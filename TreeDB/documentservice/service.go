@@ -200,6 +200,11 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
+	if len(insertIDs) > 0 && len(updates) == 0 && !req.DeferVectorIndexRebuild {
+		if err := preflightServiceVectorAutoRebuildSupported(info); err != nil {
+			return UpsertDocumentsResponse{}, err
+		}
+	}
 	inserted := 0
 	updated := 0
 	if len(insertIDs) > 0 {
@@ -1081,6 +1086,30 @@ func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
 type preparedDocument struct {
 	id  string
 	raw []byte
+}
+
+func preflightServiceVectorAutoRebuildSupported(info IndexInfo) error {
+	if info.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
+		return nil
+	}
+	for _, q := range info.QuantizedIndexes {
+		if q.Codec != collections.QuantizedVectorCodecScalarU8 || scalarU8CalibrationInfoIsLegacy(q) {
+			continue
+		}
+		mode := collections.ScalarU8CalibrationMode("")
+		if q.ScalarU8Calibration != nil {
+			mode = q.ScalarU8Calibration.Mode
+		}
+		return serviceErrorf(CodeUnsupported, "upsert documents auto rebuild unsupported: vector index %q quantized index %q scalar_u8 calibration mode %q is config-only; alpha assets are not built in this release", info.VectorIndexName, q.Name, mode)
+	}
+	return nil
+}
+
+func scalarU8CalibrationInfoIsLegacy(q QuantizedIndexInfo) bool {
+	if q.ScalarU8Calibration == nil {
+		return true
+	}
+	return q.ScalarU8Calibration.Mode == "" || q.ScalarU8Calibration.Mode == collections.ScalarU8CalibrationModeLegacy
 }
 
 func upsertPreparedDocument(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool) (inserted bool, updated bool, err error) {
