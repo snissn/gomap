@@ -24,24 +24,29 @@ const (
 	appendOnlyInlineKeyLen                  = 8
 	// Pool size-class boundaries. Min/Max initial entries are derived from
 	// these shifts so the three constants can't drift out of sync.
-	appendOnlyEntryPoolMinShift         = 7
-	appendOnlyEntryPoolMaxShift         = 20
-	appendOnlyEntryPoolClassCount       = appendOnlyEntryPoolMaxShift - appendOnlyEntryPoolMinShift + 1
-	appendOnlyEntryPoolMaxCap           = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
-	appendOnlyMinInitialEntries         = 1 << appendOnlyEntryPoolMinShift // 128
-	appendOnlyMaxInitialEntries         = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
-	appendOnlyIteratorPoolMaxCap        = 1 << 20
-	appendOnlyIteratorPtrPoolMaxCap     = 1 << 20
-	appendOnlyReusableKeyMaxCap         = 1 << 10
-	appendOnlyKeyArenaDefaultChunk      = 2 << 10
-	appendOnlyValueArenaMinShift        = 12
-	appendOnlyValueArenaMaxShift        = 20
-	appendOnlyValueArenaClassCount      = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
-	appendOnlyValueArenaDefaultChunk    = 32 << 10
-	appendOnlyValueArenaPoolMaxCap      = 1 << appendOnlyValueArenaMaxShift
-	appendOnlyValueArenaRetainMaxCap    = 4 << 20
-	appendOnlyValueArenaRetainChunks    = 128
-	appendOnlySortedRunMaxCount         = 256
+	appendOnlyEntryPoolMinShift      = 7
+	appendOnlyEntryPoolMaxShift      = 20
+	appendOnlyEntryPoolClassCount    = appendOnlyEntryPoolMaxShift - appendOnlyEntryPoolMinShift + 1
+	appendOnlyEntryPoolMaxCap        = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
+	appendOnlyMinInitialEntries      = 1 << appendOnlyEntryPoolMinShift // 128
+	appendOnlyMaxInitialEntries      = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
+	appendOnlyIteratorPoolMaxCap     = 1 << 20
+	appendOnlyIteratorPtrPoolMaxCap  = 1 << 20
+	appendOnlyReusableKeyMaxCap      = 1 << 10
+	appendOnlyKeyArenaDefaultChunk   = 2 << 10
+	appendOnlyValueArenaMinShift     = 12
+	appendOnlyValueArenaMaxShift     = 20
+	appendOnlyValueArenaClassCount   = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
+	appendOnlyValueArenaDefaultChunk = 32 << 10
+	appendOnlyValueArenaPoolMaxCap   = 1 << appendOnlyValueArenaMaxShift
+	appendOnlyValueArenaRetainMaxCap = 4 << 20
+	appendOnlyValueArenaRetainChunks = 128
+	appendOnlySortedRunMaxCount      = 256
+	// When random writes break append-only ordering, the table falls back to a
+	// latest-key map. Pre-size that map from the table's steady-state entry hint
+	// (bounded above) so hot random-write ingestion does not repeatedly grow maps
+	// from tiny capacity after the sorted-run fast path is exhausted.
+	appendOnlyLatestIndexMaxReserve     = 8 << 10
 	appendOnlyReuseOversizeFactor       = 4
 	appendOnlyResetDropThresholdEntries = 1 << 15
 	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
@@ -875,6 +880,23 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	return indices
 }
 
+func (m *AppendOnly) latestIndexReserveHintLocked(need int) int {
+	if need < 0 {
+		need = 0
+	}
+	reserve := need
+	if need > appendOnlySortedRunMaxCount && m.baseEntriesLen > reserve {
+		reserve = m.baseEntriesLen
+	}
+	if reserve > appendOnlyLatestIndexMaxReserve {
+		reserve = appendOnlyLatestIndexMaxReserve
+	}
+	if reserve < need {
+		reserve = need
+	}
+	return reserve
+}
+
 func (m *AppendOnly) rebuildLatestIndexLocked() {
 	m.clearSortedRunsLocked()
 	if m.count == 0 {
@@ -894,7 +916,7 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 	if m.latest64 != nil {
 		clear(m.latest64)
 	}
-	reserve := m.count
+	reserve := m.latestIndexReserveHintLocked(m.count)
 	active := m.entries[:m.count]
 	for i := range active {
 		k := appendOnlyEntryKey(&active[i])
@@ -920,13 +942,13 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	}
 	if k64, ok := appendOnlyKeyU64(key); ok {
 		if m.latest64 == nil {
-			m.latest64 = make(map[uint64]int, 1)
+			m.latest64 = make(map[uint64]int, m.latestIndexReserveHintLocked(idx+1))
 		}
 		m.latest64[k64] = idx
 		return
 	}
 	if m.latest == nil {
-		m.latest = make(map[string]int, 1)
+		m.latest = make(map[string]int, m.latestIndexReserveHintLocked(idx+1))
 	}
 	m.latest[appendOnlyKeyString(key)] = idx
 }

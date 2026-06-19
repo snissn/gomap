@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"encoding/binary"
 	"sync"
 	"testing"
 	"time"
@@ -605,5 +606,59 @@ func TestBuildSortedLatestIndicesLockedRetainsGrownIndexBuf(t *testing.T) {
 	retained := m.indexBuf[:len(indices)]
 	if &retained[0] != &indices[0] {
 		t.Fatal("indexBuf does not retain grown indices backing array")
+	}
+}
+
+func TestAppendOnlyLatestIndexReserveHintBounds(t *testing.T) {
+	small := NewAppendOnlyWithEntryCapacity(16)
+	small.mu.Lock()
+	if got := small.latestIndexReserveHintLocked(2); got != 2 {
+		small.mu.Unlock()
+		t.Fatalf("small reserve hint=%d want exact need 2", got)
+	}
+	small.mu.Unlock()
+
+	large := NewAppendOnlyWithEntryCapacity(appendOnlyLatestIndexMaxReserve * 4)
+	large.mu.Lock()
+	if got := large.latestIndexReserveHintLocked(appendOnlySortedRunMaxCount + 1); got != appendOnlyLatestIndexMaxReserve {
+		large.mu.Unlock()
+		t.Fatalf("large reserve hint=%d want capped %d", got, appendOnlyLatestIndexMaxReserve)
+	}
+	if got, need := large.latestIndexReserveHintLocked(appendOnlyLatestIndexMaxReserve+123), appendOnlyLatestIndexMaxReserve+123; got != need {
+		large.mu.Unlock()
+		t.Fatalf("reserve hint below need: got=%d need=%d", got, need)
+	}
+	large.mu.Unlock()
+}
+
+func TestAppendOnlyLatestIndexFallbackLatestWinsAndOwnsBytes(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(appendOnlyLatestIndexMaxReserve * 2)
+	var key [appendOnlyInlineKeyLen]byte
+	for i := 0; i < appendOnlySortedRunMaxCount+8; i++ {
+		binary.BigEndian.PutUint64(key[:], uint64(10_000-i))
+		value := []byte{byte(i)}
+		m.Set(key[:], value)
+		key[0] = 0xff
+		value[0] = 0xee
+	}
+
+	var target [appendOnlyInlineKeyLen]byte
+	binary.BigEndian.PutUint64(target[:], 42)
+	first := []byte("first-value")
+	m.Set(target[:], first)
+	first[0] = 'X'
+	second := []byte("second-value")
+	m.Set(target[:], second)
+	second[0] = 'Y'
+
+	m.Freeze()
+	got, deleted, ok := m.Get(target[:])
+	if !ok || deleted || string(got) != "second-value" {
+		t.Fatalf("Get target=(%q, deleted=%t, ok=%t), want second-value", got, deleted, ok)
+	}
+
+	m.Reset()
+	if got, _, ok := m.Get(target[:]); ok {
+		t.Fatalf("reset leaked old latest-index entry with value %q", got)
 	}
 }
