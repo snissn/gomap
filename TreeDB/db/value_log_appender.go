@@ -87,6 +87,8 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	if appender == nil {
 		return nil, ErrValueLogAppenderUnavailable
 	}
+	db.publishPrepareMu.RLock()
+	defer db.publishPrepareMu.RUnlock()
 	ptrs, err := appender.AppendValues(values)
 	if err != nil {
 		return nil, err
