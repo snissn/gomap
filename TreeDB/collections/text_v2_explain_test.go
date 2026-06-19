@@ -127,6 +127,23 @@ func TestTextV2QueryExplainNoExplainPathAndCounters2838(t *testing.T) {
 	if explained.Stats.TextPostingsScanned > uint64(withExplain.MaxPostingsScanned) {
 		t.Fatalf("explain postings scanned=%d exceeds MaxPostingsScanned=%d", explained.Stats.TextPostingsScanned, withExplain.MaxPostingsScanned)
 	}
+
+	andOpts := opts
+	andOpts.Operator = TextSearchOperatorAND
+	andBefore, err := col.searchText(andOpts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("AND no-explain: %v", err)
+	}
+	andExplainOpts := andOpts
+	andExplainOpts.Explain = true
+	andExplained, err := col.searchText(andExplainOpts, textSearchResultScoreOnly)
+	if err != nil {
+		t.Fatalf("AND explain: %v", err)
+	}
+	assertTextSearchParity2627(t, andExplained, andBefore)
+	if andExplained.Stats.TextPostingsScanned != andBefore.Stats.TextPostingsScanned {
+		t.Fatalf("AND explain postings scanned=%d no-explain=%d; explain should reuse block-max postings instead of rescanning topK terms", andExplained.Stats.TextPostingsScanned, andBefore.Stats.TextPostingsScanned)
+	}
 }
 
 func TestTextV2QueryExplainFailClosedReasons2838(t *testing.T) {
