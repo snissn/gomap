@@ -592,6 +592,17 @@ func TestColumnGraphScalarU8AlphaScorerAdjustsRankingAndTies2844(t *testing.T) {
 	if stats.QuantizedScoreCalls != uint64(len(ordinals)) || stats.QuantizedScoreCodecScalarU8Alpha != 1 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 {
 		t.Fatalf("alpha scorer stats=%+v", stats)
 	}
+	legacyScorer := scorer
+	legacyScorer.alphaLookup = nil
+	legacyScorer.alphaScoreScales = nil
+	var legacyScratch columnVectorGraphNativeSearchScratch
+	var legacyStats columnVectorGraphNativeSearchStats
+	if _, err := legacyScorer.scoreOrdinals(ordinals, scores[:0], &legacyScratch, &legacyStats); err != nil {
+		t.Fatalf("legacy scoreOrdinals: %v", err)
+	}
+	if legacyStats.QuantizedScoreCalls != uint64(len(ordinals)) || legacyStats.QuantizedScoreCodecScalarU8Alpha != 0 {
+		t.Fatalf("legacy scorer stats=%+v want no scalar_u8 alpha counter", legacyStats)
+	}
 }
 
 func TestColumnGraphScalarU8AlphaLookupUniformGranuleEdges2866(t *testing.T) {
