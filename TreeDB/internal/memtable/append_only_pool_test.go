@@ -658,6 +658,13 @@ func TestAppendOnlyLatestIndexFallbackLatestWinsAndOwnsBytes(t *testing.T) {
 	}
 
 	m.Reset()
+	m.mu.RLock()
+	latestLen := len(m.latest)
+	latest64Len := len(m.latest64)
+	m.mu.RUnlock()
+	if latestLen != 0 || latest64Len != 0 {
+		t.Fatalf("reset leaked latest-index entries: latest=%d latest64=%d", latestLen, latest64Len)
+	}
 	if got, _, ok := m.Get(target[:]); ok {
 		t.Fatalf("reset leaked old latest-index entry with value %q", got)
 	}
