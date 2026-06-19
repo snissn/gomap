@@ -535,6 +535,10 @@ func hybridMergeStats(dst *HybridSearchStats, src HybridSearchStats) {
 	dst.TextPostingBlocksSkipped += src.TextPostingBlocksSkipped
 	dst.TextBlockMaxFallbacks += src.TextBlockMaxFallbacks
 	dst.TextBlockMaxThresholds += src.TextBlockMaxThresholds
+	dst.TextWANDPivots += src.TextWANDPivots
+	dst.TextScalarPrefilterIDs += src.TextScalarPrefilterIDs
+	dst.TextScalarPostingBlocksSkipped += src.TextScalarPostingBlocksSkipped
+	dst.TextScalarPostingsRejected += src.TextScalarPostingsRejected
 	dst.TextCandidatesScored += src.TextCandidatesScored
 	dst.TextStateLookups += src.TextStateLookups
 	dst.TextNormLookups += src.TextNormLookups

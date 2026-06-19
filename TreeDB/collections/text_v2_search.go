@@ -202,6 +202,7 @@ type textV2SearchTopCandidate struct {
 	term       string
 	posting    textV2SearchPostingValue
 	hasPosting bool
+	detail     *textV2SearchCandidate
 }
 
 type textV2SearchTopK struct {
@@ -217,22 +218,29 @@ func (t *textV2SearchTopK) threshold() (float64, bool) {
 }
 
 func (t *textV2SearchTopK) add(candidate textV2SearchTopCandidate) bool {
+	_, _, thresholdChanged := t.addCandidate(candidate)
+	return thresholdChanged
+}
+
+func (t *textV2SearchTopK) addCandidate(candidate textV2SearchTopCandidate) (int, bool, bool) {
 	if t == nil || t.limit <= 0 {
-		return false
+		return -1, false, false
 	}
+	beforeThreshold, beforeReady := t.threshold()
 	if len(t.candidates) == t.limit && !textV2TopCandidateLess(candidate, t.candidates[len(t.candidates)-1]) {
-		return false
+		return -1, false, false
 	}
 	pos := sort.Search(len(t.candidates), func(i int) bool { return textV2TopCandidateLess(candidate, t.candidates[i]) })
 	if len(t.candidates) < t.limit {
 		t.candidates = append(t.candidates, textV2SearchTopCandidate{})
 		copy(t.candidates[pos+1:], t.candidates[pos:])
 		t.candidates[pos] = candidate
-		return len(t.candidates) == t.limit && pos < len(t.candidates)-1
+	} else {
+		copy(t.candidates[pos+1:], t.candidates[pos:len(t.candidates)-1])
+		t.candidates[pos] = candidate
 	}
-	copy(t.candidates[pos+1:], t.candidates[pos:len(t.candidates)-1])
-	t.candidates[pos] = candidate
-	return true
+	afterThreshold, afterReady := t.threshold()
+	return pos, true, afterReady && (!beforeReady || afterThreshold > beforeThreshold)
 }
 
 func textV2TopCandidateLess(a, b textV2SearchTopCandidate) bool {
@@ -253,11 +261,15 @@ func executeTextV2SearchAtSnapshot(
 	candidateLimit, maxPostingsScanned int,
 	resultMode textSearchResultMode,
 	response TextSearchResponse,
-) (TextSearchResponse, error) {
+) (ret TextSearchResponse, err error) {
+	if response.Explain != nil {
+		defer func() { textSearchExplainFinish(ret.Explain, ret.Stats) }()
+	}
 	ctx, err := newTextV2SearchContext(snap, catalog, idx, terms)
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 	}
+	textSearchExplainBindV2Context(response.Explain, ctx, terms, nil)
 	if ctx.corpus.DocumentCount == 0 {
 		response.Results = []TextSearchResult{}
 		return response, nil
@@ -265,6 +277,10 @@ func executeTextV2SearchAtSnapshot(
 	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.textV2AllowedDocumentIDs)
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+	}
+	textSearchExplainBindV2Context(response.Explain, ctx, terms, allowSet)
+	if allowSet != nil {
+		response.Stats.TextScalarPrefilterIDs = uint64(len(allowSet.sorted))
 	}
 	if allowSet.empty() {
 		response.Results = []TextSearchResult{}
@@ -281,7 +297,9 @@ func executeTextV2SearchAtSnapshot(
 	}
 	if !opts.textV2DisableBlockMax {
 		response.Stats.TextBlockMaxFallbacks++
+		textSearchExplainAddFallback(response.Explain, "blockmax_unsupported_shape")
 	}
+	textSearchExplainSetServingPath(response.Explain, TextSearchExplainPathExactPostings, false)
 
 	candidates := make(map[uint64]*textV2SearchCandidate)
 	cache := textV2SearchBlockCache{}
@@ -380,6 +398,15 @@ func executeTextV2SearchAtSnapshot(
 		}
 		if err := populateTextV2SearchResultMatchesFromCandidate(snap, catalog, ctx, idx, candidate, resultMode, &result, &response.Stats); err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		}
+		if response.Explain != nil {
+			norm, ok, err := cache.normEntry(snap, catalog, ctx, candidate.ordinal, &response.Stats)
+			if err != nil || !ok {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if err := textSearchExplainAppendV2CandidateScore(response.Explain, result, candidate, terms, ctx, norm); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
 		}
 		response.Results[i] = result
 	}
@@ -544,6 +571,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 	resultMode textSearchResultMode,
 	response TextSearchResponse,
 ) (TextSearchResponse, error) {
+	textSearchExplainSetServingPath(response.Explain, TextSearchExplainPathBlockMaxSingle, true)
 	termStats := ctx.termStats[term]
 	if termStats.DocumentFrequency == 0 {
 		response.Results = []TextSearchResult{}
@@ -567,6 +595,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		fallback := response
 		fallback.Stats = baseStats
 		fallback.Stats.TextBlockMaxFallbacks++
+		textSearchExplainAddFallback(fallback.Explain, "blockmax_single_unsealed_or_overlapping_block")
 		fallbackOpts := opts
 		fallbackOpts.textV2DisableBlockMax = true
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, fallbackOpts, []string{term}, TextSearchOperatorOR, candidateLimit, maxPostingsScanned, resultMode, fallback)
@@ -610,6 +639,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		blocksSeen++
 		if allowSet != nil && !allowSet.intersects(scanner.block.Summary.FirstOrdinal, scanner.block.Summary.LastOrdinal) {
 			response.Stats.TextPostingBlocksSkipped++
+			response.Stats.TextScalarPostingBlocksSkipped++
 			it.Next()
 			continue
 		}
@@ -639,6 +669,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 posting entry outside status snapshot"))
 			}
 			if !allowSet.contains(entry.Ordinal) {
+				response.Stats.TextScalarPostingsRejected++
 				continue
 			}
 			norm, ok, err := cache.normEntry(snap, catalog, ctx, entry.Ordinal, &response.Stats)
@@ -677,7 +708,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 			}
 			beforeThreshold, beforeReady := top.threshold()
 			topCandidate := textV2SearchTopCandidate{ordinal: entry.Ordinal, generation: entry.Generation, documentID: docMap.DocumentID, score: score}
-			if resultMode != textSearchResultScoreOnly {
+			if resultMode != textSearchResultScoreOnly || response.Explain != nil {
 				topCandidate.term = term
 				topCandidate.posting = posting
 				topCandidate.hasPosting = true
@@ -720,6 +751,15 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		}
 		if err := populateTextV2SearchResultMatchesFromTopCandidate(snap, catalog, ctx, idx, candidate, resultMode, &result, &response.Stats); err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		}
+		if response.Explain != nil {
+			norm, ok, err := cache.normEntry(snap, catalog, ctx, candidate.ordinal, &response.Stats)
+			if err != nil || !ok {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if err := textSearchExplainAppendV2TopCandidateScore(response.Explain, result, candidate, ctx, norm); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
 		}
 		response.Results[i] = result
 	}
@@ -768,6 +808,7 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 	resultMode textSearchResultMode,
 	response TextSearchResponse,
 ) (TextSearchResponse, error) {
+	textSearchExplainSetServingPath(response.Explain, TextSearchExplainPathBlockMaxAND, true)
 	for _, term := range terms {
 		termStats := ctx.termStats[term]
 		if termStats.DocumentFrequency == 0 {
@@ -784,6 +825,7 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 		fallbackResponse := response
 		fallbackResponse.Stats = baseStats
 		fallbackResponse.Stats.TextBlockMaxFallbacks++
+		textSearchExplainAddFallback(fallbackResponse.Explain, "blockmax_and_unsealed_stale_or_overlapping_block")
 		fallbackOpts := opts
 		fallbackOpts.textV2DisableBlockMax = true
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, fallbackOpts, terms, TextSearchOperatorAND, candidateLimit, maxPostingsScanned, resultMode, fallbackResponse)
@@ -839,7 +881,7 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 		}
 
 		if allowSet != nil && !allowSet.intersects(first, last) {
-			if err := skipTextV2ANDBlockMaxOverlapThrough(ctx, states, fieldCount, last, &response.Stats); err != nil {
+			if err := skipTextV2ANDBlockMaxOverlapThrough(ctx, states, fieldCount, last, &response.Stats, true); err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
 			continue
@@ -850,13 +892,14 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 			combinedUpperBound += state.upperBound
 		}
 		if threshold, ok := top.threshold(); ok && combinedUpperBound < threshold {
-			if err := skipTextV2ANDBlockMaxOverlapThrough(ctx, states, fieldCount, last, &response.Stats); err != nil {
+			if err := skipTextV2ANDBlockMaxOverlapThrough(ctx, states, fieldCount, last, &response.Stats, false); err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
 			continue
 		}
 
-		truncated, stale, err := visitTextV2ANDBlockMaxOverlap(snap, catalog, ctx, states, &cache, allowSet, candidateLimit, maxPostingsScanned, resultMode, first, last, &top, seenCurrent, &response.Stats)
+		retainDetail := (resultMode != textSearchResultScoreOnly || response.Explain != nil) && len(terms) > 1
+		truncated, stale, err := visitTextV2ANDBlockMaxOverlap(snap, catalog, ctx, states, &cache, allowSet, candidateLimit, maxPostingsScanned, retainDetail, first, last, &top, seenCurrent, &response.Stats)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -890,16 +933,37 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 			Score:      candidate.score,
 			ScoreKind:  HybridScoreKindBM25F,
 		}
-		if resultMode != textSearchResultScoreOnly && len(terms) > 1 {
-			detail, err := buildTextV2SearchCandidateForTopTerms(snap, catalog, ctx, terms, candidate.ordinal, candidate.generation, candidate.documentID, candidate.score)
+		var detail *textV2SearchCandidate
+		if candidate.detail != nil {
+			detail = candidate.detail
+		} else if (resultMode != textSearchResultScoreOnly || response.Explain != nil) && len(terms) > 1 {
+			var truncated bool
+			var err error
+			detail, truncated, err = buildTextV2SearchCandidateForTopTerms(snap, catalog, ctx, terms, candidate.ordinal, candidate.generation, candidate.documentID, candidate.score, maxPostingsScanned, &response.Stats)
 			if err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
+			if truncated {
+				response.Stats.Truncated = true
+				response.Stats.FailClosedReason = textSearchFailClosedPostingsLimit
+				return textSearchFailClosed(response, textSearchFailClosedPostingsLimit, fmt.Errorf("%w: collection %q text-v2 index %q exceeded bounded explain posting scan", ErrTextIndexUnavailable, catalog.meta.Name, idx.Name))
+			}
+		}
+		if resultMode != textSearchResultScoreOnly && len(terms) > 1 {
 			if err := populateTextV2SearchResultMatchesFromCandidate(snap, catalog, ctx, idx, detail, resultMode, &result, &response.Stats); err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
 		} else if err := populateTextV2SearchResultMatchesFromTopCandidate(snap, catalog, ctx, idx, candidate, resultMode, &result, &response.Stats); err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		}
+		if response.Explain != nil {
+			norm, ok, err := cache.normEntry(snap, catalog, ctx, candidate.ordinal, &response.Stats)
+			if err != nil || !ok {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if err := textSearchExplainAppendV2CandidateScore(response.Explain, result, detail, terms, ctx, norm); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
 		}
 		response.Results[i] = result
 	}
@@ -1119,7 +1183,7 @@ func skipTextV2ANDBlockMaxNonOverlappingBlocks(ctx *textV2SearchContext, states 
 	return progressed, nil
 }
 
-func skipTextV2ANDBlockMaxOverlapThrough(ctx *textV2SearchContext, states []*textV2ANDBlockMaxTermState, fieldCount int, through uint64, stats *TextSearchStats) error {
+func skipTextV2ANDBlockMaxOverlapThrough(ctx *textV2SearchContext, states []*textV2ANDBlockMaxTermState, fieldCount int, through uint64, stats *TextSearchStats, scalarPrune bool) error {
 	for _, state := range states {
 		if state == nil || state.exhausted {
 			continue
@@ -1138,6 +1202,9 @@ func skipTextV2ANDBlockMaxOverlapThrough(ctx *textV2SearchContext, states []*tex
 		if state.currentLast() <= through {
 			if stats != nil {
 				stats.TextPostingBlocksSkipped++
+				if scalarPrune {
+					stats.TextScalarPostingBlocksSkipped++
+				}
 			}
 			if err := state.advanceBlock(ctx, fieldCount); err != nil {
 				return err
@@ -1175,7 +1242,7 @@ func visitTextV2ANDBlockMaxOverlap(
 	cache *textV2SearchBlockCache,
 	allowSet *textV2SearchOrdinalAllowSet,
 	candidateLimit, maxPostingsScanned int,
-	resultMode textSearchResultMode,
+	retainDetail bool,
 	first, last uint64,
 	top *textV2SearchTopK,
 	seenCurrent map[uint64]uint64,
@@ -1255,20 +1322,29 @@ func visitTextV2ANDBlockMaxOverlap(
 						if err != nil {
 							return false, false, err
 						}
-						beforeThreshold, beforeReady := top.threshold()
 						topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
-						top.add(topCandidate)
+						pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
+						if admitted && retainDetail {
+							detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+							for _, state := range states {
+								if err := detail.addPostingValue(state.term, state.entries[state.entryIdx].value); err != nil {
+									return false, false, err
+								}
+							}
+							top.candidates[pos].detail = detail
+						}
 						seenCurrent[target] = norm.Generation
 						if stats != nil {
 							stats.TextCandidatesScored++
-							afterThreshold, afterReady := top.threshold()
-							if afterReady && (!beforeReady || afterThreshold > beforeThreshold) {
+							if thresholdChanged {
 								stats.TextBlockMaxThresholds++
 							}
 						}
 					}
 				}
 			}
+		} else if stats != nil {
+			stats.TextScalarPostingsRejected++
 		}
 		for _, state := range states {
 			state.entryIdx++
@@ -1289,6 +1365,7 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 	resultMode textSearchResultMode,
 	response TextSearchResponse,
 ) (TextSearchResponse, error) {
+	textSearchExplainSetServingPath(response.Explain, TextSearchExplainPathBlockMaxORWAND, true)
 	liveTerms := make([]string, 0, len(terms))
 	for _, term := range terms {
 		termStats := ctx.termStats[term]
@@ -1313,6 +1390,7 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 		fallbackResponse := response
 		fallbackResponse.Stats = baseStats
 		fallbackResponse.Stats.TextBlockMaxFallbacks++
+		textSearchExplainAddFallback(fallbackResponse.Explain, "blockmax_or_unsealed_or_overlapping_block")
 		fallbackOpts := opts
 		fallbackOpts.textV2DisableBlockMax = true
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, fallbackOpts, terms, TextSearchOperatorOR, candidateLimit, maxPostingsScanned, resultMode, fallbackResponse)
@@ -1395,6 +1473,7 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 			}
 		}
 
+		response.Stats.TextWANDPivots++
 		target := active[pivot].currentFirst()
 		if target == 0 {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 OR block-max invalid target ordinal"))
@@ -1411,7 +1490,8 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 			continue
 		}
 
-		truncated, err := visitTextV2ORBlockMaxCandidate(snap, catalog, ctx, states, active, &cache, allowSet, candidateLimit, maxPostingsScanned, target, &top, &response.Stats)
+		retainDetail := resultMode != textSearchResultScoreOnly || response.Explain != nil
+		truncated, err := visitTextV2ORBlockMaxCandidate(snap, catalog, ctx, states, active, &cache, allowSet, candidateLimit, maxPostingsScanned, retainDetail, target, &top, &response.Stats)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -1442,12 +1522,38 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 			Score:      candidate.score,
 			ScoreKind:  HybridScoreKindBM25F,
 		}
-		if resultMode != textSearchResultScoreOnly {
-			detail, err := buildTextV2SearchCandidateForTopMatchingTerms(snap, catalog, ctx, terms, candidate.ordinal, candidate.generation, candidate.documentID, candidate.score)
+		var detail *textV2SearchCandidate
+		if candidate.detail != nil {
+			detail = candidate.detail
+		} else if candidate.hasPosting {
+			detail = &textV2SearchCandidate{ordinal: candidate.ordinal, generation: candidate.generation, documentID: append([]byte(nil), candidate.documentID...), score: candidate.score}
+			if err := detail.addPostingValue(candidate.term, candidate.posting); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+		} else if resultMode != textSearchResultScoreOnly || response.Explain != nil {
+			var truncated bool
+			var err error
+			detail, truncated, err = buildTextV2SearchCandidateForTopMatchingTerms(snap, catalog, ctx, terms, candidate.ordinal, candidate.generation, candidate.documentID, candidate.score, maxPostingsScanned, &response.Stats)
 			if err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
+			if truncated {
+				response.Stats.Truncated = true
+				response.Stats.FailClosedReason = textSearchFailClosedPostingsLimit
+				return textSearchFailClosed(response, textSearchFailClosedPostingsLimit, fmt.Errorf("%w: collection %q text-v2 index %q exceeded bounded explain posting scan", ErrTextIndexUnavailable, catalog.meta.Name, idx.Name))
+			}
+		}
+		if resultMode != textSearchResultScoreOnly {
 			if err := populateTextV2SearchResultMatchesFromCandidate(snap, catalog, ctx, idx, detail, resultMode, &result, &response.Stats); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+		}
+		if response.Explain != nil {
+			norm, ok, err := cache.normEntry(snap, catalog, ctx, candidate.ordinal, &response.Stats)
+			if err != nil || !ok {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if err := textSearchExplainAppendV2CandidateScore(response.Explain, result, detail, terms, ctx, norm); err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
 		}
@@ -1500,6 +1606,7 @@ func skipTextV2ORBlockMaxDisallowedBlocks(ctx *textV2SearchContext, states []*te
 		for state != nil && !state.exhausted && !state.decoded && !state.requiresFallback && !allowSet.intersects(state.block.Summary.FirstOrdinal, state.block.Summary.LastOrdinal) {
 			if stats != nil {
 				stats.TextPostingBlocksSkipped++
+				stats.TextScalarPostingBlocksSkipped++
 			}
 			if err := state.advanceBlock(ctx, fieldCount); err != nil {
 				return err
@@ -1623,12 +1730,16 @@ func visitTextV2ORBlockMaxCandidate(
 	cache *textV2SearchBlockCache,
 	allowSet *textV2SearchOrdinalAllowSet,
 	candidateLimit, maxPostingsScanned int,
+	retainDetail bool,
 	target uint64,
 	top *textV2SearchTopK,
 	stats *TextSearchStats,
 ) (bool, error) {
 	fieldCount := len(ctx.fieldNames)
 	if allowSet != nil && !allowSet.contains(target) {
+		if stats != nil {
+			stats.TextScalarPostingsRejected++
+		}
 		return advanceTextV2ORBlockMaxStatesPastTarget(ctx, advanceStates, fieldCount, maxPostingsScanned, target, stats)
 	}
 	norm, ok, err := cache.normEntry(snap, catalog, ctx, target, stats)
@@ -1688,12 +1799,27 @@ func visitTextV2ORBlockMaxCandidate(
 		}
 	}
 	if matched {
-		beforeThreshold, beforeReady := top.threshold()
-		top.add(textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score})
+		topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
+		pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
+		if admitted && retainDetail {
+			detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+			for _, state := range scoreStates {
+				if state == nil || state.exhausted || state.currentFirst() != target || state.entryIdx >= len(state.entries) || state.entries[state.entryIdx].ordinal != target {
+					continue
+				}
+				posting := state.entries[state.entryIdx].value
+				if posting.generation != norm.Generation {
+					continue
+				}
+				if err := detail.addPostingValue(state.term, posting); err != nil {
+					return false, err
+				}
+			}
+			top.candidates[pos].detail = detail
+		}
 		if stats != nil {
 			stats.TextCandidatesScored++
-			afterThreshold, afterReady := top.threshold()
-			if afterReady && (!beforeReady || afterThreshold > beforeThreshold) {
+			if thresholdChanged {
 				stats.TextBlockMaxThresholds++
 			}
 		}
@@ -1755,43 +1881,57 @@ func scoreTextV2ANDBlockMaxCandidate(states []*textV2ANDBlockMaxTermState, ctx *
 	return score, nil
 }
 
-func buildTextV2SearchCandidateForTopTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, terms []string, ordinal, generation uint64, documentID []byte, score float64) (*textV2SearchCandidate, error) {
+func buildTextV2SearchCandidateForTopTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, terms []string, ordinal, generation uint64, documentID []byte, score float64, maxPostingsScanned int, stats *TextSearchStats) (*textV2SearchCandidate, bool, error) {
 	candidate := &textV2SearchCandidate{ordinal: ordinal, generation: generation, documentID: append([]byte(nil), documentID...), score: score}
 	fieldCount := len(ctx.fieldNames)
 	for _, term := range terms {
-		posting, found, err := readTextV2PositionPostingAtRoot(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		posting, found, scanned, err := readTextV2PositionPostingAtRootCounted(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		if stats != nil && scanned > 0 {
+			stats.TextPostingsScanned += uint64(scanned)
+			stats.PostingsScanned = stats.TextPostingsScanned
+		}
+		if maxPostingsScanned > 0 && stats != nil && stats.TextPostingsScanned > uint64(maxPostingsScanned) {
+			return nil, true, nil
+		}
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !found {
-			return nil, errMalformedTextStorage("missing text-v2 scoring posting for final candidate ordinal %d generation %d term %q", ordinal, generation, term)
+			return nil, false, errMalformedTextStorage("missing text-v2 scoring posting for final candidate ordinal %d generation %d term %q", ordinal, generation, term)
 		}
 		if err := candidate.addPostingValue(term, posting); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	return candidate, nil
+	return candidate, false, nil
 }
 
-func buildTextV2SearchCandidateForTopMatchingTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, terms []string, ordinal, generation uint64, documentID []byte, score float64) (*textV2SearchCandidate, error) {
+func buildTextV2SearchCandidateForTopMatchingTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, terms []string, ordinal, generation uint64, documentID []byte, score float64, maxPostingsScanned int, stats *TextSearchStats) (*textV2SearchCandidate, bool, error) {
 	candidate := &textV2SearchCandidate{ordinal: ordinal, generation: generation, documentID: append([]byte(nil), documentID...), score: score}
 	fieldCount := len(ctx.fieldNames)
 	for _, term := range terms {
-		posting, found, err := readTextV2PositionPostingAtRoot(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		posting, found, scanned, err := readTextV2PositionPostingAtRootCounted(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		if stats != nil && scanned > 0 {
+			stats.TextPostingsScanned += uint64(scanned)
+			stats.PostingsScanned = stats.TextPostingsScanned
+		}
+		if maxPostingsScanned > 0 && stats != nil && stats.TextPostingsScanned > uint64(maxPostingsScanned) {
+			return nil, true, nil
+		}
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !found {
 			continue
 		}
 		if err := candidate.addPostingValue(term, posting); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	if candidate.postingCount() == 0 {
-		return nil, errMalformedTextStorage("missing text-v2 scoring postings for final OR candidate ordinal %d generation %d", ordinal, generation)
+		return nil, false, errMalformedTextStorage("missing text-v2 scoring postings for final OR candidate ordinal %d generation %d", ordinal, generation)
 	}
-	return candidate, nil
+	return candidate, false, nil
 }
 
 func scanTextV2SearchPostingBlocksTerm(
@@ -1854,6 +1994,7 @@ func scanTextV2SearchPostingBlocksTerm(
 		blocksSeen++
 		if allowSet != nil && scanner.ChecksumVerified() && !allowSet.intersects(scanner.block.Summary.FirstOrdinal, scanner.block.Summary.LastOrdinal) {
 			stats.TextPostingBlocksSkipped++
+			stats.TextScalarPostingBlocksSkipped++
 			it.Next()
 			continue
 		}
@@ -1873,6 +2014,7 @@ func scanTextV2SearchPostingBlocksTerm(
 				return false, errMalformedTextStorage("text-v2 posting entry outside status snapshot")
 			}
 			if !allowSet.contains(entry.Ordinal) {
+				stats.TextScalarPostingsRejected++
 				continue
 			}
 			candidate := candidates[entry.Ordinal]

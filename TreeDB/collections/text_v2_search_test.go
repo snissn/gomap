@@ -776,7 +776,7 @@ func TestTextV2SearchSnapshotBindingAndReopen2627(t *testing.T) {
 	}
 }
 
-func createTextSearchCollection2627(t *testing.T, d *backenddb.DB, collection string, def TextIndexDefinition, ids, docs [][]byte) *Collection {
+func createTextSearchCollection2627(t testing.TB, d *backenddb.DB, collection string, def TextIndexDefinition, ids, docs [][]byte) *Collection {
 	t.Helper()
 	mgr := NewCollectionManager(d)
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: collection}); err != nil {

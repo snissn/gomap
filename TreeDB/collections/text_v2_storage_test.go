@@ -589,7 +589,7 @@ func BenchmarkTextV2DocIDMappingCodec2624(b *testing.B) {
 	})
 }
 
-func openTextV2TestDB(t *testing.T, dir string, forcePointers bool) *backenddb.DB {
+func openTextV2TestDB(t testing.TB, dir string, forcePointers bool) *backenddb.DB {
 	t.Helper()
 	opts := backenddb.Options{Dir: dir, DisableBackgroundPrune: true}
 	if forcePointers {

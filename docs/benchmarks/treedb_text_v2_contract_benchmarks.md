@@ -197,7 +197,8 @@ Report text search counters:
 
 - `postings_scanned/search`;
 - `posting_blocks_visited/search` and `posting_blocks_skipped/search` (v1 = 0; M4 v2 exhaustive search reports visited blocks and skipped=0; M5 v2 block-max reports decoded versus skipped blocks);
-- `blockmax_fallbacks/search` and `threshold_updates/search`;
+- `blockmax_fallbacks/search`, `threshold_updates/search`, and `wand_pivots/search` when exposed by focused explain/OR-WAND rows;
+- scalar-pruning hooks for hybrid text+scalar serving: `scalar_prefilter_ids/search`, `scalar_posting_blocks_skipped/search`, and `scalar_postings_rejected/search`;
 - `candidates_scored/search`;
 - `state_lookups/search` and `norm_lookups/search`;
 - `match_details/search`;
