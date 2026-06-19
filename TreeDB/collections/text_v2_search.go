@@ -217,6 +217,13 @@ func (t *textV2SearchTopK) threshold() (float64, bool) {
 	return t.candidates[len(t.candidates)-1].score, true
 }
 
+func (t *textV2SearchTopK) worst() (textV2SearchTopCandidate, bool) {
+	if t == nil || t.limit <= 0 || len(t.candidates) < t.limit {
+		return textV2SearchTopCandidate{}, false
+	}
+	return t.candidates[len(t.candidates)-1], true
+}
+
 func (t *textV2SearchTopK) needsDocumentIDForScore(score float64) bool {
 	if t == nil || t.limit <= 0 {
 		return false
@@ -643,7 +650,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		if len(scanner.block.Summary.MaxFieldTermFrequencies) != fieldCount {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 posting block field count %d want %d", len(scanner.block.Summary.MaxFieldTermFrequencies), fieldCount))
 		}
-		if !scanner.ChecksumVerified() || scanner.block.Kind != textV2PostingBlockKindSealed || (hasLastBlock && scanner.block.Summary.FirstOrdinal <= lastBlockLast) {
+		if !scanner.ChecksumVerified() || !textV2PostingBlockKindSupportsBlockMax(scanner.block.Kind) || (hasLastBlock && scanner.block.Summary.FirstOrdinal <= lastBlockLast) {
 			return fallbackToExactScan()
 		}
 		hasLastBlock = true
@@ -659,10 +666,25 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
-		if threshold, ok := top.threshold(); ok && blockUpperBound < threshold {
-			response.Stats.TextPostingBlocksSkipped++
-			it.Next()
-			continue
+		if threshold, ok := top.threshold(); ok {
+			if blockUpperBound < threshold {
+				response.Stats.TextPostingBlocksSkipped++
+				it.Next()
+				continue
+			}
+			tightUpperBound, err := textV2SearchTightBlockUpperBound(snap, catalog, ctx, &cache, term, scanner.block.Summary, &response.Stats)
+			if err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			canSkip, err := textV2SearchTightUpperBoundSkipsRange(snap, catalog, ctx, &cache, tightUpperBound, scanner.block.Summary.FirstOrdinal, scanner.block.Summary.LastOrdinal, &top)
+			if err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if canSkip {
+				response.Stats.TextPostingBlocksSkipped++
+				it.Next()
+				continue
+			}
 		}
 		response.Stats.TextPostingBlocksVisited++
 		var entry textV2PostingBlockEntry
@@ -796,6 +818,7 @@ type textV2ANDBlockMaxTermState struct {
 	scanner          *textV2PostingBlockEntryScanner
 	scannerStorage   textV2PostingBlockEntryScanner
 	upperBound       float64
+	upperBoundTight  bool
 	entries          []textV2ANDBlockMaxPostingEntry
 	entryIdx         int
 	decoded          bool
@@ -907,11 +930,28 @@ func executeTextV2ANDBlockMaxSearchAtSnapshot(
 		for _, state := range states {
 			combinedUpperBound += state.upperBound
 		}
-		if threshold, ok := top.threshold(); ok && combinedUpperBound < threshold {
-			if err := skipTextV2ANDBlockMaxOverlapThrough(ctx, states, fieldCount, last, &response.Stats, false); err != nil {
-				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+		if threshold, ok := top.threshold(); ok {
+			canSkip := combinedUpperBound < threshold
+			if !canSkip {
+				tightCombinedUpperBound := 0.0
+				for _, state := range states {
+					if err := tightenTextV2BlockMaxStateUpperBound(snap, catalog, ctx, &cache, state, &response.Stats); err != nil {
+						return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+					}
+					tightCombinedUpperBound += state.upperBound
+				}
+				var err error
+				canSkip, err = textV2SearchTightUpperBoundSkipsRange(snap, catalog, ctx, &cache, tightCombinedUpperBound, first, last, &top)
+				if err != nil {
+					return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+				}
 			}
-			continue
+			if canSkip {
+				if err := skipTextV2ANDBlockMaxOverlapThrough(ctx, states, fieldCount, last, &response.Stats, false); err != nil {
+					return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+				}
+				continue
+			}
 		}
 
 		retainDetail := (resultMode != textSearchResultScoreOnly || response.Explain != nil) && len(terms) > 1
@@ -1023,6 +1063,7 @@ func (s *textV2ANDBlockMaxTermState) loadNextBlock(ctx *textV2SearchContext, fie
 	s.block = textV2PostingBlockValue{}
 	s.scanner = nil
 	s.upperBound = 0
+	s.upperBoundTight = false
 	s.entries = s.entries[:0]
 	s.entryIdx = 0
 	s.decoded = false
@@ -1053,7 +1094,7 @@ func (s *textV2ANDBlockMaxTermState) loadNextBlock(ctx *textV2SearchContext, fie
 		if err != nil {
 			return err
 		}
-		if scanner.block.Kind != textV2PostingBlockKindSealed || !scanner.ChecksumVerified() || (s.hasLastBlock && scanner.block.Summary.FirstOrdinal <= s.lastBlockLast) {
+		if !textV2PostingBlockKindSupportsBlockMax(scanner.block.Kind) || !scanner.ChecksumVerified() || (s.hasLastBlock && scanner.block.Summary.FirstOrdinal <= s.lastBlockLast) {
 			s.requiresFallback = true
 		}
 		s.block = scanner.block
@@ -1158,7 +1199,7 @@ func textV2ANDBlockMaxAnyExhausted(states []*textV2ANDBlockMaxTermState) bool {
 
 func textV2ANDBlockMaxNeedsFallback(states []*textV2ANDBlockMaxTermState) bool {
 	for _, state := range states {
-		if state == nil || state.requiresFallback || (!state.exhausted && (state.scanner == nil || !state.scanner.ChecksumVerified() || state.scanner.block.Kind != textV2PostingBlockKindSealed)) {
+		if state == nil || state.requiresFallback || (!state.exhausted && (state.scanner == nil || !state.scanner.ChecksumVerified() || !textV2PostingBlockKindSupportsBlockMax(state.scanner.block.Kind))) {
 			return true
 		}
 	}
@@ -1453,7 +1494,7 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 		textV2ORBlockMaxSortStates(active)
 
 		if threshold, ok := top.threshold(); ok {
-			truncated, progressed, err := skipTextV2ORBlockMaxLowUpperWindow(ctx, active, fieldCount, maxPostingsScanned, threshold, &response.Stats)
+			truncated, progressed, err := skipTextV2ORBlockMaxLowUpperWindow(snap, catalog, ctx, &cache, active, fieldCount, maxPostingsScanned, threshold, &top, &response.Stats)
 			if err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
@@ -1587,6 +1628,15 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 	return response, nil
 }
 
+func textV2PostingBlockKindSupportsBlockMax(kind textV2PostingBlockKind) bool {
+	switch kind {
+	case textV2PostingBlockKindSealed, textV2PostingBlockKindMicro:
+		return true
+	default:
+		return false
+	}
+}
+
 func textV2ORBlockMaxActiveStates(states, scratch []*textV2ANDBlockMaxTermState) []*textV2ANDBlockMaxTermState {
 	active := scratch[:0]
 	for _, state := range states {
@@ -1618,6 +1668,19 @@ func textV2ORBlockMaxSortStates(states []*textV2ANDBlockMaxTermState) {
 	})
 }
 
+func tightenTextV2BlockMaxStateUpperBound(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, cache *textV2SearchBlockCache, state *textV2ANDBlockMaxTermState, stats *TextSearchStats) error {
+	if state == nil || state.exhausted || state.upperBoundTight {
+		return nil
+	}
+	upperBound, err := textV2SearchTightBlockUpperBound(snap, catalog, ctx, cache, state.term, state.block.Summary, stats)
+	if err != nil {
+		return err
+	}
+	state.upperBound = upperBound
+	state.upperBoundTight = true
+	return nil
+}
+
 func skipTextV2ORBlockMaxDisallowedBlocks(ctx *textV2SearchContext, states []*textV2ANDBlockMaxTermState, fieldCount int, allowSet *textV2SearchOrdinalAllowSet, stats *TextSearchStats) error {
 	if allowSet == nil {
 		return nil
@@ -1636,7 +1699,7 @@ func skipTextV2ORBlockMaxDisallowedBlocks(ctx *textV2SearchContext, states []*te
 	return nil
 }
 
-func skipTextV2ORBlockMaxLowUpperWindow(ctx *textV2SearchContext, states []*textV2ANDBlockMaxTermState, fieldCount, maxPostingsScanned int, threshold float64, stats *TextSearchStats) (bool, bool, error) {
+func skipTextV2ORBlockMaxLowUpperWindow(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, cache *textV2SearchBlockCache, states []*textV2ANDBlockMaxTermState, fieldCount, maxPostingsScanned int, threshold float64, top *textV2SearchTopK, stats *TextSearchStats) (bool, bool, error) {
 	if len(states) == 0 {
 		return false, false, nil
 	}
@@ -1646,11 +1709,17 @@ func skipTextV2ORBlockMaxLowUpperWindow(ctx *textV2SearchContext, states []*text
 	}
 	windowLast := uint64(math.MaxUint64)
 	upperSum := 0.0
+	var overlappingInline [8]*textV2ANDBlockMaxTermState
+	overlapping := overlappingInline[:0]
+	if len(states) > len(overlappingInline) {
+		overlapping = make([]*textV2ANDBlockMaxTermState, 0, len(states))
+	}
 	for _, state := range states {
 		currentFirst := state.currentFirst()
 		currentLast := state.currentLast()
 		if currentFirst <= windowFirst && currentLast >= windowFirst {
 			upperSum += state.upperBound
+			overlapping = append(overlapping, state)
 			if currentLast < windowLast {
 				windowLast = currentLast
 			}
@@ -1660,7 +1729,25 @@ func skipTextV2ORBlockMaxLowUpperWindow(ctx *textV2SearchContext, states []*text
 			windowLast = currentFirst - 1
 		}
 	}
-	if windowLast < windowFirst || upperSum >= threshold {
+	if windowLast < windowFirst {
+		return false, false, nil
+	}
+	canSkip := upperSum < threshold
+	if !canSkip {
+		tightUpperSum := 0.0
+		for _, state := range overlapping {
+			if err := tightenTextV2BlockMaxStateUpperBound(snap, catalog, ctx, cache, state, stats); err != nil {
+				return false, false, err
+			}
+			tightUpperSum += state.upperBound
+		}
+		var err error
+		canSkip, err = textV2SearchTightUpperBoundSkipsRange(snap, catalog, ctx, cache, tightUpperSum, windowFirst, windowLast, top)
+		if err != nil {
+			return false, false, err
+		}
+	}
+	if !canSkip {
 		return false, false, nil
 	}
 	target := windowLast + 1
@@ -2123,19 +2210,47 @@ func textV2SearchPostingValueFromEntry(entry textV2PostingBlockEntry, fieldCount
 }
 
 func textV2SearchBlockUpperBound(term string, summary textV2PostingBlockSummary, ctx *textV2SearchContext) (float64, error) {
+	return textV2SearchBlockUpperBoundWithFieldLengthMinimums(term, summary, ctx, nil)
+}
+
+func textV2SearchTightBlockUpperBound(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, cache *textV2SearchBlockCache, term string, summary textV2PostingBlockSummary, stats *TextSearchStats) (float64, error) {
+	if cache == nil {
+		return 0, errMalformedTextStorage("text-v2 search cache is nil")
+	}
+	fieldCount := len(ctx.fieldNames)
+	var inline [8]uint32
+	mins := inline[:]
+	if fieldCount > len(inline) {
+		mins = make([]uint32, fieldCount)
+	} else {
+		mins = mins[:fieldCount]
+	}
+	hasLive, complete, err := cache.minFieldLengthsInRange(snap, catalog, ctx, summary.FirstOrdinal, summary.LastOrdinal, mins, stats)
+	if err != nil {
+		return 0, err
+	}
+	if !complete {
+		return textV2SearchBlockUpperBound(term, summary, ctx)
+	}
+	if !hasLive {
+		return 0, nil
+	}
+	return textV2SearchBlockUpperBoundWithFieldLengthMinimums(term, summary, ctx, mins)
+}
+
+func textV2SearchBlockUpperBoundWithFieldLengthMinimums(term string, summary textV2PostingBlockSummary, ctx *textV2SearchContext, minFieldLengths []uint32) (float64, error) {
 	if summary.UpperBoundKind != textV2PostingUpperBoundKindBM25FLaneMax {
 		return 0, errMalformedTextStorage("text-v2 posting block unsupported upper-bound kind %d", summary.UpperBoundKind)
 	}
 	if len(summary.MaxFieldTermFrequencies) != len(ctx.fieldNames) {
 		return 0, errMalformedTextStorage("text-v2 posting block upper-bound field count %d want %d", len(summary.MaxFieldTermFrequencies), len(ctx.fieldNames))
 	}
+	if minFieldLengths != nil && len(minFieldLengths) != len(ctx.fieldNames) {
+		return 0, errMalformedTextStorage("text-v2 posting block upper-bound min field count %d want %d", len(minFieldLengths), len(ctx.fieldNames))
+	}
 	stats := ctx.termStats[term]
 	if stats.DocumentFrequency == 0 || stats.DocumentFrequency > ctx.corpus.DocumentCount {
 		return 0, errMalformedTextStorage("text-v2 term %q document frequency %d outside corpus %d", term, stats.DocumentFrequency, ctx.corpus.DocumentCount)
-	}
-	minDenominator := 1 - textSearchBM25B
-	if minDenominator <= 0 {
-		return 0, errMalformedTextStorage("invalid BM25F normalization denominator")
 	}
 	var combinedTFUpper float64
 	for fieldIdx, maxTF := range summary.MaxFieldTermFrequencies {
@@ -2146,7 +2261,18 @@ func textV2SearchBlockUpperBound(term string, summary textV2PostingBlockSummary,
 		if statsValue.DocumentCount == 0 || statsValue.TotalTokenCount == 0 {
 			return 0, errMalformedTextStorage("missing text-v2 field accounting for %q", ctx.fieldNames[fieldIdx])
 		}
-		combinedTFUpper += ctx.fieldWeights[fieldIdx] * (float64(maxTF) / minDenominator)
+		avgLength := float64(statsValue.TotalTokenCount) / float64(statsValue.DocumentCount)
+		if avgLength <= 0 {
+			return 0, errMalformedTextStorage("invalid average text-v2 field length for %q", ctx.fieldNames[fieldIdx])
+		}
+		denominator := 1 - textSearchBM25B
+		if minFieldLengths != nil {
+			denominator += textSearchBM25B * (float64(minFieldLengths[fieldIdx]) / avgLength)
+		}
+		if denominator <= 0 {
+			return 0, errMalformedTextStorage("invalid BM25F normalization denominator")
+		}
+		combinedTFUpper += ctx.fieldWeights[fieldIdx] * (float64(maxTF) / denominator)
 	}
 	if combinedTFUpper <= 0 {
 		return 0, nil
@@ -2155,6 +2281,30 @@ func textV2SearchBlockUpperBound(term string, summary textV2PostingBlockSummary,
 	df := float64(stats.DocumentFrequency)
 	idf := math.Log(1 + (corpusDocuments-df+0.5)/(df+0.5))
 	return idf * ((combinedTFUpper * (textSearchBM25K1 + 1)) / (combinedTFUpper + textSearchBM25K1)), nil
+}
+
+func textV2SearchTightUpperBoundSkipsRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, cache *textV2SearchBlockCache, upperBound float64, first, last uint64, top *textV2SearchTopK) (bool, error) {
+	worst, ok := top.worst()
+	if !ok {
+		return false, nil
+	}
+	if upperBound < worst.score {
+		return true, nil
+	}
+	if upperBound > worst.score {
+		return false, nil
+	}
+	minDocID, hasLive, complete, err := cache.minDocumentIDInRange(snap, catalog, ctx, first, last)
+	if err != nil {
+		return false, err
+	}
+	if !complete {
+		return false, nil
+	}
+	if !hasLive {
+		return true, nil
+	}
+	return bytes.Compare(minDocID, worst.documentID) >= 0, nil
 }
 
 func scoreTextV2SearchPostingValue(term string, posting textV2SearchPostingValue, ctx *textV2SearchContext, norm textV2SearchNormEntry) (float64, error) {
@@ -2504,33 +2654,57 @@ func (b textV2SearchDocMapBlock) find(ordinal uint64) (textV2SearchDocMapEntry, 
 	return textV2SearchDocMapEntry{}, false
 }
 
-func (cache *textV2SearchBlockCache) normEntry(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, ordinal uint64, stats *TextSearchStats) (textV2SearchNormEntry, bool, error) {
-	blockStart := textV2OrdinalBlockStart(ordinal, textV2DefaultNormBlockSize)
+func (cache *textV2SearchBlockCache) normBlockAtOptional(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, blockStart uint64, stats *TextSearchStats) (textV2SearchNormBlock, bool, error) {
 	if blockStart == 0 {
-		return textV2SearchNormEntry{}, false, errMalformedTextStorage("text-v2 invalid norm ordinal %d", ordinal)
+		return textV2SearchNormBlock{}, false, errMalformedTextStorage("text-v2 invalid norm block start")
 	}
 	if cache.normBlocks == nil {
 		cache.normBlocks = make(map[uint64]textV2SearchNormBlock)
 	}
 	block, ok := cache.normBlocks[blockStart]
-	if !ok {
-		raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, ctx.normBlocksRootName, encodeTextV2BlockKey(blockStart), nil)
-		if err != nil {
-			return textV2SearchNormEntry{}, false, err
-		}
+	if ok {
+		return block, true, nil
+	}
+	raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, ctx.normBlocksRootName, encodeTextV2BlockKey(blockStart), nil)
+	if err != nil {
+		return textV2SearchNormBlock{}, false, err
+	}
+	if stats != nil {
 		stats.TextNormLookups++
-		if !found {
-			return textV2SearchNormEntry{}, false, errMalformedTextStorage("missing text-v2 norm block %d", blockStart)
-		}
-		decoded, err := decodeTextV2SearchNormBlock(raw)
-		if err != nil {
-			return textV2SearchNormEntry{}, false, err
-		}
-		if decoded.BlockStart != blockStart || decoded.BlockSize != textV2DefaultNormBlockSize || decoded.FieldCount != uint32(len(ctx.fieldNames)) {
-			return textV2SearchNormEntry{}, false, errMalformedTextStorage("text-v2 norm block key/value mismatch")
-		}
-		cache.normBlocks[blockStart] = decoded
-		block = decoded
+	}
+	if !found {
+		return textV2SearchNormBlock{}, false, nil
+	}
+	decoded, err := decodeTextV2SearchNormBlock(raw)
+	if err != nil {
+		return textV2SearchNormBlock{}, false, err
+	}
+	if decoded.BlockStart != blockStart || decoded.BlockSize != textV2DefaultNormBlockSize || decoded.FieldCount != uint32(len(ctx.fieldNames)) {
+		return textV2SearchNormBlock{}, false, errMalformedTextStorage("text-v2 norm block key/value mismatch")
+	}
+	cache.normBlocks[blockStart] = decoded
+	return decoded, true, nil
+}
+
+func (cache *textV2SearchBlockCache) normBlockAt(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, blockStart uint64, stats *TextSearchStats) (textV2SearchNormBlock, error) {
+	block, found, err := cache.normBlockAtOptional(snap, catalog, ctx, blockStart, stats)
+	if err != nil {
+		return textV2SearchNormBlock{}, err
+	}
+	if !found {
+		return textV2SearchNormBlock{}, errMalformedTextStorage("missing text-v2 norm block %d", blockStart)
+	}
+	return block, nil
+}
+
+func (cache *textV2SearchBlockCache) normEntry(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, ordinal uint64, stats *TextSearchStats) (textV2SearchNormEntry, bool, error) {
+	blockStart := textV2OrdinalBlockStart(ordinal, textV2DefaultNormBlockSize)
+	if blockStart == 0 {
+		return textV2SearchNormEntry{}, false, errMalformedTextStorage("text-v2 invalid norm ordinal %d", ordinal)
+	}
+	block, err := cache.normBlockAt(snap, catalog, ctx, blockStart, stats)
+	if err != nil {
+		return textV2SearchNormEntry{}, false, err
 	}
 	entry, found := block.find(ordinal)
 	if !found {
@@ -2542,32 +2716,121 @@ func (cache *textV2SearchBlockCache) normEntry(snap *backenddb.Snapshot, catalog
 	return entry, true, nil
 }
 
-func (cache *textV2SearchBlockCache) docMapEntry(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, ordinal uint64) (textV2SearchDocMapEntry, bool, error) {
-	blockStart := textV2OrdinalBlockStart(ordinal, textV2DefaultDocMapBlockSize)
+func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, first, last uint64, mins []uint32, stats *TextSearchStats) (hasLive bool, complete bool, err error) {
+	if first == 0 || last < first {
+		return false, false, errMalformedTextStorage("text-v2 invalid norm range [%d,%d]", first, last)
+	}
+	if len(mins) != len(ctx.fieldNames) {
+		return false, false, errMalformedTextStorage("text-v2 norm min field count %d want %d", len(mins), len(ctx.fieldNames))
+	}
+	for i := range mins {
+		mins[i] = math.MaxUint32
+	}
+	blockStart := textV2OrdinalBlockStart(first, textV2DefaultNormBlockSize)
 	if blockStart == 0 {
-		return textV2SearchDocMapEntry{}, false, errMalformedTextStorage("text-v2 invalid docmap ordinal %d", ordinal)
+		return false, false, errMalformedTextStorage("text-v2 invalid norm range start %d", first)
+	}
+	for blockStart <= last {
+		block, found, err := cache.normBlockAtOptional(snap, catalog, ctx, blockStart, stats)
+		if err != nil {
+			return false, false, err
+		}
+		if !found {
+			// Missing norm blocks can be legitimate sparse/tombstone-purged ordinal gaps,
+			// but they make the field-length minimum incomplete for this posting range.
+			// The caller must fail closed to the loose summary-only bound instead of
+			// treating the gap as proof that no live posting ordinal can score.
+			return hasLive, false, nil
+		}
+		overlapFirst := max(first, blockStart)
+		overlapLast := min(last, blockStart+uint64(textV2DefaultNormBlockSize)-1)
+		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= overlapFirst })
+		expectedOrdinal := overlapFirst
+		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= overlapLast {
+			entry := block.Entries[idx]
+			if entry.Ordinal != expectedOrdinal {
+				// A present sidecar block with a missing entry in the posting range
+				// does not prove the range is empty or fully bounded: the posting block
+				// may still reference a corrupt/missing norm entry that the exact scorer
+				// must fail closed on.
+				return hasLive, false, nil
+			}
+			if len(entry.FieldLengths) != len(ctx.fieldNames) {
+				return false, false, errMalformedTextStorage("text-v2 norm entry field count %d want %d", len(entry.FieldLengths), len(ctx.fieldNames))
+			}
+			if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.NormGeneration {
+				return false, false, errMalformedTextStorage("text-v2 norm entry outside status snapshot")
+			}
+			if !entry.tombstoned() {
+				for fieldIdx, length := range entry.FieldLengths {
+					if length < mins[fieldIdx] {
+						mins[fieldIdx] = length
+					}
+				}
+				hasLive = true
+			}
+			expectedOrdinal++
+			idx++
+		}
+		if expectedOrdinal <= overlapLast {
+			return hasLive, false, nil
+		}
+		if blockStart > math.MaxUint64-uint64(textV2DefaultNormBlockSize) {
+			break
+		}
+		blockStart += uint64(textV2DefaultNormBlockSize)
+	}
+	return hasLive, true, nil
+}
+
+func (cache *textV2SearchBlockCache) docMapBlockAtOptional(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, blockStart uint64) (textV2SearchDocMapBlock, bool, error) {
+	if blockStart == 0 {
+		return textV2SearchDocMapBlock{}, false, errMalformedTextStorage("text-v2 invalid docmap block start")
 	}
 	if cache.docMapBlocks == nil {
 		cache.docMapBlocks = make(map[uint64]textV2SearchDocMapBlock)
 	}
 	block, ok := cache.docMapBlocks[blockStart]
-	if !ok {
-		raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, ctx.docMapRootName, encodeTextV2BlockKey(blockStart), nil)
-		if err != nil {
-			return textV2SearchDocMapEntry{}, false, err
-		}
-		if !found {
-			return textV2SearchDocMapEntry{}, false, errMalformedTextStorage("missing text-v2 docmap block %d", blockStart)
-		}
-		decoded, err := decodeTextV2SearchDocMapBlock(raw)
-		if err != nil {
-			return textV2SearchDocMapEntry{}, false, err
-		}
-		if decoded.BlockStart != blockStart || decoded.BlockSize != textV2DefaultDocMapBlockSize {
-			return textV2SearchDocMapEntry{}, false, errMalformedTextStorage("text-v2 docmap block key/value mismatch")
-		}
-		cache.docMapBlocks[blockStart] = decoded
-		block = decoded
+	if ok {
+		return block, true, nil
+	}
+	raw, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, ctx.docMapRootName, encodeTextV2BlockKey(blockStart), nil)
+	if err != nil {
+		return textV2SearchDocMapBlock{}, false, err
+	}
+	if !found {
+		return textV2SearchDocMapBlock{}, false, nil
+	}
+	decoded, err := decodeTextV2SearchDocMapBlock(raw)
+	if err != nil {
+		return textV2SearchDocMapBlock{}, false, err
+	}
+	if decoded.BlockStart != blockStart || decoded.BlockSize != textV2DefaultDocMapBlockSize {
+		return textV2SearchDocMapBlock{}, false, errMalformedTextStorage("text-v2 docmap block key/value mismatch")
+	}
+	cache.docMapBlocks[blockStart] = decoded
+	return decoded, true, nil
+}
+
+func (cache *textV2SearchBlockCache) docMapBlockAt(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, blockStart uint64) (textV2SearchDocMapBlock, error) {
+	block, found, err := cache.docMapBlockAtOptional(snap, catalog, ctx, blockStart)
+	if err != nil {
+		return textV2SearchDocMapBlock{}, err
+	}
+	if !found {
+		return textV2SearchDocMapBlock{}, errMalformedTextStorage("missing text-v2 docmap block %d", blockStart)
+	}
+	return block, nil
+}
+
+func (cache *textV2SearchBlockCache) docMapEntry(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, ordinal uint64) (textV2SearchDocMapEntry, bool, error) {
+	blockStart := textV2OrdinalBlockStart(ordinal, textV2DefaultDocMapBlockSize)
+	if blockStart == 0 {
+		return textV2SearchDocMapEntry{}, false, errMalformedTextStorage("text-v2 invalid docmap ordinal %d", ordinal)
+	}
+	block, err := cache.docMapBlockAt(snap, catalog, ctx, blockStart)
+	if err != nil {
+		return textV2SearchDocMapEntry{}, false, err
 	}
 	entry, found := block.find(ordinal)
 	if !found {
@@ -2577,6 +2840,64 @@ func (cache *textV2SearchBlockCache) docMapEntry(snap *backenddb.Snapshot, catal
 		return textV2SearchDocMapEntry{}, false, errMalformedTextStorage("text-v2 docmap entry outside status snapshot")
 	}
 	return entry, true, nil
+}
+
+func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, first, last uint64) (minID []byte, hasLive bool, complete bool, err error) {
+	if first == 0 || last < first {
+		return nil, false, false, errMalformedTextStorage("text-v2 invalid docmap range [%d,%d]", first, last)
+	}
+	blockStart := textV2OrdinalBlockStart(first, textV2DefaultDocMapBlockSize)
+	if blockStart == 0 {
+		return nil, false, false, errMalformedTextStorage("text-v2 invalid docmap range start %d", first)
+	}
+	for blockStart <= last {
+		block, found, err := cache.docMapBlockAtOptional(snap, catalog, ctx, blockStart)
+		if err != nil {
+			return nil, false, false, err
+		}
+		if !found {
+			// Missing docmap blocks make the document-ID tie proof incomplete.
+			// Do not treat the gap as empty; let the caller visit the range so a
+			// referenced posting can fail closed through the required docmap lookup.
+			return minID, minID != nil, false, nil
+		}
+		overlapFirst := max(first, blockStart)
+		overlapLast := min(last, blockStart+uint64(textV2DefaultDocMapBlockSize)-1)
+		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= overlapFirst })
+		expectedOrdinal := overlapFirst
+		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= overlapLast {
+			entry := block.Entries[idx]
+			if entry.Ordinal != expectedOrdinal {
+				// A present sidecar block with a missing entry in the posting range
+				// does not prove the range is empty or fully bounded: the posting block
+				// may still reference a corrupt/missing docmap entry that the exact
+				// scorer must fail closed on.
+				return minID, minID != nil, false, nil
+			}
+			if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.DocMapGeneration {
+				return nil, false, false, errMalformedTextStorage("text-v2 docmap entry outside status snapshot")
+			}
+			if !entry.tombstoned() && (minID == nil || bytes.Compare(entry.DocumentID, minID) < 0) {
+				minID = entry.DocumentID
+			}
+			expectedOrdinal++
+			idx++
+		}
+		if expectedOrdinal <= overlapLast {
+			return minID, minID != nil, false, nil
+		}
+		if blockStart > math.MaxUint64-uint64(textV2DefaultDocMapBlockSize) {
+			break
+		}
+		blockStart += uint64(textV2DefaultDocMapBlockSize)
+	}
+	if minID == nil {
+		// A range with only tombstoned doc-map entries is not a safe tie-prune
+		// proof: corrupt tombstone flags can otherwise hide the required
+		// norm/docmap consistency check for referenced postings.
+		return nil, false, false, nil
+	}
+	return minID, true, true, nil
 }
 
 func orderTextV2SearchScanTerms(terms []string, operator TextSearchOperator, stats map[string]textV2TermStatsValue) []string {
