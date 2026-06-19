@@ -1315,9 +1315,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	baseSeq := db.meta.CommitSeq
 	db.mu.RUnlock()
 
-	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
-	defer db.releasePendingValueLogAppendPtrCollector(ptrCollector)
-	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, collectedIter, systemRootOrderedPublishOptions(db), false)
+	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, iter, systemRootOrderedPublishOptions(db), false)
 	if err != nil {
 		return 0, err
 	}

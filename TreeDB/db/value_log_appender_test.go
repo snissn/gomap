@@ -22,7 +22,7 @@ func TestAppendValueLogValuesUnavailableReturnsSentinel(t *testing.T) {
 	}
 }
 
-func TestAppendValueLogValuesPublishOrderedRootReleasesPendingPin(t *testing.T) {
+func TestAppendValueLogValuesPublishSystemRootReleasesPendingPin(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -55,12 +55,12 @@ func TestAppendValueLogValuesPublishOrderedRootReleasesPendingPin(t *testing.T) 
 	table := memtable.NewAppendOnlyWithEntryCapacity(1)
 	table.SetEntry([]byte("doc/p"), nil, ptrs[0], node.FlagPointer)
 	table.Freeze()
-	root, err := db.PublishOrderedRootIterator(0, table.NewIterator(nil, nil))
+	root, err := db.PublishSystemRootIterator(table.NewIterator(nil, nil))
 	if err != nil {
-		t.Fatalf("PublishOrderedRootIterator: %v", err)
+		t.Fatalf("PublishSystemRootIterator: %v", err)
 	}
 	if root == 0 {
-		t.Fatalf("PublishOrderedRootIterator returned root 0")
+		t.Fatalf("PublishSystemRootIterator returned root 0")
 	}
 
 	db.pendingValueLogAppendMu.Lock()
