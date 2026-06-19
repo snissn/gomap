@@ -436,9 +436,6 @@ func quantizedIndexRerankCapabilityDeclared(def collections.VectorIndexDefinitio
 		if codec == "" {
 			codec = collections.QuantizedVectorCodecScalarU8
 		}
-		if codec == collections.QuantizedVectorCodecScalarU8 && !scalarU8CalibrationDefinitionIsLegacy(q) {
-			continue
-		}
 		return true
 	}
 	return false
@@ -450,7 +447,7 @@ func scalarU8QuantizedRerankCapabilityDeclared(def collections.VectorIndexDefini
 		if codec == "" {
 			codec = collections.QuantizedVectorCodecScalarU8
 		}
-		if codec == collections.QuantizedVectorCodecScalarU8 && scalarU8CalibrationDefinitionIsLegacy(q) {
+		if codec == collections.QuantizedVectorCodecScalarU8 {
 			return true
 		}
 	}
