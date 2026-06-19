@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -12,7 +13,8 @@ import (
 const (
 	textV2KeyKindPosition byte = 0x22
 
-	textV2PositionValueVersion byte = 1
+	textV2PositionValueVersionV1 byte = 1
+	textV2PositionValueVersion   byte = 2
 )
 
 type textV2PositionFieldValue struct {
@@ -76,23 +78,30 @@ func encodeTextV2PositionValue(value textV2PositionValue) []byte {
 	out = appendTextUvarint(out, uint64(value.FormatVersion))
 	out = appendTextUvarint(out, value.Ordinal)
 	out = appendTextUvarint(out, value.Generation)
-	out = appendTextString(out, value.Term)
 	out = appendTextUvarint(out, uint64(len(fields)))
 	for _, field := range fields {
 		out = appendTextUvarint(out, uint64(field.FieldIndex))
 		out = appendTextUvarint(out, uint64(field.Frequency))
-		out = appendTextUint32Slice(out, field.Positions)
+		out = appendTextV2PositionDeltas(out, field.Positions)
 		out = appendTextOffsetSlice(out, field.Offsets)
 	}
 	return out
 }
 
 func decodeTextV2PositionValue(raw []byte) (textV2PositionValue, error) {
+	return decodeTextV2PositionValueForTerm(raw, "")
+}
+
+func decodeTextV2PositionValueForTerm(raw []byte, keyTerm string) (textV2PositionValue, error) {
 	if len(raw) == 0 {
 		return textV2PositionValue{}, errMalformedTextStorage("empty text-v2 position value")
 	}
-	if raw[0] != textV2PositionValueVersion {
+	valueVersion := raw[0]
+	if valueVersion != textV2PositionValueVersion && valueVersion != textV2PositionValueVersionV1 {
 		return textV2PositionValue{}, errUnsupportedTextStorageVersion("text-v2 position value", raw[0])
+	}
+	if valueVersion == textV2PositionValueVersion && keyTerm == "" {
+		return textV2PositionValue{}, errMalformedTextStorage("text-v2 position value v2 requires key term")
 	}
 	cur := textCursor{buf: raw[1:]}
 	formatVersion, err := cur.readUvarint()
@@ -110,9 +119,15 @@ func decodeTextV2PositionValue(raw []byte) (textV2PositionValue, error) {
 	if err != nil {
 		return textV2PositionValue{}, errMalformedTextStorage("text-v2 position generation: %v", err)
 	}
-	term, err := cur.readString()
-	if err != nil {
-		return textV2PositionValue{}, errMalformedTextStorage("text-v2 position term: %v", err)
+	term := keyTerm
+	if valueVersion == textV2PositionValueVersionV1 {
+		term, err = cur.readString()
+		if err != nil {
+			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position term: %v", err)
+		}
+		if keyTerm != "" && term != keyTerm {
+			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position key/value term mismatch")
+		}
 	}
 	fieldCount, err := cur.readUvarint()
 	if err != nil {
@@ -135,7 +150,12 @@ func decodeTextV2PositionValue(raw []byte) (textV2PositionValue, error) {
 		if err != nil {
 			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position field[%d] frequency: %v", i, err)
 		}
-		positions, err := cur.readUint32Slice()
+		var positions []uint32
+		if valueVersion == textV2PositionValueVersionV1 {
+			positions, err = cur.readUint32Slice()
+		} else {
+			positions, err = cur.readTextV2PositionDeltas()
+		}
 		if err != nil {
 			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position field[%d] positions: %v", i, err)
 		}
@@ -439,11 +459,83 @@ func cloneTextV2PositionFields(fields []textV2PositionFieldValue) []textV2Positi
 }
 
 func estimateTextV2PositionValueLen(value textV2PositionValue, fields []textV2PositionFieldValue) int {
-	n := 1 + binary.MaxVarintLen64*4 + len(value.Term)
+	n := 1 + binary.MaxVarintLen64*4
 	for _, field := range fields {
 		n += binary.MaxVarintLen64 * 2
-		n += encodedTextUint32SliceLen(field.Positions)
+		n += encodedTextV2PositionDeltasLen(field.Positions)
 		n += encodedTextOffsetSliceLen(field.Offsets)
 	}
 	return n
+}
+
+func encodedTextV2PositionDeltasLen(values []uint32) int {
+	n := textUvarintLen(uint64(len(values)))
+	var prev uint32
+	for i, value := range values {
+		delta := value
+		if i > 0 {
+			if value <= prev {
+				delta = 0
+			} else {
+				delta = value - prev
+			}
+		}
+		n += textUvarintLen(uint64(delta))
+		prev = value
+	}
+	return n
+}
+
+func appendTextV2PositionDeltas(dst []byte, values []uint32) []byte {
+	dst = appendTextUvarint(dst, uint64(len(values)))
+	var prev uint32
+	for i, value := range values {
+		delta := value
+		if i > 0 {
+			if value <= prev {
+				delta = 0
+			} else {
+				delta = value - prev
+			}
+		}
+		dst = appendTextUvarint(dst, uint64(delta))
+		prev = value
+	}
+	return dst
+}
+
+func (c *textCursor) readTextV2PositionDeltas() ([]uint32, error) {
+	count, err := c.readUvarint()
+	if err != nil {
+		return nil, err
+	}
+	if count > uint64(c.remaining()+1) {
+		return nil, errors.New("count too large")
+	}
+	out := make([]uint32, 0, count)
+	var prev uint32
+	for i := uint64(0); i < count; i++ {
+		delta, err := c.readUvarint()
+		if err != nil {
+			return nil, err
+		}
+		if delta > uint64(^uint32(0)) {
+			return nil, errors.New("uint32 overflow")
+		}
+		var value uint32
+		if i == 0 {
+			value = uint32(delta)
+		} else {
+			if delta == 0 {
+				return nil, errors.New("non-increasing position delta")
+			}
+			if delta > uint64(^uint32(0)-prev) {
+				return nil, errors.New("uint32 overflow")
+			}
+			value = prev + uint32(delta)
+		}
+		out = append(out, value)
+		prev = value
+	}
+	return out, nil
 }
