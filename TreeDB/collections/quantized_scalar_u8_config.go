@@ -66,6 +66,14 @@ type ScalarU8CalibrationConfig struct {
 	AlphaPolicy ScalarU8AlphaPolicy         `json:"alpha_policy,omitempty"`
 }
 
+// NormalizeScalarU8CalibrationConfig validates and canonicalizes the optional
+// scalar_u8 calibration config on q. Nil preserves the legacy scalar_u8 v1
+// behavior and empty codec identity; explicit empty/legacy configs normalize to
+// legacy mode so callers that send the field get deterministic metadata back.
+func NormalizeScalarU8CalibrationConfig(defName string, index int, q QuantizedVectorIndexDefinition) (*ScalarU8CalibrationConfig, error) {
+	return normalizeScalarU8CalibrationConfig(defName, index, q)
+}
+
 func normalizeScalarU8CalibrationConfig(defName string, index int, q QuantizedVectorIndexDefinition) (*ScalarU8CalibrationConfig, error) {
 	if q.ScalarU8Calibration == nil {
 		return nil, nil
@@ -133,10 +141,26 @@ func scalarU8CalibrationConfigClone(in *ScalarU8CalibrationConfig) *ScalarU8Cali
 }
 
 func scalarU8CalibrationConfigEqual(a, b *ScalarU8CalibrationConfig) bool {
+	if scalarU8CalibrationConfigLegacyEquivalent(a) && scalarU8CalibrationConfigLegacyEquivalent(b) {
+		return true
+	}
+	return scalarU8CalibrationConfigStrictEqual(a, b)
+}
+
+func scalarU8CalibrationConfigStrictEqual(a, b *ScalarU8CalibrationConfig) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
 	return *a == *b
+}
+
+func scalarU8CalibrationConfigLegacyEquivalent(cfg *ScalarU8CalibrationConfig) bool {
+	if cfg == nil {
+		return true
+	}
+	return (cfg.Mode == "" || cfg.Mode == ScalarU8CalibrationModeLegacy) &&
+		cfg.Grouping == "" &&
+		scalarU8AlphaPolicyZero(cfg.AlphaPolicy)
 }
 
 func scalarU8CalibrationMode(q QuantizedVectorIndexDefinition) ScalarU8CalibrationMode {
