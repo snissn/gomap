@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,6 +177,114 @@ func TestMetadataCommandsPreserveVectorIndexes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(metas[0].VectorIndexes[0], got) {
 		t.Fatalf("listed vector index=%+v want %+v", metas[0].VectorIndexes[0], got)
+	}
+}
+
+func TestMetadataCommandsPreserveScalarU8Calibration2842(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	wantCalibration := &collections.ScalarU8CalibrationConfig{
+		Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+		Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+		AlphaPolicy: collections.ScalarU8AlphaPolicy{
+			Name:        collections.ScalarU8AlphaPolicyAbsQuantile,
+			QuantilePPM: collections.ScalarU8AlphaPolicyAbsQuantilePPM999,
+		},
+	}
+	meta, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     collections.VectorMetricCosine,
+			Dimensions: 64,
+			Strategy:   collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:                "embedding.scalar_u8.alpha",
+				Codec:               collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: wantCalibration,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if len(meta.VectorIndexes) != 1 || len(meta.VectorIndexes[0].QuantizedIndexes) != 1 {
+		t.Fatalf("created vector indexes=%+v", meta.VectorIndexes)
+	}
+	gotCalibration := meta.VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration
+	if !reflect.DeepEqual(gotCalibration, wantCalibration) {
+		t.Fatalf("created scalar_u8 calibration=%+v want %+v", gotCalibration, wantCalibration)
+	}
+	metas, err := client.ListCollections(ctx)
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(metas) != 1 || len(metas[0].VectorIndexes) != 1 || len(metas[0].VectorIndexes[0].QuantizedIndexes) != 1 {
+		t.Fatalf("listed collections=%+v", metas)
+	}
+	listedCalibration := metas[0].VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration
+	if !reflect.DeepEqual(listedCalibration, wantCalibration) {
+		t.Fatalf("listed scalar_u8 calibration=%+v want %+v", listedCalibration, wantCalibration)
+	}
+}
+
+func TestDecodeCollectionMetaRejectsInvalidScalarU8Calibration2842(t *testing.T) {
+	base := collections.CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     collections.VectorMetricCosine,
+			Dimensions: 64,
+			Strategy:   collections.VectorIndexStrategyColumnGraph,
+		}},
+	}
+	tests := []struct {
+		name string
+		q    collections.QuantizedVectorIndexDefinition
+		want string
+	}{
+		{
+			name: "unsupported_mode",
+			q: collections.QuantizedVectorIndexDefinition{
+				Name:    "embedding.scalar_u8.bad",
+				Codec:   collections.QuantizedVectorCodecScalarU8,
+				Version: 1,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: "per_vector_alpha",
+				},
+			},
+			want: "mode",
+		},
+		{
+			name: "scalar_config_on_rabitq",
+			q: collections.QuantizedVectorIndexDefinition{
+				Name:    "embedding.rabitq.bad",
+				Codec:   "rabitq_1bit",
+				Version: 1,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: collections.ScalarU8CalibrationModeLegacy,
+				},
+			},
+			want: "requires codec",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := base
+			meta.VectorIndexes = append([]collections.VectorIndexDefinition(nil), base.VectorIndexes...)
+			meta.VectorIndexes[0].QuantizedIndexes = []collections.QuantizedVectorIndexDefinition{tt.q}
+			_, err := decodeCollectionMeta(encodeCollectionMeta(meta))
+			if nativeCodeOf(err) != iwire.ErrInvalidCommand || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("decodeCollectionMeta err=%v code=%d want invalid command containing %q", err, nativeCodeOf(err), tt.want)
+			}
+		})
 	}
 }
 

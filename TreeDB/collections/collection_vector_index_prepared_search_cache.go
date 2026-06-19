@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
 
 type collectionVectorIndexPreparedSearchFamily uint8
@@ -643,16 +644,20 @@ func collectionVectorIndexPreparedQuantizedSearchCacheKey(collection string, nam
 	if !ok {
 		return "", fmt.Errorf("%w: vector index %q quantized index %q is not declared", ErrVectorIndexSearchUnavailable, def.Name, quantizedIndexName)
 	}
-	asset, ok := columnVectorGraphQuantizedAssetByName(state, def)[quantizedIndexName]
-	if !ok {
+	assetSet, ok := columnVectorGraphQuantizedAssetSetsByName(state, def)[quantizedIndexName]
+	if !ok || !assetSet.HasCodes {
 		return "", fmt.Errorf("%w: %w: vector index %q quantized index %q has no quantized score-plane asset", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetMissing, def.Name, quantizedIndexName)
 	}
-	refIdentity := columnVectorGraphQuantizedAssetRefIdentity(asset.Ref)
-	schema, err := columnVectorGraphQuantizedAssetSchema(def, graph, qdef, asset, refIdentity)
+	refIdentity := columnVectorGraphQuantizedAssetRefIdentity(assetSet.Codes.Ref)
+	alphaIdentity := quantizedasset.AssetRefIdentity{}
+	if assetSet.HasAlpha {
+		alphaIdentity = columnVectorGraphQuantizedAssetRefIdentity(assetSet.Alpha.Ref)
+	}
+	schema, err := columnVectorGraphQuantizedAssetSchemaFromAssets(def, graph, qdef, assetSet, refIdentity, alphaIdentity)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w: vector index %q quantized index %q cache key schema identity: %v", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, def.Name, quantizedIndexName, err)
 	}
-	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|codec_config_hash=%d|codec_config=%x|code_dimensions=%d|code_width_bits=%d|max_decoded_blocks=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, schema.Codec.ConfigHash, schema.Codec.Config, schema.CodeDimensions, schema.CodeWidthBits, maxDecodedBlocks, asset.AssetID, asset.SourceSchemaHash, asset.AssetBytes, refIdentity, base), nil
+	return fmt.Sprintf("collection_buffered_quantized_v1|family=quantized|q=%s|codec=%s|version=%d|codec_config_hash=%d|codec_config=%x|code_dimensions=%d|code_width_bits=%d|max_decoded_blocks=%d|asset_id=%s|asset_schema=%d|asset_bytes=%d|asset_ref=%+v|alpha_asset_id=%s|alpha_schema=%d|alpha_bytes=%d|alpha_ref=%+v|%s", qdef.Name, qdef.Codec, qdef.Version, schema.Codec.ConfigHash, schema.Codec.Config, schema.CodeDimensions, schema.CodeWidthBits, maxDecodedBlocks, assetSet.Codes.AssetID, assetSet.Codes.SourceSchemaHash, assetSet.Codes.AssetBytes, refIdentity, assetSet.Alpha.AssetID, assetSet.Alpha.SourceSchemaHash, assetSet.Alpha.AssetBytes, alphaIdentity, base), nil
 }
 
 func (p *collectionVectorIndexPreparedSearch) readyForCurrentSearch() bool {

@@ -31,6 +31,8 @@ const (
 	RoleCentroidDotProduct     Role = "centroid_dot_product"
 	RoleCentroidID             Role = "centroid_id"
 	RoleListID                 Role = "list_id"
+	RoleScalarU8Alpha          Role = "scalar_u8_alpha"
+	RoleGranuleRowCount        Role = "granule_row_count"
 )
 
 // GraphOrdinalOrder describes how typed-column rows line up with scorer input
@@ -88,6 +90,7 @@ type SchemaDescriptor struct {
 	CodeDimensions   int
 	CodeWidthBits    int
 	RowCount         int
+	GranuleCount     int
 	OrdinalOrder     GraphOrdinalOrder
 	Codec            CodecDescriptor
 	BaseGraph        BaseGraphIdentity
@@ -102,6 +105,7 @@ type ExpectedSchema struct {
 	CodeDimensions   int
 	CodeWidthBits    int
 	RowCount         int
+	GranuleCount     int
 	OrdinalOrder     GraphOrdinalOrder
 	Codec            CodecDescriptor
 	BaseGraph        BaseGraphIdentity
@@ -117,6 +121,7 @@ type ColumnDescriptor struct {
 	LogicalType      string
 	Type             typedcolumn.ColumnType
 	Encoding         typedcolumn.Encoding
+	RowCount         int
 	ElementsPerRow   int
 	BytesPerRow      int
 	BitsPerElement   int
@@ -306,6 +311,12 @@ func validateSchema(schema SchemaDescriptor, expected ExpectedSchema) error {
 	if schema.RowCount != expected.RowCount {
 		return fmt.Errorf("quantizedasset: row_count=%d want %d", schema.RowCount, expected.RowCount)
 	}
+	if schema.GranuleCount < 0 {
+		return fmt.Errorf("quantizedasset: granule_count=%d", schema.GranuleCount)
+	}
+	if expected.GranuleCount != 0 && schema.GranuleCount != expected.GranuleCount {
+		return fmt.Errorf("quantizedasset: granule_count=%d want %d", schema.GranuleCount, expected.GranuleCount)
+	}
 	if schema.OrdinalOrder == "" {
 		return errors.New("quantizedasset: missing ordinal_order")
 	}
@@ -328,6 +339,9 @@ func validateSchema(schema SchemaDescriptor, expected ExpectedSchema) error {
 		}
 		if column.Column == "" {
 			return fmt.Errorf("quantizedasset: role %q missing column", column.Role)
+		}
+		if column.RowCount < 0 {
+			return fmt.Errorf("quantizedasset: role %q row_count=%d", column.Role, column.RowCount)
 		}
 		if _, ok := seen[column.Role]; ok {
 			return fmt.Errorf("quantizedasset: duplicate role %q", column.Role)
@@ -463,8 +477,9 @@ func resolvePart(parts map[string]PartImageSource, desc ColumnDescriptor) (PartI
 }
 
 func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImageSource) (preparedColumn, ColumnFootprint, error) {
-	if src.Image.Rows != schema.RowCount {
-		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q part rows=%d want schema row_count=%d", desc.Role, src.Image.Rows, schema.RowCount)
+	rows := descriptorRowCount(schema, desc)
+	if src.Image.Rows != rows {
+		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q part rows=%d want row_count=%d", desc.Role, src.Image.Rows, rows)
 	}
 	if desc.Ref.Present {
 		if !src.Ref.Present {
@@ -509,15 +524,15 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 	if err != nil {
 		return preparedColumn{}, ColumnFootprint{}, err
 	}
-	wantBytes, err := checkedMul(rowBytes, schema.RowCount)
+	wantBytes, err := checkedMul(rowBytes, rows)
 	if err != nil {
 		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q payload size: %w", desc.Role, err)
 	}
 	if len(payload) != wantBytes {
-		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q payload bytes=%d want rows=%d*row_bytes=%d", desc.Role, len(payload), schema.RowCount, rowBytes)
+		return preparedColumn{}, ColumnFootprint{}, fmt.Errorf("quantizedasset: role %q payload bytes=%d want rows=%d*row_bytes=%d", desc.Role, len(payload), rows, rowBytes)
 	}
 	if kind == preparedColumnPackedUint {
-		if err := validatePackedColumnPadding(desc.Role, schema.RowCount, certCol.FixedWidthElements, certCol.BitsPerElement, rowBytes, payload); err != nil {
+		if err := validatePackedColumnPadding(desc.Role, rows, certCol.FixedWidthElements, certCol.BitsPerElement, rowBytes, payload); err != nil {
 			return preparedColumn{}, ColumnFootprint{}, err
 		}
 	}
@@ -528,7 +543,7 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 		logicalType:       certCol.LogicalType,
 		typeName:          certCol.Type,
 		encoding:          certCol.Encoding,
-		rows:              schema.RowCount,
+		rows:              rows,
 		payload:           payload,
 		bytesPerRow:       rowBytes,
 		elementsPerRow:    certCol.FixedWidthElements,
@@ -546,7 +561,7 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 		LogicalType:       certCol.LogicalType,
 		Type:              certCol.Type,
 		Encoding:          certCol.Encoding,
-		Rows:              schema.RowCount,
+		Rows:              rows,
 		ElementsPerRow:    certCol.FixedWidthElements,
 		BytesPerRow:       rowBytes,
 		BitsPerElement:    certCol.BitsPerElement,
@@ -558,6 +573,18 @@ func prepareColumn(schema SchemaDescriptor, desc ColumnDescriptor, src PartImage
 		cf.BytesPerVector = float64(section.Length) / float64(schema.RowCount)
 	}
 	return col, cf, nil
+}
+
+func descriptorRowCount(schema SchemaDescriptor, desc ColumnDescriptor) int {
+	if desc.RowCount != 0 {
+		return desc.RowCount
+	}
+	switch desc.Role {
+	case RoleScalarU8Alpha, RoleGranuleRowCount:
+		return schema.GranuleCount
+	default:
+		return schema.RowCount
+	}
 }
 
 func validatePackedColumnPadding(role Role, rows, elementsPerRow, bitsPerElement, rowBytes int, payload []byte) error {
@@ -591,8 +618,9 @@ func validatePackedColumnPadding(role Role, rows, elementsPerRow, bitsPerElement
 }
 
 func validateColumnShape(schema SchemaDescriptor, desc ColumnDescriptor, cert typedcolumn.ColumnPartLayoutContractColumn, section typedcolumn.ColumnPartImageSection) error {
-	if cert.Rows != schema.RowCount {
-		return fmt.Errorf("quantizedasset: role %q cert rows=%d want %d", desc.Role, cert.Rows, schema.RowCount)
+	rows := descriptorRowCount(schema, desc)
+	if cert.Rows != rows {
+		return fmt.Errorf("quantizedasset: role %q cert rows=%d want %d", desc.Role, cert.Rows, rows)
 	}
 	if cert.Name != desc.Column {
 		return fmt.Errorf("quantizedasset: role %q cert column=%q want %q", desc.Role, cert.Name, desc.Column)
@@ -612,8 +640,8 @@ func validateColumnShape(schema SchemaDescriptor, desc ColumnDescriptor, cert ty
 	if section.Kind != typedcolumn.ColumnPartImageSectionColumnData || section.Category != typedcolumn.ColumnPartImageCategoryDeclaredColumns || section.Column != desc.Column {
 		return fmt.Errorf("quantizedasset: role %q invalid data section kind/category/column=(%s,%s,%q)", desc.Role, section.Kind, section.Category, section.Column)
 	}
-	if section.Rows != schema.RowCount {
-		return fmt.Errorf("quantizedasset: role %q section rows=%d want %d", desc.Role, section.Rows, schema.RowCount)
+	if section.Rows != rows {
+		return fmt.Errorf("quantizedasset: role %q section rows=%d want %d", desc.Role, section.Rows, rows)
 	}
 	if section.Offset != cert.Section.Offset || section.Length != cert.Section.Length {
 		return fmt.Errorf("quantizedasset: role %q section offset/length=(%d,%d) want cert=(%d,%d)", desc.Role, section.Offset, section.Length, cert.Section.Offset, cert.Section.Length)
@@ -662,12 +690,12 @@ func validateRoleType(role Role, cert typedcolumn.ColumnPartLayoutContractColumn
 			return nil
 		}
 		return fmt.Errorf("quantizedasset: role %q type/logical/encoding=(%s,%q,%s) is not a packed-code column", role, cert.Type, cert.LogicalType, cert.Encoding)
-	case RoleNorm, RoleStep, RoleLower, RoleCodeSum, RoleNorm2, RoleCentroidDistance, RoleQuantizedDotProductInv, RoleCentroidDotProduct:
+	case RoleNorm, RoleStep, RoleLower, RoleCodeSum, RoleNorm2, RoleCentroidDistance, RoleQuantizedDotProductInv, RoleCentroidDotProduct, RoleScalarU8Alpha:
 		if cert.Type == typedcolumn.ColumnTypeFloat32 && cert.Encoding == typedcolumn.EncodingRawFloat32 && cert.LogicalType == string(columnsemantics.LogicalFloat32) {
 			return nil
 		}
 		return fmt.Errorf("quantizedasset: role %q type/logical/encoding=(%s,%q,%s) want float32/raw_float32", role, cert.Type, cert.LogicalType, cert.Encoding)
-	case RoleCodeCount, RoleCentroidID, RoleListID:
+	case RoleCodeCount, RoleCentroidID, RoleListID, RoleGranuleRowCount:
 		if cert.Type == typedcolumn.ColumnTypeUint32 && cert.Encoding == typedcolumn.EncodingRawUint32 && cert.LogicalType == string(columnsemantics.LogicalUint32) {
 			return nil
 		}
@@ -761,7 +789,7 @@ func columnDataSection(image typedcolumn.ColumnPartImage, column string) (typedc
 // KnownRole reports whether role is part of the #1932 quantized schema contract.
 func KnownRole(role Role) bool {
 	switch role {
-	case RoleCodes, RolePackedCodes, RoleNorm, RoleStep, RoleLower, RoleCodeSum, RoleNorm2, RoleCodeCount, RoleCentroidDistance, RoleQuantizedDotProductInv, RoleCentroidDotProduct, RoleCentroidID, RoleListID:
+	case RoleCodes, RolePackedCodes, RoleNorm, RoleStep, RoleLower, RoleCodeSum, RoleNorm2, RoleCodeCount, RoleCentroidDistance, RoleQuantizedDotProductInv, RoleCentroidDotProduct, RoleCentroidID, RoleListID, RoleScalarU8Alpha, RoleGranuleRowCount:
 		return true
 	default:
 		return false
@@ -811,6 +839,17 @@ func (p *Prepared) HasRole(role Role) bool {
 	}
 	_, ok := p.columns[role]
 	return ok
+}
+
+// RoleRows returns the validated row count for a prepared role. Most code roles
+// use the vector row count; side metadata roles may use a smaller row count such
+// as one row per storage granule.
+func (p *Prepared) RoleRows(role Role) (int, bool) {
+	col, ok := p.preparedColumn(role)
+	if !ok {
+		return 0, false
+	}
+	return col.rows, true
 }
 
 // Footprint returns a copy of prepare-time byte accounting.
