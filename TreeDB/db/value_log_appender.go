@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -115,6 +116,20 @@ func (db *DB) protectPendingValueLogAppendPtrs(ptrs []page.ValuePtr) {
 	}
 }
 
+func (db *DB) releasePendingValueLogAppendFileIDsFromEntries(entries []batchpkg.Entry) {
+	if db == nil || len(entries) == 0 {
+		return
+	}
+	release := make(map[uint32]int64)
+	for _, entry := range entries {
+		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.ValuePtr.FileID == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+			continue
+		}
+		release[entry.ValuePtr.FileID]++
+	}
+	db.releasePendingValueLogAppendFileIDCounts(release)
+}
+
 func (db *DB) releasePendingValueLogAppendFileIDsFromDelta(delta *valueLogRefDelta) {
 	if db == nil || delta == nil {
 		return
@@ -124,7 +139,11 @@ func (db *DB) releasePendingValueLogAppendFileIDsFromDelta(delta *valueLogRefDel
 		release[fileID] += count
 		return nil
 	})
-	if len(release) == 0 {
+	db.releasePendingValueLogAppendFileIDCounts(release)
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDCounts(release map[uint32]int64) {
+	if db == nil || len(release) == 0 {
 		return
 	}
 	db.pendingValueLogAppendMu.Lock()

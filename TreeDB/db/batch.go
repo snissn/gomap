@@ -335,6 +335,8 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {
+		abandonedEntries, _ := b.batch.ApplyPlan()
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(abandonedEntries)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -349,6 +351,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	entries, ranges := b.batch.ApplyPlan()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
 	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		freeErr := tracker.FreeAll()
@@ -379,6 +382,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	}
 	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
 	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		freeErr := tracker.FreeAll()
@@ -394,6 +398,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		hook()
 		publishPrepareGuard, err = b.db.prepareFlushApplyPublish(sync)
 		if err != nil {
+			b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 			b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 			freeErr := tracker.FreeAll()
@@ -431,6 +436,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 			b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), false)
@@ -455,6 +461,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	b.db.commitMu.Unlock()
 	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		b.db.writeMu.RUnlock()
@@ -520,12 +527,15 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {
+		abandonedEntries, _ := b.batch.ApplyPlan()
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(abandonedEntries)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
 	entries, ranges := b.batch.ApplyPlan()
 	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
 	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
@@ -539,6 +549,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
 		// This should not happen if writeMu is held and we are the only writer.
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 		b.db.observeFlushApplyMismatch()
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackRootMismatch)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
@@ -550,6 +561,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 
 	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
 	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
@@ -563,6 +575,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
+			b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 			b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), false)
@@ -574,6 +587,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	if err != nil {
+		b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		if intent != nil {
