@@ -285,12 +285,37 @@ func (db *DB) observeFlushApplyCommitWait(wait time.Duration) {
 	addDurationNs(&db.flushApplyCommitWaitNs, wait)
 }
 
-func (db *DB) observeFlushApplyGuardedPublish(hold time.Duration) {
+func (db *DB) observeFlushApplyPublishPrepare(d time.Duration, err error) {
+	if db == nil {
+		return
+	}
+	db.flushApplyPublishPrepareCalls.Add(1)
+	if err != nil {
+		db.flushApplyPublishPrepareErrors.Add(1)
+	}
+	addDurationNs(&db.flushApplyPublishPrepareNs, d)
+}
+
+func (db *DB) prepareFlushApplyPublish(sync bool) (*finalizeCommitPrepareGuard, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	start := time.Now()
+	guard, err := db.prepareFinalizeCommitDurability(sync)
+	db.observeFlushApplyPublishPrepare(time.Since(start), err)
+	return guard, err
+}
+
+func (db *DB) observeFlushApplyGuardedPublish(hold time.Duration, installed bool) {
 	if db == nil {
 		return
 	}
 	db.flushApplyGuardedPublishCalls.Add(1)
 	addDurationNs(&db.flushApplyGuardedPublishNs, hold)
+	if installed {
+		db.flushApplyPublishFinalInstallCalls.Add(1)
+		addDurationNs(&db.flushApplyPublishFinalInstallNs, hold)
+	}
 }
 
 // FlushApplyReducerPublishNs returns the cumulative root-reduce plus guarded
@@ -454,13 +479,24 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.read_only_prepare.worker_ranges_total"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareWorkerRanges.Load())
 	stats["treedb.flush_apply.read_only_prepare.worker_ranges_max"] = fmt.Sprintf("%d", db.flushApplyReadOnlyPrepareWorkerRangesMax.Load())
 	stats["treedb.flush_apply.commit_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyCommitWaitNs.Load())
+	publishPrepareNs := db.flushApplyPublishPrepareNs.Load()
+	stats["treedb.flush_apply.publish_prepare.calls_total"] = fmt.Sprintf("%d", db.flushApplyPublishPrepareCalls.Load())
+	stats["treedb.flush_apply.publish_prepare.errors_total"] = fmt.Sprintf("%d", db.flushApplyPublishPrepareErrors.Load())
+	stats["treedb.flush_apply.publish_prepare.ns_total"] = fmt.Sprintf("%d", publishPrepareNs)
 	stats["treedb.flush_apply.guarded_publish.calls_total"] = fmt.Sprintf("%d", db.flushApplyGuardedPublishCalls.Load())
 	guardedPublishNs := db.flushApplyGuardedPublishNs.Load()
 	stats["treedb.flush_apply.guarded_publish.ns_total"] = fmt.Sprintf("%d", guardedPublishNs)
+	stats["treedb.flush_apply.publish_final_install.calls_total"] = fmt.Sprintf("%d", db.flushApplyPublishFinalInstallCalls.Load())
+	stats["treedb.flush_apply.publish_final_install.ns_total"] = fmt.Sprintf("%d", db.flushApplyPublishFinalInstallNs.Load())
+	publishTotalNs := publishPrepareNs + guardedPublishNs
+	stats["treedb.flush_apply.publish_total.ns_total"] = fmt.Sprintf("%d", publishTotalNs)
 	reducerPublishNs := rootReduceNs + guardedPublishNs
 	stats["treedb.flush_apply.reducer_publish.ns_total"] = fmt.Sprintf("%d", reducerPublishNs)
 	if applyOps > 0 {
+		stats["treedb.flush_apply.publish_prepare.ns_per_op"] = fmt.Sprintf("%.6f", float64(publishPrepareNs)/float64(applyOps))
 		stats["treedb.flush_apply.guarded_publish.ns_per_op"] = fmt.Sprintf("%.6f", float64(guardedPublishNs)/float64(applyOps))
+		stats["treedb.flush_apply.publish_final_install.ns_per_op"] = fmt.Sprintf("%.6f", float64(db.flushApplyPublishFinalInstallNs.Load())/float64(applyOps))
+		stats["treedb.flush_apply.publish_total.ns_per_op"] = fmt.Sprintf("%.6f", float64(publishTotalNs)/float64(applyOps))
 		stats["treedb.flush_apply.reducer_publish.ns_per_op"] = fmt.Sprintf("%.6f", float64(reducerPublishNs)/float64(applyOps))
 	}
 	stats["treedb.flush_apply.span_native.candidate_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeCandidateOps.Load())

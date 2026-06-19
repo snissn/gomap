@@ -193,6 +193,9 @@ type orderedRootDeltaGroupPublishStats struct {
 	systemApplyCalls                       uint64
 	systemApplyOps                         uint64
 	systemApplyNodeLoads                   uint64
+	publishPrepareNs                       uint64
+	publishPrepareCalls                    uint64
+	publishPrepareErrors                   uint64
 	finalizeNs                             uint64
 	finalizeCalls                          uint64
 	latencyP99                             time.Duration
@@ -222,6 +225,9 @@ type orderedRootDeltaGroupPublishPhaseStats struct {
 	systemApplyNs                          uint64
 	systemApplyCalls                       uint64
 	systemApplyMetrics                     orderedRootDeltaGroupZipperStats
+	publishPrepareNs                       uint64
+	publishPrepareCalls                    uint64
+	publishPrepareErrors                   uint64
 	finalizeNs                             uint64
 	finalizeCalls                          uint64
 }
@@ -393,6 +399,9 @@ func (db *DB) observeOrderedRootDeltaGroupPublish(wait, hold time.Duration, root
 	db.orderedRootDeltaGroupSystemApplyCalls.Add(phases.systemApplyCalls)
 	db.orderedRootDeltaGroupSystemApplyOps.Add(orderedRootDeltaGroupMetricUint(phases.systemApplyMetrics.ZipperApplyOps))
 	db.orderedRootDeltaGroupSystemApplyNodeLoads.Add(orderedRootDeltaGroupMetricUint(phases.systemApplyMetrics.ZipperNodeLoads))
+	db.orderedRootDeltaGroupPublishPrepareNs.Add(phases.publishPrepareNs)
+	db.orderedRootDeltaGroupPublishPrepareCalls.Add(phases.publishPrepareCalls)
+	db.orderedRootDeltaGroupPublishPrepareErrors.Add(phases.publishPrepareErrors)
 	db.orderedRootDeltaGroupFinalizeNs.Add(phases.finalizeNs)
 	db.orderedRootDeltaGroupFinalizeCalls.Add(phases.finalizeCalls)
 	for {
@@ -471,6 +480,9 @@ func (db *DB) orderedRootDeltaGroupPublishStats() orderedRootDeltaGroupPublishSt
 		systemApplyCalls:                       db.orderedRootDeltaGroupSystemApplyCalls.Load(),
 		systemApplyOps:                         db.orderedRootDeltaGroupSystemApplyOps.Load(),
 		systemApplyNodeLoads:                   db.orderedRootDeltaGroupSystemApplyNodeLoads.Load(),
+		publishPrepareNs:                       db.orderedRootDeltaGroupPublishPrepareNs.Load(),
+		publishPrepareCalls:                    db.orderedRootDeltaGroupPublishPrepareCalls.Load(),
+		publishPrepareErrors:                   db.orderedRootDeltaGroupPublishPrepareErrors.Load(),
 		finalizeNs:                             db.orderedRootDeltaGroupFinalizeNs.Load(),
 		finalizeCalls:                          db.orderedRootDeltaGroupFinalizeCalls.Load(),
 	}

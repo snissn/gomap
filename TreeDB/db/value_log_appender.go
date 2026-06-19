@@ -1,8 +1,12 @@
 package db
 
 import (
+	"context"
 	"errors"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -84,7 +88,278 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	if appender == nil {
 		return nil, ErrValueLogAppenderUnavailable
 	}
-	return appender.AppendValues(values)
+	db.publishPrepareMu.RLock()
+	defer db.publishPrepareMu.RUnlock()
+	ptrs, err := appender.AppendValues(values)
+	if err != nil {
+		return nil, err
+	}
+	db.protectPendingValueLogAppendPtrs(ptrs)
+	return ptrs, nil
+}
+
+// protectPendingValueLogAppendPtrs pins value-log files returned to native-root
+// callers until a later root publish makes those pointers reachable. A shared
+// appender flush can make another writer's not-yet-published segment visible on
+// disk; ValueLogGC consults this set so it cannot reclaim that segment against
+// the older root snapshot.
+func (db *DB) protectPendingValueLogAppendPtrs(ptrs []page.ValuePtr) {
+	if db == nil || len(ptrs) == 0 {
+		return
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	for _, ptr := range ptrs {
+		if ptr.FileID == 0 || !page.IsValueLogFileID(ptr.FileID) {
+			continue
+		}
+		if db.pendingValueLogAppendFileIDRefs == nil {
+			db.pendingValueLogAppendFileIDRefs = make(map[uint32]int)
+		}
+		if db.pendingValueLogAppendPtrRefs == nil {
+			db.pendingValueLogAppendPtrRefs = make(map[page.ValuePtr]int)
+		}
+		db.pendingValueLogAppendFileIDRefs[ptr.FileID]++
+		db.pendingValueLogAppendPtrRefs[ptr]++
+	}
+}
+
+// ReleaseValueLogValues releases pending GC pins for previously appended
+// value-log pointers. Native-root callers should call this when pointers are
+// abandoned before publication or after a detached root containing those
+// pointers has been made reachable by a later catalog/system-root publish.
+func (db *DB) ReleaseValueLogValues(ptrs []page.ValuePtr) {
+	if db == nil || len(ptrs) == 0 {
+		return
+	}
+	release := make(map[page.ValuePtr]int64, len(ptrs))
+	for _, ptr := range ptrs {
+		if ptr.FileID == 0 || !page.IsValueLogFileID(ptr.FileID) {
+			continue
+		}
+		release[ptr]++
+	}
+	db.releasePendingValueLogAppendPtrCounts(release)
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDsFromEntries(entries []batchpkg.Entry) {
+	if db == nil || len(entries) == 0 {
+		return
+	}
+	release := make(map[page.ValuePtr]int64)
+	for _, entry := range entries {
+		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.ValuePtr.FileID == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+			continue
+		}
+		release[entry.ValuePtr]++
+	}
+	db.releasePendingValueLogAppendPtrCounts(release)
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDsFromBatch(delta *batchpkg.Batch) {
+	if db == nil || delta == nil || delta.IsEmpty() {
+		return
+	}
+	db.releasePendingValueLogAppendFileIDsFromEntries(delta.OrderedEntries())
+}
+
+func collectPendingValueLogAppendPtrCount(counts map[page.ValuePtr]int64, ptr page.ValuePtr, flags byte) map[page.ValuePtr]int64 {
+	if flags&node.FlagPointer == 0 || ptr.FileID == 0 || !page.IsValueLogFileID(ptr.FileID) {
+		return counts
+	}
+	if counts == nil {
+		counts = make(map[page.ValuePtr]int64)
+	}
+	counts[ptr]++
+	return counts
+}
+
+type pendingValueLogAppendPtrCollectingIterator struct {
+	iterator.UnsafeIterator
+	ptrCounts map[page.ValuePtr]int64
+}
+
+func newPendingValueLogAppendPtrCollectingIterator(iter iterator.UnsafeIterator) (*pendingValueLogAppendPtrCollectingIterator, iterator.UnsafeIterator) {
+	if iter == nil {
+		return nil, nil
+	}
+	collector := &pendingValueLogAppendPtrCollectingIterator{UnsafeIterator: iter}
+	return collector, collector
+}
+
+func (iter *pendingValueLogAppendPtrCollectingIterator) UnsafeEntry() (val []byte, ptr page.ValuePtr, flags byte) {
+	val, ptr, flags = iter.UnsafeIterator.UnsafeEntry()
+	iter.ptrCounts = collectPendingValueLogAppendPtrCount(iter.ptrCounts, ptr, flags)
+	return val, ptr, flags
+}
+
+func (db *DB) releasePendingValueLogAppendPtrCollector(collector *pendingValueLogAppendPtrCollectingIterator) {
+	if db == nil || collector == nil || len(collector.ptrCounts) == 0 {
+		return
+	}
+	db.releasePendingValueLogAppendPtrCounts(collector.ptrCounts)
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDsFromDelta(delta *valueLogRefDelta) {
+	if db == nil || delta == nil {
+		return
+	}
+	release := make(map[uint32]int64)
+	_ = delta.forEachPositive(func(fileID uint32, count int64) error {
+		release[fileID] += count
+		return nil
+	})
+	db.releasePendingValueLogAppendFileIDCounts(release)
+}
+
+func (db *DB) releasePendingValueLogAppendPtrCounts(release map[page.ValuePtr]int64) {
+	if db == nil || len(release) == 0 {
+		return
+	}
+	fileIDs := make(map[uint32]int64, len(release))
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	for ptr, n := range release {
+		refs := db.pendingValueLogAppendPtrRefs[ptr]
+		if refs <= 0 {
+			continue
+		}
+		actual := int(n)
+		if refs < actual {
+			actual = refs
+		}
+		if refs == actual {
+			delete(db.pendingValueLogAppendPtrRefs, ptr)
+		} else {
+			db.pendingValueLogAppendPtrRefs[ptr] = refs - actual
+		}
+		fileIDs[ptr.FileID] += int64(actual)
+	}
+	for fileID, n := range fileIDs {
+		refs := db.pendingValueLogAppendFileIDRefs[fileID]
+		if refs <= int(n) {
+			delete(db.pendingValueLogAppendFileIDRefs, fileID)
+			continue
+		}
+		db.pendingValueLogAppendFileIDRefs[fileID] = refs - int(n)
+	}
+	if len(db.pendingValueLogAppendPtrRefs) == 0 {
+		db.pendingValueLogAppendPtrRefs = nil
+	}
+	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
+		db.pendingValueLogAppendFileIDRefs = nil
+	}
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDCounts(release map[uint32]int64) {
+	if db == nil || len(release) == 0 {
+		return
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	for fileID, n := range release {
+		refs := db.pendingValueLogAppendFileIDRefs[fileID]
+		if refs <= int(n) {
+			delete(db.pendingValueLogAppendFileIDRefs, fileID)
+			continue
+		}
+		db.pendingValueLogAppendFileIDRefs[fileID] = refs - int(n)
+	}
+	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
+		db.pendingValueLogAppendFileIDRefs = nil
+	}
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDsReferenced(ctx context.Context) error {
+	pending := db.pendingValueLogAppendPtrs()
+	if len(pending) == 0 {
+		return nil
+	}
+	referenced, err := db.referencedPendingValueLogAppendPtrs(ctx, pending)
+	if err != nil {
+		return err
+	}
+	db.releasePendingValueLogAppendPtrCounts(referenced)
+	return nil
+}
+
+func (db *DB) referencedPendingValueLogAppendPtrs(ctx context.Context, pending map[page.ValuePtr]struct{}) (map[page.ValuePtr]int64, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return nil, nil
+	}
+	roots, err := maintenanceRootsForSnapshot(snap)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	roots = dedupeMaintenanceRootsByRootID(roots)
+	referenced := make(map[page.ValuePtr]int64)
+	for _, root := range roots {
+		iter := scanValueLogRefCountRootIterator(snap, root)
+		for iter.Valid() {
+			if err := ctx.Err(); err != nil {
+				_ = iter.Close()
+				_ = snap.Close()
+				return nil, err
+			}
+			_, ptr, flags := iter.UnsafeEntry()
+			if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+				if _, ok := pending[ptr]; ok {
+					referenced[ptr]++
+				}
+			}
+			iter.Next()
+		}
+		if err := iter.Error(); err != nil {
+			_ = iter.Close()
+			_ = snap.Close()
+			return nil, err
+		}
+		_ = iter.Close()
+	}
+	if err := snap.Close(); err != nil {
+		return nil, err
+	}
+	return referenced, nil
+}
+
+func (db *DB) pendingValueLogAppendPtrs() map[page.ValuePtr]struct{} {
+	if db == nil {
+		return nil
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	if len(db.pendingValueLogAppendPtrRefs) == 0 {
+		return nil
+	}
+	out := make(map[page.ValuePtr]struct{}, len(db.pendingValueLogAppendPtrRefs))
+	for ptr := range db.pendingValueLogAppendPtrRefs {
+		out[ptr] = struct{}{}
+	}
+	return out
+}
+
+func (db *DB) pendingValueLogAppendFileIDs() map[uint32]struct{} {
+	if db == nil {
+		return nil
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
+		return nil
+	}
+	out := make(map[uint32]struct{}, len(db.pendingValueLogAppendFileIDRefs))
+	for fileID := range db.pendingValueLogAppendFileIDRefs {
+		out[fileID] = struct{}{}
+	}
+	return out
 }
 
 func (db *DB) installCommandWALValueLogAppender() error {

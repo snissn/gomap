@@ -78,8 +78,8 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   `treedb.flush_apply.*`, `treedb.flush_apply.span_run.*`, and
   `treedb.flush_apply.span_native.*` counters so planning, canonical run shape,
   old-leaf read/decode bytes/op, leaf merges/op, replacement pages/op,
-  append frames/op, guarded publish, reducer/publish, checkpoint wait splits,
-  fallback reasons, retry, and foreground-assist stages appear beside
+  append frames/op, publish prepare/final-install, guarded publish,
+  reducer/publish, checkpoint wait splits, fallback reasons, retry, and foreground-assist stages appear beside
   CPU/allocation/contention profiles. Value-log codec policy artifacts also preserve
   `treedb.cache.vlog_auto.*`, `treedb.cache.vlog_write_mode.*`,
   `treedb.cache.vlog_payload_kind.*`, `treedb.cache.vlog_payload_split.*`,

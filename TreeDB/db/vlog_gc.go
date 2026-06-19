@@ -125,6 +125,14 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	if vm == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
+	if !opts.DryRun {
+		// Publish preparation can flush value-log segments before the root that
+		// references them is installed. Serialize the reachability scan and delete
+		// phase with that prepared-publish window so GC cannot classify those
+		// segments against the previous root and remove them prematurely.
+		db.publishPrepareMu.Lock()
+		defer db.publishPrepareMu.Unlock()
+	}
 
 	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
 	var referenced map[uint32]struct{}
@@ -176,6 +184,10 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 		}
 	}
+	pendingAppendIDs := db.pendingValueLogAppendFileIDs()
+	for id := range pendingAppendIDs {
+		keptIDs[id] = struct{}{}
+	}
 	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
 	for _, path := range opts.ProtectedPaths {
 		if path == "" {
@@ -226,6 +238,17 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			stats.SegmentsTotal++
 			stats.BytesTotal += size
 
+			if _, ok := pendingAppendIDs[id]; ok {
+				stats.SegmentsProtected++
+				stats.BytesProtected += size
+				stats.SegmentsProtectedOther++
+				stats.BytesProtectedOther += size
+				stats.ObservedSourceSegmentsProtected++
+				stats.ObservedSourceBytesProtected += size
+				stats.ObservedSourceSegmentsProtectedOther++
+				stats.ObservedSourceBytesProtectedOther += size
+				continue
+			}
 			if _, ok := keptIDs[id]; ok && !opts.ObservedSourceReclaimActive {
 				stats.SegmentsActive++
 				stats.BytesActive += size

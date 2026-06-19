@@ -6405,7 +6405,10 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "flush_apply.span_native.fallback.reducer_validation_failed_ops_total", alts: []string{"treedb.flush_apply.span_native.fallback.reason.reducer_validation_failed.ops_total"}},
 		{label: "flush_apply.root_reduce.ns_total", alts: []string{"treedb.flush_apply.root_reduce.ns_total"}},
 		{label: "flush_apply.commit_wait_ns_total", alts: []string{"treedb.flush_apply.commit_wait_ns_total"}},
+		{label: "flush_apply.publish_prepare.ns_total", alts: []string{"treedb.flush_apply.publish_prepare.ns_total"}},
 		{label: "flush_apply.guarded_publish.ns_total", alts: []string{"treedb.flush_apply.guarded_publish.ns_total"}},
+		{label: "flush_apply.publish_final_install.ns_total", alts: []string{"treedb.flush_apply.publish_final_install.ns_total"}},
+		{label: "flush_apply.publish_total.ns_total", alts: []string{"treedb.flush_apply.publish_total.ns_total"}},
 		{label: "flush_apply.reducer_publish.ns_total", alts: []string{"treedb.flush_apply.reducer_publish.ns_total"}},
 		{label: "flush_apply.retry_total", alts: []string{"treedb.flush_apply.retry_total"}},
 		{label: "flush_apply.mismatch_total", alts: []string{"treedb.flush_apply.mismatch_total"}},
@@ -6420,6 +6423,7 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_pages_written_total"}},
 		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total"}},
 		{label: "publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total"}},
+		{label: "publish.ordered_root_delta_group.publish_prepare_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.publish_prepare_ns_total"}},
 		{label: "publish.ordered_root_delta_group.write_lock_wait_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total"}},
 		{label: "publish.ordered_root_delta_group.write_lock_hold_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total"}},
 	}

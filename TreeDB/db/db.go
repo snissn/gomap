@@ -151,20 +151,24 @@ type DB struct {
 	maintenanceOpsPerCoalesce      int
 	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
-	mu               sync.RWMutex
-	writeMu          sync.RWMutex
-	commitMu         sync.Mutex
-	updateLocks      keyupdate.Locks
-	maintenanceMu    sync.Mutex
-	combineMu        sync.RWMutex
-	combineReqCh     chan *commitCombineReq
-	combineStopCh    chan struct{}
-	combineDoneCh    chan struct{}
-	vacuumInProgress atomic.Bool
-	vacuum           vacuumRecorder
-	meta             page.MetaPageBody
-	metaPageID       uint64
-	commandJournal   *commitlog.CommandJournal
+	mu                              sync.RWMutex
+	writeMu                         sync.RWMutex
+	commitMu                        sync.Mutex
+	publishPrepareMu                sync.RWMutex
+	pendingValueLogAppendMu         sync.Mutex
+	pendingValueLogAppendFileIDRefs map[uint32]int
+	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
+	updateLocks                     keyupdate.Locks
+	maintenanceMu                   sync.Mutex
+	combineMu                       sync.RWMutex
+	combineReqCh                    chan *commitCombineReq
+	combineStopCh                   chan struct{}
+	combineDoneCh                   chan struct{}
+	vacuumInProgress                atomic.Bool
+	vacuum                          vacuumRecorder
+	meta                            page.MetaPageBody
+	metaPageID                      uint64
+	commandJournal                  *commitlog.CommandJournal
 
 	state atomic.Pointer[DBState]
 
@@ -269,6 +273,9 @@ type DB struct {
 	orderedRootDeltaGroupSystemApplyCalls                       atomic.Uint64
 	orderedRootDeltaGroupSystemApplyOps                         atomic.Uint64
 	orderedRootDeltaGroupSystemApplyNodeLoads                   atomic.Uint64
+	orderedRootDeltaGroupPublishPrepareNs                       atomic.Uint64
+	orderedRootDeltaGroupPublishPrepareCalls                    atomic.Uint64
+	orderedRootDeltaGroupPublishPrepareErrors                   atomic.Uint64
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
 
@@ -343,6 +350,11 @@ type DB struct {
 	flushApplySpanNativeFallbackOps               [FlushSpanRunFallbackReasonCount]atomic.Uint64
 	flushApplySpanNativeFallbackSpans             [FlushSpanRunFallbackReasonCount]atomic.Uint64
 	flushApplyCommitWaitNs                        atomic.Uint64
+	flushApplyPublishPrepareCalls                 atomic.Uint64
+	flushApplyPublishPrepareErrors                atomic.Uint64
+	flushApplyPublishPrepareNs                    atomic.Uint64
+	flushApplyPublishFinalInstallCalls            atomic.Uint64
+	flushApplyPublishFinalInstallNs               atomic.Uint64
 	flushApplyGuardedPublishCalls                 atomic.Uint64
 	flushApplyGuardedPublishNs                    atomic.Uint64
 	flushApplyLeafLogOutputReservationWaitNs      atomic.Uint64
@@ -404,13 +416,14 @@ type DB struct {
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
-	testFailWriteMeta                  atomic.Bool
-	testFailCommandWALFlush            atomic.Bool
-	testAfterOptimisticApplyHook       func()
-	testCommandWALRecoveryFailAfterLSN atomic.Uint64
-	commandWALReplayLSN                atomic.Uint64
-	commandWALReplayToken              atomic.Uint64
-	commandWALReplayTokenSeq           atomic.Uint64
+	testFailWriteMeta                     atomic.Bool
+	testFailCommandWALFlush               atomic.Bool
+	testAfterOptimisticApplyHook          func()
+	testAfterOptimisticPublishPrepareHook func()
+	testCommandWALRecoveryFailAfterLSN    atomic.Uint64
+	commandWALReplayLSN                   atomic.Uint64
+	commandWALReplayToken                 atomic.Uint64
+	commandWALReplayTokenSeq              atomic.Uint64
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
@@ -2441,31 +2454,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	}
 	valueLogAppender := db.currentValueLogAppender()
 
-	// Ensure value-log-backed leaf pages are flushed before we publish an index
-	// commit that references them. Per-root storage policies can use the leaf
-	// page log even when the DB-level default stores outer leaves in index pages.
-	if db.leafPageLog != nil {
-		if sync {
-			if err := db.leafPageLog.Sync(); err != nil {
-				return post, prePublishErr(err)
-			}
-		} else {
-			if err := db.leafPageLog.Flush(); err != nil {
-				return post, prePublishErr(err)
-			}
-		}
-	}
-	if valueLogAppender != nil {
-		if sync {
-			if err := valueLogAppender.Sync(); err != nil {
-				return post, prePublishErr(err)
-			}
-		} else {
-			if err := valueLogAppender.Flush(); err != nil {
-				return post, prePublishErr(err)
-			}
-		}
-	}
 	debugTiming := commitTimingEnabled()
 	var (
 		start    time.Time
@@ -2476,18 +2464,24 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if debugTiming {
 		start = time.Now()
 	}
-	var watermarkWait, watermarkHold time.Duration
-
-	// 1. Sync Data (Index Pages) - No DB Lock
-	if sync {
+	var inlinePublishPrepareGuard *finalizeCommitPrepareGuard
+	if !opts.skipPrePublishFlush {
+		db.publishPrepareMu.RLock()
+		inlinePublishPrepareGuard = &finalizeCommitPrepareGuard{db: db}
+		defer inlinePublishPrepareGuard.Release()
 		t0 := time.Now()
-		if err := idx.pager.Sync(); err != nil {
+		if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, sync); err != nil {
 			return post, prePublishErr(err)
 		}
 		if debugTiming {
 			durSync1 = time.Since(t0)
 		}
 	}
+	var watermarkWait, watermarkHold time.Duration
+
+	// 1. Data/leaf-log/value-log flush is complete here. Prepared publish callers
+	// may have done it outside commit serialization; ordinary callers did it
+	// above through flushFinalizeCommitDurability.
 
 	// 2. Prepare Meta - Short Lock
 	lockStart := time.Now()

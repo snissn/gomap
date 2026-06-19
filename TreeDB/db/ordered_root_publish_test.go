@@ -1900,6 +1900,9 @@ func TestPublishOrderedRootDeltaGroupWithSystemBuilder_ReportsPublishStats(t *te
 		"treedb.publish.ordered_root_delta_group.system_apply_ns_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_ops_total",
 		"treedb.publish.ordered_root_delta_group.system_apply_node_loads_total",
+		"treedb.publish.ordered_root_delta_group.publish_prepare_ns_total",
+		"treedb.publish.ordered_root_delta_group.publish_prepare_calls_total",
+		"treedb.publish.ordered_root_delta_group.publish_prepare_errors_total",
 		"treedb.publish.ordered_root_delta_group.finalize_ns_total",
 	} {
 		if _, ok := stats[key]; !ok {
@@ -2325,6 +2328,12 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticAppli
 	}
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "2" {
 		t.Fatalf("root apply calls stat=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.publish_prepare_calls_total"]; got != "1" {
+		t.Fatalf("publish prepare calls stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.publish_prepare_errors_total"]; got != "0" {
+		t.Fatalf("publish prepare errors stat=%q want 0", got)
 	}
 }
 

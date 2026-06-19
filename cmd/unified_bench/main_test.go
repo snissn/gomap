@@ -2515,6 +2515,7 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 				"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "11",
 				"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total":    "2048",
 				"treedb.publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total": "4096",
+				"treedb.publish.ordered_root_delta_group.publish_prepare_ns_total":                     "66",
 				"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total":                     "12345",
 				"treedb.cache.vlog_auto.frames.block_lz4":                                              "7",
 				"treedb.cache.vlog_auto.bytes.block_lz4":                                               "3500",
@@ -2582,6 +2583,7 @@ func TestRenderMarkdownSingle_IncludesTreeDBPerfSections(t *testing.T) {
 		"publish.ordered_root_delta_group.root_apply_calls_total: 11",
 		"publish.ordered_root_delta_group.root_apply_leaf_log_node_bytes_read_total: 2048",
 		"publish.ordered_root_delta_group.root_apply_leaf_log_page_bytes_written_total: 4096",
+		"publish.ordered_root_delta_group.publish_prepare_ns_total: 66",
 		"publish.ordered_root_delta_group.write_lock_hold_ns_total: 12345",
 		"applied_command_lsn: 3",
 		"command_wal.enabled: true",
@@ -3001,6 +3003,9 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 			"treedb.flush_apply.span_native.scheduler.task_bytes_per_task":                         "512.000000",
 			"treedb.flush_apply.span_native.scheduler.task_bytes_max":                              "1024",
 			"treedb.flush_apply.span_native.scheduler.single_span_tasks_total":                     "1",
+			"treedb.flush_apply.publish_prepare.ns_total":                                          "44",
+			"treedb.flush_apply.publish_final_install.ns_total":                                    "55",
+			"treedb.flush_apply.publish_total.ns_total":                                            "99",
 			"treedb.flush_apply.reducer_publish.ns_total":                                          "99",
 			"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
 			"treedb.flush_apply.span_native.fallback.reason.root_mismatch.ops_total":               "1",
@@ -3050,6 +3055,9 @@ func TestRenderTreeDBSelectedStatsString_IncludesSpanRunProofCounters(t *testing
 		"flush_apply.span_native.scheduler.task_bytes_per_task: 512.000000",
 		"flush_apply.span_native.scheduler.task_bytes_max: 1024",
 		"flush_apply.span_native.scheduler.single_span_tasks_total: 1",
+		"flush_apply.publish_prepare.ns_total: 44",
+		"flush_apply.publish_final_install.ns_total: 55",
+		"flush_apply.publish_total.ns_total: 99",
 		"flush_apply.reducer_publish.ns_total: 99",
 		"flush_apply.span_native.fallback.not_implemented_ops_total: 10",
 		"flush_apply.span_native.fallback.root_mismatch_ops_total: 1",
@@ -3265,9 +3273,13 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 					"treedb.flush_apply.span_native.scheduler.worker_idle_ns_total":                        "3000",
 					"treedb.flush_apply.span_native.scheduler.ready_tasks_total":                           "8",
 					"treedb.flush_apply.span_native.scheduler.task_spans_per_task":                         "6.000000",
+					"treedb.flush_apply.publish_prepare.ns_total":                                          "44",
+					"treedb.flush_apply.publish_final_install.ns_total":                                    "55",
+					"treedb.flush_apply.publish_total.ns_total":                                            "99",
 					"treedb.flush_apply.reducer_publish.ns_total":                                          "99",
 					"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
 					"treedb.publish.ordered_root_delta_group.root_apply_calls_total":                       "4",
+					"treedb.publish.ordered_root_delta_group.publish_prepare_ns_total":                     "66",
 					"treedb.cache.vlog_auto.frames.block_lz4":                                              "5",
 					"treedb.cache.vlog_block.k.bucket.lz4.le_1":                                            "5",
 					"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                                        "5",
@@ -3319,6 +3331,9 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "4" {
 		t.Fatalf("unexpected TreeDB selected stat root_apply_calls_total=%q", got)
 	}
+	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.publish.ordered_root_delta_group.publish_prepare_ns_total"]; got != "66" {
+		t.Fatalf("unexpected TreeDB selected stat publish_prepare_ns_total=%q", got)
+	}
 	if got := parsed.Runs[0].TreeDBStats["TreeDB"]["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes"]; got != "8589934592" {
 		t.Fatalf("unexpected cache leaf mmap budget stat=%q", got)
 	}
@@ -3352,6 +3367,9 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 		"treedb.flush_apply.span_native.scheduler.worker_idle_ns_total": "3000",
 		"treedb.flush_apply.span_native.scheduler.ready_tasks_total":    "8",
 		"treedb.flush_apply.span_native.scheduler.task_spans_per_task":  "6.000000",
+		"treedb.flush_apply.publish_prepare.ns_total":                   "44",
+		"treedb.flush_apply.publish_final_install.ns_total":             "55",
+		"treedb.flush_apply.publish_total.ns_total":                     "99",
 		"treedb.flush_apply.reducer_publish.ns_total":                   "99",
 	} {
 		if got := parsed.Runs[0].TreeDBStats["TreeDB"][key]; got != want {
