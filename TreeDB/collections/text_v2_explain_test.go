@@ -121,6 +121,12 @@ func TestTextV2QueryExplainNoExplainPathAndCounters2838(t *testing.T) {
 	if explained.Explain == nil || len(explained.Explain.Results) != len(explained.Results) {
 		t.Fatalf("explained=%+v want topK score components", explained.Explain)
 	}
+	if explained.Stats.TextPostingsScanned != before.Stats.TextPostingsScanned {
+		t.Fatalf("explain postings scanned=%d no-explain=%d; explain should reuse WAND postings instead of rescanning topK terms", explained.Stats.TextPostingsScanned, before.Stats.TextPostingsScanned)
+	}
+	if explained.Stats.TextPostingsScanned > uint64(withExplain.MaxPostingsScanned) {
+		t.Fatalf("explain postings scanned=%d exceeds MaxPostingsScanned=%d", explained.Stats.TextPostingsScanned, withExplain.MaxPostingsScanned)
+	}
 }
 
 func TestTextV2QueryExplainFailClosedReasons2838(t *testing.T) {

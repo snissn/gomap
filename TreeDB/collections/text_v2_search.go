@@ -202,6 +202,7 @@ type textV2SearchTopCandidate struct {
 	term       string
 	posting    textV2SearchPostingValue
 	hasPosting bool
+	detail     *textV2SearchCandidate
 }
 
 type textV2SearchTopK struct {
@@ -1498,11 +1499,24 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 			ScoreKind:  HybridScoreKindBM25F,
 		}
 		var detail *textV2SearchCandidate
-		if resultMode != textSearchResultScoreOnly || response.Explain != nil {
+		if candidate.detail != nil {
+			detail = candidate.detail
+		} else if candidate.hasPosting {
+			detail = &textV2SearchCandidate{ordinal: candidate.ordinal, generation: candidate.generation, documentID: append([]byte(nil), candidate.documentID...), score: candidate.score}
+			if err := detail.addPostingValue(candidate.term, candidate.posting); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+		} else if resultMode != textSearchResultScoreOnly || response.Explain != nil {
+			var truncated bool
 			var err error
-			detail, err = buildTextV2SearchCandidateForTopMatchingTerms(snap, catalog, ctx, terms, candidate.ordinal, candidate.generation, candidate.documentID, candidate.score)
+			detail, truncated, err = buildTextV2SearchCandidateForTopMatchingTerms(snap, catalog, ctx, terms, candidate.ordinal, candidate.generation, candidate.documentID, candidate.score, maxPostingsScanned, &response.Stats)
 			if err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if truncated {
+				response.Stats.Truncated = true
+				response.Stats.FailClosedReason = textSearchFailClosedPostingsLimit
+				return textSearchFailClosed(response, textSearchFailClosedPostingsLimit, fmt.Errorf("%w: collection %q text-v2 index %q exceeded bounded explain posting scan", ErrTextIndexUnavailable, catalog.meta.Name, idx.Name))
 			}
 		}
 		if resultMode != textSearchResultScoreOnly {
@@ -1725,6 +1739,7 @@ func visitTextV2ORBlockMaxCandidate(
 
 	score := 0.0
 	matched := false
+	var detail *textV2SearchCandidate
 	if ok {
 		// Accumulate in canonical query-term order (scoreStates), not the
 		// WAND-active order (advanceStates), so floating-point ties match the
@@ -1752,6 +1767,12 @@ func visitTextV2ORBlockMaxCandidate(
 				}
 				matched = true
 			}
+			if detail == nil {
+				detail = &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...)}
+			}
+			if err := detail.addPostingValue(state.term, posting); err != nil {
+				return false, err
+			}
 			termScore, err := scoreTextV2SearchPostingValue(state.term, posting, ctx, norm)
 			if err != nil {
 				return false, err
@@ -1761,7 +1782,10 @@ func visitTextV2ORBlockMaxCandidate(
 	}
 	if matched {
 		beforeThreshold, beforeReady := top.threshold()
-		top.add(textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score})
+		if detail != nil {
+			detail.score = score
+		}
+		top.add(textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score, detail: detail})
 		if stats != nil {
 			stats.TextCandidatesScored++
 			afterThreshold, afterReady := top.threshold()
@@ -1845,25 +1869,32 @@ func buildTextV2SearchCandidateForTopTerms(snap *backenddb.Snapshot, catalog *co
 	return candidate, nil
 }
 
-func buildTextV2SearchCandidateForTopMatchingTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, terms []string, ordinal, generation uint64, documentID []byte, score float64) (*textV2SearchCandidate, error) {
+func buildTextV2SearchCandidateForTopMatchingTerms(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, terms []string, ordinal, generation uint64, documentID []byte, score float64, maxPostingsScanned int, stats *TextSearchStats) (*textV2SearchCandidate, bool, error) {
 	candidate := &textV2SearchCandidate{ordinal: ordinal, generation: generation, documentID: append([]byte(nil), documentID...), score: score}
 	fieldCount := len(ctx.fieldNames)
 	for _, term := range terms {
-		posting, found, err := readTextV2PositionPostingAtRoot(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		posting, found, scanned, err := readTextV2PositionPostingAtRootCounted(snap, catalog, ctx.postingBlocksRootName, term, ordinal, generation, fieldCount)
+		if stats != nil && scanned > 0 {
+			stats.TextPostingsScanned += uint64(scanned)
+			stats.PostingsScanned = stats.TextPostingsScanned
+		}
+		if maxPostingsScanned > 0 && stats != nil && stats.TextPostingsScanned > uint64(maxPostingsScanned) {
+			return nil, true, nil
+		}
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !found {
 			continue
 		}
 		if err := candidate.addPostingValue(term, posting); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	if candidate.postingCount() == 0 {
-		return nil, errMalformedTextStorage("missing text-v2 scoring postings for final OR candidate ordinal %d generation %d", ordinal, generation)
+		return nil, false, errMalformedTextStorage("missing text-v2 scoring postings for final OR candidate ordinal %d generation %d", ordinal, generation)
 	}
-	return candidate, nil
+	return candidate, false, nil
 }
 
 func scanTextV2SearchPostingBlocksTerm(
