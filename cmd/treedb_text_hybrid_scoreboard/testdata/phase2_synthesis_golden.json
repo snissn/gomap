@@ -224,12 +224,12 @@
     {
       "shape_id": "index_size",
       "shape": "index size",
-      "classification": "near_parity",
+      "classification": "far_behind",
       "priority": 1,
       "primary_issue": "#2835",
-      "treedb_evidence": "captured 1 row(s): treedb_common_10k/BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk ns/op=1100000, storage=144 B/doc",
-      "external_evidence": "captured 1 row(s): sqlite_common_10k/sqlite_fts5/common_term_no_docs ns/op=1000000, storage=128 B/doc",
-      "rationale": "captured comparable storage rows: TreeDB 144 B/doc vs external 128 B/doc (ratio 1.12x)",
+      "treedb_evidence": "TreeDB durable text-v2 bytes/doc is not captured in the current scoreboard run",
+      "external_evidence": "no comparable external row captured; SQLite FTS5=not_captured; Bleve=unavailable (not run in unit test); Tantivy=unavailable (not run in unit test); Lucene=unavailable (not run in unit test)",
+      "rationale": "phase-1 scoreboard has external storage rows but lacks a durable TreeDB text-v2 bytes/doc row, so footprint parity is the first evidence and optimization gap",
       "required_follow_up_rows": [
         "TreeDB durable text-v2 bytes/doc after checkpoint and rewrite",
         "SQLite FTS5/Lucene/Tantivy/Bleve index bytes/doc after equivalent optimize/vacuum"
@@ -404,7 +404,7 @@
       "priority": 1,
       "shape_id": "index_size",
       "primary_issue": "#2835",
-      "rationale": "captured comparable storage rows: TreeDB 144 B/doc vs external 128 B/doc (ratio 1.12x)",
+      "rationale": "phase-1 scoreboard has external storage rows but lacks a durable TreeDB text-v2 bytes/doc row, so footprint parity is the first evidence and optimization gap",
       "required_follow_up_rows": [
         "TreeDB durable text-v2 bytes/doc after checkpoint and rewrite",
         "SQLite FTS5/Lucene/Tantivy/Bleve index bytes/doc after equivalent optimize/vacuum"

@@ -291,6 +291,50 @@ func TestPhase2SynthesisGolden(t *testing.T) {
 	}
 }
 
+func TestPhase2IndexSizeIgnoresIncidentalRetrievalStorage(t *testing.T) {
+	treedbNS := 1_100_000.0
+	sqliteNS := 1_000_000.0
+	treedbStorage := 144.0
+	sqliteStorage := 128.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel:        "treedb_common_10k",
+			System:             "TreeDB",
+			Engine:             "treedb_text_v2",
+			Modality:           "text_only",
+			QueryShape:         "common term BM25F top-k with block-max pruning",
+			Boundary:           "No-document text-v2 score-only BM25F search",
+			Benchmark:          "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:            &treedbNS,
+			StorageBytesPerDoc: &treedbStorage,
+		},
+		{
+			SourceLabel:        "sqlite_common_10k",
+			System:             "SQLite FTS5",
+			Engine:             "sqlite_fts5",
+			Modality:           "text_only",
+			QueryShape:         "common term FTS5 MATCH top-k",
+			Boundary:           "no-document rowid+bm25 retrieval only",
+			Benchmark:          "sqlite_fts5/common_term_no_docs",
+			NsPerOp:            &sqliteNS,
+			StorageBytesPerDoc: &sqliteStorage,
+		},
+	}, nil)
+	var indexSize phase2GapClassification
+	for _, got := range syn.GapClassifications {
+		if got.ShapeID == "index_size" {
+			indexSize = got
+			break
+		}
+	}
+	if indexSize.Classification != "far_behind" {
+		t.Fatalf("index_size classification=%q evidence=%q; incidental retrieval storage must not become index-size parity evidence", indexSize.Classification, indexSize.TreeDBEvidence)
+	}
+	if !strings.Contains(indexSize.TreeDBEvidence, "not captured") {
+		t.Fatalf("index_size TreeDB evidence=%q want explicit missing footprint evidence", indexSize.TreeDBEvidence)
+	}
+}
+
 func TestRunWritesPhase2SynthesisArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	goBench := filepath.Join(dir, "go.txt")

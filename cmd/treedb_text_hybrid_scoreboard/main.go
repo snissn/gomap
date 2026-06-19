@@ -1366,7 +1366,11 @@ func phase2RowMatchesTarget(row scoreboardRow, shapeID string) bool {
 	case "index_build_ingest":
 		return row.Modality == "build_storage" || strings.Contains(text, "index build") || strings.Contains(text, "ingest") || strings.Contains(text, "insertbatch") || strings.Contains(text, "backfill")
 	case "index_size":
-		return row.StorageBytes != nil || row.StorageBytesPerDoc != nil || strings.Contains(text, "storage") || strings.Contains(text, "index size")
+		// Why: many retrieval and vector rows carry storage_bytes_per_doc for
+		// context. Treat index-size parity as measured only when the row's own
+		// benchmark/query/boundary explicitly represents a text index footprint
+		// boundary, not merely because a storage metric is attached.
+		return strings.Contains(text, "index size") || strings.Contains(text, "bytes/doc") || strings.Contains(text, "index_bytes") || (strings.Contains(text, "storage") && strings.Contains(text, "text"))
 	case "reopen":
 		return strings.Contains(text, "reopen") || strings.Contains(text, "recovery")
 	case "maintenance_rewrite":
