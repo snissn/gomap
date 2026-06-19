@@ -369,7 +369,6 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	currentRoot := b.db.meta.UserRootPageID
 	b.db.mu.RUnlock()
 	if currentRoot != rootID {
-		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeFlushApplyMismatch()
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackRootMismatch)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
@@ -418,7 +417,6 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.RUnlock()
 	if currentRoot != rootID {
-		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeFlushApplyMismatch()
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackRootMismatch)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))

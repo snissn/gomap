@@ -2341,6 +2341,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 
 	rootIDs = make([]uint64, len(ordered))
 	defer func() {
+		if retrySerialized {
+			return
+		}
 		for idx := range ordered {
 			db.releasePendingValueLogAppendFileIDsFromBatch(ordered[idx].Delta)
 		}
