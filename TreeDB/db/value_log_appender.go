@@ -84,7 +84,79 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	if appender == nil {
 		return nil, ErrValueLogAppenderUnavailable
 	}
-	return appender.AppendValues(values)
+	ptrs, err := appender.AppendValues(values)
+	if err != nil {
+		return nil, err
+	}
+	db.protectPendingValueLogAppendPtrs(ptrs)
+	return ptrs, nil
+}
+
+// protectPendingValueLogAppendPtrs pins value-log files returned to native-root
+// callers until a later root publish makes those pointers reachable. A shared
+// appender flush can make another writer's not-yet-published segment visible on
+// disk; ValueLogGC consults this set so it cannot reclaim that segment against
+// the older root snapshot.
+func (db *DB) protectPendingValueLogAppendPtrs(ptrs []page.ValuePtr) {
+	if db == nil || len(ptrs) == 0 {
+		return
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	for _, ptr := range ptrs {
+		if ptr.FileID == 0 || !page.IsValueLogFileID(ptr.FileID) {
+			continue
+		}
+		if db.pendingValueLogAppendFileIDRefs == nil {
+			db.pendingValueLogAppendFileIDRefs = make(map[uint32]int)
+		}
+		db.pendingValueLogAppendFileIDRefs[ptr.FileID]++
+	}
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDsFromDelta(delta *valueLogRefDelta) {
+	if db == nil || delta == nil {
+		return
+	}
+	release := make(map[uint32]int64)
+	_ = delta.forEachChange(func(fileID uint32, change int64) error {
+		if change > 0 {
+			release[fileID] += change
+		}
+		return nil
+	})
+	if len(release) == 0 {
+		return
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	for fileID, n := range release {
+		refs := db.pendingValueLogAppendFileIDRefs[fileID]
+		if refs <= int(n) {
+			delete(db.pendingValueLogAppendFileIDRefs, fileID)
+			continue
+		}
+		db.pendingValueLogAppendFileIDRefs[fileID] = refs - int(n)
+	}
+	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
+		db.pendingValueLogAppendFileIDRefs = nil
+	}
+}
+
+func (db *DB) pendingValueLogAppendFileIDs() map[uint32]struct{} {
+	if db == nil {
+		return nil
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
+		return nil
+	}
+	out := make(map[uint32]struct{}, len(db.pendingValueLogAppendFileIDRefs))
+	for fileID := range db.pendingValueLogAppendFileIDRefs {
+		out[fileID] = struct{}{}
+	}
+	return out
 }
 
 func (db *DB) installCommandWALValueLogAppender() error {

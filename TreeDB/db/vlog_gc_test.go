@@ -273,6 +273,42 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	id1 := appendPointersInNewSegment(t, dir, 0, 1, 1_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("pending-seq1|"), 32)
+	})[0].FileID
+	appendPointersInNewSegment(t, dir, 0, 2, 2_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-seq2|"), 32)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	db.pendingValueLogAppendMu.Lock()
+	db.pendingValueLogAppendFileIDRefs = map[uint32]int{id1: 1}
+	db.pendingValueLogAppendMu.Unlock()
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted != 0 {
+		t.Fatalf("pending value-log appender segment was deleted: %+v", stats)
+	}
+	pendingPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("pending segment missing after GC: %v", err)
+	}
+}
+
 func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) {
 	dir := t.TempDir()
 

@@ -184,6 +184,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 			}
 		}
 	}
+	for id := range db.pendingValueLogAppendFileIDs() {
+		keptIDs[id] = struct{}{}
+	}
 	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
 	for _, path := range opts.ProtectedPaths {
 		if path == "" {

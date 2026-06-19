@@ -151,21 +151,23 @@ type DB struct {
 	maintenanceOpsPerCoalesce      int
 	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
-	mu               sync.RWMutex
-	writeMu          sync.RWMutex
-	commitMu         sync.Mutex
-	publishPrepareMu sync.Mutex
-	updateLocks      keyupdate.Locks
-	maintenanceMu    sync.Mutex
-	combineMu        sync.RWMutex
-	combineReqCh     chan *commitCombineReq
-	combineStopCh    chan struct{}
-	combineDoneCh    chan struct{}
-	vacuumInProgress atomic.Bool
-	vacuum           vacuumRecorder
-	meta             page.MetaPageBody
-	metaPageID       uint64
-	commandJournal   *commitlog.CommandJournal
+	mu                              sync.RWMutex
+	writeMu                         sync.RWMutex
+	commitMu                        sync.Mutex
+	publishPrepareMu                sync.Mutex
+	pendingValueLogAppendMu         sync.Mutex
+	pendingValueLogAppendFileIDRefs map[uint32]int
+	updateLocks                     keyupdate.Locks
+	maintenanceMu                   sync.Mutex
+	combineMu                       sync.RWMutex
+	combineReqCh                    chan *commitCombineReq
+	combineStopCh                   chan struct{}
+	combineDoneCh                   chan struct{}
+	vacuumInProgress                atomic.Bool
+	vacuum                          vacuumRecorder
+	meta                            page.MetaPageBody
+	metaPageID                      uint64
+	commandJournal                  *commitlog.CommandJournal
 
 	state atomic.Pointer[DBState]
 
@@ -2653,6 +2655,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 
 	if post.vlogRefDelta != nil {
 		defer releaseValueLogRefDelta(post.vlogRefDelta)
+		db.releasePendingValueLogAppendFileIDsFromDelta(post.vlogRefDelta)
 	}
 	if db.valueLogRefTracker != nil {
 		if post.vlogRefDelta != nil {
