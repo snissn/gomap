@@ -263,23 +263,96 @@ class IndexCapabilities:
 
 
 @dataclass(frozen=True)
+class ScalarU8AlphaPolicy:
+    name: str = ""
+    quantile_ppm: int = 0
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any] | None) -> "ScalarU8AlphaPolicy":
+        if data is None:
+            return cls()
+        data = _as_mapping(data, "scalar_u8 alpha policy")
+        _reject_unknown(data, ["name", "quantile_ppm"], "scalar_u8 alpha policy")
+        return cls(
+            name=_as_optional_str_default(data.get("name"), "scalar_u8 alpha policy.name"),
+            quantile_ppm=_as_optional_int_default(data.get("quantile_ppm"), "scalar_u8 alpha policy.quantile_ppm"),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if self.name:
+            out["name"] = self.name
+        if self.quantile_ppm:
+            out["quantile_ppm"] = self.quantile_ppm
+        return out
+
+
+@dataclass(frozen=True)
+class ScalarU8CalibrationConfig:
+    mode: str = ""
+    grouping: str = ""
+    alpha_policy: ScalarU8AlphaPolicy | Mapping[str, Any] = field(default_factory=ScalarU8AlphaPolicy)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any] | None) -> "ScalarU8CalibrationConfig":
+        if data is None:
+            return cls()
+        data = _as_mapping(data, "scalar_u8 calibration")
+        _reject_unknown(data, ["mode", "grouping", "alpha_policy"], "scalar_u8 calibration")
+        return cls(
+            mode=_as_optional_str_default(data.get("mode"), "scalar_u8 calibration.mode"),
+            grouping=_as_optional_str_default(data.get("grouping"), "scalar_u8 calibration.grouping"),
+            alpha_policy=ScalarU8AlphaPolicy.from_dict(data.get("alpha_policy")),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if self.mode:
+            out["mode"] = self.mode
+        if self.grouping:
+            out["grouping"] = self.grouping
+        policy = (
+            self.alpha_policy
+            if isinstance(self.alpha_policy, ScalarU8AlphaPolicy)
+            else ScalarU8AlphaPolicy.from_dict(self.alpha_policy)
+        )
+        policy_dict = policy.to_dict()
+        if policy_dict:
+            out["alpha_policy"] = policy_dict
+        return out
+
+
+@dataclass(frozen=True)
 class QuantizedIndexInfo:
     name: str
     codec: str = "scalar_u8"
     version: int = 1
+    scalar_u8_calibration: Optional[ScalarU8CalibrationConfig | Mapping[str, Any]] = None
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "QuantizedIndexInfo":
         data = _as_mapping(data, "quantized index")
-        _reject_unknown(data, ["name", "codec", "version"], "quantized index")
+        _reject_unknown(data, ["name", "codec", "version", "scalar_u8_calibration"], "quantized index")
+        raw_calibration = data.get("scalar_u8_calibration")
         return cls(
             name=_as_str(data["name"], "quantized index.name"),
             codec=_as_optional_str_default(data.get("codec"), "quantized index.codec") or "scalar_u8",
             version=_as_optional_int_default(data.get("version"), "quantized index.version") or 1,
+            scalar_u8_calibration=(
+                None if raw_calibration is None else ScalarU8CalibrationConfig.from_dict(raw_calibration)
+            ),
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "codec": self.codec, "version": self.version}
+        out: Dict[str, Any] = {"name": self.name, "codec": self.codec, "version": self.version}
+        if self.scalar_u8_calibration is not None:
+            calibration = (
+                self.scalar_u8_calibration
+                if isinstance(self.scalar_u8_calibration, ScalarU8CalibrationConfig)
+                else ScalarU8CalibrationConfig.from_dict(self.scalar_u8_calibration)
+            )
+            out["scalar_u8_calibration"] = calibration.to_dict()
+        return out
 
 
 @dataclass(frozen=True)

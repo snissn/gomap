@@ -20,7 +20,7 @@ var (
 )
 
 func TestKnownQuantizedRoles1932(t *testing.T) {
-	for _, role := range []Role{RoleCodes, RolePackedCodes, RoleNorm, RoleStep, RoleLower, RoleCodeSum, RoleNorm2, RoleCodeCount, RoleCentroidDistance, RoleQuantizedDotProductInv, RoleCentroidDotProduct, RoleCentroidID, RoleListID} {
+	for _, role := range []Role{RoleCodes, RolePackedCodes, RoleNorm, RoleStep, RoleLower, RoleCodeSum, RoleNorm2, RoleCodeCount, RoleCentroidDistance, RoleQuantizedDotProductInv, RoleCentroidDotProduct, RoleCentroidID, RoleListID, RoleScalarU8Alpha, RoleGranuleRowCount} {
 		if !KnownRole(role) {
 			t.Fatalf("KnownRole(%q)=false", role)
 		}
@@ -62,6 +62,49 @@ func TestSchemaDescriptorValidatesScalarPackedAndPQShapes1932(t *testing.T) {
 	}
 	if _, ok := prepared.Uint32(RoleCentroidID, 0); !ok {
 		t.Fatalf("pq centroid_id missing")
+	}
+}
+
+func TestPrepareSupportsGranuleSideMetadata2843(t *testing.T) {
+	fixture := buildFixedQuantizedFixture1932(t)
+	alphaImage := buildQuantizedPartImage1932(t, []typedcolumn.ColumnDefinition{
+		{Name: "alpha_col", Type: typedcolumn.ColumnTypeFloat32, Encoding: typedcolumn.EncodingRawFloat32, Compression: typedcolumn.CompressionNone, CompressionSet: true, StatsDisabled: true},
+		{Name: "granule_rows_col", Type: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone, CompressionSet: true, StatsDisabled: true},
+	}, typedcolumn.Batch{
+		Rows:           2,
+		Float32Columns: map[string][]float32{"alpha_col": []float32{0.5, 0.75}},
+		Uint32Columns:  map[string][]uint32{"granule_rows_col": []uint32{2, 2}},
+	}, map[string]string{
+		"alpha_col":        string(columnsemantics.LogicalFloat32),
+		"granule_rows_col": string(columnsemantics.LogicalUint32),
+	})
+	alphaRef := refForImage1932("alpha", alphaImage)
+	req := fixture.prepareRequest()
+	req.Schema.GranuleCount = 2
+	req.Schema.Columns = append(req.Schema.Columns,
+		ColumnDescriptor{Role: RoleScalarU8Alpha, Column: "alpha_col", AssetID: "alpha", Required: true, LogicalType: string(columnsemantics.LogicalFloat32), Type: typedcolumn.ColumnTypeFloat32, Encoding: typedcolumn.EncodingRawFloat32, RowCount: 2, AssetBytes: int64(alphaImage.TotalBytes()), SourceSchemaHash: 0x19320002, Ref: alphaRef},
+		ColumnDescriptor{Role: RoleGranuleRowCount, Column: "granule_rows_col", AssetID: "alpha", Required: true, LogicalType: string(columnsemantics.LogicalUint32), Type: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, RowCount: 2, AssetBytes: int64(alphaImage.TotalBytes()), SourceSchemaHash: 0x19320002, Ref: alphaRef},
+	)
+	req.Expected = expectedFromSchema1932(req.Schema, RoleCodes, RoleScalarU8Alpha, RoleGranuleRowCount)
+	req.Parts = append(req.Parts, PartImageSource{AssetID: "alpha", Image: alphaImage, Ref: alphaRef, AssetBytes: int64(alphaImage.TotalBytes()), SourceSchemaHash: 0x19320002})
+	prepared, err := Prepare(req)
+	if err != nil {
+		t.Fatalf("Prepare with granule metadata: %v", err)
+	}
+	if got, ok := prepared.RoleRows(RoleScalarU8Alpha); !ok || got != 2 {
+		t.Fatalf("alpha role rows=%d ok=%v want 2", got, ok)
+	}
+	if got, ok := prepared.Float32(RoleScalarU8Alpha, 1); !ok || got != 0.75 {
+		t.Fatalf("alpha[1]=%v ok=%v want 0.75", got, ok)
+	}
+	if got, ok := prepared.Uint32(RoleGranuleRowCount, 0); !ok || got != 2 {
+		t.Fatalf("granule_row_count[0]=%d ok=%v want 2", got, ok)
+	}
+
+	bad := req
+	bad.Expected.GranuleCount = 3
+	if _, err := Prepare(bad); err == nil || !strings.Contains(err.Error(), "granule_count=2 want 3") {
+		t.Fatalf("Prepare granule mismatch err=%v want granule_count", err)
 	}
 }
 

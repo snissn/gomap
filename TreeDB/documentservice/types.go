@@ -61,9 +61,10 @@ type IndexCapabilities struct {
 // QuantizedIndexInfo describes a declared quantized score plane attached to the
 // service vector index.
 type QuantizedIndexInfo struct {
-	Name    string `json:"name"`
-	Codec   string `json:"codec"`
-	Version uint32 `json:"version"`
+	Name                string                                 `json:"name"`
+	Codec               string                                 `json:"codec"`
+	Version             uint32                                 `json:"version"`
+	ScalarU8Calibration *collections.ScalarU8CalibrationConfig `json:"scalar_u8_calibration,omitempty"`
 }
 
 // IndexInfo is returned by create/open and echoed by operation responses.
@@ -388,6 +389,7 @@ func metricFromCollection(metric collections.VectorMetric) (Metric, error) {
 func indexCapabilities(vectorDef collections.VectorIndexDefinition, hybridSearch bool) IndexCapabilities {
 	columnGraph := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	quantized := columnGraph && len(vectorDef.QuantizedIndexes) > 0
+	quantizedRerank := columnGraph && quantizedIndexRerankCapabilityDeclared(vectorDef)
 	return IndexCapabilities{
 		DenseVectorSearch:       true,
 		ExactDenseScoring:       true,
@@ -402,8 +404,8 @@ func indexCapabilities(vectorDef collections.VectorIndexDefinition, hybridSearch
 		ColumnGraphVectorSearch: columnGraph,
 		ExactColumnGraphSearch:  columnGraph,
 		QuantizedVectorSearch:   quantized,
-		QuantizedRerank:         quantized,
-		ScalarU8QuantizedRerank: columnGraph && quantizedIndexCodecDeclared(vectorDef, collections.QuantizedVectorCodecScalarU8),
+		QuantizedRerank:         quantizedRerank,
+		ScalarU8QuantizedRerank: columnGraph && scalarU8QuantizedRerankCapabilityDeclared(vectorDef),
 		RabitQ1BitExperimental:  columnGraph && quantizedIndexCodecDeclared(vectorDef, "rabitq_1bit"),
 	}
 }
@@ -414,7 +416,7 @@ func quantizedIndexInfos(def collections.VectorIndexDefinition) []QuantizedIndex
 	}
 	out := make([]QuantizedIndexInfo, len(def.QuantizedIndexes))
 	for i, q := range def.QuantizedIndexes {
-		out[i] = QuantizedIndexInfo{Name: q.Name, Codec: q.Codec, Version: q.Version}
+		out[i] = QuantizedIndexInfo{Name: q.Name, Codec: q.Codec, Version: q.Version, ScalarU8Calibration: q.ScalarU8Calibration}
 	}
 	return out
 }
@@ -426,6 +428,40 @@ func quantizedIndexCodecDeclared(def collections.VectorIndexDefinition, codec st
 		}
 	}
 	return false
+}
+
+func quantizedIndexRerankCapabilityDeclared(def collections.VectorIndexDefinition) bool {
+	for _, q := range def.QuantizedIndexes {
+		codec := q.Codec
+		if codec == "" {
+			codec = collections.QuantizedVectorCodecScalarU8
+		}
+		if codec == collections.QuantizedVectorCodecScalarU8 && !scalarU8CalibrationDefinitionIsLegacy(q) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func scalarU8QuantizedRerankCapabilityDeclared(def collections.VectorIndexDefinition) bool {
+	for _, q := range def.QuantizedIndexes {
+		codec := q.Codec
+		if codec == "" {
+			codec = collections.QuantizedVectorCodecScalarU8
+		}
+		if codec == collections.QuantizedVectorCodecScalarU8 && scalarU8CalibrationDefinitionIsLegacy(q) {
+			return true
+		}
+	}
+	return false
+}
+
+func scalarU8CalibrationDefinitionIsLegacy(q collections.QuantizedVectorIndexDefinition) bool {
+	if q.ScalarU8Calibration == nil {
+		return true
+	}
+	return q.ScalarU8Calibration.Mode == "" || q.ScalarU8Calibration.Mode == collections.ScalarU8CalibrationModeLegacy
 }
 
 func scorePtr(score float64) *float64 {
