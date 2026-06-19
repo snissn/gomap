@@ -124,10 +124,10 @@ func (db *DB) protectPendingValueLogAppendPtrs(ptrs []page.ValuePtr) {
 	}
 }
 
-// ReleaseValueLogValues abandons previously appended value-log pointers that
-// will not be published into a root. Native-root callers that discard pointers
-// returned by AppendValueLogValues should call this so pending GC pins can be
-// released.
+// ReleaseValueLogValues releases pending GC pins for previously appended
+// value-log pointers. Native-root callers should call this when pointers are
+// abandoned before publication or after a detached root containing those
+// pointers has been made reachable by a later catalog/system-root publish.
 func (db *DB) ReleaseValueLogValues(ptrs []page.ValuePtr) {
 	if db == nil || len(ptrs) == 0 {
 		return
