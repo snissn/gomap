@@ -1793,13 +1793,16 @@ func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.Chil
 	}
 	appendStart := time.Now()
 	ptrs, err := batcher.AppendLeafPages(leafPages)
-	recordZipperLeafLogOutputAppend(metrics, time.Since(appendStart), len(leafPages), err == nil)
+	appendWait := time.Since(appendStart)
 	if err != nil {
+		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
 		return nil, err
 	}
 	if len(ptrs) != len(leafPages) {
+		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
 		return nil, fmt.Errorf("zipper: leaf page batch returned %d ptrs for %d pages", len(ptrs), len(leafPages))
 	}
+	recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), true)
 	if cap(refs) < len(ptrs) {
 		refs = make([]page.ChildRef, len(ptrs))
 	} else {
