@@ -25,46 +25,26 @@ var (
 	ErrSpanNativeReducerValidation = errors.New("zipper: span-native reducer validation failed")
 )
 
-// spanNativeLeafLogOutputBuffer is the conservative M2 output-reservation
-// contract for span-native outer-leaf writes. Workers reserve placeholder refs
-// and copy prepared leaf pages into this apply-local buffer; the coordinator
-// then performs one ordered durable AppendLeafPages call and rewrites every
-// placeholder before reducer publication. This keeps leaf construction parallel
-// while avoiding concurrent publication of incomplete leaf-log pointers.
-type spanNativeLeafLogOutputBuffer struct {
-	mu           sync.Mutex
-	pages        [][]byte
-	payloads     [][]byte
-	payloadArena []byte
+// spanNativeLeafLogOutputGate prepares leaf-log payloads in span-native
+// workers, then bounds the durable append fan-out to the apply worker count.
+// The resulting refs are still only published by the coordinator after every
+// worker succeeds and the reducer validates the replacement root; any output
+// written before a later failure is accounted as abandoned by the DB flush path.
+type spanNativeLeafLogOutputGate struct {
+	sem chan struct{}
 }
 
-var (
-	spanNativeBufferedLeafPagePool       sync.Pool
-	spanNativeBufferedPayloadScratchPool sync.Pool
-)
+var spanNativeLeafLogPayloadScratchPool sync.Pool
 
-func acquireSpanNativeBufferedLeafPage(size int) []byte {
-	if size <= 0 {
-		return nil
+func newSpanNativeLeafLogOutputGate(limit int) *spanNativeLeafLogOutputGate {
+	if limit <= 0 {
+		return &spanNativeLeafLogOutputGate{}
 	}
-	if v := spanNativeBufferedLeafPagePool.Get(); v != nil {
-		if buf, ok := v.([]byte); ok && cap(buf) >= size {
-			return buf[:size]
-		}
-	}
-	return make([]byte, size)
+	return &spanNativeLeafLogOutputGate{sem: make(chan struct{}, limit)}
 }
 
-func releaseSpanNativeBufferedLeafPage(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > page.PageSize*2 {
-		return
-	}
-	clear(buf)
-	spanNativeBufferedLeafPagePool.Put(buf[:0])
-}
-
-func acquireSpanNativeBufferedPayloadScratch() []byte {
-	if v := spanNativeBufferedPayloadScratchPool.Get(); v != nil {
+func acquireSpanNativeLeafLogPayloadScratch() []byte {
+	if v := spanNativeLeafLogPayloadScratchPool.Get(); v != nil {
 		if buf, ok := v.([]byte); ok && cap(buf) <= page.PageSize*2 {
 			return buf[:0]
 		}
@@ -72,173 +52,64 @@ func acquireSpanNativeBufferedPayloadScratch() []byte {
 	return make([]byte, 0, page.PageSize)
 }
 
-func releaseSpanNativeBufferedPayloadScratch(buf []byte) {
+func releaseSpanNativeLeafLogPayloadScratch(buf []byte) {
 	if cap(buf) == 0 || cap(buf) > page.PageSize*2 {
 		return
 	}
-	clear(buf)
-	spanNativeBufferedPayloadScratchPool.Put(buf[:0])
+	spanNativeLeafLogPayloadScratchPool.Put(buf[:0])
 }
 
-func (b *spanNativeLeafLogOutputBuffer) appendPayloadLocked(payload []byte) []byte {
-	if len(payload) == 0 {
-		return payload
-	}
-	start := len(b.payloadArena)
-	b.payloadArena = append(b.payloadArena, payload...)
-	return b.payloadArena[start:]
-}
-
-func (b *spanNativeLeafLogOutputBuffer) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
-	var one [1][]byte
-	one[0] = leafPage
-	refs, err := b.persistLeafPageBatchDataTo(z, one[:], nil, metrics)
+func (g *spanNativeLeafLogOutputGate) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	scratch := acquireSpanNativeLeafLogPayloadScratch()
+	payload, _, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch[:0], leafPage)
 	if err != nil {
+		releaseSpanNativeLeafLogPayloadScratch(scratch)
 		return page.ChildRef{}, err
 	}
-	if len(refs) != 1 {
-		return page.ChildRef{}, fmt.Errorf("zipper: buffered leaf-log persist returned %d refs for one page", len(refs))
+	waitStart := time.Now()
+	if g != nil && g.sem != nil {
+		g.sem <- struct{}{}
+		defer func() { <-g.sem }()
 	}
-	return refs[0], nil
+	reservationWait := time.Since(waitStart)
+	if metrics != nil && reservationWait > 0 {
+		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
+	}
+	ref, err := z.persistPreparedLeafPageDataTo(leafPage, payload, metrics)
+	releaseSpanNativeLeafLogPayloadScratch(scratch)
+	return ref, err
 }
 
-func (b *spanNativeLeafLogOutputBuffer) persistLeafPageBatchDataTo(_ *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	refs = refs[:0]
 	if len(leafPages) == 0 {
 		return refs, nil
 	}
-	if len(leafPages) == 1 {
-		return b.persistSingleLeafPageDataTo(leafPages[0], refs, metrics)
-	}
-
-	var ownedInline [8][]byte
 	var payloadInline [8][]byte
-	var ownedPages [][]byte
 	var payloads [][]byte
-	if len(leafPages) <= len(ownedInline) {
-		ownedPages = ownedInline[:len(leafPages)]
+	if len(leafPages) <= len(payloadInline) {
 		payloads = payloadInline[:len(leafPages)]
 	} else {
-		ownedPages = make([][]byte, len(leafPages))
 		payloads = make([][]byte, len(leafPages))
 	}
+	var arena []byte
 	for i, leafPage := range leafPages {
-		owned := acquireSpanNativeBufferedLeafPage(len(leafPage))
-		copy(owned, leafPage)
-		payload, _, err := valuelog.MaybeCompactLeafLogPayloadTo(nil, owned)
+		var err error
+		arena, payloads[i], _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(arena, leafPage)
 		if err != nil {
-			for _, pageBuf := range ownedPages[:i] {
-				releaseSpanNativeBufferedLeafPage(pageBuf)
-			}
-			releaseSpanNativeBufferedLeafPage(owned)
 			return nil, err
 		}
-		ownedPages[i] = owned
-		payloads[i] = payload
 	}
 	waitStart := time.Now()
-	b.mu.Lock()
+	if g != nil && g.sem != nil {
+		g.sem <- struct{}{}
+		defer func() { <-g.sem }()
+	}
 	reservationWait := time.Since(waitStart)
-	start := len(b.pages)
-	b.pages = append(b.pages, ownedPages...)
-	b.payloads = append(b.payloads, payloads...)
-	b.mu.Unlock()
 	if metrics != nil && reservationWait > 0 {
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
 	}
-	if cap(refs) < len(leafPages) {
-		refs = make([]page.ChildRef, len(leafPages))
-	} else {
-		refs = refs[:len(leafPages)]
-	}
-	for i := range refs {
-		refs[i] = spanNativeBufferedLeafLogChildRef(start + i)
-	}
-	return refs, nil
-}
-
-func (b *spanNativeLeafLogOutputBuffer) persistSingleLeafPageDataTo(leafPage []byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
-	owned := acquireSpanNativeBufferedLeafPage(len(leafPage))
-	copy(owned, leafPage)
-	scratch := acquireSpanNativeBufferedPayloadScratch()
-	payload, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch[:0], owned)
-	if err != nil {
-		releaseSpanNativeBufferedPayloadScratch(scratch)
-		releaseSpanNativeBufferedLeafPage(owned)
-		return nil, err
-	}
-	waitStart := time.Now()
-	b.mu.Lock()
-	reservationWait := time.Since(waitStart)
-	start := len(b.pages)
-	if compacted {
-		payload = b.appendPayloadLocked(payload)
-	}
-	b.pages = append(b.pages, owned)
-	b.payloads = append(b.payloads, payload)
-	b.mu.Unlock()
-	releaseSpanNativeBufferedPayloadScratch(scratch)
-	if metrics != nil && reservationWait > 0 {
-		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
-	}
-	if cap(refs) < 1 {
-		refs = make([]page.ChildRef, 1)
-	} else {
-		refs = refs[:1]
-	}
-	refs[0] = spanNativeBufferedLeafLogChildRef(start)
-	return refs, nil
-}
-
-func (b *spanNativeLeafLogOutputBuffer) commit(z *Zipper, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
-	if b == nil {
-		return nil, nil
-	}
-	b.mu.Lock()
-	pages := b.pages
-	payloads := b.payloads
-	b.pages = nil
-	b.payloads = nil
-	b.payloadArena = nil
-	b.mu.Unlock()
-	if len(pages) == 0 {
-		return nil, nil
-	}
-	defer func() {
-		for _, pageBuf := range pages {
-			releaseSpanNativeBufferedLeafPage(pageBuf)
-		}
-	}()
-	refs, err := z.persistPreparedLeafPageBatchDataTo(pages, payloads, nil, metrics)
-	if err != nil {
-		return nil, err
-	}
-	if len(refs) != len(pages) {
-		return nil, fmt.Errorf("zipper: buffered leaf-log commit returned %d refs for %d pages", len(refs), len(pages))
-	}
-	for _, ref := range refs {
-		recordZipperLeafLogPageRecordHintWrite(metrics, ref)
-	}
-	return refs, nil
-}
-
-func spanNativeBufferedLeafLogChildRef(index int) page.ChildRef {
-	return page.LeafLogChildRef(page.LogRecordRef{Offset: uint64(index)})
-}
-
-func resolveSpanNativeBufferedLeafLogRef(ref page.ChildRef, committed []page.ChildRef) (page.ChildRef, bool, error) {
-	if ref.Kind != page.ChildRefLeafLog || ref.Log.FileID != 0 {
-		return ref, false, nil
-	}
-	idx := ref.Log.Offset
-	if idx >= uint64(len(committed)) {
-		return page.ChildRef{}, false, fmt.Errorf("buffered leaf-log placeholder index %d outside committed refs %d", idx, len(committed))
-	}
-	resolved := committed[int(idx)]
-	if resolved.Kind != page.ChildRefLeafLog || resolved.Log.FileID == 0 {
-		return page.ChildRef{}, false, fmt.Errorf("buffered leaf-log placeholder %d resolved to invalid ref %+v", idx, resolved)
-	}
-	return resolved, true, nil
+	return z.persistPreparedLeafPageBatchDataTo(leafPages, payloads, refs, metrics)
 }
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {
@@ -276,12 +147,16 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	}
 	outputs := coordinatorScratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
 	defer outputs.release()
-	var leafLogBuffer *spanNativeLeafLogOutputBuffer
+	var leafLogOutput *spanNativeLeafLogOutputGate
 	if z.outerLeavesInValueLog {
 		if z.leafPageLog == nil {
 			return ApplyResult{}, true, errors.New("zipper: outer leaves in value log enabled without leaf page log")
 		}
-		leafLogBuffer = &spanNativeLeafLogOutputBuffer{}
+		appendLimit := 1
+		if concurrent, ok := z.leafPageLog.(LeafPageConcurrentAppendLog); ok && concurrent.ConcurrentLeafPageAppends() {
+			appendLimit = scheduledWorkers
+		}
+		leafLogOutput = newSpanNativeLeafLogOutputGate(appendLimit)
 	}
 	workerScratches := coordinatorScratch.acquireSpanWorkerScratchSlots(len(workerRanges))
 	defer func() {
@@ -322,16 +197,22 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 				localSplits = nil
 			}
 		}
-		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafLogBuffer}
+		recordFailedRange := func() {
+			rangeMetrics[job] = localMetrics
+			rangeRetired[job] = localRetired
+		}
+		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafLogOutput}
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
 			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, workerScratch, false, workerApplyCfg)
 			if err != nil {
+				recordFailedRange()
 				releaseLocalSplits()
 				errOnce.Do(func() { firstErr = err })
 				return
 			}
 			if err := outputs.setRef(i, newRef); err != nil {
+				recordFailedRange()
 				releaseLocalSplits()
 				errOnce.Do(func() {
 					firstErr = fmt.Errorf("%w: span %d ref kind %d: %v", ErrSpanNativeOutputOwnership, i, newRef.Kind, err)
@@ -419,18 +300,6 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 		return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, firstErr
 	}
-	if leafLogBuffer != nil {
-		committedRefs, err := leafLogBuffer.commit(z, &metrics)
-		if err != nil {
-			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
-			return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, err
-		}
-		if err := outputs.resolveBufferedLeafLogRefs(committedRefs); err != nil {
-			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
-			return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, fmt.Errorf("%w: %v", ErrSpanNativeOutputOwnership, err)
-		}
-	}
-
 	rootReduceStart := time.Now()
 	newRootID, err := z.reduceSpanNativeRootWithContext(rootID, spanNativeLeafReplacements{spans: prepared.LeafSpans, outputs: &outputs}, &metrics, &retired, coordinatorScratch)
 	metrics.ZipperRootReduceNs += time.Since(rootReduceStart).Nanoseconds()
@@ -711,39 +580,6 @@ func (o *spanNativeLeafOutputs) setRef(index int, ref page.ChildRef) error {
 	default:
 		return page.ErrInvalidPageType
 	}
-}
-
-func (o *spanNativeLeafOutputs) resolveBufferedLeafLogRefs(committed []page.ChildRef) error {
-	if o == nil || o.mode != spanNativeLeafOutputLeafLogs {
-		return nil
-	}
-	for i := 0; i*page.LogRecordRefSize+page.LogRecordRefSize <= len(o.leafLogRefs); i++ {
-		off := i * page.LogRecordRefSize
-		ref := page.LeafLogChildRef(page.DecodeLogRecordRef(o.leafLogRefs[off : off+page.LogRecordRefSize]))
-		resolved, ok, err := resolveSpanNativeBufferedLeafLogRef(ref, committed)
-		if err != nil {
-			return err
-		}
-		if ok {
-			page.EncodeLogRecordRef(o.leafLogRefs[off:off+page.LogRecordRefSize], resolved.Log)
-		}
-	}
-	for ri := range o.splitRanges {
-		splitGroups := o.splitRanges[ri].splits
-		for gi := range splitGroups {
-			splits := splitGroups[gi]
-			for si := range splits {
-				resolved, ok, err := resolveSpanNativeBufferedLeafLogRef(splits[si].Ref, committed)
-				if err != nil {
-					return err
-				}
-				if ok {
-					splits[si].Ref = resolved
-				}
-			}
-		}
-	}
-	return nil
 }
 
 func (o *spanNativeLeafOutputs) output(index int) spanNativeLeafOutput {

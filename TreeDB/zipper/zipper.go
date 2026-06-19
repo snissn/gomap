@@ -31,6 +31,14 @@ type LeafPageBatchLog interface {
 	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedLog interface {
+	AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error)
+}
+
+type LeafPageConcurrentAppendLog interface {
+	ConcurrentLeafPageAppends() bool
+}
+
 type LeafPagePreparedBatchLog interface {
 	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
 }
@@ -1785,6 +1793,33 @@ func (z *Zipper) persistLeafPageBatchData(leafPages [][]byte, metrics *adaptive.
 
 func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	return z.persistLeafPageBatchDataToWithConfig(leafPages, refs, metrics, applyRunConfig{})
+}
+
+func (z *Zipper) persistPreparedLeafPageDataTo(leafPage []byte, preparedPayload []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	if prepared, ok := z.leafPageLog.(LeafPagePreparedLog); ok {
+		appendStart := time.Now()
+		ptr, err := prepared.AppendPreparedLeafPage(leafPage, preparedPayload)
+		appendWait := time.Since(appendStart)
+		if err != nil {
+			recordZipperLeafLogOutputAppend(metrics, appendWait, 1, false)
+			return page.ChildRef{}, err
+		}
+		recordZipperLeafLogOutputAppend(metrics, appendWait, 1, true)
+		z.cachePersistedLeafPage(ptr, leafPage)
+		return page.LeafLogChildRef(ptr), nil
+	}
+	var onePage [1][]byte
+	var onePayload [1][]byte
+	onePage[0] = leafPage
+	onePayload[0] = preparedPayload
+	refs, err := z.persistPreparedLeafPageBatchDataTo(onePage[:], onePayload[:], nil, metrics)
+	if err != nil {
+		return page.ChildRef{}, err
+	}
+	if len(refs) != 1 {
+		return page.ChildRef{}, fmt.Errorf("zipper: prepared leaf page returned %d refs for one page", len(refs))
+	}
+	return refs[0], nil
 }
 
 func (z *Zipper) persistPreparedLeafPageBatchDataTo(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {

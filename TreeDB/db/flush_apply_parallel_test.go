@@ -604,7 +604,7 @@ func TestFlushApplySpanNativeSingleWorkerUsesApplyWithOptionsStats(t *testing.T)
 	}
 }
 
-func TestFlushApplySpanNativeBufferedLeafLogOutputReopens(t *testing.T) {
+func TestFlushApplySpanNativePreparedLeafLogOutputReopens(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
 		Dir:                        dir,
@@ -659,12 +659,12 @@ func TestFlushApplySpanNativeBufferedLeafLogOutputReopens(t *testing.T) {
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got == 0 {
 		_ = leafLog.Close()
 		_ = d.Close()
-		t.Fatalf("span-native used ops = 0, want buffered leaf-log output path")
+		t.Fatalf("span-native used ops = 0, want prepared leaf-log output path")
 	}
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_calls_total"); got == 0 {
 		_ = leafLog.Close()
 		_ = d.Close()
-		t.Fatalf("leaf-log append calls = 0, want committed buffered output")
+		t.Fatalf("leaf-log append calls = 0, want committed prepared output")
 	}
 	if err := d.Checkpoint(); err != nil {
 		_ = leafLog.Close()

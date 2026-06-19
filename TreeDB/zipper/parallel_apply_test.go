@@ -207,7 +207,7 @@ func TestApplyWithOptionsParallelReadErrorFailsBeforeOutput(t *testing.T) {
 		t.Fatalf("seed Apply: %v", err)
 	}
 	store.pages = make(map[page.LeafLogPtr][]byte)
-	z.SetLeafPageReader(parallelSafeLeafPageReader{pages: store.pages})
+	z.SetLeafPageReader(store)
 	update := buildParallelApplyBatch(t, 128, "upd")
 	defer func() { _ = update.Close() }()
 	pool := NewApplyWorkerPool(2)
@@ -244,7 +244,7 @@ func TestApplyWithOptionsParallelLeafLogEncodeError(t *testing.T) {
 	}
 
 	appendErr := errors.New("test leaf-log append failure")
-	z.SetLeafPageReader(parallelSafeLeafPageReader{pages: store.pages})
+	z.SetLeafPageReader(store)
 	z.SetLeafPageLog(&failingBatchLeafPageLog{batchMemoryLeafPageStore: store, err: appendErr})
 	update := buildParallelApplyBatch(t, 512, "upd")
 	defer func() { _ = update.Close() }()

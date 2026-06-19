@@ -252,7 +252,7 @@ func TestSpanNativeApplyConcurrentWorkerLocalScratchSplitParity(t *testing.T) {
 	}
 }
 
-func TestSpanNativeApplyLeafLogOutputBufferedSingleCommitBatch(t *testing.T) {
+func TestSpanNativeApplyLeafLogOutputPreparedWorkerAppends(t *testing.T) {
 	_, serial := newReadOnlyPrepareZipper(t)
 	serial.SetOuterLeavesInValueLog(true)
 	serialStore := newBatchMemoryLeafPageStore()
@@ -267,7 +267,7 @@ func TestSpanNativeApplyLeafLogOutputBufferedSingleCommitBatch(t *testing.T) {
 
 	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 4096)
 	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
-	native.SetLeafPageReader(parallelSafeLeafPageReader{pages: nativeStore.pages})
+	native.SetLeafPageReader(nativeStore)
 	nativeStore.batchLens = nil
 	nativeStore.singleCalls = 0
 
@@ -294,17 +294,24 @@ func TestSpanNativeApplyLeafLogOutputBufferedSingleCommitBatch(t *testing.T) {
 	if !result.SpanNativeUsed || result.Metrics.ZipperLeafLogPagesWritten < 2 {
 		t.Fatalf("span-native/leaf-log metrics used=%v pages=%d", result.SpanNativeUsed, result.Metrics.ZipperLeafLogPagesWritten)
 	}
-	if result.Metrics.ZipperLeafLogOutputAppendCalls != 1 {
-		t.Fatalf("leaf-log append calls=%d want one coordinator commit batch", result.Metrics.ZipperLeafLogOutputAppendCalls)
+	if result.Metrics.ZipperLeafLogOutputAppendCalls == 0 || result.Metrics.ZipperLeafLogOutputAppendPages != result.Metrics.ZipperLeafLogPagesWritten {
+		t.Fatalf("leaf-log append calls=%d appendPages=%d pagesWritten=%d", result.Metrics.ZipperLeafLogOutputAppendCalls, result.Metrics.ZipperLeafLogOutputAppendPages, result.Metrics.ZipperLeafLogPagesWritten)
 	}
 	if got := nativeStore.singleCalls; got != 0 {
-		t.Fatalf("single leaf-log appends=%d want buffered batch path", got)
+		t.Fatalf("single leaf-log appends=%d want prepared batch append path", got)
 	}
-	if len(nativeStore.batchLens) != 1 || nativeStore.batchLens[0] != result.Metrics.ZipperLeafLogPagesWritten {
-		t.Fatalf("batch lens=%v pagesWritten=%d want one batch covering all buffered output", nativeStore.batchLens, result.Metrics.ZipperLeafLogPagesWritten)
+	if len(nativeStore.batchLens) == 0 {
+		t.Fatalf("batch lens empty; want worker prepared appends")
+	}
+	var appended int
+	for _, n := range nativeStore.batchLens {
+		appended += n
+	}
+	if appended != result.Metrics.ZipperLeafLogPagesWritten {
+		t.Fatalf("batch lens=%v appended=%d pagesWritten=%d", nativeStore.batchLens, appended, result.Metrics.ZipperLeafLogPagesWritten)
 	}
 	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
-		t.Fatalf("span-native buffered leaf-log output mismatch")
+		t.Fatalf("span-native prepared leaf-log output mismatch")
 	}
 }
 
@@ -316,7 +323,7 @@ func TestSpanNativeApplyLeafLogOutputCommitFailureReturnsBeforeReduce(t *testing
 	native.SetLeafPageReader(store)
 
 	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
-	native.SetLeafPageReader(parallelSafeLeafPageReader{pages: store.pages})
+	native.SetLeafPageReader(store)
 	store.batchLens = nil
 	store.singleCalls = 0
 
@@ -332,17 +339,17 @@ func TestSpanNativeApplyLeafLogOutputCommitFailureReturnsBeforeReduce(t *testing
 		}
 	}
 
-	appendErr := errors.New("test span-native buffered leaf-log commit failure")
+	appendErr := errors.New("test span-native prepared leaf-log append failure")
 	native.SetLeafPageLog(&failingBatchLeafPageLog{batchMemoryLeafPageStore: store, err: appendErr})
 	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 4})
 	if !errors.Is(err, appendErr) {
 		t.Fatalf("ApplyWithOptions err=%v want %v", err, appendErr)
 	}
 	if result.RootID != 0 {
-		t.Fatalf("RootID=%d want zero because buffered output failed before reducer publication", result.RootID)
+		t.Fatalf("RootID=%d want zero because prepared output failed before reducer publication", result.RootID)
 	}
-	if result.Metrics.ZipperLeafLogOutputAppendCalls != 1 {
-		t.Fatalf("leaf-log append calls=%d want one failed coordinator commit", result.Metrics.ZipperLeafLogOutputAppendCalls)
+	if result.Metrics.ZipperLeafLogOutputAppendCalls == 0 {
+		t.Fatalf("leaf-log append calls=%d want at least one failed worker append", result.Metrics.ZipperLeafLogOutputAppendCalls)
 	}
 	if result.Metrics.ZipperLeafLogOutputAppendPages != 0 {
 		t.Fatalf("successful append pages=%d want 0 on failed buffered commit", result.Metrics.ZipperLeafLogOutputAppendPages)
