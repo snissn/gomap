@@ -197,6 +197,8 @@ type VectorIndexSearchStats struct {
 	QuantizedAssetHeapCopyBytes uint64 `json:"quantized_asset_heap_copy_bytes,omitempty"`
 	// QuantizedAssetActiveHandles is the current active mappedresource handle count for the selected quantized score-plane asset.
 	QuantizedAssetActiveHandles int64 `json:"quantized_asset_active_handles,omitempty"`
+	// QuantizedScoreCodecScalarU8Alpha reports searches served by scalar_u8 per-granule alpha scoring.
+	QuantizedScoreCodecScalarU8Alpha uint64 `json:"quantized_score_codec_scalar_u8_alpha,omitempty"`
 	// QuantizedScoreCodecBRQ1Bit reports searches served by the brq_1bit quantized scorer.
 	QuantizedScoreCodecBRQ1Bit uint64 `json:"quantized_score_codec_brq_1bit,omitempty"`
 	// BRQ1BitQueryWeightBits reports the runtime query-weight bit width for brq_1bit searches.
@@ -2226,6 +2228,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 		QuantizedAssetMappedBytes:             searchStats.QuantizedAssetMappedBytes,
 		QuantizedAssetHeapCopyBytes:           searchStats.QuantizedAssetHeapCopyBytes,
 		QuantizedAssetActiveHandles:           searchStats.QuantizedAssetActiveHandles,
+		QuantizedScoreCodecScalarU8Alpha:      searchStats.QuantizedScoreCodecScalarU8Alpha,
 		QuantizedScoreCodecBRQ1Bit:            searchStats.QuantizedScoreCodecBRQ1Bit,
 		BRQ1BitQueryWeightBits:                searchStats.BRQ1BitQueryWeightBits,
 		BRQ1BitBitProductPasses:               searchStats.BRQ1BitBitProductPasses,

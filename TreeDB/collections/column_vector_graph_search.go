@@ -388,6 +388,7 @@ type columnVectorGraphNativeSearchStats struct {
 	QuantizedAssetMappedBytes            uint64
 	QuantizedAssetHeapCopyBytes          uint64
 	QuantizedAssetActiveHandles          int64
+	QuantizedScoreCodecScalarU8Alpha     uint64
 	QuantizedScoreCodecBRQ1Bit           uint64
 	BRQ1BitQueryWeightBits               uint64
 	BRQ1BitBitProductPasses              uint64
