@@ -672,6 +672,93 @@ func TestServiceCreateIndexRejectsInvalidScalarU8Calibration2842(t *testing.T) {
 	}
 }
 
+func TestServiceIndexCapabilitiesIncludeScalarU8PerGranuleAlphaRerank2844(t *testing.T) {
+	base := collections.VectorIndexDefinition{
+		Name:       defaultVectorIndexName,
+		Field:      defaultEmbeddingField,
+		Metric:     collections.VectorMetricCosine,
+		Dimensions: 2,
+		Encoding:   collections.VectorIndexEncodingFloat32,
+		Strategy:   collections.VectorIndexStrategyColumnGraph,
+	}
+	alphaCalibration := &collections.ScalarU8CalibrationConfig{
+		Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+		Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+		AlphaPolicy: collections.ScalarU8AlphaPolicy{
+			Name: collections.ScalarU8AlphaPolicyMaxAbs,
+		},
+	}
+	tests := []struct {
+		name                        string
+		quantizedIndexes            []collections.QuantizedVectorIndexDefinition
+		wantQuantizedRerank         bool
+		wantScalarU8QuantizedRerank bool
+	}{
+		{
+			name: "legacy_nil_config",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:    "embedding.scalar_u8.fast",
+				Codec:   collections.QuantizedVectorCodecScalarU8,
+				Version: 1,
+			}},
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: true,
+		},
+		{
+			name: "explicit_legacy_config",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:    "embedding.scalar_u8.legacy",
+				Codec:   collections.QuantizedVectorCodecScalarU8,
+				Version: 1,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: collections.ScalarU8CalibrationModeLegacy,
+				},
+			}},
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: true,
+		},
+		{
+			name: "per_granule_alpha_scoring",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:                "embedding.scalar_u8.alpha",
+				Codec:               collections.QuantizedVectorCodecScalarU8,
+				Version:             1,
+				ScalarU8Calibration: alphaCalibration,
+			}},
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: true,
+		},
+		{
+			name: "alpha_scalar_u8_and_rabitq_rerank",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{
+				{
+					Name:                "embedding.scalar_u8.alpha",
+					Codec:               collections.QuantizedVectorCodecScalarU8,
+					Version:             1,
+					ScalarU8Calibration: alphaCalibration,
+				},
+				{
+					Name:    "embedding.rabitq_1bit.experimental",
+					Codec:   "rabitq_1bit",
+					Version: 1,
+				},
+			},
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def := base
+			def.QuantizedIndexes = tt.quantizedIndexes
+			got := indexCapabilities(def, true)
+			if got.QuantizedRerank != tt.wantQuantizedRerank || got.ScalarU8QuantizedRerank != tt.wantScalarU8QuantizedRerank {
+				t.Fatalf("capabilities=%+v want quantized_rerank=%t scalar_u8_quantized_rerank=%t", got, tt.wantQuantizedRerank, tt.wantScalarU8QuantizedRerank)
+			}
+		})
+	}
+}
+
 func TestServiceUpsertScalarU8PerGranuleAlphaDefaultBuildsAssets2843(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
