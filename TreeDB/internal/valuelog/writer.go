@@ -74,6 +74,7 @@ type Writer struct {
 	encScratch             []byte
 	encLimiter             limitedSliceWriter
 	blockScratch           []byte
+	blockCodecScratch      blockCodecScratch
 	skipDictID             uint64
 	codecs                 *dictCodecEntry
 	dictFrameEncodeLevel   zstd.EncoderLevel
@@ -1929,7 +1930,7 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 	}
 
 	encodeStart := w.sampleEncodeStart()
-	encoded, encodeErr := encodeBlockPayload(w.blockCodec, payload, w.blockScratch[:0])
+	encoded, encodeErr := encodeBlockPayloadWithScratch(w.blockCodec, payload, w.blockScratch[:0], &w.blockCodecScratch)
 	encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
 	if encoded != nil {
 		w.blockScratch = encoded[:0]
