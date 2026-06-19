@@ -302,7 +302,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	}
 	b.FinishNoNode()
 
-	leafID, err := z.persistLeafPage(b)
+	leafID, err := z.persistLeafPage(b, nil)
 	if err != nil {
 		t.Fatalf("persistLeafPage: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestZipperLeafRefCacheOwnsPersistedLeafBytes(t *testing.T) {
 	}
 	b.FinishNoNode()
 
-	leafID, err := z.persistLeafPage(b)
+	leafID, err := z.persistLeafPage(b, nil)
 	if err != nil {
 		t.Fatalf("persistLeafPage: %v", err)
 	}

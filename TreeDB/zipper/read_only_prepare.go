@@ -307,6 +307,21 @@ func (r ReadOnlyPrepareResult) AppendLeafSpanWorkerRanges(dst []ReadOnlyLeafSpan
 	return dst
 }
 
+const readOnlyLeafSpanWorkUnitQueueFactor = 4
+
+// AppendLeafSpanWorkUnitRanges appends bounded, contiguous span-native work
+// units to dst. It targets a small ready-work queue ahead of the admitted
+// workers, with range size derived from total estimated span ops and bytes
+// rather than one task per leaf span. No task crosses publication order: ranges
+// preserve span order and outputs still publish by original span index.
+func (r ReadOnlyPrepareResult) AppendLeafSpanWorkUnitRanges(dst []ReadOnlyLeafSpanWorkerRange, workers int) []ReadOnlyLeafSpanWorkerRange {
+	leafSummary := r.LeafSpanSummary()
+	r.forEachLeafSpanWorkUnitRange(workers, leafSummary, func(workerRange ReadOnlyLeafSpanWorkerRange) {
+		dst = append(dst, workerRange)
+	})
+	return dst
+}
+
 // LeafSpanWorkerRangeSummary returns an aggregate of the deterministic worker
 // ranges for workers without retaining the ranges themselves.
 func (r ReadOnlyPrepareResult) LeafSpanWorkerRangeSummary(workers int) ReadOnlyLeafSpanWorkerRangeSummary {
@@ -364,6 +379,66 @@ func (r ReadOnlyPrepareResult) forEachLeafSpanWorkerRange(workers int, leafSumma
 			cumulativeOps += int64(spanOps)
 			spanIdx++
 			if remainingRanges > 0 && cumulativeOps >= targetCumulativeOps {
+				break
+			}
+		}
+		fn(ReadOnlyLeafSpanWorkerRange{
+			FirstSpan: firstSpan,
+			SpanCount: spanIdx - firstSpan,
+			Ops:       rangeOps,
+			Bytes:     rangeBytes,
+		})
+	}
+}
+
+func readOnlyLeafSpanWorkUnitTargetRanges(workers, spans int) int {
+	if workers <= 0 || spans <= 0 {
+		return 0
+	}
+	if workers <= 1 {
+		return 1
+	}
+	target := workers * readOnlyLeafSpanWorkUnitQueueFactor
+	if target < workers {
+		target = workers
+	}
+	if target > spans {
+		target = spans
+	}
+	return target
+}
+
+func (r ReadOnlyPrepareResult) forEachLeafSpanWorkUnitRange(workers int, leafSummary ReadOnlyLeafSpanSummary, fn func(ReadOnlyLeafSpanWorkerRange)) {
+	if fn == nil || workers <= 0 || len(r.LeafSpans) == 0 {
+		return
+	}
+	targetRanges := readOnlyLeafSpanWorkUnitTargetRanges(workers, len(r.LeafSpans))
+	if targetRanges <= 0 {
+		return
+	}
+	totalOps := int64(leafSummary.SpanOps)
+	if totalOps <= 0 {
+		totalOps = int64(r.Ops)
+	}
+	targetOps := readOnlyPrepareCeilDiv64(totalOps, int64(targetRanges))
+	if targetOps <= 0 {
+		targetOps = 1
+	}
+	targetBytes := readOnlyPrepareCeilDiv64(int64(leafSummary.SpanBytes), int64(targetRanges))
+
+	spanIdx := 0
+	for rangeIdx := 0; rangeIdx < targetRanges && spanIdx < len(r.LeafSpans); rangeIdx++ {
+		firstSpan := spanIdx
+		rangeOps := 0
+		rangeBytes := 0
+		remainingRanges := targetRanges - rangeIdx - 1
+		lastAllowedSpan := len(r.LeafSpans) - remainingRanges
+		for spanIdx < lastAllowedSpan {
+			span := r.LeafSpans[spanIdx]
+			rangeOps += span.OpCount
+			rangeBytes += span.ByteCount
+			spanIdx++
+			if remainingRanges > 0 && (int64(rangeOps) >= targetOps || (targetBytes > 0 && int64(rangeBytes) >= targetBytes)) {
 				break
 			}
 		}
@@ -695,9 +770,12 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 func elapsedNsSince(start time.Time) uint64 {
 	elapsed := time.Since(start)
 	if elapsed <= 0 {
-		return 0
+		return 1
 	}
-	return uint64(elapsed.Nanoseconds())
+	if ns := elapsed.Nanoseconds(); ns > 0 {
+		return uint64(ns)
+	}
+	return 1
 }
 
 func resolveParallelApplyWorkers(opts ApplyOptions, summary ReadOnlyLeafSpanSummary) int {

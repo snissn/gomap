@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -233,5 +234,315 @@ func TestRunWritesReportBeforeReturningCounterFailure(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(out, "scoreboard.json")); statErr != nil {
 		t.Fatalf("scoreboard.json not written before failure: %v", statErr)
+	}
+}
+
+func TestPhase2SynthesisGolden(t *testing.T) {
+	treedbNS := 1_100_000.0
+	sqliteNS := 1_000_000.0
+	treedbStorage := 144.0
+	sqliteStorage := 128.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel:        "treedb_common_10k",
+			System:             "TreeDB",
+			Engine:             "treedb_text_v2",
+			Modality:           "text_only",
+			QueryShape:         "common term BM25F top-k with block-max pruning",
+			Boundary:           "No-document text-v2 score-only BM25F search",
+			Benchmark:          "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:            &treedbNS,
+			StorageBytesPerDoc: &treedbStorage,
+		},
+		{
+			SourceLabel:        "sqlite_common_10k",
+			System:             "SQLite FTS5",
+			Engine:             "sqlite_fts5",
+			Modality:           "text_only",
+			QueryShape:         "common term FTS5 MATCH top-k",
+			Boundary:           "no-document rowid+bm25 retrieval only",
+			Benchmark:          "sqlite_fts5/common_term_no_docs",
+			NsPerOp:            &sqliteNS,
+			StorageBytesPerDoc: &sqliteStorage,
+		},
+	}, []unavailableRow{
+		{System: "Bleve", Reason: "not run in unit test"},
+		{System: "Tantivy", Reason: "not run in unit test"},
+		{System: "Lucene", Reason: "not run in unit test"},
+	})
+	payload, err := json.MarshalIndent(syn, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal synthesis: %v", err)
+	}
+	payload = append(payload, '\n')
+	goldenPath := filepath.Join("testdata", "phase2_synthesis_golden.json")
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(goldenPath, payload, 0o644); err != nil {
+			t.Fatalf("update golden %s: %v", goldenPath, err)
+		}
+		return
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", goldenPath, err)
+	}
+	if string(payload) != string(want) {
+		t.Fatalf("phase2 synthesis golden mismatch\n--- got ---\n%s\n--- want ---\n%s", payload, want)
+	}
+}
+
+func TestPhase2SynthesisDoesNotClaimParityFromSQLiteOnly(t *testing.T) {
+	treedbNS := 700_000.0
+	sqliteNS := 1_000_000.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel: "treedb_common_10k",
+			System:      "TreeDB",
+			Engine:      "treedb_text_v2",
+			Modality:    "text_only",
+			QueryShape:  "common term BM25F top-k with block-max pruning",
+			Boundary:    "No-document text-v2 score-only BM25F search",
+			Benchmark:   "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:     &treedbNS,
+		},
+		{
+			SourceLabel: "sqlite_common_10k",
+			System:      "SQLite FTS5",
+			Engine:      "sqlite_fts5",
+			Modality:    "text_only",
+			QueryShape:  "common term FTS5 MATCH top-k",
+			Boundary:    "no-document rowid+bm25 retrieval only",
+			Benchmark:   "sqlite_fts5/common_term_no_docs",
+			NsPerOp:     &sqliteNS,
+		},
+	}, []unavailableRow{{System: "Lucene", Reason: "not run"}, {System: "Tantivy", Reason: "not run"}, {System: "Bleve", Reason: "not run"}})
+	var common phase2GapClassification
+	for _, got := range syn.GapClassifications {
+		if got.ShapeID == "single_term_common" {
+			common = got
+			break
+		}
+	}
+	if common.Classification == "ahead" || common.Classification == "near_parity" {
+		t.Fatalf("single_term_common classification=%q from SQLite-only evidence; want evidence gap", common.Classification)
+	}
+	if !strings.Contains(common.ExternalEvidence, "sqlite_common_10k") {
+		t.Fatalf("single_term_common external evidence=%q should still document SQLite row availability", common.ExternalEvidence)
+	}
+}
+
+func TestPhase2SynthesisRequiresExplicitComparablePair(t *testing.T) {
+	treedbNS := 700_000.0
+	luceneNS := 1_000_000.0
+	rows := []scoreboardRow{
+		{
+			SourceLabel: "treedb_common_10k",
+			System:      "TreeDB",
+			Engine:      "treedb_text_v2",
+			Modality:    "text_only",
+			Dataset:     "docs=10000",
+			TopK:        10,
+			QueryShape:  "common term BM25F top-k with block-max pruning",
+			Boundary:    "No-document text-v2 score-only BM25F search",
+			Benchmark:   "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:     &treedbNS,
+		},
+		{
+			SourceLabel: "lucene_common_1m",
+			System:      "Lucene",
+			Engine:      "lucene",
+			Modality:    "text_only",
+			Dataset:     "docs=1000000",
+			TopK:        10,
+			QueryShape:  "common term BM25 top-k",
+			Boundary:    "no-document scorer top-k",
+			Benchmark:   "lucene/common_term_no_docs",
+			NsPerOp:     &luceneNS,
+		},
+	}
+	syn := buildPhase2Synthesis(rows, nil)
+	common := phase2ClassificationByID(t, syn, "single_term_common")
+	if common.Classification == "ahead" || common.Classification == "near_parity" {
+		t.Fatalf("single_term_common classification=%q from unpaired rows; want default evidence gap", common.Classification)
+	}
+
+	rows[0].Metrics = map[string]float64{"phase2_comparable": 1}
+	rows[1].Metrics = map[string]float64{"phase2_comparable": 1}
+	rows[1].Dataset = rows[0].Dataset + " queries=1000"
+	syn = buildPhase2Synthesis(rows, nil)
+	common = phase2ClassificationByID(t, syn, "single_term_common")
+	if common.Classification != "ahead" {
+		t.Fatalf("single_term_common classification=%q with explicit comparable pair; want ahead", common.Classification)
+	}
+}
+
+func TestPhase2SynthesisComparesExplicitBuildPairs(t *testing.T) {
+	treeBuildNS := 800_000_000.0
+	luceneBuild := 1.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel: "treedb_build_10k",
+			System:      "TreeDB",
+			Engine:      "treedb_text_v2",
+			Modality:    "build_storage",
+			Dataset:     "docs=10000",
+			TopK:        0,
+			QueryShape:  "text-v2 index build",
+			Boundary:    "checkpointed text index build",
+			Benchmark:   "BenchmarkCreateTextIndex/build",
+			NsPerOp:     &treeBuildNS,
+			Metrics:     map[string]float64{"phase2_comparable": 1},
+		},
+		{
+			SourceLabel:  "lucene_build_10k",
+			System:       "Lucene",
+			Engine:       "lucene",
+			Modality:     "build_storage",
+			Dataset:      "docs=10000",
+			TopK:         0,
+			QueryShape:   "Lucene index build",
+			Boundary:     "optimized index build",
+			Benchmark:    "lucene/build",
+			BuildSeconds: &luceneBuild,
+			Metrics:      map[string]float64{"phase2_comparable": 1},
+		},
+	}, nil)
+	build := phase2ClassificationByID(t, syn, "index_build_ingest")
+	if build.Classification != "ahead" {
+		t.Fatalf("index_build_ingest classification=%q rationale=%q; want build metric comparison", build.Classification, build.Rationale)
+	}
+	if !strings.Contains(build.Rationale, "build pair") {
+		t.Fatalf("index_build_ingest rationale=%q missing build pair evidence", build.Rationale)
+	}
+}
+
+func phase2ClassificationByID(t *testing.T, syn phase2Synthesis, shapeID string) phase2GapClassification {
+	t.Helper()
+	for _, got := range syn.GapClassifications {
+		if got.ShapeID == shapeID {
+			return got
+		}
+	}
+	t.Fatalf("missing phase2 classification %q", shapeID)
+	return phase2GapClassification{}
+}
+
+func TestPhase2IndexSizeIgnoresIncidentalRetrievalStorage(t *testing.T) {
+	treedbNS := 1_100_000.0
+	sqliteNS := 1_000_000.0
+	treedbStorage := 144.0
+	sqliteStorage := 128.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel:        "treedb_common_10k",
+			System:             "TreeDB",
+			Engine:             "treedb_text_v2",
+			Modality:           "text_only",
+			QueryShape:         "common term BM25F top-k with block-max pruning",
+			Boundary:           "No-document text-v2 score-only BM25F search",
+			Benchmark:          "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:            &treedbNS,
+			StorageBytesPerDoc: &treedbStorage,
+		},
+		{
+			SourceLabel:        "sqlite_common_10k",
+			System:             "SQLite FTS5",
+			Engine:             "sqlite_fts5",
+			Modality:           "text_only",
+			QueryShape:         "common term FTS5 MATCH top-k",
+			Boundary:           "no-document rowid+bm25 retrieval only",
+			Benchmark:          "sqlite_fts5/common_term_no_docs",
+			NsPerOp:            &sqliteNS,
+			StorageBytesPerDoc: &sqliteStorage,
+		},
+	}, nil)
+	var indexSize phase2GapClassification
+	for _, got := range syn.GapClassifications {
+		if got.ShapeID == "index_size" {
+			indexSize = got
+			break
+		}
+	}
+	if indexSize.Classification != "far_behind" {
+		t.Fatalf("index_size classification=%q evidence=%q; incidental retrieval storage must not become index-size parity evidence", indexSize.Classification, indexSize.TreeDBEvidence)
+	}
+	if !strings.Contains(indexSize.TreeDBEvidence, "not captured") {
+		t.Fatalf("index_size TreeDB evidence=%q want explicit missing footprint evidence", indexSize.TreeDBEvidence)
+	}
+}
+
+func TestRunWritesPhase2SynthesisArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	goBench := filepath.Join(dir, "go.txt")
+	if err := os.WriteFile(goBench, []byte(`BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk-8 1 1000 ns/op 16 B/op 1 allocs/op 0 docs_fetched/search 0 full_doc_fallbacks/search 0 fail_closed/search 0 state_lookups/search 0 match_details/search 4 posting_blocks_visited/search 2 posting_blocks_skipped/search
+`), 0o644); err != nil {
+		t.Fatalf("write go bench: %v", err)
+	}
+	out := filepath.Join(dir, "out")
+	if err := run(config{
+		outDir:      out,
+		goBenches:   namedPaths{{Name: "treedb_text_blockmax_10k", Path: goBench}},
+		unavailable: namedValues{{Name: "Lucene", Value: "not run in artifact smoke"}, {Name: "Tantivy", Value: "not run in artifact smoke"}, {Name: "Bleve", Value: "not run in artifact smoke"}},
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	jsonPayload, err := os.ReadFile(filepath.Join(out, "scoreboard.json"))
+	if err != nil {
+		t.Fatalf("read scoreboard.json: %v", err)
+	}
+	var rep report
+	if err := json.Unmarshal(jsonPayload, &rep); err != nil {
+		t.Fatalf("parse scoreboard.json: %v", err)
+	}
+	if rep.Phase2Synthesis.SchemaVersion != phase2SynthesisVersion {
+		t.Fatalf("phase2 synthesis schema=%q", rep.Phase2Synthesis.SchemaVersion)
+	}
+	mdPayload, err := os.ReadFile(filepath.Join(out, "scoreboard.md"))
+	if err != nil {
+		t.Fatalf("read scoreboard.md: %v", err)
+	}
+	md := string(mdPayload)
+	for _, want := range []string{"## Phase-2 gap classification", "single_term_common", "External baseline coverage", "Non-equivalent analyzer/query semantics"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("scoreboard.md missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func TestPhase2GapReadoutDocContainsRequiredTaxonomy(t *testing.T) {
+	path := filepath.Join("..", "..", "docs", "benchmarks", "treedb_text_v2_phase2_gap_classification.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	doc := string(data)
+	for _, want := range []string{
+		"/tmp/gomap_2727_scoreboard_candidate_20260613_090425",
+		"scripts/bench_text_hybrid_scoreboard.sh",
+		"single_term_common",
+		"single_term_rare",
+		"multi_term_and",
+		"multi_term_or_wand",
+		"phrase",
+		"hybrid_text_scalar",
+		"index_build_ingest",
+		"index_size",
+		"reopen",
+		"maintenance_rewrite",
+		"ahead",
+		"near_parity",
+		"behind_but_tractable",
+		"far_behind",
+		"SQLite FTS5",
+		"Bleve",
+		"Tantivy",
+		"Lucene",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("phase2 readout missing %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(doc), "slab") {
+		t.Fatalf("phase2 readout should use value-log/storage-native wording, not slab")
 	}
 }

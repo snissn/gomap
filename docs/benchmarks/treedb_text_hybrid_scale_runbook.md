@@ -138,7 +138,8 @@ Primary artifacts:
 The JSON/Markdown report includes:
 
 - load/build timings, rows/s, text storage, vector rebuild status, checkpoint
-  time, storage bytes, and bytes/doc;
+  time, storage bytes, bytes/doc, and text-v2 lane bytes/doc (docid, docmap,
+  postings, norms, positions, term stats, status/format);
 - text-only common, rare, multi-term AND, and multi-term OR score-only query rows;
 - hybrid text-only, text+scalar, and optional text+vector(+scalar) query rows;
 - p50/p95/p99/mean latency and derived ops/sec for each retrieval row;

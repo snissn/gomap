@@ -146,7 +146,10 @@ Report text write counters:
   operation. For maintained v2 insert/update/delete rows this is the emitted
   root-delta estimate (docID/docmap/norm/term-status/posting-block deltas plus
   the status generation), not the net post-mutation root size;
-- `index_bytes/doc`.
+- `index_bytes/doc`, plus v2 lane bytes/doc (`v2_docid_bytes/doc`,
+  `v2_docmap_bytes/doc`, `v2_posting_bytes/doc`, `v2_norm_bytes/doc`,
+  `v2_position_bytes/doc`, `v2_term_bytes/doc`, and
+  `v2_status_format_bytes/doc`).
 
 ## New text search scale rows
 
@@ -273,9 +276,10 @@ go test ./TreeDB/collections \
 
 Report `position_lookups/search`, `phrase_candidates_checked/search`,
 `phrase_candidates_matched/search`, `v2_position_entries`, `index_bytes/doc`,
-and the standard runtime/allocation counters. Stemming and synonym options are
-reserved extension seams and must fail closed until a future ticket defines their
-indexing/query expansion semantics and rebuild compatibility.
+`v2_position_bytes/doc`, and the standard runtime/allocation counters. Stemming
+and synonym options are reserved extension seams and must fail closed until a
+future ticket defines their indexing/query expansion semantics and rebuild
+compatibility.
 
 >=100k local artifact:
 
