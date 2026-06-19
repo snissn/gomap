@@ -172,6 +172,36 @@ func TestHybridAdaptiveCandidateBudgetTieFallbackDeterminism2875(t *testing.T) {
 	}
 }
 
+func TestHybridAdaptiveTextBudgetPreservesRequestedScanGuardrail2875(t *testing.T) {
+	fixture := openIndexInsertSearchInsertedTextV2Fixture2564(t, 20000, 16, 8)
+	defer func() { _ = fixture.db.Close() }()
+
+	opts := HybridSearchOptions{
+		TopK:       10,
+		Text:       &HybridTextQuery{IndexName: hybridCloseoutTextIndexName2506, Query: "refund policy", CandidateLimit: 200},
+		ResultMode: HybridResultModeScoreOnly,
+	}
+	fixed, err := fixture.col.searchHybridWithCandidateBudgetPolicy(opts, hybridCandidateBudgetPolicyFixed)
+	if err != nil {
+		t.Fatalf("fixed SearchHybrid: %v", err)
+	}
+	adaptive, err := fixture.col.SearchHybrid(opts)
+	if err != nil {
+		t.Fatalf("adaptive SearchHybrid: %v", err)
+	}
+	assertHybridResponsesEqual2875(t, adaptive, fixed)
+	assertHybridNoDocumentGuardrails2875(t, adaptive.Stats)
+	if adaptive.Stats.CandidateBudgetPolicy != HybridCandidateBudgetPolicyAdaptiveRRF || adaptive.Stats.CandidateBudgetStopReason != HybridCandidateBudgetStopReasonSingleSourceTopK || adaptive.Stats.CandidateBudgetFallbacks != 0 {
+		t.Fatalf("adaptive stats=%+v want exact single-source adaptive without fallback", adaptive.Stats)
+	}
+	if adaptive.Stats.TextCandidatesRequested != 200 || adaptive.Stats.TextCandidateBudgetEffective != 10 || adaptive.Stats.TextCandidatesReturned != 10 {
+		t.Fatalf("adaptive stats=%+v want requested/effective/returned text budgets 200/10/10", adaptive.Stats)
+	}
+	if adaptive.Stats.TextCandidatesScored <= uint64(hybridTextCandidateDefaultScanCandidateLimit) {
+		t.Fatalf("adaptive stats=%+v want requested text scan guardrail to allow scoring past the default minimum", adaptive.Stats)
+	}
+}
+
 func assertHybridResponsesEqual2875(tb testing.TB, got, want HybridSearchResponse) {
 	tb.Helper()
 	if len(got.Results) != len(want.Results) {
