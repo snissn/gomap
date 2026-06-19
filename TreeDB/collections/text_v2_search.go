@@ -2207,9 +2207,12 @@ func textV2SearchTightBlockUpperBound(snap *backenddb.Snapshot, catalog *collect
 	} else {
 		mins = mins[:fieldCount]
 	}
-	hasLive, err := cache.minFieldLengthsInRange(snap, catalog, ctx, summary.FirstOrdinal, summary.LastOrdinal, mins, stats)
+	hasLive, complete, err := cache.minFieldLengthsInRange(snap, catalog, ctx, summary.FirstOrdinal, summary.LastOrdinal, mins, stats)
 	if err != nil {
 		return 0, err
+	}
+	if !complete {
+		return textV2SearchBlockUpperBound(term, summary, ctx)
 	}
 	if !hasLive {
 		return 0, nil
@@ -2692,41 +2695,40 @@ func (cache *textV2SearchBlockCache) normEntry(snap *backenddb.Snapshot, catalog
 	return entry, true, nil
 }
 
-func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, first, last uint64, mins []uint32, stats *TextSearchStats) (bool, error) {
+func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, first, last uint64, mins []uint32, stats *TextSearchStats) (hasLive bool, complete bool, err error) {
 	if first == 0 || last < first {
-		return false, errMalformedTextStorage("text-v2 invalid norm range [%d,%d]", first, last)
+		return false, false, errMalformedTextStorage("text-v2 invalid norm range [%d,%d]", first, last)
 	}
 	if len(mins) != len(ctx.fieldNames) {
-		return false, errMalformedTextStorage("text-v2 norm min field count %d want %d", len(mins), len(ctx.fieldNames))
+		return false, false, errMalformedTextStorage("text-v2 norm min field count %d want %d", len(mins), len(ctx.fieldNames))
 	}
 	for i := range mins {
 		mins[i] = math.MaxUint32
 	}
 	blockStart := textV2OrdinalBlockStart(first, textV2DefaultNormBlockSize)
 	if blockStart == 0 {
-		return false, errMalformedTextStorage("text-v2 invalid norm range start %d", first)
+		return false, false, errMalformedTextStorage("text-v2 invalid norm range start %d", first)
 	}
-	hasLive := false
 	for blockStart <= last {
 		block, found, err := cache.normBlockAtOptional(snap, catalog, ctx, blockStart, stats)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if !found {
-			if blockStart > math.MaxUint64-uint64(textV2DefaultNormBlockSize) {
-				break
-			}
-			blockStart += uint64(textV2DefaultNormBlockSize)
-			continue
+			// Missing norm blocks can be legitimate sparse/tombstone-purged ordinal gaps,
+			// but they make the field-length minimum incomplete for this posting range.
+			// The caller must fail closed to the loose summary-only bound instead of
+			// treating the gap as proof that no live posting ordinal can score.
+			return hasLive, false, nil
 		}
 		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= first })
 		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= last {
 			entry := block.Entries[idx]
 			if len(entry.FieldLengths) != len(ctx.fieldNames) {
-				return false, errMalformedTextStorage("text-v2 norm entry field count %d want %d", len(entry.FieldLengths), len(ctx.fieldNames))
+				return false, false, errMalformedTextStorage("text-v2 norm entry field count %d want %d", len(entry.FieldLengths), len(ctx.fieldNames))
 			}
 			if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.NormGeneration {
-				return false, errMalformedTextStorage("text-v2 norm entry outside status snapshot")
+				return false, false, errMalformedTextStorage("text-v2 norm entry outside status snapshot")
 			}
 			if !entry.tombstoned() {
 				for fieldIdx, length := range entry.FieldLengths {
@@ -2743,7 +2745,7 @@ func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snap
 		}
 		blockStart += uint64(textV2DefaultNormBlockSize)
 	}
-	return hasLive, nil
+	return hasLive, true, nil
 }
 
 func (cache *textV2SearchBlockCache) docMapBlockAtOptional(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, blockStart uint64) (textV2SearchDocMapBlock, bool, error) {
