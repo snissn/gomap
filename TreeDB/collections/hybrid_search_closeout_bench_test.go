@@ -410,7 +410,7 @@ func hybridCloseoutReportStats2506(b *testing.B, response HybridSearchResponse) 
 	b.ReportMetric(float64(response.Stats.DocumentsMissing), "docs_missing/search")
 	b.ReportMetric(float64(response.Stats.FullDocumentScanFallbacks), "full_doc_fallbacks/search")
 	b.ReportMetric(float64(response.Stats.Truncated), "truncated/search")
-	if response.Stats.CandidateBudgetPolicy == HybridCandidateBudgetPolicyAdaptiveRRF {
+	if hybridCandidateBudgetPolicyIsAdaptive(response.Stats.CandidateBudgetPolicy) {
 		b.ReportMetric(1, "adaptive_budget/search")
 	} else {
 		b.ReportMetric(0, "adaptive_budget/search")

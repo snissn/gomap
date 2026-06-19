@@ -31,6 +31,15 @@ type hybridCandidateBudgetProofAccumulator struct {
 	hasVector   bool
 }
 
+func hybridCandidateBudgetPolicyIsAdaptive(policy HybridCandidateBudgetPolicy) bool {
+	switch policy {
+	case HybridCandidateBudgetPolicyAdaptiveRRF:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExecutionPlan, candidateAllowSet, filterAllowSet hybridScalarAllowSet, mode hybridCandidateBudgetPolicyMode) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	defaultMode := mode == hybridCandidateBudgetPolicyDefault
 	if defaultMode {
