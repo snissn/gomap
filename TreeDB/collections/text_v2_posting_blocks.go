@@ -155,6 +155,22 @@ func decodeTextV2PostingBlockKeyForPrefix(raw, prefix []byte) (textV2PostingBloc
 	return decodeTextV2PostingBlockKey(raw)
 }
 
+func decodeTextV2PostingBlockKeySuffixForPrefix(raw, prefix []byte) (uint64, uint64, error) {
+	if !bytes.HasPrefix(raw, prefix) {
+		return 0, 0, errMalformedTextStorage("text-v2 posting block key outside requested term prefix")
+	}
+	suffix := raw[len(prefix):]
+	if len(suffix) != 16 {
+		return 0, 0, errMalformedTextStorage("text-v2 posting block key suffix length %d", len(suffix))
+	}
+	blockStart := binary.BigEndian.Uint64(suffix[:8])
+	blockID := binary.BigEndian.Uint64(suffix[8:])
+	if blockStart == 0 || blockID == 0 {
+		return 0, 0, errMalformedTextStorage("text-v2 posting block key blockStart/blockID cannot be zero")
+	}
+	return blockStart, blockID, nil
+}
+
 func encodeTextV2PostingBlockValue(value textV2PostingBlockValue) []byte {
 	entries := cloneTextV2PostingBlockEntries(value.Entries)
 	slices.SortFunc(entries, func(a, b textV2PostingBlockEntry) int {
@@ -300,12 +316,14 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 }
 
 type textV2PostingBlockEntryScanner struct {
-	block            textV2PostingBlockValue
-	cur              textCursor
-	remaining        uint32
-	seen             uint32
-	prevOrdinal      uint64
-	fieldScratch     []uint32
+	block        textV2PostingBlockValue
+	cur          textCursor
+	remaining    uint32
+	seen         uint32
+	prevOrdinal  uint64
+	fieldScratch []uint32
+	// scratch is caller-owned decode storage reused only within one iterator/query.
+	scratch          []uint32
 	computed         textV2PostingBlockSummary
 	computedFieldTF  []uint32
 	checksumVerified bool
@@ -314,6 +332,10 @@ type textV2PostingBlockEntryScanner struct {
 }
 
 func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2PostingBlockEntryScanner, error) {
+	return initTextV2PostingBlockEntryScanner(nil, raw, scratch)
+}
+
+func initTextV2PostingBlockEntryScanner(dst *textV2PostingBlockEntryScanner, raw []byte, scratch []uint32) (*textV2PostingBlockEntryScanner, error) {
 	if len(raw) == 0 {
 		return nil, errMalformedTextStorage("empty text-v2 posting block value")
 	}
@@ -406,9 +428,15 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 		return nil, errMalformedTextStorage("text-v2 posting block field count invalid")
 	}
 	fieldCountInt := int(fieldCount)
-	fieldMetadata := make([]uint32, fieldCountInt*2)
-	maxFieldTF := fieldMetadata[:fieldCountInt:fieldCountInt]
-	computedFieldTF := fieldMetadata[fieldCountInt : fieldCountInt*2 : fieldCountInt*2]
+	scratchNeeded := fieldCountInt * 3
+	if cap(scratch) < scratchNeeded {
+		scratch = make([]uint32, scratchNeeded)
+	}
+	scratch = scratch[:scratchNeeded]
+	fieldScratch := scratch[:fieldCountInt:fieldCountInt]
+	maxFieldTF := scratch[fieldCountInt : fieldCountInt*2 : fieldCountInt*2]
+	computedFieldTF := scratch[fieldCountInt*2 : scratchNeeded : scratchNeeded]
+	clear(computedFieldTF)
 	for i := uint32(0); i < fieldCount; i++ {
 		fieldTF, err := cur.readUvarint()
 		if err != nil {
@@ -441,10 +469,10 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 	if entryCount > uint64(cur.remaining())/minEntryBytes {
 		return nil, errMalformedTextStorage("text-v2 posting block entry payload too short")
 	}
-	if cap(scratch) < fieldCountInt {
-		scratch = make([]uint32, fieldCountInt)
+	if dst == nil {
+		dst = &textV2PostingBlockEntryScanner{}
 	}
-	return &textV2PostingBlockEntryScanner{
+	*dst = textV2PostingBlockEntryScanner{
 		block: textV2PostingBlockValue{
 			FormatVersion: uint32(formatVersion),
 			Kind:          kind,
@@ -463,10 +491,12 @@ func newTextV2PostingBlockEntryScanner(raw []byte, scratch []uint32) (*textV2Pos
 		cur:              cur,
 		remaining:        docCount,
 		prevOrdinal:      blockStart - 1,
-		fieldScratch:     scratch[:fieldCountInt],
+		fieldScratch:     fieldScratch,
+		scratch:          scratch,
 		computedFieldTF:  computedFieldTF,
 		checksumVerified: checksumVerified,
-	}, nil
+	}
+	return dst, nil
 }
 
 func (s *textV2PostingBlockEntryScanner) Summary() textV2PostingBlockSummary {
@@ -652,7 +682,7 @@ func scanTextV2PostingBlocksForTerm(
 		if err := scanner.Err(); err != nil {
 			return err
 		}
-		scratch = scanner.fieldScratch
+		scratch = scanner.scratch
 		it.Next()
 	}
 	return it.Error()

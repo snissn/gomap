@@ -357,6 +357,12 @@ func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
 
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
+	if plan.text != nil && plan.vector != nil {
+		capHint := plan.text.CandidateLimit + plan.vector.CandidateLimit
+		if capHint > 0 {
+			out = make([]HybridSearchCandidate, 0, capHint)
+		}
+	}
 	var stats HybridSearchStats
 	runText := func() error {
 		if plan.text == nil {
@@ -367,7 +373,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 		if err != nil {
 			return hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
 		}
-		out = append(out, response.Candidates...)
+		out = appendHybridSearchCandidates(out, response.Candidates)
 		return nil
 	}
 	runVector := func() error {
@@ -379,7 +385,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 		if err != nil {
 			return hybridCandidateSourceError{source: HybridCandidateSourceVector, err: err}
 		}
-		out = append(out, response.Candidates...)
+		out = appendHybridSearchCandidates(out, response.Candidates)
 		return nil
 	}
 
@@ -402,11 +408,21 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	return out, stats, nil
 }
 
+func appendHybridSearchCandidates(dst, src []HybridSearchCandidate) []HybridSearchCandidate {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		return src
+	}
+	return append(dst, src...)
+}
+
 func hybridFilterCandidatesByScalarAllowSet(candidates []HybridSearchCandidate, allowSet hybridScalarAllowSet, stats *HybridSearchStats) []HybridSearchCandidate {
 	if allowSet == nil {
 		return candidates
 	}
-	out := make([]HybridSearchCandidate, 0, len(candidates))
+	out := candidates[:0]
 	for _, candidate := range candidates {
 		if stats != nil {
 			stats.ScalarPostfilterChecks++
@@ -435,7 +451,7 @@ func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet 
 	if allowSet == nil {
 		return results
 	}
-	filtered := make([]HybridSearchResult, 0, len(results))
+	filtered := results[:0]
 	for _, result := range results {
 		if stats != nil {
 			stats.ScalarPostfilterChecks++

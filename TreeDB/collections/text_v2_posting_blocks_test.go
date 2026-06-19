@@ -38,6 +38,10 @@ func TestTextV2PostingBlockCodecRoundTripAndFailClosed2625(t *testing.T) {
 		if err != nil || decoded.Term != term {
 			t.Fatalf("decode key for prefix=%+v err=%v", decoded, err)
 		}
+		blockStart, blockID, err := decodeTextV2PostingBlockKeySuffixForPrefix(key, prefix)
+		if err != nil || blockStart != 1 || blockID != 7 {
+			t.Fatalf("decode key suffix start=%d id=%d err=%v", blockStart, blockID, err)
+		}
 	}
 	if _, err := decodeTextV2PostingBlockKey([]byte{textV2KeyVersion, textV2KeyKindPostingBlock, 0}); !errors.Is(err, ErrTextIndexStorageCorrupt) {
 		t.Fatalf("short key err=%v want ErrTextIndexStorageCorrupt", err)
@@ -111,6 +115,47 @@ func TestTextV2PostingBlockCodecRoundTripAndFailClosed2625(t *testing.T) {
 				t.Fatalf("err=%v want ErrTextIndexStorageCorrupt", err)
 			}
 		})
+	}
+}
+
+func TestTextV2PostingBlockScannerScratchReuseAllocGuard2876(t *testing.T) {
+	blocks, err := buildTextV2PostingBlockKVs("refund", syntheticTextV2PostingEntries2625(int(textV2PostingBlockTargetPostings), 2), 2, textV2PostingBlockBuildOptions{})
+	if err != nil {
+		t.Fatalf("build blocks: %v", err)
+	}
+	if len(blocks) != 1 {
+		t.Fatalf("blocks=%d want 1", len(blocks))
+	}
+	var scratch []uint32
+	var scanner textV2PostingBlockEntryScanner
+	scan := func() uint64 {
+		s, err := initTextV2PostingBlockEntryScanner(&scanner, blocks[0].Value, scratch)
+		if err != nil {
+			panic(err)
+		}
+		var sum uint64
+		var entry textV2PostingBlockEntry
+		for s.Next(&entry) {
+			sum += uint64(entry.TermFrequency)
+		}
+		if err := s.Err(); err != nil {
+			panic(err)
+		}
+		scratch = s.scratch
+		return sum
+	}
+	if sum := scan(); sum == 0 {
+		t.Fatal("warm scan produced zero term frequency")
+	}
+	var sink uint64
+	allocs := testing.AllocsPerRun(100, func() {
+		sink += scan()
+	})
+	if sink == 0 {
+		t.Fatal("scan sink stayed zero")
+	}
+	if allocs != 0 {
+		t.Fatalf("scanner warm scratch allocs/run=%v want 0", allocs)
 	}
 }
 
@@ -957,7 +1002,7 @@ func BenchmarkTextV2PostingBlockRangeScanVsV1Synthetic2625(b *testing.B) {
 					if err := scanner.Err(); err != nil {
 						b.Fatal(err)
 					}
-					scratch = scanner.fieldScratch
+					scratch = scanner.scratch
 				}
 				textV2PostingBlockBenchSink2625 += sum
 			}
