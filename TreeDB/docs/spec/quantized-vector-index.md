@@ -31,8 +31,9 @@ declarations.
 `scalar_u8` declarations may also carry `scalar_u8_calibration`. Omitted config
 preserves the legacy scalar_u8 v1 contract and remains the default for new
 `scalar_u8` declarations after the #2845 no-promote gate. Explicit legacy config
-is `{"mode":"legacy"}` and is behaviorally identical to omission. The explicit
-per-existing-granule alpha opt-in contract is:
+is `{"mode":"legacy"}` and is behaviorally identical to omission. Persisted
+collection metadata for these semantics uses collection metadata version `5`.
+The explicit per-existing-granule alpha opt-in contract is:
 
 ```json
 {

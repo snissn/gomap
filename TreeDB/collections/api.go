@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	collectionMetaVersion        = 4
+	collectionMetaVersion        = 5
 	maxCollectionMutationRetries = 64
 	// Bound stale buffered-read replans so a writer under constant buffered
 	// pressure eventually falls back to a publish boundary or outer retry.
