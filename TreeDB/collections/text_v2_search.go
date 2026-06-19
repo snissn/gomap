@@ -2891,7 +2891,13 @@ func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapsh
 		}
 		blockStart += uint64(textV2DefaultDocMapBlockSize)
 	}
-	return minID, minID != nil, true, nil
+	if minID == nil {
+		// A range with only tombstoned doc-map entries is not a safe tie-prune
+		// proof: corrupt tombstone flags can otherwise hide the required
+		// norm/docmap consistency check for referenced postings.
+		return nil, false, false, nil
+	}
+	return minID, true, true, nil
 }
 
 func orderTextV2SearchScanTerms(terms []string, operator TextSearchOperator, stats map[string]textV2TermStatsValue) []string {
