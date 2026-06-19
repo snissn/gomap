@@ -265,7 +265,19 @@ func prepareColumnVectorGraphQuantizedAssets(assetRootDir, collection string, ba
 }
 
 func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, generation, partID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorGraphPreparedQuantizedAsset, error) {
-	payload, sourceCfg, err := prepareColumnVectorGraphQuantizedCodesPayload(collection, base, def, q, partID, rows)
+	var alphaMetadata columnVectorGraphScalarU8AlphaMetadata
+	var payload []byte
+	var sourceCfg ColumnStoreConfig
+	var err error
+	if q.Codec == QuantizedVectorCodecScalarU8 && !scalarU8CalibrationIsLegacy(q) {
+		alphaMetadata, err = buildColumnVectorGraphScalarU8AlphaMetadata(def, q, rows)
+		if err != nil {
+			return nil, err
+		}
+		payload, sourceCfg, err = prepareColumnVectorGraphScalarU8QuantizedCodesPayloadWithAlphaMetadata(collection, base, def, q, partID, rows, alphaMetadata, true)
+	} else {
+		payload, sourceCfg, err = prepareColumnVectorGraphQuantizedCodesPayload(collection, base, def, q, partID, rows)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -280,11 +292,7 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 	out := []columnVectorGraphPreparedQuantizedAsset{prepared}
 	if q.Codec == QuantizedVectorCodecScalarU8 && !scalarU8CalibrationIsLegacy(q) {
 		alphaPartID := nextColumnVectorGraphPartIDAfter(partID, prepared.Ref.PartID)
-		metadata, err := buildColumnVectorGraphScalarU8AlphaMetadata(def, q, rows)
-		if err != nil {
-			return nil, err
-		}
-		alphaPayload, alphaCfg, err := prepareColumnVectorGraphScalarU8AlphaPayload(collection, base, def, q, alphaPartID, metadata)
+		alphaPayload, alphaCfg, err := prepareColumnVectorGraphScalarU8AlphaPayload(collection, base, def, q, alphaPartID, alphaMetadata)
 		if err != nil {
 			return nil, err
 		}
@@ -292,7 +300,7 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 		if err != nil {
 			return nil, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha asset identity: %w", q.Name, err)
 		}
-		alphaPrepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, alphaCfg, q, columnVectorIndexStateAssetRoleQuantizedAlpha, alphaAssetID, generation, alphaPartID, len(metadata.Alphas), alphaPayload)
+		alphaPrepared, err := appendColumnVectorGraphQuantizedPreparedAsset(assetRootDir, alphaCfg, q, columnVectorIndexStateAssetRoleQuantizedAlpha, alphaAssetID, generation, alphaPartID, len(alphaMetadata.Alphas), alphaPayload)
 		if err != nil {
 			return nil, err
 		}
@@ -350,6 +358,10 @@ func prepareColumnVectorGraphQuantizedCodesPayload(collection string, base Colum
 }
 
 func prepareColumnVectorGraphScalarU8QuantizedCodesPayload(collection string, base ColumnStoreConfig, def VectorIndexDefinition, q QuantizedVectorIndexDefinition, partID uint64, rows []columnVectorGraphAssetRow) ([]byte, ColumnStoreConfig, error) {
+	return prepareColumnVectorGraphScalarU8QuantizedCodesPayloadWithAlphaMetadata(collection, base, def, q, partID, rows, columnVectorGraphScalarU8AlphaMetadata{}, false)
+}
+
+func prepareColumnVectorGraphScalarU8QuantizedCodesPayloadWithAlphaMetadata(collection string, base ColumnStoreConfig, def VectorIndexDefinition, q QuantizedVectorIndexDefinition, partID uint64, rows []columnVectorGraphAssetRow, metadata columnVectorGraphScalarU8AlphaMetadata, metadataSet bool) ([]byte, ColumnStoreConfig, error) {
 	sourceCfg, err := columnVectorGraphQuantizedCodesColumnStoreConfig(collection, base, def, q)
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
@@ -361,7 +373,7 @@ func prepareColumnVectorGraphScalarU8QuantizedCodesPayload(collection string, ba
 	for rowIdx := range primaryIDs {
 		primaryIDs[rowIdx] = int64(rowIdx)
 	}
-	codes, err := buildColumnVectorGraphScalarU8CodesForDefinition(def, q, rows)
+	codes, err := buildColumnVectorGraphScalarU8CodesForDefinitionWithAlphaMetadata(def, q, rows, metadata, metadataSet)
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
 	}
@@ -926,12 +938,24 @@ type columnVectorGraphScalarU8AlphaMetadata struct {
 }
 
 func buildColumnVectorGraphScalarU8CodesForDefinition(def VectorIndexDefinition, q QuantizedVectorIndexDefinition, rows []columnVectorGraphAssetRow) ([]byte, error) {
+	return buildColumnVectorGraphScalarU8CodesForDefinitionWithAlphaMetadata(def, q, rows, columnVectorGraphScalarU8AlphaMetadata{}, false)
+}
+
+func buildColumnVectorGraphScalarU8CodesForDefinitionWithAlphaMetadata(def VectorIndexDefinition, q QuantizedVectorIndexDefinition, rows []columnVectorGraphAssetRow, metadata columnVectorGraphScalarU8AlphaMetadata, metadataSet bool) ([]byte, error) {
 	if scalarU8CalibrationIsLegacy(q) {
+		if metadataSet && (len(metadata.Alphas) != 0 || len(metadata.RowCounts) != 0) {
+			return nil, fmt.Errorf("collections: column_graph quantized index %q legacy scalar_u8 cannot use alpha metadata", q.Name)
+		}
 		return buildColumnVectorGraphScalarU8Codes(def, rows)
 	}
-	metadata, err := buildColumnVectorGraphScalarU8AlphaMetadata(def, q, rows)
-	if err != nil {
-		return nil, err
+	if !metadataSet {
+		var err error
+		metadata, err = buildColumnVectorGraphScalarU8AlphaMetadata(def, q, rows)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(rows) != 0 && len(metadata.Alphas) == 0 {
+		return nil, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha metadata is empty for %d rows", q.Name, len(rows))
 	}
 	return buildColumnVectorGraphScalarU8CodesWithAlpha(def, rows, metadata)
 }
@@ -947,7 +971,7 @@ func buildColumnVectorGraphScalarU8CodesWithAlpha(def VectorIndexDefinition, row
 	if len(rows) != 0 && def.Dimensions > math.MaxInt/len(rows) {
 		return nil, errors.New("collections: column_graph quantized asset codes bytes overflow")
 	}
-	if len(metadata.Alphas) != 0 && len(metadata.Alphas) != len(metadata.RowCounts) {
+	if len(metadata.Alphas) != len(metadata.RowCounts) {
 		return nil, fmt.Errorf("collections: column_graph scalar_u8 alpha metadata alphas=%d row_counts=%d", len(metadata.Alphas), len(metadata.RowCounts))
 	}
 	codes := make([]byte, 0, len(rows)*def.Dimensions)
@@ -1065,7 +1089,16 @@ func computeColumnVectorGraphScalarU8GranuleAlpha(def VectorIndexDefinition, q Q
 	if cfg == nil || cfg.Mode != ScalarU8CalibrationModePerGranuleAlpha {
 		return 0, fmt.Errorf("mode %q is not per_granule_alpha", scalarU8CalibrationMode(q))
 	}
-	absValues := make([]float64, 0, len(rows)*def.Dimensions)
+	var absValues []float64
+	if cfg.AlphaPolicy.Name == ScalarU8AlphaPolicyAbsQuantile {
+		if def.Dimensions <= 0 {
+			return 0, fmt.Errorf("dimensions=%d must be positive", def.Dimensions)
+		}
+		if len(rows) != 0 && def.Dimensions > math.MaxInt/len(rows) {
+			return 0, errors.New("abs_quantile coordinate count overflow")
+		}
+		absValues = make([]float64, 0, len(rows)*def.Dimensions)
+	}
 	maxAbs := float64(0)
 	for rowIdx, row := range rows {
 		if len(row.Vector) != def.Dimensions {
@@ -1102,6 +1135,17 @@ func computeColumnVectorGraphScalarU8GranuleAlpha(def VectorIndexDefinition, q Q
 			idx = len(absValues)
 		}
 		alpha64 = absValues[idx-1]
+		if !validColumnVectorGraphScalarU8Alpha(float32(alpha64)) && maxAbs > 0 {
+			for _, candidate := range absValues {
+				if validColumnVectorGraphScalarU8Alpha(float32(candidate)) {
+					alpha64 = candidate
+					break
+				}
+			}
+			if !validColumnVectorGraphScalarU8Alpha(float32(alpha64)) && validColumnVectorGraphScalarU8Alpha(float32(maxAbs)) {
+				alpha64 = maxAbs
+			}
+		}
 	}
 	alpha := float32(alpha64)
 	if !validColumnVectorGraphScalarU8Alpha(alpha) {
@@ -1244,6 +1288,22 @@ func columnVectorGraphQuantizedExpectedStateAssetIDs(def VectorIndexDefinition) 
 	return expected
 }
 
+func columnVectorGraphQuantizedDefinitionForStateAsset(def VectorIndexDefinition, asset columnVectorIndexStateAssetSnapshot) (QuantizedVectorIndexDefinition, bool) {
+	for _, q := range def.QuantizedIndexes {
+		switch asset.Role {
+		case columnVectorIndexStateAssetRoleQuantizedCodes:
+			if asset.AssetID == columnVectorGraphQuantizedCodesAssetID(q) {
+				return q, true
+			}
+		case columnVectorIndexStateAssetRoleQuantizedAlpha:
+			if alphaID := columnVectorGraphScalarU8AlphaAssetID(q); alphaID != "" && asset.AssetID == alphaID {
+				return q, true
+			}
+		}
+	}
+	return QuantizedVectorIndexDefinition{}, false
+}
+
 func validateColumnVectorGraphQuantizedStateAssets(collection string, cfg ColumnStoreConfig, def VectorIndexDefinition, state columnVectorIndexStateSnapshot) error {
 	expected := columnVectorGraphQuantizedExpectedStateAssetIDs(def)
 	seen := make(map[string]struct{}, len(expected))
@@ -1270,6 +1330,15 @@ func validateColumnVectorGraphQuantizedStateAssets(collection string, cfg Column
 		}
 		if asset.SourceSchemaHash != sourceCfg.SchemaHash {
 			return fmt.Errorf("collections: vector-index state quantized asset %q role=%q schema_hash=%d want %d", q.Name, asset.Role, asset.SourceSchemaHash, sourceCfg.SchemaHash)
+		}
+		if asset.Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
+			wantRowCounts, err := columnVectorGraphScalarU8AlphaExpectedGranuleRowCounts(q, state.RowCount)
+			if err != nil {
+				return fmt.Errorf("collections: vector-index state quantized asset %q role=%q expected alpha granules: %w", q.Name, asset.Role, err)
+			}
+			if asset.RowCount != len(wantRowCounts) {
+				return fmt.Errorf("collections: vector-index state quantized asset %q role=%q granule_count=%d want %d", q.Name, asset.Role, asset.RowCount, len(wantRowCounts))
+			}
 		}
 	}
 	for key, q := range expected {
