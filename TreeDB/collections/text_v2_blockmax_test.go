@@ -360,7 +360,7 @@ func TestTextV2BlockMaxMultiTermORCandidateLimitIgnoresStaleGeneration2730(t *te
 	top := &textV2SearchTopK{limit: 1, candidates: []textV2SearchTopCandidate{{ordinal: 1, generation: 1, documentID: []byte("d1"), score: 1}}}
 
 	// Advancement is covered by end-to-end block-max tests; this fixture isolates scoring-limit ordering.
-	truncated, err := visitTextV2ORBlockMaxCandidate(nil, nil, ctx, states, nil, cache, nil, 1, 64, target, top, stats)
+	truncated, err := visitTextV2ORBlockMaxCandidate(nil, nil, ctx, states, nil, cache, nil, 1, 64, false, target, top, stats)
 	if err != nil {
 		t.Fatalf("visit OR candidate with stale generation: %v", err)
 	}

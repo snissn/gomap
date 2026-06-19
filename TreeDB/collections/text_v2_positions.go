@@ -332,15 +332,21 @@ func readTextV2PositionDocMapEntryAtRoot(snap *backenddb.Snapshot, catalog *coll
 }
 
 func readTextV2PositionPostingAtRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, term string, ordinal, generation uint64, fieldCount int) (textV2SearchPostingValue, bool, error) {
+	posting, found, _, err := readTextV2PositionPostingAtRootCounted(snap, catalog, rootName, term, ordinal, generation, fieldCount)
+	return posting, found, err
+}
+
+func readTextV2PositionPostingAtRootCounted(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName, term string, ordinal, generation uint64, fieldCount int) (textV2SearchPostingValue, bool, int, error) {
 	prefix := encodeTextV2PostingBlockTermPrefix(term)
 	it, err := collectionIteratorAtCatalogRoot(snap, catalog, rootName, prefix, textSearchPrefixEnd(prefix), true)
 	if err != nil || it == nil {
-		return textV2SearchPostingValue{}, false, err
+		return textV2SearchPostingValue{}, false, 0, err
 	}
 	defer func() { _ = it.Close() }()
 	var scratch []uint32
 	var found bool
 	var out textV2SearchPostingValue
+	var scanned int
 	for it.Valid() {
 		keyBytes := it.UnsafeKey()
 		if !bytes.HasPrefix(keyBytes, prefix) {
@@ -352,21 +358,22 @@ func readTextV2PositionPostingAtRoot(snap *backenddb.Snapshot, catalog *collecti
 		}
 		key, err := decodeTextV2PostingBlockKeyForPrefix(keyBytes, prefix)
 		if err != nil {
-			return textV2SearchPostingValue{}, false, err
+			return textV2SearchPostingValue{}, false, scanned, err
 		}
 		scanner, err := newTextV2PostingBlockEntryScanner(it.UnsafeValue(), scratch)
 		if err != nil {
-			return textV2SearchPostingValue{}, false, err
+			return textV2SearchPostingValue{}, false, scanned, err
 		}
 		if scanner.block.BlockStart != key.BlockStart || scanner.block.BlockID != key.BlockID {
-			return textV2SearchPostingValue{}, false, errMalformedTextStorage("text-v2 position posting block key/value identity mismatch")
+			return textV2SearchPostingValue{}, false, scanned, errMalformedTextStorage("text-v2 position posting block key/value identity mismatch")
 		}
 		if ordinal < scanner.block.Summary.FirstOrdinal || ordinal > scanner.block.Summary.LastOrdinal {
 			var discard textV2PostingBlockEntry
 			for scanner.Next(&discard) {
+				scanned++
 			}
 			if err := scanner.Err(); err != nil {
-				return textV2SearchPostingValue{}, false, err
+				return textV2SearchPostingValue{}, false, scanned, err
 			}
 			scratch = scanner.fieldScratch
 			it.Next()
@@ -374,29 +381,30 @@ func readTextV2PositionPostingAtRoot(snap *backenddb.Snapshot, catalog *collecti
 		}
 		var entry textV2PostingBlockEntry
 		for scanner.Next(&entry) {
+			scanned++
 			if entry.Ordinal != ordinal || entry.Generation != generation {
 				continue
 			}
 			posting, err := textV2SearchPostingValueFromEntry(entry, fieldCount)
 			if err != nil {
-				return textV2SearchPostingValue{}, false, err
+				return textV2SearchPostingValue{}, false, scanned, err
 			}
 			if found {
-				return textV2SearchPostingValue{}, false, errMalformedTextStorage("duplicate text-v2 scoring posting for position ordinal %d term %q generation %d", ordinal, term, generation)
+				return textV2SearchPostingValue{}, false, scanned, errMalformedTextStorage("duplicate text-v2 scoring posting for position ordinal %d term %q generation %d", ordinal, term, generation)
 			}
 			out = posting
 			found = true
 		}
 		if err := scanner.Err(); err != nil {
-			return textV2SearchPostingValue{}, false, err
+			return textV2SearchPostingValue{}, false, scanned, err
 		}
 		scratch = scanner.fieldScratch
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return textV2SearchPostingValue{}, false, err
+		return textV2SearchPostingValue{}, false, scanned, err
 	}
-	return out, found, nil
+	return out, found, scanned, nil
 }
 
 func validateTextV2PositionValueForDefinition(value textV2PositionValue, def TextIndexDefinition) error {

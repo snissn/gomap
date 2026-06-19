@@ -92,6 +92,13 @@ type TextSearchOptions struct {
 	IncludeDocuments     bool
 	DocumentFetchOptions DocumentFetchOptions
 
+	// Explain opts into a diagnostic payload that describes analyzed terms,
+	// text-v2 root/status snapshot, serving path, pruning counters, phrase
+	// validation, fail-closed reasons, and BM25F score components for returned
+	// results. The zero value keeps explain disabled and avoids mandatory extra
+	// allocations on the normal search path.
+	Explain bool
+
 	// textV2AllowedDocumentIDs is an internal, snapshot-bound scalar prefilter
 	// allow-set used by hybrid search. It is intentionally unexported so public
 	// text search cannot accidentally bind to a scalar index outside the hybrid
@@ -125,34 +132,38 @@ type TextSearchResult struct {
 // text-only results without inventing new counter names. The shorter aliases are
 // retained for text-only callers.
 type TextSearchStats struct {
-	QueryTerms                  int
-	TextCandidatesRequested     uint64
-	TextCandidatesReturned      uint64
-	TextPostingsScanned         uint64
-	TextPostingBlocksVisited    uint64
-	TextPostingBlocksSkipped    uint64
-	TextBlockMaxFallbacks       uint64
-	TextBlockMaxThresholds      uint64
-	TextCandidatesScored        uint64
-	TextStateLookups            uint64
-	TextNormLookups             uint64
-	TextMatchDetailsBuilt       uint64
-	TextPositionLookups         uint64
-	TextPhraseCandidatesChecked uint64
-	TextPhraseCandidatesMatched uint64
-	PostingsScanned             uint64
-	CandidatesScored            uint64
-	DocumentsFetched            uint64
-	DocumentsMissing            uint64
-	FullDocumentScanFallbacks   uint64
-	PostingsScanNanos           uint64
-	CandidateScoreNanos         uint64
-	DocumentFetchNanos          uint64
-	Truncated                   bool
-	FailClosed                  uint64
-	FailClosedReason            string
-	Unavailable                 bool
-	UnavailableReason           string
+	QueryTerms                     int
+	TextCandidatesRequested        uint64
+	TextCandidatesReturned         uint64
+	TextPostingsScanned            uint64
+	TextPostingBlocksVisited       uint64
+	TextPostingBlocksSkipped       uint64
+	TextBlockMaxFallbacks          uint64
+	TextBlockMaxThresholds         uint64
+	TextWANDPivots                 uint64
+	TextScalarPrefilterIDs         uint64
+	TextScalarPostingBlocksSkipped uint64
+	TextScalarPostingsRejected     uint64
+	TextCandidatesScored           uint64
+	TextStateLookups               uint64
+	TextNormLookups                uint64
+	TextMatchDetailsBuilt          uint64
+	TextPositionLookups            uint64
+	TextPhraseCandidatesChecked    uint64
+	TextPhraseCandidatesMatched    uint64
+	PostingsScanned                uint64
+	CandidatesScored               uint64
+	DocumentsFetched               uint64
+	DocumentsMissing               uint64
+	FullDocumentScanFallbacks      uint64
+	PostingsScanNanos              uint64
+	CandidateScoreNanos            uint64
+	DocumentFetchNanos             uint64
+	Truncated                      bool
+	FailClosed                     uint64
+	FailClosedReason               string
+	Unavailable                    bool
+	UnavailableReason              string
 }
 
 // TextSearchResponse contains ranked text results and diagnostics.
@@ -160,6 +171,7 @@ type TextSearchResponse struct {
 	IndexName string
 	Results   []TextSearchResult
 	Stats     TextSearchStats
+	Explain   *TextSearchExplain
 }
 
 type textSearchCandidatePosting struct {
@@ -254,6 +266,9 @@ func (c *Collection) SearchText(opts TextSearchOptions) (TextSearchResponse, err
 
 func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchResultMode) (TextSearchResponse, error) {
 	var response TextSearchResponse
+	if opts.Explain {
+		response.Explain = newTextSearchExplain(opts, resultMode)
+	}
 	if c == nil {
 		return response, errCollectionNil
 	}
@@ -299,6 +314,7 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 		return response, ErrIndexNotFound
 	}
 	response.IndexName = idx.Name
+	textSearchExplainBindIndex(response.Explain, catalog, idx, opts)
 
 	if opts.Phrase != nil {
 		phrase, err := parseTextSearchPhraseQuery(idx, *opts.Phrase)
@@ -316,6 +332,7 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 		candidateLimit := normalizeTextSearchCandidateLimit(opts.TopK, opts.CandidateLimit)
 		maxPostingsScanned := normalizeTextSearchMaxPostingsScanned(candidateLimit, len(uniqueTextSearchTerms(phrase.terms)), opts.MaxPostingsScanned)
 		response.Stats.TextCandidatesRequested = uint64(candidateLimit)
+		textSearchExplainBindPhrase(response.Explain, phrase, opts.Phrase.Slop, candidateLimit, maxPostingsScanned)
 		if idx.Version != TextIndexVersionV2 {
 			return textSearchFailClosed(response, textSearchFailClosedUnsupported, fmt.Errorf("%w: phrase/proximity search requires text-v2 index", ErrTextIndexUnavailable))
 		}
@@ -342,11 +359,15 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	candidateLimit := normalizeTextSearchCandidateLimit(opts.TopK, opts.CandidateLimit)
 	maxPostingsScanned := normalizeTextSearchMaxPostingsScanned(candidateLimit, len(terms), opts.MaxPostingsScanned)
 	response.Stats.TextCandidatesRequested = uint64(candidateLimit)
+	textSearchExplainBindParsed(response.Explain, terms, operator, candidateLimit, maxPostingsScanned)
 	if idx.Version == TextIndexVersionV2 {
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
 	}
 
-	return executeTextSearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
+	textSearchExplainSetServingPath(response.Explain, TextSearchExplainPathV1Postings, false)
+	ret, err := executeTextSearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
+	textSearchExplainFinish(ret.Explain, ret.Stats)
+	return ret, err
 }
 
 func executeTextSearchAtSnapshot(
@@ -788,12 +809,14 @@ func textSearchFailClosed(response TextSearchResponse, reason string, err error)
 	response.Stats.FailClosedReason = reason
 	response.Stats.Unavailable = true
 	response.Stats.UnavailableReason = reason
+	textSearchExplainFailClosed(response.Explain, reason)
 	if response.Stats.PostingsScanned == 0 {
 		response.Stats.PostingsScanned = response.Stats.TextPostingsScanned
 	}
 	if response.Stats.CandidatesScored == 0 {
 		response.Stats.CandidatesScored = response.Stats.TextCandidatesScored
 	}
+	textSearchExplainFinish(response.Explain, response.Stats)
 	if err == nil {
 		return response, fmt.Errorf("%w: %s", ErrTextIndexUnavailable, reason)
 	}
