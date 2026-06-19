@@ -183,13 +183,13 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 		}
 	}
 	centeredScratch := resizeColumnVectorGraphNativeScalarU8CenteredScratch(scratch.quantizedQueryCentered, r.def.Dimensions)[:r.def.Dimensions]
+	queryCodeScale := queryInvNorm
+	if alphaLookup != nil {
+		queryCodeScale *= 1 / queryAlpha
+	}
 	var centeredSum int64
 	for i, value := range query {
-		codeValue := value * queryInvNorm
-		if alphaLookup != nil {
-			codeValue /= queryAlpha
-		}
-		code := columnVectorGraphScalarU8Code(codeValue)
+		code := columnVectorGraphScalarU8Code(value * queryCodeScale)
 		centered := vectorops.ScalarU8CenteredValue(code)
 		centeredScratch[i] = centered
 		centeredSum += int64(centered)
