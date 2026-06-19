@@ -479,7 +479,9 @@ func estimateTextV2PositionValueLen(value textV2PositionValue, fields []textV2Po
 }
 
 func textV2PositionTermHash(term string) uint64 {
-	return columnPhysicalQueryHashString(term)
+	// A 32-bit fingerprint preserves an independent key/value term check for the
+	// compressed v2 payload without reintroducing the full duplicate term string.
+	return columnPhysicalQueryHashString(term) & 0xffffffff
 }
 
 func encodedTextV2PositionDeltasLen(values []uint32) int {
