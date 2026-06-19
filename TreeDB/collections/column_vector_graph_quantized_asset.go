@@ -1028,7 +1028,7 @@ func buildColumnVectorGraphScalarU8AlphaMetadata(def VectorIndexDefinition, q Qu
 	if def.Dimensions <= 0 {
 		return columnVectorGraphScalarU8AlphaMetadata{}, errors.New("collections: column_graph scalar_u8 alpha dimensions must be positive")
 	}
-	rowCounts, err := columnVectorGraphScalarU8AlphaGranuleRowCounts(len(rows), typedcolumn.DefaultRowsPerGranule)
+	rowCounts, err := columnVectorGraphScalarU8AlphaExpectedGranuleRowCounts(q, len(rows))
 	if err != nil {
 		return columnVectorGraphScalarU8AlphaMetadata{}, err
 	}
@@ -1044,6 +1044,20 @@ func buildColumnVectorGraphScalarU8AlphaMetadata(def VectorIndexDefinition, q Qu
 		rowStart = rowEnd
 	}
 	return metadata, nil
+}
+
+func columnVectorGraphScalarU8AlphaExpectedGranuleRowCounts(q QuantizedVectorIndexDefinition, rows int) ([]uint32, error) {
+	cfg, err := normalizedScalarU8CalibrationConfigForIdentity(q)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || cfg.Mode != ScalarU8CalibrationModePerGranuleAlpha {
+		return nil, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha mode %q is not %q", q.Name, scalarU8CalibrationMode(q), ScalarU8CalibrationModePerGranuleAlpha)
+	}
+	if cfg.Grouping != ScalarU8CalibrationGroupingStorageLayoutGranule {
+		return nil, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 alpha grouping=%q want %q", q.Name, cfg.Grouping, ScalarU8CalibrationGroupingStorageLayoutGranule)
+	}
+	return columnVectorGraphScalarU8AlphaGranuleRowCounts(rows, typedColumnDefaultRowsPerGranule())
 }
 
 func columnVectorGraphScalarU8AlphaGranuleRowCounts(rows, rowsPerGranule int) ([]uint32, error) {
@@ -1572,6 +1586,14 @@ func prepareColumnVectorGraphQuantizedAssetFromImages(def VectorIndexDefinition,
 	if assets.HasAlpha {
 		parts = append(parts, quantizedasset.PartImageSource{AssetID: assets.Alpha.AssetID, Image: alphaImage, Ref: alphaRef, AssetBytes: assets.Alpha.AssetBytes, SourceSchemaHash: assets.Alpha.SourceSchemaHash})
 	}
+	expectedGranuleCount := schema.GranuleCount
+	if q.Codec == QuantizedVectorCodecScalarU8 && !scalarU8CalibrationIsLegacy(q) {
+		expectedRowCounts, err := columnVectorGraphScalarU8AlphaExpectedGranuleRowCounts(q, schema.RowCount)
+		if err != nil {
+			return nil, fmt.Errorf("%w: quantized asset %q scalar_u8 alpha expected granules: %v", errColumnVectorGraphQuantizedAssetInvalid, q.Name, err)
+		}
+		expectedGranuleCount = len(expectedRowCounts)
+	}
 	prepared, err := quantizedasset.Prepare(quantizedasset.PrepareRequest{
 		Schema: schema,
 		Expected: quantizedasset.ExpectedSchema{
@@ -1580,7 +1602,7 @@ func prepareColumnVectorGraphQuantizedAssetFromImages(def VectorIndexDefinition,
 			CodeDimensions:   schema.CodeDimensions,
 			CodeWidthBits:    schema.CodeWidthBits,
 			RowCount:         schema.RowCount,
-			GranuleCount:     schema.GranuleCount,
+			GranuleCount:     expectedGranuleCount,
 			OrdinalOrder:     schema.OrdinalOrder,
 			Codec:            schema.Codec,
 			BaseGraph:        schema.BaseGraph,
@@ -1801,8 +1823,12 @@ func columnVectorGraphScalarU8AlphaLookupFromPrepared(q QuantizedVectorIndexDefi
 	if !ok || len(rowCountPayload) != countRows*4 {
 		return nil, fmt.Errorf("scalar_u8 granule row-count payload bytes=%d ok=%v want %d", len(rowCountPayload), ok, countRows*4)
 	}
-	if prepared.Rows() > 0 && alphaRows == 0 {
-		return nil, fmt.Errorf("scalar_u8 alpha granules=0 want rows=%d", prepared.Rows())
+	expectedRowCounts, err := columnVectorGraphScalarU8AlphaExpectedGranuleRowCounts(q, prepared.Rows())
+	if err != nil {
+		return nil, err
+	}
+	if alphaRows != len(expectedRowCounts) {
+		return nil, fmt.Errorf("scalar_u8 alpha granules=%d want %d for rows=%d rows_per_granule=%d", alphaRows, len(expectedRowCounts), prepared.Rows(), typedColumnDefaultRowsPerGranule())
 	}
 	firstRows := make([]int, alphaRows+1)
 	rowSum := 0
@@ -1813,6 +1839,9 @@ func columnVectorGraphScalarU8AlphaLookupFromPrepared(q QuantizedVectorIndexDefi
 			return nil, fmt.Errorf("scalar_u8 alpha granule %d value=%v is invalid", granule, alpha)
 		}
 		count := binary.LittleEndian.Uint32(rowCountPayload[granule*4 : granule*4+4])
+		if count != expectedRowCounts[granule] {
+			return nil, fmt.Errorf("scalar_u8 alpha granule %d row_count=%d want %d for rows=%d rows_per_granule=%d", granule, count, expectedRowCounts[granule], prepared.Rows(), typedColumnDefaultRowsPerGranule())
+		}
 		if count == 0 || uint64(count) > uint64(math.MaxInt-rowSum) {
 			return nil, fmt.Errorf("scalar_u8 alpha granule %d row_count=%d is invalid", granule, count)
 		}
