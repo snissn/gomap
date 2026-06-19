@@ -123,6 +123,24 @@ func (db *DB) protectPendingValueLogAppendPtrs(ptrs []page.ValuePtr) {
 	}
 }
 
+// ReleaseValueLogValues abandons previously appended value-log pointers that
+// will not be published into a root. Native-root callers that discard pointers
+// returned by AppendValueLogValues should call this so pending GC pins can be
+// released.
+func (db *DB) ReleaseValueLogValues(ptrs []page.ValuePtr) {
+	if db == nil || len(ptrs) == 0 {
+		return
+	}
+	release := make(map[page.ValuePtr]int64, len(ptrs))
+	for _, ptr := range ptrs {
+		if ptr.FileID == 0 || !page.IsValueLogFileID(ptr.FileID) {
+			continue
+		}
+		release[ptr]++
+	}
+	db.releasePendingValueLogAppendPtrCounts(release)
+}
+
 func (db *DB) releasePendingValueLogAppendFileIDsFromEntries(entries []batchpkg.Entry) {
 	if db == nil || len(entries) == 0 {
 		return
