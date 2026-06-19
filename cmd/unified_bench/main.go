@@ -6367,6 +6367,7 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "flush_apply.merge_build.leaf_merges_total", alts: []string{"treedb.flush_apply.merge_build.leaf_merges_total"}},
 		{label: "flush_apply.merge_build.leaf_merges_per_op", alts: []string{"treedb.flush_apply.merge_build.leaf_merges_per_op"}},
 		{label: "flush_apply.merge_build.replacement_leaf_pages_per_op", alts: []string{"treedb.flush_apply.merge_build.replacement_leaf_pages_per_op"}},
+		{label: "flush_apply.leaf_log_output.reservation_wait_ns_total", alts: []string{"treedb.flush_apply.leaf_log_output.reservation_wait_ns_total"}},
 		{label: "flush_apply.leaf_log_output.append_wait_ns_total", alts: []string{"treedb.flush_apply.leaf_log_output.append_wait_ns_total"}},
 		{label: "flush_apply.leaf_log_output.append_calls_total", alts: []string{"treedb.flush_apply.leaf_log_output.append_calls_total"}},
 		{label: "flush_apply.leaf_log_output.append_pages_total", alts: []string{"treedb.flush_apply.leaf_log_output.append_pages_total"}},

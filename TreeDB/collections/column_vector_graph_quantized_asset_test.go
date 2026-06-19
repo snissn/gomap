@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
@@ -51,6 +52,11 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	}
 	if asset.Role != columnVectorIndexStateAssetRoleQuantizedCodes || asset.AssetID != columnVectorGraphQuantizedCodesAssetID(def.QuantizedIndexes[0]) || asset.RowCount != len(rows) || asset.AssetBytes <= 0 {
 		t.Fatalf("quantized asset snapshot=%+v", asset)
+	}
+	for _, stateAsset := range state.Assets {
+		if stateAsset.Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
+			t.Fatalf("legacy scalar_u8 unexpectedly published alpha asset: %+v", stateAsset)
+		}
 	}
 	if err := validateColumnVectorIndexStateAssetsForStatus(d.ColumnAssetRootDir(), "docs", *cfg, def, state, graph); err != nil {
 		t.Fatalf("validate state assets with quantized asset: %v", err)
@@ -163,6 +169,307 @@ func TestColumnGraphScalarU8QuantizedAssetRebuildPrepareReopen1926(t *testing.T)
 	exact, err := reopenedCol.SearchVectorIndex(VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{1, 0, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 1, EfSearch: len(rows), MaxDecodedBlocks: 1})
 	if err != nil || len(exact.Results) != 1 {
 		t.Fatalf("exact SearchVectorIndex results=%d err=%v", len(exact.Results), err)
+	}
+}
+
+func TestColumnGraphScalarU8AlphaQuantizedAssetRebuildPrepareReopen2843(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 4, 0}},
+		{id: "doc-b", vector: []float32{1, 2, 2}},
+		{id: "doc-c", vector: []float32{-2, 1, 2}},
+	}
+	q := scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha")
+	dir, d, col, def := openColumnGraphQuantizedTestCollection1926(t, rows, []QuantizedVectorIndexDefinition{q})
+	status, err := col.RebuildVectorIndex(def.Name)
+	if err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	assertColumnGraphRebuildLoadedStatusV2A(t, status, def.Name)
+
+	cfg, graph, state, assets := loadColumnGraphScalarU8AlphaState2843(t, d, def)
+	if !assets.HasCodes || !assets.HasAlpha {
+		t.Fatalf("alpha quantized assets=%+v state=%+v want codes and alpha", assets, state.Assets)
+	}
+	if assets.Codes.RowCount != len(rows) || assets.Alpha.RowCount != 1 || assets.Codes.AssetBytes <= 0 || assets.Alpha.AssetBytes <= 0 {
+		t.Fatalf("asset rows/bytes codes=%+v alpha=%+v", assets.Codes, assets.Alpha)
+	}
+	if err := validateColumnVectorIndexStateAssetsForStatus(d.ColumnAssetRootDir(), "docs", *cfg, def, state, graph); err != nil {
+		t.Fatalf("validate state assets: %v", err)
+	}
+	prepared, err := loadColumnVectorGraphQuantizedAssetSet(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, def.QuantizedIndexes[0], assets)
+	if err != nil {
+		t.Fatalf("loadColumnVectorGraphQuantizedAssetSet: %v", err)
+	}
+	lookup, err := columnVectorGraphScalarU8AlphaLookupFromPrepared(def.QuantizedIndexes[0], prepared)
+	if err != nil {
+		t.Fatalf("alpha lookup: %v", err)
+	}
+	if lookup.Rows() != len(rows) || lookup.Granules() != 1 {
+		t.Fatalf("lookup rows/granules=(%d,%d)", lookup.Rows(), lookup.Granules())
+	}
+	alpha, ok := lookup.AlphaForGranule(0)
+	if !ok || math.Abs(float64(alpha-0.8)) > 1e-6 {
+		t.Fatalf("alpha=%v ok=%v want 0.8", alpha, ok)
+	}
+	rowCount, ok := lookup.RowCountForGranule(0)
+	if !ok || rowCount != uint32(len(rows)) {
+		t.Fatalf("granule row_count=%d ok=%v want %d", rowCount, ok, len(rows))
+	}
+	records, _ := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	scannedRows := loadColumnGraphRebuildRowsFromStateV2A(t, d, "docs", cfg, def, graph, records)
+	assetRows := columnGraphAssetRowsFromScanned2843(scannedRows)
+	wantCodes := referenceScalarU8AlphaCodes2843(t, def, assetRows, []float32{0.8})
+	codeView, ok := prepared.CodeRowView(quantizedasset.RoleCodes)
+	if !ok {
+		t.Fatal("code row view unavailable")
+	}
+	payload, ok := codeView.PayloadBytes()
+	if !ok || !bytes.Equal(payload, wantCodes) {
+		t.Fatalf("alpha codes=%v ok=%v want reference %v", payload, ok, wantCodes)
+	}
+	legacyCodes, err := buildColumnVectorGraphScalarU8Codes(def, assetRows)
+	if err != nil {
+		t.Fatalf("legacy codes: %v", err)
+	}
+	if bytes.Equal(payload, legacyCodes) {
+		t.Fatalf("alpha codes unexpectedly match legacy codes=%v", payload)
+	}
+	preReopenPayload := append([]byte(nil), payload...)
+
+	reader, err := col.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1, UseResourceQuantizedAssets: true})
+	if err != nil {
+		t.Fatalf("open reader: %v", err)
+	}
+	loaded := reader.quantizedAssetStatus[def.QuantizedIndexes[0].Name]
+	if loaded.Prepared == nil || loaded.Err != nil || loaded.ScalarU8Alpha == nil {
+		_ = reader.Close()
+		t.Fatalf("reader alpha quantized status=%+v", loaded)
+	}
+	if columnVectorGraphQuantizedAssetMmapExpectedForTest2621() {
+		if loaded.Health != columnVectorGraphQuantizedAssetHealthMmapDirect || loaded.MappedBytes == 0 {
+			_ = reader.Close()
+			t.Fatalf("reader alpha scalar_u8 status=%+v want mmap/direct code asset", loaded)
+		}
+	} else if loaded.Health != columnVectorGraphQuantizedAssetHealthHeapCopy || loaded.HeapCopyBytes == 0 {
+		_ = reader.Close()
+		t.Fatalf("reader alpha scalar_u8 status=%+v want heap-copy fallback", loaded)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("reader Close: %v", err)
+	}
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection reopen: %v", err)
+	}
+	reopenedReader, err := reopenedCol.openColumnVectorGraphPhysicalRowReader(def.Name, columnVectorGraphPhysicalRowReaderOptions{MaxDecodedBlocks: 1, UseResourceQuantizedAssets: true})
+	if err != nil {
+		t.Fatalf("open reader reopen: %v", err)
+	}
+	defer func() { _ = reopenedReader.Close() }()
+	reopenedStatus := reopenedReader.quantizedAssetStatus[def.QuantizedIndexes[0].Name]
+	if reopenedStatus.Prepared == nil || reopenedStatus.Err != nil || reopenedStatus.ScalarU8Alpha == nil {
+		t.Fatalf("reopened reader alpha quantized status=%+v", reopenedStatus)
+	}
+	reopenedPayload, ok := reopenedStatus.Prepared.CodeRowView(quantizedasset.RoleCodes)
+	if !ok {
+		t.Fatal("reopened code row view unavailable")
+	}
+	reopenedBytes, ok := reopenedPayload.PayloadBytes()
+	if !ok || !bytes.Equal(reopenedBytes, preReopenPayload) {
+		t.Fatalf("reopened code payload identity ok=%v got=%v want=%v", ok, reopenedBytes, preReopenPayload)
+	}
+	reopenedAlpha, _, ok := reopenedStatus.ScalarU8Alpha.AlphaForRow(1)
+	if !ok || math.Abs(float64(reopenedAlpha-0.8)) > 1e-6 {
+		t.Fatalf("reopened alpha row lookup=%v ok=%v want 0.8", reopenedAlpha, ok)
+	}
+}
+
+func TestColumnGraphScalarU8AlphaQuantileSparseGranulePositiveFallback2843(t *testing.T) {
+	const dims = 1000
+	q := scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha.quantile")
+	q.ScalarU8Calibration.AlphaPolicy = ScalarU8AlphaPolicy{Name: ScalarU8AlphaPolicyAbsQuantile, QuantilePPM: ScalarU8AlphaPolicyAbsQuantilePPM999}
+	def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:             "embedding_graph",
+		Field:            "embedding",
+		Metric:           VectorMetricCosine,
+		Dimensions:       dims,
+		M:                3,
+		Strategy:         VectorIndexStrategyColumnGraph,
+		QuantizedIndexes: []QuantizedVectorIndexDefinition{q},
+	})
+	if err != nil {
+		t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	q = def.QuantizedIndexes[0]
+	vector := make([]float32, dims)
+	vector[dims-1] = 1
+	rows := []columnVectorGraphAssetRow{{ID: []byte("doc-a"), Vector: vector, InvNorm: 1}}
+
+	alpha, err := computeColumnVectorGraphScalarU8GranuleAlpha(def, q, rows)
+	if err != nil {
+		t.Fatalf("computeColumnVectorGraphScalarU8GranuleAlpha: %v", err)
+	}
+	if alpha != 1 {
+		t.Fatalf("alpha=%v want deterministic positive fallback 1", alpha)
+	}
+	metadata, err := buildColumnVectorGraphScalarU8AlphaMetadata(def, q, rows)
+	if err != nil {
+		t.Fatalf("buildColumnVectorGraphScalarU8AlphaMetadata: %v", err)
+	}
+	if len(metadata.Alphas) != 1 || metadata.Alphas[0] != 1 {
+		t.Fatalf("metadata alphas=%v want [1]", metadata.Alphas)
+	}
+	codes, err := buildColumnVectorGraphScalarU8CodesForDefinition(def, q, rows)
+	if err != nil {
+		t.Fatalf("buildColumnVectorGraphScalarU8CodesForDefinition: %v", err)
+	}
+	if len(codes) != dims {
+		t.Fatalf("codes len=%d want %d", len(codes), dims)
+	}
+	if codes[0] != 128 || codes[dims-1] != 255 {
+		t.Fatalf("codes edge=(%d,%d) want (128,255)", codes[0], codes[dims-1])
+	}
+}
+
+func TestColumnGraphScalarU8AlphaStateStatusRejectsWrongGranuleCount2843(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 4, 0}},
+		{id: "doc-b", vector: []float32{1, 2, 2}},
+		{id: "doc-c", vector: []float32{-2, 1, 2}},
+	}
+	_, d, col, def := openColumnGraphQuantizedTestCollection1926(t, rows, []QuantizedVectorIndexDefinition{scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha")})
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	if cfg.ActiveManifest == nil {
+		t.Fatal("active manifest is nil")
+	}
+	manifest, err := decodeColumnManifestSnapshotForScan(records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
+	}
+	_, _, state, _ := loadColumnGraphScalarU8AlphaState2843(t, d, def)
+	badState := state
+	badState.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...)
+	mutated := false
+	for i := range badState.Assets {
+		if badState.Assets[i].Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
+			badState.Assets[i].RowCount++
+			mutated = true
+			break
+		}
+	}
+	if !mutated {
+		t.Fatalf("state assets=%+v missing alpha", state.Assets)
+	}
+	if got := columnVectorIndexStateMatchStatus(badState, def, *cfg, manifest, records); got != columnVectorIndexStateMatchMismatch {
+		t.Fatalf("match status=%v want mismatch for wrong alpha granule count", got)
+	}
+
+	if _, err := encodeColumnVectorIndexStateRecord(badState); err != nil {
+		t.Fatalf("encode bad state with relaxed alpha row_count: %v", err)
+	}
+}
+
+func TestColumnGraphScalarU8AlphaQuantizedAssetFailsClosed2843(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 4, 0}},
+		{id: "doc-b", vector: []float32{1, 2, 2}},
+		{id: "doc-c", vector: []float32{-2, 1, 2}},
+	}
+	_, d, col, def := openColumnGraphQuantizedTestCollection1926(t, rows, []QuantizedVectorIndexDefinition{scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha")})
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	cfg, graph, state, assets := loadColumnGraphScalarU8AlphaState2843(t, d, def)
+	q := def.QuantizedIndexes[0]
+
+	missingAlpha := state
+	missingAlpha.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...)
+	for i := range missingAlpha.Assets {
+		if missingAlpha.Assets[i].Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
+			missingAlpha.Assets = append(missingAlpha.Assets[:i], missingAlpha.Assets[i+1:]...)
+			break
+		}
+	}
+	if err := validateColumnVectorGraphQuantizedStateAssets("docs", *cfg, def, missingAlpha); err == nil || !strings.Contains(err.Error(), "missing quantized asset") {
+		t.Fatalf("missing alpha state err=%v want missing quantized asset", err)
+	}
+	if _, err := loadColumnVectorGraphQuantizedAsset(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, q, assets.Codes); !errors.Is(err, errColumnVectorGraphQuantizedAssetMissing) || !strings.Contains(err.Error(), "alpha") {
+		t.Fatalf("load without alpha err=%v want missing alpha", err)
+	}
+
+	staleSchema := assets
+	staleSchema.Alpha.SourceSchemaHash++
+	if _, err := loadColumnVectorGraphQuantizedAssetSet(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, q, staleSchema); !errors.Is(err, errColumnVectorGraphQuantizedAssetStale) || !strings.Contains(err.Error(), "schema_hash") {
+		t.Fatalf("stale alpha schema err=%v want stale schema_hash", err)
+	}
+	staleRows := assets
+	staleRows.Alpha.RowCount++
+	if _, err := loadColumnVectorGraphQuantizedAssetSet(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, q, staleRows); !errors.Is(err, errColumnVectorGraphQuantizedAssetInvalid) || !strings.Contains(err.Error(), "granule_count") {
+		t.Fatalf("stale alpha row count err=%v want invalid granule_count", err)
+	}
+}
+
+func TestColumnGraphScalarU8AlphaQuantizedAssetRejectsWrongGranuleCountIdentity2843(t *testing.T) {
+	if _, err := prepareUncheckedScalarU8AlphaPrepared2843(t, 3, []uint32{1, 2}); !errors.Is(err, errColumnVectorGraphQuantizedAssetInvalid) || !strings.Contains(err.Error(), "granule_count") {
+		t.Fatalf("wrong alpha granule count err=%v want invalid granule_count", err)
+	}
+}
+
+func TestColumnGraphScalarU8AlphaQuantizedAssetRejectsWrongGranuleBoundaryIdentity2843(t *testing.T) {
+	rowsPerGranule := typedColumnDefaultRowsPerGranule()
+	if rowsPerGranule < 2 {
+		t.Fatalf("rows_per_granule=%d want >=2", rowsPerGranule)
+	}
+	rows := rowsPerGranule + 2
+	wrongRowCounts := []uint32{uint32(rowsPerGranule - 1), 3}
+	if _, err := prepareUncheckedScalarU8AlphaPrepared2843(t, rows, wrongRowCounts); !errors.Is(err, errColumnVectorGraphQuantizedAssetInvalid) || !strings.Contains(err.Error(), "row_count") || !strings.Contains(err.Error(), "want") {
+		t.Fatalf("wrong alpha granule boundary err=%v want invalid row_count identity", err)
+	}
+}
+
+func TestColumnGraphScalarU8AlphaQuantizedAssetRejectsInvalidAlpha2843(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 4, 0}},
+		{id: "doc-b", vector: []float32{1, 2, 2}},
+	}
+	_, d, col, def := openColumnGraphQuantizedTestCollection1926(t, rows, []QuantizedVectorIndexDefinition{scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha")})
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	cfg, graph, _, assets := loadColumnGraphScalarU8AlphaState2843(t, d, def)
+	q := def.QuantizedIndexes[0]
+	for _, tc := range []struct {
+		name  string
+		alpha float32
+	}{
+		{name: "zero", alpha: 0},
+		{name: "negative", alpha: -0.25},
+		{name: "nan", alpha: float32(math.NaN())},
+		{name: "inf", alpha: float32(math.Inf(1))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			badAlpha := writeUncheckedScalarU8AlphaAsset2843(t, d, *cfg, def, graph, q, assets.Alpha.Ref.PartID+100, []float32{tc.alpha}, []uint32{uint32(len(rows))})
+			badSet := assets
+			badSet.Alpha = badAlpha
+			if _, err := loadColumnVectorGraphQuantizedAssetSet(d.ColumnAssetRootDir(), "docs", *cfg, def, graph, q, badSet); !errors.Is(err, errColumnVectorGraphQuantizedAssetInvalid) || !strings.Contains(err.Error(), "alpha") {
+				t.Fatalf("invalid alpha=%v err=%v want invalid alpha", tc.alpha, err)
+			}
+		})
 	}
 }
 
@@ -704,6 +1011,198 @@ func columnGraphQuantizedAssetRow1926(tb testing.TB, id string, vector []float32
 		tb.Fatalf("columnVectorGraphInvNorm %s: %v", id, err)
 	}
 	return columnVectorGraphAssetRow{ID: []byte(id), Vector: append([]float32(nil), vector...), InvNorm: invNorm}
+}
+
+func scalarU8AlphaQuantizedIndex2843(name string) QuantizedVectorIndexDefinition {
+	return QuantizedVectorIndexDefinition{
+		Name:  name,
+		Codec: QuantizedVectorCodecScalarU8,
+		ScalarU8Calibration: &ScalarU8CalibrationConfig{
+			Mode:     ScalarU8CalibrationModePerGranuleAlpha,
+			Grouping: ScalarU8CalibrationGroupingStorageLayoutGranule,
+			AlphaPolicy: ScalarU8AlphaPolicy{
+				Name: ScalarU8AlphaPolicyMaxAbs,
+			},
+		},
+	}
+}
+
+func loadColumnGraphScalarU8AlphaState2843(tb testing.TB, d *backenddb.DB, def VectorIndexDefinition) (*ColumnStoreConfig, columnVectorGraphManifestSnapshot, columnVectorIndexStateSnapshot, columnVectorGraphQuantizedAssetSet) {
+	tb.Helper()
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(tb, d, "docs")
+	graphRecord, ok := findColumnVectorGraphManifestRecord(records, def.Name)
+	if !ok {
+		tb.Fatalf("missing graph record %q", def.Name)
+	}
+	graph, err := decodeColumnVectorGraphManifestRecord(graphRecord.value)
+	if err != nil {
+		tb.Fatalf("decode graph: %v", err)
+	}
+	stateRecord, ok := findColumnVectorIndexStateRecord(records, def.Name)
+	if !ok {
+		tb.Fatalf("missing vector-index state record %q", def.Name)
+	}
+	state, err := decodeColumnVectorIndexStateRecord(stateRecord.value)
+	if err != nil {
+		tb.Fatalf("decode state: %v", err)
+	}
+	sets := columnVectorGraphQuantizedAssetSetsByName(state, def)
+	assets, ok := sets[def.QuantizedIndexes[0].Name]
+	if !ok {
+		tb.Fatalf("alpha quantized assets missing from state assets: %+v", state.Assets)
+	}
+	return cfg, graph, state, assets
+}
+
+func columnGraphAssetRowsFromInput2843(tb testing.TB, rows []columnGraphRebuildInputRowV2A) []columnVectorGraphAssetRow {
+	tb.Helper()
+	out := make([]columnVectorGraphAssetRow, len(rows))
+	for i, row := range rows {
+		out[i] = columnGraphQuantizedAssetRow1926(tb, row.id, row.vector)
+	}
+	return out
+}
+
+func columnGraphAssetRowsFromScanned2843(rows []columnGraphRebuildScannedRowV2A) []columnVectorGraphAssetRow {
+	out := make([]columnVectorGraphAssetRow, len(rows))
+	for i, row := range rows {
+		out[i] = columnVectorGraphAssetRow{ID: []byte(row.id), Vector: append([]float32(nil), row.vector...), InvNorm: row.invNorm}
+	}
+	return out
+}
+
+func referenceScalarU8AlphaCodes2843(tb testing.TB, def VectorIndexDefinition, rows []columnVectorGraphAssetRow, alphas []float32) []byte {
+	tb.Helper()
+	if len(alphas) == 0 {
+		tb.Fatal("reference alphas are empty")
+	}
+	codes := make([]byte, 0, len(rows)*def.Dimensions)
+	for rowIdx, row := range rows {
+		alpha := alphas[0]
+		if len(alphas) == len(rows) {
+			alpha = alphas[rowIdx]
+		}
+		if !validColumnVectorGraphScalarU8Alpha(alpha) {
+			tb.Fatalf("invalid reference alpha %v", alpha)
+		}
+		for _, value := range row.Vector {
+			codes = append(codes, columnVectorGraphScalarU8Code(value*row.InvNorm/alpha))
+		}
+	}
+	return codes
+}
+
+func prepareUncheckedScalarU8AlphaPrepared2843(tb testing.TB, rows int, rowCounts []uint32) (*quantizedasset.Prepared, error) {
+	tb.Helper()
+	if rows < 0 {
+		tb.Fatalf("rows=%d", rows)
+	}
+	q := scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha")
+	def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:             "embedding_graph",
+		Field:            "embedding",
+		Metric:           VectorMetricCosine,
+		Dimensions:       3,
+		M:                3,
+		Strategy:         VectorIndexStrategyColumnGraph,
+		QuantizedIndexes: []QuantizedVectorIndexDefinition{q},
+	})
+	if err != nil {
+		tb.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	q = def.QuantizedIndexes[0]
+	base, err := normalizeColumnStoreConfig("docs", columnGraphRebuildColumnStoreConfigV2A(def.Dimensions))
+	if err != nil {
+		tb.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	assetRows := make([]columnVectorGraphAssetRow, rows)
+	for i := range assetRows {
+		assetRows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("doc-%06d", i)), Vector: []float32{1, 0, 0}, InvNorm: 1}
+	}
+	codePayload, codeCfg, err := prepareColumnVectorGraphQuantizedCodesPayload("docs", *base, def, q, 2843001, assetRows)
+	if err != nil {
+		tb.Fatalf("prepareColumnVectorGraphQuantizedCodesPayload: %v", err)
+	}
+	codeImage, err := typedcolumn.ParseColumnPartImage(codePayload)
+	if err != nil {
+		tb.Fatalf("ParseColumnPartImage codes: %v", err)
+	}
+	alphas := make([]float32, len(rowCounts))
+	for i := range alphas {
+		alphas[i] = 1
+	}
+	alphaPayload, alphaCfg, err := prepareColumnVectorGraphScalarU8AlphaPayload("docs", *base, def, q, 2843002, columnVectorGraphScalarU8AlphaMetadata{Alphas: alphas, RowCounts: append([]uint32(nil), rowCounts...)})
+	if err != nil {
+		tb.Fatalf("prepareColumnVectorGraphScalarU8AlphaPayload: %v", err)
+	}
+	alphaImage, err := typedcolumn.ParseColumnPartImage(alphaPayload)
+	if err != nil {
+		tb.Fatalf("ParseColumnPartImage alpha: %v", err)
+	}
+	graph := columnVectorGraphManifestSnapshot{IndexName: def.Name, Field: def.Field, Metric: def.Metric, Encoding: def.Encoding, Dimensions: def.Dimensions, M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch, BaseManifestGeneration: 1, BaseManifestChecksum: 2, BaseSchemaHash: 3, GraphSchemaHash: 4, RowCount: rows}
+	codeRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: base.AssetManager.Namespace, Generation: graph.BaseManifestGeneration, PartID: codeImage.PartID, FileID: 1, Length: int64(len(codePayload))}
+	alphaRef := ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: base.AssetManager.Namespace, Generation: graph.BaseManifestGeneration, PartID: alphaImage.PartID, FileID: 2, Length: int64(len(alphaPayload))}
+	assets := columnVectorGraphQuantizedAssetSet{
+		Codes:    columnVectorIndexStateAssetSnapshot{Role: columnVectorIndexStateAssetRoleQuantizedCodes, AssetID: columnVectorGraphQuantizedCodesAssetID(q), LogicalType: columnVectorIndexStateLogicalTypeByteVector, PhysicalEncoding: columnVectorIndexStateEncodingRawFixedBytes, RowCount: rows, SourceSchemaHash: codeCfg.SchemaHash, Ref: codeRef, AssetBytes: int64(len(codePayload))},
+		Alpha:    columnVectorIndexStateAssetSnapshot{Role: columnVectorIndexStateAssetRoleQuantizedAlpha, AssetID: columnVectorGraphScalarU8AlphaAssetID(q), LogicalType: columnVectorIndexStateLogicalTypeScalarU8Alpha, PhysicalEncoding: columnVectorIndexStateEncodingRawFloat32Uint32, RowCount: len(rowCounts), SourceSchemaHash: alphaCfg.SchemaHash, Ref: alphaRef, AssetBytes: int64(len(alphaPayload))},
+		HasCodes: true,
+		HasAlpha: true,
+	}
+	return prepareColumnVectorGraphQuantizedAssetFromImages(def, graph, q, assets, codeImage, alphaImage)
+}
+
+func writeUncheckedScalarU8AlphaAsset2843(tb testing.TB, d *backenddb.DB, cfg ColumnStoreConfig, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, q QuantizedVectorIndexDefinition, partID uint64, alphas []float32, rowCounts []uint32) columnVectorIndexStateAssetSnapshot {
+	tb.Helper()
+	sourceCfg, err := columnVectorGraphScalarU8AlphaColumnStoreConfig("docs", cfg, def, q)
+	if err != nil {
+		tb.Fatalf("columnVectorGraphScalarU8AlphaColumnStoreConfig: %v", err)
+	}
+	if len(alphas) != len(rowCounts) {
+		tb.Fatalf("alphas=%d rowCounts=%d", len(alphas), len(rowCounts))
+	}
+	primaryIDs := make([]int64, len(alphas))
+	for i := range primaryIDs {
+		primaryIDs[i] = int64(i)
+	}
+	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
+		SchemaVersion: uint32(sourceCfg.SchemaHash),
+		SchemaMode:    typedcolumn.ColumnSchemaFixed,
+		Columns: []typedcolumn.ColumnDefinition{
+			columnVectorGraphQuantizedPrimaryIDColumnDefinition(),
+			{Name: columnVectorGraphQuantizedScalarU8AlphaColumnName, Type: typedcolumn.ColumnTypeFloat32, Encoding: typedcolumn.EncodingRawFloat32, Compression: typedcolumn.CompressionNone, CompressionSet: true, StatsDisabled: true},
+			{Name: columnVectorGraphQuantizedGranuleRowCountColumnName, Type: typedcolumn.ColumnTypeUint32, Encoding: typedcolumn.EncodingRawUint32, Compression: typedcolumn.CompressionNone, CompressionSet: true, StatsDisabled: true},
+		},
+		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
+		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
+		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
+		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
+	}, typedcolumn.Batch{
+		Rows:           len(alphas),
+		Columns:        map[string][]int64{typedColumnAdapterPrimaryIDColumn: primaryIDs},
+		Float32Columns: map[string][]float32{columnVectorGraphQuantizedScalarU8AlphaColumnName: alphas},
+		Uint32Columns:  map[string][]uint32{columnVectorGraphQuantizedGranuleRowCountColumnName: rowCounts},
+	})
+	if err != nil {
+		tb.Fatalf("BuildColumnPart invalid alpha fixture: %v", err)
+	}
+	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{LayoutLogicalTypes: map[string]string{
+		columnVectorGraphQuantizedScalarU8AlphaColumnName:   string(columnsemantics.LogicalFloat32),
+		columnVectorGraphQuantizedGranuleRowCountColumnName: string(columnsemantics.LogicalUint32),
+	}})
+	if err != nil {
+		tb.Fatalf("BuildColumnPartImage invalid alpha fixture: %v", err)
+	}
+	appender, err := newNextColumnPhysicalAssetSegmentAppender(d.ColumnAssetRootDir(), sourceCfg)
+	if err != nil {
+		tb.Fatalf("new appender: %v", err)
+	}
+	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, sourceCfg)
+	ref, appendErr := appender.appendKindWithAlignment(image.Bytes, ColumnAssetKindTCS1TypedColumnPart, graph.BaseManifestGeneration, partID, alignment)
+	closeErr := appender.close()
+	if appendErr != nil || closeErr != nil {
+		tb.Fatalf("append invalid alpha asset append=%v close=%v", appendErr, closeErr)
+	}
+	return columnVectorIndexStateAssetSnapshot{Role: columnVectorIndexStateAssetRoleQuantizedAlpha, AssetID: columnVectorGraphScalarU8AlphaAssetID(q), LogicalType: columnVectorIndexStateLogicalTypeScalarU8Alpha, PhysicalEncoding: columnVectorIndexStateEncodingRawFloat32Uint32, RowCount: len(alphas), SourceSchemaHash: sourceCfg.SchemaHash, Ref: ref, AssetBytes: ref.Length}
 }
 
 func attachScalarU8QuantizedAssetForReader1926(tb testing.TB, reader *columnVectorGraphPhysicalRowReader, rows []columnVectorGraphAssetRow) QuantizedVectorIndexDefinition {
