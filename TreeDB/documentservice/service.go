@@ -200,6 +200,11 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
+	if len(insertIDs) > 0 && len(updates) == 0 && !req.DeferVectorIndexRebuild {
+		if err := preflightServiceVectorAutoRebuildSupported(info); err != nil {
+			return UpsertDocumentsResponse{}, err
+		}
+	}
 	inserted := 0
 	updated := 0
 	if len(insertIDs) > 0 {
@@ -1081,6 +1086,17 @@ func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
 type preparedDocument struct {
 	id  string
 	raw []byte
+}
+
+func preflightServiceVectorAutoRebuildSupported(info IndexInfo) error {
+	return nil
+}
+
+func scalarU8CalibrationInfoIsLegacy(q QuantizedIndexInfo) bool {
+	if q.ScalarU8Calibration == nil {
+		return true
+	}
+	return q.ScalarU8Calibration.Mode == "" || q.ScalarU8Calibration.Mode == collections.ScalarU8CalibrationModeLegacy
 }
 
 func upsertPreparedDocument(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool) (inserted bool, updated bool, err error) {
