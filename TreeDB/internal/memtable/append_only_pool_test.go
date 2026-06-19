@@ -624,11 +624,31 @@ func TestAppendOnlyLatestIndexReserveHintBounds(t *testing.T) {
 		large.mu.Unlock()
 		t.Fatalf("large reserve hint=%d want capped %d", got, appendOnlyLatestIndexMaxReserve)
 	}
-	if got, need := large.latestIndexReserveHintLocked(appendOnlyLatestIndexMaxReserve+123), appendOnlyLatestIndexMaxReserve+123; got != need {
+	if got := large.latestIndexReserveHintLocked(appendOnlyLatestIndexMaxReserve + 123); got != appendOnlyLatestIndexMaxReserve {
 		large.mu.Unlock()
-		t.Fatalf("reserve hint below need: got=%d need=%d", got, need)
+		t.Fatalf("reserve hint above cap: got=%d want %d", got, appendOnlyLatestIndexMaxReserve)
 	}
 	large.mu.Unlock()
+}
+
+func TestAppendOnlyLateMixedKeyLatestIndexReserveStaysCapped(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(appendOnlyLatestIndexMaxReserve * 4)
+	var key [appendOnlyInlineKeyLen]byte
+	for i := 0; i < appendOnlyLatestIndexMaxReserve+appendOnlySortedRunMaxCount; i++ {
+		binary.BigEndian.PutUint64(key[:], uint64(1_000_000+i))
+		m.Set(key[:], []byte{1})
+	}
+	m.mu.Lock()
+	if got := m.latestIndexReserveHintLocked(m.count + 1); got != appendOnlyLatestIndexMaxReserve {
+		m.mu.Unlock()
+		t.Fatalf("late mixed-key reserve hint=%d want capped %d", got, appendOnlyLatestIndexMaxReserve)
+	}
+	m.mu.Unlock()
+
+	m.Set([]byte("variable-width-key"), []byte("value"))
+	if got, _, ok := m.Get([]byte("variable-width-key")); !ok || string(got) != "value" {
+		t.Fatalf("late mixed-key lookup=(%q, ok=%t), want value", got, ok)
+	}
 }
 
 func TestAppendOnlyLatestIndexFallbackLatestWinsAndOwnsBytes(t *testing.T) {

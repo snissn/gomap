@@ -889,10 +889,7 @@ func (m *AppendOnly) latestIndexReserveHintLocked(need int) int {
 		reserve = m.baseEntriesLen
 	}
 	if reserve > appendOnlyLatestIndexMaxReserve {
-		reserve = appendOnlyLatestIndexMaxReserve
-	}
-	if reserve < need {
-		reserve = need
+		return appendOnlyLatestIndexMaxReserve
 	}
 	return reserve
 }
