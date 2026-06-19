@@ -672,7 +672,7 @@ func TestServiceCreateIndexRejectsInvalidScalarU8Calibration2842(t *testing.T) {
 	}
 }
 
-func TestServiceIndexCapabilitiesExcludeScalarU8PerGranuleAlphaRerank2848(t *testing.T) {
+func TestServiceIndexCapabilitiesIncludeScalarU8PerGranuleAlphaRerank2844(t *testing.T) {
 	base := collections.VectorIndexDefinition{
 		Name:       defaultVectorIndexName,
 		Field:      defaultEmbeddingField,
@@ -718,18 +718,18 @@ func TestServiceIndexCapabilitiesExcludeScalarU8PerGranuleAlphaRerank2848(t *tes
 			wantScalarU8QuantizedRerank: true,
 		},
 		{
-			name: "per_granule_alpha_config_only",
+			name: "per_granule_alpha_scoring",
 			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
 				Name:                "embedding.scalar_u8.alpha",
 				Codec:               collections.QuantizedVectorCodecScalarU8,
 				Version:             1,
 				ScalarU8Calibration: alphaCalibration,
 			}},
-			wantQuantizedRerank:         false,
-			wantScalarU8QuantizedRerank: false,
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: true,
 		},
 		{
-			name: "alpha_scalar_u8_does_not_mask_rabitq_rerank",
+			name: "alpha_scalar_u8_and_rabitq_rerank",
 			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{
 				{
 					Name:                "embedding.scalar_u8.alpha",
@@ -744,7 +744,7 @@ func TestServiceIndexCapabilitiesExcludeScalarU8PerGranuleAlphaRerank2848(t *tes
 				},
 			},
 			wantQuantizedRerank:         true,
-			wantScalarU8QuantizedRerank: false,
+			wantScalarU8QuantizedRerank: true,
 		},
 	}
 	for _, tt := range tests {
