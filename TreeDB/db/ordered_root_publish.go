@@ -2341,6 +2341,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	var optimisticSystemDeltaReleaseEntries []batch.Entry
 	defer func() {
 		if retrySerialized {
+			db.releasePendingValueLogAppendFileIDsFromEntries(optimisticSystemDeltaReleaseEntries)
 			return
 		}
 		for idx := range ordered {
