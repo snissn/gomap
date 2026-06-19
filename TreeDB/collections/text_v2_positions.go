@@ -2,8 +2,10 @@ package collections
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
 	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -78,7 +80,7 @@ func encodeTextV2PositionValue(value textV2PositionValue) []byte {
 	out = appendTextUvarint(out, uint64(value.FormatVersion))
 	out = appendTextUvarint(out, value.Ordinal)
 	out = appendTextUvarint(out, value.Generation)
-	out = appendTextUvarint(out, textV2PositionTermHash(value.Term))
+	out = appendTextV2PositionTermBinding(out, value.Term)
 	out = appendTextUvarint(out, uint64(len(fields)))
 	for _, field := range fields {
 		out = appendTextUvarint(out, uint64(field.FieldIndex))
@@ -122,12 +124,8 @@ func decodeTextV2PositionValueForTerm(raw []byte, keyTerm string) (textV2Positio
 	}
 	term := keyTerm
 	if valueVersion == textV2PositionValueVersion {
-		termHash, err := cur.readUvarint()
-		if err != nil {
-			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position term hash: %v", err)
-		}
-		if termHash != textV2PositionTermHash(keyTerm) {
-			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position key/value term mismatch")
+		if err := readTextV2PositionTermBinding(&cur, keyTerm); err != nil {
+			return textV2PositionValue{}, err
 		}
 	}
 	if valueVersion == textV2PositionValueVersionV1 {
@@ -469,7 +467,7 @@ func cloneTextV2PositionFields(fields []textV2PositionFieldValue) []textV2Positi
 }
 
 func estimateTextV2PositionValueLen(value textV2PositionValue, fields []textV2PositionFieldValue) int {
-	n := 1 + binary.MaxVarintLen64*5
+	n := 1 + binary.MaxVarintLen64*4 + encodedTextV2PositionTermBindingLen(value.Term)
 	for _, field := range fields {
 		n += binary.MaxVarintLen64 * 2
 		n += encodedTextV2PositionDeltasLen(field.Positions)
@@ -478,10 +476,46 @@ func estimateTextV2PositionValueLen(value textV2PositionValue, fields []textV2Po
 	return n
 }
 
-func textV2PositionTermHash(term string) uint64 {
-	// A 32-bit fingerprint preserves an independent key/value term check for the
-	// compressed v2 payload without reintroducing the full duplicate term string.
-	return columnPhysicalQueryHashString(term) & 0xffffffff
+const textV2PositionTermFingerprintSize = 5
+
+func appendTextV2PositionTermBinding(out []byte, term string) []byte {
+	out = appendTextUvarint(out, uint64(len(term)))
+	fingerprint := textV2PositionTermFingerprint(term)
+	return append(out, fingerprint[:]...)
+}
+
+func readTextV2PositionTermBinding(cur *textCursor, keyTerm string) error {
+	termLen, err := cur.readUvarint()
+	if err != nil {
+		return errMalformedTextStorage("text-v2 position term length: %v", err)
+	}
+	if termLen != uint64(len(keyTerm)) {
+		return errMalformedTextStorage("text-v2 position key/value term mismatch")
+	}
+	if cur.remaining() < textV2PositionTermFingerprintSize {
+		return errMalformedTextStorage("text-v2 position term fingerprint: %v", io.ErrUnexpectedEOF)
+	}
+	termFingerprint := cur.buf[cur.pos : cur.pos+textV2PositionTermFingerprintSize]
+	cur.pos += textV2PositionTermFingerprintSize
+	wantFingerprint := textV2PositionTermFingerprint(keyTerm)
+	if !bytes.Equal(termFingerprint, wantFingerprint[:]) {
+		return errMalformedTextStorage("text-v2 position key/value term mismatch")
+	}
+	return nil
+}
+
+func encodedTextV2PositionTermBindingLen(term string) int {
+	return textUvarintLen(uint64(len(term))) + textV2PositionTermFingerprintSize
+}
+
+func textV2PositionTermFingerprint(term string) [textV2PositionTermFingerprintSize]byte {
+	// Store the exact term length plus a SHA-256/40 fingerprint so the compressed
+	// v2 payload keeps an independent key/value term binding without
+	// reintroducing the full duplicate term string.
+	sum := sha256.Sum256([]byte(term))
+	var out [textV2PositionTermFingerprintSize]byte
+	copy(out[:], sum[:textV2PositionTermFingerprintSize])
+	return out
 }
 
 func encodedTextV2PositionDeltasLen(values []uint32) int {

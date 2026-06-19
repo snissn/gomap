@@ -59,7 +59,7 @@ func TestTextV2PositionValueV2RejectsCorruptDeltas2835(t *testing.T) {
 	raw = appendTextUvarint(raw, uint64(textV2FormatVersion))
 	raw = appendTextUvarint(raw, 1) // ordinal
 	raw = appendTextUvarint(raw, 1) // generation
-	raw = appendTextUvarint(raw, textV2PositionTermHash("refund"))
+	raw = appendTextV2PositionTermBinding(raw, "refund")
 	raw = appendTextUvarint(raw, 1) // field count
 	raw = appendTextUvarint(raw, 0) // field index
 	raw = appendTextUvarint(raw, 2) // frequency

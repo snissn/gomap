@@ -343,15 +343,16 @@ Position values are versioned and fail closed. New writers use value version 2;
 readers still accept legacy value version 1 for pre-alpha fixtures.
 
 Version 2 omits the duplicate term string already present in the position key,
-retains a compact 32-bit FNV-1a term fingerprint for independent key/value
-mismatch detection, and delta-codes strictly increasing positions:
+retains an independent key/value term binding via the exact term length plus a
+40-bit SHA-256 fingerprint, and delta-codes strictly increasing positions:
 
 ```text
 u8      ValueVersion  = 2
 uvarint FormatVersion = 1
 uvarint Ordinal
 uvarint Generation
-uvarint TermFingerprint32  // low 32 bits of TreeDB FNV-1a string hash
+uvarint TermLen
+bytes[5] TermFingerprint40  // first 5 bytes of SHA-256(term)
 uvarint FieldEntryCount
 
 // repeated FieldEntryCount times, sorted by field index
