@@ -305,14 +305,16 @@ func (db *DB) prepareFlushApplyPublish(sync bool) (*finalizeCommitPrepareGuard, 
 	return guard, err
 }
 
-func (db *DB) observeFlushApplyGuardedPublish(hold time.Duration) {
+func (db *DB) observeFlushApplyGuardedPublish(hold time.Duration, installed bool) {
 	if db == nil {
 		return
 	}
 	db.flushApplyGuardedPublishCalls.Add(1)
-	db.flushApplyPublishFinalInstallCalls.Add(1)
 	addDurationNs(&db.flushApplyGuardedPublishNs, hold)
-	addDurationNs(&db.flushApplyPublishFinalInstallNs, hold)
+	if installed {
+		db.flushApplyPublishFinalInstallCalls.Add(1)
+		addDurationNs(&db.flushApplyPublishFinalInstallNs, hold)
+	}
 }
 
 // FlushApplyReducerPublishNs returns the cumulative root-reduce plus guarded

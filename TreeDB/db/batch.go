@@ -416,7 +416,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		b.db.observeFlushApplyMismatch()
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackRootMismatch)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
-		b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
+		b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), false)
 		b.db.commitMu.Unlock()
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -433,7 +433,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
-			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
+			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), false)
 			b.db.commitMu.Unlock()
 			freeErr := tracker.FreeAll()
 			b.db.writeMu.RUnlock()
@@ -452,7 +452,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 	}
-	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
+	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -565,14 +565,14 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
-			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
+			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), false)
 			return err
 		}
 		opts := commandWALFinalizeOptions(intent)
 		opts.skipPrePublishFlush = true
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
-	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
+	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	if err != nil {
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))

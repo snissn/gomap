@@ -40,9 +40,10 @@ var (
 )
 
 type valueLogRefDelta struct {
-	inline  [16]valueLogRefDeltaEntry
-	inlineN int
-	changes map[uint32]int64
+	inline    [16]valueLogRefDeltaEntry
+	inlineN   int
+	changes   map[uint32]int64
+	positives map[uint32]int64
 }
 
 const valueLogRefDeltaPromotedMapInitCap = 128
@@ -83,20 +84,29 @@ func (d *valueLogRefDelta) resetForReuse() {
 		clear(d.inline[:d.inlineN])
 		d.inlineN = 0
 	}
-	if d.changes == nil {
-		return
+	if d.changes != nil {
+		// Keep small/typical maps warm for reuse; drop unusually large maps.
+		if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
+			d.changes = nil
+		} else {
+			clear(d.changes)
+		}
 	}
-	// Keep small/typical maps warm for reuse; drop unusually large maps.
-	if len(d.changes) > valueLogRefDeltaPoolMaxRetainedEntries {
-		d.changes = nil
-		return
+	if d.positives != nil {
+		if len(d.positives) > valueLogRefDeltaPoolMaxRetainedEntries {
+			d.positives = nil
+		} else {
+			clear(d.positives)
+		}
 	}
-	clear(d.changes)
 }
 
 func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 	if d == nil || delta == 0 {
 		return
+	}
+	if delta > 0 {
+		d.addPositive(fileID, delta)
 	}
 	if d.changes == nil {
 		for i := 0; i < d.inlineN; i++ {
@@ -140,6 +150,31 @@ func (d *valueLogRefDelta) add(fileID uint32, delta int64) {
 		return
 	}
 	d.changes[fileID] = next
+}
+
+func (d *valueLogRefDelta) addPositive(fileID uint32, delta int64) {
+	if d == nil || fileID == 0 || delta <= 0 {
+		return
+	}
+	if d.positives == nil {
+		d.positives = make(map[uint32]int64, valueLogRefDeltaPromotedMapInitCap)
+	}
+	d.positives[fileID] += delta
+}
+
+func (d *valueLogRefDelta) forEachPositive(fn func(fileID uint32, count int64) error) error {
+	if d == nil || len(d.positives) == 0 {
+		return nil
+	}
+	for fileID, count := range d.positives {
+		if count <= 0 {
+			continue
+		}
+		if err := fn(fileID, count); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *valueLogRefDelta) forEachChange(fn func(fileID uint32, change int64) error) error {

@@ -119,10 +119,8 @@ func (db *DB) releasePendingValueLogAppendFileIDsFromDelta(delta *valueLogRefDel
 		return
 	}
 	release := make(map[uint32]int64)
-	_ = delta.forEachChange(func(fileID uint32, change int64) error {
-		if change > 0 {
-			release[fileID] += change
-		}
+	_ = delta.forEachPositive(func(fileID uint32, count int64) error {
+		release[fileID] += count
 		return nil
 	})
 	if len(release) == 0 {

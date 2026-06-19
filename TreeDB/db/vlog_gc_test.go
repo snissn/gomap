@@ -282,11 +282,14 @@ func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	id1 := appendPointersInNewSegment(t, dir, 0, 1, 1_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("pending-seq1|"), 32)
+	appendPointersInNewSegment(t, dir, 0, 1, 500, 1, func(int) []byte {
+		return bytes.Repeat([]byte("old-unreferenced|"), 32)
+	})
+	id1 := appendPointersInNewSegment(t, dir, 0, 2, 1_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("pending-seq2|"), 32)
 	})[0].FileID
-	appendPointersInNewSegment(t, dir, 0, 2, 2_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("active-seq2|"), 32)
+	appendPointersInNewSegment(t, dir, 0, 3, 2_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-seq3|"), 32)
 	})
 	if err := db.RefreshValueLogSet(); err != nil {
 		t.Fatalf("RefreshValueLogSet: %v", err)
@@ -300,10 +303,14 @@ func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
-	if stats.SegmentsDeleted != 0 {
-		t.Fatalf("pending value-log appender segment was deleted: %+v", stats)
+	if stats.SegmentsDeleted != 1 {
+		t.Fatalf("expected one unreferenced segment deleted while pending remained, got %+v", stats)
 	}
-	pendingPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	oldPath := filepath.Join(dir, "value_vlog", "value-l0-000001.log")
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("old unreferenced segment should have been deleted: %v", err)
+	}
+	pendingPath := filepath.Join(dir, "value_vlog", "value-l0-000002.log")
 	if _, err := os.Stat(pendingPath); err != nil {
 		t.Fatalf("pending segment missing after GC: %v", err)
 	}
