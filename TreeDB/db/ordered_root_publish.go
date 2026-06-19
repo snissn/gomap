@@ -2393,10 +2393,14 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		}
 		phaseStart = time.Now()
 		prepareErr := db.prepareFinalizeCommitDurability(false)
-		phaseStats.publishPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		publishPrepareNs := orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.publishPrepareNs += publishPrepareNs
 		phaseStats.publishPrepareCalls++
 		if prepareErr != nil {
 			phaseStats.publishPrepareErrors++
+			db.orderedRootDeltaGroupPublishPrepareNs.Add(publishPrepareNs)
+			db.orderedRootDeltaGroupPublishPrepareCalls.Add(1)
+			db.orderedRootDeltaGroupPublishPrepareErrors.Add(1)
 			err = prepareErr
 			return 0, nil, false, err
 		}
