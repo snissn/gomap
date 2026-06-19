@@ -2953,6 +2953,7 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 	dst.ZipperApplyWallNs += src.ZipperApplyWallNs
 	dst.ZipperRootReduceNs += src.ZipperRootReduceNs
+	dst.ZipperLeafLogOutputReservationWaitNs += src.ZipperLeafLogOutputReservationWaitNs
 	dst.ZipperLeafLogOutputAppendWaitNs += src.ZipperLeafLogOutputAppendWaitNs
 	dst.ZipperLeafLogOutputAppendCalls += src.ZipperLeafLogOutputAppendCalls
 	dst.ZipperLeafLogOutputAppendPages += src.ZipperLeafLogOutputAppendPages
