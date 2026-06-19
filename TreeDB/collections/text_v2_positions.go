@@ -375,7 +375,7 @@ func readTextV2PositionPostingAtRootCounted(snap *backenddb.Snapshot, catalog *c
 			if err := scanner.Err(); err != nil {
 				return textV2SearchPostingValue{}, false, scanned, err
 			}
-			scratch = scanner.fieldScratch
+			scratch = scanner.scratch
 			it.Next()
 			continue
 		}
@@ -398,7 +398,7 @@ func readTextV2PositionPostingAtRootCounted(snap *backenddb.Snapshot, catalog *c
 		if err := scanner.Err(); err != nil {
 			return textV2SearchPostingValue{}, false, scanned, err
 		}
-		scratch = scanner.fieldScratch
+		scratch = scanner.scratch
 		it.Next()
 	}
 	if err := it.Error(); err != nil {

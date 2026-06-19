@@ -217,6 +217,17 @@ func (t *textV2SearchTopK) threshold() (float64, bool) {
 	return t.candidates[len(t.candidates)-1].score, true
 }
 
+func (t *textV2SearchTopK) needsDocumentIDForScore(score float64) bool {
+	if t == nil || t.limit <= 0 {
+		return false
+	}
+	if len(t.candidates) < t.limit {
+		return true
+	}
+	worst := t.candidates[len(t.candidates)-1].score
+	return score >= worst
+}
+
 func (t *textV2SearchTopK) add(candidate textV2SearchTopCandidate) bool {
 	_, _, thresholdChanged := t.addCandidate(candidate)
 	return thresholdChanged
@@ -604,6 +615,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 	top := textV2SearchTopK{limit: opts.TopK, candidates: make([]textV2SearchTopCandidate, 0, opts.TopK)}
 	fieldCount := len(ctx.fieldNames)
 	var scratch []uint32
+	var scannerStorage textV2PostingBlockEntryScanner
 	var blocksSeen uint64
 	var lastBlockLast uint64
 	var hasLastBlock bool
@@ -617,15 +629,15 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 			it.Next()
 			continue
 		}
-		key, err := decodeTextV2PostingBlockKeyForPrefix(keyBytes, prefix)
+		keyBlockStart, keyBlockID, err := decodeTextV2PostingBlockKeySuffixForPrefix(keyBytes, prefix)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
-		scanner, err := newTextV2PostingBlockEntryScanner(it.UnsafeValue(), scratch)
+		scanner, err := initTextV2PostingBlockEntryScanner(&scannerStorage, it.UnsafeValue(), scratch)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
-		if scanner.block.BlockStart != key.BlockStart || scanner.block.BlockID != key.BlockID {
+		if scanner.block.BlockStart != keyBlockStart || scanner.block.BlockID != keyBlockID {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 posting block key/value identity mismatch"))
 		}
 		if len(scanner.block.Summary.MaxFieldTermFrequencies) != fieldCount {
@@ -679,19 +691,6 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 			if !ok || norm.tombstoned() || norm.Generation != entry.Generation {
 				continue
 			}
-			docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, entry.Ordinal)
-			if err != nil {
-				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
-			}
-			if !ok {
-				continue
-			}
-			if norm.Generation != docMap.Generation || norm.Flags != docMap.Flags {
-				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", entry.Ordinal))
-			}
-			if docMap.tombstoned() {
-				continue
-			}
 			if candidateLimit > 0 && response.Stats.TextCandidatesScored >= uint64(candidateLimit) {
 				response.Stats.Truncated = true
 				response.Stats.FailClosedReason = textSearchFailClosedCandidateLimit
@@ -706,6 +705,23 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 			if err != nil {
 				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 			}
+			response.Stats.TextCandidatesScored++
+			if !top.needsDocumentIDForScore(score) {
+				continue
+			}
+			docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, entry.Ordinal)
+			if err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+			if !ok {
+				continue
+			}
+			if norm.Generation != docMap.Generation || norm.Flags != docMap.Flags {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", entry.Ordinal))
+			}
+			if docMap.tombstoned() {
+				continue
+			}
 			beforeThreshold, beforeReady := top.threshold()
 			topCandidate := textV2SearchTopCandidate{ordinal: entry.Ordinal, generation: entry.Generation, documentID: docMap.DocumentID, score: score}
 			if resultMode != textSearchResultScoreOnly || response.Explain != nil {
@@ -714,7 +730,6 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 				topCandidate.hasPosting = true
 			}
 			top.add(topCandidate)
-			response.Stats.TextCandidatesScored++
 			afterThreshold, afterReady := top.threshold()
 			if afterReady && (!beforeReady || afterThreshold > beforeThreshold) {
 				response.Stats.TextBlockMaxThresholds++
@@ -723,7 +738,7 @@ func executeTextV2BlockMaxSearchAtSnapshot(
 		if err := scanner.Err(); err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
-		scratch = scanner.fieldScratch
+		scratch = scanner.scratch
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
@@ -779,6 +794,7 @@ type textV2ANDBlockMaxTermState struct {
 	scratch          []uint32
 	block            textV2PostingBlockValue
 	scanner          *textV2PostingBlockEntryScanner
+	scannerStorage   textV2PostingBlockEntryScanner
 	upperBound       float64
 	entries          []textV2ANDBlockMaxPostingEntry
 	entryIdx         int
@@ -1019,15 +1035,15 @@ func (s *textV2ANDBlockMaxTermState) loadNextBlock(ctx *textV2SearchContext, fie
 			s.it.Next()
 			continue
 		}
-		key, err := decodeTextV2PostingBlockKeyForPrefix(keyBytes, s.prefix)
+		keyBlockStart, keyBlockID, err := decodeTextV2PostingBlockKeySuffixForPrefix(keyBytes, s.prefix)
 		if err != nil {
 			return err
 		}
-		scanner, err := newTextV2PostingBlockEntryScanner(s.it.UnsafeValue(), s.scratch)
+		scanner, err := initTextV2PostingBlockEntryScanner(&s.scannerStorage, s.it.UnsafeValue(), s.scratch)
 		if err != nil {
 			return err
 		}
-		if scanner.block.BlockStart != key.BlockStart || scanner.block.BlockID != key.BlockID {
+		if scanner.block.BlockStart != keyBlockStart || scanner.block.BlockID != keyBlockID {
 			return errMalformedTextStorage("text-v2 posting block key/value identity mismatch")
 		}
 		if len(scanner.block.Summary.MaxFieldTermFrequencies) != fieldCount {
@@ -1115,7 +1131,7 @@ func (s *textV2ANDBlockMaxTermState) ensureDecoded(ctx *textV2SearchContext, fie
 	if err := s.scanner.Err(); err != nil {
 		return false, err
 	}
-	s.scratch = s.scanner.fieldScratch
+	s.scratch = s.scanner.scratch
 	s.decoded = true
 	return false, nil
 }
@@ -1301,42 +1317,44 @@ func visitTextV2ANDBlockMaxOverlap(
 				if !current {
 					return false, true, nil
 				}
-				docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, target)
+				if previousGeneration, seen := seenCurrent[target]; seen && previousGeneration == norm.Generation {
+					return false, false, errMalformedTextStorage("duplicate current text-v2 AND candidate ordinal %d generation %d", target, norm.Generation)
+				}
+				if candidateLimit > 0 && stats != nil && stats.TextCandidatesScored >= uint64(candidateLimit) {
+					stats.Truncated = true
+					stats.FailClosedReason = textSearchFailClosedCandidateLimit
+					return true, false, nil
+				}
+				score, err := scoreTextV2ANDBlockMaxCandidate(states, ctx, norm)
 				if err != nil {
 					return false, false, err
 				}
-				if ok {
-					if norm.Generation != docMap.Generation || norm.Flags != docMap.Flags {
-						return false, false, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", target)
+				seenCurrent[target] = norm.Generation
+				if stats != nil {
+					stats.TextCandidatesScored++
+				}
+				if top.needsDocumentIDForScore(score) {
+					docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, target)
+					if err != nil {
+						return false, false, err
 					}
-					if !docMap.tombstoned() {
-						if previousGeneration, seen := seenCurrent[target]; seen && previousGeneration == norm.Generation {
-							return false, false, errMalformedTextStorage("duplicate current text-v2 AND candidate ordinal %d generation %d", target, norm.Generation)
+					if ok {
+						if norm.Generation != docMap.Generation || norm.Flags != docMap.Flags {
+							return false, false, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", target)
 						}
-						if candidateLimit > 0 && stats != nil && stats.TextCandidatesScored >= uint64(candidateLimit) {
-							stats.Truncated = true
-							stats.FailClosedReason = textSearchFailClosedCandidateLimit
-							return true, false, nil
-						}
-						score, err := scoreTextV2ANDBlockMaxCandidate(states, ctx, norm)
-						if err != nil {
-							return false, false, err
-						}
-						topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
-						pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
-						if admitted && retainDetail {
-							detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
-							for _, state := range states {
-								if err := detail.addPostingValue(state.term, state.entries[state.entryIdx].value); err != nil {
-									return false, false, err
+						if !docMap.tombstoned() {
+							topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
+							pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
+							if admitted && retainDetail {
+								detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+								for _, state := range states {
+									if err := detail.addPostingValue(state.term, state.entries[state.entryIdx].value); err != nil {
+										return false, false, err
+									}
 								}
+								top.candidates[pos].detail = detail
 							}
-							top.candidates[pos].detail = detail
-						}
-						seenCurrent[target] = norm.Generation
-						if stats != nil {
-							stats.TextCandidatesScored++
-							if thresholdChanged {
+							if stats != nil && thresholdChanged {
 								stats.TextBlockMaxThresholds++
 							}
 						}
@@ -1748,25 +1766,11 @@ func visitTextV2ORBlockMaxCandidate(
 	if err != nil {
 		return false, err
 	}
-	var docMap textV2SearchDocMapEntry
-	if ok && !norm.tombstoned() {
-		docMap, ok, err = cache.docMapEntry(snap, catalog, ctx, target)
-		if err != nil {
-			return false, err
-		}
-		if ok {
-			if norm.Generation != docMap.Generation || norm.Flags != docMap.Flags {
-				return false, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", target)
-			}
-			if docMap.tombstoned() {
-				ok = false
-			}
-		}
-	}
+	currentOK := ok && !norm.tombstoned()
 
 	score := 0.0
 	matched := false
-	if ok {
+	if currentOK {
 		// Accumulate in canonical query-term order (scoreStates), not the
 		// WAND-active order (advanceStates), so floating-point ties match the
 		// exhaustive scorer's deterministic ordering exactly.
@@ -1801,28 +1805,41 @@ func visitTextV2ORBlockMaxCandidate(
 		}
 	}
 	if matched {
-		topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
-		pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
-		if admitted && retainDetail {
-			detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
-			for _, state := range scoreStates {
-				if state == nil || state.exhausted || state.currentFirst() != target || state.entryIdx >= len(state.entries) || state.entries[state.entryIdx].ordinal != target {
-					continue
-				}
-				posting := state.entries[state.entryIdx].value
-				if posting.generation != norm.Generation {
-					continue
-				}
-				if err := detail.addPostingValue(state.term, posting); err != nil {
-					return false, err
-				}
-			}
-			top.candidates[pos].detail = detail
-		}
 		if stats != nil {
 			stats.TextCandidatesScored++
-			if thresholdChanged {
-				stats.TextBlockMaxThresholds++
+		}
+		if top.needsDocumentIDForScore(score) {
+			docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, target)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				if norm.Generation != docMap.Generation || norm.Flags != docMap.Flags {
+					return false, errMalformedTextStorage("text-v2 norm/docmap generation mismatch for ordinal %d", target)
+				}
+				if !docMap.tombstoned() {
+					topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
+					pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
+					if admitted && retainDetail {
+						detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+						for _, state := range scoreStates {
+							if state == nil || state.exhausted || state.currentFirst() != target || state.entryIdx >= len(state.entries) || state.entries[state.entryIdx].ordinal != target {
+								continue
+							}
+							posting := state.entries[state.entryIdx].value
+							if posting.generation != norm.Generation {
+								continue
+							}
+							if err := detail.addPostingValue(state.term, posting); err != nil {
+								return false, err
+							}
+						}
+						top.candidates[pos].detail = detail
+					}
+					if stats != nil && thresholdChanged {
+						stats.TextBlockMaxThresholds++
+					}
+				}
 			}
 		}
 	}
@@ -1968,6 +1985,7 @@ func scanTextV2SearchPostingBlocksTerm(
 	}
 	defer func() { _ = it.Close() }()
 	var scratch []uint32
+	var scannerStorage textV2PostingBlockEntryScanner
 	var blocksSeen uint64
 	fieldCount := len(ctx.fieldNames)
 	for it.Valid() {
@@ -1979,15 +1997,15 @@ func scanTextV2SearchPostingBlocksTerm(
 			it.Next()
 			continue
 		}
-		key, err := decodeTextV2PostingBlockKeyForPrefix(keyBytes, prefix)
+		keyBlockStart, keyBlockID, err := decodeTextV2PostingBlockKeySuffixForPrefix(keyBytes, prefix)
 		if err != nil {
 			return false, err
 		}
-		scanner, err := newTextV2PostingBlockEntryScanner(it.UnsafeValue(), scratch)
+		scanner, err := initTextV2PostingBlockEntryScanner(&scannerStorage, it.UnsafeValue(), scratch)
 		if err != nil {
 			return false, err
 		}
-		if scanner.block.BlockStart != key.BlockStart || scanner.block.BlockID != key.BlockID {
+		if scanner.block.BlockStart != keyBlockStart || scanner.block.BlockID != keyBlockID {
 			return false, errMalformedTextStorage("text-v2 posting block key/value identity mismatch")
 		}
 		if len(scanner.block.Summary.MaxFieldTermFrequencies) != fieldCount {
@@ -2046,7 +2064,7 @@ func scanTextV2SearchPostingBlocksTerm(
 		if err := scanner.Err(); err != nil {
 			return false, err
 		}
-		scratch = scanner.fieldScratch
+		scratch = scanner.scratch
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
