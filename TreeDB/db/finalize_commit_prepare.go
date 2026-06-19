@@ -58,6 +58,8 @@ func (db *DB) prepareFinalizeCommitDurability(sync bool) error {
 		return errors.New("missing index")
 	}
 	valueLogAppender := db.currentValueLogAppender()
+	db.publishPrepareMu.Lock()
+	defer db.publishPrepareMu.Unlock()
 	if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, sync); err != nil {
 		return wrapFinalizeCommitError(err, true)
 	}

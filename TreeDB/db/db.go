@@ -154,6 +154,7 @@ type DB struct {
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
 	commitMu         sync.Mutex
+	publishPrepareMu sync.Mutex
 	updateLocks      keyupdate.Locks
 	maintenanceMu    sync.Mutex
 	combineMu        sync.RWMutex
