@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -23,6 +24,115 @@ var (
 	// before publishing a reconstructed root.
 	ErrSpanNativeReducerValidation = errors.New("zipper: span-native reducer validation failed")
 )
+
+// spanNativeLeafLogOutputGate prepares leaf-log payloads in span-native
+// workers, then bounds the durable append fan-out to the apply worker count.
+// The resulting refs are still only published by the coordinator after every
+// worker succeeds and the reducer validates the replacement root; any output
+// written before a later failure is accounted as abandoned by the DB flush path.
+type spanNativeLeafLogOutputGate struct {
+	sem chan struct{}
+}
+
+var spanNativeLeafLogPayloadScratchPool sync.Pool
+
+func newSpanNativeLeafLogOutputGate(limit int) *spanNativeLeafLogOutputGate {
+	if limit <= 0 {
+		return &spanNativeLeafLogOutputGate{}
+	}
+	return &spanNativeLeafLogOutputGate{sem: make(chan struct{}, limit)}
+}
+
+func acquireSpanNativeLeafLogPayloadScratch() []byte {
+	if v := spanNativeLeafLogPayloadScratchPool.Get(); v != nil {
+		if buf, ok := v.([]byte); ok && cap(buf) <= page.PageSize*2 {
+			return buf[:0]
+		}
+	}
+	return make([]byte, 0, page.PageSize)
+}
+
+func releaseSpanNativeLeafLogPayloadScratch(buf []byte) {
+	if cap(buf) == 0 || cap(buf) > page.PageSize*2 {
+		return
+	}
+	spanNativeLeafLogPayloadScratchPool.Put(buf[:0])
+}
+
+func (g *spanNativeLeafLogOutputGate) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	prepared := z.leafPageLogConsumesPreparedPayloads(false)
+	var payload []byte
+	var scratch []byte
+	if prepared {
+		scratch = acquireSpanNativeLeafLogPayloadScratch()
+		var err error
+		payload, _, err = valuelog.MaybeCompactLeafLogPayloadTo(scratch[:0], leafPage)
+		if err != nil {
+			releaseSpanNativeLeafLogPayloadScratch(scratch)
+			return page.ChildRef{}, err
+		}
+	}
+	waitStart := time.Now()
+	if g != nil && g.sem != nil {
+		g.sem <- struct{}{}
+		defer func() { <-g.sem }()
+	}
+	reservationWait := time.Since(waitStart)
+	if metrics != nil && reservationWait > 0 {
+		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
+	}
+	if !prepared {
+		return z.persistLeafPageData(leafPage, metrics)
+	}
+	ref, err := z.persistPreparedLeafPageDataTo(leafPage, payload, metrics)
+	releaseSpanNativeLeafLogPayloadScratch(scratch)
+	return ref, err
+}
+
+func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	refs = refs[:0]
+	if len(leafPages) == 0 {
+		return refs, nil
+	}
+	if len(leafPages) == 1 {
+		ref, err := g.persistLeafPageData(z, leafPages[0], metrics)
+		if err != nil {
+			return nil, err
+		}
+		return append(refs, ref), nil
+	}
+	prepared := z.leafPageLogConsumesPreparedPayloads(true)
+	var payloads [][]byte
+	if prepared {
+		var payloadInline [8][]byte
+		if len(leafPages) <= len(payloadInline) {
+			payloads = payloadInline[:len(leafPages)]
+		} else {
+			payloads = make([][]byte, len(leafPages))
+		}
+		var arena []byte
+		for i, leafPage := range leafPages {
+			var err error
+			arena, payloads[i], _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(arena, leafPage)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	waitStart := time.Now()
+	if g != nil && g.sem != nil {
+		g.sem <- struct{}{}
+		defer func() { <-g.sem }()
+	}
+	reservationWait := time.Since(waitStart)
+	if metrics != nil && reservationWait > 0 {
+		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
+	}
+	if !prepared {
+		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
+	}
+	return z.persistPreparedLeafPageBatchDataTo(leafPages, payloads, refs, metrics)
+}
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {
 	if !validateSpanNativePreparedPlan(ops, prepared) {
@@ -59,6 +169,17 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	}
 	outputs := coordinatorScratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
 	defer outputs.release()
+	var leafLogOutput *spanNativeLeafLogOutputGate
+	if z.outerLeavesInValueLog {
+		if z.leafPageLog == nil {
+			return ApplyResult{}, true, errors.New("zipper: outer leaves in value log enabled without leaf page log")
+		}
+		appendLimit := 1
+		if concurrent, ok := z.leafPageLog.(LeafPageConcurrentAppendLog); ok && concurrent.ConcurrentLeafPageAppends() {
+			appendLimit = scheduledWorkers
+		}
+		leafLogOutput = newSpanNativeLeafLogOutputGate(appendLimit)
+	}
 	workerScratches := coordinatorScratch.acquireSpanWorkerScratchSlots(len(workerRanges))
 	defer func() {
 		for i := range workerScratches {
@@ -98,15 +219,22 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 				localSplits = nil
 			}
 		}
+		recordFailedRange := func() {
+			rangeMetrics[job] = localMetrics
+			rangeRetired[job] = localRetired
+		}
+		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafLogOutput}
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
-			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, workerScratch, false, applyRunConfig{maxParallelWorkers: 1})
+			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, workerScratch, false, workerApplyCfg)
 			if err != nil {
+				recordFailedRange()
 				releaseLocalSplits()
 				errOnce.Do(func() { firstErr = err })
 				return
 			}
 			if err := outputs.setRef(i, newRef); err != nil {
+				recordFailedRange()
 				releaseLocalSplits()
 				errOnce.Do(func() {
 					firstErr = fmt.Errorf("%w: span %d ref kind %d: %v", ErrSpanNativeOutputOwnership, i, newRef.Kind, err)
@@ -194,7 +322,6 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 		return ApplyResult{Metrics: metrics, PendingRetiredPages: retired}, true, firstErr
 	}
-
 	rootReduceStart := time.Now()
 	newRootID, err := z.reduceSpanNativeRootWithContext(rootID, spanNativeLeafReplacements{spans: prepared.LeafSpans, outputs: &outputs}, &metrics, &retired, coordinatorScratch)
 	metrics.ZipperRootReduceNs += time.Since(rootReduceStart).Nanoseconds()

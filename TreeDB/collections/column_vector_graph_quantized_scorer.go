@@ -368,10 +368,14 @@ func columnVectorGraphScalarU8AbsQuantileQueryAlpha(query []float32, queryInvNor
 		values = ensureColumnVectorGraphNativeFloat32Scratch(values, len(query))
 	}
 	values = values[:len(query)]
+	maxAbs := float32(0)
 	for i, value := range query {
 		normalized := value * queryInvNorm
 		if normalized < 0 {
 			normalized = -normalized
+		}
+		if normalized > maxAbs {
+			maxAbs = normalized
 		}
 		values[i] = normalized
 	}
@@ -383,7 +387,29 @@ func columnVectorGraphScalarU8AbsQuantileQueryAlpha(query []float32, queryInvNor
 	if idx > len(values) {
 		idx = len(values)
 	}
-	return columnVectorGraphSelectKthFloat32(values, idx-1)
+	alpha := columnVectorGraphSelectKthFloat32(values, idx-1)
+	if validColumnVectorGraphScalarU8Alpha(alpha) {
+		return alpha
+	}
+	// Match build-time abs_quantile's sparse-granule positive fallback: if
+	// the requested quantile lands on zero but the query has a positive finite
+	// coordinate, use the smallest positive finite alpha instead of failing the
+	// otherwise valid query as unavailable.
+	if maxAbs > 0 {
+		fallback := float32(0)
+		for _, candidate := range values {
+			if validColumnVectorGraphScalarU8Alpha(candidate) && (fallback == 0 || candidate < fallback) {
+				fallback = candidate
+			}
+		}
+		if validColumnVectorGraphScalarU8Alpha(fallback) {
+			return fallback
+		}
+		if validColumnVectorGraphScalarU8Alpha(maxAbs) {
+			return maxAbs
+		}
+	}
+	return alpha
 }
 
 func columnVectorGraphSelectKthFloat32(values []float32, k int) float32 {

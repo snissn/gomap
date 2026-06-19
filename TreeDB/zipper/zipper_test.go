@@ -144,6 +144,7 @@ func (s *memoryLeafPageStore) resetObservations() {
 }
 
 type batchMemoryLeafPageStore struct {
+	mu             sync.Mutex
 	next           uint32
 	pages          map[page.LeafLogPtr][]byte
 	batchLens      []int
@@ -157,6 +158,8 @@ func newBatchMemoryLeafPageStore() *batchMemoryLeafPageStore {
 }
 
 func (s *batchMemoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.singleCalls++
 	if s.next == 0 {
 		s.next = 4
@@ -170,6 +173,8 @@ func (s *batchMemoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLog
 }
 
 func (s *batchMemoryLeafPageStore) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.batchLens = append(s.batchLens, len(leafPages))
 	if s.next == 0 {
 		s.next = 4
@@ -196,6 +201,8 @@ func (s *batchMemoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, ok := s.pages[leafPtr]
 	if !ok {
 		return nil, io.EOF
@@ -209,6 +216,8 @@ func (s *batchMemoryLeafPageStore) ReadUnsafeToWithCacheHit(ptr page.ValuePtr, d
 	if err != nil {
 		return nil, false, false, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, ok := s.pages[leafPtr]
 	if !ok {
 		return nil, false, false, io.EOF
@@ -223,6 +232,8 @@ func (s *batchMemoryLeafPageStore) ReadUnsafeToWithCacheHit(ptr page.ValuePtr, d
 }
 
 func (s *batchMemoryLeafPageStore) ReadLeafLogPageUnsafeTo(ptr page.LeafLogPtr, dst []byte) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, ok := s.pages[ptr]
 	if !ok {
 		return nil, false, io.EOF
@@ -925,7 +936,7 @@ func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
 	scratch := newMergeScratch()
 
 	var metrics adaptive.Metrics
-	_, splits, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, false)
+	_, splits, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, false, applyRunConfig{})
 	if err != nil {
 		t.Fatalf("mergeLeaf failed: %v", err)
 	}
@@ -1218,7 +1229,7 @@ func BenchmarkMergeLeafOuterLeafBatchScratch(b *testing.B) {
 		builder.SetPageID(0)
 		scratch := z.acquireApplyScratch()
 		var metrics adaptive.Metrics
-		_, _, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, true)
+		_, _, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, true, applyRunConfig{})
 		z.releaseApplyScratch(scratch)
 		if err != nil {
 			b.Fatalf("mergeLeaf: %v", err)
