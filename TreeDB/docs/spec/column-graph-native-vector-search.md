@@ -255,13 +255,14 @@ GOWORK=off go test ./TreeDB/collections \
 
 The stable row labels and prepared typed-column placeholders are defined in
 [`typed-column-graph-search-benchmark-matrix.md`](typed-column-graph-search-benchmark-matrix.md).
-Use the #1926/#2454 quantized score-plane matrix when collecting exact FP32,
-scalar_u8, and pure-Go RaBitQ evidence:
+Use the #1926/#2454/#2845 quantized score-plane matrix when collecting exact
+FP32, legacy scalar_u8, explicit per-granule-alpha scalar_u8, and pure-Go RaBitQ
+evidence:
 
 ```sh
 GOMAXPROCS=8 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
-  -bench '^(BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450)$' \
+  -bench '^(BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedAlphaSearchWithBuffer2414|BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8QuantizedAlpha2415|BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452|BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926|BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450)$' \
   -benchmem -benchtime=100x -count=3
 ```
 

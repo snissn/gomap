@@ -985,11 +985,11 @@ Coverage:
 Invariant:
 - Exact/default `column_graph` search remains authoritative float32-vector
   scoring unless callers explicitly select a named quantized score plane.
-- `quantized_only` returns estimated legacy scalar_u8, pure-Go `rabitq_1bit`,
-  or prototype `brq_1bit` scores from the selected named score plane and must
-  not read exact vectors or norms during scoring. Calibrated per-granule-alpha
-  scalar_u8 assets are persisted/prepared but still fail closed for search until
-  an alpha-aware scorer lands.
+- `quantized_only` returns estimated legacy scalar_u8, explicit
+  per-granule-alpha scalar_u8, pure-Go `rabitq_1bit`, or prototype `brq_1bit`
+  scores from the selected named score plane and must not read exact vectors or
+  norms during scoring. Omitted `scalar_u8_calibration` remains legacy after the
+  #2845 no-promote gate; calibrated alpha is explicit opt-in.
 - `quantized_rerank` uses the selected quantized traversal over the normalized
   `ef_search` candidate pool, trims to `QuantizedRerankCandidates`, exact-reranks
   only that shortlist by graph ordinal, and returns exact cosine scores.
@@ -1024,10 +1024,14 @@ Coverage:
     `quantized_only` vs `quantized_rerank` `ns/op`, `ops/sec`, `B/op`,
     `allocs/op`, recall@K, candidate/rerank counts, code bytes, exact vector/norm
     bytes, fallback counters, and asset bytes/vector on one fixture.
+  - `BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedAlphaSearchWithBuffer2414`
+    and `BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8QuantizedAlpha2415`
+    report explicit per-granule-alpha scalar_u8 lower-level/collection rows and
+    `quantized_score_codec_scalar_u8_alpha/search` counters for the #2845 gate.
   - `BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926` reports rebuild
-    cost and storage/asset bytes for exact assets versus scalar_u8 assets; alpha
-    metadata asset bytes should be reported separately when calibrated scalar_u8
-    rebuild rows are added.
+    cost and storage/asset bytes for exact assets versus legacy and
+    per-granule-alpha scalar_u8 assets, including alpha metadata bytes,
+    alpha distribution, and code-boundary rate for calibrated rows.
   - `BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451`,
     `BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452`,
     and `BenchmarkColumnGraphRabitQQuantizedRebuildStorage2450` report pure-Go

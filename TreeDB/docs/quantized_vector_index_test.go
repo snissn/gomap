@@ -24,9 +24,11 @@ func TestDocs_QuantizedVectorIndex1926Closeout(t *testing.T) {
 		"Missing, stale, corrupt, mismatched, unsupported, closed, or unprepared assets return `ErrVectorIndexSearchUnavailable`",
 		"BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926",
 		"BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedSearchWithBuffer2414",
+		"BenchmarkVectorIndexSearcherColumnGraphScalarU8QuantizedAlphaSearchWithBuffer2414",
 		"BenchmarkVectorIndexSearcherColumnGraphRabitQQuantizedSearchWithBuffer2451",
 		"BenchmarkVectorIndexSearcherColumnGraphBRQQuantizedSearchWithBuffer2481",
 		"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8Quantized2415",
+		"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8QuantizedAlpha2415",
 		"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452",
 		"Collection.SearchVectorIndexWithBuffer",
 		"BenchmarkColumnGraphScalarU8QuantizedRebuildStorage1926",
@@ -39,6 +41,9 @@ func TestDocs_QuantizedVectorIndex1926Closeout(t *testing.T) {
 		"vector_B/search",
 		"norm_B/search",
 		"quantized_asset_B/vector",
+		"quantized_score_codec_scalar_u8_alpha/search",
+		"scalar-u8-alpha-default-gate-2845.md",
+		"per-granule-alpha remains explicit opt-in",
 		"rabitq-closeout-2454.md",
 		"vector-search-closeout-2483.md",
 		"RaBitQ go-highway acceleration did not land",
@@ -56,6 +61,7 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 	checks := map[string][]string{
 		filepath.Join(treeRoot, "docs", "spec", "README.md"): {
 			"quantized-vector-index.md",
+			"scalar-u8-alpha-default-gate-2845.md",
 			"rabitq-closeout-2454.md",
 			"vector-search-closeout-2483.md",
 		},
@@ -70,6 +76,7 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 		},
 		filepath.Join(treeRoot, "docs", "spec", "typed-column-graph-search-admission.md"): {
 			"BenchmarkColumnGraphScalarU8QuantizedScorePlanes1926",
+			"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphScalarU8QuantizedAlpha2415",
 			"BenchmarkCollectionSearchVectorIndexWithBufferColumnGraphRabitQQuantized2452",
 			"Current scalar Go scorer evidence makes no speedup claim",
 		},
@@ -103,6 +110,31 @@ func TestDocs_QuantizedVectorIndex1926LinkedOwners(t *testing.T) {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing quantized vector index closeout text %q", path, want)
 			}
+		}
+	}
+}
+
+func TestDocs_ScalarU8AlphaDefaultGate2845(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "scalar-u8-alpha-default-gate-2845.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read scalar_u8 alpha default gate: %v", err)
+	}
+	text := string(data)
+	normalized := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"Status: **no-promote / explicit opt-in**",
+		"Omitted `scalar_u8_calibration` continues to mean legacy `scalar_u8` v1",
+		"Collection.SearchVectorIndexWithBuffer",
+		"81.25%",
+		"100%",
+		"quantized_score_codec_scalar_u8_alpha/search=1",
+		"0 B/op`, `0 allocs/op",
+		"alpha min/mean/max `0.1495`",
+	} {
+		if !strings.Contains(normalized, strings.Join(strings.Fields(want), " ")) {
+			t.Fatalf("scalar_u8 alpha default gate missing %q", want)
 		}
 	}
 }

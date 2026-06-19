@@ -1103,8 +1103,8 @@ Legacy scalar_u8 score planes use `byte_vector` over `raw_fixed_bytes` with
 asset IDs `quantized/<name>/codes`; per-granule-alpha scalar_u8 uses config-hash
 asset IDs `quantized/<name>/scalar_u8/<hash>/codes` plus
 `quantized/<name>/scalar_u8/<hash>/alpha` with logical type `scalar_u8_alpha`
-and physical encoding `raw_float32_uint32`. Declared `rabitq_1bit` v1 score
-planes use `packed_bit_vector` over `raw_packed_bit_vector` with asset IDs
+and physical encoding `raw_float32_uint32`. Declared `rabitq_1bit` v1 score planes
+use `packed_bit_vector` over `raw_packed_bit_vector` with asset IDs
 `quantized/<name>/packed_codes`; prototype `brq_1bit` v1 score planes use asset
 IDs `quantized/<name>/brq_1bit/packed_codes`. The vector-index-state checksum
 includes the control record, but the record's base checksum excludes
