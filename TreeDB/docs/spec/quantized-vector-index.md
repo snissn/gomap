@@ -245,8 +245,8 @@ Representative #2507 BRQ prototype evidence is in
 16 logical code B/vector, and about 74.47 quantized asset B/vector in its rebuild
 shape. This is prototype evidence, not a promotion or crossover claim.
 
-The #2845 per-granule-alpha scalar_u8 gate recorded a local count=3 10k x 768
-smoke in `scalar-u8-alpha-default-gate-2845.md`. Alpha improved the production
+The #2845 per-granule-alpha scalar_u8 gate recorded a latest-main count=10 10k x 768
+matrix in `scalar-u8-alpha-default-gate-2845.md`. Alpha improved the production
 gate collection recall from 81.25% to 100% on that fixture and kept hot rows at
 `0 B/op`, `0 allocs/op`, but collection buffered runtime regressed on several
 rows. Therefore omitted `scalar_u8_calibration` remains legacy, and
