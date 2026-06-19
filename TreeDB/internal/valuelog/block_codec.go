@@ -60,7 +60,27 @@ func putBlockZstdEncoder(enc *zstd.Encoder) {
 	blockZstdEncoderPool.Put(enc)
 }
 
+// blockCodecScratch holds per-writer/preparer codec state. It is intentionally
+// caller-owned and not safe for concurrent use.
+type blockCodecScratch struct {
+	lz4Compressor *lz4.Compressor
+}
+
+func (s *blockCodecScratch) lz4() *lz4.Compressor {
+	if s == nil {
+		return nil
+	}
+	if s.lz4Compressor == nil {
+		s.lz4Compressor = &lz4.Compressor{}
+	}
+	return s.lz4Compressor
+}
+
 func encodeBlockPayload(codec BlockCodec, raw []byte, dst []byte) ([]byte, error) {
+	return encodeBlockPayloadWithScratch(codec, raw, dst, nil)
+}
+
+func encodeBlockPayloadWithScratch(codec BlockCodec, raw []byte, dst []byte, scratch *blockCodecScratch) ([]byte, error) {
 	if len(raw) == 0 {
 		if dst == nil {
 			return nil, nil
@@ -86,7 +106,15 @@ func encodeBlockPayload(codec BlockCodec, raw []byte, dst []byte) ([]byte, error
 			dst = make([]byte, bound)
 		}
 		dst = dst[:bound]
-		n, err := lz4.CompressBlock(raw, dst, nil)
+		var (
+			n   int
+			err error
+		)
+		if scratch != nil {
+			n, err = scratch.lz4().CompressBlock(raw, dst)
+		} else {
+			n, err = lz4.CompressBlock(raw, dst, nil)
+		}
 		if err != nil {
 			return nil, err
 		}

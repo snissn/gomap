@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -16,6 +17,7 @@ type leafPageCacheTestFallback struct {
 	readUnsafeToCalls int
 	err               error
 	data              []byte
+	checksumEnabled   bool
 }
 
 func (f *leafPageCacheTestFallback) Read(ptr page.ValuePtr) ([]byte, error) {
@@ -44,6 +46,10 @@ func (f *leafPageCacheTestFallback) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) 
 		return dst, true, nil
 	}
 	return f.data, false, nil
+}
+
+func (f *leafPageCacheTestFallback) ReadChecksumEnabled() bool {
+	return f.checksumEnabled
 }
 
 type leafPageCacheUnsafeOnlyFallback struct {
@@ -265,6 +271,135 @@ func TestCachedLeafPageReaderMissReportsNoCacheHit(t *testing.T) {
 	}
 	if stats := cache.stats(); stats.Misses != 1 || stats.Stores != 0 || stats.Hits != 0 {
 		t.Fatalf("stats=%+v, want one miss and no store", stats)
+	}
+}
+
+func TestCachedLeafPageReaderReadMissAdmissionStoresRepeatedMiss(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x24}, page.PageSize)
+	fallback := &leafPageCacheTestFallback{data: leaf, checksumEnabled: true}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	dst := make([]byte, 0, page.PageSize)
+	for i := 0; i < 2; i++ {
+		got, usedDst, cacheHit, err := reader.ReadUnsafeToWithCacheHit(ptr.ValuePtr(), dst[:0])
+		if err != nil {
+			t.Fatalf("ReadUnsafeToWithCacheHit miss %d: %v", i, err)
+		}
+		if cacheHit {
+			t.Fatalf("miss %d cacheHit=true, want false before admission is served", i)
+		}
+		if !usedDst || !bytes.Equal(got, leaf) {
+			t.Fatalf("miss %d got usedDst=%v equal=%v", i, usedDst, bytes.Equal(got, leaf))
+		}
+	}
+	if fallback.readUnsafeToCalls != 2 {
+		t.Fatalf("fallback ReadUnsafeTo calls=%d, want 2", fallback.readUnsafeToCalls)
+	}
+	stats := cache.stats()
+	if stats.Misses != 2 || stats.ReadMissAdmissionSkips != 1 || stats.ReadMissAdmissionStores != 1 || stats.Stores != 1 {
+		t.Fatalf("stats after repeated miss=%+v, want one skipped candidate and one store", stats)
+	}
+
+	got, usedDst, cacheHit, err := reader.ReadUnsafeToWithCacheHit(ptr.ValuePtr(), dst[:0])
+	if err != nil {
+		t.Fatalf("ReadUnsafeToWithCacheHit hit: %v", err)
+	}
+	if !cacheHit || !usedDst || !bytes.Equal(got, leaf) {
+		t.Fatalf("cache hit got cacheHit=%v usedDst=%v equal=%v", cacheHit, usedDst, bytes.Equal(got, leaf))
+	}
+	if fallback.readUnsafeToCalls != 2 {
+		t.Fatalf("fallback calls after cache hit=%d, want 2", fallback.readUnsafeToCalls)
+	}
+
+	_, _, state, ok := cache.getToWithState(ptr, dst[:0])
+	if !ok || !state.RecordChecksumVerified || state.PageChecksumVerified {
+		t.Fatalf("checksum state=%+v ok=%v, want record verified only", state, ok)
+	}
+	if !cache.markPageChecksumVerified(ptr) {
+		t.Fatal("record-verified read-miss admission should accept page checksum mark")
+	}
+}
+
+func TestCachedLeafPageReaderReadMissAdmissionUnknownChecksumStaysUnverified(t *testing.T) {
+	cache := newLeafPageReadCache(8)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}
+	leaf := bytes.Repeat([]byte{0x24}, page.PageSize)
+	fallback := &leafPageCacheUnsafeOnlyFallback{data: leaf}
+	reader := newCachedLeafPageReader(cache, fallback)
+
+	for i := 0; i < 2; i++ {
+		if _, _, err := reader.ReadUnsafeTo(ptr.ValuePtr(), make([]byte, 0, page.PageSize)); err != nil {
+			t.Fatalf("ReadUnsafeTo miss %d: %v", i, err)
+		}
+	}
+	if stats := cache.stats(); stats.ReadMissAdmissionStores != 1 {
+		t.Fatalf("stats=%+v, want one read-miss admission store", stats)
+	}
+	if cache.markPageChecksumVerified(ptr) {
+		t.Fatal("unknown-checksum read-miss admission should not accept page checksum mark")
+	}
+}
+
+var cachedLeafPageReaderLZ4BenchSink byte
+
+type leafPageCacheLZ4BenchFallback struct {
+	encoded []byte
+	calls   int
+}
+
+func (f *leafPageCacheLZ4BenchFallback) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	f.calls++
+	out := make([]byte, page.PageSize)
+	if _, err := lz4.UncompressBlock(f.encoded, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (f *leafPageCacheLZ4BenchFallback) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	f.calls++
+	if cap(dst) < page.PageSize {
+		dst = make([]byte, page.PageSize)
+	} else {
+		dst = dst[:page.PageSize]
+	}
+	n, err := lz4.UncompressBlock(f.encoded, dst)
+	if err != nil {
+		return nil, false, err
+	}
+	return dst[:n], true, nil
+}
+
+func (f *leafPageCacheLZ4BenchFallback) ReadChecksumEnabled() bool { return true }
+
+func BenchmarkCachedLeafPageReaderRepeatedLZ4ReadMissAdmission(b *testing.B) {
+	leaf := bytes.Repeat([]byte("leaf-page|"), (page.PageSize/10)+1)
+	leaf = leaf[:page.PageSize]
+	encoded := make([]byte, lz4.CompressBlockBound(len(leaf)))
+	n, err := lz4.CompressBlock(leaf, encoded, nil)
+	if err != nil || n <= 0 {
+		b.Fatalf("compress: n=%d err=%v", n, err)
+	}
+	fallback := &leafPageCacheLZ4BenchFallback{encoded: encoded[:n]}
+	cache := newLeafPageReadCache(64)
+	reader := newCachedLeafPageReader(cache, fallback)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: uint32(n)}
+	dst := make([]byte, 0, page.PageSize)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, _, _, err := reader.ReadUnsafeToWithCacheHit(ptr.ValuePtr(), dst[:0])
+		if err != nil {
+			b.Fatalf("read: %v", err)
+		}
+		cachedLeafPageReaderLZ4BenchSink ^= got[0]
+	}
+	b.StopTimer()
+	if b.N > 0 {
+		b.ReportMetric(float64(fallback.calls)/float64(b.N), "fallback_calls/op")
 	}
 }
 
