@@ -759,7 +759,7 @@ func TestServiceIndexCapabilitiesExcludeScalarU8PerGranuleAlphaRerank2848(t *tes
 	}
 }
 
-func TestServiceUpsertScalarU8PerGranuleAlphaDefaultPreflightNoCommit2842(t *testing.T) {
+func TestServiceUpsertScalarU8PerGranuleAlphaDefaultBuildsAssets2843(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -785,20 +785,16 @@ func TestServiceUpsertScalarU8PerGranuleAlphaDefaultPreflightNoCommit2842(t *tes
 	if err != nil {
 		t.Fatalf("CreateIndex alpha: %v", err)
 	}
-	_, err = svc.UpsertDocuments(ctx, "bench_alpha_default", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}})
-	if ErrorCodeOf(err) != CodeUnsupported || !strings.Contains(err.Error(), "scalar_u8 calibration") {
-		t.Fatalf("default UpsertDocuments alpha err=%v code=%s want unsupported scalar_u8 calibration", err, ErrorCodeOf(err))
+	if _, err := svc.UpsertDocuments(ctx, "bench_alpha_default", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("default UpsertDocuments alpha: %v", err)
 	}
 	count, err := svc.CountDocuments(ctx, "bench_alpha_default", CountDocumentsRequest{})
-	if err != nil {
-		t.Fatalf("CountDocuments after failed default upsert: %v", err)
-	}
-	if count.Count != 0 {
-		t.Fatalf("default upsert committed before unsupported auto-rebuild failure; count=%d want 0", count.Count)
+	if err != nil || count.Count != 1 {
+		t.Fatalf("CountDocuments after default alpha upsert=%+v err=%v want 1", count, err)
 	}
 }
 
-func TestServiceOptimizeScalarU8PerGranuleAlphaFailsClosed2842(t *testing.T) {
+func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -831,8 +827,8 @@ func TestServiceOptimizeScalarU8PerGranuleAlphaFailsClosed2842(t *testing.T) {
 	if err != nil || count.Count != 1 {
 		t.Fatalf("CountDocuments after deferred alpha upsert=%+v err=%v want 1", count, err)
 	}
-	if _, err := svc.OptimizeIndex(ctx, "bench_alpha", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeUnsupported {
-		t.Fatalf("OptimizeIndex alpha err=%v code=%s want unsupported, not internal", err, ErrorCodeOf(err))
+	if _, err := svc.OptimizeIndex(ctx, "bench_alpha", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex alpha: %v", err)
 	}
 }
 

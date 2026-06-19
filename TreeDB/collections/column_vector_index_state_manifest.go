@@ -19,6 +19,7 @@ const (
 	columnVectorIndexStateAssetRoleRowRefs           = "row_refs"
 	columnVectorIndexStateAssetRoleDocumentIDs       = "document_ids"
 	columnVectorIndexStateAssetRoleQuantizedCodes    = "quantized_codes"
+	columnVectorIndexStateAssetRoleQuantizedAlpha    = "quantized_alpha"
 	columnVectorIndexStateAssetRoleHNSWSearchPack    = "hnsw_search_pack"
 	columnVectorIndexStateHNSWSearchPackAssetID      = "hnsw_search_pack_v1"
 
@@ -29,6 +30,7 @@ const (
 	columnVectorIndexStateLogicalTypeBytes           = "bytes"
 	columnVectorIndexStateLogicalTypeByteVector      = "byte_vector"
 	columnVectorIndexStateLogicalTypePackedBitVector = "packed_bit_vector"
+	columnVectorIndexStateLogicalTypeScalarU8Alpha   = "scalar_u8_alpha"
 	columnVectorIndexStateLogicalTypeSearchPack      = "hnsw_search_pack"
 	columnVectorIndexStateEncodingRawUint32List      = "raw_uint32_offsets_list"
 	columnVectorIndexStateEncodingRawInt64           = "raw_int64"
@@ -37,6 +39,7 @@ const (
 	columnVectorIndexStateEncodingRawBytesOffsets    = "raw_bytes_offsets"
 	columnVectorIndexStateEncodingRawFixedBytes      = "raw_fixed_bytes"
 	columnVectorIndexStateEncodingRawPackedBitVector = "raw_packed_bit_vector"
+	columnVectorIndexStateEncodingRawFloat32Uint32   = "raw_float32_uint32"
 	columnVectorIndexStateEncodingHNSWSearchPackV1   = "hnsw_search_pack_v1"
 )
 
@@ -362,7 +365,11 @@ func validateColumnVectorIndexStateAssetSnapshot(snapshot columnVectorIndexState
 	if asset.Role == columnVectorIndexStateAssetRoleHNSWSearchPack && asset.AssetID != columnVectorIndexStateHNSWSearchPackAssetID {
 		return fmt.Errorf("hnsw_search_pack asset id=%q want %q", asset.AssetID, columnVectorIndexStateHNSWSearchPackAssetID)
 	}
-	if asset.RowCount != snapshot.RowCount {
+	if asset.Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
+		if asset.RowCount < 0 || (snapshot.RowCount > 0 && asset.RowCount == 0) || asset.RowCount > snapshot.RowCount {
+			return fmt.Errorf("quantized_alpha row_count=%d is invalid for vector-index row_count=%d", asset.RowCount, snapshot.RowCount)
+		}
+	} else if asset.RowCount != snapshot.RowCount {
 		return fmt.Errorf("row_count=%d want vector-index row_count=%d", asset.RowCount, snapshot.RowCount)
 	}
 	if asset.SourceSchemaHash == 0 {
@@ -406,6 +413,8 @@ func columnVectorIndexStateAssetTypeContract(role string) (logicalType, physical
 		return columnVectorIndexStateLogicalTypeBytes, columnVectorIndexStateEncodingRawBytesOffsets, true
 	case columnVectorIndexStateAssetRoleQuantizedCodes:
 		return columnVectorIndexStateLogicalTypeByteVector, columnVectorIndexStateEncodingRawFixedBytes, true
+	case columnVectorIndexStateAssetRoleQuantizedAlpha:
+		return columnVectorIndexStateLogicalTypeScalarU8Alpha, columnVectorIndexStateEncodingRawFloat32Uint32, true
 	case columnVectorIndexStateAssetRoleHNSWSearchPack:
 		return columnVectorIndexStateLogicalTypeSearchPack, columnVectorIndexStateEncodingHNSWSearchPackV1, true
 	default:
@@ -430,6 +439,7 @@ func columnVectorIndexStateAssetRoleKnown(role string) bool {
 		columnVectorIndexStateAssetRoleRowRefs,
 		columnVectorIndexStateAssetRoleDocumentIDs,
 		columnVectorIndexStateAssetRoleQuantizedCodes,
+		columnVectorIndexStateAssetRoleQuantizedAlpha,
 		columnVectorIndexStateAssetRoleHNSWSearchPack:
 		return true
 	default:
@@ -467,7 +477,7 @@ func columnVectorIndexStateMatchStatusWithBaseChecksum(state columnVectorIndexSt
 		return columnVectorIndexStateMatchMismatch
 	}
 	for _, asset := range state.Assets {
-		if !columnVectorIndexStateAssetRefMatchesManifest(asset, state, cfg) {
+		if !columnVectorIndexStateAssetRefMatchesManifestForDefinition(asset, state, cfg, def) {
 			return columnVectorIndexStateMatchMismatch
 		}
 	}
@@ -502,13 +512,32 @@ func columnVectorIndexStateMatchesGraph(state columnVectorIndexStateSnapshot, gr
 }
 
 func columnVectorIndexStateAssetRefMatchesManifest(asset columnVectorIndexStateAssetSnapshot, state columnVectorIndexStateSnapshot, cfg ColumnStoreConfig) bool {
+	rowCountOK := asset.RowCount == state.RowCount
+	if asset.Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
+		rowCountOK = asset.RowCount >= 0 && (state.RowCount == 0 || (asset.RowCount > 0 && asset.RowCount <= state.RowCount))
+	}
 	return asset.Ref.Kind == columnVectorIndexStateAssetRefKindContract(asset.Role) &&
 		asset.Ref.Namespace == cfg.AssetManager.Namespace &&
 		asset.Ref.Generation == state.BaseManifestGeneration &&
-		asset.RowCount == state.RowCount &&
+		rowCountOK &&
 		asset.AssetBytes == asset.Ref.Length &&
 		asset.SourceSchemaHash != 0 &&
 		validateColumnAssetRefForPlan(asset.Ref) == nil
+}
+
+func columnVectorIndexStateAssetRefMatchesManifestForDefinition(asset columnVectorIndexStateAssetSnapshot, state columnVectorIndexStateSnapshot, cfg ColumnStoreConfig, def VectorIndexDefinition) bool {
+	if !columnVectorIndexStateAssetRefMatchesManifest(asset, state, cfg) {
+		return false
+	}
+	if asset.Role != columnVectorIndexStateAssetRoleQuantizedAlpha {
+		return true
+	}
+	q, ok := columnVectorGraphQuantizedDefinitionForStateAsset(def, asset)
+	if !ok {
+		return false
+	}
+	wantRowCounts, err := columnVectorGraphScalarU8AlphaExpectedGranuleRowCounts(q, state.RowCount)
+	return err == nil && asset.RowCount == len(wantRowCounts)
 }
 
 func columnVectorIndexStateSnapshotFromGraph(graph columnVectorGraphManifestSnapshot) columnVectorIndexStateSnapshot {

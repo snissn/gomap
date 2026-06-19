@@ -1089,19 +1089,6 @@ type preparedDocument struct {
 }
 
 func preflightServiceVectorAutoRebuildSupported(info IndexInfo) error {
-	if info.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
-		return nil
-	}
-	for _, q := range info.QuantizedIndexes {
-		if q.Codec != collections.QuantizedVectorCodecScalarU8 || scalarU8CalibrationInfoIsLegacy(q) {
-			continue
-		}
-		mode := collections.ScalarU8CalibrationMode("")
-		if q.ScalarU8Calibration != nil {
-			mode = q.ScalarU8Calibration.Mode
-		}
-		return serviceErrorf(CodeUnsupported, "upsert documents auto rebuild unsupported: vector index %q quantized index %q scalar_u8 calibration mode %q is config-only; alpha assets are not built in this release", info.VectorIndexName, q.Name, mode)
-	}
 	return nil
 }
 

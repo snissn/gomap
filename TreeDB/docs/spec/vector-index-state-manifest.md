@@ -69,7 +69,8 @@ Defined v1 roles and type contracts are:
 | `normalized_vectors` | `float32_vector` | `raw_float32_vector` | optional derived normalized vectors (#1977). |
 | `row_refs` | `int64` | `raw_int64` | ordinal-to-base-row `DocumentRowRef` coordinates (#1993). |
 | `document_ids` | `bytes` | `raw_bytes_offsets` | ordinal-to-exact returned document ID bytes (#2013). |
-| `quantized_codes` | `byte_vector` | `raw_fixed_bytes` | scalar_u8 quantized code rows for declared score planes (#1926). |
+| `quantized_codes` | `byte_vector` or `packed_bit_vector` | `raw_fixed_bytes` or `raw_packed_bit_vector` | quantized code rows for declared score planes (#1926/#2454/#2480). |
+| `quantized_alpha` | `scalar_u8_alpha` | `raw_float32_uint32` | per-granule scalar_u8 alpha metadata for calibrated scalar_u8 assets (#2843). |
 
 The role contract deliberately names generic typed-column primitives. HNSW layer
 semantics, neighbor ordinal bounds, graph traversal, deleted-row policy, row ref
@@ -78,10 +79,16 @@ layer. Row-ref state uses multiple `row_refs` assets distinguished by asset id
 (for generation, part id, row index, and applied command LSN). Document-ID state
 uses one `document_ids` asset with one opaque byte value per graph ordinal.
 Quantized-code state uses one `quantized_codes` asset per declared quantized
-index, distinguished by asset id `quantized/<name>/codes`. Current #1926
-scalar_u8 slices use this prepared state for explicit `quantized_only` scoring
-and for `quantized_rerank` candidate collection before exact reranking the
-validated shortlist by graph ordinal. `quantized_rerank` traverses the normalized
+index, distinguished by asset id (`quantized/<name>/codes` for legacy scalar_u8,
+codec-specific ids for packed codecs, or config-hashed scalar_u8 ids for
+calibrated scalar_u8). Calibrated scalar_u8 `per_granule_alpha` state also
+requires a sibling `quantized_alpha` asset with one `float32` alpha and one
+`uint32` row count per storage-layout granule; row counts must sum to the graph
+row count. Legacy #1926 scalar_u8 slices use prepared code state for explicit
+`quantized_only` scoring and for `quantized_rerank` candidate collection before
+exact reranking the validated shortlist by graph ordinal. Calibrated alpha assets
+are built and prepared but search scoring remains fail-closed until an
+alpha-aware scorer lands. `quantized_rerank` traverses the normalized
 `ef_search` candidate pool, then trims to `QuantizedRerankCandidates` before
 reading authoritative vectors/norms for exact scores. Missing, stale,
 mismatched, or unprepared quantized assets still fail closed; quantized modes
