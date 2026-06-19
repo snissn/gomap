@@ -60,11 +60,17 @@ func releaseSpanNativeLeafLogPayloadScratch(buf []byte) {
 }
 
 func (g *spanNativeLeafLogOutputGate) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
-	scratch := acquireSpanNativeLeafLogPayloadScratch()
-	payload, _, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch[:0], leafPage)
-	if err != nil {
-		releaseSpanNativeLeafLogPayloadScratch(scratch)
-		return page.ChildRef{}, err
+	prepared := z.leafPageLogConsumesPreparedPayloads(false)
+	var payload []byte
+	var scratch []byte
+	if prepared {
+		scratch = acquireSpanNativeLeafLogPayloadScratch()
+		var err error
+		payload, _, err = valuelog.MaybeCompactLeafLogPayloadTo(scratch[:0], leafPage)
+		if err != nil {
+			releaseSpanNativeLeafLogPayloadScratch(scratch)
+			return page.ChildRef{}, err
+		}
 	}
 	waitStart := time.Now()
 	if g != nil && g.sem != nil {
@@ -74,6 +80,9 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageData(z *Zipper, leafPage []
 	reservationWait := time.Since(waitStart)
 	if metrics != nil && reservationWait > 0 {
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
+	}
+	if !prepared {
+		return z.persistLeafPageData(leafPage, metrics)
 	}
 	ref, err := z.persistPreparedLeafPageDataTo(leafPage, payload, metrics)
 	releaseSpanNativeLeafLogPayloadScratch(scratch)
@@ -85,19 +94,29 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leaf
 	if len(leafPages) == 0 {
 		return refs, nil
 	}
-	var payloadInline [8][]byte
-	var payloads [][]byte
-	if len(leafPages) <= len(payloadInline) {
-		payloads = payloadInline[:len(leafPages)]
-	} else {
-		payloads = make([][]byte, len(leafPages))
-	}
-	var arena []byte
-	for i, leafPage := range leafPages {
-		var err error
-		arena, payloads[i], _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(arena, leafPage)
+	if len(leafPages) == 1 {
+		ref, err := g.persistLeafPageData(z, leafPages[0], metrics)
 		if err != nil {
 			return nil, err
+		}
+		return append(refs, ref), nil
+	}
+	prepared := z.leafPageLogConsumesPreparedPayloads(true)
+	var payloads [][]byte
+	if prepared {
+		var payloadInline [8][]byte
+		if len(leafPages) <= len(payloadInline) {
+			payloads = payloadInline[:len(leafPages)]
+		} else {
+			payloads = make([][]byte, len(leafPages))
+		}
+		var arena []byte
+		for i, leafPage := range leafPages {
+			var err error
+			arena, payloads[i], _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(arena, leafPage)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	waitStart := time.Now()
@@ -108,6 +127,9 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leaf
 	reservationWait := time.Since(waitStart)
 	if metrics != nil && reservationWait > 0 {
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
+	}
+	if !prepared {
+		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
 	}
 	return z.persistPreparedLeafPageBatchDataTo(leafPages, payloads, refs, metrics)
 }

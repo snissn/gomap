@@ -35,6 +35,14 @@ type LeafPagePreparedLog interface {
 	AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedAppendLog interface {
+	PreparedLeafPageAppends() bool
+}
+
+type LeafPagePreparedBatchAppendLog interface {
+	PreparedLeafPageBatchAppends() bool
+}
+
 type LeafPageConcurrentAppendLog interface {
 	ConcurrentLeafPageAppends() bool
 }
@@ -110,6 +118,22 @@ func (l *leafPageLogWithRecordLengthHints) ConcurrentLeafPageAppends() bool {
 	}
 	concurrent, ok := l.inner.(LeafPageConcurrentAppendLog)
 	return ok && concurrent.ConcurrentLeafPageAppends()
+}
+
+func (l *leafPageLogWithRecordLengthHints) PreparedLeafPageAppends() bool {
+	if l == nil || l.inner == nil {
+		return false
+	}
+	_, ok := l.inner.(LeafPagePreparedLog)
+	return ok
+}
+
+func (l *leafPageLogWithRecordLengthHints) PreparedLeafPageBatchAppends() bool {
+	if l == nil || l.inner == nil {
+		return false
+	}
+	_, ok := l.inner.(LeafPagePreparedBatchLog)
+	return ok
 }
 
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {

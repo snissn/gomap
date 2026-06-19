@@ -35,6 +35,14 @@ type LeafPagePreparedLog interface {
 	AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedAppendLog interface {
+	PreparedLeafPageAppends() bool
+}
+
+type LeafPagePreparedBatchAppendLog interface {
+	PreparedLeafPageBatchAppends() bool
+}
+
 type LeafPageConcurrentAppendLog interface {
 	ConcurrentLeafPageAppends() bool
 }
@@ -1856,6 +1864,24 @@ func (z *Zipper) persistPreparedLeafPageBatchDataTo(leafPages [][]byte, prepared
 		refs[i] = page.LeafLogChildRef(ptr)
 	}
 	return refs, nil
+}
+
+func (z *Zipper) leafPageLogConsumesPreparedPayloads(batch bool) bool {
+	if z == nil || z.leafPageLog == nil {
+		return false
+	}
+	if batch {
+		if prepared, ok := z.leafPageLog.(LeafPagePreparedBatchAppendLog); ok {
+			return prepared.PreparedLeafPageBatchAppends()
+		}
+		_, ok := z.leafPageLog.(LeafPagePreparedBatchLog)
+		return ok
+	}
+	if prepared, ok := z.leafPageLog.(LeafPagePreparedAppendLog); ok {
+		return prepared.PreparedLeafPageAppends()
+	}
+	_, ok := z.leafPageLog.(LeafPagePreparedLog)
+	return ok
 }
 
 func (z *Zipper) persistLeafPageBatchDataToWithConfig(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics, cfg applyRunConfig) ([]page.ChildRef, error) {

@@ -127,6 +127,10 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 
 func (l *cachingLeafPageLog) ConcurrentLeafPageAppends() bool { return true }
 
+func (l *cachingLeafPageLog) PreparedLeafPageAppends() bool { return true }
+
+func (l *cachingLeafPageLog) PreparedLeafPageBatchAppends() bool { return true }
+
 func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
 	if l == nil || l.db == nil || l.lane == nil {
 		return page.LeafLogPtr{}, errWALUnavailable
