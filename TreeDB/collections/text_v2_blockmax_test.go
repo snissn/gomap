@@ -299,6 +299,43 @@ func TestTextV2BlockMaxMissingNormBlockFailsClosed2873(t *testing.T) {
 	}
 }
 
+func TestTextV2BlockMaxMissingDocMapBlockFailsClosed2873(t *testing.T) {
+	d := openTextV2TestDB(t, t.TempDir(), false)
+	defer func() { _ = d.Close() }()
+	ids, docs := textV2BlockMaxUniformHighDFDocs2873(1024, false)
+	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{
+		Name:    "lexical",
+		Version: TextIndexVersionV2,
+		Fields:  []TextIndexField{{Field: "title", Weight: 5}, {Field: "body"}},
+	}, ids, docs)
+
+	missingBlockStart := uint64(textV2DefaultDocMapBlockSize) + 1
+	docMapRoot := collectionTextV2DocMapRootName("docs", "lexical")
+	if raw := textV2ReadRootBytes2624(t, d, "docs", docMapRoot, encodeTextV2BlockKey(missingBlockStart)); len(raw) == 0 {
+		t.Fatalf("missing fixture docmap block %d before corruption", missingBlockStart)
+	}
+	deleteTextRootValue2624(t, d, "docs", docMapRoot, encodeTextV2BlockKey(missingBlockStart))
+
+	opts := TextSearchOptions{IndexName: "lexical", Query: "refund", TopK: 10, CandidateLimit: len(ids), MaxPostingsScanned: len(ids) * 2}
+	exhaustiveOpts := opts
+	exhaustiveOpts.textV2DisableBlockMax = true
+	exhaustive, err := col.searchText(exhaustiveOpts, textSearchResultScoreOnly)
+	if !errors.Is(err, ErrTextIndexUnavailable) || !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("exhaustive err=%v response=%+v want unavailable/storage corrupt", err, exhaustive)
+	}
+	if exhaustive.Stats.FailClosed != 1 || exhaustive.Stats.FailClosedReason != textSearchFailClosedStorageCorrupt || exhaustive.Stats.DocumentsFetched != 0 {
+		t.Fatalf("exhaustive stats=%+v want storage-corrupt fail-closed without docs", exhaustive.Stats)
+	}
+
+	got, err := col.searchText(opts, textSearchResultScoreOnly)
+	if !errors.Is(err, ErrTextIndexUnavailable) || !errors.Is(err, ErrTextIndexStorageCorrupt) {
+		t.Fatalf("block-max err=%v response=%+v want unavailable/storage corrupt", err, got)
+	}
+	if got.Stats.FailClosed != 1 || got.Stats.FailClosedReason != textSearchFailClosedStorageCorrupt || got.Stats.DocumentsFetched != 0 {
+		t.Fatalf("block-max stats=%+v want storage-corrupt fail-closed without docs", got.Stats)
+	}
+}
+
 func TestTextV2BlockMaxHighDFMicroBlocksExactPruning2873(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()

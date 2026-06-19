@@ -2276,9 +2276,12 @@ func textV2SearchTightUpperBoundSkipsRange(snap *backenddb.Snapshot, catalog *co
 	if upperBound > worst.score {
 		return false, nil
 	}
-	minDocID, hasLive, err := cache.minDocumentIDInRange(snap, catalog, ctx, first, last)
+	minDocID, hasLive, complete, err := cache.minDocumentIDInRange(snap, catalog, ctx, first, last)
 	if err != nil {
 		return false, err
+	}
+	if !complete {
+		return false, nil
 	}
 	if !hasLive {
 		return true, nil
@@ -2807,32 +2810,30 @@ func (cache *textV2SearchBlockCache) docMapEntry(snap *backenddb.Snapshot, catal
 	return entry, true, nil
 }
 
-func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, first, last uint64) ([]byte, bool, error) {
+func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapshot, catalog *collectionCatalog, ctx *textV2SearchContext, first, last uint64) (minID []byte, hasLive bool, complete bool, err error) {
 	if first == 0 || last < first {
-		return nil, false, errMalformedTextStorage("text-v2 invalid docmap range [%d,%d]", first, last)
+		return nil, false, false, errMalformedTextStorage("text-v2 invalid docmap range [%d,%d]", first, last)
 	}
 	blockStart := textV2OrdinalBlockStart(first, textV2DefaultDocMapBlockSize)
 	if blockStart == 0 {
-		return nil, false, errMalformedTextStorage("text-v2 invalid docmap range start %d", first)
+		return nil, false, false, errMalformedTextStorage("text-v2 invalid docmap range start %d", first)
 	}
-	var minID []byte
 	for blockStart <= last {
 		block, found, err := cache.docMapBlockAtOptional(snap, catalog, ctx, blockStart)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		if !found {
-			if blockStart > math.MaxUint64-uint64(textV2DefaultDocMapBlockSize) {
-				break
-			}
-			blockStart += uint64(textV2DefaultDocMapBlockSize)
-			continue
+			// Missing docmap blocks make the document-ID tie proof incomplete.
+			// Do not treat the gap as empty; let the caller visit the range so a
+			// referenced posting can fail closed through the required docmap lookup.
+			return minID, minID != nil, false, nil
 		}
 		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= first })
 		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= last {
 			entry := block.Entries[idx]
 			if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.DocMapGeneration {
-				return nil, false, errMalformedTextStorage("text-v2 docmap entry outside status snapshot")
+				return nil, false, false, errMalformedTextStorage("text-v2 docmap entry outside status snapshot")
 			}
 			if !entry.tombstoned() && (minID == nil || bytes.Compare(entry.DocumentID, minID) < 0) {
 				minID = entry.DocumentID
@@ -2844,7 +2845,7 @@ func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapsh
 		}
 		blockStart += uint64(textV2DefaultDocMapBlockSize)
 	}
-	return minID, minID != nil, nil
+	return minID, minID != nil, true, nil
 }
 
 func orderTextV2SearchScanTerms(terms []string, operator TextSearchOperator, stats map[string]textV2TermStatsValue) []string {
