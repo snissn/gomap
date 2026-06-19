@@ -1041,12 +1041,6 @@ func buildPhase2Synthesis(rows []scoreboardRow, unavailable []unavailableRow) ph
 			RequiredFollowUpRows: append([]string(nil), row.RequiredFollowUpRows...),
 		})
 	}
-	sort.Slice(priorities, func(i, j int) bool {
-		if priorities[i].Priority == priorities[j].Priority {
-			return priorities[i].ShapeID < priorities[j].ShapeID
-		}
-		return priorities[i].Priority < priorities[j].Priority
-	})
 	return phase2Synthesis{
 		SchemaVersion:          phase2SynthesisVersion,
 		ClassificationBasis:    "phase-2 target taxonomy plus captured scoreboard rows; ahead/near require comparable external rows, while missing or non-equivalent external rows stay behind/far by evidence gap rather than parity claim",
@@ -1297,7 +1291,11 @@ func phase2NonSQLiteExternalRow(row scoreboardRow) bool {
 }
 
 func phase2ComparableRowMetadata(a, b scoreboardRow) bool {
-	if a.Dataset == "" || b.Dataset == "" || a.Dataset != b.Dataset {
+	if aDocs, okA := phase2DatasetDocs(a.Dataset); okA {
+		if bDocs, okB := phase2DatasetDocs(b.Dataset); okB && aDocs != bDocs {
+			return false
+		}
+	} else if bDocs, okB := phase2DatasetDocs(b.Dataset); okB && bDocs != "" {
 		return false
 	}
 	if a.TopK != b.TopK {
@@ -1307,6 +1305,16 @@ func phase2ComparableRowMetadata(a, b scoreboardRow) bool {
 		return false
 	}
 	return true
+}
+
+func phase2DatasetDocs(dataset string) (string, bool) {
+	for _, field := range strings.Fields(dataset) {
+		if strings.HasPrefix(field, "docs=") {
+			value := strings.TrimPrefix(field, "docs=")
+			return value, value != ""
+		}
+	}
+	return "", false
 }
 
 func comparableLatencyPair(treeRow, externalRow scoreboardRow) (float64, float64, bool) {
@@ -1324,10 +1332,22 @@ func comparableStoragePair(treeRow, externalRow scoreboardRow) (float64, float64
 }
 
 func comparableBuildPair(treeRow, externalRow scoreboardRow) (float64, float64, bool) {
-	if treeRow.BuildSeconds == nil || externalRow.BuildSeconds == nil || *treeRow.BuildSeconds <= 0 || *externalRow.BuildSeconds <= 0 {
+	treeSeconds, okTree := rowBuildSecondsMetric(treeRow)
+	externalSeconds, okExternal := rowBuildSecondsMetric(externalRow)
+	if !okTree || !okExternal || treeSeconds <= 0 || externalSeconds <= 0 {
 		return 0, 0, false
 	}
-	return *treeRow.BuildSeconds, *externalRow.BuildSeconds, true
+	return treeSeconds, externalSeconds, true
+}
+
+func rowBuildSecondsMetric(row scoreboardRow) (float64, bool) {
+	if row.BuildSeconds != nil && *row.BuildSeconds > 0 {
+		return *row.BuildSeconds, true
+	}
+	if row.NsPerOp != nil && *row.NsPerOp > 0 {
+		return *row.NsPerOp / 1e9, true
+	}
+	return 0, false
 }
 
 func phase2RowMetricSummary(row scoreboardRow, metricKind string) string {
@@ -1338,8 +1358,8 @@ func phase2RowMetricSummary(row scoreboardRow, metricKind string) string {
 			metric = " storage=" + formatNumber(*row.StorageBytesPerDoc) + " B/doc"
 		}
 	case "build":
-		if row.BuildSeconds != nil {
-			metric = " build=" + formatSecondsPtr(row.BuildSeconds)
+		if seconds, ok := rowBuildSecondsMetric(row); ok {
+			metric = " build=" + formatSecondsPtr(&seconds)
 		}
 	default:
 		if row.NsPerOp != nil {
@@ -1360,32 +1380,6 @@ func classFromLowerIsBetterRatio(ratio float64) string {
 	default:
 		return "far_behind"
 	}
-}
-
-func bestNsPerOp(rows []scoreboardRow) (float64, bool) {
-	best := math.Inf(1)
-	for _, row := range rows {
-		if row.NsPerOp != nil && *row.NsPerOp > 0 && *row.NsPerOp < best {
-			best = *row.NsPerOp
-		}
-	}
-	if math.IsInf(best, 1) {
-		return 0, false
-	}
-	return best, true
-}
-
-func bestStorageBytesPerDoc(rows []scoreboardRow) (float64, bool) {
-	best := math.Inf(1)
-	for _, row := range rows {
-		if row.StorageBytesPerDoc != nil && *row.StorageBytesPerDoc > 0 && *row.StorageBytesPerDoc < best {
-			best = *row.StorageBytesPerDoc
-		}
-	}
-	if math.IsInf(best, 1) {
-		return 0, false
-	}
-	return best, true
 }
 
 func defaultPhase2Classification(shapeID string) (string, string) {

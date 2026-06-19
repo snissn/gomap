@@ -368,7 +368,7 @@ func TestPhase2SynthesisRequiresExplicitComparablePair(t *testing.T) {
 
 	rows[0].Metrics = map[string]float64{"phase2_comparable": 1}
 	rows[1].Metrics = map[string]float64{"phase2_comparable": 1}
-	rows[1].Dataset = rows[0].Dataset
+	rows[1].Dataset = rows[0].Dataset + " queries=1000"
 	syn = buildPhase2Synthesis(rows, nil)
 	common = phase2ClassificationByID(t, syn, "single_term_common")
 	if common.Classification != "ahead" {
@@ -377,21 +377,21 @@ func TestPhase2SynthesisRequiresExplicitComparablePair(t *testing.T) {
 }
 
 func TestPhase2SynthesisComparesExplicitBuildPairs(t *testing.T) {
-	treeBuild := 0.8
+	treeBuildNS := 800_000_000.0
 	luceneBuild := 1.0
 	syn := buildPhase2Synthesis([]scoreboardRow{
 		{
-			SourceLabel:  "treedb_build_10k",
-			System:       "TreeDB",
-			Engine:       "treedb_text_v2",
-			Modality:     "build_storage",
-			Dataset:      "docs=10000",
-			TopK:         0,
-			QueryShape:   "text-v2 index build",
-			Boundary:     "checkpointed text index build",
-			Benchmark:    "BenchmarkCreateTextIndex/build",
-			BuildSeconds: &treeBuild,
-			Metrics:      map[string]float64{"phase2_comparable": 1},
+			SourceLabel: "treedb_build_10k",
+			System:      "TreeDB",
+			Engine:      "treedb_text_v2",
+			Modality:    "build_storage",
+			Dataset:     "docs=10000",
+			TopK:        0,
+			QueryShape:  "text-v2 index build",
+			Boundary:    "checkpointed text index build",
+			Benchmark:   "BenchmarkCreateTextIndex/build",
+			NsPerOp:     &treeBuildNS,
+			Metrics:     map[string]float64{"phase2_comparable": 1},
 		},
 		{
 			SourceLabel:  "lucene_build_10k",
