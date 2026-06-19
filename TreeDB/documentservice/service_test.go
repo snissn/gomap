@@ -626,6 +626,52 @@ func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
 	}
 }
 
+func TestServiceCreateIndexRejectsInvalidScalarU8Calibration2842(t *testing.T) {
+	tests := []struct {
+		name string
+		q    QuantizedIndexInfo
+	}{
+		{
+			name: "unsupported_mode",
+			q: QuantizedIndexInfo{
+				Name:  "embedding.scalar_u8.bad",
+				Codec: collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: "per_vector_alpha",
+				},
+			},
+		},
+		{
+			name: "scalar_config_on_rabitq",
+			q: QuantizedIndexInfo{
+				Name:  "embedding.rabitq.bad",
+				Codec: "rabitq_1bit",
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: collections.ScalarU8CalibrationModeLegacy,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, db := newTestService(t)
+			defer db.Close()
+			_, err := svc.CreateIndex(context.Background(), CreateIndexRequest{
+				Name:      "bench_" + tt.name,
+				Dimension: 2,
+				Metric:    MetricCosine,
+				VectorIndexOptions: &BenchmarkVectorIndexOptions{
+					Strategy:         collections.VectorIndexStrategyColumnGraph,
+					QuantizedIndexes: []QuantizedIndexInfo{tt.q},
+				},
+			})
+			if ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "scalar_u8_calibration") {
+				t.Fatalf("CreateIndex err=%v code=%s want invalid_request scalar_u8_calibration", err, ErrorCodeOf(err))
+			}
+		})
+	}
+}
+
 func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
