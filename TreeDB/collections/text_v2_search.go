@@ -218,22 +218,29 @@ func (t *textV2SearchTopK) threshold() (float64, bool) {
 }
 
 func (t *textV2SearchTopK) add(candidate textV2SearchTopCandidate) bool {
+	_, _, thresholdChanged := t.addCandidate(candidate)
+	return thresholdChanged
+}
+
+func (t *textV2SearchTopK) addCandidate(candidate textV2SearchTopCandidate) (int, bool, bool) {
 	if t == nil || t.limit <= 0 {
-		return false
+		return -1, false, false
 	}
+	beforeThreshold, beforeReady := t.threshold()
 	if len(t.candidates) == t.limit && !textV2TopCandidateLess(candidate, t.candidates[len(t.candidates)-1]) {
-		return false
+		return -1, false, false
 	}
 	pos := sort.Search(len(t.candidates), func(i int) bool { return textV2TopCandidateLess(candidate, t.candidates[i]) })
 	if len(t.candidates) < t.limit {
 		t.candidates = append(t.candidates, textV2SearchTopCandidate{})
 		copy(t.candidates[pos+1:], t.candidates[pos:])
 		t.candidates[pos] = candidate
-		return len(t.candidates) == t.limit && pos < len(t.candidates)-1
+	} else {
+		copy(t.candidates[pos+1:], t.candidates[pos:len(t.candidates)-1])
+		t.candidates[pos] = candidate
 	}
-	copy(t.candidates[pos+1:], t.candidates[pos:len(t.candidates)-1])
-	t.candidates[pos] = candidate
-	return true
+	afterThreshold, afterReady := t.threshold()
+	return pos, true, afterReady && (!beforeReady || afterThreshold > beforeThreshold)
 }
 
 func textV2TopCandidateLess(a, b textV2SearchTopCandidate) bool {
@@ -1315,23 +1322,21 @@ func visitTextV2ANDBlockMaxOverlap(
 						if err != nil {
 							return false, false, err
 						}
-						var detail *textV2SearchCandidate
-						if retainDetail {
-							detail = &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+						topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
+						pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
+						if admitted && retainDetail {
+							detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
 							for _, state := range states {
 								if err := detail.addPostingValue(state.term, state.entries[state.entryIdx].value); err != nil {
 									return false, false, err
 								}
 							}
+							top.candidates[pos].detail = detail
 						}
-						beforeThreshold, beforeReady := top.threshold()
-						topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score, detail: detail}
-						top.add(topCandidate)
 						seenCurrent[target] = norm.Generation
 						if stats != nil {
 							stats.TextCandidatesScored++
-							afterThreshold, afterReady := top.threshold()
-							if afterReady && (!beforeReady || afterThreshold > beforeThreshold) {
+							if thresholdChanged {
 								stats.TextBlockMaxThresholds++
 							}
 						}
@@ -1759,7 +1764,6 @@ func visitTextV2ORBlockMaxCandidate(
 
 	score := 0.0
 	matched := false
-	var detail *textV2SearchCandidate
 	if ok {
 		// Accumulate in canonical query-term order (scoreStates), not the
 		// WAND-active order (advanceStates), so floating-point ties match the
@@ -1787,14 +1791,6 @@ func visitTextV2ORBlockMaxCandidate(
 				}
 				matched = true
 			}
-			if retainDetail {
-				if detail == nil {
-					detail = &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...)}
-				}
-				if err := detail.addPostingValue(state.term, posting); err != nil {
-					return false, err
-				}
-			}
 			termScore, err := scoreTextV2SearchPostingValue(state.term, posting, ctx, norm)
 			if err != nil {
 				return false, err
@@ -1803,15 +1799,27 @@ func visitTextV2ORBlockMaxCandidate(
 		}
 	}
 	if matched {
-		beforeThreshold, beforeReady := top.threshold()
-		if detail != nil {
-			detail.score = score
+		topCandidate := textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score}
+		pos, admitted, thresholdChanged := top.addCandidate(topCandidate)
+		if admitted && retainDetail {
+			detail := &textV2SearchCandidate{ordinal: target, generation: norm.Generation, documentID: append([]byte(nil), docMap.DocumentID...), score: score}
+			for _, state := range scoreStates {
+				if state == nil || state.exhausted || state.currentFirst() != target || state.entryIdx >= len(state.entries) || state.entries[state.entryIdx].ordinal != target {
+					continue
+				}
+				posting := state.entries[state.entryIdx].value
+				if posting.generation != norm.Generation {
+					continue
+				}
+				if err := detail.addPostingValue(state.term, posting); err != nil {
+					return false, err
+				}
+			}
+			top.candidates[pos].detail = detail
 		}
-		top.add(textV2SearchTopCandidate{ordinal: target, generation: norm.Generation, documentID: docMap.DocumentID, score: score, detail: detail})
 		if stats != nil {
 			stats.TextCandidatesScored++
-			afterThreshold, afterReady := top.threshold()
-			if afterReady && (!beforeReady || afterThreshold > beforeThreshold) {
+			if thresholdChanged {
 				stats.TextBlockMaxThresholds++
 			}
 		}
