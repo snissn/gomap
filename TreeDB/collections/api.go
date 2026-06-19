@@ -5291,6 +5291,13 @@ func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memta
 	batchEntryIndexes := make([]int, 0, collectionPointerizeBatchMaxValues)
 	batchBytes := 0
 	pointerized := false
+	var appendedPtrs []page.ValuePtr
+	success := false
+	defer func() {
+		if !success {
+			db.ReleaseValueLogValues(appendedPtrs)
+		}
+	}()
 	flushBatch := func() error {
 		if len(batchValues) == 0 {
 			return nil
@@ -5300,8 +5307,10 @@ func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memta
 			return err
 		}
 		if len(ptrs) != len(batchValues) {
+			db.ReleaseValueLogValues(ptrs)
 			return fmt.Errorf("collections: value-log appender returned %d ptrs for %d values", len(ptrs), len(batchValues))
 		}
+		appendedPtrs = append(appendedPtrs, ptrs...)
 		for i, ptr := range ptrs {
 			entryIndex := batchEntryIndexes[i]
 			entries[entryIndex].value = nil
@@ -5365,7 +5374,30 @@ func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memta
 		out.SetEntrySteal(entry.key, entry.value, entry.ptr, entry.flags)
 	}
 	out.Freeze()
-	return out, true, nil
+	success = true
+	return &collectionPointerizedRunTable{Table: out, db: db, ptrs: appendedPtrs}, true, nil
+}
+
+type collectionPointerizedRunTable struct {
+	memtable.Table
+	db   *backenddb.DB
+	ptrs []page.ValuePtr
+}
+
+func (t *collectionPointerizedRunTable) Release() {
+	if t == nil {
+		return
+	}
+	if t.db != nil && len(t.ptrs) > 0 {
+		t.db.ReleaseValueLogValues(t.ptrs)
+		t.db = nil
+		t.ptrs = nil
+	}
+	resetCollectionRunTable(t.Table)
+}
+
+func (t *collectionPointerizedRunTable) Reset() {
+	t.Release()
 }
 
 func appendCollectionPointerizedBatchValues(db *backenddb.DB, values [][]byte, packRetainedTemplateV1 bool) ([]page.ValuePtr, error) {
