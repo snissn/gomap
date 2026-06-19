@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -444,6 +445,11 @@ func TestFlushApplySpanNativeSparsePointSpansWithStats(t *testing.T) {
 }
 
 func TestFlushApplySpanNativeSchedulerWorkerStats(t *testing.T) {
+	// This test asserts multi-worker scheduler telemetry; force enough runnable
+	// workers even when the test process is launched with GOMAXPROCS=1.
+	prevProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
+
 	d := openFlushApplyTestDBWithSpanNative(t, 4, true)
 	putBatch(t, d, 0, 12000, "base")
 
