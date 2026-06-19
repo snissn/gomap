@@ -45,6 +45,9 @@ func TestTextV2PositionValueV2RoundTripAndLegacyCompatibility2835(t *testing.T) 
 	if len(encoded) >= len(legacy) {
 		t.Fatalf("v2 encoded bytes=%d want smaller than legacy=%d", len(encoded), len(legacy))
 	}
+	if _, err := decodeTextV2PositionValueForTerm(encoded, "wrong-term"); err == nil {
+		t.Fatalf("decode v2 position with mismatched key term succeeded; want corruption")
+	}
 	if _, err := decodeTextV2PositionValueForTerm(legacy, "wrong-term"); err == nil {
 		t.Fatalf("decode legacy v1 with mismatched key term succeeded; want corruption")
 	}
@@ -56,6 +59,7 @@ func TestTextV2PositionValueV2RejectsCorruptDeltas2835(t *testing.T) {
 	raw = appendTextUvarint(raw, uint64(textV2FormatVersion))
 	raw = appendTextUvarint(raw, 1) // ordinal
 	raw = appendTextUvarint(raw, 1) // generation
+	raw = appendTextUvarint(raw, textV2PositionTermHash("refund"))
 	raw = appendTextUvarint(raw, 1) // field count
 	raw = appendTextUvarint(raw, 0) // field index
 	raw = appendTextUvarint(raw, 2) // frequency
@@ -72,8 +76,8 @@ func TestTextV2StorageStatsLaneBytesAndPositionSavings2835(t *testing.T) {
 	d := openTextV2TestDB(t, t.TempDir(), false)
 	defer func() { _ = d.Close() }()
 	col := createTextSearchCollection2627(t, d, "docs", TextIndexDefinition{Name: "lexical", Version: TextIndexVersionV2, StorePositions: true, StoreOffsets: true, Fields: []TextIndexField{{Field: "title"}, {Field: "body"}}}, [][]byte{[]byte("d1"), []byte("d2")}, [][]byte{
-		[]byte(`{"title":"refund policy","body":"refund policy support refund policy support refund policy support"}`),
-		[]byte(`{"title":"shipping policy","body":"shipping support policy refund support policy refund"}`),
+		[]byte(`{"title":"refundpolicytwenty835longtoken policy","body":"refundpolicytwenty835longtoken policy support refundpolicytwenty835longtoken policy support refundpolicytwenty835longtoken policy support"}`),
+		[]byte(`{"title":"shippingpolicytwenty835longtoken policy","body":"shippingpolicytwenty835longtoken support policy refundpolicytwenty835longtoken support policy refundpolicytwenty835longtoken"}`),
 	})
 
 	stats, err := col.TextIndexStorageStats("lexical")

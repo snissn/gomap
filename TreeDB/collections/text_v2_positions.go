@@ -78,6 +78,7 @@ func encodeTextV2PositionValue(value textV2PositionValue) []byte {
 	out = appendTextUvarint(out, uint64(value.FormatVersion))
 	out = appendTextUvarint(out, value.Ordinal)
 	out = appendTextUvarint(out, value.Generation)
+	out = appendTextUvarint(out, textV2PositionTermHash(value.Term))
 	out = appendTextUvarint(out, uint64(len(fields)))
 	for _, field := range fields {
 		out = appendTextUvarint(out, uint64(field.FieldIndex))
@@ -120,6 +121,15 @@ func decodeTextV2PositionValueForTerm(raw []byte, keyTerm string) (textV2Positio
 		return textV2PositionValue{}, errMalformedTextStorage("text-v2 position generation: %v", err)
 	}
 	term := keyTerm
+	if valueVersion == textV2PositionValueVersion {
+		termHash, err := cur.readUvarint()
+		if err != nil {
+			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position term hash: %v", err)
+		}
+		if termHash != textV2PositionTermHash(keyTerm) {
+			return textV2PositionValue{}, errMalformedTextStorage("text-v2 position key/value term mismatch")
+		}
+	}
 	if valueVersion == textV2PositionValueVersionV1 {
 		term, err = cur.readString()
 		if err != nil {
@@ -459,13 +469,17 @@ func cloneTextV2PositionFields(fields []textV2PositionFieldValue) []textV2Positi
 }
 
 func estimateTextV2PositionValueLen(value textV2PositionValue, fields []textV2PositionFieldValue) int {
-	n := 1 + binary.MaxVarintLen64*4
+	n := 1 + binary.MaxVarintLen64*5
 	for _, field := range fields {
 		n += binary.MaxVarintLen64 * 2
 		n += encodedTextV2PositionDeltasLen(field.Positions)
 		n += encodedTextOffsetSliceLen(field.Offsets)
 	}
 	return n
+}
+
+func textV2PositionTermHash(term string) uint64 {
+	return columnPhysicalQueryHashString(term)
 }
 
 func encodedTextV2PositionDeltasLen(values []uint32) int {
