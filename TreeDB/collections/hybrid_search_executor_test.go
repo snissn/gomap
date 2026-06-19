@@ -103,6 +103,27 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 	}
 }
 
+func TestHybridSearchCandidatePreallocHintBoundsLimits2876(t *testing.T) {
+	plan := hybridSearchExecutionPlan{
+		text:   &HybridTextQuery{CandidateLimit: 64},
+		vector: &HybridVectorQuery{CandidateLimit: 64},
+	}
+	if got := hybridSearchCandidatePreallocHint(plan); got != 128 {
+		t.Fatalf("cap hint=%d want exact small combined limit", got)
+	}
+
+	plan.text.CandidateLimit = maxCollectionInt
+	plan.vector.CandidateLimit = maxCollectionInt
+	if got := hybridSearchCandidatePreallocHint(plan); got != hybridCandidatePreallocLimit {
+		t.Fatalf("cap hint=%d want bounded limit %d", got, hybridCandidatePreallocLimit)
+	}
+
+	plan.vector = nil
+	if got := hybridSearchCandidatePreallocHint(plan); got != 0 {
+		t.Fatalf("single-source cap hint=%d want 0", got)
+	}
+}
+
 func TestSearchHybridExecutorTextOnlyAndVectorOnly2505(t *testing.T) {
 	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
 		{id: "doc-a", title: "refund", body: "refund refund", city: "sea", score: 10, vector: []float32{1, 0, 0}},
