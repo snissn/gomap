@@ -2658,9 +2658,6 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	if post.vlogRefDelta != nil {
 		defer releaseValueLogRefDelta(post.vlogRefDelta)
 	}
-	if err := db.releasePendingValueLogAppendFileIDsReferenced(context.Background()); err != nil {
-		db.reportError(err)
-	}
 	if db.valueLogRefTracker != nil {
 		if post.vlogRefDelta != nil {
 			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {

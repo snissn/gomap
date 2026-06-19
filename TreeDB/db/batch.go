@@ -471,6 +471,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	vlogRefDelta = nil
 	b.db.invalidateLeafGenerationSubtreeStats(tracker.Pages())
 	b.db.finalizeCommitPostWork(post)
+	b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
 	}
@@ -598,6 +599,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
 	vlogRefDelta = nil
 	b.db.finalizeCommitPostWork(post)
+	b.db.releasePendingValueLogAppendFileIDsFromEntries(entries)
 	b.db.clearLeafGenerationReachabilityCaches()
 	if b.db.vacuum.Active() {
 		b.db.vacuum.RecordApplyPlan(entries, ranges)
