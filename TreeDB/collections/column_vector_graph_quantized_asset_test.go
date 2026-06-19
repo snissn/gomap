@@ -340,6 +340,43 @@ func TestColumnGraphScalarU8AlphaQuantileSparseGranulePositiveFallback2843(t *te
 	}
 }
 
+func TestColumnGraphScalarU8AlphaQuantileSparseQueryPositiveFallback2844(t *testing.T) {
+	const dims = 1000
+	q := scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha.query_quantile")
+	q.ScalarU8Calibration.AlphaPolicy = ScalarU8AlphaPolicy{Name: ScalarU8AlphaPolicyAbsQuantile, QuantilePPM: ScalarU8AlphaPolicyAbsQuantilePPM999}
+	def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:             "embedding_graph",
+		Field:            "embedding",
+		Metric:           VectorMetricCosine,
+		Dimensions:       dims,
+		M:                3,
+		Strategy:         VectorIndexStrategyColumnGraph,
+		QuantizedIndexes: []QuantizedVectorIndexDefinition{q},
+	})
+	if err != nil {
+		t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	q = def.QuantizedIndexes[0]
+	query := make([]float32, dims)
+	query[dims-1] = 1
+	queryInvNorm, err := columnVectorGraphInvNorm(query)
+	if err != nil {
+		t.Fatalf("query inv norm: %v", err)
+	}
+	buildAlpha, err := computeColumnVectorGraphScalarU8GranuleAlpha(def, q, []columnVectorGraphAssetRow{{ID: []byte("query"), Vector: query, InvNorm: queryInvNorm}})
+	if err != nil {
+		t.Fatalf("computeColumnVectorGraphScalarU8GranuleAlpha: %v", err)
+	}
+	var scratch columnVectorGraphNativeSearchScratch
+	queryAlpha, err := columnVectorGraphScalarU8QueryAlpha(q, query, queryInvNorm, &scratch)
+	if err != nil {
+		t.Fatalf("columnVectorGraphScalarU8QueryAlpha: %v", err)
+	}
+	if queryAlpha != buildAlpha || queryAlpha != 1 {
+		t.Fatalf("query alpha=%v build alpha=%v want mirrored positive fallback 1", queryAlpha, buildAlpha)
+	}
+}
+
 func TestColumnGraphScalarU8AlphaStateStatusRejectsWrongGranuleCount2843(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{3, 4, 0}},
