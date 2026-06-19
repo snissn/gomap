@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -139,6 +140,28 @@ func (db *DB) releasePendingValueLogAppendFileIDsFromDelta(delta *valueLogRefDel
 	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
 		db.pendingValueLogAppendFileIDRefs = nil
 	}
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDsReferenced(ctx context.Context) error {
+	pending := db.pendingValueLogAppendFileIDs()
+	if len(pending) == 0 {
+		return nil
+	}
+	referenced, err := db.referencedValueLogSegments(ctx)
+	if err != nil {
+		return err
+	}
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
+	for fileID := range pending {
+		if _, ok := referenced[fileID]; ok {
+			delete(db.pendingValueLogAppendFileIDRefs, fileID)
+		}
+	}
+	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
+		db.pendingValueLogAppendFileIDRefs = nil
+	}
+	return nil
 }
 
 func (db *DB) pendingValueLogAppendFileIDs() map[uint32]struct{} {
