@@ -152,9 +152,13 @@ non-positive, NaN, or infinite alpha metadata during prepared open. Fail-closed 
 quantized-mode fields so callers do not accidentally depend on no-op options.
 
 Legacy `scalar_u8` v1 `quantized_only` consumes the prepared `codes` reader and
-scores normalized query/candidate code rows. The per-granule-alpha asset mode is
-persisted and prepared, but search scoring remains intentionally fail-closed
-until a scorer consumes the alpha lookup state. `rabitq_1bit` v1 `quantized_only` consumes
+scores normalized query/candidate code rows. The per-granule-alpha scalar_u8 mode
+requires the matching alpha lookup state, encodes the query with the selected
+query alpha policy, and reports approximate scores as
+`alpha_q * alpha_g * centered_dot(query_code, row_code) / (255*255)`. The
+query-alpha factor is constant for a query, but returned `quantized_only` scores
+include it; candidate comparisons include each row's existing-granule alpha and
+preserve lower-ordinal tie behavior for equal adjusted scores. `rabitq_1bit` v1 `quantized_only` consumes
 `packed_codes`, `code_count`, and `quantized_dot_product_inv` and uses the
 weighted sign-dot estimator specified in `rabitq-1bit-v1.md`. Prototype
 `brq_1bit` v1 consumes the same side arrays but uses the `uint4` runtime query
