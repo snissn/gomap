@@ -626,6 +626,216 @@ func TestServiceErrorCasesDimensionStaleUnavailable(t *testing.T) {
 	}
 }
 
+func TestServiceCreateIndexRejectsInvalidScalarU8Calibration2842(t *testing.T) {
+	tests := []struct {
+		name string
+		q    QuantizedIndexInfo
+	}{
+		{
+			name: "unsupported_mode",
+			q: QuantizedIndexInfo{
+				Name:  "embedding.scalar_u8.bad",
+				Codec: collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: "per_vector_alpha",
+				},
+			},
+		},
+		{
+			name: "scalar_config_on_rabitq",
+			q: QuantizedIndexInfo{
+				Name:  "embedding.rabitq.bad",
+				Codec: "rabitq_1bit",
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: collections.ScalarU8CalibrationModeLegacy,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, db := newTestService(t)
+			defer db.Close()
+			_, err := svc.CreateIndex(context.Background(), CreateIndexRequest{
+				Name:      "bench_" + tt.name,
+				Dimension: 2,
+				Metric:    MetricCosine,
+				VectorIndexOptions: &BenchmarkVectorIndexOptions{
+					Strategy:         collections.VectorIndexStrategyColumnGraph,
+					QuantizedIndexes: []QuantizedIndexInfo{tt.q},
+				},
+			})
+			if ErrorCodeOf(err) != CodeInvalidRequest || !strings.Contains(err.Error(), "scalar_u8_calibration") {
+				t.Fatalf("CreateIndex err=%v code=%s want invalid_request scalar_u8_calibration", err, ErrorCodeOf(err))
+			}
+		})
+	}
+}
+
+func TestServiceIndexCapabilitiesExcludeScalarU8PerGranuleAlphaRerank2848(t *testing.T) {
+	base := collections.VectorIndexDefinition{
+		Name:       defaultVectorIndexName,
+		Field:      defaultEmbeddingField,
+		Metric:     collections.VectorMetricCosine,
+		Dimensions: 2,
+		Encoding:   collections.VectorIndexEncodingFloat32,
+		Strategy:   collections.VectorIndexStrategyColumnGraph,
+	}
+	alphaCalibration := &collections.ScalarU8CalibrationConfig{
+		Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+		Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+		AlphaPolicy: collections.ScalarU8AlphaPolicy{
+			Name: collections.ScalarU8AlphaPolicyMaxAbs,
+		},
+	}
+	tests := []struct {
+		name                        string
+		quantizedIndexes            []collections.QuantizedVectorIndexDefinition
+		wantQuantizedRerank         bool
+		wantScalarU8QuantizedRerank bool
+	}{
+		{
+			name: "legacy_nil_config",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:    "embedding.scalar_u8.fast",
+				Codec:   collections.QuantizedVectorCodecScalarU8,
+				Version: 1,
+			}},
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: true,
+		},
+		{
+			name: "explicit_legacy_config",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:    "embedding.scalar_u8.legacy",
+				Codec:   collections.QuantizedVectorCodecScalarU8,
+				Version: 1,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: collections.ScalarU8CalibrationModeLegacy,
+				},
+			}},
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: true,
+		},
+		{
+			name: "per_granule_alpha_config_only",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:                "embedding.scalar_u8.alpha",
+				Codec:               collections.QuantizedVectorCodecScalarU8,
+				Version:             1,
+				ScalarU8Calibration: alphaCalibration,
+			}},
+			wantQuantizedRerank:         false,
+			wantScalarU8QuantizedRerank: false,
+		},
+		{
+			name: "alpha_scalar_u8_does_not_mask_rabitq_rerank",
+			quantizedIndexes: []collections.QuantizedVectorIndexDefinition{
+				{
+					Name:                "embedding.scalar_u8.alpha",
+					Codec:               collections.QuantizedVectorCodecScalarU8,
+					Version:             1,
+					ScalarU8Calibration: alphaCalibration,
+				},
+				{
+					Name:    "embedding.rabitq_1bit.experimental",
+					Codec:   "rabitq_1bit",
+					Version: 1,
+				},
+			},
+			wantQuantizedRerank:         true,
+			wantScalarU8QuantizedRerank: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def := base
+			def.QuantizedIndexes = tt.quantizedIndexes
+			got := indexCapabilities(def, true)
+			if got.QuantizedRerank != tt.wantQuantizedRerank || got.ScalarU8QuantizedRerank != tt.wantScalarU8QuantizedRerank {
+				t.Fatalf("capabilities=%+v want quantized_rerank=%t scalar_u8_quantized_rerank=%t", got, tt.wantQuantizedRerank, tt.wantScalarU8QuantizedRerank)
+			}
+		})
+	}
+}
+
+func TestServiceUpsertScalarU8PerGranuleAlphaDefaultPreflightNoCommit2842(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "bench_alpha_default",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedIndexInfo{{
+				Name:  "embedding.scalar_u8.alpha",
+				Codec: collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+					Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+					AlphaPolicy: collections.ScalarU8AlphaPolicy{
+						Name: collections.ScalarU8AlphaPolicyMaxAbs,
+					},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex alpha: %v", err)
+	}
+	_, err = svc.UpsertDocuments(ctx, "bench_alpha_default", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}})
+	if ErrorCodeOf(err) != CodeUnsupported || !strings.Contains(err.Error(), "scalar_u8 calibration") {
+		t.Fatalf("default UpsertDocuments alpha err=%v code=%s want unsupported scalar_u8 calibration", err, ErrorCodeOf(err))
+	}
+	count, err := svc.CountDocuments(ctx, "bench_alpha_default", CountDocumentsRequest{})
+	if err != nil {
+		t.Fatalf("CountDocuments after failed default upsert: %v", err)
+	}
+	if count.Count != 0 {
+		t.Fatalf("default upsert committed before unsupported auto-rebuild failure; count=%d want 0", count.Count)
+	}
+}
+
+func TestServiceOptimizeScalarU8PerGranuleAlphaFailsClosed2842(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "bench_alpha",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedIndexInfo{{
+				Name:  "embedding.scalar_u8.alpha",
+				Codec: collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+					Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+					AlphaPolicy: collections.ScalarU8AlphaPolicy{
+						Name: collections.ScalarU8AlphaPolicyMaxAbs,
+					},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex alpha: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "bench_alpha", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("deferred UpsertDocuments alpha: %v", err)
+	}
+	count, err := svc.CountDocuments(ctx, "bench_alpha", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("CountDocuments after deferred alpha upsert=%+v err=%v want 1", count, err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, "bench_alpha", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("OptimizeIndex alpha err=%v code=%s want unsupported, not internal", err, ErrorCodeOf(err))
+	}
+}
+
 func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

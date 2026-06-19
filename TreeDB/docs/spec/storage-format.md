@@ -1412,7 +1412,9 @@ when an existing catalog entry has identical normalized metadata; incompatible
 metadata fails closed before advancing `AppliedCommandLSN`.
 
 Collection vector-index declarations are stored in the canonical collection
-metadata JSON under top-level `vector_indexes`. Quantized score-plane
+metadata JSON under top-level `vector_indexes`. The current collection metadata
+JSON version is `5`, which includes the persisted `scalar_u8_calibration`
+semantics for quantized scalar_u8 score planes. Quantized score-plane
 declarations, when present, live under `vector_indexes[].quantized_indexes` and
 are declarations only until matching derived assets are built and loaded; explicit
 quantized query modes must fail closed when those assets are absent or stale.

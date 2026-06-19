@@ -124,13 +124,30 @@ type columnVectorGraphQuantizedAssetResource struct {
 var columnVectorGraphQuantizedAssetForceReadAtFallbackForTest atomic.Bool
 
 func columnVectorGraphQuantizedAssetID(q QuantizedVectorIndexDefinition) string {
+	assetID, err := columnVectorGraphQuantizedAssetIDChecked(q)
+	if err != nil {
+		return "quantized/" + q.Name + "/scalar_u8/invalid_calibration/codes"
+	}
+	return assetID
+}
+
+func columnVectorGraphQuantizedAssetIDChecked(q QuantizedVectorIndexDefinition) (string, error) {
 	switch q.Codec {
 	case brq.CodecName:
-		return "quantized/" + q.Name + "/brq_1bit/packed_codes"
+		return "quantized/" + q.Name + "/brq_1bit/packed_codes", nil
 	case rabitq.CodecName:
-		return "quantized/" + q.Name + "/packed_codes"
+		return "quantized/" + q.Name + "/packed_codes", nil
+	case "", QuantizedVectorCodecScalarU8:
+		cfgHash, err := scalarU8CalibrationConfigHashForAssetID(q)
+		if err != nil {
+			return "", err
+		}
+		if cfgHash != 0 {
+			return fmt.Sprintf("quantized/%s/scalar_u8/%016x/codes", q.Name, cfgHash), nil
+		}
+		return "quantized/" + q.Name + "/codes", nil
 	default:
-		return "quantized/" + q.Name + "/codes"
+		return "quantized/" + q.Name + "/codes", nil
 	}
 }
 
@@ -190,7 +207,11 @@ func prepareColumnVectorGraphQuantizedAsset(assetRootDir, collection string, bas
 	if ref.Namespace != sourceCfg.AssetManager.Namespace || ref.Kind != ColumnAssetKindTCS1TypedColumnPart || ref.Generation != generation || ref.PartID != partID || ref.Length != int64(len(payload)) {
 		return columnVectorGraphPreparedQuantizedAsset{}, fmt.Errorf("collections: invalid column_graph quantized asset ref %+v", ref)
 	}
-	return columnVectorGraphPreparedQuantizedAsset{Definition: q, AssetID: columnVectorGraphQuantizedAssetID(q), Config: sourceCfg, Ref: ref, Bytes: ref.Length, Rows: len(rows), SchemaHash: sourceCfg.SchemaHash}, nil
+	assetID, err := columnVectorGraphQuantizedAssetIDChecked(q)
+	if err != nil {
+		return columnVectorGraphPreparedQuantizedAsset{}, fmt.Errorf("collections: column_graph quantized index %q asset identity: %w", q.Name, err)
+	}
+	return columnVectorGraphPreparedQuantizedAsset{Definition: q, AssetID: assetID, Config: sourceCfg, Ref: ref, Bytes: ref.Length, Rows: len(rows), SchemaHash: sourceCfg.SchemaHash}, nil
 }
 
 func prepareColumnVectorGraphQuantizedCodesPayload(collection string, base ColumnStoreConfig, def VectorIndexDefinition, q QuantizedVectorIndexDefinition, partID uint64, rows []columnVectorGraphAssetRow) ([]byte, ColumnStoreConfig, error) {
@@ -219,6 +240,17 @@ func prepareColumnVectorGraphQuantizedCodesPayload(collection string, base Colum
 }
 
 func prepareColumnVectorGraphScalarU8QuantizedCodesPayload(collection string, base ColumnStoreConfig, def VectorIndexDefinition, q QuantizedVectorIndexDefinition, partID uint64, rows []columnVectorGraphAssetRow) ([]byte, ColumnStoreConfig, error) {
+	calibration, err := normalizedScalarU8CalibrationConfigForIdentity(q)
+	if err != nil {
+		return nil, base, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 calibration config is invalid: %w", q.Name, err)
+	}
+	mode := ScalarU8CalibrationModeLegacy
+	if calibration != nil {
+		mode = calibration.Mode
+	}
+	if mode != ScalarU8CalibrationModeLegacy {
+		return nil, base, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 calibration mode %q is config-only; alpha assets are not built in this release", q.Name, mode)
+	}
 	sourceCfg, err := columnVectorGraphQuantizedCodesColumnStoreConfig(collection, base, def, q)
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
@@ -539,9 +571,17 @@ func columnVectorGraphQuantizedCodesColumnStoreConfig(collection string, base Co
 		if q.Version != 1 {
 			return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q "+columnVectorGraphQuantizedScalarU8UnsupportedVersionText, q.Name, q.Version)
 		}
+		path := def.Field + "_quantized_codes"
+		cfgHash, err := scalarU8CalibrationConfigHashForAssetID(q)
+		if err != nil {
+			return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 calibration identity: %w", q.Name, err)
+		}
+		if cfgHash != 0 {
+			path = fmt.Sprintf("%s_quantized_scalar_u8_%016x_%s", def.Field, cfgHash, columnVectorGraphQuantizedCodesColumnName)
+		}
 		columns = []ColumnStoreColumn{{
 			Name:        columnVectorGraphQuantizedCodesColumnName,
-			Path:        def.Field + "_quantized_codes",
+			Path:        path,
 			Owner:       TypedStorageOwnerColumnPart,
 			ValueType:   ColumnStoreValueByteVector,
 			BytesPerRow: def.Dimensions,
@@ -971,6 +1011,9 @@ func validateColumnVectorGraphQuantizedAssetLoadInputs(rootDir, collection strin
 	if asset.RowCount != graph.RowCount {
 		return fmt.Errorf("%w: quantized asset %q row_count=%d want graph row_count=%d", errColumnVectorGraphQuantizedAssetStale, q.Name, asset.RowCount, graph.RowCount)
 	}
+	if q.Codec == QuantizedVectorCodecScalarU8 && !scalarU8CalibrationIsLegacy(q) {
+		return fmt.Errorf("%w: quantized asset %q scalar_u8 calibration mode %q requires alpha assets that are not loaded in this release", errColumnVectorGraphQuantizedAssetInvalid, q.Name, scalarU8CalibrationMode(q))
+	}
 	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
 		return fmt.Errorf("%w: quantized asset %q unavailable: %v", errColumnVectorGraphQuantizedAssetMissing, q.Name, err)
 	}
@@ -1246,9 +1289,13 @@ func columnVectorGraphQuantizedAssetSchema(def VectorIndexDefinition, graph colu
 		if q.Version != 1 {
 			return quantizedasset.SchemaDescriptor{}, fmt.Errorf(columnVectorGraphQuantizedScalarU8UnsupportedVersionText, q.Version)
 		}
+		codecConfig, codecConfigHash, err := scalarU8CalibrationCodecConfig(q)
+		if err != nil {
+			return quantizedasset.SchemaDescriptor{}, err
+		}
 		schema.CodeDimensions = def.Dimensions
 		schema.CodeWidthBits = 8
-		schema.Codec = quantizedasset.CodecDescriptor{Name: q.Codec, Version: q.Version}
+		schema.Codec = quantizedasset.CodecDescriptor{Name: q.Codec, Version: q.Version, ConfigHash: codecConfigHash, Config: codecConfig}
 		schema.Columns = []quantizedasset.ColumnDescriptor{{
 			Role:             quantizedasset.RoleCodes,
 			Column:           columnVectorGraphQuantizedCodesColumnName,
