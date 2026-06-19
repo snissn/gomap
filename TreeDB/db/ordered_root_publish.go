@@ -2340,6 +2340,11 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	}()
 
 	rootIDs = make([]uint64, len(ordered))
+	defer func() {
+		for idx := range ordered {
+			db.releasePendingValueLogAppendFileIDsFromBatch(ordered[idx].Delta)
+		}
+	}()
 	systemOpts := systemRootOrderedPublishOptions(db)
 	var nonSystemRetired []uint64
 	var nonSystemMetrics adaptive.Metrics
