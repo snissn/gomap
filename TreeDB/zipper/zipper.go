@@ -1409,6 +1409,19 @@ func recordZipperInternalParallelMerge(metrics *adaptive.Metrics, activeChildren
 	}
 }
 
+func recordZipperLeafLogOutputAppend(metrics *adaptive.Metrics, wait time.Duration, pages int, success bool) {
+	if metrics == nil {
+		return
+	}
+	metrics.ZipperLeafLogOutputAppendCalls++
+	if wait > 0 {
+		metrics.ZipperLeafLogOutputAppendWaitNs += wait.Nanoseconds()
+	}
+	if success && pages > 0 {
+		metrics.ZipperLeafLogOutputAppendPages += pages
+	}
+}
+
 func validateLoadedLeafLogNode(data []byte) (node.Node, error) {
 	if len(data) != page.PageSize {
 		return node.Node{}, errors.New("zipper: leaf page has invalid size")
@@ -1719,21 +1732,23 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 	return node.NewNodeView(data), true, nil, false, zipperNodeLoadPager, nil
 }
 
-func (z *Zipper) persistLeafPage(b *node.Builder) (page.ChildRef, error) {
+func (z *Zipper) persistLeafPage(b *node.Builder, metrics *adaptive.Metrics) (page.ChildRef, error) {
 	if b == nil {
 		return page.ChildRef{}, errors.New("zipper: nil leaf builder")
 	}
 	if !z.outerLeavesInValueLog {
 		return page.PageChildRef(b.PageID()), nil
 	}
-	return z.persistLeafPageData(b.Data())
+	return z.persistLeafPageData(b.Data(), metrics)
 }
 
-func (z *Zipper) persistLeafPageData(leafPage []byte) (page.ChildRef, error) {
+func (z *Zipper) persistLeafPageData(leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
 	if z.leafPageLog == nil {
 		return page.ChildRef{}, errors.New("zipper: missing leaf page log")
 	}
+	appendStart := time.Now()
 	ptr, err := z.leafPageLog.AppendLeafPage(leafPage)
+	recordZipperLeafLogOutputAppend(metrics, time.Since(appendStart), 1, err == nil)
 	if err != nil {
 		return page.ChildRef{}, err
 	}
@@ -1741,17 +1756,17 @@ func (z *Zipper) persistLeafPageData(leafPage []byte) (page.ChildRef, error) {
 	return page.LeafLogChildRef(ptr), nil
 }
 
-func (z *Zipper) persistLeafPageBatchData(leafPages [][]byte) ([]page.ChildRef, error) {
-	return z.persistLeafPageBatchDataTo(leafPages, nil)
+func (z *Zipper) persistLeafPageBatchData(leafPages [][]byte, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	return z.persistLeafPageBatchDataTo(leafPages, nil, metrics)
 }
 
-func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	refs = refs[:0]
 	if len(leafPages) == 0 {
 		return refs, nil
 	}
 	if len(leafPages) == 1 {
-		ref, err := z.persistLeafPageData(leafPages[0])
+		ref, err := z.persistLeafPageData(leafPages[0], metrics)
 		if err != nil {
 			return nil, err
 		}
@@ -1768,7 +1783,7 @@ func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.Chil
 			refs = refs[:len(leafPages)]
 		}
 		for i, leafPage := range leafPages {
-			ref, err := z.persistLeafPageData(leafPage)
+			ref, err := z.persistLeafPageData(leafPage, metrics)
 			if err != nil {
 				return nil, err
 			}
@@ -1776,7 +1791,9 @@ func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.Chil
 		}
 		return refs, nil
 	}
+	appendStart := time.Now()
 	ptrs, err := batcher.AppendLeafPages(leafPages)
+	recordZipperLeafLogOutputAppend(metrics, time.Since(appendStart), len(leafPages), err == nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2021,7 +2038,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			return page.ChildRef{}, nil
 		}
 
-		nodeRef, err := z.persistLeafPage(target)
+		nodeRef, err := z.persistLeafPage(target, metrics)
 		if err != nil {
 			return page.ChildRef{}, err
 		}
@@ -2257,7 +2274,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 	if len(pendingLeafPagePersists) == 1 {
 		pending := pendingLeafPagePersists[0]
-		ref, err := z.persistLeafPageData(pending.data)
+		ref, err := z.persistLeafPageData(pending.data, metrics)
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
@@ -2282,7 +2299,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		if scratch != nil {
 			refScratch = scratch.acquireChildRefBatch(len(pendingLeafPagePersists))
 		}
-		refs, err := z.persistLeafPageBatchDataTo(leafPages, refScratch)
+		refs, err := z.persistLeafPageBatchDataTo(leafPages, refScratch, metrics)
 		if scratch != nil {
 			scratch.releaseLeafPageBatch(leafPages)
 		}
@@ -2832,6 +2849,22 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperRootSplitLevels += src.ZipperRootSplitLevels
 	dst.ZipperApplyWallNs += src.ZipperApplyWallNs
 	dst.ZipperRootReduceNs += src.ZipperRootReduceNs
+	dst.ZipperLeafLogOutputAppendWaitNs += src.ZipperLeafLogOutputAppendWaitNs
+	dst.ZipperLeafLogOutputAppendCalls += src.ZipperLeafLogOutputAppendCalls
+	dst.ZipperLeafLogOutputAppendPages += src.ZipperLeafLogOutputAppendPages
+	dst.ZipperSpanNativeWorkerBusyNs += src.ZipperSpanNativeWorkerBusyNs
+	dst.ZipperSpanNativeWorkerIdleNs += src.ZipperSpanNativeWorkerIdleNs
+	dst.ZipperSpanNativeWorkerWaitNs += src.ZipperSpanNativeWorkerWaitNs
+	dst.ZipperSpanNativeReadyTasks += src.ZipperSpanNativeReadyTasks
+	dst.ZipperSpanNativeDispatchedTasks += src.ZipperSpanNativeDispatchedTasks
+	dst.ZipperSpanNativeCompletedTasks += src.ZipperSpanNativeCompletedTasks
+	if src.ZipperSpanNativeQueueDepthMax > dst.ZipperSpanNativeQueueDepthMax {
+		dst.ZipperSpanNativeQueueDepthMax = src.ZipperSpanNativeQueueDepthMax
+	}
+	dst.ZipperSpanNativeScheduledWorkers += src.ZipperSpanNativeScheduledWorkers
+	if src.ZipperSpanNativeScheduledWorkersMax > dst.ZipperSpanNativeScheduledWorkersMax {
+		dst.ZipperSpanNativeScheduledWorkersMax = src.ZipperSpanNativeScheduledWorkersMax
+	}
 
 	if src.SlabWriteBytesByFile != nil {
 		if dst.SlabWriteBytesByFile == nil {
@@ -3008,7 +3041,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		metrics.IndexWriteBytes += page.PageSize
 		metrics.LeafFill += float64(page.PageSize-b.FreeSpace()) / float64(page.PageSize)
 		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
-		leafID, err := z.persistLeafPage(b)
+		leafID, err := z.persistLeafPage(b, metrics)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
 				retired = append(retired, pid)
@@ -3068,7 +3101,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
-		leafID, err := z.persistLeafPage(b)
+		leafID, err := z.persistLeafPage(b, metrics)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
 				retired = append(retired, pid)
@@ -3231,7 +3264,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		metrics.LeafFill += float64(page.PageSize-rb.FreeSpace()) / float64(page.PageSize)
 		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
 		recordZipperLeafPageWrite(metrics, z.outerLeavesInValueLog)
-		leftID, err = z.persistLeafPage(lb)
+		leftID, err = z.persistLeafPage(lb, metrics)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
 				retired = append(retired, lid, rid)
@@ -3239,7 +3272,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			return page.ChildRef{}, page.ChildRef{}, nil, false, err
 		}
 		recordZipperLeafLogPageRecordHintWrite(metrics, leftID)
-		rightID, err = z.persistLeafPage(rb)
+		rightID, err = z.persistLeafPage(rb, metrics)
 		if err != nil {
 			if !z.outerLeavesInValueLog {
 				retired = append(retired, lid, rid)

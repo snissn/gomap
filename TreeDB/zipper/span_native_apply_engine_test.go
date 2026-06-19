@@ -239,6 +239,12 @@ func TestSpanNativeApplyConcurrentWorkerLocalScratchSplitParity(t *testing.T) {
 	if result.Metrics.Splits == 0 {
 		t.Fatalf("splits=%d want split outputs from worker-local scratch", result.Metrics.Splits)
 	}
+	if result.Metrics.ZipperSpanNativeWorkerBusyNs <= 0 || result.Metrics.ZipperSpanNativeWorkerWaitNs <= 0 {
+		t.Fatalf("span-native worker busy/wait ns=%d/%d, want non-zero", result.Metrics.ZipperSpanNativeWorkerBusyNs, result.Metrics.ZipperSpanNativeWorkerWaitNs)
+	}
+	if result.Metrics.ZipperSpanNativeReadyTasks == 0 || result.Metrics.ZipperSpanNativeDispatchedTasks != result.Metrics.ZipperSpanNativeReadyTasks || result.Metrics.ZipperSpanNativeCompletedTasks != result.Metrics.ZipperSpanNativeDispatchedTasks {
+		t.Fatalf("span-native scheduler ready/dispatched/completed=%d/%d/%d", result.Metrics.ZipperSpanNativeReadyTasks, result.Metrics.ZipperSpanNativeDispatchedTasks, result.Metrics.ZipperSpanNativeCompletedTasks)
+	}
 	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
 		t.Fatalf("concurrent span-native output mismatch")
 	}
