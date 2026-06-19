@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/golang/snappy"
+	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -2341,6 +2342,31 @@ func TestValueLogBlockCodecSnappy_ReusesProvidedBuffer(t *testing.T) {
 	}
 	if &out[0] != &dst[0] {
 		t.Fatalf("expected encode to reuse provided destination buffer")
+	}
+}
+
+func TestValueLogBlockCodecLZ4_ReusesWorkerLocalCompressorScratch(t *testing.T) {
+	var scratch blockCodecScratch
+	dst := make([]byte, lz4.CompressBlockBound(4096))
+	for i, fill := range []byte{'a', 'b'} {
+		raw := bytes.Repeat([]byte{fill}, 4096)
+		out, err := encodeBlockPayloadWithScratch(BlockCodecLZ4, raw, dst[:0], &scratch)
+		if err != nil {
+			t.Fatalf("encode %d: %v", i, err)
+		}
+		if len(out) == 0 {
+			t.Fatalf("encode %d returned empty output", i)
+		}
+		decoded, err := decodeBlockPayload(uint8(BlockCodecLZ4), out, uint32(len(raw)), nil)
+		if err != nil {
+			t.Fatalf("decode %d: %v", i, err)
+		}
+		if !bytes.Equal(decoded, raw) {
+			t.Fatalf("decode %d mismatch", i)
+		}
+	}
+	if scratch.lz4Compressor == nil {
+		t.Fatal("expected worker-local lz4 compressor scratch to be initialized")
 	}
 }
 

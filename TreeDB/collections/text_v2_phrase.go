@@ -224,7 +224,7 @@ func readTextV2PhrasePositionValueAtSnapshot(
 	if !found {
 		return textV2PositionValue{}, errMalformedTextStorage("missing text-v2 position entry for phrase ordinal %d term %q", ordinal, term)
 	}
-	value, err := decodeTextV2PositionValue(raw)
+	value, err := decodeTextV2PositionValueForTerm(raw, term)
 	if err != nil {
 		return textV2PositionValue{}, err
 	}

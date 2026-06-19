@@ -293,6 +293,95 @@ func TestColumnGraphScalarU8AlphaQuantizedAssetRebuildPrepareReopen2843(t *testi
 	}
 }
 
+func TestColumnGraphScalarU8AlphaQuantileSparseGranulePositiveFallback2843(t *testing.T) {
+	const dims = 1000
+	q := scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha.quantile")
+	q.ScalarU8Calibration.AlphaPolicy = ScalarU8AlphaPolicy{Name: ScalarU8AlphaPolicyAbsQuantile, QuantilePPM: ScalarU8AlphaPolicyAbsQuantilePPM999}
+	def, err := normalizeVectorIndexDefinition(VectorIndexDefinition{
+		Name:             "embedding_graph",
+		Field:            "embedding",
+		Metric:           VectorMetricCosine,
+		Dimensions:       dims,
+		M:                3,
+		Strategy:         VectorIndexStrategyColumnGraph,
+		QuantizedIndexes: []QuantizedVectorIndexDefinition{q},
+	})
+	if err != nil {
+		t.Fatalf("normalizeVectorIndexDefinition: %v", err)
+	}
+	q = def.QuantizedIndexes[0]
+	vector := make([]float32, dims)
+	vector[dims-1] = 1
+	rows := []columnVectorGraphAssetRow{{ID: []byte("doc-a"), Vector: vector, InvNorm: 1}}
+
+	alpha, err := computeColumnVectorGraphScalarU8GranuleAlpha(def, q, rows)
+	if err != nil {
+		t.Fatalf("computeColumnVectorGraphScalarU8GranuleAlpha: %v", err)
+	}
+	if alpha != 1 {
+		t.Fatalf("alpha=%v want deterministic positive fallback 1", alpha)
+	}
+	metadata, err := buildColumnVectorGraphScalarU8AlphaMetadata(def, q, rows)
+	if err != nil {
+		t.Fatalf("buildColumnVectorGraphScalarU8AlphaMetadata: %v", err)
+	}
+	if len(metadata.Alphas) != 1 || metadata.Alphas[0] != 1 {
+		t.Fatalf("metadata alphas=%v want [1]", metadata.Alphas)
+	}
+	codes, err := buildColumnVectorGraphScalarU8CodesForDefinition(def, q, rows)
+	if err != nil {
+		t.Fatalf("buildColumnVectorGraphScalarU8CodesForDefinition: %v", err)
+	}
+	if len(codes) != dims {
+		t.Fatalf("codes len=%d want %d", len(codes), dims)
+	}
+	if codes[0] != 128 || codes[dims-1] != 255 {
+		t.Fatalf("codes edge=(%d,%d) want (128,255)", codes[0], codes[dims-1])
+	}
+}
+
+func TestColumnGraphScalarU8AlphaStateStatusRejectsWrongGranuleCount2843(t *testing.T) {
+	rows := []columnGraphRebuildInputRowV2A{
+		{id: "doc-a", vector: []float32{3, 4, 0}},
+		{id: "doc-b", vector: []float32{1, 2, 2}},
+		{id: "doc-c", vector: []float32{-2, 1, 2}},
+	}
+	_, d, col, def := openColumnGraphQuantizedTestCollection1926(t, rows, []QuantizedVectorIndexDefinition{scalarU8AlphaQuantizedIndex2843("embedding.scalar_u8.alpha")})
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatalf("RebuildVectorIndex: %v", err)
+	}
+	records, cfg := loadColumnGraphRebuildManifestRecordsAndConfigV2A(t, d, "docs")
+	if cfg.ActiveManifest == nil {
+		t.Fatal("active manifest is nil")
+	}
+	manifest, err := decodeColumnManifestSnapshotForScan(records)
+	if err != nil {
+		t.Fatalf("decodeColumnManifestSnapshotForScan: %v", err)
+	}
+	_, _, state, _ := loadColumnGraphScalarU8AlphaState2843(t, d, def)
+	badState := state
+	badState.Assets = append([]columnVectorIndexStateAssetSnapshot(nil), state.Assets...)
+	mutated := false
+	for i := range badState.Assets {
+		if badState.Assets[i].Role == columnVectorIndexStateAssetRoleQuantizedAlpha {
+			badState.Assets[i].RowCount++
+			mutated = true
+			break
+		}
+	}
+	if !mutated {
+		t.Fatalf("state assets=%+v missing alpha", state.Assets)
+	}
+	if got := columnVectorIndexStateMatchStatus(badState, def, *cfg, manifest, records); got != columnVectorIndexStateMatchMismatch {
+		t.Fatalf("match status=%v want mismatch for wrong alpha granule count", got)
+	}
+
+	if _, err := encodeColumnVectorIndexStateRecord(badState); err != nil {
+		t.Fatalf("encode bad state with relaxed alpha row_count: %v", err)
+	}
+}
+
 func TestColumnGraphScalarU8AlphaQuantizedAssetFailsClosed2843(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{3, 4, 0}},

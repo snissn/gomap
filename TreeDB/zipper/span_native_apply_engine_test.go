@@ -3,6 +3,7 @@ package zipper
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -239,8 +240,79 @@ func TestSpanNativeApplyConcurrentWorkerLocalScratchSplitParity(t *testing.T) {
 	if result.Metrics.Splits == 0 {
 		t.Fatalf("splits=%d want split outputs from worker-local scratch", result.Metrics.Splits)
 	}
+	if result.Metrics.ZipperSpanNativeScheduledWorkersMax < 2 {
+		t.Fatalf("span-native scheduled workers max=%d, want >=2", result.Metrics.ZipperSpanNativeScheduledWorkersMax)
+	}
+	if result.Metrics.ZipperSpanNativeReadyTasks == 0 || result.Metrics.ZipperSpanNativeDispatchedTasks != result.Metrics.ZipperSpanNativeReadyTasks || result.Metrics.ZipperSpanNativeCompletedTasks != result.Metrics.ZipperSpanNativeDispatchedTasks {
+		t.Fatalf("span-native scheduler ready/dispatched/completed=%d/%d/%d", result.Metrics.ZipperSpanNativeReadyTasks, result.Metrics.ZipperSpanNativeDispatchedTasks, result.Metrics.ZipperSpanNativeCompletedTasks)
+	}
 	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
 		t.Fatalf("concurrent span-native output mismatch")
+	}
+}
+
+func TestSpanNativeApplyGroupsTinyLeafSpansIntoBoundedWorkUnits(t *testing.T) {
+	prevProcs := runtime.GOMAXPROCS(4)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
+
+	_, serial := newReadOnlyPrepareZipper(t)
+	_, native := newReadOnlyPrepareZipper(t)
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 20000)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 20000)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < 20000; i += 31 {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", i)), []byte(fmt.Sprintf("grouped-%06d", i))); err != nil {
+			t.Fatalf("Set grouped %d: %v", i, err)
+		}
+	}
+
+	prepared, err := native.PrepareReadOnly(nativeRoot, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	if len(prepared.LeafSpans) <= 4*readOnlyLeafSpanWorkUnitQueueFactor {
+		t.Fatalf("prepared spans=%d want enough tiny spans to prove grouping", len(prepared.LeafSpans))
+	}
+	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+	if err != nil {
+		t.Fatalf("serial Apply: %v", err)
+	}
+	pool := NewApplyWorkerPool(4)
+	defer pool.Close()
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{
+		SpanNativeApply:          true,
+		ParallelApplyConcurrency: 4,
+		ParallelApplyWorkerPool:  pool,
+	})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if !result.SpanNativeEligible || !result.SpanNativeUsed || result.SpanNativeWorkers != 4 {
+		t.Fatalf("span-native flags eligible/used/workers=%v/%v/%d", result.SpanNativeEligible, result.SpanNativeUsed, result.SpanNativeWorkers)
+	}
+	ready := result.Metrics.ZipperSpanNativeReadyTasks
+	if ready <= result.SpanNativeWorkers || ready > result.SpanNativeWorkers*readOnlyLeafSpanWorkUnitQueueFactor {
+		t.Fatalf("ready work units=%d want bounded queue > workers and <= factor cap", ready)
+	}
+	if ready >= len(prepared.LeafSpans) {
+		t.Fatalf("ready work units=%d should group %d leaf spans", ready, len(prepared.LeafSpans))
+	}
+	if got := result.Metrics.ZipperSpanNativeTaskSpansTotal; got != len(prepared.LeafSpans) {
+		t.Fatalf("task spans total=%d want prepared spans %d", got, len(prepared.LeafSpans))
+	}
+	if got := result.Metrics.ZipperSpanNativeTaskOpsTotal; got != prepared.PointOps {
+		t.Fatalf("task ops total=%d want point ops %d", got, prepared.PointOps)
+	}
+	if result.Metrics.ZipperSpanNativeTaskSpansMax <= 1 {
+		t.Fatalf("task spans max=%d want grouped work units", result.Metrics.ZipperSpanNativeTaskSpansMax)
+	}
+	if result.Metrics.ZipperSpanNativeSingleSpanTasks >= ready {
+		t.Fatalf("single-span tasks=%d ready=%d want grouped distribution", result.Metrics.ZipperSpanNativeSingleSpanTasks, ready)
+	}
+	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
+		t.Fatalf("grouped span-native output mismatch")
 	}
 }
 
