@@ -78,6 +78,9 @@ func normalizeScalarU8CalibrationConfig(defName string, index int, q QuantizedVe
 	if q.ScalarU8Calibration == nil {
 		return nil, nil
 	}
+	if q.Codec == "" {
+		q.Codec = QuantizedVectorCodecScalarU8
+	}
 	if q.Codec != QuantizedVectorCodecScalarU8 {
 		return nil, fmt.Errorf("collections: vector index %q quantized index[%d] scalar_u8_calibration requires codec %q", defName, index, QuantizedVectorCodecScalarU8)
 	}
@@ -175,6 +178,9 @@ func scalarU8CalibrationIsLegacy(q QuantizedVectorIndexDefinition) bool {
 }
 
 func scalarU8CalibrationCodecConfig(q QuantizedVectorIndexDefinition) ([]byte, uint64, error) {
+	if q.Codec == "" {
+		q.Codec = QuantizedVectorCodecScalarU8
+	}
 	if q.Codec != QuantizedVectorCodecScalarU8 {
 		return nil, 0, fmt.Errorf("scalar_u8 calibration identity requires codec %q, got %q", QuantizedVectorCodecScalarU8, q.Codec)
 	}
@@ -207,10 +213,10 @@ func normalizedScalarU8CalibrationConfigForIdentity(q QuantizedVectorIndexDefini
 	return normalizeScalarU8CalibrationConfig("", 0, q)
 }
 
-func scalarU8CalibrationConfigHashForAssetID(q QuantizedVectorIndexDefinition) uint64 {
+func scalarU8CalibrationConfigHashForAssetID(q QuantizedVectorIndexDefinition) (uint64, error) {
 	_, hash, err := scalarU8CalibrationCodecConfig(q)
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return hash
+	return hash, nil
 }

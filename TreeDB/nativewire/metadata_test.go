@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,6 +231,60 @@ func TestMetadataCommandsPreserveScalarU8Calibration2842(t *testing.T) {
 	listedCalibration := metas[0].VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration
 	if !reflect.DeepEqual(listedCalibration, wantCalibration) {
 		t.Fatalf("listed scalar_u8 calibration=%+v want %+v", listedCalibration, wantCalibration)
+	}
+}
+
+func TestDecodeCollectionMetaRejectsInvalidScalarU8Calibration2842(t *testing.T) {
+	base := collections.CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     collections.VectorMetricCosine,
+			Dimensions: 64,
+			Strategy:   collections.VectorIndexStrategyColumnGraph,
+		}},
+	}
+	tests := []struct {
+		name string
+		q    collections.QuantizedVectorIndexDefinition
+		want string
+	}{
+		{
+			name: "unsupported_mode",
+			q: collections.QuantizedVectorIndexDefinition{
+				Name:    "embedding.scalar_u8.bad",
+				Codec:   collections.QuantizedVectorCodecScalarU8,
+				Version: 1,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: "per_vector_alpha",
+				},
+			},
+			want: "mode",
+		},
+		{
+			name: "scalar_config_on_rabitq",
+			q: collections.QuantizedVectorIndexDefinition{
+				Name:    "embedding.rabitq.bad",
+				Codec:   "rabitq_1bit",
+				Version: 1,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode: collections.ScalarU8CalibrationModeLegacy,
+				},
+			},
+			want: "requires codec",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			meta := base
+			meta.VectorIndexes = append([]collections.VectorIndexDefinition(nil), base.VectorIndexes...)
+			meta.VectorIndexes[0].QuantizedIndexes = []collections.QuantizedVectorIndexDefinition{tt.q}
+			_, err := decodeCollectionMeta(encodeCollectionMeta(meta))
+			if nativeCodeOf(err) != iwire.ErrInvalidCommand || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("decodeCollectionMeta err=%v code=%d want invalid command containing %q", err, nativeCodeOf(err), tt.want)
+			}
+		})
 	}
 }
 

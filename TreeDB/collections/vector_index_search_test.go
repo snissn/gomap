@@ -216,6 +216,62 @@ func TestScalarU8CalibrationDefinitionNormalization2842(t *testing.T) {
 	}
 }
 
+func TestNormalizeScalarU8CalibrationConfigDefaultsEmptyCodec2842(t *testing.T) {
+	legacy, err := NormalizeScalarU8CalibrationConfig("embedding_graph", 0, QuantizedVectorIndexDefinition{
+		Name:                "embedding.scalar_u8.legacy",
+		ScalarU8Calibration: &ScalarU8CalibrationConfig{},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeScalarU8CalibrationConfig empty codec legacy: %v", err)
+	}
+	if legacy == nil || legacy.Mode != ScalarU8CalibrationModeLegacy {
+		t.Fatalf("legacy config=%+v want normalized legacy mode", legacy)
+	}
+	alpha, err := NormalizeScalarU8CalibrationConfig("embedding_graph", 0, QuantizedVectorIndexDefinition{
+		Name: "embedding.scalar_u8.alpha",
+		ScalarU8Calibration: &ScalarU8CalibrationConfig{
+			Mode: ScalarU8CalibrationModePerGranuleAlpha,
+			AlphaPolicy: ScalarU8AlphaPolicy{
+				Name: ScalarU8AlphaPolicyMaxAbs,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeScalarU8CalibrationConfig empty codec alpha: %v", err)
+	}
+	if alpha == nil || alpha.Mode != ScalarU8CalibrationModePerGranuleAlpha || alpha.Grouping != ScalarU8CalibrationGroupingStorageLayoutGranule || alpha.AlphaPolicy.Name != ScalarU8AlphaPolicyMaxAbs {
+		t.Fatalf("alpha config=%+v want normalized per-granule alpha", alpha)
+	}
+}
+
+func TestInvalidScalarU8CalibrationIdentityDoesNotMasqueradeAsLegacy2842(t *testing.T) {
+	invalid := QuantizedVectorIndexDefinition{
+		Name:    "embedding.scalar_u8.bad",
+		Codec:   QuantizedVectorCodecScalarU8,
+		Version: 1,
+		ScalarU8Calibration: &ScalarU8CalibrationConfig{
+			Mode: "per_vector_alpha",
+		},
+	}
+	if _, _, err := scalarU8CalibrationCodecConfig(invalid); err == nil {
+		t.Fatal("scalarU8CalibrationCodecConfig invalid config err=nil want error")
+	}
+	if hash, err := scalarU8CalibrationConfigHashForAssetID(invalid); err == nil || hash != 0 {
+		t.Fatalf("scalarU8CalibrationConfigHashForAssetID hash=%d err=%v want zero with error", hash, err)
+	}
+	if assetID := columnVectorGraphQuantizedAssetID(invalid); assetID == "quantized/embedding.scalar_u8.bad/codes" {
+		t.Fatalf("invalid scalar_u8 calibration asset id %q must not collapse to legacy", assetID)
+	}
+	if _, err := columnVectorGraphQuantizedAssetIDChecked(invalid); err == nil {
+		t.Fatal("columnVectorGraphQuantizedAssetIDChecked invalid config err=nil want error")
+	}
+	base := ColumnStoreConfig{Enabled: true, AssetManager: &ColumnAssetManagerConfig{Namespace: "docs/column-assets"}}
+	def := VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 3}
+	if _, err := columnVectorGraphQuantizedCodesColumnStoreConfig("docs", base, def, invalid); err == nil {
+		t.Fatal("columnVectorGraphQuantizedCodesColumnStoreConfig invalid config err=nil want error")
+	}
+}
+
 func TestSameCollectionMetaScalarU8LegacyCalibrationIdentity2842(t *testing.T) {
 	base := CollectionMeta{
 		Name: "docs",
