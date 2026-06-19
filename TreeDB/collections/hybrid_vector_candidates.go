@@ -25,6 +25,10 @@ func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (Hybr
 }
 
 func (c *Collection) searchHybridVectorCandidates(query HybridVectorQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
+	return c.searchHybridVectorCandidatesWithAllowSetBudget(query, allowSet, query.CandidateLimit)
+}
+
+func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query HybridVectorQuery, allowSet hybridScalarAllowSet, allowSetBudget int) (HybridCandidateResponse, error) {
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
@@ -41,7 +45,10 @@ func (c *Collection) searchHybridVectorCandidates(query HybridVectorQuery, allow
 	if allowSet != nil && len(allowSet) == 0 {
 		return HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}, nil
 	}
-	if hybridVectorCandidateUseExactAllowSet(query, allowSet) {
+	if allowSetBudget < requested {
+		allowSetBudget = requested
+	}
+	if hybridVectorCandidateUseExactAllowSetBudget(query, allowSet, allowSetBudget) {
 		response, err := c.searchHybridVectorCandidatesAllowSet(query, allowSet)
 		if !errors.Is(err, errHybridVectorAllowSetScanBudgetExceeded) {
 			return response, err
@@ -75,13 +82,17 @@ func hybridVectorSearchOptions(query HybridVectorQuery) VectorIndexSearchOptions
 }
 
 func hybridVectorCandidateUseExactAllowSet(query HybridVectorQuery, allowSet hybridScalarAllowSet) bool {
-	if allowSet == nil || len(allowSet) == 0 || query.CandidateLimit <= 0 {
+	return hybridVectorCandidateUseExactAllowSetBudget(query, allowSet, query.CandidateLimit)
+}
+
+func hybridVectorCandidateUseExactAllowSetBudget(query HybridVectorQuery, allowSet hybridScalarAllowSet, allowSetBudget int) bool {
+	if allowSet == nil || len(allowSet) == 0 || query.CandidateLimit <= 0 || allowSetBudget <= 0 {
 		return false
 	}
-	if query.CandidateLimit > hybridVectorScalarPrefilterExactMax {
+	if allowSetBudget > hybridVectorScalarPrefilterExactMax {
 		return false
 	}
-	return len(allowSet) <= query.CandidateLimit
+	return len(allowSet) <= allowSetBudget
 }
 
 func validateHybridVectorCandidateQuery(query HybridVectorQuery) error {

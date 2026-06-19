@@ -108,6 +108,43 @@ func TestHybridDefaultCandidateBudgetKeepsFixedHybridWhenBoundsNeedProbing2875(t
 	}
 }
 
+func TestHybridAdaptiveVectorBudgetPreservesScalarAllowSetRankSemantics2875(t *testing.T) {
+	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
+		{id: "doc-global", title: "refund", body: "refund", city: "sfo", score: 10, vector: []float32{1, 0, 0}},
+		{id: "doc-allowed-a", title: "refund", body: "refund", city: "sea", score: 20, vector: []float32{0.99, 0.01, 0}},
+		{id: "doc-allowed-b", title: "refund", body: "refund", city: "sea", score: 30, vector: []float32{0.98, 0.02, 0}},
+	})
+	defer func() { _ = d.Close() }()
+
+	opts := HybridSearchOptions{
+		TopK:         1,
+		Vector:       &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 2, EfSearch: 8, QueryMode: VectorIndexQueryModeExact},
+		ScalarFilter: &HybridScalarFilter{IndexName: "city", Value: "sea"},
+	}
+	fixed, err := col.searchHybridWithCandidateBudgetPolicy(opts, hybridCandidateBudgetPolicyFixed)
+	if err != nil {
+		t.Fatalf("fixed SearchHybrid: %v", err)
+	}
+	adaptive, err := col.searchHybridWithCandidateBudgetPolicy(opts, hybridCandidateBudgetPolicyAdaptive)
+	if err != nil {
+		t.Fatalf("adaptive SearchHybrid: %v", err)
+	}
+	assertHybridResponsesEqual2875(t, adaptive, fixed)
+	assertHybridNoDocumentGuardrails2875(t, adaptive.Stats)
+	if got := hybridResultIDs2505(adaptive.Results); len(got) != 1 || got[0] != "doc-allowed-a" {
+		t.Fatalf("adaptive ids=%v want top allowed vector hit", got)
+	}
+	if adaptive.Results[0].Sources[0].SourceRank != 1 {
+		t.Fatalf("adaptive result=%+v want scalar allow-set vector rank semantics", adaptive.Results[0])
+	}
+	if adaptive.Stats.CandidateBudgetPolicy != HybridCandidateBudgetPolicyAdaptiveRRF || adaptive.Stats.CandidateBudgetStopReason != HybridCandidateBudgetStopReasonExactRRFBound || adaptive.Stats.CandidateBudgetFallbacks != 0 || adaptive.Stats.CandidateBudgetIterations != 1 {
+		t.Fatalf("adaptive stats=%+v want exact scalar allow-set proof without fallback", adaptive.Stats)
+	}
+	if adaptive.Stats.VectorCandidatesRequested != 2 || adaptive.Stats.VectorCandidateBudgetEffective != 1 || adaptive.Stats.VectorCandidatesReturned != 1 {
+		t.Fatalf("adaptive stats=%+v want requested/effective/returned vector budgets 2/1/1", adaptive.Stats)
+	}
+}
+
 func TestHybridAdaptiveCandidateBudgetFallbacks2875(t *testing.T) {
 	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
 		{id: "doc-a", title: "refund", body: "refund policy", city: "sea", score: 10, vector: []float32{1, 0, 0}},

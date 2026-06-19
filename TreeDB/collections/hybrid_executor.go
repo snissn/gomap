@@ -24,15 +24,16 @@ const (
 type hybridSearchExecutionPlan struct {
 	public HybridSearchPlan
 
-	text                    *HybridTextQuery
-	textCandidateScanBudget int
-	vector                  *HybridVectorQuery
-	scalarFilter            *HybridScalarFilter
-	scalarFilterStrategy    HybridScalarFilterStrategy
-	fusion                  HybridFusionOptions
-	resultMode              HybridResultMode
-	topK                    int
-	scalarLookupLimit       int
+	text                          *HybridTextQuery
+	textCandidateScanBudget       int
+	vector                        *HybridVectorQuery
+	vectorCandidateAllowSetBudget int
+	scalarFilter                  *HybridScalarFilter
+	scalarFilterStrategy          HybridScalarFilterStrategy
+	fusion                        HybridFusionOptions
+	resultMode                    HybridResultMode
+	topK                          int
+	scalarLookupLimit             int
 }
 
 func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchResponse, error) {
@@ -173,6 +174,7 @@ func planHybridSearch(opts HybridSearchOptions) (hybridSearchExecutionPlan, erro
 			vector.CandidateLimit = hybridDefaultCandidateLimit(opts.TopK)
 		}
 		plan.vector = &vector
+		plan.vectorCandidateAllowSetBudget = vector.CandidateLimit
 		plan.public.VectorCandidateLimit = vector.CandidateLimit
 	}
 
@@ -388,7 +390,7 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 		if plan.vector == nil {
 			return nil
 		}
-		response, err := c.searchHybridVectorCandidates(*plan.vector, allowSet)
+		response, err := c.searchHybridVectorCandidatesWithAllowSetBudget(*plan.vector, allowSet, plan.vectorCandidateAllowSetBudget)
 		hybridMergeStats(&stats, response.Stats)
 		if err != nil {
 			return hybridCandidateSourceError{source: HybridCandidateSourceVector, err: err}
