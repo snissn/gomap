@@ -20,7 +20,10 @@ import (
 	"time"
 )
 
-const schemaVersion = "treedb_text_hybrid_scoreboard/v1"
+const (
+	schemaVersion          = "treedb_text_hybrid_scoreboard/v1"
+	phase2SynthesisVersion = "treedb_text_v2_phase2_gap_synthesis/v1"
+)
 
 type config struct {
 	outDir               string
@@ -106,6 +109,7 @@ type report struct {
 	Rows               []scoreboardRow     `json:"rows"`
 	CounterValidations []counterValidation `json:"counter_validations,omitempty"`
 	Unavailable        []unavailableRow    `json:"unavailable,omitempty"`
+	Phase2Synthesis    phase2Synthesis     `json:"phase2_synthesis"`
 	Caveats            []string            `json:"caveats,omitempty"`
 }
 
@@ -169,6 +173,53 @@ type unavailableRow struct {
 	System string `json:"system"`
 	Reason string `json:"reason"`
 	Source string `json:"source,omitempty"`
+}
+
+type phase2Synthesis struct {
+	SchemaVersion          string                    `json:"schema_version"`
+	ClassificationBasis    string                    `json:"classification_basis"`
+	ExternalBaselines      []phase2ExternalBaseline  `json:"external_baselines"`
+	BenchmarkTargets       []phase2BenchmarkTarget   `json:"benchmark_targets"`
+	GapClassifications     []phase2GapClassification `json:"gap_classifications"`
+	PriorityOrder          []phase2Priority          `json:"priority_order"`
+	AnalyzerSemanticsNotes []string                  `json:"analyzer_semantics_notes"`
+}
+
+type phase2ExternalBaseline struct {
+	System   string `json:"system"`
+	Status   string `json:"status"`
+	Evidence string `json:"evidence"`
+	Caveat   string `json:"caveat,omitempty"`
+}
+
+type phase2BenchmarkTarget struct {
+	ShapeID          string   `json:"shape_id"`
+	Shape            string   `json:"shape"`
+	Description      string   `json:"description"`
+	PrimaryIssue     string   `json:"primary_issue"`
+	RequiredRows     []string `json:"required_rows"`
+	RequiredCounters []string `json:"required_counters"`
+}
+
+type phase2GapClassification struct {
+	ShapeID                string   `json:"shape_id"`
+	Shape                  string   `json:"shape"`
+	Classification         string   `json:"classification"`
+	Priority               int      `json:"priority"`
+	PrimaryIssue           string   `json:"primary_issue"`
+	TreeDBEvidence         string   `json:"treedb_evidence"`
+	ExternalEvidence       string   `json:"external_evidence"`
+	Rationale              string   `json:"rationale"`
+	RequiredFollowUpRows   []string `json:"required_follow_up_rows"`
+	NonEquivalentSemantics []string `json:"non_equivalent_semantics,omitempty"`
+}
+
+type phase2Priority struct {
+	Priority             int      `json:"priority"`
+	ShapeID              string   `json:"shape_id"`
+	PrimaryIssue         string   `json:"primary_issue"`
+	Rationale            string   `json:"rationale"`
+	RequiredFollowUpRows []string `json:"required_follow_up_rows"`
 }
 
 type goBenchSample struct {
@@ -309,6 +360,7 @@ func buildReport(cfg config) (report, error) {
 	}
 
 	sortRows(rep.Rows)
+	rep.Phase2Synthesis = buildPhase2Synthesis(rep.Rows, rep.Unavailable)
 	rep.CounterValidations = validateCounterRows(rep.Rows)
 	var failures []string
 	for _, check := range rep.CounterValidations {
@@ -967,6 +1019,457 @@ func validateCounterRows(rows []scoreboardRow) []counterValidation {
 	return checks
 }
 
+func buildPhase2Synthesis(rows []scoreboardRow, unavailable []unavailableRow) phase2Synthesis {
+	targets := phase2BenchmarkTargets()
+	classifications := make([]phase2GapClassification, 0, len(targets))
+	for _, target := range targets {
+		classifications = append(classifications, classifyPhase2Gap(target, rows, unavailable))
+	}
+	sort.Slice(classifications, func(i, j int) bool {
+		if classifications[i].Priority == classifications[j].Priority {
+			return classifications[i].ShapeID < classifications[j].ShapeID
+		}
+		return classifications[i].Priority < classifications[j].Priority
+	})
+	priorities := make([]phase2Priority, 0, len(classifications))
+	for _, row := range classifications {
+		priorities = append(priorities, phase2Priority{
+			Priority:             row.Priority,
+			ShapeID:              row.ShapeID,
+			PrimaryIssue:         row.PrimaryIssue,
+			Rationale:            row.Rationale,
+			RequiredFollowUpRows: append([]string(nil), row.RequiredFollowUpRows...),
+		})
+	}
+	sort.Slice(priorities, func(i, j int) bool {
+		if priorities[i].Priority == priorities[j].Priority {
+			return priorities[i].ShapeID < priorities[j].ShapeID
+		}
+		return priorities[i].Priority < priorities[j].Priority
+	})
+	return phase2Synthesis{
+		SchemaVersion:          phase2SynthesisVersion,
+		ClassificationBasis:    "phase-2 target taxonomy plus captured scoreboard rows; ahead/near require comparable external rows, while missing or non-equivalent external rows stay behind/far by evidence gap rather than parity claim",
+		ExternalBaselines:      phase2ExternalBaselines(rows, unavailable),
+		BenchmarkTargets:       targets,
+		GapClassifications:     classifications,
+		PriorityOrder:          priorities,
+		AnalyzerSemanticsNotes: phase2AnalyzerSemanticsNotes(),
+	}
+}
+
+func phase2ExternalBaselines(rows []scoreboardRow, unavailable []unavailableRow) []phase2ExternalBaseline {
+	systems := []string{"SQLite FTS5", "Bleve", "Tantivy", "Lucene"}
+	out := make([]phase2ExternalBaseline, 0, len(systems))
+	for _, system := range systems {
+		var rowLabels []string
+		for _, row := range rows {
+			if strings.EqualFold(row.System, system) {
+				rowLabels = append(rowLabels, row.SourceLabel)
+			}
+		}
+		if len(rowLabels) > 0 {
+			sort.Strings(rowLabels)
+			out = append(out, phase2ExternalBaseline{System: system, Status: "available", Evidence: fmt.Sprintf("captured scoreboard row(s): %s", strings.Join(rowLabels, ", ")), Caveat: externalBaselineCaveat(system)})
+			continue
+		}
+		if reason, source, ok := unavailableReason(system, unavailable); ok {
+			evidence := reason
+			if source != "" {
+				evidence = evidence + " (source: " + source + ")"
+			}
+			out = append(out, phase2ExternalBaseline{System: system, Status: "unavailable", Evidence: evidence, Caveat: externalBaselineCaveat(system)})
+			continue
+		}
+		out = append(out, phase2ExternalBaseline{System: system, Status: "not_captured", Evidence: "no artifact or explicit unavailable marker in this scoreboard run", Caveat: externalBaselineCaveat(system)})
+	}
+	return out
+}
+
+func unavailableReason(system string, unavailable []unavailableRow) (reason, source string, ok bool) {
+	for _, row := range unavailable {
+		if strings.EqualFold(row.System, system) {
+			return row.Reason, row.Source, true
+		}
+	}
+	return "", "", false
+}
+
+func externalBaselineCaveat(system string) string {
+	switch system {
+	case "SQLite FTS5":
+		return "embedded FTS baseline; rowid+bm25 retrieval is not Lucene/Tantivy/Bleve analyzer or query-parser parity"
+	case "Bleve":
+		return "requires a pinned Go harness with the same corpus, analyzer, query semantics, and result-order checks"
+	case "Tantivy":
+		return "requires a pinned Rust/Tantivy harness with the same corpus, analyzer, query semantics, and result-order checks"
+	case "Lucene":
+		return "requires a pinned Lucene/JMH or OpenSearch run with the same corpus, analyzer, query semantics, and result-order checks"
+	default:
+		return ""
+	}
+}
+
+func phase2BenchmarkTargets() []phase2BenchmarkTarget {
+	commonCounters := []string{"docs_fetched/search=0", "full_doc_fallbacks/search=0", "fail_closed/search=0", "text_state_lookups/search=0", "text_match_details/search=0"}
+	blockCounters := append(append([]string(nil), commonCounters...), "posting_blocks_visited/search", "posting_blocks_skipped/search", "threshold_updates/search")
+	return []phase2BenchmarkTarget{
+		{
+			ShapeID:          "single_term_common",
+			Shape:            "single-term common",
+			Description:      "High-document-frequency BM25F top-k term with exact block-max skipping.",
+			PrimaryIssue:     "#2835",
+			RequiredRows:     []string{"TreeDB 10k and 100k blockmax_common_topk", "SQLite FTS5/Lucene/Tantivy/Bleve common-term top-k rows"},
+			RequiredCounters: blockCounters,
+		},
+		{
+			ShapeID:          "single_term_rare",
+			Shape:            "single-term rare",
+			Description:      "Low-document-frequency BM25F top-k term where decode/setup overhead dominates.",
+			PrimaryIssue:     "#2835",
+			RequiredRows:     []string{"TreeDB rare term score-only 10k/100k/1M", "SQLite FTS5/Lucene/Tantivy/Bleve rare-term top-k rows"},
+			RequiredCounters: commonCounters,
+		},
+		{
+			ShapeID:          "multi_term_and",
+			Shape:            "multi-term AND",
+			Description:      "Exact BM25F conjunction over multiple query terms with deterministic ranking.",
+			PrimaryIssue:     "#2837",
+			RequiredRows:     []string{"TreeDB multi_term_and score-only 10k/100k/1M", "SQLite FTS5/Lucene/Tantivy/Bleve explicit AND rows"},
+			RequiredCounters: append(append([]string(nil), commonCounters...), "posting_blocks_visited/search", "candidates_scored/search"),
+		},
+		{
+			ShapeID:          "multi_term_or_wand",
+			Shape:            "multi-term OR/WAND",
+			Description:      "Exact BM25F disjunction with block-max/WAND pruning and deterministic ranking.",
+			PrimaryIssue:     "#2836",
+			RequiredRows:     []string{"TreeDB or_common/or_common_rare/or_high_frequency blockmax and exhaustive rows", "Lucene/Tantivy/Bleve OR/WAND rows", "SQLite FTS5 OR row if semantics are made explicit"},
+			RequiredCounters: append(append([]string(nil), blockCounters...), "blockmax_fallbacks/search", "candidates_scored/search"),
+		},
+		{
+			ShapeID:          "phrase",
+			Shape:            "phrase/proximity",
+			Description:      "Bounded position-lane phrase/proximity query over StorePositions text-v2 indexes.",
+			PrimaryIssue:     "#2839",
+			RequiredRows:     []string{"TreeDB phrase exact/slop 10k/100k", "Lucene/Tantivy/Bleve phrase/proximity rows with analyzer notes"},
+			RequiredCounters: append(append([]string(nil), commonCounters...), "position_lookups/search", "phrase_candidates_checked/search", "phrase_candidates_matched/search"),
+		},
+		{
+			ShapeID:          "hybrid_text_scalar",
+			Shape:            "hybrid text+scalar",
+			Description:      "BM25F candidate generation composed with indexed scalar filtering without full-document fetch.",
+			PrimaryIssue:     "#2836",
+			RequiredRows:     []string{"TreeDB text_scalar and hybrid_scalar no-doc rows at rare/broad selectivity", "Lucene/Tantivy/Bleve equivalent filter rows or documented non-equivalence"},
+			RequiredCounters: append(append([]string(nil), blockCounters...), "scalar_prefilter_ids/search", "text_candidates/search"),
+		},
+		{
+			ShapeID:          "index_build_ingest",
+			Shape:            "index build/ingest",
+			Description:      "Text-v2 CreateTextIndex backfill and maintained insert/update/delete throughput.",
+			PrimaryIssue:     "#2835",
+			RequiredRows:     []string{"TreeDB CreateTextIndex/backfill and InsertBatch text-v2 rows", "SQLite FTS5/Lucene/Tantivy/Bleve build rows with WAL/checkpoint boundary"},
+			RequiredCounters: []string{"rows/s", "B/op", "allocs/op", "index_bytes/doc", "posting_blocks/doc", "write_amp_entries/doc"},
+		},
+		{
+			ShapeID:          "index_size",
+			Shape:            "index size",
+			Description:      "Durable text index bytes/doc, separating primary payload, WAL, value-log, and text-v2 roots.",
+			PrimaryIssue:     "#2835",
+			RequiredRows:     []string{"TreeDB durable text-v2 bytes/doc after checkpoint and rewrite", "SQLite FTS5/Lucene/Tantivy/Bleve index bytes/doc after equivalent optimize/vacuum"},
+			RequiredCounters: []string{"storage_bytes", "storage_bytes_per_doc", "index_bytes/doc", "value-log bytes", "WAL excluded"},
+		},
+		{
+			ShapeID:          "reopen",
+			Shape:            "reopen/recovery",
+			Description:      "Close/open and post-reopen text/hybrid probe latency with snapshot-bound roots.",
+			PrimaryIssue:     "#2837",
+			RequiredRows:     []string{"TreeDB scale harness reopen probe at 10k/1M/10M", "External engine reopen/open-reader rows where embedded equivalents exist"},
+			RequiredCounters: []string{"close_seconds", "open_seconds", "probe_seconds", "docs_fetched/search=0", "fail_closed/search=0"},
+		},
+		{
+			ShapeID:          "maintenance_rewrite",
+			Shape:            "maintenance/rewrite",
+			Description:      "Bounded logical text-v2 rewrite plus normal TreeDB physical reclamation and post-rewrite search probes.",
+			PrimaryIssue:     "#2840",
+			RequiredRows:     []string{"TreeDB RewriteTextIndex/MaintainTextIndexes rows with stale-posting debt", "External optimize/merge rows if used as a comparator"},
+			RequiredCounters: []string{"stale_postings_purged/op", "tombstones_purged/op", "posting_blocks_read/op", "posting_blocks_written/op", "rewrite seconds", "post-rewrite search ns/op"},
+		},
+	}
+}
+
+func classifyPhase2Gap(target phase2BenchmarkTarget, rows []scoreboardRow, unavailable []unavailableRow) phase2GapClassification {
+	treeRows := matchingRowsForPhase2Target(rows, target.ShapeID, true)
+	externalRows := matchingRowsForPhase2Target(rows, target.ShapeID, false)
+	classification, rationale := defaultPhase2Classification(target.ShapeID)
+	if measuredClass, measuredRationale, ok := measuredPhase2Classification(target.ShapeID, treeRows, externalRows); ok {
+		classification, rationale = measuredClass, measuredRationale
+	}
+	return phase2GapClassification{
+		ShapeID:                target.ShapeID,
+		Shape:                  target.Shape,
+		Classification:         classification,
+		Priority:               phase2PriorityForTarget(target.ShapeID),
+		PrimaryIssue:           target.PrimaryIssue,
+		TreeDBEvidence:         phase2EvidenceSummary("TreeDB", target.ShapeID, treeRows),
+		ExternalEvidence:       phase2ExternalEvidenceSummary(target.ShapeID, externalRows, unavailable),
+		Rationale:              rationale,
+		RequiredFollowUpRows:   append([]string(nil), target.RequiredRows...),
+		NonEquivalentSemantics: phase2SemanticsForTarget(target.ShapeID),
+	}
+}
+
+func measuredPhase2Classification(shapeID string, treeRows, externalRows []scoreboardRow) (string, string, bool) {
+	if len(treeRows) == 0 || len(externalRows) == 0 {
+		return "", "", false
+	}
+	if shapeID == "index_size" {
+		treeStorage, okTree := bestStorageBytesPerDoc(treeRows)
+		extStorage, okExt := bestStorageBytesPerDoc(externalRows)
+		if okTree && okExt && extStorage > 0 {
+			ratio := treeStorage / extStorage
+			return classFromLowerIsBetterRatio(ratio), fmt.Sprintf("captured comparable storage rows: TreeDB %.3g B/doc vs external %.3g B/doc (ratio %.3gx)", treeStorage, extStorage, ratio), true
+		}
+		return "", "", false
+	}
+	treeNS, okTree := bestNsPerOp(treeRows)
+	extNS, okExt := bestNsPerOp(externalRows)
+	if !okTree || !okExt || extNS <= 0 {
+		return "", "", false
+	}
+	ratio := treeNS / extNS
+	return classFromLowerIsBetterRatio(ratio), fmt.Sprintf("captured comparable latency rows: TreeDB %.3g ns/op vs external %.3g ns/op (ratio %.3gx)", treeNS, extNS, ratio), true
+}
+
+func classFromLowerIsBetterRatio(ratio float64) string {
+	switch {
+	case ratio <= 0.8:
+		return "ahead"
+	case ratio <= 1.5:
+		return "near_parity"
+	case ratio <= 8:
+		return "behind_but_tractable"
+	default:
+		return "far_behind"
+	}
+}
+
+func bestNsPerOp(rows []scoreboardRow) (float64, bool) {
+	best := math.Inf(1)
+	for _, row := range rows {
+		if row.NsPerOp != nil && *row.NsPerOp > 0 && *row.NsPerOp < best {
+			best = *row.NsPerOp
+		}
+	}
+	if math.IsInf(best, 1) {
+		return 0, false
+	}
+	return best, true
+}
+
+func bestStorageBytesPerDoc(rows []scoreboardRow) (float64, bool) {
+	best := math.Inf(1)
+	for _, row := range rows {
+		if row.StorageBytesPerDoc != nil && *row.StorageBytesPerDoc > 0 && *row.StorageBytesPerDoc < best {
+			best = *row.StorageBytesPerDoc
+		}
+	}
+	if math.IsInf(best, 1) {
+		return 0, false
+	}
+	return best, true
+}
+
+func defaultPhase2Classification(shapeID string) (string, string) {
+	switch shapeID {
+	case "index_size":
+		return "far_behind", "phase-1 scoreboard has external storage rows but lacks a durable TreeDB text-v2 bytes/doc row, so footprint parity is the first evidence and optimization gap"
+	case "single_term_common":
+		return "behind_but_tractable", "TreeDB has exact block-max common-term evidence, but comparable Lucene/Tantivy/Bleve/SQLite rows and bytes/doc context are missing"
+	case "multi_term_or_wand":
+		return "behind_but_tractable", "exact OR/WAND block-max landed in phase 1, but scalar-aware pruning and external OR/WAND rows are still required before parity claims"
+	case "hybrid_text_scalar":
+		return "behind_but_tractable", "TreeDB has zero-document hybrid/scalar rows, but industry baselines are non-equivalent or unavailable and scalar-aware WAND counters need expansion"
+	case "index_build_ingest":
+		return "behind_but_tractable", "build and ingest rows exist but are not yet separated into text-only durable bytes/doc and external-equivalent build boundaries"
+	case "phrase":
+		return "behind_but_tractable", "bounded phrase/proximity exists, but Lucene/Tantivy/Bleve phrase semantics and analyzer behavior are broader and unmeasured"
+	case "reopen":
+		return "behind_but_tractable", "scale harness covers reopen, but phase-2 needs refreshed 1M/10M rows and external open-reader comparators where feasible"
+	case "maintenance_rewrite":
+		return "behind_but_tractable", "bounded rewrite/maintenance exists, but phase-2 needs debt, duration, and post-maintenance search rows at larger scale"
+	case "multi_term_and":
+		return "behind_but_tractable", "exact AND serving exists, but current scoreboard lacks external conjunction rows and scale refreshes"
+	case "single_term_rare":
+		return "behind_but_tractable", "rare-term serving should be tractable, but phase-2 needs explicit rows because setup/decode overhead can dominate"
+	default:
+		return "behind_but_tractable", "target requires phase-2 evidence before parity claims"
+	}
+}
+
+func phase2PriorityForTarget(shapeID string) int {
+	switch shapeID {
+	case "index_size":
+		return 1
+	case "single_term_common":
+		return 2
+	case "multi_term_or_wand":
+		return 3
+	case "hybrid_text_scalar":
+		return 4
+	case "index_build_ingest":
+		return 5
+	case "phrase":
+		return 6
+	case "reopen":
+		return 7
+	case "maintenance_rewrite":
+		return 8
+	case "multi_term_and":
+		return 9
+	case "single_term_rare":
+		return 10
+	default:
+		return 99
+	}
+}
+
+func matchingRowsForPhase2Target(rows []scoreboardRow, shapeID string, treeDB bool) []scoreboardRow {
+	var matches []scoreboardRow
+	for _, row := range rows {
+		isTreeDB := strings.EqualFold(row.System, "TreeDB")
+		if treeDB != isTreeDB {
+			continue
+		}
+		if phase2RowMatchesTarget(row, shapeID) {
+			matches = append(matches, row)
+		}
+	}
+	sortRows(matches)
+	return matches
+}
+
+func phase2RowMatchesTarget(row scoreboardRow, shapeID string) bool {
+	text := strings.ToLower(strings.Join([]string{row.Modality, row.Engine, row.QueryShape, row.Boundary, row.Benchmark}, " "))
+	switch shapeID {
+	case "single_term_common":
+		return strings.Contains(text, "common term") || strings.Contains(text, "blockmax_common_topk") || strings.Contains(text, "exhaustive_common_topk")
+	case "single_term_rare":
+		return strings.Contains(text, "rare term") || strings.Contains(text, "rare_no_docs") || strings.Contains(text, "rare_score")
+	case "multi_term_and":
+		return strings.Contains(text, "multi-term and") || strings.Contains(text, "multi_term_and") || strings.Contains(text, "and_common")
+	case "multi_term_or_wand":
+		return strings.Contains(text, "multi-term or") || strings.Contains(text, "or/wand") || strings.Contains(text, "wand") || strings.Contains(text, "or_common") || strings.Contains(text, "or_high_frequency")
+	case "phrase":
+		return strings.Contains(text, "phrase") || strings.Contains(text, "proximity")
+	case "hybrid_text_scalar":
+		return row.Modality == "text_scalar" || row.Modality == "hybrid_scalar" || (strings.Contains(text, "scalar") && strings.Contains(text, "text"))
+	case "index_build_ingest":
+		return row.Modality == "build_storage" || strings.Contains(text, "index build") || strings.Contains(text, "ingest") || strings.Contains(text, "insertbatch") || strings.Contains(text, "backfill")
+	case "index_size":
+		return row.StorageBytes != nil || row.StorageBytesPerDoc != nil || strings.Contains(text, "storage") || strings.Contains(text, "index size")
+	case "reopen":
+		return strings.Contains(text, "reopen") || strings.Contains(text, "recovery")
+	case "maintenance_rewrite":
+		return strings.Contains(text, "maintenance") || strings.Contains(text, "rewrite") || strings.Contains(text, "compact")
+	default:
+		return false
+	}
+}
+
+func phase2EvidenceSummary(system, shapeID string, rows []scoreboardRow) string {
+	if len(rows) == 0 {
+		if system == "TreeDB" {
+			return phase2TreeDBFallbackEvidence(shapeID)
+		}
+		return "no comparable row captured"
+	}
+	parts := make([]string, 0, len(rows))
+	for _, row := range rows {
+		var metricParts []string
+		if row.NsPerOp != nil {
+			metricParts = append(metricParts, "ns/op="+formatNumber(*row.NsPerOp))
+		}
+		if row.StorageBytesPerDoc != nil {
+			metricParts = append(metricParts, "storage="+formatNumber(*row.StorageBytesPerDoc)+" B/doc")
+		}
+		if row.BuildSeconds != nil {
+			metricParts = append(metricParts, "build="+formatSecondsPtr(row.BuildSeconds))
+		}
+		metric := ""
+		if len(metricParts) > 0 {
+			metric = " " + strings.Join(metricParts, ", ")
+		}
+		parts = append(parts, fmt.Sprintf("%s/%s%s", row.SourceLabel, row.Benchmark, metric))
+	}
+	return fmt.Sprintf("captured %d row(s): %s", len(rows), strings.Join(parts, "; "))
+}
+
+func phase2TreeDBFallbackEvidence(shapeID string) string {
+	switch shapeID {
+	case "single_term_common":
+		return "phase-1 #2810/#2809 evidence includes TreeDB block-max common-term rows; rerun scoreboard for current numbers"
+	case "single_term_rare":
+		return "scale harness defines rare-term score-only rows; current scoreboard run did not capture them"
+	case "multi_term_and":
+		return "phase-1 text-v2 contract and scale harness define exact multi-term AND rows; current scoreboard run did not capture them"
+	case "multi_term_or_wand":
+		return "#2812 landed exact multi-term OR/WAND block-max rows; current scoreboard run did not capture them"
+	case "phrase":
+		return "#2815 landed bounded phrase/proximity rows; current scoreboard run did not capture them"
+	case "hybrid_text_scalar":
+		return "#2810 scoreboard includes zero-doc hybrid/scalar row support; rerun with scalar selectivity rows if absent"
+	case "index_build_ingest":
+		return "#2810/#2813 harnesses include build/backfill/ingest rows; current scoreboard run did not capture a text-only equivalent"
+	case "index_size":
+		return "TreeDB durable text-v2 bytes/doc is not captured in the current scoreboard run"
+	case "reopen":
+		return "#2813 scale harness includes reopen probes; current scoreboard run did not capture reopen rows"
+	case "maintenance_rewrite":
+		return "#2814 maintenance policy and #2813 scale harness include rewrite/maintenance rows; current scoreboard run did not capture them"
+	default:
+		return "no TreeDB row captured"
+	}
+}
+
+func phase2ExternalEvidenceSummary(shapeID string, externalRows []scoreboardRow, unavailable []unavailableRow) string {
+	if len(externalRows) > 0 {
+		return phase2EvidenceSummary("external", shapeID, externalRows)
+	}
+	var statuses []string
+	for _, system := range []string{"SQLite FTS5", "Bleve", "Tantivy", "Lucene"} {
+		if reason, _, ok := unavailableReason(system, unavailable); ok {
+			statuses = append(statuses, fmt.Sprintf("%s=unavailable (%s)", system, reason))
+		} else {
+			statuses = append(statuses, fmt.Sprintf("%s=not_captured", system))
+		}
+	}
+	return "no comparable external row captured; " + strings.Join(statuses, "; ")
+}
+
+func phase2SemanticsForTarget(shapeID string) []string {
+	switch shapeID {
+	case "single_term_common", "single_term_rare", "multi_term_and", "multi_term_or_wand":
+		return []string{"TreeDB simple analyzer/BM25F weighting is not automatically equivalent to SQLite unicode61/porter, Bleve analyzers, Tantivy tokenizers, or Lucene analyzers", "explicit AND/OR query semantics must be pinned before latency ratios are parity evidence"}
+	case "phrase":
+		return []string{"TreeDB phrase/proximity is structured and bounded over StorePositions indexes; it is not a Lucene-compatible query DSL", "slop, stopword position gaps, and unsupported stemming/synonym expansion must be recorded per row"}
+	case "hybrid_text_scalar":
+		return []string{"SQLite FTS5 is not a hybrid text+scalar engine by itself", "Lucene/Tantivy/Bleve filter semantics and whether filters are pre- or post-score must be documented"}
+	case "index_build_ingest", "index_size", "reopen", "maintenance_rewrite":
+		return []string{"storage/build boundaries must state WAL inclusion, checkpoint/optimize/vacuum state, and retained primary-payload treatment"}
+	default:
+		return nil
+	}
+}
+
+func phase2AnalyzerSemanticsNotes() []string {
+	return []string{
+		"Do not compare TreeDB BM25F rows with external BM25/BM25F rows unless analyzer, field weights, top-k, query operator, and final-document fetch boundaries are pinned.",
+		"SQLite FTS5 default rows are useful embedded baselines, but they are not Lucene/Tantivy/Bleve analyzer or query-parser parity.",
+		"Phrase/proximity rows must record StorePositions, slop, stopword behavior, and unsupported stemming/synonym states; unsupported states must fail closed.",
+		"Candidate-generation rows must keep full-document fetch counters at zero; final-fetch rows belong in separate tables.",
+	}
+}
+
 func requiresZeroDocValidation(row scoreboardRow) bool {
 	lowerBoundary := strings.ToLower(row.Boundary)
 	lowerName := strings.ToLower(row.Benchmark)
@@ -1031,6 +1534,8 @@ func renderMarkdown(rep report) string {
 		fmt.Fprintf(&b, "| _none_ | | | | | | | | | | | |\n")
 	}
 
+	renderPhase2SynthesisMarkdown(&b, rep.Phase2Synthesis)
+
 	fmt.Fprintf(&b, "\n## Zero-doc counter validation\n\n")
 	fmt.Fprintf(&b, "| Source | Benchmark | OK | Checks / failures |\n")
 	fmt.Fprintf(&b, "| --- | --- | --- | --- |\n")
@@ -1068,6 +1573,44 @@ func renderMarkdown(rep report) string {
 		fmt.Fprintf(&b, "\n## Captured host/context\n\n```text\n%s\n```\n", rep.Context.ContextText)
 	}
 	return b.String()
+}
+
+func renderPhase2SynthesisMarkdown(b *strings.Builder, syn phase2Synthesis) {
+	if syn.SchemaVersion == "" {
+		return
+	}
+	fmt.Fprintf(b, "\n## Phase-2 gap classification\n\n")
+	fmt.Fprintf(b, "Schema: `%s`  \n", syn.SchemaVersion)
+	fmt.Fprintf(b, "Basis: %s\n\n", syn.ClassificationBasis)
+	fmt.Fprintf(b, "Classification vocabulary: `ahead` and `near_parity` require comparable external evidence; `behind_but_tractable` means the feature/evidence exists but phase-2 work is still needed; `far_behind` marks a blocking parity/evidence gap and must not be read as an unmeasured performance ratio.\n\n")
+
+	fmt.Fprintf(b, "### External baseline coverage\n\n")
+	fmt.Fprintf(b, "| System | Status | Evidence | Caveat |\n")
+	fmt.Fprintf(b, "| --- | --- | --- | --- |\n")
+	for _, row := range syn.ExternalBaselines {
+		fmt.Fprintf(b, "| %s | `%s` | %s | %s |\n", escape(row.System), escape(row.Status), escape(row.Evidence), escape(row.Caveat))
+	}
+
+	fmt.Fprintf(b, "\n### Benchmark target taxonomy\n\n")
+	fmt.Fprintf(b, "| Target | Shape | Primary issue | Required rows | Required counters |\n")
+	fmt.Fprintf(b, "| --- | --- | --- | --- | --- |\n")
+	for _, row := range syn.BenchmarkTargets {
+		fmt.Fprintf(b, "| `%s` | %s | %s | %s | %s |\n", escape(row.ShapeID), escape(row.Shape), escape(row.PrimaryIssue), escape(strings.Join(row.RequiredRows, "; ")), escape(strings.Join(row.RequiredCounters, "; ")))
+	}
+
+	fmt.Fprintf(b, "\n### Gap classification and priority order\n\n")
+	fmt.Fprintf(b, "| Priority | Target | Classification | TreeDB evidence | External evidence | Required follow-up rows | Rationale |\n")
+	fmt.Fprintf(b, "| ---: | --- | --- | --- | --- | --- | --- |\n")
+	for _, row := range syn.GapClassifications {
+		fmt.Fprintf(b, "| %d | `%s` | `%s` | %s | %s | %s | %s |\n", row.Priority, escape(row.ShapeID), escape(row.Classification), escape(row.TreeDBEvidence), escape(row.ExternalEvidence), escape(strings.Join(row.RequiredFollowUpRows, "; ")), escape(row.Rationale))
+	}
+
+	if len(syn.AnalyzerSemanticsNotes) > 0 {
+		fmt.Fprintf(b, "\n### Non-equivalent analyzer/query semantics\n\n")
+		for _, note := range syn.AnalyzerSemanticsNotes {
+			fmt.Fprintf(b, "- %s\n", note)
+		}
+	}
 }
 
 func compactQueryBoundary(row scoreboardRow) string {

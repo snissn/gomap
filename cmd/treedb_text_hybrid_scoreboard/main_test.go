@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -233,5 +234,135 @@ func TestRunWritesReportBeforeReturningCounterFailure(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(out, "scoreboard.json")); statErr != nil {
 		t.Fatalf("scoreboard.json not written before failure: %v", statErr)
+	}
+}
+
+func TestPhase2SynthesisGolden(t *testing.T) {
+	treedbNS := 1_100_000.0
+	sqliteNS := 1_000_000.0
+	treedbStorage := 144.0
+	sqliteStorage := 128.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel:        "treedb_common_10k",
+			System:             "TreeDB",
+			Engine:             "treedb_text_v2",
+			Modality:           "text_only",
+			QueryShape:         "common term BM25F top-k with block-max pruning",
+			Boundary:           "No-document text-v2 score-only BM25F search",
+			Benchmark:          "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:            &treedbNS,
+			StorageBytesPerDoc: &treedbStorage,
+		},
+		{
+			SourceLabel:        "sqlite_common_10k",
+			System:             "SQLite FTS5",
+			Engine:             "sqlite_fts5",
+			Modality:           "text_only",
+			QueryShape:         "common term FTS5 MATCH top-k",
+			Boundary:           "no-document rowid+bm25 retrieval only",
+			Benchmark:          "sqlite_fts5/common_term_no_docs",
+			NsPerOp:            &sqliteNS,
+			StorageBytesPerDoc: &sqliteStorage,
+		},
+	}, []unavailableRow{
+		{System: "Bleve", Reason: "not run in unit test"},
+		{System: "Tantivy", Reason: "not run in unit test"},
+		{System: "Lucene", Reason: "not run in unit test"},
+	})
+	payload, err := json.MarshalIndent(syn, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal synthesis: %v", err)
+	}
+	payload = append(payload, '\n')
+	goldenPath := filepath.Join("testdata", "phase2_synthesis_golden.json")
+	if os.Getenv("UPDATE_GOLDEN") == "1" {
+		if err := os.WriteFile(goldenPath, payload, 0o644); err != nil {
+			t.Fatalf("update golden %s: %v", goldenPath, err)
+		}
+		return
+	}
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v", goldenPath, err)
+	}
+	if string(payload) != string(want) {
+		t.Fatalf("phase2 synthesis golden mismatch\n--- got ---\n%s\n--- want ---\n%s", payload, want)
+	}
+}
+
+func TestRunWritesPhase2SynthesisArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	goBench := filepath.Join(dir, "go.txt")
+	if err := os.WriteFile(goBench, []byte(`BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk-8 1 1000 ns/op 16 B/op 1 allocs/op 0 docs_fetched/search 0 full_doc_fallbacks/search 0 fail_closed/search 0 state_lookups/search 0 match_details/search 4 posting_blocks_visited/search 2 posting_blocks_skipped/search
+`), 0o644); err != nil {
+		t.Fatalf("write go bench: %v", err)
+	}
+	out := filepath.Join(dir, "out")
+	if err := run(config{
+		outDir:      out,
+		goBenches:   namedPaths{{Name: "treedb_text_blockmax_10k", Path: goBench}},
+		unavailable: namedValues{{Name: "Lucene", Value: "not run in artifact smoke"}, {Name: "Tantivy", Value: "not run in artifact smoke"}, {Name: "Bleve", Value: "not run in artifact smoke"}},
+	}); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	jsonPayload, err := os.ReadFile(filepath.Join(out, "scoreboard.json"))
+	if err != nil {
+		t.Fatalf("read scoreboard.json: %v", err)
+	}
+	var rep report
+	if err := json.Unmarshal(jsonPayload, &rep); err != nil {
+		t.Fatalf("parse scoreboard.json: %v", err)
+	}
+	if rep.Phase2Synthesis.SchemaVersion != phase2SynthesisVersion {
+		t.Fatalf("phase2 synthesis schema=%q", rep.Phase2Synthesis.SchemaVersion)
+	}
+	mdPayload, err := os.ReadFile(filepath.Join(out, "scoreboard.md"))
+	if err != nil {
+		t.Fatalf("read scoreboard.md: %v", err)
+	}
+	md := string(mdPayload)
+	for _, want := range []string{"## Phase-2 gap classification", "single_term_common", "External baseline coverage", "Non-equivalent analyzer/query semantics"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("scoreboard.md missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func TestPhase2GapReadoutDocContainsRequiredTaxonomy(t *testing.T) {
+	path := filepath.Join("..", "..", "docs", "benchmarks", "treedb_text_v2_phase2_gap_classification.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	doc := string(data)
+	for _, want := range []string{
+		"/tmp/gomap_2727_scoreboard_candidate_20260613_090425",
+		"scripts/bench_text_hybrid_scoreboard.sh",
+		"single_term_common",
+		"single_term_rare",
+		"multi_term_and",
+		"multi_term_or_wand",
+		"phrase",
+		"hybrid_text_scalar",
+		"index_build_ingest",
+		"index_size",
+		"reopen",
+		"maintenance_rewrite",
+		"ahead",
+		"near_parity",
+		"behind_but_tractable",
+		"far_behind",
+		"SQLite FTS5",
+		"Bleve",
+		"Tantivy",
+		"Lucene",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("phase2 readout missing %q", want)
+		}
+	}
+	if strings.Contains(strings.ToLower(doc), "slab") {
+		t.Fatalf("phase2 readout should use value-log/storage-native wording, not slab")
 	}
 }
