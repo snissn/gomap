@@ -1,10 +1,11 @@
-# TreeDB text-v2/hybrid industry comparison scoreboard (#2727)
+# TreeDB text-v2/hybrid industry comparison scoreboard (#2727/#2834)
 
 This runbook is the stable #2727 scoreboard contract for downstream text-v2 and
-hybrid optimization issues. It measures TreeDB text-only, vector-only,
-text+vector, and text+vector+scalar retrieval rows against local external
-baselines where practical. It is a benchmark/report harness, not an optimization
-or industry-parity claim.
+hybrid optimization issues. #2834 layers the phase-2 gap-classification
+synthesis on the same artifacts. The harness measures TreeDB text-only,
+vector-only, text+vector, and text+vector+scalar retrieval rows against local
+external baselines where practical. It is a benchmark/report harness, not an
+optimization or industry-parity claim.
 
 ## Stable commands and artifacts
 
@@ -17,8 +18,10 @@ RUN_DIR=/tmp/gomap_text_hybrid_scoreboard_$(date +%Y%m%d_%H%M%S) \
 
 Primary outputs:
 
-- `$RUN_DIR/scoreboard.md`
-- `$RUN_DIR/scoreboard.json`
+- `$RUN_DIR/scoreboard.md` with retrieval rows, zero-doc validation, and the
+  phase-2 gap classification table
+- `$RUN_DIR/scoreboard.json` with schema `treedb_text_hybrid_scoreboard/v1` and
+  nested `phase2_synthesis` schema `treedb_text_v2_phase2_gap_synthesis/v1`
 - `$RUN_DIR/context.txt`
 - raw TreeDB Go benchmark logs under `$RUN_DIR/treedb_*.txt`
 - optional external JSON artifacts such as `$RUN_DIR/sqlite_fts5_10k.json`
@@ -174,14 +177,27 @@ Candidate-generation rows must keep full document fetches at zero. Final-fetch
 rows must keep document fetches bounded by top-K and should stay separate from
 candidate rows.
 
+## Phase-2 synthesis readout
+
+The durable #2834 baseline readout is published at
+`docs/benchmarks/treedb_text_v2_phase2_gap_classification.md`. It classifies the
+current evidence by target shape (`single_term_common`, `single_term_rare`,
+`multi_term_and`, `multi_term_or_wand`, `phrase`, `hybrid_text_scalar`,
+`index_build_ingest`, `index_size`, `reopen`, and `maintenance_rewrite`) using
+`ahead`, `near_parity`, `behind_but_tractable`, and `far_behind` vocabulary.
+`ahead` and `near_parity` require comparable external evidence; unavailable or
+non-equivalent external rows remain explicit gaps rather than parity claims.
+
 ## Downstream contract surface
 
-Downstream issues #2728, #2729, #2731, and #2734 can cite:
+Downstream issues #2728, #2729, #2731, #2734, and phase-2 issues #2835-#2840 can cite:
 
 - `scripts/bench_text_hybrid_scoreboard.sh` as the stable capture entry point;
 - `cmd/treedb_text_hybrid_scoreboard` as the parser/report generator;
-- `scoreboard.json` schema `treedb_text_hybrid_scoreboard/v1`;
-- `scoreboard.md` retrieval and zero-doc counter validation tables.
+- `scoreboard.json` schema `treedb_text_hybrid_scoreboard/v1` and nested
+  `phase2_synthesis` schema `treedb_text_v2_phase2_gap_synthesis/v1`;
+- `scoreboard.md` retrieval, phase-2 gap classification, and zero-doc counter
+  validation tables.
 
 Avoid changing these names or table meanings without updating this runbook and
 the parser/report tests.
