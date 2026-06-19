@@ -32,12 +32,16 @@ var (
 // placeholder before reducer publication. This keeps leaf construction parallel
 // while avoiding concurrent publication of incomplete leaf-log pointers.
 type spanNativeLeafLogOutputBuffer struct {
-	mu       sync.Mutex
-	pages    [][]byte
-	payloads [][]byte
+	mu           sync.Mutex
+	pages        [][]byte
+	payloads     [][]byte
+	payloadArena []byte
 }
 
-var spanNativeBufferedLeafPagePool sync.Pool
+var (
+	spanNativeBufferedLeafPagePool       sync.Pool
+	spanNativeBufferedPayloadScratchPool sync.Pool
+)
 
 func acquireSpanNativeBufferedLeafPage(size int) []byte {
 	if size <= 0 {
@@ -59,6 +63,32 @@ func releaseSpanNativeBufferedLeafPage(buf []byte) {
 	spanNativeBufferedLeafPagePool.Put(buf[:0])
 }
 
+func acquireSpanNativeBufferedPayloadScratch() []byte {
+	if v := spanNativeBufferedPayloadScratchPool.Get(); v != nil {
+		if buf, ok := v.([]byte); ok && cap(buf) <= page.PageSize*2 {
+			return buf[:0]
+		}
+	}
+	return make([]byte, 0, page.PageSize)
+}
+
+func releaseSpanNativeBufferedPayloadScratch(buf []byte) {
+	if cap(buf) == 0 || cap(buf) > page.PageSize*2 {
+		return
+	}
+	clear(buf)
+	spanNativeBufferedPayloadScratchPool.Put(buf[:0])
+}
+
+func (b *spanNativeLeafLogOutputBuffer) appendPayloadLocked(payload []byte) []byte {
+	if len(payload) == 0 {
+		return payload
+	}
+	start := len(b.payloadArena)
+	b.payloadArena = append(b.payloadArena, payload...)
+	return b.payloadArena[start:]
+}
+
 func (b *spanNativeLeafLogOutputBuffer) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
 	var one [1][]byte
 	one[0] = leafPage
@@ -77,8 +107,21 @@ func (b *spanNativeLeafLogOutputBuffer) persistLeafPageBatchDataTo(_ *Zipper, le
 	if len(leafPages) == 0 {
 		return refs, nil
 	}
-	ownedPages := make([][]byte, len(leafPages))
-	payloads := make([][]byte, len(leafPages))
+	if len(leafPages) == 1 {
+		return b.persistSingleLeafPageDataTo(leafPages[0], refs, metrics)
+	}
+
+	var ownedInline [8][]byte
+	var payloadInline [8][]byte
+	var ownedPages [][]byte
+	var payloads [][]byte
+	if len(leafPages) <= len(ownedInline) {
+		ownedPages = ownedInline[:len(leafPages)]
+		payloads = payloadInline[:len(leafPages)]
+	} else {
+		ownedPages = make([][]byte, len(leafPages))
+		payloads = make([][]byte, len(leafPages))
+	}
 	for i, leafPage := range leafPages {
 		owned := acquireSpanNativeBufferedLeafPage(len(leafPage))
 		copy(owned, leafPage)
@@ -114,6 +157,39 @@ func (b *spanNativeLeafLogOutputBuffer) persistLeafPageBatchDataTo(_ *Zipper, le
 	return refs, nil
 }
 
+func (b *spanNativeLeafLogOutputBuffer) persistSingleLeafPageDataTo(leafPage []byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	owned := acquireSpanNativeBufferedLeafPage(len(leafPage))
+	copy(owned, leafPage)
+	scratch := acquireSpanNativeBufferedPayloadScratch()
+	payload, compacted, err := valuelog.MaybeCompactLeafLogPayloadTo(scratch[:0], owned)
+	if err != nil {
+		releaseSpanNativeBufferedPayloadScratch(scratch)
+		releaseSpanNativeBufferedLeafPage(owned)
+		return nil, err
+	}
+	waitStart := time.Now()
+	b.mu.Lock()
+	reservationWait := time.Since(waitStart)
+	start := len(b.pages)
+	if compacted {
+		payload = b.appendPayloadLocked(payload)
+	}
+	b.pages = append(b.pages, owned)
+	b.payloads = append(b.payloads, payload)
+	b.mu.Unlock()
+	releaseSpanNativeBufferedPayloadScratch(scratch)
+	if metrics != nil && reservationWait > 0 {
+		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
+	}
+	if cap(refs) < 1 {
+		refs = make([]page.ChildRef, 1)
+	} else {
+		refs = refs[:1]
+	}
+	refs[0] = spanNativeBufferedLeafLogChildRef(start)
+	return refs, nil
+}
+
 func (b *spanNativeLeafLogOutputBuffer) commit(z *Zipper, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	if b == nil {
 		return nil, nil
@@ -123,6 +199,7 @@ func (b *spanNativeLeafLogOutputBuffer) commit(z *Zipper, metrics *adaptive.Metr
 	payloads := b.payloads
 	b.pages = nil
 	b.payloads = nil
+	b.payloadArena = nil
 	b.mu.Unlock()
 	if len(pages) == 0 {
 		return nil, nil
