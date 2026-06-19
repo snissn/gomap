@@ -2375,6 +2375,32 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		_ = systemDelta.Close()
 		phaseStats.systemApplyMetrics.add(systemMetrics)
 
+		db.mu.RLock()
+		observedSystemRoot := db.meta.SystemRootPageID
+		db.mu.RUnlock()
+		if observedSystemRoot != systemBaseRoot {
+			if freeErr := systemTracker.FreeAll(); freeErr != nil {
+				err = freeErr
+				return 0, nil, false, err
+			}
+			systemTracker = nil
+			if observedSystemRoot == 0 || attempt+1 >= orderedRootOptimisticSystemDeltaRebaseMaxAttempts {
+				retrySerialized = true
+				return 0, nil, retrySerialized, nil
+			}
+			systemBaseRoot = observedSystemRoot
+			continue
+		}
+		phaseStart = time.Now()
+		prepareErr := db.prepareFinalizeCommitDurability(false)
+		phaseStats.publishPrepareNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+		phaseStats.publishPrepareCalls++
+		if prepareErr != nil {
+			phaseStats.publishPrepareErrors++
+			err = prepareErr
+			return 0, nil, false, err
+		}
+
 		lockStart := time.Now()
 		db.commitMu.Lock()
 		holdStart := time.Now()
@@ -2417,7 +2443,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		phaseStart = time.Now()
 		var post finalizeCommitPost
 		commitStarted = true
-		post, err = db.finalizeCommitLocked(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil)
+		post, err = db.finalizeCommitLockedWithOptions(curUserRoot, newSystemRoot, retired, false, merged, commitTouchedValueLogSegments, true, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true})
 		phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.finalizeCalls++
 		hold := time.Since(holdStart)

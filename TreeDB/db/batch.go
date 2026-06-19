@@ -363,12 +363,39 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
 	}()
+	b.db.mu.RLock()
+	currentRoot := b.db.meta.UserRootPageID
+	b.db.mu.RUnlock()
+	if currentRoot != rootID {
+		b.db.observeFlushApplyMismatch()
+		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackRootMismatch)
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, nil
+	}
+	if err = b.db.prepareFlushApplyPublish(sync); err != nil {
+		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
+	}
+	if hook := b.db.testAfterOptimisticPublishPrepareHook; hook != nil {
+		hook()
+	}
 	commitWaitStart := time.Now()
 	b.db.commitMu.Lock()
 	b.db.observeFlushApplyCommitWait(time.Since(commitWaitStart))
 	guardedPublishStart := time.Now()
 	b.db.mu.RLock()
-	currentRoot := b.db.meta.UserRootPageID
+	currentRoot = b.db.meta.UserRootPageID
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.RUnlock()
 	if currentRoot != rootID {
@@ -387,7 +414,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -401,7 +428,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 			}
 			return false, err
 		}
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
+		opts := commandWALFinalizeOptions(intent)
+		opts.skipPrePublishFlush = true
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 		// Poison while still holding commitMu so that no concurrent writer can
 		// slip past the poison check in appendRawKVCommandWALIntent and publish a
 		// root that covers the unapplied frame's LSN.
@@ -505,10 +534,15 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
+	if err = b.db.prepareFlushApplyPublish(sync); err != nil {
+		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
+		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
+		return err
+	}
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil)
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -518,7 +552,9 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 			return err
 		}
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, commandWALFinalizeOptions(intent))
+		opts := commandWALFinalizeOptions(intent)
+		opts.skipPrePublishFlush = true
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart))
 	if err != nil {

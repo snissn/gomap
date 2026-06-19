@@ -260,7 +260,10 @@ func TestFlushApplyConcurrencyUsesBoundedWorkerPoolForPointSpans(t *testing.T) {
 		"treedb.flush_apply.merge_build.leaf_merges_per_op",
 		"treedb.flush_apply.merge_build.replacement_leaf_pages_per_op",
 		"treedb.flush_apply.root_reduce.ns_per_op",
+		"treedb.flush_apply.publish_prepare.ns_per_op",
 		"treedb.flush_apply.guarded_publish.ns_per_op",
+		"treedb.flush_apply.publish_final_install.ns_per_op",
+		"treedb.flush_apply.publish_total.ns_per_op",
 		"treedb.flush_apply.span_run.target_leaf_spans_total",
 		"treedb.flush_apply.span_run.span_ops_total",
 		"treedb.flush_apply.span_run.ops_per_span",
@@ -320,6 +323,109 @@ func TestFlushApplyRootMismatchRetriesWithoutPublishingAbandonedWork(t *testing.
 	}
 	if got := stats["treedb.flush_apply.retry_total"]; got == "" || got == "0" {
 		t.Fatalf("retry stat=%q want >0", got)
+	}
+}
+
+func TestFlushApplyPreparedPublishMismatchRetriesWithoutPublishingPreparedRoot(t *testing.T) {
+	d := openFlushApplyTestDB(t, 4)
+	putBatch(t, d, 0, 9000, "base")
+	prepareBefore := requireDBStatUint64(t, d, "treedb.flush_apply.publish_prepare.calls_total")
+
+	var fired atomic.Bool
+	d.testAfterOptimisticPublishPrepareHook = func() {
+		if !fired.CompareAndSwap(false, true) {
+			return
+		}
+		other := d.NewBatch()
+		if err := other.Set([]byte("key-concurrent"), []byte("concurrent")); err != nil {
+			t.Fatalf("concurrent Set: %v", err)
+		}
+		if err := other.Write(); err != nil {
+			t.Fatalf("concurrent Write: %v", err)
+		}
+	}
+	defer func() { d.testAfterOptimisticPublishPrepareHook = nil }()
+
+	b := d.NewBatch()
+	for i := 0; i < 7000; i++ {
+		key := []byte(fmt.Sprintf("key-%06d", i))
+		if err := b.Set(key, []byte(fmt.Sprintf("prepared-retry-%06d", i))); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write with prepared-publish retry: %v", err)
+	}
+	if got, err := d.Get([]byte("key-concurrent")); err != nil || string(got) != "concurrent" {
+		t.Fatalf("concurrent value got=%q err=%v", got, err)
+	}
+	if got, err := d.Get([]byte("key-000123")); err != nil || string(got) != "prepared-retry-000123" {
+		t.Fatalf("retried value got=%q err=%v", got, err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.mismatch_total"); got == 0 {
+		t.Fatalf("mismatch stat=0 want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.retry_total"); got == 0 {
+		t.Fatalf("retry stat=0 want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.publish_prepare.calls_total"); got < prepareBefore+2 {
+		t.Fatalf("publish prepare calls delta=%d want >=2 for stale prepared attempt plus retry", got-prepareBefore)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.publish_final_install.calls_total"); got == 0 {
+		t.Fatalf("publish final install calls=0 want >0")
+	}
+}
+
+func TestFlushApplyPreparedPublishWriteSyncReopens(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                   dir,
+		ChunkSize:             64 * 1024,
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency: 4,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	b := d.NewBatch()
+	for i := 0; i < 1024; i++ {
+		key := []byte(fmt.Sprintf("reopen-key-%06d", i))
+		val := []byte(fmt.Sprintf("reopen-value-%06d", i))
+		if err := b.Set(key, val); err != nil {
+			t.Fatalf("Set %d: %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.publish_prepare.calls_total"); got == 0 {
+		t.Fatalf("publish prepare calls=0 want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.publish_final_install.calls_total"); got == 0 {
+		t.Fatalf("publish final install calls=0 want >0")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	for _, i := range []int{0, 123, 1023} {
+		key := []byte(fmt.Sprintf("reopen-key-%06d", i))
+		want := fmt.Sprintf("reopen-value-%06d", i)
+		got, err := reopened.Get(key)
+		if err != nil {
+			t.Fatalf("reopen Get %q: %v", key, err)
+		}
+		if string(got) != want {
+			t.Fatalf("reopen Get %q=%q want %q", key, got, want)
+		}
 	}
 }
 

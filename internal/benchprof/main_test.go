@@ -340,7 +340,11 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 						"treedb.flush_apply.span_native.scheduler.worker_idle_ns_total":                        "3000",
 						"treedb.flush_apply.span_native.scheduler.ready_tasks_total":                           "8",
 						"treedb.flush_apply.span_native.scheduler.task_spans_per_task":                         "6.000000",
+						"treedb.flush_apply.publish_prepare.ns_total":                                          "44",
+						"treedb.flush_apply.publish_final_install.ns_total":                                    "55",
+						"treedb.flush_apply.publish_total.ns_total":                                            "99",
 						"treedb.flush_apply.reducer_publish.ns_total":                                          "99",
+						"treedb.publish.ordered_root_delta_group.publish_prepare_ns_total":                     "66",
 						"treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total": "10",
 					},
 				},
@@ -390,7 +394,11 @@ func TestLoadTreeDBStatsMetadata(t *testing.T) {
 		!strings.Contains(md, "treedb.flush_apply.span_native.scheduler.worker_idle_ns_total") ||
 		!strings.Contains(md, "treedb.flush_apply.span_native.scheduler.ready_tasks_total") ||
 		!strings.Contains(md, "treedb.flush_apply.span_native.scheduler.task_spans_per_task") ||
+		!strings.Contains(md, "treedb.flush_apply.publish_prepare.ns_total") ||
+		!strings.Contains(md, "treedb.flush_apply.publish_final_install.ns_total") ||
+		!strings.Contains(md, "treedb.flush_apply.publish_total.ns_total") ||
 		!strings.Contains(md, "treedb.flush_apply.reducer_publish.ns_total") ||
+		!strings.Contains(md, "treedb.publish.ordered_root_delta_group.publish_prepare_ns_total") ||
 		!strings.Contains(md, "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total") {
 		t.Fatalf("markdown missing TreeDB stats metadata:\n%s", md)
 	}
