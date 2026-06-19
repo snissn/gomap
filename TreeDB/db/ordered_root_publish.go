@@ -2934,19 +2934,25 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	var merged adaptive.Metrics
 	var systemStats orderedRootPublishStats
 	var vlogRefDelta *valueLogRefDelta
-	var ptrCollectors []*pendingValueLogAppendPtrCollectingIterator
+	var systemPtrCollectors []*pendingValueLogAppendPtrCollectingIterator
+	var orderedPtrCollectors []*pendingValueLogAppendPtrCollectingIterator
 	defer func() {
 		if vlogRefDelta != nil {
 			releaseValueLogRefDelta(vlogRefDelta)
 		}
-		for _, collector := range ptrCollectors {
+		for _, collector := range systemPtrCollectors {
 			db.releasePendingValueLogAppendPtrCollector(collector)
+		}
+		if buildSystemIter != nil {
+			for _, collector := range orderedPtrCollectors {
+				db.releasePendingValueLogAppendPtrCollector(collector)
+			}
 		}
 	}()
 
 	if systemIter != nil {
 		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(systemIter)
-		ptrCollectors = append(ptrCollectors, ptrCollector)
+		systemPtrCollectors = append(systemPtrCollectors, ptrCollector)
 		rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, collectedIter, systemOpts, true)
 		if err != nil {
 			return 0, nil, err
@@ -2970,7 +2976,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		orderedConsumed[idx] = true
 		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: ordered[idx].Iter}
 		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(touchedIter)
-		ptrCollectors = append(ptrCollectors, ptrCollector)
+		orderedPtrCollectors = append(orderedPtrCollectors, ptrCollector)
 		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, collectedIter, opts, false)
 		if err != nil {
 			return 0, nil, err
@@ -2994,7 +3000,7 @@ func (db *DB) publishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 			return 0, nil, errors.New("nil system root iterator")
 		}
 		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
-		ptrCollectors = append(ptrCollectors, ptrCollector)
+		systemPtrCollectors = append(systemPtrCollectors, ptrCollector)
 		rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, collectedIter, systemOpts, true)
 		if err != nil {
 			return 0, nil, err
