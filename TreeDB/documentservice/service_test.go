@@ -672,7 +672,7 @@ func TestServiceCreateIndexRejectsInvalidScalarU8Calibration2842(t *testing.T) {
 	}
 }
 
-func TestServiceOptimizeScalarU8PerGranuleAlphaFailsClosed2842(t *testing.T) {
+func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -701,8 +701,8 @@ func TestServiceOptimizeScalarU8PerGranuleAlphaFailsClosed2842(t *testing.T) {
 	if _, err := svc.UpsertDocuments(ctx, "bench_alpha", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatalf("deferred UpsertDocuments alpha: %v", err)
 	}
-	if _, err := svc.OptimizeIndex(ctx, "bench_alpha", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeUnsupported {
-		t.Fatalf("OptimizeIndex alpha err=%v code=%s want unsupported, not internal", err, ErrorCodeOf(err))
+	if _, err := svc.OptimizeIndex(ctx, "bench_alpha", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("OptimizeIndex alpha: %v", err)
 	}
 }
 
