@@ -2742,16 +2742,19 @@ func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snap
 			// treating the gap as proof that no live posting ordinal can score.
 			return hasLive, false, nil
 		}
-		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= first })
-		blockHadEntry := idx < len(block.Entries) && block.Entries[idx].Ordinal <= last
-		if !blockHadEntry {
-			// A present sidecar block with no entries in the posting range does not
-			// prove the range is empty: the posting block may still reference a
-			// corrupt/missing norm entry that the exact scorer must fail closed on.
-			return hasLive, false, nil
-		}
-		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= last {
+		overlapFirst := max(first, blockStart)
+		overlapLast := min(last, blockStart+uint64(textV2DefaultNormBlockSize)-1)
+		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= overlapFirst })
+		expectedOrdinal := overlapFirst
+		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= overlapLast {
 			entry := block.Entries[idx]
+			if entry.Ordinal != expectedOrdinal {
+				// A present sidecar block with a missing entry in the posting range
+				// does not prove the range is empty or fully bounded: the posting block
+				// may still reference a corrupt/missing norm entry that the exact scorer
+				// must fail closed on.
+				return hasLive, false, nil
+			}
 			if len(entry.FieldLengths) != len(ctx.fieldNames) {
 				return false, false, errMalformedTextStorage("text-v2 norm entry field count %d want %d", len(entry.FieldLengths), len(ctx.fieldNames))
 			}
@@ -2766,7 +2769,11 @@ func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snap
 				}
 				hasLive = true
 			}
+			expectedOrdinal++
 			idx++
+		}
+		if expectedOrdinal <= overlapLast {
+			return hasLive, false, nil
 		}
 		if blockStart > math.MaxUint64-uint64(textV2DefaultNormBlockSize) {
 			break
@@ -2854,23 +2861,30 @@ func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapsh
 			// referenced posting can fail closed through the required docmap lookup.
 			return minID, minID != nil, false, nil
 		}
-		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= first })
-		blockHadEntry := idx < len(block.Entries) && block.Entries[idx].Ordinal <= last
-		if !blockHadEntry {
-			// A present sidecar block with no entries in the posting range does not
-			// prove the range is empty: the posting block may still reference a
-			// corrupt/missing docmap entry that the exact scorer must fail closed on.
-			return minID, minID != nil, false, nil
-		}
-		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= last {
+		overlapFirst := max(first, blockStart)
+		overlapLast := min(last, blockStart+uint64(textV2DefaultDocMapBlockSize)-1)
+		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= overlapFirst })
+		expectedOrdinal := overlapFirst
+		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= overlapLast {
 			entry := block.Entries[idx]
+			if entry.Ordinal != expectedOrdinal {
+				// A present sidecar block with a missing entry in the posting range
+				// does not prove the range is empty or fully bounded: the posting block
+				// may still reference a corrupt/missing docmap entry that the exact
+				// scorer must fail closed on.
+				return minID, minID != nil, false, nil
+			}
 			if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.DocMapGeneration {
 				return nil, false, false, errMalformedTextStorage("text-v2 docmap entry outside status snapshot")
 			}
 			if !entry.tombstoned() && (minID == nil || bytes.Compare(entry.DocumentID, minID) < 0) {
 				minID = entry.DocumentID
 			}
+			expectedOrdinal++
 			idx++
+		}
+		if expectedOrdinal <= overlapLast {
+			return minID, minID != nil, false, nil
 		}
 		if blockStart > math.MaxUint64-uint64(textV2DefaultDocMapBlockSize) {
 			break
