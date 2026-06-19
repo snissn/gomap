@@ -31,6 +31,10 @@ type LeafPageBatchLog interface {
 	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedBatchLog interface {
+	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
+}
+
 type LeafPageReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
@@ -1781,6 +1785,42 @@ func (z *Zipper) persistLeafPageBatchData(leafPages [][]byte, metrics *adaptive.
 
 func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	return z.persistLeafPageBatchDataToWithConfig(leafPages, refs, metrics, applyRunConfig{})
+}
+
+func (z *Zipper) persistPreparedLeafPageBatchDataTo(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	refs = refs[:0]
+	if len(leafPages) == 0 {
+		return refs, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, fmt.Errorf("zipper: prepared leaf payload count %d for %d pages", len(preparedPayloads), len(leafPages))
+	}
+	preparedBatcher, ok := z.leafPageLog.(LeafPagePreparedBatchLog)
+	if !ok {
+		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
+	}
+	appendStart := time.Now()
+	ptrs, err := preparedBatcher.AppendPreparedLeafPages(leafPages, preparedPayloads)
+	appendWait := time.Since(appendStart)
+	if err != nil {
+		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
+		return nil, err
+	}
+	if len(ptrs) != len(leafPages) {
+		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
+		return nil, fmt.Errorf("zipper: prepared leaf page batch returned %d ptrs for %d pages", len(ptrs), len(leafPages))
+	}
+	recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), true)
+	if cap(refs) < len(ptrs) {
+		refs = make([]page.ChildRef, len(ptrs))
+	} else {
+		refs = refs[:len(ptrs)]
+	}
+	for i, ptr := range ptrs {
+		z.cachePersistedLeafPage(ptr, leafPages[i])
+		refs[i] = page.LeafLogChildRef(ptr)
+	}
+	return refs, nil
 }
 
 func (z *Zipper) persistLeafPageBatchDataToWithConfig(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics, cfg applyRunConfig) ([]page.ChildRef, error) {

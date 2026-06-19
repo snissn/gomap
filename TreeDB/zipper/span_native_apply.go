@@ -10,6 +10,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -31,8 +32,9 @@ var (
 // placeholder before reducer publication. This keeps leaf construction parallel
 // while avoiding concurrent publication of incomplete leaf-log pointers.
 type spanNativeLeafLogOutputBuffer struct {
-	mu    sync.Mutex
-	pages [][]byte
+	mu       sync.Mutex
+	pages    [][]byte
+	payloads [][]byte
 }
 
 var spanNativeBufferedLeafPagePool sync.Pool
@@ -75,15 +77,28 @@ func (b *spanNativeLeafLogOutputBuffer) persistLeafPageBatchDataTo(_ *Zipper, le
 	if len(leafPages) == 0 {
 		return refs, nil
 	}
+	ownedPages := make([][]byte, len(leafPages))
+	payloads := make([][]byte, len(leafPages))
+	for i, leafPage := range leafPages {
+		owned := acquireSpanNativeBufferedLeafPage(len(leafPage))
+		copy(owned, leafPage)
+		payload, _, err := valuelog.MaybeCompactLeafLogPayloadTo(nil, owned)
+		if err != nil {
+			for _, pageBuf := range ownedPages[:i] {
+				releaseSpanNativeBufferedLeafPage(pageBuf)
+			}
+			releaseSpanNativeBufferedLeafPage(owned)
+			return nil, err
+		}
+		ownedPages[i] = owned
+		payloads[i] = payload
+	}
 	waitStart := time.Now()
 	b.mu.Lock()
 	reservationWait := time.Since(waitStart)
 	start := len(b.pages)
-	for _, leafPage := range leafPages {
-		owned := acquireSpanNativeBufferedLeafPage(len(leafPage))
-		copy(owned, leafPage)
-		b.pages = append(b.pages, owned)
-	}
+	b.pages = append(b.pages, ownedPages...)
+	b.payloads = append(b.payloads, payloads...)
 	b.mu.Unlock()
 	if metrics != nil && reservationWait > 0 {
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
@@ -105,7 +120,9 @@ func (b *spanNativeLeafLogOutputBuffer) commit(z *Zipper, metrics *adaptive.Metr
 	}
 	b.mu.Lock()
 	pages := b.pages
+	payloads := b.payloads
 	b.pages = nil
+	b.payloads = nil
 	b.mu.Unlock()
 	if len(pages) == 0 {
 		return nil, nil
@@ -115,7 +132,7 @@ func (b *spanNativeLeafLogOutputBuffer) commit(z *Zipper, metrics *adaptive.Metr
 			releaseSpanNativeBufferedLeafPage(pageBuf)
 		}
 	}()
-	refs, err := z.persistLeafPageBatchDataTo(pages, nil, metrics)
+	refs, err := z.persistPreparedLeafPageBatchDataTo(pages, payloads, nil, metrics)
 	if err != nil {
 		return nil, err
 	}

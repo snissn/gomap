@@ -241,6 +241,57 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 	return leafPtrs, nil
 }
 
+func (l *cachingLeafPageLog) AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error) {
+	if l == nil || l.db == nil || l.lane == nil {
+		return nil, errWALUnavailable
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, fmt.Errorf("cachingdb: prepared leaf page batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+	}
+	startRID, err := l.db.ReserveValueLogRIDs(len(leafPages))
+	if err != nil {
+		return nil, err
+	}
+	records := getValueLogRecordsCap(len(leafPages))
+	records = records[:len(leafPages)]
+	defer func() {
+		for i := range records {
+			records[i] = valuelog.Record{}
+		}
+		putValueLogRecordsNoClear(records)
+	}()
+	for i := range leafPages {
+		if len(leafPages[i]) != page.PageSize {
+			return nil, fmt.Errorf("cachingdb: prepared leaf page %d has invalid size: got=%dB want=%dB", i, len(leafPages[i]), page.PageSize)
+		}
+		records[i] = valuelog.Record{
+			RID:   startRID + uint64(i),
+			Value: preparedPayloads[i],
+		}
+	}
+	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
+	if err != nil {
+		return nil, err
+	}
+	defer putValueLogPtrs(valuePtrs)
+	if len(valuePtrs) != len(leafPages) {
+		return nil, fmt.Errorf("cachingdb: prepared leaf page batch returned %d ptrs for %d leaf pages", len(valuePtrs), len(leafPages))
+	}
+	leafPtrs := make([]page.LeafLogPtr, len(valuePtrs))
+	for i, ptr := range valuePtrs {
+		leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
+		if convErr != nil {
+			return nil, convErr
+		}
+		leafPtrs[i] = leafPtr
+		l.db.noteLeafGenerationRecordLength(ptr)
+	}
+	return leafPtrs, nil
+}
+
 func getCompactLeafLogPayloadScratch() *compactLeafLogPayloadScratch {
 	if v := compactLeafLogPayloadScratchPool.Get(); v != nil {
 		if scratch, ok := v.(*compactLeafLogPayloadScratch); ok && scratch != nil && cap(scratch.buf) >= page.PageSize {
