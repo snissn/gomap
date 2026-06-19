@@ -377,7 +377,8 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		}
 		return false, nil
 	}
-	if err = b.db.prepareFlushApplyPublish(sync); err != nil {
+	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
+	if err != nil {
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		freeErr := tracker.FreeAll()
@@ -387,8 +388,21 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		}
 		return false, err
 	}
+	defer func() { publishPrepareGuard.Release() }()
 	if hook := b.db.testAfterOptimisticPublishPrepareHook; hook != nil {
+		publishPrepareGuard.Release()
 		hook()
+		publishPrepareGuard, err = b.db.prepareFlushApplyPublish(sync)
+		if err != nil {
+			b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
+			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
+			freeErr := tracker.FreeAll()
+			b.db.writeMu.RUnlock()
+			if freeErr != nil {
+				return false, freeErr
+			}
+			return false, err
+		}
 	}
 	commitWaitStart := time.Now()
 	b.db.commitMu.Lock()
@@ -534,11 +548,13 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err = b.db.prepareFlushApplyPublish(sync); err != nil {
+	publishPrepareGuard, err := b.db.prepareFlushApplyPublish(sync)
+	if err != nil {
 		b.db.observeFlushApplySpanNativePublishFallback(applyResult, FlushSpanRunFallbackOutputOwnershipFailure)
 		b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
+	defer publishPrepareGuard.Release()
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {

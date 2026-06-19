@@ -295,14 +295,14 @@ func (db *DB) observeFlushApplyPublishPrepare(d time.Duration, err error) {
 	addDurationNs(&db.flushApplyPublishPrepareNs, d)
 }
 
-func (db *DB) prepareFlushApplyPublish(sync bool) error {
+func (db *DB) prepareFlushApplyPublish(sync bool) (*finalizeCommitPrepareGuard, error) {
 	if db == nil {
-		return ErrClosed
+		return nil, ErrClosed
 	}
 	start := time.Now()
-	err := db.prepareFinalizeCommitDurability(sync)
+	guard, err := db.prepareFinalizeCommitDurability(sync)
 	db.observeFlushApplyPublishPrepare(time.Since(start), err)
-	return err
+	return guard, err
 }
 
 func (db *DB) observeFlushApplyGuardedPublish(hold time.Duration) {

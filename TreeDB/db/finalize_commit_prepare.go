@@ -2,6 +2,21 @@ package db
 
 import "errors"
 
+// finalizeCommitPrepareGuard keeps value-log GC from scanning reachability and
+// deleting freshly flushed publish output before the root that references it is
+// either installed or abandoned.
+type finalizeCommitPrepareGuard struct {
+	db *DB
+}
+
+func (g *finalizeCommitPrepareGuard) Release() {
+	if g == nil || g.db == nil {
+		return
+	}
+	g.db.publishPrepareMu.Unlock()
+	g.db = nil
+}
+
 func (db *DB) flushFinalizeCommitDurability(idx *indexGen, valueLogAppender ValueLogAppender, sync bool) error {
 	if idx == nil {
 		return errors.New("missing index")
@@ -43,25 +58,26 @@ func (db *DB) flushFinalizeCommitDurability(idx *indexGen, valueLogAppender Valu
 	return nil
 }
 
-func (db *DB) prepareFinalizeCommitDurability(sync bool) error {
+func (db *DB) prepareFinalizeCommitDurability(sync bool) (*finalizeCommitPrepareGuard, error) {
 	if db == nil {
-		return ErrClosed
+		return nil, ErrClosed
 	}
 	if db.readOnly {
-		return ErrReadOnly
+		return nil, ErrReadOnly
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
-		return err
+		return nil, err
 	}
 	idx := db.idx.Load()
 	if idx == nil {
-		return errors.New("missing index")
+		return nil, errors.New("missing index")
 	}
 	valueLogAppender := db.currentValueLogAppender()
 	db.publishPrepareMu.Lock()
-	defer db.publishPrepareMu.Unlock()
+	guard := &finalizeCommitPrepareGuard{db: db}
 	if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, sync); err != nil {
-		return wrapFinalizeCommitError(err, true)
+		guard.Release()
+		return nil, wrapFinalizeCommitError(err, true)
 	}
-	return nil
+	return guard, nil
 }

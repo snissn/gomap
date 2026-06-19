@@ -2392,7 +2392,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			continue
 		}
 		phaseStart = time.Now()
-		prepareErr := db.prepareFinalizeCommitDurability(false)
+		publishPrepareGuard, prepareErr := db.prepareFinalizeCommitDurability(false)
 		publishPrepareNs := orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.publishPrepareNs += publishPrepareNs
 		phaseStats.publishPrepareCalls++
@@ -2403,6 +2403,12 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			db.orderedRootDeltaGroupPublishPrepareErrors.Add(1)
 			err = prepareErr
 			return 0, nil, false, err
+		}
+		releasePublishPrepare := func() {
+			if publishPrepareGuard != nil {
+				publishPrepareGuard.Release()
+				publishPrepareGuard = nil
+			}
 		}
 
 		lockStart := time.Now()
@@ -2415,6 +2421,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		db.mu.RUnlock()
 		if curSystemRoot != systemBaseRoot {
 			db.commitMu.Unlock()
+			releasePublishPrepare()
 			if freeErr := systemTracker.FreeAll(); freeErr != nil {
 				err = freeErr
 				return 0, nil, false, err
@@ -2454,6 +2461,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		committedRootPages = rootTracker.Pages()
 		committedSystemPages = systemTracker.Pages()
 		db.commitMu.Unlock()
+		releasePublishPrepare()
 		if err != nil {
 			return 0, nil, false, err
 		}

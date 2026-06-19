@@ -2460,7 +2460,11 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if debugTiming {
 		start = time.Now()
 	}
+	var inlinePublishPrepareGuard *finalizeCommitPrepareGuard
 	if !opts.skipPrePublishFlush {
+		db.publishPrepareMu.Lock()
+		inlinePublishPrepareGuard = &finalizeCommitPrepareGuard{db: db}
+		defer inlinePublishPrepareGuard.Release()
 		t0 := time.Now()
 		if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, sync); err != nil {
 			return post, prePublishErr(err)
