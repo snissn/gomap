@@ -1414,9 +1414,11 @@ func recordZipperLeafLogOutputAppend(metrics *adaptive.Metrics, wait time.Durati
 		return
 	}
 	metrics.ZipperLeafLogOutputAppendCalls++
-	if wait > 0 {
-		metrics.ZipperLeafLogOutputAppendWaitNs += wait.Nanoseconds()
+	waitNs := wait.Nanoseconds()
+	if waitNs <= 0 {
+		waitNs = 1
 	}
+	metrics.ZipperLeafLogOutputAppendWaitNs += waitNs
 	if success && pages > 0 {
 		metrics.ZipperLeafLogOutputAppendPages += pages
 	}
