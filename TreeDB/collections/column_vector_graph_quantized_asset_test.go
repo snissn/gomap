@@ -385,15 +385,21 @@ func TestColumnGraphScalarU8AlphaQuantizedAssetRejectsInvalidAlpha2843(t *testin
 }
 
 func TestColumnGraphScalarU8AlphaScorerAdjustsRankingAndTies2844(t *testing.T) {
-	codes := []byte{
-		255, // unadjusted top, but alpha lowers it below row 1
-		200,
-		255, // equal adjusted score with row 3; lower ordinal must win
-		255,
+	rowsPerGranule := typedColumnDefaultRowsPerGranule()
+	if rowsPerGranule < 2 {
+		t.Fatalf("rows_per_granule=%d want >=2", rowsPerGranule)
 	}
-	alphas := []float32{0.4, 1, 0.5, 0.5}
-	rowCounts := []uint32{1, 1, 1, 1}
-	def, q, prepared, lookup, _ := prepareScalarU8AlphaPreparedForTest2844(t, 1, codes, alphas, rowCounts)
+	const dims = 1
+	const tailRows = 2
+	rowCount := rowsPerGranule + tailRows
+	tailStart := rowsPerGranule
+	codes := bytes.Repeat([]byte{128}, rowCount*dims)
+	codes[0] = 255         // unadjusted top, but alpha lowers it below the tail granule.
+	codes[tailStart] = 200 // equal adjusted score with the next tail row; lower ordinal must win.
+	codes[tailStart+1] = 200
+	alphas := []float32{0.4, 1}
+	rowCounts := []uint32{uint32(rowsPerGranule), tailRows}
+	def, q, prepared, lookup, _ := prepareScalarU8AlphaPreparedForTest2844(t, dims, codes, alphas, rowCounts)
 	codeRows, ok := prepared.CodeRowView(quantizedasset.RoleCodes)
 	if !ok {
 		t.Fatal("code row view unavailable")
@@ -419,7 +425,12 @@ func TestColumnGraphScalarU8AlphaScorerAdjustsRankingAndTies2844(t *testing.T) {
 	}
 	_ = centered
 	scorer := columnVectorGraphScalarU8QuantizedScorer{indexName: q.Name, dims: def.Dimensions, codeRows: codeRows, codePayload: payload, centeredQuery: centeredQuery, alphaLookup: lookup, queryAlpha: queryAlpha}
-	ordinals := []int{0, 1, 2, 3}
+	ordinals := make([]int, rowCount)
+	ids := make([]string, rowCount)
+	for ordinal := range ordinals {
+		ordinals[ordinal] = ordinal
+		ids[ordinal] = fmt.Sprintf("row-%d", ordinal)
+	}
 	scores := make([]float64, 0, len(ordinals))
 	var scratch columnVectorGraphNativeSearchScratch
 	var stats columnVectorGraphNativeSearchStats
@@ -427,24 +438,30 @@ func TestColumnGraphScalarU8AlphaScorerAdjustsRankingAndTies2844(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scoreOrdinals: %v", err)
 	}
-	want := scalarU8AlphaQuantizedTopKForCodesForTest2844(t, []string{"row-0", "row-1", "row-2", "row-3"}, def.Dimensions, q, query, codes, alphas, rowCounts, len(ordinals))
-	for i, result := range want {
+	want := scalarU8AlphaQuantizedTopKForCodesForTest2844(t, ids, def.Dimensions, q, query, codes, alphas, rowCounts, 3)
+	if len(want) != 3 {
+		t.Fatalf("reference top len=%d want 3", len(want))
+	}
+	for _, result := range want {
 		if math.Abs(got[result.Ordinal]-result.Score) > 1e-12 {
-			t.Fatalf("score ordinal=%d got=%v want=%v all=%v", result.Ordinal, got[result.Ordinal], result.Score, got)
+			t.Fatalf("score ordinal=%d got=%v want=%v", result.Ordinal, got[result.Ordinal], result.Score)
 		}
-		if i == 0 && result.Ordinal != 1 {
-			t.Fatalf("alpha-adjusted top ordinal=%d want row 1; scores=%v", result.Ordinal, got)
-		}
+	}
+	if want[0].Ordinal != tailStart || want[1].Ordinal != tailStart+1 || want[2].Ordinal != 0 {
+		t.Fatalf("alpha-adjusted top=%+v want tail rows then demoted row 0", want)
 	}
 	var top []columnVectorGraphSearchCandidate
 	for ordinal, score := range got {
 		top = insertColumnGraphTopForTest(top, 3, columnVectorGraphSearchCandidate{ordinal: ordinal, score: score})
 	}
-	if len(top) != 3 || top[0].ordinal != 1 || top[1].ordinal != 2 || top[2].ordinal != 3 {
-		t.Fatalf("alpha top=%+v scores=%v want row1 then equal-score rows 2,3 in ordinal order", top, got)
+	if len(top) != 3 || top[0].ordinal != tailStart || top[1].ordinal != tailStart+1 || top[2].ordinal != 0 {
+		t.Fatalf("alpha top=%+v want tail rows then demoted row 0", top)
 	}
-	if got[2] != got[3] {
-		t.Fatalf("tie fixture scores row2=%v row3=%v want equal adjusted scores", got[2], got[3])
+	if got[tailStart] != got[tailStart+1] {
+		t.Fatalf("tie fixture scores tail0=%v tail1=%v want equal adjusted scores", got[tailStart], got[tailStart+1])
+	}
+	if got[0] >= got[tailStart] {
+		t.Fatalf("alpha did not demote row0 below tail: row0=%v tail=%v", got[0], got[tailStart])
 	}
 	if stats.QuantizedScoreCalls != uint64(len(ordinals)) || stats.QuantizedScoreCodecScalarU8Alpha != 1 || stats.VectorBytesRead != 0 || stats.NormBytesRead != 0 {
 		t.Fatalf("alpha scorer stats=%+v", stats)
@@ -470,20 +487,17 @@ func TestColumnGraphScalarU8AlphaPreparedTraversalQuantizedOnlyAndRerankUseAlpha
 	defer func() { _ = searcher.Close() }()
 	idsByOrdinal := hnswSearchPackIDsByOrdinalForTest2844(t, searcher.reader.hnswSearchPack)
 	codes := make([]byte, len(rows)*def.Dimensions)
-	alphas := make([]float32, len(rows))
 	for ordinal, id := range idsByOrdinal {
 		copy(codes[ordinal*def.Dimensions:(ordinal+1)*def.Dimensions], []byte{128, 128, 128})
-		alphas[ordinal] = 0.5
 		switch id {
 		case "doc-exact":
 			copy(codes[ordinal*def.Dimensions:(ordinal+1)*def.Dimensions], []byte{255, 128, 128})
-			alphas[ordinal] = 0.4
 		case "doc-alpha":
 			copy(codes[ordinal*def.Dimensions:(ordinal+1)*def.Dimensions], []byte{200, 128, 128})
-			alphas[ordinal] = 1
 		}
 	}
-	rowCounts := []uint32{1, 1, 1}
+	alphas := []float32{0.5}
+	rowCounts := []uint32{uint32(len(rows))}
 	installScalarU8AlphaPreparedStatusForTest2844(t, searcher.reader, codes, alphas, rowCounts)
 
 	query := []float32{1, 0, 0}
@@ -496,8 +510,8 @@ func TestColumnGraphScalarU8AlphaPreparedTraversalQuantizedOnlyAndRerankUseAlpha
 	}
 	wantQuantized := scalarU8AlphaQuantizedTopKForCodesForTest2844(t, idsByOrdinal, def.Dimensions, def.QuantizedIndexes[0], query, codes, alphas, rowCounts, quantizedOnlyOpts.TopK)
 	assertVectorIndexSearchResultsV4(t, quantizedOnly.Results, wantQuantized, false)
-	if string(quantizedOnly.Results[0].ID) != "doc-alpha" {
-		t.Fatalf("quantized_only top=%q want alpha-adjusted doc-alpha", quantizedOnly.Results[0].ID)
+	if string(quantizedOnly.Results[0].ID) != string(wantQuantized[0].ID) {
+		t.Fatalf("quantized_only top=%q want reference %q", quantizedOnly.Results[0].ID, wantQuantized[0].ID)
 	}
 	if quantizedOnly.Stats.SearchRouteQuantizedOnly != 1 || quantizedOnly.Stats.QuantizedScorerActive != 1 || quantizedOnly.Stats.QuantizedScoreCodecScalarU8Alpha != 1 || quantizedOnly.Stats.QuantizedScoreCalls == 0 || quantizedOnly.Stats.VectorBytesRead != 0 || quantizedOnly.Stats.NormBytesRead != 0 || quantizedOnly.Stats.DocumentsFetched != 0 {
 		t.Fatalf("quantized_only stats=%+v want alpha quantized scorer without exact/doc reads", quantizedOnly.Stats)
@@ -511,12 +525,24 @@ func TestColumnGraphScalarU8AlphaPreparedTraversalQuantizedOnlyAndRerankUseAlpha
 	if err != nil {
 		t.Fatalf("SearchWithBuffer quantized_rerank: %v", err)
 	}
-	if len(reranked.Results) != 1 || string(reranked.Results[0].ID) != "doc-alpha" {
-		t.Fatalf("quantized_rerank results=%+v want exact rerank of alpha-selected doc-alpha only", reranked.Results)
+	wantRerankID := string(wantQuantized[0].ID)
+	if len(reranked.Results) != 1 || string(reranked.Results[0].ID) != wantRerankID {
+		t.Fatalf("quantized_rerank results=%+v want exact rerank of reference-selected %q only", reranked.Results, wantRerankID)
 	}
-	wantRerankScore := exactColumnGraphScoreForTest1926(t, rows[1].vector, query)
+	var wantRerankScore float64
+	foundRerankVector := false
+	for _, row := range rows {
+		if row.id == wantRerankID {
+			wantRerankScore = exactColumnGraphScoreForTest1926(t, row.vector, query)
+			foundRerankVector = true
+			break
+		}
+	}
+	if !foundRerankVector {
+		t.Fatalf("missing rerank vector for %q", wantRerankID)
+	}
 	if math.Abs(reranked.Results[0].Score-wantRerankScore) > 1e-6 {
-		t.Fatalf("rerank score=%v want exact doc-alpha score=%v", reranked.Results[0].Score, wantRerankScore)
+		t.Fatalf("rerank score=%v want exact %q score=%v", reranked.Results[0].Score, wantRerankID, wantRerankScore)
 	}
 	if reranked.Stats.SearchRouteQuantizedRerank != 1 || reranked.Stats.QuantizedScorerActive != 1 || reranked.Stats.QuantizedScoreCodecScalarU8Alpha != 1 || reranked.Stats.QuantizedRerankCandidates != 1 || reranked.Stats.QuantizedRerankExactScoreCalls != 1 || reranked.Stats.VectorBytesRead == 0 || reranked.Stats.NormBytesRead == 0 || reranked.Stats.DocumentsFetched != 0 {
 		t.Fatalf("quantized_rerank stats=%+v want alpha traversal plus one exact rerank", reranked.Stats)
@@ -567,8 +593,8 @@ func TestColumnGraphScalarU8AlphaMissingStaleFailsClosedNoExactFallback2844(t *t
 	}
 	defer func() { _ = searcher.Close() }()
 	codes := []byte{255, 128, 128, 200, 128, 128}
-	alphas := []float32{0.4, 1}
-	rowCounts := []uint32{1, 1}
+	alphas := []float32{0.5}
+	rowCounts := []uint32{uint32(len(rows))}
 	baseStatus := installScalarU8AlphaPreparedStatusForTest2844(t, searcher.reader, codes, alphas, rowCounts)
 	qName := def.QuantizedIndexes[0].Name
 	query := []float32{1, 0, 0}
