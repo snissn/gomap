@@ -38,7 +38,8 @@ Use a dedicated long-running shell/tmux session and capture artifacts outside
 this interactive PR loop:
 
 ```sh
-RUN_DIR=/tmp/gomap_issue_2837_scale_10m_$(date +%Y%m%d_%H%M%S) \
+RUN_DIR=/tmp/gomap_issue_2837_scale_10m_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$RUN_DIR"
 TREEDB_TEXT_V2_SCALE_DOCS=10000000 \
 TREEDB_TEXT_V2_SCALE_QUERIES=10000 \
 GOWORK=off go test ./TreeDB/collections -run '^$' \
