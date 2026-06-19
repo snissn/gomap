@@ -2743,6 +2743,13 @@ func (cache *textV2SearchBlockCache) minFieldLengthsInRange(snap *backenddb.Snap
 			return hasLive, false, nil
 		}
 		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= first })
+		blockHadEntry := idx < len(block.Entries) && block.Entries[idx].Ordinal <= last
+		if !blockHadEntry {
+			// A present sidecar block with no entries in the posting range does not
+			// prove the range is empty: the posting block may still reference a
+			// corrupt/missing norm entry that the exact scorer must fail closed on.
+			return hasLive, false, nil
+		}
 		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= last {
 			entry := block.Entries[idx]
 			if len(entry.FieldLengths) != len(ctx.fieldNames) {
@@ -2848,6 +2855,13 @@ func (cache *textV2SearchBlockCache) minDocumentIDInRange(snap *backenddb.Snapsh
 			return minID, minID != nil, false, nil
 		}
 		idx := sort.Search(len(block.Entries), func(i int) bool { return block.Entries[i].Ordinal >= first })
+		blockHadEntry := idx < len(block.Entries) && block.Entries[idx].Ordinal <= last
+		if !blockHadEntry {
+			// A present sidecar block with no entries in the posting range does not
+			// prove the range is empty: the posting block may still reference a
+			// corrupt/missing docmap entry that the exact scorer must fail closed on.
+			return minID, minID != nil, false, nil
+		}
 		for idx < len(block.Entries) && block.Entries[idx].Ordinal <= last {
 			entry := block.Entries[idx]
 			if entry.Ordinal >= ctx.status.NextOrdinal || entry.Generation > ctx.status.DocMapGeneration {
