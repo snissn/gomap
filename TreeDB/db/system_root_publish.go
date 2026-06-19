@@ -76,7 +76,8 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	newSystemRoot, retired, metrics, publishStats, vlogRefDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemRootOrderedPublishOptions(db), true)
+	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
+	newSystemRoot, retired, metrics, publishStats, vlogRefDelta, err := db.publishOrderedRootIterator(baseSystemRoot, collectedIter, systemRootOrderedPublishOptions(db), true)
 	if err != nil {
 		return 0, err
 	}
@@ -109,6 +110,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, touchedValueLogSegments, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, err
 	}
+	db.releasePendingValueLogAppendPtrCollector(ptrCollector)
 	vlogRefDelta = nil
 	return newSystemRoot, nil
 }

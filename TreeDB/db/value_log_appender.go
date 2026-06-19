@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -153,6 +154,51 @@ func (db *DB) releasePendingValueLogAppendFileIDsFromEntries(entries []batchpkg.
 		release[entry.ValuePtr]++
 	}
 	db.releasePendingValueLogAppendPtrCounts(release)
+}
+
+func (db *DB) releasePendingValueLogAppendFileIDsFromBatch(delta *batchpkg.Batch) {
+	if db == nil || delta == nil || delta.IsEmpty() {
+		return
+	}
+	entries, _ := delta.ApplyPlan()
+	db.releasePendingValueLogAppendFileIDsFromEntries(entries)
+}
+
+func collectPendingValueLogAppendPtrCount(counts map[page.ValuePtr]int64, ptr page.ValuePtr, flags byte) map[page.ValuePtr]int64 {
+	if flags&node.FlagPointer == 0 || ptr.FileID == 0 || !page.IsValueLogFileID(ptr.FileID) {
+		return counts
+	}
+	if counts == nil {
+		counts = make(map[page.ValuePtr]int64)
+	}
+	counts[ptr]++
+	return counts
+}
+
+type pendingValueLogAppendPtrCollectingIterator struct {
+	iterator.UnsafeIterator
+	ptrCounts map[page.ValuePtr]int64
+}
+
+func newPendingValueLogAppendPtrCollectingIterator(iter iterator.UnsafeIterator) (*pendingValueLogAppendPtrCollectingIterator, iterator.UnsafeIterator) {
+	if iter == nil {
+		return nil, nil
+	}
+	collector := &pendingValueLogAppendPtrCollectingIterator{UnsafeIterator: iter}
+	return collector, collector
+}
+
+func (iter *pendingValueLogAppendPtrCollectingIterator) UnsafeEntry() (val []byte, ptr page.ValuePtr, flags byte) {
+	val, ptr, flags = iter.UnsafeIterator.UnsafeEntry()
+	iter.ptrCounts = collectPendingValueLogAppendPtrCount(iter.ptrCounts, ptr, flags)
+	return val, ptr, flags
+}
+
+func (db *DB) releasePendingValueLogAppendPtrCollector(collector *pendingValueLogAppendPtrCollectingIterator) {
+	if db == nil || collector == nil || len(collector.ptrCounts) == 0 {
+		return
+	}
+	db.releasePendingValueLogAppendPtrCounts(collector.ptrCounts)
 }
 
 func (db *DB) releasePendingValueLogAppendFileIDsFromDelta(delta *valueLogRefDelta) {
