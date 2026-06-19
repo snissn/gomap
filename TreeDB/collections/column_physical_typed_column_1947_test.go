@@ -239,6 +239,121 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataMissingStrings216
 	}
 }
 
+func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataTopKFastPaths2878(t *testing.T) {
+	docs := []string{
+		`{"time_us":1000,"kind":"commit","did":"did_a","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":1050,"kind":"commit","did":"did_x","commit":{"collection":"app.bsky.feed.post"}}`,
+		`{"time_us":1100,"kind":"commit","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":1200,"kind":"commit","did":"did_b","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":2000,"kind":"commit","did":"did_a","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":2200,"kind":"commit","did":"did_delete","commit":{"operation":"delete","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":2500,"kind":"commit","did":"did_c","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+		`{"time_us":3000,"kind":"commit","did":"did_c","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
+	}
+	_, collection, closeFn := openColumnPhysicalJSONBenchNullableFullDataFixture2165(t, docs)
+	defer closeFn()
+
+	postCreate := []ColumnPhysicalQueryPredicate{
+		{Column: "kind", Value: "commit"},
+		{Column: "operation", Value: "create"},
+		{Column: "event", Value: "app.bsky.feed.post"},
+	}
+	q4 := ColumnPhysicalQueryRequest{
+		Kind:              ColumnPhysicalQueryGroupMinInt64,
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Predicates:        postCreate,
+		TopK:              2,
+		TopKOrder:         ColumnPhysicalQueryTopKInt64Asc,
+		SkipEmptyGroupKey: true,
+	}
+	q4Want := []ColumnPhysicalQueryGroup{{Key: "did_a", Int64: 1000}, {Key: "did_b", Int64: 1200}}
+	runNullableFullDataTopKFastPath2878(t, collection, "q4", q4, q4Want, func(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+		tb.Helper()
+		assertNullableFullDataTopKBaseDiagnostics2878(tb, label, diag, len(postCreate), q4.TopK, string(q4.TopKOrder), len(q4Want))
+		if !diag.TimeOrderTopKUsed || diag.DenseInt64SpanUsed {
+			tb.Fatalf("%s diagnostics=%+v want time-order topK only", label, diag)
+		}
+		if diag.RowsScanned != 4 || diag.RowsMatched != 3 || diag.ReduceRows != 3 {
+			tb.Fatalf("%s diagnostics=%+v want early q4 scan/match/reduce 4/3/3", label, diag)
+		}
+		if diag.TopKCandidates != len(q4Want) {
+			tb.Fatalf("%s diagnostics=%+v want topK candidates=%d", label, diag, len(q4Want))
+		}
+	})
+
+	q5 := ColumnPhysicalQueryRequest{
+		Kind:              ColumnPhysicalQueryGroupInt64Span,
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Predicates:        postCreate,
+		TopK:              2,
+		TopKOrder:         ColumnPhysicalQueryTopKInt64Desc,
+		SkipEmptyGroupKey: true,
+	}
+	q5Want := []ColumnPhysicalQueryGroup{{Key: "did_a", Int64: 1000}, {Key: "did_c", Int64: 500}}
+	runNullableFullDataTopKFastPath2878(t, collection, "q5", q5, q5Want, func(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+		tb.Helper()
+		assertNullableFullDataTopKBaseDiagnostics2878(tb, label, diag, len(postCreate), q5.TopK, string(q5.TopKOrder), len(q5Want))
+		if !diag.DenseInt64SpanUsed || diag.TimeOrderTopKUsed {
+			tb.Fatalf("%s diagnostics=%+v want dense int64-span only", label, diag)
+		}
+		if diag.RowsScanned != len(docs) || diag.RowsMatched != 6 || diag.ReduceRows != 6 {
+			tb.Fatalf("%s diagnostics=%+v want q5 scan/match/reduce %d/6/6", label, diag, len(docs))
+		}
+		if diag.TopKCandidates != 3 {
+			tb.Fatalf("%s diagnostics=%+v want three non-empty topK candidates", label, diag)
+		}
+	})
+
+	missingOperation := []ColumnPhysicalQueryPredicate{
+		{Column: "kind", Value: "commit"},
+		{Column: "operation", Value: ""},
+		{Column: "event", Value: "app.bsky.feed.post"},
+	}
+	q4MissingOperation := ColumnPhysicalQueryRequest{
+		Kind:              ColumnPhysicalQueryGroupMinInt64,
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Predicates:        missingOperation,
+		TopK:              1,
+		TopKOrder:         ColumnPhysicalQueryTopKInt64Asc,
+		SkipEmptyGroupKey: true,
+	}
+	q4MissingOperationWant := []ColumnPhysicalQueryGroup{{Key: "did_x", Int64: 1050}}
+	runNullableFullDataTopKFastPath2878(t, collection, "q4 missing operation", q4MissingOperation, q4MissingOperationWant, func(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+		tb.Helper()
+		assertNullableFullDataTopKBaseDiagnostics2878(tb, label, diag, len(missingOperation), q4MissingOperation.TopK, string(q4MissingOperation.TopKOrder), len(q4MissingOperationWant))
+		if !diag.TimeOrderTopKUsed || diag.DenseInt64SpanUsed {
+			tb.Fatalf("%s diagnostics=%+v want time-order topK only", label, diag)
+		}
+		if diag.RowsMatched != 1 || diag.ReduceRows != 1 {
+			tb.Fatalf("%s diagnostics=%+v want nullable missing operation to match exactly one row", label, diag)
+		}
+	})
+
+	q5MissingOperation := ColumnPhysicalQueryRequest{
+		Kind:              ColumnPhysicalQueryGroupInt64Span,
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Predicates:        missingOperation,
+		TopK:              1,
+		TopKOrder:         ColumnPhysicalQueryTopKInt64Desc,
+		SkipEmptyGroupKey: true,
+	}
+	q5MissingOperationWant := []ColumnPhysicalQueryGroup{{Key: "did_x", Int64: 0}}
+	runNullableFullDataTopKFastPath2878(t, collection, "q5 missing operation", q5MissingOperation, q5MissingOperationWant, func(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+		tb.Helper()
+		assertNullableFullDataTopKBaseDiagnostics2878(tb, label, diag, len(missingOperation), q5MissingOperation.TopK, string(q5MissingOperation.TopKOrder), len(q5MissingOperationWant))
+		if !diag.DenseInt64SpanUsed || diag.TimeOrderTopKUsed {
+			tb.Fatalf("%s diagnostics=%+v want dense int64-span only", label, diag)
+		}
+		if diag.RowsMatched != 1 || diag.ReduceRows != 1 {
+			tb.Fatalf("%s diagnostics=%+v want nullable missing operation to match exactly one row", label, diag)
+		}
+	})
+}
+
 func TestColumnPhysicalJSONBenchTypedColumnPartEdgeShapes1947(t *testing.T) {
 	events := columnPhysicalJSONBenchParityEventsP0()
 	_, collection, closeFn, _ := openColumnPhysicalJSONBenchTypedColumnPartFixture1947(t, events)
@@ -651,6 +766,53 @@ func runNullableFullDataQuery2165(tb testing.TB, collection *Collection, name st
 		}
 	}
 	return direct
+}
+
+func runNullableFullDataTopKFastPath2878(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, want []ColumnPhysicalQueryGroup, assertDiag func(testing.TB, string, ColumnPhysicalQueryDiagnostics)) {
+	tb.Helper()
+	direct, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("RunColumnPhysicalQuery(%s): %v", name, err)
+	}
+	if !reflect.DeepEqual(direct.Groups, want) {
+		tb.Fatalf("%s direct groups=%+v want %+v", name, direct.Groups, want)
+	}
+	assertDiag(tb, name+" direct", direct.Diagnostics)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("PrepareColumnPhysicalQuery(%s): %v", name, err)
+	}
+	defer func() { _ = runner.Close() }()
+	for run := 0; run < 2; run++ {
+		prepared, err := runner.Run()
+		if err != nil {
+			tb.Fatalf("prepared %s run %d: %v", name, run, err)
+		}
+		if !reflect.DeepEqual(prepared.Groups, want) {
+			tb.Fatalf("%s prepared run %d groups=%+v want %+v", name, run, prepared.Groups, want)
+		}
+		assertDiag(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics)
+	}
+}
+
+func assertNullableFullDataTopKBaseDiagnostics2878(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, predicates, topK int, order string, resultGroups int) {
+	tb.Helper()
+	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		tb.Fatalf("%s diagnostics storage/fallback=%+v want typed-column source without fallback", label, diag)
+	}
+	if diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 {
+		tb.Fatalf("%s materialized row/document on typed-column physical path: %+v", label, diag)
+	}
+	if diag.PredicateCount != predicates || diag.PredicateLiterals != predicates {
+		tb.Fatalf("%s predicate diagnostics=%+v want %d equality predicates", label, diag, predicates)
+	}
+	if diag.DecodedBlocks == 0 || diag.DecodedPayloadBytes == 0 || diag.TypedColumnPartSections == 0 || diag.TypedColumnPartSectionBytes == 0 {
+		tb.Fatalf("%s typed-column decode diagnostics missing: %+v", label, diag)
+	}
+	if diag.TopKLimit != topK || diag.TopKOrder != order || diag.ResultGroups != resultGroups {
+		tb.Fatalf("%s topK diagnostics=%+v want limit=%d order=%q groups=%d", label, diag, topK, order, resultGroups)
+	}
 }
 
 func assertNullableFullDataGenericDiagnostics2165(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {

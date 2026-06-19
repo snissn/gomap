@@ -34,9 +34,11 @@ type columnTypedColumnDenseGroupCountPart struct {
 }
 
 type columnTypedColumnDensePredicatePart struct {
-	Codes      []uint32
-	Allowed    []uint64
-	RejectsAll bool
+	Codes               []uint32
+	Valid               []bool
+	Allowed             []uint64
+	MissingMatchesEmpty bool
+	RejectsAll          bool
 }
 
 type columnTypedColumnDenseGroupHourCountPart struct {
@@ -51,6 +53,7 @@ type columnTypedColumnDenseInt64SpanPart struct {
 	Cardinality      int
 	DictionaryByCode map[int64]string
 	GroupCodes       []uint32
+	GroupValid       []bool
 	Values           []int64
 	Predicates       []columnTypedColumnDensePredicatePart
 }
@@ -1202,6 +1205,14 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseInt64Span(vi
 				matchedRows++
 			}
 			reduceRows++
+			if !columnTypedColumnDenseCodeValid(dense.GroupValid, rowIdx) {
+				if req.SkipEmptyGroupKey {
+					continue
+				}
+				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseInt64SpanUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("%w: dense typed-column int64-span nullable group column requires skip-empty group key", ErrColumnQueryPlanUnsupported)
+			}
 			localIdx, ok := columnDictionaryCodeIndex(code, len(r.denseLocalSpans))
 			if !ok {
 				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
@@ -1284,7 +1295,7 @@ func columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req ColumnPhysicalQ
 }
 
 func columnTypedColumnPhysicalQueryUseDenseInt64Span(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return !plan.NullableStringValues && plan.DenseInt64Span && columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req)
+	return plan.DenseInt64Span && columnTypedColumnPhysicalQueryShapeCanUseDenseInt64Span(req) && columnTypedColumnPhysicalQueryNullableStringsAllowedForTopK(plan, req)
 }
 
 func columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req ColumnPhysicalQueryRequest) bool {
@@ -1300,7 +1311,14 @@ func columnTypedColumnPhysicalQuerySortKeyCanUseTimeOrderTopK(sortKey []ColumnSo
 }
 
 func columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
-	return !plan.NullableStringValues && plan.TimeOrderTopK && columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req)
+	return plan.TimeOrderTopK && columnTypedColumnPhysicalQueryShapeCanUseTimeOrderTopK(req) && columnTypedColumnPhysicalQueryNullableStringsAllowedForTopK(plan, req)
+}
+
+func columnTypedColumnPhysicalQueryNullableStringsAllowedForTopK(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
+	if !plan.NullableStringValues {
+		return true
+	}
+	return req.SkipEmptyGroupKey
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
@@ -1913,6 +1931,14 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64Span(view columnPhys
 				matchedRows++
 			}
 			reduceRows++
+			if !columnTypedColumnDenseCodeValid(dense.GroupValid, rowIdx) {
+				if req.SkipEmptyGroupKey {
+					continue
+				}
+				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseInt64SpanUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("%w: dense typed-column int64-span nullable group column requires skip-empty group key", ErrColumnQueryPlanUnsupported)
+			}
 			localIdx, ok := columnDictionaryCodeIndex(code, len(r.denseLocalSpans))
 			if !ok {
 				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
@@ -1991,14 +2017,27 @@ func columnTypedColumnDensePredicatesMatch(predicates []columnTypedColumnDensePr
 		if rowIdx < 0 || rowIdx >= len(predicate.Codes) {
 			return false
 		}
-		code := predicate.Codes[rowIdx]
-		word := int(code / 64)
-		bit := uint(code % 64)
-		if word >= len(predicate.Allowed) || (predicate.Allowed[word]&(uint64(1)<<bit)) == 0 {
+		if !columnTypedColumnDenseCodeValid(predicate.Valid, rowIdx) {
+			if !predicate.MissingMatchesEmpty {
+				return false
+			}
+			continue
+		}
+		if !columnTypedColumnCodeAllowed(predicate.Allowed, predicate.Codes[rowIdx]) {
 			return false
 		}
 	}
 	return true
+}
+
+func columnTypedColumnDenseCodeValid(valid []bool, rowIdx int) bool {
+	return valid == nil || (rowIdx >= 0 && rowIdx < len(valid) && valid[rowIdx])
+}
+
+func columnTypedColumnCodeAllowed(allowed []uint64, code uint32) bool {
+	word := int(code / 64)
+	bit := uint(code % 64)
+	return word < len(allowed) && (allowed[word]&(uint64(1)<<bit)) != 0
 }
 
 func columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
