@@ -1316,6 +1316,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	db.mu.RUnlock()
 
 	ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
+	defer db.releasePendingValueLogAppendPtrCollector(ptrCollector)
 	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, collectedIter, systemRootOrderedPublishOptions(db), false)
 	if err != nil {
 		return 0, err
@@ -1339,7 +1340,6 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	if err := db.finalizeCommit(userRoot, systemRoot, retired, false, metrics, nil, true, vlogRefDelta, nil, nil); err != nil {
 		return 0, err
 	}
-	db.releasePendingValueLogAppendPtrCollector(ptrCollector)
 	vlogRefDelta = nil
 	return newRoot, nil
 }

@@ -160,8 +160,7 @@ func (db *DB) releasePendingValueLogAppendFileIDsFromBatch(delta *batchpkg.Batch
 	if db == nil || delta == nil || delta.IsEmpty() {
 		return
 	}
-	entries, _ := delta.ApplyPlan()
-	db.releasePendingValueLogAppendFileIDsFromEntries(entries)
+	db.releasePendingValueLogAppendFileIDsFromEntries(delta.OrderedEntries())
 }
 
 func collectPendingValueLogAppendPtrCount(counts map[page.ValuePtr]int64, ptr page.ValuePtr, flags byte) map[page.ValuePtr]int64 {
