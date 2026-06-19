@@ -13,7 +13,7 @@ func (g *finalizeCommitPrepareGuard) Release() {
 	if g == nil || g.db == nil {
 		return
 	}
-	g.db.publishPrepareMu.Unlock()
+	g.db.publishPrepareMu.RUnlock()
 	g.db = nil
 }
 
@@ -73,7 +73,7 @@ func (db *DB) prepareFinalizeCommitDurability(sync bool) (*finalizeCommitPrepare
 		return nil, errors.New("missing index")
 	}
 	valueLogAppender := db.currentValueLogAppender()
-	db.publishPrepareMu.Lock()
+	db.publishPrepareMu.RLock()
 	guard := &finalizeCommitPrepareGuard{db: db}
 	if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, sync); err != nil {
 		guard.Release()

@@ -154,7 +154,7 @@ type DB struct {
 	mu                              sync.RWMutex
 	writeMu                         sync.RWMutex
 	commitMu                        sync.Mutex
-	publishPrepareMu                sync.Mutex
+	publishPrepareMu                sync.RWMutex
 	pendingValueLogAppendMu         sync.Mutex
 	pendingValueLogAppendFileIDRefs map[uint32]int
 	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
@@ -2464,7 +2464,11 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if debugTiming {
 		start = time.Now()
 	}
+	var inlinePublishPrepareGuard *finalizeCommitPrepareGuard
 	if !opts.skipPrePublishFlush {
+		db.publishPrepareMu.RLock()
+		inlinePublishPrepareGuard = &finalizeCommitPrepareGuard{db: db}
+		defer inlinePublishPrepareGuard.Release()
 		t0 := time.Now()
 		if err := db.flushFinalizeCommitDurability(idx, valueLogAppender, sync); err != nil {
 			return post, prePublishErr(err)

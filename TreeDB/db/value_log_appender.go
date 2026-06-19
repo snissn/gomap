@@ -156,12 +156,19 @@ func (db *DB) releasePendingValueLogAppendPtrCounts(release map[page.ValuePtr]in
 	defer db.pendingValueLogAppendMu.Unlock()
 	for ptr, n := range release {
 		refs := db.pendingValueLogAppendPtrRefs[ptr]
-		if refs <= int(n) {
+		if refs <= 0 {
+			continue
+		}
+		actual := int(n)
+		if refs < actual {
+			actual = refs
+		}
+		if refs == actual {
 			delete(db.pendingValueLogAppendPtrRefs, ptr)
 		} else {
-			db.pendingValueLogAppendPtrRefs[ptr] = refs - int(n)
+			db.pendingValueLogAppendPtrRefs[ptr] = refs - actual
 		}
-		fileIDs[ptr.FileID] += n
+		fileIDs[ptr.FileID] += int64(actual)
 	}
 	for fileID, n := range fileIDs {
 		refs := db.pendingValueLogAppendFileIDRefs[fileID]
