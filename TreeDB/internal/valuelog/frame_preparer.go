@@ -14,10 +14,11 @@ import (
 //
 // It is not safe for concurrent use.
 type FramePreparer struct {
-	rawScratch   []byte
-	encScratch   []byte
-	blockScratch []byte
-	encLimiter   limitedSliceWriter
+	rawScratch        []byte
+	encScratch        []byte
+	blockScratch      []byte
+	blockCodecScratch blockCodecScratch
+	encLimiter        limitedSliceWriter
 
 	skipDictID uint64
 	codecs     *dictCodecEntry
@@ -388,7 +389,7 @@ func (p *FramePreparer) prepareBlockFrameBody(dst []byte, records []Record, offs
 		}
 	}
 	encodeStart := p.sampleEncodeStart()
-	encoded, encodeErr := encodeBlockPayload(p.blockCodec, payload, p.blockScratch[:0])
+	encoded, encodeErr := encodeBlockPayloadWithScratch(p.blockCodec, payload, p.blockScratch[:0], &p.blockCodecScratch)
 	encodeNs := p.sampleEncodeEnd(encodeStart, rawPayloadBytes, len(records))
 	if encoded != nil {
 		p.blockScratch = encoded[:0]

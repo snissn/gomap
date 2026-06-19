@@ -307,13 +307,17 @@ bounded top-K heap so final summaries do not require a full posting rescan. The
 `text-v2-posting-blocks` scoring format is unchanged.
 
 If a v2 index is created with `StorePositions`, M6 writes optional
-`text-v2-positions` entries keyed by `(ordinal, term)`. Values contain the
-current document generation, term, per-field term frequency, positions, and
-optional offsets. Detailed/compact materialization validates these entries for
-returned final results and fails closed on missing, corrupt, mismatched, or
-unsupported payloads; score-only mode does not read the lane. Update/delete
-maintenance removes old position entries through ordinary root deltas before
-writing any replacement entries, so physical reclamation remains normal TreeDB
+`text-v2-positions` entries keyed by `(ordinal, term)`. Current value format v2
+keeps the current document generation and per-field term frequency, delta-codes
+strictly increasing token positions, stores optional offsets, and intentionally
+omits the term already present in the key. Legacy value format v1 (with the term
+and absolute positions in the value) remains readable for pre-alpha test
+fixtures, but newly written position entries use the smaller key-bound v2
+payload. Detailed/compact materialization validates these entries for returned
+final results and fails closed on missing, corrupt, mismatched, or unsupported
+payloads; score-only mode does not read the lane. Update/delete maintenance
+removes old position entries through ordinary root deltas before writing any
+replacement entries, so physical reclamation remains normal TreeDB
 root/value-log maintenance. There is no standalone text-block GC.
 
 `SearchHybridTextCandidates` and the text leg of `SearchHybrid` use score-only
@@ -476,7 +480,7 @@ row applies. Explicit v1 rows report compatible zero/legacy values so v1/v2 comp
 | `scalar_filter_selectivity` | matched/(matched+rejected), reported as pct or ppm |
 | `fail_closed` | fail-closed count and reason |
 | `write_amplification` | text-root entries or bytes emitted per document |
-| `index_bytes_per_doc` | durable text-index bytes divided by indexed documents |
+| `index_bytes_per_doc` | durable text-index bytes divided by indexed documents; storage stats also expose v2 lane byte totals for docid, docmap, posting blocks, norm blocks, positions, term stats, and status/format records |
 | `rewrite_merge_state` | v2 generation/rewrite/merge lifecycle state |
 
 Candidate generation must keep `docs_fetched=0` and `full_doc_fallbacks=0`.

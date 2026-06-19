@@ -477,7 +477,7 @@ func columnVectorIndexStateMatchStatusWithBaseChecksum(state columnVectorIndexSt
 		return columnVectorIndexStateMatchMismatch
 	}
 	for _, asset := range state.Assets {
-		if !columnVectorIndexStateAssetRefMatchesManifest(asset, state, cfg) {
+		if !columnVectorIndexStateAssetRefMatchesManifestForDefinition(asset, state, cfg, def) {
 			return columnVectorIndexStateMatchMismatch
 		}
 	}
@@ -523,6 +523,21 @@ func columnVectorIndexStateAssetRefMatchesManifest(asset columnVectorIndexStateA
 		asset.AssetBytes == asset.Ref.Length &&
 		asset.SourceSchemaHash != 0 &&
 		validateColumnAssetRefForPlan(asset.Ref) == nil
+}
+
+func columnVectorIndexStateAssetRefMatchesManifestForDefinition(asset columnVectorIndexStateAssetSnapshot, state columnVectorIndexStateSnapshot, cfg ColumnStoreConfig, def VectorIndexDefinition) bool {
+	if !columnVectorIndexStateAssetRefMatchesManifest(asset, state, cfg) {
+		return false
+	}
+	if asset.Role != columnVectorIndexStateAssetRoleQuantizedAlpha {
+		return true
+	}
+	q, ok := columnVectorGraphQuantizedDefinitionForStateAsset(def, asset)
+	if !ok {
+		return false
+	}
+	wantRowCounts, err := columnVectorGraphScalarU8AlphaExpectedGranuleRowCounts(q, state.RowCount)
+	return err == nil && asset.RowCount == len(wantRowCounts)
 }
 
 func columnVectorIndexStateSnapshotFromGraph(graph columnVectorGraphManifestSnapshot) columnVectorIndexStateSnapshot {

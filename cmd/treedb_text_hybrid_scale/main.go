@@ -223,15 +223,22 @@ type maintenanceReport struct {
 }
 
 type storageSnapshot struct {
-	Label             string  `json:"label"`
-	Bytes             int64   `json:"bytes"`
-	BytesPerDoc       float64 `json:"bytes_per_doc,omitempty"`
-	TextEncodedBytes  uint64  `json:"text_encoded_bytes,omitempty"`
-	TextBytesPerDoc   float64 `json:"text_bytes_per_doc,omitempty"`
-	V2PostingBlocks   uint64  `json:"v2_posting_blocks,omitempty"`
-	V2LiveDocuments   uint64  `json:"v2_live_documents,omitempty"`
-	V2DeletedDocs     uint64  `json:"v2_deleted_docs,omitempty"`
-	VectorNativeBytes int64   `json:"vector_native_bytes,omitempty"`
+	Label                       string  `json:"label"`
+	Bytes                       int64   `json:"bytes"`
+	BytesPerDoc                 float64 `json:"bytes_per_doc,omitempty"`
+	TextEncodedBytes            uint64  `json:"text_encoded_bytes,omitempty"`
+	TextBytesPerDoc             float64 `json:"text_bytes_per_doc,omitempty"`
+	TextDocIDBytesPerDoc        float64 `json:"text_docid_bytes_per_doc,omitempty"`
+	TextDocMapBytesPerDoc       float64 `json:"text_docmap_bytes_per_doc,omitempty"`
+	TextPostingBlockBytesPerDoc float64 `json:"text_posting_block_bytes_per_doc,omitempty"`
+	TextNormBlockBytesPerDoc    float64 `json:"text_norm_block_bytes_per_doc,omitempty"`
+	TextPositionBytesPerDoc     float64 `json:"text_position_bytes_per_doc,omitempty"`
+	TextTermStatsBytesPerDoc    float64 `json:"text_term_stats_bytes_per_doc,omitempty"`
+	TextStatusFormatBytesPerDoc float64 `json:"text_status_format_bytes_per_doc,omitempty"`
+	V2PostingBlocks             uint64  `json:"v2_posting_blocks,omitempty"`
+	V2LiveDocuments             uint64  `json:"v2_live_documents,omitempty"`
+	V2DeletedDocs               uint64  `json:"v2_deleted_docs,omitempty"`
+	VectorNativeBytes           int64   `json:"vector_native_bytes,omitempty"`
 }
 
 type guardrailResult struct {
@@ -1425,8 +1432,16 @@ func rankBottlenecks(rep report) []bottleneckRow {
 func storageSnapshotFromText(label string, docs int, bytes int64, stats collections.TextIndexStorageStats, vectorStatus *collections.VectorIndexStatus) storageSnapshot {
 	snap := storageSnapshot{Label: label, Bytes: bytes, TextEncodedBytes: stats.EncodedBytes, V2PostingBlocks: stats.V2PostingBlocks, V2LiveDocuments: stats.V2LiveDocuments, V2DeletedDocs: stats.V2DeletedDocs}
 	if docs > 0 {
-		snap.BytesPerDoc = float64(bytes) / float64(docs)
-		snap.TextBytesPerDoc = float64(stats.EncodedBytes) / float64(docs)
+		docsDivisor := float64(docs)
+		snap.BytesPerDoc = float64(bytes) / docsDivisor
+		snap.TextBytesPerDoc = float64(stats.EncodedBytes) / docsDivisor
+		snap.TextDocIDBytesPerDoc = float64(stats.V2DocIDBytes) / docsDivisor
+		snap.TextDocMapBytesPerDoc = float64(stats.V2DocMapBytes) / docsDivisor
+		snap.TextPostingBlockBytesPerDoc = float64(stats.V2PostingBlockBytes) / docsDivisor
+		snap.TextNormBlockBytesPerDoc = float64(stats.V2NormBlockBytes) / docsDivisor
+		snap.TextPositionBytesPerDoc = float64(stats.V2PositionBytes) / docsDivisor
+		snap.TextTermStatsBytesPerDoc = float64(stats.V2TermStatsBytes) / docsDivisor
+		snap.TextStatusFormatBytesPerDoc = float64(stats.V2StatusFormatBytes) / docsDivisor
 	}
 	if vectorStatus != nil {
 		snap.VectorNativeBytes = vectorStatusBytes(vectorStatus)
@@ -1483,6 +1498,16 @@ func renderMarkdown(rep report) string {
 		fmt.Fprintf(&b, "| backfill fixture | %.3f | %.1f | %d | %.1f | %.1f | 0 |\n", rep.Backfill.TotalSeconds, rep.Backfill.RowsPerSecond, rep.Backfill.StorageBytes, rep.Backfill.StorageBytesPerDoc, float64(rep.Backfill.TextStorage.EncodedBytes)/float64(maxInt(rep.Backfill.Rows, 1)))
 	}
 	fmt.Fprintf(&b, "\nLoad breakdown: generation `%.3fs`, insert `%.3fs`, flush `%.3fs`, vector rebuild `%.3fs`, checkpoint `%.3fs`.\n\n", rep.Load.GenerationSeconds, rep.Load.InsertSeconds, rep.Load.FlushSeconds, rep.Load.VectorRebuildSeconds, rep.Load.CheckpointSeconds)
+
+	if len(rep.StorageSnapshots) != 0 {
+		fmt.Fprintf(&b, "### Text-v2 lane bytes/doc\n\n")
+		fmt.Fprintf(&b, "| snapshot | docid | docmap | postings | norms | positions | terms | status/format |\n")
+		fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n")
+		for _, snap := range rep.StorageSnapshots {
+			fmt.Fprintf(&b, "| `%s` | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f | %.1f |\n", snap.Label, snap.TextDocIDBytesPerDoc, snap.TextDocMapBytesPerDoc, snap.TextPostingBlockBytesPerDoc, snap.TextNormBlockBytesPerDoc, snap.TextPositionBytesPerDoc, snap.TextTermStatsBytesPerDoc, snap.TextStatusFormatBytesPerDoc)
+		}
+		fmt.Fprintf(&b, "\n")
+	}
 
 	if len(rep.Queries) != 0 {
 		fmt.Fprintf(&b, "## Retrieval latency\n\n")
