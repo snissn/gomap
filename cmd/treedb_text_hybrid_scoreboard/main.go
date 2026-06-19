@@ -1219,9 +1219,15 @@ func classifyPhase2Gap(target phase2BenchmarkTarget, rows []scoreboardRow, unava
 }
 
 func measuredPhase2Classification(shapeID string, treeRows, externalRows []scoreboardRow) (string, string, bool) {
-	if len(treeRows) == 0 || len(externalRows) == 0 {
+	comparableExternalRows := phase2ComparableExternalRows(externalRows)
+	if len(treeRows) == 0 || len(comparableExternalRows) == 0 {
 		return "", "", false
 	}
+	// Why: SQLite FTS5 is a useful embedded baseline, but the #2834 readout
+	// explicitly treats SQLite-only evidence as non-equivalent for industry
+	// parity. Ratio-based ahead/near claims require a non-SQLite baseline row
+	// from a pinned comparable search engine harness.
+	externalRows = comparableExternalRows
 	if shapeID == "index_size" {
 		treeStorage, okTree := bestStorageBytesPerDoc(treeRows)
 		extStorage, okExt := bestStorageBytesPerDoc(externalRows)
@@ -1238,6 +1244,17 @@ func measuredPhase2Classification(shapeID string, treeRows, externalRows []score
 	}
 	ratio := treeNS / extNS
 	return classFromLowerIsBetterRatio(ratio), fmt.Sprintf("captured comparable latency rows: TreeDB %.3g ns/op vs external %.3g ns/op (ratio %.3gx)", treeNS, extNS, ratio), true
+}
+
+func phase2ComparableExternalRows(rows []scoreboardRow) []scoreboardRow {
+	out := make([]scoreboardRow, 0, len(rows))
+	for _, row := range rows {
+		if strings.EqualFold(row.System, "SQLite FTS5") || strings.EqualFold(row.Engine, "sqlite_fts5") {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 func classFromLowerIsBetterRatio(ratio float64) string {

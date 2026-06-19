@@ -291,6 +291,46 @@ func TestPhase2SynthesisGolden(t *testing.T) {
 	}
 }
 
+func TestPhase2SynthesisDoesNotClaimParityFromSQLiteOnly(t *testing.T) {
+	treedbNS := 700_000.0
+	sqliteNS := 1_000_000.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel: "treedb_common_10k",
+			System:      "TreeDB",
+			Engine:      "treedb_text_v2",
+			Modality:    "text_only",
+			QueryShape:  "common term BM25F top-k with block-max pruning",
+			Boundary:    "No-document text-v2 score-only BM25F search",
+			Benchmark:   "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:     &treedbNS,
+		},
+		{
+			SourceLabel: "sqlite_common_10k",
+			System:      "SQLite FTS5",
+			Engine:      "sqlite_fts5",
+			Modality:    "text_only",
+			QueryShape:  "common term FTS5 MATCH top-k",
+			Boundary:    "no-document rowid+bm25 retrieval only",
+			Benchmark:   "sqlite_fts5/common_term_no_docs",
+			NsPerOp:     &sqliteNS,
+		},
+	}, []unavailableRow{{System: "Lucene", Reason: "not run"}, {System: "Tantivy", Reason: "not run"}, {System: "Bleve", Reason: "not run"}})
+	var common phase2GapClassification
+	for _, got := range syn.GapClassifications {
+		if got.ShapeID == "single_term_common" {
+			common = got
+			break
+		}
+	}
+	if common.Classification == "ahead" || common.Classification == "near_parity" {
+		t.Fatalf("single_term_common classification=%q from SQLite-only evidence; want evidence gap", common.Classification)
+	}
+	if !strings.Contains(common.ExternalEvidence, "sqlite_common_10k") {
+		t.Fatalf("single_term_common external evidence=%q should still document SQLite row availability", common.ExternalEvidence)
+	}
+}
+
 func TestPhase2IndexSizeIgnoresIncidentalRetrievalStorage(t *testing.T) {
 	treedbNS := 1_100_000.0
 	sqliteNS := 1_000_000.0

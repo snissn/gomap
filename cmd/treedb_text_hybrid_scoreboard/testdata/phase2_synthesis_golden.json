@@ -241,12 +241,12 @@
     {
       "shape_id": "single_term_common",
       "shape": "single-term common",
-      "classification": "near_parity",
+      "classification": "behind_but_tractable",
       "priority": 2,
       "primary_issue": "#2835",
       "treedb_evidence": "captured 1 row(s): treedb_common_10k/BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk ns/op=1100000, storage=144 B/doc",
       "external_evidence": "captured 1 row(s): sqlite_common_10k/sqlite_fts5/common_term_no_docs ns/op=1000000, storage=128 B/doc",
-      "rationale": "captured comparable latency rows: TreeDB 1.1e+06 ns/op vs external 1e+06 ns/op (ratio 1.1x)",
+      "rationale": "TreeDB has exact block-max common-term evidence, but comparable Lucene/Tantivy/Bleve/SQLite rows and bytes/doc context are missing",
       "required_follow_up_rows": [
         "TreeDB 10k and 100k blockmax_common_topk",
         "SQLite FTS5/Lucene/Tantivy/Bleve common-term top-k rows"
@@ -414,7 +414,7 @@
       "priority": 2,
       "shape_id": "single_term_common",
       "primary_issue": "#2835",
-      "rationale": "captured comparable latency rows: TreeDB 1.1e+06 ns/op vs external 1e+06 ns/op (ratio 1.1x)",
+      "rationale": "TreeDB has exact block-max common-term evidence, but comparable Lucene/Tantivy/Bleve/SQLite rows and bytes/doc context are missing",
       "required_follow_up_rows": [
         "TreeDB 10k and 100k blockmax_common_topk",
         "SQLite FTS5/Lucene/Tantivy/Bleve common-term top-k rows"
