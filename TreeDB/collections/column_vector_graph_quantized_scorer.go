@@ -302,8 +302,14 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDsPrepared(rowIDs []
 	if err != nil {
 		return dst[:0], err
 	}
+	if s.alphaLookup == nil {
+		for i, dot := range dots {
+			dst[i] = scalarU8QuantizedCosineScoreFromDot(dot)
+		}
+		return dst, nil
+	}
 	for i, dot := range dots {
-		score, ok := s.scoreFromDotRowID(dot, rowIDs[i])
+		score, ok := s.scoreAlphaFromDotRowID(dot, rowIDs[i])
 		if !ok {
 			return dst[:0], fmt.Errorf("%w: column_graph quantized index %q scalar_u8 alpha row_id=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, rowIDs[i])
 		}
@@ -315,6 +321,13 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreRowIDsPrepared(rowIDs []
 func (s *columnVectorGraphScalarU8QuantizedScorer) scoreFromDotRowID(dot int64, rowID uint32) (float64, bool) {
 	if s == nil || s.alphaLookup == nil {
 		return scalarU8QuantizedCosineScoreFromDot(dot), true
+	}
+	return s.scoreAlphaFromDotRowID(dot, rowID)
+}
+
+func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAlphaFromDotRowID(dot int64, rowID uint32) (float64, bool) {
+	if s == nil || s.alphaLookup == nil {
+		return 0, false
 	}
 	row := int(rowID)
 	if len(s.alphaScoreScales) == s.alphaLookup.granules {
@@ -573,15 +586,27 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreGreedyBestRowIDsPrevalid
 		return best, bestScore, false, err
 	}
 	changed := false
+	if s.alphaLookup == nil {
+		for i, rowID := range rowIDs {
+			neighborOrdinal := int(rowID)
+			score := scalarU8QuantizedCosineScoreFromDot(dots[i])
+			// Preserve the prepared traversal's public float64 score formula and
+			// exact lower-ordinal tie behavior while avoiding the intermediate
+			// float64 score tile used by the generic row-ID score seam.
+			if score > bestScore || (score == bestScore && neighborOrdinal < best) {
+				best = neighborOrdinal
+				bestScore = score
+				changed = true
+			}
+		}
+		return best, bestScore, changed, nil
+	}
 	for i, rowID := range rowIDs {
 		neighborOrdinal := int(rowID)
-		score, ok := s.scoreFromDotRowID(dots[i], rowID)
+		score, ok := s.scoreAlphaFromDotRowID(dots[i], rowID)
 		if !ok {
 			return best, bestScore, false, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 alpha row_id=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, rowID)
 		}
-		// Preserve the prepared traversal's public float64 score formula and
-		// exact lower-ordinal tie behavior while avoiding the intermediate
-		// float64 score tile used by the generic row-ID score seam.
 		if score > bestScore || (score == bestScore && neighborOrdinal < best) {
 			best = neighborOrdinal
 			bestScore = score
@@ -603,8 +628,17 @@ func (s *columnVectorGraphScalarU8QuantizedScorer) scoreAndPushFrontierVisitedRo
 	if err != nil {
 		return 0, err
 	}
+	if s.alphaLookup == nil {
+		for i, rowID := range rowIDs {
+			candidate := columnVectorGraphSearchCandidate{ordinal: int(rowID), score: scalarU8QuantizedCosineScoreFromDot(dots[i])}
+			if scratch.insertTop(topK, candidate) {
+				scratch.pushFrontierAccounting(candidate, stats)
+			}
+		}
+		return len(rowIDs), nil
+	}
 	for i, rowID := range rowIDs {
-		score, ok := s.scoreFromDotRowID(dots[i], rowID)
+		score, ok := s.scoreAlphaFromDotRowID(dots[i], rowID)
 		if !ok {
 			return 0, fmt.Errorf("%w: column_graph quantized index %q scalar_u8 alpha row_id=%d unavailable", ErrVectorIndexSearchUnavailable, s.indexName, rowID)
 		}
