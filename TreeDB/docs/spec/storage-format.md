@@ -339,7 +339,32 @@ uvarint TermLen
 bytes Term[TermLen]
 ```
 
-Position values are versioned and fail closed:
+Position values are versioned and fail closed. New writers use value version 2;
+readers still accept legacy value version 1 for pre-alpha fixtures.
+
+Version 2 omits the duplicate term string already present in the position key,
+retains a compact 32-bit FNV-1a term fingerprint for independent key/value
+mismatch detection, and delta-codes strictly increasing positions:
+
+```text
+u8      ValueVersion  = 2
+uvarint FormatVersion = 1
+uvarint Ordinal
+uvarint Generation
+uvarint TermFingerprint32  // low 32 bits of TreeDB FNV-1a string hash
+uvarint FieldEntryCount
+
+// repeated FieldEntryCount times, sorted by field index
+uvarint FieldIndex
+uvarint FieldTermFrequency
+uvarint PositionCount
+uvarint FirstPosition
+uvarint PositionDelta[PositionCount-1]
+uvarint OffsetCount
+repeated OffsetCount: uvarint Start, uvarint End
+```
+
+Legacy version 1 values include the full term string and absolute positions:
 
 ```text
 u8      ValueVersion  = 1
