@@ -21241,10 +21241,13 @@ func vectorIndexDefinitionValuesEqual(a, b VectorIndexDefinition) bool {
 }
 
 func quantizedVectorIndexDefinitionValuesEqual(a, b QuantizedVectorIndexDefinition) bool {
-	return a.Name == b.Name &&
-		a.Codec == b.Codec &&
-		a.Version == b.Version &&
-		scalarU8CalibrationConfigEqual(a.ScalarU8Calibration, b.ScalarU8Calibration)
+	if a.Name != b.Name || a.Codec != b.Codec || a.Version != b.Version {
+		return false
+	}
+	if a.Codec == QuantizedVectorCodecScalarU8 {
+		return scalarU8CalibrationConfigEqual(a.ScalarU8Calibration, b.ScalarU8Calibration)
+	}
+	return scalarU8CalibrationConfigStrictEqual(a.ScalarU8Calibration, b.ScalarU8Calibration)
 }
 
 func collectionMetaHasSecondaryUniqueIndex(meta CollectionMeta) bool {

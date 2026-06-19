@@ -216,6 +216,58 @@ func TestScalarU8CalibrationDefinitionNormalization2842(t *testing.T) {
 	}
 }
 
+func TestSameCollectionMetaScalarU8LegacyCalibrationIdentity2842(t *testing.T) {
+	base := CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding_graph",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 3,
+			Strategy:   VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedVectorIndexDefinition{{
+				Name:  "embedding.scalar_u8.legacy",
+				Codec: QuantizedVectorCodecScalarU8,
+			}},
+		}},
+	}
+
+	explicitEmpty := base
+	explicitEmpty.VectorIndexes = copyVectorIndexDefinitions(base.VectorIndexes)
+	explicitEmpty.VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration = &ScalarU8CalibrationConfig{}
+
+	explicitLegacy := base
+	explicitLegacy.VectorIndexes = copyVectorIndexDefinitions(base.VectorIndexes)
+	explicitLegacy.VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration = &ScalarU8CalibrationConfig{Mode: ScalarU8CalibrationModeLegacy}
+
+	for _, other := range []struct {
+		name string
+		meta CollectionMeta
+	}{
+		{name: "empty", meta: explicitEmpty},
+		{name: "legacy", meta: explicitLegacy},
+	} {
+		t.Run(other.name, func(t *testing.T) {
+			if !sameCollectionMeta(base, other.meta) || !sameCollectionMeta(other.meta, base) {
+				t.Fatalf("sameCollectionMeta omitted vs explicit %s scalar_u8_calibration = false", other.name)
+			}
+		})
+	}
+
+	alpha := base
+	alpha.VectorIndexes = copyVectorIndexDefinitions(base.VectorIndexes)
+	alpha.VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration = &ScalarU8CalibrationConfig{
+		Mode:     ScalarU8CalibrationModePerGranuleAlpha,
+		Grouping: ScalarU8CalibrationGroupingStorageLayoutGranule,
+		AlphaPolicy: ScalarU8AlphaPolicy{
+			Name: ScalarU8AlphaPolicyMaxAbs,
+		},
+	}
+	if sameCollectionMeta(base, alpha) {
+		t.Fatal("sameCollectionMeta omitted vs per_granule_alpha scalar_u8_calibration = true")
+	}
+}
+
 func TestScalarU8CalibrationDefinitionInvalidConfig2842(t *testing.T) {
 	base := VectorIndexDefinition{
 		Name:       "embedding_graph",
