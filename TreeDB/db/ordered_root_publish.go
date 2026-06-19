@@ -2402,12 +2402,14 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		if err != nil {
 			return 0, nil, false, err
 		}
+		systemDeltaReleaseEntries := append([]batch.Entry(nil), systemDelta.OrderedEntries()...)
 		phaseStart = time.Now()
 		rootID, systemRetired, systemMetrics, applyErr := db.publishOrderedRootDeltaBatchWithAllocator(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, false)
 		phaseStats.systemApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 		phaseStats.systemApplyCalls++
 		if applyErr != nil {
 			_ = systemDelta.Close()
+			db.releasePendingValueLogAppendFileIDsFromEntries(systemDeltaReleaseEntries)
 			err = applyErr
 			return 0, nil, false, err
 		}
@@ -2419,6 +2421,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		observedSystemRoot := db.meta.SystemRootPageID
 		db.mu.RUnlock()
 		if observedSystemRoot != systemBaseRoot {
+			db.releasePendingValueLogAppendFileIDsFromEntries(systemDeltaReleaseEntries)
 			if freeErr := systemTracker.FreeAll(); freeErr != nil {
 				err = freeErr
 				return 0, nil, false, err
@@ -2441,6 +2444,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			db.orderedRootDeltaGroupPublishPrepareNs.Add(publishPrepareNs)
 			db.orderedRootDeltaGroupPublishPrepareCalls.Add(1)
 			db.orderedRootDeltaGroupPublishPrepareErrors.Add(1)
+			db.releasePendingValueLogAppendFileIDsFromEntries(systemDeltaReleaseEntries)
 			err = prepareErr
 			return 0, nil, false, err
 		}
@@ -2460,6 +2464,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		curSystemRoot := db.meta.SystemRootPageID
 		db.mu.RUnlock()
 		if curSystemRoot != systemBaseRoot {
+			db.releasePendingValueLogAppendFileIDsFromEntries(systemDeltaReleaseEntries)
 			db.commitMu.Unlock()
 			releasePublishPrepare()
 			if freeErr := systemTracker.FreeAll(); freeErr != nil {
@@ -2503,8 +2508,10 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		db.commitMu.Unlock()
 		releasePublishPrepare()
 		if err != nil {
+			db.releasePendingValueLogAppendFileIDsFromEntries(systemDeltaReleaseEntries)
 			return 0, nil, false, err
 		}
+		db.releasePendingValueLogAppendFileIDsFromEntries(systemDeltaReleaseEntries)
 		db.invalidateLeafGenerationSubtreeStats(append(committedRootPages, committedSystemPages...))
 		db.finalizeCommitPostWork(post)
 		db.writeMu.RUnlock()
