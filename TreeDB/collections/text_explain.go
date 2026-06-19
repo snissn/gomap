@@ -318,7 +318,7 @@ func textSearchExplainBindV2Context(explain *TextSearchExplain, ctx *textV2Searc
 	explain.Serving.BM25B = textSearchBM25B
 	if allowSet != nil {
 		explain.Serving.ScalarPruning.Enabled = true
-		explain.Serving.ScalarPruning.AllowSetSize = uint64(len(allowSet.sorted))
+		explain.Serving.ScalarPruning.AllowSetSize = uint64(allowSet.size())
 	}
 }
 

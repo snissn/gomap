@@ -46,7 +46,7 @@ func executeTextV2PhraseSearchAtSnapshot(
 	}
 	textSearchExplainBindV2Context(response.Explain, ctx, uniqueTerms, allowSet)
 	if allowSet != nil {
-		response.Stats.TextScalarPrefilterIDs = uint64(len(allowSet.sorted))
+		response.Stats.TextScalarPrefilterIDs = uint64(allowSet.size())
 	}
 	if allowSet.empty() {
 		response.Results = []TextSearchResult{}
