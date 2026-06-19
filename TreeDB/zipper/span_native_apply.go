@@ -43,13 +43,20 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		workers = spanCount
 	}
 
-	workerRanges := coordinatorScratch.acquireSpanWorkerRanges(workers)
-	workerRanges = prepared.AppendLeafSpanWorkerRanges(workerRanges, workers)
+	rangeCapacity := readOnlyLeafSpanWorkUnitTargetRanges(workers, spanCount)
+	workerRanges := coordinatorScratch.acquireSpanWorkerRanges(rangeCapacity)
+	workerRanges = prepared.AppendLeafSpanWorkUnitRanges(workerRanges, workers)
 	if len(workerRanges) == 0 {
 		workerRanges = append(workerRanges, ReadOnlyLeafSpanWorkerRange{FirstSpan: 0, SpanCount: spanCount, Ops: len(ops)})
 	}
 	defer coordinatorScratch.releaseSpanWorkerRanges(workerRanges)
-	workers = len(workerRanges)
+	scheduledWorkers := workers
+	if scheduledWorkers > len(workerRanges) {
+		scheduledWorkers = len(workerRanges)
+	}
+	if scheduledWorkers <= 0 {
+		scheduledWorkers = 1
+	}
 	outputs := coordinatorScratch.acquireSpanNativeLeafOutputs(spanCount, z.outerLeavesInValueLog)
 	defer outputs.release()
 	workerScratches := coordinatorScratch.acquireSpanWorkerScratchSlots(len(workerRanges))
@@ -123,7 +130,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	finishScheduleStats := func() {
 		waitNs := int64(elapsedNsSince(scheduleStart))
 		busyNs := workerBusyNs.Load()
-		idleNs := waitNs*int64(workers) - busyNs
+		idleNs := waitNs*int64(scheduledWorkers) - busyNs
 		if idleNs < 0 {
 			idleNs = 0
 		}
@@ -136,18 +143,19 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		if len(workerRanges) > metrics.ZipperSpanNativeQueueDepthMax {
 			metrics.ZipperSpanNativeQueueDepthMax = len(workerRanges)
 		}
-		metrics.ZipperSpanNativeScheduledWorkers += workers
-		if workers > metrics.ZipperSpanNativeScheduledWorkersMax {
-			metrics.ZipperSpanNativeScheduledWorkersMax = workers
+		metrics.ZipperSpanNativeScheduledWorkers += scheduledWorkers
+		if scheduledWorkers > metrics.ZipperSpanNativeScheduledWorkersMax {
+			metrics.ZipperSpanNativeScheduledWorkersMax = scheduledWorkers
 		}
+		recordSpanNativeWorkUnitMetrics(&metrics, workerRanges)
 	}
 	if workerPool != nil {
-		if err := workerPool.Run(workers, len(workerRanges), runRange); err != nil {
+		if err := workerPool.Run(scheduledWorkers, len(workerRanges), runRange); err != nil {
 			finishScheduleStats()
 			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 			return ApplyResult{Metrics: metrics}, true, err
 		}
-	} else if workers <= 1 {
+	} else if scheduledWorkers <= 1 {
 		for job := range workerRanges {
 			runRange(0, job)
 		}
@@ -164,7 +172,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 				runRange(workerID, job)
 			}
 		}
-		for workerID := 0; workerID < workers; workerID++ {
+		for workerID := 0; workerID < scheduledWorkers; workerID++ {
 			wg.Add(1)
 			go worker(workerID)
 		}
@@ -199,9 +207,47 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		PendingRetiredPages: retired,
 		Metrics:             metrics,
 		SpanNativeEligible:  true,
-		SpanNativeWorkers:   workers,
+		SpanNativeWorkers:   scheduledWorkers,
 		SpanNativeUsed:      true,
 	}, true, nil
+}
+
+func recordSpanNativeWorkUnitMetrics(metrics *adaptive.Metrics, ranges []ReadOnlyLeafSpanWorkerRange) {
+	if metrics == nil || len(ranges) == 0 {
+		return
+	}
+	observed := 0
+	for i := range ranges {
+		r := ranges[i]
+		if r.SpanCount <= 0 {
+			continue
+		}
+		metrics.ZipperSpanNativeTaskSpansTotal += r.SpanCount
+		metrics.ZipperSpanNativeTaskOpsTotal += r.Ops
+		metrics.ZipperSpanNativeTaskBytesTotal += r.Bytes
+		if observed == 0 || r.SpanCount < metrics.ZipperSpanNativeTaskSpansMin {
+			metrics.ZipperSpanNativeTaskSpansMin = r.SpanCount
+		}
+		if r.SpanCount > metrics.ZipperSpanNativeTaskSpansMax {
+			metrics.ZipperSpanNativeTaskSpansMax = r.SpanCount
+		}
+		if observed == 0 || r.Ops < metrics.ZipperSpanNativeTaskOpsMin {
+			metrics.ZipperSpanNativeTaskOpsMin = r.Ops
+		}
+		if r.Ops > metrics.ZipperSpanNativeTaskOpsMax {
+			metrics.ZipperSpanNativeTaskOpsMax = r.Ops
+		}
+		if observed == 0 || r.Bytes < metrics.ZipperSpanNativeTaskBytesMin {
+			metrics.ZipperSpanNativeTaskBytesMin = r.Bytes
+		}
+		if r.Bytes > metrics.ZipperSpanNativeTaskBytesMax {
+			metrics.ZipperSpanNativeTaskBytesMax = r.Bytes
+		}
+		if r.SpanCount == 1 {
+			metrics.ZipperSpanNativeSingleSpanTasks++
+		}
+		observed++
+	}
 }
 
 func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareResult) bool {

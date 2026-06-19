@@ -981,12 +981,21 @@ func (db *DB) disableLeafPageReadCacheForMaintenance() func() {
 }
 
 func (r *cachedLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
-	if key, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
+	var key page.LeafLogPtr
+	var keyOK bool
+	if k, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
+		key = k
+		keyOK = true
 		if data, ok := r.cache.get(key); ok {
 			return data, nil
 		}
 	}
-	return r.fallback.ReadUnsafe(ptr)
+	data, err := r.fallback.ReadUnsafe(ptr)
+	if err != nil {
+		return nil, err
+	}
+	r.storeReadMiss(key, keyOK, data)
+	return data, nil
 }
 
 func (r *cachedLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
@@ -995,7 +1004,11 @@ func (r *cachedLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]by
 }
 
 func (r *cachedLeafPageReader) ReadUnsafeToWithCacheHit(ptr page.ValuePtr, dst []byte) ([]byte, bool, bool, error) {
-	if key, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
+	var key page.LeafLogPtr
+	var keyOK bool
+	if k, err := page.LeafLogPtrFromValuePtr(ptr); err == nil {
+		key = k
+		keyOK = true
 		if data, usedDst, ok := r.cache.getTo(key, dst); ok {
 			return data, usedDst, true, nil
 		}
@@ -1007,13 +1020,26 @@ func (r *cachedLeafPageReader) ReadUnsafeToWithCacheHit(ptr page.ValuePtr, dst [
 		if err != nil {
 			return nil, false, false, err
 		}
+		r.storeReadMiss(key, keyOK, data)
 		return data, usedDst, false, nil
 	}
 	data, err := r.fallback.ReadUnsafe(ptr)
 	if err != nil {
 		return nil, false, false, err
 	}
+	r.storeReadMiss(key, keyOK, data)
 	return data, false, false, nil
+}
+
+func (r *cachedLeafPageReader) storeReadMiss(key page.LeafLogPtr, keyOK bool, leafPage []byte) {
+	if r == nil || r.cache == nil || !keyOK || len(leafPage) != page.PageSize {
+		return
+	}
+	recordChecksumVerified := false
+	if cap, ok := r.fallback.(readChecksumCapability); ok {
+		recordChecksumVerified = cap.ReadChecksumEnabled()
+	}
+	r.cache.storeReadMiss(key, leafPage, recordChecksumVerified)
 }
 
 func cloneLeafPageReadCacheData(data []byte) []byte {

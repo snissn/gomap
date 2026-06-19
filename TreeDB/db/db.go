@@ -357,6 +357,16 @@ type DB struct {
 	flushApplySpanNativeQueueDepthMax             atomic.Uint64
 	flushApplySpanNativeScheduledWorkers          atomic.Uint64
 	flushApplySpanNativeScheduledWorkersMax       atomic.Uint64
+	flushApplySpanNativeTaskSpansTotal            atomic.Uint64
+	flushApplySpanNativeTaskSpansMin              atomic.Uint64
+	flushApplySpanNativeTaskSpansMax              atomic.Uint64
+	flushApplySpanNativeTaskOpsTotal              atomic.Uint64
+	flushApplySpanNativeTaskOpsMin                atomic.Uint64
+	flushApplySpanNativeTaskOpsMax                atomic.Uint64
+	flushApplySpanNativeTaskBytesTotal            atomic.Uint64
+	flushApplySpanNativeTaskBytesMin              atomic.Uint64
+	flushApplySpanNativeTaskBytesMax              atomic.Uint64
+	flushApplySpanNativeSingleSpanTasks           atomic.Uint64
 	flushApplyRetries                             atomic.Uint64
 	flushApplyMismatches                          atomic.Uint64
 

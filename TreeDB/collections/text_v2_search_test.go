@@ -220,7 +220,7 @@ func TestTextV2PositionsLaneCorruptionFailsClosedOnlyForDetailedMode2629(t *test
 		positionKey = encodeTextV2PositionKey(doc.Ordinal, "unique2629")
 	})
 	raw := textV2ReadRootBytes2624(t, d, "docs", collectionTextV2PositionsRootName("docs", "lexical"), positionKey)
-	position, err := decodeTextV2PositionValue(raw)
+	position, err := decodeTextV2PositionValueForTerm(raw, "unique2629")
 	if err != nil {
 		t.Fatalf("decode position value before corruption: %v", err)
 	}

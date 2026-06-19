@@ -69,6 +69,16 @@ type Metrics struct {
 	ZipperSpanNativeQueueDepthMax       int
 	ZipperSpanNativeScheduledWorkers    int
 	ZipperSpanNativeScheduledWorkersMax int
+	ZipperSpanNativeTaskSpansTotal      int
+	ZipperSpanNativeTaskSpansMin        int
+	ZipperSpanNativeTaskSpansMax        int
+	ZipperSpanNativeTaskOpsTotal        int
+	ZipperSpanNativeTaskOpsMin          int
+	ZipperSpanNativeTaskOpsMax          int
+	ZipperSpanNativeTaskBytesTotal      int
+	ZipperSpanNativeTaskBytesMin        int
+	ZipperSpanNativeTaskBytesMax        int
+	ZipperSpanNativeSingleSpanTasks     int
 
 	// SlabWriteBytesByFile tracks bytes appended to each slab file during this
 	// commit (keyed by FileID).

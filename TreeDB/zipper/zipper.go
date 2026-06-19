@@ -2870,6 +2870,28 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	if src.ZipperSpanNativeScheduledWorkersMax > dst.ZipperSpanNativeScheduledWorkersMax {
 		dst.ZipperSpanNativeScheduledWorkersMax = src.ZipperSpanNativeScheduledWorkersMax
 	}
+	dst.ZipperSpanNativeTaskSpansTotal += src.ZipperSpanNativeTaskSpansTotal
+	if src.ZipperSpanNativeTaskSpansMin > 0 && (dst.ZipperSpanNativeTaskSpansMin == 0 || src.ZipperSpanNativeTaskSpansMin < dst.ZipperSpanNativeTaskSpansMin) {
+		dst.ZipperSpanNativeTaskSpansMin = src.ZipperSpanNativeTaskSpansMin
+	}
+	if src.ZipperSpanNativeTaskSpansMax > dst.ZipperSpanNativeTaskSpansMax {
+		dst.ZipperSpanNativeTaskSpansMax = src.ZipperSpanNativeTaskSpansMax
+	}
+	dst.ZipperSpanNativeTaskOpsTotal += src.ZipperSpanNativeTaskOpsTotal
+	if src.ZipperSpanNativeTaskOpsMin > 0 && (dst.ZipperSpanNativeTaskOpsMin == 0 || src.ZipperSpanNativeTaskOpsMin < dst.ZipperSpanNativeTaskOpsMin) {
+		dst.ZipperSpanNativeTaskOpsMin = src.ZipperSpanNativeTaskOpsMin
+	}
+	if src.ZipperSpanNativeTaskOpsMax > dst.ZipperSpanNativeTaskOpsMax {
+		dst.ZipperSpanNativeTaskOpsMax = src.ZipperSpanNativeTaskOpsMax
+	}
+	dst.ZipperSpanNativeTaskBytesTotal += src.ZipperSpanNativeTaskBytesTotal
+	if src.ZipperSpanNativeTaskBytesMin > 0 && (dst.ZipperSpanNativeTaskBytesMin == 0 || src.ZipperSpanNativeTaskBytesMin < dst.ZipperSpanNativeTaskBytesMin) {
+		dst.ZipperSpanNativeTaskBytesMin = src.ZipperSpanNativeTaskBytesMin
+	}
+	if src.ZipperSpanNativeTaskBytesMax > dst.ZipperSpanNativeTaskBytesMax {
+		dst.ZipperSpanNativeTaskBytesMax = src.ZipperSpanNativeTaskBytesMax
+	}
+	dst.ZipperSpanNativeSingleSpanTasks += src.ZipperSpanNativeSingleSpanTasks
 
 	if src.SlabWriteBytesByFile != nil {
 		if dst.SlabWriteBytesByFile == nil {

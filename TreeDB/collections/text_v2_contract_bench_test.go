@@ -681,6 +681,7 @@ func BenchmarkTextV2PhraseProximity2733(b *testing.B) {
 			b.ReportMetric(float64(maxPostings), "max_postings/search")
 			b.ReportMetric(float64(stats.V2PositionEntries), "v2_position_entries")
 			b.ReportMetric(float64(stats.EncodedBytes)/float64(maxTextV2ContractInt2623(docs, 1)), "index_bytes/doc")
+			textV2ContractReportBackfillLaneBytes2623(b, docs, stats)
 			textV2ContractReportTextStats2623(b, sink)
 		})
 	}
@@ -1207,6 +1208,7 @@ func textV2ContractReportBackfillStats2623(b *testing.B, docs int, stats TextInd
 	b.ReportMetric(float64(entries)/docsDivisor, "index_entries/doc")
 	b.ReportMetric(float64(entries)/docsDivisor, "write_amp_entries/doc")
 	b.ReportMetric(float64(stats.EncodedBytes)/docsDivisor, "index_bytes/doc")
+	textV2ContractReportBackfillLaneBytes2623(b, docs, stats)
 }
 
 func textV2ContractReportWriteStats2623(b *testing.B, docs int, stats TextIndexStorageStats, writeAmpEntries uint64) {
@@ -1227,6 +1229,31 @@ func textV2ContractReportWriteStats2623(b *testing.B, docs int, stats TextIndexS
 	b.ReportMetric(float64(entries)/docsDivisor, "index_entries/doc")
 	b.ReportMetric(float64(writeAmpEntries)/docsDivisor, "write_amp_entries/doc")
 	b.ReportMetric(float64(stats.EncodedBytes)/docsDivisor, "index_bytes/doc")
+	textV2ContractReportStorageLaneBytes2623(b, docs, stats)
+}
+
+func textV2ContractReportBackfillLaneBytes2623(b *testing.B, docs int, stats TextIndexBackfillStats) {
+	b.Helper()
+	docsDivisor := float64(maxTextV2ContractInt2623(docs, 1))
+	b.ReportMetric(float64(stats.V2DocIDBytes)/docsDivisor, "v2_docid_bytes/doc")
+	b.ReportMetric(float64(stats.V2DocMapBytes)/docsDivisor, "v2_docmap_bytes/doc")
+	b.ReportMetric(float64(stats.V2PostingBlockBytes)/docsDivisor, "v2_posting_bytes/doc")
+	b.ReportMetric(float64(stats.V2NormBlockBytes)/docsDivisor, "v2_norm_bytes/doc")
+	b.ReportMetric(float64(stats.V2PositionBytes)/docsDivisor, "v2_position_bytes/doc")
+	b.ReportMetric(float64(stats.V2TermStatsBytes)/docsDivisor, "v2_term_bytes/doc")
+	b.ReportMetric(float64(stats.V2StatusFormatBytes)/docsDivisor, "v2_status_format_bytes/doc")
+}
+
+func textV2ContractReportStorageLaneBytes2623(b *testing.B, docs int, stats TextIndexStorageStats) {
+	b.Helper()
+	docsDivisor := float64(maxTextV2ContractInt2623(docs, 1))
+	b.ReportMetric(float64(stats.V2DocIDBytes)/docsDivisor, "v2_docid_bytes/doc")
+	b.ReportMetric(float64(stats.V2DocMapBytes)/docsDivisor, "v2_docmap_bytes/doc")
+	b.ReportMetric(float64(stats.V2PostingBlockBytes)/docsDivisor, "v2_posting_bytes/doc")
+	b.ReportMetric(float64(stats.V2NormBlockBytes)/docsDivisor, "v2_norm_bytes/doc")
+	b.ReportMetric(float64(stats.V2PositionBytes)/docsDivisor, "v2_position_bytes/doc")
+	b.ReportMetric(float64(stats.V2TermStatsBytes)/docsDivisor, "v2_term_bytes/doc")
+	b.ReportMetric(float64(stats.V2StatusFormatBytes)/docsDivisor, "v2_status_format_bytes/doc")
 }
 
 func textV2ContractReportHighDFBlocks2626(b *testing.B, docs int, blocks uint64) {
