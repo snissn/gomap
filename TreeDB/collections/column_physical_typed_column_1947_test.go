@@ -305,6 +305,53 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataTopKFastPaths2878
 			tb.Fatalf("%s diagnostics=%+v want three non-empty topK candidates", label, diag)
 		}
 	})
+
+	missingOperation := []ColumnPhysicalQueryPredicate{
+		{Column: "kind", Value: "commit"},
+		{Column: "operation", Value: ""},
+		{Column: "event", Value: "app.bsky.feed.post"},
+	}
+	q4MissingOperation := ColumnPhysicalQueryRequest{
+		Kind:              ColumnPhysicalQueryGroupMinInt64,
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Predicates:        missingOperation,
+		TopK:              1,
+		TopKOrder:         ColumnPhysicalQueryTopKInt64Asc,
+		SkipEmptyGroupKey: true,
+	}
+	q4MissingOperationWant := []ColumnPhysicalQueryGroup{{Key: "did_x", Int64: 1050}}
+	runNullableFullDataTopKFastPath2878(t, collection, "q4 missing operation", q4MissingOperation, q4MissingOperationWant, func(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+		tb.Helper()
+		assertNullableFullDataTopKBaseDiagnostics2878(tb, label, diag, len(missingOperation), q4MissingOperation.TopK, string(q4MissingOperation.TopKOrder), len(q4MissingOperationWant))
+		if !diag.TimeOrderTopKUsed || diag.DenseInt64SpanUsed {
+			tb.Fatalf("%s diagnostics=%+v want time-order topK only", label, diag)
+		}
+		if diag.RowsMatched != 1 || diag.ReduceRows != 1 {
+			tb.Fatalf("%s diagnostics=%+v want nullable missing operation to match exactly one row", label, diag)
+		}
+	})
+
+	q5MissingOperation := ColumnPhysicalQueryRequest{
+		Kind:              ColumnPhysicalQueryGroupInt64Span,
+		GroupColumn:       "did",
+		ValueColumn:       "time_us",
+		Predicates:        missingOperation,
+		TopK:              1,
+		TopKOrder:         ColumnPhysicalQueryTopKInt64Desc,
+		SkipEmptyGroupKey: true,
+	}
+	q5MissingOperationWant := []ColumnPhysicalQueryGroup{{Key: "did_x", Int64: 0}}
+	runNullableFullDataTopKFastPath2878(t, collection, "q5 missing operation", q5MissingOperation, q5MissingOperationWant, func(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+		tb.Helper()
+		assertNullableFullDataTopKBaseDiagnostics2878(tb, label, diag, len(missingOperation), q5MissingOperation.TopK, string(q5MissingOperation.TopKOrder), len(q5MissingOperationWant))
+		if !diag.DenseInt64SpanUsed || diag.TimeOrderTopKUsed {
+			tb.Fatalf("%s diagnostics=%+v want dense int64-span only", label, diag)
+		}
+		if diag.RowsMatched != 1 || diag.ReduceRows != 1 {
+			tb.Fatalf("%s diagnostics=%+v want nullable missing operation to match exactly one row", label, diag)
+		}
+	})
 }
 
 func TestColumnPhysicalJSONBenchTypedColumnPartEdgeShapes1947(t *testing.T) {

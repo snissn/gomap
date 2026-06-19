@@ -1467,10 +1467,11 @@ type columnTypedColumnTimeOrderCodeColumn struct {
 }
 
 type columnTypedColumnTimeOrderPredicateColumn struct {
-	CodeColumn    columnTypedColumnTimeOrderCodeColumn
-	Allowed       []uint64
-	RejectsAll    bool
-	UsesGroupCode bool
+	CodeColumn          columnTypedColumnTimeOrderCodeColumn
+	Allowed             []uint64
+	MissingMatchesEmpty bool
+	RejectsAll          bool
+	UsesGroupCode       bool
 }
 
 type columnTypedColumnTimeOrderTopKPart struct {
@@ -1553,25 +1554,26 @@ func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysi
 	predicates := make([]columnTypedColumnTimeOrderPredicateColumn, 0, len(plan.PredicateSpecs))
 	for _, spec := range plan.PredicateSpecs {
 		if spec.column == plan.GroupColumn {
-			allowed, rejectsAll, err := timeOrderTopKAllowedCodes(groupColumn, cardinality, spec)
+			allowed, missingMatchesEmpty, rejectsAll, err := timeOrderTopKAllowedCodes(groupColumn, cardinality, spec)
 			if err != nil {
 				return columnTypedColumnPhysicalQueryPart{}, err
 			}
-			predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{CodeColumn: group, Allowed: allowed, RejectsAll: rejectsAll, UsesGroupCode: true})
+			predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{CodeColumn: group, Allowed: allowed, MissingMatchesEmpty: missingMatchesEmpty, RejectsAll: rejectsAll, UsesGroupCode: true})
 			continue
 		}
 		predicateColumn, predicatePartColumn, predicateCardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, spec.column, "time-order topK predicate")
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
-		allowed, rejectsAll, err := timeOrderTopKAllowedCodes(predicateColumn, predicateCardinality, spec)
+		allowed, missingMatchesEmpty, rejectsAll, err := timeOrderTopKAllowedCodes(predicateColumn, predicateCardinality, spec)
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
 		predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{
-			CodeColumn: columnTypedColumnTimeOrderCodeColumn{PartColumn: predicatePartColumn, Cardinality: predicateCardinality, DictionaryByCode: predicateColumn.ReverseDictionary, Nullable: predicateColumn.Field.Nullable},
-			Allowed:    allowed,
-			RejectsAll: rejectsAll,
+			CodeColumn:          columnTypedColumnTimeOrderCodeColumn{PartColumn: predicatePartColumn, Cardinality: predicateCardinality, DictionaryByCode: predicateColumn.ReverseDictionary, Nullable: predicateColumn.Field.Nullable},
+			Allowed:             allowed,
+			MissingMatchesEmpty: missingMatchesEmpty,
+			RejectsAll:          rejectsAll,
 		})
 	}
 
@@ -1656,22 +1658,26 @@ func validateTypedColumnTimeOrderTopKMarks(part *typedcolumn.ColumnPart, valueCo
 	return nil
 }
 
-func timeOrderTopKAllowedCodes(column typedColumnAdapterColumn, cardinality int, spec columnPhysicalQueryPredicateSpec) ([]uint64, bool, error) {
+func timeOrderTopKAllowedCodes(column typedColumnAdapterColumn, cardinality int, spec columnPhysicalQueryPredicateSpec) ([]uint64, bool, bool, error) {
 	allowed := make([]uint64, (cardinality+63)/64)
 	matchedLiterals := 0
+	missingMatchesEmpty := false
 	for _, value := range spec.values {
+		if column.Field.Nullable && value == "" {
+			missingMatchesEmpty = true
+		}
 		code, ok := column.Dictionary[value]
 		if !ok {
 			continue
 		}
 		if code < 0 || uint64(code) >= uint64(cardinality) {
-			return nil, false, fmt.Errorf("collections: time-order topK predicate dictionary code %d outside cardinality %d for column %q", code, cardinality, column.Definition.Name)
+			return nil, false, false, fmt.Errorf("collections: time-order topK predicate dictionary code %d outside cardinality %d for column %q", code, cardinality, column.Definition.Name)
 		}
 		idx := int(code)
 		allowed[idx/64] |= uint64(1) << uint(idx%64)
 		matchedLiterals++
 	}
-	return allowed, matchedLiterals == 0, nil
+	return allowed, missingMatchesEmpty, matchedLiterals == 0 && !missingMatchesEmpty, nil
 }
 
 func (p *columnTypedColumnTimeOrderTopKPart) resetTimeOrderTopKScan() {
@@ -1758,12 +1764,12 @@ func (p *columnTypedColumnTimeOrderTopKPart) evaluateTimeOrderTopKRow(granuleIdx
 			return "", false, decoded, blocks, decodedBytes, fmt.Errorf("collections: time-order topK predicate row=%d outside decoded rows=%d", rowInGranule, len(codes))
 		}
 		if valid := p.predicateValid[predIdx]; valid != nil && !columnTypedColumnDenseCodeValid(valid, rowInGranule) {
-			return "", false, decoded, blocks, decodedBytes, nil
+			if !predicate.MissingMatchesEmpty {
+				return "", false, decoded, blocks, decodedBytes, nil
+			}
+			continue
 		}
-		code := codes[rowInGranule]
-		word := int(code / 64)
-		bit := uint(code % 64)
-		if word >= len(predicate.Allowed) || (predicate.Allowed[word]&(uint64(1)<<bit)) == 0 {
+		if !columnTypedColumnCodeAllowed(predicate.Allowed, codes[rowInGranule]) {
 			return "", false, decoded, blocks, decodedBytes, nil
 		}
 	}
@@ -2183,7 +2189,11 @@ func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fi
 	}
 	allowed := make([]uint64, (cardinality+63)/64)
 	matchedLiterals := 0
+	missingMatchesEmpty := false
 	for _, value := range spec.values {
+		if adapterColumn.Field.Nullable && value == "" {
+			missingMatchesEmpty = true
+		}
 		code, ok := adapterColumn.Dictionary[value]
 		if !ok {
 			continue
@@ -2195,7 +2205,7 @@ func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fi
 		allowed[idx/64] |= uint64(1) << uint(idx%64)
 		matchedLiterals++
 	}
-	if matchedLiterals == 0 {
+	if matchedLiterals == 0 && !missingMatchesEmpty {
 		return columnTypedColumnDensePredicatePart{RejectsAll: true}, 0, 0, nil
 	}
 	if adapterColumn.Field.Nullable {
@@ -2203,7 +2213,7 @@ func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fi
 		if err != nil {
 			return columnTypedColumnDensePredicatePart{}, 0, 0, err
 		}
-		return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed}, decodedBytes, blocks, nil
+		return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed, MissingMatchesEmpty: missingMatchesEmpty}, decodedBytes, blocks, nil
 	}
 	codes, decodedBytes, blocks, err := decodeTypedColumnDenseUint32Codes(partColumn, cardinality, rows, "predicate")
 	if err != nil {

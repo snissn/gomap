@@ -34,10 +34,11 @@ type columnTypedColumnDenseGroupCountPart struct {
 }
 
 type columnTypedColumnDensePredicatePart struct {
-	Codes      []uint32
-	Valid      []bool
-	Allowed    []uint64
-	RejectsAll bool
+	Codes               []uint32
+	Valid               []bool
+	Allowed             []uint64
+	MissingMatchesEmpty bool
+	RejectsAll          bool
 }
 
 type columnTypedColumnDenseGroupHourCountPart struct {
@@ -2017,12 +2018,12 @@ func columnTypedColumnDensePredicatesMatch(predicates []columnTypedColumnDensePr
 			return false
 		}
 		if !columnTypedColumnDenseCodeValid(predicate.Valid, rowIdx) {
-			return false
+			if !predicate.MissingMatchesEmpty {
+				return false
+			}
+			continue
 		}
-		code := predicate.Codes[rowIdx]
-		word := int(code / 64)
-		bit := uint(code % 64)
-		if word >= len(predicate.Allowed) || (predicate.Allowed[word]&(uint64(1)<<bit)) == 0 {
+		if !columnTypedColumnCodeAllowed(predicate.Allowed, predicate.Codes[rowIdx]) {
 			return false
 		}
 	}
@@ -2031,6 +2032,12 @@ func columnTypedColumnDensePredicatesMatch(predicates []columnTypedColumnDensePr
 
 func columnTypedColumnDenseCodeValid(valid []bool, rowIdx int) bool {
 	return valid == nil || (rowIdx >= 0 && rowIdx < len(valid) && valid[rowIdx])
+}
+
+func columnTypedColumnCodeAllowed(allowed []uint64, code uint32) bool {
+	word := int(code / 64)
+	bit := uint(code % 64)
+	return word < len(allowed) && (allowed[word]&(uint64(1)<<bit)) != 0
 }
 
 func columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) bool {
