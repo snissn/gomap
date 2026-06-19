@@ -35,6 +35,28 @@ type spanNativeLeafLogOutputBuffer struct {
 	pages [][]byte
 }
 
+var spanNativeBufferedLeafPagePool sync.Pool
+
+func acquireSpanNativeBufferedLeafPage(size int) []byte {
+	if size <= 0 {
+		return nil
+	}
+	if v := spanNativeBufferedLeafPagePool.Get(); v != nil {
+		if buf, ok := v.([]byte); ok && cap(buf) >= size {
+			return buf[:size]
+		}
+	}
+	return make([]byte, size)
+}
+
+func releaseSpanNativeBufferedLeafPage(buf []byte) {
+	if cap(buf) == 0 || cap(buf) > page.PageSize*2 {
+		return
+	}
+	clear(buf)
+	spanNativeBufferedLeafPagePool.Put(buf[:0])
+}
+
 func (b *spanNativeLeafLogOutputBuffer) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
 	var one [1][]byte
 	one[0] = leafPage
@@ -58,7 +80,7 @@ func (b *spanNativeLeafLogOutputBuffer) persistLeafPageBatchDataTo(_ *Zipper, le
 	reservationWait := time.Since(waitStart)
 	start := len(b.pages)
 	for _, leafPage := range leafPages {
-		owned := make([]byte, len(leafPage))
+		owned := acquireSpanNativeBufferedLeafPage(len(leafPage))
 		copy(owned, leafPage)
 		b.pages = append(b.pages, owned)
 	}
@@ -88,6 +110,11 @@ func (b *spanNativeLeafLogOutputBuffer) commit(z *Zipper, metrics *adaptive.Metr
 	if len(pages) == 0 {
 		return nil, nil
 	}
+	defer func() {
+		for _, pageBuf := range pages {
+			releaseSpanNativeBufferedLeafPage(pageBuf)
+		}
+	}()
 	refs, err := z.persistLeafPageBatchDataTo(pages, nil, metrics)
 	if err != nil {
 		return nil, err
