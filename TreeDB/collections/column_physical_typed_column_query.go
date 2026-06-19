@@ -59,8 +59,10 @@ type columnTypedColumnDenseInt64SpanPart struct {
 }
 
 type columnTypedColumnSortedGroupedDistinctCodeColumn struct {
-	Codes      []int64
-	Dictionary []string
+	Codes            []int64
+	Dictionary       []string
+	GlobalCodes      []uint32
+	GlobalDictionary []string
 }
 
 type columnTypedColumnSortedGroupedDistinctPredicate struct {
@@ -444,7 +446,88 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 	if len(runner.parts) == 0 && len(view.AssetRefs) != 0 {
 		return nil, errors.New("collections: typed-column part physical query has no live typed_column_part assets")
 	}
+	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) {
+		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(runner.parts); err != nil {
+			return nil, err
+		}
+	}
 	return runner, nil
+}
+
+func prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(parts []columnTypedColumnPhysicalQueryPart) error {
+	groupDict, groupRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
+		return &part.Group
+	})
+	if err != nil {
+		return err
+	}
+	distinctDict, distinctRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
+		return &part.Distinct
+	})
+	if err != nil {
+		return err
+	}
+	for partIdx := range parts {
+		part := parts[partIdx].SortedGroupedDistinct
+		if part == nil {
+			return fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
+		}
+		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(&part.Group, groupDict, groupRanks); err != nil {
+			return fmt.Errorf("collections: sorted grouped-distinct group part %d: %w", partIdx, err)
+		}
+		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(&part.Distinct, distinctDict, distinctRanks); err != nil {
+			return fmt.Errorf("collections: sorted grouped-distinct distinct part %d: %w", partIdx, err)
+		}
+	}
+	return nil
+}
+
+func columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn) ([]string, map[string]uint32, error) {
+	values := make(map[string]struct{})
+	for partIdx := range parts {
+		part := parts[partIdx].SortedGroupedDistinct
+		if part == nil {
+			return nil, nil, fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
+		}
+		column := selectColumn(part)
+		for _, value := range column.Dictionary {
+			values[value] = struct{}{}
+		}
+	}
+	dictionary := make([]string, 0, len(values))
+	for value := range values {
+		dictionary = append(dictionary, value)
+	}
+	sort.Strings(dictionary)
+	ranks := make(map[string]uint32, len(dictionary))
+	for rank, value := range dictionary {
+		if uint64(rank) > uint64(^uint32(0)) {
+			return nil, nil, fmt.Errorf("collections: sorted grouped-distinct global dictionary cardinality=%d exceeds uint32", len(dictionary))
+		}
+		ranks[value] = uint32(rank)
+	}
+	return dictionary, ranks, nil
+}
+
+func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(column *columnTypedColumnSortedGroupedDistinctCodeColumn, globalDictionary []string, ranks map[string]uint32) error {
+	localRanks := make([]uint32, len(column.Dictionary))
+	for localCode, value := range column.Dictionary {
+		rank, ok := ranks[value]
+		if !ok {
+			return fmt.Errorf("local dictionary value %q missing from global dictionary", value)
+		}
+		localRanks[localCode] = rank
+	}
+	globalCodes := make([]uint32, len(column.Codes))
+	for row, localCode := range column.Codes {
+		if localCode < 0 || localCode >= int64(len(localRanks)) {
+			return fmt.Errorf("row=%d code=%d outside cardinality=%d", row, localCode, len(localRanks))
+		}
+		globalCodes[row] = localRanks[localCode]
+	}
+	column.GlobalCodes = globalCodes
+	column.GlobalDictionary = globalDictionary
+	return nil
 }
 
 func columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) bool {
@@ -2069,55 +2152,13 @@ func (r *columnTypedColumnPhysicalQueryRunner) runSortedGroupedDistinct(view col
 		}
 	}
 
-	groups := r.resultGroups[:0]
-	firstGroup := true
-	currentGroup := ""
-	currentDistinct := ""
-	groupRows := 0
-	distinctRows := 0
-	reduceRows := 0
-	emitGroup := func() {
-		if firstGroup {
-			return
-		}
-		groups = append(groups, ColumnPhysicalQueryGroup{Key: currentGroup, Count: groupRows, DistinctCount: distinctRows})
+	groups, reduceRows, err := r.reduceSortedGroupedDistinct(iterators, &heap)
+	if err != nil {
+		rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
+		diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+		diag.SortedGroupedDistinctUsed = true
+		return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 	}
-	for heap.len() != 0 {
-		iteratorIdx := heap.pop(iterators)
-		iterator := iterators[iteratorIdx]
-		group := iterator.currentGroup
-		distinct := iterator.currentDistinct
-		if firstGroup {
-			firstGroup = false
-			currentGroup = group
-			currentDistinct = distinct
-			groupRows = 1
-			distinctRows = 1
-		} else if group != currentGroup {
-			emitGroup()
-			currentGroup = group
-			currentDistinct = distinct
-			groupRows = 1
-			distinctRows = 1
-		} else {
-			groupRows++
-			if distinct != currentDistinct {
-				currentDistinct = distinct
-				distinctRows++
-			}
-		}
-		reduceRows++
-		if err := iterator.advance(); err != nil {
-			rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
-			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
-			diag.SortedGroupedDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
-		}
-		if !iterator.done {
-			heap.push(iteratorIdx, iterators)
-		}
-	}
-	emitGroup()
 	r.resultGroups = groups
 	rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
@@ -2159,55 +2200,13 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleSortedGroupedDist
 		}
 	}
 
-	groups := r.resultGroups[:0]
-	firstGroup := true
-	currentGroup := ""
-	currentDistinct := ""
-	groupRows := 0
-	distinctRows := 0
-	reduceRows := 0
-	emitGroup := func() {
-		if firstGroup {
-			return
-		}
-		groups = append(groups, ColumnPhysicalQueryGroup{Key: currentGroup, Count: groupRows, DistinctCount: distinctRows})
+	groups, reduceRows, err := r.reduceSortedGroupedDistinct(iterators, &heap)
+	if err != nil {
+		rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
+		diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+		diag.SortedGroupedDistinctUsed = true
+		return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 	}
-	for heap.len() != 0 {
-		iteratorIdx := heap.pop(iterators)
-		iterator := iterators[iteratorIdx]
-		group := iterator.currentGroup
-		distinct := iterator.currentDistinct
-		if firstGroup {
-			firstGroup = false
-			currentGroup = group
-			currentDistinct = distinct
-			groupRows = 1
-			distinctRows = 1
-		} else if group != currentGroup {
-			emitGroup()
-			currentGroup = group
-			currentDistinct = distinct
-			groupRows = 1
-			distinctRows = 1
-		} else {
-			groupRows++
-			if distinct != currentDistinct {
-				currentDistinct = distinct
-				distinctRows++
-			}
-		}
-		reduceRows++
-		if err := iterator.advance(); err != nil {
-			rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
-			diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
-			diag.SortedGroupedDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
-		}
-		if !iterator.done {
-			heap.push(iteratorIdx, iterators)
-		}
-	}
-	emitGroup()
 	r.resultGroups = groups
 	rowsScanned, matchedRows := columnTypedColumnSortedGroupedDistinctIteratorTotals(iterators)
 	diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
@@ -2219,22 +2218,25 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleSortedGroupedDist
 }
 
 type columnTypedColumnSortedGroupedDistinctIterator struct {
-	partIndex        int
-	row              int
-	rows             int
-	rowIndexes       []int
-	physicalRows     []int
-	visibility       *typedColumnLatestPhysicalPart
-	codePart         *columnTypedColumnSortedGroupedDistinctPart
-	groupValues      []columnDeclaredValue
-	distinctValues   []columnDeclaredValue
-	predicateSpecs   []columnPhysicalQueryPredicateSpec
-	predicateColumns [][]columnDeclaredValue
-	currentGroup     string
-	currentDistinct  string
-	done             bool
-	rowsScanned      int
-	matchedRows      int
+	partIndex           int
+	row                 int
+	rows                int
+	rowIndexes          []int
+	physicalRows        []int
+	visibility          *typedColumnLatestPhysicalPart
+	codePart            *columnTypedColumnSortedGroupedDistinctPart
+	groupValues         []columnDeclaredValue
+	distinctValues      []columnDeclaredValue
+	predicateSpecs      []columnPhysicalQueryPredicateSpec
+	predicateColumns    [][]columnDeclaredValue
+	currentGroup        string
+	currentDistinct     string
+	currentGroupCode    uint32
+	currentDistinctCode uint32
+	globalCodes         bool
+	done                bool
+	rowsScanned         int
+	matchedRows         int
 }
 
 func newColumnTypedColumnSortedGroupedDistinctIterator(part *columnTypedColumnPhysicalQueryPart, plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, partIndex int, visibility *typedColumnLatestPhysicalPart) (*columnTypedColumnSortedGroupedDistinctIterator, error) {
@@ -2246,6 +2248,7 @@ func newColumnTypedColumnSortedGroupedDistinctIterator(part *columnTypedColumnPh
 			physicalRows: part.SortedGroupedDistinct.PhysicalRows,
 			visibility:   visibility,
 			codePart:     part.SortedGroupedDistinct,
+			globalCodes:  columnTypedColumnSortedGroupedDistinctPartHasGlobalCodes(part.SortedGroupedDistinct),
 		}, nil
 	}
 	partRows := len(part.RowIndexes)
@@ -2364,6 +2367,20 @@ func (it *columnTypedColumnSortedGroupedDistinctIterator) advanceCodes() error {
 		if len(it.codePart.Predicates) != 0 {
 			it.matchedRows++
 		}
+		if it.globalCodes {
+			if rowIdx >= len(it.codePart.Group.GlobalCodes) || rowIdx >= len(it.codePart.Distinct.GlobalCodes) {
+				return fmt.Errorf("collections: sorted grouped-distinct row=%d outside global code rows group=%d distinct=%d", rowIdx, len(it.codePart.Group.GlobalCodes), len(it.codePart.Distinct.GlobalCodes))
+			}
+			it.currentGroupCode = it.codePart.Group.GlobalCodes[rowIdx]
+			it.currentDistinctCode = it.codePart.Distinct.GlobalCodes[rowIdx]
+			if int(it.currentGroupCode) >= len(it.codePart.Group.GlobalDictionary) {
+				return fmt.Errorf("collections: sorted grouped-distinct global group code=%d outside cardinality=%d", it.currentGroupCode, len(it.codePart.Group.GlobalDictionary))
+			}
+			if int(it.currentDistinctCode) >= len(it.codePart.Distinct.GlobalDictionary) {
+				return fmt.Errorf("collections: sorted grouped-distinct global distinct code=%d outside cardinality=%d", it.currentDistinctCode, len(it.codePart.Distinct.GlobalDictionary))
+			}
+			return nil
+		}
 		groupCode := it.codePart.Group.Codes[rowIdx]
 		distinctCode := it.codePart.Distinct.Codes[rowIdx]
 		if groupCode < 0 || groupCode >= int64(len(it.codePart.Group.Dictionary)) {
@@ -2379,7 +2396,139 @@ func (it *columnTypedColumnSortedGroupedDistinctIterator) advanceCodes() error {
 	it.done = true
 	it.currentGroup = ""
 	it.currentDistinct = ""
+	it.currentGroupCode = 0
+	it.currentDistinctCode = 0
 	return nil
+}
+
+func columnTypedColumnSortedGroupedDistinctPartHasGlobalCodes(part *columnTypedColumnSortedGroupedDistinctPart) bool {
+	return part != nil &&
+		len(part.Group.GlobalCodes) == part.Rows &&
+		len(part.Distinct.GlobalCodes) == part.Rows &&
+		part.Group.GlobalDictionary != nil &&
+		part.Distinct.GlobalDictionary != nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) reduceSortedGroupedDistinct(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) ([]ColumnPhysicalQueryGroup, int, error) {
+	if columnTypedColumnSortedGroupedDistinctHeapUsesGlobalCodes(iterators, heap) {
+		return r.reduceSortedGroupedDistinctGlobalCodes(iterators, heap)
+	}
+	return r.reduceSortedGroupedDistinctStrings(iterators, heap)
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) reduceSortedGroupedDistinctGlobalCodes(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) ([]ColumnPhysicalQueryGroup, int, error) {
+	groups := r.resultGroups[:0]
+	firstGroup := true
+	var currentGroupCode uint32
+	var currentDistinctCode uint32
+	var groupDictionary []string
+	groupRows := 0
+	distinctRows := 0
+	reduceRows := 0
+	emitGroup := func() {
+		if firstGroup {
+			return
+		}
+		groups = append(groups, ColumnPhysicalQueryGroup{Key: groupDictionary[currentGroupCode], Count: groupRows, DistinctCount: distinctRows})
+	}
+	for heap.len() != 0 {
+		iteratorIdx := heap.pop(iterators)
+		iterator := iterators[iteratorIdx]
+		groupCode := iterator.currentGroupCode
+		distinctCode := iterator.currentDistinctCode
+		if firstGroup {
+			firstGroup = false
+			currentGroupCode = groupCode
+			currentDistinctCode = distinctCode
+			groupDictionary = iterator.codePart.Group.GlobalDictionary
+			groupRows = 1
+			distinctRows = 1
+		} else if groupCode != currentGroupCode {
+			emitGroup()
+			currentGroupCode = groupCode
+			currentDistinctCode = distinctCode
+			groupDictionary = iterator.codePart.Group.GlobalDictionary
+			groupRows = 1
+			distinctRows = 1
+		} else {
+			groupRows++
+			if distinctCode != currentDistinctCode {
+				currentDistinctCode = distinctCode
+				distinctRows++
+			}
+		}
+		reduceRows++
+		if err := iterator.advance(); err != nil {
+			return groups, reduceRows, err
+		}
+		if !iterator.done {
+			heap.push(iteratorIdx, iterators)
+		}
+	}
+	emitGroup()
+	return groups, reduceRows, nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) reduceSortedGroupedDistinctStrings(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) ([]ColumnPhysicalQueryGroup, int, error) {
+	groups := r.resultGroups[:0]
+	firstGroup := true
+	currentGroup := ""
+	currentDistinct := ""
+	groupRows := 0
+	distinctRows := 0
+	reduceRows := 0
+	emitGroup := func() {
+		if firstGroup {
+			return
+		}
+		groups = append(groups, ColumnPhysicalQueryGroup{Key: currentGroup, Count: groupRows, DistinctCount: distinctRows})
+	}
+	for heap.len() != 0 {
+		iteratorIdx := heap.pop(iterators)
+		iterator := iterators[iteratorIdx]
+		group := iterator.currentGroup
+		distinct := iterator.currentDistinct
+		if firstGroup {
+			firstGroup = false
+			currentGroup = group
+			currentDistinct = distinct
+			groupRows = 1
+			distinctRows = 1
+		} else if group != currentGroup {
+			emitGroup()
+			currentGroup = group
+			currentDistinct = distinct
+			groupRows = 1
+			distinctRows = 1
+		} else {
+			groupRows++
+			if distinct != currentDistinct {
+				currentDistinct = distinct
+				distinctRows++
+			}
+		}
+		reduceRows++
+		if err := iterator.advance(); err != nil {
+			return groups, reduceRows, err
+		}
+		if !iterator.done {
+			heap.push(iteratorIdx, iterators)
+		}
+	}
+	emitGroup()
+	return groups, reduceRows, nil
+}
+
+func columnTypedColumnSortedGroupedDistinctHeapUsesGlobalCodes(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) bool {
+	if heap.len() == 0 {
+		return false
+	}
+	for _, iteratorIdx := range heap.items {
+		if iteratorIdx < 0 || iteratorIdx >= len(iterators) || !iterators[iteratorIdx].globalCodes {
+			return false
+		}
+	}
+	return true
 }
 
 type columnTypedColumnSortedGroupedDistinctHeap struct {
@@ -2428,6 +2577,15 @@ func (h *columnTypedColumnSortedGroupedDistinctHeap) pop(iterators []*columnType
 }
 
 func columnTypedColumnSortedGroupedDistinctIteratorLess(left, right *columnTypedColumnSortedGroupedDistinctIterator) bool {
+	if left.globalCodes && right.globalCodes {
+		if left.currentGroupCode != right.currentGroupCode {
+			return left.currentGroupCode < right.currentGroupCode
+		}
+		if left.currentDistinctCode != right.currentDistinctCode {
+			return left.currentDistinctCode < right.currentDistinctCode
+		}
+		return left.partIndex < right.partIndex
+	}
 	if left.currentGroup != right.currentGroup {
 		return left.currentGroup < right.currentGroup
 	}

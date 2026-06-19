@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -133,6 +134,19 @@ func TestTypedColumnQ2SortedGroupedDistinctLocalDictionariesAndEmptyValues1950(t
 	if got["app.emptydid"].Count != 2 || got["app.emptydid"].Distinct != 1 {
 		t.Fatalf("empty did counts=%+v want empty distinct value counted once", got["app.emptydid"])
 	}
+
+	runner, err := col.PrepareColumnPhysicalQuery(typedColumnQ2Request1950())
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery(q2 local dictionaries): %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	assertTypedColumnQ2PreparedGlobalCodes1950(t, runner)
+	prepared, err := runner.Run()
+	if err != nil {
+		t.Fatalf("prepared q2 local dictionaries: %v", err)
+	}
+	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "prepared local dictionaries", prepared, rowHash, want)
+	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "prepared local dictionaries", prepared.Diagnostics, len(events), columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events), true)
 }
 
 func TestTypedColumnQ2SortedGroupedDistinctPrefixMismatchFallback1950(t *testing.T) {
@@ -320,6 +334,81 @@ func flattenColumnPhysicalEvents1950(batches [][]columnPhysicalJSONBenchParityEv
 		events = append(events, batch...)
 	}
 	return events
+}
+
+func assertTypedColumnQ2PreparedGlobalCodes1950(tb testing.TB, runner *ColumnPhysicalQueryRunner) {
+	tb.Helper()
+	if runner == nil || runner.typedColumn == nil {
+		tb.Fatalf("prepared q2 runner missing typed-column state")
+	}
+	if len(runner.typedColumn.parts) < 2 {
+		tb.Fatalf("prepared q2 parts=%d want multiple local dictionaries", len(runner.typedColumn.parts))
+	}
+	didMRank := -1
+	didMParts := 0
+	for partIdx := range runner.typedColumn.parts {
+		part := runner.typedColumn.parts[partIdx].SortedGroupedDistinct
+		if part == nil {
+			tb.Fatalf("part %d missing sorted grouped-distinct state", partIdx)
+		}
+		if len(part.Group.GlobalCodes) != part.Rows || len(part.Distinct.GlobalCodes) != part.Rows {
+			tb.Fatalf("part %d global code rows group=%d distinct=%d want %d", partIdx, len(part.Group.GlobalCodes), len(part.Distinct.GlobalCodes), part.Rows)
+		}
+		if !sort.StringsAreSorted(part.Group.GlobalDictionary) || !sort.StringsAreSorted(part.Distinct.GlobalDictionary) {
+			tb.Fatalf("part %d global dictionaries not lexicographically sorted group=%v distinct=%v", partIdx, part.Group.GlobalDictionary, part.Distinct.GlobalDictionary)
+		}
+		for row, code := range part.Group.GlobalCodes {
+			if int(code) >= len(part.Group.GlobalDictionary) {
+				tb.Fatalf("part %d group global code row=%d code=%d outside cardinality=%d", partIdx, row, code, len(part.Group.GlobalDictionary))
+			}
+		}
+		for row, code := range part.Distinct.GlobalCodes {
+			if int(code) >= len(part.Distinct.GlobalDictionary) {
+				tb.Fatalf("part %d distinct global code row=%d code=%d outside cardinality=%d", partIdx, row, code, len(part.Distinct.GlobalDictionary))
+			}
+		}
+		localDidM := -1
+		for code, value := range part.Distinct.Dictionary {
+			if value == "did:m" {
+				localDidM = code
+				break
+			}
+		}
+		if localDidM < 0 {
+			continue
+		}
+		partDidMRank := -1
+		for rank, value := range part.Distinct.GlobalDictionary {
+			if value == "did:m" {
+				partDidMRank = rank
+				break
+			}
+		}
+		if partDidMRank < 0 {
+			tb.Fatalf("part %d distinct global dictionary missing did:m", partIdx)
+		}
+		if didMRank < 0 {
+			didMRank = partDidMRank
+		} else if didMRank != partDidMRank {
+			tb.Fatalf("did:m global rank part %d=%d want %d", partIdx, partDidMRank, didMRank)
+		}
+		seenDidMRow := false
+		for row, localCode := range part.Distinct.Codes {
+			if localCode == int64(localDidM) {
+				seenDidMRow = true
+				if part.Distinct.GlobalCodes[row] != uint32(partDidMRank) {
+					tb.Fatalf("part %d did:m row=%d global code=%d want %d", partIdx, row, part.Distinct.GlobalCodes[row], partDidMRank)
+				}
+			}
+		}
+		if !seenDidMRow {
+			tb.Fatalf("part %d local did:m code=%d not referenced by any row", partIdx, localDidM)
+		}
+		didMParts++
+	}
+	if didMParts < 2 {
+		tb.Fatalf("did:m appeared in %d parts want at least two to prove cross-part global rank reuse", didMParts)
+	}
 }
 
 func openTypedColumnSortKeyFixtureBatches1950(tb testing.TB, sortKey []ColumnSortKey, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {
