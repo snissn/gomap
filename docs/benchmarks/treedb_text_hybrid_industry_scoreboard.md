@@ -170,7 +170,8 @@ For Go benchmark rows, include:
   `fail_closed/search`, text posting/block/state/norm counters, scalar counters,
   vector candidate/edge counters;
 - build/storage context when available (`indexed_insert_batch_flush_vector_rebuild`,
-  `create_text_v2_index_backfill`, `index_bytes/doc`, external build/storage
+  `create_text_v2_index_backfill`, `index_bytes/doc`, v2 lane bytes/doc such as
+  `v2_posting_bytes/doc` and `v2_position_bytes/doc`, external build/storage
   fields).
 
 Candidate-generation rows must keep full document fetches at zero. Final-fetch
