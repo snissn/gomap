@@ -43,8 +43,8 @@ Full report, commands, host context, run repeats, and artifact paths:
 
 ### Indexed Collection Insert Workload
 
-Two secondary indexes, latest-main June 4 HST / June 4 UTC rerun, `100000`
-documents, batch size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec`
+Two secondary indexes, June 17 UTC full benchmark refresh, `100000` documents,
+batch size `16000`, and `command_wal_relaxed` for TreeDB. `docs/sec`
 is the timed insert measurement for the value-log outer-leaf layout. Compacted
 B/doc uses the byte-minimized `exhaustive_compact` row for TreeDB template-v1 and
 SQLite after `VACUUM`; TreeDB JSON is omitted from the README compacted-size
@@ -52,13 +52,13 @@ headline until the canonical exhaustive fixture covers that format.
 
 | engine / format | layout | docs/sec | compacted B/doc |
 | --- | --- | ---: | ---: |
-| TreeDB template-v1 | data and index outer leaves in value log | 697,350 | 22.8 |
-| TreeDB JSON | data and index outer leaves in value log | 475,511 | — |
-| SQLite native columns | WAL normal | 332,116 | 156.7 |
-| SQLite JSON | WAL normal | 282,885 | 231.7 |
+| TreeDB template-v1 | data and index outer leaves in value log | 746,269 | 22.8 |
+| TreeDB JSON | data and index outer leaves in value log | 527,148 | — |
+| SQLite native columns | WAL normal | 385,654 | 156.7 |
+| SQLite JSON | WAL normal | 333,444 | 231.7 |
 
 Source:
-[June 4 exhaustive-compact two-index insert rerun](docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md).
+[June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md).
 
 ### Collection Read And Lookup Workload
 
@@ -133,6 +133,22 @@ semantics match.
 
 Source:
 [June 4 fast Mongo/native client-shape matrix](docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md).
+
+### Mongo API Full-Sweep Workload
+
+June 17 UTC full benchmark refresh, Docker MongoDB 8 baseline, `100000` BSON
+documents, TreeDB Mongo gateway `driver-command-raw`, and `command_wal_relaxed`.
+The full-sweep load rows include the additional `age_1` range index even when
+the displayed secondary-index count is `0`.
+
+| secondary indexes | TreeDB load docs/sec | MongoDB load docs/sec | TreeDB `_id` r16 ops/sec | MongoDB `_id` r16 ops/sec | TreeDB physical MiB | MongoDB physical MiB |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 549,311 | 454,224 | 137,313 | 34,396 | 68.66 | 213.38 |
+| 1 | 422,113 | 255,638 | 121,289 | 34,727 | 69.38 | 216.94 |
+| 2 | 448,003 | 206,858 | 129,211 | 34,566 | 69.66 | 217.52 |
+
+Source:
+[June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md).
 
 ### Vector Search External Snapshot
 
@@ -295,6 +311,7 @@ Current YCSB status and rerun commands:
 
 Collection, vector-search, and engine benchmark runbooks:
 
+- `docs/benchmarks/full_benchmark_report_2026-06-17.md`
 - `docs/benchmarks/collections_insert_two_index_exhaustive_main_2026-06-04.md`
 - `docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md`
 - `TreeDB/docs/guides/vector-search-high-qps-collection-api.md`
