@@ -100,6 +100,38 @@ This adds the 100k text-v2 blockmax/common-term rows. 100k hybrid/vector rows
 remain opt-in and should be planned explicitly before long local or service
 runs.
 
+### Latest local 100k scoreboard capture (2026-06-19)
+
+Artifact root: `/tmp/gomap_text_hybrid_scoreboard_100k_20260619_085040`
+
+Command:
+
+```sh
+RUN_100K=true TEXT_100K_BENCHTIME=1x TEXT_100K_COUNT=1 \
+RUN_DIR=/tmp/gomap_text_hybrid_scoreboard_100k_20260619_085040 \
+scripts/bench_text_hybrid_scoreboard.sh
+```
+
+Host/context: Apple M3, 8 CPUs, `go1.26.0 darwin/arm64`, branch `main`, commit
+`7f0e68d9c46afb9d54152d8bc558ebcdc89fd468`. The run was on an interactive
+laptop with load averages around `3.66 4.40 4.25`; treat it as local evidence,
+not an industry-parity claim.
+
+Key rows from `scoreboard.md`:
+
+| row | docs | ns/op | ops/sec | B/op | allocs/op | guardrail counters |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| TreeDB blockmax common top-k | 10k | 259,986 | 3,846.4 | 205,304 | 409 | docs_fetched=0, fail_closed=0, postings_scanned=1,280, blocks_visited=10, blocks_skipped=69 |
+| TreeDB exhaustive common top-k | 10k | 6,435,319 | 155.4 | 4,630,901 | 20,988 | docs_fetched=0, fail_closed=0, postings_scanned=10,000 |
+| TreeDB blockmax common top-k | 100k | 2,535,375 | 394.4 | 1,964,888 | 3,146 | docs_fetched=0, fail_closed=0, postings_scanned=12,544, blocks_visited=98, blocks_skipped=684 |
+| TreeDB exhaustive common top-k | 100k | 75,703,333 | 13.2 | 45,237,440 | 208,483 | docs_fetched=0, fail_closed=0, postings_scanned=100,000 |
+| SQLite FTS5 rowid+bm25 baseline | 10k | 2,031,922 | 492.1 | — | — | docs_fetched=0, fail_closed=0 |
+
+This local capture shows TreeDB's v2 block-max common-term row at 100k is about
+`29.9x` faster than its exact exhaustive reference. The SQLite FTS5 row remains
+a useful embedded baseline but is not equivalent to TreeDB BM25F/Lucene-style
+semantics; Lucene, Tantivy, and Bleve rows were still unavailable in this run.
+
 ### Focused multi-term OR/WAND rows (#2730)
 
 For exact multi-term text-v2 serving evidence outside the default scoreboard
