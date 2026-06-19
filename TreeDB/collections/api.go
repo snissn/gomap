@@ -910,9 +910,10 @@ type VectorIndexDefinition struct {
 // explicitly, and search must fail closed until matching prepared assets are
 // loaded and scored.
 type QuantizedVectorIndexDefinition struct {
-	Name    string `json:"name"`
-	Codec   string `json:"codec"`
-	Version uint32 `json:"version,omitempty"`
+	Name                string                     `json:"name"`
+	Codec               string                     `json:"codec"`
+	Version             uint32                     `json:"version,omitempty"`
+	ScalarU8Calibration *ScalarU8CalibrationConfig `json:"scalar_u8_calibration,omitempty"`
 }
 
 type CollectionMeta struct {
@@ -21104,6 +21105,11 @@ func normalizeQuantizedVectorIndexDefinitions(def VectorIndexDefinition) ([]Quan
 		default:
 			return nil, fmt.Errorf("collections: vector index %q quantized index %q codec %q is unsupported", def.Name, q.Name, q.Codec)
 		}
+		scalarU8Calibration, err := normalizeScalarU8CalibrationConfig(def.Name, i, q)
+		if err != nil {
+			return nil, err
+		}
+		q.ScalarU8Calibration = scalarU8Calibration
 		if q.Version == 0 {
 			q.Version = 1
 		}
@@ -21150,7 +21156,15 @@ func (m CollectionMeta) copy() *CollectionMeta {
 func copyVectorIndexDefinitions(in []VectorIndexDefinition) []VectorIndexDefinition {
 	out := append([]VectorIndexDefinition(nil), in...)
 	for i := range out {
-		out[i].QuantizedIndexes = append([]QuantizedVectorIndexDefinition(nil), out[i].QuantizedIndexes...)
+		out[i].QuantizedIndexes = copyQuantizedVectorIndexDefinitions(out[i].QuantizedIndexes)
+	}
+	return out
+}
+
+func copyQuantizedVectorIndexDefinitions(in []QuantizedVectorIndexDefinition) []QuantizedVectorIndexDefinition {
+	out := append([]QuantizedVectorIndexDefinition(nil), in...)
+	for i := range out {
+		out[i].ScalarU8Calibration = scalarU8CalibrationConfigClone(out[i].ScalarU8Calibration)
 	}
 	return out
 }
@@ -21218,11 +21232,18 @@ func vectorIndexDefinitionValuesEqual(a, b VectorIndexDefinition) bool {
 		return false
 	}
 	for i := range a.QuantizedIndexes {
-		if a.QuantizedIndexes[i] != b.QuantizedIndexes[i] {
+		if !quantizedVectorIndexDefinitionValuesEqual(a.QuantizedIndexes[i], b.QuantizedIndexes[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+func quantizedVectorIndexDefinitionValuesEqual(a, b QuantizedVectorIndexDefinition) bool {
+	return a.Name == b.Name &&
+		a.Codec == b.Codec &&
+		a.Version == b.Version &&
+		scalarU8CalibrationConfigEqual(a.ScalarU8Calibration, b.ScalarU8Calibration)
 }
 
 func collectionMetaHasSecondaryUniqueIndex(meta CollectionMeta) bool {

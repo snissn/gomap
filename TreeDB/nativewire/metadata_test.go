@@ -179,6 +179,60 @@ func TestMetadataCommandsPreserveVectorIndexes(t *testing.T) {
 	}
 }
 
+func TestMetadataCommandsPreserveScalarU8Calibration2842(t *testing.T) {
+	client, _, _ := serveCollectionPipe(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	wantCalibration := &collections.ScalarU8CalibrationConfig{
+		Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+		Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+		AlphaPolicy: collections.ScalarU8AlphaPolicy{
+			Name:        collections.ScalarU8AlphaPolicyAbsQuantile,
+			QuantilePPM: collections.ScalarU8AlphaPolicyAbsQuantilePPM999,
+		},
+	}
+	meta, err := client.CreateCollection(ctx, collections.CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []collections.VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     collections.VectorMetricCosine,
+			Dimensions: 64,
+			Strategy:   collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []collections.QuantizedVectorIndexDefinition{{
+				Name:                "embedding.scalar_u8.alpha",
+				Codec:               collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: wantCalibration,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+	if len(meta.VectorIndexes) != 1 || len(meta.VectorIndexes[0].QuantizedIndexes) != 1 {
+		t.Fatalf("created vector indexes=%+v", meta.VectorIndexes)
+	}
+	gotCalibration := meta.VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration
+	if !reflect.DeepEqual(gotCalibration, wantCalibration) {
+		t.Fatalf("created scalar_u8 calibration=%+v want %+v", gotCalibration, wantCalibration)
+	}
+	metas, err := client.ListCollections(ctx)
+	if err != nil {
+		t.Fatalf("ListCollections: %v", err)
+	}
+	if len(metas) != 1 || len(metas[0].VectorIndexes) != 1 || len(metas[0].VectorIndexes[0].QuantizedIndexes) != 1 {
+		t.Fatalf("listed collections=%+v", metas)
+	}
+	listedCalibration := metas[0].VectorIndexes[0].QuantizedIndexes[0].ScalarU8Calibration
+	if !reflect.DeepEqual(listedCalibration, wantCalibration) {
+		t.Fatalf("listed scalar_u8 calibration=%+v want %+v", listedCalibration, wantCalibration)
+	}
+}
+
 func TestMetadataHandleRefWorksForListIndexes(t *testing.T) {
 	client, _, _ := serveCollectionPipe(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

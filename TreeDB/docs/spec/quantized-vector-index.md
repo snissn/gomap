@@ -24,6 +24,27 @@ to `codec="scalar_u8"` and `version=1`; they also accept explicit
 `codec="rabitq_1bit", version=1` and `codec="brq_1bit", version=1`
 declarations.
 
+`scalar_u8` declarations may also carry `scalar_u8_calibration`. Omitted config
+preserves the legacy scalar_u8 v1 contract. Explicit legacy config is
+`{"mode":"legacy"}` and is behaviorally identical to omission. The config-only
+per-existing-granule alpha contract is:
+
+```json
+{
+  "mode": "per_granule_alpha",
+  "grouping": "storage_layout_granule",
+  "alpha_policy": { "name": "max_abs" }
+}
+```
+
+The only grouping source in this contract is `storage_layout_granule`: builders
+must use existing disk-local storage/layout granules or row groups exposed by the
+base column-graph/typed-column layout and must not choose a new vector-specific
+granule size. The deterministic finite alpha policies are `max_abs` with no
+parameters, and `abs_quantile` with `quantile_ppm=999000` (0.999) encoded as an
+integer parameter. `scalar_u8_calibration` is invalid on non-`scalar_u8` codecs;
+legacy mode rejects grouping and alpha policy fields.
+
 Search uses an explicit mode:
 
 | Mode | Score plane | Returned scores | Exact vector/norm reads | Notes |
@@ -59,6 +80,26 @@ asset ref/checksum identity). For cosine, persisted scalar_u8 codes are built
 from inverse-norm-normalized vector components so equivalent directions encode to
 the same row.
 
+Existing legacy scalar_u8 declarations with omitted calibration config keep the
+legacy empty codec config identity: `quantizedasset.CodecDescriptor.Config` is
+empty and `CodecDescriptor.ConfigHash` is zero. Any non-legacy
+`scalar_u8_calibration` is encoded into `CodecDescriptor.Config` canonical bytes
+and `ConfigHash`, and also participates in vector-index-state asset identity
+(asset id/path/schema hash) so assets built under one calibration policy cannot
+be reused under another. The config-only per-granule alpha mode currently uses an
+asset id of the form `quantized/<name>/scalar_u8/<config-hash>/codes`; downstream
+alpha builders may add alpha side assets, but those side assets must carry the
+same codec config identity and base graph identity.
+
+Implementation inventory for #2842: the current quantized asset builder is
+called with a flat `[]columnVectorGraphAssetRow` ordered by graph/vector ordinal.
+The base column-graph physical asset is persisted as typed-column storage using
+its existing part/granule layout, while the current scalar_u8 quantized writer
+builds a separate typed-column part with `typedcolumn.DefaultRowsPerGranule`.
+No per-granule alpha values are built here. Downstream alpha asset builders must
+fail closed until they can derive alpha groups from existing storage/layout
+granule metadata rather than inventing a vector-only grouping size.
+
 Each declared `rabitq_1bit` v1 score plane also rebuilds one TVIS
 vector-index-state asset, with role `quantized_codes`, asset id
 `quantized/<name>/packed_codes`, logical type `packed_bit_vector`, and physical
@@ -87,11 +128,16 @@ logical `quantized_code_B/vector` and actual `quantized_asset_B/vector`.
 ## Scoring and fail-closed behavior
 
 Quantized modes validate the selected name, declaration, codec/version, prepared
-asset, row count, dimensions, metric, source schema, base graph identity, asset
-ref identity, and typed-column layout before traversal/scoring. Missing, stale,
-corrupt, mismatched, unsupported, closed, or unprepared assets return
-`ErrVectorIndexSearchUnavailable`; they must not fall back to exact traversal or
-document reconstruction. Fail-closed stats use codec-generic counters such as
+asset, row count, dimensions, metric, source schema, base graph identity, codec
+config identity, asset ref identity, and typed-column layout before
+traversal/scoring. Missing, stale, corrupt, mismatched, unsupported, closed, or
+unprepared assets return `ErrVectorIndexSearchUnavailable`; they must not fall
+back to exact traversal or document reconstruction. Downstream alpha asset
+builders must fail closed when required per-granule alpha assets are missing,
+when alpha asset config/base-graph identity differs from the selected
+`scalar_u8_calibration`, or when a score formula differs from legacy `scalar_u8`
+but route/counters/docs do not expose that distinction. Fail-closed stats use
+codec-generic counters such as
 `quantized_asset_missing`, `quantized_asset_invalid`, `quantized_asset_stale`,
 `quantized_asset_closed`, and `quantized_asset_unavailable`. Exact mode rejects
 quantized-mode fields so callers do not accidentally depend on no-op options.

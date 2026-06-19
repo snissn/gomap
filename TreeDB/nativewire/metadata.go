@@ -51,7 +51,7 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
-	dst := binary.AppendUvarint(nil, 3)
+	dst := binary.AppendUvarint(nil, 4)
 	dst = appendString(dst, meta.Name)
 	dst = binary.AppendUvarint(dst, uint64(encodeDocumentFormat(meta.Options.DocumentFormat)))
 	dst = binary.AppendUvarint(dst, uint64(encodeRootStorage(meta.Options.DataRootStoragePolicy)))
@@ -71,7 +71,7 @@ func encodeCollectionMeta(meta collections.CollectionMeta) []byte {
 	}
 	dst = binary.AppendUvarint(dst, uint64(len(meta.VectorIndexes)))
 	for _, def := range meta.VectorIndexes {
-		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, 3)
+		dst = appendVectorIndexDefinitionForCollectionMeta(dst, def, 4)
 	}
 	return dst
 }
@@ -81,7 +81,7 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 && version != 2 && version != 3 {
+	if version != 1 && version != 2 && version != 3 && version != 4 {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	name, err := readString(src, &off)
@@ -326,6 +326,15 @@ func appendVectorIndexDefinitionForCollectionMeta(dst []byte, def collections.Ve
 			dst = appendString(dst, q.Name)
 			dst = appendString(dst, q.Codec)
 			dst = binary.AppendUvarint(dst, uint64(q.Version))
+			if collectionMetaVersion >= 4 {
+				dst = appendBool(dst, q.ScalarU8Calibration != nil)
+				if q.ScalarU8Calibration != nil {
+					dst = appendString(dst, string(q.ScalarU8Calibration.Mode))
+					dst = appendString(dst, string(q.ScalarU8Calibration.Grouping))
+					dst = appendString(dst, string(q.ScalarU8Calibration.AlphaPolicy.Name))
+					dst = binary.AppendUvarint(dst, uint64(q.ScalarU8Calibration.AlphaPolicy.QuantilePPM))
+				}
+			}
 		}
 	}
 	return dst
@@ -461,10 +470,47 @@ func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectio
 		if codecVersion > uint64(^uint32(0)) {
 			return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrResourceExhausted, "quantized vector index version %d exceeds uint32 capacity", codecVersion)
 		}
+		var scalarU8Calibration *collections.ScalarU8CalibrationConfig
+		if collectionMetaVersion >= 4 {
+			hasScalarU8Calibration, err := readBool(src, &off)
+			if err != nil {
+				return collections.VectorIndexDefinition{}, 0, err
+			}
+			if hasScalarU8Calibration {
+				mode, err := readString(src, &off)
+				if err != nil {
+					return collections.VectorIndexDefinition{}, 0, err
+				}
+				grouping, err := readString(src, &off)
+				if err != nil {
+					return collections.VectorIndexDefinition{}, 0, err
+				}
+				policyName, err := readString(src, &off)
+				if err != nil {
+					return collections.VectorIndexDefinition{}, 0, err
+				}
+				quantilePPM, err := readUvarintField(src, &off, "scalar_u8_alpha_policy_quantile_ppm")
+				if err != nil {
+					return collections.VectorIndexDefinition{}, 0, err
+				}
+				if quantilePPM > uint64(^uint32(0)) {
+					return collections.VectorIndexDefinition{}, 0, protocolError(iwire.ErrResourceExhausted, "scalar_u8 alpha policy quantile_ppm %d exceeds uint32 capacity", quantilePPM)
+				}
+				scalarU8Calibration = &collections.ScalarU8CalibrationConfig{
+					Mode:     collections.ScalarU8CalibrationMode(mode),
+					Grouping: collections.ScalarU8CalibrationGrouping(grouping),
+					AlphaPolicy: collections.ScalarU8AlphaPolicy{
+						Name:        collections.ScalarU8AlphaPolicyName(policyName),
+						QuantilePPM: uint32(quantilePPM),
+					},
+				}
+			}
+		}
 		quantized = append(quantized, collections.QuantizedVectorIndexDefinition{
-			Name:    name,
-			Codec:   codec,
-			Version: uint32(codecVersion),
+			Name:                name,
+			Codec:               codec,
+			Version:             uint32(codecVersion),
+			ScalarU8Calibration: scalarU8Calibration,
 		})
 	}
 	def.Strategy = decodedStrategy

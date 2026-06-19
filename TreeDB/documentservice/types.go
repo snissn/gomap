@@ -61,9 +61,10 @@ type IndexCapabilities struct {
 // QuantizedIndexInfo describes a declared quantized score plane attached to the
 // service vector index.
 type QuantizedIndexInfo struct {
-	Name    string `json:"name"`
-	Codec   string `json:"codec"`
-	Version uint32 `json:"version"`
+	Name                string                                 `json:"name"`
+	Codec               string                                 `json:"codec"`
+	Version             uint32                                 `json:"version"`
+	ScalarU8Calibration *collections.ScalarU8CalibrationConfig `json:"scalar_u8_calibration,omitempty"`
 }
 
 // IndexInfo is returned by create/open and echoed by operation responses.
@@ -414,7 +415,7 @@ func quantizedIndexInfos(def collections.VectorIndexDefinition) []QuantizedIndex
 	}
 	out := make([]QuantizedIndexInfo, len(def.QuantizedIndexes))
 	for i, q := range def.QuantizedIndexes {
-		out[i] = QuantizedIndexInfo{Name: q.Name, Codec: q.Codec, Version: q.Version}
+		out[i] = QuantizedIndexInfo{Name: q.Name, Codec: q.Codec, Version: q.Version, ScalarU8Calibration: q.ScalarU8Calibration}
 	}
 	return out
 }

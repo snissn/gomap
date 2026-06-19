@@ -129,6 +129,11 @@ func columnVectorGraphQuantizedAssetID(q QuantizedVectorIndexDefinition) string 
 		return "quantized/" + q.Name + "/brq_1bit/packed_codes"
 	case rabitq.CodecName:
 		return "quantized/" + q.Name + "/packed_codes"
+	case QuantizedVectorCodecScalarU8:
+		if cfgHash := scalarU8CalibrationConfigHashForAssetID(q); cfgHash != 0 {
+			return fmt.Sprintf("quantized/%s/scalar_u8/%016x/codes", q.Name, cfgHash)
+		}
+		return "quantized/" + q.Name + "/codes"
 	default:
 		return "quantized/" + q.Name + "/codes"
 	}
@@ -219,6 +224,9 @@ func prepareColumnVectorGraphQuantizedCodesPayload(collection string, base Colum
 }
 
 func prepareColumnVectorGraphScalarU8QuantizedCodesPayload(collection string, base ColumnStoreConfig, def VectorIndexDefinition, q QuantizedVectorIndexDefinition, partID uint64, rows []columnVectorGraphAssetRow) ([]byte, ColumnStoreConfig, error) {
+	if !scalarU8CalibrationIsLegacy(q) {
+		return nil, base, fmt.Errorf("collections: column_graph quantized index %q scalar_u8 calibration mode %q is config-only; alpha assets are not built in this release", q.Name, scalarU8CalibrationMode(q))
+	}
 	sourceCfg, err := columnVectorGraphQuantizedCodesColumnStoreConfig(collection, base, def, q)
 	if err != nil {
 		return nil, ColumnStoreConfig{}, err
@@ -539,9 +547,13 @@ func columnVectorGraphQuantizedCodesColumnStoreConfig(collection string, base Co
 		if q.Version != 1 {
 			return ColumnStoreConfig{}, fmt.Errorf("collections: column_graph quantized index %q "+columnVectorGraphQuantizedScalarU8UnsupportedVersionText, q.Name, q.Version)
 		}
+		path := def.Field + "_quantized_codes"
+		if cfgHash := scalarU8CalibrationConfigHashForAssetID(q); cfgHash != 0 {
+			path = fmt.Sprintf("%s_quantized_scalar_u8_%016x_%s", def.Field, cfgHash, columnVectorGraphQuantizedCodesColumnName)
+		}
 		columns = []ColumnStoreColumn{{
 			Name:        columnVectorGraphQuantizedCodesColumnName,
-			Path:        def.Field + "_quantized_codes",
+			Path:        path,
 			Owner:       TypedStorageOwnerColumnPart,
 			ValueType:   ColumnStoreValueByteVector,
 			BytesPerRow: def.Dimensions,
@@ -971,6 +983,9 @@ func validateColumnVectorGraphQuantizedAssetLoadInputs(rootDir, collection strin
 	if asset.RowCount != graph.RowCount {
 		return fmt.Errorf("%w: quantized asset %q row_count=%d want graph row_count=%d", errColumnVectorGraphQuantizedAssetStale, q.Name, asset.RowCount, graph.RowCount)
 	}
+	if q.Codec == QuantizedVectorCodecScalarU8 && !scalarU8CalibrationIsLegacy(q) {
+		return fmt.Errorf("%w: quantized asset %q scalar_u8 calibration mode %q requires alpha assets that are not loaded in this release", errColumnVectorGraphQuantizedAssetInvalid, q.Name, scalarU8CalibrationMode(q))
+	}
 	if err := validateColumnVectorIndexStateAssetRefAvailable(rootDir, asset); err != nil {
 		return fmt.Errorf("%w: quantized asset %q unavailable: %v", errColumnVectorGraphQuantizedAssetMissing, q.Name, err)
 	}
@@ -1246,9 +1261,13 @@ func columnVectorGraphQuantizedAssetSchema(def VectorIndexDefinition, graph colu
 		if q.Version != 1 {
 			return quantizedasset.SchemaDescriptor{}, fmt.Errorf(columnVectorGraphQuantizedScalarU8UnsupportedVersionText, q.Version)
 		}
+		codecConfig, codecConfigHash, err := scalarU8CalibrationCodecConfig(q)
+		if err != nil {
+			return quantizedasset.SchemaDescriptor{}, err
+		}
 		schema.CodeDimensions = def.Dimensions
 		schema.CodeWidthBits = 8
-		schema.Codec = quantizedasset.CodecDescriptor{Name: q.Codec, Version: q.Version}
+		schema.Codec = quantizedasset.CodecDescriptor{Name: q.Codec, Version: q.Version, ConfigHash: codecConfigHash, Config: codecConfig}
 		schema.Columns = []quantizedasset.ColumnDescriptor{{
 			Role:             quantizedasset.RoleCodes,
 			Column:           columnVectorGraphQuantizedCodesColumnName,

@@ -1052,7 +1052,7 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		if q.Version > 1 {
 			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized index %q version=%d is unsupported", q.Name, q.Version)
 		}
-		out.quantizedIndexes[i] = collections.QuantizedVectorIndexDefinition{Name: q.Name, Codec: q.Codec, Version: q.Version}
+		out.quantizedIndexes[i] = collections.QuantizedVectorIndexDefinition{Name: q.Name, Codec: q.Codec, Version: q.Version, ScalarU8Calibration: q.ScalarU8Calibration}
 	}
 	return out, nil
 }

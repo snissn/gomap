@@ -59,8 +59,15 @@ func TestVectorIndexQuantizedDefinitionNormalization1926(t *testing.T) {
 	if err != nil {
 		t.Fatalf("normalizeVectorIndexDefinition: %v", err)
 	}
-	if got := def.QuantizedIndexes; len(got) != 1 || got[0].Name != "embedding.scalar_u8.fast" || got[0].Codec != QuantizedVectorCodecScalarU8 || got[0].Version != 1 {
-		t.Fatalf("QuantizedIndexes=%+v want normalized scalar_u8 v1", got)
+	if got := def.QuantizedIndexes; len(got) != 1 || got[0].Name != "embedding.scalar_u8.fast" || got[0].Codec != QuantizedVectorCodecScalarU8 || got[0].Version != 1 || got[0].ScalarU8Calibration != nil {
+		t.Fatalf("QuantizedIndexes=%+v want normalized legacy scalar_u8 v1 without explicit calibration config", got)
+	}
+	codecConfig, codecConfigHash, err := scalarU8CalibrationCodecConfig(def.QuantizedIndexes[0])
+	if err != nil {
+		t.Fatalf("legacy scalar_u8 codec config identity: %v", err)
+	}
+	if codecConfigHash != 0 || len(codecConfig) != 0 {
+		t.Fatalf("legacy scalar_u8 codec config hash/bytes=(%d,%q) want zero/empty", codecConfigHash, codecConfig)
 	}
 	if _, ok := findQuantizedVectorIndex(def, "embedding.scalar_u8.fast"); !ok {
 		t.Fatalf("findQuantizedVectorIndex did not find normalized quantized index")
@@ -123,6 +130,183 @@ func TestVectorIndexQuantizedDefinitionNormalization1926(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestScalarU8CalibrationDefinitionNormalization2842(t *testing.T) {
+	base := VectorIndexDefinition{
+		Name:       "embedding_graph",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 3,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	}
+
+	explicitLegacy := base
+	explicitLegacy.QuantizedIndexes = []QuantizedVectorIndexDefinition{{
+		Name:                "embedding.scalar_u8.legacy",
+		Codec:               QuantizedVectorCodecScalarU8,
+		ScalarU8Calibration: &ScalarU8CalibrationConfig{},
+	}}
+	normalizedLegacy, err := normalizeVectorIndexDefinition(explicitLegacy)
+	if err != nil {
+		t.Fatalf("normalize explicit legacy scalar_u8: %v", err)
+	}
+	legacyCfg := normalizedLegacy.QuantizedIndexes[0].ScalarU8Calibration
+	if legacyCfg == nil || legacyCfg.Mode != ScalarU8CalibrationModeLegacy || legacyCfg.Grouping != "" || !scalarU8AlphaPolicyZero(legacyCfg.AlphaPolicy) {
+		t.Fatalf("explicit legacy scalar_u8 config=%+v want normalized legacy mode only", legacyCfg)
+	}
+	legacyBytes, legacyHash, err := scalarU8CalibrationCodecConfig(normalizedLegacy.QuantizedIndexes[0])
+	if err != nil {
+		t.Fatalf("explicit legacy scalar_u8 config identity: %v", err)
+	}
+	if legacyHash != 0 || len(legacyBytes) != 0 {
+		t.Fatalf("explicit legacy config identity hash/bytes=(%d,%q) want zero/empty legacy identity", legacyHash, legacyBytes)
+	}
+
+	perGranule := base
+	perGranule.QuantizedIndexes = []QuantizedVectorIndexDefinition{{
+		Name:  "embedding.scalar_u8.alpha",
+		Codec: QuantizedVectorCodecScalarU8,
+		ScalarU8Calibration: &ScalarU8CalibrationConfig{
+			Mode:     ScalarU8CalibrationModePerGranuleAlpha,
+			Grouping: ScalarU8CalibrationGroupingStorageLayoutGranule,
+			AlphaPolicy: ScalarU8AlphaPolicy{
+				Name: ScalarU8AlphaPolicyMaxAbs,
+			},
+		},
+	}}
+	normalizedAlpha, err := normalizeVectorIndexDefinition(perGranule)
+	if err != nil {
+		t.Fatalf("normalize per-granule scalar_u8 alpha: %v", err)
+	}
+	alphaCfg := normalizedAlpha.QuantizedIndexes[0].ScalarU8Calibration
+	if alphaCfg == nil || alphaCfg.Mode != ScalarU8CalibrationModePerGranuleAlpha || alphaCfg.Grouping != ScalarU8CalibrationGroupingStorageLayoutGranule || alphaCfg.AlphaPolicy.Name != ScalarU8AlphaPolicyMaxAbs {
+		t.Fatalf("per-granule scalar_u8 config=%+v want normalized alpha config", alphaCfg)
+	}
+	alphaBytes, alphaHash, err := scalarU8CalibrationCodecConfig(normalizedAlpha.QuantizedIndexes[0])
+	if err != nil {
+		t.Fatalf("per-granule scalar_u8 config identity: %v", err)
+	}
+	if alphaHash == 0 || !strings.Contains(string(alphaBytes), "calibration_mode=per_granule_alpha") || !strings.Contains(string(alphaBytes), "grouping=storage_layout_granule") || !strings.Contains(string(alphaBytes), "alpha_policy=max_abs") {
+		t.Fatalf("per-granule scalar_u8 identity hash=%d bytes=%q missing alpha contract", alphaHash, alphaBytes)
+	}
+	if got := columnVectorGraphQuantizedAssetID(normalizedAlpha.QuantizedIndexes[0]); !strings.Contains(got, fmt.Sprintf("/%016x/codes", alphaHash)) {
+		t.Fatalf("per-granule scalar_u8 asset_id=%q want config hash %#x", got, alphaHash)
+	}
+
+	quantile := perGranule
+	quantile.QuantizedIndexes[0].ScalarU8Calibration = &ScalarU8CalibrationConfig{
+		Mode:     ScalarU8CalibrationModePerGranuleAlpha,
+		Grouping: ScalarU8CalibrationGroupingStorageLayoutGranule,
+		AlphaPolicy: ScalarU8AlphaPolicy{
+			Name:        ScalarU8AlphaPolicyAbsQuantile,
+			QuantilePPM: ScalarU8AlphaPolicyAbsQuantilePPM999,
+		},
+	}
+	normalizedQuantile, err := normalizeVectorIndexDefinition(quantile)
+	if err != nil {
+		t.Fatalf("normalize per-granule scalar_u8 quantile alpha: %v", err)
+	}
+	quantileBytes, quantileHash, err := scalarU8CalibrationCodecConfig(normalizedQuantile.QuantizedIndexes[0])
+	if err != nil {
+		t.Fatalf("quantile scalar_u8 config identity: %v", err)
+	}
+	if quantileHash == 0 || quantileHash == alphaHash || string(quantileBytes) == string(alphaBytes) || !strings.Contains(string(quantileBytes), "alpha_quantile_ppm=999000") {
+		t.Fatalf("quantile scalar_u8 identity hash/bytes=(%d,%q) should differ from max_abs hash/bytes=(%d,%q)", quantileHash, quantileBytes, alphaHash, alphaBytes)
+	}
+}
+
+func TestScalarU8CalibrationDefinitionInvalidConfig2842(t *testing.T) {
+	base := VectorIndexDefinition{
+		Name:       "embedding_graph",
+		Field:      "embedding",
+		Metric:     VectorMetricCosine,
+		Dimensions: 3,
+		Strategy:   VectorIndexStrategyColumnGraph,
+	}
+	tests := []struct {
+		name string
+		q    QuantizedVectorIndexDefinition
+		want string
+	}{
+		{name: "unsupported_mode", q: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, ScalarU8Calibration: &ScalarU8CalibrationConfig{Mode: "per_vector_alpha"}}, want: "mode"},
+		{name: "unsupported_grouping", q: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, ScalarU8Calibration: &ScalarU8CalibrationConfig{Mode: ScalarU8CalibrationModePerGranuleAlpha, Grouping: "vector_granule", AlphaPolicy: ScalarU8AlphaPolicy{Name: ScalarU8AlphaPolicyMaxAbs}}}, want: "grouping"},
+		{name: "legacy_with_policy", q: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, ScalarU8Calibration: &ScalarU8CalibrationConfig{Mode: ScalarU8CalibrationModeLegacy, AlphaPolicy: ScalarU8AlphaPolicy{Name: ScalarU8AlphaPolicyMaxAbs}}}, want: "legacy"},
+		{name: "max_abs_with_quantile", q: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, ScalarU8Calibration: &ScalarU8CalibrationConfig{Mode: ScalarU8CalibrationModePerGranuleAlpha, AlphaPolicy: ScalarU8AlphaPolicy{Name: ScalarU8AlphaPolicyMaxAbs, QuantilePPM: 999000}}}, want: "max_abs"},
+		{name: "unsupported_quantile", q: QuantizedVectorIndexDefinition{Name: "q", Codec: QuantizedVectorCodecScalarU8, ScalarU8Calibration: &ScalarU8CalibrationConfig{Mode: ScalarU8CalibrationModePerGranuleAlpha, AlphaPolicy: ScalarU8AlphaPolicy{Name: ScalarU8AlphaPolicyAbsQuantile, QuantilePPM: 998000}}}, want: "quantile_ppm"},
+		{name: "scalar_config_on_rabitq", q: QuantizedVectorIndexDefinition{Name: "q", Codec: "rabitq_1bit", ScalarU8Calibration: &ScalarU8CalibrationConfig{Mode: ScalarU8CalibrationModeLegacy}}, want: "requires codec"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def := base
+			def.QuantizedIndexes = []QuantizedVectorIndexDefinition{tt.q}
+			_, err := normalizeVectorIndexDefinition(def)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("normalizeVectorIndexDefinition err=%v want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestScalarU8CalibrationJSONMetadataRoundTrip2842(t *testing.T) {
+	meta := CollectionMeta{
+		Name: "docs",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding_graph",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 3,
+			Strategy:   VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedVectorIndexDefinition{{
+				Name:  "embedding.scalar_u8.alpha",
+				Codec: QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: &ScalarU8CalibrationConfig{
+					Mode:     ScalarU8CalibrationModePerGranuleAlpha,
+					Grouping: ScalarU8CalibrationGroupingStorageLayoutGranule,
+					AlphaPolicy: ScalarU8AlphaPolicy{
+						Name:        ScalarU8AlphaPolicyAbsQuantile,
+						QuantilePPM: ScalarU8AlphaPolicyAbsQuantilePPM999,
+					},
+				},
+			}},
+		}},
+	}
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		t.Fatalf("normalizeCollectionMeta: %v", err)
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		t.Fatalf("json.Marshal CollectionMeta: %v", err)
+	}
+	if !bytes.Contains(raw, []byte(`"scalar_u8_calibration"`)) || !bytes.Contains(raw, []byte(`"per_granule_alpha"`)) || !bytes.Contains(raw, []byte(`"quantile_ppm":999000`)) {
+		t.Fatalf("metadata JSON %s missing scalar_u8 alpha config", raw)
+	}
+	var decoded CollectionMeta
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal CollectionMeta: %v", err)
+	}
+	roundTrip, err := normalizeCollectionMeta(decoded)
+	if err != nil {
+		t.Fatalf("normalize decoded CollectionMeta: %v", err)
+	}
+	if !collectionMetaValuesEqual(normalized, roundTrip) {
+		t.Fatalf("round-trip metadata=%+v want %+v", roundTrip, normalized)
+	}
+}
+
+func TestScalarU8CalibrationDocsSpec2842(t *testing.T) {
+	doc := readRepoText(t, "TreeDB/docs/spec/quantized-vector-index.md")
+	requireTextContains(t, "quantized vector index scalar_u8 alpha spec", doc,
+		"scalar_u8_calibration",
+		"per_granule_alpha",
+		"storage_layout_granule",
+		"alpha_policy",
+		"CodecDescriptor.Config",
+		"ConfigHash",
+		"Existing legacy scalar_u8 declarations with omitted calibration config keep the legacy empty codec config identity",
+		"Downstream alpha asset builders must fail closed",
+	)
 }
 
 func TestSearchVectorIndexQuantizedOnlyAndRerankSupported1926(t *testing.T) {
