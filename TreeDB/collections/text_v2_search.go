@@ -1473,7 +1473,9 @@ func executeTextV2ORBlockMaxSearchAtSnapshot(
 			}
 		}
 
-		response.Stats.TextWANDPivots++
+		if thresholdReady {
+			response.Stats.TextWANDPivots++
+		}
 		target := active[pivot].currentFirst()
 		if target == 0 {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, errMalformedTextStorage("text-v2 OR block-max invalid target ordinal"))
