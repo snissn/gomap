@@ -16,6 +16,8 @@ from treedb_client import (
     KeywordSearchRequest,
     KeywordSearchResponse,
     QuantizedIndexInfo,
+    ScalarU8AlphaPolicy,
+    ScalarU8CalibrationConfig,
 )
 
 
@@ -161,6 +163,48 @@ class IndexModelTests(unittest.TestCase):
         self.assertEqual(response.results[0].id, "doc-1")
         self.assertTrue(response.index.capabilities.scalar_u8_quantized_rerank)
         self.assertEqual(response.index.quantized_indexes[0].name, "embedding.scalar_u8.fast")
+
+    def test_quantized_index_scalar_u8_calibration_round_trip(self) -> None:
+        calibration = ScalarU8CalibrationConfig(
+            mode="per_granule_alpha",
+            grouping="storage_layout_granule",
+            alpha_policy=ScalarU8AlphaPolicy(name="abs_quantile", quantile_ppm=999000),
+        )
+        options = BenchmarkVectorIndexOptions(
+            strategy="column_graph",
+            quantized_indexes=[
+                QuantizedIndexInfo(name="embedding.scalar_u8.alpha", scalar_u8_calibration=calibration)
+            ],
+        )
+
+        self.assertEqual(
+            options.to_dict()["quantized_indexes"],
+            [
+                {
+                    "name": "embedding.scalar_u8.alpha",
+                    "codec": "scalar_u8",
+                    "version": 1,
+                    "scalar_u8_calibration": {
+                        "mode": "per_granule_alpha",
+                        "grouping": "storage_layout_granule",
+                        "alpha_policy": {"name": "abs_quantile", "quantile_ppm": 999000},
+                    },
+                }
+            ],
+        )
+        parsed = QuantizedIndexInfo.from_dict(options.to_dict()["quantized_indexes"][0])
+        parsed_calibration = parsed.scalar_u8_calibration
+        self.assertIsInstance(parsed_calibration, ScalarU8CalibrationConfig)
+        assert isinstance(parsed_calibration, ScalarU8CalibrationConfig)
+        self.assertEqual(parsed_calibration.alpha_policy.quantile_ppm, 999000)
+
+        with self.assertRaisesRegex(ValueError, "unsupported field"):
+            QuantizedIndexInfo.from_dict(
+                {
+                    "name": "embedding.scalar_u8.bad",
+                    "scalar_u8_calibration": {"mode": "legacy", "future": True},
+                }
+            )
 
     def test_benchmark_vector_options_preserve_explicit_zero_values(self) -> None:
         options = BenchmarkVectorIndexOptions.from_dict({"m": 0, "ef_construction": 0, "ef_search": 0})

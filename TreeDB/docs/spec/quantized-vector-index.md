@@ -24,6 +24,28 @@ to `codec="scalar_u8"` and `version=1`; they also accept explicit
 `codec="rabitq_1bit", version=1` and `codec="brq_1bit", version=1`
 declarations.
 
+`scalar_u8` declarations may also carry `scalar_u8_calibration`. Omitted config
+preserves the legacy scalar_u8 v1 contract. Explicit legacy config is
+`{"mode":"legacy"}` and is behaviorally identical to omission. Persisted
+collection metadata for these semantics uses collection metadata version `5`.
+The config-only per-existing-granule alpha contract is:
+
+```json
+{
+  "mode": "per_granule_alpha",
+  "grouping": "storage_layout_granule",
+  "alpha_policy": { "name": "max_abs" }
+}
+```
+
+The only grouping source in this contract is `storage_layout_granule`: builders
+must use existing disk-local storage/layout granules or row groups exposed by the
+base column-graph/typed-column layout and must not choose a new vector-specific
+granule size. The deterministic finite alpha policies are `max_abs` with no
+parameters, and `abs_quantile` with `quantile_ppm=999000` (0.999) encoded as an
+integer parameter. `scalar_u8_calibration` is invalid on non-`scalar_u8` codecs;
+legacy mode rejects grouping and alpha policy fields.
+
 Search uses an explicit mode:
 
 | Mode | Score plane | Returned scores | Exact vector/norm reads | Notes |
@@ -50,14 +72,43 @@ collection route.
 
 ## Durable asset model
 
-Each declared scalar score plane rebuilds one TVIS vector-index-state asset with
-role `quantized_codes`, asset id `quantized/<name>/codes`, logical type
-`byte_vector`, and physical encoding `raw_fixed_bytes`. Rows are in graph ordinal
-order and bind to the base graph identity (index, field, metric, dimensions, row
-count, base manifest identity, graph schema hash, codec name/version/config, and
-asset ref/checksum identity). For cosine, persisted scalar_u8 codes are built
-from inverse-norm-normalized vector components so equivalent directions encode to
-the same row.
+Each declared legacy scalar_u8 score plane rebuilds one TVIS vector-index-state
+asset with role `quantized_codes`, asset id `quantized/<name>/codes`, logical
+type `byte_vector`, and physical encoding `raw_fixed_bytes`. Rows are in graph
+ordinal order and bind to the base graph identity (index, field, metric,
+dimensions, row count, base manifest identity, graph schema hash, codec
+name/version/config, and asset ref/checksum identity). For cosine, persisted
+legacy scalar_u8 codes are built from inverse-norm-normalized vector components
+so equivalent directions encode to the same row.
+
+Existing legacy scalar_u8 declarations with omitted calibration config keep the
+legacy empty codec config identity: `quantizedasset.CodecDescriptor.Config` is
+empty and `CodecDescriptor.ConfigHash` is zero. Any non-legacy
+`scalar_u8_calibration` is encoded into `CodecDescriptor.Config` canonical bytes
+and `ConfigHash`, and also participates in vector-index-state asset identity
+(asset id/path/schema hash) so assets built under one calibration policy cannot
+be reused under another.
+
+For `mode="per_granule_alpha"`, rebuild publishes two TVIS assets for the named
+score plane:
+
+- `quantized_codes`: asset id `quantized/<name>/scalar_u8/<config-hash>/codes`,
+  logical type `byte_vector`, physical encoding `raw_fixed_bytes`, with dense
+  u8 rows encoded by dividing each normalized component by that row's granule
+  alpha before applying the legacy scalar_u8 byte map.
+- `quantized_alpha`: asset id `quantized/<name>/scalar_u8/<config-hash>/alpha`,
+  logical type `scalar_u8_alpha`, physical encoding `raw_float32_uint32`, backed
+  by a typed-column part with one row per storage-layout granule. It stores
+  `scalar_u8_alpha` (`float32` / `raw_float32`) and `granule_row_count`
+  (`uint32` / `raw_uint32`). Row counts are cumulative in graph-ordinal order and
+  must sum to the code row count.
+
+The alpha grouping source is the existing typed-column storage-layout granule
+policy used by the scalar_u8 quantized code part; the mode does not define or
+promote a new vector-specific granule size. Prepare validates code row count,
+alpha granule count, config hash/bytes, base graph identity, schema/ref/checksum
+identity, finite positive alpha values, and row-count sums before exposing code
+rows plus alpha lookup state.
 
 Each declared `rabitq_1bit` v1 score plane also rebuilds one TVIS
 vector-index-state asset, with role `quantized_codes`, asset id
@@ -87,17 +138,23 @@ logical `quantized_code_B/vector` and actual `quantized_asset_B/vector`.
 ## Scoring and fail-closed behavior
 
 Quantized modes validate the selected name, declaration, codec/version, prepared
-asset, row count, dimensions, metric, source schema, base graph identity, asset
-ref identity, and typed-column layout before traversal/scoring. Missing, stale,
-corrupt, mismatched, unsupported, closed, or unprepared assets return
-`ErrVectorIndexSearchUnavailable`; they must not fall back to exact traversal or
-document reconstruction. Fail-closed stats use codec-generic counters such as
+asset, row count, dimensions, metric, source schema, base graph identity, codec
+config identity, asset ref identity, and typed-column layout before
+traversal/scoring. Missing, stale, corrupt, mismatched, unsupported, closed, or
+unprepared assets return `ErrVectorIndexSearchUnavailable`; they must not fall
+back to exact traversal or document reconstruction. Downstream alpha asset
+builders must fail closed when the selected scalar_u8 calibration contract is
+missing or mismatched. Per-granule-alpha scalar_u8 additionally requires the
+matching `quantized_alpha` asset and rejects missing, stale, mismatched,
+non-positive, NaN, or infinite alpha metadata during prepared open. Fail-closed stats use codec-generic counters such as
 `quantized_asset_missing`, `quantized_asset_invalid`, `quantized_asset_stale`,
 `quantized_asset_closed`, and `quantized_asset_unavailable`. Exact mode rejects
 quantized-mode fields so callers do not accidentally depend on no-op options.
 
-`scalar_u8` v1 `quantized_only` consumes the prepared `codes` reader and scores
-normalized query/candidate code rows. `rabitq_1bit` v1 `quantized_only` consumes
+Legacy `scalar_u8` v1 `quantized_only` consumes the prepared `codes` reader and
+scores normalized query/candidate code rows. The per-granule-alpha asset mode is
+persisted and prepared, but search scoring remains intentionally fail-closed
+until a scorer consumes the alpha lookup state. `rabitq_1bit` v1 `quantized_only` consumes
 `packed_codes`, `code_count`, and `quantized_dot_product_inv` and uses the
 weighted sign-dot estimator specified in `rabitq-1bit-v1.md`. Prototype
 `brq_1bit` v1 consumes the same side arrays but uses the `uint4` runtime query
@@ -152,8 +209,9 @@ fixture, `search_route_quantized_only/search`,
 `quantized_rerank_exact_score_calls/search`, `quantized_code_B/search`,
 `vector_B/search`, `norm_B/search`, logical code bytes/vector, and actual
 `quantized_asset_B/vector`. The rebuild rows report build throughput, allocation
-cost, total graph/vector-index-state storage, quantized asset bytes, and
-quantized asset bytes/vector.
+cost, total graph/vector-index-state storage, quantized asset bytes, quantized
+asset bytes/vector, and for per-granule-alpha scalar_u8 definitions the alpha
+metadata asset bytes separately from dense u8 code bytes.
 
 Representative #2454/#2482/#2487 evidence on Apple M3 / darwin arm64 / Go
 `go1.26.0` is recorded in `rabitq-closeout-2454.md`,

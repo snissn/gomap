@@ -1123,15 +1123,17 @@ asset roles include adjacency (`uint32_list` over
 `raw_uint32_offsets_list`), inverse norms (`float32` over `raw_float32`),
 optional normalized vectors (`float32_vector` over `raw_float32_vector`), row
 references (`int64` over `raw_int64`), exact returned document IDs (`bytes`
-over `raw_bytes_offsets`), and quantized code assets (`quantized_codes` role).
-Declared scalar_u8 score planes use `byte_vector` over `raw_fixed_bytes` with
-asset IDs `quantized/<name>/codes`. Declared `rabitq_1bit` v1 score planes use
-`packed_bit_vector` over `raw_packed_bit_vector` with asset IDs
-`quantized/<name>/packed_codes`; prototype `brq_1bit` v1 score planes use asset
-IDs `quantized/<name>/brq_1bit/packed_codes`. Their typed-column parts contain
-the `packed_codes`, `code_count`, and `quantized_dot_product_inv` roles described
-in `quantized-vector-index.md`, `rabitq-1bit-v1.md`, and `brq-1bit-v1.md`. The active manifest
-checksum includes the control record, but the record's base checksum excludes
+over `raw_bytes_offsets`), quantized code assets (`quantized_codes` role), and
+scalar_u8 per-granule alpha metadata (`quantized_alpha` role) when selected.
+Legacy scalar_u8 score planes use `byte_vector` over `raw_fixed_bytes` with
+asset IDs `quantized/<name>/codes`; per-granule-alpha scalar_u8 uses config-hash
+asset IDs `quantized/<name>/scalar_u8/<hash>/codes` plus
+`quantized/<name>/scalar_u8/<hash>/alpha` with logical type `scalar_u8_alpha`
+and physical encoding `raw_float32_uint32`. Declared `rabitq_1bit` v1 score
+planes use `packed_bit_vector` over `raw_packed_bit_vector` with asset IDs
+`quantized/<name>/packed_codes`; `rabitq_1bit` v1 score planes store packed codes, code counts, and quantized dot-product inverse side arrays. Prototype `brq_1bit` v1 score planes use asset
+IDs `quantized/<name>/brq_1bit/packed_codes`. The vector-index-state checksum
+includes the control record, but the record's base checksum excludes
 vector-index derived records so stale-state checks compare against authoritative
 collection data. See `vector-index-state-manifest.md` and
 `vector-index-row-ref-state-1993.md` for validation and fail-closed rules.
@@ -1412,7 +1414,9 @@ when an existing catalog entry has identical normalized metadata; incompatible
 metadata fails closed before advancing `AppliedCommandLSN`.
 
 Collection vector-index declarations are stored in the canonical collection
-metadata JSON under top-level `vector_indexes`. Quantized score-plane
+metadata JSON under top-level `vector_indexes`. The current collection metadata
+JSON version is `5`, which includes the persisted `scalar_u8_calibration`
+semantics for quantized scalar_u8 score planes. Quantized score-plane
 declarations, when present, live under `vector_indexes[].quantized_indexes` and
 are declarations only until matching derived assets are built and loaded; explicit
 quantized query modes must fail closed when those assets are absent or stale.

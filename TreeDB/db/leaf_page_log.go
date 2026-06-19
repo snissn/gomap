@@ -28,6 +28,33 @@ type LeafPageBatchLog interface {
 	AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedLog interface {
+	// AppendPreparedLeafPage appends one caller-prepared leaf-log payload. The
+	// original leafPage is used for read-cache population and integrity checks;
+	// preparedPayload contains the already-compacted value-log record payload.
+	AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error)
+}
+
+type LeafPagePreparedAppendLog interface {
+	PreparedLeafPageAppends() bool
+}
+
+type LeafPagePreparedBatchAppendLog interface {
+	PreparedLeafPageBatchAppends() bool
+}
+
+type LeafPageConcurrentAppendLog interface {
+	ConcurrentLeafPageAppends() bool
+}
+
+type LeafPagePreparedBatchLog interface {
+	// AppendPreparedLeafPages appends caller-prepared leaf-log payloads while
+	// preserving the positional relationship to the original leaf pages. The
+	// original leafPages are used for read-cache population and integrity checks;
+	// preparedPayloads contain the already-compacted value-log record payloads.
+	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
+}
+
 type LeafPageLogSegment struct {
 	Path   string
 	FileID uint32
@@ -85,6 +112,30 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 	return ptr, nil
 }
 
+func (l *leafPageLogWithRecordLengthHints) ConcurrentLeafPageAppends() bool {
+	if l == nil || l.inner == nil {
+		return false
+	}
+	concurrent, ok := l.inner.(LeafPageConcurrentAppendLog)
+	return ok && concurrent.ConcurrentLeafPageAppends()
+}
+
+func (l *leafPageLogWithRecordLengthHints) PreparedLeafPageAppends() bool {
+	if l == nil || l.inner == nil {
+		return false
+	}
+	_, ok := l.inner.(LeafPagePreparedLog)
+	return ok
+}
+
+func (l *leafPageLogWithRecordLengthHints) PreparedLeafPageBatchAppends() bool {
+	if l == nil || l.inner == nil {
+		return false
+	}
+	_, ok := l.inner.(LeafPagePreparedBatchLog)
+	return ok
+}
+
 func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
 	if l == nil || l.inner == nil {
 		return nil, errors.New("leaf page log unavailable")
@@ -109,26 +160,76 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPages(leafPages [][]byte) (
 			ptrs[i] = ptr
 		}
 	}
-	if len(ptrs) != len(leafPages) {
-		return nil, fmt.Errorf("leaf page batch log returned %d ptrs for %d leaf pages", len(ptrs), len(leafPages))
-	}
-	if l.db != nil {
-		lastRecordLen := uint32(0)
-		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
-			lastRecordLen = provider.LastLeafPageRecordLength()
-		}
-		for i, ptr := range ptrs {
-			// LeafPageBatchLog guarantees returned pointers are positional:
-			// ptrs[i] references leafPages[i].
-			l.db.storeLeafPageReadCache(ptr, leafPages[i])
-			recordLen := ptr.RecordLength()
-			if recordLen == 0 {
-				recordLen = lastRecordLen
-			}
-			l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, recordLen)
-		}
+	if err := l.noteLeafPageBatchPointers(leafPages, ptrs); err != nil {
+		return nil, err
 	}
 	return ptrs, nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error) {
+	if l == nil || l.inner == nil {
+		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
+	}
+	prepared, ok := l.inner.(LeafPagePreparedLog)
+	if !ok {
+		return l.AppendLeafPage(leafPage)
+	}
+	ptr, err := prepared.AppendPreparedLeafPage(leafPage, preparedPayload)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	l.noteLeafPagePointer(leafPage, ptr)
+	return ptr, nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error) {
+	if l == nil || l.inner == nil {
+		return nil, errors.New("leaf page log unavailable")
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, fmt.Errorf("leaf page prepared batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+	}
+	prepared, ok := l.inner.(LeafPagePreparedBatchLog)
+	if !ok {
+		return l.AppendLeafPages(leafPages)
+	}
+	ptrs, err := prepared.AppendPreparedLeafPages(leafPages, preparedPayloads)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.noteLeafPageBatchPointers(leafPages, ptrs); err != nil {
+		return nil, err
+	}
+	return ptrs, nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) noteLeafPageBatchPointers(leafPages [][]byte, ptrs []page.LeafLogPtr) error {
+	if len(ptrs) != len(leafPages) {
+		return fmt.Errorf("leaf page batch log returned %d ptrs for %d leaf pages", len(ptrs), len(leafPages))
+	}
+	for i, ptr := range ptrs {
+		// Batch logs guarantee returned pointers are positional: ptrs[i]
+		// references leafPages[i].
+		l.noteLeafPagePointer(leafPages[i], ptr)
+	}
+	return nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) noteLeafPagePointer(leafPage []byte, ptr page.LeafLogPtr) {
+	if l.db == nil {
+		return
+	}
+	l.db.storeLeafPageReadCache(ptr, leafPage)
+	recordLen := ptr.RecordLength()
+	if recordLen == 0 {
+		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
+			recordLen = provider.LastLeafPageRecordLength()
+		}
+	}
+	l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, recordLen)
 }
 
 func (l *leafPageLogWithRecordLengthHints) Flush() error {

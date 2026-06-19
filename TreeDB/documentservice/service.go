@@ -200,6 +200,11 @@ func (s *Service) UpsertDocuments(ctx context.Context, index string, req UpsertD
 		}
 		updates = append(updates, doc)
 	}
+	if len(insertIDs) > 0 && len(updates) == 0 && !req.DeferVectorIndexRebuild {
+		if err := preflightServiceVectorAutoRebuildSupported(info); err != nil {
+			return UpsertDocumentsResponse{}, err
+		}
+	}
 	inserted := 0
 	updated := 0
 	if len(insertIDs) > 0 {
@@ -1052,7 +1057,13 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		if q.Version > 1 {
 			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized index %q version=%d is unsupported", q.Name, q.Version)
 		}
-		out.quantizedIndexes[i] = collections.QuantizedVectorIndexDefinition{Name: q.Name, Codec: q.Codec, Version: q.Version}
+		collectionQ := collections.QuantizedVectorIndexDefinition{Name: q.Name, Codec: q.Codec, Version: q.Version, ScalarU8Calibration: q.ScalarU8Calibration}
+		scalarU8Calibration, err := collections.NormalizeScalarU8CalibrationConfig(defaultVectorIndexName, i, collectionQ)
+		if err != nil {
+			return normalizedBenchmarkVectorIndexOptions{}, wrapServiceError(CodeInvalidRequest, fmt.Sprintf("vector_index_options.quantized_indexes[%d].scalar_u8_calibration is invalid", i), err)
+		}
+		collectionQ.ScalarU8Calibration = scalarU8Calibration
+		out.quantizedIndexes[i] = collectionQ
 	}
 	return out, nil
 }
@@ -1075,6 +1086,17 @@ func serviceColumnStoreConfig(dimension int) *collections.ColumnStoreConfig {
 type preparedDocument struct {
 	id  string
 	raw []byte
+}
+
+func preflightServiceVectorAutoRebuildSupported(info IndexInfo) error {
+	return nil
+}
+
+func scalarU8CalibrationInfoIsLegacy(q QuantizedIndexInfo) bool {
+	if q.ScalarU8Calibration == nil {
+		return true
+	}
+	return q.ScalarU8Calibration.Mode == "" || q.ScalarU8Calibration.Mode == collections.ScalarU8CalibrationModeLegacy
 }
 
 func upsertPreparedDocument(ctx context.Context, col *collections.Collection, doc preparedDocument, preferInsert bool) (inserted bool, updated bool, err error) {
@@ -1735,8 +1757,11 @@ func mapCollectionMaintenanceError(operation string, err error) error {
 	if errors.As(err, &serviceErr) {
 		return err
 	}
-	if errors.Is(err, collections.ErrIndexNotFound) || errors.Is(err, collections.ErrHybridSearchIndexUnavailable) {
+	if errors.Is(err, collections.ErrIndexNotFound) || errors.Is(err, collections.ErrHybridSearchIndexUnavailable) || errors.Is(err, collections.ErrVectorIndexSearchUnavailable) {
 		return wrapServiceError(CodeIndexUnavailable, operation+" failed", err)
+	}
+	if strings.Contains(err.Error(), "scalar_u8 calibration mode") && strings.Contains(err.Error(), "alpha assets are not built") {
+		return wrapServiceError(CodeUnsupported, operation+" unsupported", err)
 	}
 	if errors.Is(err, backenddb.ErrClosed) {
 		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
