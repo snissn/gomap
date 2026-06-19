@@ -376,6 +376,46 @@ func TestPhase2SynthesisRequiresExplicitComparablePair(t *testing.T) {
 	}
 }
 
+func TestPhase2SynthesisComparesExplicitBuildPairs(t *testing.T) {
+	treeBuild := 0.8
+	luceneBuild := 1.0
+	syn := buildPhase2Synthesis([]scoreboardRow{
+		{
+			SourceLabel:  "treedb_build_10k",
+			System:       "TreeDB",
+			Engine:       "treedb_text_v2",
+			Modality:     "build_storage",
+			Dataset:      "docs=10000",
+			TopK:         0,
+			QueryShape:   "text-v2 index build",
+			Boundary:     "checkpointed text index build",
+			Benchmark:    "BenchmarkCreateTextIndex/build",
+			BuildSeconds: &treeBuild,
+			Metrics:      map[string]float64{"phase2_comparable": 1},
+		},
+		{
+			SourceLabel:  "lucene_build_10k",
+			System:       "Lucene",
+			Engine:       "lucene",
+			Modality:     "build_storage",
+			Dataset:      "docs=10000",
+			TopK:         0,
+			QueryShape:   "Lucene index build",
+			Boundary:     "optimized index build",
+			Benchmark:    "lucene/build",
+			BuildSeconds: &luceneBuild,
+			Metrics:      map[string]float64{"phase2_comparable": 1},
+		},
+	}, nil)
+	build := phase2ClassificationByID(t, syn, "index_build_ingest")
+	if build.Classification != "ahead" {
+		t.Fatalf("index_build_ingest classification=%q rationale=%q; want build metric comparison", build.Classification, build.Rationale)
+	}
+	if !strings.Contains(build.Rationale, "build pair") {
+		t.Fatalf("index_build_ingest rationale=%q missing build pair evidence", build.Rationale)
+	}
+}
+
 func phase2ClassificationByID(t *testing.T, syn phase2Synthesis, shapeID string) phase2GapClassification {
 	t.Helper()
 	for _, got := range syn.GapClassifications {

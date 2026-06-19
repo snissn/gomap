@@ -1230,6 +1230,8 @@ func measuredPhase2Classification(shapeID string, treeRows, externalRows []score
 		var ok bool
 		if shapeID == "index_size" {
 			treeMetric, externalMetric, ok = comparableStoragePair(pair.TreeDB, pair.External)
+		} else if shapeID == "index_build_ingest" {
+			treeMetric, externalMetric, ok = comparableBuildPair(pair.TreeDB, pair.External)
 		} else {
 			treeMetric, externalMetric, ok = comparableLatencyPair(pair.TreeDB, pair.External)
 		}
@@ -1246,9 +1248,12 @@ func measuredPhase2Classification(shapeID string, treeRows, externalRows []score
 		return "", "", false
 	}
 	if shapeID == "index_size" {
-		return classFromLowerIsBetterRatio(bestRatio), fmt.Sprintf("captured explicit comparable storage pair: TreeDB %s vs %s (ratio %.3gx)", phase2RowMetricSummary(best.TreeDB, true), phase2RowMetricSummary(best.External, true), bestRatio), true
+		return classFromLowerIsBetterRatio(bestRatio), fmt.Sprintf("captured explicit comparable storage pair: TreeDB %s vs %s (ratio %.3gx)", phase2RowMetricSummary(best.TreeDB, "storage"), phase2RowMetricSummary(best.External, "storage"), bestRatio), true
 	}
-	return classFromLowerIsBetterRatio(bestRatio), fmt.Sprintf("captured explicit comparable latency pair: TreeDB %s vs %s (ratio %.3gx)", phase2RowMetricSummary(best.TreeDB, false), phase2RowMetricSummary(best.External, false), bestRatio), true
+	if shapeID == "index_build_ingest" {
+		return classFromLowerIsBetterRatio(bestRatio), fmt.Sprintf("captured explicit comparable build pair: TreeDB %s vs %s (ratio %.3gx)", phase2RowMetricSummary(best.TreeDB, "build"), phase2RowMetricSummary(best.External, "build"), bestRatio), true
+	}
+	return classFromLowerIsBetterRatio(bestRatio), fmt.Sprintf("captured explicit comparable latency pair: TreeDB %s vs %s (ratio %.3gx)", phase2RowMetricSummary(best.TreeDB, "latency"), phase2RowMetricSummary(best.External, "latency"), bestRatio), true
 }
 
 type phase2ComparablePair struct {
@@ -1318,12 +1323,28 @@ func comparableStoragePair(treeRow, externalRow scoreboardRow) (float64, float64
 	return *treeRow.StorageBytesPerDoc, *externalRow.StorageBytesPerDoc, true
 }
 
-func phase2RowMetricSummary(row scoreboardRow, storage bool) string {
+func comparableBuildPair(treeRow, externalRow scoreboardRow) (float64, float64, bool) {
+	if treeRow.BuildSeconds == nil || externalRow.BuildSeconds == nil || *treeRow.BuildSeconds <= 0 || *externalRow.BuildSeconds <= 0 {
+		return 0, 0, false
+	}
+	return *treeRow.BuildSeconds, *externalRow.BuildSeconds, true
+}
+
+func phase2RowMetricSummary(row scoreboardRow, metricKind string) string {
 	metric := ""
-	if storage && row.StorageBytesPerDoc != nil {
-		metric = " storage=" + formatNumber(*row.StorageBytesPerDoc) + " B/doc"
-	} else if !storage && row.NsPerOp != nil {
-		metric = " ns/op=" + formatNumber(*row.NsPerOp)
+	switch metricKind {
+	case "storage":
+		if row.StorageBytesPerDoc != nil {
+			metric = " storage=" + formatNumber(*row.StorageBytesPerDoc) + " B/doc"
+		}
+	case "build":
+		if row.BuildSeconds != nil {
+			metric = " build=" + formatSecondsPtr(row.BuildSeconds)
+		}
+	default:
+		if row.NsPerOp != nil {
+			metric = " ns/op=" + formatNumber(*row.NsPerOp)
+		}
 	}
 	return fmt.Sprintf("%s/%s%s", row.SourceLabel, row.Benchmark, metric)
 }
