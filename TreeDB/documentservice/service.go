@@ -1052,7 +1052,13 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		if q.Version > 1 {
 			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized index %q version=%d is unsupported", q.Name, q.Version)
 		}
-		out.quantizedIndexes[i] = collections.QuantizedVectorIndexDefinition{Name: q.Name, Codec: q.Codec, Version: q.Version, ScalarU8Calibration: q.ScalarU8Calibration}
+		collectionQ := collections.QuantizedVectorIndexDefinition{Name: q.Name, Codec: q.Codec, Version: q.Version, ScalarU8Calibration: q.ScalarU8Calibration}
+		scalarU8Calibration, err := collections.NormalizeScalarU8CalibrationConfig(defaultVectorIndexName, i, collectionQ)
+		if err != nil {
+			return normalizedBenchmarkVectorIndexOptions{}, wrapServiceError(CodeInvalidRequest, fmt.Sprintf("vector_index_options.quantized_indexes[%d].scalar_u8_calibration is invalid", i), err)
+		}
+		collectionQ.ScalarU8Calibration = scalarU8Calibration
+		out.quantizedIndexes[i] = collectionQ
 	}
 	return out, nil
 }
