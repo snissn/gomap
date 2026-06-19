@@ -672,6 +672,41 @@ func TestServiceCreateIndexRejectsInvalidScalarU8Calibration2842(t *testing.T) {
 	}
 }
 
+func TestServiceUpsertScalarU8PerGranuleAlphaDefaultBuildsAssets2843(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "bench_alpha_default",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedIndexInfo{{
+				Name:  "embedding.scalar_u8.alpha",
+				Codec: collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+					Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+					AlphaPolicy: collections.ScalarU8AlphaPolicy{
+						Name: collections.ScalarU8AlphaPolicyMaxAbs,
+					},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex alpha: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "bench_alpha_default", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}}); err != nil {
+		t.Fatalf("default UpsertDocuments alpha: %v", err)
+	}
+	count, err := svc.CountDocuments(ctx, "bench_alpha_default", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("CountDocuments after default alpha upsert=%+v err=%v want 1", count, err)
+	}
+}
+
 func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
@@ -700,6 +735,10 @@ func TestServiceOptimizeScalarU8PerGranuleAlphaBuildsAssets2843(t *testing.T) {
 	}
 	if _, err := svc.UpsertDocuments(ctx, "bench_alpha", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatalf("deferred UpsertDocuments alpha: %v", err)
+	}
+	count, err := svc.CountDocuments(ctx, "bench_alpha", CountDocumentsRequest{})
+	if err != nil || count.Count != 1 {
+		t.Fatalf("CountDocuments after deferred alpha upsert=%+v err=%v want 1", count, err)
 	}
 	if _, err := svc.OptimizeIndex(ctx, "bench_alpha", OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("OptimizeIndex alpha: %v", err)
