@@ -128,11 +128,12 @@ type columnVectorGraphQuantizedAssetResource struct {
 }
 
 type columnVectorGraphScalarU8AlphaLookup struct {
-	rows            int
-	granules        int
-	alphaPayload    []byte
-	rowCountPayload []byte
-	firstRows       []int
+	rows               int
+	granules           int
+	alphaPayload       []byte
+	rowCountPayload    []byte
+	firstRows          []int
+	uniformGranuleRows int
 }
 
 func (l *columnVectorGraphScalarU8AlphaLookup) Rows() int {
@@ -164,15 +165,77 @@ func (l *columnVectorGraphScalarU8AlphaLookup) RowCountForGranule(granule int) (
 }
 
 func (l *columnVectorGraphScalarU8AlphaLookup) AlphaForRow(row int) (float32, int, bool) {
-	if l == nil || row < 0 || row >= l.rows || len(l.firstRows) != l.granules+1 {
-		return 0, 0, false
-	}
-	granule := sort.Search(l.granules, func(i int) bool { return l.firstRows[i+1] > row })
-	if granule < 0 || granule >= l.granules || row < l.firstRows[granule] || row >= l.firstRows[granule+1] {
+	granule, ok := l.granuleForRow(row)
+	if !ok {
 		return 0, 0, false
 	}
 	alpha, ok := l.AlphaForGranule(granule)
 	return alpha, granule, ok
+}
+
+func (l *columnVectorGraphScalarU8AlphaLookup) granuleForRow(row int) (int, bool) {
+	if l == nil || row < 0 || row >= l.rows || l.granules < 0 || len(l.firstRows) != l.granules+1 {
+		return 0, false
+	}
+	if l.uniformGranuleRows > 0 {
+		granule := row / l.uniformGranuleRows
+		if granule >= l.granules {
+			granule = l.granules - 1
+		}
+		if granule >= 0 && row >= l.firstRows[granule] && row < l.firstRows[granule+1] {
+			return granule, true
+		}
+	}
+	lo, hi := 0, l.granules
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if l.firstRows[mid+1] > row {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	granule := lo
+	if granule < 0 || granule >= l.granules || row < l.firstRows[granule] || row >= l.firstRows[granule+1] {
+		return 0, false
+	}
+	return granule, true
+}
+
+func (l *columnVectorGraphScalarU8AlphaLookup) validateForScoring(rows int) error {
+	if l == nil {
+		return fmt.Errorf("%w: scalar_u8 alpha lookup is missing", errColumnVectorGraphQuantizedAssetMissing)
+	}
+	if rows < 0 || l.rows != rows {
+		return fmt.Errorf("%w: scalar_u8 alpha rows=%d want graph rows=%d", errColumnVectorGraphQuantizedAssetStale, l.rows, rows)
+	}
+	if !l.validShapeForRows(rows) {
+		return fmt.Errorf("%w: scalar_u8 alpha lookup shape is invalid", errColumnVectorGraphQuantizedAssetInvalid)
+	}
+	for granule := 0; granule < l.granules; granule++ {
+		alpha, ok := l.AlphaForGranule(granule)
+		if !ok || !validColumnVectorGraphScalarU8Alpha(alpha) {
+			return fmt.Errorf("%w: scalar_u8 alpha granule %d value=%v is invalid", errColumnVectorGraphQuantizedAssetInvalid, granule, alpha)
+		}
+		count, ok := l.RowCountForGranule(granule)
+		if !ok || count == 0 {
+			return fmt.Errorf("%w: scalar_u8 alpha granule %d row_count=%d is invalid", errColumnVectorGraphQuantizedAssetInvalid, granule, count)
+		}
+	}
+	return nil
+}
+
+func (l *columnVectorGraphScalarU8AlphaLookup) validShapeForRows(rows int) bool {
+	if l == nil || rows < 0 || l.rows != rows || l.granules < 0 || len(l.alphaPayload) != l.granules*4 || len(l.rowCountPayload) != l.granules*4 || len(l.firstRows) != l.granules+1 {
+		return false
+	}
+	if rows > 0 && l.granules == 0 {
+		return false
+	}
+	if l.granules == 0 {
+		return rows == 0
+	}
+	return l.firstRows[0] == 0 && l.firstRows[l.granules] == rows
 }
 
 var columnVectorGraphQuantizedAssetForceReadAtFallbackForTest atomic.Bool
@@ -1769,6 +1832,7 @@ func columnVectorGraphScalarU8AlphaLookupFromPrepared(q QuantizedVectorIndexDefi
 	}
 	firstRows := make([]int, alphaRows+1)
 	rowSum := 0
+	uniformGranuleRows := 0
 	for granule := 0; granule < alphaRows; granule++ {
 		alpha := math.Float32frombits(binary.LittleEndian.Uint32(alphaPayload[granule*4 : granule*4+4]))
 		if !validColumnVectorGraphScalarU8Alpha(alpha) {
@@ -1781,6 +1845,11 @@ func columnVectorGraphScalarU8AlphaLookupFromPrepared(q QuantizedVectorIndexDefi
 		if count == 0 || uint64(count) > uint64(math.MaxInt-rowSum) {
 			return nil, fmt.Errorf("scalar_u8 alpha granule %d row_count=%d is invalid", granule, count)
 		}
+		if granule == 0 {
+			uniformGranuleRows = int(count)
+		} else if granule < alphaRows-1 && int(count) != uniformGranuleRows {
+			uniformGranuleRows = 0
+		}
 		firstRows[granule] = rowSum
 		rowSum += int(count)
 	}
@@ -1788,7 +1857,7 @@ func columnVectorGraphScalarU8AlphaLookupFromPrepared(q QuantizedVectorIndexDefi
 	if rowSum != prepared.Rows() {
 		return nil, fmt.Errorf("scalar_u8 alpha row_counts sum=%d want prepared rows=%d", rowSum, prepared.Rows())
 	}
-	return &columnVectorGraphScalarU8AlphaLookup{rows: prepared.Rows(), granules: alphaRows, alphaPayload: alphaPayload, rowCountPayload: rowCountPayload, firstRows: firstRows}, nil
+	return &columnVectorGraphScalarU8AlphaLookup{rows: prepared.Rows(), granules: alphaRows, alphaPayload: alphaPayload, rowCountPayload: rowCountPayload, firstRows: firstRows, uniformGranuleRows: uniformGranuleRows}, nil
 }
 
 func validateColumnVectorGraphRabitQPreparedAsset(prepared *quantizedasset.Prepared, plan *rabitq.Plan) error {
