@@ -1219,42 +1219,113 @@ func classifyPhase2Gap(target phase2BenchmarkTarget, rows []scoreboardRow, unava
 }
 
 func measuredPhase2Classification(shapeID string, treeRows, externalRows []scoreboardRow) (string, string, bool) {
-	comparableExternalRows := phase2ComparableExternalRows(externalRows)
-	if len(treeRows) == 0 || len(comparableExternalRows) == 0 {
+	pairs := phase2ComparablePairs(treeRows, externalRows)
+	if len(pairs) == 0 {
 		return "", "", false
 	}
-	// Why: SQLite FTS5 is a useful embedded baseline, but the #2834 readout
-	// explicitly treats SQLite-only evidence as non-equivalent for industry
-	// parity. Ratio-based ahead/near claims require a non-SQLite baseline row
-	// from a pinned comparable search engine harness.
-	externalRows = comparableExternalRows
-	if shapeID == "index_size" {
-		treeStorage, okTree := bestStorageBytesPerDoc(treeRows)
-		extStorage, okExt := bestStorageBytesPerDoc(externalRows)
-		if okTree && okExt && extStorage > 0 {
-			ratio := treeStorage / extStorage
-			return classFromLowerIsBetterRatio(ratio), fmt.Sprintf("captured comparable storage rows: TreeDB %.3g B/doc vs external %.3g B/doc (ratio %.3gx)", treeStorage, extStorage, ratio), true
+	bestRatio := math.Inf(1)
+	var best phase2ComparablePair
+	for _, pair := range pairs {
+		var treeMetric, externalMetric float64
+		var ok bool
+		if shapeID == "index_size" {
+			treeMetric, externalMetric, ok = comparableStoragePair(pair.TreeDB, pair.External)
+		} else {
+			treeMetric, externalMetric, ok = comparableLatencyPair(pair.TreeDB, pair.External)
 		}
-		return "", "", false
-	}
-	treeNS, okTree := bestNsPerOp(treeRows)
-	extNS, okExt := bestNsPerOp(externalRows)
-	if !okTree || !okExt || extNS <= 0 {
-		return "", "", false
-	}
-	ratio := treeNS / extNS
-	return classFromLowerIsBetterRatio(ratio), fmt.Sprintf("captured comparable latency rows: TreeDB %.3g ns/op vs external %.3g ns/op (ratio %.3gx)", treeNS, extNS, ratio), true
-}
-
-func phase2ComparableExternalRows(rows []scoreboardRow) []scoreboardRow {
-	out := make([]scoreboardRow, 0, len(rows))
-	for _, row := range rows {
-		if strings.EqualFold(row.System, "SQLite FTS5") || strings.EqualFold(row.Engine, "sqlite_fts5") {
+		if !ok || externalMetric <= 0 {
 			continue
 		}
-		out = append(out, row)
+		ratio := treeMetric / externalMetric
+		if ratio < bestRatio {
+			bestRatio = ratio
+			best = pair
+		}
 	}
-	return out
+	if math.IsInf(bestRatio, 1) {
+		return "", "", false
+	}
+	if shapeID == "index_size" {
+		return classFromLowerIsBetterRatio(bestRatio), fmt.Sprintf("captured explicit comparable storage pair: TreeDB %s vs %s (ratio %.3gx)", phase2RowMetricSummary(best.TreeDB, true), phase2RowMetricSummary(best.External, true), bestRatio), true
+	}
+	return classFromLowerIsBetterRatio(bestRatio), fmt.Sprintf("captured explicit comparable latency pair: TreeDB %s vs %s (ratio %.3gx)", phase2RowMetricSummary(best.TreeDB, false), phase2RowMetricSummary(best.External, false), bestRatio), true
+}
+
+type phase2ComparablePair struct {
+	TreeDB   scoreboardRow
+	External scoreboardRow
+}
+
+func phase2ComparablePairs(treeRows, externalRows []scoreboardRow) []phase2ComparablePair {
+	var pairs []phase2ComparablePair
+	for _, treeRow := range treeRows {
+		if !phase2ExplicitComparableRow(treeRow) {
+			continue
+		}
+		for _, externalRow := range externalRows {
+			if !phase2ExplicitComparableRow(externalRow) || !phase2NonSQLiteExternalRow(externalRow) {
+				continue
+			}
+			if !phase2ComparableRowMetadata(treeRow, externalRow) {
+				continue
+			}
+			pairs = append(pairs, phase2ComparablePair{TreeDB: treeRow, External: externalRow})
+		}
+	}
+	return pairs
+}
+
+func phase2ExplicitComparableRow(row scoreboardRow) bool {
+	if row.Metrics != nil && row.Metrics["phase2_comparable"] == 1 {
+		return true
+	}
+	for _, caveat := range row.Caveats {
+		if strings.Contains(strings.ToLower(caveat), "phase2_comparable") {
+			return true
+		}
+	}
+	return false
+}
+
+func phase2NonSQLiteExternalRow(row scoreboardRow) bool {
+	return !strings.EqualFold(row.System, "SQLite FTS5") && !strings.EqualFold(row.Engine, "sqlite_fts5")
+}
+
+func phase2ComparableRowMetadata(a, b scoreboardRow) bool {
+	if a.Dataset == "" || b.Dataset == "" || a.Dataset != b.Dataset {
+		return false
+	}
+	if a.TopK != b.TopK {
+		return false
+	}
+	if a.QuerySet != "" && b.QuerySet != "" && a.QuerySet != b.QuerySet {
+		return false
+	}
+	return true
+}
+
+func comparableLatencyPair(treeRow, externalRow scoreboardRow) (float64, float64, bool) {
+	if treeRow.NsPerOp == nil || externalRow.NsPerOp == nil || *treeRow.NsPerOp <= 0 || *externalRow.NsPerOp <= 0 {
+		return 0, 0, false
+	}
+	return *treeRow.NsPerOp, *externalRow.NsPerOp, true
+}
+
+func comparableStoragePair(treeRow, externalRow scoreboardRow) (float64, float64, bool) {
+	if treeRow.StorageBytesPerDoc == nil || externalRow.StorageBytesPerDoc == nil || *treeRow.StorageBytesPerDoc <= 0 || *externalRow.StorageBytesPerDoc <= 0 {
+		return 0, 0, false
+	}
+	return *treeRow.StorageBytesPerDoc, *externalRow.StorageBytesPerDoc, true
+}
+
+func phase2RowMetricSummary(row scoreboardRow, storage bool) string {
+	metric := ""
+	if storage && row.StorageBytesPerDoc != nil {
+		metric = " storage=" + formatNumber(*row.StorageBytesPerDoc) + " B/doc"
+	} else if !storage && row.NsPerOp != nil {
+		metric = " ns/op=" + formatNumber(*row.NsPerOp)
+	}
+	return fmt.Sprintf("%s/%s%s", row.SourceLabel, row.Benchmark, metric)
 }
 
 func classFromLowerIsBetterRatio(ratio float64) string {

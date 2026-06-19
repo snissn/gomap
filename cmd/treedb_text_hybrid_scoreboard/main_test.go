@@ -331,6 +331,62 @@ func TestPhase2SynthesisDoesNotClaimParityFromSQLiteOnly(t *testing.T) {
 	}
 }
 
+func TestPhase2SynthesisRequiresExplicitComparablePair(t *testing.T) {
+	treedbNS := 700_000.0
+	luceneNS := 1_000_000.0
+	rows := []scoreboardRow{
+		{
+			SourceLabel: "treedb_common_10k",
+			System:      "TreeDB",
+			Engine:      "treedb_text_v2",
+			Modality:    "text_only",
+			Dataset:     "docs=10000",
+			TopK:        10,
+			QueryShape:  "common term BM25F top-k with block-max pruning",
+			Boundary:    "No-document text-v2 score-only BM25F search",
+			Benchmark:   "BenchmarkTextV2BlockMaxCommonTerm2628/blockmax_common_topk",
+			NsPerOp:     &treedbNS,
+		},
+		{
+			SourceLabel: "lucene_common_1m",
+			System:      "Lucene",
+			Engine:      "lucene",
+			Modality:    "text_only",
+			Dataset:     "docs=1000000",
+			TopK:        10,
+			QueryShape:  "common term BM25 top-k",
+			Boundary:    "no-document scorer top-k",
+			Benchmark:   "lucene/common_term_no_docs",
+			NsPerOp:     &luceneNS,
+		},
+	}
+	syn := buildPhase2Synthesis(rows, nil)
+	common := phase2ClassificationByID(t, syn, "single_term_common")
+	if common.Classification == "ahead" || common.Classification == "near_parity" {
+		t.Fatalf("single_term_common classification=%q from unpaired rows; want default evidence gap", common.Classification)
+	}
+
+	rows[0].Metrics = map[string]float64{"phase2_comparable": 1}
+	rows[1].Metrics = map[string]float64{"phase2_comparable": 1}
+	rows[1].Dataset = rows[0].Dataset
+	syn = buildPhase2Synthesis(rows, nil)
+	common = phase2ClassificationByID(t, syn, "single_term_common")
+	if common.Classification != "ahead" {
+		t.Fatalf("single_term_common classification=%q with explicit comparable pair; want ahead", common.Classification)
+	}
+}
+
+func phase2ClassificationByID(t *testing.T, syn phase2Synthesis, shapeID string) phase2GapClassification {
+	t.Helper()
+	for _, got := range syn.GapClassifications {
+		if got.ShapeID == shapeID {
+			return got
+		}
+	}
+	t.Fatalf("missing phase2 classification %q", shapeID)
+	return phase2GapClassification{}
+}
+
 func TestPhase2IndexSizeIgnoresIncidentalRetrievalStorage(t *testing.T) {
 	treedbNS := 1_100_000.0
 	sqliteNS := 1_000_000.0
