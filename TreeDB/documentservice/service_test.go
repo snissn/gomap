@@ -672,6 +672,40 @@ func TestServiceCreateIndexRejectsInvalidScalarU8Calibration2842(t *testing.T) {
 	}
 }
 
+func TestServiceOptimizeScalarU8PerGranuleAlphaFailsClosed2842(t *testing.T) {
+	svc, db := newTestService(t)
+	defer db.Close()
+	ctx := context.Background()
+	_, err := svc.CreateIndex(ctx, CreateIndexRequest{
+		Name:      "bench_alpha",
+		Dimension: 2,
+		Metric:    MetricCosine,
+		VectorIndexOptions: &BenchmarkVectorIndexOptions{
+			Strategy: collections.VectorIndexStrategyColumnGraph,
+			QuantizedIndexes: []QuantizedIndexInfo{{
+				Name:  "embedding.scalar_u8.alpha",
+				Codec: collections.QuantizedVectorCodecScalarU8,
+				ScalarU8Calibration: &collections.ScalarU8CalibrationConfig{
+					Mode:     collections.ScalarU8CalibrationModePerGranuleAlpha,
+					Grouping: collections.ScalarU8CalibrationGroupingStorageLayoutGranule,
+					AlphaPolicy: collections.ScalarU8AlphaPolicy{
+						Name: collections.ScalarU8AlphaPolicyMaxAbs,
+					},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateIndex alpha: %v", err)
+	}
+	if _, err := svc.UpsertDocuments(ctx, "bench_alpha", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
+		t.Fatalf("deferred UpsertDocuments alpha: %v", err)
+	}
+	if _, err := svc.OptimizeIndex(ctx, "bench_alpha", OptimizeIndexRequest{}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("OptimizeIndex alpha err=%v code=%s want unsupported, not internal", err, ErrorCodeOf(err))
+	}
+}
+
 func TestServiceBenchmarkLifecycleResetOptimizeAndNoDocumentSearch(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()

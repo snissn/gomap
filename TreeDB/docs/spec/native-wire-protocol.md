@@ -529,8 +529,13 @@ index_value_type
 index_unique
 index_multi_key
 index_storage_policy
+vector_indexes
+quantized_indexes
+scalar_u8_calibration
 ```
 
+The current nativewire collection metadata frame version is `5`; version `5`
+includes persisted scalar_u8 calibration semantics for quantized vector indexes.
 Metadata mutation responses SHOULD include the resulting catalog version or
 equivalent schema guard. Later single-node mutation requests MAY use
 `expected_catalog_version` to fail fast when a client planned against stale

@@ -1741,8 +1741,11 @@ func mapCollectionMaintenanceError(operation string, err error) error {
 	if errors.As(err, &serviceErr) {
 		return err
 	}
-	if errors.Is(err, collections.ErrIndexNotFound) || errors.Is(err, collections.ErrHybridSearchIndexUnavailable) {
+	if errors.Is(err, collections.ErrIndexNotFound) || errors.Is(err, collections.ErrHybridSearchIndexUnavailable) || errors.Is(err, collections.ErrVectorIndexSearchUnavailable) {
 		return wrapServiceError(CodeIndexUnavailable, operation+" failed", err)
+	}
+	if strings.Contains(err.Error(), "scalar_u8 calibration mode") && strings.Contains(err.Error(), "alpha assets are not built") {
+		return wrapServiceError(CodeUnsupported, operation+" unsupported", err)
 	}
 	if errors.Is(err, backenddb.ErrClosed) {
 		return wrapServiceError(CodeIndexUnavailable, "TreeDB backend is closed", err)
