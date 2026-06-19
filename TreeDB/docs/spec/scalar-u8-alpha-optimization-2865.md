@@ -2,8 +2,8 @@
 
 Status: baseline/profile runbook for the #2864 optimization graph. This page is
 benchmark-adjacent evidence, not a default-promotion decision. The current
-promotion decision remains the #2845 **no-promote / explicit opt-in** gate until
-#2869 records a replacement decision from latest-main evidence.
+promotion decision is the #2869 final **no-promote / explicit opt-in** gate in
+`scalar-u8-alpha-default-gate-2845.md`.
 
 ## Baseline context
 
