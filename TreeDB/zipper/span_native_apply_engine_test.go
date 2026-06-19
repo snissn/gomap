@@ -2,6 +2,7 @@ package zipper
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"runtime"
 	"testing"
@@ -248,6 +249,103 @@ func TestSpanNativeApplyConcurrentWorkerLocalScratchSplitParity(t *testing.T) {
 	}
 	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
 		t.Fatalf("concurrent span-native output mismatch")
+	}
+}
+
+func TestSpanNativeApplyLeafLogOutputBufferedSingleCommitBatch(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	serial.SetOuterLeavesInValueLog(true)
+	serialStore := newBatchMemoryLeafPageStore()
+	serial.SetLeafPageLog(serialStore)
+	serial.SetLeafPageReader(serialStore)
+
+	_, native := newReadOnlyPrepareZipper(t)
+	native.SetOuterLeavesInValueLog(true)
+	nativeStore := newBatchMemoryLeafPageStore()
+	native.SetLeafPageLog(nativeStore)
+	native.SetLeafPageReader(nativeStore)
+
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 4096)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+	native.SetLeafPageReader(parallelSafeLeafPageReader{pages: nativeStore.pages})
+	nativeStore.batchLens = nil
+	nativeStore.singleCalls = 0
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	value := bytes.Repeat([]byte("v"), 180)
+	for _, anchor := range []int{17, 1029, 2053, 3079} {
+		for j := 0; j < 48; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			if err := delta.Set(key, value); err != nil {
+				t.Fatalf("Set anchor=%d j=%d: %v", anchor, j, err)
+			}
+		}
+	}
+
+	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+	if err != nil {
+		t.Fatalf("serial Apply: %v", err)
+	}
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 4})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if !result.SpanNativeUsed || result.Metrics.ZipperLeafLogPagesWritten < 2 {
+		t.Fatalf("span-native/leaf-log metrics used=%v pages=%d", result.SpanNativeUsed, result.Metrics.ZipperLeafLogPagesWritten)
+	}
+	if result.Metrics.ZipperLeafLogOutputAppendCalls != 1 {
+		t.Fatalf("leaf-log append calls=%d want one coordinator commit batch", result.Metrics.ZipperLeafLogOutputAppendCalls)
+	}
+	if got := nativeStore.singleCalls; got != 0 {
+		t.Fatalf("single leaf-log appends=%d want buffered batch path", got)
+	}
+	if len(nativeStore.batchLens) != 1 || nativeStore.batchLens[0] != result.Metrics.ZipperLeafLogPagesWritten {
+		t.Fatalf("batch lens=%v pagesWritten=%d want one batch covering all buffered output", nativeStore.batchLens, result.Metrics.ZipperLeafLogPagesWritten)
+	}
+	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
+		t.Fatalf("span-native buffered leaf-log output mismatch")
+	}
+}
+
+func TestSpanNativeApplyLeafLogOutputCommitFailureReturnsBeforeReduce(t *testing.T) {
+	_, native := newReadOnlyPrepareZipper(t)
+	native.SetOuterLeavesInValueLog(true)
+	store := newBatchMemoryLeafPageStore()
+	native.SetLeafPageLog(store)
+	native.SetLeafPageReader(store)
+
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+	native.SetLeafPageReader(parallelSafeLeafPageReader{pages: store.pages})
+	store.batchLens = nil
+	store.singleCalls = 0
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	value := bytes.Repeat([]byte("v"), 180)
+	for _, anchor := range []int{17, 1029, 2053, 3079} {
+		for j := 0; j < 48; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			if err := delta.Set(key, value); err != nil {
+				t.Fatalf("Set anchor=%d j=%d: %v", anchor, j, err)
+			}
+		}
+	}
+
+	appendErr := errors.New("test span-native buffered leaf-log commit failure")
+	native.SetLeafPageLog(&failingBatchLeafPageLog{batchMemoryLeafPageStore: store, err: appendErr})
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 4})
+	if !errors.Is(err, appendErr) {
+		t.Fatalf("ApplyWithOptions err=%v want %v", err, appendErr)
+	}
+	if result.RootID != 0 {
+		t.Fatalf("RootID=%d want zero because buffered output failed before reducer publication", result.RootID)
+	}
+	if result.Metrics.ZipperLeafLogOutputAppendCalls != 1 {
+		t.Fatalf("leaf-log append calls=%d want one failed coordinator commit", result.Metrics.ZipperLeafLogOutputAppendCalls)
+	}
+	if result.Metrics.ZipperLeafLogOutputAppendPages != 0 {
+		t.Fatalf("successful append pages=%d want 0 on failed buffered commit", result.Metrics.ZipperLeafLogOutputAppendPages)
 	}
 }
 
@@ -532,14 +630,13 @@ func collectSpanNativeTestInternalPageIDsRef(t *testing.T, z *Zipper, ref page.C
 
 func collectChildRefLeafPairs(t *testing.T, z *Zipper, ref page.ChildRef) []byte {
 	t.Helper()
-	if ref.Kind != page.ChildRefPage {
-		t.Fatalf("child kind=%d want page", ref.Kind)
-	}
-	data, err := z.pager.Get(ref.Page)
+	n, _, leafScratch, leafScratchRef, _, err := z.loadNodeRef(ref, nil)
 	if err != nil {
-		t.Fatalf("get page %d: %v", ref.Page, err)
+		t.Fatalf("load child ref %+v: %v", ref, err)
 	}
-	n := node.NewNode(data)
+	if leafScratchRef {
+		releaseLeafPageScratch(nil, leafScratch)
+	}
 	switch n.Type() {
 	case page.PageTypeLeaf, 0:
 		var out []byte

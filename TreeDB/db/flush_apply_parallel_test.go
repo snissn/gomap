@@ -604,6 +604,97 @@ func TestFlushApplySpanNativeSingleWorkerUsesApplyWithOptionsStats(t *testing.T)
 	}
 }
 
+func TestFlushApplySpanNativeBufferedLeafLogOutputReopens(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  64 * 1024,
+		IndexOuterLeavesInValueLog: true,
+		FlushAdmissionPolicy:       FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:      4,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		FlushApplySpanNative:       true,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockLZ4,
+		},
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{
+		Compression: ValueLogCompressionBlock,
+		BlockCodec:  ValueLogBlockLZ4,
+	})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("NewStandaloneLeafPageLog: %v", err)
+	}
+	d.SetLeafPageLog(leafLog)
+
+	putBatch(t, d, 0, 4096, "base")
+	updates := d.NewBatch()
+	for _, anchor := range []int{17, 1029, 2053, 3079} {
+		for j := 0; j < 48; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			val := bytes.Repeat([]byte{byte(1 + (anchor+j)%251)}, 180)
+			if err := updates.Set(key, val); err != nil {
+				_ = updates.Close()
+				_ = leafLog.Close()
+				_ = d.Close()
+				t.Fatalf("Set update anchor=%d j=%d: %v", anchor, j, err)
+			}
+		}
+	}
+	if err := updates.Write(); err != nil {
+		_ = updates.Close()
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("Write updates: %v", err)
+	}
+	_ = updates.Close()
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.used_ops_total"); got == 0 {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("span-native used ops = 0, want buffered leaf-log output path")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.flush_apply.leaf_log_output.append_calls_total"); got == 0 {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("leaf-log append calls = 0, want committed buffered output")
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		_ = leafLog.Close()
+		t.Fatalf("Close db: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("Close leaf log: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	for _, key := range [][]byte{[]byte("key-000000"), []byte("key-001029-007"), []byte("key-003079-047")} {
+		got, err := reopened.Get(key)
+		if err != nil {
+			t.Fatalf("reopen Get(%q): %v", key, err)
+		}
+		if len(got) == 0 {
+			t.Fatalf("reopen Get(%q) returned empty value", key)
+		}
+	}
+}
+
 func TestFlushApplySpanNativeRootMismatchTracksAbandonedLeafLogOutput(t *testing.T) {
 	d := openFlushApplyLeafLogTestDBWithSpanNative(t, 4, true)
 	putBatch(t, d, 0, 9000, "base")

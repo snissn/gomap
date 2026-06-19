@@ -925,7 +925,7 @@ func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
 	scratch := newMergeScratch()
 
 	var metrics adaptive.Metrics
-	_, splits, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, false)
+	_, splits, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, false, applyRunConfig{})
 	if err != nil {
 		t.Fatalf("mergeLeaf failed: %v", err)
 	}
@@ -1218,7 +1218,7 @@ func BenchmarkMergeLeafOuterLeafBatchScratch(b *testing.B) {
 		builder.SetPageID(0)
 		scratch := z.acquireApplyScratch()
 		var metrics adaptive.Metrics
-		_, _, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, true)
+		_, _, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, true, applyRunConfig{})
 		z.releaseApplyScratch(scratch)
 		if err != nil {
 			b.Fatalf("mergeLeaf: %v", err)
