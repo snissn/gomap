@@ -18,7 +18,9 @@ in [`quantized-prepared-hnsw-closeout-2588.md`](quantized-prepared-hnsw-closeout
 The #2845 per-granule-alpha scalar_u8 default gate is recorded in
 [`scalar-u8-alpha-default-gate-2845.md`](scalar-u8-alpha-default-gate-2845.md);
 it kept per-granule alpha explicit/opt-in and did not promote it as the default
-for new `scalar_u8` declarations.
+for new `scalar_u8` declarations. The #2864 optimization graph starts from the
+baseline/profile runbook in
+[`scalar-u8-alpha-optimization-2865.md`](scalar-u8-alpha-optimization-2865.md).
 
 ## User-visible query modes
 
