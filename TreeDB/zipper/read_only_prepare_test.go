@@ -650,6 +650,59 @@ func TestReadOnlyPrepareResultWorkerRanges(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPrepareResultWorkUnitRangesBoundReadyQueue(t *testing.T) {
+	const spans = 64
+	prepared := ReadOnlyPrepareResult{Ops: spans, PointOps: spans, ExactLeafSpans: true}
+	for i := 0; i < spans; i++ {
+		key := []byte(fmt.Sprintf("k%03d", i))
+		span := ReadOnlyLeafSpan{
+			FirstOpKey:   key,
+			LastOpKey:    key,
+			OpCount:      1,
+			PointOpCount: 1,
+			PointOpStart: i,
+			PointOpEnd:   i + 1,
+			ByteCount:    100,
+		}
+		if i > 0 {
+			span.LowKey = key
+		}
+		if i+1 < spans {
+			span.HighKey = []byte(fmt.Sprintf("k%03d", i+1))
+		}
+		prepared.LeafSpans = append(prepared.LeafSpans, span)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+
+	ranges := prepared.AppendLeafSpanWorkUnitRanges(nil, 4)
+	if len(ranges) <= 4 || len(ranges) > 4*readOnlyLeafSpanWorkUnitQueueFactor {
+		t.Fatalf("work-unit ranges=%d want bounded queue > workers and <= factor cap: %+v", len(ranges), ranges)
+	}
+	if ranges[0].SpanCount <= 1 {
+		t.Fatalf("first work unit spans=%d want grouped adjacent spans", ranges[0].SpanCount)
+	}
+	totalSpans, totalOps, totalBytes := 0, 0, 0
+	for i, r := range ranges {
+		if r.SpanCount <= 0 {
+			t.Fatalf("range %d empty: %+v", i, r)
+		}
+		if i > 0 && r.FirstSpan != ranges[i-1].FirstSpan+ranges[i-1].SpanCount {
+			t.Fatalf("range %d starts at %d after prior %+v", i, r.FirstSpan, ranges[i-1])
+		}
+		totalSpans += r.SpanCount
+		totalOps += r.Ops
+		totalBytes += r.Bytes
+	}
+	if totalSpans != spans || totalOps != spans || totalBytes != spans*100 {
+		t.Fatalf("work units cover spans/ops/bytes=%d/%d/%d want %d/%d/%d", totalSpans, totalOps, totalBytes, spans, spans, spans*100)
+	}
+
+	serialRanges := prepared.AppendLeafSpanWorkUnitRanges(nil, 1)
+	if len(serialRanges) != 1 || serialRanges[0].SpanCount != spans {
+		t.Fatalf("single-worker work units=%+v want one range covering all spans", serialRanges)
+	}
+}
+
 func TestZipperPrepareReadOnlyRandomizedPartition(t *testing.T) {
 	_, z := newReadOnlyPrepareZipper(t)
 	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 1024)
