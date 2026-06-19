@@ -16,10 +16,10 @@ const (
 	// ScalarU8CalibrationModeLegacy preserves the original scalar_u8 v1 contract:
 	// one normalized uint8 code per vector dimension and no alpha side asset.
 	ScalarU8CalibrationModeLegacy ScalarU8CalibrationMode = "legacy"
-	// ScalarU8CalibrationModePerGranuleAlpha opts into the future scalar_u8 v1
-	// per-existing-storage-granule scalar alpha contract. This branch defines
-	// config and identity only; build/search support intentionally fails closed
-	// until downstream implementation issues add alpha assets and scoring.
+	// ScalarU8CalibrationModePerGranuleAlpha opts into the scalar_u8 v1
+	// per-existing-storage-granule scalar alpha contract. Rebuild persists alpha
+	// metadata and encodes rows with their granule alpha; search scoring remains
+	// fail-closed until a scorer explicitly consumes the alpha state.
 	ScalarU8CalibrationModePerGranuleAlpha ScalarU8CalibrationMode = "per_granule_alpha"
 )
 
