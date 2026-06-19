@@ -121,11 +121,14 @@ func (r *columnVectorGraphPhysicalRowReader) prepareScalarU8QuantizedScorer(mode
 	if !ok {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: column_graph %q quantized index %q is not declared", ErrVectorIndexSearchUnavailable, r.def.Name, indexName)
 	}
-	if status.Definition != qdef {
+	if !quantizedVectorIndexDefinitionValuesEqual(status.Definition, qdef) {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q prepared definition mismatch", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetStale, r.def.Name, mode.String(), indexName)
 	}
 	if qdef.Codec != QuantizedVectorCodecScalarU8 || qdef.Version != 1 {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q codec/version=(%q,%d) is not scalar_u8 v1", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, qdef.Codec, qdef.Version)
+	}
+	if !scalarU8CalibrationIsLegacy(qdef) {
+		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q scalar_u8 calibration mode %q is not implemented", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, scalarU8CalibrationMode(qdef))
 	}
 	if r.def.Metric != VectorMetricCosine {
 		return columnVectorGraphScalarU8QuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q quantized index %q metric %q is unsupported for scalar_u8 scorer", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetInvalid, r.def.Name, indexName, r.def.Metric)
@@ -445,7 +448,7 @@ func (r *columnVectorGraphPhysicalRowReader) prepareRabitQQuantizedScorer(mode c
 	if !ok {
 		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: column_graph %q quantized index %q is not declared", ErrVectorIndexSearchUnavailable, r.def.Name, indexName)
 	}
-	if status.Definition != qdef {
+	if !quantizedVectorIndexDefinitionValuesEqual(status.Definition, qdef) {
 		return columnVectorGraphRabitQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q prepared definition mismatch", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetStale, r.def.Name, mode.String(), indexName)
 	}
 	if qdef.Codec != rabitq.CodecName || qdef.Version != rabitq.CodecVersion {
@@ -631,7 +634,7 @@ func (r *columnVectorGraphPhysicalRowReader) prepareBRQQuantizedScorer(mode colu
 	if !ok {
 		return columnVectorGraphBRQQuantizedScorer{}, fmt.Errorf("%w: column_graph %q quantized index %q is not declared", ErrVectorIndexSearchUnavailable, r.def.Name, indexName)
 	}
-	if status.Definition != qdef {
+	if !quantizedVectorIndexDefinitionValuesEqual(status.Definition, qdef) {
 		return columnVectorGraphBRQQuantizedScorer{}, fmt.Errorf("%w: %w: column_graph %q query_mode=%s quantized index %q prepared definition mismatch", ErrVectorIndexSearchUnavailable, errColumnVectorGraphQuantizedAssetStale, r.def.Name, mode.String(), indexName)
 	}
 	if qdef.Codec != brq.CodecName || qdef.Version != brq.CodecVersion {

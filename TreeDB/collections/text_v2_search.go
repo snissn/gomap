@@ -2171,7 +2171,7 @@ func validateTextV2PositionPostingAtSnapshot(snap *backenddb.Snapshot, catalog *
 	if !found {
 		return errMalformedTextStorage("missing text-v2 position entry for ordinal %d term %q", ordinal, term)
 	}
-	value, err := decodeTextV2PositionValue(raw)
+	value, err := decodeTextV2PositionValueForTerm(raw, term)
 	if err != nil {
 		return err
 	}

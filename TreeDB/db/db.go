@@ -356,6 +356,7 @@ type DB struct {
 	flushApplyPublishFinalInstallNs               atomic.Uint64
 	flushApplyGuardedPublishCalls                 atomic.Uint64
 	flushApplyGuardedPublishNs                    atomic.Uint64
+	flushApplyLeafLogOutputReservationWaitNs      atomic.Uint64
 	flushApplyLeafLogOutputAppendWaitNs           atomic.Uint64
 	flushApplyLeafLogOutputAppendCalls            atomic.Uint64
 	flushApplyLeafLogOutputAppendPages            atomic.Uint64

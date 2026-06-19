@@ -339,7 +339,33 @@ uvarint TermLen
 bytes Term[TermLen]
 ```
 
-Position values are versioned and fail closed:
+Position values are versioned and fail closed. New writers use value version 2;
+readers still accept legacy value version 1 for pre-alpha fixtures.
+
+Version 2 omits the duplicate term string already present in the position key,
+retains an independent key/value term binding via the exact term length plus a
+40-bit SHA-256 fingerprint, and delta-codes strictly increasing positions:
+
+```text
+u8      ValueVersion  = 2
+uvarint FormatVersion = 1
+uvarint Ordinal
+uvarint Generation
+uvarint TermLen
+bytes[5] TermFingerprint40  // first 5 bytes of SHA-256(term)
+uvarint FieldEntryCount
+
+// repeated FieldEntryCount times, sorted by field index
+uvarint FieldIndex
+uvarint FieldTermFrequency
+uvarint PositionCount
+uvarint FirstPosition
+uvarint PositionDelta[PositionCount-1]
+uvarint OffsetCount
+repeated OffsetCount: uvarint Start, uvarint End
+```
+
+Legacy version 1 values include the full term string and absolute positions:
 
 ```text
 u8      ValueVersion  = 1
@@ -1386,7 +1412,9 @@ when an existing catalog entry has identical normalized metadata; incompatible
 metadata fails closed before advancing `AppliedCommandLSN`.
 
 Collection vector-index declarations are stored in the canonical collection
-metadata JSON under top-level `vector_indexes`. Quantized score-plane
+metadata JSON under top-level `vector_indexes`. The current collection metadata
+JSON version is `5`, which includes the persisted `scalar_u8_calibration`
+semantics for quantized scalar_u8 score planes. Quantized score-plane
 declarations, when present, live under `vector_indexes[].quantized_indexes` and
 are declarations only until matching derived assets are built and loaded; explicit
 quantized query modes must fail closed when those assets are absent or stale.
