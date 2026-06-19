@@ -1463,6 +1463,7 @@ type columnTypedColumnTimeOrderCodeColumn struct {
 	PartColumn       typedcolumn.ColumnPartColumn
 	Cardinality      int
 	DictionaryByCode map[int64]string
+	Nullable         bool
 }
 
 type columnTypedColumnTimeOrderPredicateColumn struct {
@@ -1483,7 +1484,9 @@ type columnTypedColumnTimeOrderTopKPart struct {
 	decodedGranule int
 	timeValues     []int64
 	groupCodes     []uint32
+	groupValid     []bool
 	predicateCodes [][]uint32
+	predicateValid [][]bool
 }
 
 // decodeTypedColumnPhysicalQueryTimeOrderTopKPart prepares the q4a
@@ -1546,7 +1549,7 @@ func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysi
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
 
-	group := columnTypedColumnTimeOrderCodeColumn{PartColumn: groupPartColumn, Cardinality: cardinality, DictionaryByCode: groupColumn.ReverseDictionary}
+	group := columnTypedColumnTimeOrderCodeColumn{PartColumn: groupPartColumn, Cardinality: cardinality, DictionaryByCode: groupColumn.ReverseDictionary, Nullable: groupColumn.Field.Nullable}
 	predicates := make([]columnTypedColumnTimeOrderPredicateColumn, 0, len(plan.PredicateSpecs))
 	for _, spec := range plan.PredicateSpecs {
 		if spec.column == plan.GroupColumn {
@@ -1566,7 +1569,7 @@ func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysi
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
 		predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{
-			CodeColumn: columnTypedColumnTimeOrderCodeColumn{PartColumn: predicatePartColumn, Cardinality: predicateCardinality, DictionaryByCode: predicateColumn.ReverseDictionary},
+			CodeColumn: columnTypedColumnTimeOrderCodeColumn{PartColumn: predicatePartColumn, Cardinality: predicateCardinality, DictionaryByCode: predicateColumn.ReverseDictionary, Nullable: predicateColumn.Field.Nullable},
 			Allowed:    allowed,
 			RejectsAll: rejectsAll,
 		})
@@ -1675,12 +1678,21 @@ func (p *columnTypedColumnTimeOrderTopKPart) resetTimeOrderTopKScan() {
 	p.decodedGranule = -1
 	p.timeValues = p.timeValues[:0]
 	p.groupCodes = p.groupCodes[:0]
+	p.groupValid = p.groupValid[:0]
 	if cap(p.predicateCodes) < len(p.Predicates) {
 		p.predicateCodes = make([][]uint32, len(p.Predicates))
 	} else {
 		p.predicateCodes = p.predicateCodes[:len(p.Predicates)]
 		for idx := range p.predicateCodes {
 			p.predicateCodes[idx] = p.predicateCodes[idx][:0]
+		}
+	}
+	if cap(p.predicateValid) < len(p.Predicates) {
+		p.predicateValid = make([][]bool, len(p.Predicates))
+	} else {
+		p.predicateValid = p.predicateValid[:len(p.Predicates)]
+		for idx := range p.predicateValid {
+			p.predicateValid[idx] = p.predicateValid[idx][:0]
 		}
 	}
 }
@@ -1745,6 +1757,9 @@ func (p *columnTypedColumnTimeOrderTopKPart) evaluateTimeOrderTopKRow(granuleIdx
 		if rowInGranule < 0 || rowInGranule >= len(codes) {
 			return "", false, decoded, blocks, decodedBytes, fmt.Errorf("collections: time-order topK predicate row=%d outside decoded rows=%d", rowInGranule, len(codes))
 		}
+		if valid := p.predicateValid[predIdx]; valid != nil && !columnTypedColumnDenseCodeValid(valid, rowInGranule) {
+			return "", false, decoded, blocks, decodedBytes, nil
+		}
 		code := codes[rowInGranule]
 		word := int(code / 64)
 		bit := uint(code % 64)
@@ -1754,6 +1769,9 @@ func (p *columnTypedColumnTimeOrderTopKPart) evaluateTimeOrderTopKRow(granuleIdx
 	}
 	if rowInGranule < 0 || rowInGranule >= len(p.groupCodes) {
 		return "", false, decoded, blocks, decodedBytes, fmt.Errorf("collections: time-order topK group row=%d outside decoded rows=%d", rowInGranule, len(p.groupCodes))
+	}
+	if !columnTypedColumnDenseCodeValid(p.groupValid, rowInGranule) {
+		return "", true, decoded, blocks, decodedBytes, nil
 	}
 	groupCode := p.groupCodes[rowInGranule]
 	if uint64(groupCode) >= uint64(p.Group.Cardinality) {
@@ -1797,7 +1815,12 @@ func (p *columnTypedColumnTimeOrderTopKPart) ensureTimeOrderTopKGranuleDecoded(g
 	}
 	var groupBytes uint64
 	var groupBlocks int
-	p.groupCodes, groupBytes, groupBlocks, err = decodeTypedColumnUint32CodesForRowRange(p.Group.PartColumn, p.Group.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK group", p.groupCodes)
+	if p.Group.Nullable {
+		p.groupCodes, p.groupValid, groupBytes, groupBlocks, err = decodeTypedColumnNullableUint32CodesForRowRange(p.Group.PartColumn, p.Group.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK group", p.groupCodes, p.groupValid)
+	} else {
+		p.groupCodes, groupBytes, groupBlocks, err = decodeTypedColumnUint32CodesForRowRange(p.Group.PartColumn, p.Group.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK group", p.groupCodes)
+		p.groupValid = nil
+	}
 	decodedBytes += groupBytes
 	blocks += groupBlocks
 	if err != nil {
@@ -1806,11 +1829,17 @@ func (p *columnTypedColumnTimeOrderTopKPart) ensureTimeOrderTopKGranuleDecoded(g
 	for idx, predicate := range p.Predicates {
 		if predicate.UsesGroupCode {
 			p.predicateCodes[idx] = p.groupCodes
+			p.predicateValid[idx] = p.groupValid
 			continue
 		}
 		var predicateBytes uint64
 		var predicateBlocks int
-		p.predicateCodes[idx], predicateBytes, predicateBlocks, err = decodeTypedColumnUint32CodesForRowRange(predicate.CodeColumn.PartColumn, predicate.CodeColumn.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK predicate", p.predicateCodes[idx])
+		if predicate.CodeColumn.Nullable {
+			p.predicateCodes[idx], p.predicateValid[idx], predicateBytes, predicateBlocks, err = decodeTypedColumnNullableUint32CodesForRowRange(predicate.CodeColumn.PartColumn, predicate.CodeColumn.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK predicate", p.predicateCodes[idx], p.predicateValid[idx])
+		} else {
+			p.predicateCodes[idx], predicateBytes, predicateBlocks, err = decodeTypedColumnUint32CodesForRowRange(predicate.CodeColumn.PartColumn, predicate.CodeColumn.Cardinality, granule.FirstRow, granule.RowCount, "time-order topK predicate", p.predicateCodes[idx])
+			p.predicateValid[idx] = nil
+		}
 		decodedBytes += predicateBytes
 		blocks += predicateBlocks
 		if err != nil {
@@ -1923,6 +1952,77 @@ func decodeTypedColumnUint32CodesForRowRange(partColumn typedcolumn.ColumnPartCo
 	return out, decodedBytes, blocks, nil
 }
 
+func decodeTypedColumnNullableUint32CodesForRowRange(partColumn typedcolumn.ColumnPartColumn, cardinality, firstRow, rowCount int, role string, dst []uint32, validDst []bool) ([]uint32, []bool, uint64, int, error) {
+	if rowCount < 0 || firstRow < 0 {
+		return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s invalid row range first=%d rows=%d", role, firstRow, rowCount)
+	}
+	if rowCount == 0 {
+		return dst[:0], validDst[:0], 0, 0, nil
+	}
+	limit := firstRow + rowCount
+	out := dst[:0]
+	if cap(out) < rowCount {
+		out = make([]uint32, 0, rowCount)
+	}
+	valid := validDst[:0]
+	if cap(valid) < rowCount {
+		valid = make([]bool, 0, rowCount)
+	}
+	var valueScratch []int64
+	var nullScratch []bool
+	var defaultScratch []bool
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	blocks := 0
+	for blockIdx, block := range partColumn.Blocks {
+		blockFirst := block.Descriptor.FirstRow
+		blockLimit := blockFirst + block.Descriptor.RowCount
+		if blockLimit <= firstRow {
+			continue
+		}
+		if blockFirst >= limit {
+			break
+		}
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return nil, nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s block %d min/max [%d,%d] outside cardinality %d", role, blockIdx, g.Min, g.Max, cardinality)
+			}
+		}
+		values, nulls, defaults, err := reader.DecodeNullableInt64Into(valueScratch[:0], nullScratch[:0], defaultScratch[:0], g)
+		if err != nil {
+			return nil, nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s block %d: %w", role, blockIdx, err)
+		}
+		if len(values) != block.Descriptor.RowCount || len(nulls) != block.Descriptor.RowCount || len(defaults) != block.Descriptor.RowCount {
+			return nil, nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s block %d decoded rows values/nulls/defaults=%d/%d/%d want %d", role, blockIdx, len(values), len(nulls), len(defaults), block.Descriptor.RowCount)
+		}
+		start := max(firstRow, blockFirst)
+		end := min(limit, blockLimit)
+		for row := start - blockFirst; row < end-blockFirst; row++ {
+			if nulls[row] || defaults[row] {
+				out = append(out, 0)
+				valid = append(valid, false)
+				continue
+			}
+			code := values[row]
+			if code < 0 || uint64(code) >= uint64(cardinality) || code > int64(^uint32(0)) {
+				return nil, nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s code=%d outside cardinality=%d", role, code, cardinality)
+			}
+			out = append(out, uint32(code))
+			valid = append(valid, true)
+		}
+		valueScratch = values
+		nullScratch = nulls
+		defaultScratch = defaults
+		decodedBytes += uint64(g.RawBytes)
+		blocks++
+	}
+	if len(out) != rowCount || len(valid) != rowCount {
+		return nil, nil, decodedBytes, blocks, fmt.Errorf("collections: dense typed-column %s decoded rows codes/valid=%d/%d want range rows=%d", role, len(out), len(valid), rowCount)
+	}
+	return out, valid, decodedBytes, blocks, nil
+}
+
 // decodeTypedColumnPhysicalQueryDenseInt64SpanPart prepares the q5 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
@@ -1974,9 +2074,20 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column int64-span value column %q type=%s", ErrColumnQueryPlanUnsupported, plan.ValueColumn, valuePartColumn.Definition.Type)
 	}
 
-	groupCodes, groupDecodedBytes, groupBlocks, err := decodeTypedColumnDenseUint32Codes(groupPartColumn, cardinality, summary.Rows, "int64-span group")
-	if err != nil {
-		return columnTypedColumnPhysicalQueryPart{}, err
+	var groupCodes []uint32
+	var groupValid []bool
+	var groupDecodedBytes uint64
+	var groupBlocks int
+	if groupColumn.Field.Nullable {
+		groupCodes, groupValid, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseNullableUint32Codes(groupPartColumn, cardinality, summary.Rows, "int64-span group")
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+	} else {
+		groupCodes, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseUint32Codes(groupPartColumn, cardinality, summary.Rows, "int64-span group")
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
 	}
 	values, valueDecodedBytes, valueBlocks, err := decodeTypedColumnDenseInt64Values(valuePartColumn, summary.Rows, "int64-span value")
 	if err != nil {
@@ -2015,6 +2126,7 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 			Cardinality:      cardinality,
 			DictionaryByCode: groupColumn.ReverseDictionary,
 			GroupCodes:       groupCodes,
+			GroupValid:       groupValid,
 			Values:           values,
 			Predicates:       predicates,
 		},
@@ -2035,14 +2147,18 @@ func typedColumnDenseStringCodeColumn(adapterPart *typedColumnAdapterPart, field
 			break
 		}
 	}
-	if adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
-		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("%w: dense typed-column %s column %q is not a non-null low-cardinality string", ErrColumnQueryPlanUnsupported, role, column)
+	wantEncoding := typedcolumn.EncodingLowCardinalityUint32
+	if adapterColumn.Field.Nullable {
+		wantEncoding = typedcolumn.EncodingNullableInt64
+	}
+	if adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != wantEncoding {
+		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("%w: dense typed-column %s column %q is not a compatible low-cardinality string", ErrColumnQueryPlanUnsupported, role, column)
 	}
 	partColumn, ok := adapterPart.Part.Columns[adapterColumn.Definition.Name]
 	if !ok {
 		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s missing column %q", role, adapterColumn.Definition.Name)
 	}
-	if partColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || partColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 || partColumn.Definition.Cardinality == 0 {
+	if partColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || partColumn.Definition.Encoding != wantEncoding || (!adapterColumn.Field.Nullable && partColumn.Definition.Cardinality == 0) {
 		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("%w: dense typed-column %s column %q type=%s encoding=%s cardinality=%d", ErrColumnQueryPlanUnsupported, role, column, partColumn.Definition.Type, partColumn.Definition.Encoding, partColumn.Definition.Cardinality)
 	}
 	if uint64(int(partColumn.Definition.Cardinality)) != uint64(partColumn.Definition.Cardinality) {
@@ -2081,6 +2197,13 @@ func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fi
 	}
 	if matchedLiterals == 0 {
 		return columnTypedColumnDensePredicatePart{RejectsAll: true}, 0, 0, nil
+	}
+	if adapterColumn.Field.Nullable {
+		codes, valid, decodedBytes, blocks, err := decodeTypedColumnDenseNullableUint32Codes(partColumn, cardinality, rows, "predicate")
+		if err != nil {
+			return columnTypedColumnDensePredicatePart{}, 0, 0, err
+		}
+		return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed}, decodedBytes, blocks, nil
 	}
 	codes, decodedBytes, blocks, err := decodeTypedColumnDenseUint32Codes(partColumn, cardinality, rows, "predicate")
 	if err != nil {
@@ -2121,6 +2244,10 @@ func decodeTypedColumnDenseUint32Codes(partColumn typedcolumn.ColumnPartColumn, 
 		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want part rows=%d", role, len(codes), rows)
 	}
 	return codes, decodedBytes, len(partColumn.Blocks), nil
+}
+
+func decodeTypedColumnDenseNullableUint32Codes(partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string) ([]uint32, []bool, uint64, int, error) {
+	return decodeTypedColumnNullableUint32CodesForRowRange(partColumn, cardinality, 0, rows, role, make([]uint32, 0, rows), make([]bool, 0, rows))
 }
 
 func decodeTypedColumnDenseInt64Values(partColumn typedcolumn.ColumnPartColumn, rows int, role string) ([]int64, uint64, int, error) {
