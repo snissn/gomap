@@ -7983,6 +7983,16 @@ type DB struct {
 	checkpointActiveBackgroundFlushWaitNs                        atomic.Uint64
 	checkpointActiveBackgroundFlushWaitMaxNs                     atomic.Uint64
 	checkpointActiveBackgroundFlushWaitSamples                   atomic.Uint64
+	checkpointDebtMemtablesLast                                  atomic.Uint64
+	checkpointDebtMemtablesMax                                   atomic.Uint64
+	checkpointDebtBytesLast                                      atomic.Uint64
+	checkpointDebtBytesMax                                       atomic.Uint64
+	checkpointBarrierWaitNs                                      atomic.Uint64
+	checkpointBarrierWaitMaxNs                                   atomic.Uint64
+	checkpointBarrierWaitSamples                                 atomic.Uint64
+	checkpointFlushAllWorkerPasses                               atomic.Uint64
+	checkpointFlushAllWorkersTotal                               atomic.Uint64
+	checkpointFlushAllWorkersMax                                 atomic.Uint64
 	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
 	commandWALCheckpointPublishSeparate                          atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
@@ -21060,6 +21070,57 @@ func (db *DB) recordCheckpointCutover(d time.Duration) {
 	}
 }
 
+func (db *DB) checkpointDebtSnapshotLocked() (memtables uint64, bytes uint64) {
+	if db == nil {
+		return 0, 0
+	}
+	if queued := len(db.queue); queued > 0 {
+		memtables += uint64(queued)
+	}
+	if mutableBytes := db.mutableBytes.Load(); mutableBytes > 0 {
+		// Count the mutable shard set as one pending checkpoint cutover unit. The
+		// exact shard count is intentionally avoided here because writers mutate
+		// shard-local tables under shard locks, while this checkpoint-debt snapshot
+		// only needs a cheap lock-free indication of foreground dirtiness.
+		memtables++
+		bytes += uint64(mutableBytes)
+	}
+	if backlog := db.queueBacklogBytes.Load(); backlog > 0 {
+		bytes += uint64(backlog)
+	}
+	return memtables, bytes
+}
+
+func (db *DB) observeCheckpointDebt(memtables, bytes uint64) {
+	if db == nil {
+		return
+	}
+	db.checkpointDebtMemtablesLast.Store(memtables)
+	db.checkpointDebtBytesLast.Store(bytes)
+	updateAtomicMaxUint64(&db.checkpointDebtMemtablesMax, memtables)
+	updateAtomicMaxUint64(&db.checkpointDebtBytesMax, bytes)
+}
+
+func (db *DB) observeCheckpointBarrierWait(d time.Duration) {
+	if db == nil || d <= 0 {
+		return
+	}
+	ns := uint64(d.Nanoseconds())
+	db.checkpointBarrierWaitNs.Add(ns)
+	db.checkpointBarrierWaitSamples.Add(1)
+	updateAtomicMaxUint64(&db.checkpointBarrierWaitMaxNs, ns)
+}
+
+func (db *DB) observeCheckpointFlushAllWorkers(workers int) {
+	if db == nil || workers <= 0 || !db.checkpointing.Load() {
+		return
+	}
+	u := uint64(workers)
+	db.checkpointFlushAllWorkerPasses.Add(1)
+	db.checkpointFlushAllWorkersTotal.Add(u)
+	updateAtomicMaxUint64(&db.checkpointFlushAllWorkersMax, u)
+}
+
 type checkpointStageStats struct {
 	lastNs  atomic.Uint64
 	totalNs atomic.Uint64
@@ -21274,9 +21335,23 @@ func (db *DB) Checkpoint() error {
 	}()
 	// Note: Any code path that takes both flushMu and checkpointMu must acquire
 	// flushMu first to avoid deadlocks.
+	db.mu.RLock()
+	checkpointDebtMemtables, checkpointDebtBytes := db.checkpointDebtSnapshotLocked()
+	db.mu.RUnlock()
+	db.observeCheckpointDebt(checkpointDebtMemtables, checkpointDebtBytes)
+	if checkpointDebtMemtables > 0 || checkpointDebtBytes > 0 {
+		// Kick the continuous drainer before the explicit checkpoint tries to take
+		// ownership. If a background pass is already running, the checkpoint below
+		// becomes a barrier over that work instead of silently leaving debt idle
+		// until the forced boundary arrives.
+		db.TriggerFlush()
+	}
 	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
-	flushMuWaitStart := time.Now()
+	barrierWaitStart := time.Now()
+	flushMuWaitStart := barrierWaitStart
 	db.flushMu.Lock()
+	barrierWaitDur := time.Since(barrierWaitStart)
+	db.observeCheckpointBarrierWait(barrierWaitDur)
 	flushMuWaitDur := time.Since(flushMuWaitStart)
 	flushMuWait := uint64(flushMuWaitDur)
 	db.checkpointFlushMuWaitNs.Add(flushMuWait)
@@ -24514,6 +24589,7 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 		if activeCount == 0 {
 			return
 		}
+		db.observeCheckpointFlushAllWorkers(activeCount)
 		passCommandPublish := commandPublish
 		if activeCount != 1 {
 			// Preserve the previous behavior: command-WAL checkpoint publication is
@@ -26812,6 +26888,16 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_total"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitNs.Load())
 	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_max"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitMaxNs.Load())
 	stats["treedb.cache.checkpoint.active_background_flush_wait_samples"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitSamples.Load())
+	stats["treedb.cache.checkpoint.debt_memtables_last"] = fmt.Sprintf("%d", db.checkpointDebtMemtablesLast.Load())
+	stats["treedb.cache.checkpoint.debt_memtables_max"] = fmt.Sprintf("%d", db.checkpointDebtMemtablesMax.Load())
+	stats["treedb.cache.checkpoint.debt_bytes_last"] = fmt.Sprintf("%d", db.checkpointDebtBytesLast.Load())
+	stats["treedb.cache.checkpoint.debt_bytes_max"] = fmt.Sprintf("%d", db.checkpointDebtBytesMax.Load())
+	stats["treedb.cache.checkpoint.barrier_wait_ns_total"] = fmt.Sprintf("%d", db.checkpointBarrierWaitNs.Load())
+	stats["treedb.cache.checkpoint.barrier_wait_ns_max"] = fmt.Sprintf("%d", db.checkpointBarrierWaitMaxNs.Load())
+	stats["treedb.cache.checkpoint.barrier_wait_samples"] = fmt.Sprintf("%d", db.checkpointBarrierWaitSamples.Load())
+	stats["treedb.cache.checkpoint.flush_all.worker_passes_total"] = fmt.Sprintf("%d", db.checkpointFlushAllWorkerPasses.Load())
+	stats["treedb.cache.checkpoint.flush_all.workers_total"] = fmt.Sprintf("%d", db.checkpointFlushAllWorkersTotal.Load())
+	stats["treedb.cache.checkpoint.flush_all.workers_max"] = fmt.Sprintf("%d", db.checkpointFlushAllWorkersMax.Load())
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
 	appendCheckpointStageStats(stats, "cutover", &db.checkpointStageCutover)
 	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
