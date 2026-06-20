@@ -24954,7 +24954,7 @@ func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPubl
 	if totalLen == 0 && totalSpans > 0 {
 		buildStart := time.Now()
 		backendBatch := db.newBackendBatchWithSize(totalSpans)
-		setBackendBatchSpanNativeFallback(backendBatch, flushSpanNativeFallbackReasonForCollectionMode(mode))
+		setBackendBatchSpanNativeFallback(backendBatch, flushRangeOnlySpanNativeFallbackReasonForCollectionMode(mode))
 		reserveBackendBatchOps(backendBatch, totalSpans)
 		pending := 0
 		for _, unit := range units {

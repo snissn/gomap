@@ -24,7 +24,7 @@ func requirePublicStatUint64(t *testing.T, db *treedb.DB, key string) uint64 {
 	return v
 }
 
-func TestSpanNativeCheckpointDrainFallbackReopenRewriteAndGC(t *testing.T) {
+func TestSpanNativeCheckpointDrainUsesSpanNativeReopenRewriteAndGC(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.Options{
 		Dir:                   dir,
@@ -55,11 +55,31 @@ func TestSpanNativeCheckpointDrainFallbackReopenRewriteAndGC(t *testing.T) {
 	}
 	if err := db.Checkpoint(); err != nil {
 		_ = db.Close()
-		t.Fatalf("checkpoint: %v", err)
+		t.Fatalf("checkpoint base: %v", err)
 	}
-	if got := requirePublicStatUint64(t, db, "treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total"); got == 0 {
+	usedBefore := requirePublicStatUint64(t, db, "treedb.flush_apply.span_native.used_ops_total")
+	closeFallbackBefore := requirePublicStatUint64(t, db, "treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total")
+	for i := 0; i < 96; i++ {
+		key := fmt.Sprintf("key-%04d", i)
+		value := bytes.Repeat([]byte{byte(251 - i%251)}, 2048)
+		values[key] = value
+		if err := db.Set([]byte(key), value); err != nil {
+			_ = db.Close()
+			t.Fatalf("update %s: %v", key, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
 		_ = db.Close()
-		t.Fatalf("close_or_checkpoint fallback ops=0 want checkpoint drain to force serial-safe fallback")
+		t.Fatalf("checkpoint update: %v", err)
+	}
+	usedAfter := requirePublicStatUint64(t, db, "treedb.flush_apply.span_native.used_ops_total")
+	if usedAfter <= usedBefore {
+		_ = db.Close()
+		t.Fatalf("span-native used ops did not increase across checkpoint point drain: before=%d after=%d", usedBefore, usedAfter)
+	}
+	if got := requirePublicStatUint64(t, db, "treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total"); got != closeFallbackBefore {
+		_ = db.Close()
+		t.Fatalf("close_or_checkpoint fallback ops changed during checkpoint point drain: before=%d after=%d", closeFallbackBefore, got)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)

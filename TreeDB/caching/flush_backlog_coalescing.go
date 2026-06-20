@@ -90,11 +90,24 @@ type backendBatchSpanNativeFallbackSetter interface {
 
 func flushSpanNativeFallbackReasonForCollectionMode(mode flushCollectionMode) backenddb.FlushSpanRunFallbackReason {
 	switch mode {
-	case flushCollectionCheckpoint, flushCollectionClose:
+	case flushCollectionClose:
+		// Keep close conservative: Close may be running after background workers are
+		// quiescing and must not start new optimistic span-native durable output
+		// unless that path is separately scoped and proven. Checkpoint point drains
+		// are allowed to use span-native apply so long as the ordinary eligibility
+		// checks below still pass; unsafe range/command/lane/root/output cases keep
+		// their fail-closed fallback reasons.
 		return backenddb.FlushSpanRunFallbackCloseOrCheckpoint
 	default:
 		return backenddb.FlushSpanRunFallbackUnknown
 	}
+}
+
+func flushRangeOnlySpanNativeFallbackReasonForCollectionMode(mode flushCollectionMode) backenddb.FlushSpanRunFallbackReason {
+	if mode == flushCollectionClose {
+		return backenddb.FlushSpanRunFallbackCloseOrCheckpoint
+	}
+	return backenddb.FlushSpanRunFallbackRangeDeleteBarrier
 }
 
 func setBackendBatchSpanNativeFallback(backendBatch batch.Interface, reason backenddb.FlushSpanRunFallbackReason) {
