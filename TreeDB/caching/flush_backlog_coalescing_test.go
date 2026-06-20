@@ -423,6 +423,47 @@ func TestFlushCollectionModeRangeOnlyCheckpointFallbackReason(t *testing.T) {
 	}
 }
 
+func TestCheckpointFrontierDrainLeavesPostFrontierQueued(t *testing.T) {
+	db, backend := newCoalescingTestDB(t, Options{}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtables(t, db, 2, "frontier")
+	db.mu.Lock()
+	frontier := db.captureCheckpointFrontierLocked()
+	db.observeCheckpointFrontierCapture(frontier)
+	db.mu.Unlock()
+	enqueuePointMemtables(t, db, 1, "postfrontier")
+
+	db.checkpointing.Store(true)
+	db.flushMu.Lock()
+	db.flushCheckpointFrontierLocked(false, nil, frontier)
+	db.observeCheckpointFrontierDrain(frontier)
+	db.flushMu.Unlock()
+	db.checkpointing.Store(false)
+
+	backend.mu.RLock()
+	_, firstOK := backend.data["frontier-000-000"]
+	_, secondOK := backend.data["frontier-001-000"]
+	_, postOK := backend.data["postfrontier-000-000"]
+	backend.mu.RUnlock()
+	if !firstOK || !secondOK {
+		t.Fatalf("frontier keys flushed to backend first=%t second=%t", firstOK, secondOK)
+	}
+	if postOK {
+		t.Fatalf("post-frontier key was flushed to backend")
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.checkpoint.frontier.units_last"); got != 2 {
+		t.Fatalf("frontier units_last=%d want 2", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.checkpoint.frontier.drained_units_last"); got != 2 {
+		t.Fatalf("frontier drained_units_last=%d want 2", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.checkpoint.frontier.post_units_last"); got != 1 {
+		t.Fatalf("frontier post_units_last=%d want 1", got)
+	}
+	if got, err := db.Get([]byte("postfrontier-000-000")); err != nil || string(got) != "value" {
+		t.Fatalf("post-frontier key should remain readable from cache, got=%q err=%v", got, err)
+	}
+}
+
 func TestFlushBacklogCoalescingCoalescedRunPreservesShadowing(t *testing.T) {
 	db, _ := newCoalescingTestDB(t, Options{
 		FlushBacklogCoalescing:                  true,
