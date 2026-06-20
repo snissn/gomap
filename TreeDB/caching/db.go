@@ -24771,9 +24771,6 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 		db.flushAllLocked(reqSync, commandPublish)
 		return
 	}
-	if len(frontier.ids) == 0 {
-		return
-	}
 	db.beginFlushCoordinatorPass()
 	defer db.endFlushCoordinatorPass()
 	origSync := reqSync
@@ -24789,6 +24786,9 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 		if !ok {
 			return
 		}
+	}
+	if len(frontier.ids) == 0 {
+		return
 	}
 	lanes := len(db.lanes)
 	if lanes == 0 {

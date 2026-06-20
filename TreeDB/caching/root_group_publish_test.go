@@ -654,6 +654,55 @@ func TestInstallPublishedRootSetLocked_NewerGenerationReplacesDirtyPublishGroup(
 	}
 }
 
+func TestFlushCheckpointEmptyFrontierPublishesDirtyRoots(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		JournalLanes:             1,
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
+		AllowUnsafe:              true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	db.mu.Lock()
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 10,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "p", value: "v"}), rootID: 101},
+		},
+	}) {
+		db.mu.Unlock()
+		t.Fatal("expected install to succeed")
+	}
+	hookCalls := 0
+	db.rootPublishHook = func(*rootPublishGroup) error {
+		hookCalls++
+		return nil
+	}
+	db.mu.Unlock()
+
+	db.flushMu.Lock()
+	db.flushCheckpointFrontierLocked(false, nil, checkpointFrontier{captured: true})
+	db.flushMu.Unlock()
+
+	db.mu.Lock()
+	dirtyPending := db.dirtyRootPublishGroupPending
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+
+	if hookCalls != 1 {
+		t.Fatalf("hookCalls=%d want 1", hookCalls)
+	}
+	if dirtyPending {
+		t.Fatal("expected dirty publish group to clear after empty-frontier checkpoint publish")
+	}
+}
+
 func TestFlushSome_PrefersDirtyRootPublishGroupBeforeLaneWork(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
