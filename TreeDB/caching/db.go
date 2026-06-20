@@ -21118,9 +21118,11 @@ func (db *DB) observeCheckpointDebt(memtables, bytes uint64) {
 }
 
 type checkpointFrontier struct {
-	ids   map[uint64]struct{}
-	units uint64
-	bytes uint64
+	ids            map[uint64]struct{}
+	units          uint64
+	bytes          uint64
+	captured       bool
+	missingQueueID bool
 }
 
 func (f checkpointFrontier) contains(id uint64) bool {
@@ -21132,7 +21134,7 @@ func (f checkpointFrontier) contains(id uint64) bool {
 }
 
 func (db *DB) captureCheckpointFrontierLocked() checkpointFrontier {
-	var f checkpointFrontier
+	f := checkpointFrontier{captured: true}
 	if db == nil || len(db.queue) == 0 {
 		return f
 	}
@@ -21143,6 +21145,7 @@ func (db *DB) captureCheckpointFrontierLocked() checkpointFrontier {
 			id = db.queueIDs[i]
 		}
 		if id == 0 {
+			f.missingQueueID = true
 			continue
 		}
 		f.ids[id] = struct{}{}
@@ -21573,6 +21576,11 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	frontier := db.captureCheckpointFrontierLocked()
+	if frontier.missingQueueID {
+		db.mu.Unlock()
+		releaseWriteMu()
+		return errors.New("cachingdb: checkpoint frontier missing stable queue id")
+	}
 	db.observeCheckpointFrontierCapture(frontier)
 	walDir := db.dir
 	preRotateWALPaths := db.currentWALPaths()
@@ -21649,6 +21657,13 @@ func (db *DB) Checkpoint() error {
 	flushAllStart := time.Now()
 	db.flushCheckpointFrontierLocked(true, commandWALPublishPiggyback, frontier)
 	db.observeCheckpointFrontierDrain(frontier)
+	postFrontierWALDebt := false
+	if frontier.captured {
+		db.mu.RLock()
+		_, _, postUnits, _ := db.checkpointFrontierResidualLocked(frontier)
+		postFrontierWALDebt = postUnits > 0 || db.mutableBytes.Load() > 0
+		db.mu.RUnlock()
+	}
 	recordCheckpointStageSince(&db.checkpointStageFlushAll, flushAllStart)
 	leafLogAppendWaitAfter := db.flushApplyLeafLogAppendWaitNs.Load()
 	leafValueLogSyncNs := uint64(valueLogFlushDur.Nanoseconds()) + saturatingSubUint64(leafLogAppendWaitAfter, leafLogAppendWaitBefore)
@@ -21731,7 +21746,7 @@ func (db *DB) Checkpoint() error {
 		currentWALs[path] = struct{}{}
 	}
 	unsafeWALDeletes := make(map[string]struct{})
-	if wroteDuringWALRotate {
+	if wroteDuringWALRotate || postFrontierWALDebt {
 		for _, path := range preRotateWALPaths {
 			if path == "" {
 				continue
@@ -24730,8 +24745,11 @@ func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes i
 }
 
 func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkpointCommandWALPublish, frontier checkpointFrontier) {
-	if len(frontier.ids) == 0 {
+	if !frontier.captured {
 		db.flushAllLocked(reqSync, commandPublish)
+		return
+	}
+	if len(frontier.ids) == 0 {
 		return
 	}
 	db.beginFlushCoordinatorPass()

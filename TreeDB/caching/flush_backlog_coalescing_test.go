@@ -464,6 +464,57 @@ func TestCheckpointFrontierDrainLeavesPostFrontierQueued(t *testing.T) {
 	}
 }
 
+func TestCheckpointEmptyFrontierLeavesPostFrontierQueued(t *testing.T) {
+	db, backend := newCoalescingTestDB(t, Options{}, highSingleOpCoalescingSnapshot())
+	db.mu.Lock()
+	frontier := db.captureCheckpointFrontierLocked()
+	db.observeCheckpointFrontierCapture(frontier)
+	db.mu.Unlock()
+	enqueuePointMemtables(t, db, 1, "emptyfrontier")
+
+	db.checkpointing.Store(true)
+	db.flushMu.Lock()
+	db.flushCheckpointFrontierLocked(false, nil, frontier)
+	db.observeCheckpointFrontierDrain(frontier)
+	db.flushMu.Unlock()
+	db.checkpointing.Store(false)
+
+	backend.mu.RLock()
+	_, postOK := backend.data["emptyfrontier-000-000"]
+	backend.mu.RUnlock()
+	if postOK {
+		t.Fatalf("empty-frontier post key was flushed to backend")
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.checkpoint.frontier.units_last"); got != 0 {
+		t.Fatalf("frontier units_last=%d want 0", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.checkpoint.frontier.post_units_last"); got != 1 {
+		t.Fatalf("frontier post_units_last=%d want 1", got)
+	}
+	if got, err := db.Get([]byte("emptyfrontier-000-000")); err != nil || string(got) != "value" {
+		t.Fatalf("empty-frontier post key should remain readable from cache, got=%q err=%v", got, err)
+	}
+}
+
+func TestCheckpointFrontierMissingQueueIDMarkedIncomplete(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtables(t, db, 1, "missingid")
+	db.mu.Lock()
+	if len(db.queueIDs) == 0 {
+		db.mu.Unlock()
+		t.Fatalf("expected queued unit id")
+	}
+	db.queueIDs[0] = 0
+	frontier := db.captureCheckpointFrontierLocked()
+	db.mu.Unlock()
+	if !frontier.captured {
+		t.Fatalf("frontier not marked captured")
+	}
+	if !frontier.missingQueueID {
+		t.Fatalf("frontier missingQueueID=false want true")
+	}
+}
+
 func TestFlushBacklogCoalescingCoalescedRunPreservesShadowing(t *testing.T) {
 	db, _ := newCoalescingTestDB(t, Options{
 		FlushBacklogCoalescing:                  true,
