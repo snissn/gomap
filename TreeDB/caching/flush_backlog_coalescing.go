@@ -465,22 +465,25 @@ func (db *DB) observeCheckpointFlushBacklogCoalescingDrain(units []flushUnit, to
 	if db == nil || !db.flushBacklogCoalescing || len(units) == 0 {
 		return
 	}
-	baseMaxMemtables, _ := db.baseFlushUnitBudget()
+	baseMaxMemtables, baseTargetBytes := db.baseFlushUnitBudget()
 	if baseMaxMemtables < 1 {
 		baseMaxMemtables = 1
 	}
-	if len(units) <= baseMaxMemtables {
-		db.flushBacklogCoalescingCheckpointBaseBudgetCovered.Add(1)
-		return
-	}
-	baseCount := baseMaxMemtables
-	if baseCount > len(units) {
-		baseCount = len(units)
-	}
-	baseScan := flushUnitBudgetScan{count: baseCount}
-	for i := 0; i < baseCount; i++ {
+	baseScan := flushUnitBudgetScan{}
+	for i := 0; i < len(units); i++ {
+		if baseScan.count >= baseMaxMemtables {
+			break
+		}
+		if baseScan.count > 0 && baseTargetBytes > 0 && baseScan.bytes >= baseTargetBytes {
+			break
+		}
+		baseScan.count++
 		baseScan.bytes += units[i].memBytes
 		baseScan.ops += units[i].memLen
+	}
+	if baseScan.count >= len(units) {
+		db.flushBacklogCoalescingCheckpointBaseBudgetCovered.Add(1)
+		return
 	}
 	selected := flushUnitBudgetScan{count: len(units), bytes: totalBytes, ops: totalOps}
 	db.observeFlushBacklogCoalescingAdmission(baseScan, selected, true)

@@ -319,6 +319,29 @@ func TestFlushBacklogCoalescingCheckpointUsesFrontierOwnedAdmission(t *testing.T
 	}
 }
 
+func TestFlushBacklogCoalescingCheckpointAdmissionAccountsForBaseByteBudget(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{
+		FlushThreshold:         1,
+		FlushBacklogCoalescing: true,
+		FlushBuildConcurrency:  2,
+	}, highSingleOpCoalescingSnapshot())
+	units := []flushUnit{
+		{memBytes: 40 << 20, memLen: 1},
+		{memBytes: 40 << 20, memLen: 1},
+		{memBytes: 40 << 20, memLen: 1},
+	}
+	db.observeCheckpointFlushBacklogCoalescingDrain(units, 120<<20, 3)
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.admitted_runs_total"); got != 1 {
+		t.Fatalf("checkpoint admitted runs=%d want 1", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.base_budget_covered_total"); got != 0 {
+		t.Fatalf("checkpoint base_budget_covered=%d want 0", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.selected_memtables_max"); got != 3 {
+		t.Fatalf("checkpoint selected_memtables_max=%d want 3", got)
+	}
+}
+
 func TestFlushBacklogCoalescingDrainModesBypassAdaptiveAdmission(t *testing.T) {
 	cases := []struct {
 		name string
