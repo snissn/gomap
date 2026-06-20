@@ -151,6 +151,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	SortedGroupedDistinctUsed           bool
 	SortedGroupedDistinctFallbackReason string
 	DenseGroupCountUsed                 bool
+	DenseGroupCountDistinctUsed         bool
 	DenseGroupHourCountUsed             bool
 	DenseInt64SpanUsed                  bool
 	TimeOrderTopKUsed                   bool
@@ -1369,6 +1370,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	}
 	left.SortedGroupedDistinctFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortedGroupedDistinctFallbackReason, right.SortedGroupedDistinctFallbackReason)
 	left.DenseGroupCountUsed = left.DenseGroupCountUsed || right.DenseGroupCountUsed
+	left.DenseGroupCountDistinctUsed = left.DenseGroupCountDistinctUsed || right.DenseGroupCountDistinctUsed
 	left.DenseGroupHourCountUsed = left.DenseGroupHourCountUsed || right.DenseGroupHourCountUsed
 	left.DenseInt64SpanUsed = left.DenseInt64SpanUsed || right.DenseInt64SpanUsed
 	left.TimeOrderTopKUsed = left.TimeOrderTopKUsed || right.TimeOrderTopKUsed
