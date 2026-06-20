@@ -23,6 +23,10 @@ func (c *Collection) SearchHybridTextCandidates(query HybridTextQuery) (HybridCa
 }
 
 func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
+	return c.searchHybridTextCandidatesWithScanBudget(query, allowSet, query.CandidateLimit)
+}
+
+func (c *Collection) searchHybridTextCandidatesWithScanBudget(query HybridTextQuery, allowSet hybridScalarAllowSet, scanBudget int) (HybridCandidateResponse, error) {
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
@@ -36,6 +40,9 @@ func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet 
 		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
 		return response, err
 	}
+	if scanBudget < requested {
+		scanBudget = requested
+	}
 
 	resultMode := textSearchResultScoreOnly
 	if query.IncludeTextMatches {
@@ -45,7 +52,7 @@ func (c *Collection) searchHybridTextCandidates(query HybridTextQuery, allowSet 
 		IndexName:                query.IndexName,
 		Query:                    query.Query,
 		TopK:                     requested,
-		CandidateLimit:           hybridTextCandidateScanCandidateLimit(requested),
+		CandidateLimit:           hybridTextCandidateScanCandidateLimit(scanBudget),
 		IncludeDocuments:         false,
 		textV2AllowedDocumentIDs: allowSet,
 	}, resultMode)
@@ -129,6 +136,7 @@ func hybridTextCandidateStatsFromSearch(requested int, textStats TextSearchStats
 	textCandidatesScored := hybridMaxUint64(textStats.TextCandidatesScored, textStats.CandidatesScored)
 	stats := HybridSearchStats{
 		TextCandidatesRequested:        requested64,
+		TextCandidateBudgetEffective:   requested64,
 		TextCandidatesReturned:         returned64,
 		TextPostingsScanned:            hybridMaxUint64(textStats.TextPostingsScanned, textStats.PostingsScanned),
 		TextPostingBlocksVisited:       textStats.TextPostingBlocksVisited,

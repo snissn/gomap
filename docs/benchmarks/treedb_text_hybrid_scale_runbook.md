@@ -105,11 +105,15 @@ Recommended planning gates before 1M/10M runs:
 - treat 1M as a potentially long local job and 10M as a multi-hour/tens-of-GB job;
 - stop and preserve the artifact directory if guardrails fail unexpectedly.
 
-The 1M selected command uses `ONE_M_CANDIDATE_LIMIT=65536` so the hybrid+scalar
-row can cover the synthetic 6.25% tenant allow-set while preserving score-only,
-zero-document candidate generation. Smaller candidate budgets are still useful
-as diagnostic fail-closed probes, but do not cite them as passing 1M hybrid rows
-if guardrails fail.
+The 1M selected command uses `ONE_M_CANDIDATE_LIMIT=65536` as the fixed
+requested budget so the hybrid+scalar row can cover the synthetic 6.25% tenant
+allow-set while preserving score-only, zero-document candidate generation.
+Current reports also include adaptive budget counters (`text_budget=effective/requested`,
+`vector_budget=effective/requested`, `budget_policy`, `budget_stop`, and
+`budget_fallback`) so top-k RRF rows can show exact effective-budget reductions
+without changing the requested-budget guardrail. Smaller candidate budgets are
+still useful as diagnostic fail-closed probes, but do not cite them as passing
+1M hybrid rows if guardrails fail.
 
 By default, the primary, backfill, and maintenance DB directories are removed at
 successful process exit. Set `KEEP_DB=true` only when you need to inspect storage

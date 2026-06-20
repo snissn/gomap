@@ -91,6 +91,32 @@ const (
 	HybridFailClosedReasonFullDocumentScanForbidden HybridFailClosedReason = "full_document_scan_forbidden"
 )
 
+// HybridCandidateBudgetPolicy reports whether SearchHybrid used the fixed
+// caller-provided source budgets or an exact adaptive RRF budget proof.
+type HybridCandidateBudgetPolicy string
+
+const (
+	HybridCandidateBudgetPolicyFixed       HybridCandidateBudgetPolicy = "fixed"
+	HybridCandidateBudgetPolicyAdaptiveRRF HybridCandidateBudgetPolicy = "adaptive_rrf"
+)
+
+// HybridCandidateBudgetStopReason is a low-cardinality explanation for the
+// candidate-budget decision. Fallback reasons use the same vocabulary.
+type HybridCandidateBudgetStopReason string
+
+const (
+	HybridCandidateBudgetStopReasonNone                   HybridCandidateBudgetStopReason = "none"
+	HybridCandidateBudgetStopReasonFixedPolicy            HybridCandidateBudgetStopReason = "fixed_policy"
+	HybridCandidateBudgetStopReasonNoReduction            HybridCandidateBudgetStopReason = "no_reduction"
+	HybridCandidateBudgetStopReasonEmptyScalarAllowSet    HybridCandidateBudgetStopReason = "empty_scalar_allow_set"
+	HybridCandidateBudgetStopReasonSingleSourceTopK       HybridCandidateBudgetStopReason = "single_source_topk"
+	HybridCandidateBudgetStopReasonExactRRFBound          HybridCandidateBudgetStopReason = "exact_rrf_bound"
+	HybridCandidateBudgetStopReasonRequestedBudgetReached HybridCandidateBudgetStopReason = "requested_budget_reached"
+	HybridCandidateBudgetStopReasonUnsupportedFusion      HybridCandidateBudgetStopReason = "unsupported_fusion"
+	HybridCandidateBudgetStopReasonPostfilterUnsupported  HybridCandidateBudgetStopReason = "postfilter_unsupported"
+	HybridCandidateBudgetStopReasonExactBoundInsufficient HybridCandidateBudgetStopReason = "exact_bound_insufficient"
+)
+
 // HybridTextQuery configures the lexical candidate source. Query syntax,
 // analyzers, and BM25/BM25F scoring are owned by the text-search tracker; this
 // contract fixes only the candidate budget and source naming consumed by hybrid
@@ -251,46 +277,53 @@ type HybridSearchSnapshot struct {
 // HybridSearchStats is the common debug/counter vocabulary for hybrid planning,
 // candidate generation, fusion, scalar filtering, and bounded final fetch.
 type HybridSearchStats struct {
-	TextCandidatesRequested        uint64                 `json:"text_candidates_requested,omitempty"`
-	TextCandidatesReturned         uint64                 `json:"text_candidates_returned,omitempty"`
-	TextPostingsScanned            uint64                 `json:"text_postings_scanned,omitempty"`
-	TextPostingBlocksVisited       uint64                 `json:"text_posting_blocks_visited,omitempty"`
-	TextPostingBlocksSkipped       uint64                 `json:"text_posting_blocks_skipped,omitempty"`
-	TextBlockMaxFallbacks          uint64                 `json:"text_block_max_fallbacks,omitempty"`
-	TextBlockMaxThresholds         uint64                 `json:"text_block_max_thresholds,omitempty"`
-	TextWANDPivots                 uint64                 `json:"text_wand_pivots,omitempty"`
-	TextScalarPrefilterIDs         uint64                 `json:"text_scalar_prefilter_ids,omitempty"`
-	TextScalarPostingBlocksSkipped uint64                 `json:"text_scalar_posting_blocks_skipped,omitempty"`
-	TextScalarPostingsRejected     uint64                 `json:"text_scalar_postings_rejected,omitempty"`
-	TextCandidatesScored           uint64                 `json:"text_candidates_scored,omitempty"`
-	TextStateLookups               uint64                 `json:"text_state_lookups,omitempty"`
-	TextNormLookups                uint64                 `json:"text_norm_lookups,omitempty"`
-	TextMatchDetailsBuilt          uint64                 `json:"text_match_details_built,omitempty"`
-	TextPositionLookups            uint64                 `json:"text_position_lookups,omitempty"`
-	TextPhraseCandidatesChecked    uint64                 `json:"text_phrase_candidates_checked,omitempty"`
-	TextPhraseCandidatesMatched    uint64                 `json:"text_phrase_candidates_matched,omitempty"`
-	VectorCandidatesRequested      uint64                 `json:"vector_candidates_requested,omitempty"`
-	VectorCandidatesReturned       uint64                 `json:"vector_candidates_returned,omitempty"`
-	VectorCandidatesExamined       uint64                 `json:"vector_candidates_examined,omitempty"`
-	VectorEdgesVisited             uint64                 `json:"vector_edges_visited,omitempty"`
-	ScalarPrefilterIDs             uint64                 `json:"scalar_prefilter_ids,omitempty"`
-	ScalarPostfilterChecks         uint64                 `json:"scalar_postfilter_checks,omitempty"`
-	ScalarFilterMatched            uint64                 `json:"scalar_filter_matched,omitempty"`
-	ScalarFilterRejected           uint64                 `json:"scalar_filter_rejected,omitempty"`
-	ScalarFilterSelectivityPPM     uint64                 `json:"scalar_filter_selectivity_ppm,omitempty"`
-	CandidatesFused                uint64                 `json:"candidates_fused,omitempty"`
-	CandidatesAfterFusion          uint64                 `json:"candidates_after_fusion,omitempty"`
-	FusionTextOnly                 uint64                 `json:"fusion_text_only,omitempty"`
-	FusionVectorOnly               uint64                 `json:"fusion_vector_only,omitempty"`
-	FusionBoth                     uint64                 `json:"fusion_both,omitempty"`
-	FusionDuplicateCandidates      uint64                 `json:"fusion_duplicate_candidates,omitempty"`
-	CandidatesAfterFilter          uint64                 `json:"candidates_after_filter,omitempty"`
-	DocumentsFetched               uint64                 `json:"documents_fetched,omitempty"`
-	DocumentsMissing               uint64                 `json:"documents_missing,omitempty"`
-	FullDocumentScanFallbacks      uint64                 `json:"full_document_scan_fallbacks,omitempty"`
-	Truncated                      uint64                 `json:"truncated,omitempty"`
-	FailClosed                     uint64                 `json:"fail_closed,omitempty"`
-	FailClosedReason               HybridFailClosedReason `json:"fail_closed_reason,omitempty"`
+	TextCandidatesRequested        uint64                          `json:"text_candidates_requested,omitempty"`
+	TextCandidateBudgetEffective   uint64                          `json:"text_candidate_budget_effective,omitempty"`
+	TextCandidatesReturned         uint64                          `json:"text_candidates_returned,omitempty"`
+	TextPostingsScanned            uint64                          `json:"text_postings_scanned,omitempty"`
+	TextPostingBlocksVisited       uint64                          `json:"text_posting_blocks_visited,omitempty"`
+	TextPostingBlocksSkipped       uint64                          `json:"text_posting_blocks_skipped,omitempty"`
+	TextBlockMaxFallbacks          uint64                          `json:"text_block_max_fallbacks,omitempty"`
+	TextBlockMaxThresholds         uint64                          `json:"text_block_max_thresholds,omitempty"`
+	TextWANDPivots                 uint64                          `json:"text_wand_pivots,omitempty"`
+	TextScalarPrefilterIDs         uint64                          `json:"text_scalar_prefilter_ids,omitempty"`
+	TextScalarPostingBlocksSkipped uint64                          `json:"text_scalar_posting_blocks_skipped,omitempty"`
+	TextScalarPostingsRejected     uint64                          `json:"text_scalar_postings_rejected,omitempty"`
+	TextCandidatesScored           uint64                          `json:"text_candidates_scored,omitempty"`
+	TextStateLookups               uint64                          `json:"text_state_lookups,omitempty"`
+	TextNormLookups                uint64                          `json:"text_norm_lookups,omitempty"`
+	TextMatchDetailsBuilt          uint64                          `json:"text_match_details_built,omitempty"`
+	TextPositionLookups            uint64                          `json:"text_position_lookups,omitempty"`
+	TextPhraseCandidatesChecked    uint64                          `json:"text_phrase_candidates_checked,omitempty"`
+	TextPhraseCandidatesMatched    uint64                          `json:"text_phrase_candidates_matched,omitempty"`
+	VectorCandidatesRequested      uint64                          `json:"vector_candidates_requested,omitempty"`
+	VectorCandidateBudgetEffective uint64                          `json:"vector_candidate_budget_effective,omitempty"`
+	VectorCandidatesReturned       uint64                          `json:"vector_candidates_returned,omitempty"`
+	VectorCandidatesExamined       uint64                          `json:"vector_candidates_examined,omitempty"`
+	VectorEdgesVisited             uint64                          `json:"vector_edges_visited,omitempty"`
+	ScalarPrefilterIDs             uint64                          `json:"scalar_prefilter_ids,omitempty"`
+	ScalarPostfilterChecks         uint64                          `json:"scalar_postfilter_checks,omitempty"`
+	ScalarFilterMatched            uint64                          `json:"scalar_filter_matched,omitempty"`
+	ScalarFilterRejected           uint64                          `json:"scalar_filter_rejected,omitempty"`
+	ScalarFilterSelectivityPPM     uint64                          `json:"scalar_filter_selectivity_ppm,omitempty"`
+	CandidatesFused                uint64                          `json:"candidates_fused,omitempty"`
+	CandidatesAfterFusion          uint64                          `json:"candidates_after_fusion,omitempty"`
+	FusionTextOnly                 uint64                          `json:"fusion_text_only,omitempty"`
+	FusionVectorOnly               uint64                          `json:"fusion_vector_only,omitempty"`
+	FusionBoth                     uint64                          `json:"fusion_both,omitempty"`
+	FusionDuplicateCandidates      uint64                          `json:"fusion_duplicate_candidates,omitempty"`
+	CandidatesAfterFilter          uint64                          `json:"candidates_after_filter,omitempty"`
+	DocumentsFetched               uint64                          `json:"documents_fetched,omitempty"`
+	DocumentsMissing               uint64                          `json:"documents_missing,omitempty"`
+	FullDocumentScanFallbacks      uint64                          `json:"full_document_scan_fallbacks,omitempty"`
+	Truncated                      uint64                          `json:"truncated,omitempty"`
+	CandidateBudgetPolicy          HybridCandidateBudgetPolicy     `json:"candidate_budget_policy,omitempty"`
+	CandidateBudgetStopReason      HybridCandidateBudgetStopReason `json:"candidate_budget_stop_reason,omitempty"`
+	CandidateBudgetFallbacks       uint64                          `json:"candidate_budget_fallbacks,omitempty"`
+	CandidateBudgetFallbackReason  HybridCandidateBudgetStopReason `json:"candidate_budget_fallback_reason,omitempty"`
+	CandidateBudgetIterations      uint64                          `json:"candidate_budget_iterations,omitempty"`
+	FailClosed                     uint64                          `json:"fail_closed,omitempty"`
+	FailClosedReason               HybridFailClosedReason          `json:"fail_closed_reason,omitempty"`
 }
 
 // HybridSearchResponse is returned by SearchHybrid once the executor lands. The

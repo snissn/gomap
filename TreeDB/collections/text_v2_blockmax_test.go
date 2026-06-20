@@ -866,8 +866,8 @@ func TestTextV2ScalarFilterPruningEmptyRareBroad2628(t *testing.T) {
 	if len(broad.Results) == 0 || broad.Stats.FailClosed != 0 || broad.Stats.ScalarFilterSelectivityPPM == 0 {
 		t.Fatalf("broad response=%+v want successful broad indexed filter", broad)
 	}
-	if rare.Stats.TextPostingsScanned >= broad.Stats.TextPostingsScanned {
-		t.Fatalf("rare stats=%+v broad stats=%+v want rare filter to decode fewer postings", rare.Stats, broad.Stats)
+	if rare.Stats.TextCandidatesScored >= broad.Stats.TextCandidatesScored || rare.Stats.TextScalarPostingBlocksSkipped == 0 {
+		t.Fatalf("rare stats=%+v broad stats=%+v want rare filter to score fewer candidates and skip scalar-disjoint blocks", rare.Stats, broad.Stats)
 	}
 }
 

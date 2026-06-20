@@ -1562,7 +1562,7 @@ func queryCounters(row queryReport) string {
 	}
 	if row.HybridStats != nil {
 		st := row.HybridStats
-		return fmt.Sprintf("docs_fetched=%d, fail_closed=%d, text_candidates=%d, vector_candidates=%d, scalar_prefilter=%d, fused=%d", st.DocumentsFetched, st.FailClosed, st.TextCandidatesReturned, st.VectorCandidatesReturned, st.ScalarPrefilterIDs, st.CandidatesFused)
+		return fmt.Sprintf("docs_fetched=%d, fail_closed=%d, text_budget=%d/%d, vector_budget=%d/%d, text_candidates=%d, vector_candidates=%d, scalar_prefilter=%d, fused=%d, budget_policy=%s, budget_stop=%s, budget_fallback=%s", st.DocumentsFetched, st.FailClosed, st.TextCandidateBudgetEffective, st.TextCandidatesRequested, st.VectorCandidateBudgetEffective, st.VectorCandidatesRequested, st.TextCandidatesReturned, st.VectorCandidatesReturned, st.ScalarPrefilterIDs, st.CandidatesFused, st.CandidateBudgetPolicy, st.CandidateBudgetStopReason, st.CandidateBudgetFallbackReason)
 	}
 	return ""
 }
