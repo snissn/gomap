@@ -342,6 +342,25 @@ func TestFlushBacklogCoalescingCheckpointAdmissionAccountsForBaseByteBudget(t *t
 	}
 }
 
+func TestFlushBacklogCoalescingCheckpointRangeSpanBaseBudgetCovered(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{
+		FlushThreshold:         1,
+		FlushBacklogCoalescing: true,
+		FlushBuildConcurrency:  2,
+	}, highSingleOpCoalescingSnapshot())
+	units := []flushUnit{
+		{spans: []batch.DeleteRange{{Start: []byte("a"), End: []byte("b")}}},
+		{spans: []batch.DeleteRange{{Start: []byte("c"), End: []byte("d")}}},
+	}
+	db.observeCheckpointFlushBacklogCoalescingDrain(units, 0, 2)
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.admitted_runs_total"); got != 0 {
+		t.Fatalf("checkpoint admitted runs=%d want 0", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.base_budget_covered_total"); got != 1 {
+		t.Fatalf("checkpoint base_budget_covered=%d want 1", got)
+	}
+}
+
 func TestFlushBacklogCoalescingDrainModesBypassAdaptiveAdmission(t *testing.T) {
 	cases := []struct {
 		name string

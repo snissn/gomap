@@ -470,16 +470,35 @@ func (db *DB) observeCheckpointFlushBacklogCoalescingDrain(units []flushUnit, to
 		baseMaxMemtables = 1
 	}
 	baseScan := flushUnitBudgetScan{}
+	spanOnly := false
 	for i := 0; i < len(units); i++ {
-		if baseScan.count >= baseMaxMemtables {
+		unitLimit := baseMaxMemtables
+		if spanOnly {
+			unitLimit = flushRangeSpanCombineMaxUnits
+		}
+		if baseScan.count >= unitLimit {
 			break
 		}
-		if baseScan.count > 0 && baseTargetBytes > 0 && baseScan.bytes >= baseTargetBytes {
+		hasSpans := len(units[i].spans) > 0
+		if hasSpans {
+			if !spanOnly && i != 0 {
+				break
+			}
+			if baseScan.count > 0 && !spanOnly {
+				break
+			}
+		} else if spanOnly {
+			break
+		}
+		if !spanOnly && baseScan.count > 0 && baseTargetBytes > 0 && baseScan.bytes >= baseTargetBytes {
 			break
 		}
 		baseScan.count++
 		baseScan.bytes += units[i].memBytes
 		baseScan.ops += units[i].memLen
+		if hasSpans {
+			spanOnly = true
+		}
 	}
 	if baseScan.count >= len(units) {
 		db.flushBacklogCoalescingCheckpointBaseBudgetCovered.Add(1)
