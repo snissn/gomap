@@ -212,7 +212,7 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataMissingStrings216
 		DistinctColumn: "did",
 		Predicates:     commitCreate,
 	}
-	q2Result := runNullableFullDataQuery2165(t, collection, "q2", q2, len(docs), len(commitCreate), 4, 4)
+	q2Result := runNullableFullDataDenseQ2Query2165(t, collection, "q2", q2, len(docs), len(commitCreate), 4, 4)
 	wantQ2 := map[string]columnPhysicalCountDistinct2165{
 		"":                   {Count: 1, Distinct: 1},
 		"app.bsky.feed.post": {Count: 3, Distinct: 2},
@@ -768,6 +768,35 @@ func runNullableFullDataQuery2165(tb testing.TB, collection *Collection, name st
 	return direct
 }
 
+func runNullableFullDataDenseQ2Query2165(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, wantRows, wantPredicates, wantMatched, wantReduce int) ColumnPhysicalQueryResult {
+	tb.Helper()
+	direct, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("RunColumnPhysicalQuery(%s): %v", name, err)
+	}
+	assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, name+" direct", direct.Diagnostics, wantRows, wantPredicates, wantMatched, wantReduce)
+	assertNullableFullDataDenseQ2Diagnostics2165(tb, name+" direct", direct.Diagnostics)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("PrepareColumnPhysicalQuery(%s): %v", name, err)
+	}
+	defer func() { _ = runner.Close() }()
+	var prepared ColumnPhysicalQueryResult
+	for run := 0; run < 2; run++ {
+		prepared, err = runner.Run()
+		if err != nil {
+			tb.Fatalf("prepared %s run %d: %v", name, run, err)
+		}
+		assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics, wantRows, wantPredicates, wantMatched, wantReduce)
+		assertNullableFullDataDenseQ2Diagnostics2165(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics)
+		if !reflect.DeepEqual(prepared.Groups, direct.Groups) {
+			tb.Fatalf("%s prepared run %d groups=%+v want direct %+v", name, run, prepared.Groups, direct.Groups)
+		}
+	}
+	return direct
+}
+
 func runNullableFullDataTopKFastPath2878(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, want []ColumnPhysicalQueryGroup, assertDiag func(testing.TB, string, ColumnPhysicalQueryDiagnostics)) {
 	tb.Helper()
 	direct, err := collection.RunColumnPhysicalQuery(req)
@@ -817,7 +846,7 @@ func assertNullableFullDataTopKBaseDiagnostics2878(tb testing.TB, label string, 
 
 func assertNullableFullDataGenericDiagnostics2165(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
 	tb.Helper()
-	if diag.DenseGroupCountUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.SortedGroupedDistinctUsed || diag.TimeOrderTopKUsed {
+	if diag.DenseGroupCountUsed || diag.DenseGroupCountDistinctUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.SortedGroupedDistinctUsed || diag.TimeOrderTopKUsed {
 		tb.Fatalf("%s nullable full-data query used nullable-unsafe fast path: %+v", label, diag)
 	}
 	if diag.SortKeyPrefixPlanned || diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
@@ -825,6 +854,19 @@ func assertNullableFullDataGenericDiagnostics2165(tb testing.TB, label string, d
 	}
 	if diag.DecodedBlocks == 0 || diag.DecodedPayloadBytes == 0 {
 		tb.Fatalf("%s nullable full-data query did not report typed-column decode work: %+v", label, diag)
+	}
+}
+
+func assertNullableFullDataDenseQ2Diagnostics2165(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+	tb.Helper()
+	if !diag.DenseGroupCountDistinctUsed || diag.DenseGroupCountUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.SortedGroupedDistinctUsed || diag.TimeOrderTopKUsed {
+		tb.Fatalf("%s diagnostics=%+v want only dense q2 count-distinct fast path", label, diag)
+	}
+	if diag.SortKeyPrefixPlanned || diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
+		tb.Fatalf("%s dense q2 diagnostics used sort-key pruning: %+v", label, diag)
+	}
+	if diag.DecodedBlocks == 0 || diag.DecodedPayloadBytes == 0 {
+		tb.Fatalf("%s dense q2 diagnostics did not report typed-column decode work: %+v", label, diag)
 	}
 }
 

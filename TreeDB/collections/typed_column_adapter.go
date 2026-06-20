@@ -2139,6 +2139,102 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 	}, nil
 }
 
+// decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPart prepares the q2
+// typed-column section fast path. It decodes dictionary codes for the group,
+// distinct, and predicate columns once, then the runner reduces by integer code.
+func decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
+	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, image)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	summary := typedColumnAdapterImageSummary{PartID: image.PartID, Rows: image.Rows, Sections: len(image.Sections), SectionBytes: typedColumnPhysicalQueryImageSectionBytes(image), SortKey: columnSortKeysFromTypedColumnSortKeys(adapterPart.Part.Descriptor.SortKey)}
+	if summary.PartID != typedRef.Ref.PartID || summary.Rows != typedRef.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d manifest_rows=%d", summary.PartID, typedRef.Ref.PartID, summary.Rows, typedRef.Rows)
+	}
+	if physical.Rows != 0 && summary.Rows != physical.Rows {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("typed_column_part rows=%d do not match physical rows=%d", summary.Rows, physical.Rows)
+	}
+	if err := validateTypedColumnPhysicalQuerySortMetadata(plan.SortKey, typedRef.SortKey, summary.SortKey); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+
+	group, groupDecodedBytes, groupBlocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "grouped count-distinct group")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	distinct, distinctDecodedBytes, distinctBlocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.DistinctColumn, summary.Rows, "grouped count-distinct distinct")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	if len(group.Codes) != len(distinct.Codes) {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column grouped count-distinct group/distinct rows=%d/%d", len(group.Codes), len(distinct.Codes))
+	}
+
+	predicates := make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
+	predicateDecodedBytes := uint64(0)
+	predicateBlocks := 0
+	for _, spec := range plan.PredicateSpecs {
+		predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		predicates = append(predicates, predicate)
+		predicateDecodedBytes += decodedBytes
+		predicateBlocks += blocks
+	}
+
+	decodedBlocks := groupBlocks + distinctBlocks + predicateBlocks
+	return columnTypedColumnPhysicalQueryPart{
+		Ref:                 typedRef,
+		PhysicalRef:         physical,
+		Rows:                summary.Rows,
+		Bytes:               int64(len(raw)),
+		Sections:            summary.Sections,
+		SectionBytes:        summary.SectionBytes,
+		GranulesConsidered:  decodedBlocks,
+		GranulesDecoded:     decodedBlocks,
+		DecodedBlocks:       decodedBlocks,
+		DecodedPayloadBytes: groupDecodedBytes + distinctDecodedBytes + predicateDecodedBytes,
+		DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+			Rows:       summary.Rows,
+			Group:      group,
+			Distinct:   distinct,
+			Predicates: predicates,
+		},
+	}, nil
+}
+
+func typedColumnDenseGroupCountDistinctCodeColumn(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, column string, rows int, role string) (columnTypedColumnDenseStringCodeColumn, uint64, int, error) {
+	adapterColumn, partColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, fields, column, role)
+	if err != nil {
+		return columnTypedColumnDenseStringCodeColumn{}, 0, 0, err
+	}
+	dictionary := make([]string, cardinality)
+	for code := 0; code < cardinality; code++ {
+		value, ok := adapterColumn.ReverseDictionary[int64(code)]
+		if !ok {
+			return columnTypedColumnDenseStringCodeColumn{}, 0, 0, fmt.Errorf("collections: dense typed-column %s dictionary missing local code %d for column %q", role, code, adapterColumn.Definition.Name)
+		}
+		dictionary[code] = value
+	}
+	if adapterColumn.Field.Nullable {
+		codes, valid, decodedBytes, blocks, err := decodeTypedColumnDenseNullableUint32Codes(partColumn, cardinality, rows, role)
+		if err != nil {
+			return columnTypedColumnDenseStringCodeColumn{}, 0, 0, err
+		}
+		return columnTypedColumnDenseStringCodeColumn{Codes: codes, Valid: valid, Dictionary: dictionary}, decodedBytes, blocks, nil
+	}
+	codes, decodedBytes, blocks, err := decodeTypedColumnDenseUint32Codes(partColumn, cardinality, rows, role)
+	if err != nil {
+		return columnTypedColumnDenseStringCodeColumn{}, 0, 0, err
+	}
+	return columnTypedColumnDenseStringCodeColumn{Codes: codes, Dictionary: dictionary}, decodedBytes, blocks, nil
+}
+
 func typedColumnDenseStringCodeColumn(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, column, role string) (typedColumnAdapterColumn, typedcolumn.ColumnPartColumn, int, error) {
 	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, column)
 	if err != nil {
