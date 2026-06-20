@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -327,6 +328,98 @@ func TestFlushBacklogCoalescingDrainModesBypassAdaptiveAdmission(t *testing.T) {
 				t.Fatalf("source_memtables_max=%d want base flush of 1", got)
 			}
 		})
+	}
+}
+
+func TestFlushCollectionModeSpanNativeFallbackOnlyForClose(t *testing.T) {
+	cases := []struct {
+		name string
+		mode flushCollectionMode
+		mark func(*DB)
+		want backenddb.FlushSpanRunFallbackReason
+	}{
+		{name: "checkpoint", mode: flushCollectionBackground, mark: func(db *DB) { db.checkpointing.Store(true) }, want: backenddb.FlushSpanRunFallbackUnknown},
+		{name: "close", mode: flushCollectionBackground, mark: func(db *DB) { db.closing.Store(true) }, want: backenddb.FlushSpanRunFallbackCloseOrCheckpoint},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db, backend := newCoalescingTestDB(t, Options{
+				FlushBacklogCoalescing: true,
+			}, highSingleOpCoalescingSnapshot())
+			enqueuePointMemtables(t, db, 1, "fallback"+tc.name)
+			if tc.mark != nil {
+				tc.mark(db)
+			}
+			if !db.flushLaneOnceWithCollectionMode(false, 0, nil, tc.mode) {
+				t.Fatalf("flushLaneOnceWithCollectionMode returned false")
+			}
+			db.checkpointing.Store(false)
+			db.closing.Store(false)
+			backend.mu.RLock()
+			got := backend.lastSpanNativeFallbackReason
+			backend.mu.RUnlock()
+			if got != tc.want {
+				t.Fatalf("fallback reason=%s want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFlushCollectionModeCheckpointCommandWALPublishForcesFallback(t *testing.T) {
+	db, backend := newCoalescingTestDB(t, Options{
+		FlushApplySpanNative:  true,
+		FlushApplyConcurrency: 4,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+	}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtables(t, db, 1, "commandwal")
+	db.checkpointing.Store(true)
+	publish := &checkpointCommandWALPublish{appliedLSN: 7, ranges: []backenddb.CommandWALLSNRange{{First: 1, Last: 7}}}
+	if !db.flushLaneOnceWithCollectionMode(false, 0, publish, flushCollectionBackground) {
+		t.Fatalf("flushLaneOnceWithCollectionMode returned false")
+	}
+	db.checkpointing.Store(false)
+	if !publish.consumed {
+		t.Fatalf("command WAL publish was not consumed")
+	}
+	backend.mu.RLock()
+	got := backend.lastSpanNativeFallbackReason
+	backend.mu.RUnlock()
+	if got != backenddb.FlushSpanRunFallbackCommandWALBarrier {
+		t.Fatalf("command WAL checkpoint fallback reason=%s want %s", got, backenddb.FlushSpanRunFallbackCommandWALBarrier)
+	}
+}
+
+func TestFlushCollectionModeRangeOnlyCheckpointFallbackReason(t *testing.T) {
+	db, backend := newCoalescingTestDB(t, Options{
+		DisableWAL:                 true,
+		AllowUnsafe:                true,
+		FlushBacklogCoalescing:     true,
+		FlushApplySpanNative:       true,
+		FlushApplyConcurrency:      4,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		FlushSpanRunTargetPlanning: true,
+	}, highSingleOpCoalescingSnapshot())
+	db.mu.Lock()
+	if err := db.enqueueRangeSpanLayerLocked([]batch.DeleteRange{{Start: []byte("point-a"), End: []byte("point-z")}}); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("enqueueRangeSpanLayerLocked: %v", err)
+	}
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
+	db.checkpointing.Store(true)
+	if !db.flushLaneOnceWithCollectionMode(false, 0, nil, flushCollectionBackground) {
+		t.Fatalf("flushLaneOnceWithCollectionMode returned false")
+	}
+	db.checkpointing.Store(false)
+	backend.mu.RLock()
+	got := backend.lastSpanNativeFallbackReason
+	backend.mu.RUnlock()
+	if got != backenddb.FlushSpanRunFallbackRangeDeleteBarrier {
+		t.Fatalf("range-only checkpoint fallback reason=%s want %s", got, backenddb.FlushSpanRunFallbackRangeDeleteBarrier)
 	}
 }
 

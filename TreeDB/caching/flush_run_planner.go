@@ -794,7 +794,7 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 
 func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int, mode flushCollectionMode) bool {
 	flushStart := time.Now()
-	spanNativeFallbackReason := flushSpanNativeFallbackReasonForCollectionMode(mode)
+	spanNativeFallbackReason := flushPointRunSpanNativeFallbackReasonForCollectionMode(mode, commandPublish)
 	buildStart := flushStart
 	build, err := db.buildCanonicalUnitRuns(units, totalLen, totalSpans)
 	if err != nil {
@@ -990,7 +990,7 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 		return db.flushCanonicalPointUnitsStreamed(syncFlush, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans, mode)
 	}
 	flushStart := time.Now()
-	spanNativeFallbackReason := flushSpanNativeFallbackReasonForCollectionMode(mode)
+	spanNativeFallbackReason := flushPointRunSpanNativeFallbackReasonForCollectionMode(mode, commandPublish)
 	buildStart := flushStart
 	run, err := db.buildCanonicalFlushRun(units, totalLen, totalSpans)
 	if err != nil {

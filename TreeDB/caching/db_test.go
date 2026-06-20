@@ -28,26 +28,27 @@ const retainedPruneNegativeAssertWait = 150 * time.Millisecond
 
 // MockBackend implements BackendDB
 type MockBackend struct {
-	mu                     sync.RWMutex
-	data                   map[string][]byte
-	lastOps                []batch.Entry
-	writeCalls             int
-	writeSyncs             int
-	iteratorCalls          int
-	iteratorStartedCh      chan struct{}
-	iteratorBlockCh        chan struct{}
-	writeErr               error
-	setOpsErr              error
-	setErr                 error
-	deleteErr              error
-	registerValueLogErr    error
-	markValueLogZombieErr  error
-	markValueLogZombieID   uint32
-	pointerEntries         map[string]page.ValuePtr
-	setOpsInlineValueLimit int
-	fragReport             map[string]string
-	fragErr                error
-	vacuumErr              error
+	mu                           sync.RWMutex
+	data                         map[string][]byte
+	lastOps                      []batch.Entry
+	writeCalls                   int
+	writeSyncs                   int
+	iteratorCalls                int
+	iteratorStartedCh            chan struct{}
+	iteratorBlockCh              chan struct{}
+	writeErr                     error
+	setOpsErr                    error
+	setErr                       error
+	deleteErr                    error
+	registerValueLogErr          error
+	markValueLogZombieErr        error
+	markValueLogZombieID         uint32
+	pointerEntries               map[string]page.ValuePtr
+	setOpsInlineValueLimit       int
+	lastSpanNativeFallbackReason db.FlushSpanRunFallbackReason
+	fragReport                   map[string]string
+	fragErr                      error
+	vacuumErr                    error
 }
 
 func NewMockBackend() *MockBackend {
@@ -765,6 +766,14 @@ func (b *MockBatch) WriteSync() error {
 	b.mb.mu.Unlock()
 	return nil
 }
+
+func (b *MockBatch) SetFlushApplySpanNativeFallback(reason db.FlushSpanRunFallbackReason) {
+	b.mb.mu.Lock()
+	b.mb.lastSpanNativeFallbackReason = reason
+	b.mb.mu.Unlock()
+}
+
+func (b *MockBatch) SetCommandWALPublish(uint64, []db.CommandWALLSNRange) error { return nil }
 
 func (b *MockBatch) Close() error              { return nil }
 func (b *MockBatch) GetByteSize() (int, error) { return 0, nil }
