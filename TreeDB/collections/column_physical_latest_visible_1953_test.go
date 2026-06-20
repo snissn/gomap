@@ -179,6 +179,62 @@ func TestColumnPhysicalNonDenseNoPredicateMutationUsesTypedLatestVisible1953(t *
 	assertPreparedMutationFailsClosed1953(t, col, req)
 }
 
+func TestColumnPhysicalQ2NoSortLatestVisibleNoPredicateUsesGeneric1953(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{{
+		{ID: "a1", TimeUS: 100, Kind: "commit", Operation: "create", Collection: "app.alpha", Did: "did:one"},
+		{ID: "a2", TimeUS: 110, Kind: "commit", Operation: "create", Collection: "app.alpha", Did: "did:two"},
+		{ID: "b1", TimeUS: 120, Kind: "commit", Operation: "create", Collection: "app.beta", Did: "did:one"},
+	}, {
+		{ID: "c1", TimeUS: 130, Kind: "identity", Operation: "update", Collection: "app.gamma", Did: "did:three"},
+		{ID: "a3", TimeUS: 140, Kind: "commit", Operation: "delete", Collection: "app.alpha", Did: "did:one"},
+	}}
+	_, _, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, nil, batches)
+	defer closeFn()
+	events := flattenColumnPhysicalEvents1950(batches)
+	latest := latestEventMap1953(events)
+
+	updated := latest["a1"]
+	updated.Collection = "app.beta"
+	updated.Did = "did:two"
+	updated.TimeUS += 77
+	updateTypedColumnEvent1953(t, col, updated)
+	latest[updated.ID] = updated
+	deleteTypedColumnEvent1953(t, col, "c1")
+	delete(latest, "c1")
+
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "collection",
+		DistinctColumn: "did",
+	}
+	result, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q2 no-sort no-predicate latest-visible): %v diagnostics=%+v", err, result.Diagnostics)
+	}
+	live := latestEvents1953(latest)
+	got := columnPhysicalJSONBenchQ2CountsP0(result.Groups)
+	want := collectionDidCountDistinct1953(live)
+	if !columnPhysicalJSONBenchQ2CountsEqualP0(got, want) {
+		t.Fatalf("q2 no-sort latest-visible counts=%v want %v groups=%+v", got, want, result.Groups)
+	}
+	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || result.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		t.Fatalf("q2 no-sort diagnostics=%+v want typed-column latest-visible path", result.Diagnostics)
+	}
+	if result.Diagnostics.DenseGroupCountDistinctUsed || result.Diagnostics.SortedGroupedDistinctUsed {
+		t.Fatalf("q2 no-sort diagnostics=%+v want generic latest-visible count-distinct path", result.Diagnostics)
+	}
+	if result.Diagnostics.MutationParts == 0 || result.Diagnostics.VisibilityRows != len(live) || result.Diagnostics.DeletedRows == 0 {
+		t.Fatalf("q2 no-sort visibility diagnostics=%+v want mutation parts, visible=%d, deleted rows", result.Diagnostics, len(live))
+	}
+	if result.Diagnostics.PredicateCount != 0 || result.Diagnostics.RowsMatched != 0 || result.Diagnostics.ReduceRows != len(live) {
+		t.Fatalf("q2 no-sort reduce diagnostics=%+v want no predicates and reduce rows=%d", result.Diagnostics, len(live))
+	}
+	if result.Diagnostics.RowMaterializations != 0 || result.Diagnostics.DocumentMaterializations != 0 {
+		t.Fatalf("q2 no-sort materialization diagnostics=%+v want no row/document materialization", result.Diagnostics)
+	}
+	assertPreparedMutationFailsClosed1953(t, col, req)
+}
+
 func TestColumnPhysicalQ2SortedLatestVisibleMutationReopen1953(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
 	dir, d, col, closeFn := openTypedColumnLatestVisibleFixture1953(t, typedColumnQ2ClickHouseSortKey1950(), batches)
@@ -710,6 +766,23 @@ func latestEvents1953(latest map[string]columnPhysicalJSONBenchParityEventP0) []
 		out = append(out, event)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func collectionDidCountDistinct1953(events []columnPhysicalJSONBenchParityEventP0) map[string]columnPhysicalJSONBenchQ2CountP0 {
+	counts := make(map[string]int64)
+	distinct := make(map[string]map[string]struct{})
+	for _, event := range events {
+		counts[event.Collection]++
+		if distinct[event.Collection] == nil {
+			distinct[event.Collection] = make(map[string]struct{})
+		}
+		distinct[event.Collection][event.Did] = struct{}{}
+	}
+	out := make(map[string]columnPhysicalJSONBenchQ2CountP0, len(counts))
+	for collection, count := range counts {
+		out[collection] = columnPhysicalJSONBenchQ2CountP0{Count: count, Distinct: int64(len(distinct[collection]))}
+	}
 	return out
 }
 
