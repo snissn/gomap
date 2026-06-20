@@ -91,6 +91,134 @@ func TestCachingDB_Checkpoint_TrimsWAL(t *testing.T) {
 	}
 }
 
+func TestCachingDB_DirectWriteGateRechecksCheckpointAfterPublicWait(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(true)
+	db.checkpointMu.Unlock()
+
+	acquired := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		db.beginDirectWrite()
+		close(acquired)
+		db.writeMu.RUnlock()
+		close(done)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatalf("direct write gate acquired while checkpointing")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("direct write gate did not resume after checkpoint")
+	}
+}
+
+func TestCachingDB_ExclusiveWriteGateRechecksCheckpointAfterPublicWait(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(true)
+	db.checkpointMu.Unlock()
+
+	acquired := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		db.beginExclusiveWrite()
+		close(acquired)
+		db.writeMu.Unlock()
+		close(done)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatalf("exclusive write gate acquired while checkpointing")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("exclusive write gate did not resume after checkpoint")
+	}
+}
+
+func TestCachingDB_ExclusiveWriteWithFlushMuHeldReleasesFlushMuWhileWaiting(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.checkpointMu.Lock()
+	db.maintenanceActive.Store(true)
+	db.checkpointMu.Unlock()
+
+	db.flushMu.Lock()
+	acquiredWrite := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		db.beginExclusiveWriteWithFlushMuHeld()
+		close(acquiredWrite)
+		db.writeMu.Unlock()
+		db.flushMu.Unlock()
+		close(done)
+	}()
+
+	flushMuReleased := make(chan struct{})
+	go func() {
+		db.flushMu.Lock()
+		close(flushMuReleased)
+		db.flushMu.Unlock()
+	}()
+
+	select {
+	case <-flushMuReleased:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("exclusive writer did not release flushMu while waiting for maintenance")
+	}
+	select {
+	case <-acquiredWrite:
+		t.Fatalf("exclusive writer acquired while maintenance is active")
+	default:
+	}
+
+	db.checkpointMu.Lock()
+	db.maintenanceActive.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("exclusive writer with flushMu held did not resume after maintenance")
+	}
+}
+
 func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

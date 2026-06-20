@@ -7993,6 +7993,22 @@ type DB struct {
 	checkpointFlushAllWorkerPasses                               atomic.Uint64
 	checkpointFlushAllWorkersTotal                               atomic.Uint64
 	checkpointFlushAllWorkersMax                                 atomic.Uint64
+	checkpointFrontierSamples                                    atomic.Uint64
+	checkpointFrontierUnitsLast                                  atomic.Uint64
+	checkpointFrontierUnitsMax                                   atomic.Uint64
+	checkpointFrontierBytesLast                                  atomic.Uint64
+	checkpointFrontierBytesMax                                   atomic.Uint64
+	checkpointFrontierDrainedUnitsLast                           atomic.Uint64
+	checkpointFrontierDrainedBytesLast                           atomic.Uint64
+	checkpointFrontierPostUnitsLast                              atomic.Uint64
+	checkpointFrontierPostUnitsMax                               atomic.Uint64
+	checkpointFrontierPostBytesLast                              atomic.Uint64
+	checkpointFrontierPostBytesMax                               atomic.Uint64
+	checkpointWALCleanupConsideredLast                           atomic.Uint64
+	checkpointWALCleanupRemovedLast                              atomic.Uint64
+	checkpointWALCleanupSkippedCurrentLast                       atomic.Uint64
+	checkpointWALCleanupSkippedPreRotateLast                     atomic.Uint64
+	checkpointWALCleanupSkippedRetainedLast                      atomic.Uint64
 	commandWALCheckpointPublishPiggybacked                       atomic.Uint64
 	commandWALCheckpointPublishSeparate                          atomic.Uint64
 	checkpointFlushMuWaitNs                                      atomic.Uint64
@@ -21050,6 +21066,41 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
+func (db *DB) beginDirectWrite() {
+	for {
+		db.writeMu.RLock()
+		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			return
+		}
+		db.writeMu.RUnlock()
+		db.waitForCheckpoint()
+	}
+}
+
+func (db *DB) beginExclusiveWrite() {
+	for {
+		db.writeMu.Lock()
+		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			return
+		}
+		db.writeMu.Unlock()
+		db.waitForCheckpoint()
+	}
+}
+
+func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
+	for {
+		db.writeMu.Lock()
+		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			return
+		}
+		db.writeMu.Unlock()
+		db.flushMu.Unlock()
+		db.waitForCheckpoint()
+		db.flushMu.Lock()
+	}
+}
+
 func (db *DB) recordCheckpointCutover(d time.Duration) {
 	if db == nil {
 		return
@@ -21099,6 +21150,113 @@ func (db *DB) observeCheckpointDebt(memtables, bytes uint64) {
 	db.checkpointDebtBytesLast.Store(bytes)
 	updateAtomicMaxUint64(&db.checkpointDebtMemtablesMax, memtables)
 	updateAtomicMaxUint64(&db.checkpointDebtBytesMax, bytes)
+}
+
+type checkpointFrontier struct {
+	ids            map[uint64]struct{}
+	units          uint64
+	bytes          uint64
+	captured       bool
+	missingQueueID bool
+}
+
+func (f checkpointFrontier) contains(id uint64) bool {
+	if len(f.ids) == 0 {
+		return false
+	}
+	_, ok := f.ids[id]
+	return ok
+}
+
+func (db *DB) captureCheckpointFrontierLocked() checkpointFrontier {
+	f := checkpointFrontier{captured: true}
+	if db == nil || len(db.queue) == 0 {
+		return f
+	}
+	f.ids = make(map[uint64]struct{}, len(db.queue))
+	for i, mem := range db.queue {
+		var id uint64
+		if i < len(db.queueIDs) {
+			id = db.queueIDs[i]
+		}
+		if id == 0 {
+			f.missingQueueID = true
+			continue
+		}
+		f.ids[id] = struct{}{}
+		f.units++
+		if mem != nil {
+			if size := mem.Size(); size > 0 {
+				f.bytes += uint64(size)
+			}
+		}
+	}
+	return f
+}
+
+func (db *DB) checkpointFrontierResidualLocked(f checkpointFrontier) (frontierUnits, frontierBytes, postUnits, postBytes uint64) {
+	if db == nil || len(db.queue) == 0 {
+		return 0, 0, 0, 0
+	}
+	for i, mem := range db.queue {
+		var id uint64
+		if i < len(db.queueIDs) {
+			id = db.queueIDs[i]
+		}
+		var size uint64
+		if mem != nil {
+			if s := mem.Size(); s > 0 {
+				size = uint64(s)
+			}
+		}
+		if f.contains(id) {
+			frontierUnits++
+			frontierBytes += size
+		} else {
+			postUnits++
+			postBytes += size
+		}
+	}
+	return frontierUnits, frontierBytes, postUnits, postBytes
+}
+
+func (db *DB) observeCheckpointFrontierCapture(f checkpointFrontier) {
+	if db == nil {
+		return
+	}
+	db.checkpointFrontierSamples.Add(1)
+	db.checkpointFrontierUnitsLast.Store(f.units)
+	db.checkpointFrontierBytesLast.Store(f.bytes)
+	updateAtomicMaxUint64(&db.checkpointFrontierUnitsMax, f.units)
+	updateAtomicMaxUint64(&db.checkpointFrontierBytesMax, f.bytes)
+}
+
+func (db *DB) observeCheckpointFrontierDrain(f checkpointFrontier) {
+	if db == nil {
+		return
+	}
+	db.mu.RLock()
+	frontierUnits, frontierBytes, postUnits, postBytes := db.checkpointFrontierResidualLocked(f)
+	db.mu.RUnlock()
+	drainedUnits := saturatingSubUint64(f.units, frontierUnits)
+	drainedBytes := saturatingSubUint64(f.bytes, frontierBytes)
+	db.checkpointFrontierDrainedUnitsLast.Store(drainedUnits)
+	db.checkpointFrontierDrainedBytesLast.Store(drainedBytes)
+	db.checkpointFrontierPostUnitsLast.Store(postUnits)
+	db.checkpointFrontierPostBytesLast.Store(postBytes)
+	updateAtomicMaxUint64(&db.checkpointFrontierPostUnitsMax, postUnits)
+	updateAtomicMaxUint64(&db.checkpointFrontierPostBytesMax, postBytes)
+}
+
+func (db *DB) observeCheckpointWALCleanupCoverage(considered, removed, skippedCurrent, skippedPreRotate, skippedRetained uint64) {
+	if db == nil {
+		return
+	}
+	db.checkpointWALCleanupConsideredLast.Store(considered)
+	db.checkpointWALCleanupRemovedLast.Store(removed)
+	db.checkpointWALCleanupSkippedCurrentLast.Store(skippedCurrent)
+	db.checkpointWALCleanupSkippedPreRotateLast.Store(skippedPreRotate)
+	db.checkpointWALCleanupSkippedRetainedLast.Store(skippedRetained)
 }
 
 func (db *DB) observeCheckpointBarrierWait(d time.Duration) {
@@ -21452,6 +21610,13 @@ func (db *DB) Checkpoint() error {
 			return nil
 		}
 	}
+	frontier := db.captureCheckpointFrontierLocked()
+	if frontier.missingQueueID {
+		db.mu.Unlock()
+		releaseWriteMu()
+		return errors.New("cachingdb: checkpoint frontier missing stable queue id")
+	}
+	db.observeCheckpointFrontierCapture(frontier)
 	walDir := db.dir
 	preRotateWALPaths := db.currentWALPaths()
 	ridBeforeWALRotate := db.nextRID.Load()
@@ -21525,7 +21690,15 @@ func (db *DB) Checkpoint() error {
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
 	flushAllStart := time.Now()
-	db.flushAllLocked(true, commandWALPublishPiggyback)
+	db.flushCheckpointFrontierLocked(true, commandWALPublishPiggyback, frontier)
+	db.observeCheckpointFrontierDrain(frontier)
+	postFrontierWALDebt := false
+	if frontier.captured {
+		db.mu.RLock()
+		_, _, postUnits, _ := db.checkpointFrontierResidualLocked(frontier)
+		postFrontierWALDebt = postUnits > 0 || db.mutableBytes.Load() > 0
+		db.mu.RUnlock()
+	}
 	recordCheckpointStageSince(&db.checkpointStageFlushAll, flushAllStart)
 	leafLogAppendWaitAfter := db.flushApplyLeafLogAppendWaitNs.Load()
 	leafValueLogSyncNs := uint64(valueLogFlushDur.Nanoseconds()) + saturatingSubUint64(leafLogAppendWaitAfter, leafLogAppendWaitBefore)
@@ -21608,7 +21781,7 @@ func (db *DB) Checkpoint() error {
 		currentWALs[path] = struct{}{}
 	}
 	unsafeWALDeletes := make(map[string]struct{})
-	if wroteDuringWALRotate {
+	if wroteDuringWALRotate || postFrontierWALDebt {
 		for _, path := range preRotateWALPaths {
 			if path == "" {
 				continue
@@ -21618,15 +21791,20 @@ func (db *DB) Checkpoint() error {
 	}
 
 	removed := false
+	var cleanupConsidered, cleanupRemoved, cleanupSkippedCurrent, cleanupSkippedPreRotate, cleanupSkippedRetained uint64
 	for _, seg := range segments {
+		cleanupConsidered++
 		path := seg.path
 		if _, ok := currentWALs[path]; ok {
+			cleanupSkippedCurrent++
 			continue
 		}
 		if _, ok := unsafeWALDeletes[path]; ok {
+			cleanupSkippedPreRotate++
 			continue
 		}
 		if db.valueLogRetained(path) {
+			cleanupSkippedRetained++
 			continue
 		}
 		db.dropValueLogSegment(path)
@@ -21634,6 +21812,7 @@ func (db *DB) Checkpoint() error {
 			// Best effort cleanup; ignore errors to prevent flakiness on Windows
 			continue
 		}
+		cleanupRemoved++
 		removed = true
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
@@ -21643,6 +21822,7 @@ func (db *DB) Checkpoint() error {
 	if removed && !db.relaxedSync {
 		db.syncDirBestEffort(db.dir)
 	}
+	db.observeCheckpointWALCleanupCoverage(cleanupConsidered, cleanupRemoved, cleanupSkippedCurrent, cleanupSkippedPreRotate, cleanupSkippedRetained)
 	recordCheckpointStageSince(&db.checkpointStageWALCleanup, walCleanupStart)
 
 	postMaintenanceStart := time.Now()
@@ -22460,7 +22640,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 }
 
 func (db *DB) setDirect(key, value []byte, sync bool) error {
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 	needSyncBarrier := false
 	var ptr page.ValuePtr
@@ -22640,7 +22820,7 @@ func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand fu
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 	var ptr page.ValuePtr
 	var retainPath string
@@ -22882,7 +23062,7 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.writeMu.Lock()
+	db.beginExclusiveWriteWithFlushMuHeld()
 	defer db.writeMu.Unlock()
 
 	db.mu.Lock()
@@ -22957,7 +23137,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
 	// post-journal apply divergence on partial batch failure.
 	if !db.disableJournal {
-		db.writeMu.Lock()
+		db.beginExclusiveWrite()
 		defer db.writeMu.Unlock()
 
 		it, err := db.Iterator(start, end)
@@ -23248,7 +23428,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		// rotating the memtable (which can allocate large arenas).
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
-		db.writeMu.Lock()
+		db.beginExclusiveWriteWithFlushMuHeld()
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
@@ -23649,7 +23829,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 }
 
 func (db *DB) deleteDirect(key []byte, sync bool) error {
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 	needSyncBarrier := false
 
@@ -23725,7 +23905,7 @@ func (db *DB) deleteDirectAfterCommandWALAppend(key []byte, appendCommand func()
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 
 	shard := db.shardForKey(key)
@@ -24542,6 +24722,129 @@ func (db *DB) flushAll(reqSync bool) {
 	db.flushAllLocked(reqSync, nil)
 }
 
+func filterFlushUnitsToCheckpointFrontier(units []flushUnit, ids []uint64, frontier checkpointFrontier) ([]flushUnit, []uint64, int64, int) {
+	if len(frontier.ids) == 0 || len(units) == 0 {
+		return nil, nil, 0, 0
+	}
+	outUnits := units[:0]
+	outIDs := ids[:0]
+	var totalBytes int64
+	var totalLen int
+	for i, unit := range units {
+		id := unit.id
+		if id == 0 && i < len(ids) {
+			id = ids[i]
+		}
+		if !frontier.contains(id) {
+			break
+		}
+		outUnits = append(outUnits, unit)
+		outIDs = append(outIDs, id)
+		totalBytes += unit.memBytes
+		totalLen += unit.memLen
+	}
+	return outUnits, outIDs, totalBytes, totalLen
+}
+
+func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes int) ([]bool, int) {
+	active := make([]bool, lanes)
+	if db == nil || len(frontier.ids) == 0 {
+		return active, 0
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for i := range db.queue {
+		var id uint64
+		if i < len(db.queueIDs) {
+			id = db.queueIDs[i]
+		}
+		if !frontier.contains(id) {
+			continue
+		}
+		laneID := 0
+		if i < len(db.queueLaneIDs) {
+			laneID = int(db.queueLaneIDs[i])
+		}
+		if laneID < 0 || laneID >= lanes {
+			laneID = 0
+		}
+		active[laneID] = true
+	}
+	activeCount := 0
+	for i := range active {
+		if active[i] {
+			activeCount++
+		}
+	}
+	return active, activeCount
+}
+
+func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkpointCommandWALPublish, frontier checkpointFrontier) {
+	if !frontier.captured {
+		db.flushAllLocked(reqSync, commandPublish)
+		return
+	}
+	db.beginFlushCoordinatorPass()
+	defer db.endFlushCoordinatorPass()
+	origSync := reqSync
+	syncFlag := db.flushSyncRequested(reqSync)
+	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
+		db.debugVlogEvent("flushCheckpointFrontier_upgraded_sync", -1, "flushMu")
+	}
+	for {
+		attempted, ok := db.attemptDirtyRootPublish()
+		if !attempted {
+			break
+		}
+		if !ok {
+			return
+		}
+	}
+	if len(frontier.ids) == 0 {
+		return
+	}
+	lanes := len(db.lanes)
+	if lanes == 0 {
+		lanes = 1
+	}
+
+	for {
+		active, activeCount := db.checkpointFrontierActiveLanes(frontier, lanes)
+		if activeCount == 0 {
+			return
+		}
+		db.observeCheckpointFlushAllWorkers(activeCount)
+		passCommandPublish := commandPublish
+		if activeCount != 1 {
+			commandPublish = nil
+			passCommandPublish = nil
+		}
+		var wg sync.WaitGroup
+		var progress atomic.Bool
+		wg.Add(activeCount)
+		for i := 0; i < lanes; i++ {
+			laneID := i
+			if !active[laneID] {
+				continue
+			}
+			go func() {
+				if laneID < len(db.flushLaneMu) {
+					db.flushLaneMu[laneID].Lock()
+					defer db.flushLaneMu[laneID].Unlock()
+				}
+				for db.flushLaneOnceWithCollectionModeFrontier(syncFlag, laneID, passCommandPublish, flushCollectionBackground, &frontier) {
+					progress.Store(true)
+				}
+				wg.Done()
+			}()
+		}
+		wg.Wait()
+		if !progress.Load() {
+			return
+		}
+	}
+}
+
 func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALPublish) {
 	db.beginFlushCoordinatorPass()
 	defer db.endFlushCoordinatorPass()
@@ -24915,6 +25218,10 @@ func (db *DB) flushLaneOnceWithCommandPublish(sync bool, laneID int, commandPubl
 }
 
 func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode) bool {
+	return db.flushLaneOnceWithCollectionModeFrontier(sync, laneID, commandPublish, mode, nil)
+}
+
+func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode, frontier *checkpointFrontier) bool {
 	db.mu.Lock()
 	mode = db.flushCollectionMode(mode)
 	queueLen := len(db.queue)
@@ -24925,6 +25232,9 @@ func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPubl
 	maxMemtables, targetBytes, maxOps := db.selectFlushUnitBudgetLocked(laneID, mode)
 	planStart := time.Now()
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsWithOpsLocked(laneID, maxMemtables, targetBytes, maxOps)
+	if frontier != nil {
+		units, ids, totalBytes, totalLen = filterFlushUnitsToCheckpointFrontier(units, ids, *frontier)
+	}
 	planningDur := time.Since(planStart)
 	db.mu.Unlock()
 	if len(units) == 0 {
@@ -26902,6 +27212,22 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.flush_all.worker_passes_total"] = fmt.Sprintf("%d", db.checkpointFlushAllWorkerPasses.Load())
 	stats["treedb.cache.checkpoint.flush_all.workers_total"] = fmt.Sprintf("%d", db.checkpointFlushAllWorkersTotal.Load())
 	stats["treedb.cache.checkpoint.flush_all.workers_max"] = fmt.Sprintf("%d", db.checkpointFlushAllWorkersMax.Load())
+	stats["treedb.cache.checkpoint.frontier.samples"] = fmt.Sprintf("%d", db.checkpointFrontierSamples.Load())
+	stats["treedb.cache.checkpoint.frontier.units_last"] = fmt.Sprintf("%d", db.checkpointFrontierUnitsLast.Load())
+	stats["treedb.cache.checkpoint.frontier.units_max"] = fmt.Sprintf("%d", db.checkpointFrontierUnitsMax.Load())
+	stats["treedb.cache.checkpoint.frontier.bytes_last"] = fmt.Sprintf("%d", db.checkpointFrontierBytesLast.Load())
+	stats["treedb.cache.checkpoint.frontier.bytes_max"] = fmt.Sprintf("%d", db.checkpointFrontierBytesMax.Load())
+	stats["treedb.cache.checkpoint.frontier.drained_units_last"] = fmt.Sprintf("%d", db.checkpointFrontierDrainedUnitsLast.Load())
+	stats["treedb.cache.checkpoint.frontier.drained_bytes_last"] = fmt.Sprintf("%d", db.checkpointFrontierDrainedBytesLast.Load())
+	stats["treedb.cache.checkpoint.frontier.post_units_last"] = fmt.Sprintf("%d", db.checkpointFrontierPostUnitsLast.Load())
+	stats["treedb.cache.checkpoint.frontier.post_units_max"] = fmt.Sprintf("%d", db.checkpointFrontierPostUnitsMax.Load())
+	stats["treedb.cache.checkpoint.frontier.post_bytes_last"] = fmt.Sprintf("%d", db.checkpointFrontierPostBytesLast.Load())
+	stats["treedb.cache.checkpoint.frontier.post_bytes_max"] = fmt.Sprintf("%d", db.checkpointFrontierPostBytesMax.Load())
+	stats["treedb.cache.checkpoint.wal_cleanup.considered_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupConsideredLast.Load())
+	stats["treedb.cache.checkpoint.wal_cleanup.removed_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupRemovedLast.Load())
+	stats["treedb.cache.checkpoint.wal_cleanup.skipped_current_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupSkippedCurrentLast.Load())
+	stats["treedb.cache.checkpoint.wal_cleanup.skipped_pre_rotate_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupSkippedPreRotateLast.Load())
+	stats["treedb.cache.checkpoint.wal_cleanup.skipped_retained_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupSkippedRetainedLast.Load())
 	stats["treedb.cache.checkpoint.noop_skips"] = fmt.Sprintf("%d", db.checkpointNoopSkips.Load())
 	appendCheckpointStageStats(stats, "cutover", &db.checkpointStageCutover)
 	appendCheckpointStageStats(stats, "wal_rotate", &db.checkpointStageWALRotate)
@@ -31033,7 +31359,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	// a concurrent cached write can slip between the scan and the materialized
 	// point-delete batch, producing a non-serializable mix of range-deleted old
 	// keys and surviving newly inserted keys.
-	b.db.writeMu.Lock()
+	b.db.beginExclusiveWrite()
 	writeMuHeld := true
 	unlockWriteMu := func() {
 		if writeMuHeld {
@@ -31123,7 +31449,7 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 
 	b.db.flushMu.Lock()
 	defer b.db.flushMu.Unlock()
-	b.db.writeMu.Lock()
+	b.db.beginExclusiveWriteWithFlushMuHeld()
 	defer b.db.writeMu.Unlock()
 
 	b.db.mu.Lock()
@@ -31266,7 +31592,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeRegular(syncWrite bool) error {
-	b.db.writeMu.RLock()
+	b.db.beginDirectWrite()
 	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
 }
 
