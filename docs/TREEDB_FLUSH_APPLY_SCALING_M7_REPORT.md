@@ -91,7 +91,8 @@ artifacts in the report:
 - `treedb.cache.flush_apply.*`
 - `treedb.cache.checkpoint.debt_*`
 - `treedb.cache.checkpoint.barrier_wait_*`
-- `treedb.cache.checkpoint.flush_all.worker_*`
+- `treedb.cache.checkpoint.flush_all.worker_passes_total`
+- `treedb.cache.checkpoint.flush_all.workers_total/max`
 - `treedb.cache.checkpoint.stage.*`
 - read/cache hit and write-admission counters
 - CPU, allocation, block, and mutex profiles
@@ -102,7 +103,7 @@ artifacts in the report:
 No on-disk migration is involved. To roll back the scaling stack at runtime, set:
 
 ```go
-Options{FlushAdmissionPolicy: db.FlushAdmissionPolicyOff}
+treedb.Options{FlushAdmissionPolicy: treedb.FlushAdmissionPolicyOff}
 ```
 
 or use the benchmark/runtime flag:
