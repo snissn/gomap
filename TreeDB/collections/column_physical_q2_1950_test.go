@@ -153,6 +153,26 @@ func TestTypedColumnQ2DenseGroupCountDistinctNoSortLocalDictionaries1950(t *test
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctBitsetLayout1950(t *testing.T) {
+	wordsPerGroup, totalWords, ok := columnTypedColumnDenseGroupCountDistinctBitsetLayout(13, 1_000_000)
+	if !ok {
+		t.Fatalf("layout ok=false want true")
+	}
+	if wordsPerGroup != 15_625 || totalWords != 203_125 {
+		t.Fatalf("layout words_per_group=%d total_words=%d want 15625/203125", wordsPerGroup, totalWords)
+	}
+
+	wordsPerGroup, totalWords, ok = columnTypedColumnDenseGroupCountDistinctBitsetLayout(0, 1_000_000)
+	if !ok || wordsPerGroup != 0 || totalWords != 0 {
+		t.Fatalf("zero-group layout words_per_group=%d total_words=%d ok=%t want 0/0/true", wordsPerGroup, totalWords, ok)
+	}
+
+	_, _, ok = columnTypedColumnDenseGroupCountDistinctBitsetLayout(1, columnTypedColumnDenseGroupCountDistinctMaxBitsetWords*64+1)
+	if ok {
+		t.Fatalf("oversized layout ok=true want false")
+	}
+}
+
 func TestTypedColumnQ2SortedGroupedDistinctLocalDictionariesAndEmptyValues1950(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2LocalDictBatchA1950(), typedColumnQ2LocalDictBatchB1950()}
 	events := flattenColumnPhysicalEvents1950(batches)
