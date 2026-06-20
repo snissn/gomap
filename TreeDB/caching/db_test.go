@@ -773,6 +773,8 @@ func (b *MockBatch) SetFlushApplySpanNativeFallback(reason db.FlushSpanRunFallba
 	b.mb.mu.Unlock()
 }
 
+func (b *MockBatch) SetCommandWALPublish(uint64, []db.CommandWALLSNRange) error { return nil }
+
 func (b *MockBatch) Close() error              { return nil }
 func (b *MockBatch) GetByteSize() (int, error) { return 0, nil }
 

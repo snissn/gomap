@@ -365,6 +365,32 @@ func TestFlushCollectionModeSpanNativeFallbackOnlyForClose(t *testing.T) {
 	}
 }
 
+func TestFlushCollectionModeCheckpointCommandWALPublishForcesFallback(t *testing.T) {
+	db, backend := newCoalescingTestDB(t, Options{
+		FlushApplySpanNative:  true,
+		FlushApplyConcurrency: 4,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+	}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtables(t, db, 1, "commandwal")
+	db.checkpointing.Store(true)
+	publish := &checkpointCommandWALPublish{appliedLSN: 7, ranges: []backenddb.CommandWALLSNRange{{First: 1, Last: 7}}}
+	if !db.flushLaneOnceWithCollectionMode(false, 0, publish, flushCollectionBackground) {
+		t.Fatalf("flushLaneOnceWithCollectionMode returned false")
+	}
+	db.checkpointing.Store(false)
+	if !publish.consumed {
+		t.Fatalf("command WAL publish was not consumed")
+	}
+	backend.mu.RLock()
+	got := backend.lastSpanNativeFallbackReason
+	backend.mu.RUnlock()
+	if got != backenddb.FlushSpanRunFallbackCommandWALBarrier {
+		t.Fatalf("command WAL checkpoint fallback reason=%s want %s", got, backenddb.FlushSpanRunFallbackCommandWALBarrier)
+	}
+}
+
 func TestFlushCollectionModeRangeOnlyCheckpointFallbackReason(t *testing.T) {
 	db, backend := newCoalescingTestDB(t, Options{
 		DisableWAL:                 true,
