@@ -21066,6 +21066,28 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
+func (db *DB) beginDirectWrite() {
+	for {
+		db.writeMu.RLock()
+		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			return
+		}
+		db.writeMu.RUnlock()
+		db.waitForCheckpoint()
+	}
+}
+
+func (db *DB) beginExclusiveWrite() {
+	for {
+		db.writeMu.Lock()
+		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			return
+		}
+		db.writeMu.Unlock()
+		db.waitForCheckpoint()
+	}
+}
+
 func (db *DB) recordCheckpointCutover(d time.Duration) {
 	if db == nil {
 		return
@@ -22605,7 +22627,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 }
 
 func (db *DB) setDirect(key, value []byte, sync bool) error {
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 	needSyncBarrier := false
 	var ptr page.ValuePtr
@@ -22785,7 +22807,7 @@ func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand fu
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 	var ptr page.ValuePtr
 	var retainPath string
@@ -23794,7 +23816,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 }
 
 func (db *DB) deleteDirect(key []byte, sync bool) error {
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 	needSyncBarrier := false
 
@@ -23870,7 +23892,7 @@ func (db *DB) deleteDirectAfterCommandWALAppend(key []byte, appendCommand func()
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
-	db.writeMu.RLock()
+	db.beginDirectWrite()
 	needRotate := false
 
 	shard := db.shardForKey(key)
@@ -31324,7 +31346,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	// a concurrent cached write can slip between the scan and the materialized
 	// point-delete batch, producing a non-serializable mix of range-deleted old
 	// keys and surviving newly inserted keys.
-	b.db.writeMu.Lock()
+	b.db.beginExclusiveWrite()
 	writeMuHeld := true
 	unlockWriteMu := func() {
 		if writeMuHeld {
@@ -31557,7 +31579,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeRegular(syncWrite bool) error {
-	b.db.writeMu.RLock()
+	b.db.beginDirectWrite()
 	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
 }
 
