@@ -291,6 +291,34 @@ func TestFlushBacklogCoalescingPreservesLaneAndRangeBarriers(t *testing.T) {
 	})
 }
 
+func TestFlushBacklogCoalescingCheckpointUsesFrontierOwnedAdmission(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{
+		FlushBacklogCoalescing:                  true,
+		FlushBacklogCoalescingMaxMemtables:      4,
+		FlushBacklogCoalescingMaxOps:            16,
+		FlushBacklogCoalescingSingleOpSpanRatio: 0.5,
+		FlushBacklogCoalescingMaxOpsPerSpan:     2,
+	}, backenddb.FlushApplyPressureSnapshot{})
+	enqueuePointMemtables(t, db, 4, "checkpoint")
+	db.checkpointing.Store(true)
+	if !db.flushLaneOnceWithCollectionMode(false, 0, nil, flushCollectionBackground) {
+		t.Fatalf("flushLaneOnceWithCollectionMode returned false")
+	}
+	db.checkpointing.Store(false)
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.admitted_runs_total"); got != 1 {
+		t.Fatalf("checkpoint admitted runs=%d want 1", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.selected_memtables_max"); got != 4 {
+		t.Fatalf("checkpoint selected_memtables_max=%d want 4", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.skip.reason.no_pressure_total"); got != 0 {
+		t.Fatalf("checkpoint no_pressure skip=%d want 0", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_span_run.source_memtables_max"); got != 4 {
+		t.Fatalf("source_memtables_max=%d want checkpoint coalesced flush of 4", got)
+	}
+}
+
 func TestFlushBacklogCoalescingDrainModesBypassAdaptiveAdmission(t *testing.T) {
 	cases := []struct {
 		name string
@@ -298,7 +326,6 @@ func TestFlushBacklogCoalescingDrainModesBypassAdaptiveAdmission(t *testing.T) {
 		mark func(*DB)
 		stat string
 	}{
-		{name: "checkpoint", mode: flushCollectionBackground, mark: func(db *DB) { db.checkpointing.Store(true) }, stat: "treedb.cache.flush_backlog_coalescing.skip.reason.checkpoint_total"},
 		{name: "close", mode: flushCollectionBackground, mark: func(db *DB) { db.closing.Store(true) }, stat: "treedb.cache.flush_backlog_coalescing.skip.reason.close_total"},
 		{name: "stop", mode: flushCollectionStop, stat: "treedb.cache.flush_backlog_coalescing.skip.reason.stop_pressure_total"},
 		{name: "foreground", mode: flushCollectionForeground, stat: "treedb.cache.flush_backlog_coalescing.skip.reason.writer_stall_budget_total"},
@@ -319,7 +346,6 @@ func TestFlushBacklogCoalescingDrainModesBypassAdaptiveAdmission(t *testing.T) {
 			if !db.flushLaneOnceWithCollectionMode(false, 0, nil, tc.mode) {
 				t.Fatalf("flushLaneOnceWithCollectionMode returned false")
 			}
-			db.checkpointing.Store(false)
 			db.closing.Store(false)
 			if got := coalescingStatUint64(t, db, tc.stat); got == 0 {
 				t.Fatalf("%s=%d want >0", tc.stat, got)
@@ -424,7 +450,13 @@ func TestFlushCollectionModeRangeOnlyCheckpointFallbackReason(t *testing.T) {
 }
 
 func TestCheckpointFrontierDrainLeavesPostFrontierQueued(t *testing.T) {
-	db, backend := newCoalescingTestDB(t, Options{}, highSingleOpCoalescingSnapshot())
+	db, backend := newCoalescingTestDB(t, Options{
+		FlushBacklogCoalescing:                  true,
+		FlushBacklogCoalescingMaxMemtables:      4,
+		FlushBacklogCoalescingMaxOps:            16,
+		FlushBacklogCoalescingSingleOpSpanRatio: 0.5,
+		FlushBacklogCoalescingMaxOpsPerSpan:     2,
+	}, highSingleOpCoalescingSnapshot())
 	enqueuePointMemtables(t, db, 2, "frontier")
 	db.mu.Lock()
 	frontier := db.captureCheckpointFrontierLocked()
@@ -458,6 +490,12 @@ func TestCheckpointFrontierDrainLeavesPostFrontierQueued(t *testing.T) {
 	}
 	if got := coalescingStatUint64(t, db, "treedb.cache.checkpoint.frontier.post_units_last"); got != 1 {
 		t.Fatalf("frontier post_units_last=%d want 1", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_backlog_coalescing.checkpoint.selected_memtables_max"); got != 2 {
+		t.Fatalf("checkpoint selected_memtables_max=%d want frontier-bound 2", got)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_span_run.source_memtables_max"); got != 2 {
+		t.Fatalf("source_memtables_max=%d want frontier-bound 2", got)
 	}
 	if got, err := db.Get([]byte("postfrontier-000-000")); err != nil || string(got) != "value" {
 		t.Fatalf("post-frontier key should remain readable from cache, got=%q err=%v", got, err)
