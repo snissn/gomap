@@ -21102,8 +21102,11 @@ func (db *DB) observeCheckpointDebt(memtables, bytes uint64) {
 }
 
 func (db *DB) observeCheckpointBarrierWait(d time.Duration) {
-	if db == nil || d <= 0 {
+	if db == nil {
 		return
+	}
+	if d < 0 {
+		d = 0
 	}
 	ns := uint64(d.Nanoseconds())
 	db.checkpointBarrierWaitNs.Add(ns)
@@ -21335,6 +21338,7 @@ func (db *DB) Checkpoint() error {
 	}()
 	// Note: Any code path that takes both flushMu and checkpointMu must acquire
 	// flushMu first to avoid deadlocks.
+	checkpointBgErrBefore := db.backgroundError()
 	db.mu.RLock()
 	checkpointDebtMemtables, checkpointDebtBytes := db.checkpointDebtSnapshotLocked()
 	db.mu.RUnlock()
@@ -21518,7 +21522,6 @@ func (db *DB) Checkpoint() error {
 	}
 
 	// Flush all queued memtables with backend sync.
-	bgErrBefore := db.backgroundError()
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
 	flushAllStart := time.Now()
@@ -21530,7 +21533,7 @@ func (db *DB) Checkpoint() error {
 	if reducerPublishAfter := db.backendFlushApplyReducerPublishNs(); reducerPublishAfter > reducerPublishBefore {
 		db.checkpointStageReducerPublish.record(time.Duration(reducerPublishAfter - reducerPublishBefore))
 	}
-	if bgErr := db.backgroundError(); bgErr != nil && bgErrBefore == nil {
+	if bgErr := db.backgroundError(); bgErr != nil && checkpointBgErrBefore == nil {
 		return bgErr
 	}
 
