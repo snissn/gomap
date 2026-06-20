@@ -8061,6 +8061,14 @@ type DB struct {
 	flushBacklogCoalescingSelectedBytesMax                       atomic.Uint64
 	flushBacklogCoalescingSelectedOps                            atomic.Uint64
 	flushBacklogCoalescingSelectedOpsMax                         atomic.Uint64
+	flushBacklogCoalescingCheckpointAdmittedRuns                 atomic.Uint64
+	flushBacklogCoalescingCheckpointSelectedMemtables            atomic.Uint64
+	flushBacklogCoalescingCheckpointSelectedMemtablesMax         atomic.Uint64
+	flushBacklogCoalescingCheckpointSelectedBytes                atomic.Uint64
+	flushBacklogCoalescingCheckpointSelectedBytesMax             atomic.Uint64
+	flushBacklogCoalescingCheckpointSelectedOps                  atomic.Uint64
+	flushBacklogCoalescingCheckpointSelectedOpsMax               atomic.Uint64
+	flushBacklogCoalescingCheckpointBaseBudgetCovered            atomic.Uint64
 	flushBacklogCoalescingQueuedMemtablesMax                     atomic.Uint64
 	flushBacklogCoalescingQueuedBytesMax                         atomic.Uint64
 	flushBacklogCoalescingQueuedAgeNsMax                         atomic.Uint64
@@ -25234,6 +25242,9 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsWithOpsLocked(laneID, maxMemtables, targetBytes, maxOps)
 	if frontier != nil {
 		units, ids, totalBytes, totalLen = filterFlushUnitsToCheckpointFrontier(units, ids, *frontier)
+	}
+	if mode == flushCollectionCheckpoint {
+		db.observeCheckpointFlushBacklogCoalescingDrain(units, totalBytes, totalLen)
 	}
 	planningDur := time.Since(planStart)
 	db.mu.Unlock()

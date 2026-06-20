@@ -420,6 +420,139 @@ func coalescingSkipReasonForCollectStop(stop flushCollectStopReason) flushBacklo
 	}
 }
 
+func (db *DB) observeFlushBacklogCoalescingAdmission(baseScan, selected flushUnitBudgetScan, checkpoint bool) {
+	if db == nil {
+		return
+	}
+	db.flushBacklogCoalescingAdmittedRuns.Add(1)
+	extraMemtables := selected.count - baseScan.count
+	if extraMemtables > 0 {
+		db.flushBacklogCoalescingAdmittedExtraMemtables.Add(uint64(extraMemtables))
+	}
+	if extraBytes := selected.bytes - baseScan.bytes; extraBytes > 0 {
+		db.flushBacklogCoalescingAdmittedExtraBytes.Add(uint64(extraBytes))
+	}
+	if extraOps := selected.ops - baseScan.ops; extraOps > 0 {
+		db.flushBacklogCoalescingAdmittedExtraOps.Add(uint64(extraOps))
+	}
+	db.flushBacklogCoalescingSelectedMemtables.Add(uint64(selected.count))
+	updateAtomicMaxUint64(&db.flushBacklogCoalescingSelectedMemtablesMax, uint64(selected.count))
+	if selected.bytes > 0 {
+		db.flushBacklogCoalescingSelectedBytes.Add(uint64(selected.bytes))
+		updateAtomicMaxUint64(&db.flushBacklogCoalescingSelectedBytesMax, uint64(selected.bytes))
+	}
+	if selected.ops > 0 {
+		db.flushBacklogCoalescingSelectedOps.Add(uint64(selected.ops))
+		updateAtomicMaxUint64(&db.flushBacklogCoalescingSelectedOpsMax, uint64(selected.ops))
+	}
+	if !checkpoint {
+		return
+	}
+	db.flushBacklogCoalescingCheckpointAdmittedRuns.Add(1)
+	db.flushBacklogCoalescingCheckpointSelectedMemtables.Add(uint64(selected.count))
+	updateAtomicMaxUint64(&db.flushBacklogCoalescingCheckpointSelectedMemtablesMax, uint64(selected.count))
+	if selected.bytes > 0 {
+		db.flushBacklogCoalescingCheckpointSelectedBytes.Add(uint64(selected.bytes))
+		updateAtomicMaxUint64(&db.flushBacklogCoalescingCheckpointSelectedBytesMax, uint64(selected.bytes))
+	}
+	if selected.ops > 0 {
+		db.flushBacklogCoalescingCheckpointSelectedOps.Add(uint64(selected.ops))
+		updateAtomicMaxUint64(&db.flushBacklogCoalescingCheckpointSelectedOpsMax, uint64(selected.ops))
+	}
+}
+
+func (db *DB) observeCheckpointFlushBacklogCoalescingDrain(units []flushUnit, totalBytes int64, totalOps int) {
+	if db == nil || !db.flushBacklogCoalescing || len(units) == 0 {
+		return
+	}
+	baseMaxMemtables, baseTargetBytes := db.baseFlushUnitBudget()
+	if baseMaxMemtables < 1 {
+		baseMaxMemtables = 1
+	}
+	baseScan := flushUnitBudgetScan{}
+	spanOnly := false
+	for i := 0; i < len(units); i++ {
+		unitLimit := baseMaxMemtables
+		if spanOnly {
+			unitLimit = flushRangeSpanCombineMaxUnits
+		}
+		if baseScan.count >= unitLimit {
+			break
+		}
+		hasSpans := len(units[i].spans) > 0
+		if hasSpans {
+			if !spanOnly && i != 0 {
+				break
+			}
+			if baseScan.count > 0 && !spanOnly {
+				break
+			}
+		} else if spanOnly {
+			break
+		}
+		if !spanOnly && baseScan.count > 0 && baseTargetBytes > 0 && baseScan.bytes >= baseTargetBytes {
+			break
+		}
+		baseScan.count++
+		baseScan.bytes += units[i].memBytes
+		baseScan.ops += units[i].memLen
+		if hasSpans {
+			spanOnly = true
+		}
+	}
+	if baseScan.count >= len(units) {
+		db.flushBacklogCoalescingCheckpointBaseBudgetCovered.Add(1)
+		return
+	}
+	selected := flushUnitBudgetScan{count: len(units), bytes: totalBytes, ops: totalOps}
+	db.observeFlushBacklogCoalescingAdmission(baseScan, selected, true)
+}
+
+func (db *DB) selectCheckpointFrontierFlushUnitBudgetLocked(laneID int, baseMaxMemtables int, baseTargetBytes int64) (maxMemtables int, targetBytes int64, maxOps int) {
+	maxMemtables, targetBytes = baseMaxMemtables, baseTargetBytes
+	if db == nil {
+		return maxMemtables, targetBytes, 0
+	}
+
+	baseScan := db.scanFlushUnitsBudgetLocked(laneID, baseMaxMemtables, baseTargetBytes, 0)
+	if baseScan.queueLen == 0 || baseScan.count == 0 {
+		db.observeFlushBacklogCoalescingSkip(flushBacklogCoalescingSkipQueueDepth)
+		return maxMemtables, targetBytes, 0
+	}
+	if baseScan.count >= baseScan.queueLen || baseScan.stop == flushCollectStopNone {
+		db.observeFlushBacklogCoalescingSkip(flushBacklogCoalescingSkipQueueDepth)
+		return maxMemtables, targetBytes, 0
+	}
+	if baseScan.stop == flushCollectStopRangeBarrier || baseScan.stop == flushCollectStopLaneBarrier {
+		db.observeFlushBacklogCoalescingSkip(coalescingSkipReasonForCollectStop(baseScan.stop))
+		return maxMemtables, targetBytes, 0
+	}
+
+	maxMemtables = db.flushBacklogCoalescingMaxMemtables
+	if maxMemtables < baseMaxMemtables {
+		maxMemtables = baseMaxMemtables
+	}
+	if maxMemtables > flushBacklogCoalescingHardMaxMemtables {
+		maxMemtables = flushBacklogCoalescingHardMaxMemtables
+	}
+	targetBytes = db.flushBacklogCoalescingMaxBytes
+	if targetBytes < baseTargetBytes {
+		targetBytes = baseTargetBytes
+	}
+	maxOps = db.flushBacklogCoalescingMaxOps
+
+	coalesced := db.scanFlushUnitsBudgetLocked(laneID, maxMemtables, targetBytes, maxOps)
+	if coalesced.count <= baseScan.count {
+		db.observeFlushBacklogCoalescingSkip(coalescingSkipReasonForCollectStop(coalesced.stop))
+		return baseMaxMemtables, baseTargetBytes, 0
+	}
+
+	if coalesced.count < coalesced.queueLen && coalesced.stop != flushCollectStopNone {
+		db.observeFlushBacklogCoalescingSkip(coalescingSkipReasonForCollectStop(coalesced.stop))
+	}
+	return maxMemtables, targetBytes, maxOps
+}
+
 func (db *DB) selectFlushUnitBudgetLocked(laneID int, mode flushCollectionMode) (maxMemtables int, targetBytes int64, maxOps int) {
 	baseMaxMemtables, baseTargetBytes := db.baseFlushUnitBudget()
 	maxMemtables, targetBytes = baseMaxMemtables, baseTargetBytes
@@ -452,8 +585,7 @@ func (db *DB) selectFlushUnitBudgetLocked(laneID int, mode flushCollectionMode) 
 		db.observeFlushBacklogCoalescingSkip(flushBacklogCoalescingSkipClose)
 		return maxMemtables, targetBytes, 0
 	case flushCollectionCheckpoint:
-		db.observeFlushBacklogCoalescingSkip(flushBacklogCoalescingSkipCheckpoint)
-		return maxMemtables, targetBytes, 0
+		return db.selectCheckpointFrontierFlushUnitBudgetLocked(laneID, baseMaxMemtables, baseTargetBytes)
 	case flushCollectionStop:
 		db.observeFlushBacklogCoalescingSkip(flushBacklogCoalescingSkipStopPressure)
 		return maxMemtables, targetBytes, 0
@@ -505,27 +637,7 @@ func (db *DB) selectFlushUnitBudgetLocked(laneID int, mode flushCollectionMode) 
 		return baseMaxMemtables, baseTargetBytes, 0
 	}
 
-	db.flushBacklogCoalescingAdmittedRuns.Add(1)
-	extraMemtables := coalesced.count - baseScan.count
-	if extraMemtables > 0 {
-		db.flushBacklogCoalescingAdmittedExtraMemtables.Add(uint64(extraMemtables))
-	}
-	if extraBytes := coalesced.bytes - baseScan.bytes; extraBytes > 0 {
-		db.flushBacklogCoalescingAdmittedExtraBytes.Add(uint64(extraBytes))
-	}
-	if extraOps := coalesced.ops - baseScan.ops; extraOps > 0 {
-		db.flushBacklogCoalescingAdmittedExtraOps.Add(uint64(extraOps))
-	}
-	db.flushBacklogCoalescingSelectedMemtables.Add(uint64(coalesced.count))
-	updateAtomicMaxUint64(&db.flushBacklogCoalescingSelectedMemtablesMax, uint64(coalesced.count))
-	if coalesced.bytes > 0 {
-		db.flushBacklogCoalescingSelectedBytes.Add(uint64(coalesced.bytes))
-		updateAtomicMaxUint64(&db.flushBacklogCoalescingSelectedBytesMax, uint64(coalesced.bytes))
-	}
-	if coalesced.ops > 0 {
-		db.flushBacklogCoalescingSelectedOps.Add(uint64(coalesced.ops))
-		updateAtomicMaxUint64(&db.flushBacklogCoalescingSelectedOpsMax, uint64(coalesced.ops))
-	}
+	db.observeFlushBacklogCoalescingAdmission(baseScan, coalesced, false)
 	if coalesced.count < coalesced.queueLen && coalesced.stop != flushCollectStopNone {
 		db.observeFlushBacklogCoalescingSkip(coalescingSkipReasonForCollectStop(coalesced.stop))
 	}
