@@ -21339,11 +21339,12 @@ func (db *DB) Checkpoint() error {
 	checkpointDebtMemtables, checkpointDebtBytes := db.checkpointDebtSnapshotLocked()
 	db.mu.RUnlock()
 	db.observeCheckpointDebt(checkpointDebtMemtables, checkpointDebtBytes)
-	if checkpointDebtMemtables > 0 || checkpointDebtBytes > 0 {
+	if (checkpointDebtMemtables > 0 || checkpointDebtBytes > 0) && (!db.disableJournal || db.relaxedSync) {
 		// Kick the continuous drainer before the explicit checkpoint tries to take
-		// ownership. If a background pass is already running, the checkpoint below
-		// becomes a barrier over that work instead of silently leaving debt idle
-		// until the forced boundary arrives.
+		// ownership. With WAL enabled, any pre-checkpoint async drain remains covered
+		// by WAL until this checkpoint rotates/trims it. In strict WAL-disabled mode,
+		// do not pre-drain asynchronously: Checkpoint must own the synced flush
+		// boundary so success implies a backend sync.
 		db.TriggerFlush()
 	}
 	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
