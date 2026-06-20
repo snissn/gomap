@@ -21088,6 +21088,19 @@ func (db *DB) beginExclusiveWrite() {
 	}
 }
 
+func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
+	for {
+		db.writeMu.Lock()
+		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			return
+		}
+		db.writeMu.Unlock()
+		db.flushMu.Unlock()
+		db.waitForCheckpoint()
+		db.flushMu.Lock()
+	}
+}
+
 func (db *DB) recordCheckpointCutover(d time.Duration) {
 	if db == nil {
 		return
@@ -23049,7 +23062,7 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.beginExclusiveWrite()
+	db.beginExclusiveWriteWithFlushMuHeld()
 	defer db.writeMu.Unlock()
 
 	db.mu.Lock()
@@ -23415,7 +23428,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		// rotating the memtable (which can allocate large arenas).
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
-		db.beginExclusiveWrite()
+		db.beginExclusiveWriteWithFlushMuHeld()
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
@@ -31436,7 +31449,7 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 
 	b.db.flushMu.Lock()
 	defer b.db.flushMu.Unlock()
-	b.db.beginExclusiveWrite()
+	b.db.beginExclusiveWriteWithFlushMuHeld()
 	defer b.db.writeMu.Unlock()
 
 	b.db.mu.Lock()
