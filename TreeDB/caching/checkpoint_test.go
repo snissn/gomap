@@ -129,6 +129,44 @@ func TestCachingDB_DirectWriteGateRechecksCheckpointAfterPublicWait(t *testing.T
 	}
 }
 
+func TestCachingDB_ExclusiveWriteGateRechecksCheckpointAfterPublicWait(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(true)
+	db.checkpointMu.Unlock()
+
+	acquired := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		db.beginExclusiveWrite()
+		close(acquired)
+		db.writeMu.Unlock()
+		close(done)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatalf("exclusive write gate acquired while checkpointing")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("exclusive write gate did not resume after checkpoint")
+	}
+}
+
 func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

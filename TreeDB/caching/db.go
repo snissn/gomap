@@ -23049,7 +23049,7 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.writeMu.Lock()
+	db.beginExclusiveWrite()
 	defer db.writeMu.Unlock()
 
 	db.mu.Lock()
@@ -23124,7 +23124,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
 	// post-journal apply divergence on partial batch failure.
 	if !db.disableJournal {
-		db.writeMu.Lock()
+		db.beginExclusiveWrite()
 		defer db.writeMu.Unlock()
 
 		it, err := db.Iterator(start, end)
@@ -23415,7 +23415,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		// rotating the memtable (which can allocate large arenas).
 		db.flushMu.Lock()
 		defer db.flushMu.Unlock()
-		db.writeMu.Lock()
+		db.beginExclusiveWrite()
 		defer db.writeMu.Unlock()
 
 		db.mu.Lock()
@@ -31436,7 +31436,7 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 
 	b.db.flushMu.Lock()
 	defer b.db.flushMu.Unlock()
-	b.db.writeMu.Lock()
+	b.db.beginExclusiveWrite()
 	defer b.db.writeMu.Unlock()
 
 	b.db.mu.Lock()
