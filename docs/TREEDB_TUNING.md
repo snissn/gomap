@@ -130,9 +130,11 @@ Rollout guidance:
   rollback or a narrower explicit policy.
 
 M5/#2788 evidence is recorded in
-`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. Checkpoint pauses remain
-multi-second and are an accepted bounded model tradeoff, not a claim that
-checkpoint debt disappeared.
+`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. The #2819/#2832 final gate
+is recorded in `docs/TREEDB_FLUSH_APPLY_SCALING_M7_REPORT.md` and keeps the
+default at conservative c4; higher c8/c16 or physical-core rows remain explicit
+experiments. Checkpoint pauses are tracked by the M4 barrier/debt counters and
+remain a workload guardrail, not a claim that checkpoint debt disappeared.
 
 ### Read latency under flush debt (cached mode)
 
@@ -214,9 +216,20 @@ TreeDB enables a periodic cached-mode checkpoint by default:
 
 A checkpoint:
 - blocks writers briefly,
+- records pending checkpoint debt and kicks the background drainer when that is
+  safe for the durability mode,
 - rotates to a fresh journal segment,
 - flushes queued memtables to the index with `WriteSync`,
 - trims old journal segments.
+
+Useful checkpoint counters:
+
+- `treedb.cache.checkpoint.debt_memtables_last/max`
+- `treedb.cache.checkpoint.debt_bytes_last/max`
+- `treedb.cache.checkpoint.barrier_wait_ns_total/max`
+- `treedb.cache.checkpoint.flush_all.worker_passes_total`
+- `treedb.cache.checkpoint.flush_all.workers_total/max`
+- `treedb.cache.checkpoint.stage.*`
 
 Tuning/disable:
 - Set `BackgroundCheckpointInterval < 0` to disable periodic checkpoints.
