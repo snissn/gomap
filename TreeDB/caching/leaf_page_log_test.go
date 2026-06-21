@@ -534,6 +534,46 @@ func TestCachingLeafPageLogLaneProviderFlushesSelectedLaneForLiveRead(t *testing
 	}
 }
 
+func TestCachingLeafPageLogLaneLiveReadIgnoresInactiveSameSeqLane(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	defer func() { _ = db.Close() }()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	lane2, ok := provider.LeafPageLogLane(2)
+	if !ok || lane2 == nil {
+		t.Fatal("LeafPageLogLane(2) unavailable")
+	}
+	lanePage := testLeafPageBytes("live-lane-2")
+	lanePtr, err := lane2.AppendLeafPage(lanePage)
+	if err != nil {
+		t.Fatalf("lane 2 AppendLeafPage: %v", err)
+	}
+	lane1, ok := provider.LeafPageLogLane(1)
+	if !ok || lane1 == nil {
+		t.Fatal("LeafPageLogLane(1) unavailable")
+	}
+	_ = lane1
+
+	var readBarrierFlushes atomic.Int32
+	db.testOnVlogFlush = func(laneID int) {
+		if laneID == leafLogLaneID {
+			readBarrierFlushes.Add(1)
+		}
+	}
+	got, err := db.valueLogReader.Read(lanePtr.ValuePtr())
+	if err != nil {
+		t.Fatalf("live read selected lane with inactive same-seq lane: %v", err)
+	}
+	if !bytes.Equal(got, lanePage) {
+		t.Fatalf("live read selected lane with inactive same-seq lane mismatch")
+	}
+	if readBarrierFlushes.Load() == 0 {
+		t.Fatalf("live read selected lane did not flush active same-seq writer")
+	}
+}
+
 func TestCachingLeafPageLogLaneMaintenanceAdvanceUsesUniqueSequences(t *testing.T) {
 	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
 	defer func() { _ = db.Close() }()

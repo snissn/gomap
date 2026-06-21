@@ -2819,7 +2819,13 @@ func (db *DB) valueLogLaneForFileID(fileID uint32) *lane {
 		return db.valueLogLaneByID(int(laneID))
 	}
 	for _, l := range db.leafLogAppendLanesSnapshot() {
-		if l != nil && db.currentValueLogSeq(l) == int(seq) {
+		if l == nil {
+			continue
+		}
+		l.vlogMu.Lock()
+		matches := l.vlogSeq == int(seq) && (l.vlogPath != "" || l.vlog != nil)
+		l.vlogMu.Unlock()
+		if matches {
 			return l
 		}
 	}
