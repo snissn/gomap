@@ -394,7 +394,7 @@ func leafPageLogCurrentSegments(log LeafPageLog) ([]LeafPageLogSegment, error) {
 		if err != nil || len(current) == 0 {
 			return nil, err
 		}
-		return sanitizeLeafPageLogCreatedSegments(current), nil
+		return dedupeLeafPageLogSegments(current), nil
 	}
 	provider, ok := log.(leafPageLogCurrentSegmentProvider)
 	if !ok {
