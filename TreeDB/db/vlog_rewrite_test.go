@@ -134,6 +134,56 @@ func TestNoteRewriteSwapTouchedSegments(t *testing.T) {
 	}
 }
 
+func TestRegisterRewriteCreatedValueLogSegmentsDemotesPriorMultiCurrentLeafSegment(t *testing.T) {
+	dir := t.TempDir()
+	ids := make([]uint32, 2)
+	for i := range ids {
+		id, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID, uint32(i+1))
+		if err != nil {
+			t.Fatalf("EncodeFileID(%d): %v", i+1, err)
+		}
+		ids[i] = id
+		path := valuelog.SegmentPath(dir, id)
+		w, err := valuelog.NewWriter(path, id)
+		if err != nil {
+			t.Fatalf("NewWriter(%q): %v", path, err)
+		}
+		if _, err := w.Append(0, nil, uint64(i+1), []byte("leaf")); err != nil {
+			_ = w.Close()
+			t.Fatalf("Append(%q): %v", path, err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatalf("Close(%q): %v", path, err)
+		}
+	}
+
+	mgr, err := valuelog.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Close() })
+	mgr.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, true)
+	d := &DB{valueLogManager: mgr}
+
+	last, hasLast, err := d.registerRewriteCreatedValueLogSegments([]uint32{ids[0]}, 0, false)
+	if err != nil {
+		t.Fatalf("register first segment: %v", err)
+	}
+	if got := mgr.CurrentWritableFileIDs(); !slices.Equal(got, []uint32{ids[0]}) {
+		t.Fatalf("current writable after first register=%v want [%d]", got, ids[0])
+	}
+	last, hasLast, err = d.registerRewriteCreatedValueLogSegments([]uint32{ids[1]}, last, hasLast)
+	if err != nil {
+		t.Fatalf("register second segment: %v", err)
+	}
+	if !hasLast || last != ids[1] {
+		t.Fatalf("last registered=(%d,%t) want (%d,true)", last, hasLast, ids[1])
+	}
+	if got := mgr.CurrentWritableFileIDs(); !slices.Equal(got, []uint32{ids[1]}) {
+		t.Fatalf("current writable after second register=%v want [%d]", got, ids[1])
+	}
+}
+
 func TestLeafRefRewriteCtx_LeafRemapInlinePromotion(t *testing.T) {
 	var ctx leafRefRewriteCtx
 

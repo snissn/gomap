@@ -1905,19 +1905,10 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		// Register rewrite-created segments before publishing pointer swaps so
 		// finalizeCommit can stay on CurrentSetNoRefresh and avoid full scans.
-		for _, id := range batchCreatedIDs {
-			if hasLastRegisteredID && id == lastRegisteredCreatedID {
-				continue
-			}
-			path := db.valueLogManager.SegmentPath(id)
-			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
-				return err
-			}
-			if err := db.valueLogManager.PromoteCurrentWritable(id); err != nil {
-				return err
-			}
-			lastRegisteredCreatedID = id
-			hasLastRegisteredID = true
+		var registerErr error
+		lastRegisteredCreatedID, hasLastRegisteredID, registerErr = db.registerRewriteCreatedValueLogSegments(batchCreatedIDs, lastRegisteredCreatedID, hasLastRegisteredID)
+		if registerErr != nil {
+			return registerErr
 		}
 		if err := db.applyRewriteSwapBatchToMaintenanceRoot(root, collectionState, swaps, opts.SyncEachBatch); err != nil {
 			return err
@@ -2923,6 +2914,31 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 		return nil, err
 	}
 	return delta, nil
+}
+
+func (db *DB) registerRewriteCreatedValueLogSegments(ids []uint32, previousFileID uint32, hasPrevious bool) (uint32, bool, error) {
+	if db == nil || db.valueLogManager == nil {
+		return previousFileID, hasPrevious, nil
+	}
+	for _, id := range ids {
+		if hasPrevious && id == previousFileID {
+			continue
+		}
+		path := db.valueLogManager.SegmentPath(id)
+		if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
+			return previousFileID, hasPrevious, err
+		}
+		replacingID := uint32(0)
+		if hasPrevious {
+			replacingID = previousFileID
+		}
+		if err := db.valueLogManager.PromoteCurrentWritableReplacing(id, replacingID); err != nil {
+			return previousFileID, hasPrevious, err
+		}
+		previousFileID = id
+		hasPrevious = true
+	}
+	return previousFileID, hasPrevious, nil
 }
 
 func noteRewriteSwapTouchedSegments(b *batch.Batch, swaps []rewriteSwap) {
