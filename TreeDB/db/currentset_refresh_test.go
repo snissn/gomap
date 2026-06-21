@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -1132,6 +1133,11 @@ func TestRegisterLeafPageLogSegmentsForPublish_MultipleReportedSegments(t *testi
 		if !d.isLeafGenerationSegmentPath(seg.Path) {
 			t.Fatalf("segment path not classified as leaf_vlog: %s", seg.Path)
 		}
+	}
+	wantCurrentIDs := leafPageLogSegmentFileIDsForTest(wantCurrent)
+	sort.Slice(wantCurrentIDs, func(i, j int) bool { return wantCurrentIDs[i] < wantCurrentIDs[j] })
+	if got := d.valueLogManager.CurrentWritableFileIDs(); !reflect.DeepEqual(got, wantCurrentIDs) {
+		t.Fatalf("current writable file ids=%v want %v", got, wantCurrentIDs)
 	}
 	wantPending := make([]uint32, 0, len(wantUnique))
 	for _, seg := range wantUnique {

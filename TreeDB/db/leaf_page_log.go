@@ -81,9 +81,6 @@ type leafPageLogCurrentSegmentProvider interface {
 	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
 }
 
-// Optional interface implemented by leaf-page logs that can report every
-// currently writable value-log segment identity.
-
 type leafPageLogProtectedRootProvider interface {
 	ProtectedLeafGenerationRootIDs() []uint64
 }
@@ -524,11 +521,22 @@ func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	currentByID := make(map[uint32]struct{}, len(currentSegments))
+	for _, seg := range currentSegments {
+		if seg.FileID != 0 {
+			currentByID[seg.FileID] = struct{}{}
+		}
+	}
 	segments := dedupeLeafPageLogSegments(append(createdSegments, currentSegments...))
 	registeredSegments := make([]LeafPageLogSegment, 0, len(segments))
 	for _, seg := range segments {
 		if err := db.valueLogManager.RegisterSegment(seg.Path, seg.FileID); err != nil {
 			return false, err
+		}
+		if _, current := currentByID[seg.FileID]; current {
+			if err := db.valueLogManager.PromoteCurrentWritable(seg.FileID); err != nil {
+				return false, err
+			}
 		}
 		registeredSegments = append(registeredSegments, seg)
 		if db.isLeafGenerationSegmentPath(seg.Path) {
@@ -540,6 +548,7 @@ func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 	}
 	return len(registeredSegments) > 0, nil
 }
+
 func (db *DB) ensureLeafPageLogSegmentRegisteredAt(path string, fileID uint32, commitSeq uint64) (bool, error) {
 	if db == nil || db.valueLogManager == nil || path == "" || fileID == 0 {
 		return false, nil
