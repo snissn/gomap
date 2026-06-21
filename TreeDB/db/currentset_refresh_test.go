@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -128,7 +130,40 @@ type createdThenCurrentLeafPageLog struct {
 	firstFileID     uint32
 	currentPath     string
 	currentFileID   uint32
+	currentPaths    []string
+	currentFileIDs  []uint32
 	createdSegments []rewriteCreatedSegment
+	reported        []LeafPageLogSegment
+}
+
+func (l *createdThenCurrentLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	if l == nil || len(l.createdSegments) == 0 {
+		return nil, nil
+	}
+	out := make([]LeafPageLogSegment, 0, len(l.createdSegments))
+	for _, seg := range l.createdSegments {
+		out = append(out, LeafPageLogSegment{Path: seg.path, FileID: seg.fileID})
+	}
+	return out, nil
+}
+
+func (l *createdThenCurrentLeafPageLog) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	if l == nil {
+		return nil, nil
+	}
+	if len(l.currentPaths) > 0 {
+		out := make([]LeafPageLogSegment, 0, len(l.currentPaths))
+		for i := range l.currentPaths {
+			if i < len(l.currentFileIDs) && l.currentPaths[i] != "" && l.currentFileIDs[i] != 0 {
+				out = append(out, LeafPageLogSegment{Path: l.currentPaths[i], FileID: l.currentFileIDs[i]})
+			}
+		}
+		return out, nil
+	}
+	if l.currentPath == "" || l.currentFileID == 0 {
+		return nil, nil
+	}
+	return []LeafPageLogSegment{{Path: l.currentPath, FileID: l.currentFileID}}, nil
 }
 
 func (l *createdThenCurrentLeafPageLog) openSegment(seq uint32) (*valuelog.Writer, string, uint32, error) {
@@ -249,6 +284,16 @@ func (l *createdThenCurrentLeafPageLog) createdSegmentsSnapshot() ([]rewriteCrea
 	return append([]rewriteCreatedSegment(nil), l.createdSegments...), nil
 }
 
+type observerLeafPageLog struct {
+	*createdThenCurrentLeafPageLog
+	registered []LeafPageLogSegment
+}
+
+func (l *observerLeafPageLog) MarkLeafPageLogSegmentsRegistered(segments []LeafPageLogSegment) {
+	l.registered = append(l.registered, segments...)
+	l.reported = append(l.reported[:0], segments...)
+}
+
 // unregisteredLeafPageLog intentionally does not implement
 // CurrentValueLogSegment and does not register its segment with the manager.
 // It is used to verify forced-refresh safety fallbacks.
@@ -315,6 +360,169 @@ func (l *unregisteredLeafPageLog) Close() error {
 	err := l.w.Close()
 	l.w = nil
 	return err
+}
+
+type multiReportedLeafPageLog struct {
+	appendSegment   LeafPageLogSegment
+	currentSegments []LeafPageLogSegment
+	createdSegments []LeafPageLogSegment
+	registeredCalls [][]LeafPageLogSegment
+	writer          *valuelog.Writer
+	nextRID         uint64
+}
+
+func newMultiReportedLeafPageLog(t *testing.T, dir string) *multiReportedLeafPageLog {
+	t.Helper()
+	leafDir := LeafLogDirPath(dir)
+	appendSegment, writer := openLeafPageLogTestWriter(t, leafDir, 250, 1)
+	currentPath, currentFileID := createLeafGenerationTestSegment(t, leafDir, 249, 1)
+	createdPath1, createdFileID1 := createLeafGenerationTestSegment(t, leafDir, 248, 1)
+	createdPath2, createdFileID2 := createLeafGenerationTestSegment(t, leafDir, 247, 1)
+	return &multiReportedLeafPageLog{
+		appendSegment: appendSegment,
+		currentSegments: []LeafPageLogSegment{
+			appendSegment,
+			{Path: currentPath, FileID: currentFileID},
+		},
+		createdSegments: []LeafPageLogSegment{
+			appendSegment,
+			{Path: createdPath1, FileID: createdFileID1},
+			{Path: createdPath2, FileID: createdFileID2},
+		},
+		writer: writer,
+	}
+}
+
+func openLeafPageLogTestWriter(t *testing.T, leafDir string, lane, seq uint32) (LeafPageLogSegment, *valuelog.Writer) {
+	t.Helper()
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID(%d,%d): %v", lane, seq, err)
+	}
+	path := filepath.Join(leafDir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", path, err)
+	}
+	writer, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(%q): %v", path, err)
+	}
+	return LeafPageLogSegment{Path: path, FileID: fileID}, writer
+}
+
+func (l *multiReportedLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if l == nil || l.writer == nil {
+		return page.LeafLogPtr{}, errors.New("leaf log writer unavailable")
+	}
+	l.nextRID++
+	ptr, err := l.writer.Append(0, nil, l.nextRID, leafPage)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return page.LeafLogPtrFromValuePtr(ptr)
+}
+
+func (l *multiReportedLeafPageLog) Flush() error {
+	if l == nil || l.writer == nil {
+		return nil
+	}
+	return l.writer.Flush()
+}
+
+func (l *multiReportedLeafPageLog) Sync() error {
+	if l == nil || l.writer == nil {
+		return nil
+	}
+	return l.writer.Sync()
+}
+
+func (l *multiReportedLeafPageLog) Close() error {
+	if l == nil || l.writer == nil {
+		return nil
+	}
+	err := l.writer.Close()
+	l.writer = nil
+	return err
+}
+
+func (l *multiReportedLeafPageLog) CurrentValueLogSegment() (string, uint32, bool) {
+	if l == nil || len(l.currentSegments) == 0 {
+		return "", 0, false
+	}
+	seg := l.currentSegments[0]
+	if seg.Path == "" || seg.FileID == 0 {
+		return "", 0, false
+	}
+	return seg.Path, seg.FileID, true
+}
+
+func (l *multiReportedLeafPageLog) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	if l == nil || len(l.currentSegments) == 0 {
+		return nil, nil
+	}
+	return append([]LeafPageLogSegment(nil), l.currentSegments...), nil
+}
+
+func (l *multiReportedLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	if l == nil || len(l.createdSegments) == 0 {
+		return nil, nil
+	}
+	return append([]LeafPageLogSegment(nil), l.createdSegments...), nil
+}
+
+func (l *multiReportedLeafPageLog) MarkLeafPageLogSegmentsRegistered(segments []LeafPageLogSegment) {
+	if l == nil || len(segments) == 0 {
+		return
+	}
+	copied := append([]LeafPageLogSegment(nil), segments...)
+	l.registeredCalls = append(l.registeredCalls, copied)
+	registered := make(map[uint32]struct{}, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		registered[seg.FileID] = struct{}{}
+	}
+	if len(registered) == 0 {
+		return
+	}
+	filtered := l.createdSegments[:0]
+	for _, seg := range l.createdSegments {
+		if _, ok := registered[seg.FileID]; ok {
+			continue
+		}
+		filtered = append(filtered, seg)
+	}
+	l.createdSegments = filtered
+}
+
+func uniqueLeafPageLogSegmentsForTest(groups ...[]LeafPageLogSegment) []LeafPageLogSegment {
+	seen := make(map[uint32]struct{})
+	out := make([]LeafPageLogSegment, 0)
+	for _, group := range groups {
+		for _, seg := range group {
+			if seg.Path == "" || seg.FileID == 0 {
+				continue
+			}
+			if _, ok := seen[seg.FileID]; ok {
+				continue
+			}
+			seen[seg.FileID] = struct{}{}
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
+func leafPageLogSegmentFileIDsForTest(segments []LeafPageLogSegment) []uint32 {
+	out := make([]uint32, 0, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		out = append(out, seg.FileID)
+	}
+	return out
 }
 
 func TestAppendOrderedRootDeltaBatchFinalTouchedValueLogSegmentsDedupesWithSeed(t *testing.T) {
@@ -871,6 +1079,195 @@ func TestOuterLeafCommitPublishesCreatedSegmentBeforeCurrentWithoutRefresh(t *te
 	}
 	if !bytes.Equal(got, []byte("v")) {
 		t.Fatalf("Get mismatch: got %q want %q", got, "v")
+	}
+}
+
+func TestRegisterLeafPageLogSegmentsForPublish_MultipleReportedSegments(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	leafLog := newMultiReportedLeafPageLog(t, dir)
+	defer func() { _ = leafLog.Close() }()
+	d.SetLeafPageLog(leafLog)
+	refreshBefore := d.valueLogManager.RefreshScanCount()
+	wantCreated := append([]LeafPageLogSegment(nil), leafLog.createdSegments...)
+	wantCurrent := append([]LeafPageLogSegment(nil), leafLog.currentSegments...)
+	wantUnique := uniqueLeafPageLogSegmentsForTest(wantCreated, wantCurrent)
+
+	registered, err := d.registerLeafPageLogSegmentsForPublish()
+	if err != nil {
+		t.Fatalf("registerLeafPageLogSegmentsForPublish: %v", err)
+	}
+	if !registered {
+		t.Fatal("expected reported leaf segments to register")
+	}
+	if got, want := d.valueLogManager.RefreshScanCount(), refreshBefore; got != want {
+		t.Fatalf("registerLeafPageLogSegmentsForPublish triggered refresh scan: before=%d after=%d", want, got)
+	}
+	if got, want := len(leafLog.registeredCalls), 1; got != want {
+		t.Fatalf("registration observer calls=%d want %d", got, want)
+	}
+	if !reflect.DeepEqual(leafLog.registeredCalls[0], wantCreated) {
+		t.Fatalf("registered created segments=%v want %v", leafLog.registeredCalls[0], wantCreated)
+	}
+	if got, want := len(leafLog.createdSegments), 0; got != want {
+		t.Fatalf("created segments remaining=%d want %d", got, want)
+	}
+	set := d.valueLogManager.CurrentSetNoRefresh()
+	defer func() {
+		if set != nil {
+			_ = d.valueLogManager.Release(set)
+		}
+	}()
+	if set == nil {
+		t.Fatal("missing value-log set after registration")
+	}
+	for _, seg := range wantUnique {
+		if _, ok := set.Files[seg.FileID]; !ok {
+			t.Fatalf("value-log set missing segment %d (%s)", seg.FileID, filepath.Base(seg.Path))
+		}
+		if !d.isLeafGenerationSegmentPath(seg.Path) {
+			t.Fatalf("segment path not classified as leaf_vlog: %s", seg.Path)
+		}
+	}
+	wantCurrentIDs := leafPageLogSegmentFileIDsForTest(wantCurrent)
+	sort.Slice(wantCurrentIDs, func(i, j int) bool { return wantCurrentIDs[i] < wantCurrentIDs[j] })
+	if got := d.valueLogManager.CurrentWritableFileIDs(); !reflect.DeepEqual(got, wantCurrentIDs) {
+		t.Fatalf("current writable file ids=%v want %v", got, wantCurrentIDs)
+	}
+	wantPending := make([]uint32, 0, len(wantUnique))
+	for _, seg := range wantUnique {
+		rawFileID, ok := rawLeafGenerationFileID(seg.FileID)
+		if !ok {
+			t.Fatalf("raw leaf generation file id missing for segment %d", seg.FileID)
+		}
+		wantPending = append(wantPending, rawFileID)
+	}
+	if got := append([]uint32(nil), d.leafGenerationPendingFileIDs...); !reflect.DeepEqual(got, wantPending) {
+		t.Fatalf("pending leaf generation file ids=%v want %v", got, wantPending)
+	}
+}
+
+func TestOuterLeafCommitPublishesMultipleReportedSegmentsWithoutRefreshAndReopen(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	leafLog := newMultiReportedLeafPageLog(t, dir)
+	d.SetLeafPageLog(leafLog)
+	refreshBefore := d.valueLogManager.RefreshScanCount()
+	wantCreated := append([]LeafPageLogSegment(nil), leafLog.createdSegments...)
+	wantCurrent := append([]LeafPageLogSegment(nil), leafLog.currentSegments...)
+	wantUnique := uniqueLeafPageLogSegmentsForTest(wantCreated, wantCurrent)
+
+	if err := d.Set([]byte("k"), []byte("v")); err != nil {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	refreshAfter := d.valueLogManager.RefreshScanCount()
+	if refreshAfter != refreshBefore {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("outer-leaf commit triggered value-log refresh scan: before=%d after=%d", refreshBefore, refreshAfter)
+	}
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("state missing value-log set")
+	}
+	for _, seg := range wantUnique {
+		if _, ok := st.ValueLogSet.Files[seg.FileID]; !ok {
+			_ = leafLog.Close()
+			_ = d.Close()
+			t.Fatalf("published state missing segment %d (%s)", seg.FileID, filepath.Base(seg.Path))
+		}
+	}
+	if got, want := len(leafLog.registeredCalls), 1; got != want {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("registration observer calls=%d want %d", got, want)
+	}
+	if !reflect.DeepEqual(leafLog.registeredCalls[0], wantCreated) {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("registered created segments=%v want %v", leafLog.registeredCalls[0], wantCreated)
+	}
+	if got, want := len(leafLog.createdSegments), 0; got != want {
+		_ = leafLog.Close()
+		_ = d.Close()
+		t.Fatalf("created segments remaining=%d want %d", got, want)
+	}
+	if err := leafLog.Close(); err != nil {
+		_ = d.Close()
+		t.Fatalf("Close leaf log: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("reopen Open: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, err := reopened.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("reopened Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("reopened Get mismatch: got %q want %q", got, "v")
+	}
+}
+
+func TestOuterLeafCommitFailsClosedWhenReportedSegmentCannotRegister(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	leafLog := newMultiReportedLeafPageLog(t, dir)
+	defer func() { _ = leafLog.Close() }()
+	d.SetLeafPageLog(leafLog)
+	before := d.valueLogManager.RefreshScanCount()
+	missingFileID, err := valuelog.EncodeFileID(246, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	leafLog.createdSegments[0] = LeafPageLogSegment{
+		Path:   filepath.Join(LeafLogDirPath(dir), "value-l246-000001.log"),
+		FileID: missingFileID,
+	}
+
+	if err := d.Set([]byte("k"), []byte("v")); err == nil {
+		t.Fatal("expected Set to fail when a reported leaf segment cannot register")
+	}
+	if got, want := d.valueLogManager.RefreshScanCount(), before; got != want {
+		t.Fatalf("failed commit triggered refresh scan: before=%d after=%d", want, got)
+	}
+	if got, want := len(leafLog.registeredCalls), 0; got != want {
+		t.Fatalf("registration observer calls=%d want %d", got, want)
+	}
+	if d.valueLogManager.HasSegment(leafLog.appendSegment.FileID) {
+		t.Fatalf("unexpected registration of append segment %d after failure", leafLog.appendSegment.FileID)
+	}
+	st := d.State()
+	if st == nil || st.CommitSeq != 0 {
+		t.Fatalf("state changed after failed commit: %+v", st)
+	}
+	if st != nil && st.ValueLogSet != nil {
+		if _, ok := st.ValueLogSet.Files[leafLog.appendSegment.FileID]; ok {
+			t.Fatalf("published state unexpectedly includes failed append segment %d", leafLog.appendSegment.FileID)
+		}
 	}
 }
 
