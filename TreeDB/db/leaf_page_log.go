@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -527,6 +528,14 @@ func (db *DB) leafPageLogLaneForWorkerIndex(workerIndex int) (LeafPageLog, bool)
 // when it rotates the shared value log so outer-leaf commits can publish a
 // current ValueLogSet via CurrentSetNoRefresh.
 func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
+	return db.RegisterValueLogSegmentReplacing(path, fileID, 0)
+}
+
+// RegisterValueLogSegmentReplacing registers a newly created value-log segment
+// and marks it as current writable, sealing previousFileID when it is the prior
+// segment for the same physical writer. Cached leaf-log lanes use this because
+// multiple physical writers share the reserved encoded leaf-log lane id.
+func (db *DB) RegisterValueLogSegmentReplacing(path string, fileID, previousFileID uint32) error {
 	if db == nil {
 		return nil
 	}
@@ -539,7 +548,7 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
 		return err
 	}
-	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+	if err := db.valueLogManager.PromoteCurrentWritableReplacing(fileID, previousFileID); err != nil {
 		return err
 	}
 	if db.isLeafGenerationSegmentPath(path) {
@@ -592,6 +601,15 @@ func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 		registeredSegments = append(registeredSegments, seg)
 		if db.isLeafGenerationSegmentPath(seg.Path) {
 			db.queueLeafGenerationWritableFileID(seg.FileID)
+		}
+	}
+	for _, id := range db.valueLogManager.CurrentWritableFileIDs() {
+		lane, _ := valuelog.DecodeFileID(id)
+		if lane != valuelog.ReservedLeafLogLaneID {
+			continue
+		}
+		if _, current := currentByID[id]; !current {
+			db.valueLogManager.DemoteCurrentWritable(id)
 		}
 	}
 	if len(createdSegments) > 0 {

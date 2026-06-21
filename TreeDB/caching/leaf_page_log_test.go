@@ -511,8 +511,9 @@ func TestCachingLeafPageLogLaneProviderFlushesSelectedLaneForLiveRead(t *testing
 		current[id] = struct{}{}
 	}
 	for _, ptr := range []page.LeafLogPtr{defaultPtr, lanePtr} {
-		if _, ok := current[ptr.ValuePtr().FileID]; !ok {
-			t.Fatalf("current writable ids %v missing %d", currentIDs, ptr.ValuePtr().FileID)
+		fileID := ptr.ValuePtr().FileID
+		if _, ok := current[fileID]; !ok {
+			t.Fatalf("current writable ids %v missing %d", currentIDs, fileID)
 		}
 	}
 	got, err := db.valueLogReader.Read(lanePtr.ValuePtr())
@@ -521,6 +522,83 @@ func TestCachingLeafPageLogLaneProviderFlushesSelectedLaneForLiveRead(t *testing
 	}
 	if !bytes.Equal(got, lanePage) {
 		t.Fatalf("live read selected lane mismatch")
+	}
+}
+
+func TestCachingLeafPageLogLaneMaintenanceAdvanceUsesUniqueSequences(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	defer func() { _ = db.Close() }()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	appenders := []backenddb.LeafPageLog{captured.leafLog}
+	for worker := 1; worker <= 2; worker++ {
+		appender, ok := provider.LeafPageLogLane(worker)
+		if !ok || appender == nil {
+			t.Fatalf("LeafPageLogLane(%d) unavailable", worker)
+		}
+		appenders = append(appenders, appender)
+	}
+	for i, appender := range appenders {
+		if _, err := appender.AppendLeafPage(testLeafPageBytes(fmt.Sprintf("advance-%d", i))); err != nil {
+			t.Fatalf("AppendLeafPage lane %d: %v", i, err)
+		}
+	}
+	lanes := db.leafLogAppendLanesSnapshot()
+	oldIDs := make(map[uint32]struct{}, len(lanes))
+	maxSeq := 0
+	for _, l := range lanes {
+		if l == nil || l.vlogSeq == 0 {
+			continue
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if err != nil {
+			t.Fatalf("EncodeFileID old seq %d: %v", l.vlogSeq, err)
+		}
+		oldIDs[fileID] = struct{}{}
+		if l.vlogSeq > maxSeq {
+			maxSeq = l.vlogSeq
+		}
+	}
+	observedMaxSeq := maxSeq + 10
+	db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
+	for _, l := range lanes {
+		if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+			t.Fatalf("advanceLeafLogAppendWriterPastObservedSeq: %v", err)
+		}
+	}
+	seenSeq := make(map[int]struct{}, len(lanes))
+	for _, l := range lanes {
+		if l == nil {
+			continue
+		}
+		if l.vlogSeq <= observedMaxSeq {
+			t.Fatalf("lane seq=%d want > observed %d", l.vlogSeq, observedMaxSeq)
+		}
+		if _, dup := seenSeq[l.vlogSeq]; dup {
+			t.Fatalf("duplicate advanced leaf seq %d", l.vlogSeq)
+		}
+		seenSeq[l.vlogSeq] = struct{}{}
+	}
+	currentIDs := db.valueLogReader.CurrentWritableFileIDs()
+	current := make(map[uint32]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		current[id] = struct{}{}
+	}
+	for oldID := range oldIDs {
+		if _, stillCurrent := current[oldID]; stillCurrent {
+			t.Fatalf("old leaf segment %d still current after rotation; current=%v", oldID, currentIDs)
+		}
+	}
+	for _, l := range lanes {
+		fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if err != nil {
+			t.Fatalf("EncodeFileID new seq %d: %v", l.vlogSeq, err)
+		}
+		if _, ok := current[fileID]; !ok {
+			t.Fatalf("current writable ids %v missing advanced file %d", currentIDs, fileID)
+		}
 	}
 }
 

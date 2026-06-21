@@ -7196,8 +7196,10 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 		}
 	}
 	if db.indexOuterLeavesInValueLog {
+		observedMaxSeq := maxSeqByLane[leafLogLaneID]
+		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
 		for _, l := range db.leafLogAppendLanesSnapshot() {
-			if err := db.advanceValueLogWriterPastObservedSeq(l, maxSeqByLane[leafLogLaneID]); err != nil {
+			if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
 				return err
 			}
 		}
@@ -7205,12 +7207,33 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 	return nil
 }
 
-func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
+func (db *DB) advanceLeafLogAppendWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
 	if db == nil || l == nil || observedMaxSeq <= 0 {
 		return nil
 	}
-	if db.isLeafLogAppendLane(l) {
-		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if observedMaxSeq <= l.vlogSeq {
+		return nil
+	}
+	if l.vlog == nil {
+		l.vlogSeq = observedMaxSeq
+		l.vlogPath = ""
+		l.vlogCaps = vlogWriterCaps{}
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		return nil
+	}
+	nextSeq, err := db.nextLeafLogAppendSeq()
+	if err != nil {
+		return err
+	}
+	return db.rotateValueLogMuHeldToSeq(l, nextSeq)
+}
+
+func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
+	if db == nil || l == nil || observedMaxSeq <= 0 {
+		return nil
 	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
@@ -24850,7 +24873,11 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 		l.vlogSeq = nextSeq
 		l.vlogLiveBytes.Store(0)
 	}
-	if err := db.registerValueLogSegment(path, fileID); err != nil {
+	previousFileID := uint32(0)
+	if oldSeq > 0 && oldPath != "" {
+		previousFileID, _ = valuelog.EncodeFileID(uint32(l.id), uint32(oldSeq))
+	}
+	if err := db.registerValueLogSegmentReplacing(path, fileID, previousFileID); err != nil {
 		if oldPath != "" {
 			if hadClosedPrev {
 				l.vlogClosedSizes[oldPath] = closedPrev
@@ -24916,6 +24943,10 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 }
 
 func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
+	return db.registerValueLogSegmentReplacing(path, fileID, 0)
+}
+
+func (db *DB) registerValueLogSegmentReplacing(path string, fileID, previousFileID uint32) error {
 	if db == nil {
 		return nil
 	}
@@ -24926,10 +24957,21 @@ func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
 		if err := db.valueLogReader.RegisterSegment(path, fileID); err != nil {
 			return err
 		}
-		if err := db.valueLogReader.PromoteCurrentWritable(fileID); err != nil {
+		if err := db.valueLogReader.PromoteCurrentWritableReplacing(fileID, previousFileID); err != nil {
 			_ = db.valueLogReader.RemoveSegment(fileID)
 			return err
 		}
+	}
+	if registrar, ok := db.backend.(interface {
+		RegisterValueLogSegmentReplacing(path string, fileID, previousFileID uint32) error
+	}); ok {
+		if err := registrar.RegisterValueLogSegmentReplacing(path, fileID, previousFileID); err != nil {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.RemoveSegment(fileID)
+			}
+			return err
+		}
+		return nil
 	}
 	if registrar, ok := db.backend.(interface {
 		RegisterValueLogSegment(path string, fileID uint32) error

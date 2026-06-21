@@ -379,6 +379,35 @@ func TestManagerPromoteCurrentWritable_AllowsMultiCurrentWritableLane(t *testing
 	}
 }
 
+func TestManagerPromoteCurrentWritableReplacing_DemotesPriorMultiCurrentWriter(t *testing.T) {
+	mgr := &Manager{
+		files:                 make(map[uint32]*File),
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	mgr.SetMultiCurrentWritableLane(ReservedLeafLogLaneID, true)
+	f1 := &File{ID: mustEncodeFileID(t, ReservedLeafLogLaneID, 1)}
+	f2 := &File{ID: mustEncodeFileID(t, ReservedLeafLogLaneID, 2)}
+	mgr.files[f1.ID] = f1
+	mgr.files[f2.ID] = f2
+
+	if err := mgr.PromoteCurrentWritable(f1.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritable(first): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritableReplacing(f2.ID, f1.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritableReplacing(second): %v", err)
+	}
+	if f1.currentWritable.Load() {
+		t.Fatalf("first file still current writable after replacement")
+	}
+	if !f2.currentWritable.Load() {
+		t.Fatalf("second file not marked current writable")
+	}
+	gotIDs := mgr.CurrentWritableFileIDs()
+	if len(gotIDs) != 1 || gotIDs[0] != f2.ID {
+		t.Fatalf("CurrentWritableFileIDs=%v want [%d]", gotIDs, f2.ID)
+	}
+}
+
 func TestManagerSetCurrentWritableReadBarrier_NilClearsCallback(t *testing.T) {
 	mgr := &Manager{}
 	calls := 0
