@@ -10,10 +10,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-type leafPageLogLaneProvider interface {
-	leafPageLogLane(workerIndex int) (LeafPageLog, bool)
-}
-
 type leafPageLogLaneCloner interface {
 	cloneLeafPageLogLane(*leafLogSeqAllocator) (LeafPageLog, error)
 }
@@ -73,6 +69,13 @@ type leafPageLogLaneGroup struct {
 func wrapLeafPageLogWithLaneSelection(log LeafPageLog) LeafPageLog {
 	if log == nil {
 		return nil
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		if _, ok := wrapped.inner.(LeafPageLogLaneProvider); ok {
+			return log
+		}
+	} else if _, ok := log.(LeafPageLogLaneProvider); ok {
+		return log
 	}
 	if group, ok := log.(*leafPageLogLaneGroup); ok {
 		return group
@@ -183,7 +186,7 @@ func (g *leafPageLogLaneGroup) Close() error {
 	})
 }
 
-func (g *leafPageLogLaneGroup) leafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+func (g *leafPageLogLaneGroup) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
 	if g == nil {
 		return nil, false
 	}
@@ -217,6 +220,10 @@ func (g *leafPageLogLaneGroup) leafPageLogLane(workerIndex int) (LeafPageLog, bo
 	}
 	g.lanes[workerIndex] = lane
 	return lane, true
+}
+
+func (g *leafPageLogLaneGroup) leafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	return g.LeafPageLogLane(workerIndex)
 }
 
 func (g *leafPageLogLaneGroup) defaultLane() LeafPageLog {

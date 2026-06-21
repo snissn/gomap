@@ -64,6 +64,16 @@ type LeafPageLogCreatedSegmentProvider interface {
 	CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error)
 }
 
+// LeafPageLogLaneProvider optionally exposes additional lane-specific leaf-page
+// log appenders for concurrent writers.
+type LeafPageLogLaneProvider interface {
+	LeafPageLogLane(workerIndex int) (LeafPageLog, bool)
+}
+
+// leafPageLogLaneProvider is retained for internal callers that still use the
+// unexported name.
+type leafPageLogLaneProvider = LeafPageLogLaneProvider
+
 // LeafPageLogCurrentSegmentProvider optionally reports every currently tracked
 // leaf-log segment. Implementations may return multiple current segments while
 // keeping the singular CurrentValueLogSegment compatibility path available.
@@ -269,6 +279,24 @@ func (l *leafPageLogWithRecordLengthHints) CurrentLeafPageLogSegmentsSnapshot() 
 		return nil, nil
 	}
 	return leafPageLogCurrentSegments(l.inner)
+}
+
+func (l *leafPageLogWithRecordLengthHints) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	if l == nil || l.inner == nil {
+		return nil, false
+	}
+	provider, ok := l.inner.(LeafPageLogLaneProvider)
+	if !ok {
+		if workerIndex <= 0 {
+			return l, true
+		}
+		return nil, false
+	}
+	lane, ok := provider.LeafPageLogLane(workerIndex)
+	if !ok || lane == nil {
+		return nil, false
+	}
+	return wrapLeafPageLogWithRecordLengthHints(l.db, lane), true
 }
 
 func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationRootIDs() []uint64 {
@@ -485,8 +513,8 @@ func (db *DB) leafPageLogLaneForWorkerIndex(workerIndex int) (LeafPageLog, bool)
 	if db == nil || db.leafPageLog == nil {
 		return nil, false
 	}
-	if provider, ok := db.leafPageLog.(leafPageLogLaneProvider); ok {
-		return provider.leafPageLogLane(workerIndex)
+	if provider, ok := db.leafPageLog.(LeafPageLogLaneProvider); ok {
+		return provider.LeafPageLogLane(workerIndex)
 	}
 	if workerIndex <= 0 {
 		return db.leafPageLog, true
