@@ -3948,6 +3948,14 @@ func (w *rewriteWriter) CurrentValueLogSegment() (string, uint32, bool) {
 	return w.currentPrimaryValueLogSegment()
 }
 
+func (w *rewriteWriter) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	path, fileID, ok := w.CurrentValueLogSegment()
+	if !ok || path == "" || fileID == 0 {
+		return nil, nil
+	}
+	return []LeafPageLogSegment{{Path: path, FileID: fileID}}, nil
+}
+
 func (w *rewriteWriter) currentPrimaryValueLogSegment() (string, uint32, bool) {
 	if w == nil {
 		return "", 0, false

@@ -64,6 +64,13 @@ type LeafPageLogCreatedSegmentProvider interface {
 	CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error)
 }
 
+// LeafPageLogCurrentSegmentProvider optionally reports every currently tracked
+// leaf-log segment. Implementations may return multiple current segments while
+// keeping the singular CurrentValueLogSegment compatibility path available.
+type LeafPageLogCurrentSegmentProvider interface {
+	CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error)
+}
+
 type LeafPageLogSegmentRegistrationObserver interface {
 	MarkLeafPageLogSegmentsRegistered([]LeafPageLogSegment)
 }
@@ -73,6 +80,9 @@ type LeafPageLogSegmentRegistrationObserver interface {
 type leafPageLogCurrentSegmentProvider interface {
 	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
 }
+
+// Optional interface implemented by leaf-page logs that can report every
+// currently writable value-log segment identity.
 
 type leafPageLogProtectedRootProvider interface {
 	ProtectedLeafGenerationRootIDs() []uint64
@@ -257,6 +267,13 @@ func (l *leafPageLogWithRecordLengthHints) CurrentValueLogSegment() (path string
 	return provider.CurrentValueLogSegment()
 }
 
+func (l *leafPageLogWithRecordLengthHints) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	if l == nil || l.inner == nil {
+		return nil, nil
+	}
+	return leafPageLogCurrentSegments(l.inner)
+}
+
 func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationRootIDs() []uint64 {
 	if l == nil || l.inner == nil {
 		return nil
@@ -294,11 +311,11 @@ func (db *DB) currentLeafPageLogSegment() (path string, fileID uint32, ok bool) 
 	if db == nil || db.leafPageLog == nil {
 		return "", 0, false
 	}
-	provider, ok := db.leafPageLog.(leafPageLogCurrentSegmentProvider)
-	if !ok {
+	segments, err := leafPageLogCurrentSegments(db.leafPageLog)
+	if err != nil || len(segments) == 0 {
 		return "", 0, false
 	}
-	return provider.CurrentValueLogSegment()
+	return segments[0].Path, segments[0].FileID, true
 }
 
 func (db *DB) protectedLeafGenerationRootIDsFromLeafPageLog() []uint64 {
@@ -365,15 +382,52 @@ func leafPageLogCreatedSegments(log LeafPageLog) ([]LeafPageLogSegment, error) {
 		}
 		out = append(out, LeafPageLogSegment{Path: seg.path, FileID: seg.fileID})
 	}
-	return out, nil
+	return sanitizeLeafPageLogCreatedSegments(out), nil
+}
+
+func leafPageLogCurrentSegments(log LeafPageLog) ([]LeafPageLogSegment, error) {
+	if log == nil {
+		return nil, nil
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		return leafPageLogCurrentSegments(wrapped.inner)
+	}
+	if provider, ok := log.(LeafPageLogCurrentSegmentProvider); ok {
+		current, err := provider.CurrentLeafPageLogSegmentsSnapshot()
+		if err != nil || len(current) == 0 {
+			return nil, err
+		}
+		return sanitizeLeafPageLogCreatedSegments(current), nil
+	}
+	provider, ok := log.(leafPageLogCurrentSegmentProvider)
+	if !ok {
+		return nil, nil
+	}
+	path, fileID, ok := provider.CurrentValueLogSegment()
+	if !ok || path == "" || fileID == 0 {
+		return nil, nil
+	}
+	return []LeafPageLogSegment{{Path: path, FileID: fileID}}, nil
 }
 
 func sanitizeLeafPageLogCreatedSegments(created []LeafPageLogSegment) []LeafPageLogSegment {
-	out := make([]LeafPageLogSegment, 0, len(created))
-	for _, seg := range created {
+	return dedupeLeafPageLogSegments(created)
+}
+
+func dedupeLeafPageLogSegments(segments []LeafPageLogSegment) []LeafPageLogSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	out := make([]LeafPageLogSegment, 0, len(segments))
+	seen := make(map[uint32]struct{}, len(segments))
+	for _, seg := range segments {
 		if seg.Path == "" || seg.FileID == 0 {
 			continue
 		}
+		if _, ok := seen[seg.FileID]; ok {
+			continue
+		}
+		seen[seg.FileID] = struct{}{}
 		out = append(out, seg)
 	}
 	return out
@@ -466,30 +520,26 @@ func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, seg := range createdSegments {
+	currentSegments, err := leafPageLogCurrentSegments(db.leafPageLog)
+	if err != nil {
+		return false, err
+	}
+	segments := dedupeLeafPageLogSegments(append(createdSegments, currentSegments...))
+	registeredSegments := make([]LeafPageLogSegment, 0, len(segments))
+	for _, seg := range segments {
 		if err := db.valueLogManager.RegisterSegment(seg.Path, seg.FileID); err != nil {
 			return false, err
 		}
+		registeredSegments = append(registeredSegments, seg)
 		if db.isLeafGenerationSegmentPath(seg.Path) {
 			db.queueLeafGenerationWritableFileID(seg.FileID)
 		}
 	}
-	path, fileID, ok := db.currentLeafPageLogSegment()
-	if !ok || path == "" || fileID == 0 {
+	if len(createdSegments) > 0 {
 		markLeafPageLogSegmentsRegistered(db.leafPageLog, createdSegments)
-		return len(createdSegments) > 0, nil
 	}
-	registered, err := db.ensureLeafPageLogSegmentRegisteredAt(path, fileID, 0)
-	if err != nil {
-		return false, err
-	}
-	if registered && db.isLeafGenerationSegmentPath(path) {
-		db.queueLeafGenerationWritableFileID(fileID)
-	}
-	markLeafPageLogSegmentsRegistered(db.leafPageLog, createdSegments)
-	return registered, nil
+	return len(registeredSegments) > 0, nil
 }
-
 func (db *DB) ensureLeafPageLogSegmentRegisteredAt(path string, fileID uint32, commitSeq uint64) (bool, error) {
 	if db == nil || db.valueLogManager == nil || path == "" || fileID == 0 {
 		return false, nil
