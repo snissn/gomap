@@ -6361,6 +6361,7 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "flush_apply.cache.coordinator.hard_overload_fallbacks_total", alts: []string{"treedb.cache.flush_apply.coordinator.hard_overload_fallbacks_total"}},
 		{label: "checkpoint.flushmu_wait_total_ms", alts: []string{"treedb.cache.checkpoint.flushmu_wait_total_ms"}},
 		{label: "checkpoint.active_background_flush_wait_ns_total", alts: []string{"treedb.cache.checkpoint.active_background_flush_wait_ns_total"}},
+		{label: "checkpoint.preflush_kick_skips_total", alts: []string{"treedb.cache.checkpoint.preflush_kick_skips_total"}},
 		{label: "checkpoint.shared_drain.flushmu_releases_total", alts: []string{"treedb.cache.checkpoint.shared_drain.flushmu_releases_total"}},
 		{label: "checkpoint.shared_drain.checkpoint_units_total", alts: []string{"treedb.cache.checkpoint.shared_drain.checkpoint_units_total"}},
 		{label: "checkpoint.shared_drain.background_units_total", alts: []string{"treedb.cache.checkpoint.shared_drain.background_units_total"}},
