@@ -260,6 +260,7 @@ type rewriteSourceSelectionStats struct {
 }
 
 type rewriteRIDAllocator struct {
+	mu      sync.Mutex
 	next    uint64
 	reserve func(count int) (uint64, error)
 }
@@ -301,6 +302,8 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 	if err := validateRewriteRIDCount(count); err != nil {
 		return 0, err
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.reserve != nil {
 		start, err := a.reserve(count)
 		if err != nil {
@@ -3471,7 +3474,32 @@ func (w *rewriteWriter) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator
 	w.leafSeqAllocator = seqAlloc
 }
 
-func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator) (LeafPageLog, error) {
+func (w *rewriteWriter) leafPageLogSeqFloor() uint32 {
+	if w == nil {
+		return 0
+	}
+	return w.leafSeq
+}
+
+func (w *rewriteWriter) leafPageLogRIDAllocator() *rewriteRIDAllocator {
+	if w == nil {
+		return nil
+	}
+	if w.ridAlloc != nil {
+		return w.ridAlloc
+	}
+	return newRewriteRIDAllocator(w.nextRID, nil)
+}
+
+func (w *rewriteWriter) setLeafPageLogRIDAllocator(ridAlloc *rewriteRIDAllocator) {
+	if w == nil || ridAlloc == nil {
+		return
+	}
+	w.ridAlloc = ridAlloc
+	w.nextRID = 0
+}
+
+func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridAlloc *rewriteRIDAllocator) (LeafPageLog, error) {
 	if w == nil {
 		return nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -3482,6 +3510,7 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator) (Lea
 	clone.leafDir = w.leafDir
 	clone.leafLane = w.leafLane
 	clone.leafSeqAllocator = seqAlloc
+	clone.ridAlloc = ridAlloc
 	clone.blockCompression = w.blockCompression
 	clone.blockCodec = w.blockCodec
 	clone.leafBlockCodec = w.leafBlockCodec

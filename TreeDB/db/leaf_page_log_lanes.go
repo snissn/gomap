@@ -11,11 +11,20 @@ import (
 )
 
 type leafPageLogLaneCloner interface {
-	cloneLeafPageLogLane(*leafLogSeqAllocator) (LeafPageLog, error)
+	cloneLeafPageLogLane(*leafLogSeqAllocator, *rewriteRIDAllocator) (LeafPageLog, error)
 }
 
 type leafPageLogSeqAllocatorSetter interface {
 	setLeafPageLogSeqAllocator(*leafLogSeqAllocator)
+}
+
+type leafPageLogSeqFloorProvider interface {
+	leafPageLogSeqFloor() uint32
+}
+
+type leafPageLogRIDAllocatorProvider interface {
+	leafPageLogRIDAllocator() *rewriteRIDAllocator
+	setLeafPageLogRIDAllocator(*rewriteRIDAllocator)
 }
 
 type leafLogSeqAllocator struct {
@@ -60,10 +69,12 @@ func (a *leafLogSeqAllocator) AdvanceAtLeast(seq uint32) {
 }
 
 type leafPageLogLaneGroup struct {
-	mu       sync.RWMutex
-	lanes    []LeafPageLog
-	cloner   leafPageLogLaneCloner
-	seqAlloc *leafLogSeqAllocator
+	mu        sync.RWMutex
+	lanes     []LeafPageLog
+	laneLocks []*sync.Mutex
+	cloner    leafPageLogLaneCloner
+	seqAlloc  *leafLogSeqAllocator
+	ridAlloc  *rewriteRIDAllocator
 }
 
 func wrapLeafPageLogWithLaneSelection(log LeafPageLog) LeafPageLog {
@@ -80,22 +91,31 @@ func wrapLeafPageLogWithLaneSelection(log LeafPageLog) LeafPageLog {
 	if group, ok := log.(*leafPageLogLaneGroup); ok {
 		return group
 	}
-	group := &leafPageLogLaneGroup{lanes: []LeafPageLog{log}}
+	group := &leafPageLogLaneGroup{lanes: []LeafPageLog{log}, laneLocks: []*sync.Mutex{newLeafPageLogLaneLock()}}
 	if cloner, ok := log.(leafPageLogLaneCloner); ok {
 		group.cloner = cloner
 		group.seqAlloc = newLeafLogSeqAllocator(leafPageLogMaxSeq(log))
 		if setter, ok := log.(leafPageLogSeqAllocatorSetter); ok {
 			setter.setLeafPageLogSeqAllocator(group.seqAlloc)
 		}
+		if ridProvider, ok := log.(leafPageLogRIDAllocatorProvider); ok {
+			group.ridAlloc = ridProvider.leafPageLogRIDAllocator()
+			ridProvider.setLeafPageLogRIDAllocator(group.ridAlloc)
+		}
 	}
 	return group
 }
+
+func newLeafPageLogLaneLock() *sync.Mutex { return &sync.Mutex{} }
 
 func leafPageLogMaxSeq(log LeafPageLog) uint32 {
 	if log == nil {
 		return 0
 	}
 	maxSeq := uint32(0)
+	if provider, ok := log.(leafPageLogSeqFloorProvider); ok {
+		maxSeq = provider.leafPageLogSeqFloor()
+	}
 	for _, segments := range [][]LeafPageLogSegment{mustLeafPageLogCreatedSegments(log), mustLeafPageLogCurrentSegments(log)} {
 		for _, seg := range segments {
 			if !isLeafLogWriterLane(seg.FileID) {
@@ -153,19 +173,11 @@ func maxSegmentTargetBytesForLane(dir string, fileID uint32, defaultTarget, leaf
 }
 
 func (g *leafPageLogLaneGroup) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
-	lane := g.defaultLane()
-	if lane == nil {
-		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
-	}
-	ptr, err := lane.AppendLeafPage(leafPage)
-	if err != nil {
-		return page.LeafLogPtr{}, err
-	}
-	if g != nil && g.seqAlloc != nil {
-		_, seq := valuelog.DecodeFileID(ptr.ValuePtr().FileID)
-		g.seqAlloc.AdvanceAtLeast(seq)
-	}
-	return ptr, nil
+	return g.appendLeafPageAt(0, leafPage)
+}
+
+func (g *leafPageLogLaneGroup) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return g.appendLeafPagesAt(0, leafPages)
 }
 
 func (g *leafPageLogLaneGroup) Flush() error {
@@ -194,13 +206,12 @@ func (g *leafPageLogLaneGroup) LeafPageLogLane(workerIndex int) (LeafPageLog, bo
 		workerIndex = 0
 	}
 	if workerIndex == 0 {
-		return g, true
+		return &leafPageLogLaneHandle{group: g, index: 0}, true
 	}
 	g.mu.RLock()
 	if workerIndex < len(g.lanes) && g.lanes[workerIndex] != nil {
-		lane := g.lanes[workerIndex]
 		g.mu.RUnlock()
-		return lane, true
+		return &leafPageLogLaneHandle{group: g, index: workerIndex}, true
 	}
 	g.mu.RUnlock()
 	if g.cloner == nil {
@@ -209,17 +220,18 @@ func (g *leafPageLogLaneGroup) LeafPageLogLane(workerIndex int) (LeafPageLog, bo
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if workerIndex < len(g.lanes) && g.lanes[workerIndex] != nil {
-		return g.lanes[workerIndex], true
+		return &leafPageLogLaneHandle{group: g, index: workerIndex}, true
 	}
 	for len(g.lanes) <= workerIndex {
 		g.lanes = append(g.lanes, nil)
+		g.laneLocks = append(g.laneLocks, newLeafPageLogLaneLock())
 	}
-	lane, err := g.cloner.cloneLeafPageLogLane(g.seqAlloc)
+	lane, err := g.cloner.cloneLeafPageLogLane(g.seqAlloc, g.ridAlloc)
 	if err != nil {
 		return nil, false
 	}
 	g.lanes[workerIndex] = lane
-	return lane, true
+	return &leafPageLogLaneHandle{group: g, index: workerIndex}, true
 }
 
 func (g *leafPageLogLaneGroup) leafPageLogLane(workerIndex int) (LeafPageLog, bool) {
@@ -238,20 +250,158 @@ func (g *leafPageLogLaneGroup) defaultLane() LeafPageLog {
 	return g.lanes[0]
 }
 
+type leafPageLogLaneHandle struct {
+	group *leafPageLogLaneGroup
+	index int
+}
+
+func (h *leafPageLogLaneHandle) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	if h == nil || h.group == nil {
+		return page.LeafLogPtr{}, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPageAt(h.index, leafPage)
+}
+
+func (h *leafPageLogLaneHandle) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if h == nil || h.group == nil {
+		return nil, errors.New("leaf page log unavailable")
+	}
+	return h.group.appendLeafPagesAt(h.index, leafPages)
+}
+
+func (h *leafPageLogLaneHandle) Flush() error {
+	if h == nil || h.group == nil {
+		return nil
+	}
+	return h.group.withLane(h.index, func(lane LeafPageLog) error { return lane.Flush() })
+}
+
+func (h *leafPageLogLaneHandle) Sync() error {
+	if h == nil || h.group == nil {
+		return nil
+	}
+	return h.group.withLane(h.index, func(lane LeafPageLog) error { return lane.Sync() })
+}
+
+func (h *leafPageLogLaneHandle) LastLeafPageRecordLength() uint32 {
+	if h == nil || h.group == nil {
+		return 0
+	}
+	var recordLen uint32
+	_ = h.group.withLane(h.index, func(lane LeafPageLog) error {
+		if provider, ok := lane.(leafPageLogRecordLengthProvider); ok {
+			recordLen = provider.LastLeafPageRecordLength()
+		}
+		return nil
+	})
+	return recordLen
+}
+
+func (g *leafPageLogLaneGroup) appendLeafPageAt(index int, leafPage []byte) (page.LeafLogPtr, error) {
+	var ptr page.LeafLogPtr
+	err := g.withLane(index, func(lane LeafPageLog) error {
+		var err error
+		ptr, err = lane.AppendLeafPage(leafPage)
+		return err
+	})
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	g.noteAppendedLeafPtr(ptr)
+	return ptr, nil
+}
+
+func (g *leafPageLogLaneGroup) appendLeafPagesAt(index int, leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	var ptrs []page.LeafLogPtr
+	err := g.withLane(index, func(lane LeafPageLog) error {
+		if batcher, ok := lane.(LeafPageBatchLog); ok {
+			var err error
+			ptrs, err = batcher.AppendLeafPages(leafPages)
+			return err
+		}
+		ptrs = make([]page.LeafLogPtr, len(leafPages))
+		for i, leafPage := range leafPages {
+			ptr, err := lane.AppendLeafPage(leafPage)
+			if err != nil {
+				return err
+			}
+			ptrs[i] = ptr
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(ptrs) != len(leafPages) {
+		return nil, fmt.Errorf("leaf page batch log returned %d ptrs for %d leaf pages", len(ptrs), len(leafPages))
+	}
+	for _, ptr := range ptrs {
+		g.noteAppendedLeafPtr(ptr)
+	}
+	return ptrs, nil
+}
+
+func (g *leafPageLogLaneGroup) withLane(index int, fn func(LeafPageLog) error) error {
+	if g == nil || fn == nil {
+		return errors.New("leaf page log unavailable")
+	}
+	lane, lock := g.laneAndLock(index)
+	if lane == nil {
+		return errors.New("leaf page log unavailable")
+	}
+	lock.Lock()
+	defer lock.Unlock()
+	return fn(lane)
+}
+
+func (g *leafPageLogLaneGroup) laneAndLock(index int) (LeafPageLog, *sync.Mutex) {
+	if g == nil {
+		return nil, newLeafPageLogLaneLock()
+	}
+	if index < 0 {
+		index = 0
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if index >= len(g.lanes) || g.lanes[index] == nil {
+		return nil, newLeafPageLogLaneLock()
+	}
+	lock := leafPageLogLaneLockAt(g.laneLocks, index)
+	return g.lanes[index], lock
+}
+
+func leafPageLogLaneLockAt(locks []*sync.Mutex, index int) *sync.Mutex {
+	if index >= 0 && index < len(locks) && locks[index] != nil {
+		return locks[index]
+	}
+	return newLeafPageLogLaneLock()
+}
+
+func (g *leafPageLogLaneGroup) noteAppendedLeafPtr(ptr page.LeafLogPtr) {
+	if g == nil || g.seqAlloc == nil {
+		return
+	}
+	_, seq := valuelog.DecodeFileID(ptr.ValuePtr().FileID)
+	g.seqAlloc.AdvanceAtLeast(seq)
+}
+
 func (g *leafPageLogLaneGroup) CurrentValueLogSegment() (path string, fileID uint32, ok bool) {
 	if g == nil {
 		return "", 0, false
 	}
-	g.mu.RLock()
-	if len(g.lanes) > 0 && g.lanes[0] != nil {
-		lane := g.lanes[0]
-		g.mu.RUnlock()
-		provider, ok := lane.(leafPageLogCurrentSegmentProvider)
-		if ok {
-			return provider.CurrentValueLogSegment()
+	_ = g.withLane(0, func(lane LeafPageLog) error {
+		provider, hasProvider := lane.(leafPageLogCurrentSegmentProvider)
+		if hasProvider {
+			path, fileID, ok = provider.CurrentValueLogSegment()
 		}
+		return nil
+	})
+	if ok {
+		return path, fileID, true
 	}
-	g.mu.RUnlock()
 	segments, err := g.CurrentLeafPageLogSegmentsSnapshot()
 	if err != nil || len(segments) == 0 {
 		return "", 0, false
@@ -263,17 +413,19 @@ func (g *leafPageLogLaneGroup) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageL
 	if g == nil {
 		return nil, nil
 	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	if len(g.lanes) == 0 {
+	lanes, locks := g.snapshotLanesAndLocks()
+	if len(lanes) == 0 {
 		return nil, nil
 	}
-	out := make([]LeafPageLogSegment, 0, len(g.lanes))
-	for _, lane := range g.lanes {
+	out := make([]LeafPageLogSegment, 0, len(lanes))
+	for i, lane := range lanes {
 		if lane == nil {
 			continue
 		}
+		lock := leafPageLogLaneLockAt(locks, i)
+		lock.Lock()
 		segments, err := leafPageLogCurrentSegments(lane)
+		lock.Unlock()
 		if err != nil {
 			return nil, err
 		}
@@ -286,17 +438,19 @@ func (g *leafPageLogLaneGroup) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageL
 	if g == nil {
 		return nil, nil
 	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	if len(g.lanes) == 0 {
+	lanes, locks := g.snapshotLanesAndLocks()
+	if len(lanes) == 0 {
 		return nil, nil
 	}
-	out := make([]LeafPageLogSegment, 0, len(g.lanes))
-	for _, lane := range g.lanes {
+	out := make([]LeafPageLogSegment, 0, len(lanes))
+	for i, lane := range lanes {
 		if lane == nil {
 			continue
 		}
+		lock := leafPageLogLaneLockAt(locks, i)
+		lock.Lock()
 		segments, err := leafPageLogCreatedSegments(lane)
+		lock.Unlock()
 		if err != nil {
 			return nil, err
 		}
@@ -309,10 +463,12 @@ func (g *leafPageLogLaneGroup) MarkLeafPageLogSegmentsRegistered(segments []Leaf
 	if g == nil || len(segments) == 0 {
 		return
 	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-	for _, lane := range g.lanes {
+	lanes, locks := g.snapshotLanesAndLocks()
+	for i, lane := range lanes {
+		lock := leafPageLogLaneLockAt(locks, i)
+		lock.Lock()
 		markLeafPageLogSegmentsRegistered(lane, segments)
+		lock.Unlock()
 	}
 }
 
@@ -320,23 +476,34 @@ func (g *leafPageLogLaneGroup) leafValueLogLanes() []LeafPageLog {
 	if g == nil {
 		return nil
 	}
+	lanes, _ := g.snapshotLanesAndLocks()
+	return lanes
+}
+
+func (g *leafPageLogLaneGroup) snapshotLanesAndLocks() ([]LeafPageLog, []*sync.Mutex) {
+	if g == nil {
+		return nil, nil
+	}
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.lanes
+	return append([]LeafPageLog(nil), g.lanes...), append([]*sync.Mutex(nil), g.laneLocks...)
 }
 
 func (g *leafPageLogLaneGroup) forEachLane(fn func(LeafPageLog) error) error {
 	if g == nil || fn == nil {
 		return nil
 	}
-	g.mu.RLock()
-	defer g.mu.RUnlock()
+	lanes, locks := g.snapshotLanesAndLocks()
 	var firstErr error
-	for _, lane := range g.lanes {
+	for i, lane := range lanes {
 		if lane == nil {
 			continue
 		}
-		if err := fn(lane); err != nil && firstErr == nil {
+		lock := leafPageLogLaneLockAt(locks, i)
+		lock.Lock()
+		err := fn(lane)
+		lock.Unlock()
+		if err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -365,7 +532,40 @@ func (l *leafPageLogWithRecordLengthHints) setLeafPageLogSeqAllocator(seqAlloc *
 	setter.setLeafPageLogSeqAllocator(seqAlloc)
 }
 
-func (l *leafPageLogWithRecordLengthHints) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator) (LeafPageLog, error) {
+func (l *leafPageLogWithRecordLengthHints) leafPageLogSeqFloor() uint32 {
+	if l == nil || l.inner == nil {
+		return 0
+	}
+	provider, ok := l.inner.(leafPageLogSeqFloorProvider)
+	if !ok {
+		return 0
+	}
+	return provider.leafPageLogSeqFloor()
+}
+
+func (l *leafPageLogWithRecordLengthHints) leafPageLogRIDAllocator() *rewriteRIDAllocator {
+	if l == nil || l.inner == nil {
+		return nil
+	}
+	provider, ok := l.inner.(leafPageLogRIDAllocatorProvider)
+	if !ok {
+		return nil
+	}
+	return provider.leafPageLogRIDAllocator()
+}
+
+func (l *leafPageLogWithRecordLengthHints) setLeafPageLogRIDAllocator(ridAlloc *rewriteRIDAllocator) {
+	if l == nil || l.inner == nil {
+		return
+	}
+	provider, ok := l.inner.(leafPageLogRIDAllocatorProvider)
+	if !ok {
+		return
+	}
+	provider.setLeafPageLogRIDAllocator(ridAlloc)
+}
+
+func (l *leafPageLogWithRecordLengthHints) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridAlloc *rewriteRIDAllocator) (LeafPageLog, error) {
 	if l == nil || l.inner == nil {
 		return nil, errors.New("leaf page log unavailable")
 	}
@@ -373,7 +573,7 @@ func (l *leafPageLogWithRecordLengthHints) cloneLeafPageLogLane(seqAlloc *leafLo
 	if !ok {
 		return nil, fmt.Errorf("leaf page log lane cloning unavailable")
 	}
-	clone, err := cloner.cloneLeafPageLogLane(seqAlloc)
+	clone, err := cloner.cloneLeafPageLogLane(seqAlloc, ridAlloc)
 	if err != nil {
 		return nil, err
 	}

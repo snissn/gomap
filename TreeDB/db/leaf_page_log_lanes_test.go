@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,7 +102,51 @@ func (l *leafLaneCountingLog) MarkLeafPageLogSegmentsRegistered(segments []LeafP
 	observer.MarkLeafPageLogSegmentsRegistered(segments)
 }
 
-func (l *leafLaneCountingLog) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator) (LeafPageLog, error) {
+func (l *leafLaneCountingLog) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator) {
+	if l == nil || l.inner == nil {
+		return
+	}
+	setter, ok := l.inner.(leafPageLogSeqAllocatorSetter)
+	if !ok {
+		return
+	}
+	setter.setLeafPageLogSeqAllocator(seqAlloc)
+}
+
+func (l *leafLaneCountingLog) leafPageLogSeqFloor() uint32 {
+	if l == nil || l.inner == nil {
+		return 0
+	}
+	provider, ok := l.inner.(leafPageLogSeqFloorProvider)
+	if !ok {
+		return 0
+	}
+	return provider.leafPageLogSeqFloor()
+}
+
+func (l *leafLaneCountingLog) leafPageLogRIDAllocator() *rewriteRIDAllocator {
+	if l == nil || l.inner == nil {
+		return nil
+	}
+	provider, ok := l.inner.(leafPageLogRIDAllocatorProvider)
+	if !ok {
+		return nil
+	}
+	return provider.leafPageLogRIDAllocator()
+}
+
+func (l *leafLaneCountingLog) setLeafPageLogRIDAllocator(ridAlloc *rewriteRIDAllocator) {
+	if l == nil || l.inner == nil {
+		return
+	}
+	provider, ok := l.inner.(leafPageLogRIDAllocatorProvider)
+	if !ok {
+		return
+	}
+	provider.setLeafPageLogRIDAllocator(ridAlloc)
+}
+
+func (l *leafLaneCountingLog) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridAlloc *rewriteRIDAllocator) (LeafPageLog, error) {
 	if l == nil || l.inner == nil {
 		return nil, errors.New("leaf page log unavailable")
 	}
@@ -108,7 +154,7 @@ func (l *leafLaneCountingLog) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator
 	if !ok {
 		return nil, errors.New("leaf page log lane cloning unavailable")
 	}
-	clone, err := cloner.cloneLeafPageLogLane(seqAlloc)
+	clone, err := cloner.cloneLeafPageLogLane(seqAlloc, ridAlloc)
 	if err != nil {
 		return nil, err
 	}
@@ -273,6 +319,119 @@ func TestLeafPageLogLaneSnapshotsAggregateAndMarkPerLane(t *testing.T) {
 	if len(finalCreated) != 0 {
 		t.Fatalf("created segments after final mark=%d want 0", len(finalCreated))
 	}
+}
+
+func TestLeafPageLogLaneGroupReopenSeedsSharedSeqAllocator(t *testing.T) {
+	dir := t.TempDir()
+	first, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{Compression: ValueLogCompressionOff})
+	if err != nil {
+		t.Fatalf("NewStandaloneLeafPageLog first: %v", err)
+	}
+	firstPtr, err := first.AppendLeafPage(testLeafPageBytes("first"))
+	if err != nil {
+		_ = first.Close()
+		t.Fatalf("first AppendLeafPage: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	_, firstSeq := valuelog.DecodeFileID(firstPtr.ValuePtr().FileID)
+
+	second, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{Compression: ValueLogCompressionOff})
+	if err != nil {
+		t.Fatalf("NewStandaloneLeafPageLog second: %v", err)
+	}
+	group := wrapLeafPageLogWithLaneSelection(second)
+	provider, ok := group.(LeafPageLogLaneProvider)
+	if !ok {
+		_ = second.Close()
+		t.Fatal("wrapped leaf log missing lane provider")
+	}
+	lane, ok := provider.LeafPageLogLane(1)
+	if !ok || lane == nil {
+		_ = second.Close()
+		t.Fatal("lane 1 unavailable")
+	}
+	secondPtr, err := lane.AppendLeafPage(testLeafPageBytes("second"))
+	if err != nil {
+		_ = second.Close()
+		t.Fatalf("lane 1 AppendLeafPage: %v", err)
+	}
+	if closer, ok := group.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			t.Fatalf("group Close: %v", err)
+		}
+	} else if err := second.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	_, secondSeq := valuelog.DecodeFileID(secondPtr.ValuePtr().FileID)
+	if secondSeq <= firstSeq {
+		t.Fatalf("reopened lane seq=%d, want > first seq=%d", secondSeq, firstSeq)
+	}
+}
+
+func TestLeafPageLogLaneGroupSharesRecordIDsAcrossLanes(t *testing.T) {
+	dir := t.TempDir()
+	baseLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{Compression: ValueLogCompressionOff})
+	if err != nil {
+		t.Fatalf("NewStandaloneLeafPageLog: %v", err)
+	}
+	group := wrapLeafPageLogWithLaneSelection(baseLog)
+	provider, ok := group.(LeafPageLogLaneProvider)
+	if !ok {
+		_ = baseLog.Close()
+		t.Fatal("wrapped leaf log missing lane provider")
+	}
+	lane0, ok := provider.LeafPageLogLane(0)
+	if !ok || lane0 == nil {
+		_ = baseLog.Close()
+		t.Fatal("lane 0 unavailable")
+	}
+	lane1, ok := provider.LeafPageLogLane(1)
+	if !ok || lane1 == nil {
+		_ = baseLog.Close()
+		t.Fatal("lane 1 unavailable")
+	}
+	ptr0, err := lane0.AppendLeafPage(testLeafPageBytes("rid-lane-0"))
+	if err != nil {
+		_ = baseLog.Close()
+		t.Fatalf("lane 0 AppendLeafPage: %v", err)
+	}
+	ptr1, err := lane1.AppendLeafPage(testLeafPageBytes("rid-lane-1"))
+	if err != nil {
+		_ = baseLog.Close()
+		t.Fatalf("lane 1 AppendLeafPage: %v", err)
+	}
+	if closer, ok := group.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			t.Fatalf("group Close: %v", err)
+		}
+	} else if err := baseLog.Close(); err != nil {
+		t.Fatalf("base Close: %v", err)
+	}
+
+	rid0 := readLeafLogRIDForPtr(t, dir, ptr0)
+	rid1 := readLeafLogRIDForPtr(t, dir, ptr1)
+	if rid0 == rid1 {
+		t.Fatalf("duplicate RID across lanes: %d", rid0)
+	}
+}
+
+func readLeafLogRIDForPtr(t *testing.T, dir string, ptr page.LeafLogPtr) uint64 {
+	t.Helper()
+	valuePtr := ptr.ValuePtr()
+	lane, seq := valuelog.DecodeFileID(valuePtr.FileID)
+	path := filepath.Join(LeafLogDirPath(dir), fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open leaf log %s: %v", path, err)
+	}
+	defer func() { _ = f.Close() }()
+	rid, err := valuelog.ReadRIDAtUnverified(f, valuePtr.FileID, valuePtr)
+	if err != nil {
+		t.Fatalf("ReadRIDAtUnverified(%+v): %v", valuePtr, err)
+	}
+	return rid
 }
 
 func TestLeafPageLogLanes_FlushSyncCloseTouchAllLanes(t *testing.T) {
