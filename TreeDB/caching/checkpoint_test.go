@@ -219,6 +219,66 @@ func TestCachingDB_ExclusiveWriteWithFlushMuHeldReleasesFlushMuWhileWaiting(t *t
 	}
 }
 
+func TestCachingDB_CheckpointWaiterReleasesFlushMu(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(true)
+
+	done := make(chan error, 1)
+	go func() { done <- db.Checkpoint() }()
+
+	observedFlushMuHeld := false
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if db.flushMu.TryLock() {
+			db.flushMu.Unlock()
+		} else {
+			observedFlushMuHeld = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !observedFlushMuHeld {
+		db.checkpointMu.Unlock()
+		t.Fatalf("checkpoint waiter never acquired flushMu before waiting")
+	}
+
+	db.checkpointMu.Unlock()
+
+	flushMuReleased := false
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if db.flushMu.TryLock() {
+			flushMuReleased = true
+			db.flushMu.Unlock()
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !flushMuReleased {
+		t.Fatalf("checkpoint waiter did not release flushMu while waiting")
+	}
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Checkpoint returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("checkpoint waiter did not complete after broadcast")
+	}
+}
+
 func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

@@ -8004,6 +8004,17 @@ type DB struct {
 	checkpointFrontierPostUnitsMax                               atomic.Uint64
 	checkpointFrontierPostBytesLast                              atomic.Uint64
 	checkpointFrontierPostBytesMax                               atomic.Uint64
+	checkpointActiveFrontierMu                                   sync.RWMutex
+	checkpointActiveFrontier                                     checkpointFrontier
+	checkpointSharedDrainFlushMuReleases                         atomic.Uint64
+	checkpointSharedDrainWaitNs                                  atomic.Uint64
+	checkpointSharedDrainWaitMaxNs                               atomic.Uint64
+	checkpointSharedDrainCheckpointUnits                         atomic.Uint64
+	checkpointSharedDrainCheckpointOps                           atomic.Uint64
+	checkpointSharedDrainCheckpointBytes                         atomic.Uint64
+	checkpointSharedDrainBackgroundUnits                         atomic.Uint64
+	checkpointSharedDrainBackgroundOps                           atomic.Uint64
+	checkpointSharedDrainBackgroundBytes                         atomic.Uint64
 	checkpointWALCleanupConsideredLast                           atomic.Uint64
 	checkpointWALCleanupRemovedLast                              atomic.Uint64
 	checkpointWALCleanupSkippedCurrentLast                       atomic.Uint64
@@ -21176,6 +21187,36 @@ func (f checkpointFrontier) contains(id uint64) bool {
 	return ok
 }
 
+func (db *DB) setActiveCheckpointFrontier(f checkpointFrontier) {
+	if db == nil {
+		return
+	}
+	db.checkpointActiveFrontierMu.Lock()
+	db.checkpointActiveFrontier = f
+	db.checkpointActiveFrontierMu.Unlock()
+}
+
+func (db *DB) clearActiveCheckpointFrontier() {
+	if db == nil {
+		return
+	}
+	db.checkpointActiveFrontierMu.Lock()
+	db.checkpointActiveFrontier = checkpointFrontier{}
+	db.checkpointActiveFrontierMu.Unlock()
+}
+
+func (db *DB) activeCheckpointFrontier() (checkpointFrontier, bool) {
+	if db == nil {
+		return checkpointFrontier{}, false
+	}
+	db.checkpointActiveFrontierMu.RLock()
+	// checkpointFrontier.ids is immutable after capture; sharing the map backing
+	// store across copies is safe as long as frontier membership remains read-only.
+	f := db.checkpointActiveFrontier
+	db.checkpointActiveFrontierMu.RUnlock()
+	return f, f.captured
+}
+
 func (db *DB) captureCheckpointFrontierLocked() checkpointFrontier {
 	f := checkpointFrontier{captured: true}
 	if db == nil || len(db.queue) == 0 {
@@ -21254,6 +21295,39 @@ func (db *DB) observeCheckpointFrontierDrain(f checkpointFrontier) {
 	db.checkpointFrontierPostBytesLast.Store(postBytes)
 	updateAtomicMaxUint64(&db.checkpointFrontierPostUnitsMax, postUnits)
 	updateAtomicMaxUint64(&db.checkpointFrontierPostBytesMax, postBytes)
+}
+
+func (db *DB) observeCheckpointSharedDrainWait(d time.Duration) {
+	if db == nil || d < 0 {
+		return
+	}
+	ns := uint64(d.Nanoseconds())
+	db.checkpointSharedDrainWaitNs.Add(ns)
+	updateAtomicMaxUint64(&db.checkpointSharedDrainWaitMaxNs, ns)
+}
+
+func (db *DB) observeCheckpointSharedDrainWork(background bool, units int, ops int, bytes int64) {
+	if db == nil || units <= 0 {
+		return
+	}
+	u := uint64(units)
+	var opu uint64
+	if ops > 0 {
+		opu = uint64(ops)
+	}
+	var byu uint64
+	if bytes > 0 {
+		byu = uint64(bytes)
+	}
+	if background {
+		db.checkpointSharedDrainBackgroundUnits.Add(u)
+		db.checkpointSharedDrainBackgroundOps.Add(opu)
+		db.checkpointSharedDrainBackgroundBytes.Add(byu)
+		return
+	}
+	db.checkpointSharedDrainCheckpointUnits.Add(u)
+	db.checkpointSharedDrainCheckpointOps.Add(opu)
+	db.checkpointSharedDrainCheckpointBytes.Add(byu)
 }
 
 func (db *DB) observeCheckpointWALCleanupCoverage(considered, removed, skippedCurrent, skippedPreRotate, skippedRetained uint64) {
@@ -21530,14 +21604,37 @@ func (db *DB) Checkpoint() error {
 	if activeBackgroundFlushBeforeWait {
 		db.observeCheckpointActiveBackgroundFlushWait(flushMuWaitDur)
 	}
-	defer db.flushMu.Unlock() // Ensure it's released
-
-	db.checkpointMu.Lock()
-	for db.checkpointing.Load() {
-		db.checkpointCond.Wait()
+	flushMuHeld := true
+	unlockFlushMu := func() {
+		if flushMuHeld {
+			flushMuHeld = false
+			db.flushMu.Unlock()
+		}
 	}
-	db.checkpointing.Store(true) // Set flag only after acquiring flushMu
-	db.checkpointMu.Unlock()
+	lockFlushMu := func() {
+		if !flushMuHeld {
+			db.flushMu.Lock()
+			flushMuHeld = true
+		}
+	}
+	defer unlockFlushMu()
+
+	for {
+		db.checkpointMu.Lock()
+		if !db.checkpointing.Load() {
+			db.checkpointing.Store(true) // Set flag only after acquiring flushMu
+			db.checkpointMu.Unlock()
+			break
+		}
+		db.checkpointMu.Unlock()
+		unlockFlushMu()
+		db.checkpointMu.Lock()
+		for db.checkpointing.Load() {
+			db.checkpointCond.Wait()
+		}
+		db.checkpointMu.Unlock()
+		lockFlushMu()
+	}
 
 	defer func() { // This defer runs when db.Checkpoint() returns
 		db.checkpointMu.Lock()
@@ -21698,7 +21795,25 @@ func (db *DB) Checkpoint() error {
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
 	flushAllStart := time.Now()
-	db.flushCheckpointFrontierLocked(true, commandWALPublishPiggyback, frontier)
+	if commandWALPublishPiggyback != nil || len(frontier.ids) < 8 || frontier.bytes < 8<<20 {
+		db.flushCheckpointFrontierLocked(true, commandWALPublishPiggyback, frontier)
+	} else {
+		db.setActiveCheckpointFrontier(frontier)
+		if len(frontier.ids) > 0 {
+			db.TriggerFlush()
+		}
+		db.checkpointSharedDrainFlushMuReleases.Add(1)
+		unlockFlushMu()
+		runtime.Gosched()
+		// The shared-drain pass intentionally runs without flushMu held: the captured
+		// frontier bounds the queue IDs it may claim, per-lane flushLaneMu serializes
+		// apply work, and final sync/WAL cleanup remains checkpoint-exclusive after
+		// reacquiring flushMu below.
+		db.flushCheckpointFrontierLocked(true, nil, frontier)
+		lockFlushMu()
+		db.clearActiveCheckpointFrontier()
+		db.observeCheckpointSharedDrainWait(time.Since(flushAllStart))
+	}
 	db.observeCheckpointFrontierDrain(frontier)
 	postFrontierWALDebt := false
 	if frontier.captured {
@@ -24876,6 +24991,45 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 	}
 
 	for {
+		if activeFrontier, ok := db.activeCheckpointFrontier(); ok {
+			frontierSyncFlag := db.flushSyncRequested(true)
+			active, activeCount := db.checkpointFrontierActiveLanes(activeFrontier, lanes)
+			if activeCount == 0 {
+				return
+			}
+			db.observeCheckpointFlushAllWorkers(activeCount)
+			var wg sync.WaitGroup
+			var progress atomic.Bool
+			wg.Add(activeCount)
+			for i := 0; i < lanes; i++ {
+				laneID := i
+				if !active[laneID] {
+					continue
+				}
+				go func() {
+					defer wg.Done()
+					if laneID < len(db.flushLaneMu) {
+						if !db.flushLaneMu[laneID].TryLock() {
+							return
+						}
+						defer db.flushLaneMu[laneID].Unlock()
+					}
+					if db.flushLaneOnceWithCollectionMode(frontierSyncFlag, laneID, nil, flushCollectionBackground) {
+						progress.Store(true)
+					}
+				}()
+			}
+			wg.Wait()
+			if !progress.Load() {
+				return
+			}
+			// Active checkpoint frontiers are drained cooperatively. A background
+			// trigger performs one bounded claim pass, then returns so the checkpoint
+			// participant can continue or observe completion without background
+			// monopolizing the frontier.
+			return
+		}
+
 		// Only spawn flush workers for lanes that actually have queued memtables.
 		// Otherwise each lane does an O(queueLen) scan in collectFlushUnitsLocked to
 		// discover there's nothing to do, which can be extremely expensive when the
@@ -25232,12 +25386,22 @@ func (db *DB) flushLaneOnceWithCollectionMode(sync bool, laneID int, commandPubl
 func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode, frontier *checkpointFrontier) bool {
 	db.mu.Lock()
 	mode = db.flushCollectionMode(mode)
+	frontierFromActive := false
+	if frontier == nil && mode == flushCollectionCheckpoint {
+		if activeFrontier, ok := db.activeCheckpointFrontier(); ok {
+			frontier = &activeFrontier
+			frontierFromActive = true
+		}
+	}
 	queueLen := len(db.queue)
 	if queueLen == 0 {
 		db.mu.Unlock()
 		return false
 	}
 	maxMemtables, targetBytes, maxOps := db.selectFlushUnitBudgetLocked(laneID, mode)
+	if frontierFromActive {
+		maxMemtables, targetBytes, maxOps = 1, 0, 0
+	}
 	planStart := time.Now()
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsWithOpsLocked(laneID, maxMemtables, targetBytes, maxOps)
 	if frontier != nil {
@@ -25258,6 +25422,11 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 	}()
 	totalSpans := flushUnitSpanCount(units)
 	rangeBarriers := flushUnitRangeBarrierCount(units)
+	observeSharedDrainSuccess := func() {
+		if mode == flushCollectionCheckpoint && frontier != nil {
+			db.observeCheckpointSharedDrainWork(frontierFromActive, len(units), totalLen+totalSpans, totalBytes)
+		}
+	}
 	db.observeFlushApplyPlan(len(units), totalLen+totalSpans, totalBytes, planningDur)
 	db.observeFlushSpanRunSource(len(units), totalLen, totalSpans, rangeBarriers)
 
@@ -25270,6 +25439,7 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
 		db.mu.Unlock()
 		flushSuccess = true
+		observeSharedDrainSuccess()
 		return true
 	}
 	if totalLen == 0 && totalSpans > 0 {
@@ -25339,12 +25509,14 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
 		db.mu.Unlock()
 		flushSuccess = true
+		observeSharedDrainSuccess()
 		return true
 	}
 
 	pointFlushed := db.flushCanonicalPointUnits(sync, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans, mode)
 	if pointFlushed {
 		flushSuccess = true
+		observeSharedDrainSuccess()
 	}
 	return pointFlushed
 }
@@ -27234,6 +27406,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.frontier.post_units_max"] = fmt.Sprintf("%d", db.checkpointFrontierPostUnitsMax.Load())
 	stats["treedb.cache.checkpoint.frontier.post_bytes_last"] = fmt.Sprintf("%d", db.checkpointFrontierPostBytesLast.Load())
 	stats["treedb.cache.checkpoint.frontier.post_bytes_max"] = fmt.Sprintf("%d", db.checkpointFrontierPostBytesMax.Load())
+	stats["treedb.cache.checkpoint.shared_drain.flushmu_releases_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainFlushMuReleases.Load())
+	stats["treedb.cache.checkpoint.shared_drain.wait_ns_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainWaitNs.Load())
+	stats["treedb.cache.checkpoint.shared_drain.wait_ns_max"] = fmt.Sprintf("%d", db.checkpointSharedDrainWaitMaxNs.Load())
+	stats["treedb.cache.checkpoint.shared_drain.checkpoint_units_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainCheckpointUnits.Load())
+	stats["treedb.cache.checkpoint.shared_drain.checkpoint_ops_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainCheckpointOps.Load())
+	stats["treedb.cache.checkpoint.shared_drain.checkpoint_bytes_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainCheckpointBytes.Load())
+	stats["treedb.cache.checkpoint.shared_drain.background_units_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundUnits.Load())
+	stats["treedb.cache.checkpoint.shared_drain.background_ops_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundOps.Load())
+	stats["treedb.cache.checkpoint.shared_drain.background_bytes_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundBytes.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.considered_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupConsideredLast.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.removed_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupRemovedLast.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.skipped_current_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupSkippedCurrentLast.Load())
