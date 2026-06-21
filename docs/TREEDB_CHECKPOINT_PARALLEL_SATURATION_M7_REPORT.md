@@ -49,16 +49,14 @@ Forced-off and auto rows use the same workload with
 
 ## Artifact roots
 
-- M0 c4 baseline: `/tmp/treedb_parallel_saturation_m0_20260620_082057/c4`
-- M0 c8 baseline: `/tmp/treedb_parallel_saturation_m0_20260620_082057/c8`
-- M0 c16 baseline: `/tmp/treedb_parallel_saturation_m0_20260620_082057/c16`
-- M7 explicit c4: `/tmp/treedb_2905_single_lane_direct_noyield_c4_20260620_182515`
-- M7 explicit c8: `/tmp/treedb_2905_single_lane_direct_noyield_c8_20260620_182716`
-- M7 explicit c16: `/tmp/treedb_2907_final_explicit_c16_20260620_185648`
-- M7 forced off: `/tmp/treedb_2907_final_forced_off_20260620_185829`
-- M7 auto: `/tmp/treedb_2907_final_auto_20260620_190102`
-
-Use `<remote-profile-root>/...` when publishing outside local development.
+- M0 c4 baseline: `<remote-profile-root>/treedb_parallel_saturation_m0_20260620_082057/c4`
+- M0 c8 baseline: `<remote-profile-root>/treedb_parallel_saturation_m0_20260620_082057/c8`
+- M0 c16 baseline: `<remote-profile-root>/treedb_parallel_saturation_m0_20260620_082057/c16`
+- M7 explicit c4: `<remote-profile-root>/treedb_2905_single_lane_direct_noyield_c4_20260620_182515`
+- M7 explicit c8: `<remote-profile-root>/treedb_2905_single_lane_direct_noyield_c8_20260620_182716`
+- M7 explicit c16: `<remote-profile-root>/treedb_2907_final_explicit_c16_20260620_185648`
+- M7 forced off: `<remote-profile-root>/treedb_2907_final_forced_off_20260620_185829`
+- M7 auto: `<remote-profile-root>/treedb_2907_final_auto_20260620_190102`
 
 ## Final 10MM matrix
 
@@ -85,7 +83,7 @@ Effective cores are computed as
 | Checkpoint ops/span >=8 or accepted workload limit | Fail/open | final rows remain ~2.94-3.05 ops/span |
 | Single-op span ratio materially lower than M0 | Fail/open | ops/span is effectively unchanged from M0 |
 | Write+checkpoint throughput materially improves vs same-concurrency M0 | Mixed/fail-open | c8 random improves, but c4/c16 are within noise/mixed |
-| No material read/cache/reopen/GC/storage regression | No new blocker found | M0-M6 correctness/CI remained green; footprint is comparable except forced-off leaf_vlog growth |
+| No material read/cache/reopen/GC/storage regression | Deferred/no new blocker found | M0-M6 correctness/CI remained green; footprint is comparable except forced-off leaf_vlog growth. Dedicated settled/mixed read-cache-scan rows were not rerun in M7 because the parent-close gate is already blocked by #2916; #2916 must include or explicitly waive those guardrail rows before parent closure. |
 
 ## Fan-in check from M6
 
