@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -261,7 +263,7 @@ func TestSpanNativeApplyLeafLogOutputPreparedWorkerAppends(t *testing.T) {
 
 	_, native := newReadOnlyPrepareZipper(t)
 	native.SetOuterLeavesInValueLog(true)
-	nativeStore := newBatchMemoryLeafPageStore()
+	nativeStore := newConcurrentBatchMemoryLeafPageStore(200 * time.Microsecond)
 	native.SetLeafPageLog(nativeStore)
 	native.SetLeafPageReader(nativeStore)
 
@@ -310,6 +312,9 @@ func TestSpanNativeApplyLeafLogOutputPreparedWorkerAppends(t *testing.T) {
 	if appended != result.Metrics.ZipperLeafLogPagesWritten {
 		t.Fatalf("batch lens=%v appended=%d pagesWritten=%d", nativeStore.batchLens, appended, result.Metrics.ZipperLeafLogPagesWritten)
 	}
+	if got := nativeStore.concurrentCalls.Load(); got == 0 {
+		t.Fatal("concurrent leaf-log append support was not queried")
+	}
 	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
 		t.Fatalf("span-native prepared leaf-log output mismatch")
 	}
@@ -354,6 +359,245 @@ func TestSpanNativeApplyLeafLogOutputCommitFailureReturnsBeforeReduce(t *testing
 	if result.Metrics.ZipperLeafLogOutputAppendPages != 0 {
 		t.Fatalf("successful append pages=%d want 0 on failed buffered commit", result.Metrics.ZipperLeafLogOutputAppendPages)
 	}
+}
+
+type preparedBatchMemoryLeafPageStore struct {
+	*batchMemoryLeafPageStore
+	preparedSingleCalls int
+	preparedBatchLens   []int
+}
+
+func newPreparedBatchMemoryLeafPageStore() *preparedBatchMemoryLeafPageStore {
+	return &preparedBatchMemoryLeafPageStore{batchMemoryLeafPageStore: newBatchMemoryLeafPageStore()}
+}
+
+func (s *preparedBatchMemoryLeafPageStore) PreparedLeafPageAppends() bool { return true }
+
+func (s *preparedBatchMemoryLeafPageStore) PreparedLeafPageBatchAppends() bool { return true }
+
+func (s *preparedBatchMemoryLeafPageStore) AppendPreparedLeafPage(leafPage []byte, preparedPayload []byte) (page.LeafLogPtr, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(leafPage) != page.PageSize {
+		return page.LeafLogPtr{}, fmt.Errorf("prepared leaf page size=%d want=%d", len(leafPage), page.PageSize)
+	}
+	s.preparedSingleCalls++
+	if s.next == 0 {
+		s.next = 4
+	}
+	ptr := page.LeafLogPtr{FileID: 1, Offset: uint64(s.next), RecordLengthHint: page.PageSize}
+	s.next += page.PageSize + 32
+	if !s.discardAppends {
+		s.pages[ptr] = append([]byte(nil), preparedPayload...)
+	}
+	return ptr, nil
+}
+
+func (s *preparedBatchMemoryLeafPageStore) AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(leafPages) != len(preparedPayloads) {
+		return nil, fmt.Errorf("prepared leaf page batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	s.preparedBatchLens = append(s.preparedBatchLens, len(leafPages))
+	if s.next == 0 {
+		s.next = 4
+	}
+	offset := uint64(s.next)
+	s.next += page.PageSize + 32
+	ptrs := make([]page.LeafLogPtr, len(leafPages))
+	for i, leafPage := range leafPages {
+		if len(leafPage) != page.PageSize {
+			return nil, fmt.Errorf("prepared leaf page %d size=%d want=%d", i, len(leafPage), page.PageSize)
+		}
+		ptr := page.LeafLogPtr{FileID: 1, Offset: offset, RecordLengthHint: page.ValuePtrMarkGrouped(page.PageSize, uint8(i)), SubIndex: uint16(i)}
+		ptrs[i] = ptr
+		if !s.discardAppends {
+			s.pages[ptr] = append([]byte(nil), preparedPayloads[i]...)
+		}
+	}
+	return ptrs, nil
+}
+
+type concurrentBatchMemoryLeafPageStore struct {
+	*batchMemoryLeafPageStore
+	appendDelay     time.Duration
+	concurrentCalls atomic.Int64
+}
+
+func newConcurrentBatchMemoryLeafPageStore(delay time.Duration) *concurrentBatchMemoryLeafPageStore {
+	return &concurrentBatchMemoryLeafPageStore{
+		batchMemoryLeafPageStore: newBatchMemoryLeafPageStore(),
+		appendDelay:              delay,
+	}
+}
+
+func (s *concurrentBatchMemoryLeafPageStore) ConcurrentLeafPageAppends() bool {
+	s.concurrentCalls.Add(1)
+	return true
+}
+
+func (s *concurrentBatchMemoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	ptrs, err := s.AppendLeafPages([][]byte{leafPage})
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return ptrs[0], nil
+}
+
+func (s *concurrentBatchMemoryLeafPageStore) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	if s.appendDelay > 0 {
+		time.Sleep(s.appendDelay)
+	}
+	return s.batchMemoryLeafPageStore.AppendLeafPages(leafPages)
+}
+
+func TestSpanNativeLeafLogOutputRequestBatchHelper(t *testing.T) {
+	makeLeafPage := func(ch byte) []byte {
+		return bytes.Repeat([]byte{ch}, page.PageSize)
+	}
+
+	t.Run("raw", func(t *testing.T) {
+		_, z := newReadOnlyPrepareZipper(t)
+		z.SetOuterLeavesInValueLog(true)
+		store := newBatchMemoryLeafPageStore()
+		z.SetLeafPageLog(store)
+		gate := newSpanNativeLeafLogOutputGate(4)
+		reqs := []*spanNativeLeafLogOutputRequest{
+			{leafPages: [][]byte{makeLeafPage('a')}, done: make(chan spanNativeLeafLogOutputResult, 1)},
+			{leafPages: [][]byte{makeLeafPage('b'), makeLeafPage('c')}, done: make(chan spanNativeLeafLogOutputResult, 1)},
+		}
+		if err := gate.appendQueuedLeafLogOutputRequests(z, reqs); err != nil {
+			t.Fatalf("appendQueuedLeafLogOutputRequests raw: %v", err)
+		}
+		res1 := <-reqs[0].done
+		res2 := <-reqs[1].done
+		if res1.err != nil || res2.err != nil {
+			t.Fatalf("raw batch result errs=%v/%v", res1.err, res2.err)
+		}
+		if len(res1.refs) != 1 || len(res2.refs) != 2 {
+			t.Fatalf("raw refs lens=%d/%d want 1/2", len(res1.refs), len(res2.refs))
+		}
+		if len(store.batchLens) != 1 || store.batchLens[0] != 3 {
+			t.Fatalf("raw batch lens=%v want [3]", store.batchLens)
+		}
+		if store.singleCalls != 0 {
+			t.Fatalf("raw single appends=%d want 0", store.singleCalls)
+		}
+	})
+
+	t.Run("prepared", func(t *testing.T) {
+		_, z := newReadOnlyPrepareZipper(t)
+		z.SetOuterLeavesInValueLog(true)
+		store := newPreparedBatchMemoryLeafPageStore()
+		z.SetLeafPageLog(store)
+		gate := newSpanNativeLeafLogOutputGate(4)
+		reqs := []*spanNativeLeafLogOutputRequest{
+			{leafPages: [][]byte{makeLeafPage('d')}, preparedPayloads: [][]byte{[]byte("prepared-d")}, done: make(chan spanNativeLeafLogOutputResult, 1)},
+			{leafPages: [][]byte{makeLeafPage('e'), makeLeafPage('f')}, preparedPayloads: [][]byte{[]byte("prepared-e"), []byte("prepared-f")}, done: make(chan spanNativeLeafLogOutputResult, 1)},
+		}
+		if err := gate.appendQueuedLeafLogOutputRequests(z, reqs); err != nil {
+			t.Fatalf("appendQueuedLeafLogOutputRequests prepared: %v", err)
+		}
+		res1 := <-reqs[0].done
+		res2 := <-reqs[1].done
+		if res1.err != nil || res2.err != nil {
+			t.Fatalf("prepared batch result errs=%v/%v", res1.err, res2.err)
+		}
+		if len(res1.refs) != 1 || len(res2.refs) != 2 {
+			t.Fatalf("prepared refs lens=%d/%d want 1/2", len(res1.refs), len(res2.refs))
+		}
+		if len(store.preparedBatchLens) != 1 || store.preparedBatchLens[0] != 3 {
+			t.Fatalf("prepared batch lens=%v want [3]", store.preparedBatchLens)
+		}
+		if store.preparedSingleCalls != 0 {
+			t.Fatalf("prepared single appends=%d want 0", store.preparedSingleCalls)
+		}
+		if got := store.pages[res1.refs[0].Log]; !bytes.Equal(got, []byte("prepared-d")) {
+			t.Fatalf("prepared single payload=%q want %q", got, []byte("prepared-d"))
+		}
+		if got := store.pages[res2.refs[0].Log]; !bytes.Equal(got, []byte("prepared-e")) {
+			t.Fatalf("prepared first batch payload=%q want %q", got, []byte("prepared-e"))
+		}
+		if got := store.pages[res2.refs[1].Log]; !bytes.Equal(got, []byte("prepared-f")) {
+			t.Fatalf("prepared second batch payload=%q want %q", got, []byte("prepared-f"))
+		}
+	})
+
+	t.Run("failure", func(t *testing.T) {
+		_, z := newReadOnlyPrepareZipper(t)
+		z.SetOuterLeavesInValueLog(true)
+		store := newBatchMemoryLeafPageStore()
+		z.SetLeafPageLog(&failingBatchLeafPageLog{batchMemoryLeafPageStore: store, err: errors.New("append failed")})
+		gate := newSpanNativeLeafLogOutputGate(4)
+		reqs := []*spanNativeLeafLogOutputRequest{
+			{leafPages: [][]byte{makeLeafPage('g')}, done: make(chan spanNativeLeafLogOutputResult, 1)},
+			{leafPages: [][]byte{makeLeafPage('h')}, done: make(chan spanNativeLeafLogOutputResult, 1)},
+		}
+		if err := gate.appendQueuedLeafLogOutputRequests(z, reqs); err == nil {
+			t.Fatal("appendQueuedLeafLogOutputRequests failure: expected error")
+		}
+		res1 := <-reqs[0].done
+		res2 := <-reqs[1].done
+		if res1.err == nil || res2.err == nil {
+			t.Fatalf("failure results errs=%v/%v want non-nil", res1.err, res2.err)
+		}
+		if len(store.batchLens) != 0 || store.singleCalls != 0 {
+			t.Fatalf("failure should not publish appends: batchLens=%v singleCalls=%d", store.batchLens, store.singleCalls)
+		}
+	})
+
+	t.Run("collector", func(t *testing.T) {
+		_, z := newReadOnlyPrepareZipper(t)
+		z.SetOuterLeavesInValueLog(true)
+		store := newConcurrentBatchMemoryLeafPageStore(200 * time.Microsecond)
+		z.SetLeafPageLog(store)
+		gate := newSpanNativeLeafLogOutputGate(4)
+		gate.startCollector(z)
+		defer gate.closeCollector()
+
+		type result struct {
+			ref page.ChildRef
+			err error
+		}
+		resCh := make(chan result, 4)
+		for _, ch := range []byte{'i', 'j', 'k', 'l'} {
+			ch := ch
+			go func() {
+				ref, err := gate.persistLeafPageData(z, makeLeafPage(ch), nil)
+				resCh <- result{ref: ref, err: err}
+			}()
+		}
+		for range []byte{'i', 'j', 'k', 'l'} {
+			select {
+			case res := <-resCh:
+				if res.err != nil {
+					t.Fatalf("collector persistLeafPageData: %v", res.err)
+				}
+				if !res.ref.IsLeafLog() {
+					t.Fatalf("collector ref kind=%v want leaf-log", res.ref.Kind)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("collector persistLeafPageData timed out")
+			}
+		}
+		if len(store.batchLens) == 0 {
+			t.Fatal("collector batch lens empty")
+		}
+		var total int
+		for _, n := range store.batchLens {
+			total += n
+		}
+		if total != 4 {
+			t.Fatalf("collector batch lens=%v total=%d want 4", store.batchLens, total)
+		}
+		if store.singleCalls != 0 {
+			t.Fatalf("collector single appends=%d want 0", store.singleCalls)
+		}
+	})
 }
 
 func TestSpanNativeApplyGroupsTinyLeafSpansIntoBoundedWorkUnits(t *testing.T) {
