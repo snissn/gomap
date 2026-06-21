@@ -344,6 +344,41 @@ func TestManagerPromoteCurrentWritable_SwitchesPriorLaneSegmentToSealed(t *testi
 	}
 }
 
+func TestManagerPromoteCurrentWritable_AllowsMultiCurrentWritableLane(t *testing.T) {
+	mgr := &Manager{
+		files:                 make(map[uint32]*File),
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	mgr.SetMultiCurrentWritableLane(ReservedLeafLogLaneID, true)
+	f1 := &File{ID: mustEncodeFileID(t, ReservedLeafLogLaneID, 1)}
+	f2 := &File{ID: mustEncodeFileID(t, ReservedLeafLogLaneID, 2)}
+	mgr.files[f1.ID] = f1
+	mgr.files[f2.ID] = f2
+
+	if err := mgr.PromoteCurrentWritable(f1.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritable(first): %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(f2.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritable(second): %v", err)
+	}
+	if !f1.currentWritable.Load() {
+		t.Fatalf("first file was sealed despite multi-current lane")
+	}
+	if !f2.currentWritable.Load() {
+		t.Fatalf("second file not marked current writable")
+	}
+	gotIDs := mgr.CurrentWritableFileIDs()
+	got := make(map[uint32]struct{}, len(gotIDs))
+	for _, id := range gotIDs {
+		got[id] = struct{}{}
+	}
+	for _, id := range []uint32{f1.ID, f2.ID} {
+		if _, ok := got[id]; !ok {
+			t.Fatalf("CurrentWritableFileIDs missing %d; got %v", id, gotIDs)
+		}
+	}
+}
+
 func TestManagerSetCurrentWritableReadBarrier_NilClearsCallback(t *testing.T) {
 	mgr := &Manager{}
 	calls := 0

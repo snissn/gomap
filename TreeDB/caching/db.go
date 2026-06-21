@@ -2810,6 +2810,22 @@ func (db *DB) valueLogLaneByID(laneID int) *lane {
 	return nil
 }
 
+func (db *DB) valueLogLaneForFileID(fileID uint32) *lane {
+	if db == nil || fileID == 0 {
+		return nil
+	}
+	laneID, seq := valuelog.DecodeFileID(fileID)
+	if laneID != leafLogLaneID || !db.indexOuterLeavesInValueLog {
+		return db.valueLogLaneByID(int(laneID))
+	}
+	for _, l := range db.leafLogAppendLanesSnapshot() {
+		if l != nil && db.currentValueLogSeq(l) == int(seq) {
+			return l
+		}
+	}
+	return nil
+}
+
 func (db *DB) isLeafLogAppendLane(l *lane) bool {
 	if db == nil || !db.indexOuterLeavesInValueLog || l == nil || l.id != leafLogLaneID {
 		return false
@@ -4026,19 +4042,24 @@ func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]b
 }
 
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
+	_, err := db.flushValueLogForFileIDWithSize(ptr.FileID)
+	return err
+}
+
+func (db *DB) flushValueLogForFileIDWithSize(fileID uint32) (int64, error) {
 	if !db.valueLogEnabled() {
-		return nil
+		return -1, nil
 	}
-	laneID, seq := valuelog.DecodeFileID(ptr.FileID)
-	l := db.valueLogLaneByID(int(laneID))
+	_, seq := valuelog.DecodeFileID(fileID)
+	l := db.valueLogLaneForFileID(fileID)
 	if l == nil {
-		return nil
+		return -1, nil
 	}
 	currentSeq := db.currentValueLogSeq(l)
 	if currentSeq == int(seq) {
-		return db.flushValueLogLane(l)
+		return db.flushValueLogLaneWithSize(l)
 	}
-	return nil
+	return -1, nil
 }
 
 func (db *DB) flushValueLog(laneIDs ...int) error {
@@ -4186,7 +4207,7 @@ func dispatchBackendValueLogReadBarrierWithSize(key uintptr, fileID uint32) (int
 	if len(dbs) == 0 {
 		return -1, nil
 	}
-	laneID, seq := valuelog.DecodeFileID(fileID)
+	_, seq := valuelog.DecodeFileID(fileID)
 	var firstErr error
 	flushedAny := false
 	size := int64(-1)
@@ -4195,7 +4216,7 @@ func dispatchBackendValueLogReadBarrierWithSize(key uintptr, fileID uint32) (int
 		if db == nil || db.closing.Load() {
 			continue
 		}
-		l := db.valueLogLaneByID(int(laneID))
+		l := db.valueLogLaneForFileID(fileID)
 		if l == nil {
 			continue
 		}
@@ -4240,12 +4261,7 @@ func (db *DB) installBackendValueLogReadBarrier() {
 		key := backendValueLogReadBarrierKey(db.backend)
 		if key == 0 {
 			barrierSetter.SetCurrentValueLogReadBarrierWithSize(func(fileID uint32) (int64, error) {
-				laneID, _ := valuelog.DecodeFileID(fileID)
-				l := db.valueLogLaneByID(int(laneID))
-				if l == nil {
-					return -1, nil
-				}
-				return db.flushValueLogLaneWithSize(l)
+				return db.flushValueLogForFileIDWithSize(fileID)
 			})
 			return
 		}
@@ -4262,12 +4278,8 @@ func (db *DB) installBackendValueLogReadBarrier() {
 	key := backendValueLogReadBarrierKey(db.backend)
 	if key == 0 {
 		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
-			laneID, _ := valuelog.DecodeFileID(fileID)
-			l := db.valueLogLaneByID(int(laneID))
-			if l == nil {
-				return nil
-			}
-			return db.flushValueLogLane(l)
+			_, err := db.flushValueLogForFileIDWithSize(fileID)
+			return err
 		})
 		return
 	}
@@ -10864,6 +10876,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
 	reader.SetCurrentWritableMmapEnabled(opts.ValueLogCurrentWritableMmap)
+	reader.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
@@ -11319,6 +11332,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				return currentZipperParallelMergePressure()
 			})
 		}
+	}
+	if db.valueLogReader != nil {
+		db.valueLogReader.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+			return db.flushValueLogForFileIDWithSize(fileID)
+		})
 	}
 	db.installBackendValueLogReadBarrier()
 

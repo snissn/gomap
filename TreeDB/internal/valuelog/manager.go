@@ -1173,9 +1173,13 @@ type Manager struct {
 
 	mu    sync.RWMutex
 	files map[uint32]*File
-	// currentWritableByLane tracks the one segment per lane that may still grow
-	// and therefore is allowed to remap aggressively for zero-copy unsafe views.
-	currentWritableByLane map[uint32]uint32
+	// currentWritableByLane tracks segments that may still grow and therefore are
+	// allowed to remap aggressively for zero-copy unsafe views. Most lanes have a
+	// single current writer keyed by lane id; lanes listed in
+	// multiCurrentWritableLanes are keyed by file id so independent physical
+	// writers that share an encoded lane can remain current simultaneously.
+	currentWritableByLane     map[uint32]uint32
+	multiCurrentWritableLanes map[uint32]bool
 
 	refreshScans atomic.Uint64
 
@@ -1221,6 +1225,28 @@ func (m *Manager) SetCurrentWritableMmapEnabled(enabled bool) {
 		return
 	}
 	m.currentWritableMmap.Store(enabled)
+}
+
+// SetMultiCurrentWritableLane allows multiple physical files with the same
+// encoded lane id to remain current-writable at the same time. This is used for
+// TreeDB leaf-log append lanes, where the reserved lane id identifies the leaf
+// log class while file ids still identify independent writer streams.
+func (m *Manager) SetMultiCurrentWritableLane(lane uint32, enabled bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !enabled {
+		if m.multiCurrentWritableLanes != nil {
+			delete(m.multiCurrentWritableLanes, lane)
+		}
+		return
+	}
+	if m.multiCurrentWritableLanes == nil {
+		m.multiCurrentWritableLanes = make(map[uint32]bool)
+	}
+	m.multiCurrentWritableLanes[lane] = true
 }
 
 // SetCurrentWritableReadBarrier installs an optional callback that is invoked
@@ -1530,8 +1556,9 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	return nil
 }
 
-// PromoteCurrentWritable marks fileID as the current writable segment for its
-// lane and seals the previous current segment in that lane.
+// PromoteCurrentWritable marks fileID as current writable. By default this
+// seals the previous current segment in the same encoded lane. Lanes enabled via
+// SetMultiCurrentWritableLane instead use one current slot per file id.
 func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	if m == nil {
 		return nil
@@ -1546,7 +1573,8 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	if !ok {
 		return &fileNotFoundError{id: fileID}
 	}
-	if prevID, ok := m.currentWritableByLane[lane]; ok && prevID != 0 && prevID != fileID {
+	key := m.currentWritableKeyLocked(lane, fileID)
+	if prevID, ok := m.currentWritableByLane[key]; ok && prevID != 0 && prevID != fileID {
 		if prev := m.files[prevID]; prev != nil {
 			prev.remapMu.Lock()
 			prev.currentWritable.Store(false)
@@ -1563,8 +1591,15 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 		}
 	}
 	f.currentWritable.Store(true)
-	m.currentWritableByLane[lane] = fileID
+	m.currentWritableByLane[key] = fileID
 	return nil
+}
+
+func (m *Manager) currentWritableKeyLocked(lane, fileID uint32) uint32 {
+	if m != nil && m.multiCurrentWritableLanes != nil && m.multiCurrentWritableLanes[lane] {
+		return fileID
+	}
+	return lane
 }
 
 // CurrentWritableFileIDs returns the registered current writable value-log

@@ -483,6 +483,47 @@ func TestCachingLeafPageLogLaneSelectionAppendsUniqueReadablePtrs(t *testing.T) 
 	}
 }
 
+func TestCachingLeafPageLogLaneProviderFlushesSelectedLaneForLiveRead(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	defer func() { _ = db.Close() }()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	defaultPage := testLeafPageBytes("live-default")
+	defaultPtr, err := captured.leafLog.AppendLeafPage(defaultPage)
+	if err != nil {
+		t.Fatalf("default AppendLeafPage: %v", err)
+	}
+	lane1, ok := provider.LeafPageLogLane(1)
+	if !ok || lane1 == nil {
+		t.Fatal("LeafPageLogLane(1) unavailable")
+	}
+	lanePage := testLeafPageBytes("live-lane-1")
+	lanePtr, err := lane1.AppendLeafPage(lanePage)
+	if err != nil {
+		t.Fatalf("lane 1 AppendLeafPage: %v", err)
+	}
+
+	currentIDs := db.valueLogReader.CurrentWritableFileIDs()
+	current := make(map[uint32]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		current[id] = struct{}{}
+	}
+	for _, ptr := range []page.LeafLogPtr{defaultPtr, lanePtr} {
+		if _, ok := current[ptr.ValuePtr().FileID]; !ok {
+			t.Fatalf("current writable ids %v missing %d", currentIDs, ptr.ValuePtr().FileID)
+		}
+	}
+	got, err := db.valueLogReader.Read(lanePtr.ValuePtr())
+	if err != nil {
+		t.Fatalf("live read selected lane: %v", err)
+	}
+	if !bytes.Equal(got, lanePage) {
+		t.Fatalf("live read selected lane mismatch")
+	}
+}
+
 func TestCachingLeafPageLogLaneSnapshotsAggregateAndMarkPerLane(t *testing.T) {
 	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
 	defer func() { _ = db.Close() }()
