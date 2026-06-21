@@ -6467,6 +6467,10 @@ func TestVlogGenerationRewritePlan_FiltersPenalizedSegments(t *testing.T) {
 		SelectedBytesStale: 75 << 20,
 	}
 	recorder.mu.Unlock()
+	// The first ineffective rewrite consumes the tiny test rewrite budget. Refill
+	// it explicitly so this test exercises penalty filtering instead of depending
+	// on wall-clock budget accrual, which is flaky on fast Windows runners.
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteIneffectiveBackoff).UnixNano())
 	db.vlogGenerationCheckpointKickPending.Store(false)
@@ -6558,6 +6562,10 @@ func TestVlogGenerationRewritePlan_ReadmitsPenalizedSegmentWhenStaleBytesImprove
 	}
 	recorder.mu.Unlock()
 	forceVlogMaintenanceIdle(db)
+	// The first ineffective rewrite consumes the tiny test rewrite budget. Refill
+	// it explicitly so this test exercises stale-byte readmission instead of
+	// depending on wall-clock budget accrual, which is flaky on fast runners.
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteIneffectiveBackoff).UnixNano())
 	db.maybeRunVlogGenerationMaintenance(false)
