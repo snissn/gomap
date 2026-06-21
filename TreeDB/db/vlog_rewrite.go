@@ -3363,15 +3363,16 @@ type rewriteCreatedSegment struct {
 }
 
 type rewriteWriter struct {
-	walDir   string
-	lane     uint32
-	seq      uint32
-	maxSize  int64
-	leafDir  string
-	leafLane uint32
-	leafSeq  uint32
-	nextRID  uint64
-	ridAlloc *rewriteRIDAllocator
+	walDir           string
+	lane             uint32
+	seq              uint32
+	maxSize          int64
+	leafDir          string
+	leafLane         uint32
+	leafSeq          uint32
+	leafSeqAllocator *leafLogSeqAllocator
+	nextRID          uint64
+	ridAlloc         *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
 	currentPath       string
@@ -3463,6 +3464,33 @@ func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) 
 	w.leafSeq = startSeq
 }
 
+func (w *rewriteWriter) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator) {
+	if w == nil {
+		return
+	}
+	w.leafSeqAllocator = seqAlloc
+}
+
+func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator) (LeafPageLog, error) {
+	if w == nil {
+		return nil, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.leafDir == "" {
+		return nil, errors.New("vlog-rewrite: leaf lane cloning requires a leaf writer")
+	}
+	clone := newRewriteWriter(w.walDir, w.lane, 0, w.maxSize)
+	clone.leafDir = w.leafDir
+	clone.leafLane = w.leafLane
+	clone.leafSeqAllocator = seqAlloc
+	clone.blockCompression = w.blockCompression
+	clone.blockCodec = w.blockCodec
+	clone.leafBlockCodec = w.leafBlockCodec
+	clone.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+	clone.SetTemplateCompression(w.templateMode, w.templateCfg, w.templateStore)
+	clone.SetLeafDictMode(w.leafDictID, w.leafDict, w.leafDictUseRawPages)
+	return clone, nil
+}
+
 func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
 	if w == nil || w.leafDir == "" || seq <= w.leafSeq {
 		return nil
@@ -3472,6 +3500,9 @@ func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
 			return err
 		}
 		w.leafW = nil
+	}
+	if w.leafSeqAllocator != nil {
+		w.leafSeqAllocator.AdvanceAtLeast(seq)
 	}
 	w.leafSeq = seq
 	w.leafCurrentPath = ""
@@ -4050,8 +4081,31 @@ func (w *rewriteWriter) maybeRotateLeafForEstimate(estimate int64) error {
 	return w.rotateLeaf()
 }
 
-func (w *rewriteWriter) rotateLeaf() error {
+func (w *rewriteWriter) nextLeafSeq() (uint32, error) {
+	if w == nil {
+		return 0, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.leafSeqAllocator != nil {
+		seq, err := w.leafSeqAllocator.Next()
+		if err != nil {
+			return 0, err
+		}
+		w.leafSeq = seq
+		return seq, nil
+	}
 	nextSeq := w.leafSeq + 1
+	if nextSeq <= w.leafSeq {
+		return 0, fmt.Errorf("vlog-rewrite: leaf log sequence space exhausted")
+	}
+	w.leafSeq = nextSeq
+	return nextSeq, nil
+}
+
+func (w *rewriteWriter) rotateLeaf() error {
+	nextSeq, err := w.nextLeafSeq()
+	if err != nil {
+		return err
+	}
 	fileID, err := valuelog.EncodeFileID(w.leafLane, nextSeq)
 	if err != nil {
 		return err

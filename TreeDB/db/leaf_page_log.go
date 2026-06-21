@@ -462,13 +462,36 @@ func (db *DB) SetLeafPageLog(log LeafPageLog) {
 	if db == nil {
 		return
 	}
-	wrapped := wrapLeafPageLogWithRecordLengthHints(db, log)
+	wrapped := wrapLeafPageLogWithLaneSelection(wrapLeafPageLogWithRecordLengthHints(db, log))
 	db.writeMu.Lock()
 	db.leafPageLog = wrapped
 	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
 		idx.zipper.SetLeafPageLog(wrapped)
 	}
 	db.writeMu.Unlock()
+}
+
+func (db *DB) leafValueLogLanes() []LeafPageLog {
+	if db == nil || db.leafPageLog == nil {
+		return nil
+	}
+	if provider, ok := db.leafPageLog.(interface{ leafValueLogLanes() []LeafPageLog }); ok {
+		return provider.leafValueLogLanes()
+	}
+	return []LeafPageLog{db.leafPageLog}
+}
+
+func (db *DB) leafPageLogLaneForWorkerIndex(workerIndex int) (LeafPageLog, bool) {
+	if db == nil || db.leafPageLog == nil {
+		return nil, false
+	}
+	if provider, ok := db.leafPageLog.(leafPageLogLaneProvider); ok {
+		return provider.leafPageLogLane(workerIndex)
+	}
+	if workerIndex <= 0 {
+		return db.leafPageLog, true
+	}
+	return nil, false
 }
 
 // RegisterValueLogSegment registers a newly created value-log segment with the
