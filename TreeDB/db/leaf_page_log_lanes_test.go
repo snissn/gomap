@@ -272,7 +272,7 @@ func TestLeafPageLogLaneSelectionAppendsUniqueReadablePtrs(t *testing.T) {
 
 func TestLeafPageLogLaneSnapshotsAggregateAndMarkPerLane(t *testing.T) {
 	db, _ := openLeafPageLogLaneTestDB(t)
-	defer func() { _ = db.Close() }()
+	defer closeLeafPageLogLaneTestDB(t, db)
 
 	appenders := []LeafPageLog{db.leafPageLog}
 	for lane := 1; lane <= 2; lane++ {
@@ -318,6 +318,21 @@ func TestLeafPageLogLaneSnapshotsAggregateAndMarkPerLane(t *testing.T) {
 	}
 	if len(finalCreated) != 0 {
 		t.Fatalf("created segments after final mark=%d want 0", len(finalCreated))
+	}
+}
+
+func closeLeafPageLogLaneTestDB(t *testing.T, db *DB) {
+	t.Helper()
+	if db == nil {
+		return
+	}
+	if closer, ok := db.leafPageLog.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			t.Fatalf("Close leaf log: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
 	}
 }
 
