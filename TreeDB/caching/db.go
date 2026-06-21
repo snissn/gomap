@@ -8006,7 +8006,7 @@ type DB struct {
 	checkpointFrontierPostBytesMax                               atomic.Uint64
 	checkpointActiveFrontierMu                                   sync.RWMutex
 	checkpointActiveFrontier                                     checkpointFrontier
-	checkpointFlushPreemptRequested                              atomic.Bool
+	checkpointFlushPreemptActive                                 atomic.Int64
 	checkpointFlushPreemptRequests                               atomic.Uint64
 	checkpointSharedDrainFlushMuReleases                         atomic.Uint64
 	checkpointSharedDrainWaitNs                                  atomic.Uint64
@@ -21604,9 +21604,9 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
-	db.checkpointFlushPreemptRequested.Store(true)
+	db.checkpointFlushPreemptActive.Add(1)
 	db.checkpointFlushPreemptRequests.Add(1)
-	defer db.checkpointFlushPreemptRequested.Store(false)
+	defer addAtomicInt64FloorZero(&db.checkpointFlushPreemptActive, -1)
 	barrierWaitStart := time.Now()
 	flushMuWaitStart := barrierWaitStart
 	db.flushMu.Lock()
@@ -24893,7 +24893,7 @@ func (db *DB) shouldPreemptBackgroundFlushForCheckpoint(reqSync bool) bool {
 	if db.closing.Load() || db.checkpointing.Load() {
 		return false
 	}
-	return db.checkpointFlushPreemptRequested.Load()
+	return db.checkpointFlushPreemptActive.Load() > 0
 }
 
 func (db *DB) observeCheckpointBackgroundFlushPreempted() {
@@ -25041,6 +25041,10 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 			break
 		}
 		if !ok {
+			return
+		}
+		if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+			db.observeCheckpointBackgroundFlushPreempted()
 			return
 		}
 	}

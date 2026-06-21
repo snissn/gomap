@@ -635,11 +635,11 @@ func TestBackgroundFlushYieldsToPendingCheckpointBetweenPasses(t *testing.T) {
 	}, highSingleOpCoalescingSnapshot())
 	enqueuePointMemtables(t, db, 3, "preempt")
 
-	db.checkpointFlushPreemptRequested.Store(true)
+	db.checkpointFlushPreemptActive.Add(1)
 	db.flushMu.Lock()
 	db.flushAllLocked(false, nil)
 	db.flushMu.Unlock()
-	db.checkpointFlushPreemptRequested.Store(false)
+	addAtomicInt64FloorZero(&db.checkpointFlushPreemptActive, -1)
 
 	db.mu.RLock()
 	remaining := len(db.queue)
@@ -651,9 +651,9 @@ func TestBackgroundFlushYieldsToPendingCheckpointBetweenPasses(t *testing.T) {
 		t.Fatalf("checkpoint preemptions=%d want 1", got)
 	}
 
-	db.checkpointFlushPreemptRequested.Store(true)
+	db.checkpointFlushPreemptActive.Add(1)
 	db.flushAll(true)
-	db.checkpointFlushPreemptRequested.Store(false)
+	addAtomicInt64FloorZero(&db.checkpointFlushPreemptActive, -1)
 	db.mu.RLock()
 	remaining = len(db.queue)
 	db.mu.RUnlock()
