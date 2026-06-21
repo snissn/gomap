@@ -8015,6 +8015,7 @@ type DB struct {
 	checkpointSharedDrainBackgroundUnits                         atomic.Uint64
 	checkpointSharedDrainBackgroundOps                           atomic.Uint64
 	checkpointSharedDrainBackgroundBytes                         atomic.Uint64
+	checkpointPreflushKickSkips                                  atomic.Uint64
 	checkpointWALCleanupConsideredLast                           atomic.Uint64
 	checkpointWALCleanupRemovedLast                              atomic.Uint64
 	checkpointWALCleanupSkippedCurrentLast                       atomic.Uint64
@@ -21584,12 +21585,20 @@ func (db *DB) Checkpoint() error {
 	db.mu.RUnlock()
 	db.observeCheckpointDebt(checkpointDebtMemtables, checkpointDebtBytes)
 	if (checkpointDebtMemtables > 0 || checkpointDebtBytes > 0) && (!db.disableJournal || db.relaxedSync) {
-		// Kick the continuous drainer before the explicit checkpoint tries to take
-		// ownership. With WAL enabled, any pre-checkpoint async drain remains covered
-		// by WAL until this checkpoint rotates/trims it. In strict WAL-disabled mode,
-		// do not pre-drain asynchronously: Checkpoint must own the synced flush
-		// boundary so success implies a backend sync.
-		db.TriggerFlush()
+		if db.flushApplyConcurrency > 1 {
+			// Parallel checkpoint drains should capture the frontier first instead of
+			// racing their own background kick and then waiting on flushMu. The shared
+			// frontier path below publishes a bounded active frontier and triggers
+			// background help after checkpoint owns the pre-frontier durability boundary.
+			db.checkpointPreflushKickSkips.Add(1)
+		} else {
+			// Kick the continuous drainer before the explicit checkpoint tries to take
+			// ownership. With WAL enabled, any pre-checkpoint async drain remains covered
+			// by WAL until this checkpoint rotates/trims it. In strict WAL-disabled mode,
+			// do not pre-drain asynchronously: Checkpoint must own the synced flush
+			// boundary so success implies a backend sync.
+			db.TriggerFlush()
+		}
 	}
 	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
 	barrierWaitStart := time.Now()
@@ -21795,7 +21804,15 @@ func (db *DB) Checkpoint() error {
 	leafLogAppendWaitBefore := db.flushApplyLeafLogAppendWaitNs.Load()
 	reducerPublishBefore := db.backendFlushApplyReducerPublishNs()
 	flushAllStart := time.Now()
-	if commandWALPublishPiggyback != nil || len(frontier.ids) < 8 || frontier.bytes < 8<<20 {
+	frontierLaneCount := len(db.lanes)
+	if frontierLaneCount == 0 {
+		frontierLaneCount = 1
+	}
+	_, frontierActiveLanes := db.checkpointFrontierActiveLanes(frontier, frontierLaneCount)
+	// Same-lane background claims serialize on flushLaneMu and only make the
+	// checkpoint wait for another owner. Share the active frontier only when the
+	// frontier spans multiple lanes that can make independent progress.
+	if commandWALPublishPiggyback != nil || len(frontier.ids) < 8 || frontier.bytes < 8<<20 || frontierActiveLanes <= 1 {
 		db.flushCheckpointFrontierLocked(true, commandWALPublishPiggyback, frontier)
 	} else {
 		db.setActiveCheckpointFrontier(frontier)
@@ -27415,6 +27432,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.shared_drain.background_units_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundUnits.Load())
 	stats["treedb.cache.checkpoint.shared_drain.background_ops_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundOps.Load())
 	stats["treedb.cache.checkpoint.shared_drain.background_bytes_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundBytes.Load())
+	stats["treedb.cache.checkpoint.preflush_kick_skips_total"] = fmt.Sprintf("%d", db.checkpointPreflushKickSkips.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.considered_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupConsideredLast.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.removed_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupRemovedLast.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.skipped_current_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupSkippedCurrentLast.Load())

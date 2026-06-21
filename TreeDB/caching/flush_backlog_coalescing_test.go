@@ -613,6 +613,21 @@ func TestCheckpointActiveFrontierFiltersBackgroundFlush(t *testing.T) {
 	}
 }
 
+func TestCheckpointParallelDrainSkipsPreflushKick(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{
+		FlushApplyConcurrency: 4,
+		FlushApplySpanNative:  true,
+	}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtables(t, db, 2, "preflushskip")
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.checkpoint.preflush_kick_skips_total"); got == 0 {
+		t.Fatalf("preflush kick skips=%d want >0", got)
+	}
+}
+
 func TestCheckpointSharedFrontierRecordsBackgroundAndCheckpointWork(t *testing.T) {
 	db, backend := newCoalescingTestDB(t, Options{}, highSingleOpCoalescingSnapshot())
 	enqueuePointMemtables(t, db, 3, "sharedfrontier")
