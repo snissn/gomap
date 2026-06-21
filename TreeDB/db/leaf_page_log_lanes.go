@@ -465,6 +465,9 @@ func (g *leafPageLogLaneGroup) MarkLeafPageLogSegmentsRegistered(segments []Leaf
 	}
 	lanes, locks := g.snapshotLanesAndLocks()
 	for i, lane := range lanes {
+		if lane == nil {
+			continue
+		}
 		lock := leafPageLogLaneLockAt(locks, i)
 		lock.Lock()
 		markLeafPageLogSegmentsRegistered(lane, segments)

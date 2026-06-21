@@ -516,12 +516,21 @@ func TestCachingLeafPageLogLaneProviderFlushesSelectedLaneForLiveRead(t *testing
 			t.Fatalf("current writable ids %v missing %d", currentIDs, fileID)
 		}
 	}
+	var readBarrierFlushes atomic.Int32
+	db.testOnVlogFlush = func(laneID int) {
+		if laneID == leafLogLaneID {
+			readBarrierFlushes.Add(1)
+		}
+	}
 	got, err := db.valueLogReader.Read(lanePtr.ValuePtr())
 	if err != nil {
 		t.Fatalf("live read selected lane: %v", err)
 	}
 	if !bytes.Equal(got, lanePage) {
 		t.Fatalf("live read selected lane mismatch")
+	}
+	if readBarrierFlushes.Load() == 0 {
+		t.Fatalf("live read selected lane did not flush through current-writable barrier")
 	}
 }
 
