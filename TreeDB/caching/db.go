@@ -8006,6 +8006,8 @@ type DB struct {
 	checkpointFrontierPostBytesMax                               atomic.Uint64
 	checkpointActiveFrontierMu                                   sync.RWMutex
 	checkpointActiveFrontier                                     checkpointFrontier
+	checkpointFlushPreemptRequested                              atomic.Bool
+	checkpointFlushPreemptRequests                               atomic.Uint64
 	checkpointSharedDrainFlushMuReleases                         atomic.Uint64
 	checkpointSharedDrainWaitNs                                  atomic.Uint64
 	checkpointSharedDrainWaitMaxNs                               atomic.Uint64
@@ -8098,6 +8100,7 @@ type DB struct {
 	flushApplyCoordinatorProgressWaits                           atomic.Uint64
 	flushApplyCoordinatorProgressWaitNs                          atomic.Uint64
 	flushApplyCoordinatorStallWaits                              atomic.Uint64
+	flushApplyCoordinatorCheckpointPreemptions                   atomic.Uint64
 	flushApplyCoordinatorBlockingFallbacks                       atomic.Uint64
 	flushApplyCoordinatorHardOverloadFallbacks                   atomic.Uint64
 	lastForegroundWriteUnixNano                                  atomic.Int64
@@ -21601,6 +21604,9 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
+	db.checkpointFlushPreemptRequested.Store(true)
+	db.checkpointFlushPreemptRequests.Add(1)
+	defer db.checkpointFlushPreemptRequested.Store(false)
 	barrierWaitStart := time.Now()
 	flushMuWaitStart := barrierWaitStart
 	db.flushMu.Lock()
@@ -22301,6 +22307,7 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	defer db.flushMu.Unlock()
 	db.beginFlushCoordinatorPass()
 	defer db.endFlushCoordinatorPass()
+	reqSync := sync
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
@@ -22317,6 +22324,10 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 				return flushed
 			}
 			flushed++
+			if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+				db.observeCheckpointBackgroundFlushPreempted()
+				return flushed
+			}
 			continue
 		}
 		laneID, ok := db.pickFlushLane()
@@ -22336,6 +22347,10 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 			return flushed
 		}
 		flushed++
+		if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+			db.observeCheckpointBackgroundFlushPreempted()
+			return flushed
+		}
 	}
 }
 
@@ -22349,6 +22364,7 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 	defer db.flushMu.Unlock()
 	db.beginFlushCoordinatorPass()
 	defer db.endFlushCoordinatorPass()
+	reqSync := sync
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
 
@@ -22365,6 +22381,10 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 				return flushed
 			}
 			flushed++
+			if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+				db.observeCheckpointBackgroundFlushPreempted()
+				return flushed
+			}
 			continue
 		}
 		laneID, ok := db.pickFlushLane()
@@ -22376,6 +22396,10 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 			return flushed
 		}
 		flushed++
+		if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+			db.observeCheckpointBackgroundFlushPreempted()
+			return flushed
+		}
 	}
 }
 
@@ -24862,6 +24886,24 @@ func (db *DB) flushAll(reqSync bool) {
 	db.flushAllLocked(reqSync, nil)
 }
 
+func (db *DB) shouldPreemptBackgroundFlushForCheckpoint(reqSync bool) bool {
+	if db == nil || reqSync {
+		return false
+	}
+	if db.closing.Load() || db.checkpointing.Load() {
+		return false
+	}
+	return db.checkpointFlushPreemptRequested.Load()
+}
+
+func (db *DB) observeCheckpointBackgroundFlushPreempted() {
+	if db == nil {
+		return
+	}
+	db.flushApplyCoordinatorCheckpointPreemptions.Add(1)
+	db.signalFlushCoordinatorWaiters()
+}
+
 func filterFlushUnitsToCheckpointFrontier(units []flushUnit, ids []uint64, frontier checkpointFrontier) ([]flushUnit, []uint64, int64, int) {
 	if len(frontier.ids) == 0 || len(units) == 0 {
 		return nil, nil, 0, 0
@@ -25098,6 +25140,9 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 				}
 				for db.flushLaneOnceWithCommandPublish(syncFlag, laneID, passCommandPublish) {
 					progress.Store(true)
+					if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+						break
+					}
 				}
 				wg.Done()
 			}()
@@ -25114,6 +25159,10 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 			return
 		}
 		if !progress.Load() {
+			return
+		}
+		if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+			db.observeCheckpointBackgroundFlushPreempted()
 			return
 		}
 	}
@@ -27432,6 +27481,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.shared_drain.background_units_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundUnits.Load())
 	stats["treedb.cache.checkpoint.shared_drain.background_ops_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundOps.Load())
 	stats["treedb.cache.checkpoint.shared_drain.background_bytes_total"] = fmt.Sprintf("%d", db.checkpointSharedDrainBackgroundBytes.Load())
+	stats["treedb.cache.checkpoint.flush_preempt_requests_total"] = fmt.Sprintf("%d", db.checkpointFlushPreemptRequests.Load())
 	stats["treedb.cache.checkpoint.preflush_kick_skips_total"] = fmt.Sprintf("%d", db.checkpointPreflushKickSkips.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.considered_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupConsideredLast.Load())
 	stats["treedb.cache.checkpoint.wal_cleanup.removed_last"] = fmt.Sprintf("%d", db.checkpointWALCleanupRemovedLast.Load())

@@ -628,6 +628,43 @@ func TestCheckpointParallelDrainSkipsPreflushKick(t *testing.T) {
 	}
 }
 
+func TestBackgroundFlushYieldsToPendingCheckpointBetweenPasses(t *testing.T) {
+	db, _ := newCoalescingTestDB(t, Options{
+		FlushBacklogCoalescing: false,
+		FlushBuildConcurrency:  1,
+	}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtables(t, db, 3, "preempt")
+
+	db.checkpointFlushPreemptRequested.Store(true)
+	db.flushMu.Lock()
+	db.flushAllLocked(false, nil)
+	db.flushMu.Unlock()
+	db.checkpointFlushPreemptRequested.Store(false)
+
+	db.mu.RLock()
+	remaining := len(db.queue)
+	db.mu.RUnlock()
+	if remaining != 2 {
+		t.Fatalf("remaining queue after preempted background flush=%d want 2", remaining)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_apply.coordinator.checkpoint_preemptions_total"); got != 1 {
+		t.Fatalf("checkpoint preemptions=%d want 1", got)
+	}
+
+	db.checkpointFlushPreemptRequested.Store(true)
+	db.flushAll(true)
+	db.checkpointFlushPreemptRequested.Store(false)
+	db.mu.RLock()
+	remaining = len(db.queue)
+	db.mu.RUnlock()
+	if remaining != 0 {
+		t.Fatalf("remaining queue after sync flush=%d want 0", remaining)
+	}
+	if got := coalescingStatUint64(t, db, "treedb.cache.flush_apply.coordinator.checkpoint_preemptions_total"); got != 1 {
+		t.Fatalf("checkpoint preemptions after sync flush=%d want still 1", got)
+	}
+}
+
 func TestCheckpointSharedFrontierRecordsBackgroundAndCheckpointWork(t *testing.T) {
 	db, backend := newCoalescingTestDB(t, Options{}, highSingleOpCoalescingSnapshot())
 	enqueuePointMemtables(t, db, 3, "sharedfrontier")
