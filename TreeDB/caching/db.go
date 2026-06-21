@@ -21210,6 +21210,8 @@ func (db *DB) activeCheckpointFrontier() (checkpointFrontier, bool) {
 		return checkpointFrontier{}, false
 	}
 	db.checkpointActiveFrontierMu.RLock()
+	// checkpointFrontier.ids is immutable after capture; sharing the map backing
+	// store across copies is safe as long as frontier membership remains read-only.
 	f := db.checkpointActiveFrontier
 	db.checkpointActiveFrontierMu.RUnlock()
 	return f, f.captured
@@ -21803,11 +21805,15 @@ func (db *DB) Checkpoint() error {
 		db.checkpointSharedDrainFlushMuReleases.Add(1)
 		unlockFlushMu()
 		runtime.Gosched()
+		// The shared-drain pass intentionally runs without flushMu held: the captured
+		// frontier bounds the queue IDs it may claim, per-lane flushLaneMu serializes
+		// apply work, and final sync/WAL cleanup remains checkpoint-exclusive after
+		// reacquiring flushMu below.
 		db.flushCheckpointFrontierLocked(true, nil, frontier)
 		lockFlushMu()
 		db.clearActiveCheckpointFrontier()
+		db.observeCheckpointSharedDrainWait(time.Since(flushAllStart))
 	}
-	db.observeCheckpointSharedDrainWait(time.Since(flushAllStart))
 	db.observeCheckpointFrontierDrain(frontier)
 	postFrontierWALDebt := false
 	if frontier.captured {
@@ -25001,14 +25007,16 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 					continue
 				}
 				go func() {
+					defer wg.Done()
 					if laneID < len(db.flushLaneMu) {
-						db.flushLaneMu[laneID].Lock()
+						if !db.flushLaneMu[laneID].TryLock() {
+							return
+						}
 						defer db.flushLaneMu[laneID].Unlock()
 					}
 					if db.flushLaneOnceWithCollectionMode(frontierSyncFlag, laneID, nil, flushCollectionBackground) {
 						progress.Store(true)
 					}
-					wg.Done()
 				}()
 			}
 			wg.Wait()
@@ -25414,8 +25422,10 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 	}()
 	totalSpans := flushUnitSpanCount(units)
 	rangeBarriers := flushUnitRangeBarrierCount(units)
-	if mode == flushCollectionCheckpoint && frontier != nil {
-		db.observeCheckpointSharedDrainWork(frontierFromActive, len(units), totalLen+totalSpans, totalBytes)
+	observeSharedDrainSuccess := func() {
+		if mode == flushCollectionCheckpoint && frontier != nil {
+			db.observeCheckpointSharedDrainWork(frontierFromActive, len(units), totalLen+totalSpans, totalBytes)
+		}
 	}
 	db.observeFlushApplyPlan(len(units), totalLen+totalSpans, totalBytes, planningDur)
 	db.observeFlushSpanRunSource(len(units), totalLen, totalSpans, rangeBarriers)
@@ -25429,6 +25439,7 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
 		db.mu.Unlock()
 		flushSuccess = true
+		observeSharedDrainSuccess()
 		return true
 	}
 	if totalLen == 0 && totalSpans > 0 {
@@ -25498,12 +25509,14 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 		db.removeQueuedUnitsLocked(removeIDs, units, totalBytes)
 		db.mu.Unlock()
 		flushSuccess = true
+		observeSharedDrainSuccess()
 		return true
 	}
 
 	pointFlushed := db.flushCanonicalPointUnits(sync, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans, mode)
 	if pointFlushed {
 		flushSuccess = true
+		observeSharedDrainSuccess()
 	}
 	return pointFlushed
 }

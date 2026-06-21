@@ -228,13 +228,30 @@ func TestCachingDB_CheckpointWaiterReleasesFlushMu(t *testing.T) {
 
 	db.checkpointMu.Lock()
 	db.checkpointing.Store(true)
-	db.checkpointMu.Unlock()
 
 	done := make(chan error, 1)
 	go func() { done <- db.Checkpoint() }()
 
-	flushMuReleased := false
+	observedFlushMuHeld := false
 	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if db.flushMu.TryLock() {
+			db.flushMu.Unlock()
+		} else {
+			observedFlushMuHeld = true
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !observedFlushMuHeld {
+		db.checkpointMu.Unlock()
+		t.Fatalf("checkpoint waiter never acquired flushMu before waiting")
+	}
+
+	db.checkpointMu.Unlock()
+
+	flushMuReleased := false
+	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if db.flushMu.TryLock() {
 			flushMuReleased = true
