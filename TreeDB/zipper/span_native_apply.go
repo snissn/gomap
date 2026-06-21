@@ -27,29 +27,11 @@ var (
 
 // spanNativeLeafLogOutputGate prepares leaf-log payloads in span-native
 // workers, then bounds the durable append fan-out to the apply worker count.
-// When concurrency is available it also coalesces queued append requests so a
-// burst of tiny spans can share a single durable leaf-log append boundary.
 // The resulting refs are still only published by the coordinator after every
 // worker succeeds and the reducer validates the replacement root; any output
 // written before a later failure is accounted as abandoned by the DB flush path.
 type spanNativeLeafLogOutputGate struct {
 	sem chan struct{}
-
-	reqCh     chan *spanNativeLeafLogOutputRequest
-	doneCh    chan struct{}
-	startOnce sync.Once
-	stopOnce  sync.Once
-}
-
-type spanNativeLeafLogOutputRequest struct {
-	leafPages        [][]byte
-	preparedPayloads [][]byte
-	done             chan spanNativeLeafLogOutputResult
-}
-
-type spanNativeLeafLogOutputResult struct {
-	refs []page.ChildRef
-	err  error
 }
 
 var spanNativeLeafLogPayloadScratchPool sync.Pool
@@ -59,148 +41,6 @@ func newSpanNativeLeafLogOutputGate(limit int) *spanNativeLeafLogOutputGate {
 		return &spanNativeLeafLogOutputGate{}
 	}
 	return &spanNativeLeafLogOutputGate{sem: make(chan struct{}, limit)}
-}
-
-func (g *spanNativeLeafLogOutputGate) startCollector(z *Zipper) {
-	if g == nil || z == nil || z.leafPageLog == nil || g.sem == nil || cap(g.sem) <= 1 {
-		return
-	}
-	g.startOnce.Do(func() {
-		g.reqCh = make(chan *spanNativeLeafLogOutputRequest, cap(g.sem))
-		g.doneCh = make(chan struct{})
-		go g.runCollector(z)
-	})
-}
-
-func (g *spanNativeLeafLogOutputGate) closeCollector() {
-	if g == nil || g.reqCh == nil {
-		return
-	}
-	g.stopOnce.Do(func() {
-		close(g.reqCh)
-		<-g.doneCh
-	})
-}
-
-func (g *spanNativeLeafLogOutputGate) runCollector(z *Zipper) {
-	defer close(g.doneCh)
-	var stickyErr error
-	batch := make([]*spanNativeLeafLogOutputRequest, 0, 8)
-	for req := range g.reqCh {
-		if req == nil {
-			continue
-		}
-		if stickyErr != nil {
-			req.done <- spanNativeLeafLogOutputResult{err: stickyErr}
-			continue
-		}
-		batch = append(batch[:0], req)
-	drain:
-		for {
-			select {
-			case next, ok := <-g.reqCh:
-				if !ok {
-					break drain
-				}
-				if next != nil {
-					batch = append(batch, next)
-				}
-			default:
-				break drain
-			}
-		}
-		if err := g.appendQueuedLeafLogOutputRequests(z, batch); err != nil {
-			stickyErr = err
-		}
-	}
-}
-
-func (g *spanNativeLeafLogOutputGate) submitLeafLogOutputRequest(req *spanNativeLeafLogOutputRequest) spanNativeLeafLogOutputResult {
-	if g == nil || g.reqCh == nil || req == nil || req.done == nil {
-		return spanNativeLeafLogOutputResult{err: errors.New("zipper: span-native leaf-log output collector unavailable")}
-	}
-	g.reqCh <- req
-	return <-req.done
-}
-
-func (g *spanNativeLeafLogOutputGate) appendQueuedLeafLogOutputRequests(z *Zipper, requests []*spanNativeLeafLogOutputRequest) error {
-	if z == nil || len(requests) == 0 {
-		return nil
-	}
-	prepared := len(requests[0].preparedPayloads) > 0
-	totalPages := 0
-	for _, req := range requests {
-		if req == nil || req.done == nil {
-			err := errors.New("zipper: span-native leaf-log output request unavailable")
-			for _, pending := range requests {
-				if pending != nil && pending.done != nil {
-					pending.done <- spanNativeLeafLogOutputResult{err: err}
-				}
-			}
-			return err
-		}
-		if (len(req.preparedPayloads) > 0) != prepared {
-			err := errors.New("zipper: mixed prepared/raw leaf-log output requests")
-			for _, pending := range requests {
-				pending.done <- spanNativeLeafLogOutputResult{err: err}
-			}
-			return err
-		}
-		if prepared && len(req.preparedPayloads) != len(req.leafPages) {
-			err := fmt.Errorf("zipper: prepared leaf-log output request has %d payloads for %d pages", len(req.preparedPayloads), len(req.leafPages))
-			for _, pending := range requests {
-				pending.done <- spanNativeLeafLogOutputResult{err: err}
-			}
-			return err
-		}
-		totalPages += len(req.leafPages)
-	}
-	if totalPages == 0 {
-		for _, req := range requests {
-			req.done <- spanNativeLeafLogOutputResult{}
-		}
-		return nil
-	}
-	flatLeafPages := make([][]byte, 0, totalPages)
-	var flatPayloads [][]byte
-	if prepared {
-		flatPayloads = make([][]byte, 0, totalPages)
-	}
-	pageCounts := make([]int, len(requests))
-	for i, req := range requests {
-		pageCounts[i] = len(req.leafPages)
-		flatLeafPages = append(flatLeafPages, req.leafPages...)
-		if prepared {
-			flatPayloads = append(flatPayloads, req.preparedPayloads...)
-		}
-	}
-	var flatRefs []page.ChildRef
-	var err error
-	if prepared {
-		flatRefs, err = z.persistPreparedLeafPageBatchDataTo(flatLeafPages, flatPayloads, nil, nil)
-	} else {
-		flatRefs, err = z.persistLeafPageBatchDataTo(flatLeafPages, nil, nil)
-	}
-	if err != nil {
-		for _, req := range requests {
-			req.done <- spanNativeLeafLogOutputResult{err: err}
-		}
-		return err
-	}
-	if len(flatRefs) != totalPages {
-		err = fmt.Errorf("zipper: span-native leaf-log batch returned %d refs for %d pages", len(flatRefs), totalPages)
-		for _, req := range requests {
-			req.done <- spanNativeLeafLogOutputResult{err: err}
-		}
-		return err
-	}
-	offset := 0
-	for i, req := range requests {
-		count := pageCounts[i]
-		req.done <- spanNativeLeafLogOutputResult{refs: flatRefs[offset : offset+count]}
-		offset += count
-	}
-	return nil
 }
 
 func acquireSpanNativeLeafLogPayloadScratch() []byte {
@@ -241,43 +81,25 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageData(z *Zipper, leafPage []
 	if metrics != nil && reservationWait > 0 {
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
 	}
-	if g == nil || g.reqCh == nil {
-		if !prepared {
-			return z.persistLeafPageData(leafPage, metrics)
-		}
-		ref, err := z.persistPreparedLeafPageDataTo(leafPage, payload, metrics)
-		releaseSpanNativeLeafLogPayloadScratch(scratch)
-		return ref, err
+	if !prepared {
+		return z.persistLeafPageData(leafPage, metrics)
 	}
-	request := &spanNativeLeafLogOutputRequest{
-		leafPages: [][]byte{leafPage},
-		done:      make(chan spanNativeLeafLogOutputResult, 1),
-	}
-	if prepared {
-		request.preparedPayloads = [][]byte{payload}
-	}
-	appendStart := time.Now()
-	result := g.submitLeafLogOutputRequest(request)
-	appendWait := time.Since(appendStart)
-	success := result.err == nil && len(result.refs) == 1
-	if len(result.refs) != 1 && result.err == nil {
-		result.err = fmt.Errorf("zipper: span-native leaf-log output returned %d refs for 1 page", len(result.refs))
-		success = false
-	}
-	if metrics != nil {
-		recordZipperLeafLogOutputAppend(metrics, appendWait, 1, success)
-	}
+	ref, err := z.persistPreparedLeafPageDataTo(leafPage, payload, metrics)
 	releaseSpanNativeLeafLogPayloadScratch(scratch)
-	if result.err != nil {
-		return page.ChildRef{}, result.err
-	}
-	return result.refs[0], nil
+	return ref, err
 }
 
 func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	refs = refs[:0]
 	if len(leafPages) == 0 {
 		return refs, nil
+	}
+	if len(leafPages) == 1 {
+		ref, err := g.persistLeafPageData(z, leafPages[0], metrics)
+		if err != nil {
+			return nil, err
+		}
+		return append(refs, ref), nil
 	}
 	prepared := z.leafPageLogConsumesPreparedPayloads(true)
 	var payloads [][]byte
@@ -306,48 +128,10 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leaf
 	if metrics != nil && reservationWait > 0 {
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
 	}
-	if g == nil || g.reqCh == nil {
-		if len(leafPages) == 1 {
-			if prepared {
-				ref, err := z.persistPreparedLeafPageDataTo(leafPages[0], payloads[0], metrics)
-				if err != nil {
-					return nil, err
-				}
-				return append(refs, ref), nil
-			}
-			ref, err := z.persistLeafPageData(leafPages[0], metrics)
-			if err != nil {
-				return nil, err
-			}
-			return append(refs, ref), nil
-		}
-		if !prepared {
-			return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
-		}
-		return z.persistPreparedLeafPageBatchDataTo(leafPages, payloads, refs, metrics)
+	if !prepared {
+		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
 	}
-	request := &spanNativeLeafLogOutputRequest{
-		leafPages: leafPages,
-		done:      make(chan spanNativeLeafLogOutputResult, 1),
-	}
-	if prepared {
-		request.preparedPayloads = payloads
-	}
-	appendStart := time.Now()
-	result := g.submitLeafLogOutputRequest(request)
-	appendWait := time.Since(appendStart)
-	success := result.err == nil && len(result.refs) == len(leafPages)
-	if len(result.refs) != len(leafPages) && result.err == nil {
-		result.err = fmt.Errorf("zipper: span-native leaf-log output returned %d refs for %d pages", len(result.refs), len(leafPages))
-		success = false
-	}
-	if metrics != nil {
-		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), success)
-	}
-	if result.err != nil {
-		return nil, result.err
-	}
-	return append(refs, result.refs...), nil
+	return z.persistPreparedLeafPageBatchDataTo(leafPages, payloads, refs, metrics)
 }
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {
@@ -395,8 +179,6 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			appendLimit = scheduledWorkers
 		}
 		leafLogOutput = newSpanNativeLeafLogOutputGate(appendLimit)
-		leafLogOutput.startCollector(z)
-		defer leafLogOutput.closeCollector()
 	}
 	workerScratches := coordinatorScratch.acquireSpanWorkerScratchSlots(len(workerRanges))
 	defer func() {
