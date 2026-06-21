@@ -2811,7 +2811,7 @@ func (db *DB) valueLogLaneByID(laneID int) *lane {
 }
 
 func (db *DB) isLeafLogAppendLane(l *lane) bool {
-	if db == nil || !db.indexOuterLeavesInValueLog || l == nil {
+	if db == nil || !db.indexOuterLeavesInValueLog || l == nil || l.id != leafLogLaneID {
 		return false
 	}
 	if l == &db.leafLog {

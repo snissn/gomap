@@ -2,7 +2,6 @@ package caching
 
 import (
 	"errors"
-	"sort"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -217,24 +216,4 @@ func (g *cachingLeafPageLogGroup) forEachLane(fn func(*cachingLeafPageLog) error
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func dedupeCachingLeafPageLogSegments(segments []backenddb.LeafPageLogSegment) []backenddb.LeafPageLogSegment {
-	if len(segments) == 0 {
-		return nil
-	}
-	sort.SliceStable(segments, func(i, j int) bool { return segments[i].FileID < segments[j].FileID })
-	out := segments[:0]
-	seen := make(map[uint32]struct{}, len(segments))
-	for _, seg := range segments {
-		if seg.Path == "" || seg.FileID == 0 {
-			continue
-		}
-		if _, ok := seen[seg.FileID]; ok {
-			continue
-		}
-		seen[seg.FileID] = struct{}{}
-		out = append(out, seg)
-	}
-	return out
 }
