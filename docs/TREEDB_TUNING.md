@@ -133,8 +133,13 @@ M5/#2788 evidence is recorded in
 `docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. The #2819/#2832 final gate
 is recorded in `docs/TREEDB_FLUSH_APPLY_SCALING_M7_REPORT.md` and keeps the
 default at conservative c4; higher c8/c16 or physical-core rows remain explicit
-experiments. Checkpoint pauses are tracked by the M4 barrier/debt counters and
-remain a workload guardrail, not a claim that checkpoint debt disappeared.
+experiments. The #2899/#2907 checkpoint-parallel final gate is recorded in
+`docs/TREEDB_CHECKPOINT_PARALLEL_SATURATION_M7_REPORT.md`: c4/c8 worker
+saturation and checkpoint fallback gates pass, but random-key ops/span remains
+~3 and active-background checkpoint wait remains material, so auto stays
+conservative c4 and parent completion is blocked on #2916 unless waived.
+Checkpoint pauses are tracked by the M4 barrier/debt counters and remain a
+workload guardrail, not a claim that checkpoint debt disappeared.
 
 ### Read latency under flush debt (cached mode)
 
