@@ -10,6 +10,11 @@ const (
 	InlineHardMax          = 2048
 	DefaultStep            = 64
 	UpdateInterval         = 100 // K commits
+
+	// ZipperLeafLogOutputLaneStatsMax is the highest worker-selected leaf-log
+	// lane index tracked directly in fixed-size apply metrics. Larger lane indexes
+	// are folded into an overflow counter to avoid per-append maps or allocation.
+	ZipperLeafLogOutputLaneStatsMax = 64
 )
 
 // Metrics represents the telemetry gathered during a single commit.
@@ -61,6 +66,9 @@ type Metrics struct {
 	ZipperLeafLogOutputAppendWaitNs      int64
 	ZipperLeafLogOutputAppendCalls       int
 	ZipperLeafLogOutputAppendPages       int
+	ZipperLeafLogOutputLaneTaskTotal     uint64
+	ZipperLeafLogOutputLaneTasks         [ZipperLeafLogOutputLaneStatsMax + 1]uint64
+	ZipperLeafLogOutputLaneTaskOverflow  uint64
 	ZipperSpanNativeWorkerBusyNs         int64
 	ZipperSpanNativeWorkerIdleNs         int64
 	ZipperSpanNativeWorkerWaitNs         int64

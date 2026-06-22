@@ -108,6 +108,24 @@ func (db *DB) observeFlushApplyLeafLogAppend(wait, wall time.Duration, bytes int
 	}
 }
 
+func (db *DB) observeLeafLogLaneAppend(l *lane, wait, hold time.Duration, bytes int64, pages int, err error) {
+	if db == nil || l == nil {
+		return
+	}
+	l.leafLogAppendCalls.Add(1)
+	if pages > 0 {
+		l.leafLogAppendPages.Add(uint64(pages))
+	}
+	if bytes > 0 {
+		l.leafLogAppendBytes.Add(uint64(bytes))
+	}
+	addCacheDurationNs(&l.leafLogAppendLockWaitNs, wait)
+	addCacheDurationNs(&l.leafLogAppendLockHoldNs, hold)
+	if err != nil {
+		l.leafLogAppendErrors.Add(1)
+	}
+}
+
 func (db *DB) observeForegroundFlushAssist(wait time.Duration, flushed int) {
 	if db == nil {
 		return
@@ -357,10 +375,78 @@ func (db *DB) foregroundAssistYieldToActiveFlush(backlog, stopBytes int64) bool 
 	return true
 }
 
+func (db *DB) appendCacheLeafLogLaneStats(stats map[string]string) {
+	if db == nil || stats == nil || !db.indexOuterLeavesInValueLog {
+		return
+	}
+	lanes := db.leafLogAppendLanesSnapshot()
+	stats["treedb.cache.leaf_log_lanes.configured"] = fmt.Sprintf("%d", len(lanes))
+	activeLanes := 0
+	usedLanes := 0
+	var totalCalls, totalPages, totalBytes, totalWaitNs, totalHoldNs, totalErrors, totalRotations, totalIdleRotations uint64
+	for i, l := range lanes {
+		if l == nil {
+			continue
+		}
+		calls := l.leafLogAppendCalls.Load()
+		pages := l.leafLogAppendPages.Load()
+		bytes := l.leafLogAppendBytes.Load()
+		waitNs := l.leafLogAppendLockWaitNs.Load()
+		holdNs := l.leafLogAppendLockHoldNs.Load()
+		errors := l.leafLogAppendErrors.Load()
+		rotations := l.vlogRotateTotal.Load()
+		idleRotations := l.vlogRotateIdleTotal.Load()
+		activeSegments := 0
+		closedSegments := 0
+		l.vlogMu.Lock()
+		if l.vlogPath != "" && l.vlogSeq > 0 {
+			activeSegments = 1
+		}
+		closedSegments = len(l.vlogClosedSizes)
+		l.vlogMu.Unlock()
+		if activeSegments > 0 || closedSegments > 0 || calls > 0 || rotations > 0 {
+			activeLanes++
+		}
+		if calls > 0 || pages > 0 {
+			usedLanes++
+		}
+		totalCalls += calls
+		totalPages += pages
+		totalBytes += bytes
+		totalWaitNs += waitNs
+		totalHoldNs += holdNs
+		totalErrors += errors
+		totalRotations += rotations
+		totalIdleRotations += idleRotations
+		prefix := fmt.Sprintf("treedb.cache.leaf_log_lanes.lane.%02d", i)
+		stats[prefix+".append_calls_total"] = fmt.Sprintf("%d", calls)
+		stats[prefix+".append_pages_total"] = fmt.Sprintf("%d", pages)
+		stats[prefix+".append_bytes_total"] = fmt.Sprintf("%d", bytes)
+		stats[prefix+".append_lock_wait_ns_total"] = fmt.Sprintf("%d", waitNs)
+		stats[prefix+".append_lock_hold_ns_total"] = fmt.Sprintf("%d", holdNs)
+		stats[prefix+".append_errors_total"] = fmt.Sprintf("%d", errors)
+		stats[prefix+".segment_rotations_total"] = fmt.Sprintf("%d", rotations)
+		stats[prefix+".segment_rotations_idle_total"] = fmt.Sprintf("%d", idleRotations)
+		stats[prefix+".segments_active"] = fmt.Sprintf("%d", activeSegments)
+		stats[prefix+".segments_closed"] = fmt.Sprintf("%d", closedSegments)
+	}
+	stats["treedb.cache.leaf_log_lanes.active"] = fmt.Sprintf("%d", activeLanes)
+	stats["treedb.cache.leaf_log_lanes.append_lanes_used"] = fmt.Sprintf("%d", usedLanes)
+	stats["treedb.cache.leaf_log_lanes.append_calls_total"] = fmt.Sprintf("%d", totalCalls)
+	stats["treedb.cache.leaf_log_lanes.append_pages_total"] = fmt.Sprintf("%d", totalPages)
+	stats["treedb.cache.leaf_log_lanes.append_bytes_total"] = fmt.Sprintf("%d", totalBytes)
+	stats["treedb.cache.leaf_log_lanes.append_lock_wait_ns_total"] = fmt.Sprintf("%d", totalWaitNs)
+	stats["treedb.cache.leaf_log_lanes.append_lock_hold_ns_total"] = fmt.Sprintf("%d", totalHoldNs)
+	stats["treedb.cache.leaf_log_lanes.append_errors_total"] = fmt.Sprintf("%d", totalErrors)
+	stats["treedb.cache.leaf_log_lanes.segment_rotations_total"] = fmt.Sprintf("%d", totalRotations)
+	stats["treedb.cache.leaf_log_lanes.segment_rotations_idle_total"] = fmt.Sprintf("%d", totalIdleRotations)
+}
+
 func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	if db == nil || stats == nil {
 		return
 	}
+	db.appendCacheLeafLogLaneStats(stats)
 	stats["treedb.cache.flush_apply.batches_total"] = fmt.Sprintf("%d", db.flushApplyBatches.Load())
 	stats["treedb.cache.flush_apply.units_total"] = fmt.Sprintf("%d", db.flushApplyUnits.Load())
 	stats["treedb.cache.flush_apply.entries_total"] = fmt.Sprintf("%d", db.flushApplyEntries.Load())

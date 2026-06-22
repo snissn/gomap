@@ -176,6 +176,7 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, e
 		l.db.markValueLogRetain(retainPath)
 	}
 	if err != nil {
+		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
 		return page.LeafLogPtr{}, err
 	}
 	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
@@ -256,6 +257,7 @@ func (l *cachingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLog
 
 	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
 	if err != nil {
+		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
 		return nil, err
 	}
 	defer putValueLogPtrs(valuePtrs)
@@ -287,6 +289,7 @@ func (l *cachingLeafPageLog) AppendPreparedLeafPage(leafPage []byte, preparedPay
 		l.db.markValueLogRetain(retainPath)
 	}
 	if err != nil {
+		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
 		return page.LeafLogPtr{}, err
 	}
 	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
@@ -337,6 +340,7 @@ func (l *cachingLeafPageLog) AppendPreparedLeafPages(leafPages [][]byte, prepare
 	}
 	valuePtrs, err := l.db.appendValueLog(l.lane, 0, nil, records, journalDurabilityNone)
 	if err != nil {
+		l.db.observeLeafLogLaneAppend(l.lane, 0, 0, 0, 0, err)
 		return nil, err
 	}
 	defer putValueLogPtrs(valuePtrs)

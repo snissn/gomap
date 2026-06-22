@@ -74,9 +74,10 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   `treedb.vlog.mmap_read.*` counters over cache-prefixed aliases, and the
   metadata includes generic plus leaf-specific sealed mmap budget caps when
   TreeDB exposes them. Parallel-flush M0/M8 artifacts preserve
-  `treedb.cache.flush_apply.*`, `treedb.cache.flush_span_run.*`,
-  `treedb.flush_apply.*`, `treedb.flush_apply.span_run.*`, and
-  `treedb.flush_apply.span_native.*` counters so planning, canonical run shape,
+  `treedb.cache.flush_apply.*`, `treedb.cache.leaf_log_lanes.*`,
+  `treedb.cache.flush_span_run.*`, `treedb.flush_apply.*`,
+  `treedb.flush_apply.span_run.*`, and `treedb.flush_apply.span_native.*`
+  counters so planning, leaf-log lane distribution, canonical run shape,
   old-leaf read/decode bytes/op, leaf merges/op, replacement pages/op,
   append frames/op, publish prepare/final-install, guarded publish,
   reducer/publish, checkpoint wait splits, fallback reasons, retry, and foreground-assist stages appear beside

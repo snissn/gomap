@@ -100,6 +100,13 @@ type lane struct {
 	vlogRotateTotal     atomic.Uint64
 	vlogRotateIdleTotal atomic.Uint64
 
+	leafLogAppendCalls      atomic.Uint64
+	leafLogAppendPages      atomic.Uint64
+	leafLogAppendBytes      atomic.Uint64
+	leafLogAppendLockWaitNs atomic.Uint64
+	leafLogAppendLockHoldNs atomic.Uint64
+	leafLogAppendErrors     atomic.Uint64
+
 	syncing atomic.Bool
 }
 

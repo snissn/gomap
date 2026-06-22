@@ -3014,6 +3014,13 @@ func mergeMetrics(dst, src *adaptive.Metrics) {
 	dst.ZipperLeafLogOutputAppendWaitNs += src.ZipperLeafLogOutputAppendWaitNs
 	dst.ZipperLeafLogOutputAppendCalls += src.ZipperLeafLogOutputAppendCalls
 	dst.ZipperLeafLogOutputAppendPages += src.ZipperLeafLogOutputAppendPages
+	if src.ZipperLeafLogOutputLaneTaskTotal > 0 {
+		dst.ZipperLeafLogOutputLaneTaskTotal += src.ZipperLeafLogOutputLaneTaskTotal
+		for i := range dst.ZipperLeafLogOutputLaneTasks {
+			dst.ZipperLeafLogOutputLaneTasks[i] += src.ZipperLeafLogOutputLaneTasks[i]
+		}
+	}
+	dst.ZipperLeafLogOutputLaneTaskOverflow += src.ZipperLeafLogOutputLaneTaskOverflow
 	dst.ZipperSpanNativeWorkerBusyNs += src.ZipperSpanNativeWorkerBusyNs
 	dst.ZipperSpanNativeWorkerIdleNs += src.ZipperSpanNativeWorkerIdleNs
 	dst.ZipperSpanNativeWorkerWaitNs += src.ZipperSpanNativeWorkerWaitNs

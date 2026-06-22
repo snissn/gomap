@@ -15217,6 +15217,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	leafLogAppend := db != nil && db.isLeafLogAppendLane(l)
 	appendWallStart := time.Time{}
 	appendWait := time.Duration(0)
+	appendHold := time.Duration(0)
 	if leafLogAppend {
 		appendWallStart = time.Now()
 	}
@@ -15484,8 +15485,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		lockWaitStart = time.Now()
 	}
 	l.vlogMu.Lock()
+	lockHoldStart := time.Time{}
 	if leafLogAppend {
 		appendWait += time.Since(lockWaitStart)
+		lockHoldStart = time.Now()
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
@@ -15692,6 +15695,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if err == nil && !rawBatchUsed {
 		for i := 0; i < len(records); i += k {
 			if i > 0 && i%4096 == 0 {
+				if leafLogAppend {
+					appendHold += time.Since(lockHoldStart)
+				}
 				l.vlogMu.Unlock()
 				runtime.Gosched()
 				relockWaitStart := time.Time{}
@@ -15701,6 +15707,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				l.vlogMu.Lock()
 				if leafLogAppend {
 					appendWait += time.Since(relockWaitStart)
+					lockHoldStart = time.Now()
 				}
 				w = l.vlog
 				if w == nil {
@@ -15849,6 +15856,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if db.testBeforeVlogUnlock != nil {
 		db.testBeforeVlogUnlock(int(l.id))
 	}
+	if leafLogAppend {
+		appendHold += time.Since(lockHoldStart)
+	}
 	l.vlogMu.Unlock()
 	if len(retainPaths) > 0 {
 		for _, path := range retainPaths {
@@ -15974,6 +15984,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 	if leafLogAppend {
 		db.observeFlushApplyLeafLogAppend(appendWait, time.Since(appendWallStart), bytesWrittenTotal, framesTotal, len(records))
+		db.observeLeafLogLaneAppend(l, appendWait, appendHold, bytesWrittenTotal, len(records), nil)
 	}
 	if !wallStart.IsZero() {
 		storedForMetrics := storedPayloadBytes
@@ -16013,6 +16024,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	leafLogAppend := db != nil && db.isLeafLogAppendLane(l)
 	appendWallStart := time.Time{}
 	appendWait := time.Duration(0)
+	appendHold := time.Duration(0)
 	if leafLogAppend {
 		appendWallStart = time.Now()
 	}
@@ -16383,8 +16395,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		lockWaitStart = time.Now()
 	}
 	l.vlogMu.Lock()
+	lockHoldStart := time.Time{}
 	if leafLogAppend {
 		appendWait += time.Since(lockWaitStart)
+		lockHoldStart = time.Now()
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
@@ -16527,6 +16541,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	if db.testBeforeVlogUnlock != nil {
 		db.testBeforeVlogUnlock(int(l.id))
 	}
+	if leafLogAppend {
+		appendHold += time.Since(lockHoldStart)
+	}
 	l.vlogMu.Unlock()
 	if err != nil {
 		return page.ValuePtr{}, "", err
@@ -16587,6 +16604,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 	if leafLogAppend {
 		db.observeFlushApplyLeafLogAppend(appendWait, time.Since(appendWallStart), totalBytes, 1, 1)
+		db.observeLeafLogLaneAppend(l, appendWait, appendHold, totalBytes, 1, nil)
 	}
 	if !wallStart.IsZero() {
 		storedForMetrics := stats.StoredPayloadBytes

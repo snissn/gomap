@@ -361,6 +361,8 @@ type DB struct {
 	flushApplyLeafLogOutputAppendWaitNs           atomic.Uint64
 	flushApplyLeafLogOutputAppendCalls            atomic.Uint64
 	flushApplyLeafLogOutputAppendPages            atomic.Uint64
+	flushApplyLeafLogOutputLaneTasks              [adaptive.ZipperLeafLogOutputLaneStatsMax + 1]atomic.Uint64
+	flushApplyLeafLogOutputLaneTaskOverflow       atomic.Uint64
 	flushApplySpanNativeWorkerBusyNs              atomic.Uint64
 	flushApplySpanNativeWorkerIdleNs              atomic.Uint64
 	flushApplySpanNativeWorkerWaitNs              atomic.Uint64
