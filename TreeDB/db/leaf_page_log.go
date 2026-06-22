@@ -56,6 +56,13 @@ type LeafPagePreparedBatchLog interface {
 	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedChildRefBatchLog interface {
+	// AppendPreparedLeafPageChildRefs is the ChildRef-returning counterpart to
+	// AppendPreparedLeafPages. It lets hot paths avoid allocating an intermediate
+	// []LeafLogPtr when the caller ultimately needs ChildRefs.
+	AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error)
+}
+
 type LeafPageLogSegment struct {
 	Path   string
 	FileID uint32
@@ -150,7 +157,10 @@ func (l *leafPageLogWithRecordLengthHints) PreparedLeafPageBatchAppends() bool {
 	if l == nil || l.inner == nil {
 		return false
 	}
-	_, ok := l.inner.(LeafPagePreparedBatchLog)
+	if _, ok := l.inner.(LeafPagePreparedBatchLog); ok {
+		return true
+	}
+	_, ok := l.inner.(LeafPagePreparedChildRefBatchLog)
 	return ok
 }
 
@@ -222,6 +232,48 @@ func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPages(leafPages [][
 		return nil, err
 	}
 	return ptrs, nil
+}
+
+func (l *leafPageLogWithRecordLengthHints) AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+	refs = refs[:0]
+	if l == nil || l.inner == nil {
+		return nil, errors.New("leaf page log unavailable")
+	}
+	if len(leafPages) == 0 {
+		return refs, nil
+	}
+	if len(preparedPayloads) != len(leafPages) {
+		return nil, fmt.Errorf("leaf page prepared child-ref batch has %d payloads for %d leaf pages", len(preparedPayloads), len(leafPages))
+	}
+	if prepared, ok := l.inner.(LeafPagePreparedChildRefBatchLog); ok {
+		out, err := prepared.AppendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) != len(leafPages) {
+			return nil, fmt.Errorf("leaf page prepared child-ref batch returned %d refs for %d leaf pages", len(out), len(leafPages))
+		}
+		for i, ref := range out {
+			if !ref.IsLeafLog() {
+				return nil, fmt.Errorf("leaf page prepared child-ref batch returned non-leaf-log ref at %d", i)
+			}
+			l.noteLeafPagePointer(leafPages[i], ref.Log)
+		}
+		return out, nil
+	}
+	ptrs, err := l.AppendPreparedLeafPages(leafPages, preparedPayloads)
+	if err != nil {
+		return nil, err
+	}
+	if cap(refs) < len(ptrs) {
+		refs = make([]page.ChildRef, len(ptrs))
+	} else {
+		refs = refs[:len(ptrs)]
+	}
+	for i, ptr := range ptrs {
+		refs[i] = page.LeafLogChildRef(ptr)
+	}
+	return refs, nil
 }
 
 func (l *leafPageLogWithRecordLengthHints) noteLeafPageBatchPointers(leafPages [][]byte, ptrs []page.LeafLogPtr) error {

@@ -15,6 +15,7 @@ var _ backenddb.LeafPageLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPagePreparedLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPagePreparedBatchLog = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPagePreparedChildRefBatchLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageConcurrentAppendLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCreatedSegmentProvider = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCurrentSegmentProvider = (*cachingLeafPageLogGroup)(nil)
@@ -81,6 +82,14 @@ func (g *cachingLeafPageLogGroup) AppendPreparedLeafPages(leafPages [][]byte, pr
 		return nil, errors.New("cachingdb: leaf page log unavailable")
 	}
 	return log.AppendPreparedLeafPages(leafPages, preparedPayloads)
+}
+
+func (g *cachingLeafPageLogGroup) AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+	log := g.defaultLog()
+	if log == nil {
+		return nil, errors.New("cachingdb: leaf page log unavailable")
+	}
+	return log.AppendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs)
 }
 
 func (g *cachingLeafPageLogGroup) ConcurrentLeafPageAppends() bool { return true }

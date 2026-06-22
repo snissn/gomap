@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -1170,6 +1171,148 @@ func TestZipperMergeScratch_ConcurrentPendingLeafPageScratchReuse(t *testing.T) 
 		}(g)
 	}
 	wg.Wait()
+}
+
+func buildCompactEstimateLeaf(t *testing.T) []byte {
+	t.Helper()
+	compactLeaf := make([]byte, page.PageSize)
+	builder := node.NewBuilderWithOptions(compactLeaf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		if err := builder.AddLeafEntry([]byte{byte('k'), byte('0' + i)}, []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	builder.FinishNoNode()
+	return compactLeaf
+}
+
+func TestEstimateSpanNativeLeafLogPayloadArenaCapUsesCompactableRatio(t *testing.T) {
+	compactLeaf := buildCompactEstimateLeaf(t)
+	compactLen, compacted := valuelog.MaybeCompactLeafLogPayloadLength(compactLeaf)
+	if !compacted {
+		t.Fatalf("test leaf did not compact")
+	}
+	nonCompactLeaf := bytes.Repeat([]byte{'x'}, page.PageSize)
+	leafPages := [][]byte{compactLeaf, nonCompactLeaf, compactLeaf, nonCompactLeaf}
+	got := estimateSpanNativeLeafLogPayloadArenaCap(leafPages)
+	want := compactLen * 2
+	if got != want {
+		t.Fatalf("estimate=%d want %d", got, want)
+	}
+}
+
+func TestEstimateSpanNativeLeafLogPayloadArenaCapScansUnsampledMixedPages(t *testing.T) {
+	compactLeaf := buildCompactEstimateLeaf(t)
+	compactLen, compacted := valuelog.MaybeCompactLeafLogPayloadLength(compactLeaf)
+	if !compacted {
+		t.Fatalf("test leaf did not compact")
+	}
+	nonCompactLeaf := bytes.Repeat([]byte{'x'}, page.PageSize)
+	leafPages := make([][]byte, 0, 10)
+	for i := 0; i < 8; i++ {
+		leafPages = append(leafPages, nonCompactLeaf)
+	}
+	leafPages = append(leafPages, compactLeaf, compactLeaf)
+	got := estimateSpanNativeLeafLogPayloadArenaCap(leafPages)
+	want := compactLen * 2
+	if got != want {
+		t.Fatalf("estimate=%d want %d", got, want)
+	}
+}
+
+type childRefPreparedBatchTestLog struct {
+	called bool
+	next   uint64
+}
+
+func (l *childRefPreparedBatchTestLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return page.LeafLogPtr{}, fmt.Errorf("unexpected AppendLeafPage fallback")
+}
+
+func (l *childRefPreparedBatchTestLog) AppendPreparedLeafPageChildRefs(leafPages [][]byte, _ [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+	l.called = true
+	if cap(refs) < len(leafPages) {
+		refs = make([]page.ChildRef, len(leafPages))
+	} else {
+		refs = refs[:len(leafPages)]
+	}
+	if l.next == 0 {
+		l.next = 4
+	}
+	for i := range leafPages {
+		ptr := page.LeafLogPtr{FileID: 7, Offset: l.next, RecordLengthHint: page.PageSize, SubIndex: uint16(i)}
+		refs[i] = page.LeafLogChildRef(ptr)
+		l.next += page.PageSize + 32
+	}
+	return refs, nil
+}
+
+func TestPersistPreparedLeafPageBatchDataUsesChildRefBatcher(t *testing.T) {
+	z := New(nil, nil)
+	log := &childRefPreparedBatchTestLog{}
+	leafPages := [][]byte{
+		bytes.Repeat([]byte{'a'}, page.PageSize),
+		bytes.Repeat([]byte{'b'}, page.PageSize),
+		bytes.Repeat([]byte{'c'}, page.PageSize),
+	}
+	payloads := [][]byte{[]byte("payload-a"), []byte("payload-b"), []byte("payload-c")}
+	reusable := make([]page.ChildRef, 0, len(leafPages))
+	var metrics adaptive.Metrics
+
+	refs, err := z.persistPreparedLeafPageBatchDataToLog(log, leafPages, payloads, reusable, &metrics)
+	if err != nil {
+		t.Fatalf("persistPreparedLeafPageBatchDataToLog: %v", err)
+	}
+	requireChildRefPreparedBatchTestRefs(t, refs, leafPages, reusable, log, metrics)
+}
+
+func TestPersistLeafPageBatchDataDetectsChildRefPreparedBatcher(t *testing.T) {
+	z := New(nil, nil)
+	log := &childRefPreparedBatchTestLog{}
+	leafPages := [][]byte{
+		buildCompactEstimateLeaf(t),
+		buildCompactEstimateLeaf(t),
+		buildCompactEstimateLeaf(t),
+	}
+	reusable := make([]page.ChildRef, 0, len(leafPages))
+	var metrics adaptive.Metrics
+	gate := newSpanNativeLeafLogOutputGate(0)
+
+	refs, err := gate.persistLeafPageBatchDataToLog(z, log, leafPages, reusable, &metrics)
+	if err != nil {
+		t.Fatalf("persistLeafPageBatchDataToLog: %v", err)
+	}
+	requireChildRefPreparedBatchTestRefs(t, refs, leafPages, reusable, log, metrics)
+}
+
+func requireChildRefPreparedBatchTestRefs(t *testing.T, refs []page.ChildRef, leafPages [][]byte, reusable []page.ChildRef, log *childRefPreparedBatchTestLog, metrics adaptive.Metrics) {
+	t.Helper()
+	if !log.called {
+		t.Fatalf("child-ref batch appender was not called")
+	}
+	if len(refs) != len(leafPages) {
+		t.Fatalf("refs len=%d want %d", len(refs), len(leafPages))
+	}
+	if cap(refs) != cap(reusable) {
+		t.Fatalf("refs cap=%d want reusable cap %d", cap(refs), cap(reusable))
+	}
+	if len(refs) > 0 && cap(reusable) > 0 {
+		if &refs[:cap(refs)][0] != &reusable[:cap(reusable)][0] {
+			t.Fatalf("refs did not reuse reusable backing array")
+		}
+	}
+	for i, ref := range refs {
+		if !ref.IsLeafLog() || ref.Log.FileID != 7 || ref.Log.SubIndex != uint16(i) {
+			t.Fatalf("ref[%d]=%+v", i, ref)
+		}
+	}
+	if metrics.ZipperLeafLogOutputAppendCalls != 1 || metrics.ZipperLeafLogOutputAppendPages != len(leafPages) {
+		t.Fatalf("append metrics calls=%d pages=%d", metrics.ZipperLeafLogOutputAppendCalls, metrics.ZipperLeafLogOutputAppendPages)
+	}
 }
 
 type benchmarkLeafBatchLog struct {
