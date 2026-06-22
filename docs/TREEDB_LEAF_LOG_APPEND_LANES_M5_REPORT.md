@@ -153,6 +153,7 @@ GOWORK=off go test ./TreeDB/db ./TreeDB/caching \
 c4/c8/c16 matrix command, changing only `-treedb-flush-apply-concurrency`:
 
 ```sh
+OUT=$(mktemp -d /tmp/treedb_2931_final_XXXXXX)
 ./bin/unified-bench -dbs treedb -test sequential_write,batch_random,random_write \
   -keys 10000000 -valsize 128 -batchsize 8000 -checkpoint-between-tests \
   -treedb-flush-admission-policy=explicit -treedb-flush-apply-span-native \
@@ -167,6 +168,7 @@ Read/cache/scan guardrail command, with optional
 `-treedb-leaf-page-read-cache-entries=-1` for the no-cache row:
 
 ```sh
+OUT=$(mktemp -d /tmp/treedb_2931_read_scan_XXXXXX)
 ./bin/unified-bench -dbs treedb \
   -test sequential_write,random_read,random_read_parallel,random_read_batch,full_scan,prefix_scan \
   -keys 1000000 -valsize 128 -batchsize 8000 -checkpoint-between-tests \
