@@ -71,6 +71,105 @@ func currentLeafSegmentOrFatal(t *testing.T, leafLog *rewriteWriter) (string, ui
 	return path, fileID
 }
 
+func openLeafLogLaneGCTestDB(t *testing.T, maxSegmentBytes int64) (*DB, LeafPageLogCloser, Options) {
+	t.Helper()
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		ChunkSize:                  64 * 1024,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		FlushAdmissionPolicy:       FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:      4,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		FlushApplySpanNative:       true,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionOff,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog, err := NewStandaloneLeafPageLog(dir, StandaloneLeafPageLogOptions{
+		MaxSegmentBytes: maxSegmentBytes,
+		Compression:     ValueLogCompressionOff,
+	})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewStandaloneLeafPageLog: %v", err)
+	}
+	db.SetLeafPageLog(leafLog)
+	return db, leafLog, opts
+}
+
+func closeLeafLogLaneGCTestDB(t *testing.T, db *DB, leafLog LeafPageLogCloser) {
+	t.Helper()
+	if db != nil {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close DB: %v", err)
+		}
+	}
+	if leafLog != nil {
+		if err := leafLog.Close(); err != nil {
+			t.Fatalf("Close leaf log: %v", err)
+		}
+	}
+}
+
+func requireLeafLogCurrentSegments(t *testing.T, db *DB, min int) []LeafPageLogSegment {
+	t.Helper()
+	segments, err := leafPageLogCurrentSegments(db.leafPageLog)
+	if err != nil {
+		t.Fatalf("leafPageLogCurrentSegments: %v", err)
+	}
+	if len(segments) < min {
+		t.Fatalf("current leaf-log segments=%d want >=%d: %+v", len(segments), min, segments)
+	}
+	return segments
+}
+
+func leafGenerationManifestRawFileIDSet(manifest *leafGenerationManifest) map[uint32]struct{} {
+	out := make(map[uint32]struct{})
+	if manifest == nil {
+		return out
+	}
+	for _, gen := range manifest.Generations {
+		for _, rawFileID := range gen.FileIDs {
+			if rawFileID != 0 {
+				out[rawFileID] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func currentLeafLogRawFileIDSetForTest(t *testing.T, db *DB) map[uint32]struct{} {
+	t.Helper()
+	currentRaw, err := db.currentLeafPageLogRawFileIDSet()
+	if err != nil {
+		t.Fatalf("currentLeafPageLogRawFileIDSet: %v", err)
+	}
+	if currentRaw == nil {
+		return map[uint32]struct{}{}
+	}
+	return currentRaw
+}
+
+func leafGenerationRawFileIDsWithout(base, exclude map[uint32]struct{}) []uint32 {
+	out := make([]uint32, 0, len(base))
+	for rawFileID := range base {
+		if _, skip := exclude[rawFileID]; skip {
+			continue
+		}
+		out = append(out, rawFileID)
+	}
+	return out
+}
+
 func findLeafGenerationByFileID(t *testing.T, manifest *leafGenerationManifest, fileID uint32) leafGenerationRecord {
 	t.Helper()
 	if manifest == nil {
@@ -207,6 +306,197 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 	remaining := manifestAfter.Generations[0]
 	if got, want := remaining.FileIDs[0], rawFileID2; got != want {
 		t.Fatalf("remaining generation fileID=%d, want %d", got, want)
+	}
+}
+
+func TestLeafPageLogLanes_CheckpointReopenPublishesEveryCurrentLane(t *testing.T) {
+	db, leafLog, opts := openLeafLogLaneGCTestDB(t, 0)
+	closed := false
+	defer func() {
+		if !closed {
+			closeLeafLogLaneGCTestDB(t, db, leafLog)
+		}
+	}()
+
+	putBatch(t, db, 0, 4096, "base")
+	updates := db.NewBatch()
+	expected := map[string][]byte{
+		"key-000000": []byte("base-000000"),
+	}
+	for _, anchor := range []int{17, 1029, 2053, 3079} {
+		for j := 0; j < 48; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			val := bytes.Repeat([]byte{byte(1 + (anchor+j)%251)}, 180)
+			if err := updates.Set(key, val); err != nil {
+				_ = updates.Close()
+				t.Fatalf("Set update anchor=%d j=%d: %v", anchor, j, err)
+			}
+			if j == 7 || j == 47 {
+				expected[string(key)] = append([]byte(nil), val...)
+			}
+		}
+	}
+	if err := updates.Write(); err != nil {
+		_ = updates.Close()
+		t.Fatalf("Write updates: %v", err)
+	}
+	if err := updates.Close(); err != nil {
+		t.Fatalf("Close updates: %v", err)
+	}
+	if got := requireDBStatUint64(t, db, "treedb.flush_apply.span_native.used_ops_total"); got == 0 {
+		t.Fatalf("span-native used ops = 0, want lane-routed leaf output")
+	}
+	currentSegments := requireLeafLogCurrentSegments(t, db, 2)
+
+	manifest := loadLeafGenerationManifestOrFatal(t, opts.Dir)
+	view := newLeafGenerationView(manifest)
+	if view == nil {
+		t.Fatal("leaf generation view missing")
+	}
+	for _, seg := range currentSegments {
+		rawFileID := page.ValueLogSegmentID(seg.FileID)
+		if _, ok := view.FileToGeneration[rawFileID]; !ok {
+			t.Fatalf("current lane segment %d (%s) missing from leaf-generation manifest", seg.FileID, seg.Path)
+		}
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil {
+		t.Fatal("missing value-log set")
+	}
+	for _, seg := range currentSegments {
+		if _, ok := set.Files[seg.FileID]; !ok {
+			_ = db.valueLogManager.Release(set)
+			t.Fatalf("current lane segment %d (%s) missing from value-log set", seg.FileID, seg.Path)
+		}
+	}
+	if err := db.valueLogManager.Release(set); err != nil {
+		t.Fatalf("Release value-log set: %v", err)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("Close leaf log: %v", err)
+	}
+	closed = true
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	for key, want := range expected {
+		got, err := reopened.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("reopen Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reopen Get(%q)=%q want %q", key, got, want)
+		}
+	}
+}
+
+func TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment(t *testing.T) {
+	db, leafLog, _ := openLeafLogLaneGCTestDB(t, 0)
+	defer closeLeafLogLaneGCTestDB(t, db, leafLog)
+
+	putBatch(t, db, 0, 4096, "old")
+	baseSegments := requireLeafLogCurrentSegments(t, db, 1)
+	base := baseSegments[0]
+	baseRawFileID := page.ValueLogSegmentID(base.FileID)
+
+	putBatch(t, db, 0, 4096, "new")
+	currentRaw := currentLeafLogRawFileIDSetForTest(t, db)
+	if _, ok := currentRaw[baseRawFileID]; !ok {
+		t.Fatalf("base segment %d is no longer a current leaf-log lane; current=%v", base.FileID, currentRaw)
+	}
+	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if _, err := os.Stat(base.Path); err != nil {
+		t.Fatalf("current but unreachable leaf-log segment was removed: %s err=%v", base.Path, err)
+	}
+	for _, seg := range requireLeafLogCurrentSegments(t, db, 2) {
+		if _, err := os.Stat(seg.Path); err != nil {
+			t.Fatalf("current leaf-log segment missing after GC: %s err=%v", seg.Path, err)
+		}
+	}
+}
+
+func TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen(t *testing.T) {
+	db, leafLog, opts := openLeafLogLaneGCTestDB(t, 32<<10)
+	closed := false
+	defer func() {
+		if !closed {
+			closeLeafLogLaneGCTestDB(t, db, leafLog)
+		}
+	}()
+
+	putBatch(t, db, 0, 4096, "old")
+	baseIDs := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
+	putBatch(t, db, 0, 4096, "mid")
+	midIDs := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
+	midOnly := leafGenerationRawFileIDsWithout(midIDs, baseIDs)
+	midOnlySet := make(map[uint32]struct{}, len(midOnly))
+	for _, rawFileID := range midOnly {
+		midOnlySet[rawFileID] = struct{}{}
+	}
+	sealedMid := leafGenerationRawFileIDsWithout(midOnlySet, currentLeafLogRawFileIDSetForTest(t, db))
+	if len(sealedMid) < 2 {
+		t.Fatalf("sealed mid-generation lane segments=%d want >=2 (midOnly=%v)", len(sealedMid), midOnly)
+	}
+	sealedMidPaths := make([]string, 0, len(sealedMid))
+	for _, rawFileID := range sealedMid {
+		path := leafGenerationFallbackPath(opts.Dir, rawFileID)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("stat sealed mid segment %d: %v", rawFileID, err)
+		}
+		sealedMidPaths = append(sealedMidPaths, path)
+	}
+
+	putBatch(t, db, 0, 4096, "final")
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("Close leaf log: %v", err)
+	}
+	closed = true
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	stats, err := reopened.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	if stats.FilesDeleted == 0 {
+		t.Fatalf("FilesDeleted=0 want reclaimed sealed mid-generation lane segments (stats=%+v)", stats)
+	}
+	for _, path := range sealedMidPaths {
+		if err := waitForPathRemoval(path, 5*time.Second); err != nil {
+			t.Fatalf("waitForPathRemoval(%s): %v (stats=%+v)", path, err, stats)
+		}
+	}
+	for _, idx := range []int{0, 1029, 3079} {
+		key := []byte(fmt.Sprintf("key-%06d", idx))
+		got, err := reopened.Get(key)
+		if err != nil {
+			t.Fatalf("reopened Get(%q): %v", key, err)
+		}
+		want := []byte(fmt.Sprintf("final-%06d", idx))
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reopened Get(%q)=%q want %q", key, got, want)
+		}
 	}
 }
 

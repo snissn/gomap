@@ -80,6 +80,10 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, nil
 	}
 	filePaths := db.leafGenerationFilePaths(manifest)
+	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
+	if err != nil {
+		return stats, err
+	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -135,12 +139,24 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 				if activeFileRefs[fileID] > 0 {
 					continue
 				}
+				if _, current := currentLeafLogRawFileIDs[fileID]; current {
+					continue
+				}
 				zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
 			}
 			continue
 		}
 		if gen.State == leafGenerationStateWritable {
 			stats.GenerationsWritable++
+			continue
+		}
+		// Multiple physical leaf-log append writers can be current at once while
+		// the generation manifest still records one file per generation. A sealed
+		// generation that owns an active current writer must not be zombied just
+		// because the current root no longer references its older pages; future
+		// appends may still land in that file until the lane rotates or closes.
+		if leafGenerationRecordIntersectsFileIDSet(*gen, currentLeafLogRawFileIDs) {
+			stats.GenerationsLive++
 			continue
 		}
 		if _, ok := liveGenerations[gen.GenerationID]; ok {
@@ -242,6 +258,43 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	}
 	db.leafGenerationManifest = manifest
 	return stats, nil
+}
+
+func (db *DB) currentLeafPageLogRawFileIDSet() (map[uint32]struct{}, error) {
+	if db == nil || db.leafPageLog == nil {
+		return nil, nil
+	}
+	segments, err := leafPageLogCurrentSegments(db.leafPageLog)
+	if err != nil {
+		return nil, err
+	}
+	if len(segments) == 0 {
+		return nil, nil
+	}
+	out := make(map[uint32]struct{}, len(segments))
+	for _, seg := range segments {
+		rawFileID, ok := rawLeafGenerationFileID(seg.FileID)
+		if !ok {
+			continue
+		}
+		out[rawFileID] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func leafGenerationRecordIntersectsFileIDSet(gen leafGenerationRecord, fileIDs map[uint32]struct{}) bool {
+	if len(fileIDs) == 0 || len(gen.FileIDs) == 0 {
+		return false
+	}
+	for _, fileID := range gen.FileIDs {
+		if _, ok := fileIDs[fileID]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func leafGenerationActiveFileRefCounts(manifest *leafGenerationManifest) map[uint32]int {
