@@ -189,13 +189,52 @@ func (g *leafPageLogLaneGroup) Sync() error {
 }
 
 func (g *leafPageLogLaneGroup) Close() error {
-	return g.forEachLane(func(lane LeafPageLog) error {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	lanes := append([]LeafPageLog(nil), g.lanes...)
+	for i := range g.lanes {
+		g.lanes[i] = nil
+	}
+	g.mu.Unlock()
+	var err error
+	for _, lane := range lanes {
+		if lane == nil {
+			continue
+		}
 		closer, ok := lane.(interface{ Close() error })
 		if !ok {
-			return nil
+			continue
 		}
-		return closer.Close()
-	})
+		err = errors.Join(err, closer.Close())
+	}
+	return err
+}
+
+func (g *leafPageLogLaneGroup) CloseSelectedLanes() error {
+	if g == nil {
+		return nil
+	}
+	g.mu.Lock()
+	lanes := append([]LeafPageLog(nil), g.lanes...)
+	for i := 1; i < len(g.lanes); i++ {
+		g.lanes[i] = nil
+	}
+	g.mu.Unlock()
+	var err error
+	for i := 1; i < len(lanes); i++ {
+		lane := lanes[i]
+		if lane == nil {
+			continue
+		}
+		closer, ok := lane.(interface{ Close() error })
+		if !ok {
+			continue
+		}
+		err = errors.Join(err, closer.Close())
+	}
+	return err
 }
 
 func (g *leafPageLogLaneGroup) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
