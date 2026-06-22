@@ -174,7 +174,16 @@ func TestDB_NoteLeafGenerationRecordLength_ForwardsToBackend(t *testing.T) {
 
 type capturingLeafLogBackend struct {
 	BackendDB
-	leafLog backenddb.LeafPageLog
+	leafLog   backenddb.LeafPageLog
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (b *capturingLeafLogBackend) Close() error {
+	b.closeOnce.Do(func() {
+		b.closeErr = b.BackendDB.Close()
+	})
+	return b.closeErr
 }
 
 func (b *capturingLeafLogBackend) SetLeafPageLog(log backenddb.LeafPageLog) {
@@ -519,7 +528,10 @@ func TestCachingSpanNativeLeafLogOutputUsesSelectedLanes(t *testing.T) {
 		_ = captured.Close()
 		t.Fatalf("cache open: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	defer func() {
+		_ = db.Close()
+		_ = captured.Close()
+	}()
 
 	writeBatch := func(label string, fn func(*Batch) error) {
 		t.Helper()
@@ -574,7 +586,13 @@ func TestCachingSpanNativeLeafLogOutputUsesSelectedLanes(t *testing.T) {
 	lanes := db.leafLogAppendLanesSnapshot()
 	nonDefault := 0
 	for i, l := range lanes {
-		if i > 0 && l != nil && l.vlogSeq > 0 {
+		if i == 0 || l == nil {
+			continue
+		}
+		l.vlogMu.Lock()
+		used := l.vlogSeq > 0
+		l.vlogMu.Unlock()
+		if used {
 			nonDefault++
 		}
 	}
