@@ -157,6 +157,10 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		// appends may still land in that file until the lane rotates or closes.
 		if leafGenerationRecordIntersectsFileIDSet(*gen, currentLeafLogRawFileIDs) {
 			stats.GenerationsLive++
+			if gen.State != leafGenerationStateSealed {
+				gen.State = leafGenerationStateSealed
+				intermediateChanged = true
+			}
 			continue
 		}
 		if _, ok := liveGenerations[gen.GenerationID]; ok {

@@ -347,6 +347,12 @@ func TestLeafPageLogLanes_CheckpointReopenPublishesEveryCurrentLane(t *testing.T
 		t.Fatalf("span-native used ops = 0, want lane-routed leaf output")
 	}
 	currentSegments := requireLeafLogCurrentSegments(t, db, 2)
+	currentLaneFileIDs := make(map[uint32]string, len(currentSegments))
+	currentLaneRawFileIDs := make(map[uint32]string, len(currentSegments))
+	for _, seg := range currentSegments {
+		currentLaneFileIDs[seg.FileID] = seg.Path
+		currentLaneRawFileIDs[page.ValueLogSegmentID(seg.FileID)] = seg.Path
+	}
 
 	manifest := loadLeafGenerationManifestOrFatal(t, opts.Dir)
 	view := newLeafGenerationView(manifest)
@@ -389,6 +395,31 @@ func TestLeafPageLogLanes_CheckpointReopenPublishesEveryCurrentLane(t *testing.T
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+
+	reopenedManifest := loadLeafGenerationManifestOrFatal(t, opts.Dir)
+	reopenedView := newLeafGenerationView(reopenedManifest)
+	if reopenedView == nil {
+		t.Fatal("reopened leaf generation view missing")
+	}
+	for rawFileID, path := range currentLaneRawFileIDs {
+		if _, ok := reopenedView.FileToGeneration[rawFileID]; !ok {
+			t.Fatalf("reopened manifest missing current lane raw file %d (%s)", rawFileID, path)
+		}
+	}
+	reopenedSet := reopened.valueLogManager.CurrentSetNoRefresh()
+	if reopenedSet == nil {
+		t.Fatal("missing reopened value-log set")
+	}
+	for fileID, path := range currentLaneFileIDs {
+		if _, ok := reopenedSet.Files[fileID]; !ok {
+			_ = reopened.valueLogManager.Release(reopenedSet)
+			t.Fatalf("reopened value-log set missing current lane segment %d (%s)", fileID, path)
+		}
+	}
+	if err := reopened.valueLogManager.Release(reopenedSet); err != nil {
+		t.Fatalf("Release reopened value-log set: %v", err)
+	}
+
 	for key, want := range expected {
 		got, err := reopened.Get([]byte(key))
 		if err != nil {
@@ -414,8 +445,41 @@ func TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment(t *testing
 	if _, ok := currentRaw[baseRawFileID]; !ok {
 		t.Fatalf("base segment %d is no longer a current leaf-log lane; current=%v", base.FileID, currentRaw)
 	}
+	manifest := loadLeafGenerationManifestOrFatal(t, db.dir)
+	markedRetiring := false
+	for i := range manifest.Generations {
+		for _, rawFileID := range manifest.Generations[i].FileIDs {
+			if rawFileID != baseRawFileID {
+				continue
+			}
+			manifest.Generations[i].State = leafGenerationStateRetiring
+			manifest.Generations[i].RetiredCommitSeq = 123
+			markedRetiring = true
+			break
+		}
+		if markedRetiring {
+			break
+		}
+	}
+	if !markedRetiring {
+		t.Fatalf("base raw file id %d missing from manifest", baseRawFileID)
+	}
+	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+		t.Fatalf("save retiring manifest: %v", err)
+	}
+	db.mu.Lock()
+	db.leafGenerationManifest = manifest
+	db.mu.Unlock()
+	if err := db.publishLeafGenerationState(false); err != nil {
+		t.Fatalf("publish retiring manifest: %v", err)
+	}
+
 	if _, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
+	}
+	afterManifest := loadLeafGenerationManifestOrFatal(t, db.dir)
+	if gen := findLeafGenerationByFileID(t, afterManifest, baseRawFileID); gen.State != leafGenerationStateSealed {
+		t.Fatalf("current leaf-log generation state=%q want %q", gen.State, leafGenerationStateSealed)
 	}
 	if _, err := os.Stat(base.Path); err != nil {
 		t.Fatalf("current but unreachable leaf-log segment was removed: %s err=%v", base.Path, err)
