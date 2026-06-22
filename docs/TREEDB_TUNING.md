@@ -139,7 +139,12 @@ saturation and checkpoint fallback gates pass, but random-key ops/span remains
 ~3 and active-background checkpoint wait remains material, so auto stays
 conservative c4 and parent completion is blocked on #2916 unless waived.
 Checkpoint pauses are tracked by the M4 barrier/debt counters and remain a
-workload guardrail, not a claim that checkpoint debt disappeared.
+workload guardrail, not a claim that checkpoint debt disappeared. The #2925
+leaf-log append-lane sprint final gate is recorded in
+`docs/TREEDB_LEAF_LOG_APPEND_LANES_M5_REPORT.md`: the admitted span-native path
+now uses true worker-owned selected leaf-log lanes without a global collector,
+plain `AppendLeafPage` still uses lane 0, and c8/c16 remain explicit rows while
+issue #2943 tracks the remaining checkpoint active-background/barrier wait blocker.
 
 ### Read latency under flush debt (cached mode)
 
