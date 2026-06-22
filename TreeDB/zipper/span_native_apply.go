@@ -474,7 +474,13 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		recordSpanNativeWorkUnitMetrics(&metrics, workerRanges)
 	}
 	if workerPool != nil {
-		if err := workerPool.Run(scheduledWorkers, len(workerRanges), runRange); err != nil {
+		var err error
+		if leafLogOutput != nil && scheduledWorkers > 1 {
+			err = workerPool.RunStrided(scheduledWorkers, len(workerRanges), runRange)
+		} else {
+			err = workerPool.Run(scheduledWorkers, len(workerRanges), runRange)
+		}
+		if err != nil {
 			finishScheduleStats()
 			metrics.ZipperApplyWallNs = time.Since(applyStart).Nanoseconds()
 			return ApplyResult{Metrics: metrics}, true, err
@@ -483,6 +489,19 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		for job := range workerRanges {
 			runRange(0, job)
 		}
+	} else if leafLogOutput != nil {
+		var wg sync.WaitGroup
+		worker := func(workerID int) {
+			defer wg.Done()
+			for job := workerID; job < len(workerRanges); job += scheduledWorkers {
+				runRange(workerID, job)
+			}
+		}
+		for workerID := 0; workerID < scheduledWorkers; workerID++ {
+			wg.Add(1)
+			go worker(workerID)
+		}
+		wg.Wait()
 	} else {
 		var nextJob int64 = -1
 		var wg sync.WaitGroup

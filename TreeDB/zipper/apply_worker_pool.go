@@ -14,10 +14,12 @@ type applyWorkerPoolTask struct {
 }
 
 type applyWorkerPoolRun struct {
-	count int
-	fn    func(workerID, job int)
-	next  atomic.Int64
-	wg    sync.WaitGroup
+	count   int
+	workers int
+	fn      func(workerID, job int)
+	strided bool
+	next    atomic.Int64
+	wg      sync.WaitGroup
 }
 
 // ApplyWorkerPool is a small reusable worker pool for opt-in flush/apply COW
@@ -58,12 +60,18 @@ func (p *ApplyWorkerPool) worker() {
 			}
 			continue
 		}
-		for {
-			job := int(run.next.Add(1)) - 1
-			if job >= run.count {
-				break
+		if run.strided {
+			for job := task.workerID; job < run.count; job += run.workers {
+				run.fn(task.workerID, job)
 			}
-			run.fn(task.workerID, job)
+		} else {
+			for {
+				job := int(run.next.Add(1)) - 1
+				if job >= run.count {
+					break
+				}
+				run.fn(task.workerID, job)
+			}
 		}
 		run.wg.Done()
 	}
@@ -72,6 +80,17 @@ func (p *ApplyWorkerPool) worker() {
 // Run schedules up to workers reusable workers over count jobs. It blocks until
 // all scheduled workers finish. A closed pool returns errApplyWorkerPoolClosed.
 func (p *ApplyWorkerPool) Run(workers, count int, fn func(workerID, job int)) error {
+	return p.run(workers, count, fn, false)
+}
+
+// RunStrided schedules jobs deterministically by workerID (job=workerID+n*workers).
+// This preserves worker-owned resources such as selected leaf-log lanes while
+// still using the reusable worker pool.
+func (p *ApplyWorkerPool) RunStrided(workers, count int, fn func(workerID, job int)) error {
+	return p.run(workers, count, fn, true)
+}
+
+func (p *ApplyWorkerPool) run(workers, count int, fn func(workerID, job int), strided bool) error {
 	if count <= 0 || fn == nil {
 		return nil
 	}
@@ -88,7 +107,7 @@ func (p *ApplyWorkerPool) Run(workers, count int, fn func(workerID, job int)) er
 		workers = 1
 	}
 
-	run := &applyWorkerPoolRun{count: count, fn: fn}
+	run := &applyWorkerPoolRun{count: count, workers: workers, fn: fn, strided: strided}
 	run.wg.Add(workers)
 
 	p.mu.Lock()
