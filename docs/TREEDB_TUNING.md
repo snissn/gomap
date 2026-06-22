@@ -144,7 +144,7 @@ leaf-log append-lane sprint final gate is recorded in
 `docs/TREEDB_LEAF_LOG_APPEND_LANES_M5_REPORT.md`: the admitted span-native path
 now uses true worker-owned selected leaf-log lanes without a global collector,
 plain `AppendLeafPage` still uses lane 0, and c8/c16 remain explicit rows while
-#2943 tracks the remaining checkpoint active-background/barrier wait blocker.
+issue #2943 tracks the remaining checkpoint active-background/barrier wait blocker.
 
 ### Read latency under flush debt (cached mode)
 
