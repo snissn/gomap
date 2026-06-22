@@ -2942,6 +2942,12 @@ func (db *DB) nextLeafLogAppendSeq() (int, error) {
 		if next <= cur {
 			return 0, fmt.Errorf("cachingdb: leaf log sequence space exhausted")
 		}
+		if _, err := valuelog.EncodeFileID(uint32(leafLogLaneID), next); err != nil {
+			if errors.Is(err, valuelog.ErrSegmentIDRange) {
+				return 0, fmt.Errorf("cachingdb: leaf log sequence space exhausted")
+			}
+			return 0, err
+		}
 		if db.leafLogAppendSeq.CompareAndSwap(cur, next) {
 			return int(next), nil
 		}

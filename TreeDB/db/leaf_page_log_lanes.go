@@ -47,6 +47,12 @@ func (a *leafLogSeqAllocator) Next() (uint32, error) {
 		if next <= current {
 			return 0, fmt.Errorf("leaf log sequence space exhausted")
 		}
+		if _, err := valuelog.EncodeFileID(rewriteLeafLogLaneID, next); err != nil {
+			if errors.Is(err, valuelog.ErrSegmentIDRange) {
+				return 0, fmt.Errorf("leaf log sequence space exhausted")
+			}
+			return 0, err
+		}
 		if a.next.CompareAndSwap(current, next) {
 			return next, nil
 		}
