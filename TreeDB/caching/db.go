@@ -15695,6 +15695,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if err == nil && !rawBatchUsed {
 		for i := 0; i < len(records); i += k {
 			if i > 0 && i%4096 == 0 {
+				if leafLogAppend {
+					appendHold += time.Since(lockHoldStart)
+				}
 				l.vlogMu.Unlock()
 				runtime.Gosched()
 				relockWaitStart := time.Time{}
@@ -15704,6 +15707,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				l.vlogMu.Lock()
 				if leafLogAppend {
 					appendWait += time.Since(relockWaitStart)
+					lockHoldStart = time.Now()
 				}
 				w = l.vlog
 				if w == nil {
