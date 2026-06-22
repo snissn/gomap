@@ -1929,7 +1929,10 @@ func leafPageLogConsumesPreparedPayloads(log LeafPageLog, batch bool) bool {
 		if prepared, ok := log.(LeafPagePreparedBatchAppendLog); ok {
 			return prepared.PreparedLeafPageBatchAppends()
 		}
-		_, ok := log.(LeafPagePreparedBatchLog)
+		if _, ok := log.(LeafPagePreparedBatchLog); ok {
+			return true
+		}
+		_, ok := log.(LeafPagePreparedChildRefBatchLog)
 		return ok
 	}
 	if prepared, ok := log.(LeafPagePreparedAppendLog); ok {
