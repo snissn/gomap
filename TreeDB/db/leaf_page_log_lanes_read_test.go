@@ -98,6 +98,10 @@ func requireLeafLaneReferencedFileIDs(t *testing.T, db *DB, min int) map[uint32]
 
 func requireLeafLaneReadSurfaces(t *testing.T, db *DB, model map[string][]byte, count int) {
 	t.Helper()
+	const minReadSurfaceKeyCount = 3080
+	if count < minReadSurfaceKeyCount {
+		t.Fatalf("read-surface fixture count=%d want >=%d", count, minReadSurfaceKeyCount)
+	}
 	sampleIdx := []int{0, 1, 97, 1029, 2053, 3079, count - 1}
 	getManyKeys := make([][]byte, 0, len(sampleIdx)+1)
 	for _, idx := range sampleIdx {
