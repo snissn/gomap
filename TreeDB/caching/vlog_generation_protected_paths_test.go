@@ -360,9 +360,18 @@ func mustCurrentValueLogPathsForOwnershipTest(t *testing.T, db *DB) (valuePath s
 	db.lanes[0].vlogMu.Lock()
 	valuePath = db.lanes[0].vlogPath
 	db.lanes[0].vlogMu.Unlock()
-	db.leafLog.vlogMu.Lock()
-	leafPath = db.leafLog.vlogPath
-	db.leafLog.vlogMu.Unlock()
+	for _, leafLane := range db.leafLogAppendLanesSnapshot() {
+		if leafLane == nil {
+			continue
+		}
+		leafLane.vlogMu.Lock()
+		path := leafLane.vlogPath
+		leafLane.vlogMu.Unlock()
+		if path != "" {
+			leafPath = path
+			break
+		}
+	}
 	if valuePath == "" {
 		t.Fatal("missing current value_vlog path")
 	}

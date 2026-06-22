@@ -234,6 +234,10 @@ func (g *leafPageLogLaneGroup) LeafPageLogLane(workerIndex int) (LeafPageLog, bo
 	return &leafPageLogLaneHandle{group: g, index: workerIndex}, true
 }
 
+func (g *leafPageLogLaneGroup) LeafPageLogLaneAny(workerIndex int) (any, bool) {
+	return g.LeafPageLogLane(workerIndex)
+}
+
 func (g *leafPageLogLaneGroup) leafPageLogLane(workerIndex int) (LeafPageLog, bool) {
 	return g.LeafPageLogLane(workerIndex)
 }

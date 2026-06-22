@@ -47,6 +47,14 @@ type LeafPageConcurrentAppendLog interface {
 	ConcurrentLeafPageAppends() bool
 }
 
+type LeafPageLogLaneProvider interface {
+	LeafPageLogLane(workerIndex int) (LeafPageLog, bool)
+}
+
+type leafPageLogLaneAnyProvider interface {
+	LeafPageLogLaneAny(workerIndex int) (any, bool)
+}
+
 type LeafPagePreparedBatchLog interface {
 	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
 }
@@ -1782,11 +1790,15 @@ func (z *Zipper) persistLeafPageDataWithConfig(leafPage []byte, metrics *adaptiv
 }
 
 func (z *Zipper) persistLeafPageData(leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
-	if z.leafPageLog == nil {
+	return z.persistLeafPageDataToLog(z.leafPageLog, leafPage, metrics)
+}
+
+func (z *Zipper) persistLeafPageDataToLog(log LeafPageLog, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	if log == nil {
 		return page.ChildRef{}, errors.New("zipper: missing leaf page log")
 	}
 	appendStart := time.Now()
-	ptr, err := z.leafPageLog.AppendLeafPage(leafPage)
+	ptr, err := log.AppendLeafPage(leafPage)
 	recordZipperLeafLogOutputAppend(metrics, time.Since(appendStart), 1, err == nil)
 	if err != nil {
 		return page.ChildRef{}, err
@@ -1804,7 +1816,11 @@ func (z *Zipper) persistLeafPageBatchDataTo(leafPages [][]byte, refs []page.Chil
 }
 
 func (z *Zipper) persistPreparedLeafPageDataTo(leafPage []byte, preparedPayload []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
-	if prepared, ok := z.leafPageLog.(LeafPagePreparedLog); ok {
+	return z.persistPreparedLeafPageDataToLog(z.leafPageLog, leafPage, preparedPayload, metrics)
+}
+
+func (z *Zipper) persistPreparedLeafPageDataToLog(log LeafPageLog, leafPage []byte, preparedPayload []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	if prepared, ok := log.(LeafPagePreparedLog); ok {
 		appendStart := time.Now()
 		ptr, err := prepared.AppendPreparedLeafPage(leafPage, preparedPayload)
 		appendWait := time.Since(appendStart)
@@ -1820,7 +1836,7 @@ func (z *Zipper) persistPreparedLeafPageDataTo(leafPage []byte, preparedPayload 
 	var onePayload [1][]byte
 	onePage[0] = leafPage
 	onePayload[0] = preparedPayload
-	refs, err := z.persistPreparedLeafPageBatchDataTo(onePage[:], onePayload[:], nil, metrics)
+	refs, err := z.persistPreparedLeafPageBatchDataToLog(log, onePage[:], onePayload[:], nil, metrics)
 	if err != nil {
 		return page.ChildRef{}, err
 	}
@@ -1831,6 +1847,10 @@ func (z *Zipper) persistPreparedLeafPageDataTo(leafPage []byte, preparedPayload 
 }
 
 func (z *Zipper) persistPreparedLeafPageBatchDataTo(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	return z.persistPreparedLeafPageBatchDataToLog(z.leafPageLog, leafPages, preparedPayloads, refs, metrics)
+}
+
+func (z *Zipper) persistPreparedLeafPageBatchDataToLog(log LeafPageLog, leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	refs = refs[:0]
 	if len(leafPages) == 0 {
 		return refs, nil
@@ -1838,9 +1858,9 @@ func (z *Zipper) persistPreparedLeafPageBatchDataTo(leafPages [][]byte, prepared
 	if len(preparedPayloads) != len(leafPages) {
 		return nil, fmt.Errorf("zipper: prepared leaf payload count %d for %d pages", len(preparedPayloads), len(leafPages))
 	}
-	preparedBatcher, ok := z.leafPageLog.(LeafPagePreparedBatchLog)
+	preparedBatcher, ok := log.(LeafPagePreparedBatchLog)
 	if !ok {
-		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
+		return z.persistLeafPageBatchDataToLog(log, leafPages, refs, metrics)
 	}
 	appendStart := time.Now()
 	ptrs, err := preparedBatcher.AppendPreparedLeafPages(leafPages, preparedPayloads)
@@ -1867,42 +1887,53 @@ func (z *Zipper) persistPreparedLeafPageBatchDataTo(leafPages [][]byte, prepared
 }
 
 func (z *Zipper) leafPageLogConsumesPreparedPayloads(batch bool) bool {
-	if z == nil || z.leafPageLog == nil {
+	if z == nil {
+		return false
+	}
+	return leafPageLogConsumesPreparedPayloads(z.leafPageLog, batch)
+}
+
+func leafPageLogConsumesPreparedPayloads(log LeafPageLog, batch bool) bool {
+	if log == nil {
 		return false
 	}
 	if batch {
-		if prepared, ok := z.leafPageLog.(LeafPagePreparedBatchAppendLog); ok {
+		if prepared, ok := log.(LeafPagePreparedBatchAppendLog); ok {
 			return prepared.PreparedLeafPageBatchAppends()
 		}
-		_, ok := z.leafPageLog.(LeafPagePreparedBatchLog)
+		_, ok := log.(LeafPagePreparedBatchLog)
 		return ok
 	}
-	if prepared, ok := z.leafPageLog.(LeafPagePreparedAppendLog); ok {
+	if prepared, ok := log.(LeafPagePreparedAppendLog); ok {
 		return prepared.PreparedLeafPageAppends()
 	}
-	_, ok := z.leafPageLog.(LeafPagePreparedLog)
+	_, ok := log.(LeafPagePreparedLog)
 	return ok
 }
 
 func (z *Zipper) persistLeafPageBatchDataToWithConfig(leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics, cfg applyRunConfig) ([]page.ChildRef, error) {
+	if cfg.leafPagePersister != nil {
+		return cfg.leafPagePersister.persistLeafPageBatchDataTo(z, leafPages, refs, metrics)
+	}
+	return z.persistLeafPageBatchDataToLog(z.leafPageLog, leafPages, refs, metrics)
+}
+
+func (z *Zipper) persistLeafPageBatchDataToLog(log LeafPageLog, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	refs = refs[:0]
 	if len(leafPages) == 0 {
 		return refs, nil
 	}
-	if cfg.leafPagePersister != nil {
-		return cfg.leafPagePersister.persistLeafPageBatchDataTo(z, leafPages, refs, metrics)
-	}
 	if len(leafPages) == 1 {
-		ref, err := z.persistLeafPageData(leafPages[0], metrics)
+		ref, err := z.persistLeafPageDataToLog(log, leafPages[0], metrics)
 		if err != nil {
 			return nil, err
 		}
 		return append(refs, ref), nil
 	}
-	if z.leafPageLog == nil {
+	if log == nil {
 		return nil, errors.New("zipper: missing leaf page log")
 	}
-	batcher, ok := z.leafPageLog.(LeafPageBatchLog)
+	batcher, ok := log.(LeafPageBatchLog)
 	if !ok {
 		if cap(refs) < len(leafPages) {
 			refs = make([]page.ChildRef, len(leafPages))
@@ -1910,7 +1941,7 @@ func (z *Zipper) persistLeafPageBatchDataToWithConfig(leafPages [][]byte, refs [
 			refs = refs[:len(leafPages)]
 		}
 		for i, leafPage := range leafPages {
-			ref, err := z.persistLeafPageData(leafPage, metrics)
+			ref, err := z.persistLeafPageDataToLog(log, leafPage, metrics)
 			if err != nil {
 				return nil, err
 			}

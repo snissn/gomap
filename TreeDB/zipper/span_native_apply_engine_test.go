@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -252,6 +254,180 @@ func TestSpanNativeApplyConcurrentWorkerLocalScratchSplitParity(t *testing.T) {
 	}
 }
 
+type laneRecordingLeafPageLog struct {
+	mu                    sync.Mutex
+	next                  uint64
+	pages                 map[page.LeafLogPtr][]byte
+	appendCounts          map[int]int
+	batchCalls            map[int]int
+	preparedSingleCalls   map[int]int
+	preparedBatchCalls    map[int]int
+	preparedBatchPageLens []int
+	failLane              int
+	failErr               error
+}
+
+type laneRecordingLeafPageLogView struct {
+	parent *laneRecordingLeafPageLog
+	lane   int
+}
+
+func newLaneRecordingLeafPageLog() *laneRecordingLeafPageLog {
+	return &laneRecordingLeafPageLog{
+		pages:               make(map[page.LeafLogPtr][]byte),
+		appendCounts:        make(map[int]int),
+		batchCalls:          make(map[int]int),
+		preparedSingleCalls: make(map[int]int),
+		preparedBatchCalls:  make(map[int]int),
+	}
+}
+
+func (l *laneRecordingLeafPageLog) resetObservations() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.appendCounts = make(map[int]int)
+	l.batchCalls = make(map[int]int)
+	l.preparedSingleCalls = make(map[int]int)
+	l.preparedBatchCalls = make(map[int]int)
+	l.preparedBatchPageLens = nil
+}
+
+func (l *laneRecordingLeafPageLog) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	if workerIndex <= 0 {
+		return l, true
+	}
+	return &laneRecordingLeafPageLogView{parent: l, lane: workerIndex}, true
+}
+
+func (l *laneRecordingLeafPageLog) ConcurrentLeafPageAppends() bool { return true }
+
+func (l *laneRecordingLeafPageLog) PreparedLeafPageAppends() bool { return true }
+
+func (l *laneRecordingLeafPageLog) PreparedLeafPageBatchAppends() bool { return true }
+
+func (l *laneRecordingLeafPageLog) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	ptrs, err := l.appendLeafPagesForLane(0, [][]byte{leafPage}, false, false)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return ptrs[0], nil
+}
+
+func (l *laneRecordingLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return l.appendLeafPagesForLane(0, leafPages, true, false)
+}
+
+func (l *laneRecordingLeafPageLog) AppendPreparedLeafPage(leafPage []byte, _ []byte) (page.LeafLogPtr, error) {
+	ptrs, err := l.appendLeafPagesForLane(0, [][]byte{leafPage}, false, true)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return ptrs[0], nil
+}
+
+func (l *laneRecordingLeafPageLog) AppendPreparedLeafPages(leafPages [][]byte, _ [][]byte) ([]page.LeafLogPtr, error) {
+	return l.appendLeafPagesForLane(0, leafPages, true, true)
+}
+
+func (v *laneRecordingLeafPageLogView) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error) {
+	ptrs, err := v.parent.appendLeafPagesForLane(v.lane, [][]byte{leafPage}, false, false)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return ptrs[0], nil
+}
+
+func (v *laneRecordingLeafPageLogView) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, error) {
+	return v.parent.appendLeafPagesForLane(v.lane, leafPages, true, false)
+}
+
+func (v *laneRecordingLeafPageLogView) AppendPreparedLeafPage(leafPage []byte, _ []byte) (page.LeafLogPtr, error) {
+	ptrs, err := v.parent.appendLeafPagesForLane(v.lane, [][]byte{leafPage}, false, true)
+	if err != nil {
+		return page.LeafLogPtr{}, err
+	}
+	return ptrs[0], nil
+}
+
+func (v *laneRecordingLeafPageLogView) AppendPreparedLeafPages(leafPages [][]byte, _ [][]byte) ([]page.LeafLogPtr, error) {
+	return v.parent.appendLeafPagesForLane(v.lane, leafPages, true, true)
+}
+
+func (v *laneRecordingLeafPageLogView) PreparedLeafPageAppends() bool { return true }
+
+func (v *laneRecordingLeafPageLogView) PreparedLeafPageBatchAppends() bool { return true }
+
+func (l *laneRecordingLeafPageLog) appendLeafPagesForLane(lane int, leafPages [][]byte, batchCall bool, prepared bool) ([]page.LeafLogPtr, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.failErr != nil && lane == l.failLane {
+		return nil, l.failErr
+	}
+	if l.next == 0 {
+		l.next = 4
+	}
+	baseOffset := l.next
+	l.next += page.PageSize + 32
+	fileID := uint32(10_000 + lane)
+	ptrs := make([]page.LeafLogPtr, len(leafPages))
+	for i, leafPage := range leafPages {
+		recordLen := uint32(page.PageSize)
+		if len(leafPages) > 1 {
+			recordLen = page.ValuePtrMarkGrouped(page.PageSize, uint8(i))
+		}
+		ptr := page.LeafLogPtr{FileID: fileID, Offset: baseOffset, RecordLengthHint: recordLen, SubIndex: uint16(i)}
+		ptrs[i] = ptr
+		l.pages[ptr] = append([]byte(nil), leafPage...)
+	}
+	l.appendCounts[lane] += len(leafPages)
+	if batchCall {
+		l.batchCalls[lane]++
+	}
+	if prepared {
+		if batchCall {
+			l.preparedBatchCalls[lane]++
+			l.preparedBatchPageLens = append(l.preparedBatchPageLens, len(leafPages))
+		} else {
+			l.preparedSingleCalls[lane]++
+		}
+	}
+	return ptrs, nil
+}
+
+func (l *laneRecordingLeafPageLog) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	leafPtr, err := page.LeafLogPtrFromValuePtr(ptr)
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	data, ok := l.pages[leafPtr]
+	if !ok {
+		return nil, io.EOF
+	}
+	return append([]byte(nil), data...), nil
+}
+
+func (l *laneRecordingLeafPageLog) observedAppendCounts() map[int]int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make(map[int]int, len(l.appendCounts))
+	for lane, count := range l.appendCounts {
+		out[lane] = count
+	}
+	return out
+}
+
+func (l *laneRecordingLeafPageLog) observedPreparedBatchCalls() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	total := 0
+	for _, count := range l.preparedBatchCalls {
+		total += count
+	}
+	return total
+}
+
 func TestSpanNativeApplyLeafLogOutputPreparedWorkerAppends(t *testing.T) {
 	_, serial := newReadOnlyPrepareZipper(t)
 	serial.SetOuterLeavesInValueLog(true)
@@ -312,6 +488,101 @@ func TestSpanNativeApplyLeafLogOutputPreparedWorkerAppends(t *testing.T) {
 	}
 	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
 		t.Fatalf("span-native prepared leaf-log output mismatch")
+	}
+}
+
+func TestSpanNativeApplyLeafLogOutputRoutesWorkerRangesToSelectedLanes(t *testing.T) {
+	_, serial := newReadOnlyPrepareZipper(t)
+	serial.SetOuterLeavesInValueLog(true)
+	serialStore := newBatchMemoryLeafPageStore()
+	serial.SetLeafPageLog(serialStore)
+	serial.SetLeafPageReader(serialStore)
+
+	_, native := newReadOnlyPrepareZipper(t)
+	native.SetOuterLeavesInValueLog(true)
+	nativeStore := newLaneRecordingLeafPageLog()
+	native.SetLeafPageLog(nativeStore)
+	native.SetLeafPageReader(nativeStore)
+
+	serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 4096)
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+	nativeStore.resetObservations()
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	value := bytes.Repeat([]byte("v"), 180)
+	for _, anchor := range []int{17, 1029, 2053, 3079} {
+		for j := 0; j < 48; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			if err := delta.Set(key, value); err != nil {
+				t.Fatalf("Set anchor=%d j=%d: %v", anchor, j, err)
+			}
+		}
+	}
+
+	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+	if err != nil {
+		t.Fatalf("serial Apply: %v", err)
+	}
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 4})
+	if err != nil {
+		t.Fatalf("span-native ApplyWithOptions: %v", err)
+	}
+	if !result.SpanNativeUsed || result.SpanNativeWorkers < 2 {
+		t.Fatalf("span-native used/workers=%v/%d", result.SpanNativeUsed, result.SpanNativeWorkers)
+	}
+	counts := nativeStore.observedAppendCounts()
+	if counts[0] != 0 {
+		t.Fatalf("default lane appends after reset=%d want 0; counts=%v", counts[0], counts)
+	}
+	selectedLanes := 0
+	for lane, count := range counts {
+		if lane <= 0 || count <= 0 {
+			continue
+		}
+		selectedLanes++
+	}
+	if selectedLanes < 2 {
+		t.Fatalf("selected lanes with appends=%d counts=%v want >=2", selectedLanes, counts)
+	}
+	if preparedBatches := nativeStore.observedPreparedBatchCalls(); preparedBatches == 0 {
+		t.Fatalf("prepared batch calls=0 counts=%v", counts)
+	}
+	if !bytes.Equal(collectRootLeafPairs(t, serial, serialNewRoot), collectRootLeafPairs(t, native, result.RootID)) {
+		t.Fatalf("span-native lane-routed leaf-log output mismatch")
+	}
+}
+
+func TestSpanNativeApplyLeafLogOutputSelectedLaneFailureReturnsBeforeReduce(t *testing.T) {
+	_, native := newReadOnlyPrepareZipper(t)
+	native.SetOuterLeavesInValueLog(true)
+	store := newLaneRecordingLeafPageLog()
+	store.failLane = 1
+	store.failErr = errors.New("test selected leaf-log lane append failure")
+	native.SetLeafPageLog(store)
+	native.SetLeafPageReader(store)
+
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 4096)
+	store.resetObservations()
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	value := bytes.Repeat([]byte("v"), 180)
+	for _, anchor := range []int{17, 1029, 2053, 3079} {
+		for j := 0; j < 48; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			if err := delta.Set(key, value); err != nil {
+				t.Fatalf("Set anchor=%d j=%d: %v", anchor, j, err)
+			}
+		}
+	}
+
+	result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 4})
+	if !errors.Is(err, store.failErr) {
+		t.Fatalf("ApplyWithOptions err=%v want %v", err, store.failErr)
+	}
+	if result.RootID != 0 {
+		t.Fatalf("RootID=%d want zero because selected-lane output failed before reducer publication", result.RootID)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -479,6 +480,117 @@ func TestCachingLeafPageLogLaneSelectionAppendsUniqueReadablePtrs(t *testing.T) 
 		}
 		if !bytes.Equal(got, res.want) {
 			t.Fatalf("reopen read lane %d mismatch", res.lane)
+		}
+	}
+}
+
+func TestCachingSpanNativeLeafLogOutputUsesSelectedLanes(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		ChunkSize:                  64 * 1024,
+		IndexOuterLeavesInValueLog: true,
+		FlushAdmissionPolicy:       backenddb.FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:      4,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		FlushApplySpanNative:       true,
+		ValueLog: backenddb.ValueLogOptions{
+			Compression: backenddb.ValueLogCompressionBlock,
+			BlockCodec:  backenddb.ValueLogBlockLZ4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	captured := &capturingLeafLogBackend{BackendDB: backend}
+	db, err := Open(dir, captured, Options{
+		IndexOuterLeavesInValueLog: true,
+		FlushApplyConcurrency:      4,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		FlushApplySpanNative:       true,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		_ = captured.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	writeBatch := func(label string, fn func(*Batch) error) {
+		t.Helper()
+		b := db.NewBatch()
+		if err := fn(b); err != nil {
+			_ = b.Close()
+			t.Fatalf("%s build: %v", label, err)
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			t.Fatalf("%s write: %v", label, err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("%s close: %v", label, err)
+		}
+	}
+	writeBatch("base", func(b *Batch) error {
+		for i := 0; i < 8192; i++ {
+			key := []byte(fmt.Sprintf("key-%06d", i))
+			val := bytes.Repeat([]byte{byte(1 + i%251)}, 180)
+			if err := b.Set(key, val); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("base Checkpoint: %v", err)
+	}
+
+	writeBatch("updates", func(b *Batch) error {
+		for i := 0; i < 512; i++ {
+			idx := (i * 97) % 8192
+			key := []byte(fmt.Sprintf("key-%06d", idx))
+			val := []byte(fmt.Sprintf("updated-%06d", idx))
+			if err := b.Set(key, val); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("updates Checkpoint: %v", err)
+	}
+
+	stats := captured.Stats()
+	raw := stats["treedb.flush_apply.span_native.used_ops_total"]
+	usedOps, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || usedOps == 0 {
+		t.Fatalf("span-native used ops stat=%q err=%v want >0", raw, err)
+	}
+	lanes := db.leafLogAppendLanesSnapshot()
+	nonDefault := 0
+	for i, l := range lanes {
+		if i > 0 && l != nil && l.vlogSeq > 0 {
+			nonDefault++
+		}
+	}
+	if nonDefault == 0 {
+		t.Fatalf("selected leaf-log lanes=%d want >0 (snapshot len=%d, leafLog=%T, outer=%t, append_calls=%q)", nonDefault, len(lanes), captured.leafLog, db.indexOuterLeavesInValueLog, stats["treedb.flush_apply.leaf_log_output.append_calls_total"])
+	}
+
+	for _, idx := range []int{0, 97, 97 * 7 % 8192} {
+		key := []byte(fmt.Sprintf("key-%06d", idx))
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		want := []byte(fmt.Sprintf("updated-%06d", idx))
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%q)=%q want %q", key, got, want)
 		}
 	}
 }

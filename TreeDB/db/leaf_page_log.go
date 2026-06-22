@@ -300,6 +300,10 @@ func (l *leafPageLogWithRecordLengthHints) LeafPageLogLane(workerIndex int) (Lea
 	return wrapLeafPageLogWithRecordLengthHints(l.db, lane), true
 }
 
+func (l *leafPageLogWithRecordLengthHints) LeafPageLogLaneAny(workerIndex int) (any, bool) {
+	return l.LeafPageLogLane(workerIndex)
+}
+
 func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationRootIDs() []uint64 {
 	if l == nil || l.inner == nil {
 		return nil

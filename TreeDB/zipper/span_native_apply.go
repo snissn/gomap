@@ -34,6 +34,11 @@ type spanNativeLeafLogOutputGate struct {
 	sem chan struct{}
 }
 
+type spanNativeLeafLogOutputLane struct {
+	gate *spanNativeLeafLogOutputGate
+	log  LeafPageLog
+}
+
 var spanNativeLeafLogPayloadScratchPool sync.Pool
 
 func newSpanNativeLeafLogOutputGate(limit int) *spanNativeLeafLogOutputGate {
@@ -59,8 +64,44 @@ func releaseSpanNativeLeafLogPayloadScratch(buf []byte) {
 	spanNativeLeafLogPayloadScratchPool.Put(buf[:0])
 }
 
+func (g *spanNativeLeafLogOutputGate) leafPageLogForWorker(z *Zipper, workerIndex int) LeafPageLog {
+	if z == nil || z.leafPageLog == nil {
+		return nil
+	}
+	if workerIndex > 0 {
+		if provider, ok := z.leafPageLog.(LeafPageLogLaneProvider); ok {
+			if laneLog, ok := provider.LeafPageLogLane(workerIndex); ok && laneLog != nil {
+				return laneLog
+			}
+		}
+		if provider, ok := z.leafPageLog.(leafPageLogLaneAnyProvider); ok {
+			if lane, ok := provider.LeafPageLogLaneAny(workerIndex); ok && lane != nil {
+				if laneLog, ok := lane.(LeafPageLog); ok && laneLog != nil {
+					return laneLog
+				}
+			}
+		}
+	}
+	return z.leafPageLog
+}
+
 func (g *spanNativeLeafLogOutputGate) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
-	prepared := z.leafPageLogConsumesPreparedPayloads(false)
+	return g.persistLeafPageDataForWorker(z, 0, leafPage, metrics)
+}
+
+func (g *spanNativeLeafLogOutputLane) persistLeafPageData(z *Zipper, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	if g == nil || g.gate == nil {
+		return z.persistLeafPageData(leafPage, metrics)
+	}
+	return g.gate.persistLeafPageDataToLog(z, g.log, leafPage, metrics)
+}
+
+func (g *spanNativeLeafLogOutputGate) persistLeafPageDataForWorker(z *Zipper, workerIndex int, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	return g.persistLeafPageDataToLog(z, g.leafPageLogForWorker(z, workerIndex), leafPage, metrics)
+}
+
+func (g *spanNativeLeafLogOutputGate) persistLeafPageDataToLog(z *Zipper, log LeafPageLog, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	prepared := leafPageLogConsumesPreparedPayloads(log, false)
 	var payload []byte
 	var scratch []byte
 	if prepared {
@@ -82,26 +123,41 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageData(z *Zipper, leafPage []
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
 	}
 	if !prepared {
-		return z.persistLeafPageData(leafPage, metrics)
+		return z.persistLeafPageDataToLog(log, leafPage, metrics)
 	}
-	ref, err := z.persistPreparedLeafPageDataTo(leafPage, payload, metrics)
+	ref, err := z.persistPreparedLeafPageDataToLog(log, leafPage, payload, metrics)
 	releaseSpanNativeLeafLogPayloadScratch(scratch)
 	return ref, err
 }
 
 func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	return g.persistLeafPageBatchDataToForWorker(z, 0, leafPages, refs, metrics)
+}
+
+func (g *spanNativeLeafLogOutputLane) persistLeafPageBatchDataTo(z *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	if g == nil || g.gate == nil {
+		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
+	}
+	return g.gate.persistLeafPageBatchDataToLog(z, g.log, leafPages, refs, metrics)
+}
+
+func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataToForWorker(z *Zipper, workerIndex int, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
+	return g.persistLeafPageBatchDataToLog(z, g.leafPageLogForWorker(z, workerIndex), leafPages, refs, metrics)
+}
+
+func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataToLog(z *Zipper, log LeafPageLog, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error) {
 	refs = refs[:0]
 	if len(leafPages) == 0 {
 		return refs, nil
 	}
 	if len(leafPages) == 1 {
-		ref, err := g.persistLeafPageData(z, leafPages[0], metrics)
+		ref, err := g.persistLeafPageDataToLog(z, log, leafPages[0], metrics)
 		if err != nil {
 			return nil, err
 		}
 		return append(refs, ref), nil
 	}
-	prepared := z.leafPageLogConsumesPreparedPayloads(true)
+	prepared := leafPageLogConsumesPreparedPayloads(log, true)
 	var payloads [][]byte
 	if prepared {
 		var payloadInline [8][]byte
@@ -129,9 +185,9 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataTo(z *Zipper, leaf
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
 	}
 	if !prepared {
-		return z.persistLeafPageBatchDataTo(leafPages, refs, metrics)
+		return z.persistLeafPageBatchDataToLog(log, leafPages, refs, metrics)
 	}
-	return z.persistPreparedLeafPageBatchDataTo(leafPages, payloads, refs, metrics)
+	return z.persistPreparedLeafPageBatchDataToLog(log, leafPages, payloads, refs, metrics)
 }
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {
@@ -223,7 +279,12 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			rangeMetrics[job] = localMetrics
 			rangeRetired[job] = localRetired
 		}
-		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafLogOutput}
+		var leafPagePersister leafPagePersistSink = leafLogOutput
+		if leafLogOutput != nil && scheduledWorkers > 1 {
+			laneIndex := (job % scheduledWorkers) + 1
+			leafPagePersister = &spanNativeLeafLogOutputLane{gate: leafLogOutput, log: leafLogOutput.leafPageLogForWorker(z, laneIndex)}
+		}
+		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafPagePersister}
 		for i := workerRange.FirstSpan; i < end; i++ {
 			span := prepared.LeafSpans[i]
 			newRef, splits, err := z.writeRecursive(span.Ref, ops[span.PointOpStart:span.PointOpEnd], nil, false, nil, &localMetrics, span.LowKey, span.HighKey, &localRetired, workerScratch, false, workerApplyCfg)
