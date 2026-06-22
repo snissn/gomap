@@ -46,7 +46,7 @@ func TestFlushApplyStatsExposeLeafLogOutputLaneTaskDistribution(t *testing.T) {
 	for key, want := range map[string]uint64{
 		"treedb.flush_apply.leaf_log_output.lane.01.tasks_total":       2,
 		"treedb.flush_apply.leaf_log_output.lane.02.tasks_total":       3,
-		"treedb.flush_apply.leaf_log_output.lane.tasks_total":          5,
+		"treedb.flush_apply.leaf_log_output.lane.tasks_total":          6,
 		"treedb.flush_apply.leaf_log_output.lane.tasks_lanes_used":     2,
 		"treedb.flush_apply.leaf_log_output.lane.tasks_max":            3,
 		"treedb.flush_apply.leaf_log_output.lane.tasks_overflow_total": 1,

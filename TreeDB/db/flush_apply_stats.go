@@ -458,10 +458,11 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 		}
 		stats[fmt.Sprintf("treedb.flush_apply.leaf_log_output.lane.%02d.tasks_total", i)] = fmt.Sprintf("%d", tasks)
 	}
-	stats["treedb.flush_apply.leaf_log_output.lane.tasks_total"] = fmt.Sprintf("%d", laneTaskTotal)
+	laneTaskOverflow := db.flushApplyLeafLogOutputLaneTaskOverflow.Load()
+	stats["treedb.flush_apply.leaf_log_output.lane.tasks_total"] = fmt.Sprintf("%d", laneTaskTotal+laneTaskOverflow)
 	stats["treedb.flush_apply.leaf_log_output.lane.tasks_lanes_used"] = fmt.Sprintf("%d", laneTaskLanes)
 	stats["treedb.flush_apply.leaf_log_output.lane.tasks_max"] = fmt.Sprintf("%d", laneTaskMax)
-	stats["treedb.flush_apply.leaf_log_output.lane.tasks_overflow_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputLaneTaskOverflow.Load())
+	stats["treedb.flush_apply.leaf_log_output.lane.tasks_overflow_total"] = fmt.Sprintf("%d", laneTaskOverflow)
 	stats["treedb.flush_apply.prepared_output.leaf_log_pages_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesPrepared.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_bytes_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogBytesPrepared.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesInstalled.Load())
