@@ -59,6 +59,10 @@ type LeafPagePreparedBatchLog interface {
 	AppendPreparedLeafPages(leafPages [][]byte, preparedPayloads [][]byte) ([]page.LeafLogPtr, error)
 }
 
+type LeafPagePreparedChildRefBatchLog interface {
+	AppendPreparedLeafPageChildRefs(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error)
+}
+
 type LeafPageReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
@@ -1857,6 +1861,30 @@ func (z *Zipper) persistPreparedLeafPageBatchDataToLog(log LeafPageLog, leafPage
 	}
 	if len(preparedPayloads) != len(leafPages) {
 		return nil, fmt.Errorf("zipper: prepared leaf payload count %d for %d pages", len(preparedPayloads), len(leafPages))
+	}
+	if refBatcher, ok := log.(LeafPagePreparedChildRefBatchLog); ok {
+		appendStart := time.Now()
+		out, err := refBatcher.AppendPreparedLeafPageChildRefs(leafPages, preparedPayloads, refs)
+		appendWait := time.Since(appendStart)
+		if err != nil {
+			recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
+			return nil, err
+		}
+		if len(out) != len(leafPages) {
+			recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
+			return nil, fmt.Errorf("zipper: prepared leaf page child-ref batch returned %d refs for %d pages", len(out), len(leafPages))
+		}
+		for i, ref := range out {
+			if !ref.IsLeafLog() {
+				recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), false)
+				return nil, fmt.Errorf("zipper: prepared leaf page child-ref batch returned non-leaf-log ref at %d", i)
+			}
+		}
+		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), true)
+		for i, ref := range out {
+			z.cachePersistedLeafPage(ref.Log, leafPages[i])
+		}
+		return out, nil
 	}
 	preparedBatcher, ok := log.(LeafPagePreparedBatchLog)
 	if !ok {

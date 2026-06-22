@@ -1172,6 +1172,68 @@ func TestZipperMergeScratch_ConcurrentPendingLeafPageScratchReuse(t *testing.T) 
 	wg.Wait()
 }
 
+type childRefPreparedBatchTestLog struct {
+	called bool
+	next   uint64
+}
+
+func (l *childRefPreparedBatchTestLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return page.LeafLogPtr{}, fmt.Errorf("unexpected AppendLeafPage fallback")
+}
+
+func (l *childRefPreparedBatchTestLog) AppendPreparedLeafPageChildRefs(leafPages [][]byte, _ [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+	l.called = true
+	if cap(refs) < len(leafPages) {
+		refs = make([]page.ChildRef, len(leafPages))
+	} else {
+		refs = refs[:len(leafPages)]
+	}
+	if l.next == 0 {
+		l.next = 4
+	}
+	for i := range leafPages {
+		ptr := page.LeafLogPtr{FileID: 7, Offset: l.next, RecordLengthHint: page.PageSize, SubIndex: uint16(i)}
+		refs[i] = page.LeafLogChildRef(ptr)
+		l.next += page.PageSize + 32
+	}
+	return refs, nil
+}
+
+func TestPersistPreparedLeafPageBatchDataUsesChildRefBatcher(t *testing.T) {
+	z := New(nil, nil)
+	log := &childRefPreparedBatchTestLog{}
+	leafPages := [][]byte{
+		bytes.Repeat([]byte{'a'}, page.PageSize),
+		bytes.Repeat([]byte{'b'}, page.PageSize),
+		bytes.Repeat([]byte{'c'}, page.PageSize),
+	}
+	payloads := [][]byte{[]byte("payload-a"), []byte("payload-b"), []byte("payload-c")}
+	reusable := make([]page.ChildRef, 0, len(leafPages))
+	var metrics adaptive.Metrics
+
+	refs, err := z.persistPreparedLeafPageBatchDataToLog(log, leafPages, payloads, reusable, &metrics)
+	if err != nil {
+		t.Fatalf("persistPreparedLeafPageBatchDataToLog: %v", err)
+	}
+	if !log.called {
+		t.Fatalf("child-ref batch appender was not called")
+	}
+	if len(refs) != len(leafPages) {
+		t.Fatalf("refs len=%d want %d", len(refs), len(leafPages))
+	}
+	if cap(refs) != cap(reusable) {
+		t.Fatalf("refs cap=%d want reusable cap %d", cap(refs), cap(reusable))
+	}
+	for i, ref := range refs {
+		if !ref.IsLeafLog() || ref.Log.FileID != 7 || ref.Log.SubIndex != uint16(i) {
+			t.Fatalf("ref[%d]=%+v", i, ref)
+		}
+	}
+	if metrics.ZipperLeafLogOutputAppendCalls != 1 || metrics.ZipperLeafLogOutputAppendPages != len(leafPages) {
+		t.Fatalf("append metrics calls=%d pages=%d", metrics.ZipperLeafLogOutputAppendCalls, metrics.ZipperLeafLogOutputAppendPages)
+	}
+}
+
 type benchmarkLeafBatchLog struct {
 	next uint64
 	ptrs []page.LeafLogPtr

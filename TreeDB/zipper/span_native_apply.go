@@ -39,7 +39,25 @@ type spanNativeLeafLogOutputLane struct {
 	log  LeafPageLog
 }
 
-var spanNativeLeafLogPayloadScratchPool sync.Pool
+const spanNativeLeafLogPayloadArenaMaxCap = 16 << 20
+
+type spanNativeLeafLogPayloadScratch struct {
+	buf []byte
+}
+
+type spanNativeLeafLogPayloadArena struct {
+	buf []byte
+}
+
+type spanNativeLeafLogPayloadSlice struct {
+	items [][]byte
+}
+
+var (
+	spanNativeLeafLogPayloadScratchPool sync.Pool
+	spanNativeLeafLogPayloadArenaPool   sync.Pool
+	spanNativeLeafLogPayloadSlicePool   sync.Pool
+)
 
 func newSpanNativeLeafLogOutputGate(limit int) *spanNativeLeafLogOutputGate {
 	if limit <= 0 {
@@ -48,20 +66,100 @@ func newSpanNativeLeafLogOutputGate(limit int) *spanNativeLeafLogOutputGate {
 	return &spanNativeLeafLogOutputGate{sem: make(chan struct{}, limit)}
 }
 
-func acquireSpanNativeLeafLogPayloadScratch() []byte {
+func acquireSpanNativeLeafLogPayloadScratch() *spanNativeLeafLogPayloadScratch {
 	if v := spanNativeLeafLogPayloadScratchPool.Get(); v != nil {
-		if buf, ok := v.([]byte); ok && cap(buf) <= page.PageSize*2 {
-			return buf[:0]
+		if scratch, ok := v.(*spanNativeLeafLogPayloadScratch); ok && scratch != nil && cap(scratch.buf) <= page.PageSize*2 {
+			scratch.buf = scratch.buf[:0]
+			return scratch
 		}
 	}
-	return make([]byte, 0, page.PageSize)
+	return &spanNativeLeafLogPayloadScratch{buf: make([]byte, 0, page.PageSize)}
 }
 
-func releaseSpanNativeLeafLogPayloadScratch(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > page.PageSize*2 {
+func releaseSpanNativeLeafLogPayloadScratch(scratch *spanNativeLeafLogPayloadScratch) {
+	if scratch == nil || cap(scratch.buf) == 0 || cap(scratch.buf) > page.PageSize*2 {
 		return
 	}
-	spanNativeLeafLogPayloadScratchPool.Put(buf[:0])
+	scratch.buf = scratch.buf[:0]
+	spanNativeLeafLogPayloadScratchPool.Put(scratch)
+}
+
+func acquireSpanNativeLeafLogPayloadArena(need int) *spanNativeLeafLogPayloadArena {
+	if need < 0 {
+		need = 0
+	}
+	if need <= spanNativeLeafLogPayloadArenaMaxCap {
+		if v := spanNativeLeafLogPayloadArenaPool.Get(); v != nil {
+			if arena, ok := v.(*spanNativeLeafLogPayloadArena); ok && arena != nil && cap(arena.buf) >= need && cap(arena.buf) <= spanNativeLeafLogPayloadArenaMaxCap {
+				arena.buf = arena.buf[:0]
+				return arena
+			}
+		}
+	}
+	arena := &spanNativeLeafLogPayloadArena{}
+	if need > 0 {
+		arena.buf = make([]byte, 0, need)
+	}
+	return arena
+}
+
+func releaseSpanNativeLeafLogPayloadArena(arena *spanNativeLeafLogPayloadArena) {
+	if arena == nil || cap(arena.buf) > spanNativeLeafLogPayloadArenaMaxCap {
+		return
+	}
+	arena.buf = arena.buf[:0]
+	spanNativeLeafLogPayloadArenaPool.Put(arena)
+}
+
+func acquireSpanNativeLeafLogPayloadSlice(n int) *spanNativeLeafLogPayloadSlice {
+	if n <= 0 {
+		return &spanNativeLeafLogPayloadSlice{}
+	}
+	if v := spanNativeLeafLogPayloadSlicePool.Get(); v != nil {
+		if lease, ok := v.(*spanNativeLeafLogPayloadSlice); ok && lease != nil && cap(lease.items) >= n && cap(lease.items) <= 1<<20 {
+			lease.items = lease.items[:n]
+			return lease
+		}
+	}
+	return &spanNativeLeafLogPayloadSlice{items: make([][]byte, n)}
+}
+
+func releaseSpanNativeLeafLogPayloadSlice(lease *spanNativeLeafLogPayloadSlice) {
+	if lease == nil || cap(lease.items) == 0 || cap(lease.items) > 1<<20 {
+		return
+	}
+	clear(lease.items[:cap(lease.items)])
+	lease.items = lease.items[:0]
+	spanNativeLeafLogPayloadSlicePool.Put(lease)
+}
+
+func estimateSpanNativeLeafLogPayloadArenaCap(leafPages [][]byte) int {
+	if len(leafPages) == 0 {
+		return 0
+	}
+	samples := len(leafPages)
+	if samples > 8 {
+		samples = 8
+	}
+	compactSamples := 0
+	totalCompactLen := 0
+	for i := 0; i < samples; i++ {
+		compactLen, compacted := valuelog.MaybeCompactLeafLogPayloadLength(leafPages[i])
+		if !compacted {
+			continue
+		}
+		compactSamples++
+		totalCompactLen += compactLen
+	}
+	if compactSamples == 0 {
+		return 0
+	}
+	avgCompactLen := (totalCompactLen + compactSamples - 1) / compactSamples
+	maxCap := page.PageSize * len(leafPages)
+	if avgCompactLen > maxCap/len(leafPages) {
+		return maxCap
+	}
+	return avgCompactLen * len(leafPages)
 }
 
 func (g *spanNativeLeafLogOutputGate) selectedLeafPageLogForWorker(z *Zipper, workerIndex int) (LeafPageLog, bool) {
@@ -111,11 +209,11 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageDataForWorker(z *Zipper, wo
 func (g *spanNativeLeafLogOutputGate) persistLeafPageDataToLog(z *Zipper, log LeafPageLog, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
 	prepared := leafPageLogConsumesPreparedPayloads(log, false)
 	var payload []byte
-	var scratch []byte
+	var scratch *spanNativeLeafLogPayloadScratch
 	if prepared {
 		scratch = acquireSpanNativeLeafLogPayloadScratch()
 		var err error
-		payload, _, err = valuelog.MaybeCompactLeafLogPayloadTo(scratch[:0], leafPage)
+		payload, _, err = valuelog.MaybeCompactLeafLogPayloadTo(scratch.buf[:0], leafPage)
 		if err != nil {
 			releaseSpanNativeLeafLogPayloadScratch(scratch)
 			return page.ChildRef{}, err
@@ -167,35 +265,45 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataToLog(z *Zipper, l
 	}
 	prepared := leafPageLogConsumesPreparedPayloads(log, true)
 	var payloads [][]byte
+	var payloadSlice *spanNativeLeafLogPayloadArena
+	var payloadLease *spanNativeLeafLogPayloadSlice
 	if prepared {
-		var payloadInline [8][]byte
-		if len(leafPages) <= len(payloadInline) {
-			payloads = payloadInline[:len(leafPages)]
-		} else {
-			payloads = make([][]byte, len(leafPages))
-		}
-		var arena []byte
+		payloadLease = acquireSpanNativeLeafLogPayloadSlice(len(leafPages))
+		payloads = payloadLease.items
+		payloadSlice = acquireSpanNativeLeafLogPayloadArena(estimateSpanNativeLeafLogPayloadArenaCap(leafPages))
 		for i, leafPage := range leafPages {
 			var err error
-			arena, payloads[i], _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(arena, leafPage)
+			payloadSlice.buf, payloads[i], _, err = valuelog.MaybeAppendCompactLeafLogPayloadTo(payloadSlice.buf, leafPage)
 			if err != nil {
+				releaseSpanNativeLeafLogPayloadSlice(payloadLease)
+				releaseSpanNativeLeafLogPayloadArena(payloadSlice)
 				return nil, err
 			}
 		}
 	}
 	waitStart := time.Now()
+	acquiredSemaphore := false
 	if g != nil && g.sem != nil {
 		g.sem <- struct{}{}
-		defer func() { <-g.sem }()
+		acquiredSemaphore = true
 	}
 	reservationWait := time.Since(waitStart)
 	if metrics != nil && reservationWait > 0 {
 		metrics.ZipperLeafLogOutputReservationWaitNs += reservationWait.Nanoseconds()
 	}
-	if !prepared {
-		return z.persistLeafPageBatchDataToLog(log, leafPages, refs, metrics)
+	var out []page.ChildRef
+	var err error
+	if prepared {
+		out, err = z.persistPreparedLeafPageBatchDataToLog(log, leafPages, payloads, refs, metrics)
+	} else {
+		out, err = z.persistLeafPageBatchDataToLog(log, leafPages, refs, metrics)
 	}
-	return z.persistPreparedLeafPageBatchDataToLog(log, leafPages, payloads, refs, metrics)
+	if acquiredSemaphore {
+		<-g.sem
+	}
+	releaseSpanNativeLeafLogPayloadSlice(payloadLease)
+	releaseSpanNativeLeafLogPayloadArena(payloadSlice)
+	return out, err
 }
 
 func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {

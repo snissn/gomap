@@ -24,16 +24,35 @@ func MaybeCompactLeafLogPayload(leafPage []byte) ([]byte, bool, error) {
 	return MaybeCompactLeafLogPayloadTo(nil, leafPage)
 }
 
-func MaybeCompactLeafLogPayloadTo(dst, leafPage []byte) ([]byte, bool, error) {
+// MaybeCompactLeafLogPayloadLength returns the compact payload length that the
+// MaybeCompact* helpers would produce for leafPage, without materializing the
+// payload. A false compacted result means callers should use leafPage as-is.
+func MaybeCompactLeafLogPayloadLength(leafPage []byte) (compactLen int, compacted bool) {
+	_, _, compactLen, compacted = compactLeafLogPayloadShape(leafPage)
+	if !compacted {
+		return len(leafPage), false
+	}
+	return compactLen, true
+}
+
+func compactLeafLogPayloadShape(leafPage []byte) (prefixLen, suffixLen, compactLen int, compacted bool) {
 	if len(leafPage) != page.PageSize {
-		return leafPage, false, nil
+		return 0, 0, 0, false
 	}
 	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leafPage)
 	if err != nil {
-		return leafPage, false, nil
+		return 0, 0, 0, false
 	}
-	compactLen := compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
+	compactLen = compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
 	if compactLen >= len(leafPage) {
+		return 0, 0, 0, false
+	}
+	return prefixLen, suffixLen, compactLen, true
+}
+
+func MaybeCompactLeafLogPayloadTo(dst, leafPage []byte) ([]byte, bool, error) {
+	prefixLen, suffixLen, compactLen, compacted := compactLeafLogPayloadShape(leafPage)
+	if !compacted {
 		return leafPage, false, nil
 	}
 
@@ -57,15 +76,8 @@ func MaybeCompactLeafLogPayloadTo(dst, leafPage []byte) ([]byte, bool, error) {
 }
 
 func MaybeAppendCompactLeafLogPayloadTo(dst, leafPage []byte) ([]byte, []byte, bool, error) {
-	if len(leafPage) != page.PageSize {
-		return dst, leafPage, false, nil
-	}
-	prefixLen, suffixLen, err := node.LeafPageLiveBounds(leafPage)
-	if err != nil {
-		return dst, leafPage, false, nil
-	}
-	compactLen := compactLeafPagePayloadHeaderSize + prefixLen + suffixLen
-	if compactLen >= len(leafPage) {
+	prefixLen, suffixLen, compactLen, compacted := compactLeafLogPayloadShape(leafPage)
+	if !compacted {
 		return dst, leafPage, false, nil
 	}
 

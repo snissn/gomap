@@ -117,12 +117,16 @@ func requireLeafPagesLogicallyEqual(t *testing.T, want, got []byte) {
 func TestMaybeCompactLeafLogPayload_SparseLeafRoundTrips(t *testing.T) {
 	leaf := buildSparseLeafPageForPayloadTest(t)
 
+	payloadLen, payloadLenCompacted := MaybeCompactLeafLogPayloadLength(leaf)
 	payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
 	if err != nil {
 		t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
 	}
 	if !compacted {
 		t.Fatalf("expected sparse leaf page to compact")
+	}
+	if !payloadLenCompacted || payloadLen != len(payload) {
+		t.Fatalf("payload length estimate=(%d,%v) want (%d,true)", payloadLen, payloadLenCompacted, len(payload))
 	}
 	if len(payload) >= len(leaf) {
 		t.Fatalf("payload len=%d want < %d", len(payload), len(leaf))
