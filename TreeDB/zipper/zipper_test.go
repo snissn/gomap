@@ -1300,6 +1300,11 @@ func requireChildRefPreparedBatchTestRefs(t *testing.T, refs []page.ChildRef, le
 	if cap(refs) != cap(reusable) {
 		t.Fatalf("refs cap=%d want reusable cap %d", cap(refs), cap(reusable))
 	}
+	if len(refs) > 0 && cap(reusable) > 0 {
+		if &refs[:cap(refs)][0] != &reusable[:cap(reusable)][0] {
+			t.Fatalf("refs did not reuse reusable backing array")
+		}
+	}
 	for i, ref := range refs {
 		if !ref.IsLeafLog() || ref.Log.FileID != 7 || ref.Log.SubIndex != uint16(i) {
 			t.Fatalf("ref[%d]=%+v", i, ref)
