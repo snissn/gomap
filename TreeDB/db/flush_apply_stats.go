@@ -230,9 +230,11 @@ func (db *DB) observeFlushApplyMetrics(metrics adaptive.Metrics, applyWall time.
 	addInt64Metric(&db.flushApplyLeafLogOutputAppendWaitNs, metrics.ZipperLeafLogOutputAppendWaitNs)
 	addIntMetric(&db.flushApplyLeafLogOutputAppendCalls, metrics.ZipperLeafLogOutputAppendCalls)
 	addIntMetric(&db.flushApplyLeafLogOutputAppendPages, metrics.ZipperLeafLogOutputAppendPages)
-	for i, tasks := range metrics.ZipperLeafLogOutputLaneTasks {
-		if tasks > 0 {
-			db.flushApplyLeafLogOutputLaneTasks[i].Add(tasks)
+	if metrics.ZipperLeafLogOutputLaneTaskTotal > 0 {
+		for i, tasks := range metrics.ZipperLeafLogOutputLaneTasks {
+			if tasks > 0 {
+				db.flushApplyLeafLogOutputLaneTasks[i].Add(tasks)
+			}
 		}
 	}
 	if metrics.ZipperLeafLogOutputLaneTaskOverflow > 0 {
