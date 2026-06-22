@@ -2094,6 +2094,7 @@ func (db *DB) Close() error {
 	// Wait for active apply attempts before closing the reusable flush/apply
 	// worker pool and tearing down index resources.
 	db.writeMu.Lock()
+	leafPageLog := db.leafPageLog
 	if db.flushApplyWorkerPool != nil {
 		db.flushApplyWorkerPool.Close()
 		db.flushApplyWorkerPool = nil
@@ -2133,6 +2134,11 @@ func (db *DB) Close() error {
 	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
+	}
+	if group, ok := leafPageLog.(*leafPageLogLaneGroup); ok {
+		if err := group.CloseSelectedLanes(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if vm != nil {
 		if err := vm.Close(); err != nil {

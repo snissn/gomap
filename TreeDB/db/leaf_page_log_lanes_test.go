@@ -183,6 +183,20 @@ func openLeafPageLogLaneTestDB(t *testing.T) (*DB, LeafPageLogCloser) {
 	return db, leafLog
 }
 
+func TestLeafPageLogLaneGroupAdvertisesConcurrentAppends(t *testing.T) {
+	db, leafLog := openLeafPageLogLaneTestDB(t)
+	defer func() { _ = leafLog.Close() }()
+	defer func() { _ = db.Close() }()
+
+	concurrent, ok := db.leafPageLog.(LeafPageConcurrentAppendLog)
+	if !ok {
+		t.Fatalf("leaf log %T missing concurrent append marker", db.leafPageLog)
+	}
+	if !concurrent.ConcurrentLeafPageAppends() {
+		t.Fatalf("ConcurrentLeafPageAppends=false for %T", db.leafPageLog)
+	}
+}
+
 func TestLeafPageLogLaneSelectionAppendsUniqueReadablePtrs(t *testing.T) {
 	db, _ := openLeafPageLogLaneTestDB(t)
 
