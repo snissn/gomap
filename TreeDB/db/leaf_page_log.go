@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -63,6 +64,16 @@ type LeafPageLogSegment struct {
 type LeafPageLogCreatedSegmentProvider interface {
 	CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error)
 }
+
+// LeafPageLogLaneProvider optionally exposes additional lane-specific leaf-page
+// log appenders for concurrent writers.
+type LeafPageLogLaneProvider interface {
+	LeafPageLogLane(workerIndex int) (LeafPageLog, bool)
+}
+
+// leafPageLogLaneProvider is retained for internal callers that still use the
+// unexported name.
+type leafPageLogLaneProvider = LeafPageLogLaneProvider
 
 // LeafPageLogCurrentSegmentProvider optionally reports every currently tracked
 // leaf-log segment. Implementations may return multiple current segments while
@@ -271,6 +282,24 @@ func (l *leafPageLogWithRecordLengthHints) CurrentLeafPageLogSegmentsSnapshot() 
 	return leafPageLogCurrentSegments(l.inner)
 }
 
+func (l *leafPageLogWithRecordLengthHints) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	if l == nil || l.inner == nil {
+		return nil, false
+	}
+	provider, ok := l.inner.(LeafPageLogLaneProvider)
+	if !ok {
+		if workerIndex <= 0 {
+			return l, true
+		}
+		return nil, false
+	}
+	lane, ok := provider.LeafPageLogLane(workerIndex)
+	if !ok || lane == nil {
+		return nil, false
+	}
+	return wrapLeafPageLogWithRecordLengthHints(l.db, lane), true
+}
+
 func (l *leafPageLogWithRecordLengthHints) ProtectedLeafGenerationRootIDs() []uint64 {
 	if l == nil || l.inner == nil {
 		return nil
@@ -462,7 +491,7 @@ func (db *DB) SetLeafPageLog(log LeafPageLog) {
 	if db == nil {
 		return
 	}
-	wrapped := wrapLeafPageLogWithRecordLengthHints(db, log)
+	wrapped := wrapLeafPageLogWithLaneSelection(wrapLeafPageLogWithRecordLengthHints(db, log))
 	db.writeMu.Lock()
 	db.leafPageLog = wrapped
 	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
@@ -471,11 +500,42 @@ func (db *DB) SetLeafPageLog(log LeafPageLog) {
 	db.writeMu.Unlock()
 }
 
+func (db *DB) leafValueLogLanes() []LeafPageLog {
+	if db == nil || db.leafPageLog == nil {
+		return nil
+	}
+	if provider, ok := db.leafPageLog.(interface{ leafValueLogLanes() []LeafPageLog }); ok {
+		return provider.leafValueLogLanes()
+	}
+	return []LeafPageLog{db.leafPageLog}
+}
+
+func (db *DB) leafPageLogLaneForWorkerIndex(workerIndex int) (LeafPageLog, bool) {
+	if db == nil || db.leafPageLog == nil {
+		return nil, false
+	}
+	if provider, ok := db.leafPageLog.(LeafPageLogLaneProvider); ok {
+		return provider.LeafPageLogLane(workerIndex)
+	}
+	if workerIndex <= 0 {
+		return db.leafPageLog, true
+	}
+	return nil, false
+}
+
 // RegisterValueLogSegment registers a newly created value-log segment with the
 // backend read manager without scanning the filesystem. Cached mode uses this
 // when it rotates the shared value log so outer-leaf commits can publish a
 // current ValueLogSet via CurrentSetNoRefresh.
 func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
+	return db.RegisterValueLogSegmentReplacing(path, fileID, 0)
+}
+
+// RegisterValueLogSegmentReplacing registers a newly created value-log segment
+// and marks it as current writable, sealing previousFileID when it is the prior
+// segment for the same physical writer. Cached leaf-log lanes use this because
+// multiple physical writers share the reserved encoded leaf-log lane id.
+func (db *DB) RegisterValueLogSegmentReplacing(path string, fileID, previousFileID uint32) error {
 	if db == nil {
 		return nil
 	}
@@ -488,7 +548,7 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 	if err := db.valueLogManager.RegisterSegment(path, fileID); err != nil {
 		return err
 	}
-	if err := db.valueLogManager.PromoteCurrentWritable(fileID); err != nil {
+	if err := db.valueLogManager.PromoteCurrentWritableReplacing(fileID, previousFileID); err != nil {
 		return err
 	}
 	if db.isLeafGenerationSegmentPath(path) {
@@ -541,6 +601,15 @@ func (db *DB) registerLeafPageLogSegmentsForPublish() (bool, error) {
 		registeredSegments = append(registeredSegments, seg)
 		if db.isLeafGenerationSegmentPath(seg.Path) {
 			db.queueLeafGenerationWritableFileID(seg.FileID)
+		}
+	}
+	for _, id := range db.valueLogManager.CurrentWritableFileIDs() {
+		lane, _ := valuelog.DecodeFileID(id)
+		if lane != valuelog.ReservedLeafLogLaneID {
+			continue
+		}
+		if _, current := currentByID[id]; !current {
+			db.valueLogManager.DemoteCurrentWritable(id)
 		}
 	}
 	if len(createdSegments) > 0 {

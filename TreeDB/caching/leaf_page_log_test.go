@@ -3,9 +3,11 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -167,6 +169,52 @@ func TestDB_NoteLeafGenerationRecordLength_ForwardsToBackend(t *testing.T) {
 	if got := stub.notified[0]; got != ptr {
 		t.Fatalf("notified ptr=%+v want %+v", got, ptr)
 	}
+}
+
+type capturingLeafLogBackend struct {
+	BackendDB
+	leafLog backenddb.LeafPageLog
+}
+
+func (b *capturingLeafLogBackend) SetLeafPageLog(log backenddb.LeafPageLog) {
+	b.leafLog = log
+	if setter, ok := any(b.BackendDB).(interface{ SetLeafPageLog(backenddb.LeafPageLog) }); ok {
+		setter.SetLeafPageLog(log)
+	}
+}
+
+func openCachingLeafPageLogLaneTestDB(t *testing.T) (*DB, *capturingLeafLogBackend, string) {
+	t.Helper()
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	captured := &capturingLeafLogBackend{BackendDB: backend}
+	db, err := Open(dir, captured, Options{
+		IndexOuterLeavesInValueLog: true,
+		FlushApplyConcurrency:      2,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		_ = captured.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	if captured.leafLog == nil {
+		_ = db.Close()
+		t.Fatal("leaf log was not installed on backend")
+	}
+	return db, captured, dir
+}
+
+func testLeafPageBytes(label string) []byte {
+	buf := bytes.Repeat([]byte{0}, page.PageSize)
+	copy(buf, label)
+	return buf
 }
 
 func TestCompactLeafLogPayloadScratchPtrRefClearedForPooling(t *testing.T) {
@@ -331,5 +379,408 @@ func TestCachingLeafPageLog_AppendLeafPageCompactsSparseLeafPayload(t *testing.T
 	}
 	if info.Size() >= int64(valuelog.HeaderSize+page.PageSize) {
 		t.Fatalf("file size=%d want compact leaf payload smaller than raw %d", info.Size(), valuelog.HeaderSize+page.PageSize)
+	}
+}
+
+func TestCachingLeafPageLogLaneSelectionAppendsUniqueReadablePtrs(t *testing.T) {
+	db, captured, dir := openCachingLeafPageLogLaneTestDB(t)
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	defaultPage := testLeafPageBytes("lane-0-default")
+	defaultPtr, err := captured.leafLog.AppendLeafPage(defaultPage)
+	if err != nil {
+		t.Fatalf("default AppendLeafPage: %v", err)
+	}
+	if got := len(db.leafLogAppendLanesSnapshot()); got != 1 {
+		t.Fatalf("default append created %d leaf lanes, want 1", got)
+	}
+
+	const extraLanes = 3
+	type laneResult struct {
+		lane int
+		ptr  page.LeafLogPtr
+		want []byte
+	}
+	results := make(chan laneResult, extraLanes)
+	var wg sync.WaitGroup
+	for lane := 1; lane <= extraLanes; lane++ {
+		lane := lane
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			appender, ok := provider.LeafPageLogLane(lane)
+			if !ok || appender == nil {
+				t.Errorf("LeafPageLogLane(%d) unavailable", lane)
+				return
+			}
+			want := testLeafPageBytes(fmt.Sprintf("lane-%d", lane))
+			ptr, err := appender.AppendLeafPage(want)
+			if err != nil {
+				t.Errorf("lane %d AppendLeafPage: %v", lane, err)
+				return
+			}
+			results <- laneResult{lane: lane, ptr: ptr, want: want}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	checks := []laneResult{{lane: 0, ptr: defaultPtr, want: defaultPage}}
+	for res := range results {
+		checks = append(checks, res)
+	}
+	if len(checks) != extraLanes+1 {
+		t.Fatalf("got %d appended pages, want %d", len(checks), extraLanes+1)
+	}
+	seen := map[uint32]struct{}{}
+	for _, res := range checks {
+		fileID := res.ptr.ValuePtr().FileID
+		laneID, seq := valuelog.DecodeFileID(fileID)
+		if laneID != leafLogLaneID {
+			t.Fatalf("lane %d fileID lane=%d want=%d (fileID=%d seq=%d)", res.lane, laneID, leafLogLaneID, fileID, seq)
+		}
+		if _, ok := seen[fileID]; ok {
+			t.Fatalf("duplicate leaf log fileID %d", fileID)
+		}
+		seen[fileID] = struct{}{}
+	}
+	if got := len(db.leafLogAppendLanesSnapshot()); got != extraLanes+1 {
+		t.Fatalf("lane snapshot len=%d want %d", got, extraLanes+1)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close cached db: %v", err)
+	}
+	backend2, err := backenddb.Open(backenddb.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("reopen backend: %v", err)
+	}
+	reopened, err := Open(dir, backend2, Options{
+		IndexOuterLeavesInValueLog: true,
+		FlushApplyConcurrency:      2,
+		RelaxedSync:                true,
+		AllowUnsafe:                true,
+	})
+	if err != nil {
+		_ = backend2.Close()
+		t.Fatalf("reopen cache: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	for _, res := range checks {
+		got, err := reopened.ReadValueLogRecord(res.ptr.ValuePtr())
+		if err != nil {
+			t.Fatalf("reopen read lane %d: %v", res.lane, err)
+		}
+		if !bytes.Equal(got, res.want) {
+			t.Fatalf("reopen read lane %d mismatch", res.lane)
+		}
+	}
+}
+
+func TestCachingLeafPageLogLaneProviderFlushesSelectedLaneForLiveRead(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	defer func() { _ = db.Close() }()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	defaultPage := testLeafPageBytes("live-default")
+	defaultPtr, err := captured.leafLog.AppendLeafPage(defaultPage)
+	if err != nil {
+		t.Fatalf("default AppendLeafPage: %v", err)
+	}
+	lane1, ok := provider.LeafPageLogLane(1)
+	if !ok || lane1 == nil {
+		t.Fatal("LeafPageLogLane(1) unavailable")
+	}
+	lanePage := testLeafPageBytes("live-lane-1")
+	lanePtr, err := lane1.AppendLeafPage(lanePage)
+	if err != nil {
+		t.Fatalf("lane 1 AppendLeafPage: %v", err)
+	}
+
+	currentIDs := db.valueLogReader.CurrentWritableFileIDs()
+	current := make(map[uint32]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		current[id] = struct{}{}
+	}
+	for _, ptr := range []page.LeafLogPtr{defaultPtr, lanePtr} {
+		fileID := ptr.ValuePtr().FileID
+		if _, ok := current[fileID]; !ok {
+			t.Fatalf("current writable ids %v missing %d", currentIDs, fileID)
+		}
+	}
+	var readBarrierFlushes atomic.Int32
+	db.testOnVlogFlush = func(laneID int) {
+		if laneID == leafLogLaneID {
+			readBarrierFlushes.Add(1)
+		}
+	}
+	got, err := db.valueLogReader.Read(lanePtr.ValuePtr())
+	if err != nil {
+		t.Fatalf("live read selected lane: %v", err)
+	}
+	if !bytes.Equal(got, lanePage) {
+		t.Fatalf("live read selected lane mismatch")
+	}
+	if readBarrierFlushes.Load() == 0 {
+		t.Fatalf("live read selected lane did not flush through current-writable barrier")
+	}
+}
+
+func TestCachingLeafPageLogLaneLiveReadIgnoresInactiveSameSeqLane(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	defer func() { _ = db.Close() }()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	lane2, ok := provider.LeafPageLogLane(2)
+	if !ok || lane2 == nil {
+		t.Fatal("LeafPageLogLane(2) unavailable")
+	}
+	lanePage := testLeafPageBytes("live-lane-2")
+	lanePtr, err := lane2.AppendLeafPage(lanePage)
+	if err != nil {
+		t.Fatalf("lane 2 AppendLeafPage: %v", err)
+	}
+	lane1, ok := provider.LeafPageLogLane(1)
+	if !ok || lane1 == nil {
+		t.Fatal("LeafPageLogLane(1) unavailable")
+	}
+	_ = lane1
+
+	var readBarrierFlushes atomic.Int32
+	db.testOnVlogFlush = func(laneID int) {
+		if laneID == leafLogLaneID {
+			readBarrierFlushes.Add(1)
+		}
+	}
+	got, err := db.valueLogReader.Read(lanePtr.ValuePtr())
+	if err != nil {
+		t.Fatalf("live read selected lane with inactive same-seq lane: %v", err)
+	}
+	if !bytes.Equal(got, lanePage) {
+		t.Fatalf("live read selected lane with inactive same-seq lane mismatch")
+	}
+	if readBarrierFlushes.Load() == 0 {
+		t.Fatalf("live read selected lane did not flush active same-seq writer")
+	}
+}
+
+func TestCachingLeafPageLogLaneMaintenanceAdvanceUsesUniqueSequences(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	defer func() { _ = db.Close() }()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	appenders := []backenddb.LeafPageLog{captured.leafLog}
+	for worker := 1; worker <= 2; worker++ {
+		appender, ok := provider.LeafPageLogLane(worker)
+		if !ok || appender == nil {
+			t.Fatalf("LeafPageLogLane(%d) unavailable", worker)
+		}
+		appenders = append(appenders, appender)
+	}
+	for i, appender := range appenders {
+		if _, err := appender.AppendLeafPage(testLeafPageBytes(fmt.Sprintf("advance-%d", i))); err != nil {
+			t.Fatalf("AppendLeafPage lane %d: %v", i, err)
+		}
+	}
+	lanes := db.leafLogAppendLanesSnapshot()
+	oldIDs := make(map[uint32]struct{}, len(lanes))
+	maxSeq := 0
+	for _, l := range lanes {
+		if l == nil || l.vlogSeq == 0 {
+			continue
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if err != nil {
+			t.Fatalf("EncodeFileID old seq %d: %v", l.vlogSeq, err)
+		}
+		oldIDs[fileID] = struct{}{}
+		if l.vlogSeq > maxSeq {
+			maxSeq = l.vlogSeq
+		}
+	}
+	observedMaxSeq := maxSeq + 10
+	db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
+	for _, l := range lanes {
+		if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+			t.Fatalf("advanceLeafLogAppendWriterPastObservedSeq: %v", err)
+		}
+	}
+	seenSeq := make(map[int]struct{}, len(lanes))
+	for _, l := range lanes {
+		if l == nil {
+			continue
+		}
+		if l.vlogSeq <= observedMaxSeq {
+			t.Fatalf("lane seq=%d want > observed %d", l.vlogSeq, observedMaxSeq)
+		}
+		if _, dup := seenSeq[l.vlogSeq]; dup {
+			t.Fatalf("duplicate advanced leaf seq %d", l.vlogSeq)
+		}
+		seenSeq[l.vlogSeq] = struct{}{}
+	}
+	currentIDs := db.valueLogReader.CurrentWritableFileIDs()
+	current := make(map[uint32]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		current[id] = struct{}{}
+	}
+	for oldID := range oldIDs {
+		if _, stillCurrent := current[oldID]; stillCurrent {
+			t.Fatalf("old leaf segment %d still current after rotation; current=%v", oldID, currentIDs)
+		}
+	}
+	for _, l := range lanes {
+		fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if err != nil {
+			t.Fatalf("EncodeFileID new seq %d: %v", l.vlogSeq, err)
+		}
+		if _, ok := current[fileID]; !ok {
+			t.Fatalf("current writable ids %v missing advanced file %d", currentIDs, fileID)
+		}
+	}
+}
+
+func TestCachingLeafPageLogLaneSnapshotsAggregateAndMarkPerLane(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	defer func() { _ = db.Close() }()
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	createdProvider, ok := captured.leafLog.(backenddb.LeafPageLogCreatedSegmentProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing created snapshot provider")
+	}
+	currentProvider, ok := captured.leafLog.(backenddb.LeafPageLogCurrentSegmentProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing current snapshot provider")
+	}
+	observer, ok := captured.leafLog.(backenddb.LeafPageLogSegmentRegistrationObserver)
+	if !ok {
+		t.Fatal("captured leaf log missing registration observer")
+	}
+
+	appenders := []backenddb.LeafPageLog{captured.leafLog}
+	for lane := 1; lane <= 2; lane++ {
+		appender, ok := provider.LeafPageLogLane(lane)
+		if !ok || appender == nil {
+			t.Fatalf("LeafPageLogLane(%d) unavailable", lane)
+		}
+		appenders = append(appenders, appender)
+	}
+	for i, appender := range appenders {
+		if _, err := appender.AppendLeafPage(testLeafPageBytes(fmt.Sprintf("snapshot-%d", i))); err != nil {
+			t.Fatalf("AppendLeafPage lane %d: %v", i, err)
+		}
+	}
+
+	created, err := createdProvider.CreatedLeafPageLogSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("CreatedLeafPageLogSegmentsSnapshot: %v", err)
+	}
+	if len(created) != len(appenders) {
+		t.Fatalf("created segments=%d want %d", len(created), len(appenders))
+	}
+	current, err := currentProvider.CurrentLeafPageLogSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("CurrentLeafPageLogSegmentsSnapshot: %v", err)
+	}
+	if len(current) != len(appenders) {
+		t.Fatalf("current segments=%d want %d", len(current), len(appenders))
+	}
+
+	observer.MarkLeafPageLogSegmentsRegistered(created[:1])
+	afterFirstMark, err := createdProvider.CreatedLeafPageLogSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("CreatedLeafPageLogSegmentsSnapshot after first mark: %v", err)
+	}
+	if len(afterFirstMark) != len(appenders)-1 {
+		t.Fatalf("created segments after first mark=%d want %d", len(afterFirstMark), len(appenders)-1)
+	}
+	currentAfterMark, err := currentProvider.CurrentLeafPageLogSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("CurrentLeafPageLogSegmentsSnapshot after first mark: %v", err)
+	}
+	if len(currentAfterMark) != len(appenders) {
+		t.Fatalf("current segments after mark=%d want %d", len(currentAfterMark), len(appenders))
+	}
+	observer.MarkLeafPageLogSegmentsRegistered(afterFirstMark)
+	finalCreated, err := createdProvider.CreatedLeafPageLogSegmentsSnapshot()
+	if err != nil {
+		t.Fatalf("CreatedLeafPageLogSegmentsSnapshot after final mark: %v", err)
+	}
+	if len(finalCreated) != 0 {
+		t.Fatalf("created segments after final mark=%d want 0", len(finalCreated))
+	}
+}
+
+func TestCachingLeafPageLogLanes_FlushSyncCloseTouchAllLanes(t *testing.T) {
+	db, captured, _ := openCachingLeafPageLogLaneTestDB(t)
+	provider, ok := captured.leafLog.(backenddb.LeafPageLogLaneProvider)
+	if !ok {
+		t.Fatal("captured leaf log missing lane provider")
+	}
+	closer, ok := captured.leafLog.(interface{ Close() error })
+	if !ok {
+		t.Fatal("captured leaf log missing close")
+	}
+	appenders := []backenddb.LeafPageLog{captured.leafLog}
+	for lane := 1; lane <= 2; lane++ {
+		appender, ok := provider.LeafPageLogLane(lane)
+		if !ok || appender == nil {
+			t.Fatalf("LeafPageLogLane(%d) unavailable", lane)
+		}
+		appenders = append(appenders, appender)
+	}
+	for i, appender := range appenders {
+		if _, err := appender.AppendLeafPage(testLeafPageBytes(fmt.Sprintf("touch-%d", i))); err != nil {
+			t.Fatalf("AppendLeafPage lane %d: %v", i, err)
+		}
+	}
+	var flushCalls atomic.Int32
+	var syncCalls atomic.Int32
+	db.testOnVlogFlush = func(laneID int) {
+		flushCalls.Add(1)
+	}
+	db.testOnVlogSync = func(laneID int) {
+		syncCalls.Add(1)
+	}
+	if err := captured.leafLog.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if got := flushCalls.Load(); got != int32(len(appenders)) {
+		t.Fatalf("flush count=%d want %d", got, len(appenders))
+	}
+	db.relaxedSync = false
+	if err := captured.leafLog.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got := syncCalls.Load(); got != int32(len(appenders)) {
+		t.Fatalf("sync count=%d want %d", got, len(appenders))
+	}
+	if err := closer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	for i, lane := range db.leafLogAppendLanesSnapshot() {
+		if lane == nil {
+			continue
+		}
+		if lane.vlog != nil {
+			t.Fatalf("lane %d still has an open writer", i)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db Close: %v", err)
 	}
 }

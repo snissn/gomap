@@ -35,6 +35,29 @@ func TestMaxValueLogRIDFromSegmentsScansLatestSegmentPerLane(t *testing.T) {
 	}
 }
 
+func TestMaxValueLogRIDFromSegmentsScansAllLeafLogSegments(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	leafSeq1 := writeRIDValueLogSegment(t, dir, leafLogLaneID, 1, 99)
+	leafSeq2 := writeRIDValueLogSegment(t, dir, leafLogLaneID, 2, 11)
+	lane0Tail := writeRIDValueLogSegment(t, dir, 0, 1, 22)
+
+	segments := []logSegmentInfo{
+		{path: leafSeq1, size: fileSize(t, leafSeq1), seq: 1, lane: leafLogLaneID, valueLog: true},
+		{path: leafSeq2, size: fileSize(t, leafSeq2), seq: 2, lane: leafLogLaneID, valueLog: true},
+		{path: lane0Tail, size: fileSize(t, lane0Tail), seq: 1, lane: 0, valueLog: true},
+	}
+
+	maxRID, err := maxValueLogRIDFromSegments(segments)
+	if err != nil {
+		t.Fatalf("maxValueLogRIDFromSegments: %v", err)
+	}
+	if maxRID != 99 {
+		t.Fatalf("maxRID=%d want 99 from older leaf-log physical writer", maxRID)
+	}
+}
+
 func TestMaxValueLogRIDFromSegments_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 	t.Parallel()
 

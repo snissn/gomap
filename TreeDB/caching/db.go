@@ -2791,7 +2791,7 @@ func (db *DB) valueLogDirForLane(l *lane) string {
 	if db == nil {
 		return ""
 	}
-	if l != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID && db.leafLogDir != "" {
+	if db.isLeafLogAppendLane(l) && db.leafLogDir != "" {
 		return db.leafLogDir
 	}
 	return db.valueLogDir
@@ -2807,6 +2807,163 @@ func (db *DB) valueLogLaneByID(laneID int) *lane {
 	if laneID == leafLogLaneID && db.indexOuterLeavesInValueLog {
 		return &db.leafLog
 	}
+	return nil
+}
+
+func (db *DB) valueLogLaneForFileID(fileID uint32) *lane {
+	if db == nil || fileID == 0 {
+		return nil
+	}
+	laneID, seq := valuelog.DecodeFileID(fileID)
+	if laneID != leafLogLaneID || !db.indexOuterLeavesInValueLog {
+		return db.valueLogLaneByID(int(laneID))
+	}
+	for _, l := range db.leafLogAppendLanesSnapshot() {
+		if l == nil {
+			continue
+		}
+		l.vlogMu.Lock()
+		matches := l.vlogSeq == int(seq) && (l.vlogPath != "" || l.vlog != nil)
+		l.vlogMu.Unlock()
+		if matches {
+			return l
+		}
+	}
+	return nil
+}
+
+func (db *DB) isLeafLogAppendLane(l *lane) bool {
+	if db == nil || !db.indexOuterLeavesInValueLog || l == nil || l.id != leafLogLaneID {
+		return false
+	}
+	if l == &db.leafLog {
+		return true
+	}
+	db.leafLogAppendMu.RLock()
+	defer db.leafLogAppendMu.RUnlock()
+	for _, lane := range db.leafLogAppendLanes {
+		if lane == l {
+			return true
+		}
+	}
+	return false
+}
+
+func (db *DB) leafLogAppendCompressionSelector() *vlogCompressionSelector {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	seedCodec := db.valueLogBlockCodec
+	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput {
+		seedCodec = valuelog.BlockCodecLZ4
+	}
+	return newVlogCompressionSelectorWithSeed(
+		normalizeVlogAutoPolicy(db.valueLogAutoPolicy),
+		uint64(db.valueLogIncompressibleHold),
+		uint64(db.valueLogIncompressibleProbe),
+		seedCodec,
+	)
+}
+
+func (db *DB) initLeafLogAppendState(maxLeafVlogSeq int) {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return
+	}
+	db.leafLogAppendMu.Lock()
+	defer db.leafLogAppendMu.Unlock()
+	db.leafLogAppendSeq.Store(uint32(maxLeafVlogSeq))
+	db.leafLogAppendLanes = []*lane{&db.leafLog}
+}
+
+func (db *DB) leafLogAppendLanesSnapshot() []*lane {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	db.leafLogAppendMu.RLock()
+	defer db.leafLogAppendMu.RUnlock()
+	if len(db.leafLogAppendLanes) == 0 {
+		return []*lane{&db.leafLog}
+	}
+	return append([]*lane(nil), db.leafLogAppendLanes...)
+}
+
+func (db *DB) leafLogAppendLaneForWorkerIndex(workerIndex int) *lane {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	if workerIndex <= 0 {
+		return &db.leafLog
+	}
+	db.leafLogAppendMu.Lock()
+	if len(db.leafLogAppendLanes) == 0 {
+		db.leafLogAppendLanes = []*lane{&db.leafLog}
+	}
+	for len(db.leafLogAppendLanes) <= workerIndex {
+		db.leafLogAppendLanes = append(db.leafLogAppendLanes, nil)
+	}
+	l := db.leafLogAppendLanes[workerIndex]
+	if l == nil {
+		l = &lane{
+			id:                      leafLogLaneID,
+			vlogGenerationClass:     db.leafLog.vlogGenerationClass,
+			vlogCompressionSelector: db.leafLogAppendCompressionSelector(),
+			vlogSeq:                 int(db.leafLogAppendSeq.Load()),
+		}
+		db.startVlogWriter(l)
+		db.leafLogAppendLanes[workerIndex] = l
+	}
+	db.leafLogAppendMu.Unlock()
+	return l
+}
+
+func (db *DB) advanceLeafLogAppendSeqAtLeast(seq int) {
+	if db == nil || !db.indexOuterLeavesInValueLog || seq <= 0 {
+		return
+	}
+	need := uint32(seq)
+	for {
+		cur := db.leafLogAppendSeq.Load()
+		if cur >= need {
+			return
+		}
+		if db.leafLogAppendSeq.CompareAndSwap(cur, need) {
+			return
+		}
+	}
+}
+
+func (db *DB) nextLeafLogAppendSeq() (int, error) {
+	if db == nil || !db.indexOuterLeavesInValueLog {
+		return 0, errWALUnavailable
+	}
+	for {
+		cur := db.leafLogAppendSeq.Load()
+		next := cur + 1
+		if next <= cur {
+			return 0, fmt.Errorf("cachingdb: leaf log sequence space exhausted")
+		}
+		if db.leafLogAppendSeq.CompareAndSwap(cur, next) {
+			return int(next), nil
+		}
+	}
+}
+
+func (db *DB) closeLeafValueLogLane(l *lane) error {
+	if db == nil || l == nil {
+		return nil
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if l.vlog != nil {
+		if err := l.vlog.Close(); err != nil {
+			return err
+		}
+		l.vlog = nil
+	}
+	l.vlogCaps = vlogWriterCaps{}
+	l.vlogLiveBytes.Store(0)
+	l.vlogModeSet = false
+	l.vlogModeWriter = nil
 	return nil
 }
 
@@ -2880,11 +3037,16 @@ func (db *DB) currentValueLogPaths() []string {
 		l.walMu.Unlock()
 	}
 	if db.indexOuterLeavesInValueLog && db.splitValueLogEnabled() {
-		db.leafLog.vlogMu.Lock()
-		if db.leafLog.vlogPath != "" {
-			paths = append(paths, db.leafLog.vlogPath)
+		for _, l := range db.leafLogAppendLanesSnapshot() {
+			if l == nil {
+				continue
+			}
+			l.vlogMu.Lock()
+			if l.vlogPath != "" {
+				paths = append(paths, l.vlogPath)
+			}
+			l.vlogMu.Unlock()
 		}
-		db.leafLog.vlogMu.Unlock()
 	}
 	return paths
 }
@@ -3886,19 +4048,24 @@ func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]b
 }
 
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
+	_, err := db.flushValueLogForFileIDWithSize(ptr.FileID)
+	return err
+}
+
+func (db *DB) flushValueLogForFileIDWithSize(fileID uint32) (int64, error) {
 	if !db.valueLogEnabled() {
-		return nil
+		return -1, nil
 	}
-	laneID, seq := valuelog.DecodeFileID(ptr.FileID)
-	l := db.valueLogLaneByID(int(laneID))
+	_, seq := valuelog.DecodeFileID(fileID)
+	l := db.valueLogLaneForFileID(fileID)
 	if l == nil {
-		return nil
+		return -1, nil
 	}
 	currentSeq := db.currentValueLogSeq(l)
 	if currentSeq == int(seq) {
-		return db.flushValueLogLane(l)
+		return db.flushValueLogLaneWithSize(l)
 	}
-	return nil
+	return -1, nil
 }
 
 func (db *DB) flushValueLog(laneIDs ...int) error {
@@ -4046,7 +4213,7 @@ func dispatchBackendValueLogReadBarrierWithSize(key uintptr, fileID uint32) (int
 	if len(dbs) == 0 {
 		return -1, nil
 	}
-	laneID, seq := valuelog.DecodeFileID(fileID)
+	_, seq := valuelog.DecodeFileID(fileID)
 	var firstErr error
 	flushedAny := false
 	size := int64(-1)
@@ -4055,7 +4222,7 @@ func dispatchBackendValueLogReadBarrierWithSize(key uintptr, fileID uint32) (int
 		if db == nil || db.closing.Load() {
 			continue
 		}
-		l := db.valueLogLaneByID(int(laneID))
+		l := db.valueLogLaneForFileID(fileID)
 		if l == nil {
 			continue
 		}
@@ -4100,12 +4267,7 @@ func (db *DB) installBackendValueLogReadBarrier() {
 		key := backendValueLogReadBarrierKey(db.backend)
 		if key == 0 {
 			barrierSetter.SetCurrentValueLogReadBarrierWithSize(func(fileID uint32) (int64, error) {
-				laneID, _ := valuelog.DecodeFileID(fileID)
-				l := db.valueLogLaneByID(int(laneID))
-				if l == nil {
-					return -1, nil
-				}
-				return db.flushValueLogLaneWithSize(l)
+				return db.flushValueLogForFileIDWithSize(fileID)
 			})
 			return
 		}
@@ -4122,12 +4284,8 @@ func (db *DB) installBackendValueLogReadBarrier() {
 	key := backendValueLogReadBarrierKey(db.backend)
 	if key == 0 {
 		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
-			laneID, _ := valuelog.DecodeFileID(fileID)
-			l := db.valueLogLaneByID(int(laneID))
-			if l == nil {
-				return nil
-			}
-			return db.flushValueLogLane(l)
+			_, err := db.flushValueLogForFileIDWithSize(fileID)
+			return err
 		})
 		return
 	}
@@ -4474,16 +4632,21 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 			l.vlogMu.Unlock()
 		}
 		if db.indexOuterLeavesInValueLog {
-			db.leafLog.vlogMu.Lock()
-			for path, size := range db.leafLog.vlogClosedSizes {
-				pathSizes[path] = size
-				pathClasses[path] = db.leafLog.vlogGenerationClass
+			for _, l := range db.leafLogAppendLanesSnapshot() {
+				if l == nil {
+					continue
+				}
+				l.vlogMu.Lock()
+				for path, size := range l.vlogClosedSizes {
+					pathSizes[path] = size
+					pathClasses[path] = l.vlogGenerationClass
+				}
+				if l.vlogPath != "" {
+					currentSizes[l.vlogPath] = l.vlogLiveBytes.Load()
+					pathClasses[l.vlogPath] = l.vlogGenerationClass
+				}
+				l.vlogMu.Unlock()
 			}
-			if db.leafLog.vlogPath != "" {
-				currentSizes[db.leafLog.vlogPath] = db.leafLog.vlogLiveBytes.Load()
-				pathClasses[db.leafLog.vlogPath] = db.leafLog.vlogGenerationClass
-			}
-			db.leafLog.vlogMu.Unlock()
 		}
 	} else {
 		for i := range db.lanes {
@@ -4825,17 +4988,21 @@ func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error)
 		l.vlogMu.Unlock()
 	}
 	if db.indexOuterLeavesInValueLog {
-		l := &db.leafLog
-		l.vlogMu.Lock()
-		if l.vlogPath != "" {
-			db.markValueLogRetain(l.vlogPath)
-			err := db.rotateValueLogMuHeld(l)
-			l.vlogMu.Unlock()
-			if err != nil {
-				unlock()
-				return nil, err
+		for _, l := range db.leafLogAppendLanesSnapshot() {
+			if l == nil {
+				continue
 			}
-		} else {
+			l.vlogMu.Lock()
+			if l.vlogPath != "" {
+				db.markValueLogRetain(l.vlogPath)
+				err := db.rotateValueLogMuHeld(l)
+				l.vlogMu.Unlock()
+				if err != nil {
+					unlock()
+					return nil, err
+				}
+				continue
+			}
 			l.vlogMu.Unlock()
 		}
 	}
@@ -5631,8 +5798,12 @@ func (db *DB) allowValueLogPointers() bool {
 				bytes += l.vlogLiveBytes.Load()
 			}
 		}
-		if db.indexOuterLeavesInValueLog && db.leafLog.vlogPath != "" && db.leafLog.vlogPath == db.leafLog.vlogRetainedPath {
-			bytes += db.leafLog.vlogLiveBytes.Load()
+		if db.indexOuterLeavesInValueLog {
+			for _, l := range db.leafLogAppendLanesSnapshot() {
+				if l != nil && l.vlogPath != "" && l.vlogPath == l.vlogRetainedPath {
+					bytes += l.vlogLiveBytes.Load()
+				}
+			}
 		}
 	}
 	if bytes >= limit {
@@ -7031,11 +7202,39 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 		}
 	}
 	if db.indexOuterLeavesInValueLog {
-		if err := db.advanceValueLogWriterPastObservedSeq(&db.leafLog, maxSeqByLane[leafLogLaneID]); err != nil {
-			return err
+		observedMaxSeq := maxSeqByLane[leafLogLaneID]
+		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
+		for _, l := range db.leafLogAppendLanesSnapshot() {
+			if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+func (db *DB) advanceLeafLogAppendWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
+	if db == nil || l == nil || observedMaxSeq <= 0 {
+		return nil
+	}
+	l.vlogMu.Lock()
+	defer l.vlogMu.Unlock()
+	if observedMaxSeq <= l.vlogSeq {
+		return nil
+	}
+	if l.vlog == nil {
+		l.vlogSeq = observedMaxSeq
+		l.vlogPath = ""
+		l.vlogCaps = vlogWriterCaps{}
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		return nil
+	}
+	nextSeq, err := db.nextLeafLogAppendSeq()
+	if err != nil {
+		return err
+	}
+	return db.rotateValueLogMuHeldToSeq(l, nextSeq)
 }
 
 func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
@@ -7118,7 +7317,7 @@ func (db *DB) valueLogMaxSegmentBytesForLane(l *lane) int64 {
 		return base
 	}
 	target := int64(0)
-	if db.indexOuterLeavesInValueLog && l == &db.leafLog && db.valueLogGenerationLeafTarget > 0 {
+	if db.isLeafLogAppendLane(l) && db.valueLogGenerationLeafTarget > 0 {
 		target = db.valueLogGenerationLeafTarget
 	} else {
 		switch l.vlogGenerationClass {
@@ -7721,16 +7920,19 @@ type DB struct {
 	backendRangeErr               error
 
 	// Durability
-	lanes         []lane
-	leafLog       lane
-	laneMu        sync.Mutex
-	laneCond      *sync.Cond
-	nextLane      int
-	flushLaneMu   []sync.Mutex
-	nextCommitSeq atomic.Uint64
-	walAckMu      sync.Mutex
-	walErr        error
-	nextRID       atomic.Uint64
+	lanes              []lane
+	leafLog            lane
+	leafLogAppendMu    sync.RWMutex
+	leafLogAppendLanes []*lane
+	leafLogAppendSeq   atomic.Uint32
+	laneMu             sync.Mutex
+	laneCond           *sync.Cond
+	nextLane           int
+	flushLaneMu        []sync.Mutex
+	nextCommitSeq      atomic.Uint64
+	walAckMu           sync.Mutex
+	walErr             error
+	nextRID            atomic.Uint64
 
 	// Legacy flags removed from public options; retained internally for code paths.
 	disableValueLog            bool
@@ -10501,10 +10703,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	segments, _ := listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir)
 	reserveLeafLogLane := opts.IndexOuterLeavesInValueLog
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
-	// RID allocation is monotonic, so each lane's latest non-empty value-log
-	// segment contains that lane's high-watermark. Scanning only those tail
-	// segments avoids a full value-log pass during clean geth restarts while still
-	// seeding the allocator above every valid on-disk RID produced by this path.
+	// RID allocation is monotonic, so each non-leaf lane's latest non-empty
+	// value-log segment contains that lane's high-watermark. Leaf-log append lanes
+	// share one encoded lane across multiple physical writers, so their RID seed
+	// scans every non-empty reserved leaf-log segment.
 	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err
@@ -10703,6 +10905,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	reader.SetDisableReadChecksum(opts.DisableReadChecksum)
 	reader.SetCurrentWritableMmapEnabled(opts.ValueLogCurrentWritableMmap)
+	reader.SetMultiCurrentWritableLane(valuelog.ReservedLeafLogLaneID, opts.IndexOuterLeavesInValueLog)
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
@@ -11018,12 +11221,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.leafLog.id = leafLogLaneID
 		db.leafLog.vlogSeq = maxLeafVlogSeq
 		db.leafLog.vlogGenerationClass = vlogGenerationClassHot
-		db.leafLog.vlogCompressionSelector = newVlogCompressionSelectorWithSeed(
-			valueLogAutoPolicy,
-			uint64(valueLogIncompressibleHold),
-			uint64(valueLogIncompressibleProbe),
-			selectorSeedCodec,
-		)
+		db.leafLog.vlogCompressionSelector = db.leafLogAppendCompressionSelector()
+		db.initLeafLogAppendState(maxLeafVlogSeq)
 	}
 	if maxExistingRID > 0 {
 		db.nextRID.Store(maxExistingRID)
@@ -11162,6 +11361,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 				return currentZipperParallelMergePressure()
 			})
 		}
+	}
+	if db.valueLogReader != nil {
+		db.valueLogReader.SetCurrentWritableReadBarrierWithSize(func(fileID uint32) (int64, error) {
+			return db.flushValueLogForFileIDWithSize(fileID)
+		})
 	}
 	db.installBackendValueLogReadBarrier()
 
@@ -15010,7 +15214,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		wallStart = db.valueLogAutotuneMetrics.now()
 	}
 	selectorStart := time.Now()
-	leafLogAppend := db != nil && l == &db.leafLog
+	leafLogAppend := db != nil && db.isLeafLogAppendLane(l)
 	appendWallStart := time.Time{}
 	appendWait := time.Duration(0)
 	if leafLogAppend {
@@ -15806,7 +16010,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		wallStart = db.valueLogAutotuneMetrics.now()
 	}
 	selectorStart := time.Now()
-	leafLogAppend := db != nil && l == &db.leafLog
+	leafLogAppend := db != nil && db.isLeafLogAppendLane(l)
 	appendWallStart := time.Time{}
 	appendWait := time.Duration(0)
 	if leafLogAppend {
@@ -22545,16 +22749,11 @@ func (db *DB) Close() error {
 		l.vlogMu.Unlock()
 	}
 	if db.indexOuterLeavesInValueLog {
-		db.leafLog.vlogMu.Lock()
-		if db.leafLog.vlog != nil {
-			_ = db.leafLog.vlog.Close()
-			db.leafLog.vlog = nil
-			db.leafLog.vlogCaps = vlogWriterCaps{}
-			db.leafLog.vlogLiveBytes.Store(0)
+		for _, l := range db.leafLogAppendLanesSnapshot() {
+			if err := db.closeLeafValueLogLane(l); err != nil {
+				errs = append(errs, err)
+			}
 		}
-		db.leafLog.vlogModeSet = false
-		db.leafLog.vlogModeWriter = nil
-		db.leafLog.vlogMu.Unlock()
 	}
 
 	if walBytes > 0 && !hadMemtables {
@@ -24580,6 +24779,13 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 }
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
+	if db.isLeafLogAppendLane(l) {
+		nextSeq, err := db.nextLeafLogAppendSeq()
+		if err != nil {
+			return err
+		}
+		return db.rotateValueLogMuHeldToSeq(l, nextSeq)
+	}
 	return db.rotateValueLogMuHeldToSeq(l, l.vlogSeq+1)
 }
 
@@ -24599,6 +24805,9 @@ func (db *DB) ensureValueLogWriterMuHeld(l *lane) error {
 func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 	if l == nil {
 		return errWALUnavailable
+	}
+	if db.isLeafLogAppendLane(l) {
+		db.advanceLeafLogAppendSeqAtLeast(nextSeq)
 	}
 	if nextSeq <= l.vlogSeq {
 		return nil
@@ -24670,7 +24879,11 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 		l.vlogSeq = nextSeq
 		l.vlogLiveBytes.Store(0)
 	}
-	if err := db.registerValueLogSegment(path, fileID); err != nil {
+	previousFileID := uint32(0)
+	if oldSeq > 0 && oldPath != "" {
+		previousFileID, _ = valuelog.EncodeFileID(uint32(l.id), uint32(oldSeq))
+	}
+	if err := db.registerValueLogSegmentReplacing(path, fileID, previousFileID); err != nil {
 		if oldPath != "" {
 			if hadClosedPrev {
 				l.vlogClosedSizes[oldPath] = closedPrev
@@ -24699,7 +24912,7 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 	}
 	l.vlogPath = path
 	l.vlogLiveBytes.Store(0)
-	if db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID {
+	if db.isLeafLogAppendLane(l) {
 		l.vlogCreatedSegments = append(l.vlogCreatedSegments, laneValueLogSegment{path: path, fileID: fileID})
 	}
 	return nil
@@ -24736,6 +24949,10 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 }
 
 func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
+	return db.registerValueLogSegmentReplacing(path, fileID, 0)
+}
+
+func (db *DB) registerValueLogSegmentReplacing(path string, fileID, previousFileID uint32) error {
 	if db == nil {
 		return nil
 	}
@@ -24746,10 +24963,21 @@ func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
 		if err := db.valueLogReader.RegisterSegment(path, fileID); err != nil {
 			return err
 		}
-		if err := db.valueLogReader.PromoteCurrentWritable(fileID); err != nil {
+		if err := db.valueLogReader.PromoteCurrentWritableReplacing(fileID, previousFileID); err != nil {
 			_ = db.valueLogReader.RemoveSegment(fileID)
 			return err
 		}
+	}
+	if registrar, ok := db.backend.(interface {
+		RegisterValueLogSegmentReplacing(path string, fileID, previousFileID uint32) error
+	}); ok {
+		if err := registrar.RegisterValueLogSegmentReplacing(path, fileID, previousFileID); err != nil {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.RemoveSegment(fileID)
+			}
+			return err
+		}
+		return nil
 	}
 	if registrar, ok := db.backend.(interface {
 		RegisterValueLogSegment(path string, fileID uint32) error
@@ -24811,18 +25039,33 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 	if !ok {
 		return
 	}
+	if laneID == leafLogLaneID && db.indexOuterLeavesInValueLog {
+		for _, l := range db.leafLogAppendLanesSnapshot() {
+			if db.untrackValueLogSegmentFromLane(l, path) {
+				return
+			}
+		}
+		return
+	}
 	l := db.valueLogLaneByID(laneID)
 	if l == nil {
 		return
 	}
+	db.untrackValueLogSegmentFromLane(l, path)
+}
+
+func (db *DB) untrackValueLogSegmentFromLane(l *lane, path string) bool {
+	if db == nil || l == nil {
+		return false
+	}
 	l.vlogMu.Lock()
 	defer l.vlogMu.Unlock()
 	if l.vlogClosedSizes == nil || path == "" {
-		return
+		return false
 	}
 	size, ok := l.vlogClosedSizes[path]
 	if !ok {
-		return
+		return false
 	}
 	delete(l.vlogClosedSizes, path)
 	db.valueLogRetainedClosedBytes.Add(-size)
@@ -24836,6 +25079,7 @@ func (db *DB) untrackValueLogSegmentLocked(path string) {
 			break
 		}
 	}
+	return true
 }
 
 func (db *DB) flushLoop() {
@@ -32717,7 +32961,7 @@ func listNonEmptySplitLogSegments(walDir, valueLogDir, leafLogDir string) (segme
 
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
-	for _, seg := range tailValueLogSegmentsByLane(segments) {
+	for _, seg := range ridSeedValueLogSegments(segments) {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
 		}
@@ -32754,13 +32998,43 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	return maxRID, nil
 }
 
+func ridSeedValueLogSegments(segments []logSegmentInfo) []logSegmentInfo {
+	if len(segments) == 0 {
+		return nil
+	}
+	out := make([]logSegmentInfo, 0, len(segments))
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		if seg.lane == leafLogLaneID {
+			out = append(out, seg)
+		}
+	}
+	out = append(out, tailValueLogSegmentsByLaneExcept(segments, leafLogLaneID)...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].lane != out[j].lane {
+			return out[i].lane < out[j].lane
+		}
+		if out[i].seq != out[j].seq {
+			return out[i].seq < out[j].seq
+		}
+		return out[i].path < out[j].path
+	})
+	return out
+}
+
 func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
+	return tailValueLogSegmentsByLaneExcept(segments, -1)
+}
+
+func tailValueLogSegmentsByLaneExcept(segments []logSegmentInfo, exceptLane int) []logSegmentInfo {
 	if len(segments) == 0 {
 		return nil
 	}
 	tailByLane := make(map[int]logSegmentInfo)
 	for _, seg := range segments {
-		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 || seg.lane == exceptLane {
 			continue
 		}
 		prev, ok := tailByLane[seg.lane]

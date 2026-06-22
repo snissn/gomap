@@ -32,6 +32,9 @@ type compactLeafLogPayloadScratchPtrRef struct {
 }
 
 func newCachingLeafPageLog(db *DB, l *lane) backenddb.LeafPageLog {
+	if db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog {
+		return &cachingLeafPageLogGroup{db: db}
+	}
 	return &cachingLeafPageLog{db: db, lane: l}
 }
 
@@ -83,6 +86,23 @@ func (l *cachingLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]backenddb.L
 	return out, nil
 }
 
+func (l *cachingLeafPageLog) CurrentLeafPageLogSegmentsSnapshot() ([]backenddb.LeafPageLogSegment, error) {
+	if l == nil || l.lane == nil {
+		return nil, nil
+	}
+	lane := l.lane
+	lane.vlogMu.Lock()
+	defer lane.vlogMu.Unlock()
+	if lane.vlogPath == "" || lane.vlogSeq <= 0 {
+		return nil, nil
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(lane.id), uint32(lane.vlogSeq))
+	if err != nil {
+		return nil, err
+	}
+	return []backenddb.LeafPageLogSegment{{Path: lane.vlogPath, FileID: fileID}}, nil
+}
+
 func (l *cachingLeafPageLog) MarkLeafPageLogSegmentsRegistered(segments []backenddb.LeafPageLogSegment) {
 	if l == nil || l.lane == nil || len(segments) == 0 {
 		return
@@ -123,6 +143,13 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	if notifier, ok := db.backend.(interface{ NoteLeafGenerationRecordLength(page.ValuePtr) }); ok {
 		notifier.NoteLeafGenerationRecordLength(ptr)
 	}
+}
+
+func (l *cachingLeafPageLog) Close() error {
+	if l == nil || l.db == nil || l.lane == nil {
+		return nil
+	}
+	return l.db.closeLeafValueLogLane(l.lane)
 }
 
 func (l *cachingLeafPageLog) ConcurrentLeafPageAppends() bool { return true }

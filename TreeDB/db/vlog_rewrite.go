@@ -260,6 +260,7 @@ type rewriteSourceSelectionStats struct {
 }
 
 type rewriteRIDAllocator struct {
+	mu      sync.Mutex
 	next    uint64
 	reserve func(count int) (uint64, error)
 }
@@ -301,6 +302,8 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 	if err := validateRewriteRIDCount(count); err != nil {
 		return 0, err
 	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.reserve != nil {
 		start, err := a.reserve(count)
 		if err != nil {
@@ -1902,19 +1905,10 @@ func (db *DB) valueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		// Register rewrite-created segments before publishing pointer swaps so
 		// finalizeCommit can stay on CurrentSetNoRefresh and avoid full scans.
-		for _, id := range batchCreatedIDs {
-			if hasLastRegisteredID && id == lastRegisteredCreatedID {
-				continue
-			}
-			path := db.valueLogManager.SegmentPath(id)
-			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
-				return err
-			}
-			if err := db.valueLogManager.PromoteCurrentWritable(id); err != nil {
-				return err
-			}
-			lastRegisteredCreatedID = id
-			hasLastRegisteredID = true
+		var registerErr error
+		lastRegisteredCreatedID, hasLastRegisteredID, registerErr = db.registerRewriteCreatedValueLogSegments(batchCreatedIDs, lastRegisteredCreatedID, hasLastRegisteredID)
+		if registerErr != nil {
+			return registerErr
 		}
 		if err := db.applyRewriteSwapBatchToMaintenanceRoot(root, collectionState, swaps, opts.SyncEachBatch); err != nil {
 			return err
@@ -2922,6 +2916,31 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 	return delta, nil
 }
 
+func (db *DB) registerRewriteCreatedValueLogSegments(ids []uint32, previousFileID uint32, hasPrevious bool) (uint32, bool, error) {
+	if db == nil || db.valueLogManager == nil {
+		return previousFileID, hasPrevious, nil
+	}
+	for _, id := range ids {
+		if hasPrevious && id == previousFileID {
+			continue
+		}
+		path := db.valueLogManager.SegmentPath(id)
+		if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
+			return previousFileID, hasPrevious, err
+		}
+		replacingID := uint32(0)
+		if hasPrevious {
+			replacingID = previousFileID
+		}
+		if err := db.valueLogManager.PromoteCurrentWritableReplacing(id, replacingID); err != nil {
+			return previousFileID, hasPrevious, err
+		}
+		previousFileID = id
+		hasPrevious = true
+	}
+	return previousFileID, hasPrevious, nil
+}
+
 func noteRewriteSwapTouchedSegments(b *batch.Batch, swaps []rewriteSwap) {
 	if b == nil || len(swaps) == 0 {
 		return
@@ -3363,15 +3382,16 @@ type rewriteCreatedSegment struct {
 }
 
 type rewriteWriter struct {
-	walDir   string
-	lane     uint32
-	seq      uint32
-	maxSize  int64
-	leafDir  string
-	leafLane uint32
-	leafSeq  uint32
-	nextRID  uint64
-	ridAlloc *rewriteRIDAllocator
+	walDir           string
+	lane             uint32
+	seq              uint32
+	maxSize          int64
+	leafDir          string
+	leafLane         uint32
+	leafSeq          uint32
+	leafSeqAllocator *leafLogSeqAllocator
+	nextRID          uint64
+	ridAlloc         *rewriteRIDAllocator
 	// currentPath/currentFileID cache the active writer segment identity so
 	// CurrentValueLogSegment can avoid per-call path/fileID recomputation.
 	currentPath       string
@@ -3463,6 +3483,59 @@ func (w *rewriteWriter) ConfigureLeafLog(leafDir string, lane, startSeq uint32) 
 	w.leafSeq = startSeq
 }
 
+func (w *rewriteWriter) setLeafPageLogSeqAllocator(seqAlloc *leafLogSeqAllocator) {
+	if w == nil {
+		return
+	}
+	w.leafSeqAllocator = seqAlloc
+}
+
+func (w *rewriteWriter) leafPageLogSeqFloor() uint32 {
+	if w == nil {
+		return 0
+	}
+	return w.leafSeq
+}
+
+func (w *rewriteWriter) leafPageLogRIDAllocator() *rewriteRIDAllocator {
+	if w == nil {
+		return nil
+	}
+	if w.ridAlloc != nil {
+		return w.ridAlloc
+	}
+	return newRewriteRIDAllocator(w.nextRID, nil)
+}
+
+func (w *rewriteWriter) setLeafPageLogRIDAllocator(ridAlloc *rewriteRIDAllocator) {
+	if w == nil || ridAlloc == nil {
+		return
+	}
+	w.ridAlloc = ridAlloc
+	w.nextRID = 0
+}
+
+func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridAlloc *rewriteRIDAllocator) (LeafPageLog, error) {
+	if w == nil {
+		return nil, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.leafDir == "" {
+		return nil, errors.New("vlog-rewrite: leaf lane cloning requires a leaf writer")
+	}
+	clone := newRewriteWriter(w.walDir, w.lane, 0, w.maxSize)
+	clone.leafDir = w.leafDir
+	clone.leafLane = w.leafLane
+	clone.leafSeqAllocator = seqAlloc
+	clone.ridAlloc = ridAlloc
+	clone.blockCompression = w.blockCompression
+	clone.blockCodec = w.blockCodec
+	clone.leafBlockCodec = w.leafBlockCodec
+	clone.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
+	clone.SetTemplateCompression(w.templateMode, w.templateCfg, w.templateStore)
+	clone.SetLeafDictMode(w.leafDictID, w.leafDict, w.leafDictUseRawPages)
+	return clone, nil
+}
+
 func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
 	if w == nil || w.leafDir == "" || seq <= w.leafSeq {
 		return nil
@@ -3472,6 +3545,9 @@ func (w *rewriteWriter) resetLeafLogSeqAtLeast(seq uint32) error {
 			return err
 		}
 		w.leafW = nil
+	}
+	if w.leafSeqAllocator != nil {
+		w.leafSeqAllocator.AdvanceAtLeast(seq)
 	}
 	w.leafSeq = seq
 	w.leafCurrentPath = ""
@@ -4050,8 +4126,31 @@ func (w *rewriteWriter) maybeRotateLeafForEstimate(estimate int64) error {
 	return w.rotateLeaf()
 }
 
-func (w *rewriteWriter) rotateLeaf() error {
+func (w *rewriteWriter) nextLeafSeq() (uint32, error) {
+	if w == nil {
+		return 0, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.leafSeqAllocator != nil {
+		seq, err := w.leafSeqAllocator.Next()
+		if err != nil {
+			return 0, err
+		}
+		w.leafSeq = seq
+		return seq, nil
+	}
 	nextSeq := w.leafSeq + 1
+	if nextSeq <= w.leafSeq {
+		return 0, fmt.Errorf("vlog-rewrite: leaf log sequence space exhausted")
+	}
+	w.leafSeq = nextSeq
+	return nextSeq, nil
+}
+
+func (w *rewriteWriter) rotateLeaf() error {
+	nextSeq, err := w.nextLeafSeq()
+	if err != nil {
+		return err
+	}
 	fileID, err := valuelog.EncodeFileID(w.leafLane, nextSeq)
 	if err != nil {
 		return err

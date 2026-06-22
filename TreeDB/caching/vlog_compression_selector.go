@@ -1614,7 +1614,7 @@ func (db *DB) preferLeafPageBlockCodec(l *lane, unitPayloadBytes int, configured
 	if db == nil || l == nil || !db.indexOuterLeavesInValueLog {
 		return configured, false
 	}
-	if l != &db.leafLog || l.id != leafLogLaneID {
+	if !db.isLeafLogAppendLane(l) {
 		return configured, false
 	}
 	switch normalizeVlogCompressionMode(db.valueLogCompressionMode) {
@@ -1898,7 +1898,7 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 }
 
 func (db *DB) isLiveLeafLogLane(l *lane) bool {
-	return db != nil && db.indexOuterLeavesInValueLog && l == &db.leafLog && l.id == leafLogLaneID
+	return db != nil && db.isLeafLogAppendLane(l)
 }
 
 func (db *DB) clampLiveLeafLogFrameK(l *lane, k int) int {
