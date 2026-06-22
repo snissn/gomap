@@ -230,6 +230,14 @@ func (db *DB) observeFlushApplyMetrics(metrics adaptive.Metrics, applyWall time.
 	addInt64Metric(&db.flushApplyLeafLogOutputAppendWaitNs, metrics.ZipperLeafLogOutputAppendWaitNs)
 	addIntMetric(&db.flushApplyLeafLogOutputAppendCalls, metrics.ZipperLeafLogOutputAppendCalls)
 	addIntMetric(&db.flushApplyLeafLogOutputAppendPages, metrics.ZipperLeafLogOutputAppendPages)
+	for i, tasks := range metrics.ZipperLeafLogOutputLaneTasks {
+		if tasks > 0 {
+			db.flushApplyLeafLogOutputLaneTasks[i].Add(tasks)
+		}
+	}
+	if metrics.ZipperLeafLogOutputLaneTaskOverflow > 0 {
+		db.flushApplyLeafLogOutputLaneTaskOverflow.Add(metrics.ZipperLeafLogOutputLaneTaskOverflow)
+	}
 	addInt64Metric(&db.flushApplySpanNativeWorkerBusyNs, metrics.ZipperSpanNativeWorkerBusyNs)
 	addInt64Metric(&db.flushApplySpanNativeWorkerIdleNs, metrics.ZipperSpanNativeWorkerIdleNs)
 	addInt64Metric(&db.flushApplySpanNativeWorkerWaitNs, metrics.ZipperSpanNativeWorkerWaitNs)
@@ -433,6 +441,25 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.leaf_log_output.append_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputAppendWaitNs.Load())
 	stats["treedb.flush_apply.leaf_log_output.append_calls_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputAppendCalls.Load())
 	stats["treedb.flush_apply.leaf_log_output.append_pages_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputAppendPages.Load())
+	laneTaskLanes := 0
+	laneTaskTotal := uint64(0)
+	laneTaskMax := uint64(0)
+	for i := range db.flushApplyLeafLogOutputLaneTasks {
+		tasks := db.flushApplyLeafLogOutputLaneTasks[i].Load()
+		if tasks == 0 {
+			continue
+		}
+		laneTaskLanes++
+		laneTaskTotal += tasks
+		if tasks > laneTaskMax {
+			laneTaskMax = tasks
+		}
+		stats[fmt.Sprintf("treedb.flush_apply.leaf_log_output.lane.%02d.tasks_total", i)] = fmt.Sprintf("%d", tasks)
+	}
+	stats["treedb.flush_apply.leaf_log_output.lane.tasks_total"] = fmt.Sprintf("%d", laneTaskTotal)
+	stats["treedb.flush_apply.leaf_log_output.lane.tasks_lanes_used"] = fmt.Sprintf("%d", laneTaskLanes)
+	stats["treedb.flush_apply.leaf_log_output.lane.tasks_max"] = fmt.Sprintf("%d", laneTaskMax)
+	stats["treedb.flush_apply.leaf_log_output.lane.tasks_overflow_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogOutputLaneTaskOverflow.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_pages_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesPrepared.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_bytes_prepared_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogBytesPrepared.Load())
 	stats["treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"] = fmt.Sprintf("%d", db.flushApplyPreparedOutputLeafLogPagesInstalled.Load())

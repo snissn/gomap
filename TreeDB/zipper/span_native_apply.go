@@ -64,23 +64,31 @@ func releaseSpanNativeLeafLogPayloadScratch(buf []byte) {
 	spanNativeLeafLogPayloadScratchPool.Put(buf[:0])
 }
 
-func (g *spanNativeLeafLogOutputGate) leafPageLogForWorker(z *Zipper, workerIndex int) LeafPageLog {
-	if z == nil || z.leafPageLog == nil {
-		return nil
+func (g *spanNativeLeafLogOutputGate) selectedLeafPageLogForWorker(z *Zipper, workerIndex int) (LeafPageLog, bool) {
+	if z == nil || z.leafPageLog == nil || workerIndex <= 0 {
+		return nil, false
 	}
-	if workerIndex > 0 {
-		if provider, ok := z.leafPageLog.(LeafPageLogLaneProvider); ok {
-			if laneLog, ok := provider.LeafPageLogLane(workerIndex); ok && laneLog != nil {
-				return laneLog
+	if provider, ok := z.leafPageLog.(LeafPageLogLaneProvider); ok {
+		if laneLog, ok := provider.LeafPageLogLane(workerIndex); ok && laneLog != nil {
+			return laneLog, true
+		}
+	}
+	if provider, ok := z.leafPageLog.(leafPageLogLaneAnyProvider); ok {
+		if lane, ok := provider.LeafPageLogLaneAny(workerIndex); ok && lane != nil {
+			if laneLog, ok := lane.(LeafPageLog); ok && laneLog != nil {
+				return laneLog, true
 			}
 		}
-		if provider, ok := z.leafPageLog.(leafPageLogLaneAnyProvider); ok {
-			if lane, ok := provider.LeafPageLogLaneAny(workerIndex); ok && lane != nil {
-				if laneLog, ok := lane.(LeafPageLog); ok && laneLog != nil {
-					return laneLog
-				}
-			}
-		}
+	}
+	return nil, false
+}
+
+func (g *spanNativeLeafLogOutputGate) leafPageLogForWorker(z *Zipper, workerIndex int) LeafPageLog {
+	if laneLog, ok := g.selectedLeafPageLogForWorker(z, workerIndex); ok {
+		return laneLog
+	}
+	if z == nil {
+		return nil
 	}
 	return z.leafPageLog
 }
@@ -282,7 +290,15 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		var leafPagePersister leafPagePersistSink = leafLogOutput
 		if leafLogOutput != nil && scheduledWorkers > 1 {
 			laneIndex := workerID + 1
-			leafPagePersister = &spanNativeLeafLogOutputLane{gate: leafLogOutput, log: leafLogOutput.leafPageLogForWorker(z, laneIndex)}
+			if laneLog, ok := leafLogOutput.selectedLeafPageLogForWorker(z, laneIndex); ok {
+				localMetrics.ZipperLeafLogOutputLaneTaskTotal++
+				if laneIndex >= 0 && laneIndex <= adaptive.ZipperLeafLogOutputLaneStatsMax {
+					localMetrics.ZipperLeafLogOutputLaneTasks[laneIndex]++
+				} else {
+					localMetrics.ZipperLeafLogOutputLaneTaskOverflow++
+				}
+				leafPagePersister = &spanNativeLeafLogOutputLane{gate: leafLogOutput, log: laneLog}
+			}
 		}
 		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafPagePersister}
 		for i := workerRange.FirstSpan; i < end; i++ {

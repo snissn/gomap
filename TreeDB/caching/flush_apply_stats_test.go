@@ -151,6 +151,55 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 	}
 }
 
+func TestLeafLogLaneStatsExposeConfiguredActiveAndPerLaneCounters(t *testing.T) {
+	db := &DB{indexOuterLeavesInValueLog: true}
+	lane0 := &lane{id: leafLogLaneID, vlogPath: "leaf-0", vlogSeq: 1, vlogClosedSizes: map[string]int64{"old-0": 1}}
+	lane1 := &lane{id: leafLogLaneID, vlogPath: "leaf-1", vlogSeq: 2}
+	db.leafLogAppendLanes = []*lane{lane0, lane1}
+	db.observeLeafLogLaneAppend(lane0, 3*time.Nanosecond, 5*time.Nanosecond, 128, 1, nil)
+	db.observeLeafLogLaneAppend(lane1, 7*time.Nanosecond, 11*time.Nanosecond, 256, 2, nil)
+	lane1.vlogRotateTotal.Add(1)
+	lane1.vlogRotateIdleTotal.Add(1)
+
+	stats := map[string]string{}
+	db.appendCacheFlushApplyStats(stats)
+	for key, want := range map[string]uint64{
+		"treedb.cache.leaf_log_lanes.configured":                           2,
+		"treedb.cache.leaf_log_lanes.active":                               2,
+		"treedb.cache.leaf_log_lanes.append_lanes_used":                    2,
+		"treedb.cache.leaf_log_lanes.append_calls_total":                   2,
+		"treedb.cache.leaf_log_lanes.append_pages_total":                   3,
+		"treedb.cache.leaf_log_lanes.append_bytes_total":                   384,
+		"treedb.cache.leaf_log_lanes.append_lock_wait_ns_total":            10,
+		"treedb.cache.leaf_log_lanes.append_lock_hold_ns_total":            16,
+		"treedb.cache.leaf_log_lanes.segment_rotations_total":              1,
+		"treedb.cache.leaf_log_lanes.segment_rotations_idle_total":         1,
+		"treedb.cache.leaf_log_lanes.lane.00.append_calls_total":           1,
+		"treedb.cache.leaf_log_lanes.lane.00.append_pages_total":           1,
+		"treedb.cache.leaf_log_lanes.lane.00.segments_active":              1,
+		"treedb.cache.leaf_log_lanes.lane.00.segments_closed":              1,
+		"treedb.cache.leaf_log_lanes.lane.01.append_calls_total":           1,
+		"treedb.cache.leaf_log_lanes.lane.01.append_pages_total":           2,
+		"treedb.cache.leaf_log_lanes.lane.01.segment_rotations_total":      1,
+		"treedb.cache.leaf_log_lanes.lane.01.segment_rotations_idle_total": 1,
+	} {
+		if got := requireStatUint64(t, stats, key); got != want {
+			t.Fatalf("%s=%d want %d", key, got, want)
+		}
+	}
+}
+
+func TestObserveLeafLogLaneAppendHasNoAllocations(t *testing.T) {
+	db := &DB{}
+	l := &lane{}
+	allocs := testing.AllocsPerRun(1000, func() {
+		db.observeLeafLogLaneAppend(l, time.Nanosecond, time.Nanosecond, 128, 1, nil)
+	})
+	if allocs != 0 {
+		t.Fatalf("observeLeafLogLaneAppend allocations/run=%f want 0", allocs)
+	}
+}
+
 func TestFlushSpanRunStatsSeparateSourceShadowedAndPlannedOps(t *testing.T) {
 	db := &DB{}
 	db.observeFlushSpanRunSource(2, 3, 0, 0)

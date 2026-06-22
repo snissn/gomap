@@ -459,6 +459,22 @@ func TestCachingLeafPageLogLaneSelectionAppendsUniqueReadablePtrs(t *testing.T) 
 	if got := len(db.leafLogAppendLanesSnapshot()); got != extraLanes+1 {
 		t.Fatalf("lane snapshot len=%d want %d", got, extraLanes+1)
 	}
+	stats := db.Stats()
+	if got := requireStatUint64(t, stats, "treedb.cache.leaf_log_lanes.configured"); got != extraLanes+1 {
+		t.Fatalf("configured leaf-log lanes=%d want %d", got, extraLanes+1)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.leaf_log_lanes.append_lanes_used"); got != extraLanes+1 {
+		t.Fatalf("append lanes used=%d want %d", got, extraLanes+1)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.leaf_log_lanes.append_calls_total"); got != extraLanes+1 {
+		t.Fatalf("append calls=%d want %d", got, extraLanes+1)
+	}
+	for lane := 0; lane <= extraLanes; lane++ {
+		key := fmt.Sprintf("treedb.cache.leaf_log_lanes.lane.%02d.append_pages_total", lane)
+		if got := requireStatUint64(t, stats, key); got != 1 {
+			t.Fatalf("%s=%d want 1", key, got)
+		}
+	}
 
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close cached db: %v", err)
