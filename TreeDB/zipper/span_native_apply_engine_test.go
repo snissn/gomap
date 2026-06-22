@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -255,16 +256,25 @@ func TestSpanNativeApplyConcurrentWorkerLocalScratchSplitParity(t *testing.T) {
 }
 
 type laneRecordingLeafPageLog struct {
-	mu                    sync.Mutex
-	next                  uint64
-	pages                 map[page.LeafLogPtr][]byte
-	appendCounts          map[int]int
-	batchCalls            map[int]int
-	preparedSingleCalls   map[int]int
-	preparedBatchCalls    map[int]int
-	preparedBatchPageLens []int
-	failLane              int
-	failErr               error
+	mu                     sync.Mutex
+	next                   uint64
+	pages                  map[page.LeafLogPtr][]byte
+	appendCounts           map[int]int
+	batchCalls             map[int]int
+	preparedSingleCalls    map[int]int
+	preparedBatchCalls     map[int]int
+	preparedBatchPageLens  []int
+	activeMu               sync.Mutex
+	activeLanes            map[int]int
+	sameLaneConcurrent     bool
+	sameLaneConcurrentCh   chan struct{}
+	sameLaneConcurrentOnce sync.Once
+	blockLane              int
+	blockEntered           chan struct{}
+	blockRelease           chan struct{}
+	blockOnce              sync.Once
+	failLane               int
+	failErr                error
 }
 
 type laneRecordingLeafPageLogView struct {
@@ -290,6 +300,72 @@ func (l *laneRecordingLeafPageLog) resetObservations() {
 	l.preparedSingleCalls = make(map[int]int)
 	l.preparedBatchCalls = make(map[int]int)
 	l.preparedBatchPageLens = nil
+}
+
+func (l *laneRecordingLeafPageLog) blockFirstAppendOnLane(lane int) (entered <-chan struct{}, release func()) {
+	enteredCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+	l.activeMu.Lock()
+	l.activeLanes = make(map[int]int)
+	l.sameLaneConcurrent = false
+	l.sameLaneConcurrentCh = make(chan struct{})
+	l.sameLaneConcurrentOnce = sync.Once{}
+	l.blockLane = lane
+	l.blockEntered = enteredCh
+	l.blockRelease = releaseCh
+	l.blockOnce = sync.Once{}
+	l.activeMu.Unlock()
+	return enteredCh, func() { close(releaseCh) }
+}
+
+func (l *laneRecordingLeafPageLog) observedSameLaneConcurrentAppend() bool {
+	l.activeMu.Lock()
+	defer l.activeMu.Unlock()
+	return l.sameLaneConcurrent
+}
+
+func (l *laneRecordingLeafPageLog) sameLaneConcurrentSignal() <-chan struct{} {
+	l.activeMu.Lock()
+	defer l.activeMu.Unlock()
+	return l.sameLaneConcurrentCh
+}
+
+func (l *laneRecordingLeafPageLog) enterAppendLane(lane int) func() {
+	l.activeMu.Lock()
+	if l.activeLanes == nil && l.blockEntered == nil && l.sameLaneConcurrentCh == nil {
+		l.activeMu.Unlock()
+		return func() {}
+	}
+	if l.activeLanes == nil {
+		l.activeLanes = make(map[int]int)
+	}
+	if l.activeLanes[lane] > 0 {
+		l.sameLaneConcurrent = true
+		if l.sameLaneConcurrentCh != nil {
+			l.sameLaneConcurrentOnce.Do(func() { close(l.sameLaneConcurrentCh) })
+		}
+	}
+	l.activeLanes[lane]++
+	var wait <-chan struct{}
+	if lane == l.blockLane && l.blockEntered != nil && l.blockRelease != nil {
+		l.blockOnce.Do(func() {
+			close(l.blockEntered)
+			wait = l.blockRelease
+		})
+	}
+	l.activeMu.Unlock()
+	if wait != nil {
+		<-wait
+	}
+	return func() {
+		l.activeMu.Lock()
+		if l.activeLanes[lane] <= 1 {
+			delete(l.activeLanes, lane)
+		} else {
+			l.activeLanes[lane]--
+		}
+		l.activeMu.Unlock()
+	}
 }
 
 func (l *laneRecordingLeafPageLog) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
@@ -358,9 +434,12 @@ func (v *laneRecordingLeafPageLogView) PreparedLeafPageAppends() bool { return t
 func (v *laneRecordingLeafPageLogView) PreparedLeafPageBatchAppends() bool { return true }
 
 func (l *laneRecordingLeafPageLog) appendLeafPagesForLane(lane int, leafPages [][]byte, batchCall bool, prepared bool) ([]page.LeafLogPtr, error) {
+	leave := l.enterAppendLane(lane)
+	defer leave()
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.failErr != nil && lane == l.failLane {
+	if l.failErr != nil && (lane == l.failLane || (l.failLane < 0 && lane > 0)) {
 		return nil, l.failErr
 	}
 	if l.next == 0 {
@@ -553,11 +632,70 @@ func TestSpanNativeApplyLeafLogOutputRoutesWorkerRangesToSelectedLanes(t *testin
 	}
 }
 
+func TestSpanNativeApplyLeafLogOutputLanesFollowWorkerID(t *testing.T) {
+	_, native := newReadOnlyPrepareZipper(t)
+	native.SetOuterLeavesInValueLog(true)
+	store := newLaneRecordingLeafPageLog()
+	native.SetLeafPageLog(store)
+	native.SetLeafPageReader(store)
+
+	nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 8192)
+	store.resetObservations()
+	entered, release := store.blockFirstAppendOnLane(1)
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	value := bytes.Repeat([]byte("v"), 180)
+	for anchor := 0; anchor < 8192; anchor += 257 {
+		for j := 0; j < 16; j++ {
+			key := []byte(fmt.Sprintf("key-%06d-%03d", anchor, j))
+			if err := delta.Set(key, value); err != nil {
+				t.Fatalf("Set anchor=%d j=%d: %v", anchor, j, err)
+			}
+		}
+	}
+
+	type applyResult struct {
+		result ApplyResult
+		err    error
+	}
+	done := make(chan applyResult, 1)
+	go func() {
+		result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 2})
+		done <- applyResult{result: result, err: err}
+	}()
+
+	select {
+	case <-entered:
+	case res := <-done:
+		t.Fatalf("ApplyWithOptions completed before lane 1 append blocked: result=%+v err=%v", res.result, res.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for lane 1 append to block")
+	}
+
+	select {
+	case <-store.sameLaneConcurrentSignal():
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("ApplyWithOptions: %v", res.err)
+	}
+	if !res.result.SpanNativeUsed || res.result.SpanNativeWorkers != 2 {
+		t.Fatalf("span-native used/workers=%v/%d", res.result.SpanNativeUsed, res.result.SpanNativeWorkers)
+	}
+	if store.observedSameLaneConcurrentAppend() {
+		t.Fatalf("observed concurrent appends to the same selected lane; lane selection must follow worker ID")
+	}
+}
+
 func TestSpanNativeApplyLeafLogOutputSelectedLaneFailureReturnsBeforeReduce(t *testing.T) {
 	_, native := newReadOnlyPrepareZipper(t)
 	native.SetOuterLeavesInValueLog(true)
 	store := newLaneRecordingLeafPageLog()
-	store.failLane = 1
+	store.failLane = -1
 	store.failErr = errors.New("test selected leaf-log lane append failure")
 	native.SetLeafPageLog(store)
 	native.SetLeafPageReader(store)

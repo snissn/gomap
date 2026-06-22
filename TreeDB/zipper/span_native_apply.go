@@ -255,7 +255,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	var workerBusyNs atomic.Int64
 	var dispatchedTasks atomic.Uint64
 	var completedTasks atomic.Uint64
-	runRange := func(_ int, job int) {
+	runRange := func(workerID int, job int) {
 		dispatchedTasks.Add(1)
 		busyStart := time.Now()
 		defer func() {
@@ -281,7 +281,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		}
 		var leafPagePersister leafPagePersistSink = leafLogOutput
 		if leafLogOutput != nil && scheduledWorkers > 1 {
-			laneIndex := (job % scheduledWorkers) + 1
+			laneIndex := workerID + 1
 			leafPagePersister = &spanNativeLeafLogOutputLane{gate: leafLogOutput, log: leafLogOutput.leafPageLogForWorker(z, laneIndex)}
 		}
 		workerApplyCfg := applyRunConfig{maxParallelWorkers: 1, leafPagePersister: leafPagePersister}

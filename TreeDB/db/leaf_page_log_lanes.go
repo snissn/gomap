@@ -277,6 +277,8 @@ func (g *leafPageLogLaneGroup) LeafPageLogLaneAny(workerIndex int) (any, bool) {
 	return g.LeafPageLogLane(workerIndex)
 }
 
+func (g *leafPageLogLaneGroup) ConcurrentLeafPageAppends() bool { return g != nil }
+
 func (g *leafPageLogLaneGroup) leafPageLogLane(workerIndex int) (LeafPageLog, bool) {
 	return g.LeafPageLogLane(workerIndex)
 }
