@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -1170,6 +1171,32 @@ func TestZipperMergeScratch_ConcurrentPendingLeafPageScratchReuse(t *testing.T) 
 		}(g)
 	}
 	wg.Wait()
+}
+
+func TestEstimateSpanNativeLeafLogPayloadArenaCapUsesCompactableRatio(t *testing.T) {
+	compactLeaf := make([]byte, page.PageSize)
+	builder := node.NewBuilderWithOptions(compactLeaf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		if err := builder.AddLeafEntry([]byte{byte('k'), byte('0' + i)}, []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%d): %v", i, err)
+		}
+	}
+	builder.FinishNoNode()
+	compactLen, compacted := valuelog.MaybeCompactLeafLogPayloadLength(compactLeaf)
+	if !compacted {
+		t.Fatalf("test leaf did not compact")
+	}
+	nonCompactLeaf := bytes.Repeat([]byte{'x'}, page.PageSize)
+	leafPages := [][]byte{compactLeaf, nonCompactLeaf, compactLeaf, nonCompactLeaf}
+	got := estimateSpanNativeLeafLogPayloadArenaCap(leafPages)
+	want := compactLen * 2
+	if got != want {
+		t.Fatalf("estimate=%d want %d", got, want)
+	}
 }
 
 type childRefPreparedBatchTestLog struct {

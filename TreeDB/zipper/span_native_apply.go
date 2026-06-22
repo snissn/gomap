@@ -155,11 +155,15 @@ func estimateSpanNativeLeafLogPayloadArenaCap(leafPages [][]byte) int {
 		return 0
 	}
 	avgCompactLen := (totalCompactLen + compactSamples - 1) / compactSamples
-	maxCap := page.PageSize * len(leafPages)
-	if avgCompactLen > maxCap/len(leafPages) {
+	estimatedCompactPages := (len(leafPages)*compactSamples + samples - 1) / samples
+	if estimatedCompactPages <= 0 {
+		return 0
+	}
+	maxCap := page.PageSize * estimatedCompactPages
+	if avgCompactLen > maxCap/estimatedCompactPages {
 		return maxCap
 	}
-	return avgCompactLen * len(leafPages)
+	return avgCompactLen * estimatedCompactPages
 }
 
 func (g *spanNativeLeafLogOutputGate) selectedLeafPageLogForWorker(z *Zipper, workerIndex int) (LeafPageLog, bool) {
