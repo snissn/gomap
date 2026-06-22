@@ -476,7 +476,7 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 	if workerPool != nil {
 		var err error
 		if leafLogOutput != nil && scheduledWorkers > 1 {
-			err = workerPool.RunStrided(scheduledWorkers, len(workerRanges), runRange)
+			err = workerPool.RunSeeded(scheduledWorkers, len(workerRanges), runRange)
 		} else {
 			err = workerPool.Run(scheduledWorkers, len(workerRanges), runRange)
 		}
@@ -490,10 +490,18 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 			runRange(0, job)
 		}
 	} else if leafLogOutput != nil {
+		var nextJob int64 = int64(scheduledWorkers - 1)
 		var wg sync.WaitGroup
 		worker := func(workerID int) {
 			defer wg.Done()
-			for job := workerID; job < len(workerRanges); job += scheduledWorkers {
+			if workerID < len(workerRanges) {
+				runRange(workerID, workerID)
+			}
+			for {
+				job := int(atomic.AddInt64(&nextJob, 1))
+				if job >= len(workerRanges) {
+					return
+				}
 				runRange(workerID, job)
 			}
 		}

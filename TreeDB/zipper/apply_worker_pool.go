@@ -17,7 +17,7 @@ type applyWorkerPoolRun struct {
 	count   int
 	workers int
 	fn      func(workerID, job int)
-	strided bool
+	seeded  bool
 	next    atomic.Int64
 	wg      sync.WaitGroup
 }
@@ -60,18 +60,15 @@ func (p *ApplyWorkerPool) worker() {
 			}
 			continue
 		}
-		if run.strided {
-			for job := task.workerID; job < run.count; job += run.workers {
-				run.fn(task.workerID, job)
+		if run.seeded && task.workerID < run.count {
+			run.fn(task.workerID, task.workerID)
+		}
+		for {
+			job := int(run.next.Add(1)) - 1
+			if job >= run.count {
+				break
 			}
-		} else {
-			for {
-				job := int(run.next.Add(1)) - 1
-				if job >= run.count {
-					break
-				}
-				run.fn(task.workerID, job)
-			}
+			run.fn(task.workerID, job)
 		}
 		run.wg.Done()
 	}
@@ -83,14 +80,14 @@ func (p *ApplyWorkerPool) Run(workers, count int, fn func(workerID, job int)) er
 	return p.run(workers, count, fn, false)
 }
 
-// RunStrided schedules jobs deterministically by workerID (job=workerID+n*workers).
+// RunSeeded schedules one initial job per workerID before dynamic work stealing.
 // This preserves worker-owned resources such as selected leaf-log lanes while
-// still using the reusable worker pool.
-func (p *ApplyWorkerPool) RunStrided(workers, count int, fn func(workerID, job int)) error {
+// retaining load balancing for the remaining jobs.
+func (p *ApplyWorkerPool) RunSeeded(workers, count int, fn func(workerID, job int)) error {
 	return p.run(workers, count, fn, true)
 }
 
-func (p *ApplyWorkerPool) run(workers, count int, fn func(workerID, job int), strided bool) error {
+func (p *ApplyWorkerPool) run(workers, count int, fn func(workerID, job int), seeded bool) error {
 	if count <= 0 || fn == nil {
 		return nil
 	}
@@ -107,7 +104,10 @@ func (p *ApplyWorkerPool) run(workers, count int, fn func(workerID, job int), st
 		workers = 1
 	}
 
-	run := &applyWorkerPoolRun{count: count, workers: workers, fn: fn, strided: strided}
+	run := &applyWorkerPoolRun{count: count, workers: workers, fn: fn, seeded: seeded}
+	if seeded {
+		run.next.Store(int64(workers))
+	}
 	run.wg.Add(workers)
 
 	p.mu.Lock()
