@@ -141,9 +141,12 @@ func TestCheckpointWaitProductivityStatsLateDrainUsesCurrentWaitDuration(t *test
 }
 
 func TestCheckpointWaitProductivityStatsQueuedFrontierNoActiveBackground(t *testing.T) {
+	// Keep the queued frontier stable until Checkpoint owns flushMu; legacy queue
+	// backpressure can otherwise race this no-active-background assertion.
 	db, _ := newCoalescingTestDB(t, Options{
-		DisableWAL:  true,
-		AllowUnsafe: true,
+		DisableWAL:         true,
+		AllowUnsafe:        true,
+		MaxQueuedMemtables: -1,
 	}, highSingleOpCoalescingSnapshot())
 	enqueuePointMemtables(t, db, 2, "queuedfrontier")
 	if err := db.Set([]byte("queuedfrontier-mutable"), []byte("value")); err != nil {
