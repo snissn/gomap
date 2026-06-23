@@ -145,6 +145,10 @@ leaf-log append-lane sprint final gate is recorded in
 now uses true worker-owned selected leaf-log lanes without a global collector,
 plain `AppendLeafPage` still uses lane 0, and c8/c16 remain explicit rows while
 issue #2943 tracks the remaining checkpoint active-background/barrier wait blocker.
+The #2949 LANE-M0 append-path inventory is recorded in
+`docs/TREEDB_LEAF_LOG_APPEND_PATHS_LANE_M0_INVENTORY.md`; it keeps generic
+batch/default widening as a future proof-gated policy decision and explicitly
+excludes maintenance and recovery paths.
 
 ### Read latency under flush debt (cached mode)
 
