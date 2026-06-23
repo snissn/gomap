@@ -226,7 +226,11 @@ func (db *DB) observeFlushSpanRunTargetLeafSpanSummary(targetLeafSpans, singleOp
 }
 
 func (db *DB) observeCheckpointActiveBackgroundFlushWait(wait time.Duration) {
-	if db == nil || wait <= 0 {
+	if db == nil {
+		return
+	}
+	if wait <= 0 {
+		db.checkpointActiveBackgroundFlushWaitLastNs.Store(0)
 		return
 	}
 	ns := uint64(wait.Nanoseconds())

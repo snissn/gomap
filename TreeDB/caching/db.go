@@ -21662,9 +21662,9 @@ func (db *DB) observeCheckpointFrontierCapture(f checkpointFrontier) {
 	updateAtomicMaxUint64(&db.checkpointFrontierBytesMax, f.bytes)
 }
 
-func (db *DB) observeCheckpointWaitFrontierAfterLock(f checkpointFrontier) {
+func (db *DB) observeCheckpointWaitFrontierAfterLock(f checkpointFrontier) checkpointFrontierResidualStats {
 	if db == nil {
-		return
+		return checkpointFrontierResidualStats{}
 	}
 	db.mu.RLock()
 	residual := db.checkpointFrontierResidualStatsLocked(f)
@@ -21681,6 +21681,20 @@ func (db *DB) observeCheckpointWaitFrontierAfterLock(f checkpointFrontier) {
 	db.checkpointWaitPostFrontierUnitsLast.Store(residual.postUnits)
 	db.checkpointWaitPostFrontierBytesLast.Store(residual.postBytes)
 	db.checkpointWaitPostFrontierLanesLast.Store(residual.postLanes)
+	return residual
+}
+
+func (db *DB) observeCheckpointFlushMuWaitAfterLock(f checkpointFrontier, wait time.Duration, activeBackgroundFlushBeforeWait bool) checkpointFrontierResidualStats {
+	residual := db.observeCheckpointWaitFrontierAfterLock(f)
+	if db == nil {
+		return residual
+	}
+	if activeBackgroundFlushBeforeWait || residual.drainedUnits > 0 || residual.drainedBytes > 0 {
+		db.observeCheckpointActiveBackgroundFlushWait(wait)
+	} else {
+		db.checkpointActiveBackgroundFlushWaitLastNs.Store(0)
+	}
+	return residual
 }
 
 func (db *DB) observeCheckpointFrontierDrain(f checkpointFrontier) {
@@ -22051,16 +22065,13 @@ func (db *DB) Checkpoint() error {
 	barrierWaitStart := time.Now()
 	flushMuWaitStart := barrierWaitStart
 	db.flushMu.Lock()
+	flushMuWaitDur := time.Since(flushMuWaitStart)
 	barrierWaitDur := time.Since(barrierWaitStart)
 	db.observeCheckpointBarrierWait(barrierWaitDur)
-	db.observeCheckpointWaitFrontierAfterLock(requestFrontier)
-	flushMuWaitDur := time.Since(flushMuWaitStart)
+	db.observeCheckpointFlushMuWaitAfterLock(requestFrontier, flushMuWaitDur, activeBackgroundFlushBeforeWait)
 	flushMuWait := uint64(flushMuWaitDur)
 	db.checkpointFlushMuWaitNs.Add(flushMuWait)
 	updateAtomicMaxUint64(&db.checkpointFlushMuWaitMaxNs, flushMuWait)
-	if activeBackgroundFlushBeforeWait {
-		db.observeCheckpointActiveBackgroundFlushWait(flushMuWaitDur)
-	}
 	flushMuHeld := true
 	unlockFlushMu := func() {
 		if flushMuHeld {

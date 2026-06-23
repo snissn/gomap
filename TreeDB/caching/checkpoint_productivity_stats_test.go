@@ -65,6 +65,64 @@ func TestCheckpointWaitProductivityStatsNoopCheckpoint(t *testing.T) {
 	}
 }
 
+func TestCheckpointWaitProductivityStatsLateDrainUsesCurrentWaitDuration(t *testing.T) {
+	frontier := checkpointFrontier{
+		ids: map[uint64]checkpointFrontierUnit{
+			1: {bytes: 4096, laneID: 0},
+		},
+		laneUnits: map[uint16]uint64{0: 1},
+		units:     1,
+		bytes:     4096,
+		captured:  true,
+	}
+
+	t.Run("late-drained frontier records current wait", func(t *testing.T) {
+		db := &DB{}
+		staleWaitNs := uint64(time.Hour.Nanoseconds())
+		db.checkpointActiveBackgroundFlushWaitLastNs.Store(staleWaitNs)
+
+		wait := 25 * time.Millisecond
+		residual := db.observeCheckpointFlushMuWaitAfterLock(frontier, wait, false)
+		if residual.drainedUnits != 1 || residual.drainedBytes != 4096 {
+			t.Fatalf("drained frontier = (%d units, %d bytes), want (1, 4096)", residual.drainedUnits, residual.drainedBytes)
+		}
+		waitNs := uint64(wait.Nanoseconds())
+		if got := db.checkpointActiveBackgroundFlushWaitLastNs.Load(); got != waitNs {
+			t.Fatalf("active wait last ns=%d want current wait %d, stale was %d", got, waitNs, staleWaitNs)
+		}
+		if got := db.checkpointActiveBackgroundFlushWaitSamples.Load(); got != 1 {
+			t.Fatalf("active wait samples=%d want 1", got)
+		}
+		currentRate := checkpointRatePerSecond(db.checkpointWaitFrontierDrainedBytesLast.Load(), db.checkpointActiveBackgroundFlushWaitLastNs.Load())
+		staleRate := checkpointRatePerSecond(db.checkpointWaitFrontierDrainedBytesLast.Load(), staleWaitNs)
+		if currentRate <= staleRate {
+			t.Fatalf("wait drain rate=%f should use current wait and exceed stale-rate %f", currentRate, staleRate)
+		}
+	})
+
+	t.Run("no active or drained frontier clears stale wait", func(t *testing.T) {
+		db := &DB{}
+		db.queue = append(db.queue, nil)
+		db.queueIDs = []uint64{1}
+		db.queueLaneIDs = []uint16{0}
+		db.checkpointActiveBackgroundFlushWaitLastNs.Store(uint64(time.Hour.Nanoseconds()))
+
+		residual := db.observeCheckpointFlushMuWaitAfterLock(frontier, 25*time.Millisecond, false)
+		if residual.drainedUnits != 0 || residual.frontierUnits != 1 {
+			t.Fatalf("residual frontier = drained %d remaining %d, want drained 0 remaining 1", residual.drainedUnits, residual.frontierUnits)
+		}
+		if got := db.checkpointActiveBackgroundFlushWaitLastNs.Load(); got != 0 {
+			t.Fatalf("active wait last ns=%d want 0", got)
+		}
+		if got := db.checkpointActiveBackgroundFlushWaitSamples.Load(); got != 0 {
+			t.Fatalf("active wait samples=%d want 0", got)
+		}
+		if got := checkpointRatePerSecond(db.checkpointWaitFrontierDrainedBytesLast.Load(), db.checkpointActiveBackgroundFlushWaitLastNs.Load()); got != 0 {
+			t.Fatalf("wait drain rate=%f want 0", got)
+		}
+	})
+}
+
 func TestCheckpointWaitProductivityStatsQueuedFrontierNoActiveBackground(t *testing.T) {
 	db, _ := newCoalescingTestDB(t, Options{
 		DisableWAL:  true,
