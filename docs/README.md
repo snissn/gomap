@@ -66,6 +66,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 - **[TreeDB Vector Search Closeout](../TreeDB/docs/spec/vector-search-closeout-2483.md)**: Exact FP32, scalar_u8, RaBitQ, and BRQ route-boundary/evidence index with #2487 snapshot caveats and #2494 crossover-pending status.
 - **[Unified Bench](../cmd/unified_bench/README.md)**: Usage guide for benchmark execution and artifact capture.
 - **[BenchProf](../cmd/benchprof/README.md)**: Analysis tool for CPU/alloc/block/mutex profiles and ops/sec outputs.
+- **[TreeDB Checkpoint Wait Classification M1](TREEDB_CHECKPOINT_WAIT_CLASSIFICATION_M1_REPORT.md)**: #2946 immediate/settled checkpoint wait classification and artifact table.
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.
 - **[Dev Notes](DEV_NOTES.md)**: Performance investigations and future optimization ideas.
 
