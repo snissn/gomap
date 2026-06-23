@@ -209,6 +209,16 @@ type closeStatsDB struct {
 	closed        atomic.Bool
 }
 
+type checkpointStatsDB struct {
+	fixedNameDB
+	checkpointCalls atomic.Int64
+}
+
+type activeFlushStatsDB struct {
+	fixedNameDB
+	statsCalls atomic.Int64
+}
+
 func (d *closeStatsDB) Name() string { return d.name }
 
 func (d *closeStatsDB) Close() error {
@@ -243,6 +253,41 @@ func (d *closeStatsDB) Stats() map[string]string {
 	}
 	stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"] = "0"
 	return stats
+}
+
+func (d *checkpointStatsDB) Checkpoint() error {
+	d.checkpointCalls.Add(1)
+	return nil
+}
+
+func (d *checkpointStatsDB) Stats() map[string]string {
+	calls := d.checkpointCalls.Load()
+	return map[string]string{
+		"treedb.cache.queue_len":                                                       "0",
+		"treedb.cache.queue_backlog_bytes":                                             "0",
+		"treedb.cache.flush_apply.coordinator.active_workers":                          "0",
+		"treedb.cache.flush_apply.coordinator.in_flight_bytes":                         "0",
+		"treedb.cache.checkpoint.active_background_flush_wait_ns_last":                 fmt.Sprintf("%d", calls*10),
+		"treedb.cache.checkpoint.wait.frontier_units_at_request_last":                  fmt.Sprintf("%d", calls),
+		"treedb.cache.checkpoint.stage.flush_all.total_ns":                             fmt.Sprintf("%d", calls*100),
+		"treedb.flush_apply.span_native.fallback.reason.close_or_checkpoint.ops_total": fmt.Sprintf("%d", calls),
+	}
+}
+
+func (d *activeFlushStatsDB) Stats() map[string]string {
+	calls := d.statsCalls.Add(1)
+	activeWorkers := "0"
+	inFlightBytes := "0"
+	if calls == 1 {
+		activeWorkers = "1"
+		inFlightBytes = "1024"
+	}
+	return map[string]string{
+		"treedb.cache.queue_len":                               "0",
+		"treedb.cache.queue_backlog_bytes":                     "0",
+		"treedb.cache.flush_apply.coordinator.active_workers":  activeWorkers,
+		"treedb.cache.flush_apply.coordinator.in_flight_bytes": inFlightBytes,
+	}
 }
 
 type settleProbeDB struct {
@@ -1861,6 +1906,86 @@ func TestRunBenchmark_CheckpointBetweenTests_RunsFinalCheckpoint(t *testing.T) {
 	}
 	if _, ok := run.CheckpointDurations[checkpointPostRunLabel]; !ok {
 		t.Fatalf("expected post-run checkpoint durations under %q", checkpointPostRunLabel)
+	}
+}
+
+func TestRunBenchmark_CheckpointSettleAndStatsSnapshots(t *testing.T) {
+	const dbName = "treedb_checkpoint_stats_mock"
+	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
+		return &checkpointStatsDB{fixedNameDB: fixedNameDB{name: "TreeDB"}}, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:           1,
+		ValueSize:      1,
+		BatchSize:      1,
+		DBsArg:         dbName,
+		TestsArg:       "sequential_write,random_read",
+		KeepDir:        false,
+		Progress:       false,
+		SeedUsed:       1,
+		ReadRequireHit: false,
+
+		CheckpointBetweenTests:      true,
+		CheckpointSettleBeforeTests: map[string]struct{}{"random_read": {}},
+		CheckpointSettleTimeout:     100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if _, ok := run.CheckpointSettleDurations["random_read"]["TreeDB"]; !ok {
+		t.Fatalf("missing checkpoint settle duration: %#v", run.CheckpointSettleDurations)
+	}
+	randomReadStats := run.CheckpointTreeDBStats["random_read"]["TreeDB"]
+	if got := randomReadStats["treedb.cache.checkpoint.wait.frontier_units_at_request_last"]; got == "" || got == "0" {
+		t.Fatalf("missing checkpoint snapshot stats: %#v", randomReadStats)
+	}
+	if got := randomReadStats["treedb.cache.checkpoint.active_background_flush_wait_ns_last"]; got == "" || got == "0" {
+		t.Fatalf("missing checkpoint wait last stat: %#v", randomReadStats)
+	}
+
+	md := renderMarkdownSingle(run)
+	if !strings.Contains(md, "## Checkpoint Settle Time (Before Selected Checkpoints)") {
+		t.Fatalf("missing checkpoint settle markdown section:\n%s", md)
+	}
+	if !strings.Contains(md, "## TreeDB Selected Stats (Checkpoint Snapshots)") {
+		t.Fatalf("missing checkpoint stats markdown section:\n%s", md)
+	}
+
+	dir := t.TempDir()
+	if err := writeBenchprofArtifacts(dir, "native-fastpath", []BenchRun{run}); err != nil {
+		t.Fatalf("writeBenchprofArtifacts: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof_results.json: %v", err)
+	}
+	var parsed benchprofExport
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse benchprof_results.json: %v", err)
+	}
+	if len(parsed.Runs) != 1 {
+		t.Fatalf("runs=%d want 1", len(parsed.Runs))
+	}
+	if _, ok := parsed.Runs[0].CheckpointSettleSeconds["random_read"]["TreeDB"]; !ok {
+		t.Fatalf("missing exported settle seconds: %#v", parsed.Runs[0].CheckpointSettleSeconds)
+	}
+	if got := parsed.Runs[0].CheckpointTreeDBStats["random_read"]["TreeDB"]["treedb.cache.checkpoint.wait.frontier_units_at_request_last"]; got == "" || got == "0" {
+		t.Fatalf("missing exported checkpoint stats: %#v", parsed.Runs[0].CheckpointTreeDBStats)
+	}
+}
+
+func TestWaitForTreeDBQueueDrainInstanceWaitsForActiveFlush(t *testing.T) {
+	db := &activeFlushStatsDB{fixedNameDB: fixedNameDB{name: "TreeDB"}}
+	_, settled, err := waitForTreeDBQueueDrainInstance(&DBInstance{Name: "treedb", Wrapper: db}, 200*time.Millisecond)
+	if err != nil {
+		t.Fatalf("waitForTreeDBQueueDrainInstance: %v", err)
+	}
+	if !settled {
+		t.Fatalf("settled=false want true")
+	}
+	if got := db.statsCalls.Load(); got < 2 {
+		t.Fatalf("stats calls=%d want at least 2", got)
 	}
 }
 

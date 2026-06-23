@@ -27933,6 +27933,9 @@ func (db *DB) Stats() map[string]string {
 	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
+	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
+	stats["treedb.cache.flush_apply.coordinator.active_workers"] = fmt.Sprintf("%d", db.flushCoordinatorActiveWorkers.Load())
+	stats["treedb.cache.flush_apply.coordinator.in_flight_bytes"] = fmt.Sprintf("%d", db.flushCoordinatorInFlightBytes.Load())
 	deleteRangeSnapshotIterators := db.deleteRangeIterators.Load()
 	deleteRangeBackendIterators := db.deleteRangeBackendIterators.Load()
 	deleteRangeMemtableIterators := db.deleteRangeMemtableIterators.Load()

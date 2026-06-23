@@ -191,6 +191,8 @@ explicitly deferred.
 - `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
 - `-max-rss-mb` abort the run if RSS exceeds this many MiB (guardrail; `0` = disabled; Linux-only)
 - `-checkpoint-between-tests` force a best-effort durability checkpoint between tests (DBs that support `Checkpoint()`), and also once after the final test so end-of-run disk usage reflects a settled state
+- `-checkpoint-settle-before-tests` comma-separated checkpoint labels that should first wait for TreeDB queue/background debt to drain before checkpointing (for example `random_read`, `post-run`, or `all`); useful for immediate-vs-settled checkpoint comparisons without changing production behavior
+- `-checkpoint-settle-timeout` maximum wait for `-checkpoint-settle-before-tests` (default `10m`)
 - `-vacuum-between-tests` vacuum supported DBs between tests (implies `-checkpoint-between-tests`; TreeDB uses `VacuumIndexOnline`)
 - `-treedb-vlog-rewrite-after-run` run the full TreeDB `CompactStorage` path after the run and report before/after disk usage + the data directory path; the flag name is kept for compatibility
 - `-treedb-vacuum-after-vlog-rewrite-run` run offline TreeDB index vacuum after `-treedb-vlog-rewrite-after-run` before final reporting (disable explicitly with `-treedb-vacuum-after-vlog-rewrite-run=false`)
@@ -246,7 +248,12 @@ This writes:
 For TreeDB runs, `benchprof_results.json` also preserves selected TreeDB stats
 under `runs[].treedb_stats`, including ordered-root/root-apply, value-log mmap
 read counters, and generic plus leaf-specific mmap sealed-budget caps used by
-raw-engine review gates. Selected mmap read display fields prefer the backend
+raw-engine review gates. Checkpoint-enabled runs also export
+`runs[].checkpoint_durations_seconds`; selected settled runs export
+`runs[].checkpoint_settle_seconds`; and TreeDB checkpoint snapshots are preserved
+under `runs[].checkpoint_treedb_stats` so immediate-vs-settled checkpoint rows can
+use the checkpoint-local `*_last` counters even if a final no-op checkpoint runs
+before end-of-run stats are captured. Selected mmap read display fields prefer the backend
 `treedb.vlog.mmap_read.*` family over cache aliases so counts and ratios come
 from one source family. The `collection_storage` suite also
 adds `runs[].collection_workloads` entries with stable mode/workload names,

@@ -89,6 +89,8 @@ var (
 	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
 
 	checkpointBetweenTests          = flag.Bool("checkpoint-between-tests", false, "Force a best-effort durability checkpoint between each benchmark test (DBs that support Checkpoint())")
+	checkpointSettleBeforeTestsArg  = flag.String("checkpoint-settle-before-tests", "", "Comma-separated checkpoint-before-test labels that should wait for TreeDB queue/background debt to drain before checkpointing (use all for every checkpoint; supports post-run)")
+	checkpointSettleTimeout         = flag.Duration("checkpoint-settle-timeout", defaultCheckpointSettleTimeout, "Maximum time to wait for TreeDB queue/background debt to drain before a selected checkpoint")
 	vacuumBetweenTests              = flag.Bool("vacuum-between-tests", false, "Vacuum supported DBs between each benchmark test (implies -checkpoint-between-tests; TreeDB: VacuumIndexOnline)")
 	checkpointEveryOps              = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
 	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
@@ -111,6 +113,8 @@ func flagExplicit(name string) bool {
 }
 
 const checkpointPostRunLabel = "post-run"
+
+const defaultCheckpointSettleTimeout = 10 * time.Minute
 
 const (
 	defaultBatchDeleteRangeWidth     = 100
@@ -190,6 +194,9 @@ type BenchConfig struct {
 	MaxRSSMB int
 
 	CheckpointBetweenTests          bool
+	CheckpointSettleBeforeTests     map[string]struct{}
+	CheckpointSettleBeforeAll       bool
+	CheckpointSettleTimeout         time.Duration
 	VacuumBetweenTests              bool
 	CheckpointEveryOps              int
 	CheckpointEveryBytes            int64
@@ -220,21 +227,23 @@ type dirDiskUsage struct {
 }
 
 type BenchRun struct {
-	Config              BenchConfig
-	Instances           []*DBInstance
-	TestOrder           []string
-	DisplayNames        map[string]string
-	Results             map[string]map[string]float64
-	CheckpointDurations map[string]map[string]time.Duration
-	VacuumDurations     map[string]map[string]time.Duration
-	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
-	TreeDBDiskUsage     map[string]treeDBDiskUsage
-	TreeDBVlogRewrite   map[string]treeDBVlogRewriteReport
-	TreeDBPerf          map[string]map[string]treeDBPerfMetrics
-	TreeDBStats         map[string]map[string]string
-	DiskUsage           map[string]dirDiskUsage
-	BatchDeleteRange    map[string]map[string]batchDeleteRangeReport
-	CollectionWorkloads []benchprofCollectionWorkload
+	Config                    BenchConfig
+	Instances                 []*DBInstance
+	TestOrder                 []string
+	DisplayNames              map[string]string
+	Results                   map[string]map[string]float64
+	CheckpointDurations       map[string]map[string]time.Duration
+	CheckpointSettleDurations map[string]map[string]time.Duration
+	CheckpointTreeDBStats     map[string]map[string]map[string]string
+	VacuumDurations           map[string]map[string]time.Duration
+	VacuumIndexBytes          map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
+	TreeDBDiskUsage           map[string]treeDBDiskUsage
+	TreeDBVlogRewrite         map[string]treeDBVlogRewriteReport
+	TreeDBPerf                map[string]map[string]treeDBPerfMetrics
+	TreeDBStats               map[string]map[string]string
+	DiskUsage                 map[string]dirDiskUsage
+	BatchDeleteRange          map[string]map[string]batchDeleteRangeReport
+	CollectionWorkloads       []benchprofCollectionWorkload
 }
 
 type treeDBPerfMetrics struct {
@@ -297,14 +306,17 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys                int                                          `json:"keys"`
-	Profile             string                                       `json:"profile,omitempty"`
-	ExecutionPath       string                                       `json:"execution_path,omitempty"`
-	Results             map[string]map[string]float64                `json:"results,omitempty"`
-	TreeDBPerf          map[string]map[string]treeDBPerfMetrics      `json:"treedb_perf,omitempty"`
-	TreeDBStats         map[string]map[string]string                 `json:"treedb_stats,omitempty"`
-	BatchDeleteRange    map[string]map[string]batchDeleteRangeReport `json:"batch_delete_range,omitempty"`
-	CollectionWorkloads []benchprofCollectionWorkload                `json:"collection_workloads,omitempty"`
+	Keys                       int                                          `json:"keys"`
+	Profile                    string                                       `json:"profile,omitempty"`
+	ExecutionPath              string                                       `json:"execution_path,omitempty"`
+	Results                    map[string]map[string]float64                `json:"results,omitempty"`
+	CheckpointDurationsSeconds map[string]map[string]float64                `json:"checkpoint_durations_seconds,omitempty"`
+	CheckpointSettleSeconds    map[string]map[string]float64                `json:"checkpoint_settle_seconds,omitempty"`
+	CheckpointTreeDBStats      map[string]map[string]map[string]string      `json:"checkpoint_treedb_stats,omitempty"`
+	TreeDBPerf                 map[string]map[string]treeDBPerfMetrics      `json:"treedb_perf,omitempty"`
+	TreeDBStats                map[string]map[string]string                 `json:"treedb_stats,omitempty"`
+	BatchDeleteRange           map[string]map[string]batchDeleteRangeReport `json:"batch_delete_range,omitempty"`
+	CollectionWorkloads        []benchprofCollectionWorkload                `json:"collection_workloads,omitempty"`
 }
 
 type scanDiag struct {
@@ -527,6 +539,7 @@ func main() {
 
 	// Populate TreeDB specific config into BenchConfig by reading the flags defined in adapter_treedb.go
 	effectiveReadWorkers := resolveReadWorkers(*readWorkers)
+	checkpointSettleBeforeTests, checkpointSettleBeforeAll := parseCheckpointSettleBeforeTests(*checkpointSettleBeforeTestsArg)
 	baseCfg := BenchConfig{
 		Keys:                             *numKeys,
 		KeyShape:                         *keyShapeArg,
@@ -562,6 +575,9 @@ func main() {
 		MaxWall:                          *maxWall,
 		MaxRSSMB:                         *maxRSSMB,
 		CheckpointBetweenTests:           *checkpointBetweenTests || *vacuumBetweenTests,
+		CheckpointSettleBeforeTests:      checkpointSettleBeforeTests,
+		CheckpointSettleBeforeAll:        checkpointSettleBeforeAll,
+		CheckpointSettleTimeout:          *checkpointSettleTimeout,
 		VacuumBetweenTests:               *vacuumBetweenTests,
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
@@ -1363,6 +1379,32 @@ func benchprofJSONResults(results map[string]map[string]float64) map[string]map[
 	return out
 }
 
+func benchprofJSONDurationSeconds(durations map[string]map[string]time.Duration) map[string]map[string]float64 {
+	if len(durations) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]float64, len(durations))
+	for label, perDB := range durations {
+		if len(perDB) == 0 {
+			continue
+		}
+		clean := make(map[string]float64, len(perDB))
+		for dbName, d := range perDB {
+			if d < 0 {
+				continue
+			}
+			clean[dbName] = d.Seconds()
+		}
+		if len(clean) > 0 {
+			out[label] = clean
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string, runs []BenchRun) error {
 	jsonPath = strings.TrimSpace(jsonPath)
 	markdownPath = strings.TrimSpace(markdownPath)
@@ -1387,14 +1429,17 @@ func writeBenchprofArtifactsToPaths(jsonPath, markdownPath, executionPath string
 	}
 	for _, run := range runs {
 		out.Runs = append(out.Runs, benchprofExportRun{
-			Keys:                run.Config.Keys,
-			Profile:             strings.TrimSpace(run.Config.Profile),
-			ExecutionPath:       executionPath,
-			Results:             benchprofJSONResults(run.Results),
-			TreeDBPerf:          run.TreeDBPerf,
-			TreeDBStats:         selectedBenchprofTreeDBStats(run.TreeDBStats),
-			BatchDeleteRange:    run.BatchDeleteRange,
-			CollectionWorkloads: run.CollectionWorkloads,
+			Keys:                       run.Config.Keys,
+			Profile:                    strings.TrimSpace(run.Config.Profile),
+			ExecutionPath:              executionPath,
+			Results:                    benchprofJSONResults(run.Results),
+			CheckpointDurationsSeconds: benchprofJSONDurationSeconds(run.CheckpointDurations),
+			CheckpointSettleSeconds:    benchprofJSONDurationSeconds(run.CheckpointSettleDurations),
+			CheckpointTreeDBStats:      selectedBenchprofCheckpointTreeDBStats(run.CheckpointTreeDBStats),
+			TreeDBPerf:                 run.TreeDBPerf,
+			TreeDBStats:                selectedBenchprofTreeDBStats(run.TreeDBStats),
+			BatchDeleteRange:           run.BatchDeleteRange,
+			CollectionWorkloads:        run.CollectionWorkloads,
 		})
 	}
 
@@ -1437,6 +1482,60 @@ func selectedBenchprofTreeDBStats(stats map[string]map[string]string) map[string
 		return nil
 	}
 	return out
+}
+
+func selectedBenchprofCheckpointTreeDBStats(stats map[string]map[string]map[string]string) map[string]map[string]map[string]string {
+	if len(stats) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]map[string]string)
+	for label, perDB := range stats {
+		selectedPerDB := selectedBenchprofTreeDBStats(perDB)
+		if len(selectedPerDB) == 0 {
+			continue
+		}
+		out[label] = selectedPerDB
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func recordDuration(dst map[string]map[string]time.Duration, label, dbName string, d time.Duration) {
+	if dst == nil || label == "" || dbName == "" {
+		return
+	}
+	perDB := dst[label]
+	if perDB == nil {
+		perDB = make(map[string]time.Duration)
+		dst[label] = perDB
+	}
+	perDB[dbName] = d
+}
+
+func recordCheckpointTreeDBStats(dst map[string]map[string]map[string]string, label string, db kvstore.DB) {
+	if dst == nil || label == "" || db == nil {
+		return
+	}
+	sp, ok := db.(kvstore.StatsProvider)
+	if !ok {
+		return
+	}
+	selected := treedbstats.Selected(sp.Stats())
+	if len(selected) == 0 {
+		return
+	}
+	copySnap := make(map[string]string, len(selected))
+	for k, v := range selected {
+		copySnap[k] = v
+	}
+	perDB := dst[label]
+	if perDB == nil {
+		perDB = make(map[string]map[string]string)
+		dst[label] = perDB
+	}
+	perDB[db.Name()] = copySnap
 }
 
 func validateBenchprofExecutionPath(executionPath string) error {
@@ -2351,6 +2450,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	guard := newBenchGuard(cfg)
 	checkpointDurations := make(map[string]map[string]time.Duration)
+	checkpointSettleDurations := make(map[string]map[string]time.Duration)
+	checkpointTreeDBStats := make(map[string]map[string]map[string]string)
 	vacuumDurations := make(map[string]map[string]time.Duration)
 	vacuumIndexBytes := make(map[string]map[string][2]uint64)
 	treeDBPerf := make(map[string]map[string]treeDBPerfMetrics)
@@ -4541,6 +4642,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 
+				if shouldSettleBeforeCheckpoint(cfg, testName) {
+					settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
+					if settleErr != nil {
+						return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, testName, settleErr)
+					}
+					if settled {
+						recordDuration(checkpointSettleDurations, testName, inst.Wrapper.Name(), settleDur)
+					}
+				}
+
 				start := time.Now()
 				checkpointErr := cp.Checkpoint()
 
@@ -4552,6 +4663,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if checkpointErr != nil {
 					return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, checkpointErr)
 				}
+				recordCheckpointTreeDBStats(checkpointTreeDBStats, testName, inst.Wrapper)
 				chkMap[inst.Wrapper.Name()] = time.Since(start)
 			}
 			checkpointDurations[testName] = chkMap
@@ -4830,6 +4942,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 			}
 
+			if shouldSettleBeforeCheckpoint(cfg, checkpointPostRunLabel) {
+				settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
+				if settleErr != nil {
+					return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, checkpointPostRunLabel, settleErr)
+				}
+				if settled {
+					recordDuration(checkpointSettleDurations, checkpointPostRunLabel, inst.Wrapper.Name(), settleDur)
+				}
+			}
+
 			start := time.Now()
 			checkpointErr := cp.Checkpoint()
 
@@ -4841,6 +4963,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if checkpointErr != nil {
 				return BenchRun{}, fmt.Errorf("checkpoint %s after run: %w", inst.Name, checkpointErr)
 			}
+			recordCheckpointTreeDBStats(checkpointTreeDBStats, checkpointPostRunLabel, inst.Wrapper)
 			chkMap[inst.Wrapper.Name()] = time.Since(start)
 		}
 		if len(chkMap) > 0 {
@@ -4964,20 +5087,22 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	return BenchRun{
-		Config:              cfg,
-		Instances:           instances,
-		TestOrder:           finalTestOrder,
-		DisplayNames:        displayNames,
-		Results:             results,
-		CheckpointDurations: checkpointDurations,
-		VacuumDurations:     vacuumDurations,
-		VacuumIndexBytes:    vacuumIndexBytes,
-		TreeDBDiskUsage:     treedbDisk,
-		TreeDBVlogRewrite:   treedbRewrite,
-		TreeDBPerf:          treeDBPerf,
-		TreeDBStats:         treedbStats,
-		DiskUsage:           diskUsage,
-		BatchDeleteRange:    batchDeleteRangeReports,
+		Config:                    cfg,
+		Instances:                 instances,
+		TestOrder:                 finalTestOrder,
+		DisplayNames:              displayNames,
+		Results:                   results,
+		CheckpointDurations:       checkpointDurations,
+		CheckpointSettleDurations: checkpointSettleDurations,
+		CheckpointTreeDBStats:     checkpointTreeDBStats,
+		VacuumDurations:           vacuumDurations,
+		VacuumIndexBytes:          vacuumIndexBytes,
+		TreeDBDiskUsage:           treedbDisk,
+		TreeDBVlogRewrite:         treedbRewrite,
+		TreeDBPerf:                treeDBPerf,
+		TreeDBStats:               treedbStats,
+		DiskUsage:                 diskUsage,
+		BatchDeleteRange:          batchDeleteRangeReports,
 	}, nil
 }
 
@@ -5869,6 +5994,20 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString(renderCheckpointDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations))
 		sb.WriteString("```\n")
 	}
+	if len(run.CheckpointSettleDurations) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## Checkpoint Settle Time (Before Selected Checkpoints)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderCheckpointDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointSettleDurations))
+		sb.WriteString("```\n")
+	}
+	if checkpointStats := strings.TrimSpace(renderCheckpointTreeDBStatsString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointTreeDBStats)); checkpointStats != "" {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB Selected Stats (Checkpoint Snapshots)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(checkpointStats)
+		sb.WriteString("\n```\n")
+	}
 	if len(run.VacuumDurations) > 0 {
 		sb.WriteString("\n")
 		sb.WriteString("## Vacuum Time (Between Tests)\n\n")
@@ -5944,6 +6083,61 @@ func renderMarkdownSingle(run BenchRun) string {
 		}
 	}
 	return sb.String()
+}
+
+func renderCheckpointTreeDBStatsString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, checkpointStats map[string]map[string]map[string]string) string {
+	if len(checkpointStats) == 0 {
+		return ""
+	}
+	order := make([]string, 0, len(finalTestOrder)+1)
+	seen := make(map[string]struct{}, len(checkpointStats))
+	for _, testName := range finalTestOrder {
+		if _, ok := checkpointStats[testName]; !ok {
+			continue
+		}
+		order = append(order, testName)
+		seen[testName] = struct{}{}
+	}
+	if _, ok := checkpointStats[checkpointPostRunLabel]; ok {
+		if _, already := seen[checkpointPostRunLabel]; !already {
+			order = append(order, checkpointPostRunLabel)
+			seen[checkpointPostRunLabel] = struct{}{}
+		}
+	}
+	var extras []string
+	for label := range checkpointStats {
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		extras = append(extras, label)
+	}
+	sort.Strings(extras)
+	order = append(order, extras...)
+
+	var sb strings.Builder
+	for _, label := range order {
+		statsText := strings.TrimSpace(renderTreeDBSelectedStatsString(instances, checkpointStats[label]))
+		if statsText == "" {
+			continue
+		}
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		display := displayNames[label]
+		if strings.TrimSpace(display) == "" {
+			display = label
+		}
+		if label == checkpointPostRunLabel {
+			sb.WriteString("after run")
+		} else {
+			sb.WriteString("before ")
+			sb.WriteString(display)
+		}
+		sb.WriteByte('\n')
+		sb.WriteString(statsText)
+		sb.WriteByte('\n')
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func renderTreeDBPerfString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, perf map[string]map[string]treeDBPerfMetrics) string {
@@ -6364,6 +6558,9 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "flush_apply.prepared_output.leaf_log_pages_installed_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_installed_total"}},
 		{label: "flush_apply.prepared_output.leaf_log_pages_abandoned_total", alts: []string{"treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"}},
 		{label: "flush_apply.cache.foreground_assist_wait_ns_total", alts: []string{"treedb.cache.flush_apply.foreground_assist_wait_ns_total"}},
+		{label: "flush_apply.cache.coordinator.active", alts: []string{"treedb.cache.flush_apply.coordinator.active"}},
+		{label: "flush_apply.cache.coordinator.active_workers", alts: []string{"treedb.cache.flush_apply.coordinator.active_workers"}},
+		{label: "flush_apply.cache.coordinator.in_flight_bytes", alts: []string{"treedb.cache.flush_apply.coordinator.in_flight_bytes"}},
 		{label: "flush_apply.cache.coordinator.active_assist_skips_total", alts: []string{"treedb.cache.flush_apply.coordinator.active_assist_skips_total"}},
 		{label: "flush_apply.cache.coordinator.progress_wait_ns_total", alts: []string{"treedb.cache.flush_apply.coordinator.progress_wait_ns_total"}},
 		{label: "flush_apply.cache.coordinator.stall_waits_total", alts: []string{"treedb.cache.flush_apply.coordinator.stall_waits_total"}},
@@ -7590,6 +7787,39 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dµs", d.Microseconds())
 }
 
+func parseCheckpointSettleBeforeTests(arg string) (map[string]struct{}, bool) {
+	parts := parseList(arg)
+	if len(parts) == 0 {
+		return nil, false
+	}
+	out := make(map[string]struct{}, len(parts))
+	all := false
+	for _, raw := range parts {
+		if raw == "" {
+			continue
+		}
+		switch raw {
+		case "all", "*":
+			all = true
+			continue
+		case "after_run", "after-run", "postrun", "post_run":
+			raw = checkpointPostRunLabel
+		}
+		if raw != checkpointPostRunLabel {
+			normalized := normalizeTests([]string{raw})
+			if len(normalized) == 0 {
+				continue
+			}
+			raw = normalized[0]
+		}
+		out[raw] = struct{}{}
+	}
+	if len(out) == 0 {
+		out = nil
+	}
+	return out, all
+}
+
 func parseList(s string) []string {
 	parts := strings.Split(s, ",")
 	for i := range parts {
@@ -7691,6 +7921,63 @@ func settleBenchInstances(instances []*DBInstance) error {
 	return nil
 }
 
+func shouldSettleBeforeCheckpoint(cfg BenchConfig, label string) bool {
+	if label == "" {
+		return false
+	}
+	if cfg.CheckpointSettleBeforeAll {
+		return true
+	}
+	if len(cfg.CheckpointSettleBeforeTests) == 0 {
+		return false
+	}
+	_, ok := cfg.CheckpointSettleBeforeTests[label]
+	return ok
+}
+
+func checkpointSettleTimeoutOrDefault(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultCheckpointSettleTimeout
+	}
+	return timeout
+}
+
+func waitForTreeDBQueueDrainInstance(inst *DBInstance, timeout time.Duration) (time.Duration, bool, error) {
+	if inst == nil || inst.Wrapper == nil || !isTreeDBInstance(inst) {
+		return 0, false, nil
+	}
+	sp, ok := inst.Wrapper.(kvstore.StatsProvider)
+	if !ok {
+		return 0, false, nil
+	}
+	timeout = checkpointSettleTimeoutOrDefault(timeout)
+	start := time.Now()
+	deadline := start.Add(timeout)
+	for {
+		stats := sp.Stats()
+		pending := false
+		if queueLen, ok := parseStatInt64(stats, "treedb.cache.queue_len"); ok && queueLen > 0 {
+			pending = true
+		}
+		if backlogBytes, ok := parseStatInt64(stats, "treedb.cache.queue_backlog_bytes"); ok && backlogBytes > 0 {
+			pending = true
+		}
+		if activeWorkers, ok := parseStatInt64(stats, "treedb.cache.flush_apply.coordinator.active_workers"); ok && activeWorkers > 0 {
+			pending = true
+		}
+		if inFlightBytes, ok := parseStatInt64(stats, "treedb.cache.flush_apply.coordinator.in_flight_bytes"); ok && inFlightBytes > 0 {
+			pending = true
+		}
+		if !pending {
+			return time.Since(start), true, nil
+		}
+		if time.Now().After(deadline) {
+			return time.Since(start), true, fmt.Errorf("checkpoint settle timeout: treedb cache queue did not drain within %s", timeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func waitForTreeDBQueueDrain(instances []*DBInstance, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -7712,6 +7999,14 @@ func waitForTreeDBQueueDrain(instances []*DBInstance, timeout time.Duration) err
 				break
 			}
 			if backlogBytes, ok := parseStatInt64(stats, "treedb.cache.queue_backlog_bytes"); ok && backlogBytes > 0 {
+				pending = true
+				break
+			}
+			if activeWorkers, ok := parseStatInt64(stats, "treedb.cache.flush_apply.coordinator.active_workers"); ok && activeWorkers > 0 {
+				pending = true
+				break
+			}
+			if inFlightBytes, ok := parseStatInt64(stats, "treedb.cache.flush_apply.coordinator.in_flight_bytes"); ok && inFlightBytes > 0 {
 				pending = true
 				break
 			}
