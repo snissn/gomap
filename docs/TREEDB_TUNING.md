@@ -152,7 +152,9 @@ excludes maintenance and recovery paths. The #2950 LANE-M1 default-policy design
 is recorded in `docs/TREEDB_WIDE_LEAF_LOG_DEFAULT_POLICY_M1.md`; it proposes a
 future normal cached non-maintenance batch/prepared-batch c4-capped default,
 requires a direct leaf-log append-lane rollback knob before implementation, and
-keeps single-page, maintenance, rewrite, recovery, standalone, and c8/c16 paths
+keeps single-page appends, maintenance/rewrite/leaf-pack/vacuum writers,
+command WAL replay/recovery, standalone/direct-backend leaf logs,
+cold-build/rebuild/bulk callers, backend-direct benchmark rows, and c8/c16 paths
 out of the default policy.
 
 ### Read latency under flush debt (cached mode)
