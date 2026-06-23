@@ -265,6 +265,7 @@ func (d *checkpointStatsDB) Stats() map[string]string {
 	return map[string]string{
 		"treedb.cache.queue_len":                                                       "0",
 		"treedb.cache.queue_backlog_bytes":                                             "0",
+		"treedb.cache.flush_apply.coordinator.active":                                  "0",
 		"treedb.cache.flush_apply.coordinator.active_workers":                          "0",
 		"treedb.cache.flush_apply.coordinator.in_flight_bytes":                         "0",
 		"treedb.cache.checkpoint.active_background_flush_wait_ns_last":                 fmt.Sprintf("%d", calls*10),
@@ -276,15 +277,18 @@ func (d *checkpointStatsDB) Stats() map[string]string {
 
 func (d *activeFlushStatsDB) Stats() map[string]string {
 	calls := d.statsCalls.Add(1)
+	active := "0"
 	activeWorkers := "0"
 	inFlightBytes := "0"
 	if calls == 1 {
+		active = "1"
 		activeWorkers = "1"
 		inFlightBytes = "1024"
 	}
 	return map[string]string{
 		"treedb.cache.queue_len":                               "0",
 		"treedb.cache.queue_backlog_bytes":                     "0",
+		"treedb.cache.flush_apply.coordinator.active":          active,
 		"treedb.cache.flush_apply.coordinator.active_workers":  activeWorkers,
 		"treedb.cache.flush_apply.coordinator.in_flight_bytes": inFlightBytes,
 	}
@@ -1986,6 +1990,31 @@ func TestWaitForTreeDBQueueDrainInstanceWaitsForActiveFlush(t *testing.T) {
 	}
 	if got := db.statsCalls.Load(); got < 2 {
 		t.Fatalf("stats calls=%d want at least 2", got)
+	}
+}
+
+func TestRunBenchmark_CheckpointSettleRejectsUnknownLabel(t *testing.T) {
+	const dbName = "treedb_checkpoint_bad_settle_label_mock"
+	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
+		return &checkpointStatsDB{fixedNameDB: fixedNameDB{name: "TreeDB"}}, nil
+	})
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:           1,
+		ValueSize:      1,
+		BatchSize:      1,
+		DBsArg:         dbName,
+		TestsArg:       "sequential_write",
+		KeepDir:        false,
+		Progress:       false,
+		SeedUsed:       1,
+		ReadRequireHit: false,
+
+		CheckpointBetweenTests:      true,
+		CheckpointSettleBeforeTests: map[string]struct{}{"typo_label": {}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown checkpoint settle label") {
+		t.Fatalf("runBenchmark error=%v, want unknown checkpoint settle label", err)
 	}
 }
 

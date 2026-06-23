@@ -4448,6 +4448,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if len(finalTestOrder) == 0 {
 		return BenchRun{}, fmt.Errorf("no tests selected")
 	}
+	if err := validateCheckpointSettleBeforeTests(cfg, finalTestOrder); err != nil {
+		return BenchRun{}, err
+	}
 
 	maxEncodedKey := uint64(cfg.Keys)
 	setMaxEncoded := func(v uint64) {
@@ -4632,12 +4635,19 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 
 				if shouldSettleBeforeCheckpoint(cfg, testName) {
-					settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
+					if err := guard.Checkpoint(); err != nil {
+						return BenchRun{}, err
+					}
+					settleTimeout := checkpointSettleTimeoutWithGuard(cfg.CheckpointSettleTimeout, guard)
+					settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, settleTimeout)
 					if settleErr != nil {
 						return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, testName, settleErr)
 					}
 					if settled {
 						recordDuration(checkpointSettleDurations, testName, inst.Wrapper.Name(), settleDur)
+					}
+					if err := guard.Checkpoint(); err != nil {
+						return BenchRun{}, err
 					}
 				}
 
@@ -4932,12 +4942,19 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 
 			if shouldSettleBeforeCheckpoint(cfg, checkpointPostRunLabel) {
-				settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
+				if err := guard.Checkpoint(); err != nil {
+					return BenchRun{}, err
+				}
+				settleTimeout := checkpointSettleTimeoutWithGuard(cfg.CheckpointSettleTimeout, guard)
+				settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, settleTimeout)
 				if settleErr != nil {
 					return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, checkpointPostRunLabel, settleErr)
 				}
 				if settled {
 					recordDuration(checkpointSettleDurations, checkpointPostRunLabel, inst.Wrapper.Name(), settleDur)
+				}
+				if err := guard.Checkpoint(); err != nil {
+					return BenchRun{}, err
 				}
 			}
 
@@ -7935,9 +7952,46 @@ func shouldSettleBeforeCheckpoint(cfg BenchConfig, label string) bool {
 	return ok
 }
 
+func validateCheckpointSettleBeforeTests(cfg BenchConfig, finalTestOrder []string) error {
+	if len(cfg.CheckpointSettleBeforeTests) == 0 {
+		return nil
+	}
+	valid := make(map[string]struct{}, len(finalTestOrder)+1)
+	for _, label := range finalTestOrder {
+		valid[label] = struct{}{}
+	}
+	valid[checkpointPostRunLabel] = struct{}{}
+	var unknown []string
+	for label := range cfg.CheckpointSettleBeforeTests {
+		if _, ok := valid[label]; !ok {
+			unknown = append(unknown, label)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return fmt.Errorf("unknown checkpoint settle label(s): %s", strings.Join(unknown, ","))
+}
+
 func checkpointSettleTimeoutOrDefault(timeout time.Duration) time.Duration {
 	if timeout <= 0 {
 		return defaultCheckpointSettleTimeout
+	}
+	return timeout
+}
+
+func checkpointSettleTimeoutWithGuard(timeout time.Duration, guard *benchGuard) time.Duration {
+	timeout = checkpointSettleTimeoutOrDefault(timeout)
+	if guard == nil || guard.deadline.IsZero() {
+		return timeout
+	}
+	remaining := time.Until(guard.deadline)
+	if remaining <= 0 {
+		return time.Nanosecond
+	}
+	if remaining < timeout {
+		return remaining
 	}
 	return timeout
 }
@@ -7960,6 +8014,9 @@ func waitForTreeDBQueueDrainInstance(inst *DBInstance, timeout time.Duration) (t
 			pending = true
 		}
 		if backlogBytes, ok := parseStatInt64(stats, "treedb.cache.queue_backlog_bytes"); ok && backlogBytes > 0 {
+			pending = true
+		}
+		if active, ok := parseStatInt64(stats, "treedb.cache.flush_apply.coordinator.active"); ok && active > 0 {
 			pending = true
 		}
 		if activeWorkers, ok := parseStatInt64(stats, "treedb.cache.flush_apply.coordinator.active_workers"); ok && activeWorkers > 0 {
@@ -7999,6 +8056,10 @@ func waitForTreeDBQueueDrain(instances []*DBInstance, timeout time.Duration) err
 				break
 			}
 			if backlogBytes, ok := parseStatInt64(stats, "treedb.cache.queue_backlog_bytes"); ok && backlogBytes > 0 {
+				pending = true
+				break
+			}
+			if active, ok := parseStatInt64(stats, "treedb.cache.flush_apply.coordinator.active"); ok && active > 0 {
 				pending = true
 				break
 			}

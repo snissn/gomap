@@ -191,7 +191,7 @@ explicitly deferred.
 - `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
 - `-max-rss-mb` abort the run if RSS exceeds this many MiB (guardrail; `0` = disabled; Linux-only)
 - `-checkpoint-between-tests` force a best-effort durability checkpoint between tests (DBs that support `Checkpoint()`), and also once after the final test so end-of-run disk usage reflects a settled state
-- `-checkpoint-settle-before-tests` comma-separated checkpoint labels that should first wait for TreeDB queue/background debt to drain before checkpointing (for example `random_read`, `post-run`, or `all`); useful for immediate-vs-settled checkpoint comparisons without changing production behavior
+- `-checkpoint-settle-before-tests` comma-separated checkpoint labels that should first wait for TreeDB queue/background debt to drain before checkpointing (for example `random_read`, `post-run`, or `all`; explicit labels must match the selected test order or the run fails); useful for immediate-vs-settled checkpoint comparisons without changing production behavior
 - `-checkpoint-settle-timeout` maximum wait for `-checkpoint-settle-before-tests` (default `10m`)
 - `-vacuum-between-tests` vacuum supported DBs between tests (implies `-checkpoint-between-tests`; TreeDB uses `VacuumIndexOnline`)
 - `-treedb-vlog-rewrite-after-run` run the full TreeDB `CompactStorage` path after the run and report before/after disk usage + the data directory path; the flag name is kept for compatibility
