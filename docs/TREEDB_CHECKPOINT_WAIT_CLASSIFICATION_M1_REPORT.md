@@ -1,7 +1,7 @@
 # TreeDB Checkpoint Wait Classification M1 Report
 
-Issue: [#2946](https://github.com/snissn/gomap/issues/2946)  
-Parent tracker: [#2943](https://github.com/snissn/gomap/issues/2943)  
+Issue: [#2946](https://github.com/snissn/gomap/issues/2946)
+Parent tracker: [#2943](https://github.com/snissn/gomap/issues/2943)
 Root parents: [#2916](https://github.com/snissn/gomap/issues/2916) / [#2899](https://github.com/snissn/gomap/issues/2899)
 
 ## Verdict
@@ -42,8 +42,11 @@ report does not claim parent closure.
 
 - Evidence root: `/tmp/gomap_2946_checkpoint_wait_20260623_122739`
 - Evidence head SHA: `a7f1f9cb11cd939bec6a28d6c2caa6d76e9acd65`
-- Base SHA: `4613e89013a7708413185dedbf0bbb89025577a1` (`origin/main`, includes
+- Evidence base SHA: `4613e89013a7708413185dedbf0bbb89025577a1` (`origin/main`, includes
   #2945/#2949 and #2950)
+- Branch was later rebased onto `8d430e1b4e6e837f10c09db7bbb2b6a341768e64`
+  (PR #2962 / #2947) without rerunning the full matrix, per coordinator
+  direction.
 - Host: `mikers-B560-DS3H-AC-Y1`
 - CPU: Intel i5-11400F, 6 cores / 12 threads (`nproc=12`)
 - OS: Linux `6.8.0-124-generic` x86_64
