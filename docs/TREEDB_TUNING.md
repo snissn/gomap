@@ -148,7 +148,12 @@ issue #2943 tracks the remaining checkpoint active-background/barrier wait block
 The #2949 LANE-M0 append-path inventory is recorded in
 `docs/TREEDB_LEAF_LOG_APPEND_PATHS_LANE_M0_INVENTORY.md`; it keeps generic
 batch/default widening as a future proof-gated policy decision and explicitly
-excludes maintenance and recovery paths.
+excludes maintenance and recovery paths. The #2950 LANE-M1 default-policy design
+is recorded in `docs/TREEDB_WIDE_LEAF_LOG_DEFAULT_POLICY_M1.md`; it proposes a
+future normal cached non-maintenance batch/prepared-batch c4-capped default,
+requires a direct leaf-log append-lane rollback knob before implementation, and
+keeps single-page, maintenance, rewrite, recovery, standalone, and c8/c16 paths
+out of the default policy.
 
 ### Read latency under flush debt (cached mode)
 
