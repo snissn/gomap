@@ -231,6 +231,7 @@ func (db *DB) observeCheckpointActiveBackgroundFlushWait(wait time.Duration) {
 	}
 	ns := uint64(wait.Nanoseconds())
 	db.checkpointActiveBackgroundFlushWaitNs.Add(ns)
+	db.checkpointActiveBackgroundFlushWaitLastNs.Store(ns)
 	db.checkpointActiveBackgroundFlushWaitSamples.Add(1)
 	updateAtomicMaxUint64(&db.checkpointActiveBackgroundFlushWaitMaxNs, ns)
 }
