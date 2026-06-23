@@ -21745,6 +21745,21 @@ func (db *DB) observeCheckpointSharedDrainWork(background bool, units int, ops i
 	db.checkpointSharedDrainCheckpointBytes.Add(byu)
 }
 
+func (db *DB) resetCheckpointFlushAllLastStats() {
+	if db == nil {
+		return
+	}
+	db.checkpointFlushAllWorkersLast.Store(0)
+	db.checkpointFlushAllFrontierLanesLast.Store(0)
+	db.checkpointOwnedDrainUnitsLast.Store(0)
+	db.checkpointOwnedDrainOpsLast.Store(0)
+	db.checkpointOwnedDrainBytesLast.Store(0)
+	db.checkpointOwnedDrainNsLast.Store(0)
+	db.checkpointBackgroundDrainUnitsLast.Store(0)
+	db.checkpointBackgroundDrainOpsLast.Store(0)
+	db.checkpointBackgroundDrainBytesLast.Store(0)
+}
+
 func (db *DB) observeCheckpointOwnedDrain(checkpointUnitsBefore, checkpointOpsBefore, checkpointBytesBefore uint64, backgroundUnitsBefore, backgroundOpsBefore, backgroundBytesBefore uint64, d time.Duration) {
 	if db == nil {
 		return
@@ -22103,6 +22118,8 @@ func (db *DB) Checkpoint() error {
 		db.checkpointMu.Unlock()
 		lockFlushMu()
 	}
+
+	db.resetCheckpointFlushAllLastStats()
 
 	defer func() { // This defer runs when db.Checkpoint() returns
 		db.checkpointMu.Lock()

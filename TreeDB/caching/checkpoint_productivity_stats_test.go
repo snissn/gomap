@@ -36,6 +36,16 @@ func TestCheckpointWaitProductivityStatsNoopCheckpoint(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
+	db.checkpointFlushAllWorkersLast.Store(2)
+	db.checkpointFlushAllFrontierLanesLast.Store(2)
+	db.checkpointOwnedDrainUnitsLast.Store(3)
+	db.checkpointOwnedDrainOpsLast.Store(4)
+	db.checkpointOwnedDrainBytesLast.Store(5)
+	db.checkpointOwnedDrainNsLast.Store(6)
+	db.checkpointBackgroundDrainUnitsLast.Store(7)
+	db.checkpointBackgroundDrainOpsLast.Store(8)
+	db.checkpointBackgroundDrainBytesLast.Store(9)
+
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -50,8 +60,15 @@ func TestCheckpointWaitProductivityStatsNoopCheckpoint(t *testing.T) {
 		"treedb.cache.checkpoint.wait.frontier_units_at_request_last",
 		"treedb.cache.checkpoint.wait.remaining_frontier_units_last",
 		"treedb.cache.checkpoint.wait.drained_frontier_units_last",
+		"treedb.cache.checkpoint.flush_all.workers_last",
+		"treedb.cache.checkpoint.flush_all.frontier_lanes_last",
 		"treedb.cache.checkpoint.flush_all.owned_drain_units_last",
+		"treedb.cache.checkpoint.flush_all.owned_drain_ops_last",
+		"treedb.cache.checkpoint.flush_all.owned_drain_bytes_last",
+		"treedb.cache.checkpoint.flush_all.owned_drain_ns_last",
 		"treedb.cache.checkpoint.flush_all.background_drain_units_last",
+		"treedb.cache.checkpoint.flush_all.background_drain_ops_last",
+		"treedb.cache.checkpoint.flush_all.background_drain_bytes_last",
 	} {
 		if got := requireStatUint64(t, stats, key); got != 0 {
 			t.Fatalf("%s=%d want 0", key, got)
