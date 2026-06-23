@@ -8334,6 +8334,7 @@ type DB struct {
 	flushBacklogCoalescingLastOldLeafBytesPerOpPPM               atomic.Uint64
 	flushBacklogCoalescingSkipReasons                            [flushBacklogCoalescingSkipReasonCount]atomic.Uint64
 	flushCoordinatorActive                                       atomic.Int64
+	flushCoordinatorActiveWorkers                                atomic.Int64
 	flushCoordinatorInFlightBytes                                atomic.Int64
 	flushCoordinatorProgress                                     atomic.Uint64
 	flushCoordinatorErrors                                       atomic.Uint64
@@ -21447,7 +21448,7 @@ func (db *DB) checkpointDebtSnapshotLocked() checkpointDebtSnapshot {
 		queueUnits:          uint64(len(db.queue)),
 		mutableBytes:        nonNegativeInt64ToUint64(db.mutableBytes.Load()),
 		activeInFlightBytes: nonNegativeInt64ToUint64(db.flushCoordinatorInFlightBytes.Load()),
-		activeWorkers:       nonNegativeInt64ToUint64(db.flushCoordinatorActive.Load()),
+		activeWorkers:       nonNegativeInt64ToUint64(db.flushCoordinatorActiveWorkers.Load()),
 	}
 	if len(db.queue) > 0 {
 		lanes := make(map[uint16]struct{})

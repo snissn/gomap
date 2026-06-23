@@ -258,6 +258,7 @@ func (db *DB) beginFlushCoordinatorWork(bytes int64) {
 	if db == nil {
 		return
 	}
+	db.flushCoordinatorActiveWorkers.Add(1)
 	if bytes > 0 {
 		db.flushCoordinatorInFlightBytes.Add(bytes)
 	}
@@ -268,6 +269,7 @@ func (db *DB) finishFlushCoordinatorWork(bytes int64, success bool) {
 	if db == nil {
 		return
 	}
+	addAtomicInt64FloorZero(&db.flushCoordinatorActiveWorkers, -1)
 	if bytes > 0 {
 		addAtomicInt64FloorZero(&db.flushCoordinatorInFlightBytes, -bytes)
 	}
@@ -529,6 +531,7 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 		stats["treedb.cache.flush_backlog_coalescing.skip.reason."+reason.String()+"_total"] = fmt.Sprintf("%d", db.flushBacklogCoalescingSkipReasons[reason].Load())
 	}
 	stats["treedb.cache.flush_apply.coordinator.active"] = fmt.Sprintf("%d", db.flushCoordinatorActive.Load())
+	stats["treedb.cache.flush_apply.coordinator.active_workers"] = fmt.Sprintf("%d", db.flushCoordinatorActiveWorkers.Load())
 	stats["treedb.cache.flush_apply.coordinator.in_flight_bytes"] = fmt.Sprintf("%d", db.flushCoordinatorInFlightBytes.Load())
 	stats["treedb.cache.flush_apply.coordinator.progress_total"] = fmt.Sprintf("%d", db.flushCoordinatorProgress.Load())
 	stats["treedb.cache.flush_apply.coordinator.errors_total"] = fmt.Sprintf("%d", db.flushCoordinatorErrors.Load())
