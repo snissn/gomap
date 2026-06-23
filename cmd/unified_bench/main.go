@@ -4673,8 +4673,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				if checkpointErr != nil {
 					return BenchRun{}, fmt.Errorf("checkpoint %s before %s: %w", inst.Name, testName, checkpointErr)
 				}
-				recordCheckpointTreeDBStats(checkpointTreeDBStats, testName, inst.Wrapper)
 				chkMap[inst.Wrapper.Name()] = time.Since(start)
+				recordCheckpointTreeDBStats(checkpointTreeDBStats, testName, inst.Wrapper)
 			}
 			checkpointDurations[testName] = chkMap
 
@@ -4980,8 +4980,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if checkpointErr != nil {
 				return BenchRun{}, fmt.Errorf("checkpoint %s after run: %w", inst.Name, checkpointErr)
 			}
-			recordCheckpointTreeDBStats(checkpointTreeDBStats, checkpointPostRunLabel, inst.Wrapper)
 			chkMap[inst.Wrapper.Name()] = time.Since(start)
+			recordCheckpointTreeDBStats(checkpointTreeDBStats, checkpointPostRunLabel, inst.Wrapper)
 		}
 		if len(chkMap) > 0 {
 			checkpointDurations[checkpointPostRunLabel] = chkMap
