@@ -4631,6 +4631,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					continue
 				}
 
+				if shouldSettleBeforeCheckpoint(cfg, testName) {
+					settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
+					if settleErr != nil {
+						return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, testName, settleErr)
+					}
+					if settled {
+						recordDuration(checkpointSettleDurations, testName, inst.Wrapper.Name(), settleDur)
+					}
+				}
+
 				var (
 					checkpointCPUFile *os.File
 					err               error
@@ -4639,16 +4649,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					checkpointCPUFile, err = startCheckpointCPUProfile(cfg, profileHooks, testName, inst.Wrapper.Name())
 					if err != nil {
 						return BenchRun{}, fmt.Errorf("checkpoint %s before %s profiling: %w", inst.Name, testName, err)
-					}
-				}
-
-				if shouldSettleBeforeCheckpoint(cfg, testName) {
-					settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
-					if settleErr != nil {
-						return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, testName, settleErr)
-					}
-					if settled {
-						recordDuration(checkpointSettleDurations, testName, inst.Wrapper.Name(), settleDur)
 					}
 				}
 
@@ -4931,6 +4931,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				continue
 			}
 
+			if shouldSettleBeforeCheckpoint(cfg, checkpointPostRunLabel) {
+				settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
+				if settleErr != nil {
+					return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, checkpointPostRunLabel, settleErr)
+				}
+				if settled {
+					recordDuration(checkpointSettleDurations, checkpointPostRunLabel, inst.Wrapper.Name(), settleDur)
+				}
+			}
+
 			var (
 				checkpointCPUFile *os.File
 				err               error
@@ -4939,16 +4949,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				checkpointCPUFile, err = startCheckpointCPUProfile(cfg, profileHooks, checkpointPostRunLabel, inst.Wrapper.Name())
 				if err != nil {
 					return BenchRun{}, fmt.Errorf("checkpoint %s after run profiling: %w", inst.Name, err)
-				}
-			}
-
-			if shouldSettleBeforeCheckpoint(cfg, checkpointPostRunLabel) {
-				settleDur, settled, settleErr := waitForTreeDBQueueDrainInstance(inst, cfg.CheckpointSettleTimeout)
-				if settleErr != nil {
-					return BenchRun{}, fmt.Errorf("settle %s before checkpoint %s: %w", inst.Name, checkpointPostRunLabel, settleErr)
-				}
-				if settled {
-					recordDuration(checkpointSettleDurations, checkpointPostRunLabel, inst.Wrapper.Name(), settleDur)
 				}
 			}
 
