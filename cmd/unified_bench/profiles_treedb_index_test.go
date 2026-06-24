@@ -111,8 +111,8 @@ func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmissionRejectsInvalid(t *tes
 	}
 }
 
-func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC4Adaptive(t *testing.T) {
-	oldGOMAXPROCS := runtime.GOMAXPROCS(4)
+func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC8CappedAdaptive(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(12)
 	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
@@ -123,7 +123,7 @@ func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC4Adaptive(t *testin
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions default auto: %v", err)
 	}
-	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 4 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 8 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
 		t.Fatalf("default auto candidate not selected: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 	}
 	if opts.FlushApplyMinEntries != 1 || opts.FlushApplyMinSpans != 1 || opts.FlushApplyMinBytes != 1 {
@@ -136,16 +136,16 @@ func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC4Adaptive(t *testin
 	for _, want := range []string{
 		"flush_admission_policy=auto",
 		"flush_admission_admitted=true",
-		"flush_admission_reason=auto_admitted_c4_adaptive",
-		"flush_admission_effective_concurrency=4",
-		"flush_apply_concurrency=4",
+		"flush_admission_reason=auto_admitted_capped_adaptive",
+		"flush_admission_effective_concurrency=8",
+		"flush_apply_concurrency=8",
 		"flush_apply_min_entries_configured=1",
 		"flush_apply_min_spans_configured=1",
 		"flush_apply_min_bytes_configured=1",
 		"flush_apply_span_native=true",
 		"flush_backlog_coalescing=true",
 		"outer_leaf_read_cache_write_admission=adaptive",
-		"  - flush_admission_policy=auto admitted: auto_admitted_c4_adaptive",
+		"  - flush_admission_policy=auto admitted: auto_admitted_capped_adaptive",
 	} {
 		if !treeDBReportHasLine(text, want) {
 			t.Fatalf("resolved options missing line %q: %q", want, text)

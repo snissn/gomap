@@ -2,28 +2,29 @@ package db
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 )
 
 const (
-	defaultFlushAdmissionAutoConcurrency = 4
-	defaultFlushAdmissionAutoMinEntries  = 1
-	defaultFlushAdmissionAutoMinSpans    = 1
-	defaultFlushAdmissionAutoMinBytes    = 1
+	defaultFlushAdmissionAutoConcurrencyCap = 8
+	defaultFlushAdmissionAutoMinConcurrency = 2
+	defaultFlushAdmissionAutoMinEntries     = 1
+	defaultFlushAdmissionAutoMinSpans       = 1
+	defaultFlushAdmissionAutoMinBytes       = 1
 )
 
 // FlushAdmissionPolicy controls how TreeDB admits the span-native/backlog
 // flush/apply candidate path. The zero value is the default auto selector: it
-// admits the measured conservative c4/adaptive candidate on sufficiently
-// parallel hosts, declines low-concurrency shapes, and leaves rollback and
-// explicit opt-in policies available.
+// admits the measured machine-aware capped span-native/backlog/adaptive
+// candidate on sufficiently parallel hosts, declines low-concurrency shapes,
+// and leaves rollback and explicit opt-in policies available.
 type FlushAdmissionPolicy uint8
 
 const (
 	// FlushAdmissionPolicyAuto is the default selector. It admits the measured
-	// c4 span-native/backlog/adaptive-cache candidate only when the low-concurrency
-	// guardrail passes; otherwise it fails closed to the serial path.
+	// span-native/backlog/adaptive-cache candidate at min(GOMAXPROCS, 8) only when
+	// the low-concurrency guardrail passes; otherwise it fails closed to the
+	// serial path.
 	FlushAdmissionPolicyAuto FlushAdmissionPolicy = iota
 	// FlushAdmissionPolicyExplicit preserves existing explicit knobs. Use this to
 	// opt in to a non-default span-native/backlog/concurrency/cache shape.
@@ -34,15 +35,15 @@ const (
 )
 
 const (
-	FlushAdmissionReasonNoExplicitOptIn     = "no_explicit_opt_in"
-	FlushAdmissionReasonExplicitOptIn       = "explicit_opt_in"
-	FlushAdmissionReasonPolicyOff           = "policy_off"
-	FlushAdmissionReasonAutoAdmitted        = "auto_admitted"
-	FlushAdmissionReasonAutoAdmittedC4Adapt = "auto_admitted_c4_adaptive"
-	FlushAdmissionReasonLowConcurrency      = "low_concurrency"
-	FlushAdmissionReasonUnsafeDurability    = "unsafe_durability"
-	FlushAdmissionReasonCheckpointDebt      = "checkpoint_debt_unresolved"
-	FlushAdmissionReasonInvalidPolicy       = "invalid_policy"
+	FlushAdmissionReasonNoExplicitOptIn         = "no_explicit_opt_in"
+	FlushAdmissionReasonExplicitOptIn           = "explicit_opt_in"
+	FlushAdmissionReasonPolicyOff               = "policy_off"
+	FlushAdmissionReasonAutoAdmitted            = "auto_admitted"
+	FlushAdmissionReasonAutoAdmittedCappedAdapt = "auto_admitted_capped_adaptive"
+	FlushAdmissionReasonLowConcurrency          = "low_concurrency"
+	FlushAdmissionReasonUnsafeDurability        = "unsafe_durability"
+	FlushAdmissionReasonCheckpointDebt          = "checkpoint_debt_unresolved"
+	FlushAdmissionReasonInvalidPolicy           = "invalid_policy"
 )
 
 // #2794/B1 checkpoint debt is accepted for this cycle as a bounded analytics
@@ -158,7 +159,7 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 	case FlushAdmissionPolicyAuto:
 		reasons := make([]string, 0, 2)
 		candidateConcurrency := autoFlushApplyConcurrency(opts.FlushApplyConcurrency)
-		if candidateConcurrency < defaultFlushAdmissionAutoConcurrency {
+		if candidateConcurrency < defaultFlushAdmissionAutoMinConcurrency {
 			reasons = append(reasons, FlushAdmissionReasonLowConcurrency)
 		}
 		if opts.Durability == DurabilityWALOffRelaxed {
@@ -172,7 +173,7 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 			return decision
 		}
 
-		opts.FlushApplyConcurrency = defaultFlushAdmissionAutoConcurrency
+		opts.FlushApplyConcurrency = candidateConcurrency
 		opts.FlushApplyMinEntries = defaultFlushAdmissionAutoMinEntries
 		opts.FlushApplyMinSpans = defaultFlushAdmissionAutoMinSpans
 		opts.FlushApplyMinBytes = defaultFlushAdmissionAutoMinBytes
@@ -183,8 +184,8 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 		}
 
 		decision.Admitted = true
-		decision.Reason = FlushAdmissionReasonAutoAdmittedC4Adapt
-		decision.FlushApplyConcurrency = defaultFlushAdmissionAutoConcurrency
+		decision.Reason = FlushAdmissionReasonAutoAdmittedCappedAdapt
+		decision.FlushApplyConcurrency = candidateConcurrency
 		decision.FlushApplySpanNative = true
 		decision.FlushBacklogCoalescing = true
 		decision.LeafPageReadCacheWriteAdmission = opts.LeafPageReadCacheWriteAdmission
@@ -197,13 +198,13 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 }
 
 func autoFlushApplyConcurrency(configured int) int {
-	if configured > 0 {
-		return normalizeFlushApplyConcurrency(configured)
+	workers := configured
+	if workers <= 0 {
+		workers = defaultFlushAdmissionAutoConcurrencyCap
 	}
-	workers := defaultFlushAdmissionAutoConcurrency
-	gomax := runtime.GOMAXPROCS(0)
-	if gomax < workers {
-		workers = gomax
+	workers = normalizeFlushApplyConcurrency(workers)
+	if workers > defaultFlushAdmissionAutoConcurrencyCap {
+		workers = defaultFlushAdmissionAutoConcurrencyCap
 	}
 	return normalizeFlushApplyConcurrency(workers)
 }

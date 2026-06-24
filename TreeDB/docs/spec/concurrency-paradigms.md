@@ -377,7 +377,7 @@ Note:
 | `Options.FlushBuildChunkMinBytes` | Adaptive chunk lower bound. |
 | `Options.FlushBuildChunkMaxBytes` | Adaptive chunk upper bound. |
 | `Options.FlushBuildPrefetchUnits` | Build prefetch depth for flush pipeline. |
-| `Options.FlushApplyConcurrency` | Experimental/default-off COW apply worker-pool cap (`<=1` disables the M2 opt-in path). |
+| `Options.FlushApplyConcurrency` | COW apply worker-pool cap. Default `FlushAdmissionPolicyAuto` selects `min(GOMAXPROCS, 8)` for the admitted span-native/backlog path; `<=1` disables the worker-pool path under explicit policy. |
 | `Options.FlushApplyMinEntries` | Planned span-op gate before enabling opt-in parallel apply. |
 | `Options.FlushApplyMinSpans` | Planned leaf-span gate before enabling opt-in parallel apply. |
 | `Options.FlushApplyMinBytes` | Planned span-byte gate before enabling opt-in parallel apply. |
@@ -388,9 +388,8 @@ Notes:
 - `FlushBuildConcurrency <= 0` defaults to `GOMAXPROCS`.
 - `FlushBuildMinEntries <= 0` defaults to `16k`.
 - `FlushBuildMinUnits <= 0` defaults to `2`.
-- `FlushApplyConcurrency` is not enabled by default; when set, workers are still capped by `GOMAXPROCS` and read-only leaf-span planning.
-- M5 keeps this path opt-in/default-off. Default-on production readiness is
-  blocked on the M6 checkpoint allocation/memcopy work tracked in #2757.
+- `FlushApplyConcurrency` is enabled by the default auto admission policy for durable cached-mode opens that pass guardrails. Auto selects `min(GOMAXPROCS, 8)` and remains capped by read-only leaf-span planning.
+- Roll back the default with `FlushAdmissionPolicyOff` / `-treedb-flush-admission-policy=off`; use `FlushAdmissionPolicyExplicit` for c4/c8/c16 experiments.
 - With value-log-backed outer leaves, workers may prepare block/dict
   grouped-frame bodies outside the leaf-log append mutex, but the durable append
   stream remains serialized per leaf-log lane. Published roots install leaf-log

@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestNormalizeFlushAdmission_DefaultAutoAdmitsC4Adaptive(t *testing.T) {
-	oldGOMAXPROCS := runtime.GOMAXPROCS(4)
+func TestNormalizeFlushAdmission_DefaultAutoAdmitsC8CappedAdaptive(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(12)
 	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
 
 	opts := Options{}
@@ -19,11 +19,11 @@ func TestNormalizeFlushAdmission_DefaultAutoAdmitsC4Adaptive(t *testing.T) {
 	if !decision.Admitted {
 		t.Fatalf("admitted=false want true; reason=%q", decision.Reason)
 	}
-	if decision.Reason != FlushAdmissionReasonAutoAdmittedC4Adapt {
-		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonAutoAdmittedC4Adapt)
+	if decision.Reason != FlushAdmissionReasonAutoAdmittedCappedAdapt {
+		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonAutoAdmittedCappedAdapt)
 	}
-	if opts.FlushApplyConcurrency != 4 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
-		t.Fatalf("default auto did not select c4 span/backlog: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	if opts.FlushApplyConcurrency != 8 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("default auto did not select c8-capped span/backlog: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 	}
 	if opts.FlushApplyMinEntries != 1 || opts.FlushApplyMinSpans != 1 || opts.FlushApplyMinBytes != 1 {
 		t.Fatalf("default auto did not select measured min gates: entries=%d spans=%d bytes=%d", opts.FlushApplyMinEntries, opts.FlushApplyMinSpans, opts.FlushApplyMinBytes)
@@ -31,8 +31,26 @@ func TestNormalizeFlushAdmission_DefaultAutoAdmitsC4Adaptive(t *testing.T) {
 	if opts.LeafPageReadCacheWriteAdmission != LeafPageReadCacheWriteAdmissionAdaptive {
 		t.Fatalf("default auto cache admission=%s want adaptive", opts.LeafPageReadCacheWriteAdmission)
 	}
-	if decision.FlushApplyConcurrency != 4 || !decision.FlushApplySpanNative || !decision.FlushBacklogCoalescing || decision.LeafPageReadCacheWriteAdmission != LeafPageReadCacheWriteAdmissionAdaptive {
-		t.Fatalf("decision did not report c4 adaptive candidate: %+v", decision)
+	if decision.FlushApplyConcurrency != 8 || !decision.FlushApplySpanNative || !decision.FlushBacklogCoalescing || decision.LeafPageReadCacheWriteAdmission != LeafPageReadCacheWriteAdmissionAdaptive {
+		t.Fatalf("decision did not report c8-capped adaptive candidate: %+v", decision)
+	}
+}
+
+func TestNormalizeFlushAdmission_DefaultAutoCapsToGOMAXPROCS(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
+
+	opts := Options{}
+	decision := NormalizeFlushAdmissionOptions(&opts)
+
+	if !decision.Admitted {
+		t.Fatalf("admitted=false want true; reason=%q", decision.Reason)
+	}
+	if opts.FlushApplyConcurrency != 4 || decision.FlushApplyConcurrency != 4 {
+		t.Fatalf("default auto should cap to GOMAXPROCS: opts=%d decision=%d", opts.FlushApplyConcurrency, decision.FlushApplyConcurrency)
+	}
+	if decision.Reason != FlushAdmissionReasonAutoAdmittedCappedAdapt {
+		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonAutoAdmittedCappedAdapt)
 	}
 }
 
@@ -159,7 +177,7 @@ func TestNormalizeFlushAdmission_AutoDeclinesConfiguredC1RegressionShape(t *test
 	}
 }
 
-func TestNormalizeFlushAdmission_AutoCapsConfiguredConcurrencyToC4Candidate(t *testing.T) {
+func TestNormalizeFlushAdmission_AutoCapsConfiguredConcurrencyToC8Candidate(t *testing.T) {
 	oldGOMAXPROCS := runtime.GOMAXPROCS(16)
 	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
 
@@ -172,11 +190,11 @@ func TestNormalizeFlushAdmission_AutoCapsConfiguredConcurrencyToC4Candidate(t *t
 	if !decision.Admitted {
 		t.Fatalf("admitted=false want true; reason=%q", decision.Reason)
 	}
-	if opts.FlushApplyConcurrency != 4 || decision.FlushApplyConcurrency != 4 {
-		t.Fatalf("auto should cap to c4 candidate: opts=%d decision=%d", opts.FlushApplyConcurrency, decision.FlushApplyConcurrency)
+	if opts.FlushApplyConcurrency != 8 || decision.FlushApplyConcurrency != 8 {
+		t.Fatalf("auto should cap to c8 candidate: opts=%d decision=%d", opts.FlushApplyConcurrency, decision.FlushApplyConcurrency)
 	}
-	if decision.Reason != FlushAdmissionReasonAutoAdmittedC4Adapt {
-		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonAutoAdmittedC4Adapt)
+	if decision.Reason != FlushAdmissionReasonAutoAdmittedCappedAdapt {
+		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonAutoAdmittedCappedAdapt)
 	}
 }
 
@@ -214,8 +232,8 @@ func TestFlushAdmissionStatsExposePolicyReasonAndCandidate(t *testing.T) {
 	if got := stats["treedb.flush_admission.admitted"]; got != "true" {
 		t.Fatalf("stats admitted=%q want true", got)
 	}
-	if got := stats["treedb.flush_admission.reason"]; got != FlushAdmissionReasonAutoAdmittedC4Adapt {
-		t.Fatalf("stats reason=%q want %q", got, FlushAdmissionReasonAutoAdmittedC4Adapt)
+	if got := stats["treedb.flush_admission.reason"]; got != FlushAdmissionReasonAutoAdmittedCappedAdapt {
+		t.Fatalf("stats reason=%q want %q", got, FlushAdmissionReasonAutoAdmittedCappedAdapt)
 	}
 	if got := stats["treedb.flush_admission.flush_apply_concurrency"]; got != "4" {
 		t.Fatalf("stats concurrency=%q want 4", got)

@@ -1035,17 +1035,18 @@ type Options struct {
 
 	// FlushAdmissionPolicy selects how TreeDB admits the span-native/backlog
 	// flush/apply candidate path. The zero value (auto) admits the measured
-	// conservative c4/adaptive candidate on sufficiently parallel hosts and fails
-	// closed on low-concurrency hosts or DurabilityWALOffRelaxed unsafe-durability
-	// opens. Explicit preserves caller-supplied knobs; Off force-disables
-	// span-native/backlog/concurrency as a rollback policy.
+	// machine-aware capped adaptive candidate, selecting up to min(GOMAXPROCS, 8)
+	// workers on sufficiently parallel hosts and failing closed on low-concurrency
+	// hosts or DurabilityWALOffRelaxed unsafe-durability opens. Explicit preserves
+	// caller-supplied knobs; Off force-disables span-native/backlog/concurrency as
+	// a rollback policy.
 	FlushAdmissionPolicy FlushAdmissionPolicy
 
 	// FlushApplyConcurrency enables M2 parallel COW apply for backend flush/write
 	// batches using a bounded reusable worker pool. It is separate from
 	// FlushBuildConcurrency. Values <=1 keep the worker-pool path off for
-	// explicit policy; the default auto admission policy chooses a conservative
-	// c4 candidate when the low-concurrency guardrail passes.
+	// explicit policy; the default auto admission policy chooses a machine-aware
+	// candidate capped at 8 workers when the low-concurrency guardrail passes.
 	FlushApplyConcurrency int
 	// FlushApplyMinEntries gates opt-in parallel apply by planned span-local ops.
 	// Values <=0 use the internal default.
@@ -1057,9 +1058,9 @@ type Options struct {
 	// Values <=0 use the internal default.
 	FlushApplyMinBytes int
 	// FlushApplySpanNative enables the M10 span-native apply candidate path. The
-	// default auto admission policy enables it only for the measured conservative
-	// c4 candidate; explicit policy preserves caller-provided values. Unsupported
-	// runs fall back to recursive apply.
+	// default auto admission policy enables it only for the measured capped
+	// adaptive candidate; explicit policy preserves caller-provided values.
+	// Unsupported runs fall back to recursive apply.
 	FlushApplySpanNative bool
 
 	// FlushBackendMaxEntries caps how many operations are buffered into a single
@@ -1084,7 +1085,7 @@ type Options struct {
 
 	// FlushBacklogCoalescing enables the M11 bounded adaptive cached-flush
 	// coalescing controller. The default auto admission policy enables it for the
-	// measured conservative c4 candidate; when enabled the cache layer may
+	// measured capped adaptive candidate; when enabled the cache layer may
 	// include additional already-sealed eligible memtables in one canonical flush
 	// run under observed cumulative single-op-span pressure and explicit budgets.
 	FlushBacklogCoalescing bool

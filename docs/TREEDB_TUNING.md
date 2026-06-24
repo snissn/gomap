@@ -96,23 +96,23 @@ optionally build the `SetOps` batch in parallel:
 flush/apply + backlog coalescing path:
 
 - `FlushAdmissionPolicyAuto` is the default/unconfigured policy. It admits the
-  measured conservative c4 span-native + backlog candidate with adaptive
+  measured machine-aware capped span-native + backlog candidate with adaptive
   write-side outer-leaf cache admission when the low-concurrency and durability
-  guardrails pass.
+  guardrails pass. The admitted worker count is `min(GOMAXPROCS, 8)`.
 - `FlushAdmissionPolicyOff` is the immediate rollback policy. It force-disables
   span-native apply, backlog coalescing, and flush-apply concurrency.
 - `FlushAdmissionPolicyExplicit` preserves caller-supplied knobs for experiments
-  and explicit c4/c16/cache-disabled comparisons.
+  and explicit c4/c8/c16/cache-disabled comparisons.
 
 `FlushApplyConcurrency`, `FlushApplySpanNative`, and `FlushBacklogCoalescing`
 remain available as explicit knobs. Under the default `auto` policy, TreeDB
-normalizes the admitted candidate to c4 with `FlushApplyMinEntries=1`,
-`FlushApplyMinSpans=1`, `FlushApplyMinBytes=1`, span-native enabled, backlog
-coalescing enabled, and adaptive write-side cache admission. The policy declines
-low-concurrency/c1-shaped configurations and WAL-off unsafe durability. Leaf and
-value-log output remain persistent storage; failed or abandoned apply attempts do
-not publish roots, and unreachable prepared output is reclaimed only by
-reachability-based maintenance.
+normalizes the admitted candidate to a capped worker count with
+`FlushApplyMinEntries=1`, `FlushApplyMinSpans=1`, `FlushApplyMinBytes=1`,
+span-native enabled, backlog coalescing enabled, and adaptive write-side cache
+admission. The policy declines low-concurrency/c1-shaped configurations and
+WAL-off unsafe durability. Leaf and value-log output remain persistent storage;
+failed or abandoned apply attempts do not publish roots, and unreachable
+prepared output is reclaimed only by reachability-based maintenance.
 
 Rollout guidance:
 
@@ -120,8 +120,8 @@ Rollout guidance:
 - Roll back immediately with `FlushAdmissionPolicyOff` or
   `-treedb-flush-admission-policy=off`; no data migration is required because
   the option changes only in-memory apply/cache policy.
-- Use `FlushAdmissionPolicyExplicit` for non-default experiments such as c16,
-  immediate cache admission, or cache-disabled diagnostic rows.
+- Use `FlushAdmissionPolicyExplicit` for non-default experiments such as c4 on
+  large hosts, c16, immediate cache admission, or cache-disabled diagnostic rows.
 - Watch `treedb.flush_admission.*`, `treedb.flush_apply.*`,
   `treedb.cache.flush_apply.*`, `prepared_output.*`, checkpoint wall times,
   allocation profiles, cache hit/store/eviction counters, and final
@@ -130,21 +130,14 @@ Rollout guidance:
   rollback or a narrower explicit policy.
 
 M5/#2788 evidence is recorded in
-`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. The #2819/#2832 final gate
-is recorded in `docs/TREEDB_FLUSH_APPLY_SCALING_M7_REPORT.md` and keeps the
-default at conservative c4; higher c8/c16 or physical-core rows remain explicit
-experiments. The #2899/#2907 checkpoint-parallel final gate is recorded in
-`docs/TREEDB_CHECKPOINT_PARALLEL_SATURATION_M7_REPORT.md`: c4/c8 worker
-saturation and checkpoint fallback gates pass, but random-key ops/span remains
-~3 and active-background checkpoint wait remains material, so auto stays
-conservative c4 and parent completion is blocked on #2916 unless waived.
-Checkpoint pauses are tracked by the M4 barrier/debt counters and remain a
-workload guardrail, not a claim that checkpoint debt disappeared. The #2925
-leaf-log append-lane sprint final gate is recorded in
-`docs/TREEDB_LEAF_LOG_APPEND_LANES_M5_REPORT.md`: the admitted span-native path
-now uses true worker-owned selected leaf-log lanes without a global collector,
-plain `AppendLeafPage` still uses lane 0, and c8/c16 remain explicit rows while
-issue #2943 tracks the remaining checkpoint active-background/barrier wait blocker.
+`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. The #2819/#2832,
+#2899/#2907, and #2925 reports kept c8/c16 explicit while checkpoint and
+leaf-log-lane blockers were still open. Post-#2960 evidence and the #2974 graph
+supersede that c4 default decision for the admitted span-native apply path:
+`docs/TREEDB_C8_DEFAULT_PROMOTION_2974.md` records the c8 default promotion,
+maintenance gate, and rollback policy. Checkpoint pauses are still tracked by
+the barrier/debt counters and remain a workload guardrail, not a claim that
+checkpoint debt disappeared.
 The #2949 LANE-M0 append-path inventory is recorded in
 `docs/TREEDB_LEAF_LOG_APPEND_PATHS_LANE_M0_INVENTORY.md`; it keeps generic
 batch/default widening as a future proof-gated policy decision and explicitly
