@@ -130,7 +130,7 @@ Rollout guidance:
   rollback or a narrower explicit policy.
 
 M5/#2788 evidence is recorded in
-`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. The reports for
+`docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. The reports for issues
 #2819/#2832, #2899/#2907, and #2925 kept c8/c16 explicit while checkpoint and
 leaf-log-lane blockers were still open. Post-#2960 evidence and the #2974 graph
 supersede that c4 default decision for the admitted span-native apply path:

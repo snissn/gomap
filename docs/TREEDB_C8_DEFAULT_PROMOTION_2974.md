@@ -97,7 +97,9 @@ The candidate default is close to explicit c8 behavior in the profile-dir matrix
 (810,414 vs 829,271 ops/s) and materially improves the original current default
 (+26.2% vs 642,203 ops/s). The no-profile base/candidate default rerun also
 shows a material improvement (+37.8%). c16 remains opt-in: it used more lanes and
-leaf-vlog files and did not beat c8 in the post-#2960 matrix.
+leaf-vlog files; it was flat with c8 in the profile-dir matrix and only slightly
+ahead in the no-profile perf-stat confirmation, so it did not justify becoming
+the default cap.
 
 ## Maintenance/correctness gate (#2978)
 
