@@ -132,6 +132,7 @@ type Zipper struct {
 	leafPageLog           LeafPageLog
 	leafPageReader        LeafPageReader
 	leafRefCacheMu        sync.RWMutex
+	leafRefCacheActive    atomic.Bool
 	leafRefCache          map[page.LeafLogPtr][]byte
 
 	leafReserveBytes          int
@@ -1530,14 +1531,8 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 		// maintenance may reload newly written leaf refs before the value log is
 		// flushed. Pure put/restore applies do not revisit those fresh leaves, so
 		// avoid retaining their page buffers for the whole commit.
-		z.leafRefCacheMu.Lock()
-		z.leafRefCache = make(map[page.LeafLogPtr][]byte)
-		z.leafRefCacheMu.Unlock()
-		defer func() {
-			z.leafRefCacheMu.Lock()
-			z.leafRefCache = nil
-			z.leafRefCacheMu.Unlock()
-		}()
+		z.beginLeafRefCache()
+		defer z.endLeafRefCache()
 	}
 
 	var retired []uint64
@@ -1680,7 +1675,7 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 	}
 	if ref.Kind == page.ChildRefLeafLog {
 		ptr := ref.Log
-		if z.outerLeavesInValueLog {
+		if z.outerLeavesInValueLog && z.leafRefCacheActive.Load() {
 			z.leafRefCacheMu.RLock()
 			data, cached := z.leafRefCache[ptr]
 			z.leafRefCacheMu.RUnlock()
@@ -2004,7 +1999,30 @@ func (z *Zipper) persistLeafPageBatchDataToLog(log LeafPageLog, leafPages [][]by
 	return refs, nil
 }
 
+func (z *Zipper) beginLeafRefCache() {
+	if z == nil {
+		return
+	}
+	z.leafRefCacheMu.Lock()
+	z.leafRefCache = make(map[page.LeafLogPtr][]byte)
+	z.leafRefCacheActive.Store(true)
+	z.leafRefCacheMu.Unlock()
+}
+
+func (z *Zipper) endLeafRefCache() {
+	if z == nil {
+		return
+	}
+	z.leafRefCacheMu.Lock()
+	z.leafRefCache = nil
+	z.leafRefCacheActive.Store(false)
+	z.leafRefCacheMu.Unlock()
+}
+
 func (z *Zipper) cachePersistedLeafPage(ptr page.LeafLogPtr, leafPage []byte) {
+	if z == nil || !z.leafRefCacheActive.Load() {
+		return
+	}
 	z.leafRefCacheMu.Lock()
 	if z.leafRefCache != nil {
 		// Persist paths often hand us builder/scratch buffers that are reused later

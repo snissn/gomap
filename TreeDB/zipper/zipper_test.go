@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -304,7 +305,8 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 
 	// Simulate Apply() scope: enable the in-flight leaf-ref cache so loadNode can
 	// resolve freshly appended leaf pages before the leafPageLog is flushed.
-	z.leafRefCache = make(map[page.LeafLogPtr][]byte)
+	z.beginLeafRefCache()
+	defer z.endLeafRefCache()
 
 	data := make([]byte, page.PageSize)
 	b := node.NewBuilder(data, page.PageTypeLeaf)
@@ -353,7 +355,8 @@ func TestZipperLeafRefCacheOwnsPersistedLeafBytes(t *testing.T) {
 	z.SetOuterLeavesInValueLog(true)
 	z.SetLeafPageLog(&stubLeafPageLog{})
 	z.SetLeafPageReader(&countingLeafPageReader{})
-	z.leafRefCache = make(map[page.LeafLogPtr][]byte)
+	z.beginLeafRefCache()
+	defer z.endLeafRefCache()
 
 	data := make([]byte, page.PageSize)
 	b := node.NewBuilder(data, page.PageTypeLeaf)
@@ -390,6 +393,24 @@ func TestZipperLeafRefCacheOwnsPersistedLeafBytes(t *testing.T) {
 	}
 	if got := loaded.Type(); got != page.PageTypeLeaf {
 		t.Fatalf("loaded.Type()=%d want %d", got, page.PageTypeLeaf)
+	}
+}
+
+func TestZipperCachePersistedLeafPageNoopAvoidsLockWhenCacheInactive(t *testing.T) {
+	z := &Zipper{}
+	z.leafRefCacheMu.Lock()
+	defer z.leafRefCacheMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		z.cachePersistedLeafPage(page.LeafLogPtr{FileID: 1, Offset: 128}, []byte("leaf"))
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("cachePersistedLeafPage blocked on leafRefCacheMu with inactive cache")
 	}
 }
 
