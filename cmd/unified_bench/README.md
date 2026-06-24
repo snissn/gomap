@@ -126,10 +126,11 @@ These are mainly for experiments and should usually be left at engine defaults:
 - `-treedb-vlog-dict-*`
 - `-treedb-vlog-rewrite-*`
 - `-treedb-flush-build-*`
-- `-treedb-flush-apply-concurrency` and `-treedb-flush-apply-min-*` (opt-in/default-off TreeDB COW apply workers)
-- `-treedb-flush-apply-span-native` (M10 opt-in/default-off span-native apply/reducer for eligible exact point spans)
+- `-treedb-flush-admission-policy=auto|explicit|off` (auto defaults to the admitted capped span-native/backlog path; off is the rollback)
+- `-treedb-flush-apply-concurrency` and `-treedb-flush-apply-min-*` (auto caps at `min(GOMAXPROCS,8)` when admitted; explicit policy preserves c4/c8/c16 experiments)
+- `-treedb-flush-apply-span-native` (M10 span-native apply/reducer override for eligible exact point spans; auto enables when admitted)
 - `-treedb-flush-span-run-target-planning` (diagnostic/default-off read-only target-leaf planning for canonical flush runs)
-- `-treedb-flush-backlog-coalescing*` (M11 opt-in/default-off bounded adaptive backlog coalescing controller; byte/op budgets are soft pre-next-memtable limits)
+- `-treedb-flush-backlog-coalescing*` (M11 bounded adaptive backlog coalescing controller; auto enables when admitted, byte/op budgets are soft pre-next-memtable limits)
 - `-treedb-max-queued-memtables`, `-treedb-slowdown-backlog-seconds`, `-treedb-stop-backlog-seconds`
 
 Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
