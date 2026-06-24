@@ -336,7 +336,10 @@ func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, p
 		workers = spanCount
 	}
 
-	rangeCapacity := readOnlyLeafSpanWorkUnitTargetRanges(workers, spanCount)
+	rangeCapacity := workers
+	if rangeCapacity > spanCount {
+		rangeCapacity = spanCount
+	}
 	workerRanges := coordinatorScratch.acquireSpanWorkerRanges(rangeCapacity)
 	workerRanges = prepared.AppendLeafSpanWorkUnitRanges(workerRanges, workers)
 	if len(workerRanges) == 0 {

@@ -765,7 +765,7 @@ func TestSpanNativeApplyLeafLogOutputCommitFailureReturnsBeforeReduce(t *testing
 	}
 }
 
-func TestSpanNativeApplyGroupsTinyLeafSpansIntoBoundedWorkUnits(t *testing.T) {
+func TestSpanNativeApplyGroupsTinyLeafSpansIntoWorkerRanges(t *testing.T) {
 	prevProcs := runtime.GOMAXPROCS(4)
 	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
 
@@ -786,7 +786,7 @@ func TestSpanNativeApplyGroupsTinyLeafSpansIntoBoundedWorkUnits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareReadOnly: %v", err)
 	}
-	if len(prepared.LeafSpans) <= 4*readOnlyLeafSpanWorkUnitQueueFactor {
+	if len(prepared.LeafSpans) <= 4 {
 		t.Fatalf("prepared spans=%d want enough tiny spans to prove grouping", len(prepared.LeafSpans))
 	}
 	serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
@@ -807,8 +807,8 @@ func TestSpanNativeApplyGroupsTinyLeafSpansIntoBoundedWorkUnits(t *testing.T) {
 		t.Fatalf("span-native flags eligible/used/workers=%v/%v/%d", result.SpanNativeEligible, result.SpanNativeUsed, result.SpanNativeWorkers)
 	}
 	ready := result.Metrics.ZipperSpanNativeReadyTasks
-	if ready <= result.SpanNativeWorkers || ready > result.SpanNativeWorkers*readOnlyLeafSpanWorkUnitQueueFactor {
-		t.Fatalf("ready work units=%d want bounded queue > workers and <= factor cap", ready)
+	if ready != result.SpanNativeWorkers {
+		t.Fatalf("ready work units=%d want one range per active worker %d", ready, result.SpanNativeWorkers)
 	}
 	if ready >= len(prepared.LeafSpans) {
 		t.Fatalf("ready work units=%d should group %d leaf spans", ready, len(prepared.LeafSpans))

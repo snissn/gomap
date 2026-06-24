@@ -650,7 +650,7 @@ func TestReadOnlyPrepareResultWorkerRanges(t *testing.T) {
 	}
 }
 
-func TestReadOnlyPrepareResultWorkUnitRangesBoundReadyQueue(t *testing.T) {
+func TestReadOnlyPrepareResultWorkUnitRangesOneRangePerWorker(t *testing.T) {
 	const spans = 64
 	prepared := ReadOnlyPrepareResult{Ops: spans, PointOps: spans, ExactLeafSpans: true}
 	for i := 0; i < spans; i++ {
@@ -675,8 +675,8 @@ func TestReadOnlyPrepareResultWorkUnitRangesBoundReadyQueue(t *testing.T) {
 	requireValidReadOnlyPrepare(t, prepared)
 
 	ranges := prepared.AppendLeafSpanWorkUnitRanges(nil, 4)
-	if len(ranges) <= 4 || len(ranges) > 4*readOnlyLeafSpanWorkUnitQueueFactor {
-		t.Fatalf("work-unit ranges=%d want bounded queue > workers and <= factor cap: %+v", len(ranges), ranges)
+	if len(ranges) != 4 {
+		t.Fatalf("work-unit ranges=%d want one range per active worker: %+v", len(ranges), ranges)
 	}
 	if ranges[0].SpanCount <= 1 {
 		t.Fatalf("first work unit spans=%d want grouped adjacent spans", ranges[0].SpanCount)
@@ -697,9 +697,26 @@ func TestReadOnlyPrepareResultWorkUnitRangesBoundReadyQueue(t *testing.T) {
 		t.Fatalf("work units cover spans/ops/bytes=%d/%d/%d want %d/%d/%d", totalSpans, totalOps, totalBytes, spans, spans, spans*100)
 	}
 
+	for _, workers := range []int{8, 16} {
+		workerRanges := prepared.AppendLeafSpanWorkUnitRanges(nil, workers)
+		if len(workerRanges) != workers {
+			t.Fatalf("workers=%d emitted %d ranges, want one range per active worker", workers, len(workerRanges))
+		}
+	}
+
 	serialRanges := prepared.AppendLeafSpanWorkUnitRanges(nil, 1)
 	if len(serialRanges) != 1 || serialRanges[0].SpanCount != spans {
 		t.Fatalf("single-worker work units=%+v want one range covering all spans", serialRanges)
+	}
+
+	tooManyWorkerRanges := prepared.AppendLeafSpanWorkUnitRanges(nil, spans+10)
+	if len(tooManyWorkerRanges) != spans {
+		t.Fatalf("over-subscribed workers emitted %d ranges, want clamp to %d non-empty spans", len(tooManyWorkerRanges), spans)
+	}
+
+	emptyRanges := (ReadOnlyPrepareResult{}).AppendLeafSpanWorkUnitRanges(nil, 8)
+	if len(emptyRanges) != 0 {
+		t.Fatalf("empty prepare emitted ranges: %+v", emptyRanges)
 	}
 }
 
