@@ -1,7 +1,7 @@
 # TreeDB c8 default promotion (#2974)
 
 This is the closeout report for the post-#2960 span-native apply default graph:
-#2975, #2976, #2977, #2978, #2979, and #2980.
+issues #2975, #2976, #2977, #2978, #2979, and #2980.
 
 ## Decision
 
