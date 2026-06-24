@@ -74,9 +74,7 @@ var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 var iteratorDebugEnabled atomic.Bool
 
 var valueLogEligiblePool sync.Pool                  // stores []int
-var valueLogRecordPool sync.Pool                    // stores []valuelog.Record
 var valueLogKeyPool sync.Pool                       // stores [][]byte
-var valueLogPtrPool sync.Pool                       // stores []page.ValuePtr
 var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
 var batchArenaLeasePool sync.Pool                   // stores *batchArenaLease
 var appendOnlyDirectValueArenaPools [appendOnlyDirectValueArenaClassCount]sync.Pool
@@ -89,9 +87,17 @@ var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
 var outerLeafBlobRefScratchPool sync.Pool
 var outerLeafEncoderPool sync.Pool // stores *outerleaf.Encoder
 var valueLogPreparedBodyPool sync.Pool
-var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
 var valueLogFramePreparerPool sync.Pool      // stores *valuelog.FramePreparer
+var valueLogRecordLeaseMu sync.Mutex
+var valueLogRecordLeases [][]valuelog.Record
+var valueLogRecordLeaseCapTotal int
+var valueLogPtrLeaseMu sync.Mutex
+var valueLogPtrLeases [][]page.ValuePtr
+var valueLogPtrLeaseCapTotal int
+var valueLogPreparedFramesLeaseMu sync.Mutex
+var valueLogPreparedFrameLeases [][]preparedDictFrame
+var valueLogPreparedFrameLeaseCapTotal int
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
 var backendValueLogReadBarrierRegistryMu sync.Mutex
@@ -1113,9 +1119,16 @@ func noteBatchArenaPoolGC(numGC uint64) {
 }
 
 const (
-	maxValueLogKeyLeaseCount = 64
-	maxValueLogKeyLeaseCap   = 1 << 20
-	batchArenaMinShift       = 12
+	maxValueLogSliceLeaseCount            = 256
+	maxValueLogRecordLeaseCap             = 1 << 20
+	maxValueLogRecordLeaseTotalCap        = 1 << 20
+	maxValueLogPtrLeaseCap                = 1 << 20
+	maxValueLogPtrLeaseTotalCap           = 1 << 20
+	maxValueLogPreparedFrameLeaseCap      = 1 << 14
+	maxValueLogPreparedFrameLeaseTotalCap = 1 << 14
+	maxValueLogKeyLeaseCount              = 64
+	maxValueLogKeyLeaseCap                = 1 << 20
+	batchArenaMinShift                    = 12
 	// batch arenas are chunked key/value copy buffers that may be leased to
 	// memtables. Keep the max pooled chunk size modest to avoid retaining large
 	// mostly-empty tail chunks during big restore batches.
@@ -1207,6 +1220,108 @@ func putBatchInt64SliceRef(ref *batchInt64SliceRef) {
 	batchInt64SliceRefPool.Put(ref)
 }
 
+func takeValueLogRecordLease(capacity int) []valuelog.Record {
+	valueLogRecordLeaseMu.Lock()
+	for i := len(valueLogRecordLeases) - 1; i >= 0; i-- {
+		s := valueLogRecordLeases[i]
+		if cap(s) < capacity {
+			continue
+		}
+		last := len(valueLogRecordLeases) - 1
+		valueLogRecordLeases[i] = valueLogRecordLeases[last]
+		valueLogRecordLeases[last] = nil
+		valueLogRecordLeases = valueLogRecordLeases[:last]
+		valueLogRecordLeaseCapTotal -= cap(s)
+		valueLogRecordLeaseMu.Unlock()
+		return s
+	}
+	valueLogRecordLeaseMu.Unlock()
+	return nil
+}
+
+func storeValueLogRecordLease(s []valuelog.Record) bool {
+	if s == nil || cap(s) == 0 || cap(s) > maxValueLogRecordLeaseCap {
+		return false
+	}
+	valueLogRecordLeaseMu.Lock()
+	if len(valueLogRecordLeases) >= maxValueLogSliceLeaseCount || valueLogRecordLeaseCapTotal+cap(s) > maxValueLogRecordLeaseTotalCap {
+		valueLogRecordLeaseMu.Unlock()
+		return false
+	}
+	valueLogRecordLeases = append(valueLogRecordLeases, s[:0])
+	valueLogRecordLeaseCapTotal += cap(s)
+	valueLogRecordLeaseMu.Unlock()
+	return true
+}
+
+func takeValueLogPtrLease(capacity int) []page.ValuePtr {
+	valueLogPtrLeaseMu.Lock()
+	for i := len(valueLogPtrLeases) - 1; i >= 0; i-- {
+		s := valueLogPtrLeases[i]
+		if cap(s) < capacity {
+			continue
+		}
+		last := len(valueLogPtrLeases) - 1
+		valueLogPtrLeases[i] = valueLogPtrLeases[last]
+		valueLogPtrLeases[last] = nil
+		valueLogPtrLeases = valueLogPtrLeases[:last]
+		valueLogPtrLeaseCapTotal -= cap(s)
+		valueLogPtrLeaseMu.Unlock()
+		return s
+	}
+	valueLogPtrLeaseMu.Unlock()
+	return nil
+}
+
+func storeValueLogPtrLease(s []page.ValuePtr) bool {
+	if s == nil || cap(s) == 0 || cap(s) > maxValueLogPtrLeaseCap {
+		return false
+	}
+	valueLogPtrLeaseMu.Lock()
+	if len(valueLogPtrLeases) >= maxValueLogSliceLeaseCount || valueLogPtrLeaseCapTotal+cap(s) > maxValueLogPtrLeaseTotalCap {
+		valueLogPtrLeaseMu.Unlock()
+		return false
+	}
+	valueLogPtrLeases = append(valueLogPtrLeases, s[:0])
+	valueLogPtrLeaseCapTotal += cap(s)
+	valueLogPtrLeaseMu.Unlock()
+	return true
+}
+
+func takeVlogPreparedFrameLease(capacity int) []preparedDictFrame {
+	valueLogPreparedFramesLeaseMu.Lock()
+	for i := len(valueLogPreparedFrameLeases) - 1; i >= 0; i-- {
+		s := valueLogPreparedFrameLeases[i]
+		if cap(s) < capacity {
+			continue
+		}
+		last := len(valueLogPreparedFrameLeases) - 1
+		valueLogPreparedFrameLeases[i] = valueLogPreparedFrameLeases[last]
+		valueLogPreparedFrameLeases[last] = nil
+		valueLogPreparedFrameLeases = valueLogPreparedFrameLeases[:last]
+		valueLogPreparedFrameLeaseCapTotal -= cap(s)
+		valueLogPreparedFramesLeaseMu.Unlock()
+		return s
+	}
+	valueLogPreparedFramesLeaseMu.Unlock()
+	return nil
+}
+
+func storeVlogPreparedFrameLease(s []preparedDictFrame) bool {
+	if s == nil || cap(s) == 0 || cap(s) > maxValueLogPreparedFrameLeaseCap {
+		return false
+	}
+	valueLogPreparedFramesLeaseMu.Lock()
+	if len(valueLogPreparedFrameLeases) >= maxValueLogSliceLeaseCount || valueLogPreparedFrameLeaseCapTotal+cap(s) > maxValueLogPreparedFrameLeaseTotalCap {
+		valueLogPreparedFramesLeaseMu.Unlock()
+		return false
+	}
+	valueLogPreparedFrameLeases = append(valueLogPreparedFrameLeases, s[:0])
+	valueLogPreparedFrameLeaseCapTotal += cap(s)
+	valueLogPreparedFramesLeaseMu.Unlock()
+	return true
+}
+
 func getValueLogEligible(capacity int) []int {
 	if capacity < 0 {
 		capacity = 0
@@ -1236,12 +1351,8 @@ func getValueLogRecords(n int) []valuelog.Record {
 	if n < 0 {
 		n = 0
 	}
-	if v := valueLogRecordPool.Get(); v != nil {
-		if s, ok := v.([]valuelog.Record); ok {
-			if cap(s) >= n {
-				return s[:n]
-			}
-		}
+	if s := takeValueLogRecordLease(n); s != nil {
+		return s[:n]
 	}
 	return make([]valuelog.Record, n)
 }
@@ -1250,12 +1361,8 @@ func getValueLogRecordsCap(capacity int) []valuelog.Record {
 	if capacity < 0 {
 		capacity = 0
 	}
-	if v := valueLogRecordPool.Get(); v != nil {
-		if s, ok := v.([]valuelog.Record); ok {
-			if cap(s) >= capacity {
-				return s[:0]
-			}
-		}
+	if s := takeValueLogRecordLease(capacity); s != nil {
+		return s[:0]
 	}
 	return make([]valuelog.Record, 0, capacity)
 }
@@ -1268,10 +1375,10 @@ func putValueLogRecords(s []valuelog.Record) {
 		s[i] = valuelog.Record{}
 	}
 	// Avoid retaining huge slices in the pool.
-	if cap(s) > 1<<20 {
+	if cap(s) > maxValueLogRecordLeaseCap {
 		return
 	}
-	valueLogRecordPool.Put(s[:0])
+	_ = storeValueLogRecordLease(s)
 }
 
 func clearValueLogRecordValues(s []valuelog.Record) {
@@ -1288,7 +1395,7 @@ func putValueLogRecordsNoClear(s []valuelog.Record) {
 	}
 	// Avoid O(cap) clearing work for oversized slices that we intentionally
 	// drop instead of returning to the pool.
-	if cap(s) > 1<<20 {
+	if cap(s) > maxValueLogRecordLeaseCap {
 		return
 	}
 	records := s
@@ -1296,7 +1403,7 @@ func putValueLogRecordsNoClear(s []valuelog.Record) {
 		records = records[:cap(records)]
 	}
 	clearValueLogRecordValues(records)
-	valueLogRecordPool.Put(s[:0])
+	_ = storeValueLogRecordLease(s)
 }
 
 func outerLeafArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
@@ -1888,12 +1995,8 @@ func getValueLogPtrs(n int) []page.ValuePtr {
 	if n < 0 {
 		n = 0
 	}
-	if v := valueLogPtrPool.Get(); v != nil {
-		if s, ok := v.([]page.ValuePtr); ok {
-			if cap(s) >= n {
-				return s[:n]
-			}
-		}
+	if s := takeValueLogPtrLease(n); s != nil {
+		return s[:n]
 	}
 	return make([]page.ValuePtr, n)
 }
@@ -1902,15 +2005,13 @@ func getValueLogPtrsCap(capacity int) []page.ValuePtr {
 	if capacity < 0 {
 		capacity = 0
 	}
-	if v := valueLogPtrPool.Get(); v != nil {
-		if s, ok := v.([]page.ValuePtr); ok {
-			maxCap := capacity * 2
-			if maxCap < 256 {
-				maxCap = 256
-			}
-			if cap(s) >= capacity && cap(s) <= maxCap {
-				return s[:0]
-			}
+	if s := takeValueLogPtrLease(capacity); s != nil {
+		maxCap := capacity * 2
+		if maxCap < 256 {
+			maxCap = 256
+		}
+		if cap(s) <= maxCap {
+			return s[:0]
 		}
 	}
 	return make([]page.ValuePtr, 0, capacity)
@@ -1926,10 +2027,10 @@ func putValueLogPtrsNoClear(s []page.ValuePtr) {
 	}
 	// page.ValuePtr contains no pointer fields, so we can safely skip element
 	// clearing in hot paths to reduce memclr overhead.
-	if cap(s) > 1<<20 {
+	if cap(s) > maxValueLogPtrLeaseCap {
 		return
 	}
-	valueLogPtrPool.Put(s[:0])
+	_ = storeValueLogPtrLease(s)
 }
 
 func getValueLogKeys(capacity int) [][]byte {
@@ -2004,12 +2105,8 @@ func getVlogPreparedFrames(n int) []preparedDictFrame {
 	if n < 0 {
 		n = 0
 	}
-	if v := valueLogPreparedFramesPool.Get(); v != nil {
-		if s, ok := v.([]preparedDictFrame); ok {
-			if cap(s) >= n {
-				return s[:n]
-			}
-		}
+	if s := takeVlogPreparedFrameLease(n); s != nil {
+		return s[:n]
 	}
 	return make([]preparedDictFrame, n)
 }
@@ -2022,7 +2119,7 @@ func putVlogPreparedFrames(frames []preparedDictFrame) {
 	if cap(frames) > maxVlogPreparedFramesPoolCap {
 		return
 	}
-	valueLogPreparedFramesPool.Put(frames[:0])
+	_ = storeVlogPreparedFrameLease(frames)
 }
 
 func getVlogFramePreparer() *valuelog.FramePreparer {
@@ -15019,6 +15116,44 @@ func releasePreparedDictFrames(frames []preparedDictFrame) {
 	}
 }
 
+func (db *DB) prepareAppendFrameOne(
+	rid uint64,
+	value []byte,
+	writeMode vlogCompressionWriteMode,
+	blockCodec valuelog.BlockCodec,
+	ioNsPerStoredByte float64,
+	encodeNsPerRawByte float64,
+	safetyMargin float64,
+) (preparedDictFrame, int64, error) {
+	blockCompression := writeMode == vlogWriteBlock
+	if !blockCompression {
+		return preparedDictFrame{}, 0, nil
+	}
+	prepStart := time.Now()
+	preparer := getVlogFramePreparer()
+	preparer.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
+	preparer.SetBlockCompression(blockCodec, true)
+	preparer.SetKeepPolicy(ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin)
+	preparer.SetEncodeSampleStride(0)
+	bodyBuf := getVlogPreparedFrameBody()
+	var rec [1]valuelog.Record
+	rec[0] = valuelog.Record{RID: rid, Value: value}
+	body, stats, err := preparer.PrepareFrameInto(bodyBuf.buf[:0], 0, nil, rec[:])
+	putVlogFramePreparer(preparer)
+	if err != nil {
+		putVlogPreparedFrameBody(bodyBuf)
+		return preparedDictFrame{}, time.Since(prepStart).Nanoseconds(), err
+	}
+	bodyBuf.buf = body
+	return preparedDictFrame{
+		start:   0,
+		end:     1,
+		body:    body,
+		bodyBuf: bodyBuf,
+		stats:   stats,
+	}, time.Since(prepStart).Nanoseconds(), nil
+}
+
 func (db *DB) valueLogKeepPolicy() (ioNsPerStoredByte, encodeNsPerRawByte, safetyMargin float64) {
 	safetyMargin = db.valueLogAutotuneSafetyMargin()
 	if db.valueLogAutotuneOptions.Mode == valuelog.AutotuneOff {
@@ -16222,29 +16357,22 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 	}
 
-	var preparedOneFrames []preparedDictFrame
+	var preparedOneFrame preparedDictFrame
 	var preparedOnePrepNs int64
 	if leafLogAppend && finalWriteMode == vlogWriteBlock && db.flushApplyConcurrency > 1 {
-		var rec [1]valuelog.Record
-		rec[0] = valuelog.Record{RID: rid, Value: value}
 		keepIoNs, keepEncodeNs, keepSafety := db.valueLogKeepPolicy()
 		if forceBlockCompressionAttempt {
 			keepIoNs = 0
 			keepEncodeNs = 0
 		}
-		prepared, prepNs, prepErr := db.prepareAppendFrames(
-			l,
-			0,
-			nil,
-			rec[:],
-			1,
-			len(value),
+		prepared, prepNs, prepErr := db.prepareAppendFrameOne(
+			rid,
+			value,
 			finalWriteMode,
 			finalBlockCodec,
 			keepIoNs,
 			keepEncodeNs,
 			keepSafety,
-			wallStart,
 		)
 		if prepErr != nil {
 			return page.ValuePtr{}, "", prepErr
@@ -16253,16 +16381,13 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		if prepNs > 0 {
 			db.observeFlushApplyLeafLogEncodeCompress(time.Duration(prepNs))
 		}
-		if len(prepared) > 0 {
-			preparedOneFrames = prepared
-			defer func() {
-				releasePreparedDictFrames(preparedOneFrames)
-				putVlogPreparedFrames(preparedOneFrames)
-			}()
-		}
+		preparedOneFrame = prepared
 	}
 
 	if allowQueue && db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
+		if preparedOneFrame.bodyBuf != nil {
+			releasePreparedDictFrame(&preparedOneFrame)
+		}
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 				l.vlogMu.Unlock()
@@ -16444,21 +16569,33 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
 		l.vlogMu.Unlock()
+		if preparedOneFrame.bodyBuf != nil {
+			releasePreparedDictFrame(&preparedOneFrame)
+		}
 		return page.ValuePtr{}, "", err
 	}
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
+		if preparedOneFrame.bodyBuf != nil {
+			releasePreparedDictFrame(&preparedOneFrame)
+		}
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
 		l.vlogMu.Unlock()
+		if preparedOneFrame.bodyBuf != nil {
+			releasePreparedDictFrame(&preparedOneFrame)
+		}
 		return page.ValuePtr{}, "", rotateErr
 	}
 	// Reload writer in case rotation replaced l.vlog.
 	w = l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
+		if preparedOneFrame.bodyBuf != nil {
+			releasePreparedDictFrame(&preparedOneFrame)
+		}
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	if l.vlogCaps.writer != w {
@@ -16473,7 +16610,10 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	startSize := w.Size()
 	flushedBoundary := false
 	syncedBoundary := false
-	usePreparedOneFrame := len(preparedOneFrames) == 1 && caps.prepared != nil
+	usePreparedOneFrame := preparedOneFrame.bodyBuf != nil && caps.prepared != nil
+	if preparedOneFrame.bodyBuf != nil && caps.prepared == nil {
+		releasePreparedDictFrame(&preparedOneFrame)
+	}
 
 	if !usePreparedOneFrame {
 		applyValueLogOneKeepPolicy(policySetter)
@@ -16484,16 +16624,22 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 	if usePreparedOneFrame {
-		pf := &preparedOneFrames[0]
+		pf := &preparedOneFrame
 		stats = pf.stats
-		var ptrScratch [1]page.ValuePtr
-		ptrs, frameErr := caps.prepared.AppendEncodedFrameInto(pf.body, pf.stats.Records, ptrScratch[:])
-		if frameErr != nil {
-			err = frameErr
-		} else if len(ptrs) != 1 {
-			err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 prepared record", len(ptrs))
+		if oneAppender, ok := w.(interface {
+			AppendEncodedFrameOne([]byte) (page.ValuePtr, error)
+		}); ok && pf.stats.Records == 1 {
+			ptr, err = oneAppender.AppendEncodedFrameOne(pf.body)
 		} else {
-			ptr = ptrs[0]
+			var ptrScratch [1]page.ValuePtr
+			ptrs, frameErr := caps.prepared.AppendEncodedFrameInto(pf.body, pf.stats.Records, ptrScratch[:])
+			if frameErr != nil {
+				err = frameErr
+			} else if len(ptrs) != 1 {
+				err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 prepared record", len(ptrs))
+			} else {
+				ptr = ptrs[0]
+			}
 		}
 		releasePreparedDictFrame(pf)
 	} else if finalWriteMode == vlogWriteBlock {

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
@@ -1428,6 +1429,90 @@ func TestAppendEncodedFrameInto_RoundTripWithDict(t *testing.T) {
 		if !bytes.Equal(got, expect[i]) {
 			t.Fatalf("ptr%d mismatch", i+1)
 		}
+	}
+}
+
+func TestAppendEncodedFrameOne_RoundTripAndAllocsBudget(t *testing.T) {
+	records := []Record{{RID: 1, Value: []byte("single prepared frame payload")}}
+	prep := NewFramePreparer()
+	body, _, err := prep.PrepareFrameInto(nil, 0, nil, records)
+	if err != nil {
+		t.Fatalf("PrepareFrameInto: %v", err)
+	}
+
+	clock := NewVirtualClock(time.Unix(0, 0))
+	writer := NewWriterWithSink(&VirtualSink{Clock: clock}, page.ValueLogFileID(1))
+	if _, err := writer.AppendEncodedFrameOne(body); err != nil {
+		t.Fatalf("warm AppendEncodedFrameOne: %v", err)
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := writer.AppendEncodedFrameOne(body); err != nil {
+			t.Fatalf("AppendEncodedFrameOne: %v", err)
+		}
+	})
+	if allocs > 0 {
+		t.Fatalf("AppendEncodedFrameOne steady-state allocs = %.2f, want 0", allocs)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+	fileWriter, err := NewWriter(path, page.ValueLogFileID(2))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptr, err := fileWriter.AppendEncodedFrameOne(body)
+	if err != nil {
+		_ = fileWriter.Close()
+		t.Fatalf("AppendEncodedFrameOne file: %v", err)
+	}
+	if err := fileWriter.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	defer f.Close()
+	got, err := ReadAtWithDict(f, ptr, true, nil, nil, nil, templ.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("ReadAtWithDict: %v", err)
+	}
+	if !bytes.Equal(got, records[0].Value) {
+		t.Fatalf("round trip mismatch: got %q want %q", got, records[0].Value)
+	}
+}
+
+func TestFramePreparerAndAppendEncodedFrameIntoAllocsBudget(t *testing.T) {
+	records := []Record{{RID: 1, Value: bytes.Repeat([]byte("x"), 256)}}
+	prep := NewFramePreparer()
+	body, _, err := prep.PrepareFrameInto(nil, 0, nil, records)
+	if err != nil {
+		t.Fatalf("warm PrepareFrameInto: %v", err)
+	}
+	allocs := testing.AllocsPerRun(1000, func() {
+		var prepErr error
+		body, _, prepErr = prep.PrepareFrameInto(body[:0], 0, nil, records)
+		if prepErr != nil {
+			t.Fatalf("PrepareFrameInto: %v", prepErr)
+		}
+	})
+	if allocs > 0 {
+		t.Fatalf("PrepareFrameInto steady-state allocs = %.2f, want 0", allocs)
+	}
+
+	clock := NewVirtualClock(time.Unix(0, 0))
+	writer := NewWriterWithSink(&VirtualSink{Clock: clock}, page.ValueLogFileID(1))
+	ptrScratch := make([]page.ValuePtr, len(records))
+	if _, err := writer.AppendEncodedFrameInto(body, len(records), ptrScratch); err != nil {
+		t.Fatalf("warm AppendEncodedFrameInto: %v", err)
+	}
+	allocs = testing.AllocsPerRun(1000, func() {
+		if _, err := writer.AppendEncodedFrameInto(body, len(records), ptrScratch); err != nil {
+			t.Fatalf("AppendEncodedFrameInto: %v", err)
+		}
+	})
+	if allocs > 0 {
+		t.Fatalf("AppendEncodedFrameInto steady-state allocs = %.2f, want 0", allocs)
 	}
 }
 
