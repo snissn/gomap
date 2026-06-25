@@ -351,6 +351,8 @@ func mapNativeWireError(err error) DeterministicErrorCodeV1 {
 	case nativewire.ErrInvalidCommand:
 		reason := nativeWireErrorReason(err)
 		switch {
+		case strings.Contains(reason, "missing idempotency key"):
+			return ErrorNoIdempotencyV1
 		case strings.Contains(reason, "missing catalog guard"):
 			return ErrorMissingGuardV1
 		case strings.Contains(reason, "missing command schema"), strings.Contains(reason, " is not replicated"):

@@ -194,6 +194,13 @@ func TestDecodeCommandEntryV1RejectsMalformedOversizedMissingGuardAndNoIdempoten
 	if _, err := DecodeCommandEntryV1(noID, DecodeOptions{}); codeOf(err) != ErrorNoIdempotencyV1 {
 		t.Fatalf("NoIdempotency err=%v code=%s", err, codeOf(err))
 	}
+	missingID := appendDeterministicEntryRaw(nativewire.CommandCreateCollection, []nativewire.Section{
+		{ID: nativewire.SectionCollectionMeta, Bytes: createCollectionMetaPayload("users")},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: uvarintPayload(7)},
+	})
+	if _, err := DecodeCommandEntryV1(missingID, DecodeOptions{}); codeOf(err) != ErrorNoIdempotencyV1 {
+		t.Fatalf("missing idempotency err=%v code=%s", err, codeOf(err))
+	}
 	duplicateSingleton := appendDeterministicEntryRaw(nativewire.CommandCreateCollection, []nativewire.Section{
 		{ID: nativewire.SectionCollectionMeta, Bytes: createCollectionMetaPayload("users")},
 		{ID: nativewire.SectionCollectionMeta, Bytes: createCollectionMetaPayload("users")},
