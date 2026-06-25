@@ -253,11 +253,41 @@ for producers in $PRODUCERS_LIST; do
     echo "missing summary for producers=$producers: $summary" >&2
     exit 1
   fi
+  include_header=false
   if [[ "$wrote_header" == false ]]; then
-    cat "$summary" > "$tmp_summary"
+    include_header=true
     wrote_header=true
-  else
-    tail -n +2 "$summary" >> "$tmp_summary"
+  fi
+  if ! awk -v include_header="$include_header" -F '\t' '
+    BEGIN {
+      OFS = FS
+    }
+    NR == 1 {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "phase") {
+          phase_col = i
+        }
+      }
+      if (include_header == "true") {
+        print
+      }
+      next
+    }
+    phase_col > 0 && $phase_col == "load_insert_many" {
+      rows++
+      print
+    }
+    END {
+      if (phase_col == 0) {
+        exit 2
+      }
+      if (rows == 0) {
+        exit 3
+      }
+    }
+  ' "$summary" >> "$tmp_summary"; then
+    echo "failed to append load_insert_many rows for producers=$producers from $summary" >&2
+    exit 1
   fi
 done
 mv "$tmp_summary" "$AGG_SUMMARY"
@@ -283,7 +313,8 @@ cat > "$OUT_DIR/README.md" <<EOF
 Each \`producers_<N>/\` directory is a normal load-only \`mongo_gateway_compare.sh\`
 bundle with raw JSON, \`matrix.tsv\`, \`summary.tsv\`, and \`report.md\`.
 
-The aggregate \`summary.tsv\` is a concatenation of the producer run summaries.
+The aggregate \`summary.tsv\` keeps one header and only the \`load_insert_many\`
+rows from each producer run summary.
 Use the \`insert_producers\`, \`effective_producers\`, and \`load_batch_count\`
 columns to distinguish requested producer counts from capped effective counts.
 EOF
