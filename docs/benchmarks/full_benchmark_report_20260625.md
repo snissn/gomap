@@ -8,8 +8,10 @@ June 24 artifact.
 ## Artifact
 
 - Report: `/tmp/gomap_m4_final_smoke_goworkoff_20260625_105430/deep_report.html`
+- Current-head rerender: `/tmp/gomap_m4_final_smoke_goworkoff_20260625_105430/deep_report_current_head.html`
 - Run root: `/tmp/gomap_m4_final_smoke_goworkoff_20260625_105430`
 - Commit: `0927decca6c846e1c9a42686cd2363f37b7fbeaf`
+- Current render commit: `fe7fa40b784941db94bc655474bb07366c093f51`
 - Branch: `codex/3031-final-report-evidence`
 - Go: `go version go1.25.7 linux/amd64`
 - Host: `Linux mikers-B560-DS3H-AC-Y1 6.8.0-124-generic x86_64`
@@ -20,6 +22,10 @@ Run status from the rendered report:
 ```text
 Complete run: all 20 recorded commands exited 0.
 ```
+
+The current-head rerender used the completed run root above and validated the
+same complete run status after the command-log parser stopped counting
+in-progress commands as successful.
 
 All required report sections were present: raw TreeDB engine, collections vs
 SQLite, Mongo API full sweep, Mongo client-mode load matrix, Mongo InsertMany
