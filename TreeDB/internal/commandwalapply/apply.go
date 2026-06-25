@@ -29,6 +29,9 @@ type LoweredFrameClass uint8
 const (
 	LoweredFrameClassTestNoop LoweredFrameClass = iota + 1
 	LoweredFrameClassCatalogCreateCollection
+	LoweredFrameClassCollectionInsertBatchByID
+	LoweredFrameClassCollectionDeleteBatchByID
+	LoweredFrameClassCollectionUpdateBatchByID
 )
 
 // ApplyMetadata is the explicit metadata slot future R3a apply code will carry
@@ -108,6 +111,57 @@ func CatalogCreateCollectionFrame(payload []byte) (LoweredFrame, error) {
 		Payload:       payload,
 	}
 	if err := validateCatalogCreateCollectionFrame(frame); err != nil {
+		return LoweredFrame{}, err
+	}
+	return frame, nil
+}
+
+// CollectionInsertBatchByIDFrame returns the accepted collection insert
+// mutation frame. Payload must be the canonical command-WAL payload produced
+// from deterministic document IDs and documents, without local physical IDs.
+func CollectionInsertBatchByIDFrame(payload []byte) (LoweredFrame, error) {
+	frame := LoweredFrame{
+		Class:         LoweredFrameClassCollectionInsertBatchByID,
+		Kind:          commitlog.CommandKindCollectionInsertBatchByID,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+		Payload:       payload,
+	}
+	if err := validateCollectionInsertBatchByIDFrame(frame); err != nil {
+		return LoweredFrame{}, err
+	}
+	return frame, nil
+}
+
+// CollectionDeleteBatchByIDFrame returns the accepted collection delete
+// mutation frame. Payload must be the canonical command-WAL payload produced
+// from deterministic document IDs.
+func CollectionDeleteBatchByIDFrame(payload []byte) (LoweredFrame, error) {
+	frame := LoweredFrame{
+		Class:         LoweredFrameClassCollectionDeleteBatchByID,
+		Kind:          commitlog.CommandKindCollectionDeleteBatchByID,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
+		Payload:       payload,
+	}
+	if err := validateCollectionDeleteBatchByIDFrame(frame); err != nil {
+		return LoweredFrame{}, err
+	}
+	return frame, nil
+}
+
+// CollectionUpdateBatchByIDFrame returns the accepted collection replacement
+// mutation frame. Payload must be the canonical command-WAL payload containing
+// final replacement documents keyed by deterministic document IDs.
+func CollectionUpdateBatchByIDFrame(payload []byte) (LoweredFrame, error) {
+	frame := LoweredFrame{
+		Class:         LoweredFrameClassCollectionUpdateBatchByID,
+		Kind:          commitlog.CommandKindCollectionUpdateBatchByID,
+		Scope:         commitlog.CommandScopeCollection,
+		PayloadFormat: commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		Payload:       payload,
+	}
+	if err := validateCollectionUpdateBatchByIDFrame(frame); err != nil {
 		return LoweredFrame{}, err
 	}
 	return frame, nil
@@ -223,6 +277,12 @@ func validateLoweredFrame(frame LoweredFrame) error {
 		return validateTestNoopFrame(frame)
 	case LoweredFrameClassCatalogCreateCollection:
 		return validateCatalogCreateCollectionFrame(frame)
+	case LoweredFrameClassCollectionInsertBatchByID:
+		return validateCollectionInsertBatchByIDFrame(frame)
+	case LoweredFrameClassCollectionDeleteBatchByID:
+		return validateCollectionDeleteBatchByIDFrame(frame)
+	case LoweredFrameClassCollectionUpdateBatchByID:
+		return validateCollectionUpdateBatchByIDFrame(frame)
 	default:
 		return fmt.Errorf("%w: command wal apply frame class %d is not accepted", backenddb.ErrCommandWALUnsupported, frame.Class)
 	}
@@ -259,6 +319,42 @@ func validateCatalogCreateCollectionFrame(frame LoweredFrame) error {
 	}
 	if _, err := commitlog.DecodeCatalogCreateCollectionPayload(frame.Payload); err != nil {
 		return fmt.Errorf("%w: malformed command wal apply catalog create frame: %v", backenddb.ErrCommandWALRejected, err)
+	}
+	return nil
+}
+
+func validateCollectionInsertBatchByIDFrame(frame LoweredFrame) error {
+	if frame.Kind != commitlog.CommandKindCollectionInsertBatchByID ||
+		frame.Scope != commitlog.CommandScopeCollection ||
+		frame.PayloadFormat != commitlog.PayloadFormatCollectionInsertBatchByIDV1 {
+		return fmt.Errorf("%w: command wal apply collection insert frame has unsupported identity kind=%d scope=%d format=%d", backenddb.ErrCommandWALUnsupported, frame.Kind, frame.Scope, frame.PayloadFormat)
+	}
+	if _, err := commitlog.DecodeCollectionInsertBatchByIDPayload(frame.Payload); err != nil {
+		return fmt.Errorf("%w: malformed command wal apply collection insert frame: %v", backenddb.ErrCommandWALRejected, err)
+	}
+	return nil
+}
+
+func validateCollectionDeleteBatchByIDFrame(frame LoweredFrame) error {
+	if frame.Kind != commitlog.CommandKindCollectionDeleteBatchByID ||
+		frame.Scope != commitlog.CommandScopeCollection ||
+		frame.PayloadFormat != commitlog.PayloadFormatCollectionDeleteBatchByIDV1 {
+		return fmt.Errorf("%w: command wal apply collection delete frame has unsupported identity kind=%d scope=%d format=%d", backenddb.ErrCommandWALUnsupported, frame.Kind, frame.Scope, frame.PayloadFormat)
+	}
+	if _, err := commitlog.DecodeCollectionDeleteBatchByIDPayload(frame.Payload); err != nil {
+		return fmt.Errorf("%w: malformed command wal apply collection delete frame: %v", backenddb.ErrCommandWALRejected, err)
+	}
+	return nil
+}
+
+func validateCollectionUpdateBatchByIDFrame(frame LoweredFrame) error {
+	if frame.Kind != commitlog.CommandKindCollectionUpdateBatchByID ||
+		frame.Scope != commitlog.CommandScopeCollection ||
+		frame.PayloadFormat != commitlog.PayloadFormatCollectionUpdateBatchByIDV1 {
+		return fmt.Errorf("%w: command wal apply collection update frame has unsupported identity kind=%d scope=%d format=%d", backenddb.ErrCommandWALUnsupported, frame.Kind, frame.Scope, frame.PayloadFormat)
+	}
+	if _, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(frame.Payload); err != nil {
+		return fmt.Errorf("%w: malformed command wal apply collection update frame: %v", backenddb.ErrCommandWALRejected, err)
 	}
 	return nil
 }
