@@ -101,6 +101,48 @@ func TestAppendAndFinalizeNoopFrame(t *testing.T) {
 	}
 }
 
+func TestAppendRejectsOutstandingNoopHandle(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		t.Fatalf("Append first: %v", err)
+	}
+	if _, _, err := Append(db, frame, ApplyMetadata{}, Options{}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("Append second outstanding error=%v, want ErrCommandWALRejected", err)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 1 {
+		t.Fatalf("command WAL frames after rejected outstanding append=%d, want 1", got)
+	}
+
+	if _, err := Finalize(db, handle, ApplyMetadata{}, Options{}); err != nil {
+		t.Fatalf("Finalize first: %v", err)
+	}
+	next, _, err := Append(db, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		t.Fatalf("Append after finalize: %v", err)
+	}
+	if next.LSN() <= appendResult.LSN {
+		t.Fatalf("next append lsn=%d, want greater than first lsn=%d", next.LSN(), appendResult.LSN)
+	}
+	if _, err := Finalize(db, next, ApplyMetadata{}, Options{}); err != nil {
+		t.Fatalf("Finalize second: %v", err)
+	}
+}
+
 func TestRejectedInputFailsBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	db, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
