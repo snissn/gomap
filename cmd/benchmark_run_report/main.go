@@ -162,6 +162,7 @@ type commandLogEntry struct {
 	ExitStatus  int
 	DurationSec int
 	Warning     string
+	Complete    bool
 }
 
 type runMetadata map[string]string
@@ -457,8 +458,15 @@ func loadCommandLog(path string) ([]commandLogEntry, []string) {
 	var entries []commandLogEntry
 	var warnings []string
 	var current *commandLogEntry
-	flush := func() {
+	flush := func(final bool) {
 		if current == nil {
+			return
+		}
+		if !current.Complete {
+			if !final {
+				warnings = append(warnings, "commands log command without exit status: "+current.Command)
+			}
+			current = nil
 			return
 		}
 		entries = append(entries, *current)
@@ -472,7 +480,7 @@ func loadCommandLog(path string) ([]commandLogEntry, []string) {
 		}
 		switch {
 		case strings.HasPrefix(line, "command:"):
-			flush()
+			flush(false)
 			current = &commandLogEntry{Command: strings.TrimSpace(strings.TrimPrefix(line, "command:"))}
 		case strings.HasPrefix(line, "exit_status:"):
 			if current == nil {
@@ -486,6 +494,7 @@ func loadCommandLog(path string) ([]commandLogEntry, []string) {
 			}
 			current.ExitStatus = status
 			current.DurationSec = duration
+			current.Complete = true
 		case strings.HasPrefix(line, "warning:"):
 			warning := strings.TrimSpace(strings.TrimPrefix(line, "warning:"))
 			if current == nil {
@@ -497,7 +506,7 @@ func loadCommandLog(path string) ([]commandLogEntry, []string) {
 			warnings = append(warnings, fmt.Sprintf("commands log line %d is unrecognized: %s", lineNo, line))
 		}
 	}
-	flush()
+	flush(true)
 	return entries, warnings
 }
 
