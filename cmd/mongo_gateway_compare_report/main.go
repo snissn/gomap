@@ -1593,14 +1593,8 @@ func summaryLoadMetadataFields(cmp phaseComparison, cell cellComparison) []strin
 	if !ok {
 		return []string{"", "", "", "", ""}
 	}
-	loadBatches := derivedLoadBatchCount(result, phase)
-	effectiveProducers := phase.EffectiveProducers
-	if effectiveProducers <= 0 && result.InsertProducers > 0 {
-		effectiveProducers = result.InsertProducers
-		if loadBatches > 0 && effectiveProducers > loadBatches {
-			effectiveProducers = loadBatches
-		}
-	}
+	loadBatches := summaryLoadBatchCount(result, phase)
+	effectiveProducers := summaryEffectiveLoadProducers(result, phase)
 	return []string{
 		formatRawInt(result.BatchSize > 0, int64(result.BatchSize)),
 		formatRawInt(result.InsertProducers > 0, int64(result.InsertProducers)),
@@ -1620,7 +1614,22 @@ func summaryLoadMetadataSource(cmp phaseComparison, cell cellComparison) (benchm
 	return benchmarkResult{}, phaseResult{}, false
 }
 
-func derivedLoadBatchCount(result benchmarkResult, phase phaseResult) int {
+func summaryEffectiveLoadProducers(result benchmarkResult, phase phaseResult) int {
+	effective := phase.EffectiveProducers
+	batches := summaryLoadBatchCount(result, phase)
+	if effective <= 0 {
+		effective = result.InsertProducers
+	}
+	if effective <= 0 {
+		return 0
+	}
+	if batches > 0 && effective > batches {
+		return batches
+	}
+	return effective
+}
+
+func summaryLoadBatchCount(result benchmarkResult, phase phaseResult) int {
 	if result.Documents > 0 && result.BatchSize > 0 {
 		return (result.Documents + result.BatchSize - 1) / result.BatchSize
 	}
