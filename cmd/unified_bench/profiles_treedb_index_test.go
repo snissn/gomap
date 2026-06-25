@@ -187,21 +187,24 @@ func TestBuildTreeDBOptions_FlushAdmissionExplicitPreservesOptInFlags(t *testing
 		t.Fatalf("explicit opt-in not preserved: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 	}
 	text := rep.formatText("")
+	decision := treedbdb.FlushAdmissionDecisionForOptions(opts)
 	for _, want := range []string{
 		"flush_admission_policy=explicit",
 		"flush_admission_admitted=true",
 		"flush_admission_reason=explicit_opt_in",
 		"flush_admission_configured_concurrency=4",
-		"flush_admission_effective_concurrency=4",
-		"flush_admission_concurrency_cap_reason=configured",
+		"flush_admission_effective_concurrency=" + strconv.Itoa(decision.FlushApplyConcurrency),
+		"flush_admission_concurrency_cap_reason=" + decision.FlushApplyConcurrencyCapReason,
 		"flush_admission_concurrency_defaulted=false",
+		"runtime_gomaxprocs=" + strconv.Itoa(runtime.GOMAXPROCS(0)),
 		"flush_admission_flush_apply_span_native=true",
 		"flush_admission_flush_backlog_coalescing=true",
+		"flush_apply_concurrency=4",
 		"flush_apply_span_native=true",
 		"flush_backlog_coalescing=true",
 	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("resolved options missing %q: %q", want, text)
+		if !treeDBReportHasLine(text, want) {
+			t.Fatalf("resolved options missing line %q: %q", want, text)
 		}
 	}
 }
