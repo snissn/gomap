@@ -505,6 +505,31 @@ func TestReadMongoSummaryStrictParsing(t *testing.T) {
 	}
 }
 
+func TestReadMongoSummaryOptionalLoadMetadata(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "summary.tsv")
+
+	writeFile(t, path, mongoSummaryFixture(0))
+	rows, err := readMongoSummary(path)
+	if err != nil {
+		t.Fatalf("read old summary: %v", err)
+	}
+	if rows[0].BatchSize != 0 || rows[0].InsertProducers != 0 || rows[0].EffectiveProducers != 0 || rows[0].DriverCalls != 0 || rows[0].LoadBatchCount != 0 {
+		t.Fatalf("old summary parsed metadata: %+v", rows[0])
+	}
+
+	writeFile(t, path, mongoSummaryFixtureWithLoadMetadata(0, 25, 8, 4))
+	rows, err = readMongoSummary(path)
+	if err != nil {
+		t.Fatalf("read summary with load metadata: %v", err)
+	}
+	got := rows[0]
+	if got.BatchSize != 25 || got.InsertProducers != 8 || got.EffectiveProducers != 4 || got.DriverCalls != 4 || got.LoadBatchCount != 4 {
+		t.Fatalf("load metadata = batch=%d requested=%d effective=%d calls=%d batches=%d",
+			got.BatchSize, got.InsertProducers, got.EffectiveProducers, got.DriverCalls, got.LoadBatchCount)
+	}
+}
+
 func TestMongoSweepCountsObservedOnly(t *testing.T) {
 	rows := []mongoSummaryRow{
 		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r16", TreeDBOpsSec: 160, MongoOpsSec: 80},
@@ -683,6 +708,32 @@ func TestFullSweepLoadNoteRangeIndexMentionsDisplayedZeroOnly(t *testing.T) {
 	}
 }
 
+func TestFullSweepLoadNoteReportsProducerMetadata(t *testing.T) {
+	note := fullSweepLoadNote([]mongoSummaryRow{{
+		Documents:          100,
+		SecondaryIndexes:   0,
+		Phase:              "load_insert_many",
+		BatchSize:          25,
+		InsertProducers:    8,
+		EffectiveProducers: 8,
+		DriverCalls:        4,
+		LoadBatchCount:     4,
+	}})
+	for _, want := range []string{
+		"Measured load metadata",
+		"100 docs",
+		"batch size 25",
+		"requested insert producers 8",
+		"effective 4",
+		"capped by 4 load batches",
+		"driver calls 4",
+	} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("note missing %q\n%s", want, note)
+		}
+	}
+}
+
 func TestFormatChartTooltipValueDoesNotDoubleBytes(t *testing.T) {
 	if got := formatChartTooltipValue(1024*1024, "bytes"); got != "1.00 MiB" {
 		t.Fatalf("bytes tooltip = %q, want 1.00 MiB", got)
@@ -760,10 +811,19 @@ func TestParseConfigRejectsInvalidRunRoot(t *testing.T) {
 
 const mongoSummaryHeader = "documents\tsecondary_indexes\trange_index\trange_mode\ttreedb_config\tmongo_config\tphase\ttreedb_ops_sec\ttreedb_sampled_ops_sec\ttreedb_sampled_ns_per_op\tmongo_ops_sec\tmongo_sampled_ops_sec\tmongo_sampled_ns_per_op\ttreedb_to_mongo_ops_ratio\ttreedb_to_mongo_sampled_ops_ratio\ttreedb_p50_us\tmongo_p50_us\ttreedb_p95_us\tmongo_p95_us\ttreedb_p99_us\tmongo_p99_us\ttreedb_disk_snapshot\ttreedb_disk_bytes\ttreedb_physical_bytes\tmongo_dbstats_data_size_bytes\tmongo_dbstats_total_size_bytes\tmongo_physical_bytes\ttreedb_to_mongo_dbstats_total_ratio\ttreedb_to_mongo_physical_ratio\n"
 
+const mongoSummaryHeaderWithLoadMetadata = "documents\tsecondary_indexes\trange_index\trange_mode\ttreedb_config\tmongo_config\tphase\ttreedb_ops_sec\ttreedb_sampled_ops_sec\ttreedb_sampled_ns_per_op\tmongo_ops_sec\tmongo_sampled_ops_sec\tmongo_sampled_ns_per_op\ttreedb_to_mongo_ops_ratio\ttreedb_to_mongo_sampled_ops_ratio\ttreedb_p50_us\tmongo_p50_us\ttreedb_p95_us\tmongo_p95_us\ttreedb_p99_us\tmongo_p99_us\ttreedb_disk_snapshot\ttreedb_disk_bytes\ttreedb_physical_bytes\tmongo_dbstats_data_size_bytes\tmongo_dbstats_total_size_bytes\tmongo_physical_bytes\ttreedb_to_mongo_dbstats_total_ratio\ttreedb_to_mongo_physical_ratio\tbatch_size\tinsert_producers\teffective_producers\tdriver_calls\tload_batch_count\n"
+
 func mongoSummaryFixture(indexes int) string {
 	return mongoSummaryHeader +
 		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t1000\t1000\t1000\t500\t500\t2000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", indexes) +
 		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tconcurrent_id_find_one_r1\t2000\t2000\t500\t1000\t1000\t1000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", indexes)
+}
+
+func mongoSummaryFixtureWithLoadMetadata(indexes, batchSize, requestedProducers, effectiveProducers int) string {
+	loadBatchCount := (100 + batchSize - 1) / batchSize
+	return mongoSummaryHeaderWithLoadMetadata +
+		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t1000\t1000\t1000\t500\t500\t2000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\t%d\t%d\t%d\t%d\t%d\n",
+			indexes, batchSize, requestedProducers, effectiveProducers, loadBatchCount, loadBatchCount)
 }
 
 func writeFile(t *testing.T, path, content string) {

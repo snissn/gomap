@@ -40,6 +40,8 @@ type benchmarkResult struct {
 	Database                   string            `json:"database"`
 	Collection                 string            `json:"collection"`
 	Documents                  int               `json:"documents"`
+	BatchSize                  int               `json:"batch_size"`
+	InsertProducers            int               `json:"insert_producers"`
 	SecondaryIndexes           int               `json:"secondary_indexes"`
 	RangeIndex                 bool              `json:"range_index"`
 	ClientMode                 string            `json:"client_mode,omitempty"`
@@ -67,6 +69,7 @@ type phaseResult struct {
 	Name                    string             `json:"name"`
 	Operations              int                `json:"operations"`
 	DriverCalls             int                `json:"driver_calls"`
+	EffectiveProducers      int                `json:"effective_producers,omitempty"`
 	DurationMillis          float64            `json:"duration_ms"`
 	OpsPerSecond            float64            `json:"ops_per_sec"`
 	SampledOpsPerSecond     float64            `json:"sampled_ops_per_sec,omitempty"`
@@ -1520,6 +1523,11 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 		"mongo_physical_bytes",
 		"treedb_to_mongo_dbstats_total_ratio",
 		"treedb_to_mongo_physical_ratio",
+		"batch_size",
+		"insert_producers",
+		"effective_producers",
+		"driver_calls",
+		"load_batch_count",
 	}
 	if err := writer.Write(header); err != nil {
 		return err
@@ -1568,12 +1576,64 @@ func writeSummaryTSV(path string, cells []cellComparison) error {
 			formatRawMeasuredRatio(treeOK && mongoTotalOK, treeBytes, mongoTotal),
 			formatRawRatio(safeRatio(float64(treePhysical), float64(mongoPhysical))),
 		}
+		row = append(row, summaryLoadMetadataFields(cmp, cell)...)
 		if err := writer.Write(row); err != nil {
 			return err
 		}
 	}
 	writer.Flush()
 	return writer.Error()
+}
+
+func summaryLoadMetadataFields(cmp phaseComparison, cell cellComparison) []string {
+	if cmp.Name != "load_insert_many" {
+		return []string{"", "", "", "", ""}
+	}
+	result, phase, ok := summaryLoadMetadataSource(cmp, cell)
+	if !ok {
+		return []string{"", "", "", "", ""}
+	}
+	loadBatches := summaryLoadBatchCount(result, phase)
+	effectiveProducers := summaryEffectiveLoadProducers(result, phase)
+	return []string{
+		formatRawInt(result.BatchSize > 0, int64(result.BatchSize)),
+		formatRawInt(result.InsertProducers > 0, int64(result.InsertProducers)),
+		formatRawInt(effectiveProducers > 0, int64(effectiveProducers)),
+		formatRawInt(phase.DriverCalls > 0, int64(phase.DriverCalls)),
+		formatRawInt(loadBatches > 0, int64(loadBatches)),
+	}
+}
+
+func summaryLoadMetadataSource(cmp phaseComparison, cell cellComparison) (benchmarkResult, phaseResult, bool) {
+	if cmp.HasTreeDB {
+		return cell.TreeDB.Result, cmp.TreeDBPhase, true
+	}
+	if cmp.HasMongo && cell.Mongo != nil {
+		return cell.Mongo.Result, cmp.MongoPhase, true
+	}
+	return benchmarkResult{}, phaseResult{}, false
+}
+
+func summaryEffectiveLoadProducers(result benchmarkResult, phase phaseResult) int {
+	effective := phase.EffectiveProducers
+	batches := summaryLoadBatchCount(result, phase)
+	if effective <= 0 {
+		effective = result.InsertProducers
+	}
+	if effective <= 0 {
+		return 0
+	}
+	if batches > 0 && effective > batches {
+		return batches
+	}
+	return effective
+}
+
+func summaryLoadBatchCount(result benchmarkResult, phase phaseResult) int {
+	if result.Documents > 0 && result.BatchSize > 0 {
+		return (result.Documents + result.BatchSize - 1) / result.BatchSize
+	}
+	return phase.DriverCalls
 }
 
 func findCell(cells []cellComparison, key cellKey) cellComparison {
