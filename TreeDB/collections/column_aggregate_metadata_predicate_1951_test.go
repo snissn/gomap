@@ -208,6 +208,64 @@ func TestPredicateQualifiedAggregateMetadataNullablePredicatesSkipNullRows3001(t
 	}
 }
 
+func TestPredicateQualifiedAggregateMetadataNullableEmptyPredicateMatchesMissingRows3001(t *testing.T) {
+	cfg := *predicateAggregateMetadataConfig1951()
+	for idx := range cfg.Columns {
+		if cfg.Columns[idx].Name == "operation" {
+			cfg.Columns[idx].Nullable = true
+		}
+	}
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{{
+		Name:        "empty_operation_dids",
+		GroupColumn: "did",
+		Kind:        ColumnAggregateCount,
+		Predicates:  []ColumnPhysicalQueryPredicate{{Column: "operation", Value: ""}},
+	}}
+	rows := []columnDeclaredRow{
+		{ID: []byte("explicit-empty"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: ""},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.post"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:empty"},
+		}},
+		{ID: []byte("null-operation"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 2},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, Null: true},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.post"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:null"},
+		}},
+		{ID: []byte("missing-operation"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 3},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.post"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:missing"},
+		}},
+		{ID: []byte("create-operation"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 4},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.post"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:create"},
+		}},
+	}
+
+	asset, ok, err := buildColumnAggregateMetadataAsset(cfg, rows, cfg.AggregateMetadata[0], "events", "events/column-assets", 1, typedColumnPartAssetPartID, 1)
+	if err != nil || !ok {
+		t.Fatalf("buildColumnAggregateMetadataAsset ok=%v err=%v", ok, err)
+	}
+	want := []columnAggregateMetadataEntry{
+		{Group: "did:empty", Count: 1},
+		{Group: "did:missing", Count: 1},
+		{Group: "did:null", Count: 1},
+	}
+	if !equalColumnAggregateMetadataEntries3001(asset.Entries, want) {
+		t.Fatalf("asset entries=%+v want %+v", asset.Entries, want)
+	}
+}
+
 func TestAggregateMetadataNullableGroupBucketsAsEmptyString3001(t *testing.T) {
 	cfg := *typedColumnSortKeyConfig1948(nil)
 	for idx := range cfg.Columns {

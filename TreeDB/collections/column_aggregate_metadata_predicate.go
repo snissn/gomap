@@ -6,10 +6,11 @@ import (
 )
 
 type columnAggregateMetadataPredicateSpec struct {
-	column    string
-	kind      ColumnPhysicalQueryPredicateKind
-	values    []string
-	columnIdx int
+	column              string
+	kind                ColumnPhysicalQueryPredicateKind
+	values              []string
+	columnIdx           int
+	missingMatchesEmpty bool
 }
 
 func columnAggregateMetadataPredicateSpecs(cfg ColumnStoreConfig, predicates []ColumnPhysicalQueryPredicate) ([]columnAggregateMetadataPredicateSpec, error) {
@@ -66,10 +67,25 @@ func columnAggregateMetadataPredicateSpecs(cfg ColumnStoreConfig, predicates []C
 				}
 			}
 		}
-		specs = append(specs, columnAggregateMetadataPredicateSpec{column: predicate.Column, kind: kind, values: values, columnIdx: columnIdx})
+		specs = append(specs, columnAggregateMetadataPredicateSpec{
+			column:              predicate.Column,
+			kind:                kind,
+			values:              values,
+			columnIdx:           columnIdx,
+			missingMatchesEmpty: col.Nullable && columnAggregateMetadataPredicateValuesContainEmpty(values),
+		})
 	}
 	sort.Slice(specs, func(i, j int) bool { return specs[i].column < specs[j].column })
 	return specs, nil
+}
+
+func columnAggregateMetadataPredicateValuesContainEmpty(values []string) bool {
+	for _, value := range values {
+		if value == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func columnAggregateMetadataCanonicalPredicates(cfg ColumnStoreConfig, predicates []ColumnPhysicalQueryPredicate) ([]ColumnPhysicalQueryPredicate, error) {
@@ -159,6 +175,9 @@ func columnAggregateMetadataPredicatesMatchRow(specs []columnAggregateMetadataPr
 		}
 		value := values[spec.columnIdx]
 		if value.Null || !value.Present {
+			if spec.missingMatchesEmpty {
+				continue
+			}
 			return false, nil
 		}
 		if value.Type != ColumnStoreValueString {
