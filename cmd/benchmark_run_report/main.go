@@ -1572,7 +1572,7 @@ func reportNav(data reportData) string {
 	if len(data.MongoFullSweep) > 0 {
 		items = append(items, navItem{Href: "#mongo-full", Label: "Mongo API sweep"})
 	}
-	if len(data.MongoLoadScaling) > 0 {
+	if hasMongoLoadScalingRows(data.MongoLoadScaling) {
 		items = append(items, navItem{Href: "#mongo-load-scaling", Label: "Load scaling"})
 	}
 	if len(data.MongoLoadModes) > 0 {
@@ -2930,6 +2930,15 @@ func mongoLoadScalingRows(rows []mongoSummaryRow) []mongoSummaryRow {
 		return out[i].TreeDBConfig < out[j].TreeDBConfig
 	})
 	return out
+}
+
+func hasMongoLoadScalingRows(rows []mongoSummaryRow) bool {
+	for _, row := range rows {
+		if row.Phase == "load_insert_many" {
+			return true
+		}
+	}
+	return false
 }
 
 func mongoLoadScalingScopeText(rows []mongoSummaryRow) string {
@@ -4409,18 +4418,18 @@ func fmtRatio(v float64) string {
 	return fmt.Sprintf("%.2fx", v)
 }
 
-func fmtPercentRatio(v float64) string {
-	if v == 0 {
+func fmtPercentRatio(v float64, ok bool) string {
+	if !ok {
 		return "-"
 	}
 	return fmt.Sprintf("%.1f%%", v*100)
 }
 
-func ratioOrZero(numerator, denominator float64) float64 {
+func ratioOrZero(numerator, denominator float64) (float64, bool) {
 	if denominator == 0 {
-		return 0
+		return 0, false
 	}
-	return numerator / denominator
+	return numerator / denominator, true
 }
 
 func fmtBytes(v float64) string {

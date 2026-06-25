@@ -83,7 +83,7 @@ Options:
   --skip-mongo           Skip all Mongo-compatible sections.
   --skip-load-modes      Skip Mongo client-mode load matrix.
   --include-load-scaling Include Mongo InsertMany producer-scaling sweep.
-                         Default: included once rendered report support is present.
+                         Default: included.
   --skip-load-scaling    Skip Mongo InsertMany producer-scaling sweep.
   --skip-scaling         Skip Mongo reader/writer scaling.
   --help                 Show this help.
