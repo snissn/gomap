@@ -186,6 +186,9 @@ func DecodeCommandEntryV1(src []byte, opts DecodeOptions) (CommandEntryV1, error
 	if err != nil {
 		return CommandEntryV1{}, err
 	}
+	if max := commandEntryMaxFrameSize(opts.Limits); uint64(len(src)) > max {
+		return CommandEntryV1{}, validationError(ErrorResourceExhaustedV1, fmt.Errorf("deterministic entry length %d exceeds limit %d", len(src), max))
+	}
 	entryBytes := bytes.Clone(src)
 	decoded, err := nativewire.DecodeDeterministicEntry(entryBytes, opts.Limits)
 	if err != nil {
@@ -249,6 +252,13 @@ func CommandDigestV1ForBytes(src []byte, opts DecodeOptions) CommandDigestV1 {
 	var out CommandDigestV1
 	copy(out[:], h.Sum(nil))
 	return out
+}
+
+func commandEntryMaxFrameSize(limits nativewire.Limits) uint64 {
+	if limits.MaxFrameSize != 0 {
+		return limits.MaxFrameSize
+	}
+	return nativewire.DefaultLimits().MaxFrameSize
 }
 
 func ValidateCommandDigestInputV1(src []byte, opts DecodeOptions) (CommandDigestV1, error) {
