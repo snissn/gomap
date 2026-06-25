@@ -35,7 +35,7 @@ SKIP_RAW="${SKIP_RAW:-false}"
 SKIP_COLLECTIONS="${SKIP_COLLECTIONS:-false}"
 SKIP_MONGO="${SKIP_MONGO:-false}"
 SKIP_LOAD_MODES="${SKIP_LOAD_MODES:-false}"
-SKIP_LOAD_SCALING="${SKIP_LOAD_SCALING:-false}"
+SKIP_LOAD_SCALING="${SKIP_LOAD_SCALING:-true}"
 SKIP_SCALING="${SKIP_SCALING:-false}"
 ORIGINAL_ARGS=("$@")
 FAILURES=0
@@ -82,6 +82,8 @@ Options:
                           Skip pprof capture for TreeDB collections vs SQLite.
   --skip-mongo           Skip all Mongo-compatible sections.
   --skip-load-modes      Skip Mongo client-mode load matrix.
+  --include-load-scaling Include Mongo InsertMany producer-scaling sweep.
+                         Default: skipped until the renderer support lands.
   --skip-load-scaling    Skip Mongo InsertMany producer-scaling sweep.
   --skip-scaling         Skip Mongo reader/writer scaling.
   --help                 Show this help.
@@ -227,6 +229,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-load-modes)
       SKIP_LOAD_MODES=true
+      shift
+      ;;
+    --include-load-scaling)
+      SKIP_LOAD_SCALING=false
       shift
       ;;
     --skip-load-scaling)
