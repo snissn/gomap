@@ -1,6 +1,7 @@
 package raftapply
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
@@ -55,28 +57,218 @@ func TestUnsupportedDeterministicEntryRejectsBeforeAppendAndStores(t *testing.T)
 	}
 }
 
-func TestCreateCollectionDecodedButNotLoweredDoesNotMutateCatalog(t *testing.T) {
+func TestCreateCollectionApplyCreatesCatalogAndDeterministicResult(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
 	defer func() { _ = db.Close() }()
 
-	seam := &countingCommandWALApplySeam{}
-	raw := readHexFixture(t, "../nativewire/testdata/v1/create_collection_entry.hex")
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
 	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
-		ProgressStore:       NewMemoryApplyProgressStore(8, 8),
-		ResultStore:         NewMemoryApplyResultStore(8),
-		CommandWALApplySeam: seam,
+		ProgressStore: progress,
+		ResultStore:   results,
 	})
-	assertRejected(t, result, err, raftentry.ApplyStatusRejectedUnsupported, raftentry.ErrorUnsupportedCommandV1)
-	if seam.appendCalls != 0 || len(readCommandWALFrames(t, dir)) != 0 {
-		t.Fatalf("create_collection rejection reached command WAL seam/files append=%d frames=%d", seam.appendCalls, len(readCommandWALFrames(t, dir)))
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
 	}
-	_, openErr := collections.NewCollectionManager(db).OpenCollection("users")
-	if !errors.Is(openErr, collections.ErrCollectionNotFound) {
-		t.Fatalf("OpenCollection users error=%v, want ErrCollectionNotFound", openErr)
+	if got := opened.Meta().Name; got != "users" {
+		t.Fatalf("collection name=%q, want users", got)
 	}
-	if got := db.State().AppliedCommandLSN; got != 0 {
-		t.Fatalf("AppliedCommandLSN=%d, want 0", got)
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	assertCatalogCreateFrame(t, frames[0], "users")
+	if got := db.State().AppliedCommandLSN; got != frames[0].LSN {
+		t.Fatalf("AppliedCommandLSN=%d, want catalog frame LSN %d", got, frames[0].LSN)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+
+	replayed, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("same ApplyEntryID replay: %v", err)
+	}
+	if replayed != result {
+		t.Fatalf("same ApplyEntryID replay result=%+v, want stored %+v", replayed, result)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 1 {
+		t.Fatalf("command WAL frames after result replay=%d, want 1", got)
+	}
+
+	duplicate, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, duplicate, raftentry.ApplyStatusAlreadyApplied, 0)
+	if duplicate.ResultDigest != result.ResultDigest {
+		t.Fatalf("duplicate result digest=%s, want %s", duplicate.ResultDigest.Hex(), result.ResultDigest.Hex())
+	}
+	frames = readCommandWALFrames(t, dir)
+	if len(frames) != 2 {
+		t.Fatalf("command WAL frames after same-schema duplicate=%d, want 2", len(frames))
+	}
+	assertCatalogCreateFrame(t, frames[1], "users")
+	if got := db.State().AppliedCommandLSN; got != frames[1].LSN {
+		t.Fatalf("AppliedCommandLSN=%d, want duplicate no-op frame LSN %d", got, frames[1].LSN)
+	}
+	if progress.Len() != 2 || results.Len() != 2 {
+		t.Fatalf("store lengths after duplicate progress=%d results=%d, want 2/2", progress.Len(), results.Len())
+	}
+}
+
+func TestCreateCollectionDuplicateIncompatibleFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	incompatible := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-bson", testCreateCollectionMetaOptions{
+		documentFormat: uint64(nativewire.DocumentFormatBSON),
+	})
+	rejected, err := ApplyCommittedEntryV1(db, incompatible, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertRejected(t, rejected, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after incompatible duplicate=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after incompatible duplicate=%d, want %d", got, beforeLSN)
+	}
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	if got := opened.Meta().Options.DocumentFormat; got != collections.DocumentFormatDefault {
+		t.Fatalf("document format after rejected duplicate=%q, want default", got)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after rejected duplicate progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+}
+
+func TestCreateCollectionReopenPreservesCatalogAndLogicalDigest(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: NewMemoryApplyProgressStore(8, 8),
+		ResultStore:   NewMemoryApplyResultStore(8),
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeDigest, err := LogicalDigestV1ForDB(db, LogicalDigestOptionsV1{})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("LogicalDigestV1ForDB before reopen: %v", err)
+	}
+	beforeLSN := db.State().AppliedCommandLSN
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen := openApplyHarnessDB(t, dir)
+	defer func() { _ = reopen.Close() }()
+	opened, err := collections.NewCollectionManager(reopen).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users after reopen: %v", err)
+	}
+	if got := opened.Meta().Name; got != "users" {
+		t.Fatalf("reopened collection name=%q, want users", got)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("reopen AppliedCommandLSN=%d, want %d", got, beforeLSN)
+	}
+	afterDigest, err := LogicalDigestV1ForDB(reopen, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB after reopen: %v", err)
+	}
+	if afterDigest != beforeDigest {
+		t.Fatalf("logical digest after reopen=%s, want %s", afterDigest.Hex(), beforeDigest.Hex())
+	}
+}
+
+func TestLogicalDigestConvergesAcrossFreshDBsAndIgnoresLocalLayout(t *testing.T) {
+	rawUsers := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
+	rawOrders := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders", testCreateCollectionMetaOptions{})
+
+	dirA := t.TempDir()
+	dbA := openApplyHarnessDB(t, dirA)
+	defer func() { _ = dbA.Close() }()
+	applyCreateSequence(t, dbA, rawUsers, rawOrders)
+	if err := dbA.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint A: %v", err)
+	}
+	digestA, err := LogicalDigestV1ForDB(dbA, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB A: %v", err)
+	}
+
+	dirB := t.TempDir()
+	dbB := openApplyHarnessDBWithOptions(t, dirB, backenddb.Options{IndexOuterLeavesInValueLog: true})
+	defer func() { _ = dbB.Close() }()
+	if err := dbB.Set([]byte("layout-noise"), []byte("advances local raw roots and command WAL LSN")); err != nil {
+		t.Fatalf("layout-noise Set: %v", err)
+	}
+	if err := dbB.RotateCommandWALActiveSegment(false); err != nil {
+		t.Fatalf("RotateCommandWALActiveSegment: %v", err)
+	}
+	applyCreateSequence(t, dbB, rawUsers)
+	if err := dbB.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint B mid-sequence: %v", err)
+	}
+	applyCreateSequenceFrom(t, dbB, 2, rawOrders)
+	digestB, err := LogicalDigestV1ForDB(dbB, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB B: %v", err)
+	}
+	if digestB != digestA {
+		t.Fatalf("logical digests differ across local layout/checkpoint timing: A=%s B=%s", digestA.Hex(), digestB.Hex())
+	}
+
+	dirC := t.TempDir()
+	dbC := openApplyHarnessDB(t, dirC)
+	defer func() { _ = dbC.Close() }()
+	rawAccounts := deterministicCreateCollectionEntry(t, "accounts", "client-a:create:accounts", testCreateCollectionMetaOptions{})
+	applyCreateSequence(t, dbC, rawAccounts)
+	digestC, err := LogicalDigestV1ForDB(dbC, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB C: %v", err)
+	}
+	if digestC == digestA {
+		t.Fatalf("different catalog produced same logical digest %s", digestA.Hex())
+	}
+	scopedDigest, err := LogicalDigestV1ForDB(dbA, LogicalDigestOptionsV1{CatalogScope: "catalog/other"})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB scoped: %v", err)
+	}
+	if scopedDigest == digestA {
+		t.Fatalf("different catalog scope produced same logical digest %s", digestA.Hex())
+	}
+	databaseDigest, err := LogicalDigestV1ForDB(dbA, LogicalDigestOptionsV1{DatabaseScope: "database/other"})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB database scope: %v", err)
+	}
+	if databaseDigest == digestA {
+		t.Fatalf("different database scope produced same logical digest %s", digestA.Hex())
 	}
 }
 
@@ -269,13 +461,17 @@ func TestMemoryStoresAreBounded(t *testing.T) {
 
 func openApplyHarnessDB(t *testing.T, dir string) *backenddb.DB {
 	t.Helper()
-	db, err := backenddb.Open(backenddb.Options{
-		Dir:                          dir,
-		CommandWAL:                   true,
-		DisableBackgroundPrune:       true,
-		CommandWALStatsScan:          true,
-		CommandWALSegmentTargetBytes: 1 << 20,
-	})
+	return openApplyHarnessDBWithOptions(t, dir, backenddb.Options{})
+}
+
+func openApplyHarnessDBWithOptions(t *testing.T, dir string, opts backenddb.Options) *backenddb.DB {
+	t.Helper()
+	opts.Dir = dir
+	opts.CommandWAL = true
+	opts.DisableBackgroundPrune = true
+	opts.CommandWALStatsScan = true
+	opts.CommandWALSegmentTargetBytes = 1 << 20
+	db, err := backenddb.Open(opts)
 	if err != nil {
 		t.Fatalf("Open DB: %v", err)
 	}
@@ -286,6 +482,17 @@ func applyMeta(term, index uint64) ApplyMetadataV1 {
 	return ApplyMetadataV1{
 		EntryID:                 raftentry.ApplyEntryID{Term: term, Index: index},
 		LocalDurabilityBoundary: LocalDurabilityCommandWALV1,
+	}
+}
+
+func assertApplied(t *testing.T, result raftentry.ApplyResultV1, wantStatus raftentry.ApplyStatusV1, wantAffected int64) {
+	t.Helper()
+	if result.Status != wantStatus ||
+		result.DeterministicErrorCode != raftentry.ErrorNoneV1 ||
+		result.AffectedCount != wantAffected ||
+		result.CommandDigest == (raftentry.CommandDigestV1{}) ||
+		result.ResultDigest == (raftentry.CommandDigestV1{}) {
+		t.Fatalf("applied result=%+v, want status=%s affected=%d non-zero digests", result, wantStatus, wantAffected)
 	}
 }
 
@@ -302,9 +509,106 @@ func assertRejected(t *testing.T, result raftentry.ApplyResultV1, err error, wan
 	}
 }
 
+func assertCatalogCreateFrame(t *testing.T, env commitlog.CommandEnvelope, collection string) {
+	t.Helper()
+	if env.Kind != commitlog.CommandKindCatalogCreateCollection ||
+		env.Scope != commitlog.CommandScopeCatalog ||
+		env.PayloadFormat != commitlog.PayloadFormatCatalogCreateCollectionV1 {
+		t.Fatalf("command WAL frame identity=%+v, want catalog create collection", env)
+	}
+	payload, err := commitlog.DecodeCatalogCreateCollectionPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCatalogCreateCollectionPayload: %v", err)
+	}
+	if payload.Collection != collection {
+		t.Fatalf("catalog create collection=%q, want %q", payload.Collection, collection)
+	}
+}
+
 func codeOf(err error) raftentry.DeterministicErrorCodeV1 {
 	code, _ := ErrorCodeOf(err)
 	return code
+}
+
+type testCreateCollectionMetaOptions struct {
+	documentFormat uint64
+}
+
+func deterministicCreateCollectionEntry(t *testing.T, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
+	t.Helper()
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandCreateCollection, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: nativewire.SectionCollectionMeta, Bytes: testCreateCollectionMetaPayload(collection, opts)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 7)},
+	}
+	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
+
+func testCreateCollectionMetaPayload(collection string, opts testCreateCollectionMetaOptions) []byte {
+	dst := binary.AppendUvarint(nil, 1)     // collection_meta version
+	dst = appendTestString(dst, collection) // name
+	dst = binary.AppendUvarint(dst, opts.documentFormat)
+	dst = binary.AppendUvarint(dst, 0) // data_root_storage_policy
+	dst = binary.AppendUvarint(dst, 0) // index_state_storage_policy
+	dst = append(dst, 0)               // allow_array_values_in_index
+	dst = append(dst, 0)               // disable_indexed_write_memtables
+	dst = append(dst, 0)               // buffered_indexed_writes
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_documents
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_bytes
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_root_runs
+	dst = append(dst, 0)               // buffered_indexed_async_flush
+	dst = append(dst, 0)               // buffered_indexed_overlay_roots
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_async_flush_max_queued_units
+	dst = binary.AppendUvarint(dst, 0) // index_count
+	return dst
+}
+
+func appendTestString(dst []byte, value string) []byte {
+	dst = binary.AppendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
+func applyCreateSequence(t *testing.T, db *backenddb.DB, entries ...[]byte) []raftentry.ApplyResultV1 {
+	t.Helper()
+	return applyCreateSequenceWithOptions(t, db, 1, true, entries...)
+}
+
+func applyCreateSequenceFrom(t *testing.T, db *backenddb.DB, startIndex uint64, entries ...[]byte) []raftentry.ApplyResultV1 {
+	t.Helper()
+	return applyCreateSequenceWithOptions(t, db, startIndex, startIndex == 1, entries...)
+}
+
+func applyCreateSequenceWithOptions(t *testing.T, db *backenddb.DB, startIndex uint64, enforceProgress bool, entries ...[]byte) []raftentry.ApplyResultV1 {
+	t.Helper()
+	results := NewMemoryApplyResultStore(len(entries) + 8)
+	var progress ApplyProgressStore
+	if enforceProgress {
+		progress = NewMemoryApplyProgressStore(len(entries)+8, startIndex+uint64(len(entries))+8)
+	}
+	out := make([]raftentry.ApplyResultV1, 0, len(entries))
+	for i, entry := range entries {
+		result, err := ApplyCommittedEntryV1(db, entry, applyMeta(1, startIndex+uint64(i)), Options{
+			ProgressStore: progress,
+			ResultStore:   results,
+		})
+		if err != nil {
+			t.Fatalf("ApplyCommittedEntryV1 index %d: %v result=%+v", startIndex+uint64(i), err, result)
+		}
+		if result.Status != raftentry.ApplyStatusApplied {
+			t.Fatalf("ApplyCommittedEntryV1 index %d status=%s, want applied", startIndex+uint64(i), result.Status)
+		}
+		out = append(out, result)
+	}
+	return out
 }
 
 func readHexFixture(t *testing.T, rel string) []byte {

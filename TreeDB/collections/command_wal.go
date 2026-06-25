@@ -123,11 +123,7 @@ func (m *CollectionManager) newCatalogCreateCollectionCommandWALIntent(meta Coll
 	if m == nil || m.db == nil || !m.db.CommandWALEnabled() {
 		return nil, nil
 	}
-	encoded, err := encodeCollectionMeta(meta)
-	if err != nil {
-		return nil, err
-	}
-	payload, err := commitlog.EncodeCatalogCreateCollectionPayload(meta.Name, encoded)
+	payload, err := EncodeCatalogCreateCollectionCommandWALPayload(meta)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +133,22 @@ func (m *CollectionManager) newCatalogCreateCollectionCommandWALIntent(meta Coll
 		commitlog.PayloadFormatCatalogCreateCollectionV1,
 		payload,
 	)
+}
+
+// EncodeCatalogCreateCollectionCommandWALPayload returns the canonical local
+// command-WAL payload used for catalog collection creates. R3a apply uses this
+// as its lowering boundary before handing the pre-appended intent back to the
+// normal catalog executor.
+func EncodeCatalogCreateCollectionCommandWALPayload(meta CollectionMeta) ([]byte, error) {
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := encodeNormalizedCollectionMeta(normalized)
+	if err != nil {
+		return nil, err
+	}
+	return commitlog.EncodeCatalogCreateCollectionPayload(normalized.Name, encoded)
 }
 
 func collectionDocumentsFromNoIndexEntries(entries []noIndexBatchEntry) []commitlog.CollectionDocument {
