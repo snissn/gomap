@@ -559,7 +559,7 @@ func columnMaterializableAggregateMetadataCount(cfg ColumnStoreConfig) int {
 }
 
 func columnAggregateMetadataMaterializable(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) bool {
-	if aggregate.Kind != ColumnAggregateCount && aggregate.Kind != ColumnAggregateMin && aggregate.Kind != ColumnAggregateMax {
+	if aggregate.Kind != ColumnAggregateCount && aggregate.Kind != ColumnAggregateGroupHourCount && aggregate.Kind != ColumnAggregateMin && aggregate.Kind != ColumnAggregateMax {
 		return false
 	}
 	if strings.TrimSpace(aggregate.GroupColumn) == "" {

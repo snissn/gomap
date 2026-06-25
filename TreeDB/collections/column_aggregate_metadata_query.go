@@ -25,6 +25,7 @@ type columnAggregateMetadataRunner struct {
 	rows                     int
 	scheduledGranules        int
 	groupKeys                []string
+	groupHours               []int
 	entries                  []columnAggregateMetadataRunnerEntry
 	seenGeneration           []uint32
 	runGeneration            uint32
@@ -35,6 +36,11 @@ type columnAggregateMetadataRunner struct {
 	resultGroups             []ColumnPhysicalQueryGroup
 	columnAssetReadIntegrity string
 	predicateDiagnostics     columnPhysicalQueryPredicateDiagnosticPlan
+}
+
+type columnAggregateMetadataRunnerGroupKey struct {
+	group string
+	hour  int
 }
 
 func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache) (*columnAggregateMetadataRunner, error) {
@@ -62,7 +68,7 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 		columnAssetReadIntegrity: columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity),
 		predicateDiagnostics:     newColumnPhysicalQueryPredicateDiagnosticPlan(req),
 	}
-	groupCodes := make(map[string]int)
+	groupCodes := make(map[columnAggregateMetadataRunnerGroupKey]int)
 	var rawScratch []byte
 	for _, metadataRef := range refs {
 		raw, err := readCache.read(metadataRef.AssetRef, rawScratch)
@@ -84,11 +90,13 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 		}
 		runner.metadataHits++
 		for _, entry := range asset.Entries {
-			code, ok := groupCodes[entry.Group]
+			groupKey := columnAggregateMetadataRunnerKey(req, entry)
+			code, ok := groupCodes[groupKey]
 			if !ok {
 				code = len(runner.groupKeys)
-				groupCodes[entry.Group] = code
+				groupCodes[groupKey] = code
 				runner.groupKeys = append(runner.groupKeys, entry.Group)
+				runner.groupHours = append(runner.groupHours, groupKey.hour)
 			}
 			runner.entries = append(runner.entries, columnAggregateMetadataRunnerEntry{
 				groupCode: code,
@@ -103,7 +111,7 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 	groupCount := len(runner.groupKeys)
 	runner.seenGeneration = make([]uint32, groupCount)
 	runner.touchedCodes = make([]int, 0, groupCount)
-	if req.Kind == ColumnPhysicalQueryGroupCount {
+	if req.Kind == ColumnPhysicalQueryGroupCount || req.Kind == ColumnPhysicalQueryGroupHourCount {
 		runner.counts = make([]int, groupCount)
 	}
 	runner.mins = make([]int64, groupCount)
@@ -117,6 +125,14 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 	runner.mappedBytes = stats.TotalMappedBytes
 	runner.heapCopyBytes = stats.TotalHeapCopyBytes
 	return runner, nil
+}
+
+func columnAggregateMetadataRunnerKey(req ColumnPhysicalQueryRequest, entry columnAggregateMetadataEntry) columnAggregateMetadataRunnerGroupKey {
+	key := columnAggregateMetadataRunnerGroupKey{group: entry.Group}
+	if req.Kind == ColumnPhysicalQueryGroupHourCount {
+		key.hour = entry.Hour
+	}
+	return key
 }
 
 func (r *columnAggregateMetadataRunner) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) ColumnPhysicalQueryResult {
@@ -169,7 +185,7 @@ func (r *columnAggregateMetadataRunner) reduceEntries() {
 		if r.seenGeneration[code] != generation {
 			r.seenGeneration[code] = generation
 			r.touchedCodes = append(r.touchedCodes, code)
-			if r.kind == ColumnPhysicalQueryGroupCount {
+			if r.kind == ColumnPhysicalQueryGroupCount || r.kind == ColumnPhysicalQueryGroupHourCount {
 				r.counts[code] = entry.count
 				continue
 			}
@@ -177,7 +193,7 @@ func (r *columnAggregateMetadataRunner) reduceEntries() {
 			r.maxs[code] = entry.max
 			continue
 		}
-		if r.kind == ColumnPhysicalQueryGroupCount {
+		if r.kind == ColumnPhysicalQueryGroupCount || r.kind == ColumnPhysicalQueryGroupHourCount {
 			r.counts[code] += entry.count
 			continue
 		}
@@ -203,7 +219,11 @@ func (r *columnAggregateMetadataRunner) appendAllGroups() {
 	for _, code := range r.touchedCodes {
 		r.resultGroups = append(r.resultGroups, r.groupForCode(code))
 	}
-	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
+	if r.kind == ColumnPhysicalQueryGroupHourCount {
+		sortColumnPhysicalQueryGroupsByKeyHour(r.resultGroups)
+	} else {
+		sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
+	}
 }
 
 func (r *columnAggregateMetadataRunner) appendTopKGroups(req ColumnPhysicalQueryRequest) {
@@ -220,6 +240,9 @@ func (r *columnAggregateMetadataRunner) groupForCode(code int) ColumnPhysicalQue
 	group := ColumnPhysicalQueryGroup{Key: r.groupKeys[code]}
 	switch r.kind {
 	case ColumnPhysicalQueryGroupCount:
+		group.Count = r.counts[code]
+	case ColumnPhysicalQueryGroupHourCount:
+		group.Hour = r.groupHours[code]
 		group.Count = r.counts[code]
 	case ColumnPhysicalQueryGroupMinInt64:
 		group.Int64 = r.mins[code]

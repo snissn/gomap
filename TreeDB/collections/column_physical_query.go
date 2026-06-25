@@ -1579,6 +1579,8 @@ func columnPhysicalQueryAggregateMetadataConfig(cfg ColumnStoreConfig, req Colum
 		switch req.Kind {
 		case ColumnPhysicalQueryGroupCount:
 			return aggregate, aggregate.Kind == ColumnAggregateCount
+		case ColumnPhysicalQueryGroupHourCount:
+			return aggregate, aggregate.Kind == ColumnAggregateGroupHourCount
 		case ColumnPhysicalQueryGroupMinInt64:
 			return aggregate, aggregate.Kind == ColumnAggregateMin
 		case ColumnPhysicalQueryGroupMaxInt64:
@@ -2147,10 +2149,16 @@ func sortColumnPhysicalQueryGroupsByKey(groups []ColumnPhysicalQueryGroup) {
 type columnPhysicalQueryMetadataAccumulator struct {
 	kind        ColumnPhysicalQueryKind
 	counts      map[string]int
+	hourCounts  map[columnPhysicalQueryMetadataHourKey]int
 	int64Values map[string]int64
 	spans       map[string]columnPhysicalQuerySpan
 	rows        int
 	entries     int
+}
+
+type columnPhysicalQueryMetadataHourKey struct {
+	group string
+	hour  int
 }
 
 func newColumnPhysicalQueryMetadataAccumulator(kind ColumnPhysicalQueryKind) *columnPhysicalQueryMetadataAccumulator {
@@ -2158,6 +2166,8 @@ func newColumnPhysicalQueryMetadataAccumulator(kind ColumnPhysicalQueryKind) *co
 	switch kind {
 	case ColumnPhysicalQueryGroupCount:
 		acc.counts = make(map[string]int)
+	case ColumnPhysicalQueryGroupHourCount:
+		acc.hourCounts = make(map[columnPhysicalQueryMetadataHourKey]int)
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
 		acc.int64Values = make(map[string]int64)
 	case ColumnPhysicalQueryGroupInt64Span:
@@ -2173,6 +2183,8 @@ func (a *columnPhysicalQueryMetadataAccumulator) add(entries []columnAggregateMe
 		switch a.kind {
 		case ColumnPhysicalQueryGroupCount:
 			a.counts[entry.Group] += entry.Count
+		case ColumnPhysicalQueryGroupHourCount:
+			a.hourCounts[columnPhysicalQueryMetadataHourKey{group: entry.Group, hour: entry.Hour}] += entry.Count
 		case ColumnPhysicalQueryGroupMinInt64:
 			if cur, ok := a.int64Values[entry.Group]; !ok || entry.Min < cur {
 				a.int64Values[entry.Group] = entry.Min
@@ -2205,6 +2217,9 @@ func (a *columnPhysicalQueryMetadataAccumulator) groupCount() int {
 	if a.spans != nil {
 		return len(a.spans)
 	}
+	if a.hourCounts != nil {
+		return len(a.hourCounts)
+	}
 	if a.counts != nil {
 		return len(a.counts)
 	}
@@ -2232,6 +2247,10 @@ func (a *columnPhysicalQueryMetadataAccumulator) groups(req ColumnPhysicalQueryR
 		for key, count := range a.counts {
 			add(ColumnPhysicalQueryGroup{Key: key, Count: count})
 		}
+	case ColumnPhysicalQueryGroupHourCount:
+		for key, count := range a.hourCounts {
+			add(ColumnPhysicalQueryGroup{Key: key.group, Hour: key.hour, Count: count})
+		}
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
 		for key, value := range a.int64Values {
 			add(ColumnPhysicalQueryGroup{Key: key, Int64: value})
@@ -2242,7 +2261,11 @@ func (a *columnPhysicalQueryMetadataAccumulator) groups(req ColumnPhysicalQueryR
 		}
 	}
 	if req.TopK == 0 {
-		sortColumnPhysicalQueryGroupsByKey(out)
+		if a.kind == ColumnPhysicalQueryGroupHourCount {
+			sortColumnPhysicalQueryGroupsByKeyHour(out)
+		} else {
+			sortColumnPhysicalQueryGroupsByKey(out)
+		}
 	}
 	return out
 }
@@ -2258,6 +2281,14 @@ func (a *columnPhysicalQueryMetadataAccumulator) topKCandidates(req ColumnPhysic
 	if a.spans != nil {
 		for key := range a.spans {
 			if key != "" {
+				candidates++
+			}
+		}
+		return candidates
+	}
+	if a.hourCounts != nil {
+		for key := range a.hourCounts {
+			if key.group != "" {
 				candidates++
 			}
 		}

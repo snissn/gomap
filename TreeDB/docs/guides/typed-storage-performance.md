@@ -33,7 +33,7 @@ Recommended starting point for new performance work:
 | --- | --- | --- |
 | Non-nullable int64 predicate scan | Landed scoped MVP; explicit API, not broad planner routing. | `BenchmarkTypedColumnInt64PredicateScan` and aggregate benchmark below. |
 | Non-nullable int64 count/sum/avg aggregate | Landed benchmark/API path across no-filter, equality, tiny/range, wide range, all-pruned/all-match, tail, and clustered/reverse/partial/random/hotspot distributions; still allocation-heavy and not final. | `BenchmarkTypedColumnInt64PredicateAggregate`. |
-| Grouped count/min/max/span aggregate metadata over typed-column parts | Landed scoped MVP for insert-only string-group aggregate metadata when referenced columns are `typed_column_part` owners; count metadata may omit the value column, min/max/span metadata uses an int64 value column, metadata is derived, generation/schema/part-bound, can declare exact string predicate coverage, and q1/q4/q5-style metadata paths scan metadata entries instead of data rows. | `BenchmarkAggregateMetadataTypedColumnPart1786`, `BenchmarkPredicateQualifiedAggregateMetadataQ4Q5DirectPrepared1951`. |
+| Grouped count/group-hour/min/max/span aggregate metadata over typed-column parts | Landed scoped MVP for insert-only string-group aggregate metadata when referenced columns are `typed_column_part` owners; count metadata may omit the value column, group-hour/min/max/span metadata uses an int64 value column, metadata is derived, generation/schema/part-bound, can declare exact string predicate coverage, and q1/q3/q4/q5-style metadata paths scan metadata entries instead of data rows. | `BenchmarkAggregateMetadataTypedColumnPart1786`, `BenchmarkPredicateQualifiedAggregateMetadataQ3DirectPrepared2892`, `BenchmarkPredicateQualifiedAggregateMetadataQ4Q5DirectPrepared1951`. |
 | Dense fixed-dimension `float32_vector` typed-column sections | Landed durable publication/reconstruction and direct-view tests. | `BenchmarkTypedColumnVectorDense...` under `TreeDB/internal/typedcolumn`. |
 | Dense fixed-degree `adjacency_list` typed-column sections | Landed durable publication/reconstruction for non-nullable owners with positive `adjacency_degree`; legacy dense direct-view reads remain fallback-only while explicit offsets-list variable adjacency uses the adapter direct-view path. | `BenchmarkTypedColumnAdjacencyDenseFallbackScan`, `BenchmarkTypedColumnAdapterVariableAdjacencyScan1917`. |
 | Vector graph typed-column reads | Landed native-reader path for `column_graph`; HNSW adjacency now uses typed-column `uint32_list` vector-index state on the healthy path, with legacy row/source fallback quarantined. | [#1782](https://github.com/snissn/gomap/issues/1782), `cmd/treedb_column_graph_demo`, and column graph benchmarks. |
@@ -94,10 +94,11 @@ row should show `document_materializations/op=0`, `row_materializations/op=0`,
 
 ### Typed-column aggregate metadata MVP benchmark
 
-Use this to measure the #1786 scoped metadata path for grouped count/min/max/span
-over `typed_column_part` string group columns and, for min/max/span, int64 value
-columns. The `prepared` variant separates setup/metadata decode from the warmed
-reduce loop and should remain `0 B/op`, `0 allocs/op`.
+Use this to measure the scoped metadata path for grouped
+count/group-hour/min/max/span over `typed_column_part` string group columns and,
+for group-hour/min/max/span, int64 value columns. The `prepared` variant
+separates setup/metadata decode from the warmed reduce loop and should remain
+low allocation.
 
 ```sh
 go test ./TreeDB/collections \
@@ -115,7 +116,17 @@ Key counters: `metadata_hits/op`, `metadata_decoded_bytes/op`,
 `result_shape_ns/op`. Prepared aggregate metadata queries may request explicit
 Top-K result shaping for int64 min/max/span results; this keeps all-groups
 semantics unchanged unless callers set `TopK` and `TopKOrder`. Grouped count
-metadata currently targets full q1-style group-count results.
+metadata targets full q1-style group-count results. Grouped-hour metadata targets
+q3-style `(collection, UTC hour)` counts with exact predicate coverage.
+
+```sh
+go test ./TreeDB/collections \
+  -run '^$' \
+  -bench '^BenchmarkPredicateQualifiedAggregateMetadataQ3DirectPrepared2892$' \
+  -benchmem \
+  -benchtime=200ms \
+  -count=1
+```
 
 ### JSONBench q3 grouped-hour physical reducer
 

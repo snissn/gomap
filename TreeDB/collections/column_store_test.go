@@ -697,6 +697,54 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "value column",
 		},
 		{
+			name: "aggregate group hour missing value column",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+					{Name: "collection", Path: "collection", ValueType: ColumnStoreValueString},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "feed_event_hour_count", GroupColumn: "collection", Kind: ColumnAggregateGroupHourCount}},
+			},
+			want: "requires a column",
+		},
+		{
+			name: "aggregate group hour missing group column",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+					{Name: "collection", Path: "collection", ValueType: ColumnStoreValueString},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "feed_event_hour_count", Column: "time_us", Kind: ColumnAggregateGroupHourCount}},
+			},
+			want: "requires a group column",
+		},
+		{
+			name: "aggregate group hour group column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+					{Name: "collection", Path: "collection", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "feed_event_hour_count", Column: "time_us", GroupColumn: "collection", Kind: ColumnAggregateGroupHourCount}},
+			},
+			want: "group column",
+		},
+		{
+			name: "aggregate group hour value column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueString},
+					{Name: "collection", Path: "collection", ValueType: ColumnStoreValueString},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "feed_event_hour_count", Column: "time_us", GroupColumn: "collection", Kind: ColumnAggregateGroupHourCount}},
+			},
+			want: "value column",
+		},
+		{
 			name: "invalid asset namespace traversal",
 			cfg: &ColumnStoreConfig{
 				Enabled:      true,
