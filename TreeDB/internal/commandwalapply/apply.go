@@ -53,6 +53,7 @@ type Options struct {
 // Handle is the append token required to publish the same local command-WAL
 // frame after the normal executor has made the command locally visible.
 type Handle struct {
+	db      *backenddb.DB
 	intent  *backenddb.CommandWALIntent
 	lsn     uint64
 	staging *stagingGuard
@@ -119,7 +120,7 @@ func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options)
 		staging.release()
 		return Handle{}, Result{}, err
 	}
-	return Handle{intent: intent, lsn: lsn, staging: staging}, Result{
+	return Handle{db: db, intent: intent, lsn: lsn, staging: staging}, Result{
 		LSN:               lsn,
 		Status:            StatusLocallyWALRecoverable,
 		AppliedCommandLSN: applied,
@@ -136,6 +137,9 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	}
 	if handle.intent == nil || handle.lsn == 0 {
 		return Result{}, fmt.Errorf("%w: command wal apply finalize missing appended frame", backenddb.ErrCommandWALRejected)
+	}
+	if handle.db != db {
+		return Result{}, fmt.Errorf("%w: command wal apply finalize handle belongs to a different DB", backenddb.ErrCommandWALRejected)
 	}
 	if handle.staging != nil {
 		defer handle.staging.release()

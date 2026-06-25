@@ -207,6 +207,52 @@ func TestOutstandingApplyHandleBlocksRawCommandWALPublish(t *testing.T) {
 	}
 }
 
+func TestFinalizeRejectsHandleFromDifferentDB(t *testing.T) {
+	sourceDir := t.TempDir()
+	source, err := backenddb.Open(backenddb.Options{
+		Dir:                    sourceDir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open source: %v", err)
+	}
+	defer func() { _ = source.Close() }()
+
+	targetDir := t.TempDir()
+	target, err := backenddb.Open(backenddb.Options{
+		Dir:                    targetDir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open target: %v", err)
+	}
+	defer func() { _ = target.Close() }()
+
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	handle, _, err := Append(source, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		t.Fatalf("Append source: %v", err)
+	}
+
+	if _, err := Finalize(target, handle, ApplyMetadata{}, Options{}); !errors.Is(err, backenddb.ErrCommandWALRejected) {
+		t.Fatalf("Finalize target error=%v, want ErrCommandWALRejected", err)
+	}
+	if got := target.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("target AppliedCommandLSN=%d, want 0", got)
+	}
+	if got := len(readCommandWALFrames(t, targetDir)); got != 0 {
+		t.Fatalf("target command WAL frames=%d, want 0", got)
+	}
+	if _, err := Finalize(source, handle, ApplyMetadata{}, Options{}); err != nil {
+		t.Fatalf("Finalize source after rejected target finalize: %v", err)
+	}
+}
+
 func TestRejectedInputFailsBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	db, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
