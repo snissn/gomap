@@ -166,6 +166,7 @@ type reportData struct {
 	CollectionComparisons []collectionComparison
 	MongoFullSweep        []mongoSummaryRow
 	MongoLoadModes        []loadModeRow
+	MongoLoadScaling      []mongoSummaryRow
 	MongoScaling          map[int][]mongoSummaryRow
 	Profiles              profileReportData
 	Warnings              []string
@@ -342,6 +343,10 @@ func loadReportData(cfg config) (reportData, error) {
 		data.Warnings = append(data.Warnings, warnings...)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		data.Warnings = append(data.Warnings, err.Error())
+	}
+	if rows, warnings := loadMongoLoadScaling(filepath.Join(cfg.RunRoot, "mongo_gateway_load_scaling_1m")); len(rows) > 0 || len(warnings) > 0 {
+		data.MongoLoadScaling = rows
+		data.Warnings = append(data.Warnings, warnings...)
 	}
 	if scaling, warnings := loadMongoScaling(filepath.Join(cfg.RunRoot, "mongo_gateway_reader_writer_scaling_1m")); len(scaling) > 0 || len(warnings) > 0 {
 		data.MongoScaling = scaling
@@ -794,6 +799,21 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 	return out, warnings, nil
 }
 
+func loadMongoLoadScaling(dir string) ([]mongoSummaryRow, []string) {
+	path := filepath.Join(dir, "summary.tsv")
+	rows, err := readMongoSummary(path)
+	if err == nil {
+		return rows, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			return nil, []string{fmt.Sprintf("mongo load scaling: %s is missing summary.tsv", filepath.Base(dir))}
+		}
+		return nil, nil
+	}
+	return nil, []string{err.Error()}
+}
+
 func resolveRunArtifactPath(baseDir, relPath string) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", fmt.Errorf("empty artifact path under %s", baseDir)
@@ -1195,6 +1215,7 @@ func renderHTML(data reportData) string {
 		b.WriteString("</ul></section>\n")
 	}
 	renderMongoFullSweep(&b, data.MongoFullSweep)
+	renderMongoLoadScaling(&b, data.MongoLoadScaling)
 	renderMongoLoadModes(&b, data.MongoLoadModes)
 	renderMongoScaling(&b, data.MongoScaling)
 	renderCollections(&b, data.Collections, data.CollectionComparisons)
@@ -1212,6 +1233,9 @@ func reportNav(data reportData) string {
 	var items []navItem
 	if len(data.MongoFullSweep) > 0 {
 		items = append(items, navItem{Href: "#mongo-full", Label: "Mongo API sweep"})
+	}
+	if len(data.MongoLoadScaling) > 0 {
+		items = append(items, navItem{Href: "#mongo-load-scaling", Label: "Load scaling"})
 	}
 	if len(data.MongoLoadModes) > 0 {
 		items = append(items, navItem{Href: "#mongo-load", Label: "Load modes"})
@@ -2336,6 +2360,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "bytes"))
 		b.WriteString("<p class=\"subtle\"><strong>Storage basis:</strong> " + esc(mongoStorageBasisText(loadRows)) + "</p>")
+		writeMongoIndexRetentionTable(b, loadRows)
 	}
 	b.WriteString("</div></div>")
 	for _, idx := range indexes {
@@ -2412,6 +2437,149 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	writeTable(b, []string{"indexes", "target", "config", "load docs/sec", "physical bytes", "raw JSON"}, body, numericColumns(0, 3, 4))
 	b.WriteString("</details>")
 	b.WriteString("</section>\n")
+}
+
+func renderMongoLoadScaling(b *strings.Builder, rows []mongoSummaryRow) {
+	loadRows := mongoLoadScalingRows(rows)
+	if len(loadRows) == 0 {
+		return
+	}
+	b.WriteString("<section id=\"mongo-load-scaling\"><h2>Mongo API InsertMany Producer Scaling</h2>")
+	b.WriteString("<p class=\"subtle\">Load-only BSON `driver-command-raw` TreeDB-vs-MongoDB sweep. This section varies InsertMany producer count and is separate from reader/writer operation scaling.</p>")
+	if metadata := mongoLoadScalingScopeText(loadRows); metadata != "" {
+		b.WriteString("<p class=\"subtle\"><strong>Scope:</strong> " + esc(metadata) + "</p>")
+	}
+	b.WriteString("<div class=\"chart-grid\">")
+	for _, idx := range sortedMongoIndexes(loadRows) {
+		counts := mongoLoadProducerCounts(loadRows, idx)
+		if len(counts) == 0 {
+			continue
+		}
+		b.WriteString(lineChart("Insert throughput vs insert producers, "+indexCountLabel(idx), countLabels(counts), "insert producers", "docs/sec", []chartSeries{
+			{Name: "TreeDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "tree"), Color: "#2867c7"},
+			{Name: "MongoDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "mongo"), Color: "#1f8a5b"},
+		}, "docs/sec"))
+	}
+	b.WriteString("</div>")
+	writeMongoLoadScalingSummaryTable(b, loadRows)
+	b.WriteString("<details><summary>Raw load-scaling TSV rows</summary>")
+	writeMongoSummaryTable(b, loadRows)
+	b.WriteString("</details></section>\n")
+}
+
+func mongoLoadScalingRows(rows []mongoSummaryRow) []mongoSummaryRow {
+	var out []mongoSummaryRow
+	for _, row := range rows {
+		if row.Phase == "load_insert_many" {
+			out = append(out, row)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SecondaryIndexes != out[j].SecondaryIndexes {
+			return out[i].SecondaryIndexes < out[j].SecondaryIndexes
+		}
+		if mongoLoadProducerCount(out[i]) != mongoLoadProducerCount(out[j]) {
+			return mongoLoadProducerCount(out[i]) < mongoLoadProducerCount(out[j])
+		}
+		return out[i].TreeDBConfig < out[j].TreeDBConfig
+	})
+	return out
+}
+
+func mongoLoadScalingScopeText(rows []mongoSummaryRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	first := rows[0]
+	for _, row := range rows[1:] {
+		if row.Documents != first.Documents || row.BatchSize != first.BatchSize || row.TreeDBConfig != first.TreeDBConfig || row.MongoConfig != first.MongoConfig {
+			return "mixed document, batch, or client-mode metadata; see raw load-scaling rows"
+		}
+	}
+	parts := []string{fmt.Sprintf("%s docs", commaInt(int64(first.Documents)))}
+	if first.BatchSize > 0 {
+		parts = append(parts, fmt.Sprintf("batch size %s", commaInt(int64(first.BatchSize))))
+	}
+	if batches := mongoLoadBatchCount(first); batches > 0 {
+		parts = append(parts, fmt.Sprintf("%s load batches", commaInt(int64(batches))))
+	}
+	if first.TreeDBConfig != "" {
+		parts = append(parts, "TreeDB "+first.TreeDBConfig)
+	}
+	if first.MongoConfig != "" {
+		parts = append(parts, "MongoDB "+first.MongoConfig)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func mongoLoadProducerCounts(rows []mongoSummaryRow, idx int) []int {
+	seen := make(map[int]bool)
+	for _, row := range rows {
+		if row.SecondaryIndexes != idx {
+			continue
+		}
+		count := mongoLoadProducerCount(row)
+		if count > 0 {
+			seen[count] = true
+		}
+	}
+	var out []int
+	for count := range seen {
+		out = append(out, count)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func mongoLoadProducerOps(rows []mongoSummaryRow, idx int, counts []int, side string) []float64 {
+	out := make([]float64, 0, len(counts))
+	for _, count := range counts {
+		row, ok := mongoLoadProducerRow(rows, idx, count)
+		if !ok {
+			out = append(out, 0)
+			continue
+		}
+		if side == "mongo" {
+			out = append(out, row.MongoOpsSec)
+		} else {
+			out = append(out, row.TreeDBOpsSec)
+		}
+	}
+	return out
+}
+
+func mongoLoadProducerRow(rows []mongoSummaryRow, idx, count int) (mongoSummaryRow, bool) {
+	for _, row := range rows {
+		if row.SecondaryIndexes == idx && mongoLoadProducerCount(row) == count {
+			return row, true
+		}
+	}
+	return mongoSummaryRow{}, false
+}
+
+func mongoLoadProducerCount(row mongoSummaryRow) int {
+	if row.InsertProducers > 0 {
+		return row.InsertProducers
+	}
+	return mongoEffectiveLoadProducers(row)
+}
+
+func writeMongoLoadScalingSummaryTable(b *strings.Builder, rows []mongoSummaryRow) {
+	var body [][]string
+	for _, row := range rows {
+		body = append(body, []string{
+			strconv.Itoa(row.SecondaryIndexes),
+			formatOptionalInt(mongoLoadProducerCount(row)),
+			formatOptionalInt(mongoEffectiveLoadProducers(row)),
+			formatOptionalInt(mongoLoadBatchCount(row)),
+			fmtOps(row.TreeDBOpsSec),
+			fmtOps(row.MongoOpsSec),
+			fmtRatio(row.TreeDBToMongoRatio),
+		})
+	}
+	b.WriteString("<h3>Producer scaling summary</h3>")
+	b.WriteString("<p class=\"subtle\">Requested producers are used on the chart axis. Effective producers show capped runs when requested producers exceed the number of load batches.</p>")
+	writeTable(b, []string{"indexes", "requested producers", "effective producers", "load batches", "TreeDB docs/sec", "MongoDB docs/sec", "TreeDB/MongoDB"}, body, numericColumns(0, 1, 2, 3, 4, 5, 6))
 }
 
 func fullSweepLoadNote(rows []mongoSummaryRow) string {
@@ -2885,6 +3053,39 @@ func mongoRowDisk(rows []mongoSummaryRow, side string) []float64 {
 		}
 	}
 	return out
+}
+
+func writeMongoIndexRetentionTable(b *strings.Builder, rows []mongoSummaryRow) {
+	if len(rows) == 0 {
+		return
+	}
+	var baseline mongoSummaryRow
+	var hasBaseline bool
+	for _, row := range rows {
+		if row.SecondaryIndexes == 0 {
+			baseline = row
+			hasBaseline = true
+			break
+		}
+	}
+	if !hasBaseline {
+		return
+	}
+	var body [][]string
+	for _, row := range rows {
+		body = append(body, []string{
+			strconv.Itoa(row.SecondaryIndexes),
+			fmtOps(row.TreeDBOpsSec),
+			fmtOps(row.MongoOpsSec),
+			fmtPercentRatio(ratioOrZero(row.TreeDBOpsSec, baseline.TreeDBOpsSec)),
+			fmtPercentRatio(ratioOrZero(row.MongoOpsSec, baseline.MongoOpsSec)),
+			fmtRatio(row.TreeDBToMongoRatio),
+			fmtRatio(row.TreeDBToMongoPhysRatio),
+		})
+	}
+	b.WriteString("<h3>Index throughput retention</h3>")
+	b.WriteString("<p class=\"subtle\">Retention is each load throughput divided by the 0-secondary-index load throughput for the same database.</p>")
+	writeTable(b, []string{"secondary indexes", "TreeDB docs/sec", "MongoDB docs/sec", "TreeDB retained", "MongoDB retained", "TreeDB/MongoDB throughput", "TreeDB/MongoDB physical bytes"}, body, numericColumns(0, 1, 2, 3, 4, 5, 6))
 }
 
 func mongoStorageBasisText(rows []mongoSummaryRow) string {
@@ -3759,6 +3960,20 @@ func fmtRatio(v float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.2fx", v)
+}
+
+func fmtPercentRatio(v float64) string {
+	if v == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", v*100)
+}
+
+func ratioOrZero(numerator, denominator float64) float64 {
+	if denominator == 0 {
+		return 0
+	}
+	return numerator / denominator
 }
 
 func fmtBytes(v float64) string {

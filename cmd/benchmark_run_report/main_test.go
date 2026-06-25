@@ -102,6 +102,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	summary0 := mongoSummaryFixture(0)
 	summary4 := mongoSummaryFixture(4)
 	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "summary.tsv"), summary0+strings.TrimPrefix(summary4, mongoSummaryHeader))
+	writeFile(t, filepath.Join(root, "mongo_gateway_load_scaling_1m", "summary.tsv"), mongoLoadScalingSummaryFixture())
 	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_0", "summary.tsv"), summary0)
 	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_4", "summary.tsv"), summary4)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
@@ -128,6 +129,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"HEAD=abc123def456",
 		"origin/main=999888777666",
 		"Mongo API Full Sweep",
+		"Mongo API InsertMany Producer Scaling",
 		"Load-Only Client-Mode Matrix",
 		"Mongo API Reader/Writer Scaling",
 		"Collections vs SQLite",
@@ -144,6 +146,11 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Client Count",
 		"Load interpretation:",
 		"pure ingest client-mode matrix",
+		"Index throughput retention",
+		"Producer scaling summary",
+		"Insert Throughput Vs Insert Producers, 0 Indexes",
+		"requested producers",
+		"effective producers",
 		"4 Indexes: Mongo API Scaling",
 		"Single threaded client",
 		"ID Find One: Throughput Vs Reader Clients",
@@ -212,7 +219,7 @@ func TestRenderHTMLNavOmitsMissingSections(t *testing.T) {
 	if !strings.Contains(html, "href=\"#mongo-load\"") {
 		t.Fatalf("nav missing present load-mode section\n%s", html)
 	}
-	for _, absent := range []string{"href=\"#mongo-full\"", "href=\"#scaling\"", "href=\"#collections\"", "href=\"#raw-engine\""} {
+	for _, absent := range []string{"href=\"#mongo-full\"", "href=\"#mongo-load-scaling\"", "href=\"#scaling\"", "href=\"#collections\"", "href=\"#raw-engine\""} {
 		if strings.Contains(html, absent) {
 			t.Fatalf("nav includes missing section %s\n%s", absent, html)
 		}
@@ -734,6 +741,55 @@ func TestFullSweepLoadNoteReportsProducerMetadata(t *testing.T) {
 	}
 }
 
+func TestRenderMongoLoadScalingSection(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{Documents: 100, BatchSize: 25, LoadBatchCount: 4, SecondaryIndexes: 0, TreeDBConfig: "treedb_bson", MongoConfig: "mongo", Phase: "load_insert_many", InsertProducers: 1, EffectiveProducers: 1, TreeDBOpsSec: 1000, MongoOpsSec: 500, TreeDBToMongoRatio: 2},
+		{Documents: 100, BatchSize: 25, LoadBatchCount: 4, SecondaryIndexes: 0, TreeDBConfig: "treedb_bson", MongoConfig: "mongo", Phase: "load_insert_many", InsertProducers: 2, EffectiveProducers: 2, TreeDBOpsSec: 1600, MongoOpsSec: 700, TreeDBToMongoRatio: 2.29},
+		{Documents: 100, BatchSize: 25, LoadBatchCount: 4, SecondaryIndexes: 1, TreeDBConfig: "treedb_bson", MongoConfig: "mongo", Phase: "load_insert_many", InsertProducers: 1, EffectiveProducers: 1, TreeDBOpsSec: 800, MongoOpsSec: 300, TreeDBToMongoRatio: 2.67},
+	}
+	var b strings.Builder
+	renderMongoLoadScaling(&b, rows)
+	html := b.String()
+	for _, want := range []string{
+		"Mongo API InsertMany Producer Scaling",
+		"Insert Throughput Vs Insert Producers, 0 Indexes",
+		"Insert Throughput Vs Insert Producers, 1 Index",
+		"Producer scaling summary",
+		"requested producers",
+		"effective producers",
+		"Raw load-scaling TSV rows",
+		"1,600",
+		"2.29x",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("load-scaling section missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestMongoIndexRetentionTable(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{SecondaryIndexes: 0, TreeDBOpsSec: 100, MongoOpsSec: 80, TreeDBToMongoRatio: 1.25, TreeDBToMongoPhysRatio: 0.4},
+		{SecondaryIndexes: 1, TreeDBOpsSec: 80, MongoOpsSec: 40, TreeDBToMongoRatio: 2, TreeDBToMongoPhysRatio: 0.3},
+	}
+	var b strings.Builder
+	writeMongoIndexRetentionTable(&b, rows)
+	html := b.String()
+	for _, want := range []string{
+		"Index throughput retention",
+		"TreeDB retained",
+		"MongoDB retained",
+		"80.0%",
+		"50.0%",
+		"2.00x",
+		"0.30x",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("retention table missing %q\n%s", want, html)
+		}
+	}
+}
+
 func TestFormatChartTooltipValueDoesNotDoubleBytes(t *testing.T) {
 	if got := formatChartTooltipValue(1024*1024, "bytes"); got != "1.00 MiB" {
 		t.Fatalf("bytes tooltip = %q, want 1.00 MiB", got)
@@ -754,6 +810,23 @@ func TestLoadMongoScalingWarnsMissingSummary(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "indexes_0") || !strings.Contains(warnings[0], "summary.tsv") {
 		t.Fatalf("warnings = %v, want missing summary warning", warnings)
+	}
+}
+
+func TestLoadMongoLoadScalingWarnsMissingSummary(t *testing.T) {
+	root := t.TempDir()
+	rows, warnings := loadMongoLoadScaling(root)
+	if len(rows) != 0 {
+		t.Fatalf("rows = %v, want none", rows)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "mongo load scaling") || !strings.Contains(warnings[0], "summary.tsv") {
+		t.Fatalf("warnings = %v, want missing load-scaling summary warning", warnings)
+	}
+
+	missingRoot := filepath.Join(t.TempDir(), "absent")
+	rows, warnings = loadMongoLoadScaling(missingRoot)
+	if len(rows) != 0 || len(warnings) != 0 {
+		t.Fatalf("absent root rows=%v warnings=%v, want none", rows, warnings)
 	}
 }
 
@@ -824,6 +897,22 @@ func mongoSummaryFixtureWithLoadMetadata(indexes, batchSize, requestedProducers,
 	return mongoSummaryHeaderWithLoadMetadata +
 		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t1000\t1000\t1000\t500\t500\t2000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\t%d\t%d\t%d\t%d\t%d\n",
 			indexes, batchSize, requestedProducers, effectiveProducers, loadBatchCount, loadBatchCount)
+}
+
+func mongoLoadScalingSummaryFixture() string {
+	return mongoSummaryHeaderWithLoadMetadata +
+		mongoLoadScalingSummaryRow(0, 1, 1, 1000, 500) +
+		mongoLoadScalingSummaryRow(0, 2, 2, 1600, 700) +
+		mongoLoadScalingSummaryRow(1, 1, 1, 800, 300) +
+		mongoLoadScalingSummaryRow(1, 2, 2, 1200, 450)
+}
+
+func mongoLoadScalingSummaryRow(indexes, requestedProducers, effectiveProducers int, treeOps, mongoOps float64) string {
+	batchSize := 25
+	loadBatchCount := 4
+	ratio := treeOps / mongoOps
+	return fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t%.0f\t%.0f\t1000\t%.0f\t%.0f\t2000\t%.2f\t%.2f\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\t%d\t%d\t%d\t%d\t%d\n",
+		indexes, treeOps, treeOps, mongoOps, mongoOps, ratio, ratio, batchSize, requestedProducers, effectiveProducers, loadBatchCount, loadBatchCount)
 }
 
 func writeFile(t *testing.T, path, content string) {
