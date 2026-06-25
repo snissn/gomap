@@ -18,6 +18,9 @@ COLLECTION_PROFILE_BENCHTIME="${COLLECTION_PROFILE_BENCHTIME:-}"
 COLLECTION_PROFILE_COUNT="${COLLECTION_PROFILE_COUNT:-1}"
 MONGO_BATCH_SIZE="${MONGO_BATCH_SIZE:-10000}"
 INSERT_PRODUCERS="${INSERT_PRODUCERS:-8}"
+MONGO_LOAD_SCALING_DOCS="${MONGO_LOAD_SCALING_DOCS:-}"
+MONGO_LOAD_SCALING_BATCH_SIZE="${MONGO_LOAD_SCALING_BATCH_SIZE:-1000}"
+MONGO_LOAD_PRODUCERS="${MONGO_LOAD_PRODUCERS:-1,2,4,8,16,32}"
 MONGO_MODE="${MONGO_MODE:-docker}"
 MONGO_URI="${MONGO_URI:-mongodb://127.0.0.1:27017}"
 MONGO_IMAGE="${MONGO_IMAGE:-mongo:8}"
@@ -32,6 +35,7 @@ SKIP_RAW="${SKIP_RAW:-false}"
 SKIP_COLLECTIONS="${SKIP_COLLECTIONS:-false}"
 SKIP_MONGO="${SKIP_MONGO:-false}"
 SKIP_LOAD_MODES="${SKIP_LOAD_MODES:-false}"
+SKIP_LOAD_SCALING="${SKIP_LOAD_SCALING:-false}"
 SKIP_SCALING="${SKIP_SCALING:-false}"
 ORIGINAL_ARGS=("$@")
 FAILURES=0
@@ -47,6 +51,7 @@ The output layout intentionally matches cmd/benchmark_run_report:
   <run-root>/collections_sqlite_canonical_1m/
   <run-root>/mongo_gateway_full_sweep_1m_expanded/
   <run-root>/mongo_client_mode_load_matrix_1m/
+  <run-root>/mongo_gateway_load_scaling_1m/
   <run-root>/mongo_gateway_reader_writer_scaling_1m/
   <run-root>/deep_report.html
 
@@ -58,6 +63,11 @@ Options:
   --raw-keys N           Override raw engine key count.
   --collection-docs N    Override collection/SQLite document count.
   --mongo-docs N         Override Mongo-compatible document count.
+  --mongo-load-docs N    Override Mongo load-scaling document count. Default: --mongo-docs.
+  --mongo-load-batch-size N
+                         Override Mongo load-scaling InsertMany batch size. Default: 1000.
+  --mongo-load-producers LIST
+                         Producer counts for Mongo load scaling. Default: "1,2,4,8,16,32".
   --mongo-mode MODE      Mongo mode for full/load comparison: docker or external. Default: docker.
   --mongo-uri URI        MongoDB URI for external/scaling runs. Default: mongodb://127.0.0.1:27017.
   --mongo-image IMAGE    Docker image for --mongo-mode docker. Default: mongo:8.
@@ -72,12 +82,14 @@ Options:
                           Skip pprof capture for TreeDB collections vs SQLite.
   --skip-mongo           Skip all Mongo-compatible sections.
   --skip-load-modes      Skip Mongo client-mode load matrix.
+  --skip-load-scaling    Skip Mongo InsertMany producer-scaling sweep.
   --skip-scaling         Skip Mongo reader/writer scaling.
   --help                 Show this help.
 
 Environment overrides use the uppercase variable names in the script, including
 RUN_ROOT, TIER, INDEXES_LIST, RAW_KEYS, COLLECTION_DOCS,
 COLLECTION_PROFILES, COLLECTION_PROFILE_BENCHTIME, COLLECTION_PROFILE_COUNT, MONGO_DOCS,
+MONGO_LOAD_SCALING_DOCS, MONGO_LOAD_SCALING_BATCH_SIZE, MONGO_LOAD_PRODUCERS,
 MONGO_MODE, MONGO_URI, MONGO_IMAGE (default: mongo:8), MONGO_COMPACT, MONGO_READERS, MONGO_WRITERS, TIMEOUT, and TITLE.
 EOF
 }
@@ -148,6 +160,21 @@ while [[ $# -gt 0 ]]; do
       MONGO_DOCS="$2"
       shift 2
       ;;
+    --mongo-load-docs)
+      require_value "$1" "${2-}"
+      MONGO_LOAD_SCALING_DOCS="$2"
+      shift 2
+      ;;
+    --mongo-load-batch-size)
+      require_value "$1" "${2-}"
+      MONGO_LOAD_SCALING_BATCH_SIZE="$2"
+      shift 2
+      ;;
+    --mongo-load-producers)
+      require_value "$1" "${2-}"
+      MONGO_LOAD_PRODUCERS="$2"
+      shift 2
+      ;;
     --mongo-mode)
       require_value "$1" "${2-}"
       MONGO_MODE="$2"
@@ -202,6 +229,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_LOAD_MODES=true
       shift
       ;;
+    --skip-load-scaling)
+      SKIP_LOAD_SCALING=true
+      shift
+      ;;
     --skip-scaling)
       SKIP_SCALING=true
       shift
@@ -254,6 +285,7 @@ case "$TIER" in
     exit 2
     ;;
 esac
+MONGO_LOAD_SCALING_DOCS="${MONGO_LOAD_SCALING_DOCS:-$MONGO_DOCS}"
 raw_skip_mongo=$SKIP_MONGO
 SKIP_MONGO=$(normalize_bool_text "$SKIP_MONGO") || {
   echo "invalid SKIP_MONGO=$raw_skip_mongo (want true/false, 1/0, or yes/no)" >&2
@@ -287,6 +319,7 @@ if ! bool_true "$SKIP_MONGO"; then
 fi
 
 INDEXES_LIST=$(normalize_list "$INDEXES_LIST")
+MONGO_LOAD_PRODUCERS=$(normalize_list "$MONGO_LOAD_PRODUCERS")
 MONGO_READERS=$(normalize_list "$MONGO_READERS")
 MONGO_WRITERS=$(normalize_list "$MONGO_WRITERS")
 
@@ -343,6 +376,9 @@ write_metadata() {
     echo "- collection_profile_benchtime: ${COLLECTION_PROFILE_BENCHTIME:-${COLLECTION_BENCHTIME:-${COLLECTION_DOCS}x}}"
     echo "- collection_profile_count: $COLLECTION_PROFILE_COUNT"
     echo "- mongo_docs: $MONGO_DOCS"
+    echo "- mongo_load_scaling_docs: $MONGO_LOAD_SCALING_DOCS"
+    echo "- mongo_load_scaling_batch_size: $MONGO_LOAD_SCALING_BATCH_SIZE"
+    echo "- mongo_load_producers: $MONGO_LOAD_PRODUCERS"
     echo "- mongo_mode: $MONGO_MODE"
     echo "- mongo_image: $MONGO_IMAGE"
     echo "- mongo_compact: $MONGO_COMPACT"
@@ -356,6 +392,7 @@ write_metadata() {
     echo "- skip_collections: $SKIP_COLLECTIONS"
     echo "- skip_mongo: $SKIP_MONGO"
     echo "- skip_load_modes: $SKIP_LOAD_MODES"
+    echo "- skip_load_scaling: $SKIP_LOAD_SCALING"
     echo "- skip_scaling: $SKIP_SCALING"
     echo "- go: $(go version)"
     echo "- uname: $(uname -a)"
@@ -515,6 +552,27 @@ run_mongo_load_modes() {
       --title "Mongo API Client-Mode Load Matrix"
 }
 
+run_mongo_load_scaling() {
+  bool_true "$SKIP_MONGO" && return 0
+  bool_true "$SKIP_LOAD_SCALING" && return 0
+  local root="$RUN_ROOT/mongo_gateway_load_scaling_1m"
+  run_logged mongo_load_scaling env \
+    MONGO_MAX_POOL_SIZE="$MONGO_MAX_POOL_SIZE" \
+    MONGO_MAX_CONNECTING="$MONGO_MAX_CONNECTING" \
+    ./scripts/mongo_gateway_load_scaling_bench.sh \
+      --out "$root" \
+      --docs "$MONGO_LOAD_SCALING_DOCS" \
+      --indexes "$INDEXES_LIST" \
+      --batch-size "$MONGO_LOAD_SCALING_BATCH_SIZE" \
+      --producers "$MONGO_LOAD_PRODUCERS" \
+      --mongo-mode "$MONGO_MODE" \
+      --mongo-image "$MONGO_IMAGE" \
+      --mongo-compact "$MONGO_COMPACT" \
+      --mongo-uri "$MONGO_URI" \
+      --timeout "$TIMEOUT" \
+      --title "Mongo API InsertMany Producer Scaling"
+}
+
 run_mongo_scaling() {
   bool_true "$SKIP_MONGO" && return 0
   bool_true "$SKIP_SCALING" && return 0
@@ -557,6 +615,7 @@ run_raw_engine
 run_collections
 run_mongo_full_sweep
 run_mongo_load_modes
+run_mongo_load_scaling
 run_mongo_scaling
 render_report
 
