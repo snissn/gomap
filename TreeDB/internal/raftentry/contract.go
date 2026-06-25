@@ -355,7 +355,12 @@ func mapNativeWireError(src []byte, err error) DeterministicErrorCodeV1 {
 			return ErrorNoIdempotencyV1
 		case strings.Contains(reason, "missing catalog guard"):
 			return ErrorMissingGuardV1
-		case strings.Contains(reason, "missing command schema"), strings.Contains(reason, " is not replicated"):
+		case strings.Contains(reason, " is not replicated"):
+			if commandID, ok := deterministicEntryCommandID(src); ok {
+				return rowRejectionCodeV1(ClassifyNativeWireCommandV1(commandID))
+			}
+			return ErrorUnsupportedCommandV1
+		case strings.Contains(reason, "missing command schema"):
 			return ErrorUnsupportedCommandV1
 		}
 		return ErrorMalformedEntryV1

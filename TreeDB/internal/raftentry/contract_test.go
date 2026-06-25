@@ -178,6 +178,16 @@ func TestDecodeCommandEntryV1RejectsDDLBarriersReadsAndUnknowns(t *testing.T) {
 	}
 }
 
+func TestDecodeCommandEntryV1MapsReadOnlyNativeWireRejection(t *testing.T) {
+	readOnly := appendDeterministicEntryRaw(nativewire.CommandGetMany, []nativewire.Section{
+		{ID: nativewire.SectionCollectionRef, Bytes: []byte{1, 'c'}},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, []byte("a"))},
+	})
+	if _, err := DecodeCommandEntryV1(readOnly, DecodeOptions{}); codeOf(err) != ErrorReadOnlyV1 {
+		t.Fatalf("read-only command err=%v code=%s", err, codeOf(err))
+	}
+}
+
 func TestDecodeCommandEntryV1RejectsMalformedOversizedMissingGuardAndNoIdempotency(t *testing.T) {
 	if _, err := DecodeCommandEntryV1([]byte("bad"), DecodeOptions{}); codeOf(err) != ErrorMalformedEntryV1 {
 		t.Fatalf("malformed err=%v code=%s", err, codeOf(err))
