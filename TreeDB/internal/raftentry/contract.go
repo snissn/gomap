@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
@@ -198,7 +199,7 @@ func DecodeCommandEntryV1(src []byte, opts DecodeOptions) (CommandEntryV1, error
 		return CommandEntryV1{}, validationError(ErrorUnsupportedCommandV1, fmt.Errorf("native-wire command %d", decoded.CommandID))
 	}
 	if row.Decision != DecisionAccepted {
-		return CommandEntryV1{}, validationError(ErrorUnsupportedCommandV1, fmt.Errorf("%s is %s for R3a v1: %s", row.NativeWireCommand, row.Decision, row.Reason))
+		return CommandEntryV1{}, validationError(rowRejectionCodeV1(row), fmt.Errorf("%s is %s for R3a v1: %s", row.NativeWireCommand, row.Decision, row.Reason))
 	}
 	idempotencyKey, ok := sectionBytes(decoded.Sections, nativewire.SectionIdempotencyKey)
 	if !ok || len(idempotencyKey) == 0 {
@@ -313,6 +314,15 @@ func validationError(code DeterministicErrorCodeV1, err error) error {
 	return &ValidationError{Code: code, Err: err}
 }
 
+func rowRejectionCodeV1(row CommandRowV1) DeterministicErrorCodeV1 {
+	switch row.CommandWALStatus {
+	case "read-only":
+		return ErrorReadOnlyV1
+	default:
+		return ErrorUnsupportedCommandV1
+	}
+}
+
 func mapNativeWireError(err error) DeterministicErrorCodeV1 {
 	code, ok := nativewire.ErrorCodeOf(err)
 	if !ok {
@@ -322,10 +332,20 @@ func mapNativeWireError(err error) DeterministicErrorCodeV1 {
 	case nativewire.ErrMalformedFrame:
 		return ErrorMalformedEntryV1
 	case nativewire.ErrUnsupportedVersion:
+		if strings.Contains(nativeWireErrorReason(err), "unsupported deterministic command") {
+			return ErrorUnsupportedCommandV1
+		}
 		return ErrorUnsupportedVersionV1
 	case nativewire.ErrUnsupportedFeature:
 		return ErrorUnsupportedFeatureV1
 	case nativewire.ErrInvalidCommand:
+		reason := nativeWireErrorReason(err)
+		switch {
+		case strings.Contains(reason, "missing catalog guard"):
+			return ErrorMissingGuardV1
+		case strings.Contains(reason, "missing command schema"), strings.Contains(reason, " is not replicated"):
+			return ErrorUnsupportedCommandV1
+		}
 		return ErrorMalformedEntryV1
 	case nativewire.ErrResourceExhausted:
 		return ErrorResourceExhaustedV1
@@ -336,6 +356,14 @@ func mapNativeWireError(err error) DeterministicErrorCodeV1 {
 	default:
 		return ErrorMalformedEntryV1
 	}
+}
+
+func nativeWireErrorReason(err error) string {
+	var e *nativewire.ProtocolError
+	if errors.As(err, &e) && e != nil {
+		return e.Reason
+	}
+	return ""
 }
 
 type digestWriter interface {

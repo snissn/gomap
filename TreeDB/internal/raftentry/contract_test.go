@@ -187,7 +187,7 @@ func TestDecodeCommandEntryV1RejectsMalformedOversizedMissingGuardAndNoIdempoten
 		t.Fatalf("oversized err=%v code=%s", err, codeOf(err))
 	}
 	missingGuard := deterministicCreateCollectionEntry(t, "client-a:create:users", false)
-	if _, err := DecodeCommandEntryV1(missingGuard, DecodeOptions{}); codeOf(err) != ErrorMalformedEntryV1 {
+	if _, err := DecodeCommandEntryV1(missingGuard, DecodeOptions{}); codeOf(err) != ErrorMissingGuardV1 {
 		t.Fatalf("missing guard err=%v code=%s", err, codeOf(err))
 	}
 	noID := deterministicCreateCollectionEntry(t, NoIdempotencyTokenV1, true)
@@ -224,7 +224,7 @@ func TestDecodeCommandEntryV1RejectsMalformedOversizedMissingGuardAndNoIdempoten
 		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte("client-a:create:users")},
 		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: uvarintPayload(7)},
 	})
-	if _, err := DecodeCommandEntryV1(unknownCommand, DecodeOptions{}); codeOf(err) != ErrorUnsupportedVersionV1 {
+	if _, err := DecodeCommandEntryV1(unknownCommand, DecodeOptions{}); codeOf(err) != ErrorUnsupportedCommandV1 {
 		t.Fatalf("unknown command err=%v code=%s", err, codeOf(err))
 	}
 }
@@ -246,39 +246,50 @@ func TestDecodeCommandEntryV1RejectsTargetAndScopeMismatch(t *testing.T) {
 }
 
 func TestApplyResultV1VocabularyIsStable(t *testing.T) {
-	statuses := []ApplyStatusV1{
-		ApplyStatusApplied,
-		ApplyStatusAlreadyApplied,
-		ApplyStatusDeterministicGuardFailure,
-		ApplyStatusRejectedUnsupported,
-		ApplyStatusRejectedMalformed,
-		ApplyStatusRejectedConflict,
-		ApplyStatusRecoveryRequired,
+	statuses := []struct {
+		name string
+		got  ApplyStatusV1
+		want string
+	}{
+		{"ApplyStatusApplied", ApplyStatusApplied, "applied"},
+		{"ApplyStatusAlreadyApplied", ApplyStatusAlreadyApplied, "already-applied"},
+		{"ApplyStatusDeterministicGuardFailure", ApplyStatusDeterministicGuardFailure, "deterministic-guard-failure"},
+		{"ApplyStatusRejectedUnsupported", ApplyStatusRejectedUnsupported, "rejected-unsupported"},
+		{"ApplyStatusRejectedMalformed", ApplyStatusRejectedMalformed, "rejected-malformed"},
+		{"ApplyStatusRejectedConflict", ApplyStatusRejectedConflict, "rejected-conflict"},
+		{"ApplyStatusRecoveryRequired", ApplyStatusRecoveryRequired, "recovery-required"},
 	}
-	for _, status := range statuses {
-		if status == "" {
-			t.Fatalf("empty ApplyResultV1 status in %v", statuses)
+	for _, tc := range statuses {
+		if string(tc.got) != tc.want {
+			t.Fatalf("%s=%q, want %q", tc.name, tc.got, tc.want)
 		}
 	}
-	errors := []DeterministicErrorCodeV1{
-		ErrorUnsupportedCommandV1,
-		ErrorMalformedEntryV1,
-		ErrorUnsupportedVersionV1,
-		ErrorUnsupportedFeatureV1,
-		ErrorMissingGuardV1,
-		ErrorTargetMismatchV1,
-		ErrorRejectedConflictV1,
-		ErrorReadOnlyV1,
-		ErrorUnsafeDurabilityModeV1,
-		ErrorResourceExhaustedV1,
-		ErrorNoIdempotencyV1,
-		ErrorResultReplayRequiredV1,
-		ErrorUnknownRequiredFieldV1,
-		ErrorUnsupportedScopeRuleV1,
+	if ErrorNoneV1 != "" {
+		t.Fatalf("ErrorNoneV1=%q, want empty success code", ErrorNoneV1)
 	}
-	for _, code := range errors {
-		if code == "" {
-			t.Fatalf("empty deterministic error code in %v", errors)
+	errors := []struct {
+		name string
+		got  DeterministicErrorCodeV1
+		want string
+	}{
+		{"ErrorUnsupportedCommandV1", ErrorUnsupportedCommandV1, "unsupported-command"},
+		{"ErrorMalformedEntryV1", ErrorMalformedEntryV1, "malformed-entry"},
+		{"ErrorUnsupportedVersionV1", ErrorUnsupportedVersionV1, "unsupported-version"},
+		{"ErrorUnsupportedFeatureV1", ErrorUnsupportedFeatureV1, "unsupported-feature"},
+		{"ErrorMissingGuardV1", ErrorMissingGuardV1, "missing-guard"},
+		{"ErrorTargetMismatchV1", ErrorTargetMismatchV1, "target-mismatch"},
+		{"ErrorRejectedConflictV1", ErrorRejectedConflictV1, "rejected-conflict"},
+		{"ErrorReadOnlyV1", ErrorReadOnlyV1, "read-only"},
+		{"ErrorUnsafeDurabilityModeV1", ErrorUnsafeDurabilityModeV1, "unsafe-durability-mode"},
+		{"ErrorResourceExhaustedV1", ErrorResourceExhaustedV1, "resource-exhausted"},
+		{"ErrorNoIdempotencyV1", ErrorNoIdempotencyV1, "no-idempotency"},
+		{"ErrorResultReplayRequiredV1", ErrorResultReplayRequiredV1, "result-replay-required"},
+		{"ErrorUnknownRequiredFieldV1", ErrorUnknownRequiredFieldV1, "unknown-required-field"},
+		{"ErrorUnsupportedScopeRuleV1", ErrorUnsupportedScopeRuleV1, "unsupported-scope-rule"},
+	}
+	for _, tc := range errors {
+		if string(tc.got) != tc.want {
+			t.Fatalf("%s=%q, want %q", tc.name, tc.got, tc.want)
 		}
 	}
 }
@@ -301,7 +312,12 @@ func TestR3aAllowlistCoversNativeWireV1CommandsAndDocsMatrix(t *testing.T) {
 		}
 	}
 	alignment := loadAlignment(t)
+	alignmentByNative := make(map[string]alignmentEntry, len(alignment.Entries))
 	for _, entry := range alignment.Entries {
+		if _, exists := alignmentByNative[entry.NativeWireCommand]; exists {
+			t.Fatalf("duplicate alignment entry for %s", entry.NativeWireCommand)
+		}
+		alignmentByNative[entry.NativeWireCommand] = entry
 		row, ok := rowsByNative[entry.NativeWireCommand]
 		if !ok {
 			t.Fatalf("alignment entry %s has no R3a row", entry.NativeWireCommand)
@@ -313,8 +329,20 @@ func TestR3aAllowlistCoversNativeWireV1CommandsAndDocsMatrix(t *testing.T) {
 			t.Fatalf("%s accepted without WAL-supported status", entry.NativeWireCommand)
 		}
 	}
+	for command, row := range rowsByNative {
+		entry, ok := alignmentByNative[command]
+		if !ok {
+			t.Fatalf("R3a row %s missing alignment entry", command)
+		}
+		if row.CommandWALStatus != entry.SupportMatrixStatus || row.CommandWALKind != entry.CommandWALKind {
+			t.Fatalf("%s row=%+v alignment=%+v", command, row, entry)
+		}
+	}
 	if row := ClassifyNativeWireCommandV1(nativewire.CommandCreateCollection); row.Decision != DecisionAccepted || row.DuplicateMode != DuplicateFailClosedAllowedV1 || row.ResultReplayMode != ResultReplayFailClosedV1 {
 		t.Fatalf("create collection row=%+v", row)
+	}
+	if code := rowRejectionCodeV1(ClassifyNativeWireCommandV1(nativewire.CommandGetMany)); code != ErrorReadOnlyV1 {
+		t.Fatalf("read-only row rejection code=%s, want %s", code, ErrorReadOnlyV1)
 	}
 }
 
