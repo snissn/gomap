@@ -252,6 +252,9 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	if db == nil || !db.commandWAL {
 		return nil, nil
 	}
+	if db.readOnly {
+		return nil, ErrReadOnly
+	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
@@ -563,6 +566,9 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 // publishing roots. It is used by cached public command-WAL writers that must
 // make a typed frame replay-visible before inserting the mutation into memory.
 func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
+	if db != nil && db.readOnly {
+		return 0, ErrReadOnly
+	}
 	return db.appendPublicCommandWALIntent(intent, sync)
 }
 
@@ -572,6 +578,9 @@ func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint6
 func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
+	}
+	if db.readOnly {
+		return 0, ErrReadOnly
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
@@ -750,6 +759,9 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	}
 	if db == nil {
 		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
 	}
 	if !db.CommandWALEnabled() {
 		return ErrCommandWALUnsupported
