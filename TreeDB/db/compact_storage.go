@@ -65,8 +65,11 @@ var ErrCompactStorageLeafPageLogOwnerUnsupported = errors.New("treedb: compact s
 // CompactStorageLeafPageLogOwnerClassification is the compact-owner production
 // support contract attached to fail-closed exhaustive compact errors.
 type CompactStorageLeafPageLogOwnerClassification struct {
-	OwnerClass         CompactStorageLeafPageLogOwnerClass
-	Status             CompactStorageOwnerStatus
+	OwnerClass CompactStorageLeafPageLogOwnerClass
+	Status     CompactStorageOwnerStatus
+	// Lifecycle is a caller-supplied modeled state, not runtime proof. The
+	// current CompactStorage refusal path classifies after taking the exclusive
+	// maintenance lock and therefore passes CompactStorageLifecycleExclusiveMaintenance.
 	Lifecycle          CompactStorageLifecycleState
 	Replaceable        bool
 	RequiresQuiescence bool
@@ -1432,6 +1435,20 @@ func compactStorageReplaceableLeafPageLog(log LeafPageLog) bool {
 	return classification.Replaceable && classification.Status == CompactStorageOwnerStatusSupportedTarget
 }
 
+// CompactStorageLeafPageLogOwnerClassification reports the compact-owner
+// support category for the currently installed leaf-page log. The lifecycle
+// argument is a modeled assumption used by the contract matrix; it does not
+// prove the database is actually in that lifecycle state.
+func (db *DB) CompactStorageLeafPageLogOwnerClassification(lifecycle CompactStorageLifecycleState) CompactStorageLeafPageLogOwnerClassification {
+	if db == nil {
+		return compactStorageClassifyLeafPageLogOwner(nil, lifecycle)
+	}
+	db.writeMu.Lock()
+	log := db.leafPageLog
+	db.writeMu.Unlock()
+	return compactStorageClassifyLeafPageLogOwner(log, lifecycle)
+}
+
 func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactStorageLifecycleState) CompactStorageLeafPageLogOwnerClassification {
 	if lifecycle == "" {
 		lifecycle = CompactStorageLifecycleExclusiveMaintenance
@@ -1449,7 +1466,7 @@ func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactSt
 		if lifecycle == CompactStorageLifecycleActiveWriter {
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
 			classification.RequiresQuiescence = true
-			classification.Detail = "command-WAL cleanup and checkpoint/close drains must quiesce before exhaustive compact can replace the replay-inline owner"
+			classification.Detail = "modeled active-writer status: command-WAL cleanup and checkpoint/close drains must quiesce before exhaustive compact can replace the replay-inline owner"
 		} else {
 			classification.Status = CompactStorageOwnerStatusSupportedTarget
 			classification.Replaceable = true
@@ -1458,7 +1475,7 @@ func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactSt
 		if lifecycle == CompactStorageLifecycleActiveWriter {
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
 			classification.RequiresQuiescence = true
-			classification.Detail = "lane/wrapper replay-inline owner must be quiesced before exhaustive compact can reason about replacement"
+			classification.Detail = "modeled active-writer status: lane/wrapper replay-inline owner must be quiesced before exhaustive compact can reason about replacement"
 		} else {
 			classification.Status = CompactStorageOwnerStatusBlockingBug
 			classification.Detail = "replay-inline owner is internally owned but hidden behind leaf-log wrappers that compact replacement does not unwrap yet"
@@ -1467,7 +1484,7 @@ func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactSt
 		if lifecycle == CompactStorageLifecycleActiveWriter {
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
 			classification.RequiresQuiescence = true
-			classification.Detail = "background flush/apply workers and cached backlog must be fenced before exhaustive compact can take over the owner"
+			classification.Detail = "modeled active-writer status: background flush/apply workers and cached backlog must be fenced before exhaustive compact can take over the owner"
 		} else {
 			classification.Status = CompactStorageOwnerStatusBlockingBug
 			classification.RequiresQuiescence = true

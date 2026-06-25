@@ -17,6 +17,39 @@ const (
 	CompactStorageExhaustive = treedbdb.CompactStorageExhaustive
 )
 
+type CompactStorageOwnerStatus = treedbdb.CompactStorageOwnerStatus
+
+const (
+	CompactStorageOwnerStatusSupportedTarget      = treedbdb.CompactStorageOwnerStatusSupportedTarget
+	CompactStorageOwnerStatusLiveWriterFailClosed = treedbdb.CompactStorageOwnerStatusLiveWriterFailClosed
+	CompactStorageOwnerStatusExternalUnsupported  = treedbdb.CompactStorageOwnerStatusExternalUnsupported
+	CompactStorageOwnerStatusBlockingBug          = treedbdb.CompactStorageOwnerStatusBlockingBug
+)
+
+type CompactStorageLeafPageLogOwnerClass = treedbdb.CompactStorageLeafPageLogOwnerClass
+
+const (
+	CompactStorageLeafPageLogOwnerNone                     = treedbdb.CompactStorageLeafPageLogOwnerNone
+	CompactStorageLeafPageLogOwnerCommandWALReplayInline   = treedbdb.CompactStorageLeafPageLogOwnerCommandWALReplayInline
+	CompactStorageLeafPageLogOwnerInternalHiddenByWrapper  = treedbdb.CompactStorageLeafPageLogOwnerInternalHiddenByWrapper
+	CompactStorageLeafPageLogOwnerCachedWrapper            = treedbdb.CompactStorageLeafPageLogOwnerCachedWrapper
+	CompactStorageLeafPageLogOwnerStandaloneCallerExternal = treedbdb.CompactStorageLeafPageLogOwnerStandaloneCallerExternal
+)
+
+type CompactStorageLifecycleState = treedbdb.CompactStorageLifecycleState
+
+const (
+	CompactStorageLifecycleExclusiveMaintenance = treedbdb.CompactStorageLifecycleExclusiveMaintenance
+	CompactStorageLifecycleQuiescedMaintenance  = treedbdb.CompactStorageLifecycleQuiescedMaintenance
+	CompactStorageLifecycleActiveWriter         = treedbdb.CompactStorageLifecycleActiveWriter
+)
+
+var ErrCompactStorageLeafPageLogOwnerUnsupported = treedbdb.ErrCompactStorageLeafPageLogOwnerUnsupported
+
+type CompactStorageLeafPageLogOwnerClassification = treedbdb.CompactStorageLeafPageLogOwnerClassification
+
+type CompactStorageLeafPageLogOwnerError = treedbdb.CompactStorageLeafPageLogOwnerError
+
 // CompactStorageOptions controls full storage compaction across TreeDB storage
 // domains. Prefer this high-level API over manually sequencing value-log
 // rewrite, value-log GC, leaf-generation pack/GC, and index vacuum.
@@ -105,6 +138,16 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	success = true
 	return CompactStorageStats(stats), nil
+}
+
+// CompactStorageLeafPageLogOwnerClassification reports the backend leaf-log
+// owner classification currently visible to CompactStorage. The lifecycle
+// argument is a modeled contract category, not runtime proof of quiescence.
+func (db *DB) CompactStorageLeafPageLogOwnerClassification(lifecycle CompactStorageLifecycleState) CompactStorageLeafPageLogOwnerClassification {
+	if db == nil || db.backend == nil {
+		return treedbdb.CompactStorageLeafPageLogOwnerClassification{}
+	}
+	return db.backend.CompactStorageLeafPageLogOwnerClassification(lifecycle)
 }
 
 func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, checkpoint bool) error {

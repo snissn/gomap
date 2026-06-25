@@ -3,6 +3,7 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,44 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
+
+func TestCompactStoragePublicCommandWALRelaxedDefaultOwnerClassification(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	opts.DisableSideStores = true
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("Open command_wal_relaxed public cached DB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SetSync([]byte("canonical"), bytes.Repeat([]byte("v"), 512)); err != nil {
+		t.Fatalf("SetSync canonical public cached write: %v", err)
+	}
+
+	classification := db.CompactStorageLeafPageLogOwnerClassification(treedb.CompactStorageLifecycleQuiescedMaintenance)
+	if classification.OwnerClass != treedb.CompactStorageLeafPageLogOwnerCachedWrapper {
+		t.Fatalf("owner=%q want %q (classification=%+v)", classification.OwnerClass, treedb.CompactStorageLeafPageLogOwnerCachedWrapper, classification)
+	}
+	if classification.Status != treedb.CompactStorageOwnerStatusBlockingBug {
+		t.Fatalf("status=%q want %q (classification=%+v)", classification.Status, treedb.CompactStorageOwnerStatusBlockingBug, classification)
+	}
+	if !classification.RequiresQuiescence {
+		t.Fatalf("RequiresQuiescence=false, want true (classification=%+v)", classification)
+	}
+
+	_, err = db.CompactStorage(context.Background(), treedb.CompactStorageOptions{Mode: treedb.CompactStorageExhaustive})
+	if !errors.Is(err, treedb.ErrCompactStorageLeafPageLogOwnerUnsupported) {
+		t.Fatalf("CompactStorage exhaustive error=%v, want owner unsupported", err)
+	}
+	var ownerErr *treedb.CompactStorageLeafPageLogOwnerError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("CompactStorage exhaustive error=%T, want CompactStorageLeafPageLogOwnerError", err)
+	}
+	if ownerErr.Classification.OwnerClass != treedb.CompactStorageLeafPageLogOwnerCachedWrapper {
+		t.Fatalf("error owner=%q want %q", ownerErr.Classification.OwnerClass, treedb.CompactStorageLeafPageLogOwnerCachedWrapper)
+	}
+}
 
 func TestCompactStorageFullPacksLeafGenerationDebtOffline(t *testing.T) {
 	dir := t.TempDir()

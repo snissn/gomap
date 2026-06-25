@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -142,7 +143,7 @@ func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
 	}
 }
 
-func TestCompactStorageCommandWALValueLogLeafPageLogCurrentBlockingBug(t *testing.T) {
+func TestCompactStorageRawBackendCommandWALValueLogLeafPageLogCurrentBlockingBug(t *testing.T) {
 	d, err := Open(Options{
 		Dir:                        t.TempDir(),
 		CommandWAL:                 true,
@@ -179,6 +180,24 @@ func TestCompactStorageCommandWALValueLogLeafPageLogCurrentBlockingBug(t *testin
 	}
 }
 
+func TestCompactStorageActiveWriterLifecycleIsModeledStatus(t *testing.T) {
+	log := compactStorageMatrixCachedLeafPageLog{}
+	active := compactStorageClassifyLeafPageLogOwner(log, CompactStorageLifecycleActiveWriter)
+	if active.Status != CompactStorageOwnerStatusLiveWriterFailClosed {
+		t.Fatalf("active status=%q want %q", active.Status, CompactStorageOwnerStatusLiveWriterFailClosed)
+	}
+	if !strings.Contains(active.Detail, "modeled active-writer status") {
+		t.Fatalf("active detail=%q, want modeled-status wording", active.Detail)
+	}
+	exclusive := compactStorageClassifyLeafPageLogOwner(log, CompactStorageLifecycleExclusiveMaintenance)
+	if exclusive.Status != CompactStorageOwnerStatusBlockingBug {
+		t.Fatalf("exclusive status=%q want %q", exclusive.Status, CompactStorageOwnerStatusBlockingBug)
+	}
+	if strings.Contains(exclusive.Detail, "active-writer") {
+		t.Fatalf("exclusive detail=%q should not imply active-writer runtime proof", exclusive.Detail)
+	}
+}
+
 func TestCompactStorageDefaultProducedOwnerContractMatrix(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -198,12 +217,13 @@ func TestCompactStorageDefaultProducedOwnerContractMatrix(t *testing.T) {
 			quiescence:   []string{"checkpoint-close-drain"},
 		},
 		{
-			name:         "command_wal_relaxed default profile value-log backed outer leaves",
-			producerPath: "treedb.OptionsFor(ProfileCommandWALRelaxed)",
-			owner:        CompactStorageLeafPageLogOwnerInternalHiddenByWrapper,
-			lifecycle:    CompactStorageLifecycleQuiescedMaintenance,
-			status:       CompactStorageOwnerStatusBlockingBug,
-			quiescence:   []string{"checkpoint-close-drain", "command-wal-cleanup"},
+			name:               "public command_wal_relaxed default profile value-log backed outer leaves",
+			producerPath:       "treedb.Open(treedb.OptionsFor(ProfileCommandWALRelaxed)) cached wrapper; fixture-proved in TreeDB/compact_storage_test.go",
+			owner:              CompactStorageLeafPageLogOwnerCachedWrapper,
+			lifecycle:          CompactStorageLifecycleQuiescedMaintenance,
+			status:             CompactStorageOwnerStatusBlockingBug,
+			quiescence:         []string{"background-flush-apply-workers", "checkpoint-close-drain", "command-wal-cleanup", "cached-backlog"},
+			missingFixtureWork: "supported-target requires #3049 to implement explicit cached owner handoff/unwrap; #3048 proves the canonical owner class only",
 		},
 		{
 			name:               "public cached wrapper value-log backed outer leaves",
@@ -215,8 +235,8 @@ func TestCompactStorageDefaultProducedOwnerContractMatrix(t *testing.T) {
 			missingFixtureWork: "cached exhaustive compact needs explicit quiesced owner handoff or unwrap fixture before it can be marked supported-target",
 		},
 		{
-			name:         "treedb raw command WAL maintenance path",
-			producerPath: "TreeDB/cmd/treemap compact -rw -mode exhaustive over command-WAL raw dir",
+			name:         "raw backend command WAL maintenance path",
+			producerPath: "TreeDB/db.Open or TreeDB/cmd/treemap compact -rw -mode exhaustive over a raw command-WAL backend dir; not the public cached canonical collection path",
 			owner:        CompactStorageLeafPageLogOwnerInternalHiddenByWrapper,
 			lifecycle:    CompactStorageLifecycleExclusiveMaintenance,
 			status:       CompactStorageOwnerStatusBlockingBug,
