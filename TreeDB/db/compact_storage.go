@@ -25,6 +25,81 @@ const (
 	CompactStorageExhaustive CompactStorageMode = "exhaustive"
 )
 
+// CompactStorageOwnerStatus is the production support category for an
+// exhaustive compact leaf-page-log owner.
+type CompactStorageOwnerStatus string
+
+const (
+	CompactStorageOwnerStatusSupportedTarget      CompactStorageOwnerStatus = "supported-target"
+	CompactStorageOwnerStatusLiveWriterFailClosed CompactStorageOwnerStatus = "live-writer fail-closed"
+	CompactStorageOwnerStatusExternalUnsupported  CompactStorageOwnerStatus = "external-owner unsupported"
+	CompactStorageOwnerStatusBlockingBug          CompactStorageOwnerStatus = "blocking-bug"
+)
+
+// CompactStorageLeafPageLogOwnerClass identifies who owns the currently
+// installed leaf-page-log writer from CompactStorage's point of view.
+type CompactStorageLeafPageLogOwnerClass string
+
+const (
+	CompactStorageLeafPageLogOwnerNone                     CompactStorageLeafPageLogOwnerClass = "no installed leaf log"
+	CompactStorageLeafPageLogOwnerCommandWALReplayInline   CompactStorageLeafPageLogOwnerClass = "command-WAL/replay-inline internal owner"
+	CompactStorageLeafPageLogOwnerInternalHiddenByWrapper  CompactStorageLeafPageLogOwnerClass = "internal owner hidden by wrapper"
+	CompactStorageLeafPageLogOwnerCachedWrapper            CompactStorageLeafPageLogOwnerClass = "cached/wrapper owner"
+	CompactStorageLeafPageLogOwnerStandaloneCallerExternal CompactStorageLeafPageLogOwnerClass = "standalone/caller external owner"
+)
+
+// CompactStorageLifecycleState records the writer lifecycle assumption used by
+// the owner classifier.
+type CompactStorageLifecycleState string
+
+const (
+	CompactStorageLifecycleExclusiveMaintenance CompactStorageLifecycleState = "exclusive maintenance"
+	CompactStorageLifecycleQuiescedMaintenance  CompactStorageLifecycleState = "quiesced maintenance"
+	CompactStorageLifecycleActiveWriter         CompactStorageLifecycleState = "active writer"
+)
+
+// ErrCompactStorageLeafPageLogOwnerUnsupported is returned when exhaustive
+// compact reaches an installed leaf-page-log owner it cannot safely replace.
+var ErrCompactStorageLeafPageLogOwnerUnsupported = errors.New("treedb: compact storage leaf page log owner unsupported")
+
+// CompactStorageLeafPageLogOwnerClassification is the compact-owner production
+// support contract attached to fail-closed exhaustive compact errors.
+type CompactStorageLeafPageLogOwnerClassification struct {
+	OwnerClass         CompactStorageLeafPageLogOwnerClass
+	Status             CompactStorageOwnerStatus
+	Lifecycle          CompactStorageLifecycleState
+	Replaceable        bool
+	RequiresQuiescence bool
+	Detail             string
+}
+
+// CompactStorageLeafPageLogOwnerError carries the owner classification that
+// caused exhaustive compact to fail closed.
+type CompactStorageLeafPageLogOwnerError struct {
+	Classification CompactStorageLeafPageLogOwnerClassification
+}
+
+func (e *CompactStorageLeafPageLogOwnerError) Error() string {
+	classification := CompactStorageLeafPageLogOwnerClassification{}
+	if e != nil {
+		classification = e.Classification
+	}
+	status := classification.Status
+	if status == "" {
+		status = CompactStorageOwnerStatusExternalUnsupported
+	}
+	return fmt.Sprintf(
+		"treedb: exhaustive compact requires an internally-owned leaf page log; close or clear the installed leaf page log before compacting (owner=%s status=%s lifecycle=%s)",
+		classification.OwnerClass,
+		status,
+		classification.Lifecycle,
+	)
+}
+
+func (e *CompactStorageLeafPageLogOwnerError) Unwrap() error {
+	return ErrCompactStorageLeafPageLogOwnerUnsupported
+}
+
 // CompactStorageOptions controls full storage compaction across TreeDB storage
 // domains. Prefer this high-level API over manually sequencing value-log
 // rewrite, value-log GC, leaf-generation pack/GC, and index vacuum.
@@ -260,7 +335,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	defer cleanupLeafLog()
 	if opts.Mode == CompactStorageExhaustive && db.indexOuterLeavesInValueLog && compactLeafLog == nil && db.leafPageLog != nil {
-		return stats, fmt.Errorf("treedb: exhaustive compact requires an internally-owned leaf page log; close or clear the installed leaf page log before compacting")
+		return stats, &CompactStorageLeafPageLogOwnerError{
+			Classification: compactStorageClassifyLeafPageLogOwner(db.leafPageLog, CompactStorageLifecycleExclusiveMaintenance),
+		}
 	}
 
 	// Leaf-pack/GC can make pre-compact leaf generations unreachable before
@@ -1351,11 +1428,128 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 }
 
 func compactStorageReplaceableLeafPageLog(log LeafPageLog) bool {
-	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
-		log = wrapped.inner
+	classification := compactStorageClassifyLeafPageLogOwner(log, CompactStorageLifecycleExclusiveMaintenance)
+	return classification.Replaceable && classification.Status == CompactStorageOwnerStatusSupportedTarget
+}
+
+func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactStorageLifecycleState) CompactStorageLeafPageLogOwnerClassification {
+	if lifecycle == "" {
+		lifecycle = CompactStorageLifecycleExclusiveMaintenance
 	}
-	_, ok := log.(replayInlineLeafPageLog)
-	return ok
+	ownerClass := compactStorageLeafPageLogOwnerClass(log)
+	classification := CompactStorageLeafPageLogOwnerClassification{
+		OwnerClass: ownerClass,
+		Lifecycle:  lifecycle,
+	}
+	switch ownerClass {
+	case CompactStorageLeafPageLogOwnerNone:
+		classification.Status = CompactStorageOwnerStatusSupportedTarget
+		classification.Replaceable = true
+	case CompactStorageLeafPageLogOwnerCommandWALReplayInline:
+		if lifecycle == CompactStorageLifecycleActiveWriter {
+			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
+			classification.RequiresQuiescence = true
+			classification.Detail = "command-WAL cleanup and checkpoint/close drains must quiesce before exhaustive compact can replace the replay-inline owner"
+		} else {
+			classification.Status = CompactStorageOwnerStatusSupportedTarget
+			classification.Replaceable = true
+		}
+	case CompactStorageLeafPageLogOwnerInternalHiddenByWrapper:
+		if lifecycle == CompactStorageLifecycleActiveWriter {
+			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
+			classification.RequiresQuiescence = true
+			classification.Detail = "lane/wrapper replay-inline owner must be quiesced before exhaustive compact can reason about replacement"
+		} else {
+			classification.Status = CompactStorageOwnerStatusBlockingBug
+			classification.Detail = "replay-inline owner is internally owned but hidden behind leaf-log wrappers that compact replacement does not unwrap yet"
+		}
+	case CompactStorageLeafPageLogOwnerCachedWrapper:
+		if lifecycle == CompactStorageLifecycleActiveWriter {
+			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
+			classification.RequiresQuiescence = true
+			classification.Detail = "background flush/apply workers and cached backlog must be fenced before exhaustive compact can take over the owner"
+		} else {
+			classification.Status = CompactStorageOwnerStatusBlockingBug
+			classification.RequiresQuiescence = true
+			classification.Detail = "cached/wrapper owners need an explicit quiesced handoff or unwrap capability before exhaustive compact can replace them"
+		}
+	default:
+		classification.Status = CompactStorageOwnerStatusExternalUnsupported
+		classification.Detail = "standalone caller-owned leaf logs remain outside exhaustive compact ownership"
+	}
+	return classification
+}
+
+func compactStorageLeafPageLogOwnerClass(log LeafPageLog) CompactStorageLeafPageLogOwnerClass {
+	if log == nil {
+		return CompactStorageLeafPageLogOwnerNone
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		return compactStorageLeafPageLogOwnerClass(wrapped.inner)
+	}
+	if _, ok := log.(replayInlineLeafPageLog); ok {
+		return CompactStorageLeafPageLogOwnerCommandWALReplayInline
+	}
+	if group, ok := log.(*leafPageLogLaneGroup); ok {
+		return compactStorageLeafPageLogLaneGroupOwnerClass(group)
+	}
+	if compactStorageLooksLikeCachedLeafPageLog(log) {
+		return CompactStorageLeafPageLogOwnerCachedWrapper
+	}
+	return CompactStorageLeafPageLogOwnerStandaloneCallerExternal
+}
+
+func compactStorageLeafPageLogLaneGroupOwnerClass(group *leafPageLogLaneGroup) CompactStorageLeafPageLogOwnerClass {
+	if group == nil {
+		return CompactStorageLeafPageLogOwnerNone
+	}
+	lanes, _ := group.snapshotLanesAndLocks()
+	if len(lanes) == 0 {
+		return CompactStorageLeafPageLogOwnerStandaloneCallerExternal
+	}
+	allCommandWALReplayInline := true
+	allExternal := true
+	for _, lane := range lanes {
+		switch compactStorageLeafPageLogOwnerClass(lane) {
+		case CompactStorageLeafPageLogOwnerCommandWALReplayInline:
+			allExternal = false
+		case CompactStorageLeafPageLogOwnerCachedWrapper:
+			return CompactStorageLeafPageLogOwnerCachedWrapper
+		case CompactStorageLeafPageLogOwnerInternalHiddenByWrapper:
+			allExternal = false
+		case CompactStorageLeafPageLogOwnerStandaloneCallerExternal:
+			allCommandWALReplayInline = false
+		default:
+			allCommandWALReplayInline = false
+			allExternal = false
+		}
+	}
+	if allCommandWALReplayInline {
+		return CompactStorageLeafPageLogOwnerInternalHiddenByWrapper
+	}
+	if allExternal {
+		return CompactStorageLeafPageLogOwnerStandaloneCallerExternal
+	}
+	return CompactStorageLeafPageLogOwnerInternalHiddenByWrapper
+}
+
+func compactStorageLooksLikeCachedLeafPageLog(log LeafPageLog) bool {
+	if log == nil {
+		return false
+	}
+	if _, ok := log.(LeafPageConcurrentAppendLog); !ok {
+		return false
+	}
+	if _, ok := log.(LeafPageLogLaneProvider); ok {
+		return true
+	}
+	if _, ok := log.(LeafPageLogCreatedSegmentProvider); ok {
+		return true
+	}
+	if _, ok := log.(LeafPageLogCurrentSegmentProvider); ok {
+		return true
+	}
+	return false
 }
 
 func (db *DB) refreshCompactStorageLeafPageLog(writer *rewriteWriter) error {
