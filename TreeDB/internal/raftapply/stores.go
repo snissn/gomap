@@ -58,6 +58,7 @@ type ApplyResultRecordV1 struct {
 // ApplyResultStore records deterministic apply results for idempotency/replay.
 type ApplyResultStore interface {
 	LookupApplyResult(raftentry.ApplyEntryID) (ApplyResultRecordV1, bool, error)
+	CheckCanRecordApplyResult(ApplyResultRecordV1) error
 	RecordApplyResult(ApplyResultRecordV1) error
 }
 
@@ -71,6 +72,7 @@ type ApplyProgressRecordV1 struct {
 // ApplyProgressStore checks monotonic apply order and records durable progress.
 type ApplyProgressStore interface {
 	CheckCanApply(raftentry.ApplyEntryID) error
+	CheckCanRecordApplied(ApplyProgressRecordV1) error
 	RecordApplied(ApplyProgressRecordV1) error
 	LastApplied() (raftentry.ApplyEntryID, bool)
 }
@@ -109,17 +111,35 @@ func (s *MemoryApplyResultStore) RecordApplyResult(record ApplyResultRecordV1) e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkCanRecordApplyResultLocked(record); err != nil {
+		return err
+	}
+	s.records[record.EntryID] = record
+	return nil
+}
+
+func (s *MemoryApplyResultStore) CheckCanRecordApplyResult(record ApplyResultRecordV1) error {
+	if s == nil {
+		return nil
+	}
+	if err := validateApplyEntryID(record.EntryID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checkCanRecordApplyResultLocked(record)
+}
+
+func (s *MemoryApplyResultStore) checkCanRecordApplyResultLocked(record ApplyResultRecordV1) error {
 	if existing, ok := s.records[record.EntryID]; ok {
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply result digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
-		s.records[record.EntryID] = record
 		return nil
 	}
 	if len(s.records) >= s.max {
 		return codedError(raftentry.ErrorResourceExhaustedV1, "apply result store capacity %d reached", s.max)
 	}
-	s.records[record.EntryID] = record
 	return nil
 }
 
@@ -170,11 +190,33 @@ func (s *MemoryApplyProgressStore) RecordApplied(record ApplyProgressRecordV1) e
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkCanRecordAppliedLocked(record); err != nil {
+		return err
+	}
+	s.records[record.EntryID] = record
+	if record.EntryID.Index > s.last.Index {
+		s.last = record.EntryID
+	}
+	return nil
+}
+
+func (s *MemoryApplyProgressStore) CheckCanRecordApplied(record ApplyProgressRecordV1) error {
+	if s == nil {
+		return nil
+	}
+	if err := validateApplyEntryID(record.EntryID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.checkCanRecordAppliedLocked(record)
+}
+
+func (s *MemoryApplyProgressStore) checkCanRecordAppliedLocked(record ApplyProgressRecordV1) error {
 	if existing, ok := s.records[record.EntryID]; ok {
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply progress digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
-		s.records[record.EntryID] = record
 		return nil
 	}
 	if err := s.checkCanApplyLocked(record.EntryID); err != nil {
@@ -183,8 +225,6 @@ func (s *MemoryApplyProgressStore) RecordApplied(record ApplyProgressRecordV1) e
 	if len(s.records) >= s.max {
 		return codedError(raftentry.ErrorResourceExhaustedV1, "apply progress store capacity %d reached", s.max)
 	}
-	s.records[record.EntryID] = record
-	s.last = record.EntryID
 	return nil
 }
 
