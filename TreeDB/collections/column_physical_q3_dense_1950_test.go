@@ -33,7 +33,7 @@ func TestColumnPhysicalQ3DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q3 dense): %v", err)
 	}
-	assertColumnPhysicalQ3DenseResult1950(t, "direct", direct, want, len(events), matchedRows)
+	assertColumnPhysicalQ3DenseResult1950(t, "direct", direct, want, len(events), matchedRows, matchedRows)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -45,7 +45,7 @@ func TestColumnPhysicalQ3DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 		if err != nil {
 			t.Fatalf("prepared q3 dense run %d: %v", run, err)
 		}
-		assertColumnPhysicalQ3DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, len(events), matchedRows)
+		assertColumnPhysicalQ3DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, 0, matchedRows, matchedRows)
 	}
 
 	noPredicateReq := req
@@ -71,7 +71,7 @@ func BenchmarkColumnPhysicalQ3DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview RunColumnPhysicalQuery: %v", err)
 		}
-		assertColumnPhysicalQ3DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, len(events), matchedRows, len(preview.Groups))
+		assertColumnPhysicalQ3DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, len(events), matchedRows, matchedRows, len(preview.Groups))
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -102,7 +102,7 @@ func BenchmarkColumnPhysicalQ3DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview runner.Run: %v", err)
 		}
-		assertColumnPhysicalQ3DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, len(events), matchedRows, len(preview.Groups))
+		assertColumnPhysicalQ3DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, 0, matchedRows, matchedRows, len(preview.Groups))
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -203,7 +203,7 @@ func columnPhysicalQ3DenseReferenceGroups1950(events []columnPhysicalJSONBenchPa
 	return groups
 }
 
-func assertColumnPhysicalQ3DenseResult1950(tb testing.TB, label string, result ColumnPhysicalQueryResult, want []ColumnPhysicalQueryGroup, rows, matchedRows int) {
+func assertColumnPhysicalQ3DenseResult1950(tb testing.TB, label string, result ColumnPhysicalQueryResult, want []ColumnPhysicalQueryGroup, wantRowsScanned, wantRowsMatched, wantReduceRows int) {
 	tb.Helper()
 	if len(result.Groups) != len(want) {
 		tb.Fatalf("%s groups=%+v want %+v", label, result.Groups, want)
@@ -213,10 +213,10 @@ func assertColumnPhysicalQ3DenseResult1950(tb testing.TB, label string, result C
 			tb.Fatalf("%s groups=%+v want %+v", label, result.Groups, want)
 		}
 	}
-	assertColumnPhysicalQ3DenseDiagnostics1950(tb, label, result.Diagnostics, rows, matchedRows, len(want))
+	assertColumnPhysicalQ3DenseDiagnostics1950(tb, label, result.Diagnostics, wantRowsScanned, wantRowsMatched, wantReduceRows, len(want))
 }
 
-func assertColumnPhysicalQ3DenseDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, rows, matchedRows, resultGroups int) {
+func assertColumnPhysicalQ3DenseDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, wantRowsScanned, wantRowsMatched, wantReduceRows, resultGroups int) {
 	tb.Helper()
 	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
 		tb.Fatalf("%s diagnostics storage/fallback=%+v", label, diag)
@@ -227,8 +227,8 @@ func assertColumnPhysicalQ3DenseDiagnostics1950(tb testing.TB, label string, dia
 	if diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 {
 		tb.Fatalf("%s materialized rows/documents: %+v", label, diag)
 	}
-	if diag.RowsScanned != rows || diag.RowsMatched != matchedRows || diag.ReduceRows != matchedRows {
-		tb.Fatalf("%s rows scanned/matched/reduced=%d/%d/%d want %d/%d diagnostics=%+v", label, diag.RowsScanned, diag.RowsMatched, diag.ReduceRows, rows, matchedRows, diag)
+	if diag.RowsScanned != wantRowsScanned || diag.RowsMatched != wantRowsMatched || diag.ReduceRows != wantReduceRows {
+		tb.Fatalf("%s rows scanned/matched/reduced=%d/%d/%d want %d/%d/%d diagnostics=%+v", label, diag.RowsScanned, diag.RowsMatched, diag.ReduceRows, wantRowsScanned, wantRowsMatched, wantReduceRows, diag)
 	}
 	if diag.PredicateCount != 3 || diag.PredicateLiterals != 5 {
 		tb.Fatalf("%s predicate diagnostics=%+v want two equal predicates plus three-value IN", label, diag)
