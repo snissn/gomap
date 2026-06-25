@@ -343,22 +343,22 @@ func run(argv []string) error {
 		}
 	}
 	if !cfg.SkipOfflineRewrite {
-		if err := runOfflineRewriteMatrix(cfg, canon, "offline_compact", phaseOfflineCompact, "full"); err != nil {
-			return err
-		}
-		if err := runOfflineRewriteMatrix(cfg, canon, "exhaustive_compact", phaseExhaustiveCompact, "exhaustive"); err != nil {
-			return err
-		}
+		runReportPhase(canon, "error", "phase.offline_compact.failed", "offline compact matrix", func() error {
+			return runOfflineRewriteMatrix(cfg, canon, "offline_compact", phaseOfflineCompact, "full")
+		})
+		runReportPhase(canon, "warning", "phase.exhaustive_compact.failed", "exhaustive compact matrix", func() error {
+			return runOfflineRewriteMatrix(cfg, canon, "exhaustive_compact", phaseExhaustiveCompact, "exhaustive")
+		})
 	}
 	if !cfg.SkipFullLeafgen {
-		if err := runFullLeafgenFixture(cfg, canon, formats); err != nil {
-			return err
-		}
+		runReportPhase(canon, "warning", "phase.full_leafgen_pack_gc.failed", "full leafgen pack/GC fixture", func() error {
+			return runFullLeafgenFixture(cfg, canon, formats)
+		})
 	}
 
 	canon.Comparisons = buildCompactedComparisons(canon)
 	finalizeRunMetadata(canon)
-	canon.Checks = validateCanonicalRun(canon)
+	canon.Checks = append(canon.Checks, validateCanonicalRun(canon)...)
 	if err := writeOutputs(canon); err != nil {
 		return err
 	}
@@ -369,6 +369,16 @@ func run(argv []string) error {
 		return errors.New("guardrail validation failed; rerun with -allow-incomplete to keep partial results")
 	}
 	return nil
+}
+
+func runReportPhase(canon *canonicalRun, severity, code, label string, fn func() error) {
+	if err := fn(); err != nil {
+		canon.Checks = append(canon.Checks, guardrailCheck{
+			Severity: severity,
+			Code:     code,
+			Message:  fmt.Sprintf("%s failed; writing completed canonical phases anyway: %v", label, err),
+		})
+	}
 }
 
 func normalizeRunPaths(cfg *config) error {
@@ -578,12 +588,13 @@ func runOfflineRewriteMatrix(cfg config, canon *canonicalRun, dirName, compactPh
 }
 
 func runFullLeafgenFixture(cfg config, canon *canonicalRun, formats []string) error {
+	var errs []error
 	for _, format := range formats {
 		if err := runFullLeafgenFixtureForFormat(cfg, canon, format); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func runFullLeafgenFixtureForFormat(cfg config, canon *canonicalRun, format string) error {
