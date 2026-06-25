@@ -432,6 +432,8 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("flush_admission_effective_concurrency=%d", admission.FlushApplyConcurrency))
 	lines = append(lines, fmt.Sprintf("flush_admission_concurrency_defaulted=%t", admission.FlushApplyConcurrencyDefaulted))
 	lines = append(lines, fmt.Sprintf("runtime_gomaxprocs=%d", admission.RuntimeGOMAXPROCS))
+	lines = append(lines, fmt.Sprintf("flush_admission_flush_apply_span_native=%t", admission.FlushApplySpanNative))
+	lines = append(lines, fmt.Sprintf("flush_admission_flush_backlog_coalescing=%t", admission.FlushBacklogCoalescing))
 	if admission.PhysicalCores > 0 {
 		lines = append(lines, fmt.Sprintf("hardware_physical_cores=%d", admission.PhysicalCores))
 	} else {

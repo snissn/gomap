@@ -133,6 +133,8 @@ These are mainly for experiments and should usually be left at engine defaults:
 - `-treedb-flush-backlog-coalescing*` (M11 bounded adaptive backlog coalescing controller; auto enables when admitted, byte/op budgets are soft pre-next-memtable limits)
 - `-treedb-max-queued-memtables`, `-treedb-slowdown-backlog-seconds`, `-treedb-stop-backlog-seconds`
 
+Benchmark reports include resolved TreeDB options and selected stats for `flush_admission.policy`, `admitted`, `reason`, selected concurrency/defaulting, `GOMAXPROCS`, physical cores, span-native enablement, and backlog-coalescing enablement.
+
 Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 
 ### TreeDB value-log codec matrix
