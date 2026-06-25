@@ -20,12 +20,13 @@ const (
 )
 
 // LoweredFrameClass identifies which already-classified lowering path produced
-// a frame. This spike accepts only the scoped no-op class so it cannot widen the
-// replicated command set ahead of the R3a contract and harness PRs.
+// a frame. Classes are intentionally explicit so future command widening cannot
+// accidentally piggyback on a generic command-WAL append path.
 type LoweredFrameClass uint8
 
 const (
 	LoweredFrameClassTestNoop LoweredFrameClass = iota + 1
+	LoweredFrameClassCatalogCreateCollection
 )
 
 // ApplyMetadata is the explicit metadata slot future R3a apply code will carry
@@ -61,6 +62,12 @@ func (h Handle) LSN() uint64 {
 	return h.lsn
 }
 
+// CommandWALIntent returns the pre-appended local command-WAL intent. Normal
+// executors use it to publish roots and AppliedCommandLSN for the same frame.
+func (h Handle) CommandWALIntent() *backenddb.CommandWALIntent {
+	return h.intent
+}
+
 // Result describes the local apply/recoverability boundary reached.
 type Result struct {
 	LSN               uint64
@@ -83,6 +90,23 @@ func TestNoopFrame() (LoweredFrame, error) {
 		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
 		Payload:       payload,
 	}, nil
+}
+
+// CatalogCreateCollectionFrame returns the first accepted catalog mutation
+// frame for R3a apply. Payload must be the canonical commitlog
+// CatalogCreateCollection v1 payload produced by the collections catalog path.
+func CatalogCreateCollectionFrame(payload []byte) (LoweredFrame, error) {
+	frame := LoweredFrame{
+		Class:         LoweredFrameClassCatalogCreateCollection,
+		Kind:          commitlog.CommandKindCatalogCreateCollection,
+		Scope:         commitlog.CommandScopeCatalog,
+		PayloadFormat: commitlog.PayloadFormatCatalogCreateCollectionV1,
+		Payload:       payload,
+	}
+	if err := validateCatalogCreateCollectionFrame(frame); err != nil {
+		return LoweredFrame{}, err
+	}
+	return frame, nil
 }
 
 // Append validates and appends a lowered local command-WAL frame. It does not
@@ -159,6 +183,8 @@ func validateLoweredFrame(frame LoweredFrame) error {
 	switch frame.Class {
 	case LoweredFrameClassTestNoop:
 		return validateTestNoopFrame(frame)
+	case LoweredFrameClassCatalogCreateCollection:
+		return validateCatalogCreateCollectionFrame(frame)
 	default:
 		return fmt.Errorf("%w: command wal apply frame class %d is not accepted", backenddb.ErrCommandWALUnsupported, frame.Class)
 	}
@@ -176,6 +202,18 @@ func validateTestNoopFrame(frame LoweredFrame) error {
 	}
 	if len(ops) != 0 {
 		return fmt.Errorf("%w: command wal apply test frame must be an empty RawKVBatch", backenddb.ErrCommandWALUnsupported)
+	}
+	return nil
+}
+
+func validateCatalogCreateCollectionFrame(frame LoweredFrame) error {
+	if frame.Kind != commitlog.CommandKindCatalogCreateCollection ||
+		frame.Scope != commitlog.CommandScopeCatalog ||
+		frame.PayloadFormat != commitlog.PayloadFormatCatalogCreateCollectionV1 {
+		return fmt.Errorf("%w: command wal apply catalog create frame has unsupported identity kind=%d scope=%d format=%d", backenddb.ErrCommandWALUnsupported, frame.Kind, frame.Scope, frame.PayloadFormat)
+	}
+	if _, err := commitlog.DecodeCatalogCreateCollectionPayload(frame.Payload); err != nil {
+		return fmt.Errorf("%w: malformed command wal apply catalog create frame: %v", backenddb.ErrCommandWALRejected, err)
 	}
 	return nil
 }

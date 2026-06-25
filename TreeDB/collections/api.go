@@ -2883,6 +2883,26 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	return m.createCollectionWithCommandWALIntent(normalized, nil)
 }
 
+// CreateCollectionWithCommandWALIntent applies a catalog create through the
+// normal collection catalog executor while covering a command-WAL frame that
+// was already appended by a deterministic apply layer.
+func (m *CollectionManager) CreateCollectionWithCommandWALIntent(meta CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
+	if m == nil {
+		return nil, errCollectionManagerNil
+	}
+	if m.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if m.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		return nil, err
+	}
+	return m.createCollectionWithCommandWALIntent(normalized, commandWALIntent)
+}
+
 func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
 	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
 	if !coveredCommandWALIntent {

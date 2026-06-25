@@ -85,9 +85,8 @@ func ApplyCommittedEntryV1(db *backenddb.DB, entryBytes []byte, meta ApplyMetada
 	return NewHarness(db, opts).ApplyCommittedEntryV1(entryBytes, meta)
 }
 
-// ApplyCommittedEntryV1 decodes, validates, classifies, and fail-closed rejects
-// committed deterministic entry bytes. This slice deliberately does not lower
-// any command to a local command-WAL frame yet.
+// ApplyCommittedEntryV1 decodes, validates, classifies, and applies the first
+// R3a command slice through local command WAL and normal catalog executors.
 func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
 	if h == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("raftapply: nil harness"))
@@ -99,12 +98,6 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	if err := validateApplyEntryID(meta.EntryID); err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(raftentry.CommandDigestV1{}, code, err)
-	}
-	if h.opts.ProgressStore != nil {
-		if err := h.opts.ProgressStore.CheckCanApply(meta.EntryID); err != nil {
-			code, _ := ErrorCodeOf(err)
-			return reject(raftentry.CommandDigestV1{}, code, err)
-		}
 	}
 
 	decodeOpts := raftentry.DecodeOptions{
@@ -133,11 +126,44 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			if record.CommandDigest != entry.Digest {
 				return reject(entry.Digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("raftapply: apply entry %d/%d digest conflicts with existing result", meta.EntryID.Term, meta.EntryID.Index))
 			}
-			return reject(entry.Digest, raftentry.ErrorResultReplayRequiredV1, fmt.Errorf("raftapply: apply entry %d/%d result replay is not implemented", meta.EntryID.Term, meta.EntryID.Index))
+			return record.Result, nil
+		}
+	}
+	if h.opts.ProgressStore != nil {
+		if err := h.opts.ProgressStore.CheckCanApply(meta.EntryID); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(entry.Digest, code, err)
 		}
 	}
 
-	return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s decoded but command lowering is deferred", entry.Row.NativeWireCommand))
+	if entry.Target.CommandID != nativewire.CommandCreateCollection {
+		return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s is not accepted by create-collection slice", entry.Row.NativeWireCommand))
+	}
+	result, err := h.applyCreateCollectionV1(entry, meta)
+	if err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(entry.Digest, code, err)
+	}
+	if h.opts.ResultStore != nil {
+		if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
+			EntryID:       meta.EntryID,
+			CommandDigest: entry.Digest,
+			Result:        result,
+		}); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(entry.Digest, code, err)
+		}
+	}
+	if h.opts.ProgressStore != nil {
+		if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
+			EntryID:       meta.EntryID,
+			CommandDigest: entry.Digest,
+		}); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(entry.Digest, code, err)
+		}
+	}
+	return result, nil
 }
 
 func (h *Harness) preflightLocalBoundary(meta ApplyMetadataV1) error {
