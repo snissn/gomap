@@ -722,7 +722,7 @@ func TestFullSweepLoadNoteReportsProducerMetadata(t *testing.T) {
 		Phase:              "load_insert_many",
 		BatchSize:          25,
 		InsertProducers:    8,
-		EffectiveProducers: 4,
+		EffectiveProducers: 8,
 		DriverCalls:        4,
 		LoadBatchCount:     4,
 	}})

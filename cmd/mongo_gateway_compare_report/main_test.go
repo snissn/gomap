@@ -89,7 +89,7 @@ func TestSummaryTSVEmitsLoadMetadataColumns(t *testing.T) {
   "insert_producers": 4,
   "secondary_indexes": 0,
   "phases": [
-    {"name": "load_insert_many", "operations": 10, "driver_calls": 3, "effective_producers": 3, "ops_per_sec": 1000, "latency_micros": {}},
+    {"name": "load_insert_many", "operations": 10, "driver_calls": 3, "effective_producers": 9, "ops_per_sec": 1000, "latency_micros": {}},
     {"name": "id_find_one", "operations": 10, "driver_calls": 10, "ops_per_sec": 2000, "latency_micros": {}}
   ],
   "treedb_disk_after_checkpoint": {"total_bytes": 1000}
@@ -103,7 +103,7 @@ func TestSummaryTSVEmitsLoadMetadataColumns(t *testing.T) {
   "insert_producers": 4,
   "secondary_indexes": 0,
   "phases": [
-    {"name": "load_insert_many", "operations": 10, "driver_calls": 3, "effective_producers": 3, "ops_per_sec": 500, "latency_micros": {}},
+    {"name": "load_insert_many", "operations": 10, "driver_calls": 3, "effective_producers": 9, "ops_per_sec": 500, "latency_micros": {}},
     {"name": "id_find_one", "operations": 10, "driver_calls": 10, "ops_per_sec": 2500, "latency_micros": {}}
   ],
   "mongodb_stats_final": {"dataSize": 1300, "totalSize": 1500}
