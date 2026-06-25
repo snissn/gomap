@@ -201,6 +201,14 @@ Acceptance:
 
 Add Raft around the deterministic write set only.
 
+The current R3a planning slice (#1654, with executable children #3037-#3043)
+is the local state-machine boundary before networked Raft is selected:
+committed deterministic `CommandEntryV1` bytes are decoded directly, validated
+against command digest/target/idempotency rules, lowered to the local
+user-command WAL `CommandEnvelope` payload, applied through the normal executor,
+and only then allowed to advance future apply-progress metadata according to the
+selected local command-WAL/`AppliedLSN` recoverability boundary.
+
 Replicate:
 
 - collection create/drop metadata,
@@ -233,9 +241,10 @@ Acceptance:
   `locally_recoverable`; client `raft_committed` success is not returned until
   the responding node satisfies the selected local apply durability rule,
 - persistent applied-index, idempotency-result, and catalog-guard outcome
-  metadata cannot advance past a collection mutation unless that mutation is
-  `CollectionWALRecoverable` locally, or a later stable-Raft replay design proves
-  the entry is replayed before serving;
+  metadata cannot advance past a collection mutation unless the corresponding
+  local command-WAL frame, normal executor effects, and selected
+  root/`AppliedLSN` boundary are recoverable locally, or a later stable-Raft
+  replay design proves the entry is replayed before serving;
 - the same committed entry sequence applied to fresh DBs in separate processes
   produces the same logical state digest,
 - snapshot restore plus log-tail replay produces the same logical state digest

@@ -185,11 +185,33 @@ func TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN(t *testing.
 		"Native-wire and Raft alignment",
 		"must lower to a local command-WAL frame and satisfy the requested local ack boundary before reporting local recoverability",
 		"`raft_committed` is not local WAL append",
+		"For the R3a local apply harness tracked by #1654",
+		"lowers supported entries to local `CommandEnvelope` payloads",
+		"advances future `ApplyProgress` or applied-index metadata only after the selected local recoverability boundary is satisfied",
 	} {
 		if !strings.Contains(normalizedSpec, required) {
 			t.Fatalf("user-command WAL spec missing Raft/local recoverability rule: %q", required)
 		}
 	}
+}
+
+func TestRaftRoadmapUsesCommandWALRecoverabilityBoundary(t *testing.T) {
+	roadmap := readRepoText(t, "TreeDB/docs/spec/native-query-raft-roadmap.md")
+	normalizedRoadmap := collapseWhitespace(roadmap)
+	for _, forbidden := range []string{
+		"CollectionWALRecoverable",
+		"physical/root-delta WAL as the active plan",
+	} {
+		if strings.Contains(roadmap, forbidden) {
+			t.Fatalf("native-query Raft roadmap still uses stale recoverability language %q", forbidden)
+		}
+	}
+	assertContainsAll(t, normalizedRoadmap, "R3a command-WAL roadmap boundary",
+		"The current R3a planning slice (#1654, with executable children #3037-#3043)",
+		"user-command WAL `CommandEnvelope` payload",
+		"selected local command-WAL/`AppliedLSN` recoverability boundary",
+		"local command-WAL frame, normal executor effects, and selected root/`AppliedLSN` boundary",
+	)
 }
 
 func TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema(t *testing.T) {
