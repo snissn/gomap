@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -140,6 +141,69 @@ func TestAppendRejectsOutstandingNoopHandle(t *testing.T) {
 	}
 	if _, err := Finalize(db, next, ApplyMetadata{}, Options{}); err != nil {
 		t.Fatalf("Finalize second: %v", err)
+	}
+}
+
+func TestOutstandingApplyHandleBlocksRawCommandWALPublish(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	writeStarted := make(chan struct{})
+	writeDone := make(chan error, 1)
+	go func() {
+		b := db.NewBatch()
+		if err := b.Set([]byte("raw/blocked"), []byte("value")); err != nil {
+			writeDone <- err
+			return
+		}
+		close(writeStarted)
+		writeDone <- b.Write()
+	}()
+
+	select {
+	case <-writeStarted:
+	case err := <-writeDone:
+		t.Fatalf("raw write completed before starting Write: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("raw write goroutine did not start")
+	}
+
+	select {
+	case err := <-writeDone:
+		t.Fatalf("raw write completed while apply handle was outstanding: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if _, err := Finalize(db, handle, ApplyMetadata{}, Options{}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("raw write after finalize: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("raw write remained blocked after finalize")
+	}
+	if got := db.State().AppliedCommandLSN; got != appendResult.LSN+1 {
+		t.Fatalf("AppliedCommandLSN after raw write=%d, want %d", got, appendResult.LSN+1)
 	}
 }
 

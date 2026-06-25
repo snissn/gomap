@@ -53,8 +53,9 @@ type Options struct {
 // Handle is the append token required to publish the same local command-WAL
 // frame after the normal executor has made the command locally visible.
 type Handle struct {
-	intent *backenddb.CommandWALIntent
-	lsn    uint64
+	intent  *backenddb.CommandWALIntent
+	lsn     uint64
+	staging *stagingGuard
 }
 
 // LSN returns the local command-WAL sequence number assigned at append time.
@@ -112,11 +113,13 @@ func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options)
 	if err := checkContiguousAppendReady(db, applied); err != nil {
 		return Handle{}, Result{}, err
 	}
+	staging := newStagingGuard(db.LockCommandWALStaging())
 	lsn, err := db.AppendCommandWALIntent(intent, opts.Sync)
 	if err != nil {
+		staging.release()
 		return Handle{}, Result{}, err
 	}
-	return Handle{intent: intent, lsn: lsn}, Result{
+	return Handle{intent: intent, lsn: lsn, staging: staging}, Result{
 		LSN:               lsn,
 		Status:            StatusLocallyWALRecoverable,
 		AppliedCommandLSN: applied,
@@ -133,6 +136,9 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	}
 	if handle.intent == nil || handle.lsn == 0 {
 		return Result{}, fmt.Errorf("%w: command wal apply finalize missing appended frame", backenddb.ErrCommandWALRejected)
+	}
+	if handle.staging != nil {
+		defer handle.staging.release()
 	}
 	if err := db.PublishCommandWALNoop(handle.intent, opts.Sync); err != nil {
 		return Result{}, err
@@ -184,6 +190,25 @@ func validateTestNoopFrame(frame LoweredFrame) error {
 }
 
 var applyAppendMu sync.Mutex
+
+type stagingGuard struct {
+	once   sync.Once
+	unlock func()
+}
+
+func newStagingGuard(unlock func()) *stagingGuard {
+	if unlock == nil {
+		unlock = func() {}
+	}
+	return &stagingGuard{unlock: unlock}
+}
+
+func (g *stagingGuard) release() {
+	if g == nil {
+		return
+	}
+	g.once.Do(g.unlock)
+}
 
 func checkContiguousAppendReady(db *backenddb.DB, applied uint64) error {
 	next := db.CommandWALNextLSN()
