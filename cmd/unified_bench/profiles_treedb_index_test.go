@@ -143,7 +143,9 @@ func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsHardwareAwareAdaptiv
 		"flush_admission_policy=auto",
 		"flush_admission_admitted=true",
 		"flush_admission_reason=auto_admitted_hardware_aware",
+		"flush_admission_configured_concurrency=0",
 		"flush_admission_effective_concurrency=" + strconv.Itoa(opts.FlushApplyConcurrency),
+		"flush_admission_concurrency_cap_reason=" + treedbdb.FlushAdmissionDecisionForOptions(opts).FlushApplyConcurrencyCapReason,
 		"flush_admission_concurrency_defaulted=true",
 		"runtime_gomaxprocs=12",
 		"flush_admission_flush_apply_span_native=true",
@@ -189,6 +191,10 @@ func TestBuildTreeDBOptions_FlushAdmissionExplicitPreservesOptInFlags(t *testing
 		"flush_admission_policy=explicit",
 		"flush_admission_admitted=true",
 		"flush_admission_reason=explicit_opt_in",
+		"flush_admission_configured_concurrency=4",
+		"flush_admission_effective_concurrency=4",
+		"flush_admission_concurrency_cap_reason=configured",
+		"flush_admission_concurrency_defaulted=false",
 		"flush_admission_flush_apply_span_native=true",
 		"flush_admission_flush_backlog_coalescing=true",
 		"flush_apply_span_native=true",
@@ -222,6 +228,10 @@ func TestBuildTreeDBOptions_FlushAdmissionOffForcesOff(t *testing.T) {
 		"flush_admission_policy=off",
 		"flush_admission_admitted=false",
 		"flush_admission_reason=policy_off",
+		"flush_admission_configured_concurrency=4",
+		"flush_admission_effective_concurrency=0",
+		"flush_admission_concurrency_cap_reason=disabled",
+		"flush_admission_concurrency_defaulted=false",
 		"flush_admission_flush_apply_span_native=false",
 		"flush_admission_flush_backlog_coalescing=false",
 		"flush_apply_concurrency=0",
@@ -256,7 +266,46 @@ func TestBuildTreeDBOptions_FlushAdmissionAutoDeclinesLowConcurrency(t *testing.
 		"flush_admission_policy=auto",
 		"flush_admission_admitted=false",
 		"flush_admission_reason=low_concurrency",
+		"flush_admission_configured_concurrency=1",
+		"flush_admission_effective_concurrency=0",
+		"flush_admission_concurrency_cap_reason=disabled",
+		"flush_admission_concurrency_defaulted=false",
 		"  - flush_admission_policy=auto declined: low_concurrency",
+	} {
+		if !treeDBReportHasLine(text, want) {
+			t.Fatalf("resolved options missing line %q: %q", want, text)
+		}
+	}
+}
+
+func TestBuildTreeDBOptions_FlushAdmissionAutoReportsConfiguredC16CappedByGOMAXPROCS(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(8)
+	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbFlushAdmissionPolicy = "auto"
+	*treedbFlushApplyConcurrency = 16
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions flush admission auto c16: %v", err)
+	}
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 8 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("auto c16 not capped/enabled: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	text := rep.formatText("")
+	for _, want := range []string{
+		"flush_admission_policy=auto",
+		"flush_admission_admitted=true",
+		"flush_admission_reason=auto_admitted_hardware_aware",
+		"flush_admission_configured_concurrency=16",
+		"flush_admission_effective_concurrency=8",
+		"flush_admission_concurrency_cap_reason=configured_gomaxprocs_cap",
+		"flush_admission_concurrency_defaulted=false",
+		"runtime_gomaxprocs=8",
+		"flush_apply_concurrency=8",
 	} {
 		if !treeDBReportHasLine(text, want) {
 			t.Fatalf("resolved options missing line %q: %q", want, text)
