@@ -9372,6 +9372,46 @@ func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte
 	return resultIDs, err
 }
 
+// PreflightCommandWALMutation checks collection-local command-WAL support for
+// an already-classified deterministic apply mutation before R3a appends its
+// local command-WAL frame.
+func (c *Collection) PreflightCommandWALMutation(operation ColumnPublishOperation) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return err
+	}
+	return requireColumnStoreWriteOperationSupported(c.meta, operation)
+}
+
+// InsertBatchWithCommandWALIntent applies an already-appended collection insert
+// command-WAL frame through the normal insert executor. It is reserved for R3a
+// deterministic apply; ordinary callers should use InsertBatch or
+// InsertBatchValidatedBSON so the collection owns command-WAL creation.
+func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
+	if commandWALIntent == nil {
+		return nil, errors.New("collections: InsertBatchWithCommandWALIntent requires command WAL intent")
+	}
+	resultIDs, err := c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, nil, commandWALIntent, insertBatchExecutionOptions{returnResultIDs: true})
+	if err == nil {
+		if trustedValidBSON {
+			err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+		} else {
+			err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+		}
+	}
+	return resultIDs, err
+}
+
 // NativewireInsertBatchNoResultIDs executes an insert batch without cloning
 // response-owned result IDs. It exists for the nativewire gateway omit-result
 // fast path; public callers that need returned IDs should keep using
@@ -10911,6 +10951,62 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 	return deleted, err
 }
 
+// DeleteBatchWithCommandWALIntent applies an already-appended collection delete
+// command-WAL frame through the normal delete executor. It is reserved for R3a
+// deterministic apply; ordinary callers should use DeleteBatch.
+func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, error) {
+	if commandWALIntent == nil {
+		return 0, errors.New("collections: DeleteBatchWithCommandWALIntent requires command WAL intent")
+	}
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return 0, err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	for i, id := range documentIDs {
+		if len(id) == 0 {
+			return 0, fmt.Errorf("collections: document id cannot be empty at index %d", i)
+		}
+	}
+	ids, err := cloneBatchDocumentIDs(documentIDs)
+	if err != nil {
+		return 0, err
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for i, id := range ids {
+		key := string(id)
+		if _, ok := seen[key]; ok {
+			return 0, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+		}
+		seen[key] = struct{}{}
+	}
+	unlockMutation := c.lockMutation()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
+	if c.commandWALActive(commandWALIntent) || c.shouldFlushBeforeIndexedDelete(c.meta) {
+		if err := c.flushBufferedWrites(); err != nil {
+			return 0, err
+		}
+	}
+	deleted, err := c.deleteBatchWithCommandWALIntent(ids, commandWALIntent)
+	if err == nil && deleted > 0 {
+		unlockMutation.Unlock()
+		mutationLocked = false
+		err = commitAmbiguousError("DeleteBatch vector index maintenance", c.notifyVectorIndexesDelete(ids))
+	}
+	return deleted, err
+}
+
 func (c *Collection) deleteBatchWithCommandWALIntent(ids [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
@@ -11645,6 +11741,76 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBa
 		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
 	return results, batched, err
+}
+
+// ReplaceBatchWithCommandWALIntent applies existing-only full-document
+// replacements with an already-appended collection update command-WAL frame. It
+// is reserved for R3a deterministic apply; ordinary callers should use Update
+// or UpdateBatch.
+func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, int, error) {
+	if commandWALIntent == nil {
+		return 0, 0, errors.New("collections: ReplaceBatchWithCommandWALIntent requires command WAL intent")
+	}
+	if len(ids) != len(documents) {
+		return 0, 0, fmt.Errorf("collections: replace ids length %d does not match documents length %d", len(ids), len(documents))
+	}
+	items := make([]UpdateBatchItem, len(ids))
+	for i := range ids {
+		id := bytes.Clone(ids[i])
+		replacement := bytes.Clone(documents[i])
+		items[i] = UpdateBatchItem{
+			DocumentID: id,
+			Update: func(doc []byte) func([]byte) ([]byte, bool, error) {
+				return func(current []byte) ([]byte, bool, error) {
+					if current == nil {
+						return nil, false, nil
+					}
+					if bytes.Equal(current, doc) {
+						return current, false, nil
+					}
+					return doc, true, nil
+				}
+			}(replacement),
+		}
+	}
+	ownedItems, err := prepareUpdateBatchItems(items)
+	if err != nil {
+		return 0, 0, err
+	}
+	if c == nil {
+		return 0, 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, 0, errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return 0, 0, err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		return 0, 0, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
+		return 0, 0, err
+	}
+	results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent(ownedItems, updateBatchModeAny, commandWALIntent)
+	if err == nil {
+		err = commitAmbiguousError("ReplaceBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	matched, modified := 0, 0
+	for _, result := range results {
+		if result.Matched {
+			matched++
+		}
+		if result.Modified {
+			modified++
+		}
+	}
+	return matched, modified, nil
 }
 
 func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
