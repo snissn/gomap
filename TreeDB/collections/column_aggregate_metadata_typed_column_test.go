@@ -72,7 +72,10 @@ func TestAggregateMetadataTypedColumnPartGroupCount3000(t *testing.T) {
 	if scan.Diagnostics.StorageSource == ColumnPhysicalQueryStorageSourceAggregateMetadata || scan.Diagnostics.RowsScanned != len(events) {
 		t.Fatalf("scan diagnostics=%+v want typed-column data scan over %d rows", scan.Diagnostics, len(events))
 	}
-	wantCounts := columnPhysicalQueryGroupCountsM14B(scan.Groups)
+	wantCounts := make(map[string]int)
+	for _, ev := range events {
+		wantCounts[ev.Did]++
+	}
 
 	metaReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "did", AggregateMetadataName: "count_did"}
 	metadata, err := col.RunColumnPhysicalQuery(metaReq)
