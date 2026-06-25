@@ -1069,6 +1069,19 @@ func validateColumnAggregateKind(kind ColumnAggregateKind, column string) error 
 
 func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetadata, columnTypes map[string]ColumnStoreValueType) error {
 	switch aggregate.Kind {
+	case ColumnAggregateCount:
+		if aggregate.GroupColumn != "" {
+			if aggregate.Column != "" {
+				return fmt.Errorf("collections: aggregate metadata %q kind %q does not support a value column", aggregate.Name, aggregate.Kind)
+			}
+			groupType, ok := columnTypes[aggregate.GroupColumn]
+			if !ok {
+				return fmt.Errorf("collections: aggregate metadata %q references unknown group column %q", aggregate.Name, aggregate.GroupColumn)
+			}
+			if groupType != ColumnStoreValueString {
+				return fmt.Errorf("collections: aggregate metadata %q group column %q has type %q, want %q", aggregate.Name, aggregate.GroupColumn, groupType, ColumnStoreValueString)
+			}
+		}
 	case ColumnAggregateMin, ColumnAggregateMax:
 		valueType, ok := columnTypes[aggregate.Column]
 		if !ok {

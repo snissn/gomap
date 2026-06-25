@@ -127,10 +127,13 @@ func columnStoreTypedColumnPartAggregateMetadata(cfg ColumnStoreConfig) []Column
 	}
 	out := make([]ColumnAggregateMetadata, 0, len(cfg.AggregateMetadata))
 	for _, aggregate := range cfg.AggregateMetadata {
-		if aggregate.Column == "" || aggregate.GroupColumn == "" {
+		if aggregate.GroupColumn == "" {
 			continue
 		}
-		if ownerByColumn[aggregate.Column] != TypedStorageOwnerColumnPart || ownerByColumn[aggregate.GroupColumn] != TypedStorageOwnerColumnPart {
+		if ownerByColumn[aggregate.GroupColumn] != TypedStorageOwnerColumnPart {
+			continue
+		}
+		if aggregate.Kind != ColumnAggregateCount && (aggregate.Column == "" || ownerByColumn[aggregate.Column] != TypedStorageOwnerColumnPart) {
 			continue
 		}
 		allPredicateColumnsTyped := true

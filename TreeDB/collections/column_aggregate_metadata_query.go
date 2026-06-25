@@ -9,6 +9,7 @@ import (
 
 type columnAggregateMetadataRunnerEntry struct {
 	groupCode int
+	count     int
 	min       int64
 	max       int64
 }
@@ -28,6 +29,7 @@ type columnAggregateMetadataRunner struct {
 	seenGeneration           []uint32
 	runGeneration            uint32
 	touchedCodes             []int
+	counts                   []int
 	mins                     []int64
 	maxs                     []int64
 	resultGroups             []ColumnPhysicalQueryGroup
@@ -90,6 +92,7 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 			}
 			runner.entries = append(runner.entries, columnAggregateMetadataRunnerEntry{
 				groupCode: code,
+				count:     entry.Count,
 				min:       entry.Min,
 				max:       entry.Max,
 			})
@@ -100,6 +103,9 @@ func prepareColumnAggregateMetadataRunner(view columnPhysicalScanSnapshotView, r
 	groupCount := len(runner.groupKeys)
 	runner.seenGeneration = make([]uint32, groupCount)
 	runner.touchedCodes = make([]int, 0, groupCount)
+	if req.Kind == ColumnPhysicalQueryGroupCount {
+		runner.counts = make([]int, groupCount)
+	}
 	runner.mins = make([]int64, groupCount)
 	runner.maxs = make([]int64, groupCount)
 	resultCap := groupCount
@@ -130,7 +136,11 @@ func (r *columnAggregateMetadataRunner) run(view columnPhysicalScanSnapshotView,
 
 	diag := columnPhysicalQueryDiagnosticsFromScan(view.Diagnostics)
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, 2)
+	projectedColumns := 2
+	if req.Kind == ColumnPhysicalQueryGroupCount {
+		projectedColumns = 1
+	}
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(r.predicateDiagnostics, projectedColumns)
 	diag.MetadataHits = r.metadataHits
 	diag.MetadataEntries = r.metadataEntries
 	diag.ScheduledGranules = r.scheduledGranules
@@ -159,8 +169,16 @@ func (r *columnAggregateMetadataRunner) reduceEntries() {
 		if r.seenGeneration[code] != generation {
 			r.seenGeneration[code] = generation
 			r.touchedCodes = append(r.touchedCodes, code)
+			if r.kind == ColumnPhysicalQueryGroupCount {
+				r.counts[code] = entry.count
+				continue
+			}
 			r.mins[code] = entry.min
 			r.maxs[code] = entry.max
+			continue
+		}
+		if r.kind == ColumnPhysicalQueryGroupCount {
+			r.counts[code] += entry.count
 			continue
 		}
 		if entry.min < r.mins[code] {
@@ -201,6 +219,8 @@ func (r *columnAggregateMetadataRunner) appendTopKGroups(req ColumnPhysicalQuery
 func (r *columnAggregateMetadataRunner) groupForCode(code int) ColumnPhysicalQueryGroup {
 	group := ColumnPhysicalQueryGroup{Key: r.groupKeys[code]}
 	switch r.kind {
+	case ColumnPhysicalQueryGroupCount:
+		group.Count = r.counts[code]
 	case ColumnPhysicalQueryGroupMinInt64:
 		group.Int64 = r.mins[code]
 	case ColumnPhysicalQueryGroupMaxInt64:

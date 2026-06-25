@@ -559,10 +559,13 @@ func columnMaterializableAggregateMetadataCount(cfg ColumnStoreConfig) int {
 }
 
 func columnAggregateMetadataMaterializable(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) bool {
-	if aggregate.Kind != ColumnAggregateMin && aggregate.Kind != ColumnAggregateMax {
+	if aggregate.Kind != ColumnAggregateCount && aggregate.Kind != ColumnAggregateMin && aggregate.Kind != ColumnAggregateMax {
 		return false
 	}
-	if strings.TrimSpace(aggregate.Column) == "" || strings.TrimSpace(aggregate.GroupColumn) == "" {
+	if strings.TrimSpace(aggregate.GroupColumn) == "" {
+		return false
+	}
+	if aggregate.Kind != ColumnAggregateCount && strings.TrimSpace(aggregate.Column) == "" {
 		return false
 	}
 	groupOK, valueOK := false, false
@@ -573,6 +576,9 @@ func columnAggregateMetadataMaterializable(cfg ColumnStoreConfig, aggregate Colu
 		case strings.TrimSpace(aggregate.Column):
 			valueOK = col.ValueType == ColumnStoreValueInt64
 		}
+	}
+	if aggregate.Kind == ColumnAggregateCount {
+		return groupOK
 	}
 	return groupOK && valueOK
 }

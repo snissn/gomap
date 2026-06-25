@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -46,6 +47,74 @@ func TestAggregateMetadataTypedColumnPartMinMaxSpan1786(t *testing.T) {
 			assertAggregateMetadataTypedColumnDiagnostics1786(t, result.Diagnostics, len(events))
 		})
 	}
+}
+
+func TestAggregateMetadataTypedColumnPartGroupCount3000(t *testing.T) {
+	events := columnPhysicalQueryFixtureEventsM13B(128)
+	d := openTypedColumnInt64ScanDB(t)
+	col := createAggregateMetadataCollection1786(t, d, aggregateMetadataCountTypedColumnPartConfig3000())
+	insertAggregateMetadataEvents1786(t, col, events)
+	collectionName := col.Meta().Name
+
+	refs := aggregateMetadataRefs1786(columnManifestAssetRefsForCollectionM12A(t, d, col))
+	if got, want := len(refs), 1; got != want {
+		t.Fatalf("aggregate metadata refs=%d want %d refs=%+v", got, want, refs)
+	}
+	if refs[0].PartID != typedColumnPartAssetPartID {
+		t.Fatalf("aggregate metadata ref part_id=%d want typed_column_part part_id=%d ref=%+v", refs[0].PartID, typedColumnPartAssetPartID, refs[0])
+	}
+
+	scanReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "did"}
+	scan, err := col.RunColumnPhysicalQuery(scanReq)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery scan: %v", err)
+	}
+	if scan.Diagnostics.StorageSource == ColumnPhysicalQueryStorageSourceAggregateMetadata || scan.Diagnostics.RowsScanned != len(events) {
+		t.Fatalf("scan diagnostics=%+v want typed-column data scan over %d rows", scan.Diagnostics, len(events))
+	}
+	wantCounts := make(map[string]int)
+	for _, ev := range events {
+		wantCounts[ev.Did]++
+	}
+
+	metaReq := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "did", AggregateMetadataName: "count_did"}
+	metadata, err := col.RunColumnPhysicalQuery(metaReq)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery metadata: %v", err)
+	}
+	assertAggregateMetadataGroupCount3000(t, "direct metadata", metadata, wantCounts, len(events))
+
+	runner, err := col.PrepareColumnPhysicalQuery(metaReq)
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery metadata: %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	for run := 0; run < 2; run++ {
+		prepared, err := runner.Run()
+		if err != nil {
+			t.Fatalf("prepared metadata run %d: %v", run, err)
+		}
+		assertAggregateMetadataGroupCount3000(t, fmt.Sprintf("prepared metadata run %d", run), prepared, wantCounts, len(events))
+	}
+
+	dir := d.Dir()
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close before reopen: %v", err)
+	}
+	reopened, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open reopened DB: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection(collectionName)
+	if err != nil {
+		t.Fatalf("OpenCollection reopened: %v", err)
+	}
+	reopenedResult, err := reopenedCol.RunColumnPhysicalQuery(metaReq)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery reopened metadata: %v", err)
+	}
+	assertAggregateMetadataGroupCount3000(t, "reopened metadata", reopenedResult, wantCounts, len(events))
 }
 
 func TestAggregateMetadataTypedColumnPartReopen1786(t *testing.T) {
@@ -323,6 +392,20 @@ func aggregateMetadataTypedColumnPartConfig1786() *ColumnStoreConfig {
 	return cfg
 }
 
+func aggregateMetadataCountTypedColumnPartConfig3000() *ColumnStoreConfig {
+	cfg := testColumnStoreConfig(nil)
+	cfg.Columns = []ColumnStoreColumn{
+		{Name: "did", Path: "did", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerRowAsset, Dictionary: true},
+	}
+	cfg.SortKey = nil
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{
+		{Name: "count_did", GroupColumn: "did", Kind: ColumnAggregateCount},
+	}
+	return cfg
+}
+
 func createAggregateMetadataCollection1786(tb testing.TB, d *backenddb.DB, cfg *ColumnStoreConfig) *Collection {
 	tb.Helper()
 	mgr := NewCollectionManager(d)
@@ -368,6 +451,8 @@ func BenchmarkAggregateMetadataTypedColumnPart1786(b *testing.B) {
 	reqMetadataTopK.TopKOrder = ColumnPhysicalQueryTopKInt64Desc
 	reqMetadataTopK.SkipEmptyGroupKey = true
 	reqScan := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
+	reqCountMetadata := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "did", AggregateMetadataName: "count_did", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
+	reqCountScan := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "did", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify}
 
 	b.Run("typed_column_metadata", func(b *testing.B) {
 		d, col := openAggregateMetadataTypedColumnPartFixture1786(b, events)
@@ -442,6 +527,80 @@ func BenchmarkAggregateMetadataTypedColumnPart1786(b *testing.B) {
 		}
 		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
 	})
+	b.Run("typed_column_group_count_metadata", func(b *testing.B) {
+		d, col := openAggregateMetadataCountTypedColumnPartFixture3000(b, events)
+		defer func() { _ = d.Close() }()
+		preview, err := col.RunColumnPhysicalQuery(reqCountMetadata)
+		if err != nil {
+			b.Fatalf("preview group-count metadata: %v", err)
+		}
+		if preview.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceAggregateMetadata || len(preview.Groups) == 0 {
+			b.Fatalf("preview group-count metadata diagnostics=%+v groups=%d", preview.Diagnostics, len(preview.Groups))
+		}
+		b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+		b.ReportAllocs()
+		b.ResetTimer()
+		var last ColumnPhysicalQueryDiagnostics
+		for i := 0; i < b.N; i++ {
+			result, err := col.RunColumnPhysicalQuery(reqCountMetadata)
+			if err != nil {
+				b.Fatalf("RunColumnPhysicalQuery group-count metadata: %v", err)
+			}
+			last = result.Diagnostics
+		}
+		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
+	})
+	b.Run("typed_column_group_count_metadata_prepared", func(b *testing.B) {
+		d, col := openAggregateMetadataCountTypedColumnPartFixture3000(b, events)
+		defer func() { _ = d.Close() }()
+		runner, err := col.PrepareColumnPhysicalQuery(reqCountMetadata)
+		if err != nil {
+			b.Fatalf("PrepareColumnPhysicalQuery group-count metadata: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		preview, err := runner.Run()
+		if err != nil {
+			b.Fatalf("preview prepared group-count metadata: %v", err)
+		}
+		if preview.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceAggregateMetadata || len(preview.Groups) == 0 {
+			b.Fatalf("preview prepared group-count metadata diagnostics=%+v groups=%d", preview.Diagnostics, len(preview.Groups))
+		}
+		b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+		b.ReportAllocs()
+		b.ResetTimer()
+		var last ColumnPhysicalQueryDiagnostics
+		for i := 0; i < b.N; i++ {
+			result, err := runner.Run()
+			if err != nil {
+				b.Fatalf("runner Run group-count metadata: %v", err)
+			}
+			last = result.Diagnostics
+		}
+		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
+	})
+	b.Run("typed_column_group_count_direct_scan", func(b *testing.B) {
+		d, col := openAggregateMetadataCountTypedColumnPartFixture3000(b, events)
+		defer func() { _ = d.Close() }()
+		preview, err := col.RunColumnPhysicalQuery(reqCountScan)
+		if err != nil {
+			b.Fatalf("preview group-count scan: %v", err)
+		}
+		if preview.Diagnostics.StorageSource == ColumnPhysicalQueryStorageSourceAggregateMetadata || len(preview.Groups) == 0 {
+			b.Fatalf("preview group-count scan diagnostics=%+v groups=%d", preview.Diagnostics, len(preview.Groups))
+		}
+		b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+		b.ReportAllocs()
+		b.ResetTimer()
+		var last ColumnPhysicalQueryDiagnostics
+		for i := 0; i < b.N; i++ {
+			result, err := col.RunColumnPhysicalQuery(reqCountScan)
+			if err != nil {
+				b.Fatalf("RunColumnPhysicalQuery group-count scan: %v", err)
+			}
+			last = result.Diagnostics
+		}
+		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
+	})
 	b.Run("typed_row_asset_direct_scan", func(b *testing.B) {
 		col, closeFn := openColumnPhysicalQueryFixtureM13B(b, events)
 		defer closeFn()
@@ -482,6 +641,14 @@ func BenchmarkAggregateMetadataTypedColumnPart1786(b *testing.B) {
 		}
 		reportAggregateMetadataPhysicalQueryBench1786(b, last, rows)
 	})
+}
+
+func openAggregateMetadataCountTypedColumnPartFixture3000(tb testing.TB, events []columnPhysicalQueryEventM13B) (*backenddb.DB, *Collection) {
+	tb.Helper()
+	d := openTypedColumnInt64ScanDB(tb)
+	col := createAggregateMetadataCollection1786(tb, d, aggregateMetadataCountTypedColumnPartConfig3000())
+	insertAggregateMetadataEvents1786(tb, col, events)
+	return d, col
 }
 
 func openAggregateMetadataDocumentFixture1786(tb testing.TB, events []columnPhysicalQueryEventM13B) (*backenddb.DB, *Collection) {
@@ -600,5 +767,20 @@ func assertAggregateMetadataTypedColumnDiagnostics1786(t testing.TB, diag Column
 	}
 	if diag.ScheduledGranules == 0 || diag.SkippedGranules != 0 {
 		t.Fatalf("typed-column aggregate metadata skip diagnostics=%+v", diag)
+	}
+}
+
+func assertAggregateMetadataGroupCount3000(t testing.TB, label string, result ColumnPhysicalQueryResult, wantCounts map[string]int, wantRows int) {
+	t.Helper()
+	if result.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceAggregateMetadata || result.Diagnostics.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		t.Fatalf("%s diagnostics storage/fallback=%+v", label, result.Diagnostics)
+	}
+	assertAggregateMetadataTypedColumnDiagnostics1786(t, result.Diagnostics, wantRows)
+	if result.Diagnostics.ProjectedColumns != 1 || result.Diagnostics.PredicateCount != 0 {
+		t.Fatalf("%s projected/predicate diagnostics=%+v want one projected group column and no predicates", label, result.Diagnostics)
+	}
+	gotCounts := columnPhysicalQueryGroupCountsM14B(result.Groups)
+	if !reflect.DeepEqual(gotCounts, wantCounts) {
+		t.Fatalf("%s counts=%v want %v groups=%+v", label, gotCounts, wantCounts, result.Groups)
 	}
 }
