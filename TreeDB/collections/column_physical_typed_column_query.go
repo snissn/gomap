@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
+	"slices"
 	"sort"
 	"time"
 )
@@ -12,8 +14,9 @@ import (
 const columnTypedColumnDenseGroupCountDistinctMaxBitsetWords = 2 << 20
 
 const (
-	columnTypedColumnDenseGroupCountDistinctReducerPairBitset    = "pair_bitset"
-	columnTypedColumnDenseGroupCountDistinctReducerPackedPairMap = "packed_pair_map"
+	columnTypedColumnDenseGroupCountDistinctReducerPairBitset   = "pair_bitset"
+	columnTypedColumnDenseGroupCountDistinctReducerActiveBitset = "active_group_bitset"
+	columnTypedColumnDenseGroupCountDistinctReducerSortedPairs  = "sorted_packed_pairs"
 )
 
 type columnTypedColumnPhysicalQueryPlan struct {
@@ -153,7 +156,10 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	denseGroupCountDistinctCounts         []int
 	denseGroupCountDistinctDistinctCounts []int
 	denseGroupCountDistinctPairBits       []uint64
-	denseGroupCountDistinctPairs          map[uint64]struct{}
+	denseGroupCountDistinctGroupActive    []bool
+	denseGroupCountDistinctGroupOffsets   []int
+	denseGroupCountDistinctActiveGroups   []int
+	denseGroupCountDistinctPairList       []uint64
 	denseGroupHourCounts                  map[string][24]int
 	denseLocalHourCounts                  []int
 	denseSpanValues                       map[string]columnPhysicalQuerySpan
@@ -2203,15 +2209,29 @@ func columnTypedColumnDenseGroupCountDistinctBitsetLayout(groupCardinality, dist
 	if wordsPerGroup <= 0 {
 		return 0, 0, false
 	}
-	maxInt := int(^uint(0) >> 1)
-	if groupCardinality > maxInt/wordsPerGroup {
-		return 0, 0, false
-	}
-	totalWords := groupCardinality * wordsPerGroup
-	if totalWords > columnTypedColumnDenseGroupCountDistinctMaxBitsetWords {
-		return 0, 0, false
+	totalWords, ok := columnTypedColumnDenseGroupCountDistinctBitsetWords(groupCardinality, wordsPerGroup)
+	if !ok {
+		return wordsPerGroup, 0, false
 	}
 	return wordsPerGroup, totalWords, true
+}
+
+func columnTypedColumnDenseGroupCountDistinctBitsetWords(groups, wordsPerGroup int) (int, bool) {
+	if groups < 0 || wordsPerGroup < 0 {
+		return 0, false
+	}
+	if groups == 0 || wordsPerGroup == 0 {
+		return 0, true
+	}
+	maxInt := int(^uint(0) >> 1)
+	if groups > maxInt/wordsPerGroup {
+		return 0, false
+	}
+	totalWords := groups * wordsPerGroup
+	if totalWords > columnTypedColumnDenseGroupCountDistinctMaxBitsetWords {
+		return 0, false
+	}
+	return totalWords, true
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinct(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
@@ -2253,6 +2273,9 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinct(view c
 		clear(r.denseGroupCountDistinctDistinctCounts)
 	}
 	wordsPerGroup, pairBitWords, usePairBitset := columnTypedColumnDenseGroupCountDistinctBitsetLayout(groupCardinality, distinctCardinality)
+	reducer := columnTypedColumnDenseGroupCountDistinctReducerPairBitset
+	useActivePairBitset := false
+	useSortedPairs := false
 	if usePairBitset {
 		if cap(r.denseGroupCountDistinctPairBits) < pairBitWords {
 			r.denseGroupCountDistinctPairBits = make([]uint64, pairBitWords)
@@ -2260,12 +2283,28 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinct(view c
 			r.denseGroupCountDistinctPairBits = r.denseGroupCountDistinctPairBits[:pairBitWords]
 			clear(r.denseGroupCountDistinctPairBits)
 		}
-	} else {
-		if r.denseGroupCountDistinctPairs == nil {
-			r.denseGroupCountDistinctPairs = make(map[uint64]struct{}, groupCardinality)
+	} else if wordsPerGroup > 0 && wordsPerGroup <= columnTypedColumnDenseGroupCountDistinctMaxBitsetWords {
+		reducer = columnTypedColumnDenseGroupCountDistinctReducerActiveBitset
+		useActivePairBitset = true
+		pairBitWords = 0
+		r.denseGroupCountDistinctPairBits = r.denseGroupCountDistinctPairBits[:0]
+		if cap(r.denseGroupCountDistinctGroupActive) < groupCardinality {
+			r.denseGroupCountDistinctGroupActive = make([]bool, groupCardinality)
 		} else {
-			clear(r.denseGroupCountDistinctPairs)
+			r.denseGroupCountDistinctGroupActive = r.denseGroupCountDistinctGroupActive[:groupCardinality]
+			clear(r.denseGroupCountDistinctGroupActive)
 		}
+		if cap(r.denseGroupCountDistinctGroupOffsets) < groupCardinality {
+			r.denseGroupCountDistinctGroupOffsets = make([]int, groupCardinality)
+		} else {
+			r.denseGroupCountDistinctGroupOffsets = r.denseGroupCountDistinctGroupOffsets[:groupCardinality]
+		}
+		r.denseGroupCountDistinctActiveGroups = r.denseGroupCountDistinctActiveGroups[:0]
+	} else {
+		reducer = columnTypedColumnDenseGroupCountDistinctReducerSortedPairs
+		useSortedPairs = true
+		pairBitWords = 0
+		r.denseGroupCountDistinctPairList = r.denseGroupCountDistinctPairList[:0]
 	}
 
 	rowsScanned := 0
@@ -2319,35 +2358,72 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinct(view c
 				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group code[%d]=%d outside cardinality=%d", partIdx, rowIdx, groupCode, len(r.denseGroupCountDistinctCounts))
 			}
 			r.denseGroupCountDistinctCounts[groupIdx]++
+			distinctIdx, ok := columnDictionaryCodeIndex(distinctCode, distinctCardinality)
+			if !ok {
+				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseGroupCountDistinctUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct code[%d]=%d outside cardinality=%d", partIdx, rowIdx, distinctCode, distinctCardinality)
+			}
 			if usePairBitset {
-				distinctIdx, ok := columnDictionaryCodeIndex(distinctCode, distinctCardinality)
-				if !ok {
-					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
-					diag.DenseGroupCountDistinctUsed = true
-					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct code[%d]=%d outside cardinality=%d", partIdx, rowIdx, distinctCode, distinctCardinality)
-				}
 				wordIdx := groupIdx*wordsPerGroup + distinctIdx/64
 				mask := uint64(1) << uint(distinctIdx&63)
 				if r.denseGroupCountDistinctPairBits[wordIdx]&mask == 0 {
 					r.denseGroupCountDistinctPairBits[wordIdx] |= mask
 					r.denseGroupCountDistinctDistinctCounts[groupIdx]++
 				}
+			} else if useActivePairBitset {
+				if !r.denseGroupCountDistinctGroupActive[groupIdx] {
+					nextPairBitWords, ok := columnTypedColumnDenseGroupCountDistinctBitsetWords(len(r.denseGroupCountDistinctActiveGroups)+1, wordsPerGroup)
+					if !ok {
+						r.convertDenseGroupCountDistinctActiveBitsToPairs(wordsPerGroup, distinctCardinality)
+						clear(r.denseGroupCountDistinctDistinctCounts)
+						reducer = columnTypedColumnDenseGroupCountDistinctReducerSortedPairs
+						useActivePairBitset = false
+						useSortedPairs = true
+						pairBitWords = 0
+					} else {
+						offset := len(r.denseGroupCountDistinctPairBits)
+						if cap(r.denseGroupCountDistinctPairBits) < nextPairBitWords {
+							nextBits := make([]uint64, nextPairBitWords)
+							copy(nextBits, r.denseGroupCountDistinctPairBits)
+							r.denseGroupCountDistinctPairBits = nextBits
+						} else {
+							r.denseGroupCountDistinctPairBits = r.denseGroupCountDistinctPairBits[:nextPairBitWords]
+							clear(r.denseGroupCountDistinctPairBits[offset:nextPairBitWords])
+						}
+						r.denseGroupCountDistinctGroupActive[groupIdx] = true
+						r.denseGroupCountDistinctGroupOffsets[groupIdx] = offset
+						r.denseGroupCountDistinctActiveGroups = append(r.denseGroupCountDistinctActiveGroups, groupIdx)
+						pairBitWords = nextPairBitWords
+					}
+				}
+				if useActivePairBitset {
+					wordIdx := r.denseGroupCountDistinctGroupOffsets[groupIdx] + distinctIdx/64
+					mask := uint64(1) << uint(distinctIdx&63)
+					if r.denseGroupCountDistinctPairBits[wordIdx]&mask == 0 {
+						r.denseGroupCountDistinctPairBits[wordIdx] |= mask
+						r.denseGroupCountDistinctDistinctCounts[groupIdx]++
+					}
+				} else {
+					r.denseGroupCountDistinctPairList = append(r.denseGroupCountDistinctPairList, uint64(groupIdx)<<32|uint64(distinctIdx))
+				}
 			} else {
-				pair := uint64(groupCode)<<32 | uint64(distinctCode)
-				r.denseGroupCountDistinctPairs[pair] = struct{}{}
+				r.denseGroupCountDistinctPairList = append(r.denseGroupCountDistinctPairList, uint64(groupIdx)<<32|uint64(distinctIdx))
 			}
 		}
 	}
-	if !usePairBitset {
-		for pair := range r.denseGroupCountDistinctPairs {
-			groupCode := uint32(pair >> 32)
-			groupIdx, ok := columnDictionaryCodeIndex(groupCode, len(r.denseGroupCountDistinctDistinctCounts))
-			if !ok {
-				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
-				diag.DenseGroupCountDistinctUsed = true
-				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct pair group code=%d outside cardinality=%d", groupCode, len(r.denseGroupCountDistinctDistinctCounts))
+	if useSortedPairs {
+		slices.Sort(r.denseGroupCountDistinctPairList)
+		var previous uint64
+		havePrevious := false
+		for _, pair := range r.denseGroupCountDistinctPairList {
+			if havePrevious && pair == previous {
+				continue
 			}
+			groupIdx := int(pair >> 32)
 			r.denseGroupCountDistinctDistinctCounts[groupIdx]++
+			previous = pair
+			havePrevious = true
 		}
 	}
 	r.resultGroups = r.resultGroups[:0]
@@ -2366,7 +2442,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinct(view c
 	sortColumnPhysicalQueryGroupsByKey(r.resultGroups)
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 	diag.DenseGroupCountDistinctUsed = true
-	annotateColumnTypedColumnDenseGroupCountDistinctDiagnostics(&diag, groupCardinality, distinctCardinality, pairBitWords, usePairBitset)
+	annotateColumnTypedColumnDenseGroupCountDistinctDiagnostics(&diag, groupCardinality, distinctCardinality, pairBitWords, reducer)
 	diag.ResultGroups = len(r.resultGroups)
 	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
 	finalizeColumnPhysicalQueryResultGroups(req, &result)
@@ -2374,18 +2450,32 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinct(view c
 	return result, nil
 }
 
-func annotateColumnTypedColumnDenseGroupCountDistinctDiagnostics(diag *ColumnPhysicalQueryDiagnostics, groupCardinality, distinctCardinality, pairBitWords int, usePairBitset bool) {
+func (r *columnTypedColumnPhysicalQueryRunner) convertDenseGroupCountDistinctActiveBitsToPairs(wordsPerGroup, distinctCardinality int) {
+	r.denseGroupCountDistinctPairList = r.denseGroupCountDistinctPairList[:0]
+	for _, groupIdx := range r.denseGroupCountDistinctActiveGroups {
+		offset := r.denseGroupCountDistinctGroupOffsets[groupIdx]
+		groupBits := r.denseGroupCountDistinctPairBits[offset : offset+wordsPerGroup]
+		for wordOffset, word := range groupBits {
+			for word != 0 {
+				bit := bits.TrailingZeros64(word)
+				distinctIdx := wordOffset*64 + bit
+				if distinctIdx < distinctCardinality {
+					r.denseGroupCountDistinctPairList = append(r.denseGroupCountDistinctPairList, uint64(groupIdx)<<32|uint64(distinctIdx))
+				}
+				word &= word - 1
+			}
+		}
+	}
+}
+
+func annotateColumnTypedColumnDenseGroupCountDistinctDiagnostics(diag *ColumnPhysicalQueryDiagnostics, groupCardinality, distinctCardinality, pairBitWords int, reducer string) {
 	if diag == nil {
 		return
 	}
 	diag.DenseGroupCountDistinctGroups = groupCardinality
 	diag.DenseGroupCountDistinctValues = distinctCardinality
 	diag.DenseGroupCountDistinctPairBitWords = pairBitWords
-	if usePairBitset {
-		diag.DenseGroupCountDistinctReducer = columnTypedColumnDenseGroupCountDistinctReducerPairBitset
-		return
-	}
-	diag.DenseGroupCountDistinctReducer = columnTypedColumnDenseGroupCountDistinctReducerPackedPairMap
+	diag.DenseGroupCountDistinctReducer = reducer
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupHourCount(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
