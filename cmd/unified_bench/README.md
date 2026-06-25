@@ -126,8 +126,8 @@ These are mainly for experiments and should usually be left at engine defaults:
 - `-treedb-vlog-dict-*`
 - `-treedb-vlog-rewrite-*`
 - `-treedb-flush-build-*`
-- `-treedb-flush-admission-policy=auto|explicit|off` (auto defaults to the admitted capped span-native/backlog path; off is the rollback)
-- `-treedb-flush-apply-concurrency` and `-treedb-flush-apply-min-*` (auto caps at `min(GOMAXPROCS,8)` when admitted; explicit policy preserves c4/c8/c16 experiments)
+- `-treedb-flush-admission-policy=auto|explicit|off` (auto defaults to the admitted hardware-aware span-native/backlog path; off is the rollback)
+- `-treedb-flush-apply-concurrency`, `-treedb-flush-apply-min-*`, and `-treedb-journal-lanes` (auto apply defaults to detected physical cores capped by `GOMAXPROCS` and 8, with `min(GOMAXPROCS,8)` fallback when physical cores are unknown; default journal/value-log lanes are coalescing-safe; configured apply/lane values preserve c4/c8/c16/lane experiments)
 - `-treedb-flush-apply-span-native` (M10 span-native apply/reducer override for eligible exact point spans; auto enables when admitted)
 - `-treedb-flush-span-run-target-planning` (diagnostic/default-off read-only target-leaf planning for canonical flush runs)
 - `-treedb-flush-backlog-coalescing*` (M11 bounded adaptive backlog coalescing controller; auto enables when admitted, byte/op budgets are soft pre-next-memtable limits)

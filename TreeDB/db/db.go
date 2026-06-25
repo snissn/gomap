@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,20 +46,7 @@ const (
 )
 
 func normalizeFlushApplyConcurrency(workers int) int {
-	if workers <= 1 {
-		return 0
-	}
-	gomax := runtime.GOMAXPROCS(0)
-	if gomax < 1 {
-		gomax = 1
-	}
-	if workers > gomax {
-		workers = gomax
-	}
-	if workers <= 1 {
-		return 0
-	}
-	return workers
+	return normalizeFlushApplyConcurrencyForGOMAXPROCS(workers, runtimeGOMAXPROCS())
 }
 
 type DBState struct {
@@ -1035,9 +1021,10 @@ type Options struct {
 
 	// FlushAdmissionPolicy selects how TreeDB admits the span-native/backlog
 	// flush/apply candidate path. The zero value (auto) admits the measured
-	// machine-aware capped adaptive candidate, selecting up to min(GOMAXPROCS, 8)
-	// workers on sufficiently parallel hosts and failing closed on low-concurrency
-	// hosts or DurabilityWALOffRelaxed unsafe-durability opens. Explicit preserves
+	// hardware-aware adaptive candidate, selecting up to the detected physical
+	// core count capped by GOMAXPROCS and a conservative upper bound on
+	// sufficiently parallel hosts. If physical-core detection is unavailable, auto
+	// falls back to the existing GOMAXPROCS-capped bound. Explicit preserves
 	// caller-supplied knobs; Off force-disables span-native/backlog/concurrency as
 	// a rollback policy.
 	FlushAdmissionPolicy FlushAdmissionPolicy
@@ -1045,8 +1032,8 @@ type Options struct {
 	// FlushApplyConcurrency enables M2 parallel COW apply for backend flush/write
 	// batches using a bounded reusable worker pool. It is separate from
 	// FlushBuildConcurrency. Values <=1 keep the worker-pool path off for
-	// explicit policy; the default auto admission policy chooses a machine-aware
-	// candidate capped at 8 workers when the low-concurrency guardrail passes.
+	// explicit policy; the default auto admission policy chooses a hardware-aware
+	// candidate capped by GOMAXPROCS when the low-concurrency guardrail passes.
 	FlushApplyConcurrency int
 	// FlushApplyMinEntries gates opt-in parallel apply by planned span-local ops.
 	// Values <=0 use the internal default.

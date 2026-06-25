@@ -96,23 +96,31 @@ optionally build the `SetOps` batch in parallel:
 flush/apply + backlog coalescing path:
 
 - `FlushAdmissionPolicyAuto` is the default/unconfigured policy. It admits the
-  measured machine-aware capped span-native + backlog candidate with adaptive
+  measured hardware-aware span-native + backlog candidate with adaptive
   write-side outer-leaf cache admission when the low-concurrency and durability
-  guardrails pass. The admitted worker count is `min(GOMAXPROCS, 8)`.
+  guardrails pass. The default worker count is the detected physical-core count,
+  capped by `GOMAXPROCS` and a conservative upper bound of 8. If physical-core
+  detection is unavailable, auto falls back to the existing `min(GOMAXPROCS, 8)`
+  bound.
 - `FlushAdmissionPolicyOff` is the immediate rollback policy. It force-disables
   span-native apply, backlog coalescing, and flush-apply concurrency.
 - `FlushAdmissionPolicyExplicit` preserves caller-supplied knobs for experiments
   and explicit c4/c8/c16/cache-disabled comparisons.
 
-`FlushApplyConcurrency`, `FlushApplySpanNative`, and `FlushBacklogCoalescing`
-remain available as explicit knobs. Under the default `auto` policy, TreeDB
-normalizes the admitted candidate to a capped worker count with
-`FlushApplyMinEntries=1`, `FlushApplyMinSpans=1`, `FlushApplyMinBytes=1`,
-span-native enabled, backlog coalescing enabled, and adaptive write-side cache
-admission. The policy declines low-concurrency/c1-shaped configurations and
-WAL-off unsafe durability. Leaf and value-log output remain persistent storage;
-failed or abandoned apply attempts do not publish roots, and unreachable
-prepared output is reclaimed only by reachability-based maintenance.
+`FlushApplyConcurrency`, `FlushApplySpanNative`, `FlushBacklogCoalescing`, and
+`JournalLanes` remain available as explicit knobs. Under the default `auto`
+policy, TreeDB normalizes the admitted candidate to a hardware-aware capped
+worker count with `FlushApplyMinEntries=1`, `FlushApplyMinSpans=1`,
+`FlushApplyMinBytes=1`, span-native enabled, backlog coalescing enabled, and
+adaptive write-side cache admission. A configured apply-concurrency value is an
+explicit override and is capped only by `GOMAXPROCS`. Default journal/value-log
+lanes are coalescing-safe: hot/warm/cold generation uses three total lanes (one
+hot, one warm, one cold), while generation-off cached mode defaults to one hot
+lane; configured `JournalLanes` values are authoritative. The policy declines
+low-concurrency/c1-shaped configurations and WAL-off unsafe durability. Leaf and
+value-log output remain persistent storage; failed or abandoned apply attempts do
+not publish roots, and unreachable prepared output is reclaimed only by
+reachability-based maintenance.
 
 Rollout guidance:
 
@@ -122,12 +130,16 @@ Rollout guidance:
   the option changes only in-memory apply/cache policy.
 - Use `FlushAdmissionPolicyExplicit` for non-default experiments such as c4 on
   large hosts, c16, immediate cache admission, or cache-disabled diagnostic rows.
-- Watch `treedb.flush_admission.*`, `treedb.flush_apply.*`,
+- Watch `treedb.flush_admission.*`, `treedb.cache.journal_lanes.*`,
+  `treedb.cache.memtable_shards`, `treedb.flush_apply.*`,
   `treedb.cache.flush_apply.*`, `prepared_output.*`, checkpoint wall times,
   allocation profiles, cache hit/store/eviction counters, and final
   `index.db`/`leaf_vlog` footprint. Reproducible regressions in read/scan
   throughput, checkpoint time, allocation volume, or footprint should trigger
   rollback or a narrower explicit policy.
+
+The current hardware-aware/coalescing-safe default formula and benchmark gate
+commands are summarized in `docs/TREEDB_DEFAULT_POLICY_2996.md`.
 
 M5/#2788 evidence is recorded in
 `docs/TREEDB_SPAN_NATIVE_DEFAULT_GATE_M5_REPORT.md`. The reports for issues
