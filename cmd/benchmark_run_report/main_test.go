@@ -12,6 +12,7 @@ import (
 func TestDeepReportFromRunRoot(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "HEAD.txt"), "HEAD=abc123def456\norigin/main=999888777666\n")
+	writeFile(t, filepath.Join(root, "commands.log"), "command: go test ./cmd/benchmark_run_report\nexit_status: 0 duration_sec: 2\ncommand: scripts/bench_collections_canonical.sh --smoke\nexit_status: 1 duration_sec: 5\nwarning: collections failed with exit status 1; continuing so the final report can render\n")
 	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_checkpoint_between_tests", "benchprof_results.json"), `{
   "runs": [{
     "profile": "wal_on_fast",
@@ -128,6 +129,9 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"test report",
 		"HEAD=abc123def456",
 		"origin/main=999888777666",
+		"Run Status",
+		"Partial run: 1 of 2 recorded commands exited nonzero.",
+		"collections failed with exit status 1",
 		"Mongo API Full Sweep",
 		"Mongo API InsertMany Producer Scaling",
 		"Load-Only Client-Mode Matrix",
@@ -219,10 +223,104 @@ func TestRenderHTMLNavOmitsMissingSections(t *testing.T) {
 	if !strings.Contains(html, "href=\"#mongo-load\"") {
 		t.Fatalf("nav missing present load-mode section\n%s", html)
 	}
-	for _, absent := range []string{"href=\"#mongo-full\"", "href=\"#mongo-load-scaling\"", "href=\"#scaling\"", "href=\"#collections\"", "href=\"#raw-engine\""} {
+	for _, absent := range []string{"href=\"#run-status\"", "href=\"#mongo-full\"", "href=\"#mongo-load-scaling\"", "href=\"#scaling\"", "href=\"#collections\"", "href=\"#raw-engine\""} {
 		if strings.Contains(html, absent) {
 			t.Fatalf("nav includes missing section %s\n%s", absent, html)
 		}
+	}
+}
+
+func TestLoadCommandLogAndRenderRunStatus(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "commands.log")
+	writeFile(t, path, "command: go test ./...\nexit_status: 0 duration_sec: 12\ncommand: scripts/fail.sh\nexit_status: 2 duration_sec: 3\nwarning: fail.sh failed with exit status 2; continuing so the final report can render\n")
+
+	commands, warnings := loadCommandLog(path)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands = %v, want 2", commands)
+	}
+	if commands[1].ExitStatus != 2 || commands[1].DurationSec != 3 || !strings.Contains(commands[1].Warning, "exit status 2") {
+		t.Fatalf("failed command parsed incorrectly: %+v", commands[1])
+	}
+
+	var b strings.Builder
+	renderRunStatus(&b, commands, nil)
+	html := b.String()
+	for _, want := range []string{
+		"Run Status",
+		"Partial run: 1 of 2 recorded commands exited nonzero.",
+		"scripts/fail.sh",
+		"fail.sh failed with exit status 2",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("run status missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestRunStatusReportsSkippedMissingAndOptionalSections(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "RUNBOOK.md"), `# Full TreeDB Benchmark Report Run
+
+- skip_raw: false
+- skip_collections: true
+- skip_mongo: false
+- skip_load_modes: true
+- skip_load_scaling: false
+- skip_scaling: false
+`)
+	writeFile(t, filepath.Join(root, "commands.log"), "command: smoke\nexit_status: 0 duration_sec: 1\n")
+	if err := os.MkdirAll(filepath.Join(root, "mongo_gateway_load_scaling_1m"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(root, "deep_report.html")
+	if err := run([]string{"-run-root", root, "-out", out, "-title", "partial fixture"}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	html := readFile(t, out)
+	for _, want := range []string{
+		"Run Status",
+		"Partial run:",
+		"expected artifact section(s) are missing or partial",
+		"artifact section(s) were intentionally skipped",
+		"Artifact Sections",
+		"Raw TreeDB engine",
+		"missing required",
+		"Collections vs SQLite",
+		"skipped",
+		"skip flag set in RUNBOOK.md",
+		"Mongo InsertMany producer scaling",
+		"partial",
+		"missing optional",
+		"profile manifests",
+		"mongo load scaling: mongo_gateway_load_scaling_1m is missing summary.tsv",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("partial status missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestOldArtifactWithoutCommandsLogStillRenders(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "summary.tsv"), mongoSummaryFixture(0))
+
+	out := filepath.Join(root, "deep_report.html")
+	if err := run([]string{"-run-root", root, "-out", out, "-title", "old artifact"}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	html := readFile(t, out)
+	for _, want := range []string{"old artifact", "Mongo API Full Sweep"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("legacy report missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "Run Status") {
+		t.Fatalf("legacy report without RUNBOOK.md/commands.log should not require status block\n%s", html)
 	}
 }
 
