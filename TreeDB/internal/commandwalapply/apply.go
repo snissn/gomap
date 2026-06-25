@@ -53,10 +53,8 @@ type Options struct {
 // Handle is the append token required to publish the same local command-WAL
 // frame after the normal executor has made the command locally visible.
 type Handle struct {
-	intent  *backenddb.CommandWALIntent
-	lsn     uint64
-	db      *backenddb.DB
-	release func()
+	intent *backenddb.CommandWALIntent
+	lsn    uint64
 }
 
 // LSN returns the local command-WAL sequence number assigned at append time.
@@ -101,16 +99,6 @@ func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options)
 	if err := validateLoweredFrame(frame); err != nil {
 		return Handle{}, Result{}, err
 	}
-	release, err := acquireApplySlot(db)
-	if err != nil {
-		return Handle{}, Result{}, err
-	}
-	releaseOnError := true
-	defer func() {
-		if releaseOnError {
-			release()
-		}
-	}()
 	intent, err := db.NewCommandWALIntent(frame.Kind, frame.Scope, frame.PayloadFormat, frame.Payload)
 	if err != nil {
 		return Handle{}, Result{}, err
@@ -118,16 +106,17 @@ func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options)
 	if intent == nil {
 		return Handle{}, Result{}, fmt.Errorf("%w: command wal apply intent unavailable", backenddb.ErrCommandWALUnsupported)
 	}
+	applyAppendMu.Lock()
+	defer applyAppendMu.Unlock()
+	applied := appliedCommandLSN(db)
+	if err := checkContiguousAppendReady(db, applied); err != nil {
+		return Handle{}, Result{}, err
+	}
 	lsn, err := db.AppendCommandWALIntent(intent, opts.Sync)
 	if err != nil {
 		return Handle{}, Result{}, err
 	}
-	releaseOnError = false
-	applied := uint64(0)
-	if state := db.State(); state != nil {
-		applied = state.AppliedCommandLSN
-	}
-	return Handle{intent: intent, lsn: lsn, db: db, release: release}, Result{
+	return Handle{intent: intent, lsn: lsn}, Result{
 		LSN:               lsn,
 		Status:            StatusLocallyWALRecoverable,
 		AppliedCommandLSN: applied,
@@ -144,12 +133,6 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	}
 	if handle.intent == nil || handle.lsn == 0 {
 		return Result{}, fmt.Errorf("%w: command wal apply finalize missing appended frame", backenddb.ErrCommandWALRejected)
-	}
-	if handle.db != nil && handle.db != db {
-		return Result{}, fmt.Errorf("%w: command wal apply handle belongs to a different DB", backenddb.ErrCommandWALRejected)
-	}
-	if handle.release != nil {
-		defer handle.release()
 	}
 	if err := db.PublishCommandWALNoop(handle.intent, opts.Sync); err != nil {
 		return Result{}, err
@@ -200,27 +183,22 @@ func validateTestNoopFrame(frame LoweredFrame) error {
 	return nil
 }
 
-var applySlots struct {
-	sync.Mutex
-	active map[*backenddb.DB]bool
+var applyAppendMu sync.Mutex
+
+func checkContiguousAppendReady(db *backenddb.DB, applied uint64) error {
+	next := db.CommandWALNextLSN()
+	if next == 0 {
+		return fmt.Errorf("%w: command wal apply next LSN unavailable", backenddb.ErrCommandWALUnsupported)
+	}
+	if next != applied+1 {
+		return fmt.Errorf("%w: command wal apply has outstanding frame next_lsn=%d applied_lsn=%d", backenddb.ErrCommandWALRejected, next, applied)
+	}
+	return nil
 }
 
-func acquireApplySlot(db *backenddb.DB) (func(), error) {
-	applySlots.Lock()
-	defer applySlots.Unlock()
-	if applySlots.active == nil {
-		applySlots.active = make(map[*backenddb.DB]bool)
+func appliedCommandLSN(db *backenddb.DB) uint64 {
+	if state := db.State(); state != nil {
+		return state.AppliedCommandLSN
 	}
-	if applySlots.active[db] {
-		return nil, fmt.Errorf("%w: command wal apply already has an outstanding frame", backenddb.ErrCommandWALRejected)
-	}
-	applySlots.active[db] = true
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			applySlots.Lock()
-			delete(applySlots.active, db)
-			applySlots.Unlock()
-		})
-	}, nil
+	return 0
 }
