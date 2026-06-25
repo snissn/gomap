@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,66 @@ func TestPrepareRunDirRemovesPriorCanonicalArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, runDirSentinel)); err != nil {
 		t.Fatalf("run-dir sentinel should be present: %v", err)
+	}
+}
+
+func TestRunReportPhaseRecordsWarningAndContinues(t *testing.T) {
+	canon := &canonicalRun{}
+	called := false
+
+	runReportPhase(canon, "warning", "phase.test.failed", "test phase", func() error {
+		called = true
+		return errors.New("boom")
+	})
+
+	if !called {
+		t.Fatal("optional phase was not called")
+	}
+	if len(canon.Checks) != 1 {
+		t.Fatalf("checks = %#v, want one warning", canon.Checks)
+	}
+	check := canon.Checks[0]
+	if check.Severity != "warning" || check.Code != "phase.test.failed" || !strings.Contains(check.Message, "boom") {
+		t.Fatalf("unexpected optional phase warning: %#v", check)
+	}
+}
+
+func TestRunReportPhaseRecordsErrorAndContinues(t *testing.T) {
+	canon := &canonicalRun{}
+
+	runReportPhase(canon, "error", "phase.required.failed", "required phase", func() error {
+		return errors.New("boom")
+	})
+
+	if len(canon.Checks) != 1 {
+		t.Fatalf("checks = %#v, want one error", canon.Checks)
+	}
+	check := canon.Checks[0]
+	if check.Severity != "error" || check.Code != "phase.required.failed" || !strings.Contains(check.Message, "boom") {
+		t.Fatalf("unexpected required phase error: %#v", check)
+	}
+}
+
+func TestCanonicalValidationPreservesExistingWarnings(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Checks = append(canon.Checks, guardrailCheck{
+		Severity: "warning",
+		Code:     "phase.exhaustive_compact.failed",
+		Message:  "exhaustive compact matrix failed",
+	})
+	canon.Checks = append(canon.Checks, validateCanonicalRun(canon)...)
+
+	var sawOptionalWarning bool
+	for _, check := range canon.Checks {
+		if check.Code == "phase.exhaustive_compact.failed" {
+			sawOptionalWarning = true
+		}
+		if check.Severity == "error" {
+			t.Fatalf("unexpected guardrail error: %#v", check)
+		}
+	}
+	if !sawOptionalWarning {
+		t.Fatalf("optional phase warning was not preserved: %#v", canon.Checks)
 	}
 }
 
