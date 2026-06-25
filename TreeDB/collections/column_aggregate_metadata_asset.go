@@ -9,11 +9,12 @@ import (
 
 const (
 	columnAggregateMetadataAssetMagic   = uint32(0x5443414d) // TCAM
-	columnAggregateMetadataAssetVersion = uint16(3)
+	columnAggregateMetadataAssetVersion = uint16(4)
 )
 
 type columnAggregateMetadataEntry struct {
 	Group string
+	Hour  int
 	Count int
 	Min   int64
 	Max   int64
@@ -77,7 +78,11 @@ func encodeColumnAggregateMetadataAsset(asset columnAggregateMetadataAsset) ([]b
 		if entry.Count <= 0 {
 			return nil, errors.New("collections: aggregate metadata asset entry count must be positive")
 		}
+		if entry.Hour < 0 || entry.Hour >= 24 {
+			return nil, errors.New("collections: aggregate metadata asset entry hour must be in [0, 23]")
+		}
 		writeManifestString(&b, entry.Group)
+		writeManifestUint64(&b, uint64(entry.Hour))
 		writeManifestUint64(&b, uint64(entry.Count))
 		writeManifestUint64(&b, uint64(entry.Min))
 		writeManifestUint64(&b, uint64(entry.Max))
@@ -155,6 +160,10 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 	asset.Entries = make([]columnAggregateMetadataEntry, 0, int(entryCount))
 	for i := 0; i < int(entryCount); i++ {
 		group := cur.string()
+		hour := uint64(0)
+		if version >= 4 {
+			hour = cur.u64()
+		}
 		count := cur.u64()
 		min := int64(cur.u64())
 		max := int64(cur.u64())
@@ -164,7 +173,10 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 		if count == 0 || count > uint64(maxCollectionInt) {
 			return columnAggregateMetadataAsset{}, errors.New("collections: aggregate metadata asset entry count overflows int or is zero")
 		}
-		asset.Entries = append(asset.Entries, columnAggregateMetadataEntry{Group: group, Count: int(count), Min: min, Max: max})
+		if hour >= 24 {
+			return columnAggregateMetadataAsset{}, errors.New("collections: aggregate metadata asset entry hour is outside [0, 23]")
+		}
+		asset.Entries = append(asset.Entries, columnAggregateMetadataEntry{Group: group, Hour: int(hour), Count: int(count), Min: min, Max: max})
 	}
 	if cur.pos != len(raw) {
 		return columnAggregateMetadataAsset{}, errors.New("collections: trailing bytes in aggregate metadata asset")
@@ -203,11 +215,12 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 
 // buildColumnAggregateMetadataAsset supports the current insert-only metadata
 // shape: every non-deleted row must have present, non-null string group values
-// and int64 aggregate values. Rows counts the full input row set, including
-// deleted rows, while Entries reflects only non-deleted, type-validated rows.
+// and any required int64 aggregate values. Rows counts the full input row set,
+// including deleted rows, while Entries reflects only non-deleted,
+// type-validated rows.
 func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregate ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) (columnAggregateMetadataAsset, bool, error) {
 	switch aggregate.Kind {
-	case ColumnAggregateCount, ColumnAggregateMin, ColumnAggregateMax:
+	case ColumnAggregateCount, ColumnAggregateGroupHourCount, ColumnAggregateMin, ColumnAggregateMax:
 	default:
 		return columnAggregateMetadataAsset{}, false, nil
 	}
@@ -259,12 +272,16 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 	}
 	rows = metadataRows
 	entries := make([]columnAggregateMetadataEntry, 0)
+	type metadataEntryKey struct {
+		group string
+		hour  int
+	}
 	for start := 0; start < len(rows); start += rowsPerMetadataEntrySet {
 		end := start + rowsPerMetadataEntrySet
 		if end > len(rows) {
 			end = len(rows)
 		}
-		entriesByGroup := make(map[string]columnAggregateMetadataEntry)
+		entriesByKey := make(map[metadataEntryKey]columnAggregateMetadataEntry)
 		for _, row := range rows[start:end] {
 			if row.Deleted {
 				continue
@@ -290,11 +307,12 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 			if group == "" && groupValue.StringBytes != nil {
 				group = string(groupValue.StringBytes)
 			}
+			key := metadataEntryKey{group: group}
 			if aggregate.Kind == ColumnAggregateCount {
-				cur := entriesByGroup[group]
+				cur := entriesByKey[key]
 				cur.Group = group
 				cur.Count++
-				entriesByGroup[group] = cur
+				entriesByKey[key] = cur
 				continue
 			}
 			valueValue := row.Values[valueIdx]
@@ -304,9 +322,18 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 			if valueValue.Type != ColumnStoreValueInt64 {
 				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
 			}
-			cur, ok := entriesByGroup[group]
+			if aggregate.Kind == ColumnAggregateGroupHourCount {
+				key.hour = columnPhysicalQueryUTCHour(valueValue.Int64)
+				cur := entriesByKey[key]
+				cur.Group = group
+				cur.Hour = key.hour
+				cur.Count++
+				entriesByKey[key] = cur
+				continue
+			}
+			cur, ok := entriesByKey[key]
 			if !ok {
-				entriesByGroup[group] = columnAggregateMetadataEntry{Group: group, Count: 1, Min: valueValue.Int64, Max: valueValue.Int64}
+				entriesByKey[key] = columnAggregateMetadataEntry{Group: group, Count: 1, Min: valueValue.Int64, Max: valueValue.Int64}
 				continue
 			}
 			cur.Count++
@@ -316,13 +343,18 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 			if valueValue.Int64 > cur.Max {
 				cur.Max = valueValue.Int64
 			}
-			entriesByGroup[group] = cur
+			entriesByKey[key] = cur
 		}
-		granuleEntries := make([]columnAggregateMetadataEntry, 0, len(entriesByGroup))
-		for _, entry := range entriesByGroup {
+		granuleEntries := make([]columnAggregateMetadataEntry, 0, len(entriesByKey))
+		for _, entry := range entriesByKey {
 			granuleEntries = append(granuleEntries, entry)
 		}
-		sort.Slice(granuleEntries, func(i, j int) bool { return granuleEntries[i].Group < granuleEntries[j].Group })
+		sort.Slice(granuleEntries, func(i, j int) bool {
+			if granuleEntries[i].Group != granuleEntries[j].Group {
+				return granuleEntries[i].Group < granuleEntries[j].Group
+			}
+			return granuleEntries[i].Hour < granuleEntries[j].Hour
+		})
 		entries = append(entries, granuleEntries...)
 	}
 	return columnAggregateMetadataAsset{

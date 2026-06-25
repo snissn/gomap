@@ -114,6 +114,45 @@ func TestPredicateQualifiedAggregateMetadataQ4Q5DirectPrepared1951(t *testing.T)
 	}
 }
 
+func TestPredicateQualifiedAggregateMetadataQ3GroupHourDirectPrepared2892(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBatchA1950(), columnPhysicalQ3DenseBatchB1950()}
+	events := flattenColumnPhysicalEvents1950(batches)
+	_, col, closeFn := openPredicateAggregateMetadataFixtureWithConfig1951(t, predicateAggregateMetadataQ3Config2892(), batches)
+	defer closeFn()
+
+	full, err := col.RunColumnPhysicalQuery(columnPredicateAggregateMetadataQ3Request2892(false))
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery full q3: %v", err)
+	}
+	want := columnPhysicalQ3DenseReferenceGroups1950(events)
+	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q3", events)
+	if !equalColumnPhysicalGroups1871(full.Groups, want) {
+		t.Fatalf("full q3 groups=%+v want %+v", full.Groups, want)
+	}
+	if full.Diagnostics.StorageSource == ColumnPhysicalQueryStorageSourceAggregateMetadata || full.Diagnostics.RowsScanned != len(events) || full.Diagnostics.RowsMatched != matchedRows {
+		t.Fatalf("full q3 diagnostics=%+v want data scan over real predicates", full.Diagnostics)
+	}
+
+	metadata, err := col.RunColumnPhysicalQuery(columnPredicateAggregateMetadataQ3Request2892(true))
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery metadata q3: %v", err)
+	}
+	assertPredicateAggregateMetadataQ3Result2892(t, "direct metadata q3", metadata, want, matchedRows, len(events))
+
+	runner, err := col.PrepareColumnPhysicalQuery(columnPredicateAggregateMetadataQ3Request2892(true))
+	if err != nil {
+		t.Fatalf("PrepareColumnPhysicalQuery metadata q3: %v", err)
+	}
+	defer func() { _ = runner.Close() }()
+	for run := 0; run < 2; run++ {
+		prepared, err := runner.Run()
+		if err != nil {
+			t.Fatalf("prepared metadata q3 run %d: %v", run, err)
+		}
+		assertPredicateAggregateMetadataQ3Result2892(t, fmt.Sprintf("prepared metadata q3 run %d", run), prepared, want, matchedRows, len(events))
+	}
+}
+
 func TestPredicateQualifiedAggregateMetadataExactPredicateCoverage1951(t *testing.T) {
 	_, col, closeFn := openPredicateAggregateMetadataFixture1951(t, [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ5DenseBatchA1950()})
 	defer closeFn()
@@ -258,7 +297,74 @@ func BenchmarkPredicateQualifiedAggregateMetadataQ4Q5DirectPrepared1951(b *testi
 	}
 }
 
+func BenchmarkPredicateQualifiedAggregateMetadataQ3DirectPrepared2892(b *testing.B) {
+	events := columnPhysicalQ3DenseBenchmarkEvents1950(16_384)
+	_, col, closeFn := openPredicateAggregateMetadataFixtureWithConfig1951(b, predicateAggregateMetadataQ3Config2892(), [][]columnPhysicalJSONBenchParityEventP0{events})
+	defer closeFn()
+	req := columnPredicateAggregateMetadataQ3Request2892(true)
+
+	b.Run("q3_direct_metadata", func(b *testing.B) {
+		preview, err := col.RunColumnPhysicalQuery(req)
+		if err != nil {
+			b.Fatalf("preview RunColumnPhysicalQuery: %v", err)
+		}
+		b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+		b.ReportAllocs()
+		b.ResetTimer()
+		var last ColumnPhysicalQueryDiagnostics
+		var groups int
+		for i := 0; i < b.N; i++ {
+			result, err := col.RunColumnPhysicalQuery(req)
+			if err != nil {
+				b.Fatalf("RunColumnPhysicalQuery: %v", err)
+			}
+			groups += len(result.Groups)
+			last = result.Diagnostics
+		}
+		b.StopTimer()
+		if groups == 0 {
+			b.Fatal("benchmark produced no groups")
+		}
+		reportPredicateAggregateMetadataBenchMetrics1951(b, last)
+	})
+
+	b.Run("q3_prepared_metadata", func(b *testing.B) {
+		runner, err := col.PrepareColumnPhysicalQuery(req)
+		if err != nil {
+			b.Fatalf("PrepareColumnPhysicalQuery: %v", err)
+		}
+		defer func() { _ = runner.Close() }()
+		preview, err := runner.Run()
+		if err != nil {
+			b.Fatalf("preview runner.Run: %v", err)
+		}
+		b.SetBytes(preview.Diagnostics.PhysicalBytesScanned)
+		b.ReportAllocs()
+		b.ResetTimer()
+		var last ColumnPhysicalQueryDiagnostics
+		var groups int
+		for i := 0; i < b.N; i++ {
+			result, err := runner.Run()
+			if err != nil {
+				b.Fatalf("runner.Run: %v", err)
+			}
+			groups += len(result.Groups)
+			last = result.Diagnostics
+		}
+		b.StopTimer()
+		if groups == 0 {
+			b.Fatal("benchmark produced no groups")
+		}
+		reportPredicateAggregateMetadataBenchMetrics1951(b, last)
+	})
+}
+
 func openPredicateAggregateMetadataFixture1951(tb testing.TB, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {
+	tb.Helper()
+	return openPredicateAggregateMetadataFixtureWithConfig1951(tb, predicateAggregateMetadataConfig1951(), batches)
+}
+
+func openPredicateAggregateMetadataFixtureWithConfig1951(tb testing.TB, cfg *ColumnStoreConfig, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {
 	tb.Helper()
 	dir := tb.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
@@ -269,7 +375,7 @@ func openPredicateAggregateMetadataFixture1951(tb testing.TB, batches [][]column
 		tb.Fatalf("Open setup DB: %v", err)
 	}
 	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: predicateAggregateMetadataConfig1951()}}); err != nil {
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
 		_ = d.Close()
 		tb.Fatalf("CreateCollection: %v", err)
 	}
@@ -360,12 +466,47 @@ func predicateAggregateMetadataConfig1951() *ColumnStoreConfig {
 	return cfg
 }
 
+func predicateAggregateMetadataQ3Config2892() *ColumnStoreConfig {
+	cfg := typedColumnSortKeyConfig1948(nil)
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{
+		{
+			Name:        "feed_event_hour_count",
+			Column:      "time_us",
+			GroupColumn: "collection",
+			Kind:        ColumnAggregateGroupHourCount,
+			Predicates:  columnPredicateAggregateMetadataFeedPredicates2892(),
+		},
+	}
+	return cfg
+}
+
 func columnPredicateAggregateMetadataPostPredicates1951() []ColumnPhysicalQueryPredicate {
 	return []ColumnPhysicalQueryPredicate{
 		{Column: "kind", Value: "commit"},
 		{Column: "operation", Value: "create"},
 		{Column: "collection", Value: "app.bsky.feed.post"},
 	}
+}
+
+func columnPredicateAggregateMetadataFeedPredicates2892() []ColumnPhysicalQueryPredicate {
+	return []ColumnPhysicalQueryPredicate{
+		{Column: "kind", Value: "commit"},
+		{Column: "operation", Value: "create"},
+		{Column: "collection", Kind: ColumnPhysicalQueryPredicateInList, Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"}},
+	}
+}
+
+func columnPredicateAggregateMetadataQ3Request2892(metadata bool) ColumnPhysicalQueryRequest {
+	req := ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupHourCount,
+		GroupColumn: "collection",
+		ValueColumn: "time_us",
+		Predicates:  columnPredicateAggregateMetadataFeedPredicates2892(),
+	}
+	if metadata {
+		req.AggregateMetadataName = "feed_event_hour_count"
+	}
+	return req
 }
 
 func columnPredicateAggregateMetadataQ4Request1951(metadata bool) ColumnPhysicalQueryRequest {
@@ -427,6 +568,38 @@ func assertPredicateAggregateMetadataResult1951(tb testing.TB, label string, res
 	}
 	if diag.MetadataEntries > matchedRows || matchedRows <= 0 || totalRows <= matchedRows {
 		tb.Fatalf("%s unexpected metadata/source counts diagnostics=%+v matched=%d total=%d", label, diag, matchedRows, totalRows)
+	}
+}
+
+func assertPredicateAggregateMetadataQ3Result2892(tb testing.TB, label string, result ColumnPhysicalQueryResult, want []ColumnPhysicalQueryGroup, matchedRows, totalRows int) {
+	tb.Helper()
+	if !equalColumnPhysicalGroups1871(result.Groups, want) {
+		tb.Fatalf("%s groups=%+v want %+v", label, result.Groups, want)
+	}
+	diag := result.Diagnostics
+	if diag.StorageSource != ColumnPhysicalQueryStorageSourceAggregateMetadata || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		tb.Fatalf("%s diagnostics storage/fallback=%+v", label, diag)
+	}
+	if diag.RowsScanned != 0 || diag.DecodedBlocks != 0 || diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 {
+		tb.Fatalf("%s metadata path scanned/materialized data rows: %+v", label, diag)
+	}
+	expectedPredicates := columnPredicateAggregateMetadataFeedPredicates2892()
+	expectedLiterals := 0
+	for _, predicate := range expectedPredicates {
+		if columnPhysicalQueryPredicateKindOrDefault(predicate.Kind) == ColumnPhysicalQueryPredicateInList {
+			expectedLiterals += len(predicate.Values)
+		} else {
+			expectedLiterals++
+		}
+	}
+	if diag.PredicateCount != len(expectedPredicates) || diag.PredicateLiterals != expectedLiterals || diag.RowsMatched != matchedRows || diag.ReduceRows != matchedRows {
+		tb.Fatalf("%s predicate/source-row diagnostics=%+v want predicates=%d literals=%d matched/reduced=%d", label, diag, len(expectedPredicates), expectedLiterals, matchedRows)
+	}
+	if diag.MetadataHits == 0 || diag.MetadataEntries == 0 || diag.DecodedMetadataBytes == 0 || diag.PhysicalBytesScanned <= 0 {
+		tb.Fatalf("%s metadata diagnostics=%+v want metadata entries/hits/bytes", label, diag)
+	}
+	if diag.MetadataEntries > matchedRows || matchedRows <= 0 || totalRows <= matchedRows || diag.ResultGroups != len(want) {
+		tb.Fatalf("%s unexpected metadata/source counts diagnostics=%+v matched=%d total=%d result_groups=%d", label, diag, matchedRows, totalRows, len(want))
 	}
 }
 

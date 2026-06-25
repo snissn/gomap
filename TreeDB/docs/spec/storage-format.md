@@ -849,12 +849,14 @@ entries  grouped aggregate entries
 Version 1 assets did not carry predicate coverage. Version 2 adds exact
 predicate coverage for equality and bounded string `IN` predicates. Version 3
 keeps the v2 predicate encoding and permits grouped `count` metadata with an
-empty `ValueColumn`; `min`/`max` metadata still requires a value column. Each
-entry stores `Group`, `Count`, `Min`, and `Max`; grouped count entries populate
-`Count` and leave `Min`/`Max` at zero. Readers only accept an asset when
-collection, namespace, generation, part id, schema hash, aggregate name,
-predicate coverage, group column, value column where required, and aggregate
-kind match the requested physical query.
+empty `ValueColumn`; `min`/`max` metadata still requires a value column. Version
+4 adds an `Hour` field to each entry for `group-hour-count` metadata. Each
+version 4 entry stores `Group`, `Hour`, `Count`, `Min`, and `Max`; grouped
+count entries use `Hour=0`, populate `Count`, and leave `Min`/`Max` at zero.
+Grouped-hour count entries populate `Group`, `Hour`, and `Count`. Readers only
+accept an asset when collection, namespace, generation, part id, schema hash,
+aggregate name, predicate coverage, group column, value column where required,
+and aggregate kind match the requested physical query.
 
 Typed-column part descriptor column type codes are currently:
 
@@ -1462,7 +1464,7 @@ control-plane state, not a sidecar hint. Current normalized fields are:
   analytical ordering, and aggregate metadata definitions. Aggregate metadata
   definitions may include exact string predicate coverage; metadata assets are
   only eligible for matching physical queries with identical predicate, group,
-  value, and aggregate shape.
+  value, hour-bucketing where applicable, and aggregate shape.
 - `retained_payload` and `reconstruction`: how non-column row bytes and column
   values reconstruct full documents. The current default retained-payload policy
   is `non-column`.

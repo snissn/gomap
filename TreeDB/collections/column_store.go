@@ -157,11 +157,12 @@ const (
 type ColumnAggregateKind string
 
 const (
-	ColumnAggregateCount         ColumnAggregateKind = "count"
-	ColumnAggregateMin           ColumnAggregateKind = "min"
-	ColumnAggregateMax           ColumnAggregateKind = "max"
-	ColumnAggregateSum           ColumnAggregateKind = "sum"
-	ColumnAggregateCountDistinct ColumnAggregateKind = "count-distinct"
+	ColumnAggregateCount          ColumnAggregateKind = "count"
+	ColumnAggregateGroupHourCount ColumnAggregateKind = "group-hour-count"
+	ColumnAggregateMin            ColumnAggregateKind = "min"
+	ColumnAggregateMax            ColumnAggregateKind = "max"
+	ColumnAggregateSum            ColumnAggregateKind = "sum"
+	ColumnAggregateCountDistinct  ColumnAggregateKind = "count-distinct"
 )
 
 type ColumnAssetManagerKind string
@@ -1057,7 +1058,7 @@ func validateColumnAggregateKind(kind ColumnAggregateKind, column string) error 
 	switch kind {
 	case ColumnAggregateCount:
 		return nil
-	case ColumnAggregateMin, ColumnAggregateMax, ColumnAggregateSum, ColumnAggregateCountDistinct:
+	case ColumnAggregateGroupHourCount, ColumnAggregateMin, ColumnAggregateMax, ColumnAggregateSum, ColumnAggregateCountDistinct:
 		if column == "" {
 			return fmt.Errorf("aggregate kind %q requires a column", kind)
 		}
@@ -1081,6 +1082,24 @@ func validateColumnAggregateMetadataPhysicalSpec(aggregate ColumnAggregateMetada
 			if groupType != ColumnStoreValueString {
 				return fmt.Errorf("collections: aggregate metadata %q group column %q has type %q, want %q", aggregate.Name, aggregate.GroupColumn, groupType, ColumnStoreValueString)
 			}
+		}
+	case ColumnAggregateGroupHourCount:
+		valueType, ok := columnTypes[aggregate.Column]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown column %q", aggregate.Name, aggregate.Column)
+		}
+		if aggregate.GroupColumn == "" {
+			return fmt.Errorf("collections: aggregate metadata %q kind %q requires a group column", aggregate.Name, aggregate.Kind)
+		}
+		groupType, ok := columnTypes[aggregate.GroupColumn]
+		if !ok {
+			return fmt.Errorf("collections: aggregate metadata %q references unknown group column %q", aggregate.Name, aggregate.GroupColumn)
+		}
+		if groupType != ColumnStoreValueString {
+			return fmt.Errorf("collections: aggregate metadata %q group column %q has type %q, want %q", aggregate.Name, aggregate.GroupColumn, groupType, ColumnStoreValueString)
+		}
+		if valueType != ColumnStoreValueInt64 {
+			return fmt.Errorf("collections: aggregate metadata %q value column %q has type %q, want %q", aggregate.Name, aggregate.Column, valueType, ColumnStoreValueInt64)
 		}
 	case ColumnAggregateMin, ColumnAggregateMax:
 		valueType, ok := columnTypes[aggregate.Column]
