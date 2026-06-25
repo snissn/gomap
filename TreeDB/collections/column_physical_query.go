@@ -614,7 +614,11 @@ func (c *Collection) runColumnPhysicalQueryAggregateMetadataInSnapshotView(view 
 	diag.StorageSource = ColumnPhysicalQueryStorageSourceAggregateMetadata
 	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
 	diag.WorkerCount = 1
-	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(predicateDiagnostics, 2)
+	projectedColumns := 2
+	if req.Kind == ColumnPhysicalQueryGroupCount {
+		projectedColumns = 1
+	}
+	diag.ProjectedColumns = columnPhysicalQueryDiagnosticProjectedColumns(predicateDiagnostics, projectedColumns)
 	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
 	diag.ScheduledGranules = len(refs)
 	for _, metadataRef := range refs {
@@ -1573,6 +1577,8 @@ func columnPhysicalQueryAggregateMetadataConfig(cfg ColumnStoreConfig, req Colum
 		}
 		aggregate.Predicates = predicateCoverage
 		switch req.Kind {
+		case ColumnPhysicalQueryGroupCount:
+			return aggregate, aggregate.Kind == ColumnAggregateCount
 		case ColumnPhysicalQueryGroupMinInt64:
 			return aggregate, aggregate.Kind == ColumnAggregateMin
 		case ColumnPhysicalQueryGroupMaxInt64:
@@ -2140,6 +2146,7 @@ func sortColumnPhysicalQueryGroupsByKey(groups []ColumnPhysicalQueryGroup) {
 
 type columnPhysicalQueryMetadataAccumulator struct {
 	kind        ColumnPhysicalQueryKind
+	counts      map[string]int
 	int64Values map[string]int64
 	spans       map[string]columnPhysicalQuerySpan
 	rows        int
@@ -2149,6 +2156,8 @@ type columnPhysicalQueryMetadataAccumulator struct {
 func newColumnPhysicalQueryMetadataAccumulator(kind ColumnPhysicalQueryKind) *columnPhysicalQueryMetadataAccumulator {
 	acc := &columnPhysicalQueryMetadataAccumulator{kind: kind}
 	switch kind {
+	case ColumnPhysicalQueryGroupCount:
+		acc.counts = make(map[string]int)
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
 		acc.int64Values = make(map[string]int64)
 	case ColumnPhysicalQueryGroupInt64Span:
@@ -2162,6 +2171,8 @@ func (a *columnPhysicalQueryMetadataAccumulator) add(entries []columnAggregateMe
 		a.entries++
 		a.rows += entry.Count
 		switch a.kind {
+		case ColumnPhysicalQueryGroupCount:
+			a.counts[entry.Group] += entry.Count
 		case ColumnPhysicalQueryGroupMinInt64:
 			if cur, ok := a.int64Values[entry.Group]; !ok || entry.Min < cur {
 				a.int64Values[entry.Group] = entry.Min
@@ -2194,6 +2205,9 @@ func (a *columnPhysicalQueryMetadataAccumulator) groupCount() int {
 	if a.spans != nil {
 		return len(a.spans)
 	}
+	if a.counts != nil {
+		return len(a.counts)
+	}
 	return len(a.int64Values)
 }
 
@@ -2214,6 +2228,10 @@ func (a *columnPhysicalQueryMetadataAccumulator) groups(req ColumnPhysicalQueryR
 		out = append(out, group)
 	}
 	switch a.kind {
+	case ColumnPhysicalQueryGroupCount:
+		for key, count := range a.counts {
+			add(ColumnPhysicalQueryGroup{Key: key, Count: count})
+		}
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64:
 		for key, value := range a.int64Values {
 			add(ColumnPhysicalQueryGroup{Key: key, Int64: value})
@@ -2239,6 +2257,14 @@ func (a *columnPhysicalQueryMetadataAccumulator) topKCandidates(req ColumnPhysic
 	candidates := 0
 	if a.spans != nil {
 		for key := range a.spans {
+			if key != "" {
+				candidates++
+			}
+		}
+		return candidates
+	}
+	if a.counts != nil {
+		for key := range a.counts {
 			if key != "" {
 				candidates++
 			}

@@ -662,6 +662,17 @@ func TestColumnStoreMetadataValidation(t *testing.T) {
 			want: "group column",
 		},
 		{
+			name: "aggregate count group column wrong type",
+			cfg: &ColumnStoreConfig{
+				Enabled: true,
+				Columns: []ColumnStoreColumn{
+					{Name: "did", Path: "did", ValueType: ColumnStoreValueInt64},
+				},
+				AggregateMetadata: []ColumnAggregateMetadata{{Name: "count_did", GroupColumn: "did", Kind: ColumnAggregateCount}},
+			},
+			want: "group column",
+		},
+		{
 			name: "aggregate min value column wrong type",
 			cfg: &ColumnStoreConfig{
 				Enabled: true,

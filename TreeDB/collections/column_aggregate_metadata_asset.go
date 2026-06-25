@@ -9,7 +9,7 @@ import (
 
 const (
 	columnAggregateMetadataAssetMagic   = uint32(0x5443414d) // TCAM
-	columnAggregateMetadataAssetVersion = uint16(2)
+	columnAggregateMetadataAssetVersion = uint16(3)
 )
 
 type columnAggregateMetadataEntry struct {
@@ -35,8 +35,8 @@ type columnAggregateMetadataAsset struct {
 }
 
 func encodeColumnAggregateMetadataAsset(asset columnAggregateMetadataAsset) ([]byte, error) {
-	if asset.Collection == "" || asset.Namespace == "" || asset.AggregateName == "" || asset.GroupColumn == "" || asset.ValueColumn == "" {
-		return nil, errors.New("collections: aggregate metadata asset requires collection, namespace, name, group column, and value column")
+	if asset.Collection == "" || asset.Namespace == "" || asset.AggregateName == "" || asset.GroupColumn == "" {
+		return nil, errors.New("collections: aggregate metadata asset requires collection, namespace, name, and group column")
 	}
 	if asset.Generation == 0 || asset.PartID == 0 {
 		return nil, errors.New("collections: aggregate metadata asset requires generation and part_id")
@@ -207,12 +207,15 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 // deleted rows, while Entries reflects only non-deleted, type-validated rows.
 func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregate ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) (columnAggregateMetadataAsset, bool, error) {
 	switch aggregate.Kind {
-	case ColumnAggregateMin, ColumnAggregateMax:
+	case ColumnAggregateCount, ColumnAggregateMin, ColumnAggregateMax:
 	default:
 		return columnAggregateMetadataAsset{}, false, nil
 	}
-	if aggregate.GroupColumn == "" || aggregate.Column == "" {
-		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q requires group_column and column", aggregate.Name)
+	if aggregate.GroupColumn == "" {
+		return columnAggregateMetadataAsset{}, false, nil
+	}
+	if aggregate.Kind != ColumnAggregateCount && aggregate.Column == "" {
+		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q requires column", aggregate.Name)
 	}
 	groupIdx, valueIdx := -1, -1
 	for i, col := range cfg.Columns {
@@ -223,13 +226,16 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 			}
 			groupIdx = i
 		case aggregate.Column:
+			if aggregate.Kind == ColumnAggregateCount {
+				continue
+			}
 			if col.ValueType != ColumnStoreValueInt64 {
 				return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q value column %q has type %q, want %q", aggregate.Name, aggregate.Column, col.ValueType, ColumnStoreValueInt64)
 			}
 			valueIdx = i
 		}
 	}
-	if groupIdx < 0 || valueIdx < 0 {
+	if groupIdx < 0 || (aggregate.Kind != ColumnAggregateCount && valueIdx < 0) {
 		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q references unknown column(s)", aggregate.Name)
 	}
 	predicateSpecs, err := columnAggregateMetadataPredicateSpecs(cfg, aggregate.Predicates)
@@ -263,7 +269,7 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 			if row.Deleted {
 				continue
 			}
-			if groupIdx >= len(row.Values) || valueIdx >= len(row.Values) {
+			if groupIdx >= len(row.Values) || (aggregate.Kind != ColumnAggregateCount && valueIdx >= len(row.Values)) {
 				return columnAggregateMetadataAsset{}, false, errors.New("collections: aggregate metadata row is missing declared values")
 			}
 			matched, err := columnAggregateMetadataPredicatesMatchRow(predicateSpecs, row.Values)
@@ -274,16 +280,29 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 				continue
 			}
 			groupValue := row.Values[groupIdx]
-			valueValue := row.Values[valueIdx]
-			if groupValue.Null || !groupValue.Present || valueValue.Null || !valueValue.Present {
+			if groupValue.Null || !groupValue.Present {
 				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q does not support null or missing values", ErrColumnQueryPlanUnsupported, aggregate.Name)
 			}
-			if groupValue.Type != ColumnStoreValueString || valueValue.Type != ColumnStoreValueInt64 {
+			if groupValue.Type != ColumnStoreValueString {
 				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
 			}
 			group := groupValue.String
 			if group == "" && groupValue.StringBytes != nil {
 				group = string(groupValue.StringBytes)
+			}
+			if aggregate.Kind == ColumnAggregateCount {
+				cur := entriesByGroup[group]
+				cur.Group = group
+				cur.Count++
+				entriesByGroup[group] = cur
+				continue
+			}
+			valueValue := row.Values[valueIdx]
+			if valueValue.Null || !valueValue.Present {
+				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q does not support null or missing values", ErrColumnQueryPlanUnsupported, aggregate.Name)
+			}
+			if valueValue.Type != ColumnStoreValueInt64 {
+				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
 			}
 			cur, ok := entriesByGroup[group]
 			if !ok {
@@ -323,7 +342,13 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 }
 
 func columnAggregateMetadataUsesTypedColumnGranules(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) bool {
-	columns := []string{aggregate.Column, aggregate.GroupColumn}
+	columns := make([]string, 0, 2+len(aggregate.Predicates))
+	if aggregate.Column != "" {
+		columns = append(columns, aggregate.Column)
+	}
+	if aggregate.GroupColumn != "" {
+		columns = append(columns, aggregate.GroupColumn)
+	}
 	for _, predicate := range aggregate.Predicates {
 		columns = append(columns, predicate.Column)
 	}
