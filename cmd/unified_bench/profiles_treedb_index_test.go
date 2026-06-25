@@ -112,6 +112,9 @@ func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmissionRejectsInvalid(t *tes
 }
 
 func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsHardwareAwareAdaptive(t *testing.T) {
+	if physical := treedbdb.DetectPhysicalCores(); physical == 1 {
+		t.Skip("default auto correctly declines one-physical-core hosts; formula coverage lives in TreeDB/db hardware tests")
+	}
 	oldGOMAXPROCS := runtime.GOMAXPROCS(12)
 	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
 	saved := saveTreeDBFlagState()
