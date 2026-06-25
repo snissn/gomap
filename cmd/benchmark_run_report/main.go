@@ -3094,17 +3094,18 @@ func sameMongoLoadMetadata(a, b mongoSummaryRow) bool {
 }
 
 func mongoEffectiveLoadProducers(row mongoSummaryRow) int {
-	if row.EffectiveProducers > 0 {
-		return row.EffectiveProducers
+	effective := row.EffectiveProducers
+	if effective <= 0 {
+		effective = row.InsertProducers
 	}
-	if row.InsertProducers <= 0 {
+	if effective <= 0 {
 		return 0
 	}
 	batches := mongoLoadBatchCount(row)
-	if batches > 0 && row.InsertProducers > batches {
+	if batches > 0 && effective > batches {
 		return batches
 	}
-	return row.InsertProducers
+	return effective
 }
 
 func mongoLoadBatchCount(row mongoSummaryRow) int {
