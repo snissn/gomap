@@ -162,6 +162,7 @@ type commandLogEntry struct {
 	ExitStatus  int
 	DurationSec int
 	Warning     string
+	Complete    bool
 }
 
 type runMetadata map[string]string
@@ -486,6 +487,7 @@ func loadCommandLog(path string) ([]commandLogEntry, []string) {
 			}
 			current.ExitStatus = status
 			current.DurationSec = duration
+			current.Complete = true
 		case strings.HasPrefix(line, "warning:"):
 			warning := strings.TrimSpace(strings.TrimPrefix(line, "warning:"))
 			if current == nil {
@@ -1598,16 +1600,17 @@ func renderRunStatus(b *strings.Builder, commands []commandLogEntry, sections []
 		return
 	}
 	failed := commandFailureCount(commands)
+	incomplete := incompleteCommandCount(commands)
 	blockedSections := blockingArtifactSectionCount(sections)
 	skippedSections := skippedArtifactSectionCount(sections)
 	classAttr := ""
-	if failed > 0 {
+	if failed > 0 || incomplete > 0 {
 		classAttr = " class=\"warn\""
 	}
 	if blockedSections > 0 {
 		classAttr = " class=\"warn\""
 	}
-	status := runStatusText(len(commands), failed, blockedSections, skippedSections)
+	status := runStatusText(len(commands), failed, incomplete, blockedSections, skippedSections)
 	b.WriteString("<section id=\"run-status\"" + classAttr + "><h2>Run Status</h2>")
 	b.WriteString("<p class=\"subtle\">" + esc(status) + "</p>")
 	if len(sections) > 0 {
@@ -1633,23 +1636,42 @@ func renderRunStatus(b *strings.Builder, commands []commandLogEntry, sections []
 		for i, command := range commands {
 			body = append(body, []string{
 				strconv.Itoa(i + 1),
-				strconv.Itoa(command.ExitStatus),
-				formatOptionalInt(command.DurationSec),
+				commandExitStatusText(command),
+				commandDurationText(command),
 				emptyDash(command.Warning),
 				command.Command,
 			})
 		}
 		b.WriteString("<h3>Recorded Commands</h3>")
-		writeTable(b, []string{"#", "exit status", "duration sec", "warning", "command"}, body, numericColumns(0, 1, 2))
+		writeTable(b, []string{"#", "exit status", "duration sec", "warning", "command"}, body, numericColumns(0, 2))
 	}
 	b.WriteString("</section>\n")
 }
 
-func runStatusText(commandCount, failedCommands, blockedSections, skippedSections int) string {
+func commandExitStatusText(command commandLogEntry) string {
+	if !command.Complete {
+		return "incomplete"
+	}
+	return strconv.Itoa(command.ExitStatus)
+}
+
+func commandDurationText(command commandLogEntry) string {
+	if !command.Complete {
+		return "-"
+	}
+	return formatOptionalInt(command.DurationSec)
+}
+
+func runStatusText(commandCount, failedCommands, incompleteCommands, blockedSections, skippedSections int) string {
 	var sentences []string
 	if commandCount > 0 {
 		if failedCommands > 0 {
 			sentences = append(sentences, fmt.Sprintf("Partial run: %d of %d recorded commands exited nonzero.", failedCommands, commandCount))
+			if incompleteCommands > 0 {
+				sentences = append(sentences, fmt.Sprintf("%d recorded command(s) lacked exit status.", incompleteCommands))
+			}
+		} else if incompleteCommands > 0 {
+			sentences = append(sentences, fmt.Sprintf("Partial run: %d of %d recorded commands lacked exit status.", incompleteCommands, commandCount))
 		} else if blockedSections > 0 || skippedSections > 0 {
 			sentences = append(sentences, fmt.Sprintf("Partial run: all %d recorded commands exited 0.", commandCount))
 		} else {
@@ -1674,11 +1696,21 @@ func runStatusText(commandCount, failedCommands, blockedSections, skippedSection
 func commandFailureCount(commands []commandLogEntry) int {
 	var failed int
 	for _, command := range commands {
-		if command.ExitStatus != 0 {
+		if command.Complete && command.ExitStatus != 0 {
 			failed++
 		}
 	}
 	return failed
+}
+
+func incompleteCommandCount(commands []commandLogEntry) int {
+	var incomplete int
+	for _, command := range commands {
+		if !command.Complete {
+			incomplete++
+		}
+	}
+	return incomplete
 }
 
 func blockingArtifactSectionCount(sections []artifactSectionStatus) int {

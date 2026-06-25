@@ -245,6 +245,9 @@ func TestLoadCommandLogAndRenderRunStatus(t *testing.T) {
 	if commands[1].ExitStatus != 2 || commands[1].DurationSec != 3 || !strings.Contains(commands[1].Warning, "exit status 2") {
 		t.Fatalf("failed command parsed incorrectly: %+v", commands[1])
 	}
+	if !commands[0].Complete || !commands[1].Complete {
+		t.Fatalf("completed commands parsed as incomplete: %+v", commands)
+	}
 
 	var b strings.Builder
 	renderRunStatus(&b, commands, nil)
@@ -258,6 +261,42 @@ func TestLoadCommandLogAndRenderRunStatus(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Fatalf("run status missing %q\n%s", want, html)
 		}
+	}
+}
+
+func TestLoadCommandLogMarksTrailingCommandIncomplete(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "commands.log")
+	writeFile(t, path, "command: go test ./cmd/benchmark_run_report\nexit_status: 0 duration_sec: 2\ncommand: go run ./cmd/benchmark_run_report\n")
+
+	commands, warnings := loadCommandLog(path)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands = %v, want 2", commands)
+	}
+	if !commands[0].Complete {
+		t.Fatalf("first command parsed as incomplete: %+v", commands[0])
+	}
+	if commands[1].Complete || commands[1].ExitStatus != 0 || commands[1].DurationSec != 0 {
+		t.Fatalf("trailing command parsed as complete: %+v", commands[1])
+	}
+
+	var b strings.Builder
+	renderRunStatus(&b, commands, nil)
+	html := b.String()
+	for _, want := range []string{
+		"Partial run: 1 of 2 recorded commands lacked exit status.",
+		"incomplete",
+		"go run ./cmd/benchmark_run_report",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("run status missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "Complete run: all 2 recorded commands exited 0.") {
+		t.Fatalf("incomplete trailing command looked complete\n%s", html)
 	}
 }
 
