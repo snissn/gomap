@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -170,6 +171,177 @@ func TestTypedColumnQ2DenseGroupCountDistinctBitsetLayout1950(t *testing.T) {
 	_, _, ok = columnTypedColumnDenseGroupCountDistinctBitsetLayout(1, columnTypedColumnDenseGroupCountDistinctMaxBitsetWords*64+1)
 	if ok {
 		t.Fatalf("oversized layout ok=true want false")
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctActiveGroupBitset1950(t *testing.T) {
+	const (
+		groupCardinality    = 4096
+		distinctCardinality = 65536
+		groupA              = 100
+		groupB              = 200
+		groupRejected       = 300
+	)
+	groupDictionary := make([]string, groupCardinality)
+	groupDictionary[groupA] = "app.active.a"
+	groupDictionary[groupB] = "app.active.b"
+	groupDictionary[groupRejected] = "app.rejected"
+	distinctDictionary := make([]string, distinctCardinality)
+	groupCodes := []uint32{groupA, groupA, groupA, groupB, groupB, groupB, groupRejected}
+	distinctCodes := []uint32{10, 10, 11, 20, 21, 20, 30}
+	predicateCodes := []uint32{1, 1, 1, 1, 1, 1, 0}
+	allowed := []uint64{2}
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "collection",
+		DistinctColumn: "did",
+		Predicates: []ColumnPhysicalQueryPredicate{
+			{Column: "kind", Value: "commit"},
+			{Column: "operation", Value: "create"},
+		},
+	}
+	runner := &columnTypedColumnPhysicalQueryRunner{
+		plan: columnTypedColumnPhysicalQueryPlan{
+			ProjectedColumns:        []string{"collection", "did", "kind", "operation"},
+			PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+			DenseGroupCountDistinct: true,
+		},
+		parts: []columnTypedColumnPhysicalQueryPart{
+			{
+				Rows: len(groupCodes),
+				DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+					Rows: len(groupCodes),
+					Group: columnTypedColumnDenseStringCodeColumn{
+						Codes:            groupCodes,
+						GlobalCodes:      groupCodes,
+						GlobalDictionary: groupDictionary,
+					},
+					Distinct: columnTypedColumnDenseStringCodeColumn{
+						Codes:            distinctCodes,
+						GlobalCodes:      distinctCodes,
+						GlobalDictionary: distinctDictionary,
+					},
+					Predicates: []columnTypedColumnDensePredicatePart{
+						{Codes: predicateCodes, Allowed: allowed},
+						{Codes: predicateCodes, Allowed: allowed},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+	if err != nil {
+		t.Fatalf("runDenseGroupCountDistinct: %v", err)
+	}
+	if result.Diagnostics.DenseGroupCountDistinctReducer != columnTypedColumnDenseGroupCountDistinctReducerActiveBitset {
+		t.Fatalf("reducer=%q want %q diagnostics=%+v", result.Diagnostics.DenseGroupCountDistinctReducer, columnTypedColumnDenseGroupCountDistinctReducerActiveBitset, result.Diagnostics)
+	}
+	if result.Diagnostics.DenseGroupCountDistinctGroups != groupCardinality || result.Diagnostics.DenseGroupCountDistinctValues != distinctCardinality {
+		t.Fatalf("cardinality diagnostics=%+v want groups=%d values=%d", result.Diagnostics, groupCardinality, distinctCardinality)
+	}
+	if got, want := result.Diagnostics.DenseGroupCountDistinctPairBitWords, 2*((distinctCardinality+63)/64); got != want {
+		t.Fatalf("pair bit words=%d want active group words=%d diagnostics=%+v", got, want, result.Diagnostics)
+	}
+	if result.Diagnostics.RowsScanned != len(groupCodes) || result.Diagnostics.RowsMatched != 6 || result.Diagnostics.ReduceRows != 6 {
+		t.Fatalf("row diagnostics=%+v want scanned=%d matched/reduced=6", result.Diagnostics, len(groupCodes))
+	}
+	got := columnPhysicalJSONBenchQ2CountsP0(result.Groups)
+	want := map[string]columnPhysicalJSONBenchQ2CountP0{
+		"app.active.a": {Count: 3, Distinct: 2},
+		"app.active.b": {Count: 3, Distinct: 2},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("groups=%v want %v raw=%+v", got, want, result.Groups)
+	}
+}
+
+func BenchmarkTypedColumnQ2DenseGroupCountDistinctActiveGroups1950(b *testing.B) {
+	const (
+		rows                = 262144
+		activeGroups        = 13
+		groupCardinality    = 4096
+		distinctCardinality = 65536
+	)
+	groupDictionary := make([]string, groupCardinality)
+	activeGroupCodes := make([]uint32, activeGroups)
+	for groupIdx := 0; groupIdx < activeGroups; groupIdx++ {
+		code := uint32(100 + groupIdx)
+		activeGroupCodes[groupIdx] = code
+		groupDictionary[code] = fmt.Sprintf("app.active.%02d", groupIdx)
+	}
+	distinctDictionary := make([]string, distinctCardinality)
+	groupCodes := make([]uint32, rows)
+	distinctCodes := make([]uint32, rows)
+	predicateCodes := make([]uint32, rows)
+	for row := 0; row < rows; row++ {
+		groupCodes[row] = activeGroupCodes[row%activeGroups]
+		distinctCodes[row] = uint32(row % distinctCardinality)
+		predicateCodes[row] = 1
+	}
+	allowed := []uint64{2}
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "collection",
+		DistinctColumn: "did",
+		Predicates: []ColumnPhysicalQueryPredicate{
+			{Column: "kind", Value: "commit"},
+			{Column: "operation", Value: "create"},
+		},
+	}
+	runner := &columnTypedColumnPhysicalQueryRunner{
+		plan: columnTypedColumnPhysicalQueryPlan{
+			ProjectedColumns:        []string{"collection", "did", "kind", "operation"},
+			PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+			DenseGroupCountDistinct: true,
+		},
+		parts: []columnTypedColumnPhysicalQueryPart{
+			{
+				Rows: rows,
+				DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+					Rows: rows,
+					Group: columnTypedColumnDenseStringCodeColumn{
+						Codes:            groupCodes,
+						GlobalCodes:      groupCodes,
+						GlobalDictionary: groupDictionary,
+					},
+					Distinct: columnTypedColumnDenseStringCodeColumn{
+						Codes:            distinctCodes,
+						GlobalCodes:      distinctCodes,
+						GlobalDictionary: distinctDictionary,
+					},
+					Predicates: []columnTypedColumnDensePredicatePart{
+						{Codes: predicateCodes, Allowed: allowed},
+						{Codes: predicateCodes, Allowed: allowed},
+					},
+				},
+			},
+		},
+	}
+	preview, err := runner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+	if err != nil {
+		b.Fatalf("preview runDenseGroupCountDistinct: %v", err)
+	}
+	if len(preview.Groups) != activeGroups || preview.Diagnostics.ReduceRows != rows {
+		b.Fatalf("preview groups=%d reduce=%d diagnostics=%+v", len(preview.Groups), preview.Diagnostics.ReduceRows, preview.Diagnostics)
+	}
+	b.SetBytes(rows)
+	b.ReportAllocs()
+	b.ResetTimer()
+	var last ColumnPhysicalQueryDiagnostics
+	for i := 0; i < b.N; i++ {
+		result, err := runner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+		if err != nil {
+			b.Fatalf("runDenseGroupCountDistinct: %v", err)
+		}
+		last = result.Diagnostics
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(last.RowsScanned), "rows_scanned/op")
+	b.ReportMetric(float64(last.ReduceRows), "reduce_rows/op")
+	b.ReportMetric(float64(last.DenseGroupCountDistinctPairBitWords), "pair_bit_words/op")
+	if last.ScanNanos > 0 {
+		b.ReportMetric(float64(last.RowsScanned)*1e9/float64(last.ScanNanos), "diag_rows_per_sec")
 	}
 }
 
