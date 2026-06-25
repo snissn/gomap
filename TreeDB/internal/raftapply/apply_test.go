@@ -207,6 +207,54 @@ func TestCollectionMutationApplyInsertReplaceDeleteFramesAndDigest(t *testing.T)
 	}
 }
 
+func TestLowerCollectionMutationRejectsInvalidIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		command   nativewire.CommandID
+		ids       [][]byte
+		documents [][]byte
+		wantCode  raftentry.DeterministicErrorCodeV1
+	}{
+		{
+			name:      "duplicate insert ids",
+			command:   nativewire.CommandInsertBatch,
+			ids:       [][]byte{[]byte("u1"), []byte("u1")},
+			documents: [][]byte{[]byte(`{"city":"hnl"}`), []byte(`{"city":"sfo"}`)},
+			wantCode:  raftentry.ErrorRejectedConflictV1,
+		},
+		{
+			name:      "duplicate replace ids",
+			command:   nativewire.CommandReplaceBatch,
+			ids:       [][]byte{[]byte("u1"), []byte("u1")},
+			documents: [][]byte{[]byte(`{"city":"hnl"}`), []byte(`{"city":"sfo"}`)},
+			wantCode:  raftentry.ErrorRejectedConflictV1,
+		},
+		{
+			name:     "duplicate delete ids",
+			command:  nativewire.CommandDeleteBatch,
+			ids:      [][]byte{[]byte("u1"), []byte("u1")},
+			wantCode: raftentry.ErrorRejectedConflictV1,
+		},
+		{
+			name:      "empty insert id",
+			command:   nativewire.CommandInsertBatch,
+			ids:       [][]byte{[]byte("")},
+			documents: [][]byte{[]byte(`{"city":"hnl"}`)},
+			wantCode:  raftentry.ErrorMalformedEntryV1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := syntheticMutationCommandEntryV1(tt.command, tt.ids, tt.documents)
+			_, err := lowerCollectionMutationV1(entry, nativewire.Limits{})
+			if got := codeOf(err); got != tt.wantCode {
+				t.Fatalf("lowerCollectionMutationV1 error code=%s, want %s (err=%v)", got, tt.wantCode, err)
+			}
+		})
+	}
+}
+
 func TestCollectionMutationCommandWALReplayHandlers(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -992,6 +1040,26 @@ func deterministicReplaceBatchEntry(t *testing.T, collection, idempotency string
 	return deterministicMutationEntry(t, nativewire.CommandReplaceBatch, collection, idempotency, format, ids, documents, []nativewire.Section{
 		{ID: nativewire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)},
 	})
+}
+
+func syntheticMutationCommandEntryV1(command nativewire.CommandID, ids, documents [][]byte) raftentry.CommandEntryV1 {
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, ids...)},
+	}
+	if command == nativewire.CommandInsertBatch || command == nativewire.CommandReplaceBatch {
+		sections = append(sections,
+			nativewire.Section{ID: nativewire.SectionDocumentFormat, Bytes: binary.AppendUvarint(nil, uint64(nativewire.DocumentFormatJSON))},
+			nativewire.Section{ID: nativewire.SectionDocuments, Bytes: nativewire.AppendByteVector(nil, documents...)},
+		)
+	}
+	if command == nativewire.CommandReplaceBatch {
+		sections = append(sections, nativewire.Section{ID: nativewire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)})
+	}
+	return raftentry.CommandEntryV1{
+		Decoded: nativewire.DeterministicEntry{Sections: sections},
+		Target:  raftentry.TargetIdentityV1{CommandID: command},
+	}
 }
 
 func deterministicDeleteBatchEntry(t *testing.T, collection, idempotency string, ids [][]byte) []byte {

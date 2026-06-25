@@ -123,6 +123,9 @@ func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire
 		if len(ids) != len(documents) {
 			return collectionMutationV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: document_ids length %d does not match documents length %d", len(ids), len(documents))
 		}
+		if err := validateMutationDocumentIDsV1(ids); err != nil {
+			return collectionMutationV1{}, err
+		}
 		if entry.Target.CommandID == nativewire.CommandReplaceBatch {
 			if err := requireExistingReplacementModeV1(entry); err != nil {
 				return collectionMutationV1{}, err
@@ -135,6 +138,9 @@ func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire
 	case nativewire.CommandDeleteBatch:
 		ids, err := lowerByteVectorSectionV1(entry, nativewire.SectionDocumentIDs, limits, "document_ids")
 		if err != nil {
+			return collectionMutationV1{}, err
+		}
+		if err := validateMutationDocumentIDsV1(ids); err != nil {
 			return collectionMutationV1{}, err
 		}
 		mutation.ids = ids
@@ -362,6 +368,21 @@ func validateMutationDocumentsV1(format collections.DocumentFormat, documents []
 		if err := bson.Raw(doc).Validate(); err != nil {
 			return codedError(raftentry.ErrorMalformedEntryV1, "raftapply: BSON document at index %d: %v", i, err)
 		}
+	}
+	return nil
+}
+
+func validateMutationDocumentIDsV1(ids [][]byte) error {
+	seen := make(map[string]struct{}, len(ids))
+	for i, id := range ids {
+		if len(id) == 0 {
+			return codedError(raftentry.ErrorMalformedEntryV1, "raftapply: document_id at index %d cannot be empty", i)
+		}
+		key := string(id)
+		if _, ok := seen[key]; ok {
+			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: duplicate document_id %q at index %d", string(id), i)
+		}
+		seen[key] = struct{}{}
 	}
 	return nil
 }
