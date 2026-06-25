@@ -607,6 +607,15 @@ single-node local API lands before the native-wire surface, the native-wire
 schema added later must either adopt the local canonical bytes or explicitly
 record why a wrapper is required.
 
+For the R3a local apply harness tracked by #1654, the deterministic entry is not
+the local WAL record itself. The harness decodes committed `CommandEntryV1`
+bytes, validates digest, target, idempotency, and allowlist metadata, lowers
+supported entries to local `CommandEnvelope` payloads, appends/applies through
+the user-command WAL and normal executor, and advances future `ApplyProgress` or
+applied-index metadata only after the selected local recoverability boundary is
+satisfied. If the selected boundary is root-recoverable, that means roots and
+`AppliedLSN` have been published atomically.
+
 ## 12. Future Command Admission Policy
 
 Every PR that adds or broadens a mutating user-facing command must update the
