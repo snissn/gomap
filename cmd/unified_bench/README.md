@@ -351,6 +351,9 @@ physical-column labels with a deterministic JSONBench-shaped fixture.
 so the unified-bench default still exercises the durable gate. The runnable
 execution labels are `row_store_baseline`, `b_tree_index_baseline`,
 `serial_column_scan`, `aggregate_metadata`, and `parallel_column_scan`.
+The `aggregate_metadata` path uses typed aggregate metadata for q1, q4b, and
+q5_metadata where those assets are available; the other synthetic query shapes
+reroute to serial physical scans.
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)

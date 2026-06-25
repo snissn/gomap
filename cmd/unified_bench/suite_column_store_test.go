@@ -1956,6 +1956,13 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			}
 			cellMetrics := assertColumnStoreJSONBenchCellShapeM1955(t, report, tc.forcedPath == columnStorePathAggregateMetadata)
 			if tc.forcedPath == columnStorePathAggregateMetadata {
+				q1Cells := cellMetrics[columnStoreQueryQ1]
+				if q1Cells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect].MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
+					t.Fatalf("q1 missing direct metadata cell: %+v", q1Cells)
+				}
+				if q1Cells[columnStoreJSONBenchCellColumnPreparedMetadata+"/"+columnStoreJSONBenchModePrepared].MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
+					t.Fatalf("q1 missing prepared metadata cell: %+v", q1Cells)
+				}
 				q4bCells := cellMetrics[columnStoreQueryQ4B]
 				if q4bCells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect].MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
 					t.Fatalf("q4b missing direct metadata cell: %+v", q4bCells)
@@ -1966,7 +1973,7 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 			for _, q := range report.Queries {
-				metadataFastPath := q.Name == columnStoreQueryQ4B || q.Name == columnStoreQueryQ5Metadata
+				metadataFastPath := q.Name == columnStoreQueryQ1 || q.Name == columnStoreQueryQ4B || q.Name == columnStoreQueryQ5Metadata
 				if tc.forcedPath == columnStorePathAggregateMetadata && !metadataFastPath {
 					if q.PlanLabel != columnStorePathSerialColumnScan {
 						t.Fatalf("query %s plan_label=%q want %q under aggregate_metadata forced path", q.Name, q.PlanLabel, columnStorePathSerialColumnScan)
@@ -2013,6 +2020,16 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				}
 			}
 			if tc.forcedPath == columnStorePathAggregateMetadata {
+				q1 := queryMetrics[columnStoreQueryQ1]
+				if q1.PlanLabel != columnStorePathAggregateMetadata {
+					t.Fatalf("q1 plan_label=%q want %q", q1.PlanLabel, columnStorePathAggregateMetadata)
+				}
+				if q1.MetadataHits == 0 {
+					t.Fatalf("q1 metadata_hits=0 want aggregate metadata fast path: %+v", q1)
+				}
+				if !strings.Contains(q1.ThroughputInterpretation, "metadata-bound") {
+					t.Fatalf("q1 throughput_interpretation=%q want metadata-bound aggregate classification", q1.ThroughputInterpretation)
+				}
 				q4b := queryMetrics[columnStoreQueryQ4B]
 				if q4b.PlanLabel != columnStorePathAggregateMetadata {
 					t.Fatalf("q4b plan_label=%q want %q", q4b.PlanLabel, columnStorePathAggregateMetadata)
@@ -2772,7 +2789,7 @@ func TestColumnStoreSuiteConfigUsesExplicitAggregateMetadataNamesM11A(t *testing
 		names = append(names, agg.Name)
 	}
 	got := strings.Join(names, ",")
-	if !strings.Contains(got, columnStoreSuiteQ5AggregateMin) || !strings.Contains(got, columnStoreSuiteQ5AggregateMax) {
+	if !strings.Contains(got, columnStoreSuiteQ1AggregateCount) || !strings.Contains(got, columnStoreSuiteQ5AggregateMin) || !strings.Contains(got, columnStoreSuiteQ5AggregateMax) {
 		t.Fatalf("aggregate metadata names=%q", got)
 	}
 	if strings.Contains(got, "q5_did_time_span,") || strings.HasSuffix(got, "q5_did_time_span") {
@@ -2927,19 +2944,14 @@ func TestColumnStoreSuiteAggregateMetadataRequestUsesRegisteredNameM11B(t *testi
 	for _, agg := range cfg.AggregateMetadata {
 		registered[agg.Name] = true
 	}
-	name := columnStoreSuiteAggregateMetadataName(columnStoreQueryQ5Metadata)
-	if name == "" {
-		t.Fatal("q5_metadata did not request aggregate metadata")
-	}
-	if !registered[name] {
-		t.Fatalf("q5_metadata requested aggregate metadata %q outside registered names", name)
-	}
-	name = columnStoreSuiteAggregateMetadataName(columnStoreQueryQ4B)
-	if name == "" {
-		t.Fatal("q4b did not request aggregate metadata")
-	}
-	if !registered[name] {
-		t.Fatalf("q4b requested aggregate metadata %q outside registered names", name)
+	for _, query := range []string{columnStoreQueryQ1, columnStoreQueryQ4B, columnStoreQueryQ5Metadata} {
+		name := columnStoreSuiteAggregateMetadataName(query)
+		if name == "" {
+			t.Fatalf("%s did not request aggregate metadata", query)
+		}
+		if !registered[name] {
+			t.Fatalf("%s requested aggregate metadata %q outside registered names", query, name)
+		}
 	}
 }
 
