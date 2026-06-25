@@ -98,6 +98,11 @@ type mongoSummaryRow struct {
 	MongoPhysicalBytes      float64
 	TreeDBToMongoTotalRatio float64
 	TreeDBToMongoPhysRatio  float64
+	BatchSize               int
+	InsertProducers         int
+	EffectiveProducers      int
+	DriverCalls             int
+	LoadBatchCount          int
 	Source                  string
 }
 
@@ -682,6 +687,19 @@ func readMongoSummary(path string) ([]mongoSummaryRow, error) {
 			setErr(err)
 			return v
 		}
+		optionalIntField := func(name string) int {
+			if _, ok := header[normalizeTSVHeader(name)]; !ok {
+				return 0
+			}
+			v, err := tsvField(path, header, rec, line, name)
+			setErr(err)
+			if v == "" {
+				return 0
+			}
+			parsed, err := parseIntColumn(path, line, name, v)
+			setErr(err)
+			return parsed
+		}
 		boolField := func(name string) bool {
 			v, err := parseBoolColumn(path, line, name, get(name))
 			setErr(err)
@@ -717,6 +735,11 @@ func readMongoSummary(path string) ([]mongoSummaryRow, error) {
 			MongoPhysicalBytes:      floatField("mongo_physical_bytes"),
 			TreeDBToMongoTotalRatio: floatField("treedb_to_mongo_dbstats_total_ratio"),
 			TreeDBToMongoPhysRatio:  floatField("treedb_to_mongo_physical_ratio"),
+			BatchSize:               optionalIntField("batch_size"),
+			InsertProducers:         optionalIntField("insert_producers"),
+			EffectiveProducers:      optionalIntField("effective_producers"),
+			DriverCalls:             optionalIntField("driver_calls"),
+			LoadBatchCount:          optionalIntField("load_batch_count"),
 			Source:                  filepath.Base(filepath.Dir(path)),
 		}
 		if parseErr != nil {
@@ -2393,6 +2416,9 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 
 func fullSweepLoadNote(rows []mongoSummaryRow) string {
 	note := "The load chart in this section is the load phase of the broader full sweep, not the pure ingest client-mode matrix. Use it when interpreting the read/range/update sweep as a whole; use the load-only matrix below when comparing client paths."
+	if metadata := mongoLoadMetadataText(rows); metadata != "" {
+		note += " " + metadata
+	}
 	for _, row := range rows {
 		if row.Phase == "load_insert_many" && row.SecondaryIndexes == 0 && row.RangeIndex {
 			note += " This run has range_index=true, so even the displayed 0-secondary-index load cell maintains the additional age_1 range index during insert."
@@ -2400,6 +2426,90 @@ func fullSweepLoadNote(rows []mongoSummaryRow) string {
 		}
 	}
 	return "<p class=\"subtle\"><strong>Load interpretation:</strong> " + esc(note) + "</p>"
+}
+
+func mongoLoadMetadataText(rows []mongoSummaryRow) string {
+	loadRows := mongoRowsForPhase(rows, "load_insert_many")
+	if len(loadRows) == 0 {
+		return ""
+	}
+	first, ok := firstMongoLoadRowWithMetadata(loadRows)
+	if !ok {
+		return "Load metadata is unavailable in this summary; regenerate with a newer compare report to show batch size and producer counts."
+	}
+	for _, row := range loadRows {
+		if !mongoLoadHasMetadata(row) || !sameMongoLoadMetadata(first, row) {
+			return "Load rows use mixed or incomplete document, batch, or producer metadata; see the raw full-sweep TSV rows."
+		}
+	}
+	parts := []string{fmt.Sprintf("%s docs", commaInt(int64(first.Documents)))}
+	if first.BatchSize > 0 {
+		parts = append(parts, fmt.Sprintf("batch size %s", commaInt(int64(first.BatchSize))))
+	}
+	requested := first.InsertProducers
+	effective := mongoEffectiveLoadProducers(first)
+	batches := mongoLoadBatchCount(first)
+	switch {
+	case requested > 0 && effective > 0 && requested != effective:
+		if batches > 0 {
+			parts = append(parts, fmt.Sprintf("requested insert producers %d, effective %d (capped by %d load batches)", requested, effective, batches))
+		} else {
+			parts = append(parts, fmt.Sprintf("requested insert producers %d, effective %d", requested, effective))
+		}
+	case requested > 0:
+		parts = append(parts, fmt.Sprintf("insert producers %d", requested))
+	case effective > 0:
+		parts = append(parts, fmt.Sprintf("effective insert producers %d", effective))
+	}
+	if first.DriverCalls > 0 {
+		parts = append(parts, fmt.Sprintf("driver calls %s", commaInt(int64(first.DriverCalls))))
+	}
+	return "Measured load metadata: " + strings.Join(parts, ", ") + "."
+}
+
+func firstMongoLoadRowWithMetadata(rows []mongoSummaryRow) (mongoSummaryRow, bool) {
+	for _, row := range rows {
+		if mongoLoadHasMetadata(row) {
+			return row, true
+		}
+	}
+	return mongoSummaryRow{}, false
+}
+
+func mongoLoadHasMetadata(row mongoSummaryRow) bool {
+	return row.BatchSize > 0 || row.InsertProducers > 0 || row.EffectiveProducers > 0 || row.DriverCalls > 0 || row.LoadBatchCount > 0
+}
+
+func sameMongoLoadMetadata(a, b mongoSummaryRow) bool {
+	return a.Documents == b.Documents &&
+		a.BatchSize == b.BatchSize &&
+		a.InsertProducers == b.InsertProducers &&
+		mongoEffectiveLoadProducers(a) == mongoEffectiveLoadProducers(b) &&
+		mongoLoadBatchCount(a) == mongoLoadBatchCount(b)
+}
+
+func mongoEffectiveLoadProducers(row mongoSummaryRow) int {
+	if row.EffectiveProducers > 0 {
+		return row.EffectiveProducers
+	}
+	if row.InsertProducers <= 0 {
+		return 0
+	}
+	batches := mongoLoadBatchCount(row)
+	if batches > 0 && row.InsertProducers > batches {
+		return batches
+	}
+	return row.InsertProducers
+}
+
+func mongoLoadBatchCount(row mongoSummaryRow) int {
+	if row.LoadBatchCount > 0 {
+		return row.LoadBatchCount
+	}
+	if row.Documents <= 0 || row.BatchSize <= 0 {
+		return 0
+	}
+	return (row.Documents + row.BatchSize - 1) / row.BatchSize
 }
 
 func renderMongoScaling(b *strings.Builder, byIndex map[int][]mongoSummaryRow) {
@@ -2471,6 +2581,11 @@ func writeMongoSummaryTable(b *strings.Builder, rows []mongoSummaryRow) {
 			row.TreeDBConfig,
 			emptyDash(row.MongoConfig),
 			row.Phase,
+			formatOptionalInt(row.BatchSize),
+			formatOptionalInt(row.InsertProducers),
+			formatOptionalInt(mongoEffectiveLoadProducers(row)),
+			formatOptionalInt(row.DriverCalls),
+			formatOptionalInt(mongoLoadBatchCount(row)),
 			fmtOps(row.TreeDBOpsSec),
 			fmtOps(row.MongoOpsSec),
 			fmtRatio(row.TreeDBToMongoRatio),
@@ -2484,7 +2599,14 @@ func writeMongoSummaryTable(b *strings.Builder, rows []mongoSummaryRow) {
 			row.Source,
 		})
 	}
-	writeTable(b, []string{"docs", "indexes", "range index", "range mode", "TreeDB config", "Mongo config", "phase", "TreeDB ops/s", "Mongo ops/s", "ratio", "TreeDB p95 us", "Mongo p95 us", "TreeDB disk snapshot", "TreeDB logical bytes", "TreeDB physical", "Mongo dbStats total", "Mongo physical", "source"}, body, numericColumns(0, 1, 7, 8, 9, 10, 11, 13, 14, 15, 16))
+	writeTable(b, []string{"docs", "indexes", "range index", "range mode", "TreeDB config", "Mongo config", "phase", "batch size", "insert producers", "effective producers", "driver calls", "load batches", "TreeDB ops/s", "Mongo ops/s", "ratio", "TreeDB p95 us", "Mongo p95 us", "TreeDB disk snapshot", "TreeDB logical bytes", "TreeDB physical", "Mongo dbStats total", "Mongo physical", "source"}, body, numericColumns(0, 1, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21))
+}
+
+func formatOptionalInt(value int) string {
+	if value <= 0 {
+		return "n/a"
+	}
+	return commaInt(int64(value))
 }
 
 func sortedMongoIndexes(rows []mongoSummaryRow) []int {

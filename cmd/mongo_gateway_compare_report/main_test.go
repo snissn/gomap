@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,81 @@ func TestReportFromMatrix(t *testing.T) {
 	summary := readFile(t, summaryPath)
 	if !strings.Contains(summary, "load_insert_many\t10000.000000\t12500.000000\t80.000000\t5000.000000\t6250.000000\t160.000000\t2.000000\t2.000000") {
 		t.Fatalf("summary missing load ratio:\n%s", summary)
+	}
+}
+
+func TestSummaryTSVEmitsLoadMetadataColumns(t *testing.T) {
+	dir := t.TempDir()
+	treedbPath := filepath.Join(dir, "treedb.json")
+	mongoPath := filepath.Join(dir, "mongo.json")
+	matrixPath := filepath.Join(dir, "matrix.tsv")
+	reportPath := filepath.Join(dir, "report.md")
+	summaryPath := filepath.Join(dir, "summary.tsv")
+
+	writeFile(t, treedbPath, `{
+  "target": "treedb",
+  "database": "bench",
+  "collection": "docs",
+  "documents": 10,
+  "batch_size": 4,
+  "insert_producers": 4,
+  "secondary_indexes": 0,
+  "phases": [
+    {"name": "load_insert_many", "operations": 10, "driver_calls": 3, "effective_producers": 3, "ops_per_sec": 1000, "latency_micros": {}},
+    {"name": "id_find_one", "operations": 10, "driver_calls": 10, "ops_per_sec": 2000, "latency_micros": {}}
+  ],
+  "treedb_disk_after_checkpoint": {"total_bytes": 1000}
+}`)
+	writeFile(t, mongoPath, `{
+  "target": "mongo",
+  "database": "bench",
+  "collection": "docs",
+  "documents": 10,
+  "batch_size": 4,
+  "insert_producers": 4,
+  "secondary_indexes": 0,
+  "phases": [
+    {"name": "load_insert_many", "operations": 10, "driver_calls": 3, "effective_producers": 3, "ops_per_sec": 500, "latency_micros": {}},
+    {"name": "id_find_one", "operations": 10, "driver_calls": 10, "ops_per_sec": 2500, "latency_micros": {}}
+  ],
+  "mongodb_stats_final": {"dataSize": 1300, "totalSize": 1500}
+}`)
+	writeFile(t, matrixPath, "target\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
+		"treedb\t10\t0\ttreedb.json\t2048\n"+
+		"mongo\t10\t0\tmongo.json\t4096\n")
+
+	if err := run([]string{
+		"-matrix", matrixPath,
+		"-report", reportPath,
+		"-summary", summaryPath,
+	}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	records := readTSV(t, summaryPath)
+	header := tsvHeaderMap(t, records[0])
+	for _, name := range []string{"batch_size", "insert_producers", "effective_producers", "driver_calls", "load_batch_count"} {
+		if _, ok := header[name]; !ok {
+			t.Fatalf("summary header missing %q: %v", name, records[0])
+		}
+	}
+	load := tsvRowByPhase(t, records, header, "load_insert_many")
+	for name, want := range map[string]string{
+		"batch_size":          "4",
+		"insert_producers":    "4",
+		"effective_producers": "3",
+		"driver_calls":        "3",
+		"load_batch_count":    "3",
+	} {
+		if got := load[header[name]]; got != want {
+			t.Fatalf("load row %s=%q want %q\nrow=%v", name, got, want, load)
+		}
+	}
+	read := tsvRowByPhase(t, records, header, "id_find_one")
+	for _, name := range []string{"batch_size", "insert_producers", "effective_producers", "driver_calls", "load_batch_count"} {
+		if got := read[header[name]]; got != "" {
+			t.Fatalf("non-load row %s=%q want blank\nrow=%v", name, got, read)
+		}
 	}
 }
 
@@ -1398,4 +1474,43 @@ func readFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func readTSV(t *testing.T, path string) [][]string {
+	t.Helper()
+	reader := csv.NewReader(strings.NewReader(readFile(t, path)))
+	reader.Comma = '\t'
+	reader.FieldsPerRecord = -1
+	records, err := reader.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) == 0 {
+		t.Fatalf("%s: empty TSV", path)
+	}
+	return records
+}
+
+func tsvHeaderMap(t *testing.T, header []string) map[string]int {
+	t.Helper()
+	out := make(map[string]int, len(header))
+	for i, name := range header {
+		out[name] = i
+	}
+	return out
+}
+
+func tsvRowByPhase(t *testing.T, records [][]string, header map[string]int, phase string) []string {
+	t.Helper()
+	phaseCol, ok := header["phase"]
+	if !ok {
+		t.Fatalf("header missing phase column: %v", header)
+	}
+	for _, row := range records[1:] {
+		if phaseCol < len(row) && row[phaseCol] == phase {
+			return row
+		}
+	}
+	t.Fatalf("missing phase %q in records: %v", phase, records)
+	return nil
 }
