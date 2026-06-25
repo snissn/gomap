@@ -139,6 +139,10 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	if entry.Target.CommandID != nativewire.CommandCreateCollection {
 		return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s is not accepted by create-collection slice", entry.Row.NativeWireCommand))
 	}
+	if err := h.preflightApplyRecords(meta.EntryID, entry.Digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(entry.Digest, code, err)
+	}
 	result, err := h.applyCreateCollectionV1(entry, meta)
 	if err != nil {
 		code, _ := ErrorCodeOf(err)
@@ -187,6 +191,26 @@ func (h *Harness) preflightLocalBoundary(meta ApplyMetadataV1) error {
 			return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "closed DB rejects deterministic apply")
 		}
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local command WAL boundary is not writable: %v", err)
+	}
+	return nil
+}
+
+func (h *Harness) preflightApplyRecords(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1) error {
+	if h.opts.ResultStore != nil {
+		if err := h.opts.ResultStore.CheckCanRecordApplyResult(ApplyResultRecordV1{
+			EntryID:       id,
+			CommandDigest: digest,
+		}); err != nil {
+			return err
+		}
+	}
+	if h.opts.ProgressStore != nil {
+		if err := h.opts.ProgressStore.CheckCanRecordApplied(ApplyProgressRecordV1{
+			EntryID:       id,
+			CommandDigest: digest,
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

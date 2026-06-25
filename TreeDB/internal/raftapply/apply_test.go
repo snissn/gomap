@@ -347,6 +347,66 @@ func TestProgressGapFailsBeforeAppendOrMutation(t *testing.T) {
 	}
 }
 
+func TestResultStoreCapacityFailsBeforeAppendOrMutation(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(0)
+	seam := &countingCommandWALApplySeam{}
+	raw := readHexFixture(t, "../nativewire/testdata/v1/create_collection_entry.hex")
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorResourceExhaustedV1)
+	if seam.appendCalls != 0 || len(readCommandWALFrames(t, dir)) != 0 {
+		t.Fatalf("result-store overflow reached append path append=%d frames=%d", seam.appendCalls, len(readCommandWALFrames(t, dir)))
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after result-store overflow=%d, want 0", got)
+	}
+	_, openErr := collections.NewCollectionManager(db).OpenCollection("users")
+	if !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after result-store overflow error=%v, want ErrCollectionNotFound", openErr)
+	}
+	if progress.Len() != 0 || results.Len() != 0 {
+		t.Fatalf("store lengths after result-store overflow progress=%d results=%d, want 0/0", progress.Len(), results.Len())
+	}
+}
+
+func TestProgressRecordCapacityFailsBeforeAppendOrMutation(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(0, 8)
+	results := NewMemoryApplyResultStore(8)
+	seam := &countingCommandWALApplySeam{}
+	raw := readHexFixture(t, "../nativewire/testdata/v1/create_collection_entry.hex")
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorResourceExhaustedV1)
+	if seam.appendCalls != 0 || len(readCommandWALFrames(t, dir)) != 0 {
+		t.Fatalf("progress-store overflow reached append path append=%d frames=%d", seam.appendCalls, len(readCommandWALFrames(t, dir)))
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after progress-store overflow=%d, want 0", got)
+	}
+	_, openErr := collections.NewCollectionManager(db).OpenCollection("users")
+	if !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after progress-store overflow error=%v, want ErrCollectionNotFound", openErr)
+	}
+	if progress.Len() != 0 || results.Len() != 0 {
+		t.Fatalf("store lengths after progress-store overflow progress=%d results=%d, want 0/0", progress.Len(), results.Len())
+	}
+}
+
 func TestReadOnlyDBApplyFailsBeforeAppendOrMutation(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
