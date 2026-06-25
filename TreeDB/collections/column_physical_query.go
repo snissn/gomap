@@ -158,6 +158,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	DenseGroupCountDistinctPairBitWords int
 	DenseGroupHourCountUsed             bool
 	DenseInt64SpanUsed                  bool
+	DenseInt64SpanReducer               string
 	TimeOrderTopKUsed                   bool
 	DecodedPayloadBytes                 uint64
 	FallbackReads                       int
@@ -1391,6 +1392,7 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	}
 	left.DenseGroupHourCountUsed = left.DenseGroupHourCountUsed || right.DenseGroupHourCountUsed
 	left.DenseInt64SpanUsed = left.DenseInt64SpanUsed || right.DenseInt64SpanUsed
+	left.DenseInt64SpanReducer = mergeColumnPhysicalQueryReducerLabel(left.DenseInt64SpanReducer, right.DenseInt64SpanReducer)
 	left.TimeOrderTopKUsed = left.TimeOrderTopKUsed || right.TimeOrderTopKUsed
 	left.DecodedPayloadBytes += right.DecodedPayloadBytes
 	left.PhysicalBytesScanned += right.PhysicalBytesScanned

@@ -232,6 +232,8 @@ type columnStoreQueryMetric struct {
 	RowsScanned              int                               `json:"rows_scanned"`
 	RowsMatched              int                               `json:"rows_matched"`
 	ReduceRows               int                               `json:"reduce_rows"`
+	TopKCandidates           int                               `json:"topk_candidates,omitempty"`
+	DenseInt64SpanReducer    string                            `json:"dense_int64_span_reducer,omitempty"`
 	DecodedGranules          int                               `json:"decoded_granules"`
 	PlannerCandidates        int                               `json:"planner_candidates"`
 	PlannerReason            string                            `json:"planner_reason,omitempty"`
@@ -291,6 +293,8 @@ type columnStoreJSONBenchCell struct {
 	RowsScanned                      int                               `json:"rows_scanned"`
 	RowsMatched                      int                               `json:"rows_matched"`
 	ReduceRows                       int                               `json:"reduce_rows"`
+	TopKCandidates                   int                               `json:"topk_candidates,omitempty"`
+	DenseInt64SpanReducer            string                            `json:"dense_int64_span_reducer,omitempty"`
 	DecodedGranules                  int                               `json:"decoded_granules"`
 	SkippedGranules                  int                               `json:"skipped_granules"`
 	ScheduledGranules                int                               `json:"scheduled_granules"`
@@ -370,6 +374,8 @@ type columnStoreQueryExecution struct {
 	RowsScanned            int
 	RowsMatched            int
 	ReduceRows             int
+	TopKCandidates         int
+	DenseInt64SpanReducer  string
 	DecodedGranules        int
 	DecodedBlocks          int
 	DecodedPayloadBytes    uint64
@@ -1592,6 +1598,8 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			RowsScanned:            exec.RowsScanned,
 			RowsMatched:            exec.RowsMatched,
 			ReduceRows:             exec.ReduceRows,
+			TopKCandidates:         exec.TopKCandidates,
+			DenseInt64SpanReducer:  exec.DenseInt64SpanReducer,
 			DecodedGranules:        exec.DecodedGranules,
 			PlannerCandidates:      plan.Diagnostics.CandidatePlans,
 			PlannerReason:          plan.Diagnostics.Reason,
@@ -1798,6 +1806,8 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		RowsScanned:            diag.RowsScanned,
 		RowsMatched:            diag.RowsMatched,
 		ReduceRows:             diag.ReduceRows,
+		TopKCandidates:         diag.TopKCandidates,
+		DenseInt64SpanReducer:  diag.DenseInt64SpanReducer,
 		DecodedGranules:        diag.DecodedGranules,
 		DecodedBlocks:          diag.DecodedBlocks,
 		DecodedPayloadBytes:    diag.DecodedPayloadBytes,
@@ -1890,6 +1900,8 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 		RowsScanned:            diag.RowsScanned,
 		RowsMatched:            diag.RowsMatched,
 		ReduceRows:             diag.ReduceRows,
+		TopKCandidates:         diag.TopKCandidates,
+		DenseInt64SpanReducer:  diag.DenseInt64SpanReducer,
 		DecodedGranules:        diag.DecodedGranules,
 		DecodedBlocks:          diag.DecodedBlocks,
 		DecodedPayloadBytes:    diag.DecodedPayloadBytes,
@@ -2301,6 +2313,8 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.RowsScanned = q.RowsScanned
 	cell.RowsMatched = q.RowsMatched
 	cell.ReduceRows = q.ReduceRows
+	cell.TopKCandidates = q.TopKCandidates
+	cell.DenseInt64SpanReducer = q.DenseInt64SpanReducer
 	cell.DecodedGranules = q.DecodedGranules
 	cell.SkippedGranules = q.SkippedGranules
 	cell.ScheduledGranules = q.ScheduledGranules
@@ -2362,6 +2376,8 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.RowsScanned = exec.RowsScanned
 	cell.RowsMatched = exec.RowsMatched
 	cell.ReduceRows = exec.ReduceRows
+	cell.TopKCandidates = exec.TopKCandidates
+	cell.DenseInt64SpanReducer = exec.DenseInt64SpanReducer
 	cell.DecodedGranules = exec.DecodedGranules
 	cell.SkippedGranules = exec.SkippedGranules
 	cell.ScheduledGranules = exec.ScheduledGranules

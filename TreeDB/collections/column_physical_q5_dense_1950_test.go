@@ -34,7 +34,7 @@ func TestColumnPhysicalQ5DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q5 dense): %v", err)
 	}
-	assertColumnPhysicalQ5DenseResult1950(t, "direct", direct, want, len(events), matchedRows)
+	assertColumnPhysicalQ5DenseResult1950(t, "direct", direct, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestColumnPhysicalQ5DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 		if err != nil {
 			t.Fatalf("prepared q5 dense run %d: %v", run, err)
 		}
-		assertColumnPhysicalQ5DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, len(events), matchedRows)
+		assertColumnPhysicalQ5DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 	}
 
 	noPredicateReq := req
@@ -57,7 +57,7 @@ func TestColumnPhysicalQ5DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q5 dense no predicates): %v", err)
 	}
-	if !noPredicate.Diagnostics.DenseInt64SpanUsed || noPredicate.Diagnostics.RowsScanned != len(events) || noPredicate.Diagnostics.RowsMatched != 0 || noPredicate.Diagnostics.ReduceRows != len(events) {
+	if !noPredicate.Diagnostics.DenseInt64SpanUsed || noPredicate.Diagnostics.DenseInt64SpanReducer != columnTypedColumnDenseInt64SpanReducerLocalMap || noPredicate.Diagnostics.RowsScanned != len(events) || noPredicate.Diagnostics.RowsMatched != 0 || noPredicate.Diagnostics.ReduceRows != len(events) {
 		t.Fatalf("no-predicate diagnostics=%+v want dense span with RowsMatched=0 and ReduceRows=%d", noPredicate.Diagnostics, len(events))
 	}
 }
@@ -74,7 +74,7 @@ func BenchmarkColumnPhysicalQ5DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview RunColumnPhysicalQuery: %v", err)
 		}
-		assertColumnPhysicalQ5DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, len(events), matchedRows, req.TopK, len(preview.Groups))
+		assertColumnPhysicalQ5DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, len(events), matchedRows, req.TopK, len(preview.Groups), columnTypedColumnDenseInt64SpanReducerLocalMap)
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -105,7 +105,7 @@ func BenchmarkColumnPhysicalQ5DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview runner.Run: %v", err)
 		}
-		assertColumnPhysicalQ5DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, len(events), matchedRows, req.TopK, len(preview.Groups))
+		assertColumnPhysicalQ5DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, len(events), matchedRows, req.TopK, len(preview.Groups), columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -227,7 +227,7 @@ func columnPhysicalQ5DenseReferenceGroups1950(events []columnPhysicalJSONBenchPa
 	return groups
 }
 
-func assertColumnPhysicalQ5DenseResult1950(tb testing.TB, label string, result ColumnPhysicalQueryResult, want []ColumnPhysicalQueryGroup, rows, matchedRows int) {
+func assertColumnPhysicalQ5DenseResult1950(tb testing.TB, label string, result ColumnPhysicalQueryResult, want []ColumnPhysicalQueryGroup, rows, matchedRows int, wantReducer string) {
 	tb.Helper()
 	if len(result.Groups) != len(want) {
 		tb.Fatalf("%s groups=%+v want %+v", label, result.Groups, want)
@@ -237,16 +237,19 @@ func assertColumnPhysicalQ5DenseResult1950(tb testing.TB, label string, result C
 			tb.Fatalf("%s groups=%+v want %+v", label, result.Groups, want)
 		}
 	}
-	assertColumnPhysicalQ5DenseDiagnostics1950(tb, label, result.Diagnostics, rows, matchedRows, 3, len(want))
+	assertColumnPhysicalQ5DenseDiagnostics1950(tb, label, result.Diagnostics, rows, matchedRows, 3, len(want), wantReducer)
 }
 
-func assertColumnPhysicalQ5DenseDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, rows, matchedRows, topK, resultGroups int) {
+func assertColumnPhysicalQ5DenseDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, rows, matchedRows, topK, resultGroups int, wantReducer string) {
 	tb.Helper()
 	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
 		tb.Fatalf("%s diagnostics storage/fallback=%+v", label, diag)
 	}
 	if !diag.DenseInt64SpanUsed {
 		tb.Fatalf("%s diagnostics did not mark dense int64-span use: %+v", label, diag)
+	}
+	if diag.DenseInt64SpanReducer != wantReducer {
+		tb.Fatalf("%s dense int64-span reducer=%q want %q diagnostics=%+v", label, diag.DenseInt64SpanReducer, wantReducer, diag)
 	}
 	if diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 {
 		tb.Fatalf("%s materialized rows/documents: %+v", label, diag)
