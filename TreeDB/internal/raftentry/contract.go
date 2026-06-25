@@ -342,8 +342,14 @@ func mapNativeWireError(src []byte, err error) DeterministicErrorCodeV1 {
 	case nativewire.ErrMalformedFrame:
 		return ErrorMalformedEntryV1
 	case nativewire.ErrUnsupportedVersion:
-		if commandID, ok := deterministicEntryCommandID(src); ok && !knownNativeWireCommandIDV1(commandID) {
-			return ErrorUnsupportedCommandV1
+		if commandID, ok := deterministicEntryCommandID(src); ok {
+			row := ClassifyNativeWireCommandV1(commandID)
+			if row.Known && row.CommandWALStatus == "read-only" {
+				return ErrorReadOnlyV1
+			}
+			if !knownNativeWireCommandIDV1(commandID) {
+				return ErrorUnsupportedCommandV1
+			}
 		}
 		return ErrorUnsupportedVersionV1
 	case nativewire.ErrUnsupportedFeature:

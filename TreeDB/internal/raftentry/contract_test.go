@@ -186,6 +186,10 @@ func TestDecodeCommandEntryV1MapsReadOnlyNativeWireRejection(t *testing.T) {
 	if _, err := DecodeCommandEntryV1(readOnly, DecodeOptions{}); codeOf(err) != ErrorReadOnlyV1 {
 		t.Fatalf("read-only command err=%v code=%s", err, codeOf(err))
 	}
+	explain := appendDeterministicEntryRaw(nativewire.CommandExplain, nil)
+	if _, err := DecodeCommandEntryV1(explain, DecodeOptions{}); codeOf(err) != ErrorReadOnlyV1 {
+		t.Fatalf("explain command err=%v code=%s", err, codeOf(err))
+	}
 }
 
 func TestDecodeCommandEntryV1RejectsMalformedOversizedMissingGuardAndNoIdempotency(t *testing.T) {
