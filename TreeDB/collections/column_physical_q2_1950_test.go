@@ -661,6 +661,9 @@ func assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(tb testing.TB, la
 	if !diag.DenseGroupCountDistinctUsed || diag.SortedGroupedDistinctUsed || diag.DenseGroupCountUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.TimeOrderTopKUsed {
 		tb.Fatalf("%s diagnostics=%+v want only dense grouped count-distinct path", label, diag)
 	}
+	if diag.DenseGroupCountDistinctReducer != columnTypedColumnDenseGroupCountDistinctReducerPairBitset || diag.DenseGroupCountDistinctGroups == 0 || diag.DenseGroupCountDistinctValues == 0 || diag.DenseGroupCountDistinctPairBitWords == 0 {
+		tb.Fatalf("%s dense grouped count-distinct reducer diagnostics=%+v want pair bitset with cardinalities", label, diag)
+	}
 	if diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
 		tb.Fatalf("%s mark diagnostics=%+v want no sort-key pruning in dense no-sort path", label, diag)
 	}

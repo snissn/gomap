@@ -152,6 +152,10 @@ type ColumnPhysicalQueryDiagnostics struct {
 	SortedGroupedDistinctFallbackReason string
 	DenseGroupCountUsed                 bool
 	DenseGroupCountDistinctUsed         bool
+	DenseGroupCountDistinctReducer      string
+	DenseGroupCountDistinctGroups       int
+	DenseGroupCountDistinctValues       int
+	DenseGroupCountDistinctPairBitWords int
 	DenseGroupHourCountUsed             bool
 	DenseInt64SpanUsed                  bool
 	TimeOrderTopKUsed                   bool
@@ -379,7 +383,7 @@ func (c *Collection) PrepareColumnPhysicalQuery(req ColumnPhysicalQueryRequest) 
 	readCache.returnViews = true
 	var metadata *columnAggregateMetadataRunner
 	var exec *columnPhysicalQueryExecutor
-	typedColumn, typedColumnCandidate, err := prepareColumnTypedColumnPhysicalQueryRunner(view, req, &readCache)
+	typedColumn, typedColumnCandidate, err := prepareColumnTypedColumnPhysicalQueryRunner(view, req, &readCache, true)
 	if err != nil {
 		_ = readCache.close()
 		return nil, err
@@ -1371,6 +1375,16 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.SortedGroupedDistinctFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(left.SortedGroupedDistinctFallbackReason, right.SortedGroupedDistinctFallbackReason)
 	left.DenseGroupCountUsed = left.DenseGroupCountUsed || right.DenseGroupCountUsed
 	left.DenseGroupCountDistinctUsed = left.DenseGroupCountDistinctUsed || right.DenseGroupCountDistinctUsed
+	left.DenseGroupCountDistinctReducer = mergeColumnPhysicalQueryReducerLabel(left.DenseGroupCountDistinctReducer, right.DenseGroupCountDistinctReducer)
+	if right.DenseGroupCountDistinctGroups > left.DenseGroupCountDistinctGroups {
+		left.DenseGroupCountDistinctGroups = right.DenseGroupCountDistinctGroups
+	}
+	if right.DenseGroupCountDistinctValues > left.DenseGroupCountDistinctValues {
+		left.DenseGroupCountDistinctValues = right.DenseGroupCountDistinctValues
+	}
+	if right.DenseGroupCountDistinctPairBitWords > left.DenseGroupCountDistinctPairBitWords {
+		left.DenseGroupCountDistinctPairBitWords = right.DenseGroupCountDistinctPairBitWords
+	}
 	left.DenseGroupHourCountUsed = left.DenseGroupHourCountUsed || right.DenseGroupHourCountUsed
 	left.DenseInt64SpanUsed = left.DenseInt64SpanUsed || right.DenseInt64SpanUsed
 	left.TimeOrderTopKUsed = left.TimeOrderTopKUsed || right.TimeOrderTopKUsed
@@ -1403,6 +1417,16 @@ func mergeColumnPhysicalQueryStorageSource(left, right ColumnPhysicalQueryStorag
 		return left
 	}
 	return ColumnPhysicalQueryStorageSourceMixed
+}
+
+func mergeColumnPhysicalQueryReducerLabel(left, right string) string {
+	if left == "" {
+		return right
+	}
+	if right == "" || right == left {
+		return left
+	}
+	return "mixed"
 }
 
 func mergeColumnPhysicalQueryFallbackReason(left, right ColumnPhysicalQueryFallbackReason) ColumnPhysicalQueryFallbackReason {

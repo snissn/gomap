@@ -1105,6 +1105,13 @@ Reports must never merge direct and prepared rows. Prepared rows can show the
 steady-state service ceiling; direct rows show ad-hoc query performance and are
 the primary optimization target in this plan.
 
+Current production prepared runners may build exact reusable summaries during
+setup for predicate-compatible q1 and q3 typed-column scans. Hot prepared `Run`
+calls can then answer those queries without scanning data rows while preserving
+the same result hash and reducer cardinality diagnostics as the direct path.
+This is a prepared-service ceiling, not a substitute for direct or persisted
+summary work; benchmark reports must still keep direct q1/q3 rows visible.
+
 ## Direct vs Prepared Contract
 
 Direct and prepared share logical query semantics, result shape, diagnostics, and
@@ -1129,6 +1136,11 @@ Prepared query requirements:
   state no longer matches.
 - Prepared rows are allowed to outperform direct rows, but they must not be used
   to hide poor direct performance.
+
+Top-K result shaping should avoid materializing the full candidate result set
+when the query only needs a bounded Top-K. For q5 dense-span scans, keep the
+candidate counter diagnostic, but feed candidates directly into the bounded
+Top-K reducer instead of appending every user span before trimming.
 
 Shared implementation preference:
 

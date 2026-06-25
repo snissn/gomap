@@ -41,7 +41,7 @@ func TestColumnPhysicalQ1DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q1 dense): %v", err)
 	}
-	assertColumnPhysicalQ1DenseResult1950(t, "direct", direct, want, totalRows)
+	assertColumnPhysicalQ1DenseResult1950(t, "direct", direct, want, totalRows, totalRows)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -53,7 +53,7 @@ func TestColumnPhysicalQ1DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 		if err != nil {
 			t.Fatalf("prepared q1 dense run %d: %v", run, err)
 		}
-		assertColumnPhysicalQ1DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, totalRows)
+		assertColumnPhysicalQ1DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, 0, totalRows)
 	}
 }
 
@@ -82,7 +82,7 @@ func BenchmarkColumnPhysicalQ1DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview RunColumnPhysicalQuery: %v", err)
 		}
-		assertColumnPhysicalQ1DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, totalRows)
+		assertColumnPhysicalQ1DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, totalRows, totalRows)
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -113,7 +113,7 @@ func BenchmarkColumnPhysicalQ1DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview runner.Run: %v", err)
 		}
-		assertColumnPhysicalQ1DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, totalRows)
+		assertColumnPhysicalQ1DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, 0, totalRows)
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -201,7 +201,7 @@ func typedColumnQ1DictionaryCodeByGeneration1950(tb testing.TB, d *backenddb.DB,
 	return out
 }
 
-func assertColumnPhysicalQ1DenseResult1950(tb testing.TB, label string, result ColumnPhysicalQueryResult, want map[string]int, rows int) {
+func assertColumnPhysicalQ1DenseResult1950(tb testing.TB, label string, result ColumnPhysicalQueryResult, want map[string]int, wantRowsScanned, wantReduceRows int) {
 	tb.Helper()
 	got := make(map[string]int, len(result.Groups))
 	for _, group := range result.Groups {
@@ -215,10 +215,10 @@ func assertColumnPhysicalQ1DenseResult1950(tb testing.TB, label string, result C
 			tb.Fatalf("%s group %q count=%d want %d all=%v", label, key, got[key], wantCount, got)
 		}
 	}
-	assertColumnPhysicalQ1DenseDiagnostics1950(tb, label, result.Diagnostics, rows)
+	assertColumnPhysicalQ1DenseDiagnostics1950(tb, label, result.Diagnostics, wantRowsScanned, wantReduceRows)
 }
 
-func assertColumnPhysicalQ1DenseDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, rows int) {
+func assertColumnPhysicalQ1DenseDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, wantRowsScanned, wantReduceRows int) {
 	tb.Helper()
 	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
 		tb.Fatalf("%s diagnostics storage/fallback=%+v", label, diag)
@@ -229,8 +229,8 @@ func assertColumnPhysicalQ1DenseDiagnostics1950(tb testing.TB, label string, dia
 	if diag.RowMaterializations != 0 || diag.DocumentMaterializations != 0 {
 		tb.Fatalf("%s materialized rows/documents: %+v", label, diag)
 	}
-	if diag.RowsScanned != rows || diag.ReduceRows != rows {
-		tb.Fatalf("%s rows scanned/reduced=%d/%d want %d diagnostics=%+v", label, diag.RowsScanned, diag.ReduceRows, rows, diag)
+	if diag.RowsScanned != wantRowsScanned || diag.ReduceRows != wantReduceRows {
+		tb.Fatalf("%s rows scanned/reduced=%d/%d want %d/%d diagnostics=%+v", label, diag.RowsScanned, diag.ReduceRows, wantRowsScanned, wantReduceRows, diag)
 	}
 	if diag.TypedColumnPartSections == 0 || diag.TypedColumnPartSectionBytes == 0 || diag.DecodedPayloadBytes == 0 || diag.DecodedBlocks == 0 {
 		tb.Fatalf("%s missing typed-column section/decode diagnostics: %+v", label, diag)

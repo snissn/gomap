@@ -127,12 +127,16 @@ func TestColumnPhysicalJSONBenchTypedColumnPartDirectPreparedReopen1947(t *testi
 				t.Fatalf("PrepareColumnPhysicalQuery(%s): %v", tc.name, err)
 			}
 			defer func() { _ = runner.Close() }()
+			wantPreparedRowsScanned := len(scanned)
+			if tc.name == "q1" || tc.name == "q3" {
+				wantPreparedRowsScanned = 0
+			}
 			for run := 0; run < 2; run++ {
 				prepared, err := runner.Run()
 				if err != nil {
 					t.Fatalf("prepared %s run %d: %v", tc.name, run, err)
 				}
-				assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(t, tc.name, prepared.Diagnostics, len(scanned), tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows)
+				assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(t, tc.name, prepared.Diagnostics, wantPreparedRowsScanned, tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows)
 				preparedHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0(tc.name, prepared.Groups))
 				if preparedHash != rowHash {
 					t.Fatalf("%s prepared run %d hash=%016x want row scan %016x groups=%+v", tc.name, run, preparedHash, rowHash, prepared.Groups)
@@ -505,8 +509,8 @@ func TestColumnPhysicalJSONBenchTypedColumnPartPreparedRunnerPinsSnapshot1947(t 
 		t.Fatalf("prepared initial Run: %v", err)
 	}
 	firstHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0("q1", first.Groups))
-	if first.Diagnostics.RowsScanned != len(events) || first.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection {
-		t.Fatalf("initial prepared diagnostics=%+v want typed-column snapshot rows=%d", first.Diagnostics, len(events))
+	if first.Diagnostics.RowsScanned != 0 || first.Diagnostics.ReduceRows != len(events) || first.Diagnostics.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection {
+		t.Fatalf("initial prepared diagnostics=%+v want typed-column summary over snapshot rows=%d", first.Diagnostics, len(events))
 	}
 
 	newEvent := columnPhysicalJSONBenchParityEventP0{ID: "e99", TimeUS: events[0].TimeUS + 99*columnPhysicalQueryHourUS, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.reply", Did: "did_new"}
@@ -527,8 +531,8 @@ func TestColumnPhysicalJSONBenchTypedColumnPartPreparedRunnerPinsSnapshot1947(t 
 		t.Fatalf("prepared pinned Run after insert: %v", err)
 	}
 	pinnedHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0("q1", pinned.Groups))
-	if pinned.Diagnostics.RowsScanned != len(events) || pinnedHash != firstHash {
-		t.Fatalf("prepared pinned diagnostics=%+v hash=%016x want original rows=%d hash=%016x", pinned.Diagnostics, pinnedHash, len(events), firstHash)
+	if pinned.Diagnostics.RowsScanned != 0 || pinned.Diagnostics.ReduceRows != len(events) || pinnedHash != firstHash {
+		t.Fatalf("prepared pinned diagnostics=%+v hash=%016x want original summary rows=%d hash=%016x", pinned.Diagnostics, pinnedHash, len(events), firstHash)
 	}
 	if err := runner.Close(); err != nil {
 		t.Fatalf("runner Close: %v", err)
