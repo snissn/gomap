@@ -226,6 +226,14 @@ func TestDecodeCommandEntryV1RejectsMalformedOversizedMissingGuardAndNoIdempoten
 	if _, err := DecodeCommandEntryV1(unknownFeature, DecodeOptions{}); codeOf(err) != ErrorUnsupportedFeatureV1 {
 		t.Fatalf("unknown feature err=%v code=%s", err, codeOf(err))
 	}
+	unsupportedCommandVersion := appendDeterministicEntryRawWithHeader(nativewire.DeterministicEntryVersion, nativewire.CommandCreateCollection, 2, 0, []nativewire.Section{
+		{ID: nativewire.SectionCollectionMeta, Bytes: createCollectionMetaPayload("users")},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte("client-a:create:users")},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: uvarintPayload(7)},
+	})
+	if _, err := DecodeCommandEntryV1(unsupportedCommandVersion, DecodeOptions{}); codeOf(err) != ErrorUnsupportedVersionV1 {
+		t.Fatalf("unsupported command version err=%v code=%s", err, codeOf(err))
+	}
 	unknownCommand := appendDeterministicEntryRaw(nativewire.CommandID(9999), []nativewire.Section{
 		{ID: nativewire.SectionCollectionMeta, Bytes: createCollectionMetaPayload("users")},
 		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte("client-a:create:users")},

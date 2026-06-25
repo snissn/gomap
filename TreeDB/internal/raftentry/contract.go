@@ -192,7 +192,7 @@ func DecodeCommandEntryV1(src []byte, opts DecodeOptions) (CommandEntryV1, error
 	entryBytes := bytes.Clone(src)
 	decoded, err := nativewire.DecodeDeterministicEntry(entryBytes, opts.Limits)
 	if err != nil {
-		return CommandEntryV1{}, validationError(mapNativeWireError(err), err)
+		return CommandEntryV1{}, validationError(mapNativeWireError(entryBytes, err), err)
 	}
 	if decoded.Version != EntryVersionV1 {
 		return CommandEntryV1{}, validationError(ErrorUnsupportedVersionV1, fmt.Errorf("entry version %d", decoded.Version))
@@ -266,7 +266,7 @@ func ValidateCommandDigestInputV1(src []byte, opts DecodeOptions) (CommandDigest
 		return CommandDigestV1{}, err
 	}
 	if _, err := nativewire.DecodeDeterministicEntry(src, opts.Limits); err != nil {
-		return CommandDigestV1{}, validationError(mapNativeWireError(err), err)
+		return CommandDigestV1{}, validationError(mapNativeWireError(src, err), err)
 	}
 	return CommandDigestV1ForBytes(src, opts), nil
 }
@@ -333,7 +333,7 @@ func rowRejectionCodeV1(row CommandRowV1) DeterministicErrorCodeV1 {
 	}
 }
 
-func mapNativeWireError(err error) DeterministicErrorCodeV1 {
+func mapNativeWireError(src []byte, err error) DeterministicErrorCodeV1 {
 	code, ok := nativewire.ErrorCodeOf(err)
 	if !ok {
 		return ErrorMalformedEntryV1
@@ -342,7 +342,7 @@ func mapNativeWireError(err error) DeterministicErrorCodeV1 {
 	case nativewire.ErrMalformedFrame:
 		return ErrorMalformedEntryV1
 	case nativewire.ErrUnsupportedVersion:
-		if strings.Contains(nativeWireErrorReason(err), "unsupported deterministic command") {
+		if commandID, ok := deterministicEntryCommandID(src); ok && !knownNativeWireCommandIDV1(commandID) {
 			return ErrorUnsupportedCommandV1
 		}
 		return ErrorUnsupportedVersionV1
@@ -376,6 +376,35 @@ func nativeWireErrorReason(err error) string {
 		return e.Reason
 	}
 	return ""
+}
+
+func deterministicEntryCommandID(src []byte) (nativewire.CommandID, bool) {
+	if len(src) < len(nativewire.DeterministicEntryMagic) || string(src[:len(nativewire.DeterministicEntryMagic)]) != nativewire.DeterministicEntryMagic {
+		return 0, false
+	}
+	off := len(nativewire.DeterministicEntryMagic)
+	entryVersion, n := binary.Uvarint(src[off:])
+	if n <= 0 {
+		return 0, false
+	}
+	if entryVersion != nativewire.DeterministicEntryVersion {
+		return 0, false
+	}
+	off += n
+	commandID, n := binary.Uvarint(src[off:])
+	if n <= 0 {
+		return 0, false
+	}
+	return nativewire.CommandID(commandID), true
+}
+
+func knownNativeWireCommandIDV1(id nativewire.CommandID) bool {
+	for _, schema := range nativewire.MustV1Registry().Schemas() {
+		if schema.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 type digestWriter interface {
