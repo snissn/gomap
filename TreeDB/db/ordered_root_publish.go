@@ -903,6 +903,17 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, &pagerAllocator{p: idx.pager}, false)
 }
 
+func (db *DB) orderedRootDeltaBatchApplyOptions() zipper.ApplyOptions {
+	applyOpts := db.flushApplyOptions()
+	applyOpts.SpanNativeApply = false
+	applyOpts.SpanNativeForceFallbackReason = ""
+	if applyOpts.ParallelApplyConcurrency <= 1 {
+		applyOpts.PrepareReadOnly = false
+		applyOpts.ReadOnlyPrepareWorkers = 0
+	}
+	return applyOpts
+}
+
 func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeDeletedOnColdBuild bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
 	if db == nil {
 		err = ErrClosed
@@ -950,6 +961,21 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	rootZipper, err := db.orderedRootZipperForOptionsWithAllocator(idx, opts, alloc)
 	if err != nil {
 		return 0, nil, metrics, err
+	}
+	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
+	if prepareBuf != nil {
+		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+	}
+	if flushApplyUseOptions(applyOpts) {
+		result, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, applyOpts)
+		db.observeFlushApplyPrepareResult(result, applyErr)
+		db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
+		newRoot = result.RootID
+		retired = result.PendingRetiredPages
+		metrics = result.Metrics
+		err = applyErr
+		return
 	}
 	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
 	return
@@ -2586,39 +2612,35 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
 	}()
-	for idx := range ordered {
-		opts, err := db.orderedRootPublishOptionsForPolicy(ordered[idx].StoragePolicy)
-		if err != nil {
-			return 0, nil, err
-		}
-		if ordered[idx].PrepareReadOnly {
-			rootZipper, prepErr := db.orderedRootZipperForOptionsWithAllocator(idxGen, opts, idxGen.allocator)
-			if prepErr != nil {
-				return 0, nil, prepErr
-			}
-			summary, workerSummary, prepareNs, validationFailed, prepErr := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[idx].BaseRoot, ordered[idx].Delta, ordered[idx].ReadOnlyPrepareWorkers)
-			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, summary, workerSummary, prepareNs, prepErr, validationFailed)
-			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, prepErr, validationFailed)
-			if prepErr != nil {
-				return 0, nil, prepErr
+	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, ordered, idxGen.allocator, &phaseStats); err != nil {
+		return 0, nil, err
+	}
+	phaseStart := time.Now()
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, idxGen.allocator, &pagerAllocator{p: idxGen.pager})
+	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if parallelRootApply {
+		phaseStats.rootApplyParallelGroups++
+		for idx := range ordered {
+			if ordered[idx].ParallelApply && ordered[idx].Delta != nil && !ordered[idx].Delta.IsEmpty() {
+				phaseStats.rootApplyParallelRoots++
 			}
 		}
-		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, ordered[idx].BaseRoot, ordered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, ordered[idx].IncludeDeletedOnColdBuild)
-		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-		phaseStats.rootApplyCalls++
-		if err != nil {
-			return 0, nil, err
+	}
+	for idx := range rootApplyResults {
+		result := rootApplyResults[idx]
+		if result.err != nil {
+			return 0, nil, result.err
 		}
 		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(ordered[idx].Delta, touchedValueLogSegments)
-		rootIDs[idx] = rootID
+		rootIDs[idx] = result.rootID
 		rootsObserved++
-		retired = append(retired, rootRetired...)
-		mergeOrderedRootPublishMetrics(&merged, metrics)
-		phaseStats.rootApplyMetrics.add(metrics)
+		retired = append(retired, result.retired...)
+		mergeOrderedRootPublishMetrics(&merged, result.metrics)
+		phaseStats.rootApplyMetrics.add(result.metrics)
+		phaseStats.rootApplyCalls++
 	}
 
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	iter, err := buildSystemDeltaIter(append([]uint64(nil), rootIDs...))
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
@@ -2787,39 +2809,35 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
 	}()
-	for idx := range allOrdered {
-		opts, err := db.orderedRootPublishOptionsForPolicy(allOrdered[idx].StoragePolicy)
-		if err != nil {
-			return 0, nil, err
-		}
-		if allOrdered[idx].PrepareReadOnly {
-			rootZipper, prepErr := db.orderedRootZipperForOptionsWithAllocator(idxGen, opts, idxGen.allocator)
-			if prepErr != nil {
-				return 0, nil, prepErr
-			}
-			summary, workerSummary, prepareNs, validationFailed, prepErr := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, allOrdered[idx].BaseRoot, allOrdered[idx].Delta, allOrdered[idx].ReadOnlyPrepareWorkers)
-			addOrderedRootReadOnlyPreparePhaseStats(&phaseStats, summary, workerSummary, prepareNs, prepErr, validationFailed)
-			db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, prepErr, validationFailed)
-			if prepErr != nil {
-				return 0, nil, prepErr
+	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats); err != nil {
+		return 0, nil, err
+	}
+	phaseStart := time.Now()
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, &pagerAllocator{p: idxGen.pager})
+	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
+	if parallelRootApply {
+		phaseStats.rootApplyParallelGroups++
+		for idx := range allOrdered {
+			if allOrdered[idx].ParallelApply && allOrdered[idx].Delta != nil && !allOrdered[idx].Delta.IsEmpty() {
+				phaseStats.rootApplyParallelRoots++
 			}
 		}
-		phaseStart := time.Now()
-		rootID, rootRetired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idxGen, allOrdered[idx].BaseRoot, allOrdered[idx].Delta, opts, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, allOrdered[idx].IncludeDeletedOnColdBuild)
-		phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
-		phaseStats.rootApplyCalls++
-		if err != nil {
-			return 0, nil, err
+	}
+	for idx := range rootApplyResults {
+		result := rootApplyResults[idx]
+		if result.err != nil {
+			return 0, nil, result.err
 		}
 		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(allOrdered[idx].Delta, touchedValueLogSegments)
-		rootIDs[idx] = rootID
+		rootIDs[idx] = result.rootID
 		rootsObserved++
-		retired = append(retired, rootRetired...)
-		mergeOrderedRootPublishMetrics(&merged, metrics)
-		phaseStats.rootApplyMetrics.add(metrics)
+		retired = append(retired, result.retired...)
+		mergeOrderedRootPublishMetrics(&merged, result.metrics)
+		phaseStats.rootApplyMetrics.add(result.metrics)
+		phaseStats.rootApplyCalls++
 	}
 
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	iter, err := buildSystemDeltaIter(ctx, rootIDs)
 	phaseStats.systemBuildNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if err != nil {
