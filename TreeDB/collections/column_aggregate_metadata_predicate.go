@@ -36,9 +36,6 @@ func columnAggregateMetadataPredicateSpecs(cfg ColumnStoreConfig, predicates []C
 		if !col.Dictionary {
 			return nil, fmt.Errorf("%w: aggregate metadata predicate column %q requires dictionary string storage", ErrColumnQueryPlanUnsupported, predicate.Column)
 		}
-		if col.Nullable {
-			return nil, fmt.Errorf("%w: aggregate metadata predicate column %q does not support nullable values", ErrColumnQueryPlanUnsupported, predicate.Column)
-		}
 		kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
 		var values []string
 		switch kind {
@@ -162,7 +159,7 @@ func columnAggregateMetadataPredicatesMatchRow(specs []columnAggregateMetadataPr
 		}
 		value := values[spec.columnIdx]
 		if value.Null || !value.Present {
-			return false, fmt.Errorf("%w: aggregate metadata predicate column %q does not support null or missing values", ErrColumnQueryPlanUnsupported, spec.column)
+			return false, nil
 		}
 		if value.Type != ColumnStoreValueString {
 			return false, fmt.Errorf("%w: aggregate metadata predicate column %q encountered incompatible row value type %q", ErrColumnQueryPlanUnsupported, spec.column, value.Type)

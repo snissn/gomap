@@ -298,7 +298,7 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 			}
 			groupValue := row.Values[groupIdx]
 			if groupValue.Null || !groupValue.Present {
-				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q does not support null or missing values", ErrColumnQueryPlanUnsupported, aggregate.Name)
+				groupValue = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: ""}
 			}
 			if groupValue.Type != ColumnStoreValueString {
 				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)

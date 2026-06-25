@@ -153,6 +153,117 @@ func TestPredicateQualifiedAggregateMetadataQ3GroupHourDirectPrepared2892(t *tes
 	}
 }
 
+func TestPredicateQualifiedAggregateMetadataNullablePredicatesSkipNullRows3001(t *testing.T) {
+	cfg := *predicateAggregateMetadataConfig1951()
+	for idx := range cfg.Columns {
+		switch cfg.Columns[idx].Name {
+		case "kind", "operation", "collection", "did":
+			cfg.Columns[idx].Nullable = true
+		}
+	}
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{{
+		Name:        "matching_dids",
+		GroupColumn: "did",
+		Kind:        ColumnAggregateCount,
+		Predicates:  columnPredicateAggregateMetadataPostPredicates1951(),
+	}}
+	rows := []columnDeclaredRow{
+		{ID: []byte("match"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.post"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:match"},
+		}},
+		{ID: []byte("null-kind"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 2},
+			{Type: ColumnStoreValueString, Present: true, Null: true},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.post"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:null-kind"},
+		}},
+		{ID: []byte("missing-operation"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 3},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.post"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:missing-operation"},
+		}},
+		{ID: []byte("wrong-collection"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 4},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString, Present: true, String: "app.bsky.feed.like"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:wrong-collection"},
+		}},
+	}
+
+	asset, ok, err := buildColumnAggregateMetadataAsset(cfg, rows, cfg.AggregateMetadata[0], "events", "events/column-assets", 1, typedColumnPartAssetPartID, 1)
+	if err != nil || !ok {
+		t.Fatalf("buildColumnAggregateMetadataAsset ok=%v err=%v", ok, err)
+	}
+	want := []columnAggregateMetadataEntry{{Group: "did:match", Count: 1}}
+	if !equalColumnAggregateMetadataEntries3001(asset.Entries, want) {
+		t.Fatalf("asset entries=%+v want %+v", asset.Entries, want)
+	}
+}
+
+func TestAggregateMetadataNullableGroupBucketsAsEmptyString3001(t *testing.T) {
+	cfg := *typedColumnSortKeyConfig1948(nil)
+	for idx := range cfg.Columns {
+		if cfg.Columns[idx].Name == "collection" {
+			cfg.Columns[idx].Nullable = true
+		}
+	}
+	aggregate := ColumnAggregateMetadata{
+		Name:        "collection_count",
+		GroupColumn: "collection",
+		Kind:        ColumnAggregateCount,
+	}
+	rows := []columnDeclaredRow{
+		{ID: []byte("alpha"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+			{Type: ColumnStoreValueString, Present: true, String: "did:alpha"},
+		}},
+		{ID: []byte("null-group"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 2},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString, Present: true, Null: true},
+			{Type: ColumnStoreValueString, Present: true, String: "did:null"},
+		}},
+		{ID: []byte("missing-group"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 3},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString},
+			{Type: ColumnStoreValueString, Present: true, String: "did:missing"},
+		}},
+		{ID: []byte("deleted-null-group"), Deleted: true, Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 4},
+			{Type: ColumnStoreValueString, Present: true, String: "commit"},
+			{Type: ColumnStoreValueString, Present: true, String: "create"},
+			{Type: ColumnStoreValueString, Present: true, Null: true},
+			{Type: ColumnStoreValueString, Present: true, String: "did:deleted"},
+		}},
+	}
+
+	asset, ok, err := buildColumnAggregateMetadataAsset(cfg, rows, aggregate, "events", "events/column-assets", 1, typedColumnPartAssetPartID, 1)
+	if err != nil || !ok {
+		t.Fatalf("buildColumnAggregateMetadataAsset ok=%v err=%v", ok, err)
+	}
+	want := []columnAggregateMetadataEntry{
+		{Group: "", Count: 2},
+		{Group: "alpha", Count: 1},
+	}
+	if !equalColumnAggregateMetadataEntries3001(asset.Entries, want) {
+		t.Fatalf("asset entries=%+v want %+v", asset.Entries, want)
+	}
+}
+
 func TestPredicateQualifiedAggregateMetadataExactPredicateCoverage1951(t *testing.T) {
 	_, col, closeFn := openPredicateAggregateMetadataFixture1951(t, [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ5DenseBatchA1950()})
 	defer closeFn()
@@ -619,4 +730,16 @@ func reportPredicateAggregateMetadataBenchMetrics1951(b *testing.B, diag ColumnP
 	b.ReportMetric(float64(diag.ReduceRows), "reduce_rows/op")
 	b.ReportMetric(float64(diag.DecodedMetadataBytes), "metadata_decoded_bytes/op")
 	b.ReportMetric(float64(diag.ResultShapeNanos), "result_shape_ns/op")
+}
+
+func equalColumnAggregateMetadataEntries3001(left, right []columnAggregateMetadataEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for idx := range left {
+		if left[idx] != right[idx] {
+			return false
+		}
+	}
+	return true
 }

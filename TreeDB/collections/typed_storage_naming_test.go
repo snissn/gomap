@@ -332,9 +332,9 @@ type typedStorageLegacyNameAllowlistEntry struct {
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 56, occurrences: 62},
-	{path: "TreeDB/collections/column_aggregate_metadata_asset.go", classification: typedStorageLegacyDerived, matchingLines: 17, occurrences: 19},
+	{path: "TreeDB/collections/column_aggregate_metadata_asset.go", classification: typedStorageLegacyDerived, matchingLines: 18, occurrences: 20},
 	{path: "TreeDB/collections/column_aggregate_metadata_predicate.go", classification: typedStorageLegacyDerived, matchingLines: 6, occurrences: 6},
-	{path: "TreeDB/collections/column_aggregate_metadata_predicate_1951_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 17, occurrences: 18},
+	{path: "TreeDB/collections/column_aggregate_metadata_predicate_1951_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 57, occurrences: 58},
 	{path: "TreeDB/collections/column_aggregate_metadata_typed_column_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 21},
 	{path: "TreeDB/collections/column_asset_gc_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 35, occurrences: 37},
 	{path: "TreeDB/collections/column_asset_lifecycle.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
