@@ -354,7 +354,7 @@ after the collection WAL gate, not current behavior.
   checkpoints in command-WAL cached mode.
 - Background pruning: `PruneInterval`, `PruneMaxPages`, `PruneMaxDuration`
 - Optional flush build parallelism: `FlushBuildConcurrency`
-- Auto-admitted span-native flush apply workers: `FlushApplyConcurrency` defaults to `min(GOMAXPROCS, 8)` under `FlushAdmissionPolicyAuto`; use `FlushAdmissionPolicyOff` to roll back and `FlushAdmissionPolicyExplicit` for c4/c8/c16 experiments
+- Auto-admitted span-native flush apply workers: `FlushApplyConcurrency` defaults to detected physical cores capped by `GOMAXPROCS` and 8 under `FlushAdmissionPolicyAuto` (falling back to `min(GOMAXPROCS, 8)` when physical cores are unknown); default journal/value-log lanes stay coalescing-safe, and `FlushAdmissionPolicyOff`, `FlushAdmissionPolicyExplicit`, explicit `FlushApplyConcurrency`, and explicit `JournalLanes` remain available for c4/c8/c16/lane experiments
 - Optional piggyback compaction toggle: `DisablePiggybackCompaction`
 - Value-log retention guardrails: `ValueLog.MaxRetainedBytes`, `ValueLog.MaxRetainedBytesHard`
 - Value-log compression mode: `ValueLog.Compression` (`off|block|dict|auto`) and `ValueLog.BlockCodec` (`snappy|lz4|zstd`)

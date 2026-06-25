@@ -111,7 +111,10 @@ func TestBuildTreeDBOptions_LeafPageReadCacheWriteAdmissionRejectsInvalid(t *tes
 	}
 }
 
-func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC8CappedAdaptive(t *testing.T) {
+func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsHardwareAwareAdaptive(t *testing.T) {
+	if physical := treedbdb.DetectPhysicalCores(); physical == 1 {
+		t.Skip("default auto correctly declines one-physical-core hosts; formula coverage lives in TreeDB/db hardware tests")
+	}
 	oldGOMAXPROCS := runtime.GOMAXPROCS(12)
 	defer runtime.GOMAXPROCS(oldGOMAXPROCS)
 	saved := saveTreeDBFlagState()
@@ -123,8 +126,11 @@ func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC8CappedAdaptive(t *
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions default auto: %v", err)
 	}
-	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency != 8 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+	if opts.FlushAdmissionPolicy != treedb.FlushAdmissionPolicyAuto || opts.FlushApplyConcurrency < 2 || opts.FlushApplyConcurrency > 8 || opts.FlushApplyConcurrency > runtime.GOMAXPROCS(0) || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
 		t.Fatalf("default auto candidate not selected: policy=%s concurrency=%d span=%t backlog=%t", opts.FlushAdmissionPolicy, opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	if physical := treedbdb.DetectPhysicalCores(); physical > 0 && opts.FlushApplyConcurrency > physical {
+		t.Fatalf("default auto concurrency=%d exceeds detected physical cores=%d", opts.FlushApplyConcurrency, physical)
 	}
 	if opts.FlushApplyMinEntries != 1 || opts.FlushApplyMinSpans != 1 || opts.FlushApplyMinBytes != 1 {
 		t.Fatalf("default auto min gates not selected: entries=%d spans=%d bytes=%d", opts.FlushApplyMinEntries, opts.FlushApplyMinSpans, opts.FlushApplyMinBytes)
@@ -136,16 +142,22 @@ func TestBuildTreeDBOptions_FlushAdmissionDefaultAutoReportsC8CappedAdaptive(t *
 	for _, want := range []string{
 		"flush_admission_policy=auto",
 		"flush_admission_admitted=true",
-		"flush_admission_reason=auto_admitted_capped_adaptive",
-		"flush_admission_effective_concurrency=8",
-		"flush_apply_concurrency=8",
+		"flush_admission_reason=auto_admitted_hardware_aware",
+		"flush_admission_effective_concurrency=" + strconv.Itoa(opts.FlushApplyConcurrency),
+		"flush_admission_concurrency_defaulted=true",
+		"runtime_gomaxprocs=12",
+		"flush_apply_concurrency=" + strconv.Itoa(opts.FlushApplyConcurrency),
 		"flush_apply_min_entries_configured=1",
 		"flush_apply_min_spans_configured=1",
 		"flush_apply_min_bytes_configured=1",
 		"flush_apply_span_native=true",
 		"flush_backlog_coalescing=true",
+		"journal_lanes_effective_default=1",
+		"journal_lanes_hot=1",
+		"journal_lanes_warm=0",
+		"journal_lanes_cold=0",
 		"outer_leaf_read_cache_write_admission=adaptive",
-		"  - flush_admission_policy=auto admitted: auto_admitted_capped_adaptive",
+		"  - flush_admission_policy=auto admitted: auto_admitted_hardware_aware",
 	} {
 		if !treeDBReportHasLine(text, want) {
 			t.Fatalf("resolved options missing line %q: %q", want, text)

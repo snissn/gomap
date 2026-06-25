@@ -377,7 +377,7 @@ Note:
 | `Options.FlushBuildChunkMinBytes` | Adaptive chunk lower bound. |
 | `Options.FlushBuildChunkMaxBytes` | Adaptive chunk upper bound. |
 | `Options.FlushBuildPrefetchUnits` | Build prefetch depth for flush pipeline. |
-| `Options.FlushApplyConcurrency` | COW apply worker-pool cap. Default `FlushAdmissionPolicyAuto` selects `min(GOMAXPROCS, 8)` for the admitted span-native/backlog path; `<=1` disables the worker-pool path under explicit policy. |
+| `Options.FlushApplyConcurrency` | COW apply worker-pool cap. Default `FlushAdmissionPolicyAuto` selects detected physical cores capped by `GOMAXPROCS` and 8 for the admitted span-native/backlog path (falling back to `min(GOMAXPROCS, 8)` when physical cores are unknown); `<=1` disables the worker-pool path under explicit policy. |
 | `Options.FlushApplyMinEntries` | Planned span-op gate before enabling opt-in parallel apply. |
 | `Options.FlushApplyMinSpans` | Planned leaf-span gate before enabling opt-in parallel apply. |
 | `Options.FlushApplyMinBytes` | Planned span-byte gate before enabling opt-in parallel apply. |
@@ -388,8 +388,8 @@ Notes:
 - `FlushBuildConcurrency <= 0` defaults to `GOMAXPROCS`.
 - `FlushBuildMinEntries <= 0` defaults to `16k`.
 - `FlushBuildMinUnits <= 0` defaults to `2`.
-- `FlushApplyConcurrency` is enabled by the default auto admission policy for durable cached-mode opens that pass guardrails. Auto selects `min(GOMAXPROCS, 8)` and remains capped by read-only leaf-span planning.
-- Roll back the default with `FlushAdmissionPolicyOff` / `-treedb-flush-admission-policy=off`; use `FlushAdmissionPolicyExplicit` for c4/c8/c16 experiments.
+- `FlushApplyConcurrency` is enabled by the default auto admission policy for durable cached-mode opens that pass guardrails. Auto selects a physical-core-aware worker count capped by `GOMAXPROCS` and 8, and remains capped by read-only leaf-span planning.
+- Roll back the default with `FlushAdmissionPolicyOff` / `-treedb-flush-admission-policy=off`; use `FlushAdmissionPolicyExplicit` or a configured apply concurrency for c4/c8/c16 experiments.
 - With value-log-backed outer leaves, workers may prepare block/dict
   grouped-frame bodies outside the leaf-log append mutex, but the durable append
   stream remains serialized per leaf-log lane. Published roots install leaf-log
@@ -409,7 +409,8 @@ Notes:
 | `Options.ValueLog.ForcePointers` | Forces value-log path for all puts; increases vlog lane pressure. |
 
 Notes:
-- `JournalLanes <= 0` defaults to 1.
+- `JournalLanes <= 0` uses the coalescing-safe default: hot/warm/cold generation opens three total lanes (one hot, one warm, one cold), while generation-off cached mode opens one hot lane.
+- Configured `JournalLanes` values are authoritative for explicit lane experiments.
 - Open can raise active lane count to match existing on-disk lane IDs.
 - Max supported lanes is 255.
 

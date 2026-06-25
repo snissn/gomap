@@ -5,13 +5,16 @@ import (
 	"math"
 	"runtime"
 	"strings"
+
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
 type hostInfo struct {
-	OS        string
-	Arch      string
-	GoVersion string
-	CPUs      int
+	OS            string
+	Arch          string
+	GoVersion     string
+	CPUs          int
+	PhysicalCores int
 
 	CPUModel     string
 	MachineModel string
@@ -20,13 +23,14 @@ type hostInfo struct {
 
 func getHostInfo() hostInfo {
 	return hostInfo{
-		OS:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		GoVersion:    runtime.Version(),
-		CPUs:         runtime.NumCPU(),
-		CPUModel:     hostCPUModel(),
-		MachineModel: hostMachineModel(),
-		MemBytes:     hostMemBytes(),
+		OS:            runtime.GOOS,
+		Arch:          runtime.GOARCH,
+		GoVersion:     runtime.Version(),
+		CPUs:          runtime.NumCPU(),
+		PhysicalCores: treedbdb.DetectPhysicalCores(),
+		CPUModel:      hostCPUModel(),
+		MachineModel:  hostMachineModel(),
+		MemBytes:      hostMemBytes(),
 	}
 }
 
@@ -35,6 +39,9 @@ func (h hostInfo) MarkdownSummary() string {
 		fmt.Sprintf("%s/%s", h.OS, h.Arch),
 		fmt.Sprintf("Go %s", h.GoVersion),
 		fmt.Sprintf("CPUs %d", h.CPUs),
+	}
+	if h.PhysicalCores > 0 {
+		parts = append(parts, fmt.Sprintf("physical cores %d", h.PhysicalCores))
 	}
 	if h.MemBytes > 0 {
 		parts = append(parts, fmt.Sprintf("RAM %s", formatBytes(h.MemBytes)))

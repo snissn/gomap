@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -39,8 +40,8 @@ var (
 	treedbFlushBuildChunkMinBytes         = flag.Int("treedb-flush-build-chunk-min-bytes", 0, "TreeDB (cached): adaptive chunk min bytes (0=default)")
 	treedbFlushBuildChunkMaxBytes         = flag.Int("treedb-flush-build-chunk-max-bytes", 0, "TreeDB (cached): adaptive chunk max bytes (0=default)")
 	treedbFlushBuildPrefetchUnits         = flag.Int("treedb-flush-build-prefetch-units", 0, "TreeDB (cached): prefetch units for parallel flush build (0=default)")
-	treedbFlushAdmissionPolicy            = flag.String("treedb-flush-admission-policy", "auto", "TreeDB: span-native/backlog/concurrency admission policy (auto|explicit|off; default auto selects min(GOMAXPROCS,8) capped adaptive when admitted)")
-	treedbFlushApplyConcurrency           = flag.Int("treedb-flush-apply-concurrency", 0, "TreeDB: flush/apply COW worker-pool concurrency override (auto caps at 8 when admitted; 0/1 disables under explicit)")
+	treedbFlushAdmissionPolicy            = flag.String("treedb-flush-admission-policy", "auto", "TreeDB: span-native/backlog/concurrency admission policy (auto|explicit|off; default auto selects physical-core-aware capped adaptive when admitted)")
+	treedbFlushApplyConcurrency           = flag.Int("treedb-flush-apply-concurrency", 0, "TreeDB: flush/apply COW worker-pool concurrency override (auto default is physical-core-aware capped; configured values override and cap only at GOMAXPROCS; 0/1 disables under explicit)")
 	treedbFlushApplyMinEntries            = flag.Int("treedb-flush-apply-min-entries", 0, "TreeDB: minimum planned span ops to enable parallel apply (0=policy default)")
 	treedbFlushApplyMinSpans              = flag.Int("treedb-flush-apply-min-spans", 0, "TreeDB: minimum planned leaf spans to enable parallel apply (0=policy default)")
 	treedbFlushApplyMinBytes              = flag.Int("treedb-flush-apply-min-bytes", 0, "TreeDB: minimum planned span bytes to enable parallel apply (0=policy default)")
@@ -62,7 +63,7 @@ var (
 	treedbLeafPageReadCacheEntries        = flag.Int("treedb-leaf-page-read-cache-entries", 0, "TreeDB: outer-leaf read cache entries for leaf pages stored in the value log (0=default/env, <0=disable)")
 	treedbLeafPageReadCacheWriteAdmission = flag.String("treedb-leaf-page-read-cache-write-admission", "immediate", "TreeDB: write-side outer-leaf read-cache admission policy (immediate|adaptive)")
 	treedbChunkSize                       = flag.Int64("treedb-chunk-size", defaultTreeDBChunkSizeBytes, "TreeDB: pager chunk size in bytes (default 256KiB)")
-	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=auto)")
+	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal/value-log lane count (0=coalescing-safe auto; explicit values override)")
 	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
 	treedbKeepRecent                      = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
 	treedbMaxQueuedMems                   = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
@@ -429,6 +430,13 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("flush_admission_admitted=%t", admission.Admitted))
 	lines = append(lines, fmt.Sprintf("flush_admission_reason=%s", admission.Reason))
 	lines = append(lines, fmt.Sprintf("flush_admission_effective_concurrency=%d", admission.FlushApplyConcurrency))
+	lines = append(lines, fmt.Sprintf("flush_admission_concurrency_defaulted=%t", admission.FlushApplyConcurrencyDefaulted))
+	lines = append(lines, fmt.Sprintf("runtime_gomaxprocs=%d", admission.RuntimeGOMAXPROCS))
+	if admission.PhysicalCores > 0 {
+		lines = append(lines, fmt.Sprintf("hardware_physical_cores=%d", admission.PhysicalCores))
+	} else {
+		lines = append(lines, "hardware_physical_cores=unknown")
+	}
 	lines = append(lines, fmt.Sprintf("flush_apply_concurrency=%d", r.opts.FlushApplyConcurrency))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_entries_configured=%d", r.opts.FlushApplyMinEntries))
 	lines = append(lines, fmt.Sprintf("flush_apply_min_spans_configured=%d", r.opts.FlushApplyMinSpans))
@@ -443,6 +451,13 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_single_op_ratio=%s", formatTreeDBFlushBacklogCoalescingSingleOpRatio(r.opts.FlushBacklogCoalescingSingleOpSpanRatio)))
 	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_max_ops_per_span=%s", formatTreeDBDefaultedFloat(r.opts.FlushBacklogCoalescingMaxOpsPerSpan, defaultTreeDBFlushBacklogCoalescingMaxOpsPerSpan)))
 	lines = append(lines, fmt.Sprintf("flush_backlog_coalescing_min_old_leaf_bytes_per_op=%.6f", r.opts.FlushBacklogCoalescingMinOldLeafBytesPerOp))
+	journalLanes := treedbdb.ResolveJournalLaneDefaults(r.opts.JournalLanes, runtime.GOMAXPROCS(0), treedbdb.DetectPhysicalCores(), r.opts.ValueLog.Generational.Policy)
+	lines = append(lines, fmt.Sprintf("journal_lanes_configured=%d", r.opts.JournalLanes))
+	lines = append(lines, fmt.Sprintf("journal_lanes_effective_default=%d", journalLanes.Effective))
+	lines = append(lines, fmt.Sprintf("journal_lanes_defaulted=%t", journalLanes.Defaulted))
+	lines = append(lines, fmt.Sprintf("journal_lanes_hot=%d", journalLanes.HotLanes))
+	lines = append(lines, fmt.Sprintf("journal_lanes_warm=%d", journalLanes.WarmLanes))
+	lines = append(lines, fmt.Sprintf("journal_lanes_cold=%d", journalLanes.ColdLanes))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold

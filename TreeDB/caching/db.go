@@ -8023,19 +8023,23 @@ type DB struct {
 	backendRangeErr               error
 
 	// Durability
-	lanes              []lane
-	leafLog            lane
-	leafLogAppendMu    sync.RWMutex
-	leafLogAppendLanes []*lane
-	leafLogAppendSeq   atomic.Uint32
-	laneMu             sync.Mutex
-	laneCond           *sync.Cond
-	nextLane           int
-	flushLaneMu        []sync.Mutex
-	nextCommitSeq      atomic.Uint64
-	walAckMu           sync.Mutex
-	walErr             error
-	nextRID            atomic.Uint64
+	journalLanesConfigured    int
+	journalLanesDefaulted     bool
+	journalLanesGOMAXPROCS    int
+	journalLanesPhysicalCores int
+	lanes                     []lane
+	leafLog                   lane
+	leafLogAppendMu           sync.RWMutex
+	leafLogAppendLanes        []*lane
+	leafLogAppendSeq          atomic.Uint32
+	laneMu                    sync.Mutex
+	laneCond                  *sync.Cond
+	nextLane                  int
+	flushLaneMu               []sync.Mutex
+	nextCommitSeq             atomic.Uint64
+	walAckMu                  sync.Mutex
+	walErr                    error
+	nextRID                   atomic.Uint64
 
 	// Legacy flags removed from public options; retained internally for code paths.
 	disableValueLog            bool
@@ -10880,14 +10884,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			maxWALSeq[seg.lane] = seg.seq
 		}
 	}
-	laneCount := opts.JournalLanes
-	laneCountDefaulted := laneCount <= 0
-	if laneCountDefaulted {
-		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
-	}
-	if reserveLeafLogLane && laneCount > leafLogLaneID {
-		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
-	}
 	valueLogGenerationPolicy := backenddb.ValueLogGenerationPolicy(opts.ValueLogGenerationPolicy)
 	switch valueLogGenerationPolicy {
 	case backenddb.ValueLogGenerationDefault:
@@ -10899,6 +10895,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generation policy %d", opts.ValueLogGenerationPolicy)
 	}
 	valueLogGenerationPolicyUint8 := uint8(valueLogGenerationPolicy)
+	journalLaneDefaults := backenddb.ResolveJournalLaneDefaults(opts.JournalLanes, runtime.GOMAXPROCS(0), backenddb.DetectPhysicalCores(), valueLogGenerationPolicy)
+	laneCount := journalLaneDefaults.Effective
+	laneCountDefaulted := journalLaneDefaults.Defaulted
+	if reserveLeafLogLane && laneCount > leafLogLaneID {
+		return nil, fmt.Errorf("cachingdb: IndexOuterLeavesInValueLog reserves lane %d; JournalLanes must be <= %d", leafLogLaneID, leafLogLaneID)
+	}
 	// Hot/warm/cold generation reserves lanes 1 and 2 for non-hot classes when
 	// available. When the lane count is caller-provided (e.g., tests pinning
 	// JournalLanes=1), allow fewer lanes and treat all lanes as hot.
@@ -11352,6 +11354,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushCoordinatorWaitCh:                     make(chan struct{}),
 		autoCheckpointOnceCh:                       make(chan struct{}, 1),
 		autoCheckpointWriteCh:                      make(chan struct{}, 1),
+		journalLanesConfigured:                     journalLaneDefaults.Configured,
+		journalLanesDefaulted:                      journalLaneDefaults.Defaulted,
+		journalLanesGOMAXPROCS:                     journalLaneDefaults.GOMAXPROCS,
+		journalLanesPhysicalCores:                  journalLaneDefaults.PhysicalCores,
 		lanes:                                      lanes,
 		flushLaneMu:                                make([]sync.Mutex, len(lanes)),
 	}
@@ -13360,26 +13366,7 @@ const vlogQueueMinValueSize = 1 << 10
 const vlogWriteLinger = 75 * time.Microsecond
 
 func defaultJournalLaneCount(procs int) int {
-	if procs <= 2 {
-		return 1
-	}
-	// Keep defaults conservative on low/mid core hosts.
-	lanes := procs / 4
-	if lanes < 1 {
-		lanes = 1
-	}
-	// On high-core hosts, increase lane fanout to unlock journal/value-log
-	// parallelism, but avoid the most aggressive split to limit queue overhead.
-	if procs >= 16 {
-		highCoreLanes := (procs * 3) / 8
-		if highCoreLanes > lanes {
-			lanes = highCoreLanes
-		}
-	}
-	if lanes > 8 {
-		lanes = 8
-	}
-	return lanes
+	return backenddb.ResolveJournalLaneDefaults(0, procs, 0, backenddb.ValueLogGenerationHotWarmCold).Effective
 }
 
 func (db *DB) startDomainIngressWorkers() {
@@ -27889,6 +27876,15 @@ func (db *DB) Stats() map[string]string {
 	}
 	backendVlogMmap := backendVlogMmapStatsSnapshot(stats)
 	stats["treedb.process.identity.wal_dir"] = db.dir
+	stats["treedb.cache.memtable_shards"] = fmt.Sprintf("%d", len(db.mutableShards))
+	stats["treedb.cache.journal_lanes.configured"] = fmt.Sprintf("%d", db.journalLanesConfigured)
+	stats["treedb.cache.journal_lanes.defaulted"] = fmt.Sprintf("%t", db.journalLanesDefaulted)
+	stats["treedb.cache.journal_lanes.effective"] = fmt.Sprintf("%d", len(db.lanes))
+	stats["treedb.cache.journal_lanes.hot"] = fmt.Sprintf("%d", len(db.valueLogHotLanes))
+	stats["treedb.cache.journal_lanes.warm"] = fmt.Sprintf("%d", len(db.valueLogWarmLanes))
+	stats["treedb.cache.journal_lanes.cold"] = fmt.Sprintf("%d", len(db.valueLogColdLanes))
+	stats["treedb.cache.journal_lanes.gomaxprocs"] = fmt.Sprintf("%d", db.journalLanesGOMAXPROCS)
+	stats["treedb.cache.journal_lanes.physical_cores"] = fmt.Sprintf("%d", db.journalLanesPhysicalCores)
 	db.sampleProcessMemoryPeaks(backendVlogMmap)
 	db.mu.RLock()
 	queueLen := len(db.queue)

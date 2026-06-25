@@ -15,16 +15,18 @@ const (
 
 // FlushAdmissionPolicy controls how TreeDB admits the span-native/backlog
 // flush/apply candidate path. The zero value is the default auto selector: it
-// admits the measured machine-aware capped span-native/backlog/adaptive
-// candidate on sufficiently parallel hosts, declines low-concurrency shapes,
-// and leaves rollback and explicit opt-in policies available.
+// admits the measured hardware-aware span-native/backlog/adaptive candidate on
+// sufficiently parallel hosts, declines low-concurrency shapes, and leaves
+// rollback and explicit opt-in policies available.
 type FlushAdmissionPolicy uint8
 
 const (
 	// FlushAdmissionPolicyAuto is the default selector. It admits the measured
-	// span-native/backlog/adaptive-cache candidate at min(GOMAXPROCS, 8) only when
-	// the low-concurrency guardrail passes; otherwise it fails closed to the
-	// serial path.
+	// span-native/backlog/adaptive-cache candidate at the detected physical core
+	// count, capped by GOMAXPROCS and a conservative upper bound, only when the
+	// low-concurrency guardrail passes; otherwise it fails closed to the serial
+	// path. If physical-core detection is unavailable, auto falls back to the
+	// existing GOMAXPROCS-capped bound.
 	FlushAdmissionPolicyAuto FlushAdmissionPolicy = iota
 	// FlushAdmissionPolicyExplicit preserves existing explicit knobs. Use this to
 	// opt in to a non-default span-native/backlog/concurrency/cache shape.
@@ -35,15 +37,16 @@ const (
 )
 
 const (
-	FlushAdmissionReasonNoExplicitOptIn         = "no_explicit_opt_in"
-	FlushAdmissionReasonExplicitOptIn           = "explicit_opt_in"
-	FlushAdmissionReasonPolicyOff               = "policy_off"
-	FlushAdmissionReasonAutoAdmitted            = "auto_admitted"
-	FlushAdmissionReasonAutoAdmittedCappedAdapt = "auto_admitted_capped_adaptive"
-	FlushAdmissionReasonLowConcurrency          = "low_concurrency"
-	FlushAdmissionReasonUnsafeDurability        = "unsafe_durability"
-	FlushAdmissionReasonCheckpointDebt          = "checkpoint_debt_unresolved"
-	FlushAdmissionReasonInvalidPolicy           = "invalid_policy"
+	FlushAdmissionReasonNoExplicitOptIn           = "no_explicit_opt_in"
+	FlushAdmissionReasonExplicitOptIn             = "explicit_opt_in"
+	FlushAdmissionReasonPolicyOff                 = "policy_off"
+	FlushAdmissionReasonAutoAdmitted              = "auto_admitted"
+	FlushAdmissionReasonAutoAdmittedCappedAdapt   = "auto_admitted_capped_adaptive"
+	FlushAdmissionReasonAutoAdmittedHardwareAware = "auto_admitted_hardware_aware"
+	FlushAdmissionReasonLowConcurrency            = "low_concurrency"
+	FlushAdmissionReasonUnsafeDurability          = "unsafe_durability"
+	FlushAdmissionReasonCheckpointDebt            = "checkpoint_debt_unresolved"
+	FlushAdmissionReasonInvalidPolicy             = "invalid_policy"
 )
 
 // #2794/B1 checkpoint debt is accepted for this cycle as a bounded analytics
@@ -58,6 +61,9 @@ type FlushAdmissionDecision struct {
 	Admitted                        bool
 	Reason                          string
 	FlushApplyConcurrency           int
+	FlushApplyConcurrencyDefaulted  bool
+	RuntimeGOMAXPROCS               int
+	PhysicalCores                   int
 	FlushApplySpanNative            bool
 	FlushBacklogCoalescing          bool
 	LeafPageReadCacheWriteAdmission LeafPageReadCacheWriteAdmissionPolicy
@@ -128,13 +134,20 @@ func FlushAdmissionDecisionForOptions(opts Options) FlushAdmissionDecision {
 }
 
 func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
+	return computeFlushAdmissionDecisionForHardware(opts, runtimeGOMAXPROCS(), DetectPhysicalCores())
+}
+
+func computeFlushAdmissionDecisionForHardware(opts *Options, gomax, physicalCores int) FlushAdmissionDecision {
 	policy := opts.FlushAdmissionPolicy
-	effectiveConcurrency := normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency)
+	effectiveConcurrency := normalizeFlushApplyConcurrencyForGOMAXPROCS(opts.FlushApplyConcurrency, gomax)
 	decision := FlushAdmissionDecision{
 		Policy:                          policy,
 		FlushApplyConcurrency:           effectiveConcurrency,
 		FlushApplySpanNative:            opts.FlushApplySpanNative,
 		FlushBacklogCoalescing:          opts.FlushBacklogCoalescing,
+		FlushApplyConcurrencyDefaulted:  opts.FlushApplyConcurrency <= 0,
+		RuntimeGOMAXPROCS:               gomax,
+		PhysicalCores:                   physicalCores,
 		LeafPageReadCacheWriteAdmission: opts.LeafPageReadCacheWriteAdmission,
 	}
 
@@ -158,7 +171,7 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 		return decision
 	case FlushAdmissionPolicyAuto:
 		reasons := make([]string, 0, 2)
-		candidateConcurrency := autoFlushApplyConcurrency(opts.FlushApplyConcurrency)
+		candidateConcurrency := autoFlushApplyConcurrencyForHardware(opts.FlushApplyConcurrency, gomax, physicalCores)
 		if candidateConcurrency < defaultFlushAdmissionAutoMinConcurrency {
 			reasons = append(reasons, FlushAdmissionReasonLowConcurrency)
 		}
@@ -184,7 +197,7 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 		}
 
 		decision.Admitted = true
-		decision.Reason = FlushAdmissionReasonAutoAdmittedCappedAdapt
+		decision.Reason = FlushAdmissionReasonAutoAdmittedHardwareAware
 		decision.FlushApplyConcurrency = candidateConcurrency
 		decision.FlushApplySpanNative = true
 		decision.FlushBacklogCoalescing = true
@@ -198,15 +211,7 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 }
 
 func autoFlushApplyConcurrency(configured int) int {
-	workers := configured
-	if workers <= 0 {
-		workers = defaultFlushAdmissionAutoConcurrencyCap
-	}
-	workers = normalizeFlushApplyConcurrency(workers)
-	if workers > defaultFlushAdmissionAutoConcurrencyCap {
-		workers = defaultFlushAdmissionAutoConcurrencyCap
-	}
-	return normalizeFlushApplyConcurrency(workers)
+	return autoFlushApplyConcurrencyForHardware(configured, runtimeGOMAXPROCS(), DetectPhysicalCores())
 }
 
 func (d *FlushAdmissionDecision) disableAll(opts *Options, reason string) {
