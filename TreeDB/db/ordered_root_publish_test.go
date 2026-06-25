@@ -2337,6 +2337,186 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticAppli
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_AppliesRootsInParallel(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	deltaAIter := mustFrozenSystemMemtable(t, "a/1", "delta-a").NewIterator(nil, nil)
+	deltaA, err := OrderedRootDeltaBatchFromIterator(deltaAIter)
+	_ = deltaAIter.Close()
+	if err != nil {
+		t.Fatalf("delta a batch: %v", err)
+	}
+	defer func() { _ = deltaA.Close() }()
+
+	deltaBIter := mustFrozenSystemMemtable(t, "b/1", "delta-b").NewIterator(nil, nil)
+	deltaB, err := OrderedRootDeltaBatchFromIterator(deltaBIter)
+	_ = deltaBIter.Close()
+	if err != nil {
+		t.Fatalf("delta b batch: %v", err)
+	}
+	defer func() { _ = deltaB.Close() }()
+
+	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
+		{BaseRoot: 0, Delta: deltaA, ParallelApply: true},
+		{BaseRoot: 0, Delta: deltaB, ParallelApply: true},
+	}, mustRawKVCommandWALIntent(t, db, "cmd/parallel-roots", "1"), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+			return nil, errors.New("unexpected command WAL root IDs")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/a", strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/b", strconv.FormatUint(rootIDs[1], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish command WAL delta batch group: %v", err)
+	}
+	if systemRoot == 0 || len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+		t.Fatalf("systemRoot=%d rootIDs=%v, want non-zero system root and two non-zero roots", systemRoot, rootIDs)
+	}
+	if got := db.State().AppliedCommandLSN; got == 0 {
+		t.Fatalf("AppliedCommandLSN=%d, want command WAL frame applied", got)
+	}
+	requireCommandWALPublishReady(t, db, "parallel command WAL root publish")
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	for rootIdx, kv := range []map[string]string{
+		{"a/1": "delta-a"},
+		{"b/1": "delta-b"},
+	} {
+		for key, want := range kv {
+			entry, err := snap.GetEntryAtRoot(rootIDs[rootIdx], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(root=%d key=%s): %v", rootIdx, key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("root=%d key=%s got=%q want %q", rootIdx, key, got, want)
+			}
+		}
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"]; got != "1" {
+		t.Fatalf("parallel groups stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"]; got != "2" {
+		t.Fatalf("parallel roots stat=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "2" {
+		t.Fatalf("root apply calls stat=%q want 2", got)
+	}
+}
+
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_WarmRootsUseFlushApplyOptions(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db, err := Open(Options{
+		Dir:                        dir,
+		FlushAdmissionPolicy:       FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:      2,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	makeDelta := func(kv ...string) *batch.Batch {
+		t.Helper()
+		table := mustFrozenSystemMemtable(t, kv...)
+		iter := table.NewIterator(nil, nil)
+		delta, err := OrderedRootDeltaBatchFromIterator(iter)
+		_ = iter.Close()
+		if err != nil {
+			t.Fatalf("delta batch: %v", err)
+		}
+		return delta
+	}
+
+	baseA := makeDelta("a/1", "base-a")
+	defer func() { _ = baseA.Close() }()
+	baseB := makeDelta("b/1", "base-b")
+	defer func() { _ = baseB.Close() }()
+	_, baseRootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
+		{BaseRoot: 0, Delta: baseA},
+		{BaseRoot: 0, Delta: baseB},
+	}, mustRawKVCommandWALIntent(t, db, "cmd/base-roots", "1"), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+			return nil, errors.New("unexpected base root IDs")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/a", strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/b", strconv.FormatUint(rootIDs[1], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish base roots: %v", err)
+	}
+
+	updateA := makeDelta("a/2", "delta-a")
+	defer func() { _ = updateA.Close() }()
+	updateB := makeDelta("b/2", "delta-b")
+	defer func() { _ = updateB.Close() }()
+	_, updatedRootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
+		{BaseRoot: baseRootIDs[0], Delta: updateA, ParallelApply: true},
+		{BaseRoot: baseRootIDs[1], Delta: updateB, ParallelApply: true},
+	}, mustRawKVCommandWALIntent(t, db, "cmd/warm-roots", "1"), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+			return nil, errors.New("unexpected updated root IDs")
+		}
+		return mustFrozenSystemMemtable(t,
+			"sys/collections/users/a", strconv.FormatUint(rootIDs[0], 10),
+			"sys/collections/users/b", strconv.FormatUint(rootIDs[1], 10),
+		).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatalf("publish warm roots: %v", err)
+	}
+	requireCommandWALPublishReady(t, db, "warm command WAL root publish")
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	for rootIdx, kv := range []map[string]string{
+		{"a/1": "base-a", "a/2": "delta-a"},
+		{"b/1": "base-b", "b/2": "delta-b"},
+	} {
+		for key, want := range kv {
+			entry, err := snap.GetEntryAtRoot(updatedRootIDs[rootIdx], []byte(key))
+			if err != nil {
+				t.Fatalf("GetEntryAtRoot(root=%d key=%s): %v", rootIdx, key, err)
+			}
+			if got := string(entry.Value); got != want {
+				t.Fatalf("root=%d key=%s got=%q want %q", rootIdx, key, got, want)
+			}
+		}
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.flush_apply.read_only_prepare.calls_total"]; got != "2" {
+		t.Fatalf("read-only prepare calls stat=%q want 2", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"]; got != "1" {
+		t.Fatalf("parallel groups stat=%q want 1", got)
+	}
+	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"]; got != "2" {
+		t.Fatalf("parallel roots stat=%q want 2", got)
+	}
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticColdBuildsRootsInParallel(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
