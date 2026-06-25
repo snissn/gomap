@@ -1,0 +1,304 @@
+package commandwalapply
+
+import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+)
+
+func TestRecoverabilityStatusNames(t *testing.T) {
+	if StatusLocallyApplied != "locally_applied" {
+		t.Fatalf("StatusLocallyApplied=%q", StatusLocallyApplied)
+	}
+	if StatusLocallyWALRecoverable != "locally_wal_recoverable" {
+		t.Fatalf("StatusLocallyWALRecoverable=%q", StatusLocallyWALRecoverable)
+	}
+	if StatusLocallyRootRecoverable != "locally_root_recoverable" {
+		t.Fatalf("StatusLocallyRootRecoverable=%q", StatusLocallyRootRecoverable)
+	}
+}
+
+func TestAppendAndFinalizeNoopFrame(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                          dir,
+		CommandWAL:                   true,
+		DisableBackgroundPrune:       true,
+		CommandWALStatsScan:          true,
+		CommandWALSegmentTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	frame, err := TestNoopFrame()
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if appendResult.Status != StatusLocallyWALRecoverable {
+		_ = db.Close()
+		t.Fatalf("append status=%q, want %q", appendResult.Status, StatusLocallyWALRecoverable)
+	}
+	if appendResult.LSN == 0 || handle.LSN() != appendResult.LSN {
+		_ = db.Close()
+		t.Fatalf("append lsn=%d handle=%d, want non-zero match", appendResult.LSN, handle.LSN())
+	}
+	if appendResult.AppliedCommandLSN != 0 || db.State().AppliedCommandLSN != 0 {
+		_ = db.Close()
+		t.Fatalf("AppliedCommandLSN after append result=%d state=%d, want 0", appendResult.AppliedCommandLSN, db.State().AppliedCommandLSN)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		_ = db.Close()
+		t.Fatalf("command WAL frames after append=%d, want 1", len(frames))
+	}
+	assertNoopFrame(t, frames[0], appendResult.LSN)
+
+	finalResult, err := Finalize(db, handle, ApplyMetadata{}, Options{})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("Finalize: %v", err)
+	}
+	if finalResult.Status != StatusLocallyRootRecoverable {
+		_ = db.Close()
+		t.Fatalf("final status=%q, want %q", finalResult.Status, StatusLocallyRootRecoverable)
+	}
+	if finalResult.LSN != appendResult.LSN || finalResult.AppliedCommandLSN != appendResult.LSN {
+		_ = db.Close()
+		t.Fatalf("final result=%+v, want lsn and applied %d", finalResult, appendResult.LSN)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 1 {
+		_ = db.Close()
+		t.Fatalf("command WAL frames after finalize=%d, want no duplicate append", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ro, err := backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, CommandWAL: true})
+	if err != nil {
+		t.Fatalf("read-only reopen after finalize: %v", err)
+	}
+	if got := ro.State().AppliedCommandLSN; got != appendResult.LSN {
+		_ = ro.Close()
+		t.Fatalf("reopen AppliedCommandLSN=%d, want %d", got, appendResult.LSN)
+	}
+	if err := ro.Close(); err != nil {
+		t.Fatalf("Close read-only: %v", err)
+	}
+}
+
+func TestRejectedInputFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	nonEmptyPayload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("k"),
+		Value: []byte("v"),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	tests := []struct {
+		name    string
+		frame   LoweredFrame
+		wantErr error
+		wantMsg string
+	}{
+		{
+			name: "unsupported class",
+			frame: LoweredFrame{
+				Class:         0,
+				Kind:          commitlog.CommandKindRawKVBatch,
+				Scope:         commitlog.CommandScopeRawKV,
+				PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+				Payload:       frame.Payload,
+			},
+			wantErr: backenddb.ErrCommandWALUnsupported,
+			wantMsg: "not accepted",
+		},
+		{
+			name: "unsupported identity",
+			frame: LoweredFrame{
+				Class:         LoweredFrameClassTestNoop,
+				Kind:          commitlog.CommandKindCollectionInsertBatchByID,
+				Scope:         commitlog.CommandScopeCollection,
+				PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+				Payload:       frame.Payload,
+			},
+			wantErr: backenddb.ErrCommandWALUnsupported,
+			wantMsg: "unsupported identity",
+		},
+		{
+			name: "malformed payload",
+			frame: LoweredFrame{
+				Class:         LoweredFrameClassTestNoop,
+				Kind:          commitlog.CommandKindRawKVBatch,
+				Scope:         commitlog.CommandScopeRawKV,
+				PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+				Payload:       []byte{0x01},
+			},
+			wantErr: backenddb.ErrCommandWALRejected,
+			wantMsg: "malformed",
+		},
+		{
+			name: "non empty raw kv payload",
+			frame: LoweredFrame{
+				Class:         LoweredFrameClassTestNoop,
+				Kind:          commitlog.CommandKindRawKVBatch,
+				Scope:         commitlog.CommandScopeRawKV,
+				PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+				Payload:       nonEmptyPayload,
+			},
+			wantErr: backenddb.ErrCommandWALUnsupported,
+			wantMsg: "empty RawKVBatch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := len(readCommandWALFrames(t, dir))
+			_, _, err := Append(db, tt.frame, ApplyMetadata{}, Options{})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Append error=%v, want %v", err, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Fatalf("Append error=%v, want message containing %q", err, tt.wantMsg)
+			}
+			after := len(readCommandWALFrames(t, dir))
+			if after != before {
+				t.Fatalf("command WAL frames after rejected input=%d, want %d", after, before)
+			}
+		})
+	}
+}
+
+func TestApplyRejectsReadOnlyDB(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	ro, err := backenddb.Open(backenddb.Options{Dir: dir, ReadOnly: true, CommandWAL: true})
+	if err != nil {
+		t.Fatalf("Open read-only: %v", err)
+	}
+	defer func() { _ = ro.Close() }()
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	if _, _, err := Append(ro, frame, ApplyMetadata{}, Options{}); !errors.Is(err, backenddb.ErrReadOnly) {
+		t.Fatalf("Append read-only error=%v, want ErrReadOnly", err)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 0 {
+		t.Fatalf("command WAL frames after read-only apply=%d, want 0", got)
+	}
+}
+
+func TestApplyRejectsCommandWALDisabledDB(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		Durability:             backenddb.DurabilityWALOffRelaxed,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open WAL-off DB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	if _, _, err := Append(db, frame, ApplyMetadata{}, Options{}); !errors.Is(err, backenddb.ErrCommandWALUnsupported) {
+		t.Fatalf("Append command-WAL-disabled error=%v, want ErrCommandWALUnsupported", err)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 0 {
+		t.Fatalf("command WAL frames after disabled apply=%d, want 0", got)
+	}
+}
+
+func readCommandWALFrames(t *testing.T, dir string) []commitlog.CommandEnvelope {
+	t.Helper()
+	walDir := backenddb.WALDirPath(dir)
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("ReadDir %s: %v", walDir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && commitlog.IsCommandSegmentName(entry.Name()) {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	var frames []commitlog.CommandEnvelope
+	for _, name := range names {
+		path := filepath.Join(walDir, name)
+		r, err := commitlog.NewReader(path)
+		if err != nil {
+			t.Fatalf("NewReader %s: %v", name, err)
+		}
+		for {
+			env, err := r.ReadCommandFrame()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				_ = r.Close()
+				t.Fatalf("ReadCommandFrame %s: %v", name, err)
+			}
+			frames = append(frames, env)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatalf("Close reader %s: %v", name, err)
+		}
+	}
+	return frames
+}
+
+func assertNoopFrame(t *testing.T, env commitlog.CommandEnvelope, wantLSN uint64) {
+	t.Helper()
+	if env.LSN != wantLSN ||
+		env.Kind != commitlog.CommandKindRawKVBatch ||
+		env.Scope != commitlog.CommandScopeRawKV ||
+		env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+		t.Fatalf("noop frame identity=%+v, want lsn=%d RawKVBatch/RawKV/V1", env, wantLSN)
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+	}
+	if len(ops) != 0 {
+		t.Fatalf("noop frame ops=%+v, want empty", ops)
+	}
+}
