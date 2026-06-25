@@ -824,6 +824,38 @@ non-deleted generation+row. Readers validate namespace, generation, part id,
 schema hash, declared column descriptors, length, role, operation, and checksum
 before accepting an asset ref.
 
+Exact aggregate metadata assets use `ColumnAssetRef.Kind =
+tcs1_aggregate_metadata` and the `TCAM` envelope:
+
+```text
+u32      Magic = "TCAM"
+u16      Version
+string   Collection
+string   Namespace
+u64      Generation
+u64      PartID
+u64      AppliedCommandLSN
+u64      SchemaHash
+string   AggregateName
+string   GroupColumn
+string   ValueColumn
+u64      PredicateCount
+preds    declared exact predicate coverage
+u64      Rows
+u64      EntryCount
+entries  grouped aggregate entries
+```
+
+Version 1 assets did not carry predicate coverage. Version 2 adds exact
+predicate coverage for equality and bounded string `IN` predicates. Version 3
+keeps the v2 predicate encoding and permits grouped `count` metadata with an
+empty `ValueColumn`; `min`/`max` metadata still requires a value column. Each
+entry stores `Group`, `Count`, `Min`, and `Max`; grouped count entries populate
+`Count` and leave `Min`/`Max` at zero. Readers only accept an asset when
+collection, namespace, generation, part id, schema hash, aggregate name,
+predicate coverage, group column, value column where required, and aggregate
+kind match the requested physical query.
+
 Typed-column part descriptor column type codes are currently:
 
 | Code | Type string | Notes |
