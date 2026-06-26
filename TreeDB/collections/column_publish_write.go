@@ -23,6 +23,7 @@ type columnWritePublishInput struct {
 	rows               int
 	declaredRows       []columnDeclaredRow
 	declaredRowsReady  bool
+	documentExtraction time.Duration
 	commandBytes       int64
 	rowRemainderBytes  int64
 	columnPayloadBytes int64
@@ -403,7 +404,9 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		if input.meta.Options.ColumnStore == nil {
 			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s missing column-store config", input.operation)
 		}
+		start := time.Now()
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(*input.meta.Options.ColumnStore, input.documents)
+		input.documentExtraction = time.Since(start)
 		if err != nil {
 			return columnWritePublishInput{}, err
 		}
@@ -509,7 +512,7 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 	if err != nil {
 		return ColumnPublishPlan{}, err
 	}
-	return BuildColumnPublishPlan(ColumnPublishPlanInput{
+	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
 		Collection:               input.meta.Name,
 		ColumnStore:              cfg,
 		ColumnStoreNormalized:    true,
@@ -527,6 +530,11 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 			EncodeManifest: encodeColumnManifestIdentityForWrite,
 		},
 	})
+	if err != nil {
+		return ColumnPublishPlan{}, err
+	}
+	plan.StageMetrics.DocumentExtraction += input.documentExtraction
+	return plan, nil
 }
 
 func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collectionName string, cfg ColumnStoreConfig) ([]columnManifestRecord, error) {

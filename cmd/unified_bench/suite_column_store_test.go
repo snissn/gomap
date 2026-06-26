@@ -559,6 +559,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.InsertStats.ColumnPublishCommitDurationMS <= 0 || report.InsertStats.ColumnPublishCommitNsPerRow <= 0 {
 		t.Fatalf("column publish commit timing missing: %+v", report.InsertStats)
 	}
+	if report.InsertStats.ColumnStoreDeclaredRowReuseCoverageRatio < 1 && report.InsertStats.ColumnPublishDocumentExtractionDurationMS <= 0 {
+		t.Fatalf("column publish document extraction timing missing: %+v", report.InsertStats)
+	}
 	if report.InsertStats.ColumnPublishAssetPreparationDurationMS <= 0 || report.InsertStats.ColumnPublishManifestEncodeDurationMS <= 0 || report.InsertStats.ColumnPublishRootDeltaDurationMS <= 0 {
 		t.Fatalf("column publish plan subphase timings missing: %+v", report.InsertStats)
 	}
