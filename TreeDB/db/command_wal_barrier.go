@@ -107,6 +107,24 @@ func (db *DB) lockCommandWALRawPublish() func() {
 	return db.commandWALRawPublishMu.Unlock
 }
 
+// LockCommandWALPublish serializes a higher-level command-WAL publish without
+// running raw-publish barriers. Callers must arrange any higher-level draining
+// required before appending or publishing under the returned lock.
+func (db *DB) LockCommandWALPublish() func() {
+	return db.lockCommandWALRawPublish()
+}
+
+// LockCommandWALPublishWithBarriers serializes a public command-WAL append and
+// drains registered staged-command barriers before the caller appends a frame.
+func (db *DB) LockCommandWALPublishWithBarriers() (func(), error) {
+	unlock := db.lockCommandWALRawPublish()
+	if err := db.runCommandWALRawPublishBarriers(); err != nil {
+		unlock()
+		return nil, err
+	}
+	return unlock, nil
+}
+
 // LockCommandWALStaging prevents any command-WAL append/publish path from
 // starting while a higher-level command has appended a frame but not yet made it
 // publishable.

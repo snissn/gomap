@@ -573,13 +573,16 @@ func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint6
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
 	}
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return 0, err
+	}
 	defer unlockCommandWALPublish()
 	return db.appendPublicCommandWALIntent(intent, sync)
 }
 
-// AppendStagedCommandWALIntent appends an intent while the caller holds
-// LockCommandWALStaging.
+// AppendStagedCommandWALIntent appends an intent while the caller holds a
+// higher-level staging guard observed by public command-WAL barriers.
 func (db *DB) AppendStagedCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
@@ -606,7 +609,10 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 		payloadFormat: payloadFormat,
 		payload:       payload,
 	}
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return 0, err
+	}
 	defer unlockCommandWALPublish()
 	return db.appendCommandWALIntent(&intent, sync)
 }
@@ -771,14 +777,17 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 }
 
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return err
+	}
 	defer unlockCommandWALPublish()
 	return db.publishCommandWALNoop(intent, sync)
 }
 
 // PublishStagedCommandWALNoop publishes an already-staged command-WAL no-op.
-// Callers must hold LockCommandWALStaging from the frame append through this
-// publish call.
+// Callers must hold a higher-level raw publish or staging guard from the frame
+// append through this publish call.
 func (db *DB) PublishStagedCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	return db.publishCommandWALNoop(intent, sync)
 }

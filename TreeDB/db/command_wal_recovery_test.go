@@ -890,7 +890,7 @@ func TestCommandWALRawPublishBarriersSkippedAfterPoison(t *testing.T) {
 	}
 }
 
-func TestAppendCommandWALPayloadDoesNotRunRawPublishBarriers(t *testing.T) {
+func TestAppendCommandWALPayloadRunsRawPublishBarriers(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
 	db := openCommandWALDB(t, dir)
@@ -918,14 +918,14 @@ func TestAppendCommandWALPayloadDoesNotRunRawPublishBarriers(t *testing.T) {
 		payload,
 		false,
 	)
-	if err != nil {
-		t.Fatalf("AppendCommandWALPayload error=%v", err)
+	if !errors.Is(err, barrierErr) {
+		t.Fatalf("AppendCommandWALPayload error=%v, want barrier error", err)
 	}
-	if lsn == 0 {
-		t.Fatalf("AppendCommandWALPayload lsn=0, want assigned LSN")
+	if lsn != 0 {
+		t.Fatalf("AppendCommandWALPayload lsn=%d, want no append after barrier error", lsn)
 	}
-	if barrierCalled.Load() {
-		t.Fatalf("higher-level command WAL payload append ran raw publish barrier")
+	if !barrierCalled.Load() {
+		t.Fatalf("higher-level command WAL payload append did not run raw publish barrier")
 	}
 }
 
