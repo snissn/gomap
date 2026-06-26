@@ -433,6 +433,73 @@ func TestCollectionMutationMalformedJSONFailsBeforeAppend(t *testing.T) {
 	}
 }
 
+func TestCollectionMutationUniqueConflictFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-unique-json", testCreateCollectionMetaOptions{
+		includeIndex: true,
+		indexUnique:  true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	seed := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:seed", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"email":"same@example.com","city":"hnl"}`)})
+	seedResult, err := ApplyCommittedEntryV1(db, seed, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 seed: %v result=%+v", err, seedResult)
+	}
+	assertApplied(t, seedResult, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	conflicting := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:unique-conflict", nativewire.DocumentFormatJSON, [][]byte{[]byte("u2")}, [][]byte{[]byte(`{"email":"same@example.com","city":"sea"}`)})
+	result, err := ApplyCommittedEntryV1(db, conflicting, applyMeta(1, 3), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if !errors.Is(err, collections.ErrUniqueIndexConflict) {
+		t.Fatalf("ApplyCommittedEntryV1 err=%v, want ErrUniqueIndexConflict", err)
+	}
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("unique conflict reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after unique conflict=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after unique conflict=%d, want %d", got, beforeLSN)
+	}
+	opened, err := collections.NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection docs after unique conflict: %v", err)
+	}
+	got, err := opened.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("Get u2 after unique conflict: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u2 after unique conflict=%s, want nil", got)
+	}
+	if progress.Len() != 2 || results.Len() != 2 {
+		t.Fatalf("store lengths after unique conflict progress=%d results=%d, want 2/2", progress.Len(), results.Len())
+	}
+}
+
 func TestCollectionMutationCoveredCommandWALFailureRequiresRecovery(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -1618,6 +1685,7 @@ type testCreateCollectionMetaOptions struct {
 	includeIndex       bool
 	indexValueType     uint64
 	indexStoragePolicy uint64
+	indexUnique        bool
 	includeVectorIndex bool
 }
 
@@ -1675,8 +1743,8 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 		dst = appendTestString(dst, "email")
 		dst = appendTestString(dst, "email")
 		dst = binary.AppendUvarint(dst, valueType)
-		dst = append(dst, 0) // unique
-		dst = append(dst, 0) // multi_key
+		dst = append(dst, boolByte(opts.indexUnique)) // unique
+		dst = append(dst, 0)                          // multi_key
 		dst = binary.AppendUvarint(dst, opts.indexStoragePolicy)
 	}
 	if version >= 2 {
@@ -1699,6 +1767,13 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 		}
 	}
 	return dst
+}
+
+func boolByte(v bool) byte {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func appendTestString(dst []byte, value string) []byte {

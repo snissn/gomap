@@ -9543,6 +9543,70 @@ func (c *Collection) PreflightCommandWALMutation(operation ColumnPublishOperatio
 	return requireColumnStoreWriteOperationSupported(c.meta, operation)
 }
 
+// PreflightInsertBatchConflicts checks deterministic insert-batch conflicts
+// before an external command-WAL owner stages its local frame. It publishes any
+// buffered writes first so the persisted primary and unique roots match the
+// collection's visible state, then reuses normal insert planning conflict
+// probes without publishing the planned mutation.
+func (c *Collection) PreflightInsertBatchConflicts(ids, documents [][]byte, trustedValidBSON bool) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	meta := catalog.meta
+	c.meta = meta
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
+	if err != nil {
+		return err
+	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		return err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	indexRuntimes, indexRuntimesErr := catalog.cachedIndexRuntimes()
+	planner := insertBatchPlanner{
+		collection:             meta.Name,
+		primaryRoot:            catalog.primaryRootName,
+		templateRoot:           catalog.templateRootName,
+		indexStateRoot:         catalog.indexStateRootName,
+		cachedIndexRuntimes:    indexRuntimes,
+		cachedIndexRuntimesErr: indexRuntimesErr,
+		options:                plannerOptions,
+	}
+	plan, err := planner.planInsertBatch(ids, documents)
+	if err != nil {
+		return err
+	}
+	defer resetCollectionRunTables(plan.runs)
+	return plan.checkPersistedConflicts(snap, catalog)
+}
+
 // InsertBatchWithCommandWALIntent applies an already-appended collection insert
 // command-WAL frame through the normal insert executor. It is reserved for R3a
 // deterministic apply; ordinary callers should use InsertBatch or

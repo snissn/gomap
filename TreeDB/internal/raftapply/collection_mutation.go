@@ -241,14 +241,8 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 			return nil, codeCollectionApplyError(err)
 		}
 		mutation.frameDocuments = collectionDocumentsFromMutationV1(mutation.ids, mutation.documents)
-		for _, id := range mutation.ids {
-			current, err := collection.Get(id)
-			if err != nil {
-				return nil, codeCollectionApplyError(err)
-			}
-			if current != nil {
-				return nil, codedError(raftentry.ErrorRejectedConflictV1, "raftapply: insert document %q already exists in collection %q", string(id), mutation.collection)
-			}
+		if err := collection.PreflightInsertBatchConflicts(mutation.ids, mutation.documents, mutation.trustedValidBSON); err != nil {
+			return nil, codeCollectionApplyError(err)
 		}
 	case nativewire.CommandReplaceBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
