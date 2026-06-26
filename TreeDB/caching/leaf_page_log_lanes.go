@@ -95,6 +95,8 @@ func (g *cachingLeafPageLogGroup) AppendPreparedLeafPageChildRefs(leafPages [][]
 
 func (g *cachingLeafPageLogGroup) ConcurrentLeafPageAppends() bool { return true }
 
+func (g *cachingLeafPageLogGroup) CompactStorageCachedWrapperOwner() bool { return true }
+
 func (g *cachingLeafPageLogGroup) PreparedLeafPageAppends() bool { return true }
 
 func (g *cachingLeafPageLogGroup) PreparedLeafPageBatchAppends() bool { return true }

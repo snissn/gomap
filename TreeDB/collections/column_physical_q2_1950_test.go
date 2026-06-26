@@ -34,6 +34,15 @@ func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "direct", direct, rowHash, wantCounts)
 	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "direct", direct.Diagnostics, len(events), matchedRows, true)
 
+	skipChecksumsReq := req
+	skipChecksumsReq.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+	skipChecksums, err := col.RunColumnPhysicalQuery(skipChecksumsReq)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q2 skip checksums): %v", err)
+	}
+	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "skip checksums", skipChecksums, rowHash, wantCounts)
+	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "skip checksums", skipChecksums.Diagnostics, len(events), matchedRows, true)
+
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
 		t.Fatalf("PrepareColumnPhysicalQuery(q2): %v", err)

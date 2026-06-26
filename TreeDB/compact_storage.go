@@ -46,9 +46,13 @@ const (
 
 var ErrCompactStorageLeafPageLogOwnerUnsupported = treedbdb.ErrCompactStorageLeafPageLogOwnerUnsupported
 
+var ErrCompactStorageLeafPageLogHandoffCleanup = treedbdb.ErrCompactStorageLeafPageLogHandoffCleanup
+
 type CompactStorageLeafPageLogOwnerClassification = treedbdb.CompactStorageLeafPageLogOwnerClassification
 
 type CompactStorageLeafPageLogOwnerError = treedbdb.CompactStorageLeafPageLogOwnerError
+
+type CompactStorageLeafPageLogHandoffError = treedbdb.CompactStorageLeafPageLogHandoffError
 
 // CompactStorageOptions controls full storage compaction across TreeDB storage
 // domains. Prefer this high-level API over manually sequencing value-log

@@ -1374,11 +1374,11 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	return part, nil
 }
 
-func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache) (columnTypedColumnPhysicalQueryPart, bool, error) {
+func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, allowDenseGroupCountDistinct bool) (columnTypedColumnPhysicalQueryPart, bool, error) {
 	if !typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity) {
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
-	requests, ok, err := columnTypedColumnPhysicalQueryDensePreparedRequests(plan, req)
+	requests, ok, err := columnTypedColumnPhysicalQueryDensePreparedRequests(plan, req, allowDenseGroupCountDistinct)
 	if err != nil || !ok {
 		return columnTypedColumnPhysicalQueryPart{}, ok, err
 	}
@@ -1412,6 +1412,9 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	switch {
 	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
 		part, err := decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
+		return part, true, err
+	case columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
+		part, err := decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
 		return part, true, err
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
 		part, err := decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
@@ -1461,7 +1464,10 @@ func (r *columnTypedColumnPhysicalRangePartReader) readRange(offset int, length 
 	return raw, nil
 }
 
-func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest) ([]typedColumnPreparedColumnRequest, bool, error) {
+func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, allowDenseGroupCountDistinct bool) ([]typedColumnPreparedColumnRequest, bool, error) {
+	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) {
+		return nil, false, nil
+	}
 	requests := make([]typedColumnPreparedColumnRequest, 0, 4+len(plan.PredicateSpecs))
 	addString := func(column string, role typedcolumn.ColumnExecutionRole, op columnsemantics.Operation) error {
 		adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(plan.Fields, column)
@@ -1508,6 +1514,19 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 	switch {
 	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
 		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryCount); err != nil {
+			return nil, true, err
+		}
+	case columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
+		if !allowDenseGroupCountDistinct {
+			return nil, false, nil
+		}
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy); err != nil {
+			return nil, true, err
+		}
+		if err := addString(plan.DistinctColumn, typedcolumn.ColumnRoleMeasure, columnsemantics.OpDictionaryGroupBy); err != nil {
+			return nil, true, err
+		}
+		if err := addPredicates(plan.PredicateSpecs); err != nil {
 			return nil, true, err
 		}
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
@@ -1683,6 +1702,53 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan columnTypedC
 		DecodedBlocks:       blocks,
 		DecodedPayloadBytes: decodedBytes,
 		DenseGroupCount:     &columnTypedColumnDenseGroupCountPart{Cardinality: len(group.Dictionary), Dictionary: group.Dictionary, Codes: group.Codes, Valid: group.Valid},
+	}, nil
+}
+
+func decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64) (columnTypedColumnPhysicalQueryPart, error) {
+	group, groupDecodedBytes, groupBlocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "grouped count-distinct group")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	distinct, distinctDecodedBytes, distinctBlocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.DistinctColumn, summary.Rows, "grouped count-distinct distinct")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	if len(group.Codes) != len(distinct.Codes) {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column grouped count-distinct group/distinct rows=%d/%d", len(group.Codes), len(distinct.Codes))
+	}
+
+	predicates := make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
+	predicateDecodedBytes := uint64(0)
+	predicateBlocks := 0
+	for _, spec := range plan.PredicateSpecs {
+		predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		predicates = append(predicates, predicate)
+		predicateDecodedBytes += decodedBytes
+		predicateBlocks += blocks
+	}
+
+	decodedBlocks := groupBlocks + distinctBlocks + predicateBlocks
+	return columnTypedColumnPhysicalQueryPart{
+		Ref:                 typedRef,
+		PhysicalRef:         physical,
+		Rows:                summary.Rows,
+		Bytes:               bytesRead,
+		Sections:            summary.Sections,
+		SectionBytes:        summary.SectionBytes,
+		GranulesConsidered:  decodedBlocks,
+		GranulesDecoded:     decodedBlocks,
+		DecodedBlocks:       decodedBlocks,
+		DecodedPayloadBytes: groupDecodedBytes + distinctDecodedBytes + predicateDecodedBytes,
+		DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+			Rows:       summary.Rows,
+			Group:      group,
+			Distinct:   distinct,
+			Predicates: predicates,
+		},
 	}, nil
 }
 
