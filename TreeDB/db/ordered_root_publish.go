@@ -1042,7 +1042,8 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {
-		route, context := opts.orderedRootSpanNativeRouteContext(OrderedRootSpanNativeRouteOverlayColdBuild, "ordered-root delta batch cold build")
+		route := OrderedRootSpanNativeRouteOverlayColdBuild
+		context := "ordered-root delta batch cold build"
 		db.observeOrderedRootSpanNativeEligibility(db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
 			Route:          route,
 			Context:        context,

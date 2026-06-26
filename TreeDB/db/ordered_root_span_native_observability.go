@@ -93,6 +93,7 @@ type orderedRootSpanNativeEligibilityRequest struct {
 	Summary                       zipper.ReadOnlyLeafSpanSummary
 	DeltaOps                      int
 	ReadOnlyPrepareValidationFail bool
+	ReadOnlyPrepareFailed         bool
 	Err                           error
 	ExplicitFallbackReason        string
 	SpanNativeEligible            bool
@@ -296,7 +297,7 @@ func (db *DB) classifyOrderedRootSpanNativeFallback(req orderedRootSpanNativeEli
 	switch {
 	case req.ReadOnlyPrepareValidationFail:
 		return FlushSpanRunFallbackValidationFailed
-	case req.Err != nil && !req.SpanNativeEligible:
+	case req.Err != nil && req.ReadOnlyPrepareFailed:
 		return FlushSpanRunFallbackPrepareError
 	case req.ForceColdBuild || summary.ColdBuild:
 		return FlushSpanRunFallbackColdBuild
@@ -478,6 +479,9 @@ func (db *DB) observeOrderedRootSpanNativeEligibility(row OrderedRootSpanNativeT
 		}
 		return
 	}
+	if row.Status == OrderedRootSpanNativeStatusEligible {
+		return
+	}
 	if !row.Eligible {
 		if row.Ops > 0 {
 			db.orderedRootSpanNativeIneligibleOps.Add(row.Ops)
@@ -541,6 +545,7 @@ func (db *DB) observeOrderedRootSpanNativeApplyResult(route OrderedRootSpanNativ
 		Context:                       context,
 		Summary:                       summary,
 		ReadOnlyPrepareValidationFail: result.ReadOnlyPrepareValidationFailed,
+		ReadOnlyPrepareFailed:         result.ReadOnlyPrepareFailed,
 		Err:                           err,
 		ExplicitFallbackReason:        explicitFallbackReason,
 		SpanNativeEligible:            result.SpanNativeEligible,
@@ -574,6 +579,7 @@ func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnl
 		Summary:                       summary,
 		DeltaOps:                      deltaOps,
 		ReadOnlyPrepareValidationFail: validationFailed,
+		ReadOnlyPrepareFailed:         err != nil,
 		Err:                           err,
 		ExplicitFallbackReason:        explicitFallbackReason,
 		SpanNativeEligible:            spanNativeEligible,

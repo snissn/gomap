@@ -5761,6 +5761,7 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallbacks/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallbacks_total", operations)
 	addRatioMetric(metrics, "ordered_root_span_native_used_ops/candidate_op", delta, "treedb.publish.ordered_root_delta_group.span_native.used_ops_total", "treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total")
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_not_implemented_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.span_native_not_implemented.ops_total", operations)
+	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_prepare_error_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.prepare_error.ops_total", operations)
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_route_ineligible_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.route_ineligible.ops_total", operations)
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_disabled_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.disabled.ops_total", operations)
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_admission_policy_decline_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.admission_policy_decline.ops_total", operations)
@@ -5788,6 +5789,7 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 		addPerOperationMetric(metrics, metricPrefix+"used_ops/doc", delta, statPrefix+"used_ops_total", operations)
 		addPerOperationMetric(metrics, metricPrefix+"ineligible_ops/doc", delta, statPrefix+"ineligible_ops_total", operations)
 		addPerOperationMetric(metrics, metricPrefix+"fallbacks/doc", delta, statPrefix+"fallbacks_total", operations)
+		addPerOperationMetric(metrics, metricPrefix+"fallback_prepare_error_ops/doc", delta, statPrefix+"fallback.reason.prepare_error.ops_total", operations)
 		addRatioMetric(metrics, metricPrefix+"used_ops/candidate_op", delta, statPrefix+"used_ops_total", statPrefix+"candidate_ops_total")
 	}
 	addPerOperationMetric(metrics, "indexed_flush_calls/doc", delta, "treedb.collections.write_domain.indexed_flush.calls_total", operations)
