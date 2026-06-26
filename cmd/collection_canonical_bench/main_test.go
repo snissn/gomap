@@ -263,6 +263,38 @@ func TestCanonicalValidationRequiresProductionEvidenceForCompactedClaims(t *test
 	}
 }
 
+func TestCanonicalValidationSkipsAuxiliaryPostInsertRowsForProductionEvidence(t *testing.T) {
+	canon := knownExampleRun()
+	offline := testStorageRow("treedb_template_v1_collection_2_indexes", "treedb_fast", "template-v1", "collection", phasePostInsert, 2, 12000000, 120.0)
+	offline.BenchmarkName = "treedb_collection_compression_matrix"
+	offline.MaintenanceMode = "none"
+	offline.BenchmarkTimed = false
+	offline.MeasurementKind = "offline_script"
+	offline.MeasurementNote = "offline compact matrix before-compact size; not compacted"
+	offline.CompactionFlags = nil
+	offline.ProductionEvidence = &productionEvidence{
+		StoragePolicy:          "index-vlog",
+		StorageCells:           "index-vlog",
+		LeafSegmentTargetBytes: 1048576,
+	}
+	fixture := testStorageRow("treedb_template_v1_collection_2_indexes", "treedb_fast", "template-v1", "collection", phasePostInsert, 2, 12500000, 125.0)
+	fixture.BenchmarkName = "collection-load-fixture"
+	fixture.MaintenanceMode = "none"
+	fixture.BenchmarkTimed = false
+	fixture.MeasurementKind = "fixture_wall_timed"
+	fixture.MeasurementNote = "full leafgen fixture pre-maintenance size; use benchmark-timed rows for primary throughput"
+	fixture.CompactionFlags = nil
+	fixture.DocsPerSec = floatPtr(100000)
+	canon.Results = append(canon.Results, offline, fixture)
+	finalizeRunMetadata(canon)
+
+	for _, check := range validateCanonicalRun(canon) {
+		if check.Code == "missing_production_evidence" {
+			t.Fatalf("auxiliary post-insert rows should not require producer-path evidence: %#v", check)
+		}
+	}
+}
+
 func TestCanonicalValidationAcceptsNoSecondaryIndexFlushSpanEvidence(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Config.Indexes = 0

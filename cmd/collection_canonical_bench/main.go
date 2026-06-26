@@ -1234,7 +1234,7 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		if (isTreeDBCompactedPhase(r.Phase) || r.Phase == phaseSQLiteVacuum) && len(r.CompactionFlags) == 0 {
 			add("error", "missing_compaction_flags", fmt.Sprintf("%s/%s is missing compaction flags", r.ConfigName, r.Phase))
 		}
-		if r.Phase == phasePostInsert && r.Shape == "collection" && strings.HasPrefix(r.ConfigName, "treedb_") && !hasRowProductionEvidence(r) {
+		if isTreeDBTimedPostInsertProductionRow(r) && !hasRowProductionEvidence(r) {
 			add("error", "missing_production_evidence", fmt.Sprintf("%s/%s is missing producer route, selected concurrency/admission, span-native used ops, or fallback-counter evidence", r.ConfigName, r.Phase))
 		}
 	}
@@ -1413,11 +1413,18 @@ func hasTreeDBConfigProductionEvidence(canon *canonicalRun, treeDBConfig string)
 		return false
 	}
 	for _, row := range canon.Results {
-		if row.ConfigName == treeDBConfig && row.Phase == phasePostInsert && row.Shape == "collection" && hasRowProductionEvidence(row) {
+		if row.ConfigName == treeDBConfig && isTreeDBTimedPostInsertProductionRow(row) && hasRowProductionEvidence(row) {
 			return true
 		}
 	}
 	return false
+}
+
+func isTreeDBTimedPostInsertProductionRow(row resultRow) bool {
+	return row.Phase == phasePostInsert &&
+		row.Shape == "collection" &&
+		strings.HasPrefix(row.ConfigName, "treedb_") &&
+		row.BenchmarkTimed
 }
 
 func hasRowProductionEvidence(row resultRow) bool {
