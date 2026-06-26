@@ -416,6 +416,38 @@ func TestRawSpanNativePrepareErrorRequiresPrepareFailureFlag(t *testing.T) {
 	}
 }
 
+func TestRawSpanNativeCloseDrainDisabledPrecedesCloseFallback(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                   t.TempDir(),
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+		FlushApplySpanNative:  false,
+		FlushApplyConcurrency: 4,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	req := rawSpanNativeEligibilityRequest{
+		route:                    RawSpanNativeRouteCloseOrCheckpointDrain,
+		deltaOps:                 1,
+		readOnlyPrepareRequested: true,
+		applyOptionsUsed:         true,
+		spanNativeRequested:      false,
+	}
+	if got := d.rawSpanNativeEligibility(req).fallbackReason; got != FlushSpanRunFallbackDisabled {
+		t.Fatalf("fallbackReason=%s, want disabled for parallel-only close/checkpoint drains", got)
+	}
+
+	req.spanNativeRequested = true
+	if got := d.rawSpanNativeEligibility(req).fallbackReason; got != FlushSpanRunFallbackCloseOrCheckpoint {
+		t.Fatalf("fallbackReason=%s, want close_or_checkpoint when span-native is requested", got)
+	}
+}
+
 func openExplicitRawSpanNativeRouteTestDB(t *testing.T) *DB {
 	t.Helper()
 	d, err := Open(Options{

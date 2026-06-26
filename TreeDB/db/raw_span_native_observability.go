@@ -269,8 +269,6 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 		return FlushSpanRunFallbackValidationFailed
 	case req.readOnlyPrepareRequested && req.readOnlyPrepareFailed:
 		return FlushSpanRunFallbackPrepareError
-	case req.route == RawSpanNativeRouteCloseOrCheckpointDrain:
-		return FlushSpanRunFallbackCloseOrCheckpoint
 	case ops == 0:
 		return FlushSpanRunFallbackBelowThreshold
 	}
@@ -292,6 +290,8 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 		return FlushSpanRunFallbackDisabled
 	case !req.spanNativeRequested:
 		return FlushSpanRunFallbackDisabled
+	case req.route == RawSpanNativeRouteCloseOrCheckpointDrain:
+		return FlushSpanRunFallbackCloseOrCheckpoint
 	case summary.DeleteRanges > 0 || req.route == RawSpanNativeRouteRangeDelete || req.route == RawSpanNativeRouteMixedRangeDelete:
 		return FlushSpanRunFallbackRangeDeleteBarrier
 	case summary.Maintenance:
