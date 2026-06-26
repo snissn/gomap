@@ -68,6 +68,12 @@ type collectionComparison struct {
 	Source            string
 }
 
+type collectionGuardrailCheck struct {
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+}
+
 type mongoSummaryRow struct {
 	Documents               int
 	SecondaryIndexes        int
@@ -833,6 +839,7 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "indexes_") {
 			continue
 		}
+		dirIndex := collectionIndexFromDirectory(entry.Name())
 		path := filepath.Join(dir, entry.Name(), "benchmark_results.json")
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -840,13 +847,19 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 			continue
 		}
 		var parsed struct {
-			Results     []collectionRow        `json:"results"`
-			Comparisons []collectionComparison `json:"comparisons"`
+			Results         []collectionRow            `json:"results"`
+			Comparisons     []collectionComparison     `json:"comparisons"`
+			GuardrailChecks []collectionGuardrailCheck `json:"guardrail_checks"`
+			Checks          []collectionGuardrailCheck `json:"checks"`
 		}
 		if err := json.Unmarshal(raw, &parsed); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
 			continue
 		}
+		parsed.Checks = append(parsed.GuardrailChecks, parsed.Checks...)
+		var compactWarnings []string
+		parsed.Comparisons, compactWarnings = filterCollectionComparisonsForCompactedEvidence(path, dirIndex, parsed.Results, parsed.Comparisons, parsed.Checks)
+		warnings = append(warnings, compactWarnings...)
 		for i := range parsed.Results {
 			parsed.Results[i].Source = filepath.ToSlash(filepath.Join(entry.Name(), "benchmark_results.json"))
 		}
@@ -872,6 +885,65 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 		return comps[i].Name < comps[j].Name
 	})
 	return rows, comps, warnings
+}
+
+func filterCollectionComparisonsForCompactedEvidence(path string, dirIndex int, rows []collectionRow, comps []collectionComparison, checks []collectionGuardrailCheck) ([]collectionComparison, []string) {
+	if len(comps) == 0 {
+		return comps, nil
+	}
+	if collectionChecksBlockCompactedClaims(checks) {
+		return nil, []string{fmt.Sprintf("%s: exhaustive_compact did not complete; suppressing TreeDB compacted-size comparisons from this source", path)}
+	}
+
+	filtered := make([]collectionComparison, 0, len(comps))
+	suppressed := 0
+	for _, comp := range comps {
+		if collectionComparisonHasPositiveExhaustiveCompactEvidence(rows, comp, dirIndex) {
+			filtered = append(filtered, comp)
+			continue
+		}
+		suppressed++
+	}
+	if suppressed == 0 {
+		return filtered, nil
+	}
+	return filtered, []string{fmt.Sprintf("%s: no positive exhaustive_compact row for %d TreeDB comparison(s) at the compared config/index; suppressing unsupported TreeDB compacted-size comparisons from this source", path, suppressed)}
+}
+
+func collectionChecksBlockCompactedClaims(checks []collectionGuardrailCheck) bool {
+	for _, check := range checks {
+		if check.Code == "phase.exhaustive_compact.failed" {
+			return true
+		}
+	}
+	return false
+}
+
+func collectionComparisonHasPositiveExhaustiveCompactEvidence(rows []collectionRow, comp collectionComparison, dirIndex int) bool {
+	compIndex := collectionIndexFromConfig(comp.TreeDBConfig)
+	for _, row := range rows {
+		if row.Phase == "exhaustive_compact" &&
+			row.Shape == "collection" &&
+			strings.HasPrefix(row.ConfigName, "treedb_") &&
+			row.ConfigName == comp.TreeDBConfig &&
+			row.BytesPerDoc > 0 &&
+			(compIndex < 0 || row.IndexCount == compIndex) &&
+			(dirIndex < 0 || row.IndexCount == dirIndex) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectionIndexFromDirectory(name string) int {
+	if !strings.HasPrefix(name, "indexes_") {
+		return -1
+	}
+	v, err := strconv.Atoi(strings.TrimPrefix(name, "indexes_"))
+	if err != nil {
+		return -1
+	}
+	return v
 }
 
 func (r *collectionRow) UnmarshalJSON(raw []byte) error {
@@ -2132,7 +2204,7 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 	values := make(map[string][]float64)
 	labelSet := make(map[string]bool)
 	for _, comp := range comps {
-		if comp.SmallerRatio <= 0 {
+		if comp.SmallerRatio <= 0 || !collectionComparisonIsClaimableCompacted(comp) {
 			continue
 		}
 		label := collectionComparisonLabel(comp)
@@ -2148,7 +2220,7 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 		labelPos[label] = i
 	}
 	for _, comp := range comps {
-		if comp.SmallerRatio <= 0 {
+		if comp.SmallerRatio <= 0 || !collectionComparisonIsClaimableCompacted(comp) {
 			continue
 		}
 		key := displayConfigWithoutIndex(comp.TreeDBConfig) + " vs " + displayConfigWithoutIndex(comp.SQLiteConfig)
@@ -2170,6 +2242,10 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 		series = append(series, chartSeries{Name: key, Values: values[key], Color: collectionSeriesColor(key)})
 	}
 	return collectionChartRows{Categories: labels, Series: nonZeroSeries(series)}
+}
+
+func collectionComparisonIsClaimableCompacted(comp collectionComparison) bool {
+	return comp.TreeDBPhase == "exhaustive_compact" && comp.SQLitePhase == "sqlite_vacuum"
 }
 
 func collectionComparisonLabel(comp collectionComparison) string {
@@ -2269,7 +2345,7 @@ func bestCollectionComparison(comps []collectionComparison) (collectionCompariso
 	var best collectionComparison
 	var ok bool
 	for _, comp := range comps {
-		if comp.SmallerRatio <= 0 {
+		if comp.SmallerRatio <= 0 || !collectionComparisonIsClaimableCompacted(comp) {
 			continue
 		}
 		if !ok || comp.SmallerRatio > best.SmallerRatio {
@@ -2549,11 +2625,7 @@ func collectionChartPhase(family, kind string) (string, bool) {
 func collectionChartPhaseMatches(family, kind, phase string) bool {
 	if kind == "bytes" {
 		if family == "TreeDB" {
-			return phase == "exhaustive_compact" ||
-				phase == "full_leafgen_pack_gc" ||
-				phase == "offline_compact" ||
-				phase == "offline_rewrite" ||
-				phase == "online_one_pass_maintenance"
+			return phase == "exhaustive_compact"
 		}
 		if family == "SQLite" {
 			return phase == "sqlite_vacuum"

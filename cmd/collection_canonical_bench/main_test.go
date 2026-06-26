@@ -120,14 +120,14 @@ func TestCanonicalValidationPreservesExistingWarnings(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Checks = append(canon.Checks, guardrailCheck{
 		Severity: "warning",
-		Code:     "phase.exhaustive_compact.failed",
-		Message:  "exhaustive compact matrix failed",
+		Code:     "phase.full_leafgen_pack_gc.failed",
+		Message:  "full leafgen pack/GC fixture failed",
 	})
 	canon.Checks = append(canon.Checks, validateCanonicalRun(canon)...)
 
 	var sawOptionalWarning bool
 	for _, check := range canon.Checks {
-		if check.Code == "phase.exhaustive_compact.failed" {
+		if check.Code == "phase.full_leafgen_pack_gc.failed" {
 			sawOptionalWarning = true
 		}
 		if check.Severity == "error" {
@@ -136,6 +136,104 @@ func TestCanonicalValidationPreservesExistingWarnings(t *testing.T) {
 	}
 	if !sawOptionalWarning {
 		t.Fatalf("optional phase warning was not preserved: %#v", canon.Checks)
+	}
+}
+
+func TestCanonicalValidationRejectsWarningOnlyExhaustiveCompactFailure(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Checks = append(canon.Checks, guardrailCheck{
+		Severity: "warning",
+		Code:     "phase.exhaustive_compact.failed",
+		Message:  "legacy warning-only exhaustive compact failure",
+	})
+
+	checks := validateCanonicalRun(canon)
+	var sawRequired bool
+	for _, check := range checks {
+		if check.Severity == "error" && check.Code == "exhaustive_compact_required" {
+			sawRequired = true
+		}
+	}
+	if !sawRequired {
+		t.Fatalf("expected exhaustive compact failure to become a blocking guardrail, got %#v", checks)
+	}
+}
+
+func TestCanonicalComparisonsSuppressedAfterExhaustiveCompactFailure(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Checks = append(canon.Checks, guardrailCheck{
+		Severity: "error",
+		Code:     "phase.exhaustive_compact.failed",
+		Message:  "exhaustive compact matrix failed",
+	})
+
+	if comparisons := buildCompactedComparisons(canon); len(comparisons) != 0 {
+		t.Fatalf("warning-only compact evidence should not emit compacted comparisons: %#v", comparisons)
+	}
+	summary := renderExecutiveSummary(canon)
+	if strings.Contains(summary, "byte-minimized") || strings.Contains(summary, "via exhaustive compact") {
+		t.Fatalf("summary should not claim byte-minimized storage after exhaustive compact failure: %s", summary)
+	}
+	var fair strings.Builder
+	writeFairComparison(&fair, canon)
+	if strings.Contains(fair.String(), "| `treedb_template_v1_collection_2_indexes` |") {
+		t.Fatalf("fair comparison table should suppress TreeDB compacted claims after failure:\n%s", fair.String())
+	}
+}
+
+func TestCanonicalComparisonsRequirePositiveExhaustiveCompactEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*canonicalRun)
+	}{
+		{
+			name: "missing_row",
+			mutate: func(canon *canonicalRun) {
+				var filtered []resultRow
+				for _, row := range canon.Results {
+					if row.Phase == phaseExhaustiveCompact {
+						continue
+					}
+					filtered = append(filtered, row)
+				}
+				canon.Results = filtered
+			},
+		},
+		{
+			name: "zero_bytes_per_doc",
+			mutate: func(canon *canonicalRun) {
+				for i := range canon.Results {
+					if canon.Results[i].Phase == phaseExhaustiveCompact {
+						canon.Results[i].BytesPerDoc = floatPtr(0)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			canon := knownExampleRun()
+			tt.mutate(canon)
+
+			checks := validateCanonicalRun(canon)
+			assertCheckCode(t, checks, "exhaustive_compact_required")
+			if comparisons := buildCompactedComparisons(canon); len(comparisons) != 0 {
+				t.Fatalf("missing positive exhaustive evidence should not build compacted comparisons: %#v", comparisons)
+			}
+			if comparisons := comparisonsForReport(canon); len(comparisons) != 0 {
+				t.Fatalf("missing positive exhaustive evidence should suppress stored compacted comparisons: %#v", comparisons)
+			}
+			summary := renderExecutiveSummary(canon)
+			if strings.Contains(summary, "byte-minimized") || strings.Contains(summary, "via exhaustive compact") {
+				t.Fatalf("summary should not claim byte-minimized storage without positive exhaustive evidence: %s", summary)
+			}
+			var fair strings.Builder
+			writeFairComparison(&fair, canon)
+			if strings.Contains(fair.String(), "| `treedb_template_v1_collection_2_indexes` |") {
+				t.Fatalf("fair comparison table should suppress TreeDB compacted claims without positive exhaustive evidence:\n%s", fair.String())
+			}
+		})
 	}
 }
 
@@ -309,6 +407,50 @@ func TestCanonicalDerivedCompactedComparisons(t *testing.T) {
 		if diff := got.SmallerRatio - tc.wantRatio; diff < -0.0001 || diff > 0.0001 {
 			t.Fatalf("ratio for %s vs %s = %f, want %f", tc.phase, tc.sqliteConfig, got.SmallerRatio, tc.wantRatio)
 		}
+	}
+}
+
+func TestCanonicalDerivedCompactedComparisonsRequireEvidencePerTreeDBConfig(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Results = append(canon.Results,
+		testStorageRow("treedb_json_collection_2_indexes", "treedb_fast", "json", "collection", phaseOfflineCompact, 2, 3900000, 39.0),
+		testStorageRow("treedb_json_collection_2_indexes", "treedb_fast", "json", "collection", phaseFullLeafgenPackGC, 2, 2900000, 29.0),
+	)
+	finalizeRunMetadata(canon)
+
+	canon.Comparisons = buildCompactedComparisons(canon)
+	if got := findComparison(canon.Comparisons, "treedb_template_v1_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got == nil {
+		t.Fatalf("template-v1 comparison with matching exhaustive evidence was suppressed: %#v", canon.Comparisons)
+	}
+	if got := findComparison(canon.Comparisons, "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got != nil {
+		t.Fatalf("json comparison without matching exhaustive evidence was emitted: %#v", got)
+	}
+	for _, check := range validateCanonicalRun(canon) {
+		if check.Code == "missing_compacted_ratio" && strings.Contains(check.Message, "treedb_json_collection_2_indexes") {
+			t.Fatalf("validation should not require a compacted ratio without matching exhaustive evidence: %#v", check)
+		}
+	}
+
+	canon.Comparisons = append(canon.Comparisons, comparisonRow{
+		ComparisonName:    "stale_json_without_exhaustive_evidence",
+		TreeDBConfigName:  "treedb_json_collection_2_indexes",
+		TreeDBPhase:       phaseOfflineCompact,
+		SQLiteConfigName:  "sqlite_native_columns_2_indexes",
+		SQLitePhase:       phaseSQLiteVacuum,
+		TreeDBBytesPerDoc: 39.0,
+		SQLiteBytesPerDoc: 156.7,
+		SmallerRatio:      156.7 / 39.0,
+	})
+	if got := findComparison(comparisonsForReport(canon), "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got != nil {
+		t.Fatalf("stored stale comparison without matching exhaustive evidence was reportable: %#v", got)
+	}
+
+	canon.Results = append(canon.Results,
+		testStorageRow("treedb_json_collection_2_indexes", "treedb_fast", "json", "collection", phaseExhaustiveCompact, 2, 2100000, 21.0),
+	)
+	canon.Comparisons = buildCompactedComparisons(canon)
+	if got := findComparison(canon.Comparisons, "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got == nil {
+		t.Fatalf("json comparison with matching exhaustive evidence was not emitted: %#v", canon.Comparisons)
 	}
 }
 

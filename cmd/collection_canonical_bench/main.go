@@ -346,7 +346,7 @@ func run(argv []string) error {
 		runReportPhase(canon, "error", "phase.offline_compact.failed", "offline compact matrix", func() error {
 			return runOfflineRewriteMatrix(cfg, canon, "offline_compact", phaseOfflineCompact, "full")
 		})
-		runReportPhase(canon, "warning", "phase.exhaustive_compact.failed", "exhaustive compact matrix", func() error {
+		runReportPhase(canon, "error", "phase.exhaustive_compact.failed", "exhaustive compact matrix", func() error {
 			return runOfflineRewriteMatrix(cfg, canon, "exhaustive_compact", phaseExhaustiveCompact, "exhaustive")
 		})
 	}
@@ -1070,6 +1070,9 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		checks = append(checks, guardrailCheck{Severity: sev, Code: code, Message: msg})
 	}
 	add("warning", "phase.online_one_pass.partial", "online_one_pass_maintenance is partial online maintenance; do not describe it as full compaction")
+	if compactedClaimsBlocked(canon) {
+		add("error", "exhaustive_compact_required", "exhaustive_compact must complete before canonical TreeDB compacted-size comparisons or byte-minimized headlines are reportable")
+	}
 	for _, r := range canon.Results {
 		if r.GeneratedAt == "" || r.RunDir == "" || r.Worktree == "" || r.Commit == "" || len(r.CommandLine) == 0 {
 			add("error", "missing_row_run_metadata", fmt.Sprintf("%s/%s is missing row-level run metadata", r.ConfigName, r.Phase))
@@ -1118,6 +1121,9 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 	}
 	if !sqliteSkipped {
 		for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+			if !hasTreeDBConfigExhaustiveCompactEvidence(canon, treeDBConfig) {
+				continue
+			}
 			for _, treedbPhase := range compactedTreeDBPhases() {
 				if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
 					continue
@@ -1168,9 +1174,15 @@ func buildCompactedComparisons(canon *canonicalRun) []comparisonRow {
 	if canon == nil {
 		return nil
 	}
+	if compactedClaimsBlocked(canon) {
+		return nil
+	}
 	var comparisons []comparisonRow
 	sqliteConfigs := []string{sqliteNativeConfigName(canon), sqliteJSONConfigName(canon)}
 	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+		if !hasTreeDBConfigExhaustiveCompactEvidence(canon, treeDBConfig) {
+			continue
+		}
 		for _, treedbPhase := range compactedTreeDBPhases() {
 			treeRow := findResult(canon.Results, treeDBConfig, treedbPhase)
 			if !hasPositiveBytesPerDoc(treeRow) {
@@ -1203,10 +1215,59 @@ func comparisonsForReport(canon *canonicalRun) []comparisonRow {
 	if canon == nil {
 		return nil
 	}
+	if compactedClaimsBlocked(canon) {
+		return nil
+	}
 	if len(canon.Comparisons) > 0 {
-		return canon.Comparisons
+		return filterCompactedComparisonsForEvidence(canon, canon.Comparisons)
 	}
 	return buildCompactedComparisons(canon)
+}
+
+func compactedClaimsBlocked(canon *canonicalRun) bool {
+	if canon == nil {
+		return false
+	}
+	return checksBlockCompactedClaims(canon.Checks) || !hasCanonicalExhaustiveCompactEvidence(canon)
+}
+
+func hasCanonicalExhaustiveCompactEvidence(canon *canonicalRun) bool {
+	if canon == nil {
+		return false
+	}
+	return hasTreeDBConfigExhaustiveCompactEvidence(canon, compactedTreeDBConfigName(canon))
+}
+
+func hasTreeDBConfigExhaustiveCompactEvidence(canon *canonicalRun, treeDBConfig string) bool {
+	if canon == nil || strings.TrimSpace(treeDBConfig) == "" {
+		return false
+	}
+	return hasPositiveBytesPerDoc(findResult(canon.Results, treeDBConfig, phaseExhaustiveCompact))
+}
+
+func filterCompactedComparisonsForEvidence(canon *canonicalRun, comps []comparisonRow) []comparisonRow {
+	if canon == nil || len(comps) == 0 {
+		return comps
+	}
+	var filtered []comparisonRow
+	for _, cmp := range comps {
+		if strings.HasPrefix(cmp.TreeDBConfigName, "treedb_") &&
+			isTreeDBCompactedPhase(cmp.TreeDBPhase) &&
+			!hasTreeDBConfigExhaustiveCompactEvidence(canon, cmp.TreeDBConfigName) {
+			continue
+		}
+		filtered = append(filtered, cmp)
+	}
+	return filtered
+}
+
+func checksBlockCompactedClaims(checks []guardrailCheck) bool {
+	for _, check := range checks {
+		if check.Code == "phase.exhaustive_compact.failed" {
+			return true
+		}
+	}
+	return false
 }
 
 func findComparison(comparisons []comparisonRow, treeConfig, treePhase, sqliteConfig, sqlitePhase string) *comparisonRow {
@@ -1385,7 +1446,7 @@ func renderExecutiveSummary(canon *canonicalRun) string {
 	exhaustive := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseExhaustiveCompact)
 	sqliteJSON := findResult(canon.Results, sqliteJSONConfigName(canon), phaseSQLiteVacuum)
 	sqliteNative := findResult(canon.Results, sqliteNativeConfigName(canon), phaseSQLiteVacuum)
-	if hasPositiveBytesPerDoc(offline) && hasPositiveBytesPerDoc(exhaustive) &&
+	if !compactedClaimsBlocked(canon) && hasPositiveBytesPerDoc(offline) && hasPositiveBytesPerDoc(exhaustive) &&
 		hasPositiveBytesPerDoc(sqliteJSON) && hasPositiveBytesPerDoc(sqliteNative) {
 		engine := "TreeDB"
 		if fastest != nil {
@@ -1417,6 +1478,10 @@ func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
 		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s |\n", r.ConfigName, r.Phase, formatFloatPtr(r.BytesPerDoc, 1), formatIntPtr(r.TotalBytes)))
 	}
 	sb.WriteString("\nTreeDB compacted rows versus SQLite after `VACUUM`:\n\n")
+	if compactedClaimsBlocked(canon) {
+		sb.WriteString("TreeDB compacted-size comparisons are suppressed because `exhaustive_compact` did not complete for the supported canonical path.\n")
+		return
+	}
 	sb.WriteString("| TreeDB config | Phase | B/doc | vs SQLite native-columns VACUUM | vs SQLite JSON VACUUM |\n")
 	sb.WriteString("| --- | --- | ---: | ---: | ---: |\n")
 	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
