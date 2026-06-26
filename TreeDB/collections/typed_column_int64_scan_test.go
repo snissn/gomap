@@ -526,6 +526,69 @@ func TestTypedColumnInt64AggregateAllPredicate(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64AggregateSecondOfDaySquareExpression(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1_000_000, 2_000_000, 86_401_000_000})
+
+	req := TypedColumnInt64PredicateAggregateRequest{
+		Column:     "time_us",
+		Kind:       TypedColumnInt64PredicateAll,
+		Expression: TypedColumnInt64AggregateSecondOfDaySquare,
+	}
+	result, err := col.RunTypedColumnInt64PredicateAggregate(req)
+	if err != nil {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate expression: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 3, 6)
+	if result.Diagnostics.RowsScanned != 3 || result.Diagnostics.RowsMatched != 3 || result.Diagnostics.StatsBlocks != 0 {
+		t.Fatalf("diagnostics=%+v want expression to scan typed-column rows without aggregate stats", result.Diagnostics)
+	}
+	assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, result.Diagnostics, "second-of-day-square expression aggregate")
+}
+
+func TestTypedColumnInt64PreparedAggregateSecondOfDaySquareExpression(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1_000_000, 2_000_000, 86_401_000_000})
+
+	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{
+		Column:                   "time_us",
+		Kind:                     TypedColumnInt64PredicateAll,
+		Expression:               TypedColumnInt64AggregateSecondOfDaySquare,
+		ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify,
+	})
+	if err != nil {
+		t.Fatalf("PrepareTypedColumnInt64PredicateAggregate expression: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	result, err := session.Run()
+	if err != nil {
+		t.Fatalf("Run expression: %v", err)
+	}
+	assertTypedColumnInt64Aggregate(t, result, 3, 6)
+	if result.Diagnostics.RowsScanned != 3 || result.Diagnostics.RowsMatched != 3 || result.Diagnostics.StatsBlocks != 0 || result.Diagnostics.KernelBlocks != 0 {
+		t.Fatalf("diagnostics=%+v want expression hot run to scan typed-column rows without stats/kernel sum", result.Diagnostics)
+	}
+	assertTypedColumnInt64AggregateNoMaterializationDiagnostics(t, result.Diagnostics, "prepared second-of-day-square expression aggregate")
+}
+
+func TestTypedColumnInt64AggregateRejectsUnsupportedExpression(t *testing.T) {
+	d, col := setupTypedColumnInt64ScanCollection(t)
+	defer func() { _ = d.Close() }()
+	insertTypedColumnInt64ScanRows(t, col, []int64{1_000_000})
+
+	_, err := col.RunTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{
+		Column:     "time_us",
+		Kind:       TypedColumnInt64PredicateAll,
+		Expression: TypedColumnInt64AggregateExpression("bogus"),
+	})
+	if !errors.Is(err, ErrColumnQueryPlanUnsupported) {
+		t.Fatalf("RunTypedColumnInt64PredicateAggregate err=%v want ErrColumnQueryPlanUnsupported", err)
+	}
+}
+
 func TestTypedColumnInt64AggregateAllPrunedZero(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()

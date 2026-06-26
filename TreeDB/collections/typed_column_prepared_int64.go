@@ -280,19 +280,19 @@ func typedColumnInt64RawPredicateSelection(req TypedColumnInt64PredicateScanRequ
 	return typedColumnInt64PredicateRowsSelection(g.Rows, scratch)
 }
 
-func addTypedColumnInt64AggregateRawRow(result *TypedColumnInt64PredicateAggregateResult, raw []byte, rows int, row int) error {
+func addTypedColumnInt64AggregateRawRow(result *TypedColumnInt64PredicateAggregateResult, raw []byte, rows int, row int, expression TypedColumnInt64AggregateExpression) error {
 	if row < 0 || row >= rows {
 		return fmt.Errorf("typed-column int64 aggregate raw row=%d rows=%d", row, rows)
 	}
 	value := int64(binary.LittleEndian.Uint64(raw[row*8:]))
-	if err := addTypedColumnInt64PredicateAggregateValue(result, value); err != nil {
+	if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, value); err != nil {
 		return err
 	}
 	result.Diagnostics.RowsMatched++
 	return nil
 }
 
-func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64PredicateAggregateResult, raw []byte, rows int, selection typedcolumn.RowSelection) error {
+func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64PredicateAggregateResult, raw []byte, rows int, selection typedcolumn.RowSelection, expression TypedColumnInt64AggregateExpression) error {
 	if err := typedColumnInt64RawPayloadRows(raw, rows); err != nil {
 		return err
 	}
@@ -301,7 +301,7 @@ func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64Predi
 		return nil
 	case typedcolumn.RowSelectionAll:
 		for row := 0; row < rows; row++ {
-			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row, expression); err != nil {
 				return err
 			}
 		}
@@ -312,7 +312,7 @@ func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64Predi
 			return fmt.Errorf("typed-column int64 aggregate invalid raw range selection [%d,%d) rows=%d", start, end, rows)
 		}
 		for row := start; row < end; row++ {
-			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row, expression); err != nil {
 				return err
 			}
 		}
@@ -323,7 +323,7 @@ func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64Predi
 				return fmt.Errorf("typed-column int64 aggregate invalid raw ranges selection [%d,%d) rows=%d", r.Start, r.End, rows)
 			}
 			for row := r.Start; row < r.End; row++ {
-				if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+				if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row, expression); err != nil {
 					return err
 				}
 			}
@@ -331,7 +331,7 @@ func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64Predi
 		return nil
 	case typedcolumn.RowSelectionSparse:
 		for _, row := range selection.SparseRows() {
-			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+			if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row, expression); err != nil {
 				return err
 			}
 		}
@@ -344,7 +344,7 @@ func addTypedColumnInt64AggregateSelectedRawValues(result *TypedColumnInt64Predi
 				if row >= rows {
 					break
 				}
-				if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row); err != nil {
+				if err := addTypedColumnInt64AggregateRawRow(result, raw, rows, row, expression); err != nil {
 					return err
 				}
 				word &^= uint64(1) << uint(bit)
@@ -375,7 +375,10 @@ func addTypedColumnInt64AggregateKernelResult(result *TypedColumnInt64PredicateA
 	return nil
 }
 
-func addTypedColumnInt64AggregateKernelValues(result *TypedColumnInt64PredicateAggregateResult, reducer typedkernel.PreparedReducer, values []int64, selection typedcolumn.RowSelection, scratch *typedkernel.Scratch) error {
+func addTypedColumnInt64AggregateKernelValues(result *TypedColumnInt64PredicateAggregateResult, reducer typedkernel.PreparedReducer, values []int64, selection typedcolumn.RowSelection, expression TypedColumnInt64AggregateExpression, scratch *typedkernel.Scratch) error {
+	if !typedColumnInt64AggregateExpressionIsIdentity(expression) {
+		return addTypedColumnInt64AggregateSelectedValues(result, values, selection, expression)
+	}
 	out, err := reducer.Reduce(typedkernel.ReduceRequest{Rows: len(values), Selection: selection, Int64Values: values}, scratch)
 	if err != nil {
 		return err
@@ -383,7 +386,23 @@ func addTypedColumnInt64AggregateKernelValues(result *TypedColumnInt64PredicateA
 	return addTypedColumnInt64AggregateKernelResult(result, out)
 }
 
-func addTypedColumnInt64AggregateKernelCursor(result *TypedColumnInt64PredicateAggregateResult, reducer typedkernel.PreparedReducer, cursor *typedcolumn.Int64Cursor, rows int, selection typedcolumn.RowSelection, scratch *typedkernel.Scratch) error {
+func addTypedColumnInt64AggregateKernelCursor(result *TypedColumnInt64PredicateAggregateResult, reducer typedkernel.PreparedReducer, cursor *typedcolumn.Int64Cursor, rows int, selection typedcolumn.RowSelection, expression TypedColumnInt64AggregateExpression, scratch *typedkernel.Scratch) error {
+	if !typedColumnInt64AggregateExpressionIsIdentity(expression) {
+		for row := 0; row < rows; row++ {
+			value, err := cursor.Next()
+			if err != nil {
+				return err
+			}
+			if !selection.Contains(row) {
+				continue
+			}
+			if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, value); err != nil {
+				return err
+			}
+			result.Diagnostics.RowsMatched++
+		}
+		return cursor.Finish()
+	}
 	out, err := reducer.Reduce(typedkernel.ReduceRequest{Rows: rows, Selection: selection, Int64Cursor: cursor}, scratch)
 	if err != nil {
 		return err
@@ -541,7 +560,7 @@ func typedColumnInt64DirectViewFallbackAllowed(status typeddecode.Status) bool {
 	}
 }
 
-func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64PredicateAggregateResult, req TypedColumnInt64PredicateScanRequest, granule typedcolumn.EncodedGranule, block typedColumnPreparedBlockPlan, reducer typedkernel.PreparedReducer, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) error {
+func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64PredicateAggregateResult, req TypedColumnInt64PredicateScanRequest, expression TypedColumnInt64AggregateExpression, granule typedcolumn.EncodedGranule, block typedColumnPreparedBlockPlan, reducer typedkernel.PreparedReducer, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) error {
 	if result == nil {
 		return errors.New("collections: nil typed-column int64 aggregate result")
 	}
@@ -555,7 +574,8 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 	}
 	result.Diagnostics.RowsScanned += rows
 	selection := block.CandidateSelection
-	if selection.IsAll() && !block.NeedsPredicate && visibility == nil {
+	identityExpression := typedColumnInt64AggregateExpressionIsIdentity(expression)
+	if selection.IsAll() && !block.NeedsPredicate && visibility == nil && identityExpression {
 		count, sum, err := scratch.reader.CountSumInt64(granule)
 		if err != nil {
 			return err
@@ -570,7 +590,7 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 		recordTypedColumnInt64KernelBlock(&result.Diagnostics, true, false)
 		return nil
 	}
-	if selection.IsAll() && !block.NeedsPredicate {
+	if selection.IsAll() && !block.NeedsPredicate && identityExpression {
 		if visibility != nil {
 			visibilitySelection, err := typedColumnInt64VisibilitySelectionForBlock(visibility, block.Descriptor.FirstRow, block.Descriptor.RowCount, scratch)
 			if err != nil {
@@ -590,7 +610,7 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 		if err != nil {
 			return err
 		}
-		if err := addTypedColumnInt64AggregateKernelCursor(result, reducer, &cursor, rows, selection, &scratch.kernel); err != nil {
+		if err := addTypedColumnInt64AggregateKernelCursor(result, reducer, &cursor, rows, selection, expression, &scratch.kernel); err != nil {
 			return err
 		}
 		recordTypedColumnInt64KernelBlock(&result.Diagnostics, visibility == nil && selection.IsAll(), true)
@@ -619,7 +639,7 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 		if visibility != nil && !visibility.rowVisible(block.Descriptor.FirstRow+row) {
 			continue
 		}
-		if err := addTypedColumnInt64PredicateAggregateValue(result, value); err != nil {
+		if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, value); err != nil {
 			return err
 		}
 		result.Diagnostics.RowsMatched++
@@ -645,7 +665,7 @@ func addTypedColumnInt64AggregateStreamingValues(result *TypedColumnInt64Predica
 	return nil
 }
 
-func addTypedColumnInt64AggregateStatsBlock(result *TypedColumnInt64PredicateAggregateResult, preparedColumn *typedColumnPreparedColumnState, block *typedColumnPreparedBlockPlan) (bool, error) {
+func addTypedColumnInt64AggregateStatsBlock(result *TypedColumnInt64PredicateAggregateResult, preparedColumn *typedColumnPreparedColumnState, block *typedColumnPreparedBlockPlan, expression TypedColumnInt64AggregateExpression) (bool, error) {
 	if result == nil || preparedColumn == nil {
 		return false, nil
 	}
@@ -653,6 +673,10 @@ func addTypedColumnInt64AggregateStatsBlock(result *TypedColumnInt64PredicateAgg
 		if preparedColumn.StatsFallbackReason != "" {
 			recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, preparedColumn.StatsFallbackReason)
 		}
+		return false, nil
+	}
+	if !typedColumnInt64AggregateExpressionIsIdentity(expression) {
+		recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, "aggregate_expression")
 		return false, nil
 	}
 	if !block.CandidateSelection.IsAll() || block.NeedsPredicate {
@@ -722,10 +746,14 @@ func (s *TypedColumnInt64PredicateAggregateSession) addTypedColumnInt64Aggregate
 	if selection.IsEmpty() {
 		return nil
 	}
-	if err := addTypedColumnInt64AggregateKernelValues(result, preparedColumn.AggregateReducer, values, selection, &s.aggregateScratch.kernel); err != nil {
+	if err := addTypedColumnInt64AggregateKernelValues(result, preparedColumn.AggregateReducer, values, selection, s.req.Expression, &s.aggregateScratch.kernel); err != nil {
 		return err
 	}
-	recordTypedColumnInt64KernelBlock(&result.Diagnostics, !block.NeedsPredicate && visibility == nil && selection.IsAll(), false)
+	if typedColumnInt64AggregateExpressionIsIdentity(s.req.Expression) {
+		recordTypedColumnInt64KernelBlock(&result.Diagnostics, !block.NeedsPredicate && visibility == nil && selection.IsAll(), false)
+	} else {
+		recordTypedColumnInt64KernelFallbackBlock(&result.Diagnostics)
+	}
 	return nil
 }
 
@@ -739,6 +767,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 	decodedAny := false
 	statsAny := false
 	payloadRead := false
+	identityExpression := typedColumnInt64AggregateExpressionIsIdentity(s.req.Expression)
 	columnPlan := typeddecode.Int64ReducerPlan(preparedColumn.Plan.Layout, preparedColumn.Certification)
 	recordTypedColumnInt64FastDecodePlan(&result.Diagnostics, columnPlan)
 	var err error
@@ -757,7 +786,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 			recordTypedColumnInt64PruningFallbackBlock(&result.Diagnostics, preparedColumn.PruningFallbackReason)
 		}
 		if visibility == nil && s.req.ColumnAssetReadIntegrity != ColumnAssetReadIntegritySkipChecksums {
-			usedStats, err := addTypedColumnInt64AggregateStatsBlock(result, preparedColumn, block)
+			usedStats, err := addTypedColumnInt64AggregateStatsBlock(result, preparedColumn, block, s.req.Expression)
 			if err != nil {
 				return false, err
 			}
@@ -765,6 +794,8 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 				statsAny = true
 				continue
 			}
+		} else if !identityExpression && preparedColumn.Int64StatsReady && block.CandidateSelection.IsAll() && !block.NeedsPredicate {
+			recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, "aggregate_expression")
 		} else if s.req.ColumnAssetReadIntegrity == ColumnAssetReadIntegritySkipChecksums && preparedColumn.Int64StatsReady && block.CandidateSelection.IsAll() && !block.NeedsPredicate {
 			recordTypedColumnInt64StatsFallbackBlock(&result.Diagnostics, "skip_checksums")
 		} else if preparedColumn.Int64StatsReady && block.CandidateSelection.IsAll() && !block.NeedsPredicate {
@@ -848,7 +879,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregateColumnS
 			streamingFallbackReason = columnPlan.Reason
 		}
 		recordTypedColumnInt64ScratchDecode(&result.Diagnostics, streamingFallbackReason)
-		if err := addTypedColumnInt64AggregateStreamingValues(result, typedColumnInt64PredicateAggregateScanRequest(s.req), granule, *block, preparedColumn.AggregateReducer, visibility, &s.aggregateScratch); err != nil {
+		if err := addTypedColumnInt64AggregateStreamingValues(result, typedColumnInt64PredicateAggregateScanRequest(s.req), s.req.Expression, granule, *block, preparedColumn.AggregateReducer, visibility, &s.aggregateScratch); err != nil {
 			return false, err
 		}
 	}

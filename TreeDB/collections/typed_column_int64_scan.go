@@ -17,6 +17,13 @@ const (
 	TypedColumnInt64PredicateRange TypedColumnInt64PredicateScanKind = "range"
 )
 
+type TypedColumnInt64AggregateExpression string
+
+const (
+	TypedColumnInt64AggregateIdentity          TypedColumnInt64AggregateExpression = "identity"
+	TypedColumnInt64AggregateSecondOfDaySquare TypedColumnInt64AggregateExpression = "second_of_day_square"
+)
+
 type TypedColumnInt64PredicateScanRequest struct {
 	Column                   string
 	Kind                     TypedColumnInt64PredicateScanKind
@@ -32,6 +39,7 @@ type TypedColumnInt64PredicateAggregateRequest struct {
 	Value                    int64
 	Low                      int64
 	High                     int64
+	Expression               TypedColumnInt64AggregateExpression
 	ColumnAssetReadIntegrity ColumnAssetReadIntegrity
 }
 
@@ -215,6 +223,14 @@ func addTypedColumnInt64PredicateAggregateValue(result *TypedColumnInt64Predicat
 	return nil
 }
 
+func addTypedColumnInt64PredicateAggregateExpressionValue(result *TypedColumnInt64PredicateAggregateResult, expression TypedColumnInt64AggregateExpression, value int64) error {
+	transformed, err := typedColumnInt64AggregateExpressionValue(expression, value)
+	if err != nil {
+		return err
+	}
+	return addTypedColumnInt64PredicateAggregateValue(result, transformed)
+}
+
 // RunTypedColumnInt64PredicateScan executes the scoped #1757 scalar predicate MVP.
 // When the requested int64 field is owned by typed_column_part, the predicate is
 // evaluated directly over durable typed_column_part assets and fails closed if
@@ -352,13 +368,17 @@ func (c *Collection) PrepareTypedColumnInt64PredicateAggregate(req TypedColumnIn
 }
 
 func validateTypedColumnInt64PredicateAggregateRequest(req TypedColumnInt64PredicateAggregateRequest) error {
-	return validateTypedColumnInt64PredicateScanRequest(TypedColumnInt64PredicateScanRequest{
+	if err := validateTypedColumnInt64PredicateScanRequest(TypedColumnInt64PredicateScanRequest{
 		Column: req.Column,
 		Kind:   req.Kind,
 		Value:  req.Value,
 		Low:    req.Low,
 		High:   req.High,
-	})
+	}); err != nil {
+		return err
+	}
+	_, err := normalizeTypedColumnInt64AggregateExpression(req.Expression)
+	return err
 }
 
 func typedColumnInt64PredicateAggregateScanRequest(req TypedColumnInt64PredicateAggregateRequest) TypedColumnInt64PredicateScanRequest {
@@ -369,6 +389,42 @@ func typedColumnInt64PredicateAggregateScanRequest(req TypedColumnInt64Predicate
 		Low:                      req.Low,
 		High:                     req.High,
 		ColumnAssetReadIntegrity: req.ColumnAssetReadIntegrity,
+	}
+}
+
+func normalizeTypedColumnInt64AggregateExpression(expression TypedColumnInt64AggregateExpression) (TypedColumnInt64AggregateExpression, error) {
+	switch expression {
+	case "", TypedColumnInt64AggregateIdentity:
+		return TypedColumnInt64AggregateIdentity, nil
+	case TypedColumnInt64AggregateSecondOfDaySquare:
+		return expression, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported typed-column int64 aggregate expression %q", ErrColumnQueryPlanUnsupported, expression)
+	}
+}
+
+func typedColumnInt64AggregateExpressionIsIdentity(expression TypedColumnInt64AggregateExpression) bool {
+	normalized, err := normalizeTypedColumnInt64AggregateExpression(expression)
+	return err == nil && normalized == TypedColumnInt64AggregateIdentity
+}
+
+func typedColumnInt64AggregateExpressionValue(expression TypedColumnInt64AggregateExpression, value int64) (int64, error) {
+	normalized, err := normalizeTypedColumnInt64AggregateExpression(expression)
+	if err != nil {
+		return 0, err
+	}
+	switch normalized {
+	case TypedColumnInt64AggregateIdentity:
+		return value, nil
+	case TypedColumnInt64AggregateSecondOfDaySquare:
+		seconds := value / 1_000_000
+		secondOfDay := seconds % 86_400
+		if secondOfDay < 0 {
+			secondOfDay += 86_400
+		}
+		return secondOfDay * secondOfDay, nil
+	default:
+		return 0, fmt.Errorf("%w: unsupported typed-column int64 aggregate expression %q", ErrColumnQueryPlanUnsupported, expression)
 	}
 }
 
@@ -966,7 +1022,7 @@ func (s *TypedColumnInt64PredicateAggregateSession) scanPreparedAggregatePart(ty
 	if visibility != nil && typedColumnAdapterPartHasLogicalSortKey(adapterPart) {
 		return typedColumnSortedMutationVisibilityUnsupported("typed-column int64 predicate aggregate")
 	}
-	partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(s.req), result, visibility, &s.aggregateScratch)
+	partPruned, err := scanTypedColumnInt64PredicateAggregatePartWithExpressionAndScratch(adapterPart.Part, adapterColumn.Definition.Name, typedColumnInt64PredicateAggregateScanRequest(s.req), s.req.Expression, result, visibility, &s.aggregateScratch)
 	if err != nil {
 		return fmt.Errorf("collections: typed-column int64 predicate aggregate scan generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 	}
@@ -1216,7 +1272,7 @@ func (c *Collection) runTypedColumnInt64PredicateAggregateDocumentFallback(req T
 		}
 		result.Diagnostics.RowsScanned++
 		if typedColumnInt64PredicateMatches(typedColumnInt64PredicateAggregateScanRequest(req), value) {
-			if err := addTypedColumnInt64PredicateAggregateValue(&result, value); err != nil {
+			if err := addTypedColumnInt64PredicateAggregateExpressionValue(&result, req.Expression, value); err != nil {
 				return false, err
 			}
 			result.Diagnostics.RowsMatched++
