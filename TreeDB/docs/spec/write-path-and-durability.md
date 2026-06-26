@@ -102,13 +102,15 @@ cannot be replayed as typed commands yet fail closed with
 Raw backend apply routes are also part of the span-native default-admission
 support surface. Backend stats report `treedb.raw.span_native.route.<route>.*`
 for point puts, point deletes, mixed point batches, range-delete batches, empty
-batches, and close/checkpoint drains. Default-auto admitted point routes may use
-span-native apply; unsupported rows fail closed with named reasons such as
-`range_delete_barrier`, `below_threshold`, `disabled`,
-`admission_policy_decline`, `command_wal_barrier`, or
-`close_or_checkpoint`. Public command-WAL `Update` and `UpdateSync` rejections
-are reported under `treedb.raw.span_native.public.route.<route>.fallback.*`
-because they return before a backend batch exists.
+batches, mixed range-delete batches, and close/checkpoint drains. Default-auto
+admitted point routes may use span-native apply; unsupported backend rows fail
+closed with named reasons such as `range_delete_barrier`, `below_threshold`,
+`disabled`, `admission_policy_decline`, or `close_or_checkpoint`. Public
+command-WAL `Update` and `UpdateSync` rejections are reported under
+`treedb.raw.span_native.public.route.<route>.fallback.reason.command_wal_barrier.*`
+because they return before a backend batch exists; backend
+`treedb.raw.span_native.route.<route>.*` counters do not emit
+`command_wal_barrier`.
 
 The user-command WAL is a local crash-recovery log, not a Raft log. Future Raft
 entries may share command-envelope payloads, but consensus ordering and local

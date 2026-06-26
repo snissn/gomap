@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"runtime"
 	"strconv"
 	"testing"
@@ -112,6 +113,41 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 		stats := d.Stats()
 		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.range_delete.fallback.reason.range_delete_barrier.count_total"); got == 0 {
 			t.Fatalf("range_delete range_delete_barrier count=0, want named fallback")
+		}
+	})
+
+	t.Run("mixed range delete barrier", func(t *testing.T) {
+		d := openExplicitRawSpanNativeRouteTestDB(t)
+		for _, key := range [][]byte{[]byte("a"), []byte("b"), []byte("c")} {
+			if err := d.Set(key, []byte("v")); err != nil {
+				t.Fatalf("seed Set(%q): %v", key, err)
+			}
+		}
+		b := d.NewBatch()
+		if err := b.Set([]byte("point"), []byte("v2")); err != nil {
+			t.Fatalf("Set mixed point: %v", err)
+		}
+		if err := b.Delete([]byte("b")); err != nil {
+			t.Fatalf("Delete mixed point: %v", err)
+		}
+		if err := b.DeleteRange([]byte("a"), []byte("z")); err != nil {
+			t.Fatalf("DeleteRange: %v", err)
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		stats := d.Stats()
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.mixed_range_delete.observations_total"); got == 0 {
+			t.Fatalf("mixed_range_delete observations=0, want observed route")
+		}
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.mixed_range_delete.fallback.reason.range_delete_barrier.count_total"); got == 0 {
+			t.Fatalf("mixed_range_delete range_delete_barrier count=0, want named fallback")
+		}
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.mixed_range_delete.fallback.reason.unknown.count_total"); got != 0 {
+			t.Fatalf("mixed_range_delete unknown fallbacks=%d want 0", got)
 		}
 	})
 
@@ -263,6 +299,26 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 			t.Fatalf("range_delete candidate_ops_total=%d, want 0 when span-native apply is disabled", got)
 		}
 	})
+}
+
+func TestRawSpanNativePrepareErrorRequiresPrepareFailureFlag(t *testing.T) {
+	d := openExplicitRawSpanNativeRouteTestDB(t)
+	req := rawSpanNativeEligibilityRequest{
+		route:                    RawSpanNativeRoutePointPut,
+		deltaOps:                 1,
+		readOnlyPrepareRequested: true,
+		err:                      errors.New("later apply failure"),
+		applyOptionsUsed:         true,
+		spanNativeRequested:      true,
+	}
+	if got := d.rawSpanNativeEligibility(req).fallbackReason; got == FlushSpanRunFallbackPrepareError {
+		t.Fatalf("fallbackReason=%s, want later apply failure to avoid prepare_error without ReadOnlyPrepareFailed", got)
+	}
+
+	req.readOnlyPrepareFailed = true
+	if got := d.rawSpanNativeEligibility(req).fallbackReason; got != FlushSpanRunFallbackPrepareError {
+		t.Fatalf("fallbackReason=%s, want prepare_error when ReadOnlyPrepareFailed is set", got)
+	}
 }
 
 func openExplicitRawSpanNativeRouteTestDB(t *testing.T) *DB {

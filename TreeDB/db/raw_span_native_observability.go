@@ -60,6 +60,7 @@ type rawSpanNativeEligibilityRequest struct {
 	summary                       zipper.ReadOnlyLeafSpanSummary
 	deltaOps                      int
 	readOnlyPrepareRequested      bool
+	readOnlyPrepareFailed         bool
 	readOnlyPrepareValidationFail bool
 	err                           error
 	explicitFallbackReason        string
@@ -165,6 +166,7 @@ func (db *DB) observeRawSpanNativeApplyResult(plan rawSpanNativeBatchPlan, resul
 		summary:                       result.ReadOnlyPrepare.LeafSpanSummary(),
 		deltaOps:                      plan.ops,
 		readOnlyPrepareRequested:      result.ReadOnlyPrepareRequested,
+		readOnlyPrepareFailed:         result.ReadOnlyPrepareFailed,
 		readOnlyPrepareValidationFail: result.ReadOnlyPrepareValidationFailed,
 		err:                           err,
 		explicitFallbackReason:        result.SpanNativeFallbackReason,
@@ -257,7 +259,7 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 	switch {
 	case req.readOnlyPrepareValidationFail:
 		return FlushSpanRunFallbackValidationFailed
-	case req.err != nil && req.readOnlyPrepareRequested && !req.spanNativeEligible:
+	case req.readOnlyPrepareRequested && req.readOnlyPrepareFailed:
 		return FlushSpanRunFallbackPrepareError
 	case req.route == RawSpanNativeRouteCloseOrCheckpointDrain:
 		return FlushSpanRunFallbackCloseOrCheckpoint
