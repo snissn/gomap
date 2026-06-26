@@ -454,6 +454,8 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 		return
 	}
 	db.appendCacheLeafLogLaneStats(stats)
+	stats["treedb.cache.flush_apply.concurrency"] = fmt.Sprintf("%d", db.flushApplyConcurrency)
+	stats["treedb.cache.flush_apply.span_native"] = fmt.Sprintf("%t", db.flushApplySpanNative)
 	stats["treedb.cache.flush_apply.batches_total"] = fmt.Sprintf("%d", db.flushApplyBatches.Load())
 	stats["treedb.cache.flush_apply.units_total"] = fmt.Sprintf("%d", db.flushApplyUnits.Load())
 	stats["treedb.cache.flush_apply.entries_total"] = fmt.Sprintf("%d", db.flushApplyEntries.Load())

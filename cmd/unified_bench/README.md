@@ -126,12 +126,14 @@ These are mainly for experiments and should usually be left at engine defaults:
 - `-treedb-vlog-dict-*`
 - `-treedb-vlog-rewrite-*`
 - `-treedb-flush-build-*`
-- `-treedb-flush-admission-policy=auto|explicit|off` (auto defaults to the admitted hardware-aware span-native/backlog path; off is the rollback)
+- `-treedb-flush-admission-policy=auto|explicit|off` (auto defaults to the admitted hardware-aware span-native/backlog path; off is the rollback and reports `reason=policy_off`, selected concurrency `0`, span-native `false`, and backlog coalescing `false`)
 - `-treedb-flush-apply-concurrency`, `-treedb-flush-apply-min-*`, and `-treedb-journal-lanes` (auto apply defaults to detected physical cores capped by `GOMAXPROCS` and 8, with `min(GOMAXPROCS,8)` fallback when physical cores are unknown; default journal/value-log lanes are coalescing-safe; configured apply/lane values preserve c4/c8/c16/lane experiments)
 - `-treedb-flush-apply-span-native` (M10 span-native apply/reducer override for eligible exact point spans; auto enables when admitted)
 - `-treedb-flush-span-run-target-planning` (diagnostic/default-off read-only target-leaf planning for canonical flush runs)
 - `-treedb-flush-backlog-coalescing*` (M11 bounded adaptive backlog coalescing controller; auto enables when admitted, byte/op budgets are soft pre-next-memtable limits)
 - `-treedb-max-queued-memtables`, `-treedb-slowdown-backlog-seconds`, `-treedb-stop-backlog-seconds`
+
+Benchmark reports include resolved TreeDB options and selected stats for `flush_admission.policy`, `admitted`, `reason`, configured/requested concurrency, selected/effective concurrency, concurrency cap reason, defaulting, `GOMAXPROCS`, physical cores, span-native enablement, and backlog-coalescing enablement. `reason=unsafe_durability` is the expected auto decline when WAL-off durability is allowed; support triage should treat that the same as `policy_off` for the span-native/backlog path, while preserving the caller's configured concurrency in the report for reproduction.
 
 Use `./bin/unified-bench -h` for the full grouped TreeDB advanced flag list.
 
