@@ -77,6 +77,8 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.flush_apply."):
 		return true
+	case strings.HasPrefix(key, "treedb.raw.span_native."):
+		return true
 	case strings.HasPrefix(key, "treedb.cache.flush_backlog_coalescing."):
 		return true
 	case key == "treedb.cache.queue_len":

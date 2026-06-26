@@ -265,10 +265,6 @@ func collectionSpanNativeBenchmarkMetrics() []collectionBenchmarkStatMetric {
 		{key: "treedb.publish.ordered_root_delta_group.span_native.used_ops_total", unit: "ordered_root_span_used_ops"},
 		{key: "treedb.publish.ordered_root_delta_group.span_native.ineligible_ops_total", unit: "ordered_root_span_ineligible_ops"},
 		{key: "treedb.publish.ordered_root_delta_group.span_native.fallbacks_total", unit: "ordered_root_span_fallbacks"},
-		{key: "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.used_ops_total", unit: "ordered_root_collection_route_used_ops"},
-		{key: "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.used_ops_total", unit: "ordered_root_multi_index_route_used_ops"},
-		{key: "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.used_ops_total", unit: "ordered_root_command_wal_route_used_ops"},
-		{key: "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.used_ops_total", unit: "ordered_root_system_delta_route_used_ops"},
 	}
 	for _, reason := range backenddb.FlushSpanRunFallbackReasons() {
 		name := reason.String()
@@ -295,7 +291,55 @@ func collectionSpanNativeBenchmarkMetrics() []collectionBenchmarkStatMetric {
 			},
 		)
 	}
+	for _, route := range collectionOrderedRootSpanNativeBenchmarkRoutes() {
+		routeName := string(route)
+		routePrefix := "treedb.publish.ordered_root_delta_group.span_native.route." + routeName + "."
+		unitPrefix := "ordered_root_route_" + routeName + "_"
+		metrics = append(metrics,
+			collectionBenchmarkStatMetric{key: routePrefix + "observations_total", unit: unitPrefix + "observations"},
+			collectionBenchmarkStatMetric{key: routePrefix + "candidate_ops_total", unit: unitPrefix + "candidate_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "candidate_spans_total", unit: unitPrefix + "candidate_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "eligible_ops_total", unit: unitPrefix + "eligible_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "eligible_spans_total", unit: unitPrefix + "eligible_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "used_ops_total", unit: unitPrefix + "used_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "used_spans_total", unit: unitPrefix + "used_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "ineligible_ops_total", unit: unitPrefix + "ineligible_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "ineligible_spans_total", unit: unitPrefix + "ineligible_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "fallbacks_total", unit: unitPrefix + "fallbacks"},
+		)
+		for _, reason := range backenddb.FlushSpanRunFallbackReasons() {
+			reasonName := reason.String()
+			metrics = append(metrics,
+				collectionBenchmarkStatMetric{
+					key:  routePrefix + "fallback.reason." + reasonName + ".count_total",
+					unit: unitPrefix + "fallback_" + reasonName + "_count",
+				},
+				collectionBenchmarkStatMetric{
+					key:  routePrefix + "fallback.reason." + reasonName + ".ops_total",
+					unit: unitPrefix + "fallback_" + reasonName + "_ops",
+				},
+				collectionBenchmarkStatMetric{
+					key:  routePrefix + "fallback.reason." + reasonName + ".spans_total",
+					unit: unitPrefix + "fallback_" + reasonName + "_spans",
+				},
+			)
+		}
+	}
 	return metrics
+}
+
+func collectionOrderedRootSpanNativeBenchmarkRoutes() []backenddb.OrderedRootSpanNativeRoute {
+	return []backenddb.OrderedRootSpanNativeRoute{
+		backenddb.OrderedRootSpanNativeRouteDirectPublish,
+		backenddb.OrderedRootSpanNativeRouteGroupedPublish,
+		backenddb.OrderedRootSpanNativeRouteSystemDeltaBuilderPublish,
+		backenddb.OrderedRootSpanNativeRouteCommandWALPublish,
+		backenddb.OrderedRootSpanNativeRouteCollectionBufferedRoots,
+		backenddb.OrderedRootSpanNativeRouteOverlayColdBuild,
+		backenddb.OrderedRootSpanNativeRouteMultiIndexGroupPublish,
+		backenddb.OrderedRootSpanNativeRouteDeltaBatchPublish,
+		backenddb.OrderedRootSpanNativeRouteReadOnlyPrepare,
+	}
 }
 
 func benchmarkReportTreeDBSpanNativeStatDeltas(b *testing.B, backend *backenddb.DB, before map[string]string) {
