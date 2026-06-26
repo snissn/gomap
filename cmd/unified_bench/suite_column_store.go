@@ -67,6 +67,11 @@ const (
 	columnStoreJSONBenchModeRowScan                = "row_scan"
 	columnStoreJSONBenchModeDirect                 = "direct"
 	columnStoreJSONBenchModePrepared               = "prepared"
+	columnStoreQueryModeOneShotEndToEnd            = "one_shot_end_to_end"
+	columnStoreQueryModeFirstTouchAfterOpen        = "first_touch_after_open"
+	columnStoreQueryModeHotPreparedRun             = "hot_prepared_run"
+	columnStoreMetadataModeNoAggregate             = "no_aggregate_metadata"
+	columnStoreMetadataModeAutoAggregate           = "auto_aggregate_metadata"
 	columnStoreJSONBenchMutationInsertOnlyReopen   = "insert_only_checkpoint_reopen"
 	columnStoreJSONBenchSyntheticFixtureCaveat     = "in-repo synthetic JSONBench-shaped fixture; not an external full-data JSONBench run"
 	columnStoreJSONBenchFullDataCaveat             = "not an external full-data retained-JSON parity run; #2117 full retained JSON plus reconstruction parity is implemented in the external snissn/JSONBench TreeDB harness"
@@ -242,11 +247,17 @@ type columnStoreQueryMetric struct {
 	ThroughputInterpretation string                            `json:"throughput_interpretation,omitempty"`
 	StorageSource            string                            `json:"storage_source"`
 	FallbackReason           string                            `json:"fallback_reason"`
+	QueryMode                string                            `json:"query_mode"`
+	MetadataMode             string                            `json:"metadata_mode"`
 	ManifestRootName         string                            `json:"manifest_root_name,omitempty"`
 	ManifestRoot             uint64                            `json:"manifest_root,omitempty"`
 	ManifestGeneration       uint64                            `json:"manifest_generation,omitempty"`
 	ActiveManifestChecksum   uint64                            `json:"active_manifest_checksum,omitempty"`
 	DurationMS               float64                           `json:"duration_ms"`
+	PrepareSetupDurationMS   float64                           `json:"prepare_setup_duration_ms"`
+	RunDurationMS            float64                           `json:"run_duration_ms"`
+	RenderHashDurationMS     float64                           `json:"render_hash_duration_ms"`
+	TotalQueryDurationMS     float64                           `json:"total_query_duration_ms"`
 	Rows                     int                               `json:"rows"`
 	RowsProcessed            int                               `json:"rows_processed"`
 	RowsProcessedKnown       bool                              `json:"rows_processed_known"`
@@ -296,6 +307,8 @@ type columnStoreJSONBenchCell struct {
 	StorageSource                    string                            `json:"storage_source"`
 	FallbackReason                   string                            `json:"fallback_reason"`
 	ExecutionMode                    string                            `json:"execution_mode"`
+	QueryMode                        string                            `json:"query_mode"`
+	MetadataMode                     string                            `json:"metadata_mode"`
 	MetadataDataScanPath             string                            `json:"metadata_data_scan_path"`
 	CompressionMode                  string                            `json:"compression_mode"`
 	RequestedCompression             string                            `json:"requested_compression"`
@@ -324,6 +337,10 @@ type columnStoreJSONBenchCell struct {
 	ActiveManifestChecksum           uint64                            `json:"active_manifest_checksum,omitempty"`
 	PlannerDurationMS                float64                           `json:"planner_duration_ms"`
 	PreparedSetupDurationMS          float64                           `json:"prepared_setup_duration_ms,omitempty"`
+	PrepareSetupDurationMS           float64                           `json:"prepare_setup_duration_ms"`
+	RunDurationMS                    float64                           `json:"run_duration_ms"`
+	RenderHashDurationMS             float64                           `json:"render_hash_duration_ms"`
+	TotalQueryDurationMS             float64                           `json:"total_query_duration_ms"`
 	HotRunDurationMS                 float64                           `json:"hot_run_duration_ms,omitempty"`
 	ScanDurationMS                   float64                           `json:"scan_duration_ms"`
 	ReduceDurationMS                 float64                           `json:"reduce_duration_ms"`
@@ -1661,7 +1678,8 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			hash = columnStoreHashLines(exec.Lines)
 			parityHashElapsed = time.Since(parityHashStart)
 		}
-		elapsed := plannerElapsed + exec.ScanDuration + exec.ReduceDuration + exec.AdapterDuration + parityHashElapsed
+		runDuration := columnStoreQueryRunDuration(exec)
+		elapsed := plannerElapsed + runDuration + parityHashElapsed
 		rawHash := rawHashes[name]
 		pass := rawHash == hash
 		parity[name] = columnStoreParity{Pass: pass, RawHash: rawHash, ProductionHash: hash}
@@ -1706,11 +1724,17 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			ImplementationNote:     columnStoreQueryImplementationNote(name, path, planLabel),
 			StorageSource:          storageSource,
 			FallbackReason:         fallbackReason,
+			QueryMode:              columnStoreQueryModeOneShotEndToEnd,
+			MetadataMode:           columnStoreMetadataMode(planLabel, storageSource, exec.MetadataHits),
 			ManifestRootName:       manifestRootName,
 			ManifestRoot:           manifestRoot,
 			ManifestGeneration:     manifestGeneration,
 			ActiveManifestChecksum: activeManifestChecksum,
 			DurationMS:             durationMS(elapsed),
+			PrepareSetupDurationMS: durationMS(plannerElapsed),
+			RunDurationMS:          durationMS(runDuration),
+			RenderHashDurationMS:   durationMS(parityHashElapsed),
+			TotalQueryDurationMS:   durationMS(elapsed),
 			duration:               elapsed,
 			hotRunDuration:         exec.HotRunDuration,
 			Rows:                   rows,
@@ -1988,6 +2012,13 @@ func columnStorePhaseDurations(total time.Duration, diag collections.ColumnPhysi
 		scanDuration = 0
 	}
 	return scanDuration, reduceDuration, resultShapeDuration
+}
+
+func columnStoreQueryRunDuration(exec columnStoreQueryExecution) time.Duration {
+	if exec.HotRunDuration > 0 {
+		return exec.HotRunDuration
+	}
+	return exec.ScanDuration + exec.ReduceDuration + exec.AdapterDuration
 }
 
 func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collection, queryName string, planKind collections.ColumnQueryPlanKind, assetReadIntegrity collections.ColumnAssetReadIntegrity) (columnStoreQueryExecution, error) {
@@ -2424,6 +2455,11 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.AliasOf = q.AliasOf
 	cell.StorageSource = q.StorageSource
 	cell.FallbackReason = q.FallbackReason
+	cell.QueryMode = columnStoreQueryModeOrDefault(q.QueryMode, columnStoreQueryModeOneShotEndToEnd)
+	cell.MetadataMode = q.MetadataMode
+	if cell.MetadataMode == "" {
+		cell.MetadataMode = columnStoreMetadataMode(q.PlanLabel, q.StorageSource, q.MetadataHits)
+	}
 	cell.MetadataDataScanPath = columnStoreJSONBenchActualScanPath(q.PlanLabel, q.StorageSource, q.MetadataHits)
 	cell.CompressionMode = q.CompressionAttribution.CompressionPolicyLabel
 	cell.RequestedCompression = q.CompressionAttribution.RequestedCompression
@@ -2441,6 +2477,10 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.ManifestGeneration = q.ManifestGeneration
 	cell.ActiveManifestChecksum = q.ActiveManifestChecksum
 	cell.PlannerDurationMS = q.PlannerDurationMS
+	cell.PrepareSetupDurationMS = q.PrepareSetupDurationMS
+	cell.RunDurationMS = q.RunDurationMS
+	cell.RenderHashDurationMS = q.RenderHashDurationMS
+	cell.TotalQueryDurationMS = q.TotalQueryDurationMS
 	cell.HotRunDurationMS = durationMS(q.hotRunDuration)
 	if cell.HotRunDurationMS == 0 {
 		cell.HotRunDurationMS = q.ScanDurationMS + q.ReduceDurationMS + q.AdapterDurationMS
@@ -2476,6 +2516,8 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	if cell.FallbackReason == "" {
 		cell.FallbackReason = string(collections.ColumnPhysicalQueryFallbackNone)
 	}
+	cell.QueryMode = columnStoreQueryModeHotPreparedRun
+	cell.MetadataMode = columnStoreMetadataMode(planLabel, cell.StorageSource, exec.MetadataHits)
 	cell.CellLabel = columnStoreJSONBenchActualCellLabel(planLabel, cell.ExecutionMode, cell.StorageSource, exec.MetadataHits)
 	cell.MetadataDataScanPath = columnStoreJSONBenchActualScanPath(planLabel, cell.StorageSource, exec.MetadataHits)
 	cell.CompressionAttribution = columnStoreQueryCompressionAttribution(planLabel, cell.StorageSource, cell.FallbackReason, exec.BytesRead)
@@ -2507,6 +2549,10 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 		cell.ActiveManifestChecksum = direct.ActiveManifestChecksum
 	}
 	cell.PreparedSetupDurationMS = durationMS(exec.SetupDuration)
+	cell.PrepareSetupDurationMS = durationMS(exec.SetupDuration)
+	cell.RunDurationMS = durationMS(exec.HotRunDuration)
+	cell.RenderHashDurationMS = durationMS(exec.ParityHashDuration)
+	cell.TotalQueryDurationMS = durationMS(exec.HotRunDuration + exec.ParityHashDuration)
 	cell.HotRunDurationMS = durationMS(exec.HotRunDuration)
 	cell.ScanDurationMS = durationMS(exec.ScanDuration)
 	cell.ReduceDurationMS = durationMS(exec.ReduceDuration)
@@ -2551,7 +2597,13 @@ func columnStoreJSONBenchUnavailablePreparedCell(name string, direct columnStore
 	}
 	cell.CellLabel = columnStoreJSONBenchActualCellLabel(planLabel, cell.ExecutionMode, cell.StorageSource, metadataHits)
 	cell.MetadataDataScanPath = columnStoreJSONBenchActualScanPath(planLabel, cell.StorageSource, metadataHits)
+	cell.QueryMode = columnStoreQueryModeHotPreparedRun
+	cell.MetadataMode = columnStoreMetadataMode(planLabel, cell.StorageSource, metadataHits)
 	cell.PreparedSetupDurationMS = durationMS(exec.SetupDuration)
+	cell.PrepareSetupDurationMS = durationMS(exec.SetupDuration)
+	cell.RunDurationMS = durationMS(exec.HotRunDuration)
+	cell.RenderHashDurationMS = durationMS(exec.ParityHashDuration)
+	cell.TotalQueryDurationMS = durationMS(exec.HotRunDuration + exec.ParityHashDuration)
 	cell.HotRunDurationMS = durationMS(exec.HotRunDuration)
 	cell.RowCount = direct.Rows
 	cell.RawHash = direct.RawHash
@@ -2632,6 +2684,20 @@ func columnStoreJSONBenchActualScanPath(planLabel, storageSource string, metadat
 		return columnStoreJSONBenchScanPathMetadata
 	}
 	return columnStoreJSONBenchScanPathData
+}
+
+func columnStoreMetadataMode(planLabel, storageSource string, metadataHits int) string {
+	if columnStoreJSONBenchActualScanPath(planLabel, storageSource, metadataHits) == columnStoreJSONBenchScanPathMetadata {
+		return columnStoreMetadataModeAutoAggregate
+	}
+	return columnStoreMetadataModeNoAggregate
+}
+
+func columnStoreQueryModeOrDefault(mode, fallback string) string {
+	if strings.TrimSpace(mode) != "" {
+		return mode
+	}
+	return fallback
 }
 
 func columnStoreSortKeyLabels(cfg *collections.ColumnStoreConfig) []string {
@@ -3677,8 +3743,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	renderColumnStoreColgranuleReuseMarkdown(&sb, report)
 
 	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
+	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
 	for _, q := range report.Queries {
 		parity := "pass"
 		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
@@ -3700,8 +3766,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
 			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 
@@ -3828,8 +3894,8 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		sb.WriteString("No JSONBench synthetic cells were recorded.\n\n")
 		return
 	}
-	sb.WriteString("| cell | query | sort layout | storage source | mode | metadata/data path | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | result hash | parity | full-data caveat | reconstruction | status |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|\n")
+	sb.WriteString("| cell | query | query mode | metadata mode | sort layout | storage source | mode | metadata/data path | prepare/setup ms | run ms | render/hash ms | total query ms | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | result hash | parity | full-data caveat | reconstruction | status |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|\n")
 	for _, cell := range report.JSONBenchCells {
 		parity := "pass"
 		if !cell.ParityWithRowScan {
@@ -3839,13 +3905,19 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		if cell.CompatibilityStatusReason != "" {
 			status += ": " + cell.CompatibilityStatusReason
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d | %d | %d | %016x | %s | %s | %s | %s |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %s | %s | %s | %s | %s | %s | %d | %d | %d | %016x | %s | %s | %s | %s |\n",
 			markdownCodeTableText(cell.CellLabel),
 			markdownCodeTableText(cell.Query),
+			markdownCodeTableText(cell.QueryMode),
+			markdownCodeTableText(cell.MetadataMode),
 			markdownCodeTableText(cell.SortLayout),
 			markdownCodeTableText(cell.StorageSource),
 			markdownCodeTableText(cell.ExecutionMode),
 			markdownCodeTableText(cell.MetadataDataScanPath),
+			cell.PrepareSetupDurationMS,
+			cell.RunDurationMS,
+			cell.RenderHashDurationMS,
+			cell.TotalQueryDurationMS,
 			markdownCodeTableText(cell.CompressionMode),
 			markdownCodeTableText(cell.MutationMode),
 			markdownCodeTableText(cell.RetainedPayloadPolicy),
