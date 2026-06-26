@@ -273,8 +273,7 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	return db.compactStorage(ctx, opts)
 }
 
-func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
-	var stats CompactStorageStats
+func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (stats CompactStorageStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -346,7 +345,8 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	cleanupLeafLogDone := false
 	defer func() {
 		if !cleanupLeafLogDone {
-			_ = cleanupLeafLog()
+			cleanupLeafLogDone = true
+			err = errors.Join(err, cleanupLeafLog())
 		}
 	}()
 	if opts.Mode == CompactStorageExhaustive && db.indexOuterLeavesInValueLog && compactLeafLog == nil && db.leafPageLog != nil {
@@ -564,10 +564,10 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	stats.FullyCompacted = finalDebt.Empty()
 	stats.PolicyFullyCompacted = stats.FullyCompacted
 	stats.ByteMinimized = opts.Mode == CompactStorageExhaustive && finalDebt.Empty()
-	if err := cleanupLeafLog(); err != nil {
-		return stats, err
-	}
 	cleanupLeafLogDone = true
+	if cleanupErr := cleanupLeafLog(); cleanupErr != nil {
+		return stats, cleanupErr
+	}
 	return stats, nil
 }
 

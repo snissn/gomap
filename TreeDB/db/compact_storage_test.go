@@ -906,6 +906,52 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 	}
 }
 
+type compactStorageFailingHandoffLeafPageLog struct {
+	err          error
+	advanceCalls int
+}
+
+func (l *compactStorageFailingHandoffLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return page.LeafLogPtr{}, nil
+}
+
+func (l *compactStorageFailingHandoffLeafPageLog) Flush() error { return nil }
+
+func (l *compactStorageFailingHandoffLeafPageLog) Sync() error { return nil }
+
+func (l *compactStorageFailingHandoffLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(uint32) error {
+	l.advanceCalls++
+	return l.err
+}
+
+func TestCompactStorageLeafPageLogCleanupErrorPropagatesOnce(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+	writeLeafGenerationKeys(t, d, "cleanup", 64, 'c')
+	currentLeafSegmentOrFatal(t, leafLog)
+
+	cleanupErr := errors.New("compact cleanup advance failure")
+	failingHandoff := &compactStorageFailingHandoffLeafPageLog{err: cleanupErr}
+	previousOwner := &leafPageLogLaneGroup{
+		lanes: []LeafPageLog{
+			replayInlineLeafPageLog{},
+			failingHandoff,
+		},
+	}
+	d.SetLeafPageLog(previousOwner)
+	previousInstalled := d.leafPageLog
+
+	_, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("CompactStorage error=%v, want cleanup handoff error %v", err, cleanupErr)
+	}
+	if failingHandoff.advanceCalls != 1 {
+		t.Fatalf("cleanup handoff calls=%d want 1", failingHandoff.advanceCalls)
+	}
+	if d.leafPageLog != previousInstalled {
+		t.Fatalf("leaf-page log was not restored after cleanup error: got %T want %T", d.leafPageLog, previousInstalled)
+	}
+}
+
 func TestRegisterLeafPageLogSegmentsForPublishRegistersRewriteSegments(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{
