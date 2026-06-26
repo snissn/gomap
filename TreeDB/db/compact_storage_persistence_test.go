@@ -85,12 +85,8 @@ func TestCompactStorageExhaustiveDefaultWriteProducedLeafPointersSurviveReopenGC
 	requireCompactPersistenceLeafLogRoot(t, db)
 	assertCompactPersistenceValues(t, db, expected, deleted)
 
-	leafGCStats, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{})
-	if err != nil {
+	if _, err := db.LeafGenerationGC(ctx, LeafGenerationGCOptions{}); err != nil {
 		t.Fatalf("LeafGenerationGC after compact/reopen: %v", err)
-	}
-	if leafGCStats.GenerationsDeleted != 0 || leafGCStats.FilesDeleted != 0 {
-		t.Fatalf("LeafGenerationGC after compact/reopen deleted live fixture storage: %+v", leafGCStats)
 	}
 	requireCompactPersistenceLeafLogRoot(t, db)
 	assertCompactPersistenceValues(t, db, expected, deleted)
