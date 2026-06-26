@@ -274,6 +274,10 @@ type ColumnPublishLifecycleSummary struct {
 // ColumnPublishStageMetrics records stage timings and optional allocation
 // counters for publish-plan construction.
 type ColumnPublishStageMetrics struct {
+	// DocumentExtraction also includes the production command-WAL
+	// JSON-to-declared-row conversion when that path prepares declared rows before
+	// BuildColumnPublishPlan. Typed-column asset encoding remains charged to
+	// AssetPreparation unless an explicit EncodeDeclaredColumns hook runs.
 	DocumentExtraction      time.Duration
 	DeclaredColumnEncoding  time.Duration
 	AssetPreparation        time.Duration
