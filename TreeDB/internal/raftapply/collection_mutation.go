@@ -134,6 +134,9 @@ func (h *Harness) collectionMutationApplyError(entry raftentry.CommandEntryV1, h
 }
 
 func collectionMutationRequiresRecovery(err error) bool {
+	if code, ok := ErrorCodeOf(err); ok && code == raftentry.ErrorUnsafeDurabilityModeV1 {
+		return true
+	}
 	return errors.Is(err, collections.ErrCommitAmbiguous) ||
 		errors.Is(err, backenddb.ErrRecoveryRequired) ||
 		errors.Is(err, backenddb.ErrCommandWALRejected) ||

@@ -1567,6 +1567,17 @@ func codeOf(err error) raftentry.DeterministicErrorCodeV1 {
 	return code
 }
 
+func TestCollectionMutationRequiresRecoveryCodedUnsafeDurability(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", codedError(raftentry.ErrorUnsafeDurabilityModeV1, "unsafe durability after publish"))
+	if !collectionMutationRequiresRecovery(err) {
+		t.Fatalf("coded unsafe durability error did not require recovery")
+	}
+	err = fmt.Errorf("wrapped: %w", codedError(raftentry.ErrorRejectedConflictV1, "ordinary conflict"))
+	if collectionMutationRequiresRecovery(err) {
+		t.Fatalf("coded rejected conflict unexpectedly required recovery")
+	}
+}
+
 type recordApplyResultStoreFailAfterPreflight struct{}
 
 func (recordApplyResultStoreFailAfterPreflight) LookupApplyResult(raftentry.ApplyEntryID) (ApplyResultRecordV1, bool, error) {
