@@ -126,11 +126,14 @@ def parse_disk_breakdown(path: Path, app_db: Path) -> dict[str, int]:
         if size < 0:
             continue
         item = Path(path_raw)
-        try:
-            rel = item.relative_to(app_db)
-            key = str(rel)
-        except ValueError:
-            key = "application.db" if item == app_db else item.name
+        if item == app_db:
+            key = "application.db"
+        else:
+            try:
+                rel = item.relative_to(app_db)
+                key = "application.db" if str(rel) == "." else str(rel)
+            except ValueError:
+                key = item.name
         values[key] = size
     return values
 
@@ -143,7 +146,13 @@ def load_json(path: Path) -> Any:
 
 
 def summarize_dwell_samples(dwell_dir: Path) -> dict[str, Any]:
-    sample_paths = sorted(dwell_dir.glob("sample_*.json"))
+    def sample_sort_key(path: Path) -> tuple[int, str]:
+        match = re.fullmatch(r"sample_([0-9]+)\.json", path.name)
+        if match:
+            return (safe_int(match.group(1)), path.name)
+        return (sys.maxsize, path.name)
+
+    sample_paths = sorted(dwell_dir.glob("sample_*.json"), key=sample_sort_key)
     samples = [load_json(path) for path in sample_paths]
     samples = [sample for sample in samples if isinstance(sample, dict)]
     if not samples:
@@ -175,13 +184,17 @@ def count_fatal_matches(node_log: Path) -> dict[str, Any]:
     if not node_log.is_file():
         return {"count": 0, "matches": []}
     matches: list[dict[str, str]] = []
-    for line_no, raw in enumerate(node_log.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-        lowered = raw.lower()
-        for pattern in FATAL_PATTERNS:
-            if pattern.lower() in lowered:
-                matches.append({"line": line_no, "pattern": pattern, "text": raw.strip()[:500]})
-                break
-    return {"count": len(matches), "matches": matches[:20]}
+    count = 0
+    with node_log.open(encoding="utf-8", errors="replace") as handle:
+        for line_no, raw in enumerate(handle, 1):
+            lowered = raw.lower()
+            for pattern in FATAL_PATTERNS:
+                if pattern.lower() in lowered:
+                    count += 1
+                    if len(matches) < 20:
+                        matches.append({"line": line_no, "pattern": pattern, "text": raw.strip()[:500]})
+                    break
+    return {"count": count, "matches": matches}
 
 
 def summarize_home(home: Path) -> dict[str, Any]:
