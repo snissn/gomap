@@ -29,15 +29,18 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if err != nil {
 		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
 	}
+	handleFinalized := false
+	defer func() {
+		if !handleFinalized {
+			h.walApply.Abort(h.db, handle)
+		}
+	}()
 	intent := handle.CommandWALIntent()
 	if intent == nil || handle.LSN() == 0 {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
 	}
 	if _, err := collections.NewCollectionManager(h.db).CreateCollectionWithCommandWALIntent(collectionMeta, intent); err != nil {
 		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
-	}
-	if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
-		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
 	}
 	logical, err := LogicalDigestV1ForDB(h.db, LogicalDigestOptionsV1{
 		ScopeRule:     meta.ScopeRule,
@@ -47,6 +50,10 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}
+	if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
+		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+	}
+	handleFinalized = true
 	status := raftentry.ApplyStatusApplied
 	affected := int64(1)
 	if alreadyApplied {

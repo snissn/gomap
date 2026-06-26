@@ -192,6 +192,21 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	}, nil
 }
 
+// Abort releases an appended apply handle that cannot be finalized by the
+// caller. If the frame is still beyond AppliedCommandLSN, the open DB handle is
+// poisoned so the next writer fails closed and reopen recovery owns the gap.
+func Abort(db *backenddb.DB, handle Handle) {
+	if handle.staging != nil {
+		defer handle.staging.release()
+	}
+	if db == nil || handle.db != db || handle.intent == nil || handle.lsn == 0 {
+		return
+	}
+	if appliedCommandLSN(db) < handle.lsn {
+		db.MarkCommandWALIntentRecoveryRequired(handle.intent)
+	}
+}
+
 // ApplyNoop appends and finalizes the scoped no-op frame. It exists only to
 // test the boundary end-to-end without adding accepted replicated commands.
 func ApplyNoop(db *backenddb.DB, frame LoweredFrame, meta ApplyMetadata, opts Options) (Result, error) {

@@ -124,6 +124,57 @@ func TestCreateCollectionApplyCreatesCatalogAndDeterministicResult(t *testing.T)
 	}
 }
 
+func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	id := raftentry.ApplyEntryID{Term: 1, Index: 1}
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
+	entry, err := raftentry.DecodeCommandEntryV1(raw, raftentry.DecodeOptions{ApplyEntryID: id})
+	if err != nil {
+		t.Fatalf("DecodeCommandEntryV1: %v", err)
+	}
+	result := raftentry.ApplyResultV1{
+		Status:                 raftentry.ApplyStatusApplied,
+		CommandDigest:          entry.Digest,
+		DeterministicErrorCode: raftentry.ErrorNoneV1,
+		AffectedCount:          1,
+		ResultDigest:           entry.Digest,
+	}
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	if err := results.RecordApplyResult(ApplyResultRecordV1{
+		EntryID:       id,
+		CommandDigest: entry.Digest,
+		Result:        result,
+	}); err != nil {
+		t.Fatalf("RecordApplyResult: %v", err)
+	}
+
+	seam := &countingCommandWALApplySeam{}
+	replayed, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 stored result replay: %v", err)
+	}
+	if replayed != result {
+		t.Fatalf("stored result replay=%+v, want %+v", replayed, result)
+	}
+	if progress.Len() != 1 {
+		t.Fatalf("progress records after stored result replay=%d, want 1", progress.Len())
+	}
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("stored result replay reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 0 {
+		t.Fatalf("command WAL frames after stored result replay=%d, want 0", got)
+	}
+}
+
 func TestCreateCollectionDuplicateIncompatibleFailsBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -741,3 +792,5 @@ func (s *countingCommandWALApplySeam) Finalize(db *backenddb.DB, handle commandw
 	s.finalizeCalls++
 	return commandwalapply.Result{}, errors.New("unexpected finalize")
 }
+
+func (s *countingCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply.Handle) {}

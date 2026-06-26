@@ -41,6 +41,7 @@ type ApplyMetadataV1 struct {
 type CommandWALApplySeam interface {
 	Append(*backenddb.DB, commandwalapply.LoweredFrame, commandwalapply.ApplyMetadata, commandwalapply.Options) (commandwalapply.Handle, commandwalapply.Result, error)
 	Finalize(*backenddb.DB, commandwalapply.Handle, commandwalapply.ApplyMetadata, commandwalapply.Options) (commandwalapply.Result, error)
+	Abort(*backenddb.DB, commandwalapply.Handle)
 }
 
 type defaultCommandWALApplySeam struct{}
@@ -51,6 +52,10 @@ func (defaultCommandWALApplySeam) Append(db *backenddb.DB, frame commandwalapply
 
 func (defaultCommandWALApplySeam) Finalize(db *backenddb.DB, handle commandwalapply.Handle, meta commandwalapply.ApplyMetadata, opts commandwalapply.Options) (commandwalapply.Result, error) {
 	return commandwalapply.Finalize(db, handle, meta, opts)
+}
+
+func (defaultCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply.Handle) {
+	commandwalapply.Abort(db, handle)
 }
 
 // Options wires the harness to deterministic decode limits, fake or durable
@@ -125,6 +130,15 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 		if ok {
 			if record.CommandDigest != entry.Digest {
 				return reject(entry.Digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("raftapply: apply entry %d/%d digest conflicts with existing result", meta.EntryID.Term, meta.EntryID.Index))
+			}
+			if h.opts.ProgressStore != nil {
+				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
+					EntryID:       meta.EntryID,
+					CommandDigest: entry.Digest,
+				}); err != nil {
+					code, _ := ErrorCodeOf(err)
+					return reject(entry.Digest, code, err)
+				}
 			}
 			return record.Result, nil
 		}
