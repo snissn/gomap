@@ -21,6 +21,86 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestColumnPhysicalQuerySumSecondOfDaySquareOverflowCheckedM3116(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "compatibility_row_scan",
+			run: func() error {
+				exec := &columnPhysicalQueryExecutor{
+					kind:     ColumnPhysicalQuerySumSecondOfDaySquare,
+					valueIdx: 0,
+					int64Sum: typedColumnInt64PredicateAggregateMaxSum,
+				}
+				return exec.visitValues([]columnDeclaredValue{{Type: ColumnStoreValueInt64, Present: true, Int64: 1_000_000}})
+			},
+		},
+		{
+			name: "direct_asset_scan",
+			run: func() error {
+				exec := &columnPhysicalQueryExecutor{
+					kind:     ColumnPhysicalQuerySumSecondOfDaySquare,
+					int64Sum: typedColumnInt64PredicateAggregateMaxSum,
+				}
+				return exec.visitDirectSumSecondOfDaySquare(1_000_000, true)
+			},
+		},
+		{
+			name: "parallel_merge",
+			run: func() error {
+				left := &columnPhysicalQueryExecutor{
+					kind:         ColumnPhysicalQuerySumSecondOfDaySquare,
+					int64Sum:     typedColumnInt64PredicateAggregateMaxSum,
+					int64SumRows: 1,
+				}
+				right := &columnPhysicalQueryExecutor{
+					kind:         ColumnPhysicalQuerySumSecondOfDaySquare,
+					int64Sum:     1,
+					int64SumRows: 1,
+				}
+				return left.mergeFrom(right)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.run()
+			if err == nil || !strings.Contains(err.Error(), "sum overflow") {
+				t.Fatalf("err=%v want sum overflow", err)
+			}
+		})
+	}
+}
+
+func TestColumnPhysicalQuerySumSecondOfDaySquareResultKeyUsesValueColumnM3116(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "score_us", Path: "score_us", ValueType: ColumnStoreValueInt64},
+		},
+	}
+	exec, err := newColumnPhysicalQueryExecutor(cfg, ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQuerySumSecondOfDaySquare,
+		ValueColumn: "score_us",
+	})
+	if err != nil {
+		t.Fatalf("newColumnPhysicalQueryExecutor: %v", err)
+	}
+	if err := exec.addSumSecondOfDaySquareValue(1_000_000); err != nil {
+		t.Fatalf("addSumSecondOfDaySquareValue: %v", err)
+	}
+	groups := exec.groups()
+	if len(groups) != 1 {
+		t.Fatalf("groups=%+v want one result", groups)
+	}
+	if groups[0].Key != "score_us_second_of_day_square" {
+		t.Fatalf("result key=%q want %q", groups[0].Key, "score_us_second_of_day_square")
+	}
+}
+
 func TestColumnPhysicalQueryAdapterExecutesJSONBenchShapesM13B(t *testing.T) {
 	events := columnPhysicalQueryFixtureEventsM13B(96)
 	reopened, closeFn := openColumnPhysicalQueryFixtureM13B(t, events)

@@ -44,6 +44,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 		wantPredicates  int
 		wantMatchedRows int
 		wantReduceRows  int
+		wantSource      ColumnPhysicalQueryStorageSource
 	}{
 		{
 			name:            "q1",
@@ -51,6 +52,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			wantPredicates:  0,
 			wantMatchedRows: 0,
 			wantReduceRows:  len(scanned),
+			wantSource:      ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset,
 		},
 		{
 			name: "q2",
@@ -63,6 +65,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			wantPredicates:  len(commitCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", scanned),
 			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", scanned),
+			wantSource:      ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset,
 		},
 		{
 			name: "q3",
@@ -75,6 +78,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			wantPredicates:  len(feedCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q3", scanned),
 			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q3", scanned),
+			wantSource:      ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset,
 		},
 		{
 			name: "q4a",
@@ -87,6 +91,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			wantPredicates:  len(postCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q4a", scanned),
 			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q4a", scanned),
+			wantSource:      ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset,
 		},
 		{
 			name: "q4b",
@@ -99,6 +104,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			wantPredicates:  len(postCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q4b", scanned),
 			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q4b", scanned),
+			wantSource:      ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset,
 		},
 		{
 			name: "q5",
@@ -111,6 +117,18 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			wantPredicates:  len(postCreate),
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned),
 			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned),
+			wantSource:      ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset,
+		},
+		{
+			name: "sum_time_second_of_day_square",
+			req: ColumnPhysicalQueryRequest{
+				Kind:        ColumnPhysicalQuerySumSecondOfDaySquare,
+				ValueColumn: "time_us",
+			},
+			wantPredicates:  0,
+			wantMatchedRows: 0,
+			wantReduceRows:  len(scanned),
+			wantSource:      ColumnPhysicalQueryStorageSourceTypedRowAsset,
 		},
 	}
 
@@ -123,7 +141,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RunColumnPhysicalQuery(%s): %v", tc.name, err)
 			}
-			assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, direct.Diagnostics, len(scanned), tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows)
+			assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, direct.Diagnostics, len(scanned), tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows, tc.wantSource)
 			directHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0(tc.name, direct.Groups))
 			if directHash != rowHash {
 				t.Fatalf("%s direct hash=%016x want row scan %016x row=%v direct=%v", tc.name, directHash, rowHash, rowLines, columnPhysicalJSONBenchPhysicalLinesP0(tc.name, direct.Groups))
@@ -139,7 +157,7 @@ func TestColumnPhysicalJSONBenchParityQ1Q5P0(t *testing.T) {
 				if err != nil {
 					t.Fatalf("prepared %s run %d: %v", tc.name, run, err)
 				}
-				assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, prepared.Diagnostics, len(scanned), tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows)
+				assertColumnPhysicalJSONBenchDiagnosticsP0(t, tc.name, prepared.Diagnostics, len(scanned), tc.wantPredicates, tc.wantMatchedRows, tc.wantReduceRows, tc.wantSource)
 				preparedHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchPhysicalLinesP0(tc.name, prepared.Groups))
 				if preparedHash != rowHash {
 					t.Fatalf("%s prepared run %d hash=%016x want row scan %016x row=%v prepared=%v", tc.name, run, preparedHash, rowHash, rowLines, columnPhysicalJSONBenchPhysicalLinesP0(tc.name, prepared.Groups))
@@ -296,7 +314,7 @@ func assertColumnPhysicalJSONBenchRowScanPreservesFullPredicateColumnsP0(tb test
 	}
 }
 
-func assertColumnPhysicalJSONBenchDiagnosticsP0(tb testing.TB, query string, diag ColumnPhysicalQueryDiagnostics, wantRowsScanned, wantPredicates, wantMatchedRows, wantReduceRows int) {
+func assertColumnPhysicalJSONBenchDiagnosticsP0(tb testing.TB, query string, diag ColumnPhysicalQueryDiagnostics, wantRowsScanned, wantPredicates, wantMatchedRows, wantReduceRows int, wantSource ColumnPhysicalQueryStorageSource) {
 	tb.Helper()
 	if diag.ManifestRootName != "events/column/manifest" || diag.ManifestRoot == 0 {
 		tb.Fatalf("%s manifest root name/id missing: %+v", query, diag)
@@ -304,8 +322,8 @@ func assertColumnPhysicalJSONBenchDiagnosticsP0(tb testing.TB, query string, dia
 	if diag.ManifestGeneration == 0 || diag.ActiveManifestChecksum == 0 {
 		tb.Fatalf("%s active manifest generation/checksum missing: %+v", query, diag)
 	}
-	if diag.StorageSource != ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset {
-		tb.Fatalf("%s storage source=%q want %q diagnostics=%+v", query, diag.StorageSource, ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset, diag)
+	if diag.StorageSource != wantSource {
+		tb.Fatalf("%s storage source=%q want %q diagnostics=%+v", query, diag.StorageSource, wantSource, diag)
 	}
 	if diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
 		tb.Fatalf("%s fallback reason=%q want none diagnostics=%+v", query, diag.FallbackReason, diag)
@@ -338,6 +356,8 @@ func columnPhysicalJSONBenchReferenceMatchP0(query string, event columnPhysicalJ
 		return event.Kind == "commit" && event.Operation == "create" && (event.Collection == "app.bsky.feed.post" || event.Collection == "app.bsky.feed.repost" || event.Collection == "app.bsky.feed.like")
 	case "q4a", "q4b", "q5":
 		return event.Kind == "commit" && event.Operation == "create" && event.Collection == "app.bsky.feed.post"
+	case "sum_time_second_of_day_square":
+		return true
 	default:
 		panic(query)
 	}
@@ -400,6 +420,16 @@ func columnPhysicalJSONBenchReferenceLinesP0(query string, events []columnPhysic
 			values[did] = span.max - span.min
 		}
 		return columnPhysicalJSONBenchIntLinesP0(query, values)
+	case "sum_time_second_of_day_square":
+		sum := int64(0)
+		for _, event := range events {
+			value, err := typedColumnInt64AggregateExpressionValue(TypedColumnInt64AggregateSecondOfDaySquare, event.TimeUS)
+			if err != nil {
+				panic(err)
+			}
+			sum += value
+		}
+		return columnPhysicalJSONBenchIntLinesP0(query, map[string]int64{"time_us_second_of_day_square": sum})
 	default:
 		panic(query)
 	}
@@ -422,7 +452,7 @@ func columnPhysicalJSONBenchPhysicalLinesP0(query string, groups []ColumnPhysica
 			values[key] = int64(group.Count)
 		}
 		return columnPhysicalJSONBenchIntLinesP0(query, values)
-	case "q4a", "q4b", "q5":
+	case "q4a", "q4b", "q5", "sum_time_second_of_day_square":
 		values := make(map[string]int64, len(groups))
 		for _, group := range groups {
 			values[group.Key] = group.Int64
