@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -769,11 +770,15 @@ func TestCompactStorageRIDAllocatorIsSharedAcrossOfflineWriters(t *testing.T) {
 		t.Fatalf("rid start scans=%d want 1", scanCalls)
 	}
 
-	_, cleanup, err := d.installCompactStorageLeafPageLog(opts)
+	_, handoff, err := d.installCompactStorageLeafPageLog(opts)
 	if err != nil {
 		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
 	}
-	defer func() { _ = cleanup() }()
+	defer func() {
+		if handoff != nil {
+			_ = handoff.cleanup()
+		}
+	}()
 	if d.leafPageLog == nil {
 		t.Fatal("expected installed leaf page log")
 	}
@@ -805,11 +810,15 @@ func TestCompactStorageRefreshesInstalledLeafWriterAfterPack(t *testing.T) {
 		valueLogCompression:        ValueLogCompressionOff,
 	}
 	opts := CompactStorageOptions{ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve}
-	installed, cleanup, err := d.installCompactStorageLeafPageLog(opts)
+	installed, handoff, err := d.installCompactStorageLeafPageLog(opts)
 	if err != nil {
 		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
 	}
-	defer func() { _ = cleanup() }()
+	defer func() {
+		if handoff != nil {
+			_ = handoff.cleanup()
+		}
+	}()
 	if installed == nil {
 		t.Fatal("expected installed compact leaf writer")
 	}
@@ -863,14 +872,14 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 		Mode:        CompactStorageExhaustive,
 		ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve,
 	}
-	installed, cleanup, err := d.installCompactStorageLeafPageLog(opts)
+	installed, handoff, err := d.installCompactStorageLeafPageLog(opts)
 	if err != nil {
 		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
 	}
 	cleanupDone := false
 	defer func() {
-		if !cleanupDone {
-			_ = cleanup()
+		if !cleanupDone && handoff != nil {
+			_ = handoff.cleanup()
 		}
 	}()
 	if installed == nil {
@@ -882,7 +891,7 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("h"), page.PageSize)); err != nil {
 		t.Fatalf("installed AppendLeafPage: %v", err)
 	}
-	if err := cleanup(); err != nil {
+	if err := handoff.cleanup(); err != nil {
 		t.Fatalf("cleanup handoff: %v", err)
 	}
 	cleanupDone = true
@@ -891,6 +900,222 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 	}
 	if previousOwner.advanced != 1 {
 		t.Fatalf("restored owner advanced seq=%d want 1", previousOwner.advanced)
+	}
+}
+
+func TestCompactStorageLeafPageLogHandoffAdvanceFailureFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(ValueLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	if err := os.MkdirAll(LeafLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir leaf_vlog: %v", err)
+	}
+
+	d := &DB{
+		dir:                        dir,
+		indexOuterLeavesInValueLog: true,
+		valueLogCompression:        ValueLogCompressionOff,
+	}
+	advanceErr := errors.New("injected advance failure")
+	previousOwner := &compactStorageMatrixCachedHandoffLeafPageLog{advanceErr: advanceErr}
+	d.SetLeafPageLog(previousOwner)
+	opts := CompactStorageOptions{
+		Mode:        CompactStorageExhaustive,
+		ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve,
+	}
+	installed, handoff, err := d.installCompactStorageLeafPageLog(opts)
+	if err != nil {
+		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
+	}
+	if installed == nil || handoff == nil {
+		t.Fatal("expected installed compact handoff")
+	}
+	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("h"), page.PageSize)); err != nil {
+		t.Fatalf("installed AppendLeafPage: %v", err)
+	}
+	err = handoff.cleanup()
+	if !errors.Is(err, ErrCompactStorageLeafPageLogHandoffCleanup) {
+		t.Fatalf("cleanup error=%v, want handoff cleanup sentinel", err)
+	}
+	if !errors.Is(err, advanceErr) {
+		t.Fatalf("cleanup error=%v, want injected advance error", err)
+	}
+	var handoffErr *CompactStorageLeafPageLogHandoffError
+	if !errors.As(err, &handoffErr) {
+		t.Fatalf("cleanup error=%T, want CompactStorageLeafPageLogHandoffError", err)
+	}
+	if handoffErr.Stage != "restore previous owner" {
+		t.Fatalf("handoff stage=%q want restore previous owner", handoffErr.Stage)
+	}
+	if d.leafPageLog != nil {
+		t.Fatalf("leaf-page log=%T, want fail-closed nil active writer", d.leafPageLog)
+	}
+	if previousOwner.advanced != 0 {
+		t.Fatalf("previous owner advanced seq=%d despite injected failure", previousOwner.advanced)
+	}
+}
+
+func TestCompactStoragePreInstallFailureDoesNotMutateLeafPageLogOwner(t *testing.T) {
+	d, _, wantValue := openCompactStorageCommandWALLeafPageLogDB(t)
+	defer func() { _ = d.Close() }()
+	previousLeafPageLog := d.leafPageLog
+
+	scanErr := errors.New("injected compact rid scan failure")
+	origScanner := rewriteRIDStartScanner
+	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
+		return 0, scanErr
+	}
+	t.Cleanup(func() { rewriteRIDStartScanner = origScanner })
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if !errors.Is(err, scanErr) {
+		t.Fatalf("CompactStorage error=%v, want injected scan failure", err)
+	}
+	if d.leafPageLog != previousLeafPageLog {
+		t.Fatalf("pre-install failure mutated owner: got %T want %T", d.leafPageLog, previousLeafPageLog)
+	}
+	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("pre-install failure reported compact success flags: %+v", stats)
+	}
+	got, err := d.Get([]byte("canonical"))
+	if err != nil {
+		t.Fatalf("Get canonical after pre-install failure: %v", err)
+	}
+	if !bytes.Equal(got, wantValue) {
+		t.Fatalf("canonical value mismatch after pre-install failure: got %q want %q", got, wantValue)
+	}
+	if err := d.SetSync([]byte("post-pre-install-failure"), []byte("ok")); err != nil {
+		t.Fatalf("SetSync after pre-install failure: %v", err)
+	}
+}
+
+func TestCompactStorageInterruptedHandoffRestoresPreviousLeafPageLog(t *testing.T) {
+	tests := []struct {
+		name        string
+		cancelAfter string
+	}{
+		{
+			name:        "during rewrite after compact writer install",
+			cancelAfter: "checkpoint",
+		},
+		{
+			name:        "after value log rewrite registration checkpoint",
+			cancelAfter: "checkpoint-after-value-log-rewrite",
+		},
+		{
+			name:        "after generation seal",
+			cancelAfter: "seal-current-leaf-generation",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, dir, wantValue := openCompactStorageCommandWALLeafPageLogDB(t)
+			closed := false
+			defer func() {
+				if !closed {
+					_ = d.Close()
+				}
+			}()
+			previousLeafPageLog := d.leafPageLog
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			d.compactStorageAfterPhase = func(name string) {
+				if name == tt.cancelAfter {
+					cancel()
+				}
+			}
+
+			stats, err := d.CompactStorage(ctx, CompactStorageOptions{Mode: CompactStorageExhaustive})
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("CompactStorage error=%v, want context.Canceled after %s", err, tt.cancelAfter)
+			}
+			if d.leafPageLog != previousLeafPageLog {
+				t.Fatalf("interrupted compact restored leaf-page log=%T want exact previous %T", d.leafPageLog, previousLeafPageLog)
+			}
+			if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+				t.Fatalf("interrupted compact reported compact success flags: %+v", stats)
+			}
+			got, err := d.Get([]byte("canonical"))
+			if err != nil {
+				t.Fatalf("Get canonical after interrupted compact: %v", err)
+			}
+			if !bytes.Equal(got, wantValue) {
+				t.Fatalf("canonical value mismatch after interrupted compact: got %q want %q", got, wantValue)
+			}
+			postKey := []byte("post-" + tt.name)
+			if err := d.SetSync(postKey, []byte("ok")); err != nil {
+				t.Fatalf("SetSync after interrupted compact: %v", err)
+			}
+			got, err = d.Get(postKey)
+			if err != nil {
+				t.Fatalf("Get post key after interrupted compact: %v", err)
+			}
+			if string(got) != "ok" {
+				t.Fatalf("post value=%q want ok", got)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatalf("close after interrupted compact: %v", err)
+			}
+			closed = true
+
+			reopened, err := Open(compactStorageCommandWALLeafPageLogOptions(dir))
+			if err != nil {
+				t.Fatalf("reopen after interrupted compact: %v", err)
+			}
+			defer func() { _ = reopened.Close() }()
+			got, err = reopened.Get([]byte("canonical"))
+			if err != nil {
+				t.Fatalf("reopen Get canonical: %v", err)
+			}
+			if !bytes.Equal(got, wantValue) {
+				t.Fatalf("reopen canonical value mismatch: got %q want %q", got, wantValue)
+			}
+			got, err = reopened.Get(postKey)
+			if err != nil {
+				t.Fatalf("reopen Get post key: %v", err)
+			}
+			if string(got) != "ok" {
+				t.Fatalf("reopen post value=%q want ok", got)
+			}
+		})
+	}
+}
+
+func openCompactStorageCommandWALLeafPageLogDB(t *testing.T) (*DB, string, []byte) {
+	t.Helper()
+	dir := t.TempDir()
+	d, err := Open(compactStorageCommandWALLeafPageLogOptions(dir))
+	if err != nil {
+		t.Fatalf("Open command WAL value-log outer leaves: %v", err)
+	}
+	if d.leafPageLog == nil {
+		_ = d.Close()
+		t.Fatal("expected command WAL open to install replay-inline leaf page log")
+	}
+	for i := 0; i < 96; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		value := bytes.Repeat([]byte{byte('a' + i%26)}, 384)
+		if err := d.SetSync(key, value); err != nil {
+			_ = d.Close()
+			t.Fatalf("SetSync(%d): %v", i, err)
+		}
+	}
+	wantValue := bytes.Repeat([]byte("z"), 512)
+	if err := d.SetSync([]byte("canonical"), wantValue); err != nil {
+		_ = d.Close()
+		t.Fatalf("SetSync canonical: %v", err)
+	}
+	return d, dir, wantValue
+}
+
+func compactStorageCommandWALLeafPageLogOptions(dir string) Options {
+	return Options{
+		Dir:                        dir,
+		CommandWAL:                 true,
+		Durability:                 DurabilityWALOnRelaxed,
+		DisableSideStores:          true,
+		IndexOuterLeavesInValueLog: true,
 	}
 }
 
@@ -1508,7 +1733,7 @@ func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
 		t.Fatalf("listValueLogSegments before compact: %v", err)
 	}
 
-	_, err = d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
 	if !errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported) {
 		t.Fatalf("CompactStorage exhaustive with external leaf log error=%v, want owner unsupported", err)
 	}
@@ -1518,6 +1743,12 @@ func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
 	}
 	if ownerErr.Classification.Status != CompactStorageOwnerStatusExternalUnsupported {
 		t.Fatalf("owner status=%q want %q", ownerErr.Classification.Status, CompactStorageOwnerStatusExternalUnsupported)
+	}
+	if ownerErr.Classification.Detail == "" {
+		t.Fatal("owner refusal detail is empty")
+	}
+	if stats.FullyCompacted || stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("external owner refusal reported compact success flags: %+v", stats)
 	}
 	if d.leafPageLog != previousLeafPageLog {
 		t.Fatalf("external owner was mutated: got %T want %T", d.leafPageLog, previousLeafPageLog)

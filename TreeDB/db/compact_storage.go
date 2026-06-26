@@ -62,6 +62,11 @@ const (
 // compact reaches an installed leaf-page-log owner it cannot safely replace.
 var ErrCompactStorageLeafPageLogOwnerUnsupported = errors.New("treedb: compact storage leaf page log owner unsupported")
 
+// ErrCompactStorageLeafPageLogHandoffCleanup is returned when CompactStorage
+// cannot safely restore the previous leaf-page-log owner after installing its
+// temporary compact writer.
+var ErrCompactStorageLeafPageLogHandoffCleanup = errors.New("treedb: compact storage leaf page log handoff cleanup failed")
+
 // LeafPageLogCompactStorageHandoff is implemented by internally owned
 // leaf-page-log writers that can be safely restored after CompactStorage
 // temporarily replaces them with its compact writer.
@@ -108,6 +113,44 @@ func (e *CompactStorageLeafPageLogOwnerError) Error() string {
 
 func (e *CompactStorageLeafPageLogOwnerError) Unwrap() error {
 	return ErrCompactStorageLeafPageLogOwnerUnsupported
+}
+
+// CompactStorageLeafPageLogHandoffError reports the restore stage that failed
+// after CompactStorage installed its temporary leaf-page-log writer. When
+// restoration cannot be proven safe, CompactStorage fails closed by clearing the
+// active leaf-page-log writer; close and reopen the database before resuming
+// writes.
+type CompactStorageLeafPageLogHandoffError struct {
+	Stage    string
+	Recovery string
+	Err      error
+}
+
+func (e *CompactStorageLeafPageLogHandoffError) Error() string {
+	stage := ""
+	recovery := "close and reopen the database before resuming writes"
+	var err error
+	if e != nil {
+		stage = e.Stage
+		if e.Recovery != "" {
+			recovery = e.Recovery
+		}
+		err = e.Err
+	}
+	if stage == "" {
+		stage = "unknown"
+	}
+	if err == nil {
+		return fmt.Sprintf("treedb: compact storage leaf page log handoff cleanup failed at %s; recovery: %s", stage, recovery)
+	}
+	return fmt.Sprintf("treedb: compact storage leaf page log handoff cleanup failed at %s: %v; recovery: %s", stage, err, recovery)
+}
+
+func (e *CompactStorageLeafPageLogHandoffError) Unwrap() []error {
+	if e == nil || e.Err == nil {
+		return []error{ErrCompactStorageLeafPageLogHandoffCleanup}
+	}
+	return []error{ErrCompactStorageLeafPageLogHandoffCleanup, e.Err}
 }
 
 // CompactStorageOptions controls full storage compaction across TreeDB storage
@@ -273,8 +316,7 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	return db.compactStorage(ctx, opts)
 }
 
-func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
-	var stats CompactStorageStats
+func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (stats CompactStorageStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -339,14 +381,16 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 		return stats, err
 	}
 
-	compactLeafLog, cleanupLeafLog, err := db.installCompactStorageLeafPageLog(opts)
+	compactLeafLog, leafLogHandoff, err := db.installCompactStorageLeafPageLog(opts)
 	if err != nil {
 		return stats, err
 	}
 	cleanupLeafLogDone := false
 	defer func() {
-		if !cleanupLeafLogDone {
-			_ = cleanupLeafLog()
+		if !cleanupLeafLogDone && leafLogHandoff != nil {
+			if cleanupErr := leafLogHandoff.cleanup(); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
 		}
 	}()
 	if opts.Mode == CompactStorageExhaustive && db.indexOuterLeavesInValueLog && compactLeafLog == nil && db.leafPageLog != nil {
@@ -561,13 +605,15 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	stats.ValueLogRewritePlan = finalAudit.ValueLogRewritePlan
 	stats.LeafGenerationPlan = finalAudit.LeafGenerationPlan
 	stats.RemainingDebt = finalDebt
+	if leafLogHandoff != nil {
+		if err := leafLogHandoff.cleanup(); err != nil {
+			return stats, err
+		}
+	}
+	cleanupLeafLogDone = true
 	stats.FullyCompacted = finalDebt.Empty()
 	stats.PolicyFullyCompacted = stats.FullyCompacted
 	stats.ByteMinimized = opts.Mode == CompactStorageExhaustive && finalDebt.Empty()
-	if err := cleanupLeafLog(); err != nil {
-		return stats, err
-	}
-	cleanupLeafLogDone = true
 	return stats, nil
 }
 
@@ -1398,14 +1444,59 @@ func compactStorageValueLogFileID(name string) (uint32, bool) {
 	return fileID, true
 }
 
-func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rewriteWriter, func() error, error) {
+type compactStorageLeafPageLogHandoff struct {
+	db                  *DB
+	writer              *rewriteWriter
+	previousLeafPageLog LeafPageLog
+	done                bool
+}
+
+func (h *compactStorageLeafPageLogHandoff) cleanup() error {
+	if h == nil || h.db == nil || h.writer == nil {
+		return nil
+	}
+	if h.done {
+		return nil
+	}
+	h.done = true
+	var cleanupErr error
+	if err := h.writer.Close(); err != nil {
+		cleanupErr = errors.Join(cleanupErr, compactStorageLeafPageLogHandoffError("close compact writer", err))
+	}
+	if h.previousLeafPageLog == nil {
+		h.db.setLeafPageLogRaw(nil)
+		return cleanupErr
+	}
+	segments, err := listValueLogSegments(h.db.dir)
+	if err != nil {
+		h.db.setLeafPageLogRaw(nil)
+		return errors.Join(cleanupErr, compactStorageLeafPageLogHandoffError("scan compact leaf segments", err))
+	}
+	leafSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
+	if err := compactStorageAdvanceLeafPageLogSeqAtLeast(h.previousLeafPageLog, leafSeq); err != nil {
+		h.db.setLeafPageLogRaw(nil)
+		return errors.Join(cleanupErr, compactStorageLeafPageLogHandoffError("restore previous owner", err))
+	}
+	h.db.setLeafPageLogRaw(h.previousLeafPageLog)
+	return cleanupErr
+}
+
+func compactStorageLeafPageLogHandoffError(stage string, err error) error {
+	return &CompactStorageLeafPageLogHandoffError{
+		Stage:    stage,
+		Recovery: "close and reopen the database before resuming writes",
+		Err:      err,
+	}
+}
+
+func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rewriteWriter, *compactStorageLeafPageLogHandoff, error) {
 	if db == nil || !db.indexOuterLeavesInValueLog {
-		return nil, func() error { return nil }, nil
+		return nil, nil, nil
 	}
 	previousLeafPageLog := db.leafPageLog
 	if previousLeafPageLog != nil {
 		if opts.Mode != CompactStorageExhaustive || !compactStorageReplaceableLeafPageLog(previousLeafPageLog) {
-			return nil, func() error { return nil }, nil
+			return nil, nil, nil
 		}
 	}
 	segments, err := listValueLogSegments(db.dir)
@@ -1440,22 +1531,10 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 		}
 	}
 	db.SetLeafPageLog(writer)
-	return writer, func() error {
-		var cleanupErr error
-		if err := writer.Close(); err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
-		}
-		segments, err := listValueLogSegments(db.dir)
-		if err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
-		} else {
-			leafSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
-			if err := compactStorageAdvanceLeafPageLogSeqAtLeast(previousLeafPageLog, leafSeq); err != nil {
-				cleanupErr = errors.Join(cleanupErr, err)
-			}
-		}
-		db.setLeafPageLogRaw(previousLeafPageLog)
-		return cleanupErr
+	return writer, &compactStorageLeafPageLogHandoff{
+		db:                  db,
+		writer:              writer,
+		previousLeafPageLog: previousLeafPageLog,
 	}, nil
 }
 

@@ -40,10 +40,14 @@ func (compactStorageMatrixCachedLeafPageLog) CurrentLeafPageLogSegmentsSnapshot(
 
 type compactStorageMatrixCachedHandoffLeafPageLog struct {
 	compactStorageMatrixCachedLeafPageLog
-	advanced uint32
+	advanced   uint32
+	advanceErr error
 }
 
 func (l *compactStorageMatrixCachedHandoffLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
+	if l.advanceErr != nil {
+		return l.advanceErr
+	}
 	l.advanced = seq
 	return nil
 }
