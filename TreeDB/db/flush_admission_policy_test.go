@@ -1,6 +1,7 @@
 package db
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,12 +12,16 @@ func TestNormalizeFlushAdmission_DefaultAutoHardwareAware(t *testing.T) {
 		gomax    int
 		physical int
 		want     int
+		wantCap  string
 	}{
-		{name: "six_physical_twelve_gomax", gomax: 12, physical: 6, want: 6},
-		{name: "six_physical_sixteen_gomax", gomax: 16, physical: 6, want: 6},
-		{name: "twelve_physical_caps_at_eight", gomax: 16, physical: 12, want: 8},
-		{name: "unknown_physical_falls_back_to_capped_gomax", gomax: 16, physical: 0, want: 8},
-		{name: "gomax_below_physical_caps", gomax: 4, physical: 12, want: 4},
+		{name: "two_physical_two_gomax_admits_c2", gomax: 2, physical: 2, want: 2, wantCap: FlushAdmissionConcurrencyCapDefaultPhysicalCores},
+		{name: "four_physical_four_gomax_admits_c4", gomax: 4, physical: 4, want: 4, wantCap: FlushAdmissionConcurrencyCapDefaultPhysicalCores},
+		{name: "eight_physical_eight_gomax_admits_c8", gomax: 8, physical: 8, want: 8, wantCap: FlushAdmissionConcurrencyCapDefaultAutoCap},
+		{name: "six_physical_twelve_gomax", gomax: 12, physical: 6, want: 6, wantCap: FlushAdmissionConcurrencyCapDefaultPhysicalCores},
+		{name: "six_physical_sixteen_gomax", gomax: 16, physical: 6, want: 6, wantCap: FlushAdmissionConcurrencyCapDefaultPhysicalCores},
+		{name: "twelve_physical_caps_at_eight", gomax: 16, physical: 12, want: 8, wantCap: FlushAdmissionConcurrencyCapDefaultAutoCap},
+		{name: "unknown_physical_falls_back_to_capped_gomax", gomax: 16, physical: 0, want: 8, wantCap: FlushAdmissionConcurrencyCapDefaultAutoCap},
+		{name: "gomax_below_physical_caps", gomax: 4, physical: 12, want: 4, wantCap: FlushAdmissionConcurrencyCapDefaultGOMAXPROCS},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -34,6 +39,12 @@ func TestNormalizeFlushAdmission_DefaultAutoHardwareAware(t *testing.T) {
 			}
 			if opts.FlushApplyConcurrency != tc.want || decision.FlushApplyConcurrency != tc.want {
 				t.Fatalf("auto concurrency opts/decision=%d/%d want %d", opts.FlushApplyConcurrency, decision.FlushApplyConcurrency, tc.want)
+			}
+			if decision.FlushApplyConcurrencyConfigured != 0 {
+				t.Fatalf("configured concurrency=%d want 0", decision.FlushApplyConcurrencyConfigured)
+			}
+			if decision.FlushApplyConcurrencyCapReason != tc.wantCap {
+				t.Fatalf("cap reason=%q want %q", decision.FlushApplyConcurrencyCapReason, tc.wantCap)
 			}
 			if !decision.FlushApplyConcurrencyDefaulted {
 				t.Fatalf("defaulted=false want true")
@@ -70,6 +81,10 @@ func TestNormalizeFlushAdmission_DefaultAutoDeclinesLowConcurrency(t *testing.T)
 	if opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
 		t.Fatalf("auto low-concurrency decline did not force off: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 	}
+	if decision.FlushApplyConcurrencyConfigured != 0 || decision.FlushApplyConcurrency != 0 || !decision.FlushApplyConcurrencyDefaulted || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapDisabled {
+		t.Fatalf("concurrency configured/selected/defaulted/cap=%d/%d/%t/%q want 0/0/true/%q",
+			decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrency, decision.FlushApplyConcurrencyDefaulted, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapDisabled)
+	}
 	if opts.LeafPageReadCacheWriteAdmission != LeafPageReadCacheWriteAdmissionImmediate {
 		t.Fatalf("auto low-concurrency decline changed cache admission to %s", opts.LeafPageReadCacheWriteAdmission)
 	}
@@ -97,6 +112,10 @@ func TestNormalizeFlushAdmission_OffForcesCandidateOff(t *testing.T) {
 	if opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
 		t.Fatalf("off policy did not force off: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 	}
+	if decision.FlushApplyConcurrencyConfigured != 4 || decision.FlushApplyConcurrency != 0 || decision.FlushApplyConcurrencyDefaulted || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapDisabled {
+		t.Fatalf("off configured/selected/defaulted/cap=%d/%d/%t/%q want 4/0/false/%q",
+			decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrency, decision.FlushApplyConcurrencyDefaulted, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapDisabled)
+	}
 	if opts.LeafPageReadCacheWriteAdmission != LeafPageReadCacheWriteAdmissionAdaptive {
 		t.Fatalf("off policy should not rewrite explicit cache admission: %s", opts.LeafPageReadCacheWriteAdmission)
 	}
@@ -123,6 +142,9 @@ func TestNormalizeFlushAdmission_ExplicitOptInKeepsC1Compatibility(t *testing.T)
 	if decision.FlushApplyConcurrency != 0 {
 		t.Fatalf("effective concurrency=%d want 0 for c1", decision.FlushApplyConcurrency)
 	}
+	if decision.FlushApplyConcurrencyConfigured != 1 || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapDisabled {
+		t.Fatalf("configured/cap=%d/%q want 1/%q", decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapDisabled)
+	}
 }
 
 func TestNormalizeFlushAdmission_ExplicitOptInKeepsC16Compatibility(t *testing.T) {
@@ -146,6 +168,35 @@ func TestNormalizeFlushAdmission_ExplicitOptInKeepsC16Compatibility(t *testing.T
 	if decision.FlushApplyConcurrency != 16 {
 		t.Fatalf("effective concurrency=%d want 16", decision.FlushApplyConcurrency)
 	}
+	if decision.FlushApplyConcurrencyConfigured != 16 || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapConfigured {
+		t.Fatalf("configured/cap=%d/%q want 16/%q", decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapConfigured)
+	}
+}
+
+func TestNormalizeFlushAdmission_ExplicitOptInReportsC16CappedByGOMAXPROCS(t *testing.T) {
+	opts := Options{
+		FlushAdmissionPolicy:   FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:  16,
+		FlushApplySpanNative:   true,
+		FlushBacklogCoalescing: true,
+	}
+	decision := computeFlushAdmissionDecisionForHardware(&opts, 8, 32)
+
+	if !decision.Admitted {
+		t.Fatalf("admitted=false want true")
+	}
+	if decision.Reason != FlushAdmissionReasonExplicitOptIn {
+		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonExplicitOptIn)
+	}
+	if opts.FlushApplyConcurrency != 16 || !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("explicit c16 mutated opts: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	if decision.FlushApplyConcurrency != 8 {
+		t.Fatalf("effective concurrency=%d want 8", decision.FlushApplyConcurrency)
+	}
+	if decision.FlushApplyConcurrencyConfigured != 16 || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS {
+		t.Fatalf("configured/cap=%d/%q want 16/%q", decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS)
+	}
 }
 
 func TestNormalizeFlushAdmission_AutoDeclinesConfiguredC1RegressionShape(t *testing.T) {
@@ -166,6 +217,10 @@ func TestNormalizeFlushAdmission_AutoDeclinesConfiguredC1RegressionShape(t *test
 	if opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
 		t.Fatalf("auto c1 decline did not force off: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 	}
+	if decision.FlushApplyConcurrencyConfigured != 1 || decision.FlushApplyConcurrency != 0 || decision.FlushApplyConcurrencyDefaulted || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapDisabled {
+		t.Fatalf("auto c1 configured/selected/defaulted/cap=%d/%d/%t/%q want 1/0/false/%q",
+			decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrency, decision.FlushApplyConcurrencyDefaulted, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapDisabled)
+	}
 }
 
 func TestNormalizeFlushAdmission_AutoConfiguredConcurrencyIsAuthoritative(t *testing.T) {
@@ -184,8 +239,41 @@ func TestNormalizeFlushAdmission_AutoConfiguredConcurrencyIsAuthoritative(t *tes
 	if decision.FlushApplyConcurrencyDefaulted {
 		t.Fatalf("defaulted=true want false for configured override")
 	}
+	if decision.FlushApplyConcurrencyConfigured != 16 || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapConfigured {
+		t.Fatalf("configured/cap=%d/%q want 16/%q", decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapConfigured)
+	}
 	if decision.Reason != FlushAdmissionReasonAutoAdmittedHardwareAware {
 		t.Fatalf("reason=%q want %q", decision.Reason, FlushAdmissionReasonAutoAdmittedHardwareAware)
+	}
+}
+
+func TestNormalizeFlushAdmission_AutoConfiguredC16CapsByGOMAXPROCS(t *testing.T) {
+	opts := Options{
+		FlushAdmissionPolicy:  FlushAdmissionPolicyAuto,
+		FlushApplyConcurrency: 16,
+	}
+	decision := computeFlushAdmissionDecisionForHardware(&opts, 8, 32)
+
+	if !decision.Admitted {
+		t.Fatalf("admitted=false want true; reason=%q", decision.Reason)
+	}
+	if opts.FlushApplyConcurrency != 8 || decision.FlushApplyConcurrency != 8 {
+		t.Fatalf("auto configured c16 opts/decision=%d/%d want 8", opts.FlushApplyConcurrency, decision.FlushApplyConcurrency)
+	}
+	if decision.FlushApplyConcurrencyConfigured != 16 {
+		t.Fatalf("configured concurrency=%d want 16", decision.FlushApplyConcurrencyConfigured)
+	}
+	if decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS {
+		t.Fatalf("cap reason=%q want %q", decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS)
+	}
+	if decision.FlushApplyConcurrencyDefaulted {
+		t.Fatalf("defaulted=true want false for configured c16")
+	}
+	if decision.RuntimeGOMAXPROCS != 8 || decision.PhysicalCores != 32 {
+		t.Fatalf("hardware fields gomax/physical=%d/%d want 8/32", decision.RuntimeGOMAXPROCS, decision.PhysicalCores)
+	}
+	if !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
+		t.Fatalf("auto configured c16 did not enable span/backlog: span=%t backlog=%t", opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 	}
 }
 
@@ -201,6 +289,10 @@ func TestNormalizeFlushAdmission_AutoDeclinesWALOffUnsafeDurability(t *testing.T
 	}
 	if opts.FlushApplyConcurrency != 0 || opts.FlushApplySpanNative || opts.FlushBacklogCoalescing {
 		t.Fatalf("auto unsafe-durability decline did not force off: concurrency=%d span=%t backlog=%t", opts.FlushApplyConcurrency, opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
+	}
+	if decision.FlushApplyConcurrencyConfigured != 0 || decision.FlushApplyConcurrency != 0 || !decision.FlushApplyConcurrencyDefaulted || decision.FlushApplyConcurrencyCapReason != FlushAdmissionConcurrencyCapDisabled {
+		t.Fatalf("unsafe configured/selected/defaulted/cap=%d/%d/%t/%q want 0/0/true/%q",
+			decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrency, decision.FlushApplyConcurrencyDefaulted, decision.FlushApplyConcurrencyCapReason, FlushAdmissionConcurrencyCapDisabled)
 	}
 }
 
@@ -220,8 +312,14 @@ func TestFlushAdmissionStatsExposePolicyReasonHardwareAndCandidate(t *testing.T)
 	if got := stats["treedb.flush_admission.reason"]; got != FlushAdmissionReasonAutoAdmittedHardwareAware {
 		t.Fatalf("stats reason=%q want %q", got, FlushAdmissionReasonAutoAdmittedHardwareAware)
 	}
+	if got := stats["treedb.flush_admission.flush_apply_concurrency_configured"]; got != "0" {
+		t.Fatalf("stats configured concurrency=%q want 0", got)
+	}
 	if got := stats["treedb.flush_admission.flush_apply_concurrency"]; got != "6" {
 		t.Fatalf("stats concurrency=%q want 6", got)
+	}
+	if got := stats["treedb.flush_admission.flush_apply_concurrency_cap_reason"]; got != FlushAdmissionConcurrencyCapDefaultPhysicalCores {
+		t.Fatalf("stats cap reason=%q want %q", got, FlushAdmissionConcurrencyCapDefaultPhysicalCores)
 	}
 	if got := stats["treedb.flush_admission.flush_apply_concurrency_defaulted"]; got != "true" {
 		t.Fatalf("stats concurrency defaulted=%q want true", got)
@@ -235,8 +333,52 @@ func TestFlushAdmissionStatsExposePolicyReasonHardwareAndCandidate(t *testing.T)
 	if got := stats["treedb.flush_admission.flush_apply_span_native"]; got != "true" {
 		t.Fatalf("stats span native=%q want true", got)
 	}
+	if got := stats["treedb.flush_admission.flush_backlog_coalescing"]; got != "true" {
+		t.Fatalf("stats backlog=%q want true", got)
+	}
 	if got := stats["treedb.flush_admission.leaf_page_read_cache_write_admission"]; got != "adaptive" {
 		t.Fatalf("stats cache admission=%q want adaptive", got)
+	}
+}
+
+func TestFlushAdmissionStatsPreserveConfiguredConcurrencyThroughDirectOpen(t *testing.T) {
+	prev := runtime.GOMAXPROCS(8)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+
+	db, err := Open(Options{
+		Dir:                   t.TempDir(),
+		FlushAdmissionPolicy:  FlushAdmissionPolicyAuto,
+		FlushApplyConcurrency: 16,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	stats := db.Stats()
+	if got := stats["treedb.flush_admission.policy"]; got != "auto" {
+		t.Fatalf("stats policy=%q want auto", got)
+	}
+	if got := stats["treedb.flush_admission.admitted"]; got != "true" {
+		t.Fatalf("stats admitted=%q want true", got)
+	}
+	if got := stats["treedb.flush_admission.flush_apply_concurrency_configured"]; got != "16" {
+		t.Fatalf("stats configured concurrency=%q want 16", got)
+	}
+	if got := stats["treedb.flush_admission.flush_apply_concurrency"]; got != "8" {
+		t.Fatalf("stats selected concurrency=%q want 8", got)
+	}
+	if got := stats["treedb.flush_admission.flush_apply_concurrency_cap_reason"]; got != FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS {
+		t.Fatalf("stats cap reason=%q want %q", got, FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS)
+	}
+	if got := stats["treedb.flush_admission.flush_apply_concurrency_defaulted"]; got != "false" {
+		t.Fatalf("stats defaulted=%q want false", got)
+	}
+	if got := stats["treedb.flush_admission.gomaxprocs"]; got != "8" {
+		t.Fatalf("stats gomaxprocs=%q want 8", got)
+	}
+	if got := stats["treedb.flush_admission.physical_cores"]; got == "" {
+		t.Fatal("missing physical core admission stat")
 	}
 }
 

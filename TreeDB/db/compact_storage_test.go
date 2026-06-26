@@ -3,11 +3,11 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -1452,8 +1452,15 @@ func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
 	writeLeafGenerationKeys(t, d, "current", 8, 'x')
 
 	_, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
-	if err == nil || !strings.Contains(err.Error(), "internally-owned leaf page log") {
-		t.Fatalf("CompactStorage exhaustive with external leaf log error=%v, want ownership error", err)
+	if !errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported) {
+		t.Fatalf("CompactStorage exhaustive with external leaf log error=%v, want owner unsupported", err)
+	}
+	var ownerErr *CompactStorageLeafPageLogOwnerError
+	if !errors.As(err, &ownerErr) {
+		t.Fatalf("CompactStorage exhaustive error=%T, want CompactStorageLeafPageLogOwnerError", err)
+	}
+	if ownerErr.Classification.Status != CompactStorageOwnerStatusExternalUnsupported {
+		t.Fatalf("owner status=%q want %q", ownerErr.Classification.Status, CompactStorageOwnerStatusExternalUnsupported)
 	}
 }
 

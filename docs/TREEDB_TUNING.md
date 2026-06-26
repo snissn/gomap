@@ -127,7 +127,11 @@ Rollout guidance:
 - Use the default auto policy for normal durable cached-mode workloads.
 - Roll back immediately with `FlushAdmissionPolicyOff` or
   `-treedb-flush-admission-policy=off`; no data migration is required because
-  the option changes only in-memory apply/cache policy.
+  the option changes only in-memory apply/cache policy. The expected support
+  signature is `treedb.flush_admission.policy=off`,
+  `admitted=false`, `reason=policy_off`,
+  `flush_apply_concurrency=0`, `flush_apply_span_native=false`, and
+  `flush_backlog_coalescing=false`.
 - Use `FlushAdmissionPolicyExplicit` for non-default experiments such as c4 on
   large hosts, c16, immediate cache admission, or cache-disabled diagnostic rows.
 - Watch `treedb.flush_admission.*`, `treedb.cache.journal_lanes.*`,
@@ -137,6 +141,15 @@ Rollout guidance:
   `index.db`/`leaf_vlog` footprint. Reproducible regressions in read/scan
   throughput, checkpoint time, allocation volume, or footprint should trigger
   rollback or a narrower explicit policy.
+
+Admission support triage:
+
+| Stat shape | Interpretation | Expected action |
+| --- | --- | --- |
+| `policy=off`, `admitted=false`, `reason=policy_off`, selected concurrency `0`, span-native `false`, backlog `false` | Rollback is active. Caller-provided concurrency remains visible in `flush_apply_concurrency_configured` for reproduction, but the selected/effective path is serial. | Keep this when stabilizing production or bisecting; remove only after new evidence is accepted. |
+| `policy=auto`, `admitted=false`, `reason=unsafe_durability`, selected concurrency `0`, span-native `false`, backlog `false` | Auto declined because WAL-off relaxed durability is enabled. Value-log storage remains persistent, but span-native/backlog admission currently requires the normal durability envelope. | Treat as a deliberate fail-closed state; use durable WAL or `explicit` only for an accepted unsafe experiment. |
+| `policy=auto`, `admitted=false`, `reason=low_concurrency`, selected concurrency `0` | Auto saw c1 or another sub-c2 shape after `GOMAXPROCS` normalization. | Expected on low-concurrency hosts or c1 rows; no production admission unless the host/options can select at least c2. |
+| `flush_apply_concurrency_configured=16`, `flush_apply_concurrency=8`, `flush_apply_concurrency_cap_reason=configured_gomaxprocs_cap`, `gomaxprocs=8` | Caller requested c16, but the effective worker pool is capped by `GOMAXPROCS`. | Benchmark/report rows must carry both values; raise `GOMAXPROCS` to test true c16. |
 
 The current hardware-aware/coalescing-safe default formula and benchmark gate
 commands are summarized in `docs/TREEDB_DEFAULT_POLICY_2996.md`.
