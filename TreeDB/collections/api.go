@@ -403,6 +403,13 @@ type Collection struct {
 	vectorBufferedSearchInvalidations uint64
 	vectorBufferedSearchCloses        uint64
 	vectorBufferedSearchErrors        uint64
+
+	typedColumnOneShotTopKMu            sync.Mutex
+	typedColumnOneShotTopK              *collectionTypedColumnOneShotTopKCacheEntry
+	typedColumnOneShotTopKHits          uint64
+	typedColumnOneShotTopKMisses        uint64
+	typedColumnOneShotTopKBuilds        uint64
+	typedColumnOneShotTopKInvalidations uint64
 }
 
 type CollectionRootOverlayCompactionStats struct {

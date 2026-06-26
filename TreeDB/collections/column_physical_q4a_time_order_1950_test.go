@@ -57,6 +57,62 @@ func TestColumnPhysicalQ4ATimeOrderTopKDirectPreparedParity1950(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQ4ATimeOrderTopKOneShotCache3085(t *testing.T) {
+	batches := columnPhysicalQ4ATimeOrderBatches1950(9_000)
+	events := flattenColumnPhysicalEvents1950(batches)
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, []ColumnSortKey{{Column: "time_us"}}, batches)
+	defer closeFn()
+
+	scanned := scanColumnPhysicalJSONBenchParityEventsP0(t, col, len(events))
+	req := columnPhysicalQ4ATimeOrderRequest1950()
+	want := columnPhysicalQ4ATimeOrderReferenceGroups1950(scanned, req.TopK)
+	wantCandidates := columnPhysicalQ4ATimeOrderReferenceEarlyCandidates1950(scanned, req.TopK)
+
+	first, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("first RunColumnPhysicalQuery(q4a time-order topK): %v", err)
+	}
+	assertColumnPhysicalQ4ATimeOrderResult1950(t, "first one-shot", first, want, len(events), wantCandidates)
+	snapshot := col.typedColumnOneShotTopKCacheSnapshotForTest()
+	if snapshot.Entries != 1 || snapshot.CacheMisses != 1 || snapshot.CacheBuilds != 1 || snapshot.CacheHits != 0 {
+		t.Fatalf("cache after first run=%+v want one miss/build entry", snapshot)
+	}
+
+	second, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("second RunColumnPhysicalQuery(q4a time-order topK): %v", err)
+	}
+	assertColumnPhysicalQ4ATimeOrderResult1950(t, "second one-shot", second, want, len(events), wantCandidates)
+	snapshot = col.typedColumnOneShotTopKCacheSnapshotForTest()
+	if snapshot.Entries != 1 || snapshot.CacheMisses != 1 || snapshot.CacheBuilds != 1 || snapshot.CacheHits != 1 {
+		t.Fatalf("cache after second run=%+v want one cache hit", snapshot)
+	}
+
+	smallerTopK := req
+	smallerTopK.TopK = 2
+	smallerWant := columnPhysicalQ4ATimeOrderReferenceGroups1950(scanned, smallerTopK.TopK)
+	smallerCandidates := columnPhysicalQ4ATimeOrderReferenceEarlyCandidates1950(scanned, smallerTopK.TopK)
+	third, err := col.RunColumnPhysicalQuery(smallerTopK)
+	if err != nil {
+		t.Fatalf("third RunColumnPhysicalQuery(q4a time-order topK=2): %v", err)
+	}
+	if len(third.Groups) != len(smallerWant) {
+		t.Fatalf("third one-shot topK=2 groups=%+v want %+v", third.Groups, smallerWant)
+	}
+	for i := range smallerWant {
+		if third.Groups[i].Key != smallerWant[i].Key || third.Groups[i].Int64 != smallerWant[i].Int64 {
+			t.Fatalf("third one-shot topK=2 groups=%+v want %+v", third.Groups, smallerWant)
+		}
+	}
+	if !third.Diagnostics.TimeOrderTopKUsed || third.Diagnostics.TopKLimit != smallerTopK.TopK || third.Diagnostics.TopKCandidates != smallerCandidates || third.Diagnostics.ResultGroups != len(smallerWant) {
+		t.Fatalf("third one-shot topK=2 diagnostics=%+v want time-order topK=%d candidates=%d groups=%d", third.Diagnostics, smallerTopK.TopK, smallerCandidates, len(smallerWant))
+	}
+	snapshot = col.typedColumnOneShotTopKCacheSnapshotForTest()
+	if snapshot.Entries != 1 || snapshot.CacheMisses != 2 || snapshot.CacheBuilds != 2 || snapshot.CacheHits != 1 || snapshot.Invalidations != 1 {
+		t.Fatalf("cache after topK change=%+v want invalidation and rebuild", snapshot)
+	}
+}
+
 func BenchmarkColumnPhysicalQ4ATimeOrderTopK1950(b *testing.B) {
 	batches := columnPhysicalQ4ATimeOrderBatches1950(9_000)
 	events := flattenColumnPhysicalEvents1950(batches)
