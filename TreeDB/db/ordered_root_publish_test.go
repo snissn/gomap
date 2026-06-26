@@ -2630,8 +2630,20 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticColdB
 	defer func() { _ = deltaB.Close() }()
 
 	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
-		{BaseRoot: 0, Delta: deltaA, ParallelApply: true},
-		{BaseRoot: 0, Delta: deltaB, ParallelApply: true},
+		{
+			BaseRoot:          0,
+			Delta:             deltaA,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			SpanNativeContext: "collection route must not override cold build",
+		},
+		{
+			BaseRoot:          0,
+			Delta:             deltaB,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCommandWALPublish,
+			SpanNativeContext: "command WAL route must not override cold build",
+		},
 	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
 			return nil, errors.New("unexpected optimistic cold root IDs")
@@ -2678,6 +2690,11 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticColdB
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "2" {
 		t.Fatalf("root apply calls stat=%q want 2", got)
 	}
+	overlayPrefix := "treedb.publish.ordered_root_delta_group.span_native.route.overlay_cold_build."
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
 }
 
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticMixedOptInStaysSerialized(t *testing.T) {
