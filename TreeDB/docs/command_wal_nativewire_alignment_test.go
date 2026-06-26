@@ -195,6 +195,28 @@ func TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN(t *testing.
 	}
 }
 
+func TestR3aApplyCloseout3043DocumentsLocalBoundary(t *testing.T) {
+	closeout := readRepoText(t, "TreeDB/docs/spec/r3a-apply-closeout-3043.md")
+	normalized := collapseWhitespace(closeout)
+	assertContainsAll(t, normalized, "R3a apply closeout #3043",
+		"local-only harness evidence",
+		"does not expose networked Raft",
+		"records result/idempotency and apply-progress metadata only after local `AppliedCommandLSN` coverage is present",
+		"`before-local-wal-append-v1`",
+		"`after-local-wal-append-before-visible-v1`",
+		"`after-visible-before-result-record-v1`",
+		"`after-result-record-before-progress-v1`",
+		"`after-progress-record-v1`",
+		"`create_collection`",
+		"`insert_batch`",
+		"`replace_batch`",
+		"`delete_batch`",
+		"`update_bson_set` are not accepted",
+		"`raft_committed` acknowledgement",
+		"BenchmarkApplyCommittedEntryCloseout3043",
+	)
+}
+
 func TestRaftRoadmapUsesCommandWALRecoverabilityBoundary(t *testing.T) {
 	roadmap := readRepoText(t, "TreeDB/docs/spec/native-query-raft-roadmap.md")
 	normalizedRoadmap := collapseWhitespace(roadmap)

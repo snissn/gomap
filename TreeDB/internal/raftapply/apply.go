@@ -21,6 +21,26 @@ const (
 	LocalDurabilityCommandWALV1 LocalDurabilityBoundaryV1 = "local-command-wal-v1"
 )
 
+type FaultPointV1 string
+
+const (
+	FaultBeforeLocalWALAppendV1             FaultPointV1 = "before-local-wal-append-v1"
+	FaultAfterLocalWALAppendBeforeVisibleV1 FaultPointV1 = "after-local-wal-append-before-visible-v1"
+	FaultAfterVisibleBeforeResultRecordV1   FaultPointV1 = "after-visible-before-result-record-v1"
+	FaultAfterResultRecordBeforeProgressV1  FaultPointV1 = "after-result-record-before-progress-v1"
+	FaultAfterProgressRecordV1              FaultPointV1 = "after-progress-record-v1"
+)
+
+type ApplyFaultContextV1 struct {
+	EntryID           raftentry.ApplyEntryID
+	CommandDigest     raftentry.CommandDigestV1
+	AppliedCommandLSN uint64
+}
+
+type FaultInjector interface {
+	InjectApplyFault(FaultPointV1, ApplyFaultContextV1) error
+}
+
 // ApplyMetadataV1 is explicit per-entry metadata carried beside committed
 // deterministic entry bytes. None of these fields are native-wire request
 // structs or handler inputs.
@@ -72,6 +92,7 @@ type Options struct {
 	ProgressStore       ApplyProgressStore
 	ResultStore         ApplyResultStore
 	CommandWALApplySeam CommandWALApplySeam
+	FaultInjector       FaultInjector
 }
 
 // Harness applies committed deterministic entry bytes to one local DB handle.
@@ -156,16 +177,63 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			if record.CommandDigest != entry.Digest {
 				return reject(entry.Digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("raftapply: apply entry %d/%d digest conflicts with existing result", meta.EntryID.Term, meta.EntryID.Index))
 			}
+			if err := h.requireApplyRecordCoverage(record.AppliedCommandLSN); err != nil {
+				code, _ := ErrorCodeOf(err)
+				return recoveryRequired(entry.Digest, code, err)
+			}
 			if h.opts.ProgressStore != nil {
 				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
-					EntryID:       meta.EntryID,
-					CommandDigest: entry.Digest,
+					EntryID:           meta.EntryID,
+					CommandDigest:     entry.Digest,
+					AppliedCommandLSN: record.AppliedCommandLSN,
 				}); err != nil {
 					code, _ := ErrorCodeOf(err)
 					return reject(entry.Digest, code, err)
 				}
 			}
 			return record.Result, nil
+		}
+		record, ok, err = h.opts.ResultStore.LookupApplyResultByIdempotencyKey(entry.IdempotencyKey)
+		if err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(entry.Digest, code, err)
+		}
+		if ok {
+			if record.CommandDigest != entry.Digest {
+				return reject(entry.Digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("raftapply: idempotency key conflicts with existing result for apply entry %d/%d", meta.EntryID.Term, meta.EntryID.Index))
+			}
+			if err := h.requireApplyRecordCoverage(record.AppliedCommandLSN); err != nil {
+				code, _ := ErrorCodeOf(err)
+				return recoveryRequired(entry.Digest, code, err)
+			}
+			if err := h.preflightApplyRecords(meta.EntryID, entry.Digest, entry.IdempotencyKey); err != nil {
+				code, _ := ErrorCodeOf(err)
+				return reject(entry.Digest, code, err)
+			}
+			duplicate := record.Result
+			duplicate.Status = raftentry.ApplyStatusAlreadyApplied
+			duplicate.AffectedCount = 0
+			if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
+				EntryID:           meta.EntryID,
+				CommandDigest:     entry.Digest,
+				IdempotencyKey:    entry.IdempotencyKey,
+				AppliedCommandLSN: record.AppliedCommandLSN,
+				Result:            duplicate,
+			}); err != nil {
+				code, _ := ErrorCodeOf(err)
+				return reject(entry.Digest, code, err)
+			}
+			if h.opts.ProgressStore != nil {
+				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
+					EntryID:           meta.EntryID,
+					CommandDigest:     entry.Digest,
+					AppliedCommandLSN: record.AppliedCommandLSN,
+				}); err != nil {
+					code, _ := ErrorCodeOf(err)
+					return reject(entry.Digest, code, err)
+				}
+			}
+			return duplicate, nil
 		}
 	}
 	if h.opts.ProgressStore != nil {
@@ -175,7 +243,11 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 		}
 	}
 
-	if err := h.preflightApplyRecords(meta.EntryID, entry.Digest); err != nil {
+	if err := h.preflightApplyRecords(meta.EntryID, entry.Digest, entry.IdempotencyKey); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(entry.Digest, code, err)
+	}
+	if err := h.injectFault(FaultBeforeLocalWALAppendV1, meta.EntryID, entry.Digest); err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(entry.Digest, code, err)
 	}
@@ -195,24 +267,44 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 		code, _ := ErrorCodeOf(err)
 		return reject(entry.Digest, code, err)
 	}
+	appliedLSN := h.appliedCommandLSN()
+	if err := h.requireApplyRecordCoverage(appliedLSN); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return recoveryRequired(entry.Digest, code, err)
+	}
+	if err := h.injectFault(FaultAfterVisibleBeforeResultRecordV1, meta.EntryID, entry.Digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return recoveryRequired(entry.Digest, code, err)
+	}
 	if h.opts.ResultStore != nil {
 		if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
-			EntryID:       meta.EntryID,
-			CommandDigest: entry.Digest,
-			Result:        result,
+			EntryID:           meta.EntryID,
+			CommandDigest:     entry.Digest,
+			IdempotencyKey:    entry.IdempotencyKey,
+			AppliedCommandLSN: appliedLSN,
+			Result:            result,
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
 			return recoveryRequired(entry.Digest, code, err)
 		}
 	}
+	if err := h.injectFault(FaultAfterResultRecordBeforeProgressV1, meta.EntryID, entry.Digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return recoveryRequired(entry.Digest, code, err)
+	}
 	if h.opts.ProgressStore != nil {
 		if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
-			EntryID:       meta.EntryID,
-			CommandDigest: entry.Digest,
+			EntryID:           meta.EntryID,
+			CommandDigest:     entry.Digest,
+			AppliedCommandLSN: appliedLSN,
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
 			return recoveryRequired(entry.Digest, code, err)
 		}
+	}
+	if err := h.injectFault(FaultAfterProgressRecordV1, meta.EntryID, entry.Digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return recoveryRequired(entry.Digest, code, err)
 	}
 	return result, nil
 }
@@ -242,11 +334,12 @@ func (h *Harness) preflightLocalBoundary(meta ApplyMetadataV1) error {
 	return nil
 }
 
-func (h *Harness) preflightApplyRecords(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1) error {
+func (h *Harness) preflightApplyRecords(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1, idempotencyKey []byte) error {
 	if h.opts.ResultStore != nil {
 		if err := h.opts.ResultStore.CheckCanRecordApplyResult(ApplyResultRecordV1{
-			EntryID:       id,
-			CommandDigest: digest,
+			EntryID:        id,
+			CommandDigest:  digest,
+			IdempotencyKey: idempotencyKey,
 		}); err != nil {
 			return err
 		}
@@ -258,6 +351,40 @@ func (h *Harness) preflightApplyRecords(id raftentry.ApplyEntryID, digest raften
 		}); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (h *Harness) appliedCommandLSN() uint64 {
+	if h == nil || h.db == nil {
+		return 0
+	}
+	return h.db.State().AppliedCommandLSN
+}
+
+func (h *Harness) requireApplyRecordCoverage(appliedLSN uint64) error {
+	if appliedLSN == 0 {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: apply metadata has no local AppliedCommandLSN coverage")
+	}
+	if h != nil && h.db != nil && h.db.State().AppliedCommandLSN < appliedLSN {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: apply metadata AppliedCommandLSN %d outruns local coverage %d", appliedLSN, h.db.State().AppliedCommandLSN)
+	}
+	return nil
+}
+
+func (h *Harness) injectFault(point FaultPointV1, id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1) error {
+	if h == nil || h.opts.FaultInjector == nil {
+		return nil
+	}
+	if err := h.opts.FaultInjector.InjectApplyFault(point, ApplyFaultContextV1{
+		EntryID:           id,
+		CommandDigest:     digest,
+		AppliedCommandLSN: h.appliedCommandLSN(),
+	}); err != nil {
+		if _, ok := ErrorCodeOf(err); ok {
+			return err
+		}
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: injected fault at %s: %v", point, err)
 	}
 	return nil
 }
