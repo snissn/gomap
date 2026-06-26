@@ -127,13 +127,20 @@ func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
 			wantQuiescence: true,
 		},
 		{
-			name:            "cached wrapper owner quiesced maintenance",
-			log:             &compactStorageMatrixCachedHandoffLeafPageLog{},
-			lifecycle:       CompactStorageLifecycleQuiescedMaintenance,
-			wantOwner:       CompactStorageLeafPageLogOwnerCachedWrapper,
-			wantStatus:      CompactStorageOwnerStatusSupportedTarget,
-			wantReplaceable: true,
-			wantQuiescence:  true,
+			name:           "cached wrapper owner exclusive maintenance",
+			log:            &compactStorageMatrixCachedHandoffLeafPageLog{},
+			lifecycle:      CompactStorageLifecycleExclusiveMaintenance,
+			wantOwner:      CompactStorageLeafPageLogOwnerCachedWrapper,
+			wantStatus:     CompactStorageOwnerStatusLiveWriterFailClosed,
+			wantQuiescence: true,
+		},
+		{
+			name:           "cached wrapper owner quiesced maintenance",
+			log:            &compactStorageMatrixCachedHandoffLeafPageLog{},
+			lifecycle:      CompactStorageLifecycleQuiescedMaintenance,
+			wantOwner:      CompactStorageLeafPageLogOwnerCachedWrapper,
+			wantStatus:     CompactStorageOwnerStatusLiveWriterFailClosed,
+			wantQuiescence: true,
 		},
 		{
 			name:           "cached-shaped wrapper without handoff capability",
@@ -234,11 +241,11 @@ func TestCompactStorageActiveWriterLifecycleIsModeledStatus(t *testing.T) {
 		t.Fatalf("active detail=%q, want modeled-status wording", active.Detail)
 	}
 	exclusive := compactStorageClassifyLeafPageLogOwner(log, CompactStorageLifecycleExclusiveMaintenance)
-	if exclusive.Status != CompactStorageOwnerStatusSupportedTarget {
-		t.Fatalf("exclusive status=%q want %q", exclusive.Status, CompactStorageOwnerStatusSupportedTarget)
+	if exclusive.Status != CompactStorageOwnerStatusLiveWriterFailClosed {
+		t.Fatalf("exclusive status=%q want %q", exclusive.Status, CompactStorageOwnerStatusLiveWriterFailClosed)
 	}
-	if strings.Contains(exclusive.Detail, "active-writer") {
-		t.Fatalf("exclusive detail=%q should not imply active-writer runtime proof", exclusive.Detail)
+	if exclusive.Replaceable {
+		t.Fatalf("exclusive replaceable=true, want false")
 	}
 	missingHandoff := compactStorageClassifyLeafPageLogOwner(compactStorageMatrixCachedLeafPageLog{}, CompactStorageLifecycleExclusiveMaintenance)
 	if missingHandoff.Status != CompactStorageOwnerStatusBlockingBug {
@@ -269,7 +276,7 @@ func TestCompactStorageDefaultProducedOwnerContractMatrix(t *testing.T) {
 			producerPath: "treedb.Open(treedb.OptionsFor(ProfileCommandWALRelaxed)) cached wrapper; fixture-proved in TreeDB/compact_storage_test.go",
 			owner:        CompactStorageLeafPageLogOwnerCachedWrapper,
 			lifecycle:    CompactStorageLifecycleQuiescedMaintenance,
-			status:       CompactStorageOwnerStatusSupportedTarget,
+			status:       CompactStorageOwnerStatusLiveWriterFailClosed,
 			quiescence:   []string{"background-flush-apply-workers", "checkpoint-close-drain", "command-wal-cleanup", "cached-backlog"},
 		},
 		{
@@ -277,7 +284,7 @@ func TestCompactStorageDefaultProducedOwnerContractMatrix(t *testing.T) {
 			producerPath: "treedb.Open cached wrapper",
 			owner:        CompactStorageLeafPageLogOwnerCachedWrapper,
 			lifecycle:    CompactStorageLifecycleQuiescedMaintenance,
-			status:       CompactStorageOwnerStatusSupportedTarget,
+			status:       CompactStorageOwnerStatusLiveWriterFailClosed,
 			quiescence:   []string{"background-flush-apply-workers", "checkpoint-close-drain", "cached-backlog"},
 		},
 		{
@@ -293,7 +300,7 @@ func TestCompactStorageDefaultProducedOwnerContractMatrix(t *testing.T) {
 			producerPath: "ordered-root route matrix",
 			owner:        CompactStorageLeafPageLogOwnerCachedWrapper,
 			lifecycle:    CompactStorageLifecycleQuiescedMaintenance,
-			status:       CompactStorageOwnerStatusSupportedTarget,
+			status:       CompactStorageOwnerStatusLiveWriterFailClosed,
 			quiescence:   []string{"background-flush-apply-workers", "checkpoint-close-drain", "ordered-root-publishers", "cached-backlog"},
 		},
 	}

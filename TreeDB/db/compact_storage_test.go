@@ -856,7 +856,12 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 		indexOuterLeavesInValueLog: true,
 		valueLogCompression:        ValueLogCompressionOff,
 	}
-	previousOwner := &compactStorageMatrixCachedHandoffLeafPageLog{}
+	previousAppender, err := newReplayInlineAppenderWithNextRID(d, nil, 1)
+	if err != nil {
+		t.Fatalf("newReplayInlineAppenderWithNextRID: %v", err)
+	}
+	defer func() { _ = previousAppender.close() }()
+	previousOwner := replayInlineLeafPageLog{appender: previousAppender}
 	d.SetLeafPageLog(previousOwner)
 	previousInstalled := d.leafPageLog
 	opts := CompactStorageOptions{
@@ -889,8 +894,15 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 	if d.leafPageLog != previousInstalled {
 		t.Fatalf("restored leaf-page log=%T want exact previous %T", d.leafPageLog, previousInstalled)
 	}
-	if previousOwner.advanced != 1 {
-		t.Fatalf("restored owner advanced seq=%d want 1", previousOwner.advanced)
+	if _, err := d.leafPageLog.AppendLeafPage(bytes.Repeat([]byte("r"), page.PageSize)); err != nil {
+		t.Fatalf("restored owner AppendLeafPage: %v", err)
+	}
+	gotPath, _, ok := previousOwner.CurrentValueLogSegment()
+	if !ok {
+		t.Fatal("restored owner did not report current leaf segment")
+	}
+	if got := filepath.Base(gotPath); got != "value-l255-000002.log" {
+		t.Fatalf("restored owner segment=%s, want value-l255-000002.log", got)
 	}
 }
 

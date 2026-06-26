@@ -3,6 +3,7 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,7 +12,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestCompactStoragePublicCommandWALRelaxedDefaultOwnerClassification(t *testing.T) {
+func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrapper(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
 	opts.DisableSideStores = true
@@ -29,33 +30,36 @@ func TestCompactStoragePublicCommandWALRelaxedDefaultOwnerClassification(t *test
 	if classification.OwnerClass != treedb.CompactStorageLeafPageLogOwnerCachedWrapper {
 		t.Fatalf("owner=%q want %q (classification=%+v)", classification.OwnerClass, treedb.CompactStorageLeafPageLogOwnerCachedWrapper, classification)
 	}
-	if classification.Status != treedb.CompactStorageOwnerStatusSupportedTarget {
-		t.Fatalf("status=%q want %q (classification=%+v)", classification.Status, treedb.CompactStorageOwnerStatusSupportedTarget, classification)
+	if classification.Status != treedb.CompactStorageOwnerStatusLiveWriterFailClosed {
+		t.Fatalf("status=%q want %q (classification=%+v)", classification.Status, treedb.CompactStorageOwnerStatusLiveWriterFailClosed, classification)
 	}
 	if !classification.RequiresQuiescence {
 		t.Fatalf("RequiresQuiescence=false, want true (classification=%+v)", classification)
 	}
+	if classification.Replaceable {
+		t.Fatalf("Replaceable=true, want false (classification=%+v)", classification)
+	}
 
-	if _, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{Mode: treedb.CompactStorageExhaustive}); err != nil {
-		t.Fatalf("CompactStorage exhaustive: %v", err)
+	if _, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{Mode: treedb.CompactStorageExhaustive}); !errors.Is(err, treedb.ErrCompactStorageLeafPageLogOwnerUnsupported) {
+		t.Fatalf("CompactStorage exhaustive error=%v, want owner unsupported", err)
 	}
 	got, err := db.Get([]byte("canonical"))
 	if err != nil {
-		t.Fatalf("Get canonical after compact: %v", err)
+		t.Fatalf("Get canonical after refused compact: %v", err)
 	}
 	want := bytes.Repeat([]byte("v"), 512)
 	if !bytes.Equal(got, want) {
-		t.Fatalf("canonical value mismatch after compact: got %q want %q", got, want)
+		t.Fatalf("canonical value mismatch after refused compact: got %q want %q", got, want)
 	}
-	if err := db.SetSync([]byte("post-compact"), []byte("ok")); err != nil {
-		t.Fatalf("post-compact SetSync through restored cached owner: %v", err)
+	if err := db.SetSync([]byte("post-refusal"), []byte("ok")); err != nil {
+		t.Fatalf("post-refusal SetSync through original cached owner: %v", err)
 	}
-	got, err = db.Get([]byte("post-compact"))
+	got, err = db.Get([]byte("post-refusal"))
 	if err != nil {
-		t.Fatalf("Get post-compact: %v", err)
+		t.Fatalf("Get post-refusal: %v", err)
 	}
 	if string(got) != "ok" {
-		t.Fatalf("post-compact value=%q want ok", got)
+		t.Fatalf("post-refusal value=%q want ok", got)
 	}
 }
 

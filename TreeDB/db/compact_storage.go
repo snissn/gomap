@@ -1517,19 +1517,16 @@ func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactSt
 			classification.Detail = "internally owned replay-inline wrapper exposes a compact handoff restore capability"
 		}
 	case CompactStorageLeafPageLogOwnerCachedWrapper:
+		classification.RequiresQuiescence = true
 		if lifecycle == CompactStorageLifecycleActiveWriter {
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
-			classification.RequiresQuiescence = true
 			classification.Detail = "modeled active-writer status: background flush/apply workers and cached backlog must be fenced before exhaustive compact can take over the owner"
 		} else if !compactStorageLeafPageLogHandoffCapable(log) {
 			classification.Status = CompactStorageOwnerStatusBlockingBug
-			classification.RequiresQuiescence = true
 			classification.Detail = "cached/wrapper owner does not expose the compact handoff restore capability"
 		} else {
-			classification.Status = CompactStorageOwnerStatusSupportedTarget
-			classification.Replaceable = true
-			classification.RequiresQuiescence = true
-			classification.Detail = "cached/wrapper owner exposes an explicit quiesced compact handoff restore capability"
+			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
+			classification.Detail = "cached/wrapper owner has compact handoff support, but CompactStorage does not fence cached writes and background flushes for the full exhaustive run"
 		}
 	default:
 		classification.Status = CompactStorageOwnerStatusExternalUnsupported
