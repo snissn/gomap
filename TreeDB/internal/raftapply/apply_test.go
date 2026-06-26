@@ -593,6 +593,55 @@ func TestCollectionMutationCoveredCommandWALFailureRequiresRecovery(t *testing.T
 	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
 }
 
+func TestCollectionMutationFinalizeFailureAfterAppendRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-finalize-failure", testCreateCollectionMetaOptions{})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &failingFinalizeCommandWALApplySeam{
+		finalizeErr: fmt.Errorf("synthetic finalize failure: %w", backenddb.ErrCommandWALRejected),
+	}
+	emptyInsert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:empty-finalize-failure", nativewire.DocumentFormatJSON, nil, nil)
+	result, err := ApplyCommittedEntryV1(db, emptyInsert, applyMeta(1, 2), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if seam.appendCalls != 1 || seam.finalizeCalls != 1 || seam.abortCalls != 1 {
+		t.Fatalf("seam calls append/finalize/abort=%d/%d/%d, want 1/1/1", seam.appendCalls, seam.finalizeCalls, seam.abortCalls)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != len(beforeFrames)+1 {
+		t.Fatalf("command WAL frames after finalize failure=%d, want %d", len(frames), len(beforeFrames)+1)
+	}
+	last := frames[len(frames)-1]
+	assertCollectionInsertFrame(t, last, "docs", map[string][]byte{})
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after finalize failure=%d, want %d", got, beforeLSN)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after finalize failure progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+	if err := db.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("CheckStorageMaintenanceReady after finalize failure error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestCollectionMutationStaleCatalogGuardFailsBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -2063,6 +2112,31 @@ func (s *countingCommandWALApplySeam) Finalize(db *backenddb.DB, handle commandw
 }
 
 func (s *countingCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply.Handle) {}
+
+type failingFinalizeCommandWALApplySeam struct {
+	appendCalls   int
+	finalizeCalls int
+	abortCalls    int
+	finalizeErr   error
+}
+
+func (s *failingFinalizeCommandWALApplySeam) Append(db *backenddb.DB, frame commandwalapply.LoweredFrame, meta commandwalapply.ApplyMetadata, opts commandwalapply.Options) (commandwalapply.Handle, commandwalapply.Result, error) {
+	s.appendCalls++
+	return commandwalapply.Append(db, frame, meta, opts)
+}
+
+func (s *failingFinalizeCommandWALApplySeam) Finalize(db *backenddb.DB, handle commandwalapply.Handle, meta commandwalapply.ApplyMetadata, opts commandwalapply.Options) (commandwalapply.Result, error) {
+	s.finalizeCalls++
+	if s.finalizeErr != nil {
+		return commandwalapply.Result{}, s.finalizeErr
+	}
+	return commandwalapply.Finalize(db, handle, meta, opts)
+}
+
+func (s *failingFinalizeCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply.Handle) {
+	s.abortCalls++
+	commandwalapply.Abort(db, handle)
+}
 
 var benchmarkCollectionMutationSink collectionMutationV1
 

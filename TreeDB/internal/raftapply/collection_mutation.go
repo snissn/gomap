@@ -78,7 +78,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	case nativewire.CommandInsertBatch:
 		if len(mutation.documents) == 0 {
 			if err := finalizeHandle(); err != nil {
-				return raftentry.ApplyResultV1{}, err
+				return commandWALFinalizeRecoveryRequired(entry, err)
 			}
 			break
 		}
@@ -104,7 +104,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	}
 	if !handleFinalized {
 		if err := finalizeHandle(); err != nil {
-			return raftentry.ApplyResultV1{}, err
+			return commandWALFinalizeRecoveryRequired(entry, err)
 		}
 	}
 
@@ -124,6 +124,11 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		AffectedCount:          affected,
 		ResultDigest:           raftentry.CommandDigestV1(logical),
 	}, nil
+}
+
+func commandWALFinalizeRecoveryRequired(entry raftentry.CommandEntryV1, err error) (raftentry.ApplyResultV1, error) {
+	code, _ := ErrorCodeOf(err)
+	return recoveryRequired(entry.Digest, code, err)
 }
 
 func (h *Harness) collectionMutationApplyError(entry raftentry.CommandEntryV1, handle commandwalapply.Handle, err error) (raftentry.ApplyResultV1, error) {
