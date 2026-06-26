@@ -176,6 +176,33 @@ func (db *DB) observeRawSpanNativeApplyResult(plan rawSpanNativeBatchPlan, resul
 	db.observeRawSpanNativeObservation(observation)
 }
 
+func (db *DB) observeRawSpanNativePublishFallback(plan rawSpanNativeBatchPlan, result zipper.ApplyResult, reason FlushSpanRunFallbackReason) {
+	if db == nil || !reason.Valid() || reason == FlushSpanRunFallbackUnknown {
+		return
+	}
+	routeCounters := db.rawSpanNativeRouteCountersFor(plan.route)
+	if routeCounters == nil {
+		return
+	}
+	if !result.ReadOnlyPrepareRequested || (!result.SpanNativeEligible && !result.SpanNativeUsed) {
+		return
+	}
+	ops, spans := rawSpanNativeOpsAndSpans(result.ReadOnlyPrepare.LeafSpanSummary(), plan.ops)
+	db.rawSpanNativeFallbacks.Add(1)
+	db.rawSpanNativeFallbackReasonCounts[reason].Add(1)
+	db.rawSpanNativeFallbackOps[reason].Add(ops)
+	db.rawSpanNativeFallbackSpans[reason].Add(spans)
+	routeCounters.fallbacks.Add(1)
+	routeCounters.fallbackReasonCounts[reason].Add(1)
+	routeCounters.fallbackOps[reason].Add(ops)
+	routeCounters.fallbackSpans[reason].Add(spans)
+}
+
+func (db *DB) observeRawBatchSpanNativePublishFallback(plan rawSpanNativeBatchPlan, result zipper.ApplyResult, reason FlushSpanRunFallbackReason) {
+	db.observeFlushApplySpanNativePublishFallback(result, reason)
+	db.observeRawSpanNativePublishFallback(plan, result, reason)
+}
+
 func (db *DB) rawSpanNativeEligibility(req rawSpanNativeEligibilityRequest) rawSpanNativeObservation {
 	ops, spans := rawSpanNativeOpsAndSpans(req.summary, req.deltaOps)
 	observation := rawSpanNativeObservation{
