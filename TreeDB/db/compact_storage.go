@@ -490,7 +490,9 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 	}
 
+	leafPackPassesRemaining := opts.LeafPackMaxPasses
 	for pass := 0; pass < opts.LeafPackMaxPasses; pass++ {
+		leafPackPassesRemaining--
 		var pack LeafGenerationPackRunOnceStats
 		phaseName := fmt.Sprintf("leaf-generation-pack-%d", pass+1)
 		if err := db.runCompactStoragePhase(&stats, phaseName, func() error {
@@ -565,7 +567,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 	}
 
-	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs); err != nil {
+	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, leafPackPassesRemaining); err != nil {
 		return stats, err
 	}
 	// If index vacuum was unsupported, keep leaf-generation pins through final
@@ -677,7 +679,7 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 	return true, nil
 }
 
-func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}) error {
+func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining int) error {
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
@@ -729,7 +731,8 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 		}
-		if debt.LeafPackGenerations > 0 {
+		if debt.LeafPackGenerations > 0 && leafPackPassesRemaining > 0 {
+			leafPackPassesRemaining--
 			var pack LeafGenerationPackRunOnceStats
 			phaseName := fmt.Sprintf("settle-leaf-generation-pack-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {

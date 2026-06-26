@@ -1808,6 +1808,48 @@ func TestCompactStoragePlanLeafPackDebtUsesBoundedSelection(t *testing.T) {
 	}
 }
 
+func TestCompactStorageSettleHonorsLeafPackMaxPasses(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf left: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "left", 0, 1024, 'b')
+
+	writeLeafGenerationKeys(t, d, "right", 2048, 'c')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf right: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "right", 0, 1024, 'd')
+	writeLeafGenerationKeys(t, d, "current", 16, 'e')
+	d.SetLeafPageLog(nil)
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMaxPasses:             1,
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := len(stats.LeafGenerationPacks); got != 1 {
+		t.Fatalf("leaf pack runs=%d want exactly one capped pass, packs=%+v", got, stats.LeafGenerationPacks)
+	}
+	if !stats.LeafGenerationPacks[0].Ran {
+		t.Fatalf("capped leaf pack did not run: %+v", stats.LeafGenerationPacks[0])
+	}
+	if compactStoragePhaseSeen(stats.Phases, "settle-leaf-generation-pack-1") {
+		t.Fatalf("settle ran an extra leaf-pack pass despite exhausted LeafPackMaxPasses: phases=%+v", stats.Phases)
+	}
+	if stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=true want residual debt after capped pass")
+	}
+	if stats.RemainingDebt.LeafPackGenerations == 0 || stats.RemainingDebt.LeafPackBytes == 0 {
+		t.Fatalf("remaining leaf-pack debt=%+v want residual capped debt", stats.RemainingDebt)
+	}
+}
+
 func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testing.T) {
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
