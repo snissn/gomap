@@ -32,6 +32,10 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.PrepareDocuments += src.PrepareDocuments
 	dst.IndexStateExtraction += src.IndexStateExtraction
 	dst.DuplicateDocumentPreflight += src.DuplicateDocumentPreflight
+	dst.RetainedPayloadPrepare += src.RetainedPayloadPrepare
+	dst.RetainedPayloadRows += src.RetainedPayloadRows
+	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
+	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
 	dst.TemplateRunBuild += src.TemplateRunBuild
 	dst.PrimaryRunBuild += src.PrimaryRunBuild
@@ -57,6 +61,7 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("prepare_ns/doc", stats.PrepareDocuments)
 	reportDuration("index_state_extract_ns/doc", stats.IndexStateExtraction)
 	reportDuration("duplicate_preflight_ns/doc", stats.DuplicateDocumentPreflight)
+	reportDuration("retained_payload_prepare_ns/doc", stats.RetainedPayloadPrepare)
 	reportDuration("unique_preflight_ns/doc", stats.UniqueIndexPreflight)
 	reportDuration("template_run_ns/doc", stats.TemplateRunBuild)
 	reportDuration("primary_run_ns/doc", stats.PrimaryRunBuild)
@@ -84,6 +89,15 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 		}
 		if stats.ValidationPreflightRechecked > 0 {
 			b.ReportMetric(float64(stats.ValidationPreflightRechecked)/float64(batches), "validation_preflight_rechecked/batch")
+		}
+		if stats.RetainedPayloadRows > 0 {
+			b.ReportMetric(float64(stats.RetainedPayloadRows)/float64(batches), "retained_payload_rows/batch")
+		}
+		if stats.RetainedPayloadDeclaredRows > 0 {
+			b.ReportMetric(float64(stats.RetainedPayloadDeclaredRows)/float64(batches), "retained_payload_declared_rows/batch")
+		}
+		if stats.RetainedPayloadSemanticStreamBlocks > 0 {
+			b.ReportMetric(float64(stats.RetainedPayloadSemanticStreamBlocks)/float64(batches), "retained_payload_semantic_stream_blocks/batch")
 		}
 	}
 }

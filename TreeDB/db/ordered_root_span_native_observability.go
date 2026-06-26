@@ -110,6 +110,7 @@ func (db *DB) OrderedRootSpanNativeTriageSnapshot() []OrderedRootSpanNativeTriag
 		route     OrderedRootSpanNativeRoute
 		context   string
 		candidate bool
+		eligible  bool
 		reason    FlushSpanRunFallbackReason
 		detail    string
 	}{
@@ -129,22 +130,22 @@ func (db *DB) OrderedRootSpanNativeTriageSnapshot() []OrderedRootSpanNativeTriag
 			route:     OrderedRootSpanNativeRouteSystemDeltaBuilderPublish,
 			context:   "ordered-root delta group with system delta builder",
 			candidate: true,
-			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
-			detail:    "warm delta groups are observable candidates but remain fail-closed until ordered-root span-native output is enabled",
+			eligible:  true,
+			detail:    "warm ordered-root system delta groups can use span-native apply when admitted; unsupported rows fail closed with route-specific fallback reasons",
 		},
 		{
 			route:     OrderedRootSpanNativeRouteCommandWALPublish,
 			context:   "command-WAL covered ordered-root delta publish",
 			candidate: true,
-			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
-			detail:    "command-WAL ordered-root deltas require the same fail-closed eligibility contract plus command ordering",
+			eligible:  true,
+			detail:    "command-WAL ordered-root deltas can use span-native apply after the command frame is appended and before the covered commit finalizes",
 		},
 		{
 			route:     OrderedRootSpanNativeRouteCollectionBufferedRoots,
 			context:   "collection buffered root delta publish",
 			candidate: true,
-			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
-			detail:    "collection buffered roots publish through ordered-root delta routes and need ordered-root proof",
+			eligible:  true,
+			detail:    "collection buffered roots publish through ordered-root delta routes and inherit the ordered-root span-native correctness contract",
 		},
 		{
 			route:   OrderedRootSpanNativeRouteOverlayColdBuild,
@@ -156,32 +157,32 @@ func (db *DB) OrderedRootSpanNativeTriageSnapshot() []OrderedRootSpanNativeTriag
 			route:     OrderedRootSpanNativeRouteMultiIndexGroupPublish,
 			context:   "multi-index ordered-root group publish",
 			candidate: true,
-			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
-			detail:    "multi-index groups are observable candidates but remain fail-closed before #3024",
+			eligible:  true,
+			detail:    "multi-index warm ordered-root groups can use span-native apply when admitted; cold and maintenance rows remain deterministic fallbacks",
 		},
 		{
 			route:     OrderedRootSpanNativeRouteDeltaBatchPublish,
 			context:   "ordered-root delta batch root apply",
 			candidate: true,
-			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
-			detail:    "warm ordered-root delta batches are the runtime candidate surface",
+			eligible:  true,
+			detail:    "warm ordered-root delta batches are the runtime span-native candidate surface",
 		},
 		{
 			route:     OrderedRootSpanNativeRouteReadOnlyPrepare,
 			context:   "ordered-root read-only prepare proof",
 			candidate: true,
-			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
-			detail:    "read-only prepare validates leaf-span planning before any span-native ordered-root apply is enabled",
+			eligible:  true,
+			detail:    "read-only prepare validates leaf-span planning for admitted ordered-root span-native apply",
 		},
 	}
 	out := make([]OrderedRootSpanNativeTriageRow, 0, len(routes))
 	for _, route := range routes {
-		out = append(out, db.orderedRootSpanNativeRouteTriage(route.route, route.context, route.candidate, route.reason, route.detail))
+		out = append(out, db.orderedRootSpanNativeRouteTriage(route.route, route.context, route.candidate, route.eligible, route.reason, route.detail))
 	}
 	return out
 }
 
-func (db *DB) orderedRootSpanNativeRouteTriage(route OrderedRootSpanNativeRoute, context string, candidate bool, fallback FlushSpanRunFallbackReason, detail string) OrderedRootSpanNativeTriageRow {
+func (db *DB) orderedRootSpanNativeRouteTriage(route OrderedRootSpanNativeRoute, context string, candidate bool, eligible bool, fallback FlushSpanRunFallbackReason, detail string) OrderedRootSpanNativeTriageRow {
 	admission := FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto}.withStatsDefaults()
 	if db != nil {
 		admission = db.flushAdmission.withStatsDefaults()
@@ -215,6 +216,17 @@ func (db *DB) orderedRootSpanNativeRouteTriage(route OrderedRootSpanNativeRoute,
 		row.FallbackReason = FlushSpanRunFallbackAdmissionPolicyDecline.String()
 		row.FallbackClass = orderedRootSpanNativeFallbackClass(FlushSpanRunFallbackAdmissionPolicyDecline)
 		return row
+	}
+	if !admission.FlushApplySpanNative {
+		row.FallbackReason = FlushSpanRunFallbackDisabled.String()
+		row.FallbackClass = orderedRootSpanNativeFallbackClass(FlushSpanRunFallbackDisabled)
+		return row
+	}
+	if eligible {
+		row.Eligible = true
+		row.Status = OrderedRootSpanNativeStatusEligible
+		row.FallbackReason = ""
+		row.FallbackClass = OrderedRootSpanNativeFallbackClassNone
 	}
 	return row
 }
@@ -253,7 +265,7 @@ func (db *DB) orderedRootSpanNativeEligibility(req orderedRootSpanNativeEligibil
 		classifiedReason := db.classifyOrderedRootSpanNativeFallback(req, ops)
 		if !hasExplicitReason {
 			reason = classifiedReason
-		} else if classifiedReason.Valid() && classifiedReason != FlushSpanRunFallbackSpanNativeNotImplemented {
+		} else if classifiedReason.Valid() && classifiedReason != FlushSpanRunFallbackSpanNativeNotImplemented && (classifiedReason != FlushSpanRunFallbackUnknown || req.Err != nil) {
 			reason = classifiedReason
 			hasExplicitReason = false
 		}
@@ -294,7 +306,7 @@ func (db *DB) classifyOrderedRootSpanNativeFallback(req orderedRootSpanNativeEli
 		return FlushSpanRunFallbackPrepareError
 	case req.ForceColdBuild || summary.ColdBuild:
 		return FlushSpanRunFallbackColdBuild
-	case summary.Maintenance:
+	case summary.Maintenance && summary.PointOps <= 0:
 		return FlushSpanRunFallbackMaintenance
 	case summary.DeleteRanges > 0:
 		return FlushSpanRunFallbackRangeDeleteBarrier
@@ -315,7 +327,10 @@ func (db *DB) classifyOrderedRootSpanNativeFallback(req orderedRootSpanNativeEli
 	if !admission.Admitted {
 		return FlushSpanRunFallbackAdmissionPolicyDecline
 	}
-	return FlushSpanRunFallbackSpanNativeNotImplemented
+	if !admission.FlushApplySpanNative {
+		return FlushSpanRunFallbackDisabled
+	}
+	return FlushSpanRunFallbackUnknown
 }
 
 func orderedRootSpanNativeCandidate(route OrderedRootSpanNativeRoute, summary zipper.ReadOnlyLeafSpanSummary, ops uint64) bool {
@@ -326,7 +341,7 @@ func orderedRootSpanNativeCandidate(route OrderedRootSpanNativeRoute, summary zi
 		summary.Spans > 0 &&
 		summary.ExactLeafSpans &&
 		!summary.ColdBuild &&
-		!summary.Maintenance &&
+		(!summary.Maintenance || summary.PointOps > 0) &&
 		summary.DeleteRanges == 0
 }
 
@@ -489,6 +504,9 @@ func (db *DB) observeOrderedRootSpanNativeEligibility(row OrderedRootSpanNativeT
 			}
 		}
 	}
+	if row.Eligible && row.FallbackReason == "" {
+		return
+	}
 	reason, ok := ParseFlushSpanRunFallbackReason(row.FallbackReason)
 	if !ok || !reason.Valid() {
 		reason = FlushSpanRunFallbackUnknown
@@ -553,11 +571,11 @@ func orderedRootSpanNativeApplyPreparedCandidate(route OrderedRootSpanNativeRout
 	return orderedRootSpanNativeCandidate(route, summary, ops)
 }
 
-func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int, err error, validationFailed bool) {
+func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int, err error, validationFailed bool, opts orderedRootPublishOptions) {
 	if db == nil {
 		return
 	}
-	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
 	spanNativeEligible := err == nil && !validationFailed && applyOpts.SpanNativeApply
 	explicitFallbackReason := ""
 	if err == nil && !validationFailed && !spanNativeEligible {

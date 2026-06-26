@@ -486,17 +486,23 @@ type CollectionInsertStats struct {
 	// DuplicateDocumentPreflight includes duplicate-ID detection and
 	// existing-document conflict checks.
 	DuplicateDocumentPreflight time.Duration
-	UniqueIndexPreflight       time.Duration
-	TemplateRunBuild           time.Duration
-	PrimaryRunBuild            time.Duration
-	IndexStateRunBuild         time.Duration
-	SecondaryRunBuild          time.Duration
-	Publish                    time.Duration
-	SecondaryEntries           int
-	SecondaryKeyBytes          int
-	SecondarySortedRuns        int
-	SecondaryUnsortedRuns      int
-	SecondaryRuns              []CollectionSecondaryRunStats
+	// RetainedPayloadPrepare includes retained-payload transforms for column
+	// stores before the primary run is built.
+	RetainedPayloadPrepare              time.Duration
+	RetainedPayloadRows                 int
+	RetainedPayloadDeclaredRows         int
+	RetainedPayloadSemanticStreamBlocks int
+	UniqueIndexPreflight                time.Duration
+	TemplateRunBuild                    time.Duration
+	PrimaryRunBuild                     time.Duration
+	IndexStateRunBuild                  time.Duration
+	SecondaryRunBuild                   time.Duration
+	Publish                             time.Duration
+	SecondaryEntries                    int
+	SecondaryKeyBytes                   int
+	SecondarySortedRuns                 int
+	SecondaryUnsortedRuns               int
+	SecondaryRuns                       []CollectionSecondaryRunStats
 }
 
 // CollectionSecondaryRunStats captures per-secondary-index run construction
@@ -10777,18 +10783,33 @@ func (c *Collection) insertBatchNoIndex(
 	var retainedDocuments [][]byte
 	var retainedTemplateRecords []templateV1Record
 	var retainedSemanticStreamBlocks memtable.Table
+	var retainedDeclaredRows []columnDeclaredRow
+	var retainedDeclaredRowsReady bool
 	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
+		phaseStart = time.Now()
+		fullDocumentIDs := make([][]byte, len(entries))
 		fullDocuments := make([][]byte, len(entries))
 		for i := range entries {
+			fullDocumentIDs[i] = entries[i].id
 			fullDocuments[i] = entries[i].document
 		}
-		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(*c.meta.Options.ColumnStore, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(*c.meta.Options.ColumnStore, fullDocumentIDs, fullDocuments, columnRetainedPayloadTemplateResolver(snap, catalog))
 		if err != nil {
 			return nil, err
 		}
 		retainedDocuments = prepared.documents
 		retainedTemplateRecords = prepared.templateRecords
 		retainedSemanticStreamBlocks = prepared.semanticStreamBlocks
+		retainedDeclaredRows = prepared.declaredRows
+		retainedDeclaredRowsReady = prepared.declaredRowsReady
+		stats.RetainedPayloadPrepare = time.Since(phaseStart)
+		stats.RetainedPayloadRows = len(entries)
+		if retainedDeclaredRowsReady {
+			stats.RetainedPayloadDeclaredRows = len(retainedDeclaredRows)
+		}
+		if retainedSemanticStreamBlocks != nil {
+			stats.RetainedPayloadSemanticStreamBlocks = retainedSemanticStreamBlocks.Len()
+		}
 	}
 
 	phaseStart = time.Now()
@@ -10933,6 +10954,8 @@ func (c *Collection) insertBatchNoIndex(
 				operation:         ColumnPublishOperationInsert,
 				documents:         columnWriteDocumentsFromNoIndexEntries(entries),
 				rows:              len(entries),
+				declaredRows:      retainedDeclaredRows,
+				declaredRowsReady: retainedDeclaredRowsReady,
 				rowRemainderBytes: rowRemainderBytes,
 			})
 			return err

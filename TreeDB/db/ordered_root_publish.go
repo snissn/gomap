@@ -115,6 +115,7 @@ type orderedRootPublishOptions struct {
 	leafPageLog           bulk.LeafPageAppender
 	spanNativeRoute       OrderedRootSpanNativeRoute
 	spanNativeContext     string
+	spanNativeFallback    string
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
@@ -131,6 +132,13 @@ func (opts orderedRootPublishOptions) withSpanNativeRoute(route OrderedRootSpanN
 	}
 	opts.spanNativeRoute = route
 	opts.spanNativeContext = context
+	return opts
+}
+
+func (opts orderedRootPublishOptions) withSpanNativeFallback(reason FlushSpanRunFallbackReason) orderedRootPublishOptions {
+	if reason.Valid() && reason != FlushSpanRunFallbackUnknown {
+		opts.spanNativeFallback = reason.String()
+	}
 	return opts
 }
 
@@ -945,13 +953,14 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	}
 	defer delta.Close()
 	if delta.IsEmpty() {
+		db.observeOrderedRootSpanNativeNoopFallback(opts, OrderedRootSpanNativeRouteDeltaBatchPublish, "ordered-root delta iterator warm no-op")
 		return baseRoot, nil, metrics, nil, nil
 	}
 	rootZipper, err := db.orderedRootZipperForOptions(idx, opts)
 	if err != nil {
 		return 0, nil, metrics, nil, err
 	}
-	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
@@ -999,16 +1008,40 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 	return db.publishOrderedRootDeltaBatchWithAllocator(idx, baseRoot, delta, opts, idx.allocator, &pagerAllocator{p: idx.pager}, false)
 }
 
-func (db *DB) orderedRootDeltaBatchApplyOptions() zipper.ApplyOptions {
+func (db *DB) orderedRootDeltaBatchApplyOptions(opts orderedRootPublishOptions) zipper.ApplyOptions {
 	applyOpts := db.flushApplyOptions()
-	spanNativeRequested := applyOpts.SpanNativeApply
-	applyOpts.SpanNativeApply = false
-	applyOpts.SpanNativeForceFallbackReason = FlushSpanRunFallbackSpanNativeNotImplemented.String()
-	if applyOpts.ParallelApplyConcurrency <= 1 && !spanNativeRequested {
+	if applyOpts.SpanNativeApply {
+		applyOpts.SpanNativeAllowMaintenancePointOps = true
+	}
+	if opts.spanNativeFallback != "" {
+		applyOpts.SpanNativeForceFallbackReason = opts.spanNativeFallback
+	}
+	if applyOpts.ParallelApplyConcurrency <= 1 && !applyOpts.SpanNativeApply {
 		applyOpts.PrepareReadOnly = false
 		applyOpts.ReadOnlyPrepareWorkers = 0
 	}
 	return applyOpts
+}
+
+func (db *DB) observeOrderedRootSpanNativeNoopFallback(opts orderedRootPublishOptions, defaultRoute OrderedRootSpanNativeRoute, defaultContext string) {
+	if db == nil {
+		return
+	}
+	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
+	if !flushApplyUseOptions(applyOpts) {
+		return
+	}
+	fallback := applyOpts.SpanNativeForceFallbackReason
+	if fallback == "" {
+		fallback = FlushSpanRunFallbackBelowThreshold.String()
+	}
+	route, context := opts.orderedRootSpanNativeRouteContext(defaultRoute, defaultContext)
+	db.observeOrderedRootSpanNativeEligibility(db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:                  route,
+		Context:                context,
+		Summary:                zipper.ReadOnlyLeafSpanSummary{ExactLeafSpans: true},
+		ExplicitFallbackReason: fallback,
+	}))
 }
 
 func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot uint64, delta *batch.Batch, opts orderedRootPublishOptions, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, includeDeletedOnColdBuild bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, err error) {
@@ -1033,6 +1066,7 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		return
 	}
 	if delta.IsEmpty() {
+		db.observeOrderedRootSpanNativeNoopFallback(opts, OrderedRootSpanNativeRouteDeltaBatchPublish, "ordered-root delta batch no-op")
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {
@@ -1067,7 +1101,7 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if err != nil {
 		return 0, nil, metrics, err
 	}
-	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
@@ -2034,6 +2068,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		rootContext = "command-WAL ordered-root iterator group root apply"
 	}
 	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(systemRoute, systemContext)
+	if storageMaintenance {
+		systemOpts = systemOpts.withSpanNativeFallback(FlushSpanRunFallbackMaintenance)
+	}
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
@@ -2049,6 +2086,9 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 			return 0, nil, preApplyErr(err)
 		}
 		opts = opts.withSpanNativeRoute(rootRoute, rootContext)
+		if storageMaintenance {
+			opts = opts.withSpanNativeFallback(FlushSpanRunFallbackMaintenance)
+		}
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()
 		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(ordered[idx].Iter)
@@ -2371,11 +2411,18 @@ func runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot
 	return prepared, summary, workerSummary, prepareNs, false, nil
 }
 
-func (db *DB) runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int) (zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
-	applyOpts := zipper.ApplyOptions{PrepareReadOnly: true, ReadOnlyPrepareWorkers: workers}
+func (db *DB) runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int, applyOpts zipper.ApplyOptions) (zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
+	applyOpts.PrepareReadOnly = true
+	applyOpts.ReadOnlyPrepareWorkers = workers
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+	}
+	if applyOpts.SpanNativeApply {
+		applyOpts.ReadOnlyPrepare.OmitKeys = false
+		if applyOpts.SpanNativeAllowMaintenancePointOps {
+			applyOpts.ReadOnlyPrepare.AllowMaintenancePointLeafSpans = true
+		}
 	}
 	prepared, summary, workerSummary, prepareNs, validationFailed, err := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, baseRoot, delta, workers, applyOpts.ReadOnlyPrepare)
 	if prepareBuf != nil {
@@ -2431,14 +2478,15 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		if err != nil {
 			return err
 		}
-		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers)
+		applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
+		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers, applyOpts)
 		addOrderedRootReadOnlyPreparePhaseStats(phaseStats, summary, workerSummary, prepareNs, err, validationFailed)
 		db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, validationFailed)
 		deltaOps := 0
 		if ordered[orderedIdx].Delta != nil {
 			deltaOps = ordered[orderedIdx].Delta.Len()
 		}
-		db.observeOrderedRootSpanNativeReadOnlyPrepare(summary, deltaOps, err, validationFailed)
+		db.observeOrderedRootSpanNativeReadOnlyPrepare(summary, deltaOps, err, validationFailed, opts)
 		if err != nil {
 			return err
 		}

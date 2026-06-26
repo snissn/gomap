@@ -1808,6 +1808,48 @@ func TestCompactStoragePlanLeafPackDebtUsesBoundedSelection(t *testing.T) {
 	}
 }
 
+func TestCompactStorageSettleHonorsLeafPackMaxPasses(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "left", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf left: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "left", 0, 1024, 'b')
+
+	writeLeafGenerationKeys(t, d, "right", 2048, 'c')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf right: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "right", 0, 1024, 'd')
+	writeLeafGenerationKeys(t, d, "current", 16, 'e')
+	d.SetLeafPageLog(nil)
+
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{
+		LeafPackMaxPasses:             1,
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := len(stats.LeafGenerationPacks); got != 1 {
+		t.Fatalf("leaf pack runs=%d want exactly one capped pass, packs=%+v", got, stats.LeafGenerationPacks)
+	}
+	if !stats.LeafGenerationPacks[0].Ran {
+		t.Fatalf("capped leaf pack did not run: %+v", stats.LeafGenerationPacks[0])
+	}
+	if compactStoragePhaseSeen(stats.Phases, "settle-leaf-generation-pack-1") {
+		t.Fatalf("settle ran an extra leaf-pack pass despite exhausted LeafPackMaxPasses: phases=%+v", stats.Phases)
+	}
+	if stats.FullyCompacted {
+		t.Fatalf("FullyCompacted=true want residual debt after capped pass")
+	}
+	if stats.RemainingDebt.LeafPackGenerations == 0 || stats.RemainingDebt.LeafPackBytes == 0 {
+		t.Fatalf("remaining leaf-pack debt=%+v want residual capped debt", stats.RemainingDebt)
+	}
+}
+
 func TestCompactStorageStopsLeafPackOnLowYieldResidualWithinPassBudget(t *testing.T) {
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
@@ -1993,6 +2035,72 @@ func TestCompactStorageFullLeafPackDefaultUsesByteBudgetNotGenerationCap(t *test
 	}
 	if gens != 64 || bytes != 128 {
 		t.Fatalf("explicit capped leaf-pack debt gens=%d bytes=%d want 64/128", gens, bytes)
+	}
+}
+
+func TestCompactStorageLeafPackFilterIgnoresOnlyRunCreatedGenerations(t *testing.T) {
+	opts := compactStorageLeafPackFromPlanOptions(normalizeCompactStorageOptions(CompactStorageOptions{
+		LeafPackMinExpectedReclaimBytes: 1,
+		LeafPackMinReclaimPerCopyPPM:    1,
+	}), nil, nil)
+	plan := LeafGenerationPlan{
+		Admission: leafGenerationPlanAdmissionEligible,
+		Generations: []LeafGenerationPlanGeneration{
+			{GenerationID: 1, FileIDs: []uint32{11}, BytesTotal: 100, BytesLive: 80, BytesDead: 20, BytesToCopy: 80, LivePages: 1, Eligible: true},
+			{GenerationID: 2, FileIDs: []uint32{21}, BytesTotal: 200, BytesLive: 150, BytesDead: 50, BytesToCopy: 150, LivePages: 1, Eligible: true},
+			{GenerationID: 3, FileIDs: []uint32{31, 32}, BytesTotal: 300, BytesLive: 200, BytesDead: 100, BytesToCopy: 200, LivePages: 2, Eligible: true},
+		},
+		Candidates: []LeafGenerationPlanGeneration{
+			{GenerationID: 1, FileIDs: []uint32{11}, BytesTotal: 100, BytesLive: 80, BytesDead: 20, BytesToCopy: 80, LivePages: 1, Eligible: true},
+			{GenerationID: 2, FileIDs: []uint32{21}, BytesTotal: 200, BytesLive: 150, BytesDead: 50, BytesToCopy: 150, LivePages: 1, Eligible: true},
+			{GenerationID: 3, FileIDs: []uint32{31, 32}, BytesTotal: 300, BytesLive: 200, BytesDead: 100, BytesToCopy: 200, LivePages: 2, Eligible: true},
+		},
+	}
+
+	filtered := compactStorageFilterIgnoredLeafPackPlan(plan, opts, map[uint32]struct{}{11: {}, 31: {}})
+	if got, want := filtered.CandidateGenerationIDs, []uint64{2, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("CandidateGenerationIDs=%v want %v", got, want)
+	}
+	if got, want := filtered.CandidateBytesTotal, int64(500); got != want {
+		t.Fatalf("CandidateBytesTotal=%d want %d", got, want)
+	}
+	if got, want := filtered.CandidateBytesLive, int64(350); got != want {
+		t.Fatalf("CandidateBytesLive=%d want %d", got, want)
+	}
+	if got, want := filtered.CandidateBytesDead, int64(150); got != want {
+		t.Fatalf("CandidateBytesDead=%d want %d", got, want)
+	}
+	if got, want := filtered.CandidateBytesToCopy, int64(350); got != want {
+		t.Fatalf("CandidateBytesToCopy=%d want %d", got, want)
+	}
+	if got, want := filtered.CandidateLivePages, 3; got != want {
+		t.Fatalf("CandidateLivePages=%d want %d", got, want)
+	}
+	if got, want := filtered.ExpectedReclaimBytes, int64(150); got != want {
+		t.Fatalf("ExpectedReclaimBytes=%d want %d", got, want)
+	}
+	if got, want := filtered.ExpectedReclaimRatioPPM, ratioPPM(150, 500); got != want {
+		t.Fatalf("ExpectedReclaimRatioPPM=%d want %d", got, want)
+	}
+	if got, want := filtered.ExpectedReclaimPerByteCopiedPPM, ratioPPM(150, 350); got != want {
+		t.Fatalf("ExpectedReclaimPerByteCopiedPPM=%d want %d", got, want)
+	}
+	if filtered.Generations[0].Eligible || filtered.Generations[0].SkipReason != compactStorageLeafPackSkipRunCreated {
+		t.Fatalf("filtered generation 1=%+v want run-created skip", filtered.Generations[0])
+	}
+	if !filtered.Generations[2].Eligible {
+		t.Fatalf("partially ignored generation was filtered: %+v", filtered.Generations[2])
+	}
+	if plan.Generations[0].SkipReason != "" || !plan.Generations[0].Eligible {
+		t.Fatalf("original plan mutated: %+v", plan.Generations[0])
+	}
+
+	allIgnored := compactStorageFilterIgnoredLeafPackPlan(plan, opts, map[uint32]struct{}{11: {}, 21: {}, 31: {}, 32: {}})
+	if allIgnored.Admission != leafGenerationPlanAdmissionNoCandidates || len(allIgnored.Candidates) != 0 || len(allIgnored.CandidateGenerationIDs) != 0 {
+		t.Fatalf("allIgnored admission=%s candidates=%v ids=%v want no candidates", allIgnored.Admission, allIgnored.Candidates, allIgnored.CandidateGenerationIDs)
+	}
+	if allIgnored.CandidateBytesTotal != 0 || allIgnored.CandidateBytesDead != 0 || allIgnored.ExpectedReclaimBytes != 0 {
+		t.Fatalf("allIgnored retained accounting: total=%d dead=%d reclaim=%d", allIgnored.CandidateBytesTotal, allIgnored.CandidateBytesDead, allIgnored.ExpectedReclaimBytes)
 	}
 }
 
