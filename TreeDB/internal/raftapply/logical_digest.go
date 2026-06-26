@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/collections"

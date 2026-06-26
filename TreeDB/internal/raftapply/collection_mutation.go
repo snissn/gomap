@@ -38,21 +38,37 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}
-	handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
+	var handle commandwalapply.Handle
+	handleAppended := false
+	handleFinalized := false
+	defer func() {
+		if handleAppended && !handleFinalized {
+			h.walApply.Abort(h.db, handle)
+		}
+	}()
+	handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
 	if err != nil {
 		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
 	}
+	handleAppended = true
 	intent := handle.CommandWALIntent()
 	if intent == nil || handle.LSN() == 0 {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
+	}
+	finalizeHandle := func() error {
+		if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
+			return codeCommandWALApplyError(err)
+		}
+		handleFinalized = true
+		return nil
 	}
 
 	var affected int64
 	switch mutation.command {
 	case nativewire.CommandInsertBatch:
 		if len(mutation.documents) == 0 {
-			if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
-				return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+			if err := finalizeHandle(); err != nil {
+				return raftentry.ApplyResultV1{}, err
 			}
 			break
 		}
@@ -76,14 +92,20 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	default:
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
 	}
+	if !handleFinalized {
+		if err := finalizeHandle(); err != nil {
+			return raftentry.ApplyResultV1{}, err
+		}
+	}
 
-	logical, err := LogicalDigestV1ForDB(h.db, LogicalDigestOptionsV1{
+	logical, err := h.logicalDigestV1(LogicalDigestOptionsV1{
 		ScopeRule:     meta.ScopeRule,
 		DatabaseScope: meta.DatabaseScope,
 		CatalogScope:  meta.CatalogScope,
 	})
 	if err != nil {
-		return raftentry.ApplyResultV1{}, err
+		code, _ := ErrorCodeOf(err)
+		return recoveryRequired(entry.Digest, code, err)
 	}
 	return raftentry.ApplyResultV1{
 		Status:                 raftentry.ApplyStatusApplied,
@@ -157,7 +179,11 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 	if mutation == nil {
 		return nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: nil collection mutation")
 	}
-	collection, err := collections.NewCollectionManager(h.db).OpenCollection(mutation.collection)
+	manager := h.replayCollectionManager()
+	if manager == nil {
+		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot preflight collection mutation")
+	}
+	collection, err := manager.OpenCollection(mutation.collection)
 	if err != nil {
 		return nil, codeCollectionApplyError(err)
 	}

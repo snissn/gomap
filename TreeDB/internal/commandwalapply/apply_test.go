@@ -129,6 +129,7 @@ func TestAppendCatalogCreateCollectionFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
+	defer Abort(db, handle)
 	if appendResult.Status != StatusLocallyWALRecoverable {
 		t.Fatalf("append status=%q, want %q", appendResult.Status, StatusLocallyWALRecoverable)
 	}
@@ -151,19 +152,6 @@ func TestAppendCatalogCreateCollectionFrame(t *testing.T) {
 }
 
 func TestAppendCollectionMutationFrames(t *testing.T) {
-	dir := t.TempDir()
-	db, err := backenddb.Open(backenddb.Options{
-		Dir:                          dir,
-		CommandWAL:                   true,
-		DisableBackgroundPrune:       true,
-		CommandWALStatsScan:          true,
-		CommandWALSegmentTargetBytes: 1 << 20,
-	})
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
 	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{{
 		ID:       []byte("u1"),
 		Document: []byte(`{"name":"ada"}`),
@@ -212,29 +200,45 @@ func TestAppendCollectionMutationFrames(t *testing.T) {
 			payloadFormat: commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
 		},
 	}
-	for i, tc := range cases {
-		frame, err := tc.build(tc.payload)
-		if err != nil {
-			t.Fatalf("%s build frame: %v", tc.name, err)
-		}
-		handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
-		if err != nil {
-			t.Fatalf("%s Append: %v", tc.name, err)
-		}
-		if appendResult.Status != StatusLocallyWALRecoverable || appendResult.LSN == 0 || handle.LSN() != appendResult.LSN || handle.CommandWALIntent() == nil {
-			t.Fatalf("%s append result=%+v handle lsn=%d intent nil=%v", tc.name, appendResult, handle.LSN(), handle.CommandWALIntent() == nil)
-		}
-		frames := readCommandWALFrames(t, dir)
-		if len(frames) != i+1 {
-			t.Fatalf("%s command WAL frames=%d, want %d", tc.name, len(frames), i+1)
-		}
-		got := frames[len(frames)-1]
-		if got.LSN != appendResult.LSN ||
-			got.Kind != tc.kind ||
-			got.Scope != commitlog.CommandScopeCollection ||
-			got.PayloadFormat != tc.payloadFormat {
-			t.Fatalf("%s frame=%+v, want lsn=%d kind=%d collection format=%d", tc.name, got, appendResult.LSN, tc.kind, tc.payloadFormat)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := backenddb.Open(backenddb.Options{
+				Dir:                          dir,
+				CommandWAL:                   true,
+				DisableBackgroundPrune:       true,
+				CommandWALStatsScan:          true,
+				CommandWALSegmentTargetBytes: 1 << 20,
+			})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			frame, err := tc.build(tc.payload)
+			if err != nil {
+				t.Fatalf("build frame: %v", err)
+			}
+			handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+			if err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			defer Abort(db, handle)
+			if appendResult.Status != StatusLocallyWALRecoverable || appendResult.LSN == 0 || handle.LSN() != appendResult.LSN || handle.CommandWALIntent() == nil {
+				t.Fatalf("append result=%+v handle lsn=%d intent nil=%v", appendResult, handle.LSN(), handle.CommandWALIntent() == nil)
+			}
+			frames := readCommandWALFrames(t, dir)
+			if len(frames) != 1 {
+				t.Fatalf("command WAL frames=%d, want 1", len(frames))
+			}
+			got := frames[0]
+			if got.LSN != appendResult.LSN ||
+				got.Kind != tc.kind ||
+				got.Scope != commitlog.CommandScopeCollection ||
+				got.PayloadFormat != tc.payloadFormat {
+				t.Fatalf("frame=%+v, want lsn=%d kind=%d collection format=%d", got, appendResult.LSN, tc.kind, tc.payloadFormat)
+			}
+		})
 	}
 }
 

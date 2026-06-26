@@ -34,7 +34,7 @@ func TestUnsupportedDeterministicEntryRejectsBeforeAppendAndStores(t *testing.T)
 	progress := NewMemoryApplyProgressStore(8, 8)
 	results := NewMemoryApplyResultStore(8)
 	seam := &countingCommandWALApplySeam{}
-	raw := readHexFixture(t, "../nativewire/testdata/v1/insert_batch_entry.hex")
+	raw := readHexFixture(t, "../nativewire/testdata/v1/update_bson_set_entry.hex")
 
 	beforeLSN := db.State().AppliedCommandLSN
 	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
