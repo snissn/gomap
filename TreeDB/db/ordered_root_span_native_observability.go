@@ -546,11 +546,11 @@ func orderedRootSpanNativeApplyPrepareFailed(result zipper.ApplyResult) bool {
 	return result.ReadOnlyPrepareValidationFailed || result.ReadOnlyPrepareFailed
 }
 
-func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int, err error, validationFailed bool) {
+func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int, err error, validationFailed bool, opts orderedRootPublishOptions) {
 	if db == nil {
 		return
 	}
-	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
 	spanNativeEligible := err == nil && !validationFailed && applyOpts.SpanNativeApply
 	explicitFallbackReason := ""
 	if err == nil && !validationFailed && !spanNativeEligible {

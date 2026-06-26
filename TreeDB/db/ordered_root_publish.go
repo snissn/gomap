@@ -2367,7 +2367,7 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		if ordered[orderedIdx].Delta != nil {
 			deltaOps = ordered[orderedIdx].Delta.Len()
 		}
-		db.observeOrderedRootSpanNativeReadOnlyPrepare(summary, deltaOps, err, validationFailed)
+		db.observeOrderedRootSpanNativeReadOnlyPrepare(summary, deltaOps, err, validationFailed, opts)
 		if err != nil {
 			return err
 		}
