@@ -181,6 +181,62 @@ func TestCanonicalComparisonsSuppressedAfterExhaustiveCompactFailure(t *testing.
 	}
 }
 
+func TestCanonicalComparisonsRequirePositiveExhaustiveCompactEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*canonicalRun)
+	}{
+		{
+			name: "missing_row",
+			mutate: func(canon *canonicalRun) {
+				var filtered []resultRow
+				for _, row := range canon.Results {
+					if row.Phase == phaseExhaustiveCompact {
+						continue
+					}
+					filtered = append(filtered, row)
+				}
+				canon.Results = filtered
+			},
+		},
+		{
+			name: "zero_bytes_per_doc",
+			mutate: func(canon *canonicalRun) {
+				for i := range canon.Results {
+					if canon.Results[i].Phase == phaseExhaustiveCompact {
+						canon.Results[i].BytesPerDoc = floatPtr(0)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			canon := knownExampleRun()
+			tt.mutate(canon)
+
+			checks := validateCanonicalRun(canon)
+			assertCheckCode(t, checks, "exhaustive_compact_required")
+			if comparisons := buildCompactedComparisons(canon); len(comparisons) != 0 {
+				t.Fatalf("missing positive exhaustive evidence should not build compacted comparisons: %#v", comparisons)
+			}
+			if comparisons := comparisonsForReport(canon); len(comparisons) != 0 {
+				t.Fatalf("missing positive exhaustive evidence should suppress stored compacted comparisons: %#v", comparisons)
+			}
+			summary := renderExecutiveSummary(canon)
+			if strings.Contains(summary, "byte-minimized") || strings.Contains(summary, "via exhaustive compact") {
+				t.Fatalf("summary should not claim byte-minimized storage without positive exhaustive evidence: %s", summary)
+			}
+			var fair strings.Builder
+			writeFairComparison(&fair, canon)
+			if strings.Contains(fair.String(), "| `treedb_template_v1_collection_2_indexes` |") {
+				t.Fatalf("fair comparison table should suppress TreeDB compacted claims without positive exhaustive evidence:\n%s", fair.String())
+			}
+		})
+	}
+}
+
 func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
 	cfg := config{OutDir: filepath.Join("relative", "bench-run")}
 	if err := normalizeRunPaths(&cfg); err != nil {

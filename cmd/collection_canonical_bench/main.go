@@ -1222,7 +1222,14 @@ func compactedClaimsBlocked(canon *canonicalRun) bool {
 	if canon == nil {
 		return false
 	}
-	return checksBlockCompactedClaims(canon.Checks)
+	return checksBlockCompactedClaims(canon.Checks) || !hasCanonicalExhaustiveCompactEvidence(canon)
+}
+
+func hasCanonicalExhaustiveCompactEvidence(canon *canonicalRun) bool {
+	if canon == nil {
+		return false
+	}
+	return hasPositiveBytesPerDoc(findResult(canon.Results, compactedTreeDBConfigName(canon), phaseExhaustiveCompact))
 }
 
 func checksBlockCompactedClaims(checks []guardrailCheck) bool {

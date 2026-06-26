@@ -856,8 +856,8 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 			continue
 		}
 		parsed.Checks = append(parsed.GuardrailChecks, parsed.Checks...)
-		if collectionChecksBlockCompactedClaims(parsed.Checks) {
-			warnings = append(warnings, fmt.Sprintf("%s: exhaustive_compact did not complete; suppressing TreeDB compacted-size comparisons from this source", path))
+		if collectionCompactedClaimsBlocked(parsed.Results, parsed.Checks) {
+			warnings = append(warnings, fmt.Sprintf("%s: exhaustive_compact did not complete or no positive exhaustive_compact row was emitted; suppressing TreeDB compacted-size comparisons from this source", path))
 			parsed.Comparisons = nil
 		}
 		for i := range parsed.Results {
@@ -887,9 +887,25 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 	return rows, comps, warnings
 }
 
+func collectionCompactedClaimsBlocked(rows []collectionRow, checks []collectionGuardrailCheck) bool {
+	return collectionChecksBlockCompactedClaims(checks) || !collectionHasPositiveExhaustiveCompactEvidence(rows)
+}
+
 func collectionChecksBlockCompactedClaims(checks []collectionGuardrailCheck) bool {
 	for _, check := range checks {
 		if check.Code == "phase.exhaustive_compact.failed" {
+			return true
+		}
+	}
+	return false
+}
+
+func collectionHasPositiveExhaustiveCompactEvidence(rows []collectionRow) bool {
+	for _, row := range rows {
+		if row.Phase == "exhaustive_compact" &&
+			row.Shape == "collection" &&
+			strings.HasPrefix(row.ConfigName, "treedb_") &&
+			row.BytesPerDoc > 0 {
 			return true
 		}
 	}
