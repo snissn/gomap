@@ -2046,6 +2046,22 @@ func TestColumnStoreSuiteReportsFirstTouchAfterOpenLaneM3070(t *testing.T) {
 			t.Fatalf("markdown missing %q:\n%s", want, md)
 		}
 	}
+
+	var benchprof benchprofExport
+	benchprofData, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+	if err != nil {
+		t.Fatalf("read benchprof_results.json: %v", err)
+	}
+	if err := json.Unmarshal(benchprofData, &benchprof); err != nil {
+		t.Fatalf("unmarshal benchprof_results.json: %v", err)
+	}
+	if len(benchprof.Runs) != 1 {
+		t.Fatalf("benchprof runs=%d want one", len(benchprof.Runs))
+	}
+	stats := benchprof.Runs[0].TreeDBStats[columnStoreSuiteBenchDisplayName]
+	if got := stats["treedb.vlog.mmap_read.hits"]; got == "" || got == "0" {
+		t.Fatalf("benchprof stats used post-first-touch reopen snapshot; vlog mmap hits=%q stats=%+v", got, stats)
+	}
 }
 
 func TestColumnStoreSuiteReportsFirstTouchMismatchAfterArtifactsM3070(t *testing.T) {
