@@ -2515,6 +2515,11 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"]; got != "2" {
 		t.Fatalf("parallel roots stat=%q want 2", got)
 	}
+	commandRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish."
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
 }
 
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticColdBuildsRootsInParallel(t *testing.T) {
@@ -2854,7 +2859,7 @@ func TestApplyOrderedRootDeltaBatchGroupRoots_MixedOptInStartsParallelBeforeSeri
 		{BaseRoot: 0, Delta: deltaA, ParallelApply: true},
 		{BaseRoot: baseRootB, Delta: deltaB},
 		{BaseRoot: 0, Delta: deltaC, ParallelApply: true},
-	}, serialAlloc, coldAlloc)
+	}, serialAlloc, coldAlloc, OrderedRootSpanNativeRouteMultiIndexGroupPublish, "test mixed group root apply")
 	if !parallel {
 		t.Fatal("expected mixed group to use parallel apply")
 	}

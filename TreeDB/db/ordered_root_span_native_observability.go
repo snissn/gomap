@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -22,6 +23,24 @@ const (
 	OrderedRootSpanNativeRouteDeltaBatchPublish         OrderedRootSpanNativeRoute = "delta_batch_publish"
 	OrderedRootSpanNativeRouteReadOnlyPrepare           OrderedRootSpanNativeRoute = "read_only_prepare"
 )
+
+const orderedRootSpanNativeRouteCount = 9
+
+type orderedRootSpanNativeRouteCounters struct {
+	observations         atomic.Uint64
+	candidateOps         atomic.Uint64
+	candidateSpans       atomic.Uint64
+	eligibleOps          atomic.Uint64
+	eligibleSpans        atomic.Uint64
+	usedOps              atomic.Uint64
+	usedSpans            atomic.Uint64
+	ineligibleOps        atomic.Uint64
+	ineligibleSpans      atomic.Uint64
+	fallbacks            atomic.Uint64
+	fallbackReasonCounts [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	fallbackOps          [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	fallbackSpans        [FlushSpanRunFallbackReasonCount]atomic.Uint64
+}
 
 // OrderedRootSpanNativeStatus is the terminal support status for a route or
 // observed publish attempt.
@@ -145,6 +164,13 @@ func (db *DB) OrderedRootSpanNativeTriageSnapshot() []OrderedRootSpanNativeTriag
 			candidate: true,
 			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
 			detail:    "warm ordered-root delta batches are the runtime candidate surface",
+		},
+		{
+			route:     OrderedRootSpanNativeRouteReadOnlyPrepare,
+			context:   "ordered-root read-only prepare proof",
+			candidate: true,
+			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
+			detail:    "read-only prepare validates leaf-span planning before any span-native ordered-root apply is enabled",
 		},
 	}
 	out := make([]OrderedRootSpanNativeTriageRow, 0, len(routes))
@@ -311,6 +337,45 @@ func orderedRootSpanNativeRouteCanBeCandidate(route OrderedRootSpanNativeRoute) 
 	}
 }
 
+func orderedRootSpanNativeRoutes() []OrderedRootSpanNativeRoute {
+	return []OrderedRootSpanNativeRoute{
+		OrderedRootSpanNativeRouteDirectPublish,
+		OrderedRootSpanNativeRouteGroupedPublish,
+		OrderedRootSpanNativeRouteSystemDeltaBuilderPublish,
+		OrderedRootSpanNativeRouteCommandWALPublish,
+		OrderedRootSpanNativeRouteCollectionBufferedRoots,
+		OrderedRootSpanNativeRouteOverlayColdBuild,
+		OrderedRootSpanNativeRouteMultiIndexGroupPublish,
+		OrderedRootSpanNativeRouteDeltaBatchPublish,
+		OrderedRootSpanNativeRouteReadOnlyPrepare,
+	}
+}
+
+func orderedRootSpanNativeRouteIndex(route OrderedRootSpanNativeRoute) (int, bool) {
+	switch route {
+	case OrderedRootSpanNativeRouteDirectPublish:
+		return 0, true
+	case OrderedRootSpanNativeRouteGroupedPublish:
+		return 1, true
+	case OrderedRootSpanNativeRouteSystemDeltaBuilderPublish:
+		return 2, true
+	case OrderedRootSpanNativeRouteCommandWALPublish:
+		return 3, true
+	case OrderedRootSpanNativeRouteCollectionBufferedRoots:
+		return 4, true
+	case OrderedRootSpanNativeRouteOverlayColdBuild:
+		return 5, true
+	case OrderedRootSpanNativeRouteMultiIndexGroupPublish:
+		return 6, true
+	case OrderedRootSpanNativeRouteDeltaBatchPublish:
+		return 7, true
+	case OrderedRootSpanNativeRouteReadOnlyPrepare:
+		return 8, true
+	default:
+		return 0, false
+	}
+}
+
 func orderedRootSpanNativeOpsAndSpans(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int) (uint64, uint64) {
 	ops := summary.Ops
 	if ops <= 0 {
@@ -353,37 +418,65 @@ func (db *DB) observeOrderedRootSpanNativeEligibility(row OrderedRootSpanNativeT
 	if db == nil {
 		return
 	}
+	routeCounters := db.orderedRootSpanNativeRouteCountersFor(row.Route)
+	if routeCounters != nil {
+		routeCounters.observations.Add(1)
+	}
 	if row.Candidate {
 		if row.Ops > 0 {
 			db.orderedRootSpanNativeCandidateOps.Add(row.Ops)
+			if routeCounters != nil {
+				routeCounters.candidateOps.Add(row.Ops)
+			}
 		}
 		if row.Spans > 0 {
 			db.orderedRootSpanNativeCandidateSpans.Add(row.Spans)
+			if routeCounters != nil {
+				routeCounters.candidateSpans.Add(row.Spans)
+			}
 		}
 	}
 	if row.Eligible {
 		if row.Ops > 0 {
 			db.orderedRootSpanNativeEligibleOps.Add(row.Ops)
+			if routeCounters != nil {
+				routeCounters.eligibleOps.Add(row.Ops)
+			}
 		}
 		if row.Spans > 0 {
 			db.orderedRootSpanNativeEligibleSpans.Add(row.Spans)
+			if routeCounters != nil {
+				routeCounters.eligibleSpans.Add(row.Spans)
+			}
 		}
 	}
 	if row.Used {
 		if row.Ops > 0 {
 			db.orderedRootSpanNativeUsedOps.Add(row.Ops)
+			if routeCounters != nil {
+				routeCounters.usedOps.Add(row.Ops)
+			}
 		}
 		if row.Spans > 0 {
 			db.orderedRootSpanNativeUsedSpans.Add(row.Spans)
+			if routeCounters != nil {
+				routeCounters.usedSpans.Add(row.Spans)
+			}
 		}
 		return
 	}
 	if !row.Eligible {
 		if row.Ops > 0 {
 			db.orderedRootSpanNativeIneligibleOps.Add(row.Ops)
+			if routeCounters != nil {
+				routeCounters.ineligibleOps.Add(row.Ops)
+			}
 		}
 		if row.Spans > 0 {
 			db.orderedRootSpanNativeIneligibleSpans.Add(row.Spans)
+			if routeCounters != nil {
+				routeCounters.ineligibleSpans.Add(row.Spans)
+			}
 		}
 	}
 	reason, ok := ParseFlushSpanRunFallbackReason(row.FallbackReason)
@@ -392,12 +485,30 @@ func (db *DB) observeOrderedRootSpanNativeEligibility(row OrderedRootSpanNativeT
 	}
 	db.orderedRootSpanNativeFallbacks.Add(1)
 	db.orderedRootSpanNativeFallbackReasonCounts[reason].Add(1)
+	if routeCounters != nil {
+		routeCounters.fallbacks.Add(1)
+		routeCounters.fallbackReasonCounts[reason].Add(1)
+	}
 	if row.Ops > 0 {
 		db.orderedRootSpanNativeFallbackOps[reason].Add(row.Ops)
+		if routeCounters != nil {
+			routeCounters.fallbackOps[reason].Add(row.Ops)
+		}
 	}
 	if row.Spans > 0 {
 		db.orderedRootSpanNativeFallbackSpans[reason].Add(row.Spans)
+		if routeCounters != nil {
+			routeCounters.fallbackSpans[reason].Add(row.Spans)
+		}
 	}
+}
+
+func (db *DB) orderedRootSpanNativeRouteCountersFor(route OrderedRootSpanNativeRoute) *orderedRootSpanNativeRouteCounters {
+	idx, ok := orderedRootSpanNativeRouteIndex(route)
+	if db == nil || !ok {
+		return nil
+	}
+	return &db.orderedRootSpanNativeRouteCounters[idx]
 }
 
 func (db *DB) observeOrderedRootSpanNativeApplyResult(route OrderedRootSpanNativeRoute, context string, result zipper.ApplyResult, err error, fallbackReason string) {
@@ -439,6 +550,29 @@ func (db *DB) appendOrderedRootSpanNativeStats(stats map[string]string) {
 		stats[prefix+"fallback.reason."+name+".count_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackReasonCounts[reason].Load())
 		stats[prefix+"fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackOps[reason].Load())
 		stats[prefix+"fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackSpans[reason].Load())
+	}
+	for _, route := range orderedRootSpanNativeRoutes() {
+		routeCounters := db.orderedRootSpanNativeRouteCountersFor(route)
+		if routeCounters == nil {
+			continue
+		}
+		routePrefix := prefix + "route." + string(route) + "."
+		stats[routePrefix+"observations_total"] = fmt.Sprintf("%d", routeCounters.observations.Load())
+		stats[routePrefix+"candidate_ops_total"] = fmt.Sprintf("%d", routeCounters.candidateOps.Load())
+		stats[routePrefix+"candidate_spans_total"] = fmt.Sprintf("%d", routeCounters.candidateSpans.Load())
+		stats[routePrefix+"eligible_ops_total"] = fmt.Sprintf("%d", routeCounters.eligibleOps.Load())
+		stats[routePrefix+"eligible_spans_total"] = fmt.Sprintf("%d", routeCounters.eligibleSpans.Load())
+		stats[routePrefix+"used_ops_total"] = fmt.Sprintf("%d", routeCounters.usedOps.Load())
+		stats[routePrefix+"used_spans_total"] = fmt.Sprintf("%d", routeCounters.usedSpans.Load())
+		stats[routePrefix+"ineligible_ops_total"] = fmt.Sprintf("%d", routeCounters.ineligibleOps.Load())
+		stats[routePrefix+"ineligible_spans_total"] = fmt.Sprintf("%d", routeCounters.ineligibleSpans.Load())
+		stats[routePrefix+"fallbacks_total"] = fmt.Sprintf("%d", routeCounters.fallbacks.Load())
+		for _, reason := range FlushSpanRunFallbackReasons() {
+			name := reason.String()
+			stats[routePrefix+"fallback.reason."+name+".count_total"] = fmt.Sprintf("%d", routeCounters.fallbackReasonCounts[reason].Load())
+			stats[routePrefix+"fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", routeCounters.fallbackOps[reason].Load())
+			stats[routePrefix+"fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", routeCounters.fallbackSpans[reason].Load())
+		}
 	}
 	for _, row := range db.OrderedRootSpanNativeTriageSnapshot() {
 		routePrefix := prefix + "triage.route." + string(row.Route) + "."

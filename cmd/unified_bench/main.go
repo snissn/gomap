@@ -6694,17 +6694,6 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "publish.ordered_root_delta_group.span_native.fallback.root_mismatch_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.root_mismatch.ops_total"}},
 		{label: "publish.ordered_root_delta_group.span_native.fallback.unknown_count_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.unknown.count_total"}},
 		{label: "publish.ordered_root_delta_group.span_native.fallback.unknown_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.unknown.ops_total"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.delta_batch.status", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.status"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.delta_batch.fallback_reason", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.fallback_reason"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.delta_batch.admission_reason", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.admission_reason"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.command_wal.status", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.command_wal_publish.status"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.command_wal.fallback_reason", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.command_wal_publish.fallback_reason"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.collection_buffered_roots.status", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.collection_buffered_roots.status"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.collection_buffered_roots.fallback_reason", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.collection_buffered_roots.fallback_reason"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.overlay_cold_build.status", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.overlay_cold_build.status"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.overlay_cold_build.fallback_reason", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.overlay_cold_build.fallback_reason"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.multi_index_group.status", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.multi_index_group_publish.status"}},
-		{label: "publish.ordered_root_delta_group.span_native.triage.multi_index_group.fallback_reason", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route.multi_index_group_publish.fallback_reason"}},
 		{label: "publish.ordered_root_delta_group.root_apply_calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total"}},
 		{label: "publish.ordered_root_delta_group.root_apply_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ns_total"}},
 		{label: "publish.ordered_root_delta_group.root_apply_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ops_total"}},
@@ -6716,6 +6705,71 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "publish.ordered_root_delta_group.publish_prepare_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.publish_prepare_ns_total"}},
 		{label: "publish.ordered_root_delta_group.write_lock_wait_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total"}},
 		{label: "publish.ordered_root_delta_group.write_lock_hold_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total"}},
+	}
+	orderedRootRoutes := []string{
+		string(treedbdb.OrderedRootSpanNativeRouteDirectPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteGroupedPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteSystemDeltaBuilderPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteCommandWALPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteCollectionBufferedRoots),
+		string(treedbdb.OrderedRootSpanNativeRouteOverlayColdBuild),
+		string(treedbdb.OrderedRootSpanNativeRouteMultiIndexGroupPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteDeltaBatchPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteReadOnlyPrepare),
+	}
+	for _, route := range orderedRootRoutes {
+		for _, field := range []string{
+			"observations_total",
+			"candidate_ops_total",
+			"eligible_ops_total",
+			"used_ops_total",
+			"ineligible_ops_total",
+			"fallbacks_total",
+			"fallback.reason.span_native_not_implemented.count_total",
+			"fallback.reason.span_native_not_implemented.ops_total",
+			"fallback.reason.route_ineligible.count_total",
+			"fallback.reason.route_ineligible.ops_total",
+			"fallback.reason.disabled.count_total",
+			"fallback.reason.disabled.ops_total",
+			"fallback.reason.admission_policy_decline.count_total",
+			"fallback.reason.admission_policy_decline.ops_total",
+			"fallback.reason.cold_build.ops_total",
+			"fallback.reason.validation_failed.ops_total",
+			"fallback.reason.range_delete_barrier.ops_total",
+			"fallback.reason.inexact_leaf_spans.ops_total",
+			"fallback.reason.unknown.count_total",
+			"fallback.reason.unknown.ops_total",
+		} {
+			keys = append(keys, struct {
+				label string
+				alts  []string
+			}{
+				label: "publish.ordered_root_delta_group.span_native.route." + route + "." + field,
+				alts:  []string{"treedb.publish.ordered_root_delta_group.span_native.route." + route + "." + field},
+			})
+		}
+		for _, field := range []string{
+			"context",
+			"status",
+			"candidate",
+			"eligible",
+			"used",
+			"fallback_reason",
+			"fallback_class",
+			"admission_policy",
+			"admission_admitted",
+			"admission_reason",
+			"selected_workers",
+			"detail",
+		} {
+			keys = append(keys, struct {
+				label string
+				alts  []string
+			}{
+				label: "publish.ordered_root_delta_group.span_native.triage." + route + "." + field,
+				alts:  []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route." + route + "." + field},
+			})
+		}
 	}
 	var sb strings.Builder
 	for _, inst := range instances {

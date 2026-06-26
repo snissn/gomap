@@ -5769,6 +5769,27 @@ func deriveTreeDBPhaseMetrics(delta map[string]float64, operations, driverCalls 
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_range_delete_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.range_delete_barrier.ops_total", operations)
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_inexact_leaf_spans_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.inexact_leaf_spans.ops_total", operations)
 	addPerOperationMetric(metrics, "ordered_root_span_native_fallback_unknown_ops/doc", delta, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.unknown.ops_total", operations)
+	for _, route := range []string{
+		string(backenddb.OrderedRootSpanNativeRouteDirectPublish),
+		string(backenddb.OrderedRootSpanNativeRouteGroupedPublish),
+		string(backenddb.OrderedRootSpanNativeRouteSystemDeltaBuilderPublish),
+		string(backenddb.OrderedRootSpanNativeRouteCommandWALPublish),
+		string(backenddb.OrderedRootSpanNativeRouteCollectionBufferedRoots),
+		string(backenddb.OrderedRootSpanNativeRouteOverlayColdBuild),
+		string(backenddb.OrderedRootSpanNativeRouteMultiIndexGroupPublish),
+		string(backenddb.OrderedRootSpanNativeRouteDeltaBatchPublish),
+		string(backenddb.OrderedRootSpanNativeRouteReadOnlyPrepare),
+	} {
+		metricPrefix := "ordered_root_span_native_route_" + route + "_"
+		statPrefix := "treedb.publish.ordered_root_delta_group.span_native.route." + route + "."
+		addPerOperationMetric(metrics, metricPrefix+"observations/doc", delta, statPrefix+"observations_total", operations)
+		addPerOperationMetric(metrics, metricPrefix+"candidate_ops/doc", delta, statPrefix+"candidate_ops_total", operations)
+		addPerOperationMetric(metrics, metricPrefix+"eligible_ops/doc", delta, statPrefix+"eligible_ops_total", operations)
+		addPerOperationMetric(metrics, metricPrefix+"used_ops/doc", delta, statPrefix+"used_ops_total", operations)
+		addPerOperationMetric(metrics, metricPrefix+"ineligible_ops/doc", delta, statPrefix+"ineligible_ops_total", operations)
+		addPerOperationMetric(metrics, metricPrefix+"fallbacks/doc", delta, statPrefix+"fallbacks_total", operations)
+		addRatioMetric(metrics, metricPrefix+"used_ops/candidate_op", delta, statPrefix+"used_ops_total", statPrefix+"candidate_ops_total")
+	}
 	addPerOperationMetric(metrics, "indexed_flush_calls/doc", delta, "treedb.collections.write_domain.indexed_flush.calls_total", operations)
 	addRatioMetric(metrics, "indexed_flush_docs/batch", delta, "treedb.collections.write_domain.indexed_flush.docs_total", "treedb.collections.write_domain.indexed_flush.calls_total")
 	addRatioMetric(metrics, "indexed_flush_units/batch", delta, "treedb.collections.write_domain.indexed_flush.units_total", "treedb.collections.write_domain.indexed_flush.calls_total")
