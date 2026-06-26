@@ -159,6 +159,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 	backend, collection := openBenchmarkCollection(b, fmt.Sprintf("bench_shape_insert_%d", indexCount), collectionShapeIndexes(indexCount)...)
 	targetBatchSize := benchmarkBatchSize(b)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
+	startTreeDBStats := backend.Stats()
 	var insertElapsed time.Duration
 	var bufferedFlushElapsed time.Duration
 	var syncElapsed time.Duration
@@ -246,6 +247,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
 	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
+	benchmarkReportTreeDBSpanNativeStatDeltas(b, backend, startTreeDBStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }
@@ -273,6 +275,7 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 	backend, collection := openBenchmarkCollection(b, fmt.Sprintf("bench_shape_single_string_%d", indexCount), collectionSingleStringIndexes(indexCount)...)
 	targetBatchSize := benchmarkBatchSize(b)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
+	startTreeDBStats := backend.Stats()
 	var insertElapsed time.Duration
 	var syncElapsed time.Duration
 	var insertStats collections.CollectionInsertStats
@@ -317,6 +320,7 @@ func benchmarkCollectionShapeSingleStringInsertBatch(b *testing.B, indexCount in
 		benchmarkReportCheckpointSplit(b, b.N, insertElapsed, syncElapsed)
 	}
 	benchmarkReportCollectionInsertStats(b, b.N, batches, insertStats)
+	benchmarkReportTreeDBSpanNativeStatDeltas(b, backend, startTreeDBStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
 }

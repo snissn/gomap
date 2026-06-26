@@ -102,6 +102,35 @@ func TestCollectionBenchProfileForEngineRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestBenchmarkStatUint64Delta(t *testing.T) {
+	before := map[string]string{"treedb.test.counter": "17"}
+	after := map[string]string{"treedb.test.counter": "42"}
+	if got := benchmarkStatUint64Delta(t, before, after, "treedb.test.counter"); got != 25 {
+		t.Fatalf("delta=%d want 25", got)
+	}
+}
+
+func TestCollectionSpanNativeBenchmarkStatMetricsAreNamed(t *testing.T) {
+	seenKeys := make(map[string]struct{}, len(collectionSpanNativeBenchmarkStatMetrics))
+	seenUnits := make(map[string]struct{}, len(collectionSpanNativeBenchmarkStatMetrics))
+	for _, metric := range collectionSpanNativeBenchmarkStatMetrics {
+		if metric.key == "" {
+			t.Fatal("empty span-native benchmark stat key")
+		}
+		if metric.unit == "" {
+			t.Fatalf("empty report unit for stat %q", metric.key)
+		}
+		if _, ok := seenKeys[metric.key]; ok {
+			t.Fatalf("duplicate span-native benchmark stat key %q", metric.key)
+		}
+		seenKeys[metric.key] = struct{}{}
+		if _, ok := seenUnits[metric.unit]; ok {
+			t.Fatalf("duplicate span-native benchmark report unit %q", metric.unit)
+		}
+		seenUnits[metric.unit] = struct{}{}
+	}
+}
+
 func benchmarkBoolEnv(tb testing.TB, name string, def bool) bool {
 	tb.Helper()
 
@@ -190,12 +219,69 @@ func benchmarkStatUint64(tb testing.TB, stats map[string]string, key string) uin
 	return n
 }
 
+func benchmarkStatUint64Delta(tb testing.TB, before, after map[string]string, key string) uint64 {
+	tb.Helper()
+
+	start := benchmarkStatUint64(tb, before, key)
+	end := benchmarkStatUint64(tb, after, key)
+	if end < start {
+		tb.Fatalf("benchmark stat %q moved backwards: start=%d end=%d", key, start, end)
+	}
+	return end - start
+}
+
 func benchmarkNativeProbeFallbackCounters(tb testing.TB, backend *backenddb.DB) (key, prefix uint64) {
 	tb.Helper()
 
 	stats := backend.Stats()
 	return benchmarkStatUint64(tb, stats, "treedb.native_fastpath.per_item_key_probe_fallback_count"),
 		benchmarkStatUint64(tb, stats, "treedb.native_fastpath.per_item_prefix_probe_fallback_count")
+}
+
+type collectionBenchmarkStatMetric struct {
+	key  string
+	unit string
+}
+
+var collectionSpanNativeBenchmarkStatMetrics = []collectionBenchmarkStatMetric{
+	{key: "treedb.flush_apply.span_native.candidate_ops_total", unit: "flush_span_candidate_ops"},
+	{key: "treedb.flush_apply.span_native.eligible_ops_total", unit: "flush_span_eligible_ops"},
+	{key: "treedb.flush_apply.span_native.used_ops_total", unit: "flush_span_used_ops"},
+	{key: "treedb.flush_apply.span_native.ineligible_ops_total", unit: "flush_span_ineligible_ops"},
+	{key: "treedb.flush_apply.span_native.fallbacks_total", unit: "flush_span_fallbacks"},
+	{key: "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total", unit: "flush_span_not_impl_fallback_ops"},
+	{key: "treedb.flush_apply.span_native.fallback.reason.unknown.ops_total", unit: "flush_span_unknown_fallback_ops"},
+	{key: "treedb.flush_apply.span_native.scheduler.ready_tasks_total", unit: "flush_span_ready_tasks"},
+	{key: "treedb.flush_apply.span_native.scheduler.dispatched_tasks_total", unit: "flush_span_dispatched_tasks"},
+	{key: "treedb.flush_apply.span_native.scheduler.completed_tasks_total", unit: "flush_span_completed_tasks"},
+	{key: "treedb.flush_apply.span_native.scheduler.worker_busy_ns_total", unit: "flush_span_worker_busy_ns"},
+	{key: "treedb.flush_apply.span_native.scheduler.worker_idle_ns_total", unit: "flush_span_worker_idle_ns"},
+	{key: "treedb.flush_apply.span_native.scheduler.worker_wait_ns_total", unit: "flush_span_worker_wait_ns"},
+	{key: "treedb.publish.ordered_root_delta_group.calls_total", unit: "ordered_root_group_calls"},
+	{key: "treedb.publish.ordered_root_delta_group.roots_total", unit: "ordered_root_group_roots"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total", unit: "ordered_root_span_candidate_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.eligible_ops_total", unit: "ordered_root_span_eligible_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.used_ops_total", unit: "ordered_root_span_used_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.ineligible_ops_total", unit: "ordered_root_span_ineligible_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.fallbacks_total", unit: "ordered_root_span_fallbacks"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.span_native_not_implemented.ops_total", unit: "ordered_root_not_impl_fallback_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.unknown.ops_total", unit: "ordered_root_unknown_fallback_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.used_ops_total", unit: "ordered_root_collection_route_used_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.used_ops_total", unit: "ordered_root_multi_index_route_used_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.used_ops_total", unit: "ordered_root_command_wal_route_used_ops"},
+	{key: "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.used_ops_total", unit: "ordered_root_system_delta_route_used_ops"},
+}
+
+func benchmarkReportTreeDBSpanNativeStatDeltas(b *testing.B, backend *backenddb.DB, before map[string]string) {
+	b.Helper()
+	if backend == nil || before == nil {
+		return
+	}
+	after := backend.Stats()
+	for _, metric := range collectionSpanNativeBenchmarkStatMetrics {
+		delta := benchmarkStatUint64Delta(b, before, after, metric.key)
+		b.ReportMetric(float64(delta), metric.unit)
+	}
 }
 
 func benchmarkReportNativeProbeFallbackDeltas(b *testing.B, backend *backenddb.DB, startKey, startPrefix uint64) {
