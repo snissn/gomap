@@ -52,7 +52,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_checkpoint_between_tests", "unified-bench.log"), "Disk Usage (End of Run)\nTreeDB:\n  maindb/index.db: 1 MiB\n  maindb/leaf_vlog: total=2 MiB files=1 value=2 MiB other=0 B\n")
 	writeFile(t, filepath.Join(root, "collections_sqlite_canonical_1m", "indexes_0", "benchmark_results.json"), `{
   "results": [
-    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":1000,"bytes_per_doc":10,"docs_per_sec":10000,"measurement_kind":"go_benchmark"},
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":1000,"bytes_per_doc":10,"docs_per_sec":10000,"measurement_kind":"go_benchmark","production_evidence":{"producer_route":"command_wal_publish","producer_route_candidate_ops":100,"producer_route_used_ops":100,"producer_route_fallbacks":0,"storage_policy":"data_outer=true,index_outer=true","gomaxprocs":16,"physical_cores":8,"flush_admission_effective_concurrency":8,"flush_admission_admitted":true,"flush_admission_span_native":true,"flush_admission_backlog_coalescing":true,"flush_span_fallbacks":0,"ordered_root_span_fallbacks":0}},
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"offline_rewrite","maintenance_mode":"offline_rewrite","total_bytes":700,"bytes_per_doc":7,"measurement_kind":"fixture","extra":{"index_db_bytes":"400","leaf_vlog_bytes":"300"}},
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"exhaustive_compact","maintenance_mode":"exhaustive_compact","total_bytes":450,"bytes_per_doc":4.5,"measurement_kind":"fixture"},
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"full_leafgen_pack_gc","maintenance_mode":"full_leafgen_pack_gc","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
@@ -209,7 +209,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 			t.Fatalf("report still contains unwanted split/missing raw-wire marker %q\n%s", unwanted, html)
 		}
 	}
-	if strings.Contains(html, "<details open") {
+	if strings.Contains(html, "<details open><summary>Raw ") {
 		t.Fatalf("raw tables should be hidden by default\n%s", html)
 	}
 }
@@ -463,6 +463,64 @@ func TestLoadCollectionsSuppressesCompactedClaimsWithoutExhaustiveEvidence(t *te
 	}
 }
 
+func TestLoadCollectionsSuppressesCompactedClaimsWithoutProductionEvidence(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "indexes_0", "benchmark_results.json"), `{
+  "results": [
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"exhaustive_compact","maintenance_mode":"exhaustive_compact","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
+    {"config_name":"sqlite_native_columns_0_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"}
+  ],
+  "comparisons": [
+    {"comparison_name":"tree_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"exhaustive_compact","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":5,"sqlite_bytes_per_doc":20,"smaller_ratio":4,"comparison_basis":"legacy fixture"}
+  ],
+  "guardrail_checks": []
+}`)
+
+	rows, comps, warnings := loadCollections(root)
+	if len(rows) == 0 {
+		t.Fatalf("expected rows to remain available for lifecycle auditing")
+	}
+	if len(comps) != 0 {
+		t.Fatalf("missing production evidence should suppress comparisons, got %#v", comps)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "matching production evidence") {
+		t.Fatalf("expected production-evidence suppression warning, got %#v", warnings)
+	}
+}
+
+func TestLoadCollectionsKeepsNoSecondaryIndexFlushProductionEvidence(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "indexes_0", "benchmark_results.json"), `{
+  "results": [
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":10000,"bytes_per_doc":100,"measurement_kind":"go_benchmark","production_evidence":{"storage_policy":"data_outer=true,index_outer=true","gomaxprocs":16,"physical_cores":8,"flush_admission_effective_concurrency":8,"flush_admission_admitted":true,"flush_admission_span_native":true,"flush_admission_backlog_coalescing":true,"flush_span_candidate_ops":2,"flush_span_used_ops":2,"flush_span_fallbacks":0,"ordered_root_span_fallbacks":0}},
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"exhaustive_compact","maintenance_mode":"exhaustive_compact","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
+    {"config_name":"sqlite_native_columns_0_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"}
+  ],
+  "comparisons": [
+    {"comparison_name":"tree_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"exhaustive_compact","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":5,"sqlite_bytes_per_doc":20,"smaller_ratio":4,"comparison_basis":"fixture"}
+  ],
+  "guardrail_checks": []
+}`)
+
+	rows, comps, warnings := loadCollections(root)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings with no-secondary-index flush evidence: %#v", warnings)
+	}
+	if len(comps) != 1 {
+		t.Fatalf("no-secondary-index flush evidence should preserve comparison, got %#v", comps)
+	}
+	html := renderHTML(reportData{
+		Config:                config{Title: "production evidence", RunRoot: t.TempDir()},
+		Collections:           rows,
+		CollectionComparisons: comps,
+	})
+	for _, want := range []string{"TreeDB production evidence", "effective concurrency", "data_outer=true,index_outer=true"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("production evidence report missing %q\n%s", want, html)
+		}
+	}
+}
+
 func TestLoadCollectionsRequiresExhaustiveEvidenceForComparedIndex(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "indexes_2", "benchmark_results.json"), `{
@@ -492,6 +550,7 @@ func TestLoadCollectionsKeepsCompactedClaimsWithMatchingExhaustiveEvidence(t *te
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "indexes_2", "benchmark_results.json"), `{
   "results": [
+    {"config_name":"treedb_template_v1_collection_2_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":2,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":10000,"bytes_per_doc":100,"measurement_kind":"go_benchmark","production_evidence":{"producer_route":"command_wal_publish","producer_route_candidate_ops":100,"producer_route_used_ops":100,"producer_route_fallbacks":0,"storage_policy":"data_outer=true,index_outer=true","gomaxprocs":16,"physical_cores":8,"flush_admission_effective_concurrency":8,"flush_admission_admitted":true,"flush_admission_span_native":true,"flush_admission_backlog_coalescing":true,"flush_span_fallbacks":0,"ordered_root_span_fallbacks":0}},
     {"config_name":"treedb_template_v1_collection_2_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":2,"document_count":100,"phase":"exhaustive_compact","maintenance_mode":"exhaustive_compact","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
     {"config_name":"sqlite_native_columns_2_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":2,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"}
   ],
@@ -501,7 +560,7 @@ func TestLoadCollectionsKeepsCompactedClaimsWithMatchingExhaustiveEvidence(t *te
   "guardrail_checks": []
 }`)
 
-	_, comps, warnings := loadCollections(root)
+	rows, comps, warnings := loadCollections(root)
 	if len(warnings) != 0 {
 		t.Fatalf("unexpected warnings with matching exhaustive evidence: %#v", warnings)
 	}
@@ -510,6 +569,16 @@ func TestLoadCollectionsKeepsCompactedClaimsWithMatchingExhaustiveEvidence(t *te
 	}
 	if comps[0].TreeDBConfig != "treedb_template_v1_collection_2_indexes" {
 		t.Fatalf("unexpected comparison preserved: %#v", comps[0])
+	}
+	html := renderHTML(reportData{
+		Config:                config{Title: "production evidence", RunRoot: t.TempDir()},
+		Collections:           rows,
+		CollectionComparisons: comps,
+	})
+	for _, want := range []string{"TreeDB production evidence", "command_wal_publish", "effective concurrency"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("production evidence report missing %q\n%s", want, html)
+		}
 	}
 }
 

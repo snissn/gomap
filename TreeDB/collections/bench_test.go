@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -102,6 +103,35 @@ func TestCollectionBenchProfileForEngineRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestBenchmarkStatUint64Delta(t *testing.T) {
+	before := map[string]string{"treedb.test.counter": "17"}
+	after := map[string]string{"treedb.test.counter": "42"}
+	if got := benchmarkStatUint64Delta(t, before, after, "treedb.test.counter"); got != 25 {
+		t.Fatalf("delta=%d want 25", got)
+	}
+}
+
+func TestCollectionSpanNativeBenchmarkStatMetricsAreNamed(t *testing.T) {
+	seenKeys := make(map[string]struct{}, len(collectionSpanNativeBenchmarkStatMetrics))
+	seenUnits := make(map[string]struct{}, len(collectionSpanNativeBenchmarkStatMetrics))
+	for _, metric := range collectionSpanNativeBenchmarkStatMetrics {
+		if metric.key == "" {
+			t.Fatal("empty span-native benchmark stat key")
+		}
+		if metric.unit == "" {
+			t.Fatalf("empty report unit for stat %q", metric.key)
+		}
+		if _, ok := seenKeys[metric.key]; ok {
+			t.Fatalf("duplicate span-native benchmark stat key %q", metric.key)
+		}
+		seenKeys[metric.key] = struct{}{}
+		if _, ok := seenUnits[metric.unit]; ok {
+			t.Fatalf("duplicate span-native benchmark report unit %q", metric.unit)
+		}
+		seenUnits[metric.unit] = struct{}{}
+	}
+}
+
 func benchmarkBoolEnv(tb testing.TB, name string, def bool) bool {
 	tb.Helper()
 
@@ -190,12 +220,179 @@ func benchmarkStatUint64(tb testing.TB, stats map[string]string, key string) uin
 	return n
 }
 
+func benchmarkStatUint64Delta(tb testing.TB, before, after map[string]string, key string) uint64 {
+	tb.Helper()
+
+	start := benchmarkStatUint64(tb, before, key)
+	end := benchmarkStatUint64(tb, after, key)
+	if end < start {
+		tb.Fatalf("benchmark stat %q moved backwards: start=%d end=%d", key, start, end)
+	}
+	return end - start
+}
+
 func benchmarkNativeProbeFallbackCounters(tb testing.TB, backend *backenddb.DB) (key, prefix uint64) {
 	tb.Helper()
 
 	stats := backend.Stats()
 	return benchmarkStatUint64(tb, stats, "treedb.native_fastpath.per_item_key_probe_fallback_count"),
 		benchmarkStatUint64(tb, stats, "treedb.native_fastpath.per_item_prefix_probe_fallback_count")
+}
+
+type collectionBenchmarkStatMetric struct {
+	key  string
+	unit string
+}
+
+var collectionSpanNativeBenchmarkStatMetrics = collectionSpanNativeBenchmarkMetrics()
+
+func collectionSpanNativeBenchmarkMetrics() []collectionBenchmarkStatMetric {
+	metrics := []collectionBenchmarkStatMetric{
+		{key: "treedb.flush_apply.span_native.candidate_ops_total", unit: "flush_span_candidate_ops"},
+		{key: "treedb.flush_apply.span_native.eligible_ops_total", unit: "flush_span_eligible_ops"},
+		{key: "treedb.flush_apply.span_native.used_ops_total", unit: "flush_span_used_ops"},
+		{key: "treedb.flush_apply.span_native.ineligible_ops_total", unit: "flush_span_ineligible_ops"},
+		{key: "treedb.flush_apply.span_native.fallbacks_total", unit: "flush_span_fallbacks"},
+		{key: "treedb.flush_apply.span_native.scheduler.ready_tasks_total", unit: "flush_span_ready_tasks"},
+		{key: "treedb.flush_apply.span_native.scheduler.dispatched_tasks_total", unit: "flush_span_dispatched_tasks"},
+		{key: "treedb.flush_apply.span_native.scheduler.completed_tasks_total", unit: "flush_span_completed_tasks"},
+		{key: "treedb.flush_apply.span_native.scheduler.worker_busy_ns_total", unit: "flush_span_worker_busy_ns"},
+		{key: "treedb.flush_apply.span_native.scheduler.worker_idle_ns_total", unit: "flush_span_worker_idle_ns"},
+		{key: "treedb.flush_apply.span_native.scheduler.worker_wait_ns_total", unit: "flush_span_worker_wait_ns"},
+		{key: "treedb.publish.ordered_root_delta_group.calls_total", unit: "ordered_root_group_calls"},
+		{key: "treedb.publish.ordered_root_delta_group.roots_total", unit: "ordered_root_group_roots"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total", unit: "ordered_root_span_candidate_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.eligible_ops_total", unit: "ordered_root_span_eligible_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.used_ops_total", unit: "ordered_root_span_used_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.ineligible_ops_total", unit: "ordered_root_span_ineligible_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.fallbacks_total", unit: "ordered_root_span_fallbacks"},
+	}
+	for _, reason := range backenddb.FlushSpanRunFallbackReasons() {
+		name := reason.String()
+		metrics = append(metrics,
+			collectionBenchmarkStatMetric{
+				key:  "treedb.flush_apply.span_native.fallback.reason." + name + ".ops_total",
+				unit: "flush_span_fallback_" + name + "_ops",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.flush_apply.span_native.fallback.reason." + name + ".spans_total",
+				unit: "flush_span_fallback_" + name + "_spans",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.publish.ordered_root_delta_group.span_native.fallback.reason." + name + ".count_total",
+				unit: "ordered_root_span_fallback_" + name + "_count",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.publish.ordered_root_delta_group.span_native.fallback.reason." + name + ".ops_total",
+				unit: "ordered_root_span_fallback_" + name + "_ops",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.publish.ordered_root_delta_group.span_native.fallback.reason." + name + ".spans_total",
+				unit: "ordered_root_span_fallback_" + name + "_spans",
+			},
+		)
+	}
+	for _, route := range collectionOrderedRootSpanNativeBenchmarkRoutes() {
+		routeName := string(route)
+		routePrefix := "treedb.publish.ordered_root_delta_group.span_native.route." + routeName + "."
+		unitPrefix := "ordered_root_route_" + routeName + "_"
+		metrics = append(metrics,
+			collectionBenchmarkStatMetric{key: routePrefix + "observations_total", unit: unitPrefix + "observations"},
+			collectionBenchmarkStatMetric{key: routePrefix + "candidate_ops_total", unit: unitPrefix + "candidate_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "candidate_spans_total", unit: unitPrefix + "candidate_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "eligible_ops_total", unit: unitPrefix + "eligible_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "eligible_spans_total", unit: unitPrefix + "eligible_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "used_ops_total", unit: unitPrefix + "used_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "used_spans_total", unit: unitPrefix + "used_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "ineligible_ops_total", unit: unitPrefix + "ineligible_ops"},
+			collectionBenchmarkStatMetric{key: routePrefix + "ineligible_spans_total", unit: unitPrefix + "ineligible_spans"},
+			collectionBenchmarkStatMetric{key: routePrefix + "fallbacks_total", unit: unitPrefix + "fallbacks"},
+		)
+		for _, reason := range backenddb.FlushSpanRunFallbackReasons() {
+			reasonName := reason.String()
+			metrics = append(metrics,
+				collectionBenchmarkStatMetric{
+					key:  routePrefix + "fallback.reason." + reasonName + ".count_total",
+					unit: unitPrefix + "fallback_" + reasonName + "_count",
+				},
+				collectionBenchmarkStatMetric{
+					key:  routePrefix + "fallback.reason." + reasonName + ".ops_total",
+					unit: unitPrefix + "fallback_" + reasonName + "_ops",
+				},
+				collectionBenchmarkStatMetric{
+					key:  routePrefix + "fallback.reason." + reasonName + ".spans_total",
+					unit: unitPrefix + "fallback_" + reasonName + "_spans",
+				},
+			)
+		}
+	}
+	return metrics
+}
+
+func collectionOrderedRootSpanNativeBenchmarkRoutes() []backenddb.OrderedRootSpanNativeRoute {
+	return []backenddb.OrderedRootSpanNativeRoute{
+		backenddb.OrderedRootSpanNativeRouteDirectPublish,
+		backenddb.OrderedRootSpanNativeRouteGroupedPublish,
+		backenddb.OrderedRootSpanNativeRouteSystemDeltaBuilderPublish,
+		backenddb.OrderedRootSpanNativeRouteCommandWALPublish,
+		backenddb.OrderedRootSpanNativeRouteCollectionBufferedRoots,
+		backenddb.OrderedRootSpanNativeRouteOverlayColdBuild,
+		backenddb.OrderedRootSpanNativeRouteMultiIndexGroupPublish,
+		backenddb.OrderedRootSpanNativeRouteDeltaBatchPublish,
+		backenddb.OrderedRootSpanNativeRouteReadOnlyPrepare,
+	}
+}
+
+func benchmarkReportTreeDBSpanNativeStatDeltas(b *testing.B, backend *backenddb.DB, before map[string]string) {
+	b.Helper()
+	if backend == nil || before == nil {
+		return
+	}
+	after := backend.Stats()
+	b.ReportMetric(float64(runtime.GOMAXPROCS(0)), "gomaxprocs")
+	if physicalCores := backenddb.DetectPhysicalCores(); physicalCores > 0 {
+		b.ReportMetric(float64(physicalCores), "physical_cores")
+	}
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.flush_apply_concurrency_configured", "flush_admission_configured_concurrency")
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.flush_apply_concurrency", "flush_admission_effective_concurrency")
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.gomaxprocs", "flush_admission_gomaxprocs")
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.physical_cores", "flush_admission_physical_cores")
+	benchmarkReportTreeDBStatBool(b, after, "treedb.flush_admission.admitted", "flush_admission_admitted")
+	benchmarkReportTreeDBStatBool(b, after, "treedb.flush_admission.flush_apply_span_native", "flush_admission_span_native")
+	benchmarkReportTreeDBStatBool(b, after, "treedb.flush_admission.flush_backlog_coalescing", "flush_admission_backlog_coalescing")
+	for _, metric := range collectionSpanNativeBenchmarkStatMetrics {
+		delta := benchmarkStatUint64Delta(b, before, after, metric.key)
+		b.ReportMetric(float64(delta), metric.unit)
+	}
+}
+
+func benchmarkReportTreeDBStatUint64(b *testing.B, stats map[string]string, key, unit string) {
+	b.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		return
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		b.Fatalf("benchmark stat %q=%q is not uint64: %v", key, raw, err)
+	}
+	b.ReportMetric(float64(n), unit)
+}
+
+func benchmarkReportTreeDBStatBool(b *testing.B, stats map[string]string, key, unit string) {
+	b.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		return
+	}
+	switch raw {
+	case "true":
+		b.ReportMetric(1, unit)
+	case "false":
+		b.ReportMetric(0, unit)
+	default:
+		b.Fatalf("benchmark stat %q=%q is not bool", key, raw)
+	}
 }
 
 func benchmarkReportNativeProbeFallbackDeltas(b *testing.B, backend *backenddb.DB, startKey, startPrefix uint64) {
