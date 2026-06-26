@@ -243,33 +243,59 @@ type collectionBenchmarkStatMetric struct {
 	unit string
 }
 
-var collectionSpanNativeBenchmarkStatMetrics = []collectionBenchmarkStatMetric{
-	{key: "treedb.flush_apply.span_native.candidate_ops_total", unit: "flush_span_candidate_ops"},
-	{key: "treedb.flush_apply.span_native.eligible_ops_total", unit: "flush_span_eligible_ops"},
-	{key: "treedb.flush_apply.span_native.used_ops_total", unit: "flush_span_used_ops"},
-	{key: "treedb.flush_apply.span_native.ineligible_ops_total", unit: "flush_span_ineligible_ops"},
-	{key: "treedb.flush_apply.span_native.fallbacks_total", unit: "flush_span_fallbacks"},
-	{key: "treedb.flush_apply.span_native.fallback.reason.span_native_not_implemented.ops_total", unit: "flush_span_not_impl_fallback_ops"},
-	{key: "treedb.flush_apply.span_native.fallback.reason.unknown.ops_total", unit: "flush_span_unknown_fallback_ops"},
-	{key: "treedb.flush_apply.span_native.scheduler.ready_tasks_total", unit: "flush_span_ready_tasks"},
-	{key: "treedb.flush_apply.span_native.scheduler.dispatched_tasks_total", unit: "flush_span_dispatched_tasks"},
-	{key: "treedb.flush_apply.span_native.scheduler.completed_tasks_total", unit: "flush_span_completed_tasks"},
-	{key: "treedb.flush_apply.span_native.scheduler.worker_busy_ns_total", unit: "flush_span_worker_busy_ns"},
-	{key: "treedb.flush_apply.span_native.scheduler.worker_idle_ns_total", unit: "flush_span_worker_idle_ns"},
-	{key: "treedb.flush_apply.span_native.scheduler.worker_wait_ns_total", unit: "flush_span_worker_wait_ns"},
-	{key: "treedb.publish.ordered_root_delta_group.calls_total", unit: "ordered_root_group_calls"},
-	{key: "treedb.publish.ordered_root_delta_group.roots_total", unit: "ordered_root_group_roots"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total", unit: "ordered_root_span_candidate_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.eligible_ops_total", unit: "ordered_root_span_eligible_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.used_ops_total", unit: "ordered_root_span_used_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.ineligible_ops_total", unit: "ordered_root_span_ineligible_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.fallbacks_total", unit: "ordered_root_span_fallbacks"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.span_native_not_implemented.ops_total", unit: "ordered_root_not_impl_fallback_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.fallback.reason.unknown.ops_total", unit: "ordered_root_unknown_fallback_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.used_ops_total", unit: "ordered_root_collection_route_used_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.used_ops_total", unit: "ordered_root_multi_index_route_used_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.used_ops_total", unit: "ordered_root_command_wal_route_used_ops"},
-	{key: "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.used_ops_total", unit: "ordered_root_system_delta_route_used_ops"},
+var collectionSpanNativeBenchmarkStatMetrics = collectionSpanNativeBenchmarkMetrics()
+
+func collectionSpanNativeBenchmarkMetrics() []collectionBenchmarkStatMetric {
+	metrics := []collectionBenchmarkStatMetric{
+		{key: "treedb.flush_apply.span_native.candidate_ops_total", unit: "flush_span_candidate_ops"},
+		{key: "treedb.flush_apply.span_native.eligible_ops_total", unit: "flush_span_eligible_ops"},
+		{key: "treedb.flush_apply.span_native.used_ops_total", unit: "flush_span_used_ops"},
+		{key: "treedb.flush_apply.span_native.ineligible_ops_total", unit: "flush_span_ineligible_ops"},
+		{key: "treedb.flush_apply.span_native.fallbacks_total", unit: "flush_span_fallbacks"},
+		{key: "treedb.flush_apply.span_native.scheduler.ready_tasks_total", unit: "flush_span_ready_tasks"},
+		{key: "treedb.flush_apply.span_native.scheduler.dispatched_tasks_total", unit: "flush_span_dispatched_tasks"},
+		{key: "treedb.flush_apply.span_native.scheduler.completed_tasks_total", unit: "flush_span_completed_tasks"},
+		{key: "treedb.flush_apply.span_native.scheduler.worker_busy_ns_total", unit: "flush_span_worker_busy_ns"},
+		{key: "treedb.flush_apply.span_native.scheduler.worker_idle_ns_total", unit: "flush_span_worker_idle_ns"},
+		{key: "treedb.flush_apply.span_native.scheduler.worker_wait_ns_total", unit: "flush_span_worker_wait_ns"},
+		{key: "treedb.publish.ordered_root_delta_group.calls_total", unit: "ordered_root_group_calls"},
+		{key: "treedb.publish.ordered_root_delta_group.roots_total", unit: "ordered_root_group_roots"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total", unit: "ordered_root_span_candidate_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.eligible_ops_total", unit: "ordered_root_span_eligible_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.used_ops_total", unit: "ordered_root_span_used_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.ineligible_ops_total", unit: "ordered_root_span_ineligible_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.fallbacks_total", unit: "ordered_root_span_fallbacks"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.used_ops_total", unit: "ordered_root_collection_route_used_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.used_ops_total", unit: "ordered_root_multi_index_route_used_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.used_ops_total", unit: "ordered_root_command_wal_route_used_ops"},
+		{key: "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.used_ops_total", unit: "ordered_root_system_delta_route_used_ops"},
+	}
+	for _, reason := range backenddb.FlushSpanRunFallbackReasons() {
+		name := reason.String()
+		metrics = append(metrics,
+			collectionBenchmarkStatMetric{
+				key:  "treedb.flush_apply.span_native.fallback.reason." + name + ".ops_total",
+				unit: "flush_span_fallback_" + name + "_ops",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.flush_apply.span_native.fallback.reason." + name + ".spans_total",
+				unit: "flush_span_fallback_" + name + "_spans",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.publish.ordered_root_delta_group.span_native.fallback.reason." + name + ".count_total",
+				unit: "ordered_root_span_fallback_" + name + "_count",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.publish.ordered_root_delta_group.span_native.fallback.reason." + name + ".ops_total",
+				unit: "ordered_root_span_fallback_" + name + "_ops",
+			},
+			collectionBenchmarkStatMetric{
+				key:  "treedb.publish.ordered_root_delta_group.span_native.fallback.reason." + name + ".spans_total",
+				unit: "ordered_root_span_fallback_" + name + "_spans",
+			},
+		)
+	}
+	return metrics
 }
 
 func benchmarkReportTreeDBSpanNativeStatDeltas(b *testing.B, backend *backenddb.DB, before map[string]string) {
