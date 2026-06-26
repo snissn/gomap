@@ -47,12 +47,9 @@ func columnRetainedPayloadJSONFromJSONDocument(cfg ColumnStoreConfig, document [
 	case ColumnRetainedPayloadNone:
 		return []byte("{}"), nil
 	case ColumnRetainedPayloadNonColumn:
-		obj, err := decodeColumnJSONObject(document)
+		obj, err := columnRetainedPayloadJSONObjectFromJSONDocument(cfg, document)
 		if err != nil {
 			return nil, err
-		}
-		for _, col := range cfg.Columns {
-			deleteColumnJSONPath(obj, col.Path)
 		}
 		out, err := json.Marshal(obj)
 		if err != nil {
@@ -61,6 +58,24 @@ func columnRetainedPayloadJSONFromJSONDocument(cfg ColumnStoreConfig, document [
 		return out, nil
 	default:
 		return nil, fmt.Errorf("collections: unsupported retained payload policy %q", cfg.RetainedPayload)
+	}
+}
+
+func columnRetainedPayloadJSONObjectFromJSONDocument(cfg ColumnStoreConfig, document []byte) (map[string]any, error) {
+	switch cfg.RetainedPayload {
+	case ColumnRetainedPayloadNone:
+		return map[string]any{}, nil
+	case ColumnRetainedPayloadNonColumn:
+		obj, err := decodeColumnJSONObject(document)
+		if err != nil {
+			return nil, err
+		}
+		for _, col := range cfg.Columns {
+			deleteColumnJSONPath(obj, col.Path)
+		}
+		return obj, nil
+	default:
+		return nil, fmt.Errorf("collections: retained payload policy %q cannot produce object payload", cfg.RetainedPayload)
 	}
 }
 

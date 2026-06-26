@@ -865,7 +865,12 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 		indexOuterLeavesInValueLog: true,
 		valueLogCompression:        ValueLogCompressionOff,
 	}
-	previousOwner := &compactStorageMatrixCachedHandoffLeafPageLog{}
+	previousAppender, err := newReplayInlineAppenderWithNextRID(d, nil, 1)
+	if err != nil {
+		t.Fatalf("newReplayInlineAppenderWithNextRID: %v", err)
+	}
+	defer func() { _ = previousAppender.close() }()
+	previousOwner := replayInlineLeafPageLog{appender: previousAppender}
 	d.SetLeafPageLog(previousOwner)
 	previousInstalled := d.leafPageLog
 	opts := CompactStorageOptions{
@@ -898,8 +903,60 @@ func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testi
 	if d.leafPageLog != previousInstalled {
 		t.Fatalf("restored leaf-page log=%T want exact previous %T", d.leafPageLog, previousInstalled)
 	}
-	if previousOwner.advanced != 1 {
-		t.Fatalf("restored owner advanced seq=%d want 1", previousOwner.advanced)
+	if _, err := d.leafPageLog.AppendLeafPage(bytes.Repeat([]byte("r"), page.PageSize)); err != nil {
+		t.Fatalf("restored owner AppendLeafPage: %v", err)
+	}
+	gotPath, _, ok := previousOwner.CurrentValueLogSegment()
+	if !ok {
+		t.Fatal("restored owner did not report current leaf segment")
+	}
+	if got := filepath.Base(gotPath); got != "value-l255-000002.log" {
+		t.Fatalf("restored owner segment=%s, want value-l255-000002.log", got)
+	}
+}
+
+type compactStorageFailingHandoffLeafPageLog struct {
+	err          error
+	advanceCalls int
+}
+
+func (l *compactStorageFailingHandoffLeafPageLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	return page.LeafLogPtr{}, nil
+}
+
+func (l *compactStorageFailingHandoffLeafPageLog) Flush() error { return nil }
+
+func (l *compactStorageFailingHandoffLeafPageLog) Sync() error { return nil }
+
+func (l *compactStorageFailingHandoffLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(uint32) error {
+	l.advanceCalls++
+	return l.err
+}
+
+func TestCompactStorageLeafPageLogCleanupErrorPropagatesOnce(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+	writeLeafGenerationKeys(t, d, "cleanup", 64, 'c')
+	currentLeafSegmentOrFatal(t, leafLog)
+
+	cleanupErr := errors.New("compact cleanup advance failure")
+	failingHandoff := &compactStorageFailingHandoffLeafPageLog{err: cleanupErr}
+	previousOwner := &leafPageLogLaneGroup{
+		lanes: []LeafPageLog{
+			replayInlineLeafPageLog{},
+			failingHandoff,
+		},
+	}
+	d.SetLeafPageLog(previousOwner)
+
+	_, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("CompactStorage error=%v, want cleanup handoff error %v", err, cleanupErr)
+	}
+	if failingHandoff.advanceCalls != 1 {
+		t.Fatalf("cleanup handoff calls=%d want 1", failingHandoff.advanceCalls)
+	}
+	if d.leafPageLog != nil {
+		t.Fatalf("leaf-page log was not cleared after cleanup error: got %T want nil fail-closed writer", d.leafPageLog)
 	}
 }
 
@@ -918,7 +975,13 @@ func TestCompactStorageLeafPageLogHandoffAdvanceFailureFailsClosed(t *testing.T)
 		valueLogCompression:        ValueLogCompressionOff,
 	}
 	advanceErr := errors.New("injected advance failure")
-	previousOwner := &compactStorageMatrixCachedHandoffLeafPageLog{advanceErr: advanceErr}
+	failingHandoff := &compactStorageFailingHandoffLeafPageLog{err: advanceErr}
+	previousOwner := &leafPageLogLaneGroup{
+		lanes: []LeafPageLog{
+			replayInlineLeafPageLog{},
+			failingHandoff,
+		},
+	}
 	d.SetLeafPageLog(previousOwner)
 	opts := CompactStorageOptions{
 		Mode:        CompactStorageExhaustive,
@@ -951,8 +1014,8 @@ func TestCompactStorageLeafPageLogHandoffAdvanceFailureFailsClosed(t *testing.T)
 	if d.leafPageLog != nil {
 		t.Fatalf("leaf-page log=%T, want fail-closed nil active writer", d.leafPageLog)
 	}
-	if previousOwner.advanced != 0 {
-		t.Fatalf("previous owner advanced seq=%d despite injected failure", previousOwner.advanced)
+	if failingHandoff.advanceCalls != 1 {
+		t.Fatalf("previous owner advance calls=%d want 1", failingHandoff.advanceCalls)
 	}
 }
 
@@ -962,11 +1025,11 @@ func TestCompactStoragePreInstallFailureDoesNotMutateLeafPageLogOwner(t *testing
 	previousLeafPageLog := d.leafPageLog
 
 	scanErr := errors.New("injected compact rid scan failure")
-	origScanner := rewriteRIDStartScanner
-	rewriteRIDStartScanner = func([]logSegment) (uint64, error) {
-		return 0, scanErr
+	origLister := rewriteWALSegmentsLister
+	rewriteWALSegmentsLister = func(string) ([]logSegment, error) {
+		return nil, scanErr
 	}
-	t.Cleanup(func() { rewriteRIDStartScanner = origScanner })
+	t.Cleanup(func() { rewriteWALSegmentsLister = origLister })
 
 	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
 	if !errors.Is(err, scanErr) {

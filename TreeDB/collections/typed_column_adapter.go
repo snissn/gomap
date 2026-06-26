@@ -1315,70 +1315,9 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	if plan.SortKeyPrefix.Planned {
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count does not support sort-key row pruning", ErrColumnQueryPlanUnsupported)
 	}
-	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(plan.Fields, plan.GroupColumn)
+	group, decodedBytes, blocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
-	}
-	if !ok {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count column %q is not owned by typed_column_part", plan.GroupColumn)
-	}
-	for _, candidate := range adapterPart.Columns {
-		if candidate.Definition.Name == adapterColumn.Definition.Name {
-			adapterColumn = candidate
-			break
-		}
-	}
-	if adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count column %q is not a non-null low-cardinality string", ErrColumnQueryPlanUnsupported, plan.GroupColumn)
-	}
-	partColumn, ok := adapterPart.Part.Columns[adapterColumn.Definition.Name]
-	if !ok {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count missing column %q", adapterColumn.Definition.Name)
-	}
-	if partColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || partColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 || partColumn.Definition.Cardinality == 0 {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count column %q type=%s encoding=%s cardinality=%d", ErrColumnQueryPlanUnsupported, plan.GroupColumn, partColumn.Definition.Type, partColumn.Definition.Encoding, partColumn.Definition.Cardinality)
-	}
-	if uint64(int(partColumn.Definition.Cardinality)) != uint64(partColumn.Definition.Cardinality) {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count cardinality=%d exceeds host int", partColumn.Definition.Cardinality)
-	}
-	cardinality := int(partColumn.Definition.Cardinality)
-	if len(adapterColumn.ReverseDictionary) != cardinality {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count dictionary cardinality=%d want %d for column %q", len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
-	}
-	for code := 0; code < cardinality; code++ {
-		if _, ok := adapterColumn.ReverseDictionary[int64(code)]; !ok {
-			return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count dictionary missing local code %d for column %q", code, adapterColumn.Definition.Name)
-		}
-	}
-	codes := make([]uint32, 0, summary.Rows)
-	var scratch []uint32
-	var reader typedcolumn.GranuleReader
-	decodedBytes := uint64(0)
-	for blockIdx, block := range partColumn.Blocks {
-		g := block.Granule
-		if g.HasMinMax {
-			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
-				return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count block %d min/max [%d,%d] outside cardinality %d", blockIdx, g.Min, g.Max, cardinality)
-			}
-		}
-		decoded, err := reader.DecodeUint32CodesInto(scratch[:0], g)
-		if err != nil {
-			return columnTypedColumnPhysicalQueryPart{}, err
-		}
-		if len(decoded) != block.Descriptor.RowCount {
-			return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count decoded rows=%d want %d", len(decoded), block.Descriptor.RowCount)
-		}
-		for i, code := range decoded {
-			if uint64(code) >= uint64(cardinality) {
-				return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count code[%d]=%d outside cardinality=%d", i, code, cardinality)
-			}
-		}
-		codes = append(codes, decoded...)
-		scratch = decoded
-		decodedBytes += uint64(g.RawBytes)
-	}
-	if len(codes) != summary.Rows {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count decoded rows=%d want part rows=%d", len(codes), summary.Rows)
 	}
 	return columnTypedColumnPhysicalQueryPart{
 		Ref:                 typedRef,
@@ -1387,11 +1326,11 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 		Bytes:               int64(len(raw)),
 		Sections:            summary.Sections,
 		SectionBytes:        summary.SectionBytes,
-		GranulesConsidered:  len(partColumn.Blocks),
-		GranulesDecoded:     len(partColumn.Blocks),
-		DecodedBlocks:       len(partColumn.Blocks),
+		GranulesConsidered:  blocks,
+		GranulesDecoded:     blocks,
+		DecodedBlocks:       blocks,
 		DecodedPayloadBytes: decodedBytes,
-		DenseGroupCount:     &columnTypedColumnDenseGroupCountPart{Cardinality: cardinality, DictionaryByCode: adapterColumn.ReverseDictionary, Codes: codes},
+		DenseGroupCount:     &columnTypedColumnDenseGroupCountPart{Cardinality: len(group.Dictionary), Dictionary: group.Dictionary, Codes: group.Codes, Valid: group.Valid},
 	}, nil
 }
 
@@ -4958,6 +4897,10 @@ type typedColumnInt64PredicateAggregateScanScratch struct {
 }
 
 func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) (bool, error) {
+	return scanTypedColumnInt64PredicateAggregatePartWithExpressionAndScratch(part, valueColumn, req, TypedColumnInt64AggregateIdentity, result, visibility, scratch)
+}
+
+func scanTypedColumnInt64PredicateAggregatePartWithExpressionAndScratch(part *typedcolumn.ColumnPart, valueColumn string, req TypedColumnInt64PredicateScanRequest, expression TypedColumnInt64AggregateExpression, result *TypedColumnInt64PredicateAggregateResult, visibility *typedColumnLatestPhysicalPart, scratch *typedColumnInt64PredicateAggregateScanScratch) (bool, error) {
 	if part == nil {
 		return false, errors.New("nil typed-column part")
 	}
@@ -5018,7 +4961,7 @@ func scanTypedColumnInt64PredicateAggregatePartWithVisibilityAndScratch(part *ty
 		if selection.IsEmpty() {
 			continue
 		}
-		if err := addTypedColumnInt64AggregateSelectedValues(result, values, selection); err != nil {
+		if err := addTypedColumnInt64AggregateSelectedValues(result, values, selection, expression); err != nil {
 			return false, err
 		}
 	}
@@ -5126,13 +5069,13 @@ func typedColumnInt64VisibilitySelectionForBlock(visibility *typedColumnLatestPh
 	return typedcolumn.NewSparseRowSelectionNoCopy(rowCount, scratch.visibilityRows)
 }
 
-func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64PredicateAggregateResult, values []int64, selection typedcolumn.RowSelection) error {
+func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64PredicateAggregateResult, values []int64, selection typedcolumn.RowSelection, expression TypedColumnInt64AggregateExpression) error {
 	switch selection.Kind() {
 	case typedcolumn.RowSelectionEmpty:
 		return nil
 	case typedcolumn.RowSelectionAll:
 		for _, v := range values {
-			if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+			if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, v); err != nil {
 				return err
 			}
 			result.Diagnostics.RowsMatched++
@@ -5144,7 +5087,7 @@ func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64Predicat
 			return fmt.Errorf("typed-column int64 aggregate invalid range selection [%d,%d) values=%d", start, end, len(values))
 		}
 		for _, v := range values[start:end] {
-			if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+			if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, v); err != nil {
 				return err
 			}
 			result.Diagnostics.RowsMatched++
@@ -5156,7 +5099,7 @@ func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64Predicat
 				return fmt.Errorf("typed-column int64 aggregate invalid ranges selection [%d,%d) values=%d", r.Start, r.End, len(values))
 			}
 			for _, v := range values[r.Start:r.End] {
-				if err := addTypedColumnInt64PredicateAggregateValue(result, v); err != nil {
+				if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, v); err != nil {
 					return err
 				}
 				result.Diagnostics.RowsMatched++
@@ -5168,7 +5111,7 @@ func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64Predicat
 			if row < 0 || row >= len(values) {
 				return fmt.Errorf("typed-column int64 aggregate sparse row=%d values=%d", row, len(values))
 			}
-			if err := addTypedColumnInt64PredicateAggregateValue(result, values[row]); err != nil {
+			if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, values[row]); err != nil {
 				return err
 			}
 			result.Diagnostics.RowsMatched++
@@ -5182,7 +5125,7 @@ func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64Predicat
 				if row >= len(values) {
 					break
 				}
-				if err := addTypedColumnInt64PredicateAggregateValue(result, values[row]); err != nil {
+				if err := addTypedColumnInt64PredicateAggregateExpressionValue(result, expression, values[row]); err != nil {
 					return err
 				}
 				result.Diagnostics.RowsMatched++
