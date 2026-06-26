@@ -218,6 +218,24 @@ type columnStoreInsertPhaseMetric struct {
 	RetainedPayloadRows                       int     `json:"retained_payload_rows,omitempty"`
 	RetainedPayloadDeclaredRows               int     `json:"retained_payload_declared_rows,omitempty"`
 	RetainedPayloadSemanticStreamBlocks       int     `json:"retained_payload_semantic_stream_blocks,omitempty"`
+	ColumnPublishBuildColumnDeltaDurationMS   float64 `json:"column_publish_build_column_delta_duration_ms,omitempty"`
+	ColumnPublishBuildColumnDeltaNsPerRow     float64 `json:"column_publish_build_column_delta_ns_per_row,omitempty"`
+	ColumnPublishBuildSystemDeltaDurationMS   float64 `json:"column_publish_build_system_delta_duration_ms,omitempty"`
+	ColumnPublishBuildSystemDeltaNsPerRow     float64 `json:"column_publish_build_system_delta_ns_per_row,omitempty"`
+	ColumnPublishCommitDurationMS             float64 `json:"column_publish_commit_duration_ms,omitempty"`
+	ColumnPublishCommitNsPerRow               float64 `json:"column_publish_commit_ns_per_row,omitempty"`
+	ColumnPublishDocumentExtractionDurationMS float64 `json:"column_publish_document_extraction_duration_ms,omitempty"`
+	ColumnPublishDeclaredColumnDurationMS     float64 `json:"column_publish_declared_column_encoding_duration_ms,omitempty"`
+	ColumnPublishAssetPreparationDurationMS   float64 `json:"column_publish_asset_preparation_duration_ms,omitempty"`
+	ColumnPublishManifestEncodeDurationMS     float64 `json:"column_publish_manifest_encode_duration_ms,omitempty"`
+	ColumnPublishAssetClosureDurationMS       float64 `json:"column_publish_asset_closure_validation_duration_ms,omitempty"`
+	ColumnPublishRootDeltaDurationMS          float64 `json:"column_publish_root_delta_construction_duration_ms,omitempty"`
+	ColumnPublishSystemDeltaDurationMS        float64 `json:"column_publish_system_delta_construction_duration_ms,omitempty"`
+	ColumnPublishRootDeltaMaterializeMS       float64 `json:"column_publish_root_delta_materialization_duration_ms,omitempty"`
+	ColumnPublishRows                         int     `json:"column_publish_rows,omitempty"`
+	ColumnPublishPreparedAssets               int     `json:"column_publish_prepared_assets,omitempty"`
+	ColumnPublishRequiredAssetBytes           int64   `json:"column_publish_required_asset_bytes,omitempty"`
+	ColumnPublishManifestBytes                int64   `json:"column_publish_manifest_bytes,omitempty"`
 	PrimaryRunBuildDurationMS                 float64 `json:"primary_run_build_duration_ms,omitempty"`
 	PrimaryRunBuildNsPerRow                   float64 `json:"primary_run_build_ns_per_row,omitempty"`
 	PublishDurationMS                         float64 `json:"publish_duration_ms,omitempty"`
@@ -1322,6 +1340,21 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.RetainedPayloadRows += src.RetainedPayloadRows
 	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
 	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	dst.ColumnPublishBuildColumnDelta += src.ColumnPublishBuildColumnDelta
+	dst.ColumnPublishBuildSystemDelta += src.ColumnPublishBuildSystemDelta
+	dst.ColumnPublishCommit += src.ColumnPublishCommit
+	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
+	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
+	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
+	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
+	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
+	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
+	dst.ColumnPublishSystemDeltaConstruction += src.ColumnPublishSystemDeltaConstruction
+	dst.ColumnPublishRootDeltaMaterialization += src.ColumnPublishRootDeltaMaterialization
+	dst.ColumnPublishRows += src.ColumnPublishRows
+	dst.ColumnPublishPreparedAssets += src.ColumnPublishPreparedAssets
+	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
+	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
 	dst.TemplateRunBuild += src.TemplateRunBuild
 	dst.PrimaryRunBuild += src.PrimaryRunBuild
@@ -1337,22 +1370,40 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertStats, batches int) columnStoreInsertPhaseMetric {
 	rows := stats.Documents
 	out := columnStoreInsertPhaseMetric{
-		Documents:                            rows,
-		Batches:                              batches,
-		Runs:                                 stats.Runs,
-		PrepareDocumentsDurationMS:           durationMS(stats.PrepareDocuments),
-		PrepareDocumentsNsPerRow:             nsPerRow(stats.PrepareDocuments, rows),
-		DuplicateDocumentPreflightDurationMS: durationMS(stats.DuplicateDocumentPreflight),
-		DuplicateDocumentPreflightNsPerRow:   nsPerRow(stats.DuplicateDocumentPreflight, rows),
-		RetainedPayloadPrepareDurationMS:     durationMS(stats.RetainedPayloadPrepare),
-		RetainedPayloadPrepareNsPerRow:       nsPerRow(stats.RetainedPayloadPrepare, rows),
-		RetainedPayloadRows:                  stats.RetainedPayloadRows,
-		RetainedPayloadDeclaredRows:          stats.RetainedPayloadDeclaredRows,
-		RetainedPayloadSemanticStreamBlocks:  stats.RetainedPayloadSemanticStreamBlocks,
-		PrimaryRunBuildDurationMS:            durationMS(stats.PrimaryRunBuild),
-		PrimaryRunBuildNsPerRow:              nsPerRow(stats.PrimaryRunBuild, rows),
-		PublishDurationMS:                    durationMS(stats.Publish),
-		PublishNsPerRow:                      nsPerRow(stats.Publish, rows),
+		Documents:                                 rows,
+		Batches:                                   batches,
+		Runs:                                      stats.Runs,
+		PrepareDocumentsDurationMS:                durationMS(stats.PrepareDocuments),
+		PrepareDocumentsNsPerRow:                  nsPerRow(stats.PrepareDocuments, rows),
+		DuplicateDocumentPreflightDurationMS:      durationMS(stats.DuplicateDocumentPreflight),
+		DuplicateDocumentPreflightNsPerRow:        nsPerRow(stats.DuplicateDocumentPreflight, rows),
+		RetainedPayloadPrepareDurationMS:          durationMS(stats.RetainedPayloadPrepare),
+		RetainedPayloadPrepareNsPerRow:            nsPerRow(stats.RetainedPayloadPrepare, rows),
+		RetainedPayloadRows:                       stats.RetainedPayloadRows,
+		RetainedPayloadDeclaredRows:               stats.RetainedPayloadDeclaredRows,
+		RetainedPayloadSemanticStreamBlocks:       stats.RetainedPayloadSemanticStreamBlocks,
+		ColumnPublishBuildColumnDeltaDurationMS:   durationMS(stats.ColumnPublishBuildColumnDelta),
+		ColumnPublishBuildColumnDeltaNsPerRow:     nsPerRow(stats.ColumnPublishBuildColumnDelta, rows),
+		ColumnPublishBuildSystemDeltaDurationMS:   durationMS(stats.ColumnPublishBuildSystemDelta),
+		ColumnPublishBuildSystemDeltaNsPerRow:     nsPerRow(stats.ColumnPublishBuildSystemDelta, rows),
+		ColumnPublishCommitDurationMS:             durationMS(stats.ColumnPublishCommit),
+		ColumnPublishCommitNsPerRow:               nsPerRow(stats.ColumnPublishCommit, rows),
+		ColumnPublishDocumentExtractionDurationMS: durationMS(stats.ColumnPublishDocumentExtraction),
+		ColumnPublishDeclaredColumnDurationMS:     durationMS(stats.ColumnPublishDeclaredColumnEncoding),
+		ColumnPublishAssetPreparationDurationMS:   durationMS(stats.ColumnPublishAssetPreparation),
+		ColumnPublishManifestEncodeDurationMS:     durationMS(stats.ColumnPublishManifestEncode),
+		ColumnPublishAssetClosureDurationMS:       durationMS(stats.ColumnPublishAssetClosureValidation),
+		ColumnPublishRootDeltaDurationMS:          durationMS(stats.ColumnPublishRootDeltaConstruction),
+		ColumnPublishSystemDeltaDurationMS:        durationMS(stats.ColumnPublishSystemDeltaConstruction),
+		ColumnPublishRootDeltaMaterializeMS:       durationMS(stats.ColumnPublishRootDeltaMaterialization),
+		ColumnPublishRows:                         stats.ColumnPublishRows,
+		ColumnPublishPreparedAssets:               stats.ColumnPublishPreparedAssets,
+		ColumnPublishRequiredAssetBytes:           stats.ColumnPublishRequiredAssetBytes,
+		ColumnPublishManifestBytes:                stats.ColumnPublishManifestBytes,
+		PrimaryRunBuildDurationMS:                 durationMS(stats.PrimaryRunBuild),
+		PrimaryRunBuildNsPerRow:                   nsPerRow(stats.PrimaryRunBuild, rows),
+		PublishDurationMS:                         durationMS(stats.Publish),
+		PublishNsPerRow:                           nsPerRow(stats.Publish, rows),
 	}
 	if stats.RetainedPayloadRows > 0 {
 		out.ColumnStoreDeclaredRowReuseCoverageRatio = float64(stats.RetainedPayloadDeclaredRows) / float64(stats.RetainedPayloadRows)
@@ -3926,6 +3977,10 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks: %d\n", stats.RetainedPayloadSemanticStreamBlocks))
 	sb.WriteString(fmt.Sprintf("- column_store_declared_row_reuse_coverage_ratio: %.6f\n", stats.ColumnStoreDeclaredRowReuseCoverageRatio))
 	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks_per_run: %.6f\n\n", stats.RetainedPayloadSemanticStreamBlocksPerRun))
+	sb.WriteString(fmt.Sprintf("- column_publish_rows: %d\n", stats.ColumnPublishRows))
+	sb.WriteString(fmt.Sprintf("- column_publish_prepared_assets: %d\n", stats.ColumnPublishPreparedAssets))
+	sb.WriteString(fmt.Sprintf("- column_publish_required_asset_bytes: %d\n", stats.ColumnPublishRequiredAssetBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_manifest_bytes: %d\n\n", stats.ColumnPublishManifestBytes))
 
 	sb.WriteString("| phase | ms | ns/row |\n")
 	sb.WriteString("|---|---:|---:|\n")
@@ -3934,6 +3989,36 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("| `retained_payload_prepare` | %.3f | %.1f |\n", stats.RetainedPayloadPrepareDurationMS, stats.RetainedPayloadPrepareNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `primary_run_build` | %.3f | %.1f |\n", stats.PrimaryRunBuildDurationMS, stats.PrimaryRunBuildNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `publish` | %.3f | %.1f |\n\n", stats.PublishDurationMS, stats.PublishNsPerRow))
+
+	if columnStoreInsertStatsHasColumnPublishSubphase(stats) {
+		sb.WriteString("| column publish subphase | ms | ns/row |\n")
+		sb.WriteString("|---|---:|---:|\n")
+		sb.WriteString(fmt.Sprintf("| `build_column_delta_callback` | %.3f | %.1f |\n", stats.ColumnPublishBuildColumnDeltaDurationMS, stats.ColumnPublishBuildColumnDeltaNsPerRow))
+		sb.WriteString(fmt.Sprintf("| `build_system_delta_callback` | %.3f | %.1f |\n", stats.ColumnPublishBuildSystemDeltaDurationMS, stats.ColumnPublishBuildSystemDeltaNsPerRow))
+		sb.WriteString(fmt.Sprintf("| `publish_commit_total` | %.3f | %.1f |\n", stats.ColumnPublishCommitDurationMS, stats.ColumnPublishCommitNsPerRow))
+		sb.WriteString(fmt.Sprintf("| `document_extraction` | %.3f |  |\n", stats.ColumnPublishDocumentExtractionDurationMS))
+		sb.WriteString(fmt.Sprintf("| `declared_column_encoding` | %.3f |  |\n", stats.ColumnPublishDeclaredColumnDurationMS))
+		sb.WriteString(fmt.Sprintf("| `asset_preparation` | %.3f |  |\n", stats.ColumnPublishAssetPreparationDurationMS))
+		sb.WriteString(fmt.Sprintf("| `manifest_encode` | %.3f |  |\n", stats.ColumnPublishManifestEncodeDurationMS))
+		sb.WriteString(fmt.Sprintf("| `asset_closure_validation` | %.3f |  |\n", stats.ColumnPublishAssetClosureDurationMS))
+		sb.WriteString(fmt.Sprintf("| `root_delta_construction` | %.3f |  |\n", stats.ColumnPublishRootDeltaDurationMS))
+		sb.WriteString(fmt.Sprintf("| `root_delta_materialization` | %.3f |  |\n", stats.ColumnPublishRootDeltaMaterializeMS))
+		sb.WriteString(fmt.Sprintf("| `system_delta_construction` | %.3f |  |\n\n", stats.ColumnPublishSystemDeltaDurationMS))
+	}
+}
+
+func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhaseMetric) bool {
+	return stats.ColumnPublishBuildColumnDeltaDurationMS > 0 ||
+		stats.ColumnPublishBuildSystemDeltaDurationMS > 0 ||
+		stats.ColumnPublishCommitDurationMS > 0 ||
+		stats.ColumnPublishDocumentExtractionDurationMS > 0 ||
+		stats.ColumnPublishDeclaredColumnDurationMS > 0 ||
+		stats.ColumnPublishAssetPreparationDurationMS > 0 ||
+		stats.ColumnPublishManifestEncodeDurationMS > 0 ||
+		stats.ColumnPublishAssetClosureDurationMS > 0 ||
+		stats.ColumnPublishRootDeltaDurationMS > 0 ||
+		stats.ColumnPublishRootDeltaMaterializeMS > 0 ||
+		stats.ColumnPublishSystemDeltaDurationMS > 0
 }
 
 func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, queries []columnStoreQueryMetric, parityByName map[string]columnStoreParity) {

@@ -146,26 +146,28 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
-	cached                          *caching.DB
-	backend                         *db.DB
-	dictdb                          *db.DB
-	templateDB                      *DB
-	writePath                       writePathInfo
-	commandWALCached                bool
-	commandWALPendingMu             sync.Mutex
-	commandWALFirst                 atomic.Uint64
-	commandWALLast                  atomic.Uint64
-	commandWALCheckpointCutoverLast atomic.Uint64
-	commandWALCheckpointCutoverErr  error
-	commandWALLiveFrames            atomic.Uint64
-	bgVac                           bgIndexVacuumWorker
-	notifyError                     func(error)
-	bgErrMu                         sync.Mutex
-	bgErr                           error
-	durabilityMode                  string
-	valueLogReadIntegrity           string
-	dir                             string
-	maintenance                     maintenanceCoordinator
+	cached                              *caching.DB
+	backend                             *db.DB
+	dictdb                              *db.DB
+	templateDB                          *DB
+	writePath                           writePathInfo
+	commandWALCached                    bool
+	commandWALPendingMu                 sync.Mutex
+	commandWALFirst                     atomic.Uint64
+	commandWALLast                      atomic.Uint64
+	commandWALCheckpointCutoverLast     atomic.Uint64
+	commandWALCheckpointCutoverErr      error
+	commandWALLiveFrames                atomic.Uint64
+	rawSpanNativePublicUpdateReject     atomic.Uint64
+	rawSpanNativePublicUpdateSyncReject atomic.Uint64
+	bgVac                               bgIndexVacuumWorker
+	notifyError                         func(error)
+	bgErrMu                             sync.Mutex
+	bgErr                               error
+	durabilityMode                      string
+	valueLogReadIntegrity               string
+	dir                                 string
+	maintenance                         maintenanceCoordinator
 }
 
 var (
@@ -1606,6 +1608,7 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 		return err
 	}
 	if db.commandWALCached {
+		db.rawSpanNativePublicUpdateReject.Add(1)
 		return ErrCommandWALRejected
 	}
 	if db.cached != nil {
@@ -1628,6 +1631,7 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 		return err
 	}
 	if db.commandWALCached {
+		db.rawSpanNativePublicUpdateSyncReject.Add(1)
 		return ErrCommandWALRejected
 	}
 	if db.cached != nil {
@@ -1815,6 +1819,7 @@ func (db *DB) Stats() map[string]string {
 		}
 		writePathStatsInto(stats, db.writePath)
 		db.publicCommandWALLiveStatsInto(stats)
+		db.publicRawSpanNativeStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
@@ -1826,11 +1831,26 @@ func (db *DB) Stats() map[string]string {
 		stats = make(map[string]string)
 	}
 	writePathStatsInto(stats, db.writePath)
+	db.publicRawSpanNativeStatsInto(stats)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
+}
+
+func (db *DB) publicRawSpanNativeStatsInto(stats map[string]string) {
+	if db == nil || stats == nil {
+		return
+	}
+	update := db.rawSpanNativePublicUpdateReject.Load()
+	updateSync := db.rawSpanNativePublicUpdateSyncReject.Load()
+	prefix := "treedb.raw.span_native.public."
+	stats[prefix+"command_wal_rejections_total"] = fmt.Sprintf("%d", update+updateSync)
+	stats[prefix+"route.update.fallback.reason.command_wal_barrier.count_total"] = fmt.Sprintf("%d", update)
+	stats[prefix+"route.update.fallback.reason.command_wal_barrier.ops_total"] = fmt.Sprintf("%d", update)
+	stats[prefix+"route.update_sync.fallback.reason.command_wal_barrier.count_total"] = fmt.Sprintf("%d", updateSync)
+	stats[prefix+"route.update_sync.fallback.reason.command_wal_barrier.ops_total"] = fmt.Sprintf("%d", updateSync)
 }
 
 // DurabilityMode reports the effective durability/integrity policy string.

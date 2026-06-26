@@ -492,17 +492,34 @@ type CollectionInsertStats struct {
 	RetainedPayloadRows                 int
 	RetainedPayloadDeclaredRows         int
 	RetainedPayloadSemanticStreamBlocks int
-	UniqueIndexPreflight                time.Duration
-	TemplateRunBuild                    time.Duration
-	PrimaryRunBuild                     time.Duration
-	IndexStateRunBuild                  time.Duration
-	SecondaryRunBuild                   time.Duration
-	Publish                             time.Duration
-	SecondaryEntries                    int
-	SecondaryKeyBytes                   int
-	SecondarySortedRuns                 int
-	SecondaryUnsortedRuns               int
-	SecondaryRuns                       []CollectionSecondaryRunStats
+	// ColumnPublish* fields are populated for typed-column InsertBatch paths
+	// that route through the command-WAL column manifest publish path.
+	ColumnPublishBuildColumnDelta         time.Duration
+	ColumnPublishBuildSystemDelta         time.Duration
+	ColumnPublishCommit                   time.Duration
+	ColumnPublishDocumentExtraction       time.Duration
+	ColumnPublishDeclaredColumnEncoding   time.Duration
+	ColumnPublishAssetPreparation         time.Duration
+	ColumnPublishManifestEncode           time.Duration
+	ColumnPublishAssetClosureValidation   time.Duration
+	ColumnPublishRootDeltaConstruction    time.Duration
+	ColumnPublishSystemDeltaConstruction  time.Duration
+	ColumnPublishRootDeltaMaterialization time.Duration
+	ColumnPublishRows                     int
+	ColumnPublishPreparedAssets           int
+	ColumnPublishRequiredAssetBytes       int64
+	ColumnPublishManifestBytes            int64
+	UniqueIndexPreflight                  time.Duration
+	TemplateRunBuild                      time.Duration
+	PrimaryRunBuild                       time.Duration
+	IndexStateRunBuild                    time.Duration
+	SecondaryRunBuild                     time.Duration
+	Publish                               time.Duration
+	SecondaryEntries                      int
+	SecondaryKeyBytes                     int
+	SecondarySortedRuns                   int
+	SecondaryUnsortedRuns                 int
+	SecondaryRuns                         []CollectionSecondaryRunStats
 }
 
 // CollectionSecondaryRunStats captures per-secondary-index run construction
@@ -10200,6 +10217,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				operation:        ColumnPublishOperationInsert,
 				documents:        columnWriteDocumentsFromCommitLog(commandWALDocuments),
 				rows:             len(plan.resultIDs),
+				insertStats:      &plan.stats.CollectionInsertStats,
 			})
 			return err
 		})
@@ -10917,6 +10935,7 @@ func (c *Collection) insertBatchNoIndex(
 				declaredRows:      retainedDeclaredRows,
 				declaredRowsReady: retainedDeclaredRowsReady,
 				rowRemainderBytes: rowRemainderBytes,
+				insertStats:       &stats,
 			})
 			return err
 		})
