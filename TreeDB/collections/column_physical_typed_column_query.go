@@ -459,32 +459,40 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 		if !ok {
 			return nil, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
 		}
-		raw, err := readCache.read(typedRef.Ref, rawScratch)
+		var part columnTypedColumnPhysicalQueryPart
+		part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache)
 		runner.segmentFileCacheHits = readCache.hits
 		runner.segmentFileCacheMisses = readCache.misses
 		if err != nil {
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
-			}
-			return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+			return nil, fmt.Errorf("collections: typed-column part physical query range decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 		}
-		rawScratch = raw
-		var part columnTypedColumnPhysicalQueryPart
-		switch {
-		case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
-			part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-		case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
-			part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-		case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
-			part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-		case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
-			part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
-		case columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req):
-			part, err = decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
-		case allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
-			part, err = decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-		default:
-			part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+		if !rangeOK {
+			raw, err := readCache.read(typedRef.Ref, rawScratch)
+			runner.segmentFileCacheHits = readCache.hits
+			runner.segmentFileCacheMisses = readCache.misses
+			if err != nil {
+				if errors.Is(err, io.ErrUnexpectedEOF) {
+					return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+				}
+				return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+			}
+			rawScratch = raw
+			switch {
+			case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
+				part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+			case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
+				part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+			case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
+				part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+			case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
+				part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+			case columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req):
+				part, err = decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+			case allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
+				part, err = decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+			default:
+				part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+			}
 		}
 		if err != nil {
 			return nil, fmt.Errorf("collections: typed-column part physical query decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
