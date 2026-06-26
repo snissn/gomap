@@ -2539,8 +2539,20 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	updateB := makeDelta("b/2", "delta-b")
 	defer func() { _ = updateB.Close() }()
 	_, updatedRootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
-		{BaseRoot: baseRootIDs[0], Delta: updateA, ParallelApply: true},
-		{BaseRoot: baseRootIDs[1], Delta: updateB, ParallelApply: true},
+		{
+			BaseRoot:          baseRootIDs[0],
+			Delta:             updateA,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			SpanNativeContext: "collection route must be superseded by command WAL",
+		},
+		{
+			BaseRoot:          baseRootIDs[1],
+			Delta:             updateB,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			SpanNativeContext: "collection route must be superseded by command WAL",
+		},
 	}, mustRawKVCommandWALIntent(t, db, "cmd/warm-roots", "1"), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
 			return nil, errors.New("unexpected updated root IDs")
@@ -2590,6 +2602,7 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	commandRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish."
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.candidate_ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.candidate_ops_total")
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"eligible_ops_total")
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"used_ops_total")
