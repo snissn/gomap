@@ -1374,8 +1374,11 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	return part, nil
 }
 
-func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, allowDenseGroupCountDistinct bool) (columnTypedColumnPhysicalQueryPart, bool, error) {
+func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, allowDenseGroupCountDistinct bool, includePhysicalRows bool) (columnTypedColumnPhysicalQueryPart, bool, error) {
 	if !typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity) {
+		return columnTypedColumnPhysicalQueryPart{}, false, nil
+	}
+	if includePhysicalRows && columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req) {
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
 	requests, ok, err := columnTypedColumnPhysicalQueryDensePreparedRequests(plan, req, allowDenseGroupCountDistinct)
@@ -1401,11 +1404,20 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	if diag.Fallback {
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
-	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPart(prepared, plan.Fields, reader.readRange)
+	summary, err := typedColumnPhysicalQueryPreparedSummary(prepared, plan, typedRef, physical)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
-	summary, err := typedColumnPhysicalQueryPreparedSummary(prepared, plan, typedRef, physical)
+	if columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req) {
+		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{LazyPayloads: true})
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, true, err
+		}
+		payloadLoader := newColumnTypedColumnTimeOrderTopKPayloadLoader(reader.readRangeOwned, prepared)
+		part, err := decodeTypedColumnPhysicalQueryTimeOrderTopKPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, payloadLoader)
+		return part, true, err
+	}
+	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPart(prepared, plan.Fields, reader.readRange)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
@@ -1462,6 +1474,17 @@ func (r *columnTypedColumnPhysicalRangePartReader) readRange(offset int, length 
 	}
 	r.bytesRead += int64(len(raw))
 	return raw, nil
+}
+
+func (r *columnTypedColumnPhysicalRangePartReader) readRangeOwned(offset int, length int, section bool) ([]byte, error) {
+	if r == nil || r.readCache == nil {
+		return nil, errors.New("collections: typed-column physical range reader missing read cache")
+	}
+	savedReturnViews := r.readCache.returnViews
+	r.readCache.returnViews = false
+	raw, err := r.readRange(offset, length, section)
+	r.readCache.returnViews = savedReturnViews
+	return raw, err
 }
 
 func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, allowDenseGroupCountDistinct bool) ([]typedColumnPreparedColumnRequest, bool, error) {
@@ -1550,6 +1573,20 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 		if err := addPredicates(plan.PredicateSpecs); err != nil {
 			return nil, true, err
 		}
+	case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy); err != nil {
+			return nil, true, err
+		}
+		if err := addInt64(plan.ValueColumn); err != nil {
+			return nil, true, err
+		}
+		if err := addPredicates(plan.PredicateSpecs); err != nil {
+			return nil, true, err
+		}
+		if len(requests) != 0 {
+			requests[0].IncludeSortKeyMetadata = true
+			requests[0].IncludeSortKeyMarks = true
+		}
 	default:
 		return nil, false, nil
 	}
@@ -1581,11 +1618,19 @@ func columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan columnTypedColumn
 	return spanPlan, groupPredicate, hasGroupPredicate
 }
 
+type typedColumnPreparedAdapterPartOptions struct {
+	LazyPayloads bool
+}
+
 func typedColumnPhysicalQueryPreparedAdapterPart(prepared *typedColumnPreparedPartState, fields []TypedStorageField, readRange typedColumnPreparedRangeReader) (*typedColumnAdapterPart, error) {
+	return typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, fields, readRange, typedColumnPreparedAdapterPartOptions{})
+}
+
+func typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared *typedColumnPreparedPartState, fields []TypedStorageField, readRange typedColumnPreparedRangeReader, opts typedColumnPreparedAdapterPartOptions) (*typedColumnAdapterPart, error) {
 	if prepared == nil {
 		return nil, errors.New("collections: dense typed-column prepared range missing part")
 	}
-	if readRange == nil {
+	if readRange == nil && !opts.LazyPayloads {
 		return nil, errors.New("collections: dense typed-column prepared range missing payload reader")
 	}
 	columns := make([]typedColumnAdapterColumn, 0, len(prepared.Columns))
@@ -1612,31 +1657,43 @@ func typedColumnPhysicalQueryPreparedAdapterPart(prepared *typedColumnPreparedPa
 			adapterColumn.ReverseDictionary = reverseTypedColumnAdapterDictionary(preparedColumn.Dictionaries)
 			dictionaries[adapterColumn.Definition.Name] = preparedColumn.Dictionaries
 		}
-		partColumn, err := typedColumnPreparedColumnWithPayloads(preparedColumn, readRange)
+		partColumn, err := typedColumnPreparedColumnWithOptionalPayloads(preparedColumn, readRange, !opts.LazyPayloads)
 		if err != nil {
 			return nil, err
 		}
 		columns = append(columns, adapterColumn)
 		partColumns[adapterColumn.Definition.Name] = partColumn
 	}
+	descriptor := prepared.Descriptor
+	if len(descriptor.SortKey) != 0 {
+		descriptor.SortKey = append([]typedcolumn.SortKeyColumn(nil), descriptor.SortKey...)
+	}
+	marks := append([]typedcolumn.SortKeyMark(nil), prepared.Marks...)
 	return &typedColumnAdapterPart{
 		Options:    typedColumnAdapterOptions{Fields: fields, SchemaVersion: prepared.Descriptor.SchemaVersion},
 		Columns:    columns,
-		Part:       &typedcolumn.ColumnPart{Descriptor: prepared.Descriptor, Columns: partColumns},
+		Part:       &typedcolumn.ColumnPart{Descriptor: descriptor, Columns: partColumns, Marks: marks},
 		Dictionary: dictionaries,
 	}, nil
 }
 
 func typedColumnPreparedColumnWithPayloads(preparedColumn *typedColumnPreparedColumnState, readRange typedColumnPreparedRangeReader) (typedcolumn.ColumnPartColumn, error) {
+	return typedColumnPreparedColumnWithOptionalPayloads(preparedColumn, readRange, true)
+}
+
+func typedColumnPreparedColumnWithOptionalPayloads(preparedColumn *typedColumnPreparedColumnState, readRange typedColumnPreparedRangeReader, includePayloads bool) (typedcolumn.ColumnPartColumn, error) {
 	if preparedColumn == nil {
 		return typedcolumn.ColumnPartColumn{}, errors.New("collections: dense typed-column prepared range missing column")
-	}
-	if len(preparedColumn.BlockPlans) != len(preparedColumn.Column.Blocks) {
-		return typedcolumn.ColumnPartColumn{}, fmt.Errorf("collections: dense typed-column prepared range column %q block plans=%d want blocks=%d", preparedColumn.Column.Definition.Name, len(preparedColumn.BlockPlans), len(preparedColumn.Column.Blocks))
 	}
 	column := preparedColumn.Column
 	if len(column.Blocks) != 0 {
 		column.Blocks = append([]typedcolumn.ColumnBlock(nil), column.Blocks...)
+	}
+	if !includePayloads {
+		return column, nil
+	}
+	if len(preparedColumn.BlockPlans) != len(column.Blocks) {
+		return typedcolumn.ColumnPartColumn{}, fmt.Errorf("collections: dense typed-column prepared range column %q block plans=%d want blocks=%d", preparedColumn.Column.Definition.Name, len(preparedColumn.BlockPlans), len(column.Blocks))
 	}
 	for _, blockPlan := range preparedColumn.BlockPlans {
 		if blockPlan.Index < 0 || blockPlan.Index >= len(column.Blocks) {
@@ -1919,6 +1976,7 @@ type columnTypedColumnTimeOrderTopKPart struct {
 	Granules       []typedcolumn.GranuleDescriptor
 	Marks          []typedcolumn.SortKeyMark
 	PhysicalRows   []int
+	PayloadLoader  *columnTypedColumnTimeOrderTopKPayloadLoader
 	ValueColumn    typedcolumn.ColumnPartColumn
 	Group          columnTypedColumnTimeOrderCodeColumn
 	Predicates     []columnTypedColumnTimeOrderPredicateColumn
@@ -1928,6 +1986,78 @@ type columnTypedColumnTimeOrderTopKPart struct {
 	groupValid     []bool
 	predicateCodes [][]uint32
 	predicateValid [][]bool
+}
+
+type columnTypedColumnTimeOrderTopKPayloadLoader struct {
+	readRange typedColumnPreparedRangeReader
+	plans     map[string][]typedColumnPreparedBlockPlan
+	bytesRead int64
+}
+
+func newColumnTypedColumnTimeOrderTopKPayloadLoader(readRange typedColumnPreparedRangeReader, prepared *typedColumnPreparedPartState) *columnTypedColumnTimeOrderTopKPayloadLoader {
+	if readRange == nil || prepared == nil || len(prepared.Columns) == 0 {
+		return nil
+	}
+	plans := make(map[string][]typedColumnPreparedBlockPlan, len(prepared.Columns))
+	for name, column := range prepared.Columns {
+		if column == nil {
+			continue
+		}
+		plans[name] = append([]typedColumnPreparedBlockPlan(nil), column.BlockPlans...)
+	}
+	return &columnTypedColumnTimeOrderTopKPayloadLoader{readRange: readRange, plans: plans}
+}
+
+func (l *columnTypedColumnTimeOrderTopKPayloadLoader) ensureColumnPayloadsForRowRange(column *typedcolumn.ColumnPartColumn, firstRow, rowCount int, role string) error {
+	if l == nil {
+		return nil
+	}
+	if l.readRange == nil {
+		return errors.New("collections: time-order topK payload loader missing range reader")
+	}
+	if column == nil {
+		return fmt.Errorf("collections: time-order topK payload loader missing %s column", role)
+	}
+	plans, ok := l.plans[column.Definition.Name]
+	if !ok {
+		return fmt.Errorf("collections: time-order topK payload loader missing block plans for %s column %q", role, column.Definition.Name)
+	}
+	if len(plans) != len(column.Blocks) {
+		return fmt.Errorf("collections: time-order topK payload loader column %q block plans=%d want blocks=%d", column.Definition.Name, len(plans), len(column.Blocks))
+	}
+	limit := firstRow + rowCount
+	for blockIdx := range column.Blocks {
+		block := &column.Blocks[blockIdx]
+		blockFirst := block.Descriptor.FirstRow
+		blockLimit := blockFirst + block.Descriptor.RowCount
+		if blockLimit <= firstRow {
+			continue
+		}
+		if blockFirst >= limit {
+			break
+		}
+		if len(block.Granule.Payload) != 0 {
+			continue
+		}
+		plan := plans[blockIdx]
+		if plan.Index != blockIdx {
+			return fmt.Errorf("collections: time-order topK payload loader column %q plan index=%d want %d", column.Definition.Name, plan.Index, blockIdx)
+		}
+		if plan.PayloadLength == 0 {
+			continue
+		}
+		payload, err := l.readRange(plan.PayloadOffset, plan.PayloadLength, false)
+		if err != nil {
+			return fmt.Errorf("collections: time-order topK payload loader read %s column %q block %d: %w", role, column.Definition.Name, blockIdx, err)
+		}
+		if len(payload) != plan.PayloadLength {
+			return fmt.Errorf("collections: time-order topK payload loader column %q block %d payload bytes=%d want %d", column.Definition.Name, blockIdx, len(payload), plan.PayloadLength)
+		}
+		block.Granule.Payload = payload
+		block.Granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: len(payload)}
+		l.bytesRead += int64(len(payload))
+	}
+	return nil
 }
 
 // decodeTypedColumnPhysicalQueryTimeOrderTopKPart prepares the q4a
@@ -2043,6 +2173,87 @@ func decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan columnTypedColumnPhysi
 			Granules:       append([]typedcolumn.GranuleDescriptor(nil), adapterPart.Part.Descriptor.Granules...),
 			Marks:          append([]typedcolumn.SortKeyMark(nil), adapterPart.Part.Marks...),
 			PhysicalRows:   physicalRows,
+			ValueColumn:    valuePartColumn,
+			Group:          group,
+			Predicates:     predicates,
+			decodedGranule: -1,
+		},
+	}, nil
+}
+
+func decodeTypedColumnPhysicalQueryTimeOrderTopKPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64, payloadLoader *columnTypedColumnTimeOrderTopKPayloadLoader) (columnTypedColumnPhysicalQueryPart, error) {
+	groupColumn, groupPartColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, "time-order topK group")
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	valueColumn, ok, err := typedColumnInt64PredicateAdapterColumn(plan.Fields, plan.ValueColumn)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+	if !ok {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: time-order topK value column %q is not owned by typed_column_part", plan.ValueColumn)
+	}
+	for _, candidate := range adapterPart.Columns {
+		if candidate.Definition.Name == valueColumn.Definition.Name {
+			valueColumn = candidate
+			break
+		}
+	}
+	if valueColumn.Field.Nullable || valueColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: time-order topK value column %q is not a non-null int64", ErrColumnQueryPlanUnsupported, plan.ValueColumn)
+	}
+	valuePartColumn, ok := adapterPart.Part.Columns[valueColumn.Definition.Name]
+	if !ok {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: time-order topK missing value column %q", valueColumn.Definition.Name)
+	}
+	if valuePartColumn.Definition.Type != typedcolumn.ColumnTypeInt64 {
+		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: time-order topK value column %q type=%s", ErrColumnQueryPlanUnsupported, plan.ValueColumn, valuePartColumn.Definition.Type)
+	}
+	if err := validateTypedColumnTimeOrderTopKMarks(adapterPart.Part, valueColumn.Definition.Name); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, err
+	}
+
+	group := columnTypedColumnTimeOrderCodeColumn{PartColumn: groupPartColumn, Cardinality: cardinality, DictionaryByCode: groupColumn.ReverseDictionary, Nullable: groupColumn.Field.Nullable}
+	predicates := make([]columnTypedColumnTimeOrderPredicateColumn, 0, len(plan.PredicateSpecs))
+	for _, spec := range plan.PredicateSpecs {
+		if spec.column == plan.GroupColumn {
+			allowed, missingMatchesEmpty, rejectsAll, err := timeOrderTopKAllowedCodes(groupColumn, cardinality, spec)
+			if err != nil {
+				return columnTypedColumnPhysicalQueryPart{}, err
+			}
+			predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{CodeColumn: group, Allowed: allowed, MissingMatchesEmpty: missingMatchesEmpty, RejectsAll: rejectsAll, UsesGroupCode: true})
+			continue
+		}
+		predicateColumn, predicatePartColumn, predicateCardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, spec.column, "time-order topK predicate")
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		allowed, missingMatchesEmpty, rejectsAll, err := timeOrderTopKAllowedCodes(predicateColumn, predicateCardinality, spec)
+		if err != nil {
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		predicates = append(predicates, columnTypedColumnTimeOrderPredicateColumn{
+			CodeColumn:          columnTypedColumnTimeOrderCodeColumn{PartColumn: predicatePartColumn, Cardinality: predicateCardinality, DictionaryByCode: predicateColumn.ReverseDictionary, Nullable: predicateColumn.Field.Nullable},
+			Allowed:             allowed,
+			MissingMatchesEmpty: missingMatchesEmpty,
+			RejectsAll:          rejectsAll,
+		})
+	}
+
+	return columnTypedColumnPhysicalQueryPart{
+		Ref:                typedRef,
+		PhysicalRef:        physical,
+		Rows:               summary.Rows,
+		Bytes:              bytesRead,
+		Sections:           summary.Sections,
+		SectionBytes:       summary.SectionBytes,
+		GranulesConsidered: len(adapterPart.Part.Descriptor.Granules),
+		SortKeyMarkChecks:  len(adapterPart.Part.Marks),
+		TimeOrderTopK: &columnTypedColumnTimeOrderTopKPart{
+			Rows:           summary.Rows,
+			Granules:       append([]typedcolumn.GranuleDescriptor(nil), adapterPart.Part.Descriptor.Granules...),
+			Marks:          append([]typedcolumn.SortKeyMark(nil), adapterPart.Part.Marks...),
+			PayloadLoader:  payloadLoader,
 			ValueColumn:    valuePartColumn,
 			Group:          group,
 			Predicates:     predicates,
@@ -2238,6 +2449,9 @@ func (p *columnTypedColumnTimeOrderTopKPart) ensureTimeOrderTopKGranuleDecoded(g
 		return false, 0, 0, fmt.Errorf("collections: time-order topK granule %d outside %d", granuleIdx, len(p.Granules))
 	}
 	granule := p.Granules[granuleIdx]
+	if err := p.ensureTimeOrderTopKGranulePayloads(granuleIdx, granule); err != nil {
+		return false, 0, 0, err
+	}
 	blocks := 0
 	decodedBytes := uint64(0)
 	var err error
@@ -2294,6 +2508,28 @@ func (p *columnTypedColumnTimeOrderTopKPart) ensureTimeOrderTopKGranuleDecoded(g
 	}
 	p.decodedGranule = granuleIdx
 	return true, blocks, decodedBytes, nil
+}
+
+func (p *columnTypedColumnTimeOrderTopKPart) ensureTimeOrderTopKGranulePayloads(granuleIdx int, granule typedcolumn.GranuleDescriptor) error {
+	if p == nil || p.PayloadLoader == nil {
+		return nil
+	}
+	if err := p.PayloadLoader.ensureColumnPayloadsForRowRange(&p.ValueColumn, granule.FirstRow, granule.RowCount, "value"); err != nil {
+		return fmt.Errorf("collections: time-order topK granule %d: %w", granuleIdx, err)
+	}
+	if err := p.PayloadLoader.ensureColumnPayloadsForRowRange(&p.Group.PartColumn, granule.FirstRow, granule.RowCount, "group"); err != nil {
+		return fmt.Errorf("collections: time-order topK granule %d: %w", granuleIdx, err)
+	}
+	for idx := range p.Predicates {
+		predicate := &p.Predicates[idx]
+		if predicate.UsesGroupCode {
+			continue
+		}
+		if err := p.PayloadLoader.ensureColumnPayloadsForRowRange(&predicate.CodeColumn.PartColumn, granule.FirstRow, granule.RowCount, "predicate"); err != nil {
+			return fmt.Errorf("collections: time-order topK granule %d: %w", granuleIdx, err)
+		}
+	}
+	return nil
 }
 
 func decodeTypedColumnInt64ValuesForRowRange(partColumn typedcolumn.ColumnPartColumn, firstRow, rowCount int, role string, dst []int64) ([]int64, uint64, int, error) {
