@@ -37,6 +37,7 @@ const (
 	ColumnPhysicalQueryGroupMinInt64         ColumnPhysicalQueryKind = "group_min_int64"
 	ColumnPhysicalQueryGroupMaxInt64         ColumnPhysicalQueryKind = "group_max_int64"
 	ColumnPhysicalQueryGroupInt64Span        ColumnPhysicalQueryKind = "group_int64_span"
+	ColumnPhysicalQuerySumSecondOfDaySquare  ColumnPhysicalQueryKind = "sum_second_of_day_square"
 )
 
 // ColumnPhysicalQueryStorageSource names the physical storage family that
@@ -97,7 +98,7 @@ type ColumnPhysicalQueryRequest struct {
 // ColumnPhysicalQueryGroup is one reduced result row. Key is the group key.
 // Count is populated for count-style queries and remains the distinct count for
 // group_count_distinct. Hour is populated by group_hour_count. DistinctCount is
-// populated by group_count_and_distinct; Int64 is populated for min/max/span-style queries.
+// populated by group_count_and_distinct; Int64 is populated for min/max/span/sum expression queries.
 type ColumnPhysicalQueryGroup struct {
 	Key           string
 	Hour          int
@@ -1473,6 +1474,8 @@ type columnPhysicalQueryExecutor struct {
 	hourCounts   [24]int
 	int64Values  map[string]int64
 	int64Spans   map[string]columnPhysicalQuerySpan
+	int64Sum     int64
+	int64SumRows int
 	reduceRows   int
 	resultGroups []ColumnPhysicalQueryGroup
 }
@@ -1542,6 +1545,8 @@ func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQue
 			exec.valueIdx, exec.valueColumnIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
 		}
 		exec.int64Spans = make(map[string]columnPhysicalQuerySpan)
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		exec.valueIdx, exec.valueColumnIdx, err = addProjection(req.ValueColumn, ColumnStoreValueInt64, "value")
 	default:
 		err = fmt.Errorf("%w: unsupported physical column query kind %q", ErrColumnQueryPlanUnsupported, req.Kind)
 	}
@@ -1622,6 +1627,8 @@ func (e *columnPhysicalQueryExecutor) supportsDirectAssetReduce() bool {
 		return e.valueColumnIdx >= 0
 	case ColumnPhysicalQueryGroupMinInt64, ColumnPhysicalQueryGroupMaxInt64, ColumnPhysicalQueryGroupInt64Span:
 		return e.groupColumnIdx >= 0 && e.valueColumnIdx >= 0
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		return e.valueColumnIdx >= 0
 	default:
 		return false
 	}
@@ -1653,6 +1660,8 @@ func (e *columnPhysicalQueryExecutor) resetForRun() {
 	for key := range e.int64Spans {
 		delete(e.int64Spans, key)
 	}
+	e.int64Sum = 0
+	e.int64SumRows = 0
 }
 
 func (e *columnPhysicalQueryExecutor) visit(row columnPhysicalScanRowView) error {
@@ -1721,6 +1730,17 @@ func (e *columnPhysicalQueryExecutor) visitValues(values []columnDeclaredValue) 
 			cur.max = value
 		}
 		e.int64Spans[key] = cur
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		value, err := columnPhysicalQueryInt64Value(values[e.valueIdx])
+		if err != nil {
+			return err
+		}
+		expressionValue, err := typedColumnInt64AggregateExpressionValue(TypedColumnInt64AggregateSecondOfDaySquare, value)
+		if err != nil {
+			return err
+		}
+		e.int64Sum += expressionValue
+		e.int64SumRows++
 	}
 	return nil
 }
@@ -1789,6 +1809,10 @@ func reduceColumnPhysicalAssetDirect(raw []byte, ref ColumnAssetRef, expectedCol
 			}
 		case ColumnPhysicalQueryGroupInt64Span:
 			if err := exec.visitDirectGroupInt64Span(group, groupOK, value, valueOK); err != nil {
+				return columnPhysicalAssetScanSummary{}, err
+			}
+		case ColumnPhysicalQuerySumSecondOfDaySquare:
+			if err := exec.visitDirectSumSecondOfDaySquare(value, valueOK); err != nil {
 				return columnPhysicalAssetScanSummary{}, err
 			}
 		default:
@@ -2028,6 +2052,20 @@ func (e *columnPhysicalQueryExecutor) visitDirectGroupInt64Span(group []byte, gr
 	return nil
 }
 
+func (e *columnPhysicalQueryExecutor) visitDirectSumSecondOfDaySquare(value int64, valueOK bool) error {
+	if !valueOK {
+		return fmt.Errorf("%w: physical column query missing int64 value", ErrColumnQueryPlanUnsupported)
+	}
+	expressionValue, err := typedColumnInt64AggregateExpressionValue(TypedColumnInt64AggregateSecondOfDaySquare, value)
+	if err != nil {
+		return err
+	}
+	e.int64Sum += expressionValue
+	e.int64SumRows++
+	e.reduceRows++
+	return nil
+}
+
 func (e *columnPhysicalQueryExecutor) stringInt64Values(values []columnDeclaredValue) (string, int64, error) {
 	key, err := e.stringKey(values[e.groupIdx])
 	if err != nil {
@@ -2078,6 +2116,10 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 	case ColumnPhysicalQueryGroupInt64Span:
 		for key, span := range e.int64Spans {
 			e.resultGroups = append(e.resultGroups, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
+		}
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		if e.int64SumRows > 0 {
+			e.resultGroups = append(e.resultGroups, ColumnPhysicalQueryGroup{Key: "time_us_second_of_day_square", Count: e.int64SumRows, Int64: e.int64Sum})
 		}
 	}
 	if e.topK == 0 {
@@ -2369,6 +2411,9 @@ func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecut
 			}
 			e.int64Spans[key] = cur
 		}
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		e.int64Sum += other.int64Sum
+		e.int64SumRows += other.int64SumRows
 	default:
 		return fmt.Errorf("%w: unsupported physical column query kind %q", ErrColumnQueryPlanUnsupported, e.kind)
 	}
