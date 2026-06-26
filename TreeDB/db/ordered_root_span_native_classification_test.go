@@ -954,7 +954,14 @@ func TestOrderedRootSpanNativeApplyResultPreservesPrepareFailureReason(t *testin
 }
 
 func TestOrderedRootSpanNativeApplyResultDoesNotClassifyPostPrepareApplyErrorAsPrepareError(t *testing.T) {
-	opts := Options{}
+	opts := Options{
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency: 2,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+		FlushApplySpanNative:  true,
+	}
 	db := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&opts, 16, 6)}
 	prepared := zipper.ReadOnlyPrepareResult{
 		Ops:            4,
@@ -979,10 +986,12 @@ func TestOrderedRootSpanNativeApplyResultDoesNotClassifyPostPrepareApplyErrorAsP
 	stats := map[string]string{}
 	db.appendOrderedRootSpanNativeStats(stats)
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackPrepareError.String()+".ops_total")
-	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackUnknown.String()+".ops_total")
 	routePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish."
 	requireOrderedRootStatCounterZero(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackPrepareError.String()+".ops_total")
-	requireOrderedRootStatCounterPositive(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackUnknown.String()+".ops_total")
 }
 
 func TestOrderedRootSpanNativeApplyResultPreservesBarrierFallbackReason(t *testing.T) {
