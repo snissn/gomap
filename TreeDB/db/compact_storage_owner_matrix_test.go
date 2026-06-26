@@ -38,12 +38,38 @@ func (compactStorageMatrixCachedLeafPageLog) CurrentLeafPageLogSegmentsSnapshot(
 	return nil, nil
 }
 
+func (compactStorageMatrixCachedLeafPageLog) CompactStorageCachedWrapperOwner() bool { return true }
+
+type compactStorageMatrixExternalCachedShapeLeafPageLog struct {
+	compactStorageMatrixLeafPageLog
+}
+
+func (compactStorageMatrixExternalCachedShapeLeafPageLog) ConcurrentLeafPageAppends() bool {
+	return true
+}
+
+func (compactStorageMatrixExternalCachedShapeLeafPageLog) LeafPageLogLane(int) (LeafPageLog, bool) {
+	return compactStorageMatrixLeafPageLog{}, true
+}
+
+func (compactStorageMatrixExternalCachedShapeLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return nil, nil
+}
+
+func (compactStorageMatrixExternalCachedShapeLeafPageLog) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return nil, nil
+}
+
 type compactStorageMatrixCachedHandoffLeafPageLog struct {
 	compactStorageMatrixCachedLeafPageLog
-	advanced uint32
+	advanced   uint32
+	advanceErr error
 }
 
 func (l *compactStorageMatrixCachedHandoffLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
+	if l.advanceErr != nil {
+		return l.advanceErr
+	}
 	l.advanced = seq
 	return nil
 }
@@ -114,6 +140,13 @@ func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
 		{
 			name:       "plain caller external owner",
 			log:        compactStorageMatrixLeafPageLog{},
+			lifecycle:  CompactStorageLifecycleQuiescedMaintenance,
+			wantOwner:  CompactStorageLeafPageLogOwnerStandaloneCallerExternal,
+			wantStatus: CompactStorageOwnerStatusExternalUnsupported,
+		},
+		{
+			name:       "caller external owner with cached-like concurrency shape",
+			log:        compactStorageMatrixExternalCachedShapeLeafPageLog{},
 			lifecycle:  CompactStorageLifecycleQuiescedMaintenance,
 			wantOwner:  CompactStorageLeafPageLogOwnerStandaloneCallerExternal,
 			wantStatus: CompactStorageOwnerStatusExternalUnsupported,

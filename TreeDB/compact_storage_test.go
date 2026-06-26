@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -38,6 +39,11 @@ func TestCompactStoragePublicCommandWALRelaxedExhaustiveFailsClosedForCachedWrap
 	}
 	if classification.Replaceable {
 		t.Fatalf("Replaceable=true, want false (classification=%+v)", classification)
+	}
+	for _, want := range []string{"background flush/apply workers", "checkpoint/close drains", "cached backlog"} {
+		if !strings.Contains(classification.Detail, want) {
+			t.Fatalf("classification detail=%q, want %q", classification.Detail, want)
+		}
 	}
 
 	if _, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{Mode: treedb.CompactStorageExhaustive}); !errors.Is(err, treedb.ErrCompactStorageLeafPageLogOwnerUnsupported) {
