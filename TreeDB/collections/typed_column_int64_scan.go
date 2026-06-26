@@ -24,6 +24,11 @@ const (
 	TypedColumnInt64AggregateSecondOfDaySquare TypedColumnInt64AggregateExpression = "second_of_day_square"
 )
 
+const (
+	typedColumnInt64AggregateSecondUS  = int64(1_000_000)
+	typedColumnInt64AggregateDaySecond = int64(86_400)
+)
+
 type TypedColumnInt64PredicateScanRequest struct {
 	Column                   string
 	Kind                     TypedColumnInt64PredicateScanKind
@@ -417,15 +422,23 @@ func typedColumnInt64AggregateExpressionValue(expression TypedColumnInt64Aggrega
 	case TypedColumnInt64AggregateIdentity:
 		return value, nil
 	case TypedColumnInt64AggregateSecondOfDaySquare:
-		seconds := value / 1_000_000
-		secondOfDay := seconds % 86_400
+		seconds := typedColumnInt64AggregateFloorUnixSeconds(value)
+		secondOfDay := seconds % typedColumnInt64AggregateDaySecond
 		if secondOfDay < 0 {
-			secondOfDay += 86_400
+			secondOfDay += typedColumnInt64AggregateDaySecond
 		}
 		return secondOfDay * secondOfDay, nil
 	default:
 		return 0, fmt.Errorf("%w: unsupported typed-column int64 aggregate expression %q", ErrColumnQueryPlanUnsupported, expression)
 	}
+}
+
+func typedColumnInt64AggregateFloorUnixSeconds(timeUS int64) int64 {
+	seconds := timeUS / typedColumnInt64AggregateSecondUS
+	if timeUS < 0 && timeUS%typedColumnInt64AggregateSecondUS != 0 {
+		seconds--
+	}
+	return seconds
 }
 
 func validateTypedColumnInt64PredicateScanRequest(req TypedColumnInt64PredicateScanRequest) error {

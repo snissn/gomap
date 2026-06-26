@@ -526,10 +526,33 @@ func TestTypedColumnInt64AggregateAllPredicate(t *testing.T) {
 	}
 }
 
+func TestTypedColumnInt64AggregateSecondOfDaySquareExpressionFloorsNegativeMicros(t *testing.T) {
+	tests := []struct {
+		value int64
+		want  int64
+	}{
+		{value: -1, want: 86_399 * 86_399},
+		{value: -999_999, want: 86_399 * 86_399},
+		{value: -1_000_000, want: 86_399 * 86_399},
+		{value: -1_000_001, want: 86_398 * 86_398},
+		{value: 0, want: 0},
+		{value: 1_000_000, want: 1},
+	}
+	for _, tt := range tests {
+		got, err := typedColumnInt64AggregateExpressionValue(TypedColumnInt64AggregateSecondOfDaySquare, tt.value)
+		if err != nil {
+			t.Fatalf("typedColumnInt64AggregateExpressionValue(%d): %v", tt.value, err)
+		}
+		if got != tt.want {
+			t.Fatalf("typedColumnInt64AggregateExpressionValue(%d)=%d want %d", tt.value, got, tt.want)
+		}
+	}
+}
+
 func TestTypedColumnInt64AggregateSecondOfDaySquareExpression(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
-	insertTypedColumnInt64ScanRows(t, col, []int64{1_000_000, 2_000_000, 86_401_000_000})
+	insertTypedColumnInt64ScanRows(t, col, []int64{-1, -1_000_001, 1_000_000})
 
 	req := TypedColumnInt64PredicateAggregateRequest{
 		Column:     "time_us",
@@ -540,7 +563,7 @@ func TestTypedColumnInt64AggregateSecondOfDaySquareExpression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTypedColumnInt64PredicateAggregate expression: %v", err)
 	}
-	assertTypedColumnInt64Aggregate(t, result, 3, 6)
+	assertTypedColumnInt64Aggregate(t, result, 3, 86_399*86_399+86_398*86_398+1)
 	if result.Diagnostics.RowsScanned != 3 || result.Diagnostics.RowsMatched != 3 || result.Diagnostics.StatsBlocks != 0 {
 		t.Fatalf("diagnostics=%+v want expression to scan typed-column rows without aggregate stats", result.Diagnostics)
 	}
@@ -550,7 +573,7 @@ func TestTypedColumnInt64AggregateSecondOfDaySquareExpression(t *testing.T) {
 func TestTypedColumnInt64PreparedAggregateSecondOfDaySquareExpression(t *testing.T) {
 	d, col := setupTypedColumnInt64ScanCollection(t)
 	defer func() { _ = d.Close() }()
-	insertTypedColumnInt64ScanRows(t, col, []int64{1_000_000, 2_000_000, 86_401_000_000})
+	insertTypedColumnInt64ScanRows(t, col, []int64{-1, -1_000_001, 1_000_000})
 
 	session, err := col.PrepareTypedColumnInt64PredicateAggregate(TypedColumnInt64PredicateAggregateRequest{
 		Column:                   "time_us",
@@ -567,7 +590,7 @@ func TestTypedColumnInt64PreparedAggregateSecondOfDaySquareExpression(t *testing
 	if err != nil {
 		t.Fatalf("Run expression: %v", err)
 	}
-	assertTypedColumnInt64Aggregate(t, result, 3, 6)
+	assertTypedColumnInt64Aggregate(t, result, 3, 86_399*86_399+86_398*86_398+1)
 	if result.Diagnostics.RowsScanned != 3 || result.Diagnostics.RowsMatched != 3 || result.Diagnostics.StatsBlocks != 0 || result.Diagnostics.KernelBlocks != 0 {
 		t.Fatalf("diagnostics=%+v want expression hot run to scan typed-column rows without stats/kernel sum", result.Diagnostics)
 	}
