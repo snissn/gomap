@@ -2232,6 +2232,9 @@ func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fi
 	}
 	allowed := make([]uint64, (cardinality+63)/64)
 	matchedLiterals := 0
+	singleCode := uint32(0)
+	singleCodeAllowed := false
+	multipleCodesAllowed := false
 	missingMatchesEmpty := false
 	for _, value := range spec.values {
 		if adapterColumn.Field.Nullable && value == "" {
@@ -2245,24 +2248,34 @@ func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fi
 			return columnTypedColumnDensePredicatePart{}, 0, 0, fmt.Errorf("collections: dense typed-column predicate dictionary code %d outside cardinality %d for column %q", code, cardinality, adapterColumn.Definition.Name)
 		}
 		idx := int(code)
-		allowed[idx/64] |= uint64(1) << uint(idx%64)
+		mask := uint64(1) << uint(idx%64)
+		if allowed[idx/64]&mask == 0 {
+			if singleCodeAllowed && singleCode != uint32(idx) {
+				multipleCodesAllowed = true
+			} else {
+				singleCode = uint32(idx)
+				singleCodeAllowed = true
+			}
+		}
+		allowed[idx/64] |= mask
 		matchedLiterals++
 	}
 	if matchedLiterals == 0 && !missingMatchesEmpty {
 		return columnTypedColumnDensePredicatePart{RejectsAll: true}, 0, 0, nil
 	}
+	singleCodeAllowed = singleCodeAllowed && !multipleCodesAllowed && !missingMatchesEmpty
 	if adapterColumn.Field.Nullable {
 		codes, valid, decodedBytes, blocks, err := decodeTypedColumnDenseNullableUint32Codes(partColumn, cardinality, rows, "predicate")
 		if err != nil {
 			return columnTypedColumnDensePredicatePart{}, 0, 0, err
 		}
-		return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed, MissingMatchesEmpty: missingMatchesEmpty}, decodedBytes, blocks, nil
+		return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed, SingleCode: singleCode, SingleCodeAllowed: singleCodeAllowed, MissingMatchesEmpty: missingMatchesEmpty}, decodedBytes, blocks, nil
 	}
 	codes, decodedBytes, blocks, err := decodeTypedColumnDenseUint32Codes(partColumn, cardinality, rows, "predicate")
 	if err != nil {
 		return columnTypedColumnDensePredicatePart{}, 0, 0, err
 	}
-	return columnTypedColumnDensePredicatePart{Codes: codes, Allowed: allowed}, decodedBytes, blocks, nil
+	return columnTypedColumnDensePredicatePart{Codes: codes, Allowed: allowed, SingleCode: singleCode, SingleCodeAllowed: singleCodeAllowed}, decodedBytes, blocks, nil
 }
 
 func decodeTypedColumnDenseUint32Codes(partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string) ([]uint32, uint64, int, error) {
