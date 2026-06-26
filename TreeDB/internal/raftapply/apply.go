@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -28,6 +29,11 @@ type ApplyMetadataV1 struct {
 	LocalDurabilityBoundary LocalDurabilityBoundaryV1
 	SyncLocalCommandWAL     bool
 
+	// CurrentCatalogVersion is the caller-observed local catalog version used
+	// to enforce deterministic expected-catalog-version guards before mutation.
+	CurrentCatalogVersion    uint64
+	HasCurrentCatalogVersion bool
+
 	ScopeRule       raftentry.ScopeRuleV1
 	DatabaseScope   string
 	CatalogScope    string
@@ -41,6 +47,7 @@ type ApplyMetadataV1 struct {
 type CommandWALApplySeam interface {
 	Append(*backenddb.DB, commandwalapply.LoweredFrame, commandwalapply.ApplyMetadata, commandwalapply.Options) (commandwalapply.Handle, commandwalapply.Result, error)
 	Finalize(*backenddb.DB, commandwalapply.Handle, commandwalapply.ApplyMetadata, commandwalapply.Options) (commandwalapply.Result, error)
+	Abort(*backenddb.DB, commandwalapply.Handle)
 }
 
 type defaultCommandWALApplySeam struct{}
@@ -51,6 +58,10 @@ func (defaultCommandWALApplySeam) Append(db *backenddb.DB, frame commandwalapply
 
 func (defaultCommandWALApplySeam) Finalize(db *backenddb.DB, handle commandwalapply.Handle, meta commandwalapply.ApplyMetadata, opts commandwalapply.Options) (commandwalapply.Result, error) {
 	return commandwalapply.Finalize(db, handle, meta, opts)
+}
+
+func (defaultCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply.Handle) {
+	commandwalapply.Abort(db, handle)
 }
 
 // Options wires the harness to deterministic decode limits, fake or durable
@@ -65,9 +76,11 @@ type Options struct {
 
 // Harness applies committed deterministic entry bytes to one local DB handle.
 type Harness struct {
-	db       *backenddb.DB
-	opts     Options
-	walApply CommandWALApplySeam
+	db                *backenddb.DB
+	opts              Options
+	walApply          CommandWALApplySeam
+	collectionManager *collections.CollectionManager
+	logicalDigestV1Fn func(LogicalDigestOptionsV1) (LogicalDigestV1, error)
 }
 
 // NewHarness constructs an R3a apply harness for committed deterministic bytes.
@@ -76,7 +89,24 @@ func NewHarness(db *backenddb.DB, opts Options) *Harness {
 	if walApply == nil {
 		walApply = defaultCommandWALApplySeam{}
 	}
-	return &Harness{db: db, opts: opts, walApply: walApply}
+	var manager *collections.CollectionManager
+	if db != nil {
+		manager = collections.NewCommandWALReplayCollectionManager(db)
+	}
+	return &Harness{db: db, opts: opts, walApply: walApply, collectionManager: manager}
+}
+
+func (h *Harness) replayCollectionManager() *collections.CollectionManager {
+	if h == nil {
+		return nil
+	}
+	if h.collectionManager != nil {
+		return h.collectionManager
+	}
+	if h.db == nil {
+		return nil
+	}
+	return collections.NewCommandWALReplayCollectionManager(h.db)
 }
 
 // ApplyCommittedEntryV1 applies committed deterministic entry bytes through a
@@ -85,9 +115,8 @@ func ApplyCommittedEntryV1(db *backenddb.DB, entryBytes []byte, meta ApplyMetada
 	return NewHarness(db, opts).ApplyCommittedEntryV1(entryBytes, meta)
 }
 
-// ApplyCommittedEntryV1 decodes, validates, classifies, and fail-closed rejects
-// committed deterministic entry bytes. This slice deliberately does not lower
-// any command to a local command-WAL frame yet.
+// ApplyCommittedEntryV1 decodes, validates, classifies, and applies the first
+// R3a command slice through local command WAL and normal catalog executors.
 func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
 	if h == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("raftapply: nil harness"))
@@ -99,12 +128,6 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	if err := validateApplyEntryID(meta.EntryID); err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(raftentry.CommandDigestV1{}, code, err)
-	}
-	if h.opts.ProgressStore != nil {
-		if err := h.opts.ProgressStore.CheckCanApply(meta.EntryID); err != nil {
-			code, _ := ErrorCodeOf(err)
-			return reject(raftentry.CommandDigestV1{}, code, err)
-		}
 	}
 
 	decodeOpts := raftentry.DecodeOptions{
@@ -133,11 +156,60 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			if record.CommandDigest != entry.Digest {
 				return reject(entry.Digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("raftapply: apply entry %d/%d digest conflicts with existing result", meta.EntryID.Term, meta.EntryID.Index))
 			}
-			return reject(entry.Digest, raftentry.ErrorResultReplayRequiredV1, fmt.Errorf("raftapply: apply entry %d/%d result replay is not implemented", meta.EntryID.Term, meta.EntryID.Index))
+			if h.opts.ProgressStore != nil {
+				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
+					EntryID:       meta.EntryID,
+					CommandDigest: entry.Digest,
+				}); err != nil {
+					code, _ := ErrorCodeOf(err)
+					return reject(entry.Digest, code, err)
+				}
+			}
+			return record.Result, nil
+		}
+	}
+	if h.opts.ProgressStore != nil {
+		if err := h.opts.ProgressStore.CheckCanApply(meta.EntryID); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(entry.Digest, code, err)
 		}
 	}
 
-	return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s decoded but command lowering is deferred", entry.Row.NativeWireCommand))
+	if entry.Target.CommandID != nativewire.CommandCreateCollection {
+		return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s is not accepted by create-collection slice", entry.Row.NativeWireCommand))
+	}
+	if err := h.preflightApplyRecords(meta.EntryID, entry.Digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(entry.Digest, code, err)
+	}
+	result, err := h.applyCreateCollectionV1(entry, meta)
+	if err != nil {
+		if result.Status == raftentry.ApplyStatusRecoveryRequired {
+			return result, err
+		}
+		code, _ := ErrorCodeOf(err)
+		return reject(entry.Digest, code, err)
+	}
+	if h.opts.ResultStore != nil {
+		if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
+			EntryID:       meta.EntryID,
+			CommandDigest: entry.Digest,
+			Result:        result,
+		}); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return recoveryRequired(entry.Digest, code, err)
+		}
+	}
+	if h.opts.ProgressStore != nil {
+		if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
+			EntryID:       meta.EntryID,
+			CommandDigest: entry.Digest,
+		}); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return recoveryRequired(entry.Digest, code, err)
+		}
+	}
+	return result, nil
 }
 
 func (h *Harness) preflightLocalBoundary(meta ApplyMetadataV1) error {
@@ -165,6 +237,26 @@ func (h *Harness) preflightLocalBoundary(meta ApplyMetadataV1) error {
 	return nil
 }
 
+func (h *Harness) preflightApplyRecords(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1) error {
+	if h.opts.ResultStore != nil {
+		if err := h.opts.ResultStore.CheckCanRecordApplyResult(ApplyResultRecordV1{
+			EntryID:       id,
+			CommandDigest: digest,
+		}); err != nil {
+			return err
+		}
+	}
+	if h.opts.ProgressStore != nil {
+		if err := h.opts.ProgressStore.CheckCanRecordApplied(ApplyProgressRecordV1{
+			EntryID:       id,
+			CommandDigest: digest,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateApplyEntryID(id raftentry.ApplyEntryID) error {
 	if id.Term == 0 || id.Index == 0 {
 		return codedError(raftentry.ErrorMalformedEntryV1, "apply entry id must have non-zero term and index")
@@ -185,6 +277,18 @@ func reject(digest raftentry.CommandDigestV1, code raftentry.DeterministicErrorC
 	}
 	result := raftentry.ApplyResultV1{
 		Status:                 statusForCode(code),
+		CommandDigest:          digest,
+		DeterministicErrorCode: code,
+	}
+	return result, &Error{Code: code, Err: err}
+}
+
+func recoveryRequired(digest raftentry.CommandDigestV1, code raftentry.DeterministicErrorCodeV1, err error) (raftentry.ApplyResultV1, error) {
+	if code == "" {
+		code = raftentry.ErrorUnsafeDurabilityModeV1
+	}
+	result := raftentry.ApplyResultV1{
+		Status:                 raftentry.ApplyStatusRecoveryRequired,
 		CommandDigest:          digest,
 		DeterministicErrorCode: code,
 	}

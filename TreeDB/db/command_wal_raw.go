@@ -27,6 +27,7 @@ type commandWALBatchIntent struct {
 	replayToken        uint64
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
+	staged             bool
 }
 
 // CommandWALIntent is an opaque command-WAL append/finalize token used by
@@ -55,6 +56,17 @@ func (intent *CommandWALIntent) ReplayAssignedLSN() (uint64, bool) {
 		return 0, false
 	}
 	return intent.inner.lsn, true
+}
+
+// StagedForPublish reports whether the intent was appended by
+// AppendStagedCommandWALIntent and still expects its caller to hold the
+// command-WAL staging lock through root publication.
+func (intent *CommandWALIntent) StagedForPublish() bool {
+	return intent.staged()
+}
+
+func (intent *CommandWALIntent) staged() bool {
+	return intent != nil && intent.inner.staged
 }
 
 func (db *DB) CommandWALEnabled() bool {
@@ -590,7 +602,14 @@ func (db *DB) AppendStagedCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
 	}
-	return db.appendPublicCommandWALIntent(intent, sync)
+	lsn, err := db.appendPublicCommandWALIntent(intent, sync)
+	if err != nil {
+		return 0, err
+	}
+	if intent != nil && lsn != 0 {
+		intent.inner.staged = true
+	}
+	return lsn, nil
 }
 
 // AppendCommandWALPayload appends a command-WAL frame without allocating a
@@ -783,9 +802,13 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if intent == nil {
 		return nil
 	}
-	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
-	if err != nil {
-		return err
+	unlockCommandWALPublish := func() {}
+	if !intent.staged() {
+		var err error
+		unlockCommandWALPublish, err = db.LockCommandWALPublishWithBarriers()
+		if err != nil {
+			return err
+		}
 	}
 	defer unlockCommandWALPublish()
 	return db.publishCommandWALNoop(intent, sync)
@@ -836,6 +859,7 @@ func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	}
 	db.commitMu.Unlock()
 	db.finalizeCommitPostWork(post)
+	intent.inner.staged = false
 	return nil
 }
 
