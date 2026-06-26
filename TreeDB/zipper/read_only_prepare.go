@@ -780,7 +780,7 @@ func spanNativeApplyFallbackReason(opts ApplyOptions, summary ReadOnlyLeafSpanSu
 	if summary.ColdBuild {
 		return 0, "cold_build"
 	}
-	if summary.Maintenance {
+	if summary.Maintenance && summary.PointOps <= 0 {
 		return 0, "maintenance"
 	}
 	if summary.DeleteRanges > 0 {
@@ -957,7 +957,7 @@ func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []
 		maintenance = false
 	}
 	result.Maintenance = maintenance
-	result.ExactLeafSpans = !maintenance
+	result.ExactLeafSpans = true
 	if rootID == 0 {
 		result.ColdBuild = true
 		result.ExactLeafSpans = true

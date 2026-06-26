@@ -604,7 +604,7 @@ func recordSpanNativeWorkUnitMetrics(metrics *adaptive.Metrics, ranges []ReadOnl
 }
 
 func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareResult) bool {
-	if prepared.OmitKeys || prepared.DeleteRanges != 0 || prepared.ColdBuild || prepared.Maintenance || !prepared.ExactLeafSpans || len(prepared.LeafSpans) == 0 {
+	if prepared.OmitKeys || prepared.DeleteRanges != 0 || prepared.ColdBuild || !prepared.ExactLeafSpans || len(prepared.LeafSpans) == 0 {
 		return false
 	}
 	spans := prepared.LeafSpans
@@ -943,6 +943,20 @@ func spanNativeReplacementHeadSplit(span ReadOnlyLeafSpan, output spanNativeLeaf
 	return Split{Key: spanKey, Ref: output.ref}
 }
 
+func spanNativeReplacementParentKey(currentKey []byte, replacements spanNativeLeafReplacements) []byte {
+	if replacements.len() == 0 {
+		return currentKey
+	}
+	low := replacements.spans[0].LowKey
+	if low == nil {
+		return []byte{}
+	}
+	if currentKey == nil || bytes.Compare(low, currentKey) < 0 {
+		return low
+	}
+	return currentKey
+}
+
 func (z *Zipper) retireSpanNativeWholeRootInternalPages(rootID uint64, replacements spanNativeLeafReplacements, retired *[]uint64, scratch *mergeScratch) error {
 	if retired == nil || replacements.len() == 0 {
 		return nil
@@ -1081,7 +1095,7 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 			if childReplacements.len() == 1 && childReplacements.spans[0].Ref == childRef {
 				changed = true
 				out := childReplacements.output(0)
-				if err := writer.append(Split{Key: key, Ref: out.ref}); err != nil {
+				if err := writer.append(Split{Key: spanNativeReplacementParentKey(key, childReplacements), Ref: out.ref}); err != nil {
 					return page.ChildRef{}, nil, false, err
 				}
 				for _, s := range out.splits {
@@ -1100,7 +1114,7 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 				return page.ChildRef{}, nil, false, fmt.Errorf("%w: replacement span did not match child range", ErrSpanNativeReducerValidation)
 			}
 			changed = true
-			if err := writer.append(Split{Key: key, Ref: newRef}); err != nil {
+			if err := writer.append(Split{Key: spanNativeReplacementParentKey(key, childReplacements), Ref: newRef}); err != nil {
 				return page.ChildRef{}, nil, false, err
 			}
 			for _, s := range childSplits {
