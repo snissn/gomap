@@ -396,6 +396,30 @@ func TestPostApplyProgressStoreFailureRequiresRecovery(t *testing.T) {
 	}
 }
 
+func TestPostPublishLogicalDigestFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
+	h := NewHarness(db, Options{})
+	h.logicalDigestV1Fn = func(LogicalDigestOptionsV1) (LogicalDigestV1, error) {
+		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "digest unavailable after publish")
+	}
+	result, err := h.ApplyCommittedEntryV1(raw, applyMeta(1, 1))
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); openErr != nil {
+		t.Fatalf("OpenCollection users after recovery-required digest failure: %v", openErr)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	if got := db.State().AppliedCommandLSN; got != frames[0].LSN {
+		t.Fatalf("AppliedCommandLSN=%d, want visible command WAL LSN %d", got, frames[0].LSN)
+	}
+}
+
 func TestLogicalDigestConvergesAcrossFreshDBsAndIgnoresLocalLayout(t *testing.T) {
 	rawUsers := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
 	rawOrders := deterministicCreateCollectionEntryWithCatalogVersion(t, "orders", "client-a:create:orders", testCatalogVersionStart+1, testCreateCollectionMetaOptions{})

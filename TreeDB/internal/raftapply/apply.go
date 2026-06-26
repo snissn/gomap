@@ -80,6 +80,7 @@ type Harness struct {
 	opts              Options
 	walApply          CommandWALApplySeam
 	collectionManager *collections.CollectionManager
+	logicalDigestV1Fn func(LogicalDigestOptionsV1) (LogicalDigestV1, error)
 }
 
 // NewHarness constructs an R3a apply harness for committed deterministic bytes.
@@ -183,6 +184,9 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	}
 	result, err := h.applyCreateCollectionV1(entry, meta)
 	if err != nil {
+		if result.Status == raftentry.ApplyStatusRecoveryRequired {
+			return result, err
+		}
 		code, _ := ErrorCodeOf(err)
 		return reject(entry.Digest, code, err)
 	}

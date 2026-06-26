@@ -38,6 +38,9 @@ func LogicalDigestV1ForDB(db *backenddb.DB, opts LogicalDigestOptionsV1) (Logica
 }
 
 func (h *Harness) logicalDigestV1(opts LogicalDigestOptionsV1) (LogicalDigestV1, error) {
+	if h != nil && h.logicalDigestV1Fn != nil {
+		return h.logicalDigestV1Fn(opts)
+	}
 	manager := h.replayCollectionManager()
 	if manager == nil {
 		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot compute logical digest")

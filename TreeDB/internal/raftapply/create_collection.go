@@ -88,7 +88,8 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 		CatalogScope:  meta.CatalogScope,
 	})
 	if err != nil {
-		return raftentry.ApplyResultV1{}, err
+		code, _ := ErrorCodeOf(err)
+		return recoveryRequired(entry.Digest, code, err)
 	}
 	if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
 		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
