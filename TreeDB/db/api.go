@@ -693,6 +693,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.command_wal.enabled"] = fmt.Sprintf("%t", db.commandWAL)
 	writeCommandWALStats(stats, db)
 	db.appendFlushApplyStats(stats)
+	db.appendRawSpanNativeStats(stats)
 	stats["treedb.keep_recent"] = fmt.Sprintf("%d", db.keepRecent)
 	stats["treedb.prefer_append_alloc"] = fmt.Sprintf("%t", db.preferAppendAlloc)
 	stats["treedb.freelist_region_pages"] = fmt.Sprintf("%d", db.freelistRegionPages)

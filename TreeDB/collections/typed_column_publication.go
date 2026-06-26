@@ -282,15 +282,11 @@ func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation,
 	if err != nil {
 		return nil, 0, err
 	}
-	adapterRows, err := typedColumnAdapterRowsFromDeclaredRows(cfg.Columns, fields, rows)
-	if err != nil {
-		return nil, 0, err
-	}
 	adapterOpts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, partID, fields, sortKey)
 	if err != nil {
 		return nil, 0, err
 	}
-	part, err := buildTypedColumnAdapterPart(adapterOpts, adapterRows)
+	part, err := buildTypedColumnAdapterPartFromDeclaredRows(adapterOpts, cfg.Columns, rows)
 	if err != nil {
 		return nil, 0, err
 	}

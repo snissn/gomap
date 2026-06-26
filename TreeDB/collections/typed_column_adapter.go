@@ -182,6 +182,66 @@ type typedColumnAdapterRow struct {
 	Values    map[string]columnDeclaredValue
 }
 
+type typedColumnAdapterRowSource interface {
+	Len() int
+	PrimaryID(rowIdx int) int64
+	Value(rowIdx int, column typedColumnAdapterColumn) (columnDeclaredValue, bool, error)
+}
+
+type typedColumnAdapterRowsSource []typedColumnAdapterRow
+
+func (s typedColumnAdapterRowsSource) Len() int {
+	return len(s)
+}
+
+func (s typedColumnAdapterRowsSource) PrimaryID(rowIdx int) int64 {
+	return s[rowIdx].PrimaryID
+}
+
+func (s typedColumnAdapterRowsSource) Value(rowIdx int, column typedColumnAdapterColumn) (columnDeclaredValue, bool, error) {
+	return typedColumnAdapterRowValue(s[rowIdx], column)
+}
+
+type typedColumnDeclaredRowSource struct {
+	allColumns  []ColumnStoreColumn
+	rows        []columnDeclaredRow
+	indexByPath map[string]int
+}
+
+func newTypedColumnDeclaredRowSource(allColumns []ColumnStoreColumn, rows []columnDeclaredRow) typedColumnDeclaredRowSource {
+	indexByPath := make(map[string]int, len(allColumns))
+	for i, col := range allColumns {
+		indexByPath[col.Path] = i
+	}
+	return typedColumnDeclaredRowSource{allColumns: allColumns, rows: rows, indexByPath: indexByPath}
+}
+
+func (s typedColumnDeclaredRowSource) Len() int {
+	return len(s.rows)
+}
+
+func (s typedColumnDeclaredRowSource) PrimaryID(rowIdx int) int64 {
+	return int64(rowIdx)
+}
+
+func (s typedColumnDeclaredRowSource) Value(rowIdx int, column typedColumnAdapterColumn) (columnDeclaredValue, bool, error) {
+	if rowIdx < 0 || rowIdx >= len(s.rows) {
+		return columnDeclaredValue{}, false, fmt.Errorf("row index=%d outside rows=%d", rowIdx, len(s.rows))
+	}
+	row := s.rows[rowIdx]
+	if row.Deleted {
+		return columnDeclaredValue{}, false, fmt.Errorf("row[%d] is deleted", rowIdx)
+	}
+	if len(row.Values) != len(s.allColumns) {
+		return columnDeclaredValue{}, false, fmt.Errorf("row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(s.allColumns))
+	}
+	allIdx, ok := s.indexByPath[column.Field.Path]
+	if !ok {
+		return columnDeclaredValue{}, false, fmt.Errorf("typed-column part field %q not found", column.Field.Path)
+	}
+	return row.Values[allIdx], true, nil
+}
+
 type typedColumnAdapterPart struct {
 	Options    typedColumnAdapterOptions
 	Columns    []typedColumnAdapterColumn
@@ -568,6 +628,14 @@ func validateTypedColumnAdapterStringDictionaryLogicalOrder(column typedColumnAd
 }
 
 func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedColumnAdapterRow) (*typedColumnAdapterPart, error) {
+	return buildTypedColumnAdapterPartFromSource(opts, typedColumnAdapterRowsSource(rows))
+}
+
+func buildTypedColumnAdapterPartFromDeclaredRows(opts typedColumnAdapterOptions, allColumns []ColumnStoreColumn, rows []columnDeclaredRow) (*typedColumnAdapterPart, error) {
+	return buildTypedColumnAdapterPartFromSource(opts, newTypedColumnDeclaredRowSource(allColumns, rows))
+}
+
+func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSource typedColumnAdapterRowSource) (*typedColumnAdapterPart, error) {
 	if opts.PartID == 0 {
 		opts.PartID = 1
 	}
@@ -577,7 +645,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 	}
 	for i := range columns {
 		if columns[i].Field.ValueType == ColumnStoreValueString {
-			dict, err := buildTypedColumnAdapterStringDictionary(columns[i], rows)
+			dict, err := buildTypedColumnAdapterStringDictionaryFromSource(columns[i], rowSource)
 			if err != nil {
 				return nil, err
 			}
@@ -587,30 +655,31 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 		}
 	}
 
+	rowCount := rowSource.Len()
 	defs := make([]typedcolumn.ColumnDefinition, 0, len(columns)+1)
 	defs = append(defs, typedColumnAdapterPrimaryIDDefinition(opts))
 	for _, column := range columns {
 		defs = append(defs, column.Definition)
 	}
-	batch := typedcolumn.Batch{Rows: len(rows), Columns: make(map[string][]int64, len(defs)), Nulls: make(map[string][]bool), Defaults: make(map[string][]bool)}
-	batch.Columns[typedColumnAdapterPrimaryIDColumn] = make([]int64, len(rows))
+	batch := typedcolumn.Batch{Rows: rowCount, Columns: make(map[string][]int64, len(defs)), Nulls: make(map[string][]bool), Defaults: make(map[string][]bool)}
+	batch.Columns[typedColumnAdapterPrimaryIDColumn] = make([]int64, rowCount)
 	for _, column := range columns {
 		switch column.Definition.Type {
 		case typedcolumn.ColumnTypeFloat32:
 			if batch.Float32Columns == nil {
 				batch.Float32Columns = make(map[string][]float32)
 			}
-			batch.Float32Columns[column.Definition.Name] = make([]float32, len(rows))
+			batch.Float32Columns[column.Definition.Name] = make([]float32, rowCount)
 		case typedcolumn.ColumnTypeFloat64:
 			if batch.Float64Columns == nil {
 				batch.Float64Columns = make(map[string][]float64)
 			}
-			batch.Float64Columns[column.Definition.Name] = make([]float64, len(rows))
+			batch.Float64Columns[column.Definition.Name] = make([]float64, rowCount)
 		case typedcolumn.ColumnTypeFloat32Vector:
 			if batch.Float32Vectors == nil {
 				batch.Float32Vectors = make(map[string][]float32)
 			}
-			elements, err := typedColumnAdapterDenseElements(len(rows), column.Definition.FixedWidthElements)
+			elements, err := typedColumnAdapterDenseElements(rowCount, column.Definition.FixedWidthElements)
 			if err != nil {
 				return nil, err
 			}
@@ -625,23 +694,23 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			if !ok {
 				return nil, fmt.Errorf("%w: unsupported dense numeric vector value_type=%s", errTypedColumnAdapterUnsupportedType, column.Field.ValueType)
 			}
-			bytes, err := typedColumnAdapterDenseBytes(len(rows), column.Definition.FixedWidthElements, width)
+			bytes, err := typedColumnAdapterDenseBytes(rowCount, column.Definition.FixedWidthElements, width)
 			if err != nil {
 				return nil, err
 			}
 			if batch.DenseFixedWidthVectors == nil {
 				batch.DenseFixedWidthVectors = make(map[string]typedcolumn.RawDenseFixedWidth)
 			}
-			batch.DenseFixedWidthVectors[column.Definition.Name] = typedcolumn.RawDenseFixedWidth{Rows: len(rows), ElementsPerRow: column.Definition.FixedWidthElements, ElementWidthBytes: width, Values: make([]byte, bytes)}
+			batch.DenseFixedWidthVectors[column.Definition.Name] = typedcolumn.RawDenseFixedWidth{Rows: rowCount, ElementsPerRow: column.Definition.FixedWidthElements, ElementWidthBytes: width, Values: make([]byte, bytes)}
 		case typedcolumn.ColumnTypeFixedBytes:
-			bytes, err := typedColumnAdapterDenseBytes(len(rows), column.Definition.FixedWidthElements, 1)
+			bytes, err := typedColumnAdapterDenseBytes(rowCount, column.Definition.FixedWidthElements, 1)
 			if err != nil {
 				return nil, err
 			}
 			if batch.FixedBytesColumns == nil {
 				batch.FixedBytesColumns = make(map[string]typedcolumn.FixedBytesRows)
 			}
-			batch.FixedBytesColumns[column.Definition.Name] = typedcolumn.FixedBytesRows{Rows: len(rows), BytesPerRow: column.Definition.FixedWidthElements, Values: make([]byte, bytes)}
+			batch.FixedBytesColumns[column.Definition.Name] = typedcolumn.FixedBytesRows{Rows: rowCount, BytesPerRow: column.Definition.FixedWidthElements, Values: make([]byte, bytes)}
 		case typedcolumn.ColumnTypePackedBitVector, typedcolumn.ColumnTypePackedUint2Vector, typedcolumn.ColumnTypePackedUint4Vector:
 			bitsPerElement, ok := typedcolumn.PackedUintVectorBits(column.Definition.Type)
 			if !ok {
@@ -651,24 +720,24 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			if err != nil {
 				return nil, err
 			}
-			bytes, err := typedColumnAdapterDenseBytes(len(rows), rowBytes, 1)
+			bytes, err := typedColumnAdapterDenseBytes(rowCount, rowBytes, 1)
 			if err != nil {
 				return nil, err
 			}
 			if batch.PackedUintColumns == nil {
 				batch.PackedUintColumns = make(map[string]typedcolumn.PackedUintRows)
 			}
-			batch.PackedUintColumns[column.Definition.Name] = typedcolumn.PackedUintRows{Rows: len(rows), ElementsPerRow: column.Definition.FixedWidthElements, BitsPerElement: bitsPerElement, BytesPerRow: rowBytes, Values: make([]byte, bytes)}
+			batch.PackedUintColumns[column.Definition.Name] = typedcolumn.PackedUintRows{Rows: rowCount, ElementsPerRow: column.Definition.FixedWidthElements, BitsPerElement: bitsPerElement, BytesPerRow: rowBytes, Values: make([]byte, bytes)}
 		case typedcolumn.ColumnTypeUint32List:
 			if batch.Uint32OffsetsLists == nil {
 				batch.Uint32OffsetsLists = make(map[string]typedcolumn.RawUint32OffsetsList)
 			}
-			batch.Uint32OffsetsLists[column.Definition.Name] = typedcolumn.Uint32List{Rows: len(rows), Offsets: make([]uint64, len(rows)+1)}
+			batch.Uint32OffsetsLists[column.Definition.Name] = typedcolumn.Uint32List{Rows: rowCount, Offsets: make([]uint64, rowCount+1)}
 		case typedcolumn.ColumnTypeBytes:
 			if batch.BytesColumns == nil {
 				batch.BytesColumns = make(map[string]typedcolumn.RawBytesOffsets)
 			}
-			batch.BytesColumns[column.Definition.Name] = typedcolumn.BytesColumn{Rows: len(rows), Offsets: make([]uint64, len(rows)+1)}
+			batch.BytesColumns[column.Definition.Name] = typedcolumn.BytesColumn{Rows: rowCount, Offsets: make([]uint64, rowCount+1)}
 		case typedcolumn.ColumnTypeInt8,
 			typedcolumn.ColumnTypeUint8,
 			typedcolumn.ColumnTypeInt16,
@@ -678,7 +747,7 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 			typedcolumn.ColumnTypeUint64,
 			typedcolumn.ColumnTypeFloat16,
 			typedcolumn.ColumnTypeBFloat16:
-			if !typedColumnAdapterInitPrimitiveScalarBatchColumn(&batch, column, len(rows)) {
+			if !typedColumnAdapterInitPrimitiveScalarBatchColumn(&batch, column, rowCount) {
 				return nil, fmt.Errorf("%w: unsupported primitive scalar column type %s", errTypedColumnAdapterUnsupportedType, column.Definition.Type)
 			}
 		case typedcolumn.ColumnTypeAdjacencyList:
@@ -686,29 +755,29 @@ func buildTypedColumnAdapterPart(opts typedColumnAdapterOptions, rows []typedCol
 				if batch.Uint32OffsetsLists == nil {
 					batch.Uint32OffsetsLists = make(map[string]typedcolumn.RawUint32OffsetsList)
 				}
-				batch.Uint32OffsetsLists[column.Definition.Name] = typedcolumn.RawUint32OffsetsList{Rows: len(rows), Offsets: make([]uint64, len(rows)+1)}
+				batch.Uint32OffsetsLists[column.Definition.Name] = typedcolumn.RawUint32OffsetsList{Rows: rowCount, Offsets: make([]uint64, rowCount+1)}
 			} else {
 				if batch.Uint32Vectors == nil {
 					batch.Uint32Vectors = make(map[string][]uint32)
 				}
-				elements, err := typedColumnAdapterDenseElements(len(rows), column.Definition.FixedWidthElements)
+				elements, err := typedColumnAdapterDenseElements(rowCount, column.Definition.FixedWidthElements)
 				if err != nil {
 					return nil, err
 				}
 				batch.Uint32Vectors[column.Definition.Name] = make([]uint32, elements)
 			}
 		default:
-			batch.Columns[column.Definition.Name] = make([]int64, len(rows))
+			batch.Columns[column.Definition.Name] = make([]int64, rowCount)
 			if column.Field.Nullable {
-				batch.Nulls[column.Definition.Name] = make([]bool, len(rows))
-				batch.Defaults[column.Definition.Name] = make([]bool, len(rows))
+				batch.Nulls[column.Definition.Name] = make([]bool, rowCount)
+				batch.Defaults[column.Definition.Name] = make([]bool, rowCount)
 			}
 		}
 	}
-	for rowIdx, row := range rows {
-		batch.Columns[typedColumnAdapterPrimaryIDColumn][rowIdx] = row.PrimaryID
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		batch.Columns[typedColumnAdapterPrimaryIDColumn][rowIdx] = rowSource.PrimaryID(rowIdx)
 		for _, column := range columns {
-			value, ok, err := typedColumnAdapterRowValue(row, column)
+			value, ok, err := rowSource.Value(rowIdx, column)
 			if err != nil {
 				return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 			}
@@ -4444,9 +4513,13 @@ func typedColumnAdapterRowValue(row typedColumnAdapterRow, column typedColumnAda
 }
 
 func buildTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, rows []typedColumnAdapterRow) (map[string]int64, error) {
+	return buildTypedColumnAdapterStringDictionaryFromSource(column, typedColumnAdapterRowsSource(rows))
+}
+
+func buildTypedColumnAdapterStringDictionaryFromSource(column typedColumnAdapterColumn, rowSource typedColumnAdapterRowSource) (map[string]int64, error) {
 	seen := make(map[string]struct{})
-	for rowIdx, row := range rows {
-		value, ok, err := typedColumnAdapterRowValue(row, column)
+	for rowIdx := 0; rowIdx < rowSource.Len(); rowIdx++ {
+		value, ok, err := rowSource.Value(rowIdx, column)
 		if err != nil {
 			return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 		}
