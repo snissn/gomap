@@ -201,7 +201,7 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataMissingStrings216
 	defer closeFn()
 
 	q1 := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event"}
-	q1Result := runNullableFullDataQuery2165(t, collection, "q1", q1, len(docs), 0, 0, len(docs))
+	q1Result := runNullableFullDataDenseQ1Query3075(t, collection, "q1", q1, len(docs), 0, 0, len(docs))
 	if got, want := columnPhysicalGroupCountMap2165(q1Result.Groups), map[string]int{"": 2, "app.bsky.feed.post": 4}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("q1 groups=%v want %v raw=%+v", got, want, q1Result.Groups)
 	}
@@ -772,6 +772,35 @@ func runNullableFullDataQuery2165(tb testing.TB, collection *Collection, name st
 	return direct
 }
 
+func runNullableFullDataDenseQ1Query3075(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, wantRows, wantPredicates, wantMatched, wantReduce int) ColumnPhysicalQueryResult {
+	tb.Helper()
+	direct, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("RunColumnPhysicalQuery(%s): %v", name, err)
+	}
+	assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, name+" direct", direct.Diagnostics, wantRows, wantPredicates, wantMatched, wantReduce)
+	assertNullableFullDataDenseQ1Diagnostics3075(tb, name+" direct", direct.Diagnostics)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("PrepareColumnPhysicalQuery(%s): %v", name, err)
+	}
+	defer func() { _ = runner.Close() }()
+	var prepared ColumnPhysicalQueryResult
+	for run := 0; run < 2; run++ {
+		prepared, err = runner.Run()
+		if err != nil {
+			tb.Fatalf("prepared %s run %d: %v", name, run, err)
+		}
+		assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics, 0, wantPredicates, wantMatched, wantReduce)
+		assertNullableFullDataDenseQ1Diagnostics3075(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics)
+		if !reflect.DeepEqual(prepared.Groups, direct.Groups) {
+			tb.Fatalf("%s prepared run %d groups=%+v want direct %+v", name, run, prepared.Groups, direct.Groups)
+		}
+	}
+	return direct
+}
+
 func runNullableFullDataDenseQ2Query2165(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, wantRows, wantPredicates, wantMatched, wantReduce int) ColumnPhysicalQueryResult {
 	tb.Helper()
 	direct, err := collection.RunColumnPhysicalQuery(req)
@@ -858,6 +887,19 @@ func assertNullableFullDataGenericDiagnostics2165(tb testing.TB, label string, d
 	}
 	if diag.DecodedBlocks == 0 || diag.DecodedPayloadBytes == 0 {
 		tb.Fatalf("%s nullable full-data query did not report typed-column decode work: %+v", label, diag)
+	}
+}
+
+func assertNullableFullDataDenseQ1Diagnostics3075(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+	tb.Helper()
+	if !diag.DenseGroupCountUsed || diag.DenseGroupCountDistinctUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.SortedGroupedDistinctUsed || diag.TimeOrderTopKUsed {
+		tb.Fatalf("%s diagnostics=%+v want only dense q1 group-count fast path", label, diag)
+	}
+	if diag.SortKeyPrefixPlanned || diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
+		tb.Fatalf("%s dense q1 diagnostics used sort-key pruning: %+v", label, diag)
+	}
+	if diag.DecodedBlocks == 0 || diag.DecodedPayloadBytes == 0 {
+		tb.Fatalf("%s dense q1 diagnostics did not report typed-column decode work: %+v", label, diag)
 	}
 }
 
