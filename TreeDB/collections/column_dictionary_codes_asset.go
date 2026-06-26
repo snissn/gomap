@@ -40,20 +40,99 @@ type columnDictionaryCodesAssetPayload struct {
 }
 
 func buildColumnDictionaryCodesAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow, collection, namespace string, generation, partID, appliedCommandLSN uint64) ([]columnDictionaryCodesAsset, error) {
-	var assets []columnDictionaryCodesAsset
+	builders := make([]columnDictionaryCodesAssetBuilder, 0)
 	for colIdx, col := range cfg.Columns {
 		if !col.Dictionary || col.ValueType != ColumnStoreValueString {
 			continue
 		}
-		asset, ok, err := buildColumnDictionaryCodesAssetForColumn(cfg, rows, collection, namespace, generation, partID, appliedCommandLSN, colIdx)
-		if err != nil {
-			return nil, err
+		builders = append(builders, newColumnDictionaryCodesAssetBuilder(col, colIdx, len(rows)))
+	}
+	if len(builders) == 0 {
+		return nil, nil
+	}
+	for rowIdx, row := range rows {
+		if row.Deleted {
+			return nil, nil
 		}
+		if len(row.Values) != len(cfg.Columns) {
+			return nil, fmt.Errorf("collections: dictionary code row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(cfg.Columns))
+		}
+		for idx := range builders {
+			if err := builders[idx].appendValue(rowIdx, row.Values[builders[idx].columnIndex]); err != nil {
+				return nil, err
+			}
+		}
+	}
+	assets := make([]columnDictionaryCodesAsset, 0, len(builders))
+	for idx := range builders {
+		asset, ok := builders[idx].asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedCommandLSN)
 		if ok {
 			assets = append(assets, asset)
 		}
 	}
 	return assets, nil
+}
+
+type columnDictionaryCodesAssetBuilder struct {
+	column      ColumnStoreColumn
+	columnIndex int
+	byValue     map[string]uint32
+	dictionary  []string
+	codes       []uint32
+	valid       bool
+}
+
+func newColumnDictionaryCodesAssetBuilder(col ColumnStoreColumn, colIdx, rows int) columnDictionaryCodesAssetBuilder {
+	return columnDictionaryCodesAssetBuilder{
+		column:      col,
+		columnIndex: colIdx,
+		byValue:     make(map[string]uint32),
+		dictionary:  make([]string, 0),
+		codes:       make([]uint32, 0, rows),
+		valid:       true,
+	}
+}
+
+func (b *columnDictionaryCodesAssetBuilder) appendValue(rowIdx int, value columnDeclaredValue) error {
+	if !b.valid {
+		return nil
+	}
+	if value.Type != ColumnStoreValueString {
+		return fmt.Errorf("collections: dictionary code row[%d] column[%d] type=%q want string", rowIdx, b.columnIndex, value.Type)
+	}
+	if !value.Present || value.Null {
+		b.valid = false
+		return nil
+	}
+	code, ok := b.byValue[value.String]
+	if !ok {
+		if uint64(len(b.dictionary)) == uint64(^uint32(0)) {
+			return errors.New("collections: dictionary code cardinality exceeds uint32")
+		}
+		code = uint32(len(b.dictionary))
+		b.byValue[value.String] = code
+		b.dictionary = append(b.dictionary, value.String)
+	}
+	b.codes = append(b.codes, code)
+	return nil
+}
+
+func (b *columnDictionaryCodesAssetBuilder) asset(schemaHash uint64, collection, namespace string, generation, partID, appliedCommandLSN uint64) (columnDictionaryCodesAsset, bool) {
+	if !b.valid || len(b.codes) == 0 {
+		return columnDictionaryCodesAsset{}, false
+	}
+	return columnDictionaryCodesAsset{
+		Collection:        collection,
+		Namespace:         namespace,
+		Generation:        generation,
+		PartID:            partID,
+		AppliedCommandLSN: appliedCommandLSN,
+		SchemaHash:        schemaHash,
+		ColumnName:        b.column.Name,
+		ColumnIndex:       b.columnIndex,
+		Dictionary:        b.dictionary,
+		Codes:             b.codes,
+	}, true
 }
 
 func buildColumnDictionaryCodesAssetForColumn(cfg ColumnStoreConfig, rows []columnDeclaredRow, collection, namespace string, generation, partID, appliedCommandLSN uint64, colIdx int) (columnDictionaryCodesAsset, bool, error) {
@@ -64,9 +143,7 @@ func buildColumnDictionaryCodesAssetForColumn(cfg ColumnStoreConfig, rows []colu
 	if !col.Dictionary || col.ValueType != ColumnStoreValueString {
 		return columnDictionaryCodesAsset{}, false, nil
 	}
-	byValue := make(map[string]uint32)
-	dict := make([]string, 0)
-	codes := make([]uint32, 0, len(rows))
+	builder := newColumnDictionaryCodesAssetBuilder(col, colIdx, len(rows))
 	for rowIdx, row := range rows {
 		if row.Deleted {
 			return columnDictionaryCodesAsset{}, false, nil
@@ -74,39 +151,15 @@ func buildColumnDictionaryCodesAssetForColumn(cfg ColumnStoreConfig, rows []colu
 		if len(row.Values) != len(cfg.Columns) {
 			return columnDictionaryCodesAsset{}, false, fmt.Errorf("collections: dictionary code row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(cfg.Columns))
 		}
-		value := row.Values[colIdx]
-		if value.Type != ColumnStoreValueString {
-			return columnDictionaryCodesAsset{}, false, fmt.Errorf("collections: dictionary code row[%d] column[%d] type=%q want string", rowIdx, colIdx, value.Type)
+		if err := builder.appendValue(rowIdx, row.Values[colIdx]); err != nil {
+			return columnDictionaryCodesAsset{}, false, err
 		}
-		if !value.Present || value.Null {
+		if !builder.valid {
 			return columnDictionaryCodesAsset{}, false, nil
 		}
-		code, ok := byValue[value.String]
-		if !ok {
-			if uint64(len(dict)) == uint64(^uint32(0)) {
-				return columnDictionaryCodesAsset{}, false, errors.New("collections: dictionary code cardinality exceeds uint32")
-			}
-			code = uint32(len(dict))
-			byValue[value.String] = code
-			dict = append(dict, value.String)
-		}
-		codes = append(codes, code)
 	}
-	if len(codes) == 0 {
-		return columnDictionaryCodesAsset{}, false, nil
-	}
-	return columnDictionaryCodesAsset{
-		Collection:        collection,
-		Namespace:         namespace,
-		Generation:        generation,
-		PartID:            partID,
-		AppliedCommandLSN: appliedCommandLSN,
-		SchemaHash:        cfg.SchemaHash,
-		ColumnName:        col.Name,
-		ColumnIndex:       colIdx,
-		Dictionary:        dict,
-		Codes:             codes,
-	}, true, nil
+	asset, ok := builder.asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedCommandLSN)
+	return asset, ok, nil
 }
 
 func encodeColumnDictionaryCodesAsset(asset columnDictionaryCodesAsset) ([]byte, error) {
