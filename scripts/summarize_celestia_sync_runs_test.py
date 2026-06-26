@@ -32,6 +32,7 @@ def write_run_home(
     time_lines = [
         "start_utc=2026-06-26T00:00:00Z",
         "trust_height=1000",
+        "trust_hash=ABCDEF",
         f"db_backend={backend}",
         f"app_db_backend={backend}",
         f"sync_duration_seconds={sync_seconds}",
@@ -110,12 +111,46 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertEqual(payload["runs"][0]["disk_breakdown_bytes"]["application.db"], 10_000)
             self.assertEqual(payload["comparison"]["deltas"]["sync_duration_seconds"], 30)
             self.assertEqual(payload["comparison"]["ratios"]["end_app_bytes"], 0.8)
+            self.assertTrue(payload["comparison"]["valid"])
 
             markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")
             self.assertIn("# Celestia Sync Run Summary", markdown)
             self.assertIn("goleveldb", markdown)
             self.assertIn("treedb", markdown)
             self.assertIn("sync_duration_seconds", markdown)
+
+    def test_skips_comparison_for_mismatched_run_windows(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            level = write_run_home(root, "goleveldb", sync_seconds=120, rss_kb=1000, app_bytes=10_000)
+            tree = write_run_home(root, "treedb", sync_seconds=150, rss_kb=2000, app_bytes=8_000)
+            sync_time = tree / "sync" / "sync-time.log"
+            sync_time.write_text(
+                sync_time.read_text(encoding="utf-8").replace("trust_hash=ABCDEF", "trust_hash=DIFFERENT"),
+                encoding="utf-8",
+            )
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(level), str(tree)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            comparison = payload["comparison"]
+            self.assertFalse(comparison["valid"])
+            self.assertEqual(comparison["reason"], "mismatched_run_window")
+            self.assertNotIn("ratios", comparison)
+            self.assertEqual(comparison["mismatches"][0]["field"], "trust_hash")
+
+            markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")
+            self.assertIn("Comparison skipped: mismatched_run_window.", markdown)
+            self.assertIn("trust_hash", markdown)
 
     def test_counts_fatal_log_matches(self) -> None:
         with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:

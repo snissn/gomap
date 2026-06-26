@@ -270,6 +270,27 @@ def diff_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
     if baseline is None or candidate is None:
         return {}
 
+    window_fields = ["trust_height", "trust_hash", "final_local_height", "blocks_synced"]
+    mismatches = [
+        {
+            "field": field,
+            "baseline": baseline.get(field, ""),
+            "candidate": candidate.get(field, ""),
+        }
+        for field in window_fields
+        if baseline.get(field, "") != candidate.get(field, "")
+    ]
+    if mismatches:
+        return {
+            "valid": False,
+            "reason": "mismatched_run_window",
+            "baseline_home": baseline.get("home", ""),
+            "baseline_backend": baseline.get("db_backend", ""),
+            "candidate_home": candidate.get("home", ""),
+            "candidate_backend": candidate.get("db_backend", ""),
+            "mismatches": mismatches,
+        }
+
     def delta(field: str) -> float:
         return safe_float(candidate.get(field), 0.0) - safe_float(baseline.get(field), 0.0)
 
@@ -292,6 +313,7 @@ def diff_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "sync_seconds_per_block",
     ]
     return {
+        "valid": True,
         "baseline_home": baseline.get("home", ""),
         "baseline_backend": baseline.get("db_backend", ""),
         "candidate_home": candidate.get("home", ""),
@@ -350,30 +372,41 @@ def render_markdown(payload: dict[str, Any]) -> str:
     comparison = payload.get("comparison") or {}
     if comparison:
         lines.extend(["", "## Comparison", ""])
-        delta_rows = [["metric", "delta", "ratio"]]
-        deltas = comparison.get("deltas", {})
-        ratios = comparison.get("ratios", {})
-        for field in [
-            "sync_duration_seconds",
-            "total_duration_seconds",
-            "max_rss_kb",
-            "max_hwm_kb",
-            "end_app_bytes",
-            "app_bytes_per_block",
-            "sync_seconds_per_block",
-        ]:
-            raw_delta = deltas.get(field, 0)
-            if field.endswith("_bytes") or field == "app_bytes_per_block":
-                delta_text = human_bytes(raw_delta)
-            elif field.endswith("_kb"):
-                delta_text = human_bytes(raw_delta * 1024)
-            elif field.endswith("_seconds") or field == "sync_seconds_per_block":
-                delta_text = human_seconds(raw_delta)
-            else:
-                delta_text = f"{raw_delta:.3f}"
-            ratio = safe_float(ratios.get(field), 0.0)
-            delta_rows.append([field, delta_text, f"{ratio:.3f}x" if ratio else "n/a"])
-        lines.append(markdown_table(delta_rows))
+        if comparison.get("valid") is False:
+            lines.append(f"Comparison skipped: {comparison.get('reason', 'invalid_comparison')}.")
+            mismatch_rows = [["field", "baseline", "candidate"]]
+            for mismatch in comparison.get("mismatches", []):
+                mismatch_rows.append([
+                    str(mismatch.get("field", "")),
+                    str(mismatch.get("baseline", "")),
+                    str(mismatch.get("candidate", "")),
+                ])
+            lines.extend(["", markdown_table(mismatch_rows)])
+        else:
+            delta_rows = [["metric", "delta", "ratio"]]
+            deltas = comparison.get("deltas", {})
+            ratios = comparison.get("ratios", {})
+            for field in [
+                "sync_duration_seconds",
+                "total_duration_seconds",
+                "max_rss_kb",
+                "max_hwm_kb",
+                "end_app_bytes",
+                "app_bytes_per_block",
+                "sync_seconds_per_block",
+            ]:
+                raw_delta = deltas.get(field, 0)
+                if field.endswith("_bytes") or field == "app_bytes_per_block":
+                    delta_text = human_bytes(raw_delta)
+                elif field.endswith("_kb"):
+                    delta_text = human_bytes(raw_delta * 1024)
+                elif field.endswith("_seconds") or field == "sync_seconds_per_block":
+                    delta_text = human_seconds(raw_delta)
+                else:
+                    delta_text = f"{raw_delta:.3f}"
+                ratio = safe_float(ratios.get(field), 0.0)
+                delta_rows.append([field, delta_text, f"{ratio:.3f}x" if ratio else "n/a"])
+            lines.append(markdown_table(delta_rows))
 
     lines.extend(["", "## Artifacts", ""])
     for run in runs:
