@@ -73,7 +73,7 @@ func TestColumnPhysicalQ4ATimeOrderTopKOneShotCache3085(t *testing.T) {
 		t.Fatalf("first RunColumnPhysicalQuery(q4a time-order topK): %v", err)
 	}
 	assertColumnPhysicalQ4ATimeOrderResult1950(t, "first one-shot", first, want, len(events), wantCandidates)
-	snapshot := col.typedColumnOneShotTopKCacheSnapshotForTest()
+	snapshot := col.typedColumnOneShotCacheSnapshotForTest()
 	if snapshot.Entries != 1 || snapshot.CacheMisses != 1 || snapshot.CacheBuilds != 1 || snapshot.CacheHits != 0 {
 		t.Fatalf("cache after first run=%+v want one miss/build entry", snapshot)
 	}
@@ -83,7 +83,7 @@ func TestColumnPhysicalQ4ATimeOrderTopKOneShotCache3085(t *testing.T) {
 		t.Fatalf("second RunColumnPhysicalQuery(q4a time-order topK): %v", err)
 	}
 	assertColumnPhysicalQ4ATimeOrderResult1950(t, "second one-shot", second, want, len(events), wantCandidates)
-	snapshot = col.typedColumnOneShotTopKCacheSnapshotForTest()
+	snapshot = col.typedColumnOneShotCacheSnapshotForTest()
 	if snapshot.Entries != 1 || snapshot.CacheMisses != 1 || snapshot.CacheBuilds != 1 || snapshot.CacheHits != 1 {
 		t.Fatalf("cache after second run=%+v want one cache hit", snapshot)
 	}
@@ -107,7 +107,7 @@ func TestColumnPhysicalQ4ATimeOrderTopKOneShotCache3085(t *testing.T) {
 	if !third.Diagnostics.TimeOrderTopKUsed || third.Diagnostics.TopKLimit != smallerTopK.TopK || third.Diagnostics.TopKCandidates != smallerCandidates || third.Diagnostics.ResultGroups != len(smallerWant) {
 		t.Fatalf("third one-shot topK=2 diagnostics=%+v want time-order topK=%d candidates=%d groups=%d", third.Diagnostics, smallerTopK.TopK, smallerCandidates, len(smallerWant))
 	}
-	snapshot = col.typedColumnOneShotTopKCacheSnapshotForTest()
+	snapshot = col.typedColumnOneShotCacheSnapshotForTest()
 	if snapshot.Entries != 1 || snapshot.CacheMisses != 2 || snapshot.CacheBuilds != 2 || snapshot.CacheHits != 1 || snapshot.Invalidations != 1 {
 		t.Fatalf("cache after topK change=%+v want invalidation and rebuild", snapshot)
 	}

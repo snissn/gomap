@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-type collectionTypedColumnOneShotTopKCacheSlot struct {
+type collectionTypedColumnOneShotCacheSlot struct {
 	commitSeq                uint64
 	systemRoot               uint64
 	manifestGeneration       uint64
@@ -25,13 +25,13 @@ type collectionTypedColumnOneShotTopKCacheSlot struct {
 	predicates               string
 }
 
-type collectionTypedColumnOneShotTopKCacheEntry struct {
-	slot   collectionTypedColumnOneShotTopKCacheSlot
+type collectionTypedColumnOneShotCacheEntry struct {
+	slot   collectionTypedColumnOneShotCacheSlot
 	runner *columnTypedColumnPhysicalQueryRunner
 	mu     sync.Mutex
 }
 
-type collectionTypedColumnOneShotTopKCacheSnapshot struct {
+type collectionTypedColumnOneShotCacheSnapshot struct {
 	Entries       int
 	CacheHits     uint64
 	CacheMisses   uint64
@@ -39,20 +39,20 @@ type collectionTypedColumnOneShotTopKCacheSnapshot struct {
 	Invalidations uint64
 }
 
-func (c *Collection) runColumnTypedColumnOneShotTopKWithCache(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
+func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
 	if c == nil || view.MutationParts != 0 {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	if !columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req) || req.AggregateMetadataName != "" {
+	if req.AggregateMetadataName != "" {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	slot := collectionTypedColumnOneShotTopKCacheSlotFor(view, req)
+	slot := collectionTypedColumnOneShotCacheSlotFor(view, req)
 
-	c.typedColumnOneShotTopKMu.Lock()
-	entry := c.typedColumnOneShotTopK
+	c.typedColumnOneShotMu.Lock()
+	entry := c.typedColumnOneShot
 	if entry != nil && entry.slot == slot {
-		c.typedColumnOneShotTopKHits++
-		c.typedColumnOneShotTopKMu.Unlock()
+		c.typedColumnOneShotHits++
+		c.typedColumnOneShotMu.Unlock()
 		entry.mu.Lock()
 		result, err := entry.runner.run(view, req)
 		entry.mu.Unlock()
@@ -60,12 +60,12 @@ func (c *Collection) runColumnTypedColumnOneShotTopKWithCache(view columnPhysica
 		return result, true, err
 	}
 	if entry != nil {
-		c.typedColumnOneShotTopKInvalidations++
-		c.typedColumnOneShotTopK = nil
+		c.typedColumnOneShotInvalidations++
+		c.typedColumnOneShot = nil
 	}
-	c.typedColumnOneShotTopKMisses++
-	c.typedColumnOneShotTopKBuilds++
-	c.typedColumnOneShotTopKMu.Unlock()
+	c.typedColumnOneShotMisses++
+	c.typedColumnOneShotBuilds++
+	c.typedColumnOneShotMu.Unlock()
 
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
@@ -82,14 +82,14 @@ func (c *Collection) runColumnTypedColumnOneShotTopKWithCache(view columnPhysica
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, candidate, err
 	}
-	entry = &collectionTypedColumnOneShotTopKCacheEntry{slot: slot, runner: runner}
+	entry = &collectionTypedColumnOneShotCacheEntry{slot: slot, runner: runner}
 
-	c.typedColumnOneShotTopKMu.Lock()
-	if current := c.typedColumnOneShotTopK; current != nil && current.slot != slot {
-		c.typedColumnOneShotTopKInvalidations++
+	c.typedColumnOneShotMu.Lock()
+	if current := c.typedColumnOneShot; current != nil && current.slot != slot {
+		c.typedColumnOneShotInvalidations++
 	}
-	c.typedColumnOneShotTopK = entry
-	c.typedColumnOneShotTopKMu.Unlock()
+	c.typedColumnOneShot = entry
+	c.typedColumnOneShotMu.Unlock()
 
 	entry.mu.Lock()
 	result, err := entry.runner.run(view, req)
@@ -98,8 +98,8 @@ func (c *Collection) runColumnTypedColumnOneShotTopKWithCache(view columnPhysica
 	return result, true, err
 }
 
-func (c *Collection) runColumnPhysicalQueryTypedColumnOneShotTopKInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
-	if !columnTypedColumnOneShotTopKCacheRequestCandidate(req) || !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
+func (c *Collection) runColumnPhysicalQueryTypedColumnOneShotInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
+	if !columnTypedColumnOneShotCacheRequestCandidate(req) || !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
 	start := time.Now()
@@ -110,21 +110,15 @@ func (c *Collection) runColumnPhysicalQueryTypedColumnOneShotTopKInSnapshotView(
 	if view.MutationParts != 0 {
 		return ColumnPhysicalQueryResult{}, false, nil
 	}
-	return c.runColumnTypedColumnOneShotTopKWithCache(view, req, plan, start)
+	return c.runColumnTypedColumnOneShotWithCache(view, req, plan, start)
 }
 
-func columnTypedColumnOneShotTopKCacheRequestCandidate(req ColumnPhysicalQueryRequest) bool {
-	return req.Kind == ColumnPhysicalQueryGroupMinInt64 &&
-		req.AggregateMetadataName == "" &&
-		req.DistinctColumn == "" &&
-		req.GroupColumn != "" &&
-		req.ValueColumn != "" &&
-		req.TopK > 0 &&
-		req.TopKOrder == ColumnPhysicalQueryTopKInt64Asc
+func columnTypedColumnOneShotCacheRequestCandidate(req ColumnPhysicalQueryRequest) bool {
+	return req.AggregateMetadataName == ""
 }
 
-func collectionTypedColumnOneShotTopKCacheSlotFor(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) collectionTypedColumnOneShotTopKCacheSlot {
-	return collectionTypedColumnOneShotTopKCacheSlot{
+func collectionTypedColumnOneShotCacheSlotFor(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) collectionTypedColumnOneShotCacheSlot {
+	return collectionTypedColumnOneShotCacheSlot{
 		commitSeq:                view.CommitSeq,
 		systemRoot:               view.SystemRoot,
 		manifestGeneration:       view.Diagnostics.ManifestGeneration,
@@ -139,11 +133,11 @@ func collectionTypedColumnOneShotTopKCacheSlotFor(view columnPhysicalScanSnapsho
 		topK:                     req.TopK,
 		topKOrder:                req.TopKOrder,
 		skipEmptyGroupKey:        req.SkipEmptyGroupKey,
-		predicates:               collectionTypedColumnOneShotTopKPredicateKey(req),
+		predicates:               collectionTypedColumnOneShotPredicateKey(req),
 	}
 }
 
-func collectionTypedColumnOneShotTopKPredicateKey(req ColumnPhysicalQueryRequest) string {
+func collectionTypedColumnOneShotPredicateKey(req ColumnPhysicalQueryRequest) string {
 	if len(req.Predicates) == 0 {
 		return ""
 	}
@@ -168,19 +162,19 @@ func writeColumnPhysicalCacheKeyPart(b *strings.Builder, value string) {
 	b.WriteByte(';')
 }
 
-func (c *Collection) typedColumnOneShotTopKCacheSnapshotForTest() collectionTypedColumnOneShotTopKCacheSnapshot {
+func (c *Collection) typedColumnOneShotCacheSnapshotForTest() collectionTypedColumnOneShotCacheSnapshot {
 	if c == nil {
-		return collectionTypedColumnOneShotTopKCacheSnapshot{}
+		return collectionTypedColumnOneShotCacheSnapshot{}
 	}
-	c.typedColumnOneShotTopKMu.Lock()
-	defer c.typedColumnOneShotTopKMu.Unlock()
-	snapshot := collectionTypedColumnOneShotTopKCacheSnapshot{
-		CacheHits:     c.typedColumnOneShotTopKHits,
-		CacheMisses:   c.typedColumnOneShotTopKMisses,
-		CacheBuilds:   c.typedColumnOneShotTopKBuilds,
-		Invalidations: c.typedColumnOneShotTopKInvalidations,
+	c.typedColumnOneShotMu.Lock()
+	defer c.typedColumnOneShotMu.Unlock()
+	snapshot := collectionTypedColumnOneShotCacheSnapshot{
+		CacheHits:     c.typedColumnOneShotHits,
+		CacheMisses:   c.typedColumnOneShotMisses,
+		CacheBuilds:   c.typedColumnOneShotBuilds,
+		Invalidations: c.typedColumnOneShotInvalidations,
 	}
-	if c.typedColumnOneShotTopK != nil {
+	if c.typedColumnOneShot != nil {
 		snapshot.Entries = 1
 	}
 	return snapshot
