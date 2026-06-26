@@ -839,6 +839,7 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "indexes_") {
 			continue
 		}
+		dirIndex := collectionIndexFromDirectory(entry.Name())
 		path := filepath.Join(dir, entry.Name(), "benchmark_results.json")
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -856,10 +857,9 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 			continue
 		}
 		parsed.Checks = append(parsed.GuardrailChecks, parsed.Checks...)
-		if collectionCompactedClaimsBlocked(parsed.Results, parsed.Checks) {
-			warnings = append(warnings, fmt.Sprintf("%s: exhaustive_compact did not complete or no positive exhaustive_compact row was emitted; suppressing TreeDB compacted-size comparisons from this source", path))
-			parsed.Comparisons = nil
-		}
+		var compactWarnings []string
+		parsed.Comparisons, compactWarnings = filterCollectionComparisonsForCompactedEvidence(path, dirIndex, parsed.Results, parsed.Comparisons, parsed.Checks)
+		warnings = append(warnings, compactWarnings...)
 		for i := range parsed.Results {
 			parsed.Results[i].Source = filepath.ToSlash(filepath.Join(entry.Name(), "benchmark_results.json"))
 		}
@@ -887,8 +887,27 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 	return rows, comps, warnings
 }
 
-func collectionCompactedClaimsBlocked(rows []collectionRow, checks []collectionGuardrailCheck) bool {
-	return collectionChecksBlockCompactedClaims(checks) || !collectionHasPositiveExhaustiveCompactEvidence(rows)
+func filterCollectionComparisonsForCompactedEvidence(path string, dirIndex int, rows []collectionRow, comps []collectionComparison, checks []collectionGuardrailCheck) ([]collectionComparison, []string) {
+	if len(comps) == 0 {
+		return comps, nil
+	}
+	if collectionChecksBlockCompactedClaims(checks) {
+		return nil, []string{fmt.Sprintf("%s: exhaustive_compact did not complete; suppressing TreeDB compacted-size comparisons from this source", path)}
+	}
+
+	filtered := make([]collectionComparison, 0, len(comps))
+	suppressed := 0
+	for _, comp := range comps {
+		if collectionComparisonHasPositiveExhaustiveCompactEvidence(rows, comp, dirIndex) {
+			filtered = append(filtered, comp)
+			continue
+		}
+		suppressed++
+	}
+	if suppressed == 0 {
+		return filtered, nil
+	}
+	return filtered, []string{fmt.Sprintf("%s: no positive exhaustive_compact row for %d TreeDB comparison(s) at the compared config/index; suppressing unsupported TreeDB compacted-size comparisons from this source", path, suppressed)}
 }
 
 func collectionChecksBlockCompactedClaims(checks []collectionGuardrailCheck) bool {
@@ -900,16 +919,31 @@ func collectionChecksBlockCompactedClaims(checks []collectionGuardrailCheck) boo
 	return false
 }
 
-func collectionHasPositiveExhaustiveCompactEvidence(rows []collectionRow) bool {
+func collectionComparisonHasPositiveExhaustiveCompactEvidence(rows []collectionRow, comp collectionComparison, dirIndex int) bool {
+	compIndex := collectionIndexFromConfig(comp.TreeDBConfig)
 	for _, row := range rows {
 		if row.Phase == "exhaustive_compact" &&
 			row.Shape == "collection" &&
 			strings.HasPrefix(row.ConfigName, "treedb_") &&
-			row.BytesPerDoc > 0 {
+			row.ConfigName == comp.TreeDBConfig &&
+			row.BytesPerDoc > 0 &&
+			(compIndex < 0 || row.IndexCount == compIndex) &&
+			(dirIndex < 0 || row.IndexCount == dirIndex) {
 			return true
 		}
 	}
 	return false
+}
+
+func collectionIndexFromDirectory(name string) int {
+	if !strings.HasPrefix(name, "indexes_") {
+		return -1
+	}
+	v, err := strconv.Atoi(strings.TrimPrefix(name, "indexes_"))
+	if err != nil {
+		return -1
+	}
+	return v
 }
 
 func (r *collectionRow) UnmarshalJSON(raw []byte) error {
