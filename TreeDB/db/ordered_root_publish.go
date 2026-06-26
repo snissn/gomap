@@ -147,6 +147,9 @@ func (opts orderedRootPublishOptions) orderedRootSpanNativeRouteContext(defaultR
 }
 
 func orderedRootDeltaBatchInputSpanNativeRoute(input OrderedRootDeltaBatchPublishInput, defaultRoute OrderedRootSpanNativeRoute, defaultContext string) (OrderedRootSpanNativeRoute, string) {
+	if defaultRoute == OrderedRootSpanNativeRouteCommandWALPublish {
+		return defaultRoute, defaultContext
+	}
 	route := input.SpanNativeRoute
 	if _, ok := orderedRootSpanNativeRouteIndex(route); !ok {
 		route = defaultRoute
@@ -2322,6 +2325,11 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers)
 		addOrderedRootReadOnlyPreparePhaseStats(phaseStats, summary, workerSummary, prepareNs, err, validationFailed)
 		db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, validationFailed)
+		deltaOps := 0
+		if ordered[orderedIdx].Delta != nil {
+			deltaOps = ordered[orderedIdx].Delta.Len()
+		}
+		db.observeOrderedRootSpanNativeReadOnlyPrepare(summary, deltaOps, err, validationFailed)
 		if err != nil {
 			return err
 		}
