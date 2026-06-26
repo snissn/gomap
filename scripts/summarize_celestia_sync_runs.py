@@ -271,6 +271,23 @@ def diff_metrics(runs: list[dict[str, Any]]) -> dict[str, Any]:
         return {}
 
     window_fields = ["trust_height", "trust_hash", "final_local_height", "blocks_synced"]
+    missing_fields = []
+    for side, run in [("baseline", baseline), ("candidate", candidate)]:
+        for field in window_fields:
+            value = run.get(field, "")
+            if value == "" or value == 0:
+                missing_fields.append({"side": side, "field": field})
+    if missing_fields:
+        return {
+            "valid": False,
+            "reason": "missing_run_window_evidence",
+            "baseline_home": baseline.get("home", ""),
+            "baseline_backend": baseline.get("db_backend", ""),
+            "candidate_home": candidate.get("home", ""),
+            "candidate_backend": candidate.get("db_backend", ""),
+            "missing_fields": missing_fields,
+        }
+
     mismatches = [
         {
             "field": field,
@@ -374,14 +391,20 @@ def render_markdown(payload: dict[str, Any]) -> str:
         lines.extend(["", "## Comparison", ""])
         if comparison.get("valid") is False:
             lines.append(f"Comparison skipped: {comparison.get('reason', 'invalid_comparison')}.")
-            mismatch_rows = [["field", "baseline", "candidate"]]
-            for mismatch in comparison.get("mismatches", []):
-                mismatch_rows.append([
-                    str(mismatch.get("field", "")),
-                    str(mismatch.get("baseline", "")),
-                    str(mismatch.get("candidate", "")),
-                ])
-            lines.extend(["", markdown_table(mismatch_rows)])
+            if comparison.get("mismatches"):
+                mismatch_rows = [["field", "baseline", "candidate"]]
+                for mismatch in comparison.get("mismatches", []):
+                    mismatch_rows.append([
+                        str(mismatch.get("field", "")),
+                        str(mismatch.get("baseline", "")),
+                        str(mismatch.get("candidate", "")),
+                    ])
+                lines.extend(["", markdown_table(mismatch_rows)])
+            if comparison.get("missing_fields"):
+                missing_rows = [["side", "field"]]
+                for missing in comparison.get("missing_fields", []):
+                    missing_rows.append([str(missing.get("side", "")), str(missing.get("field", ""))])
+                lines.extend(["", markdown_table(missing_rows)])
         else:
             delta_rows = [["metric", "delta", "ratio"]]
             deltas = comparison.get("deltas", {})

@@ -152,6 +152,46 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertIn("Comparison skipped: mismatched_run_window.", markdown)
             self.assertIn("trust_hash", markdown)
 
+    def test_skips_comparison_when_window_evidence_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            level = write_run_home(root, "goleveldb", sync_seconds=120, rss_kb=1000, app_bytes=10_000)
+            tree = write_run_home(root, "treedb", sync_seconds=150, rss_kb=2000, app_bytes=8_000)
+            for run in [level, tree]:
+                sync_time = run / "sync" / "sync-time.log"
+                sync_time.write_text(
+                    sync_time.read_text(encoding="utf-8").replace("trust_hash=ABCDEF\n", ""),
+                    encoding="utf-8",
+                )
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(level), str(tree)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            comparison = payload["comparison"]
+            self.assertFalse(comparison["valid"])
+            self.assertEqual(comparison["reason"], "missing_run_window_evidence")
+            self.assertEqual(
+                comparison["missing_fields"],
+                [
+                    {"side": "baseline", "field": "trust_hash"},
+                    {"side": "candidate", "field": "trust_hash"},
+                ],
+            )
+            self.assertNotIn("ratios", comparison)
+
+            markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")
+            self.assertIn("Comparison skipped: missing_run_window_evidence.", markdown)
+            self.assertIn("trust_hash", markdown)
+
     def test_counts_fatal_log_matches(self) -> None:
         with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
             root = Path(tmp)
