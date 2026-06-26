@@ -29,6 +29,35 @@ func TestColumnPhysicalDenseTypedColumnTargetedRangeReads3090(t *testing.T) {
 		assertColumnPhysicalTargetedRangeBytes3090(t, "q1", full.Diagnostics, ranged.Diagnostics)
 	})
 
+	t.Run("q2_group_count_distinct", func(t *testing.T) {
+		batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2LocalDictBatchA1950(), typedColumnQ2LocalDictBatchB1950()}
+		events := flattenColumnPhysicalEvents1950(batches)
+		_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
+		defer closeFn()
+
+		req := typedColumnQ2Request1950()
+		rowHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q2", events))
+		want := columnPhysicalJSONBenchQ2ReferenceCountsP0(events)
+		matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events)
+
+		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityVerify
+		full, err := col.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery(q2 verify): %v", err)
+		}
+		assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 verify", full, rowHash, want)
+		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 verify", full.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
+
+		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+		ranged, err := col.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery(q2 skip checksums): %v", err)
+		}
+		assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 targeted ranges", ranged, rowHash, want)
+		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 targeted ranges", ranged.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
+		assertColumnPhysicalTargetedRangeBytes3090(t, "q2", full.Diagnostics, ranged.Diagnostics)
+	})
+
 	t.Run("q3_group_hour_count", func(t *testing.T) {
 		batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBatchA1950(), columnPhysicalQ3DenseBatchB1950()}
 		events := flattenColumnPhysicalEvents1950(batches)
@@ -54,6 +83,33 @@ func TestColumnPhysicalDenseTypedColumnTargetedRangeReads3090(t *testing.T) {
 		}
 		assertColumnPhysicalQ3DenseResult1950(t, "q3 targeted ranges", ranged, want, len(events), matchedRows, matchedRows)
 		assertColumnPhysicalTargetedRangeBytes3090(t, "q3", full.Diagnostics, ranged.Diagnostics)
+	})
+
+	t.Run("q4_time_order_topk", func(t *testing.T) {
+		batches := columnPhysicalQ4ATimeOrderBatches1950(9_000)
+		events := flattenColumnPhysicalEvents1950(batches)
+		_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, []ColumnSortKey{{Column: "time_us"}}, batches)
+		defer closeFn()
+
+		scanned := scanColumnPhysicalJSONBenchParityEventsP0(t, col, len(events))
+		req := columnPhysicalQ4ATimeOrderRequest1950()
+		want := columnPhysicalQ4ATimeOrderReferenceGroups1950(scanned, req.TopK)
+		wantCandidates := columnPhysicalQ4ATimeOrderReferenceEarlyCandidates1950(scanned, req.TopK)
+
+		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityVerify
+		full, err := col.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery(q4 verify): %v", err)
+		}
+		assertColumnPhysicalQ4ATimeOrderResult1950(t, "q4 verify", full, want, len(events), wantCandidates)
+
+		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+		ranged, err := col.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery(q4 skip checksums): %v", err)
+		}
+		assertColumnPhysicalQ4ATimeOrderResult1950(t, "q4 targeted ranges", ranged, want, len(events), wantCandidates)
+		assertColumnPhysicalTargetedRangeBytes3090(t, "q4", full.Diagnostics, ranged.Diagnostics)
 	})
 
 	t.Run("q5_group_int64_span", func(t *testing.T) {

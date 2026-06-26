@@ -34,6 +34,8 @@ type typedColumnPreparedColumnRequest struct {
 	IncludeVisibility        bool
 	IncludeStats             bool
 	IncludePruning           bool
+	IncludeSortKeyMetadata   bool
+	IncludeSortKeyMarks      bool
 	HasInt64PruningPredicate bool
 	Int64PruningPredicate    typedcolumn.Int64PruningPredicate
 	IncludeVectorPayload     bool
@@ -119,6 +121,7 @@ type typedColumnPreparedPartState struct {
 	RowSpan         typedcolumn.RowSpan
 	PhysicalColumns map[string]typedcolumn.ColumnPartColumn
 	Columns         map[string]*typedColumnPreparedColumnState
+	Marks           []typedcolumn.SortKeyMark
 	Certification   typedcolumn.ColumnPartLayoutCertification
 	Dependencies    []typedcolumn.SectionDependencyDescriptor
 	ManifestBytes   int
@@ -158,6 +161,7 @@ func (p *typedColumnPreparedPartState) close() {
 		delete(p.PhysicalColumns, name)
 	}
 	p.PhysicalColumns = nil
+	p.Marks = nil
 	p.Certification = typedcolumn.ColumnPartLayoutCertification{}
 	for name, column := range p.Columns {
 		if column != nil {
@@ -454,6 +458,13 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 			diag.PruningValidationFailures++
 			diag.PruningValidationFailureReason = err.Error()
 			return nil, diag, fmt.Errorf("collections: typed_column_part pruning validation failed: %w", err)
+		}
+	}
+	if typedColumnPreparedRequestsIncludeSortKeyMetadata(columnRequests) || typedColumnPreparedRequestsIncludeSortKeyMarks(columnRequests) {
+		sortKeyDiag, err := typedColumnAttachPreparedSortKey(part, image, readRange, typedColumnPreparedRequestsIncludeSortKeyMarks(columnRequests))
+		typedColumnPreparedStateDiagnosticsAdd(&diag, sortKeyDiag)
+		if err != nil {
+			return nil, diag, fmt.Errorf("collections: typed_column_part sort-key validation failed: %w", err)
 		}
 	}
 	if !typedColumnPreparedRequestsIncludeStats(columnRequests) {
@@ -771,6 +782,69 @@ func typedColumnPreparedColumnWantsPruning(column *typedColumnPreparedColumnStat
 		}
 	}
 	return false
+}
+
+func typedColumnPreparedRequestsIncludeSortKeyMetadata(requests []typedColumnPreparedColumnRequest) bool {
+	for _, request := range requests {
+		if request.IncludeSortKeyMetadata || request.IncludeSortKeyMarks {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnPreparedRequestsIncludeSortKeyMarks(requests []typedColumnPreparedColumnRequest) bool {
+	for _, request := range requests {
+		if request.IncludeSortKeyMarks {
+			return true
+		}
+	}
+	return false
+}
+
+func typedColumnAttachPreparedSortKey(part *typedColumnPreparedPartState, image typedcolumn.ColumnPartImage, readRange typedColumnPreparedRangeReader, includeMarks bool) (typedColumnPreparedStateDiagnostics, error) {
+	var diag typedColumnPreparedStateDiagnostics
+	if part == nil {
+		return diag, errors.New("collections: typed-column prepared sort-key missing part")
+	}
+	if readRange == nil {
+		return diag, errors.New("collections: typed-column prepared sort-key requires range reader")
+	}
+	metadataSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionSortKeyMetadata)
+	if err != nil {
+		return diag, err
+	}
+	metadataRaw, err := readRange(metadataSection.Offset, metadataSection.Length, true)
+	if err != nil {
+		return diag, err
+	}
+	sortKey, err := typedcolumn.DecodeColumnPartSortKeyMetadataSectionPayload(metadataRaw)
+	if err != nil {
+		return diag, err
+	}
+	diag.DecodedMetadataBytes += uint64(len(metadataRaw))
+	part.Descriptor.SortKey = sortKey
+	if !includeMarks {
+		return diag, nil
+	}
+	marksSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionSortKeyMarks)
+	if err != nil {
+		return diag, err
+	}
+	marksRaw, err := readRange(marksSection.Offset, marksSection.Length, true)
+	if err != nil {
+		return diag, err
+	}
+	marks, err := typedcolumn.DecodeColumnPartSortKeyMarksSectionPayload(marksRaw)
+	if err != nil {
+		return diag, err
+	}
+	if err := typedcolumn.ValidateColumnPartSortKeyMarks(part.Descriptor, marks); err != nil {
+		return diag, err
+	}
+	diag.DecodedMetadataBytes += uint64(len(marksRaw))
+	part.Marks = append(part.Marks[:0], marks...)
+	return diag, nil
 }
 
 func typedColumnAttachPreparedPruning(part *typedColumnPreparedPartState, image typedcolumn.ColumnPartImage, readRange typedColumnPreparedRangeReader, requests []typedColumnPreparedColumnRequest) (typedColumnPreparedStateDiagnostics, error) {

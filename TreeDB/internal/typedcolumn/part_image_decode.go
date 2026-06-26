@@ -1331,7 +1331,11 @@ func decodeSortKeyMetadataSection(image ColumnPartImage) ([]SortKeyColumn, error
 	if err != nil {
 		return nil, err
 	}
-	dec := columnPartImageDecoder{data: image.sectionBytes(section)}
+	return DecodeColumnPartSortKeyMetadataSectionPayload(image.sectionBytes(section))
+}
+
+func DecodeColumnPartSortKeyMetadataSectionPayload(data []byte) ([]SortKeyColumn, error) {
+	dec := columnPartImageDecoder{data: data}
 	count, err := dec.u32()
 	if err != nil {
 		return nil, err
@@ -1367,7 +1371,11 @@ func decodeSortKeyMarksSection(image ColumnPartImage) ([]SortKeyMark, error) {
 	if err != nil {
 		return nil, err
 	}
-	dec := columnPartImageDecoder{data: image.sectionBytes(section)}
+	return DecodeColumnPartSortKeyMarksSectionPayload(image.sectionBytes(section))
+}
+
+func DecodeColumnPartSortKeyMarksSectionPayload(data []byte) ([]SortKeyMark, error) {
+	dec := columnPartImageDecoder{data: data}
 	count, err := dec.u32()
 	if err != nil {
 		return nil, err
@@ -1511,6 +1519,10 @@ func validateDecodedSortKeyMarks(desc ColumnPartDescriptor, marks []SortKeyMark)
 		}
 	}
 	return nil
+}
+
+func ValidateColumnPartSortKeyMarks(desc ColumnPartDescriptor, marks []SortKeyMark) error {
+	return validateDecodedSortKeyMarks(desc, marks)
 }
 
 func decodeSortKeyBound(dec *columnPartImageDecoder) (SortKeyBound, error) {
