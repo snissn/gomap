@@ -93,11 +93,22 @@ classified as `WAL-rejected` or `WAL-off-only` in `user-command-wal.md`.
 
 Raw public key/value writes are part of the command-WAL surface when a DB is
 opened with `CommandWAL=true`: `Set`, `SetSync`, `Delete`, `DeleteSync`,
-`Batch.Write`, and `Batch.WriteSync` append typed `RawKVBatch` command frames
-before publishing visibility. Public cached raw operations that cannot be
-replayed as typed commands yet fail closed with `ErrCommandWALRejected`;
-currently that includes callback-based `Update`, `UpdateSync`, and range
-`DeleteRange`.
+`DeleteRange`, `Batch.Write`, and `Batch.WriteSync` append typed `RawKVBatch`
+command frames before publishing visibility. Public cached raw operations that
+cannot be replayed as typed commands yet fail closed with
+`ErrCommandWALRejected`; currently that includes callback-based `Update` and
+`UpdateSync`.
+
+Raw backend apply routes are also part of the span-native default-admission
+support surface. Backend stats report `treedb.raw.span_native.route.<route>.*`
+for point puts, point deletes, mixed point batches, range-delete batches, empty
+batches, and close/checkpoint drains. Default-auto admitted point routes may use
+span-native apply; unsupported rows fail closed with named reasons such as
+`range_delete_barrier`, `below_threshold`, `disabled`,
+`admission_policy_decline`, `command_wal_barrier`, or
+`close_or_checkpoint`. Public command-WAL `Update` and `UpdateSync` rejections
+are reported under `treedb.raw.span_native.public.route.<route>.fallback.*`
+because they return before a backend batch exists.
 
 The user-command WAL is a local crash-recovery log, not a Raft log. Future Raft
 entries may share command-envelope payloads, but consensus ordering and local

@@ -172,6 +172,18 @@ and 10.70M write skips in the write/checkpoint row, versus 12.41M stores for the
 explicit c4 immediate row. This preserves the M4 cache-churn rationale while
 keeping read-miss admission intact in read guardrails.
 
+Raw route support counters are exported in addition to the aggregate
+`treedb.flush_apply.span_native.*` counters. Backend raw apply rows use
+`treedb.raw.span_native.route.<route>.*` for point puts, point deletes, mixed
+point batches, range-delete batches, mixed range-delete batches, empty batches,
+and close/checkpoint drains. Default-auto admitted point rows can report
+`used_ops_total`; unsupported or rollback rows report named fallback reasons
+such as `range_delete_barrier`, `below_threshold`, `disabled`,
+`admission_policy_decline`, `command_wal_barrier`, and
+`close_or_checkpoint`. Public command-WAL `Update` and `UpdateSync` rejections
+return before backend apply, so they are reported separately under
+`treedb.raw.span_native.public.route.<route>.fallback.reason.command_wal_barrier.*`.
+
 ## Focused validation
 
 Final-root focused test logs are under

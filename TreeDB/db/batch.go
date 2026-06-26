@@ -248,6 +248,7 @@ func (b *Batch) write(sync bool) error {
 		return ErrClosed
 	}
 	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
+		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false)
 		return b.db.Checkpoint()
 	}
 	intent := b.commandWALPublishIntent
@@ -286,6 +287,7 @@ func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchInte
 
 func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool, error) {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
+	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
 	b.db.writeMu.RLock()
 	if b.db.closing.Load() {
@@ -320,7 +322,8 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	var metrics adaptive.Metrics
 	var err error
 	var applyResult zipper.ApplyResult
-	if flushApplyUseOptions(applyOpts) {
+	applyWithOptions := flushApplyUseOptions(applyOpts)
+	if applyWithOptions {
 		result, applyErr := z.ApplyWithOptions(rootID, b.batch, applyOpts)
 		applyResult = result
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
@@ -332,6 +335,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 	} else {
 		newRoot, retired, metrics, err = z.Apply(rootID, b.batch)
 	}
+	b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions)
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {
@@ -480,6 +484,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 
 func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
+	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
 	commitWaitStart := time.Now()
 	b.db.writeMu.Lock()
@@ -512,7 +517,8 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	var metrics adaptive.Metrics
 	var err error
 	var applyResult zipper.ApplyResult
-	if flushApplyUseOptions(applyOpts) {
+	applyWithOptions := flushApplyUseOptions(applyOpts)
+	if applyWithOptions {
 		result, applyErr := idx.zipper.ApplyWithOptions(rootID, b.batch, applyOpts)
 		applyResult = result
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
@@ -524,6 +530,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 	} else {
 		newRoot, retired, metrics, err = idx.zipper.Apply(rootID, b.batch)
 	}
+	b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions)
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {
