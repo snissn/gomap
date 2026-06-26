@@ -390,6 +390,32 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	return db.newRawKVCommandWALIntentFromEntries(entries)
+}
+
+// NewRawKVCommandWALIntentFromOrderedEntries builds a public raw-KV command
+// intent from entries that are already in the caller's required application
+// order. Unlike prepareRawKVCommandWALIntent, this does not sort or compact
+// point ops; public cached batches rely on replay order to preserve mixed
+// set/delete/range-delete semantics.
+func (db *DB) NewRawKVCommandWALIntentFromOrderedEntries(entries []batchpkg.Entry) (*CommandWALIntent, error) {
+	if db == nil || !db.commandWAL {
+		return nil, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntries(entries)
+	if intent == nil || err != nil {
+		return nil, err
+	}
+	return &CommandWALIntent{inner: *intent}, nil
+}
+
+func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
 	externalRefs := false
 	var ridCache map[page.ValuePtr]uint64
 	var smallOps [16]commitlog.RawKVOperation
@@ -424,6 +450,9 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 		default:
 			return nil, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
 		}
+	}
+	if len(ops) == 0 {
+		return nil, nil
 	}
 	payload, err := commitlog.EncodeRawKVBatchPayload(ops)
 	if err != nil {

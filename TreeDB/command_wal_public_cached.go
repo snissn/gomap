@@ -41,6 +41,24 @@ func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error 
 	return err
 }
 
+func (tdb *DB) appendPublicRawKVCommandEntries(entries []batch.Entry, sync bool) error {
+	if tdb == nil || !tdb.commandWALCached || len(entries) == 0 {
+		return nil
+	}
+	if tdb.backend == nil {
+		return ErrClosed
+	}
+	intent, err := tdb.backend.NewRawKVCommandWALIntentFromOrderedEntries(entries)
+	if err != nil {
+		return err
+	}
+	lsn, err := tdb.backend.AppendCommandWALIntent(intent, sync)
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+	}
+	return err
+}
+
 func (tdb *DB) appendPublicRawKVDeleteRangeCommand(start, end []byte, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || batch.IsDeleteRangeNoop(start, end) {
 		return nil
@@ -581,6 +599,22 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
+	}
+	if b.db != nil && b.db.commandWALCached && b.db.backend != nil {
+		var entries []batch.Entry
+		hasPointer := false
+		if err := b.inner.Replay(func(entry batch.Entry) error {
+			if entry.Type == batch.OpPut && entry.IsPtr {
+				hasPointer = true
+			}
+			entries = append(entries, entry)
+			return nil
+		}); err != nil {
+			return err
+		}
+		if hasPointer {
+			return b.db.appendPublicRawKVCommandEntries(entries, sync)
+		}
 	}
 	payload, err := b.commandWALPayload()
 	if err != nil {

@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1592,6 +1593,68 @@ func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
 	has, err := reopen.Has([]byte("b"))
 	if err != nil || has {
 		t.Fatalf("Has(b)=(%t,%v), want false,nil", has, err)
+	}
+}
+
+func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		WALMaxSegmentBytes:           4096,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	values := make(map[string][]byte)
+	b := db.NewBatch()
+	for i := 0; i < 8; i++ {
+		key := fmt.Sprintf("large-%02d", i)
+		value := bytes.Repeat([]byte{byte('a' + i)}, 2048)
+		values[key] = value
+		if err := b.Set([]byte(key), value); err != nil {
+			_ = b.Close()
+			_ = db.Close()
+			t.Fatalf("batch Set %s: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write should encode pointer ops as SetRID below the command frame cap: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	assertPublicCommandWALFrames(t, db, 1)
+	for key, value := range values {
+		requireRawKVValue(t, db, []byte(key), value)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	for key, value := range values {
+		requireRawKVValue(t, reopen, []byte(key), value)
 	}
 }
 
