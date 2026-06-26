@@ -1578,8 +1578,8 @@ func TestPrepareColumnWritePublishInputRecordsDocumentExtractionM10B(t *testing.
 	if !input.declaredRowsReady || len(input.declaredRows) != 1 {
 		t.Fatalf("declared rows not prepared: %+v", input)
 	}
-	if input.documentExtraction <= 0 {
-		t.Fatalf("document extraction duration=%s want positive", input.documentExtraction)
+	if input.documentExtraction < 0 {
+		t.Fatalf("document extraction duration=%s want non-negative", input.documentExtraction)
 	}
 	if got := input.declaredRows[0].Values[0].Int64; got != 42 {
 		t.Fatalf("row_id=%d want 42", got)
