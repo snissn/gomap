@@ -6671,6 +6671,31 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "publish.ordered_root_delta_group.calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.calls_total"}},
 		{label: "publish.ordered_root_delta_group.roots_total", alts: []string{"treedb.publish.ordered_root_delta_group.roots_total"}},
 		{label: "publish.ordered_root_delta_group.avg_roots_per_call", alts: []string{"treedb.publish.ordered_root_delta_group.avg_roots_per_call"}},
+		{label: "publish.ordered_root_delta_group.span_native.candidate_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.eligible_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.eligible_ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.used_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.used_ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.ineligible_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.ineligible_ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallbacks_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallbacks_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.not_implemented_count_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.span_native_not_implemented.count_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.not_implemented_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.span_native_not_implemented.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.prepare_error_count_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.prepare_error.count_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.prepare_error_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.prepare_error.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.route_ineligible_count_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.route_ineligible.count_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.route_ineligible_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.route_ineligible.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.disabled_count_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.disabled.count_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.disabled_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.disabled.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.admission_policy_decline_count_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.admission_policy_decline.count_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.admission_policy_decline_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.admission_policy_decline.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.validation_failed_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.validation_failed.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.range_delete_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.range_delete_barrier.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.cold_build_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.cold_build.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.inexact_leaf_spans_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.inexact_leaf_spans.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.memory_or_emergency_cap_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.memory_or_emergency_cap.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.output_ownership_failure_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.output_ownership_failure.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.reducer_validation_failed_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.reducer_validation_failed.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.root_mismatch_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.root_mismatch.ops_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.unknown_count_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.unknown.count_total"}},
+		{label: "publish.ordered_root_delta_group.span_native.fallback.unknown_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.unknown.ops_total"}},
 		{label: "publish.ordered_root_delta_group.root_apply_calls_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_calls_total"}},
 		{label: "publish.ordered_root_delta_group.root_apply_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ns_total"}},
 		{label: "publish.ordered_root_delta_group.root_apply_ops_total", alts: []string{"treedb.publish.ordered_root_delta_group.root_apply_ops_total"}},
@@ -6682,6 +6707,73 @@ func renderTreeDBSelectedStatsString(instances []*DBInstance, treeStats map[stri
 		{label: "publish.ordered_root_delta_group.publish_prepare_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.publish_prepare_ns_total"}},
 		{label: "publish.ordered_root_delta_group.write_lock_wait_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_wait_ns_total"}},
 		{label: "publish.ordered_root_delta_group.write_lock_hold_ns_total", alts: []string{"treedb.publish.ordered_root_delta_group.write_lock_hold_ns_total"}},
+	}
+	orderedRootRoutes := []string{
+		string(treedbdb.OrderedRootSpanNativeRouteDirectPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteGroupedPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteSystemDeltaBuilderPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteCommandWALPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteCollectionBufferedRoots),
+		string(treedbdb.OrderedRootSpanNativeRouteOverlayColdBuild),
+		string(treedbdb.OrderedRootSpanNativeRouteMultiIndexGroupPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteDeltaBatchPublish),
+		string(treedbdb.OrderedRootSpanNativeRouteReadOnlyPrepare),
+	}
+	for _, route := range orderedRootRoutes {
+		for _, field := range []string{
+			"observations_total",
+			"candidate_ops_total",
+			"eligible_ops_total",
+			"used_ops_total",
+			"ineligible_ops_total",
+			"fallbacks_total",
+			"fallback.reason.span_native_not_implemented.count_total",
+			"fallback.reason.span_native_not_implemented.ops_total",
+			"fallback.reason.prepare_error.count_total",
+			"fallback.reason.prepare_error.ops_total",
+			"fallback.reason.route_ineligible.count_total",
+			"fallback.reason.route_ineligible.ops_total",
+			"fallback.reason.disabled.count_total",
+			"fallback.reason.disabled.ops_total",
+			"fallback.reason.admission_policy_decline.count_total",
+			"fallback.reason.admission_policy_decline.ops_total",
+			"fallback.reason.cold_build.ops_total",
+			"fallback.reason.validation_failed.ops_total",
+			"fallback.reason.range_delete_barrier.ops_total",
+			"fallback.reason.inexact_leaf_spans.ops_total",
+			"fallback.reason.unknown.count_total",
+			"fallback.reason.unknown.ops_total",
+		} {
+			keys = append(keys, struct {
+				label string
+				alts  []string
+			}{
+				label: "publish.ordered_root_delta_group.span_native.route." + route + "." + field,
+				alts:  []string{"treedb.publish.ordered_root_delta_group.span_native.route." + route + "." + field},
+			})
+		}
+		for _, field := range []string{
+			"context",
+			"status",
+			"candidate",
+			"eligible",
+			"used",
+			"fallback_reason",
+			"fallback_class",
+			"admission_policy",
+			"admission_admitted",
+			"admission_reason",
+			"selected_workers",
+			"detail",
+		} {
+			keys = append(keys, struct {
+				label string
+				alts  []string
+			}{
+				label: "publish.ordered_root_delta_group.span_native.triage." + route + "." + field,
+				alts:  []string{"treedb.publish.ordered_root_delta_group.span_native.triage.route." + route + "." + field},
+			})
+		}
 	}
 	var sb strings.Builder
 	for _, inst := range instances {

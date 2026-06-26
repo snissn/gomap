@@ -264,6 +264,19 @@ type DB struct {
 	orderedRootDeltaGroupPublishPrepareErrors                   atomic.Uint64
 	orderedRootDeltaGroupFinalizeNs                             atomic.Uint64
 	orderedRootDeltaGroupFinalizeCalls                          atomic.Uint64
+	orderedRootSpanNativeCandidateOps                           atomic.Uint64
+	orderedRootSpanNativeCandidateSpans                         atomic.Uint64
+	orderedRootSpanNativeEligibleOps                            atomic.Uint64
+	orderedRootSpanNativeEligibleSpans                          atomic.Uint64
+	orderedRootSpanNativeUsedOps                                atomic.Uint64
+	orderedRootSpanNativeUsedSpans                              atomic.Uint64
+	orderedRootSpanNativeIneligibleOps                          atomic.Uint64
+	orderedRootSpanNativeIneligibleSpans                        atomic.Uint64
+	orderedRootSpanNativeFallbacks                              atomic.Uint64
+	orderedRootSpanNativeFallbackReasonCounts                   [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	orderedRootSpanNativeFallbackOps                            [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	orderedRootSpanNativeFallbackSpans                          [FlushSpanRunFallbackReasonCount]atomic.Uint64
+	orderedRootSpanNativeRouteCounters                          [orderedRootSpanNativeRouteCount]orderedRootSpanNativeRouteCounters
 
 	// Cached-flush/root-apply M0 counters. These are coarse per-apply counters
 	// used by benchmark artifacts; avoid per-node timing in zipper recursion.

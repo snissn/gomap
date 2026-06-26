@@ -19,6 +19,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -328,6 +329,35 @@ func TestProfileBenchDeltaUintStat(t *testing.T) {
 	}
 	if got := profileBenchUintStat(after, "bad"); got != 0 {
 		t.Fatalf("value bad=%d want 0", got)
+	}
+}
+
+func TestReportProfileBenchOrderedRootPublishStatsIncludesPrepareError(t *testing.T) {
+	result := testing.Benchmark(func(b *testing.B) {
+		before := map[string]string{
+			"treedb.publish.ordered_root_delta_group.calls_total": "1",
+		}
+		after := map[string]string{
+			"treedb.publish.ordered_root_delta_group.calls_total":                                                                   "2",
+			"treedb.publish.ordered_root_delta_group.roots_total":                                                                   "1",
+			"treedb.publish.ordered_root_delta_group.span_native.fallback.reason.prepare_error.ops_total":                           "6",
+			"treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.fallback.reason.prepare_error.ops_total": "4",
+		}
+		reportProfileBenchOrderedRootPublishStats(b, after, before, 20)
+	})
+	got, ok := result.Extra["publish_delta_group_span_native_fallback_prepare_error_ops/doc"]
+	if !ok {
+		t.Fatalf("missing prepare_error profile metric: %v", result.Extra)
+	}
+	if want := 0.3; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("prepare_error profile metric=%v want %v", got, want)
+	}
+	got, ok = result.Extra["publish_delta_group_span_native_route_command_wal_publish_fallback_prepare_error_ops/doc"]
+	if !ok {
+		t.Fatalf("missing command_wal_publish prepare_error profile metric: %v", result.Extra)
+	}
+	if want := 0.2; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("command_wal_publish prepare_error profile metric=%v want %v", got, want)
 	}
 }
 
@@ -1127,6 +1157,41 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	rootApplyInternalLeafLogRefs := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_leaf_log_refs_total")
 	rootApplyInternalLeafLogRefCopies := profileBenchDeltaUintStat(after, before, prefix+"root_apply_internal_leaf_log_ref_copies_total")
 	rootApplyRootSplitLevels := profileBenchDeltaUintStat(after, before, prefix+"root_apply_root_split_levels_total")
+	spanNativeCandidateOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.candidate_ops_total")
+	spanNativeEligibleOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.eligible_ops_total")
+	spanNativeUsedOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.used_ops_total")
+	spanNativeIneligibleOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.ineligible_ops_total")
+	spanNativeFallbacks := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallbacks_total")
+	spanNativeNotImplementedOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallback.reason.span_native_not_implemented.ops_total")
+	spanNativePrepareErrorOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallback.reason.prepare_error.ops_total")
+	spanNativeRouteIneligibleOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallback.reason.route_ineligible.ops_total")
+	spanNativeDisabledOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallback.reason.disabled.ops_total")
+	spanNativeAdmissionDeclineOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallback.reason.admission_policy_decline.ops_total")
+	spanNativeColdBuildOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallback.reason.cold_build.ops_total")
+	spanNativeUnknownOps := profileBenchDeltaUintStat(after, before, prefix+"span_native.fallback.reason.unknown.ops_total")
+	spanNativeRoutePrepareErrorOps := []struct {
+		route string
+		ops   uint64
+	}{}
+	for _, route := range []string{
+		string(backenddb.OrderedRootSpanNativeRouteDirectPublish),
+		string(backenddb.OrderedRootSpanNativeRouteGroupedPublish),
+		string(backenddb.OrderedRootSpanNativeRouteSystemDeltaBuilderPublish),
+		string(backenddb.OrderedRootSpanNativeRouteCommandWALPublish),
+		string(backenddb.OrderedRootSpanNativeRouteCollectionBufferedRoots),
+		string(backenddb.OrderedRootSpanNativeRouteOverlayColdBuild),
+		string(backenddb.OrderedRootSpanNativeRouteMultiIndexGroupPublish),
+		string(backenddb.OrderedRootSpanNativeRouteDeltaBatchPublish),
+		string(backenddb.OrderedRootSpanNativeRouteReadOnlyPrepare),
+	} {
+		spanNativeRoutePrepareErrorOps = append(spanNativeRoutePrepareErrorOps, struct {
+			route string
+			ops   uint64
+		}{
+			route: route,
+			ops:   profileBenchDeltaUintStat(after, before, prefix+"span_native.route."+route+".fallback.reason.prepare_error.ops_total"),
+		})
+	}
 	systemBuildNs := profileBenchDeltaUintStat(after, before, prefix+"system_build_ns_total")
 	systemApplyNs := profileBenchDeltaUintStat(after, before, prefix+"system_apply_ns_total")
 	systemApplyCalls := profileBenchDeltaUintStat(after, before, prefix+"system_apply_calls_total")
@@ -1172,6 +1237,21 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	b.ReportMetric(float64(rootApplyInternalLeafLogRefs)/float64(docs), "publish_delta_group_root_apply_internal_leaf_log_refs/doc")
 	b.ReportMetric(float64(rootApplyInternalLeafLogRefCopies)/float64(docs), "publish_delta_group_root_apply_internal_leaf_log_ref_copies/doc")
 	b.ReportMetric(float64(rootApplyRootSplitLevels)/float64(docs), "publish_delta_group_root_apply_root_split_levels/doc")
+	b.ReportMetric(float64(spanNativeCandidateOps)/float64(docs), "publish_delta_group_span_native_candidate_ops/doc")
+	b.ReportMetric(float64(spanNativeEligibleOps)/float64(docs), "publish_delta_group_span_native_eligible_ops/doc")
+	b.ReportMetric(float64(spanNativeUsedOps)/float64(docs), "publish_delta_group_span_native_used_ops/doc")
+	b.ReportMetric(float64(spanNativeIneligibleOps)/float64(docs), "publish_delta_group_span_native_ineligible_ops/doc")
+	b.ReportMetric(float64(spanNativeFallbacks), "publish_delta_group_span_native_fallbacks")
+	b.ReportMetric(float64(spanNativeNotImplementedOps)/float64(docs), "publish_delta_group_span_native_fallback_not_implemented_ops/doc")
+	b.ReportMetric(float64(spanNativePrepareErrorOps)/float64(docs), "publish_delta_group_span_native_fallback_prepare_error_ops/doc")
+	for _, routeMetric := range spanNativeRoutePrepareErrorOps {
+		b.ReportMetric(float64(routeMetric.ops)/float64(docs), "publish_delta_group_span_native_route_"+routeMetric.route+"_fallback_prepare_error_ops/doc")
+	}
+	b.ReportMetric(float64(spanNativeRouteIneligibleOps)/float64(docs), "publish_delta_group_span_native_fallback_route_ineligible_ops/doc")
+	b.ReportMetric(float64(spanNativeDisabledOps)/float64(docs), "publish_delta_group_span_native_fallback_disabled_ops/doc")
+	b.ReportMetric(float64(spanNativeAdmissionDeclineOps)/float64(docs), "publish_delta_group_span_native_fallback_admission_policy_decline_ops/doc")
+	b.ReportMetric(float64(spanNativeColdBuildOps)/float64(docs), "publish_delta_group_span_native_fallback_cold_build_ops/doc")
+	b.ReportMetric(float64(spanNativeUnknownOps)/float64(docs), "publish_delta_group_span_native_fallback_unknown_ops/doc")
 	b.ReportMetric(float64(systemBuildNs)/float64(docs), "publish_delta_group_system_build_ns/doc")
 	b.ReportMetric(float64(systemApplyNs)/float64(docs), "publish_delta_group_system_apply_ns/doc")
 	b.ReportMetric(float64(systemApplyOps)/float64(docs), "publish_delta_group_system_apply_ops/doc")
@@ -1188,6 +1268,9 @@ func reportProfileBenchOrderedRootPublishStats(b *testing.B, after, before map[s
 	}
 	if rootApplyLeafLogPageBytesWritten > 0 {
 		b.ReportMetric(float64(rootApplyLeafLogRecordHintBytesWritten)/float64(rootApplyLeafLogPageBytesWritten), "publish_delta_group_root_apply_leaf_log_record_hint_write_ratio")
+	}
+	if spanNativeCandidateOps > 0 {
+		b.ReportMetric(float64(spanNativeUsedOps)/float64(spanNativeCandidateOps), "publish_delta_group_span_native_used_ops/candidate_op")
 	}
 	if systemApplyCalls > 0 {
 		b.ReportMetric(float64(systemApplyNs)/float64(systemApplyCalls), "publish_delta_group_system_apply_ns/call")
