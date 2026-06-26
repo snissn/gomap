@@ -65,15 +65,21 @@ func TestSpanNativeApplyPointDeleteAndOverwriteEdgeParity(t *testing.T) {
 			serialRoot := buildReadOnlyPrepareRootWithKeys(t, serial, 1024)
 			nativeRoot := buildReadOnlyPrepareRootWithKeys(t, native, 1024)
 
-			delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
-			defer func() { _ = delta.Close() }()
-			tc.build(t, delta)
+			buildDelta := func() *batch.Batch {
+				delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+				tc.build(t, delta)
+				return delta
+			}
+			serialDelta := buildDelta()
+			defer func() { _ = serialDelta.Close() }()
+			nativeDelta := buildDelta()
+			defer func() { _ = nativeDelta.Close() }()
 
-			serialNewRoot, _, _, err := serial.Apply(serialRoot, delta)
+			serialNewRoot, _, _, err := serial.Apply(serialRoot, serialDelta)
 			if err != nil {
 				t.Fatalf("serial Apply: %v", err)
 			}
-			result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{
+			result, err := native.ApplyWithOptions(nativeRoot, nativeDelta, ApplyOptions{
 				SpanNativeApply:                    true,
 				SpanNativeAllowMaintenancePointOps: true,
 				ParallelApplyConcurrency:           2,

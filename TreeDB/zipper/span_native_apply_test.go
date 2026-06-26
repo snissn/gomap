@@ -35,7 +35,7 @@ func TestSpanNativeApplyEligibilityFallbackReasons(t *testing.T) {
 		{name: "cold", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.ColdBuild = true }), want: "cold_build"},
 		{name: "point-delete-maintenance-bit-default", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.Maintenance = true }), want: "maintenance"},
 		{name: "point-delete-maintenance-bit-ordered-root-opt-in", opts: ApplyOptions{SpanNativeApply: true, SpanNativeAllowMaintenancePointOps: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.Maintenance = true }), want: ""},
-		{name: "maintenance-without-point-ops", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) {
+		{name: "maintenance-opt-in-without-point-ops", opts: ApplyOptions{SpanNativeApply: true, SpanNativeAllowMaintenancePointOps: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) {
 			s.Maintenance = true
 			s.PointOps = 0
 		}), want: "maintenance"},

@@ -688,7 +688,8 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if err != nil {
 			return err
 		}
-		if debt.ValueLogGCSegments == 0 && debt.LeafPackGenerations == 0 && debt.LeafGCGenerations == 0 && len(fencedIDs) == 0 {
+		leafPackDebtActionable := debt.LeafPackGenerations > 0 && leafPackPassesRemaining > 0
+		if debt.ValueLogGCSegments == 0 && !leafPackDebtActionable && debt.LeafGCGenerations == 0 && len(fencedIDs) == 0 {
 			return nil
 		}
 		if debt.ValueLogGCSegments > 0 {
@@ -731,7 +732,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 				return err
 			}
 		}
-		if debt.LeafPackGenerations > 0 && leafPackPassesRemaining > 0 {
+		if leafPackDebtActionable {
 			leafPackPassesRemaining--
 			var pack LeafGenerationPackRunOnceStats
 			phaseName := fmt.Sprintf("settle-leaf-generation-pack-%d", pass+1)
