@@ -915,6 +915,75 @@ func TestOrderedRootSpanNativeApplyResultPreservesPrepareFailureReason(t *testin
 	requireOrderedRootStatCounterZero(t, errorStats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
 }
 
+func TestOrderedRootSpanNativeApplyResultPreservesBarrierFallbackReason(t *testing.T) {
+	opts := Options{}
+	db := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&opts, 16, 6)}
+	prepared := zipper.ReadOnlyPrepareResult{
+		Ops:            1,
+		DeleteRanges:   1,
+		ExactLeafSpans: true,
+		LeafSpans: []zipper.ReadOnlyLeafSpan{{
+			OpCount:          1,
+			DeleteRangeCount: 1,
+			DeleteRangeStart: 0,
+			DeleteRangeEnd:   1,
+			ByteCount:        128,
+		}},
+	}
+	db.observeOrderedRootSpanNativeApplyResult(
+		OrderedRootSpanNativeRouteDeltaBatchPublish,
+		"range delete barrier",
+		zipper.ApplyResult{
+			ReadOnlyPrepareRequested: true,
+			ReadOnlyPrepare:          prepared,
+		},
+		nil,
+		FlushSpanRunFallbackSpanNativeNotImplemented.String(),
+	)
+
+	stats := map[string]string{}
+	db.appendOrderedRootSpanNativeStats(stats)
+	routePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish."
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackRangeDeleteBarrier.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackRangeDeleteBarrier.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+}
+
+func TestOrderedRootSpanNativeApplyResultPreservesInexactLeafFallbackReason(t *testing.T) {
+	opts := Options{}
+	db := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&opts, 16, 6)}
+	prepared := zipper.ReadOnlyPrepareResult{
+		Ops:      2,
+		PointOps: 2,
+		LeafSpans: []zipper.ReadOnlyLeafSpan{{
+			OpCount:      2,
+			PointOpCount: 2,
+			PointOpStart: 0,
+			PointOpEnd:   2,
+			ByteCount:    128,
+		}},
+	}
+	db.observeOrderedRootSpanNativeApplyResult(
+		OrderedRootSpanNativeRouteDeltaBatchPublish,
+		"inexact leaf spans",
+		zipper.ApplyResult{
+			ReadOnlyPrepareRequested: true,
+			ReadOnlyPrepare:          prepared,
+		},
+		nil,
+		FlushSpanRunFallbackSpanNativeNotImplemented.String(),
+	)
+
+	stats := map[string]string{}
+	db.appendOrderedRootSpanNativeStats(stats)
+	routePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish."
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackInexactLeafSpans.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackInexactLeafSpans.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+}
+
 func TestOrderedRootSpanNativeExplicitBatchRouteCounters(t *testing.T) {
 	dir := t.TempDir()
 	db := openOrderedRootSpanNativeRouteCounterDB(t, dir)

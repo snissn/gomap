@@ -525,14 +525,15 @@ func (db *DB) observeOrderedRootSpanNativeApplyResult(route OrderedRootSpanNativ
 	if db == nil || !result.ReadOnlyPrepareRequested {
 		return
 	}
+	summary := result.ReadOnlyPrepare.LeafSpanSummary()
 	explicitFallbackReason := result.SpanNativeFallbackReason
-	if explicitFallbackReason == "" && !orderedRootSpanNativeApplyPrepareFailed(result) {
+	if explicitFallbackReason == "" && !orderedRootSpanNativeApplyPrepareFailed(result) && orderedRootSpanNativeApplyPreparedCandidate(route, summary) {
 		explicitFallbackReason = fallbackReason
 	}
 	row := db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
 		Route:                         route,
 		Context:                       context,
-		Summary:                       result.ReadOnlyPrepare.LeafSpanSummary(),
+		Summary:                       summary,
 		ReadOnlyPrepareValidationFail: result.ReadOnlyPrepareValidationFailed,
 		Err:                           err,
 		ExplicitFallbackReason:        explicitFallbackReason,
@@ -544,6 +545,11 @@ func (db *DB) observeOrderedRootSpanNativeApplyResult(route OrderedRootSpanNativ
 
 func orderedRootSpanNativeApplyPrepareFailed(result zipper.ApplyResult) bool {
 	return result.ReadOnlyPrepareValidationFailed || result.ReadOnlyPrepareFailed
+}
+
+func orderedRootSpanNativeApplyPreparedCandidate(route OrderedRootSpanNativeRoute, summary zipper.ReadOnlyLeafSpanSummary) bool {
+	ops, _ := orderedRootSpanNativeOpsAndSpans(summary, 0)
+	return orderedRootSpanNativeCandidate(route, summary, ops)
 }
 
 func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int, err error, validationFailed bool, opts orderedRootPublishOptions) {
