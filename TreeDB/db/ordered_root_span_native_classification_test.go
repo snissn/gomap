@@ -801,6 +801,151 @@ func TestOrderedRootSpanNativePublishUsesSpanNativeWhenAdmitted(t *testing.T) {
 	}
 }
 
+func TestOrderedRootSpanNativeDefaultAutoAdmissionEnablesApplyOptions(t *testing.T) {
+	opts := Options{}
+	decision := computeFlushAdmissionDecisionForHardware(&opts, 16, 6)
+	if !decision.Admitted || !opts.FlushApplySpanNative || opts.FlushApplyConcurrency <= 1 {
+		t.Fatalf("fixture default auto admission=%+v opts=%+v, want admitted span-native concurrency", decision, opts)
+	}
+	db := &DB{
+		flushAdmission:        decision,
+		flushApplyConcurrency: normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency),
+		flushApplyMinEntries:  opts.FlushApplyMinEntries,
+		flushApplyMinSpans:    opts.FlushApplyMinSpans,
+		flushApplyMinBytes:    opts.FlushApplyMinBytes,
+		flushApplySpanNative:  opts.FlushApplySpanNative,
+	}
+
+	rawApplyOpts := db.flushApplyOptions()
+	if !rawApplyOpts.SpanNativeApply || rawApplyOpts.ParallelApplyConcurrency <= 1 {
+		t.Fatalf("default raw apply options=%+v, want admitted span-native workers", rawApplyOpts)
+	}
+	if rawApplyOpts.SpanNativeAllowMaintenancePointOps {
+		t.Fatalf("default raw apply options enabled ordered-root maintenance opt-in: %+v", rawApplyOpts)
+	}
+
+	orderedApplyOpts := db.orderedRootDeltaBatchApplyOptions(
+		systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteMultiIndexGroupPublish, "default auto ordered-root apply"),
+	)
+	if !orderedApplyOpts.SpanNativeApply || orderedApplyOpts.ParallelApplyConcurrency <= 1 {
+		t.Fatalf("default ordered-root apply options=%+v, want admitted span-native workers", orderedApplyOpts)
+	}
+	if !orderedApplyOpts.SpanNativeAllowMaintenancePointOps {
+		t.Fatalf("default ordered-root apply options did not enable maintenance point opt-in: %+v", orderedApplyOpts)
+	}
+	if got := orderedApplyOpts.SpanNativeForceFallbackReason; got != "" {
+		t.Fatalf("default ordered-root fallback reason=%q want empty", got)
+	}
+}
+
+func TestOrderedRootSpanNativeAdmissionPolicyDisablesApplyOptions(t *testing.T) {
+	cases := []struct {
+		name   string
+		opts   Options
+		gomax  int
+		cores  int
+		reason FlushSpanRunFallbackReason
+	}{
+		{
+			name:   "off",
+			opts:   Options{FlushAdmissionPolicy: FlushAdmissionPolicyOff, FlushApplySpanNative: true, FlushApplyConcurrency: 4},
+			gomax:  16,
+			cores:  6,
+			reason: FlushSpanRunFallbackDisabled,
+		},
+		{
+			name:   "auto-decline",
+			opts:   Options{FlushAdmissionPolicy: FlushAdmissionPolicyAuto, FlushApplySpanNative: true, FlushApplyConcurrency: 1},
+			gomax:  4,
+			cores:  4,
+			reason: FlushSpanRunFallbackAdmissionPolicyDecline,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := tc.opts
+			decision := computeFlushAdmissionDecisionForHardware(&opts, tc.gomax, tc.cores)
+			if decision.Admitted || opts.FlushApplySpanNative || opts.FlushApplyConcurrency != 0 {
+				t.Fatalf("admission decision=%+v opts=%+v, want disabled ordered-root apply inputs", decision, opts)
+			}
+			db := &DB{
+				flushAdmission:        decision,
+				flushApplyConcurrency: normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency),
+				flushApplyMinEntries:  opts.FlushApplyMinEntries,
+				flushApplyMinSpans:    opts.FlushApplyMinSpans,
+				flushApplyMinBytes:    opts.FlushApplyMinBytes,
+				flushApplySpanNative:  opts.FlushApplySpanNative,
+			}
+			orderedApplyOpts := db.orderedRootDeltaBatchApplyOptions(
+				systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteMultiIndexGroupPublish, "policy disabled ordered-root apply"),
+			)
+			if orderedApplyOpts.SpanNativeApply || orderedApplyOpts.PrepareReadOnly || orderedApplyOpts.ParallelApplyConcurrency != 0 {
+				t.Fatalf("ordered-root apply options=%+v, want policy-disabled serial apply", orderedApplyOpts)
+			}
+			row := orderedRootSpanNativeTriageRowsByRoute(db.OrderedRootSpanNativeTriageSnapshot())[OrderedRootSpanNativeRouteMultiIndexGroupPublish]
+			if row.FallbackReason != tc.reason.String() || row.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
+				t.Fatalf("triage row=%+v want %s policy fallback", row, tc.reason)
+			}
+		})
+	}
+}
+
+func TestOrderedRootSpanNativeUnsupportedRouteLabelFallsBack(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                    t.TempDir(),
+		FlushAdmissionPolicy:   FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:  2,
+		FlushApplyMinEntries:   1,
+		FlushApplyMinSpans:     1,
+		FlushApplyMinBytes:     1,
+		FlushApplySpanNative:   true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "doc/1", "base").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	updateIter := mustFrozenSystemMemtable(t, "doc/2", "update").NewIterator(nil, nil)
+	update, err := OrderedRootDeltaBatchFromIterator(updateIter)
+	_ = updateIter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = update.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot:          baseRoot,
+			Delta:             update,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteDirectPublish,
+			SpanNativeContext: "unsupported direct route label",
+		}},
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/collections/users/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v, want one non-zero root", rootIDs)
+	}
+
+	stats := db.Stats()
+	directPrefix := "treedb.publish.ordered_root_delta_group.span_native.route.direct_publish."
+	requireOrderedRootStatCounterPositive(t, stats, directPrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, directPrefix+"fallback.reason."+FlushSpanRunFallbackRouteIneligible.String()+".count_total")
+	requireOrderedRootStatCounterPositive(t, stats, directPrefix+"fallback.reason."+FlushSpanRunFallbackRouteIneligible.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, directPrefix+"used_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, directPrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.used_ops_total")
+}
+
 func TestOrderedRootSpanNativeReadOnlyPrepareUsesPointDeleteOptions(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                    t.TempDir(),
