@@ -181,6 +181,7 @@ type columnStoreSuiteReport struct {
 	Parity                   map[string]columnStoreParity   `json:"parity"`
 	FirstTouchParity         map[string]columnStoreParity   `json:"first_touch_parity,omitempty"`
 	ByteAccounting           columnStoreByteAccounting      `json:"byte_accounting"`
+	MetadataCost             columnStoreMetadataCostMetric  `json:"metadata_cost"`
 	CodecLayouts             []columnStoreCodecLayoutMetric `json:"codec_layouts"`
 	CompressionMatrixNote    string                         `json:"compression_matrix_note"`
 	Manifest                 columnStoreManifestMetric      `json:"manifest"`
@@ -282,6 +283,11 @@ type columnStoreQueryMetric struct {
 	RowMaterializations      int                               `json:"row_materializations"`
 	DocumentMaterializations int                               `json:"document_materializations"`
 	AggregateMetadataUsed    bool                              `json:"aggregate_metadata_used"`
+	MetadataCostStorageBytes int64                             `json:"metadata_cost_storage_bytes,omitempty"`
+	MetadataCostStorageBasis string                            `json:"metadata_cost_storage_basis,omitempty"`
+	MetadataCostInsertMS     float64                           `json:"metadata_cost_insert_ms,omitempty"`
+	MetadataCostInsertNsRow  float64                           `json:"metadata_cost_insert_ns_per_row,omitempty"`
+	MetadataCostInsertBasis  string                            `json:"metadata_cost_insert_basis,omitempty"`
 	SortTopKPruningUsed      bool                              `json:"sort_topk_pruning_used"`
 	JSONReconstruction       bool                              `json:"json_reconstruction"`
 	ResultCount              int                               `json:"result_count"`
@@ -361,6 +367,11 @@ type columnStoreJSONBenchCell struct {
 	RowMaterializations              int                               `json:"row_materializations"`
 	DocumentMaterializations         int                               `json:"document_materializations"`
 	AggregateMetadataUsed            bool                              `json:"aggregate_metadata_used"`
+	MetadataCostStorageBytes         int64                             `json:"metadata_cost_storage_bytes,omitempty"`
+	MetadataCostStorageBasis         string                            `json:"metadata_cost_storage_basis,omitempty"`
+	MetadataCostInsertMS             float64                           `json:"metadata_cost_insert_ms,omitempty"`
+	MetadataCostInsertNsRow          float64                           `json:"metadata_cost_insert_ns_per_row,omitempty"`
+	MetadataCostInsertBasis          string                            `json:"metadata_cost_insert_basis,omitempty"`
 	SortTopKPruningUsed              bool                              `json:"sort_topk_pruning_used"`
 	JSONReconstruction               bool                              `json:"json_reconstruction"`
 	ResultCount                      int                               `json:"result_count"`
@@ -526,6 +537,17 @@ type columnStoreByteAccounting struct {
 	TotalReconstructableBytes          int64    `json:"total_reconstructable_bytes"`
 	DBTotalBytes                       int64    `json:"db_total_bytes"`
 	DBTotalFiles                       int      `json:"db_total_files"`
+}
+
+type columnStoreMetadataCostMetric struct {
+	AggregateMetadataStorageBytes  int64   `json:"aggregate_metadata_storage_bytes"`
+	AggregateMetadataSidecarBytes  int64   `json:"aggregate_metadata_sidecar_bytes"`
+	AggregateMetadataEmbeddedBytes int64   `json:"aggregate_metadata_embedded_bytes"`
+	AggregateMetadataRefs          int     `json:"aggregate_metadata_refs"`
+	InsertCostDurationMS           float64 `json:"insert_cost_duration_ms,omitempty"`
+	InsertCostNsPerRow             float64 `json:"insert_cost_ns_per_row,omitempty"`
+	InsertCostBasis                string  `json:"insert_cost_basis,omitempty"`
+	StorageCostBasis               string  `json:"storage_cost_basis,omitempty"`
 }
 
 type columnStoreManifestMetric struct {
@@ -831,15 +853,19 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: retained-payload byte accounting: %w", err)
 	}
+	insertMetric := columnStoreInsertPhaseMetricFromStats(insertStats, insertBatches)
+	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: assetReadIntegrity})
+	metadataCost := columnStoreMetadataCostMetricFromAccounting(insertMetric, physicalAccounting, physicalAccountingErr)
+	columnStoreApplyMetadataCostToQueries(queries, metadataCost)
+	columnStoreApplyMetadataCostToQueries(firstTouchQueries, metadataCost)
 	// Build direct/prepared JSONBench report cells after query CPU/alloc/block/
 	// mutex/trace capture has been finalized. These rows are a separately timed
 	// report phase and must not contaminate the measured column_store query-phase
 	// profiles or BenchmarkColumnStoreSuite* query-loop benchmarks.
 	start = time.Now()
-	jsonbenchCells, jsonbenchCellsErr := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, firstTouchQueries, cfgForPath, retainedPayloadBytes)
+	jsonbenchCells, jsonbenchCellsErr := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, firstTouchQueries, cfgForPath, retainedPayloadBytes, metadataCost)
 	stages = append(stages, columnStoreStage("jsonbench_cell_report", start, rows*len(queryNames), 0))
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
-	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: assetReadIntegrity})
 	codecLayouts := columnStoreCodecLayoutMetrics(rows, len(columnStoreSuiteConfigForPath(forcedPath).Columns), columnAssetBytes, physicalAccounting)
 	compressionMatrixNote := "current production default remains compression=none; snappy/lz4 rows appear when typed_column_part assets were explicitly published with those opt-in policies; locator section compression is benchmark-relaxed and opt-in only; dictionaries/pruning_metadata are reported as next byte targets but remain uncompressed/deferred without a section raw-length format gate; zstd/zstd_dict are reported as unsupported/deferred despite enum names"
 	if physicalAccountingErr != nil {
@@ -860,7 +886,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		AcceptedForcedPaths:   cloneStringSlice(columnStoreSuiteAcceptedForcedPaths),
 		FailClosedForcedPaths: cloneStringSlice(columnStoreSuiteFailClosedForcedPaths),
 		Stages:                stages,
-		InsertStats:           columnStoreInsertPhaseMetricFromStats(insertStats, insertBatches),
+		InsertStats:           insertMetric,
 		Queries:               queries,
 		FirstTouchQueries:     firstTouchQueries,
 		JSONBenchCells:        jsonbenchCells,
@@ -886,6 +912,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			DBTotalBytes:                       totalBytes,
 			DBTotalFiles:                       totalFiles,
 		},
+		MetadataCost:          metadataCost,
 		CodecLayouts:          codecLayouts,
 		CompressionMatrixNote: compressionMatrixNote,
 		Manifest: columnStoreManifestMetric{
@@ -1974,6 +2001,84 @@ func columnStoreSortTopKPruningUsed(exec columnStoreQueryExecution) bool {
 	return exec.TopKLimit > 0 && exec.TopKCandidates > exec.TopKLimit
 }
 
+func columnStoreMetadataCostMetricFromAccounting(insert columnStoreInsertPhaseMetric, accounting collections.ColumnStorePhysicalAccounting, accountingErr error) columnStoreMetadataCostMetric {
+	out := columnStoreMetadataCostMetric{
+		InsertCostDurationMS: insert.ColumnPublishAssetPreparationDurationMS,
+		InsertCostBasis:      "column_publish_asset_preparation_total_current_upper_bound",
+	}
+	rows := insert.ColumnPublishRows
+	if rows <= 0 {
+		rows = insert.Documents
+	}
+	if rows > 0 && insert.ColumnPublishAssetPreparationDurationMS > 0 {
+		out.InsertCostNsPerRow = insert.ColumnPublishAssetPreparationDurationMS * float64(time.Millisecond) / float64(rows)
+	}
+	if accountingErr != nil {
+		out.StorageCostBasis = "physical_accounting_unavailable: " + accountingErr.Error()
+		return out
+	}
+	out.AggregateMetadataSidecarBytes = accounting.Totals.AggregateMetadataBytes
+	out.AggregateMetadataEmbeddedBytes = accounting.Totals.TypedColumnSections.AggregateMetadataBytes
+	out.AggregateMetadataStorageBytes = columnStoreAddInt64Clamped(out.AggregateMetadataSidecarBytes, out.AggregateMetadataEmbeddedBytes)
+	out.AggregateMetadataRefs = accounting.AggregateMetadataRefs
+	if out.AggregateMetadataRefs > 0 || out.AggregateMetadataStorageBytes > 0 {
+		out.StorageCostBasis = "active_manifest_aggregate_metadata_sidecars_plus_typed_column_embedded_aggregate_sections"
+	} else {
+		out.StorageCostBasis = "no_aggregate_metadata_refs_in_active_manifest"
+	}
+	return out
+}
+
+func columnStoreApplyMetadataCostToQueries(queries []columnStoreQueryMetric, cost columnStoreMetadataCostMetric) {
+	for i := range queries {
+		if queries[i].AggregateMetadataUsed {
+			columnStoreApplyMetadataCostToQuery(&queries[i], cost)
+		}
+	}
+}
+
+func columnStoreApplyMetadataCostToQuery(q *columnStoreQueryMetric, cost columnStoreMetadataCostMetric) {
+	if q == nil {
+		return
+	}
+	q.MetadataCostStorageBytes = cost.AggregateMetadataStorageBytes
+	q.MetadataCostStorageBasis = cost.StorageCostBasis
+	q.MetadataCostInsertMS = cost.InsertCostDurationMS
+	q.MetadataCostInsertNsRow = cost.InsertCostNsPerRow
+	q.MetadataCostInsertBasis = cost.InsertCostBasis
+}
+
+func columnStoreApplyMetadataCostToCell(cell *columnStoreJSONBenchCell, cost columnStoreMetadataCostMetric) {
+	if cell == nil {
+		return
+	}
+	cell.MetadataCostStorageBytes = cost.AggregateMetadataStorageBytes
+	cell.MetadataCostStorageBasis = cost.StorageCostBasis
+	cell.MetadataCostInsertMS = cost.InsertCostDurationMS
+	cell.MetadataCostInsertNsRow = cost.InsertCostNsPerRow
+	cell.MetadataCostInsertBasis = cost.InsertCostBasis
+}
+
+func columnStoreMetadataCostFromQuery(q columnStoreQueryMetric) columnStoreMetadataCostMetric {
+	return columnStoreMetadataCostMetric{
+		AggregateMetadataStorageBytes: q.MetadataCostStorageBytes,
+		InsertCostDurationMS:          q.MetadataCostInsertMS,
+		InsertCostNsPerRow:            q.MetadataCostInsertNsRow,
+		InsertCostBasis:               q.MetadataCostInsertBasis,
+		StorageCostBasis:              q.MetadataCostStorageBasis,
+	}
+}
+
+func columnStoreAddInt64Clamped(a, b int64) int64 {
+	if a > 0 && b > math.MaxInt64-a {
+		return math.MaxInt64
+	}
+	if a < 0 && b < math.MinInt64-a {
+		return math.MinInt64
+	}
+	return a + b
+}
+
 func columnStoreAppendImplementationNote(note, suffix string) string {
 	note = strings.TrimSpace(note)
 	suffix = strings.TrimSpace(suffix)
@@ -2615,7 +2720,7 @@ func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collectio
 	return collections.ColumnRetainedPayloadFromJSONDocument(*cfg, document)
 }
 
-func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int, rawHashes map[string]uint64, forcedPath string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string, queries []columnStoreQueryMetric, firstTouchQueries []columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) ([]columnStoreJSONBenchCell, error) {
+func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int, rawHashes map[string]uint64, forcedPath string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string, queries []columnStoreQueryMetric, firstTouchQueries []columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, metadataCost columnStoreMetadataCostMetric) ([]columnStoreJSONBenchCell, error) {
 	var reportErr error
 	byQuery := make(map[string]columnStoreQueryMetric, len(queries))
 	for _, q := range queries {
@@ -2652,7 +2757,7 @@ func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int
 		if !ok {
 			rawHash = q.RawHash
 		}
-		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHash, q, exec, preparedKind, cfg, retainedPayloadBytes)
+		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHash, q, exec, preparedKind, cfg, retainedPayloadBytes, metadataCost)
 		if err := columnStoreValidatePreparedJSONBenchCellParity(cell); err != nil {
 			reportErr = errors.Join(reportErr, err)
 		}
@@ -2709,6 +2814,11 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.RowMaterializations = q.RowMaterializations
 	cell.DocumentMaterializations = q.DocumentMaterializations
 	cell.AggregateMetadataUsed = q.AggregateMetadataUsed
+	cell.MetadataCostStorageBytes = q.MetadataCostStorageBytes
+	cell.MetadataCostStorageBasis = q.MetadataCostStorageBasis
+	cell.MetadataCostInsertMS = q.MetadataCostInsertMS
+	cell.MetadataCostInsertNsRow = q.MetadataCostInsertNsRow
+	cell.MetadataCostInsertBasis = q.MetadataCostInsertBasis
 	cell.SortTopKPruningUsed = q.SortTopKPruningUsed
 	cell.JSONReconstruction = q.JSONReconstruction
 	cell.ResultCount = q.ResultCount
@@ -2746,7 +2856,7 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	return cell
 }
 
-func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, direct columnStoreQueryMetric, exec columnStoreQueryExecution, planKind collections.ColumnQueryPlanKind, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) columnStoreJSONBenchCell {
+func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, direct columnStoreQueryMetric, exec columnStoreQueryExecution, planKind collections.ColumnQueryPlanKind, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, metadataCost columnStoreMetadataCostMetric) columnStoreJSONBenchCell {
 	planLabel := string(planKind)
 	cell := columnStoreBaseJSONBenchCell(name, planLabel, cfg, retainedPayloadBytes)
 	cell.ExecutionMode = columnStoreJSONBenchModePrepared
@@ -2783,6 +2893,14 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.RowMaterializations = exec.RowMaterializations
 	cell.DocumentMaterializations = exec.DocumentMaterializations
 	cell.AggregateMetadataUsed = columnStoreAggregateMetadataUsed(cell.StorageSource, exec.MetadataHits)
+	if cell.AggregateMetadataUsed {
+		directCost := columnStoreMetadataCostFromQuery(direct)
+		if directCost.StorageCostBasis != "" || directCost.InsertCostBasis != "" || directCost.AggregateMetadataStorageBytes != 0 {
+			columnStoreApplyMetadataCostToCell(&cell, directCost)
+		} else {
+			columnStoreApplyMetadataCostToCell(&cell, metadataCost)
+		}
+	}
 	cell.SortTopKPruningUsed = columnStoreSortTopKPruningUsed(exec)
 	cell.JSONReconstruction = exec.DocumentMaterializations > 0
 	cell.ResultCount = exec.ResultCount
@@ -4035,6 +4153,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	renderColumnStoreInsertStatsMarkdown(&sb, report.InsertStats)
+	renderColumnStoreMetadataCostMarkdown(&sb, report.MetadataCost)
 	renderColumnStoreJSONBenchCellsMarkdown(&sb, report)
 	renderColumnStoreColgranuleReuseMarkdown(&sb, report)
 
@@ -4172,13 +4291,45 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 		stats.ColumnPublishSystemDeltaDurationMS > 0
 }
 
+func renderColumnStoreMetadataCostMarkdown(sb *strings.Builder, cost columnStoreMetadataCostMetric) {
+	sb.WriteString("## Metadata Cost\n\n")
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_storage_bytes: %d\n", cost.AggregateMetadataStorageBytes))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_sidecar_bytes: %d\n", cost.AggregateMetadataSidecarBytes))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_embedded_bytes: %d\n", cost.AggregateMetadataEmbeddedBytes))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_refs: %d\n", cost.AggregateMetadataRefs))
+	sb.WriteString(fmt.Sprintf("- insert_cost_duration_ms: %.3f\n", cost.InsertCostDurationMS))
+	sb.WriteString(fmt.Sprintf("- insert_cost_ns_per_row: %.1f\n", cost.InsertCostNsPerRow))
+	if cost.InsertCostBasis != "" {
+		sb.WriteString(fmt.Sprintf("- insert_cost_basis: %s\n", cost.InsertCostBasis))
+	}
+	if cost.StorageCostBasis != "" {
+		sb.WriteString(fmt.Sprintf("- storage_cost_basis: %s\n", cost.StorageCostBasis))
+	}
+	sb.WriteString("\n")
+}
+
+func columnStoreMetadataCostBasisTableText(storageBasis, insertBasis string) string {
+	storageBasis = strings.TrimSpace(storageBasis)
+	insertBasis = strings.TrimSpace(insertBasis)
+	switch {
+	case storageBasis == "" && insertBasis == "":
+		return "-"
+	case storageBasis == "":
+		return "insert=" + insertBasis
+	case insertBasis == "":
+		return "storage=" + storageBasis
+	default:
+		return "storage=" + storageBasis + "; insert=" + insertBasis
+	}
+}
+
 func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, queries []columnStoreQueryMetric, parityByName map[string]columnStoreParity) {
 	if len(queries) == 0 {
 		return
 	}
 	sb.WriteString("## " + title + "\n\n")
-	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | rows materialized | docs materialized | aggregate metadata used | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---|---|---|\n")
+	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | rows materialized | docs materialized | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---|---|---|\n")
 	for _, q := range queries {
 		parity := "pass"
 		if p, ok := parityByName[q.Name]; ok && !p.Pass {
@@ -4200,8 +4351,8 @@ func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, qu
 		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
 			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %t | %d | %d | %s | %t | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.DecodedBytes, q.DecodedPayloadBytes, q.DecodedMetadataBytes, q.MappedBytes, q.HeapCopyBytes, q.RowsScanned, q.ProjectedColumns, q.PredicateCount, q.TypedCellsVisited, markdownCodeTableText(q.TypedCellsVisitedBasis), q.RowMaterializations, q.DocumentMaterializations, q.AggregateMetadataUsed, q.SortTopKPruningUsed, q.TopKLimit, q.TopKCandidates, markdownCodeTableText(q.TopKOrder), q.JSONReconstruction, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.DecodedBytes, q.DecodedPayloadBytes, q.DecodedMetadataBytes, q.MappedBytes, q.HeapCopyBytes, q.RowsScanned, q.ProjectedColumns, q.PredicateCount, q.TypedCellsVisited, markdownCodeTableText(q.TypedCellsVisitedBasis), q.RowMaterializations, q.DocumentMaterializations, q.AggregateMetadataUsed, q.MetadataCostStorageBytes, q.MetadataCostInsertMS, markdownCodeTableText(columnStoreMetadataCostBasisTableText(q.MetadataCostStorageBasis, q.MetadataCostInsertBasis)), q.SortTopKPruningUsed, q.TopKLimit, q.TopKCandidates, markdownCodeTableText(q.TopKOrder), q.JSONReconstruction, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 }
@@ -4212,8 +4363,8 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		sb.WriteString("No JSONBench synthetic cells were recorded.\n\n")
 		return
 	}
-	sb.WriteString("| cell | query | query mode | metadata mode | sort layout | storage source | mode | metadata/data path | prepare/setup ms | run ms | render/hash ms | total query ms | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | row materializations | document materializations | aggregate metadata used | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | result hash | parity | full-data caveat | reconstruction | status |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---:|---|---|---|---|\n")
+	sb.WriteString("| cell | query | query mode | metadata mode | sort layout | storage source | mode | metadata/data path | prepare/setup ms | run ms | render/hash ms | total query ms | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | row materializations | document materializations | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | result hash | parity | full-data caveat | reconstruction | status |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---:|---|---|---|---|\n")
 	for _, cell := range report.JSONBenchCells {
 		parity := "pass"
 		if !cell.ParityWithRowScan {
@@ -4223,7 +4374,7 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		if cell.CompatibilityStatusReason != "" {
 			status += ": " + cell.CompatibilityStatusReason
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %s | %s | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %t | %d | %d | %s | %t | %016x | %s | %s | %s | %s |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %s | %s | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %016x | %s | %s | %s | %s |\n",
 			markdownCodeTableText(cell.CellLabel),
 			markdownCodeTableText(cell.Query),
 			markdownCodeTableText(cell.QueryMode),
@@ -4258,6 +4409,9 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 			cell.RowMaterializations,
 			cell.DocumentMaterializations,
 			cell.AggregateMetadataUsed,
+			cell.MetadataCostStorageBytes,
+			cell.MetadataCostInsertMS,
+			markdownCodeTableText(columnStoreMetadataCostBasisTableText(cell.MetadataCostStorageBasis, cell.MetadataCostInsertBasis)),
 			cell.SortTopKPruningUsed,
 			cell.TopKLimit,
 			cell.TopKCandidates,

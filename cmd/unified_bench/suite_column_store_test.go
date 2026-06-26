@@ -687,7 +687,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store JSON missing insert phase field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
+	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"metadata_cost"`, `"aggregate_metadata_storage_bytes"`, `"aggregate_metadata_sidecar_bytes"`, `"aggregate_metadata_embedded_bytes"`, `"aggregate_metadata_refs"`, `"insert_cost_basis"`, `"storage_cost_basis"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing reporting field %s:\n%s", want, data)
 		}
@@ -720,7 +720,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "insert_cost_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
 		}
@@ -2179,6 +2179,9 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			}
 			cellMetrics := assertColumnStoreJSONBenchCellShapeM1955(t, report, tc.forcedPath == columnStorePathAggregateMetadata)
 			if tc.forcedPath == columnStorePathAggregateMetadata {
+				if report.MetadataCost.AggregateMetadataStorageBytes <= 0 || report.MetadataCost.AggregateMetadataRefs <= 0 || report.MetadataCost.StorageCostBasis == "" || report.MetadataCost.InsertCostBasis == "" {
+					t.Fatalf("aggregate metadata run missing report-level metadata cost: %+v", report.MetadataCost)
+				}
 				q1Cells := cellMetrics[columnStoreQueryQ1]
 				q1DirectMetadata := q1Cells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect]
 				if q1DirectMetadata.MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
@@ -2187,12 +2190,18 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if q1DirectMetadata.QueryMode != columnStoreQueryModeOneShotEndToEnd || q1DirectMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
 					t.Fatalf("q1 direct metadata mode labels=%q/%q want one-shot/auto aggregate: %+v", q1DirectMetadata.QueryMode, q1DirectMetadata.MetadataMode, q1DirectMetadata)
 				}
+				if q1DirectMetadata.MetadataCostStorageBytes != report.MetadataCost.AggregateMetadataStorageBytes || q1DirectMetadata.MetadataCostStorageBasis == "" || q1DirectMetadata.MetadataCostInsertBasis == "" {
+					t.Fatalf("q1 direct metadata cell missing metadata cost: cell=%+v report=%+v", q1DirectMetadata, report.MetadataCost)
+				}
 				q1PreparedMetadata := q1Cells[columnStoreJSONBenchCellColumnPreparedMetadata+"/"+columnStoreJSONBenchModePrepared]
 				if q1PreparedMetadata.MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
 					t.Fatalf("q1 missing prepared metadata cell: %+v", q1Cells)
 				}
 				if q1PreparedMetadata.QueryMode != columnStoreQueryModeHotPreparedRun || q1PreparedMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
 					t.Fatalf("q1 prepared metadata mode labels=%q/%q want hot prepared/auto aggregate: %+v", q1PreparedMetadata.QueryMode, q1PreparedMetadata.MetadataMode, q1PreparedMetadata)
+				}
+				if q1PreparedMetadata.MetadataCostStorageBytes != report.MetadataCost.AggregateMetadataStorageBytes || q1PreparedMetadata.MetadataCostStorageBasis == "" || q1PreparedMetadata.MetadataCostInsertBasis == "" {
+					t.Fatalf("q1 prepared metadata cell missing metadata cost: cell=%+v report=%+v", q1PreparedMetadata, report.MetadataCost)
 				}
 				q4bCells := cellMetrics[columnStoreQueryQ4B]
 				q4bDirectMetadata := q4bCells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect]
@@ -2202,12 +2211,18 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				if q4bDirectMetadata.QueryMode != columnStoreQueryModeOneShotEndToEnd || q4bDirectMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
 					t.Fatalf("q4b direct metadata mode labels=%q/%q want one-shot/auto aggregate: %+v", q4bDirectMetadata.QueryMode, q4bDirectMetadata.MetadataMode, q4bDirectMetadata)
 				}
+				if q4bDirectMetadata.MetadataCostStorageBytes != report.MetadataCost.AggregateMetadataStorageBytes || q4bDirectMetadata.MetadataCostStorageBasis == "" || q4bDirectMetadata.MetadataCostInsertBasis == "" {
+					t.Fatalf("q4b direct metadata cell missing metadata cost: cell=%+v report=%+v", q4bDirectMetadata, report.MetadataCost)
+				}
 				q4bPreparedMetadata := q4bCells[columnStoreJSONBenchCellColumnPreparedMetadata+"/"+columnStoreJSONBenchModePrepared]
 				if q4bPreparedMetadata.MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
 					t.Fatalf("q4b missing prepared metadata cell: %+v", q4bCells)
 				}
 				if q4bPreparedMetadata.QueryMode != columnStoreQueryModeHotPreparedRun || q4bPreparedMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
 					t.Fatalf("q4b prepared metadata mode labels=%q/%q want hot prepared/auto aggregate: %+v", q4bPreparedMetadata.QueryMode, q4bPreparedMetadata.MetadataMode, q4bPreparedMetadata)
+				}
+				if q4bPreparedMetadata.MetadataCostStorageBytes != report.MetadataCost.AggregateMetadataStorageBytes || q4bPreparedMetadata.MetadataCostStorageBasis == "" || q4bPreparedMetadata.MetadataCostInsertBasis == "" {
+					t.Fatalf("q4b prepared metadata cell missing metadata cost: cell=%+v report=%+v", q4bPreparedMetadata, report.MetadataCost)
 				}
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
@@ -2248,12 +2263,20 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 						if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
 							t.Fatalf("query %s metadata storage/fallback=%q/%q want aggregate metadata/none", q.Name, q.StorageSource, q.FallbackReason)
 						}
+						if q.MetadataCostStorageBytes != report.MetadataCost.AggregateMetadataStorageBytes || q.MetadataCostStorageBasis == "" || q.MetadataCostInsertBasis == "" {
+							t.Fatalf("query %s missing metadata cost: query=%+v report=%+v", q.Name, q, report.MetadataCost)
+						}
 					} else if q.Name == columnStoreQuerySumSecondOfDaySq {
 						if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedRowAsset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported) {
 							t.Fatalf("query %s aggregate reroute storage/fallback=%q/%q want typed-row asset/aggregate unsupported", q.Name, q.StorageSource, q.FallbackReason)
 						}
+						if q.MetadataCostStorageBytes != 0 || q.MetadataCostStorageBasis != "" || q.MetadataCostInsertBasis != "" {
+							t.Fatalf("query %s should not carry metadata cost on aggregate-unsupported scan: %+v", q.Name, q)
+						}
 					} else if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackAggregateMetadataUnsupported) {
 						t.Fatalf("query %s aggregate reroute storage/fallback=%q/%q want compatibility sidecar/aggregate unsupported", q.Name, q.StorageSource, q.FallbackReason)
+					} else if q.MetadataCostStorageBytes != 0 || q.MetadataCostStorageBasis != "" || q.MetadataCostInsertBasis != "" {
+						t.Fatalf("query %s should not carry metadata cost on aggregate-unsupported scan: %+v", q.Name, q)
 					}
 				}
 				if tc.forcedPath == columnStorePathParallelColumnScan {
@@ -2375,6 +2398,11 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		TypedCellsVisitedBasis:   "rows_scanned_x_projected_columns",
 		RowMaterializations:      1,
 		DocumentMaterializations: 2,
+		MetadataCostStorageBytes: 4096,
+		MetadataCostStorageBasis: "storage_basis",
+		MetadataCostInsertMS:     7.25,
+		MetadataCostInsertNsRow:  250,
+		MetadataCostInsertBasis:  "insert_basis",
 		SortTopKPruningUsed:      true,
 		JSONReconstruction:       true,
 		RowsScanned:              13,
@@ -2451,6 +2479,21 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	if got, want := cell.DocumentMaterializations, q.DocumentMaterializations; got != want {
 		t.Fatalf("document_materializations=%d want %d", got, want)
 	}
+	if got, want := cell.MetadataCostStorageBytes, q.MetadataCostStorageBytes; got != want {
+		t.Fatalf("metadata_cost_storage_bytes=%d want %d", got, want)
+	}
+	if got, want := cell.MetadataCostStorageBasis, q.MetadataCostStorageBasis; got != want {
+		t.Fatalf("metadata_cost_storage_basis=%q want %q", got, want)
+	}
+	if got, want := cell.MetadataCostInsertMS, q.MetadataCostInsertMS; got != want {
+		t.Fatalf("metadata_cost_insert_ms=%v want %v", got, want)
+	}
+	if got, want := cell.MetadataCostInsertNsRow, q.MetadataCostInsertNsRow; got != want {
+		t.Fatalf("metadata_cost_insert_ns_per_row=%v want %v", got, want)
+	}
+	if got, want := cell.MetadataCostInsertBasis, q.MetadataCostInsertBasis; got != want {
+		t.Fatalf("metadata_cost_insert_basis=%q want %q", got, want)
+	}
 	if got, want := cell.SortTopKPruningUsed, q.SortTopKPruningUsed; got != want {
 		t.Fatalf("sort_topk_pruning_used=%t want %t", got, want)
 	}
@@ -2480,6 +2523,38 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 	if got, want := cell.TimeOrderTopKUsed, q.TimeOrderTopKUsed; got != want {
 		t.Fatalf("time_order_topk_used=%t want %t", got, want)
+	}
+}
+
+func TestColumnStoreApplyMetadataCostOnlyAggregateRowsM3070(t *testing.T) {
+	cost := columnStoreMetadataCostMetric{
+		AggregateMetadataStorageBytes:  1234,
+		AggregateMetadataSidecarBytes:  1000,
+		AggregateMetadataEmbeddedBytes: 234,
+		AggregateMetadataRefs:          2,
+		InsertCostDurationMS:           5.5,
+		InsertCostNsPerRow:             55,
+		InsertCostBasis:                "asset_prep_upper_bound",
+		StorageCostBasis:               "manifest_refs",
+	}
+	queries := []columnStoreQueryMetric{
+		{Name: columnStoreQueryQ1, AggregateMetadataUsed: true},
+		{Name: columnStoreQueryQ2, AggregateMetadataUsed: false},
+	}
+
+	columnStoreApplyMetadataCostToQueries(queries, cost)
+
+	if got, want := queries[0].MetadataCostStorageBytes, cost.AggregateMetadataStorageBytes; got != want {
+		t.Fatalf("aggregate metadata query storage bytes=%d want %d", got, want)
+	}
+	if got, want := queries[0].MetadataCostInsertMS, cost.InsertCostDurationMS; got != want {
+		t.Fatalf("aggregate metadata query insert ms=%v want %v", got, want)
+	}
+	if queries[0].MetadataCostStorageBasis == "" || queries[0].MetadataCostInsertBasis == "" {
+		t.Fatalf("aggregate metadata query missing basis fields: %+v", queries[0])
+	}
+	if queries[1].MetadataCostStorageBytes != 0 || queries[1].MetadataCostStorageBasis != "" || queries[1].MetadataCostInsertMS != 0 || queries[1].MetadataCostInsertBasis != "" {
+		t.Fatalf("no-metadata query should not carry metadata cost: %+v", queries[1])
 	}
 }
 
