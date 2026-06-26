@@ -246,11 +246,6 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	var plan ColumnPublishPlan
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
-	defer func() {
-		if cleanupColumnDelta != nil {
-			cleanupColumnDelta()
-		}
-	}()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
 		stageStart := time.Now()
 		defer func() {
@@ -302,6 +297,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	if err != nil {
+		// The DB publish helper owns context-built batch deltas on publish errors.
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if cleanupColumnDelta != nil {
