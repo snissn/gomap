@@ -62,7 +62,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	}
 	handleAppended = true
 	if err := h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest); err != nil {
-		return raftentry.ApplyResultV1{}, err
+		return commandWALPostAppendRecoveryRequired(entry, err)
 	}
 	intent := handle.CommandWALIntent()
 	if intent == nil || handle.LSN() == 0 {
@@ -130,6 +130,11 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 }
 
 func commandWALFinalizeRecoveryRequired(entry raftentry.CommandEntryV1, err error) (raftentry.ApplyResultV1, error) {
+	code, _ := ErrorCodeOf(err)
+	return recoveryRequired(entry.Digest, code, err)
+}
+
+func commandWALPostAppendRecoveryRequired(entry raftentry.CommandEntryV1, err error) (raftentry.ApplyResultV1, error) {
 	code, _ := ErrorCodeOf(err)
 	return recoveryRequired(entry.Digest, code, err)
 }

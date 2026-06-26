@@ -265,7 +265,7 @@ func TestFaultAfterLocalWALAppendBeforeVisibilityDoesNotAdvanceMetadata(t *testi
 		ResultStore:   results,
 		FaultInjector: singlePointFaultInjector{point: FaultAfterLocalWALAppendBeforeVisibleV1},
 	})
-	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorUnsafeDurabilityModeV1)
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
 	if got := db.State().AppliedCommandLSN; got != 0 {
 		t.Fatalf("AppliedCommandLSN after post-append/pre-visible fault=%d, want 0", got)
 	}
@@ -274,6 +274,49 @@ func TestFaultAfterLocalWALAppendBeforeVisibilityDoesNotAdvanceMetadata(t *testi
 	}
 	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection users after post-append/pre-visible fault err=%v, want ErrCollectionNotFound", openErr)
+	}
+}
+
+func TestCollectionMutationFaultAfterLocalWALAppendBeforeVisibilityRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs", testCreateCollectionMetaOptions{})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	doc := []byte(`{"name":"one"}`)
+	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:fault-after-append", nativewire.DocumentFormatJSON, [][]byte{[]byte("d1")}, [][]byte{doc})
+	result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+		FaultInjector: singlePointFaultInjector{point: FaultAfterLocalWALAppendBeforeVisibleV1},
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after mutation post-append/pre-visible fault=%d, want %d", got, beforeLSN)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after mutation post-append/pre-visible fault progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != len(beforeFrames)+1 {
+		t.Fatalf("command WAL frames after mutation post-append/pre-visible fault=%d, want %d", len(frames), len(beforeFrames)+1)
+	}
+	assertCollectionInsertFrame(t, frames[len(frames)-1], "docs", map[string][]byte{"d1": doc})
+	if err := db.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("CheckStorageMaintenanceReady after mutation post-append/pre-visible fault error=%v, want ErrRecoveryRequired", err)
 	}
 }
 
