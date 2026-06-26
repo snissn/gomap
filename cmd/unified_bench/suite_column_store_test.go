@@ -562,8 +562,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.InsertStats.ColumnStoreDeclaredRowReuseCoverageRatio < 1 && report.InsertStats.ColumnPublishDocumentExtractionDurationMS <= 0 {
 		t.Fatalf("column publish document extraction timing missing: %+v", report.InsertStats)
 	}
-	if report.InsertStats.ColumnPublishAssetPreparationDurationMS <= 0 || report.InsertStats.ColumnPublishManifestEncodeDurationMS <= 0 || report.InsertStats.ColumnPublishRootDeltaDurationMS <= 0 {
-		t.Fatalf("column publish plan subphase timings missing: %+v", report.InsertStats)
+	if report.InsertStats.ColumnPublishAssetPreparationDurationMS <= 0 {
+		t.Fatalf("column publish asset preparation timing missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.ColumnPublishManifestEncodeDurationMS < 0 || report.InsertStats.ColumnPublishRootDeltaDurationMS < 0 {
+		t.Fatalf("column publish tiny subphase timing invalid: %+v", report.InsertStats)
 	}
 	queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 	for _, q := range report.Queries {
