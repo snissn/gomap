@@ -248,8 +248,14 @@ func (db *DB) orderedRootSpanNativeEligibility(req orderedRootSpanNativeEligibil
 	}
 
 	reason, hasExplicitReason := parseFlushApplySpanNativeFallbackReason(req.ExplicitFallbackReason)
-	if !hasExplicitReason {
-		reason = db.classifyOrderedRootSpanNativeFallback(req, ops)
+	if !hasExplicitReason || reason == FlushSpanRunFallbackSpanNativeNotImplemented {
+		classifiedReason := db.classifyOrderedRootSpanNativeFallback(req, ops)
+		if !hasExplicitReason {
+			reason = classifiedReason
+		} else if classifiedReason.Valid() && classifiedReason != FlushSpanRunFallbackSpanNativeNotImplemented {
+			reason = classifiedReason
+			hasExplicitReason = false
+		}
 	}
 	if !reason.Valid() {
 		reason = FlushSpanRunFallbackUnknown

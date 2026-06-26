@@ -1178,6 +1178,15 @@ func TestOrderedRootSpanNativeEligibilityDistinguishesAdmissionFallbacks(t *test
 	if offRow.FallbackReason != FlushSpanRunFallbackDisabled.String() || offRow.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
 		t.Fatalf("off fallback row=%+v want disabled policy fallback", offRow)
 	}
+	offExplicitRow := off.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:                  OrderedRootSpanNativeRouteDeltaBatchPublish,
+		Context:                "off policy explicit fallback",
+		Summary:                summary,
+		ExplicitFallbackReason: FlushSpanRunFallbackSpanNativeNotImplemented.String(),
+	})
+	if offExplicitRow.FallbackReason != FlushSpanRunFallbackDisabled.String() || offExplicitRow.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
+		t.Fatalf("off explicit fallback row=%+v want disabled policy fallback", offExplicitRow)
+	}
 
 	declineOpts := Options{FlushAdmissionPolicy: FlushAdmissionPolicyAuto, FlushApplyConcurrency: 1, FlushApplySpanNative: true}
 	declined := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&declineOpts, 4, 4)}
@@ -1188,6 +1197,15 @@ func TestOrderedRootSpanNativeEligibilityDistinguishesAdmissionFallbacks(t *test
 	})
 	if declineRow.FallbackReason != FlushSpanRunFallbackAdmissionPolicyDecline.String() || declineRow.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
 		t.Fatalf("auto decline row=%+v want admission-policy decline", declineRow)
+	}
+	declineExplicitRow := declined.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:                  OrderedRootSpanNativeRouteDeltaBatchPublish,
+		Context:                "auto decline explicit fallback",
+		Summary:                summary,
+		ExplicitFallbackReason: FlushSpanRunFallbackSpanNativeNotImplemented.String(),
+	})
+	if declineExplicitRow.FallbackReason != FlushSpanRunFallbackAdmissionPolicyDecline.String() || declineExplicitRow.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
+		t.Fatalf("auto decline explicit row=%+v want admission-policy decline", declineExplicitRow)
 	}
 
 	admittedOpts := Options{}
