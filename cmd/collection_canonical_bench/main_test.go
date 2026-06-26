@@ -263,6 +263,57 @@ func TestCanonicalValidationRequiresProductionEvidenceForCompactedClaims(t *test
 	}
 }
 
+func TestCanonicalValidationAcceptsNoSecondaryIndexFlushSpanEvidence(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Config.Indexes = 0
+	canon.Results = append(canon.Results,
+		testNoSecondaryIndexPostInsertProductionRow("treedb_template_v1_collection_0_indexes"),
+		testStorageRow("treedb_template_v1_collection_0_indexes", "treedb_fast", "template-v1", "collection", phaseExhaustiveCompact, 0, 450000, 4.5),
+		testStorageRow("sqlite_json_0_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 0, 2500000, 25.0),
+		testStorageRow("sqlite_native_columns_0_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 0, 2000000, 20.0),
+	)
+	finalizeRunMetadata(canon)
+	canon.Comparisons = buildCompactedComparisons(canon)
+
+	for _, check := range validateCanonicalRun(canon) {
+		if check.Severity == "error" {
+			t.Fatalf("no-secondary-index flush evidence should satisfy production guardrails: %#v", check)
+		}
+	}
+	if got := findComparison(canon.Comparisons, "treedb_template_v1_collection_0_indexes", phaseExhaustiveCompact, "sqlite_native_columns_0_indexes", phaseSQLiteVacuum); got == nil {
+		t.Fatalf("no-secondary-index production evidence should preserve compacted comparison: %#v", canon.Comparisons)
+	}
+}
+
+func TestProductionEvidenceFromTreeDBTimedReportUsesNoSecondaryIndexFlushRoute(t *testing.T) {
+	ev := productionEvidenceFromTreeDBTimedReport(collectionReport{
+		BenchmarkEngine:      "command_wal_relaxed",
+		DocumentFormat:       "template-v1",
+		StoragePolicy:        "data_outer=true,index_outer=true",
+		PagerChunkSize:       "profile/default",
+		PagerSyncConcurrency: "profile/default",
+	}, map[string]float64{
+		"indexes/doc":                           0,
+		"gomaxprocs":                            16,
+		"physical_cores":                        8,
+		"flush_admission_effective_concurrency": 8,
+		"flush_admission_admitted":              1,
+		"flush_admission_span_native":           1,
+		"flush_admission_backlog_coalescing":    1,
+		"flush_span_candidate_ops":              2,
+		"flush_span_eligible_ops":               2,
+		"flush_span_used_ops":                   2,
+		"flush_span_fallbacks":                  0,
+		"ordered_root_span_fallbacks":           0,
+	}, config{Indexes: 0, StorageCells: "index-vlog", LeafSegmentTargetBytes: 1048576})
+	if ev.ProducerRoute != noSecondaryIndexProducerRoute {
+		t.Fatalf("producer route=%q want %q", ev.ProducerRoute, noSecondaryIndexProducerRoute)
+	}
+	if ev.ProducerRouteUsedOps == nil || *ev.ProducerRouteUsedOps != 2 {
+		t.Fatalf("fallback producer used ops not copied from flush span evidence: %#v", ev.ProducerRouteUsedOps)
+	}
+}
+
 func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
 	cfg := config{OutDir: filepath.Join("relative", "bench-run")}
 	if err := normalizeRunPaths(&cfg); err != nil {
@@ -747,6 +798,28 @@ func testPostInsertProductionRow(config, engine, format string, indexes int) res
 	}
 }
 
+func testNoSecondaryIndexPostInsertProductionRow(config string) resultRow {
+	return resultRow{
+		ConfigName:         config,
+		Engine:             "command_wal_relaxed",
+		Format:             "template-v1",
+		Shape:              "collection",
+		IndexCount:         0,
+		DocumentCount:      100000,
+		BenchmarkName:      "BenchmarkCollectionShapeInsertBatch/indexes_0",
+		Phase:              phasePostInsert,
+		MaintenanceMode:    "none",
+		TotalBytes:         int64Ptr(10000000),
+		BytesPerDoc:        floatPtr(100),
+		DocsPerSec:         floatPtr(500000),
+		NsPerDoc:           floatPtr(2000),
+		BatchSize:          16000,
+		BenchmarkTimed:     true,
+		MeasurementKind:    "go_benchmark",
+		ProductionEvidence: testNoSecondaryIndexProductionEvidence(),
+	}
+}
+
 func testProductionEvidence() *productionEvidence {
 	gomax := 16
 	physical := 8
@@ -790,6 +863,17 @@ func testProductionEvidence() *productionEvidence {
 		OrderedRootSpanUsedOps:              &used,
 		OrderedRootSpanFallbacks:            &fallbacks,
 	}
+}
+
+func testNoSecondaryIndexProductionEvidence() *productionEvidence {
+	ev := testProductionEvidence()
+	ev.ProducerRoute = ""
+	ev.ProducerRouteObservations = nil
+	ev.ProducerRouteCandidateOps = nil
+	ev.ProducerRouteEligibleOps = nil
+	ev.ProducerRouteUsedOps = nil
+	ev.ProducerRouteFallbacks = nil
+	return ev
 }
 
 func knownExampleRun() *canonicalRun {

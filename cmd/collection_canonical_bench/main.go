@@ -224,6 +224,8 @@ type productionEvidence struct {
 	OrderedRootSpanFallbacks            *float64 `json:"ordered_root_span_fallbacks,omitempty"`
 }
 
+const noSecondaryIndexProducerRoute = "flush_apply_span_native_no_secondary_indexes"
+
 type fixtureSummary struct {
 	GeneratedAt                string                 `json:"generated_at"`
 	Dir                        string                 `json:"dir"`
@@ -1145,6 +1147,14 @@ func productionEvidenceFromTreeDBTimedReport(report collectionReport, metrics ma
 		ev.ProducerRouteEligibleOps = floatPtr(eligible)
 		ev.ProducerRouteUsedOps = floatPtr(used)
 		ev.ProducerRouteFallbacks = floatPtr(fallbacks)
+	} else if intMetricDefault(metrics, "indexes/doc", cfg.Indexes) == 0 &&
+		floatPtrPositive(ev.FlushSpanCandidateOps) &&
+		floatPtrPositive(ev.FlushSpanUsedOps) {
+		ev.ProducerRoute = noSecondaryIndexProducerRoute
+		ev.ProducerRouteCandidateOps = cloneFloatPtr(ev.FlushSpanCandidateOps)
+		ev.ProducerRouteEligibleOps = cloneFloatPtr(ev.FlushSpanEligibleOps)
+		ev.ProducerRouteUsedOps = cloneFloatPtr(ev.FlushSpanUsedOps)
+		ev.ProducerRouteFallbacks = cloneFloatPtr(ev.FlushSpanFallbacks)
 	}
 	return ev
 }
@@ -1415,8 +1425,7 @@ func hasRowProductionEvidence(row resultRow) bool {
 	if ev == nil {
 		return false
 	}
-	return strings.TrimSpace(ev.ProducerRoute) != "" &&
-		strings.TrimSpace(ev.StoragePolicy) != "" &&
+	return strings.TrimSpace(ev.StoragePolicy) != "" &&
 		ev.GOMAXPROCS != nil &&
 		ev.FlushAdmissionEffectiveConcurrency != nil &&
 		ev.FlushAdmissionAdmitted != nil &&
@@ -1424,8 +1433,22 @@ func hasRowProductionEvidence(row resultRow) bool {
 		ev.FlushAdmissionBacklogCoalescing != nil &&
 		ev.FlushSpanFallbacks != nil &&
 		ev.OrderedRootSpanFallbacks != nil &&
+		hasProducerPathEvidence(row)
+}
+
+func hasProducerPathEvidence(row resultRow) bool {
+	ev := row.ProductionEvidence
+	if ev == nil {
+		return false
+	}
+	if strings.TrimSpace(ev.ProducerRoute) != "" &&
 		floatPtrPositive(ev.ProducerRouteCandidateOps) &&
-		floatPtrPositive(ev.ProducerRouteUsedOps)
+		floatPtrPositive(ev.ProducerRouteUsedOps) {
+		return true
+	}
+	return row.IndexCount == 0 &&
+		floatPtrPositive(ev.FlushSpanCandidateOps) &&
+		floatPtrPositive(ev.FlushSpanUsedOps)
 }
 
 func filterCompactedComparisonsForEvidence(canon *canonicalRun, comps []comparisonRow) []comparisonRow {
@@ -2003,6 +2026,14 @@ func intMetricPtr(metrics map[string]float64, key string) *int {
 	return &n
 }
 
+func intMetricDefault(metrics map[string]float64, key string, def int) int {
+	value, ok := metrics[key]
+	if !ok {
+		return def
+	}
+	return int(math.Round(value))
+}
+
 func boolMetricPtr(metrics map[string]float64, key string) *bool {
 	value, ok := metrics[key]
 	if !ok {
@@ -2018,6 +2049,13 @@ func floatMetricPtr(metrics map[string]float64, key string) *float64 {
 		return nil
 	}
 	return floatPtr(value)
+}
+
+func cloneFloatPtr(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	return floatPtr(*v)
 }
 
 func bytesPerDoc(total int64, docs int) float64 {

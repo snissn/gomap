@@ -68,6 +68,8 @@ type collectionProductionEvidence struct {
 	FlushAdmissionAdmitted             *bool    `json:"flush_admission_admitted"`
 	FlushAdmissionSpanNative           *bool    `json:"flush_admission_span_native"`
 	FlushAdmissionBacklogCoalescing    *bool    `json:"flush_admission_backlog_coalescing"`
+	FlushSpanCandidateOps              *float64 `json:"flush_span_candidate_ops"`
+	FlushSpanUsedOps                   *float64 `json:"flush_span_used_ops"`
 	FlushSpanFallbacks                 *float64 `json:"flush_span_fallbacks"`
 	OrderedRootSpanFallbacks           *float64 `json:"ordered_root_span_fallbacks"`
 }
@@ -967,8 +969,7 @@ func collectionRowHasProductionEvidence(row collectionRow) bool {
 	if ev == nil {
 		return false
 	}
-	return strings.TrimSpace(ev.ProducerRoute) != "" &&
-		strings.TrimSpace(ev.StoragePolicy) != "" &&
+	return strings.TrimSpace(ev.StoragePolicy) != "" &&
 		ev.GOMAXPROCS != nil &&
 		ev.FlushAdmissionEffectiveConcurrency != nil &&
 		ev.FlushAdmissionAdmitted != nil &&
@@ -976,8 +977,22 @@ func collectionRowHasProductionEvidence(row collectionRow) bool {
 		ev.FlushAdmissionBacklogCoalescing != nil &&
 		ev.FlushSpanFallbacks != nil &&
 		ev.OrderedRootSpanFallbacks != nil &&
+		collectionRowHasProducerPathEvidence(row)
+}
+
+func collectionRowHasProducerPathEvidence(row collectionRow) bool {
+	ev := row.ProductionEvidence
+	if ev == nil {
+		return false
+	}
+	if strings.TrimSpace(ev.ProducerRoute) != "" &&
 		collectionFloatPtrPositive(ev.ProducerRouteCandidateOps) &&
-		collectionFloatPtrPositive(ev.ProducerRouteUsedOps)
+		collectionFloatPtrPositive(ev.ProducerRouteUsedOps) {
+		return true
+	}
+	return row.IndexCount == 0 &&
+		collectionFloatPtrPositive(ev.FlushSpanCandidateOps) &&
+		collectionFloatPtrPositive(ev.FlushSpanUsedOps)
 }
 
 func collectionFloatPtrPositive(v *float64) bool {
