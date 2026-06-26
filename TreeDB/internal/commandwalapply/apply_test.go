@@ -103,6 +103,53 @@ func TestAppendAndFinalizeNoopFrame(t *testing.T) {
 	}
 }
 
+func TestAppendCatalogCreateCollectionFrame(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                          dir,
+		CommandWAL:                   true,
+		DisableBackgroundPrune:       true,
+		CommandWALStatsScan:          true,
+		CommandWALSegmentTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	payload, err := commitlog.EncodeCatalogCreateCollectionPayload("users", []byte(`{"version":5,"name":"users"}`))
+	if err != nil {
+		t.Fatalf("EncodeCatalogCreateCollectionPayload: %v", err)
+	}
+	frame, err := CatalogCreateCollectionFrame(payload)
+	if err != nil {
+		t.Fatalf("CatalogCreateCollectionFrame: %v", err)
+	}
+	handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if appendResult.Status != StatusLocallyWALRecoverable {
+		t.Fatalf("append status=%q, want %q", appendResult.Status, StatusLocallyWALRecoverable)
+	}
+	if appendResult.LSN == 0 || handle.LSN() != appendResult.LSN || handle.CommandWALIntent() == nil {
+		t.Fatalf("append result=%+v handle lsn=%d intent nil=%v", appendResult, handle.LSN(), handle.CommandWALIntent() == nil)
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after catalog append=%d, want 0 before executor finalize", got)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames after append=%d, want 1", len(frames))
+	}
+	if frames[0].LSN != appendResult.LSN ||
+		frames[0].Kind != commitlog.CommandKindCatalogCreateCollection ||
+		frames[0].Scope != commitlog.CommandScopeCatalog ||
+		frames[0].PayloadFormat != commitlog.PayloadFormatCatalogCreateCollectionV1 {
+		t.Fatalf("catalog create frame=%+v, want lsn=%d CatalogCreateCollection/Catalog/V1", frames[0], appendResult.LSN)
+	}
+}
+
 func TestAppendRejectsOutstandingNoopHandle(t *testing.T) {
 	dir := t.TempDir()
 	db, err := backenddb.Open(backenddb.Options{
@@ -275,6 +322,74 @@ func TestOutstandingApplyHandleBlocksPublicCommandWALNoopPublish(t *testing.T) {
 	}
 }
 
+func TestAbortOutstandingApplyHandleReleasesPublicPublishAndPoisons(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewTrustedCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+	}
+
+	publishStarted := make(chan struct{})
+	publishDone := make(chan error, 1)
+	go func() {
+		close(publishStarted)
+		publishDone <- db.PublishCommandWALNoop(intent, false)
+	}()
+
+	select {
+	case <-publishStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("public publish goroutine did not start")
+	}
+	select {
+	case err := <-publishDone:
+		t.Fatalf("public no-op publish completed while apply handle was outstanding: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	Abort(db, handle)
+	select {
+	case err := <-publishDone:
+		if !errors.Is(err, backenddb.ErrRecoveryRequired) {
+			t.Fatalf("public no-op publish after abort error=%v, want ErrRecoveryRequired", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("public no-op publish remained blocked after abort")
+	}
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after abort=%d, want 0", got)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 1 {
+		t.Fatalf("command WAL frames after abort=%d, want only abandoned apply frame", got)
+	}
+	if got := readCommandWALFrames(t, dir)[0].LSN; got != appendResult.LSN {
+		t.Fatalf("abandoned frame lsn=%d, want %d", got, appendResult.LSN)
+	}
+}
+
 func TestFinalizeRejectsHandleFromDifferentDB(t *testing.T) {
 	sourceDir := t.TempDir()
 	source, err := backenddb.Open(backenddb.Options{
@@ -406,6 +521,18 @@ func TestRejectedInputFailsBeforeAppend(t *testing.T) {
 			},
 			wantErr: backenddb.ErrCommandWALRejected,
 			wantMsg: "canonical empty RawKVBatch",
+		},
+		{
+			name: "malformed catalog create payload",
+			frame: LoweredFrame{
+				Class:         LoweredFrameClassCatalogCreateCollection,
+				Kind:          commitlog.CommandKindCatalogCreateCollection,
+				Scope:         commitlog.CommandScopeCatalog,
+				PayloadFormat: commitlog.PayloadFormatCatalogCreateCollectionV1,
+				Payload:       []byte{0x01},
+			},
+			wantErr: backenddb.ErrCommandWALRejected,
+			wantMsg: "malformed",
 		},
 	}
 	for _, tt := range tests {

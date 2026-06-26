@@ -22,24 +22,27 @@ const (
 	deterministicSectionScratchCapacity = sectionSeenInlineCapacity
 	maxDeterministicEntrySections       = defaultMaxSections
 
-	deterministicCollectionRefTagName   = 1
-	deterministicCollectionRefTagHandle = 2
-	deterministicReplacementExisting    = 1
-	deterministicTemplateV1InputMagic   = "TD1I"
-	deterministicTemplateV1StoredMagic  = "TD1D"
-	deterministicTemplateV1RecordMagic  = "TD1T"
-	deterministicTemplateV1KindNull     = byte(0)
-	deterministicTemplateV1KindFalse    = byte(1)
-	deterministicTemplateV1KindTrue     = byte(2)
-	deterministicTemplateV1KindFloat64  = byte(3)
-	deterministicTemplateV1KindString   = byte(4)
-	deterministicTemplateV1KindObject   = byte(5)
-	deterministicTemplateV1KindArray    = byte(6)
-	deterministicTemplateV1MaxArray     = 1 << 20
-	deterministicTemplateV1MaxTemplates = 1 << 16
-	deterministicTemplateV1MaxDepth     = 64
-	minDeterministicIndexDefinitionLen  = 6
-	maxDeterministicCollectionIndexes   = 1 << 16
+	deterministicCollectionRefTagName     = 1
+	deterministicCollectionRefTagHandle   = 2
+	deterministicReplacementExisting      = 1
+	deterministicTemplateV1InputMagic     = "TD1I"
+	deterministicTemplateV1StoredMagic    = "TD1D"
+	deterministicTemplateV1RecordMagic    = "TD1T"
+	deterministicTemplateV1KindNull       = byte(0)
+	deterministicTemplateV1KindFalse      = byte(1)
+	deterministicTemplateV1KindTrue       = byte(2)
+	deterministicTemplateV1KindFloat64    = byte(3)
+	deterministicTemplateV1KindString     = byte(4)
+	deterministicTemplateV1KindObject     = byte(5)
+	deterministicTemplateV1KindArray      = byte(6)
+	deterministicTemplateV1MaxArray       = 1 << 20
+	deterministicTemplateV1MaxTemplates   = 1 << 16
+	deterministicTemplateV1MaxDepth       = 64
+	minDeterministicIndexDefinitionLen    = 6
+	minDeterministicVectorDefinitionLen   = 7
+	maxDeterministicCollectionMetaVersion = 5
+	maxDeterministicCollectionIndexes     = 1 << 16
+	maxDeterministicUint32                = uint64(^uint32(0))
 )
 
 var (
@@ -1131,13 +1134,40 @@ func validateDeterministicIndexValueTypeEnum(value uint64) error {
 	}
 }
 
+func validateDeterministicVectorMetricEnum(value uint64) error {
+	switch value {
+	case 1, 2, 3:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported vector_metric enum %d", value)
+	}
+}
+
+func validateDeterministicVectorIndexEncodingEnum(value uint64) error {
+	switch value {
+	case 1, 2:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported vector_index_encoding enum %d", value)
+	}
+}
+
+func validateDeterministicVectorIndexStrategyEnum(value uint64) error {
+	switch value {
+	case 1, 2:
+		return nil
+	default:
+		return protocolError(ErrInvalidCommand, "unsupported vector_index_strategy enum %d", value)
+	}
+}
+
 func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	off := 0
 	version, err := readDeterministicUvarintField(raw, &off, "collection_meta.version")
 	if err != nil {
 		return err
 	}
-	if version != 1 {
+	if version < 1 || version > maxDeterministicCollectionMetaVersion {
 		return protocolError(ErrUnsupportedVersion, "collection_meta version %d", version)
 	}
 	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {
@@ -1222,6 +1252,28 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 		}
 		off = next
 	}
+	if version >= 2 {
+		vectorIndexCount, err := readDeterministicUvarintField(raw, &off, "vector_index_count")
+		if err != nil {
+			return err
+		}
+		if vectorIndexCount > uint64(maxInt) {
+			return protocolError(ErrResourceExhausted, "vector index count exceeds int capacity")
+		}
+		if vectorIndexCount > maxDeterministicCollectionIndexes {
+			return protocolError(ErrResourceExhausted, "vector index count %d exceeds limit %d", vectorIndexCount, maxDeterministicCollectionIndexes)
+		}
+		if vectorIndexCount > uint64((len(raw)-off)/minDeterministicVectorDefinitionLen) {
+			return protocolError(ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)
+		}
+		for i := uint64(0); i < vectorIndexCount; i++ {
+			next, err := validateDeterministicVectorIndexDefinitionAt(raw, off, version)
+			if err != nil {
+				return err
+			}
+			off = next
+		}
+	}
 	if off != len(raw) {
 		return protocolError(ErrMalformedFrame, "collection_meta has %d trailing bytes", len(raw)-off)
 	}
@@ -1299,6 +1351,130 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	return off, nil
 }
 
+func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version uint64) (int, error) {
+	if _, err := readDeterministicStringField(raw, &off, "vector index name"); err != nil {
+		return 0, err
+	}
+	if _, err := readDeterministicStringField(raw, &off, "vector index field"); err != nil {
+		return 0, err
+	}
+	metric, err := readDeterministicUvarintField(raw, &off, "vector index metric")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicVectorMetricEnum(metric); err != nil {
+		return 0, err
+	}
+	for _, field := range []string{"vector index dimensions", "vector index m", "vector index ef_construction", "vector index ef_search"} {
+		value, err := readDeterministicVarintField(raw, &off, field)
+		if err != nil {
+			return 0, err
+		}
+		if err := validateDeterministicNonNegativeIntCapacity(field, value); err != nil {
+			return 0, err
+		}
+	}
+	encoding, err := readDeterministicUvarintField(raw, &off, "vector index encoding")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicVectorIndexEncodingEnum(encoding); err != nil {
+		return 0, err
+	}
+	if version < 3 {
+		return off, nil
+	}
+	strategy, err := readDeterministicUvarintField(raw, &off, "vector index strategy")
+	if err != nil {
+		return 0, err
+	}
+	if err := validateDeterministicVectorIndexStrategyEnum(strategy); err != nil {
+		return 0, err
+	}
+	quantizedCount, err := readDeterministicUvarintField(raw, &off, "quantized_index_count")
+	if err != nil {
+		return 0, err
+	}
+	if quantizedCount > uint64(maxInt) {
+		return 0, protocolError(ErrResourceExhausted, "quantized vector index count exceeds int capacity")
+	}
+	if quantizedCount > maxDeterministicCollectionIndexes {
+		return 0, protocolError(ErrResourceExhausted, "quantized vector index count %d exceeds limit %d", quantizedCount, maxDeterministicCollectionIndexes)
+	}
+	for i := uint64(0); i < quantizedCount; i++ {
+		next, err := validateDeterministicQuantizedVectorIndexDefinitionAt(raw, off, version, i)
+		if err != nil {
+			return 0, err
+		}
+		off = next
+	}
+	return off, nil
+}
+
+func validateDeterministicQuantizedVectorIndexDefinitionAt(raw []byte, off int, version uint64, index uint64) (int, error) {
+	name, err := readDeterministicStringField(raw, &off, "quantized index name")
+	if err != nil {
+		return 0, err
+	}
+	codec, err := readDeterministicStringField(raw, &off, "quantized index codec")
+	if err != nil {
+		return 0, err
+	}
+	codecVersion, err := readDeterministicUvarintField(raw, &off, "quantized index version")
+	if err != nil {
+		return 0, err
+	}
+	if codecVersion > maxDeterministicUint32 {
+		return 0, protocolError(ErrResourceExhausted, "quantized vector index version %d exceeds uint32 capacity", codecVersion)
+	}
+	q := collections.QuantizedVectorIndexDefinition{
+		Name:    name,
+		Codec:   codec,
+		Version: uint32(codecVersion),
+	}
+	if version >= 4 {
+		hasScalarU8Calibration, err := readDeterministicBoolValueField(raw, &off, "scalar_u8_calibration")
+		if err != nil {
+			return 0, err
+		}
+		if hasScalarU8Calibration {
+			mode, err := readDeterministicStringField(raw, &off, "scalar_u8_calibration.mode")
+			if err != nil {
+				return 0, err
+			}
+			grouping, err := readDeterministicStringField(raw, &off, "scalar_u8_calibration.grouping")
+			if err != nil {
+				return 0, err
+			}
+			policyName, err := readDeterministicStringField(raw, &off, "scalar_u8_calibration.alpha_policy.name")
+			if err != nil {
+				return 0, err
+			}
+			quantilePPM, err := readDeterministicUvarintField(raw, &off, "scalar_u8_calibration.alpha_policy.quantile_ppm")
+			if err != nil {
+				return 0, err
+			}
+			if quantilePPM > maxDeterministicUint32 {
+				return 0, protocolError(ErrResourceExhausted, "scalar_u8 alpha policy quantile_ppm %d exceeds uint32 capacity", quantilePPM)
+			}
+			q.ScalarU8Calibration = &collections.ScalarU8CalibrationConfig{
+				Mode:     collections.ScalarU8CalibrationMode(mode),
+				Grouping: collections.ScalarU8CalibrationGrouping(grouping),
+				AlphaPolicy: collections.ScalarU8AlphaPolicy{
+					Name:        collections.ScalarU8AlphaPolicyName(policyName),
+					QuantilePPM: uint32(quantilePPM),
+				},
+			}
+		}
+	}
+	if q.ScalarU8Calibration != nil {
+		if _, err := collections.NormalizeScalarU8CalibrationConfig("", int(index), q); err != nil {
+			return 0, protocolError(ErrInvalidCommand, "%v", err)
+		}
+	}
+	return off, nil
+}
+
 func readDeterministicNameField(raw []byte, off *int, field string, limits Limits) error {
 	limits = limits.withDefaults()
 	length, err := readDeterministicUvarintField(raw, off, field+".length")
@@ -1365,16 +1541,23 @@ func isMinimalVarint(value int64, n int) bool {
 }
 
 func readDeterministicBoolField(raw []byte, off *int, field string) error {
+	_, err := readDeterministicBoolValueField(raw, off, field)
+	return err
+}
+
+func readDeterministicBoolValueField(raw []byte, off *int, field string) (bool, error) {
 	if off == nil || *off < 0 || *off >= len(raw) {
-		return protocolError(ErrMalformedFrame, "missing %s", field)
+		return false, protocolError(ErrMalformedFrame, "missing %s", field)
 	}
 	value := raw[*off]
 	*off = *off + 1
 	switch value {
-	case 0, 1:
-		return nil
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
 	default:
-		return protocolError(ErrMalformedFrame, "invalid %s bool %d", field, value)
+		return false, protocolError(ErrMalformedFrame, "invalid %s bool %d", field, value)
 	}
 }
 
