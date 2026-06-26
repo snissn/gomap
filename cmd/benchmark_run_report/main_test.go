@@ -54,6 +54,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
   "results": [
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":1000,"bytes_per_doc":10,"docs_per_sec":10000,"measurement_kind":"go_benchmark"},
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"offline_rewrite","maintenance_mode":"offline_rewrite","total_bytes":700,"bytes_per_doc":7,"measurement_kind":"fixture","extra":{"index_db_bytes":"400","leaf_vlog_bytes":"300"}},
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"exhaustive_compact","maintenance_mode":"exhaustive_compact","total_bytes":450,"bytes_per_doc":4.5,"measurement_kind":"fixture"},
     {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"full_leafgen_pack_gc","maintenance_mode":"full_leafgen_pack_gc","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
     {"config_name":"treedb_bson_collection_0_indexes","engine":"treedb_fast","format":"bson","shape":"collection","index_count":0,"document_count":100,"phase":"post_insert","maintenance_mode":"none","total_bytes":800,"bytes_per_doc":8,"docs_per_sec":20000,"measurement_kind":"go_benchmark"},
     {"config_name":"treedb_bson_collection_0_indexes","engine":"treedb_fast","format":"bson","shape":"collection","index_count":0,"document_count":100,"phase":"full_leafgen_pack_gc","maintenance_mode":"full_leafgen_pack_gc","total_bytes":400,"bytes_per_doc":4,"measurement_kind":"fixture"},
@@ -63,7 +64,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
     {"config_name":"sqlite_json_0_indexes","engine":"sqlite_wal_normal","format":"json","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":3000,"bytes_per_doc":30,"measurement_kind":"fixture"}
   ],
   "comparisons": [
-    {"comparison_name":"tree_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"full_leafgen_pack_gc","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":5,"sqlite_bytes_per_doc":20,"smaller_ratio":4,"comparison_basis":"test"}
+    {"comparison_name":"tree_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"exhaustive_compact","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":4.5,"sqlite_bytes_per_doc":20,"smaller_ratio":4.4444444444,"comparison_basis":"test"}
   ]
 }`)
 	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_checkpoint_between_tests", "insights.json"), `{
@@ -383,12 +384,141 @@ func TestRenderCollectionsWithOnlyComparisons(t *testing.T) {
 	}
 }
 
+func TestLoadCollectionsSuppressesWarningOnlyExhaustiveCompactClaims(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "indexes_0", "benchmark_results.json"), `{
+  "results": [
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"offline_compact","maintenance_mode":"offline_compact","total_bytes":700,"bytes_per_doc":7,"measurement_kind":"fixture"},
+    {"config_name":"sqlite_native_columns_0_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"}
+  ],
+  "comparisons": [
+    {"comparison_name":"offline_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"offline_compact","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":7,"sqlite_bytes_per_doc":20,"smaller_ratio":2.857142857,"comparison_basis":"legacy fixture"}
+  ],
+  "guardrail_checks": [
+    {"severity":"warning","code":"phase.exhaustive_compact.failed","message":"legacy warning-only exhaustive compact failure"}
+  ]
+}`)
+
+	rows, comps, warnings := loadCollections(root)
+	if len(rows) == 0 {
+		t.Fatalf("expected rows to remain available for lifecycle auditing")
+	}
+	if len(comps) != 0 {
+		t.Fatalf("warning-only exhaustive compact evidence should suppress comparisons, got %#v", comps)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "suppressing TreeDB compacted-size comparisons") {
+		t.Fatalf("expected suppression warning, got %#v", warnings)
+	}
+
+	html := renderHTML(reportData{
+		Config:      config{Title: "warning-only compact", RunRoot: t.TempDir()},
+		Collections: rows,
+		Warnings:    warnings,
+	})
+	for _, forbidden := range []string{"Compacted size: SQLite bytes/doc divided by TreeDB bytes/doc", "Compacted-state comparisons"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("warning-only compact evidence should not render %q\n%s", forbidden, html)
+		}
+	}
+	if !strings.Contains(html, "suppressing TreeDB compacted-size comparisons") {
+		t.Fatalf("report should preserve suppression warning\n%s", html)
+	}
+}
+
+func TestLoadCollectionsSuppressesCompactedClaimsWithoutExhaustiveEvidence(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "indexes_0", "benchmark_results.json"), `{
+  "results": [
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"offline_compact","maintenance_mode":"offline_compact","total_bytes":700,"bytes_per_doc":7,"measurement_kind":"fixture"},
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"full_leafgen_pack_gc","maintenance_mode":"full_leafgen_pack_gc","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
+    {"config_name":"sqlite_native_columns_0_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":0,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"}
+  ],
+  "comparisons": [
+    {"comparison_name":"offline_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"offline_compact","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":7,"sqlite_bytes_per_doc":20,"smaller_ratio":2.857142857,"comparison_basis":"legacy fixture"},
+    {"comparison_name":"leafgen_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"full_leafgen_pack_gc","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":5,"sqlite_bytes_per_doc":20,"smaller_ratio":4,"comparison_basis":"legacy fixture"}
+  ],
+  "guardrail_checks": []
+}`)
+
+	rows, comps, warnings := loadCollections(root)
+	if len(rows) == 0 {
+		t.Fatalf("expected rows to remain available for lifecycle auditing")
+	}
+	if len(comps) != 0 {
+		t.Fatalf("missing exhaustive compact evidence should suppress comparisons, got %#v", comps)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "no positive exhaustive_compact row") {
+		t.Fatalf("expected missing-evidence suppression warning, got %#v", warnings)
+	}
+
+	html := renderHTML(reportData{
+		Config:      config{Title: "missing exhaustive compact", RunRoot: t.TempDir()},
+		Collections: rows,
+		Warnings:    warnings,
+	})
+	for _, forbidden := range []string{"Compacted size: SQLite bytes/doc divided by TreeDB bytes/doc", "Compacted-state comparisons"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("missing exhaustive compact evidence should not render %q\n%s", forbidden, html)
+		}
+	}
+}
+
+func TestLoadCollectionsRequiresExhaustiveEvidenceForComparedIndex(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "indexes_2", "benchmark_results.json"), `{
+  "results": [
+    {"config_name":"treedb_template_v1_collection_0_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":0,"document_count":100,"phase":"exhaustive_compact","maintenance_mode":"exhaustive_compact","total_bytes":450,"bytes_per_doc":4.5,"measurement_kind":"fixture"},
+    {"config_name":"sqlite_native_columns_2_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":2,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"}
+  ],
+  "comparisons": [
+    {"comparison_name":"tree_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_2_indexes","treedb_phase":"exhaustive_compact","sqlite_config_name":"sqlite_native_columns_2_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":5,"sqlite_bytes_per_doc":20,"smaller_ratio":4,"comparison_basis":"legacy mixed-index fixture"}
+  ],
+  "guardrail_checks": []
+}`)
+
+	rows, comps, warnings := loadCollections(root)
+	if len(rows) == 0 {
+		t.Fatalf("expected rows to remain available for lifecycle auditing")
+	}
+	if len(comps) != 0 {
+		t.Fatalf("index-0 exhaustive evidence should not authorize index-2 comparisons, got %#v", comps)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "compared config/index") {
+		t.Fatalf("expected compared-index suppression warning, got %#v", warnings)
+	}
+}
+
+func TestLoadCollectionsKeepsCompactedClaimsWithMatchingExhaustiveEvidence(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "indexes_2", "benchmark_results.json"), `{
+  "results": [
+    {"config_name":"treedb_template_v1_collection_2_indexes","engine":"treedb_fast","format":"template-v1","shape":"collection","index_count":2,"document_count":100,"phase":"exhaustive_compact","maintenance_mode":"exhaustive_compact","total_bytes":500,"bytes_per_doc":5,"measurement_kind":"fixture"},
+    {"config_name":"sqlite_native_columns_2_indexes","engine":"sqlite_wal_normal","format":"native-columns","shape":"collection","index_count":2,"document_count":100,"phase":"sqlite_vacuum","maintenance_mode":"sqlite_vacuum","total_bytes":2000,"bytes_per_doc":20,"measurement_kind":"fixture"}
+  ],
+  "comparisons": [
+    {"comparison_name":"tree_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_2_indexes","treedb_phase":"exhaustive_compact","sqlite_config_name":"sqlite_native_columns_2_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":5,"sqlite_bytes_per_doc":20,"smaller_ratio":4,"comparison_basis":"fixture"}
+  ],
+  "guardrail_checks": []
+}`)
+
+	_, comps, warnings := loadCollections(root)
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings with matching exhaustive evidence: %#v", warnings)
+	}
+	if len(comps) != 1 {
+		t.Fatalf("matching exhaustive evidence should preserve comparison, got %#v", comps)
+	}
+	if comps[0].TreeDBConfig != "treedb_template_v1_collection_2_indexes" {
+		t.Fatalf("unexpected comparison preserved: %#v", comps[0])
+	}
+}
+
 func TestCollectionChartsIncludeAdditionalFormats(t *testing.T) {
 	html := renderHTML(reportData{
 		Config: config{Title: "extra formats", RunRoot: t.TempDir()},
 		Collections: []collectionRow{
 			{ConfigName: "treedb_msgpack_collection_0_indexes", Engine: "treedb_fast", Format: "msgpack", Shape: "collection", IndexCount: 0, Phase: "post_insert", DocsPerSec: 1234},
-			{ConfigName: "treedb_msgpack_collection_0_indexes", Engine: "treedb_fast", Format: "msgpack", Shape: "collection", IndexCount: 0, Phase: "full_leafgen_pack_gc", BytesPerDoc: 12.3},
+			{ConfigName: "treedb_msgpack_collection_0_indexes", Engine: "treedb_fast", Format: "msgpack", Shape: "collection", IndexCount: 0, Phase: "exhaustive_compact", BytesPerDoc: 12.3},
 		},
 	})
 	for _, want := range []string{"TreeDB Msgpack", "TreeDB Msgpack Compacted"} {
@@ -479,10 +609,11 @@ func TestMongoRowDiskFallsBackToDBStatsTotalSize(t *testing.T) {
 	}
 }
 
-func TestCollectionDiskRowsUseBestCompactedTreeDBPhase(t *testing.T) {
+func TestCollectionDiskRowsRequireExhaustiveCompactTreeDBPhase(t *testing.T) {
 	rows := []collectionRow{
 		{Shape: "collection", Engine: "treedb_fast", ConfigName: "treedb_bson_collection_0_indexes", Format: "bson", IndexCount: 0, Phase: "full_leafgen_pack_gc", BytesPerDoc: 30},
 		{Shape: "collection", Engine: "treedb_fast", ConfigName: "treedb_bson_collection_0_indexes", Format: "bson", IndexCount: 0, Phase: "offline_compact", BytesPerDoc: 20},
+		{Shape: "collection", Engine: "treedb_fast", ConfigName: "treedb_bson_collection_0_indexes", Format: "bson", IndexCount: 0, Phase: "exhaustive_compact", BytesPerDoc: 25},
 		{Shape: "collection", Engine: "treedb_fast", ConfigName: "treedb_bson_collection_0_indexes", Format: "bson", IndexCount: 0, Phase: "post_insert", BytesPerDoc: 80},
 	}
 
@@ -490,7 +621,7 @@ func TestCollectionDiskRowsUseBestCompactedTreeDBPhase(t *testing.T) {
 	if len(diskRows.Series) != 1 || len(diskRows.Series[0].Values) != 1 {
 		t.Fatalf("unexpected disk rows: %+v", diskRows)
 	}
-	if got, want := diskRows.Series[0].Values[0], 20.0; got != want {
+	if got, want := diskRows.Series[0].Values[0], 25.0; got != want {
 		t.Fatalf("compacted bytes/doc = %v, want %v", got, want)
 	}
 }
@@ -513,6 +644,14 @@ func TestCollectionComparisonRatioRowsDeduplicateIndexLabels(t *testing.T) {
 			SmallerRatio:    7,
 			ComparisonBasis: "fixture",
 		},
+		{
+			TreeDBConfig:    "treedb_template_v1_collection_2_indexes",
+			TreeDBPhase:     "exhaustive_compact",
+			SQLiteConfig:    "sqlite_native_columns_2_indexes",
+			SQLitePhase:     "sqlite_vacuum",
+			SmallerRatio:    5,
+			ComparisonBasis: "fixture",
+		},
 	})
 	if got, want := rows.Categories, []string{"2 indexes"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("categories = %v, want %v", got, want)
@@ -520,7 +659,7 @@ func TestCollectionComparisonRatioRowsDeduplicateIndexLabels(t *testing.T) {
 	if len(rows.Series) != 1 || len(rows.Series[0].Values) != 1 {
 		t.Fatalf("unexpected ratio series: %+v", rows.Series)
 	}
-	if got, want := rows.Series[0].Values[0], 7.0; got != want {
+	if got, want := rows.Series[0].Values[0], 5.0; got != want {
 		t.Fatalf("ratio value = %v, want %v", got, want)
 	}
 	if got, want := rows.Series[0].Name, "Template V1 vs Native Columns"; got != want {
