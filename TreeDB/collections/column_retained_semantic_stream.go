@@ -289,23 +289,27 @@ func prepareColumnRetainedSemanticStreamV1StorageDocuments(cfg ColumnStoreConfig
 		if end > len(documents) {
 			end = len(documents)
 		}
-		retainedJSON := make([][]byte, end-start)
-		for i := start; i < end; i++ {
-			retained, err := columnRetainedPayloadJSONFromJSONDocument(cfg, documents[i])
+		rows := end - start
+		streams := make(map[string]*columnRetainedSemanticStreamPath)
+		for row, i := 0, start; i < end; row, i = row+1, i+1 {
+			retained, err := columnRetainedPayloadJSONObjectFromJSONDocument(cfg, documents[i])
 			if err != nil {
 				resetCollectionRunTable(blockTable)
 				return columnRetainedPayloadStorageDocuments{}, err
 			}
-			retainedJSON[i-start] = retained
+			if err := collectColumnRetainedSemanticStreamObjectPaths(retained, nil, uint64(row), streams); err != nil {
+				resetCollectionRunTable(blockTable)
+				return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+			}
 		}
-		block, err := encodeColumnRetainedSemanticStreamV1Block(retainedJSON)
+		block, err := encodeColumnRetainedSemanticStreamV1BlockFromStreams(rows, streams)
 		if err != nil {
 			resetCollectionRunTable(blockTable)
 			return columnRetainedPayloadStorageDocuments{}, err
 		}
 		sum := sha256.Sum256(block)
 		blockKey := append([]byte(nil), sum[:]...)
-		for i := range retainedJSON {
+		for i := 0; i < rows; i++ {
 			out.documents[start+i] = encodeColumnRetainedSemanticStreamV1Locator(blockKey, uint64(i))
 		}
 		setCollectionRunValue(blockTable, blockKey, block)
@@ -776,14 +780,32 @@ func encodeColumnRetainedSemanticStreamV1RawBlock(documents [][]byte) ([]byte, e
 			return nil, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 		}
 	}
+	return encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(len(documents), streams)
+}
+
+func encodeColumnRetainedSemanticStreamV1BlockFromStreams(rows int, streams map[string]*columnRetainedSemanticStreamPath) ([]byte, error) {
+	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows, streams)
+	if err != nil {
+		return nil, err
+	}
+	return encodeColumnRetainedSemanticStreamV1StoredBlock(raw)
+}
+
+func encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows int, streams map[string]*columnRetainedSemanticStreamPath) ([]byte, error) {
+	if rows <= 0 {
+		return nil, errors.New("collections: semantic-stream-v1 retained block requires at least one row")
+	}
+	if err := validateColumnRetainedSemanticStreamV1BlockRows(uint64(rows)); err != nil {
+		return nil, err
+	}
 	keys := make([]string, 0, len(streams))
 	for key := range streams {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockMagic)+len(documents)*16)
+	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockMagic)+rows*16)
 	out = append(out, columnRetainedSemanticStreamV1BlockMagic...)
-	out = binary.AppendUvarint(out, uint64(len(documents)))
+	out = binary.AppendUvarint(out, uint64(rows))
 	out = binary.AppendUvarint(out, uint64(len(keys)))
 	for _, key := range keys {
 		stream := streams[key]
@@ -924,6 +946,45 @@ func collectColumnRetainedSemanticStreamPaths(raw json.RawMessage, path []string
 		}
 		appendColumnRetainedSemanticStreamValue(path, row, trimmed, streams)
 	}
+	return nil
+}
+
+func collectColumnRetainedSemanticStreamObjectPaths(obj map[string]any, path []string, row uint64, streams map[string]*columnRetainedSemanticStreamPath) error {
+	if len(obj) == 0 {
+		if len(path) > 0 {
+			return appendColumnRetainedSemanticStreamJSONValue(path, row, obj, streams)
+		}
+		return nil
+	}
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		nextPath := append(append([]string(nil), path...), key)
+		if err := collectColumnRetainedSemanticStreamAnyPaths(obj[key], nextPath, row, streams); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectColumnRetainedSemanticStreamAnyPaths(value any, path []string, row uint64, streams map[string]*columnRetainedSemanticStreamPath) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		return collectColumnRetainedSemanticStreamObjectPaths(typed, path, row, streams)
+	default:
+		return appendColumnRetainedSemanticStreamJSONValue(path, row, typed, streams)
+	}
+}
+
+func appendColumnRetainedSemanticStreamJSONValue(path []string, row uint64, value any, streams map[string]*columnRetainedSemanticStreamPath) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("collections: encode semantic-stream-v1 retained value: %w", err)
+	}
+	appendColumnRetainedSemanticStreamValue(path, row, raw, streams)
 	return nil
 }
 

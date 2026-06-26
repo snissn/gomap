@@ -630,6 +630,54 @@ func TestColumnRetainedSemanticStreamV1StoredBlockZSTDWrapper2662(t *testing.T) 
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1InsertFastPathMatchesRetainedJSONPipeline3067(t *testing.T) {
+	cfg := jsonbenchRetainedPayloadAuditConfig2382(true)
+	cfg.RetainedPayloadEncoding = ColumnRetainedPayloadEncodingSemanticStreamV1
+	documents := [][]byte{
+		[]byte(`{"time_us":1,"kind":"commit","did":"did:plc:one","commit":{"operation":"create","collection":"app.bsky.feed.post","rkey":"r-0001","record":{"$type":"app.bsky.feed.post","text":"hello","tags":["one",{"nested":true}],"empty":{}}},"payload":{"body":"kept","count":17}}`),
+		[]byte(`{"time_us":2,"kind":"commit","did":"did:plc:two","commit":{"operation":"update","collection":"app.bsky.feed.post","rkey":"r-0002","record":{"$type":"app.bsky.feed.post","text":"world","facets":[{"index":{"byteStart":0,"byteEnd":5}}]}},"identity":{"seq":12,"handle":"example.test"}}`),
+	}
+
+	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(*cfg, documents, nil)
+	if err != nil {
+		t.Fatalf("prepare semantic-stream-v1 documents: %v", err)
+	}
+	if prepared.semanticStreamBlocks == nil {
+		t.Fatal("prepare semantic-stream-v1 documents did not return block table")
+	}
+	defer resetCollectionRunTable(prepared.semanticStreamBlocks)
+
+	iter := prepared.semanticStreamBlocks.NewIterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+	if !iter.Valid() {
+		t.Fatal("semantic-stream-v1 block table is empty")
+	}
+	gotBlock := append([]byte(nil), iter.UnsafeValue()...)
+	iter.Next()
+	if iter.Valid() {
+		t.Fatal("semantic-stream-v1 block table has more than one block")
+	}
+	if err := iter.Error(); err != nil {
+		t.Fatalf("iterate semantic-stream-v1 block table: %v", err)
+	}
+
+	retainedJSON := make([][]byte, len(documents))
+	for i, document := range documents {
+		retained, err := columnRetainedPayloadJSONFromJSONDocument(*cfg, document)
+		if err != nil {
+			t.Fatalf("legacy retained JSON row %d: %v", i, err)
+		}
+		retainedJSON[i] = retained
+	}
+	wantBlock, err := encodeColumnRetainedSemanticStreamV1Block(retainedJSON)
+	if err != nil {
+		t.Fatalf("legacy semantic-stream-v1 block: %v", err)
+	}
+	if !bytes.Equal(gotBlock, wantBlock) {
+		t.Fatalf("semantic-stream-v1 fast path block mismatch: got %d bytes want %d", len(gotBlock), len(wantBlock))
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1StoredBlockZSTDRawLimitFallback2662(t *testing.T) {
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlock([][]byte{
 		[]byte(`{"payload":"same","commit":{"record":{"text":"same retained body"}}}`),
