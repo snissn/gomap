@@ -352,6 +352,12 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 			input.declaredRowsReady = true
 			return input, nil
 		}
+		if input.declaredRowsReady {
+			if len(input.declaredRows) != input.rows {
+				return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s prepared rows=%d rows=%d", input.operation, len(input.declaredRows), input.rows)
+			}
+			return input, nil
+		}
 		if len(input.documents) != input.rows {
 			return columnWritePublishInput{}, fmt.Errorf("collections: column physical asset %s documents=%d rows=%d", input.operation, len(input.documents), input.rows)
 		}

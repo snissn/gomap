@@ -284,7 +284,9 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextUsesCommandWALRou
 	commandRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish."
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
-	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"eligible_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"used_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.candidate_ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.candidate_ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.candidate_ops_total")
@@ -2581,6 +2583,7 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 		FlushApplyMinEntries:       1,
 		FlushApplyMinSpans:         1,
 		FlushApplyMinBytes:         1,
+		FlushApplySpanNative:       true,
 		DisableBackgroundPrune:     true,
 		IndexOuterLeavesInValueLog: true,
 	})
@@ -2689,9 +2692,11 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	commandRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish."
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
-	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.candidate_ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"eligible_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"used_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
 }
 

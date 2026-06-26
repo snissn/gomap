@@ -166,6 +166,7 @@ type columnStoreSuiteReport struct {
 	AcceptedForcedPaths      []string                       `json:"accepted_forced_paths"`
 	FailClosedForcedPaths    []string                       `json:"fail_closed_forced_paths"`
 	Stages                   []columnStoreStageMetric       `json:"stages"`
+	InsertStats              columnStoreInsertPhaseMetric   `json:"insert_stats"`
 	Queries                  []columnStoreQueryMetric       `json:"queries"`
 	JSONBenchCells           []columnStoreJSONBenchCell     `json:"jsonbench_cells"`
 	Parity                   map[string]columnStoreParity   `json:"parity"`
@@ -192,6 +193,27 @@ type columnStoreStageMetric struct {
 	RowsPerSecond float64 `json:"rows_per_second,omitempty"`
 	Bytes         int64   `json:"bytes,omitempty"`
 	MiBPerSecond  float64 `json:"mib_per_second,omitempty"`
+}
+
+type columnStoreInsertPhaseMetric struct {
+	Documents                                 int     `json:"documents"`
+	Batches                                   int     `json:"batches"`
+	Runs                                      int     `json:"runs"`
+	PrepareDocumentsDurationMS                float64 `json:"prepare_documents_duration_ms,omitempty"`
+	PrepareDocumentsNsPerRow                  float64 `json:"prepare_documents_ns_per_row,omitempty"`
+	DuplicateDocumentPreflightDurationMS      float64 `json:"duplicate_document_preflight_duration_ms,omitempty"`
+	DuplicateDocumentPreflightNsPerRow        float64 `json:"duplicate_document_preflight_ns_per_row,omitempty"`
+	RetainedPayloadPrepareDurationMS          float64 `json:"retained_payload_prepare_duration_ms,omitempty"`
+	RetainedPayloadPrepareNsPerRow            float64 `json:"retained_payload_prepare_ns_per_row,omitempty"`
+	RetainedPayloadRows                       int     `json:"retained_payload_rows,omitempty"`
+	RetainedPayloadDeclaredRows               int     `json:"retained_payload_declared_rows,omitempty"`
+	RetainedPayloadSemanticStreamBlocks       int     `json:"retained_payload_semantic_stream_blocks,omitempty"`
+	PrimaryRunBuildDurationMS                 float64 `json:"primary_run_build_duration_ms,omitempty"`
+	PrimaryRunBuildNsPerRow                   float64 `json:"primary_run_build_ns_per_row,omitempty"`
+	PublishDurationMS                         float64 `json:"publish_duration_ms,omitempty"`
+	PublishNsPerRow                           float64 `json:"publish_ns_per_row,omitempty"`
+	ColumnStoreDeclaredRowReuseCoverageRatio  float64 `json:"column_store_declared_row_reuse_coverage_ratio,omitempty"`
+	RetainedPayloadSemanticStreamBlocksPerRun float64 `json:"retained_payload_semantic_stream_blocks_per_run,omitempty"`
 }
 
 type columnStoreQueryMetric struct {
@@ -587,7 +609,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	stages = append(stages, columnStoreStage("open_create", start, 0, 0))
 
 	start = time.Now()
-	if err := insertColumnStoreFixture(collection, fixtureEvents, batchSize); err != nil {
+	insertStats, insertBatches, err := insertColumnStoreFixtureWithStats(collection, fixtureEvents, batchSize)
+	if err != nil {
 		_ = db.Close()
 		return "", err
 	}
@@ -727,6 +750,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		AcceptedForcedPaths:   cloneStringSlice(columnStoreSuiteAcceptedForcedPaths),
 		FailClosedForcedPaths: cloneStringSlice(columnStoreSuiteFailClosedForcedPaths),
 		Stages:                stages,
+		InsertStats:           columnStoreInsertPhaseMetricFromStats(insertStats, insertBatches),
 		Queries:               queries,
 		JSONBenchCells:        jsonbenchCells,
 		Parity:                parity,
@@ -1199,22 +1223,87 @@ func openColumnStoreSuiteDB(dir string) (*backenddb.DB, error) {
 }
 
 func insertColumnStoreFixture(collection *collections.Collection, events []columnStoreFixtureEvent, batchSize int) error {
+	_, _, err := insertColumnStoreFixtureWithStats(collection, events, batchSize)
+	return err
+}
+
+func insertColumnStoreFixtureWithStats(collection *collections.Collection, events []columnStoreFixtureEvent, batchSize int) (collections.CollectionInsertStats, int, error) {
 	idsAll := make([][]byte, len(events))
 	docsAll := make([][]byte, len(events))
 	for i := range events {
 		idsAll[i] = events[i].IDBytes
 		docsAll[i] = events[i].Doc
 	}
+	var stats collections.CollectionInsertStats
+	batches := 0
 	for start := 0; start < len(events); start += batchSize {
 		end := start + batchSize
 		if end > len(events) {
 			end = len(events)
 		}
 		if _, err := collection.InsertBatch(idsAll[start:end], docsAll[start:end]); err != nil {
-			return fmt.Errorf("column_store: InsertBatch rows %d-%d: %w", start, end, err)
+			return collections.CollectionInsertStats{}, 0, fmt.Errorf("column_store: InsertBatch rows %d-%d: %w", start, end, err)
 		}
+		columnStoreAddCollectionInsertStats(&stats, collection.LastInsertStats())
+		batches++
 	}
-	return nil
+	return stats, batches, nil
+}
+
+func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats, src collections.CollectionInsertStats) {
+	dst.Documents += src.Documents
+	dst.Indexes += src.Indexes
+	dst.Runs += src.Runs
+	dst.BufferedIndexedBatches += src.BufferedIndexedBatches
+	dst.BufferedIndexedBypassBatches += src.BufferedIndexedBypassBatches
+	dst.ValidationPreflightReused += src.ValidationPreflightReused
+	dst.ValidationPreflightRechecked += src.ValidationPreflightRechecked
+	dst.PrepareDocuments += src.PrepareDocuments
+	dst.IndexStateExtraction += src.IndexStateExtraction
+	dst.DuplicateDocumentPreflight += src.DuplicateDocumentPreflight
+	dst.RetainedPayloadPrepare += src.RetainedPayloadPrepare
+	dst.RetainedPayloadRows += src.RetainedPayloadRows
+	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
+	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
+	dst.TemplateRunBuild += src.TemplateRunBuild
+	dst.PrimaryRunBuild += src.PrimaryRunBuild
+	dst.IndexStateRunBuild += src.IndexStateRunBuild
+	dst.SecondaryRunBuild += src.SecondaryRunBuild
+	dst.Publish += src.Publish
+	dst.SecondaryEntries += src.SecondaryEntries
+	dst.SecondaryKeyBytes += src.SecondaryKeyBytes
+	dst.SecondarySortedRuns += src.SecondarySortedRuns
+	dst.SecondaryUnsortedRuns += src.SecondaryUnsortedRuns
+}
+
+func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertStats, batches int) columnStoreInsertPhaseMetric {
+	rows := stats.Documents
+	out := columnStoreInsertPhaseMetric{
+		Documents:                            rows,
+		Batches:                              batches,
+		Runs:                                 stats.Runs,
+		PrepareDocumentsDurationMS:           durationMS(stats.PrepareDocuments),
+		PrepareDocumentsNsPerRow:             nsPerRow(stats.PrepareDocuments, rows),
+		DuplicateDocumentPreflightDurationMS: durationMS(stats.DuplicateDocumentPreflight),
+		DuplicateDocumentPreflightNsPerRow:   nsPerRow(stats.DuplicateDocumentPreflight, rows),
+		RetainedPayloadPrepareDurationMS:     durationMS(stats.RetainedPayloadPrepare),
+		RetainedPayloadPrepareNsPerRow:       nsPerRow(stats.RetainedPayloadPrepare, rows),
+		RetainedPayloadRows:                  stats.RetainedPayloadRows,
+		RetainedPayloadDeclaredRows:          stats.RetainedPayloadDeclaredRows,
+		RetainedPayloadSemanticStreamBlocks:  stats.RetainedPayloadSemanticStreamBlocks,
+		PrimaryRunBuildDurationMS:            durationMS(stats.PrimaryRunBuild),
+		PrimaryRunBuildNsPerRow:              nsPerRow(stats.PrimaryRunBuild, rows),
+		PublishDurationMS:                    durationMS(stats.Publish),
+		PublishNsPerRow:                      nsPerRow(stats.Publish, rows),
+	}
+	if stats.RetainedPayloadRows > 0 {
+		out.ColumnStoreDeclaredRowReuseCoverageRatio = float64(stats.RetainedPayloadDeclaredRows) / float64(stats.RetainedPayloadRows)
+	}
+	if stats.Runs > 0 {
+		out.RetainedPayloadSemanticStreamBlocksPerRun = float64(stats.RetainedPayloadSemanticStreamBlocks) / float64(stats.Runs)
+	}
+	return out
 }
 
 func columnStoreReferenceHashes(events []columnStoreFixtureEvent) (map[string]uint64, error) {
@@ -3532,6 +3621,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	}
 	sb.WriteString("\n")
 
+	renderColumnStoreInsertStatsMarkdown(&sb, report.InsertStats)
 	renderColumnStoreJSONBenchCellsMarkdown(&sb, report)
 	renderColumnStoreColgranuleReuseMarkdown(&sb, report)
 
@@ -3636,6 +3726,29 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 		columnStoreWriteArtifactLine(&sb, "mutex delta profile", report.Artifacts.MutexDeltaProfile)
 	}
 	return sb.String()
+}
+
+func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStoreInsertPhaseMetric) {
+	if stats.Documents == 0 {
+		return
+	}
+	sb.WriteString("## Insert Phase Stats\n\n")
+	sb.WriteString(fmt.Sprintf("- documents: %d\n", stats.Documents))
+	sb.WriteString(fmt.Sprintf("- batches: %d\n", stats.Batches))
+	sb.WriteString(fmt.Sprintf("- runs: %d\n", stats.Runs))
+	sb.WriteString(fmt.Sprintf("- retained_payload_rows: %d\n", stats.RetainedPayloadRows))
+	sb.WriteString(fmt.Sprintf("- retained_payload_declared_rows: %d\n", stats.RetainedPayloadDeclaredRows))
+	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks: %d\n", stats.RetainedPayloadSemanticStreamBlocks))
+	sb.WriteString(fmt.Sprintf("- column_store_declared_row_reuse_coverage_ratio: %.6f\n", stats.ColumnStoreDeclaredRowReuseCoverageRatio))
+	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks_per_run: %.6f\n\n", stats.RetainedPayloadSemanticStreamBlocksPerRun))
+
+	sb.WriteString("| phase | ms | ns/row |\n")
+	sb.WriteString("|---|---:|---:|\n")
+	sb.WriteString(fmt.Sprintf("| `prepare_documents` | %.3f | %.1f |\n", stats.PrepareDocumentsDurationMS, stats.PrepareDocumentsNsPerRow))
+	sb.WriteString(fmt.Sprintf("| `duplicate_document_preflight` | %.3f | %.1f |\n", stats.DuplicateDocumentPreflightDurationMS, stats.DuplicateDocumentPreflightNsPerRow))
+	sb.WriteString(fmt.Sprintf("| `retained_payload_prepare` | %.3f | %.1f |\n", stats.RetainedPayloadPrepareDurationMS, stats.RetainedPayloadPrepareNsPerRow))
+	sb.WriteString(fmt.Sprintf("| `primary_run_build` | %.3f | %.1f |\n", stats.PrimaryRunBuildDurationMS, stats.PrimaryRunBuildNsPerRow))
+	sb.WriteString(fmt.Sprintf("| `publish` | %.3f | %.1f |\n\n", stats.PublishDurationMS, stats.PublishNsPerRow))
 }
 
 func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {

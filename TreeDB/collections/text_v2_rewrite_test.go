@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -286,6 +287,9 @@ func TestTextV2RewriteSnapshotBoundAndConcurrentServing2630(t *testing.T) {
 }
 
 func TestTextV2RewriteStorageMaintenanceAndValueLogGC2630(t *testing.T) {
+	prevGOMAXPROCS := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prevGOMAXPROCS) })
+
 	dir := t.TempDir()
 	d, closeDB := openTextV2PostingBlockCompressedDB2625(t, dir)
 	mgr := NewCollectionManager(d)
