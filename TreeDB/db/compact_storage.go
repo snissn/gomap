@@ -1455,6 +1455,10 @@ type compactStorageLeafPageLogHandoff struct {
 	done                bool
 }
 
+var compactStorageLeafPageLogHandoffCloseWriter = func(w *rewriteWriter) error {
+	return w.Close()
+}
+
 func (h *compactStorageLeafPageLogHandoff) cleanup() error {
 	if h == nil || h.db == nil || h.writer == nil {
 		return nil
@@ -1464,7 +1468,7 @@ func (h *compactStorageLeafPageLogHandoff) cleanup() error {
 	}
 	h.done = true
 	var cleanupErr error
-	if err := h.writer.Close(); err != nil {
+	if err := compactStorageLeafPageLogHandoffCloseWriter(h.writer); err != nil {
 		cleanupErr = errors.Join(cleanupErr, compactStorageLeafPageLogHandoffError("close compact writer", err))
 	}
 	if h.previousLeafPageLog == nil {
@@ -1603,13 +1607,13 @@ func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactSt
 		classification.RequiresQuiescence = true
 		if lifecycle == CompactStorageLifecycleActiveWriter {
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
-			classification.Detail = "modeled active-writer status: background flush/apply workers and cached backlog must be fenced before exhaustive compact can take over the owner"
+			classification.Detail = "modeled active-writer status: background flush/apply workers, checkpoint/close drains, and cached backlog must be fenced before exhaustive compact can take over the owner"
 		} else if !compactStorageLeafPageLogHandoffCapable(log) {
 			classification.Status = CompactStorageOwnerStatusBlockingBug
 			classification.Detail = "cached/wrapper owner does not expose the compact handoff restore capability"
 		} else {
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
-			classification.Detail = "cached/wrapper owner has compact handoff support, but CompactStorage does not fence cached writes and background flushes for the full exhaustive run"
+			classification.Detail = "cached/wrapper owner has compact handoff support, but CompactStorage does not fence cached writes, background flush/apply workers, checkpoint/close drains, and cached backlog for the full exhaustive run"
 		}
 	default:
 		classification.Status = CompactStorageOwnerStatusExternalUnsupported
@@ -1720,19 +1724,8 @@ func compactStorageLooksLikeCachedLeafPageLog(log LeafPageLog) bool {
 	if log == nil {
 		return false
 	}
-	if _, ok := log.(LeafPageConcurrentAppendLog); !ok {
-		return false
-	}
-	if _, ok := log.(LeafPageLogLaneProvider); ok {
-		return true
-	}
-	if _, ok := log.(LeafPageLogCreatedSegmentProvider); ok {
-		return true
-	}
-	if _, ok := log.(LeafPageLogCurrentSegmentProvider); ok {
-		return true
-	}
-	return false
+	marker, ok := log.(LeafPageLogCachedWrapperOwner)
+	return ok && marker.CompactStorageCachedWrapperOwner()
 }
 
 func (db *DB) refreshCompactStorageLeafPageLog(writer *rewriteWriter) error {

@@ -155,6 +155,8 @@ func (l *cachingLeafPageLog) Close() error {
 
 func (l *cachingLeafPageLog) ConcurrentLeafPageAppends() bool { return true }
 
+func (l *cachingLeafPageLog) CompactStorageCachedWrapperOwner() bool { return true }
+
 func (l *cachingLeafPageLog) PreparedLeafPageAppends() bool { return true }
 
 func (l *cachingLeafPageLog) PreparedLeafPageBatchAppends() bool { return true }

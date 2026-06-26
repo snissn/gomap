@@ -1019,6 +1019,119 @@ func TestCompactStorageLeafPageLogHandoffAdvanceFailureFailsClosed(t *testing.T)
 	}
 }
 
+func TestCompactStorageLeafPageLogHandoffCloseFailureFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(ValueLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	if err := os.MkdirAll(LeafLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir leaf_vlog: %v", err)
+	}
+
+	d := &DB{
+		dir:                        dir,
+		indexOuterLeavesInValueLog: true,
+		valueLogCompression:        ValueLogCompressionOff,
+	}
+	opts := CompactStorageOptions{
+		Mode:        CompactStorageExhaustive,
+		ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve,
+	}
+	installed, handoff, err := d.installCompactStorageLeafPageLog(opts)
+	if err != nil {
+		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
+	}
+	if installed == nil || handoff == nil {
+		t.Fatal("expected installed compact handoff")
+	}
+	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("c"), page.PageSize)); err != nil {
+		t.Fatalf("installed AppendLeafPage: %v", err)
+	}
+
+	closeErr := errors.New("injected compact writer close failure")
+	origClose := compactStorageLeafPageLogHandoffCloseWriter
+	compactStorageLeafPageLogHandoffCloseWriter = func(w *rewriteWriter) error {
+		_ = origClose(w)
+		return closeErr
+	}
+	t.Cleanup(func() { compactStorageLeafPageLogHandoffCloseWriter = origClose })
+
+	err = handoff.cleanup()
+	if !errors.Is(err, ErrCompactStorageLeafPageLogHandoffCleanup) {
+		t.Fatalf("cleanup error=%v, want handoff cleanup sentinel", err)
+	}
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("cleanup error=%v, want injected close error", err)
+	}
+	var handoffErr *CompactStorageLeafPageLogHandoffError
+	if !errors.As(err, &handoffErr) {
+		t.Fatalf("cleanup error=%T, want CompactStorageLeafPageLogHandoffError", err)
+	}
+	if handoffErr.Stage != "close compact writer" {
+		t.Fatalf("handoff stage=%q want close compact writer", handoffErr.Stage)
+	}
+	if d.leafPageLog != nil {
+		t.Fatalf("leaf-page log=%T, want fail-closed nil active writer", d.leafPageLog)
+	}
+	if err := handoff.cleanup(); err != nil {
+		t.Fatalf("second cleanup should be idempotent, got %v", err)
+	}
+}
+
+func TestCompactStorageLeafPageLogHandoffScanFailureFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(ValueLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	leafDir := LeafLogDirPath(dir)
+	if err := os.MkdirAll(leafDir, 0755); err != nil {
+		t.Fatalf("mkdir leaf_vlog: %v", err)
+	}
+
+	d := &DB{
+		dir:                        dir,
+		indexOuterLeavesInValueLog: true,
+		valueLogCompression:        ValueLogCompressionOff,
+	}
+	previousOwner := replayInlineLeafPageLog{}
+	d.SetLeafPageLog(previousOwner)
+	opts := CompactStorageOptions{
+		Mode:        CompactStorageExhaustive,
+		ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve,
+	}
+	installed, handoff, err := d.installCompactStorageLeafPageLog(opts)
+	if err != nil {
+		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
+	}
+	if installed == nil || handoff == nil {
+		t.Fatal("expected installed compact handoff")
+	}
+	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("s"), page.PageSize)); err != nil {
+		t.Fatalf("installed AppendLeafPage: %v", err)
+	}
+	if err := os.RemoveAll(leafDir); err != nil {
+		t.Fatalf("remove leaf dir: %v", err)
+	}
+	if err := os.WriteFile(leafDir, []byte("not-a-directory"), 0644); err != nil {
+		t.Fatalf("replace leaf dir with file: %v", err)
+	}
+
+	err = handoff.cleanup()
+	if !errors.Is(err, ErrCompactStorageLeafPageLogHandoffCleanup) {
+		t.Fatalf("cleanup error=%v, want handoff cleanup sentinel", err)
+	}
+	var handoffErr *CompactStorageLeafPageLogHandoffError
+	if !errors.As(err, &handoffErr) {
+		t.Fatalf("cleanup error=%T, want CompactStorageLeafPageLogHandoffError", err)
+	}
+	if handoffErr.Stage != "scan compact leaf segments" {
+		t.Fatalf("handoff stage=%q want scan compact leaf segments", handoffErr.Stage)
+	}
+	if d.leafPageLog != nil {
+		t.Fatalf("leaf-page log=%T, want fail-closed nil active writer", d.leafPageLog)
+	}
+}
+
 func TestCompactStoragePreInstallFailureDoesNotMutateLeafPageLogOwner(t *testing.T) {
 	d, _, wantValue := openCompactStorageCommandWALLeafPageLogDB(t)
 	defer func() { _ = d.Close() }()
