@@ -2044,6 +2044,41 @@ func TestColumnStoreSuiteReportsFirstTouchAfterOpenLaneM3070(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteReportsFirstTouchMismatchAfterArtifactsM3070(t *testing.T) {
+	dir := t.TempDir()
+	cfg := BenchConfig{Keys: 16, BatchSize: 8, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
+	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+		ProfileDir:              dir,
+		ExecutionPath:           "native-fastpath",
+		ForcedPath:              columnStorePathSerialColumnScan,
+		QueryNames:              []string{columnStoreQueryQ1},
+		FirstTouchAfterOpen:     true,
+		CorruptReferenceForTest: columnStoreQueryQ1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "parity mismatch") || !strings.Contains(err.Error(), "q1") {
+		t.Fatalf("expected first-touch parity mismatch error, got %v", err)
+	}
+
+	var report columnStoreSuiteReport
+	data, readErr := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+	if readErr != nil {
+		t.Fatalf("expected column_store_results.json after first-touch mismatch: %v", readErr)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if len(report.FirstTouchQueries) != 1 {
+		t.Fatalf("first_touch_queries=%d want one diagnostic row", len(report.FirstTouchQueries))
+	}
+	parity, ok := report.FirstTouchParity[columnStoreQueryQ1]
+	if !ok {
+		t.Fatalf("missing first-touch q1 parity: %+v", report.FirstTouchParity)
+	}
+	if parity.Pass {
+		t.Fatalf("expected first-touch q1 parity to be recorded as failed: %+v", parity)
+	}
+}
+
 func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *testing.T) {
 	tests := []struct {
 		name       string

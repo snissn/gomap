@@ -712,17 +712,15 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 
 	var firstTouchQueries []columnStoreQueryMetric
 	var firstTouchParity map[string]columnStoreParity
+	var firstTouchErr error
 	if firstTouchAfterOpen {
 		if err := db.Close(); err != nil {
 			return "", fmt.Errorf("column_store: close before first-touch-after-open: %w", err)
 		}
 		db = nil
 		start = time.Now()
-		firstTouchQueries, firstTouchParity, err = runColumnStoreSuiteFirstTouchAfterOpenQueries(dataDir, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames)
+		firstTouchQueries, firstTouchParity, firstTouchErr = runColumnStoreSuiteFirstTouchAfterOpenQueries(dataDir, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames)
 		stages = append(stages, columnStoreStage("first_touch_after_open", start, rows*len(queryNames), 0))
-		if err != nil {
-			return "", err
-		}
 		start = time.Now()
 		db, err = openColumnStoreSuiteDB(dataDir)
 		if err != nil {
@@ -872,8 +870,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		}
 	}
 	// Keep artifacts available for diagnosis even when parity/report-cell gates fail.
-	if parityErr != nil || profileFinalizeErr != nil || jsonbenchCellsErr != nil {
-		return "", errors.Join(parityErr, profileFinalizeErr, jsonbenchCellsErr)
+	if parityErr != nil || firstTouchErr != nil || profileFinalizeErr != nil || jsonbenchCellsErr != nil {
+		return "", errors.Join(parityErr, firstTouchErr, profileFinalizeErr, jsonbenchCellsErr)
 	}
 	return md, nil
 }
