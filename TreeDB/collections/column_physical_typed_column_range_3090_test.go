@@ -29,6 +29,35 @@ func TestColumnPhysicalDenseTypedColumnTargetedRangeReads3090(t *testing.T) {
 		assertColumnPhysicalTargetedRangeBytes3090(t, "q1", full.Diagnostics, ranged.Diagnostics)
 	})
 
+	t.Run("q2_group_count_distinct", func(t *testing.T) {
+		batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2LocalDictBatchA1950(), typedColumnQ2LocalDictBatchB1950()}
+		events := flattenColumnPhysicalEvents1950(batches)
+		_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
+		defer closeFn()
+
+		req := typedColumnQ2Request1950()
+		rowHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q2", events))
+		want := columnPhysicalJSONBenchQ2ReferenceCountsP0(events)
+		matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events)
+
+		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityVerify
+		full, err := col.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery(q2 verify): %v", err)
+		}
+		assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 verify", full, rowHash, want)
+		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 verify", full.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
+
+		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+		ranged, err := col.RunColumnPhysicalQuery(req)
+		if err != nil {
+			t.Fatalf("RunColumnPhysicalQuery(q2 skip checksums): %v", err)
+		}
+		assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 targeted ranges", ranged, rowHash, want)
+		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 targeted ranges", ranged.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
+		assertColumnPhysicalTargetedRangeBytes3090(t, "q2", full.Diagnostics, ranged.Diagnostics)
+	})
+
 	t.Run("q3_group_hour_count", func(t *testing.T) {
 		batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBatchA1950(), columnPhysicalQ3DenseBatchB1950()}
 		events := flattenColumnPhysicalEvents1950(batches)
