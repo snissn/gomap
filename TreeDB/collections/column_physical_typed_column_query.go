@@ -52,6 +52,8 @@ type columnTypedColumnDensePredicatePart struct {
 	Codes               []uint32
 	Valid               []bool
 	Allowed             []uint64
+	SingleCode          uint32
+	SingleCodeAllowed   bool
 	MissingMatchesEmpty bool
 	RejectsAll          bool
 }
@@ -3384,12 +3386,18 @@ func columnTypedColumnDensePredicatesMatch(predicates []columnTypedColumnDensePr
 		if predicate.RejectsAll || rowIdx < 0 || rowIdx >= len(predicate.Codes) {
 			return false
 		}
+		if predicate.SingleCodeAllowed {
+			return columnTypedColumnDensePredicateSingleCodeMatchesAfterBounds(predicate, rowIdx)
+		}
 		return columnTypedColumnDensePredicateMatchesAfterBounds(predicate, rowIdx)
 	case 2:
 		left := &predicates[0]
 		right := &predicates[1]
 		if left.RejectsAll || right.RejectsAll || rowIdx < 0 || rowIdx >= len(left.Codes) || rowIdx >= len(right.Codes) {
 			return false
+		}
+		if left.SingleCodeAllowed && right.SingleCodeAllowed {
+			return columnTypedColumnDensePredicateSingleCodeMatchesAfterBounds(left, rowIdx) && columnTypedColumnDensePredicateSingleCodeMatchesAfterBounds(right, rowIdx)
 		}
 		if left.Valid == nil && right.Valid == nil {
 			if !columnTypedColumnCodeAllowed(left.Allowed, left.Codes[rowIdx]) {
@@ -3398,6 +3406,18 @@ func columnTypedColumnDensePredicatesMatch(predicates []columnTypedColumnDensePr
 			return columnTypedColumnCodeAllowed(right.Allowed, right.Codes[rowIdx])
 		}
 		return columnTypedColumnDensePredicateMatchesAfterBounds(left, rowIdx) && columnTypedColumnDensePredicateMatchesAfterBounds(right, rowIdx)
+	case 3:
+		left := &predicates[0]
+		mid := &predicates[1]
+		right := &predicates[2]
+		if left.RejectsAll || mid.RejectsAll || right.RejectsAll || rowIdx < 0 || rowIdx >= len(left.Codes) || rowIdx >= len(mid.Codes) || rowIdx >= len(right.Codes) {
+			return false
+		}
+		if left.SingleCodeAllowed && mid.SingleCodeAllowed && right.SingleCodeAllowed {
+			return columnTypedColumnDensePredicateSingleCodeMatchesAfterBounds(left, rowIdx) &&
+				columnTypedColumnDensePredicateSingleCodeMatchesAfterBounds(mid, rowIdx) &&
+				columnTypedColumnDensePredicateSingleCodeMatchesAfterBounds(right, rowIdx)
+		}
 	}
 	for _, predicate := range predicates {
 		if predicate.RejectsAll {
@@ -3424,6 +3444,13 @@ func columnTypedColumnDensePredicateMatchesAfterBounds(predicate *columnTypedCol
 		return predicate.MissingMatchesEmpty
 	}
 	return columnTypedColumnCodeAllowed(predicate.Allowed, predicate.Codes[rowIdx])
+}
+
+func columnTypedColumnDensePredicateSingleCodeMatchesAfterBounds(predicate *columnTypedColumnDensePredicatePart, rowIdx int) bool {
+	if !columnTypedColumnDenseCodeValid(predicate.Valid, rowIdx) {
+		return false
+	}
+	return predicate.Codes[rowIdx] == predicate.SingleCode
 }
 
 func columnTypedColumnDenseCodeValid(valid []bool, rowIdx int) bool {
