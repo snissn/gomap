@@ -175,6 +175,35 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 			t.Fatalf("point_put admission_policy_decline count=0, want auto-declined fallback")
 		}
 	})
+
+	t.Run("parallel only disabled", func(t *testing.T) {
+		d, err := Open(Options{
+			Dir:                   t.TempDir(),
+			FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+			FlushApplySpanNative:  false,
+			FlushApplyConcurrency: 4,
+			FlushApplyMinEntries:  1,
+			FlushApplyMinSpans:    1,
+			FlushApplyMinBytes:    1,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		if err := d.Set([]byte("parallel-only"), []byte("v")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		stats := d.Stats()
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.disabled.count_total"); got == 0 {
+			t.Fatalf("point_put disabled count=0, want parallel-only disabled fallback")
+		}
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.span_native_not_implemented.count_total"); got != 0 {
+			t.Fatalf("point_put span_native_not_implemented count=%d, want 0 for parallel-only disabled fallback", got)
+		}
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.candidate_ops_total"); got != 0 {
+			t.Fatalf("point_put candidate_ops_total=%d, want 0 when span-native apply is disabled", got)
+		}
+	})
 }
 
 func openExplicitRawSpanNativeRouteTestDB(t *testing.T) *DB {

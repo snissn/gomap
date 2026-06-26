@@ -248,7 +248,7 @@ func (b *Batch) write(sync bool) error {
 		return ErrClosed
 	}
 	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
-		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false)
+		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false, false)
 		return b.db.Checkpoint()
 	}
 	intent := b.commandWALPublishIntent
@@ -327,6 +327,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		result, applyErr := z.ApplyWithOptions(rootID, b.batch, applyOpts)
 		applyResult = result
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
+		b.db.observeRawSpanNativeApplyResult(rawSpanPlan, result, applyErr, applyWithOptions, applyOpts.SpanNativeApply)
 		b.db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
 		newRoot = result.RootID
 		retired = result.PendingRetiredPages
@@ -334,8 +335,8 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent) (bool,
 		err = applyErr
 	} else {
 		newRoot, retired, metrics, err = z.Apply(rootID, b.batch)
+		b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions, applyOpts.SpanNativeApply)
 	}
-	b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions)
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {
@@ -522,6 +523,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 		result, applyErr := idx.zipper.ApplyWithOptions(rootID, b.batch, applyOpts)
 		applyResult = result
 		b.db.observeFlushApplyPrepareResult(result, applyErr)
+		b.db.observeRawSpanNativeApplyResult(rawSpanPlan, result, applyErr, applyWithOptions, applyOpts.SpanNativeApply)
 		b.db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
 		newRoot = result.RootID
 		retired = result.PendingRetiredPages
@@ -529,8 +531,8 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent) error 
 		err = applyErr
 	} else {
 		newRoot, retired, metrics, err = idx.zipper.Apply(rootID, b.batch)
+		b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions, applyOpts.SpanNativeApply)
 	}
-	b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions)
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
 	b.db.observeFlushApplyPreparedOutput(metrics, len(retired))
 	if err != nil {

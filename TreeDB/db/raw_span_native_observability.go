@@ -66,6 +66,7 @@ type rawSpanNativeEligibilityRequest struct {
 	spanNativeEligible            bool
 	spanNativeUsed                bool
 	applyOptionsUsed              bool
+	spanNativeRequested           bool
 }
 
 type rawSpanNativeObservation struct {
@@ -152,7 +153,7 @@ func (b *Batch) rawSpanNativeBatchPlan() rawSpanNativeBatchPlan {
 	}
 }
 
-func (db *DB) observeRawSpanNativeApplyResult(plan rawSpanNativeBatchPlan, result zipper.ApplyResult, err error, applyOptionsUsed bool) {
+func (db *DB) observeRawSpanNativeApplyResult(plan rawSpanNativeBatchPlan, result zipper.ApplyResult, err error, applyOptionsUsed bool, spanNativeRequested bool) {
 	if db == nil {
 		return
 	}
@@ -170,6 +171,7 @@ func (db *DB) observeRawSpanNativeApplyResult(plan rawSpanNativeBatchPlan, resul
 		spanNativeEligible:            result.SpanNativeEligible,
 		spanNativeUsed:                result.SpanNativeUsed,
 		applyOptionsUsed:              applyOptionsUsed,
+		spanNativeRequested:           spanNativeRequested,
 	})
 	db.observeRawSpanNativeObservation(observation)
 }
@@ -188,7 +190,7 @@ func (db *DB) rawSpanNativeEligibility(req rawSpanNativeEligibilityRequest) rawS
 		return observation
 	}
 	reason, hasExplicitReason := parseFlushApplySpanNativeFallbackReason(req.explicitFallbackReason)
-	if req.applyOptionsUsed && req.readOnlyPrepareRequested && ops > 0 {
+	if req.spanNativeRequested && req.applyOptionsUsed && req.readOnlyPrepareRequested && ops > 0 {
 		observation.candidate = true
 	}
 	if req.spanNativeEligible {
@@ -257,6 +259,9 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 		return FlushSpanRunFallbackAdmissionPolicyDecline
 	}
 	if !req.applyOptionsUsed || !req.readOnlyPrepareRequested {
+		return FlushSpanRunFallbackDisabled
+	}
+	if !req.spanNativeRequested {
 		return FlushSpanRunFallbackDisabled
 	}
 	return FlushSpanRunFallbackSpanNativeNotImplemented
