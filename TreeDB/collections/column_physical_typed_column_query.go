@@ -158,6 +158,7 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	sortKeyMarkMatches                    int
 	sortKeyMarkSkips                      int
 	sortKeyMarkFallbackReason             string
+	timeOrderTopKRunLazyPayloadBytesBase  int64
 	segmentFileCacheHits                  uint64
 	segmentFileCacheMisses                uint64
 	denseGroupCounts                      map[string]int
@@ -460,7 +461,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			return nil, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
 		}
 		var part columnTypedColumnPhysicalQueryPart
-		part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct)
+		part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct, includePhysicalRows)
 		runner.segmentFileCacheHits = readCache.hits
 		runner.segmentFileCacheMisses = readCache.misses
 		if err != nil {
@@ -1936,6 +1937,7 @@ func columnTypedColumnPhysicalQueryNullableStringsAllowedForTopK(plan columnType
 
 func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	start := time.Now()
+	r.timeOrderTopKRunLazyPayloadBytesBase = r.timeOrderTopKLazyPayloadBytes()
 	if r.timeOrderMinValues == nil {
 		r.timeOrderMinValues = make(map[string]int64, req.TopK+1)
 	} else {
@@ -2026,6 +2028,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runTimeOrderTopK(view columnPhysi
 
 func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleTimeOrderTopK(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64) (ColumnPhysicalQueryResult, error) {
 	start := time.Now()
+	r.timeOrderTopKRunLazyPayloadBytesBase = r.timeOrderTopKLazyPayloadBytes()
 	if r.timeOrderMinValues == nil {
 		r.timeOrderMinValues = make(map[string]int64, req.TopK+1)
 	} else {
@@ -2120,6 +2123,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleTimeOrderTopK(vie
 func (r *columnTypedColumnPhysicalQueryRunner) timeOrderTopKDiagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks int, decodedBytes uint64, scanNanos int64) ColumnPhysicalQueryDiagnostics {
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, scanNanos)
 	diag.TimeOrderTopKUsed = true
+	diag.PhysicalBytesScanned += r.timeOrderTopKRunLazyPayloadBytes()
 	decodedGranules += r.granulesDecoded
 	decodedBlocks += r.decodedBlocks
 	decodedBytes += r.decodedPayloadBytes
@@ -2133,6 +2137,29 @@ func (r *columnTypedColumnPhysicalQueryRunner) timeOrderTopKDiagnostics(view col
 		diag.SkippedGranules = 0
 	}
 	return diag
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) timeOrderTopKLazyPayloadBytes() int64 {
+	if r == nil {
+		return 0
+	}
+	var bytesRead int64
+	for idx := range r.parts {
+		part := r.parts[idx].TimeOrderTopK
+		if part == nil || part.PayloadLoader == nil {
+			continue
+		}
+		bytesRead += part.PayloadLoader.bytesRead
+	}
+	return bytesRead
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) timeOrderTopKRunLazyPayloadBytes() int64 {
+	current := r.timeOrderTopKLazyPayloadBytes()
+	if current < r.timeOrderTopKRunLazyPayloadBytesBase {
+		return 0
+	}
+	return current - r.timeOrderTopKRunLazyPayloadBytesBase
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) latestVisibleTimeOrderTopKDiagnostics(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, state *typedColumnLatestVisibilityState, visibilityBytes int64, visibilityNanos int64, rowsScanned, matchedRows, reduceRows, decodedGranules, decodedBlocks int, decodedBytes uint64, scanNanos int64) ColumnPhysicalQueryDiagnostics {
