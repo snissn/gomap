@@ -39,6 +39,7 @@ const (
 	columnStoreQueryQ4B                = "q4b"
 	columnStoreQueryQ5                 = "q5"
 	columnStoreQueryQ5Metadata         = "q5_metadata"
+	columnStoreQuerySumSecondOfDaySq   = "sum_time_second_of_day_square"
 	columnStoreSuiteBenchMetricPrefix  = "column_store_"
 	columnStoreSuiteAliasFullScanQ1    = "alias_full_scan_from_" + columnStoreQueryQ1
 	columnStoreSuiteAliasPrefixQ4A     = "alias_prefix_scan_from_" + columnStoreQueryQ4A
@@ -110,7 +111,7 @@ var (
 	)
 	columnStoreSuitePathArg                     = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg                  = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
-	columnStoreSuiteQueryArg                    = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5/q5_metadata suite; duplicates are rejected)")
+	columnStoreSuiteQueryArg                    = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata,sum_time_second_of_day_square; empty/all runs the full q1-q5/q5_metadata/expression suite; duplicates are rejected)")
 	columnStoreSuiteAssetReadIntegrityArg       = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
 	columnStoreSuiteTypedCompressionArg         = flag.String("column-store-typed-compression", "", "Benchmark-only typed_column_part compression policy for -suite column_store when typed-column assets are published (none,snappy,lz4,zstd,zstd_dict; zstd values fail closed; empty uses production default none)")
 	columnStoreSuiteFirstTouchAfterOpenArg      = flag.Bool("column-store-first-touch-after-open", false, "Also report secondary first_touch_after_open query rows by reopening the DB/collection once per selected query")
@@ -1872,7 +1873,7 @@ func columnStoreSuiteQueryIndexCandidates(name string) []string {
 	switch name {
 	case columnStoreQueryQ1, columnStoreQueryQ2:
 		return []string{"kind"}
-	case columnStoreQueryQ3:
+	case columnStoreQueryQ3, columnStoreQuerySumSecondOfDaySq:
 		return []string{"time_us"}
 	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
 		return []string{"did"}
@@ -2165,6 +2166,8 @@ func columnStoreSuitePhysicalQueryRequest(name string) (collections.ColumnPhysic
 		return collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}, nil
 	case columnStoreQueryQ5, columnStoreQueryQ5Metadata:
 		return collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}, nil
+	case columnStoreQuerySumSecondOfDaySq:
+		return collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQuerySumSecondOfDaySquare, ValueColumn: "time_us"}, nil
 	default:
 		return collections.ColumnPhysicalQueryRequest{}, fmt.Errorf("column_store: unknown physical query %q", name)
 	}
@@ -2177,7 +2180,7 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 		for _, group := range groups {
 			lines = append(lines, columnStoreSuiteFormatPhysicalQueryLine(prefix, group.Key, int64(group.Count)))
 		}
-	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata, columnStoreQuerySumSecondOfDaySq:
 		for _, group := range groups {
 			lines = append(lines, columnStoreSuiteFormatPhysicalQueryLine(prefix, group.Key, group.Int64))
 		}
@@ -2198,7 +2201,7 @@ func columnStoreSuiteHashPhysicalQueryGroups(prefix, queryName string, groups []
 		for _, group := range groups {
 			hash = columnStoreHashPhysicalQueryGroup(hash, prefix, group.Key, int64(group.Count))
 		}
-	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata, columnStoreQuerySumSecondOfDaySq:
 		for _, group := range groups {
 			hash = columnStoreHashPhysicalQueryGroup(hash, prefix, group.Key, group.Int64)
 		}
@@ -2224,7 +2227,7 @@ func columnStoreSuitePhysicalQueryGroupLess(queryName string, left, right collec
 	switch queryName {
 	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
 		leftValue, rightValue = int64(left.Count), int64(right.Count)
-	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata, columnStoreQuerySumSecondOfDaySq:
 	default:
 		return false
 	}
@@ -2913,6 +2916,7 @@ var columnStoreQueryNameList = [...]string{
 	columnStoreQueryQ4B,
 	columnStoreQueryQ5,
 	columnStoreQueryQ5Metadata,
+	columnStoreQuerySumSecondOfDaySq,
 }
 
 func columnStoreQueryNames() []string {
@@ -3009,6 +3013,20 @@ func columnStoreQueryImplementationNote(name, requestedPath, planPath string) st
 	}
 	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathRowStoreBaseline {
 		return planPath + "_q5_alias_row_materialization_baseline"
+	}
+	if name == columnStoreQuerySumSecondOfDaySq {
+		switch planPath {
+		case columnStorePathSerialColumnScan, columnStorePathParallelColumnScan:
+			return planPath + "_arbitrary_expression_second_of_day_square_no_aggregate_metadata_physical_cell_scan"
+		case columnStorePathAggregateMetadata:
+			return "aggregate_metadata_forced_path_rerouted_to_arbitrary_expression_no_metadata_physical_cell_scan"
+		case columnStorePathBTreeIndexBaseline:
+			return "b_tree_index_baseline_arbitrary_expression_second_of_day_square_row_materialization_no_predicate_pushdown"
+		case columnStorePathRowStoreBaseline:
+			return "row_store_baseline_arbitrary_expression_second_of_day_square_row_materialization"
+		default:
+			return planPath + "_arbitrary_expression_second_of_day_square_no_aggregate_metadata_physical_cell_scan"
+		}
 	}
 	if planPath == columnStorePathBTreeIndexBaseline {
 		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
@@ -3152,6 +3170,20 @@ func columnStoreSuiteHourKey(hour int) string {
 	return fmt.Sprintf("hour_%02d", hour)
 }
 
+func columnStoreSuiteSecondOfDaySquare(timeUS int64) int64 {
+	const secondUS = int64(1_000_000)
+	const daySeconds = int64(86_400)
+	seconds := timeUS / secondUS
+	if timeUS < 0 && timeUS%secondUS != 0 {
+		seconds--
+	}
+	secondOfDay := seconds % daySeconds
+	if secondOfDay < 0 {
+		secondOfDay += daySeconds
+	}
+	return secondOfDay * secondOfDay
+}
+
 func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
 	switch name {
 	case columnStoreQueryQ1:
@@ -3222,6 +3254,12 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			lines = append(lines, fmt.Sprintf("%s:%s=%d", name, did, sp.max-sp.min))
 		}
 		return lines, nil
+	case columnStoreQuerySumSecondOfDaySq:
+		sum := int64(0)
+		for _, event := range events {
+			sum += columnStoreSuiteSecondOfDaySquare(event.TimeUS)
+		}
+		return []string{fmt.Sprintf("%s:%s=%d", name, "time_us_second_of_day_square", sum)}, nil
 	default:
 		return nil, fmt.Errorf("unknown column_store query %q", name)
 	}
@@ -4248,6 +4286,8 @@ func columnStoreSuiteBenchDisplayNameForQuery(name string) string {
 		return "Column q5"
 	case columnStoreQueryQ5Metadata:
 		return "Column q5 metadata"
+	case columnStoreQuerySumSecondOfDaySq:
+		return "Column sum second-of-day square"
 	default:
 		return "Column " + name
 	}

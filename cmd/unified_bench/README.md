@@ -355,7 +355,9 @@ execution labels are `row_store_baseline`, `b_tree_index_baseline`,
 `serial_column_scan`, `aggregate_metadata`, and `parallel_column_scan`.
 The `aggregate_metadata` path uses typed aggregate metadata for q1, q4b, and
 q5_metadata where those assets are available; the other synthetic query shapes
-reroute to serial physical scans.
+reroute to serial physical scans. `sum_time_second_of_day_square` is an
+arbitrary-expression lane that must visit typed `time_us` cells unless a future
+planner explicitly maintains a matching generated expression or aggregate.
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
@@ -373,10 +375,10 @@ OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
 ```
 
 Use `-column-store-query q3` or a comma-separated subset such as
-`-column-store-query q2,q3,q4b,q5` when collecting query-isolated 100K-1M row
-CPU/allocation profiles. Omit it, or pass `all`, for the default full
-q1-q5/q5_metadata suite. Duplicate query names are rejected so benchprof
-tables and artifact labels stay unambiguous.
+`-column-store-query q2,q3,q4b,sum_time_second_of_day_square` when collecting
+query-isolated 100K-1M row CPU/allocation profiles. Omit it, or pass `all`, for
+the default full q1-q5/q5_metadata/expression suite. Duplicate query names are
+rejected so benchprof tables and artifact labels stay unambiguous.
 
 Use `-column-store-first-touch-after-open` when collecting the secondary
 `first_touch_after_open` lane. It closes the warmed reopened DB after the main
@@ -416,7 +418,7 @@ storage accounting (#2118), so headline ClickHouse/full-data claims require a
 fresh external JSONBench run against the selected gomap dependency.
 
 PR descriptions for column-store milestones should paste the command, row count,
-profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,
+profile, forced path, q1-q5/q5_metadata/expression rows/sec, MiB/sec, ns/row,
 planner time, scan time, reduce time, worker count, scheduled/skipped granules,
 cache hit/miss counters, materialized-row count, parity status, storage source,
 fallback reason, manifest root name/id, active manifest generation/checksum,
