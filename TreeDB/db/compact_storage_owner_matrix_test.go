@@ -229,6 +229,13 @@ func TestCompactStorageRawBackendCommandWALValueLogLeafPageLogCurrentSupported(t
 	if string(got) != "ok" {
 		t.Fatalf("post-compact value=%q want ok", got)
 	}
+	segments, err := listValueLogSegments(dir)
+	if err != nil {
+		t.Fatalf("list value-log segments after post-compact write: %v", err)
+	}
+	if _, err := scanValueLogSegments(segments, nil); err != nil {
+		t.Fatalf("scan value-log segments after post-compact write: %v", err)
+	}
 }
 
 func TestCompactStorageActiveWriterLifecycleIsModeledStatus(t *testing.T) {

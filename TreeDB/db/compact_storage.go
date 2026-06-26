@@ -708,6 +708,10 @@ func (db *DB) prepareCompactStorageRIDAllocator(opts *CompactStorageOptions) err
 	if db == nil || opts == nil || opts.ReserveRIDs != nil || !db.indexOuterLeavesInValueLog {
 		return nil
 	}
+	if reserver := db.currentValueLogRIDReserver(); reserver != nil {
+		opts.ReserveRIDs = reserver.ReserveRIDs
+		return nil
+	}
 	segments, err := rewriteWALSegmentsLister(db.dir)
 	if err != nil {
 		return fmt.Errorf("list value-log segments for compact storage rid selection in %s: %w", db.dir, err)
