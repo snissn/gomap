@@ -342,12 +342,15 @@ func mapNativeWireError(src []byte, err error) DeterministicErrorCodeV1 {
 	case nativewire.ErrMalformedFrame:
 		return ErrorMalformedEntryV1
 	case nativewire.ErrUnsupportedVersion:
-		if commandID, ok := deterministicEntryCommandID(src); ok {
-			row := ClassifyNativeWireCommandV1(commandID)
+		if header, ok := deterministicEntryHeader(src); ok {
+			if header.CommandVersion != 1 {
+				return ErrorUnsupportedVersionV1
+			}
+			row := ClassifyNativeWireCommandV1(header.CommandID)
 			if row.Known && row.CommandWALStatus == "read-only" {
 				return ErrorReadOnlyV1
 			}
-			if !knownNativeWireCommandIDV1(commandID) {
+			if !knownNativeWireCommandIDV1(header.CommandID) {
 				return ErrorUnsupportedCommandV1
 			}
 		}
@@ -362,8 +365,8 @@ func mapNativeWireError(src []byte, err error) DeterministicErrorCodeV1 {
 		case strings.Contains(reason, "missing catalog guard"):
 			return ErrorMissingGuardV1
 		case strings.Contains(reason, " is not replicated"):
-			if commandID, ok := deterministicEntryCommandID(src); ok {
-				return rowRejectionCodeV1(ClassifyNativeWireCommandV1(commandID))
+			if header, ok := deterministicEntryHeader(src); ok {
+				return rowRejectionCodeV1(ClassifyNativeWireCommandV1(header.CommandID))
 			}
 			return ErrorUnsupportedCommandV1
 		case strings.Contains(reason, "missing command schema"):
@@ -389,24 +392,37 @@ func nativeWireErrorReason(err error) string {
 	return ""
 }
 
-func deterministicEntryCommandID(src []byte) (nativewire.CommandID, bool) {
+type deterministicEntryHeaderV1 struct {
+	CommandID      nativewire.CommandID
+	CommandVersion uint64
+}
+
+func deterministicEntryHeader(src []byte) (deterministicEntryHeaderV1, bool) {
 	if len(src) < len(nativewire.DeterministicEntryMagic) || string(src[:len(nativewire.DeterministicEntryMagic)]) != nativewire.DeterministicEntryMagic {
-		return 0, false
+		return deterministicEntryHeaderV1{}, false
 	}
 	off := len(nativewire.DeterministicEntryMagic)
 	entryVersion, n := binary.Uvarint(src[off:])
 	if n <= 0 {
-		return 0, false
+		return deterministicEntryHeaderV1{}, false
 	}
 	if entryVersion != nativewire.DeterministicEntryVersion {
-		return 0, false
+		return deterministicEntryHeaderV1{}, false
 	}
 	off += n
 	commandID, n := binary.Uvarint(src[off:])
 	if n <= 0 {
-		return 0, false
+		return deterministicEntryHeaderV1{}, false
 	}
-	return nativewire.CommandID(commandID), true
+	off += n
+	commandVersion, n := binary.Uvarint(src[off:])
+	if n <= 0 {
+		return deterministicEntryHeaderV1{}, false
+	}
+	return deterministicEntryHeaderV1{
+		CommandID:      nativewire.CommandID(commandID),
+		CommandVersion: commandVersion,
+	}, true
 }
 
 func knownNativeWireCommandIDV1(id nativewire.CommandID) bool {
