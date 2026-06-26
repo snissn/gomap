@@ -1968,6 +1968,82 @@ func TestColumnStoreSuiteExecutesForcedSerialPhysicalPathM14B(t *testing.T) {
 	}
 }
 
+func TestColumnStoreSuiteReportsFirstTouchAfterOpenLaneM3070(t *testing.T) {
+	dir := t.TempDir()
+	cfg := BenchConfig{Keys: 16, BatchSize: 8, DBsArg: "treedb", Profile: "durable", SeedUsed: 1}
+	_, err := runColumnStoreSuite(cfg, columnStoreSuiteOptions{
+		ProfileDir:          dir,
+		ExecutionPath:       "native-fastpath",
+		ForcedPath:          columnStorePathSerialColumnScan,
+		QueryNames:          []string{columnStoreQueryQ1},
+		FirstTouchAfterOpen: true,
+	})
+	if err != nil {
+		t.Fatalf("runColumnStoreSuite first touch: %v", err)
+	}
+
+	var report columnStoreSuiteReport
+	data, err := os.ReadFile(filepath.Join(dir, "column_store_results.json"))
+	if err != nil {
+		t.Fatalf("read column_store_results.json: %v", err)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("unmarshal column_store_results.json: %v", err)
+	}
+	if len(report.Queries) != 1 || len(report.FirstTouchQueries) != 1 {
+		t.Fatalf("queries=%d first_touch_queries=%d want one each", len(report.Queries), len(report.FirstTouchQueries))
+	}
+	oneShot := report.Queries[0]
+	firstTouch := report.FirstTouchQueries[0]
+	if oneShot.QueryMode != columnStoreQueryModeOneShotEndToEnd {
+		t.Fatalf("one-shot query_mode=%q want %q", oneShot.QueryMode, columnStoreQueryModeOneShotEndToEnd)
+	}
+	if firstTouch.QueryMode != columnStoreQueryModeFirstTouchAfterOpen {
+		t.Fatalf("first-touch query_mode=%q want %q", firstTouch.QueryMode, columnStoreQueryModeFirstTouchAfterOpen)
+	}
+	if firstTouch.CacheLabel != "fresh_reopen_per_query" {
+		t.Fatalf("first-touch cache_label=%q want fresh_reopen_per_query", firstTouch.CacheLabel)
+	}
+	if firstTouch.MetadataMode != columnStoreMetadataModeNoAggregate || firstTouch.PlanLabel != oneShot.PlanLabel {
+		t.Fatalf("first-touch mode/plan=%q/%q want no aggregate and one-shot plan %q: %+v", firstTouch.MetadataMode, firstTouch.PlanLabel, oneShot.PlanLabel, firstTouch)
+	}
+	if firstTouch.RawHash != oneShot.RawHash || firstTouch.ProductionHash != oneShot.ProductionHash {
+		t.Fatalf("first-touch hashes raw/prod=%016x/%016x want one-shot %016x/%016x", firstTouch.RawHash, firstTouch.ProductionHash, oneShot.RawHash, oneShot.ProductionHash)
+	}
+	if firstTouch.PrepareSetupDurationMS <= firstTouch.PlannerDurationMS {
+		t.Fatalf("first-touch prepare/setup did not include reopen/open setup: first=%+v one_shot=%+v", firstTouch, oneShot)
+	}
+	if firstTouch.TotalQueryDurationMS+0.000001 < firstTouch.PrepareSetupDurationMS+firstTouch.RunDurationMS+firstTouch.RenderHashDurationMS {
+		t.Fatalf("first-touch total does not cover setup/run/render: first=%+v", firstTouch)
+	}
+	if math.Abs(firstTouch.TotalQueryDurationMS-firstTouch.DurationMS) > 0.000001 {
+		t.Fatalf("first-touch total_query_duration_ms=%f want duration_ms=%f", firstTouch.TotalQueryDurationMS, firstTouch.DurationMS)
+	}
+	if !strings.Contains(firstTouch.ImplementationNote, "first_touch_after_open") {
+		t.Fatalf("first-touch note missing mode explanation: %+v", firstTouch)
+	}
+	parity, ok := report.FirstTouchParity[columnStoreQueryQ1]
+	if !ok || !parity.Pass {
+		t.Fatalf("first-touch parity missing/failing: %+v", report.FirstTouchParity)
+	}
+	stageNames := make([]string, 0, len(report.Stages))
+	for _, stage := range report.Stages {
+		stageNames = append(stageNames, stage.Name)
+	}
+	if !slices.Contains(stageNames, "first_touch_after_open") || !slices.Contains(stageNames, "reopen_after_first_touch") {
+		t.Fatalf("first-touch stages missing from %+v", stageNames)
+	}
+	md, err := os.ReadFile(filepath.Join(dir, "column_store_results.md"))
+	if err != nil {
+		t.Fatalf("read column_store_results.md: %v", err)
+	}
+	for _, want := range []string{"## First Touch After Open Query Throughput And Parity", columnStoreQueryModeFirstTouchAfterOpen} {
+		if !strings.Contains(string(md), want) {
+			t.Fatalf("markdown missing %q:\n%s", want, md)
+		}
+	}
+}
+
 func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *testing.T) {
 	tests := []struct {
 		name       string

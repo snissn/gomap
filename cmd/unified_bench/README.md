@@ -378,6 +378,13 @@ CPU/allocation profiles. Omit it, or pass `all`, for the default full
 q1-q5/q5_metadata suite. Duplicate query names are rejected so benchprof
 tables and artifact labels stay unambiguous.
 
+Use `-column-store-first-touch-after-open` when collecting the secondary
+`first_touch_after_open` lane. It closes the warmed reopened DB after the main
+query pass, then reopens the DB and collection once per selected query and
+records separate `first_touch_queries` rows with reopen/open time included in
+`prepare_setup_duration_ms`. The primary `queries` rows remain the
+`one_shot_end_to_end` lane.
+
 Column-store non-column retained payloads default to `semantic-stream-v1` so the
 production storage-parity path uses retained semantic-stream side-root blocks.
 Use `-column-store-retained-payload-encoding template-v1`, or set
@@ -392,8 +399,9 @@ The suite writes:
 - `insights.md`, `insights.json`, `insights.html`
 - configured runtime profiles, including `cpu_column_store_treedb_column_store.pprof`, `allocs_column_store_treedb_column_store.pprof`, `checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof`, `block.pprof`, `mutex.pprof`, `trace.out`, and the query-phase delta `block_column_store_treedb_column_store.pprof` / `mutex_column_store_treedb_column_store.pprof` when those profile classes produce non-empty deltas
 
-`column_store_results.json` includes a `jsonbench_cells` matrix for the in-repo
-synthetic JSONBench-shaped fixture. Each cell records the external-facing label
+`column_store_results.json` includes `query_mode` and `metadata_mode` labels on
+query rows and a `jsonbench_cells` matrix for the in-repo synthetic
+JSONBench-shaped fixture. Each cell records the external-facing label
 (`row-scan`, `column-direct`, `column-prepared`, `column-direct-metadata`, or
 `column-prepared-metadata` when the mode exists), query name, sort layout,
 storage source, direct/prepared mode, metadata-vs-data path, compression mode,
