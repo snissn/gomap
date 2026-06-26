@@ -217,6 +217,11 @@ func (db *DB) orderedRootSpanNativeRouteTriage(route OrderedRootSpanNativeRoute,
 		row.FallbackClass = orderedRootSpanNativeFallbackClass(FlushSpanRunFallbackAdmissionPolicyDecline)
 		return row
 	}
+	if !admission.FlushApplySpanNative {
+		row.FallbackReason = FlushSpanRunFallbackDisabled.String()
+		row.FallbackClass = orderedRootSpanNativeFallbackClass(FlushSpanRunFallbackDisabled)
+		return row
+	}
 	if eligible {
 		row.Eligible = true
 		row.Status = OrderedRootSpanNativeStatusEligible
@@ -321,6 +326,9 @@ func (db *DB) classifyOrderedRootSpanNativeFallback(req orderedRootSpanNativeEli
 	}
 	if !admission.Admitted {
 		return FlushSpanRunFallbackAdmissionPolicyDecline
+	}
+	if !admission.FlushApplySpanNative {
+		return FlushSpanRunFallbackDisabled
 	}
 	return FlushSpanRunFallbackUnknown
 }

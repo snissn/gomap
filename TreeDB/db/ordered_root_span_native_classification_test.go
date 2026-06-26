@@ -1414,6 +1414,31 @@ func TestOrderedRootSpanNativeEligibilityDistinguishesAdmissionFallbacks(t *test
 		t.Fatalf("auto decline explicit row=%+v want admission-policy decline", declineExplicitRow)
 	}
 
+	parallelOnlyOpts := Options{
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency: 4,
+		FlushApplySpanNative:  false,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+	}
+	parallelOnly := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&parallelOnlyOpts, 16, 6)}
+	parallelOnlyRow := parallelOnly.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:              OrderedRootSpanNativeRouteDeltaBatchPublish,
+		Context:            "parallel-only span-native disabled",
+		Summary:            summary,
+		SpanNativeEligible: false,
+	})
+	if !parallelOnlyRow.AdmissionAdmitted {
+		t.Fatalf("parallel-only row admission_admitted=false, want admitted policy context: %+v", parallelOnlyRow)
+	}
+	if parallelOnlyRow.Eligible || parallelOnlyRow.Status != OrderedRootSpanNativeStatusFallback {
+		t.Fatalf("parallel-only row eligible/status=%t/%q want fallback: %+v", parallelOnlyRow.Eligible, parallelOnlyRow.Status, parallelOnlyRow)
+	}
+	if parallelOnlyRow.FallbackReason != FlushSpanRunFallbackDisabled.String() || parallelOnlyRow.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
+		t.Fatalf("parallel-only row=%+v want disabled policy fallback", parallelOnlyRow)
+	}
+
 	admittedOpts := Options{}
 	admitted := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&admittedOpts, 16, 6)}
 	routeRow := admitted.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
@@ -1564,6 +1589,38 @@ func TestOrderedRootSpanNativeTriageSnapshotCoversSupportRoutes(t *testing.T) {
 	}
 	if got := byRoute[OrderedRootSpanNativeRouteCommandWALPublish].FallbackReason; got != "" {
 		t.Fatalf("command-WAL fallback=%q want empty", got)
+	}
+}
+
+func TestOrderedRootSpanNativeTriageSnapshotRespectsSpanNativeOptOut(t *testing.T) {
+	opts := Options{
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency: 4,
+		FlushApplySpanNative:  false,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+	}
+	db := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&opts, 16, 6)}
+	rows := orderedRootSpanNativeTriageRowsByRoute(db.OrderedRootSpanNativeTriageSnapshot())
+	for _, route := range []OrderedRootSpanNativeRoute{
+		OrderedRootSpanNativeRouteCommandWALPublish,
+		OrderedRootSpanNativeRouteDeltaBatchPublish,
+		OrderedRootSpanNativeRouteReadOnlyPrepare,
+	} {
+		row := rows[route]
+		if !row.Candidate {
+			t.Fatalf("%s candidate=false, want candidate support row: %+v", route, row)
+		}
+		if !row.AdmissionAdmitted {
+			t.Fatalf("%s admission_admitted=false, want admitted explicit policy context: %+v", route, row)
+		}
+		if row.Eligible || row.Status != OrderedRootSpanNativeStatusFallback {
+			t.Fatalf("%s eligible/status=%t/%q want fallback: %+v", route, row.Eligible, row.Status, row)
+		}
+		if row.FallbackReason != FlushSpanRunFallbackDisabled.String() || row.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
+			t.Fatalf("%s row=%+v want disabled policy fallback", route, row)
+		}
 	}
 }
 
