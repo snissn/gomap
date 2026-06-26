@@ -544,14 +544,25 @@ func wrapLeafPageLogWithRecordLengthHints(db *DB, log LeafPageLog) LeafPageLog {
 // SetLeafPageLog installs the value-log appender used for value-log-backed leaf
 // pages. It is typically wired by the cached layer after opening the backend.
 func (db *DB) SetLeafPageLog(log LeafPageLog) {
+	db.setLeafPageLog(log, true)
+}
+
+func (db *DB) setLeafPageLogRaw(log LeafPageLog) {
+	db.setLeafPageLog(log, false)
+}
+
+func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 	if db == nil {
 		return
 	}
-	wrapped := wrapLeafPageLogWithLaneSelection(wrapLeafPageLogWithRecordLengthHints(db, log))
+	installed := log
+	if wrap {
+		installed = wrapLeafPageLogWithLaneSelection(wrapLeafPageLogWithRecordLengthHints(db, log))
+	}
 	db.writeMu.Lock()
-	db.leafPageLog = wrapped
+	db.leafPageLog = installed
 	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
-		idx.zipper.SetLeafPageLog(wrapped)
+		idx.zipper.SetLeafPageLog(installed)
 	}
 	db.writeMu.Unlock()
 }

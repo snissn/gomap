@@ -773,7 +773,7 @@ func TestCompactStorageRIDAllocatorIsSharedAcrossOfflineWriters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
 	}
-	defer cleanup()
+	defer func() { _ = cleanup() }()
 	if d.leafPageLog == nil {
 		t.Fatal("expected installed leaf page log")
 	}
@@ -809,7 +809,7 @@ func TestCompactStorageRefreshesInstalledLeafWriterAfterPack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
 	}
-	defer cleanup()
+	defer func() { _ = cleanup() }()
 	if installed == nil {
 		t.Fatal("expected installed compact leaf writer")
 	}
@@ -839,6 +839,58 @@ func TestCompactStorageRefreshesInstalledLeafWriterAfterPack(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(LeafLogDirPath(dir), "value-l255-000001.log")); err != nil {
 		t.Fatalf("expected packed leaf segment to remain: %v", err)
+	}
+}
+
+func TestCompactStorageLeafPageLogHandoffRestoresPreviousAndAdvancesSeq(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(ValueLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir value_vlog: %v", err)
+	}
+	if err := os.MkdirAll(LeafLogDirPath(dir), 0755); err != nil {
+		t.Fatalf("mkdir leaf_vlog: %v", err)
+	}
+
+	d := &DB{
+		dir:                        dir,
+		indexOuterLeavesInValueLog: true,
+		valueLogCompression:        ValueLogCompressionOff,
+	}
+	previousOwner := &compactStorageMatrixCachedHandoffLeafPageLog{}
+	d.SetLeafPageLog(previousOwner)
+	previousInstalled := d.leafPageLog
+	opts := CompactStorageOptions{
+		Mode:        CompactStorageExhaustive,
+		ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve,
+	}
+	installed, cleanup, err := d.installCompactStorageLeafPageLog(opts)
+	if err != nil {
+		t.Fatalf("installCompactStorageLeafPageLog: %v", err)
+	}
+	cleanupDone := false
+	defer func() {
+		if !cleanupDone {
+			_ = cleanup()
+		}
+	}()
+	if installed == nil {
+		t.Fatal("expected installed compact leaf writer")
+	}
+	if d.leafPageLog == previousInstalled {
+		t.Fatal("compact handoff did not install a replacement leaf-page log")
+	}
+	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("h"), page.PageSize)); err != nil {
+		t.Fatalf("installed AppendLeafPage: %v", err)
+	}
+	if err := cleanup(); err != nil {
+		t.Fatalf("cleanup handoff: %v", err)
+	}
+	cleanupDone = true
+	if d.leafPageLog != previousInstalled {
+		t.Fatalf("restored leaf-page log=%T want exact previous %T", d.leafPageLog, previousInstalled)
+	}
+	if previousOwner.advanced != 1 {
+		t.Fatalf("restored owner advanced seq=%d want 1", previousOwner.advanced)
 	}
 }
 
@@ -1450,8 +1502,13 @@ func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
 func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
 	d, _, _ := openLeafGenerationPackTestDB(t)
 	writeLeafGenerationKeys(t, d, "current", 8, 'x')
+	previousLeafPageLog := d.leafPageLog
+	beforeSegments, err := listValueLogSegments(d.dir)
+	if err != nil {
+		t.Fatalf("listValueLogSegments before compact: %v", err)
+	}
 
-	_, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	_, err = d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
 	if !errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported) {
 		t.Fatalf("CompactStorage exhaustive with external leaf log error=%v, want owner unsupported", err)
 	}
@@ -1461,6 +1518,16 @@ func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
 	}
 	if ownerErr.Classification.Status != CompactStorageOwnerStatusExternalUnsupported {
 		t.Fatalf("owner status=%q want %q", ownerErr.Classification.Status, CompactStorageOwnerStatusExternalUnsupported)
+	}
+	if d.leafPageLog != previousLeafPageLog {
+		t.Fatalf("external owner was mutated: got %T want %T", d.leafPageLog, previousLeafPageLog)
+	}
+	afterSegments, err := listValueLogSegments(d.dir)
+	if err != nil {
+		t.Fatalf("listValueLogSegments after compact: %v", err)
+	}
+	if !reflect.DeepEqual(afterSegments, beforeSegments) {
+		t.Fatalf("external owner refusal mutated value-log segments:\nbefore=%+v\nafter=%+v", beforeSegments, afterSegments)
 	}
 }
 

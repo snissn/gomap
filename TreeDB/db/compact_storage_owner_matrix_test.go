@@ -1,8 +1,9 @@
 package db
 
 import (
+	"bytes"
 	"context"
-	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -35,6 +36,16 @@ func (compactStorageMatrixCachedLeafPageLog) CreatedLeafPageLogSegmentsSnapshot(
 
 func (compactStorageMatrixCachedLeafPageLog) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
 	return nil, nil
+}
+
+type compactStorageMatrixCachedHandoffLeafPageLog struct {
+	compactStorageMatrixCachedLeafPageLog
+	advanced uint32
+}
+
+func (l *compactStorageMatrixCachedHandoffLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
+	l.advanced = seq
+	return nil
 }
 
 func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
@@ -77,12 +88,13 @@ func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
 			wantReplaceable: true,
 		},
 		{
-			name:           "command WAL replay inline hidden by lane wrapper",
-			log:            wrapLeafPageLogWithLaneSelection(&leafPageLogWithRecordLengthHints{inner: replayInlineLeafPageLog{}}),
-			lifecycle:      CompactStorageLifecycleExclusiveMaintenance,
-			wantOwner:      CompactStorageLeafPageLogOwnerInternalHiddenByWrapper,
-			wantStatus:     CompactStorageOwnerStatusBlockingBug,
-			wantQuiescence: false,
+			name:            "command WAL replay inline hidden by lane wrapper",
+			log:             wrapLeafPageLogWithLaneSelection(&leafPageLogWithRecordLengthHints{inner: replayInlineLeafPageLog{}}),
+			lifecycle:       CompactStorageLifecycleExclusiveMaintenance,
+			wantOwner:       CompactStorageLeafPageLogOwnerInternalHiddenByWrapper,
+			wantStatus:      CompactStorageOwnerStatusSupportedTarget,
+			wantReplaceable: true,
+			wantQuiescence:  false,
 		},
 		{
 			name:           "command WAL replay inline hidden by lane wrapper active writer",
@@ -108,14 +120,23 @@ func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
 		},
 		{
 			name:           "cached wrapper owner active writer",
-			log:            compactStorageMatrixCachedLeafPageLog{},
+			log:            &compactStorageMatrixCachedHandoffLeafPageLog{},
 			lifecycle:      CompactStorageLifecycleActiveWriter,
 			wantOwner:      CompactStorageLeafPageLogOwnerCachedWrapper,
 			wantStatus:     CompactStorageOwnerStatusLiveWriterFailClosed,
 			wantQuiescence: true,
 		},
 		{
-			name:           "cached wrapper owner quiesced maintenance",
+			name:            "cached wrapper owner quiesced maintenance",
+			log:             &compactStorageMatrixCachedHandoffLeafPageLog{},
+			lifecycle:       CompactStorageLifecycleQuiescedMaintenance,
+			wantOwner:       CompactStorageLeafPageLogOwnerCachedWrapper,
+			wantStatus:      CompactStorageOwnerStatusSupportedTarget,
+			wantReplaceable: true,
+			wantQuiescence:  true,
+		},
+		{
+			name:           "cached-shaped wrapper without handoff capability",
 			log:            compactStorageMatrixCachedLeafPageLog{},
 			lifecycle:      CompactStorageLifecycleQuiescedMaintenance,
 			wantOwner:      CompactStorageLeafPageLogOwnerCachedWrapper,
@@ -143,9 +164,10 @@ func TestCompactStorageLeafPageLogOwnerMatrix(t *testing.T) {
 	}
 }
 
-func TestCompactStorageRawBackendCommandWALValueLogLeafPageLogCurrentBlockingBug(t *testing.T) {
+func TestCompactStorageRawBackendCommandWALValueLogLeafPageLogCurrentSupported(t *testing.T) {
+	dir := t.TempDir()
 	d, err := Open(Options{
-		Dir:                        t.TempDir(),
+		Dir:                        dir,
 		CommandWAL:                 true,
 		Durability:                 DurabilityWALOnRelaxed,
 		DisableSideStores:          true,
@@ -158,30 +180,52 @@ func TestCompactStorageRawBackendCommandWALValueLogLeafPageLogCurrentBlockingBug
 	if d.leafPageLog == nil {
 		t.Fatal("expected command WAL open to install replay-inline leaf page log")
 	}
+	for i := 0; i < 64; i++ {
+		if err := d.SetSync([]byte(fmt.Sprintf("k%04d", i)), bytes.Repeat([]byte{byte('a' + i%26)}, 256)); err != nil {
+			t.Fatalf("SetSync(%d): %v", i, err)
+		}
+	}
+	wantValue := bytes.Repeat([]byte("z"), 512)
+	if err := d.SetSync([]byte("canonical"), wantValue); err != nil {
+		t.Fatalf("SetSync canonical: %v", err)
+	}
 
 	classification := compactStorageClassifyLeafPageLogOwner(d.leafPageLog, CompactStorageLifecycleExclusiveMaintenance)
 	if classification.OwnerClass != CompactStorageLeafPageLogOwnerInternalHiddenByWrapper {
 		t.Fatalf("owner=%q want %q (classification=%+v)", classification.OwnerClass, CompactStorageLeafPageLogOwnerInternalHiddenByWrapper, classification)
 	}
-	if classification.Status != CompactStorageOwnerStatusBlockingBug {
-		t.Fatalf("status=%q want %q (classification=%+v)", classification.Status, CompactStorageOwnerStatusBlockingBug, classification)
+	if classification.Status != CompactStorageOwnerStatusSupportedTarget {
+		t.Fatalf("status=%q want %q (classification=%+v)", classification.Status, CompactStorageOwnerStatusSupportedTarget, classification)
 	}
 
-	_, err = d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
-	if !errors.Is(err, ErrCompactStorageLeafPageLogOwnerUnsupported) {
-		t.Fatalf("CompactStorage exhaustive error=%v, want owner unsupported", err)
+	stats, err := d.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if err != nil {
+		t.Fatalf("CompactStorage exhaustive: %v", err)
 	}
-	var ownerErr *CompactStorageLeafPageLogOwnerError
-	if !errors.As(err, &ownerErr) {
-		t.Fatalf("CompactStorage exhaustive error=%T, want CompactStorageLeafPageLogOwnerError", err)
+	if !compactStoragePhaseSeen(stats.Phases, "seal-current-leaf-generation") {
+		t.Fatalf("missing seal-current-leaf-generation phase: %+v", stats.Phases)
 	}
-	if ownerErr.Classification.Status != CompactStorageOwnerStatusBlockingBug {
-		t.Fatalf("error status=%q want %q", ownerErr.Classification.Status, CompactStorageOwnerStatusBlockingBug)
+	got, err := d.Get([]byte("canonical"))
+	if err != nil {
+		t.Fatalf("Get canonical after compact: %v", err)
+	}
+	if !bytes.Equal(got, wantValue) {
+		t.Fatalf("canonical value mismatch after compact: got %q want %q", got, wantValue)
+	}
+	if err := d.SetSync([]byte("post-compact"), []byte("ok")); err != nil {
+		t.Fatalf("post-compact SetSync through restored replay-inline owner: %v", err)
+	}
+	got, err = d.Get([]byte("post-compact"))
+	if err != nil {
+		t.Fatalf("Get post-compact: %v", err)
+	}
+	if string(got) != "ok" {
+		t.Fatalf("post-compact value=%q want ok", got)
 	}
 }
 
 func TestCompactStorageActiveWriterLifecycleIsModeledStatus(t *testing.T) {
-	log := compactStorageMatrixCachedLeafPageLog{}
+	log := &compactStorageMatrixCachedHandoffLeafPageLog{}
 	active := compactStorageClassifyLeafPageLogOwner(log, CompactStorageLifecycleActiveWriter)
 	if active.Status != CompactStorageOwnerStatusLiveWriterFailClosed {
 		t.Fatalf("active status=%q want %q", active.Status, CompactStorageOwnerStatusLiveWriterFailClosed)
@@ -190,11 +234,15 @@ func TestCompactStorageActiveWriterLifecycleIsModeledStatus(t *testing.T) {
 		t.Fatalf("active detail=%q, want modeled-status wording", active.Detail)
 	}
 	exclusive := compactStorageClassifyLeafPageLogOwner(log, CompactStorageLifecycleExclusiveMaintenance)
-	if exclusive.Status != CompactStorageOwnerStatusBlockingBug {
-		t.Fatalf("exclusive status=%q want %q", exclusive.Status, CompactStorageOwnerStatusBlockingBug)
+	if exclusive.Status != CompactStorageOwnerStatusSupportedTarget {
+		t.Fatalf("exclusive status=%q want %q", exclusive.Status, CompactStorageOwnerStatusSupportedTarget)
 	}
 	if strings.Contains(exclusive.Detail, "active-writer") {
 		t.Fatalf("exclusive detail=%q should not imply active-writer runtime proof", exclusive.Detail)
+	}
+	missingHandoff := compactStorageClassifyLeafPageLogOwner(compactStorageMatrixCachedLeafPageLog{}, CompactStorageLifecycleExclusiveMaintenance)
+	if missingHandoff.Status != CompactStorageOwnerStatusBlockingBug {
+		t.Fatalf("missing-handoff status=%q want %q", missingHandoff.Status, CompactStorageOwnerStatusBlockingBug)
 	}
 }
 
@@ -217,39 +265,36 @@ func TestCompactStorageDefaultProducedOwnerContractMatrix(t *testing.T) {
 			quiescence:   []string{"checkpoint-close-drain"},
 		},
 		{
-			name:               "public command_wal_relaxed default profile value-log backed outer leaves",
-			producerPath:       "treedb.Open(treedb.OptionsFor(ProfileCommandWALRelaxed)) cached wrapper; fixture-proved in TreeDB/compact_storage_test.go",
-			owner:              CompactStorageLeafPageLogOwnerCachedWrapper,
-			lifecycle:          CompactStorageLifecycleQuiescedMaintenance,
-			status:             CompactStorageOwnerStatusBlockingBug,
-			quiescence:         []string{"background-flush-apply-workers", "checkpoint-close-drain", "command-wal-cleanup", "cached-backlog"},
-			missingFixtureWork: "supported-target requires #3049 to implement explicit cached owner handoff/unwrap; #3048 proves the canonical owner class only",
+			name:         "public command_wal_relaxed default profile value-log backed outer leaves",
+			producerPath: "treedb.Open(treedb.OptionsFor(ProfileCommandWALRelaxed)) cached wrapper; fixture-proved in TreeDB/compact_storage_test.go",
+			owner:        CompactStorageLeafPageLogOwnerCachedWrapper,
+			lifecycle:    CompactStorageLifecycleQuiescedMaintenance,
+			status:       CompactStorageOwnerStatusSupportedTarget,
+			quiescence:   []string{"background-flush-apply-workers", "checkpoint-close-drain", "command-wal-cleanup", "cached-backlog"},
 		},
 		{
-			name:               "public cached wrapper value-log backed outer leaves",
-			producerPath:       "treedb.Open cached wrapper",
-			owner:              CompactStorageLeafPageLogOwnerCachedWrapper,
-			lifecycle:          CompactStorageLifecycleQuiescedMaintenance,
-			status:             CompactStorageOwnerStatusBlockingBug,
-			quiescence:         []string{"background-flush-apply-workers", "checkpoint-close-drain", "cached-backlog"},
-			missingFixtureWork: "cached exhaustive compact needs explicit quiesced owner handoff or unwrap fixture before it can be marked supported-target",
+			name:         "public cached wrapper value-log backed outer leaves",
+			producerPath: "treedb.Open cached wrapper",
+			owner:        CompactStorageLeafPageLogOwnerCachedWrapper,
+			lifecycle:    CompactStorageLifecycleQuiescedMaintenance,
+			status:       CompactStorageOwnerStatusSupportedTarget,
+			quiescence:   []string{"background-flush-apply-workers", "checkpoint-close-drain", "cached-backlog"},
 		},
 		{
 			name:         "raw backend command WAL maintenance path",
 			producerPath: "TreeDB/db.Open or TreeDB/cmd/treemap compact -rw -mode exhaustive over a raw command-WAL backend dir; not the public cached canonical collection path",
 			owner:        CompactStorageLeafPageLogOwnerInternalHiddenByWrapper,
 			lifecycle:    CompactStorageLifecycleExclusiveMaintenance,
-			status:       CompactStorageOwnerStatusBlockingBug,
+			status:       CompactStorageOwnerStatusSupportedTarget,
 			quiescence:   []string{"checkpoint-close-drain", "command-wal-cleanup"},
 		},
 		{
-			name:               "ordered-root value-log backed outer leaves",
-			producerPath:       "ordered-root route matrix",
-			owner:              CompactStorageLeafPageLogOwnerCachedWrapper,
-			lifecycle:          CompactStorageLifecycleQuiescedMaintenance,
-			status:             CompactStorageOwnerStatusBlockingBug,
-			quiescence:         []string{"background-flush-apply-workers", "checkpoint-close-drain", "ordered-root-publishers", "cached-backlog"},
-			missingFixtureWork: "ordered-root route fixtures are owned by sibling #3021/#3032; #3048 records expected compact owner classification only",
+			name:         "ordered-root value-log backed outer leaves",
+			producerPath: "ordered-root route matrix",
+			owner:        CompactStorageLeafPageLogOwnerCachedWrapper,
+			lifecycle:    CompactStorageLifecycleQuiescedMaintenance,
+			status:       CompactStorageOwnerStatusSupportedTarget,
+			quiescence:   []string{"background-flush-apply-workers", "checkpoint-close-drain", "ordered-root-publishers", "cached-backlog"},
 		},
 	}
 

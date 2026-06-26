@@ -3,7 +3,6 @@ package treedb_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,23 +29,33 @@ func TestCompactStoragePublicCommandWALRelaxedDefaultOwnerClassification(t *test
 	if classification.OwnerClass != treedb.CompactStorageLeafPageLogOwnerCachedWrapper {
 		t.Fatalf("owner=%q want %q (classification=%+v)", classification.OwnerClass, treedb.CompactStorageLeafPageLogOwnerCachedWrapper, classification)
 	}
-	if classification.Status != treedb.CompactStorageOwnerStatusBlockingBug {
-		t.Fatalf("status=%q want %q (classification=%+v)", classification.Status, treedb.CompactStorageOwnerStatusBlockingBug, classification)
+	if classification.Status != treedb.CompactStorageOwnerStatusSupportedTarget {
+		t.Fatalf("status=%q want %q (classification=%+v)", classification.Status, treedb.CompactStorageOwnerStatusSupportedTarget, classification)
 	}
 	if !classification.RequiresQuiescence {
 		t.Fatalf("RequiresQuiescence=false, want true (classification=%+v)", classification)
 	}
 
-	_, err = db.CompactStorage(context.Background(), treedb.CompactStorageOptions{Mode: treedb.CompactStorageExhaustive})
-	if !errors.Is(err, treedb.ErrCompactStorageLeafPageLogOwnerUnsupported) {
-		t.Fatalf("CompactStorage exhaustive error=%v, want owner unsupported", err)
+	if _, err := db.CompactStorage(context.Background(), treedb.CompactStorageOptions{Mode: treedb.CompactStorageExhaustive}); err != nil {
+		t.Fatalf("CompactStorage exhaustive: %v", err)
 	}
-	var ownerErr *treedb.CompactStorageLeafPageLogOwnerError
-	if !errors.As(err, &ownerErr) {
-		t.Fatalf("CompactStorage exhaustive error=%T, want CompactStorageLeafPageLogOwnerError", err)
+	got, err := db.Get([]byte("canonical"))
+	if err != nil {
+		t.Fatalf("Get canonical after compact: %v", err)
 	}
-	if ownerErr.Classification.OwnerClass != treedb.CompactStorageLeafPageLogOwnerCachedWrapper {
-		t.Fatalf("error owner=%q want %q", ownerErr.Classification.OwnerClass, treedb.CompactStorageLeafPageLogOwnerCachedWrapper)
+	want := bytes.Repeat([]byte("v"), 512)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("canonical value mismatch after compact: got %q want %q", got, want)
+	}
+	if err := db.SetSync([]byte("post-compact"), []byte("ok")); err != nil {
+		t.Fatalf("post-compact SetSync through restored cached owner: %v", err)
+	}
+	got, err = db.Get([]byte("post-compact"))
+	if err != nil {
+		t.Fatalf("Get post-compact: %v", err)
+	}
+	if string(got) != "ok" {
+		t.Fatalf("post-compact value=%q want ok", got)
 	}
 }
 

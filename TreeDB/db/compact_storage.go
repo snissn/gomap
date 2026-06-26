@@ -62,6 +62,13 @@ const (
 // compact reaches an installed leaf-page-log owner it cannot safely replace.
 var ErrCompactStorageLeafPageLogOwnerUnsupported = errors.New("treedb: compact storage leaf page log owner unsupported")
 
+// LeafPageLogCompactStorageHandoff is implemented by internally owned
+// leaf-page-log writers that can be safely restored after CompactStorage
+// temporarily replaces them with its compact writer.
+type LeafPageLogCompactStorageHandoff interface {
+	AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error
+}
+
 // CompactStorageLeafPageLogOwnerClassification is the compact-owner production
 // support contract attached to fail-closed exhaustive compact errors.
 type CompactStorageLeafPageLogOwnerClassification struct {
@@ -336,7 +343,12 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	if err != nil {
 		return stats, err
 	}
-	defer cleanupLeafLog()
+	cleanupLeafLogDone := false
+	defer func() {
+		if !cleanupLeafLogDone {
+			_ = cleanupLeafLog()
+		}
+	}()
 	if opts.Mode == CompactStorageExhaustive && db.indexOuterLeavesInValueLog && compactLeafLog == nil && db.leafPageLog != nil {
 		return stats, &CompactStorageLeafPageLogOwnerError{
 			Classification: compactStorageClassifyLeafPageLogOwner(db.leafPageLog, CompactStorageLifecycleExclusiveMaintenance),
@@ -552,6 +564,10 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	stats.FullyCompacted = finalDebt.Empty()
 	stats.PolicyFullyCompacted = stats.FullyCompacted
 	stats.ByteMinimized = opts.Mode == CompactStorageExhaustive && finalDebt.Empty()
+	if err := cleanupLeafLog(); err != nil {
+		return stats, err
+	}
+	cleanupLeafLogDone = true
 	return stats, nil
 }
 
@@ -1382,14 +1398,14 @@ func compactStorageValueLogFileID(name string) (uint32, bool) {
 	return fileID, true
 }
 
-func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rewriteWriter, func(), error) {
+func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rewriteWriter, func() error, error) {
 	if db == nil || !db.indexOuterLeavesInValueLog {
-		return nil, func() {}, nil
+		return nil, func() error { return nil }, nil
 	}
 	previousLeafPageLog := db.leafPageLog
 	if previousLeafPageLog != nil {
 		if opts.Mode != CompactStorageExhaustive || !compactStorageReplaceableLeafPageLog(previousLeafPageLog) {
-			return nil, func() {}, nil
+			return nil, func() error { return nil }, nil
 		}
 	}
 	segments, err := listValueLogSegments(db.dir)
@@ -1424,9 +1440,22 @@ func (db *DB) installCompactStorageLeafPageLog(opts CompactStorageOptions) (*rew
 		}
 	}
 	db.SetLeafPageLog(writer)
-	return writer, func() {
-		db.SetLeafPageLog(previousLeafPageLog)
-		_ = writer.Close()
+	return writer, func() error {
+		var cleanupErr error
+		if err := writer.Close(); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		}
+		segments, err := listValueLogSegments(db.dir)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+		} else {
+			leafSeq := maxRewriteLaneSeq(segments, rewriteLeafLogLaneID)
+			if err := compactStorageAdvanceLeafPageLogSeqAtLeast(previousLeafPageLog, leafSeq); err != nil {
+				cleanupErr = errors.Join(cleanupErr, err)
+			}
+		}
+		db.setLeafPageLogRaw(previousLeafPageLog)
+		return cleanupErr
 	}, nil
 }
 
@@ -1467,6 +1496,9 @@ func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactSt
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
 			classification.RequiresQuiescence = true
 			classification.Detail = "modeled active-writer status: command-WAL cleanup and checkpoint/close drains must quiesce before exhaustive compact can replace the replay-inline owner"
+		} else if !compactStorageLeafPageLogHandoffCapable(log) {
+			classification.Status = CompactStorageOwnerStatusBlockingBug
+			classification.Detail = "command-WAL replay-inline owner does not expose the compact handoff restore capability"
 		} else {
 			classification.Status = CompactStorageOwnerStatusSupportedTarget
 			classification.Replaceable = true
@@ -1476,25 +1508,79 @@ func compactStorageClassifyLeafPageLogOwner(log LeafPageLog, lifecycle CompactSt
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
 			classification.RequiresQuiescence = true
 			classification.Detail = "modeled active-writer status: lane/wrapper replay-inline owner must be quiesced before exhaustive compact can reason about replacement"
-		} else {
+		} else if !compactStorageLeafPageLogHandoffCapable(log) {
 			classification.Status = CompactStorageOwnerStatusBlockingBug
-			classification.Detail = "replay-inline owner is internally owned but hidden behind leaf-log wrappers that compact replacement does not unwrap yet"
+			classification.Detail = "replay-inline owner is internally owned but hidden behind wrappers without a compact handoff restore capability"
+		} else {
+			classification.Status = CompactStorageOwnerStatusSupportedTarget
+			classification.Replaceable = true
+			classification.Detail = "internally owned replay-inline wrapper exposes a compact handoff restore capability"
 		}
 	case CompactStorageLeafPageLogOwnerCachedWrapper:
 		if lifecycle == CompactStorageLifecycleActiveWriter {
 			classification.Status = CompactStorageOwnerStatusLiveWriterFailClosed
 			classification.RequiresQuiescence = true
 			classification.Detail = "modeled active-writer status: background flush/apply workers and cached backlog must be fenced before exhaustive compact can take over the owner"
-		} else {
+		} else if !compactStorageLeafPageLogHandoffCapable(log) {
 			classification.Status = CompactStorageOwnerStatusBlockingBug
 			classification.RequiresQuiescence = true
-			classification.Detail = "cached/wrapper owners need an explicit quiesced handoff or unwrap capability before exhaustive compact can replace them"
+			classification.Detail = "cached/wrapper owner does not expose the compact handoff restore capability"
+		} else {
+			classification.Status = CompactStorageOwnerStatusSupportedTarget
+			classification.Replaceable = true
+			classification.RequiresQuiescence = true
+			classification.Detail = "cached/wrapper owner exposes an explicit quiesced compact handoff restore capability"
 		}
 	default:
 		classification.Status = CompactStorageOwnerStatusExternalUnsupported
 		classification.Detail = "standalone caller-owned leaf logs remain outside exhaustive compact ownership"
 	}
 	return classification
+}
+
+func compactStorageLeafPageLogHandoffCapable(log LeafPageLog) bool {
+	if log == nil {
+		return true
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		return compactStorageLeafPageLogHandoffCapable(wrapped.inner)
+	}
+	if group, ok := log.(*leafPageLogLaneGroup); ok {
+		lanes, _ := group.snapshotLanesAndLocks()
+		if len(lanes) == 0 {
+			return false
+		}
+		seenLane := false
+		for _, lane := range lanes {
+			if lane == nil {
+				continue
+			}
+			seenLane = true
+			if !compactStorageLeafPageLogHandoffCapable(lane) {
+				return false
+			}
+		}
+		return seenLane
+	}
+	_, ok := log.(LeafPageLogCompactStorageHandoff)
+	return ok
+}
+
+func compactStorageAdvanceLeafPageLogSeqAtLeast(log LeafPageLog, seq uint32) error {
+	if log == nil || seq == 0 {
+		return nil
+	}
+	if wrapped, ok := log.(*leafPageLogWithRecordLengthHints); ok {
+		return compactStorageAdvanceLeafPageLogSeqAtLeast(wrapped.inner, seq)
+	}
+	if group, ok := log.(*leafPageLogLaneGroup); ok {
+		return group.advanceCompactStorageLeafPageLogSeqAtLeast(seq)
+	}
+	handoff, ok := log.(LeafPageLogCompactStorageHandoff)
+	if !ok {
+		return fmt.Errorf("treedb: compact storage leaf-page-log owner %T cannot advance after handoff", log)
+	}
+	return handoff.AdvanceCompactStorageLeafPageLogSeqAtLeast(seq)
 }
 
 func compactStorageLeafPageLogOwnerClass(log LeafPageLog) CompactStorageLeafPageLogOwnerClass {
