@@ -362,6 +362,8 @@ func mapNativeWireError(src []byte, err error) DeterministicErrorCodeV1 {
 		switch {
 		case strings.Contains(reason, "missing idempotency key"):
 			return ErrorNoIdempotencyV1
+		case strings.Contains(reason, "idempotency_key cannot be empty"):
+			return ErrorNoIdempotencyV1
 		case strings.Contains(reason, "missing catalog guard"):
 			return ErrorMissingGuardV1
 		case strings.Contains(reason, " is not replicated"):
