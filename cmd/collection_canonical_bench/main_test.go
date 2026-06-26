@@ -120,14 +120,14 @@ func TestCanonicalValidationPreservesExistingWarnings(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Checks = append(canon.Checks, guardrailCheck{
 		Severity: "warning",
-		Code:     "phase.exhaustive_compact.failed",
-		Message:  "exhaustive compact matrix failed",
+		Code:     "phase.full_leafgen_pack_gc.failed",
+		Message:  "full leafgen pack/GC fixture failed",
 	})
 	canon.Checks = append(canon.Checks, validateCanonicalRun(canon)...)
 
 	var sawOptionalWarning bool
 	for _, check := range canon.Checks {
-		if check.Code == "phase.exhaustive_compact.failed" {
+		if check.Code == "phase.full_leafgen_pack_gc.failed" {
 			sawOptionalWarning = true
 		}
 		if check.Severity == "error" {
@@ -136,6 +136,48 @@ func TestCanonicalValidationPreservesExistingWarnings(t *testing.T) {
 	}
 	if !sawOptionalWarning {
 		t.Fatalf("optional phase warning was not preserved: %#v", canon.Checks)
+	}
+}
+
+func TestCanonicalValidationRejectsWarningOnlyExhaustiveCompactFailure(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Checks = append(canon.Checks, guardrailCheck{
+		Severity: "warning",
+		Code:     "phase.exhaustive_compact.failed",
+		Message:  "legacy warning-only exhaustive compact failure",
+	})
+
+	checks := validateCanonicalRun(canon)
+	var sawRequired bool
+	for _, check := range checks {
+		if check.Severity == "error" && check.Code == "exhaustive_compact_required" {
+			sawRequired = true
+		}
+	}
+	if !sawRequired {
+		t.Fatalf("expected exhaustive compact failure to become a blocking guardrail, got %#v", checks)
+	}
+}
+
+func TestCanonicalComparisonsSuppressedAfterExhaustiveCompactFailure(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Checks = append(canon.Checks, guardrailCheck{
+		Severity: "error",
+		Code:     "phase.exhaustive_compact.failed",
+		Message:  "exhaustive compact matrix failed",
+	})
+
+	if comparisons := buildCompactedComparisons(canon); len(comparisons) != 0 {
+		t.Fatalf("warning-only compact evidence should not emit compacted comparisons: %#v", comparisons)
+	}
+	summary := renderExecutiveSummary(canon)
+	if strings.Contains(summary, "byte-minimized") || strings.Contains(summary, "via exhaustive compact") {
+		t.Fatalf("summary should not claim byte-minimized storage after exhaustive compact failure: %s", summary)
+	}
+	var fair strings.Builder
+	writeFairComparison(&fair, canon)
+	if strings.Contains(fair.String(), "| `treedb_template_v1_collection_2_indexes` |") {
+		t.Fatalf("fair comparison table should suppress TreeDB compacted claims after failure:\n%s", fair.String())
 	}
 }
 

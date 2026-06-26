@@ -68,6 +68,12 @@ type collectionComparison struct {
 	Source            string
 }
 
+type collectionGuardrailCheck struct {
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+}
+
 type mongoSummaryRow struct {
 	Documents               int
 	SecondaryIndexes        int
@@ -840,12 +846,17 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 			continue
 		}
 		var parsed struct {
-			Results     []collectionRow        `json:"results"`
-			Comparisons []collectionComparison `json:"comparisons"`
+			Results     []collectionRow            `json:"results"`
+			Comparisons []collectionComparison     `json:"comparisons"`
+			Checks      []collectionGuardrailCheck `json:"checks"`
 		}
 		if err := json.Unmarshal(raw, &parsed); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
 			continue
+		}
+		if collectionChecksBlockCompactedClaims(parsed.Checks) {
+			warnings = append(warnings, fmt.Sprintf("%s: exhaustive_compact did not complete; suppressing TreeDB compacted-size comparisons from this source", path))
+			parsed.Comparisons = nil
 		}
 		for i := range parsed.Results {
 			parsed.Results[i].Source = filepath.ToSlash(filepath.Join(entry.Name(), "benchmark_results.json"))
@@ -872,6 +883,15 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 		return comps[i].Name < comps[j].Name
 	})
 	return rows, comps, warnings
+}
+
+func collectionChecksBlockCompactedClaims(checks []collectionGuardrailCheck) bool {
+	for _, check := range checks {
+		if check.Code == "phase.exhaustive_compact.failed" {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *collectionRow) UnmarshalJSON(raw []byte) error {
@@ -2132,7 +2152,7 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 	values := make(map[string][]float64)
 	labelSet := make(map[string]bool)
 	for _, comp := range comps {
-		if comp.SmallerRatio <= 0 {
+		if comp.SmallerRatio <= 0 || !collectionComparisonIsClaimableCompacted(comp) {
 			continue
 		}
 		label := collectionComparisonLabel(comp)
@@ -2148,7 +2168,7 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 		labelPos[label] = i
 	}
 	for _, comp := range comps {
-		if comp.SmallerRatio <= 0 {
+		if comp.SmallerRatio <= 0 || !collectionComparisonIsClaimableCompacted(comp) {
 			continue
 		}
 		key := displayConfigWithoutIndex(comp.TreeDBConfig) + " vs " + displayConfigWithoutIndex(comp.SQLiteConfig)
@@ -2170,6 +2190,10 @@ func collectionComparisonRatioRows(comps []collectionComparison) collectionChart
 		series = append(series, chartSeries{Name: key, Values: values[key], Color: collectionSeriesColor(key)})
 	}
 	return collectionChartRows{Categories: labels, Series: nonZeroSeries(series)}
+}
+
+func collectionComparisonIsClaimableCompacted(comp collectionComparison) bool {
+	return comp.TreeDBPhase == "exhaustive_compact" && comp.SQLitePhase == "sqlite_vacuum"
 }
 
 func collectionComparisonLabel(comp collectionComparison) string {
@@ -2269,7 +2293,7 @@ func bestCollectionComparison(comps []collectionComparison) (collectionCompariso
 	var best collectionComparison
 	var ok bool
 	for _, comp := range comps {
-		if comp.SmallerRatio <= 0 {
+		if comp.SmallerRatio <= 0 || !collectionComparisonIsClaimableCompacted(comp) {
 			continue
 		}
 		if !ok || comp.SmallerRatio > best.SmallerRatio {
@@ -2549,11 +2573,7 @@ func collectionChartPhase(family, kind string) (string, bool) {
 func collectionChartPhaseMatches(family, kind, phase string) bool {
 	if kind == "bytes" {
 		if family == "TreeDB" {
-			return phase == "exhaustive_compact" ||
-				phase == "full_leafgen_pack_gc" ||
-				phase == "offline_compact" ||
-				phase == "offline_rewrite" ||
-				phase == "online_one_pass_maintenance"
+			return phase == "exhaustive_compact"
 		}
 		if family == "SQLite" {
 			return phase == "sqlite_vacuum"
