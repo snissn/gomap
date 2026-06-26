@@ -270,6 +270,9 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 			}
 		}
 		mutation.frameDocuments = changed
+		if err := collection.PreflightReplaceBatchConflicts(mutation.ids, mutation.documents); err != nil {
+			return nil, codeCollectionApplyError(err)
+		}
 	case nativewire.CommandDeleteBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationDelete); err != nil {
 			return nil, codeCollectionApplyError(err)

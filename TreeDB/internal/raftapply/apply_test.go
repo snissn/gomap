@@ -500,6 +500,78 @@ func TestCollectionMutationUniqueConflictFailsBeforeAppend(t *testing.T) {
 	}
 }
 
+func TestCollectionMutationReplaceUniqueConflictFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-replace-unique-json", testCreateCollectionMetaOptions{
+		includeIndex: true,
+		indexUnique:  true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	seed := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:seed-replace", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1"), []byte("u2")}, [][]byte{
+		[]byte(`{"email":"one@example.com","city":"hnl"}`),
+		[]byte(`{"email":"two@example.com","city":"sea"}`),
+	})
+	seedResult, err := ApplyCommittedEntryV1(db, seed, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 seed: %v result=%+v", err, seedResult)
+	}
+	assertApplied(t, seedResult, raftentry.ApplyStatusApplied, 2)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	conflicting := deterministicReplaceBatchEntry(t, "docs", "client-a:replace:docs:unique-conflict", nativewire.DocumentFormatJSON, [][]byte{[]byte("u2")}, [][]byte{
+		[]byte(`{"email":"one@example.com","city":"sfo"}`),
+	})
+	result, err := ApplyCommittedEntryV1(db, conflicting, applyMeta(1, 3), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if !errors.Is(err, collections.ErrUniqueIndexConflict) {
+		t.Fatalf("ApplyCommittedEntryV1 err=%v, want ErrUniqueIndexConflict", err)
+	}
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("replace unique conflict reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after replace unique conflict=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after replace unique conflict=%d, want %d", got, beforeLSN)
+	}
+	opened, err := collections.NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection docs after replace unique conflict: %v", err)
+	}
+	got, err := opened.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("Get u2 after replace unique conflict: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`two@example.com`)) || bytes.Contains(got, []byte(`one@example.com`)) {
+		t.Fatalf("u2 after replace unique conflict=%s, want original unique email", got)
+	}
+	if progress.Len() != 2 || results.Len() != 2 {
+		t.Fatalf("store lengths after replace unique conflict progress=%d results=%d, want 2/2", progress.Len(), results.Len())
+	}
+}
+
 func TestCollectionMutationCoveredCommandWALFailureRequiresRecovery(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)

@@ -9624,6 +9624,45 @@ func (c *Collection) PreflightInsertBatchConflicts(ids, documents [][]byte, trus
 	return plan.checkPersistedConflicts(snap, catalog)
 }
 
+// PreflightReplaceBatchConflicts checks deterministic replacement conflicts
+// before an external command-WAL owner stages its local frame. It publishes any
+// buffered writes first so persisted roots match visible state, then reuses
+// normal update planning without publishing the planned mutation.
+func (c *Collection) PreflightReplaceBatchConflicts(ids, documents [][]byte) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	items, err := replaceBatchUpdateItems(ids, documents)
+	if err != nil {
+		return err
+	}
+	ownedItems, err := prepareUpdateBatchItems(items)
+	if err != nil {
+		return err
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return err
+	}
+	plan, err := c.buildUpdateBatchPlan(ownedItems, updateBatchModeAny, false, nil)
+	if err != nil {
+		return err
+	}
+	if plan != nil {
+		plan.close()
+	}
+	return nil
+}
+
 // InsertBatchWithCommandWALIntent applies an already-appended collection insert
 // command-WAL frame through the normal insert executor. It is reserved for R3a
 // deterministic apply; ordinary callers should use InsertBatch or
@@ -12011,27 +12050,9 @@ func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, c
 	if commandWALIntent == nil {
 		return 0, 0, errors.New("collections: ReplaceBatchWithCommandWALIntent requires command WAL intent")
 	}
-	if len(ids) != len(documents) {
-		return 0, 0, fmt.Errorf("collections: replace ids length %d does not match documents length %d", len(ids), len(documents))
-	}
-	items := make([]UpdateBatchItem, len(ids))
-	for i := range ids {
-		id := bytes.Clone(ids[i])
-		replacement := bytes.Clone(documents[i])
-		items[i] = UpdateBatchItem{
-			DocumentID: id,
-			Update: func(doc []byte) func([]byte) ([]byte, bool, error) {
-				return func(current []byte) ([]byte, bool, error) {
-					if current == nil {
-						return nil, false, nil
-					}
-					if bytes.Equal(current, doc) {
-						return current, false, nil
-					}
-					return doc, true, nil
-				}
-			}(replacement),
-		}
+	items, err := replaceBatchUpdateItems(ids, documents)
+	if err != nil {
+		return 0, 0, err
 	}
 	ownedItems, err := prepareUpdateBatchItems(items)
 	if err != nil {
@@ -12071,6 +12092,32 @@ func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, c
 		}
 	}
 	return matched, modified, nil
+}
+
+func replaceBatchUpdateItems(ids, documents [][]byte) ([]UpdateBatchItem, error) {
+	if len(ids) != len(documents) {
+		return nil, fmt.Errorf("collections: replace ids length %d does not match documents length %d", len(ids), len(documents))
+	}
+	items := make([]UpdateBatchItem, len(ids))
+	for i := range ids {
+		id := bytes.Clone(ids[i])
+		replacement := bytes.Clone(documents[i])
+		items[i] = UpdateBatchItem{
+			DocumentID: id,
+			Update: func(doc []byte) func([]byte) ([]byte, bool, error) {
+				return func(current []byte) ([]byte, bool, error) {
+					if current == nil {
+						return nil, false, nil
+					}
+					if bytes.Equal(current, doc) {
+						return current, false, nil
+					}
+					return doc, true, nil
+				}
+			}(replacement),
+		}
+	}
+	return items, nil
 }
 
 func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
