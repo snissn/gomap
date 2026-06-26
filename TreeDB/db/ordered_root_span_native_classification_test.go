@@ -1168,6 +1168,39 @@ func TestOrderedRootSpanNativeIteratorDeltaGroupRouteCounters(t *testing.T) {
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
 }
 
+func TestOrderedRootSpanNativeIteratorDeltaGroupColdBuildRouteCounters(t *testing.T) {
+	dir := t.TempDir()
+	db := openOrderedRootSpanNativeRouteCounterDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter: &stableRootDeltaIterator{entries: []stableRootDeltaEntry{{
+				key:   []byte("doc/1"),
+				value: []byte("base"),
+			}}},
+		}},
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/collections/users/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaGroupWithSystemDeltaBuilder: %v", err)
+	}
+	if systemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("systemRoot=%d rootIDs=%v, want non-zero roots", systemRoot, rootIDs)
+	}
+
+	stats := db.Stats()
+	overlayPrefix := "treedb.publish.ordered_root_delta_group.span_native.route.overlay_cold_build."
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".count_total")
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.observations_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.observations_total")
+}
+
 func TestOrderedRootSpanNativeIteratorCommandWALRouteCounters(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

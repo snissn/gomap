@@ -324,6 +324,23 @@ type orderedRootLenHintIterator interface {
 	Len() int
 }
 
+func orderedRootIteratorLenHint(iter iterator.UnsafeIterator) int {
+	if iter == nil {
+		return 0
+	}
+	switch it := iter.(type) {
+	case orderedRootLenHintIterator:
+		if n := it.Len(); n > 0 {
+			return n
+		}
+	case *pendingValueLogAppendPtrCollectingIterator:
+		return orderedRootIteratorLenHint(it.UnsafeIterator)
+	case *orderedRootTouchedIterator:
+		return orderedRootIteratorLenHint(it.UnsafeIterator)
+	}
+	return 0
+}
+
 func selectOrderedRootWarmPublishPlan(hasExistingEntries bool, deltaOps int, maxDeltaOps int) orderedRootPublishPlan {
 	if !hasExistingEntries {
 		return orderedRootPublishPlanColdBuild
@@ -898,6 +915,14 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	}
 
 	if baseRoot == 0 {
+		route := OrderedRootSpanNativeRouteOverlayColdBuild
+		context := "ordered-root delta iterator cold build"
+		db.observeOrderedRootSpanNativeEligibility(db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+			Route:          route,
+			Context:        context,
+			DeltaOps:       orderedRootIteratorLenHint(iter),
+			ForceColdBuild: true,
+		}))
 		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: iter}
 		newRoot, retired, metrics, _, _, err = db.publishOrderedRootIterator(0, touchedIter, opts, false)
 		touchedValueLogSegments = touchedIter.touchedValueLogSegments
