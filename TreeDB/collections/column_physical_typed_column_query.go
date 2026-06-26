@@ -1171,6 +1171,10 @@ func columnTypedColumnPhysicalQueryRequiredTypes(req ColumnPhysicalQueryRequest)
 		if err := add(req.ValueColumn, ColumnStoreValueInt64, "value"); err != nil {
 			return nil, err
 		}
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		if err := add(req.ValueColumn, ColumnStoreValueInt64, "value"); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("%w: unsupported typed-column part physical query kind %q", ErrColumnQueryPlanUnsupported, req.Kind)
 	}
@@ -4105,6 +4109,7 @@ type columnTypedColumnPhysicalQueryAccumulator struct {
 	groupHours  map[string]map[int]int
 	int64Values map[string]int64
 	int64Spans  map[string]columnPhysicalQuerySpan
+	int64Sum    TypedColumnInt64PredicateAggregateResult
 	reduceRows  int
 }
 
@@ -4208,6 +4213,14 @@ func (a *columnTypedColumnPhysicalQueryAccumulator) visit(req ColumnPhysicalQuer
 			cur.max = value
 		}
 		a.int64Spans[key] = cur
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		value, err := typedColumnPhysicalQueryInt64At(values, req.ValueColumn, rowIdx)
+		if err != nil {
+			return err
+		}
+		if err := addTypedColumnInt64PredicateAggregateExpressionValue(&a.int64Sum, TypedColumnInt64AggregateSecondOfDaySquare, value); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("%w: unsupported typed-column part physical query kind %q", ErrColumnQueryPlanUnsupported, a.kind)
 	}
@@ -4250,6 +4263,10 @@ func (a *columnTypedColumnPhysicalQueryAccumulator) groups(req ColumnPhysicalQue
 	case ColumnPhysicalQueryGroupInt64Span:
 		for key, span := range a.int64Spans {
 			out = append(out, ColumnPhysicalQueryGroup{Key: key, Int64: span.max - span.min})
+		}
+	case ColumnPhysicalQuerySumSecondOfDaySquare:
+		if a.int64Sum.Count > 0 {
+			out = append(out, ColumnPhysicalQueryGroup{Key: "time_us_second_of_day_square", Count: int(a.int64Sum.Count), Int64: a.int64Sum.Sum})
 		}
 	}
 	if req.TopK == 0 {

@@ -1012,6 +1012,9 @@ func (db *DB) orderedRootDeltaBatchApplyOptions(opts orderedRootPublishOptions) 
 	applyOpts := db.flushApplyOptions()
 	if applyOpts.SpanNativeApply {
 		applyOpts.SpanNativeAllowMaintenancePointOps = true
+		if opts.spanNativeRoute != "" && !orderedRootSpanNativeRouteCanBeCandidate(opts.spanNativeRoute) {
+			applyOpts.SpanNativeForceFallbackReason = FlushSpanRunFallbackRouteIneligible.String()
+		}
 	}
 	if opts.spanNativeFallback != "" {
 		applyOpts.SpanNativeForceFallbackReason = opts.spanNativeFallback
