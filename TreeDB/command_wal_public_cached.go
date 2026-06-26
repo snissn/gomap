@@ -251,6 +251,7 @@ type commandWALPublicBatch struct {
 	payloadOpHint     int
 	payloadByteHint   int
 	opCount           int
+	hasDeleteRange    bool
 	dirty             bool
 	// retainPayloadAfterWrite is set by adapter-only replay-view helpers. It
 	// keeps payload-owned key/value views valid after a successful Write until
@@ -284,6 +285,7 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 		return
 	}
 	_ = b.payload.ResetWithHint(b.payloadOpHint, b.payloadByteHint)
+	b.hasDeleteRange = false
 }
 
 func (b *commandWALPublicBatch) preparePayloadForAppend() {
@@ -297,6 +299,7 @@ func (b *commandWALPublicBatch) preparePayloadForAppend() {
 	// path after Write.
 	b.resetPayloadWithHint()
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.retainPayloadAfterWrite = false
 }
 
@@ -450,6 +453,7 @@ func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
 		return err
 	}
 	b.opCount++
+	b.hasDeleteRange = true
 	b.dirty = true
 	return nil
 }
@@ -497,6 +501,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 			b.resetPayloadWithHint()
 		}
 		b.opCount = 0
+		b.hasDeleteRange = false
 		b.dirty = false
 		return nil
 	}
@@ -514,6 +519,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		b.resetPayloadWithHint()
 	}
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.dirty = false
 	return nil
 }
@@ -531,6 +537,7 @@ func (b *commandWALPublicBatch) Close() error {
 	b.innerDeleteViewFn = nil
 	b.resetPayloadWithHint()
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = true
@@ -546,6 +553,7 @@ func (b *commandWALPublicBatch) Reset() {
 		b.disableInnerStreamingBypass()
 		b.resetPayloadWithHint()
 		b.opCount = 0
+		b.hasDeleteRange = false
 		b.dirty = false
 		b.retainPayloadAfterWrite = false
 		b.closed = false
@@ -556,6 +564,7 @@ func (b *commandWALPublicBatch) Reset() {
 	b.disableInnerStreamingBypass()
 	b.resetPayloadWithHint()
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = false
@@ -600,7 +609,7 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if b.db != nil && b.db.commandWALCached && b.db.backend != nil {
+	if !b.hasDeleteRange && b.db != nil && b.db.commandWALCached && b.db.backend != nil {
 		var entries []batch.Entry
 		hasPointer := false
 		if err := b.inner.Replay(func(entry batch.Entry) error {

@@ -1637,6 +1637,10 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 		t.Fatalf("batch Close: %v", err)
 	}
 	assertPublicCommandWALFrames(t, db, 1)
+	if frames := publicCommandWALFrameCount(t, db); frames != 1 {
+		_ = db.Close()
+		t.Fatalf("command_wal.frames=%d, want exactly 1", frames)
+	}
 	for key, value := range values {
 		requireRawKVValue(t, db, []byte(key), value)
 	}
@@ -1655,6 +1659,69 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 	defer reopen.Close()
 	for key, value := range values {
 		requireRawKVValue(t, reopen, []byte(key), value)
+	}
+}
+
+func TestPublicCommandWALBatchDeleteRangeWithPointerUsesCompactRangeFrame(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		WALMaxSegmentBytes:           4096,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for i := 0; i < 400; i++ {
+		key := []byte(fmt.Sprintf("range-%04d", i))
+		if err := db.Set(key, []byte("seed")); err != nil {
+			_ = db.Close()
+			t.Fatalf("seed Set %q: %v", key, err)
+		}
+	}
+	before := publicCommandWALFrameCount(t, db)
+
+	b := db.NewBatch()
+	if err := b.DeleteRange([]byte("range-"), []byte("range-\xff")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	wantValue := bytes.Repeat([]byte("z"), 2048)
+	if err := b.Set([]byte("z-pointer"), wantValue); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write should log compact DeleteRange instead of materialized point deletes: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	if frames := publicCommandWALFrameCount(t, db); frames != before+1 {
+		_ = db.Close()
+		t.Fatalf("command_wal.frames=%d want %d", frames, before+1)
+	}
+	has, err := db.Has([]byte("range-0000"))
+	if err != nil || has {
+		_ = db.Close()
+		t.Fatalf("Has(range-0000)=(%t,%v), want false,nil", has, err)
+	}
+	requireRawKVValue(t, db, []byte("z-pointer"), wantValue)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 
