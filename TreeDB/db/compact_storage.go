@@ -1459,6 +1459,8 @@ var compactStorageLeafPageLogHandoffCloseWriter = func(w *rewriteWriter) error {
 	return w.Close()
 }
 
+var compactStorageLeafPageLogHandoffListSegments = listValueLogSegments
+
 func (h *compactStorageLeafPageLogHandoff) cleanup() error {
 	if h == nil || h.db == nil || h.writer == nil {
 		return nil
@@ -1477,7 +1479,7 @@ func (h *compactStorageLeafPageLogHandoff) cleanup() error {
 		h.db.setLeafPageLogRaw(nil)
 		return cleanupErr
 	}
-	segments, err := listValueLogSegments(h.db.dir)
+	segments, err := compactStorageLeafPageLogHandoffListSegments(h.db.dir)
 	if err != nil {
 		h.db.setLeafPageLogRaw(nil)
 		return errors.Join(cleanupErr, compactStorageLeafPageLogHandoffError("scan compact leaf segments", err))

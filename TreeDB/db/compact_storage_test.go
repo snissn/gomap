@@ -1120,23 +1120,20 @@ func TestCompactStorageLeafPageLogHandoffScanFailureFailsClosed(t *testing.T) {
 	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("s"), page.PageSize)); err != nil {
 		t.Fatalf("installed AppendLeafPage: %v", err)
 	}
-	if installed.leafW == nil {
-		t.Fatal("expected compact leaf writer")
+
+	scanErr := errors.New("injected compact leaf segment scan failure")
+	origListSegments := compactStorageLeafPageLogHandoffListSegments
+	compactStorageLeafPageLogHandoffListSegments = func(string) ([]logSegment, error) {
+		return nil, scanErr
 	}
-	if err := installed.leafW.Close(); err != nil {
-		t.Fatalf("close compact leaf writer before scan failure: %v", err)
-	}
-	installed.leafW = nil
-	if err := os.RemoveAll(leafDir); err != nil {
-		t.Fatalf("remove leaf dir: %v", err)
-	}
-	if err := os.WriteFile(leafDir, []byte("not-a-directory"), 0644); err != nil {
-		t.Fatalf("replace leaf dir with file: %v", err)
-	}
+	t.Cleanup(func() { compactStorageLeafPageLogHandoffListSegments = origListSegments })
 
 	err = handoff.cleanup()
 	if !errors.Is(err, ErrCompactStorageLeafPageLogHandoffCleanup) {
 		t.Fatalf("cleanup error=%v, want handoff cleanup sentinel", err)
+	}
+	if !errors.Is(err, scanErr) {
+		t.Fatalf("cleanup error=%v, want injected scan error", err)
 	}
 	var handoffErr *CompactStorageLeafPageLogHandoffError
 	if !errors.As(err, &handoffErr) {
