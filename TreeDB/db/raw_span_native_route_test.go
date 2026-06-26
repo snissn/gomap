@@ -5,6 +5,8 @@ import (
 	"runtime"
 	"strconv"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 func TestRawSpanNativeRouteStatsPointWritesUseDefaultAuto(t *testing.T) {
@@ -334,6 +336,63 @@ func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackUsesBackendFallback
 	}
 	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.span_native_not_implemented.count_total"); got != 1 {
 		t.Fatalf("backend raw span_native_not_implemented count=%d, want 1", got)
+	}
+}
+
+func TestRawSpanNativePublishFallbackUsesPreReleaseSummarySnapshot(t *testing.T) {
+	result := zipper.ApplyResult{
+		ReadOnlyPrepareRequested: true,
+		ReadOnlyPrepare: zipper.ReadOnlyPrepareResult{
+			Ops:            3,
+			PointOps:       3,
+			ExactLeafSpans: true,
+			LeafSpans: []zipper.ReadOnlyLeafSpan{
+				{OpCount: 1, PointOpCount: 1, ByteCount: 10},
+				{OpCount: 2, PointOpCount: 2, ByteCount: 20},
+			},
+		},
+		SpanNativeEligible: true,
+	}
+	snapshot := newFlushApplySpanNativePublishSnapshot(result)
+
+	for i := range result.ReadOnlyPrepare.LeafSpans {
+		result.ReadOnlyPrepare.LeafSpans[i] = zipper.ReadOnlyLeafSpan{OpCount: 99, PointOpCount: 99, ByteCount: 99}
+	}
+	if got, want := snapshot.summary.SpanOps, 3; got != want {
+		t.Fatalf("snapshot span ops=%d want %d", got, want)
+	}
+	if got, want := snapshot.summary.SpanBytes, 30; got != want {
+		t.Fatalf("snapshot span bytes=%d want %d", got, want)
+	}
+
+	d := &DB{}
+	reason := FlushSpanRunFallbackRootMismatch
+	d.observeRawBatchSpanNativePublishFallback(rawSpanNativeBatchPlan{
+		route: RawSpanNativeRoutePointPut,
+		ops:   3,
+	}, snapshot, reason)
+
+	if got := d.flushApplySpanNativeFallbackOps[reason].Load(); got != 3 {
+		t.Fatalf("flush fallback ops=%d want 3", got)
+	}
+	if got := d.flushApplySpanNativeFallbackSpans[reason].Load(); got != 2 {
+		t.Fatalf("flush fallback spans=%d want 2", got)
+	}
+	if got := d.rawSpanNativeFallbackOps[reason].Load(); got != 3 {
+		t.Fatalf("raw fallback ops=%d want 3", got)
+	}
+	if got := d.rawSpanNativeFallbackSpans[reason].Load(); got != 2 {
+		t.Fatalf("raw fallback spans=%d want 2", got)
+	}
+	routeCounters := d.rawSpanNativeRouteCountersFor(RawSpanNativeRoutePointPut)
+	if routeCounters == nil {
+		t.Fatalf("missing point_put route counters")
+	}
+	if got := routeCounters.fallbackOps[reason].Load(); got != 3 {
+		t.Fatalf("point_put fallback ops=%d want 3", got)
+	}
+	if got := routeCounters.fallbackSpans[reason].Load(); got != 2 {
+		t.Fatalf("point_put fallback spans=%d want 2", got)
 	}
 }
 
