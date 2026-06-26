@@ -63,6 +63,10 @@ func buildColumnInt64ValuesAssetForColumn(cfg ColumnStoreConfig, rows []columnDe
 	if col.ValueType != ColumnStoreValueInt64 || col.Nullable {
 		return columnInt64ValuesAsset{}, false, nil
 	}
+	if len(rows) == 0 {
+		return columnInt64ValuesAsset{}, false, nil
+	}
+	values := make([]int64, len(rows))
 	for rowIdx, row := range rows {
 		if row.Deleted {
 			return columnInt64ValuesAsset{}, false, nil
@@ -77,13 +81,7 @@ func buildColumnInt64ValuesAssetForColumn(cfg ColumnStoreConfig, rows []columnDe
 		if !value.Present || value.Null {
 			return columnInt64ValuesAsset{}, false, nil
 		}
-	}
-	if len(rows) == 0 {
-		return columnInt64ValuesAsset{}, false, nil
-	}
-	values := make([]int64, len(rows))
-	for rowIdx, row := range rows {
-		values[rowIdx] = row.Values[colIdx].Int64
+		values[rowIdx] = value.Int64
 	}
 	return columnInt64ValuesAsset{
 		Collection:        collection,

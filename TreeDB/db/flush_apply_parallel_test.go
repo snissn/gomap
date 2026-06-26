@@ -845,6 +845,9 @@ func TestFlushApplySpanNativeRootMismatchTracksAbandonedLeafLogOutput(t *testing
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.root_mismatch.ops_total"); got == 0 {
 		t.Fatalf("span-native root_mismatch fallback ops=0 want >0")
 	}
+	if got := requireDBStatUint64(t, d, "treedb.raw.span_native.route.point_put.fallback.reason.root_mismatch.ops_total"); got == 0 {
+		t.Fatalf("raw point_put root_mismatch fallback ops=0 want >0")
+	}
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.retry_total"); got == 0 {
 		t.Fatalf("retry stat=0 want >0")
 	}
@@ -906,6 +909,9 @@ func TestFlushApplySpanNativeFinalizeFailureTracksOutputOwnershipFallback(t *tes
 	}
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.span_native.fallback.reason.output_ownership_failure.ops_total"); got == 0 {
 		t.Fatalf("span-native output_ownership_failure fallback ops=0 want >0")
+	}
+	if got := requireDBStatUint64(t, d, "treedb.raw.span_native.route.point_put.fallback.reason.output_ownership_failure.ops_total"); got == 0 {
+		t.Fatalf("raw point_put output_ownership_failure fallback ops=0 want >0")
 	}
 	if got := requireDBStatUint64(t, d, "treedb.flush_apply.prepared_output.leaf_log_pages_abandoned_total"); got == 0 {
 		t.Fatalf("abandoned leaf-log output = 0, want span-native finalize-failure output counted")

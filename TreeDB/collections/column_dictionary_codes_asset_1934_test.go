@@ -234,6 +234,77 @@ func TestColumnDictionaryCodesAssetLittleEndianPersistsAfterReopen1934(t *testin
 	}
 }
 
+func TestBuildColumnDictionaryCodesAssetsMultiColumnSinglePassM3110(t *testing.T) {
+	cfg := columnDictionaryCodesAssetTestConfig1934(t)
+	rows := columnDictionaryCodesAssetTestRowsM3110()
+
+	assets, err := buildColumnDictionaryCodesAssets(cfg, rows, "events", cfg.AssetManager.Namespace, 7, 3, 42)
+	if err != nil {
+		t.Fatalf("buildColumnDictionaryCodesAssets: %v", err)
+	}
+	if len(assets) != 2 {
+		t.Fatalf("assets=%d want kind+did", len(assets))
+	}
+	if assets[0].ColumnName != "kind" || assets[1].ColumnName != "did" {
+		t.Fatalf("asset order=%s,%s want kind,did", assets[0].ColumnName, assets[1].ColumnName)
+	}
+	byName := make(map[string]columnDictionaryCodesAsset, len(assets))
+	for _, asset := range assets {
+		byName[asset.ColumnName] = asset
+	}
+	assertDictionaryCodesAssetM3110(t, byName["kind"], 1, []string{"post", "like", "repost"}, []uint32{0, 1, 0, 2})
+	assertDictionaryCodesAssetM3110(t, byName["did"], 2, []string{"did:plc:2", "did:plc:1", "did:plc:3"}, []uint32{0, 1, 0, 2})
+
+	for _, colIdx := range []int{1, 2} {
+		asset, ok, err := buildColumnDictionaryCodesAssetForColumn(cfg, rows, "events", cfg.AssetManager.Namespace, 7, 3, 42, colIdx)
+		if err != nil {
+			t.Fatalf("buildColumnDictionaryCodesAssetForColumn col=%d: %v", colIdx, err)
+		}
+		if !ok {
+			t.Fatalf("buildColumnDictionaryCodesAssetForColumn col=%d ok=false", colIdx)
+		}
+		if !reflect.DeepEqual(asset, byName[asset.ColumnName]) {
+			t.Fatalf("column %d direct asset=%+v batched=%+v", colIdx, asset, byName[asset.ColumnName])
+		}
+	}
+}
+
+func TestBuildColumnDictionaryCodesAssetsFailClosedM3110(t *testing.T) {
+	cfg := columnDictionaryCodesAssetTestConfig1934(t)
+
+	rows := columnDictionaryCodesAssetTestRowsM3110()
+	rows[1].Values[1] = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, Null: true}
+	assets, err := buildColumnDictionaryCodesAssets(cfg, rows, "events", cfg.AssetManager.Namespace, 7, 3, 42)
+	if err != nil {
+		t.Fatalf("nullable buildColumnDictionaryCodesAssets: %v", err)
+	}
+	if len(assets) != 1 || assets[0].ColumnName != "did" {
+		t.Fatalf("nullable kind assets=%+v want only did", assets)
+	}
+
+	rows = columnDictionaryCodesAssetTestRowsM3110()
+	rows[0].Deleted = true
+	assets, err = buildColumnDictionaryCodesAssets(cfg, rows, "events", cfg.AssetManager.Namespace, 7, 3, 42)
+	if err != nil {
+		t.Fatalf("deleted buildColumnDictionaryCodesAssets: %v", err)
+	}
+	if len(assets) != 0 {
+		t.Fatalf("deleted row assets=%+v want none", assets)
+	}
+
+	rows = columnDictionaryCodesAssetTestRowsM3110()
+	rows[0].Values = rows[0].Values[:2]
+	if _, err := buildColumnDictionaryCodesAssets(cfg, rows, "events", cfg.AssetManager.Namespace, 7, 3, 42); err == nil || !strings.Contains(err.Error(), "values=2 columns=3") {
+		t.Fatalf("row-width err=%v want values=2 columns=3", err)
+	}
+
+	rows = columnDictionaryCodesAssetTestRowsM3110()
+	rows[0].Values[2] = columnDeclaredValue{Type: ColumnStoreValueInt64, Present: true, Int64: 10}
+	if _, err := buildColumnDictionaryCodesAssets(cfg, rows, "events", cfg.AssetManager.Namespace, 7, 3, 42); err == nil || !strings.Contains(err.Error(), "column[2] type=\"int64\" want string") {
+		t.Fatalf("type mismatch err=%v want did string type error", err)
+	}
+}
+
 func columnDictionaryCodesAssetTestConfig1934(t *testing.T) ColumnStoreConfig {
 	t.Helper()
 	normalized, err := normalizeColumnStoreConfig("events", testColumnStoreConfig(nil))
@@ -256,6 +327,36 @@ func columnDictionaryCodesAssetTestAsset1934(cfg ColumnStoreConfig) columnDictio
 		ColumnIndex:       1,
 		Dictionary:        []string{"alpha", "beta", "gamma"},
 		Codes:             []uint32{0, 1, 2, 1, 0, 2},
+	}
+}
+
+func columnDictionaryCodesAssetTestRowsM3110() []columnDeclaredRow {
+	return []columnDeclaredRow{
+		columnDictionaryCodesAssetTestRowM3110(10, "post", "did:plc:2"),
+		columnDictionaryCodesAssetTestRowM3110(11, "like", "did:plc:1"),
+		columnDictionaryCodesAssetTestRowM3110(12, "post", "did:plc:2"),
+		columnDictionaryCodesAssetTestRowM3110(13, "repost", "did:plc:3"),
+	}
+}
+
+func columnDictionaryCodesAssetTestRowM3110(timeUS int64, kind, did string) columnDeclaredRow {
+	return columnDeclaredRow{
+		ID: []byte(kind + ":" + did),
+		Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: timeUS},
+			{Type: ColumnStoreValueString, Present: true, String: kind},
+			{Type: ColumnStoreValueString, Present: true, String: did},
+		},
+	}
+}
+
+func assertDictionaryCodesAssetM3110(t *testing.T, asset columnDictionaryCodesAsset, columnIndex int, dictionary []string, codes []uint32) {
+	t.Helper()
+	if asset.ColumnIndex != columnIndex {
+		t.Fatalf("%s column index=%d want %d", asset.ColumnName, asset.ColumnIndex, columnIndex)
+	}
+	if !reflect.DeepEqual(asset.Dictionary, dictionary) || !reflect.DeepEqual(asset.Codes, codes) {
+		t.Fatalf("%s dictionary/codes=%v/%v want %v/%v", asset.ColumnName, asset.Dictionary, asset.Codes, dictionary, codes)
 	}
 }
 

@@ -309,6 +309,18 @@ func TestPublicCommandWALRejectsUnsupportedCachedRawMutations(t *testing.T) {
 	if string(got) != "original" {
 		t.Fatalf("Get(keep)=%q, want original", got)
 	}
+	stats := db.Stats()
+	for _, route := range []string{"update", "update_sync"} {
+		key := "treedb.raw.span_native.public.route." + route + ".fallback.reason.command_wal_barrier.count_total"
+		raw := stats[key]
+		count, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", key, raw, err)
+		}
+		if count != 1 {
+			t.Fatalf("%s=%d want 1", key, count)
+		}
+	}
 }
 
 func assertPublicCommandWALFrames(t *testing.T, db *DB, minFrames uint64) {
