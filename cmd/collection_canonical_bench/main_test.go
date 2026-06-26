@@ -19,6 +19,9 @@ func TestCanonicalReportKnownCompressionShape(t *testing.T) {
 		"exhaustive compact is about 6.8x smaller than SQLite native columns and 10.0x smaller than SQLite JSON",
 		"production offline compact is about 3.5x and 5.2x smaller, respectively",
 		"`online_one_pass_maintenance`",
+		"## Production Evidence",
+		"`command_wal_publish`",
+		"Effective concurrency",
 		"Use `exhaustive_compact` for byte-minimized benchmark/VACUUM-equivalent claims",
 		"`treedb_template_v1_collection_2_indexes` | `offline_compact` | 44.3",
 		"`treedb_template_v1_collection_2_indexes` | `exhaustive_compact` | 23.2",
@@ -237,6 +240,29 @@ func TestCanonicalComparisonsRequirePositiveExhaustiveCompactEvidence(t *testing
 	}
 }
 
+func TestCanonicalValidationRequiresProductionEvidenceForCompactedClaims(t *testing.T) {
+	canon := knownExampleRun()
+	for i := range canon.Results {
+		if canon.Results[i].ConfigName == "treedb_template_v1_collection_2_indexes" && canon.Results[i].Phase == phasePostInsert {
+			canon.Results[i].ProductionEvidence = nil
+		}
+	}
+	canon.Comparisons = buildCompactedComparisons(canon)
+
+	checks := validateCanonicalRun(canon)
+	assertCheckCode(t, checks, "production_evidence_required")
+	if comparisons := buildCompactedComparisons(canon); len(comparisons) != 0 {
+		t.Fatalf("missing producer evidence should suppress compacted comparisons: %#v", comparisons)
+	}
+	if comparisons := comparisonsForReport(canon); len(comparisons) != 0 {
+		t.Fatalf("missing producer evidence should suppress stored compacted comparisons: %#v", comparisons)
+	}
+	summary := renderExecutiveSummary(canon)
+	if strings.Contains(summary, "byte-minimized") || strings.Contains(summary, "via exhaustive compact") {
+		t.Fatalf("summary should not claim compacted-state win without production evidence: %s", summary)
+	}
+}
+
 func TestNormalizeRunPathsMakesOutDirAbsolute(t *testing.T) {
 	cfg := config{OutDir: filepath.Join("relative", "bench-run")}
 	if err := normalizeRunPaths(&cfg); err != nil {
@@ -449,6 +475,13 @@ func TestCanonicalDerivedCompactedComparisonsRequireEvidencePerTreeDBConfig(t *t
 		testStorageRow("treedb_json_collection_2_indexes", "treedb_fast", "json", "collection", phaseExhaustiveCompact, 2, 2100000, 21.0),
 	)
 	canon.Comparisons = buildCompactedComparisons(canon)
+	if got := findComparison(canon.Comparisons, "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got != nil {
+		t.Fatalf("json comparison with compact evidence but no production evidence was emitted: %#v", got)
+	}
+
+	canon.Results = append(canon.Results, testPostInsertProductionRow("treedb_json_collection_2_indexes", "treedb_fast", "json", 2))
+	finalizeRunMetadata(canon)
+	canon.Comparisons = buildCompactedComparisons(canon)
 	if got := findComparison(canon.Comparisons, "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got == nil {
 		t.Fatalf("json comparison with matching exhaustive evidence was not emitted: %#v", canon.Comparisons)
 	}
@@ -458,6 +491,7 @@ func TestCanonicalDerivedCompactedComparisonsUseConfiguredIndexCount(t *testing.
 	canon := knownExampleRun()
 	canon.Config.Indexes = 1
 	canon.Results = append(canon.Results,
+		testPostInsertProductionRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", 1),
 		testStorageRow("sqlite_json_1_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 1, 18000000, 180.0),
 		testStorageRow("sqlite_native_columns_1_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 1, 12000000, 120.0),
 		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseOfflineCompact, 1, 3600000, 36.0),
@@ -510,6 +544,7 @@ func TestExecutiveSummaryUsesConfiguredIndexCountLabel(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Config.Indexes = 1
 	canon.Results = append(canon.Results,
+		testPostInsertProductionRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", 1),
 		testStorageRow("sqlite_json_1_indexes", "sqlite_wal_normal", "json", "collection", phaseSQLiteVacuum, 1, 18000000, 180.0),
 		testStorageRow("sqlite_native_columns_1_indexes", "sqlite_wal_normal", "native-columns", "collection", phaseSQLiteVacuum, 1, 12000000, 120.0),
 		testStorageRow("treedb_template_v1_collection_1_indexes", "treedb_fast", "template-v1", "collection", phaseOfflineCompact, 1, 3600000, 36.0),
@@ -690,6 +725,73 @@ func testStorageRow(config, engine, format, shape, phase string, indexes int, by
 	}
 }
 
+func testPostInsertProductionRow(config, engine, format string, indexes int) resultRow {
+	return resultRow{
+		ConfigName:         config,
+		Engine:             engine,
+		Format:             format,
+		Shape:              "collection",
+		IndexCount:         indexes,
+		DocumentCount:      100000,
+		BenchmarkName:      "BenchmarkCollectionShapeInsertBatch",
+		Phase:              phasePostInsert,
+		MaintenanceMode:    "none",
+		TotalBytes:         int64Ptr(10000000),
+		BytesPerDoc:        floatPtr(100),
+		DocsPerSec:         floatPtr(500000),
+		NsPerDoc:           floatPtr(2000),
+		BatchSize:          16000,
+		BenchmarkTimed:     true,
+		MeasurementKind:    "go_benchmark",
+		ProductionEvidence: testProductionEvidence(),
+	}
+}
+
+func testProductionEvidence() *productionEvidence {
+	gomax := 16
+	physical := 8
+	configured := 0
+	effective := 8
+	admitted := true
+	spanNative := true
+	backlog := true
+	observations := 100.0
+	candidate := 100000.0
+	eligible := 100000.0
+	used := 100000.0
+	fallbacks := 0.0
+	return &productionEvidence{
+		ProducerRoute:                       "command_wal_publish",
+		ProducerRouteObservations:           &observations,
+		ProducerRouteCandidateOps:           &candidate,
+		ProducerRouteEligibleOps:            &eligible,
+		ProducerRouteUsedOps:                &used,
+		ProducerRouteFallbacks:              &fallbacks,
+		StoragePolicy:                       "data_outer=true,index_outer=true",
+		StorageCells:                        "index-vlog",
+		PagerChunkSize:                      "default",
+		PagerSyncConcurrency:                "default",
+		LeafSegmentTargetBytes:              1048576,
+		GOMAXPROCS:                          &gomax,
+		PhysicalCores:                       &physical,
+		FlushAdmissionConfiguredConcurrency: &configured,
+		FlushAdmissionEffectiveConcurrency:  &effective,
+		FlushAdmissionGOMAXPROCS:            &gomax,
+		FlushAdmissionPhysicalCores:         &physical,
+		FlushAdmissionAdmitted:              &admitted,
+		FlushAdmissionSpanNative:            &spanNative,
+		FlushAdmissionBacklogCoalescing:     &backlog,
+		FlushSpanCandidateOps:               &candidate,
+		FlushSpanEligibleOps:                &eligible,
+		FlushSpanUsedOps:                    &used,
+		FlushSpanFallbacks:                  &fallbacks,
+		OrderedRootSpanCandidateOps:         &candidate,
+		OrderedRootSpanEligibleOps:          &eligible,
+		OrderedRootSpanUsedOps:              &used,
+		OrderedRootSpanFallbacks:            &fallbacks,
+	}
+}
+
 func knownExampleRun() *canonicalRun {
 	docs := 100000
 	batch := 16000
@@ -738,22 +840,23 @@ func knownExampleRun() *canonicalRun {
 		},
 		Results: []resultRow{
 			{
-				ConfigName:      "treedb_template_v1_collection_2_indexes",
-				Engine:          "command_wal_relaxed",
-				Format:          "template-v1",
-				Shape:           "collection",
-				IndexCount:      2,
-				DocumentCount:   docs,
-				BenchmarkName:   "BenchmarkCollectionShapeInsertBatch/indexes_2",
-				Phase:           phasePostInsert,
-				MaintenanceMode: "none",
-				TotalBytes:      int64Ptr(10555966),
-				BytesPerDoc:     floatPtr(105.6),
-				DocsPerSec:      floatPtr(584112),
-				NsPerDoc:        floatPtr(1712),
-				BatchSize:       batch,
-				BenchmarkTimed:  true,
-				MeasurementKind: "go_benchmark",
+				ConfigName:         "treedb_template_v1_collection_2_indexes",
+				Engine:             "command_wal_relaxed",
+				Format:             "template-v1",
+				Shape:              "collection",
+				IndexCount:         2,
+				DocumentCount:      docs,
+				BenchmarkName:      "BenchmarkCollectionShapeInsertBatch/indexes_2",
+				Phase:              phasePostInsert,
+				MaintenanceMode:    "none",
+				TotalBytes:         int64Ptr(10555966),
+				BytesPerDoc:        floatPtr(105.6),
+				DocsPerSec:         floatPtr(584112),
+				NsPerDoc:           floatPtr(1712),
+				BatchSize:          batch,
+				BenchmarkTimed:     true,
+				MeasurementKind:    "go_benchmark",
+				ProductionEvidence: testProductionEvidence(),
 			},
 			{
 				ConfigName:      "treedb_template_v1_collection_2_indexes",

@@ -32,27 +32,44 @@ type rawEngineRun struct {
 }
 
 type collectionRow struct {
-	ConfigName       string
-	Engine           string
-	Format           string
-	Shape            string
-	IndexCount       int
-	DocumentCount    int
-	BenchmarkName    string
-	Phase            string
-	MaintenanceMode  string
-	TotalBytes       float64
-	BytesPerDoc      float64
-	DocsPerSec       float64
-	NsPerDoc         float64
-	BatchSize        int
-	BenchmarkTimed   bool
-	MeasurementKind  string
-	MeasurementNote  string
-	SourceArtifact   string
-	MaintenanceStats map[string]float64
-	Extra            map[string]string
-	Source           string
+	ConfigName         string
+	Engine             string
+	Format             string
+	Shape              string
+	IndexCount         int
+	DocumentCount      int
+	BenchmarkName      string
+	Phase              string
+	MaintenanceMode    string
+	TotalBytes         float64
+	BytesPerDoc        float64
+	DocsPerSec         float64
+	NsPerDoc           float64
+	BatchSize          int
+	BenchmarkTimed     bool
+	MeasurementKind    string
+	MeasurementNote    string
+	SourceArtifact     string
+	MaintenanceStats   map[string]float64
+	Extra              map[string]string
+	ProductionEvidence *collectionProductionEvidence
+	Source             string
+}
+
+type collectionProductionEvidence struct {
+	ProducerRoute                      string   `json:"producer_route"`
+	ProducerRouteCandidateOps          *float64 `json:"producer_route_candidate_ops"`
+	ProducerRouteUsedOps               *float64 `json:"producer_route_used_ops"`
+	ProducerRouteFallbacks             *float64 `json:"producer_route_fallbacks"`
+	StoragePolicy                      string   `json:"storage_policy"`
+	GOMAXPROCS                         *int     `json:"gomaxprocs"`
+	PhysicalCores                      *int     `json:"physical_cores"`
+	FlushAdmissionEffectiveConcurrency *int     `json:"flush_admission_effective_concurrency"`
+	FlushAdmissionAdmitted             *bool    `json:"flush_admission_admitted"`
+	FlushAdmissionSpanNative           *bool    `json:"flush_admission_span_native"`
+	FlushAdmissionBacklogCoalescing    *bool    `json:"flush_admission_backlog_coalescing"`
+	FlushSpanFallbacks                 *float64 `json:"flush_span_fallbacks"`
+	OrderedRootSpanFallbacks           *float64 `json:"ordered_root_span_fallbacks"`
 }
 
 type collectionComparison struct {
@@ -898,7 +915,7 @@ func filterCollectionComparisonsForCompactedEvidence(path string, dirIndex int, 
 	filtered := make([]collectionComparison, 0, len(comps))
 	suppressed := 0
 	for _, comp := range comps {
-		if collectionComparisonHasPositiveExhaustiveCompactEvidence(rows, comp, dirIndex) {
+		if collectionComparisonHasCompactedProductionEvidence(rows, comp, dirIndex) {
 			filtered = append(filtered, comp)
 			continue
 		}
@@ -907,7 +924,7 @@ func filterCollectionComparisonsForCompactedEvidence(path string, dirIndex int, 
 	if suppressed == 0 {
 		return filtered, nil
 	}
-	return filtered, []string{fmt.Sprintf("%s: no positive exhaustive_compact row for %d TreeDB comparison(s) at the compared config/index; suppressing unsupported TreeDB compacted-size comparisons from this source", path, suppressed)}
+	return filtered, []string{fmt.Sprintf("%s: no positive exhaustive_compact row and matching production evidence for %d TreeDB comparison(s) at the compared config/index; suppressing unsupported TreeDB compacted-size comparisons from this source", path, suppressed)}
 }
 
 func collectionChecksBlockCompactedClaims(checks []collectionGuardrailCheck) bool {
@@ -919,8 +936,10 @@ func collectionChecksBlockCompactedClaims(checks []collectionGuardrailCheck) boo
 	return false
 }
 
-func collectionComparisonHasPositiveExhaustiveCompactEvidence(rows []collectionRow, comp collectionComparison, dirIndex int) bool {
+func collectionComparisonHasCompactedProductionEvidence(rows []collectionRow, comp collectionComparison, dirIndex int) bool {
 	compIndex := collectionIndexFromConfig(comp.TreeDBConfig)
+	hasExhaustive := false
+	hasProduction := false
 	for _, row := range rows {
 		if row.Phase == "exhaustive_compact" &&
 			row.Shape == "collection" &&
@@ -929,10 +948,40 @@ func collectionComparisonHasPositiveExhaustiveCompactEvidence(rows []collectionR
 			row.BytesPerDoc > 0 &&
 			(compIndex < 0 || row.IndexCount == compIndex) &&
 			(dirIndex < 0 || row.IndexCount == dirIndex) {
-			return true
+			hasExhaustive = true
+		}
+		if row.Phase == "post_insert" &&
+			row.Shape == "collection" &&
+			row.ConfigName == comp.TreeDBConfig &&
+			(compIndex < 0 || row.IndexCount == compIndex) &&
+			(dirIndex < 0 || row.IndexCount == dirIndex) &&
+			collectionRowHasProductionEvidence(row) {
+			hasProduction = true
 		}
 	}
-	return false
+	return hasExhaustive && hasProduction
+}
+
+func collectionRowHasProductionEvidence(row collectionRow) bool {
+	ev := row.ProductionEvidence
+	if ev == nil {
+		return false
+	}
+	return strings.TrimSpace(ev.ProducerRoute) != "" &&
+		strings.TrimSpace(ev.StoragePolicy) != "" &&
+		ev.GOMAXPROCS != nil &&
+		ev.FlushAdmissionEffectiveConcurrency != nil &&
+		ev.FlushAdmissionAdmitted != nil &&
+		ev.FlushAdmissionSpanNative != nil &&
+		ev.FlushAdmissionBacklogCoalescing != nil &&
+		ev.FlushSpanFallbacks != nil &&
+		ev.OrderedRootSpanFallbacks != nil &&
+		collectionFloatPtrPositive(ev.ProducerRouteCandidateOps) &&
+		collectionFloatPtrPositive(ev.ProducerRouteUsedOps)
+}
+
+func collectionFloatPtrPositive(v *float64) bool {
+	return v != nil && *v > 0
 }
 
 func collectionIndexFromDirectory(name string) int {
@@ -948,26 +997,27 @@ func collectionIndexFromDirectory(name string) int {
 
 func (r *collectionRow) UnmarshalJSON(raw []byte) error {
 	type alias struct {
-		ConfigName       string             `json:"config_name"`
-		Engine           string             `json:"engine"`
-		Format           string             `json:"format"`
-		Shape            string             `json:"shape"`
-		IndexCount       int                `json:"index_count"`
-		DocumentCount    int                `json:"document_count"`
-		BenchmarkName    string             `json:"benchmark_name"`
-		Phase            string             `json:"phase"`
-		MaintenanceMode  string             `json:"maintenance_mode"`
-		TotalBytes       float64            `json:"total_bytes"`
-		BytesPerDoc      float64            `json:"bytes_per_doc"`
-		DocsPerSec       float64            `json:"docs_per_sec"`
-		NsPerDoc         float64            `json:"ns_per_doc"`
-		BatchSize        int                `json:"batch_size"`
-		BenchmarkTimed   bool               `json:"benchmark_timed"`
-		MeasurementKind  string             `json:"measurement_kind"`
-		MeasurementNote  string             `json:"measurement_note"`
-		SourceArtifact   string             `json:"source_artifact"`
-		MaintenanceStats map[string]float64 `json:"maintenance_stats"`
-		Extra            map[string]string  `json:"extra"`
+		ConfigName         string                        `json:"config_name"`
+		Engine             string                        `json:"engine"`
+		Format             string                        `json:"format"`
+		Shape              string                        `json:"shape"`
+		IndexCount         int                           `json:"index_count"`
+		DocumentCount      int                           `json:"document_count"`
+		BenchmarkName      string                        `json:"benchmark_name"`
+		Phase              string                        `json:"phase"`
+		MaintenanceMode    string                        `json:"maintenance_mode"`
+		TotalBytes         float64                       `json:"total_bytes"`
+		BytesPerDoc        float64                       `json:"bytes_per_doc"`
+		DocsPerSec         float64                       `json:"docs_per_sec"`
+		NsPerDoc           float64                       `json:"ns_per_doc"`
+		BatchSize          int                           `json:"batch_size"`
+		BenchmarkTimed     bool                          `json:"benchmark_timed"`
+		MeasurementKind    string                        `json:"measurement_kind"`
+		MeasurementNote    string                        `json:"measurement_note"`
+		SourceArtifact     string                        `json:"source_artifact"`
+		MaintenanceStats   map[string]float64            `json:"maintenance_stats"`
+		Extra              map[string]string             `json:"extra"`
+		ProductionEvidence *collectionProductionEvidence `json:"production_evidence"`
 	}
 	var a alias
 	if err := json.Unmarshal(raw, &a); err != nil {
@@ -993,6 +1043,7 @@ func (r *collectionRow) UnmarshalJSON(raw []byte) error {
 	r.SourceArtifact = a.SourceArtifact
 	r.MaintenanceStats = a.MaintenanceStats
 	r.Extra = a.Extra
+	r.ProductionEvidence = a.ProductionEvidence
 	return nil
 }
 
@@ -2114,6 +2165,11 @@ func renderCollections(b *strings.Builder, rows []collectionRow, comps []collect
 	b.WriteString("<p class=\"subtle\">TreeDB collection formats and SQLite baselines, including post-insert throughput, storage lifecycle, compacted-state ratios, and maintenance evidence. Raw canonical rows stay collapsed below.</p>")
 	if len(rows) > 0 {
 		writeCollectionSummary(b, rows, comps)
+		if productionRows := collectionProductionEvidenceRows(rows); len(productionRows) > 0 {
+			b.WriteString("<details open><summary>TreeDB production evidence</summary>")
+			writeTable(b, []string{"config", "phase", "route", "route used ops", "fallbacks", "GOMAXPROCS", "physical cores", "effective concurrency", "admitted", "span-native", "backlog", "storage"}, productionRows, numericColumns(3, 4, 5, 6, 7))
+			b.WriteString("</details>")
+		}
 		b.WriteString("<div class=\"chart-group\"><h3>Index-count overview</h3>")
 		b.WriteString("<div class=\"chart-grid\">")
 		docsRows := collectionDocsRows(rows)
@@ -2362,6 +2418,31 @@ func collectionRowsForIndex(rows []collectionRow, idx int) []collectionRow {
 		if row.IndexCount == idx {
 			out = append(out, row)
 		}
+	}
+	return out
+}
+
+func collectionProductionEvidenceRows(rows []collectionRow) [][]string {
+	var out [][]string
+	for _, row := range rows {
+		if row.ProductionEvidence == nil || !strings.HasPrefix(row.ConfigName, "treedb_") {
+			continue
+		}
+		ev := row.ProductionEvidence
+		out = append(out, []string{
+			displayConfig(row.ConfigName),
+			row.Phase,
+			ev.ProducerRoute,
+			fmtFloatPtr(ev.ProducerRouteUsedOps, 0),
+			fmtFloatPtr(ev.ProducerRouteFallbacks, 0),
+			fmtIntPtr(ev.GOMAXPROCS),
+			fmtIntPtr(ev.PhysicalCores),
+			fmtIntPtr(ev.FlushAdmissionEffectiveConcurrency),
+			fmtBoolPtr(ev.FlushAdmissionAdmitted),
+			fmtBoolPtr(ev.FlushAdmissionSpanNative),
+			fmtBoolPtr(ev.FlushAdmissionBacklogCoalescing),
+			ev.StoragePolicy,
+		})
 	}
 	return out
 }
@@ -4481,6 +4562,27 @@ func fmtFloat(v float64, decimals int) string {
 		return "-"
 	}
 	return commaFloat(v, decimals)
+}
+
+func fmtFloatPtr(v *float64, decimals int) string {
+	if v == nil {
+		return "-"
+	}
+	return fmtFloat(*v, decimals)
+}
+
+func fmtIntPtr(v *int) string {
+	if v == nil {
+		return "-"
+	}
+	return strconv.Itoa(*v)
+}
+
+func fmtBoolPtr(v *bool) string {
+	if v == nil {
+		return "-"
+	}
+	return strconv.FormatBool(*v)
 }
 
 func fmtRatio(v float64) string {

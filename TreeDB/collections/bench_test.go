@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -348,9 +349,49 @@ func benchmarkReportTreeDBSpanNativeStatDeltas(b *testing.B, backend *backenddb.
 		return
 	}
 	after := backend.Stats()
+	b.ReportMetric(float64(runtime.GOMAXPROCS(0)), "gomaxprocs")
+	if physicalCores := backenddb.DetectPhysicalCores(); physicalCores > 0 {
+		b.ReportMetric(float64(physicalCores), "physical_cores")
+	}
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.flush_apply_concurrency_configured", "flush_admission_configured_concurrency")
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.flush_apply_concurrency", "flush_admission_effective_concurrency")
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.gomaxprocs", "flush_admission_gomaxprocs")
+	benchmarkReportTreeDBStatUint64(b, after, "treedb.flush_admission.physical_cores", "flush_admission_physical_cores")
+	benchmarkReportTreeDBStatBool(b, after, "treedb.flush_admission.admitted", "flush_admission_admitted")
+	benchmarkReportTreeDBStatBool(b, after, "treedb.flush_admission.flush_apply_span_native", "flush_admission_span_native")
+	benchmarkReportTreeDBStatBool(b, after, "treedb.flush_admission.flush_backlog_coalescing", "flush_admission_backlog_coalescing")
 	for _, metric := range collectionSpanNativeBenchmarkStatMetrics {
 		delta := benchmarkStatUint64Delta(b, before, after, metric.key)
 		b.ReportMetric(float64(delta), metric.unit)
+	}
+}
+
+func benchmarkReportTreeDBStatUint64(b *testing.B, stats map[string]string, key, unit string) {
+	b.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		return
+	}
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		b.Fatalf("benchmark stat %q=%q is not uint64: %v", key, raw, err)
+	}
+	b.ReportMetric(float64(n), unit)
+}
+
+func benchmarkReportTreeDBStatBool(b *testing.B, stats map[string]string, key, unit string) {
+	b.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		return
+	}
+	switch raw {
+	case "true":
+		b.ReportMetric(1, unit)
+	case "false":
+		b.ReportMetric(0, unit)
+	default:
+		b.Fatalf("benchmark stat %q=%q is not bool", key, raw)
 	}
 }
 
