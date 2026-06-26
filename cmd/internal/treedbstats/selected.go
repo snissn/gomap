@@ -78,7 +78,7 @@ func isSelectedKey(key string) bool {
 	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):
 		return true
 	case strings.HasPrefix(key, "treedb.publish.ordered_root_delta_group."):
-		return true
+		return isSelectedOrderedRootDeltaGroupKey(key)
 	case strings.HasPrefix(key, "treedb.collections.write_domain."):
 		return true
 	case strings.HasPrefix(key, "treedb.publish.watermark."):
@@ -86,4 +86,11 @@ func isSelectedKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+func isSelectedOrderedRootDeltaGroupKey(key string) bool {
+	if !strings.HasPrefix(key, "treedb.publish.ordered_root_delta_group.span_native.triage.route.") {
+		return true
+	}
+	return !strings.HasSuffix(key, ".context") && !strings.HasSuffix(key, ".detail")
 }

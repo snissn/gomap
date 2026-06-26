@@ -794,6 +794,71 @@ func TestOrderedRootSpanNativePublishUsesSpanNativeWhenAdmitted(t *testing.T) {
 	}
 }
 
+func TestOrderedRootSpanNativePublishObservesExplicitSpanNativeFallback(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                    t.TempDir(),
+		FlushAdmissionPolicy:   FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:  1,
+		FlushApplyMinEntries:   1,
+		FlushApplyMinSpans:     1,
+		FlushApplyMinBytes:     1,
+		FlushApplySpanNative:   true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rawApplyOpts := db.flushApplyOptions()
+	if !rawApplyOpts.SpanNativeApply || !rawApplyOpts.PrepareReadOnly || rawApplyOpts.ParallelApplyConcurrency > 1 {
+		t.Fatalf("fixture raw apply options=%+v, want span-native prepare-only without parallel apply", rawApplyOpts)
+	}
+	orderedOpts := systemRootOrderedPublishOptions(db).withSpanNativeFallback(FlushSpanRunFallbackSpanNativeNotImplemented)
+	orderedApplyOpts := db.orderedRootDeltaBatchApplyOptions(orderedOpts)
+	if !orderedApplyOpts.SpanNativeApply {
+		t.Fatalf("ordered-root delta batch span-native apply disabled; want explicit fallback with prepare retained")
+	}
+	if got, want := orderedApplyOpts.SpanNativeForceFallbackReason, FlushSpanRunFallbackSpanNativeNotImplemented.String(); got != want {
+		t.Fatalf("ordered-root fallback reason hook=%q, want %q", got, want)
+	}
+	if !orderedApplyOpts.PrepareReadOnly || orderedApplyOpts.ParallelApplyConcurrency > 1 {
+		t.Fatalf("ordered-root read-only prepare options=%+v, want span-native fallback prepare retained", orderedApplyOpts)
+	}
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t, "doc/1", "base").NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	updateIter := mustFrozenSystemMemtable(t, "doc/2", "update").NewIterator(nil, nil)
+	update, err := OrderedRootDeltaBatchFromIterator(updateIter)
+	_ = updateIter.Close()
+	if err != nil {
+		t.Fatalf("OrderedRootDeltaBatchFromIterator: %v", err)
+	}
+	defer func() { _ = update.Close() }()
+
+	newRoot, _, _, err := db.publishOrderedRootDeltaBatch(baseRoot, update, orderedOpts)
+	if err != nil {
+		t.Fatalf("publishOrderedRootDeltaBatch: %v", err)
+	}
+	if newRoot == 0 || newRoot == baseRoot {
+		t.Fatalf("newRoot=%d baseRoot=%d, want changed non-zero root", newRoot, baseRoot)
+	}
+
+	stats := db.Stats()
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.flush_apply.read_only_prepare.calls_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.eligible_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.used_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".count_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	routePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish."
+	requireOrderedRootStatCounterPositive(t, stats, routePrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, routePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, routePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".count_total")
+}
+
 func TestOrderedRootSpanNativeEligibilityCountsCandidatesAndEligibleRows(t *testing.T) {
 	opts := Options{}
 	decision := computeFlushAdmissionDecisionForHardware(&opts, 16, 6)
@@ -1195,6 +1260,39 @@ func TestOrderedRootSpanNativeIteratorDeltaGroupRouteCounters(t *testing.T) {
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.candidate_ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.candidate_ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
+}
+
+func TestOrderedRootSpanNativeIteratorDeltaGroupColdBuildRouteCounters(t *testing.T) {
+	dir := t.TempDir()
+	db := openOrderedRootSpanNativeRouteCounterDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(
+		[]OrderedRootDeltaPublishInput{{
+			BaseRoot: 0,
+			Iter: &stableRootDeltaIterator{entries: []stableRootDeltaEntry{{
+				key:   []byte("doc/1"),
+				value: []byte("base"),
+			}}},
+		}},
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/collections/users/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaGroupWithSystemDeltaBuilder: %v", err)
+	}
+	if systemRoot == 0 || len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("systemRoot=%d rootIDs=%v, want non-zero roots", systemRoot, rootIDs)
+	}
+
+	stats := db.Stats()
+	overlayPrefix := "treedb.publish.ordered_root_delta_group.span_native.route.overlay_cold_build."
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".count_total")
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.observations_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.observations_total")
 }
 
 func TestOrderedRootSpanNativeIteratorCommandWALRouteCounters(t *testing.T) {

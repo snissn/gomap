@@ -129,6 +129,14 @@ func (domain *collectionWriteDomain) clearCommandWALCoordinatorOwnerIfNoPending(
 }
 
 func (c *Collection) lockCommandWALStageCoordinator() (func(), error) {
+	return c.lockCommandWALStageCoordinatorWithRawPublishState(false)
+}
+
+func (c *Collection) lockCommandWALStageCoordinatorWithHeldRawPublishLock() (func(), error) {
+	return c.lockCommandWALStageCoordinatorWithRawPublishState(true)
+}
+
+func (c *Collection) lockCommandWALStageCoordinatorWithRawPublishState(rawPublishLocked bool) (func(), error) {
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || c.writeDomain == nil {
 		return func() {}, nil
 	}
@@ -161,13 +169,27 @@ func (c *Collection) lockCommandWALStageCoordinator() (func(), error) {
 			continue
 		}
 		coord.mu.Unlock()
-		if err := flushCollectionWriteDomain(c.db, owner); err != nil {
+		var err error
+		if rawPublishLocked {
+			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(c.db, owner)
+		} else {
+			err = flushCollectionWriteDomain(c.db, owner)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
 }
 
 func (c *Collection) drainCommandWALStageCoordinatorBeforeMutation() error {
+	return c.drainCommandWALStageCoordinatorBeforeMutationWithRawPublishState(false)
+}
+
+func (c *Collection) drainCommandWALStageCoordinatorBeforeMutationWithHeldRawPublishLock() error {
+	return c.drainCommandWALStageCoordinatorBeforeMutationWithRawPublishState(true)
+}
+
+func (c *Collection) drainCommandWALStageCoordinatorBeforeMutationWithRawPublishState(rawPublishLocked bool) error {
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || c.writeDomain == nil {
 		return nil
 	}
@@ -189,7 +211,13 @@ func (c *Collection) drainCommandWALStageCoordinatorBeforeMutation() error {
 			continue
 		}
 		coord.mu.Unlock()
-		if err := flushCollectionWriteDomain(c.db, owner); err != nil {
+		var err error
+		if rawPublishLocked {
+			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(c.db, owner)
+		} else {
+			err = flushCollectionWriteDomain(c.db, owner)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -228,6 +256,14 @@ func (coord *collectionCommandWALCoordinator) waitForCommandWALStageReservationL
 }
 
 func (c *Collection) lockCommandWALPublishCoordinator() (func(), error) {
+	return c.lockCommandWALPublishCoordinatorWithRawPublishState(false)
+}
+
+func (c *Collection) lockCommandWALPublishCoordinatorWithHeldRawPublishLock() (func(), error) {
+	return c.lockCommandWALPublishCoordinatorWithRawPublishState(true)
+}
+
+func (c *Collection) lockCommandWALPublishCoordinatorWithRawPublishState(rawPublishLocked bool) (func(), error) {
 	if c == nil || c.db == nil || !c.db.CommandWALEnabled() || c.writeDomain == nil {
 		return func() {}, nil
 	}
@@ -249,7 +285,17 @@ func (c *Collection) lockCommandWALPublishCoordinator() (func(), error) {
 		}
 		coord.mu.Unlock()
 		if owner == domain {
-			if err := c.flushBufferedWrites(); err != nil {
+			var err error
+			if rawPublishLocked {
+				err = c.flushBufferedWritesWithRawPublishState(true)
+			} else {
+				err = c.flushBufferedWrites()
+			}
+			if err != nil {
+				return nil, err
+			}
+		} else if rawPublishLocked {
+			if err := flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(c.db, owner); err != nil {
 				return nil, err
 			}
 		} else if err := flushCollectionWriteDomain(c.db, owner); err != nil {
@@ -288,15 +334,20 @@ func (c *Collection) publishCommandWALNoop(intent *backenddb.CommandWALIntent, s
 	if c == nil || c.db == nil {
 		return errCollectionDBNil
 	}
-	unlock, err := c.lockCommandWALPublishCoordinator()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return c.db.PublishCommandWALNoop(intent, sync)
+	return c.withCommandWALPublishCoordinator(func() error {
+		return c.db.PublishStagedCommandWALNoop(intent, sync)
+	})
 }
 
 func (m *CollectionManager) lockCommandWALPublishCoordinator() (func(), error) {
+	return m.lockCommandWALPublishCoordinatorWithRawPublishState(false)
+}
+
+func (m *CollectionManager) lockCommandWALPublishCoordinatorWithHeldRawPublishLock() (func(), error) {
+	return m.lockCommandWALPublishCoordinatorWithRawPublishState(true)
+}
+
+func (m *CollectionManager) lockCommandWALPublishCoordinatorWithRawPublishState(rawPublishLocked bool) (func(), error) {
 	if m == nil || m.db == nil || !m.db.CommandWALEnabled() {
 		return func() {}, nil
 	}
@@ -319,7 +370,13 @@ func (m *CollectionManager) lockCommandWALPublishCoordinator() (func(), error) {
 			continue
 		}
 		coord.mu.Unlock()
-		if err := flushCollectionWriteDomain(m.db, owner); err != nil {
+		var err error
+		if rawPublishLocked {
+			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(m.db, owner)
+		} else {
+			err = flushCollectionWriteDomain(m.db, owner)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -329,19 +386,16 @@ func (m *CollectionManager) publishCommandWALNoop(intent *backenddb.CommandWALIn
 	if m == nil || m.db == nil {
 		return errCollectionDBNil
 	}
-	unlock, err := m.lockCommandWALPublishCoordinator()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return m.db.PublishCommandWALNoop(intent, sync)
+	return m.withCommandWALPublishCoordinator(func() error {
+		return m.db.PublishStagedCommandWALNoop(intent, sync)
+	})
 }
 
 func (m *CollectionManager) flushPendingCommandWALBeforeRawPublish() error {
 	if m == nil || m.db == nil || !m.db.CommandWALEnabled() {
 		return nil
 	}
-	unlock, err := m.lockCommandWALPublishCoordinator()
+	unlock, err := m.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
 	if err != nil {
 		return err
 	}
@@ -353,7 +407,20 @@ func (m *CollectionManager) withCommandWALPublishCoordinator(fn func() error) er
 	if fn == nil {
 		return nil
 	}
-	unlock, err := m.lockCommandWALPublishCoordinator()
+	var unlockRaw func()
+	lockHeldRaw := false
+	if m != nil && m.db != nil && m.db.CommandWALEnabled() {
+		unlockRaw = m.db.LockCommandWALPublish()
+		defer unlockRaw()
+		lockHeldRaw = true
+	}
+	var unlock func()
+	var err error
+	if lockHeldRaw {
+		unlock, err = m.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
+	} else {
+		unlock, err = m.lockCommandWALPublishCoordinator()
+	}
 	if err != nil {
 		return err
 	}
@@ -365,7 +432,20 @@ func (c *Collection) withCommandWALPublishCoordinator(fn func() error) error {
 	if fn == nil {
 		return nil
 	}
-	unlock, err := c.lockCommandWALPublishCoordinator()
+	lockHeldRaw := c != nil && c.commandWALRawPublishLocked
+	var unlockRaw func()
+	if !lockHeldRaw && c != nil && c.db != nil && c.db.CommandWALEnabled() {
+		unlockRaw = c.db.LockCommandWALPublish()
+		defer unlockRaw()
+		lockHeldRaw = true
+	}
+	var unlock func()
+	var err error
+	if lockHeldRaw {
+		unlock, err = c.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
+	} else {
+		unlock, err = c.lockCommandWALPublishCoordinator()
+	}
 	if err != nil {
 		return err
 	}

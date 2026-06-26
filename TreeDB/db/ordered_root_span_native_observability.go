@@ -260,7 +260,7 @@ func (db *DB) orderedRootSpanNativeEligibility(req orderedRootSpanNativeEligibil
 		classifiedReason := db.classifyOrderedRootSpanNativeFallback(req, ops)
 		if !hasExplicitReason {
 			reason = classifiedReason
-		} else if classifiedReason.Valid() && classifiedReason != FlushSpanRunFallbackSpanNativeNotImplemented {
+		} else if classifiedReason.Valid() && classifiedReason != FlushSpanRunFallbackSpanNativeNotImplemented && (classifiedReason != FlushSpanRunFallbackUnknown || req.Err != nil) {
 			reason = classifiedReason
 			hasExplicitReason = false
 		}

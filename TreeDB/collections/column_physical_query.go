@@ -974,6 +974,9 @@ func columnManifestScanSidecarsForPhysicalQuery(req ColumnPhysicalQueryRequest) 
 }
 
 func (c *Collection) runColumnPhysicalQueryInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if result, ok, err := c.runColumnPhysicalQueryTypedColumnOneShotInSnapshotView(view, req); ok {
+		return result, err
+	}
 	if result, ok, err := c.runColumnPhysicalQueryTypedColumnPartInSnapshotView(view, req); ok {
 		return result, err
 	}

@@ -17,6 +17,7 @@ type cachingLeafPageLog struct {
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLog)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLog)(nil)
+var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLog)(nil)
 
 var compactLeafLogPayloadScratchPool sync.Pool
 var compactLeafLogPayloadScratchPtrRefPool sync.Pool
@@ -494,6 +495,13 @@ func (l *cachingLeafPageLog) Sync() error {
 		return nil
 	}
 	return l.db.syncValueLogLane(l.lane)
+}
+
+func (l *cachingLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
+	if l == nil || l.db == nil {
+		return nil
+	}
+	return l.db.advanceCompactStorageLeafPageLogSeqAtLeast(seq)
 }
 
 // CurrentValueLogSegment reports the lane's current writable value-log segment.
