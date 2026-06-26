@@ -394,6 +394,12 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	} else {
 		valuesRaw = valuesRaw[:len(cfg.Columns)]
 	}
+	type retainedRootValue struct {
+		path string
+		raw  []byte
+	}
+	var retainedRootValueStack [8]retainedRootValue
+	retainedRootValues := retainedRootValueStack[:0]
 	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
 		path := string(key)
 		if indexes := plan.declaredColumnIndexesByPath[path]; len(indexes) > 0 {
@@ -408,10 +414,27 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 		if err != nil {
 			return err
 		}
-		return collectColumnRetainedSemanticStreamPaths(json.RawMessage(raw), []string{path}, row, streams)
+		for i := range retainedRootValues {
+			if retainedRootValues[i].path == path {
+				retainedRootValues[i].raw = raw
+				return nil
+			}
+		}
+		retainedRootValues = append(retainedRootValues, retainedRootValue{path: path, raw: raw})
+		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if len(retainedRootValues) > 0 {
+		sort.Slice(retainedRootValues, func(i, j int) bool {
+			return retainedRootValues[i].path < retainedRootValues[j].path
+		})
+		for _, value := range retainedRootValues {
+			if err := collectColumnRetainedSemanticStreamPaths(json.RawMessage(value.raw), []string{value.path}, row, streams); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if !plan.declaredRowsReady {
 		return nil, nil

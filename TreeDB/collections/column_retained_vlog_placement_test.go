@@ -480,6 +480,7 @@ func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t
 	}
 	ids, docs := retainedSemanticStreamDocuments(12)
 	docs[5] = []byte(`{"row_id":5,"kind":"kind-5","payload":"payload-005","note":"quote \" slash \\ smile \u263a","commit":{"cid":"bafy-test-000005"}}`)
+	docs[6] = []byte(`{"row_id":6,"kind":"old-kind","kind":"kind-6","payload":{"old":true},"payload":{"kept":true},"note":"old-note","note":["kept-note"],"commit":{"cid":"old-cid"},"commit":"kept-commit"}`)
 	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
 	if err != nil {
 		t.Fatalf("prepare semantic-stream-v1 documents with ids: %v", err)
@@ -499,6 +500,10 @@ func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t
 	}
 	if got := row.Values[1].String; got != "kind-5" {
 		t.Fatalf("declared kind=%q want kind-5", got)
+	}
+	duplicateRow := prepared.declaredRows[6]
+	if got := duplicateRow.Values[1].String; got != "kind-6" {
+		t.Fatalf("duplicate declared kind=%q want last duplicate kind-6", got)
 	}
 	if prepared.semanticStreamBlocks == nil {
 		t.Fatal("semantic-stream-v1 root fast path did not return block table")
@@ -531,6 +536,27 @@ func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t
 	}
 	if got, want := retained["note"], "quote \" slash \\ smile \u263a"; got != want {
 		t.Fatalf("retained payload note=%q want %q from escaped JSON string: %s", got, want, rowsJSON[5])
+	}
+	var duplicateRetained map[string]any
+	if err := json.Unmarshal(rowsJSON[6], &duplicateRetained); err != nil {
+		t.Fatalf("decode duplicate retained row JSON: %v", err)
+	}
+	payload, ok := duplicateRetained["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("duplicate retained payload=%T want object: %s", duplicateRetained["payload"], rowsJSON[6])
+	}
+	if _, ok := payload["old"]; ok {
+		t.Fatalf("duplicate retained payload kept overwritten root object: %s", rowsJSON[6])
+	}
+	if got, ok := payload["kept"].(bool); !ok || !got {
+		t.Fatalf("duplicate retained payload missing last root object: %s", rowsJSON[6])
+	}
+	if got, want := duplicateRetained["commit"], "kept-commit"; got != want {
+		t.Fatalf("duplicate retained commit=%q want %q: %s", got, want, rowsJSON[6])
+	}
+	note, ok := duplicateRetained["note"].([]any)
+	if !ok || len(note) != 1 || note[0] != "kept-note" {
+		t.Fatalf("duplicate retained note=%#v want last duplicate array: %s", duplicateRetained["note"], rowsJSON[6])
 	}
 }
 
