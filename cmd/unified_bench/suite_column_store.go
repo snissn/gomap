@@ -181,6 +181,7 @@ type columnStoreSuiteReport struct {
 	Parity                   map[string]columnStoreParity   `json:"parity"`
 	FirstTouchParity         map[string]columnStoreParity   `json:"first_touch_parity,omitempty"`
 	ByteAccounting           columnStoreByteAccounting      `json:"byte_accounting"`
+	MetadataCost             columnStoreMetadataCostMetric  `json:"metadata_cost"`
 	CodecLayouts             []columnStoreCodecLayoutMetric `json:"codec_layouts"`
 	CompressionMatrixNote    string                         `json:"compression_matrix_note"`
 	Manifest                 columnStoreManifestMetric      `json:"manifest"`
@@ -270,7 +271,25 @@ type columnStoreQueryMetric struct {
 	MiBPerSecond             float64                           `json:"mib_per_second"`
 	NsPerRow                 float64                           `json:"ns_per_row"`
 	BytesRead                int64                             `json:"bytes_read"`
+	DecodedBytes             uint64                            `json:"decoded_bytes"`
+	DecodedPayloadBytes      uint64                            `json:"decoded_payload_bytes"`
+	DecodedMetadataBytes     uint64                            `json:"decoded_metadata_bytes"`
+	MappedBytes              uint64                            `json:"mapped_bytes"`
+	HeapCopyBytes            uint64                            `json:"heap_copy_bytes"`
+	ProjectedColumns         int                               `json:"projected_columns"`
+	PredicateCount           int                               `json:"predicate_count"`
+	TypedCellsVisited        int64                             `json:"typed_cells_visited"`
+	TypedCellsVisitedBasis   string                            `json:"typed_cells_visited_basis,omitempty"`
 	RowMaterializations      int                               `json:"row_materializations"`
+	DocumentMaterializations int                               `json:"document_materializations"`
+	AggregateMetadataUsed    bool                              `json:"aggregate_metadata_used"`
+	MetadataCostStorageBytes int64                             `json:"metadata_cost_storage_bytes,omitempty"`
+	MetadataCostStorageBasis string                            `json:"metadata_cost_storage_basis,omitempty"`
+	MetadataCostInsertMS     float64                           `json:"metadata_cost_insert_ms,omitempty"`
+	MetadataCostInsertNsRow  float64                           `json:"metadata_cost_insert_ns_per_row,omitempty"`
+	MetadataCostInsertBasis  string                            `json:"metadata_cost_insert_basis,omitempty"`
+	SortTopKPruningUsed      bool                              `json:"sort_topk_pruning_used"`
+	JSONReconstruction       bool                              `json:"json_reconstruction"`
 	ResultCount              int                               `json:"result_count"`
 	RawHash                  uint64                            `json:"raw_hash"`
 	ProductionHash           uint64                            `json:"production_hash"`
@@ -289,7 +308,11 @@ type columnStoreQueryMetric struct {
 	RowsMatched              int                               `json:"rows_matched"`
 	ReduceRows               int                               `json:"reduce_rows"`
 	TopKCandidates           int                               `json:"topk_candidates,omitempty"`
+	TopKLimit                int                               `json:"topk_limit,omitempty"`
+	TopKOrder                string                            `json:"topk_order,omitempty"`
+	TimeOrderTopKUsed        bool                              `json:"time_order_topk_used,omitempty"`
 	DenseInt64SpanReducer    string                            `json:"dense_int64_span_reducer,omitempty"`
+	DecodedBlocks            int                               `json:"decoded_blocks"`
 	DecodedGranules          int                               `json:"decoded_granules"`
 	PlannerCandidates        int                               `json:"planner_candidates"`
 	PlannerReason            string                            `json:"planner_reason,omitempty"`
@@ -332,6 +355,25 @@ type columnStoreJSONBenchCell struct {
 	RowsProcessed                    int                               `json:"rows_processed"`
 	RowsProcessedKnown               bool                              `json:"rows_processed_known"`
 	BytesRead                        int64                             `json:"bytes_read"`
+	DecodedBytes                     uint64                            `json:"decoded_bytes"`
+	DecodedPayloadBytes              uint64                            `json:"decoded_payload_bytes"`
+	DecodedMetadataBytes             uint64                            `json:"decoded_metadata_bytes"`
+	MappedBytes                      uint64                            `json:"mapped_bytes"`
+	HeapCopyBytes                    uint64                            `json:"heap_copy_bytes"`
+	ProjectedColumns                 int                               `json:"projected_columns"`
+	PredicateCount                   int                               `json:"predicate_count"`
+	TypedCellsVisited                int64                             `json:"typed_cells_visited"`
+	TypedCellsVisitedBasis           string                            `json:"typed_cells_visited_basis,omitempty"`
+	RowMaterializations              int                               `json:"row_materializations"`
+	DocumentMaterializations         int                               `json:"document_materializations"`
+	AggregateMetadataUsed            bool                              `json:"aggregate_metadata_used"`
+	MetadataCostStorageBytes         int64                             `json:"metadata_cost_storage_bytes,omitempty"`
+	MetadataCostStorageBasis         string                            `json:"metadata_cost_storage_basis,omitempty"`
+	MetadataCostInsertMS             float64                           `json:"metadata_cost_insert_ms,omitempty"`
+	MetadataCostInsertNsRow          float64                           `json:"metadata_cost_insert_ns_per_row,omitempty"`
+	MetadataCostInsertBasis          string                            `json:"metadata_cost_insert_basis,omitempty"`
+	SortTopKPruningUsed              bool                              `json:"sort_topk_pruning_used"`
+	JSONReconstruction               bool                              `json:"json_reconstruction"`
 	ResultCount                      int                               `json:"result_count"`
 	RawHash                          uint64                            `json:"raw_hash"`
 	ResultHash                       uint64                            `json:"result_hash"`
@@ -356,7 +398,11 @@ type columnStoreJSONBenchCell struct {
 	RowsMatched                      int                               `json:"rows_matched"`
 	ReduceRows                       int                               `json:"reduce_rows"`
 	TopKCandidates                   int                               `json:"topk_candidates,omitempty"`
+	TopKLimit                        int                               `json:"topk_limit,omitempty"`
+	TopKOrder                        string                            `json:"topk_order,omitempty"`
+	TimeOrderTopKUsed                bool                              `json:"time_order_topk_used,omitempty"`
 	DenseInt64SpanReducer            string                            `json:"dense_int64_span_reducer,omitempty"`
+	DecodedBlocks                    int                               `json:"decoded_blocks"`
 	DecodedGranules                  int                               `json:"decoded_granules"`
 	SkippedGranules                  int                               `json:"skipped_granules"`
 	ScheduledGranules                int                               `json:"scheduled_granules"`
@@ -422,45 +468,51 @@ type columnStoreParity struct {
 }
 
 type columnStoreQueryExecution struct {
-	Lines                  []string
-	ProductionHash         uint64
-	ProductionHashKnown    bool
-	StorageSource          string
-	FallbackReason         string
-	ManifestRootName       string
-	ManifestRoot           uint64
-	ManifestGeneration     uint64
-	ActiveManifestChecksum uint64
-	RowsProcessed          int
-	RowsProcessedKnown     bool
-	RowsScanned            int
-	RowsMatched            int
-	ReduceRows             int
-	TopKCandidates         int
-	DenseInt64SpanReducer  string
-	DecodedGranules        int
-	DecodedBlocks          int
-	DecodedPayloadBytes    uint64
-	MappedBytes            uint64
-	HeapCopyBytes          uint64
-	PredicateCount         int
-	BytesRead              int64
-	RowMaterializations    int
-	ResultCount            int
-	MetadataHits           int
-	DictionaryCodeHits     int
-	Int64ValueHits         int
-	SkippedGranules        int
-	ScheduledGranules      int
-	WorkerCount            int
-	SegmentFileCacheHits   uint64
-	SegmentFileCacheMisses uint64
-	SetupDuration          time.Duration
-	HotRunDuration         time.Duration
-	ScanDuration           time.Duration
-	ReduceDuration         time.Duration
-	AdapterDuration        time.Duration
-	ResultShapeDuration    time.Duration
+	Lines                    []string
+	ProductionHash           uint64
+	ProductionHashKnown      bool
+	StorageSource            string
+	FallbackReason           string
+	ManifestRootName         string
+	ManifestRoot             uint64
+	ManifestGeneration       uint64
+	ActiveManifestChecksum   uint64
+	RowsProcessed            int
+	RowsProcessedKnown       bool
+	RowsScanned              int
+	RowsMatched              int
+	ReduceRows               int
+	TopKCandidates           int
+	TopKLimit                int
+	TopKOrder                string
+	TimeOrderTopKUsed        bool
+	DenseInt64SpanReducer    string
+	DecodedGranules          int
+	DecodedBlocks            int
+	DecodedPayloadBytes      uint64
+	DecodedMetadataBytes     uint64
+	MappedBytes              uint64
+	HeapCopyBytes            uint64
+	ProjectedColumns         int
+	PredicateCount           int
+	BytesRead                int64
+	RowMaterializations      int
+	DocumentMaterializations int
+	ResultCount              int
+	MetadataHits             int
+	DictionaryCodeHits       int
+	Int64ValueHits           int
+	SkippedGranules          int
+	ScheduledGranules        int
+	WorkerCount              int
+	SegmentFileCacheHits     uint64
+	SegmentFileCacheMisses   uint64
+	SetupDuration            time.Duration
+	HotRunDuration           time.Duration
+	ScanDuration             time.Duration
+	ReduceDuration           time.Duration
+	AdapterDuration          time.Duration
+	ResultShapeDuration      time.Duration
 	// Set when ProductionHashKnown is true. Fallback line-hash timing is
 	// measured at the call site because it is derived from Lines, not execution.
 	ParityHashDuration time.Duration
@@ -485,6 +537,17 @@ type columnStoreByteAccounting struct {
 	TotalReconstructableBytes          int64    `json:"total_reconstructable_bytes"`
 	DBTotalBytes                       int64    `json:"db_total_bytes"`
 	DBTotalFiles                       int      `json:"db_total_files"`
+}
+
+type columnStoreMetadataCostMetric struct {
+	AggregateMetadataStorageBytes  int64   `json:"aggregate_metadata_storage_bytes"`
+	AggregateMetadataSidecarBytes  int64   `json:"aggregate_metadata_sidecar_bytes"`
+	AggregateMetadataEmbeddedBytes int64   `json:"aggregate_metadata_embedded_bytes"`
+	AggregateMetadataRefs          int     `json:"aggregate_metadata_refs"`
+	InsertCostDurationMS           float64 `json:"insert_cost_duration_ms,omitempty"`
+	InsertCostNsPerRow             float64 `json:"insert_cost_ns_per_row,omitempty"`
+	InsertCostBasis                string  `json:"insert_cost_basis,omitempty"`
+	StorageCostBasis               string  `json:"storage_cost_basis,omitempty"`
 }
 
 type columnStoreManifestMetric struct {
@@ -790,15 +853,19 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: retained-payload byte accounting: %w", err)
 	}
+	insertMetric := columnStoreInsertPhaseMetricFromStats(insertStats, insertBatches)
+	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: assetReadIntegrity})
+	metadataCost := columnStoreMetadataCostMetricFromAccounting(insertMetric, physicalAccounting, physicalAccountingErr)
+	columnStoreApplyMetadataCostToQueries(queries, metadataCost)
+	columnStoreApplyMetadataCostToQueries(firstTouchQueries, metadataCost)
 	// Build direct/prepared JSONBench report cells after query CPU/alloc/block/
 	// mutex/trace capture has been finalized. These rows are a separately timed
 	// report phase and must not contaminate the measured column_store query-phase
 	// profiles or BenchmarkColumnStoreSuite* query-loop benchmarks.
 	start = time.Now()
-	jsonbenchCells, jsonbenchCellsErr := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, cfgForPath, retainedPayloadBytes)
+	jsonbenchCells, jsonbenchCellsErr := buildColumnStoreJSONBenchCells(collection, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames, queries, firstTouchQueries, cfgForPath, retainedPayloadBytes, metadataCost)
 	stages = append(stages, columnStoreStage("jsonbench_cell_report", start, rows*len(queryNames), 0))
 	totalReconstructableBytes := retainedPayloadBytes + columnAssetBytes + manifestControlBytes
-	physicalAccounting, physicalAccountingErr := collection.ColumnStorePhysicalAccounting(nil, collections.ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: assetReadIntegrity})
 	codecLayouts := columnStoreCodecLayoutMetrics(rows, len(columnStoreSuiteConfigForPath(forcedPath).Columns), columnAssetBytes, physicalAccounting)
 	compressionMatrixNote := "current production default remains compression=none; snappy/lz4 rows appear when typed_column_part assets were explicitly published with those opt-in policies; locator section compression is benchmark-relaxed and opt-in only; dictionaries/pruning_metadata are reported as next byte targets but remain uncompressed/deferred without a section raw-length format gate; zstd/zstd_dict are reported as unsupported/deferred despite enum names"
 	if physicalAccountingErr != nil {
@@ -819,7 +886,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		AcceptedForcedPaths:   cloneStringSlice(columnStoreSuiteAcceptedForcedPaths),
 		FailClosedForcedPaths: cloneStringSlice(columnStoreSuiteFailClosedForcedPaths),
 		Stages:                stages,
-		InsertStats:           columnStoreInsertPhaseMetricFromStats(insertStats, insertBatches),
+		InsertStats:           insertMetric,
 		Queries:               queries,
 		FirstTouchQueries:     firstTouchQueries,
 		JSONBenchCells:        jsonbenchCells,
@@ -845,6 +912,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 			DBTotalBytes:                       totalBytes,
 			DBTotalFiles:                       totalFiles,
 		},
+		MetadataCost:          metadataCost,
 		CodecLayouts:          codecLayouts,
 		CompressionMatrixNote: compressionMatrixNote,
 		Manifest: columnStoreManifestMetric{
@@ -1755,61 +1823,84 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 				activeManifestChecksum = manifestIdentity.ManifestChecksum
 			}
 		}
+		decodedBytes := columnStoreDecodedBytes(exec.DecodedPayloadBytes, exec.DecodedMetadataBytes)
+		typedCellsVisited := columnStoreTypedCellsVisited(exec.RowsScanned, exec.ProjectedColumns)
+		typedCellsVisitedBasis := columnStoreTypedCellsVisitedBasis(exec.RowsScanned, exec.ProjectedColumns)
+		aggregateMetadataUsed := columnStoreAggregateMetadataUsed(storageSource, exec.MetadataHits)
+		sortTopKPruningUsed := columnStoreSortTopKPruningUsed(exec)
+		jsonReconstruction := exec.DocumentMaterializations > 0
 		metric := columnStoreQueryMetric{
 			Name: name,
 			// PlanLabel records the executed planner kind after alias
 			// normalization, not necessarily the raw requested path string.
-			PlanLabel:              planLabel,
-			AliasOf:                columnStoreQueryAliasOf(name, planLabel),
-			ImplementationNote:     columnStoreQueryImplementationNote(name, path, planLabel),
-			StorageSource:          storageSource,
-			FallbackReason:         fallbackReason,
-			QueryMode:              columnStoreQueryModeOneShotEndToEnd,
-			MetadataMode:           columnStoreMetadataMode(planLabel, storageSource, exec.MetadataHits),
-			ManifestRootName:       manifestRootName,
-			ManifestRoot:           manifestRoot,
-			ManifestGeneration:     manifestGeneration,
-			ActiveManifestChecksum: activeManifestChecksum,
-			DurationMS:             durationMS(elapsed),
-			PrepareSetupDurationMS: durationMS(plannerElapsed),
-			RunDurationMS:          durationMS(runDuration),
-			RenderHashDurationMS:   durationMS(parityHashElapsed),
-			TotalQueryDurationMS:   durationMS(elapsed),
-			duration:               elapsed,
-			hotRunDuration:         exec.HotRunDuration,
-			Rows:                   rows,
-			RowsProcessed:          exec.RowsProcessed,
-			RowsProcessedKnown:     exec.RowsProcessedKnown,
-			RowsPerSecond:          ratePerSecond(float64(exec.RowsProcessed), elapsed),
-			MiBPerSecond:           ratePerSecond(float64(exec.BytesRead)/(1024*1024), elapsed),
-			NsPerRow:               nsPerRow(elapsed, exec.RowsProcessed),
-			BytesRead:              exec.BytesRead,
-			RowMaterializations:    exec.RowMaterializations,
-			ResultCount:            exec.ResultCount,
-			RawHash:                rawHash,
-			ProductionHash:         hash,
-			MetadataHits:           exec.MetadataHits,
-			DictionaryCodeHits:     exec.DictionaryCodeHits,
-			Int64ValueHits:         exec.Int64ValueHits,
-			SkippedGranules:        exec.SkippedGranules,
-			ScheduledGranules:      exec.ScheduledGranules,
-			WorkerCount:            exec.WorkerCount,
-			PlannerDurationMS:      durationMS(plannerElapsed),
-			ScanDurationMS:         durationMS(exec.ScanDuration),
-			ReduceDurationMS:       durationMS(exec.ReduceDuration),
-			AdapterDurationMS:      durationMS(exec.AdapterDuration),
-			ParityHashDurationMS:   durationMS(parityHashElapsed),
-			RowsScanned:            exec.RowsScanned,
-			RowsMatched:            exec.RowsMatched,
-			ReduceRows:             exec.ReduceRows,
-			TopKCandidates:         exec.TopKCandidates,
-			DenseInt64SpanReducer:  exec.DenseInt64SpanReducer,
-			DecodedGranules:        exec.DecodedGranules,
-			PlannerCandidates:      plan.Diagnostics.CandidatePlans,
-			PlannerReason:          plan.Diagnostics.Reason,
-			SegmentFileCacheHits:   exec.SegmentFileCacheHits,
-			SegmentFileCacheMisses: exec.SegmentFileCacheMisses,
-			CacheLabel:             "reopened_warm_process",
+			PlanLabel:                planLabel,
+			AliasOf:                  columnStoreQueryAliasOf(name, planLabel),
+			ImplementationNote:       columnStoreQueryImplementationNote(name, path, planLabel),
+			StorageSource:            storageSource,
+			FallbackReason:           fallbackReason,
+			QueryMode:                columnStoreQueryModeOneShotEndToEnd,
+			MetadataMode:             columnStoreMetadataMode(planLabel, storageSource, exec.MetadataHits),
+			ManifestRootName:         manifestRootName,
+			ManifestRoot:             manifestRoot,
+			ManifestGeneration:       manifestGeneration,
+			ActiveManifestChecksum:   activeManifestChecksum,
+			DurationMS:               durationMS(elapsed),
+			PrepareSetupDurationMS:   durationMS(plannerElapsed),
+			RunDurationMS:            durationMS(runDuration),
+			RenderHashDurationMS:     durationMS(parityHashElapsed),
+			TotalQueryDurationMS:     durationMS(elapsed),
+			duration:                 elapsed,
+			hotRunDuration:           exec.HotRunDuration,
+			Rows:                     rows,
+			RowsProcessed:            exec.RowsProcessed,
+			RowsProcessedKnown:       exec.RowsProcessedKnown,
+			RowsPerSecond:            ratePerSecond(float64(exec.RowsProcessed), elapsed),
+			MiBPerSecond:             ratePerSecond(float64(exec.BytesRead)/(1024*1024), elapsed),
+			NsPerRow:                 nsPerRow(elapsed, exec.RowsProcessed),
+			BytesRead:                exec.BytesRead,
+			DecodedBytes:             decodedBytes,
+			DecodedPayloadBytes:      exec.DecodedPayloadBytes,
+			DecodedMetadataBytes:     exec.DecodedMetadataBytes,
+			MappedBytes:              exec.MappedBytes,
+			HeapCopyBytes:            exec.HeapCopyBytes,
+			ProjectedColumns:         exec.ProjectedColumns,
+			PredicateCount:           exec.PredicateCount,
+			TypedCellsVisited:        typedCellsVisited,
+			TypedCellsVisitedBasis:   typedCellsVisitedBasis,
+			RowMaterializations:      exec.RowMaterializations,
+			DocumentMaterializations: exec.DocumentMaterializations,
+			AggregateMetadataUsed:    aggregateMetadataUsed,
+			SortTopKPruningUsed:      sortTopKPruningUsed,
+			JSONReconstruction:       jsonReconstruction,
+			ResultCount:              exec.ResultCount,
+			RawHash:                  rawHash,
+			ProductionHash:           hash,
+			MetadataHits:             exec.MetadataHits,
+			DictionaryCodeHits:       exec.DictionaryCodeHits,
+			Int64ValueHits:           exec.Int64ValueHits,
+			SkippedGranules:          exec.SkippedGranules,
+			ScheduledGranules:        exec.ScheduledGranules,
+			WorkerCount:              exec.WorkerCount,
+			PlannerDurationMS:        durationMS(plannerElapsed),
+			ScanDurationMS:           durationMS(exec.ScanDuration),
+			ReduceDurationMS:         durationMS(exec.ReduceDuration),
+			AdapterDurationMS:        durationMS(exec.AdapterDuration),
+			ParityHashDurationMS:     durationMS(parityHashElapsed),
+			RowsScanned:              exec.RowsScanned,
+			RowsMatched:              exec.RowsMatched,
+			ReduceRows:               exec.ReduceRows,
+			TopKCandidates:           exec.TopKCandidates,
+			TopKLimit:                exec.TopKLimit,
+			TopKOrder:                exec.TopKOrder,
+			TimeOrderTopKUsed:        exec.TimeOrderTopKUsed,
+			DenseInt64SpanReducer:    exec.DenseInt64SpanReducer,
+			DecodedBlocks:            exec.DecodedBlocks,
+			DecodedGranules:          exec.DecodedGranules,
+			PlannerCandidates:        plan.Diagnostics.CandidatePlans,
+			PlannerReason:            plan.Diagnostics.Reason,
+			SegmentFileCacheHits:     exec.SegmentFileCacheHits,
+			SegmentFileCacheMisses:   exec.SegmentFileCacheMisses,
+			CacheLabel:               "reopened_warm_process",
 			CompressionAttribution: columnStoreQueryCompressionAttribution(
 				planLabel,
 				storageSource,
@@ -1876,6 +1967,116 @@ func columnStoreFirstTouchQueryMetric(metric columnStoreQueryMetric, openElapsed
 	metric.CacheLabel = "fresh_reopen_per_query"
 	metric.ImplementationNote = columnStoreAppendImplementationNote(metric.ImplementationNote, "first_touch_after_open includes DB reopen and collection open in prepare/setup")
 	return metric
+}
+
+func columnStoreDecodedBytes(payload, metadata uint64) uint64 {
+	if ^uint64(0)-payload < metadata {
+		return ^uint64(0)
+	}
+	return payload + metadata
+}
+
+func columnStoreTypedCellsVisited(rowsScanned, projectedColumns int) int64 {
+	if rowsScanned <= 0 || projectedColumns <= 0 {
+		return 0
+	}
+	return int64(rowsScanned) * int64(projectedColumns)
+}
+
+func columnStoreTypedCellsVisitedBasis(rowsScanned, projectedColumns int) string {
+	if rowsScanned <= 0 || projectedColumns <= 0 {
+		return "no_typed_cell_scan_reported"
+	}
+	return "rows_scanned_x_projected_columns"
+}
+
+func columnStoreAggregateMetadataUsed(storageSource string, metadataHits int) bool {
+	return storageSource == string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata) && metadataHits > 0
+}
+
+func columnStoreSortTopKPruningUsed(exec columnStoreQueryExecution) bool {
+	if exec.TimeOrderTopKUsed || exec.SkippedGranules > 0 {
+		return true
+	}
+	return exec.TopKLimit > 0 && exec.TopKCandidates > exec.TopKLimit
+}
+
+func columnStoreMetadataCostMetricFromAccounting(insert columnStoreInsertPhaseMetric, accounting collections.ColumnStorePhysicalAccounting, accountingErr error) columnStoreMetadataCostMetric {
+	out := columnStoreMetadataCostMetric{
+		InsertCostDurationMS: insert.ColumnPublishAssetPreparationDurationMS,
+		InsertCostBasis:      "column_publish_asset_preparation_total_current_upper_bound",
+	}
+	rows := insert.ColumnPublishRows
+	if rows <= 0 {
+		rows = insert.Documents
+	}
+	if rows > 0 && insert.ColumnPublishAssetPreparationDurationMS > 0 {
+		out.InsertCostNsPerRow = insert.ColumnPublishAssetPreparationDurationMS * float64(time.Millisecond) / float64(rows)
+	}
+	if accountingErr != nil {
+		out.StorageCostBasis = "physical_accounting_unavailable: " + accountingErr.Error()
+		return out
+	}
+	out.AggregateMetadataSidecarBytes = accounting.Totals.AggregateMetadataBytes
+	out.AggregateMetadataEmbeddedBytes = accounting.Totals.TypedColumnSections.AggregateMetadataBytes
+	out.AggregateMetadataStorageBytes = columnStoreAddInt64Clamped(out.AggregateMetadataSidecarBytes, out.AggregateMetadataEmbeddedBytes)
+	out.AggregateMetadataRefs = accounting.AggregateMetadataRefs
+	if out.AggregateMetadataRefs > 0 || out.AggregateMetadataStorageBytes > 0 {
+		out.StorageCostBasis = "active_manifest_aggregate_metadata_sidecars_plus_typed_column_embedded_aggregate_sections"
+	} else {
+		out.StorageCostBasis = "no_aggregate_metadata_refs_in_active_manifest"
+	}
+	return out
+}
+
+func columnStoreApplyMetadataCostToQueries(queries []columnStoreQueryMetric, cost columnStoreMetadataCostMetric) {
+	for i := range queries {
+		if queries[i].AggregateMetadataUsed {
+			columnStoreApplyMetadataCostToQuery(&queries[i], cost)
+		}
+	}
+}
+
+func columnStoreApplyMetadataCostToQuery(q *columnStoreQueryMetric, cost columnStoreMetadataCostMetric) {
+	if q == nil {
+		return
+	}
+	q.MetadataCostStorageBytes = cost.AggregateMetadataStorageBytes
+	q.MetadataCostStorageBasis = cost.StorageCostBasis
+	q.MetadataCostInsertMS = cost.InsertCostDurationMS
+	q.MetadataCostInsertNsRow = cost.InsertCostNsPerRow
+	q.MetadataCostInsertBasis = cost.InsertCostBasis
+}
+
+func columnStoreApplyMetadataCostToCell(cell *columnStoreJSONBenchCell, cost columnStoreMetadataCostMetric) {
+	if cell == nil {
+		return
+	}
+	cell.MetadataCostStorageBytes = cost.AggregateMetadataStorageBytes
+	cell.MetadataCostStorageBasis = cost.StorageCostBasis
+	cell.MetadataCostInsertMS = cost.InsertCostDurationMS
+	cell.MetadataCostInsertNsRow = cost.InsertCostNsPerRow
+	cell.MetadataCostInsertBasis = cost.InsertCostBasis
+}
+
+func columnStoreMetadataCostFromQuery(q columnStoreQueryMetric) columnStoreMetadataCostMetric {
+	return columnStoreMetadataCostMetric{
+		AggregateMetadataStorageBytes: q.MetadataCostStorageBytes,
+		InsertCostDurationMS:          q.MetadataCostInsertMS,
+		InsertCostNsPerRow:            q.MetadataCostInsertNsRow,
+		InsertCostBasis:               q.MetadataCostInsertBasis,
+		StorageCostBasis:              q.MetadataCostStorageBasis,
+	}
+}
+
+func columnStoreAddInt64Clamped(a, b int64) int64 {
+	if a > 0 && b > math.MaxInt64-a {
+		return math.MaxInt64
+	}
+	if a < 0 && b < math.MinInt64-a {
+		return math.MinInt64
+	}
+	return a + b
 }
 
 func columnStoreAppendImplementationNote(note, suffix string) string {
@@ -2065,44 +2266,50 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 	}
 	scanDuration, reduceDuration, resultShapeDuration := columnStorePhaseDurations(elapsed, diag)
 	return columnStoreQueryExecution{
-		ProductionHash:         productionHash,
-		ProductionHashKnown:    true,
-		StorageSource:          string(diag.StorageSource),
-		FallbackReason:         string(diag.FallbackReason),
-		ManifestRootName:       diag.ManifestRootName,
-		ManifestRoot:           diag.ManifestRoot,
-		ManifestGeneration:     diag.ManifestGeneration,
-		ActiveManifestChecksum: diag.ActiveManifestChecksum,
-		RowsProcessed:          diag.ReduceRows,
-		RowsProcessedKnown:     true,
-		RowsScanned:            diag.RowsScanned,
-		RowsMatched:            diag.RowsMatched,
-		ReduceRows:             diag.ReduceRows,
-		TopKCandidates:         diag.TopKCandidates,
-		DenseInt64SpanReducer:  diag.DenseInt64SpanReducer,
-		DecodedGranules:        diag.DecodedGranules,
-		DecodedBlocks:          diag.DecodedBlocks,
-		DecodedPayloadBytes:    diag.DecodedPayloadBytes,
-		MappedBytes:            diag.MappedBytes,
-		HeapCopyBytes:          diag.HeapCopyBytes,
-		PredicateCount:         diag.PredicateCount,
-		BytesRead:              diag.PhysicalBytesScanned,
-		RowMaterializations:    diag.RowMaterializations,
-		ResultCount:            resultCount,
-		MetadataHits:           diag.MetadataHits,
-		DictionaryCodeHits:     diag.DictionaryCodeHits,
-		Int64ValueHits:         diag.Int64ValueHits,
-		SkippedGranules:        diag.SkippedGranules,
-		ScheduledGranules:      diag.ScheduledGranules,
-		WorkerCount:            workers,
-		SegmentFileCacheHits:   diag.SegmentFileCacheHits,
-		SegmentFileCacheMisses: diag.SegmentFileCacheMisses,
-		HotRunDuration:         elapsed,
-		ScanDuration:           scanDuration,
-		ReduceDuration:         reduceDuration,
-		AdapterDuration:        resultShapeDuration,
-		ResultShapeDuration:    resultShapeDuration,
-		ParityHashDuration:     parityHashElapsed,
+		ProductionHash:           productionHash,
+		ProductionHashKnown:      true,
+		StorageSource:            string(diag.StorageSource),
+		FallbackReason:           string(diag.FallbackReason),
+		ManifestRootName:         diag.ManifestRootName,
+		ManifestRoot:             diag.ManifestRoot,
+		ManifestGeneration:       diag.ManifestGeneration,
+		ActiveManifestChecksum:   diag.ActiveManifestChecksum,
+		RowsProcessed:            diag.ReduceRows,
+		RowsProcessedKnown:       true,
+		RowsScanned:              diag.RowsScanned,
+		RowsMatched:              diag.RowsMatched,
+		ReduceRows:               diag.ReduceRows,
+		TopKCandidates:           diag.TopKCandidates,
+		TopKLimit:                diag.TopKLimit,
+		TopKOrder:                diag.TopKOrder,
+		TimeOrderTopKUsed:        diag.TimeOrderTopKUsed,
+		DenseInt64SpanReducer:    diag.DenseInt64SpanReducer,
+		DecodedGranules:          diag.DecodedGranules,
+		DecodedBlocks:            diag.DecodedBlocks,
+		DecodedPayloadBytes:      diag.DecodedPayloadBytes,
+		DecodedMetadataBytes:     diag.DecodedMetadataBytes,
+		MappedBytes:              diag.MappedBytes,
+		HeapCopyBytes:            diag.HeapCopyBytes,
+		ProjectedColumns:         diag.ProjectedColumns,
+		PredicateCount:           diag.PredicateCount,
+		BytesRead:                diag.PhysicalBytesScanned,
+		RowMaterializations:      diag.RowMaterializations,
+		DocumentMaterializations: diag.DocumentMaterializations,
+		ResultCount:              resultCount,
+		MetadataHits:             diag.MetadataHits,
+		DictionaryCodeHits:       diag.DictionaryCodeHits,
+		Int64ValueHits:           diag.Int64ValueHits,
+		SkippedGranules:          diag.SkippedGranules,
+		ScheduledGranules:        diag.ScheduledGranules,
+		WorkerCount:              workers,
+		SegmentFileCacheHits:     diag.SegmentFileCacheHits,
+		SegmentFileCacheMisses:   diag.SegmentFileCacheMisses,
+		HotRunDuration:           elapsed,
+		ScanDuration:             scanDuration,
+		ReduceDuration:           reduceDuration,
+		AdapterDuration:          resultShapeDuration,
+		ResultShapeDuration:      resultShapeDuration,
+		ParityHashDuration:       parityHashElapsed,
 	}, nil
 }
 
@@ -2166,45 +2373,51 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 	}
 	scanDuration, reduceDuration, resultShapeDuration := columnStorePhaseDurations(hotRunElapsed, diag)
 	return columnStoreQueryExecution{
-		ProductionHash:         productionHash,
-		ProductionHashKnown:    true,
-		StorageSource:          string(diag.StorageSource),
-		FallbackReason:         string(diag.FallbackReason),
-		ManifestRootName:       diag.ManifestRootName,
-		ManifestRoot:           diag.ManifestRoot,
-		ManifestGeneration:     diag.ManifestGeneration,
-		ActiveManifestChecksum: diag.ActiveManifestChecksum,
-		RowsProcessed:          diag.ReduceRows,
-		RowsProcessedKnown:     true,
-		RowsScanned:            diag.RowsScanned,
-		RowsMatched:            diag.RowsMatched,
-		ReduceRows:             diag.ReduceRows,
-		TopKCandidates:         diag.TopKCandidates,
-		DenseInt64SpanReducer:  diag.DenseInt64SpanReducer,
-		DecodedGranules:        diag.DecodedGranules,
-		DecodedBlocks:          diag.DecodedBlocks,
-		DecodedPayloadBytes:    diag.DecodedPayloadBytes,
-		MappedBytes:            diag.MappedBytes,
-		HeapCopyBytes:          diag.HeapCopyBytes,
-		PredicateCount:         diag.PredicateCount,
-		BytesRead:              diag.PhysicalBytesScanned,
-		RowMaterializations:    diag.RowMaterializations,
-		ResultCount:            resultCount,
-		MetadataHits:           diag.MetadataHits,
-		DictionaryCodeHits:     diag.DictionaryCodeHits,
-		Int64ValueHits:         diag.Int64ValueHits,
-		SkippedGranules:        diag.SkippedGranules,
-		ScheduledGranules:      diag.ScheduledGranules,
-		WorkerCount:            workers,
-		SegmentFileCacheHits:   diag.SegmentFileCacheHits,
-		SegmentFileCacheMisses: diag.SegmentFileCacheMisses,
-		SetupDuration:          setupElapsed,
-		HotRunDuration:         hotRunElapsed,
-		ScanDuration:           scanDuration,
-		ReduceDuration:         reduceDuration,
-		AdapterDuration:        resultShapeDuration,
-		ResultShapeDuration:    resultShapeDuration,
-		ParityHashDuration:     parityHashElapsed,
+		ProductionHash:           productionHash,
+		ProductionHashKnown:      true,
+		StorageSource:            string(diag.StorageSource),
+		FallbackReason:           string(diag.FallbackReason),
+		ManifestRootName:         diag.ManifestRootName,
+		ManifestRoot:             diag.ManifestRoot,
+		ManifestGeneration:       diag.ManifestGeneration,
+		ActiveManifestChecksum:   diag.ActiveManifestChecksum,
+		RowsProcessed:            diag.ReduceRows,
+		RowsProcessedKnown:       true,
+		RowsScanned:              diag.RowsScanned,
+		RowsMatched:              diag.RowsMatched,
+		ReduceRows:               diag.ReduceRows,
+		TopKCandidates:           diag.TopKCandidates,
+		TopKLimit:                diag.TopKLimit,
+		TopKOrder:                diag.TopKOrder,
+		TimeOrderTopKUsed:        diag.TimeOrderTopKUsed,
+		DenseInt64SpanReducer:    diag.DenseInt64SpanReducer,
+		DecodedGranules:          diag.DecodedGranules,
+		DecodedBlocks:            diag.DecodedBlocks,
+		DecodedPayloadBytes:      diag.DecodedPayloadBytes,
+		DecodedMetadataBytes:     diag.DecodedMetadataBytes,
+		MappedBytes:              diag.MappedBytes,
+		HeapCopyBytes:            diag.HeapCopyBytes,
+		ProjectedColumns:         diag.ProjectedColumns,
+		PredicateCount:           diag.PredicateCount,
+		BytesRead:                diag.PhysicalBytesScanned,
+		RowMaterializations:      diag.RowMaterializations,
+		DocumentMaterializations: diag.DocumentMaterializations,
+		ResultCount:              resultCount,
+		MetadataHits:             diag.MetadataHits,
+		DictionaryCodeHits:       diag.DictionaryCodeHits,
+		Int64ValueHits:           diag.Int64ValueHits,
+		SkippedGranules:          diag.SkippedGranules,
+		ScheduledGranules:        diag.ScheduledGranules,
+		WorkerCount:              workers,
+		SegmentFileCacheHits:     diag.SegmentFileCacheHits,
+		SegmentFileCacheMisses:   diag.SegmentFileCacheMisses,
+		SetupDuration:            setupElapsed,
+		HotRunDuration:           hotRunElapsed,
+		ScanDuration:             scanDuration,
+		ReduceDuration:           reduceDuration,
+		AdapterDuration:          resultShapeDuration,
+		ResultShapeDuration:      resultShapeDuration,
+		ParityHashDuration:       parityHashElapsed,
 	}, nil
 }
 
@@ -2507,19 +2720,30 @@ func columnStoreSuiteRetainedPayloadFromDocument(document []byte, cfg *collectio
 	return collections.ColumnRetainedPayloadFromJSONDocument(*cfg, document)
 }
 
-func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int, rawHashes map[string]uint64, forcedPath string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string, queries []columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) ([]columnStoreJSONBenchCell, error) {
+func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int, rawHashes map[string]uint64, forcedPath string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string, queries []columnStoreQueryMetric, firstTouchQueries []columnStoreQueryMetric, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, metadataCost columnStoreMetadataCostMetric) ([]columnStoreJSONBenchCell, error) {
 	var reportErr error
 	byQuery := make(map[string]columnStoreQueryMetric, len(queries))
 	for _, q := range queries {
 		byQuery[q.Name] = q
 	}
-	cells := make([]columnStoreJSONBenchCell, 0, len(queryNames)*2)
+	firstTouchByQuery := make(map[string]columnStoreQueryMetric, len(firstTouchQueries))
+	for _, q := range firstTouchQueries {
+		firstTouchByQuery[q.Name] = q
+	}
+	cellsPerQuery := 2
+	if len(firstTouchByQuery) > 0 {
+		cellsPerQuery++
+	}
+	cells := make([]columnStoreJSONBenchCell, 0, len(queryNames)*cellsPerQuery)
 	for _, name := range queryNames {
 		q, ok := byQuery[name]
 		if !ok {
 			return nil, fmt.Errorf("column_store: missing query metric for JSONBench cell %s", name)
 		}
 		cells = append(cells, columnStoreJSONBenchCellFromQueryMetric(q, cfg, retainedPayloadBytes))
+		if firstTouch, ok := firstTouchByQuery[name]; ok {
+			cells = append(cells, columnStoreJSONBenchCellFromQueryMetric(firstTouch, cfg, retainedPayloadBytes))
+		}
 		preparedKind, ok := columnStorePreparedCellPlanKind(q.PlanLabel)
 		if !ok {
 			continue
@@ -2533,7 +2757,7 @@ func buildColumnStoreJSONBenchCells(collection *collections.Collection, rows int
 		if !ok {
 			rawHash = q.RawHash
 		}
-		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHash, q, exec, preparedKind, cfg, retainedPayloadBytes)
+		cell := columnStoreJSONBenchCellFromPreparedExecution(name, rawHash, q, exec, preparedKind, cfg, retainedPayloadBytes, metadataCost)
 		if err := columnStoreValidatePreparedJSONBenchCellParity(cell); err != nil {
 			reportErr = errors.Join(reportErr, err)
 		}
@@ -2578,6 +2802,25 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.RowsProcessed = q.RowsProcessed
 	cell.RowsProcessedKnown = q.RowsProcessedKnown
 	cell.BytesRead = q.BytesRead
+	cell.DecodedBytes = q.DecodedBytes
+	cell.DecodedPayloadBytes = q.DecodedPayloadBytes
+	cell.DecodedMetadataBytes = q.DecodedMetadataBytes
+	cell.MappedBytes = q.MappedBytes
+	cell.HeapCopyBytes = q.HeapCopyBytes
+	cell.ProjectedColumns = q.ProjectedColumns
+	cell.PredicateCount = q.PredicateCount
+	cell.TypedCellsVisited = q.TypedCellsVisited
+	cell.TypedCellsVisitedBasis = q.TypedCellsVisitedBasis
+	cell.RowMaterializations = q.RowMaterializations
+	cell.DocumentMaterializations = q.DocumentMaterializations
+	cell.AggregateMetadataUsed = q.AggregateMetadataUsed
+	cell.MetadataCostStorageBytes = q.MetadataCostStorageBytes
+	cell.MetadataCostStorageBasis = q.MetadataCostStorageBasis
+	cell.MetadataCostInsertMS = q.MetadataCostInsertMS
+	cell.MetadataCostInsertNsRow = q.MetadataCostInsertNsRow
+	cell.MetadataCostInsertBasis = q.MetadataCostInsertBasis
+	cell.SortTopKPruningUsed = q.SortTopKPruningUsed
+	cell.JSONReconstruction = q.JSONReconstruction
 	cell.ResultCount = q.ResultCount
 	cell.RawHash = q.RawHash
 	cell.ResultHash = q.ProductionHash
@@ -2591,10 +2834,6 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.RunDurationMS = q.RunDurationMS
 	cell.RenderHashDurationMS = q.RenderHashDurationMS
 	cell.TotalQueryDurationMS = q.TotalQueryDurationMS
-	cell.HotRunDurationMS = durationMS(q.hotRunDuration)
-	if cell.HotRunDurationMS == 0 {
-		cell.HotRunDurationMS = q.ScanDurationMS + q.ReduceDurationMS + q.AdapterDurationMS
-	}
 	cell.ScanDurationMS = q.ScanDurationMS
 	cell.ReduceDurationMS = q.ReduceDurationMS
 	cell.ResultShapeDurationMS = q.AdapterDurationMS
@@ -2604,7 +2843,11 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.RowsMatched = q.RowsMatched
 	cell.ReduceRows = q.ReduceRows
 	cell.TopKCandidates = q.TopKCandidates
+	cell.TopKLimit = q.TopKLimit
+	cell.TopKOrder = q.TopKOrder
+	cell.TimeOrderTopKUsed = q.TimeOrderTopKUsed
 	cell.DenseInt64SpanReducer = q.DenseInt64SpanReducer
+	cell.DecodedBlocks = q.DecodedBlocks
 	cell.DecodedGranules = q.DecodedGranules
 	cell.SkippedGranules = q.SkippedGranules
 	cell.ScheduledGranules = q.ScheduledGranules
@@ -2613,7 +2856,7 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	return cell
 }
 
-func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, direct columnStoreQueryMetric, exec columnStoreQueryExecution, planKind collections.ColumnQueryPlanKind, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64) columnStoreJSONBenchCell {
+func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, direct columnStoreQueryMetric, exec columnStoreQueryExecution, planKind collections.ColumnQueryPlanKind, cfg *collections.ColumnStoreConfig, retainedPayloadBytes int64, metadataCost columnStoreMetadataCostMetric) columnStoreJSONBenchCell {
 	planLabel := string(planKind)
 	cell := columnStoreBaseJSONBenchCell(name, planLabel, cfg, retainedPayloadBytes)
 	cell.ExecutionMode = columnStoreJSONBenchModePrepared
@@ -2638,6 +2881,28 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.RowsProcessed = exec.RowsProcessed
 	cell.RowsProcessedKnown = exec.RowsProcessedKnown
 	cell.BytesRead = exec.BytesRead
+	cell.DecodedPayloadBytes = exec.DecodedPayloadBytes
+	cell.DecodedMetadataBytes = exec.DecodedMetadataBytes
+	cell.DecodedBytes = columnStoreDecodedBytes(exec.DecodedPayloadBytes, exec.DecodedMetadataBytes)
+	cell.MappedBytes = exec.MappedBytes
+	cell.HeapCopyBytes = exec.HeapCopyBytes
+	cell.ProjectedColumns = exec.ProjectedColumns
+	cell.PredicateCount = exec.PredicateCount
+	cell.TypedCellsVisited = columnStoreTypedCellsVisited(exec.RowsScanned, exec.ProjectedColumns)
+	cell.TypedCellsVisitedBasis = columnStoreTypedCellsVisitedBasis(exec.RowsScanned, exec.ProjectedColumns)
+	cell.RowMaterializations = exec.RowMaterializations
+	cell.DocumentMaterializations = exec.DocumentMaterializations
+	cell.AggregateMetadataUsed = columnStoreAggregateMetadataUsed(cell.StorageSource, exec.MetadataHits)
+	if cell.AggregateMetadataUsed {
+		directCost := columnStoreMetadataCostFromQuery(direct)
+		if directCost.StorageCostBasis != "" || directCost.InsertCostBasis != "" || directCost.AggregateMetadataStorageBytes != 0 {
+			columnStoreApplyMetadataCostToCell(&cell, directCost)
+		} else {
+			columnStoreApplyMetadataCostToCell(&cell, metadataCost)
+		}
+	}
+	cell.SortTopKPruningUsed = columnStoreSortTopKPruningUsed(exec)
+	cell.JSONReconstruction = exec.DocumentMaterializations > 0
 	cell.ResultCount = exec.ResultCount
 	cell.RawHash = rawHash
 	cell.ResultHash = exec.ProductionHash
@@ -2673,7 +2938,11 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.RowsMatched = exec.RowsMatched
 	cell.ReduceRows = exec.ReduceRows
 	cell.TopKCandidates = exec.TopKCandidates
+	cell.TopKLimit = exec.TopKLimit
+	cell.TopKOrder = exec.TopKOrder
+	cell.TimeOrderTopKUsed = exec.TimeOrderTopKUsed
 	cell.DenseInt64SpanReducer = exec.DenseInt64SpanReducer
+	cell.DecodedBlocks = exec.DecodedBlocks
 	cell.DecodedGranules = exec.DecodedGranules
 	cell.SkippedGranules = exec.SkippedGranules
 	cell.ScheduledGranules = exec.ScheduledGranules
@@ -3884,6 +4153,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	sb.WriteString("\n")
 
 	renderColumnStoreInsertStatsMarkdown(&sb, report.InsertStats)
+	renderColumnStoreMetadataCostMarkdown(&sb, report.MetadataCost)
 	renderColumnStoreJSONBenchCellsMarkdown(&sb, report)
 	renderColumnStoreColgranuleReuseMarkdown(&sb, report)
 
@@ -4021,13 +4291,45 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 		stats.ColumnPublishSystemDeltaDurationMS > 0
 }
 
+func renderColumnStoreMetadataCostMarkdown(sb *strings.Builder, cost columnStoreMetadataCostMetric) {
+	sb.WriteString("## Metadata Cost\n\n")
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_storage_bytes: %d\n", cost.AggregateMetadataStorageBytes))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_sidecar_bytes: %d\n", cost.AggregateMetadataSidecarBytes))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_embedded_bytes: %d\n", cost.AggregateMetadataEmbeddedBytes))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_refs: %d\n", cost.AggregateMetadataRefs))
+	sb.WriteString(fmt.Sprintf("- insert_cost_duration_ms: %.3f\n", cost.InsertCostDurationMS))
+	sb.WriteString(fmt.Sprintf("- insert_cost_ns_per_row: %.1f\n", cost.InsertCostNsPerRow))
+	if cost.InsertCostBasis != "" {
+		sb.WriteString(fmt.Sprintf("- insert_cost_basis: %s\n", cost.InsertCostBasis))
+	}
+	if cost.StorageCostBasis != "" {
+		sb.WriteString(fmt.Sprintf("- storage_cost_basis: %s\n", cost.StorageCostBasis))
+	}
+	sb.WriteString("\n")
+}
+
+func columnStoreMetadataCostBasisTableText(storageBasis, insertBasis string) string {
+	storageBasis = strings.TrimSpace(storageBasis)
+	insertBasis = strings.TrimSpace(insertBasis)
+	switch {
+	case storageBasis == "" && insertBasis == "":
+		return "-"
+	case storageBasis == "":
+		return "insert=" + insertBasis
+	case insertBasis == "":
+		return "storage=" + storageBasis
+	default:
+		return "storage=" + storageBasis + "; insert=" + insertBasis
+	}
+}
+
 func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, queries []columnStoreQueryMetric, parityByName map[string]columnStoreParity) {
 	if len(queries) == 0 {
 		return
 	}
 	sb.WriteString("## " + title + "\n\n")
-	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
+	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | rows materialized | docs materialized | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---|---|---|\n")
 	for _, q := range queries {
 		parity := "pass"
 		if p, ok := parityByName[q.Name]; ok && !p.Pass {
@@ -4049,8 +4351,8 @@ func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, qu
 		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
 			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.DecodedBytes, q.DecodedPayloadBytes, q.DecodedMetadataBytes, q.MappedBytes, q.HeapCopyBytes, q.RowsScanned, q.ProjectedColumns, q.PredicateCount, q.TypedCellsVisited, markdownCodeTableText(q.TypedCellsVisitedBasis), q.RowMaterializations, q.DocumentMaterializations, q.AggregateMetadataUsed, q.MetadataCostStorageBytes, q.MetadataCostInsertMS, markdownCodeTableText(columnStoreMetadataCostBasisTableText(q.MetadataCostStorageBasis, q.MetadataCostInsertBasis)), q.SortTopKPruningUsed, q.TopKLimit, q.TopKCandidates, markdownCodeTableText(q.TopKOrder), q.JSONReconstruction, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 }
@@ -4061,8 +4363,8 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		sb.WriteString("No JSONBench synthetic cells were recorded.\n\n")
 		return
 	}
-	sb.WriteString("| cell | query | query mode | metadata mode | sort layout | storage source | mode | metadata/data path | prepare/setup ms | run ms | render/hash ms | total query ms | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | result hash | parity | full-data caveat | reconstruction | status |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|\n")
+	sb.WriteString("| cell | query | query mode | metadata mode | sort layout | storage source | mode | metadata/data path | prepare/setup ms | run ms | render/hash ms | total query ms | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | row materializations | document materializations | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | result hash | parity | full-data caveat | reconstruction | status |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---:|---|---|---|---|\n")
 	for _, cell := range report.JSONBenchCells {
 		parity := "pass"
 		if !cell.ParityWithRowScan {
@@ -4072,7 +4374,7 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		if cell.CompatibilityStatusReason != "" {
 			status += ": " + cell.CompatibilityStatusReason
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %s | %s | %s | %s | %s | %s | %d | %d | %d | %016x | %s | %s | %s | %s |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %s | %s | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %016x | %s | %s | %s | %s |\n",
 			markdownCodeTableText(cell.CellLabel),
 			markdownCodeTableText(cell.Query),
 			markdownCodeTableText(cell.QueryMode),
@@ -4094,6 +4396,27 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 			cell.RowCount,
 			cell.RowsProcessed,
 			cell.BytesRead,
+			cell.DecodedBytes,
+			cell.DecodedPayloadBytes,
+			cell.DecodedMetadataBytes,
+			cell.MappedBytes,
+			cell.HeapCopyBytes,
+			cell.RowsScanned,
+			cell.ProjectedColumns,
+			cell.PredicateCount,
+			cell.TypedCellsVisited,
+			markdownCodeTableText(cell.TypedCellsVisitedBasis),
+			cell.RowMaterializations,
+			cell.DocumentMaterializations,
+			cell.AggregateMetadataUsed,
+			cell.MetadataCostStorageBytes,
+			cell.MetadataCostInsertMS,
+			markdownCodeTableText(columnStoreMetadataCostBasisTableText(cell.MetadataCostStorageBasis, cell.MetadataCostInsertBasis)),
+			cell.SortTopKPruningUsed,
+			cell.TopKLimit,
+			cell.TopKCandidates,
+			markdownCodeTableText(cell.TopKOrder),
+			cell.JSONReconstruction,
 			cell.ResultHash,
 			parity,
 			markdownTableText(cell.FullDataCaveat),
