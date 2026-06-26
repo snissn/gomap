@@ -846,14 +846,16 @@ func loadCollections(dir string) ([]collectionRow, []collectionComparison, []str
 			continue
 		}
 		var parsed struct {
-			Results     []collectionRow            `json:"results"`
-			Comparisons []collectionComparison     `json:"comparisons"`
-			Checks      []collectionGuardrailCheck `json:"checks"`
+			Results         []collectionRow            `json:"results"`
+			Comparisons     []collectionComparison     `json:"comparisons"`
+			GuardrailChecks []collectionGuardrailCheck `json:"guardrail_checks"`
+			Checks          []collectionGuardrailCheck `json:"checks"`
 		}
 		if err := json.Unmarshal(raw, &parsed); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
 			continue
 		}
+		parsed.Checks = append(parsed.GuardrailChecks, parsed.Checks...)
 		if collectionChecksBlockCompactedClaims(parsed.Checks) {
 			warnings = append(warnings, fmt.Sprintf("%s: exhaustive_compact did not complete; suppressing TreeDB compacted-size comparisons from this source", path))
 			parsed.Comparisons = nil

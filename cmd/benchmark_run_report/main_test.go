@@ -394,7 +394,7 @@ func TestLoadCollectionsSuppressesWarningOnlyExhaustiveCompactClaims(t *testing.
   "comparisons": [
     {"comparison_name":"offline_vs_sqlite","treedb_config_name":"treedb_template_v1_collection_0_indexes","treedb_phase":"offline_compact","sqlite_config_name":"sqlite_native_columns_0_indexes","sqlite_phase":"sqlite_vacuum","treedb_bytes_per_doc":7,"sqlite_bytes_per_doc":20,"smaller_ratio":2.857142857,"comparison_basis":"legacy fixture"}
   ],
-  "checks": [
+  "guardrail_checks": [
     {"severity":"warning","code":"phase.exhaustive_compact.failed","message":"legacy warning-only exhaustive compact failure"}
   ]
 }`)
