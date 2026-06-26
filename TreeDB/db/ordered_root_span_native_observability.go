@@ -93,6 +93,7 @@ type orderedRootSpanNativeEligibilityRequest struct {
 	Summary                       zipper.ReadOnlyLeafSpanSummary
 	DeltaOps                      int
 	ReadOnlyPrepareValidationFail bool
+	ReadOnlyPrepareFailed         bool
 	Err                           error
 	ExplicitFallbackReason        string
 	SpanNativeEligible            bool
@@ -248,8 +249,14 @@ func (db *DB) orderedRootSpanNativeEligibility(req orderedRootSpanNativeEligibil
 	}
 
 	reason, hasExplicitReason := parseFlushApplySpanNativeFallbackReason(req.ExplicitFallbackReason)
-	if !hasExplicitReason {
-		reason = db.classifyOrderedRootSpanNativeFallback(req, ops)
+	if !hasExplicitReason || reason == FlushSpanRunFallbackSpanNativeNotImplemented {
+		classifiedReason := db.classifyOrderedRootSpanNativeFallback(req, ops)
+		if !hasExplicitReason {
+			reason = classifiedReason
+		} else if classifiedReason.Valid() && classifiedReason != FlushSpanRunFallbackSpanNativeNotImplemented {
+			reason = classifiedReason
+			hasExplicitReason = false
+		}
 	}
 	if !reason.Valid() {
 		reason = FlushSpanRunFallbackUnknown
@@ -283,7 +290,7 @@ func (db *DB) classifyOrderedRootSpanNativeFallback(req orderedRootSpanNativeEli
 	switch {
 	case req.ReadOnlyPrepareValidationFail:
 		return FlushSpanRunFallbackValidationFailed
-	case req.Err != nil && !req.SpanNativeEligible:
+	case req.Err != nil && req.ReadOnlyPrepareFailed:
 		return FlushSpanRunFallbackPrepareError
 	case req.ForceColdBuild || summary.ColdBuild:
 		return FlushSpanRunFallbackColdBuild
@@ -465,6 +472,9 @@ func (db *DB) observeOrderedRootSpanNativeEligibility(row OrderedRootSpanNativeT
 		}
 		return
 	}
+	if row.Status == OrderedRootSpanNativeStatusEligible {
+		return
+	}
 	if !row.Eligible {
 		if row.Ops > 0 {
 			db.orderedRootSpanNativeIneligibleOps.Add(row.Ops)
@@ -515,18 +525,54 @@ func (db *DB) observeOrderedRootSpanNativeApplyResult(route OrderedRootSpanNativ
 	if db == nil || !result.ReadOnlyPrepareRequested {
 		return
 	}
-	if fallbackReason == "" {
-		fallbackReason = result.SpanNativeFallbackReason
+	summary := result.ReadOnlyPrepare.LeafSpanSummary()
+	explicitFallbackReason := result.SpanNativeFallbackReason
+	if explicitFallbackReason == "" && !orderedRootSpanNativeApplyPrepareFailed(result) && orderedRootSpanNativeApplyPreparedCandidate(route, summary) {
+		explicitFallbackReason = fallbackReason
 	}
 	row := db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
 		Route:                         route,
 		Context:                       context,
-		Summary:                       result.ReadOnlyPrepare.LeafSpanSummary(),
+		Summary:                       summary,
 		ReadOnlyPrepareValidationFail: result.ReadOnlyPrepareValidationFailed,
+		ReadOnlyPrepareFailed:         result.ReadOnlyPrepareFailed,
 		Err:                           err,
-		ExplicitFallbackReason:        fallbackReason,
+		ExplicitFallbackReason:        explicitFallbackReason,
 		SpanNativeEligible:            result.SpanNativeEligible,
 		SpanNativeUsed:                result.SpanNativeUsed,
+	})
+	db.observeOrderedRootSpanNativeEligibility(row)
+}
+
+func orderedRootSpanNativeApplyPrepareFailed(result zipper.ApplyResult) bool {
+	return result.ReadOnlyPrepareValidationFailed || result.ReadOnlyPrepareFailed
+}
+
+func orderedRootSpanNativeApplyPreparedCandidate(route OrderedRootSpanNativeRoute, summary zipper.ReadOnlyLeafSpanSummary) bool {
+	ops, _ := orderedRootSpanNativeOpsAndSpans(summary, 0)
+	return orderedRootSpanNativeCandidate(route, summary, ops)
+}
+
+func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int, err error, validationFailed bool) {
+	if db == nil {
+		return
+	}
+	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	spanNativeEligible := err == nil && !validationFailed && applyOpts.SpanNativeApply
+	explicitFallbackReason := ""
+	if err == nil && !validationFailed && !spanNativeEligible {
+		explicitFallbackReason = FlushSpanRunFallbackSpanNativeNotImplemented.String()
+	}
+	row := db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:                         OrderedRootSpanNativeRouteReadOnlyPrepare,
+		Context:                       "ordered-root read-only prepare proof",
+		Summary:                       summary,
+		DeltaOps:                      deltaOps,
+		ReadOnlyPrepareValidationFail: validationFailed,
+		ReadOnlyPrepareFailed:         err != nil,
+		Err:                           err,
+		ExplicitFallbackReason:        explicitFallbackReason,
+		SpanNativeEligible:            spanNativeEligible,
 	})
 	db.observeOrderedRootSpanNativeEligibility(row)
 }

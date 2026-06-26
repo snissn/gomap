@@ -109,3 +109,44 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		t.Fatalf("Selected kept unrelated stat: %#v", got)
 	}
 }
+
+func TestSelectedDropsOrderedRootFreeFormTriageFields(t *testing.T) {
+	const prefix = "treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish."
+	stats := map[string]string{
+		prefix + "context":            "full ordered-root iterator publish",
+		prefix + "detail":             "warm ordered-root delta batches are the runtime candidate surface",
+		prefix + "status":             "fallback",
+		prefix + "candidate":          "true",
+		prefix + "eligible":           "false",
+		prefix + "used":               "false",
+		prefix + "fallback_reason":    "span_native_not_implemented",
+		prefix + "fallback_class":     "route",
+		prefix + "admission_policy":   "auto",
+		prefix + "admission_admitted": "true",
+		prefix + "admission_reason":   "auto_admitted_hardware_aware",
+		prefix + "selected_workers":   "6",
+	}
+
+	got := Selected(stats)
+	for _, key := range []string{prefix + "context", prefix + "detail"} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("Selected kept free-form triage field %s in %#v", key, got)
+		}
+	}
+	for _, key := range []string{
+		prefix + "status",
+		prefix + "candidate",
+		prefix + "eligible",
+		prefix + "used",
+		prefix + "fallback_reason",
+		prefix + "fallback_class",
+		prefix + "admission_policy",
+		prefix + "admission_admitted",
+		prefix + "admission_reason",
+		prefix + "selected_workers",
+	} {
+		if got[key] == "" {
+			t.Fatalf("Selected dropped token-safe triage field %s from %#v", key, got)
+		}
+	}
+}

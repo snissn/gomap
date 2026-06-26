@@ -997,6 +997,18 @@ func (a *replayInlineAppender) currentLeafValueLogSegment() (string, uint32, boo
 	return a.writer.currentLeafValueLogSegment()
 }
 
+func (a *replayInlineAppender) advanceLeafLogSeqAtLeast(seq uint32) error {
+	if a == nil || seq == 0 {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.writer == nil {
+		return nil
+	}
+	return a.writer.resetLeafLogSeqAtLeast(seq)
+}
+
 func (a *replayInlineAppender) syncIfDirty() error {
 	if a == nil {
 		return nil
@@ -1071,6 +1083,13 @@ func (l replayInlineLeafPageLog) LastLeafPageRecordLength() uint32 {
 		return 0
 	}
 	return l.appender.LastLeafPageRecordLength()
+}
+
+func (l replayInlineLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
+	if l.appender == nil {
+		return nil
+	}
+	return l.appender.advanceLeafLogSeqAtLeast(seq)
 }
 
 func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {

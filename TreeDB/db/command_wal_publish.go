@@ -79,6 +79,8 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	if db == nil {
 		return ErrClosed
 	}
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer unlockCommandWALPublish()
 	state := db.State()
 	if state == nil {
 		return ErrClosed

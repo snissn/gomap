@@ -3029,6 +3029,20 @@ func (db *DB) advanceLeafLogAppendSeqAtLeast(seq int) {
 	}
 }
 
+func (db *DB) advanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
+	if db == nil || !db.indexOuterLeavesInValueLog || seq == 0 {
+		return nil
+	}
+	observedMaxSeq := int(seq)
+	db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
+	for _, l := range db.leafLogAppendLanesSnapshot() {
+		if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *DB) nextLeafLogAppendSeq() (int, error) {
 	if db == nil || !db.indexOuterLeavesInValueLog {
 		return 0, errWALUnavailable
