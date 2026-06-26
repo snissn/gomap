@@ -243,6 +243,21 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataMissingStrings216
 	}
 }
 
+func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataAllMissingQ13075(t *testing.T) {
+	docs := []string{
+		`{"time_us":1000,"kind":"commit","did":"did_a","commit":{"operation":"create"}}`,
+		`{"time_us":2000}`,
+	}
+	_, collection, closeFn := openColumnPhysicalJSONBenchNullableFullDataFixture2165(t, docs)
+	defer closeFn()
+
+	q1 := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "event"}
+	q1Result := runNullableFullDataDenseQ1Query3075(t, collection, "q1 all missing", q1, len(docs), 0, 0, len(docs))
+	if got, want := columnPhysicalGroupCountMap2165(q1Result.Groups), map[string]int{"": len(docs)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("q1 all-missing groups=%v want %v raw=%+v", got, want, q1Result.Groups)
+	}
+}
+
 func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataTopKFastPaths2878(t *testing.T) {
 	docs := []string{
 		`{"time_us":1000,"kind":"commit","did":"did_a","commit":{"operation":"create","collection":"app.bsky.feed.post"}}`,
