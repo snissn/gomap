@@ -777,6 +777,9 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 }
 
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
+	if intent == nil {
+		return nil
+	}
 	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
 	if err != nil {
 		return err

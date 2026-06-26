@@ -929,6 +929,28 @@ func TestAppendCommandWALPayloadRunsRawPublishBarriers(t *testing.T) {
 	}
 }
 
+func TestPublishCommandWALNoopNilIntentSkipsRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	defer unregister()
+
+	if err := db.PublishCommandWALNoop(nil, false); err != nil {
+		t.Fatalf("PublishCommandWALNoop nil intent: %v", err)
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("nil command WAL no-op publish ran raw publish barrier")
+	}
+}
+
 func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
 	db := &DB{commandWAL: true}
 	var calls []int
