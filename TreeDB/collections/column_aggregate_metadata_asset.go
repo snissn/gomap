@@ -35,6 +35,38 @@ type columnAggregateMetadataAsset struct {
 	Entries           []columnAggregateMetadataEntry
 }
 
+type columnAggregateMetadataBuildSpec struct {
+	aggregate         ColumnAggregateMetadata
+	groupIdx          int
+	valueIdx          int
+	predicateSpecs    []columnAggregateMetadataPredicateSpec
+	predicateCoverage []ColumnPhysicalQueryPredicate
+}
+
+type columnAggregateMetadataEntryKey struct {
+	group string
+	hour  int
+}
+
+type columnAggregateMetadataAccumulatorKind uint8
+
+const (
+	columnAggregateMetadataAccumulatorCount columnAggregateMetadataAccumulatorKind = iota + 1
+	columnAggregateMetadataAccumulatorGroupHourCount
+	columnAggregateMetadataAccumulatorMinMax
+)
+
+type columnAggregateMetadataAccumulatorKey struct {
+	kind     columnAggregateMetadataAccumulatorKind
+	groupIdx int
+	valueIdx int
+}
+
+type columnAggregateMetadataAccumulator struct {
+	spec    columnAggregateMetadataBuildSpec
+	entries map[columnAggregateMetadataEntryKey]columnAggregateMetadataEntry
+}
+
 func encodeColumnAggregateMetadataAsset(asset columnAggregateMetadataAsset) ([]byte, error) {
 	if asset.Collection == "" || asset.Namespace == "" || asset.AggregateName == "" || asset.GroupColumn == "" {
 		return nil, errors.New("collections: aggregate metadata asset requires collection, namespace, name, and group column")
@@ -219,45 +251,9 @@ func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg Colu
 // including deleted rows, while Entries reflects only non-deleted,
 // type-validated rows.
 func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregate ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) (columnAggregateMetadataAsset, bool, error) {
-	switch aggregate.Kind {
-	case ColumnAggregateCount, ColumnAggregateGroupHourCount, ColumnAggregateMin, ColumnAggregateMax:
-	default:
-		return columnAggregateMetadataAsset{}, false, nil
-	}
-	if aggregate.GroupColumn == "" {
-		return columnAggregateMetadataAsset{}, false, nil
-	}
-	if aggregate.Kind != ColumnAggregateCount && aggregate.Column == "" {
-		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q requires column", aggregate.Name)
-	}
-	groupIdx, valueIdx := -1, -1
-	for i, col := range cfg.Columns {
-		switch col.Name {
-		case aggregate.GroupColumn:
-			if col.ValueType != ColumnStoreValueString {
-				return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q group column %q has type %q, want %q", aggregate.Name, aggregate.GroupColumn, col.ValueType, ColumnStoreValueString)
-			}
-			groupIdx = i
-		case aggregate.Column:
-			if aggregate.Kind == ColumnAggregateCount {
-				continue
-			}
-			if col.ValueType != ColumnStoreValueInt64 {
-				return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q value column %q has type %q, want %q", aggregate.Name, aggregate.Column, col.ValueType, ColumnStoreValueInt64)
-			}
-			valueIdx = i
-		}
-	}
-	if groupIdx < 0 || (aggregate.Kind != ColumnAggregateCount && valueIdx < 0) {
-		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q references unknown column(s)", aggregate.Name)
-	}
-	predicateSpecs, err := columnAggregateMetadataPredicateSpecs(cfg, aggregate.Predicates)
-	if err != nil {
-		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q predicate coverage: %w", aggregate.Name, err)
-	}
-	predicateCoverage, err := columnAggregateMetadataCanonicalPredicates(cfg, aggregate.Predicates)
-	if err != nil {
-		return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q predicate coverage: %w", aggregate.Name, err)
+	spec, ok, err := newColumnAggregateMetadataBuildSpec(cfg, aggregate)
+	if err != nil || !ok {
+		return columnAggregateMetadataAsset{}, ok, err
 	}
 	metadataRows, err := columnAggregateMetadataRowsForTypedColumnGranules(cfg, aggregate, rows)
 	if err != nil {
@@ -270,107 +266,300 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 	if columnAggregateMetadataUsesTypedColumnGranules(cfg, aggregate) {
 		rowsPerMetadataEntrySet = typedColumnDefaultRowsPerGranule()
 	}
-	rows = metadataRows
-	entries := make([]columnAggregateMetadataEntry, 0)
-	type metadataEntryKey struct {
-		group string
-		hour  int
+	entries, err := buildColumnAggregateMetadataEntriesForSpec(spec, metadataRows, rowsPerMetadataEntrySet)
+	if err != nil {
+		return columnAggregateMetadataAsset{}, false, err
 	}
+	return spec.asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedLSN, len(metadataRows), entries), true, nil
+}
+
+func buildColumnAggregateMetadataAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregates []ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) ([]columnAggregateMetadataAsset, error) {
+	if len(aggregates) == 0 {
+		return nil, nil
+	}
+	specs := make([]columnAggregateMetadataBuildSpec, 0, len(aggregates))
+	usesTypedGranules := false
+	typedGranuleModeSet := false
+	for _, aggregate := range aggregates {
+		spec, ok, err := newColumnAggregateMetadataBuildSpec(cfg, aggregate)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || len(spec.predicateSpecs) != 0 {
+			return buildColumnAggregateMetadataAssetsSequential(cfg, rows, aggregates, collection, namespace, generation, partID, appliedLSN)
+		}
+		aggregateUsesTypedGranules := columnAggregateMetadataUsesTypedColumnGranules(cfg, aggregate)
+		if !typedGranuleModeSet {
+			usesTypedGranules = aggregateUsesTypedGranules
+			typedGranuleModeSet = true
+		} else if usesTypedGranules != aggregateUsesTypedGranules {
+			return buildColumnAggregateMetadataAssetsSequential(cfg, rows, aggregates, collection, namespace, generation, partID, appliedLSN)
+		}
+		specs = append(specs, spec)
+	}
+	rowsPerMetadataEntrySet := len(rows)
+	metadataRows := rows
+	if usesTypedGranules {
+		var err error
+		metadataRows, err = columnAggregateMetadataRowsForTypedColumnGranules(cfg, aggregates[0], rows)
+		if err != nil {
+			return nil, fmt.Errorf("collections: aggregate metadata %q typed-column granule rows: %w", aggregates[0].Name, err)
+		}
+		rowsPerMetadataEntrySet = typedColumnDefaultRowsPerGranule()
+	} else if rowsPerMetadataEntrySet == 0 {
+		rowsPerMetadataEntrySet = typedColumnDefaultRowsPerGranule()
+	}
+	entriesBySpec, err := buildColumnAggregateMetadataEntriesForSpecs(specs, metadataRows, rowsPerMetadataEntrySet)
+	if err != nil {
+		return nil, err
+	}
+	assets := make([]columnAggregateMetadataAsset, 0, len(entriesBySpec))
+	for idx, entries := range entriesBySpec {
+		assets = append(assets, specs[idx].asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedLSN, len(metadataRows), entries))
+	}
+	return assets, nil
+}
+
+func buildColumnAggregateMetadataAssetsSequential(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregates []ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) ([]columnAggregateMetadataAsset, error) {
+	assets := make([]columnAggregateMetadataAsset, 0, len(aggregates))
+	for _, aggregate := range aggregates {
+		metadata, ok, err := buildColumnAggregateMetadataAsset(cfg, rows, aggregate, collection, namespace, generation, partID, appliedLSN)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			assets = append(assets, metadata)
+		}
+	}
+	return assets, nil
+}
+
+func newColumnAggregateMetadataBuildSpec(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) (columnAggregateMetadataBuildSpec, bool, error) {
+	switch aggregate.Kind {
+	case ColumnAggregateCount, ColumnAggregateGroupHourCount, ColumnAggregateMin, ColumnAggregateMax:
+	default:
+		return columnAggregateMetadataBuildSpec{}, false, nil
+	}
+	if aggregate.GroupColumn == "" {
+		return columnAggregateMetadataBuildSpec{}, false, nil
+	}
+	if aggregate.Kind != ColumnAggregateCount && aggregate.Column == "" {
+		return columnAggregateMetadataBuildSpec{}, false, fmt.Errorf("collections: aggregate metadata %q requires column", aggregate.Name)
+	}
+	groupIdx, valueIdx := -1, -1
+	for i, col := range cfg.Columns {
+		switch col.Name {
+		case aggregate.GroupColumn:
+			if col.ValueType != ColumnStoreValueString {
+				return columnAggregateMetadataBuildSpec{}, false, fmt.Errorf("collections: aggregate metadata %q group column %q has type %q, want %q", aggregate.Name, aggregate.GroupColumn, col.ValueType, ColumnStoreValueString)
+			}
+			groupIdx = i
+		case aggregate.Column:
+			if aggregate.Kind == ColumnAggregateCount {
+				continue
+			}
+			if col.ValueType != ColumnStoreValueInt64 {
+				return columnAggregateMetadataBuildSpec{}, false, fmt.Errorf("collections: aggregate metadata %q value column %q has type %q, want %q", aggregate.Name, aggregate.Column, col.ValueType, ColumnStoreValueInt64)
+			}
+			valueIdx = i
+		}
+	}
+	if groupIdx < 0 || (aggregate.Kind != ColumnAggregateCount && valueIdx < 0) {
+		return columnAggregateMetadataBuildSpec{}, false, fmt.Errorf("collections: aggregate metadata %q references unknown column(s)", aggregate.Name)
+	}
+	predicateSpecs, err := columnAggregateMetadataPredicateSpecs(cfg, aggregate.Predicates)
+	if err != nil {
+		return columnAggregateMetadataBuildSpec{}, false, fmt.Errorf("collections: aggregate metadata %q predicate coverage: %w", aggregate.Name, err)
+	}
+	predicateCoverage, err := columnAggregateMetadataCanonicalPredicates(cfg, aggregate.Predicates)
+	if err != nil {
+		return columnAggregateMetadataBuildSpec{}, false, fmt.Errorf("collections: aggregate metadata %q predicate coverage: %w", aggregate.Name, err)
+	}
+	return columnAggregateMetadataBuildSpec{
+		aggregate:         aggregate,
+		groupIdx:          groupIdx,
+		valueIdx:          valueIdx,
+		predicateSpecs:    predicateSpecs,
+		predicateCoverage: predicateCoverage,
+	}, true, nil
+}
+
+func newColumnAggregateMetadataAccumulators(specs []columnAggregateMetadataBuildSpec) ([]columnAggregateMetadataAccumulator, []int) {
+	accumulators := make([]columnAggregateMetadataAccumulator, 0, len(specs))
+	specAccumulatorIdx := make([]int, len(specs))
+	byKey := make(map[columnAggregateMetadataAccumulatorKey]int, len(specs))
+	for specIdx, spec := range specs {
+		key := spec.accumulatorKey()
+		if accumulatorIdx, ok := byKey[key]; ok {
+			specAccumulatorIdx[specIdx] = accumulatorIdx
+			continue
+		}
+		accumulatorIdx := len(accumulators)
+		byKey[key] = accumulatorIdx
+		specAccumulatorIdx[specIdx] = accumulatorIdx
+		accumulators = append(accumulators, columnAggregateMetadataAccumulator{
+			spec:    spec,
+			entries: make(map[columnAggregateMetadataEntryKey]columnAggregateMetadataEntry),
+		})
+	}
+	return accumulators, specAccumulatorIdx
+}
+
+func (spec columnAggregateMetadataBuildSpec) accumulatorKey() columnAggregateMetadataAccumulatorKey {
+	kind := columnAggregateMetadataAccumulatorMinMax
+	switch spec.aggregate.Kind {
+	case ColumnAggregateCount:
+		kind = columnAggregateMetadataAccumulatorCount
+	case ColumnAggregateGroupHourCount:
+		kind = columnAggregateMetadataAccumulatorGroupHourCount
+	case ColumnAggregateMin, ColumnAggregateMax:
+		kind = columnAggregateMetadataAccumulatorMinMax
+	}
+	return columnAggregateMetadataAccumulatorKey{
+		kind:     kind,
+		groupIdx: spec.groupIdx,
+		valueIdx: spec.valueIdx,
+	}
+}
+
+func buildColumnAggregateMetadataEntriesForSpecs(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, rowsPerMetadataEntrySet int) ([][]columnAggregateMetadataEntry, error) {
+	entriesBySpec := make([][]columnAggregateMetadataEntry, len(specs))
 	for start := 0; start < len(rows); start += rowsPerMetadataEntrySet {
 		end := start + rowsPerMetadataEntrySet
 		if end > len(rows) {
 			end = len(rows)
 		}
-		entriesByKey := make(map[metadataEntryKey]columnAggregateMetadataEntry)
+		accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(specs)
 		for _, row := range rows[start:end] {
 			if row.Deleted {
 				continue
 			}
-			if groupIdx >= len(row.Values) || (aggregate.Kind != ColumnAggregateCount && valueIdx >= len(row.Values)) {
-				return columnAggregateMetadataAsset{}, false, errors.New("collections: aggregate metadata row is missing declared values")
+			for idx := range accumulators {
+				if err := accumulators[idx].spec.appendRow(accumulators[idx].entries, row); err != nil {
+					return nil, err
+				}
 			}
-			matched, err := columnAggregateMetadataPredicatesMatchRow(predicateSpecs, row.Values)
-			if err != nil {
-				return columnAggregateMetadataAsset{}, false, fmt.Errorf("collections: aggregate metadata %q predicate evaluation: %w", aggregate.Name, err)
-			}
-			if !matched {
-				continue
-			}
-			groupValue := row.Values[groupIdx]
-			if groupValue.Null || !groupValue.Present {
-				groupValue = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: ""}
-			}
-			if groupValue.Type != ColumnStoreValueString {
-				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
-			}
-			group := groupValue.String
-			if group == "" && groupValue.StringBytes != nil {
-				group = string(groupValue.StringBytes)
-			}
-			key := metadataEntryKey{group: group}
-			if aggregate.Kind == ColumnAggregateCount {
-				cur := entriesByKey[key]
-				cur.Group = group
-				cur.Count++
-				entriesByKey[key] = cur
-				continue
-			}
-			valueValue := row.Values[valueIdx]
-			if valueValue.Null || !valueValue.Present {
-				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q does not support null or missing values", ErrColumnQueryPlanUnsupported, aggregate.Name)
-			}
-			if valueValue.Type != ColumnStoreValueInt64 {
-				return columnAggregateMetadataAsset{}, false, fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
-			}
-			if aggregate.Kind == ColumnAggregateGroupHourCount {
-				key.hour = columnPhysicalQueryUTCHour(valueValue.Int64)
-				cur := entriesByKey[key]
-				cur.Group = group
-				cur.Hour = key.hour
-				cur.Count++
-				entriesByKey[key] = cur
-				continue
-			}
-			cur, ok := entriesByKey[key]
-			if !ok {
-				entriesByKey[key] = columnAggregateMetadataEntry{Group: group, Count: 1, Min: valueValue.Int64, Max: valueValue.Int64}
-				continue
-			}
-			cur.Count++
-			if valueValue.Int64 < cur.Min {
-				cur.Min = valueValue.Int64
-			}
-			if valueValue.Int64 > cur.Max {
-				cur.Max = valueValue.Int64
-			}
-			entriesByKey[key] = cur
 		}
-		granuleEntries := make([]columnAggregateMetadataEntry, 0, len(entriesByKey))
-		for _, entry := range entriesByKey {
-			granuleEntries = append(granuleEntries, entry)
+		for idx := range specs {
+			entriesBySpec[idx] = append(entriesBySpec[idx], sortedColumnAggregateMetadataEntries(accumulators[specAccumulatorIdx[idx]].entries)...)
 		}
-		sort.Slice(granuleEntries, func(i, j int) bool {
-			if granuleEntries[i].Group != granuleEntries[j].Group {
-				return granuleEntries[i].Group < granuleEntries[j].Group
-			}
-			return granuleEntries[i].Hour < granuleEntries[j].Hour
-		})
-		entries = append(entries, granuleEntries...)
 	}
+	return entriesBySpec, nil
+}
+
+func buildColumnAggregateMetadataEntriesForSpec(spec columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, rowsPerMetadataEntrySet int) ([]columnAggregateMetadataEntry, error) {
+	entries := make([]columnAggregateMetadataEntry, 0)
+	for start := 0; start < len(rows); start += rowsPerMetadataEntrySet {
+		end := start + rowsPerMetadataEntrySet
+		if end > len(rows) {
+			end = len(rows)
+		}
+		entriesByKey := make(map[columnAggregateMetadataEntryKey]columnAggregateMetadataEntry)
+		for _, row := range rows[start:end] {
+			if row.Deleted {
+				continue
+			}
+			if err := spec.appendRow(entriesByKey, row); err != nil {
+				return nil, err
+			}
+		}
+		entries = append(entries, sortedColumnAggregateMetadataEntries(entriesByKey)...)
+	}
+	return entries, nil
+}
+
+func (spec columnAggregateMetadataBuildSpec) appendRow(entriesByKey map[columnAggregateMetadataEntryKey]columnAggregateMetadataEntry, row columnDeclaredRow) error {
+	aggregate := spec.aggregate
+	if spec.groupIdx >= len(row.Values) || (aggregate.Kind != ColumnAggregateCount && spec.valueIdx >= len(row.Values)) {
+		return errors.New("collections: aggregate metadata row is missing declared values")
+	}
+	matched, err := columnAggregateMetadataPredicatesMatchRow(spec.predicateSpecs, row.Values)
+	if err != nil {
+		return fmt.Errorf("collections: aggregate metadata %q predicate evaluation: %w", aggregate.Name, err)
+	}
+	if !matched {
+		return nil
+	}
+	groupValue := row.Values[spec.groupIdx]
+	if groupValue.Null || !groupValue.Present {
+		groupValue = columnDeclaredValue{Type: ColumnStoreValueString, Present: true, String: ""}
+	}
+	if groupValue.Type != ColumnStoreValueString {
+		return fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
+	}
+	group := groupValue.String
+	if group == "" && groupValue.StringBytes != nil {
+		group = string(groupValue.StringBytes)
+	}
+	key := columnAggregateMetadataEntryKey{group: group}
+	if aggregate.Kind == ColumnAggregateCount {
+		cur := entriesByKey[key]
+		cur.Group = group
+		cur.Count++
+		entriesByKey[key] = cur
+		return nil
+	}
+	valueValue := row.Values[spec.valueIdx]
+	if valueValue.Null || !valueValue.Present {
+		return fmt.Errorf("%w: aggregate metadata %q does not support null or missing values", ErrColumnQueryPlanUnsupported, aggregate.Name)
+	}
+	if valueValue.Type != ColumnStoreValueInt64 {
+		return fmt.Errorf("%w: aggregate metadata %q encountered incompatible row value types", ErrColumnQueryPlanUnsupported, aggregate.Name)
+	}
+	if aggregate.Kind == ColumnAggregateGroupHourCount {
+		key.hour = columnPhysicalQueryUTCHour(valueValue.Int64)
+		cur := entriesByKey[key]
+		cur.Group = group
+		cur.Hour = key.hour
+		cur.Count++
+		entriesByKey[key] = cur
+		return nil
+	}
+	cur, ok := entriesByKey[key]
+	if !ok {
+		entriesByKey[key] = columnAggregateMetadataEntry{Group: group, Count: 1, Min: valueValue.Int64, Max: valueValue.Int64}
+		return nil
+	}
+	cur.Count++
+	if valueValue.Int64 < cur.Min {
+		cur.Min = valueValue.Int64
+	}
+	if valueValue.Int64 > cur.Max {
+		cur.Max = valueValue.Int64
+	}
+	entriesByKey[key] = cur
+	return nil
+}
+
+func sortedColumnAggregateMetadataEntries(entriesByKey map[columnAggregateMetadataEntryKey]columnAggregateMetadataEntry) []columnAggregateMetadataEntry {
+	entries := make([]columnAggregateMetadataEntry, 0, len(entriesByKey))
+	for _, entry := range entriesByKey {
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Group != entries[j].Group {
+			return entries[i].Group < entries[j].Group
+		}
+		return entries[i].Hour < entries[j].Hour
+	})
+	return entries
+}
+
+func (spec columnAggregateMetadataBuildSpec) asset(schemaHash uint64, collection, namespace string, generation, partID, appliedLSN uint64, rows int, entries []columnAggregateMetadataEntry) columnAggregateMetadataAsset {
 	return columnAggregateMetadataAsset{
 		Collection:        collection,
 		Namespace:         namespace,
 		Generation:        generation,
 		PartID:            partID,
 		AppliedCommandLSN: appliedLSN,
-		SchemaHash:        cfg.SchemaHash,
-		AggregateName:     aggregate.Name,
-		GroupColumn:       aggregate.GroupColumn,
-		ValueColumn:       aggregate.Column,
-		Predicates:        predicateCoverage,
-		Rows:              len(rows),
+		SchemaHash:        schemaHash,
+		AggregateName:     spec.aggregate.Name,
+		GroupColumn:       spec.aggregate.GroupColumn,
+		ValueColumn:       spec.aggregate.Column,
+		Predicates:        spec.predicateCoverage,
+		Rows:              rows,
 		Entries:           entries,
-	}, true, nil
+	}
 }
 
 func columnAggregateMetadataUsesTypedColumnGranules(cfg ColumnStoreConfig, aggregate ColumnAggregateMetadata) bool {
