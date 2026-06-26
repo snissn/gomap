@@ -20,6 +20,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
+const testCatalogVersionStart = 7
+
 func TestUnsupportedDeterministicEntryRejectsBeforeAppendAndStores(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -217,6 +219,44 @@ func TestCreateCollectionDuplicateIncompatibleFailsBeforeAppend(t *testing.T) {
 	}
 }
 
+func TestCreateCollectionStaleCatalogGuardFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	rawOrders := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders", testCreateCollectionMetaOptions{})
+	applied, err := ApplyCommittedEntryV1(db, rawOrders, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, applied, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	rawUsersStale := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-stale", testCreateCollectionMetaOptions{})
+	rejected, err := ApplyCommittedEntryV1(db, rawUsersStale, applyMetaWithCatalogVersion(1, 2, testCatalogVersionStart+1), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, rejected, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("stale catalog guard reached command-WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after stale guard=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after stale guard=%d, want %d", got, beforeLSN)
+	}
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after stale guard error=%v, want ErrCollectionNotFound", openErr)
+	}
+}
+
 func TestCreateCollectionReopenPreservesCatalogAndLogicalDigest(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -303,7 +343,7 @@ func TestPostApplyProgressStoreFailureRequiresRecovery(t *testing.T) {
 
 func TestLogicalDigestConvergesAcrossFreshDBsAndIgnoresLocalLayout(t *testing.T) {
 	rawUsers := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
-	rawOrders := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders", testCreateCollectionMetaOptions{})
+	rawOrders := deterministicCreateCollectionEntryWithCatalogVersion(t, "orders", "client-a:create:orders", testCatalogVersionStart+1, testCreateCollectionMetaOptions{})
 
 	dirA := t.TempDir()
 	dbA := openApplyHarnessDB(t, dirA)
@@ -711,9 +751,15 @@ func openApplyHarnessDBWithOptions(t *testing.T, dir string, opts backenddb.Opti
 }
 
 func applyMeta(term, index uint64) ApplyMetadataV1 {
+	return applyMetaWithCatalogVersion(term, index, testCatalogVersionStart)
+}
+
+func applyMetaWithCatalogVersion(term, index, catalogVersion uint64) ApplyMetadataV1 {
 	return ApplyMetadataV1{
-		EntryID:                 raftentry.ApplyEntryID{Term: term, Index: index},
-		LocalDurabilityBoundary: LocalDurabilityCommandWALV1,
+		EntryID:                  raftentry.ApplyEntryID{Term: term, Index: index},
+		LocalDurabilityBoundary:  LocalDurabilityCommandWALV1,
+		CurrentCatalogVersion:    catalogVersion,
+		HasCurrentCatalogVersion: true,
 	}
 }
 
@@ -821,11 +867,16 @@ type testCreateCollectionMetaOptions struct {
 
 func deterministicCreateCollectionEntry(t *testing.T, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
 	t.Helper()
+	return deterministicCreateCollectionEntryWithCatalogVersion(t, collection, idempotency, testCatalogVersionStart, opts)
+}
+
+func deterministicCreateCollectionEntryWithCatalogVersion(t *testing.T, collection, idempotency string, catalogVersion uint64, opts testCreateCollectionMetaOptions) []byte {
+	t.Helper()
 	sections := []nativewire.Section{
 		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandCreateCollection, Version: 1})},
 		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
 		{ID: nativewire.SectionCollectionMeta, Bytes: testCreateCollectionMetaPayload(collection, opts)},
-		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 7)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
 	}
 	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
 	if err != nil {
@@ -895,19 +946,36 @@ func applyCreateSequenceWithOptions(t *testing.T, db *backenddb.DB, startIndex u
 	}
 	out := make([]raftentry.ApplyResultV1, 0, len(entries))
 	for i, entry := range entries {
-		result, err := ApplyCommittedEntryV1(db, entry, applyMeta(1, startIndex+uint64(i)), Options{
+		index := startIndex + uint64(i)
+		meta := applyMetaWithCatalogVersion(1, index, expectedCatalogVersionFromEntry(t, entry, index))
+		result, err := ApplyCommittedEntryV1(db, entry, meta, Options{
 			ProgressStore: progress,
 			ResultStore:   results,
 		})
 		if err != nil {
-			t.Fatalf("ApplyCommittedEntryV1 index %d: %v result=%+v", startIndex+uint64(i), err, result)
+			t.Fatalf("ApplyCommittedEntryV1 index %d: %v result=%+v", index, err, result)
 		}
 		if result.Status != raftentry.ApplyStatusApplied {
-			t.Fatalf("ApplyCommittedEntryV1 index %d status=%s, want applied", startIndex+uint64(i), result.Status)
+			t.Fatalf("ApplyCommittedEntryV1 index %d status=%s, want applied", index, result.Status)
 		}
 		out = append(out, result)
 	}
 	return out
+}
+
+func expectedCatalogVersionFromEntry(t *testing.T, entry []byte, index uint64) uint64 {
+	t.Helper()
+	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{
+		ApplyEntryID: raftentry.ApplyEntryID{Term: 1, Index: index},
+	})
+	if err != nil {
+		t.Fatalf("DecodeCommandEntryV1: %v", err)
+	}
+	version, err := decodeExpectedCatalogVersionV1(decoded.Target.ExpectedCatalogVersion)
+	if err != nil {
+		t.Fatalf("decodeExpectedCatalogVersionV1: %v", err)
+	}
+	return version
 }
 
 func readHexFixture(t *testing.T, rel string) []byte {

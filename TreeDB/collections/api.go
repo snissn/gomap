@@ -2932,6 +2932,13 @@ func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntent(meta Co
 // form of CreateCollectionWithPreparedCommandWALIntent. alreadyExisted is
 // derived after the collection schema lock is held.
 func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatus(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, bool, error) {
+	return m.CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight(meta, prepareCommandWALIntent, nil)
+}
+
+// CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight is the
+// status-returning form of CreateCollectionWithPreparedCommandWALIntent with an
+// extra publish preflight composed after the existing-schema no-op check.
+func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error), extraPreflight backenddb.OrderedRootGroupPreflight) (*CollectionMeta, bool, error) {
 	if m == nil {
 		return nil, false, errCollectionManagerNil
 	}
@@ -2945,15 +2952,15 @@ func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatus(m
 	if err != nil {
 		return nil, false, err
 	}
-	return m.createCollectionWithPreparedCommandWALIntent(normalized, nil, prepareCommandWALIntent)
+	return m.createCollectionWithPreparedCommandWALIntent(normalized, nil, prepareCommandWALIntent, extraPreflight)
 }
 
 func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
-	created, _, err := m.createCollectionWithPreparedCommandWALIntent(normalized, commandWALIntent, nil)
+	created, _, err := m.createCollectionWithPreparedCommandWALIntent(normalized, commandWALIntent, nil, nil)
 	return created, err
 }
 
-func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, bool, error) {
+func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error), extraPreflight backenddb.OrderedRootGroupPreflight) (*CollectionMeta, bool, error) {
 	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
 	coveredCommandWALIntent = coveredCommandWALIntent || prepareCommandWALIntent != nil
 	if !coveredCommandWALIntent {
@@ -3047,7 +3054,7 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		}
 		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 	}
-	preflight := m.createCollectionExistingSchemaPreflight(normalized)
+	preflight := m.createCollectionExistingSchemaPreflight(normalized, extraPreflight)
 	if m.db.CommandWALEnabled() || commandWALIntent != nil || prepareCommandWALIntent != nil {
 		commandWALIntent, err := prepareIntent()
 		if err != nil {
@@ -3115,7 +3122,7 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 	return normalized.copy(), false, nil
 }
 
-func (m *CollectionManager) createCollectionExistingSchemaPreflight(normalized CollectionMeta) backenddb.OrderedRootGroupPreflight {
+func (m *CollectionManager) createCollectionExistingSchemaPreflight(normalized CollectionMeta, extra backenddb.OrderedRootGroupPreflight) backenddb.OrderedRootGroupPreflight {
 	return func() error {
 		if m == nil || m.db == nil {
 			return errCollectionDBNil
@@ -3130,6 +3137,9 @@ func (m *CollectionManager) createCollectionExistingSchemaPreflight(normalized C
 			return err
 		}
 		if existing == nil {
+			if extra != nil {
+				return extra()
+			}
 			return nil
 		}
 		if !sameCollectionMeta(existing.meta, normalized) {

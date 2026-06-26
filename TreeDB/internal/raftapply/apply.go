@@ -29,6 +29,11 @@ type ApplyMetadataV1 struct {
 	LocalDurabilityBoundary LocalDurabilityBoundaryV1
 	SyncLocalCommandWAL     bool
 
+	// CurrentCatalogVersion is the caller-observed local catalog version used
+	// to enforce deterministic expected-catalog-version guards before mutation.
+	CurrentCatalogVersion    uint64
+	HasCurrentCatalogVersion bool
+
 	ScopeRule       raftentry.ScopeRuleV1
 	DatabaseScope   string
 	CatalogScope    string

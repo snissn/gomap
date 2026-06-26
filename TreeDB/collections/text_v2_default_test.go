@@ -183,7 +183,7 @@ func TestTextIndexDefaultCreateCollectionPreflightSkipsStaleV2Plan2690(t *testin
 			StoragePolicy: plan.policies[i],
 		})
 	}
-	_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, mgr.createCollectionExistingSchemaPreflight(*normalized), func([]uint64) (iterator.UnsafeIterator, error) {
+	_, _, err = d.PublishOrderedRootDeltaGroupWithPreflightAndSystemDeltaBuilder(ordered, mgr.createCollectionExistingSchemaPreflight(*normalized, nil), func([]uint64) (iterator.UnsafeIterator, error) {
 		t.Fatal("system builder called after no-op create preflight")
 		return nil, nil
 	})

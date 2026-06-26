@@ -13,12 +13,28 @@ import (
 )
 
 func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
+	expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
+	if err != nil {
+		return raftentry.ApplyResultV1{}, err
+	}
 	collectionMeta, payload, err := lowerCreateCollectionV1(entry)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}
-	if _, err := h.preflightCreateCollectionV1(collectionMeta, payload); err != nil {
+	alreadyExisting, err := h.preflightCreateCollectionV1(collectionMeta, payload)
+	if err != nil {
 		return raftentry.ApplyResultV1{}, err
+	}
+	if !alreadyExisting {
+		if err := checkCatalogVersionGuardV1(meta, expectedCatalogVersion); err != nil {
+			return raftentry.ApplyResultV1{}, err
+		}
+	}
+	checkPublishCatalogVersion := func() error {
+		return checkCatalogVersionGuardV1(meta, expectedCatalogVersion)
+	}
+	if alreadyExisting {
+		checkPublishCatalogVersion = nil
 	}
 	frame, err := commandwalapply.CatalogCreateCollectionFrame(payload)
 	if err != nil {
@@ -36,7 +52,7 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if manager == nil {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot apply create collection")
 	}
-	_, alreadyApplied, err := manager.CreateCollectionWithPreparedCommandWALIntentStatus(collectionMeta, func() (*backenddb.CommandWALIntent, error) {
+	_, alreadyApplied, err := manager.CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight(collectionMeta, func() (*backenddb.CommandWALIntent, error) {
 		var err error
 		handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
 		if err != nil {
@@ -48,7 +64,7 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 			return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
 		}
 		return intent, nil
-	})
+	}, checkPublishCatalogVersion)
 	if err != nil {
 		if _, ok := ErrorCodeOf(err); ok {
 			return raftentry.ApplyResultV1{}, err
@@ -83,6 +99,30 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 		AffectedCount:          affected,
 		ResultDigest:           raftentry.CommandDigestV1(logical),
 	}, nil
+}
+
+func decodeExpectedCatalogVersionV1(raw []byte) (uint64, error) {
+	if len(raw) == 0 {
+		return 0, codedError(raftentry.ErrorMissingGuardV1, "raftapply: missing expected catalog version")
+	}
+	value, n := binary.Uvarint(raw)
+	if n <= 0 {
+		return 0, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: malformed expected catalog version")
+	}
+	if n != len(raw) {
+		return 0, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: expected catalog version has %d trailing bytes", len(raw)-n)
+	}
+	return value, nil
+}
+
+func checkCatalogVersionGuardV1(meta ApplyMetadataV1, expected uint64) error {
+	if !meta.HasCurrentCatalogVersion {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: missing current catalog version for guard check")
+	}
+	if meta.CurrentCatalogVersion != expected {
+		return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: catalog version %d does not match expected %d", meta.CurrentCatalogVersion, expected)
+	}
+	return nil
 }
 
 func lowerCreateCollectionV1(entry raftentry.CommandEntryV1) (collections.CollectionMeta, []byte, error) {
