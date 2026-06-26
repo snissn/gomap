@@ -547,6 +547,21 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.InsertStats.ColumnStoreDeclaredRowReuseCoverageRatio != 1 {
 		t.Fatalf("declared row reuse coverage=%f want 1: %+v", report.InsertStats.ColumnStoreDeclaredRowReuseCoverageRatio, report.InsertStats)
 	}
+	if report.InsertStats.ColumnPublishRows != report.Rows {
+		t.Fatalf("column publish rows=%d want %d: %+v", report.InsertStats.ColumnPublishRows, report.Rows, report.InsertStats)
+	}
+	if report.InsertStats.ColumnPublishPreparedAssets == 0 || report.InsertStats.ColumnPublishRequiredAssetBytes == 0 || report.InsertStats.ColumnPublishManifestBytes == 0 {
+		t.Fatalf("column publish asset counters missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.ColumnPublishBuildColumnDeltaDurationMS <= 0 || report.InsertStats.ColumnPublishBuildColumnDeltaNsPerRow <= 0 {
+		t.Fatalf("column publish build-column-delta timing missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.ColumnPublishCommitDurationMS <= 0 || report.InsertStats.ColumnPublishCommitNsPerRow <= 0 {
+		t.Fatalf("column publish commit timing missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.ColumnPublishAssetPreparationDurationMS <= 0 || report.InsertStats.ColumnPublishManifestEncodeDurationMS <= 0 || report.InsertStats.ColumnPublishRootDeltaDurationMS <= 0 {
+		t.Fatalf("column publish plan subphase timings missing: %+v", report.InsertStats)
+	}
 	queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 	for _, q := range report.Queries {
 		assertColumnStoreCompressionAttributionM1952(t, q.Name, q.CompressionAttribution, true)
@@ -647,7 +662,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store JSON missing WAL-excluded durable storage field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`} {
+	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`, `"column_publish_build_column_delta_duration_ms"`, `"column_publish_commit_duration_ms"`, `"column_publish_asset_preparation_duration_ms"`, `"column_publish_required_asset_bytes"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing insert phase field %s:\n%s", want, data)
 		}
@@ -680,7 +695,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing WAL-excluded durable storage field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio"} {
+	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio", "column_publish_rows", "column publish subphase", "build_column_delta_callback", "publish_commit_total"} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}

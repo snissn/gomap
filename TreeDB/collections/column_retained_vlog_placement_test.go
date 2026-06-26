@@ -362,6 +362,18 @@ func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *test
 	if stats.RetainedPayloadSemanticStreamBlocks != 1 {
 		t.Fatalf("retained payload semantic-stream blocks=%d want 1", stats.RetainedPayloadSemanticStreamBlocks)
 	}
+	if stats.ColumnPublishRows != len(docs) {
+		t.Fatalf("column publish rows=%d want %d", stats.ColumnPublishRows, len(docs))
+	}
+	if stats.ColumnPublishPreparedAssets == 0 || stats.ColumnPublishRequiredAssetBytes == 0 || stats.ColumnPublishManifestBytes == 0 {
+		t.Fatalf("column publish asset counters missing: %+v", stats)
+	}
+	if stats.ColumnPublishBuildColumnDelta <= 0 || stats.ColumnPublishCommit <= 0 {
+		t.Fatalf("column publish callback/commit timings missing: %+v", stats)
+	}
+	if stats.ColumnPublishAssetPreparation <= 0 || stats.ColumnPublishManifestEncode <= 0 || stats.ColumnPublishRootDeltaConstruction <= 0 {
+		t.Fatalf("column publish plan timings missing: %+v", stats)
+	}
 	_, whitespaceRow, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[9])
 	if whitespaceRow != 9 {
 		t.Fatalf("semantic locator row=%d want whitespace-varint row 9", whitespaceRow)
