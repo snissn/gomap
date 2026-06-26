@@ -710,14 +710,11 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
-		for _, aggregate := range columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore) {
-			metadata, ok, err := buildColumnAggregateMetadataAsset(hookInput.ColumnStore, rows, aggregate, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedColumnPartAssetPartID, hookInput.AppliedCommandLSN)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			if !ok {
-				continue
-			}
+		typedMetadataAssets, err := buildColumnAggregateMetadataAssets(hookInput.ColumnStore, rows, columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore), hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedColumnPartAssetPartID, hookInput.AppliedCommandLSN)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		for _, metadata := range typedMetadataAssets {
 			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
@@ -737,7 +734,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Bytes:        metadataRef.Length,
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
-				Reason:       aggregate.Name,
+				Reason:       metadata.AggregateName,
 			})
 		}
 		dictionaryAssets, err := buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
@@ -794,14 +791,11 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Reason:       values.ColumnName,
 			})
 		}
-		for _, aggregate := range rowAssetConfig.AggregateMetadata {
-			metadata, ok, err := buildColumnAggregateMetadataAsset(rowAssetConfig, rowAssetRows, aggregate, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			if !ok {
-				continue
-			}
+		rowMetadataAssets, err := buildColumnAggregateMetadataAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
+		if err != nil {
+			return ColumnPublishPreparedAssets{}, err
+		}
+		for _, metadata := range rowMetadataAssets {
 			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
@@ -821,7 +815,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Bytes:        metadataRef.Length,
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
-				Reason:       aggregate.Name,
+				Reason:       metadata.AggregateName,
 			})
 		}
 	}
