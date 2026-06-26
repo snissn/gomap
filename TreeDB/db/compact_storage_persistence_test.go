@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -210,10 +211,12 @@ func requireCompactPersistenceAdmissionMetadata(t *testing.T, db *DB) {
 	t.Helper()
 	stats := db.Stats()
 	for key, want := range map[string]string{
-		"treedb.flush_admission.policy":                  FlushAdmissionPolicyExplicit.String(),
-		"treedb.flush_admission.admitted":                "true",
-		"treedb.flush_admission.flush_apply_concurrency": "4",
-		"treedb.flush_admission.flush_apply_span_native": "true",
+		"treedb.flush_admission.policy":                             FlushAdmissionPolicyExplicit.String(),
+		"treedb.flush_admission.admitted":                           "true",
+		"treedb.flush_admission.flush_apply_concurrency_configured": "4",
+		"treedb.flush_admission.flush_apply_concurrency":            fmt.Sprintf("%d", compactPersistenceExpectedEffectiveConcurrency(4)),
+		"treedb.flush_admission.flush_apply_concurrency_defaulted":  "false",
+		"treedb.flush_admission.flush_apply_span_native":            "true",
 	} {
 		if got := stats[key]; got != want {
 			t.Fatalf("admission metadata %s=%q want %q (stats=%+v)", key, got, want, stats)
@@ -222,6 +225,23 @@ func requireCompactPersistenceAdmissionMetadata(t *testing.T, db *DB) {
 	if got := requireDBStatUint64(t, db, "treedb.flush_apply.span_native.used_ops_total"); got == 0 {
 		t.Fatalf("default-write fixture did not use span-native apply: used_ops_total=%d", got)
 	}
+}
+
+func compactPersistenceExpectedEffectiveConcurrency(configured int) int {
+	if configured <= 1 {
+		return 0
+	}
+	gomax := runtime.GOMAXPROCS(0)
+	if gomax < 1 {
+		gomax = 1
+	}
+	if configured > gomax {
+		configured = gomax
+	}
+	if configured <= 1 {
+		return 0
+	}
+	return configured
 }
 
 func requireCompactPersistenceLeafLogRoot(t *testing.T, db *DB) []page.LeafLogPtr {
