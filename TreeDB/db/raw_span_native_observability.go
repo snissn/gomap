@@ -234,16 +234,6 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 		return FlushSpanRunFallbackPrepareError
 	case req.route == RawSpanNativeRouteCloseOrCheckpointDrain:
 		return FlushSpanRunFallbackCloseOrCheckpoint
-	case summary.DeleteRanges > 0 || req.route == RawSpanNativeRouteRangeDelete || req.route == RawSpanNativeRouteMixedRangeDelete:
-		return FlushSpanRunFallbackRangeDeleteBarrier
-	case summary.Maintenance:
-		return FlushSpanRunFallbackMaintenance
-	case summary.ColdBuild:
-		return FlushSpanRunFallbackColdBuild
-	case summary.Spans > 0 && !summary.ExactLeafSpans:
-		return FlushSpanRunFallbackInexactLeafSpans
-	case ops == 0:
-		return FlushSpanRunFallbackBelowThreshold
 	}
 	admission := FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto}.withStatsDefaults()
 	if db != nil {
@@ -258,11 +248,21 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 		}
 		return FlushSpanRunFallbackAdmissionPolicyDecline
 	}
-	if !req.applyOptionsUsed || !req.readOnlyPrepareRequested {
+	switch {
+	case !req.applyOptionsUsed || !req.readOnlyPrepareRequested:
 		return FlushSpanRunFallbackDisabled
-	}
-	if !req.spanNativeRequested {
+	case !req.spanNativeRequested:
 		return FlushSpanRunFallbackDisabled
+	case summary.DeleteRanges > 0 || req.route == RawSpanNativeRouteRangeDelete || req.route == RawSpanNativeRouteMixedRangeDelete:
+		return FlushSpanRunFallbackRangeDeleteBarrier
+	case summary.Maintenance:
+		return FlushSpanRunFallbackMaintenance
+	case summary.ColdBuild:
+		return FlushSpanRunFallbackColdBuild
+	case summary.Spans > 0 && !summary.ExactLeafSpans:
+		return FlushSpanRunFallbackInexactLeafSpans
+	case ops == 0:
+		return FlushSpanRunFallbackBelowThreshold
 	}
 	return FlushSpanRunFallbackSpanNativeNotImplemented
 }

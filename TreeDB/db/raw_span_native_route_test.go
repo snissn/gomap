@@ -204,6 +204,47 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 			t.Fatalf("point_put candidate_ops_total=%d, want 0 when span-native apply is disabled", got)
 		}
 	})
+
+	t.Run("parallel only range delete disabled", func(t *testing.T) {
+		d, err := Open(Options{
+			Dir:                   t.TempDir(),
+			FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+			FlushApplySpanNative:  false,
+			FlushApplyConcurrency: 4,
+			FlushApplyMinEntries:  1,
+			FlushApplyMinSpans:    1,
+			FlushApplyMinBytes:    1,
+		})
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer func() { _ = d.Close() }()
+		for _, key := range [][]byte{[]byte("a"), []byte("b"), []byte("c")} {
+			if err := d.Set(key, []byte("v")); err != nil {
+				t.Fatalf("seed Set(%q): %v", key, err)
+			}
+		}
+		b := d.NewBatch()
+		if err := b.DeleteRange([]byte("a"), []byte("z")); err != nil {
+			t.Fatalf("DeleteRange: %v", err)
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		stats := d.Stats()
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.range_delete.fallback.reason.disabled.count_total"); got == 0 {
+			t.Fatalf("range_delete disabled count=0, want parallel-only disabled fallback")
+		}
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.range_delete.fallback.reason.range_delete_barrier.count_total"); got != 0 {
+			t.Fatalf("range_delete barrier count=%d, want 0 for parallel-only disabled fallback", got)
+		}
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.range_delete.candidate_ops_total"); got != 0 {
+			t.Fatalf("range_delete candidate_ops_total=%d, want 0 when span-native apply is disabled", got)
+		}
+	})
 }
 
 func openExplicitRawSpanNativeRouteTestDB(t *testing.T) *DB {
