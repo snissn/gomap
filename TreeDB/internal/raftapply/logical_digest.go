@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -79,7 +78,7 @@ func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager,
 	for _, meta := range metas {
 		payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)
 		if err != nil {
-			return LogicalDigestV1{}, fmt.Errorf("raftapply: encode logical catalog metadata for %q: %w", meta.Name, err)
+			return LogicalDigestV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: encode logical catalog metadata for %q: %v", meta.Name, err)
 		}
 		writeLogicalDigestField(h, "catalog-create-collection-payload", payload)
 	}

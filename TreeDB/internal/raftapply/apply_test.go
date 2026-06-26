@@ -257,6 +257,50 @@ func TestCreateCollectionReopenPreservesCatalogAndLogicalDigest(t *testing.T) {
 	}
 }
 
+func TestPostApplyResultStoreFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ResultStore: recordApplyResultStoreFailAfterPreflight{},
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); openErr != nil {
+		t.Fatalf("OpenCollection users after recovery-required result store failure: %v", openErr)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	if got := db.State().AppliedCommandLSN; got != frames[0].LSN {
+		t.Fatalf("AppliedCommandLSN=%d, want visible command WAL LSN %d", got, frames[0].LSN)
+	}
+}
+
+func TestPostApplyProgressStoreFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: recordProgressStoreFailAfterPreflight{},
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); openErr != nil {
+		t.Fatalf("OpenCollection users after recovery-required progress store failure: %v", openErr)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	if got := db.State().AppliedCommandLSN; got != frames[0].LSN {
+		t.Fatalf("AppliedCommandLSN=%d, want visible command WAL LSN %d", got, frames[0].LSN)
+	}
+}
+
 func TestLogicalDigestConvergesAcrossFreshDBsAndIgnoresLocalLayout(t *testing.T) {
 	rawUsers := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
 	rawOrders := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders", testCreateCollectionMetaOptions{})
@@ -336,6 +380,50 @@ func TestMalformedBytesReturnDeterministicErrorWithoutAppend(t *testing.T) {
 	}
 	if seam.appendCalls != 0 || len(readCommandWALFrames(t, dir)) != 0 {
 		t.Fatalf("malformed input reached append path append=%d frames=%d", seam.appendCalls, len(readCommandWALFrames(t, dir)))
+	}
+}
+
+func TestDecodeCreateCollectionMetaRejectsUnsupportedEnums(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+		want    string
+	}{
+		{
+			name:    "document_format",
+			payload: testCreateCollectionMetaPayload("users", testCreateCollectionMetaOptions{documentFormat: 99}),
+			want:    "document_format",
+		},
+		{
+			name:    "data_root_storage",
+			payload: testCreateCollectionMetaPayload("users", testCreateCollectionMetaOptions{dataRootStorage: 99}),
+			want:    "data_root_storage",
+		},
+		{
+			name:    "index_state_storage",
+			payload: testCreateCollectionMetaPayload("users", testCreateCollectionMetaOptions{indexStateStorage: 99}),
+			want:    "index_state_storage",
+		},
+		{
+			name:    "index_value_type",
+			payload: testCreateCollectionMetaPayload("users", testCreateCollectionMetaOptions{includeIndex: true, indexValueType: 99}),
+			want:    "index value type",
+		},
+		{
+			name:    "index_storage_policy",
+			payload: testCreateCollectionMetaPayload("users", testCreateCollectionMetaOptions{includeIndex: true, indexStoragePolicy: 99}),
+			want:    "index storage policy",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := decodeCreateCollectionMetaV1(tc.payload)
+			if got := codeOf(err); got != raftentry.ErrorUnsupportedFeatureV1 {
+				t.Fatalf("decodeCreateCollectionMetaV1 error=%v code=%s, want unsupported feature", err, got)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("decodeCreateCollectionMetaV1 error=%v, want mention %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -570,6 +658,39 @@ func TestMemoryStoresAreBounded(t *testing.T) {
 	}
 }
 
+func TestMemoryApplyResultStorePreservesFirstResultForSameDigest(t *testing.T) {
+	id := raftentry.ApplyEntryID{Term: 1, Index: 1}
+	var digest raftentry.CommandDigestV1
+	digest[0] = 7
+	first := raftentry.ApplyResultV1{
+		Status:                 raftentry.ApplyStatusApplied,
+		CommandDigest:          digest,
+		DeterministicErrorCode: raftentry.ErrorNoneV1,
+		AffectedCount:          1,
+	}
+	second := raftentry.ApplyResultV1{
+		Status:                 raftentry.ApplyStatusAlreadyApplied,
+		CommandDigest:          digest,
+		DeterministicErrorCode: raftentry.ErrorNoneV1,
+		AffectedCount:          0,
+	}
+
+	results := NewMemoryApplyResultStore(1)
+	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id, CommandDigest: digest, Result: first}); err != nil {
+		t.Fatalf("RecordApplyResult first: %v", err)
+	}
+	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id, CommandDigest: digest, Result: second}); err != nil {
+		t.Fatalf("RecordApplyResult second: %v", err)
+	}
+	record, ok, err := results.LookupApplyResult(id)
+	if err != nil || !ok {
+		t.Fatalf("LookupApplyResult=(%+v,%t,%v), want first record", record, ok, err)
+	}
+	if record.Result != first {
+		t.Fatalf("stored result=%+v, want first %+v", record.Result, first)
+	}
+}
+
 func openApplyHarnessDB(t *testing.T, dir string) *backenddb.DB {
 	t.Helper()
 	return openApplyHarnessDBWithOptions(t, dir, backenddb.Options{})
@@ -620,6 +741,22 @@ func assertRejected(t *testing.T, result raftentry.ApplyResultV1, err error, wan
 	}
 }
 
+func assertRecoveryRequired(t *testing.T, result raftentry.ApplyResultV1, err error, wantCode raftentry.DeterministicErrorCodeV1) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("ApplyCommittedEntryV1 returned nil error for recovery-required result %+v", result)
+	}
+	if result.Status != raftentry.ApplyStatusRecoveryRequired || result.DeterministicErrorCode != wantCode {
+		t.Fatalf("result status/code=%s/%s, want recovery-required/%s (err=%v)", result.Status, result.DeterministicErrorCode, wantCode, err)
+	}
+	if got := codeOf(err); got != wantCode {
+		t.Fatalf("error code=%s, want %s (err=%v)", got, wantCode, err)
+	}
+	if result.CommandDigest == (raftentry.CommandDigestV1{}) {
+		t.Fatalf("recovery-required result has zero command digest: %+v", result)
+	}
+}
+
 func assertCatalogCreateFrame(t *testing.T, env commitlog.CommandEnvelope, collection string) {
 	t.Helper()
 	if env.Kind != commitlog.CommandKindCatalogCreateCollection ||
@@ -641,8 +778,45 @@ func codeOf(err error) raftentry.DeterministicErrorCodeV1 {
 	return code
 }
 
+type recordApplyResultStoreFailAfterPreflight struct{}
+
+func (recordApplyResultStoreFailAfterPreflight) LookupApplyResult(raftentry.ApplyEntryID) (ApplyResultRecordV1, bool, error) {
+	return ApplyResultRecordV1{}, false, nil
+}
+
+func (recordApplyResultStoreFailAfterPreflight) CheckCanRecordApplyResult(ApplyResultRecordV1) error {
+	return nil
+}
+
+func (recordApplyResultStoreFailAfterPreflight) RecordApplyResult(ApplyResultRecordV1) error {
+	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "result store unavailable after apply")
+}
+
+type recordProgressStoreFailAfterPreflight struct{}
+
+func (recordProgressStoreFailAfterPreflight) CheckCanApply(raftentry.ApplyEntryID) error {
+	return nil
+}
+
+func (recordProgressStoreFailAfterPreflight) CheckCanRecordApplied(ApplyProgressRecordV1) error {
+	return nil
+}
+
+func (recordProgressStoreFailAfterPreflight) RecordApplied(ApplyProgressRecordV1) error {
+	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "progress store unavailable after apply")
+}
+
+func (recordProgressStoreFailAfterPreflight) LastApplied() (raftentry.ApplyEntryID, bool) {
+	return raftentry.ApplyEntryID{}, false
+}
+
 type testCreateCollectionMetaOptions struct {
-	documentFormat uint64
+	documentFormat     uint64
+	dataRootStorage    uint64
+	indexStateStorage  uint64
+	includeIndex       bool
+	indexValueType     uint64
+	indexStoragePolicy uint64
 }
 
 func deterministicCreateCollectionEntry(t *testing.T, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
@@ -668,18 +842,32 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 	dst := binary.AppendUvarint(nil, 1)     // collection_meta version
 	dst = appendTestString(dst, collection) // name
 	dst = binary.AppendUvarint(dst, opts.documentFormat)
-	dst = binary.AppendUvarint(dst, 0) // data_root_storage_policy
-	dst = binary.AppendUvarint(dst, 0) // index_state_storage_policy
-	dst = append(dst, 0)               // allow_array_values_in_index
-	dst = append(dst, 0)               // disable_indexed_write_memtables
-	dst = append(dst, 0)               // buffered_indexed_writes
-	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_documents
-	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_bytes
-	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_root_runs
-	dst = append(dst, 0)               // buffered_indexed_async_flush
-	dst = append(dst, 0)               // buffered_indexed_overlay_roots
-	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_async_flush_max_queued_units
-	dst = binary.AppendUvarint(dst, 0) // index_count
+	dst = binary.AppendUvarint(dst, opts.dataRootStorage)   // data_root_storage_policy
+	dst = binary.AppendUvarint(dst, opts.indexStateStorage) // index_state_storage_policy
+	dst = append(dst, 0)                                    // allow_array_values_in_index
+	dst = append(dst, 0)                                    // disable_indexed_write_memtables
+	dst = append(dst, 0)                                    // buffered_indexed_writes
+	dst = binary.AppendVarint(dst, 0)                       // buffered_indexed_write_max_documents
+	dst = binary.AppendVarint(dst, 0)                       // buffered_indexed_write_max_bytes
+	dst = binary.AppendVarint(dst, 0)                       // buffered_indexed_write_max_root_runs
+	dst = append(dst, 0)                                    // buffered_indexed_async_flush
+	dst = append(dst, 0)                                    // buffered_indexed_overlay_roots
+	dst = binary.AppendVarint(dst, 0)                       // buffered_indexed_async_flush_max_queued_units
+	if !opts.includeIndex {
+		dst = binary.AppendUvarint(dst, 0) // index_count
+		return dst
+	}
+	valueType := opts.indexValueType
+	if valueType == 0 {
+		valueType = 1
+	}
+	dst = binary.AppendUvarint(dst, 1) // index_count
+	dst = appendTestString(dst, "email")
+	dst = appendTestString(dst, "email")
+	dst = binary.AppendUvarint(dst, valueType)
+	dst = append(dst, 0) // unique
+	dst = append(dst, 0) // multi_key
+	dst = binary.AppendUvarint(dst, opts.indexStoragePolicy)
 	return dst
 }
 

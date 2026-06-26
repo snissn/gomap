@@ -2571,6 +2571,63 @@ func TestCreateCollectionWithPreparedCommandWALIntentPreparesUnderSchemaLock(t *
 	}
 }
 
+func TestCreateCollectionWithPreparedCommandWALIntentRejectsUnusableIntent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(*backenddb.DB, []byte) (*backenddb.CommandWALIntent, error)
+		want    string
+	}{
+		{
+			name: "nil",
+			prepare: func(*backenddb.DB, []byte) (*backenddb.CommandWALIntent, error) {
+				return nil, nil
+			},
+			want: "prepared command-WAL intent is nil",
+		},
+		{
+			name: "unassigned",
+			prepare: func(d *backenddb.DB, payload []byte) (*backenddb.CommandWALIntent, error) {
+				return d.NewCommandWALIntent(
+					commitlog.CommandKindCatalogCreateCollection,
+					commitlog.CommandScopeCatalog,
+					commitlog.PayloadFormatCatalogCreateCollectionV1,
+					payload,
+				)
+			},
+			want: "prepared command-WAL intent has no assigned LSN",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+				t.Fatalf("SaveFormatConfig: %v", err)
+			}
+			d := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = d.Close() }()
+
+			meta := CollectionMeta{
+				Name: "users",
+				Options: CollectionOptions{
+					DocumentFormat: DocumentFormatJSON,
+				},
+			}
+			payload := catalogCreateCollectionPayload(t, meta)
+			_, err := NewCommandWALReplayCollectionManager(d).CreateCollectionWithPreparedCommandWALIntent(meta, func() (*backenddb.CommandWALIntent, error) {
+				return tc.prepare(d, payload)
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("CreateCollectionWithPreparedCommandWALIntent error=%v, want %q", err, tc.want)
+			}
+			if got := d.State().AppliedCommandLSN; got != 0 {
+				t.Fatalf("AppliedCommandLSN=%d, want 0", got)
+			}
+			if _, openErr := NewCollectionManager(d).OpenCollection("users"); !errors.Is(openErr, ErrCollectionNotFound) {
+				t.Fatalf("OpenCollection users error=%v, want ErrCollectionNotFound", openErr)
+			}
+		})
+	}
+}
+
 func TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {

@@ -17,8 +17,7 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}
-	alreadyApplied, err := h.preflightCreateCollectionV1(collectionMeta, payload)
-	if err != nil {
+	if _, err := h.preflightCreateCollectionV1(collectionMeta, payload); err != nil {
 		return raftentry.ApplyResultV1{}, err
 	}
 	frame, err := commandwalapply.CatalogCreateCollectionFrame(payload)
@@ -37,7 +36,7 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if manager == nil {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot apply create collection")
 	}
-	if _, err := manager.CreateCollectionWithPreparedCommandWALIntent(collectionMeta, func() (*backenddb.CommandWALIntent, error) {
+	_, alreadyApplied, err := manager.CreateCollectionWithPreparedCommandWALIntentStatus(collectionMeta, func() (*backenddb.CommandWALIntent, error) {
 		var err error
 		handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
 		if err != nil {
@@ -49,7 +48,8 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 			return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
 		}
 		return intent, nil
-	}); err != nil {
+	})
+	if err != nil {
 		if _, ok := ErrorCodeOf(err); ok {
 			return raftentry.ApplyResultV1{}, err
 		}
@@ -193,6 +193,18 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 	if indexCount64 > uint64(maxInt()) {
 		return collections.CollectionMeta{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: index count exceeds int capacity")
 	}
+	documentFormatDecoded, err := decodeCreateDocumentFormat(documentFormat)
+	if err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	dataRootStoragePolicy, err := decodeCreateRootStoragePolicy(dataRootStorage, "data_root_storage")
+	if err != nil {
+		return collections.CollectionMeta{}, err
+	}
+	indexStateStoragePolicy, err := decodeCreateRootStoragePolicy(indexStateStorage, "index_state_storage")
+	if err != nil {
+		return collections.CollectionMeta{}, err
+	}
 	indexes := make([]collections.IndexDefinition, 0, int(indexCount64))
 	for i := 0; i < int(indexCount64); i++ {
 		idx, err := readCreateMetaIndex(raw, &off)
@@ -208,9 +220,9 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 		Name: name,
 		Options: collections.CollectionOptions{
 			AllowArrayValuesInIndex:                 allowArray,
-			DocumentFormat:                          decodeCreateDocumentFormat(documentFormat),
-			DataRootStoragePolicy:                   decodeCreateRootStoragePolicy(dataRootStorage),
-			IndexStateStoragePolicy:                 decodeCreateRootStoragePolicy(indexStateStorage),
+			DocumentFormat:                          documentFormatDecoded,
+			DataRootStoragePolicy:                   dataRootStoragePolicy,
+			IndexStateStoragePolicy:                 indexStateStoragePolicy,
 			DisableIndexedWriteMemtables:            disableIndexedMemtables,
 			BufferedIndexedWrites:                   bufferedIndexedWrites,
 			BufferedIndexedWriteMaxDocuments:        maxDocuments,
@@ -249,13 +261,21 @@ func readCreateMetaIndex(raw []byte, off *int) (collections.IndexDefinition, err
 	if err != nil {
 		return collections.IndexDefinition{}, err
 	}
+	valueTypeDecoded, err := decodeCreateIndexValueType(valueType)
+	if err != nil {
+		return collections.IndexDefinition{}, err
+	}
+	storagePolicyDecoded, err := decodeCreateRootStoragePolicy(storagePolicy, "index storage policy")
+	if err != nil {
+		return collections.IndexDefinition{}, err
+	}
 	return collections.IndexDefinition{
 		Name:          name,
 		Field:         field,
-		ValueType:     decodeCreateIndexValueType(valueType),
+		ValueType:     valueTypeDecoded,
 		Unique:        unique,
 		MultiKey:      multiKey,
-		StoragePolicy: decodeCreateRootStoragePolicy(storagePolicy),
+		StoragePolicy: storagePolicyDecoded,
 	}, nil
 }
 
@@ -326,40 +346,46 @@ func readCreateMetaBool(raw []byte, off *int, field string) (bool, error) {
 	}
 }
 
-func decodeCreateDocumentFormat(value uint64) collections.DocumentFormat {
+func decodeCreateDocumentFormat(value uint64) (collections.DocumentFormat, error) {
 	switch nativewire.DocumentFormat(value) {
+	case nativewire.DocumentFormatDefault:
+		return collections.DocumentFormatDefault, nil
 	case nativewire.DocumentFormatJSON:
-		return collections.DocumentFormatJSON
+		return collections.DocumentFormatJSON, nil
 	case nativewire.DocumentFormatBSON:
-		return collections.DocumentFormatBSON
+		return collections.DocumentFormatBSON, nil
 	case nativewire.DocumentFormatTemplateV1:
-		return collections.DocumentFormatTemplateV1
+		return collections.DocumentFormatTemplateV1, nil
 	default:
-		return collections.DocumentFormatDefault
+		return collections.DocumentFormatDefault, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: unsupported document_format enum %d", value)
 	}
 }
 
-func decodeCreateRootStoragePolicy(value uint64) collections.RootStoragePolicy {
+func decodeCreateRootStoragePolicy(value uint64, field string) (collections.RootStoragePolicy, error) {
+	switch value {
+	case 0:
+		return collections.RootStorageDefault, nil
+	case 1:
+		return collections.RootStorageFast, nil
+	case 2:
+		return collections.RootStorageCompressed, nil
+	default:
+		return collections.RootStorageDefault, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: unsupported %s enum %d", field, value)
+	}
+}
+
+func decodeCreateIndexValueType(value uint64) (collections.IndexValueType, error) {
 	switch value {
 	case 1:
-		return collections.RootStorageFast
+		return collections.IndexValueString, nil
 	case 2:
-		return collections.RootStorageCompressed
-	default:
-		return collections.RootStorageDefault
-	}
-}
-
-func decodeCreateIndexValueType(value uint64) collections.IndexValueType {
-	switch value {
-	case 2:
-		return collections.IndexValueBool
+		return collections.IndexValueBool, nil
 	case 3:
-		return collections.IndexValueInt64
+		return collections.IndexValueInt64, nil
 	case 4:
-		return collections.IndexValueDouble
+		return collections.IndexValueDouble, nil
 	default:
-		return collections.IndexValueString
+		return collections.IndexValueString, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: unsupported index value type enum %d", value)
 	}
 }
 

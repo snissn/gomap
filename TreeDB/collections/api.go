@@ -2924,32 +2924,41 @@ func (m *CollectionManager) CreateCollectionWithCommandWALIntent(meta Collection
 // and returns the already-covered command-WAL intent. The callback runs after
 // the collection schema lock is held, preserving the public create lock order.
 func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntent(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, error) {
+	created, _, err := m.CreateCollectionWithPreparedCommandWALIntentStatus(meta, prepareCommandWALIntent)
+	return created, err
+}
+
+// CreateCollectionWithPreparedCommandWALIntentStatus is the status-returning
+// form of CreateCollectionWithPreparedCommandWALIntent. alreadyExisted is
+// derived after the collection schema lock is held.
+func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntentStatus(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, bool, error) {
 	if m == nil {
-		return nil, errCollectionManagerNil
+		return nil, false, errCollectionManagerNil
 	}
 	if m.db == nil {
-		return nil, errCollectionDBNil
+		return nil, false, errCollectionDBNil
 	}
 	if m.isClosing() {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
 	normalized, err := normalizeCollectionMeta(meta)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	return m.createCollectionWithPreparedCommandWALIntent(normalized, nil, prepareCommandWALIntent)
 }
 
 func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
-	return m.createCollectionWithPreparedCommandWALIntent(normalized, commandWALIntent, nil)
+	created, _, err := m.createCollectionWithPreparedCommandWALIntent(normalized, commandWALIntent, nil)
+	return created, err
 }
 
-func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, error) {
+func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, bool, error) {
 	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
 	coveredCommandWALIntent = coveredCommandWALIntent || prepareCommandWALIntent != nil
 	if !coveredCommandWALIntent {
 		if err := validateColumnStoreProfileSupportForDB(m.db, normalized.Options.ColumnStore, "create"); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	unlockSchema := func() {}
@@ -2971,40 +2980,46 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		if err != nil {
 			return nil, err
 		}
+		if intent == nil {
+			return nil, errors.New("collections: prepared command-WAL intent is nil")
+		}
+		if intent.AssignedLSN() == 0 {
+			return nil, errors.New("collections: prepared command-WAL intent has no assigned LSN")
+		}
 		commandWALIntent = intent
 		return commandWALIntent, nil
 	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, backenddb.ErrClosed
+		return nil, false, backenddb.ErrClosed
 	}
 	existing, err := loadCollectionCatalog(snap, normalized.Name)
 	_ = snap.Close()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if existing != nil {
 		if !sameCollectionMeta(existing.meta, normalized) {
-			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+			return nil, false, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
 		}
 		commandWALIntent, err := prepareIntent()
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if commandWALIntent != nil {
 			if err := m.publishCommandWALNoop(commandWALIntent, false); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 		}
-		return existing.meta.copy(), nil
+		return existing.meta.copy(), true, nil
 	}
 	encoded, err := encodeCollectionMeta(normalized)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	plan, err := m.buildCreateCollectionInitialTextV2Plan(normalized)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	iterators := make([]iterator.UnsafeIterator, 0, len(plan.rootNames))
 	defer func() {
@@ -3036,11 +3051,11 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 	if m.db.CommandWALEnabled() || commandWALIntent != nil || prepareCommandWALIntent != nil {
 		commandWALIntent, err := prepareIntent()
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		intent, err := m.newCatalogCreateCollectionCommandWALIntent(normalized, commandWALIntent)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		err = m.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			_, _, publishErr := m.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
@@ -3052,9 +3067,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 			return publishErr
 		})
 		if err != nil {
-			return nil, err
+			if errors.Is(err, errCreateCollectionNoopExistingSchema) {
+				return normalized.copy(), true, nil
+			}
+			return nil, false, err
 		}
-		return normalized.copy(), nil
+		return normalized.copy(), false, nil
 	}
 	if len(ordered) == 0 {
 		_, _, err = m.db.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
@@ -3089,12 +3107,12 @@ func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normali
 		})
 	}
 	if errors.Is(err, errCreateCollectionNoopExistingSchema) {
-		return normalized.copy(), nil
+		return normalized.copy(), true, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return normalized.copy(), nil
+	return normalized.copy(), false, nil
 }
 
 func (m *CollectionManager) createCollectionExistingSchemaPreflight(normalized CollectionMeta) backenddb.OrderedRootGroupPreflight {

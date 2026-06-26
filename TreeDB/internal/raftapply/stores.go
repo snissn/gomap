@@ -114,6 +114,9 @@ func (s *MemoryApplyResultStore) RecordApplyResult(record ApplyResultRecordV1) e
 	if err := s.checkCanRecordApplyResultLocked(record); err != nil {
 		return err
 	}
+	if _, ok := s.records[record.EntryID]; ok {
+		return nil
+	}
 	s.records[record.EntryID] = record
 	return nil
 }

@@ -188,7 +188,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			Result:        result,
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
-			return reject(entry.Digest, code, err)
+			return recoveryRequired(entry.Digest, code, err)
 		}
 	}
 	if h.opts.ProgressStore != nil {
@@ -197,7 +197,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			CommandDigest: entry.Digest,
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
-			return reject(entry.Digest, code, err)
+			return recoveryRequired(entry.Digest, code, err)
 		}
 	}
 	return result, nil
@@ -268,6 +268,18 @@ func reject(digest raftentry.CommandDigestV1, code raftentry.DeterministicErrorC
 	}
 	result := raftentry.ApplyResultV1{
 		Status:                 statusForCode(code),
+		CommandDigest:          digest,
+		DeterministicErrorCode: code,
+	}
+	return result, &Error{Code: code, Err: err}
+}
+
+func recoveryRequired(digest raftentry.CommandDigestV1, code raftentry.DeterministicErrorCodeV1, err error) (raftentry.ApplyResultV1, error) {
+	if code == "" {
+		code = raftentry.ErrorUnsafeDurabilityModeV1
+	}
+	result := raftentry.ApplyResultV1{
+		Status:                 raftentry.ApplyStatusRecoveryRequired,
 		CommandDigest:          digest,
 		DeterministicErrorCode: code,
 	}
