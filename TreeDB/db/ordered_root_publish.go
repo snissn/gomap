@@ -906,7 +906,7 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 func (db *DB) orderedRootDeltaBatchApplyOptions() zipper.ApplyOptions {
 	applyOpts := db.flushApplyOptions()
 	applyOpts.SpanNativeApply = false
-	applyOpts.SpanNativeForceFallbackReason = ""
+	applyOpts.SpanNativeForceFallbackReason = FlushSpanRunFallbackSpanNativeNotImplemented.String()
 	if applyOpts.ParallelApplyConcurrency <= 1 {
 		applyOpts.PrepareReadOnly = false
 		applyOpts.ReadOnlyPrepareWorkers = 0
@@ -939,6 +939,12 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {
+		db.observeOrderedRootSpanNativeEligibility(db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+			Route:          OrderedRootSpanNativeRouteOverlayColdBuild,
+			Context:        "ordered-root delta batch cold build",
+			DeltaOps:       delta.Len(),
+			ForceColdBuild: true,
+		}))
 		iter := newOrderedRootDeltaBatchIterator(delta, includeDeletedOnColdBuild)
 		defer func() { _ = iter.Close() }()
 		if coldBuildAlloc == nil {
@@ -970,6 +976,13 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if flushApplyUseOptions(applyOpts) {
 		result, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, applyOpts)
 		db.observeFlushApplyPrepareResult(result, applyErr)
+		db.observeOrderedRootSpanNativeApplyResult(
+			OrderedRootSpanNativeRouteDeltaBatchPublish,
+			"ordered-root delta batch warm apply",
+			result,
+			applyErr,
+			applyOpts.SpanNativeForceFallbackReason,
+		)
 		db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
 		newRoot = result.RootID
 		retired = result.PendingRetiredPages

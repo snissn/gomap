@@ -33,6 +33,8 @@ const (
 	FlushSpanRunFallbackMemoryEmergencyCap
 	FlushSpanRunFallbackOutputOwnershipFailure
 	FlushSpanRunFallbackReducerValidationFailed
+	FlushSpanRunFallbackRouteIneligible
+	FlushSpanRunFallbackAdmissionPolicyDecline
 
 	flushSpanRunFallbackReasonCount
 )
@@ -61,6 +63,8 @@ var flushSpanRunFallbackReasonNames = [...]string{
 	FlushSpanRunFallbackMemoryEmergencyCap:       "memory_or_emergency_cap",
 	FlushSpanRunFallbackOutputOwnershipFailure:   "output_ownership_failure",
 	FlushSpanRunFallbackReducerValidationFailed:  "reducer_validation_failed",
+	FlushSpanRunFallbackRouteIneligible:          "route_ineligible",
+	FlushSpanRunFallbackAdmissionPolicyDecline:   "admission_policy_decline",
 }
 
 func (r FlushSpanRunFallbackReason) String() string {

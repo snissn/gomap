@@ -1,0 +1,458 @@
+package db
+
+import (
+	"fmt"
+
+	"github.com/snissn/gomap/TreeDB/zipper"
+)
+
+// OrderedRootSpanNativeRoute is the stable support route label for ordered-root
+// span-native eligibility. These labels are emitted through Stats and should be
+// changed only at an explicit translation boundary.
+type OrderedRootSpanNativeRoute string
+
+const (
+	OrderedRootSpanNativeRouteDirectPublish             OrderedRootSpanNativeRoute = "direct_publish"
+	OrderedRootSpanNativeRouteGroupedPublish            OrderedRootSpanNativeRoute = "grouped_publish"
+	OrderedRootSpanNativeRouteSystemDeltaBuilderPublish OrderedRootSpanNativeRoute = "system_delta_builder_publish"
+	OrderedRootSpanNativeRouteCommandWALPublish         OrderedRootSpanNativeRoute = "command_wal_publish"
+	OrderedRootSpanNativeRouteCollectionBufferedRoots   OrderedRootSpanNativeRoute = "collection_buffered_roots"
+	OrderedRootSpanNativeRouteOverlayColdBuild          OrderedRootSpanNativeRoute = "overlay_cold_build"
+	OrderedRootSpanNativeRouteMultiIndexGroupPublish    OrderedRootSpanNativeRoute = "multi_index_group_publish"
+	OrderedRootSpanNativeRouteDeltaBatchPublish         OrderedRootSpanNativeRoute = "delta_batch_publish"
+	OrderedRootSpanNativeRouteReadOnlyPrepare           OrderedRootSpanNativeRoute = "read_only_prepare"
+)
+
+// OrderedRootSpanNativeStatus is the terminal support status for a route or
+// observed publish attempt.
+type OrderedRootSpanNativeStatus string
+
+const (
+	OrderedRootSpanNativeStatusIneligible OrderedRootSpanNativeStatus = "ineligible"
+	OrderedRootSpanNativeStatusCandidate  OrderedRootSpanNativeStatus = "candidate"
+	OrderedRootSpanNativeStatusEligible   OrderedRootSpanNativeStatus = "eligible"
+	OrderedRootSpanNativeStatusUsed       OrderedRootSpanNativeStatus = "used"
+	OrderedRootSpanNativeStatusFallback   OrderedRootSpanNativeStatus = "fallback"
+)
+
+// OrderedRootSpanNativeFallbackClass groups stable fallback reasons into the
+// support buckets operators need during triage.
+type OrderedRootSpanNativeFallbackClass string
+
+const (
+	OrderedRootSpanNativeFallbackClassNone           OrderedRootSpanNativeFallbackClass = "none"
+	OrderedRootSpanNativeFallbackClassPolicy         OrderedRootSpanNativeFallbackClass = "policy"
+	OrderedRootSpanNativeFallbackClassRoute          OrderedRootSpanNativeFallbackClass = "route"
+	OrderedRootSpanNativeFallbackClassValidation     OrderedRootSpanNativeFallbackClass = "validation"
+	OrderedRootSpanNativeFallbackClassReducerStorage OrderedRootSpanNativeFallbackClass = "reducer_storage"
+	OrderedRootSpanNativeFallbackClassUnknown        OrderedRootSpanNativeFallbackClass = "unknown"
+)
+
+// OrderedRootSpanNativeTriageRow is a route-level support snapshot. It is
+// intentionally independent of raw flush-apply counters.
+type OrderedRootSpanNativeTriageRow struct {
+	Route              OrderedRootSpanNativeRoute
+	Context            string
+	Status             OrderedRootSpanNativeStatus
+	Candidate          bool
+	Eligible           bool
+	Used               bool
+	Ops                uint64
+	Spans              uint64
+	FallbackReason     string
+	FallbackClass      OrderedRootSpanNativeFallbackClass
+	AdmissionPolicy    string
+	AdmissionAdmitted  bool
+	AdmissionReason    string
+	SelectedWorkers    int
+	RouteSupportDetail string
+}
+
+type orderedRootSpanNativeEligibilityRequest struct {
+	Route                         OrderedRootSpanNativeRoute
+	Context                       string
+	Summary                       zipper.ReadOnlyLeafSpanSummary
+	DeltaOps                      int
+	ReadOnlyPrepareValidationFail bool
+	Err                           error
+	ExplicitFallbackReason        string
+	SpanNativeEligible            bool
+	SpanNativeUsed                bool
+	ForceColdBuild                bool
+}
+
+// OrderedRootSpanNativeTriageSnapshot returns the ordered-root-specific route
+// support matrix for the current DB admission decision. It is a support surface:
+// benchmark/report plumbing should consume these rows instead of inferring
+// ordered-root proof from raw flush_apply span-native counters.
+func (db *DB) OrderedRootSpanNativeTriageSnapshot() []OrderedRootSpanNativeTriageRow {
+	routes := []struct {
+		route     OrderedRootSpanNativeRoute
+		context   string
+		candidate bool
+		reason    FlushSpanRunFallbackReason
+		detail    string
+	}{
+		{
+			route:   OrderedRootSpanNativeRouteDirectPublish,
+			context: "full ordered-root iterator publish",
+			reason:  FlushSpanRunFallbackRouteIneligible,
+			detail:  "direct full-root publish is not a span-native delta route",
+		},
+		{
+			route:   OrderedRootSpanNativeRouteGroupedPublish,
+			context: "full ordered-root group publish",
+			reason:  FlushSpanRunFallbackRouteIneligible,
+			detail:  "grouped full-root publish is not a span-native delta route",
+		},
+		{
+			route:     OrderedRootSpanNativeRouteSystemDeltaBuilderPublish,
+			context:   "ordered-root delta group with system delta builder",
+			candidate: true,
+			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
+			detail:    "warm delta groups are observable candidates but remain fail-closed until ordered-root span-native output is enabled",
+		},
+		{
+			route:     OrderedRootSpanNativeRouteCommandWALPublish,
+			context:   "command-WAL covered ordered-root delta publish",
+			candidate: true,
+			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
+			detail:    "command-WAL ordered-root deltas require the same fail-closed eligibility contract plus command ordering",
+		},
+		{
+			route:     OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			context:   "collection buffered root delta publish",
+			candidate: true,
+			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
+			detail:    "collection buffered roots publish through ordered-root delta routes and need ordered-root proof",
+		},
+		{
+			route:   OrderedRootSpanNativeRouteOverlayColdBuild,
+			context: "overlay zero-base cold-build publish",
+			reason:  FlushSpanRunFallbackColdBuild,
+			detail:  "zero-base overlay/cold-build routes do not have existing leaf spans to replace",
+		},
+		{
+			route:     OrderedRootSpanNativeRouteMultiIndexGroupPublish,
+			context:   "multi-index ordered-root group publish",
+			candidate: true,
+			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
+			detail:    "multi-index groups are observable candidates but remain fail-closed before #3024",
+		},
+		{
+			route:     OrderedRootSpanNativeRouteDeltaBatchPublish,
+			context:   "ordered-root delta batch root apply",
+			candidate: true,
+			reason:    FlushSpanRunFallbackSpanNativeNotImplemented,
+			detail:    "warm ordered-root delta batches are the runtime candidate surface",
+		},
+	}
+	out := make([]OrderedRootSpanNativeTriageRow, 0, len(routes))
+	for _, route := range routes {
+		out = append(out, db.orderedRootSpanNativeRouteTriage(route.route, route.context, route.candidate, route.reason, route.detail))
+	}
+	return out
+}
+
+func (db *DB) orderedRootSpanNativeRouteTriage(route OrderedRootSpanNativeRoute, context string, candidate bool, fallback FlushSpanRunFallbackReason, detail string) OrderedRootSpanNativeTriageRow {
+	admission := FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto}.withStatsDefaults()
+	if db != nil {
+		admission = db.flushAdmission.withStatsDefaults()
+	}
+	if !fallback.Valid() || fallback == FlushSpanRunFallbackUnknown {
+		fallback = FlushSpanRunFallbackRouteIneligible
+	}
+	row := OrderedRootSpanNativeTriageRow{
+		Route:              route,
+		Context:            context,
+		Candidate:          candidate,
+		Status:             OrderedRootSpanNativeStatusIneligible,
+		FallbackReason:     fallback.String(),
+		FallbackClass:      orderedRootSpanNativeFallbackClass(fallback),
+		AdmissionPolicy:    admission.Policy.String(),
+		AdmissionAdmitted:  admission.Admitted,
+		AdmissionReason:    admission.Reason,
+		SelectedWorkers:    admission.FlushApplyConcurrency,
+		RouteSupportDetail: detail,
+	}
+	if !candidate {
+		return row
+	}
+	row.Status = OrderedRootSpanNativeStatusFallback
+	if admission.Policy == FlushAdmissionPolicyOff {
+		row.FallbackReason = FlushSpanRunFallbackDisabled.String()
+		row.FallbackClass = orderedRootSpanNativeFallbackClass(FlushSpanRunFallbackDisabled)
+		return row
+	}
+	if !admission.Admitted {
+		row.FallbackReason = FlushSpanRunFallbackAdmissionPolicyDecline.String()
+		row.FallbackClass = orderedRootSpanNativeFallbackClass(FlushSpanRunFallbackAdmissionPolicyDecline)
+		return row
+	}
+	return row
+}
+
+func (db *DB) orderedRootSpanNativeEligibility(req orderedRootSpanNativeEligibilityRequest) OrderedRootSpanNativeTriageRow {
+	if req.Route == "" {
+		req.Route = OrderedRootSpanNativeRouteDeltaBatchPublish
+	}
+	admission := FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto}.withStatsDefaults()
+	if db != nil {
+		admission = db.flushAdmission.withStatsDefaults()
+	}
+	ops, spans := orderedRootSpanNativeOpsAndSpans(req.Summary, req.DeltaOps)
+	row := OrderedRootSpanNativeTriageRow{
+		Route:             req.Route,
+		Context:           req.Context,
+		Status:            OrderedRootSpanNativeStatusIneligible,
+		Ops:               ops,
+		Spans:             spans,
+		AdmissionPolicy:   admission.Policy.String(),
+		AdmissionAdmitted: admission.Admitted,
+		AdmissionReason:   admission.Reason,
+		SelectedWorkers:   admission.FlushApplyConcurrency,
+	}
+	if req.SpanNativeUsed {
+		row.Candidate = true
+		row.Eligible = true
+		row.Used = true
+		row.Status = OrderedRootSpanNativeStatusUsed
+		row.FallbackClass = OrderedRootSpanNativeFallbackClassNone
+		return row
+	}
+
+	reason, hasExplicitReason := parseFlushApplySpanNativeFallbackReason(req.ExplicitFallbackReason)
+	if !hasExplicitReason {
+		reason = db.classifyOrderedRootSpanNativeFallback(req, ops)
+	}
+	if !reason.Valid() {
+		reason = FlushSpanRunFallbackUnknown
+	}
+
+	row.Candidate = orderedRootSpanNativeCandidate(req.Route, req.Summary, ops)
+	if row.Candidate {
+		row.Status = OrderedRootSpanNativeStatusCandidate
+	}
+	if row.Candidate && req.SpanNativeEligible && reason == FlushSpanRunFallbackUnknown {
+		row.Eligible = true
+		row.Status = OrderedRootSpanNativeStatusEligible
+		row.FallbackClass = OrderedRootSpanNativeFallbackClassNone
+		return row
+	}
+	if row.Candidate && req.SpanNativeEligible && hasExplicitReason {
+		row.Eligible = true
+	}
+
+	row.Status = OrderedRootSpanNativeStatusFallback
+	if !row.Candidate {
+		row.Status = OrderedRootSpanNativeStatusIneligible
+	}
+	row.FallbackReason = reason.String()
+	row.FallbackClass = orderedRootSpanNativeFallbackClass(reason)
+	return row
+}
+
+func (db *DB) classifyOrderedRootSpanNativeFallback(req orderedRootSpanNativeEligibilityRequest, ops uint64) FlushSpanRunFallbackReason {
+	summary := req.Summary
+	switch {
+	case req.ReadOnlyPrepareValidationFail:
+		return FlushSpanRunFallbackValidationFailed
+	case req.Err != nil && !req.SpanNativeEligible:
+		return FlushSpanRunFallbackPrepareError
+	case req.ForceColdBuild || summary.ColdBuild:
+		return FlushSpanRunFallbackColdBuild
+	case summary.Maintenance:
+		return FlushSpanRunFallbackMaintenance
+	case summary.DeleteRanges > 0:
+		return FlushSpanRunFallbackRangeDeleteBarrier
+	case summary.Spans > 0 && !summary.ExactLeafSpans:
+		return FlushSpanRunFallbackInexactLeafSpans
+	case ops == 0:
+		return FlushSpanRunFallbackBelowThreshold
+	case !orderedRootSpanNativeRouteCanBeCandidate(req.Route):
+		return FlushSpanRunFallbackRouteIneligible
+	}
+	admission := FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto}.withStatsDefaults()
+	if db != nil {
+		admission = db.flushAdmission.withStatsDefaults()
+	}
+	if admission.Policy == FlushAdmissionPolicyOff {
+		return FlushSpanRunFallbackDisabled
+	}
+	if !admission.Admitted {
+		return FlushSpanRunFallbackAdmissionPolicyDecline
+	}
+	return FlushSpanRunFallbackSpanNativeNotImplemented
+}
+
+func orderedRootSpanNativeCandidate(route OrderedRootSpanNativeRoute, summary zipper.ReadOnlyLeafSpanSummary, ops uint64) bool {
+	if !orderedRootSpanNativeRouteCanBeCandidate(route) {
+		return false
+	}
+	return ops > 0 &&
+		summary.Spans > 0 &&
+		summary.ExactLeafSpans &&
+		!summary.ColdBuild &&
+		!summary.Maintenance &&
+		summary.DeleteRanges == 0
+}
+
+func orderedRootSpanNativeRouteCanBeCandidate(route OrderedRootSpanNativeRoute) bool {
+	switch route {
+	case OrderedRootSpanNativeRouteSystemDeltaBuilderPublish,
+		OrderedRootSpanNativeRouteCommandWALPublish,
+		OrderedRootSpanNativeRouteCollectionBufferedRoots,
+		OrderedRootSpanNativeRouteMultiIndexGroupPublish,
+		OrderedRootSpanNativeRouteDeltaBatchPublish,
+		OrderedRootSpanNativeRouteReadOnlyPrepare:
+		return true
+	default:
+		return false
+	}
+}
+
+func orderedRootSpanNativeOpsAndSpans(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int) (uint64, uint64) {
+	ops := summary.Ops
+	if ops <= 0 {
+		ops = summary.SpanOps
+	}
+	if ops <= 0 {
+		ops = deltaOps
+	}
+	if ops < 0 {
+		ops = 0
+	}
+	spans := summary.Spans
+	if spans < 0 {
+		spans = 0
+	}
+	return uint64(ops), uint64(spans)
+}
+
+func orderedRootSpanNativeFallbackClass(reason FlushSpanRunFallbackReason) OrderedRootSpanNativeFallbackClass {
+	switch reason {
+	case FlushSpanRunFallbackUnknown:
+		return OrderedRootSpanNativeFallbackClassUnknown
+	case FlushSpanRunFallbackDisabled,
+		FlushSpanRunFallbackAdmissionPolicyDecline,
+		FlushSpanRunFallbackMemoryEmergencyCap:
+		return OrderedRootSpanNativeFallbackClassPolicy
+	case FlushSpanRunFallbackValidationFailed,
+		FlushSpanRunFallbackPrepareError:
+		return OrderedRootSpanNativeFallbackClassValidation
+	case FlushSpanRunFallbackRootMismatch,
+		FlushSpanRunFallbackOutputOwnershipFailure,
+		FlushSpanRunFallbackReducerValidationFailed:
+		return OrderedRootSpanNativeFallbackClassReducerStorage
+	default:
+		return OrderedRootSpanNativeFallbackClassRoute
+	}
+}
+
+func (db *DB) observeOrderedRootSpanNativeEligibility(row OrderedRootSpanNativeTriageRow) {
+	if db == nil {
+		return
+	}
+	if row.Candidate {
+		if row.Ops > 0 {
+			db.orderedRootSpanNativeCandidateOps.Add(row.Ops)
+		}
+		if row.Spans > 0 {
+			db.orderedRootSpanNativeCandidateSpans.Add(row.Spans)
+		}
+	}
+	if row.Eligible {
+		if row.Ops > 0 {
+			db.orderedRootSpanNativeEligibleOps.Add(row.Ops)
+		}
+		if row.Spans > 0 {
+			db.orderedRootSpanNativeEligibleSpans.Add(row.Spans)
+		}
+	}
+	if row.Used {
+		if row.Ops > 0 {
+			db.orderedRootSpanNativeUsedOps.Add(row.Ops)
+		}
+		if row.Spans > 0 {
+			db.orderedRootSpanNativeUsedSpans.Add(row.Spans)
+		}
+		return
+	}
+	if !row.Eligible {
+		if row.Ops > 0 {
+			db.orderedRootSpanNativeIneligibleOps.Add(row.Ops)
+		}
+		if row.Spans > 0 {
+			db.orderedRootSpanNativeIneligibleSpans.Add(row.Spans)
+		}
+	}
+	reason, ok := ParseFlushSpanRunFallbackReason(row.FallbackReason)
+	if !ok || !reason.Valid() {
+		reason = FlushSpanRunFallbackUnknown
+	}
+	db.orderedRootSpanNativeFallbacks.Add(1)
+	db.orderedRootSpanNativeFallbackReasonCounts[reason].Add(1)
+	if row.Ops > 0 {
+		db.orderedRootSpanNativeFallbackOps[reason].Add(row.Ops)
+	}
+	if row.Spans > 0 {
+		db.orderedRootSpanNativeFallbackSpans[reason].Add(row.Spans)
+	}
+}
+
+func (db *DB) observeOrderedRootSpanNativeApplyResult(route OrderedRootSpanNativeRoute, context string, result zipper.ApplyResult, err error, fallbackReason string) {
+	if db == nil || !result.ReadOnlyPrepareRequested {
+		return
+	}
+	if fallbackReason == "" {
+		fallbackReason = result.SpanNativeFallbackReason
+	}
+	row := db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:                         route,
+		Context:                       context,
+		Summary:                       result.ReadOnlyPrepare.LeafSpanSummary(),
+		ReadOnlyPrepareValidationFail: result.ReadOnlyPrepareValidationFailed,
+		Err:                           err,
+		ExplicitFallbackReason:        fallbackReason,
+		SpanNativeEligible:            result.SpanNativeEligible,
+		SpanNativeUsed:                result.SpanNativeUsed,
+	})
+	db.observeOrderedRootSpanNativeEligibility(row)
+}
+
+func (db *DB) appendOrderedRootSpanNativeStats(stats map[string]string) {
+	if db == nil || stats == nil {
+		return
+	}
+	prefix := "treedb.publish.ordered_root_delta_group.span_native."
+	stats[prefix+"candidate_ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeCandidateOps.Load())
+	stats[prefix+"candidate_spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeCandidateSpans.Load())
+	stats[prefix+"eligible_ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeEligibleOps.Load())
+	stats[prefix+"eligible_spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeEligibleSpans.Load())
+	stats[prefix+"used_ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeUsedOps.Load())
+	stats[prefix+"used_spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeUsedSpans.Load())
+	stats[prefix+"ineligible_ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeIneligibleOps.Load())
+	stats[prefix+"ineligible_spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeIneligibleSpans.Load())
+	stats[prefix+"fallbacks_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbacks.Load())
+	for _, reason := range FlushSpanRunFallbackReasons() {
+		name := reason.String()
+		stats[prefix+"fallback.reason."+name+".count_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackReasonCounts[reason].Load())
+		stats[prefix+"fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackOps[reason].Load())
+		stats[prefix+"fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackSpans[reason].Load())
+	}
+	for _, row := range db.OrderedRootSpanNativeTriageSnapshot() {
+		routePrefix := prefix + "triage.route." + string(row.Route) + "."
+		stats[routePrefix+"context"] = row.Context
+		stats[routePrefix+"status"] = string(row.Status)
+		stats[routePrefix+"candidate"] = fmt.Sprintf("%t", row.Candidate)
+		stats[routePrefix+"eligible"] = fmt.Sprintf("%t", row.Eligible)
+		stats[routePrefix+"used"] = fmt.Sprintf("%t", row.Used)
+		stats[routePrefix+"fallback_reason"] = row.FallbackReason
+		stats[routePrefix+"fallback_class"] = string(row.FallbackClass)
+		stats[routePrefix+"admission_policy"] = row.AdmissionPolicy
+		stats[routePrefix+"admission_admitted"] = fmt.Sprintf("%t", row.AdmissionAdmitted)
+		stats[routePrefix+"admission_reason"] = row.AdmissionReason
+		stats[routePrefix+"selected_workers"] = fmt.Sprintf("%d", row.SelectedWorkers)
+		stats[routePrefix+"detail"] = row.RouteSupportDetail
+	}
+}

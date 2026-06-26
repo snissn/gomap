@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 const (
@@ -85,6 +86,7 @@ type orderedRootPublishDownstreamAction string
 const (
 	orderedRootActionImplementedCurrentSerialOnly   orderedRootPublishDownstreamAction = "implemented-current-serial-only"
 	orderedRootActionEligibleFor3022Observability   orderedRootPublishDownstreamAction = "eligible-for-#3022-observability"
+	orderedRootActionImplemented3022Observability   orderedRootPublishDownstreamAction = "implemented-#3022-observability-proof"
 	orderedRootActionRequires3023Correctness        orderedRootPublishDownstreamAction = "requires-#3023-correctness"
 	orderedRootActionRequires3024OutputOwnership    orderedRootPublishDownstreamAction = "requires-#3024-output-ownership"
 	orderedRootActionBlockedBy3032                  orderedRootPublishDownstreamAction = "blocked-by-#3032"
@@ -114,6 +116,7 @@ var orderedRootExpectedOutcomes = map[orderedRootPublishExpectedOutcome]struct{}
 var orderedRootDownstreamActions = map[orderedRootPublishDownstreamAction]struct{}{
 	orderedRootActionImplementedCurrentSerialOnly:   {},
 	orderedRootActionEligibleFor3022Observability:   {},
+	orderedRootActionImplemented3022Observability:   {},
 	orderedRootActionRequires3023Correctness:        {},
 	orderedRootActionRequires3024OutputOwnership:    {},
 	orderedRootActionBlockedBy3032:                  {},
@@ -146,13 +149,13 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 			Route:             "PublishOrderedRootIterator",
 			RouteAnchors:      []orderedRootPublishRouteAnchor{orderedRootRouteDBPublishOrderedRootIterator},
 			ExpectedOutcome:   orderedRootOutcomeCurrentSerialPublish,
-			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplementedCurrentSerialOnly, orderedRootActionEligibleFor3022Observability},
+			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplementedCurrentSerialOnly, orderedRootActionImplemented3022Observability},
 			Mode:              "serial apply",
 			Semantics:         "point inserts and overwrites through ordered iterators",
 			Storage:           "root-local inline or DB default leaf policy",
 			Durability:        "checkpoint, reopen, snapshot read visibility",
 			Status:            orderedRootPublishStatusImplemented,
-			ProductionSupport: "current serial publisher is supported; it remains serial-only unless #3022 observability identifies a later span-native candidate",
+			ProductionSupport: "current serial publisher is supported; #3022 triage reports direct_publish as route_ineligible so it cannot be mistaken for ordered-root span-native proof",
 			Covers: []string{
 				"direct_batch_publish", "serial_apply", "point_insert", "overwrite",
 				"inline_leaf_output", "root_local_policy", "checkpoint", "reopen", "snapshot_read_visibility",
@@ -167,13 +170,13 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 				orderedRootRouteDBPublishOrderedRootGroupWithSystemBuilder,
 			},
 			ExpectedOutcome:   orderedRootOutcomeCurrentSerializedGroupPublish,
-			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplementedCurrentSerialOnly, orderedRootActionEligibleFor3022Observability},
+			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplementedCurrentSerialOnly, orderedRootActionImplemented3022Observability},
 			Mode:              "serialized group publish",
 			Semantics:         "full-root grouped publication with system descriptor publish",
 			Storage:           "per-root storage policy",
 			Durability:        "one backend commit preserves system-root identity",
 			Status:            orderedRootPublishStatusImplemented,
-			ProductionSupport: "current grouped full-root publish is supported for ordered roots and descriptors; span-native enablement is not implied by this serial route",
+			ProductionSupport: "current grouped full-root publish is supported; #3022 triage reports grouped_publish as route_ineligible and system_delta_builder_publish as span_native_not_implemented",
 			Covers: []string{
 				"grouped_publish", "serialized_group_publish", "system_delta_builder_publish",
 				"non_command_wal_system_publish", "multi_index_root_groups", "system_root_identity",
@@ -224,13 +227,13 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 			Route:             "PublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder",
 			RouteAnchors:      []orderedRootPublishRouteAnchor{orderedRootRouteDBPublishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder},
 			ExpectedOutcome:   orderedRootOutcomeCurrentCommandWALCoveredPublish,
-			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionRequires3023Correctness, orderedRootActionEligibleFor3022Observability},
+			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionRequires3023Correctness, orderedRootActionImplemented3022Observability},
 			Mode:              "WAL-enabled command publish",
 			Semantics:         "command-WAL LSN is assigned before system delta builder",
 			Storage:           "per-root storage policy",
 			Durability:        "command-WAL ordering and system-root identity",
 			Status:            orderedRootPublishStatusImplemented,
-			ProductionSupport: "current command-WAL covered ordered-root publish is supported with fail-closed poisoning; span-native enablement requires #3023 and #3022 observability",
+			ProductionSupport: "current command-WAL covered ordered-root publish is supported with fail-closed poisoning; #3022 triage reports command_wal_publish as span_native_not_implemented",
 			Covers: []string{
 				"command_wal_system_publish", "wal_enabled", "command_wal_ordering", "system_root_identity",
 			},
@@ -278,13 +281,13 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 				orderedRootRouteDBRunOrderedRootDeltaBatchReadOnlyPrepare,
 			},
 			ExpectedOutcome:   orderedRootOutcomeCurrentReadOnlyPrepareOnly,
-			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplementedCurrentReadOnlyOnly, orderedRootActionEligibleFor3022Observability},
+			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplementedCurrentReadOnlyOnly, orderedRootActionImplemented3022Observability},
 			Mode:              "read-only prepare",
 			Semantics:         "side-effect-free leaf-span planning before warm apply",
 			Storage:           "no durable output owned by prepare",
 			Durability:        "planning must not publish roots or value-log pointers",
 			Status:            orderedRootPublishStatusImplemented,
-			ProductionSupport: "supported as diagnostics and planning only; it does not enable ordered-root span-native output",
+			ProductionSupport: "supported as diagnostics and planning only; #3022 keeps ordered-root span-native output fail-closed while exposing the read_only_prepare eligibility contract",
 			Covers: []string{
 				"read_only_prepare", "output_ownership",
 			},
@@ -304,9 +307,10 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 			Storage:           "prepared span-native output is not produced for ordered-root delta batches",
 			Durability:        "no span-native reducer publish occurs; prior no-replacement-changed-root reducer failure is classified but not reproduced here",
 			Status:            orderedRootPublishStatusDeterministicFallbackPrefix + FlushSpanRunFallbackSpanNativeNotImplemented.String(),
-			ProductionSupport: "current support is blanket non-span-native fallback before reducer execution; #3023/#3024 must update this row before enablement",
+			ProductionSupport: "current support is ordered-root candidate_ops plus span_native_not_implemented fallback counters with used_ops_total=0; #3023/#3024 must update this row before enablement",
 			Covers: []string{
 				"span_native_prepare", "prior_no_replacement_changed_root_guardrail", "output_ownership",
+				"ordered_root_span_native_candidate_ops_total", "ordered_root_span_native_fallback_reason", "ordered_root_span_native_used_ops_zero",
 			},
 		},
 		{
@@ -389,13 +393,13 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 				orderedRootRouteDBPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder,
 			},
 			ExpectedOutcome:   orderedRootOutcomeCurrentCollectionRoute,
-			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionEligibleFor3022Observability, orderedRootActionRequires3023Correctness},
+			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplemented3022Observability, orderedRootActionRequires3023Correctness},
 			Mode:              "ordered-root delta batch group",
 			Semantics:         "primary buffered roots publish through ordered-root batch APIs",
 			Storage:           "collection-selected root policy",
 			Durability:        "collection metadata and roots commit together",
 			Status:            orderedRootPublishStatusImplemented,
-			ProductionSupport: "current buffered collection publish is supported; #3022 must observe route selection and #3023 gates span-native enablement",
+			ProductionSupport: "current buffered collection publish is supported; #3022 triage reports collection_buffered_roots as span_native_not_implemented until #3023 gates enablement",
 			Covers: []string{
 				"buffered_collection_roots", "collection_routes",
 			},
@@ -410,13 +414,13 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 				orderedRootRouteDBPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder,
 			},
 			ExpectedOutcome:   orderedRootOutcomeCurrentCollectionRoute,
-			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionEligibleFor3022Observability, orderedRootActionRequires3023Correctness},
+			DownstreamActions: []orderedRootPublishDownstreamAction{orderedRootActionImplemented3022Observability, orderedRootActionRequires3023Correctness},
 			Mode:              "multi-index ordered-root group",
 			Semantics:         "secondary indexes publish alongside collection roots",
 			Storage:           "collection-selected root policy",
 			Durability:        "multi-index root group identity is persisted through system descriptors",
 			Status:            orderedRootPublishStatusImplemented,
-			ProductionSupport: "current secondary-index root publishing is supported via ordered-root groups; #3022 observes route choice and #3023 gates span-native enablement",
+			ProductionSupport: "current secondary-index root publishing is supported via ordered-root groups; #3022 triage reports multi_index_group_publish as span_native_not_implemented until #3023 gates enablement",
 			Covers: []string{
 				"secondary_index_roots", "multi_index_root_groups", "system_root_identity", "collection_routes",
 			},
@@ -520,48 +524,51 @@ func orderedRootSpanNativeClassificationRows() []orderedRootSpanNativeClassifica
 
 func TestOrderedRootSpanNativeClassificationMatrixCoversIssue3021(t *testing.T) {
 	required := map[string]bool{
-		"direct_batch_publish":                        false,
-		"grouped_publish":                             false,
-		"serialized_group_publish":                    false,
-		"optimistic_group_publish":                    false,
-		"system_delta_builder_publish":                false,
-		"command_wal_system_publish":                  false,
-		"non_command_wal_system_publish":              false,
-		"collection_routes":                           false,
-		"buffered_collection_roots":                   false,
-		"secondary_index_roots":                       false,
-		"multi_index_root_groups":                     false,
-		"overlay_warm_single_base_route":              false,
-		"overlay_cold_build_routes":                   false,
-		"serial_apply":                                false,
-		"parallel_root_apply":                         false,
-		"read_only_prepare":                           false,
-		"span_native_prepare":                         false,
-		"wal_enabled":                                 false,
-		"wal_disabled_cached_mode":                    false,
-		"admission_policy_dependency_3032":            false,
-		"point_insert":                                false,
-		"overwrite":                                   false,
-		"unchanged_noop_root":                         false,
-		"delete_tombstone":                            false,
-		"tombstone_semantics":                         false,
-		"mixed_update_delete_batch":                   false,
-		"empty_delta":                                 false,
-		"duplicate_same_key_overwrite":                false,
-		"inline_leaf_output":                          false,
-		"root_local_policy":                           false,
-		"value_log_leaf_output":                       false,
-		"output_ownership":                            false,
-		"persistent_vlog_pointer_reachability":        false,
-		"checkpoint":                                  false,
-		"reopen":                                      false,
-		"snapshot_read_visibility":                    false,
-		"system_root_identity":                        false,
-		"command_wal_ordering":                        false,
-		"value_log_gc_safety":                         false,
-		"depends_3032":                                false,
-		"depends_3033":                                false,
-		"prior_no_replacement_changed_root_guardrail": false,
+		"direct_batch_publish":                         false,
+		"grouped_publish":                              false,
+		"serialized_group_publish":                     false,
+		"optimistic_group_publish":                     false,
+		"system_delta_builder_publish":                 false,
+		"command_wal_system_publish":                   false,
+		"non_command_wal_system_publish":               false,
+		"collection_routes":                            false,
+		"buffered_collection_roots":                    false,
+		"secondary_index_roots":                        false,
+		"multi_index_root_groups":                      false,
+		"overlay_warm_single_base_route":               false,
+		"overlay_cold_build_routes":                    false,
+		"serial_apply":                                 false,
+		"parallel_root_apply":                          false,
+		"read_only_prepare":                            false,
+		"span_native_prepare":                          false,
+		"wal_enabled":                                  false,
+		"wal_disabled_cached_mode":                     false,
+		"admission_policy_dependency_3032":             false,
+		"point_insert":                                 false,
+		"overwrite":                                    false,
+		"unchanged_noop_root":                          false,
+		"delete_tombstone":                             false,
+		"tombstone_semantics":                          false,
+		"mixed_update_delete_batch":                    false,
+		"empty_delta":                                  false,
+		"duplicate_same_key_overwrite":                 false,
+		"inline_leaf_output":                           false,
+		"root_local_policy":                            false,
+		"value_log_leaf_output":                        false,
+		"output_ownership":                             false,
+		"persistent_vlog_pointer_reachability":         false,
+		"checkpoint":                                   false,
+		"reopen":                                       false,
+		"snapshot_read_visibility":                     false,
+		"system_root_identity":                         false,
+		"command_wal_ordering":                         false,
+		"value_log_gc_safety":                          false,
+		"depends_3032":                                 false,
+		"depends_3033":                                 false,
+		"prior_no_replacement_changed_root_guardrail":  false,
+		"ordered_root_span_native_candidate_ops_total": false,
+		"ordered_root_span_native_fallback_reason":     false,
+		"ordered_root_span_native_used_ops_zero":       false,
 	}
 
 	rows := orderedRootSpanNativeClassificationRows()
@@ -703,8 +710,8 @@ func TestOrderedRootSpanNativePublishLocksBlanketNonSpanNativeFallback(t *testin
 	if orderedApplyOpts.SpanNativeApply {
 		t.Fatalf("ordered-root delta batch span-native apply enabled; matrix row %q must be updated before behavior changes", row.ID)
 	}
-	if orderedApplyOpts.SpanNativeForceFallbackReason != "" {
-		t.Fatalf("ordered-root fallback reason hook=%q, want empty because behavior is current forced non-span-native apply", orderedApplyOpts.SpanNativeForceFallbackReason)
+	if got, want := orderedApplyOpts.SpanNativeForceFallbackReason, FlushSpanRunFallbackSpanNativeNotImplemented.String(); got != want {
+		t.Fatalf("ordered-root fallback reason hook=%q, want %q", got, want)
 	}
 	if !orderedApplyOpts.PrepareReadOnly || orderedApplyOpts.ReadOnlyPrepareWorkers != 2 {
 		t.Fatalf("ordered-root read-only prepare options=%+v, want prepare-only planning with two workers", orderedApplyOpts)
@@ -743,8 +750,256 @@ func TestOrderedRootSpanNativePublishLocksBlanketNonSpanNativeFallback(t *testin
 	stats := db.Stats()
 	requireOrderedRootStatCounterPositive(t, stats, "treedb.flush_apply.read_only_prepare.calls_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.flush_apply.span_native.used_ops_total")
-	requireOrderedRootStatCounterPositive(t, stats, "treedb.flush_apply.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
-	requireOrderedRootStatCounterZero(t, stats, "treedb.flush_apply.span_native.fallback.reason."+FlushSpanRunFallbackUnknown.String()+".ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.eligible_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.used_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.ineligible_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".count_total")
+	requireOrderedRootStatCounterPositive(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackUnknown.String()+".count_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.fallback.reason."+FlushSpanRunFallbackUnknown.String()+".ops_total")
+	if got := stats["treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.fallback_reason"]; got != FlushSpanRunFallbackSpanNativeNotImplemented.String() {
+		t.Fatalf("ordered-root delta batch triage fallback=%q want %q", got, FlushSpanRunFallbackSpanNativeNotImplemented.String())
+	}
+}
+
+func TestOrderedRootSpanNativeEligibilityCountsCandidatesBeforeEnablement(t *testing.T) {
+	opts := Options{}
+	decision := computeFlushAdmissionDecisionForHardware(&opts, 16, 6)
+	db := &DB{flushAdmission: decision}
+	row := db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:   OrderedRootSpanNativeRouteDeltaBatchPublish,
+		Context: "test warm delta batch",
+		Summary: orderedRootSafeSpanSummary(6, 3),
+	})
+	if !row.Candidate {
+		t.Fatalf("candidate=false want true: %+v", row)
+	}
+	if row.Eligible || row.Used {
+		t.Fatalf("eligible/used=%t/%t want false before enablement", row.Eligible, row.Used)
+	}
+	if row.Status != OrderedRootSpanNativeStatusFallback {
+		t.Fatalf("status=%q want fallback", row.Status)
+	}
+	if row.FallbackReason != FlushSpanRunFallbackSpanNativeNotImplemented.String() {
+		t.Fatalf("fallback=%q want %q", row.FallbackReason, FlushSpanRunFallbackSpanNativeNotImplemented)
+	}
+	db.observeOrderedRootSpanNativeEligibility(row)
+	if got := db.orderedRootSpanNativeCandidateOps.Load(); got != 6 {
+		t.Fatalf("candidate ops=%d want 6", got)
+	}
+	if got := db.orderedRootSpanNativeCandidateSpans.Load(); got != 3 {
+		t.Fatalf("candidate spans=%d want 3", got)
+	}
+	if got := db.orderedRootSpanNativeEligibleOps.Load(); got != 0 {
+		t.Fatalf("eligible ops=%d want 0", got)
+	}
+	if got := db.orderedRootSpanNativeUsedOps.Load(); got != 0 {
+		t.Fatalf("used ops=%d want 0", got)
+	}
+	if got := db.orderedRootSpanNativeFallbackOps[FlushSpanRunFallbackSpanNativeNotImplemented].Load(); got != 6 {
+		t.Fatalf("not implemented fallback ops=%d want 6", got)
+	}
+	if got := db.orderedRootSpanNativeFallbackReasonCounts[FlushSpanRunFallbackSpanNativeNotImplemented].Load(); got != 1 {
+		t.Fatalf("not implemented fallback count=%d want 1", got)
+	}
+	if got := db.orderedRootSpanNativeFallbackOps[FlushSpanRunFallbackUnknown].Load(); got != 0 {
+		t.Fatalf("unknown fallback ops=%d want 0", got)
+	}
+	if got := db.orderedRootSpanNativeFallbackReasonCounts[FlushSpanRunFallbackUnknown].Load(); got != 0 {
+		t.Fatalf("unknown fallback count=%d want 0", got)
+	}
+}
+
+func TestOrderedRootSpanNativeEligibilityDistinguishesAdmissionFallbacks(t *testing.T) {
+	summary := orderedRootSafeSpanSummary(4, 2)
+	offOpts := Options{FlushAdmissionPolicy: FlushAdmissionPolicyOff, FlushApplySpanNative: true, FlushApplyConcurrency: 4}
+	off := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&offOpts, 16, 6)}
+	offRow := off.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:   OrderedRootSpanNativeRouteDeltaBatchPublish,
+		Context: "off policy",
+		Summary: summary,
+	})
+	if offRow.FallbackReason != FlushSpanRunFallbackDisabled.String() || offRow.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
+		t.Fatalf("off fallback row=%+v want disabled policy fallback", offRow)
+	}
+
+	declineOpts := Options{FlushAdmissionPolicy: FlushAdmissionPolicyAuto, FlushApplyConcurrency: 1, FlushApplySpanNative: true}
+	declined := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&declineOpts, 4, 4)}
+	declineRow := declined.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:   OrderedRootSpanNativeRouteDeltaBatchPublish,
+		Context: "auto decline",
+		Summary: summary,
+	})
+	if declineRow.FallbackReason != FlushSpanRunFallbackAdmissionPolicyDecline.String() || declineRow.FallbackClass != OrderedRootSpanNativeFallbackClassPolicy {
+		t.Fatalf("auto decline row=%+v want admission-policy decline", declineRow)
+	}
+
+	admittedOpts := Options{}
+	admitted := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&admittedOpts, 16, 6)}
+	routeRow := admitted.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+		Route:   OrderedRootSpanNativeRouteDirectPublish,
+		Context: "direct publish",
+		Summary: summary,
+	})
+	if routeRow.FallbackReason != FlushSpanRunFallbackRouteIneligible.String() || routeRow.FallbackClass != OrderedRootSpanNativeFallbackClassRoute {
+		t.Fatalf("route-ineligible row=%+v want route fallback", routeRow)
+	}
+}
+
+func TestOrderedRootSpanNativeEligibilityNamesUnsupportedFallbacks(t *testing.T) {
+	opts := Options{}
+	db := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&opts, 16, 6)}
+	base := orderedRootSafeSpanSummary(8, 2)
+	cases := []struct {
+		name   string
+		req    orderedRootSpanNativeEligibilityRequest
+		reason FlushSpanRunFallbackReason
+	}{
+		{
+			name:   "validation failure",
+			req:    orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: base, ReadOnlyPrepareValidationFail: true},
+			reason: FlushSpanRunFallbackValidationFailed,
+		},
+		{
+			name: "range delete barrier",
+			req: orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: func() zipper.ReadOnlyLeafSpanSummary {
+				s := base
+				s.DeleteRanges = 1
+				s.ExactLeafSpans = false
+				return s
+			}()},
+			reason: FlushSpanRunFallbackRangeDeleteBarrier,
+		},
+		{
+			name: "cold build",
+			req: orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteOverlayColdBuild, Summary: func() zipper.ReadOnlyLeafSpanSummary {
+				s := base
+				s.ColdBuild = true
+				return s
+			}()},
+			reason: FlushSpanRunFallbackColdBuild,
+		},
+		{
+			name: "maintenance",
+			req: orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: func() zipper.ReadOnlyLeafSpanSummary {
+				s := base
+				s.Maintenance = true
+				s.ExactLeafSpans = false
+				return s
+			}()},
+			reason: FlushSpanRunFallbackMaintenance,
+		},
+		{
+			name: "inexact spans",
+			req: orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: func() zipper.ReadOnlyLeafSpanSummary {
+				s := base
+				s.ExactLeafSpans = false
+				return s
+			}()},
+			reason: FlushSpanRunFallbackInexactLeafSpans,
+		},
+		{
+			name:   "output ownership",
+			req:    orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: base, ExplicitFallbackReason: FlushSpanRunFallbackOutputOwnershipFailure.String()},
+			reason: FlushSpanRunFallbackOutputOwnershipFailure,
+		},
+		{
+			name:   "reducer validation",
+			req:    orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: base, ExplicitFallbackReason: FlushSpanRunFallbackReducerValidationFailed.String()},
+			reason: FlushSpanRunFallbackReducerValidationFailed,
+		},
+		{
+			name:   "root mismatch",
+			req:    orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: base, ExplicitFallbackReason: FlushSpanRunFallbackRootMismatch.String()},
+			reason: FlushSpanRunFallbackRootMismatch,
+		},
+		{
+			name:   "memory cap",
+			req:    orderedRootSpanNativeEligibilityRequest{Route: OrderedRootSpanNativeRouteDeltaBatchPublish, Summary: base, ExplicitFallbackReason: FlushSpanRunFallbackMemoryEmergencyCap.String()},
+			reason: FlushSpanRunFallbackMemoryEmergencyCap,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := db.orderedRootSpanNativeEligibility(tc.req)
+			if row.FallbackReason != tc.reason.String() {
+				t.Fatalf("fallback=%q want %q (row=%+v)", row.FallbackReason, tc.reason, row)
+			}
+			if row.FallbackReason == "" || row.FallbackReason == FlushSpanRunFallbackUnknown.String() {
+				t.Fatalf("unsupported fallback must be named, got row=%+v", row)
+			}
+		})
+	}
+}
+
+func TestOrderedRootSpanNativeTriageSnapshotCoversSupportRoutes(t *testing.T) {
+	opts := Options{}
+	db := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&opts, 16, 6)}
+	rows := db.OrderedRootSpanNativeTriageSnapshot()
+	required := map[OrderedRootSpanNativeRoute]bool{
+		OrderedRootSpanNativeRouteDirectPublish:             false,
+		OrderedRootSpanNativeRouteGroupedPublish:            false,
+		OrderedRootSpanNativeRouteSystemDeltaBuilderPublish: false,
+		OrderedRootSpanNativeRouteCommandWALPublish:         false,
+		OrderedRootSpanNativeRouteCollectionBufferedRoots:   false,
+		OrderedRootSpanNativeRouteOverlayColdBuild:          false,
+		OrderedRootSpanNativeRouteMultiIndexGroupPublish:    false,
+		OrderedRootSpanNativeRouteDeltaBatchPublish:         false,
+	}
+	for _, row := range rows {
+		if _, ok := required[row.Route]; !ok {
+			t.Fatalf("unexpected triage route %q", row.Route)
+		}
+		required[row.Route] = true
+		if row.Context == "" || row.RouteSupportDetail == "" {
+			t.Fatalf("triage row %q missing context/detail: %+v", row.Route, row)
+		}
+		if row.FallbackReason == "" || row.FallbackReason == FlushSpanRunFallbackUnknown.String() {
+			t.Fatalf("triage row %q has unsupported fallback reason %q", row.Route, row.FallbackReason)
+		}
+		if row.AdmissionPolicy == "" || row.AdmissionReason == "" {
+			t.Fatalf("triage row %q missing admission context: %+v", row.Route, row)
+		}
+	}
+	for route, seen := range required {
+		if !seen {
+			t.Fatalf("missing ordered-root triage route %q", route)
+		}
+	}
+	byRoute := orderedRootSpanNativeTriageRowsByRoute(rows)
+	if got := byRoute[OrderedRootSpanNativeRouteDirectPublish].FallbackReason; got != FlushSpanRunFallbackRouteIneligible.String() {
+		t.Fatalf("direct publish fallback=%q want route_ineligible", got)
+	}
+	if got := byRoute[OrderedRootSpanNativeRouteOverlayColdBuild].FallbackReason; got != FlushSpanRunFallbackColdBuild.String() {
+		t.Fatalf("overlay cold fallback=%q want cold_build", got)
+	}
+	if got := byRoute[OrderedRootSpanNativeRouteCommandWALPublish].FallbackReason; got != FlushSpanRunFallbackSpanNativeNotImplemented.String() {
+		t.Fatalf("command-WAL fallback=%q want span_native_not_implemented", got)
+	}
+}
+
+func TestOrderedRootSpanNativeStatsExposeSupportTriageSnapshot(t *testing.T) {
+	opts := Options{FlushAdmissionPolicy: FlushAdmissionPolicyOff, FlushApplySpanNative: true, FlushApplyConcurrency: 4}
+	db := &DB{flushAdmission: computeFlushAdmissionDecisionForHardware(&opts, 16, 6)}
+	stats := map[string]string{}
+	db.appendOrderedRootSpanNativeStats(stats)
+	prefix := "treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish."
+	if got := stats[prefix+"status"]; got != string(OrderedRootSpanNativeStatusFallback) {
+		t.Fatalf("delta batch triage status=%q want fallback", got)
+	}
+	if got := stats[prefix+"fallback_reason"]; got != FlushSpanRunFallbackDisabled.String() {
+		t.Fatalf("delta batch triage fallback=%q want disabled", got)
+	}
+	if got := stats[prefix+"fallback_class"]; got != string(OrderedRootSpanNativeFallbackClassPolicy) {
+		t.Fatalf("delta batch triage class=%q want policy", got)
+	}
+	if got := stats[prefix+"admission_policy"]; got != FlushAdmissionPolicyOff.String() {
+		t.Fatalf("delta batch triage admission policy=%q want off", got)
+	}
+	if got := stats[prefix+"admission_reason"]; got != FlushAdmissionReasonPolicyOff {
+		t.Fatalf("delta batch triage admission reason=%q want policy_off", got)
+	}
 }
 
 func orderedRootSpanNativeClassificationRowByID(t *testing.T, id string) orderedRootSpanNativeClassificationRow {
@@ -756,6 +1011,24 @@ func orderedRootSpanNativeClassificationRowByID(t *testing.T, id string) ordered
 	}
 	t.Fatalf("missing ordered-root classification row %q", id)
 	return orderedRootSpanNativeClassificationRow{}
+}
+
+func orderedRootSafeSpanSummary(ops, spans int) zipper.ReadOnlyLeafSpanSummary {
+	return zipper.ReadOnlyLeafSpanSummary{
+		Ops:            ops,
+		PointOps:       ops,
+		SpanOps:        ops,
+		Spans:          spans,
+		ExactLeafSpans: true,
+	}
+}
+
+func orderedRootSpanNativeTriageRowsByRoute(rows []OrderedRootSpanNativeTriageRow) map[OrderedRootSpanNativeRoute]OrderedRootSpanNativeTriageRow {
+	out := make(map[OrderedRootSpanNativeRoute]OrderedRootSpanNativeTriageRow, len(rows))
+	for _, row := range rows {
+		out[row.Route] = row
+	}
+	return out
 }
 
 func requireOrderedRootStatCounterPositive(t *testing.T, stats map[string]string, key string) {
