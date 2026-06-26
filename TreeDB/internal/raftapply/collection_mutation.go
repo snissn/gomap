@@ -3,6 +3,7 @@ package raftapply
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -409,12 +410,18 @@ func normalizeApplyDocumentFormat(format collections.DocumentFormat) (collection
 }
 
 func validateMutationDocumentsV1(format collections.DocumentFormat, documents [][]byte) error {
-	if format != collections.DocumentFormatBSON {
-		return nil
-	}
-	for i, doc := range documents {
-		if err := bson.Raw(doc).Validate(); err != nil {
-			return codedError(raftentry.ErrorMalformedEntryV1, "raftapply: BSON document at index %d: %v", i, err)
+	switch format {
+	case collections.DocumentFormatJSON:
+		for i, doc := range documents {
+			if !json.Valid(doc) {
+				return codedError(raftentry.ErrorMalformedEntryV1, "raftapply: JSON document at index %d is invalid JSON", i)
+			}
+		}
+	case collections.DocumentFormatBSON:
+		for i, doc := range documents {
+			if err := bson.Raw(doc).Validate(); err != nil {
+				return codedError(raftentry.ErrorMalformedEntryV1, "raftapply: BSON document at index %d: %v", i, err)
+			}
 		}
 	}
 	return nil

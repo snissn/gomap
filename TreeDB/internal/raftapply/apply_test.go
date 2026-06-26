@@ -372,6 +372,54 @@ func TestCollectionMutationCommitAmbiguousAfterPublishRequiresRecovery(t *testin
 	}
 }
 
+func TestCollectionMutationMalformedJSONFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-indexed-json", testCreateCollectionMetaOptions{
+		includeIndex: true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:bad-json", nativewire.DocumentFormatJSON, [][]byte{[]byte("bad")}, [][]byte{[]byte(`{"email":`)})
+	result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedMalformed, raftentry.ErrorMalformedEntryV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("malformed JSON reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after malformed JSON=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after malformed JSON=%d, want %d", got, beforeLSN)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after malformed JSON progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+	if got, getErr := collections.NewCollectionManager(db).OpenCollection("docs"); getErr != nil {
+		t.Fatalf("OpenCollection docs after malformed JSON: %v", getErr)
+	} else if doc, getErr := got.Get([]byte("bad")); getErr != nil || doc != nil {
+		t.Fatalf("Get bad after malformed JSON doc=%q err=%v, want nil/<nil>", doc, getErr)
+	}
+}
+
 func TestCollectionMutationStaleCatalogGuardFailsBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
