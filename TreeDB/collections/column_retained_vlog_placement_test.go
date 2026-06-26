@@ -349,6 +349,19 @@ func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *test
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		t.Fatalf("InsertBatch: %v", err)
 	}
+	stats := col.LastInsertStats()
+	if stats.RetainedPayloadPrepare <= 0 {
+		t.Fatalf("retained payload prepare duration=%s, want positive semantic-stream-v1 phase", stats.RetainedPayloadPrepare)
+	}
+	if stats.RetainedPayloadRows != len(docs) {
+		t.Fatalf("retained payload rows=%d want %d", stats.RetainedPayloadRows, len(docs))
+	}
+	if stats.RetainedPayloadDeclaredRows != len(docs) {
+		t.Fatalf("retained payload declared rows=%d want %d", stats.RetainedPayloadDeclaredRows, len(docs))
+	}
+	if stats.RetainedPayloadSemanticStreamBlocks != 1 {
+		t.Fatalf("retained payload semantic-stream blocks=%d want 1", stats.RetainedPayloadSemanticStreamBlocks)
+	}
 	_, whitespaceRow, _ := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, d, "events", ids[9])
 	if whitespaceRow != 9 {
 		t.Fatalf("semantic locator row=%d want whitespace-varint row 9", whitespaceRow)
@@ -416,6 +429,168 @@ func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *test
 	_, reopenedRow, reopenedPtr := requireColumnRetainedSemanticStreamLocatorAndBlockPointer(t, reopen, "events", ids[17])
 	if reopenedRow != row || reopenedPtr != ptr {
 		t.Fatalf("semantic stream locator changed after reopen: row/ptr got %d/%+v want %d/%+v", reopenedRow, reopenedPtr, row, ptr)
+	}
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderReuse(t *testing.T) {
+	_, docsA := retainedSemanticStreamDocuments(96)
+	_, docsB := retainedSemanticStreamDocumentsFrom(96, 96)
+	rawA, err := encodeColumnRetainedSemanticStreamV1RawBlock(docsA)
+	if err != nil {
+		t.Fatalf("encode raw block A: %v", err)
+	}
+	rawB, err := encodeColumnRetainedSemanticStreamV1RawBlock(docsB)
+	if err != nil {
+		t.Fatalf("encode raw block B: %v", err)
+	}
+
+	encoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatalf("new stored block encoder: %v", err)
+	}
+	defer encoder.close()
+	for name, raw := range map[string][]byte{"A": rawA, "B": rawB} {
+		block, err := encoder.encodeWithRawLimit(raw, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
+		if err != nil {
+			t.Fatalf("encode reused block %s: %v", name, err)
+		}
+		if !bytes.HasPrefix(block, columnRetainedSemanticStreamV1BlockZSTDMagic) {
+			t.Fatalf("reused block %s magic=%q want zstd wrapper", name, block[:len(columnRetainedSemanticStreamV1BlockMagic)])
+		}
+		decoded, err := decodeColumnRetainedSemanticStreamV1StoredBlock(block)
+		if err != nil {
+			t.Fatalf("decode reused block %s: %v", name, err)
+		}
+		if !bytes.Equal(decoded, raw) {
+			t.Fatalf("decoded reused block %s differs from raw block", name)
+		}
+	}
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids, docs := retainedSemanticStreamDocuments(12)
+	docs[5] = []byte(`{"row_id":5,"kind":"kind-5","payload":"payload-005","note":"quote \" slash \\ smile \u263a","commit":{"cid":"bafy-test-000005"}}`)
+	docs[6] = []byte(`{"row_id":6,"kind":"old-kind","kind":"kind-6","payload":{"old":true},"payload":{"kept":true},"note":"old-note","note":["kept-note"],"commit":{"cid":"old-cid"},"commit":"kept-commit"}`)
+	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
+	if err != nil {
+		t.Fatalf("prepare semantic-stream-v1 documents with ids: %v", err)
+	}
+	if !prepared.declaredRowsReady {
+		t.Fatal("semantic-stream-v1 root fast path did not prepare declared rows")
+	}
+	if len(prepared.declaredRows) != len(docs) {
+		t.Fatalf("declared rows=%d want %d", len(prepared.declaredRows), len(docs))
+	}
+	row := prepared.declaredRows[5]
+	if got := string(row.ID); got != "doc-000005" {
+		t.Fatalf("declared row id=%q want doc-000005", got)
+	}
+	if got := row.Values[0].Int64; got != 5 {
+		t.Fatalf("declared row_id=%d want 5", got)
+	}
+	if got := row.Values[1].String; got != "kind-5" {
+		t.Fatalf("declared kind=%q want kind-5", got)
+	}
+	duplicateRow := prepared.declaredRows[6]
+	if got := duplicateRow.Values[1].String; got != "kind-6" {
+		t.Fatalf("duplicate declared kind=%q want last duplicate kind-6", got)
+	}
+	if prepared.semanticStreamBlocks == nil {
+		t.Fatal("semantic-stream-v1 root fast path did not return block table")
+	}
+	defer resetCollectionRunTable(prepared.semanticStreamBlocks)
+	iter := prepared.semanticStreamBlocks.NewIterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+	if !iter.Valid() {
+		t.Fatal("semantic-stream-v1 block table is empty")
+	}
+	rowsJSON, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(iter.UnsafeValue())
+	if err != nil {
+		t.Fatalf("decode semantic-stream-v1 block rows: %v", err)
+	}
+	if len(rowsJSON) != len(docs) {
+		t.Fatalf("decoded retained rows=%d want %d", len(rowsJSON), len(docs))
+	}
+	var retained map[string]any
+	if err := json.Unmarshal(rowsJSON[5], &retained); err != nil {
+		t.Fatalf("decode retained row JSON: %v", err)
+	}
+	if _, ok := retained["row_id"]; ok {
+		t.Fatalf("retained payload still contains declared row_id: %s", rowsJSON[5])
+	}
+	if _, ok := retained["kind"]; ok {
+		t.Fatalf("retained payload still contains declared kind: %s", rowsJSON[5])
+	}
+	if _, ok := retained["commit"]; !ok {
+		t.Fatalf("retained payload lost commit field: %s", rowsJSON[5])
+	}
+	if got, want := retained["note"], "quote \" slash \\ smile \u263a"; got != want {
+		t.Fatalf("retained payload note=%q want %q from escaped JSON string: %s", got, want, rowsJSON[5])
+	}
+	var duplicateRetained map[string]any
+	if err := json.Unmarshal(rowsJSON[6], &duplicateRetained); err != nil {
+		t.Fatalf("decode duplicate retained row JSON: %v", err)
+	}
+	payload, ok := duplicateRetained["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("duplicate retained payload=%T want object: %s", duplicateRetained["payload"], rowsJSON[6])
+	}
+	if _, ok := payload["old"]; ok {
+		t.Fatalf("duplicate retained payload kept overwritten root object: %s", rowsJSON[6])
+	}
+	if got, ok := payload["kept"].(bool); !ok || !got {
+		t.Fatalf("duplicate retained payload missing last root object: %s", rowsJSON[6])
+	}
+	if got, want := duplicateRetained["commit"], "kept-commit"; got != want {
+		t.Fatalf("duplicate retained commit=%q want %q: %s", got, want, rowsJSON[6])
+	}
+	note, ok := duplicateRetained["note"].([]any)
+	if !ok || len(note) != 1 || note[0] != "kept-note" {
+		t.Fatalf("duplicate retained note=%#v want last duplicate array: %s", duplicateRetained["note"], rowsJSON[6])
+	}
+}
+
+func TestPrepareColumnWritePublishInputUsesPreparedDeclaredRows(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64},
+		},
+	}
+	preparedRows := []columnDeclaredRow{{
+		ID: []byte("doc-1"),
+		Values: []columnDeclaredValue{{
+			Type:    ColumnStoreValueInt64,
+			Present: true,
+			Int64:   42,
+		}},
+	}}
+	input, err := prepareColumnWritePublishInputBeforeCommandWAL(columnWritePublishInput{
+		meta: CollectionMeta{Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    cfg,
+		}},
+		operation:         ColumnPublishOperationInsert,
+		documents:         []columnWriteDocument{{ID: []byte("doc-1"), Document: []byte(`not-json`)}},
+		rows:              1,
+		declaredRows:      preparedRows,
+		declaredRowsReady: true,
+	})
+	if err != nil {
+		t.Fatalf("prepare with declared rows ready: %v", err)
+	}
+	if len(input.declaredRows) != 1 || input.declaredRows[0].Values[0].Int64 != 42 {
+		t.Fatalf("prepared declared rows not preserved: %+v", input.declaredRows)
 	}
 }
 
