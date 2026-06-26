@@ -39,6 +39,7 @@ const (
 	columnStoreQueryQ4B                = "q4b"
 	columnStoreQueryQ5                 = "q5"
 	columnStoreQueryQ5Metadata         = "q5_metadata"
+	columnStoreQuerySumSecondOfDaySq   = "sum_time_second_of_day_square"
 	columnStoreSuiteBenchMetricPrefix  = "column_store_"
 	columnStoreSuiteAliasFullScanQ1    = "alias_full_scan_from_" + columnStoreQueryQ1
 	columnStoreSuiteAliasPrefixQ4A     = "alias_prefix_scan_from_" + columnStoreQueryQ4A
@@ -110,9 +111,10 @@ var (
 	)
 	columnStoreSuitePathArg                     = flag.String("column-store-path", columnStorePathRowStoreBaseline, columnStoreSuitePathUsage)
 	columnStoreSuiteFixtureArg                  = flag.String("column-store-fixture", "synthetic", "Fixture for -suite column_store (synthetic; JSONBENCH_DATA mode is reserved for the large local gate)")
-	columnStoreSuiteQueryArg                    = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata; empty/all runs the full q1-q5/q5_metadata suite; duplicates are rejected)")
+	columnStoreSuiteQueryArg                    = flag.String("column-store-query", "", "Optional comma-separated query subset for -suite column_store profiling (q1,q2,q3,q4a,q4b,q5,q5_metadata,sum_time_second_of_day_square; empty/all runs the full q1-q5/q5_metadata/expression suite; duplicates are rejected)")
 	columnStoreSuiteAssetReadIntegrityArg       = flag.String("column-store-asset-read-integrity", string(collections.ColumnAssetReadIntegrityVerify), "Column asset hot-read integrity for -suite column_store physical paths (verify, cached_verify, skip_checksums; relaxed modes are unsafe and require -treedb-allow-unsafe)")
 	columnStoreSuiteTypedCompressionArg         = flag.String("column-store-typed-compression", "", "Benchmark-only typed_column_part compression policy for -suite column_store when typed-column assets are published (none,snappy,lz4,zstd,zstd_dict; zstd values fail closed; empty uses production default none)")
+	columnStoreSuiteFirstTouchAfterOpenArg      = flag.Bool("column-store-first-touch-after-open", false, "Also report secondary first_touch_after_open query rows by reopening the DB/collection once per selected query")
 	columnStoreSuiteTypedInt64EncodingArg       = flag.String("column-store-typed-int64-encoding", "", "Benchmark-only typed_column_part int64 encoding override (default,raw_int64,delta_varint,double_delta_varint; empty uses production default)")
 	columnStoreSuiteTypedRowsPerGranuleArg      = flag.Int("column-store-typed-rows-per-granule", 0, "Benchmark-only typed_column_part rows per granule override (0 uses production default)")
 	columnStoreSuiteTypedAdaptiveArg            = flag.Bool("column-store-typed-adaptive", false, "Benchmark-only typed_column_part adaptive rows-per-granule sizing (off by default; public config remains unchanged)")
@@ -153,6 +155,7 @@ type columnStoreSuiteOptions struct {
 	ColumnAssetReadIntegrity collections.ColumnAssetReadIntegrity
 	RunBenchprof             bool
 	CorruptReferenceForTest  string
+	FirstTouchAfterOpen      bool
 }
 
 type columnStoreSuiteReport struct {
@@ -173,8 +176,10 @@ type columnStoreSuiteReport struct {
 	Stages                   []columnStoreStageMetric       `json:"stages"`
 	InsertStats              columnStoreInsertPhaseMetric   `json:"insert_stats"`
 	Queries                  []columnStoreQueryMetric       `json:"queries"`
+	FirstTouchQueries        []columnStoreQueryMetric       `json:"first_touch_queries,omitempty"`
 	JSONBenchCells           []columnStoreJSONBenchCell     `json:"jsonbench_cells"`
 	Parity                   map[string]columnStoreParity   `json:"parity"`
+	FirstTouchParity         map[string]columnStoreParity   `json:"first_touch_parity,omitempty"`
 	ByteAccounting           columnStoreByteAccounting      `json:"byte_accounting"`
 	CodecLayouts             []columnStoreCodecLayoutMetric `json:"codec_layouts"`
 	CompressionMatrixNote    string                         `json:"compression_matrix_note"`
@@ -564,6 +569,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", err
 	}
+	firstTouchAfterOpen := opts.FirstTouchAfterOpen || *columnStoreSuiteFirstTouchAfterOpenArg
 	assetReadIntegrity, err := columnStoreSuiteEffectiveAssetReadIntegrity(opts.ColumnAssetReadIntegrity)
 	if err != nil {
 		return "", err
@@ -686,7 +692,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	if err != nil {
 		return "", fmt.Errorf("column_store: reopen: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
 	collection, err = collections.NewCollectionManager(db).OpenCollection("events")
 	if err != nil {
 		return "", fmt.Errorf("column_store: reopen collection: %w", err)
@@ -718,6 +728,30 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	}
 	profileFinalizeErr := finishRuntimeProfiles()
 	runtimeProfilesActive = false
+	queryPhaseStats := cloneStringMap(db.Stats())
+
+	var firstTouchQueries []columnStoreQueryMetric
+	var firstTouchParity map[string]columnStoreParity
+	var firstTouchErr error
+	if firstTouchAfterOpen {
+		if err := db.Close(); err != nil {
+			return "", fmt.Errorf("column_store: close before first-touch-after-open: %w", err)
+		}
+		db = nil
+		start = time.Now()
+		firstTouchQueries, firstTouchParity, firstTouchErr = runColumnStoreSuiteFirstTouchAfterOpenQueries(dataDir, rows, rawHashes, forcedPath, assetReadIntegrity, queryNames)
+		stages = append(stages, columnStoreStage("first_touch_after_open", start, rows*len(queryNames), 0))
+		start = time.Now()
+		db, err = openColumnStoreSuiteDB(dataDir)
+		if err != nil {
+			return "", fmt.Errorf("column_store: reopen after first-touch-after-open: %w", err)
+		}
+		collection, err = collections.NewCollectionManager(db).OpenCollection("events")
+		if err != nil {
+			return "", fmt.Errorf("column_store: reopen collection after first-touch-after-open: %w", err)
+		}
+		stages = append(stages, columnStoreStage("reopen_after_first_touch", start, rows, sourceBytes))
+	}
 
 	totalBytes, totalFiles, err := columnStoreSuiteDirUsage(dataDir)
 	if err != nil {
@@ -787,8 +821,10 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		Stages:                stages,
 		InsertStats:           columnStoreInsertPhaseMetricFromStats(insertStats, insertBatches),
 		Queries:               queries,
+		FirstTouchQueries:     firstTouchQueries,
 		JSONBenchCells:        jsonbenchCells,
 		Parity:                parity,
+		FirstTouchParity:      firstTouchParity,
 		ByteAccounting: columnStoreByteAccounting{
 			SourceDocumentBytes:                sourceBytes,
 			RetainedPayloadBytes:               retainedPayloadBytes,
@@ -839,7 +875,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	populateColumnStoreThroughputInterpretations(report.Queries)
 
 	md := renderColumnStoreSuiteMarkdown(report)
-	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
+	benchRunStats := db.Stats()
+	if firstTouchAfterOpen {
+		benchRunStats = queryPhaseStats
+	}
+	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, benchRunStats, checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg, opts.RunBenchprof)
 		report.Artifacts = columnStoreSuitePruneMissingRuntimeDeltaArtifacts(report.Artifacts)
@@ -854,8 +894,8 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 		}
 	}
 	// Keep artifacts available for diagnosis even when parity/report-cell gates fail.
-	if parityErr != nil || profileFinalizeErr != nil || jsonbenchCellsErr != nil {
-		return "", errors.Join(parityErr, profileFinalizeErr, jsonbenchCellsErr)
+	if parityErr != nil || firstTouchErr != nil || profileFinalizeErr != nil || jsonbenchCellsErr != nil {
+		return "", errors.Join(parityErr, firstTouchErr, profileFinalizeErr, jsonbenchCellsErr)
 	}
 	return md, nil
 }
@@ -1782,6 +1822,74 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 	return queries, parity, firstErr
 }
 
+func runColumnStoreSuiteFirstTouchAfterOpenQueries(dataDir string, rows int, rawHashes map[string]uint64, path string, assetReadIntegrity collections.ColumnAssetReadIntegrity, queryNames []string) ([]columnStoreQueryMetric, map[string]columnStoreParity, error) {
+	queryNames, err := columnStoreSuiteEffectiveQueryNames(queryNames, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	queries := make([]columnStoreQueryMetric, 0, len(queryNames))
+	parity := make(map[string]columnStoreParity, len(queryNames))
+	var firstErr error
+	for _, name := range queryNames {
+		openStart := time.Now()
+		db, err := openColumnStoreSuiteDB(dataDir)
+		if err != nil {
+			return queries, parity, fmt.Errorf("column_store: first-touch reopen for %s: %w", name, err)
+		}
+		collection, err := collections.NewCollectionManager(db).OpenCollection("events")
+		openElapsed := time.Since(openStart)
+		if err != nil {
+			closeErr := db.Close()
+			return queries, parity, errors.Join(fmt.Errorf("column_store: first-touch open collection for %s: %w", name, err), closeErr)
+		}
+		queryMetrics, queryParity, queryErr := runColumnStoreSuiteQueries(collection, rows, rawHashes, path, assetReadIntegrity, []string{name})
+		closeErr := db.Close()
+		if closeErr != nil {
+			queryErr = errors.Join(queryErr, fmt.Errorf("column_store: first-touch close for %s: %w", name, closeErr))
+		}
+		for key, value := range queryParity {
+			parity[key] = value
+		}
+		if len(queryMetrics) == 1 {
+			metric := columnStoreFirstTouchQueryMetric(queryMetrics[0], openElapsed)
+			queries = append(queries, metric)
+		} else if queryErr == nil {
+			queryErr = fmt.Errorf("column_store: first-touch query %s metrics=%d want 1", name, len(queryMetrics))
+		}
+		if queryErr != nil && firstErr == nil {
+			firstErr = queryErr
+		}
+	}
+	return queries, parity, firstErr
+}
+
+func columnStoreFirstTouchQueryMetric(metric columnStoreQueryMetric, openElapsed time.Duration) columnStoreQueryMetric {
+	openDurationMS := durationMS(openElapsed)
+	metric.QueryMode = columnStoreQueryModeFirstTouchAfterOpen
+	metric.DurationMS += openDurationMS
+	metric.PrepareSetupDurationMS += openDurationMS
+	metric.TotalQueryDurationMS += openDurationMS
+	metric.duration += openElapsed
+	metric.RowsPerSecond = ratePerSecond(float64(metric.RowsProcessed), metric.duration)
+	metric.MiBPerSecond = ratePerSecond(float64(metric.BytesRead)/(1024*1024), metric.duration)
+	metric.NsPerRow = nsPerRow(metric.duration, metric.RowsProcessed)
+	metric.CacheLabel = "fresh_reopen_per_query"
+	metric.ImplementationNote = columnStoreAppendImplementationNote(metric.ImplementationNote, "first_touch_after_open includes DB reopen and collection open in prepare/setup")
+	return metric
+}
+
+func columnStoreAppendImplementationNote(note, suffix string) string {
+	note = strings.TrimSpace(note)
+	suffix = strings.TrimSpace(suffix)
+	if note == "" {
+		return suffix
+	}
+	if suffix == "" {
+		return note
+	}
+	return note + "; " + suffix
+}
+
 func columnStoreSuitePlanRequest(name string, rows int, forceKind collections.ColumnQueryPlanKind) collections.ColumnQueryPlanRequest {
 	return collections.ColumnQueryPlanRequest{
 		Name:                  name,
@@ -1821,7 +1929,7 @@ func columnStoreSuiteQueryIndexCandidates(name string) []string {
 	switch name {
 	case columnStoreQueryQ1, columnStoreQueryQ2:
 		return []string{"kind"}
-	case columnStoreQueryQ3:
+	case columnStoreQueryQ3, columnStoreQuerySumSecondOfDaySq:
 		return []string{"time_us"}
 	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
 		return []string{"did"}
@@ -2114,6 +2222,8 @@ func columnStoreSuitePhysicalQueryRequest(name string) (collections.ColumnPhysic
 		return collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupMaxInt64, GroupColumn: "did", ValueColumn: "time_us"}, nil
 	case columnStoreQueryQ5, columnStoreQueryQ5Metadata:
 		return collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us"}, nil
+	case columnStoreQuerySumSecondOfDaySq:
+		return collections.ColumnPhysicalQueryRequest{Kind: collections.ColumnPhysicalQuerySumSecondOfDaySquare, ValueColumn: "time_us"}, nil
 	default:
 		return collections.ColumnPhysicalQueryRequest{}, fmt.Errorf("column_store: unknown physical query %q", name)
 	}
@@ -2126,7 +2236,7 @@ func columnStoreSuitePhysicalQueryLines(prefix, queryName string, groups []colle
 		for _, group := range groups {
 			lines = append(lines, columnStoreSuiteFormatPhysicalQueryLine(prefix, group.Key, int64(group.Count)))
 		}
-	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata, columnStoreQuerySumSecondOfDaySq:
 		for _, group := range groups {
 			lines = append(lines, columnStoreSuiteFormatPhysicalQueryLine(prefix, group.Key, group.Int64))
 		}
@@ -2147,7 +2257,7 @@ func columnStoreSuiteHashPhysicalQueryGroups(prefix, queryName string, groups []
 		for _, group := range groups {
 			hash = columnStoreHashPhysicalQueryGroup(hash, prefix, group.Key, int64(group.Count))
 		}
-	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata, columnStoreQuerySumSecondOfDaySq:
 		for _, group := range groups {
 			hash = columnStoreHashPhysicalQueryGroup(hash, prefix, group.Key, group.Int64)
 		}
@@ -2173,7 +2283,7 @@ func columnStoreSuitePhysicalQueryGroupLess(queryName string, left, right collec
 	switch queryName {
 	case columnStoreQueryQ1, columnStoreQueryQ2, columnStoreQueryQ3:
 		leftValue, rightValue = int64(left.Count), int64(right.Count)
-	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata:
+	case columnStoreQueryQ4A, columnStoreQueryQ4B, columnStoreQueryQ5, columnStoreQueryQ5Metadata, columnStoreQuerySumSecondOfDaySq:
 	default:
 		return false
 	}
@@ -2862,6 +2972,7 @@ var columnStoreQueryNameList = [...]string{
 	columnStoreQueryQ4B,
 	columnStoreQueryQ5,
 	columnStoreQueryQ5Metadata,
+	columnStoreQuerySumSecondOfDaySq,
 }
 
 func columnStoreQueryNames() []string {
@@ -2958,6 +3069,20 @@ func columnStoreQueryImplementationNote(name, requestedPath, planPath string) st
 	}
 	if name == columnStoreQueryQ5Metadata && planPath == columnStorePathRowStoreBaseline {
 		return planPath + "_q5_alias_row_materialization_baseline"
+	}
+	if name == columnStoreQuerySumSecondOfDaySq {
+		switch planPath {
+		case columnStorePathSerialColumnScan, columnStorePathParallelColumnScan:
+			return planPath + "_arbitrary_expression_second_of_day_square_no_aggregate_metadata_physical_cell_scan"
+		case columnStorePathAggregateMetadata:
+			return "aggregate_metadata_forced_path_rerouted_to_arbitrary_expression_no_metadata_physical_cell_scan"
+		case columnStorePathBTreeIndexBaseline:
+			return "b_tree_index_baseline_arbitrary_expression_second_of_day_square_row_materialization_no_predicate_pushdown"
+		case columnStorePathRowStoreBaseline:
+			return "row_store_baseline_arbitrary_expression_second_of_day_square_row_materialization"
+		default:
+			return planPath + "_arbitrary_expression_second_of_day_square_no_aggregate_metadata_physical_cell_scan"
+		}
 	}
 	if planPath == columnStorePathBTreeIndexBaseline {
 		return "full_unbounded_secondary_index_scan_no_predicate_pushdown_m11b"
@@ -3101,6 +3226,20 @@ func columnStoreSuiteHourKey(hour int) string {
 	return fmt.Sprintf("hour_%02d", hour)
 }
 
+func columnStoreSuiteSecondOfDaySquare(timeUS int64) int64 {
+	const secondUS = int64(1_000_000)
+	const daySeconds = int64(86_400)
+	seconds := timeUS / secondUS
+	if timeUS < 0 && timeUS%secondUS != 0 {
+		seconds--
+	}
+	secondOfDay := seconds % daySeconds
+	if secondOfDay < 0 {
+		secondOfDay += daySeconds
+	}
+	return secondOfDay * secondOfDay
+}
+
 func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]string, error) {
 	switch name {
 	case columnStoreQueryQ1:
@@ -3171,6 +3310,12 @@ func columnStoreQueryLines(name string, events []columnStoreDecodedEvent) ([]str
 			lines = append(lines, fmt.Sprintf("%s:%s=%d", name, did, sp.max-sp.min))
 		}
 		return lines, nil
+	case columnStoreQuerySumSecondOfDaySq:
+		sum := int64(0)
+		for _, event := range events {
+			sum += columnStoreSuiteSecondOfDaySquare(event.TimeUS)
+		}
+		return []string{fmt.Sprintf("%s:%s=%d", name, "time_us_second_of_day_square", sum)}, nil
 	default:
 		return nil, fmt.Errorf("unknown column_store query %q", name)
 	}
@@ -3742,34 +3887,8 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	renderColumnStoreJSONBenchCellsMarkdown(&sb, report)
 	renderColumnStoreColgranuleReuseMarkdown(&sb, report)
 
-	sb.WriteString("## Query Throughput And Parity\n\n")
-	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
-	for _, q := range report.Queries {
-		parity := "pass"
-		if p, ok := report.Parity[q.Name]; ok && !p.Pass {
-			parity = "FAIL"
-		}
-		note := q.ImplementationNote
-		if note == "" && q.AliasOf != "" {
-			note = "alias_of_" + q.AliasOf
-		}
-		noteCell := "-"
-		if note != "" {
-			noteCell = markdownCodeTableText(note)
-		}
-		manifestRootCell := "-"
-		if q.ManifestRootName != "" || q.ManifestRoot != 0 {
-			manifestRootCell = fmt.Sprintf("%s/%d", q.ManifestRootName, q.ManifestRoot)
-		}
-		activeManifestCell := "-"
-		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
-			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
-		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
-	}
-	sb.WriteString("\n")
+	renderColumnStoreQueryMetricsMarkdown(&sb, "Query Throughput And Parity", report.Queries, report.Parity)
+	renderColumnStoreQueryMetricsMarkdown(&sb, "First Touch After Open Query Throughput And Parity", report.FirstTouchQueries, report.FirstTouchParity)
 
 	renderColumnStoreQueryCompressionAttributionMarkdown(&sb, report)
 	renderColumnStoreCodecLayoutMarkdown(&sb, report)
@@ -3886,6 +4005,40 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `root_delta_materialization` | %.3f |  |\n", stats.ColumnPublishRootDeltaMaterializeMS))
 		sb.WriteString(fmt.Sprintf("| `system_delta_construction` | %.3f |  |\n\n", stats.ColumnPublishSystemDeltaDurationMS))
 	}
+}
+
+func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, queries []columnStoreQueryMetric, parityByName map[string]columnStoreParity) {
+	if len(queries) == 0 {
+		return
+	}
+	sb.WriteString("## " + title + "\n\n")
+	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | rows materialized | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|\n")
+	for _, q := range queries {
+		parity := "pass"
+		if p, ok := parityByName[q.Name]; ok && !p.Pass {
+			parity = "FAIL"
+		}
+		note := q.ImplementationNote
+		if note == "" && q.AliasOf != "" {
+			note = "alias_of_" + q.AliasOf
+		}
+		noteCell := "-"
+		if note != "" {
+			noteCell = markdownCodeTableText(note)
+		}
+		manifestRootCell := "-"
+		if q.ManifestRootName != "" || q.ManifestRoot != 0 {
+			manifestRootCell = fmt.Sprintf("%s/%d", q.ManifestRootName, q.ManifestRoot)
+		}
+		activeManifestCell := "-"
+		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
+			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.RowMaterializations, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+	}
+	sb.WriteString("\n")
 }
 
 func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {
@@ -4209,6 +4362,8 @@ func columnStoreSuiteBenchDisplayNameForQuery(name string) string {
 		return "Column q5"
 	case columnStoreQueryQ5Metadata:
 		return "Column q5 metadata"
+	case columnStoreQuerySumSecondOfDaySq:
+		return "Column sum second-of-day square"
 	default:
 		return "Column " + name
 	}

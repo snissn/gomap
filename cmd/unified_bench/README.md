@@ -355,7 +355,9 @@ execution labels are `row_store_baseline`, `b_tree_index_baseline`,
 `serial_column_scan`, `aggregate_metadata`, and `parallel_column_scan`.
 The `aggregate_metadata` path uses typed aggregate metadata for q1, q4b, and
 q5_metadata where those assets are available; the other synthetic query shapes
-reroute to serial physical scans.
+reroute to serial physical scans. `sum_time_second_of_day_square` is an
+arbitrary-expression lane that must visit typed `time_us` cells unless a future
+planner explicitly maintains a matching generated expression or aggregate.
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
@@ -373,10 +375,17 @@ OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
 ```
 
 Use `-column-store-query q3` or a comma-separated subset such as
-`-column-store-query q2,q3,q4b,q5` when collecting query-isolated 100K-1M row
-CPU/allocation profiles. Omit it, or pass `all`, for the default full
-q1-q5/q5_metadata suite. Duplicate query names are rejected so benchprof
-tables and artifact labels stay unambiguous.
+`-column-store-query q2,q3,q4b,sum_time_second_of_day_square` when collecting
+query-isolated 100K-1M row CPU/allocation profiles. Omit it, or pass `all`, for
+the default full q1-q5/q5_metadata/expression suite. Duplicate query names are
+rejected so benchprof tables and artifact labels stay unambiguous.
+
+Use `-column-store-first-touch-after-open` when collecting the secondary
+`first_touch_after_open` lane. It closes the warmed reopened DB after the main
+query pass, then reopens the DB and collection once per selected query and
+records separate `first_touch_queries` rows with reopen/open time included in
+`prepare_setup_duration_ms`. The primary `queries` rows remain the
+`one_shot_end_to_end` lane.
 
 Column-store non-column retained payloads default to `semantic-stream-v1` so the
 production storage-parity path uses retained semantic-stream side-root blocks.
@@ -392,8 +401,9 @@ The suite writes:
 - `insights.md`, `insights.json`, `insights.html`
 - configured runtime profiles, including `cpu_column_store_treedb_column_store.pprof`, `allocs_column_store_treedb_column_store.pprof`, `checkpoint_cpu_checkpoint_column_store_treedb_column_store.pprof`, `block.pprof`, `mutex.pprof`, `trace.out`, and the query-phase delta `block_column_store_treedb_column_store.pprof` / `mutex_column_store_treedb_column_store.pprof` when those profile classes produce non-empty deltas
 
-`column_store_results.json` includes a `jsonbench_cells` matrix for the in-repo
-synthetic JSONBench-shaped fixture. Each cell records the external-facing label
+`column_store_results.json` includes `query_mode` and `metadata_mode` labels on
+query rows and a `jsonbench_cells` matrix for the in-repo synthetic
+JSONBench-shaped fixture. Each cell records the external-facing label
 (`row-scan`, `column-direct`, `column-prepared`, `column-direct-metadata`, or
 `column-prepared-metadata` when the mode exists), query name, sort layout,
 storage source, direct/prepared mode, metadata-vs-data path, compression mode,
@@ -408,7 +418,7 @@ storage accounting (#2118), so headline ClickHouse/full-data claims require a
 fresh external JSONBench run against the selected gomap dependency.
 
 PR descriptions for column-store milestones should paste the command, row count,
-profile, forced path, q1-q5/q5_metadata rows/sec, MiB/sec, ns/row,
+profile, forced path, q1-q5/q5_metadata/expression rows/sec, MiB/sec, ns/row,
 planner time, scan time, reduce time, worker count, scheduled/skipped granules,
 cache hit/miss counters, materialized-row count, parity status, storage source,
 fallback reason, manifest root name/id, active manifest generation/checksum,
