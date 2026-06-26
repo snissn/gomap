@@ -127,7 +127,7 @@ func TestTypedColumnQ2DenseGroupCountDistinctNoSortLocalDictionaries1950(t *test
 		t.Fatalf("RunColumnPhysicalQuery(q2 dense no-sort): %v", err)
 	}
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "dense no-sort", direct, rowHash, want)
-	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "dense no-sort", direct.Diagnostics, len(events), matchedRows)
+	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "dense no-sort", direct.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -140,7 +140,7 @@ func TestTypedColumnQ2DenseGroupCountDistinctNoSortLocalDictionaries1950(t *test
 	}
 	assertTypedColumnQ2DensePreparedGlobalCodes1950(t, runner)
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "prepared dense no-sort", prepared, rowHash, want)
-	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "prepared dense no-sort", prepared.Diagnostics, len(events), matchedRows)
+	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "prepared dense no-sort", prepared.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 
 	got := columnPhysicalJSONBenchQ2CountsP0(prepared.Groups)
 	if got["app.z"].Count != 4 || got["app.z"].Distinct != 2 {
@@ -151,6 +151,72 @@ func TestTypedColumnQ2DenseGroupCountDistinctNoSortLocalDictionaries1950(t *test
 	}
 	if got["app.emptydid"].Count != 2 || got["app.emptydid"].Distinct != 1 {
 		t.Fatalf("empty did counts=%+v want empty distinct value counted once", got["app.emptydid"])
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctLocalCodesNullableValues3080(t *testing.T) {
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "collection",
+		DistinctColumn: "did",
+		Predicates: []ColumnPhysicalQueryPredicate{
+			{Column: "kind", Value: "commit"},
+			{Column: "operation", Value: "create"},
+		},
+	}
+	predicateCodes := []uint32{1, 1, 1, 1, 0}
+	allowed := []uint64{2}
+	runner := &columnTypedColumnPhysicalQueryRunner{
+		plan: columnTypedColumnPhysicalQueryPlan{
+			ProjectedColumns:        []string{"collection", "did", "kind", "operation"},
+			PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+			DenseGroupCountDistinct: true,
+		},
+		parts: []columnTypedColumnPhysicalQueryPart{
+			{
+				Rows: len(predicateCodes),
+				DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+					Rows: len(predicateCodes),
+					Group: columnTypedColumnDenseStringCodeColumn{
+						Codes:      []uint32{0, 0, 0, 1, 0},
+						Valid:      []bool{true, false, true, true, true},
+						Dictionary: []string{"app.a", "app.b"},
+					},
+					Distinct: columnTypedColumnDenseStringCodeColumn{
+						Codes:      []uint32{0, 1, 0, 0, 1},
+						Valid:      []bool{true, true, false, true, true},
+						Dictionary: []string{"did:x", "did:y"},
+					},
+					Predicates: []columnTypedColumnDensePredicatePart{
+						{Codes: predicateCodes, Allowed: allowed},
+						{Codes: predicateCodes, Allowed: allowed},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := runner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+	if err != nil {
+		t.Fatalf("runDenseGroupCountDistinct local nullable: %v", err)
+	}
+	if result.Diagnostics.DenseGroupCountDistinctReducer != columnTypedColumnDenseGroupCountDistinctReducerLocalBitset {
+		t.Fatalf("reducer=%q want %q diagnostics=%+v", result.Diagnostics.DenseGroupCountDistinctReducer, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset, result.Diagnostics)
+	}
+	if result.Diagnostics.RowsScanned != len(predicateCodes) || result.Diagnostics.RowsMatched != 4 || result.Diagnostics.ReduceRows != 4 {
+		t.Fatalf("row diagnostics=%+v want scanned=%d matched/reduced=4", result.Diagnostics, len(predicateCodes))
+	}
+	if len(runner.parts[0].DenseGroupCountDistinct.Group.GlobalCodes) != 0 || len(runner.parts[0].DenseGroupCountDistinct.Distinct.GlobalCodes) != 0 {
+		t.Fatalf("local reducer populated global codes: group=%d distinct=%d", len(runner.parts[0].DenseGroupCountDistinct.Group.GlobalCodes), len(runner.parts[0].DenseGroupCountDistinct.Distinct.GlobalCodes))
+	}
+	got := columnPhysicalJSONBenchQ2CountsP0(result.Groups)
+	want := map[string]columnPhysicalJSONBenchQ2CountP0{
+		"":      {Count: 1, Distinct: 1},
+		"app.a": {Count: 2, Distinct: 2},
+		"app.b": {Count: 1, Distinct: 1},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("groups=%v want %v raw=%+v", got, want, result.Groups)
 	}
 }
 
@@ -816,7 +882,7 @@ func assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(tb testing.TB, labe
 	}
 }
 
-func assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, totalRows, matchedRows int) {
+func assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, totalRows, matchedRows int, wantReducer string) {
 	tb.Helper()
 	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
 		tb.Fatalf("%s diagnostics=%+v want typed-column source without storage fallback", label, diag)
@@ -833,8 +899,8 @@ func assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(tb testing.TB, la
 	if !diag.DenseGroupCountDistinctUsed || diag.SortedGroupedDistinctUsed || diag.DenseGroupCountUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.TimeOrderTopKUsed {
 		tb.Fatalf("%s diagnostics=%+v want only dense grouped count-distinct path", label, diag)
 	}
-	if diag.DenseGroupCountDistinctReducer != columnTypedColumnDenseGroupCountDistinctReducerPairBitset || diag.DenseGroupCountDistinctGroups == 0 || diag.DenseGroupCountDistinctValues == 0 || diag.DenseGroupCountDistinctPairBitWords == 0 {
-		tb.Fatalf("%s dense grouped count-distinct reducer diagnostics=%+v want pair bitset with cardinalities", label, diag)
+	if diag.DenseGroupCountDistinctReducer != wantReducer || diag.DenseGroupCountDistinctGroups == 0 || diag.DenseGroupCountDistinctValues == 0 || diag.DenseGroupCountDistinctPairBitWords == 0 {
+		tb.Fatalf("%s dense grouped count-distinct reducer diagnostics=%+v want %s with cardinalities", label, diag, wantReducer)
 	}
 	if diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
 		tb.Fatalf("%s mark diagnostics=%+v want no sort-key pruning in dense no-sort path", label, diag)
