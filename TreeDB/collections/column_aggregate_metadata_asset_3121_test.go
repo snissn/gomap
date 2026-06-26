@@ -77,7 +77,7 @@ func TestAggregateMetadataAssetsFallbackSkipsUnsupportedAggregates3121(t *testin
 	}
 	want := buildColumnAggregateMetadataAssetsSequential3121(t, cfg, rows, aggregates)
 	assertColumnAggregateMetadataAssetsEqual3121(t, got, want)
-	if gotLen, wantLen := len(got), len(cfg.AggregateMetadata); gotLen != wantLen {
+	if gotLen, wantLen := len(got), len(want); gotLen != wantLen {
 		t.Fatalf("got %d assets want unsupported aggregate skipped with %d assets", gotLen, wantLen)
 	}
 }
