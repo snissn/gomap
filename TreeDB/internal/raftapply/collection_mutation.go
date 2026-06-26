@@ -27,6 +27,13 @@ type collectionMutationV1 struct {
 }
 
 func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
+	expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
+	if err != nil {
+		return raftentry.ApplyResultV1{}, err
+	}
+	if err := checkCatalogVersionGuardV1(meta, expectedCatalogVersion); err != nil {
+		return raftentry.ApplyResultV1{}, err
+	}
 	mutation, err := lowerCollectionMutationV1(entry, h.opts.DecodeLimits)
 	if err != nil {
 		return raftentry.ApplyResultV1{}, err

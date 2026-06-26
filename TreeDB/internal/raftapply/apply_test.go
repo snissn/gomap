@@ -372,6 +372,55 @@ func TestCollectionMutationCommitAmbiguousAfterPublishRequiresRecovery(t *testin
 	}
 }
 
+func TestCollectionMutationStaleCatalogGuardFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-json", testCreateCollectionMetaOptions{})
+	applied, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, applied, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	insert := deterministicInsertBatchEntry(t, "users", "client-a:insert:users-stale", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"hnl"}`)})
+	rejected, err := ApplyCommittedEntryV1(db, insert, applyMetaWithCatalogVersion(1, 2, testCatalogVersionStart+1), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, rejected, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("stale mutation guard reached command-WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after stale mutation guard=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after stale mutation guard=%d, want %d", got, beforeLSN)
+	}
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	got, err := opened.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1 after stale mutation guard: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u1 after stale mutation guard=%s, want nil", got)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after stale mutation guard progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+}
+
 func TestLowerCollectionMutationRejectsInvalidIDs(t *testing.T) {
 	tests := []struct {
 		name      string
