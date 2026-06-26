@@ -1120,6 +1120,13 @@ func TestCompactStorageLeafPageLogHandoffScanFailureFailsClosed(t *testing.T) {
 	if _, err := installed.AppendLeafPage(bytes.Repeat([]byte("s"), page.PageSize)); err != nil {
 		t.Fatalf("installed AppendLeafPage: %v", err)
 	}
+	if installed.leafW == nil {
+		t.Fatal("expected compact leaf writer")
+	}
+	if err := installed.leafW.Close(); err != nil {
+		t.Fatalf("close compact leaf writer before scan failure: %v", err)
+	}
+	installed.leafW = nil
 	if err := os.RemoveAll(leafDir); err != nil {
 		t.Fatalf("remove leaf dir: %v", err)
 	}
