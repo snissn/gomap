@@ -224,6 +224,73 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextUsesCommandWALRouteForSystemDelta(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openOrderedRootSpanNativeRouteCounterDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	makeDelta := func(kv ...string) *batch.Batch {
+		t.Helper()
+		table := mustFrozenSystemMemtable(t, kv...)
+		iter := table.NewIterator(nil, nil)
+		delta, err := OrderedRootDeltaBatchFromIterator(iter)
+		_ = iter.Close()
+		if err != nil {
+			t.Fatalf("delta batch: %v", err)
+		}
+		return delta
+	}
+
+	baseDelta := makeDelta("root/a", "base")
+	defer func() { _ = baseDelta.Close() }()
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot: 0,
+			Delta:    baseDelta,
+		}},
+		mustRawKVCommandWALIntent(t, db, "cmd/batch-context-base", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "system/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder base: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v, want one non-zero root", rootIDs)
+	}
+
+	updateDelta := makeDelta("root/b", "update")
+	defer func() { _ = updateDelta.Close() }()
+	_, updatedRootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot: rootIDs[0],
+			Delta:    updateDelta,
+		}},
+		mustRawKVCommandWALIntent(t, db, "cmd/batch-context-update", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "system/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder update: %v", err)
+	}
+	if len(updatedRootIDs) != 1 || updatedRootIDs[0] == 0 {
+		t.Fatalf("updatedRootIDs=%v, want one non-zero root", updatedRootIDs)
+	}
+
+	stats := db.Stats()
+	commandRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish."
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
+}
+
 func TestPublishOrderedRootDeltaGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -2521,6 +2588,7 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
 	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.candidate_ops_total")
 	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
 }
 

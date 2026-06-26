@@ -2696,7 +2696,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	}
 
 	rootIDs = make([]uint64, len(ordered))
-	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteSystemDeltaBuilderPublish, "ordered-root delta group system delta apply")
+	systemRoute := OrderedRootSpanNativeRouteSystemDeltaBuilderPublish
+	systemContext := "ordered-root delta group system delta apply"
+	if commandWALIntent != nil {
+		systemRoute = OrderedRootSpanNativeRouteCommandWALPublish
+		systemContext = "command-WAL ordered-root group system delta apply"
+	}
+	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(systemRoute, systemContext)
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
@@ -2899,7 +2905,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	}
 
 	rootIDs = make([]uint64, len(allOrdered))
-	systemOpts := systemRootOrderedPublishOptions(db)
+	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group system delta apply")
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
