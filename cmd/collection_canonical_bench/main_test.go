@@ -410,6 +410,50 @@ func TestCanonicalDerivedCompactedComparisons(t *testing.T) {
 	}
 }
 
+func TestCanonicalDerivedCompactedComparisonsRequireEvidencePerTreeDBConfig(t *testing.T) {
+	canon := knownExampleRun()
+	canon.Results = append(canon.Results,
+		testStorageRow("treedb_json_collection_2_indexes", "treedb_fast", "json", "collection", phaseOfflineCompact, 2, 3900000, 39.0),
+		testStorageRow("treedb_json_collection_2_indexes", "treedb_fast", "json", "collection", phaseFullLeafgenPackGC, 2, 2900000, 29.0),
+	)
+	finalizeRunMetadata(canon)
+
+	canon.Comparisons = buildCompactedComparisons(canon)
+	if got := findComparison(canon.Comparisons, "treedb_template_v1_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got == nil {
+		t.Fatalf("template-v1 comparison with matching exhaustive evidence was suppressed: %#v", canon.Comparisons)
+	}
+	if got := findComparison(canon.Comparisons, "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got != nil {
+		t.Fatalf("json comparison without matching exhaustive evidence was emitted: %#v", got)
+	}
+	for _, check := range validateCanonicalRun(canon) {
+		if check.Code == "missing_compacted_ratio" && strings.Contains(check.Message, "treedb_json_collection_2_indexes") {
+			t.Fatalf("validation should not require a compacted ratio without matching exhaustive evidence: %#v", check)
+		}
+	}
+
+	canon.Comparisons = append(canon.Comparisons, comparisonRow{
+		ComparisonName:    "stale_json_without_exhaustive_evidence",
+		TreeDBConfigName:  "treedb_json_collection_2_indexes",
+		TreeDBPhase:       phaseOfflineCompact,
+		SQLiteConfigName:  "sqlite_native_columns_2_indexes",
+		SQLitePhase:       phaseSQLiteVacuum,
+		TreeDBBytesPerDoc: 39.0,
+		SQLiteBytesPerDoc: 156.7,
+		SmallerRatio:      156.7 / 39.0,
+	})
+	if got := findComparison(comparisonsForReport(canon), "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got != nil {
+		t.Fatalf("stored stale comparison without matching exhaustive evidence was reportable: %#v", got)
+	}
+
+	canon.Results = append(canon.Results,
+		testStorageRow("treedb_json_collection_2_indexes", "treedb_fast", "json", "collection", phaseExhaustiveCompact, 2, 2100000, 21.0),
+	)
+	canon.Comparisons = buildCompactedComparisons(canon)
+	if got := findComparison(canon.Comparisons, "treedb_json_collection_2_indexes", phaseOfflineCompact, "sqlite_native_columns_2_indexes", phaseSQLiteVacuum); got == nil {
+		t.Fatalf("json comparison with matching exhaustive evidence was not emitted: %#v", canon.Comparisons)
+	}
+}
+
 func TestCanonicalDerivedCompactedComparisonsUseConfiguredIndexCount(t *testing.T) {
 	canon := knownExampleRun()
 	canon.Config.Indexes = 1

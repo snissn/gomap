@@ -1121,6 +1121,9 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 	}
 	if !sqliteSkipped {
 		for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+			if !hasTreeDBConfigExhaustiveCompactEvidence(canon, treeDBConfig) {
+				continue
+			}
 			for _, treedbPhase := range compactedTreeDBPhases() {
 				if findResult(canon.Results, treeDBConfig, treedbPhase) == nil {
 					continue
@@ -1177,6 +1180,9 @@ func buildCompactedComparisons(canon *canonicalRun) []comparisonRow {
 	var comparisons []comparisonRow
 	sqliteConfigs := []string{sqliteNativeConfigName(canon), sqliteJSONConfigName(canon)}
 	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+		if !hasTreeDBConfigExhaustiveCompactEvidence(canon, treeDBConfig) {
+			continue
+		}
 		for _, treedbPhase := range compactedTreeDBPhases() {
 			treeRow := findResult(canon.Results, treeDBConfig, treedbPhase)
 			if !hasPositiveBytesPerDoc(treeRow) {
@@ -1213,7 +1219,7 @@ func comparisonsForReport(canon *canonicalRun) []comparisonRow {
 		return nil
 	}
 	if len(canon.Comparisons) > 0 {
-		return canon.Comparisons
+		return filterCompactedComparisonsForEvidence(canon, canon.Comparisons)
 	}
 	return buildCompactedComparisons(canon)
 }
@@ -1229,7 +1235,30 @@ func hasCanonicalExhaustiveCompactEvidence(canon *canonicalRun) bool {
 	if canon == nil {
 		return false
 	}
-	return hasPositiveBytesPerDoc(findResult(canon.Results, compactedTreeDBConfigName(canon), phaseExhaustiveCompact))
+	return hasTreeDBConfigExhaustiveCompactEvidence(canon, compactedTreeDBConfigName(canon))
+}
+
+func hasTreeDBConfigExhaustiveCompactEvidence(canon *canonicalRun, treeDBConfig string) bool {
+	if canon == nil || strings.TrimSpace(treeDBConfig) == "" {
+		return false
+	}
+	return hasPositiveBytesPerDoc(findResult(canon.Results, treeDBConfig, phaseExhaustiveCompact))
+}
+
+func filterCompactedComparisonsForEvidence(canon *canonicalRun, comps []comparisonRow) []comparisonRow {
+	if canon == nil || len(comps) == 0 {
+		return comps
+	}
+	var filtered []comparisonRow
+	for _, cmp := range comps {
+		if strings.HasPrefix(cmp.TreeDBConfigName, "treedb_") &&
+			isTreeDBCompactedPhase(cmp.TreeDBPhase) &&
+			!hasTreeDBConfigExhaustiveCompactEvidence(canon, cmp.TreeDBConfigName) {
+			continue
+		}
+		filtered = append(filtered, cmp)
+	}
+	return filtered
 }
 
 func checksBlockCompactedClaims(checks []guardrailCheck) bool {
