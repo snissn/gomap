@@ -32,8 +32,16 @@ func RegisterCommandWALReplayHandlers() {
 	})
 }
 
-func newCommandWALReplayCollectionManager(db *backenddb.DB) *CollectionManager {
+// NewCommandWALReplayCollectionManager returns a collection manager for
+// command-WAL replay and deterministic apply paths. It intentionally skips the
+// backend publish-barrier and close-hook registrations used by public live
+// managers so replay/apply can own those boundaries explicitly.
+func NewCommandWALReplayCollectionManager(db *backenddb.DB) *CollectionManager {
 	return newCollectionManager(db, collectionManagerOptions{})
+}
+
+func newCommandWALReplayCollectionManager(db *backenddb.DB) *CollectionManager {
+	return NewCommandWALReplayCollectionManager(db)
 }
 
 func (c *Collection) commandWALActive(intent *backenddb.CommandWALIntent) bool {

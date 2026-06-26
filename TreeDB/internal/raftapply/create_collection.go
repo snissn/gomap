@@ -39,10 +39,14 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if intent == nil || handle.LSN() == 0 {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
 	}
-	if _, err := collections.NewCollectionManager(h.db).CreateCollectionWithCommandWALIntent(collectionMeta, intent); err != nil {
+	manager := h.replayCollectionManager()
+	if manager == nil {
+		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot apply create collection")
+	}
+	if _, err := manager.CreateCollectionWithCommandWALIntent(collectionMeta, intent); err != nil {
 		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
 	}
-	logical, err := LogicalDigestV1ForDB(h.db, LogicalDigestOptionsV1{
+	logical, err := h.logicalDigestV1(LogicalDigestOptionsV1{
 		ScopeRule:     meta.ScopeRule,
 		DatabaseScope: meta.DatabaseScope,
 		CatalogScope:  meta.CatalogScope,
@@ -88,7 +92,11 @@ func (h *Harness) preflightCreateCollectionV1(meta collections.CollectionMeta, p
 	if h == nil || h.db == nil {
 		return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil DB cannot preflight create collection")
 	}
-	existing, err := collections.NewCollectionManager(h.db).OpenCollection(meta.Name)
+	manager := h.replayCollectionManager()
+	if manager == nil {
+		return false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot preflight create collection")
+	}
+	existing, err := manager.OpenCollection(meta.Name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		return false, nil
 	}

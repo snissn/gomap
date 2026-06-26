@@ -2489,7 +2489,7 @@ func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 
-	replayManager := newCommandWALReplayCollectionManager(d)
+	replayManager := NewCommandWALReplayCollectionManager(d)
 	if replayManager.commandWALCoordinator == nil {
 		t.Fatalf("replay manager missing command WAL coordinator")
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -70,9 +71,10 @@ type Options struct {
 
 // Harness applies committed deterministic entry bytes to one local DB handle.
 type Harness struct {
-	db       *backenddb.DB
-	opts     Options
-	walApply CommandWALApplySeam
+	db                *backenddb.DB
+	opts              Options
+	walApply          CommandWALApplySeam
+	collectionManager *collections.CollectionManager
 }
 
 // NewHarness constructs an R3a apply harness for committed deterministic bytes.
@@ -81,7 +83,24 @@ func NewHarness(db *backenddb.DB, opts Options) *Harness {
 	if walApply == nil {
 		walApply = defaultCommandWALApplySeam{}
 	}
-	return &Harness{db: db, opts: opts, walApply: walApply}
+	var manager *collections.CollectionManager
+	if db != nil {
+		manager = collections.NewCommandWALReplayCollectionManager(db)
+	}
+	return &Harness{db: db, opts: opts, walApply: walApply, collectionManager: manager}
+}
+
+func (h *Harness) replayCollectionManager() *collections.CollectionManager {
+	if h == nil {
+		return nil
+	}
+	if h.collectionManager != nil {
+		return h.collectionManager
+	}
+	if h.db == nil {
+		return nil
+	}
+	return collections.NewCommandWALReplayCollectionManager(h.db)
 }
 
 // ApplyCommittedEntryV1 applies committed deterministic entry bytes through a

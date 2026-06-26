@@ -35,6 +35,21 @@ func LogicalDigestV1ForDB(db *backenddb.DB, opts LogicalDigestOptionsV1) (Logica
 	if db == nil {
 		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil DB cannot compute logical digest")
 	}
+	return logicalDigestV1ForCollectionManager(collections.NewCommandWALReplayCollectionManager(db), opts)
+}
+
+func (h *Harness) logicalDigestV1(opts LogicalDigestOptionsV1) (LogicalDigestV1, error) {
+	manager := h.replayCollectionManager()
+	if manager == nil {
+		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot compute logical digest")
+	}
+	return logicalDigestV1ForCollectionManager(manager, opts)
+}
+
+func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager, opts LogicalDigestOptionsV1) (LogicalDigestV1, error) {
+	if manager == nil {
+		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot compute logical digest")
+	}
 	scope := opts.ScopeRule
 	if scope == "" {
 		scope = raftentry.ScopeRuleSingleGroupV1
@@ -50,7 +65,7 @@ func LogicalDigestV1ForDB(db *backenddb.DB, opts LogicalDigestOptionsV1) (Logica
 	if catalog == "" {
 		catalog = raftentry.CatalogScopeDefaultV1
 	}
-	metas, err := collections.NewCollectionManager(db).ListCollections()
+	metas, err := manager.ListCollections()
 	if err != nil {
 		return LogicalDigestV1{}, codeCollectionApplyError(err)
 	}
