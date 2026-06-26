@@ -252,6 +252,9 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	if db == nil || !db.commandWAL {
 		return nil, nil
 	}
+	if db.readOnly {
+		return nil, ErrReadOnly
+	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
@@ -559,10 +562,34 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	return db.appendCommandWALIntent(&intent.inner, sync)
 }
 
+func commandWALIntentFrameAlreadyAppended(intent *CommandWALIntent) bool {
+	return intent != nil && intent.inner.lsn != 0
+}
+
 // AppendCommandWALIntent appends a deterministic command frame without
 // publishing roots. It is used by cached public command-WAL writers that must
 // make a typed frame replay-visible before inserting the mutation into memory.
 func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
+	if db != nil && db.readOnly {
+		return 0, ErrReadOnly
+	}
+	if intent == nil || commandWALIntentFrameAlreadyAppended(intent) {
+		return db.appendPublicCommandWALIntent(intent, sync)
+	}
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return 0, err
+	}
+	defer unlockCommandWALPublish()
+	return db.appendPublicCommandWALIntent(intent, sync)
+}
+
+// AppendStagedCommandWALIntent appends an intent while the caller holds a
+// higher-level staging guard observed by public command-WAL barriers.
+func (db *DB) AppendStagedCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
+	if db != nil && db.readOnly {
+		return 0, ErrReadOnly
+	}
 	return db.appendPublicCommandWALIntent(intent, sync)
 }
 
@@ -573,6 +600,9 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 	if db == nil || !db.commandWAL {
 		return 0, nil
 	}
+	if db.readOnly {
+		return 0, ErrReadOnly
+	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
@@ -582,6 +612,11 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 		payloadFormat: payloadFormat,
 		payload:       payload,
 	}
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return 0, err
+	}
+	defer unlockCommandWALPublish()
 	return db.appendCommandWALIntent(&intent, sync)
 }
 
@@ -748,8 +783,30 @@ func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if intent == nil {
 		return nil
 	}
+	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return err
+	}
+	defer unlockCommandWALPublish()
+	return db.publishCommandWALNoop(intent, sync)
+}
+
+// PublishStagedCommandWALNoop publishes an already-staged command-WAL no-op.
+// Callers must hold a higher-level raw publish or staging guard from the frame
+// append through this publish call.
+func (db *DB) PublishStagedCommandWALNoop(intent *CommandWALIntent, sync bool) error {
+	return db.publishCommandWALNoop(intent, sync)
+}
+
+func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
+	if intent == nil {
+		return nil
+	}
 	if db == nil {
 		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
 	}
 	if !db.CommandWALEnabled() {
 		return ErrCommandWALUnsupported
