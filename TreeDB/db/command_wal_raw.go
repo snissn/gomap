@@ -569,6 +569,17 @@ func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint6
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
 	}
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer unlockCommandWALPublish()
+	return db.appendPublicCommandWALIntent(intent, sync)
+}
+
+// AppendStagedCommandWALIntent appends an intent while the caller holds
+// LockCommandWALStaging.
+func (db *DB) AppendStagedCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
+	if db != nil && db.readOnly {
+		return 0, ErrReadOnly
+	}
 	return db.appendPublicCommandWALIntent(intent, sync)
 }
 
@@ -591,6 +602,8 @@ func (db *DB) AppendCommandWALPayload(kind commitlog.CommandKind, scope commitlo
 		payloadFormat: payloadFormat,
 		payload:       payload,
 	}
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer unlockCommandWALPublish()
 	return db.appendCommandWALIntent(&intent, sync)
 }
 
@@ -754,6 +767,19 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 }
 
 func (db *DB) PublishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer unlockCommandWALPublish()
+	return db.publishCommandWALNoop(intent, sync)
+}
+
+// PublishStagedCommandWALNoop publishes an already-staged command-WAL no-op.
+// Callers must hold LockCommandWALStaging from the frame append through this
+// publish call.
+func (db *DB) PublishStagedCommandWALNoop(intent *CommandWALIntent, sync bool) error {
+	return db.publishCommandWALNoop(intent, sync)
+}
+
+func (db *DB) publishCommandWALNoop(intent *CommandWALIntent, sync bool) error {
 	if intent == nil {
 		return nil
 	}

@@ -115,7 +115,12 @@ func Append(db *backenddb.DB, frame LoweredFrame, _ ApplyMetadata, opts Options)
 		return Handle{}, Result{}, err
 	}
 	staging := newStagingGuard(db.LockCommandWALStaging())
-	lsn, err := db.AppendCommandWALIntent(intent, opts.Sync)
+	applied = appliedCommandLSN(db)
+	if err := checkContiguousAppendReady(db, applied); err != nil {
+		staging.release()
+		return Handle{}, Result{}, err
+	}
+	lsn, err := db.AppendStagedCommandWALIntent(intent, opts.Sync)
 	if err != nil {
 		staging.release()
 		return Handle{}, Result{}, err
@@ -144,7 +149,7 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	if handle.staging != nil {
 		defer handle.staging.release()
 	}
-	if err := db.PublishCommandWALNoop(handle.intent, opts.Sync); err != nil {
+	if err := db.PublishStagedCommandWALNoop(handle.intent, opts.Sync); err != nil {
 		return Result{}, err
 	}
 	applied := uint64(0)

@@ -207,6 +207,73 @@ func TestOutstandingApplyHandleBlocksRawCommandWALPublish(t *testing.T) {
 	}
 }
 
+func TestOutstandingApplyHandleBlocksPublicCommandWALNoopPublish(t *testing.T) {
+	dir := t.TempDir()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                    dir,
+		CommandWAL:             true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	frame, err := TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewTrustedCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+	}
+
+	publishStarted := make(chan struct{})
+	publishDone := make(chan error, 1)
+	go func() {
+		close(publishStarted)
+		publishDone <- db.PublishCommandWALNoop(intent, false)
+	}()
+
+	select {
+	case <-publishStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("public publish goroutine did not start")
+	}
+	select {
+	case err := <-publishDone:
+		t.Fatalf("public no-op publish completed while apply handle was outstanding: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if _, err := Finalize(db, handle, ApplyMetadata{}, Options{}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("public no-op publish after finalize: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("public no-op publish remained blocked after finalize")
+	}
+	if got := db.State().AppliedCommandLSN; got != appendResult.LSN+1 {
+		t.Fatalf("AppliedCommandLSN after public no-op publish=%d, want %d", got, appendResult.LSN+1)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 2 {
+		t.Fatalf("command WAL frames after public no-op publish=%d, want 2", got)
+	}
+}
+
 func TestFinalizeRejectsHandleFromDifferentDB(t *testing.T) {
 	sourceDir := t.TempDir()
 	source, err := backenddb.Open(backenddb.Options{

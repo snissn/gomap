@@ -1990,6 +1990,8 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	}
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer unlockCommandWALPublish()
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -2750,6 +2752,8 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	}
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer unlockCommandWALPublish()
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -2904,6 +2908,8 @@ func (db *DB) finalizeOrderedRootPublishWithCommandWAL(newRootID uint64, sysRoot
 		return db.finalizeCommit(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
+	unlockCommandWALPublish := db.lockCommandWALRawPublish()
+	defer unlockCommandWALPublish()
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()

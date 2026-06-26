@@ -16,9 +16,9 @@ type commandWALRawBarrier struct {
 // RegisterCommandWALRawPublishBarrier registers a callback that raw command-WAL
 // writers must run before appending a new raw KV command frame. Higher-level
 // command executors use this to drain already-appended staged command frames so
-// raw KV publishes cannot create AppliedCommandLSN gaps. Hooks run while the raw
-// publish mutex is held, so they must not append raw command-WAL frames, take a
-// staging lock, or call paths that may do either. The returned unregister
+// raw KV publishes cannot create AppliedCommandLSN gaps. Hooks run while the
+// command-WAL publish mutex is held, so they must not append command-WAL frames,
+// take a staging lock, or call paths that may do either. The returned unregister
 // function waits for in-flight hooks and must not be called from the hook itself.
 func (db *DB) RegisterCommandWALRawPublishBarrier(hook func() error) func() {
 	if db == nil || hook == nil || !db.commandWAL {
@@ -107,12 +107,13 @@ func (db *DB) lockCommandWALRawPublish() func() {
 	return db.commandWALRawPublishMu.Unlock
 }
 
-// LockCommandWALStaging prevents a raw command-WAL publish from starting while
-// a higher-level command has appended a frame but not yet made it publishable.
+// LockCommandWALStaging prevents any command-WAL append/publish path from
+// starting while a higher-level command has appended a frame but not yet made it
+// publishable.
 func (db *DB) LockCommandWALStaging() func() {
 	if db == nil || !db.commandWAL {
 		return func() {}
 	}
-	db.commandWALRawPublishMu.RLock()
-	return db.commandWALRawPublishMu.RUnlock
+	db.commandWALRawPublishMu.Lock()
+	return db.commandWALRawPublishMu.Unlock
 }
