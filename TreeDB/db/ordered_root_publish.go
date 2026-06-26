@@ -1001,9 +1001,10 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 
 func (db *DB) orderedRootDeltaBatchApplyOptions() zipper.ApplyOptions {
 	applyOpts := db.flushApplyOptions()
+	spanNativeRequested := applyOpts.SpanNativeApply
 	applyOpts.SpanNativeApply = false
 	applyOpts.SpanNativeForceFallbackReason = FlushSpanRunFallbackSpanNativeNotImplemented.String()
-	if applyOpts.ParallelApplyConcurrency <= 1 {
+	if applyOpts.ParallelApplyConcurrency <= 1 && !spanNativeRequested {
 		applyOpts.PrepareReadOnly = false
 		applyOpts.ReadOnlyPrepareWorkers = 0
 	}
