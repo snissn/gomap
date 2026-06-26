@@ -230,7 +230,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 					AppliedCommandLSN: record.AppliedCommandLSN,
 				}); err != nil {
 					code, _ := ErrorCodeOf(err)
-					return reject(entry.Digest, code, err)
+					return recoveryRequired(entry.Digest, code, err)
 				}
 			}
 			return duplicate, nil

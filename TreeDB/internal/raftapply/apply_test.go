@@ -130,6 +130,37 @@ func TestCreateCollectionApplyCreatesCatalogAndDeterministicResult(t *testing.T)
 	}
 }
 
+func TestIdempotencyDuplicateProgressFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:duplicate-progress-failure", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	}
+
+	duplicate, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 2), Options{
+		ProgressStore: recordProgressStoreFailAfterPreflight{},
+		ResultStore:   results,
+	})
+	assertRecoveryRequired(t, duplicate, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if results.Len() != 2 {
+		t.Fatalf("result records after duplicate progress failure=%d, want 2", results.Len())
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after duplicate progress failure=%d, want %d", got, len(beforeFrames))
+	}
+}
+
 func TestCreateCollectionAcceptsCurrentCollectionMetaWireVersion(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
