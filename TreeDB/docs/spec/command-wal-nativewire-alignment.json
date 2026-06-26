@@ -7,7 +7,8 @@
     "lowered_kind_only_v1",
     "future_rejected_v1",
     "local_only_rejected_v1",
-    "local_only_barrier_v1"
+    "local_only_barrier_v1",
+    "read_rejected_v1"
   ],
   "ack_recoverability": {
     "visible": "process-visible after local command-WAL recoverability and normal-executor install; does not require root publication or AppliedLSN advancement",
@@ -147,6 +148,150 @@
       "support_matrix_status": "WAL-supported",
       "relationship": "local_only_barrier_v1",
       "notes": "CommandCheckpoint is a local-only durability barrier, not replicated command identity. It must observe command-WAL root and AppliedLSN boundaries but does not add a replayable user command payload."
+    },
+    {
+      "nativewire_command": "CommandListCollections",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Read-only native-wire metadata listing is not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandListIndexes",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Read-only native-wire index listing is not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandOpenCollection",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Connection-local native-wire collection open is not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandCloseCollection",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Connection-local native-wire collection close is not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandGetMany",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire document reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandIndexLookup",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire index lookup reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandIndexRange",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire index range reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandOpenScan",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire scan open reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandCursorNext",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire cursor reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandCursorClose",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Connection-local native-wire cursor close is not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandExplain",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire explain reads are not replicated command identity and must not append a local command-WAL frame."
+    },
+    {
+      "nativewire_command": "CommandStats",
+      "nativewire_fixture": "",
+      "nativewire_fixture_sha256": "",
+      "command_wal_kind": "none",
+      "command_wal_payload_format": "none",
+      "local_fixture": "",
+      "local_fixture_sha256": "",
+      "support_matrix_status": "read-only",
+      "relationship": "read_rejected_v1",
+      "notes": "Native-wire stats reads are not replicated command identity and must not append a local command-WAL frame."
     }
   ]
 }
