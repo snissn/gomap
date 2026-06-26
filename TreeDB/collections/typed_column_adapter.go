@@ -6101,6 +6101,9 @@ func typedColumnInt64VisibilitySelectionForBlock(visibility *typedColumnLatestPh
 }
 
 func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64PredicateAggregateResult, values []int64, selection typedcolumn.RowSelection, expression TypedColumnInt64AggregateExpression) error {
+	if expression == TypedColumnInt64AggregateSecondOfDaySquare {
+		return addTypedColumnInt64AggregateSecondOfDaySquareSelectedValues(result, values, selection)
+	}
 	switch selection.Kind() {
 	case typedcolumn.RowSelectionEmpty:
 		return nil
@@ -6167,6 +6170,118 @@ func addTypedColumnInt64AggregateSelectedValues(result *TypedColumnInt64Predicat
 	default:
 		return fmt.Errorf("typed-column int64 aggregate unsupported selection shape %s", selection.Shape().Kind)
 	}
+}
+
+func addTypedColumnInt64AggregateSecondOfDaySquareSelectedValues(result *TypedColumnInt64PredicateAggregateResult, values []int64, selection typedcolumn.RowSelection) error {
+	switch selection.Kind() {
+	case typedcolumn.RowSelectionEmpty:
+		return nil
+	case typedcolumn.RowSelectionAll:
+		return addTypedColumnInt64AggregateSecondOfDaySquareValueRange(result, values, 0, len(values))
+	case typedcolumn.RowSelectionRange:
+		start, end, ok := selection.SingleRange()
+		if !ok || start < 0 || end > len(values) {
+			return fmt.Errorf("typed-column int64 aggregate invalid range selection [%d,%d) values=%d", start, end, len(values))
+		}
+		return addTypedColumnInt64AggregateSecondOfDaySquareValueRange(result, values, start, end)
+	case typedcolumn.RowSelectionRanges:
+		for _, r := range selection.Ranges() {
+			if r.Start < 0 || r.End < r.Start || r.End > len(values) {
+				return fmt.Errorf("typed-column int64 aggregate invalid ranges selection [%d,%d) values=%d", r.Start, r.End, len(values))
+			}
+			if err := addTypedColumnInt64AggregateSecondOfDaySquareValueRange(result, values, r.Start, r.End); err != nil {
+				return err
+			}
+		}
+		return nil
+	case typedcolumn.RowSelectionSparse:
+		return addTypedColumnInt64AggregateSecondOfDaySquareSparseValues(result, values, selection.SparseRows())
+	case typedcolumn.RowSelectionBitmap:
+		return addTypedColumnInt64AggregateSecondOfDaySquareBitmapValues(result, values, selection.BitmapWords())
+	default:
+		return fmt.Errorf("typed-column int64 aggregate unsupported selection shape %s", selection.Shape().Kind)
+	}
+}
+
+func addTypedColumnInt64AggregateSecondOfDaySquareValueRange(result *TypedColumnInt64PredicateAggregateResult, values []int64, start int, end int) error {
+	if start < 0 || end < start || end > len(values) {
+		return fmt.Errorf("typed-column int64 aggregate invalid second-of-day-square range [%d,%d) values=%d", start, end, len(values))
+	}
+	count := end - start
+	if count == 0 {
+		return nil
+	}
+	checkOverflow := typedColumnInt64AggregateSecondOfDaySquareCountCanOverflow(count)
+	var sum int64
+	for _, value := range values[start:end] {
+		if err := addTypedColumnInt64AggregateSecondOfDaySquareLocal(&sum, value, checkOverflow); err != nil {
+			return err
+		}
+	}
+	return addTypedColumnInt64AggregateSecondOfDaySquareBatch(result, count, sum)
+}
+
+func addTypedColumnInt64AggregateSecondOfDaySquareSparseValues(result *TypedColumnInt64PredicateAggregateResult, values []int64, rows []int) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	checkOverflow := typedColumnInt64AggregateSecondOfDaySquareCountCanOverflow(len(rows))
+	var sum int64
+	for _, row := range rows {
+		if row < 0 || row >= len(values) {
+			return fmt.Errorf("typed-column int64 aggregate sparse row=%d values=%d", row, len(values))
+		}
+		if err := addTypedColumnInt64AggregateSecondOfDaySquareLocal(&sum, values[row], checkOverflow); err != nil {
+			return err
+		}
+	}
+	return addTypedColumnInt64AggregateSecondOfDaySquareBatch(result, len(rows), sum)
+}
+
+func addTypedColumnInt64AggregateSecondOfDaySquareBitmapValues(result *TypedColumnInt64PredicateAggregateResult, values []int64, bitmap []uint64) error {
+	count := 0
+	for _, word := range bitmap {
+		count += bits.OnesCount64(word)
+	}
+	if count == 0 {
+		return nil
+	}
+	checkOverflow := typedColumnInt64AggregateSecondOfDaySquareCountCanOverflow(count)
+	var sum int64
+	for wordIndex, word := range bitmap {
+		for word != 0 {
+			bit := bits.TrailingZeros64(word)
+			row := wordIndex*64 + bit
+			if row >= len(values) {
+				break
+			}
+			if err := addTypedColumnInt64AggregateSecondOfDaySquareLocal(&sum, values[row], checkOverflow); err != nil {
+				return err
+			}
+			word &^= uint64(1) << uint(bit)
+		}
+	}
+	return addTypedColumnInt64AggregateSecondOfDaySquareBatch(result, count, sum)
+}
+
+func addTypedColumnInt64AggregateSecondOfDaySquareBatch(result *TypedColumnInt64PredicateAggregateResult, count int, sum int64) error {
+	if count == 0 {
+		return nil
+	}
+	return addTypedColumnInt64AggregateKernelResult(result, typedkernel.AggregateResult{NonNulls: int64(count), Sum: sum, HasValue: true})
+}
+
+func typedColumnInt64AggregateSecondOfDaySquareCountCanOverflow(count int) bool {
+	return int64(count) > typedColumnInt64PredicateAggregateMaxSum/typedColumnInt64AggregateSecondOfDaySquareMaxValue
+}
+
+func addTypedColumnInt64AggregateSecondOfDaySquareLocal(sum *int64, value int64, checkOverflow bool) error {
+	transformed := typedColumnInt64AggregateSecondOfDaySquareValue(value)
+	if checkOverflow && transformed > 0 && *sum > typedColumnInt64PredicateAggregateMaxSum-transformed {
+		return fmt.Errorf("collections: typed-column int64 predicate aggregate sum overflow current=%d value=%d", *sum, transformed)
+	}
+	*sum += transformed
+	return nil
 }
 
 func recordTypedColumnSelectionDiagnostics(diag *TypedColumnInt64PredicateScanDiagnostics, selection typedcolumn.RowSelection) {

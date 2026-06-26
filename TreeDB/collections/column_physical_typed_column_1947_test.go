@@ -614,6 +614,13 @@ func BenchmarkColumnPhysicalJSONBenchTypedColumnPartDirectSmoke1947(b *testing.B
 				},
 			},
 		},
+		{
+			name: "qexpr_typed_column_part_section_no_fallback",
+			req: ColumnPhysicalQueryRequest{
+				Kind:        ColumnPhysicalQuerySumSecondOfDaySquare,
+				ValueColumn: "time_us",
+			},
+		},
 	}
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {

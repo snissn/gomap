@@ -2062,7 +2062,7 @@ func (e *columnPhysicalQueryExecutor) visitDirectSumSecondOfDaySquare(value int6
 
 func (e *columnPhysicalQueryExecutor) addSumSecondOfDaySquareValue(value int64) error {
 	result := TypedColumnInt64PredicateAggregateResult{Sum: e.int64Sum}
-	if err := addTypedColumnInt64PredicateAggregateExpressionValue(&result, TypedColumnInt64AggregateSecondOfDaySquare, value); err != nil {
+	if err := addTypedColumnInt64PredicateAggregateSecondOfDaySquareValue(&result, value); err != nil {
 		return err
 	}
 	e.int64Sum = result.Sum
