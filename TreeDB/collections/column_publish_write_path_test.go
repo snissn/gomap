@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -1549,6 +1550,61 @@ func TestColumnManifestRootDescriptorSystemDeltaReturnsPreparedUpdatedMetaM10B(t
 	}
 	if !sameCollectionMeta(decodedMeta, updatedMeta) {
 		t.Fatalf("encoded metadata did not match prepared updated metadata: decoded=%+v updated=%+v", decodedMeta, updatedMeta)
+	}
+}
+
+func TestPrepareColumnWritePublishInputRecordsDocumentExtractionM10B(t *testing.T) {
+	cfg := &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString},
+		},
+	}
+	input, err := prepareColumnWritePublishInputBeforeCommandWAL(columnWritePublishInput{
+		meta: CollectionMeta{Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+			ColumnStore:    cfg,
+		}},
+		operation: ColumnPublishOperationInsert,
+		documents: []columnWriteDocument{{
+			ID:       []byte("doc-1"),
+			Document: []byte(`{"row_id":42,"kind":"post"}`),
+		}},
+		rows: 1,
+	})
+	if err != nil {
+		t.Fatalf("prepare column write input: %v", err)
+	}
+	if !input.declaredRowsReady || len(input.declaredRows) != 1 {
+		t.Fatalf("declared rows not prepared: %+v", input)
+	}
+	if input.documentExtraction < 0 {
+		t.Fatalf("document extraction duration=%s want non-negative", input.documentExtraction)
+	}
+	if got := input.declaredRows[0].Values[0].Int64; got != 42 {
+		t.Fatalf("row_id=%d want 42", got)
+	}
+	if got := input.declaredRows[0].Values[1].String; got != "post" {
+		t.Fatalf("kind=%q want post", got)
+	}
+}
+
+func TestRecordColumnPublishPlanStatsIncludesDocumentExtractionM10B(t *testing.T) {
+	stats := &CollectionInsertStats{}
+	documentExtraction := 123 * time.Microsecond
+	recordColumnPublishPlanStats(stats, ColumnPublishPlan{
+		Enabled: true,
+		Rows:    2,
+		StageMetrics: ColumnPublishStageMetrics{
+			DocumentExtraction: documentExtraction,
+		},
+	})
+	if stats.ColumnPublishDocumentExtraction != documentExtraction {
+		t.Fatalf("document extraction=%s want %s", stats.ColumnPublishDocumentExtraction, documentExtraction)
+	}
+	if stats.ColumnPublishDeclaredColumnEncoding != 0 {
+		t.Fatalf("declared column encoding=%s want 0", stats.ColumnPublishDeclaredColumnEncoding)
 	}
 }
 
