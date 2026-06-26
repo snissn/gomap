@@ -2509,6 +2509,68 @@ func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing
 	}
 }
 
+func TestCreateCollectionWithPreparedCommandWALIntentPreparesUnderSchemaLock(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	payload, err := EncodeCatalogCreateCollectionCommandWALPayload(meta)
+	if err != nil {
+		t.Fatalf("EncodeCatalogCreateCollectionCommandWALPayload: %v", err)
+	}
+	var unlockStaging func()
+	defer func() {
+		if unlockStaging != nil {
+			unlockStaging()
+		}
+	}()
+	_, err = NewCommandWALReplayCollectionManager(d).CreateCollectionWithPreparedCommandWALIntent(meta, func() (*backenddb.CommandWALIntent, error) {
+		coord := collectionSchemaCoordinatorForDBCollection(d, meta.Name)
+		if coord == nil {
+			t.Fatalf("missing schema coordinator")
+		}
+		if coord.schemaMu.TryLock() {
+			coord.schemaMu.Unlock()
+			t.Fatalf("prepare callback ran before schema lock was held")
+		}
+		intent, err := d.NewCommandWALIntent(
+			commitlog.CommandKindCatalogCreateCollection,
+			commitlog.CommandScopeCatalog,
+			commitlog.PayloadFormatCatalogCreateCollectionV1,
+			payload,
+		)
+		if err != nil {
+			return nil, err
+		}
+		unlockStaging = d.LockCommandWALStaging()
+		if _, err := d.AppendStagedCommandWALIntent(intent, false); err != nil {
+			unlockStaging()
+			unlockStaging = nil
+			return nil, err
+		}
+		return intent, nil
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectionWithPreparedCommandWALIntent: %v", err)
+	}
+	if unlockStaging != nil {
+		unlockStaging()
+		unlockStaging = nil
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func TestCollectionCommandWALCreateCollectionReplayRecoversUnappliedFrame(t *testing.T) {
 	dir := t.TempDir()
 	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {

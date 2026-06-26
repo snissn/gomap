@@ -25,26 +25,38 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if err != nil {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: lower catalog create collection: %v", err)
 	}
-	handle, _, err := h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
-	if err != nil {
-		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
-	}
+	var handle commandwalapply.Handle
+	handleAppended := false
 	handleFinalized := false
 	defer func() {
-		if !handleFinalized {
+		if handleAppended && !handleFinalized {
 			h.walApply.Abort(h.db, handle)
 		}
 	}()
-	intent := handle.CommandWALIntent()
-	if intent == nil || handle.LSN() == 0 {
-		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
-	}
 	manager := h.replayCollectionManager()
 	if manager == nil {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot apply create collection")
 	}
-	if _, err := manager.CreateCollectionWithCommandWALIntent(collectionMeta, intent); err != nil {
+	if _, err := manager.CreateCollectionWithPreparedCommandWALIntent(collectionMeta, func() (*backenddb.CommandWALIntent, error) {
+		var err error
+		handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
+		if err != nil {
+			return nil, codeCommandWALApplyError(err)
+		}
+		handleAppended = true
+		intent := handle.CommandWALIntent()
+		if intent == nil || handle.LSN() == 0 {
+			return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
+		}
+		return intent, nil
+	}); err != nil {
+		if _, ok := ErrorCodeOf(err); ok {
+			return raftentry.ApplyResultV1{}, err
+		}
 		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
+	}
+	if !handleAppended {
+		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: create collection did not append a command WAL frame")
 	}
 	logical, err := h.logicalDigestV1(LogicalDigestOptionsV1{
 		ScopeRule:     meta.ScopeRule,

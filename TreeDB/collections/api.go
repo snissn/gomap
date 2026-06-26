@@ -2919,8 +2919,34 @@ func (m *CollectionManager) CreateCollectionWithCommandWALIntent(meta Collection
 	return m.createCollectionWithCommandWALIntent(normalized, commandWALIntent)
 }
 
+// CreateCollectionWithPreparedCommandWALIntent applies a catalog create through
+// the normal collection catalog executor while prepareCommandWALIntent appends
+// and returns the already-covered command-WAL intent. The callback runs after
+// the collection schema lock is held, preserving the public create lock order.
+func (m *CollectionManager) CreateCollectionWithPreparedCommandWALIntent(meta CollectionMeta, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, error) {
+	if m == nil {
+		return nil, errCollectionManagerNil
+	}
+	if m.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if m.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		return nil, err
+	}
+	return m.createCollectionWithPreparedCommandWALIntent(normalized, nil, prepareCommandWALIntent)
+}
+
 func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent) (*CollectionMeta, error) {
+	return m.createCollectionWithPreparedCommandWALIntent(normalized, commandWALIntent, nil)
+}
+
+func (m *CollectionManager) createCollectionWithPreparedCommandWALIntent(normalized CollectionMeta, commandWALIntent *backenddb.CommandWALIntent, prepareCommandWALIntent func() (*backenddb.CommandWALIntent, error)) (*CollectionMeta, error) {
 	coveredCommandWALIntent := commandWALIntent != nil && commandWALIntent.AssignedLSN() != 0
+	coveredCommandWALIntent = coveredCommandWALIntent || prepareCommandWALIntent != nil
 	if !coveredCommandWALIntent {
 		if err := validateColumnStoreProfileSupportForDB(m.db, normalized.Options.ColumnStore, "create"); err != nil {
 			return nil, err
@@ -2932,6 +2958,22 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		unlockSchema = coord.schemaMu.Unlock
 	}
 	defer unlockSchema()
+	commandWALIntentPrepared := commandWALIntent != nil
+	prepareIntent := func() (*backenddb.CommandWALIntent, error) {
+		if commandWALIntentPrepared {
+			return commandWALIntent, nil
+		}
+		commandWALIntentPrepared = true
+		if prepareCommandWALIntent == nil {
+			return nil, nil
+		}
+		intent, err := prepareCommandWALIntent()
+		if err != nil {
+			return nil, err
+		}
+		commandWALIntent = intent
+		return commandWALIntent, nil
+	}
 	snap := m.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed
@@ -2944,6 +2986,10 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 	if existing != nil {
 		if !sameCollectionMeta(existing.meta, normalized) {
 			return nil, fmt.Errorf("collections: existing schema for %q is incompatible", normalized.Name)
+		}
+		commandWALIntent, err := prepareIntent()
+		if err != nil {
+			return nil, err
 		}
 		if commandWALIntent != nil {
 			if err := m.publishCommandWALNoop(commandWALIntent, false); err != nil {
@@ -2987,7 +3033,11 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		return buildSystemDeltaIterator(createCollectionSystemUpdates(normalized.Name, encoded, plan.rootNames, rootIDs))
 	}
 	preflight := m.createCollectionExistingSchemaPreflight(normalized)
-	if m.db.CommandWALEnabled() || commandWALIntent != nil {
+	if m.db.CommandWALEnabled() || commandWALIntent != nil || prepareCommandWALIntent != nil {
+		commandWALIntent, err := prepareIntent()
+		if err != nil {
+			return nil, err
+		}
 		intent, err := m.newCatalogCreateCollectionCommandWALIntent(normalized, commandWALIntent)
 		if err != nil {
 			return nil, err
