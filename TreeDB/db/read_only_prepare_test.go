@@ -195,4 +195,10 @@ func TestOrderedRootDeltaBatchPrepareReadOnlyStats(t *testing.T) {
 	if got := stats["treedb.flush_apply.read_only_prepare.calls_total"]; got != "1" {
 		t.Fatalf("generic read-only calls stat=%q want 1", got)
 	}
+	readOnlyPrepareRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.read_only_prepare."
+	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"fallbacks_total")
+	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"fallback.reason."+FlushSpanRunFallbackAdmissionPolicyDecline.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, readOnlyPrepareRoutePrefix+"fallback.reason."+FlushSpanRunFallbackUnknown.String()+".ops_total")
 }

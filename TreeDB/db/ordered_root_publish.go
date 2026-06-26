@@ -113,6 +113,8 @@ type orderedRootPublishOptions struct {
 	internalBaseDelta     bool
 	outerLeavesInValueLog bool
 	leafPageLog           bulk.LeafPageAppender
+	spanNativeRoute       OrderedRootSpanNativeRoute
+	spanNativeContext     string
 }
 
 type orderedRootDeltaBatchGroupApplyResult struct {
@@ -121,6 +123,42 @@ type orderedRootDeltaBatchGroupApplyResult struct {
 	retired []uint64
 	metrics adaptive.Metrics
 	err     error
+}
+
+func (opts orderedRootPublishOptions) withSpanNativeRoute(route OrderedRootSpanNativeRoute, context string) orderedRootPublishOptions {
+	if _, ok := orderedRootSpanNativeRouteIndex(route); !ok {
+		route = ""
+	}
+	opts.spanNativeRoute = route
+	opts.spanNativeContext = context
+	return opts
+}
+
+func (opts orderedRootPublishOptions) orderedRootSpanNativeRouteContext(defaultRoute OrderedRootSpanNativeRoute, defaultContext string) (OrderedRootSpanNativeRoute, string) {
+	route := opts.spanNativeRoute
+	if _, ok := orderedRootSpanNativeRouteIndex(route); !ok {
+		route = defaultRoute
+	}
+	context := opts.spanNativeContext
+	if context == "" {
+		context = defaultContext
+	}
+	return route, context
+}
+
+func orderedRootDeltaBatchInputSpanNativeRoute(input OrderedRootDeltaBatchPublishInput, defaultRoute OrderedRootSpanNativeRoute, defaultContext string) (OrderedRootSpanNativeRoute, string) {
+	if defaultRoute == OrderedRootSpanNativeRouteCommandWALPublish {
+		return defaultRoute, defaultContext
+	}
+	route := input.SpanNativeRoute
+	if _, ok := orderedRootSpanNativeRouteIndex(route); !ok {
+		route = defaultRoute
+	}
+	context := input.SpanNativeContext
+	if context == "" {
+		context = defaultContext
+	}
+	return route, context
 }
 
 // OrderedRootStoragePolicy selects the physical storage policy for a published
@@ -189,6 +227,12 @@ type OrderedRootDeltaBatchPublishInput struct {
 	// deterministic contiguous leaf-span ranges when PrepareReadOnly is true.
 	// Values <=0 skip worker-range construction while still validating spans.
 	ReadOnlyPrepareWorkers int
+	// SpanNativeRoute tags runtime ordered-root span-native observations for this
+	// root-local batch. Empty uses the publish helper's default route.
+	SpanNativeRoute OrderedRootSpanNativeRoute
+	// SpanNativeContext is optional human-readable route context for diagnostics.
+	// Empty uses the route's default context.
+	SpanNativeContext string
 }
 
 func closeUnconsumedOrderedRootPublishIterators(ordered []OrderedRootPublishInput, consumed []bool) {
@@ -278,6 +322,23 @@ type orderedRootTrustedSortedUniqueIterator interface {
 
 type orderedRootLenHintIterator interface {
 	Len() int
+}
+
+func orderedRootIteratorLenHint(iter iterator.UnsafeIterator) int {
+	if iter == nil {
+		return 0
+	}
+	switch it := iter.(type) {
+	case orderedRootLenHintIterator:
+		if n := it.Len(); n > 0 {
+			return n
+		}
+	case *pendingValueLogAppendPtrCollectingIterator:
+		return orderedRootIteratorLenHint(it.UnsafeIterator)
+	case *orderedRootTouchedIterator:
+		return orderedRootIteratorLenHint(it.UnsafeIterator)
+	}
+	return 0
 }
 
 func selectOrderedRootWarmPublishPlan(hasExistingEntries bool, deltaOps int, maxDeltaOps int) orderedRootPublishPlan {
@@ -854,6 +915,14 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	}
 
 	if baseRoot == 0 {
+		route := OrderedRootSpanNativeRouteOverlayColdBuild
+		context := "ordered-root delta iterator cold build"
+		db.observeOrderedRootSpanNativeEligibility(db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+			Route:          route,
+			Context:        context,
+			DeltaOps:       orderedRootIteratorLenHint(iter),
+			ForceColdBuild: true,
+		}))
 		touchedIter := &orderedRootTouchedIterator{UnsafeIterator: iter}
 		newRoot, retired, metrics, _, _, err = db.publishOrderedRootIterator(0, touchedIter, opts, false)
 		touchedValueLogSegments = touchedIter.touchedValueLogSegments
@@ -882,6 +951,33 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 	if err != nil {
 		return 0, nil, metrics, nil, err
 	}
+	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
+	if prepareBuf != nil {
+		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+	}
+	if flushApplyUseOptions(applyOpts) {
+		result, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, applyOpts)
+		db.observeFlushApplyPrepareResult(result, applyErr)
+		route, context := opts.orderedRootSpanNativeRouteContext(OrderedRootSpanNativeRouteDeltaBatchPublish, "ordered-root delta iterator warm apply")
+		db.observeOrderedRootSpanNativeApplyResult(
+			route,
+			context,
+			result,
+			applyErr,
+			applyOpts.SpanNativeForceFallbackReason,
+		)
+		db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
+		newRoot = result.RootID
+		retired = result.PendingRetiredPages
+		metrics = result.Metrics
+		err = applyErr
+		if err != nil {
+			return
+		}
+		touchedValueLogSegments = appendOrderedRootDeltaBatchFinalTouchedValueLogSegments(delta, nil)
+		return
+	}
 	newRoot, retired, metrics, err = rootZipper.Apply(baseRoot, delta)
 	if err != nil {
 		return
@@ -905,9 +1001,10 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 
 func (db *DB) orderedRootDeltaBatchApplyOptions() zipper.ApplyOptions {
 	applyOpts := db.flushApplyOptions()
+	spanNativeRequested := applyOpts.SpanNativeApply
 	applyOpts.SpanNativeApply = false
-	applyOpts.SpanNativeForceFallbackReason = ""
-	if applyOpts.ParallelApplyConcurrency <= 1 {
+	applyOpts.SpanNativeForceFallbackReason = FlushSpanRunFallbackSpanNativeNotImplemented.String()
+	if applyOpts.ParallelApplyConcurrency <= 1 && !spanNativeRequested {
 		applyOpts.PrepareReadOnly = false
 		applyOpts.ReadOnlyPrepareWorkers = 0
 	}
@@ -939,6 +1036,14 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		return baseRoot, nil, metrics, nil
 	}
 	if baseRoot == 0 {
+		route := OrderedRootSpanNativeRouteOverlayColdBuild
+		context := "ordered-root delta batch cold build"
+		db.observeOrderedRootSpanNativeEligibility(db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
+			Route:          route,
+			Context:        context,
+			DeltaOps:       delta.Len(),
+			ForceColdBuild: true,
+		}))
 		iter := newOrderedRootDeltaBatchIterator(delta, includeDeletedOnColdBuild)
 		defer func() { _ = iter.Close() }()
 		if coldBuildAlloc == nil {
@@ -970,6 +1075,14 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 	if flushApplyUseOptions(applyOpts) {
 		result, applyErr := rootZipper.ApplyWithOptions(baseRoot, delta, applyOpts)
 		db.observeFlushApplyPrepareResult(result, applyErr)
+		route, context := opts.orderedRootSpanNativeRouteContext(OrderedRootSpanNativeRouteDeltaBatchPublish, "ordered-root delta batch warm apply")
+		db.observeOrderedRootSpanNativeApplyResult(
+			route,
+			context,
+			result,
+			applyErr,
+			applyOpts.SpanNativeForceFallbackReason,
+		)
 		db.releaseFlushApplyReadOnlyPrepareBuffer(prepareBuf, &result)
 		newRoot = result.RootID
 		retired = result.PendingRetiredPages
@@ -1910,7 +2023,17 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		phaseStats.preflightNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	}
 
-	systemOpts := systemRootOrderedPublishOptions(db)
+	systemRoute := OrderedRootSpanNativeRouteSystemDeltaBuilderPublish
+	systemContext := "ordered-root iterator delta group system delta apply"
+	rootRoute := OrderedRootSpanNativeRouteMultiIndexGroupPublish
+	rootContext := "multi-index ordered-root iterator group root apply"
+	if commandWALIntent != nil {
+		systemRoute = OrderedRootSpanNativeRouteCommandWALPublish
+		systemContext = "command-WAL ordered-root iterator group system delta apply"
+		rootRoute = OrderedRootSpanNativeRouteCommandWALPublish
+		rootContext = "command-WAL ordered-root iterator group root apply"
+	}
+	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(systemRoute, systemContext)
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
@@ -1925,6 +2048,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		if err != nil {
 			return 0, nil, preApplyErr(err)
 		}
+		opts = opts.withSpanNativeRoute(rootRoute, rootContext)
 		orderedConsumed[idx] = true
 		phaseStart := time.Now()
 		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(ordered[idx].Iter)
@@ -2107,7 +2231,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		}
 	}
 
-	systemOpts := systemRootOrderedPublishOptions(db)
+	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root iterator context system delta apply")
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
@@ -2123,6 +2247,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		if err != nil {
 			return 0, nil, err
 		}
+		opts = opts.withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root iterator context root apply")
 		// publishOrderedRootDeltaIterator takes ownership and closes the
 		// iterator on every non-nil path; the deferred cleanup must not close it
 		// a second time if root publication fails after ownership transfer.
@@ -2308,6 +2433,11 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers)
 		addOrderedRootReadOnlyPreparePhaseStats(phaseStats, summary, workerSummary, prepareNs, err, validationFailed)
 		db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, validationFailed)
+		deltaOps := 0
+		if ordered[orderedIdx].Delta != nil {
+			deltaOps = ordered[orderedIdx].Delta.Len()
+		}
+		db.observeOrderedRootSpanNativeReadOnlyPrepare(summary, deltaOps, err, validationFailed)
 		if err != nil {
 			return err
 		}
@@ -2315,7 +2445,7 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 	return nil
 }
 
-func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
+func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []OrderedRootDeltaBatchPublishInput, alloc zipper.PageAllocator, coldBuildAlloc bulk.Allocator, defaultRoute OrderedRootSpanNativeRoute, defaultContext string) ([]orderedRootDeltaBatchGroupApplyResult, bool) {
 	results := make([]orderedRootDeltaBatchGroupApplyResult, len(ordered))
 	applyOne := func(orderedIdx int) orderedRootDeltaBatchGroupApplyResult {
 		result := orderedRootDeltaBatchGroupApplyResult{idx: orderedIdx}
@@ -2324,6 +2454,8 @@ func (db *DB) applyOrderedRootDeltaBatchGroupRoots(idx *indexGen, ordered []Orde
 			result.err = err
 			return result
 		}
+		route, context := orderedRootDeltaBatchInputSpanNativeRoute(ordered[orderedIdx], defaultRoute, defaultContext)
+		opts = opts.withSpanNativeRoute(route, context)
 		rootID, retired, metrics, err := db.publishOrderedRootDeltaBatchWithAllocator(idx, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, opts, alloc, coldBuildAlloc, ordered[orderedIdx].IncludeDeletedOnColdBuild)
 		result.rootID = rootID
 		result.retired = retired
@@ -2456,7 +2588,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		}
 		db.releasePendingValueLogAppendFileIDsFromEntries(optimisticSystemDeltaReleaseEntries)
 	}()
-	systemOpts := systemRootOrderedPublishOptions(db)
+	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteSystemDeltaBuilderPublish, "ordered-root delta group system delta apply")
 	var nonSystemRetired []uint64
 	var nonSystemMetrics adaptive.Metrics
 	var touchedValueLogSegments []uint32
@@ -2464,7 +2596,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 		return 0, nil, false, err
 	}
 	phaseStart := time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker)
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idx, ordered, rootTracker, rootTracker, OrderedRootSpanNativeRouteMultiIndexGroupPublish, "multi-index ordered-root group root apply")
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -2688,7 +2820,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	}
 
 	rootIDs = make([]uint64, len(ordered))
-	systemOpts := systemRootOrderedPublishOptions(db)
+	systemRoute := OrderedRootSpanNativeRouteSystemDeltaBuilderPublish
+	systemContext := "ordered-root delta group system delta apply"
+	if commandWALIntent != nil {
+		systemRoute = OrderedRootSpanNativeRouteCommandWALPublish
+		systemContext = "command-WAL ordered-root group system delta apply"
+	}
+	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(systemRoute, systemContext)
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
@@ -2705,7 +2843,13 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, err
 	}
 	phaseStart := time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, idxGen.allocator, &pagerAllocator{p: idxGen.pager})
+	defaultRoute := OrderedRootSpanNativeRouteMultiIndexGroupPublish
+	defaultContext := "multi-index ordered-root group root apply"
+	if commandWALIntent != nil {
+		defaultRoute = OrderedRootSpanNativeRouteCommandWALPublish
+		defaultContext = "command-WAL ordered-root group root apply"
+	}
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, ordered, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, defaultRoute, defaultContext)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++
@@ -2893,7 +3037,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	}
 
 	rootIDs = make([]uint64, len(allOrdered))
-	systemOpts := systemRootOrderedPublishOptions(db)
+	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group system delta apply")
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
@@ -2910,7 +3054,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 	phaseStart := time.Now()
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, &pagerAllocator{p: idxGen.pager})
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, &pagerAllocator{p: idxGen.pager}, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply")
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if parallelRootApply {
 		phaseStats.rootApplyParallelGroups++

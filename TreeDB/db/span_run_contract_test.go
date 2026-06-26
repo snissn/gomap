@@ -27,6 +27,8 @@ func TestFlushSpanRunFallbackReasonStringsAreStable(t *testing.T) {
 		FlushSpanRunFallbackMemoryEmergencyCap:       "memory_or_emergency_cap",
 		FlushSpanRunFallbackOutputOwnershipFailure:   "output_ownership_failure",
 		FlushSpanRunFallbackReducerValidationFailed:  "reducer_validation_failed",
+		FlushSpanRunFallbackRouteIneligible:          "route_ineligible",
+		FlushSpanRunFallbackAdmissionPolicyDecline:   "admission_policy_decline",
 	}
 	if got := len(FlushSpanRunFallbackReasons()); got != len(want) {
 		t.Fatalf("fallback reason count=%d want %d", got, len(want))

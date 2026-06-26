@@ -8393,6 +8393,8 @@ func buildBufferedRootDeltaBatchPublishInput(spec bufferedRootDeltaBatchSpec, ro
 		StoragePolicy:             spec.storagePolicy,
 		IncludeDeletedOnColdBuild: spec.includeDeletedOnColdBuild,
 		ParallelApply:             spec.parallelApply,
+		SpanNativeRoute:           backenddb.OrderedRootSpanNativeRouteCollectionBufferedRoots,
+		SpanNativeContext:         "collection buffered root delta publish",
 	}
 	return nil
 }
@@ -8428,9 +8430,11 @@ func buildRootDeltaBatchPublishInputsFromTables(collectionName string, rootNames
 			return nil, func() {}, err
 		}
 		ordered = append(ordered, backenddb.OrderedRootDeltaBatchPublishInput{
-			BaseRoot:      baseRoot,
-			Delta:         delta,
-			StoragePolicy: policies[i],
+			BaseRoot:          baseRoot,
+			Delta:             delta,
+			StoragePolicy:     policies[i],
+			SpanNativeRoute:   backenddb.OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			SpanNativeContext: "collection root delta batch publish",
 		})
 	}
 	return ordered, cleanup, nil
