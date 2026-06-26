@@ -2506,8 +2506,10 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.flush_apply.read_only_prepare.calls_total"]; got != "2" {
-		t.Fatalf("read-only prepare calls stat=%q want 2", got)
+	// Two command-WAL publishes prepare both warm root-local applies and the
+	// warm system-root iterator applies that cover those roots.
+	if got := stats["treedb.flush_apply.read_only_prepare.calls_total"]; got != "4" {
+		t.Fatalf("read-only prepare calls stat=%q want 4", got)
 	}
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"]; got != "1" {
 		t.Fatalf("parallel groups stat=%q want 1", got)
