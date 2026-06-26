@@ -36,6 +36,21 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.RetainedPayloadRows += src.RetainedPayloadRows
 	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
 	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	dst.ColumnPublishBuildColumnDelta += src.ColumnPublishBuildColumnDelta
+	dst.ColumnPublishBuildSystemDelta += src.ColumnPublishBuildSystemDelta
+	dst.ColumnPublishCommit += src.ColumnPublishCommit
+	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
+	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
+	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
+	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
+	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
+	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
+	dst.ColumnPublishSystemDeltaConstruction += src.ColumnPublishSystemDeltaConstruction
+	dst.ColumnPublishRootDeltaMaterialization += src.ColumnPublishRootDeltaMaterialization
+	dst.ColumnPublishRows += src.ColumnPublishRows
+	dst.ColumnPublishPreparedAssets += src.ColumnPublishPreparedAssets
+	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
+	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
 	dst.TemplateRunBuild += src.TemplateRunBuild
 	dst.PrimaryRunBuild += src.PrimaryRunBuild
@@ -62,6 +77,15 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("index_state_extract_ns/doc", stats.IndexStateExtraction)
 	reportDuration("duplicate_preflight_ns/doc", stats.DuplicateDocumentPreflight)
 	reportDuration("retained_payload_prepare_ns/doc", stats.RetainedPayloadPrepare)
+	reportDuration("column_publish_build_column_delta_ns/doc", stats.ColumnPublishBuildColumnDelta)
+	reportDuration("column_publish_build_system_delta_ns/doc", stats.ColumnPublishBuildSystemDelta)
+	reportDuration("column_publish_commit_ns/doc", stats.ColumnPublishCommit)
+	reportDuration("column_publish_asset_prepare_ns/doc", stats.ColumnPublishAssetPreparation)
+	reportDuration("column_publish_manifest_encode_ns/doc", stats.ColumnPublishManifestEncode)
+	reportDuration("column_publish_asset_closure_ns/doc", stats.ColumnPublishAssetClosureValidation)
+	reportDuration("column_publish_root_delta_ns/doc", stats.ColumnPublishRootDeltaConstruction)
+	reportDuration("column_publish_system_delta_ns/doc", stats.ColumnPublishSystemDeltaConstruction)
+	reportDuration("column_publish_root_delta_materialize_ns/doc", stats.ColumnPublishRootDeltaMaterialization)
 	reportDuration("unique_preflight_ns/doc", stats.UniqueIndexPreflight)
 	reportDuration("template_run_ns/doc", stats.TemplateRunBuild)
 	reportDuration("primary_run_ns/doc", stats.PrimaryRunBuild)

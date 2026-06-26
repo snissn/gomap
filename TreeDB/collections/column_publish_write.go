@@ -3,6 +3,7 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -25,6 +26,7 @@ type columnWritePublishInput struct {
 	commandBytes       int64
 	rowRemainderBytes  int64
 	columnPayloadBytes int64
+	insertStats        *CollectionInsertStats
 }
 
 func columnStoreWriteEnabled(meta CollectionMeta) bool {
@@ -147,18 +149,33 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 	var newSystemRoot uint64
 	var rootIDs []uint64
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaPublishInput, error) {
+		stageStart := time.Now()
+		defer func() {
+			if input.insertStats != nil {
+				input.insertStats.ColumnPublishBuildColumnDelta += time.Since(stageStart)
+			}
+		}()
 		nextPlan, err := c.buildColumnPublishPlanForCommandWALContext(ctx, input, columnBaseRoot)
 		if err != nil {
 			return nil, err
 		}
 		plan = nextPlan
+		recordColumnPublishPlanStats(input.insertStats, plan)
+		materializeStart := time.Now()
 		columnDelta, err := plan.RootDelta.OrderedRootDeltaPublishInput()
+		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
 		if err != nil {
 			return nil, err
 		}
 		return []backenddb.OrderedRootDeltaPublishInput{columnDelta}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		stageStart := time.Now()
+		defer func() {
+			if input.insertStats != nil {
+				input.insertStats.ColumnPublishBuildSystemDelta += time.Since(stageStart)
+			}
+		}()
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
@@ -168,6 +185,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 		}
 		return iter, err
 	}
+	commitStart := time.Now()
 	if input.rawPublishLocked {
 		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(
 			ordered,
@@ -185,6 +203,7 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 			buildSystemDelta,
 		)
 	}
+	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
@@ -227,12 +246,21 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
+		stageStart := time.Now()
+		defer func() {
+			if input.insertStats != nil {
+				input.insertStats.ColumnPublishBuildColumnDelta += time.Since(stageStart)
+			}
+		}()
 		nextPlan, err := c.buildColumnPublishPlanForCommandWALContext(ctx, input, columnBaseRoot)
 		if err != nil {
 			return nil, err
 		}
 		plan = nextPlan
+		recordColumnPublishPlanStats(input.insertStats, plan)
+		materializeStart := time.Now()
 		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
+		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
 		if err != nil {
 			return nil, err
 		}
@@ -240,6 +268,12 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		return []backenddb.OrderedRootDeltaBatchPublishInput{columnDelta}, nil
 	}
 	buildSystemDelta := func(ctx backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+		stageStart := time.Now()
+		defer func() {
+			if input.insertStats != nil {
+				input.insertStats.ColumnPublishBuildSystemDelta += time.Since(stageStart)
+			}
+		}()
 		if plan.AppliedCommandLSN != ctx.AppliedCommandLSN {
 			return nil, columnPublishPlanLSNMismatchError(input.meta, ctx.AppliedCommandLSN, plan.AppliedCommandLSN)
 		}
@@ -251,11 +285,13 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	var newSystemRoot uint64
 	var rootIDs []uint64
+	commitStart := time.Now()
 	if input.rawPublishLocked {
 		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	}
+	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	if err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
@@ -383,6 +419,38 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 	default:
 		return columnWritePublishInput{}, fmt.Errorf("collections: unsupported column publish operation %q", input.operation)
 	}
+}
+
+func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPublishPlan) {
+	if stats == nil || !plan.Enabled {
+		return
+	}
+	metrics := plan.StageMetrics
+	stats.ColumnPublishDocumentExtraction += metrics.DocumentExtraction
+	stats.ColumnPublishDeclaredColumnEncoding += metrics.DeclaredColumnEncoding
+	stats.ColumnPublishAssetPreparation += metrics.AssetPreparation
+	stats.ColumnPublishManifestEncode += metrics.ManifestEncode
+	stats.ColumnPublishAssetClosureValidation += metrics.AssetClosureValidation
+	stats.ColumnPublishRootDeltaConstruction += metrics.RootDeltaConstruction
+	stats.ColumnPublishSystemDeltaConstruction += metrics.SystemDeltaConstruction
+	stats.ColumnPublishRows += plan.Rows
+	stats.ColumnPublishPreparedAssets += len(plan.PreparedAssets)
+	stats.ColumnPublishRequiredAssetBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishRequiredAssetBytes, plan.RequiredAssetBytes)
+	stats.ColumnPublishManifestBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishManifestBytes, plan.ManifestBytes)
+}
+
+func recordColumnPublishRootDeltaMaterialization(stats *CollectionInsertStats, elapsed time.Duration) {
+	if stats == nil {
+		return
+	}
+	stats.ColumnPublishRootDeltaMaterialization += elapsed
+}
+
+func recordColumnPublishCommit(stats *CollectionInsertStats, elapsed time.Duration) {
+	if stats == nil {
+		return
+	}
+	stats.ColumnPublishCommit += elapsed
 }
 
 func (c *Collection) publishRootDeltaGroupWithoutColumn(ordered []backenddb.OrderedRootDeltaPublishInput, input columnWritePublishInput) (uint64, []uint64, error) {
