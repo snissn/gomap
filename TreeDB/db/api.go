@@ -944,6 +944,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.publish.ordered_root_delta_group.finalize_calls_total"] = fmt.Sprintf("%d", orderedDeltaStats.finalizeCalls)
 	stats["treedb.publish.ordered_root_delta_group.latency_p99_ms"] = fmt.Sprintf("%.3f", float64(orderedDeltaStats.latencyP99)/float64(time.Millisecond))
 	stats["treedb.publish.ordered_root_delta_group.latency_max_ms"] = fmt.Sprintf("%.3f", float64(orderedDeltaStats.latencyMax)/float64(time.Millisecond))
+	db.appendOrderedRootSpanNativeStats(stats)
 	warmPublishStats := db.systemRootPublishStatsSnapshot()
 	stats["treedb.publish.system_root.warm_attempts"] = fmt.Sprintf("%d", warmPublishStats.warmAttempts)
 	stats["treedb.publish.system_root.warm_native_apply_attempts"] = fmt.Sprintf("%d", warmPublishStats.warmNativeApplyAttempts)

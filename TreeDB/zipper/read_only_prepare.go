@@ -82,6 +82,9 @@ type ApplyResult struct {
 	// ReadOnlyPrepareValidationFailed distinguishes validation failures from
 	// read/decode failures for stats.
 	ReadOnlyPrepareValidationFailed bool
+	// ReadOnlyPrepareFailed distinguishes read/decode failures from later apply
+	// failures for callers that need stable fallback labels.
+	ReadOnlyPrepareFailed bool
 	// ReadOnlyPrepareWorkerSummary is the deterministic worker-range aggregate for
 	// the requested read-only worker target.
 	ReadOnlyPrepareWorkerSummary ReadOnlyLeafSpanWorkerRangeSummary
@@ -850,6 +853,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		workerTarget := readOnlyWorkerTarget(opts)
 		result.ReadOnlyPrepareWorkerSummary = prepared.LeafSpanWorkerRangeSummary(workerTarget)
 		if err != nil {
+			result.ReadOnlyPrepareFailed = true
 			return result, err
 		}
 		if err := prepared.ValidateLeafSpans(); err != nil {

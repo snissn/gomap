@@ -224,6 +224,73 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextUsesCommandWALRouteForSystemDelta(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openOrderedRootSpanNativeRouteCounterDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	makeDelta := func(kv ...string) *batch.Batch {
+		t.Helper()
+		table := mustFrozenSystemMemtable(t, kv...)
+		iter := table.NewIterator(nil, nil)
+		delta, err := OrderedRootDeltaBatchFromIterator(iter)
+		_ = iter.Close()
+		if err != nil {
+			t.Fatalf("delta batch: %v", err)
+		}
+		return delta
+	}
+
+	baseDelta := makeDelta("root/a", "base")
+	defer func() { _ = baseDelta.Close() }()
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot: 0,
+			Delta:    baseDelta,
+		}},
+		mustRawKVCommandWALIntent(t, db, "cmd/batch-context-base", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "system/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder base: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v, want one non-zero root", rootIDs)
+	}
+
+	updateDelta := makeDelta("root/b", "update")
+	defer func() { _ = updateDelta.Close() }()
+	_, updatedRootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot: rootIDs[0],
+			Delta:    updateDelta,
+		}},
+		mustRawKVCommandWALIntent(t, db, "cmd/batch-context-update", "1"),
+		func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "system/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder update: %v", err)
+	}
+	if len(updatedRootIDs) != 1 || updatedRootIDs[0] == 0 {
+		t.Fatalf("updatedRootIDs=%v, want one non-zero root", updatedRootIDs)
+	}
+
+	stats := db.Stats()
+	commandRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish."
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.multi_index_group_publish.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
+}
+
 func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextWaitsBeforeWriteMu(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -2559,8 +2626,20 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	updateB := makeDelta("b/2", "delta-b")
 	defer func() { _ = updateB.Close() }()
 	_, updatedRootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
-		{BaseRoot: baseRootIDs[0], Delta: updateA, ParallelApply: true},
-		{BaseRoot: baseRootIDs[1], Delta: updateB, ParallelApply: true},
+		{
+			BaseRoot:          baseRootIDs[0],
+			Delta:             updateA,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			SpanNativeContext: "collection route must be superseded by command WAL",
+		},
+		{
+			BaseRoot:          baseRootIDs[1],
+			Delta:             updateB,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			SpanNativeContext: "collection route must be superseded by command WAL",
+		},
 	}, mustRawKVCommandWALIntent(t, db, "cmd/warm-roots", "1"), func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
 			return nil, errors.New("unexpected updated root IDs")
@@ -2596,8 +2675,10 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.flush_apply.read_only_prepare.calls_total"]; got != "2" {
-		t.Fatalf("read-only prepare calls stat=%q want 2", got)
+	// Two command-WAL publishes prepare both warm root-local applies and the
+	// warm system-root iterator applies that cover those roots.
+	if got := stats["treedb.flush_apply.read_only_prepare.calls_total"]; got != "4" {
+		t.Fatalf("read-only prepare calls stat=%q want 4", got)
 	}
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_groups_total"]; got != "1" {
 		t.Fatalf("parallel groups stat=%q want 1", got)
@@ -2605,6 +2686,13 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder_Wa
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_parallel_roots_total"]; got != "2" {
 		t.Fatalf("parallel roots stat=%q want 2", got)
 	}
+	commandRoutePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish."
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, commandRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.system_delta_builder_publish.candidate_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.delta_batch_publish.candidate_ops_total")
 }
 
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticColdBuildsRootsInParallel(t *testing.T) {
@@ -2632,8 +2720,20 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticColdB
 	defer func() { _ = deltaB.Close() }()
 
 	systemRoot, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder([]OrderedRootDeltaBatchPublishInput{
-		{BaseRoot: 0, Delta: deltaA, ParallelApply: true},
-		{BaseRoot: 0, Delta: deltaB, ParallelApply: true},
+		{
+			BaseRoot:          0,
+			Delta:             deltaA,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCollectionBufferedRoots,
+			SpanNativeContext: "collection route must not override cold build",
+		},
+		{
+			BaseRoot:          0,
+			Delta:             deltaB,
+			ParallelApply:     true,
+			SpanNativeRoute:   OrderedRootSpanNativeRouteCommandWALPublish,
+			SpanNativeContext: "command WAL route must not override cold build",
+		},
 	}, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
 			return nil, errors.New("unexpected optimistic cold root IDs")
@@ -2680,6 +2780,11 @@ func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticColdB
 	if got := stats["treedb.publish.ordered_root_delta_group.root_apply_calls_total"]; got != "2" {
 		t.Fatalf("root apply calls stat=%q want 2", got)
 	}
+	overlayPrefix := "treedb.publish.ordered_root_delta_group.span_native.route.overlay_cold_build."
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"observations_total")
+	requireOrderedRootStatCounterPositive(t, stats, overlayPrefix+"fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.collection_buffered_roots.fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, "treedb.publish.ordered_root_delta_group.span_native.route.command_wal_publish.fallback.reason."+FlushSpanRunFallbackColdBuild.String()+".ops_total")
 }
 
 func TestPublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder_OptimisticMixedOptInStaysSerialized(t *testing.T) {
@@ -2944,7 +3049,7 @@ func TestApplyOrderedRootDeltaBatchGroupRoots_MixedOptInStartsParallelBeforeSeri
 		{BaseRoot: 0, Delta: deltaA, ParallelApply: true},
 		{BaseRoot: baseRootB, Delta: deltaB},
 		{BaseRoot: 0, Delta: deltaC, ParallelApply: true},
-	}, serialAlloc, coldAlloc)
+	}, serialAlloc, coldAlloc, OrderedRootSpanNativeRouteMultiIndexGroupPublish, "test mixed group root apply")
 	if !parallel {
 		t.Fatal("expected mixed group to use parallel apply")
 	}
