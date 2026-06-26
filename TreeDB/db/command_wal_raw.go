@@ -562,6 +562,10 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 	return db.appendCommandWALIntent(&intent.inner, sync)
 }
 
+func commandWALIntentFrameAlreadyAppended(intent *CommandWALIntent) bool {
+	return intent != nil && intent.inner.lsn != 0
+}
+
 // AppendCommandWALIntent appends a deterministic command frame without
 // publishing roots. It is used by cached public command-WAL writers that must
 // make a typed frame replay-visible before inserting the mutation into memory.

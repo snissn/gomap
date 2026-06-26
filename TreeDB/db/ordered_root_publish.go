@@ -1716,6 +1716,13 @@ func (db *DB) PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuild
 	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered, nil, intent, buildSystemDeltaIter)
 }
 
+// PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder is
+// like PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder, but
+// assumes the caller already holds the command-WAL raw publish lock.
+func (db *DB) PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered []OrderedRootDeltaBatchPublishInput, intent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWithOptions(ordered, nil, intent, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{rawPublishLocked: true})
+}
+
 // PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder is
 // like PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder, but
 // the system-delta builder receives the command-WAL LSN assigned to this
@@ -2129,7 +2136,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(ordered []
 			return newSystemRoot, rootIDs, err
 		}
 	}
-	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered, preflight, commandWALIntent, buildSystemDeltaIter)
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWithOptions(ordered, preflight, commandWALIntent, buildSystemDeltaIter, orderedRootCommandWALPublishOptions{})
+}
+
+func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderWithOptions(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, opts orderedRootCommandWALPublishOptions) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	return db.publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered, preflight, commandWALIntent, buildSystemDeltaIter, opts)
 }
 
 func orderedRootDeltaBatchGroupParallelApplyEligible(ordered []OrderedRootDeltaBatchPublishInput) bool {
@@ -2543,7 +2554,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 	}
 }
 
-func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder) (newSystemRoot uint64, rootIDs []uint64, err error) {
+func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildSystemDeltaIter OrderedRootGroupSystemBuilder, opts orderedRootCommandWALPublishOptions) (newSystemRoot uint64, rootIDs []uint64, err error) {
 	if buildSystemDeltaIter == nil {
 		return 0, nil, errors.New("nil ordered root group system delta builder")
 	}
@@ -2683,7 +2694,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	// conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWAL(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent)
+	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, opts)
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -2903,13 +2914,23 @@ func errOrderedRootCommandWALContextConcurrentModification(wantUserRoot, gotUser
 	return fmt.Errorf("%w: command WAL ordered root publish: user_root want=%d got=%d system_root want=%d got=%d", ErrConcurrentModification, wantUserRoot, gotUserRoot, wantSystemRoot, gotSystemRoot)
 }
 
+type orderedRootCommandWALPublishOptions struct {
+	rawPublishLocked bool
+}
+
 func (db *DB) finalizeOrderedRootPublishWithCommandWAL(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent) error {
+	return db.finalizeOrderedRootPublishWithCommandWALOptions(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs, intent, orderedRootCommandWALPublishOptions{})
+}
+
+func (db *DB) finalizeOrderedRootPublishWithCommandWALOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, intent *CommandWALIntent, opts orderedRootCommandWALPublishOptions) error {
 	if intent == nil {
 		return db.finalizeCommit(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta, leafManifest, leafManifestRawFileIDs)
 	}
 	sync = commandWALIntentPublishSync(intent, sync)
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
-	defer unlockCommandWALPublish()
+	if !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(intent) {
+		unlockCommandWALPublish := db.lockCommandWALRawPublish()
+		defer unlockCommandWALPublish()
+	}
 	db.commitMu.Lock()
 	if _, err := db.appendPublicCommandWALIntent(intent, sync); err != nil {
 		db.commitMu.Unlock()

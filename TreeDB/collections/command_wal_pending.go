@@ -297,6 +297,14 @@ func (c *Collection) publishCommandWALNoop(intent *backenddb.CommandWALIntent, s
 }
 
 func (m *CollectionManager) lockCommandWALPublishCoordinator() (func(), error) {
+	return m.lockCommandWALPublishCoordinatorWithRawPublishState(false)
+}
+
+func (m *CollectionManager) lockCommandWALPublishCoordinatorWithHeldRawPublishLock() (func(), error) {
+	return m.lockCommandWALPublishCoordinatorWithRawPublishState(true)
+}
+
+func (m *CollectionManager) lockCommandWALPublishCoordinatorWithRawPublishState(rawPublishLocked bool) (func(), error) {
 	if m == nil || m.db == nil || !m.db.CommandWALEnabled() {
 		return func() {}, nil
 	}
@@ -319,7 +327,13 @@ func (m *CollectionManager) lockCommandWALPublishCoordinator() (func(), error) {
 			continue
 		}
 		coord.mu.Unlock()
-		if err := flushCollectionWriteDomain(m.db, owner); err != nil {
+		var err error
+		if rawPublishLocked {
+			err = flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(m.db, owner)
+		} else {
+			err = flushCollectionWriteDomain(m.db, owner)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -341,7 +355,7 @@ func (m *CollectionManager) flushPendingCommandWALBeforeRawPublish() error {
 	if m == nil || m.db == nil || !m.db.CommandWALEnabled() {
 		return nil
 	}
-	unlock, err := m.lockCommandWALPublishCoordinator()
+	unlock, err := m.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
 	if err != nil {
 		return err
 	}

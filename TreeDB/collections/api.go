@@ -373,6 +373,7 @@ type Collection struct {
 	db                         *backenddb.DB
 	manager                    *CollectionManager
 	writeDomain                *collectionWriteDomain
+	commandWALRawPublishLocked bool
 	name                       string
 	meta                       CollectionMeta
 	catalogMu                  sync.RWMutex
@@ -2749,10 +2750,18 @@ func (m *CollectionManager) FlushAll() error {
 }
 
 func flushCollectionWriteDomain(db *backenddb.DB, domain *collectionWriteDomain) error {
+	return flushCollectionWriteDomainWithRawPublishState(db, domain, false)
+}
+
+func flushCollectionWriteDomainWithHeldCommandWALRawPublishLock(db *backenddb.DB, domain *collectionWriteDomain) error {
+	return flushCollectionWriteDomainWithRawPublishState(db, domain, true)
+}
+
+func flushCollectionWriteDomainWithRawPublishState(db *backenddb.DB, domain *collectionWriteDomain, rawPublishLocked bool) error {
 	if db == nil || domain == nil {
 		return nil
 	}
-	collection := &Collection{db: db, writeDomain: domain}
+	collection := &Collection{db: db, writeDomain: domain, commandWALRawPublishLocked: rawPublishLocked}
 	unlockMutation := lockCollectionDomainMutation(domain)
 	defer unlockMutation.Unlock()
 	domain.waitIndexedAsyncFlush()
@@ -4599,7 +4608,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		if c.db == nil {
 			return 0, errCollectionDBNil
 		}
-		lsn, appendErr := c.db.AppendCommandWALIntent(commandWALStageIntent, false)
+		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
 		if appendErr != nil {
 			return 0, appendErr
 		}
@@ -8771,7 +8780,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		publishStart := time.Now()
 		err = publishWithCommandWALCoordinator(func(commandWALIntent *backenddb.CommandWALIntent) error {
 			if commandWALIntent != nil {
-				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 					return c.buildRootOverlayDescriptorSystemDeltaIteratorForMeta(meta, baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootOverlays, rootIDs)
 				})
 			} else {
@@ -8800,7 +8809,7 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		publishStart := time.Now()
 		err = publishWithCommandWALCoordinator(func(commandWALIntent *backenddb.CommandWALIntent) error {
 			if commandWALIntent != nil {
-				newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				newSystemRoot, rootIDs, err = c.publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 					return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 				})
 			} else {
@@ -8870,6 +8879,16 @@ func (c *Collection) flushBufferedIndexedLocked(domain *collectionWriteDomain) (
 		resetCollectionTables(runs)
 	}
 	return nil
+}
+
+func (c *Collection) publishBufferedOrderedRootDeltaBatchGroupWithCommandWAL(ordered []backenddb.OrderedRootDeltaBatchPublishInput, commandWALIntent *backenddb.CommandWALIntent, buildSystemDeltaIter backenddb.OrderedRootGroupSystemBuilder) (uint64, []uint64, error) {
+	if c == nil || c.db == nil {
+		return 0, nil, errCollectionDBNil
+	}
+	if c.commandWALRawPublishLocked {
+		return c.db.PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, buildSystemDeltaIter)
+	}
+	return c.db.PublishOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, buildSystemDeltaIter)
 }
 
 func rotateIndexedMutableToFlushUnitLocked(domain *collectionWriteDomain) bool {
@@ -9891,10 +9910,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 				return nil, err
 			}
 		}
-		var unlockCommandWALRawStage func()
 		if bufferedCommandWALIntent != nil && c.db != nil {
-			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
-			defer unlockCommandWALRawStage()
 			if err := c.drainCommandWALStageCoordinatorBeforeMutation(); err != nil {
 				closePlanningSnapshot()
 				resetCollectionRunTables(plan.runs)
@@ -13044,12 +13060,10 @@ func (c *Collection) prepareDirectUpdateCommandWALStage(plan *updateBatchPlan) (
 		return nil, nil
 	}
 	runTestBeforeCommandWALBufferedUpdateStageLockHook()
-	unlockCommandWALRawStage := c.db.LockCommandWALStaging()
 	if err := c.drainCommandWALStageCoordinatorBeforeMutation(); err != nil {
-		unlockCommandWALRawStage()
 		return nil, err
 	}
-	return unlockCommandWALRawStage, nil
+	return nil, nil
 }
 
 func addCollectionUpdateStatsForMerge(dst *CollectionUpdateStats, src CollectionUpdateStats) {
@@ -14974,7 +14988,6 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 				return nil
 			}
 			err = func() error {
-				var unlockCommandWALRawStage func()
 				if commandWALBufferedMode &&
 					plan.canStageDirectBufferedUpdateAfterCommandWALAppend() &&
 					len(plan.commandWALDocuments) > 0 {
@@ -14983,16 +14996,31 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 						return err
 					}
 					plan.bufferedCommandWALIntent = intent
-					if c.db != nil {
-						runTestBeforeCommandWALBufferedUpdateStageLockHook()
-						unlockCommandWALRawStage = c.db.LockCommandWALStaging()
-						defer unlockCommandWALRawStage()
-					}
-					if err := c.drainCommandWALStageCoordinatorBeforeMutation(); err != nil {
-						return err
-					}
+				}
+				pendingCommandWALBeforeMutation := false
+				if plan.bufferedCommandWALIntent != nil && c.writeDomain != nil {
+					c.writeDomain.mu.RLock()
+					pendingCommandWALBeforeMutation = collectionCommandWALDomainPendingLocked(c.writeDomain)
+					c.writeDomain.mu.RUnlock()
+				}
+				var unlockCommandWALRawStageBeforeMutation func()
+				if pendingCommandWALBeforeMutation && c.db != nil {
+					runTestBeforeCommandWALBufferedUpdateStageLockHook()
+					unlockCommandWALRawStageBeforeMutation = c.db.LockCommandWALStaging()
+					defer unlockCommandWALRawStageBeforeMutation()
 				}
 				return c.withMutationLock(func() error {
+					var unlockCommandWALRawStage func()
+					if plan.bufferedCommandWALIntent != nil && c.db != nil {
+						if !pendingCommandWALBeforeMutation {
+							runTestBeforeCommandWALBufferedUpdateStageLockHook()
+							if err := c.drainCommandWALStageCoordinatorBeforeMutation(); err != nil {
+								return err
+							}
+							unlockCommandWALRawStage = c.db.LockCommandWALStaging()
+							defer unlockCommandWALRawStage()
+						}
+					}
 					var unlockCommandWALStage func()
 					if plan.bufferedCommandWALIntent != nil {
 						var err error
@@ -16800,7 +16828,7 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 		if c.db == nil {
 			return errCollectionDBNil
 		}
-		lsn, appendErr := c.db.AppendCommandWALIntent(commandWALStageIntent, false)
+		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
 		if appendErr != nil {
 			return appendErr
 		}
