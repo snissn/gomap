@@ -157,15 +157,37 @@ type gitIdentity struct {
 	Hash  string
 }
 
+type commandLogEntry struct {
+	Command     string
+	ExitStatus  int
+	DurationSec int
+	Warning     string
+	Complete    bool
+}
+
+type runMetadata map[string]string
+
+type artifactSectionStatus struct {
+	Name     string
+	Artifact string
+	Status   string
+	Required bool
+	Detail   string
+}
+
 type reportData struct {
 	Config                config
 	GeneratedAt           time.Time
 	Git                   []gitIdentity
+	Commands              []commandLogEntry
+	RunMetadata           runMetadata
+	ArtifactSections      []artifactSectionStatus
 	RawEngine             []rawEngineRun
 	Collections           []collectionRow
 	CollectionComparisons []collectionComparison
 	MongoFullSweep        []mongoSummaryRow
 	MongoLoadModes        []loadModeRow
+	MongoLoadScaling      []mongoSummaryRow
 	MongoScaling          map[int][]mongoSummaryRow
 	Profiles              profileReportData
 	Warnings              []string
@@ -321,7 +343,12 @@ func loadReportData(cfg config) (reportData, error) {
 		Config:       cfg,
 		GeneratedAt:  time.Now().UTC(),
 		Git:          loadGitIdentity(cfg.RunRoot),
+		RunMetadata:  loadRunMetadata(filepath.Join(cfg.RunRoot, "RUNBOOK.md")),
 		MongoScaling: make(map[int][]mongoSummaryRow),
+	}
+	if commands, warnings := loadCommandLog(filepath.Join(cfg.RunRoot, "commands.log")); len(commands) > 0 || len(warnings) > 0 {
+		data.Commands = commands
+		data.Warnings = append(data.Warnings, warnings...)
 	}
 	if rows, warnings := loadRawEngine(filepath.Join(cfg.RunRoot, "raw_engine_full_matrix")); len(rows) > 0 || len(warnings) > 0 {
 		data.RawEngine = rows
@@ -343,6 +370,10 @@ func loadReportData(cfg config) (reportData, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		data.Warnings = append(data.Warnings, err.Error())
 	}
+	if rows, warnings := loadMongoLoadScaling(filepath.Join(cfg.RunRoot, "mongo_gateway_load_scaling_1m")); len(rows) > 0 || len(warnings) > 0 {
+		data.MongoLoadScaling = rows
+		data.Warnings = append(data.Warnings, warnings...)
+	}
 	if scaling, warnings := loadMongoScaling(filepath.Join(cfg.RunRoot, "mongo_gateway_reader_writer_scaling_1m")); len(scaling) > 0 || len(warnings) > 0 {
 		data.MongoScaling = scaling
 		data.Warnings = append(data.Warnings, warnings...)
@@ -350,6 +381,7 @@ func loadReportData(cfg config) (reportData, error) {
 	profiles, warnings := loadProfiles(cfg.RunRoot)
 	data.Profiles = profiles
 	data.Warnings = append(data.Warnings, warnings...)
+	data.ArtifactSections = summarizeArtifactSections(cfg.RunRoot, data)
 	return data, nil
 }
 
@@ -377,6 +409,313 @@ func loadGitIdentity(runRoot string) []gitIdentity {
 		out = append(out, gitIdentity{Label: key, Hash: value})
 	}
 	return out
+}
+
+func loadRunMetadata(path string) runMetadata {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	meta := make(runMetadata)
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		key, value, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "- ")), ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" {
+			meta[key] = value
+		}
+	}
+	return meta
+}
+
+func (m runMetadata) boolValue(key string) bool {
+	if m == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(m[key])) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func loadCommandLog(path string) ([]commandLogEntry, []string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, []string{fmt.Sprintf("commands log: %v", err)}
+	}
+	var entries []commandLogEntry
+	var warnings []string
+	var current *commandLogEntry
+	flush := func(final bool) {
+		if current == nil {
+			return
+		}
+		if !current.Complete {
+			if !final {
+				warnings = append(warnings, "commands log command without exit status: "+current.Command)
+			}
+			current = nil
+			return
+		}
+		entries = append(entries, *current)
+		current = nil
+	}
+	for lineIdx, line := range strings.Split(string(raw), "\n") {
+		lineNo := lineIdx + 1
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "command:"):
+			flush(false)
+			current = &commandLogEntry{Command: strings.TrimSpace(strings.TrimPrefix(line, "command:"))}
+		case strings.HasPrefix(line, "exit_status:"):
+			if current == nil {
+				warnings = append(warnings, fmt.Sprintf("commands log line %d has exit status without command", lineNo))
+				continue
+			}
+			status, duration, err := parseCommandExitLine(line)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("commands log line %d: %v", lineNo, err))
+				continue
+			}
+			current.ExitStatus = status
+			current.DurationSec = duration
+			current.Complete = true
+		case strings.HasPrefix(line, "warning:"):
+			warning := strings.TrimSpace(strings.TrimPrefix(line, "warning:"))
+			if current == nil {
+				warnings = append(warnings, "commands log warning without command: "+warning)
+				continue
+			}
+			current.Warning = warning
+		default:
+			warnings = append(warnings, fmt.Sprintf("commands log line %d is unrecognized: %s", lineNo, line))
+		}
+	}
+	flush(true)
+	return entries, warnings
+}
+
+type artifactSectionExpectation struct {
+	Name      string
+	Artifact  string
+	SkipKeys  []string
+	Optional  bool
+	HasData   func(reportData) bool
+	Exists    func(string) bool
+	SkipNote  string
+	Missing   string
+	Partial   string
+	Available string
+}
+
+func summarizeArtifactSections(runRoot string, data reportData) []artifactSectionStatus {
+	if len(data.RunMetadata) == 0 {
+		return nil
+	}
+	expectations := []artifactSectionExpectation{
+		{
+			Name:      "Raw TreeDB engine",
+			Artifact:  "raw_engine_full_matrix/",
+			SkipKeys:  []string{"skip_raw"},
+			HasData:   func(data reportData) bool { return len(data.RawEngine) > 0 },
+			Available: "raw engine rows loaded",
+		},
+		{
+			Name:      "Collections vs SQLite",
+			Artifact:  "collections_sqlite_canonical_1m/",
+			SkipKeys:  []string{"skip_collections"},
+			HasData:   func(data reportData) bool { return len(data.Collections) > 0 || len(data.CollectionComparisons) > 0 },
+			Available: "collection rows or comparisons loaded",
+		},
+		{
+			Name:      "Mongo API full sweep",
+			Artifact:  "mongo_gateway_full_sweep_1m_expanded/summary.tsv",
+			SkipKeys:  []string{"skip_mongo"},
+			HasData:   func(data reportData) bool { return len(data.MongoFullSweep) > 0 },
+			Available: "full-sweep summary rows loaded",
+		},
+		{
+			Name:      "Mongo client-mode load matrix",
+			Artifact:  "mongo_client_mode_load_matrix_1m/matrix.tsv",
+			SkipKeys:  []string{"skip_mongo", "skip_load_modes"},
+			HasData:   func(data reportData) bool { return len(data.MongoLoadModes) > 0 },
+			Available: "client-mode load rows loaded",
+		},
+		{
+			Name:      "Mongo InsertMany producer scaling",
+			Artifact:  "mongo_gateway_load_scaling_1m/summary.tsv",
+			SkipKeys:  []string{"skip_mongo", "skip_load_scaling"},
+			HasData:   func(data reportData) bool { return len(data.MongoLoadScaling) > 0 },
+			Available: "producer-scaling rows loaded",
+		},
+		{
+			Name:      "Mongo reader/writer scaling",
+			Artifact:  "mongo_gateway_reader_writer_scaling_1m/",
+			SkipKeys:  []string{"skip_mongo", "skip_scaling"},
+			HasData:   func(data reportData) bool { return len(data.MongoScaling) > 0 },
+			Available: "reader/writer scaling rows loaded",
+		},
+		{
+			Name:      "Profiling artifacts",
+			Artifact:  "profile manifests under raw, collection, and Mongo artifacts",
+			Optional:  true,
+			HasData:   func(data reportData) bool { return hasProfileArtifacts(data.Profiles) },
+			Exists:    func(runRoot string) bool { return hasProfileArtifactDirs(runRoot) },
+			Missing:   "optional profile manifests are absent",
+			Partial:   "profile directories exist but no manifests were loaded",
+			Available: "profile manifests loaded",
+		},
+	}
+
+	out := make([]artifactSectionStatus, 0, len(expectations))
+	for _, expectation := range expectations {
+		required := !expectation.Optional
+		if sectionSkipped(data.RunMetadata, expectation.SkipKeys) {
+			detail := expectation.SkipNote
+			if detail == "" {
+				detail = "skip flag set in RUNBOOK.md"
+			}
+			out = append(out, artifactSectionStatus{
+				Name:     expectation.Name,
+				Artifact: expectation.Artifact,
+				Status:   "skipped",
+				Required: false,
+				Detail:   detail,
+			})
+			continue
+		}
+		exists := artifactExists(runRoot, expectation.Artifact)
+		if !exists && !strings.HasSuffix(expectation.Artifact, "/") {
+			exists = artifactContainerExists(runRoot, expectation.Artifact)
+		}
+		if expectation.Exists != nil {
+			exists = expectation.Exists(runRoot)
+		}
+		if expectation.HasData(data) {
+			detail := expectation.Available
+			if detail == "" {
+				detail = "artifact rows loaded"
+			}
+			out = append(out, artifactSectionStatus{
+				Name:     expectation.Name,
+				Artifact: expectation.Artifact,
+				Status:   "present",
+				Required: required,
+				Detail:   detail,
+			})
+			continue
+		}
+		status := "missing required"
+		detail := expectation.Missing
+		if expectation.Optional {
+			status = "missing optional"
+			if detail == "" {
+				detail = "optional artifact is absent"
+			}
+		} else if detail == "" {
+			detail = "expected artifact is absent"
+		}
+		if exists {
+			status = "partial"
+			detail = expectation.Partial
+			if detail == "" {
+				detail = "artifact exists but no reportable rows were loaded"
+			}
+		}
+		out = append(out, artifactSectionStatus{
+			Name:     expectation.Name,
+			Artifact: expectation.Artifact,
+			Status:   status,
+			Required: required,
+			Detail:   detail,
+		})
+	}
+	return out
+}
+
+func sectionSkipped(meta runMetadata, keys []string) bool {
+	for _, key := range keys {
+		if meta.boolValue(key) {
+			return true
+		}
+	}
+	return false
+}
+
+func artifactExists(runRoot, rel string) bool {
+	rel = strings.TrimSuffix(rel, "/")
+	_, err := os.Stat(filepath.Join(runRoot, filepath.FromSlash(rel)))
+	return err == nil
+}
+
+func artifactContainerExists(runRoot, rel string) bool {
+	dir := filepath.Dir(filepath.FromSlash(rel))
+	if dir == "." || dir == string(os.PathSeparator) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(runRoot, dir))
+	return err == nil && info.IsDir()
+}
+
+func hasProfileArtifacts(profiles profileReportData) bool {
+	return len(profiles.Benchprof) > 0 || len(profiles.Collections) > 0 || len(profiles.Mongo) > 0
+}
+
+func hasProfileArtifactDirs(runRoot string) bool {
+	for _, rel := range []string{
+		"raw_engine_full_matrix",
+		"collections_sqlite_canonical_1m",
+		"mongo_gateway_full_sweep_1m_expanded/profiles",
+		"mongo_client_mode_load_matrix_1m/profiles",
+	} {
+		found := false
+		root := filepath.Join(runRoot, filepath.FromSlash(rel))
+		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil || !entry.IsDir() {
+				return nil
+			}
+			if entry.Name() == "profiles" {
+				found = true
+				return filepath.SkipDir
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func parseCommandExitLine(line string) (int, int, error) {
+	fields := strings.Fields(line)
+	if len(fields) < 4 || fields[0] != "exit_status:" || fields[2] != "duration_sec:" {
+		return 0, 0, fmt.Errorf("malformed exit line %q", line)
+	}
+	status, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse exit status %q: %w", fields[1], err)
+	}
+	duration, err := strconv.Atoi(fields[3])
+	if err != nil {
+		return 0, 0, fmt.Errorf("parse duration_sec %q: %w", fields[3], err)
+	}
+	return status, duration, nil
 }
 
 func loadRawEngine(dir string) ([]rawEngineRun, []string) {
@@ -794,6 +1133,21 @@ func loadMongoLoadModes(dir string) ([]loadModeRow, []string, error) {
 	return out, warnings, nil
 }
 
+func loadMongoLoadScaling(dir string) ([]mongoSummaryRow, []string) {
+	path := filepath.Join(dir, "summary.tsv")
+	rows, err := readMongoSummary(path)
+	if err == nil {
+		return rows, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		if _, statErr := os.Stat(dir); statErr == nil {
+			return nil, []string{fmt.Sprintf("mongo load scaling: %s is missing summary.tsv", filepath.Base(dir))}
+		}
+		return nil, nil
+	}
+	return nil, []string{err.Error()}
+}
+
 func resolveRunArtifactPath(baseDir, relPath string) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", fmt.Errorf("empty artifact path under %s", baseDir)
@@ -1187,6 +1541,7 @@ func renderHTML(data reportData) string {
 	}
 	b.WriteString(reportNav(data))
 	b.WriteString("</header>\n")
+	renderRunStatus(&b, data.Commands, data.ArtifactSections)
 	if len(data.Warnings) > 0 {
 		b.WriteString("<section class=\"warn\"><h2>Warnings</h2><ul>")
 		for _, warning := range data.Warnings {
@@ -1195,6 +1550,7 @@ func renderHTML(data reportData) string {
 		b.WriteString("</ul></section>\n")
 	}
 	renderMongoFullSweep(&b, data.MongoFullSweep)
+	renderMongoLoadScaling(&b, data.MongoLoadScaling)
 	renderMongoLoadModes(&b, data.MongoLoadModes)
 	renderMongoScaling(&b, data.MongoScaling)
 	renderCollections(&b, data.Collections, data.CollectionComparisons)
@@ -1210,8 +1566,14 @@ func reportNav(data reportData) string {
 		Label string
 	}
 	var items []navItem
+	if len(data.Commands) > 0 || len(data.ArtifactSections) > 0 {
+		items = append(items, navItem{Href: "#run-status", Label: "Run status"})
+	}
 	if len(data.MongoFullSweep) > 0 {
 		items = append(items, navItem{Href: "#mongo-full", Label: "Mongo API sweep"})
+	}
+	if hasMongoLoadScalingRows(data.MongoLoadScaling) {
+		items = append(items, navItem{Href: "#mongo-load-scaling", Label: "Load scaling"})
 	}
 	if len(data.MongoLoadModes) > 0 {
 		items = append(items, navItem{Href: "#mongo-load", Label: "Load modes"})
@@ -1238,6 +1600,114 @@ func reportNav(data reportData) string {
 	}
 	b.WriteString("</nav>")
 	return b.String()
+}
+
+func renderRunStatus(b *strings.Builder, commands []commandLogEntry, sections []artifactSectionStatus) {
+	if len(commands) == 0 && len(sections) == 0 {
+		return
+	}
+	failed := commandFailureCount(commands)
+	blockedSections := blockingArtifactSectionCount(sections)
+	skippedSections := skippedArtifactSectionCount(sections)
+	classAttr := ""
+	if failed > 0 {
+		classAttr = " class=\"warn\""
+	}
+	if blockedSections > 0 {
+		classAttr = " class=\"warn\""
+	}
+	status := runStatusText(len(commands), failed, blockedSections, skippedSections)
+	b.WriteString("<section id=\"run-status\"" + classAttr + "><h2>Run Status</h2>")
+	b.WriteString("<p class=\"subtle\">" + esc(status) + "</p>")
+	if len(sections) > 0 {
+		var body [][]string
+		for _, section := range sections {
+			required := "yes"
+			if !section.Required {
+				required = "no"
+			}
+			body = append(body, []string{
+				section.Name,
+				section.Status,
+				required,
+				section.Artifact,
+				section.Detail,
+			})
+		}
+		b.WriteString("<h3>Artifact Sections</h3>")
+		writeTable(b, []string{"section", "status", "required", "artifact", "detail"}, body, nil)
+	}
+	if len(commands) > 0 {
+		var body [][]string
+		for i, command := range commands {
+			body = append(body, []string{
+				strconv.Itoa(i + 1),
+				strconv.Itoa(command.ExitStatus),
+				formatOptionalInt(command.DurationSec),
+				emptyDash(command.Warning),
+				command.Command,
+			})
+		}
+		b.WriteString("<h3>Recorded Commands</h3>")
+		writeTable(b, []string{"#", "exit status", "duration sec", "warning", "command"}, body, numericColumns(0, 1, 2))
+	}
+	b.WriteString("</section>\n")
+}
+
+func runStatusText(commandCount, failedCommands, blockedSections, skippedSections int) string {
+	var sentences []string
+	if commandCount > 0 {
+		if failedCommands > 0 {
+			sentences = append(sentences, fmt.Sprintf("Partial run: %d of %d recorded commands exited nonzero.", failedCommands, commandCount))
+		} else if blockedSections > 0 || skippedSections > 0 {
+			sentences = append(sentences, fmt.Sprintf("Partial run: all %d recorded commands exited 0.", commandCount))
+		} else {
+			sentences = append(sentences, fmt.Sprintf("Complete run: all %d recorded commands exited 0.", commandCount))
+		}
+	} else {
+		if blockedSections > 0 || skippedSections > 0 {
+			sentences = append(sentences, "Partial run: no commands.log was available for command-level status.")
+		} else {
+			sentences = append(sentences, "Complete run: no commands.log was available, but all expected artifact sections are present.")
+		}
+	}
+	if blockedSections > 0 {
+		sentences = append(sentences, fmt.Sprintf("%d expected artifact section(s) are missing or partial.", blockedSections))
+	}
+	if skippedSections > 0 {
+		sentences = append(sentences, fmt.Sprintf("%d artifact section(s) were intentionally skipped.", skippedSections))
+	}
+	return strings.Join(sentences, " ")
+}
+
+func commandFailureCount(commands []commandLogEntry) int {
+	var failed int
+	for _, command := range commands {
+		if command.ExitStatus != 0 {
+			failed++
+		}
+	}
+	return failed
+}
+
+func blockingArtifactSectionCount(sections []artifactSectionStatus) int {
+	var blocked int
+	for _, section := range sections {
+		if section.Required && (section.Status == "missing required" || section.Status == "partial") {
+			blocked++
+		}
+	}
+	return blocked
+}
+
+func skippedArtifactSectionCount(sections []artifactSectionStatus) int {
+	var skipped int
+	for _, section := range sections {
+		if section.Status == "skipped" {
+			skipped++
+		}
+	}
+	return skipped
 }
 
 func reportCSS() string {
@@ -2336,6 +2806,7 @@ func renderMongoFullSweep(b *strings.Builder, rows []mongoSummaryRow) {
 			{Name: "MongoDB", Values: mongoRowDisk(loadRows, "mongo"), Color: "#1f8a5b"},
 		}, "bytes"))
 		b.WriteString("<p class=\"subtle\"><strong>Storage basis:</strong> " + esc(mongoStorageBasisText(loadRows)) + "</p>")
+		writeMongoIndexRetentionTable(b, loadRows)
 	}
 	b.WriteString("</div></div>")
 	for _, idx := range indexes {
@@ -2412,6 +2883,158 @@ func renderMongoLoadModes(b *strings.Builder, rows []loadModeRow) {
 	writeTable(b, []string{"indexes", "target", "config", "load docs/sec", "physical bytes", "raw JSON"}, body, numericColumns(0, 3, 4))
 	b.WriteString("</details>")
 	b.WriteString("</section>\n")
+}
+
+func renderMongoLoadScaling(b *strings.Builder, rows []mongoSummaryRow) {
+	loadRows := mongoLoadScalingRows(rows)
+	if len(loadRows) == 0 {
+		return
+	}
+	b.WriteString("<section id=\"mongo-load-scaling\"><h2>Mongo API InsertMany Producer Scaling</h2>")
+	b.WriteString("<p class=\"subtle\">Load-only BSON `driver-command-raw` TreeDB-vs-MongoDB sweep. This section varies InsertMany producer count and is separate from reader/writer operation scaling.</p>")
+	if metadata := mongoLoadScalingScopeText(loadRows); metadata != "" {
+		b.WriteString("<p class=\"subtle\"><strong>Scope:</strong> " + esc(metadata) + "</p>")
+	}
+	b.WriteString("<div class=\"chart-grid\">")
+	for _, idx := range sortedMongoIndexes(loadRows) {
+		counts := mongoLoadProducerCounts(loadRows, idx)
+		if len(counts) == 0 {
+			continue
+		}
+		b.WriteString(lineChart("Insert throughput vs insert producers, "+indexCountLabel(idx), countLabels(counts), "insert producers", "docs/sec", []chartSeries{
+			{Name: "TreeDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "tree"), Color: "#2867c7"},
+			{Name: "MongoDB", Values: mongoLoadProducerOps(loadRows, idx, counts, "mongo"), Color: "#1f8a5b"},
+		}, "docs/sec"))
+	}
+	b.WriteString("</div>")
+	writeMongoLoadScalingSummaryTable(b, loadRows)
+	b.WriteString("<details><summary>Raw load-scaling TSV rows</summary>")
+	writeMongoSummaryTable(b, loadRows)
+	b.WriteString("</details></section>\n")
+}
+
+func mongoLoadScalingRows(rows []mongoSummaryRow) []mongoSummaryRow {
+	var out []mongoSummaryRow
+	for _, row := range rows {
+		if row.Phase == "load_insert_many" {
+			out = append(out, row)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].SecondaryIndexes != out[j].SecondaryIndexes {
+			return out[i].SecondaryIndexes < out[j].SecondaryIndexes
+		}
+		if mongoLoadProducerCount(out[i]) != mongoLoadProducerCount(out[j]) {
+			return mongoLoadProducerCount(out[i]) < mongoLoadProducerCount(out[j])
+		}
+		return out[i].TreeDBConfig < out[j].TreeDBConfig
+	})
+	return out
+}
+
+func hasMongoLoadScalingRows(rows []mongoSummaryRow) bool {
+	for _, row := range rows {
+		if row.Phase == "load_insert_many" {
+			return true
+		}
+	}
+	return false
+}
+
+func mongoLoadScalingScopeText(rows []mongoSummaryRow) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	first := rows[0]
+	for _, row := range rows[1:] {
+		if row.Documents != first.Documents || row.BatchSize != first.BatchSize || row.TreeDBConfig != first.TreeDBConfig || row.MongoConfig != first.MongoConfig {
+			return "mixed document, batch, or client-mode metadata; see raw load-scaling rows"
+		}
+	}
+	parts := []string{fmt.Sprintf("%s docs", commaInt(int64(first.Documents)))}
+	if first.BatchSize > 0 {
+		parts = append(parts, fmt.Sprintf("batch size %s", commaInt(int64(first.BatchSize))))
+	}
+	if batches := mongoLoadBatchCount(first); batches > 0 {
+		parts = append(parts, fmt.Sprintf("%s load batches", commaInt(int64(batches))))
+	}
+	if first.TreeDBConfig != "" {
+		parts = append(parts, "TreeDB "+first.TreeDBConfig)
+	}
+	if first.MongoConfig != "" {
+		parts = append(parts, "MongoDB "+first.MongoConfig)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func mongoLoadProducerCounts(rows []mongoSummaryRow, idx int) []int {
+	seen := make(map[int]bool)
+	for _, row := range rows {
+		if row.SecondaryIndexes != idx {
+			continue
+		}
+		count := mongoLoadProducerCount(row)
+		if count > 0 {
+			seen[count] = true
+		}
+	}
+	var out []int
+	for count := range seen {
+		out = append(out, count)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func mongoLoadProducerOps(rows []mongoSummaryRow, idx int, counts []int, side string) []float64 {
+	out := make([]float64, 0, len(counts))
+	for _, count := range counts {
+		row, ok := mongoLoadProducerRow(rows, idx, count)
+		if !ok {
+			out = append(out, 0)
+			continue
+		}
+		if side == "mongo" {
+			out = append(out, row.MongoOpsSec)
+		} else {
+			out = append(out, row.TreeDBOpsSec)
+		}
+	}
+	return out
+}
+
+func mongoLoadProducerRow(rows []mongoSummaryRow, idx, count int) (mongoSummaryRow, bool) {
+	for _, row := range rows {
+		if row.SecondaryIndexes == idx && mongoLoadProducerCount(row) == count {
+			return row, true
+		}
+	}
+	return mongoSummaryRow{}, false
+}
+
+func mongoLoadProducerCount(row mongoSummaryRow) int {
+	if row.InsertProducers > 0 {
+		return row.InsertProducers
+	}
+	return mongoEffectiveLoadProducers(row)
+}
+
+func writeMongoLoadScalingSummaryTable(b *strings.Builder, rows []mongoSummaryRow) {
+	var body [][]string
+	for _, row := range rows {
+		body = append(body, []string{
+			strconv.Itoa(row.SecondaryIndexes),
+			formatOptionalInt(mongoLoadProducerCount(row)),
+			formatOptionalInt(mongoEffectiveLoadProducers(row)),
+			formatOptionalInt(mongoLoadBatchCount(row)),
+			fmtOps(row.TreeDBOpsSec),
+			fmtOps(row.MongoOpsSec),
+			fmtRatio(row.TreeDBToMongoRatio),
+		})
+	}
+	b.WriteString("<h3>Producer scaling summary</h3>")
+	b.WriteString("<p class=\"subtle\">Requested producers are used on the chart axis. Effective producers show capped runs when requested producers exceed the number of load batches.</p>")
+	writeTable(b, []string{"indexes", "requested producers", "effective producers", "load batches", "TreeDB docs/sec", "MongoDB docs/sec", "TreeDB/MongoDB"}, body, numericColumns(0, 1, 2, 3, 4, 5, 6))
 }
 
 func fullSweepLoadNote(rows []mongoSummaryRow) string {
@@ -2886,6 +3509,39 @@ func mongoRowDisk(rows []mongoSummaryRow, side string) []float64 {
 		}
 	}
 	return out
+}
+
+func writeMongoIndexRetentionTable(b *strings.Builder, rows []mongoSummaryRow) {
+	if len(rows) == 0 {
+		return
+	}
+	var baseline mongoSummaryRow
+	var hasBaseline bool
+	for _, row := range rows {
+		if row.SecondaryIndexes == 0 {
+			baseline = row
+			hasBaseline = true
+			break
+		}
+	}
+	if !hasBaseline {
+		return
+	}
+	var body [][]string
+	for _, row := range rows {
+		body = append(body, []string{
+			strconv.Itoa(row.SecondaryIndexes),
+			fmtOps(row.TreeDBOpsSec),
+			fmtOps(row.MongoOpsSec),
+			fmtPercentRatio(ratioOrZero(row.TreeDBOpsSec, baseline.TreeDBOpsSec)),
+			fmtPercentRatio(ratioOrZero(row.MongoOpsSec, baseline.MongoOpsSec)),
+			fmtRatio(row.TreeDBToMongoRatio),
+			fmtRatio(row.TreeDBToMongoPhysRatio),
+		})
+	}
+	b.WriteString("<h3>Index throughput retention</h3>")
+	b.WriteString("<p class=\"subtle\">Retention is each load throughput divided by the 0-secondary-index load throughput for the same database.</p>")
+	writeTable(b, []string{"secondary indexes", "TreeDB docs/sec", "MongoDB docs/sec", "TreeDB retained", "MongoDB retained", "TreeDB/MongoDB throughput", "TreeDB/MongoDB physical bytes"}, body, numericColumns(0, 1, 2, 3, 4, 5, 6))
 }
 
 func mongoStorageBasisText(rows []mongoSummaryRow) string {
@@ -3760,6 +4416,20 @@ func fmtRatio(v float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.2fx", v)
+}
+
+func fmtPercentRatio(v float64, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", v*100)
+}
+
+func ratioOrZero(numerator, denominator float64) (float64, bool) {
+	if denominator == 0 {
+		return 0, false
+	}
+	return numerator / denominator, true
 }
 
 func fmtBytes(v float64) string {

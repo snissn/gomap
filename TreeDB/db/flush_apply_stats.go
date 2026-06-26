@@ -390,7 +390,9 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_admission.policy"] = admission.Policy.String()
 	stats["treedb.flush_admission.admitted"] = fmt.Sprintf("%t", admission.Admitted)
 	stats["treedb.flush_admission.reason"] = admission.Reason
+	stats["treedb.flush_admission.flush_apply_concurrency_configured"] = fmt.Sprintf("%d", admission.FlushApplyConcurrencyConfigured)
 	stats["treedb.flush_admission.flush_apply_concurrency"] = fmt.Sprintf("%d", admission.FlushApplyConcurrency)
+	stats["treedb.flush_admission.flush_apply_concurrency_cap_reason"] = admission.FlushApplyConcurrencyCapReason
 	stats["treedb.flush_admission.flush_apply_concurrency_defaulted"] = fmt.Sprintf("%t", admission.FlushApplyConcurrencyDefaulted)
 	stats["treedb.flush_admission.gomaxprocs"] = fmt.Sprintf("%d", admission.RuntimeGOMAXPROCS)
 	stats["treedb.flush_admission.physical_cores"] = fmt.Sprintf("%d", admission.PhysicalCores)
