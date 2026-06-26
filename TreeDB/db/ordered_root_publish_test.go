@@ -247,18 +247,24 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextWaitsBeforeWriteM
 	}
 
 	publishDone := make(chan error, 1)
+	contextIntent := mustRawKVCommandWALIntent(t, db, "cmd/context", "2")
 	go func() {
 		_, _, publishErr := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
 			nil,
-			mustRawKVCommandWALIntent(t, db, "cmd/context", "2"),
+			contextIntent,
 			func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				if ctx.AppliedCommandLSN == 0 {
-					t.Fatalf("AppliedCommandLSN=0 in system builder")
+					return nil, errors.New("AppliedCommandLSN=0 in system builder")
 				}
 				if len(rootIDs) != 0 {
-					t.Fatalf("rootIDs=%v, want empty roots", rootIDs)
+					return nil, errors.New("non-empty rootIDs in system builder")
 				}
-				sys := mustFrozenSystemMemtable(t, "system/context-wait", strconv.FormatUint(ctx.AppliedCommandLSN, 10))
+				sys, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+				if err != nil {
+					return nil, err
+				}
+				sys.Set([]byte("system/context-wait"), []byte(strconv.FormatUint(ctx.AppliedCommandLSN, 10)))
+				sys.Freeze()
 				return sys.NewIterator(nil, nil), nil
 			},
 		)
