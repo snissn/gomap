@@ -169,6 +169,30 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertEqual(summary["dwell"]["last_timestamp"], "2026-06-26T00:02:10Z")
             self.assertEqual(summary["dwell"]["last_app_db_apparent_bytes"], 1244)
 
+    def test_disk_fallback_when_sync_app_bytes_is_zero(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=1234)
+            sync_time = run / "sync" / "sync-time.log"
+            sync_time.write_text(
+                sync_time.read_text(encoding="utf-8").replace("end_app_bytes=1234", "end_app_bytes=0"),
+                encoding="utf-8",
+            )
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(run)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["runs"][0]["end_app_bytes"], 1234)
+
 
 if __name__ == "__main__":
     unittest.main()

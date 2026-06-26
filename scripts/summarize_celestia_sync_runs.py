@@ -214,7 +214,10 @@ def summarize_home(home: Path) -> dict[str, Any]:
     blocks_synced = max(final_local_height - trust_height, 0) if trust_height and final_local_height else 0
     sync_seconds = safe_int(sync.get("sync_duration_seconds", sync.get("duration_seconds")), 0)
     total_seconds = safe_int(sync.get("total_duration_seconds", sync.get("duration_seconds")), sync_seconds)
-    end_app_bytes = safe_int(sync.get("end_app_bytes"), disk.get("application.db", 0))
+    disk_app_bytes = disk.get("application.db", 0)
+    end_app_bytes = safe_int(sync.get("end_app_bytes"), disk_app_bytes)
+    if end_app_bytes == 0 and disk_app_bytes > 0:
+        end_app_bytes = disk_app_bytes
     end_home_bytes = safe_int(sync.get("end_home_bytes"), 0)
     end_data_bytes = safe_int(sync.get("end_data_bytes"), 0)
     max_rss_kb = max(safe_int(sync.get("max_rss_kb"), 0), safe_int(dwell.get("max_vmrss_kb"), 0))

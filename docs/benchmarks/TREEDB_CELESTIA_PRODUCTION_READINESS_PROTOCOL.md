@@ -64,10 +64,26 @@ KEEP_RECENT_RUNS=20
 EOF
 ```
 
-Run one backend at a time so failures are easy to classify:
+Run LevelDB first:
 
 ```bash
 env $(grep -v '^#' /tmp/celestia_leveldb.env | xargs) ~/run_celestia.sh
+```
+
+Then pin the TreeDB run to the same trust and target window. Replace
+`LEVEL_HOME` with the run home created by the LevelDB command, or use the
+`ls -dt` fallback when the latest LevelDB run is the one under test.
+
+```bash
+LEVEL_HOME=$(ls -dt ~/.celestia-app-mainnet-goleveldb-* | head -n1)
+TRUST_HEIGHT=$(awk -F= '$1 == "trust_height" { print $2 }' "$LEVEL_HOME/sync/sync-time.log")
+TRUST_HASH=$(awk -F= '$1 == "trust_hash" { print $2 }' "$LEVEL_HOME/sync/sync-time.log")
+STOP_AT_LOCAL_HEIGHT=$(awk -F= '$1 == "final_local_height" { print $2 }' "$LEVEL_HOME/sync/sync-time.log")
+cat >>/tmp/celestia_treedb.env <<EOF
+TRUST_HEIGHT=$TRUST_HEIGHT
+TRUST_HASH=$TRUST_HASH
+STOP_AT_LOCAL_HEIGHT=$STOP_AT_LOCAL_HEIGHT
+EOF
 env $(grep -v '^#' /tmp/celestia_treedb.env | xargs) ~/run_celestia.sh
 ```
 
