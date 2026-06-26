@@ -1470,6 +1470,8 @@ func (h *compactStorageLeafPageLogHandoff) cleanup() error {
 	var cleanupErr error
 	if err := compactStorageLeafPageLogHandoffCloseWriter(h.writer); err != nil {
 		cleanupErr = errors.Join(cleanupErr, compactStorageLeafPageLogHandoffError("close compact writer", err))
+		h.db.setLeafPageLogRaw(nil)
+		return cleanupErr
 	}
 	if h.previousLeafPageLog == nil {
 		h.db.setLeafPageLogRaw(nil)

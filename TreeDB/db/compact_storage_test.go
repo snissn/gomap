@@ -1033,6 +1033,14 @@ func TestCompactStorageLeafPageLogHandoffCloseFailureFailsClosed(t *testing.T) {
 		indexOuterLeavesInValueLog: true,
 		valueLogCompression:        ValueLogCompressionOff,
 	}
+	previousHandoff := &compactStorageFailingHandoffLeafPageLog{}
+	previousOwner := &leafPageLogLaneGroup{
+		lanes: []LeafPageLog{
+			replayInlineLeafPageLog{},
+			previousHandoff,
+		},
+	}
+	d.SetLeafPageLog(previousOwner)
 	opts := CompactStorageOptions{
 		Mode:        CompactStorageExhaustive,
 		ReserveRIDs: newRewriteRIDAllocator(1, nil).Reserve,
@@ -1072,6 +1080,9 @@ func TestCompactStorageLeafPageLogHandoffCloseFailureFailsClosed(t *testing.T) {
 	}
 	if d.leafPageLog != nil {
 		t.Fatalf("leaf-page log=%T, want fail-closed nil active writer", d.leafPageLog)
+	}
+	if previousHandoff.advanceCalls != 0 {
+		t.Fatalf("previous owner advance calls=%d want 0 after close-stage failure", previousHandoff.advanceCalls)
 	}
 	if err := handoff.cleanup(); err != nil {
 		t.Fatalf("second cleanup should be idempotent, got %v", err)
