@@ -9,8 +9,8 @@ evidence.
 
 Use this entrypoint when you need the full `TreeDB Benchmark Run Report` with
 raw TreeDB engine profiles, TreeDB collections vs SQLite, Mongo API full sweep,
-Mongo client-mode load matrix, Mongo reader/writer scaling, and the final
-`deep_report.html`.
+Mongo InsertMany producer scaling, Mongo client-mode load matrix, Mongo
+reader/writer scaling, and the final `deep_report.html`.
 
 The collections section runs a separate pprof capture pass for every
 TreeDB/SQLite timed-matrix cell by default. Those profiles are attribution
@@ -33,6 +33,7 @@ The script writes the exact artifact layout consumed by
 ```text
 $RUN_ROOT/
   HEAD.txt
+  commands.log
   RUNBOOK.md
   raw_engine_full_matrix/
   collections_sqlite_canonical_1m/
@@ -40,6 +41,7 @@ $RUN_ROOT/
     indexes_*/timed_matrix/*/profiles/{cpu.pprof,allocs.pprof,block.pprof,mutex.pprof,profile_go_test.txt}
   mongo_gateway_full_sweep_1m_expanded/
   mongo_client_mode_load_matrix_1m/
+  mongo_gateway_load_scaling_1m/
   mongo_gateway_reader_writer_scaling_1m/
   deep_report.html
 ```
@@ -50,9 +52,9 @@ Size presets:
 - `--tier pr`: reviewable PR evidence.
 - `--tier large`: scale evidence, expected to take substantially longer.
 
-Use `--skip-raw`, `--skip-collections`, `--skip-mongo`, `--skip-load-modes`, or
-`--skip-scaling` only for resumable/debug runs. Published reports should state
-any skipped section explicitly.
+Use `--skip-raw`, `--skip-collections`, `--skip-mongo`, `--skip-load-modes`,
+`--skip-load-scaling`, or `--skip-scaling` only for resumable/debug runs.
+Published reports should state any skipped section explicitly.
 
 Use `--skip-collection-profiles` only when validating non-profile report logic;
 it removes the collection pprof manifests from the final Profiling Follow-Up
@@ -62,6 +64,9 @@ section.
 
 - Start every report with the git commit, branch, host, OS, Go version, command,
   and output directory.
+- Treat `commands.log` as part of the evidence. A rendered report should make
+  nonzero command exits visible near the top and should not look final when a
+  section failed or was skipped.
 - Keep fixture shape explicit: document count, key count, value size, batch size,
   secondary index count, document format, profile, client mode, concurrency, and
   maintenance mode.
@@ -365,6 +370,46 @@ load path. Use `direct` to separate collection-engine and storage-format
 bottlenecks from Mongo compatibility overhead. Use raw-wire modes only to
 estimate TreeDB gateway/server ceiling.
 
+## InsertMany Producer Scaling
+
+Use the load-scaling wrapper when the question is how bulk insert throughput
+changes as InsertMany producer count increases. This is the load-scaling
+counterpart to the fixed-producer index-count chart in the full sweep.
+
+```sh
+scripts/mongo_gateway_load_scaling_bench.sh \
+  --out /tmp/gomap_mongo_load_scaling_$(date +%Y%m%d_%H%M%S) \
+  --docs 100000 \
+  --indexes "0 1 2" \
+  --batch-size 1000 \
+  --producers "1,2,4,8,16,32" \
+  --mongo-mode docker \
+  --timeout 120m
+```
+
+Producer/batch sizing rule:
+
+- Effective producers are capped by load batch count:
+  `effective_producers = min(requested_producers, ceil(documents / batch_size))`.
+- For an uncapped producer-scaling chart, choose `documents` and `batch_size`
+  so `ceil(documents / batch_size)` is at least the largest requested producer
+  count.
+- Reports keep both requested and effective producers visible. If a small smoke
+  fixture has only two batches, the 16- and 32-producer rows are useful harness
+  checks but should not be interpreted as uncapped scaling evidence.
+
+Interpret the Mongo-compatible sections as separate questions:
+
+- Full sweep load chart: fixed producer count and batch size for the broader
+  read/range/update evidence bundle. Use it for index-count penalty and storage
+  comparisons under the canonical bulk-load setup.
+- InsertMany producer scaling: load-only producer-count sweep. Use it to see
+  whether TreeDB or MongoDB saturates as insert producers increase.
+- Client-mode load matrix: load-only client-path comparison. Use it to separate
+  official-driver, command, direct, and raw-wire overhead.
+- Reader/writer scaling: post-load operation scaling. Use it for point reads,
+  range reads, and updates versus client count, not for bulk-load scaling.
+
 ## Reader and Writer Scaling
 
 Use the scaling wrapper when the question is concurrency plateau, update cost,
@@ -439,10 +484,14 @@ go run ./cmd/benchmark_run_report \
   -title "TreeDB Canonical Benchmark Report"
 ```
 
-The deep report preserves full raw-engine, collection, Mongo full-sweep,
-client-mode, and reader/writer scaling tables. It also renders inline SVG charts
-for TreeDB-vs-MongoDB load, disk, read fanout, writer scaling, and client-mode
-load comparisons.
+The deep report preserves run status, full raw-engine, collection, Mongo
+full-sweep, client-mode, InsertMany producer-scaling, and reader/writer scaling
+tables. It renders inline SVG charts for TreeDB-vs-MongoDB load, disk, index
+retention, insert-producer scaling, read fanout, writer scaling, and client-mode
+load comparisons. The fixed bulk-load charts should show document count, batch
+size, requested producers, effective producers, load batch count, and storage
+basis so readers do not have to inspect raw TSV files to understand the
+measurement setup.
 
 Use this shape in PR and issue comments:
 

@@ -151,6 +151,65 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 	}
 }
 
+func TestFlushAdmissionPropagationThroughCachedOpen(t *testing.T) {
+	prev := runtime.GOMAXPROCS(8)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
+
+	dir := t.TempDir()
+	backendOpts := backenddb.Options{
+		Dir:                   dir,
+		FlushAdmissionPolicy:  backenddb.FlushAdmissionPolicyAuto,
+		FlushApplyConcurrency: 16,
+	}
+	decision := backenddb.NormalizeFlushAdmissionOptions(&backendOpts)
+	if decision.FlushApplyConcurrencyConfigured != 16 || decision.FlushApplyConcurrency != 8 {
+		t.Fatalf("normalized configured/selected=%d/%d want 16/8", decision.FlushApplyConcurrencyConfigured, decision.FlushApplyConcurrency)
+	}
+
+	backend, err := backenddb.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:         1 << 20,
+		MemtableShards:         1,
+		JournalLanes:           1,
+		FlushApplyConcurrency:  backendOpts.FlushApplyConcurrency,
+		FlushApplyMinEntries:   backendOpts.FlushApplyMinEntries,
+		FlushApplyMinSpans:     backendOpts.FlushApplyMinSpans,
+		FlushApplyMinBytes:     backendOpts.FlushApplyMinBytes,
+		FlushApplySpanNative:   backendOpts.FlushApplySpanNative,
+		FlushBacklogCoalescing: backendOpts.FlushBacklogCoalescing,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("Open cache: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	stats := db.Stats()
+	for key, want := range map[string]string{
+		"treedb.flush_admission.policy":                             "auto",
+		"treedb.flush_admission.admitted":                           "true",
+		"treedb.flush_admission.reason":                             backenddb.FlushAdmissionReasonAutoAdmittedHardwareAware,
+		"treedb.flush_admission.flush_apply_concurrency_configured": "16",
+		"treedb.flush_admission.flush_apply_concurrency":            "8",
+		"treedb.flush_admission.flush_apply_concurrency_cap_reason": backenddb.FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS,
+		"treedb.flush_admission.flush_apply_concurrency_defaulted":  "false",
+		"treedb.flush_admission.gomaxprocs":                         "8",
+		"treedb.cache.flush_apply.concurrency":                      "8",
+		"treedb.cache.flush_apply.span_native":                      "true",
+		"treedb.cache.flush_backlog_coalescing.enabled":             "true",
+	} {
+		if got := stats[key]; got != want {
+			t.Fatalf("stats[%s]=%q want %q", key, got, want)
+		}
+	}
+	if got := stats["treedb.flush_admission.physical_cores"]; got == "" {
+		t.Fatal("missing physical core admission stat")
+	}
+}
+
 func TestLeafLogLaneStatsExposeConfiguredActiveAndPerLaneCounters(t *testing.T) {
 	db := &DB{indexOuterLeavesInValueLog: true}
 	lane0 := &lane{id: leafLogLaneID, vlogPath: "leaf-0", vlogSeq: 1, vlogClosedSizes: map[string]int64{"old-0": 1}}

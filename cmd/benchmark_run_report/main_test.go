@@ -12,6 +12,7 @@ import (
 func TestDeepReportFromRunRoot(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "HEAD.txt"), "HEAD=abc123def456\norigin/main=999888777666\n")
+	writeFile(t, filepath.Join(root, "commands.log"), "command: go test ./cmd/benchmark_run_report\nexit_status: 0 duration_sec: 2\ncommand: scripts/bench_collections_canonical.sh --smoke\nexit_status: 1 duration_sec: 5\nwarning: collections failed with exit status 1; continuing so the final report can render\n")
 	writeFile(t, filepath.Join(root, "raw_engine_full_matrix", "wal_on_fast_checkpoint_between_tests", "benchprof_results.json"), `{
   "runs": [{
     "profile": "wal_on_fast",
@@ -102,6 +103,7 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 	summary0 := mongoSummaryFixture(0)
 	summary4 := mongoSummaryFixture(4)
 	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "summary.tsv"), summary0+strings.TrimPrefix(summary4, mongoSummaryHeader))
+	writeFile(t, filepath.Join(root, "mongo_gateway_load_scaling_1m", "summary.tsv"), mongoLoadScalingSummaryFixture())
 	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_0", "summary.tsv"), summary0)
 	writeFile(t, filepath.Join(root, "mongo_gateway_reader_writer_scaling_1m", "indexes_4", "summary.tsv"), summary4)
 	writeFile(t, filepath.Join(root, "mongo_client_mode_load_matrix_1m", "matrix.tsv"), "target\tconfig\tdocuments\tsecondary_indexes\traw_json\tphysical_bytes\n"+
@@ -127,7 +129,11 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"test report",
 		"HEAD=abc123def456",
 		"origin/main=999888777666",
+		"Run Status",
+		"Partial run: 1 of 2 recorded commands exited nonzero.",
+		"collections failed with exit status 1",
 		"Mongo API Full Sweep",
+		"Mongo API InsertMany Producer Scaling",
 		"Load-Only Client-Mode Matrix",
 		"Mongo API Reader/Writer Scaling",
 		"Collections vs SQLite",
@@ -144,6 +150,11 @@ func TestDeepReportFromRunRoot(t *testing.T) {
 		"Client Count",
 		"Load interpretation:",
 		"pure ingest client-mode matrix",
+		"Index throughput retention",
+		"Producer scaling summary",
+		"Insert Throughput Vs Insert Producers, 0 Indexes",
+		"requested producers",
+		"effective producers",
 		"4 Indexes: Mongo API Scaling",
 		"Single threaded client",
 		"ID Find One: Throughput Vs Reader Clients",
@@ -212,10 +223,139 @@ func TestRenderHTMLNavOmitsMissingSections(t *testing.T) {
 	if !strings.Contains(html, "href=\"#mongo-load\"") {
 		t.Fatalf("nav missing present load-mode section\n%s", html)
 	}
-	for _, absent := range []string{"href=\"#mongo-full\"", "href=\"#scaling\"", "href=\"#collections\"", "href=\"#raw-engine\""} {
+	for _, absent := range []string{"href=\"#run-status\"", "href=\"#mongo-full\"", "href=\"#mongo-load-scaling\"", "href=\"#scaling\"", "href=\"#collections\"", "href=\"#raw-engine\""} {
 		if strings.Contains(html, absent) {
 			t.Fatalf("nav includes missing section %s\n%s", absent, html)
 		}
+	}
+}
+
+func TestLoadCommandLogAndRenderRunStatus(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "commands.log")
+	writeFile(t, path, "command: go test ./...\nexit_status: 0 duration_sec: 12\ncommand: scripts/fail.sh\nexit_status: 2 duration_sec: 3\nwarning: fail.sh failed with exit status 2; continuing so the final report can render\n")
+
+	commands, warnings := loadCommandLog(path)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if len(commands) != 2 {
+		t.Fatalf("commands = %v, want 2", commands)
+	}
+	if commands[1].ExitStatus != 2 || commands[1].DurationSec != 3 || !strings.Contains(commands[1].Warning, "exit status 2") {
+		t.Fatalf("failed command parsed incorrectly: %+v", commands[1])
+	}
+	if !commands[0].Complete || !commands[1].Complete {
+		t.Fatalf("completed commands parsed as incomplete: %+v", commands)
+	}
+
+	var b strings.Builder
+	renderRunStatus(&b, commands, nil)
+	html := b.String()
+	for _, want := range []string{
+		"Run Status",
+		"Partial run: 1 of 2 recorded commands exited nonzero.",
+		"scripts/fail.sh",
+		"fail.sh failed with exit status 2",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("run status missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestLoadCommandLogSkipsTrailingCommandWithoutExit(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "commands.log")
+	writeFile(t, path, "command: go test ./cmd/benchmark_run_report\nexit_status: 0 duration_sec: 2\ncommand: go run ./cmd/benchmark_run_report\n")
+
+	commands, warnings := loadCommandLog(path)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("commands = %v, want 1", commands)
+	}
+	if !commands[0].Complete {
+		t.Fatalf("first command parsed as incomplete: %+v", commands[0])
+	}
+
+	var b strings.Builder
+	renderRunStatus(&b, commands, nil)
+	html := b.String()
+	for _, want := range []string{
+		"Complete run: all 1 recorded commands exited 0.",
+		"go test ./cmd/benchmark_run_report",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("run status missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "go run ./cmd/benchmark_run_report") {
+		t.Fatalf("trailing command without exit status was rendered\n%s", html)
+	}
+}
+
+func TestRunStatusReportsSkippedMissingAndOptionalSections(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "RUNBOOK.md"), `# Full TreeDB Benchmark Report Run
+
+- skip_raw: false
+- skip_collections: true
+- skip_mongo: false
+- skip_load_modes: true
+- skip_load_scaling: false
+- skip_scaling: false
+`)
+	writeFile(t, filepath.Join(root, "commands.log"), "command: smoke\nexit_status: 0 duration_sec: 1\n")
+	if err := os.MkdirAll(filepath.Join(root, "mongo_gateway_load_scaling_1m"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(root, "deep_report.html")
+	if err := run([]string{"-run-root", root, "-out", out, "-title", "partial fixture"}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	html := readFile(t, out)
+	for _, want := range []string{
+		"Run Status",
+		"Partial run:",
+		"expected artifact section(s) are missing or partial",
+		"artifact section(s) were intentionally skipped",
+		"Artifact Sections",
+		"Raw TreeDB engine",
+		"missing required",
+		"Collections vs SQLite",
+		"skipped",
+		"skip flag set in RUNBOOK.md",
+		"Mongo InsertMany producer scaling",
+		"partial",
+		"missing optional",
+		"profile manifests",
+		"mongo load scaling: mongo_gateway_load_scaling_1m is missing summary.tsv",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("partial status missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestOldArtifactWithoutCommandsLogStillRenders(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "mongo_gateway_full_sweep_1m_expanded", "summary.tsv"), mongoSummaryFixture(0))
+
+	out := filepath.Join(root, "deep_report.html")
+	if err := run([]string{"-run-root", root, "-out", out, "-title", "old artifact"}); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	html := readFile(t, out)
+	for _, want := range []string{"old artifact", "Mongo API Full Sweep"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("legacy report missing %q\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "Run Status") {
+		t.Fatalf("legacy report without RUNBOOK.md/commands.log should not require status block\n%s", html)
 	}
 }
 
@@ -505,6 +645,31 @@ func TestReadMongoSummaryStrictParsing(t *testing.T) {
 	}
 }
 
+func TestReadMongoSummaryOptionalLoadMetadata(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "summary.tsv")
+
+	writeFile(t, path, mongoSummaryFixture(0))
+	rows, err := readMongoSummary(path)
+	if err != nil {
+		t.Fatalf("read old summary: %v", err)
+	}
+	if rows[0].BatchSize != 0 || rows[0].InsertProducers != 0 || rows[0].EffectiveProducers != 0 || rows[0].DriverCalls != 0 || rows[0].LoadBatchCount != 0 {
+		t.Fatalf("old summary parsed metadata: %+v", rows[0])
+	}
+
+	writeFile(t, path, mongoSummaryFixtureWithLoadMetadata(0, 25, 8, 4))
+	rows, err = readMongoSummary(path)
+	if err != nil {
+		t.Fatalf("read summary with load metadata: %v", err)
+	}
+	got := rows[0]
+	if got.BatchSize != 25 || got.InsertProducers != 8 || got.EffectiveProducers != 4 || got.DriverCalls != 4 || got.LoadBatchCount != 4 {
+		t.Fatalf("load metadata = batch=%d requested=%d effective=%d calls=%d batches=%d",
+			got.BatchSize, got.InsertProducers, got.EffectiveProducers, got.DriverCalls, got.LoadBatchCount)
+	}
+}
+
 func TestMongoSweepCountsObservedOnly(t *testing.T) {
 	rows := []mongoSummaryRow{
 		{SecondaryIndexes: 0, Phase: "concurrent_id_find_one_r16", TreeDBOpsSec: 160, MongoOpsSec: 80},
@@ -683,6 +848,81 @@ func TestFullSweepLoadNoteRangeIndexMentionsDisplayedZeroOnly(t *testing.T) {
 	}
 }
 
+func TestFullSweepLoadNoteReportsProducerMetadata(t *testing.T) {
+	note := fullSweepLoadNote([]mongoSummaryRow{{
+		Documents:          100,
+		SecondaryIndexes:   0,
+		Phase:              "load_insert_many",
+		BatchSize:          25,
+		InsertProducers:    8,
+		EffectiveProducers: 8,
+		DriverCalls:        4,
+		LoadBatchCount:     4,
+	}})
+	for _, want := range []string{
+		"Measured load metadata",
+		"100 docs",
+		"batch size 25",
+		"requested insert producers 8",
+		"effective 4",
+		"capped by 4 load batches",
+		"driver calls 4",
+	} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("note missing %q\n%s", want, note)
+		}
+	}
+}
+
+func TestRenderMongoLoadScalingSection(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{Documents: 100, BatchSize: 25, LoadBatchCount: 4, SecondaryIndexes: 0, TreeDBConfig: "treedb_bson", MongoConfig: "mongo", Phase: "load_insert_many", InsertProducers: 1, EffectiveProducers: 1, TreeDBOpsSec: 1000, MongoOpsSec: 500, TreeDBToMongoRatio: 2},
+		{Documents: 100, BatchSize: 25, LoadBatchCount: 4, SecondaryIndexes: 0, TreeDBConfig: "treedb_bson", MongoConfig: "mongo", Phase: "load_insert_many", InsertProducers: 2, EffectiveProducers: 2, TreeDBOpsSec: 1600, MongoOpsSec: 700, TreeDBToMongoRatio: 2.29},
+		{Documents: 100, BatchSize: 25, LoadBatchCount: 4, SecondaryIndexes: 1, TreeDBConfig: "treedb_bson", MongoConfig: "mongo", Phase: "load_insert_many", InsertProducers: 1, EffectiveProducers: 1, TreeDBOpsSec: 800, MongoOpsSec: 300, TreeDBToMongoRatio: 2.67},
+	}
+	var b strings.Builder
+	renderMongoLoadScaling(&b, rows)
+	html := b.String()
+	for _, want := range []string{
+		"Mongo API InsertMany Producer Scaling",
+		"Insert Throughput Vs Insert Producers, 0 Indexes",
+		"Insert Throughput Vs Insert Producers, 1 Index",
+		"Producer scaling summary",
+		"requested producers",
+		"effective producers",
+		"Raw load-scaling TSV rows",
+		"1,600",
+		"2.29x",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("load-scaling section missing %q\n%s", want, html)
+		}
+	}
+}
+
+func TestMongoIndexRetentionTable(t *testing.T) {
+	rows := []mongoSummaryRow{
+		{SecondaryIndexes: 0, TreeDBOpsSec: 100, MongoOpsSec: 80, TreeDBToMongoRatio: 1.25, TreeDBToMongoPhysRatio: 0.4},
+		{SecondaryIndexes: 1, TreeDBOpsSec: 80, MongoOpsSec: 40, TreeDBToMongoRatio: 2, TreeDBToMongoPhysRatio: 0.3},
+	}
+	var b strings.Builder
+	writeMongoIndexRetentionTable(&b, rows)
+	html := b.String()
+	for _, want := range []string{
+		"Index throughput retention",
+		"TreeDB retained",
+		"MongoDB retained",
+		"80.0%",
+		"50.0%",
+		"2.00x",
+		"0.30x",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("retention table missing %q\n%s", want, html)
+		}
+	}
+}
+
 func TestFormatChartTooltipValueDoesNotDoubleBytes(t *testing.T) {
 	if got := formatChartTooltipValue(1024*1024, "bytes"); got != "1.00 MiB" {
 		t.Fatalf("bytes tooltip = %q, want 1.00 MiB", got)
@@ -703,6 +943,23 @@ func TestLoadMongoScalingWarnsMissingSummary(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "indexes_0") || !strings.Contains(warnings[0], "summary.tsv") {
 		t.Fatalf("warnings = %v, want missing summary warning", warnings)
+	}
+}
+
+func TestLoadMongoLoadScalingWarnsMissingSummary(t *testing.T) {
+	root := t.TempDir()
+	rows, warnings := loadMongoLoadScaling(root)
+	if len(rows) != 0 {
+		t.Fatalf("rows = %v, want none", rows)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "mongo load scaling") || !strings.Contains(warnings[0], "summary.tsv") {
+		t.Fatalf("warnings = %v, want missing load-scaling summary warning", warnings)
+	}
+
+	missingRoot := filepath.Join(t.TempDir(), "absent")
+	rows, warnings = loadMongoLoadScaling(missingRoot)
+	if len(rows) != 0 || len(warnings) != 0 {
+		t.Fatalf("absent root rows=%v warnings=%v, want none", rows, warnings)
 	}
 }
 
@@ -760,10 +1017,35 @@ func TestParseConfigRejectsInvalidRunRoot(t *testing.T) {
 
 const mongoSummaryHeader = "documents\tsecondary_indexes\trange_index\trange_mode\ttreedb_config\tmongo_config\tphase\ttreedb_ops_sec\ttreedb_sampled_ops_sec\ttreedb_sampled_ns_per_op\tmongo_ops_sec\tmongo_sampled_ops_sec\tmongo_sampled_ns_per_op\ttreedb_to_mongo_ops_ratio\ttreedb_to_mongo_sampled_ops_ratio\ttreedb_p50_us\tmongo_p50_us\ttreedb_p95_us\tmongo_p95_us\ttreedb_p99_us\tmongo_p99_us\ttreedb_disk_snapshot\ttreedb_disk_bytes\ttreedb_physical_bytes\tmongo_dbstats_data_size_bytes\tmongo_dbstats_total_size_bytes\tmongo_physical_bytes\ttreedb_to_mongo_dbstats_total_ratio\ttreedb_to_mongo_physical_ratio\n"
 
+const mongoSummaryHeaderWithLoadMetadata = "documents\tsecondary_indexes\trange_index\trange_mode\ttreedb_config\tmongo_config\tphase\ttreedb_ops_sec\ttreedb_sampled_ops_sec\ttreedb_sampled_ns_per_op\tmongo_ops_sec\tmongo_sampled_ops_sec\tmongo_sampled_ns_per_op\ttreedb_to_mongo_ops_ratio\ttreedb_to_mongo_sampled_ops_ratio\ttreedb_p50_us\tmongo_p50_us\ttreedb_p95_us\tmongo_p95_us\ttreedb_p99_us\tmongo_p99_us\ttreedb_disk_snapshot\ttreedb_disk_bytes\ttreedb_physical_bytes\tmongo_dbstats_data_size_bytes\tmongo_dbstats_total_size_bytes\tmongo_physical_bytes\ttreedb_to_mongo_dbstats_total_ratio\ttreedb_to_mongo_physical_ratio\tbatch_size\tinsert_producers\teffective_producers\tdriver_calls\tload_batch_count\n"
+
 func mongoSummaryFixture(indexes int) string {
 	return mongoSummaryHeader +
 		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t1000\t1000\t1000\t500\t500\t2000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", indexes) +
 		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tconcurrent_id_find_one_r1\t2000\t2000\t500\t1000\t1000\t1000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\n", indexes)
+}
+
+func mongoSummaryFixtureWithLoadMetadata(indexes, batchSize, requestedProducers, effectiveProducers int) string {
+	loadBatchCount := (100 + batchSize - 1) / batchSize
+	return mongoSummaryHeaderWithLoadMetadata +
+		fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t1000\t1000\t1000\t500\t500\t2000\t2\t2\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\t%d\t%d\t%d\t%d\t%d\n",
+			indexes, batchSize, requestedProducers, effectiveProducers, loadBatchCount, loadBatchCount)
+}
+
+func mongoLoadScalingSummaryFixture() string {
+	return mongoSummaryHeaderWithLoadMetadata +
+		mongoLoadScalingSummaryRow(0, 1, 1, 1000, 500) +
+		mongoLoadScalingSummaryRow(0, 2, 2, 1600, 700) +
+		mongoLoadScalingSummaryRow(1, 1, 1, 800, 300) +
+		mongoLoadScalingSummaryRow(1, 2, 2, 1200, 450)
+}
+
+func mongoLoadScalingSummaryRow(indexes, requestedProducers, effectiveProducers int, treeOps, mongoOps float64) string {
+	batchSize := 25
+	loadBatchCount := 4
+	ratio := treeOps / mongoOps
+	return fmt.Sprintf("100\t%d\tfalse\t\ttreedb_bson\tmongo\tload_insert_many\t%.0f\t%.0f\t1000\t%.0f\t%.0f\t2000\t%.2f\t%.2f\t1\t2\t3\t4\t5\t6\tmaintenance\t1000\t2000\t3000\t4000\t5000\t0.25\t0.4\t%d\t%d\t%d\t%d\t%d\n",
+		indexes, treeOps, treeOps, mongoOps, mongoOps, ratio, ratio, batchSize, requestedProducers, effectiveProducers, loadBatchCount, loadBatchCount)
 }
 
 func writeFile(t *testing.T, path, content string) {

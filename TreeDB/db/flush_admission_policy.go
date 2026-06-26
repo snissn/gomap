@@ -49,6 +49,15 @@ const (
 	FlushAdmissionReasonInvalidPolicy             = "invalid_policy"
 )
 
+const (
+	FlushAdmissionConcurrencyCapDisabled             = "disabled"
+	FlushAdmissionConcurrencyCapConfigured           = "configured"
+	FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS = "configured_gomaxprocs_cap"
+	FlushAdmissionConcurrencyCapDefaultPhysicalCores = "default_physical_cores"
+	FlushAdmissionConcurrencyCapDefaultAutoCap       = "default_auto_cap"
+	FlushAdmissionConcurrencyCapDefaultGOMAXPROCS    = "default_gomaxprocs_cap"
+)
+
 // #2794/B1 checkpoint debt is accepted for this cycle as a bounded analytics
 // model tradeoff, not as a mandatory runtime-mitigation blocker. Keep this seam
 // explicit so a future gate can fail closed again without changing callers.
@@ -60,7 +69,9 @@ type FlushAdmissionDecision struct {
 	Policy                          FlushAdmissionPolicy
 	Admitted                        bool
 	Reason                          string
+	FlushApplyConcurrencyConfigured int
 	FlushApplyConcurrency           int
+	FlushApplyConcurrencyCapReason  string
 	FlushApplyConcurrencyDefaulted  bool
 	RuntimeGOMAXPROCS               int
 	PhysicalCores                   int
@@ -112,7 +123,7 @@ func ParseFlushAdmissionPolicy(raw string) (FlushAdmissionPolicy, error) {
 // losing the original decline reason.
 func NormalizeFlushAdmissionOptions(opts *Options) FlushAdmissionDecision {
 	if opts == nil {
-		return FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto, Reason: FlushAdmissionReasonLowConcurrency}
+		return FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto, Reason: FlushAdmissionReasonLowConcurrency, FlushApplyConcurrencyDefaulted: true, FlushApplyConcurrencyCapReason: FlushAdmissionConcurrencyCapDisabled}
 	}
 	if opts.flushAdmissionNormalized {
 		return opts.flushAdmissionDecision.withStatsDefaults()
@@ -139,13 +150,16 @@ func computeFlushAdmissionDecision(opts *Options) FlushAdmissionDecision {
 
 func computeFlushAdmissionDecisionForHardware(opts *Options, gomax, physicalCores int) FlushAdmissionDecision {
 	policy := opts.FlushAdmissionPolicy
-	effectiveConcurrency := normalizeFlushApplyConcurrencyForGOMAXPROCS(opts.FlushApplyConcurrency, gomax)
+	configuredConcurrency := opts.FlushApplyConcurrency
+	effectiveConcurrency := normalizeFlushApplyConcurrencyForGOMAXPROCS(configuredConcurrency, gomax)
 	decision := FlushAdmissionDecision{
 		Policy:                          policy,
+		FlushApplyConcurrencyConfigured: configuredConcurrency,
 		FlushApplyConcurrency:           effectiveConcurrency,
+		FlushApplyConcurrencyCapReason:  flushAdmissionConcurrencyCapReason(configuredConcurrency, gomax, physicalCores, effectiveConcurrency),
 		FlushApplySpanNative:            opts.FlushApplySpanNative,
 		FlushBacklogCoalescing:          opts.FlushBacklogCoalescing,
-		FlushApplyConcurrencyDefaulted:  opts.FlushApplyConcurrency <= 0,
+		FlushApplyConcurrencyDefaulted:  configuredConcurrency <= 0,
 		RuntimeGOMAXPROCS:               gomax,
 		PhysicalCores:                   physicalCores,
 		LeafPageReadCacheWriteAdmission: opts.LeafPageReadCacheWriteAdmission,
@@ -199,6 +213,7 @@ func computeFlushAdmissionDecisionForHardware(opts *Options, gomax, physicalCore
 		decision.Admitted = true
 		decision.Reason = FlushAdmissionReasonAutoAdmittedHardwareAware
 		decision.FlushApplyConcurrency = candidateConcurrency
+		decision.FlushApplyConcurrencyCapReason = flushAdmissionConcurrencyCapReason(configuredConcurrency, gomax, physicalCores, candidateConcurrency)
 		decision.FlushApplySpanNative = true
 		decision.FlushBacklogCoalescing = true
 		decision.LeafPageReadCacheWriteAdmission = opts.LeafPageReadCacheWriteAdmission
@@ -214,6 +229,33 @@ func autoFlushApplyConcurrency(configured int) int {
 	return autoFlushApplyConcurrencyForHardware(configured, runtimeGOMAXPROCS(), DetectPhysicalCores())
 }
 
+func flushAdmissionConcurrencyCapReason(configured, gomax, physicalCores, selected int) string {
+	if selected <= 0 {
+		return FlushAdmissionConcurrencyCapDisabled
+	}
+	if configured > 0 {
+		if selected < configured {
+			return FlushAdmissionConcurrencyCapConfiguredGOMAXPROCS
+		}
+		return FlushAdmissionConcurrencyCapConfigured
+	}
+
+	defaultCap := defaultFlushAdmissionAutoConcurrencyCap
+	if physicalCores > 0 && physicalCores < defaultCap {
+		defaultCap = physicalCores
+	}
+	if gomax < 1 {
+		gomax = 1
+	}
+	if selected < defaultCap && selected == gomax {
+		return FlushAdmissionConcurrencyCapDefaultGOMAXPROCS
+	}
+	if physicalCores > 0 && selected == physicalCores && physicalCores < defaultFlushAdmissionAutoConcurrencyCap {
+		return FlushAdmissionConcurrencyCapDefaultPhysicalCores
+	}
+	return FlushAdmissionConcurrencyCapDefaultAutoCap
+}
+
 func (d *FlushAdmissionDecision) disableAll(opts *Options, reason string) {
 	if opts != nil {
 		opts.FlushApplyConcurrency = 0
@@ -223,6 +265,7 @@ func (d *FlushAdmissionDecision) disableAll(opts *Options, reason string) {
 	d.Admitted = false
 	d.Reason = reason
 	d.FlushApplyConcurrency = 0
+	d.FlushApplyConcurrencyCapReason = FlushAdmissionConcurrencyCapDisabled
 	d.FlushApplySpanNative = false
 	d.FlushBacklogCoalescing = false
 	if opts != nil {
@@ -250,6 +293,9 @@ func (d FlushAdmissionDecision) withStatsDefaults() FlushAdmissionDecision {
 		} else {
 			d.Reason = FlushAdmissionReasonLowConcurrency
 		}
+	}
+	if d.FlushApplyConcurrencyCapReason == "" {
+		d.FlushApplyConcurrencyCapReason = flushAdmissionConcurrencyCapReason(d.FlushApplyConcurrencyConfigured, d.RuntimeGOMAXPROCS, d.PhysicalCores, d.FlushApplyConcurrency)
 	}
 	return d
 }
