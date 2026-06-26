@@ -526,6 +526,27 @@ func (g *leafPageLogLaneGroup) MarkLeafPageLogSegmentsRegistered(segments []Leaf
 	}
 }
 
+func (g *leafPageLogLaneGroup) advanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {
+	if g == nil || seq == 0 {
+		return nil
+	}
+	if g.seqAlloc != nil {
+		g.seqAlloc.AdvanceAtLeast(seq)
+	}
+	lanes, locks := g.snapshotLanesAndLocks()
+	var err error
+	for i, lane := range lanes {
+		if lane == nil {
+			continue
+		}
+		lock := leafPageLogLaneLockAt(locks, i)
+		lock.Lock()
+		err = errors.Join(err, compactStorageAdvanceLeafPageLogSeqAtLeast(lane, seq))
+		lock.Unlock()
+	}
+	return err
+}
+
 func (g *leafPageLogLaneGroup) leafValueLogLanes() []LeafPageLog {
 	if g == nil {
 		return nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"testing"
 	"time"
 
@@ -167,6 +168,50 @@ func leafGenerationRawFileIDsWithout(base, exclude map[uint32]struct{}) []uint32
 		}
 		out = append(out, rawFileID)
 	}
+	return out
+}
+
+func leafGenerationLiveGenerationIDsForTest(t *testing.T, db *DB) map[uint64]struct{} {
+	t.Helper()
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() {
+		if err := snap.Close(); err != nil {
+			t.Fatalf("Close snapshot: %v", err)
+		}
+	}()
+	if len(snap.leafGenerationIDs) > 0 {
+		snap.releaseLeafGenerationPins()
+	}
+	live, err := collectLiveLeafGenerationIDs(context.Background(), snap, nil, nil)
+	if err != nil {
+		t.Fatalf("collectLiveLeafGenerationIDs: %v", err)
+	}
+	return live
+}
+
+func leafGenerationReclaimableRawFileIDsForTest(t *testing.T, db *DB, candidates []uint32) []uint32 {
+	t.Helper()
+	manifest := loadLeafGenerationManifestOrFatal(t, db.dir)
+	liveGenerations := leafGenerationLiveGenerationIDsForTest(t, db)
+	currentRawFileIDs := currentLeafLogRawFileIDSetForTest(t, db)
+	out := make([]uint32, 0, len(candidates))
+	for _, rawFileID := range candidates {
+		if _, current := currentRawFileIDs[rawFileID]; current {
+			continue
+		}
+		gen := findLeafGenerationByFileID(t, manifest, rawFileID)
+		if gen.State == leafGenerationStateWritable || gen.State == leafGenerationStateDeleted {
+			continue
+		}
+		if _, live := liveGenerations[gen.GenerationID]; live {
+			continue
+		}
+		out = append(out, rawFileID)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
@@ -505,24 +550,8 @@ func TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen(t *test
 	putBatch(t, db, 0, 4096, "mid")
 	midIDs := leafGenerationManifestRawFileIDSet(loadLeafGenerationManifestOrFatal(t, opts.Dir))
 	midOnly := leafGenerationRawFileIDsWithout(midIDs, baseIDs)
-	midOnlySet := make(map[uint32]struct{}, len(midOnly))
-	for _, rawFileID := range midOnly {
-		midOnlySet[rawFileID] = struct{}{}
-	}
-	sealedMid := leafGenerationRawFileIDsWithout(midOnlySet, currentLeafLogRawFileIDSetForTest(t, db))
-	if len(sealedMid) < 2 {
-		t.Fatalf("sealed mid-generation lane segments=%d want >=2 (midOnly=%v)", len(sealedMid), midOnly)
-	}
-	sealedMidPaths := make([]string, 0, len(sealedMid))
-	for _, rawFileID := range sealedMid {
-		path := leafGenerationFallbackPath(opts.Dir, rawFileID)
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("stat sealed mid segment %d: %v", rawFileID, err)
-		}
-		sealedMidPaths = append(sealedMidPaths, path)
-	}
-
 	putBatch(t, db, 0, 4096, "final")
+
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -539,14 +568,26 @@ func TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen(t *test
 		t.Fatalf("reopen: %v", err)
 	}
 	defer func() { _ = reopened.Close() }()
+	reclaimableMid := leafGenerationReclaimableRawFileIDsForTest(t, reopened, midOnly)
+	if len(reclaimableMid) < 2 {
+		t.Fatalf("reclaimable mid-generation lane segments=%d want >=2 (midOnly=%v)", len(reclaimableMid), midOnly)
+	}
+	reclaimableMidPaths := make([]string, 0, len(reclaimableMid))
+	for _, rawFileID := range reclaimableMid {
+		path := leafGenerationFallbackPath(opts.Dir, rawFileID)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("stat reclaimable mid segment %d: %v", rawFileID, err)
+		}
+		reclaimableMidPaths = append(reclaimableMidPaths, path)
+	}
 	stats, err := reopened.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
 		t.Fatalf("LeafGenerationGC: %v", err)
 	}
 	if stats.FilesDeleted == 0 {
-		t.Fatalf("FilesDeleted=0 want reclaimed sealed mid-generation lane segments (stats=%+v)", stats)
+		t.Fatalf("FilesDeleted=0 want reclaimed unreachable mid-generation lane segments (stats=%+v)", stats)
 	}
-	for _, path := range sealedMidPaths {
+	for _, path := range reclaimableMidPaths {
 		if err := waitForPathRemoval(path, 5*time.Second); err != nil {
 			t.Fatalf("waitForPathRemoval(%s): %v (stats=%+v)", path, err, stats)
 		}
