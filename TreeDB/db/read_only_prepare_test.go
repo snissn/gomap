@@ -199,6 +199,6 @@ func TestOrderedRootDeltaBatchPrepareReadOnlyStats(t *testing.T) {
 	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"observations_total")
 	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"candidate_ops_total")
 	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"fallbacks_total")
-	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"fallback.reason."+FlushSpanRunFallbackSpanNativeNotImplemented.String()+".ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, readOnlyPrepareRoutePrefix+"fallback.reason."+FlushSpanRunFallbackAdmissionPolicyDecline.String()+".ops_total")
 	requireOrderedRootStatCounterZero(t, stats, readOnlyPrepareRoutePrefix+"fallback.reason."+FlushSpanRunFallbackUnknown.String()+".ops_total")
 }
