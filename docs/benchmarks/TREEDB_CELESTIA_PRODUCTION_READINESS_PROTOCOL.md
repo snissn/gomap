@@ -105,7 +105,7 @@ CAPTURE_PPROF_ON_WARN_STUCK=0
 For TreeDB path-proof work, add:
 
 ```bash
-TREEDB_TRACE_PATH=/tmp/treedb_trace_$(date +%Y%m%d%H%M%S).jsonl
+TREEDB_TRACE_PATH=/tmp/treedb_trace_pathproof.jsonl
 TREEDB_TRACE_EVERY_N=1
 ```
 
