@@ -301,6 +301,42 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 	})
 }
 
+func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackUsesBackendFallback(t *testing.T) {
+	d := openExplicitRawSpanNativeRouteTestDB(t)
+	batch := d.NewPhysicalBatch()
+	b, ok := batch.(*Batch)
+	if !ok {
+		t.Fatalf("NewPhysicalBatch type=%T, want *Batch", batch)
+	}
+	if err := b.Set([]byte("checkpoint-command-wal-piggyback"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	b.SetFlushApplySpanNativeFallback(FlushSpanRunFallbackCommandWALBarrier)
+	if err := b.SetCommandWALPublish(1, []CommandWALLSNRange{{First: 1, Last: 1}}); err != nil {
+		t.Fatalf("SetCommandWALPublish: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stats := d.Stats()
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.command_wal_barrier.count_total"); got != 0 {
+		t.Fatalf("point_put command_wal_barrier count=%d, want 0 for backend raw route stats", got)
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.span_native_not_implemented.count_total"); got != 1 {
+		t.Fatalf("point_put span_native_not_implemented count=%d, want 1 for backend raw fallback", got)
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.command_wal_barrier.count_total"); got != 0 {
+		t.Fatalf("backend raw command_wal_barrier count=%d, want 0", got)
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.span_native_not_implemented.count_total"); got != 1 {
+		t.Fatalf("backend raw span_native_not_implemented count=%d, want 1", got)
+	}
+}
+
 func TestRawSpanNativePrepareErrorRequiresPrepareFailureFlag(t *testing.T) {
 	d := openExplicitRawSpanNativeRouteTestDB(t)
 	req := rawSpanNativeEligibilityRequest{
