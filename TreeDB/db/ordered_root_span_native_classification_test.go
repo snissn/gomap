@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -798,6 +799,62 @@ func TestOrderedRootSpanNativePublishUsesSpanNativeWhenAdmitted(t *testing.T) {
 	if got := stats["treedb.publish.ordered_root_delta_group.span_native.triage.route.multi_index_group_publish.fallback_reason"]; got != "" {
 		t.Fatalf("ordered-root multi-index triage fallback=%q want empty", got)
 	}
+}
+
+func TestOrderedRootSpanNativeReadOnlyPrepareUsesPointDeleteOptions(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                    t.TempDir(),
+		FlushAdmissionPolicy:   FlushAdmissionPolicyExplicit,
+		FlushApplyConcurrency:  2,
+		FlushApplyMinEntries:   1,
+		FlushApplyMinSpans:     1,
+		FlushApplyMinBytes:     1,
+		FlushApplySpanNative:   true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	baseRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemMemtable(t,
+		"doc/delete-me", "base",
+		"doc/keep", "base",
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator: %v", err)
+	}
+	delta := batch.New(nil, orderedRootDeltaBatchInlineThreshold)
+	if err := delta.Delete([]byte("doc/delete-me")); err != nil {
+		t.Fatalf("Delete delta: %v", err)
+	}
+	defer func() { _ = delta.Close() }()
+
+	_, rootIDs, err := db.PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder(
+		[]OrderedRootDeltaBatchPublishInput{{
+			BaseRoot:               baseRoot,
+			Delta:                  delta,
+			PrepareReadOnly:        true,
+			ReadOnlyPrepareWorkers: 2,
+		}},
+		func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
+			return mustFrozenSystemMemtable(t, "sys/collections/users/root", strconv.FormatUint(rootIDs[0], 10)).NewIterator(nil, nil), nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder: %v", err)
+	}
+	if len(rootIDs) != 1 || rootIDs[0] == 0 {
+		t.Fatalf("rootIDs=%v, want one non-zero root", rootIDs)
+	}
+
+	stats := db.Stats()
+	readOnlyPreparePrefix := "treedb.publish.ordered_root_delta_group.span_native.route.read_only_prepare."
+	requireOrderedRootStatCounterPositive(t, stats, readOnlyPreparePrefix+"candidate_ops_total")
+	requireOrderedRootStatCounterPositive(t, stats, readOnlyPreparePrefix+"eligible_ops_total")
+	requireOrderedRootStatCounterZero(t, stats, readOnlyPreparePrefix+"fallback.reason."+FlushSpanRunFallbackInexactLeafSpans.String()+".count_total")
+	requireOrderedRootStatCounterZero(t, stats, readOnlyPreparePrefix+"fallback.reason."+FlushSpanRunFallbackInexactLeafSpans.String()+".ops_total")
+	requireOrderedRootStatCounterZero(t, stats, readOnlyPreparePrefix+"fallback.reason."+FlushSpanRunFallbackUnknown.String()+".count_total")
 }
 
 func TestOrderedRootSpanNativePublishObservesExplicitSpanNativeFallback(t *testing.T) {

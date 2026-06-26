@@ -2410,11 +2410,18 @@ func runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot
 	return prepared, summary, workerSummary, prepareNs, false, nil
 }
 
-func (db *DB) runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int) (zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
-	applyOpts := zipper.ApplyOptions{PrepareReadOnly: true, ReadOnlyPrepareWorkers: workers}
+func (db *DB) runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper *zipper.Zipper, baseRoot uint64, delta *batch.Batch, workers int, applyOpts zipper.ApplyOptions) (zipper.ReadOnlyLeafSpanSummary, zipper.ReadOnlyLeafSpanWorkerRangeSummary, uint64, bool, error) {
+	applyOpts.PrepareReadOnly = true
+	applyOpts.ReadOnlyPrepareWorkers = workers
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
+	}
+	if applyOpts.SpanNativeApply {
+		applyOpts.ReadOnlyPrepare.OmitKeys = false
+		if applyOpts.SpanNativeAllowMaintenancePointOps {
+			applyOpts.ReadOnlyPrepare.AllowMaintenancePointLeafSpans = true
+		}
 	}
 	prepared, summary, workerSummary, prepareNs, validationFailed, err := runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, baseRoot, delta, workers, applyOpts.ReadOnlyPrepare)
 	if prepareBuf != nil {
@@ -2470,7 +2477,8 @@ func (db *DB) prepareOrderedRootDeltaBatchGroupReadOnly(idx *indexGen, ordered [
 		if err != nil {
 			return err
 		}
-		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers)
+		applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
+		summary, workerSummary, prepareNs, validationFailed, err := db.runOrderedRootDeltaBatchReadOnlyPrepare(rootZipper, ordered[orderedIdx].BaseRoot, ordered[orderedIdx].Delta, ordered[orderedIdx].ReadOnlyPrepareWorkers, applyOpts)
 		addOrderedRootReadOnlyPreparePhaseStats(phaseStats, summary, workerSummary, prepareNs, err, validationFailed)
 		db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, prepareNs, err, validationFailed)
 		deltaOps := 0
