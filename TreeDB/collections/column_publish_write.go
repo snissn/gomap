@@ -10,24 +10,24 @@ import (
 )
 
 type columnWritePublishInput struct {
-	meta               CollectionMeta
-	catalog            *collectionCatalog
-	baseCommitSeq      uint64
-	baseSystemRoot     uint64
-	rootNames          []string
-	baseRootIDs        map[string]uint64
-	commandWALIntent   *backenddb.CommandWALIntent
-	rawPublishLocked   bool
-	operation          ColumnPublishOperation
-	documents          []columnWriteDocument
-	rows               int
-	declaredRows       []columnDeclaredRow
-	declaredRowsReady  bool
-	documentExtraction time.Duration
-	commandBytes       int64
-	rowRemainderBytes  int64
-	columnPayloadBytes int64
-	insertStats        *CollectionInsertStats
+	meta                   CollectionMeta
+	catalog                *collectionCatalog
+	baseCommitSeq          uint64
+	baseSystemRoot         uint64
+	rootNames              []string
+	baseRootIDs            map[string]uint64
+	commandWALIntent       *backenddb.CommandWALIntent
+	rawPublishLocked       bool
+	operation              ColumnPublishOperation
+	documents              []columnWriteDocument
+	rows                   int
+	declaredRows           []columnDeclaredRow
+	declaredRowsReady      bool
+	declaredColumnEncoding time.Duration
+	commandBytes           int64
+	rowRemainderBytes      int64
+	columnPayloadBytes     int64
+	insertStats            *CollectionInsertStats
 }
 
 func columnStoreWriteEnabled(meta CollectionMeta) bool {
@@ -406,7 +406,7 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		}
 		start := time.Now()
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(*input.meta.Options.ColumnStore, input.documents)
-		input.documentExtraction = time.Since(start)
+		input.declaredColumnEncoding = time.Since(start)
 		if err != nil {
 			return columnWritePublishInput{}, err
 		}
@@ -533,7 +533,7 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 	if err != nil {
 		return ColumnPublishPlan{}, err
 	}
-	plan.StageMetrics.DocumentExtraction += input.documentExtraction
+	plan.StageMetrics.DeclaredColumnEncoding += input.declaredColumnEncoding
 	return plan, nil
 }
 
