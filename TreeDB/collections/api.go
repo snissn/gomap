@@ -20415,6 +20415,74 @@ func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, er
 	return out, truncated, nil
 }
 
+// ScanDocumentIDsFunc flushes buffered writes before acquiring a snapshot, then
+// calls fn for primary collection document IDs until maxDocuments is reached,
+// the collection is exhausted, or fn returns false. Unlike ScanDocumentsFunc,
+// it does not materialize or reconstruct document payloads.
+func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool, error)) (bool, error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	if maxDocuments <= 0 {
+		return false, errors.New("collections: max documents must be positive")
+	}
+	if fn == nil {
+		return false, errors.New("collections: scan callback is nil")
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return false, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
+	if err != nil {
+		return false, err
+	}
+	if it == nil {
+		return false, nil
+	}
+	defer func() { _ = it.Close() }()
+	truncated := false
+	scanned := 0
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		if scanned >= maxDocuments {
+			truncated = true
+			break
+		}
+		id := bytes.Clone(it.UnsafeKey())
+		scanned++
+		next, err := fn(id)
+		if err != nil {
+			return false, err
+		}
+		if !next {
+			return false, nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	return truncated, nil
+}
+
 // ScanDocumentsFunc flushes buffered writes before acquiring a snapshot, then
 // calls fn for primary collection records until maxDocuments is reached, the
 // collection is exhausted, or fn returns false. The returned boolean is true

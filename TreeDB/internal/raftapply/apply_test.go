@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -390,34 +391,67 @@ func TestCollectionMutationMalformedJSONFailsBeforeAppend(t *testing.T) {
 		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
 	}
 	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
-	beforeFrames := readCommandWALFrames(t, dir)
-	beforeLSN := db.State().AppliedCommandLSN
+	cases := []struct {
+		name string
+		doc  []byte
+	}{
+		{name: "invalid-syntax", doc: []byte(`{"email":`)},
+		{name: "array", doc: []byte(`[]`)},
+		{name: "scalar", doc: []byte(`1`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			beforeFrames := readCommandWALFrames(t, dir)
+			beforeLSN := db.State().AppliedCommandLSN
+			seam := &countingCommandWALApplySeam{}
+			id := []byte("bad-" + tc.name)
+			insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:bad-json:"+tc.name, nativewire.DocumentFormatJSON, [][]byte{id}, [][]byte{tc.doc})
+			result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
+				ProgressStore:       progress,
+				ResultStore:         results,
+				CommandWALApplySeam: seam,
+			})
+			assertRejected(t, result, err, raftentry.ApplyStatusRejectedMalformed, raftentry.ErrorMalformedEntryV1)
+			if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+				t.Fatalf("malformed JSON reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+			}
+			if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+				t.Fatalf("command WAL frames after malformed JSON=%d, want %d", got, len(beforeFrames))
+			}
+			if got := db.State().AppliedCommandLSN; got != beforeLSN {
+				t.Fatalf("AppliedCommandLSN after malformed JSON=%d, want %d", got, beforeLSN)
+			}
+			if progress.Len() != 1 || results.Len() != 1 {
+				t.Fatalf("store lengths after malformed JSON progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+			}
+			if got, getErr := collections.NewCollectionManager(db).OpenCollection("docs"); getErr != nil {
+				t.Fatalf("OpenCollection docs after malformed JSON: %v", getErr)
+			} else if doc, getErr := got.Get(id); getErr != nil || doc != nil {
+				t.Fatalf("Get bad after malformed JSON doc=%q err=%v, want nil/<nil>", doc, getErr)
+			}
+		})
+	}
+}
 
-	seam := &countingCommandWALApplySeam{}
-	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:bad-json", nativewire.DocumentFormatJSON, [][]byte{[]byte("bad")}, [][]byte{[]byte(`{"email":`)})
-	result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
-		ProgressStore:       progress,
-		ResultStore:         results,
-		CommandWALApplySeam: seam,
-	})
-	assertRejected(t, result, err, raftentry.ApplyStatusRejectedMalformed, raftentry.ErrorMalformedEntryV1)
-	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
-		t.Fatalf("malformed JSON reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+func TestCollectionMutationCoveredCommandWALFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	frame, err := commandwalapply.TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
 	}
-	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
-		t.Fatalf("command WAL frames after malformed JSON=%d, want %d", got, len(beforeFrames))
+	handle, _, err := commandwalapply.Append(db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
 	}
-	if got := db.State().AppliedCommandLSN; got != beforeLSN {
-		t.Fatalf("AppliedCommandLSN after malformed JSON=%d, want %d", got, beforeLSN)
+	if _, err := commandwalapply.Finalize(db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{}); err != nil {
+		t.Fatalf("Finalize: %v", err)
 	}
-	if progress.Len() != 1 || results.Len() != 1 {
-		t.Fatalf("store lengths after malformed JSON progress=%d results=%d, want 1/1", progress.Len(), results.Len())
-	}
-	if got, getErr := collections.NewCollectionManager(db).OpenCollection("docs"); getErr != nil {
-		t.Fatalf("OpenCollection docs after malformed JSON: %v", getErr)
-	} else if doc, getErr := got.Get([]byte("bad")); getErr != nil || doc != nil {
-		t.Fatalf("Get bad after malformed JSON doc=%q err=%v, want nil/<nil>", doc, getErr)
-	}
+	entry := raftentry.CommandEntryV1{Digest: raftentry.CommandDigestV1{1, 2, 3}}
+	result, err := NewHarness(db, Options{}).collectionMutationApplyError(entry, handle, fmt.Errorf("publish failed: %w", backenddb.ErrRecoveryRequired))
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
 }
 
 func TestCollectionMutationStaleCatalogGuardFailsBeforeAppend(t *testing.T) {
@@ -1443,9 +1477,20 @@ func assertCollectionDeleteFrame(t *testing.T, env commitlog.CommandEnvelope, co
 	for _, id := range ids {
 		want[string(id)] = struct{}{}
 	}
+	seen := make(map[string]struct{}, len(payload.IDs))
 	for _, id := range payload.IDs {
-		if _, ok := want[string(id)]; !ok {
+		key := string(id)
+		if _, ok := want[key]; !ok {
 			t.Fatalf("unexpected delete id %q", string(id))
+		}
+		if _, ok := seen[key]; ok {
+			t.Fatalf("duplicate delete id %q", string(id))
+		}
+		seen[key] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := seen[string(id)]; !ok {
+			t.Fatalf("missing delete id %q", string(id))
 		}
 	}
 }
@@ -1458,13 +1503,24 @@ func assertCollectionDocumentPayload(t *testing.T, gotCollection string, got []c
 	if len(got) != len(want) {
 		t.Fatalf("payload documents=%d, want %d", len(got), len(want))
 	}
+	seen := make(map[string]struct{}, len(got))
 	for _, doc := range got {
-		wantDoc, ok := want[string(doc.ID)]
+		key := string(doc.ID)
+		wantDoc, ok := want[key]
 		if !ok {
 			t.Fatalf("unexpected payload document id %q", string(doc.ID))
 		}
+		if _, ok := seen[key]; ok {
+			t.Fatalf("duplicate payload document id %q", string(doc.ID))
+		}
+		seen[key] = struct{}{}
 		if !bytes.Equal(doc.Document, wantDoc) {
 			t.Fatalf("payload document %q=%x, want %x", string(doc.ID), doc.Document, wantDoc)
+		}
+	}
+	for id := range want {
+		if _, ok := seen[id]; !ok {
+			t.Fatalf("missing payload document id %q", id)
 		}
 	}
 }

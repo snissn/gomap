@@ -94,9 +94,9 @@ func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager,
 		if err != nil {
 			return LogicalDigestV1{}, codeCollectionApplyError(err)
 		}
-		records := make([]collections.DocumentRecord, 0)
-		truncated, err := collection.ScanDocumentsFunc(maxInt(), func(record collections.DocumentRecord) (bool, error) {
-			records = append(records, record)
+		ids := make([][]byte, 0)
+		truncated, err := collection.ScanDocumentIDsFunc(maxInt(), func(id []byte) (bool, error) {
+			ids = append(ids, id)
 			return true, nil
 		})
 		if err != nil {
@@ -105,21 +105,32 @@ func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager,
 		if truncated {
 			return LogicalDigestV1{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: logical digest document scan for %q truncated", meta.Name)
 		}
-		sort.Slice(records, func(i, j int) bool {
-			return bytes.Compare(records[i].ID, records[j].ID) < 0
+		sort.Slice(ids, func(i, j int) bool {
+			return bytes.Compare(ids[i], ids[j]) < 0
 		})
 		materializer, err := collection.NewStoredDocumentJSONMaterializer()
 		if err != nil {
 			return LogicalDigestV1{}, codeCollectionApplyError(err)
 		}
-		writeLogicalDigestU64(h, "collection-document-count", uint64(len(records)))
-		for _, record := range records {
-			jsonDoc, err := materializer.StoredDocumentJSON(record.Document)
+		writeLogicalDigestU64(h, "collection-document-count", uint64(len(ids)))
+		var documentScratch []byte
+		for _, id := range ids {
+			document, found, err := collection.GetInto(id, documentScratch[:0])
 			if err != nil {
 				_ = materializer.Close()
 				return LogicalDigestV1{}, codeCollectionApplyError(err)
 			}
-			writeLogicalDigestField(h, "collection-document-id", record.ID)
+			if !found {
+				_ = materializer.Close()
+				return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: logical digest document %q disappeared from %q", string(id), meta.Name)
+			}
+			documentScratch = document
+			jsonDoc, err := materializer.StoredDocumentJSON(document)
+			if err != nil {
+				_ = materializer.Close()
+				return LogicalDigestV1{}, codeCollectionApplyError(err)
+			}
+			writeLogicalDigestField(h, "collection-document-id", id)
 			writeLogicalDigestField(h, "collection-document-json", jsonDoc)
 		}
 		if err := materializer.Close(); err != nil {

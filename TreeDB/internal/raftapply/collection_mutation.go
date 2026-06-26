@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -126,10 +127,19 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 }
 
 func (h *Harness) collectionMutationApplyError(entry raftentry.CommandEntryV1, handle commandwalapply.Handle, err error) (raftentry.ApplyResultV1, error) {
-	if errors.Is(err, collections.ErrCommitAmbiguous) && h.commandWALHandleCovered(handle) {
+	if h.commandWALHandleCovered(handle) && collectionMutationRequiresRecovery(err) {
 		return recoveryRequired(entry.Digest, raftentry.ErrorUnsafeDurabilityModeV1, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "%w", err))
 	}
 	return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
+}
+
+func collectionMutationRequiresRecovery(err error) bool {
+	return errors.Is(err, collections.ErrCommitAmbiguous) ||
+		errors.Is(err, backenddb.ErrRecoveryRequired) ||
+		errors.Is(err, backenddb.ErrCommandWALRejected) ||
+		errors.Is(err, backenddb.ErrCommandWALAppliedLSNNonContig) ||
+		errors.Is(err, backenddb.ErrCommandWALAppliedLSNRegression) ||
+		errors.Is(err, backenddb.ErrCommandWALSplitPublish)
 }
 
 func (h *Harness) commandWALHandleCovered(handle commandwalapply.Handle) bool {
@@ -416,6 +426,9 @@ func validateMutationDocumentsV1(format collections.DocumentFormat, documents []
 			if !json.Valid(doc) {
 				return codedError(raftentry.ErrorMalformedEntryV1, "raftapply: JSON document at index %d is invalid JSON", i)
 			}
+			if !mutationJSONDocumentIsObject(doc) {
+				return codedError(raftentry.ErrorMalformedEntryV1, "raftapply: JSON document at index %d must be an object", i)
+			}
 		}
 	case collections.DocumentFormatBSON:
 		for i, doc := range documents {
@@ -425,6 +438,11 @@ func validateMutationDocumentsV1(format collections.DocumentFormat, documents []
 		}
 	}
 	return nil
+}
+
+func mutationJSONDocumentIsObject(doc []byte) bool {
+	doc = bytes.TrimSpace(doc)
+	return len(doc) > 0 && doc[0] == '{'
 }
 
 func validateMutationDocumentIDsV1(ids [][]byte) error {
