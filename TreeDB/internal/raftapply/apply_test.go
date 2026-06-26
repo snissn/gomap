@@ -258,6 +258,36 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 	}
 }
 
+func TestStoredResultReplayProgressFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	id := raftentry.ApplyEntryID{Term: 1, Index: 1}
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:stored-progress-failure", testCreateCollectionMetaOptions{})
+	results := NewMemoryApplyResultStore(8)
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
+		ResultStore: results,
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	}
+
+	replayed, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
+		ProgressStore: recordProgressStoreFailAfterPreflight{},
+		ResultStore:   results,
+	})
+	assertRecoveryRequired(t, replayed, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if results.Len() != 1 {
+		t.Fatalf("result records after stored result progress failure=%d, want 1", results.Len())
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after stored result progress failure=%d, want %d", got, len(beforeFrames))
+	}
+}
+
 func TestFaultBeforeLocalWALAppendDoesNotAdvanceMetadata(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
