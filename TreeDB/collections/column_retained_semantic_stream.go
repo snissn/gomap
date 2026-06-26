@@ -11,12 +11,14 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/buger/jsonparser"
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/compress/zstd"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/tidwall/gjson"
 )
 
 const columnRetainedSemanticStreamV1BlockRows = 4096
@@ -47,6 +49,15 @@ type columnRetainedSemanticStreamPath struct {
 
 type columnRetainedSemanticStreamV1DecodedBlock struct {
 	rows [][]byte
+}
+
+type columnRetainedSemanticStreamV1StoredBlockEncoder struct {
+	enc *zstd.Encoder
+}
+
+type columnRetainedSemanticStreamV1RootFastPathPlan struct {
+	declaredColumnIndexesByPath map[string][]int
+	declaredRowsReady           bool
 }
 
 type columnRetainedSemanticStreamV1DecodeCache struct {
@@ -269,21 +280,40 @@ func (c *Collection) auditRetainedSemanticStreamV1BlockLayoutPathsAtSnapshot(sna
 }
 
 func prepareColumnRetainedPayloadInsertBatchStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {
+	return prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, nil, documents, fallback)
+}
+
+func prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg ColumnStoreConfig, ids, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {
 	if cfg.RetainedPayload == ColumnRetainedPayloadNonColumn &&
 		columnRetainedPayloadEffectiveEncoding(&cfg) == ColumnRetainedPayloadEncodingSemanticStreamV1 {
-		return prepareColumnRetainedSemanticStreamV1StorageDocuments(cfg, documents)
+		return prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg, ids, documents)
 	}
 	return prepareColumnRetainedPayloadStorageDocuments(cfg, documents, fallback)
 }
 
 func prepareColumnRetainedSemanticStreamV1StorageDocuments(cfg ColumnStoreConfig, documents [][]byte) (columnRetainedPayloadStorageDocuments, error) {
+	return prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg, nil, documents)
+}
+
+func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStoreConfig, ids, documents [][]byte) (columnRetainedPayloadStorageDocuments, error) {
 	out := columnRetainedPayloadStorageDocuments{
 		documents: make([][]byte, len(documents)),
 	}
 	if len(documents) == 0 {
 		return out, nil
 	}
+	rootPlan, useRootFastPath := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(documents))
+	if useRootFastPath && rootPlan.declaredRowsReady {
+		out.declaredRows = make([]columnDeclaredRow, len(documents))
+		out.declaredRowsReady = true
+	}
 	blockTable := newCollectionRunTable((len(documents) + columnRetainedSemanticStreamV1BlockRows - 1) / columnRetainedSemanticStreamV1BlockRows)
+	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		resetCollectionRunTable(blockTable)
+		return columnRetainedPayloadStorageDocuments{}, err
+	}
+	defer storedBlockEncoder.close()
 	for start := 0; start < len(documents); start += columnRetainedSemanticStreamV1BlockRows {
 		end := start + columnRetainedSemanticStreamV1BlockRows
 		if end > len(documents) {
@@ -292,17 +322,31 @@ func prepareColumnRetainedSemanticStreamV1StorageDocuments(cfg ColumnStoreConfig
 		rows := end - start
 		streams := make(map[string]*columnRetainedSemanticStreamPath)
 		for row, i := 0, start; i < end; row, i = row+1, i+1 {
-			retained, err := columnRetainedPayloadJSONObjectFromJSONDocument(cfg, documents[i])
-			if err != nil {
-				resetCollectionRunTable(blockTable)
-				return columnRetainedPayloadStorageDocuments{}, err
-			}
-			if err := collectColumnRetainedSemanticStreamObjectPaths(retained, nil, uint64(row), streams); err != nil {
-				resetCollectionRunTable(blockTable)
-				return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+			if useRootFastPath {
+				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), streams)
+				if err != nil {
+					resetCollectionRunTable(blockTable)
+					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+				}
+				if rootPlan.declaredRowsReady {
+					out.declaredRows[i] = columnDeclaredRow{
+						ID:     bytes.Clone(ids[i]),
+						Values: declaredValues,
+					}
+				}
+			} else {
+				retained, err := columnRetainedPayloadJSONObjectFromJSONDocument(cfg, documents[i])
+				if err != nil {
+					resetCollectionRunTable(blockTable)
+					return columnRetainedPayloadStorageDocuments{}, err
+				}
+				if err := collectColumnRetainedSemanticStreamObjectPaths(retained, nil, uint64(row), streams); err != nil {
+					resetCollectionRunTable(blockTable)
+					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+				}
 			}
 		}
-		block, err := encodeColumnRetainedSemanticStreamV1BlockFromStreams(rows, streams)
+		block, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows, streams, storedBlockEncoder)
 		if err != nil {
 			resetCollectionRunTable(blockTable)
 			return columnRetainedPayloadStorageDocuments{}, err
@@ -317,6 +361,86 @@ func prepareColumnRetainedSemanticStreamV1StorageDocuments(cfg ColumnStoreConfig
 	blockTable.Freeze()
 	out.semanticStreamBlocks = blockTable
 	return out, nil
+}
+
+func columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg ColumnStoreConfig, ids [][]byte, documentCount int) (columnRetainedSemanticStreamV1RootFastPathPlan, bool) {
+	plan := columnRetainedSemanticStreamV1RootFastPathPlan{
+		declaredColumnIndexesByPath: make(map[string][]int, len(cfg.Columns)),
+		declaredRowsReady:           ids != nil && len(ids) == documentCount,
+	}
+	for colIdx, col := range cfg.Columns {
+		if col.Path == "" || strings.Contains(col.Path, ".") {
+			return columnRetainedSemanticStreamV1RootFastPathPlan{}, false
+		}
+		plan.declaredColumnIndexesByPath[col.Path] = append(plan.declaredColumnIndexesByPath[col.Path], colIdx)
+		if !columnDeclaredJSONParserValueSupported(col.ValueType) {
+			plan.declaredRowsReady = false
+		}
+	}
+	return plan, true
+}
+
+func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streams map[string]*columnRetainedSemanticStreamPath) ([]columnDeclaredValue, error) {
+	if !gjson.ValidBytes(document) {
+		return nil, errors.New("invalid JSON: invalid JSON")
+	}
+	if !jsonDocumentLooksObject(document) {
+		return nil, errors.New("semantic-stream-v1 retained root must be a JSON object")
+	}
+	var stackValues [8]jsonParserIndexValue
+	valuesRaw := stackValues[:]
+	if len(cfg.Columns) > len(stackValues) {
+		valuesRaw = make([]jsonParserIndexValue, len(cfg.Columns))
+	} else {
+		valuesRaw = valuesRaw[:len(cfg.Columns)]
+	}
+	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+		path := string(key)
+		if indexes := plan.declaredColumnIndexesByPath[path]; len(indexes) > 0 {
+			if plan.declaredRowsReady {
+				for _, colIdx := range indexes {
+					valuesRaw[colIdx] = jsonParserIndexValue{raw: value, valueType: dataType}
+				}
+			}
+			return nil
+		}
+		raw, err := columnRetainedSemanticStreamV1JSONParserRawValue(value, dataType)
+		if err != nil {
+			return err
+		}
+		return collectColumnRetainedSemanticStreamPaths(json.RawMessage(raw), []string{path}, row, streams)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !plan.declaredRowsReady {
+		return nil, nil
+	}
+	values := make([]columnDeclaredValue, len(cfg.Columns))
+	var scratch []byte
+	for colIdx, col := range cfg.Columns {
+		value, err := convertColumnDeclaredJSONParserValue(col, valuesRaw[colIdx], &scratch)
+		if err != nil {
+			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
+		}
+		values[colIdx] = value
+	}
+	return values, nil
+}
+
+func columnRetainedSemanticStreamV1JSONParserRawValue(value []byte, dataType jsonparser.ValueType) ([]byte, error) {
+	switch dataType {
+	case jsonparser.String:
+		out := make([]byte, 0, len(value)+2)
+		out = append(out, '"')
+		out = append(out, value...)
+		out = append(out, '"')
+		return out, nil
+	case jsonparser.Number, jsonparser.Object, jsonparser.Array, jsonparser.Boolean, jsonparser.Null:
+		return value, nil
+	default:
+		return nil, fmt.Errorf("unsupported semantic-stream-v1 retained value type %s", dataType)
+	}
 }
 
 func encodeColumnRetainedSemanticStreamV1Locator(blockKey []byte, row uint64) []byte {
@@ -784,9 +908,16 @@ func encodeColumnRetainedSemanticStreamV1RawBlock(documents [][]byte) ([]byte, e
 }
 
 func encodeColumnRetainedSemanticStreamV1BlockFromStreams(rows int, streams map[string]*columnRetainedSemanticStreamPath) ([]byte, error) {
+	return encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows, streams, nil)
+}
+
+func encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows int, streams map[string]*columnRetainedSemanticStreamPath, encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) ([]byte, error) {
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows, streams)
 	if err != nil {
 		return nil, err
+	}
+	if encoder != nil {
+		return encoder.encodeWithRawLimit(raw, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
 	}
 	return encodeColumnRetainedSemanticStreamV1StoredBlock(raw)
 }
@@ -835,12 +966,15 @@ func encodeColumnRetainedSemanticStreamV1StoredBlock(raw []byte) ([]byte, error)
 }
 
 func encodeColumnRetainedSemanticStreamV1StoredBlockWithRawLimit(raw []byte, compressedRawLimit int) ([]byte, error) {
-	if !bytes.HasPrefix(raw, columnRetainedSemanticStreamV1BlockMagic) {
-		return nil, errors.New("collections: retained block is not semantic-stream-v1 encoded")
+	encoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		return nil, err
 	}
-	if compressedRawLimit > 0 && len(raw) > compressedRawLimit {
-		return raw, nil
-	}
+	defer encoder.close()
+	return encoder.encodeWithRawLimit(raw, compressedRawLimit)
+}
+
+func newColumnRetainedSemanticStreamV1StoredBlockEncoder() (*columnRetainedSemanticStreamV1StoredBlockEncoder, error) {
 	enc, err := zstd.NewWriter(nil,
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
 		zstd.WithEncoderCRC(false),
@@ -849,8 +983,28 @@ func encodeColumnRetainedSemanticStreamV1StoredBlockWithRawLimit(raw []byte, com
 	if err != nil {
 		return nil, fmt.Errorf("collections: create semantic-stream-v1 retained block zstd encoder: %w", err)
 	}
-	compressed := enc.EncodeAll(raw, nil)
-	enc.Close()
+	return &columnRetainedSemanticStreamV1StoredBlockEncoder{enc: enc}, nil
+}
+
+func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) close() {
+	if e == nil || e.enc == nil {
+		return
+	}
+	e.enc.Close()
+	e.enc = nil
+}
+
+func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeWithRawLimit(raw []byte, compressedRawLimit int) ([]byte, error) {
+	if !bytes.HasPrefix(raw, columnRetainedSemanticStreamV1BlockMagic) {
+		return nil, errors.New("collections: retained block is not semantic-stream-v1 encoded")
+	}
+	if compressedRawLimit > 0 && len(raw) > compressedRawLimit {
+		return raw, nil
+	}
+	if e == nil || e.enc == nil {
+		return nil, errors.New("collections: semantic-stream-v1 retained block zstd encoder is closed")
+	}
+	compressed := e.enc.EncodeAll(raw, nil)
 	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockZSTDMagic)+binary.MaxVarintLen64+len(compressed))
 	out = append(out, columnRetainedSemanticStreamV1BlockZSTDMagic...)
 	out = binary.AppendUvarint(out, uint64(len(raw)))

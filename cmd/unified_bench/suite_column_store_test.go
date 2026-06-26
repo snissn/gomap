@@ -526,6 +526,27 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if got, want := report.ForcedPath, columnStorePathRowStoreBaseline; got != want {
 		t.Fatalf("forced_path=%q want %q", got, want)
 	}
+	if got, want := report.InsertStats.Documents, report.Rows; got != want {
+		t.Fatalf("insert stats documents=%d want rows %d: %+v", got, want, report.InsertStats)
+	}
+	if report.InsertStats.Batches == 0 || report.InsertStats.Runs == 0 {
+		t.Fatalf("insert stats missing batch/run counters: %+v", report.InsertStats)
+	}
+	if got, want := report.InsertStats.RetainedPayloadRows, report.Rows; got != want {
+		t.Fatalf("retained payload rows=%d want %d: %+v", got, want, report.InsertStats)
+	}
+	if got, want := report.InsertStats.RetainedPayloadDeclaredRows, report.Rows; got != want {
+		t.Fatalf("retained payload declared rows=%d want %d: %+v", got, want, report.InsertStats)
+	}
+	if report.InsertStats.RetainedPayloadPrepareDurationMS <= 0 || report.InsertStats.RetainedPayloadPrepareNsPerRow <= 0 {
+		t.Fatalf("retained payload phase timing missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.RetainedPayloadSemanticStreamBlocks == 0 || report.InsertStats.RetainedPayloadSemanticStreamBlocksPerRun <= 0 {
+		t.Fatalf("semantic-stream block counters missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.ColumnStoreDeclaredRowReuseCoverageRatio != 1 {
+		t.Fatalf("declared row reuse coverage=%f want 1: %+v", report.InsertStats.ColumnStoreDeclaredRowReuseCoverageRatio, report.InsertStats)
+	}
 	queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
 	for _, q := range report.Queries {
 		assertColumnStoreCompressionAttributionM1952(t, q.Name, q.CompressionAttribution, true)
@@ -626,6 +647,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store JSON missing WAL-excluded durable storage field %s:\n%s", want, data)
 		}
 	}
+	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("column store JSON missing insert phase field %s:\n%s", want, data)
+		}
+	}
 	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing reporting field %s:\n%s", want, data)
@@ -652,6 +678,11 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	for _, want := range []string{"primary_index_bytes", "wal_bytes_excluded_from_durable_storage", "durable_storage_bytes_wal_excluded", "durable_storage_bytes_wal_excluded_note"} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing WAL-excluded durable storage field %q:\n%s", want, columnMarkdown)
+		}
+	}
+	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio"} {
+		if !strings.Contains(string(columnMarkdown), want) {
+			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
 	}
 	for _, want := range []string{"## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "retained payload", "retained encoding", "retained compression", "typed owner", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
