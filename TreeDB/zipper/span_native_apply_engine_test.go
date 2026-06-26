@@ -188,7 +188,7 @@ func TestSpanNativeApplySparseMultiLeafParentStitchParity(t *testing.T) {
 	if !sawGap {
 		t.Fatalf("prepared spans were contiguous; want sparse parent-stitch coverage")
 	}
-	if !validateSpanNativePreparedPlan(delta.SortedEntries(), prepared) {
+	if !validateSpanNativePreparedPlan(delta.SortedEntries(), prepared, ApplyOptions{}) {
 		t.Fatalf("sparse prepared plan rejected by span-native validator")
 	}
 
@@ -848,7 +848,7 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 		t.Fatalf("expected prepared spans")
 	}
 	ops := delta.SortedEntries()
-	if !validateSpanNativePreparedPlan(ops, prepared) {
+	if !validateSpanNativePreparedPlan(ops, prepared, ApplyOptions{}) {
 		t.Fatalf("fresh whole-root plan unexpectedly ineligible")
 	}
 
@@ -856,7 +856,7 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
 	bad.LeafSpans[0].PointOpStart = 1
 	beforePages := p.PageCount()
-	_, used, err := z.applySpanNativeWithPrepared(rootID, ops, bad, 1, nil)
+	_, used, err := z.applySpanNativeWithPrepared(rootID, ops, bad, ApplyOptions{}, 1, nil)
 	if err != nil {
 		t.Fatalf("applySpanNativeWithPrepared invalid plan err=%v", err)
 	}
@@ -870,10 +870,10 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	bad = prepared
 	bad.OmitKeys = true
 	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
-	if validateSpanNativePreparedPlan(ops, bad) {
+	if validateSpanNativePreparedPlan(ops, bad, ApplyOptions{}) {
 		t.Fatalf("validateSpanNativePreparedPlan accepted OmitKeys plan")
 	}
-	_, used, err = z.applySpanNativeWithPrepared(rootID, ops, bad, 1, nil)
+	_, used, err = z.applySpanNativeWithPrepared(rootID, ops, bad, ApplyOptions{}, 1, nil)
 	if err != nil {
 		t.Fatalf("applySpanNativeWithPrepared OmitKeys err=%v", err)
 	}
@@ -887,10 +887,10 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	bad = prepared
 	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
 	bad.LeafSpans[0].PointOpStart = -1
-	if validateSpanNativePreparedPlan(ops, bad) {
+	if validateSpanNativePreparedPlan(ops, bad, ApplyOptions{}) {
 		t.Fatalf("validateSpanNativePreparedPlan accepted negative PointOpStart")
 	}
-	_, used, err = z.applySpanNativeWithPrepared(rootID, ops, bad, 1, nil)
+	_, used, err = z.applySpanNativeWithPrepared(rootID, ops, bad, ApplyOptions{}, 1, nil)
 	if err != nil {
 		t.Fatalf("applySpanNativeWithPrepared negative PointOpStart err=%v", err)
 	}
@@ -904,7 +904,7 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	bad = prepared
 	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
 	bad.LeafSpans[0].PointOpEnd = -1
-	if validateSpanNativePreparedPlan(ops, bad) {
+	if validateSpanNativePreparedPlan(ops, bad, ApplyOptions{}) {
 		t.Fatalf("validateSpanNativePreparedPlan accepted negative PointOpEnd")
 	}
 
@@ -912,7 +912,7 @@ func TestSpanNativeApplyRejectsInvalidPreparedPlanBeforeOutput(t *testing.T) {
 	bad.LeafSpans = append([]ReadOnlyLeafSpan(nil), prepared.LeafSpans...)
 	bad.LeafSpans[0].LowKey = []byte("z")
 	bad.LeafSpans[0].HighKey = []byte("a")
-	if validateSpanNativePreparedPlan(ops, bad) {
+	if validateSpanNativePreparedPlan(ops, bad, ApplyOptions{}) {
 		t.Fatalf("validateSpanNativePreparedPlan accepted non-monotonic span bounds")
 	}
 }
