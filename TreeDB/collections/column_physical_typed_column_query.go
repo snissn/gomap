@@ -1410,6 +1410,9 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	if columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(r.plan, req) {
 		return r.runDenseGroupCountDistinct(view, req)
 	}
+	if columnTypedColumnPhysicalQueryUseSumSecondOfDaySquare(req) {
+		return r.runSumSecondOfDaySquare(view, req)
+	}
 
 	start := time.Now()
 	acc := newColumnTypedColumnPhysicalQueryAccumulator(req.Kind)
@@ -1441,6 +1444,65 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	groups := acc.groups(req, r.resultGroups)
 	r.resultGroups = groups
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, acc.reduceRows, time.Since(start).Nanoseconds())
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func columnTypedColumnPhysicalQueryUseSumSecondOfDaySquare(req ColumnPhysicalQueryRequest) bool {
+	return req.Kind == ColumnPhysicalQuerySumSecondOfDaySquare &&
+		req.ValueColumn != "" &&
+		req.GroupColumn == "" &&
+		req.DistinctColumn == "" &&
+		req.AggregateMetadataName == "" &&
+		req.TopK == 0
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runSumSecondOfDaySquare(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	rowsScanned := 0
+	matchedRows := 0
+	var sum TypedColumnInt64PredicateAggregateResult
+	for _, part := range r.parts {
+		partRows := len(part.RowIndexes)
+		if part.RowIndexes == nil {
+			partRows = part.Rows
+		}
+		values, err := typedColumnPhysicalQueryInt64ColumnValues(part.Values, req.ValueColumn, partRows)
+		if err != nil {
+			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+		}
+		if len(values) != partRows {
+			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, fmt.Errorf("collections: typed-column part physical query column %q rows=%d want %d", req.ValueColumn, len(values), partRows)
+		}
+		for rowIdx := 0; rowIdx < partRows; rowIdx++ {
+			rowsScanned++
+			matched, err := typedColumnPhysicalQueryPredicatesMatch(part.Values, r.plan.PredicateSpecs, rowIdx)
+			if err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+			}
+			if !matched {
+				continue
+			}
+			if len(r.plan.PredicateSpecs) != 0 {
+				matchedRows++
+			}
+			value, err := typedColumnPhysicalQueryInt64ColumnValue(values, req.ValueColumn, rowIdx)
+			if err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+			}
+			if err := addTypedColumnInt64PredicateAggregateSecondOfDaySquareValue(&sum, value); err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+			}
+		}
+	}
+	groups := r.resultGroups[:0]
+	if sum.Count > 0 {
+		groups = append(groups, ColumnPhysicalQueryGroup{Key: columnPhysicalQuerySumSecondOfDaySquareKey(req.ValueColumn), Count: int(sum.Count), Int64: sum.Sum})
+	}
+	r.resultGroups = groups
+	diag := r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())
 	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
 	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	r.resultGroups = result.Groups
@@ -4396,10 +4458,25 @@ func typedColumnPhysicalQueryStringValueAt(values map[string][]columnDeclaredVal
 }
 
 func typedColumnPhysicalQueryInt64At(values map[string][]columnDeclaredValue, column string, rowIdx int) (int64, error) {
+	columnValues, err := typedColumnPhysicalQueryInt64ColumnValues(values, column, rowIdx+1)
+	if err != nil {
+		return 0, err
+	}
+	return typedColumnPhysicalQueryInt64ColumnValue(columnValues, column, rowIdx)
+}
+
+func typedColumnPhysicalQueryInt64ColumnValues(values map[string][]columnDeclaredValue, column string, wantRows int) ([]columnDeclaredValue, error) {
 	columnValues, ok := values[column]
 	if !ok {
-		return 0, fmt.Errorf("collections: typed-column part physical query missing int64 column %q", column)
+		return nil, fmt.Errorf("collections: typed-column part physical query missing int64 column %q", column)
 	}
+	if len(columnValues) < wantRows {
+		return nil, fmt.Errorf("collections: typed-column part physical query column %q rows=%d want at least %d", column, len(columnValues), wantRows)
+	}
+	return columnValues, nil
+}
+
+func typedColumnPhysicalQueryInt64ColumnValue(columnValues []columnDeclaredValue, column string, rowIdx int) (int64, error) {
 	if rowIdx < 0 || rowIdx >= len(columnValues) {
 		return 0, fmt.Errorf("collections: typed-column part physical query row_index=%d outside column %q rows=%d", rowIdx, column, len(columnValues))
 	}
