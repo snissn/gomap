@@ -88,6 +88,18 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("column_publish_root_delta_ns/doc", stats.ColumnPublishRootDeltaConstruction)
 	reportDuration("column_publish_system_delta_ns/doc", stats.ColumnPublishSystemDeltaConstruction)
 	reportDuration("column_publish_root_delta_materialize_ns/doc", stats.ColumnPublishRootDeltaMaterialization)
+	if stats.ColumnPublishRows > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishRows)/float64(docs), "column_publish_rows/doc")
+	}
+	if stats.ColumnPublishPreparedAssets > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishPreparedAssets)/float64(docs), "column_publish_prepared_assets/doc")
+	}
+	if stats.ColumnPublishRequiredAssetBytes > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishRequiredAssetBytes)/float64(docs), "column_publish_required_asset_bytes/doc")
+	}
+	if stats.ColumnPublishManifestBytes > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishManifestBytes)/float64(docs), "column_publish_manifest_bytes/doc")
+	}
 	reportDuration("unique_preflight_ns/doc", stats.UniqueIndexPreflight)
 	reportDuration("template_run_ns/doc", stats.TemplateRunBuild)
 	reportDuration("primary_run_ns/doc", stats.PrimaryRunBuild)
@@ -133,6 +145,10 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 		benchmarkReportCollectionInsertStats(b, 10, 1, collections.CollectionInsertStats{
 			ColumnPublishDocumentExtraction:     20 * time.Microsecond,
 			ColumnPublishDeclaredColumnEncoding: 30 * time.Microsecond,
+			ColumnPublishRows:                   10,
+			ColumnPublishPreparedAssets:         2,
+			ColumnPublishRequiredAssetBytes:     2048,
+			ColumnPublishManifestBytes:          512,
 		})
 	})
 	if got := result.Extra["column_publish_document_extraction_ns/doc"]; got <= 0 {
@@ -140,6 +156,18 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 	}
 	if got := result.Extra["column_publish_declared_column_encoding_ns/doc"]; got <= 0 {
 		t.Fatalf("declared column encoding metric=%v want positive", got)
+	}
+	if got := result.Extra["column_publish_rows/doc"]; got <= 0 {
+		t.Fatalf("column publish rows metric=%v want positive", got)
+	}
+	if got := result.Extra["column_publish_prepared_assets/doc"]; got <= 0 {
+		t.Fatalf("column publish prepared assets metric=%v want positive", got)
+	}
+	if got := result.Extra["column_publish_required_asset_bytes/doc"]; got <= 0 {
+		t.Fatalf("column publish required asset bytes metric=%v want positive", got)
+	}
+	if got := result.Extra["column_publish_manifest_bytes/doc"]; got <= 0 {
+		t.Fatalf("column publish manifest bytes metric=%v want positive", got)
 	}
 }
 

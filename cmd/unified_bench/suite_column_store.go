@@ -3990,7 +3990,7 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("| `primary_run_build` | %.3f | %.1f |\n", stats.PrimaryRunBuildDurationMS, stats.PrimaryRunBuildNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `publish` | %.3f | %.1f |\n\n", stats.PublishDurationMS, stats.PublishNsPerRow))
 
-	if stats.ColumnPublishCommitDurationMS > 0 || stats.ColumnPublishBuildColumnDeltaDurationMS > 0 || stats.ColumnPublishBuildSystemDeltaDurationMS > 0 {
+	if columnStoreInsertStatsHasColumnPublishSubphase(stats) {
 		sb.WriteString("| column publish subphase | ms | ns/row |\n")
 		sb.WriteString("|---|---:|---:|\n")
 		sb.WriteString(fmt.Sprintf("| `build_column_delta_callback` | %.3f | %.1f |\n", stats.ColumnPublishBuildColumnDeltaDurationMS, stats.ColumnPublishBuildColumnDeltaNsPerRow))
@@ -4005,6 +4005,20 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `root_delta_materialization` | %.3f |  |\n", stats.ColumnPublishRootDeltaMaterializeMS))
 		sb.WriteString(fmt.Sprintf("| `system_delta_construction` | %.3f |  |\n\n", stats.ColumnPublishSystemDeltaDurationMS))
 	}
+}
+
+func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhaseMetric) bool {
+	return stats.ColumnPublishBuildColumnDeltaDurationMS > 0 ||
+		stats.ColumnPublishBuildSystemDeltaDurationMS > 0 ||
+		stats.ColumnPublishCommitDurationMS > 0 ||
+		stats.ColumnPublishDocumentExtractionDurationMS > 0 ||
+		stats.ColumnPublishDeclaredColumnDurationMS > 0 ||
+		stats.ColumnPublishAssetPreparationDurationMS > 0 ||
+		stats.ColumnPublishManifestEncodeDurationMS > 0 ||
+		stats.ColumnPublishAssetClosureDurationMS > 0 ||
+		stats.ColumnPublishRootDeltaDurationMS > 0 ||
+		stats.ColumnPublishRootDeltaMaterializeMS > 0 ||
+		stats.ColumnPublishSystemDeltaDurationMS > 0
 }
 
 func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, queries []columnStoreQueryMetric, parityByName map[string]columnStoreParity) {

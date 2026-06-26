@@ -246,6 +246,11 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	var plan ColumnPublishPlan
 	var updatedMeta CollectionMeta
 	var cleanupColumnDelta func()
+	defer func() {
+		if cleanupColumnDelta != nil {
+			cleanupColumnDelta()
+		}
+	}()
 	buildColumnDelta := func(ctx backenddb.CommandWALPublishContext) ([]backenddb.OrderedRootDeltaBatchPublishInput, error) {
 		stageStart := time.Now()
 		defer func() {
@@ -263,6 +268,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
 		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
 		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
 			return nil, err
 		}
 		cleanupColumnDelta = cleanup
@@ -298,6 +306,7 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	if cleanupColumnDelta != nil {
 		cleanupColumnDelta()
+		cleanupColumnDelta = nil
 	}
 	if updatedMeta.Name == "" {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)

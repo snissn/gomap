@@ -45,6 +45,20 @@ func TestColumnStoreSuiteRetainedPayloadPreservesJSONNumbersM13C(t *testing.T) {
 	}
 }
 
+func TestRenderColumnStoreInsertStatsMarkdownIncludesLaterColumnPublishSubphaseM10B(t *testing.T) {
+	var sb strings.Builder
+	renderColumnStoreInsertStatsMarkdown(&sb, columnStoreInsertPhaseMetric{
+		Documents:                               1,
+		ColumnPublishAssetPreparationDurationMS: 0.25,
+	})
+	got := sb.String()
+	for _, want := range []string{"column publish subphase", "asset_preparation"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
 	cfg := columnStoreSuiteConfig()
 	if _, err := columnStoreSuiteRetainedPayloadFromDocument([]byte(`{"payload":1} {"payload":2}`), cfg); err == nil {
