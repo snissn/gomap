@@ -210,6 +210,12 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				code, _ := ErrorCodeOf(err)
 				return reject(entry.Digest, code, err)
 			}
+			duplicateLSN := h.appliedCommandLSN()
+			if duplicateLSN < record.AppliedCommandLSN {
+				err := codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: duplicate apply metadata coverage %d trails original result coverage %d", duplicateLSN, record.AppliedCommandLSN)
+				code, _ := ErrorCodeOf(err)
+				return recoveryRequired(entry.Digest, code, err)
+			}
 			duplicate := record.Result
 			duplicate.Status = raftentry.ApplyStatusAlreadyApplied
 			duplicate.AffectedCount = 0
@@ -217,7 +223,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				EntryID:           meta.EntryID,
 				CommandDigest:     entry.Digest,
 				IdempotencyKey:    entry.IdempotencyKey,
-				AppliedCommandLSN: record.AppliedCommandLSN,
+				AppliedCommandLSN: duplicateLSN,
 				Result:            duplicate,
 			}); err != nil {
 				code, _ := ErrorCodeOf(err)
@@ -227,7 +233,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
 					EntryID:           meta.EntryID,
 					CommandDigest:     entry.Digest,
-					AppliedCommandLSN: record.AppliedCommandLSN,
+					AppliedCommandLSN: duplicateLSN,
 				}); err != nil {
 					code, _ := ErrorCodeOf(err)
 					return recoveryRequired(entry.Digest, code, err)

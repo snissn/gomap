@@ -161,6 +161,66 @@ func TestIdempotencyDuplicateProgressFailureRequiresRecovery(t *testing.T) {
 	}
 }
 
+func TestIdempotencyDuplicateRecordsCurrentAppliedCommandLSN(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	rawUsers := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:duplicate-current-lsn", testCreateCollectionMetaOptions{})
+	first, err := ApplyCommittedEntryV1(db, rawUsers, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, first, raftentry.ApplyStatusApplied, 1)
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(frames))
+	}
+	originalLSN := frames[0].LSN
+
+	rawOrders := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders:advance-lsn", testCreateCollectionMetaOptions{})
+	advanced, err := ApplyCommittedEntryV1(db, rawOrders, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, advanced, raftentry.ApplyStatusApplied, 1)
+	currentLSN := db.State().AppliedCommandLSN
+	if currentLSN <= originalLSN {
+		t.Fatalf("AppliedCommandLSN after intervening command=%d, want greater than original %d", currentLSN, originalLSN)
+	}
+
+	duplicateID := raftentry.ApplyEntryID{Term: 1, Index: 3}
+	duplicate, err := ApplyCommittedEntryV1(db, rawUsers, applyMeta(duplicateID.Term, duplicateID.Index), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, duplicate, raftentry.ApplyStatusAlreadyApplied, 0)
+	if duplicate.ResultDigest != first.ResultDigest {
+		t.Fatalf("duplicate result digest=%s, want %s", duplicate.ResultDigest.Hex(), first.ResultDigest.Hex())
+	}
+	record, ok, err := results.LookupApplyResult(duplicateID)
+	if err != nil {
+		t.Fatalf("LookupApplyResult duplicate: %v", err)
+	}
+	if !ok {
+		t.Fatal("duplicate result record missing")
+	}
+	if record.AppliedCommandLSN != currentLSN {
+		t.Fatalf("duplicate result AppliedCommandLSN=%d, want current %d", record.AppliedCommandLSN, currentLSN)
+	}
+	progress.mu.Lock()
+	progressRecord, ok := progress.records[duplicateID]
+	progress.mu.Unlock()
+	if !ok {
+		t.Fatal("duplicate progress record missing")
+	}
+	if progressRecord.AppliedCommandLSN != currentLSN {
+		t.Fatalf("duplicate progress AppliedCommandLSN=%d, want current %d", progressRecord.AppliedCommandLSN, currentLSN)
+	}
+}
+
 func TestCreateCollectionAcceptsCurrentCollectionMetaWireVersion(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
