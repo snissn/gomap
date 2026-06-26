@@ -1,9 +1,11 @@
 package raftapply
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -27,9 +29,10 @@ type LogicalDigestOptionsV1 struct {
 	CatalogScope  string
 }
 
-// LogicalDigestV1ForDB hashes the canonical catalog-create payload for each
-// listed collection plus stable scope identity. The source of truth is the
-// collection catalog API, not local storage layout.
+// LogicalDigestV1ForDB hashes the canonical catalog-create payload and
+// materialized collection contents for each listed collection plus stable scope
+// identity. The source of truth is the collection catalog API, not local
+// storage layout.
 func LogicalDigestV1ForDB(db *backenddb.DB, opts LogicalDigestOptionsV1) (LogicalDigestV1, error) {
 	if db == nil {
 		return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil DB cannot compute logical digest")
@@ -71,6 +74,9 @@ func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager,
 	if err != nil {
 		return LogicalDigestV1{}, codeCollectionApplyError(err)
 	}
+	sort.Slice(metas, func(i, j int) bool {
+		return metas[i].Name < metas[j].Name
+	})
 	h := sha256.New()
 	writeLogicalDigestField(h, "domain", []byte(logicalDigestDomainV1))
 	writeLogicalDigestU64(h, "logical-version", 1)
@@ -84,6 +90,52 @@ func logicalDigestV1ForCollectionManager(manager *collections.CollectionManager,
 			return LogicalDigestV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: encode logical catalog metadata for %q: %v", meta.Name, err)
 		}
 		writeLogicalDigestField(h, "catalog-create-collection-payload", payload)
+		collection, err := manager.OpenCollection(meta.Name)
+		if err != nil {
+			return LogicalDigestV1{}, codeCollectionApplyError(err)
+		}
+		ids := make([][]byte, 0)
+		truncated, err := collection.ScanDocumentIDsFunc(maxInt(), func(id []byte) (bool, error) {
+			ids = append(ids, id)
+			return true, nil
+		})
+		if err != nil {
+			return LogicalDigestV1{}, codeCollectionApplyError(err)
+		}
+		if truncated {
+			return LogicalDigestV1{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: logical digest document scan for %q truncated", meta.Name)
+		}
+		sort.Slice(ids, func(i, j int) bool {
+			return bytes.Compare(ids[i], ids[j]) < 0
+		})
+		materializer, err := collection.NewStoredDocumentJSONMaterializer()
+		if err != nil {
+			return LogicalDigestV1{}, codeCollectionApplyError(err)
+		}
+		writeLogicalDigestU64(h, "collection-document-count", uint64(len(ids)))
+		var documentScratch []byte
+		for _, id := range ids {
+			document, found, err := collection.GetInto(id, documentScratch[:0])
+			if err != nil {
+				_ = materializer.Close()
+				return LogicalDigestV1{}, codeCollectionApplyError(err)
+			}
+			if !found {
+				_ = materializer.Close()
+				return LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: logical digest document %q disappeared from %q", string(id), meta.Name)
+			}
+			documentScratch = document
+			jsonDoc, err := materializer.StoredDocumentJSON(document)
+			if err != nil {
+				_ = materializer.Close()
+				return LogicalDigestV1{}, codeCollectionApplyError(err)
+			}
+			writeLogicalDigestField(h, "collection-document-id", id)
+			writeLogicalDigestField(h, "collection-document-json", jsonDoc)
+		}
+		if err := materializer.Close(); err != nil {
+			return LogicalDigestV1{}, codeCollectionApplyError(err)
+		}
 	}
 	var out LogicalDigestV1
 	copy(out[:], h.Sum(nil))

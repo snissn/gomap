@@ -1,10 +1,12 @@
 package raftapply
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 const testCatalogVersionStart = 7
@@ -32,7 +35,7 @@ func TestUnsupportedDeterministicEntryRejectsBeforeAppendAndStores(t *testing.T)
 	progress := NewMemoryApplyProgressStore(8, 8)
 	results := NewMemoryApplyResultStore(8)
 	seam := &countingCommandWALApplySeam{}
-	raw := readHexFixture(t, "../nativewire/testdata/v1/insert_batch_entry.hex")
+	raw := readHexFixture(t, "../nativewire/testdata/v1/update_bson_set_entry.hex")
 
 	beforeLSN := db.State().AppliedCommandLSN
 	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
@@ -229,6 +232,721 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 	}
 	if got := len(readCommandWALFrames(t, dir)); got != 0 {
 		t.Fatalf("command WAL frames after stored result replay=%d, want 0", got)
+	}
+}
+
+func TestCollectionMutationApplyInsertReplaceDeleteFramesAndDigest(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(16, 16)
+	results := NewMemoryApplyResultStore(16)
+	apply := func(index uint64, raw []byte) raftentry.ApplyResultV1 {
+		t.Helper()
+		result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, index), Options{
+			ProgressStore: progress,
+			ResultStore:   results,
+		})
+		if err != nil {
+			t.Fatalf("ApplyCommittedEntryV1 index %d: %v result=%+v", index, err, result)
+		}
+		return result
+	}
+
+	create := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-bson", testCreateCollectionMetaOptions{
+		documentFormat: uint64(nativewire.DocumentFormatBSON),
+	})
+	docU1 := testBSONDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})
+	docU2 := testBSONDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "sea"}})
+	insert := deterministicInsertBatchEntry(t, "users", "client-a:insert:users:1", nativewire.DocumentFormatBSON, [][]byte{[]byte("u2"), []byte("u1")}, [][]byte{docU2, docU1})
+	docU1Replace := testBSONDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "sfo"}})
+	docMissing := testBSONDocument(t, bson.D{{Key: "_id", Value: "missing"}, {Key: "city", Value: "nyc"}})
+	replace := deterministicReplaceBatchEntry(t, "users", "client-a:replace:users:1", nativewire.DocumentFormatBSON, [][]byte{[]byte("u1"), []byte("missing")}, [][]byte{docU1Replace, docMissing})
+	deleteEntry := deterministicDeleteBatchEntry(t, "users", "client-a:delete:users:1", [][]byte{[]byte("u2")})
+
+	assertApplied(t, apply(1, create), raftentry.ApplyStatusApplied, 1)
+	insertResult := apply(2, insert)
+	assertApplied(t, insertResult, raftentry.ApplyStatusApplied, 2)
+	replaceResult := apply(3, replace)
+	assertApplied(t, replaceResult, raftentry.ApplyStatusApplied, 1)
+	deleteResult := apply(4, deleteEntry)
+	assertApplied(t, deleteResult, raftentry.ApplyStatusApplied, 1)
+	if insertResult.ResultDigest == replaceResult.ResultDigest || replaceResult.ResultDigest == deleteResult.ResultDigest {
+		t.Fatalf("mutation result digests did not change across document mutations insert=%s replace=%s delete=%s", insertResult.ResultDigest.Hex(), replaceResult.ResultDigest.Hex(), deleteResult.ResultDigest.Hex())
+	}
+
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	gotU1, err := opened.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if got := bson.Raw(gotU1).Lookup("city").StringValue(); got != "sfo" {
+		t.Fatalf("u1 city=%q, want sfo", got)
+	}
+	gotU2, err := opened.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("Get u2: %v", err)
+	}
+	if gotU2 != nil {
+		t.Fatalf("u2 after delete=%x, want nil", gotU2)
+	}
+
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 4 {
+		t.Fatalf("command WAL frames=%d, want 4", len(frames))
+	}
+	assertCatalogCreateFrame(t, frames[0], "users")
+	assertCollectionInsertFrame(t, frames[1], "users", map[string][]byte{
+		"u1": docU1,
+		"u2": docU2,
+	})
+	assertCollectionUpdateFrame(t, frames[2], "users", map[string][]byte{
+		"u1": docU1Replace,
+	})
+	assertCollectionDeleteFrame(t, frames[3], "users", [][]byte{[]byte("u2")})
+	if got := db.State().AppliedCommandLSN; got != frames[3].LSN {
+		t.Fatalf("AppliedCommandLSN=%d, want delete frame LSN %d", got, frames[3].LSN)
+	}
+	if progress.Len() != 4 || results.Len() != 4 {
+		t.Fatalf("store lengths progress=%d results=%d, want 4/4", progress.Len(), results.Len())
+	}
+}
+
+func TestCollectionMutationCommitAmbiguousAfterPublishRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs", testCreateCollectionMetaOptions{
+		version:            testCurrentCollectionMetaWireVersion,
+		includeVectorIndex: true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+
+	collection, err := collections.NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection docs: %v", err)
+	}
+	beforeLSN := db.State().AppliedCommandLSN
+
+	badVectorDoc := []byte(`{"embedding":[1,0,0]}`)
+	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:bad-vector", nativewire.DocumentFormatJSON, [][]byte{[]byte("bad")}, [][]byte{badVectorDoc})
+	result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if !errors.Is(err, collections.ErrCommitAmbiguous) {
+		t.Fatalf("ApplyCommittedEntryV1 err=%v, want ErrCommitAmbiguous", err)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after recovery-required mutation progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+	got, err := collection.Get([]byte("bad"))
+	if err != nil {
+		t.Fatalf("Get committed bad-vector document: %v", err)
+	}
+	if !bytes.Equal(got, badVectorDoc) {
+		t.Fatalf("committed bad-vector document=%s, want %s", got, badVectorDoc)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) == 0 {
+		t.Fatal("command WAL frames=0, want inserted mutation frame")
+	}
+	last := frames[len(frames)-1]
+	assertCollectionInsertFrame(t, last, "docs", map[string][]byte{"bad": badVectorDoc})
+	if got := db.State().AppliedCommandLSN; got <= beforeLSN || got != last.LSN {
+		t.Fatalf("AppliedCommandLSN=%d before=%d last_insert_lsn=%d", got, beforeLSN, last.LSN)
+	}
+}
+
+func TestCollectionMutationMalformedJSONFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-indexed-json", testCreateCollectionMetaOptions{
+		includeIndex: true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	cases := []struct {
+		name string
+		doc  []byte
+	}{
+		{name: "invalid-syntax", doc: []byte(`{"email":`)},
+		{name: "array", doc: []byte(`[]`)},
+		{name: "scalar", doc: []byte(`1`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			beforeFrames := readCommandWALFrames(t, dir)
+			beforeLSN := db.State().AppliedCommandLSN
+			seam := &countingCommandWALApplySeam{}
+			id := []byte("bad-" + tc.name)
+			insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:bad-json:"+tc.name, nativewire.DocumentFormatJSON, [][]byte{id}, [][]byte{tc.doc})
+			result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
+				ProgressStore:       progress,
+				ResultStore:         results,
+				CommandWALApplySeam: seam,
+			})
+			assertRejected(t, result, err, raftentry.ApplyStatusRejectedMalformed, raftentry.ErrorMalformedEntryV1)
+			if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+				t.Fatalf("malformed JSON reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+			}
+			if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+				t.Fatalf("command WAL frames after malformed JSON=%d, want %d", got, len(beforeFrames))
+			}
+			if got := db.State().AppliedCommandLSN; got != beforeLSN {
+				t.Fatalf("AppliedCommandLSN after malformed JSON=%d, want %d", got, beforeLSN)
+			}
+			if progress.Len() != 1 || results.Len() != 1 {
+				t.Fatalf("store lengths after malformed JSON progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+			}
+			if got, getErr := collections.NewCollectionManager(db).OpenCollection("docs"); getErr != nil {
+				t.Fatalf("OpenCollection docs after malformed JSON: %v", getErr)
+			} else if doc, getErr := got.Get(id); getErr != nil || doc != nil {
+				t.Fatalf("Get bad after malformed JSON doc=%q err=%v, want nil/<nil>", doc, getErr)
+			}
+		})
+	}
+}
+
+func TestCollectionMutationUniqueConflictFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-unique-json", testCreateCollectionMetaOptions{
+		includeIndex: true,
+		indexUnique:  true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	seed := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:seed", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"email":"same@example.com","city":"hnl"}`)})
+	seedResult, err := ApplyCommittedEntryV1(db, seed, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 seed: %v result=%+v", err, seedResult)
+	}
+	assertApplied(t, seedResult, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	conflicting := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:unique-conflict", nativewire.DocumentFormatJSON, [][]byte{[]byte("u2")}, [][]byte{[]byte(`{"email":"same@example.com","city":"sea"}`)})
+	result, err := ApplyCommittedEntryV1(db, conflicting, applyMeta(1, 3), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if !errors.Is(err, collections.ErrUniqueIndexConflict) {
+		t.Fatalf("ApplyCommittedEntryV1 err=%v, want ErrUniqueIndexConflict", err)
+	}
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("unique conflict reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after unique conflict=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after unique conflict=%d, want %d", got, beforeLSN)
+	}
+	opened, err := collections.NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection docs after unique conflict: %v", err)
+	}
+	got, err := opened.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("Get u2 after unique conflict: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u2 after unique conflict=%s, want nil", got)
+	}
+	if progress.Len() != 2 || results.Len() != 2 {
+		t.Fatalf("store lengths after unique conflict progress=%d results=%d, want 2/2", progress.Len(), results.Len())
+	}
+}
+
+func TestCollectionMutationReplaceUniqueConflictFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-replace-unique-json", testCreateCollectionMetaOptions{
+		includeIndex: true,
+		indexUnique:  true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	seed := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:seed-replace", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1"), []byte("u2")}, [][]byte{
+		[]byte(`{"email":"one@example.com","city":"hnl"}`),
+		[]byte(`{"email":"two@example.com","city":"sea"}`),
+	})
+	seedResult, err := ApplyCommittedEntryV1(db, seed, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 seed: %v result=%+v", err, seedResult)
+	}
+	assertApplied(t, seedResult, raftentry.ApplyStatusApplied, 2)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	conflicting := deterministicReplaceBatchEntry(t, "docs", "client-a:replace:docs:unique-conflict", nativewire.DocumentFormatJSON, [][]byte{[]byte("u2")}, [][]byte{
+		[]byte(`{"email":"one@example.com","city":"sfo"}`),
+	})
+	result, err := ApplyCommittedEntryV1(db, conflicting, applyMeta(1, 3), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if !errors.Is(err, collections.ErrUniqueIndexConflict) {
+		t.Fatalf("ApplyCommittedEntryV1 err=%v, want ErrUniqueIndexConflict", err)
+	}
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("replace unique conflict reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after replace unique conflict=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after replace unique conflict=%d, want %d", got, beforeLSN)
+	}
+	opened, err := collections.NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection docs after replace unique conflict: %v", err)
+	}
+	got, err := opened.Get([]byte("u2"))
+	if err != nil {
+		t.Fatalf("Get u2 after replace unique conflict: %v", err)
+	}
+	if !bytes.Contains(got, []byte(`two@example.com`)) || bytes.Contains(got, []byte(`one@example.com`)) {
+		t.Fatalf("u2 after replace unique conflict=%s, want original unique email", got)
+	}
+	if progress.Len() != 2 || results.Len() != 2 {
+		t.Fatalf("store lengths after replace unique conflict progress=%d results=%d, want 2/2", progress.Len(), results.Len())
+	}
+}
+
+func TestCollectionMutationCoveredCommandWALFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	frame, err := commandwalapply.TestNoopFrame()
+	if err != nil {
+		t.Fatalf("TestNoopFrame: %v", err)
+	}
+	handle, _, err := commandwalapply.Append(db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := commandwalapply.Finalize(db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{}); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	entry := raftentry.CommandEntryV1{Digest: raftentry.CommandDigestV1{1, 2, 3}}
+	result, err := NewHarness(db, Options{}).collectionMutationApplyError(entry, handle, fmt.Errorf("publish failed: %w", backenddb.ErrRecoveryRequired))
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+}
+
+func TestCollectionMutationFinalizeFailureAfterAppendRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs-finalize-failure", testCreateCollectionMetaOptions{})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &failingFinalizeCommandWALApplySeam{
+		finalizeErr: fmt.Errorf("synthetic finalize failure: %w", backenddb.ErrCommandWALRejected),
+	}
+	emptyInsert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:empty-finalize-failure", nativewire.DocumentFormatJSON, nil, nil)
+	result, err := ApplyCommittedEntryV1(db, emptyInsert, applyMeta(1, 2), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if seam.appendCalls != 1 || seam.finalizeCalls != 1 || seam.abortCalls != 1 {
+		t.Fatalf("seam calls append/finalize/abort=%d/%d/%d, want 1/1/1", seam.appendCalls, seam.finalizeCalls, seam.abortCalls)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != len(beforeFrames)+1 {
+		t.Fatalf("command WAL frames after finalize failure=%d, want %d", len(frames), len(beforeFrames)+1)
+	}
+	last := frames[len(frames)-1]
+	assertCollectionInsertFrame(t, last, "docs", map[string][]byte{})
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after finalize failure=%d, want %d", got, beforeLSN)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after finalize failure progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+	if err := db.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("CheckStorageMaintenanceReady after finalize failure error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestCollectionMutationStaleCatalogGuardFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-json", testCreateCollectionMetaOptions{})
+	applied, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, applied, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	seam := &countingCommandWALApplySeam{}
+	insert := deterministicInsertBatchEntry(t, "users", "client-a:insert:users-stale", nativewire.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"city":"hnl"}`)})
+	rejected, err := ApplyCommittedEntryV1(db, insert, applyMetaWithCatalogVersion(1, 2, testCatalogVersionStart+1), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, rejected, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("stale mutation guard reached command-WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after stale mutation guard=%d, want %d", got, len(beforeFrames))
+	}
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after stale mutation guard=%d, want %d", got, beforeLSN)
+	}
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	got, err := opened.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1 after stale mutation guard: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u1 after stale mutation guard=%s, want nil", got)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after stale mutation guard progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+}
+
+func TestLowerCollectionMutationRejectsInvalidIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		command   nativewire.CommandID
+		ids       [][]byte
+		documents [][]byte
+		wantCode  raftentry.DeterministicErrorCodeV1
+	}{
+		{
+			name:      "duplicate insert ids",
+			command:   nativewire.CommandInsertBatch,
+			ids:       [][]byte{[]byte("u1"), []byte("u1")},
+			documents: [][]byte{[]byte(`{"city":"hnl"}`), []byte(`{"city":"sfo"}`)},
+			wantCode:  raftentry.ErrorRejectedConflictV1,
+		},
+		{
+			name:      "duplicate replace ids",
+			command:   nativewire.CommandReplaceBatch,
+			ids:       [][]byte{[]byte("u1"), []byte("u1")},
+			documents: [][]byte{[]byte(`{"city":"hnl"}`), []byte(`{"city":"sfo"}`)},
+			wantCode:  raftentry.ErrorRejectedConflictV1,
+		},
+		{
+			name:     "duplicate delete ids",
+			command:  nativewire.CommandDeleteBatch,
+			ids:      [][]byte{[]byte("u1"), []byte("u1")},
+			wantCode: raftentry.ErrorRejectedConflictV1,
+		},
+		{
+			name:      "empty insert id",
+			command:   nativewire.CommandInsertBatch,
+			ids:       [][]byte{[]byte("")},
+			documents: [][]byte{[]byte(`{"city":"hnl"}`)},
+			wantCode:  raftentry.ErrorMalformedEntryV1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := syntheticMutationCommandEntryV1(tt.command, tt.ids, tt.documents)
+			_, err := lowerCollectionMutationV1(entry, nativewire.Limits{})
+			if got := codeOf(err); got != tt.wantCode {
+				t.Fatalf("lowerCollectionMutationV1 error code=%s, want %s (err=%v)", got, tt.wantCode, err)
+			}
+		})
+	}
+}
+
+func TestCollectionMutationCommandWALReplayHandlers(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	create := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-json", testCreateCollectionMetaOptions{})
+	applyCreateSequence(t, db, create)
+
+	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{{
+		ID:       []byte("u1"),
+		Document: []byte(`{"city":"hnl"}`),
+	}})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	insertFrame, err := commandwalapply.CollectionInsertBatchByIDFrame(insertPayload)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("CollectionInsertBatchByIDFrame: %v", err)
+	}
+	_, insertResult, err := commandwalapply.Append(db, insertFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("Append insert replay frame: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close before insert replay: %v", err)
+	}
+
+	db = openApplyHarnessDB(t, dir)
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("OpenCollection users after insert replay: %v", err)
+	}
+	got, err := opened.Get([]byte("u1"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("Get u1 after insert replay: %v", err)
+	}
+	if string(got) != `{"city":"hnl"}` {
+		_ = db.Close()
+		t.Fatalf("u1 after insert replay=%s", got)
+	}
+	if got := db.State().AppliedCommandLSN; got != insertResult.LSN {
+		_ = db.Close()
+		t.Fatalf("AppliedCommandLSN after insert replay=%d, want %d", got, insertResult.LSN)
+	}
+
+	updatePayload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{{
+		ID:       []byte("u1"),
+		Document: []byte(`{"city":"sfo"}`),
+	}})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	updateFrame, err := commandwalapply.CollectionUpdateBatchByIDFrame(updatePayload)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("CollectionUpdateBatchByIDFrame: %v", err)
+	}
+	_, updateResult, err := commandwalapply.Append(db, updateFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("Append update replay frame: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close before update replay: %v", err)
+	}
+
+	db = openApplyHarnessDB(t, dir)
+	opened, err = collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("OpenCollection users after update replay: %v", err)
+	}
+	got, err = opened.Get([]byte("u1"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("Get u1 after update replay: %v", err)
+	}
+	if string(got) != `{"city":"sfo"}` {
+		_ = db.Close()
+		t.Fatalf("u1 after update replay=%s", got)
+	}
+	if got := db.State().AppliedCommandLSN; got != updateResult.LSN {
+		_ = db.Close()
+		t.Fatalf("AppliedCommandLSN after update replay=%d, want %d", got, updateResult.LSN)
+	}
+
+	deletePayload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u1")})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	deleteFrame, err := commandwalapply.CollectionDeleteBatchByIDFrame(deletePayload)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("CollectionDeleteBatchByIDFrame: %v", err)
+	}
+	_, deleteResult, err := commandwalapply.Append(db, deleteFrame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("Append delete replay frame: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close before delete replay: %v", err)
+	}
+
+	db = openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+	opened, err = collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users after delete replay: %v", err)
+	}
+	got, err = opened.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1 after delete replay: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("u1 after delete replay=%s, want nil", got)
+	}
+	if got := db.State().AppliedCommandLSN; got != deleteResult.LSN {
+		t.Fatalf("AppliedCommandLSN after delete replay=%d, want %d", got, deleteResult.LSN)
+	}
+}
+
+func TestCollectionMutationLargeValueLogPointerReopenAndConverges(t *testing.T) {
+	create := deterministicCreateCollectionEntry(t, "events", "client-a:create:events", testCreateCollectionMetaOptions{})
+	largeDoc := []byte(`{"id":"big","payload":"` + strings.Repeat("x", 8192) + `"}`)
+	insert := deterministicInsertBatchEntry(t, "events", "client-a:insert:events:big", nativewire.DocumentFormatJSON, [][]byte{[]byte("big")}, [][]byte{largeDoc})
+	opts := backenddb.Options{ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true}}
+
+	dirA := t.TempDir()
+	dbA := openApplyHarnessDBWithOptions(t, dirA, opts)
+	applyCreateSequence(t, dbA, create, insert)
+	digestA, err := LogicalDigestV1ForDB(dbA, LogicalDigestOptionsV1{})
+	if err != nil {
+		_ = dbA.Close()
+		t.Fatalf("LogicalDigestV1ForDB A before reopen: %v", err)
+	}
+	beforeLSN := dbA.State().AppliedCommandLSN
+	if err := dbA.Close(); err != nil {
+		t.Fatalf("Close A: %v", err)
+	}
+
+	reopenA := openApplyHarnessDBWithOptions(t, dirA, opts)
+	opened, err := collections.NewCollectionManager(reopenA).OpenCollection("events")
+	if err != nil {
+		_ = reopenA.Close()
+		t.Fatalf("OpenCollection events after reopen: %v", err)
+	}
+	got, err := opened.Get([]byte("big"))
+	if err != nil {
+		_ = reopenA.Close()
+		t.Fatalf("Get big after reopen: %v", err)
+	}
+	if !bytes.Equal(got, largeDoc) {
+		_ = reopenA.Close()
+		t.Fatalf("large document after reopen length=%d, want %d", len(got), len(largeDoc))
+	}
+	if got := reopenA.State().AppliedCommandLSN; got != beforeLSN {
+		_ = reopenA.Close()
+		t.Fatalf("reopen AppliedCommandLSN=%d, want %d", got, beforeLSN)
+	}
+	reopenDigest, err := LogicalDigestV1ForDB(reopenA, LogicalDigestOptionsV1{})
+	if err != nil {
+		_ = reopenA.Close()
+		t.Fatalf("LogicalDigestV1ForDB A after reopen: %v", err)
+	}
+	if err := reopenA.Close(); err != nil {
+		t.Fatalf("Close reopen A: %v", err)
+	}
+	if reopenDigest != digestA {
+		t.Fatalf("logical digest after reopen=%s, want %s", reopenDigest.Hex(), digestA.Hex())
+	}
+
+	dirB := t.TempDir()
+	dbB := openApplyHarnessDBWithOptions(t, dirB, opts)
+	defer func() { _ = dbB.Close() }()
+	if err := dbB.RotateCommandWALActiveSegment(false); err != nil {
+		t.Fatalf("RotateCommandWALActiveSegment B: %v", err)
+	}
+	applyCreateSequence(t, dbB, create)
+	if err := dbB.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint B mid-sequence: %v", err)
+	}
+	applyCreateSequenceFrom(t, dbB, 2, insert)
+	digestB, err := LogicalDigestV1ForDB(dbB, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB B: %v", err)
+	}
+	if digestB != digestA {
+		t.Fatalf("fresh DB digest=%s, want %s", digestB.Hex(), digestA.Hex())
+	}
+
+	dirC := t.TempDir()
+	dbC := openApplyHarnessDBWithOptions(t, dirC, opts)
+	defer func() { _ = dbC.Close() }()
+	changedDoc := []byte(`{"id":"big","payload":"` + strings.Repeat("y", 8192) + `"}`)
+	changedInsert := deterministicInsertBatchEntry(t, "events", "client-a:insert:events:changed", nativewire.DocumentFormatJSON, [][]byte{[]byte("big")}, [][]byte{changedDoc})
+	applyCreateSequence(t, dbC, create, changedInsert)
+	digestC, err := LogicalDigestV1ForDB(dbC, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB C: %v", err)
+	}
+	if digestC == digestA {
+		t.Fatalf("intentional document difference produced same logical digest %s", digestA.Hex())
 	}
 }
 
@@ -898,6 +1616,103 @@ func assertCatalogCreateFrame(t *testing.T, env commitlog.CommandEnvelope, colle
 	}
 }
 
+func assertCollectionInsertFrame(t *testing.T, env commitlog.CommandEnvelope, collection string, docs map[string][]byte) {
+	t.Helper()
+	if env.Kind != commitlog.CommandKindCollectionInsertBatchByID ||
+		env.Scope != commitlog.CommandScopeCollection ||
+		env.PayloadFormat != commitlog.PayloadFormatCollectionInsertBatchByIDV1 {
+		t.Fatalf("command WAL frame identity=%+v, want collection insert", env)
+	}
+	payload, err := commitlog.DecodeCollectionInsertBatchByIDPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	assertCollectionDocumentPayload(t, payload.Collection, payload.Documents, collection, docs)
+}
+
+func assertCollectionUpdateFrame(t *testing.T, env commitlog.CommandEnvelope, collection string, docs map[string][]byte) {
+	t.Helper()
+	if env.Kind != commitlog.CommandKindCollectionUpdateBatchByID ||
+		env.Scope != commitlog.CommandScopeCollection ||
+		env.PayloadFormat != commitlog.PayloadFormatCollectionUpdateBatchByIDV1 {
+		t.Fatalf("command WAL frame identity=%+v, want collection update", env)
+	}
+	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	assertCollectionDocumentPayload(t, payload.Collection, payload.Documents, collection, docs)
+}
+
+func assertCollectionDeleteFrame(t *testing.T, env commitlog.CommandEnvelope, collection string, ids [][]byte) {
+	t.Helper()
+	if env.Kind != commitlog.CommandKindCollectionDeleteBatchByID ||
+		env.Scope != commitlog.CommandScopeCollection ||
+		env.PayloadFormat != commitlog.PayloadFormatCollectionDeleteBatchByIDV1 {
+		t.Fatalf("command WAL frame identity=%+v, want collection delete", env)
+	}
+	payload, err := commitlog.DecodeCollectionDeleteBatchByIDPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	if payload.Collection != collection {
+		t.Fatalf("delete collection=%q, want %q", payload.Collection, collection)
+	}
+	if len(payload.IDs) != len(ids) {
+		t.Fatalf("delete ids=%d, want %d", len(payload.IDs), len(ids))
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[string(id)] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(payload.IDs))
+	for _, id := range payload.IDs {
+		key := string(id)
+		if _, ok := want[key]; !ok {
+			t.Fatalf("unexpected delete id %q", string(id))
+		}
+		if _, ok := seen[key]; ok {
+			t.Fatalf("duplicate delete id %q", string(id))
+		}
+		seen[key] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := seen[string(id)]; !ok {
+			t.Fatalf("missing delete id %q", string(id))
+		}
+	}
+}
+
+func assertCollectionDocumentPayload(t *testing.T, gotCollection string, got []commitlog.CollectionDocument, wantCollection string, want map[string][]byte) {
+	t.Helper()
+	if gotCollection != wantCollection {
+		t.Fatalf("payload collection=%q, want %q", gotCollection, wantCollection)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("payload documents=%d, want %d", len(got), len(want))
+	}
+	seen := make(map[string]struct{}, len(got))
+	for _, doc := range got {
+		key := string(doc.ID)
+		wantDoc, ok := want[key]
+		if !ok {
+			t.Fatalf("unexpected payload document id %q", string(doc.ID))
+		}
+		if _, ok := seen[key]; ok {
+			t.Fatalf("duplicate payload document id %q", string(doc.ID))
+		}
+		seen[key] = struct{}{}
+		if !bytes.Equal(doc.Document, wantDoc) {
+			t.Fatalf("payload document %q=%x, want %x", string(doc.ID), doc.Document, wantDoc)
+		}
+	}
+	for id := range want {
+		if _, ok := seen[id]; !ok {
+			t.Fatalf("missing payload document id %q", id)
+		}
+	}
+}
+
 func catalogCreateFrameMeta(t *testing.T, env commitlog.CommandEnvelope) collections.CollectionMeta {
 	t.Helper()
 	payload, err := commitlog.DecodeCatalogCreateCollectionPayload(env.Payload)
@@ -940,6 +1755,17 @@ func codeOf(err error) raftentry.DeterministicErrorCodeV1 {
 	return code
 }
 
+func TestCollectionMutationRequiresRecoveryCodedUnsafeDurability(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", codedError(raftentry.ErrorUnsafeDurabilityModeV1, "unsafe durability after publish"))
+	if !collectionMutationRequiresRecovery(err) {
+		t.Fatalf("coded unsafe durability error did not require recovery")
+	}
+	err = fmt.Errorf("wrapped: %w", codedError(raftentry.ErrorRejectedConflictV1, "ordinary conflict"))
+	if collectionMutationRequiresRecovery(err) {
+		t.Fatalf("coded rejected conflict unexpectedly required recovery")
+	}
+}
+
 type recordApplyResultStoreFailAfterPreflight struct{}
 
 func (recordApplyResultStoreFailAfterPreflight) LookupApplyResult(raftentry.ApplyEntryID) (ApplyResultRecordV1, bool, error) {
@@ -980,6 +1806,8 @@ type testCreateCollectionMetaOptions struct {
 	includeIndex       bool
 	indexValueType     uint64
 	indexStoragePolicy uint64
+	indexUnique        bool
+	includeVectorIndex bool
 }
 
 func deterministicCreateCollectionEntry(t *testing.T, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
@@ -1036,19 +1864,129 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 		dst = appendTestString(dst, "email")
 		dst = appendTestString(dst, "email")
 		dst = binary.AppendUvarint(dst, valueType)
-		dst = append(dst, 0) // unique
-		dst = append(dst, 0) // multi_key
+		dst = append(dst, boolByte(opts.indexUnique)) // unique
+		dst = append(dst, 0)                          // multi_key
 		dst = binary.AppendUvarint(dst, opts.indexStoragePolicy)
 	}
 	if version >= 2 {
-		dst = binary.AppendUvarint(dst, 0) // vector_index_count
+		if !opts.includeVectorIndex {
+			dst = binary.AppendUvarint(dst, 0) // vector_index_count
+			return dst
+		}
+		dst = binary.AppendUvarint(dst, 1) // vector_index_count
+		dst = appendTestString(dst, "embedding")
+		dst = appendTestString(dst, "embedding")
+		dst = binary.AppendUvarint(dst, 1) // metric: cosine
+		dst = binary.AppendVarint(dst, 2)  // dimensions
+		dst = binary.AppendVarint(dst, 4)  // m
+		dst = binary.AppendVarint(dst, 16) // ef_construction
+		dst = binary.AppendVarint(dst, 8)  // ef_search
+		dst = binary.AppendUvarint(dst, 1) // encoding: float32
+		if version >= 3 {
+			dst = binary.AppendUvarint(dst, 1) // strategy: native runtime
+			dst = binary.AppendUvarint(dst, 0) // quantized_index_count
+		}
 	}
 	return dst
+}
+
+func boolByte(v bool) byte {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func appendTestString(dst []byte, value string) []byte {
 	dst = binary.AppendUvarint(dst, uint64(len(value)))
 	return append(dst, value...)
+}
+
+func deterministicInsertBatchEntry(t *testing.T, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte) []byte {
+	t.Helper()
+	return deterministicMutationEntry(t, nativewire.CommandInsertBatch, collection, idempotency, format, ids, documents, nil)
+}
+
+func deterministicReplaceBatchEntry(t *testing.T, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte) []byte {
+	t.Helper()
+	extra := []nativewire.Section{{ID: nativewire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)}}
+	return deterministicMutationEntry(t, nativewire.CommandReplaceBatch, collection, idempotency, format, ids, documents, extra)
+}
+
+func syntheticMutationCommandEntryV1(command nativewire.CommandID, ids, documents [][]byte) raftentry.CommandEntryV1 {
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCollectionRef, Bytes: append([]byte{deterministicCollectionRefTagName}, []byte("users")...)},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, ids...)},
+	}
+	if command == nativewire.CommandInsertBatch || command == nativewire.CommandReplaceBatch {
+		sections = append(sections,
+			nativewire.Section{ID: nativewire.SectionDocumentFormat, Bytes: binary.AppendUvarint(nil, uint64(nativewire.DocumentFormatJSON))},
+			nativewire.Section{ID: nativewire.SectionDocuments, Bytes: nativewire.AppendByteVector(nil, documents...)},
+		)
+	}
+	if command == nativewire.CommandReplaceBatch {
+		sections = append(sections, nativewire.Section{ID: nativewire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)})
+	}
+	return raftentry.CommandEntryV1{
+		Decoded: nativewire.DeterministicEntry{Sections: sections},
+		Target:  raftentry.TargetIdentityV1{CommandID: command},
+	}
+}
+
+func deterministicDeleteBatchEntry(t *testing.T, collection, idempotency string, ids [][]byte) []byte {
+	t.Helper()
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandDeleteBatch, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: nativewire.SectionCollectionRef, Bytes: deterministicTestCollectionNameRef(collection)},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, ids...)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+	}
+	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
+
+func deterministicMutationEntry(t *testing.T, command nativewire.CommandID, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte, extra []nativewire.Section) []byte {
+	t.Helper()
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: command, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: nativewire.SectionCollectionRef, Bytes: deterministicTestCollectionNameRef(collection)},
+		{ID: nativewire.SectionDocumentFormat, Bytes: binary.AppendUvarint(nil, uint64(format))},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, ids...)},
+		{ID: nativewire.SectionDocuments, Bytes: nativewire.AppendByteVector(nil, documents...)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+	}
+	sections = append(sections, extra...)
+	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
+
+func deterministicTestCollectionNameRef(collection string) []byte {
+	return append([]byte{deterministicCollectionRefTagName}, collection...)
+}
+
+func testBSONDocument(t *testing.T, document bson.D) []byte {
+	t.Helper()
+	encoded, err := bson.Marshal(document)
+	if err != nil {
+		t.Fatalf("Marshal BSON: %v", err)
+	}
+	return encoded
 }
 
 func applyCreateSequence(t *testing.T, db *backenddb.DB, entries ...[]byte) []raftentry.ApplyResultV1 {
@@ -1174,3 +2112,76 @@ func (s *countingCommandWALApplySeam) Finalize(db *backenddb.DB, handle commandw
 }
 
 func (s *countingCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply.Handle) {}
+
+type failingFinalizeCommandWALApplySeam struct {
+	appendCalls   int
+	finalizeCalls int
+	abortCalls    int
+	finalizeErr   error
+}
+
+func (s *failingFinalizeCommandWALApplySeam) Append(db *backenddb.DB, frame commandwalapply.LoweredFrame, meta commandwalapply.ApplyMetadata, opts commandwalapply.Options) (commandwalapply.Handle, commandwalapply.Result, error) {
+	s.appendCalls++
+	return commandwalapply.Append(db, frame, meta, opts)
+}
+
+func (s *failingFinalizeCommandWALApplySeam) Finalize(db *backenddb.DB, handle commandwalapply.Handle, meta commandwalapply.ApplyMetadata, opts commandwalapply.Options) (commandwalapply.Result, error) {
+	s.finalizeCalls++
+	if s.finalizeErr != nil {
+		return commandwalapply.Result{}, s.finalizeErr
+	}
+	return commandwalapply.Finalize(db, handle, meta, opts)
+}
+
+func (s *failingFinalizeCommandWALApplySeam) Abort(db *backenddb.DB, handle commandwalapply.Handle) {
+	s.abortCalls++
+	commandwalapply.Abort(db, handle)
+}
+
+var benchmarkCollectionMutationSink collectionMutationV1
+
+func BenchmarkDecodeLowerCollectionMutationV1(b *testing.B) {
+	ids := make([][]byte, 16)
+	documents := make([][]byte, 16)
+	for i := range ids {
+		ids[i] = []byte("doc-" + string(rune('a'+i)))
+		documents[i] = []byte(`{"name":"` + string(rune('a'+i)) + `"}`)
+	}
+	raw := deterministicMutationEntryForBenchmark(b, nativewire.CommandInsertBatch, "bench", "bench:insert", nativewire.DocumentFormatJSON, ids, documents, nil)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		entry, err := raftentry.DecodeCommandEntryV1(raw, raftentry.DecodeOptions{})
+		if err != nil {
+			b.Fatalf("DecodeCommandEntryV1: %v", err)
+		}
+		mutation, err := lowerCollectionMutationV1(entry, nativewire.Limits{})
+		if err != nil {
+			b.Fatalf("lowerCollectionMutationV1: %v", err)
+		}
+		benchmarkCollectionMutationSink = mutation
+	}
+}
+
+func deterministicMutationEntryForBenchmark(b *testing.B, command nativewire.CommandID, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte, extra []nativewire.Section) []byte {
+	b.Helper()
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: command, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: nativewire.SectionCollectionRef, Bytes: deterministicTestCollectionNameRef(collection)},
+		{ID: nativewire.SectionDocumentFormat, Bytes: binary.AppendUvarint(nil, uint64(format))},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, ids...)},
+		{ID: nativewire.SectionDocuments, Bytes: nativewire.AppendByteVector(nil, documents...)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+	}
+	sections = append(sections, extra...)
+	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		b.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		b.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
