@@ -3,6 +3,7 @@
 package commandwalapply
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
@@ -146,11 +147,11 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	if handle.db != db {
 		return Result{}, fmt.Errorf("%w: command wal apply finalize handle belongs to a different DB", backenddb.ErrCommandWALRejected)
 	}
-	if handle.staging != nil {
-		defer handle.staging.release()
-	}
 	if err := db.PublishStagedCommandWALNoop(handle.intent, opts.Sync); err != nil {
 		return Result{}, err
+	}
+	if handle.staging != nil {
+		handle.staging.release()
 	}
 	applied := uint64(0)
 	if state := db.State(); state != nil {
@@ -194,6 +195,13 @@ func validateTestNoopFrame(frame LoweredFrame) error {
 	}
 	if len(ops) != 0 {
 		return fmt.Errorf("%w: command wal apply test frame must be an empty RawKVBatch", backenddb.ErrCommandWALUnsupported)
+	}
+	canonical, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		return fmt.Errorf("%w: command wal apply canonical test frame unavailable: %v", backenddb.ErrCommandWALRejected, err)
+	}
+	if !bytes.Equal(frame.Payload, canonical) {
+		return fmt.Errorf("%w: command wal apply test frame must be the canonical empty RawKVBatch", backenddb.ErrCommandWALRejected)
 	}
 	return nil
 }

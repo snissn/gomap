@@ -1,6 +1,7 @@
 package commandwalapply
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -394,6 +395,18 @@ func TestRejectedInputFailsBeforeAppend(t *testing.T) {
 			wantErr: backenddb.ErrCommandWALUnsupported,
 			wantMsg: "empty RawKVBatch",
 		},
+		{
+			name: "non canonical empty raw kv payload",
+			frame: LoweredFrame{
+				Class:         LoweredFrameClassTestNoop,
+				Kind:          commitlog.CommandKindRawKVBatch,
+				Scope:         commitlog.CommandScopeRawKV,
+				PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+				Payload:       nonCanonicalEmptyRawKVBatchPayload(),
+			},
+			wantErr: backenddb.ErrCommandWALRejected,
+			wantMsg: "canonical empty RawKVBatch",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -520,4 +533,12 @@ func assertNoopFrame(t *testing.T, env commitlog.CommandEnvelope, wantLSN uint64
 	if len(ops) != 0 {
 		t.Fatalf("noop frame ops=%+v, want empty", ops)
 	}
+}
+
+func nonCanonicalEmptyRawKVBatchPayload() []byte {
+	payload := make([]byte, 10)
+	binary.LittleEndian.PutUint16(payload[0:2], 2)
+	binary.LittleEndian.PutUint32(payload[2:6], 0)
+	binary.LittleEndian.PutUint32(payload[6:10], 1)
+	return payload
 }

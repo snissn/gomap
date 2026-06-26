@@ -573,6 +573,9 @@ func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint6
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
 	}
+	if intent == nil || commandWALIntentFrameAlreadyAppended(intent) {
+		return db.appendPublicCommandWALIntent(intent, sync)
+	}
 	unlockCommandWALPublish, err := db.LockCommandWALPublishWithBarriers()
 	if err != nil {
 		return 0, err

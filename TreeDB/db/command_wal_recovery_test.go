@@ -951,6 +951,55 @@ func TestPublishCommandWALNoopNilIntentSkipsRawPublishBarriers(t *testing.T) {
 	}
 }
 
+func TestAppendCommandWALIntentNoAppendSkipsRawPublishBarriers(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	barrierErr := errors.New("raw publish barrier ran")
+	var barrierCalled atomic.Bool
+	unregister := db.RegisterCommandWALRawPublishBarrier(func() error {
+		barrierCalled.Store(true)
+		return barrierErr
+	})
+	defer unregister()
+
+	if lsn, err := db.AppendCommandWALIntent(nil, false); err != nil || lsn != 0 {
+		t.Fatalf("AppendCommandWALIntent nil = (%d, %v), want zero nil", lsn, err)
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("nil command WAL intent append ran raw publish barrier")
+	}
+
+	payload, err := commitlog.EncodeRawKVBatchPayload(nil)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := db.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	lsn, err := db.AppendStagedCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent: %v", err)
+	}
+	barrierCalled.Store(false)
+	got, err := db.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent already-appended: %v", err)
+	}
+	if got != lsn {
+		t.Fatalf("AppendCommandWALIntent already-appended lsn=%d want %d", got, lsn)
+	}
+	if barrierCalled.Load() {
+		t.Fatalf("already-appended command WAL intent ran raw publish barrier")
+	}
+	if err := db.PublishStagedCommandWALNoop(intent, false); err != nil {
+		t.Fatalf("PublishStagedCommandWALNoop: %v", err)
+	}
+}
+
 func TestCommandWALRawPublishBarrierUnregisterCompacts(t *testing.T) {
 	db := &DB{commandWAL: true}
 	var calls []int
