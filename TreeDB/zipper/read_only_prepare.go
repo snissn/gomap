@@ -54,6 +54,12 @@ type ApplyOptions struct {
 	// point-only leaf spans, no cold build, no maintenance rewrite, and bounded
 	// workers. Unsupported runs fail closed to the recursive apply fallback.
 	SpanNativeApply bool
+	// SpanNativeAllowMaintenancePointOps lets trusted ordered-root callers use
+	// span-native apply for point-delete maintenance plans whose tombstone/edge
+	// semantics are intentionally preserved. Raw DB apply must leave this false so
+	// delete maintenance keeps using the recursive path that prunes and rebalances
+	// empty or underfull pages.
+	SpanNativeAllowMaintenancePointOps bool
 	// SpanNativeForceFallbackReason forces a prepared span-native candidate to use
 	// the safe recursive/parallel fallback and report this stable reason string.
 	// It is used by checkpoint/close drains and emergency gates that must not
@@ -122,6 +128,11 @@ type ReadOnlyPrepareOptions struct {
 	// ValidateLeafSpans or exact span ownership after PrepareReadOnlyPlan returns.
 	DiscardLeafSpans bool
 	LeafSpanCallback func(ReadOnlyLeafSpan)
+
+	// AllowMaintenancePointLeafSpans marks point-delete maintenance plans as exact
+	// prepared-output ownership for ordered-root span-native apply. Normal raw DB
+	// maintenance leaves this false so the prepared spans remain planning hints.
+	AllowMaintenancePointLeafSpans bool
 
 	leafSpans []ReadOnlyLeafSpan
 	keyArena  []byte
@@ -783,7 +794,8 @@ func spanNativeApplyFallbackReason(opts ApplyOptions, summary ReadOnlyLeafSpanSu
 	if summary.ColdBuild {
 		return 0, "cold_build"
 	}
-	if summary.Maintenance && summary.PointOps <= 0 {
+	allowMaintenancePointOps := opts.SpanNativeAllowMaintenancePointOps && summary.PointOps > 0 && summary.DeleteRanges == 0
+	if summary.Maintenance && !allowMaintenancePointOps {
 		return 0, "maintenance"
 	}
 	if summary.DeleteRanges > 0 {
@@ -844,6 +856,9 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 			// whole-root from sparse/partial replacement sets. OmitKeys plans use nil
 			// bounds for point-only spans and are planning-only, not execution-safe.
 			opts.ReadOnlyPrepare.OmitKeys = false
+			if opts.SpanNativeAllowMaintenancePointOps {
+				opts.ReadOnlyPrepare.AllowMaintenancePointLeafSpans = true
+			}
 		}
 		prepareStart := time.Now()
 		prepared, err = z.PrepareReadOnly(rootID, b, opts.ReadOnlyPrepare)
@@ -871,7 +886,7 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 		} else if b != nil {
 			spanOps = b.SortedEntries()
 		}
-		spanResult, used, spanErr := z.applySpanNativeWithPrepared(rootID, spanOps, prepared, workers, opts.ParallelApplyWorkerPool)
+		spanResult, used, spanErr := z.applySpanNativeWithPrepared(rootID, spanOps, prepared, opts, workers, opts.ParallelApplyWorkerPool)
 		if used {
 			spanResult.ReadOnlyPrepare = prepared
 			spanResult.ReadOnlyPrepareNs = preparedNs
@@ -961,7 +976,7 @@ func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []
 		maintenance = false
 	}
 	result.Maintenance = maintenance
-	result.ExactLeafSpans = true
+	result.ExactLeafSpans = !maintenance || opts.AllowMaintenancePointLeafSpans
 	if rootID == 0 {
 		result.ColdBuild = true
 		result.ExactLeafSpans = true

@@ -73,7 +73,11 @@ func TestSpanNativeApplyPointDeleteAndOverwriteEdgeParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("serial Apply: %v", err)
 			}
-			result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{SpanNativeApply: true, ParallelApplyConcurrency: 2})
+			result, err := native.ApplyWithOptions(nativeRoot, delta, ApplyOptions{
+				SpanNativeApply:                    true,
+				SpanNativeAllowMaintenancePointOps: true,
+				ParallelApplyConcurrency:           2,
+			})
 			if err != nil {
 				t.Fatalf("span-native ApplyWithOptions: %v", err)
 			}

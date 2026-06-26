@@ -317,8 +317,8 @@ func (g *spanNativeLeafLogOutputGate) persistLeafPageBatchDataToLog(z *Zipper, l
 	return out, err
 }
 
-func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {
-	if !validateSpanNativePreparedPlan(ops, prepared) {
+func (z *Zipper) applySpanNativeWithPrepared(rootID uint64, ops []batch.Entry, prepared ReadOnlyPrepareResult, opts ApplyOptions, workers int, workerPool *ApplyWorkerPool) (ApplyResult, bool, error) {
+	if !validateSpanNativePreparedPlan(ops, prepared, opts) {
 		return ApplyResult{}, false, nil
 	}
 
@@ -603,8 +603,11 @@ func recordSpanNativeWorkUnitMetrics(metrics *adaptive.Metrics, ranges []ReadOnl
 	}
 }
 
-func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareResult) bool {
+func validateSpanNativePreparedPlan(ops []batch.Entry, prepared ReadOnlyPrepareResult, opts ApplyOptions) bool {
 	if prepared.OmitKeys || prepared.DeleteRanges != 0 || prepared.ColdBuild || !prepared.ExactLeafSpans || len(prepared.LeafSpans) == 0 {
+		return false
+	}
+	if prepared.Maintenance && !(opts.SpanNativeAllowMaintenancePointOps && prepared.PointOps > 0) {
 		return false
 	}
 	spans := prepared.LeafSpans

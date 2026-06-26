@@ -723,9 +723,15 @@ func TestOrderedRootSpanNativePublishUsesSpanNativeWhenAdmitted(t *testing.T) {
 	if !rawApplyOpts.SpanNativeApply {
 		t.Fatal("fixture did not request raw span-native apply")
 	}
+	if rawApplyOpts.SpanNativeAllowMaintenancePointOps {
+		t.Fatalf("raw apply options enabled maintenance point span-native opt-in: %+v", rawApplyOpts)
+	}
 	orderedApplyOpts := db.orderedRootDeltaBatchApplyOptions(systemRootOrderedPublishOptions(db))
 	if !orderedApplyOpts.SpanNativeApply {
 		t.Fatalf("ordered-root delta batch span-native apply disabled; matrix row %q expects admitted warm apply", row.ID)
+	}
+	if !orderedApplyOpts.SpanNativeAllowMaintenancePointOps {
+		t.Fatalf("ordered-root apply options did not enable maintenance point span-native opt-in: %+v", orderedApplyOpts)
 	}
 	if got := orderedApplyOpts.SpanNativeForceFallbackReason; got != "" {
 		t.Fatalf("ordered-root fallback reason hook=%q, want empty", got)

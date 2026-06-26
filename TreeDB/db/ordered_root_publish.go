@@ -1010,6 +1010,9 @@ func (db *DB) publishOrderedRootDeltaBatch(baseRoot uint64, delta *batch.Batch, 
 
 func (db *DB) orderedRootDeltaBatchApplyOptions(opts orderedRootPublishOptions) zipper.ApplyOptions {
 	applyOpts := db.flushApplyOptions()
+	if applyOpts.SpanNativeApply {
+		applyOpts.SpanNativeAllowMaintenancePointOps = true
+	}
 	if opts.spanNativeFallback != "" {
 		applyOpts.SpanNativeForceFallbackReason = opts.spanNativeFallback
 	}

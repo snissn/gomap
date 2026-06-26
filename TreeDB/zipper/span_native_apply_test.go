@@ -33,7 +33,8 @@ func TestSpanNativeApplyEligibilityFallbackReasons(t *testing.T) {
 		{name: "forced-memory", opts: ApplyOptions{SpanNativeApply: true, SpanNativeForceFallbackReason: "memory_or_emergency_cap"}, summary: base, want: "memory_or_emergency_cap"},
 		{name: "forced-close", opts: ApplyOptions{SpanNativeApply: true, SpanNativeForceFallbackReason: "close_or_checkpoint"}, summary: base, want: "close_or_checkpoint"},
 		{name: "cold", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.ColdBuild = true }), want: "cold_build"},
-		{name: "point-delete-maintenance-bit", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.Maintenance = true }), want: ""},
+		{name: "point-delete-maintenance-bit-default", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.Maintenance = true }), want: "maintenance"},
+		{name: "point-delete-maintenance-bit-ordered-root-opt-in", opts: ApplyOptions{SpanNativeApply: true, SpanNativeAllowMaintenancePointOps: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.Maintenance = true }), want: ""},
 		{name: "maintenance-without-point-ops", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) {
 			s.Maintenance = true
 			s.PointOps = 0
