@@ -80,6 +80,8 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("column_publish_build_column_delta_ns/doc", stats.ColumnPublishBuildColumnDelta)
 	reportDuration("column_publish_build_system_delta_ns/doc", stats.ColumnPublishBuildSystemDelta)
 	reportDuration("column_publish_commit_ns/doc", stats.ColumnPublishCommit)
+	reportDuration("column_publish_document_extraction_ns/doc", stats.ColumnPublishDocumentExtraction)
+	reportDuration("column_publish_declared_column_encoding_ns/doc", stats.ColumnPublishDeclaredColumnEncoding)
 	reportDuration("column_publish_asset_prepare_ns/doc", stats.ColumnPublishAssetPreparation)
 	reportDuration("column_publish_manifest_encode_ns/doc", stats.ColumnPublishManifestEncode)
 	reportDuration("column_publish_asset_closure_ns/doc", stats.ColumnPublishAssetClosureValidation)
@@ -123,6 +125,21 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 		if stats.RetainedPayloadSemanticStreamBlocks > 0 {
 			b.ReportMetric(float64(stats.RetainedPayloadSemanticStreamBlocks)/float64(batches), "retained_payload_semantic_stream_blocks/batch")
 		}
+	}
+}
+
+func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B(t *testing.T) {
+	result := testing.Benchmark(func(b *testing.B) {
+		benchmarkReportCollectionInsertStats(b, 10, 1, collections.CollectionInsertStats{
+			ColumnPublishDocumentExtraction:     20 * time.Microsecond,
+			ColumnPublishDeclaredColumnEncoding: 30 * time.Microsecond,
+		})
+	})
+	if got := result.Extra["column_publish_document_extraction_ns/doc"]; got <= 0 {
+		t.Fatalf("document extraction metric=%v want positive", got)
+	}
+	if got := result.Extra["column_publish_declared_column_encoding_ns/doc"]; got <= 0 {
+		t.Fatalf("declared column encoding metric=%v want positive", got)
 	}
 }
 
