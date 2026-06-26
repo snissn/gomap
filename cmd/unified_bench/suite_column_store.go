@@ -3811,6 +3811,8 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `build_column_delta_callback` | %.3f | %.1f |\n", stats.ColumnPublishBuildColumnDeltaDurationMS, stats.ColumnPublishBuildColumnDeltaNsPerRow))
 		sb.WriteString(fmt.Sprintf("| `build_system_delta_callback` | %.3f | %.1f |\n", stats.ColumnPublishBuildSystemDeltaDurationMS, stats.ColumnPublishBuildSystemDeltaNsPerRow))
 		sb.WriteString(fmt.Sprintf("| `publish_commit_total` | %.3f | %.1f |\n", stats.ColumnPublishCommitDurationMS, stats.ColumnPublishCommitNsPerRow))
+		sb.WriteString(fmt.Sprintf("| `document_extraction` | %.3f |  |\n", stats.ColumnPublishDocumentExtractionDurationMS))
+		sb.WriteString(fmt.Sprintf("| `declared_column_encoding` | %.3f |  |\n", stats.ColumnPublishDeclaredColumnDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_preparation` | %.3f |  |\n", stats.ColumnPublishAssetPreparationDurationMS))
 		sb.WriteString(fmt.Sprintf("| `manifest_encode` | %.3f |  |\n", stats.ColumnPublishManifestEncodeDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_closure_validation` | %.3f |  |\n", stats.ColumnPublishAssetClosureDurationMS))
