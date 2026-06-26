@@ -89,6 +89,14 @@ type LeafPageLogCurrentSegmentProvider interface {
 	CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error)
 }
 
+// LeafPageLogCachedWrapperOwner marks leaf-page logs installed by the public
+// cached TreeDB wrapper. Exhaustive compact treats these separately from
+// caller-owned logs with similar concurrency or segment-reporting capabilities
+// because cached owners also need background-flush and backlog quiescence.
+type LeafPageLogCachedWrapperOwner interface {
+	CompactStorageCachedWrapperOwner() bool
+}
+
 type LeafPageLogSegmentRegistrationObserver interface {
 	MarkLeafPageLogSegmentsRegistered([]LeafPageLogSegment)
 }
