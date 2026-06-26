@@ -1358,7 +1358,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	}
 	predicates := part.DenseInt64Span.Predicates
 	if groupPredicate != nil {
-		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, *groupPredicate)
+		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.GroupValid, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, *groupPredicate)
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
@@ -1368,6 +1368,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 		Cardinality:      part.DenseInt64Span.Cardinality,
 		DictionaryByCode: part.DenseInt64Span.DictionaryByCode,
 		GroupCodes:       part.DenseInt64Span.GroupCodes,
+		GroupValid:       part.DenseInt64Span.GroupValid,
 		Values:           part.DenseInt64Span.Values,
 		Predicates:       predicates,
 	}
@@ -1375,9 +1376,10 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	return part, nil
 }
 
-func densePredicateFromDictionaryCodes(codes []uint32, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
+func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
 	allowed := make([]uint64, (cardinality+63)/64)
 	matchedLiterals := 0
+	missingMatchesEmpty := false
 	for code := 0; code < cardinality; code++ {
 		value, ok := dictionaryByCode[int64(code)]
 		if !ok {
@@ -1392,10 +1394,16 @@ func densePredicateFromDictionaryCodes(codes []uint32, dictionaryByCode map[int6
 			break
 		}
 	}
-	if matchedLiterals == 0 {
+	for _, target := range spec.values {
+		if target == "" {
+			missingMatchesEmpty = true
+			break
+		}
+	}
+	if matchedLiterals == 0 && !missingMatchesEmpty {
 		return columnTypedColumnDensePredicatePart{RejectsAll: true}, nil
 	}
-	return columnTypedColumnDensePredicatePart{Codes: codes, Allowed: allowed}, nil
+	return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed, MissingMatchesEmpty: missingMatchesEmpty}, nil
 }
 
 type columnTypedColumnTimeOrderCodeColumn struct {

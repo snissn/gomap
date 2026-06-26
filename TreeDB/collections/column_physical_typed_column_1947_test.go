@@ -225,6 +225,22 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataMissingStrings216
 		t.Fatalf("q2 groups=%v want %v raw=%+v", got, wantQ2, q2Result.Groups)
 	}
 
+	feedCreate := append(append([]ColumnPhysicalQueryPredicate(nil), commitCreate...), ColumnPhysicalQueryPredicate{
+		Column: "event",
+		Kind:   ColumnPhysicalQueryPredicateInList,
+		Values: []string{"app.bsky.feed.post", "app.bsky.feed.repost", "app.bsky.feed.like"},
+	})
+	q3 := ColumnPhysicalQueryRequest{
+		Kind:        ColumnPhysicalQueryGroupHourCount,
+		GroupColumn: "event",
+		ValueColumn: "time_us",
+		Predicates:  feedCreate,
+	}
+	q3Result := runNullableFullDataDenseQ3Query3078(t, collection, "q3", q3, len(docs), len(feedCreate), 3, 3)
+	if got, want := columnPhysicalGroupHourMap3078(q3Result.Groups), map[string]map[int]int{"app.bsky.feed.post": {0: 3}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("q3 groups=%v want %v raw=%+v", got, want, q3Result.Groups)
+	}
+
 	postCreate := append(append([]ColumnPhysicalQueryPredicate(nil), commitCreate...), ColumnPhysicalQueryPredicate{Column: "event", Value: "app.bsky.feed.post"})
 	q4 := ColumnPhysicalQueryRequest{
 		Kind:        ColumnPhysicalQueryGroupMinInt64,
@@ -255,6 +271,12 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataAllMissingQ13075(
 	q1Result := runNullableFullDataDenseQ1Query3075(t, collection, "q1 all missing", q1, len(docs), 0, 0, len(docs))
 	if got, want := columnPhysicalGroupCountMap2165(q1Result.Groups), map[string]int{"": len(docs)}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("q1 all-missing groups=%v want %v raw=%+v", got, want, q1Result.Groups)
+	}
+
+	q3 := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupHourCount, GroupColumn: "event", ValueColumn: "time_us"}
+	q3Result := runNullableFullDataDenseQ3Query3078(t, collection, "q3 all missing", q3, len(docs), 0, 0, len(docs))
+	if got, want := columnPhysicalGroupHourMap3078(q3Result.Groups), map[string]map[int]int{"": {0: len(docs)}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("q3 all-missing groups=%v want %v raw=%+v", got, want, q3Result.Groups)
 	}
 }
 
@@ -845,6 +867,35 @@ func runNullableFullDataDenseQ2Query2165(tb testing.TB, collection *Collection, 
 	return direct
 }
 
+func runNullableFullDataDenseQ3Query3078(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, wantRows, wantPredicates, wantMatched, wantReduce int) ColumnPhysicalQueryResult {
+	tb.Helper()
+	direct, err := collection.RunColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("RunColumnPhysicalQuery(%s): %v", name, err)
+	}
+	assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, name+" direct", direct.Diagnostics, wantRows, wantPredicates, wantMatched, wantReduce)
+	assertNullableFullDataDenseQ3Diagnostics3078(tb, name+" direct", direct.Diagnostics)
+
+	runner, err := collection.PrepareColumnPhysicalQuery(req)
+	if err != nil {
+		tb.Fatalf("PrepareColumnPhysicalQuery(%s): %v", name, err)
+	}
+	defer func() { _ = runner.Close() }()
+	var prepared ColumnPhysicalQueryResult
+	for run := 0; run < 2; run++ {
+		prepared, err = runner.Run()
+		if err != nil {
+			tb.Fatalf("prepared %s run %d: %v", name, run, err)
+		}
+		assertColumnPhysicalJSONBenchTypedColumnDiagnostics1947(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics, 0, wantPredicates, wantMatched, wantReduce)
+		assertNullableFullDataDenseQ3Diagnostics3078(tb, fmt.Sprintf("%s prepared %d", name, run), prepared.Diagnostics)
+		if !reflect.DeepEqual(prepared.Groups, direct.Groups) {
+			tb.Fatalf("%s prepared run %d groups=%+v want direct %+v", name, run, prepared.Groups, direct.Groups)
+		}
+	}
+	return direct
+}
+
 func runNullableFullDataTopKFastPath2878(tb testing.TB, collection *Collection, name string, req ColumnPhysicalQueryRequest, want []ColumnPhysicalQueryGroup, assertDiag func(testing.TB, string, ColumnPhysicalQueryDiagnostics)) {
 	tb.Helper()
 	direct, err := collection.RunColumnPhysicalQuery(req)
@@ -931,10 +982,36 @@ func assertNullableFullDataDenseQ2Diagnostics2165(tb testing.TB, label string, d
 	}
 }
 
+func assertNullableFullDataDenseQ3Diagnostics3078(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+	tb.Helper()
+	if !diag.DenseGroupHourCountUsed || diag.DenseGroupCountUsed || diag.DenseGroupCountDistinctUsed || diag.DenseInt64SpanUsed || diag.SortedGroupedDistinctUsed || diag.TimeOrderTopKUsed {
+		tb.Fatalf("%s diagnostics=%+v want only dense q3 group-hour fast path", label, diag)
+	}
+	if diag.SortKeyPrefixPlanned || diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
+		tb.Fatalf("%s dense q3 diagnostics used sort-key pruning: %+v", label, diag)
+	}
+	if diag.DecodedBlocks == 0 || diag.DecodedPayloadBytes == 0 {
+		tb.Fatalf("%s dense q3 diagnostics did not report typed-column decode work: %+v", label, diag)
+	}
+}
+
 func columnPhysicalGroupCountMap2165(groups []ColumnPhysicalQueryGroup) map[string]int {
 	out := make(map[string]int, len(groups))
 	for _, group := range groups {
 		out[group.Key] = group.Count
+	}
+	return out
+}
+
+func columnPhysicalGroupHourMap3078(groups []ColumnPhysicalQueryGroup) map[string]map[int]int {
+	out := make(map[string]map[int]int, len(groups))
+	for _, group := range groups {
+		byHour := out[group.Key]
+		if byHour == nil {
+			byHour = make(map[int]int, 1)
+			out[group.Key] = byHour
+		}
+		byHour[group.Hour] = group.Count
 	}
 	return out
 }
