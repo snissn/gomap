@@ -1465,6 +1465,9 @@ func (r *columnTypedColumnPhysicalRangePartReader) readRange(offset int, length 
 }
 
 func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, allowDenseGroupCountDistinct bool) ([]typedColumnPreparedColumnRequest, bool, error) {
+	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) {
+		return nil, false, nil
+	}
 	requests := make([]typedColumnPreparedColumnRequest, 0, 4+len(plan.PredicateSpecs))
 	addString := func(column string, role typedcolumn.ColumnExecutionRole, op columnsemantics.Operation) error {
 		adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(plan.Fields, column)
