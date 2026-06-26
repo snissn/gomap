@@ -720,7 +720,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+	for _, want := range []string{"## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
 		}
@@ -2049,6 +2049,15 @@ func TestColumnStoreSuiteReportsFirstTouchAfterOpenLaneM3070(t *testing.T) {
 	if firstTouch.RawHash != oneShot.RawHash || firstTouch.ProductionHash != oneShot.ProductionHash {
 		t.Fatalf("first-touch hashes raw/prod=%016x/%016x want one-shot %016x/%016x", firstTouch.RawHash, firstTouch.ProductionHash, oneShot.RawHash, oneShot.ProductionHash)
 	}
+	jsonbenchModes := make(map[string]bool)
+	for _, cell := range report.JSONBenchCells {
+		if cell.Query == columnStoreQueryQ1 {
+			jsonbenchModes[cell.QueryMode] = true
+		}
+	}
+	if !jsonbenchModes[columnStoreQueryModeOneShotEndToEnd] || !jsonbenchModes[columnStoreQueryModeFirstTouchAfterOpen] || !jsonbenchModes[columnStoreQueryModeHotPreparedRun] {
+		t.Fatalf("JSONBench cells missing one-shot/first-touch/hot-prepared q1 modes: modes=%+v cells=%+v", jsonbenchModes, report.JSONBenchCells)
+	}
 	if firstTouch.PrepareSetupDurationMS <= firstTouch.PlannerDurationMS {
 		t.Fatalf("first-touch prepare/setup did not include reopen/open setup: first=%+v one_shot=%+v", firstTouch, oneShot)
 	}
@@ -2363,6 +2372,7 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		ProjectedColumns:         2,
 		PredicateCount:           1,
 		TypedCellsVisited:        26,
+		TypedCellsVisitedBasis:   "rows_scanned_x_projected_columns",
 		RowMaterializations:      1,
 		DocumentMaterializations: 2,
 		SortTopKPruningUsed:      true,
@@ -2402,14 +2412,17 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	if got, want := cell.TotalQueryDurationMS, q.TotalQueryDurationMS; got != want {
 		t.Fatalf("total_query_duration_ms=%v want %v", got, want)
 	}
-	if got, want := cell.HotRunDurationMS, 6.0; got != want {
-		t.Fatalf("hot_run_duration_ms=%v want %v", got, want)
+	if got := cell.HotRunDurationMS; got != 0 {
+		t.Fatalf("direct one-shot hot_run_duration_ms=%v want unset", got)
 	}
 	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
 		t.Fatalf("rows_scanned=%d want %d", got, want)
 	}
 	if got, want := cell.TypedCellsVisited, q.TypedCellsVisited; got != want {
 		t.Fatalf("typed_cells_visited=%d want %d", got, want)
+	}
+	if got, want := cell.TypedCellsVisitedBasis, q.TypedCellsVisitedBasis; got != want {
+		t.Fatalf("typed_cells_visited_basis=%q want %q", got, want)
 	}
 	if got, want := cell.DecodedBytes, q.DecodedBytes; got != want {
 		t.Fatalf("decoded_bytes=%d want %d", got, want)
