@@ -200,6 +200,36 @@ func TestSelectedTreeDBStats(t *testing.T) {
 	}
 }
 
+func TestSelectedTreeDBStatsTokenizedOutputDropsFreeFormTriageValues(t *testing.T) {
+	const prefix = "treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish."
+	stats := selectedTreeDBStats(map[string]string{
+		"treedb.publish.ordered_root_delta_group.calls_total": "3",
+		prefix + "context":          "full ordered-root iterator publish",
+		prefix + "detail":           "warm ordered-root delta batches are the runtime candidate surface",
+		prefix + "fallback_reason":  "span_native_not_implemented",
+		prefix + "status":           "fallback",
+		prefix + "selected_workers": "6",
+	})
+
+	var out bytes.Buffer
+	writeTreeDBStats(&out, "treedb_stats_final", stats)
+	text := strings.TrimSpace(out.String())
+	if strings.Contains(text, prefix+"context=") || strings.Contains(text, prefix+"detail=") {
+		t.Fatalf("tokenized stats output kept free-form triage fields: %q", text)
+	}
+	if !strings.Contains(text, prefix+"fallback_reason=span_native_not_implemented") {
+		t.Fatalf("tokenized stats output dropped token-safe triage label: %q", text)
+	}
+	for _, field := range strings.Fields(text) {
+		if field == "treedb_stats_final" {
+			continue
+		}
+		if !strings.Contains(field, "=") {
+			t.Fatalf("tokenized stats output contains non key=value field %q in %q", field, text)
+		}
+	}
+}
+
 func TestTreeDBStatsDeltaAndPhaseMetrics(t *testing.T) {
 	before := map[string]string{
 		"treedb.publish.ordered_root_delta_group.calls_total":                                                                   "2",
