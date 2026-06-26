@@ -709,6 +709,7 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	}
 	profileFinalizeErr := finishRuntimeProfiles()
 	runtimeProfilesActive = false
+	queryPhaseStats := cloneStringMap(db.Stats())
 
 	var firstTouchQueries []columnStoreQueryMetric
 	var firstTouchParity map[string]columnStoreParity
@@ -855,7 +856,11 @@ func runColumnStoreSuite(baseCfg BenchConfig, opts columnStoreSuiteOptions) (str
 	populateColumnStoreThroughputInterpretations(report.Queries)
 
 	md := renderColumnStoreSuiteMarkdown(report)
-	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, db.Stats(), checkpointDuration)
+	benchRunStats := db.Stats()
+	if firstTouchAfterOpen {
+		benchRunStats = queryPhaseStats
+	}
+	run := columnStoreBenchRun(baseCfg, profile, dataDir, report, benchRunStats, checkpointDuration)
 	if strings.TrimSpace(opts.ProfileDir) != "" {
 		report.Artifacts = columnStoreArtifactPathsForProfileDir(opts.ProfileDir, baseCfg, opts.RunBenchprof)
 		report.Artifacts = columnStoreSuitePruneMissingRuntimeDeltaArtifacts(report.Artifacts)
