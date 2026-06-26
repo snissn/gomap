@@ -1459,6 +1459,7 @@ type columnPhysicalQueryExecutor struct {
 	kind              ColumnPhysicalQueryKind
 	readIntegrity     ColumnAssetReadIntegrity
 	topK              int
+	valueColumn       string
 	projected         []string
 	groupIdx          int
 	valueIdx          int
@@ -1493,6 +1494,7 @@ func newColumnPhysicalQueryExecutor(cfg ColumnStoreConfig, req ColumnPhysicalQue
 		kind:              req.Kind,
 		readIntegrity:     req.ColumnAssetReadIntegrity,
 		topK:              req.TopK,
+		valueColumn:       req.ValueColumn,
 		groupIdx:          -1,
 		valueIdx:          -1,
 		distinctIdx:       -1,
@@ -2130,13 +2132,17 @@ func (e *columnPhysicalQueryExecutor) groups() []ColumnPhysicalQueryGroup {
 		}
 	case ColumnPhysicalQuerySumSecondOfDaySquare:
 		if e.int64SumRows > 0 {
-			e.resultGroups = append(e.resultGroups, ColumnPhysicalQueryGroup{Key: "time_us_second_of_day_square", Count: e.int64SumRows, Int64: e.int64Sum})
+			e.resultGroups = append(e.resultGroups, ColumnPhysicalQueryGroup{Key: columnPhysicalQuerySumSecondOfDaySquareKey(e.valueColumn), Count: e.int64SumRows, Int64: e.int64Sum})
 		}
 	}
 	if e.topK == 0 {
 		sortColumnPhysicalQueryGroupsByKey(e.resultGroups)
 	}
 	return e.resultGroups
+}
+
+func columnPhysicalQuerySumSecondOfDaySquareKey(valueColumn string) string {
+	return valueColumn + "_second_of_day_square"
 }
 
 func finalizeColumnPhysicalQueryResultGroups(req ColumnPhysicalQueryRequest, result *ColumnPhysicalQueryResult) {
