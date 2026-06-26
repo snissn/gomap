@@ -2985,7 +2985,7 @@ func (m *CollectionManager) createCollectionWithCommandWALIntent(normalized Coll
 		if err != nil {
 			return nil, err
 		}
-		err = m.withCommandWALPublishCoordinator(func() error {
+		err = m.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			_, _, publishErr := m.db.PublishStagedOrderedRootDeltaGroupWithPreflightCommandWALContextAndSystemDeltaBuilder(ordered, preflight, intent, func(_ backenddb.CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return buildSystemDelta(rootIDs)
 			})

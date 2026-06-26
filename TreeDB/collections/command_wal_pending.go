@@ -334,7 +334,7 @@ func (c *Collection) publishCommandWALNoop(intent *backenddb.CommandWALIntent, s
 	if c == nil || c.db == nil {
 		return errCollectionDBNil
 	}
-	return c.withCommandWALPublishCoordinator(func() error {
+	return c.withCommandWALPublishCoordinatorForIntent(intent, func() error {
 		return c.db.PublishStagedCommandWALNoop(intent, sync)
 	})
 }
@@ -386,7 +386,7 @@ func (m *CollectionManager) publishCommandWALNoop(intent *backenddb.CommandWALIn
 	if m == nil || m.db == nil {
 		return errCollectionDBNil
 	}
-	return m.withCommandWALPublishCoordinator(func() error {
+	return m.withCommandWALPublishCoordinatorForIntent(intent, func() error {
 		return m.db.PublishStagedCommandWALNoop(intent, sync)
 	})
 }
@@ -428,6 +428,21 @@ func (m *CollectionManager) withCommandWALPublishCoordinator(fn func() error) er
 	return fn()
 }
 
+func (m *CollectionManager) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if intent == nil || !intent.StagedForPublish() {
+		return m.withCommandWALPublishCoordinator(fn)
+	}
+	unlock, err := m.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
 func (c *Collection) withCommandWALPublishCoordinator(fn func() error) error {
 	if fn == nil {
 		return nil
@@ -446,6 +461,21 @@ func (c *Collection) withCommandWALPublishCoordinator(fn func() error) error {
 	} else {
 		unlock, err = c.lockCommandWALPublishCoordinator()
 	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return fn()
+}
+
+func (c *Collection) withCommandWALPublishCoordinatorForIntent(intent *backenddb.CommandWALIntent, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	if intent == nil || !intent.StagedForPublish() {
+		return c.withCommandWALPublishCoordinator(fn)
+	}
+	unlock, err := c.lockCommandWALPublishCoordinatorWithHeldRawPublishLock()
 	if err != nil {
 		return err
 	}

@@ -36,6 +36,9 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if _, err := collections.NewCollectionManager(h.db).CreateCollectionWithCommandWALIntent(collectionMeta, intent); err != nil {
 		return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
 	}
+	if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
+		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+	}
 	logical, err := LogicalDigestV1ForDB(h.db, LogicalDigestOptionsV1{
 		ScopeRule:     meta.ScopeRule,
 		DatabaseScope: meta.DatabaseScope,

@@ -171,16 +171,20 @@ func Finalize(db *backenddb.DB, handle Handle, _ ApplyMetadata, opts Options) (R
 	if handle.db != db {
 		return Result{}, fmt.Errorf("%w: command wal apply finalize handle belongs to a different DB", backenddb.ErrCommandWALRejected)
 	}
+	if handle.staging != nil {
+		defer handle.staging.release()
+	}
+	if applied := appliedCommandLSN(db); applied >= handle.lsn {
+		return Result{
+			LSN:               handle.lsn,
+			Status:            StatusLocallyRootRecoverable,
+			AppliedCommandLSN: applied,
+		}, nil
+	}
 	if err := db.PublishStagedCommandWALNoop(handle.intent, opts.Sync); err != nil {
 		return Result{}, err
 	}
-	if handle.staging != nil {
-		handle.staging.release()
-	}
-	applied := uint64(0)
-	if state := db.State(); state != nil {
-		applied = state.AppliedCommandLSN
-	}
+	applied := appliedCommandLSN(db)
 	return Result{
 		LSN:               handle.lsn,
 		Status:            StatusLocallyRootRecoverable,
