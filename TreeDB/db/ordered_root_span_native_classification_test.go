@@ -125,6 +125,11 @@ var orderedRootDownstreamActions = map[orderedRootPublishDownstreamAction]struct
 	orderedRootActionImplementedCurrentReadOnlyOnly: {},
 }
 
+var orderedRootSupportedBlockerActions = map[string]orderedRootPublishDownstreamAction{
+	"#3032": orderedRootActionBlockedBy3032,
+	"#3033": orderedRootActionBlockedBy3033,
+}
+
 type orderedRootSpanNativeClassificationRow struct {
 	ID                string
 	Category          string
@@ -592,6 +597,19 @@ func TestOrderedRootSpanNativeClassificationMatrixCoversIssue3021(t *testing.T) 
 	}
 }
 
+func TestOrderedRootSpanNativeClassificationRejectsUnsupportedBlockerIDs(t *testing.T) {
+	for _, issue := range []string{"#3032", "#3033"} {
+		if _, ok := orderedRootSupportedBlockerActions[issue]; !ok {
+			t.Fatalf("supported blocker %s missing from classification blocker set", issue)
+		}
+	}
+	for _, issue := range []string{"#3034", "#3022", "3032", ""} {
+		if action, ok := orderedRootSupportedBlockerActions[issue]; ok {
+			t.Fatalf("unsupported blocker %q mapped to downstream action %q", issue, action)
+		}
+	}
+}
+
 func validateOrderedRootSpanNativeClassificationRow(t *testing.T, row orderedRootSpanNativeClassificationRow, seenIDs map[string]struct{}) {
 	t.Helper()
 	if row.ID == "" {
@@ -628,8 +646,8 @@ func validateOrderedRootSpanNativeClassificationRow(t *testing.T, row orderedRoo
 		}
 	case strings.HasPrefix(row.Status, orderedRootPublishStatusBlockedByPrefix):
 		issue := strings.TrimPrefix(row.Status, orderedRootPublishStatusBlockedByPrefix)
-		if !strings.HasPrefix(issue, "#") || len(issue) == 1 {
-			t.Fatalf("classification row %q has invalid blocker status %q", row.ID, row.Status)
+		if _, ok := orderedRootSupportedBlockerActions[issue]; !ok {
+			t.Fatalf("classification row %q has unsupported blocker status %q", row.ID, row.Status)
 		}
 	default:
 		t.Fatalf("classification row %q has unsupported status %q", row.ID, row.Status)
@@ -658,21 +676,17 @@ func validateOrderedRootSpanNativeClassificationRow(t *testing.T, row orderedRoo
 		}
 		seenActions[action] = struct{}{}
 	}
-	switch {
-	case strings.HasPrefix(row.Status, orderedRootPublishStatusBlockedByPrefix+"#3032"):
-		if _, ok := seenActions[orderedRootActionBlockedBy3032]; !ok {
-			t.Fatalf("classification row %q blocked by #3032 without matching downstream action", row.ID)
+	if strings.HasPrefix(row.Status, orderedRootPublishStatusBlockedByPrefix) {
+		issue := strings.TrimPrefix(row.Status, orderedRootPublishStatusBlockedByPrefix)
+		action := orderedRootSupportedBlockerActions[issue]
+		if _, ok := seenActions[action]; !ok {
+			t.Fatalf("classification row %q blocked by %s without matching downstream action", row.ID, issue)
 		}
-	case strings.HasPrefix(row.Status, orderedRootPublishStatusBlockedByPrefix+"#3033"):
-		if _, ok := seenActions[orderedRootActionBlockedBy3033]; !ok {
-			t.Fatalf("classification row %q blocked by #3033 without matching downstream action", row.ID)
-		}
-	default:
-		if _, ok := seenActions[orderedRootActionBlockedBy3032]; ok {
-			t.Fatalf("classification row %q has #3032 action without blocked status", row.ID)
-		}
-		if _, ok := seenActions[orderedRootActionBlockedBy3033]; ok {
-			t.Fatalf("classification row %q has #3033 action without blocked status", row.ID)
+	} else {
+		for issue, action := range orderedRootSupportedBlockerActions {
+			if _, ok := seenActions[action]; ok {
+				t.Fatalf("classification row %q has %s action without blocked status", row.ID, issue)
+			}
 		}
 	}
 	if len(row.Covers) == 0 {
