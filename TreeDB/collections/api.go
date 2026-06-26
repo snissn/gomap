@@ -4600,6 +4600,14 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	if domain == nil {
 		return 0, errors.New("collections: missing write domain")
 	}
+	var unlockCommandWALRawStage func()
+	releaseCommandWALRawStage := func() {
+		if unlockCommandWALRawStage != nil {
+			unlockCommandWALRawStage()
+			unlockCommandWALRawStage = nil
+		}
+	}
+	defer releaseCommandWALRawStage()
 	commandWALStageAppended := false
 	appendCommandWALBeforeStage := func() (uint64, error) {
 		if commandWALStageIntent == nil {
@@ -4607,6 +4615,9 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		}
 		if c.db == nil {
 			return 0, errCollectionDBNil
+		}
+		if unlockCommandWALRawStage == nil {
+			unlockCommandWALRawStage = c.db.LockCommandWALStaging()
 		}
 		lsn, appendErr := c.db.AppendStagedCommandWALIntent(commandWALStageIntent, false)
 		if appendErr != nil {
@@ -4675,7 +4686,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		return 0, err
 	}
 	if plan.directBufferedInsert != nil {
-		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, commandWALLSN)
+		return c.bufferDirectIndexedInsertPlanLocked(domain, catalog, plan, commandWALLSN, releaseCommandWALRawStage)
 	}
 	autoFlushEnabled := bufferedIndexedAutoFlushEnabled(catalog.meta.Options)
 	freezeMutableIndexedRunMapsLocked(domain)
@@ -4762,6 +4773,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
 			return 0, commandWALBufferedInsertCommitAmbiguous(err)
 		}
+		releaseCommandWALRawStage()
 	}
 	compactedObsolete, err := maybeCompactBufferedIndexedMutableRunsLocked(domain, catalog.meta.Options)
 	if err != nil {
@@ -4783,7 +4795,7 @@ func (c *Collection) bufferIndexedInsertPlanLocked(catalog *collectionCatalog, b
 	return 0, nil
 }
 
-func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan, commandWALLSN uint64) (time.Duration, error) {
+func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWriteDomain, catalog *collectionCatalog, plan *insertBatchPlan, commandWALLSN uint64, releaseCommandWALRawStage func()) (time.Duration, error) {
 	direct := plan.directBufferedInsert
 	if direct == nil {
 		return 0, nil
@@ -4969,6 +4981,9 @@ func (c *Collection) bufferDirectIndexedInsertPlanLocked(domain *collectionWrite
 	if commandWALLSN != 0 {
 		if err := domain.recordPendingCommandWALLSNLocked(c.db, commandWALLSN); err != nil {
 			return 0, commandWALBufferedInsertCommitAmbiguous(err)
+		}
+		if releaseCommandWALRawStage != nil {
+			releaseCommandWALRawStage()
 		}
 	}
 
@@ -12733,9 +12748,14 @@ func (combiner *collectionUpdateCombiner) stagePreparedBatches(prepared []collec
 	if err == nil {
 		var unlockCommandWALRawStage func()
 		unlockCommandWALRawStage, err = collection.prepareDirectUpdateCommandWALStage(merged)
-		if unlockCommandWALRawStage != nil {
-			defer unlockCommandWALRawStage()
+		releaseCommandWALRawStage := func() {
+			if unlockCommandWALRawStage != nil {
+				unlockCommandWALRawStage()
+				unlockCommandWALRawStage = nil
+			}
 		}
+		defer releaseCommandWALRawStage()
+		merged.releaseCommandWALRawStage = releaseCommandWALRawStage
 	}
 	if err == nil {
 		err = collection.withMutationLock(func() error {
@@ -12788,9 +12808,14 @@ func (combiner *collectionUpdateCombiner) stageSingleDirectPreparedBatch(prepare
 	}
 	collection := prepared.batch[0].collection
 	unlockCommandWALRawStage, err := collection.prepareDirectUpdateCommandWALStage(prepared.plan)
-	if unlockCommandWALRawStage != nil {
-		defer unlockCommandWALRawStage()
+	releaseCommandWALRawStage := func() {
+		if unlockCommandWALRawStage != nil {
+			unlockCommandWALRawStage()
+			unlockCommandWALRawStage = nil
+		}
 	}
+	defer releaseCommandWALRawStage()
+	prepared.plan.releaseCommandWALRawStage = releaseCommandWALRawStage
 	if err != nil {
 		combiner.completePreparedBatchWithError(prepared, err)
 		return
@@ -13063,7 +13088,7 @@ func (c *Collection) prepareDirectUpdateCommandWALStage(plan *updateBatchPlan) (
 	if err := c.drainCommandWALStageCoordinatorBeforeMutation(); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return c.db.LockCommandWALStaging(), nil
 }
 
 func addCollectionUpdateStatsForMerge(dst *CollectionUpdateStats, src CollectionUpdateStats) {
@@ -14302,6 +14327,7 @@ type updateBatchPlan struct {
 	rowRemainderBytes           int64
 	bufferedCommandWALIntent    *backenddb.CommandWALIntent
 	bufferedCommandWALLSN       uint64
+	releaseCommandWALRawStage   func()
 	directBufferedUpdate        *directBufferedUpdatePlan
 	uniqueSecondaryIndexByRoot  []int
 	canBufferIndexedUpdateBatch bool
@@ -15004,13 +15030,23 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 					c.writeDomain.mu.RUnlock()
 				}
 				var unlockCommandWALRawStageBeforeMutation func()
+				var unlockCommandWALRawStage func()
+				releaseCommandWALRawStage := func() {
+					if unlockCommandWALRawStage != nil {
+						unlockCommandWALRawStage()
+						unlockCommandWALRawStage = nil
+					}
+					if unlockCommandWALRawStageBeforeMutation != nil {
+						unlockCommandWALRawStageBeforeMutation()
+						unlockCommandWALRawStageBeforeMutation = nil
+					}
+				}
 				if pendingCommandWALBeforeMutation && c.db != nil {
 					runTestBeforeCommandWALBufferedUpdateStageLockHook()
 					unlockCommandWALRawStageBeforeMutation = c.db.LockCommandWALStaging()
-					defer unlockCommandWALRawStageBeforeMutation()
+					defer releaseCommandWALRawStage()
 				}
 				return c.withMutationLock(func() error {
-					var unlockCommandWALRawStage func()
 					if plan.bufferedCommandWALIntent != nil && c.db != nil {
 						if !pendingCommandWALBeforeMutation {
 							runTestBeforeCommandWALBufferedUpdateStageLockHook()
@@ -15018,8 +15054,9 @@ func (c *Collection) updateBatchOnce(items []updateBatchItem, mode updateBatchMo
 								return err
 							}
 							unlockCommandWALRawStage = c.db.LockCommandWALStaging()
-							defer unlockCommandWALRawStage()
+							defer releaseCommandWALRawStage()
 						}
+						plan.releaseCommandWALRawStage = releaseCommandWALRawStage
 					}
 					var unlockCommandWALStage func()
 					if plan.bufferedCommandWALIntent != nil {
@@ -16877,6 +16914,9 @@ func (c *Collection) bufferDirectUpdateBatchPlanLocked(plan *updateBatchPlan) (b
 			return commandWALBufferedUpdateCommitAmbiguous(err)
 		}
 		commandWALPendingRecorded = true
+		if plan.releaseCommandWALRawStage != nil {
+			plan.releaseCommandWALRawStage()
+		}
 		return nil
 	}
 	lockStart := updateBatchStatsNow(detailedStats)

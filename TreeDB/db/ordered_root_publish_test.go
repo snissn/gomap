@@ -224,6 +224,90 @@ func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextPassesAssignedLSN
 	}
 }
 
+func TestPublishOrderedRootDeltaBatchGroupWithCommandWALContextWaitsBeforeWriteMu(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	staged := mustRawKVCommandWALIntent(t, db, "cmd/staged", "1")
+	unlockStage := db.LockCommandWALStaging()
+	stageReleased := false
+	defer func() {
+		if !stageReleased {
+			unlockStage()
+		}
+	}()
+	lsn, err := db.AppendStagedCommandWALIntent(staged, false)
+	if err != nil {
+		t.Fatalf("AppendStagedCommandWALIntent: %v", err)
+	}
+	if lsn == 0 {
+		t.Fatalf("AppendStagedCommandWALIntent lsn=0")
+	}
+
+	publishDone := make(chan error, 1)
+	go func() {
+		_, _, publishErr := db.PublishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilder(
+			nil,
+			mustRawKVCommandWALIntent(t, db, "cmd/context", "2"),
+			func(ctx CommandWALPublishContext, rootIDs []uint64) (iterator.UnsafeIterator, error) {
+				if ctx.AppliedCommandLSN == 0 {
+					t.Fatalf("AppliedCommandLSN=0 in system builder")
+				}
+				if len(rootIDs) != 0 {
+					t.Fatalf("rootIDs=%v, want empty roots", rootIDs)
+				}
+				sys := mustFrozenSystemMemtable(t, "system/context-wait", strconv.FormatUint(ctx.AppliedCommandLSN, 10))
+				return sys.NewIterator(nil, nil), nil
+			},
+		)
+		publishDone <- publishErr
+	}()
+
+	select {
+	case err := <-publishDone:
+		t.Fatalf("context publish completed while raw stage lock was held: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	stagedDone := make(chan error, 1)
+	go func() {
+		stagedDone <- db.PublishStagedCommandWALNoop(staged, false)
+	}()
+	select {
+	case err := <-stagedDone:
+		if err != nil {
+			t.Fatalf("PublishStagedCommandWALNoop: %v", err)
+		}
+	case <-time.After(time.Second):
+		unlockStage()
+		stageReleased = true
+		select {
+		case <-publishDone:
+		case <-time.After(time.Second):
+		}
+		t.Fatalf("staged command WAL finalize blocked behind ordered-root context publish")
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn {
+		t.Fatalf("AppliedCommandLSN after staged publish=%d, want %d", got, lsn)
+	}
+
+	unlockStage()
+	stageReleased = true
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("context publish after stage release: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("context publish did not finish after stage release")
+	}
+	if got := db.State().AppliedCommandLSN; got != lsn+1 {
+		t.Fatalf("AppliedCommandLSN after context publish=%d, want %d", got, lsn+1)
+	}
+}
+
 func TestPublishOrderedRootDeltaGroupWithCommandWALContextRejectsMissingFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

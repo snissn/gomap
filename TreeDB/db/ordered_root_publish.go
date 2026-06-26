@@ -1795,6 +1795,11 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		return 0, nil, preApplyErr(ErrClosed)
 	}
 
+	rawPublishLocked := commandWALIntent != nil && !commandWALIntentFrameAlreadyAppended(commandWALIntent)
+	if rawPublishLocked {
+		unlockCommandWALPublish := db.lockCommandWALRawPublish()
+		defer unlockCommandWALPublish()
+	}
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
@@ -1924,7 +1929,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 	// tracker conservative by invalidating it after commit.
 	var vlogRefDelta *valueLogRefDelta
 	phaseStart = time.Now()
-	err = db.finalizeOrderedRootPublishWithCommandWAL(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent)
+	err = db.finalizeOrderedRootPublishWithCommandWALOptions(userRoot, newSystemRoot, retired, false, merged, touchedValueLogSegments, true, vlogRefDelta, nil, nil, commandWALIntent, orderedRootCommandWALPublishOptions{rawPublishLocked: rawPublishLocked})
 	phaseStats.finalizeNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	phaseStats.finalizeCalls++
 	if err != nil {
@@ -1947,6 +1952,10 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, ErrClosed
 	}
 
+	if !commandWALIntentFrameAlreadyAppended(commandWALIntent) {
+		unlockCommandWALPublish := db.lockCommandWALRawPublish()
+		defer unlockCommandWALPublish()
+	}
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
@@ -1997,8 +2006,6 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 	}
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
-	defer unlockCommandWALPublish()
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -2565,6 +2572,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, ErrClosed
 	}
 
+	if commandWALIntent != nil && !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(commandWALIntent) {
+		unlockCommandWALPublish := db.lockCommandWALRawPublish()
+		defer unlockCommandWALPublish()
+		opts.rawPublishLocked = true
+	}
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
@@ -2717,6 +2729,10 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, ErrClosed
 	}
 
+	if !commandWALIntentFrameAlreadyAppended(commandWALIntent) {
+		unlockCommandWALPublish := db.lockCommandWALRawPublish()
+		defer unlockCommandWALPublish()
+	}
 	lockStart := time.Now()
 	db.writeMu.Lock()
 	holdStart := time.Now()
@@ -2763,8 +2779,6 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	}
 
 	syncCommandWAL := commandWALIntentPublishSync(commandWALIntent, false)
-	unlockCommandWALPublish := db.lockCommandWALRawPublish()
-	defer unlockCommandWALPublish()
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
