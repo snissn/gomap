@@ -106,6 +106,16 @@ func TestColumnPhysicalJSONBenchTypedColumnPartDirectPreparedReopen1947(t *testi
 			wantMatchedRows: columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned),
 			wantReduceRows:  columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned),
 		},
+		{
+			name: "sum_time_second_of_day_square",
+			req: ColumnPhysicalQueryRequest{
+				Kind:        ColumnPhysicalQuerySumSecondOfDaySquare,
+				ValueColumn: "time_us",
+			},
+			wantPredicates:  0,
+			wantMatchedRows: 0,
+			wantReduceRows:  len(scanned),
+		},
 	}
 
 	for _, tc := range cases {
