@@ -41,7 +41,7 @@ func TestCommandWALSupportMatrixIsWellFormed(t *testing.T) {
 	if matrix.Owner == "" || matrix.Tracker == "" {
 		t.Fatalf("matrix missing owner/tracker: %+v", matrix)
 	}
-	expectedStatuses := []string{"WAL-supported", "WAL-rejected", "WAL-off-only", "future"}
+	expectedStatuses := []string{"WAL-supported", "WAL-rejected", "WAL-off-only", "read-only", "future"}
 	if !equalStringSlices(matrix.Statuses, expectedStatuses) {
 		t.Fatalf("matrix statuses=%v, want fixed v1 order %v", matrix.Statuses, expectedStatuses)
 	}
@@ -123,6 +123,29 @@ func TestCommandWALSupportMatrixCoversNativeWireMutationCommands(t *testing.T) {
 	sort.Strings(commands)
 	for _, command := range commands {
 		requireMatrixEntry(t, matrix, "nativewire", command)
+	}
+}
+
+func TestCommandWALSupportMatrixCoversNativeWireReadOnlyCommands(t *testing.T) {
+	matrix := loadCommandWALSupportMatrix(t)
+	for _, command := range []string{
+		"CommandListCollections",
+		"CommandListIndexes",
+		"CommandOpenCollection",
+		"CommandCloseCollection",
+		"CommandGetMany",
+		"CommandIndexLookup",
+		"CommandIndexRange",
+		"CommandOpenScan",
+		"CommandCursorNext",
+		"CommandCursorClose",
+		"CommandExplain",
+		"CommandStats",
+	} {
+		entry := requireMatrixEntry(t, matrix, "nativewire", command)
+		if entry.Status != "read-only" || entry.Command != "none" {
+			t.Fatalf("%s entry=%+v, want read-only/none", command, entry)
+		}
 	}
 }
 

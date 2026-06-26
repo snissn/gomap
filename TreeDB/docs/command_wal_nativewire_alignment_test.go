@@ -57,9 +57,9 @@ func TestCommandWALNativeWireAlignmentManifestCoverage(t *testing.T) {
 		if matrixEntry.Status != entry.SupportMatrixStatus || matrixEntry.Command != entry.CommandWALKind {
 			t.Fatalf("alignment entry %s disagrees with support matrix: alignment=%+v matrix=%+v", entry.NativeWireCommand, entry, matrixEntry)
 		}
-		if strings.HasPrefix(entry.Relationship, "local_only_") {
+		if strings.HasPrefix(entry.Relationship, "local_only_") || entry.Relationship == "read_rejected_v1" {
 			if entry.NativeWireFixture != "" || entry.NativeWireFixtureSHA256 != "" {
-				t.Fatalf("%s is local-only but declares deterministic fixture %s", entry.NativeWireCommand, entry.NativeWireFixture)
+				t.Fatalf("%s relationship %s must not declare deterministic fixture %s", entry.NativeWireCommand, entry.Relationship, entry.NativeWireFixture)
 			}
 		} else {
 			assertHexFixtureDigest(t, entry.NativeWireFixture, entry.NativeWireFixtureSHA256)
@@ -233,6 +233,10 @@ func TestRaftCommandEntryAndLocalCommandPayloadUseSharedCanonicalSchema(t *testi
 		case "local_only_barrier_v1":
 			if entry.SupportMatrixStatus != "WAL-supported" {
 				t.Fatalf("%s local-only barrier entry must document barrier semantics: %+v", entry.NativeWireCommand, entry)
+			}
+		case "read_rejected_v1":
+			if entry.SupportMatrixStatus != "read-only" {
+				t.Fatalf("%s read-only entry must stay read-only: %+v", entry.NativeWireCommand, entry)
 			}
 		default:
 			t.Fatalf("%s has unrecognized relationship %q", entry.NativeWireCommand, entry.Relationship)
