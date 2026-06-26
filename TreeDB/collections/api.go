@@ -9539,6 +9539,149 @@ func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte
 	return resultIDs, err
 }
 
+// PreflightCommandWALMutation checks collection-local command-WAL support for
+// an already-classified deterministic apply mutation before R3a appends its
+// local command-WAL frame.
+func (c *Collection) PreflightCommandWALMutation(operation ColumnPublishOperation) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if err := c.requireColumnStoreCommandWAL(c.meta, nil); err != nil {
+		return err
+	}
+	return requireColumnStoreWriteOperationSupported(c.meta, operation)
+}
+
+// PreflightInsertBatchConflicts checks deterministic insert-batch conflicts
+// before an external command-WAL owner stages its local frame. It publishes any
+// buffered writes first so the persisted primary and unique roots match the
+// collection's visible state, then reuses normal insert planning conflict
+// probes without publishing the planned mutation.
+func (c *Collection) PreflightInsertBatchConflicts(ids, documents [][]byte, trustedValidBSON bool) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return err
+	}
+
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return err
+	}
+	if catalog == nil {
+		return errCollectionNotFound
+	}
+	meta := catalog.meta
+	c.meta = meta
+	plannerOptions, err := collectionPlannerOptionsForDB(c.db, meta)
+	if err != nil {
+		return err
+	}
+	plannerOptions, err = collectionOptionsWithTrustedBSONDocuments(plannerOptions, trustedValidBSON)
+	if err != nil {
+		return err
+	}
+	plannerOptions = collectionOptionsWithTemplateV1Resolver(plannerOptions, snap, catalog)
+	indexRuntimes, indexRuntimesErr := catalog.cachedIndexRuntimes()
+	planner := insertBatchPlanner{
+		collection:             meta.Name,
+		primaryRoot:            catalog.primaryRootName,
+		templateRoot:           catalog.templateRootName,
+		indexStateRoot:         catalog.indexStateRootName,
+		cachedIndexRuntimes:    indexRuntimes,
+		cachedIndexRuntimesErr: indexRuntimesErr,
+		options:                plannerOptions,
+	}
+	plan, err := planner.planInsertBatch(ids, documents)
+	if err != nil {
+		return err
+	}
+	defer resetCollectionRunTables(plan.runs)
+	return plan.checkPersistedConflicts(snap, catalog)
+}
+
+// PreflightReplaceBatchConflicts checks deterministic replacement conflicts
+// before an external command-WAL owner stages its local frame. It publishes any
+// buffered writes first so persisted roots match visible state, then reuses
+// normal update planning without publishing the planned mutation.
+func (c *Collection) PreflightReplaceBatchConflicts(ids, documents [][]byte) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionDBNil
+	}
+	items, err := replaceBatchUpdateItems(ids, documents)
+	if err != nil {
+		return err
+	}
+	ownedItems, err := prepareUpdateBatchItems(items)
+	if err != nil {
+		return err
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return err
+	}
+	plan, err := c.buildUpdateBatchPlan(ownedItems, updateBatchModeAny, false, nil)
+	if err != nil {
+		return err
+	}
+	if plan != nil {
+		plan.close()
+	}
+	return nil
+}
+
+// InsertBatchWithCommandWALIntent applies an already-appended collection insert
+// command-WAL frame through the normal insert executor. It is reserved for R3a
+// deterministic apply; ordinary callers should use InsertBatch or
+// InsertBatchValidatedBSON so the collection owns command-WAL creation.
+func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, trustedValidBSON bool, commandWALIntent *backenddb.CommandWALIntent) ([][]byte, error) {
+	if commandWALIntent == nil {
+		return nil, errors.New("collections: InsertBatchWithCommandWALIntent requires command WAL intent")
+	}
+	resultIDs, err := c.insertBatchWithCommandWALIntent(ids, documents, trustedValidBSON, nil, commandWALIntent, insertBatchExecutionOptions{returnResultIDs: true})
+	if err == nil {
+		if trustedValidBSON {
+			err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+		} else {
+			err = commitAmbiguousError("InsertBatch vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
+		}
+	}
+	return resultIDs, err
+}
+
 // NativewireInsertBatchNoResultIDs executes an insert batch without cloning
 // response-owned result IDs. It exists for the nativewire gateway omit-result
 // fast path; public callers that need returned IDs should keep using
@@ -10204,7 +10347,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	var publishMeta CollectionMeta
 	var publishRootNames []string
 	if columnStoreWriteEnabled(meta) {
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
 				meta:             meta,
 				catalog:          currentCatalog,
@@ -10224,7 +10367,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 	} else if commandWALIntent != nil {
 		publishMeta = meta
 		publishRootNames = rootNames
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDMap, rootIDs)
 			})
@@ -10919,7 +11062,7 @@ func (c *Collection) insertBatchNoIndex(
 	if columnStoreWriteEnabled(c.meta) {
 		var publishMeta CollectionMeta
 		var publishRootNames []string
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaGroupMaybeColumn(ordered, columnWritePublishInput{
 				meta:              c.meta,
 				catalog:           catalog,
@@ -10956,7 +11099,7 @@ func (c *Collection) insertBatchNoIndex(
 	}
 
 	if commandWALIntent != nil {
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 			})
@@ -11097,6 +11240,62 @@ func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {
 		}
 	}
 	deleted, err := c.deleteBatchWithCommandWALIntent(ids, nil)
+	if err == nil && deleted > 0 {
+		unlockMutation.Unlock()
+		mutationLocked = false
+		err = commitAmbiguousError("DeleteBatch vector index maintenance", c.notifyVectorIndexesDelete(ids))
+	}
+	return deleted, err
+}
+
+// DeleteBatchWithCommandWALIntent applies an already-appended collection delete
+// command-WAL frame through the normal delete executor. It is reserved for R3a
+// deterministic apply; ordinary callers should use DeleteBatch.
+func (c *Collection) DeleteBatchWithCommandWALIntent(documentIDs [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, error) {
+	if commandWALIntent == nil {
+		return 0, errors.New("collections: DeleteBatchWithCommandWALIntent requires command WAL intent")
+	}
+	if c == nil {
+		return 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return 0, err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	for i, id := range documentIDs {
+		if len(id) == 0 {
+			return 0, fmt.Errorf("collections: document id cannot be empty at index %d", i)
+		}
+	}
+	ids, err := cloneBatchDocumentIDs(documentIDs)
+	if err != nil {
+		return 0, err
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for i, id := range ids {
+		key := string(id)
+		if _, ok := seen[key]; ok {
+			return 0, fmt.Errorf("%w at index %d", ErrDuplicateDocumentID, i)
+		}
+		seen[key] = struct{}{}
+	}
+	unlockMutation := c.lockMutation()
+	mutationLocked := true
+	defer func() {
+		if mutationLocked {
+			unlockMutation.Unlock()
+		}
+	}()
+	if c.commandWALActive(commandWALIntent) || c.shouldFlushBeforeIndexedDelete(c.meta) {
+		if err := c.flushBufferedWrites(); err != nil {
+			return 0, err
+		}
+	}
+	deleted, err := c.deleteBatchWithCommandWALIntent(ids, commandWALIntent)
 	if err == nil && deleted > 0 {
 		unlockMutation.Unlock()
 		mutationLocked = false
@@ -11346,7 +11545,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 	if columnStoreWriteEnabled(c.meta) {
 		var publishMeta CollectionMeta
 		var publishRootNames []string
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
 				meta:             c.meta,
 				catalog:          catalog,
@@ -11379,7 +11578,7 @@ func (c *Collection) deleteBatchOnce(documentIDs [][]byte, commandWALIntent *bac
 		}
 		return len(existing), nil
 	} else if commandWALIntent != nil {
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 			})
@@ -11598,7 +11797,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	var publishMeta CollectionMeta
 	var publishRootNames []string
 	if columnStoreWriteEnabled(c.meta) {
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, nil, columnWritePublishInput{
 				meta:             c.meta,
 				catalog:          catalog,
@@ -11617,7 +11816,7 @@ func (c *Collection) deleteDocumentOnce(documentID []byte, commandWALIntent *bac
 	} else if commandWALIntent != nil {
 		publishMeta = c.meta
 		publishRootNames = rootNames
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithCommandWALAndSystemDeltaBuilder(ordered, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIterator(baseCommitSeq, baseSystemRoot, rootNames, baseRootIDs, rootIDs)
 			})
@@ -11841,6 +12040,84 @@ func (c *Collection) UpdateBatchIfNoSecondaryUniqueIndexChanges(items []UpdateBa
 		err = commitAmbiguousError("UpdateBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
 	}
 	return results, batched, err
+}
+
+// ReplaceBatchWithCommandWALIntent applies existing-only full-document
+// replacements with an already-appended collection update command-WAL frame. It
+// is reserved for R3a deterministic apply; ordinary callers should use Update
+// or UpdateBatch.
+func (c *Collection) ReplaceBatchWithCommandWALIntent(ids, documents [][]byte, commandWALIntent *backenddb.CommandWALIntent) (int, int, error) {
+	if commandWALIntent == nil {
+		return 0, 0, errors.New("collections: ReplaceBatchWithCommandWALIntent requires command WAL intent")
+	}
+	items, err := replaceBatchUpdateItems(ids, documents)
+	if err != nil {
+		return 0, 0, err
+	}
+	ownedItems, err := prepareUpdateBatchItems(items)
+	if err != nil {
+		return 0, 0, err
+	}
+	if c == nil {
+		return 0, 0, errCollectionNil
+	}
+	if c.db == nil {
+		return 0, 0, errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return 0, 0, err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		return 0, 0, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
+		return 0, 0, err
+	}
+	results, _, err := c.updateBatchOwnedItemsWithCommandWALIntent(ownedItems, updateBatchModeAny, commandWALIntent)
+	if err == nil {
+		err = commitAmbiguousError("ReplaceBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesUpdateBatch(items, results))
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	matched, modified := 0, 0
+	for _, result := range results {
+		if result.Matched {
+			matched++
+		}
+		if result.Modified {
+			modified++
+		}
+	}
+	return matched, modified, nil
+}
+
+func replaceBatchUpdateItems(ids, documents [][]byte) ([]UpdateBatchItem, error) {
+	if len(ids) != len(documents) {
+		return nil, fmt.Errorf("collections: replace ids length %d does not match documents length %d", len(ids), len(documents))
+	}
+	items := make([]UpdateBatchItem, len(ids))
+	for i := range ids {
+		id := bytes.Clone(ids[i])
+		replacement := bytes.Clone(documents[i])
+		items[i] = UpdateBatchItem{
+			DocumentID: id,
+			Update: func(doc []byte) func([]byte) ([]byte, bool, error) {
+				return func(current []byte) ([]byte, bool, error) {
+					if current == nil {
+						return nil, false, nil
+					}
+					if bytes.Equal(current, doc) {
+						return current, false, nil
+					}
+					return doc, true, nil
+				}
+			}(replacement),
+		}
+	}
+	return items, nil
 }
 
 func (c *Collection) updateBatch(items []UpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
@@ -14435,7 +14712,7 @@ func (c *Collection) updateDocumentOnceApply(documentID []byte, update func(curr
 	var publishMeta CollectionMeta
 	var publishRootNames []string
 	if columnStoreWriteEnabled(c.meta) {
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
 				meta:              c.meta,
 				catalog:           catalog,
@@ -16807,7 +17084,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	if columnStoreWriteEnabled(plan.meta) {
 		var publishMeta CollectionMeta
 		var publishRootNames []string
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, publishMeta, publishRootNames, err = c.publishRootDeltaBatchGroupMaybeColumn(ordered, preflight, columnWritePublishInput{
 				meta:              plan.meta,
 				catalog:           plan.catalog,
@@ -16844,7 +17121,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 		}
 		return plan.results, nil
 	} else if commandWALIntent != nil {
-		err = c.withCommandWALPublishCoordinator(func() error {
+		err = c.withCommandWALPublishCoordinatorForIntent(commandWALIntent, func() error {
 			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALAndSystemDeltaBuilder(ordered, preflight, commandWALIntent, func(rootIDs []uint64) (iterator.UnsafeIterator, error) {
 				return c.buildRootDescriptorSystemDeltaIteratorForMeta(plan.meta, plan.baseCommitSeq, plan.baseSystemRoot, coalescedRootNames, plan.baseRootIDs, rootIDs)
 			})
@@ -20266,6 +20543,74 @@ func (c *Collection) ScanDocuments(maxDocuments int) ([]DocumentRecord, bool, er
 		return nil, false, err
 	}
 	return out, truncated, nil
+}
+
+// ScanDocumentIDsFunc flushes buffered writes before acquiring a snapshot, then
+// calls fn for primary collection document IDs until maxDocuments is reached,
+// the collection is exhausted, or fn returns false. Unlike ScanDocumentsFunc,
+// it does not materialize or reconstruct document payloads.
+func (c *Collection) ScanDocumentIDsFunc(maxDocuments int, fn func([]byte) (bool, error)) (bool, error) {
+	if c == nil {
+		return false, errCollectionNil
+	}
+	if c.db == nil {
+		return false, errCollectionDBNil
+	}
+	if maxDocuments <= 0 {
+		return false, errors.New("collections: max documents must be positive")
+	}
+	if fn == nil {
+		return false, errors.New("collections: scan callback is nil")
+	}
+	if err := c.flushBufferedWrites(); err != nil {
+		return false, err
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := c.catalogForSnapshot(snap)
+	if err != nil {
+		return false, err
+	}
+	if catalog == nil {
+		return false, errCollectionNotFound
+	}
+	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
+	if err != nil {
+		return false, err
+	}
+	if it == nil {
+		return false, nil
+	}
+	defer func() { _ = it.Close() }()
+	truncated := false
+	scanned := 0
+	for it.Valid() {
+		if it.IsDeleted() {
+			it.Next()
+			continue
+		}
+		if scanned >= maxDocuments {
+			truncated = true
+			break
+		}
+		id := bytes.Clone(it.UnsafeKey())
+		scanned++
+		next, err := fn(id)
+		if err != nil {
+			return false, err
+		}
+		if !next {
+			return false, nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	return truncated, nil
 }
 
 // ScanDocumentsFunc flushes buffered writes before acquiring a snapshot, then

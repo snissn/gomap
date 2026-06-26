@@ -175,14 +175,19 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 		}
 	}
 
-	if entry.Target.CommandID != nativewire.CommandCreateCollection {
-		return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s is not accepted by create-collection slice", entry.Row.NativeWireCommand))
-	}
 	if err := h.preflightApplyRecords(meta.EntryID, entry.Digest); err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(entry.Digest, code, err)
 	}
-	result, err := h.applyCreateCollectionV1(entry, meta)
+	var result raftentry.ApplyResultV1
+	switch entry.Target.CommandID {
+	case nativewire.CommandCreateCollection:
+		result, err = h.applyCreateCollectionV1(entry, meta)
+	case nativewire.CommandInsertBatch, nativewire.CommandReplaceBatch, nativewire.CommandDeleteBatch:
+		result, err = h.applyCollectionMutationV1(entry, meta)
+	default:
+		return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s is not accepted by R3a apply", entry.Row.NativeWireCommand))
+	}
 	if err != nil {
 		if result.Status == raftentry.ApplyStatusRecoveryRequired {
 			return result, err

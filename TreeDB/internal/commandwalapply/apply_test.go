@@ -129,6 +129,7 @@ func TestAppendCatalogCreateCollectionFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
+	defer Abort(db, handle)
 	if appendResult.Status != StatusLocallyWALRecoverable {
 		t.Fatalf("append status=%q, want %q", appendResult.Status, StatusLocallyWALRecoverable)
 	}
@@ -147,6 +148,97 @@ func TestAppendCatalogCreateCollectionFrame(t *testing.T) {
 		frames[0].Scope != commitlog.CommandScopeCatalog ||
 		frames[0].PayloadFormat != commitlog.PayloadFormatCatalogCreateCollectionV1 {
 		t.Fatalf("catalog create frame=%+v, want lsn=%d CatalogCreateCollection/Catalog/V1", frames[0], appendResult.LSN)
+	}
+}
+
+func TestAppendCollectionMutationFrames(t *testing.T) {
+	insertPayload, err := commitlog.EncodeCollectionInsertBatchByIDPayload("users", []commitlog.CollectionDocument{{
+		ID:       []byte("u1"),
+		Document: []byte(`{"name":"ada"}`),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeCollectionInsertBatchByIDPayload: %v", err)
+	}
+	deletePayload, err := commitlog.EncodeCollectionDeleteBatchByIDPayload("users", [][]byte{[]byte("u1")})
+	if err != nil {
+		t.Fatalf("EncodeCollectionDeleteBatchByIDPayload: %v", err)
+	}
+	updatePayload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", []commitlog.CollectionDocument{{
+		ID:       []byte("u1"),
+		Document: []byte(`{"name":"grace"}`),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+
+	cases := []struct {
+		name          string
+		payload       []byte
+		build         func([]byte) (LoweredFrame, error)
+		kind          commitlog.CommandKind
+		payloadFormat commitlog.PayloadFormat
+	}{
+		{
+			name:          "insert",
+			payload:       insertPayload,
+			build:         CollectionInsertBatchByIDFrame,
+			kind:          commitlog.CommandKindCollectionInsertBatchByID,
+			payloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
+		},
+		{
+			name:          "delete",
+			payload:       deletePayload,
+			build:         CollectionDeleteBatchByIDFrame,
+			kind:          commitlog.CommandKindCollectionDeleteBatchByID,
+			payloadFormat: commitlog.PayloadFormatCollectionDeleteBatchByIDV1,
+		},
+		{
+			name:          "update",
+			payload:       updatePayload,
+			build:         CollectionUpdateBatchByIDFrame,
+			kind:          commitlog.CommandKindCollectionUpdateBatchByID,
+			payloadFormat: commitlog.PayloadFormatCollectionUpdateBatchByIDV1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := backenddb.Open(backenddb.Options{
+				Dir:                          dir,
+				CommandWAL:                   true,
+				DisableBackgroundPrune:       true,
+				CommandWALStatsScan:          true,
+				CommandWALSegmentTargetBytes: 1 << 20,
+			})
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			frame, err := tc.build(tc.payload)
+			if err != nil {
+				t.Fatalf("build frame: %v", err)
+			}
+			handle, appendResult, err := Append(db, frame, ApplyMetadata{}, Options{})
+			if err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			defer Abort(db, handle)
+			if appendResult.Status != StatusLocallyWALRecoverable || appendResult.LSN == 0 || handle.LSN() != appendResult.LSN || handle.CommandWALIntent() == nil {
+				t.Fatalf("append result=%+v handle lsn=%d intent nil=%v", appendResult, handle.LSN(), handle.CommandWALIntent() == nil)
+			}
+			frames := readCommandWALFrames(t, dir)
+			if len(frames) != 1 {
+				t.Fatalf("command WAL frames=%d, want 1", len(frames))
+			}
+			got := frames[0]
+			if got.LSN != appendResult.LSN ||
+				got.Kind != tc.kind ||
+				got.Scope != commitlog.CommandScopeCollection ||
+				got.PayloadFormat != tc.payloadFormat {
+				t.Fatalf("frame=%+v, want lsn=%d kind=%d collection format=%d", got, appendResult.LSN, tc.kind, tc.payloadFormat)
+			}
+		})
 	}
 }
 
@@ -529,6 +621,18 @@ func TestRejectedInputFailsBeforeAppend(t *testing.T) {
 				Kind:          commitlog.CommandKindCatalogCreateCollection,
 				Scope:         commitlog.CommandScopeCatalog,
 				PayloadFormat: commitlog.PayloadFormatCatalogCreateCollectionV1,
+				Payload:       []byte{0x01},
+			},
+			wantErr: backenddb.ErrCommandWALRejected,
+			wantMsg: "malformed",
+		},
+		{
+			name: "malformed collection insert payload",
+			frame: LoweredFrame{
+				Class:         LoweredFrameClassCollectionInsertBatchByID,
+				Kind:          commitlog.CommandKindCollectionInsertBatchByID,
+				Scope:         commitlog.CommandScopeCollection,
+				PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1,
 				Payload:       []byte{0x01},
 			},
 			wantErr: backenddb.ErrCommandWALRejected,

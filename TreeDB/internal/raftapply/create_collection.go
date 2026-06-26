@@ -669,11 +669,11 @@ func decodeCreateVectorIndexStrategy(value uint64) (collections.VectorIndexStrat
 func codeCollectionApplyError(err error) error {
 	switch {
 	case errors.Is(err, backenddb.ErrReadOnly):
-		return codedError(raftentry.ErrorReadOnlyV1, "%v", err)
+		return codedError(raftentry.ErrorReadOnlyV1, "%w", err)
 	case errors.Is(err, backenddb.ErrClosed), errors.Is(err, backenddb.ErrRecoveryRequired), errors.Is(err, backenddb.ErrCommandWALUnsupported), errors.Is(err, backenddb.ErrCommandWALRejected):
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "%v", err)
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "%w", err)
 	default:
-		return codedError(raftentry.ErrorRejectedConflictV1, "%v", err)
+		return codedError(raftentry.ErrorRejectedConflictV1, "%w", err)
 	}
 }
 
