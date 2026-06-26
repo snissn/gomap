@@ -1735,12 +1735,7 @@ func (e *columnPhysicalQueryExecutor) visitValues(values []columnDeclaredValue) 
 		if err != nil {
 			return err
 		}
-		expressionValue, err := typedColumnInt64AggregateExpressionValue(TypedColumnInt64AggregateSecondOfDaySquare, value)
-		if err != nil {
-			return err
-		}
-		e.int64Sum += expressionValue
-		e.int64SumRows++
+		return e.addSumSecondOfDaySquareValue(value)
 	}
 	return nil
 }
@@ -2056,13 +2051,29 @@ func (e *columnPhysicalQueryExecutor) visitDirectSumSecondOfDaySquare(value int6
 	if !valueOK {
 		return fmt.Errorf("%w: physical column query missing int64 value", ErrColumnQueryPlanUnsupported)
 	}
-	expressionValue, err := typedColumnInt64AggregateExpressionValue(TypedColumnInt64AggregateSecondOfDaySquare, value)
-	if err != nil {
+	if err := e.addSumSecondOfDaySquareValue(value); err != nil {
 		return err
 	}
-	e.int64Sum += expressionValue
-	e.int64SumRows++
 	e.reduceRows++
+	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) addSumSecondOfDaySquareValue(value int64) error {
+	result := TypedColumnInt64PredicateAggregateResult{Sum: e.int64Sum}
+	if err := addTypedColumnInt64PredicateAggregateExpressionValue(&result, TypedColumnInt64AggregateSecondOfDaySquare, value); err != nil {
+		return err
+	}
+	e.int64Sum = result.Sum
+	e.int64SumRows++
+	return nil
+}
+
+func (e *columnPhysicalQueryExecutor) addTransformedInt64Sum(value int64) error {
+	result := TypedColumnInt64PredicateAggregateResult{Sum: e.int64Sum}
+	if err := addTypedColumnInt64PredicateAggregateValue(&result, value); err != nil {
+		return err
+	}
+	e.int64Sum = result.Sum
 	return nil
 }
 
@@ -2412,7 +2423,11 @@ func (e *columnPhysicalQueryExecutor) mergeFrom(other *columnPhysicalQueryExecut
 			e.int64Spans[key] = cur
 		}
 	case ColumnPhysicalQuerySumSecondOfDaySquare:
-		e.int64Sum += other.int64Sum
+		if other.int64SumRows > 0 {
+			if err := e.addTransformedInt64Sum(other.int64Sum); err != nil {
+				return err
+			}
+		}
 		e.int64SumRows += other.int64SumRows
 	default:
 		return fmt.Errorf("%w: unsupported physical column query kind %q", ErrColumnQueryPlanUnsupported, e.kind)
