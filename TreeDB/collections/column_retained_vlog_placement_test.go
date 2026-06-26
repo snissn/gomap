@@ -607,8 +607,8 @@ func TestPrepareColumnWritePublishInputUsesPreparedDeclaredRows(t *testing.T) {
 	if len(input.declaredRows) != 1 || input.declaredRows[0].Values[0].Int64 != 42 {
 		t.Fatalf("prepared declared rows not preserved: %+v", input.declaredRows)
 	}
-	if input.declaredColumnEncoding != 0 {
-		t.Fatalf("prepared declared rows recorded declared-column encoding: %s", input.declaredColumnEncoding)
+	if input.documentExtraction != 0 {
+		t.Fatalf("prepared declared rows recorded document extraction: %s", input.documentExtraction)
 	}
 }
 

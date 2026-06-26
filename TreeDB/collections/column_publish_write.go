@@ -23,7 +23,7 @@ type columnWritePublishInput struct {
 	rows                   int
 	declaredRows           []columnDeclaredRow
 	declaredRowsReady      bool
-	declaredColumnEncoding time.Duration
+	documentExtraction     time.Duration
 	commandBytes           int64
 	rowRemainderBytes      int64
 	columnPayloadBytes     int64
@@ -406,7 +406,7 @@ func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInpu
 		}
 		start := time.Now()
 		rows, err := extractColumnDeclaredRowsFromJSONDocuments(*input.meta.Options.ColumnStore, input.documents)
-		input.declaredColumnEncoding = time.Since(start)
+		input.documentExtraction = time.Since(start)
 		if err != nil {
 			return columnWritePublishInput{}, err
 		}
@@ -533,7 +533,7 @@ func (c *Collection) buildColumnPublishPlanForCommandWALContext(ctx backenddb.Co
 	if err != nil {
 		return ColumnPublishPlan{}, err
 	}
-	plan.StageMetrics.DeclaredColumnEncoding += input.declaredColumnEncoding
+	plan.StageMetrics.DocumentExtraction += input.documentExtraction
 	return plan, nil
 }
 
