@@ -1086,13 +1086,25 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 			{
 				Name:                     columnStoreQueryQ1,
 				PlanLabel:                columnStorePathSerialColumnScan,
+				QueryMode:                columnStoreQueryModeOneShotEndToEnd,
+				MetadataMode:             columnStoreMetadataModeNoAggregate,
 				RowsProcessed:            1024,
+				PrepareSetupDurationMS:   0.125,
+				RunDurationMS:            1.250,
+				RenderHashDurationMS:     0.250,
+				TotalQueryDurationMS:     1.625,
 				ThroughputInterpretation: "physical serial scan: TCPA decode plus reducer aggregation over declared columns; memory-bandwidth bound on asset bytes; mark-pruning not active",
 			},
 			{
 				Name:                     columnStoreQueryQ5Metadata,
 				PlanLabel:                columnStorePathAggregateMetadata,
+				QueryMode:                columnStoreQueryModeOneShotEndToEnd,
+				MetadataMode:             columnStoreMetadataModeNoAggregate,
 				RowsProcessed:            1024,
+				PrepareSetupDurationMS:   0.100,
+				RunDurationMS:            0.050,
+				RenderHashDurationMS:     0.025,
+				TotalQueryDurationMS:     0.175,
 				ThroughputInterpretation: "fallback-bound aggregate metadata label: no metadata hits reported, so evidence must be treated as a physical scan/reroute rather than the metadata-asset fast path; mark-pruning not active",
 			},
 			{
@@ -1124,6 +1136,11 @@ func TestColumnStoreSuiteMarkdownRendersThroughputInterpretationM14C(t *testing.
 		"fallback-bound aggregate metadata label",
 		"mark-pruning not active",
 		"adapter ms",
+		"query mode",
+		"metadata mode",
+		"total query ms",
+		columnStoreQueryModeOneShotEndToEnd,
+		columnStoreMetadataModeNoAggregate,
 		"``q\\|pipe`tick``",
 		"``plan\\|pipe`tick``",
 		"``note\\|pipe`tick``",
@@ -1988,18 +2005,34 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 			cellMetrics := assertColumnStoreJSONBenchCellShapeM1955(t, report, tc.forcedPath == columnStorePathAggregateMetadata)
 			if tc.forcedPath == columnStorePathAggregateMetadata {
 				q1Cells := cellMetrics[columnStoreQueryQ1]
-				if q1Cells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect].MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
+				q1DirectMetadata := q1Cells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect]
+				if q1DirectMetadata.MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
 					t.Fatalf("q1 missing direct metadata cell: %+v", q1Cells)
 				}
-				if q1Cells[columnStoreJSONBenchCellColumnPreparedMetadata+"/"+columnStoreJSONBenchModePrepared].MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
+				if q1DirectMetadata.QueryMode != columnStoreQueryModeOneShotEndToEnd || q1DirectMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
+					t.Fatalf("q1 direct metadata mode labels=%q/%q want one-shot/auto aggregate: %+v", q1DirectMetadata.QueryMode, q1DirectMetadata.MetadataMode, q1DirectMetadata)
+				}
+				q1PreparedMetadata := q1Cells[columnStoreJSONBenchCellColumnPreparedMetadata+"/"+columnStoreJSONBenchModePrepared]
+				if q1PreparedMetadata.MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
 					t.Fatalf("q1 missing prepared metadata cell: %+v", q1Cells)
 				}
+				if q1PreparedMetadata.QueryMode != columnStoreQueryModeHotPreparedRun || q1PreparedMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
+					t.Fatalf("q1 prepared metadata mode labels=%q/%q want hot prepared/auto aggregate: %+v", q1PreparedMetadata.QueryMode, q1PreparedMetadata.MetadataMode, q1PreparedMetadata)
+				}
 				q4bCells := cellMetrics[columnStoreQueryQ4B]
-				if q4bCells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect].MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
+				q4bDirectMetadata := q4bCells[columnStoreJSONBenchCellColumnDirectMetadata+"/"+columnStoreJSONBenchModeDirect]
+				if q4bDirectMetadata.MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
 					t.Fatalf("q4b missing direct metadata cell: %+v", q4bCells)
 				}
-				if q4bCells[columnStoreJSONBenchCellColumnPreparedMetadata+"/"+columnStoreJSONBenchModePrepared].MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
+				if q4bDirectMetadata.QueryMode != columnStoreQueryModeOneShotEndToEnd || q4bDirectMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
+					t.Fatalf("q4b direct metadata mode labels=%q/%q want one-shot/auto aggregate: %+v", q4bDirectMetadata.QueryMode, q4bDirectMetadata.MetadataMode, q4bDirectMetadata)
+				}
+				q4bPreparedMetadata := q4bCells[columnStoreJSONBenchCellColumnPreparedMetadata+"/"+columnStoreJSONBenchModePrepared]
+				if q4bPreparedMetadata.MetadataDataScanPath != columnStoreJSONBenchScanPathMetadata {
 					t.Fatalf("q4b missing prepared metadata cell: %+v", q4bCells)
+				}
+				if q4bPreparedMetadata.QueryMode != columnStoreQueryModeHotPreparedRun || q4bPreparedMetadata.MetadataMode != columnStoreMetadataModeAutoAggregate {
+					t.Fatalf("q4b prepared metadata mode labels=%q/%q want hot prepared/auto aggregate: %+v", q4bPreparedMetadata.QueryMode, q4bPreparedMetadata.MetadataMode, q4bPreparedMetadata)
 				}
 			}
 			queryMetrics := assertColumnStoreQueryMetricCoverageM11A(t, report.Queries)
@@ -2028,6 +2061,12 @@ func TestColumnStoreSuiteExecutesForcedAggregateAndParallelPhysicalPathsM14B(t *
 				}
 				if q.StorageSource == "" || q.FallbackReason == "" {
 					t.Fatalf("query %s missing storage source/fallback diagnostics: %+v", q.Name, q)
+				}
+				if q.QueryMode != columnStoreQueryModeOneShotEndToEnd {
+					t.Fatalf("query %s query_mode=%q want %q", q.Name, q.QueryMode, columnStoreQueryModeOneShotEndToEnd)
+				}
+				if got, want := q.MetadataMode, columnStoreMetadataMode(q.PlanLabel, q.StorageSource, q.MetadataHits); got != want {
+					t.Fatalf("query %s metadata_mode=%q want %q from plan/source/hits: %+v", q.Name, got, want, q)
 				}
 				if tc.forcedPath == columnStorePathAggregateMetadata {
 					if q.MetadataHits > 0 {
@@ -2127,24 +2166,28 @@ func TestColumnStoreJSONBenchPreparedParityMismatchIsFatal1955(t *testing.T) {
 
 func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *testing.T) {
 	q := columnStoreQueryMetric{
-		Name:               "q4a",
-		PlanLabel:          columnStorePathSerialColumnScan,
-		StorageSource:      string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
-		FallbackReason:     string(collections.ColumnPhysicalQueryFallbackNone),
-		Rows:               7,
-		RowsProcessed:      5,
-		RowsProcessedKnown: true,
-		ResultCount:        2,
-		RawHash:            11,
-		ProductionHash:     11,
-		ScanDurationMS:     1.5,
-		ReduceDurationMS:   2.5,
-		AdapterDurationMS:  0.75,
-		hotRunDuration:     6 * time.Millisecond,
-		RowsScanned:        13,
-		RowsMatched:        3,
-		ReduceRows:         2,
-		DecodedGranules:    4,
+		Name:                   "q4a",
+		PlanLabel:              columnStorePathSerialColumnScan,
+		StorageSource:          string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
+		FallbackReason:         string(collections.ColumnPhysicalQueryFallbackNone),
+		Rows:                   7,
+		RowsProcessed:          5,
+		RowsProcessedKnown:     true,
+		ResultCount:            2,
+		RawHash:                11,
+		ProductionHash:         11,
+		ScanDurationMS:         1.5,
+		ReduceDurationMS:       2.5,
+		AdapterDurationMS:      0.75,
+		PrepareSetupDurationMS: 0.50,
+		RunDurationMS:          6.00,
+		RenderHashDurationMS:   0.25,
+		TotalQueryDurationMS:   6.75,
+		hotRunDuration:         6 * time.Millisecond,
+		RowsScanned:            13,
+		RowsMatched:            3,
+		ReduceRows:             2,
+		DecodedGranules:        4,
 		CompressionAttribution: columnStoreCompressionAttribution{
 			CompressionPolicyLabel: "default",
 			RequestedCompression:   "snappy",
@@ -2153,6 +2196,24 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 
 	cell := columnStoreJSONBenchCellFromQueryMetric(q, &collections.ColumnStoreConfig{}, 0)
+	if got, want := cell.QueryMode, columnStoreQueryModeOneShotEndToEnd; got != want {
+		t.Fatalf("query_mode=%q want %q", got, want)
+	}
+	if got, want := cell.MetadataMode, columnStoreMetadataModeNoAggregate; got != want {
+		t.Fatalf("metadata_mode=%q want %q", got, want)
+	}
+	if got, want := cell.PrepareSetupDurationMS, q.PrepareSetupDurationMS; got != want {
+		t.Fatalf("prepare_setup_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.RunDurationMS, q.RunDurationMS; got != want {
+		t.Fatalf("run_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.RenderHashDurationMS, q.RenderHashDurationMS; got != want {
+		t.Fatalf("render_hash_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TotalQueryDurationMS, q.TotalQueryDurationMS; got != want {
+		t.Fatalf("total_query_duration_ms=%v want %v", got, want)
+	}
 	if got, want := cell.HotRunDurationMS, 6.0; got != want {
 		t.Fatalf("hot_run_duration_ms=%v want %v", got, want)
 	}
@@ -2199,6 +2260,46 @@ func TestColumnStorePhaseDurationsUsesMeasuredHotRun1955(t *testing.T) {
 	}
 }
 
+func TestColumnStoreMetadataModeLabelsAggregateWinsAsAccelerationM3113(t *testing.T) {
+	tests := []struct {
+		name          string
+		planLabel     string
+		storageSource string
+		metadataHits  int
+		want          string
+	}{
+		{
+			name:          "aggregate metadata hit",
+			planLabel:     columnStorePathAggregateMetadata,
+			storageSource: string(collections.ColumnPhysicalQueryStorageSourceAggregateMetadata),
+			metadataHits:  2,
+			want:          columnStoreMetadataModeAutoAggregate,
+		},
+		{
+			name:          "aggregate plan rerouted to data",
+			planLabel:     columnStorePathAggregateMetadata,
+			storageSource: string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
+			metadataHits:  0,
+			want:          columnStoreMetadataModeNoAggregate,
+		},
+		{
+			name:          "physical data scan",
+			planLabel:     columnStorePathSerialColumnScan,
+			storageSource: string(collections.ColumnPhysicalQueryStorageSourceTypedColumnPartSection),
+			metadataHits:  0,
+			want:          columnStoreMetadataModeNoAggregate,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			if got := columnStoreMetadataMode(tt.planLabel, tt.storageSource, tt.metadataHits); got != tt.want {
+				t.Fatalf("columnStoreMetadataMode(%q,%q,%d)=%q want %q", tt.planLabel, tt.storageSource, tt.metadataHits, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestColumnStoreJSONBenchUnavailablePreparedCellDoesNotClaimPreparedHash1955(t *testing.T) {
 	direct := columnStoreQueryMetric{
 		Name:           columnStoreQueryQ4B,
@@ -2227,6 +2328,9 @@ func TestColumnStoreJSONBenchUnavailablePreparedCellDoesNotClaimPreparedHash1955
 	}
 	if cell.CellLabel != columnStoreJSONBenchCellColumnPrepared || cell.StorageSource != exec.StorageSource || cell.FallbackReason != exec.FallbackReason || cell.MetadataDataScanPath != columnStoreJSONBenchScanPathData || cell.PreparedSetupDurationMS <= 0 {
 		t.Fatalf("unavailable prepared cell did not preserve actual fallback diagnostics: %+v", cell)
+	}
+	if cell.QueryMode != columnStoreQueryModeHotPreparedRun || cell.MetadataMode != columnStoreMetadataModeNoAggregate {
+		t.Fatalf("unavailable prepared cell mode labels=%q/%q want hot prepared/no aggregate: %+v", cell.QueryMode, cell.MetadataMode, cell)
 	}
 	if cell.RawHash != direct.RawHash {
 		t.Fatalf("raw_hash=%016x want %016x", cell.RawHash, direct.RawHash)
@@ -2694,6 +2798,9 @@ func TestColumnStoreSuiteReportsPreparedCellParityMismatchAfterArtifacts1955(t *
 	if prepared.ParityWithRowScan || prepared.RawHash == prepared.ResultHash || prepared.ResultHash == 0 {
 		t.Fatalf("prepared mismatch cell did not preserve failing hashes: %+v", *prepared)
 	}
+	if prepared.QueryMode != columnStoreQueryModeHotPreparedRun {
+		t.Fatalf("prepared mismatch query_mode=%q want %q", prepared.QueryMode, columnStoreQueryModeHotPreparedRun)
+	}
 }
 
 func TestColumnStoreSuiteRejectsUnknownCorruptReferenceM11A(t *testing.T) {
@@ -2869,6 +2976,9 @@ func TestRunColumnStoreSuiteTypedCompressionSurfacesTypedColumnPartCodecRowsM195
 		if q.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedColumnPartSection) || q.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) {
 			t.Fatalf("compressed q1 query storage/fallback=%q/%q want typed-column part section/no fallback", q.StorageSource, q.FallbackReason)
 		}
+		if q.QueryMode != columnStoreQueryModeOneShotEndToEnd || q.MetadataMode != columnStoreMetadataModeNoAggregate {
+			t.Fatalf("compressed q1 query modes=%q/%q want one-shot/no aggregate: %+v", q.QueryMode, q.MetadataMode, q)
+		}
 	}
 	for _, cell := range report.JSONBenchCells {
 		if cell.Query != columnStoreQueryQ1 {
@@ -2876,6 +2986,9 @@ func TestRunColumnStoreSuiteTypedCompressionSurfacesTypedColumnPartCodecRowsM195
 		}
 		if cell.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedColumnPartSection) || cell.FallbackReason != string(collections.ColumnPhysicalQueryFallbackNone) || cell.CompatibilityStatus != "available" || cell.MetadataDataScanPath != columnStoreJSONBenchScanPathData {
 			t.Fatalf("compressed q1 cell diagnostics=%+v want typed-column data path/no fallback", cell)
+		}
+		if cell.QueryMode == "" || cell.MetadataMode != columnStoreMetadataModeNoAggregate {
+			t.Fatalf("compressed q1 cell modes=%q/%q want labeled no-aggregate data path: %+v", cell.QueryMode, cell.MetadataMode, cell)
 		}
 	}
 	found := false
@@ -3131,8 +3244,22 @@ func assertColumnStoreJSONBenchCellShapeM1955(t testing.TB, report columnStoreSu
 	}
 	byQueryMode := make(map[string]map[string]columnStoreJSONBenchCell)
 	for _, cell := range report.JSONBenchCells {
-		if cell.Query == "" || cell.CellLabel == "" || cell.SortLayout == "" || cell.PlanLabel == "" || cell.StorageSource == "" || cell.FallbackReason == "" || cell.ExecutionMode == "" || cell.MetadataDataScanPath == "" || cell.CompressionMode == "" || cell.MutationMode == "" || cell.RetainedPayloadPolicy == "" || cell.RetainedPayloadEncoding == "" || cell.RetainedPayloadEncodingStatus == "" || cell.RetainedPayloadCompression == "" || cell.RetainedPayloadCompressionPolicy == "" || cell.RetainedPayloadCompressionStatus == "" || cell.TypedStorageOwner == "" || cell.RowCount != report.Rows || cell.ReconstructionStatus == "" || cell.FullDataCaveat == "" || cell.StorageAccountingCaveat == "" || cell.CompatibilityStatus == "" {
+		if cell.Query == "" || cell.CellLabel == "" || cell.SortLayout == "" || cell.PlanLabel == "" || cell.StorageSource == "" || cell.FallbackReason == "" || cell.ExecutionMode == "" || cell.QueryMode == "" || cell.MetadataMode == "" || cell.MetadataDataScanPath == "" || cell.CompressionMode == "" || cell.MutationMode == "" || cell.RetainedPayloadPolicy == "" || cell.RetainedPayloadEncoding == "" || cell.RetainedPayloadEncodingStatus == "" || cell.RetainedPayloadCompression == "" || cell.RetainedPayloadCompressionPolicy == "" || cell.RetainedPayloadCompressionStatus == "" || cell.TypedStorageOwner == "" || cell.RowCount != report.Rows || cell.ReconstructionStatus == "" || cell.FullDataCaveat == "" || cell.StorageAccountingCaveat == "" || cell.CompatibilityStatus == "" {
 			t.Fatalf("incomplete JSONBench cell labels: %+v", cell)
+		}
+		switch cell.ExecutionMode {
+		case columnStoreJSONBenchModeDirect:
+			if cell.QueryMode != columnStoreQueryModeOneShotEndToEnd {
+				t.Fatalf("direct JSONBench cell query_mode=%q want %q: %+v", cell.QueryMode, columnStoreQueryModeOneShotEndToEnd, cell)
+			}
+		case columnStoreJSONBenchModePrepared:
+			if cell.QueryMode != columnStoreQueryModeHotPreparedRun {
+				t.Fatalf("prepared JSONBench cell query_mode=%q want %q: %+v", cell.QueryMode, columnStoreQueryModeHotPreparedRun, cell)
+			}
+		}
+		wantMetadataMode := columnStoreMetadataMode(cell.PlanLabel, cell.StorageSource, cell.MetadataHits)
+		if cell.MetadataMode != wantMetadataMode {
+			t.Fatalf("JSONBench cell metadata_mode=%q want %q: %+v", cell.MetadataMode, wantMetadataMode, cell)
 		}
 		if cell.FullDataCell {
 			t.Fatalf("synthetic gomap cell should not claim full-data parity: %+v", cell)
@@ -3188,6 +3315,18 @@ func assertColumnStoreQueryMetricCoverageM11A(t testing.TB, queries []columnStor
 	for _, q := range queries {
 		if _, exists := byName[q.Name]; exists {
 			t.Fatalf("duplicate query metric for %s", q.Name)
+		}
+		if q.QueryMode != columnStoreQueryModeOneShotEndToEnd {
+			t.Fatalf("query %s query_mode=%q want %q", q.Name, q.QueryMode, columnStoreQueryModeOneShotEndToEnd)
+		}
+		if got, want := q.MetadataMode, columnStoreMetadataMode(q.PlanLabel, q.StorageSource, q.MetadataHits); got != want {
+			t.Fatalf("query %s metadata_mode=%q want %q from plan/source/hits: %+v", q.Name, got, want, q)
+		}
+		if q.RunDurationMS <= 0 || q.TotalQueryDurationMS <= 0 {
+			t.Fatalf("query %s missing run/total query timings: run=%f total=%f metric=%+v", q.Name, q.RunDurationMS, q.TotalQueryDurationMS, q)
+		}
+		if math.Abs(q.TotalQueryDurationMS-q.DurationMS) > 0.000001 {
+			t.Fatalf("query %s total_query_duration_ms=%f want duration_ms=%f", q.Name, q.TotalQueryDurationMS, q.DurationMS)
 		}
 		byName[q.Name] = q
 	}
