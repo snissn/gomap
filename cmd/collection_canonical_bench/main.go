@@ -107,33 +107,34 @@ type commandRecord struct {
 }
 
 type resultRow struct {
-	GeneratedAt      string             `json:"generated_at,omitempty"`
-	RunDir           string             `json:"run_dir,omitempty"`
-	Worktree         string             `json:"worktree,omitempty"`
-	Branch           string             `json:"branch,omitempty"`
-	Commit           string             `json:"commit,omitempty"`
-	CommandLine      []string           `json:"command_line,omitempty"`
-	ConfigName       string             `json:"config_name"`
-	Engine           string             `json:"engine"`
-	Format           string             `json:"format"`
-	Shape            string             `json:"shape"`
-	IndexCount       int                `json:"index_count"`
-	DocumentCount    int                `json:"document_count"`
-	BenchmarkName    string             `json:"benchmark_name"`
-	Phase            string             `json:"phase"`
-	MaintenanceMode  string             `json:"maintenance_mode"`
-	TotalBytes       *int64             `json:"total_bytes,omitempty"`
-	BytesPerDoc      *float64           `json:"bytes_per_doc,omitempty"`
-	DocsPerSec       *float64           `json:"docs_per_sec,omitempty"`
-	NsPerDoc         *float64           `json:"ns_per_doc,omitempty"`
-	BatchSize        int                `json:"batch_size,omitempty"`
-	BenchmarkTimed   bool               `json:"benchmark_timed"`
-	MeasurementKind  string             `json:"measurement_kind"`
-	MeasurementNote  string             `json:"measurement_note,omitempty"`
-	CompactionFlags  map[string]string  `json:"compaction_flags,omitempty"`
-	SourceArtifact   string             `json:"source_artifact,omitempty"`
-	MaintenanceStats map[string]float64 `json:"maintenance_stats,omitempty"`
-	Extra            map[string]string  `json:"extra,omitempty"`
+	GeneratedAt        string              `json:"generated_at,omitempty"`
+	RunDir             string              `json:"run_dir,omitempty"`
+	Worktree           string              `json:"worktree,omitempty"`
+	Branch             string              `json:"branch,omitempty"`
+	Commit             string              `json:"commit,omitempty"`
+	CommandLine        []string            `json:"command_line,omitempty"`
+	ConfigName         string              `json:"config_name"`
+	Engine             string              `json:"engine"`
+	Format             string              `json:"format"`
+	Shape              string              `json:"shape"`
+	IndexCount         int                 `json:"index_count"`
+	DocumentCount      int                 `json:"document_count"`
+	BenchmarkName      string              `json:"benchmark_name"`
+	Phase              string              `json:"phase"`
+	MaintenanceMode    string              `json:"maintenance_mode"`
+	TotalBytes         *int64              `json:"total_bytes,omitempty"`
+	BytesPerDoc        *float64            `json:"bytes_per_doc,omitempty"`
+	DocsPerSec         *float64            `json:"docs_per_sec,omitempty"`
+	NsPerDoc           *float64            `json:"ns_per_doc,omitempty"`
+	BatchSize          int                 `json:"batch_size,omitempty"`
+	BenchmarkTimed     bool                `json:"benchmark_timed"`
+	MeasurementKind    string              `json:"measurement_kind"`
+	MeasurementNote    string              `json:"measurement_note,omitempty"`
+	CompactionFlags    map[string]string   `json:"compaction_flags,omitempty"`
+	SourceArtifact     string              `json:"source_artifact,omitempty"`
+	MaintenanceStats   map[string]float64  `json:"maintenance_stats,omitempty"`
+	Extra              map[string]string   `json:"extra,omitempty"`
+	ProductionEvidence *productionEvidence `json:"production_evidence,omitempty"`
 }
 
 type comparisonRow struct {
@@ -161,19 +162,21 @@ type guardrailCheck struct {
 }
 
 type collectionReport struct {
-	GeneratedAt         string          `json:"generated_at"`
-	Status              string          `json:"status"`
-	ExecutionPath       string          `json:"execution_path"`
-	BenchmarkEngine     string          `json:"benchmark_engine"`
-	DocumentFormat      string          `json:"document_format"`
-	StoragePolicy       string          `json:"storage_policy"`
-	Worktree            string          `json:"worktree"`
-	Branch              string          `json:"branch"`
-	Commit              string          `json:"commit"`
-	BenchPattern        string          `json:"bench_pattern"`
-	Count               int             `json:"count"`
-	CollectionBatchSize int             `json:"collection_batch_size"`
-	Sections            []reportSection `json:"sections"`
+	GeneratedAt          string          `json:"generated_at"`
+	Status               string          `json:"status"`
+	ExecutionPath        string          `json:"execution_path"`
+	BenchmarkEngine      string          `json:"benchmark_engine"`
+	DocumentFormat       string          `json:"document_format"`
+	StoragePolicy        string          `json:"storage_policy"`
+	PagerChunkSize       string          `json:"pager_chunk_size"`
+	PagerSyncConcurrency string          `json:"pager_sync_concurrency"`
+	Worktree             string          `json:"worktree"`
+	Branch               string          `json:"branch"`
+	Commit               string          `json:"commit"`
+	BenchPattern         string          `json:"bench_pattern"`
+	Count                int             `json:"count"`
+	CollectionBatchSize  int             `json:"collection_batch_size"`
+	Sections             []reportSection `json:"sections"`
 }
 
 type reportSection struct {
@@ -189,6 +192,39 @@ type reportBenchmark struct {
 	OpsPerSec   float64            `json:"ops_per_sec"`
 	MeanMetrics map[string]float64 `json:"mean_metrics"`
 }
+
+type productionEvidence struct {
+	ProducerRoute                       string   `json:"producer_route,omitempty"`
+	ProducerRouteObservations           *float64 `json:"producer_route_observations,omitempty"`
+	ProducerRouteCandidateOps           *float64 `json:"producer_route_candidate_ops,omitempty"`
+	ProducerRouteEligibleOps            *float64 `json:"producer_route_eligible_ops,omitempty"`
+	ProducerRouteUsedOps                *float64 `json:"producer_route_used_ops,omitempty"`
+	ProducerRouteFallbacks              *float64 `json:"producer_route_fallbacks,omitempty"`
+	StoragePolicy                       string   `json:"storage_policy,omitempty"`
+	StorageCells                        string   `json:"storage_cells,omitempty"`
+	PagerChunkSize                      string   `json:"pager_chunk_size,omitempty"`
+	PagerSyncConcurrency                string   `json:"pager_sync_concurrency,omitempty"`
+	LeafSegmentTargetBytes              int64    `json:"leaf_segment_target_bytes,omitempty"`
+	GOMAXPROCS                          *int     `json:"gomaxprocs,omitempty"`
+	PhysicalCores                       *int     `json:"physical_cores,omitempty"`
+	FlushAdmissionConfiguredConcurrency *int     `json:"flush_admission_configured_concurrency,omitempty"`
+	FlushAdmissionEffectiveConcurrency  *int     `json:"flush_admission_effective_concurrency,omitempty"`
+	FlushAdmissionGOMAXPROCS            *int     `json:"flush_admission_gomaxprocs,omitempty"`
+	FlushAdmissionPhysicalCores         *int     `json:"flush_admission_physical_cores,omitempty"`
+	FlushAdmissionAdmitted              *bool    `json:"flush_admission_admitted,omitempty"`
+	FlushAdmissionSpanNative            *bool    `json:"flush_admission_span_native,omitempty"`
+	FlushAdmissionBacklogCoalescing     *bool    `json:"flush_admission_backlog_coalescing,omitempty"`
+	FlushSpanCandidateOps               *float64 `json:"flush_span_candidate_ops,omitempty"`
+	FlushSpanEligibleOps                *float64 `json:"flush_span_eligible_ops,omitempty"`
+	FlushSpanUsedOps                    *float64 `json:"flush_span_used_ops,omitempty"`
+	FlushSpanFallbacks                  *float64 `json:"flush_span_fallbacks,omitempty"`
+	OrderedRootSpanCandidateOps         *float64 `json:"ordered_root_span_candidate_ops,omitempty"`
+	OrderedRootSpanEligibleOps          *float64 `json:"ordered_root_span_eligible_ops,omitempty"`
+	OrderedRootSpanUsedOps              *float64 `json:"ordered_root_span_used_ops,omitempty"`
+	OrderedRootSpanFallbacks            *float64 `json:"ordered_root_span_fallbacks,omitempty"`
+}
+
+const noSecondaryIndexProducerRoute = "flush_apply_span_native_no_secondary_indexes"
 
 type fixtureSummary struct {
 	GeneratedAt                string                 `json:"generated_at"`
@@ -744,26 +780,28 @@ func addTreeDBTimedRows(canon *canonicalRun, report collectionReport, bench repo
 	total := int64(metricDefault(metrics, "disk_total_bytes", 0))
 	bpd := bytesPerDoc(total, docs)
 	ns := bench.MeanNSPerOp
+	evidence := productionEvidenceFromTreeDBTimedReport(report, metrics, cfg)
 	canon.Results = append(canon.Results, resultRow{
-		ConfigName:       configName,
-		Engine:           report.BenchmarkEngine,
-		Format:           format,
-		Shape:            "collection",
-		IndexCount:       indexes,
-		DocumentCount:    docs,
-		BenchmarkName:    bench.Name,
-		Phase:            phasePostInsert,
-		MaintenanceMode:  "none",
-		TotalBytes:       int64Ptr(total),
-		BytesPerDoc:      floatPtr(bpd),
-		DocsPerSec:       floatPtr(bench.OpsPerSec),
-		NsPerDoc:         floatPtr(ns),
-		BatchSize:        cfg.BatchSize,
-		BenchmarkTimed:   true,
-		MeasurementKind:  "go_benchmark",
-		MeasurementNote:  "post-insert benchmark size; not compacted",
-		SourceArtifact:   path,
-		MaintenanceStats: copyMetrics(metrics, "prepare_ns/doc", "publish_ns/doc", "secondary_runs_ns/doc", "disk_total_bytes"),
+		ConfigName:         configName,
+		Engine:             report.BenchmarkEngine,
+		Format:             format,
+		Shape:              "collection",
+		IndexCount:         indexes,
+		DocumentCount:      docs,
+		BenchmarkName:      bench.Name,
+		Phase:              phasePostInsert,
+		MaintenanceMode:    "none",
+		TotalBytes:         int64Ptr(total),
+		BytesPerDoc:        floatPtr(bpd),
+		DocsPerSec:         floatPtr(bench.OpsPerSec),
+		NsPerDoc:           floatPtr(ns),
+		BatchSize:          cfg.BatchSize,
+		BenchmarkTimed:     true,
+		MeasurementKind:    "go_benchmark",
+		MeasurementNote:    "post-insert benchmark size; not compacted",
+		SourceArtifact:     path,
+		MaintenanceStats:   copyMetrics(metrics, "prepare_ns/doc", "publish_ns/doc", "secondary_runs_ns/doc", "disk_total_bytes"),
+		ProductionEvidence: evidence,
 	})
 
 	onlineTotal, onlineMetric := firstMetric(metrics,
@@ -813,8 +851,9 @@ func addTreeDBTimedRows(canon *canonicalRun, report collectionReport, bench repo
 			"post-maintenance-index-vacuum":      "online",
 			"selected-online-total-bytes-metric": onlineMetric,
 		},
-		SourceArtifact:   path,
-		MaintenanceStats: onlineStats,
+		SourceArtifact:     path,
+		MaintenanceStats:   onlineStats,
+		ProductionEvidence: cloneProductionEvidence(evidence),
 	})
 }
 
@@ -946,25 +985,31 @@ func parseOfflineRewriteTSV(canon *canonicalRun, path string, cfg config, compac
 			"index_db_bytes":                row["index_db_bytes"],
 			"value_vlog_bytes":              row["value_vlog_bytes"],
 		}
+		evidence := &productionEvidence{
+			StoragePolicy:          cfg.StorageCells,
+			StorageCells:           cfg.StorageCells,
+			LeafSegmentTargetBytes: cfg.LeafSegmentTargetBytes,
+		}
 		canon.Results = append(canon.Results, resultRow{
-			ConfigName:      canonicalConfigName("treedb", "template-v1", shape, indexes),
-			Engine:          "treedb_" + cfg.Profile,
-			Format:          "template-v1",
-			Shape:           shape,
-			IndexCount:      indexes,
-			DocumentCount:   docs,
-			BenchmarkName:   "treedb_collection_compression_matrix",
-			Phase:           phase,
-			MaintenanceMode: maintenance,
-			TotalBytes:      int64Ptr(total),
-			BytesPerDoc:     floatPtr(bytesPerDoc(total, docs)),
-			BatchSize:       cfg.BatchSize,
-			BenchmarkTimed:  false,
-			MeasurementKind: "offline_script",
-			MeasurementNote: note,
-			CompactionFlags: flags,
-			SourceArtifact:  path,
-			Extra:           extra,
+			ConfigName:         canonicalConfigName("treedb", "template-v1", shape, indexes),
+			Engine:             "treedb_" + cfg.Profile,
+			Format:             "template-v1",
+			Shape:              shape,
+			IndexCount:         indexes,
+			DocumentCount:      docs,
+			BenchmarkName:      "treedb_collection_compression_matrix",
+			Phase:              phase,
+			MaintenanceMode:    maintenance,
+			TotalBytes:         int64Ptr(total),
+			BytesPerDoc:        floatPtr(bytesPerDoc(total, docs)),
+			BatchSize:          cfg.BatchSize,
+			BenchmarkTimed:     false,
+			MeasurementKind:    "offline_script",
+			MeasurementNote:    note,
+			CompactionFlags:    flags,
+			SourceArtifact:     path,
+			Extra:              extra,
+			ProductionEvidence: evidence,
 		})
 	}
 	return sc.Err()
@@ -1060,8 +1105,108 @@ func parseFullLeafgenSummary(canon *canonicalRun, path string, cfg config) error
 		},
 		SourceArtifact:   path,
 		MaintenanceStats: stats,
+		ProductionEvidence: &productionEvidence{
+			StoragePolicy:          storagePolicyFromFixture(summary),
+			StorageCells:           cfg.StorageCells,
+			LeafSegmentTargetBytes: cfg.LeafSegmentTargetBytes,
+		},
 	})
 	return nil
+}
+
+func productionEvidenceFromTreeDBTimedReport(report collectionReport, metrics map[string]float64, cfg config) *productionEvidence {
+	ev := &productionEvidence{
+		StoragePolicy:                       report.StoragePolicy,
+		StorageCells:                        cfg.StorageCells,
+		PagerChunkSize:                      report.PagerChunkSize,
+		PagerSyncConcurrency:                report.PagerSyncConcurrency,
+		LeafSegmentTargetBytes:              cfg.LeafSegmentTargetBytes,
+		GOMAXPROCS:                          intMetricPtr(metrics, "gomaxprocs"),
+		PhysicalCores:                       intMetricPtr(metrics, "physical_cores"),
+		FlushAdmissionConfiguredConcurrency: intMetricPtr(metrics, "flush_admission_configured_concurrency"),
+		FlushAdmissionEffectiveConcurrency:  intMetricPtr(metrics, "flush_admission_effective_concurrency"),
+		FlushAdmissionGOMAXPROCS:            intMetricPtr(metrics, "flush_admission_gomaxprocs"),
+		FlushAdmissionPhysicalCores:         intMetricPtr(metrics, "flush_admission_physical_cores"),
+		FlushAdmissionAdmitted:              boolMetricPtr(metrics, "flush_admission_admitted"),
+		FlushAdmissionSpanNative:            boolMetricPtr(metrics, "flush_admission_span_native"),
+		FlushAdmissionBacklogCoalescing:     boolMetricPtr(metrics, "flush_admission_backlog_coalescing"),
+		FlushSpanCandidateOps:               floatMetricPtr(metrics, "flush_span_candidate_ops"),
+		FlushSpanEligibleOps:                floatMetricPtr(metrics, "flush_span_eligible_ops"),
+		FlushSpanUsedOps:                    floatMetricPtr(metrics, "flush_span_used_ops"),
+		FlushSpanFallbacks:                  floatMetricPtr(metrics, "flush_span_fallbacks"),
+		OrderedRootSpanCandidateOps:         floatMetricPtr(metrics, "ordered_root_span_candidate_ops"),
+		OrderedRootSpanEligibleOps:          floatMetricPtr(metrics, "ordered_root_span_eligible_ops"),
+		OrderedRootSpanUsedOps:              floatMetricPtr(metrics, "ordered_root_span_used_ops"),
+		OrderedRootSpanFallbacks:            floatMetricPtr(metrics, "ordered_root_span_fallbacks"),
+	}
+	route, observations, candidate, eligible, used, fallbacks := selectProducerRouteEvidence(metrics)
+	if route != "" {
+		ev.ProducerRoute = route
+		ev.ProducerRouteObservations = floatPtr(observations)
+		ev.ProducerRouteCandidateOps = floatPtr(candidate)
+		ev.ProducerRouteEligibleOps = floatPtr(eligible)
+		ev.ProducerRouteUsedOps = floatPtr(used)
+		ev.ProducerRouteFallbacks = floatPtr(fallbacks)
+	} else if intMetricDefault(metrics, "indexes/doc", cfg.Indexes) == 0 &&
+		floatPtrPositive(ev.FlushSpanCandidateOps) &&
+		floatPtrPositive(ev.FlushSpanUsedOps) {
+		ev.ProducerRoute = noSecondaryIndexProducerRoute
+		ev.ProducerRouteCandidateOps = cloneFloatPtr(ev.FlushSpanCandidateOps)
+		ev.ProducerRouteEligibleOps = cloneFloatPtr(ev.FlushSpanEligibleOps)
+		ev.ProducerRouteUsedOps = cloneFloatPtr(ev.FlushSpanUsedOps)
+		ev.ProducerRouteFallbacks = cloneFloatPtr(ev.FlushSpanFallbacks)
+	}
+	return ev
+}
+
+func selectProducerRouteEvidence(metrics map[string]float64) (route string, observations, candidate, eligible, used, fallbacks float64) {
+	bestScore := 0.0
+	for _, candidateRoute := range orderedRootProducerRoutes() {
+		prefix := "ordered_root_route_" + candidateRoute + "_"
+		routeObservations := metrics[prefix+"observations"]
+		routeCandidate := metrics[prefix+"candidate_ops"]
+		routeEligible := metrics[prefix+"eligible_ops"]
+		routeUsed := metrics[prefix+"used_ops"]
+		routeFallbacks := metrics[prefix+"fallbacks"]
+		score := routeUsed*1_000_000 + routeFallbacks*10_000 + routeEligible*100 + routeCandidate + routeObservations
+		if score <= bestScore {
+			continue
+		}
+		bestScore = score
+		route = candidateRoute
+		observations = routeObservations
+		candidate = routeCandidate
+		eligible = routeEligible
+		used = routeUsed
+		fallbacks = routeFallbacks
+	}
+	return route, observations, candidate, eligible, used, fallbacks
+}
+
+func orderedRootProducerRoutes() []string {
+	return []string{
+		"command_wal_publish",
+		"collection_buffered_roots",
+		"system_delta_builder_publish",
+		"multi_index_group_publish",
+		"delta_batch_publish",
+		"overlay_cold_build",
+		"direct_publish",
+		"grouped_publish",
+		"read_only_prepare",
+	}
+}
+
+func cloneProductionEvidence(ev *productionEvidence) *productionEvidence {
+	if ev == nil {
+		return nil
+	}
+	cp := *ev
+	return &cp
+}
+
+func storagePolicyFromFixture(summary fixtureSummary) string {
+	return fmt.Sprintf("data_outer=%t,index_outer=%t", summary.DataOuterLeavesInValueLog, summary.IndexOuterLeavesInValueLog)
 }
 
 func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
@@ -1070,8 +1215,11 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		checks = append(checks, guardrailCheck{Severity: sev, Code: code, Message: msg})
 	}
 	add("warning", "phase.online_one_pass.partial", "online_one_pass_maintenance is partial online maintenance; do not describe it as full compaction")
-	if compactedClaimsBlocked(canon) {
+	if checksBlockCompactedClaims(canon.Checks) || !hasCanonicalExhaustiveCompactEvidence(canon) {
 		add("error", "exhaustive_compact_required", "exhaustive_compact must complete before canonical TreeDB compacted-size comparisons or byte-minimized headlines are reportable")
+	}
+	if !hasCanonicalProductionEvidence(canon) {
+		add("error", "production_evidence_required", "canonical TreeDB compacted-size comparisons require matching post-insert producer route, concurrency, admission, and fallback-counter evidence")
 	}
 	for _, r := range canon.Results {
 		if r.GeneratedAt == "" || r.RunDir == "" || r.Worktree == "" || r.Commit == "" || len(r.CommandLine) == 0 {
@@ -1085,6 +1233,14 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 		}
 		if (isTreeDBCompactedPhase(r.Phase) || r.Phase == phaseSQLiteVacuum) && len(r.CompactionFlags) == 0 {
 			add("error", "missing_compaction_flags", fmt.Sprintf("%s/%s is missing compaction flags", r.ConfigName, r.Phase))
+		}
+		if isTreeDBTimedPostInsertProductionRow(r) && !hasRowProductionEvidence(r) {
+			add("error", "missing_production_evidence", fmt.Sprintf("%s/%s is missing producer route, selected concurrency/admission, span-native used ops, or fallback-counter evidence", r.ConfigName, r.Phase))
+		}
+	}
+	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
+		if hasTreeDBConfigExhaustiveCompactEvidence(canon, treeDBConfig) && !hasTreeDBConfigProductionEvidence(canon, treeDBConfig) {
+			add("error", "production_evidence_required", fmt.Sprintf("%s has compacted evidence but no matching post-insert production route/concurrency evidence", treeDBConfig))
 		}
 	}
 	sqliteJSONConfig := sqliteJSONConfigName(canon)
@@ -1180,7 +1336,7 @@ func buildCompactedComparisons(canon *canonicalRun) []comparisonRow {
 	var comparisons []comparisonRow
 	sqliteConfigs := []string{sqliteNativeConfigName(canon), sqliteJSONConfigName(canon)}
 	for _, treeDBConfig := range compactedTreeDBConfigNames(canon) {
-		if !hasTreeDBConfigExhaustiveCompactEvidence(canon, treeDBConfig) {
+		if !hasTreeDBConfigExhaustiveCompactEvidence(canon, treeDBConfig) || !hasTreeDBConfigProductionEvidence(canon, treeDBConfig) {
 			continue
 		}
 		for _, treedbPhase := range compactedTreeDBPhases() {
@@ -1228,7 +1384,7 @@ func compactedClaimsBlocked(canon *canonicalRun) bool {
 	if canon == nil {
 		return false
 	}
-	return checksBlockCompactedClaims(canon.Checks) || !hasCanonicalExhaustiveCompactEvidence(canon)
+	return checksBlockCompactedClaims(canon.Checks) || !hasCanonicalExhaustiveCompactEvidence(canon) || !hasCanonicalProductionEvidence(canon)
 }
 
 func hasCanonicalExhaustiveCompactEvidence(canon *canonicalRun) bool {
@@ -1245,6 +1401,63 @@ func hasTreeDBConfigExhaustiveCompactEvidence(canon *canonicalRun, treeDBConfig 
 	return hasPositiveBytesPerDoc(findResult(canon.Results, treeDBConfig, phaseExhaustiveCompact))
 }
 
+func hasCanonicalProductionEvidence(canon *canonicalRun) bool {
+	if canon == nil {
+		return false
+	}
+	return hasTreeDBConfigProductionEvidence(canon, compactedTreeDBConfigName(canon))
+}
+
+func hasTreeDBConfigProductionEvidence(canon *canonicalRun, treeDBConfig string) bool {
+	if canon == nil || strings.TrimSpace(treeDBConfig) == "" {
+		return false
+	}
+	for _, row := range canon.Results {
+		if row.ConfigName == treeDBConfig && isTreeDBTimedPostInsertProductionRow(row) && hasRowProductionEvidence(row) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTreeDBTimedPostInsertProductionRow(row resultRow) bool {
+	return row.Phase == phasePostInsert &&
+		row.Shape == "collection" &&
+		strings.HasPrefix(row.ConfigName, "treedb_") &&
+		row.BenchmarkTimed
+}
+
+func hasRowProductionEvidence(row resultRow) bool {
+	ev := row.ProductionEvidence
+	if ev == nil {
+		return false
+	}
+	return strings.TrimSpace(ev.StoragePolicy) != "" &&
+		ev.GOMAXPROCS != nil &&
+		ev.FlushAdmissionEffectiveConcurrency != nil &&
+		ev.FlushAdmissionAdmitted != nil &&
+		ev.FlushAdmissionSpanNative != nil &&
+		ev.FlushAdmissionBacklogCoalescing != nil &&
+		ev.FlushSpanFallbacks != nil &&
+		ev.OrderedRootSpanFallbacks != nil &&
+		hasProducerPathEvidence(row)
+}
+
+func hasProducerPathEvidence(row resultRow) bool {
+	ev := row.ProductionEvidence
+	if ev == nil {
+		return false
+	}
+	if strings.TrimSpace(ev.ProducerRoute) != "" &&
+		floatPtrPositive(ev.ProducerRouteCandidateOps) &&
+		floatPtrPositive(ev.ProducerRouteUsedOps) {
+		return true
+	}
+	return row.IndexCount == 0 &&
+		floatPtrPositive(ev.FlushSpanCandidateOps) &&
+		floatPtrPositive(ev.FlushSpanUsedOps)
+}
+
 func filterCompactedComparisonsForEvidence(canon *canonicalRun, comps []comparisonRow) []comparisonRow {
 	if canon == nil || len(comps) == 0 {
 		return comps
@@ -1253,7 +1466,8 @@ func filterCompactedComparisonsForEvidence(canon *canonicalRun, comps []comparis
 	for _, cmp := range comps {
 		if strings.HasPrefix(cmp.TreeDBConfigName, "treedb_") &&
 			isTreeDBCompactedPhase(cmp.TreeDBPhase) &&
-			!hasTreeDBConfigExhaustiveCompactEvidence(canon, cmp.TreeDBConfigName) {
+			(!hasTreeDBConfigExhaustiveCompactEvidence(canon, cmp.TreeDBConfigName) ||
+				!hasTreeDBConfigProductionEvidence(canon, cmp.TreeDBConfigName)) {
 			continue
 		}
 		filtered = append(filtered, cmp)
@@ -1368,6 +1582,10 @@ func renderMarkdownReport(canon *canonicalRun) string {
 		sb.WriteString(fmt.Sprintf("| `%s` | %s | `%s` | %s | %s | %s | %s |\n",
 			r.ConfigName, r.Shape, r.Phase, formatIntPtr(r.TotalBytes), formatFloatPtr(r.BytesPerDoc, 1), r.MeasurementKind, markdownEscape(r.MeasurementNote)))
 	}
+	sb.WriteString("\n")
+
+	sb.WriteString("## Production Evidence\n\n")
+	writeProductionEvidence(&sb, canon)
 	sb.WriteString("\n")
 
 	sb.WriteString("## Fair Compacted-State Comparison\n\n")
@@ -1509,6 +1727,37 @@ func writeFairComparison(sb *strings.Builder, canon *canonicalRun) {
 		}
 	}
 	sb.WriteString("\nDerived comparison rows are also emitted in `benchmark_results.json` under `comparisons`.\n")
+}
+
+func writeProductionEvidence(sb *strings.Builder, canon *canonicalRun) {
+	var rows []resultRow
+	for _, row := range canon.Results {
+		if row.ProductionEvidence != nil && strings.HasPrefix(row.ConfigName, "treedb_") {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) == 0 {
+		sb.WriteString("No TreeDB production evidence rows were emitted.\n")
+		return
+	}
+	sb.WriteString("| Config | Phase | Producer route | Route used ops | Route fallbacks | GOMAXPROCS | Physical cores | Effective concurrency | Admitted | Span-native | Backlog coalescing | Storage policy |\n")
+	sb.WriteString("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |\n")
+	for _, row := range rows {
+		ev := row.ProductionEvidence
+		sb.WriteString(fmt.Sprintf("| `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+			row.ConfigName,
+			row.Phase,
+			markdownInlineCode(ev.ProducerRoute),
+			formatFloatPtr(ev.ProducerRouteUsedOps, 0),
+			formatFloatPtr(ev.ProducerRouteFallbacks, 0),
+			formatIntMetricPtr(ev.GOMAXPROCS),
+			formatIntMetricPtr(ev.PhysicalCores),
+			formatIntMetricPtr(ev.FlushAdmissionEffectiveConcurrency),
+			formatBoolPtr(ev.FlushAdmissionAdmitted),
+			formatBoolPtr(ev.FlushAdmissionSpanNative),
+			formatBoolPtr(ev.FlushAdmissionBacklogCoalescing),
+			markdownEscape(ev.StoragePolicy)))
+	}
 }
 
 func writeCSV(path string, rows []resultRow) error {
@@ -1683,7 +1932,7 @@ func compactedTreeDBConfigNames(canon *canonicalRun) []string {
 		if row.IndexCount != canonicalIndexCount(canon) {
 			continue
 		}
-		if row.Phase != phaseOfflineCompact && row.Phase != phaseFullLeafgenPackGC {
+		if row.Phase != phaseOfflineCompact && row.Phase != phaseExhaustiveCompact && row.Phase != phaseFullLeafgenPackGC {
 			continue
 		}
 		add(row.ConfigName)
@@ -1742,6 +1991,10 @@ func hasPositiveBytesPerDoc(row *resultRow) bool {
 	return row != nil && row.BytesPerDoc != nil && *row.BytesPerDoc > 0
 }
 
+func floatPtrPositive(v *float64) bool {
+	return v != nil && *v > 0
+}
+
 func metricDefault(metrics map[string]float64, key string, def float64) float64 {
 	if metrics == nil {
 		return def
@@ -1769,6 +2022,47 @@ func copyMetrics(metrics map[string]float64, keys ...string) map[string]float64 
 		}
 	}
 	return out
+}
+
+func intMetricPtr(metrics map[string]float64, key string) *int {
+	value, ok := metrics[key]
+	if !ok {
+		return nil
+	}
+	n := int(math.Round(value))
+	return &n
+}
+
+func intMetricDefault(metrics map[string]float64, key string, def int) int {
+	value, ok := metrics[key]
+	if !ok {
+		return def
+	}
+	return int(math.Round(value))
+}
+
+func boolMetricPtr(metrics map[string]float64, key string) *bool {
+	value, ok := metrics[key]
+	if !ok {
+		return nil
+	}
+	b := value >= 0.5
+	return &b
+}
+
+func floatMetricPtr(metrics map[string]float64, key string) *float64 {
+	value, ok := metrics[key]
+	if !ok {
+		return nil
+	}
+	return floatPtr(value)
+}
+
+func cloneFloatPtr(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	return floatPtr(*v)
 }
 
 func bytesPerDoc(total int64, docs int) float64 {
@@ -1916,6 +2210,20 @@ func formatFloat(v float64, prec int) string {
 		return "-"
 	}
 	return strconv.FormatFloat(v, 'f', prec, 64)
+}
+
+func formatIntMetricPtr(v *int) string {
+	if v == nil {
+		return "-"
+	}
+	return strconv.Itoa(*v)
+}
+
+func formatBoolPtr(v *bool) string {
+	if v == nil {
+		return "-"
+	}
+	return strconv.FormatBool(*v)
 }
 
 func intPtrString(v *int64) string {

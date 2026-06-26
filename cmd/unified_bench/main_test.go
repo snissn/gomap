@@ -3821,7 +3821,7 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPathListsAllowedValues(t *testi
 	if err == nil {
 		t.Fatal("expected invalid execution path to fail")
 	}
-	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath|m8-m14-10mm-gate") {
+	if !strings.Contains(err.Error(), "expected one of oracle|native-fastpath|m8-m14-10mm-gate|span-native-default-gate|span-native-read-scan-guardrail") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(err.Error(), "mixed-path labels are forbidden") {
@@ -3853,6 +3853,37 @@ func TestWriteBenchprofArtifacts_AcceptsM8M14GateExecutionPath(t *testing.T) {
 	}
 	if got := parsed.Runs[0].ExecutionPath; got != "m8-m14-10mm-gate" {
 		t.Fatalf("execution_path=%q want m8-m14-10mm-gate", got)
+	}
+}
+
+func TestWriteBenchprofArtifacts_AcceptsSpanNativeCloseoutExecutionPaths(t *testing.T) {
+	for _, path := range []string{"span-native-default-gate", "span-native-read-scan-guardrail"} {
+		t.Run(path, func(t *testing.T) {
+			dir := t.TempDir()
+			runs := []BenchRun{{
+				Config: BenchConfig{Keys: 1, Profile: "fast"},
+				Results: map[string]map[string]float64{
+					"full_scan": {"TreeDB": 1},
+				},
+			}}
+			if err := writeBenchprofArtifacts(dir, path, runs); err != nil {
+				t.Fatalf("%s execution path should be accepted: %v", path, err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, "benchprof_results.json"))
+			if err != nil {
+				t.Fatalf("read benchprof results: %v", err)
+			}
+			var parsed benchprofExport
+			if err := json.Unmarshal(data, &parsed); err != nil {
+				t.Fatalf("parse benchprof results: %v", err)
+			}
+			if len(parsed.Runs) != 1 {
+				t.Fatalf("benchprof runs=%d want 1", len(parsed.Runs))
+			}
+			if got := parsed.Runs[0].ExecutionPath; got != path {
+				t.Fatalf("execution_path=%q want %q", got, path)
+			}
+		})
 	}
 }
 

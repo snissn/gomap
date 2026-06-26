@@ -72,7 +72,7 @@ var (
 	cpuProfile                = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg        = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 	profileDir                = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
-	pathLabel                 = flag.String("path-label", "", "Benchmark execution-path label for -profile-dir artifacts (oracle|native-fastpath|m8-m14-10mm-gate; default native-fastpath)")
+	pathLabel                 = flag.String("path-label", "", "Benchmark execution-path label for -profile-dir artifacts (oracle|native-fastpath|m8-m14-10mm-gate|span-native-default-gate|span-native-read-scan-guardrail; default native-fastpath)")
 	allocsProfile             = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
 	allocsProfileTests        = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
 	allocsProfileRate         = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
@@ -1548,13 +1548,13 @@ func normalizeBenchprofExecutionPath(executionPath string) (string, error) {
 	if executionPath == "" {
 		return "native-fastpath", nil
 	}
-	if executionPath == "oracle" || executionPath == "native-fastpath" || executionPath == "m8-m14-10mm-gate" {
+	if executionPath == "oracle" || executionPath == "native-fastpath" || executionPath == "m8-m14-10mm-gate" || executionPath == "span-native-default-gate" || executionPath == "span-native-read-scan-guardrail" {
 		return executionPath, nil
 	}
 	if strings.ContainsAny(executionPath, ",+") {
-		return "", fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath|m8-m14-10mm-gate", executionPath)
+		return "", fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden; expected one of oracle|native-fastpath|m8-m14-10mm-gate|span-native-default-gate|span-native-read-scan-guardrail", executionPath)
 	}
-	return "", fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath|m8-m14-10mm-gate", executionPath)
+	return "", fmt.Errorf("invalid execution path %q: expected one of oracle|native-fastpath|m8-m14-10mm-gate|span-native-default-gate|span-native-read-scan-guardrail", executionPath)
 }
 
 func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
