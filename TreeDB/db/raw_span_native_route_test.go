@@ -130,6 +130,24 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 		}
 	})
 
+	t.Run("empty writesync below threshold", func(t *testing.T) {
+		d := openExplicitRawSpanNativeRouteTestDB(t)
+		b := d.NewBatch()
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("empty WriteSync: %v", err)
+		}
+		if err := b.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		stats := d.Stats()
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.empty_batch.fallback.reason.below_threshold.count_total"); got == 0 {
+			t.Fatalf("empty_batch below_threshold count=0, want WriteSync shortcut named fallback")
+		}
+		if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.empty_batch.fallback.reason.disabled.count_total"); got != 0 {
+			t.Fatalf("empty_batch disabled count=%d, want 0 for WriteSync shortcut", got)
+		}
+	})
+
 	t.Run("policy off rollback", func(t *testing.T) {
 		d, err := Open(Options{
 			Dir:                   t.TempDir(),

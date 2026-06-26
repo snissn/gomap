@@ -261,6 +261,8 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 		return FlushSpanRunFallbackPrepareError
 	case req.route == RawSpanNativeRouteCloseOrCheckpointDrain:
 		return FlushSpanRunFallbackCloseOrCheckpoint
+	case ops == 0:
+		return FlushSpanRunFallbackBelowThreshold
 	}
 	admission := FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto}.withStatsDefaults()
 	if db != nil {
@@ -288,8 +290,6 @@ func (db *DB) classifyRawSpanNativeFallback(req rawSpanNativeEligibilityRequest,
 		return FlushSpanRunFallbackColdBuild
 	case summary.Spans > 0 && !summary.ExactLeafSpans:
 		return FlushSpanRunFallbackInexactLeafSpans
-	case ops == 0:
-		return FlushSpanRunFallbackBelowThreshold
 	}
 	return FlushSpanRunFallbackSpanNativeNotImplemented
 }
