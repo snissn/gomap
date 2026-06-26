@@ -406,6 +406,15 @@ def main(argv: list[str]) -> int:
         for item in missing:
             print(f"run home does not exist: {item}", file=sys.stderr)
         return 2
+    missing_time_logs = [
+        str(home.expanduser() / "sync" / "sync-time.log")
+        for home in args.homes
+        if not (home.expanduser() / "sync" / "sync-time.log").is_file()
+    ]
+    if missing_time_logs:
+        for item in missing_time_logs:
+            print(f"missing required sync-time.log: {item}", file=sys.stderr)
+        return 2
 
     payload = build_payload(args.homes)
     markdown = render_markdown(payload)

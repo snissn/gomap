@@ -193,6 +193,25 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
             self.assertEqual(payload["runs"][0]["end_app_bytes"], 1234)
 
+    def test_requires_sync_time_log(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            run = root / ".celestia-app-mainnet-treedb-20260626010101"
+            (run / "sync").mkdir(parents=True)
+
+            result = subprocess.run(
+                [str(SCRIPT), str(run)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("missing required sync-time.log", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
