@@ -3,6 +3,7 @@ package raftapply
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -21,6 +22,7 @@ import (
 )
 
 const testCatalogVersionStart = 7
+const testCurrentCollectionMetaWireVersion = 5
 
 func TestUnsupportedDeterministicEntryRejectsBeforeAppendAndStores(t *testing.T) {
 	dir := t.TempDir()
@@ -124,6 +126,59 @@ func TestCreateCollectionApplyCreatesCatalogAndDeterministicResult(t *testing.T)
 	if progress.Len() != 2 || results.Len() != 2 {
 		t.Fatalf("store lengths after duplicate progress=%d results=%d, want 2/2", progress.Len(), results.Len())
 	}
+}
+
+func TestCreateCollectionAcceptsCurrentCollectionMetaWireVersion(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:v5", testCreateCollectionMetaOptions{
+		version: testCurrentCollectionMetaWireVersion,
+	})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	if got := opened.Meta().Name; got != "users" {
+		t.Fatalf("collection name=%q, want users", got)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	assertCatalogCreateFrame(t, frames[0], "users")
+}
+
+func TestCreateCollectionForcesNativewireStoragePolicies(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:storage", testCreateCollectionMetaOptions{
+		version:            testCurrentCollectionMetaWireVersion,
+		dataRootStorage:    2,
+		indexStateStorage:  2,
+		includeIndex:       true,
+		indexStoragePolicy: 2,
+	})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	meta := opened.Meta()
+	assertNativewireFastStoragePolicies(t, meta)
+
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames=%d, want 1", len(frames))
+	}
+	assertCatalogCreateFrame(t, frames[0], "users")
+	assertNativewireFastStoragePolicies(t, catalogCreateFrameMeta(t, frames[0]))
 }
 
 func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
@@ -819,6 +874,43 @@ func assertCatalogCreateFrame(t *testing.T, env commitlog.CommandEnvelope, colle
 	}
 }
 
+func catalogCreateFrameMeta(t *testing.T, env commitlog.CommandEnvelope) collections.CollectionMeta {
+	t.Helper()
+	payload, err := commitlog.DecodeCatalogCreateCollectionPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeCatalogCreateCollectionPayload: %v", err)
+	}
+	var disk struct {
+		Name    string                        `json:"name"`
+		Options collections.CollectionOptions `json:"options,omitempty"`
+		Indexes []collections.IndexDefinition `json:"indexes,omitempty"`
+	}
+	if err := json.Unmarshal(payload.Metadata, &disk); err != nil {
+		t.Fatalf("Unmarshal catalog collection metadata: %v", err)
+	}
+	return collections.CollectionMeta{
+		Name:    disk.Name,
+		Options: disk.Options,
+		Indexes: disk.Indexes,
+	}
+}
+
+func assertNativewireFastStoragePolicies(t *testing.T, meta collections.CollectionMeta) {
+	t.Helper()
+	if got := meta.Options.DataRootStoragePolicy; got != collections.RootStorageFast {
+		t.Fatalf("data root storage policy=%q, want %q", got, collections.RootStorageFast)
+	}
+	if got := meta.Options.IndexStateStoragePolicy; got != collections.RootStorageFast {
+		t.Fatalf("index state storage policy=%q, want %q", got, collections.RootStorageFast)
+	}
+	if len(meta.Indexes) != 1 {
+		t.Fatalf("indexes=%d, want 1", len(meta.Indexes))
+	}
+	if got := meta.Indexes[0].StoragePolicy; got != collections.RootStorageFast {
+		t.Fatalf("index storage policy=%q, want %q", got, collections.RootStorageFast)
+	}
+}
+
 func codeOf(err error) raftentry.DeterministicErrorCodeV1 {
 	code, _ := ErrorCodeOf(err)
 	return code
@@ -857,6 +949,7 @@ func (recordProgressStoreFailAfterPreflight) LastApplied() (raftentry.ApplyEntry
 }
 
 type testCreateCollectionMetaOptions struct {
+	version            uint64
 	documentFormat     uint64
 	dataRootStorage    uint64
 	indexStateStorage  uint64
@@ -890,8 +983,12 @@ func deterministicCreateCollectionEntryWithCatalogVersion(t *testing.T, collecti
 }
 
 func testCreateCollectionMetaPayload(collection string, opts testCreateCollectionMetaOptions) []byte {
-	dst := binary.AppendUvarint(nil, 1)     // collection_meta version
-	dst = appendTestString(dst, collection) // name
+	version := opts.version
+	if version == 0 {
+		version = 1
+	}
+	dst := binary.AppendUvarint(nil, version) // collection_meta version
+	dst = appendTestString(dst, collection)   // name
 	dst = binary.AppendUvarint(dst, opts.documentFormat)
 	dst = binary.AppendUvarint(dst, opts.dataRootStorage)   // data_root_storage_policy
 	dst = binary.AppendUvarint(dst, opts.indexStateStorage) // index_state_storage_policy
@@ -906,19 +1003,22 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 	dst = binary.AppendVarint(dst, 0)                       // buffered_indexed_async_flush_max_queued_units
 	if !opts.includeIndex {
 		dst = binary.AppendUvarint(dst, 0) // index_count
-		return dst
+	} else {
+		valueType := opts.indexValueType
+		if valueType == 0 {
+			valueType = 1
+		}
+		dst = binary.AppendUvarint(dst, 1) // index_count
+		dst = appendTestString(dst, "email")
+		dst = appendTestString(dst, "email")
+		dst = binary.AppendUvarint(dst, valueType)
+		dst = append(dst, 0) // unique
+		dst = append(dst, 0) // multi_key
+		dst = binary.AppendUvarint(dst, opts.indexStoragePolicy)
 	}
-	valueType := opts.indexValueType
-	if valueType == 0 {
-		valueType = 1
+	if version >= 2 {
+		dst = binary.AppendUvarint(dst, 0) // vector_index_count
 	}
-	dst = binary.AppendUvarint(dst, 1) // index_count
-	dst = appendTestString(dst, "email")
-	dst = appendTestString(dst, "email")
-	dst = binary.AppendUvarint(dst, valueType)
-	dst = append(dst, 0) // unique
-	dst = append(dst, 0) // multi_key
-	dst = binary.AppendUvarint(dst, opts.indexStoragePolicy)
 	return dst
 }
 

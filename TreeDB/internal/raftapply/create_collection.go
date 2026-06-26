@@ -12,6 +12,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
+const (
+	createCollectionMetaMaxWireVersion           = 5
+	createCollectionMetaMaxIndexDefinitions      = 1 << 16
+	createCollectionMetaMinIndexDefinitionLen    = 6
+	createCollectionMetaMinVectorDefinitionLen   = 7
+	createCollectionMetaMaxQuantizedIndexVersion = uint64(^uint32(0))
+)
+
 func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (raftentry.ApplyResultV1, error) {
 	expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
 	if err != nil {
@@ -133,11 +141,21 @@ func lowerCreateCollectionV1(entry raftentry.CommandEntryV1) (collections.Collec
 	if err != nil {
 		return collections.CollectionMeta{}, nil, err
 	}
+	meta = forceNativewireCreateStoragePoliciesV1(meta)
 	payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)
 	if err != nil {
 		return collections.CollectionMeta{}, nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: encode catalog create collection payload: %v", err)
 	}
 	return meta, payload, nil
+}
+
+func forceNativewireCreateStoragePoliciesV1(meta collections.CollectionMeta) collections.CollectionMeta {
+	meta.Options.DataRootStoragePolicy = collections.RootStorageFast
+	meta.Options.IndexStateStoragePolicy = collections.RootStorageFast
+	for i := range meta.Indexes {
+		meta.Indexes[i].StoragePolicy = collections.RootStorageFast
+	}
+	return meta
 }
 
 func (h *Harness) preflightCreateCollectionV1(meta collections.CollectionMeta, payload []byte) (bool, error) {
@@ -171,7 +189,7 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
-	if version != 1 {
+	if version < 1 || version > createCollectionMetaMaxWireVersion {
 		return collections.CollectionMeta{}, codedError(raftentry.ErrorUnsupportedVersionV1, "raftapply: collection_meta version %d", version)
 	}
 	name, err := readCreateMetaString(raw, &off, "collection name")
@@ -233,6 +251,12 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 	if indexCount64 > uint64(maxInt()) {
 		return collections.CollectionMeta{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: index count exceeds int capacity")
 	}
+	if indexCount64 > createCollectionMetaMaxIndexDefinitions {
+		return collections.CollectionMeta{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: index count %d exceeds limit %d", indexCount64, createCollectionMetaMaxIndexDefinitions)
+	}
+	if indexCount64 > uint64((len(raw)-off)/createCollectionMetaMinIndexDefinitionLen) {
+		return collections.CollectionMeta{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: index count %d exceeds remaining collection_meta payload", indexCount64)
+	}
 	documentFormatDecoded, err := decodeCreateDocumentFormat(documentFormat)
 	if err != nil {
 		return collections.CollectionMeta{}, err
@@ -253,6 +277,30 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 		}
 		indexes = append(indexes, idx)
 	}
+	var vectorIndexes []collections.VectorIndexDefinition
+	if version >= 2 {
+		vectorIndexCount64, err := readCreateMetaUvarint(raw, &off, "vector_index_count")
+		if err != nil {
+			return collections.CollectionMeta{}, err
+		}
+		if vectorIndexCount64 > uint64(maxInt()) {
+			return collections.CollectionMeta{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: vector index count exceeds int capacity")
+		}
+		if vectorIndexCount64 > createCollectionMetaMaxIndexDefinitions {
+			return collections.CollectionMeta{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: vector index count %d exceeds limit %d", vectorIndexCount64, createCollectionMetaMaxIndexDefinitions)
+		}
+		if vectorIndexCount64 > uint64((len(raw)-off)/createCollectionMetaMinVectorDefinitionLen) {
+			return collections.CollectionMeta{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: vector index count %d exceeds remaining collection_meta payload", vectorIndexCount64)
+		}
+		vectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount64))
+		for i := 0; i < int(vectorIndexCount64); i++ {
+			idx, err := readCreateMetaVectorIndex(raw, &off, version)
+			if err != nil {
+				return collections.CollectionMeta{}, err
+			}
+			vectorIndexes = append(vectorIndexes, idx)
+		}
+	}
 	if off != len(raw) {
 		return collections.CollectionMeta{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: collection_meta has %d trailing bytes", len(raw)-off)
 	}
@@ -272,7 +320,8 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 			BufferedIndexedOverlayRoots:             overlayRoots,
 			BufferedIndexedAsyncFlushMaxQueuedUnits: maxQueued,
 		},
-		Indexes: indexes,
+		Indexes:       indexes,
+		VectorIndexes: vectorIndexes,
 	}, nil
 }
 
@@ -317,6 +366,158 @@ func readCreateMetaIndex(raw []byte, off *int) (collections.IndexDefinition, err
 		MultiKey:      multiKey,
 		StoragePolicy: storagePolicyDecoded,
 	}, nil
+}
+
+func readCreateMetaVectorIndex(raw []byte, off *int, version uint64) (collections.VectorIndexDefinition, error) {
+	name, err := readCreateMetaString(raw, off, "vector index name")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	field, err := readCreateMetaString(raw, off, "vector index field")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	metric, err := readCreateMetaUvarint(raw, off, "vector index metric")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	dimensions, err := readCreateMetaInt(raw, off, "vector index dimensions")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	m, err := readCreateMetaInt(raw, off, "vector index m")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	efConstruction, err := readCreateMetaInt(raw, off, "vector index ef_construction")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	efSearch, err := readCreateMetaInt(raw, off, "vector index ef_search")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	encoding, err := readCreateMetaUvarint(raw, off, "vector index encoding")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	decodedMetric, err := decodeCreateVectorMetric(metric)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	decodedEncoding, err := decodeCreateVectorIndexEncoding(encoding)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	def := collections.VectorIndexDefinition{
+		Name:           name,
+		Field:          field,
+		Metric:         decodedMetric,
+		Dimensions:     dimensions,
+		M:              m,
+		EfConstruction: efConstruction,
+		EfSearch:       efSearch,
+		Encoding:       decodedEncoding,
+	}
+	if version < 3 {
+		return def, nil
+	}
+	strategy, err := readCreateMetaUvarint(raw, off, "vector index strategy")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	decodedStrategy, err := decodeCreateVectorIndexStrategy(strategy)
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	quantizedCount64, err := readCreateMetaUvarint(raw, off, "quantized_index_count")
+	if err != nil {
+		return collections.VectorIndexDefinition{}, err
+	}
+	if quantizedCount64 > uint64(maxInt()) {
+		return collections.VectorIndexDefinition{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: quantized vector index count exceeds int capacity")
+	}
+	if quantizedCount64 > createCollectionMetaMaxIndexDefinitions {
+		return collections.VectorIndexDefinition{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: quantized vector index count %d exceeds limit %d", quantizedCount64, createCollectionMetaMaxIndexDefinitions)
+	}
+	def.Strategy = decodedStrategy
+	def.QuantizedIndexes = make([]collections.QuantizedVectorIndexDefinition, 0, int(quantizedCount64))
+	for i := 0; i < int(quantizedCount64); i++ {
+		q, err := readCreateMetaQuantizedVectorIndex(raw, off, version, def.Name, i)
+		if err != nil {
+			return collections.VectorIndexDefinition{}, err
+		}
+		def.QuantizedIndexes = append(def.QuantizedIndexes, q)
+	}
+	return def, nil
+}
+
+func readCreateMetaQuantizedVectorIndex(raw []byte, off *int, version uint64, vectorIndexName string, index int) (collections.QuantizedVectorIndexDefinition, error) {
+	name, err := readCreateMetaString(raw, off, "quantized index name")
+	if err != nil {
+		return collections.QuantizedVectorIndexDefinition{}, err
+	}
+	codec, err := readCreateMetaString(raw, off, "quantized index codec")
+	if err != nil {
+		return collections.QuantizedVectorIndexDefinition{}, err
+	}
+	codecVersion, err := readCreateMetaUvarint(raw, off, "quantized index version")
+	if err != nil {
+		return collections.QuantizedVectorIndexDefinition{}, err
+	}
+	if codecVersion > createCollectionMetaMaxQuantizedIndexVersion {
+		return collections.QuantizedVectorIndexDefinition{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: quantized vector index version %d exceeds uint32 capacity", codecVersion)
+	}
+	var scalarU8Calibration *collections.ScalarU8CalibrationConfig
+	if version >= 4 {
+		hasScalarU8Calibration, err := readCreateMetaBool(raw, off, "scalar_u8_calibration")
+		if err != nil {
+			return collections.QuantizedVectorIndexDefinition{}, err
+		}
+		if hasScalarU8Calibration {
+			mode, err := readCreateMetaString(raw, off, "scalar_u8_calibration.mode")
+			if err != nil {
+				return collections.QuantizedVectorIndexDefinition{}, err
+			}
+			grouping, err := readCreateMetaString(raw, off, "scalar_u8_calibration.grouping")
+			if err != nil {
+				return collections.QuantizedVectorIndexDefinition{}, err
+			}
+			policyName, err := readCreateMetaString(raw, off, "scalar_u8_calibration.alpha_policy.name")
+			if err != nil {
+				return collections.QuantizedVectorIndexDefinition{}, err
+			}
+			quantilePPM, err := readCreateMetaUvarint(raw, off, "scalar_u8_calibration.alpha_policy.quantile_ppm")
+			if err != nil {
+				return collections.QuantizedVectorIndexDefinition{}, err
+			}
+			if quantilePPM > createCollectionMetaMaxQuantizedIndexVersion {
+				return collections.QuantizedVectorIndexDefinition{}, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: scalar_u8 alpha policy quantile_ppm %d exceeds uint32 capacity", quantilePPM)
+			}
+			scalarU8Calibration = &collections.ScalarU8CalibrationConfig{
+				Mode:     collections.ScalarU8CalibrationMode(mode),
+				Grouping: collections.ScalarU8CalibrationGrouping(grouping),
+				AlphaPolicy: collections.ScalarU8AlphaPolicy{
+					Name:        collections.ScalarU8AlphaPolicyName(policyName),
+					QuantilePPM: uint32(quantilePPM),
+				},
+			}
+		}
+	}
+	q := collections.QuantizedVectorIndexDefinition{
+		Name:                name,
+		Codec:               codec,
+		Version:             uint32(codecVersion),
+		ScalarU8Calibration: scalarU8Calibration,
+	}
+	if q.ScalarU8Calibration != nil {
+		normalizedCalibration, err := collections.NormalizeScalarU8CalibrationConfig(vectorIndexName, index, q)
+		if err != nil {
+			return collections.QuantizedVectorIndexDefinition{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: invalid scalar_u8 calibration: %v", err)
+		}
+		q.ScalarU8Calibration = normalizedCalibration
+	}
+	return q, nil
 }
 
 func readCreateMetaString(raw []byte, off *int, field string) (string, error) {
@@ -426,6 +627,41 @@ func decodeCreateIndexValueType(value uint64) (collections.IndexValueType, error
 		return collections.IndexValueDouble, nil
 	default:
 		return collections.IndexValueString, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: unsupported index value type enum %d", value)
+	}
+}
+
+func decodeCreateVectorMetric(value uint64) (collections.VectorMetric, error) {
+	switch value {
+	case 1:
+		return collections.VectorMetricCosine, nil
+	case 2:
+		return collections.VectorMetricL2, nil
+	case 3:
+		return collections.VectorMetricInnerProduct, nil
+	default:
+		return collections.VectorMetricCosine, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: unsupported vector metric enum %d", value)
+	}
+}
+
+func decodeCreateVectorIndexEncoding(value uint64) (collections.VectorIndexEncoding, error) {
+	switch value {
+	case 1:
+		return collections.VectorIndexEncodingFloat32, nil
+	case 2:
+		return collections.VectorIndexEncodingInt8, nil
+	default:
+		return collections.VectorIndexEncodingFloat32, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: unsupported vector index encoding enum %d", value)
+	}
+}
+
+func decodeCreateVectorIndexStrategy(value uint64) (collections.VectorIndexStrategy, error) {
+	switch value {
+	case 1:
+		return collections.VectorIndexStrategyNativeRuntime, nil
+	case 2:
+		return collections.VectorIndexStrategyColumnGraph, nil
+	default:
+		return "", codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: unsupported vector index strategy enum %d", value)
 	}
 }
 
