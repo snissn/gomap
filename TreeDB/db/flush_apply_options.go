@@ -57,6 +57,26 @@ func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err erro
 	db.observeFlushApplySpanNativeFallback(summary, classifyFlushApplySpanNativeFallback(summary, err, result.ReadOnlyPrepareValidationFailed))
 }
 
+type flushApplySpanNativePublishSnapshot struct {
+	summary                  zipper.ReadOnlyLeafSpanSummary
+	readOnlyPrepareRequested bool
+	spanNativeEligible       bool
+	spanNativeUsed           bool
+}
+
+func newFlushApplySpanNativePublishSnapshot(result zipper.ApplyResult) flushApplySpanNativePublishSnapshot {
+	return flushApplySpanNativePublishSnapshot{
+		summary:                  result.ReadOnlyPrepare.LeafSpanSummary(),
+		readOnlyPrepareRequested: result.ReadOnlyPrepareRequested,
+		spanNativeEligible:       result.SpanNativeEligible,
+		spanNativeUsed:           result.SpanNativeUsed,
+	}
+}
+
+func (s flushApplySpanNativePublishSnapshot) preparedSpanNativeCandidate() bool {
+	return s.readOnlyPrepareRequested && (s.spanNativeEligible || s.spanNativeUsed)
+}
+
 func parseFlushApplySpanNativeFallbackReason(raw string) (FlushSpanRunFallbackReason, bool) {
 	if raw == "" {
 		return FlushSpanRunFallbackUnknown, false
@@ -67,12 +87,12 @@ func parseFlushApplySpanNativeFallbackReason(raw string) (FlushSpanRunFallbackRe
 	return FlushSpanRunFallbackUnknown, true
 }
 
-func (db *DB) observeFlushApplySpanNativePublishFallback(result zipper.ApplyResult, reason FlushSpanRunFallbackReason) {
+func (db *DB) observeFlushApplySpanNativePublishFallback(snapshot flushApplySpanNativePublishSnapshot, reason FlushSpanRunFallbackReason) {
 	if db == nil || !reason.Valid() || reason == FlushSpanRunFallbackUnknown {
 		return
 	}
-	if !result.ReadOnlyPrepareRequested || (!result.SpanNativeEligible && !result.SpanNativeUsed) {
+	if !snapshot.preparedSpanNativeCandidate() {
 		return
 	}
-	db.observeFlushApplySpanNativeFallbackAfterCandidate(result.ReadOnlyPrepare.LeafSpanSummary(), reason, false)
+	db.observeFlushApplySpanNativeFallbackAfterCandidate(snapshot.summary, reason, false)
 }
