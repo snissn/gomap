@@ -550,6 +550,12 @@ func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnl
 	if db == nil {
 		return
 	}
+	applyOpts := db.orderedRootDeltaBatchApplyOptions()
+	spanNativeEligible := err == nil && !validationFailed && applyOpts.SpanNativeApply
+	explicitFallbackReason := ""
+	if err == nil && !validationFailed && !spanNativeEligible {
+		explicitFallbackReason = FlushSpanRunFallbackSpanNativeNotImplemented.String()
+	}
 	row := db.orderedRootSpanNativeEligibility(orderedRootSpanNativeEligibilityRequest{
 		Route:                         OrderedRootSpanNativeRouteReadOnlyPrepare,
 		Context:                       "ordered-root read-only prepare proof",
@@ -557,6 +563,8 @@ func (db *DB) observeOrderedRootSpanNativeReadOnlyPrepare(summary zipper.ReadOnl
 		DeltaOps:                      deltaOps,
 		ReadOnlyPrepareValidationFail: validationFailed,
 		Err:                           err,
+		ExplicitFallbackReason:        explicitFallbackReason,
+		SpanNativeEligible:            spanNativeEligible,
 	})
 	db.observeOrderedRootSpanNativeEligibility(row)
 }
