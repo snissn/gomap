@@ -2489,7 +2489,7 @@ func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing
 	d := openCollectionCommandWALDB(t, dir)
 	defer func() { _ = d.Close() }()
 
-	replayManager := newCommandWALReplayCollectionManager(d)
+	replayManager := NewCommandWALReplayCollectionManager(d)
 	if replayManager.commandWALCoordinator == nil {
 		t.Fatalf("replay manager missing command WAL coordinator")
 	}
@@ -2506,6 +2506,125 @@ func TestCollectionCommandWALReplayManagerDoesNotRegisterBackendHooks(t *testing
 	}
 	if liveManager.closeUnregister == nil {
 		t.Fatalf("live manager missing close hook")
+	}
+}
+
+func TestCreateCollectionWithPreparedCommandWALIntentPreparesUnderSchemaLock(t *testing.T) {
+	dir := t.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		t.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = d.Close() }()
+
+	meta := CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatJSON,
+		},
+	}
+	payload, err := EncodeCatalogCreateCollectionCommandWALPayload(meta)
+	if err != nil {
+		t.Fatalf("EncodeCatalogCreateCollectionCommandWALPayload: %v", err)
+	}
+	var unlockStaging func()
+	defer func() {
+		if unlockStaging != nil {
+			unlockStaging()
+		}
+	}()
+	_, err = NewCommandWALReplayCollectionManager(d).CreateCollectionWithPreparedCommandWALIntent(meta, func() (*backenddb.CommandWALIntent, error) {
+		coord := collectionSchemaCoordinatorForDBCollection(d, meta.Name)
+		if coord == nil {
+			t.Fatalf("missing schema coordinator")
+		}
+		if coord.schemaMu.TryLock() {
+			coord.schemaMu.Unlock()
+			t.Fatalf("prepare callback ran before schema lock was held")
+		}
+		intent, err := d.NewCommandWALIntent(
+			commitlog.CommandKindCatalogCreateCollection,
+			commitlog.CommandScopeCatalog,
+			commitlog.PayloadFormatCatalogCreateCollectionV1,
+			payload,
+		)
+		if err != nil {
+			return nil, err
+		}
+		unlockStaging = d.LockCommandWALStaging()
+		if _, err := d.AppendStagedCommandWALIntent(intent, false); err != nil {
+			unlockStaging()
+			unlockStaging = nil
+			return nil, err
+		}
+		return intent, nil
+	})
+	if err != nil {
+		t.Fatalf("CreateCollectionWithPreparedCommandWALIntent: %v", err)
+	}
+	if unlockStaging != nil {
+		unlockStaging()
+		unlockStaging = nil
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
+func TestCreateCollectionWithPreparedCommandWALIntentRejectsUnusableIntent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prepare func(*backenddb.DB, []byte) (*backenddb.CommandWALIntent, error)
+		want    string
+	}{
+		{
+			name: "nil",
+			prepare: func(*backenddb.DB, []byte) (*backenddb.CommandWALIntent, error) {
+				return nil, nil
+			},
+			want: "prepared command-WAL intent is nil",
+		},
+		{
+			name: "unassigned",
+			prepare: func(d *backenddb.DB, payload []byte) (*backenddb.CommandWALIntent, error) {
+				return d.NewCommandWALIntent(
+					commitlog.CommandKindCatalogCreateCollection,
+					commitlog.CommandScopeCatalog,
+					commitlog.PayloadFormatCatalogCreateCollectionV1,
+					payload,
+				)
+			},
+			want: "prepared command-WAL intent has no assigned LSN",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+				t.Fatalf("SaveFormatConfig: %v", err)
+			}
+			d := openCollectionCommandWALDB(t, dir)
+			defer func() { _ = d.Close() }()
+
+			meta := CollectionMeta{
+				Name: "users",
+				Options: CollectionOptions{
+					DocumentFormat: DocumentFormatJSON,
+				},
+			}
+			payload := catalogCreateCollectionPayload(t, meta)
+			_, err := NewCommandWALReplayCollectionManager(d).CreateCollectionWithPreparedCommandWALIntent(meta, func() (*backenddb.CommandWALIntent, error) {
+				return tc.prepare(d, payload)
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("CreateCollectionWithPreparedCommandWALIntent error=%v, want %q", err, tc.want)
+			}
+			if got := d.State().AppliedCommandLSN; got != 0 {
+				t.Fatalf("AppliedCommandLSN=%d, want 0", got)
+			}
+			if _, openErr := NewCollectionManager(d).OpenCollection("users"); !errors.Is(openErr, ErrCollectionNotFound) {
+				t.Fatalf("OpenCollection users error=%v, want ErrCollectionNotFound", openErr)
+			}
+		})
 	}
 }
 

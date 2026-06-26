@@ -2133,7 +2133,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, ErrClosed
 	}
 
-	if !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(commandWALIntent) {
+	if !opts.rawPublishLocked && !commandWALIntentFrameAlreadyAppended(commandWALIntent) && !commandWALIntent.staged() {
 		unlockCommandWALPublish, lockErr := db.LockCommandWALPublishWithBarriers()
 		if lockErr != nil {
 			return 0, nil, lockErr
@@ -2315,6 +2315,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBui
 		return 0, nil, err
 	}
 	commandAppended = false
+	commandWALIntent.inner.staged = false
 	commitLocked = false
 	db.commitMu.Unlock()
 	db.finalizeCommitPostWork(post)
