@@ -263,6 +263,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
 		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
 		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
 			return nil, err
 		}
 		cleanupColumnDelta = cleanup
@@ -294,10 +297,12 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 	}
 	recordColumnPublishCommit(input.insertStats, time.Since(commitStart))
 	if err != nil {
+		// The DB publish helper owns context-built batch deltas on publish errors.
 		return 0, nil, CollectionMeta{}, nil, err
 	}
 	if cleanupColumnDelta != nil {
 		cleanupColumnDelta()
+		cleanupColumnDelta = nil
 	}
 	if updatedMeta.Name == "" {
 		return 0, nil, CollectionMeta{}, nil, fmt.Errorf("collections: column publish did not prepare updated metadata collection=%q operation=%s", input.meta.Name, input.operation)
