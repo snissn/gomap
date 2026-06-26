@@ -315,6 +315,63 @@ func TestCollectionMutationApplyInsertReplaceDeleteFramesAndDigest(t *testing.T)
 	}
 }
 
+func TestCollectionMutationCommitAmbiguousAfterPublishRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs", testCreateCollectionMetaOptions{
+		version:            testCurrentCollectionMetaWireVersion,
+		includeVectorIndex: true,
+	})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+
+	collection, err := collections.NewCollectionManager(db).OpenCollection("docs")
+	if err != nil {
+		t.Fatalf("OpenCollection docs: %v", err)
+	}
+	beforeLSN := db.State().AppliedCommandLSN
+
+	badVectorDoc := []byte(`{"embedding":[1,0,0]}`)
+	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:bad-vector", nativewire.DocumentFormatJSON, [][]byte{[]byte("bad")}, [][]byte{badVectorDoc})
+	result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if !errors.Is(err, collections.ErrCommitAmbiguous) {
+		t.Fatalf("ApplyCommittedEntryV1 err=%v, want ErrCommitAmbiguous", err)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after recovery-required mutation progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+	got, err := collection.Get([]byte("bad"))
+	if err != nil {
+		t.Fatalf("Get committed bad-vector document: %v", err)
+	}
+	if !bytes.Equal(got, badVectorDoc) {
+		t.Fatalf("committed bad-vector document=%s, want %s", got, badVectorDoc)
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) == 0 {
+		t.Fatal("command WAL frames=0, want inserted mutation frame")
+	}
+	last := frames[len(frames)-1]
+	assertCollectionInsertFrame(t, last, "docs", map[string][]byte{"bad": badVectorDoc})
+	if got := db.State().AppliedCommandLSN; got <= beforeLSN || got != last.LSN {
+		t.Fatalf("AppliedCommandLSN=%d before=%d last_insert_lsn=%d", got, beforeLSN, last.LSN)
+	}
+}
+
 func TestLowerCollectionMutationRejectsInvalidIDs(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1397,6 +1454,7 @@ type testCreateCollectionMetaOptions struct {
 	includeIndex       bool
 	indexValueType     uint64
 	indexStoragePolicy uint64
+	includeVectorIndex bool
 }
 
 func deterministicCreateCollectionEntry(t *testing.T, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
@@ -1458,7 +1516,23 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 		dst = binary.AppendUvarint(dst, opts.indexStoragePolicy)
 	}
 	if version >= 2 {
-		dst = binary.AppendUvarint(dst, 0) // vector_index_count
+		if !opts.includeVectorIndex {
+			dst = binary.AppendUvarint(dst, 0) // vector_index_count
+			return dst
+		}
+		dst = binary.AppendUvarint(dst, 1) // vector_index_count
+		dst = appendTestString(dst, "embedding")
+		dst = appendTestString(dst, "embedding")
+		dst = binary.AppendUvarint(dst, 1) // metric: cosine
+		dst = binary.AppendVarint(dst, 2)  // dimensions
+		dst = binary.AppendVarint(dst, 4)  // m
+		dst = binary.AppendVarint(dst, 16) // ef_construction
+		dst = binary.AppendVarint(dst, 8)  // ef_search
+		dst = binary.AppendUvarint(dst, 1) // encoding: float32
+		if version >= 3 {
+			dst = binary.AppendUvarint(dst, 1) // strategy: native runtime
+			dst = binary.AppendUvarint(dst, 0) // quantized_index_count
+		}
 	}
 	return dst
 }

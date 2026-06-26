@@ -3,6 +3,7 @@ package raftapply
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -74,19 +75,19 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		}
 		resultIDs, err := collection.InsertBatchWithCommandWALIntent(mutation.ids, mutation.documents, mutation.trustedValidBSON, intent)
 		if err != nil {
-			return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
+			return h.collectionMutationApplyError(entry, handle, err)
 		}
 		affected = int64(len(resultIDs))
 	case nativewire.CommandReplaceBatch:
 		_, modified, err := collection.ReplaceBatchWithCommandWALIntent(mutation.ids, mutation.documents, intent)
 		if err != nil {
-			return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
+			return h.collectionMutationApplyError(entry, handle, err)
 		}
 		affected = int64(modified)
 	case nativewire.CommandDeleteBatch:
 		deleted, err := collection.DeleteBatchWithCommandWALIntent(mutation.ids, intent)
 		if err != nil {
-			return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
+			return h.collectionMutationApplyError(entry, handle, err)
 		}
 		affected = int64(deleted)
 	default:
@@ -114,6 +115,20 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		AffectedCount:          affected,
 		ResultDigest:           raftentry.CommandDigestV1(logical),
 	}, nil
+}
+
+func (h *Harness) collectionMutationApplyError(entry raftentry.CommandEntryV1, handle commandwalapply.Handle, err error) (raftentry.ApplyResultV1, error) {
+	if errors.Is(err, collections.ErrCommitAmbiguous) && h.commandWALHandleCovered(handle) {
+		return recoveryRequired(entry.Digest, raftentry.ErrorUnsafeDurabilityModeV1, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "%w", err))
+	}
+	return raftentry.ApplyResultV1{}, codeCollectionApplyError(err)
+}
+
+func (h *Harness) commandWALHandleCovered(handle commandwalapply.Handle) bool {
+	if h == nil || h.db == nil || handle.LSN() == 0 {
+		return false
+	}
+	return h.db.State().AppliedCommandLSN >= handle.LSN()
 }
 
 func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire.Limits) (collectionMutationV1, error) {
