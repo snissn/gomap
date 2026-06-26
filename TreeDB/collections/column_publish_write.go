@@ -10,24 +10,24 @@ import (
 )
 
 type columnWritePublishInput struct {
-	meta                   CollectionMeta
-	catalog                *collectionCatalog
-	baseCommitSeq          uint64
-	baseSystemRoot         uint64
-	rootNames              []string
-	baseRootIDs            map[string]uint64
-	commandWALIntent       *backenddb.CommandWALIntent
-	rawPublishLocked       bool
-	operation              ColumnPublishOperation
-	documents              []columnWriteDocument
-	rows                   int
-	declaredRows           []columnDeclaredRow
-	declaredRowsReady      bool
-	documentExtraction     time.Duration
-	commandBytes           int64
-	rowRemainderBytes      int64
-	columnPayloadBytes     int64
-	insertStats            *CollectionInsertStats
+	meta               CollectionMeta
+	catalog            *collectionCatalog
+	baseCommitSeq      uint64
+	baseSystemRoot     uint64
+	rootNames          []string
+	baseRootIDs        map[string]uint64
+	commandWALIntent   *backenddb.CommandWALIntent
+	rawPublishLocked   bool
+	operation          ColumnPublishOperation
+	documents          []columnWriteDocument
+	rows               int
+	declaredRows       []columnDeclaredRow
+	declaredRowsReady  bool
+	documentExtraction time.Duration
+	commandBytes       int64
+	rowRemainderBytes  int64
+	columnPayloadBytes int64
+	insertStats        *CollectionInsertStats
 }
 
 func columnStoreWriteEnabled(meta CollectionMeta) bool {
