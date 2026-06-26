@@ -1315,70 +1315,9 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	if plan.SortKeyPrefix.Planned {
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count does not support sort-key row pruning", ErrColumnQueryPlanUnsupported)
 	}
-	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(plan.Fields, plan.GroupColumn)
+	group, decodedBytes, blocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
-	}
-	if !ok {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count column %q is not owned by typed_column_part", plan.GroupColumn)
-	}
-	for _, candidate := range adapterPart.Columns {
-		if candidate.Definition.Name == adapterColumn.Definition.Name {
-			adapterColumn = candidate
-			break
-		}
-	}
-	if adapterColumn.Field.Nullable || adapterColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || adapterColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count column %q is not a non-null low-cardinality string", ErrColumnQueryPlanUnsupported, plan.GroupColumn)
-	}
-	partColumn, ok := adapterPart.Part.Columns[adapterColumn.Definition.Name]
-	if !ok {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count missing column %q", adapterColumn.Definition.Name)
-	}
-	if partColumn.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode || partColumn.Definition.Encoding != typedcolumn.EncodingLowCardinalityUint32 || partColumn.Definition.Cardinality == 0 {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count column %q type=%s encoding=%s cardinality=%d", ErrColumnQueryPlanUnsupported, plan.GroupColumn, partColumn.Definition.Type, partColumn.Definition.Encoding, partColumn.Definition.Cardinality)
-	}
-	if uint64(int(partColumn.Definition.Cardinality)) != uint64(partColumn.Definition.Cardinality) {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count cardinality=%d exceeds host int", partColumn.Definition.Cardinality)
-	}
-	cardinality := int(partColumn.Definition.Cardinality)
-	if len(adapterColumn.ReverseDictionary) != cardinality {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count dictionary cardinality=%d want %d for column %q", len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
-	}
-	for code := 0; code < cardinality; code++ {
-		if _, ok := adapterColumn.ReverseDictionary[int64(code)]; !ok {
-			return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count dictionary missing local code %d for column %q", code, adapterColumn.Definition.Name)
-		}
-	}
-	codes := make([]uint32, 0, summary.Rows)
-	var scratch []uint32
-	var reader typedcolumn.GranuleReader
-	decodedBytes := uint64(0)
-	for blockIdx, block := range partColumn.Blocks {
-		g := block.Granule
-		if g.HasMinMax {
-			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
-				return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count block %d min/max [%d,%d] outside cardinality %d", blockIdx, g.Min, g.Max, cardinality)
-			}
-		}
-		decoded, err := reader.DecodeUint32CodesInto(scratch[:0], g)
-		if err != nil {
-			return columnTypedColumnPhysicalQueryPart{}, err
-		}
-		if len(decoded) != block.Descriptor.RowCount {
-			return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count decoded rows=%d want %d", len(decoded), block.Descriptor.RowCount)
-		}
-		for i, code := range decoded {
-			if uint64(code) >= uint64(cardinality) {
-				return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count code[%d]=%d outside cardinality=%d", i, code, cardinality)
-			}
-		}
-		codes = append(codes, decoded...)
-		scratch = decoded
-		decodedBytes += uint64(g.RawBytes)
-	}
-	if len(codes) != summary.Rows {
-		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column group-count decoded rows=%d want part rows=%d", len(codes), summary.Rows)
 	}
 	return columnTypedColumnPhysicalQueryPart{
 		Ref:                 typedRef,
@@ -1387,11 +1326,11 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 		Bytes:               int64(len(raw)),
 		Sections:            summary.Sections,
 		SectionBytes:        summary.SectionBytes,
-		GranulesConsidered:  len(partColumn.Blocks),
-		GranulesDecoded:     len(partColumn.Blocks),
-		DecodedBlocks:       len(partColumn.Blocks),
+		GranulesConsidered:  blocks,
+		GranulesDecoded:     blocks,
+		DecodedBlocks:       blocks,
 		DecodedPayloadBytes: decodedBytes,
-		DenseGroupCount:     &columnTypedColumnDenseGroupCountPart{Cardinality: cardinality, DictionaryByCode: adapterColumn.ReverseDictionary, Codes: codes},
+		DenseGroupCount:     &columnTypedColumnDenseGroupCountPart{Cardinality: len(group.Dictionary), Dictionary: group.Dictionary, Codes: group.Codes, Valid: group.Valid},
 	}, nil
 }
 
@@ -1419,7 +1358,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	}
 	predicates := part.DenseInt64Span.Predicates
 	if groupPredicate != nil {
-		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, *groupPredicate)
+		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.GroupValid, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, *groupPredicate)
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
@@ -1429,6 +1368,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 		Cardinality:      part.DenseInt64Span.Cardinality,
 		DictionaryByCode: part.DenseInt64Span.DictionaryByCode,
 		GroupCodes:       part.DenseInt64Span.GroupCodes,
+		GroupValid:       part.DenseInt64Span.GroupValid,
 		Values:           part.DenseInt64Span.Values,
 		Predicates:       predicates,
 	}
@@ -1436,9 +1376,10 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	return part, nil
 }
 
-func densePredicateFromDictionaryCodes(codes []uint32, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
+func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
 	allowed := make([]uint64, (cardinality+63)/64)
 	matchedLiterals := 0
+	missingMatchesEmpty := false
 	for code := 0; code < cardinality; code++ {
 		value, ok := dictionaryByCode[int64(code)]
 		if !ok {
@@ -1453,10 +1394,16 @@ func densePredicateFromDictionaryCodes(codes []uint32, dictionaryByCode map[int6
 			break
 		}
 	}
-	if matchedLiterals == 0 {
+	for _, target := range spec.values {
+		if target == "" {
+			missingMatchesEmpty = true
+			break
+		}
+	}
+	if matchedLiterals == 0 && !missingMatchesEmpty {
 		return columnTypedColumnDensePredicatePart{RejectsAll: true}, nil
 	}
-	return columnTypedColumnDensePredicatePart{Codes: codes, Allowed: allowed}, nil
+	return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed, MissingMatchesEmpty: missingMatchesEmpty}, nil
 }
 
 type columnTypedColumnTimeOrderCodeColumn struct {
