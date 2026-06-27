@@ -2033,6 +2033,68 @@ func TestLeafGenerationPackMaintenance_RequiresExplicitEnv(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationMaintenance_PauseFileSkipsAndResumes(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	pauseFile := filepath.Join(t.TempDir(), "vlog-maintenance.pause")
+	if err := os.WriteFile(pauseFile, []byte("pause"), 0o600); err != nil {
+		t.Fatalf("write pause file: %v", err)
+	}
+	t.Setenv(envVlogGenerationMaintenancePauseFile, pauseFile)
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:           backend,
+		leafPackResp: leafPackWindowExhaustingStats(1, 1024, 4096),
+	}
+	defer recorder.Close()
+	db := &DB{
+		backend:                    recorder,
+		indexOuterLeavesInValueLog: true,
+		valueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationHotWarmCold),
+		closeCh:                    make(chan struct{}),
+	}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+
+	acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if acquired {
+		t.Fatalf("paused maintenance acquired slot")
+	}
+	if got := db.vlogGenerationMaintenanceSkipPauseFile.Load(); got != 1 {
+		t.Fatalf("pause-file skips=%d want 1", got)
+	}
+	if _, calls := recorder.recordedLeafPack(); calls != 0 {
+		t.Fatalf("paused leaf-pack calls=%d want 0", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.pause_file.configured"]; got != "true" {
+		t.Fatalf("pause_file.configured=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.pause_file.paused"]; got != "true" {
+		t.Fatalf("pause_file.paused=%q want true", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.maintenance.skip.pause_file"]; got != "1" {
+		t.Fatalf("skip.pause_file=%q want 1", got)
+	}
+
+	if err := os.Remove(pauseFile); err != nil {
+		t.Fatalf("remove pause file: %v", err)
+	}
+	acquired = db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if !acquired {
+		t.Fatalf("unpaused maintenance did not acquire slot")
+	}
+	if _, calls := recorder.recordedLeafPack(); calls != 1 {
+		t.Fatalf("unpaused leaf-pack calls=%d want 1", calls)
+	}
+	stats = db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance.pause_file.paused"]; got != "false" {
+		t.Fatalf("pause_file.paused after remove=%q want false", got)
+	}
+}
+
 func TestLeafGenerationPackMaintenance_RunsWithDefaultBounds(t *testing.T) {
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
