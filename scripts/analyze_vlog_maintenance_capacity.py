@@ -152,12 +152,28 @@ def find_home_from_path(path: Path) -> str:
     return ""
 
 
+def instance_matches_pattern(name: str, stats: dict[str, Any], pattern: str) -> bool:
+    if not pattern:
+        return False
+    if pattern in name:
+        return True
+    for key in ("treedb.expvar.wal_dir", "treedb.process.identity.wal_dir"):
+        value = stats.get(key)
+        if isinstance(value, str) and pattern in value:
+            return True
+    return False
+
+
 def choose_instance(instances: dict[str, Any], pattern: str) -> tuple[str, dict[str, Any]]:
     if not instances:
         return "", {}
 
     if pattern:
-        matches = [(k, v) for k, v in instances.items() if pattern in k and isinstance(v, dict)]
+        matches = [
+            (k, v)
+            for k, v in instances.items()
+            if isinstance(v, dict) and instance_matches_pattern(k, v, pattern)
+        ]
         if matches:
             # Prefer the richest stats object among matches.
             matches.sort(key=lambda kv: len(kv[1]), reverse=True)
@@ -442,6 +458,8 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "gc_last_pending_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_pending_bytes"),
         "gc_last_protected_retained_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_protected_retained_bytes"),
         "retained_prune_closed_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.closed_bytes"),
+        "vlog_retained_segments": metric_int(stats, "treedb.cache.vlog_retained_segments"),
+        "vlog_retained_bytes_estimate": metric_int(stats, "treedb.cache.vlog_retained_bytes_estimate"),
         "retained_prune_runs": metric_int(stats, "treedb.cache.vlog_retained_prune.runs"),
         "retained_prune_forced_runs": metric_int(stats, "treedb.cache.vlog_retained_prune.forced_runs"),
         "retained_prune_candidate_segments": metric_int(stats, "treedb.cache.vlog_retained_prune.candidate_segments"),

@@ -11,6 +11,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from analyze_vlog_maintenance_capacity import build_summary as build_vlog_maintenance_summary
+from analyze_vlog_maintenance_capacity import extract_stats as extract_treedb_stats
+from analyze_vlog_maintenance_capacity import find_diagnostics_file
+
 
 FATAL_PATTERNS = [
     "valuelog: corrupt record",
@@ -21,6 +25,43 @@ FATAL_PATTERNS = [
     "IAVL commit failed",
     "panic:",
     "fatal error",
+]
+
+TREEDB_INSTANCE_PATTERN = "application.db"
+TREEDB_MAINTENANCE_COUNTERS = [
+    "maintenance_attempts",
+    "maintenance_acquired",
+    "maintenance_collisions",
+    "maintenance_with_rewrite",
+    "maintenance_with_gc",
+    "maintenance_noop",
+    "gc_runs",
+    "gc_deleted_bytes",
+    "gc_deleted_segments",
+    "gc_last_eligible_bytes",
+    "gc_last_pending_bytes",
+    "gc_last_protected_retained_bytes",
+    "retained_prune_runs",
+    "vlog_retained_segments",
+    "vlog_retained_bytes_estimate",
+    "retained_prune_closed_bytes",
+    "retained_prune_candidate_bytes",
+    "retained_prune_removed_bytes",
+    "retained_prune_removed_segments",
+    "retained_prune_live_skipped_bytes",
+    "retained_prune_in_use_skipped_bytes",
+    "vlog_zombie_bytes",
+    "vlog_zombie_segments",
+    "rewrite_runs",
+    "rewrite_reclaimed_bytes",
+    "rewrite_processed_stale_bytes",
+    "rewrite_queue_len",
+    "rewrite_queue_progress_segments_net_drain_total",
+    "rewrite_queue_progress_live_bytes_net_drain_total",
+    "checkpoint_kick_runs",
+    "checkpoint_kick_gc_runs",
+    "checkpoint_kick_rewrite_runs",
+    "checkpoint_kick_skipped_hot_no_debt",
 ]
 
 
@@ -161,8 +202,18 @@ def summarize_dwell_samples(dwell_dir: Path) -> dict[str, Any]:
     def max_field(name: str) -> int:
         return max(safe_int(sample.get(name), 0) for sample in samples)
 
+    def min_field(name: str) -> int:
+        return min(safe_int(sample.get(name), 0) for sample in samples)
+
     first = samples[0]
     last = samples[-1]
+    first_app_db_apparent = safe_int(first.get("app_db_apparent_bytes"), 0)
+    last_app_db_apparent = safe_int(last.get("app_db_apparent_bytes"), 0)
+    max_app_db_apparent = max_field("app_db_apparent_bytes")
+    min_app_db_apparent = min_field("app_db_apparent_bytes")
+    first_app_db_physical = safe_int(first.get("app_db_physical_bytes"), 0)
+    last_app_db_physical = safe_int(last.get("app_db_physical_bytes"), 0)
+    max_app_db_physical = max_field("app_db_physical_bytes")
     return {
         "sample_count": len(samples),
         "first_timestamp": first.get("timestamp", ""),
@@ -173,8 +224,18 @@ def summarize_dwell_samples(dwell_dir: Path) -> dict[str, Any]:
         "max_vmhwm_kb": max_field("vmhwm_kb"),
         "last_home_apparent_bytes": safe_int(last.get("home_apparent_bytes"), 0),
         "last_home_physical_bytes": safe_int(last.get("home_physical_bytes"), 0),
-        "last_app_db_apparent_bytes": safe_int(last.get("app_db_apparent_bytes"), 0),
-        "last_app_db_physical_bytes": safe_int(last.get("app_db_physical_bytes"), 0),
+        "first_app_db_apparent_bytes": first_app_db_apparent,
+        "last_app_db_apparent_bytes": last_app_db_apparent,
+        "max_app_db_apparent_bytes": max_app_db_apparent,
+        "min_app_db_apparent_bytes": min_app_db_apparent,
+        "app_db_apparent_delta_bytes": last_app_db_apparent - first_app_db_apparent,
+        "app_db_apparent_shrink_from_first_bytes": max(0, first_app_db_apparent - last_app_db_apparent),
+        "app_db_apparent_shrink_from_peak_bytes": max(0, max_app_db_apparent - last_app_db_apparent),
+        "first_app_db_physical_bytes": first_app_db_physical,
+        "last_app_db_physical_bytes": last_app_db_physical,
+        "max_app_db_physical_bytes": max_app_db_physical,
+        "app_db_physical_delta_bytes": last_app_db_physical - first_app_db_physical,
+        "app_db_physical_shrink_from_peak_bytes": max(0, max_app_db_physical - last_app_db_physical),
         "last_maindb_apparent_bytes": safe_int(last.get("maindb_apparent_bytes"), 0),
         "last_wal_apparent_bytes": safe_int(last.get("wal_apparent_bytes"), 0),
     }
@@ -197,6 +258,69 @@ def count_fatal_matches(node_log: Path) -> dict[str, Any]:
     return {"count": count, "matches": matches}
 
 
+def summarize_treedb_maintenance(home: Path) -> dict[str, Any]:
+    try:
+        source = find_diagnostics_file(home)
+    except OSError as exc:
+        return {"available": False, "reason": f"diagnostics_error:{exc}"}
+    if source is None:
+        return {"available": False, "reason": "diagnostics_not_found"}
+
+    payload = load_json(source)
+    if not isinstance(payload, dict):
+        return {
+            "available": False,
+            "reason": "diagnostics_json_invalid",
+            "source_file": str(source),
+        }
+
+    stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
+    if not stats:
+        return {
+            "available": False,
+            "reason": "treedb_app_stats_not_found",
+            "source_file": str(source),
+        }
+
+    summary = build_vlog_maintenance_summary(stats)
+    counters = {key: summary.get(key, 0) for key in TREEDB_MAINTENANCE_COUNTERS}
+    return {
+        "available": True,
+        "source_file": str(source),
+        "instance": instance_name,
+        "raw_stat_count": len(stats),
+        "counters": counters,
+    }
+
+
+def summarize_treedb_disk_reclaim(dwell: dict[str, Any], maintenance: dict[str, Any]) -> dict[str, Any]:
+    counters = maintenance.get("counters") if isinstance(maintenance, dict) else {}
+    if not isinstance(counters, dict):
+        counters = {}
+    app_db_shrink = safe_int(dwell.get("app_db_apparent_shrink_from_peak_bytes"), 0)
+    physical_shrink = safe_int(dwell.get("app_db_physical_shrink_from_peak_bytes"), 0)
+    return {
+        "dwell_app_db_apparent_peak_bytes": safe_int(dwell.get("max_app_db_apparent_bytes"), 0),
+        "dwell_app_db_apparent_last_bytes": safe_int(dwell.get("last_app_db_apparent_bytes"), 0),
+        "dwell_app_db_apparent_shrink_from_peak_bytes": app_db_shrink,
+        "dwell_app_db_physical_peak_bytes": safe_int(dwell.get("max_app_db_physical_bytes"), 0),
+        "dwell_app_db_physical_last_bytes": safe_int(dwell.get("last_app_db_physical_bytes"), 0),
+        "dwell_app_db_physical_shrink_from_peak_bytes": physical_shrink,
+        "gc_deleted_bytes": safe_int(counters.get("gc_deleted_bytes"), 0),
+        "gc_deleted_segments": safe_int(counters.get("gc_deleted_segments"), 0),
+        "retained_prune_closed_bytes": safe_int(counters.get("retained_prune_closed_bytes"), 0),
+        "vlog_retained_bytes_estimate": safe_int(counters.get("vlog_retained_bytes_estimate"), 0),
+        "vlog_retained_segments": safe_int(counters.get("vlog_retained_segments"), 0),
+        "retained_prune_removed_bytes": safe_int(counters.get("retained_prune_removed_bytes"), 0),
+        "retained_prune_removed_segments": safe_int(counters.get("retained_prune_removed_segments"), 0),
+        "rewrite_reclaimed_bytes": safe_int(counters.get("rewrite_reclaimed_bytes"), 0),
+        "vlog_zombie_bytes": safe_int(counters.get("vlog_zombie_bytes"), 0),
+        "named_delete_or_remove_bytes": safe_int(counters.get("gc_deleted_bytes"), 0)
+        + safe_int(counters.get("retained_prune_removed_bytes"), 0)
+        + safe_int(counters.get("rewrite_reclaimed_bytes"), 0),
+    }
+
+
 def summarize_home(home: Path) -> dict[str, Any]:
     home = home.expanduser().resolve()
     sync_dir = home / "sync"
@@ -206,6 +330,8 @@ def summarize_home(home: Path) -> dict[str, Any]:
     disk = parse_disk_breakdown(sync_dir / "disk-breakdown.log", app_db)
     dwell = summarize_dwell_samples(sync_dir / "dwell-stats")
     fatal = count_fatal_matches(sync_dir / "node.log")
+    treedb_maintenance = summarize_treedb_maintenance(home)
+    treedb_disk_reclaim = summarize_treedb_disk_reclaim(dwell, treedb_maintenance)
 
     db_backend = sync.get("db_backend") or backend_from_home(home)
     app_db_backend = sync.get("app_db_backend") or db_backend
@@ -247,6 +373,8 @@ def summarize_home(home: Path) -> dict[str, Any]:
         "sync_seconds_per_block": (sync_seconds / blocks_synced) if blocks_synced else 0.0,
         "disk_breakdown_bytes": disk,
         "dwell": dwell,
+        "treedb_maintenance": treedb_maintenance,
+        "treedb_disk_reclaim": treedb_disk_reclaim,
         "fatal_log_matches": fatal,
         "time_log": str(time_log) if time_log.exists() else "",
         "node_log": str(sync_dir / "node.log") if (sync_dir / "node.log").exists() else "",
@@ -431,9 +559,55 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 delta_rows.append([field, delta_text, f"{ratio:.3f}x" if ratio else "n/a"])
             lines.append(markdown_table(delta_rows))
 
+    maintenance_runs = [
+        run
+        for run in runs
+        if isinstance(run.get("treedb_maintenance"), dict) and run["treedb_maintenance"].get("available")
+    ]
+    if maintenance_runs:
+        lines.extend(["", "## TreeDB Maintenance", ""])
+        maint_rows = [[
+            "backend",
+            "app shrink",
+            "gc deleted",
+            "retained closed",
+            "retained estimate",
+            "retained removed",
+            "rewrite reclaimed",
+            "maint",
+            "gc runs",
+            "checkpoint kick",
+            "instance",
+        ]]
+        for run in maintenance_runs:
+            maintenance = run.get("treedb_maintenance") or {}
+            counters = maintenance.get("counters") or {}
+            reclaim = run.get("treedb_disk_reclaim") or {}
+            maint_rows.append([
+                str(run.get("db_backend", "")),
+                human_bytes(reclaim.get("dwell_app_db_apparent_shrink_from_peak_bytes", 0)),
+                human_bytes(counters.get("gc_deleted_bytes", 0)),
+                human_bytes(counters.get("retained_prune_closed_bytes", 0)),
+                human_bytes(counters.get("vlog_retained_bytes_estimate", 0)),
+                human_bytes(counters.get("retained_prune_removed_bytes", 0)),
+                human_bytes(counters.get("rewrite_reclaimed_bytes", 0)),
+                f"{counters.get('maintenance_acquired', 0)}/{counters.get('maintenance_attempts', 0)}",
+                str(counters.get("gc_runs", 0)),
+                (
+                    f"{counters.get('checkpoint_kick_runs', 0)}"
+                    f"/{counters.get('checkpoint_kick_gc_runs', 0)}"
+                    f"/{counters.get('checkpoint_kick_rewrite_runs', 0)}"
+                ),
+                str(maintenance.get("instance", "")),
+            ])
+        lines.append(markdown_table(maint_rows))
+
     lines.extend(["", "## Artifacts", ""])
     for run in runs:
         lines.append(f"- `{run.get('db_backend')}` home: `{run.get('home')}`")
+        maintenance = run.get("treedb_maintenance") or {}
+        if maintenance.get("source_file"):
+            lines.append(f"  - treedb_maintenance_source: `{maintenance['source_file']}`")
         for key in ["time_log", "node_log", "disk_breakdown_log"]:
             if run.get(key):
                 lines.append(f"  - {key}: `{run[key]}`")
