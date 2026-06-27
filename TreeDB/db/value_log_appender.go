@@ -24,6 +24,14 @@ type ValueLogAppender interface {
 	CurrentValueLogSegment() (path string, fileID uint32, ok bool)
 }
 
+// ValueLogExternalRefFlusher is an optional extension for appenders that can
+// flush the value-log lanes containing specific file IDs. Command-WAL SetRID
+// logging uses it to make freshly written pointer records visible before RID
+// lookup without flushing unrelated lanes.
+type ValueLogExternalRefFlusher interface {
+	FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error
+}
+
 type valueLogAppenderHolder struct {
 	appender ValueLogAppender
 }

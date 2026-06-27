@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -1660,6 +1661,80 @@ func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
 	for key, value := range values {
 		requireRawKVValue(t, reopen, []byte(key), value)
 	}
+}
+
+func TestPublicCommandWALBatchValueLogPointersFlushMultiLaneRefs(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		FlushThreshold:               1 << 30,
+		WALMaxSegmentBytes:           1 << 20,
+		JournalLanes:                 4,
+		MemtableShards:               16,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const entries = 1100
+	b := db.NewBatchWithSize(entries)
+	for i := 0; i < entries; i++ {
+		key := []byte(fmt.Sprintf("multi-lane-%06d", i))
+		value := bytes.Repeat([]byte{byte(i%251 + 1)}, 2048)
+		if err := b.Set(key, value); err != nil {
+			_ = b.Close()
+			t.Fatalf("batch Set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	lanes := publicCommandWALValueLogLanes(t, dir)
+	if len(lanes) < 2 {
+		t.Fatalf("value-log lanes used=%v, want at least 2 to cover multi-lane SetRID flushing", lanes)
+	}
+	for _, i := range []int{0, entries / 2, entries - 1} {
+		key := []byte(fmt.Sprintf("multi-lane-%06d", i))
+		want := bytes.Repeat([]byte{byte(i%251 + 1)}, 2048)
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get %q: %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get %q len=%d, want len=%d", key, len(got), len(want))
+		}
+	}
+}
+
+func publicCommandWALValueLogLanes(t *testing.T, dir string) map[int]struct{} {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value-log segments: %v", err)
+	}
+	lanes := make(map[int]struct{})
+	for _, path := range paths {
+		var lane, seq int
+		if n, _ := fmt.Sscanf(filepath.Base(path), "value-l%d-%d.log", &lane, &seq); n == 2 {
+			lanes[lane] = struct{}{}
+		}
+	}
+	return lanes
 }
 
 func TestPublicCommandWALBatchDeleteRangeWithPointerUsesCompactRangeFrame(t *testing.T) {

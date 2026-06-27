@@ -14,6 +14,7 @@ type cachingValueLogAppender struct {
 }
 
 var _ backenddb.ValueLogAppender = (*cachingValueLogAppender)(nil)
+var _ backenddb.ValueLogExternalRefFlusher = (*cachingValueLogAppender)(nil)
 
 func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 	return &cachingValueLogAppender{db: db, lane: l}
@@ -76,6 +77,43 @@ func (a *cachingValueLogAppender) Sync() error {
 		return nil
 	}
 	return a.db.syncValueLogLane(a.lane)
+}
+
+func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error {
+	if a == nil || a.db == nil || a.lane == nil {
+		return errWALUnavailable
+	}
+	if len(fileIDs) == 0 {
+		if sync {
+			return a.Sync()
+		}
+		return a.Flush()
+	}
+	seen := make(map[int]struct{}, len(fileIDs))
+	for _, fileID := range fileIDs {
+		if fileID == 0 || !page.IsValueLogFileID(fileID) {
+			continue
+		}
+		laneID, _ := valuelog.DecodeFileID(fileID)
+		if laneID >= uint32(len(a.db.lanes)) {
+			continue
+		}
+		id := int(laneID)
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		l := &a.db.lanes[id]
+		if err := a.db.flushValueLogLane(l); err != nil {
+			return err
+		}
+		if sync && !a.db.relaxedSync {
+			if err := a.db.syncValueLogLane(l); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (a *cachingValueLogAppender) CurrentValueLogSegment() (string, uint32, bool) {
