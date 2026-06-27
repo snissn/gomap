@@ -984,8 +984,18 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 // The returned slice may alias dst when usedDst is true. The returned bytes are
 // immutable from the caller perspective.
 func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
+	return readAtWithDictToScratch(f, ptr, verifyCRC, dictLookup, templateLookup, templateCache, templateOpts, dst, getDecodeScratch, putDecodeScratch)
+}
+
+func readAtWithDictToScratch(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte, getScratch func(int) []byte, putScratch func([]byte)) ([]byte, bool, error) {
 	if f == nil {
 		return nil, false, errors.New("valuelog: nil file")
+	}
+	if getScratch == nil {
+		getScratch = getDecodeScratch
+	}
+	if putScratch == nil {
+		putScratch = putDecodeScratch
 	}
 	if ptr.Offset < 4 {
 		return nil, false, ErrCorrupt
@@ -1171,27 +1181,27 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		return payload, usedDst, nil
 	}
 
-	payloadScratch := getDecodeScratch(int(valueLen))
+	payloadScratch := getScratch(int(valueLen))
 	payload := payloadScratch[:int(valueLen)]
 	if _, err := f.ReadAt(payload, start+HeaderSize); err != nil {
-		putDecodeScratch(payloadScratch)
+		putScratch(payloadScratch)
 		return nil, false, err
 	}
 	if verifyCRC {
 		sum := crc.ChecksumParts(header[4:], payload)
 		if sum != crcVal {
-			putDecodeScratch(payloadScratch)
+			putScratch(payloadScratch)
 			return nil, false, ErrCorrupt
 		}
 	}
-	val, usedDst, err := decodeRecordTo(header, payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst)
+	val, usedDst, err := decodeRecordToScratch(header, payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst, getScratch, putScratch)
 	if err != nil {
-		putDecodeScratch(payloadScratch)
+		putScratch(payloadScratch)
 		return nil, false, err
 	}
 	val, compactUsedDst, compactDecoded, err := maybeDecodeLeafLogPayloadTo(ptr.FileID, f.Name(), val, dst)
 	if err != nil {
-		putDecodeScratch(payloadScratch)
+		putScratch(payloadScratch)
 		return nil, false, err
 	}
 	// Safe to return payload scratch to the pool whenever the returned slice
@@ -1201,7 +1211,7 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		finalUsedDst = compactUsedDst
 	}
 	if finalUsedDst || !sliceAliasesBytes(payload, val) {
-		putDecodeScratch(payloadScratch)
+		putScratch(payloadScratch)
 	}
 	return val, finalUsedDst, nil
 }
@@ -1313,8 +1323,18 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 }
 
 func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
+	return decodeRecordToScratch(header, payload, ptr, verifyCRC, dictLookup, templateLookup, templateCache, templateOpts, dst, getDecodeScratch, putDecodeScratch)
+}
+
+func decodeRecordToScratch(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte, getScratch func(int) []byte, putScratch func([]byte)) ([]byte, bool, error) {
 	if header == nil {
 		return nil, false, ErrCorrupt
+	}
+	if getScratch == nil {
+		getScratch = getDecodeScratch
+	}
+	if putScratch == nil {
+		putScratch = putDecodeScratch
 	}
 	crcVal := binary.LittleEndian.Uint32(header[0:4])
 	version := header[4]
@@ -1404,19 +1424,19 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 				return val, true, nil
 			}
 
-			scratch := getDecodeScratch(int(rawLen))
+			scratch := getScratch(int(rawLen))
 			raw, err := decodeFramePayloadTo(frameHeader, framePayload, dictLookup, rawLen, scratch)
 			if err != nil {
-				putDecodeScratch(scratch)
+				putScratch(scratch)
 				return nil, false, err
 			}
 			if uint32(len(raw)) != rawLen {
-				putDecodeScratch(raw)
+				putScratch(raw)
 				return nil, false, ErrCorrupt
 			}
 			val := dst[:outLen]
 			copy(val, raw[start:end])
-			putDecodeScratch(raw)
+			putScratch(raw)
 			if templateLookup != nil && templ.IsEncodedPayload(val) {
 				decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
 					return resolveTemplateDef(id, templateLookup, templateCache)
@@ -1431,19 +1451,19 @@ func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr,
 
 		// Fallback: keep existing behavior (decode into pooled scratch, then copy
 		// into a fresh allocation so we don't retain the full frame).
-		scratch := getDecodeScratch(int(rawLen))
+		scratch := getScratch(int(rawLen))
 		raw, err := decodeFramePayloadTo(frameHeader, framePayload, dictLookup, rawLen, scratch)
 		if err != nil {
-			putDecodeScratch(scratch)
+			putScratch(scratch)
 			return nil, false, err
 		}
 		if uint32(len(raw)) != rawLen {
-			putDecodeScratch(raw)
+			putScratch(raw)
 			return nil, false, ErrCorrupt
 		}
 		val := make([]byte, outLen)
 		copy(val, raw[start:end])
-		putDecodeScratch(raw)
+		putScratch(raw)
 		if templateLookup != nil && templ.IsEncodedPayload(val) {
 			decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
 				return resolveTemplateDef(id, templateLookup, templateCache)

@@ -1068,7 +1068,7 @@ func (f *File) readAtWithDictTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) (
 	if verifyCRC {
 		f.noteRecordCRCCheck()
 	}
-	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
+	return readAtWithDictToScratch(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst, f.takeDecodeScratch, f.releaseDecodeScratch)
 }
 
 func (f *File) appendDecodedRecordTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
