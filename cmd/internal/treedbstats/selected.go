@@ -87,6 +87,10 @@ func isSelectedKey(key string) bool {
 		return true
 	case key == "treedb.cache.queue_backlog_bytes":
 		return true
+	case key == "treedb.cache.vlog_retained_segments":
+		return true
+	case key == "treedb.cache.vlog_retained_bytes_estimate":
+		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):
 		return true
 	case strings.HasPrefix(key, "treedb.publish.ordered_root_delta_group."):

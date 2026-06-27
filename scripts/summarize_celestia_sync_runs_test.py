@@ -85,6 +85,57 @@ def write_run_home(
     return home
 
 
+def write_treedb_debug_vars(home: Path, *, instance_key: str = "db_1#0xbeef") -> Path:
+    app_wal = str(home / "data" / "application.db" / "maindb" / "wal")
+    diag = home / "sync" / "diagnostics"
+    diag.mkdir(parents=True, exist_ok=True)
+    path = diag / "final.debug_vars.json"
+    path.write_text(
+        json.dumps(
+            {
+                "treedb": {
+                    "instances": {
+                        "db_0#0xdead": {
+                            "treedb.expvar.wal_dir": "/tmp/other/application.db/maindb/wal",
+                            "treedb.cache.vlog_generation.maintenance.attempts": "100",
+                        },
+                        instance_key: {
+                            "treedb.expvar.wal_dir": app_wal,
+                            "treedb.process.identity.wal_dir": app_wal,
+                            "treedb.cache.vlog_generation.maintenance.attempts": "7",
+                            "treedb.cache.vlog_generation.maintenance.acquired": "5",
+                            "treedb.cache.vlog_generation.maintenance.collisions": "1",
+                            "treedb.cache.vlog_generation.maintenance.passes.with_gc": "2",
+                            "treedb.cache.vlog_generation.gc.runs": "2",
+                            "treedb.cache.vlog_generation.gc.deleted_bytes": "1024",
+                            "treedb.cache.vlog_generation.gc.deleted_segments": "3",
+                            "treedb.cache.vlog_generation.gc.last_eligible_bytes": "128",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.runs": "3",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.deleted_bytes": "1536",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.deleted_files": "6",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations": "2",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations": "5",
+                            "treedb.cache.vlog_retained_segments": "4",
+                            "treedb.cache.vlog_retained_bytes_estimate": "4096",
+                            "treedb.cache.vlog_retained_prune.closed_bytes": "2048",
+                            "treedb.cache.vlog_retained_prune.removed_bytes": "512",
+                            "treedb.cache.vlog_retained_prune.removed_segments": "1",
+                            "treedb.cache.vlog_zombie.bytes": "256",
+                            "treedb.cache.vlog_zombie.segments": "2",
+                            "treedb.cache.vlog_generation.checkpoint_kick.runs": "9",
+                            "treedb.cache.vlog_generation.checkpoint_kick.gc_runs": "2",
+                            "treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs": "1",
+                        },
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 class CelestiaSyncSummaryTest(unittest.TestCase):
     def test_summarizes_runs_and_writes_json_and_markdown(self) -> None:
         with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
@@ -286,6 +337,56 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertEqual(result.stdout, "")
             self.assertIn("missing required sync-time.log", result.stderr)
+
+    def test_treedb_maintenance_summary_selects_app_instance_by_wal_dir(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000, dwell_samples=2)
+            write_treedb_debug_vars(run)
+            sample_0 = run / "sync" / "dwell-stats" / "sample_0.json"
+            sample_1 = run / "sync" / "dwell-stats" / "sample_1.json"
+            first = json.loads(sample_0.read_text(encoding="utf-8"))
+            last = json.loads(sample_1.read_text(encoding="utf-8"))
+            first["app_db_apparent_bytes"] = 5000
+            first["app_db_physical_bytes"] = 6000
+            last["app_db_apparent_bytes"] = 3000
+            last["app_db_physical_bytes"] = 3500
+            sample_0.write_text(json.dumps(first) + "\n", encoding="utf-8")
+            sample_1.write_text(json.dumps(last) + "\n", encoding="utf-8")
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(run)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            summary = payload["runs"][0]
+            maintenance = summary["treedb_maintenance"]
+            self.assertTrue(maintenance["available"])
+            self.assertEqual(maintenance["instance"], "db_1#0xbeef")
+            self.assertEqual(maintenance["counters"]["maintenance_attempts"], 7)
+            self.assertEqual(maintenance["counters"]["gc_deleted_bytes"], 1024)
+            self.assertEqual(maintenance["counters"]["leaf_pack_gc_deleted_bytes"], 1536)
+            self.assertEqual(maintenance["counters"]["leaf_pack_gc_deleted_files"], 6)
+            self.assertEqual(maintenance["counters"]["retained_prune_closed_bytes"], 2048)
+            self.assertEqual(maintenance["counters"]["vlog_retained_bytes_estimate"], 4096)
+            self.assertEqual(summary["dwell"]["app_db_apparent_shrink_from_peak_bytes"], 2000)
+            self.assertEqual(summary["treedb_disk_reclaim"]["dwell_app_db_physical_shrink_from_peak_bytes"], 2500)
+            self.assertEqual(summary["treedb_disk_reclaim"]["leaf_pack_gc_deleted_bytes"], 1536)
+            self.assertEqual(summary["treedb_disk_reclaim"]["named_delete_or_remove_bytes"], 3072)
+
+            markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")
+            self.assertIn("## TreeDB Maintenance", markdown)
+            self.assertIn("leaf-pack deleted", markdown)
+            self.assertIn("1.50 KiB", markdown)
+            self.assertIn("retained estimate", markdown)
+            self.assertIn("db_1#0xbeef", markdown)
 
 
 if __name__ == "__main__":
