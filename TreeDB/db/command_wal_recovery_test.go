@@ -823,6 +823,30 @@ func TestCommandWALPointAppendReturnsLSNOnFlushFailure(t *testing.T) {
 	}
 }
 
+func TestAppendCommandWALIntentReturnsLSNOnFlushFailure(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "k", "v")
+	db.testFailCommandWALFlush.Store(true)
+	lsn, err := db.AppendCommandWALIntent(intent, true)
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendCommandWALIntent error=%v, want command WAL flush failpoint", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendCommandWALIntent lsn=%d, want allocated LSN 1 on post-append flush failure", lsn)
+	}
+	if got := intent.AssignedLSN(); got != lsn {
+		t.Fatalf("intent AssignedLSN=%d, want %d", got, lsn)
+	}
+	db.testFailCommandWALFlush.Store(false)
+	if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestCommandWALPointAppendFlushesAsyncFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -1289,6 +1313,43 @@ func (a *commandWALExternalRefSyncTestAppender) CurrentValueLogSegment() (string
 	return "", a.fileID, true
 }
 
+type commandWALExternalRefLaneFlushTestAppender struct {
+	t               *testing.T
+	fileIDs         []uint32
+	sync            bool
+	externalFlushes atomic.Int32
+	syncs           atomic.Int32
+	flushes         atomic.Int32
+}
+
+func (a *commandWALExternalRefLaneFlushTestAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	if a.t != nil {
+		a.t.Fatal("AppendValues must not be called during flushCommandWALExternalRefs")
+	}
+	panic("AppendValues must not be called during flushCommandWALExternalRefs")
+}
+
+func (a *commandWALExternalRefLaneFlushTestAppender) Flush() error {
+	a.flushes.Add(1)
+	return nil
+}
+
+func (a *commandWALExternalRefLaneFlushTestAppender) Sync() error {
+	a.syncs.Add(1)
+	return nil
+}
+
+func (a *commandWALExternalRefLaneFlushTestAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return "", 0, false
+}
+
+func (a *commandWALExternalRefLaneFlushTestAppender) FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error {
+	a.externalFlushes.Add(1)
+	a.sync = sync
+	a.fileIDs = append(a.fileIDs[:0], fileIDs...)
+	return nil
+}
+
 // TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment verifies that
 // flushCommandWALExternalRefs does not sync the active appender segment a
 // second time via the per-fileID loop. With sync=true, exactly one Sync call
@@ -1336,6 +1397,46 @@ func TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment(t *testing.T) 
 			t.Fatalf("appender syncs=%d, want 0 for sync=false", appender.syncs.Load())
 		}
 	})
+}
+
+func TestCommandWALExternalRefFlushUsesReferencedLaneFlusher(t *testing.T) {
+	fileIDs := []uint32{17, 18}
+	for _, tc := range []struct {
+		name string
+		sync bool
+	}{
+		{name: "sync=false", sync: false},
+		{name: "sync=true", sync: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{}
+			appender := &commandWALExternalRefLaneFlushTestAppender{t: t}
+			db.SetValueLogAppender(appender)
+			if err := db.flushCommandWALExternalRefs(tc.sync, fileIDs); err != nil {
+				t.Fatalf("flushCommandWALExternalRefs referenced lanes: %v", err)
+			}
+			if appender.externalFlushes.Load() != 1 {
+				t.Fatalf("external flushes=%d, want 1", appender.externalFlushes.Load())
+			}
+			if appender.sync != tc.sync {
+				t.Fatalf("external flush sync=%v, want %v", appender.sync, tc.sync)
+			}
+			if len(appender.fileIDs) != len(fileIDs) {
+				t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+			}
+			for i := range fileIDs {
+				if appender.fileIDs[i] != fileIDs[i] {
+					t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+				}
+			}
+			if appender.flushes.Load() != 0 {
+				t.Fatalf("appender flushes=%d, want 0 when referenced-lane flusher is available", appender.flushes.Load())
+			}
+			if appender.syncs.Load() != 0 {
+				t.Fatalf("appender syncs=%d, want 0 when referenced-lane flusher is available", appender.syncs.Load())
+			}
+		})
+	}
 }
 
 func TestCommandWALMissingRIDFenceFailsRecovery(t *testing.T) {

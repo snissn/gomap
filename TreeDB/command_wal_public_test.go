@@ -1,10 +1,12 @@
 package treedb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -1592,6 +1594,209 @@ func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
 	has, err := reopen.Has([]byte("b"))
 	if err != nil || has {
 		t.Fatalf("Has(b)=(%t,%v), want false,nil", has, err)
+	}
+}
+
+func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		WALMaxSegmentBytes:           4096,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	values := make(map[string][]byte)
+	b := db.NewBatch()
+	for i := 0; i < 8; i++ {
+		key := fmt.Sprintf("large-%02d", i)
+		value := bytes.Repeat([]byte{byte('a' + i)}, 2048)
+		values[key] = value
+		if err := b.Set([]byte(key), value); err != nil {
+			_ = b.Close()
+			_ = db.Close()
+			t.Fatalf("batch Set %s: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write should encode pointer ops as SetRID below the command frame cap: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	assertPublicCommandWALFrames(t, db, 1)
+	if frames := publicCommandWALFrameCount(t, db); frames != 1 {
+		_ = db.Close()
+		t.Fatalf("command_wal.frames=%d, want exactly 1", frames)
+	}
+	for key, value := range values {
+		requireRawKVValue(t, db, []byte(key), value)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	for key, value := range values {
+		requireRawKVValue(t, reopen, []byte(key), value)
+	}
+}
+
+func TestPublicCommandWALBatchValueLogPointersFlushMultiLaneRefs(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		FlushThreshold:               1 << 30,
+		WALMaxSegmentBytes:           1 << 20,
+		JournalLanes:                 4,
+		MemtableShards:               16,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const entries = 1100
+	b := db.NewBatchWithSize(entries)
+	for i := 0; i < entries; i++ {
+		key := []byte(fmt.Sprintf("multi-lane-%06d", i))
+		value := bytes.Repeat([]byte{byte(i%251 + 1)}, 2048)
+		if err := b.Set(key, value); err != nil {
+			_ = b.Close()
+			t.Fatalf("batch Set %d: %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	lanes := publicCommandWALValueLogLanes(t, dir)
+	if len(lanes) < 2 {
+		t.Fatalf("value-log lanes used=%v, want at least 2 to cover multi-lane SetRID flushing", lanes)
+	}
+	for _, i := range []int{0, entries / 2, entries - 1} {
+		key := []byte(fmt.Sprintf("multi-lane-%06d", i))
+		want := bytes.Repeat([]byte{byte(i%251 + 1)}, 2048)
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get %q: %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get %q len=%d, want len=%d", key, len(got), len(want))
+		}
+	}
+}
+
+func publicCommandWALValueLogLanes(t *testing.T, dir string) map[int]struct{} {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value-log segments: %v", err)
+	}
+	lanes := make(map[int]struct{})
+	for _, path := range paths {
+		var lane, seq int
+		if n, _ := fmt.Sscanf(filepath.Base(path), "value-l%d-%d.log", &lane, &seq); n == 2 {
+			lanes[lane] = struct{}{}
+		}
+	}
+	return lanes
+}
+
+func TestPublicCommandWALBatchDeleteRangeWithPointerUsesCompactRangeFrame(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		WALMaxSegmentBytes:           4096,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for i := 0; i < 400; i++ {
+		key := []byte(fmt.Sprintf("range-%04d", i))
+		if err := db.Set(key, []byte("seed")); err != nil {
+			_ = db.Close()
+			t.Fatalf("seed Set %q: %v", key, err)
+		}
+	}
+	before := publicCommandWALFrameCount(t, db)
+
+	b := db.NewBatch()
+	if err := b.DeleteRange([]byte("range-"), []byte("range-\xff")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	wantValue := bytes.Repeat([]byte("z"), 2048)
+	if err := b.Set([]byte("z-pointer"), wantValue); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write should log compact DeleteRange instead of materialized point deletes: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	if frames := publicCommandWALFrameCount(t, db); frames != before+1 {
+		_ = db.Close()
+		t.Fatalf("command_wal.frames=%d want %d", frames, before+1)
+	}
+	has, err := db.Has([]byte("range-0000"))
+	if err != nil || has {
+		_ = db.Close()
+		t.Fatalf("Has(range-0000)=(%t,%v), want false,nil", has, err)
+	}
+	requireRawKVValue(t, db, []byte("z-pointer"), wantValue)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

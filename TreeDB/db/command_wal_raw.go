@@ -390,6 +390,32 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	return db.newRawKVCommandWALIntentFromEntries(entries)
+}
+
+// NewRawKVCommandWALIntentFromOrderedEntries builds a public raw-KV command
+// intent from entries that are already in the caller's required application
+// order. Unlike prepareRawKVCommandWALIntent, this does not sort or compact
+// point ops; public cached batches rely on replay order to preserve mixed
+// set/delete/range-delete semantics.
+func (db *DB) NewRawKVCommandWALIntentFromOrderedEntries(entries []batchpkg.Entry) (*CommandWALIntent, error) {
+	if db == nil || !db.commandWAL {
+		return nil, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntries(entries)
+	if intent == nil || err != nil {
+		return nil, err
+	}
+	return &CommandWALIntent{inner: *intent}, nil
+}
+
+func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
 	externalRefs := false
 	var ridCache map[page.ValuePtr]uint64
 	var smallOps [16]commitlog.RawKVOperation
@@ -424,6 +450,9 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 		default:
 			return nil, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
 		}
+	}
+	if len(ops) == 0 {
+		return nil, nil
 	}
 	payload, err := commitlog.EncodeRawKVBatchPayload(ops)
 	if err != nil {
@@ -480,7 +509,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.V
 	path := db.valueLogManager.SegmentPath(ptr.FileID)
 	rid, err := readCommandWALValueLogRIDAt(path, ptr)
 	if isCommandWALRIDLookupVisibilityError(err) {
-		if flushErr := db.flushCommandWALExternalRefs(false, nil); flushErr != nil {
+		if flushErr := db.flushCommandWALExternalRefs(false, []uint32{ptr.FileID}); flushErr != nil {
 			return 0, flushErr
 		}
 		rid, err = readCommandWALValueLogRIDAt(path, ptr)
@@ -514,6 +543,14 @@ func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 	}
 	var activeFileID uint32
 	if appender != nil {
+		if len(fileIDs) > 0 {
+			if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
+				if err := flusher.FlushValueLogExternalRefs(fileIDs, sync); err != nil {
+					return err
+				}
+				return nil
+			}
+		}
 		if _, fileID, ok := appender.CurrentValueLogSegment(); ok {
 			activeFileID = fileID
 		}
@@ -567,6 +604,11 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 		return 0, err
 	}
 	if intent.inner.lsn != 0 {
+		if !intent.inner.fromReplay {
+			if err := db.commandWALPoisonedError(); err != nil {
+				return 0, err
+			}
+		}
 		// Replay intents already refer to a durable frame; recovery must only
 		// publish that covered LSN, never append a duplicate command.
 		return intent.inner.lsn, nil
@@ -581,6 +623,8 @@ func commandWALIntentFrameAlreadyAppended(intent *CommandWALIntent) bool {
 // AppendCommandWALIntent appends a deterministic command frame without
 // publishing roots. It is used by cached public command-WAL writers that must
 // make a typed frame replay-visible before inserting the mutation into memory.
+// If the append succeeds but the post-append flush fails, the returned LSN is
+// still the allocated LSN and the open handle is poisoned for recovery.
 func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
@@ -922,17 +966,19 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	if err != nil {
 		return 0, err
 	}
+	if lsn != 0 {
+		intent.lsn = lsn
+		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
+	}
 	if err := db.FlushCommandWAL(sync); err != nil {
 		// AppendCommand already assigned a logical LSN, and the frame may be
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
 		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
-		return 0, err
+		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)
-	intent.lsn = lsn
-	intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
 	return lsn, nil
 }
 
@@ -963,8 +1009,8 @@ func commandWALFinalizeOptionsForPublicIntent(intent *CommandWALIntent) finalize
 func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchIntent) {
 	if db == nil || intent == nil || intent.lsn == 0 {
 		// intent.lsn == 0 means the frame was never durably appended
-		// (appendRawKVCommandWALIntent sets lsn only on success). No need
-		// to poison; appendRawKVCommandWALIntent already poisons its own
+		// (appendCommandWALIntent sets lsn once AppendCommand succeeds).
+		// No need to poison; appendCommandWALIntent already poisons its own
 		// flush/sync failures.
 		return
 	}

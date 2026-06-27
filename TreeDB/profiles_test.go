@@ -261,6 +261,12 @@ func TestApplyProfile_CommandWALDurableSetsCommandWALAndFastDurablePolicy(t *tes
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_durable profile")
 	}
+	if opts.WALMaxSegmentBytes != commandWALProfileSegmentBytes {
+		t.Fatalf("WALMaxSegmentBytes=%d want %d", opts.WALMaxSegmentBytes, commandWALProfileSegmentBytes)
+	}
+	if opts.CommandWALSegmentTargetBytes != commandWALProfileSegmentBytes {
+		t.Fatalf("CommandWALSegmentTargetBytes=%d want %d", opts.CommandWALSegmentTargetBytes, commandWALProfileSegmentBytes)
+	}
 }
 
 func TestApplyProfile_CommandWALRelaxedSetsCommandWALAndRelaxedPolicy(t *testing.T) {
@@ -284,6 +290,31 @@ func TestApplyProfile_CommandWALRelaxedSetsCommandWALAndRelaxedPolicy(t *testing
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_relaxed profile")
+	}
+	if opts.WALMaxSegmentBytes != commandWALProfileSegmentBytes {
+		t.Fatalf("WALMaxSegmentBytes=%d want %d", opts.WALMaxSegmentBytes, commandWALProfileSegmentBytes)
+	}
+	if opts.CommandWALSegmentTargetBytes != commandWALProfileSegmentBytes {
+		t.Fatalf("CommandWALSegmentTargetBytes=%d want %d", opts.CommandWALSegmentTargetBytes, commandWALProfileSegmentBytes)
+	}
+}
+
+func TestApplyProfile_CommandWALPreservesExplicitSegmentOverrides(t *testing.T) {
+	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := Options{
+				WALMaxSegmentBytes:           1024,
+				CommandWALSegmentTargetBytes: 2048,
+			}
+			ApplyProfile(&opts, profile)
+
+			if opts.WALMaxSegmentBytes != 1024 {
+				t.Fatalf("WALMaxSegmentBytes=%d want explicit 1024", opts.WALMaxSegmentBytes)
+			}
+			if opts.CommandWALSegmentTargetBytes != 2048 {
+				t.Fatalf("CommandWALSegmentTargetBytes=%d want explicit 2048", opts.CommandWALSegmentTargetBytes)
+			}
+		})
 	}
 }
 
