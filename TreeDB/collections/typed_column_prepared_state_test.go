@@ -487,9 +487,10 @@ func TestTypedColumnPreparedDictionaryReverseOnlyDenseDecode3175(t *testing.T) {
 }
 
 func TestTypedColumnPreparedDictionaryRequestNamesIncludeMetadata3175(t *testing.T) {
+	skippedField := typedColumnAdapterField("unused", "string")
 	names, err := typedColumnPreparedDictionaryRequestNames([]typedColumnPreparedColumnRequest{
 		{Field: typedColumnAdapterField("kind", "string"), Role: typedcolumn.ColumnRolePredicate, IncludeDictionaries: true},
-		{Field: typedColumnAdapterField("unused", "string"), IncludeDictionaries: false},
+		{Field: skippedField, IncludeDictionaries: false},
 	})
 	if err != nil {
 		t.Fatalf("request names: %v", err)
@@ -504,8 +505,12 @@ func TestTypedColumnPreparedDictionaryRequestNamesIncludeMetadata3175(t *testing
 	if _, ok := names[adapterColumn.Definition.Name]; !ok {
 		t.Fatalf("request names=%v missing requested kind dictionary %q", names, adapterColumn.Definition.Name)
 	}
-	if _, ok := names["unused"]; ok {
-		t.Fatalf("request names=%v included non-dictionary request", names)
+	skippedColumn, err := typedColumnAdapterMapField(skippedField)
+	if err != nil {
+		t.Fatalf("map skipped field: %v", err)
+	}
+	if _, ok := names[skippedColumn.Definition.Name]; ok {
+		t.Fatalf("request names=%v included non-dictionary request %q", names, skippedColumn.Definition.Name)
 	}
 	modes, err := typedColumnPreparedDictionaryRequestModes([]typedColumnPreparedColumnRequest{
 		{Field: typedColumnAdapterField("kind", "string"), Role: typedcolumn.ColumnRolePredicate, IncludeDictionaries: true},

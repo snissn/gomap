@@ -2410,7 +2410,15 @@ func validateTypedColumnTimeOrderTopKMarks(part *typedcolumn.ColumnPart, valueCo
 }
 
 func timeOrderTopKAllowedCodes(column typedColumnAdapterColumn, cardinality int, spec columnPhysicalQueryPredicateSpec) ([]uint64, bool, bool, error) {
-	if column.Dictionary == nil && len(spec.values) != 0 {
+	needsDictionary := false
+	for _, value := range spec.values {
+		if column.Field.Nullable && value == "" {
+			continue
+		}
+		needsDictionary = true
+		break
+	}
+	if column.Dictionary == nil && needsDictionary {
 		return nil, false, false, fmt.Errorf("collections: time-order topK predicate column %q missing forward dictionary", column.Definition.Name)
 	}
 	allowed := make([]uint64, (cardinality+63)/64)
