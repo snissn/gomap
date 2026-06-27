@@ -729,14 +729,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		var appender *columnPhysicalAssetSegmentAppender
 		closed := false
-		var appendStart time.Time
+		var appendDuration time.Duration
 		if needsAppender {
-			appendStart = time.Now()
+			appendStart := time.Now()
 			var err error
 			appender, err = newColumnPhysicalAssetSegmentAppendWriter(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, columnAssetM12ASegmentFileID)
 			if err != nil {
 				return err
 			}
+			appendDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
 					retErr = errors.Join(retErr, appender.abort())
@@ -748,11 +749,13 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		for _, asset := range pendingAssets {
 			ref := asset.ref
 			if !asset.hasRef {
+				appendStart := time.Now()
 				var err error
 				ref, err = appender.appendKind(asset.payload, asset.kind, generation, asset.partID)
 				if err != nil {
 					return err
 				}
+				appendDuration += time.Since(appendStart)
 				appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
 				appendedCount++
 				trackCleanupAsset(ref)
@@ -778,13 +781,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			})
 		}
 		if appender != nil {
+			appendStart := time.Now()
 			if err := appender.close(); err != nil {
 				return err
 			}
+			appendDuration += time.Since(appendStart)
 			closed = true
 		}
 		if needsAppender {
-			prepared.AssetMetrics.SharedAppendDuration += time.Since(appendStart)
+			prepared.AssetMetrics.SharedAppendDuration += appendDuration
 			prepared.AssetMetrics.SharedAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedAppendBytes, appendedBytes)
 			prepared.AssetMetrics.SharedAppendCount += appendedCount
 		}

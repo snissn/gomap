@@ -580,12 +580,19 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		t.Fatalf("column publish asset preparation timing missing: %+v", report.InsertStats)
 	}
 	if report.InsertStats.ColumnPublishRowAssetPrepareDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishDictionaryPrepareDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishInt64PrepareDurationMS <= 0 ||
 		report.InsertStats.ColumnPublishAggregateMetadataDurationMS <= 0 ||
 		report.InsertStats.ColumnPublishAssetAppendDurationMS <= 0 {
 		t.Fatalf("column publish asset-family timing missing: %+v", report.InsertStats)
 	}
 	if report.InsertStats.ColumnPublishRowAssetBytes <= 0 ||
+		report.InsertStats.ColumnPublishDictionaryBytes <= 0 ||
+		report.InsertStats.ColumnPublishDictionaryCount <= 0 ||
+		report.InsertStats.ColumnPublishInt64Bytes <= 0 ||
+		report.InsertStats.ColumnPublishInt64Count <= 0 ||
 		report.InsertStats.ColumnPublishAggregateMetadataBytes <= 0 ||
+		report.InsertStats.ColumnPublishAggregateMetadataCount <= 0 ||
 		report.InsertStats.ColumnPublishSharedAppendBytes <= 0 {
 		t.Fatalf("column publish asset-family byte counters missing: %+v", report.InsertStats)
 	}
@@ -2575,6 +2582,73 @@ func TestColumnStoreApplyMetadataCostOnlyAggregateRowsM3070(t *testing.T) {
 	}
 }
 
+func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *testing.T) {
+	stats := collections.CollectionInsertStats{
+		Documents:                             10,
+		ColumnPublishRowAssetPreparation:      1 * time.Millisecond,
+		ColumnPublishTypedColumnPreparation:   2 * time.Millisecond,
+		ColumnPublishDictionaryPreparation:    3 * time.Millisecond,
+		ColumnPublishInt64Preparation:         4 * time.Millisecond,
+		ColumnPublishAggregateMetadataPrepare: 5 * time.Millisecond,
+		ColumnPublishRowSidecarSharedBuild:    6 * time.Millisecond,
+		ColumnPublishAssetAppend:              7 * time.Millisecond,
+		ColumnPublishRowAssetBytes:            101,
+		ColumnPublishRowAssetCount:            1,
+		ColumnPublishTypedColumnBytes:         202,
+		ColumnPublishTypedColumnCount:         2,
+		ColumnPublishDictionaryBytes:          303,
+		ColumnPublishDictionaryCount:          3,
+		ColumnPublishInt64Bytes:               404,
+		ColumnPublishInt64Count:               4,
+		ColumnPublishAggregateMetadataBytes:   505,
+		ColumnPublishAggregateMetadataCount:   5,
+		ColumnPublishSharedAppendBytes:        606,
+		ColumnPublishSharedAppendCount:        6,
+	}
+
+	metric := columnStoreInsertPhaseMetricFromStats(stats, 1)
+
+	if got, want := metric.ColumnPublishRowAssetPrepareDurationMS, 1.0; got != want {
+		t.Fatalf("row asset duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnPrepareDurationMS, 2.0; got != want {
+		t.Fatalf("typed-column duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishDictionaryPrepareDurationMS, 3.0; got != want {
+		t.Fatalf("dictionary duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishInt64PrepareDurationMS, 4.0; got != want {
+		t.Fatalf("int64 duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAggregateMetadataDurationMS, 5.0; got != want {
+		t.Fatalf("aggregate metadata duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishRowSidecarSharedBuildMS, 6.0; got != want {
+		t.Fatalf("row sidecar shared duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendDurationMS, 7.0; got != want {
+		t.Fatalf("shared append duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnBytes, int64(202); got != want {
+		t.Fatalf("typed-column bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnCount, 2; got != want {
+		t.Fatalf("typed-column count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDictionaryBytes, int64(303); got != want {
+		t.Fatalf("dictionary bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDictionaryCount, 3; got != want {
+		t.Fatalf("dictionary count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishInt64Bytes, int64(404); got != want {
+		t.Fatalf("int64 bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishInt64Count, 4; got != want {
+		t.Fatalf("int64 count=%d want %d", got, want)
+	}
+}
+
 func TestColumnStoreMetadataCostMetricUsesSplitAggregateAccountingM3148(t *testing.T) {
 	insert := columnStoreInsertPhaseMetric{
 		Documents:                                99,
@@ -2620,6 +2694,20 @@ func TestColumnStoreMetadataCostMetricUsesSplitAggregateAccountingM3148(t *testi
 	}
 	if got, want := cost.StorageCostBasis, "active_manifest_aggregate_metadata_sidecars_plus_typed_column_embedded_aggregate_sections"; got != want {
 		t.Fatalf("metadata storage cost basis=%q want %q", got, want)
+	}
+
+	unavailable := columnStoreMetadataCostMetricFromAccounting(insert, collections.ColumnStorePhysicalAccounting{}, errors.New("unavailable"))
+	if got, want := unavailable.AggregateMetadataAppendShareMS, 8.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("unavailable accounting append share ms=%v want %v", got, want)
+	}
+	if got, want := unavailable.InsertCostDurationMS, 15.5; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("unavailable accounting insert cost ms=%v want %v", got, want)
+	}
+	if got, want := unavailable.InsertCostBasis, "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"; got != want {
+		t.Fatalf("unavailable accounting insert cost basis=%q want %q", got, want)
+	}
+	if !strings.Contains(unavailable.StorageCostBasis, "physical_accounting_unavailable") {
+		t.Fatalf("unavailable accounting storage basis=%q", unavailable.StorageCostBasis)
 	}
 }
 

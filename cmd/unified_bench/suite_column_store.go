@@ -2072,10 +2072,18 @@ func columnStoreMetadataCostMetricFromAccounting(insert columnStoreInsertPhaseMe
 	if rows <= 0 {
 		rows = insert.Documents
 	}
+	out.AggregateMetadataAppendShareMS = columnStoreDurationShareMS(insert.ColumnPublishAssetAppendDurationMS, insert.ColumnPublishAggregateMetadataBytes, insert.ColumnPublishSharedAppendBytes)
+	splitInsertCostMS := out.AggregateMetadataPrepareMS + out.AggregateMetadataAppendShareMS
+	splitInsertCostAvailable := splitInsertCostMS > 0 && (insert.ColumnPublishAggregateMetadataBytes > 0 || out.AggregateMetadataPrepareMS > 0)
 	if accountingErr != nil {
 		out.StorageCostBasis = "physical_accounting_unavailable: " + accountingErr.Error()
-		out.InsertCostDurationMS = out.InsertCostUpperBoundMS
-		out.InsertCostBasis = "column_publish_asset_preparation_total_upper_bound_all_asset_families"
+		if splitInsertCostAvailable {
+			out.InsertCostDurationMS = splitInsertCostMS
+			out.InsertCostBasis = "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"
+		} else {
+			out.InsertCostDurationMS = out.InsertCostUpperBoundMS
+			out.InsertCostBasis = "column_publish_asset_preparation_total_upper_bound_all_asset_families"
+		}
 		if rows > 0 && out.InsertCostDurationMS > 0 {
 			out.InsertCostNsPerRow = out.InsertCostDurationMS * float64(time.Millisecond) / float64(rows)
 		}
@@ -2087,9 +2095,8 @@ func columnStoreMetadataCostMetricFromAccounting(insert columnStoreInsertPhaseMe
 	out.AggregateMetadataRefs = accounting.AggregateMetadataRefs
 	if out.AggregateMetadataRefs > 0 || out.AggregateMetadataStorageBytes > 0 {
 		out.StorageCostBasis = "active_manifest_aggregate_metadata_sidecars_plus_typed_column_embedded_aggregate_sections"
-		out.AggregateMetadataAppendShareMS = columnStoreDurationShareMS(insert.ColumnPublishAssetAppendDurationMS, insert.ColumnPublishAggregateMetadataBytes, insert.ColumnPublishSharedAppendBytes)
-		out.InsertCostDurationMS = out.AggregateMetadataPrepareMS + out.AggregateMetadataAppendShareMS
-		if out.InsertCostDurationMS > 0 {
+		if splitInsertCostAvailable {
+			out.InsertCostDurationMS = splitInsertCostMS
 			out.InsertCostBasis = "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"
 		} else {
 			out.InsertCostDurationMS = out.InsertCostUpperBoundMS
