@@ -174,9 +174,10 @@ func TestColumnPhysicalTypedColumnParallelPartDecodeShapes3158(t *testing.T) {
 			prepareDenseGroupCountDistinctGlobalRanks: true,
 		},
 		{
-			name: "q4 time-order TopK keeps serial lazy payload loader",
+			name: "q4 time-order TopK uses parallel eager payloads",
 			plan: columnTypedColumnPhysicalQueryPlan{TimeOrderTopK: true, GroupColumn: "collection", ValueColumn: "time_us"},
 			req:  baseReq(ColumnPhysicalQueryGroupMinInt64),
+			want: true,
 		},
 		{
 			name:                             "global int64 codes stay serial",

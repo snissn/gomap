@@ -1443,7 +1443,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	return part, nil
 }
 
-func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, allowDenseGroupCountDistinct bool, includePhysicalRows bool) (columnTypedColumnPhysicalQueryPart, bool, error) {
+func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, allowDenseGroupCountDistinct bool, includePhysicalRows bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions) (columnTypedColumnPhysicalQueryPart, bool, error) {
 	if !typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity) {
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
@@ -1478,11 +1478,14 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
 	if columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req) {
-		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{LazyPayloads: true})
+		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{LazyPayloads: !opts.eagerTimeOrderTopKPayloads})
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, true, err
 		}
-		payloadLoader := newColumnTypedColumnTimeOrderTopKPayloadLoader(reader.readRangeOwned, prepared)
+		var payloadLoader *columnTypedColumnTimeOrderTopKPayloadLoader
+		if !opts.eagerTimeOrderTopKPayloads {
+			payloadLoader = newColumnTypedColumnTimeOrderTopKPayloadLoader(reader.readRangeOwned, prepared)
+		}
 		part, err := decodeTypedColumnPhysicalQueryTimeOrderTopKPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, payloadLoader)
 		return part, true, err
 	}

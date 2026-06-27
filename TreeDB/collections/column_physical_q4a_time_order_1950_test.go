@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"runtime"
 	"sort"
 	"testing"
 )
@@ -113,6 +114,38 @@ func TestColumnPhysicalQ4ATimeOrderTopKOneShotCache3085(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalQ4ATimeOrderTopKParallelEagerPayloads3158(t *testing.T) {
+	if oldProcs := runtime.GOMAXPROCS(0); oldProcs < 2 {
+		runtime.GOMAXPROCS(2)
+		defer runtime.GOMAXPROCS(oldProcs)
+	}
+
+	batches := columnPhysicalQ4ATimeOrderBatches1950(9_000)
+	events := flattenColumnPhysicalEvents1950(batches)
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, []ColumnSortKey{{Column: "time_us"}}, batches)
+	defer closeFn()
+
+	scanned := scanColumnPhysicalJSONBenchParityEventsP0(t, col, len(events))
+	req := columnPhysicalQ4ATimeOrderRequest1950()
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegrityCachedVerify
+	want := columnPhysicalQ4ATimeOrderReferenceGroups1950(scanned, req.TopK)
+	wantCandidates := columnPhysicalQ4ATimeOrderReferenceEarlyCandidates1950(scanned, req.TopK)
+
+	first, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("first RunColumnPhysicalQuery(q4a time-order topK cached-verify): %v", err)
+	}
+	assertColumnPhysicalQ4ATimeOrderResult1950(t, "parallel eager first one-shot", first, want, len(events), wantCandidates)
+	assertColumnPhysicalQ4ATimeOrderOneShotEagerPayloads3158(t, col, req)
+
+	second, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("second RunColumnPhysicalQuery(q4a time-order topK cached-verify): %v", err)
+	}
+	assertColumnPhysicalQ4ATimeOrderResult1950(t, "parallel eager second one-shot", second, want, len(events), wantCandidates)
+	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q4a parallel eager second", 1, 1, 1, 1, 0)
+}
+
 func BenchmarkColumnPhysicalQ4ATimeOrderTopK1950(b *testing.B) {
 	batches := columnPhysicalQ4ATimeOrderBatches1950(9_000)
 	events := flattenColumnPhysicalEvents1950(batches)
@@ -175,6 +208,48 @@ func BenchmarkColumnPhysicalQ4ATimeOrderTopK1950(b *testing.B) {
 			}
 			reportColumnPhysicalQ4ATimeOrderBenchMetrics1950(b, last, len(events))
 		})
+	}
+}
+
+func assertColumnPhysicalQ4ATimeOrderOneShotEagerPayloads3158(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) {
+	tb.Helper()
+	if col == nil {
+		tb.Fatalf("nil collection")
+	}
+	wantPredicates := collectionTypedColumnOneShotPredicateKey(req)
+	var entry *collectionTypedColumnOneShotCacheEntry
+	col.typedColumnOneShotMu.Lock()
+	for slot, current := range col.typedColumnOneShot {
+		if slot.kind == req.Kind &&
+			slot.groupColumn == req.GroupColumn &&
+			slot.valueColumn == req.ValueColumn &&
+			slot.topK == req.TopK &&
+			slot.topKOrder == req.TopKOrder &&
+			slot.readIntegrity == req.ColumnAssetReadIntegrity &&
+			slot.predicates == wantPredicates {
+			entry = current
+			break
+		}
+	}
+	col.typedColumnOneShotMu.Unlock()
+	if entry == nil {
+		tb.Fatalf("q4a typed-column one-shot cache entry not found")
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.runner == nil {
+		tb.Fatalf("q4a typed-column one-shot runner not found")
+	}
+	if got := len(entry.runner.parts); got < 2 {
+		tb.Fatalf("q4a typed-column one-shot runner parts=%d want at least 2 for parallel decode", got)
+	}
+	for partIdx, part := range entry.runner.parts {
+		if part.TimeOrderTopK == nil {
+			tb.Fatalf("q4a runner part %d missing time-order topK state", partIdx)
+		}
+		if part.TimeOrderTopK.PayloadLoader != nil {
+			tb.Fatalf("q4a runner part %d retained lazy payload loader after parallel decode", partIdx)
+		}
 	}
 }
 
