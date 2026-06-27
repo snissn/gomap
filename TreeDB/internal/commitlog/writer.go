@@ -123,7 +123,6 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	var commandBuf []byte
 	commandBufLimit := 0
 	if opts.DeferredCommandBufferSize > 0 {
-		commandBuf = make([]byte, 0, opts.DeferredCommandBufferSize)
 		commandBufLimit = opts.DeferredCommandBufferSize
 	}
 	return &Writer{
@@ -1029,7 +1028,7 @@ func (w *Writer) canBufferCommandFrame(total int) bool {
 }
 
 func (w *Writer) commandBufferLimit() int {
-	if w == nil || w.commandBufLimit <= 0 || cap(w.commandBuf) == 0 {
+	if w == nil || w.commandBufLimit <= 0 {
 		return 0
 	}
 	return w.commandBufLimit
