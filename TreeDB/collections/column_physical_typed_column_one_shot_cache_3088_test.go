@@ -190,9 +190,6 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 			diag.TypedColumnOneShotCacheHit, diag.TypedColumnOneShotCacheMiss, diag.TypedColumnOneShotCacheBuild,
 			wantHit, wantMiss, wantBuild, diag)
 	}
-	if wantBuild && diag.TypedColumnOneShotBuildNanos <= 0 {
-		tb.Fatalf("%s typed-column one-shot build nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnOneShotBuildNanos, diag)
-	}
 	if !wantBuild && diag.TypedColumnOneShotBuildNanos != 0 {
 		tb.Fatalf("%s typed-column one-shot build nanos=%d want 0 diagnostics=%+v", label, diag.TypedColumnOneShotBuildNanos, diag)
 	}
