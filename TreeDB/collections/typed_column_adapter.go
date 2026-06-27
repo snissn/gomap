@@ -1508,6 +1508,10 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	if err != nil || !ok {
 		return columnTypedColumnPhysicalQueryPart{}, ok, err
 	}
+	adapterDictionaryModes, err := typedColumnPreparedAdapterDictionaryModesFromRequests(requests)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, true, err
+	}
 	reader := &columnTypedColumnPhysicalRangePartReader{
 		readCache:          readCache,
 		ref:                typedRef.Ref,
@@ -1561,7 +1565,10 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		if prepareDiagnostics != nil {
 			adapterStart = time.Now()
 		}
-		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{LazyPayloads: !opts.eagerTimeOrderTopKPayloads})
+		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{
+			LazyPayloads:    !opts.eagerTimeOrderTopKPayloads,
+			DictionaryModes: adapterDictionaryModes,
+		})
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
 		}
@@ -1587,7 +1594,7 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	if prepareDiagnostics != nil {
 		adapterStart = time.Now()
 	}
-	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPart(prepared, plan.Fields, reader.readRange)
+	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{DictionaryModes: adapterDictionaryModes})
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
 	}
@@ -1826,7 +1833,30 @@ func columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan columnTypedColumn
 }
 
 type typedColumnPreparedAdapterPartOptions struct {
-	LazyPayloads bool
+	LazyPayloads    bool
+	DictionaryModes map[string]typedColumnAdapterDictionaryMode
+}
+
+func typedColumnPreparedAdapterDictionaryModesFromRequests(requests []typedColumnPreparedColumnRequest) (map[string]typedColumnAdapterDictionaryMode, error) {
+	requestModes, err := typedColumnPreparedDictionaryRequestModes(requests)
+	if err != nil {
+		return nil, err
+	}
+	if len(requestModes) == 0 {
+		return nil, nil
+	}
+	modes := make(map[string]typedColumnAdapterDictionaryMode, len(requestModes))
+	for name, mode := range requestModes {
+		if name == typedColumnAdapterMetadataDictionary {
+			continue
+		}
+		modes[name] = typedColumnAdapterDictionaryMode{
+			Forward:      mode.Forward,
+			Reverse:      mode.Reverse,
+			ValuesByCode: mode.ValuesByCode,
+		}
+	}
+	return modes, nil
 }
 
 func typedColumnPhysicalQueryPreparedAdapterPart(prepared *typedColumnPreparedPartState, fields []TypedStorageField, readRange typedColumnPreparedRangeReader) (*typedColumnAdapterPart, error) {
@@ -1863,14 +1893,17 @@ func typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared *typedColum
 		if preparedColumn.ReverseDictionaries != nil {
 			adapterColumn.ReverseDictionary = preparedColumn.ReverseDictionaries
 		}
-		if preparedColumn.DictionaryValuesByCode != nil {
-			adapterColumn.DictionaryValuesByCode = preparedColumn.DictionaryValuesByCode
-		} else if preparedColumn.Dictionaries != nil {
-			valuesByCode, err := typedColumnAdapterDictionaryValuesByCodeFromForward(preparedColumn.Dictionaries, int(adapterColumn.Definition.Cardinality))
-			if err != nil {
-				return nil, err
+		mode := typedColumnPreparedAdapterDictionaryModeForColumn(opts, adapterColumn.Definition.Name)
+		if mode.ValuesByCode {
+			if preparedColumn.DictionaryValuesByCode != nil {
+				adapterColumn.DictionaryValuesByCode = preparedColumn.DictionaryValuesByCode
+			} else if preparedColumn.Dictionaries != nil {
+				valuesByCode, err := typedColumnAdapterDictionaryValuesByCodeFromForward(preparedColumn.Dictionaries, int(adapterColumn.Definition.Cardinality))
+				if err != nil {
+					return nil, err
+				}
+				adapterColumn.DictionaryValuesByCode = valuesByCode
 			}
-			adapterColumn.DictionaryValuesByCode = valuesByCode
 		}
 		partColumn, err := typedColumnPreparedColumnWithOptionalPayloads(preparedColumn, readRange, !opts.LazyPayloads)
 		if err != nil {
@@ -4806,6 +4839,13 @@ func reverseTypedColumnAdapterDictionary(dict map[string]int64) map[int64]string
 }
 
 func typedColumnAdapterDictionaryModeForColumn(opts typedColumnAdapterOptions, column string) typedColumnAdapterDictionaryMode {
+	if opts.DictionaryModes != nil {
+		return opts.DictionaryModes[column]
+	}
+	return typedColumnAdapterDictionaryMode{Forward: true, Reverse: true, ValuesByCode: true}
+}
+
+func typedColumnPreparedAdapterDictionaryModeForColumn(opts typedColumnPreparedAdapterPartOptions, column string) typedColumnAdapterDictionaryMode {
 	if opts.DictionaryModes != nil {
 		return opts.DictionaryModes[column]
 	}

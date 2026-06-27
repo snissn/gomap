@@ -1646,9 +1646,6 @@ func validateTypedColumnPreparedReverseDictionaryForColumn(name string, cardinal
 }
 
 func validateTypedColumnPreparedValuesByCodeDictionaryForColumn(name string, cardinality uint32, valuesByCode []string) error {
-	if cardinality == 0 {
-		return fmt.Errorf("collections: typed-column prepared dictionary %s has zero cardinality", name)
-	}
 	if uint64(len(valuesByCode)) != uint64(cardinality) {
 		return fmt.Errorf("collections: typed-column prepared values-by-code dictionary %s cardinality=%d want %d", name, len(valuesByCode), cardinality)
 	}
