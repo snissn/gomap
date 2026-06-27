@@ -2,6 +2,27 @@ package valuelog
 
 import "testing"
 
+func drainDecodeScratchPoolsForTest() {
+	for {
+		select {
+		case buf := <-smallDecodeScratchPool:
+			noteDecodeScratchSmallPoolTake(cap(buf))
+		default:
+			goto drainLarge
+		}
+	}
+
+drainLarge:
+	for {
+		select {
+		case buf := <-largeDecodeScratchPool:
+			noteDecodeScratchLargePoolTake(cap(buf))
+		default:
+			return
+		}
+	}
+}
+
 func TestDecodeScratchPool_ReusesSmallBuffer_NoAllocsAfterWarmup(t *testing.T) {
 	minCap := 1024
 
@@ -20,6 +41,71 @@ func TestDecodeScratchPool_ReusesSmallBuffer_NoAllocsAfterWarmup(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("expected 0 allocs after warm-up, got %f", allocs)
+	}
+}
+
+func TestDecodeScratchPool_BoundsSmallRetainedBytes(t *testing.T) {
+	drainDecodeScratchPoolsForTest()
+	t.Cleanup(drainDecodeScratchPoolsForTest)
+
+	before := DecodeScratchStatsSnapshot()
+	for i := 0; i < smallDecodeScratchPoolEntries+7; i++ {
+		putDecodeScratch(make([]byte, 0, maxDecodeScratchKeep))
+	}
+	after := DecodeScratchStatsSnapshot()
+
+	if got := after.SmallPoolEntries; got != smallDecodeScratchPoolEntries {
+		t.Fatalf("small pool entries=%d want %d", got, smallDecodeScratchPoolEntries)
+	}
+	if got := after.SmallPoolRetainedBuffers; got != uint64(smallDecodeScratchPoolEntries) {
+		t.Fatalf("small retained buffers=%d want %d", got, smallDecodeScratchPoolEntries)
+	}
+	wantBytes := uint64(smallDecodeScratchPoolEntries * maxDecodeScratchKeep)
+	if got := after.SmallPoolRetainedBytes; got != wantBytes {
+		t.Fatalf("small retained bytes=%d want %d", got, wantBytes)
+	}
+	if got := after.SmallPoolDropsTotal - before.SmallPoolDropsTotal; got != 7 {
+		t.Fatalf("small pool drops delta=%d want 7", got)
+	}
+}
+
+func TestDecodeScratchPool_DropRollsBackRetainedGauge(t *testing.T) {
+	drainDecodeScratchPoolsForTest()
+	t.Cleanup(drainDecodeScratchPoolsForTest)
+
+	for i := 0; i < smallDecodeScratchPoolEntries; i++ {
+		putDecodeScratch(make([]byte, 0, maxDecodeScratchKeep))
+	}
+	before := DecodeScratchStatsSnapshot()
+	putDecodeScratch(make([]byte, 0, maxDecodeScratchKeep))
+	after := DecodeScratchStatsSnapshot()
+
+	if got := after.SmallPoolRetainedBuffers; got != before.SmallPoolRetainedBuffers {
+		t.Fatalf("small retained buffers changed after drop: got %d want %d", got, before.SmallPoolRetainedBuffers)
+	}
+	if got := after.SmallPoolRetainedBytes; got != before.SmallPoolRetainedBytes {
+		t.Fatalf("small retained bytes changed after drop: got %d want %d", got, before.SmallPoolRetainedBytes)
+	}
+	if got := after.SmallPoolDropsTotal - before.SmallPoolDropsTotal; got != 1 {
+		t.Fatalf("small pool drops delta=%d want 1", got)
+	}
+
+	drainDecodeScratchPoolsForTest()
+	for i := 0; i < largeDecodeScratchPoolEntries; i++ {
+		putDecodeScratch(make([]byte, 0, maxDecodeScratchKeep+1))
+	}
+	before = DecodeScratchStatsSnapshot()
+	putDecodeScratch(make([]byte, 0, maxDecodeScratchKeep+1))
+	after = DecodeScratchStatsSnapshot()
+
+	if got := after.LargePoolRetainedBuffers; got != before.LargePoolRetainedBuffers {
+		t.Fatalf("large retained buffers changed after drop: got %d want %d", got, before.LargePoolRetainedBuffers)
+	}
+	if got := after.LargePoolRetainedBytes; got != before.LargePoolRetainedBytes {
+		t.Fatalf("large retained bytes changed after drop: got %d want %d", got, before.LargePoolRetainedBytes)
+	}
+	if got := after.LargePoolDropsTotal - before.LargePoolDropsTotal; got != 1 {
+		t.Fatalf("large pool drops delta=%d want 1", got)
 	}
 }
 
@@ -70,13 +156,44 @@ func TestFileDecodeScratch_RetainsParallelSmallBuffers(t *testing.T) {
 func TestFileDecodeScratch_BoundsPerFileSmallSpares(t *testing.T) {
 	f := &File{}
 	for i := 0; i < fileDecodeScratchSpareKeep+4; i++ {
-		f.releaseDecodeScratch(make([]byte, 0, (i+1)<<10))
+		f.releaseDecodeScratch(make([]byte, 0, fileDecodeScratchRetainMaxBytes/2))
 	}
 	if cap(f.decodeScratch) == 0 {
 		t.Fatalf("expected primary decode scratch")
 	}
 	if got := len(f.decodeScratchSpare); got > fileDecodeScratchSpareKeep {
 		t.Fatalf("decodeScratchSpare len=%d want <=%d", got, fileDecodeScratchSpareKeep)
+	}
+	stats := DecodeScratchStats{}
+	f.addDecodeScratchStats(&stats)
+	if got := stats.FileRetainedBytes; got > fileDecodeScratchRetainMaxBytes {
+		t.Fatalf("file retained bytes=%d want <=%d", got, fileDecodeScratchRetainMaxBytes)
+	}
+}
+
+func TestFileDecodeScratch_TrimsAfterPrimaryRefill(t *testing.T) {
+	t.Cleanup(drainDecodeScratchPoolsForTest)
+
+	f := &File{}
+	f.releaseDecodeScratch(make([]byte, 0, fileDecodeScratchRetainMaxBytes/2))
+	f.releaseDecodeScratch(make([]byte, 0, fileDecodeScratchRetainMaxBytes/2))
+	checkedOut := f.takeDecodeScratch(fileDecodeScratchRetainMaxBytes / 2)
+	if cap(checkedOut) < fileDecodeScratchRetainMaxBytes/2 {
+		t.Fatalf("checkedOut cap=%d want >=%d", cap(checkedOut), fileDecodeScratchRetainMaxBytes/2)
+	}
+	if cap(f.decodeScratch) != 0 {
+		t.Fatalf("expected empty primary after take, got cap=%d", cap(f.decodeScratch))
+	}
+	if got := len(f.decodeScratchSpare); got == 0 {
+		t.Fatalf("expected retained spare after primary take")
+	}
+
+	f.releaseDecodeScratch(make([]byte, 0, fileDecodeScratchRetainMaxBytes))
+
+	stats := DecodeScratchStats{}
+	f.addDecodeScratchStats(&stats)
+	if got := stats.FileRetainedBytes; got > fileDecodeScratchRetainMaxBytes {
+		t.Fatalf("file retained bytes=%d want <=%d", got, fileDecodeScratchRetainMaxBytes)
 	}
 }
 
