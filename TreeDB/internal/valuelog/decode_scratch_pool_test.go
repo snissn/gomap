@@ -171,6 +171,32 @@ func TestFileDecodeScratch_BoundsPerFileSmallSpares(t *testing.T) {
 	}
 }
 
+func TestFileDecodeScratch_TrimsAfterPrimaryRefill(t *testing.T) {
+	t.Cleanup(drainDecodeScratchPoolsForTest)
+
+	f := &File{}
+	f.releaseDecodeScratch(make([]byte, 0, fileDecodeScratchRetainMaxBytes/2))
+	f.releaseDecodeScratch(make([]byte, 0, fileDecodeScratchRetainMaxBytes/2))
+	checkedOut := f.takeDecodeScratch(fileDecodeScratchRetainMaxBytes / 2)
+	if cap(checkedOut) < fileDecodeScratchRetainMaxBytes/2 {
+		t.Fatalf("checkedOut cap=%d want >=%d", cap(checkedOut), fileDecodeScratchRetainMaxBytes/2)
+	}
+	if cap(f.decodeScratch) != 0 {
+		t.Fatalf("expected empty primary after take, got cap=%d", cap(f.decodeScratch))
+	}
+	if got := len(f.decodeScratchSpare); got == 0 {
+		t.Fatalf("expected retained spare after primary take")
+	}
+
+	f.releaseDecodeScratch(make([]byte, 0, fileDecodeScratchRetainMaxBytes))
+
+	stats := DecodeScratchStats{}
+	f.addDecodeScratchStats(&stats)
+	if got := stats.FileRetainedBytes; got > fileDecodeScratchRetainMaxBytes {
+		t.Fatalf("file retained bytes=%d want <=%d", got, fileDecodeScratchRetainMaxBytes)
+	}
+}
+
 func TestFileDecodeScratch_ReusesLargeBuffer(t *testing.T) {
 	minCap := maxDecodeScratchKeep + (64 << 10) // 320KiB
 	if minCap > maxLargeDecodeScratchKeep {

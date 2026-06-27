@@ -242,6 +242,9 @@ func (f *File) stashDecodeScratchLocked(buf []byte) {
 	}
 	if cap(f.decodeScratch) == 0 {
 		f.decodeScratch = buf
+		if len(f.decodeScratchSpare) != 0 {
+			f.trimDecodeScratchLocked()
+		}
 		return
 	}
 	if cap(buf) > cap(f.decodeScratch) {
