@@ -2132,6 +2132,84 @@ func TestColumnPhysicalAssetSegmentAppendWriterBatchesExistingSegment3142(t *tes
 	}
 }
 
+func TestColumnPhysicalAssetSegmentAppendWriterBatchesMixedRegularAssets3145(t *testing.T) {
+	cfg := testColumnStoreConfig(nil)
+	normalized, err := normalizeColumnStoreConfig("events", cfg)
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	seedPayload := []byte("seed")
+	seedRef, err := writeColumnAssetToManagerSegment(root, *normalized, seedPayload, ColumnAssetKindTCS1PartImage, 11, 1, columnAssetM12ASegmentFileID)
+	if err != nil {
+		t.Fatalf("seed writeColumnAssetToManagerSegment: %v", err)
+	}
+	appender, err := newColumnPhysicalAssetSegmentAppendWriter(root, *normalized, columnAssetM12ASegmentFileID)
+	if err != nil {
+		t.Fatalf("newColumnPhysicalAssetSegmentAppendWriter: %v", err)
+	}
+	rowPayload := []byte("row-image")
+	rowRef, err := appender.appendKind(rowPayload, ColumnAssetKindTCS1PartImage, 11, 2)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("append row image: %v", err)
+	}
+	typedPayload := []byte("typed-column-part")
+	typedRef, err := appender.appendKind(typedPayload, ColumnAssetKindTCS1TypedColumnPart, 11, 3)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("append typed-column part: %v", err)
+	}
+	dictPayload := []byte("dictionary-codes")
+	dictRef, err := appender.appendKind(dictPayload, ColumnAssetKindTCS1DictionaryCodes, 11, 2)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("append dictionary: %v", err)
+	}
+	intPayload := []byte("int64-values")
+	intRef, err := appender.appendKind(intPayload, ColumnAssetKindTCS1Int64Values, 11, 2)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("append int64: %v", err)
+	}
+	if err := appender.close(); err != nil {
+		t.Fatalf("appender close: %v", err)
+	}
+	refs := []ColumnAssetRef{rowRef, typedRef, dictRef, intRef}
+	for _, ref := range refs {
+		if ref.FileID != columnAssetM12ASegmentFileID {
+			t.Fatalf("ref=%+v want shared regular segment file_id=%d", ref, columnAssetM12ASegmentFileID)
+		}
+	}
+	if rowRef.Offset <= seedRef.Offset || typedRef.Offset <= rowRef.Offset || dictRef.Offset <= typedRef.Offset || intRef.Offset <= dictRef.Offset {
+		t.Fatalf("offsets seed=%+v row=%+v typed=%+v dict=%+v int=%+v want append order", seedRef, rowRef, typedRef, dictRef, intRef)
+	}
+	if dictRef.Offset%int64(dictionaryCodesDirectViewAssetAlignment) != 0 {
+		t.Fatalf("dictionary offset=%d want %d-byte alignment", dictRef.Offset, dictionaryCodesDirectViewAssetAlignment)
+	}
+	if intRef.Offset%int64(int64ValuesDirectViewAssetAlignment) != 0 {
+		t.Fatalf("int64 offset=%d want %d-byte alignment", intRef.Offset, int64ValuesDirectViewAssetAlignment)
+	}
+	segment := readColumnAssetSegmentFileForTest(t, root, seedRef)
+	expectedPayloads := []struct {
+		ref     ColumnAssetRef
+		payload []byte
+		name    string
+	}{
+		{seedRef, seedPayload, "seed"},
+		{rowRef, rowPayload, "row"},
+		{typedRef, typedPayload, "typed"},
+		{dictRef, dictPayload, "dictionary"},
+		{intRef, intPayload, "int64"},
+	}
+	for _, expected := range expectedPayloads {
+		got := segment[expected.ref.Offset : expected.ref.Offset+expected.ref.Length]
+		if !bytes.Equal(got, expected.payload) {
+			t.Fatalf("%s payload=%q want %q", expected.name, got, expected.payload)
+		}
+	}
+}
+
 func TestColumnPhysicalAssetSegmentAppendWriterAbortKeepsExistingSegment3142(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

@@ -636,16 +636,21 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		generation = hookInput.CurrentManifest.Generation + 1
 	}
 	role := columnManifestPartRoleForPublish(hookInput.Operation)
-	type pendingColumnRegularAsset struct {
-		payload []byte
-		kind    ColumnAssetKind
-		partID  uint64
-		rows    int
-		reason  string
+	type pendingColumnAsset struct {
+		payload  []byte
+		ref      ColumnAssetRef
+		hasRef   bool
+		kind     ColumnAssetKind
+		partID   uint64
+		rows     int
+		reason   string
+		partRole ColumnManifestPartRole
+		sortKey  string
+		validate func(ColumnAssetRef) error
 	}
-	pendingRegularAssets := make([]pendingColumnRegularAsset, 0, 8)
+	pendingAssets := make([]pendingColumnAsset, 0, 8)
 	queueRegularAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string) {
-		pendingRegularAssets = append(pendingRegularAssets, pendingColumnRegularAsset{
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
 			payload: payload,
 			kind:    kind,
 			partID:  partID,
@@ -653,29 +658,88 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			reason:  reason,
 		})
 	}
-	flushRegularAssets := func() (retErr error) {
-		if len(pendingRegularAssets) == 0 {
+	queueRegularManifestAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, validate func(ColumnAssetRef) error) {
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
+			payload:  payload,
+			kind:     kind,
+			partID:   partID,
+			rows:     rows,
+			reason:   reason,
+			partRole: partRole,
+			sortKey:  sortKey,
+			validate: validate,
+		})
+	}
+	queuePreparedManifestAsset := func(asset ColumnPreparedAsset) {
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
+			ref:      asset.Ref,
+			hasRef:   true,
+			kind:     asset.Ref.Kind,
+			partID:   asset.Ref.PartID,
+			rows:     asset.Rows,
+			reason:   asset.Reason,
+			partRole: asset.PartRole,
+			sortKey:  asset.SortKey,
+			validate: func(ref ColumnAssetRef) error {
+				if !columnPreparedAssetsEqual(asset, ColumnPreparedAsset{
+					Ref:          ref,
+					Rows:         asset.Rows,
+					Bytes:        ref.Length,
+					PublishID:    asset.PublishID,
+					GenerationID: asset.GenerationID,
+					Reason:       asset.Reason,
+					PartRole:     asset.PartRole,
+					SortKey:      asset.SortKey,
+				}) {
+					return fmt.Errorf("collections: prepared asset ref %+v does not match queued asset %+v", ref, asset)
+				}
+				return nil
+			},
+		})
+	}
+	flushPendingAssets := func() (retErr error) {
+		if len(pendingAssets) == 0 {
 			return nil
 		}
-		appender, err := newColumnPhysicalAssetSegmentAppendWriter(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, columnAssetM12ASegmentFileID)
-		if err != nil {
-			return err
-		}
-		closed := false
-		defer func() {
-			if retErr != nil && !closed {
-				retErr = errors.Join(retErr, appender.abort())
+		needsAppender := false
+		for _, asset := range pendingAssets {
+			if !asset.hasRef {
+				needsAppender = true
+				break
 			}
-		}()
-		for _, asset := range pendingRegularAssets {
-			ref, err := appender.appendKind(asset.payload, asset.kind, generation, asset.partID)
+		}
+		var appender *columnPhysicalAssetSegmentAppender
+		closed := false
+		if needsAppender {
+			var err error
+			appender, err = newColumnPhysicalAssetSegmentAppendWriter(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, columnAssetM12ASegmentFileID)
 			if err != nil {
 				return err
 			}
-			trackCleanupAsset(ref)
-			if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
-				ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
-				return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
+			defer func() {
+				if retErr != nil && !closed {
+					retErr = errors.Join(retErr, appender.abort())
+				}
+			}()
+		}
+		for _, asset := range pendingAssets {
+			ref := asset.ref
+			if !asset.hasRef {
+				var err error
+				ref, err = appender.appendKind(asset.payload, asset.kind, generation, asset.partID)
+				if err != nil {
+					return err
+				}
+				trackCleanupAsset(ref)
+				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
+					ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
+					return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
+				}
+			}
+			if asset.validate != nil {
+				if err := asset.validate(ref); err != nil {
+					return err
+				}
 			}
 			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
 				Ref:          ref,
@@ -684,10 +748,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				PublishID:    hookInput.AppliedCommandLSN,
 				GenerationID: generation,
 				Reason:       asset.reason,
+				PartRole:     asset.partRole,
+				SortKey:      asset.sortKey,
 			})
 		}
-		closed = true
-		return appender.close()
+		if appender != nil {
+			closed = true
+			return appender.close()
+		}
+		return nil
 	}
 	rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
 	rowAssetRows, err := projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
@@ -708,28 +777,14 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	if err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
-	ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, columnPhysicalRowAssetPartID)
-	if err != nil {
-		return ColumnPublishPreparedAssets{}, err
-	}
-	trackCleanupAsset(ref)
-	if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded)); err != nil {
-		return ColumnPublishPreparedAssets{}, err
-	}
 	if prepared.CommandBytes == 0 {
 		prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
 	}
 	prepared.RowCount = summary.RowCount
 	prepared.ColumnPayloadBytes = summary.PayloadBytes
-	prepared.Assets = []ColumnPreparedAsset{{
-		Ref:          ref,
-		Rows:         summary.RowCount,
-		Bytes:        ref.Length,
-		PublishID:    hookInput.AppliedCommandLSN,
-		GenerationID: generation,
-		Reason:       string(input.operation),
-		PartRole:     role,
-	}}
+	queueRegularManifestAsset(encoded, ColumnAssetKindTCS1PartImage, columnPhysicalRowAssetPartID, summary.RowCount, string(input.operation), role, "", func(ref ColumnAssetRef) error {
+		return validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded))
+	})
 	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
 		typedColumnImage, typedColumnRows, err := buildTypedColumnPartImageForDeclaredRows(hookInput.ColumnStore, generation, typedColumnPartAssetPartID, rows)
 		if err != nil {
@@ -740,26 +795,35 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			typedColumnRef, err := writeTypedColumnPartAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
+			validateTypedColumnRef := func(ref ColumnAssetRef) error {
+				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != ColumnAssetKindTCS1TypedColumnPart ||
+					ref.Generation != generation || ref.PartID != typedColumnPartAssetPartID || ref.Length != int64(len(typedColumnImage)) {
+					return fmt.Errorf("collections: invalid typed-column part asset ref %+v", ref)
+				}
+				return nil
 			}
-			trackCleanupAsset(typedColumnRef)
-			if typedColumnRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || typedColumnRef.Kind != ColumnAssetKindTCS1TypedColumnPart ||
-				typedColumnRef.Generation != generation || typedColumnRef.PartID != typedColumnPartAssetPartID || typedColumnRef.Length != int64(len(typedColumnImage)) {
-				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid typed-column part asset ref %+v", typedColumnRef)
+			if columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
+				typedColumnRef, err := writeTypedColumnPartAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
+				if err != nil {
+					return ColumnPublishPreparedAssets{}, err
+				}
+				trackCleanupAsset(typedColumnRef)
+				if err := validateTypedColumnRef(typedColumnRef); err != nil {
+					return ColumnPublishPreparedAssets{}, err
+				}
+				queuePreparedManifestAsset(ColumnPreparedAsset{
+					Ref:          typedColumnRef,
+					Rows:         typedColumnRows,
+					Bytes:        typedColumnRef.Length,
+					PublishID:    hookInput.AppliedCommandLSN,
+					GenerationID: generation,
+					Reason:       string(input.operation),
+					PartRole:     role,
+					SortKey:      columnSortKeyMatchString(typedColumnSortKey),
+				})
+			} else {
+				queueRegularManifestAsset(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedColumnPartAssetPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), validateTypedColumnRef)
 			}
-			prepped := ColumnPreparedAsset{
-				Ref:          typedColumnRef,
-				Rows:         typedColumnRows,
-				Bytes:        typedColumnRef.Length,
-				PublishID:    hookInput.AppliedCommandLSN,
-				GenerationID: generation,
-				Reason:       string(input.operation),
-				PartRole:     role,
-				SortKey:      columnSortKeyMatchString(typedColumnSortKey),
-			}
-			prepared.Assets = append(prepared.Assets, prepped)
 		}
 	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
@@ -823,7 +887,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, columnPhysicalRowAssetPartID, summary.RowCount, metadata.AggregateName)
 		}
 	}
-	if err := flushRegularAssets(); err != nil {
+	if err := flushPendingAssets(); err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
 	cleanupAssets = nil
