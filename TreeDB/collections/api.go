@@ -1331,6 +1331,7 @@ func (m *CollectionManager) closeForBackend() error {
 		}
 	}()
 	m.stopUpdateCombiners()
+	m.closeCollectionTypedColumnOneShotCaches()
 	cacheErr := m.closeCollectionVectorIndexPreparedSearchCaches()
 	flushErr := m.FlushAll()
 	return errors.Join(cacheErr, flushErr)

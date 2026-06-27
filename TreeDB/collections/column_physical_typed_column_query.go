@@ -189,6 +189,32 @@ type columnTypedColumnPhysicalAggregateSummary struct {
 	denseGroupHourCount bool
 }
 
+func (r *columnTypedColumnPhysicalQueryRunner) close() {
+	if r == nil {
+		return
+	}
+	r.parts = nil
+	r.aggregateSummary = nil
+	r.denseGroupCounts = nil
+	r.denseLocalCounts = nil
+	r.denseGroupCountDistinctCounts = nil
+	r.denseGroupCountDistinctDistinctCounts = nil
+	r.denseGroupCountDistinctPairBits = nil
+	r.denseGroupCountDistinctGroupActive = nil
+	r.denseGroupCountDistinctGroupOffsets = nil
+	r.denseGroupCountDistinctActiveGroups = nil
+	r.denseGroupCountDistinctPairList = nil
+	r.denseGroupHourCounts = nil
+	r.denseLocalHourCounts = nil
+	r.denseSpanValues = nil
+	r.denseLocalSpans = nil
+	r.denseLocalSpanSeen = nil
+	r.timeOrderMinValues = nil
+	r.timeOrderHeap.items = nil
+	r.timeOrderTopKScratch = nil
+	r.resultGroups = nil
+}
+
 func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
 	if !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return ColumnPhysicalQueryResult{}, false, nil
@@ -2965,6 +2991,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctLocalCo
 		}
 		leftPredicateCodes, rightPredicateCodes, leftPredicateCode, rightPredicateCode, useTwoSinglePredicates := columnTypedColumnDenseTwoSingleCodePredicates(dense.Predicates, dense.Rows)
 		if usePairBitset && useTwoSinglePredicates && dense.Group.Valid == nil && dense.Distinct.Valid == nil {
+			reducer = columnTypedColumnDenseGroupCountDistinctReducerPairBitset
 			for rowIdx := 0; rowIdx < dense.Rows; rowIdx++ {
 				rowsScanned++
 				if leftPredicateCodes[rowIdx] != leftPredicateCode || rightPredicateCodes[rowIdx] != rightPredicateCode {

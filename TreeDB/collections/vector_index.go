@@ -900,7 +900,7 @@ func (c *Collection) persistDirtyNativeVectorIndexes() error {
 			return err
 		}
 	}
-	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() {
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() && !c.hasCollectionTypedColumnOneShotCacheEntries() {
 		c.manager.unregisterCollectionHandle(c)
 	}
 	return nil

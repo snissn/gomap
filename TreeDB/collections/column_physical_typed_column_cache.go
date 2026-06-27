@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const collectionTypedColumnOneShotCacheMaxEntries = 8
@@ -42,6 +44,30 @@ type collectionTypedColumnOneShotCacheSnapshot struct {
 	Invalidations uint64
 }
 
+func (entry *collectionTypedColumnOneShotCacheEntry) run(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	if entry == nil {
+		return ColumnPhysicalQueryResult{}, backenddb.ErrClosed
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.runner == nil {
+		return ColumnPhysicalQueryResult{}, backenddb.ErrClosed
+	}
+	return entry.runner.run(view, req)
+}
+
+func (entry *collectionTypedColumnOneShotCacheEntry) close() {
+	if entry == nil {
+		return
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.runner != nil {
+		entry.runner.close()
+		entry.runner = nil
+	}
+}
+
 func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, start time.Time) (ColumnPhysicalQueryResult, bool, error) {
 	if c == nil || view.MutationParts != 0 {
 		return ColumnPhysicalQueryResult{}, false, nil
@@ -58,9 +84,7 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		c.typedColumnOneShotClock++
 		entry.lastUse = c.typedColumnOneShotClock
 		c.typedColumnOneShotMu.Unlock()
-		entry.mu.Lock()
-		result, err := entry.runner.run(view, req)
-		entry.mu.Unlock()
+		result, err := entry.run(view, req)
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
@@ -96,36 +120,49 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		c.typedColumnOneShotClock++
 		current.lastUse = c.typedColumnOneShotClock
 		c.typedColumnOneShotMu.Unlock()
-		current.mu.Lock()
-		result, err := current.runner.run(view, req)
-		current.mu.Unlock()
+		entry.close()
+		result, err := current.run(view, req)
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
+	var evicted *collectionTypedColumnOneShotCacheEntry
 	if len(c.typedColumnOneShot) >= collectionTypedColumnOneShotCacheMaxEntries {
-		collectionTypedColumnOneShotEvictOldest(c.typedColumnOneShot)
+		evicted = collectionTypedColumnOneShotEvictOldest(c.typedColumnOneShot)
 		c.typedColumnOneShotInvalidations++
 	}
 	c.typedColumnOneShotClock++
 	entry.lastUse = c.typedColumnOneShotClock
 	c.typedColumnOneShot[slot] = entry
 	c.typedColumnOneShotMu.Unlock()
+	if evicted != nil {
+		evicted.close()
+	}
+	if c.manager != nil && !c.manager.registerCollectionHandleIfOpen(c) {
+		c.typedColumnOneShotMu.Lock()
+		if c.typedColumnOneShot[slot] == entry {
+			delete(c.typedColumnOneShot, slot)
+			c.typedColumnOneShotInvalidations++
+		}
+		c.typedColumnOneShotMu.Unlock()
+		entry.close()
+		result := ColumnPhysicalQueryResult{}
+		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
+		return result, true, backenddb.ErrClosed
+	}
 
-	entry.mu.Lock()
-	result, err := entry.runner.run(view, req)
-	entry.mu.Unlock()
+	result, err := entry.run(view, req)
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, true, err
 }
 
-func collectionTypedColumnOneShotEvictOldest(entries map[collectionTypedColumnOneShotCacheSlot]*collectionTypedColumnOneShotCacheEntry) {
+func collectionTypedColumnOneShotEvictOldest(entries map[collectionTypedColumnOneShotCacheSlot]*collectionTypedColumnOneShotCacheEntry) *collectionTypedColumnOneShotCacheEntry {
 	var oldestSlot collectionTypedColumnOneShotCacheSlot
 	var oldestUse uint64
 	haveOldest := false
 	for slot, entry := range entries {
 		if entry == nil {
 			delete(entries, slot)
-			return
+			return nil
 		}
 		if !haveOldest || entry.lastUse < oldestUse {
 			oldestSlot = slot
@@ -134,7 +171,57 @@ func collectionTypedColumnOneShotEvictOldest(entries map[collectionTypedColumnOn
 		}
 	}
 	if haveOldest {
+		entry := entries[oldestSlot]
 		delete(entries, oldestSlot)
+		return entry
+	}
+	return nil
+}
+
+func (c *Collection) hasCollectionTypedColumnOneShotCacheEntries() bool {
+	if c == nil {
+		return false
+	}
+	c.typedColumnOneShotMu.Lock()
+	defer c.typedColumnOneShotMu.Unlock()
+	return len(c.typedColumnOneShot) > 0
+}
+
+func (c *Collection) closeCollectionTypedColumnOneShotCache() {
+	if c == nil {
+		return
+	}
+	var entries []*collectionTypedColumnOneShotCacheEntry
+	c.typedColumnOneShotMu.Lock()
+	for _, entry := range c.typedColumnOneShot {
+		if entry != nil {
+			entries = append(entries, entry)
+		}
+	}
+	c.typedColumnOneShot = nil
+	c.typedColumnOneShotMu.Unlock()
+	for _, entry := range entries {
+		entry.close()
+	}
+	if c.manager != nil && !c.hasDirtyNativeVectorIndex() && !c.hasCollectionVectorIndexPreparedSearchCacheEntries() {
+		c.manager.unregisterCollectionHandle(c)
+	}
+}
+
+func (m *CollectionManager) closeCollectionTypedColumnOneShotCaches() {
+	if m == nil {
+		return
+	}
+	m.collectionsMu.RLock()
+	collections := make([]*Collection, 0, len(m.collections))
+	for collection := range m.collections {
+		if collection != nil {
+			collections = append(collections, collection)
+		}
+	}
+	m.collectionsMu.RUnlock()
+	for _, collection := range collections {
+		collection.closeCollectionTypedColumnOneShotCache()
 	}
 }
 
