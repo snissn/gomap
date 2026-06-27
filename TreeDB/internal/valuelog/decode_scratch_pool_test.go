@@ -67,6 +67,19 @@ func TestFileDecodeScratch_RetainsParallelSmallBuffers(t *testing.T) {
 	f.releaseDecodeScratch(gotB)
 }
 
+func TestFileDecodeScratch_BoundsPerFileSmallSpares(t *testing.T) {
+	f := &File{}
+	for i := 0; i < fileDecodeScratchSpareKeep+4; i++ {
+		f.releaseDecodeScratch(make([]byte, 0, (i+1)<<10))
+	}
+	if cap(f.decodeScratch) == 0 {
+		t.Fatalf("expected primary decode scratch")
+	}
+	if got := len(f.decodeScratchSpare); got > fileDecodeScratchSpareKeep {
+		t.Fatalf("decodeScratchSpare len=%d want <=%d", got, fileDecodeScratchSpareKeep)
+	}
+}
+
 func TestFileDecodeScratch_ReusesLargeBuffer(t *testing.T) {
 	minCap := maxDecodeScratchKeep + (64 << 10) // 320KiB
 	if minCap > maxLargeDecodeScratchKeep {

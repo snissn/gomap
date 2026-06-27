@@ -214,7 +214,7 @@ func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	f.cacheRawPooled = pooled
 }
 
-const fileDecodeScratchSpareKeep = 8
+const fileDecodeScratchSpareKeep = 2
 
 func (f *File) stashDecodeScratch(buf []byte) {
 	if cap(buf) == 0 {

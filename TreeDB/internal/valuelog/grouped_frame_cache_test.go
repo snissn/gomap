@@ -334,6 +334,48 @@ func TestGroupedFrameCache_StatsDoesNotCreateIdleCache(t *testing.T) {
 	}
 }
 
+func TestGroupedFrameCache_AllocatesShardSlotsLazily(t *testing.T) {
+	f := newTestGroupedCacheFile(2048, 1024, 0)
+	cache := f.ensureGroupedFrameCache()
+	if cache == nil {
+		t.Fatalf("expected grouped cache")
+	}
+	if len(cache.shards) == 0 {
+		t.Fatalf("expected logical shards")
+	}
+	for i := range cache.shards {
+		if len(cache.shards[i].slots) != 0 {
+			t.Fatalf("shard %d allocated slots before admission", i)
+		}
+	}
+
+	offsets := groupedCacheOffsets(16)
+	if !f.groupedFrameCacheStore(1, false, 1, offsets, bytes.Repeat([]byte{'x'}, 16), false) {
+		t.Fatalf("store grouped frame")
+	}
+	allocatedShards := 0
+	allocatedSlots := 0
+	for i := range cache.shards {
+		if len(cache.shards[i].slots) > 0 {
+			allocatedShards++
+			allocatedSlots += len(cache.shards[i].slots)
+		}
+	}
+	if allocatedShards != 1 {
+		t.Fatalf("allocatedShards=%d want 1", allocatedShards)
+	}
+	stats := f.groupedFrameCacheDetailedStats()
+	if stats.Entries != 1 || stats.Capacity != 2048 {
+		t.Fatalf("unexpected stats after first admission: %+v", stats)
+	}
+	if stats.AllocatedShards != allocatedShards || stats.AllocatedSlots != allocatedSlots {
+		t.Fatalf("allocated stats=%d/%d want %d/%d", stats.AllocatedShards, stats.AllocatedSlots, allocatedShards, allocatedSlots)
+	}
+	if stats.AllocatedSlots >= stats.Capacity {
+		t.Fatalf("lazy allocation did not reduce slots: allocated=%d capacity=%d", stats.AllocatedSlots, stats.Capacity)
+	}
+}
+
 func TestGroupedFrameCache_ConfigSettersDoNotCreateIdleCache(t *testing.T) {
 	f := &File{}
 	f.setGroupedFrameCacheEntries(4)

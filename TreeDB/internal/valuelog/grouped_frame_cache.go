@@ -26,6 +26,8 @@ type GroupedFrameCacheStats struct {
 	SkippedContention uint64
 	Entries           int
 	Capacity          int
+	AllocatedShards   int
+	AllocatedSlots    int
 }
 
 type groupedFrameCacheBudget struct {
@@ -120,10 +122,11 @@ type groupedFrameCache struct {
 }
 
 type groupedFrameCacheShard struct {
-	mu    sync.Mutex
-	cap   int
-	clock uint64
-	slots []groupedFrameCacheSlot
+	mu        sync.Mutex
+	cap       int
+	clock     uint64
+	allocated atomic.Bool
+	slots     []groupedFrameCacheSlot
 }
 
 type groupedFrameCacheSlot struct {
@@ -168,9 +171,6 @@ func newGroupedFrameCache(owner *File, entries, maxRaw int, maxBytes int64, budg
 			capForShard++
 		}
 		c.shards[i].cap = capForShard
-		if capForShard > 0 {
-			c.shards[i].slots = make([]groupedFrameCacheSlot, capForShard)
-		}
 	}
 	return c
 }
@@ -341,12 +341,21 @@ func (c *groupedFrameCache) readTo(start int64, verifyCRC bool, expectedK int, e
 		return nil, false, ErrCorrupt, true
 	}
 	s := c.shardFor(start, verifyCRC)
-	if s == nil {
+	if s == nil || s.cap <= 0 {
+		return nil, false, nil, false
+	}
+	if !s.allocated.Load() {
+		c.misses.Add(1)
+		return nil, false, nil, false
+	}
+	slots := s.slots
+	if len(slots) == 0 {
+		c.misses.Add(1)
 		return nil, false, nil, false
 	}
 	wantFP := groupedFrameCacheFingerprint(start, verifyCRC, expectedK, expectedOffsets, expectedRawLen)
-	for i := range s.slots {
-		slot := &s.slots[i]
+	for i := range slots {
+		slot := &slots[i]
 		if slot.fp.Load() != wantFP {
 			continue
 		}
@@ -409,7 +418,7 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 		return false
 	}
 	s := c.shardFor(start, verifyCRC)
-	if s == nil || s.cap <= 0 || len(s.slots) == 0 {
+	if s == nil || s.cap <= 0 {
 		c.skippedDisabled.Add(1)
 		return false
 	}
@@ -418,6 +427,10 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 		return false
 	}
 	defer s.mu.Unlock()
+	if !s.allocated.Load() {
+		s.slots = make([]groupedFrameCacheSlot, s.cap)
+		s.allocated.Store(true)
+	}
 
 	// Replace any existing entry for the same identity in this shard. The new
 	// entry includes K/raw length/offsets, so stale state cannot be reused across
@@ -563,8 +576,14 @@ func (c *groupedFrameCache) stats() GroupedFrameCacheStats {
 	}
 	for i := range c.shards {
 		s := &c.shards[i]
-		for j := range s.slots {
-			slot := &s.slots[j]
+		s.mu.Lock()
+		slots := s.slots
+		if len(slots) > 0 {
+			st.AllocatedShards++
+			st.AllocatedSlots += len(slots)
+		}
+		for j := range slots {
+			slot := &slots[j]
 			slot.mu.RLock()
 			valid := slot.valid
 			slot.mu.RUnlock()
@@ -572,6 +591,7 @@ func (c *groupedFrameCache) stats() GroupedFrameCacheStats {
 				st.Entries++
 			}
 		}
+		s.mu.Unlock()
 	}
 	return st
 }
@@ -592,4 +612,6 @@ func (st *GroupedFrameCacheStats) add(other GroupedFrameCacheStats) {
 	st.SkippedContention += other.SkippedContention
 	st.Entries += other.Entries
 	st.Capacity += other.Capacity
+	st.AllocatedShards += other.AllocatedShards
+	st.AllocatedSlots += other.AllocatedSlots
 }
