@@ -82,6 +82,7 @@ type columnTypedColumnDenseGroupCountDistinctPart struct {
 
 type columnTypedColumnDenseGroupHourCountPart struct {
 	Cardinality      int
+	Dictionary       []string
 	DictionaryByCode map[int64]string
 	GroupCodes       []uint32
 	GroupValid       []bool
@@ -91,6 +92,7 @@ type columnTypedColumnDenseGroupHourCountPart struct {
 
 type columnTypedColumnDenseInt64SpanPart struct {
 	Cardinality           int
+	Dictionary            []string
 	DictionaryByCode      map[int64]string
 	GroupCodes            []uint32
 	GroupValid            []bool
@@ -1010,7 +1012,7 @@ func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnP
 				}
 				if !seen {
 					var ok bool
-					key, ok = dense.DictionaryByCode[int64(localCode)]
+					key, ok = columnTypedColumnDenseGroupHourDictionaryValue(dense, localCode)
 					if !ok {
 						return nil, fmt.Errorf("collections: dense typed-column group-hour part %d dictionary missing local code %d", partIdx, localCode)
 					}
@@ -1406,7 +1408,7 @@ func prepareColumnTypedColumnDenseInt64SpanGlobalCodes(parts []columnTypedColumn
 		}
 		globalRanks := make([]uint32, dense.Cardinality)
 		for localCode := 0; localCode < dense.Cardinality; localCode++ {
-			value, ok := dense.DictionaryByCode[int64(localCode)]
+			value, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				return fmt.Errorf("collections: dense typed-column int64-span part %d dictionary missing local code %d", partIdx, localCode)
 			}
@@ -1430,7 +1432,7 @@ func columnTypedColumnDenseInt64SpanGlobalDictionary(parts []columnTypedColumnPh
 			return nil, nil, fmt.Errorf("collections: dense typed-column int64-span missing prepared part %d", partIdx)
 		}
 		for localCode := 0; localCode < dense.Cardinality; localCode++ {
-			value, ok := dense.DictionaryByCode[int64(localCode)]
+			value, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				return nil, nil, fmt.Errorf("collections: dense typed-column int64-span part %d dictionary missing local code %d", partIdx, localCode)
 			}
@@ -1450,6 +1452,34 @@ func columnTypedColumnDenseInt64SpanGlobalDictionary(parts []columnTypedColumnPh
 		ranks[value] = uint32(rank)
 	}
 	return dictionary, ranks, nil
+}
+
+func columnTypedColumnDenseInt64SpanDictionaryValue(dense *columnTypedColumnDenseInt64SpanPart, localCode int) (string, bool) {
+	if dense == nil || localCode < 0 {
+		return "", false
+	}
+	if localCode < len(dense.Dictionary) {
+		return dense.Dictionary[localCode], true
+	}
+	if dense.DictionaryByCode != nil {
+		value, ok := dense.DictionaryByCode[int64(localCode)]
+		return value, ok
+	}
+	return "", false
+}
+
+func columnTypedColumnDenseGroupHourDictionaryValue(dense *columnTypedColumnDenseGroupHourCountPart, localCode int) (string, bool) {
+	if dense == nil || localCode < 0 {
+		return "", false
+	}
+	if localCode < len(dense.Dictionary) {
+		return dense.Dictionary[localCode], true
+	}
+	if dense.DictionaryByCode != nil {
+		value, ok := dense.DictionaryByCode[int64(localCode)]
+		return value, ok
+	}
+	return "", false
 }
 
 func columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) bool {
@@ -2231,7 +2261,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseGroupHourCou
 				}
 				if !seen {
 					var ok bool
-					key, ok = dense.DictionaryByCode[int64(localCode)]
+					key, ok = columnTypedColumnDenseGroupHourDictionaryValue(dense, localCode)
 					if !ok {
 						diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 						diag.DenseGroupHourCountUsed = true
@@ -2370,7 +2400,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseInt64Span(vi
 			if !seen {
 				continue
 			}
-			key, ok := dense.DictionaryByCode[int64(localCode)]
+			key, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 				diag.DenseInt64SpanUsed = true
@@ -3768,7 +3798,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupHourCount(view colum
 				}
 				if !seen {
 					var ok bool
-					key, ok = dense.DictionaryByCode[int64(localCode)]
+					key, ok = columnTypedColumnDenseGroupHourDictionaryValue(dense, localCode)
 					if !ok {
 						diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 						diag.DenseGroupHourCountUsed = true
@@ -4075,7 +4105,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanLocalMap(view co
 			if !seen {
 				continue
 			}
-			key, ok := dense.DictionaryByCode[int64(localCode)]
+			key, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 				diag.DenseInt64SpanUsed = true

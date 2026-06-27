@@ -148,11 +148,18 @@ type typedColumnAdapterTypeMapping struct {
 }
 
 type typedColumnAdapterColumn struct {
-	Field              TypedStorageField
-	Definition         typedcolumn.ColumnDefinition
-	Dictionary         map[string]int64
-	ReverseDictionary  map[int64]string
-	FixedWidthEncoding ColumnFixedWidthEncoding
+	Field                  TypedStorageField
+	Definition             typedcolumn.ColumnDefinition
+	Dictionary             map[string]int64
+	ReverseDictionary      map[int64]string
+	DictionaryValuesByCode []string
+	FixedWidthEncoding     ColumnFixedWidthEncoding
+}
+
+type typedColumnAdapterDictionaryMode struct {
+	Forward      bool
+	Reverse      bool
+	ValuesByCode bool
 }
 
 type typedColumnAdapterOptions struct {
@@ -170,6 +177,7 @@ type typedColumnAdapterOptions struct {
 	LocatorSectionCompressionSet    bool
 	DictionarySectionCompression    typedcolumn.Compression
 	DictionarySectionCompressionSet bool
+	DictionaryModes                 map[string]typedColumnAdapterDictionaryMode
 	PruningSectionCompression       typedcolumn.Compression
 	PruningSectionCompressionSet    bool
 	Int64Encoding                   typedcolumn.Encoding
@@ -653,6 +661,10 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 			}
 			columns[i].Dictionary = dict
 			columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
+			columns[i].DictionaryValuesByCode, err = typedColumnAdapterDictionaryValuesByCodeFromForward(dict, len(dict))
+			if err != nil {
+				return nil, err
+			}
 			columns[i].Definition.Cardinality = uint32(len(dict))
 		}
 	}
@@ -1036,8 +1048,20 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 				return nil, err
 			}
 			columns[i].Definition.Cardinality = partColumn.Definition.Cardinality
-			columns[i].Dictionary = dict
-			columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
+			mode := typedColumnAdapterDictionaryModeForColumn(opts, columns[i].Definition.Name)
+			if mode.Forward {
+				columns[i].Dictionary = dict
+			}
+			if mode.Reverse {
+				columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
+			}
+			if mode.ValuesByCode {
+				valuesByCode, err := typedColumnAdapterDictionaryValuesByCodeFromForward(dict, int(partColumn.Definition.Cardinality))
+				if err != nil {
+					return nil, err
+				}
+				columns[i].DictionaryValuesByCode = valuesByCode
+			}
 		}
 	}
 	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: dictionaries}, nil
@@ -1369,6 +1393,29 @@ func typedColumnSortedGroupedDistinctDictionaryValuesByCode(column typedColumnAd
 	return valuesByCode, nil
 }
 
+func columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan columnTypedColumnPhysicalQueryPlan, valuesByCodeColumns []string, predicateSpecs []columnPhysicalQueryPredicateSpec) map[string]typedColumnAdapterDictionaryMode {
+	modes := make(map[string]typedColumnAdapterDictionaryMode, len(valuesByCodeColumns)+len(predicateSpecs))
+	add := func(column string, mode typedColumnAdapterDictionaryMode) {
+		adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(plan.Fields, column)
+		if err != nil || !ok {
+			return
+		}
+		name := adapterColumn.Definition.Name
+		current := modes[name]
+		current.Forward = current.Forward || mode.Forward
+		current.Reverse = current.Reverse || mode.Reverse
+		current.ValuesByCode = current.ValuesByCode || mode.ValuesByCode
+		modes[name] = current
+	}
+	for _, column := range valuesByCodeColumns {
+		add(column, typedColumnAdapterDictionaryMode{ValuesByCode: true})
+	}
+	for _, spec := range predicateSpecs {
+		add(spec.column, typedColumnAdapterDictionaryMode{Forward: true})
+	}
+	return modes
+}
+
 // decodeTypedColumnPhysicalQueryDenseGroupCountPart prepares the q1 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
@@ -1377,7 +1424,11 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
-	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, image)
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{
+		Fields:          plan.Fields,
+		SchemaVersion:   uint32(schemaHash),
+		DictionaryModes: columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan, []string{plan.GroupColumn}, nil),
+	}, image)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -1427,7 +1478,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	}
 	predicates := part.DenseInt64Span.Predicates
 	if hasGroupPredicate {
-		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.GroupValid, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, groupPredicate)
+		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.GroupValid, part.DenseInt64Span.Dictionary, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, groupPredicate)
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
@@ -1435,6 +1486,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	}
 	part.DenseGroupHourCount = &columnTypedColumnDenseGroupHourCountPart{
 		Cardinality:      part.DenseInt64Span.Cardinality,
+		Dictionary:       part.DenseInt64Span.Dictionary,
 		DictionaryByCode: part.DenseInt64Span.DictionaryByCode,
 		GroupCodes:       part.DenseInt64Span.GroupCodes,
 		GroupValid:       part.DenseInt64Span.GroupValid,
@@ -1455,6 +1507,10 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	requests, ok, err := columnTypedColumnPhysicalQueryDensePreparedRequests(plan, req, allowDenseGroupCountDistinct)
 	if err != nil || !ok {
 		return columnTypedColumnPhysicalQueryPart{}, ok, err
+	}
+	adapterDictionaryModes, err := typedColumnPreparedAdapterDictionaryModesFromRequests(requests)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
 	reader := &columnTypedColumnPhysicalRangePartReader{
 		readCache:          readCache,
@@ -1509,7 +1565,10 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		if prepareDiagnostics != nil {
 			adapterStart = time.Now()
 		}
-		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{LazyPayloads: !opts.eagerTimeOrderTopKPayloads})
+		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{
+			LazyPayloads:    !opts.eagerTimeOrderTopKPayloads,
+			DictionaryModes: adapterDictionaryModes,
+		})
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
 		}
@@ -1535,7 +1594,7 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	if prepareDiagnostics != nil {
 		adapterStart = time.Now()
 	}
-	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPart(prepared, plan.Fields, reader.readRange)
+	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{DictionaryModes: adapterDictionaryModes})
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
 	}
@@ -1646,7 +1705,7 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 		return nil, false, nil
 	}
 	requests := make([]typedColumnPreparedColumnRequest, 0, 4+len(plan.PredicateSpecs))
-	addString := func(column string, role typedcolumn.ColumnExecutionRole, op columnsemantics.Operation) error {
+	addString := func(column string, role typedcolumn.ColumnExecutionRole, op columnsemantics.Operation, valuesByCode bool) error {
 		adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(plan.Fields, column)
 		if err != nil {
 			return err
@@ -1658,10 +1717,11 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 			op = columnsemantics.OpCountRows
 		}
 		requests = append(requests, typedColumnPreparedColumnRequest{
-			Field:               adapterColumn.Field,
-			Role:                role,
-			Operation:           op,
-			IncludeDictionaries: true,
+			Field:                  adapterColumn.Field,
+			Role:                   role,
+			Operation:              op,
+			IncludeDictionaries:    true,
+			DictionaryValuesByCode: valuesByCode,
 		})
 		return nil
 	}
@@ -1682,7 +1742,7 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 	}
 	addPredicates := func(specs []columnPhysicalQueryPredicateSpec) error {
 		for _, spec := range specs {
-			if err := addString(spec.column, typedcolumn.ColumnRolePredicate, columnTypedColumnPhysicalPredicatePreparedOperation(spec)); err != nil {
+			if err := addString(spec.column, typedcolumn.ColumnRolePredicate, columnTypedColumnPhysicalPredicatePreparedOperation(spec), false); err != nil {
 				return err
 			}
 		}
@@ -1690,17 +1750,17 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 	}
 	switch {
 	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
-		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryCount); err != nil {
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryCount, true); err != nil {
 			return nil, true, err
 		}
 	case columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
 		if !allowDenseGroupCountDistinct {
 			return nil, false, nil
 		}
-		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy); err != nil {
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy, true); err != nil {
 			return nil, true, err
 		}
-		if err := addString(plan.DistinctColumn, typedcolumn.ColumnRoleMeasure, columnsemantics.OpDictionaryGroupBy); err != nil {
+		if err := addString(plan.DistinctColumn, typedcolumn.ColumnRoleMeasure, columnsemantics.OpDictionaryGroupBy, true); err != nil {
 			return nil, true, err
 		}
 		if err := addPredicates(plan.PredicateSpecs); err != nil {
@@ -1708,7 +1768,7 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 		}
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
 		spanPlan, _, _ := columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan)
-		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy); err != nil {
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy, false); err != nil {
 			return nil, true, err
 		}
 		if err := addInt64(plan.ValueColumn); err != nil {
@@ -1718,7 +1778,7 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 			return nil, true, err
 		}
 	case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
-		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy); err != nil {
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy, true); err != nil {
 			return nil, true, err
 		}
 		if err := addInt64(plan.ValueColumn); err != nil {
@@ -1728,7 +1788,7 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 			return nil, true, err
 		}
 	case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
-		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy); err != nil {
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy, false); err != nil {
 			return nil, true, err
 		}
 		if err := addInt64(plan.ValueColumn); err != nil {
@@ -1773,7 +1833,30 @@ func columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan columnTypedColumn
 }
 
 type typedColumnPreparedAdapterPartOptions struct {
-	LazyPayloads bool
+	LazyPayloads    bool
+	DictionaryModes map[string]typedColumnAdapterDictionaryMode
+}
+
+func typedColumnPreparedAdapterDictionaryModesFromRequests(requests []typedColumnPreparedColumnRequest) (map[string]typedColumnAdapterDictionaryMode, error) {
+	requestModes, err := typedColumnPreparedDictionaryRequestModes(requests)
+	if err != nil {
+		return nil, err
+	}
+	if len(requestModes) == 0 {
+		return nil, nil
+	}
+	modes := make(map[string]typedColumnAdapterDictionaryMode, len(requestModes))
+	for name, mode := range requestModes {
+		if name == typedColumnAdapterMetadataDictionary {
+			continue
+		}
+		modes[name] = typedColumnAdapterDictionaryMode{
+			Forward:      mode.Forward,
+			Reverse:      mode.Reverse,
+			ValuesByCode: mode.ValuesByCode,
+		}
+	}
+	return modes, nil
 }
 
 func typedColumnPhysicalQueryPreparedAdapterPart(prepared *typedColumnPreparedPartState, fields []TypedStorageField, readRange typedColumnPreparedRangeReader) (*typedColumnAdapterPart, error) {
@@ -1809,6 +1892,18 @@ func typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared *typedColum
 		}
 		if preparedColumn.ReverseDictionaries != nil {
 			adapterColumn.ReverseDictionary = preparedColumn.ReverseDictionaries
+		}
+		mode := typedColumnPreparedAdapterDictionaryModeForColumn(opts, adapterColumn.Definition.Name)
+		if mode.ValuesByCode {
+			if preparedColumn.DictionaryValuesByCode != nil {
+				adapterColumn.DictionaryValuesByCode = preparedColumn.DictionaryValuesByCode
+			} else if preparedColumn.Dictionaries != nil {
+				valuesByCode, err := typedColumnAdapterDictionaryValuesByCodeFromForward(preparedColumn.Dictionaries, int(adapterColumn.Definition.Cardinality))
+				if err != nil {
+					return nil, err
+				}
+				adapterColumn.DictionaryValuesByCode = valuesByCode
+			}
 		}
 		partColumn, err := typedColumnPreparedColumnWithOptionalPayloads(preparedColumn, readRange, !opts.LazyPayloads)
 		if err != nil {
@@ -1973,7 +2068,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTy
 	}
 	predicates := part.DenseInt64Span.Predicates
 	if hasGroupPredicate {
-		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.GroupValid, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, groupPredicate)
+		predicate, err := densePredicateFromDictionaryCodes(part.DenseInt64Span.GroupCodes, part.DenseInt64Span.GroupValid, part.DenseInt64Span.Dictionary, part.DenseInt64Span.DictionaryByCode, part.DenseInt64Span.Cardinality, groupPredicate)
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
@@ -1981,6 +2076,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTy
 	}
 	part.DenseGroupHourCount = &columnTypedColumnDenseGroupHourCountPart{
 		Cardinality:      part.DenseInt64Span.Cardinality,
+		Dictionary:       part.DenseInt64Span.Dictionary,
 		DictionaryByCode: part.DenseInt64Span.DictionaryByCode,
 		GroupCodes:       part.DenseInt64Span.GroupCodes,
 		GroupValid:       part.DenseInt64Span.GroupValid,
@@ -2077,6 +2173,7 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 
 	denseSpan := &columnTypedColumnDenseInt64SpanPart{
 		Cardinality:      cardinality,
+		Dictionary:       groupColumn.DictionaryValuesByCode,
 		DictionaryByCode: groupColumn.ReverseDictionary,
 		GroupCodes:       groupCodes,
 		GroupValid:       groupValid,
@@ -2129,12 +2226,12 @@ func preapplyColumnTypedColumnDenseInt64SpanPredicates(dense *columnTypedColumnD
 	dense.PredicateRows = selected
 }
 
-func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
+func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionary []string, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
 	allowed := make([]uint64, (cardinality+63)/64)
 	matchedLiterals := 0
 	missingMatchesEmpty := false
 	for code := 0; code < cardinality; code++ {
-		value, ok := dictionaryByCode[int64(code)]
+		value, ok := denseDictionaryValue(dictionary, dictionaryByCode, code)
 		if !ok {
 			return columnTypedColumnDensePredicatePart{}, fmt.Errorf("collections: dense typed-column predicate dictionary missing local code %d for column %q", code, spec.column)
 		}
@@ -2157,6 +2254,17 @@ func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionaryB
 		return columnTypedColumnDensePredicatePart{RejectsAll: true}, nil
 	}
 	return columnTypedColumnDensePredicatePart{Codes: codes, Valid: valid, Allowed: allowed, MissingMatchesEmpty: missingMatchesEmpty}, nil
+}
+
+func denseDictionaryValue(dictionary []string, dictionaryByCode map[int64]string, code int) (string, bool) {
+	if code >= 0 && code < len(dictionary) {
+		return dictionary[code], true
+	}
+	if dictionaryByCode != nil {
+		value, ok := dictionaryByCode[int64(code)]
+		return value, ok
+	}
+	return "", false
 }
 
 type columnTypedColumnTimeOrderCodeColumn struct {
@@ -2927,7 +3035,11 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
-	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, image)
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{
+		Fields:          plan.Fields,
+		SchemaVersion:   uint32(schemaHash),
+		DictionaryModes: columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan, []string{plan.GroupColumn}, plan.PredicateSpecs),
+	}, image)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -3008,6 +3120,7 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 
 	denseSpan := &columnTypedColumnDenseInt64SpanPart{
 		Cardinality:      cardinality,
+		Dictionary:       groupColumn.DictionaryValuesByCode,
 		DictionaryByCode: groupColumn.ReverseDictionary,
 		GroupCodes:       groupCodes,
 		GroupValid:       groupValid,
@@ -3042,7 +3155,11 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPart(plan columnTypedC
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
-	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: plan.Fields, SchemaVersion: uint32(schemaHash)}, image)
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{
+		Fields:          plan.Fields,
+		SchemaVersion:   uint32(schemaHash),
+		DictionaryModes: columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan, []string{plan.GroupColumn, plan.DistinctColumn}, plan.PredicateSpecs),
+	}, image)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -3108,13 +3225,9 @@ func typedColumnDenseGroupCountDistinctCodeColumn(adapterPart *typedColumnAdapte
 	if err != nil {
 		return columnTypedColumnDenseStringCodeColumn{}, 0, 0, err
 	}
-	dictionary := make([]string, cardinality)
-	for code := 0; code < cardinality; code++ {
-		value, ok := adapterColumn.ReverseDictionary[int64(code)]
-		if !ok {
-			return columnTypedColumnDenseStringCodeColumn{}, 0, 0, fmt.Errorf("collections: dense typed-column %s dictionary missing local code %d for column %q", role, code, adapterColumn.Definition.Name)
-		}
-		dictionary[code] = value
+	dictionary, err := typedColumnDenseStringValuesByCode(adapterColumn, cardinality, role)
+	if err != nil {
+		return columnTypedColumnDenseStringCodeColumn{}, 0, 0, err
 	}
 	if adapterColumn.Field.Nullable {
 		codes, valid, decodedBytes, blocks, err := decodeTypedColumnDenseNullableUint32Codes(partColumn, cardinality, rows, role)
@@ -3168,11 +3281,29 @@ func typedColumnDenseStringCodeColumn(adapterPart *typedColumnAdapterPart, field
 		}
 	}
 	if typedColumnDenseStringCodeColumnNeedsReverseDictionary(role) {
-		if len(adapterColumn.ReverseDictionary) != cardinality {
-			return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s dictionary cardinality=%d want %d for column %q", role, len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
+		if len(adapterColumn.DictionaryValuesByCode) != cardinality && len(adapterColumn.ReverseDictionary) != cardinality {
+			return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s dictionary cardinality values_by_code=%d reverse=%d want %d for column %q", role, len(adapterColumn.DictionaryValuesByCode), len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
 		}
 	}
 	return adapterColumn, partColumn, cardinality, nil
+}
+
+func typedColumnDenseStringValuesByCode(adapterColumn typedColumnAdapterColumn, cardinality int, role string) ([]string, error) {
+	if len(adapterColumn.DictionaryValuesByCode) == cardinality {
+		return adapterColumn.DictionaryValuesByCode, nil
+	}
+	if len(adapterColumn.ReverseDictionary) != cardinality {
+		return nil, fmt.Errorf("collections: dense typed-column %s dictionary cardinality values_by_code=%d reverse=%d want %d for column %q", role, len(adapterColumn.DictionaryValuesByCode), len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
+	}
+	dictionary := make([]string, cardinality)
+	for code := 0; code < cardinality; code++ {
+		value, ok := adapterColumn.ReverseDictionary[int64(code)]
+		if !ok {
+			return nil, fmt.Errorf("collections: dense typed-column %s dictionary missing local code %d for column %q", role, code, adapterColumn.Definition.Name)
+		}
+		dictionary[code] = value
+	}
+	return dictionary, nil
 }
 
 func typedColumnDenseStringCodeColumnNeedsForwardDictionary(role string) bool {
@@ -4705,6 +4836,59 @@ func reverseTypedColumnAdapterDictionary(dict map[string]int64) map[int64]string
 		reverse[code] = value
 	}
 	return reverse
+}
+
+func typedColumnAdapterDictionaryModeForColumn(opts typedColumnAdapterOptions, column string) typedColumnAdapterDictionaryMode {
+	if opts.DictionaryModes != nil {
+		return opts.DictionaryModes[column]
+	}
+	return typedColumnAdapterDictionaryMode{Forward: true, Reverse: true, ValuesByCode: true}
+}
+
+func typedColumnPreparedAdapterDictionaryModeForColumn(opts typedColumnPreparedAdapterPartOptions, column string) typedColumnAdapterDictionaryMode {
+	if opts.DictionaryModes != nil {
+		return opts.DictionaryModes[column]
+	}
+	return typedColumnAdapterDictionaryMode{Forward: true, Reverse: true, ValuesByCode: true}
+}
+
+func typedColumnAdapterDictionaryValuesByCodeFromForward(dict map[string]int64, cardinality int) ([]string, error) {
+	if cardinality == 0 && len(dict) == 0 {
+		return nil, nil
+	}
+	if cardinality <= 0 {
+		return nil, fmt.Errorf("collections: typed-column adapter dictionary cardinality=%d is invalid", cardinality)
+	}
+	valuesByCode := make([]string, cardinality)
+	seen := make([]bool, cardinality)
+	for value, code := range dict {
+		if code < 0 || int64(cardinality) <= code {
+			return nil, fmt.Errorf("collections: typed-column adapter dictionary code %d outside cardinality %d", code, cardinality)
+		}
+		codeIdx := int(code)
+		if seen[codeIdx] {
+			return nil, fmt.Errorf("collections: typed-column adapter dictionary duplicate code %d", code)
+		}
+		seen[codeIdx] = true
+		valuesByCode[codeIdx] = value
+	}
+	for code, ok := range seen {
+		if !ok {
+			return nil, fmt.Errorf("collections: typed-column adapter dictionary missing code %d", code)
+		}
+	}
+	return valuesByCode, nil
+}
+
+func typedColumnAdapterDictionaryValueByCode(column typedColumnAdapterColumn, code int) (string, bool) {
+	if code >= 0 && code < len(column.DictionaryValuesByCode) {
+		return column.DictionaryValuesByCode[code], true
+	}
+	if column.ReverseDictionary != nil {
+		value, ok := column.ReverseDictionary[int64(code)]
+		return value, ok
+	}
+	return "", false
 }
 
 func validateTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, cardinality uint32, dict map[string]int64) error {
