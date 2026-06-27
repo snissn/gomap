@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -418,6 +419,195 @@ func TestTypedColumnPreparedPruningFallbackDoesNotInflateEmptyBlockPlans(t *test
 	if diag.PruningFallbackBlocks != 2 || diag.PruningFallbackReason != "unsupported" || column.PruningFallbackReason != "unsupported" {
 		t.Fatalf("fallback diag=%+v column_reason=%q want two blocks and updated reason", diag, column.PruningFallbackReason)
 	}
+}
+
+func TestTypedColumnPreparedDictionarySelectiveRawDecode3175(t *testing.T) {
+	raw := encodePreparedRawDictionarySectionForTest([]preparedDictionaryForTest{
+		{Name: typedColumnAdapterMetadataDictionary, Entries: []preparedDictionaryEntryForTest{{Code: 0, Value: "metadata"}}},
+		{Name: "event", Entries: []preparedDictionaryEntryForTest{{Code: 0, Value: "app.bsky.feed.post"}, {Code: 1, Value: "app.bsky.graph.follow"}}},
+		{Name: "unused", Entries: []preparedDictionaryEntryForTest{{Code: 0, Value: strings.Repeat("skip", 128)}}},
+	})
+	got, err := decodeTypedColumnPreparedDictionariesSectionForEncoding(0, raw, map[string]struct{}{
+		typedColumnAdapterMetadataDictionary: {},
+		"event":                              {},
+	})
+	if err != nil {
+		t.Fatalf("selective raw decode: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("decoded dictionaries=%v want metadata+event only", mapKeysForTest(got))
+	}
+	if got["event"]["app.bsky.feed.post"] != 0 || got["event"]["app.bsky.graph.follow"] != 1 {
+		t.Fatalf("event dictionary=%v want dense event codes", got["event"])
+	}
+	if _, ok := got["unused"]; ok {
+		t.Fatalf("unused dictionary decoded despite selective request: %v", got["unused"])
+	}
+}
+
+func TestTypedColumnPreparedDictionarySelectiveDenseDecode3175(t *testing.T) {
+	raw := encodePreparedDenseDictionarySectionForTest([]preparedDenseDictionaryForTest{
+		{Name: typedColumnAdapterMetadataDictionary, Values: []string{"metadata"}},
+		{Name: "event", Values: []string{"app.bsky.feed.post", "app.bsky.graph.follow"}},
+		{Name: "unused", Values: []string{strings.Repeat("skip", 128)}},
+	})
+	got, err := decodeTypedColumnPreparedDictionariesSectionForEncoding(typedcolumn.EncodingDictionaryDense, raw, map[string]struct{}{
+		"event": {},
+	})
+	if err != nil {
+		t.Fatalf("selective dense decode: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("decoded dictionaries=%v want event only", mapKeysForTest(got))
+	}
+	if got["event"]["app.bsky.feed.post"] != 0 || got["event"]["app.bsky.graph.follow"] != 1 {
+		t.Fatalf("event dictionary=%v want dense event codes", got["event"])
+	}
+	if _, ok := got[typedColumnAdapterMetadataDictionary]; ok {
+		t.Fatalf("metadata dictionary decoded despite selective request: %v", got[typedColumnAdapterMetadataDictionary])
+	}
+}
+
+func TestTypedColumnPreparedDictionaryReverseOnlyDenseDecode3175(t *testing.T) {
+	raw := encodePreparedDenseDictionarySectionForTest([]preparedDenseDictionaryForTest{
+		{Name: "kind", Values: []string{"app.bsky.feed.post", "app.bsky.graph.follow"}},
+	})
+	got, err := decodeTypedColumnPreparedDictionariesForModes(typedcolumn.EncodingDictionaryDense, raw, map[string]typedColumnPreparedDictionaryRequestMode{
+		"kind": {Reverse: true},
+	})
+	if err != nil {
+		t.Fatalf("reverse-only dense decode: %v", err)
+	}
+	if len(got.Forward) != 0 {
+		t.Fatalf("forward dictionaries=%v want none", mapKeysForTest(got.Forward))
+	}
+	if got.Reverse["kind"][0] != "app.bsky.feed.post" || got.Reverse["kind"][1] != "app.bsky.graph.follow" {
+		t.Fatalf("reverse kind dictionary=%v want code-ordered values", got.Reverse["kind"])
+	}
+}
+
+func TestTypedColumnPreparedDictionaryRequestNamesIncludeMetadata3175(t *testing.T) {
+	names, err := typedColumnPreparedDictionaryRequestNames([]typedColumnPreparedColumnRequest{
+		{Field: typedColumnAdapterField("kind", "string"), Role: typedcolumn.ColumnRolePredicate, IncludeDictionaries: true},
+		{Field: typedColumnAdapterField("unused", "string"), IncludeDictionaries: false},
+	})
+	if err != nil {
+		t.Fatalf("request names: %v", err)
+	}
+	if _, ok := names[typedColumnAdapterMetadataDictionary]; !ok {
+		t.Fatalf("request names=%v missing adapter metadata dictionary", names)
+	}
+	adapterColumn, err := typedColumnAdapterMapField(typedColumnAdapterField("kind", "string"))
+	if err != nil {
+		t.Fatalf("map kind field: %v", err)
+	}
+	if _, ok := names[adapterColumn.Definition.Name]; !ok {
+		t.Fatalf("request names=%v missing requested kind dictionary %q", names, adapterColumn.Definition.Name)
+	}
+	if _, ok := names["unused"]; ok {
+		t.Fatalf("request names=%v included non-dictionary request", names)
+	}
+	modes, err := typedColumnPreparedDictionaryRequestModes([]typedColumnPreparedColumnRequest{
+		{Field: typedColumnAdapterField("kind", "string"), Role: typedcolumn.ColumnRolePredicate, IncludeDictionaries: true},
+		{Field: typedColumnAdapterField("type", "string"), Role: typedcolumn.ColumnRoleProjection, IncludeDictionaries: true},
+		{Field: typedColumnAdapterField("type", "string"), Role: typedcolumn.ColumnRolePredicate, IncludeDictionaries: true},
+	})
+	if err != nil {
+		t.Fatalf("request modes: %v", err)
+	}
+	kindColumn, err := typedColumnAdapterMapField(typedColumnAdapterField("kind", "string"))
+	if err != nil {
+		t.Fatalf("map kind field: %v", err)
+	}
+	typeColumn, err := typedColumnAdapterMapField(typedColumnAdapterField("type", "string"))
+	if err != nil {
+		t.Fatalf("map type field: %v", err)
+	}
+	if got := modes[kindColumn.Definition.Name]; !got.Forward || got.Reverse {
+		t.Fatalf("kind predicate mode=%+v want forward-only", got)
+	}
+	if got := modes[typeColumn.Definition.Name]; !got.Forward || !got.Reverse {
+		t.Fatalf("type mixed mode=%+v want forward+reverse", got)
+	}
+	if got := modes[typedColumnAdapterMetadataDictionary]; !got.Forward || got.Reverse {
+		t.Fatalf("metadata mode=%+v want forward-only", got)
+	}
+}
+
+type preparedDictionaryEntryForTest struct {
+	Code  int64
+	Value string
+}
+
+type preparedDictionaryForTest struct {
+	Name    string
+	Entries []preparedDictionaryEntryForTest
+}
+
+type preparedDenseDictionaryForTest struct {
+	Name   string
+	Values []string
+}
+
+func encodePreparedRawDictionarySectionForTest(dictionaries []preparedDictionaryForTest) []byte {
+	var out []byte
+	out = appendPreparedU32ForTest(out, uint32(len(dictionaries)))
+	for _, dict := range dictionaries {
+		out = appendPreparedStringForTest(out, dict.Name)
+		out = appendPreparedU32ForTest(out, uint32(len(dict.Entries)))
+		for _, entry := range dict.Entries {
+			out = appendPreparedI64ForTest(out, entry.Code)
+			out = appendPreparedStringForTest(out, entry.Value)
+		}
+	}
+	return out
+}
+
+func encodePreparedDenseDictionarySectionForTest(dictionaries []preparedDenseDictionaryForTest) []byte {
+	var out []byte
+	out = appendPreparedU32ForTest(out, 0x54434944)
+	out = appendPreparedU16ForTest(out, 1)
+	out = appendPreparedU16ForTest(out, 0)
+	out = appendPreparedU32ForTest(out, uint32(len(dictionaries)))
+	for _, dict := range dictionaries {
+		out = appendPreparedStringForTest(out, dict.Name)
+		out = appendPreparedU32ForTest(out, uint32(len(dict.Values)))
+		for _, value := range dict.Values {
+			out = appendPreparedStringForTest(out, value)
+		}
+	}
+	return out
+}
+
+func appendPreparedU16ForTest(out []byte, v uint16) []byte {
+	var buf [2]byte
+	binary.LittleEndian.PutUint16(buf[:], v)
+	return append(out, buf[:]...)
+}
+
+func appendPreparedU32ForTest(out []byte, v uint32) []byte {
+	var buf [4]byte
+	binary.LittleEndian.PutUint32(buf[:], v)
+	return append(out, buf[:]...)
+}
+
+func appendPreparedI64ForTest(out []byte, v int64) []byte {
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], uint64(v))
+	return append(out, buf[:]...)
+}
+
+func appendPreparedStringForTest(out []byte, value string) []byte {
+	out = appendPreparedU32ForTest(out, uint32(len(value)))
+	return append(out, value...)
+}
+
+func mapKeysForTest[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func assertPreparedSelectionRows(t *testing.T, selection typedcolumn.RowSelection, want []int) {
