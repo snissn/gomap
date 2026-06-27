@@ -23,6 +23,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments":        "512",
 		"treedb.cache.vlog_mmap.read.hit_ratio":                         "0.625000",
 		"treedb.cache.vlog_mmap.enabled":                                "true",
+		"treedb.cache.vlog_grouped_frame_cache.retained_bytes":          "65536",
+		"treedb.cache.vlog_grouped_frame_cache.allocated_slots":         "64",
+		"treedb.cache.vlog_grouped_frame_cache.hit_ratio":               "0.750000",
 		"treedb.cache.vlog_decode_buffer_grow.calls_total":              "42",
 		"treedb.cache.vlog_write_mode.raw_bytes.dict":                   "40960",
 		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf":          "1024",
@@ -69,6 +72,15 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.vlog_mmap.enabled"].(bool); !ok || !v {
 		t.Fatalf("enabled=%T(%v) want bool(true)", got["treedb.cache.vlog_mmap.enabled"], got["treedb.cache.vlog_mmap.enabled"])
+	}
+	if v, ok := got["treedb.cache.vlog_grouped_frame_cache.retained_bytes"].(int64); !ok || v != 65536 {
+		t.Fatalf("grouped cache retained_bytes=%T(%v) want int64(65536)", got["treedb.cache.vlog_grouped_frame_cache.retained_bytes"], got["treedb.cache.vlog_grouped_frame_cache.retained_bytes"])
+	}
+	if v, ok := got["treedb.cache.vlog_grouped_frame_cache.allocated_slots"].(int64); !ok || v != 64 {
+		t.Fatalf("grouped cache allocated_slots=%T(%v) want int64(64)", got["treedb.cache.vlog_grouped_frame_cache.allocated_slots"], got["treedb.cache.vlog_grouped_frame_cache.allocated_slots"])
+	}
+	if v, ok := got["treedb.cache.vlog_grouped_frame_cache.hit_ratio"].(float64); !ok || v != 0.75 {
+		t.Fatalf("grouped cache hit_ratio=%T(%v) want float64(0.75)", got["treedb.cache.vlog_grouped_frame_cache.hit_ratio"], got["treedb.cache.vlog_grouped_frame_cache.hit_ratio"])
 	}
 	if v, ok := got["treedb.cache.vlog_decode_buffer_grow.calls_total"].(int64); !ok || v != 42 {
 		t.Fatalf("decode_buffer_grow.calls_total=%T(%v) want int64(42)", got["treedb.cache.vlog_decode_buffer_grow.calls_total"], got["treedb.cache.vlog_decode_buffer_grow.calls_total"])

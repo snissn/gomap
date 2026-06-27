@@ -852,6 +852,8 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.grouped_frame_cache.skipped_contention"] = fmt.Sprintf("%d", gStats.SkippedContention)
 		stats["treedb.vlog.grouped_frame_cache.entries"] = fmt.Sprintf("%d", gStats.Entries)
 		stats["treedb.vlog.grouped_frame_cache.capacity"] = fmt.Sprintf("%d", gStats.Capacity)
+		stats["treedb.vlog.grouped_frame_cache.allocated_shards"] = fmt.Sprintf("%d", gStats.AllocatedShards)
+		stats["treedb.vlog.grouped_frame_cache.allocated_slots"] = fmt.Sprintf("%d", gStats.AllocatedSlots)
 		if total := gStats.Hits + gStats.Misses; total > 0 {
 			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gStats.Hits)/float64(total))
 		}
