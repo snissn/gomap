@@ -59,14 +59,16 @@ type columnTypedColumnDensePredicatePart struct {
 }
 
 type columnTypedColumnDenseStringCodeColumn struct {
-	Codes             []uint32
-	Valid             []bool
-	Dictionary        []string
-	GlobalCodes       []uint32
-	GlobalDictionary  []string
-	GlobalLocalRanks  []uint32
-	GlobalEmptyRank   uint32
-	GlobalEmptyRankOK bool
+	Codes               []uint32
+	Valid               []bool
+	Dictionary          []string
+	GlobalCodes         []uint32
+	GlobalDictionary    []string
+	GlobalCardinality   int
+	GlobalCardinalityOK bool
+	GlobalLocalRanks    []uint32
+	GlobalEmptyRank     uint32
+	GlobalEmptyRankOK   bool
 }
 
 type columnTypedColumnDenseGroupCountDistinctPart struct {
@@ -839,35 +841,16 @@ func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(column *colu
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalCodes(parts []columnTypedColumnPhysicalQueryPart) error {
-	groupDict, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
-		return &part.Group
-	})
-	if err != nil {
-		return err
-	}
-	distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
-		return &part.Distinct
-	})
-	if err != nil {
-		return err
-	}
-	distinctDict := columnTypedColumnDenseGroupCountDistinctCardinalityOnlyDictionary(distinctCardinality)
-	for partIdx := range parts {
-		part := parts[partIdx].DenseGroupCountDistinct
-		if part == nil {
-			return fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
-		}
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(&part.Group, groupDict, groupRanks); err != nil {
-			return fmt.Errorf("collections: dense grouped count-distinct group part %d: %w", partIdx, err)
-		}
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(&part.Distinct, distinctDict, distinctRanks); err != nil {
-			return fmt.Errorf("collections: dense grouped count-distinct distinct part %d: %w", partIdx, err)
-		}
-	}
-	return nil
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes)
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts []columnTypedColumnPhysicalQueryPart) error {
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+}
+
+type columnTypedColumnDenseGroupCountDistinctColumnPrep func(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts []columnTypedColumnPhysicalQueryPart, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
 	groupDict, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Group
 	})
@@ -880,16 +863,15 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts []colum
 	if err != nil {
 		return err
 	}
-	distinctDict := columnTypedColumnDenseGroupCountDistinctCardinalityOnlyDictionary(distinctCardinality)
 	for partIdx := range parts {
 		part := parts[partIdx].DenseGroupCountDistinct
 		if part == nil {
 			return fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
 		}
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(&part.Group, groupDict, groupRanks); err != nil {
+		if err := prepareColumn(&part.Group, groupDict, len(groupDict), groupRanks); err != nil {
 			return fmt.Errorf("collections: dense grouped count-distinct group part %d: %w", partIdx, err)
 		}
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(&part.Distinct, distinctDict, distinctRanks); err != nil {
+		if err := prepareColumn(&part.Distinct, nil, distinctCardinality, distinctRanks); err != nil {
 			return fmt.Errorf("collections: dense grouped count-distinct distinct part %d: %w", partIdx, err)
 		}
 	}
@@ -964,14 +946,8 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts []columnTypedColu
 	return ranks, len(ranks), nil
 }
 
-func columnTypedColumnDenseGroupCountDistinctCardinalityOnlyDictionary(cardinality int) []string {
-	// Dense group-count-distinct never renders distinct labels, so the distinct side
-	// only needs a stable rank space and cardinality.
-	return make([]string, cardinality)
-}
-
-func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, ranks map[string]uint32) error {
-	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(column, globalDictionary, ranks); err != nil {
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error {
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(column, globalDictionary, cardinality, ranks); err != nil {
 		return err
 	}
 	localRanks := column.GlobalLocalRanks
@@ -995,7 +971,10 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(column *co
 	return nil
 }
 
-func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, ranks map[string]uint32) error {
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error {
+	if cardinality != len(ranks) {
+		return fmt.Errorf("global cardinality=%d want ranks=%d", cardinality, len(ranks))
+	}
 	localRanks := make([]uint32, len(column.Dictionary))
 	for localCode, value := range column.Dictionary {
 		rank, ok := ranks[value]
@@ -1006,6 +985,8 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(column *co
 	}
 	emptyRank, emptyOK := ranks[""]
 	column.GlobalDictionary = globalDictionary
+	column.GlobalCardinality = cardinality
+	column.GlobalCardinalityOK = true
 	column.GlobalLocalRanks = localRanks
 	column.GlobalEmptyRank = emptyRank
 	column.GlobalEmptyRankOK = emptyOK
@@ -2678,7 +2659,7 @@ func columnTypedColumnDenseGroupCountDistinctPartsHaveGlobalCodes(parts []column
 		if dense == nil {
 			return false
 		}
-		if dense.Group.GlobalDictionary == nil || dense.Distinct.GlobalDictionary == nil {
+		if dense.Group.GlobalDictionary == nil || !dense.Group.GlobalCardinalityOK || !dense.Distinct.GlobalCardinalityOK {
 			return false
 		}
 		if len(dense.Group.GlobalCodes) != dense.Rows || len(dense.Distinct.GlobalCodes) != dense.Rows {
@@ -2700,17 +2681,23 @@ func columnTypedColumnDenseGroupCountDistinctPreparedGlobalRankInfo(parts []colu
 		if !columnTypedColumnDenseGroupCountDistinctColumnHasGlobalRanks(&dense.Group) || !columnTypedColumnDenseGroupCountDistinctColumnHasGlobalRanks(&dense.Distinct) {
 			return nil, 0, false, nil
 		}
+		if dense.Group.GlobalDictionary == nil {
+			return nil, 0, false, nil
+		}
+		if dense.Group.GlobalCardinality != len(dense.Group.GlobalDictionary) {
+			return nil, 0, true, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want dictionary=%d", partIdx, dense.Group.GlobalCardinality, len(dense.Group.GlobalDictionary))
+		}
 		if !havePreparedRanks {
 			groupDictionary = dense.Group.GlobalDictionary
-			distinctCardinality = len(dense.Distinct.GlobalDictionary)
+			distinctCardinality = dense.Distinct.GlobalCardinality
 			havePreparedRanks = true
 			continue
 		}
 		if len(dense.Group.GlobalDictionary) != len(groupDictionary) {
 			return nil, 0, true, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want %d", partIdx, len(dense.Group.GlobalDictionary), len(groupDictionary))
 		}
-		if len(dense.Distinct.GlobalDictionary) != distinctCardinality {
-			return nil, 0, true, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, len(dense.Distinct.GlobalDictionary), distinctCardinality)
+		if dense.Distinct.GlobalCardinality != distinctCardinality {
+			return nil, 0, true, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, dense.Distinct.GlobalCardinality, distinctCardinality)
 		}
 	}
 	return groupDictionary, distinctCardinality, havePreparedRanks, nil
@@ -2718,7 +2705,7 @@ func columnTypedColumnDenseGroupCountDistinctPreparedGlobalRankInfo(parts []colu
 
 func columnTypedColumnDenseGroupCountDistinctColumnHasGlobalRanks(column *columnTypedColumnDenseStringCodeColumn) bool {
 	return column != nil &&
-		column.GlobalDictionary != nil &&
+		column.GlobalCardinalityOK &&
 		len(column.GlobalLocalRanks) == len(column.Dictionary)
 }
 
@@ -2746,18 +2733,33 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctGlobalC
 			diag.DenseGroupCountDistinctUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct missing prepared part %d", partIdx)
 		}
+		if dense.Group.GlobalDictionary == nil {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d missing group global dictionary", partIdx)
+		}
+		if !dense.Group.GlobalCardinalityOK || dense.Group.GlobalCardinality != len(dense.Group.GlobalDictionary) {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d ok=%t want dictionary=%d", partIdx, dense.Group.GlobalCardinality, dense.Group.GlobalCardinalityOK, len(dense.Group.GlobalDictionary))
+		}
+		if !dense.Distinct.GlobalCardinalityOK {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d missing distinct global cardinality", partIdx)
+		}
 		if !haveCardinality {
 			groupCardinality = len(dense.Group.GlobalDictionary)
-			distinctCardinality = len(dense.Distinct.GlobalDictionary)
+			distinctCardinality = dense.Distinct.GlobalCardinality
 			haveCardinality = true
 		} else if len(dense.Group.GlobalDictionary) != groupCardinality {
 			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
 			diag.DenseGroupCountDistinctUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want %d", partIdx, len(dense.Group.GlobalDictionary), groupCardinality)
-		} else if len(dense.Distinct.GlobalDictionary) != distinctCardinality {
+		} else if dense.Distinct.GlobalCardinality != distinctCardinality {
 			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
 			diag.DenseGroupCountDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, len(dense.Distinct.GlobalDictionary), distinctCardinality)
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, dense.Distinct.GlobalCardinality, distinctCardinality)
 		}
 	}
 	if cap(r.denseGroupCountDistinctCounts) < groupCardinality {
@@ -2831,10 +2833,10 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctGlobalC
 			diag.DenseGroupCountDistinctUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want %d", partIdx, len(dense.Group.GlobalDictionary), groupCardinality)
 		}
-		if len(dense.Distinct.GlobalDictionary) != distinctCardinality {
+		if dense.Distinct.GlobalCardinality != distinctCardinality {
 			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 			diag.DenseGroupCountDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, len(dense.Distinct.GlobalDictionary), distinctCardinality)
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, dense.Distinct.GlobalCardinality, distinctCardinality)
 		}
 		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += dense.Rows

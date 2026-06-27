@@ -166,8 +166,14 @@ func assertTypedColumnQ2OneShotColumnRankMapsNoGlobalCodes3158(tb testing.TB, pa
 	if len(column.GlobalCodes) != 0 {
 		tb.Fatalf("q2 typed-column one-shot part %d %s global codes=%d want 0", partIdx, label, len(column.GlobalCodes))
 	}
-	if column.GlobalDictionary == nil {
+	if label == "group" && column.GlobalDictionary == nil {
 		tb.Fatalf("q2 typed-column one-shot part %d %s global dictionary is nil", partIdx, label)
+	}
+	if label == "distinct" && column.GlobalDictionary != nil {
+		tb.Fatalf("q2 typed-column one-shot part %d %s global dictionary allocated=%d want nil", partIdx, label, len(column.GlobalDictionary))
+	}
+	if !column.GlobalCardinalityOK {
+		tb.Fatalf("q2 typed-column one-shot part %d %s global cardinality not prepared", partIdx, label)
 	}
 	if len(column.GlobalLocalRanks) != len(column.Dictionary) {
 		tb.Fatalf("q2 typed-column one-shot part %d %s local rank entries=%d want dictionary=%d", partIdx, label, len(column.GlobalLocalRanks), len(column.Dictionary))

@@ -261,7 +261,6 @@ func TestTypedColumnQ2DenseGroupCountDistinctActiveGroupBitset1950(t *testing.T)
 	groupDictionary[groupA] = "app.active.a"
 	groupDictionary[groupB] = "app.active.b"
 	groupDictionary[groupRejected] = "app.rejected"
-	distinctDictionary := make([]string, distinctCardinality)
 	groupCodes := []uint32{groupA, groupA, groupA, groupB, groupB, groupB, groupRejected}
 	distinctCodes := []uint32{10, 10, 11, 20, 21, 20, 30}
 	predicateCodes := []uint32{1, 1, 1, 1, 1, 1, 0}
@@ -287,14 +286,17 @@ func TestTypedColumnQ2DenseGroupCountDistinctActiveGroupBitset1950(t *testing.T)
 				DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
 					Rows: len(groupCodes),
 					Group: columnTypedColumnDenseStringCodeColumn{
-						Codes:            groupCodes,
-						GlobalCodes:      groupCodes,
-						GlobalDictionary: groupDictionary,
+						Codes:               groupCodes,
+						GlobalCodes:         groupCodes,
+						GlobalDictionary:    groupDictionary,
+						GlobalCardinality:   groupCardinality,
+						GlobalCardinalityOK: true,
 					},
 					Distinct: columnTypedColumnDenseStringCodeColumn{
-						Codes:            distinctCodes,
-						GlobalCodes:      distinctCodes,
-						GlobalDictionary: distinctDictionary,
+						Codes:               distinctCodes,
+						GlobalCodes:         distinctCodes,
+						GlobalCardinality:   distinctCardinality,
+						GlobalCardinalityOK: true,
 					},
 					Predicates: []columnTypedColumnDensePredicatePart{
 						{Codes: predicateCodes, Allowed: allowed},
@@ -345,7 +347,6 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctActiveGroups1950(b *testing.B)
 		activeGroupCodes[groupIdx] = code
 		groupDictionary[code] = fmt.Sprintf("app.active.%02d", groupIdx)
 	}
-	distinctDictionary := make([]string, distinctCardinality)
 	groupCodes := make([]uint32, rows)
 	distinctCodes := make([]uint32, rows)
 	predicateCodes := make([]uint32, rows)
@@ -376,14 +377,17 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctActiveGroups1950(b *testing.B)
 				DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
 					Rows: rows,
 					Group: columnTypedColumnDenseStringCodeColumn{
-						Codes:            groupCodes,
-						GlobalCodes:      groupCodes,
-						GlobalDictionary: groupDictionary,
+						Codes:               groupCodes,
+						GlobalCodes:         groupCodes,
+						GlobalDictionary:    groupDictionary,
+						GlobalCardinality:   groupCardinality,
+						GlobalCardinalityOK: true,
 					},
 					Distinct: columnTypedColumnDenseStringCodeColumn{
-						Codes:            distinctCodes,
-						GlobalCodes:      distinctCodes,
-						GlobalDictionary: distinctDictionary,
+						Codes:               distinctCodes,
+						GlobalCodes:         distinctCodes,
+						GlobalCardinality:   distinctCardinality,
+						GlobalCardinalityOK: true,
 					},
 					Predicates: []columnTypedColumnDensePredicatePart{
 						{Codes: predicateCodes, Allowed: allowed},
@@ -754,6 +758,15 @@ func assertTypedColumnQ2DensePreparedGlobalCodes1950(tb testing.TB, runner *Colu
 		if !sort.StringsAreSorted(part.Group.GlobalDictionary) {
 			tb.Fatalf("part %d group global dictionary not lexicographically sorted group=%v", partIdx, part.Group.GlobalDictionary)
 		}
+		if !part.Group.GlobalCardinalityOK || part.Group.GlobalCardinality != len(part.Group.GlobalDictionary) {
+			tb.Fatalf("part %d group global cardinality=%d ok=%t want dictionary=%d", partIdx, part.Group.GlobalCardinality, part.Group.GlobalCardinalityOK, len(part.Group.GlobalDictionary))
+		}
+		if part.Distinct.GlobalDictionary != nil {
+			tb.Fatalf("part %d distinct global dictionary allocated=%d want nil", partIdx, len(part.Distinct.GlobalDictionary))
+		}
+		if !part.Distinct.GlobalCardinalityOK {
+			tb.Fatalf("part %d distinct global cardinality not prepared", partIdx)
+		}
 		if len(part.Distinct.GlobalLocalRanks) != len(part.Distinct.Dictionary) {
 			tb.Fatalf("part %d distinct global local ranks=%d want dictionary=%d", partIdx, len(part.Distinct.GlobalLocalRanks), len(part.Distinct.Dictionary))
 		}
@@ -771,8 +784,8 @@ func assertTypedColumnQ2DensePreparedGlobalCodes1950(tb testing.TB, runner *Colu
 			tb.Fatalf("part %d local did:m code=%d outside distinct global local ranks=%d", partIdx, localDidM, len(part.Distinct.GlobalLocalRanks))
 		}
 		partDidMRank := int(part.Distinct.GlobalLocalRanks[localDidM])
-		if partDidMRank >= len(part.Distinct.GlobalDictionary) {
-			tb.Fatalf("part %d did:m global rank=%d outside distinct cardinality=%d", partIdx, partDidMRank, len(part.Distinct.GlobalDictionary))
+		if partDidMRank >= part.Distinct.GlobalCardinality {
+			tb.Fatalf("part %d did:m global rank=%d outside distinct cardinality=%d", partIdx, partDidMRank, part.Distinct.GlobalCardinality)
 		}
 		if didMRank < 0 {
 			didMRank = partDidMRank
