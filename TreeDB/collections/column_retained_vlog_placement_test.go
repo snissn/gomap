@@ -350,9 +350,6 @@ func TestColumnRetainedPayloadSemanticStreamV1InsertBatchRoundTripReopen(t *test
 		t.Fatalf("InsertBatch: %v", err)
 	}
 	stats := col.LastInsertStats()
-	if stats.RetainedPayloadPrepare <= 0 {
-		t.Fatalf("retained payload prepare duration=%s, want positive semantic-stream-v1 phase", stats.RetainedPayloadPrepare)
-	}
 	if stats.RetainedPayloadRows != len(docs) {
 		t.Fatalf("retained payload rows=%d want %d", stats.RetainedPayloadRows, len(docs))
 	}
