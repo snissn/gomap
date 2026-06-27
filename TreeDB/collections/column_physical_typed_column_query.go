@@ -90,14 +90,17 @@ type columnTypedColumnDenseGroupHourCountPart struct {
 }
 
 type columnTypedColumnDenseInt64SpanPart struct {
-	Cardinality      int
-	DictionaryByCode map[int64]string
-	GroupCodes       []uint32
-	GroupValid       []bool
-	GlobalRanks      []uint32
-	GlobalDictionary []string
-	Values           []int64
-	Predicates       []columnTypedColumnDensePredicatePart
+	Cardinality           int
+	DictionaryByCode      map[int64]string
+	GroupCodes            []uint32
+	GroupValid            []bool
+	GlobalRanks           []uint32
+	GlobalDictionary      []string
+	Values                []int64
+	Predicates            []columnTypedColumnDensePredicatePart
+	PredicatesPreApplied  bool
+	PredicateRows         []uint32
+	PreAppliedRowsScanned int
 }
 
 type columnTypedColumnSortedGroupedDistinctCodeColumn struct {
@@ -620,7 +623,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnaps
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
 		part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 	case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
-		part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+		part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, true)
 	case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
 		part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
 	case columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req):
@@ -2186,22 +2189,35 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseInt64Span(vi
 			r.denseLocalSpanSeen = r.denseLocalSpanSeen[:dense.Cardinality]
 			clear(r.denseLocalSpanSeen)
 		}
-		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		preAppliedPredicates := dense.PredicatesPreApplied
+		if preAppliedPredicates {
+			rowsScanned += dense.PreAppliedRowsScanned
+		} else if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += len(dense.GroupCodes)
 			continue
 		}
-		for rowIdx, code := range dense.GroupCodes {
-			rowsScanned++
+		rowCount := len(dense.GroupCodes)
+		if preAppliedPredicates {
+			rowCount = len(dense.PredicateRows)
+		}
+		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
+			rowIdx := selectedIdx
+			if preAppliedPredicates {
+				rowIdx = int(dense.PredicateRows[selectedIdx])
+			} else {
+				rowsScanned++
+			}
 			if !visibility.rowVisible(rowIdx) {
 				continue
 			}
-			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
 			}
 			if len(dense.Predicates) != 0 {
 				matchedRows++
 			}
 			reduceRows++
+			code := dense.GroupCodes[rowIdx]
 			if !columnTypedColumnDenseCodeValid(dense.GroupValid, rowIdx) {
 				if req.SkipEmptyGroupKey {
 					continue
@@ -3740,13 +3756,25 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanGlobalCodes(view
 	reduceRows := 0
 	for partIdx := range r.parts {
 		dense := r.parts[partIdx].DenseInt64Span
-		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		preAppliedPredicates := dense.PredicatesPreApplied
+		if preAppliedPredicates {
+			rowsScanned += dense.PreAppliedRowsScanned
+		} else if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += len(dense.GroupCodes)
 			continue
 		}
-		for rowIdx := range dense.GroupCodes {
-			rowsScanned++
-			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+		rowCount := len(dense.GroupCodes)
+		if preAppliedPredicates {
+			rowCount = len(dense.PredicateRows)
+		}
+		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
+			rowIdx := selectedIdx
+			if preAppliedPredicates {
+				rowIdx = int(dense.PredicateRows[selectedIdx])
+			} else {
+				rowsScanned++
+			}
+			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
 			}
 			if len(dense.Predicates) != 0 {
@@ -3869,19 +3897,32 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanLocalMap(view co
 			r.denseLocalSpanSeen = r.denseLocalSpanSeen[:dense.Cardinality]
 			clear(r.denseLocalSpanSeen)
 		}
-		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		preAppliedPredicates := dense.PredicatesPreApplied
+		if preAppliedPredicates {
+			rowsScanned += dense.PreAppliedRowsScanned
+		} else if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += len(dense.GroupCodes)
 			continue
 		}
-		for rowIdx, code := range dense.GroupCodes {
-			rowsScanned++
-			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+		rowCount := len(dense.GroupCodes)
+		if preAppliedPredicates {
+			rowCount = len(dense.PredicateRows)
+		}
+		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
+			rowIdx := selectedIdx
+			if preAppliedPredicates {
+				rowIdx = int(dense.PredicateRows[selectedIdx])
+			} else {
+				rowsScanned++
+			}
+			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
 			}
 			if len(dense.Predicates) != 0 {
 				matchedRows++
 			}
 			reduceRows++
+			code := dense.GroupCodes[rowIdx]
 			if !columnTypedColumnDenseCodeValid(dense.GroupValid, rowIdx) {
 				if req.SkipEmptyGroupKey {
 					continue
