@@ -95,6 +95,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
 	}
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 first one-shot", first, rowHash, want)
 	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 first one-shot", first.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
+	assertTypedColumnOneShotCacheDiagnostics3158(t, "q2 first one-shot", first.Diagnostics, false, true, true)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 first", 1, 0, 1, 1, 0)
 
 	q1Req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
@@ -111,7 +112,26 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
 	}
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 second one-shot", second, rowHash, want)
 	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 second one-shot", second.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
+	assertTypedColumnOneShotCacheDiagnostics3158(t, "q2 second one-shot", second.Diagnostics, true, false, false)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 second", 2, 1, 2, 2, 0)
+}
+
+func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, wantHit, wantMiss, wantBuild bool) {
+	tb.Helper()
+	if diag.TypedColumnOneShotCacheHit != wantHit ||
+		diag.TypedColumnOneShotCacheMiss != wantMiss ||
+		diag.TypedColumnOneShotCacheBuild != wantBuild {
+		tb.Fatalf("%s typed-column one-shot cache hit/miss/build=%t/%t/%t want %t/%t/%t diagnostics=%+v",
+			label,
+			diag.TypedColumnOneShotCacheHit, diag.TypedColumnOneShotCacheMiss, diag.TypedColumnOneShotCacheBuild,
+			wantHit, wantMiss, wantBuild, diag)
+	}
+	if wantBuild && diag.TypedColumnOneShotBuildNanos <= 0 {
+		tb.Fatalf("%s typed-column one-shot build nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnOneShotBuildNanos, diag)
+	}
+	if !wantBuild && diag.TypedColumnOneShotBuildNanos != 0 {
+		tb.Fatalf("%s typed-column one-shot build nanos=%d want 0 diagnostics=%+v", label, diag.TypedColumnOneShotBuildNanos, diag)
+	}
 }
 
 func assertTypedColumnOneShotCacheSnapshot3088(tb testing.TB, col *Collection, label string, entries int, hits uint64, misses uint64, builds uint64, invalidations uint64) {
