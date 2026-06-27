@@ -729,7 +729,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		var appender *columnPhysicalAssetSegmentAppender
 		closed := false
+		var appendStart time.Time
 		if needsAppender {
+			appendStart = time.Now()
 			var err error
 			appender, err = newColumnPhysicalAssetSegmentAppendWriter(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, columnAssetM12ASegmentFileID)
 			if err != nil {
@@ -741,7 +743,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				}
 			}()
 		}
-		appendStart := time.Now()
 		var appendedBytes int64
 		var appendedCount int
 		for _, asset := range pendingAssets {

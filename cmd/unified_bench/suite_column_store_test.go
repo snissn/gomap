@@ -2575,6 +2575,54 @@ func TestColumnStoreApplyMetadataCostOnlyAggregateRowsM3070(t *testing.T) {
 	}
 }
 
+func TestColumnStoreMetadataCostMetricUsesSplitAggregateAccountingM3148(t *testing.T) {
+	insert := columnStoreInsertPhaseMetric{
+		Documents:                                99,
+		ColumnPublishRows:                        10,
+		ColumnPublishAssetPreparationDurationMS:  100,
+		ColumnPublishAggregateMetadataDurationMS: 7.5,
+		ColumnPublishAssetAppendDurationMS:       20,
+		ColumnPublishAggregateMetadataBytes:      400,
+		ColumnPublishSharedAppendBytes:           1000,
+	}
+	accounting := collections.ColumnStorePhysicalAccounting{
+		AggregateMetadataRefs: 2,
+		Totals: collections.ColumnStorePhysicalAccountingTotals{
+			AggregateMetadataBytes: 300,
+		},
+	}
+
+	cost := columnStoreMetadataCostMetricFromAccounting(insert, accounting, nil)
+
+	if got, want := cost.AggregateMetadataStorageBytes, int64(300); got != want {
+		t.Fatalf("aggregate metadata storage bytes=%d want %d", got, want)
+	}
+	if got, want := cost.AggregateMetadataPrepareMS, 7.5; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("aggregate metadata prepare ms=%v want %v", got, want)
+	}
+	if got, want := cost.AggregateMetadataAppendShareMS, 8.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("aggregate metadata append share ms=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostDurationMS, 15.5; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("metadata insert cost ms=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostUpperBoundMS, 100.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("metadata insert cost upper bound ms=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostNsPerRow, 1_550_000.0; math.Abs(got-want) > 1e-3 {
+		t.Fatalf("metadata insert cost ns/row=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostBasis, "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"; got != want {
+		t.Fatalf("metadata insert cost basis=%q want %q", got, want)
+	}
+	if got, want := cost.InsertCostUpperBoundBasis, "column_publish_asset_preparation_total_upper_bound_all_asset_families"; got != want {
+		t.Fatalf("metadata insert cost upper bound basis=%q want %q", got, want)
+	}
+	if got, want := cost.StorageCostBasis, "active_manifest_aggregate_metadata_sidecars_plus_typed_column_embedded_aggregate_sections"; got != want {
+		t.Fatalf("metadata storage cost basis=%q want %q", got, want)
+	}
+}
+
 func TestColumnStorePhaseDurationsUsesMeasuredHotRun1955(t *testing.T) {
 	diag := collections.ColumnPhysicalQueryDiagnostics{
 		ScanNanos:        int64(9 * time.Millisecond),
