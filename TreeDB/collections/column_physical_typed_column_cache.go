@@ -130,6 +130,9 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		entry.close()
 		result, err := current.run(view, req)
 		result.Diagnostics.TypedColumnOneShotCacheHit = true
+		result.Diagnostics.TypedColumnOneShotCacheMiss = true
+		result.Diagnostics.TypedColumnOneShotCacheBuild = true
+		result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
