@@ -2243,31 +2243,89 @@ func TestColumnPhysicalAssetSegmentAppendWriterSyncsUnknownExistingSegment3152(t
 	}
 }
 
-func TestColumnAssetSegmentFileDataSyncKeepsBytesReadable3151(t *testing.T) {
-	dir := t.TempDir()
-	file, err := os.CreateTemp(dir, "segment-*.tca")
+func withColumnAssetSegmentFileSyncForTest(t *testing.T, fn func(*os.File) error) {
+	t.Helper()
+	old := syncColumnAssetSegmentFileForPublish
+	syncColumnAssetSegmentFileForPublish = fn
+	t.Cleanup(func() {
+		syncColumnAssetSegmentFileForPublish = old
+	})
+}
+
+func TestColumnAssetSegmentDirectWriteRequiresFileSyncBeforeRef3151(t *testing.T) {
+	cfg, _ := columnAssetDirectViewAlignmentTestPayloads(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	refForPath := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		Namespace: cfg.AssetManager.Namespace,
+		FileID:    columnAssetM12ASegmentFileID,
+		Length:    1,
+	}
+	assetPath, err := columnAssetSegmentPath(root, refForPath)
 	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
+		t.Fatalf("columnAssetSegmentPath: %v", err)
 	}
-	path := file.Name()
-	payload := []byte("durable column asset payload")
-	if _, err := file.Write(payload); err != nil {
-		_ = file.Close()
-		t.Fatalf("Write: %v", err)
+	syncErr := errors.New("forced segment data sync failure")
+	calls := 0
+	withColumnAssetSegmentFileSyncForTest(t, func(file *os.File) error {
+		if file == nil {
+			t.Fatalf("syncColumnAssetSegmentFileForPublish called with nil file")
+		}
+		calls++
+		return syncErr
+	})
+	ref, err := writeColumnAssetToManagerSegment(root, cfg, []byte("direct"), ColumnAssetKindTCS1PartImage, 7, 1, columnAssetM12ASegmentFileID)
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("writeColumnAssetToManagerSegment err=%v want %v", err, syncErr)
 	}
-	if err := syncColumnAssetSegmentFile(file); err != nil {
-		_ = file.Close()
-		t.Fatalf("syncColumnAssetSegmentFile: %v", err)
+	if ref != (ColumnAssetRef{}) {
+		t.Fatalf("writeColumnAssetToManagerSegment ref=%+v want zero ref after sync failure", ref)
 	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if calls != 1 {
+		t.Fatalf("sync calls=%d want 1", calls)
 	}
-	got, err := os.ReadFile(path)
+	if columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatalf("failed direct segment write should not mark segment dir-sync known")
+	}
+}
+
+func TestColumnAssetSegmentAppenderCloseRequiresFileSyncBeforeRef3151(t *testing.T) {
+	cfg, _ := columnAssetDirectViewAlignmentTestPayloads(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	syncErr := errors.New("forced appender data sync failure")
+	calls := 0
+	withColumnAssetSegmentFileSyncForTest(t, func(file *os.File) error {
+		if file == nil {
+			t.Fatalf("syncColumnAssetSegmentFileForPublish called with nil file")
+		}
+		calls++
+		return syncErr
+	})
+	appender, err := newColumnPhysicalAssetSegmentAppender(root, cfg, columnAssetM12ASegmentFileID)
 	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+		t.Fatalf("newColumnPhysicalAssetSegmentAppender: %v", err)
 	}
-	if !bytes.Equal(got, payload) {
-		t.Fatalf("payload=%q want %q", got, payload)
+	ref, err := appender.appendKind([]byte("batched"), ColumnAssetKindTCS1PartImage, 7, 1)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("appendKind: %v", err)
+	}
+	assetPath, err := columnAssetSegmentPath(root, ref)
+	if err != nil {
+		_ = appender.abort()
+		t.Fatalf("columnAssetSegmentPath: %v", err)
+	}
+	if err := appender.close(); !errors.Is(err, syncErr) {
+		t.Fatalf("appender close err=%v want %v", err, syncErr)
+	}
+	if calls != 1 {
+		t.Fatalf("sync calls=%d want 1", calls)
+	}
+	if _, err := os.Stat(assetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("asset path after failed close err=%v want not exist", err)
+	}
+	if columnAssetSegmentDirSyncKnown(assetPath) {
+		t.Fatalf("failed appender close should not mark segment dir-sync known")
 	}
 }
 
