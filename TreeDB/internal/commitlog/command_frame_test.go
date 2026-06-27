@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -234,6 +235,39 @@ func TestRawKVBatchPayloadBuilderZeroCompactionFallsBackForMixedValues(t *testin
 	}
 	if !bytes.Equal(decoded[0].Value, make([]byte, 4)) {
 		t.Fatalf("materialized omitted zero value = %x, want zeros", decoded[0].Value)
+	}
+}
+
+func TestRawKVBatchPayloadBuilderRetainedCapPredictsCompactZeroMaterialization(t *testing.T) {
+	var nilBuilder *RawKVBatchPayloadBuilder
+	if got, err := nilBuilder.RetainedCapAfterAppend(1); err != nil || got != 0 {
+		t.Fatalf("nil RetainedCapAfterAppend=%d, %v; want 0, nil", got, err)
+	}
+
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(0, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := builder.AppendSet([]byte(fmt.Sprintf("zero-%03d", i)), make([]byte, 32)); err != nil {
+			t.Fatalf("AppendSet compact zero %d: %v", i, err)
+		}
+	}
+	if got := builder.RetainedCap(); got != rawKVBatchHeaderSize {
+		t.Fatalf("compact zero canonical retained cap=%d, want %d", got, rawKVBatchHeaderSize)
+	}
+
+	retainedCap, err := builder.RetainedCapAfterAppendSet([]byte("nz"), []byte("x"))
+	if err != nil {
+		t.Fatalf("RetainedCapAfterAppendSet non-zero: %v", err)
+	}
+	expandedLen, ok := rawKVExpandedZeroBatchPayloadSize(3, len("zero-000")*3, 32)
+	if !ok {
+		t.Fatal("expanded zero batch size overflow")
+	}
+	wantMin := expandedLen + rawKVOpHeaderSize + len("nz") + len("x")
+	if retainedCap < wantMin {
+		t.Fatalf("retained cap after compact materialization=%d, want at least %d", retainedCap, wantMin)
 	}
 }
 

@@ -1324,6 +1324,42 @@ func TestPublicCommandWALBatchPayloadSoftCapAccountsForRetainedCapGrowth(t *test
 	}
 }
 
+func TestPublicCommandWALBatchPayloadSoftCapAccountsForCompactZeroMaterialization(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 96
+
+	for i := 0; i < 3; i++ {
+		key := []byte(fmt.Sprintf("zero-%03d", i))
+		if err := wrapped.SetView(key, make([]byte, 32)); err != nil {
+			t.Fatalf("SetView compact zero %d: %v", i, err)
+		}
+	}
+	if wrapped.payloadBypass {
+		t.Fatal("compact zero appends bypassed before materialization was required")
+	}
+	firstCap := wrapped.payload.RetainedCap()
+	if firstCap > wrapped.payloadSoftCapBytes {
+		t.Fatalf("compact zero retained cap=%d, soft_cap=%d", firstCap, wrapped.payloadSoftCapBytes)
+	}
+
+	if err := wrapped.SetView([]byte("nz"), []byte("x")); err != nil {
+		t.Fatalf("SetView non-zero after compact zeros: %v", err)
+	}
+	if !wrapped.payloadBypass {
+		t.Fatal("non-zero append did not bypass before compact-zero materialization")
+	}
+	if wrapped.payload.RetainedCap() != firstCap {
+		t.Fatalf("payload retained cap grew after materialization bypass: got %d want %d", wrapped.payload.RetainedCap(), firstCap)
+	}
+	if wrapped.payload.Count() != 3 || wrapped.opCount != 4 {
+		t.Fatalf("payload count=%d opCount=%d, want 3/4", wrapped.payload.Count(), wrapped.opCount)
+	}
+	if inner.setViewCalls != 3 || inner.setCalls != 1 {
+		t.Fatalf("inner calls after compact materialization bypass: setView=%d set=%d, want 3/1", inner.setViewCalls, inner.setCalls)
+	}
+}
+
 func TestPublicCommandWALBatchPayloadSoftCapBoundsLargeValueBuilder(t *testing.T) {
 	inner := &commandWALPayloadSoftCapBatch{}
 	wrapped := newCommandWALPublicBatch(nil, inner, 0)
@@ -1339,8 +1375,8 @@ func TestPublicCommandWALBatchPayloadSoftCapBoundsLargeValueBuilder(t *testing.T
 	if !wrapped.payloadBypass {
 		t.Fatal("large-value batch did not bypass retained payload")
 	}
-	if got := wrapped.payload.Len(); got > wrapped.payloadSoftCapBytes {
-		t.Fatalf("retained payload len=%d, cap=%d", got, wrapped.payloadSoftCapBytes)
+	if got := wrapped.payload.RetainedCap(); got > wrapped.payloadSoftCapBytes {
+		t.Fatalf("retained payload cap=%d, soft_cap=%d", got, wrapped.payloadSoftCapBytes)
 	}
 	if wrapped.payload.Count() != 0 || wrapped.opCount != 8 {
 		t.Fatalf("payload count=%d opCount=%d, want 0/8", wrapped.payload.Count(), wrapped.opCount)
