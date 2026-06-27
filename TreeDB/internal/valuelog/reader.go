@@ -148,10 +148,11 @@ func putDecodeScratch(buf []byte) {
 	buf = buf[:0]
 	if c <= maxDecodeScratchKeep {
 		decodeScratchSmallPoolPutsTotal.Add(1)
+		noteDecodeScratchSmallPoolPut(c)
 		select {
 		case smallDecodeScratchPool <- buf:
-			noteDecodeScratchSmallPoolPut(c)
 		default:
+			noteDecodeScratchSmallPoolTake(c)
 			decodeScratchSmallPoolDropsTotal.Add(1)
 			decodeScratchSmallPoolDroppedBytesTotal.Add(uint64(c))
 		}
@@ -159,10 +160,11 @@ func putDecodeScratch(buf []byte) {
 	}
 	if c <= maxLargeDecodeScratchKeep {
 		decodeScratchLargePoolPutsTotal.Add(1)
+		noteDecodeScratchLargePoolPut(c)
 		select {
 		case largeDecodeScratchPool <- buf:
-			noteDecodeScratchLargePoolPut(c)
 		default:
+			noteDecodeScratchLargePoolTake(c)
 			decodeScratchLargePoolDropsTotal.Add(1)
 			decodeScratchLargePoolDroppedBytesTotal.Add(uint64(c))
 		}
