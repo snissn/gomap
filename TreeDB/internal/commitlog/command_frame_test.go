@@ -942,6 +942,36 @@ func TestWriterDeferredCommandBufferHonorsConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestWriterDeferredCommandBufferAllocatesLazily(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("small"), Value: []byte("value")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 64 << 20})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if got := w.commandBufferLimit(); got != 64<<20 {
+		t.Fatalf("commandBufferLimit=%d want %d", got, 64<<20)
+	}
+	if got := cap(w.commandBuf); got != 0 {
+		t.Fatalf("deferred command buffer cap after open=%d, want 0", got)
+	}
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
+	}
+	if got := len(w.commandBuf); got == 0 {
+		t.Fatal("small command frame was not buffered")
+	}
+	if got := cap(w.commandBuf); got >= 1<<20 {
+		t.Fatalf("deferred command buffer cap after first small frame=%d, want below 1MiB", got)
+	}
+}
+
 func TestWriterLargeBatchPayloadBypassesDeferredCommandBufferAndPreservesOrder(t *testing.T) {
 	smallPayload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("small"), Value: []byte("value")},
