@@ -108,8 +108,8 @@ func TestColumnPhysicalQ4ATimeOrderTopKOneShotCache3085(t *testing.T) {
 		t.Fatalf("third one-shot topK=2 diagnostics=%+v want time-order topK=%d candidates=%d groups=%d", third.Diagnostics, smallerTopK.TopK, smallerCandidates, len(smallerWant))
 	}
 	snapshot = col.typedColumnOneShotCacheSnapshotForTest()
-	if snapshot.Entries != 1 || snapshot.CacheMisses != 2 || snapshot.CacheBuilds != 2 || snapshot.CacheHits != 1 || snapshot.Invalidations != 1 {
-		t.Fatalf("cache after topK change=%+v want invalidation and rebuild", snapshot)
+	if snapshot.Entries != 2 || snapshot.CacheMisses != 2 || snapshot.CacheBuilds != 2 || snapshot.CacheHits != 1 || snapshot.Invalidations != 0 {
+		t.Fatalf("cache after topK change=%+v want retained prior entry and new build", snapshot)
 	}
 }
 

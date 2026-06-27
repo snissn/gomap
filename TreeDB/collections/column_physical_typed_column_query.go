@@ -189,6 +189,32 @@ type columnTypedColumnPhysicalAggregateSummary struct {
 	denseGroupHourCount bool
 }
 
+func (r *columnTypedColumnPhysicalQueryRunner) close() {
+	if r == nil {
+		return
+	}
+	r.parts = nil
+	r.aggregateSummary = nil
+	r.denseGroupCounts = nil
+	r.denseLocalCounts = nil
+	r.denseGroupCountDistinctCounts = nil
+	r.denseGroupCountDistinctDistinctCounts = nil
+	r.denseGroupCountDistinctPairBits = nil
+	r.denseGroupCountDistinctGroupActive = nil
+	r.denseGroupCountDistinctGroupOffsets = nil
+	r.denseGroupCountDistinctActiveGroups = nil
+	r.denseGroupCountDistinctPairList = nil
+	r.denseGroupHourCounts = nil
+	r.denseLocalHourCounts = nil
+	r.denseSpanValues = nil
+	r.denseLocalSpans = nil
+	r.denseLocalSpanSeen = nil
+	r.timeOrderMinValues = nil
+	r.timeOrderHeap.items = nil
+	r.timeOrderTopKScratch = nil
+	r.resultGroups = nil
+}
+
 func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
 	if !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return ColumnPhysicalQueryResult{}, false, nil
@@ -392,7 +418,21 @@ func applyTypedColumnLatestVisibilityDiagnostics(diag *ColumnPhysicalQueryDiagno
 	diag.VisibilityNanos = visibilityNanos
 }
 
+type columnTypedColumnPhysicalQueryRunnerPrepareOptions struct {
+	prepareAggregateSummaries                 bool
+	prepareDenseInt64SpanGlobalCodes          bool
+	prepareDenseGroupCountDistinctGlobalCodes bool
+}
+
 func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, prepareSummaries bool) (*columnTypedColumnPhysicalQueryRunner, bool, error) {
+	return prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
+		prepareAggregateSummaries:                 prepareSummaries,
+		prepareDenseInt64SpanGlobalCodes:          prepareSummaries,
+		prepareDenseGroupCountDistinctGlobalCodes: prepareSummaries,
+	})
+}
+
+func prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, opts columnTypedColumnPhysicalQueryRunnerPrepareOptions) (*columnTypedColumnPhysicalQueryRunner, bool, error) {
 	if !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return nil, false, nil
 	}
@@ -420,11 +460,11 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
 		return nil, true, typedColumnPhysicalQueryPairingError(err)
 	}
-	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, readCache, false, prepareSummaries, prepareSummaries)
+	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, readCache, false, opts.prepareDenseInt64SpanGlobalCodes, opts.prepareDenseGroupCountDistinctGlobalCodes)
 	if err != nil {
 		return nil, true, err
 	}
-	if prepareSummaries {
+	if opts.prepareAggregateSummaries {
 		if err := prepareColumnTypedColumnPhysicalAggregateSummary(runner, req); err != nil {
 			return nil, true, err
 		}
@@ -2947,6 +2987,52 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctLocalCo
 		}
 		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += dense.Rows
+			continue
+		}
+		leftPredicateCodes, rightPredicateCodes, leftPredicateCode, rightPredicateCode, useTwoSinglePredicates := columnTypedColumnDenseTwoSingleCodePredicates(dense.Predicates, dense.Rows)
+		if usePairBitset && useTwoSinglePredicates && dense.Group.Valid == nil && dense.Distinct.Valid == nil {
+			reducer = columnTypedColumnDenseGroupCountDistinctReducerPairBitset
+			for rowIdx := 0; rowIdx < dense.Rows; rowIdx++ {
+				rowsScanned++
+				if leftPredicateCodes[rowIdx] != leftPredicateCode || rightPredicateCodes[rowIdx] != rightPredicateCode {
+					continue
+				}
+				matchedRows++
+				reduceRows++
+				groupLocalCode := dense.Group.Codes[rowIdx]
+				if uint64(groupLocalCode) >= uint64(len(groupLocalRanks)) {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group code[%d]=%d outside cardinality=%d", partIdx, rowIdx, groupLocalCode, len(groupLocalRanks))
+				}
+				groupCode := groupLocalRanks[groupLocalCode]
+				groupIdx, ok := columnDictionaryCodeIndex(groupCode, len(r.denseGroupCountDistinctCounts))
+				if !ok {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group rank[%d]=%d outside cardinality=%d", partIdx, rowIdx, groupCode, len(r.denseGroupCountDistinctCounts))
+				}
+				r.denseGroupCountDistinctCounts[groupIdx]++
+				distinctLocalCode := dense.Distinct.Codes[rowIdx]
+				if uint64(distinctLocalCode) >= uint64(len(distinctLocalRanks)) {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct code[%d]=%d outside cardinality=%d", partIdx, rowIdx, distinctLocalCode, len(distinctLocalRanks))
+				}
+				distinctCode := distinctLocalRanks[distinctLocalCode]
+				distinctIdx, ok := columnDictionaryCodeIndex(distinctCode, distinctCardinality)
+				if !ok {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct rank[%d]=%d outside cardinality=%d", partIdx, rowIdx, distinctCode, distinctCardinality)
+				}
+				wordIdx := groupIdx*wordsPerGroup + distinctIdx/64
+				mask := uint64(1) << uint(distinctIdx&63)
+				if r.denseGroupCountDistinctPairBits[wordIdx]&mask == 0 {
+					r.denseGroupCountDistinctPairBits[wordIdx] |= mask
+					r.denseGroupCountDistinctDistinctCounts[groupIdx]++
+				}
+			}
 			continue
 		}
 		for rowIdx := 0; rowIdx < dense.Rows; rowIdx++ {

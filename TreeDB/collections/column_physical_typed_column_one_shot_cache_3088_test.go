@@ -35,14 +35,21 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ1Q3NoMetadata3088(t *testing.T) {
 		t.Fatalf("first RunColumnPhysicalQuery(q3): %v", err)
 	}
 	assertColumnPhysicalQ3DenseResult1950(t, "q3 first one-shot", q3First, q3Want, len(events), q3MatchedRows, q3MatchedRows)
-	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q3 first", 1, 1, 2, 2, 1)
+	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q3 first", 2, 1, 2, 2, 0)
 
 	q3Second, err := col.RunColumnPhysicalQuery(q3Req)
 	if err != nil {
 		t.Fatalf("second RunColumnPhysicalQuery(q3): %v", err)
 	}
 	assertColumnPhysicalQ3DenseResult1950(t, "q3 second one-shot", q3Second, q3Want, len(events), q3MatchedRows, q3MatchedRows)
-	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q3 second", 1, 2, 2, 2, 1)
+	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q3 second", 2, 2, 2, 2, 0)
+
+	q1Third, err := col.RunColumnPhysicalQuery(q1Req)
+	if err != nil {
+		t.Fatalf("third RunColumnPhysicalQuery(q1): %v", err)
+	}
+	assertColumnPhysicalQ1DenseResult1950(t, "q1 third one-shot", q1Third, q1Want, len(events), len(events))
+	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q1 third", 2, 3, 2, 2, 0)
 }
 
 func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
@@ -69,6 +76,42 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	}
 	assertColumnPhysicalQ5DenseResult1950(t, "q5 second one-shot", second, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q5 second", 1, 1, 1, 1, 0)
+}
+
+func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2LocalDictBatchA1950(), typedColumnQ2LocalDictBatchB1950()}
+	events := flattenColumnPhysicalEvents1950(batches)
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
+	defer closeFn()
+
+	req := typedColumnQ2Request1950()
+	rowHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q2", events))
+	want := columnPhysicalJSONBenchQ2ReferenceCountsP0(events)
+	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events)
+
+	first, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("first RunColumnPhysicalQuery(q2): %v", err)
+	}
+	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 first one-shot", first, rowHash, want)
+	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 first one-shot", first.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
+	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 first", 1, 0, 1, 1, 0)
+
+	q1Req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
+	q1, err := col.RunColumnPhysicalQuery(q1Req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q1 between q2 runs): %v", err)
+	}
+	assertColumnPhysicalQ1DenseResult1950(t, "q1 between q2 runs", q1, rowScanCollectionCounts1950(t, col, len(events)), len(events), len(events))
+	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q1 between q2 runs", 2, 0, 2, 2, 0)
+
+	second, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("second RunColumnPhysicalQuery(q2): %v", err)
+	}
+	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 second one-shot", second, rowHash, want)
+	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 second one-shot", second.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
+	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 second", 2, 1, 2, 2, 0)
 }
 
 func assertTypedColumnOneShotCacheSnapshot3088(tb testing.TB, col *Collection, label string, entries int, hits uint64, misses uint64, builds uint64, invalidations uint64) {
