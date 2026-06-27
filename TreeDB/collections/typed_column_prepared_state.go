@@ -32,6 +32,7 @@ type typedColumnPreparedColumnRequest struct {
 	Role                     typedcolumn.ColumnExecutionRole
 	Operation                columnsemantics.Operation
 	IncludeDictionaries      bool
+	DictionaryValuesByCode   bool
 	IncludeVisibility        bool
 	IncludeStats             bool
 	IncludePruning           bool
@@ -105,20 +106,21 @@ type typedColumnPreparedBlockPlan struct {
 }
 
 type typedColumnPreparedColumnState struct {
-	Plan                  typedColumnPreparedColumnPlan
-	Column                typedcolumn.ColumnPartColumn
-	Section               typedcolumn.ColumnPartImageSection
-	BlockPlans            []typedColumnPreparedBlockPlan
-	Certification         typedcolumn.ColumnPartLayoutContractColumn
-	AggregateReducer      typedkernel.PreparedReducer
-	AggregateReducerReady bool
-	Int64Stats            typedcolumn.Int64ColumnStats
-	Int64StatsReady       bool
-	StatsFallbackReason   string
-	PruningFallbackReason string
-	Int64PruningReady     bool
-	Dictionaries          map[string]int64
-	ReverseDictionaries   map[int64]string
+	Plan                   typedColumnPreparedColumnPlan
+	Column                 typedcolumn.ColumnPartColumn
+	Section                typedcolumn.ColumnPartImageSection
+	BlockPlans             []typedColumnPreparedBlockPlan
+	Certification          typedcolumn.ColumnPartLayoutContractColumn
+	AggregateReducer       typedkernel.PreparedReducer
+	AggregateReducerReady  bool
+	Int64Stats             typedcolumn.Int64ColumnStats
+	Int64StatsReady        bool
+	StatsFallbackReason    string
+	PruningFallbackReason  string
+	Int64PruningReady      bool
+	Dictionaries           map[string]int64
+	ReverseDictionaries    map[int64]string
+	DictionaryValuesByCode []string
 }
 
 type typedColumnPreparedPartState struct {
@@ -201,6 +203,7 @@ func (c *typedColumnPreparedColumnState) close() {
 	c.Int64PruningReady = false
 	c.Dictionaries = nil
 	c.ReverseDictionaries = nil
+	c.DictionaryValuesByCode = nil
 }
 
 func typedColumnPreparedStatePart(state *typedColumnPreparedScanState, ref ColumnAssetRef) (*typedColumnPreparedPartState, bool) {
@@ -1097,13 +1100,24 @@ func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, i
 			}
 			column.ReverseDictionaries = reverse
 		}
+		if mode.ValuesByCode {
+			valuesByCode, ok := decoded.ValuesByCode[adapterColumn.Definition.Name]
+			if !ok {
+				return diag, fmt.Errorf("collections: typed-column prepared dictionaries missing values-by-code dictionary for column %q", adapterColumn.Definition.Name)
+			}
+			if err := validateTypedColumnPreparedValuesByCodeDictionaryForColumn(adapterColumn.Definition.Name, column.Column.Definition.Cardinality, valuesByCode); err != nil {
+				return diag, err
+			}
+			column.DictionaryValuesByCode = valuesByCode
+		}
 	}
 	return diag, nil
 }
 
 type typedColumnPreparedDictionaryRequestMode struct {
-	Forward bool
-	Reverse bool
+	Forward      bool
+	Reverse      bool
+	ValuesByCode bool
 }
 
 func typedColumnPreparedDictionaryRequestNames(requests []typedColumnPreparedColumnRequest) (map[string]struct{}, error) {
@@ -1134,6 +1148,9 @@ func typedColumnPreparedDictionaryRequestModes(requests []typedColumnPreparedCol
 		if typedColumnPreparedDictionaryRequestNeedsForward(request) {
 			mode.Forward = true
 		}
+		if request.DictionaryValuesByCode {
+			mode.ValuesByCode = true
+		}
 		if typedColumnPreparedDictionaryRequestNeedsReverse(request) {
 			mode.Reverse = true
 		}
@@ -1156,6 +1173,9 @@ func typedColumnPreparedDictionaryRequestNeedsForward(request typedColumnPrepare
 }
 
 func typedColumnPreparedDictionaryRequestNeedsReverse(request typedColumnPreparedColumnRequest) bool {
+	if request.DictionaryValuesByCode {
+		return false
+	}
 	switch request.Role {
 	case typedcolumn.ColumnRolePredicate:
 		return false
@@ -1252,8 +1272,9 @@ type typedColumnPreparedDictionaryDecoder struct {
 }
 
 type typedColumnPreparedDecodedDictionaries struct {
-	Forward map[string]map[string]int64
-	Reverse map[string]map[int64]string
+	Forward      map[string]map[string]int64
+	Reverse      map[string]map[int64]string
+	ValuesByCode map[string][]string
 }
 
 func decodeTypedColumnPreparedDictionariesSection(raw []byte) (map[string]map[string]int64, error) {
@@ -1294,8 +1315,9 @@ func decodeTypedColumnPreparedRawDictionariesSection(raw []byte, modes map[strin
 		return typedColumnPreparedDecodedDictionaries{}, fmt.Errorf("collections: typed-column prepared dictionaries count=%d exceeds section bytes=%d", count, len(raw))
 	}
 	out := typedColumnPreparedDecodedDictionaries{
-		Forward: make(map[string]map[string]int64, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Forward })),
-		Reverse: make(map[string]map[int64]string, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Reverse })),
+		Forward:      make(map[string]map[string]int64, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Forward })),
+		Reverse:      make(map[string]map[int64]string, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Reverse })),
+		ValuesByCode: make(map[string][]string, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.ValuesByCode })),
 	}
 	seenNames := make(map[string]struct{}, int(count))
 	for i := 0; i < int(count); i++ {
@@ -1334,6 +1356,12 @@ func decodeTypedColumnPreparedRawDictionariesSection(raw []byte, modes map[strin
 		if mode.Reverse || mode.Forward {
 			codes = make(map[int64]string, int(entryCount))
 		}
+		var valuesByCode []string
+		var valuesByCodeSeen []bool
+		if mode.ValuesByCode {
+			valuesByCode = make([]string, int(entryCount))
+			valuesByCodeSeen = make([]bool, int(entryCount))
+		}
 		for j := 0; j < int(entryCount); j++ {
 			code, err := dec.i64()
 			if err != nil {
@@ -1355,12 +1383,26 @@ func decodeTypedColumnPreparedRawDictionariesSection(raw []byte, modes map[strin
 				}
 				codes[code] = value
 			}
+			if valuesByCode != nil {
+				if code < 0 || uint64(code) >= uint64(len(valuesByCode)) {
+					return typedColumnPreparedDecodedDictionaries{}, fmt.Errorf("collections: typed-column prepared dictionary code %d in %s outside cardinality=%d", code, name, len(valuesByCode))
+				}
+				codeIdx := int(code)
+				if valuesByCodeSeen[codeIdx] {
+					return typedColumnPreparedDecodedDictionaries{}, fmt.Errorf("collections: typed-column prepared duplicate dictionary code %d in %s", code, name)
+				}
+				valuesByCodeSeen[codeIdx] = true
+				valuesByCode[codeIdx] = value
+			}
 		}
 		if mode.Forward {
 			out.Forward[name] = values
 		}
 		if mode.Reverse {
 			out.Reverse[name] = codes
+		}
+		if mode.ValuesByCode {
+			out.ValuesByCode[name] = valuesByCode
 		}
 	}
 	if dec.off != len(raw) {
@@ -1400,8 +1442,9 @@ func decodeTypedColumnPreparedDenseDictionariesSection(raw []byte, modes map[str
 		return typedColumnPreparedDecodedDictionaries{}, fmt.Errorf("collections: typed-column prepared dense dictionaries count=%d exceeds section bytes=%d", count, len(raw))
 	}
 	out := typedColumnPreparedDecodedDictionaries{
-		Forward: make(map[string]map[string]int64, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Forward })),
-		Reverse: make(map[string]map[int64]string, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Reverse })),
+		Forward:      make(map[string]map[string]int64, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Forward })),
+		Reverse:      make(map[string]map[int64]string, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.Reverse })),
+		ValuesByCode: make(map[string][]string, typedColumnPreparedDictionaryDecodeCapacity(int(count), modes, func(mode typedColumnPreparedDictionaryRequestMode) bool { return mode.ValuesByCode })),
 	}
 	seenNames := make(map[string]struct{}, int(count))
 	for i := 0; i < int(count); i++ {
@@ -1437,6 +1480,10 @@ func decodeTypedColumnPreparedDenseDictionariesSection(raw []byte, modes map[str
 		if mode.Reverse {
 			codes = make(map[int64]string, int(entryCount))
 		}
+		var valuesByCode []string
+		if mode.ValuesByCode {
+			valuesByCode = make([]string, int(entryCount))
+		}
 		for j := 0; j < int(entryCount); j++ {
 			value, err := dec.str()
 			if err != nil {
@@ -1451,12 +1498,18 @@ func decodeTypedColumnPreparedDenseDictionariesSection(raw []byte, modes map[str
 			if mode.Reverse {
 				codes[int64(j)] = value
 			}
+			if valuesByCode != nil {
+				valuesByCode[j] = value
+			}
 		}
 		if mode.Forward {
 			out.Forward[name] = values
 		}
 		if mode.Reverse {
 			out.Reverse[name] = codes
+		}
+		if mode.ValuesByCode {
+			out.ValuesByCode[name] = valuesByCode
 		}
 	}
 	if dec.off != len(raw) {
@@ -1484,7 +1537,7 @@ func typedColumnPreparedDictionaryModeFor(modes map[string]typedColumnPreparedDi
 }
 
 func typedColumnPreparedDictionaryModeRequested(mode typedColumnPreparedDictionaryRequestMode) bool {
-	return mode.Forward || mode.Reverse
+	return mode.Forward || mode.Reverse || mode.ValuesByCode
 }
 
 func typedColumnPreparedDictionaryDecodeCapacity(total int, modes map[string]typedColumnPreparedDictionaryRequestMode, include func(typedColumnPreparedDictionaryRequestMode) bool) int {
@@ -1586,6 +1639,23 @@ func validateTypedColumnPreparedReverseDictionaryForColumn(name string, cardinal
 		}
 		if code > 0 && previous >= value {
 			return fmt.Errorf("collections: typed-column prepared reverse dictionary %s is not strictly ordered at code %d (%q >= %q)", name, code, previous, value)
+		}
+		previous = value
+	}
+	return nil
+}
+
+func validateTypedColumnPreparedValuesByCodeDictionaryForColumn(name string, cardinality uint32, valuesByCode []string) error {
+	if cardinality == 0 {
+		return fmt.Errorf("collections: typed-column prepared dictionary %s has zero cardinality", name)
+	}
+	if uint64(len(valuesByCode)) != uint64(cardinality) {
+		return fmt.Errorf("collections: typed-column prepared values-by-code dictionary %s cardinality=%d want %d", name, len(valuesByCode), cardinality)
+	}
+	var previous string
+	for code, value := range valuesByCode {
+		if code > 0 && previous >= value {
+			return fmt.Errorf("collections: typed-column prepared values-by-code dictionary %s is not strictly ordered at code %d (%q >= %q)", name, code, previous, value)
 		}
 		previous = value
 	}

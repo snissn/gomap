@@ -69,6 +69,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	}
 	assertColumnPhysicalQ5DenseResult1950(t, "q5 first one-shot", first, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q5 first", 1, 0, 1, 1, 0)
+	assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(t, col, req)
 
 	second, err := col.RunColumnPhysicalQuery(req)
 	if err != nil {
@@ -221,6 +222,47 @@ func TestColumnPhysicalTypedColumnParallelPartDecodeShapes3158(t *testing.T) {
 				t.Fatalf("parallel part decode=%t want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) {
+	tb.Helper()
+	if col == nil {
+		tb.Fatalf("nil collection")
+	}
+	wantPredicates := collectionTypedColumnOneShotPredicateKey(req)
+	var entry *collectionTypedColumnOneShotCacheEntry
+	col.typedColumnOneShotMu.Lock()
+	for slot, current := range col.typedColumnOneShot {
+		if slot.kind == req.Kind &&
+			slot.groupColumn == req.GroupColumn &&
+			slot.valueColumn == req.ValueColumn &&
+			slot.predicates == wantPredicates {
+			entry = current
+			break
+		}
+	}
+	col.typedColumnOneShotMu.Unlock()
+	if entry == nil {
+		tb.Fatalf("q5 typed-column one-shot cache entry not found")
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	runner := entry.runner
+	if runner == nil {
+		tb.Fatalf("q5 typed-column one-shot cache entry has nil runner")
+	}
+	for partIdx := range runner.parts {
+		dense := runner.parts[partIdx].DenseInt64Span
+		if dense == nil {
+			tb.Fatalf("q5 typed-column one-shot part %d missing dense int64-span state", partIdx)
+		}
+		if len(dense.Dictionary) != dense.Cardinality {
+			tb.Fatalf("q5 typed-column one-shot part %d dictionary values-by-code=%d want cardinality=%d", partIdx, len(dense.Dictionary), dense.Cardinality)
+		}
+		if len(dense.DictionaryByCode) != 0 {
+			tb.Fatalf("q5 typed-column one-shot part %d reverse dictionary retained=%d want 0", partIdx, len(dense.DictionaryByCode))
+		}
 	}
 }
 
