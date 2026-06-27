@@ -1416,7 +1416,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 // routing does not import the typedcolumn data plane directly.
 func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
 	spanPlan, groupPredicate, hasGroupPredicate := columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan)
-	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPart(spanPlan, schemaHash, typedRef, physical, raw)
+	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPart(spanPlan, schemaHash, typedRef, physical, raw, false)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -1504,7 +1504,7 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		part, err := decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
 		return part, true, err
 	case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
-		part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
+		part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, true)
 		return part, true, err
 	default:
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
@@ -1883,7 +1883,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPreparedPart(plan colu
 
 func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64) (columnTypedColumnPhysicalQueryPart, error) {
 	spanPlan, groupPredicate, hasGroupPredicate := columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan)
-	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(spanPlan, summary, typedRef, physical, adapterPart, bytesRead)
+	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(spanPlan, summary, typedRef, physical, adapterPart, bytesRead, false)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -1910,7 +1910,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTy
 	return part, nil
 }
 
-func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64, preapplyPredicates bool) (columnTypedColumnPhysicalQueryPart, error) {
 	groupColumn, groupPartColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, "int64-span group")
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
@@ -1975,6 +1975,17 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 		predicateBlocks += blocks
 	}
 
+	denseSpan := &columnTypedColumnDenseInt64SpanPart{
+		Cardinality:      cardinality,
+		DictionaryByCode: groupColumn.ReverseDictionary,
+		GroupCodes:       groupCodes,
+		GroupValid:       groupValid,
+		Values:           values,
+		Predicates:       predicates,
+	}
+	if preapplyPredicates {
+		preapplyColumnTypedColumnDenseInt64SpanPredicates(denseSpan, summary.Rows)
+	}
 	decodedBlocks := groupBlocks + valueBlocks + predicateBlocks
 	return columnTypedColumnPhysicalQueryPart{
 		Ref:                 typedRef,
@@ -1987,15 +1998,29 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 		GranulesDecoded:     decodedBlocks,
 		DecodedBlocks:       decodedBlocks,
 		DecodedPayloadBytes: groupDecodedBytes + valueDecodedBytes + predicateDecodedBytes,
-		DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
-			Cardinality:      cardinality,
-			DictionaryByCode: groupColumn.ReverseDictionary,
-			GroupCodes:       groupCodes,
-			GroupValid:       groupValid,
-			Values:           values,
-			Predicates:       predicates,
-		},
+		DenseInt64Span:      denseSpan,
 	}, nil
+}
+
+func preapplyColumnTypedColumnDenseInt64SpanPredicates(dense *columnTypedColumnDenseInt64SpanPart, rows int) {
+	if dense == nil || len(dense.Predicates) == 0 || rows <= 0 {
+		return
+	}
+	if uint64(rows) > uint64(^uint32(0)) {
+		return
+	}
+	dense.PredicatesPreApplied = true
+	dense.PreAppliedRowsScanned = rows
+	if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		return
+	}
+	selected := make([]uint32, 0, min(rows, 4096))
+	for rowIdx := 0; rowIdx < rows; rowIdx++ {
+		if columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+			selected = append(selected, uint32(rowIdx))
+		}
+	}
+	dense.PredicateRows = selected
 }
 
 func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
@@ -2780,7 +2805,7 @@ func decodeTypedColumnNullableUint32CodesForRowRange(partColumn typedcolumn.Colu
 // decodeTypedColumnPhysicalQueryDenseInt64SpanPart prepares the q5 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
-func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, preapplyPredicates bool) (columnTypedColumnPhysicalQueryPart, error) {
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
@@ -2864,6 +2889,18 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 		predicateBlocks += blocks
 	}
 
+	denseSpan := &columnTypedColumnDenseInt64SpanPart{
+		Cardinality:      cardinality,
+		DictionaryByCode: groupColumn.ReverseDictionary,
+		GroupCodes:       groupCodes,
+		GroupValid:       groupValid,
+		Values:           values,
+		Predicates:       predicates,
+	}
+	if preapplyPredicates {
+		preapplyColumnTypedColumnDenseInt64SpanPredicates(denseSpan, summary.Rows)
+	}
+
 	decodedBlocks := groupBlocks + valueBlocks + predicateBlocks
 	return columnTypedColumnPhysicalQueryPart{
 		Ref:                 typedRef,
@@ -2876,14 +2913,7 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 		GranulesDecoded:     decodedBlocks,
 		DecodedBlocks:       decodedBlocks,
 		DecodedPayloadBytes: groupDecodedBytes + valueDecodedBytes + predicateDecodedBytes,
-		DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
-			Cardinality:      cardinality,
-			DictionaryByCode: groupColumn.ReverseDictionary,
-			GroupCodes:       groupCodes,
-			GroupValid:       groupValid,
-			Values:           values,
-			Predicates:       predicates,
-		},
+		DenseInt64Span:      denseSpan,
 	}, nil
 }
 
