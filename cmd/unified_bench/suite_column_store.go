@@ -351,6 +351,19 @@ type columnStoreQueryMetric struct {
 	TypedColumnPreparePostDurationMS       float64                           `json:"typed_column_prepare_post_prepare_duration_ms,omitempty"`
 	TypedColumnPrepareSummaryDurationMS    float64                           `json:"typed_column_prepare_summary_duration_ms,omitempty"`
 	TypedColumnOneShotCacheStoreDurationMS float64                           `json:"typed_column_one_shot_cache_store_duration_ms,omitempty"`
+	TypedColumnPrepareReadImageDurationMS  float64                           `json:"typed_column_prepare_read_image_duration_ms,omitempty"`
+	TypedColumnPrepareStateBuildDurationMS float64                           `json:"typed_column_prepare_state_build_duration_ms,omitempty"`
+	TypedColumnPrepareDictionaryDurationMS float64                           `json:"typed_column_prepare_dictionary_duration_ms,omitempty"`
+	TypedColumnPreparePruningDurationMS    float64                           `json:"typed_column_prepare_pruning_duration_ms,omitempty"`
+	TypedColumnPrepareSortKeyDurationMS    float64                           `json:"typed_column_prepare_sort_key_duration_ms,omitempty"`
+	TypedColumnPrepareStatsDurationMS      float64                           `json:"typed_column_prepare_stats_duration_ms,omitempty"`
+	TypedColumnPrepareRangeReadDurationMS  float64                           `json:"typed_column_prepare_range_read_duration_ms,omitempty"`
+	TypedColumnPrepareRangeReadBytes       int64                             `json:"typed_column_prepare_range_read_bytes,omitempty"`
+	TypedColumnPrepareAdapterDurationMS    float64                           `json:"typed_column_prepare_adapter_duration_ms,omitempty"`
+	TypedColumnPrepareDenseGroupDurationMS float64                           `json:"typed_column_prepare_dense_group_duration_ms,omitempty"`
+	TypedColumnPrepareDenseValueDurationMS float64                           `json:"typed_column_prepare_dense_value_duration_ms,omitempty"`
+	TypedColumnPrepareDensePredDurationMS  float64                           `json:"typed_column_prepare_dense_predicate_duration_ms,omitempty"`
+	TypedColumnPrepareDensePreapplyMS      float64                           `json:"typed_column_prepare_dense_preapply_duration_ms,omitempty"`
 	CacheLabel                             string                            `json:"cache_label"`
 	CompressionAttribution                 columnStoreCompressionAttribution `json:"compression_attribution"`
 
@@ -450,6 +463,19 @@ type columnStoreJSONBenchCell struct {
 	TypedColumnPreparePostDurationMS       float64                           `json:"typed_column_prepare_post_prepare_duration_ms,omitempty"`
 	TypedColumnPrepareSummaryDurationMS    float64                           `json:"typed_column_prepare_summary_duration_ms,omitempty"`
 	TypedColumnOneShotCacheStoreDurationMS float64                           `json:"typed_column_one_shot_cache_store_duration_ms,omitempty"`
+	TypedColumnPrepareReadImageDurationMS  float64                           `json:"typed_column_prepare_read_image_duration_ms,omitempty"`
+	TypedColumnPrepareStateBuildDurationMS float64                           `json:"typed_column_prepare_state_build_duration_ms,omitempty"`
+	TypedColumnPrepareDictionaryDurationMS float64                           `json:"typed_column_prepare_dictionary_duration_ms,omitempty"`
+	TypedColumnPreparePruningDurationMS    float64                           `json:"typed_column_prepare_pruning_duration_ms,omitempty"`
+	TypedColumnPrepareSortKeyDurationMS    float64                           `json:"typed_column_prepare_sort_key_duration_ms,omitempty"`
+	TypedColumnPrepareStatsDurationMS      float64                           `json:"typed_column_prepare_stats_duration_ms,omitempty"`
+	TypedColumnPrepareRangeReadDurationMS  float64                           `json:"typed_column_prepare_range_read_duration_ms,omitempty"`
+	TypedColumnPrepareRangeReadBytes       int64                             `json:"typed_column_prepare_range_read_bytes,omitempty"`
+	TypedColumnPrepareAdapterDurationMS    float64                           `json:"typed_column_prepare_adapter_duration_ms,omitempty"`
+	TypedColumnPrepareDenseGroupDurationMS float64                           `json:"typed_column_prepare_dense_group_duration_ms,omitempty"`
+	TypedColumnPrepareDenseValueDurationMS float64                           `json:"typed_column_prepare_dense_value_duration_ms,omitempty"`
+	TypedColumnPrepareDensePredDurationMS  float64                           `json:"typed_column_prepare_dense_predicate_duration_ms,omitempty"`
+	TypedColumnPrepareDensePreapplyMS      float64                           `json:"typed_column_prepare_dense_preapply_duration_ms,omitempty"`
 	PredicateMode                          string                            `json:"predicate_mode"`
 	RealPredicates                         bool                              `json:"real_predicates"`
 	RetainedPayloadPolicyCaveat            string                            `json:"retained_payload_policy_caveat"`
@@ -562,6 +588,19 @@ type columnStoreQueryExecution struct {
 	TypedColumnPreparePostDuration       time.Duration
 	TypedColumnPrepareSummaryDuration    time.Duration
 	TypedColumnOneShotCacheStoreDuration time.Duration
+	TypedColumnPrepareReadImageDuration  time.Duration
+	TypedColumnPrepareStateBuildDuration time.Duration
+	TypedColumnPrepareDictionaryDuration time.Duration
+	TypedColumnPreparePruningDuration    time.Duration
+	TypedColumnPrepareSortKeyDuration    time.Duration
+	TypedColumnPrepareStatsDuration      time.Duration
+	TypedColumnPrepareRangeReadDuration  time.Duration
+	TypedColumnPrepareRangeReadBytes     int64
+	TypedColumnPrepareAdapterDuration    time.Duration
+	TypedColumnPrepareDenseGroupDuration time.Duration
+	TypedColumnPrepareDenseValueDuration time.Duration
+	TypedColumnPrepareDensePredDuration  time.Duration
+	TypedColumnPrepareDensePreapply      time.Duration
 	SetupDuration                        time.Duration
 	HotRunDuration                       time.Duration
 	ScanDuration                         time.Duration
@@ -2014,6 +2053,19 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			TypedColumnPreparePostDurationMS:       durationMS(exec.TypedColumnPreparePostDuration),
 			TypedColumnPrepareSummaryDurationMS:    durationMS(exec.TypedColumnPrepareSummaryDuration),
 			TypedColumnOneShotCacheStoreDurationMS: durationMS(exec.TypedColumnOneShotCacheStoreDuration),
+			TypedColumnPrepareReadImageDurationMS:  durationMS(exec.TypedColumnPrepareReadImageDuration),
+			TypedColumnPrepareStateBuildDurationMS: durationMS(exec.TypedColumnPrepareStateBuildDuration),
+			TypedColumnPrepareDictionaryDurationMS: durationMS(exec.TypedColumnPrepareDictionaryDuration),
+			TypedColumnPreparePruningDurationMS:    durationMS(exec.TypedColumnPreparePruningDuration),
+			TypedColumnPrepareSortKeyDurationMS:    durationMS(exec.TypedColumnPrepareSortKeyDuration),
+			TypedColumnPrepareStatsDurationMS:      durationMS(exec.TypedColumnPrepareStatsDuration),
+			TypedColumnPrepareRangeReadDurationMS:  durationMS(exec.TypedColumnPrepareRangeReadDuration),
+			TypedColumnPrepareRangeReadBytes:       exec.TypedColumnPrepareRangeReadBytes,
+			TypedColumnPrepareAdapterDurationMS:    durationMS(exec.TypedColumnPrepareAdapterDuration),
+			TypedColumnPrepareDenseGroupDurationMS: durationMS(exec.TypedColumnPrepareDenseGroupDuration),
+			TypedColumnPrepareDenseValueDurationMS: durationMS(exec.TypedColumnPrepareDenseValueDuration),
+			TypedColumnPrepareDensePredDurationMS:  durationMS(exec.TypedColumnPrepareDensePredDuration),
+			TypedColumnPrepareDensePreapplyMS:      durationMS(exec.TypedColumnPrepareDensePreapply),
 			CacheLabel:                             "reopened_warm_process",
 			CompressionAttribution: columnStoreQueryCompressionAttribution(
 				planLabel,
@@ -2457,6 +2509,19 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		TypedColumnPreparePostDuration:       time.Duration(diag.TypedColumnPreparePostPrepareNanos),
 		TypedColumnPrepareSummaryDuration:    time.Duration(diag.TypedColumnPrepareSummaryNanos),
 		TypedColumnOneShotCacheStoreDuration: time.Duration(diag.TypedColumnOneShotCacheStoreNanos),
+		TypedColumnPrepareReadImageDuration:  time.Duration(diag.TypedColumnPrepareReadImageNanos),
+		TypedColumnPrepareStateBuildDuration: time.Duration(diag.TypedColumnPrepareStateBuildNanos),
+		TypedColumnPrepareDictionaryDuration: time.Duration(diag.TypedColumnPrepareDictionaryNanos),
+		TypedColumnPreparePruningDuration:    time.Duration(diag.TypedColumnPreparePruningNanos),
+		TypedColumnPrepareSortKeyDuration:    time.Duration(diag.TypedColumnPrepareSortKeyNanos),
+		TypedColumnPrepareStatsDuration:      time.Duration(diag.TypedColumnPrepareStatsNanos),
+		TypedColumnPrepareRangeReadDuration:  time.Duration(diag.TypedColumnPrepareRangeReadNanos),
+		TypedColumnPrepareRangeReadBytes:     diag.TypedColumnPrepareRangeReadBytes,
+		TypedColumnPrepareAdapterDuration:    time.Duration(diag.TypedColumnPrepareAdapterNanos),
+		TypedColumnPrepareDenseGroupDuration: time.Duration(diag.TypedColumnPrepareDenseGroupNanos),
+		TypedColumnPrepareDenseValueDuration: time.Duration(diag.TypedColumnPrepareDenseValueNanos),
+		TypedColumnPrepareDensePredDuration:  time.Duration(diag.TypedColumnPrepareDensePredicateNanos),
+		TypedColumnPrepareDensePreapply:      time.Duration(diag.TypedColumnPrepareDensePreapplyNanos),
 		HotRunDuration:                       elapsed,
 		ScanDuration:                         scanDuration,
 		ReduceDuration:                       reduceDuration,
@@ -2572,6 +2637,19 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 		TypedColumnPreparePostDuration:       time.Duration(setupDiagnostics.TypedColumnPreparePostPrepareNanos),
 		TypedColumnPrepareSummaryDuration:    time.Duration(setupDiagnostics.TypedColumnPrepareSummaryNanos),
 		TypedColumnOneShotCacheStoreDuration: time.Duration(setupDiagnostics.TypedColumnOneShotCacheStoreNanos),
+		TypedColumnPrepareReadImageDuration:  time.Duration(setupDiagnostics.TypedColumnPrepareReadImageNanos),
+		TypedColumnPrepareStateBuildDuration: time.Duration(setupDiagnostics.TypedColumnPrepareStateBuildNanos),
+		TypedColumnPrepareDictionaryDuration: time.Duration(setupDiagnostics.TypedColumnPrepareDictionaryNanos),
+		TypedColumnPreparePruningDuration:    time.Duration(setupDiagnostics.TypedColumnPreparePruningNanos),
+		TypedColumnPrepareSortKeyDuration:    time.Duration(setupDiagnostics.TypedColumnPrepareSortKeyNanos),
+		TypedColumnPrepareStatsDuration:      time.Duration(setupDiagnostics.TypedColumnPrepareStatsNanos),
+		TypedColumnPrepareRangeReadDuration:  time.Duration(setupDiagnostics.TypedColumnPrepareRangeReadNanos),
+		TypedColumnPrepareRangeReadBytes:     setupDiagnostics.TypedColumnPrepareRangeReadBytes,
+		TypedColumnPrepareAdapterDuration:    time.Duration(setupDiagnostics.TypedColumnPrepareAdapterNanos),
+		TypedColumnPrepareDenseGroupDuration: time.Duration(setupDiagnostics.TypedColumnPrepareDenseGroupNanos),
+		TypedColumnPrepareDenseValueDuration: time.Duration(setupDiagnostics.TypedColumnPrepareDenseValueNanos),
+		TypedColumnPrepareDensePredDuration:  time.Duration(setupDiagnostics.TypedColumnPrepareDensePredicateNanos),
+		TypedColumnPrepareDensePreapply:      time.Duration(setupDiagnostics.TypedColumnPrepareDensePreapplyNanos),
 		SetupDuration:                        setupElapsed,
 		HotRunDuration:                       hotRunElapsed,
 		ScanDuration:                         scanDuration,
@@ -3006,6 +3084,19 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.TypedColumnPreparePostDurationMS = q.TypedColumnPreparePostDurationMS
 	cell.TypedColumnPrepareSummaryDurationMS = q.TypedColumnPrepareSummaryDurationMS
 	cell.TypedColumnOneShotCacheStoreDurationMS = q.TypedColumnOneShotCacheStoreDurationMS
+	cell.TypedColumnPrepareReadImageDurationMS = q.TypedColumnPrepareReadImageDurationMS
+	cell.TypedColumnPrepareStateBuildDurationMS = q.TypedColumnPrepareStateBuildDurationMS
+	cell.TypedColumnPrepareDictionaryDurationMS = q.TypedColumnPrepareDictionaryDurationMS
+	cell.TypedColumnPreparePruningDurationMS = q.TypedColumnPreparePruningDurationMS
+	cell.TypedColumnPrepareSortKeyDurationMS = q.TypedColumnPrepareSortKeyDurationMS
+	cell.TypedColumnPrepareStatsDurationMS = q.TypedColumnPrepareStatsDurationMS
+	cell.TypedColumnPrepareRangeReadDurationMS = q.TypedColumnPrepareRangeReadDurationMS
+	cell.TypedColumnPrepareRangeReadBytes = q.TypedColumnPrepareRangeReadBytes
+	cell.TypedColumnPrepareAdapterDurationMS = q.TypedColumnPrepareAdapterDurationMS
+	cell.TypedColumnPrepareDenseGroupDurationMS = q.TypedColumnPrepareDenseGroupDurationMS
+	cell.TypedColumnPrepareDenseValueDurationMS = q.TypedColumnPrepareDenseValueDurationMS
+	cell.TypedColumnPrepareDensePredDurationMS = q.TypedColumnPrepareDensePredDurationMS
+	cell.TypedColumnPrepareDensePreapplyMS = q.TypedColumnPrepareDensePreapplyMS
 	cell.ScanDurationMS = q.ScanDurationMS
 	cell.ReduceDurationMS = q.ReduceDurationMS
 	cell.ResultShapeDurationMS = q.AdapterDurationMS
@@ -3112,6 +3203,19 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.TypedColumnPreparePostDurationMS = durationMS(exec.TypedColumnPreparePostDuration)
 	cell.TypedColumnPrepareSummaryDurationMS = durationMS(exec.TypedColumnPrepareSummaryDuration)
 	cell.TypedColumnOneShotCacheStoreDurationMS = durationMS(exec.TypedColumnOneShotCacheStoreDuration)
+	cell.TypedColumnPrepareReadImageDurationMS = durationMS(exec.TypedColumnPrepareReadImageDuration)
+	cell.TypedColumnPrepareStateBuildDurationMS = durationMS(exec.TypedColumnPrepareStateBuildDuration)
+	cell.TypedColumnPrepareDictionaryDurationMS = durationMS(exec.TypedColumnPrepareDictionaryDuration)
+	cell.TypedColumnPreparePruningDurationMS = durationMS(exec.TypedColumnPreparePruningDuration)
+	cell.TypedColumnPrepareSortKeyDurationMS = durationMS(exec.TypedColumnPrepareSortKeyDuration)
+	cell.TypedColumnPrepareStatsDurationMS = durationMS(exec.TypedColumnPrepareStatsDuration)
+	cell.TypedColumnPrepareRangeReadDurationMS = durationMS(exec.TypedColumnPrepareRangeReadDuration)
+	cell.TypedColumnPrepareRangeReadBytes = exec.TypedColumnPrepareRangeReadBytes
+	cell.TypedColumnPrepareAdapterDurationMS = durationMS(exec.TypedColumnPrepareAdapterDuration)
+	cell.TypedColumnPrepareDenseGroupDurationMS = durationMS(exec.TypedColumnPrepareDenseGroupDuration)
+	cell.TypedColumnPrepareDenseValueDurationMS = durationMS(exec.TypedColumnPrepareDenseValueDuration)
+	cell.TypedColumnPrepareDensePredDurationMS = durationMS(exec.TypedColumnPrepareDensePredDuration)
+	cell.TypedColumnPrepareDensePreapplyMS = durationMS(exec.TypedColumnPrepareDensePreapply)
 	cell.MetadataHits = exec.MetadataHits
 	cell.RowsScanned = exec.RowsScanned
 	cell.RowsMatched = exec.RowsMatched
@@ -4334,6 +4438,7 @@ func renderColumnStoreSuiteMarkdown(report columnStoreSuiteReport) string {
 	renderColumnStoreInsertStatsMarkdown(&sb, report.InsertStats)
 	renderColumnStoreMetadataCostMarkdown(&sb, report.MetadataCost)
 	renderColumnStoreJSONBenchCellsMarkdown(&sb, report)
+	renderColumnStoreTypedColumnSetupDiagnosticsMarkdown(&sb, report)
 	renderColumnStoreColgranuleReuseMarkdown(&sb, report)
 
 	renderColumnStoreQueryMetricsMarkdown(&sb, "Query Throughput And Parity", report.Queries, report.Parity)
@@ -4643,6 +4748,81 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		))
 	}
 	sb.WriteString("\n")
+}
+
+func renderColumnStoreTypedColumnSetupDiagnosticsMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {
+	hasDiagnostics := false
+	for _, cell := range report.JSONBenchCells {
+		if columnStoreJSONBenchCellHasTypedColumnSetupDiagnostics(cell) {
+			hasDiagnostics = true
+			break
+		}
+	}
+	if !hasDiagnostics {
+		return
+	}
+	sb.WriteString("## Typed Column Setup Diagnostics\n\n")
+	sb.WriteString("| cell | query | mode | query mode | metadata mode | prepare/setup ms | one-shot build ms | prep plan ms | prep refs ms | prep pair ms | prep decode ms | prep post ms | prep summary ms | cache store ms | read image ms | state build ms | dictionary ms | pruning ms | sort key ms | stats ms | range read ms | range read B | adapter ms | dense group ms | dense value ms | dense predicate ms | dense preapply ms |\n")
+	sb.WriteString("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	for _, cell := range report.JSONBenchCells {
+		if !columnStoreJSONBenchCellHasTypedColumnSetupDiagnostics(cell) {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
+			markdownCodeTableText(cell.CellLabel),
+			markdownCodeTableText(cell.Query),
+			markdownCodeTableText(cell.ExecutionMode),
+			markdownCodeTableText(cell.QueryMode),
+			markdownCodeTableText(cell.MetadataMode),
+			cell.PrepareSetupDurationMS,
+			cell.TypedColumnOneShotBuildDurationMS,
+			cell.TypedColumnPreparePlanDurationMS,
+			cell.TypedColumnPrepareRefsDurationMS,
+			cell.TypedColumnPreparePairDurationMS,
+			cell.TypedColumnPrepareDecodeDurationMS,
+			cell.TypedColumnPreparePostDurationMS,
+			cell.TypedColumnPrepareSummaryDurationMS,
+			cell.TypedColumnOneShotCacheStoreDurationMS,
+			cell.TypedColumnPrepareReadImageDurationMS,
+			cell.TypedColumnPrepareStateBuildDurationMS,
+			cell.TypedColumnPrepareDictionaryDurationMS,
+			cell.TypedColumnPreparePruningDurationMS,
+			cell.TypedColumnPrepareSortKeyDurationMS,
+			cell.TypedColumnPrepareStatsDurationMS,
+			cell.TypedColumnPrepareRangeReadDurationMS,
+			cell.TypedColumnPrepareRangeReadBytes,
+			cell.TypedColumnPrepareAdapterDurationMS,
+			cell.TypedColumnPrepareDenseGroupDurationMS,
+			cell.TypedColumnPrepareDenseValueDurationMS,
+			cell.TypedColumnPrepareDensePredDurationMS,
+			cell.TypedColumnPrepareDensePreapplyMS,
+		))
+	}
+	sb.WriteString("\n")
+}
+
+func columnStoreJSONBenchCellHasTypedColumnSetupDiagnostics(cell columnStoreJSONBenchCell) bool {
+	return cell.TypedColumnOneShotBuildDurationMS != 0 ||
+		cell.TypedColumnPreparePlanDurationMS != 0 ||
+		cell.TypedColumnPrepareRefsDurationMS != 0 ||
+		cell.TypedColumnPreparePairDurationMS != 0 ||
+		cell.TypedColumnPrepareDecodeDurationMS != 0 ||
+		cell.TypedColumnPreparePostDurationMS != 0 ||
+		cell.TypedColumnPrepareSummaryDurationMS != 0 ||
+		cell.TypedColumnOneShotCacheStoreDurationMS != 0 ||
+		cell.TypedColumnPrepareReadImageDurationMS != 0 ||
+		cell.TypedColumnPrepareStateBuildDurationMS != 0 ||
+		cell.TypedColumnPrepareDictionaryDurationMS != 0 ||
+		cell.TypedColumnPreparePruningDurationMS != 0 ||
+		cell.TypedColumnPrepareSortKeyDurationMS != 0 ||
+		cell.TypedColumnPrepareStatsDurationMS != 0 ||
+		cell.TypedColumnPrepareRangeReadDurationMS != 0 ||
+		cell.TypedColumnPrepareRangeReadBytes != 0 ||
+		cell.TypedColumnPrepareAdapterDurationMS != 0 ||
+		cell.TypedColumnPrepareDenseGroupDurationMS != 0 ||
+		cell.TypedColumnPrepareDenseValueDurationMS != 0 ||
+		cell.TypedColumnPrepareDensePredDurationMS != 0 ||
+		cell.TypedColumnPrepareDensePreapplyMS != 0
 }
 
 func renderColumnStoreColgranuleReuseMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {

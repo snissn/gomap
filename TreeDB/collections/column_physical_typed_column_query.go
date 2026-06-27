@@ -217,6 +217,9 @@ type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
 	ReadImageNanos      int64
 	StateBuildNanos     int64
 	DictionaryNanos     int64
+	PruningNanos        int64
+	SortKeyNanos        int64
+	StatsNanos          int64
 	RangeReadNanos      int64
 	RangeReadBytes      int64
 	AdapterNanos        int64
@@ -239,6 +242,9 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 	diag.TypedColumnPrepareReadImageNanos += d.ReadImageNanos
 	diag.TypedColumnPrepareStateBuildNanos += d.StateBuildNanos
 	diag.TypedColumnPrepareDictionaryNanos += d.DictionaryNanos
+	diag.TypedColumnPreparePruningNanos += d.PruningNanos
+	diag.TypedColumnPrepareSortKeyNanos += d.SortKeyNanos
+	diag.TypedColumnPrepareStatsNanos += d.StatsNanos
 	diag.TypedColumnPrepareRangeReadNanos += d.RangeReadNanos
 	diag.TypedColumnPrepareRangeReadBytes += d.RangeReadBytes
 	diag.TypedColumnPrepareAdapterNanos += d.AdapterNanos
@@ -261,6 +267,9 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 	d.ReadImageNanos += src.ReadImageNanos
 	d.StateBuildNanos += src.StateBuildNanos
 	d.DictionaryNanos += src.DictionaryNanos
+	d.PruningNanos += src.PruningNanos
+	d.SortKeyNanos += src.SortKeyNanos
+	d.StatsNanos += src.StatsNanos
 	d.RangeReadNanos += src.RangeReadNanos
 	d.RangeReadBytes += src.RangeReadBytes
 	d.AdapterNanos += src.AdapterNanos

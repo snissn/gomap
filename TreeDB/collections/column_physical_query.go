@@ -193,6 +193,9 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPrepareReadImageNanos      int64
 	TypedColumnPrepareStateBuildNanos     int64
 	TypedColumnPrepareDictionaryNanos     int64
+	TypedColumnPreparePruningNanos        int64
+	TypedColumnPrepareSortKeyNanos        int64
+	TypedColumnPrepareStatsNanos          int64
 	TypedColumnPrepareRangeReadNanos      int64
 	TypedColumnPrepareRangeReadBytes      int64
 	TypedColumnPrepareAdapterNanos        int64
@@ -1459,6 +1462,9 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.TypedColumnPrepareReadImageNanos += right.TypedColumnPrepareReadImageNanos
 	left.TypedColumnPrepareStateBuildNanos += right.TypedColumnPrepareStateBuildNanos
 	left.TypedColumnPrepareDictionaryNanos += right.TypedColumnPrepareDictionaryNanos
+	left.TypedColumnPreparePruningNanos += right.TypedColumnPreparePruningNanos
+	left.TypedColumnPrepareSortKeyNanos += right.TypedColumnPrepareSortKeyNanos
+	left.TypedColumnPrepareStatsNanos += right.TypedColumnPrepareStatsNanos
 	left.TypedColumnPrepareRangeReadNanos += right.TypedColumnPrepareRangeReadNanos
 	left.TypedColumnPrepareRangeReadBytes += right.TypedColumnPrepareRangeReadBytes
 	left.TypedColumnPrepareAdapterNanos += right.TypedColumnPrepareAdapterNanos

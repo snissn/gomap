@@ -2451,6 +2451,19 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		TypedColumnPreparePostDurationMS:       0.013,
 		TypedColumnPrepareSummaryDurationMS:    0.014,
 		TypedColumnOneShotCacheStoreDurationMS: 0.015,
+		TypedColumnPrepareReadImageDurationMS:  0.016,
+		TypedColumnPrepareStateBuildDurationMS: 0.017,
+		TypedColumnPrepareDictionaryDurationMS: 0.018,
+		TypedColumnPreparePruningDurationMS:    0.019,
+		TypedColumnPrepareSortKeyDurationMS:    0.020,
+		TypedColumnPrepareStatsDurationMS:      0.021,
+		TypedColumnPrepareRangeReadDurationMS:  0.022,
+		TypedColumnPrepareRangeReadBytes:       256,
+		TypedColumnPrepareAdapterDurationMS:    0.023,
+		TypedColumnPrepareDenseGroupDurationMS: 0.024,
+		TypedColumnPrepareDenseValueDurationMS: 0.025,
+		TypedColumnPrepareDensePredDurationMS:  0.026,
+		TypedColumnPrepareDensePreapplyMS:      0.027,
 		CompressionAttribution: columnStoreCompressionAttribution{
 			CompressionPolicyLabel: "default",
 			RequestedCompression:   "snappy",
@@ -2493,11 +2506,62 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	if got, want := cell.TypedColumnPreparePlanDurationMS, q.TypedColumnPreparePlanDurationMS; got != want {
 		t.Fatalf("typed_column_prepare_plan_duration_ms=%v want %v", got, want)
 	}
+	if got, want := cell.TypedColumnPrepareRefsDurationMS, q.TypedColumnPrepareRefsDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_refs_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPreparePairDurationMS, q.TypedColumnPreparePairDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_pairing_duration_ms=%v want %v", got, want)
+	}
 	if got, want := cell.TypedColumnPrepareDecodeDurationMS, q.TypedColumnPrepareDecodeDurationMS; got != want {
 		t.Fatalf("typed_column_prepare_part_decode_duration_ms=%v want %v", got, want)
 	}
+	if got, want := cell.TypedColumnPreparePostDurationMS, q.TypedColumnPreparePostDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_post_prepare_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareSummaryDurationMS, q.TypedColumnPrepareSummaryDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_summary_duration_ms=%v want %v", got, want)
+	}
 	if got, want := cell.TypedColumnOneShotCacheStoreDurationMS, q.TypedColumnOneShotCacheStoreDurationMS; got != want {
 		t.Fatalf("typed_column_one_shot_cache_store_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareReadImageDurationMS, q.TypedColumnPrepareReadImageDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_read_image_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareStateBuildDurationMS, q.TypedColumnPrepareStateBuildDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_state_build_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDictionaryDurationMS, q.TypedColumnPrepareDictionaryDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dictionary_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPreparePruningDurationMS, q.TypedColumnPreparePruningDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_pruning_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareSortKeyDurationMS, q.TypedColumnPrepareSortKeyDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_sort_key_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareStatsDurationMS, q.TypedColumnPrepareStatsDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_stats_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareRangeReadDurationMS, q.TypedColumnPrepareRangeReadDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_range_read_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareRangeReadBytes, q.TypedColumnPrepareRangeReadBytes; got != want {
+		t.Fatalf("typed_column_prepare_range_read_bytes=%d want %d", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareAdapterDurationMS, q.TypedColumnPrepareAdapterDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_adapter_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDenseGroupDurationMS, q.TypedColumnPrepareDenseGroupDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_group_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDenseValueDurationMS, q.TypedColumnPrepareDenseValueDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_value_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDensePredDurationMS, q.TypedColumnPrepareDensePredDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_predicate_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDensePreapplyMS, q.TypedColumnPrepareDensePreapplyMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_preapply_duration_ms=%v want %v", got, want)
 	}
 	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
 		t.Fatalf("rows_scanned=%d want %d", got, want)

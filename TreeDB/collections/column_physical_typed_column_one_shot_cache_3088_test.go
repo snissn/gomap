@@ -305,11 +305,57 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 		diag.TypedColumnPreparePartDecodeNanos +
 		diag.TypedColumnPreparePostPrepareNanos +
 		diag.TypedColumnPrepareSummaryNanos +
-		diag.TypedColumnOneShotCacheStoreNanos
+		diag.TypedColumnOneShotCacheStoreNanos +
+		diag.TypedColumnPrepareReadImageNanos +
+		diag.TypedColumnPrepareStateBuildNanos +
+		diag.TypedColumnPrepareDictionaryNanos +
+		diag.TypedColumnPreparePruningNanos +
+		diag.TypedColumnPrepareSortKeyNanos +
+		diag.TypedColumnPrepareStatsNanos +
+		diag.TypedColumnPrepareRangeReadNanos +
+		diag.TypedColumnPrepareAdapterNanos +
+		diag.TypedColumnPrepareDenseGroupNanos +
+		diag.TypedColumnPrepareDenseValueNanos +
+		diag.TypedColumnPrepareDensePredicateNanos +
+		diag.TypedColumnPrepareDensePreapplyNanos
 	if wantBuild {
-		if diag.TypedColumnOneShotBuildNanos <= 0 || prepareNanos <= 0 || diag.TypedColumnPreparePartDecodeNanos <= 0 {
+		if diag.TypedColumnOneShotBuildNanos <= 0 ||
+			prepareNanos <= 0 ||
+			diag.TypedColumnPreparePartDecodeNanos <= 0 {
 			tb.Fatalf("%s typed-column one-shot setup nanos build=%d prepare_sum=%d part_decode=%d diagnostics=%+v",
-				label, diag.TypedColumnOneShotBuildNanos, prepareNanos, diag.TypedColumnPreparePartDecodeNanos, diag)
+				label,
+				diag.TypedColumnOneShotBuildNanos,
+				prepareNanos,
+				diag.TypedColumnPreparePartDecodeNanos,
+				diag)
+		}
+		if diag.DenseInt64SpanUsed {
+			fineCoreNanos := diag.TypedColumnPrepareReadImageNanos +
+				diag.TypedColumnPrepareStateBuildNanos +
+				diag.TypedColumnPrepareDictionaryNanos +
+				diag.TypedColumnPrepareRangeReadNanos +
+				diag.TypedColumnPrepareAdapterNanos
+			denseNanos := diag.TypedColumnPrepareDenseGroupNanos +
+				diag.TypedColumnPrepareDenseValueNanos +
+				diag.TypedColumnPrepareDensePredicateNanos +
+				diag.TypedColumnPrepareDensePreapplyNanos
+			if fineCoreNanos <= 0 ||
+				diag.TypedColumnPrepareRangeReadBytes <= 0 ||
+				denseNanos <= 0 ||
+				diag.TypedColumnPrepareDenseGroupNanos <= 0 ||
+				diag.TypedColumnPrepareDenseValueNanos <= 0 ||
+				diag.TypedColumnPrepareDensePredicateNanos <= 0 {
+				tb.Fatalf("%s typed-column dense setup nanos fine_core=%d range_read_bytes=%d total=%d group=%d value=%d predicate=%d preapply=%d diagnostics=%+v",
+					label,
+					fineCoreNanos,
+					diag.TypedColumnPrepareRangeReadBytes,
+					denseNanos,
+					diag.TypedColumnPrepareDenseGroupNanos,
+					diag.TypedColumnPrepareDenseValueNanos,
+					diag.TypedColumnPrepareDensePredicateNanos,
+					diag.TypedColumnPrepareDensePreapplyNanos,
+					diag)
+			}
 		}
 		return
 	}

@@ -116,7 +116,6 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, candidate, err
 	}
-	cacheStoreStart := time.Now()
 	entry = &collectionTypedColumnOneShotCacheEntry{slot: slot, runner: runner}
 
 	c.typedColumnOneShotMu.Lock()
@@ -132,11 +131,12 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		result, err := current.run(view, req)
 		result.Diagnostics.TypedColumnOneShotCacheMiss = true
 		result.Diagnostics.TypedColumnOneShotCacheBuild = true
-		applyColumnTypedColumnOneShotBuildDiagnostics(&result, runner, buildNanos, time.Since(cacheStoreStart).Nanoseconds())
+		applyColumnTypedColumnOneShotBuildDiagnostics(&result, runner, buildNanos, 0)
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
 	var evicted *collectionTypedColumnOneShotCacheEntry
+	cacheStoreStart := time.Now()
 	if len(c.typedColumnOneShot) >= collectionTypedColumnOneShotCacheMaxEntries {
 		evicted = collectionTypedColumnOneShotEvictOldest(c.typedColumnOneShot)
 		c.typedColumnOneShotInvalidations++
@@ -144,6 +144,7 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 	c.typedColumnOneShotClock++
 	entry.lastUse = c.typedColumnOneShotClock
 	c.typedColumnOneShot[slot] = entry
+	cacheStoreNanos := time.Since(cacheStoreStart).Nanoseconds()
 	c.typedColumnOneShotMu.Unlock()
 	if evicted != nil {
 		evicted.close()
@@ -159,11 +160,10 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		result := ColumnPhysicalQueryResult{}
 		result.Diagnostics.TypedColumnOneShotCacheMiss = true
 		result.Diagnostics.TypedColumnOneShotCacheBuild = true
-		applyColumnTypedColumnOneShotBuildDiagnostics(&result, runner, buildNanos, time.Since(cacheStoreStart).Nanoseconds())
+		applyColumnTypedColumnOneShotBuildDiagnostics(&result, runner, buildNanos, cacheStoreNanos)
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, backenddb.ErrClosed
 	}
-	cacheStoreNanos := time.Since(cacheStoreStart).Nanoseconds()
 
 	result, err := entry.run(view, req)
 	result.Diagnostics.TypedColumnOneShotCacheMiss = true

@@ -1457,9 +1457,10 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		return columnTypedColumnPhysicalQueryPart{}, ok, err
 	}
 	reader := &columnTypedColumnPhysicalRangePartReader{
-		readCache: readCache,
-		ref:       typedRef.Ref,
-		integrity: req.ColumnAssetReadIntegrity,
+		readCache:          readCache,
+		ref:                typedRef.Ref,
+		integrity:          req.ColumnAssetReadIntegrity,
+		measureDiagnostics: prepareDiagnostics != nil,
 	}
 	if err := reader.ensureFullAssetValidated(); err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, true, err
@@ -1469,6 +1470,9 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		prepareDiagnostics.ReadImageNanos += diag.ReadImageNanos
 		prepareDiagnostics.StateBuildNanos += diag.StateBuildNanos
 		prepareDiagnostics.DictionaryNanos += diag.DictionaryNanos
+		prepareDiagnostics.PruningNanos += diag.PruningNanos
+		prepareDiagnostics.SortKeyNanos += diag.SortKeyNanos
+		prepareDiagnostics.StatsNanos += diag.StatsNanos
 	}
 	if err != nil {
 		if prepareDiagnostics != nil {
@@ -1494,10 +1498,17 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	}
 	summary, err := typedColumnPhysicalQueryPreparedSummary(prepared, plan, typedRef, physical)
 	if err != nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
 	if columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req) {
-		adapterStart := time.Now()
+		var adapterStart time.Time
+		if prepareDiagnostics != nil {
+			adapterStart = time.Now()
+		}
 		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{LazyPayloads: !opts.eagerTimeOrderTopKPayloads})
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
@@ -1520,7 +1531,10 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		}
 		return part, true, err
 	}
-	adapterStart := time.Now()
+	var adapterStart time.Time
+	if prepareDiagnostics != nil {
+		adapterStart = time.Now()
+	}
 	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPart(prepared, plan.Fields, reader.readRange)
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
@@ -1571,11 +1585,12 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 }
 
 type columnTypedColumnPhysicalRangePartReader struct {
-	readCache *columnPhysicalAssetReadCache
-	ref       ColumnAssetRef
-	integrity ColumnAssetReadIntegrity
-	bytesRead int64
-	readNanos int64
+	readCache          *columnPhysicalAssetReadCache
+	ref                ColumnAssetRef
+	integrity          ColumnAssetReadIntegrity
+	bytesRead          int64
+	readNanos          int64
+	measureDiagnostics bool
 }
 
 func (r *columnTypedColumnPhysicalRangePartReader) ensureFullAssetValidated() error {
@@ -1600,9 +1615,14 @@ func (r *columnTypedColumnPhysicalRangePartReader) readRange(offset int, length 
 	if offset < 0 || length <= 0 {
 		return nil, fmt.Errorf("collections: typed-column physical range offset=%d length=%d is invalid", offset, length)
 	}
-	readStart := time.Now()
+	var readStart time.Time
+	if r.measureDiagnostics {
+		readStart = time.Now()
+	}
 	raw, err := r.readCache.readRange(r.ref, int64(offset), int64(length))
-	r.readNanos += time.Since(readStart).Nanoseconds()
+	if r.measureDiagnostics {
+		r.readNanos += time.Since(readStart).Nanoseconds()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2004,7 +2024,10 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 	var groupValid []bool
 	var groupDecodedBytes uint64
 	var groupBlocks int
-	phaseStart := time.Now()
+	var phaseStart time.Time
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	if groupColumn.Field.Nullable {
 		groupCodes, groupValid, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseNullableUint32Codes(groupPartColumn, cardinality, summary.Rows, "int64-span group")
 		if err != nil {
@@ -2019,7 +2042,9 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
 	}
-	phaseStart = time.Now()
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	values, valueDecodedBytes, valueBlocks, err := decodeTypedColumnDenseInt64Values(valuePartColumn, summary.Rows, "int64-span value")
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.DenseValueNanos += time.Since(phaseStart).Nanoseconds()
@@ -2034,7 +2059,9 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 	predicates := make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
 	predicateDecodedBytes := uint64(0)
 	predicateBlocks := 0
-	phaseStart = time.Now()
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	for _, spec := range plan.PredicateSpecs {
 		predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
 		if err != nil {
@@ -2057,7 +2084,9 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 		Predicates:       predicates,
 	}
 	if preapplyPredicates {
-		phaseStart = time.Now()
+		if prepareDiagnostics != nil {
+			phaseStart = time.Now()
+		}
 		preapplyColumnTypedColumnDenseInt64SpanPredicates(denseSpan, summary.Rows)
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.DensePreapplyNanos += time.Since(phaseStart).Nanoseconds()
