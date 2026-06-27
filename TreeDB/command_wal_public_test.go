@@ -1360,6 +1360,30 @@ func TestPublicCommandWALBatchPayloadSoftCapAccountsForCompactZeroMaterializatio
 	}
 }
 
+func TestPublicCommandWALBatchPayloadSoftCapAccountsForCompactZeroRetainedBuffers(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 64
+
+	key := bytes.Repeat([]byte("k"), 80)
+	value := []byte{0}
+	if err := wrapped.SetView(key, value); err != nil {
+		t.Fatalf("SetView large compact-zero key: %v", err)
+	}
+	if !wrapped.payloadBypass {
+		t.Fatal("compact-zero append did not bypass retained compact buffers")
+	}
+	if wrapped.payload.Count() != 0 || wrapped.opCount != 1 {
+		t.Fatalf("payload count=%d opCount=%d, want 0/1", wrapped.payload.Count(), wrapped.opCount)
+	}
+	if inner.setViewCalls != 0 || inner.setCalls != 1 {
+		t.Fatalf("inner calls after compact buffer bypass: setView=%d set=%d, want 0/1", inner.setViewCalls, inner.setCalls)
+	}
+	if got := wrapped.payload.RetainedCap(); got > wrapped.payloadSoftCapBytes {
+		t.Fatalf("retained canonical payload cap=%d, soft_cap=%d", got, wrapped.payloadSoftCapBytes)
+	}
+}
+
 func TestPublicCommandWALBatchPayloadSoftCapBoundsLargeValueBuilder(t *testing.T) {
 	inner := &commandWALPayloadSoftCapBatch{}
 	wrapped := newCommandWALPublicBatch(nil, inner, 0)

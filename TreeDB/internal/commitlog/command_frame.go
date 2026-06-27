@@ -258,9 +258,10 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppend(needed int) (int, erro
 	return newCap, err
 }
 
-// RetainedCapAfterAppendSet returns the canonical payload backing capacity that
-// AppendSet would retain. If the append must expand compact-zero sets first,
-// the returned capacity includes that materialization.
+// RetainedCapAfterAppendSet returns the payload-builder backing capacity that
+// AppendSet would retain. If the append stays compact-zero, the returned
+// capacity includes the compact-zero payload and zero-value view buffers. If the
+// append must expand compact-zero sets first, it includes that materialization.
 func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendSet(key, value []byte) (int, error) {
 	if b == nil {
 		return 0, nil
@@ -272,20 +273,20 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendSet(key, value []byte) 
 		return 0, ErrRecordTooLarge
 	}
 	if b.zeroSetCompactOnly && b.canAppendCompactZeroSet(value) {
-		if err := b.validateCompactZeroSetAppend(key); err != nil {
-			return 0, err
-		}
-		_, payloadCap := b.payloadLenCapForAppend()
-		return payloadCap, nil
+		return b.retainedCapAfterCompactZeroSetAppend(key, value)
 	}
 	needed := rawKVOpHeaderSize + len(key) + len(value)
 	if b.zeroSetCompactOnly {
 		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
 	}
-	return b.RetainedCapAfterAppend(needed)
+	payloadCap, err := b.RetainedCapAfterAppend(needed)
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
 }
 
-// RetainedCapAfterAppendDelete returns the canonical payload backing capacity
+// RetainedCapAfterAppendDelete returns the payload-builder backing capacity
 // that AppendDelete would retain.
 func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDelete(key []byte) (int, error) {
 	if b == nil {
@@ -301,11 +302,15 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDelete(key []byte) (int
 	if b.zeroSetCompactOnly {
 		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
 	}
-	return b.RetainedCapAfterAppend(needed)
+	payloadCap, err := b.RetainedCapAfterAppend(needed)
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
 }
 
-// RetainedCapAfterAppendDeleteRange returns the canonical payload backing
-// capacity that AppendDeleteRange would retain.
+// RetainedCapAfterAppendDeleteRange returns the payload-builder backing capacity
+// that AppendDeleteRange would retain.
 func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDeleteRange(start, end []byte) (int, error) {
 	if b == nil {
 		return 0, nil
@@ -328,7 +333,11 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDeleteRange(start, end 
 	if b.zeroSetCompactOnly {
 		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
 	}
-	return b.RetainedCapAfterAppend(needed)
+	payloadCap, err := b.RetainedCapAfterAppend(needed)
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
 }
 
 func (b *RawKVBatchPayloadBuilder) Truncate(payloadLen, count int) {
@@ -625,14 +634,18 @@ func (b *RawKVBatchPayloadBuilder) retainedCapAfterCompactZeroMaterializeAppend(
 		payloadCap = expandedLen
 	}
 	_, newCap, err := b.payloadGrowthFrom(expandedLen, payloadCap, needed)
-	return newCap, err
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(newCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
 }
 
-func (b *RawKVBatchPayloadBuilder) validateCompactZeroSetAppend(key []byte) error {
+func (b *RawKVBatchPayloadBuilder) retainedCapAfterCompactZeroSetAppend(key, value []byte) (int, error) {
 	if b == nil {
-		return nil
+		return 0, nil
 	}
 	zeroLen := len(b.zeroPayload)
+	zeroCap := cap(b.zeroPayload)
 	if zeroLen == 0 {
 		zeroLen = rawKVZeroBatchHeaderSize
 	}
@@ -642,29 +655,66 @@ func (b *RawKVBatchPayloadBuilder) validateCompactZeroSetAppend(key []byte) erro
 		if len(key) > int(^uint16(0)) {
 			version = rawKVZeroBatchPayloadV2
 		}
+		capHint := rawKVZeroBatchHeaderSize
+		if b.opHint > 0 {
+			if hint, ok := rawKVZeroBatchPayloadSizeHint(b.opHint, len(key)); ok {
+				capHint = hint
+			}
+		}
+		if zeroCap < rawKVZeroBatchHeaderSize {
+			zeroCap = capHint
+		}
 	}
 	if version == rawKVZeroBatchPayloadV3 && len(key) > int(^uint16(0)) {
 		promotedLen := rawKVZeroBatchHeaderSize
 		if b.count > (int(^uint(0)>>1)-promotedLen)/rawKVZeroOpHeaderSize {
-			return ErrRecordTooLarge
+			return 0, ErrRecordTooLarge
 		}
 		promotedLen += b.count * rawKVZeroOpHeaderSize
 		if b.zeroSetKeyBytes > int(^uint(0)>>1)-promotedLen {
-			return ErrRecordTooLarge
+			return 0, ErrRecordTooLarge
 		}
 		promotedLen += b.zeroSetKeyBytes
 		if commandFrameIntExceedsUint32(promotedLen) {
-			return ErrRecordTooLarge
+			return 0, ErrRecordTooLarge
 		}
 		zeroLen = promotedLen
+		zeroCap = promotedLen
 		version = rawKVZeroBatchPayloadV2
 	}
 	opHeaderSize := rawKVZeroOpHeaderSizeForVersion(version)
 	needed := opHeaderSize + len(key)
 	if needed > int(^uint32(0))-zeroLen || needed > int(^uint(0)>>1)-zeroLen {
-		return ErrRecordTooLarge
+		return 0, ErrRecordTooLarge
 	}
-	return nil
+	zeroLen += needed
+	if zeroLen > zeroCap {
+		zeroCap *= 2
+		if zeroCap < zeroLen {
+			zeroCap = zeroLen
+		}
+		if zeroCap < 0 {
+			return 0, ErrRecordTooLarge
+		}
+	}
+	_, payloadCap := b.payloadLenCapForAppend()
+	zeroSetValueViewCap := cap(b.zeroSetValueView)
+	if zeroSetValueViewCap < len(value) {
+		zeroSetValueViewCap = len(value)
+	}
+	return b.retainedPayloadBufferCap(payloadCap, zeroCap, zeroSetValueViewCap)
+}
+
+func (b *RawKVBatchPayloadBuilder) retainedPayloadBufferCap(caps ...int) (int, error) {
+	total := 0
+	maxInt := int(^uint(0) >> 1)
+	for _, retained := range caps {
+		if retained < 0 || retained > maxInt-total {
+			return 0, ErrRecordTooLarge
+		}
+		total += retained
+	}
+	return total, nil
 }
 
 func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte) (keyView, valueView []byte, err error) {

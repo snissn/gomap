@@ -271,6 +271,27 @@ func TestRawKVBatchPayloadBuilderRetainedCapPredictsCompactZeroMaterialization(t
 	}
 }
 
+func TestRawKVBatchPayloadBuilderRetainedCapPredictsCompactZeroBuffers(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(0, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	retainedCap, err := builder.RetainedCapAfterAppendSet([]byte("zero"), make([]byte, 128))
+	if err != nil {
+		t.Fatalf("RetainedCapAfterAppendSet compact zero: %v", err)
+	}
+	wantMin := rawKVBatchHeaderSize + rawKVZeroBatchHeaderSize + rawKVZeroOpHeaderSizeV3 + len("zero") + 128
+	if retainedCap < wantMin {
+		t.Fatalf("compact zero retained cap=%d, want at least %d", retainedCap, wantMin)
+	}
+	if got := builder.RetainedCap(); got != rawKVBatchHeaderSize {
+		t.Fatalf("prediction mutated canonical retained cap=%d, want %d", got, rawKVBatchHeaderSize)
+	}
+	if cap(builder.zeroPayload) != 0 || cap(builder.zeroSetValueView) != 0 {
+		t.Fatalf("prediction mutated compact buffers: zeroPayload cap=%d zeroSetValueView cap=%d", cap(builder.zeroPayload), cap(builder.zeroSetValueView))
+	}
+}
+
 func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing.T) {
 	payload := make([]byte, 10+len("users"))
 	encodeCollectionBatchHeader(payload, "users", int(^uint32(0)))
