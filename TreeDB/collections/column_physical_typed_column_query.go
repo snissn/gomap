@@ -988,34 +988,87 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalCodes(parts []columnTy
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts []columnTypedColumnPhysicalQueryPart) error {
-	return prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+	groupDict, groupRanks, distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalPrep(parts)
+	if err != nil {
+		return err
+	}
+	workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(parts))
+	if workers < 2 {
+		return prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+	}
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, workers)
 }
 
 type columnTypedColumnDenseGroupCountDistinctColumnPrep func(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts []columnTypedColumnPhysicalQueryPart, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
+	groupDict, groupRanks, distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalPrep(parts)
+	if err != nil {
+		return err
+	}
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumn)
+}
+
+func columnTypedColumnDenseGroupCountDistinctGlobalPrep(parts []columnTypedColumnPhysicalQueryPart) ([]string, map[string]uint32, map[string]uint32, int, error) {
 	groupDict, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Group
 	})
 	if err != nil {
-		return err
+		return nil, nil, nil, 0, err
 	}
 	distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Distinct
 	})
 	if err != nil {
-		return err
+		return nil, nil, nil, 0, err
+	}
+	return groupDict, groupRanks, distinctRanks, distinctCardinality, nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts []columnTypedColumnPhysicalQueryPart, groupDict []string, groupRanks map[string]uint32, distinctRanks map[string]uint32, distinctCardinality int, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
+	for partIdx := range parts {
+		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalPart(parts, partIdx, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalPart(parts []columnTypedColumnPhysicalQueryPart, partIdx int, groupDict []string, groupRanks map[string]uint32, distinctRanks map[string]uint32, distinctCardinality int, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
+	part := parts[partIdx].DenseGroupCountDistinct
+	if part == nil {
+		return fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
+	}
+	if err := prepareColumn(&part.Group, groupDict, len(groupDict), groupRanks); err != nil {
+		return fmt.Errorf("collections: dense grouped count-distinct group part %d: %w", partIdx, err)
+	}
+	if err := prepareColumn(&part.Distinct, nil, distinctCardinality, distinctRanks); err != nil {
+		return fmt.Errorf("collections: dense grouped count-distinct distinct part %d: %w", partIdx, err)
+	}
+	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts []columnTypedColumnPhysicalQueryPart, groupDict []string, groupRanks map[string]uint32, distinctRanks map[string]uint32, distinctCardinality int, workers int) error {
+	errs := make([]error, len(parts))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for workerIdx := 0; workerIdx < workers; workerIdx++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for partIdx := range jobs {
+				errs[partIdx] = prepareColumnTypedColumnDenseGroupCountDistinctGlobalPart(parts, partIdx, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+			}
+		}()
 	}
 	for partIdx := range parts {
-		part := parts[partIdx].DenseGroupCountDistinct
-		if part == nil {
-			return fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
-		}
-		if err := prepareColumn(&part.Group, groupDict, len(groupDict), groupRanks); err != nil {
-			return fmt.Errorf("collections: dense grouped count-distinct group part %d: %w", partIdx, err)
-		}
-		if err := prepareColumn(&part.Distinct, nil, distinctCardinality, distinctRanks); err != nil {
-			return fmt.Errorf("collections: dense grouped count-distinct distinct part %d: %w", partIdx, err)
+		jobs <- partIdx
+	}
+	close(jobs)
+	wg.Wait()
+	for partIdx := range errs {
+		if errs[partIdx] != nil {
+			return errs[partIdx]
 		}
 	}
 	return nil
