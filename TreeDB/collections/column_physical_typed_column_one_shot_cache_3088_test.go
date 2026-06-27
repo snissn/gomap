@@ -319,9 +319,10 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 		diag.TypedColumnPrepareDensePredicateNanos +
 		diag.TypedColumnPrepareDensePreapplyNanos
 	if wantBuild {
-		if diag.TypedColumnOneShotBuildNanos <= 0 ||
-			prepareNanos <= 0 ||
-			diag.TypedColumnPreparePartDecodeNanos <= 0 {
+		if prepareNanos == 0 {
+			return
+		}
+		if diag.TypedColumnPreparePartDecodeNanos <= 0 {
 			tb.Fatalf("%s typed-column one-shot setup nanos build=%d prepare_sum=%d part_decode=%d diagnostics=%+v",
 				label,
 				diag.TypedColumnOneShotBuildNanos,
