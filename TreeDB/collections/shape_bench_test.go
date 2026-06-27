@@ -42,6 +42,13 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
 	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
 	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
+	dst.ColumnPublishRowAssetPreparation += src.ColumnPublishRowAssetPreparation
+	dst.ColumnPublishTypedColumnPreparation += src.ColumnPublishTypedColumnPreparation
+	dst.ColumnPublishDictionaryPreparation += src.ColumnPublishDictionaryPreparation
+	dst.ColumnPublishInt64Preparation += src.ColumnPublishInt64Preparation
+	dst.ColumnPublishAggregateMetadataPrepare += src.ColumnPublishAggregateMetadataPrepare
+	dst.ColumnPublishRowSidecarSharedBuild += src.ColumnPublishRowSidecarSharedBuild
+	dst.ColumnPublishAssetAppend += src.ColumnPublishAssetAppend
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -49,6 +56,18 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishRootDeltaMaterialization += src.ColumnPublishRootDeltaMaterialization
 	dst.ColumnPublishRows += src.ColumnPublishRows
 	dst.ColumnPublishPreparedAssets += src.ColumnPublishPreparedAssets
+	dst.ColumnPublishRowAssetBytes += src.ColumnPublishRowAssetBytes
+	dst.ColumnPublishRowAssetCount += src.ColumnPublishRowAssetCount
+	dst.ColumnPublishTypedColumnBytes += src.ColumnPublishTypedColumnBytes
+	dst.ColumnPublishTypedColumnCount += src.ColumnPublishTypedColumnCount
+	dst.ColumnPublishDictionaryBytes += src.ColumnPublishDictionaryBytes
+	dst.ColumnPublishDictionaryCount += src.ColumnPublishDictionaryCount
+	dst.ColumnPublishInt64Bytes += src.ColumnPublishInt64Bytes
+	dst.ColumnPublishInt64Count += src.ColumnPublishInt64Count
+	dst.ColumnPublishAggregateMetadataBytes += src.ColumnPublishAggregateMetadataBytes
+	dst.ColumnPublishAggregateMetadataCount += src.ColumnPublishAggregateMetadataCount
+	dst.ColumnPublishSharedAppendBytes += src.ColumnPublishSharedAppendBytes
+	dst.ColumnPublishSharedAppendCount += src.ColumnPublishSharedAppendCount
 	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
 	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
@@ -83,6 +102,13 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("column_publish_document_extraction_ns/doc", stats.ColumnPublishDocumentExtraction)
 	reportDuration("column_publish_declared_column_encoding_ns/doc", stats.ColumnPublishDeclaredColumnEncoding)
 	reportDuration("column_publish_asset_prepare_ns/doc", stats.ColumnPublishAssetPreparation)
+	reportDuration("column_publish_row_asset_prepare_ns/doc", stats.ColumnPublishRowAssetPreparation)
+	reportDuration("column_publish_typed_column_prepare_ns/doc", stats.ColumnPublishTypedColumnPreparation)
+	reportDuration("column_publish_dictionary_prepare_ns/doc", stats.ColumnPublishDictionaryPreparation)
+	reportDuration("column_publish_int64_prepare_ns/doc", stats.ColumnPublishInt64Preparation)
+	reportDuration("column_publish_aggregate_metadata_prepare_ns/doc", stats.ColumnPublishAggregateMetadataPrepare)
+	reportDuration("column_publish_row_sidecar_shared_build_ns/doc", stats.ColumnPublishRowSidecarSharedBuild)
+	reportDuration("column_publish_asset_append_ns/doc", stats.ColumnPublishAssetAppend)
 	reportDuration("column_publish_manifest_encode_ns/doc", stats.ColumnPublishManifestEncode)
 	reportDuration("column_publish_asset_closure_ns/doc", stats.ColumnPublishAssetClosureValidation)
 	reportDuration("column_publish_root_delta_ns/doc", stats.ColumnPublishRootDeltaConstruction)

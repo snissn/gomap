@@ -437,12 +437,31 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishDocumentExtraction += metrics.DocumentExtraction
 	stats.ColumnPublishDeclaredColumnEncoding += metrics.DeclaredColumnEncoding
 	stats.ColumnPublishAssetPreparation += metrics.AssetPreparation
+	stats.ColumnPublishRowAssetPreparation += metrics.AssetMetrics.RowAssetDuration
+	stats.ColumnPublishTypedColumnPreparation += metrics.AssetMetrics.TypedColumnPartDuration
+	stats.ColumnPublishDictionaryPreparation += metrics.AssetMetrics.DictionarySidecarDuration
+	stats.ColumnPublishInt64Preparation += metrics.AssetMetrics.Int64SidecarDuration
+	stats.ColumnPublishAggregateMetadataPrepare += metrics.AssetMetrics.AggregateMetadataDuration
+	stats.ColumnPublishRowSidecarSharedBuild += metrics.AssetMetrics.RowSidecarSharedBuildDuration
+	stats.ColumnPublishAssetAppend += metrics.AssetMetrics.SharedAppendDuration
 	stats.ColumnPublishManifestEncode += metrics.ManifestEncode
 	stats.ColumnPublishAssetClosureValidation += metrics.AssetClosureValidation
 	stats.ColumnPublishRootDeltaConstruction += metrics.RootDeltaConstruction
 	stats.ColumnPublishSystemDeltaConstruction += metrics.SystemDeltaConstruction
 	stats.ColumnPublishRows += plan.Rows
 	stats.ColumnPublishPreparedAssets += len(plan.PreparedAssets)
+	stats.ColumnPublishRowAssetBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishRowAssetBytes, metrics.AssetMetrics.RowAssetBytes)
+	stats.ColumnPublishRowAssetCount += metrics.AssetMetrics.RowAssetCount
+	stats.ColumnPublishTypedColumnBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishTypedColumnBytes, metrics.AssetMetrics.TypedColumnPartBytes)
+	stats.ColumnPublishTypedColumnCount += metrics.AssetMetrics.TypedColumnPartCount
+	stats.ColumnPublishDictionaryBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishDictionaryBytes, metrics.AssetMetrics.DictionarySidecarBytes)
+	stats.ColumnPublishDictionaryCount += metrics.AssetMetrics.DictionarySidecarCount
+	stats.ColumnPublishInt64Bytes = saturatingAddNonNegativeInt64(stats.ColumnPublishInt64Bytes, metrics.AssetMetrics.Int64SidecarBytes)
+	stats.ColumnPublishInt64Count += metrics.AssetMetrics.Int64SidecarCount
+	stats.ColumnPublishAggregateMetadataBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishAggregateMetadataBytes, metrics.AssetMetrics.AggregateMetadataBytes)
+	stats.ColumnPublishAggregateMetadataCount += metrics.AssetMetrics.AggregateMetadataCount
+	stats.ColumnPublishSharedAppendBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishSharedAppendBytes, metrics.AssetMetrics.SharedAppendBytes)
+	stats.ColumnPublishSharedAppendCount += metrics.AssetMetrics.SharedAppendCount
 	stats.ColumnPublishRequiredAssetBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishRequiredAssetBytes, plan.RequiredAssetBytes)
 	stats.ColumnPublishManifestBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishManifestBytes, plan.ManifestBytes)
 }
@@ -710,26 +729,35 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		var appender *columnPhysicalAssetSegmentAppender
 		closed := false
+		var appendDuration time.Duration
 		if needsAppender {
+			appendStart := time.Now()
 			var err error
 			appender, err = newColumnPhysicalAssetSegmentAppendWriter(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, columnAssetM12ASegmentFileID)
 			if err != nil {
 				return err
 			}
+			appendDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
 					retErr = errors.Join(retErr, appender.abort())
 				}
 			}()
 		}
+		var appendedBytes int64
+		var appendedCount int
 		for _, asset := range pendingAssets {
 			ref := asset.ref
 			if !asset.hasRef {
+				appendStart := time.Now()
 				var err error
 				ref, err = appender.appendKind(asset.payload, asset.kind, generation, asset.partID)
 				if err != nil {
 					return err
 				}
+				appendDuration += time.Since(appendStart)
+				appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
+				appendedCount++
 				trackCleanupAsset(ref)
 				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
 					ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
@@ -753,13 +781,21 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			})
 		}
 		if appender != nil {
+			appendStart := time.Now()
 			if err := appender.close(); err != nil {
 				return err
 			}
+			appendDuration += time.Since(appendStart)
 			closed = true
+		}
+		if needsAppender {
+			prepared.AssetMetrics.SharedAppendDuration += appendDuration
+			prepared.AssetMetrics.SharedAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedAppendBytes, appendedBytes)
+			prepared.AssetMetrics.SharedAppendCount += appendedCount
 		}
 		return nil
 	}
+	rowAssetStart := time.Now()
 	rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
 	rowAssetRows, err := projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
 	if err != nil {
@@ -784,10 +820,14 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	}
 	prepared.RowCount = summary.RowCount
 	prepared.ColumnPayloadBytes = summary.PayloadBytes
+	prepared.AssetMetrics.RowAssetDuration += time.Since(rowAssetStart)
+	prepared.AssetMetrics.RowAssetBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.RowAssetBytes, int64(len(encoded)))
+	prepared.AssetMetrics.RowAssetCount++
 	queueRegularManifestAsset(encoded, ColumnAssetKindTCS1PartImage, columnPhysicalRowAssetPartID, summary.RowCount, string(input.operation), role, "", func(ref ColumnAssetRef) error {
 		return validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded))
 	})
 	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
+		typedColumnStart := time.Now()
 		typedColumnImage, typedColumnRows, err := buildTypedColumnPartImageForDeclaredRows(hookInput.ColumnStore, generation, typedColumnPartAssetPartID, rows)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
@@ -826,26 +866,43 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			} else {
 				queueRegularManifestAsset(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedColumnPartAssetPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), validateTypedColumnRef)
 			}
+			prepared.AssetMetrics.TypedColumnPartDuration += time.Since(typedColumnStart)
+			prepared.AssetMetrics.TypedColumnPartBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.TypedColumnPartBytes, int64(len(typedColumnImage)))
+			prepared.AssetMetrics.TypedColumnPartCount++
 		}
 	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
+		typedMetadataStart := time.Now()
 		typedMetadataAssets, err := buildColumnAggregateMetadataAssets(hookInput.ColumnStore, rows, columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore), hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedColumnPartAssetPartID, hookInput.AppliedCommandLSN)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
 		}
+		var typedMetadataBytes int64
 		for _, metadata := range typedMetadataAssets {
 			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			typedMetadataBytes = saturatingAddNonNegativeInt64(typedMetadataBytes, int64(len(encodedMetadata)))
 			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, typedColumnPartAssetPartID, len(rows), metadata.AggregateName)
 		}
+		if typedMetadataBytes > 0 {
+			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(typedMetadataStart)
+			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, typedMetadataBytes)
+			prepared.AssetMetrics.AggregateMetadataCount += len(typedMetadataAssets)
+		}
+		rowSidecarStart := time.Now()
 		rowSidecarAssets, fusedRowSidecars, err := buildColumnRowSidecarAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
+		rowSidecarBuildDuration := time.Since(rowSidecarStart)
 		if err != nil {
 			rowSidecarAssets = columnRowSidecarAssets{}
 			fusedRowSidecars = false
 			err = nil
 		}
+		if fusedRowSidecars {
+			prepared.AssetMetrics.RowSidecarSharedBuildDuration += rowSidecarBuildDuration
+		}
+		dictionaryStart := time.Now()
 		dictionaryAssets := rowSidecarAssets.DictionaryCodes
 		if !fusedRowSidecars {
 			dictionaryAssets, err = buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
@@ -853,13 +910,21 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				return ColumnPublishPreparedAssets{}, err
 			}
 		}
+		var dictionaryBytes int64
 		for _, dictionary := range dictionaryAssets {
 			encodedDictionary, err := encodeColumnDictionaryCodesAsset(dictionary)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			dictionaryBytes = saturatingAddNonNegativeInt64(dictionaryBytes, int64(len(encodedDictionary)))
 			queueRegularAsset(encodedDictionary, ColumnAssetKindTCS1DictionaryCodes, columnPhysicalRowAssetPartID, summary.RowCount, dictionary.ColumnName)
 		}
+		if dictionaryBytes > 0 {
+			prepared.AssetMetrics.DictionarySidecarDuration += time.Since(dictionaryStart)
+			prepared.AssetMetrics.DictionarySidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.DictionarySidecarBytes, dictionaryBytes)
+			prepared.AssetMetrics.DictionarySidecarCount += len(dictionaryAssets)
+		}
+		int64Start := time.Now()
 		int64Assets := rowSidecarAssets.Int64Values
 		if !fusedRowSidecars {
 			int64Assets, err = buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
@@ -867,13 +932,21 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				return ColumnPublishPreparedAssets{}, err
 			}
 		}
+		var int64Bytes int64
 		for _, values := range int64Assets {
 			encodedValues, err := encodeColumnInt64ValuesAsset(values)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			int64Bytes = saturatingAddNonNegativeInt64(int64Bytes, int64(len(encodedValues)))
 			queueRegularAsset(encodedValues, ColumnAssetKindTCS1Int64Values, columnPhysicalRowAssetPartID, summary.RowCount, values.ColumnName)
 		}
+		if int64Bytes > 0 {
+			prepared.AssetMetrics.Int64SidecarDuration += time.Since(int64Start)
+			prepared.AssetMetrics.Int64SidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.Int64SidecarBytes, int64Bytes)
+			prepared.AssetMetrics.Int64SidecarCount += len(int64Assets)
+		}
+		rowMetadataStart := time.Now()
 		rowMetadataAssets := rowSidecarAssets.AggregateMetadata
 		if !fusedRowSidecars {
 			rowMetadataAssets, err = buildColumnAggregateMetadataAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
@@ -881,12 +954,25 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				return ColumnPublishPreparedAssets{}, err
 			}
 		}
+		var rowMetadataBytes int64
 		for _, metadata := range rowMetadataAssets {
 			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
+			rowMetadataBytes = saturatingAddNonNegativeInt64(rowMetadataBytes, int64(len(encodedMetadata)))
 			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, columnPhysicalRowAssetPartID, summary.RowCount, metadata.AggregateName)
+		}
+		if rowMetadataBytes > 0 {
+			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(rowMetadataStart)
+			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, rowMetadataBytes)
+			prepared.AssetMetrics.AggregateMetadataCount += len(rowMetadataAssets)
+		}
+		if fusedRowSidecars {
+			totalFusedBytes := saturatingAddNonNegativeInt64(saturatingAddNonNegativeInt64(dictionaryBytes, int64Bytes), rowMetadataBytes)
+			prepared.AssetMetrics.DictionarySidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, dictionaryBytes, totalFusedBytes)
+			prepared.AssetMetrics.Int64SidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, int64Bytes, totalFusedBytes)
+			prepared.AssetMetrics.AggregateMetadataDuration += columnPublishDurationShare(rowSidecarBuildDuration, rowMetadataBytes, totalFusedBytes)
 		}
 	}
 	if err := flushPendingAssets(); err != nil {
@@ -894,6 +980,13 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	}
 	cleanupAssets = nil
 	return prepared, nil
+}
+
+func columnPublishDurationShare(total time.Duration, partBytes, totalBytes int64) time.Duration {
+	if total <= 0 || partBytes <= 0 || totalBytes <= 0 {
+		return 0
+	}
+	return time.Duration(float64(total) * (float64(partBytes) / float64(totalBytes)))
 }
 
 func columnManifestPartRoleForPublish(operation ColumnPublishOperation) ColumnManifestPartRole {

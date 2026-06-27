@@ -148,6 +148,7 @@ type ColumnPublishPreparedAssets struct {
 	CommandBytes       int64
 	RowRemainderBytes  int64
 	ColumnPayloadBytes int64
+	AssetMetrics       ColumnPublishAssetPreparationMetrics
 }
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.
@@ -281,10 +282,38 @@ type ColumnPublishStageMetrics struct {
 	DocumentExtraction      time.Duration
 	DeclaredColumnEncoding  time.Duration
 	AssetPreparation        time.Duration
+	AssetMetrics            ColumnPublishAssetPreparationMetrics
 	AssetClosureValidation  time.Duration
 	ManifestEncode          time.Duration
 	RootDeltaConstruction   time.Duration
 	SystemDeltaConstruction time.Duration
+}
+
+// ColumnPublishAssetPreparationMetrics breaks the production asset-preparation
+// stage down by the asset families that make up column-store insert/load cost.
+// Fused row-sidecar build time is byte-attributed to dictionary/int64/aggregate
+// families by the producer; SharedAppendDuration remains separately reported so
+// callers can choose exact upper-bound or byte-share accounting.
+type ColumnPublishAssetPreparationMetrics struct {
+	RowAssetDuration              time.Duration
+	RowAssetBytes                 int64
+	RowAssetCount                 int
+	TypedColumnPartDuration       time.Duration
+	TypedColumnPartBytes          int64
+	TypedColumnPartCount          int
+	DictionarySidecarDuration     time.Duration
+	DictionarySidecarBytes        int64
+	DictionarySidecarCount        int
+	Int64SidecarDuration          time.Duration
+	Int64SidecarBytes             int64
+	Int64SidecarCount             int
+	AggregateMetadataDuration     time.Duration
+	AggregateMetadataBytes        int64
+	AggregateMetadataCount        int
+	RowSidecarSharedBuildDuration time.Duration
+	SharedAppendDuration          time.Duration
+	SharedAppendBytes             int64
+	SharedAppendCount             int
 }
 
 // BuildColumnPublishPlan validates and stages an atomic column manifest publish
@@ -343,6 +372,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (ColumnPublishPlan, er
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish asset preparation failed: %w", err)
 	}
 	metrics.AssetPreparation = time.Since(start)
+	metrics.AssetMetrics = prepared.AssetMetrics
 	if err := validateColumnPublishPreparedAssets(prepared); err != nil {
 		return ColumnPublishPlan{}, err
 	}

@@ -501,6 +501,13 @@ type CollectionInsertStats struct {
 	ColumnPublishDocumentExtraction       time.Duration
 	ColumnPublishDeclaredColumnEncoding   time.Duration
 	ColumnPublishAssetPreparation         time.Duration
+	ColumnPublishRowAssetPreparation      time.Duration
+	ColumnPublishTypedColumnPreparation   time.Duration
+	ColumnPublishDictionaryPreparation    time.Duration
+	ColumnPublishInt64Preparation         time.Duration
+	ColumnPublishAggregateMetadataPrepare time.Duration
+	ColumnPublishRowSidecarSharedBuild    time.Duration
+	ColumnPublishAssetAppend              time.Duration
 	ColumnPublishManifestEncode           time.Duration
 	ColumnPublishAssetClosureValidation   time.Duration
 	ColumnPublishRootDeltaConstruction    time.Duration
@@ -508,6 +515,18 @@ type CollectionInsertStats struct {
 	ColumnPublishRootDeltaMaterialization time.Duration
 	ColumnPublishRows                     int
 	ColumnPublishPreparedAssets           int
+	ColumnPublishRowAssetBytes            int64
+	ColumnPublishRowAssetCount            int
+	ColumnPublishTypedColumnBytes         int64
+	ColumnPublishTypedColumnCount         int
+	ColumnPublishDictionaryBytes          int64
+	ColumnPublishDictionaryCount          int
+	ColumnPublishInt64Bytes               int64
+	ColumnPublishInt64Count               int
+	ColumnPublishAggregateMetadataBytes   int64
+	ColumnPublishAggregateMetadataCount   int
+	ColumnPublishSharedAppendBytes        int64
+	ColumnPublishSharedAppendCount        int
 	ColumnPublishRequiredAssetBytes       int64
 	ColumnPublishManifestBytes            int64
 	UniqueIndexPreflight                  time.Duration

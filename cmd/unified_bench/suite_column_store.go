@@ -228,6 +228,13 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishDocumentExtractionDurationMS float64 `json:"column_publish_document_extraction_duration_ms,omitempty"`
 	ColumnPublishDeclaredColumnDurationMS     float64 `json:"column_publish_declared_column_encoding_duration_ms,omitempty"`
 	ColumnPublishAssetPreparationDurationMS   float64 `json:"column_publish_asset_preparation_duration_ms,omitempty"`
+	ColumnPublishRowAssetPrepareDurationMS    float64 `json:"column_publish_row_asset_prepare_duration_ms,omitempty"`
+	ColumnPublishTypedColumnPrepareDurationMS float64 `json:"column_publish_typed_column_prepare_duration_ms,omitempty"`
+	ColumnPublishDictionaryPrepareDurationMS  float64 `json:"column_publish_dictionary_sidecar_prepare_duration_ms,omitempty"`
+	ColumnPublishInt64PrepareDurationMS       float64 `json:"column_publish_int64_sidecar_prepare_duration_ms,omitempty"`
+	ColumnPublishAggregateMetadataDurationMS  float64 `json:"column_publish_aggregate_metadata_prepare_duration_ms,omitempty"`
+	ColumnPublishRowSidecarSharedBuildMS      float64 `json:"column_publish_row_sidecar_shared_build_duration_ms,omitempty"`
+	ColumnPublishAssetAppendDurationMS        float64 `json:"column_publish_asset_append_duration_ms,omitempty"`
 	ColumnPublishManifestEncodeDurationMS     float64 `json:"column_publish_manifest_encode_duration_ms,omitempty"`
 	ColumnPublishAssetClosureDurationMS       float64 `json:"column_publish_asset_closure_validation_duration_ms,omitempty"`
 	ColumnPublishRootDeltaDurationMS          float64 `json:"column_publish_root_delta_construction_duration_ms,omitempty"`
@@ -235,6 +242,18 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishRootDeltaMaterializeMS       float64 `json:"column_publish_root_delta_materialization_duration_ms,omitempty"`
 	ColumnPublishRows                         int     `json:"column_publish_rows,omitempty"`
 	ColumnPublishPreparedAssets               int     `json:"column_publish_prepared_assets,omitempty"`
+	ColumnPublishRowAssetBytes                int64   `json:"column_publish_row_asset_bytes,omitempty"`
+	ColumnPublishRowAssetCount                int     `json:"column_publish_row_asset_count,omitempty"`
+	ColumnPublishTypedColumnBytes             int64   `json:"column_publish_typed_column_bytes,omitempty"`
+	ColumnPublishTypedColumnCount             int     `json:"column_publish_typed_column_count,omitempty"`
+	ColumnPublishDictionaryBytes              int64   `json:"column_publish_dictionary_sidecar_bytes,omitempty"`
+	ColumnPublishDictionaryCount              int     `json:"column_publish_dictionary_sidecar_count,omitempty"`
+	ColumnPublishInt64Bytes                   int64   `json:"column_publish_int64_sidecar_bytes,omitempty"`
+	ColumnPublishInt64Count                   int     `json:"column_publish_int64_sidecar_count,omitempty"`
+	ColumnPublishAggregateMetadataBytes       int64   `json:"column_publish_aggregate_metadata_bytes,omitempty"`
+	ColumnPublishAggregateMetadataCount       int     `json:"column_publish_aggregate_metadata_count,omitempty"`
+	ColumnPublishSharedAppendBytes            int64   `json:"column_publish_shared_asset_append_bytes,omitempty"`
+	ColumnPublishSharedAppendCount            int     `json:"column_publish_shared_asset_append_count,omitempty"`
 	ColumnPublishRequiredAssetBytes           int64   `json:"column_publish_required_asset_bytes,omitempty"`
 	ColumnPublishManifestBytes                int64   `json:"column_publish_manifest_bytes,omitempty"`
 	PrimaryRunBuildDurationMS                 float64 `json:"primary_run_build_duration_ms,omitempty"`
@@ -544,9 +563,13 @@ type columnStoreMetadataCostMetric struct {
 	AggregateMetadataSidecarBytes  int64   `json:"aggregate_metadata_sidecar_bytes"`
 	AggregateMetadataEmbeddedBytes int64   `json:"aggregate_metadata_embedded_bytes"`
 	AggregateMetadataRefs          int     `json:"aggregate_metadata_refs"`
+	AggregateMetadataPrepareMS     float64 `json:"aggregate_metadata_prepare_duration_ms,omitempty"`
+	AggregateMetadataAppendShareMS float64 `json:"aggregate_metadata_append_share_duration_ms,omitempty"`
+	InsertCostUpperBoundMS         float64 `json:"insert_cost_upper_bound_duration_ms,omitempty"`
 	InsertCostDurationMS           float64 `json:"insert_cost_duration_ms,omitempty"`
 	InsertCostNsPerRow             float64 `json:"insert_cost_ns_per_row,omitempty"`
 	InsertCostBasis                string  `json:"insert_cost_basis,omitempty"`
+	InsertCostUpperBoundBasis      string  `json:"insert_cost_upper_bound_basis,omitempty"`
 	StorageCostBasis               string  `json:"storage_cost_basis,omitempty"`
 }
 
@@ -1414,6 +1437,13 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
 	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
 	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
+	dst.ColumnPublishRowAssetPreparation += src.ColumnPublishRowAssetPreparation
+	dst.ColumnPublishTypedColumnPreparation += src.ColumnPublishTypedColumnPreparation
+	dst.ColumnPublishDictionaryPreparation += src.ColumnPublishDictionaryPreparation
+	dst.ColumnPublishInt64Preparation += src.ColumnPublishInt64Preparation
+	dst.ColumnPublishAggregateMetadataPrepare += src.ColumnPublishAggregateMetadataPrepare
+	dst.ColumnPublishRowSidecarSharedBuild += src.ColumnPublishRowSidecarSharedBuild
+	dst.ColumnPublishAssetAppend += src.ColumnPublishAssetAppend
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -1421,6 +1451,18 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishRootDeltaMaterialization += src.ColumnPublishRootDeltaMaterialization
 	dst.ColumnPublishRows += src.ColumnPublishRows
 	dst.ColumnPublishPreparedAssets += src.ColumnPublishPreparedAssets
+	dst.ColumnPublishRowAssetBytes += src.ColumnPublishRowAssetBytes
+	dst.ColumnPublishRowAssetCount += src.ColumnPublishRowAssetCount
+	dst.ColumnPublishTypedColumnBytes += src.ColumnPublishTypedColumnBytes
+	dst.ColumnPublishTypedColumnCount += src.ColumnPublishTypedColumnCount
+	dst.ColumnPublishDictionaryBytes += src.ColumnPublishDictionaryBytes
+	dst.ColumnPublishDictionaryCount += src.ColumnPublishDictionaryCount
+	dst.ColumnPublishInt64Bytes += src.ColumnPublishInt64Bytes
+	dst.ColumnPublishInt64Count += src.ColumnPublishInt64Count
+	dst.ColumnPublishAggregateMetadataBytes += src.ColumnPublishAggregateMetadataBytes
+	dst.ColumnPublishAggregateMetadataCount += src.ColumnPublishAggregateMetadataCount
+	dst.ColumnPublishSharedAppendBytes += src.ColumnPublishSharedAppendBytes
+	dst.ColumnPublishSharedAppendCount += src.ColumnPublishSharedAppendCount
 	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
 	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
@@ -1459,6 +1501,13 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishDocumentExtractionDurationMS: durationMS(stats.ColumnPublishDocumentExtraction),
 		ColumnPublishDeclaredColumnDurationMS:     durationMS(stats.ColumnPublishDeclaredColumnEncoding),
 		ColumnPublishAssetPreparationDurationMS:   durationMS(stats.ColumnPublishAssetPreparation),
+		ColumnPublishRowAssetPrepareDurationMS:    durationMS(stats.ColumnPublishRowAssetPreparation),
+		ColumnPublishTypedColumnPrepareDurationMS: durationMS(stats.ColumnPublishTypedColumnPreparation),
+		ColumnPublishDictionaryPrepareDurationMS:  durationMS(stats.ColumnPublishDictionaryPreparation),
+		ColumnPublishInt64PrepareDurationMS:       durationMS(stats.ColumnPublishInt64Preparation),
+		ColumnPublishAggregateMetadataDurationMS:  durationMS(stats.ColumnPublishAggregateMetadataPrepare),
+		ColumnPublishRowSidecarSharedBuildMS:      durationMS(stats.ColumnPublishRowSidecarSharedBuild),
+		ColumnPublishAssetAppendDurationMS:        durationMS(stats.ColumnPublishAssetAppend),
 		ColumnPublishManifestEncodeDurationMS:     durationMS(stats.ColumnPublishManifestEncode),
 		ColumnPublishAssetClosureDurationMS:       durationMS(stats.ColumnPublishAssetClosureValidation),
 		ColumnPublishRootDeltaDurationMS:          durationMS(stats.ColumnPublishRootDeltaConstruction),
@@ -1466,6 +1515,18 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishRootDeltaMaterializeMS:       durationMS(stats.ColumnPublishRootDeltaMaterialization),
 		ColumnPublishRows:                         stats.ColumnPublishRows,
 		ColumnPublishPreparedAssets:               stats.ColumnPublishPreparedAssets,
+		ColumnPublishRowAssetBytes:                stats.ColumnPublishRowAssetBytes,
+		ColumnPublishRowAssetCount:                stats.ColumnPublishRowAssetCount,
+		ColumnPublishTypedColumnBytes:             stats.ColumnPublishTypedColumnBytes,
+		ColumnPublishTypedColumnCount:             stats.ColumnPublishTypedColumnCount,
+		ColumnPublishDictionaryBytes:              stats.ColumnPublishDictionaryBytes,
+		ColumnPublishDictionaryCount:              stats.ColumnPublishDictionaryCount,
+		ColumnPublishInt64Bytes:                   stats.ColumnPublishInt64Bytes,
+		ColumnPublishInt64Count:                   stats.ColumnPublishInt64Count,
+		ColumnPublishAggregateMetadataBytes:       stats.ColumnPublishAggregateMetadataBytes,
+		ColumnPublishAggregateMetadataCount:       stats.ColumnPublishAggregateMetadataCount,
+		ColumnPublishSharedAppendBytes:            stats.ColumnPublishSharedAppendBytes,
+		ColumnPublishSharedAppendCount:            stats.ColumnPublishSharedAppendCount,
 		ColumnPublishRequiredAssetBytes:           stats.ColumnPublishRequiredAssetBytes,
 		ColumnPublishManifestBytes:                stats.ColumnPublishManifestBytes,
 		PrimaryRunBuildDurationMS:                 durationMS(stats.PrimaryRunBuild),
@@ -2003,18 +2064,29 @@ func columnStoreSortTopKPruningUsed(exec columnStoreQueryExecution) bool {
 
 func columnStoreMetadataCostMetricFromAccounting(insert columnStoreInsertPhaseMetric, accounting collections.ColumnStorePhysicalAccounting, accountingErr error) columnStoreMetadataCostMetric {
 	out := columnStoreMetadataCostMetric{
-		InsertCostDurationMS: insert.ColumnPublishAssetPreparationDurationMS,
-		InsertCostBasis:      "column_publish_asset_preparation_total_current_upper_bound",
+		AggregateMetadataPrepareMS: insert.ColumnPublishAggregateMetadataDurationMS,
+		InsertCostUpperBoundMS:     insert.ColumnPublishAssetPreparationDurationMS,
+		InsertCostUpperBoundBasis:  "column_publish_asset_preparation_total_upper_bound_all_asset_families",
 	}
 	rows := insert.ColumnPublishRows
 	if rows <= 0 {
 		rows = insert.Documents
 	}
-	if rows > 0 && insert.ColumnPublishAssetPreparationDurationMS > 0 {
-		out.InsertCostNsPerRow = insert.ColumnPublishAssetPreparationDurationMS * float64(time.Millisecond) / float64(rows)
-	}
+	out.AggregateMetadataAppendShareMS = columnStoreDurationShareMS(insert.ColumnPublishAssetAppendDurationMS, insert.ColumnPublishAggregateMetadataBytes, insert.ColumnPublishSharedAppendBytes)
+	splitInsertCostMS := out.AggregateMetadataPrepareMS + out.AggregateMetadataAppendShareMS
+	splitInsertCostAvailable := splitInsertCostMS > 0 && (insert.ColumnPublishAggregateMetadataBytes > 0 || out.AggregateMetadataPrepareMS > 0)
 	if accountingErr != nil {
 		out.StorageCostBasis = "physical_accounting_unavailable: " + accountingErr.Error()
+		if splitInsertCostAvailable {
+			out.InsertCostDurationMS = splitInsertCostMS
+			out.InsertCostBasis = "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"
+		} else {
+			out.InsertCostDurationMS = out.InsertCostUpperBoundMS
+			out.InsertCostBasis = "column_publish_asset_preparation_total_upper_bound_all_asset_families"
+		}
+		if rows > 0 && out.InsertCostDurationMS > 0 {
+			out.InsertCostNsPerRow = out.InsertCostDurationMS * float64(time.Millisecond) / float64(rows)
+		}
 		return out
 	}
 	out.AggregateMetadataSidecarBytes = accounting.Totals.AggregateMetadataBytes
@@ -2023,10 +2095,27 @@ func columnStoreMetadataCostMetricFromAccounting(insert columnStoreInsertPhaseMe
 	out.AggregateMetadataRefs = accounting.AggregateMetadataRefs
 	if out.AggregateMetadataRefs > 0 || out.AggregateMetadataStorageBytes > 0 {
 		out.StorageCostBasis = "active_manifest_aggregate_metadata_sidecars_plus_typed_column_embedded_aggregate_sections"
+		if splitInsertCostAvailable {
+			out.InsertCostDurationMS = splitInsertCostMS
+			out.InsertCostBasis = "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"
+		} else {
+			out.InsertCostDurationMS = out.InsertCostUpperBoundMS
+			out.InsertCostBasis = "column_publish_asset_preparation_total_upper_bound_all_asset_families"
+		}
 	} else {
 		out.StorageCostBasis = "no_aggregate_metadata_refs_in_active_manifest"
 	}
+	if rows > 0 && out.InsertCostDurationMS > 0 {
+		out.InsertCostNsPerRow = out.InsertCostDurationMS * float64(time.Millisecond) / float64(rows)
+	}
 	return out
+}
+
+func columnStoreDurationShareMS(totalMS float64, partBytes, totalBytes int64) float64 {
+	if totalMS <= 0 || partBytes <= 0 || totalBytes <= 0 {
+		return 0
+	}
+	return totalMS * (float64(partBytes) / float64(totalBytes))
 }
 
 func columnStoreApplyMetadataCostToQueries(queries []columnStoreQueryMetric, cost columnStoreMetadataCostMetric) {
@@ -4249,6 +4338,12 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks_per_run: %.6f\n\n", stats.RetainedPayloadSemanticStreamBlocksPerRun))
 	sb.WriteString(fmt.Sprintf("- column_publish_rows: %d\n", stats.ColumnPublishRows))
 	sb.WriteString(fmt.Sprintf("- column_publish_prepared_assets: %d\n", stats.ColumnPublishPreparedAssets))
+	sb.WriteString(fmt.Sprintf("- column_publish_row_asset_bytes: %d\n", stats.ColumnPublishRowAssetBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_typed_column_bytes: %d\n", stats.ColumnPublishTypedColumnBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_dictionary_sidecar_bytes: %d\n", stats.ColumnPublishDictionaryBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_int64_sidecar_bytes: %d\n", stats.ColumnPublishInt64Bytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_aggregate_metadata_bytes: %d\n", stats.ColumnPublishAggregateMetadataBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_shared_asset_append_bytes: %d\n", stats.ColumnPublishSharedAppendBytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_required_asset_bytes: %d\n", stats.ColumnPublishRequiredAssetBytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_manifest_bytes: %d\n\n", stats.ColumnPublishManifestBytes))
 
@@ -4269,6 +4364,13 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `document_extraction` | %.3f |  |\n", stats.ColumnPublishDocumentExtractionDurationMS))
 		sb.WriteString(fmt.Sprintf("| `declared_column_encoding` | %.3f |  |\n", stats.ColumnPublishDeclaredColumnDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_preparation` | %.3f |  |\n", stats.ColumnPublishAssetPreparationDurationMS))
+		sb.WriteString(fmt.Sprintf("| `row_asset_prepare` | %.3f |  |\n", stats.ColumnPublishRowAssetPrepareDurationMS))
+		sb.WriteString(fmt.Sprintf("| `typed_column_prepare` | %.3f |  |\n", stats.ColumnPublishTypedColumnPrepareDurationMS))
+		sb.WriteString(fmt.Sprintf("| `dictionary_sidecar_prepare` | %.3f |  |\n", stats.ColumnPublishDictionaryPrepareDurationMS))
+		sb.WriteString(fmt.Sprintf("| `int64_sidecar_prepare` | %.3f |  |\n", stats.ColumnPublishInt64PrepareDurationMS))
+		sb.WriteString(fmt.Sprintf("| `aggregate_metadata_prepare` | %.3f |  |\n", stats.ColumnPublishAggregateMetadataDurationMS))
+		sb.WriteString(fmt.Sprintf("| `row_sidecar_shared_build` | %.3f |  |\n", stats.ColumnPublishRowSidecarSharedBuildMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append` | %.3f |  |\n", stats.ColumnPublishAssetAppendDurationMS))
 		sb.WriteString(fmt.Sprintf("| `manifest_encode` | %.3f |  |\n", stats.ColumnPublishManifestEncodeDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_closure_validation` | %.3f |  |\n", stats.ColumnPublishAssetClosureDurationMS))
 		sb.WriteString(fmt.Sprintf("| `root_delta_construction` | %.3f |  |\n", stats.ColumnPublishRootDeltaDurationMS))
@@ -4284,6 +4386,13 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 		stats.ColumnPublishDocumentExtractionDurationMS > 0 ||
 		stats.ColumnPublishDeclaredColumnDurationMS > 0 ||
 		stats.ColumnPublishAssetPreparationDurationMS > 0 ||
+		stats.ColumnPublishRowAssetPrepareDurationMS > 0 ||
+		stats.ColumnPublishTypedColumnPrepareDurationMS > 0 ||
+		stats.ColumnPublishDictionaryPrepareDurationMS > 0 ||
+		stats.ColumnPublishInt64PrepareDurationMS > 0 ||
+		stats.ColumnPublishAggregateMetadataDurationMS > 0 ||
+		stats.ColumnPublishRowSidecarSharedBuildMS > 0 ||
+		stats.ColumnPublishAssetAppendDurationMS > 0 ||
 		stats.ColumnPublishManifestEncodeDurationMS > 0 ||
 		stats.ColumnPublishAssetClosureDurationMS > 0 ||
 		stats.ColumnPublishRootDeltaDurationMS > 0 ||
@@ -4297,10 +4406,16 @@ func renderColumnStoreMetadataCostMarkdown(sb *strings.Builder, cost columnStore
 	sb.WriteString(fmt.Sprintf("- aggregate_metadata_sidecar_bytes: %d\n", cost.AggregateMetadataSidecarBytes))
 	sb.WriteString(fmt.Sprintf("- aggregate_metadata_embedded_bytes: %d\n", cost.AggregateMetadataEmbeddedBytes))
 	sb.WriteString(fmt.Sprintf("- aggregate_metadata_refs: %d\n", cost.AggregateMetadataRefs))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_prepare_duration_ms: %.3f\n", cost.AggregateMetadataPrepareMS))
+	sb.WriteString(fmt.Sprintf("- aggregate_metadata_append_share_duration_ms: %.3f\n", cost.AggregateMetadataAppendShareMS))
+	sb.WriteString(fmt.Sprintf("- insert_cost_upper_bound_duration_ms: %.3f\n", cost.InsertCostUpperBoundMS))
 	sb.WriteString(fmt.Sprintf("- insert_cost_duration_ms: %.3f\n", cost.InsertCostDurationMS))
 	sb.WriteString(fmt.Sprintf("- insert_cost_ns_per_row: %.1f\n", cost.InsertCostNsPerRow))
 	if cost.InsertCostBasis != "" {
 		sb.WriteString(fmt.Sprintf("- insert_cost_basis: %s\n", cost.InsertCostBasis))
+	}
+	if cost.InsertCostUpperBoundBasis != "" {
+		sb.WriteString(fmt.Sprintf("- insert_cost_upper_bound_basis: %s\n", cost.InsertCostUpperBoundBasis))
 	}
 	if cost.StorageCostBasis != "" {
 		sb.WriteString(fmt.Sprintf("- storage_cost_basis: %s\n", cost.StorageCostBasis))
