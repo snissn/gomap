@@ -1621,7 +1621,7 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		}
 		return part, true, err
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
-		part, err := decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
+		part, err := decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, prepareDiagnostics)
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.RangeReadNanos += reader.readNanos
 			prepareDiagnostics.RangeReadBytes += reader.bytesRead
@@ -1768,7 +1768,7 @@ func columnTypedColumnPhysicalQueryDensePreparedRequests(plan columnTypedColumnP
 		}
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
 		spanPlan, _, _ := columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan)
-		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy, false); err != nil {
+		if err := addString(plan.GroupColumn, typedcolumn.ColumnRoleProjection, columnsemantics.OpDictionaryGroupBy, true); err != nil {
 			return nil, true, err
 		}
 		if err := addInt64(plan.ValueColumn); err != nil {
@@ -2057,9 +2057,9 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPreparedPart(plan colu
 	}, nil
 }
 
-func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, error) {
 	spanPlan, groupPredicate, hasGroupPredicate := columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan)
-	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(spanPlan, summary, typedRef, physical, adapterPart, bytesRead, false, nil)
+	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(spanPlan, summary, typedRef, physical, adapterPart, bytesRead, false, prepareDiagnostics)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
