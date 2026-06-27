@@ -118,6 +118,111 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
 	assertTypedColumnQ2OneShotRankMapsNoGlobalCodes3158(t, col, req)
 }
 
+func TestColumnPhysicalTypedColumnParallelPartDecodeShapes3158(t *testing.T) {
+	readCache := &columnPhysicalAssetReadCache{}
+	baseReq := func(kind ColumnPhysicalQueryKind) ColumnPhysicalQueryRequest {
+		return ColumnPhysicalQueryRequest{
+			Kind:                     kind,
+			GroupColumn:              "collection",
+			ValueColumn:              "time_us",
+			TopK:                     3,
+			TopKOrder:                ColumnPhysicalQueryTopKInt64Asc,
+			ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify,
+		}
+	}
+	tests := []struct {
+		name                                      string
+		plan                                      columnTypedColumnPhysicalQueryPlan
+		req                                       ColumnPhysicalQueryRequest
+		allowDenseGroupCountDistinct              bool
+		prepareDenseInt64SpanGlobalCodes          bool
+		prepareDenseGroupCountDistinctGlobalCodes bool
+		prepareDenseGroupCountDistinctGlobalRanks bool
+		includePhysicalRows                       bool
+		want                                      bool
+	}{
+		{
+			name: "q1 dense group-count",
+			plan: columnTypedColumnPhysicalQueryPlan{DenseGroupCount: true, GroupColumn: "collection"},
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			want: true,
+		},
+		{
+			name: "q3 dense group-hour-count",
+			plan: columnTypedColumnPhysicalQueryPlan{DenseGroupHourCount: true, GroupColumn: "collection", ValueColumn: "time_us"},
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupHourCount, GroupColumn: "collection", ValueColumn: "time_us", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			want: true,
+		},
+		{
+			name: "q5 dense int64 span",
+			plan: columnTypedColumnPhysicalQueryPlan{DenseInt64Span: true, GroupColumn: "did", ValueColumn: "time_us"},
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			want: true,
+		},
+		{
+			name:                         "q2 dense group-count-distinct rank maps",
+			plan:                         columnTypedColumnPhysicalQueryPlan{DenseGroupCountDistinct: true, GroupColumn: "collection", DistinctColumn: "did"},
+			req:                          ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "collection", DistinctColumn: "did", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			allowDenseGroupCountDistinct: true,
+			prepareDenseGroupCountDistinctGlobalRanks: true,
+			want: true,
+		},
+		{
+			name: "q2 rank maps require insert-only allowance",
+			plan: columnTypedColumnPhysicalQueryPlan{DenseGroupCountDistinct: true, GroupColumn: "collection", DistinctColumn: "did"},
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "collection", DistinctColumn: "did", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			prepareDenseGroupCountDistinctGlobalRanks: true,
+		},
+		{
+			name: "q4 time-order TopK keeps serial lazy payload loader",
+			plan: columnTypedColumnPhysicalQueryPlan{TimeOrderTopK: true, GroupColumn: "collection", ValueColumn: "time_us"},
+			req:  baseReq(ColumnPhysicalQueryGroupMinInt64),
+		},
+		{
+			name:                             "global int64 codes stay serial",
+			plan:                             columnTypedColumnPhysicalQueryPlan{DenseInt64Span: true, GroupColumn: "did", ValueColumn: "time_us"},
+			req:                              ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			prepareDenseInt64SpanGlobalCodes: true,
+		},
+		{
+			name:                         "global count-distinct codes stay serial",
+			plan:                         columnTypedColumnPhysicalQueryPlan{DenseGroupCountDistinct: true, GroupColumn: "collection", DistinctColumn: "did"},
+			req:                          ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCountAndDistinct, GroupColumn: "collection", DistinctColumn: "did", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			allowDenseGroupCountDistinct: true,
+			prepareDenseGroupCountDistinctGlobalCodes: true,
+		},
+		{
+			name:                "physical rows stay serial",
+			plan:                columnTypedColumnPhysicalQueryPlan{DenseGroupCount: true, GroupColumn: "collection"},
+			req:                 ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
+			includePhysicalRows: true,
+		},
+		{
+			name: "verify full reads stay serial",
+			plan: columnTypedColumnPhysicalQueryPlan{DenseGroupCount: true, GroupColumn: "collection"},
+			req:  ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityVerify},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := columnTypedColumnPhysicalQueryUseParallelPartDecode(
+				tc.plan,
+				tc.req,
+				readCache,
+				4,
+				tc.includePhysicalRows,
+				tc.allowDenseGroupCountDistinct,
+				tc.prepareDenseInt64SpanGlobalCodes,
+				tc.prepareDenseGroupCountDistinctGlobalCodes,
+				tc.prepareDenseGroupCountDistinctGlobalRanks,
+			)
+			if got != tc.want {
+				t.Fatalf("parallel part decode=%t want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func assertTypedColumnQ2OneShotRankMapsNoGlobalCodes3158(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) {
 	tb.Helper()
 	if col == nil {

@@ -631,16 +631,21 @@ func columnTypedColumnPhysicalQueryUseParallelPartDecode(plan columnTypedColumnP
 	if partCount < 2 || readCache == nil || readCache.resourceManager != nil {
 		return false
 	}
-	if includePhysicalRows || prepareDenseInt64SpanGlobalCodes || prepareDenseGroupCountDistinctGlobalCodes || !prepareDenseGroupCountDistinctGlobalRanks {
-		return false
-	}
-	if !allowDenseGroupCountDistinct || !columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req) {
+	if includePhysicalRows || prepareDenseInt64SpanGlobalCodes || prepareDenseGroupCountDistinctGlobalCodes {
 		return false
 	}
 	if !typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity) {
 		return false
 	}
-	return columnTypedColumnPhysicalQueryPartDecodeWorkers(partCount) > 1
+	if columnTypedColumnPhysicalQueryPartDecodeWorkers(partCount) <= 1 {
+		return false
+	}
+	if prepareDenseGroupCountDistinctGlobalRanks {
+		return allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req)
+	}
+	return columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req) ||
+		columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req) ||
+		columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req)
 }
 
 func columnTypedColumnPhysicalQueryPartDecodeWorkers(partCount int) int {
