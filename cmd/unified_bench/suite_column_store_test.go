@@ -579,6 +579,23 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.InsertStats.ColumnPublishAssetPreparationDurationMS <= 0 {
 		t.Fatalf("column publish asset preparation timing missing: %+v", report.InsertStats)
 	}
+	if report.InsertStats.ColumnPublishRowAssetPrepareDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAggregateMetadataDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendDurationMS <= 0 {
+		t.Fatalf("column publish asset-family timing missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.ColumnPublishRowAssetBytes <= 0 ||
+		report.InsertStats.ColumnPublishAggregateMetadataBytes <= 0 ||
+		report.InsertStats.ColumnPublishSharedAppendBytes <= 0 {
+		t.Fatalf("column publish asset-family byte counters missing: %+v", report.InsertStats)
+	}
+	if report.MetadataCost.AggregateMetadataPrepareMS <= 0 || report.MetadataCost.InsertCostDurationMS <= 0 || report.MetadataCost.InsertCostUpperBoundMS <= 0 {
+		t.Fatalf("metadata cost missing split insert accounting: %+v", report.MetadataCost)
+	}
+	if report.MetadataCost.InsertCostBasis == "column_publish_asset_preparation_total_current_upper_bound" ||
+		report.MetadataCost.InsertCostBasis == "column_publish_asset_preparation_total_upper_bound_all_asset_families" {
+		t.Fatalf("metadata cost basis should not be full asset-preparation upper bound when metadata refs exist: %+v", report.MetadataCost)
+	}
 	if report.InsertStats.ColumnPublishManifestEncodeDurationMS < 0 || report.InsertStats.ColumnPublishRootDeltaDurationMS < 0 {
 		t.Fatalf("column publish tiny subphase timing invalid: %+v", report.InsertStats)
 	}
@@ -682,12 +699,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store JSON missing WAL-excluded durable storage field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`, `"column_publish_build_column_delta_duration_ms"`, `"column_publish_commit_duration_ms"`, `"column_publish_asset_preparation_duration_ms"`, `"column_publish_required_asset_bytes"`} {
+	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`, `"column_publish_build_column_delta_duration_ms"`, `"column_publish_commit_duration_ms"`, `"column_publish_asset_preparation_duration_ms"`, `"column_publish_row_asset_prepare_duration_ms"`, `"column_publish_aggregate_metadata_prepare_duration_ms"`, `"column_publish_asset_append_duration_ms"`, `"column_publish_aggregate_metadata_bytes"`, `"column_publish_shared_asset_append_bytes"`, `"column_publish_required_asset_bytes"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing insert phase field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"metadata_cost"`, `"aggregate_metadata_storage_bytes"`, `"aggregate_metadata_sidecar_bytes"`, `"aggregate_metadata_embedded_bytes"`, `"aggregate_metadata_refs"`, `"insert_cost_basis"`, `"storage_cost_basis"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
+	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"metadata_cost"`, `"aggregate_metadata_storage_bytes"`, `"aggregate_metadata_sidecar_bytes"`, `"aggregate_metadata_embedded_bytes"`, `"aggregate_metadata_refs"`, `"aggregate_metadata_prepare_duration_ms"`, `"aggregate_metadata_append_share_duration_ms"`, `"insert_cost_upper_bound_duration_ms"`, `"insert_cost_basis"`, `"insert_cost_upper_bound_basis"`, `"storage_cost_basis"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing reporting field %s:\n%s", want, data)
 		}
@@ -715,12 +732,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing WAL-excluded durable storage field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio", "column_publish_rows", "column publish subphase", "build_column_delta_callback", "publish_commit_total"} {
+	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio", "column_publish_rows", "column_publish_aggregate_metadata_bytes", "column publish subphase", "build_column_delta_callback", "publish_commit_total", "aggregate_metadata_prepare", "asset_append"} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "insert_cost_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "aggregate_metadata_prepare_duration_ms", "aggregate_metadata_append_share_duration_ms", "insert_cost_upper_bound_duration_ms", "insert_cost_basis", "insert_cost_upper_bound_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
 		}
