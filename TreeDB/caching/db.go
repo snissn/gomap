@@ -2251,7 +2251,7 @@ const (
 	adaptiveSequentialWritePct                                     = 0.85
 	adaptiveRangeIteratorPct                                       = 0.40
 	adaptiveOverwriteWritePct                                      = 0.25
-	adaptiveBTreeMinIteratorSamplesDefault                         = 0
+	adaptiveBTreeMinIteratorSamplesDefault                         = 64
 	adaptiveWarmupBytes                                            = 16 * 1024 * 1024
 	maxMemtableBytesPerShard                                       = int64(3 << 30)
 	maxOuterLeafArenaPoolCap                                       = 16 << 20

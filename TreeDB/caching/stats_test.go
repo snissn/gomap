@@ -123,18 +123,25 @@ func TestChooseAdaptiveMode(t *testing.T) {
 		t.Errorf("sequential mode = %v, want %v", got, memtable.ModeAppendOnly)
 	}
 
-	// 3. High range scans -> BTree
+	// 3. Sparse range scans are not enough to leave the write-friendly base.
 	// Reset
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10) // Low seq
 	db.memtableStats.overwriteWrites.Store(0)
-	db.memtableStats.iterators.Store(100)
-	db.memtableStats.rangeIters.Store(80) // 80% range
+	db.memtableStats.iterators.Store(adaptiveBTreeMinIteratorSamplesDefault / 2)
+	db.memtableStats.rangeIters.Store(adaptiveBTreeMinIteratorSamplesDefault / 2)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
+		t.Errorf("sparse range scan mode = %v, want %v", got, memtable.ModeHashSorted)
+	}
+
+	// 4. Sustained high range scans -> BTree
+	db.memtableStats.iterators.Store(adaptiveBTreeMinIteratorSamplesDefault * 2)
+	db.memtableStats.rangeIters.Store(adaptiveBTreeMinIteratorSamplesDefault * 2)
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeBTree {
 		t.Errorf("range scan mode = %v, want %v", got, memtable.ModeBTree)
 	}
 
-	// 4. High overwrites -> HashSorted
+	// 5. High overwrites -> HashSorted
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites)
 	db.memtableStats.overwriteWrites.Store(adaptiveMinWrites / 2)

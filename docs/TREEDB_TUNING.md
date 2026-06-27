@@ -208,6 +208,19 @@ Note on memtable sharding:
 - With `MemtableShards > 1`, `queue_len` counts per-shard immutables, so a queue
   length of 40 may correspond to only ~5 rotations at 8 shards.
 
+### Adaptive BTree promotion
+
+`MemtableMode=adaptive` and `adaptive:<base>` can promote mutable memtables to
+the BTree implementation when range iterators dominate the observed read path.
+BTree memtables are useful for sustained range-heavy workloads, but they carry
+more heap overhead than the write-friendly append-only or hash-sorted modes.
+
+By default, TreeDB now requires at least 64 iterator samples and 64 range
+iterator samples before adaptive mode can choose BTree. This filters sparse
+range-iterator noise during restore or bootstrap phases. Use
+`TREEDB_ADAPTIVE_BTREE_MIN_ITERATOR_SAMPLES` to raise or lower the gate for a
+specific deployment.
+
 ### `Options.IteratorMutableMaxBytes` (cached mode; opt-in)
 
 Allows iterators to read from mutable memtables without forcing a rotation when
