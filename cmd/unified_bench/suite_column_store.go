@@ -219,6 +219,14 @@ type columnStoreInsertPhaseMetric struct {
 	RetainedPayloadRows                       int     `json:"retained_payload_rows,omitempty"`
 	RetainedPayloadDeclaredRows               int     `json:"retained_payload_declared_rows,omitempty"`
 	RetainedPayloadSemanticStreamBlocks       int     `json:"retained_payload_semantic_stream_blocks,omitempty"`
+	RetainedPayloadValueLogPointerizeMS       float64 `json:"retained_payload_value_log_pointerize_duration_ms,omitempty"`
+	RetainedPayloadValueLogPointerizeNsPerRow float64 `json:"retained_payload_value_log_pointerize_ns_per_row,omitempty"`
+	RetainedPayloadValueLogValues             int     `json:"retained_payload_value_log_values,omitempty"`
+	RetainedPayloadValueLogBytes              int64   `json:"retained_payload_value_log_bytes,omitempty"`
+	RetainedStreamValueLogPointerizeMS        float64 `json:"retained_stream_value_log_pointerize_duration_ms,omitempty"`
+	RetainedStreamValueLogPointerizeNsPerRow  float64 `json:"retained_stream_value_log_pointerize_ns_per_row,omitempty"`
+	RetainedStreamValueLogValues              int     `json:"retained_stream_value_log_values,omitempty"`
+	RetainedStreamValueLogBytes               int64   `json:"retained_stream_value_log_bytes,omitempty"`
 	ColumnPublishBuildColumnDeltaDurationMS   float64 `json:"column_publish_build_column_delta_duration_ms,omitempty"`
 	ColumnPublishBuildColumnDeltaNsPerRow     float64 `json:"column_publish_build_column_delta_ns_per_row,omitempty"`
 	ColumnPublishBuildSystemDeltaDurationMS   float64 `json:"column_publish_build_system_delta_duration_ms,omitempty"`
@@ -1506,6 +1514,12 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.RetainedPayloadRows += src.RetainedPayloadRows
 	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
 	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	dst.RetainedPayloadValueLogPointerize += src.RetainedPayloadValueLogPointerize
+	dst.RetainedPayloadValueLogValues += src.RetainedPayloadValueLogValues
+	dst.RetainedPayloadValueLogBytes += src.RetainedPayloadValueLogBytes
+	dst.RetainedStreamValueLogPointerize += src.RetainedStreamValueLogPointerize
+	dst.RetainedStreamValueLogValues += src.RetainedStreamValueLogValues
+	dst.RetainedStreamValueLogBytes += src.RetainedStreamValueLogBytes
 	dst.ColumnPublishBuildColumnDelta += src.ColumnPublishBuildColumnDelta
 	dst.ColumnPublishBuildSystemDelta += src.ColumnPublishBuildSystemDelta
 	dst.ColumnPublishCommit += src.ColumnPublishCommit
@@ -1570,6 +1584,14 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		RetainedPayloadRows:                       stats.RetainedPayloadRows,
 		RetainedPayloadDeclaredRows:               stats.RetainedPayloadDeclaredRows,
 		RetainedPayloadSemanticStreamBlocks:       stats.RetainedPayloadSemanticStreamBlocks,
+		RetainedPayloadValueLogPointerizeMS:       durationMS(stats.RetainedPayloadValueLogPointerize),
+		RetainedPayloadValueLogPointerizeNsPerRow: nsPerRow(stats.RetainedPayloadValueLogPointerize, rows),
+		RetainedPayloadValueLogValues:             stats.RetainedPayloadValueLogValues,
+		RetainedPayloadValueLogBytes:              stats.RetainedPayloadValueLogBytes,
+		RetainedStreamValueLogPointerizeMS:        durationMS(stats.RetainedStreamValueLogPointerize),
+		RetainedStreamValueLogPointerizeNsPerRow:  nsPerRow(stats.RetainedStreamValueLogPointerize, rows),
+		RetainedStreamValueLogValues:              stats.RetainedStreamValueLogValues,
+		RetainedStreamValueLogBytes:               stats.RetainedStreamValueLogBytes,
 		ColumnPublishBuildColumnDeltaDurationMS:   durationMS(stats.ColumnPublishBuildColumnDelta),
 		ColumnPublishBuildColumnDeltaNsPerRow:     nsPerRow(stats.ColumnPublishBuildColumnDelta, rows),
 		ColumnPublishBuildSystemDeltaDurationMS:   durationMS(stats.ColumnPublishBuildSystemDelta),
@@ -4529,6 +4551,10 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("- retained_payload_rows: %d\n", stats.RetainedPayloadRows))
 	sb.WriteString(fmt.Sprintf("- retained_payload_declared_rows: %d\n", stats.RetainedPayloadDeclaredRows))
 	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks: %d\n", stats.RetainedPayloadSemanticStreamBlocks))
+	sb.WriteString(fmt.Sprintf("- retained_payload_value_log_values: %d\n", stats.RetainedPayloadValueLogValues))
+	sb.WriteString(fmt.Sprintf("- retained_payload_value_log_bytes: %d\n", stats.RetainedPayloadValueLogBytes))
+	sb.WriteString(fmt.Sprintf("- retained_stream_value_log_values: %d\n", stats.RetainedStreamValueLogValues))
+	sb.WriteString(fmt.Sprintf("- retained_stream_value_log_bytes: %d\n", stats.RetainedStreamValueLogBytes))
 	sb.WriteString(fmt.Sprintf("- column_store_declared_row_reuse_coverage_ratio: %.6f\n", stats.ColumnStoreDeclaredRowReuseCoverageRatio))
 	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks_per_run: %.6f\n\n", stats.RetainedPayloadSemanticStreamBlocksPerRun))
 	sb.WriteString(fmt.Sprintf("- column_publish_rows: %d\n", stats.ColumnPublishRows))
@@ -4547,6 +4573,8 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("| `prepare_documents` | %.3f | %.1f |\n", stats.PrepareDocumentsDurationMS, stats.PrepareDocumentsNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `duplicate_document_preflight` | %.3f | %.1f |\n", stats.DuplicateDocumentPreflightDurationMS, stats.DuplicateDocumentPreflightNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `retained_payload_prepare` | %.3f | %.1f |\n", stats.RetainedPayloadPrepareDurationMS, stats.RetainedPayloadPrepareNsPerRow))
+	sb.WriteString(fmt.Sprintf("| `retained_payload_value_log_pointerize` | %.3f | %.1f |\n", stats.RetainedPayloadValueLogPointerizeMS, stats.RetainedPayloadValueLogPointerizeNsPerRow))
+	sb.WriteString(fmt.Sprintf("| `retained_stream_value_log_pointerize` | %.3f | %.1f |\n", stats.RetainedStreamValueLogPointerizeMS, stats.RetainedStreamValueLogPointerizeNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `primary_run_build` | %.3f | %.1f |\n", stats.PrimaryRunBuildDurationMS, stats.PrimaryRunBuildNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `publish` | %.3f | %.1f |\n\n", stats.PublishDurationMS, stats.PublishNsPerRow))
 
