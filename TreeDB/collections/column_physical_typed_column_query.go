@@ -198,6 +198,10 @@ type columnTypedColumnPhysicalQueryPartDecodeOutput struct {
 	part columnTypedColumnPhysicalQueryPart
 }
 
+type columnTypedColumnPhysicalQueryPartDecodeOptions struct {
+	eagerTimeOrderTopKPayloads bool
+}
+
 type columnTypedColumnPhysicalAggregateSummary struct {
 	groups              []ColumnPhysicalQueryGroup
 	matchedRows         int
@@ -544,7 +548,12 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 		})
 	}
 	if columnTypedColumnPhysicalQueryUseParallelPartDecode(plan, req, readCache, len(inputs), includePhysicalRows, allowDenseGroupCountDistinct, prepareDenseInt64SpanGlobalCodes, prepareDenseGroupCountDistinctGlobalCodes, prepareDenseGroupCountDistinctGlobalRanks) {
-		outputs, hits, misses, err := decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view, req, plan, inputs, readCache, includePhysicalRows, allowDenseGroupCountDistinct)
+		// Worker read caches close after decode, so parallel TopK runners must
+		// own payload bytes instead of retaining lazy range readers.
+		decodeOpts := columnTypedColumnPhysicalQueryPartDecodeOptions{
+			eagerTimeOrderTopKPayloads: columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req),
+		}
+		outputs, hits, misses, err := decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view, req, plan, inputs, readCache, includePhysicalRows, allowDenseGroupCountDistinct, decodeOpts)
 		if err != nil {
 			return nil, err
 		}
@@ -556,7 +565,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 	} else {
 		var rawScratch []byte
 		for _, input := range inputs {
-			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, rawScratch)
+			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, columnTypedColumnPhysicalQueryPartDecodeOptions{}, rawScratch)
 			runner.segmentFileCacheHits = readCache.hits
 			runner.segmentFileCacheMisses = readCache.misses
 			if err != nil {
@@ -589,8 +598,8 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 	return runner, nil
 }
 
-func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool, rawScratch []byte) (columnTypedColumnPhysicalQueryPart, []byte, error) {
-	part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct, includePhysicalRows)
+func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions, rawScratch []byte) (columnTypedColumnPhysicalQueryPart, []byte, error) {
+	part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct, includePhysicalRows, opts)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, rawScratch, fmt.Errorf("collections: typed-column part physical query range decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 	}
@@ -645,7 +654,8 @@ func columnTypedColumnPhysicalQueryUseParallelPartDecode(plan columnTypedColumnP
 	}
 	return columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req) ||
 		columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req) ||
-		columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req)
+		columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req) ||
+		columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req)
 }
 
 func columnTypedColumnPhysicalQueryPartDecodeWorkers(partCount int) int {
@@ -660,7 +670,7 @@ func columnTypedColumnPhysicalQueryPartDecodeWorkers(partCount int) int {
 	return workers
 }
 
-func decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, inputs []columnTypedColumnPhysicalQueryPartDecodeInput, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool) ([]columnTypedColumnPhysicalQueryPartDecodeOutput, uint64, uint64, error) {
+func decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, inputs []columnTypedColumnPhysicalQueryPartDecodeInput, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions) ([]columnTypedColumnPhysicalQueryPartDecodeOutput, uint64, uint64, error) {
 	workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(inputs))
 	if workers < 2 {
 		return nil, 0, 0, errors.New("collections: typed-column part physical query parallel decode missing workers")
@@ -700,7 +710,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view columnPhysical
 			}()
 			var rawScratch []byte
 			for input := range jobs {
-				part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, cache, includePhysicalRows, allowDenseGroupCountDistinct, rawScratch)
+				part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, cache, includePhysicalRows, allowDenseGroupCountDistinct, opts, rawScratch)
 				if err != nil {
 					setErr(err)
 					continue
