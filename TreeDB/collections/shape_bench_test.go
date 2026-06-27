@@ -36,6 +36,12 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.RetainedPayloadRows += src.RetainedPayloadRows
 	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
 	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	dst.RetainedPayloadValueLogPointerize += src.RetainedPayloadValueLogPointerize
+	dst.RetainedPayloadValueLogValues += src.RetainedPayloadValueLogValues
+	dst.RetainedPayloadValueLogBytes += src.RetainedPayloadValueLogBytes
+	dst.RetainedStreamValueLogPointerize += src.RetainedStreamValueLogPointerize
+	dst.RetainedStreamValueLogValues += src.RetainedStreamValueLogValues
+	dst.RetainedStreamValueLogBytes += src.RetainedStreamValueLogBytes
 	dst.ColumnPublishBuildColumnDelta += src.ColumnPublishBuildColumnDelta
 	dst.ColumnPublishBuildSystemDelta += src.ColumnPublishBuildSystemDelta
 	dst.ColumnPublishCommit += src.ColumnPublishCommit
@@ -99,6 +105,8 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("index_state_extract_ns/doc", stats.IndexStateExtraction)
 	reportDuration("duplicate_preflight_ns/doc", stats.DuplicateDocumentPreflight)
 	reportDuration("retained_payload_prepare_ns/doc", stats.RetainedPayloadPrepare)
+	reportDuration("retained_payload_vlog_pointerize_ns/doc", stats.RetainedPayloadValueLogPointerize)
+	reportDuration("retained_stream_vlog_pointerize_ns/doc", stats.RetainedStreamValueLogPointerize)
 	reportDuration("column_publish_build_column_delta_ns/doc", stats.ColumnPublishBuildColumnDelta)
 	reportDuration("column_publish_build_system_delta_ns/doc", stats.ColumnPublishBuildSystemDelta)
 	reportDuration("column_publish_commit_ns/doc", stats.ColumnPublishCommit)
@@ -131,6 +139,18 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	}
 	if stats.ColumnPublishManifestBytes > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishManifestBytes)/float64(docs), "column_publish_manifest_bytes/doc")
+	}
+	if stats.RetainedPayloadValueLogValues > 0 {
+		b.ReportMetric(float64(stats.RetainedPayloadValueLogValues)/float64(docs), "retained_payload_vlog_values/doc")
+	}
+	if stats.RetainedPayloadValueLogBytes > 0 {
+		b.ReportMetric(float64(stats.RetainedPayloadValueLogBytes)/float64(docs), "retained_payload_vlog_bytes/doc")
+	}
+	if stats.RetainedStreamValueLogValues > 0 {
+		b.ReportMetric(float64(stats.RetainedStreamValueLogValues)/float64(docs), "retained_stream_vlog_values/doc")
+	}
+	if stats.RetainedStreamValueLogBytes > 0 {
+		b.ReportMetric(float64(stats.RetainedStreamValueLogBytes)/float64(docs), "retained_stream_vlog_bytes/doc")
 	}
 	reportDuration("unique_preflight_ns/doc", stats.UniqueIndexPreflight)
 	reportDuration("template_run_ns/doc", stats.TemplateRunBuild)
@@ -200,6 +220,54 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 	}
 	if got := result.Extra["column_publish_manifest_bytes/doc"]; got <= 0 {
 		t.Fatalf("column publish manifest bytes metric=%v want positive", got)
+	}
+}
+
+func TestCollectionShapeInsertStatsIncludesRetainedValueLogPointerization(t *testing.T) {
+	var stats collections.CollectionInsertStats
+	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		RetainedPayloadValueLogPointerize: 10 * time.Microsecond,
+		RetainedPayloadValueLogValues:     3,
+		RetainedPayloadValueLogBytes:      300,
+		RetainedStreamValueLogPointerize:  20 * time.Microsecond,
+		RetainedStreamValueLogValues:      4,
+		RetainedStreamValueLogBytes:       400,
+	})
+	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		RetainedPayloadValueLogPointerize: 5 * time.Microsecond,
+		RetainedPayloadValueLogValues:     2,
+		RetainedPayloadValueLogBytes:      200,
+		RetainedStreamValueLogPointerize:  7 * time.Microsecond,
+		RetainedStreamValueLogValues:      1,
+		RetainedStreamValueLogBytes:       100,
+	})
+	if stats.RetainedPayloadValueLogPointerize != 15*time.Microsecond {
+		t.Fatalf("payload pointerize=%s want 15us", stats.RetainedPayloadValueLogPointerize)
+	}
+	if stats.RetainedPayloadValueLogValues != 5 || stats.RetainedPayloadValueLogBytes != 500 {
+		t.Fatalf("payload value-log values=%d bytes=%d want 5/500", stats.RetainedPayloadValueLogValues, stats.RetainedPayloadValueLogBytes)
+	}
+	if stats.RetainedStreamValueLogPointerize != 27*time.Microsecond {
+		t.Fatalf("stream pointerize=%s want 27us", stats.RetainedStreamValueLogPointerize)
+	}
+	if stats.RetainedStreamValueLogValues != 5 || stats.RetainedStreamValueLogBytes != 500 {
+		t.Fatalf("stream value-log values=%d bytes=%d want 5/500", stats.RetainedStreamValueLogValues, stats.RetainedStreamValueLogBytes)
+	}
+
+	result := testing.Benchmark(func(b *testing.B) {
+		benchmarkReportCollectionInsertStats(b, 10, 1, stats)
+	})
+	for _, name := range []string{
+		"retained_payload_vlog_pointerize_ns/doc",
+		"retained_payload_vlog_values/doc",
+		"retained_payload_vlog_bytes/doc",
+		"retained_stream_vlog_pointerize_ns/doc",
+		"retained_stream_vlog_values/doc",
+		"retained_stream_vlog_bytes/doc",
+	} {
+		if got := result.Extra[name]; got <= 0 {
+			t.Fatalf("%s metric=%v want positive", name, got)
+		}
 	}
 }
 

@@ -2703,6 +2703,12 @@ func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *test
 		ColumnPublishAggregateMetadataCount:   5,
 		ColumnPublishSharedAppendBytes:        606,
 		ColumnPublishSharedAppendCount:        6,
+		RetainedPayloadValueLogPointerize:     8 * time.Millisecond,
+		RetainedPayloadValueLogValues:         7,
+		RetainedPayloadValueLogBytes:          707,
+		RetainedStreamValueLogPointerize:      9 * time.Millisecond,
+		RetainedStreamValueLogValues:          8,
+		RetainedStreamValueLogBytes:           808,
 	}
 
 	metric := columnStoreInsertPhaseMetricFromStats(stats, 1)
@@ -2736,6 +2742,24 @@ func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *test
 	}
 	if got, want := metric.ColumnPublishAssetAppendCloseDurationMS, 4.0; got != want {
 		t.Fatalf("shared append close duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.RetainedPayloadValueLogPointerizeMS, 8.0; got != want {
+		t.Fatalf("retained payload pointerize duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.RetainedPayloadValueLogValues, 7; got != want {
+		t.Fatalf("retained payload pointerized values=%d want %d", got, want)
+	}
+	if got, want := metric.RetainedPayloadValueLogBytes, int64(707); got != want {
+		t.Fatalf("retained payload pointerized bytes=%d want %d", got, want)
+	}
+	if got, want := metric.RetainedStreamValueLogPointerizeMS, 9.0; got != want {
+		t.Fatalf("retained stream pointerize duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.RetainedStreamValueLogValues, 8; got != want {
+		t.Fatalf("retained stream pointerized values=%d want %d", got, want)
+	}
+	if got, want := metric.RetainedStreamValueLogBytes, int64(808); got != want {
+		t.Fatalf("retained stream pointerized bytes=%d want %d", got, want)
 	}
 	if got, want := metric.ColumnPublishTypedColumnBytes, int64(202); got != want {
 		t.Fatalf("typed-column bytes=%d want %d", got, want)
