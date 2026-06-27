@@ -436,6 +436,21 @@ func loadPositiveInt64EnvDefault(key string, def int64) int64 {
 	return v
 }
 
+func vlogGenerationMaintenancePauseFilePath() string {
+	return strings.TrimSpace(os.Getenv(envVlogGenerationMaintenancePauseFile))
+}
+
+func vlogGenerationMaintenancePausedByFile() (bool, string) {
+	path := vlogGenerationMaintenancePauseFilePath()
+	if path == "" {
+		return false, ""
+	}
+	if _, err := os.Stat(path); err == nil {
+		return true, path
+	}
+	return false, path
+}
+
 type leafGenerationPackMaintenanceAdmission struct {
 	allowed bool
 	reason  string
@@ -2189,6 +2204,7 @@ const (
 	envDisableVlogGenerationCheckpointKickHotDebtOnly = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY"
 	envDisableVlogGenerationPeriodicRewritePlanBudget = "TREEDB_DISABLE_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET"
 	envVlogGenerationPeriodicRewritePlanBudgetMillis  = "TREEDB_VLOG_GENERATION_PERIODIC_REWRITE_PLAN_BUDGET_MS"
+	envVlogGenerationMaintenancePauseFile             = "TREEDB_VLOG_MAINTENANCE_PAUSE_FILE"
 	// Experimental immutable-leaf maintenance hook. Disabled by default until
 	// the cached scheduler policy and dwell behavior are validated.
 	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
@@ -8692,6 +8708,7 @@ type DB struct {
 	vlogGenerationMaintenanceCollisions                          atomic.Uint64
 	vlogGenerationMaintenanceSkipWALOnPeriodic                   atomic.Uint64
 	vlogGenerationMaintenanceSkipPhase                           atomic.Uint64
+	vlogGenerationMaintenanceSkipPauseFile                       atomic.Uint64
 	vlogGenerationMaintenanceSkipStageGate                       atomic.Uint64
 	vlogGenerationMaintenanceSkipStageNotDue                     atomic.Uint64
 	vlogGenerationMaintenanceSkipStageDue                        atomic.Uint64
@@ -18913,6 +18930,19 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		return
 	}
 	db.vlogGenerationMaintenanceAttempts.Add(1)
+	if paused, path := vlogGenerationMaintenancePausedByFile(); paused {
+		db.vlogGenerationMaintenanceSkipPauseFile.Add(1)
+		if opts.debugSource != "" {
+			db.debugVlogMaintf(
+				"maintenance_skip reason=pause_file source=%s path=%s checkpoint_pending=%t deferred_pending=%t",
+				opts.debugSource,
+				path,
+				db.vlogGenerationCheckpointKickPending.Load(),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+			)
+		}
+		return
+	}
 	// In WAL-on mode, the periodic "runGC" tick must not enter the maintenance
 	// engine at all. Checkpoint-coupled work belongs to the explicit
 	// checkpoint-kick/deferred paths; letting the periodic GC tick even acquire
@@ -29239,6 +29269,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.maintenance.attempts"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAttempts.Load())
 	stats["treedb.cache.vlog_generation.maintenance.acquired"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceAcquired.Load())
 	stats["treedb.cache.vlog_generation.maintenance.collisions"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceCollisions.Load())
+	pauseFilePath := vlogGenerationMaintenancePauseFilePath()
+	pauseFilePaused, _ := vlogGenerationMaintenancePausedByFile()
+	stats["treedb.cache.vlog_generation.maintenance.pause_file.configured"] = fmt.Sprintf("%t", pauseFilePath != "")
+	stats["treedb.cache.vlog_generation.maintenance.pause_file.paused"] = fmt.Sprintf("%t", pauseFilePaused)
+	stats["treedb.cache.vlog_generation.maintenance.skip.pause_file"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPauseFile.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipWALOnPeriodic.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.maintenance_phase"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipPhase.Load())
 	stats["treedb.cache.vlog_generation.maintenance.skip.stage_gate"] = fmt.Sprintf("%d", db.vlogGenerationMaintenanceSkipStageGate.Load())
