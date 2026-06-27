@@ -311,6 +311,9 @@ type ColumnPublishAssetPreparationMetrics struct {
 	AggregateMetadataBytes        int64
 	AggregateMetadataCount        int
 	RowSidecarSharedBuildDuration time.Duration
+	SharedAppendOpenDuration      time.Duration
+	SharedAppendWriteDuration     time.Duration
+	SharedAppendCloseDuration     time.Duration
 	SharedAppendDuration          time.Duration
 	SharedAppendBytes             int64
 	SharedAppendCount             int

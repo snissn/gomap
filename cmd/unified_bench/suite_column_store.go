@@ -235,6 +235,9 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishAggregateMetadataDurationMS  float64 `json:"column_publish_aggregate_metadata_prepare_duration_ms,omitempty"`
 	ColumnPublishRowSidecarSharedBuildMS      float64 `json:"column_publish_row_sidecar_shared_build_duration_ms,omitempty"`
 	ColumnPublishAssetAppendDurationMS        float64 `json:"column_publish_asset_append_duration_ms,omitempty"`
+	ColumnPublishAssetAppendOpenDurationMS    float64 `json:"column_publish_asset_append_open_duration_ms,omitempty"`
+	ColumnPublishAssetAppendWriteDurationMS   float64 `json:"column_publish_asset_append_write_duration_ms,omitempty"`
+	ColumnPublishAssetAppendCloseDurationMS   float64 `json:"column_publish_asset_append_close_duration_ms,omitempty"`
 	ColumnPublishManifestEncodeDurationMS     float64 `json:"column_publish_manifest_encode_duration_ms,omitempty"`
 	ColumnPublishAssetClosureDurationMS       float64 `json:"column_publish_asset_closure_validation_duration_ms,omitempty"`
 	ColumnPublishRootDeltaDurationMS          float64 `json:"column_publish_root_delta_construction_duration_ms,omitempty"`
@@ -1444,6 +1447,9 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishAggregateMetadataPrepare += src.ColumnPublishAggregateMetadataPrepare
 	dst.ColumnPublishRowSidecarSharedBuild += src.ColumnPublishRowSidecarSharedBuild
 	dst.ColumnPublishAssetAppend += src.ColumnPublishAssetAppend
+	dst.ColumnPublishAssetAppendOpen += src.ColumnPublishAssetAppendOpen
+	dst.ColumnPublishAssetAppendWrite += src.ColumnPublishAssetAppendWrite
+	dst.ColumnPublishAssetAppendClose += src.ColumnPublishAssetAppendClose
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -1508,6 +1514,9 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishAggregateMetadataDurationMS:  durationMS(stats.ColumnPublishAggregateMetadataPrepare),
 		ColumnPublishRowSidecarSharedBuildMS:      durationMS(stats.ColumnPublishRowSidecarSharedBuild),
 		ColumnPublishAssetAppendDurationMS:        durationMS(stats.ColumnPublishAssetAppend),
+		ColumnPublishAssetAppendOpenDurationMS:    durationMS(stats.ColumnPublishAssetAppendOpen),
+		ColumnPublishAssetAppendWriteDurationMS:   durationMS(stats.ColumnPublishAssetAppendWrite),
+		ColumnPublishAssetAppendCloseDurationMS:   durationMS(stats.ColumnPublishAssetAppendClose),
 		ColumnPublishManifestEncodeDurationMS:     durationMS(stats.ColumnPublishManifestEncode),
 		ColumnPublishAssetClosureDurationMS:       durationMS(stats.ColumnPublishAssetClosureValidation),
 		ColumnPublishRootDeltaDurationMS:          durationMS(stats.ColumnPublishRootDeltaConstruction),
@@ -4371,6 +4380,9 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `aggregate_metadata_prepare` | %.3f |  |\n", stats.ColumnPublishAggregateMetadataDurationMS))
 		sb.WriteString(fmt.Sprintf("| `row_sidecar_shared_build` | %.3f |  |\n", stats.ColumnPublishRowSidecarSharedBuildMS))
 		sb.WriteString(fmt.Sprintf("| `asset_append` | %.3f |  |\n", stats.ColumnPublishAssetAppendDurationMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append_open` | %.3f |  |\n", stats.ColumnPublishAssetAppendOpenDurationMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append_write` | %.3f |  |\n", stats.ColumnPublishAssetAppendWriteDurationMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append_close` | %.3f |  |\n", stats.ColumnPublishAssetAppendCloseDurationMS))
 		sb.WriteString(fmt.Sprintf("| `manifest_encode` | %.3f |  |\n", stats.ColumnPublishManifestEncodeDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_closure_validation` | %.3f |  |\n", stats.ColumnPublishAssetClosureDurationMS))
 		sb.WriteString(fmt.Sprintf("| `root_delta_construction` | %.3f |  |\n", stats.ColumnPublishRootDeltaDurationMS))
@@ -4393,6 +4405,9 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 		stats.ColumnPublishAggregateMetadataDurationMS > 0 ||
 		stats.ColumnPublishRowSidecarSharedBuildMS > 0 ||
 		stats.ColumnPublishAssetAppendDurationMS > 0 ||
+		stats.ColumnPublishAssetAppendOpenDurationMS > 0 ||
+		stats.ColumnPublishAssetAppendWriteDurationMS > 0 ||
+		stats.ColumnPublishAssetAppendCloseDurationMS > 0 ||
 		stats.ColumnPublishManifestEncodeDurationMS > 0 ||
 		stats.ColumnPublishAssetClosureDurationMS > 0 ||
 		stats.ColumnPublishRootDeltaDurationMS > 0 ||

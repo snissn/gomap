@@ -508,6 +508,9 @@ type CollectionInsertStats struct {
 	ColumnPublishAggregateMetadataPrepare time.Duration
 	ColumnPublishRowSidecarSharedBuild    time.Duration
 	ColumnPublishAssetAppend              time.Duration
+	ColumnPublishAssetAppendOpen          time.Duration
+	ColumnPublishAssetAppendWrite         time.Duration
+	ColumnPublishAssetAppendClose         time.Duration
 	ColumnPublishManifestEncode           time.Duration
 	ColumnPublishAssetClosureValidation   time.Duration
 	ColumnPublishRootDeltaConstruction    time.Duration
