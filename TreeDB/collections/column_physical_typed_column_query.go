@@ -1116,6 +1116,7 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts []columnTypedColu
 	if err != nil {
 		return nil, 0, err
 	}
+	capacity = columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity)
 	ranks := make(map[string]uint32, capacity)
 	addValue := func(value string) error {
 		if _, ok := ranks[value]; ok {
@@ -1168,6 +1169,17 @@ func columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts []columnTy
 		capacity += len(column.Dictionary)
 	}
 	return capacity, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctRankMapCapacity(dictionaryCapacity int) int {
+	const (
+		rankMapShrinkThreshold = 1 << 15
+		rankMapShrinkDivisor   = 3
+	)
+	if dictionaryCapacity <= rankMapShrinkThreshold {
+		return dictionaryCapacity
+	}
+	return dictionaryCapacity / rankMapShrinkDivisor
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error {

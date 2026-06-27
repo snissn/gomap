@@ -249,6 +249,18 @@ func TestTypedColumnQ2DenseGroupCountDistinctBitsetLayout1950(t *testing.T) {
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctRankMapCapacity3158(t *testing.T) {
+	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity((1<<15)-1), (1<<15)-1; got != want {
+		t.Fatalf("small rank map capacity=%d want %d", got, want)
+	}
+	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity(1<<15), 1<<15; got != want {
+		t.Fatalf("threshold rank map capacity=%d want %d", got, want)
+	}
+	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity(627_647), 209_215; got != want {
+		t.Fatalf("large rank map capacity=%d want %d", got, want)
+	}
+}
+
 func TestTypedColumnQ2DenseGroupCountDistinctActiveGroupBitset1950(t *testing.T) {
 	const (
 		groupCardinality    = 4096
