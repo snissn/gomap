@@ -376,6 +376,44 @@ func TestGroupedFrameCache_AllocatesShardSlotsLazily(t *testing.T) {
 	}
 }
 
+func TestGroupedFrameCache_BudgetSkipDoesNotAllocateColdShard(t *testing.T) {
+	f := newTestGroupedCacheFile(2048, 1024, 64)
+	cache := f.ensureGroupedFrameCache()
+	if cache == nil {
+		t.Fatalf("expected grouped cache")
+	}
+	firstStart := int64(1)
+	firstShard := cache.shardFor(firstStart, false)
+	coldStart := firstStart + 1
+	for cache.shardFor(coldStart, false) == firstShard {
+		coldStart++
+	}
+
+	firstOffsets := groupedCacheOffsets(64)
+	if !f.groupedFrameCacheStore(firstStart, false, 1, firstOffsets, bytes.Repeat([]byte{'x'}, 64), false) {
+		t.Fatalf("store first grouped frame")
+	}
+	before := f.groupedFrameCacheDetailedStats()
+	if before.AllocatedShards != 1 || before.AllocatedSlots == 0 || before.RetainedBytes != 64 {
+		t.Fatalf("unexpected stats after first admission: %+v", before)
+	}
+
+	coldOffsets := groupedCacheOffsets(16)
+	if f.groupedFrameCacheStore(coldStart, false, 1, coldOffsets, bytes.Repeat([]byte{'y'}, 16), false) {
+		t.Fatalf("over-budget cold shard was admitted")
+	}
+	after := f.groupedFrameCacheDetailedStats()
+	if after.SkippedBudget == before.SkippedBudget {
+		t.Fatalf("expected budget skip, before=%+v after=%+v", before, after)
+	}
+	if after.AllocatedShards != before.AllocatedShards || after.AllocatedSlots != before.AllocatedSlots {
+		t.Fatalf("budget skip allocated cold shard slots: before=%+v after=%+v", before, after)
+	}
+	if coldShard := cache.shardFor(coldStart, false); len(coldShard.slots) != 0 || coldShard.allocated.Load() {
+		t.Fatalf("cold shard allocated on budget skip: allocated=%v slots=%d", coldShard.allocated.Load(), len(coldShard.slots))
+	}
+}
+
 func TestGroupedFrameCache_ConfigSettersDoNotCreateIdleCache(t *testing.T) {
 	f := &File{}
 	f.setGroupedFrameCacheEntries(4)

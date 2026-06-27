@@ -428,27 +428,31 @@ func (c *groupedFrameCache) store(start int64, verifyCRC bool, k int, offsets [M
 	}
 	defer s.mu.Unlock()
 	if !s.allocated.Load() {
-		s.slots = make([]groupedFrameCacheSlot, s.cap)
-		s.allocated.Store(true)
-	}
-
-	// Replace any existing entry for the same identity in this shard. The new
-	// entry includes K/raw length/offsets, so stale state cannot be reused across
-	// frame shape changes at the same file-local start.
-	for i := range s.slots {
-		slot := &s.slots[i]
-		if slot.valid && slot.start == start && slot.verifyCRC == verifyCRC {
-			s.evictSlotLocked(c, i)
-		}
-	}
-
-	for !c.reserve(len(raw)) {
-		idx := s.oldestIndexLocked()
-		if idx < 0 {
+		if !c.reserve(len(raw)) {
 			c.skippedBudget.Add(1)
 			return false
 		}
-		s.evictSlotLocked(c, idx)
+		s.slots = make([]groupedFrameCacheSlot, s.cap)
+		s.allocated.Store(true)
+	} else {
+		// Replace any existing entry for the same identity in this shard. The new
+		// entry includes K/raw length/offsets, so stale state cannot be reused across
+		// frame shape changes at the same file-local start.
+		for i := range s.slots {
+			slot := &s.slots[i]
+			if slot.valid && slot.start == start && slot.verifyCRC == verifyCRC {
+				s.evictSlotLocked(c, i)
+			}
+		}
+
+		for !c.reserve(len(raw)) {
+			idx := s.oldestIndexLocked()
+			if idx < 0 {
+				c.skippedBudget.Add(1)
+				return false
+			}
+			s.evictSlotLocked(c, idx)
+		}
 	}
 
 	idx := s.emptyIndexLocked()
