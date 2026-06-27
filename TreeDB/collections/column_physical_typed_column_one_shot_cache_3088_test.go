@@ -97,6 +97,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
 	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 first one-shot", first.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 	assertTypedColumnOneShotCacheDiagnostics3158(t, "q2 first one-shot", first.Diagnostics, false, true, true)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 first", 1, 0, 1, 1, 0)
+	assertTypedColumnQ2OneShotRankMapsNoGlobalCodes3158(t, col, req)
 
 	q1Req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
 	q1, err := col.RunColumnPhysicalQuery(q1Req)
@@ -114,6 +115,69 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
 	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 second one-shot", second.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 	assertTypedColumnOneShotCacheDiagnostics3158(t, "q2 second one-shot", second.Diagnostics, true, false, false)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 second", 2, 1, 2, 2, 0)
+	assertTypedColumnQ2OneShotRankMapsNoGlobalCodes3158(t, col, req)
+}
+
+func assertTypedColumnQ2OneShotRankMapsNoGlobalCodes3158(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) {
+	tb.Helper()
+	if col == nil {
+		tb.Fatalf("nil collection")
+	}
+	wantPredicates := collectionTypedColumnOneShotPredicateKey(req)
+	var entry *collectionTypedColumnOneShotCacheEntry
+	col.typedColumnOneShotMu.Lock()
+	for slot, current := range col.typedColumnOneShot {
+		if slot.kind == req.Kind &&
+			slot.groupColumn == req.GroupColumn &&
+			slot.distinctColumn == req.DistinctColumn &&
+			slot.predicates == wantPredicates {
+			entry = current
+			break
+		}
+	}
+	col.typedColumnOneShotMu.Unlock()
+	if entry == nil {
+		tb.Fatalf("q2 typed-column one-shot cache entry not found")
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	runner := entry.runner
+	if runner == nil {
+		tb.Fatalf("q2 typed-column one-shot cache entry has nil runner")
+	}
+	if len(runner.parts) < 2 {
+		tb.Fatalf("q2 typed-column one-shot runner parts=%d want multiple local dictionaries", len(runner.parts))
+	}
+	for partIdx := range runner.parts {
+		dense := runner.parts[partIdx].DenseGroupCountDistinct
+		if dense == nil {
+			tb.Fatalf("q2 typed-column one-shot part %d missing dense grouped count-distinct state", partIdx)
+		}
+		assertTypedColumnQ2OneShotColumnRankMapsNoGlobalCodes3158(tb, partIdx, "group", &dense.Group)
+		assertTypedColumnQ2OneShotColumnRankMapsNoGlobalCodes3158(tb, partIdx, "distinct", &dense.Distinct)
+	}
+}
+
+func assertTypedColumnQ2OneShotColumnRankMapsNoGlobalCodes3158(tb testing.TB, partIdx int, label string, column *columnTypedColumnDenseStringCodeColumn) {
+	tb.Helper()
+	if column == nil {
+		tb.Fatalf("q2 typed-column one-shot part %d %s column missing", partIdx, label)
+	}
+	if len(column.GlobalCodes) != 0 {
+		tb.Fatalf("q2 typed-column one-shot part %d %s global codes=%d want 0", partIdx, label, len(column.GlobalCodes))
+	}
+	if label == "group" && column.GlobalDictionary == nil {
+		tb.Fatalf("q2 typed-column one-shot part %d %s global dictionary is nil", partIdx, label)
+	}
+	if label == "distinct" && column.GlobalDictionary != nil {
+		tb.Fatalf("q2 typed-column one-shot part %d %s global dictionary allocated=%d want nil", partIdx, label, len(column.GlobalDictionary))
+	}
+	if !column.GlobalCardinalityOK {
+		tb.Fatalf("q2 typed-column one-shot part %d %s global cardinality not prepared", partIdx, label)
+	}
+	if len(column.GlobalLocalRanks) != len(column.Dictionary) {
+		tb.Fatalf("q2 typed-column one-shot part %d %s local rank entries=%d want dictionary=%d", partIdx, label, len(column.GlobalLocalRanks), len(column.Dictionary))
+	}
 }
 
 func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, wantHit, wantMiss, wantBuild bool) {
