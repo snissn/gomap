@@ -156,6 +156,7 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	plan                                  columnTypedColumnPhysicalQueryPlan
 	parts                                 []columnTypedColumnPhysicalQueryPart
 	aggregateSummary                      *columnTypedColumnPhysicalAggregateSummary
+	prepareDiagnostics                    columnTypedColumnPhysicalQueryPrepareDiagnostics
 	assetBytes                            int64
 	sections                              int
 	sectionBytes                          uint64
@@ -198,11 +199,75 @@ type columnTypedColumnPhysicalQueryPartDecodeInput struct {
 }
 
 type columnTypedColumnPhysicalQueryPartDecodeOutput struct {
-	part columnTypedColumnPhysicalQueryPart
+	part               columnTypedColumnPhysicalQueryPart
+	prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
 }
 
 type columnTypedColumnPhysicalQueryPartDecodeOptions struct {
 	eagerTimeOrderTopKPayloads bool
+}
+
+type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
+	PlanNanos           int64
+	RefsNanos           int64
+	PairingNanos        int64
+	PartDecodeNanos     int64
+	PostPrepareNanos    int64
+	SummaryNanos        int64
+	ReadImageNanos      int64
+	StateBuildNanos     int64
+	DictionaryNanos     int64
+	RangeReadNanos      int64
+	RangeReadBytes      int64
+	AdapterNanos        int64
+	DenseGroupNanos     int64
+	DenseValueNanos     int64
+	DensePredicateNanos int64
+	DensePreapplyNanos  int64
+}
+
+func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPhysicalQueryDiagnostics) {
+	if diag == nil {
+		return
+	}
+	diag.TypedColumnPreparePlanNanos += d.PlanNanos
+	diag.TypedColumnPrepareRefsNanos += d.RefsNanos
+	diag.TypedColumnPreparePairingNanos += d.PairingNanos
+	diag.TypedColumnPreparePartDecodeNanos += d.PartDecodeNanos
+	diag.TypedColumnPreparePostPrepareNanos += d.PostPrepareNanos
+	diag.TypedColumnPrepareSummaryNanos += d.SummaryNanos
+	diag.TypedColumnPrepareReadImageNanos += d.ReadImageNanos
+	diag.TypedColumnPrepareStateBuildNanos += d.StateBuildNanos
+	diag.TypedColumnPrepareDictionaryNanos += d.DictionaryNanos
+	diag.TypedColumnPrepareRangeReadNanos += d.RangeReadNanos
+	diag.TypedColumnPrepareRangeReadBytes += d.RangeReadBytes
+	diag.TypedColumnPrepareAdapterNanos += d.AdapterNanos
+	diag.TypedColumnPrepareDenseGroupNanos += d.DenseGroupNanos
+	diag.TypedColumnPrepareDenseValueNanos += d.DenseValueNanos
+	diag.TypedColumnPrepareDensePredicateNanos += d.DensePredicateNanos
+	diag.TypedColumnPrepareDensePreapplyNanos += d.DensePreapplyNanos
+}
+
+func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedColumnPhysicalQueryPrepareDiagnostics) {
+	if d == nil {
+		return
+	}
+	d.PlanNanos += src.PlanNanos
+	d.RefsNanos += src.RefsNanos
+	d.PairingNanos += src.PairingNanos
+	d.PartDecodeNanos += src.PartDecodeNanos
+	d.PostPrepareNanos += src.PostPrepareNanos
+	d.SummaryNanos += src.SummaryNanos
+	d.ReadImageNanos += src.ReadImageNanos
+	d.StateBuildNanos += src.StateBuildNanos
+	d.DictionaryNanos += src.DictionaryNanos
+	d.RangeReadNanos += src.RangeReadNanos
+	d.RangeReadBytes += src.RangeReadBytes
+	d.AdapterNanos += src.AdapterNanos
+	d.DenseGroupNanos += src.DenseGroupNanos
+	d.DenseValueNanos += src.DenseValueNanos
+	d.DensePredicateNanos += src.DensePredicateNanos
+	d.DensePreapplyNanos += src.DensePreapplyNanos
 }
 
 type columnTypedColumnPhysicalAggregateSummary struct {
@@ -408,7 +473,7 @@ func runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view colum
 		return result, true, fmt.Errorf("%w: typed-column sorted latest-visible physical query requires sorted typed_column_part assets", ErrColumnQueryPlanUnsupported)
 	}
 
-	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, &readCache, columnTypedColumnPhysicalQueryUseSortedLatestVisible(plan, req), false, false, false)
+	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, &readCache, columnTypedColumnPhysicalQueryUseSortedLatestVisible(plan, req), false, false, false, nil)
 	if err != nil {
 		result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
 		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
@@ -480,7 +545,10 @@ func prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view columnPhysicalS
 	if !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return nil, false, nil
 	}
+	var prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+	phaseStart := time.Now()
 	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
+	prepareDiagnostics.PlanNanos = time.Since(phaseStart).Nanoseconds()
 	if err != nil || !candidate {
 		return nil, candidate, err
 	}
@@ -490,33 +558,42 @@ func prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view columnPhysicalS
 	if readCache == nil {
 		return nil, true, errors.New("collections: typed-column part physical query missing read cache")
 	}
+	phaseStart = time.Now()
 	refsByGeneration, err := typedColumnPhysicalQueryRefsByGeneration(view)
+	prepareDiagnostics.RefsNanos = time.Since(phaseStart).Nanoseconds()
 	if err != nil {
 		return nil, true, err
 	}
 	if len(refsByGeneration) == 0 {
-		runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs))}
+		runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs)), prepareDiagnostics: prepareDiagnostics}
 		if len(view.AssetRefs) == 0 {
 			return runner, true, nil
 		}
 		return nil, true, errors.New("collections: missing typed_column_part assets for typed-column part physical query")
 	}
+	phaseStart = time.Now()
 	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		prepareDiagnostics.PairingNanos = time.Since(phaseStart).Nanoseconds()
 		return nil, true, typedColumnPhysicalQueryPairingError(err)
 	}
-	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, readCache, false, opts.prepareDenseInt64SpanGlobalCodes, opts.prepareDenseGroupCountDistinctGlobalCodes, opts.prepareDenseGroupCountDistinctGlobalRanks)
+	prepareDiagnostics.PairingNanos = time.Since(phaseStart).Nanoseconds()
+	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, readCache, false, opts.prepareDenseInt64SpanGlobalCodes, opts.prepareDenseGroupCountDistinctGlobalCodes, opts.prepareDenseGroupCountDistinctGlobalRanks, &prepareDiagnostics)
 	if err != nil {
 		return nil, true, err
 	}
 	if opts.prepareAggregateSummaries {
+		phaseStart = time.Now()
 		if err := prepareColumnTypedColumnPhysicalAggregateSummary(runner, req); err != nil {
+			prepareDiagnostics.SummaryNanos = time.Since(phaseStart).Nanoseconds()
 			return nil, true, err
 		}
+		prepareDiagnostics.SummaryNanos = time.Since(phaseStart).Nanoseconds()
 	}
+	runner.prepareDiagnostics = prepareDiagnostics
 	return runner, true, nil
 }
 
-func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, refsByGeneration map[uint64]columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, prepareDenseInt64SpanGlobalCodes bool, prepareDenseGroupCountDistinctGlobalCodes bool, prepareDenseGroupCountDistinctGlobalRanks bool) (*columnTypedColumnPhysicalQueryRunner, error) {
+func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, refsByGeneration map[uint64]columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, prepareDenseInt64SpanGlobalCodes bool, prepareDenseGroupCountDistinctGlobalCodes bool, prepareDenseGroupCountDistinctGlobalRanks bool, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (*columnTypedColumnPhysicalQueryRunner, error) {
 	if readCache == nil {
 		return nil, errors.New("collections: typed-column part physical query missing read cache")
 	}
@@ -550,6 +627,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			physical:  physical,
 		})
 	}
+	phaseStart := time.Now()
 	if columnTypedColumnPhysicalQueryUseParallelPartDecode(plan, req, readCache, len(inputs), includePhysicalRows, allowDenseGroupCountDistinct, prepareDenseInt64SpanGlobalCodes, prepareDenseGroupCountDistinctGlobalCodes, prepareDenseGroupCountDistinctGlobalRanks) {
 		// Worker read caches close after decode, so parallel TopK runners must
 		// own payload bytes instead of retaining lazy range readers.
@@ -558,51 +636,79 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 		}
 		outputs, hits, misses, err := decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view, req, plan, inputs, readCache, includePhysicalRows, allowDenseGroupCountDistinct, decodeOpts)
 		if err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PartDecodeNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
 		runner.segmentFileCacheHits = hits
 		runner.segmentFileCacheMisses = misses
 		for _, output := range outputs {
 			runner.addDecodedPart(output.part)
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.add(output.prepareDiagnostics)
+			}
 		}
 	} else {
 		var rawScratch []byte
 		for _, input := range inputs {
-			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, columnTypedColumnPhysicalQueryPartDecodeOptions{}, rawScratch)
+			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, columnTypedColumnPhysicalQueryPartDecodeOptions{}, rawScratch, prepareDiagnostics)
 			runner.segmentFileCacheHits = readCache.hits
 			runner.segmentFileCacheMisses = readCache.misses
 			if err != nil {
+				if prepareDiagnostics != nil {
+					prepareDiagnostics.PartDecodeNanos += time.Since(phaseStart).Nanoseconds()
+				}
 				return nil, err
 			}
 			rawScratch = scratch
 			runner.addDecodedPart(part)
 		}
 	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.PartDecodeNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if len(runner.parts) == 0 && len(view.AssetRefs) != 0 {
 		return nil, errors.New("collections: typed-column part physical query has no live typed_column_part assets")
 	}
+	phaseStart = time.Now()
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) {
 		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
 	} else if prepareDenseGroupCountDistinctGlobalCodes && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req) {
 		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalCodes(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
 	} else if prepareDenseGroupCountDistinctGlobalRanks && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req) {
 		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
 	} else if prepareDenseInt64SpanGlobalCodes && columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req) {
 		if err := prepareColumnTypedColumnDenseInt64SpanGlobalCodes(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
+	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
 	}
 	return runner, nil
 }
 
-func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions, rawScratch []byte) (columnTypedColumnPhysicalQueryPart, []byte, error) {
-	part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct, includePhysicalRows, opts)
+func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions, rawScratch []byte, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, []byte, error) {
+	part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct, includePhysicalRows, opts, prepareDiagnostics)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, rawScratch, fmt.Errorf("collections: typed-column part physical query range decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
 	}
@@ -713,14 +819,16 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view columnPhysical
 			}()
 			var rawScratch []byte
 			for input := range jobs {
-				part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, cache, includePhysicalRows, allowDenseGroupCountDistinct, opts, rawScratch)
+				var partDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+				part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, cache, includePhysicalRows, allowDenseGroupCountDistinct, opts, rawScratch, &partDiagnostics)
 				if err != nil {
 					setErr(err)
 					continue
 				}
 				rawScratch = scratch
 				outputs[input.outputIdx] = columnTypedColumnPhysicalQueryPartDecodeOutput{
-					part: part,
+					part:               part,
+					prepareDiagnostics: partDiagnostics,
 				}
 			}
 		}(workerIdx)

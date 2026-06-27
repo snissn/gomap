@@ -747,7 +747,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "aggregate_metadata_prepare_duration_ms", "aggregate_metadata_append_share_duration_ms", "insert_cost_upper_bound_duration_ms", "insert_cost_basis", "insert_cost_upper_bound_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "aggregate_metadata_prepare_duration_ms", "aggregate_metadata_append_share_duration_ms", "insert_cost_upper_bound_duration_ms", "insert_cost_basis", "insert_cost_upper_bound_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "typed prep decode ms", "one-shot cache store ms", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
 		}
@@ -2395,55 +2395,62 @@ func TestColumnStoreJSONBenchPreparedParityMismatchIsFatal1955(t *testing.T) {
 
 func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *testing.T) {
 	q := columnStoreQueryMetric{
-		Name:                              "q4a",
-		PlanLabel:                         columnStorePathSerialColumnScan,
-		StorageSource:                     string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
-		FallbackReason:                    string(collections.ColumnPhysicalQueryFallbackNone),
-		Rows:                              7,
-		RowsProcessed:                     5,
-		RowsProcessedKnown:                true,
-		ResultCount:                       2,
-		RawHash:                           11,
-		ProductionHash:                    11,
-		ScanDurationMS:                    1.5,
-		ReduceDurationMS:                  2.5,
-		AdapterDurationMS:                 0.75,
-		PrepareSetupDurationMS:            0.50,
-		RunDurationMS:                     6.00,
-		RenderHashDurationMS:              0.25,
-		TotalQueryDurationMS:              6.75,
-		hotRunDuration:                    6 * time.Millisecond,
-		BytesRead:                         2048,
-		DecodedBytes:                      1536,
-		DecodedPayloadBytes:               1024,
-		DecodedMetadataBytes:              512,
-		MappedBytes:                       384,
-		HeapCopyBytes:                     1152,
-		ProjectedColumns:                  2,
-		PredicateCount:                    1,
-		TypedCellsVisited:                 26,
-		TypedCellsVisitedBasis:            "rows_scanned_x_projected_columns",
-		RowMaterializations:               1,
-		DocumentMaterializations:          2,
-		MetadataCostStorageBytes:          4096,
-		MetadataCostStorageBasis:          "storage_basis",
-		MetadataCostInsertMS:              7.25,
-		MetadataCostInsertNsRow:           250,
-		MetadataCostInsertBasis:           "insert_basis",
-		SortTopKPruningUsed:               true,
-		JSONReconstruction:                true,
-		RowsScanned:                       13,
-		RowsMatched:                       3,
-		ReduceRows:                        2,
-		TopKLimit:                         3,
-		TopKCandidates:                    9,
-		TopKOrder:                         string(collections.ColumnPhysicalQueryTopKInt64Asc),
-		TimeOrderTopKUsed:                 true,
-		DecodedBlocks:                     2,
-		DecodedGranules:                   4,
-		TypedColumnOneShotCacheMiss:       true,
-		TypedColumnOneShotCacheBuild:      true,
-		TypedColumnOneShotBuildDurationMS: 0.125,
+		Name:                                   "q4a",
+		PlanLabel:                              columnStorePathSerialColumnScan,
+		StorageSource:                          string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
+		FallbackReason:                         string(collections.ColumnPhysicalQueryFallbackNone),
+		Rows:                                   7,
+		RowsProcessed:                          5,
+		RowsProcessedKnown:                     true,
+		ResultCount:                            2,
+		RawHash:                                11,
+		ProductionHash:                         11,
+		ScanDurationMS:                         1.5,
+		ReduceDurationMS:                       2.5,
+		AdapterDurationMS:                      0.75,
+		PrepareSetupDurationMS:                 0.50,
+		RunDurationMS:                          6.00,
+		RenderHashDurationMS:                   0.25,
+		TotalQueryDurationMS:                   6.75,
+		hotRunDuration:                         6 * time.Millisecond,
+		BytesRead:                              2048,
+		DecodedBytes:                           1536,
+		DecodedPayloadBytes:                    1024,
+		DecodedMetadataBytes:                   512,
+		MappedBytes:                            384,
+		HeapCopyBytes:                          1152,
+		ProjectedColumns:                       2,
+		PredicateCount:                         1,
+		TypedCellsVisited:                      26,
+		TypedCellsVisitedBasis:                 "rows_scanned_x_projected_columns",
+		RowMaterializations:                    1,
+		DocumentMaterializations:               2,
+		MetadataCostStorageBytes:               4096,
+		MetadataCostStorageBasis:               "storage_basis",
+		MetadataCostInsertMS:                   7.25,
+		MetadataCostInsertNsRow:                250,
+		MetadataCostInsertBasis:                "insert_basis",
+		SortTopKPruningUsed:                    true,
+		JSONReconstruction:                     true,
+		RowsScanned:                            13,
+		RowsMatched:                            3,
+		ReduceRows:                             2,
+		TopKLimit:                              3,
+		TopKCandidates:                         9,
+		TopKOrder:                              string(collections.ColumnPhysicalQueryTopKInt64Asc),
+		TimeOrderTopKUsed:                      true,
+		DecodedBlocks:                          2,
+		DecodedGranules:                        4,
+		TypedColumnOneShotCacheMiss:            true,
+		TypedColumnOneShotCacheBuild:           true,
+		TypedColumnOneShotBuildDurationMS:      0.125,
+		TypedColumnPreparePlanDurationMS:       0.010,
+		TypedColumnPrepareRefsDurationMS:       0.011,
+		TypedColumnPreparePairDurationMS:       0.012,
+		TypedColumnPrepareDecodeDurationMS:     0.080,
+		TypedColumnPreparePostDurationMS:       0.013,
+		TypedColumnPrepareSummaryDurationMS:    0.014,
+		TypedColumnOneShotCacheStoreDurationMS: 0.015,
 		CompressionAttribution: columnStoreCompressionAttribution{
 			CompressionPolicyLabel: "default",
 			RequestedCompression:   "snappy",
@@ -2482,6 +2489,15 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 	if got, want := cell.TypedColumnOneShotBuildDurationMS, q.TypedColumnOneShotBuildDurationMS; got != want {
 		t.Fatalf("typed_column_one_shot_build_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPreparePlanDurationMS, q.TypedColumnPreparePlanDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_plan_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDecodeDurationMS, q.TypedColumnPrepareDecodeDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_part_decode_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnOneShotCacheStoreDurationMS, q.TypedColumnOneShotCacheStoreDurationMS; got != want {
+		t.Fatalf("typed_column_one_shot_cache_store_duration_ms=%v want %v", got, want)
 	}
 	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
 		t.Fatalf("rows_scanned=%d want %d", got, want)

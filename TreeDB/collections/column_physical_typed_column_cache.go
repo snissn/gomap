@@ -116,6 +116,7 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, candidate, err
 	}
+	cacheStoreStart := time.Now()
 	entry = &collectionTypedColumnOneShotCacheEntry{slot: slot, runner: runner}
 
 	c.typedColumnOneShotMu.Lock()
@@ -131,7 +132,7 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		result, err := current.run(view, req)
 		result.Diagnostics.TypedColumnOneShotCacheMiss = true
 		result.Diagnostics.TypedColumnOneShotCacheBuild = true
-		result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
+		applyColumnTypedColumnOneShotBuildDiagnostics(&result, runner, buildNanos, time.Since(cacheStoreStart).Nanoseconds())
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
@@ -158,17 +159,29 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		result := ColumnPhysicalQueryResult{}
 		result.Diagnostics.TypedColumnOneShotCacheMiss = true
 		result.Diagnostics.TypedColumnOneShotCacheBuild = true
-		result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
+		applyColumnTypedColumnOneShotBuildDiagnostics(&result, runner, buildNanos, time.Since(cacheStoreStart).Nanoseconds())
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, backenddb.ErrClosed
 	}
+	cacheStoreNanos := time.Since(cacheStoreStart).Nanoseconds()
 
 	result, err := entry.run(view, req)
 	result.Diagnostics.TypedColumnOneShotCacheMiss = true
 	result.Diagnostics.TypedColumnOneShotCacheBuild = true
-	result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
+	applyColumnTypedColumnOneShotBuildDiagnostics(&result, runner, buildNanos, cacheStoreNanos)
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, true, err
+}
+
+func applyColumnTypedColumnOneShotBuildDiagnostics(result *ColumnPhysicalQueryResult, runner *columnTypedColumnPhysicalQueryRunner, buildNanos, cacheStoreNanos int64) {
+	if result == nil {
+		return
+	}
+	result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
+	result.Diagnostics.TypedColumnOneShotCacheStoreNanos = cacheStoreNanos
+	if runner != nil {
+		runner.prepareDiagnostics.applyTo(&result.Diagnostics)
+	}
 }
 
 func collectionTypedColumnOneShotEvictOldest(entries map[collectionTypedColumnOneShotCacheSlot]*collectionTypedColumnOneShotCacheEntry) *collectionTypedColumnOneShotCacheEntry {

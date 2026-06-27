@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -1444,7 +1445,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan columnTypedColum
 	return part, nil
 }
 
-func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, allowDenseGroupCountDistinct bool, includePhysicalRows bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions) (columnTypedColumnPhysicalQueryPart, bool, error) {
+func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, allowDenseGroupCountDistinct bool, includePhysicalRows bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, bool, error) {
 	if !typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity) {
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
@@ -1464,14 +1465,31 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
 	prepared, diag, err := typedColumnPreparePartStateFromRanges(typedRef.Ref, physical.Ref, typedRef.Rows, physical.Rows, plan.Fields, schemaHash, requests, reader.readRange, nil)
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.ReadImageNanos += diag.ReadImageNanos
+		prepareDiagnostics.StateBuildNanos += diag.StateBuildNanos
+		prepareDiagnostics.DictionaryNanos += diag.DictionaryNanos
+	}
 	if err != nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
 	if prepared == nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
 	defer prepared.close()
 	if diag.Fallback {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
 	summary, err := typedColumnPhysicalQueryPreparedSummary(prepared, plan, typedRef, physical)
@@ -1479,8 +1497,16 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
 	if columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req) {
+		adapterStart := time.Now()
 		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{LazyPayloads: !opts.eagerTimeOrderTopKPayloads})
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
+		}
 		if err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.RangeReadNanos += reader.readNanos
+				prepareDiagnostics.RangeReadBytes += reader.bytesRead
+			}
 			return columnTypedColumnPhysicalQueryPart{}, true, err
 		}
 		var payloadLoader *columnTypedColumnTimeOrderTopKPayloadLoader
@@ -1488,26 +1514,58 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 			payloadLoader = newColumnTypedColumnTimeOrderTopKPayloadLoader(reader.readRangeOwned, prepared)
 		}
 		part, err := decodeTypedColumnPhysicalQueryTimeOrderTopKPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, payloadLoader)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return part, true, err
 	}
+	adapterStart := time.Now()
 	adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPart(prepared, plan.Fields, reader.readRange)
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
+	}
 	if err != nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
 	switch {
 	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
 		part, err := decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return part, true, err
 	case columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
 		part, err := decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return part, true, err
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
 		part, err := decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return part, true, err
 	case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
-		part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, true)
+		part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, true, prepareDiagnostics)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return part, true, err
 	default:
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.RangeReadNanos += reader.readNanos
+			prepareDiagnostics.RangeReadBytes += reader.bytesRead
+		}
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
 }
@@ -1517,6 +1575,7 @@ type columnTypedColumnPhysicalRangePartReader struct {
 	ref       ColumnAssetRef
 	integrity ColumnAssetReadIntegrity
 	bytesRead int64
+	readNanos int64
 }
 
 func (r *columnTypedColumnPhysicalRangePartReader) ensureFullAssetValidated() error {
@@ -1541,7 +1600,9 @@ func (r *columnTypedColumnPhysicalRangePartReader) readRange(offset int, length 
 	if offset < 0 || length <= 0 {
 		return nil, fmt.Errorf("collections: typed-column physical range offset=%d length=%d is invalid", offset, length)
 	}
+	readStart := time.Now()
 	raw, err := r.readCache.readRange(r.ref, int64(offset), int64(length))
+	r.readNanos += time.Since(readStart).Nanoseconds()
 	if err != nil {
 		return nil, err
 	}
@@ -1729,9 +1790,6 @@ func typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared *typedColum
 		if preparedColumn.ReverseDictionaries != nil {
 			adapterColumn.ReverseDictionary = preparedColumn.ReverseDictionaries
 		}
-		if adapterColumn.ReverseDictionary == nil && adapterColumn.Dictionary != nil {
-			adapterColumn.ReverseDictionary = reverseTypedColumnAdapterDictionary(adapterColumn.Dictionary)
-		}
 		partColumn, err := typedColumnPreparedColumnWithOptionalPayloads(preparedColumn, readRange, !opts.LazyPayloads)
 		if err != nil {
 			return nil, err
@@ -1886,7 +1944,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPreparedPart(plan colu
 
 func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64) (columnTypedColumnPhysicalQueryPart, error) {
 	spanPlan, groupPredicate, hasGroupPredicate := columnTypedColumnPhysicalQueryDenseGroupHourSpanPlan(plan)
-	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(spanPlan, summary, typedRef, physical, adapterPart, bytesRead, false)
+	part, err := decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(spanPlan, summary, typedRef, physical, adapterPart, bytesRead, false, nil)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -1913,7 +1971,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPreparedPart(plan columnTy
 	return part, nil
 }
 
-func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64, preapplyPredicates bool) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64, preapplyPredicates bool, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, error) {
 	groupColumn, groupPartColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, "int64-span group")
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
@@ -1946,6 +2004,7 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 	var groupValid []bool
 	var groupDecodedBytes uint64
 	var groupBlocks int
+	phaseStart := time.Now()
 	if groupColumn.Field.Nullable {
 		groupCodes, groupValid, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseNullableUint32Codes(groupPartColumn, cardinality, summary.Rows, "int64-span group")
 		if err != nil {
@@ -1957,7 +2016,14 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
 	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	phaseStart = time.Now()
 	values, valueDecodedBytes, valueBlocks, err := decodeTypedColumnDenseInt64Values(valuePartColumn, summary.Rows, "int64-span value")
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.DenseValueNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -1968,6 +2034,7 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 	predicates := make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
 	predicateDecodedBytes := uint64(0)
 	predicateBlocks := 0
+	phaseStart = time.Now()
 	for _, spec := range plan.PredicateSpecs {
 		predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
 		if err != nil {
@@ -1976,6 +2043,9 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 		predicates = append(predicates, predicate)
 		predicateDecodedBytes += decodedBytes
 		predicateBlocks += blocks
+	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.DensePredicateNanos += time.Since(phaseStart).Nanoseconds()
 	}
 
 	denseSpan := &columnTypedColumnDenseInt64SpanPart{
@@ -1987,7 +2057,11 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 		Predicates:       predicates,
 	}
 	if preapplyPredicates {
+		phaseStart = time.Now()
 		preapplyColumnTypedColumnDenseInt64SpanPredicates(denseSpan, summary.Rows)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.DensePreapplyNanos += time.Since(phaseStart).Nanoseconds()
+		}
 	}
 	decodedBlocks := groupBlocks + valueBlocks + predicateBlocks
 	return columnTypedColumnPhysicalQueryPart{

@@ -299,6 +299,23 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 	if !wantBuild && diag.TypedColumnOneShotBuildNanos != 0 {
 		tb.Fatalf("%s typed-column one-shot build nanos=%d want 0 diagnostics=%+v", label, diag.TypedColumnOneShotBuildNanos, diag)
 	}
+	prepareNanos := diag.TypedColumnPreparePlanNanos +
+		diag.TypedColumnPrepareRefsNanos +
+		diag.TypedColumnPreparePairingNanos +
+		diag.TypedColumnPreparePartDecodeNanos +
+		diag.TypedColumnPreparePostPrepareNanos +
+		diag.TypedColumnPrepareSummaryNanos +
+		diag.TypedColumnOneShotCacheStoreNanos
+	if wantBuild {
+		if diag.TypedColumnOneShotBuildNanos <= 0 || prepareNanos <= 0 || diag.TypedColumnPreparePartDecodeNanos <= 0 {
+			tb.Fatalf("%s typed-column one-shot setup nanos build=%d prepare_sum=%d part_decode=%d diagnostics=%+v",
+				label, diag.TypedColumnOneShotBuildNanos, prepareNanos, diag.TypedColumnPreparePartDecodeNanos, diag)
+		}
+		return
+	}
+	if prepareNanos != 0 {
+		tb.Fatalf("%s typed-column one-shot prepare nanos sum=%d want 0 diagnostics=%+v", label, prepareNanos, diag)
+	}
 }
 
 func assertTypedColumnOneShotCacheSnapshot3088(tb testing.TB, col *Collection, label string, entries int, hits uint64, misses uint64, builds uint64, invalidations uint64) {

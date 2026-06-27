@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
@@ -63,6 +64,12 @@ type typedColumnPreparedStateDiagnostics struct {
 	CandidateRanges                int
 	CandidateRangeBytes            uint64
 	DecodedMetadataBytes           uint64
+	ReadImageNanos                 int64
+	StateBuildNanos                int64
+	DictionaryNanos                int64
+	PruningNanos                   int64
+	SortKeyNanos                   int64
+	StatsNanos                     int64
 	ManifestBytes                  uint64
 	DescriptorBytes                uint64
 	ContractBytes                  uint64
@@ -438,23 +445,32 @@ func typedColumnPreparedReadImageAndDescriptor(ref ColumnAssetRef, readRange typ
 }
 
 func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, fields []TypedStorageField, schemaHash uint64, columnRequests []typedColumnPreparedColumnRequest, readRange typedColumnPreparedRangeReader, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
+	phaseStart := time.Now()
 	image, desc, columns, manifestBytes, descriptorRaw, contractRaw, err := typedColumnPreparedReadImageAndDescriptor(ref, readRange)
+	readImageNanos := time.Since(phaseStart).Nanoseconds()
 	if err != nil {
-		return nil, typedColumnPreparedStateDiagnostics{}, err
+		return nil, typedColumnPreparedStateDiagnostics{ReadImageNanos: readImageNanos}, err
 	}
+	phaseStart = time.Now()
 	part, diag, err := typedColumnPreparePartStateFromParsed(ref, physical, typedRows, physicalRows, fields, schemaHash, image, desc, columns, manifestBytes, descriptorRaw, contractRaw, columnRequests, blockSelection)
+	diag.ReadImageNanos += readImageNanos
+	diag.StateBuildNanos += time.Since(phaseStart).Nanoseconds()
 	if err != nil || part == nil || diag.Fallback {
 		return part, diag, err
 	}
 	if typedColumnPreparedRequestsIncludeDictionaries(columnRequests) {
+		phaseStart = time.Now()
 		dictDiag, err := typedColumnAttachPreparedDictionaries(part, image, readRange, columnRequests)
+		dictDiag.DictionaryNanos += time.Since(phaseStart).Nanoseconds()
 		typedColumnPreparedStateDiagnosticsAdd(&diag, dictDiag)
 		if err != nil {
 			return nil, diag, fmt.Errorf("collections: typed_column_part dictionary validation failed: %w", err)
 		}
 	}
 	if typedColumnPreparedRequestsIncludePruning(columnRequests) {
+		phaseStart = time.Now()
 		pruningDiag, err := typedColumnAttachPreparedPruning(part, image, readRange, columnRequests)
+		pruningDiag.PruningNanos += time.Since(phaseStart).Nanoseconds()
 		typedColumnPreparedStateDiagnosticsAdd(&diag, pruningDiag)
 		if err != nil {
 			diag.PruningValidationFailures++
@@ -463,7 +479,9 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 		}
 	}
 	if typedColumnPreparedRequestsIncludeSortKeyMetadata(columnRequests) || typedColumnPreparedRequestsIncludeSortKeyMarks(columnRequests) {
+		phaseStart = time.Now()
 		sortKeyDiag, err := typedColumnAttachPreparedSortKey(part, image, readRange, typedColumnPreparedRequestsIncludeSortKeyMarks(columnRequests))
+		sortKeyDiag.SortKeyNanos += time.Since(phaseStart).Nanoseconds()
 		typedColumnPreparedStateDiagnosticsAdd(&diag, sortKeyDiag)
 		if err != nil {
 			return nil, diag, fmt.Errorf("collections: typed_column_part sort-key validation failed: %w", err)
@@ -472,11 +490,14 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 	if !typedColumnPreparedRequestsIncludeStats(columnRequests) {
 		return part, diag, nil
 	}
+	phaseStart = time.Now()
 	if err := typedColumnAttachPreparedStats(part, image, readRange); err != nil {
+		diag.StatsNanos += time.Since(phaseStart).Nanoseconds()
 		diag.StatsValidationFailures++
 		diag.StatsValidationFailureReason = err.Error()
 		return nil, diag, fmt.Errorf("collections: typed_column_part stats validation failed: %w", err)
 	}
+	diag.StatsNanos += time.Since(phaseStart).Nanoseconds()
 	return part, diag, nil
 }
 
@@ -1714,6 +1735,12 @@ func typedColumnPreparedStateDiagnosticsAdd(dst *typedColumnPreparedStateDiagnos
 	dst.CandidateRanges += src.CandidateRanges
 	dst.CandidateRangeBytes += src.CandidateRangeBytes
 	dst.DecodedMetadataBytes += src.DecodedMetadataBytes
+	dst.ReadImageNanos += src.ReadImageNanos
+	dst.StateBuildNanos += src.StateBuildNanos
+	dst.DictionaryNanos += src.DictionaryNanos
+	dst.PruningNanos += src.PruningNanos
+	dst.SortKeyNanos += src.SortKeyNanos
+	dst.StatsNanos += src.StatsNanos
 	dst.ManifestBytes += src.ManifestBytes
 	dst.DescriptorBytes += src.DescriptorBytes
 	dst.ContractBytes += src.ContractBytes
