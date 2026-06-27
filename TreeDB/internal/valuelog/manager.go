@@ -214,7 +214,10 @@ func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	f.cacheRawPooled = pooled
 }
 
-const fileDecodeScratchSpareKeep = 2
+const (
+	fileDecodeScratchSpareKeep      = 2
+	fileDecodeScratchRetainMaxBytes = 128 << 10
+)
 
 func (f *File) stashDecodeScratch(buf []byte) {
 	if cap(buf) == 0 {
@@ -233,6 +236,10 @@ func (f *File) stashDecodeScratchLocked(buf []byte) {
 	if cap(buf) == 0 {
 		return
 	}
+	if cap(buf) > fileDecodeScratchRetainMaxBytes {
+		putDecodeScratch(buf)
+		return
+	}
 	if cap(f.decodeScratch) == 0 {
 		f.decodeScratch = buf
 		return
@@ -244,9 +251,61 @@ func (f *File) stashDecodeScratchLocked(buf []byte) {
 	}
 	if len(f.decodeScratchSpare) < fileDecodeScratchSpareKeep {
 		f.decodeScratchSpare = append(f.decodeScratchSpare, buf[:0])
+		f.trimDecodeScratchLocked()
 		return
 	}
 	putDecodeScratch(buf)
+	f.trimDecodeScratchLocked()
+}
+
+func (f *File) trimDecodeScratchLocked() {
+	total := cap(f.decodeScratch)
+	for _, spare := range f.decodeScratchSpare {
+		total += cap(spare)
+	}
+	for total > fileDecodeScratchRetainMaxBytes && len(f.decodeScratchSpare) > 0 {
+		last := len(f.decodeScratchSpare) - 1
+		buf := f.decodeScratchSpare[last]
+		f.decodeScratchSpare[last] = nil
+		f.decodeScratchSpare = f.decodeScratchSpare[:last]
+		total -= cap(buf)
+		putDecodeScratch(buf)
+	}
+	if total > fileDecodeScratchRetainMaxBytes && cap(f.decodeScratch) > 0 {
+		buf := f.decodeScratch
+		f.decodeScratch = nil
+		putDecodeScratch(buf)
+	}
+}
+
+func (f *File) decodeScratchRetainedLocked() (buffers int, bytes uint64) {
+	if cap(f.decodeScratch) > 0 {
+		buffers++
+		bytes += uint64(cap(f.decodeScratch))
+	}
+	for _, buf := range f.decodeScratchSpare {
+		if cap(buf) == 0 {
+			continue
+		}
+		buffers++
+		bytes += uint64(cap(buf))
+	}
+	return buffers, bytes
+}
+
+func (f *File) addDecodeScratchStats(stats *DecodeScratchStats) {
+	if f == nil || stats == nil {
+		return
+	}
+	f.scratchMu.Lock()
+	buffers, bytes := f.decodeScratchRetainedLocked()
+	f.scratchMu.Unlock()
+	if buffers == 0 {
+		return
+	}
+	stats.FileRetainedFiles++
+	stats.FileRetainedBuffers += uint64(buffers)
+	stats.FileRetainedBytes += bytes
 }
 
 func (f *File) takeDecodeScratch(minCap int) []byte {
@@ -2290,6 +2349,23 @@ func (m *Manager) GroupedFrameCacheDetailedStats() GroupedFrameCacheStats {
 	if m.groupedFrameCacheBudget != nil {
 		stats.RetainedBytes = m.groupedFrameCacheBudget.retainedBytes()
 		stats.BudgetBytes = m.groupedFrameCacheBudget.budgetBytes()
+	}
+	return stats
+}
+
+func (m *Manager) DecodeScratchStats() DecodeScratchStats {
+	stats := DecodeScratchStatsSnapshot()
+	if m == nil {
+		return stats
+	}
+	m.mu.RLock()
+	files := make([]*File, 0, len(m.files))
+	for _, f := range m.files {
+		files = append(files, f)
+	}
+	m.mu.RUnlock()
+	for _, f := range files {
+		f.addDecodeScratchStats(&stats)
 	}
 	return stats
 }

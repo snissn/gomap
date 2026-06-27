@@ -29859,6 +29859,11 @@ func (db *DB) Stats() map[string]string {
 	if growStats.RequestedBytesTotal > 0 {
 		stats["treedb.cache.vlog_decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
 	}
+	scratchStats := valuelog.DecodeScratchStatsSnapshot()
+	if db.valueLogReader != nil {
+		scratchStats = db.valueLogReader.DecodeScratchStats()
+	}
+	valuelog.AppendDecodeScratchStats(stats, "treedb.cache.vlog_decode_scratch", scratchStats)
 	cacheVlogMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
 	if db.valueLogReader != nil {
 		remaps, deadMappings := db.valueLogReader.RemapStats()

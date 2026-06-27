@@ -17,27 +17,21 @@ import (
 )
 
 const (
-	maxDecodeScratchKeep      = 256 << 10 // 256KiB (small scratch, sync.Pool + per-file stash)
+	maxDecodeScratchKeep      = 256 << 10 // 256KiB (small scratch, bounded pool + per-file stash)
 	maxLargeDecodeScratchKeep = 4 << 20   // 4MiB (bounded pool to cap RSS overhead)
 	decodeScratchDefaultCap   = 8 << 10   // 8KiB default small scratch cap
 )
 
-const largeDecodeScratchPoolEntries = 8
+const (
+	smallDecodeScratchPoolEntries = 128
+	largeDecodeScratchPoolEntries = 8
+)
 
 const discardScratchSize = 32 << 10 // 32KiB
 
-type decodeScratchHolder struct {
-	buf []byte
-}
-
-// decodeScratchValuePool stores holders with populated small scratch buffers.
-// Holders are pointer-typed to avoid interface boxing allocations on Put/Get.
-var decodeScratchValuePool sync.Pool
-
-// decodeScratchHolderPool stores empty holders used by decodeScratchValuePool.
-var decodeScratchHolderPool = sync.Pool{
-	New: func() any { return &decodeScratchHolder{} },
-}
+// smallDecodeScratchPool is bounded because Celestia opens many value-log
+// segments; an unbounded sync.Pool can retain large final-heap plateaus.
+var smallDecodeScratchPool = make(chan []byte, smallDecodeScratchPoolEntries)
 
 // largeDecodeScratchPool is a bounded pool for larger decode scratch buffers.
 // We avoid sync.Pool here to keep a hard cap on retained multi-MiB slices.
@@ -91,31 +85,53 @@ func getDecodeScratch(minCap int) []byte {
 		// Bounded large-slice pool to reduce alloc churn on large grouped frames.
 		// If empty, fall back to allocating; we intentionally don't block.
 		if minCap <= maxLargeDecodeScratchKeep {
+			decodeScratchLargePoolGetsTotal.Add(1)
 			select {
 			case buf := <-largeDecodeScratchPool:
+				noteDecodeScratchLargePoolTake(cap(buf))
 				if cap(buf) < minCap {
+					decodeScratchLargePoolTooSmallTotal.Add(1)
+					decodeScratchLargePoolMissesTotal.Add(1)
+					decodeScratchLargeAllocCallsTotal.Add(1)
+					decodeScratchLargeAllocatedBytesTotal.Add(uint64(minCap))
 					buf = make([]byte, 0, minCap)
+				} else {
+					decodeScratchLargePoolHitsTotal.Add(1)
 				}
 				return buf[:0]
 			default:
+				decodeScratchLargePoolMissesTotal.Add(1)
+				decodeScratchLargeAllocCallsTotal.Add(1)
+				decodeScratchLargeAllocatedBytesTotal.Add(uint64(minCap))
 				return make([]byte, 0, minCap)
 			}
 		}
+		decodeScratchOversizeAllocCallsTotal.Add(1)
+		decodeScratchOversizeAllocatedBytesTotal.Add(uint64(minCap))
 		return make([]byte, 0, minCap)
 	}
 	var buf []byte
-	if v := decodeScratchValuePool.Get(); v != nil {
-		if h, ok := v.(*decodeScratchHolder); ok && h != nil {
-			buf = h.buf
-			h.buf = nil
-			decodeScratchHolderPool.Put(h)
+	decodeScratchSmallPoolGetsTotal.Add(1)
+	select {
+	case buf = <-smallDecodeScratchPool:
+		noteDecodeScratchSmallPoolTake(cap(buf))
+		if cap(buf) < minCap {
+			decodeScratchSmallPoolTooSmallTotal.Add(1)
+			decodeScratchSmallPoolMissesTotal.Add(1)
+			buf = nil
+		} else {
+			decodeScratchSmallPoolHitsTotal.Add(1)
 		}
+	default:
+		decodeScratchSmallPoolMissesTotal.Add(1)
 	}
 	if cap(buf) < minCap {
 		capHint := minCap
 		if capHint < decodeScratchDefaultCap {
 			capHint = decodeScratchDefaultCap
 		}
+		decodeScratchSmallAllocCallsTotal.Add(1)
+		decodeScratchSmallAllocatedBytesTotal.Add(uint64(capHint))
 		buf = make([]byte, 0, capHint)
 	}
 	return buf[:0]
@@ -131,21 +147,29 @@ func putDecodeScratch(buf []byte) {
 	}
 	buf = buf[:0]
 	if c <= maxDecodeScratchKeep {
-		h, _ := decodeScratchHolderPool.Get().(*decodeScratchHolder)
-		if h == nil {
-			h = &decodeScratchHolder{}
+		decodeScratchSmallPoolPutsTotal.Add(1)
+		select {
+		case smallDecodeScratchPool <- buf:
+			noteDecodeScratchSmallPoolPut(c)
+		default:
+			decodeScratchSmallPoolDropsTotal.Add(1)
+			decodeScratchSmallPoolDroppedBytesTotal.Add(uint64(c))
 		}
-		h.buf = buf
-		decodeScratchValuePool.Put(h)
 		return
 	}
 	if c <= maxLargeDecodeScratchKeep {
+		decodeScratchLargePoolPutsTotal.Add(1)
 		select {
 		case largeDecodeScratchPool <- buf:
+			noteDecodeScratchLargePoolPut(c)
 		default:
+			decodeScratchLargePoolDropsTotal.Add(1)
+			decodeScratchLargePoolDroppedBytesTotal.Add(uint64(c))
 		}
 		return
 	}
+	decodeScratchOversizeDropsTotal.Add(1)
+	decodeScratchOversizeDroppedBytesTotal.Add(uint64(c))
 }
 
 func sliceDataPtr(b []byte) (uintptr, bool) {
