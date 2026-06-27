@@ -823,6 +823,30 @@ func TestCommandWALPointAppendReturnsLSNOnFlushFailure(t *testing.T) {
 	}
 }
 
+func TestAppendCommandWALIntentReturnsLSNOnFlushFailure(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	defer db.Close()
+
+	intent := mustRawKVCommandWALIntent(t, db, "k", "v")
+	db.testFailCommandWALFlush.Store(true)
+	lsn, err := db.AppendCommandWALIntent(intent, true)
+	if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+		t.Fatalf("AppendCommandWALIntent error=%v, want command WAL flush failpoint", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("AppendCommandWALIntent lsn=%d, want allocated LSN 1 on post-append flush failure", lsn)
+	}
+	if got := intent.AssignedLSN(); got != lsn {
+		t.Fatalf("intent AssignedLSN=%d, want %d", got, lsn)
+	}
+	db.testFailCommandWALFlush.Store(false)
+	if _, err := db.AppendCommandWALIntent(intent, true); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("AppendCommandWALIntent retry error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
 func TestCommandWALPointAppendFlushesAsyncFrame(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)

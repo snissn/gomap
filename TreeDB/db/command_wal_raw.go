@@ -604,6 +604,11 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 		return 0, err
 	}
 	if intent.inner.lsn != 0 {
+		if !intent.inner.fromReplay {
+			if err := db.commandWALPoisonedError(); err != nil {
+				return 0, err
+			}
+		}
 		// Replay intents already refer to a durable frame; recovery must only
 		// publish that covered LSN, never append a duplicate command.
 		return intent.inner.lsn, nil
@@ -618,6 +623,8 @@ func commandWALIntentFrameAlreadyAppended(intent *CommandWALIntent) bool {
 // AppendCommandWALIntent appends a deterministic command frame without
 // publishing roots. It is used by cached public command-WAL writers that must
 // make a typed frame replay-visible before inserting the mutation into memory.
+// If the append succeeds but the post-append flush fails, the returned LSN is
+// still the allocated LSN and the open handle is poisoned for recovery.
 func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
@@ -959,17 +966,19 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	if err != nil {
 		return 0, err
 	}
+	if lsn != 0 {
+		intent.lsn = lsn
+		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
+	}
 	if err := db.FlushCommandWAL(sync); err != nil {
 		// AppendCommand already assigned a logical LSN, and the frame may be
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
 		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
-		return 0, err
+		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)
-	intent.lsn = lsn
-	intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
 	return lsn, nil
 }
 
@@ -1000,8 +1009,8 @@ func commandWALFinalizeOptionsForPublicIntent(intent *CommandWALIntent) finalize
 func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchIntent) {
 	if db == nil || intent == nil || intent.lsn == 0 {
 		// intent.lsn == 0 means the frame was never durably appended
-		// (appendRawKVCommandWALIntent sets lsn only on success). No need
-		// to poison; appendRawKVCommandWALIntent already poisons its own
+		// (appendCommandWALIntent sets lsn once AppendCommand succeeds).
+		// No need to poison; appendCommandWALIntent already poisons its own
 		// flush/sync failures.
 		return
 	}
