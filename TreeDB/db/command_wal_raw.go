@@ -543,26 +543,23 @@ func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 	}
 	var activeFileID uint32
 	if appender != nil {
-		usedExternalRefFlusher := false
 		if len(fileIDs) > 0 {
 			if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
 				if err := flusher.FlushValueLogExternalRefs(fileIDs, sync); err != nil {
 					return err
 				}
-				usedExternalRefFlusher = true
+				return nil
 			}
 		}
-		if !usedExternalRefFlusher {
-			if _, fileID, ok := appender.CurrentValueLogSegment(); ok {
-				activeFileID = fileID
-			}
-			if sync {
-				if err := appender.Sync(); err != nil {
-					return err
-				}
-			} else if err := appender.Flush(); err != nil {
+		if _, fileID, ok := appender.CurrentValueLogSegment(); ok {
+			activeFileID = fileID
+		}
+		if sync {
+			if err := appender.Sync(); err != nil {
 				return err
 			}
+		} else if err := appender.Flush(); err != nil {
+			return err
 		}
 	}
 	if !sync {

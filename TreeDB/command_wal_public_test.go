@@ -1696,9 +1696,9 @@ func TestPublicCommandWALBatchValueLogPointersFlushMultiLaneRefs(t *testing.T) {
 			t.Fatalf("batch Set %d: %v", i, err)
 		}
 	}
-	if err := b.Write(); err != nil {
+	if err := b.WriteSync(); err != nil {
 		_ = b.Close()
-		t.Fatalf("batch Write: %v", err)
+		t.Fatalf("batch WriteSync: %v", err)
 	}
 	if err := b.Close(); err != nil {
 		t.Fatalf("batch Close: %v", err)

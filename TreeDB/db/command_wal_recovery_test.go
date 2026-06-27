@@ -1376,32 +1376,42 @@ func TestCommandWALExternalRefFlushDoesNotDoubleSyncActiveSegment(t *testing.T) 
 }
 
 func TestCommandWALExternalRefFlushUsesReferencedLaneFlusher(t *testing.T) {
-	db := &DB{}
-	appender := &commandWALExternalRefLaneFlushTestAppender{t: t}
-	db.SetValueLogAppender(appender)
 	fileIDs := []uint32{17, 18}
-	if err := db.flushCommandWALExternalRefs(false, fileIDs); err != nil {
-		t.Fatalf("flushCommandWALExternalRefs referenced lanes: %v", err)
-	}
-	if appender.externalFlushes.Load() != 1 {
-		t.Fatalf("external flushes=%d, want 1", appender.externalFlushes.Load())
-	}
-	if appender.sync {
-		t.Fatal("external flush sync=true, want false")
-	}
-	if len(appender.fileIDs) != len(fileIDs) {
-		t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
-	}
-	for i := range fileIDs {
-		if appender.fileIDs[i] != fileIDs[i] {
-			t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
-		}
-	}
-	if appender.flushes.Load() != 0 {
-		t.Fatalf("appender flushes=%d, want 0 when referenced-lane flusher is available", appender.flushes.Load())
-	}
-	if appender.syncs.Load() != 0 {
-		t.Fatalf("appender syncs=%d, want 0 when referenced-lane flusher is available", appender.syncs.Load())
+	for _, tc := range []struct {
+		name string
+		sync bool
+	}{
+		{name: "sync=false", sync: false},
+		{name: "sync=true", sync: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &DB{}
+			appender := &commandWALExternalRefLaneFlushTestAppender{t: t}
+			db.SetValueLogAppender(appender)
+			if err := db.flushCommandWALExternalRefs(tc.sync, fileIDs); err != nil {
+				t.Fatalf("flushCommandWALExternalRefs referenced lanes: %v", err)
+			}
+			if appender.externalFlushes.Load() != 1 {
+				t.Fatalf("external flushes=%d, want 1", appender.externalFlushes.Load())
+			}
+			if appender.sync != tc.sync {
+				t.Fatalf("external flush sync=%v, want %v", appender.sync, tc.sync)
+			}
+			if len(appender.fileIDs) != len(fileIDs) {
+				t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+			}
+			for i := range fileIDs {
+				if appender.fileIDs[i] != fileIDs[i] {
+					t.Fatalf("external flush fileIDs=%v, want %v", appender.fileIDs, fileIDs)
+				}
+			}
+			if appender.flushes.Load() != 0 {
+				t.Fatalf("appender flushes=%d, want 0 when referenced-lane flusher is available", appender.flushes.Load())
+			}
+			if appender.syncs.Load() != 0 {
+				t.Fatalf("appender syncs=%d, want 0 when referenced-lane flusher is available", appender.syncs.Load())
+			}
+		})
 	}
 }
 
