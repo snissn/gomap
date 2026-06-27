@@ -777,6 +777,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if len(refs) != len(appendIndexes) {
 				return fmt.Errorf("collections: column physical asset append refs=%d want %d", len(refs), len(appendIndexes))
 			}
+			for _, ref := range refs {
+				trackCleanupAsset(ref)
+			}
 			for i, ref := range refs {
 				assetIndex := appendIndexes[i]
 				asset := pendingAssets[assetIndex]
@@ -784,7 +787,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				appendedRefSet[assetIndex] = true
 				appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
 				appendedCount++
-				trackCleanupAsset(ref)
 				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
 					ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
 					return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)

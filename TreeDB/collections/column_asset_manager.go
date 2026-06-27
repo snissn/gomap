@@ -397,11 +397,10 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
-	file, created, err := openColumnAssetSegmentAppendFile(assetPath)
+	file, needsDirSync, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
-	needsDirSync := created || !columnAssetSegmentDirSyncKnown(assetPath)
 	closeFile := true
 	defer func() {
 		if closeFile {
@@ -671,7 +670,7 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 		lock:       segmentLock,
 		unlockLock: true,
 	}
-	file, created, err := openColumnAssetSegmentAppendFile(assetPath)
+	file, needsDirSync, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
 		appender.releaseLock()
 		return nil, err
@@ -684,7 +683,7 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 	}
 	appender.file = file
 	appender.offset = offset
-	appender.syncDirOnClose = created || !columnAssetSegmentDirSyncKnown(assetPath)
+	appender.syncDirOnClose = needsDirSync
 	appender.closeFile = true
 	return appender, nil
 }
@@ -701,7 +700,7 @@ func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, error) 
 	if err != nil {
 		return nil, false, err
 	}
-	return file, false, nil
+	return file, !columnAssetSegmentDirSyncKnown(assetPath), nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
