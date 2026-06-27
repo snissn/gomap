@@ -753,8 +753,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			})
 		}
 		if appender != nil {
+			if err := appender.close(); err != nil {
+				return err
+			}
 			closed = true
-			return appender.close()
 		}
 		return nil
 	}
