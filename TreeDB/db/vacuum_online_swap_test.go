@@ -39,6 +39,19 @@ func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[page.Leaf
 	return out
 }
 
+func closeVacuumTestLeafPageLog(t *testing.T, d *DB, leafLog *registeredLeafPageLog) {
+	t.Helper()
+	if d != nil {
+		d.SetLeafPageLog(nil)
+	}
+	if leafLog == nil {
+		return
+	}
+	if err := leafLog.Close(); err != nil {
+		t.Errorf("close leaf page log: %v", err)
+	}
+}
+
 func TestVacuumBuildInternalTreeFromLeafRefs_StreamsChildren(t *testing.T) {
 	dir := t.TempDir()
 
@@ -59,6 +72,7 @@ func TestVacuumBuildInternalTreeFromLeafRefs_StreamsChildren(t *testing.T) {
 		t.Fatalf("ensure leaf writer: %v", err)
 	}
 	d.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, d, leafLog)
 
 	val := bytes.Repeat([]byte("v"), 64)
 	for version := 1; version <= 16; version++ {
@@ -223,6 +237,7 @@ func TestVacuumIndexOnline_OuterLeavesInValueLog_DoesNotRewriteLeafPages(t *test
 	}
 	leafLog := &countingLeafPageLog{inner: baseLeafLog}
 	d.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, d, baseLeafLog)
 
 	val := bytes.Repeat([]byte("v"), 64)
 	for version := 1; version <= 24; version++ {
@@ -466,6 +481,7 @@ func TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs(t *testing.T) {
 		t.Fatalf("ensure leaf writer: %v", err)
 	}
 	d.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, d, leafLog)
 
 	val := bytes.Repeat([]byte("v"), 64)
 	const (
@@ -558,6 +574,7 @@ func TestVacuumIndexOnline_PreservesOuterLeafRefsAndDataWhenOuterLeavesInValueLo
 		t.Fatalf("ensure leaf writer: %v", err)
 	}
 	d.SetLeafPageLog(leafLog)
+	defer closeVacuumTestLeafPageLog(t, d, leafLog)
 
 	val := bytes.Repeat([]byte("v"), 64)
 	for version := 1; version <= 48; version++ {
