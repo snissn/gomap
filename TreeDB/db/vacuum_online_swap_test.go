@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[page.LeafLogPtr]struct{} {
@@ -36,6 +37,91 @@ func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[page.Leaf
 		t.Fatalf("collect leaf refs: %v", err)
 	}
 	return out
+}
+
+func TestVacuumBuildInternalTreeFromLeafRefs_StreamsChildren(t *testing.T) {
+	dir := t.TempDir()
+
+	d, err := Open(Options{
+		Dir:                        dir,
+		ChunkSize:                  64 * 1024,
+		KeepRecent:                 1,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		PreferAppendAlloc:          true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	leafLog := &registeredLeafPageLog{db: d, dir: dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	d.SetLeafPageLog(leafLog)
+
+	val := bytes.Repeat([]byte("v"), 64)
+	for version := 1; version <= 16; version++ {
+		b := d.NewBatch()
+		for i := 0; i < 512; i++ {
+			key := []byte(fmt.Sprintf("stream/k/%08d/%08d", version, i))
+			val[0] = byte(version)
+			if err := b.Set(key, val); err != nil {
+				t.Fatalf("set version=%d key=%d: %v", version, i, err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("writesync version=%d: %v", version, err)
+		}
+		_ = b.Close()
+	}
+
+	state := d.State()
+	if state == nil || state.RootPageID == 0 {
+		t.Fatalf("missing root")
+	}
+	allLeafRefs, err := vacuumTreeAllLeafRefsIfComplete(d.Pager(), state.RootPageID)
+	if err != nil {
+		t.Fatalf("classify leaf-ref root: %v", err)
+	}
+	if !allLeafRefs {
+		t.Fatalf("expected fixture root to contain only leaf refs")
+	}
+	before, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(d.Pager(), state.RootPageID)
+	if err != nil {
+		t.Fatalf("collect source leaf refs: %v", err)
+	}
+	if !allLeafRefs || len(before) == 0 {
+		t.Fatalf("source leaf refs all=%v len=%d", allLeafRefs, len(before))
+	}
+
+	streamPager, err := pager.Open(filepath.Join(t.TempDir(), "streamed-index.db"), 64*1024)
+	if err != nil {
+		t.Fatalf("open stream pager: %v", err)
+	}
+	defer func() { _ = streamPager.Close() }()
+	if _, err := streamPager.Alloc(2); err != nil {
+		t.Fatalf("alloc stream pager metadata pages: %v", err)
+	}
+	streamRoot, err := vacuumBuildInternalTreeFromLeafRefs(d.Pager(), state.RootPageID, streamPager, &pagerAllocator{p: streamPager}, false)
+	if err != nil {
+		t.Fatalf("stream leaf refs: %v", err)
+	}
+	after, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(streamPager, streamRoot)
+	if err != nil {
+		t.Fatalf("collect streamed leaf refs: %v", err)
+	}
+	if !allLeafRefs {
+		t.Fatalf("streamed root is not leaf-ref complete")
+	}
+	if len(after) != len(before) {
+		t.Fatalf("leaf-ref count mismatch: before=%d after=%d", len(before), len(after))
+	}
+	for i := range before {
+		if !bytes.Equal(after[i].key, before[i].key) || after[i].childRef != before[i].childRef {
+			t.Fatalf("leaf child %d mismatch: before=%+v after=%+v", i, before[i], after[i])
+		}
+	}
 }
 
 type countingLeafPageLog struct {

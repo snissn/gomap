@@ -300,13 +300,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 				return err
 			}
 		} else {
-			leafChildren, err := vacuumCollectLeafRefChildren(basePager, baseState.RootPageID)
-			if err != nil {
-				_ = baseSnap.Close()
-				cleanupNewPager()
-				return err
-			}
-			newRoot, err = vacuumBuildInternalTreeFromChildren(newPager, newAlloc, leafChildren, effectiveInternalBaseDelta)
+			newRoot, err = vacuumBuildInternalTreeFromLeafRefs(basePager, baseState.RootPageID, newPager, newAlloc, effectiveInternalBaseDelta)
 			if err != nil {
 				_ = baseSnap.Close()
 				cleanupNewPager()
@@ -765,17 +759,198 @@ type vacuumLeafChild struct {
 	childRef page.ChildRef
 }
 
-func vacuumCollectLeafRefChildren(p *pager.Pager, rootID uint64) ([]vacuumLeafChild, error) {
-	if p == nil {
-		return nil, errors.New("vacuum: missing pager")
+type vacuumInternalTreeLevelBuilder struct {
+	builder  *node.Builder
+	startKey []byte
+}
+
+type vacuumInternalTreeBuilder struct {
+	p     *pager.Pager
+	alloc interface {
+		Alloc(hint uint64) (uint64, error)
+	}
+	internalBaseDelta bool
+	levels            []*vacuumInternalTreeLevelBuilder
+	children          int
+}
+
+func newVacuumInternalTreeBuilder(p *pager.Pager, alloc interface {
+	Alloc(hint uint64) (uint64, error)
+}, internalBaseDelta bool) (*vacuumInternalTreeBuilder, error) {
+	if p == nil || alloc == nil {
+		return nil, errors.New("vacuum: missing pager/allocator")
+	}
+	b := &vacuumInternalTreeBuilder{
+		p:                 p,
+		alloc:             alloc,
+		internalBaseDelta: internalBaseDelta,
+	}
+	if err := b.ensureLevel(0); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func (b *vacuumInternalTreeBuilder) newNodeBuilder() (*node.Builder, error) {
+	buf := make([]byte, page.PageSize)
+	var nb *node.Builder
+	if b.internalBaseDelta {
+		nb = node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{InternalBaseDelta: true})
+	} else {
+		nb = node.NewBuilder(buf, page.PageTypeInternal)
+	}
+	pid, err := b.alloc.Alloc(0)
+	if err != nil {
+		return nil, err
+	}
+	nb.SetPageID(pid)
+	return nb, nil
+}
+
+func (b *vacuumInternalTreeBuilder) ensureLevel(lvl int) error {
+	for len(b.levels) <= lvl {
+		nb, err := b.newNodeBuilder()
+		if err != nil {
+			return err
+		}
+		b.levels = append(b.levels, &vacuumInternalTreeLevelBuilder{builder: nb})
+	}
+	return nil
+}
+
+func (b *vacuumInternalTreeBuilder) addParentChild(lvl int, key []byte, childID uint64) error {
+	if err := b.ensureLevel(lvl + 1); err != nil {
+		return err
+	}
+	parent := b.levels[lvl+1]
+	if parent.startKey == nil {
+		parent.startKey = append([]byte(nil), key...)
+	}
+	err := parent.builder.AddInternalChild(key, childID)
+	if err == node.ErrNodeFull {
+		if err := b.flush(lvl + 1); err != nil {
+			return err
+		}
+		parent = b.levels[lvl+1]
+		if parent.startKey == nil {
+			parent.startKey = append([]byte(nil), key...)
+		}
+		err = parent.builder.AddInternalChild(key, childID)
+	}
+	return err
+}
+
+func (b *vacuumInternalTreeBuilder) flush(lvl int) error {
+	lb := b.levels[lvl]
+	if lb.builder.Count() == 0 {
+		return nil
+	}
+	n := lb.builder.Finish()
+	childID := lb.builder.PageID()
+	if err := b.p.Write(childID, n.Data()); err != nil {
+		return err
+	}
+
+	key := lb.startKey
+	if key == nil {
+		key = []byte{}
+	}
+	if err := b.addParentChild(lvl, key, childID); err != nil {
+		return err
+	}
+
+	nb, err := b.newNodeBuilder()
+	if err != nil {
+		return err
+	}
+	lb.builder = nb
+	lb.startKey = nil
+	return nil
+}
+
+func (b *vacuumInternalTreeBuilder) append(key []byte, childRef page.ChildRef) error {
+	lb := b.levels[0]
+	if lb.startKey == nil {
+		lb.startKey = append([]byte(nil), key...)
+	}
+	err := lb.builder.AddInternalChildRef(key, childRef)
+	if err == node.ErrNodeFull {
+		if err := b.flush(0); err != nil {
+			return err
+		}
+		lb = b.levels[0]
+		if lb.startKey == nil {
+			lb.startKey = append([]byte(nil), key...)
+		}
+		err = lb.builder.AddInternalChildRef(key, childRef)
+	}
+	if err != nil {
+		return err
+	}
+	b.children++
+	return nil
+}
+
+func (b *vacuumInternalTreeBuilder) finish() (uint64, error) {
+	if b.children == 0 {
+		return 0, errors.New("vacuum: missing children")
+	}
+
+	currID := uint64(0)
+	var root *node.Node
+	for i := 0; i < len(b.levels); i++ {
+		lb := b.levels[i]
+		if lb.builder.Count() == 0 {
+			continue
+		}
+		n := lb.builder.Finish()
+		childID := lb.builder.PageID()
+		if err := b.p.Write(childID, n.Data()); err != nil {
+			return 0, err
+		}
+		currID = childID
+		root = n
+
+		if i < len(b.levels)-1 {
+			key := lb.startKey
+			if key == nil {
+				key = []byte{}
+			}
+			if err := b.addParentChild(i, key, currID); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if currID == 0 {
+		return 0, errors.New("vacuum: missing children")
+	}
+
+	if len(b.levels) > 1 && root != nil && root.Count() == 1 {
+		childRef, err := root.GetInternalChildRef(0)
+		if err == nil && childRef.Kind == page.ChildRefPage {
+			return childRef.Page, nil
+		}
+	}
+
+	return currID, nil
+}
+
+func vacuumBuildInternalTreeFromLeafRefs(src *pager.Pager, rootID uint64, dst *pager.Pager, alloc interface {
+	Alloc(hint uint64) (uint64, error)
+}, internalBaseDelta bool) (uint64, error) {
+	if src == nil {
+		return 0, errors.New("vacuum: missing pager")
 	}
 	if rootID == 0 {
-		return nil, errors.New("vacuum: missing root id")
+		return 0, errors.New("vacuum: missing root id")
 	}
-	out := make([]vacuumLeafChild, 0, 1024)
+	builder, err := newVacuumInternalTreeBuilder(dst, alloc, internalBaseDelta)
+	if err != nil {
+		return 0, err
+	}
 	var walk func(uint64) error
 	walk = func(id uint64) error {
-		data, err := p.Get(id)
+		data, err := src.Get(id)
 		if err != nil {
 			return err
 		}
@@ -788,199 +963,80 @@ func vacuumCollectLeafRefChildren(p *pager.Pager, rootID uint64) ([]vacuumLeafCh
 				if err != nil {
 					return err
 				}
-				if childRef.Kind == page.ChildRefLeafLog {
-					out = append(out, vacuumLeafChild{
-						key:      append([]byte(nil), keyView...),
-						childRef: childRef,
-					})
-					continue
-				}
-				if err := walk(childRef.Page); err != nil {
-					return err
+				switch childRef.Kind {
+				case page.ChildRefLeafLog:
+					if err := builder.append(keyView, childRef); err != nil {
+						return err
+					}
+				case page.ChildRefPage:
+					if err := walk(childRef.Page); err != nil {
+						return err
+					}
+				default:
+					return fmt.Errorf("vacuum: unexpected child ref kind %d at page %d", childRef.Kind, id)
 				}
 			}
 			return nil
 		case page.PageTypeLeaf:
-			// In outer-leaf-in-vlog mode, leaves should be leafrefs, not pager pages.
 			return fmt.Errorf("vacuum: unexpected pager-backed leaf page %d while collecting leafrefs", id)
 		default:
 			return fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
 		}
 	}
 	if err := walk(rootID); err != nil {
-		return nil, err
-	}
-	if len(out) == 0 {
-		return nil, errors.New("vacuum: collected zero leafref children")
-	}
-	return out, nil
-}
-
-func vacuumBuildInternalTreeFromChildren(p *pager.Pager, alloc interface {
-	Alloc(hint uint64) (uint64, error)
-}, children []vacuumLeafChild, internalBaseDelta bool) (uint64, error) {
-	if p == nil || alloc == nil {
-		return 0, errors.New("vacuum: missing pager/allocator")
-	}
-	if len(children) == 0 {
-		return 0, errors.New("vacuum: missing children")
-	}
-
-	type levelBuilder struct {
-		builder  *node.Builder
-		startKey []byte
-	}
-	var levels []*levelBuilder
-
-	newBuilder := func() (*node.Builder, error) {
-		buf := make([]byte, page.PageSize)
-		var b *node.Builder
-		if internalBaseDelta {
-			b = node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{InternalBaseDelta: true})
-		} else {
-			b = node.NewBuilder(buf, page.PageTypeInternal)
-		}
-		pid, err := alloc.Alloc(0)
-		if err != nil {
-			return nil, err
-		}
-		b.SetPageID(pid)
-		return b, nil
-	}
-
-	ensureLevel := func(lvl int) error {
-		for len(levels) <= lvl {
-			b, err := newBuilder()
-			if err != nil {
-				return err
-			}
-			levels = append(levels, &levelBuilder{builder: b})
-		}
-		return nil
-	}
-	if err := ensureLevel(0); err != nil {
 		return 0, err
 	}
+	return builder.finish()
+}
 
-	var flush func(int) error
-	flush = func(lvl int) error {
-		lb := levels[lvl]
-		n := lb.builder.Finish()
-		childID := lb.builder.PageID()
-		if err := p.Write(childID, n.Data()); err != nil {
-			return err
-		}
+func vacuumTreeAllLeafRefsIfComplete(p *pager.Pager, rootID uint64) (bool, error) {
+	if p == nil {
+		return false, errors.New("vacuum: missing pager")
+	}
+	if rootID == 0 {
+		return false, errors.New("vacuum: missing root id")
+	}
 
-		if err := ensureLevel(lvl + 1); err != nil {
-			return err
-		}
-		parent := levels[lvl+1]
-		key := lb.startKey
-		if key == nil {
-			key = []byte{}
-		}
-		if parent.startKey == nil {
-			parent.startKey = append([]byte(nil), key...)
-		}
-
-		err := parent.builder.AddInternalChild(key, childID)
-		if err == node.ErrNodeFull {
-			if err := flush(lvl + 1); err != nil {
-				return err
-			}
-			parent = levels[lvl+1]
-			if parent.startKey == nil {
-				parent.startKey = append([]byte(nil), key...)
-			}
-			if err := parent.builder.AddInternalChild(key, childID); err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-
-		// Reset this level.
-		b, err := newBuilder()
+	leafRefs := 0
+	var walk func(uint64) (bool, error)
+	walk = func(id uint64) (bool, error) {
+		data, err := p.Get(id)
 		if err != nil {
-			return err
+			return false, err
 		}
-		lb.builder = b
-		lb.startKey = nil
-		return nil
-	}
-
-	for _, child := range children {
-		key := child.key
-		lb := levels[0]
-		if lb.startKey == nil {
-			lb.startKey = append([]byte(nil), key...)
-		}
-		err := lb.builder.AddInternalChildRef(key, child.childRef)
-		if err == node.ErrNodeFull {
-			if err := flush(0); err != nil {
-				return 0, err
-			}
-			lb = levels[0]
-			if lb.startKey == nil {
-				lb.startKey = append([]byte(nil), key...)
-			}
-			err = lb.builder.AddInternalChildRef(key, child.childRef)
-		}
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	// Finalize all levels (same promotion logic as bulk builder).
-	currID := uint64(0)
-	for i := 0; i < len(levels); i++ {
-		lb := levels[i]
-		n := lb.builder.Finish()
-		childID := lb.builder.PageID()
-		if err := p.Write(childID, n.Data()); err != nil {
-			return 0, err
-		}
-		currID = childID
-
-		if i < len(levels)-1 {
-			parent := levels[i+1]
-			key := lb.startKey
-			if key == nil {
-				key = []byte{}
-			}
-			if parent.startKey == nil {
-				parent.startKey = append([]byte(nil), key...)
-			}
-			err := parent.builder.AddInternalChild(key, currID)
-			if err == node.ErrNodeFull {
-				if err := flush(i + 1); err != nil {
-					return 0, err
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				_, childRef, err := n.GetInternalEntryRefView(i)
+				if err != nil {
+					return false, err
 				}
-				parent = levels[i+1]
-				if parent.startKey == nil {
-					parent.startKey = append([]byte(nil), key...)
+				if childRef.Kind == page.ChildRefLeafLog {
+					leafRefs++
+					continue
 				}
-				if err := parent.builder.AddInternalChild(key, currID); err != nil {
-					return 0, err
+				if childRef.Kind != page.ChildRefPage {
+					return false, fmt.Errorf("vacuum: unexpected child ref kind %d at page %d", childRef.Kind, id)
 				}
-			} else if err != nil {
-				return 0, err
+				allLeafRefs, err := walk(childRef.Page)
+				if err != nil || !allLeafRefs {
+					return allLeafRefs, err
+				}
 			}
+			return true, nil
+		case page.PageTypeLeaf:
+			return false, nil
+		default:
+			return false, fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
 		}
 	}
-
-	// Reduce root if possible.
-	if len(levels) > 1 {
-		root := levels[len(levels)-1].builder.Finish()
-		if root.Count() == 1 {
-			childRef, err := root.GetInternalChildRef(0)
-			if err == nil && childRef.Kind == page.ChildRefPage {
-				return childRef.Page, nil
-			}
-		}
+	allLeafRefs, err := walk(rootID)
+	if err != nil || !allLeafRefs || leafRefs == 0 {
+		return false, err
 	}
-
-	return currID, nil
+	return true, nil
 }
 
 func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, alloc interface {
