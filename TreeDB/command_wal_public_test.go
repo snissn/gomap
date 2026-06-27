@@ -1100,6 +1100,121 @@ func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T
 	}
 }
 
+func TestPublicCommandWALBatchPayloadSoftCapSwitchesToReplay(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 64
+
+	if err := wrapped.SetView([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("SetView below cap: %v", err)
+	}
+	if inner.setViewCalls != 1 || inner.setCalls != 0 {
+		t.Fatalf("inner calls after first set: setView=%d set=%d, want 1/0", inner.setViewCalls, inner.setCalls)
+	}
+	firstPayloadLen := wrapped.payload.Len()
+	if firstPayloadLen <= 0 || firstPayloadLen > wrapped.payloadSoftCapBytes {
+		t.Fatalf("payload len after first set=%d cap=%d", firstPayloadLen, wrapped.payloadSoftCapBytes)
+	}
+
+	key := []byte("second")
+	value := bytes.Repeat([]byte("x"), 128)
+	if err := wrapped.SetView(key, value); err != nil {
+		t.Fatalf("SetView over cap: %v", err)
+	}
+	key[0] = 'X'
+	value[0] = 'Y'
+	if !wrapped.payloadBypass {
+		t.Fatal("payload bypass not set after crossing soft cap")
+	}
+	if wrapped.payload.Count() != 1 || wrapped.opCount != 2 {
+		t.Fatalf("payload count=%d opCount=%d, want 1/2", wrapped.payload.Count(), wrapped.opCount)
+	}
+	if wrapped.payload.Len() != firstPayloadLen {
+		t.Fatalf("payload len grew after bypass: got %d want %d", wrapped.payload.Len(), firstPayloadLen)
+	}
+	if inner.setViewCalls != 1 || inner.setCalls != 1 {
+		t.Fatalf("inner calls after bypass: setView=%d set=%d, want 1/1", inner.setViewCalls, inner.setCalls)
+	}
+	if got := inner.entries[1]; string(got.Key) != "second" || string(got.Value) != strings.Repeat("x", 128) {
+		t.Fatalf("bypassed entry mutated or not copied: key=%q value_prefix=%q", got.Key, got.Value[:1])
+	}
+
+	payload, err := wrapped.commandWALPayload()
+	if err != nil {
+		t.Fatalf("commandWALPayload after bypass: %v", err)
+	}
+	var got []batch.Entry
+	if err := commitlog.ScanRawKVBatchPayload(payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		got = append(got, batch.Entry{Type: batch.OpPut, Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if len(got) != 2 || string(got[0].Key) != "a" || string(got[0].Value) != "b" || string(got[1].Key) != "second" || string(got[1].Value) != strings.Repeat("x", 128) {
+		t.Fatalf("replayed payload mismatch: %+v", got)
+	}
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapBoundsLargeValueBuilder(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 256 << 10
+
+	value := bytes.Repeat([]byte("v"), 512<<10)
+	for i := 0; i < 8; i++ {
+		key := []byte(fmt.Sprintf("large-%02d", i))
+		if err := wrapped.SetView(key, value); err != nil {
+			t.Fatalf("SetView large %d: %v", i, err)
+		}
+	}
+	if !wrapped.payloadBypass {
+		t.Fatal("large-value batch did not bypass retained payload")
+	}
+	if got := wrapped.payload.Len(); got > wrapped.payloadSoftCapBytes {
+		t.Fatalf("retained payload len=%d, cap=%d", got, wrapped.payloadSoftCapBytes)
+	}
+	if wrapped.payload.Count() != 0 || wrapped.opCount != 8 {
+		t.Fatalf("payload count=%d opCount=%d, want 0/8", wrapped.payload.Count(), wrapped.opCount)
+	}
+	if inner.setViewCalls != 0 || inner.setCalls != 8 {
+		t.Fatalf("inner calls after large values: setView=%d set=%d, want 0/8", inner.setViewCalls, inner.setCalls)
+	}
+	totalCopied := 0
+	for _, entry := range inner.entries {
+		totalCopied += len(entry.Value)
+	}
+	if totalCopied != 8*len(value) {
+		t.Fatalf("inner copied value bytes=%d, want %d", totalCopied, 8*len(value))
+	}
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapPreservesReplayViews(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 1
+
+	key := []byte("alpha")
+	value := []byte("value")
+	keyView, valueView, err := wrapped.SetViewWithReplayBytes(key, value)
+	if err != nil {
+		t.Fatalf("SetViewWithReplayBytes: %v", err)
+	}
+	key[0] = 'X'
+	value[0] = 'Y'
+	if wrapped.payloadBypass {
+		t.Fatal("replay-view append used payload bypass")
+	}
+	if inner.setViewCalls != 1 || inner.setCalls != 0 {
+		t.Fatalf("inner calls=%d/%d, want replay views through SetViewValidated", inner.setViewCalls, inner.setCalls)
+	}
+	if string(keyView) != "alpha" || string(valueView) != "value" {
+		t.Fatalf("replay views changed: key=%q value=%q", keyView, valueView)
+	}
+	if wrapped.payload.Count() != 1 || wrapped.opCount != 1 {
+		t.Fatalf("payload count=%d opCount=%d, want 1/1", wrapped.payload.Count(), wrapped.opCount)
+	}
+}
+
 type commandWALNoResetBatch struct {
 	entries []batch.Entry
 }
@@ -1113,12 +1228,29 @@ type commandWALHookBatch struct {
 	writeAfterCalls int
 }
 
+type commandWALPayloadSoftCapBatch struct {
+	commandWALResetBatch
+	setCalls     int
+	setViewCalls int
+}
+
 func (b *commandWALHookBatch) WriteAfterCommandWALAppend(_ bool, appendCommand func() error) error {
 	if err := appendCommand(); err != nil {
 		return err
 	}
 	b.writeAfterCalls++
 	b.Reset()
+	return nil
+}
+
+func (b *commandWALPayloadSoftCapBatch) Set(key, value []byte) error {
+	b.setCalls++
+	return b.commandWALResetBatch.Set(key, value)
+}
+
+func (b *commandWALPayloadSoftCapBatch) SetViewValidated(key, value []byte) error {
+	b.setViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 	return nil
 }
 
