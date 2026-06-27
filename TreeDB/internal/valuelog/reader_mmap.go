@@ -15,11 +15,13 @@ import (
 
 func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, cache *templateDefCache, opts templ.DecodeOptions) ([]byte, error) {
 	if lookup == nil || !templ.IsEncodedPayload(payload) {
+		noteGrowReadAppendDecodedPayload(dst, len(payload))
 		oldLen := len(dst)
 		dst = grow(dst, len(payload))
 		copy(dst[oldLen:], payload)
 		return dst, nil
 	}
+	noteGrowReadAppendTemplateEncodedPayload(len(payload))
 	return templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
 		return resolveTemplateDef(id, lookup, cache)
 	}, opts)
