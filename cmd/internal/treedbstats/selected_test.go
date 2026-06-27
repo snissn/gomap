@@ -11,7 +11,7 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total":                           "5",
 		"treedb.process.read_path.outer_leaf.cache.hits":                                                "11",
 		"treedb.vlog.mmap_read.fallback_readat":                                                         "13",
-		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                                                 "8589934592",
+		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                                                 "2147483648",
 		"treedb.vlog.grouped_frame_cache.retained_bytes":                                                "67108864",
 		"treedb.vlog.grouped_frame_cache.allocated_slots":                                               "512",
 		"treedb.cache.vlog_grouped_frame_cache.retained_bytes":                                          "33554432",

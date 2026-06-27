@@ -77,11 +77,12 @@ const (
 	defaultMaxMappedSealed           = 8
 	defaultMaxMappedSealedBytes      = 64 << 20
 	defaultMaxMappedLeafSealed       = defaultMaxMappedSealed * 64
-	defaultLeafSealedBytesMultiplier = 128
-	// Leaf-log reads are on the BTree traversal hot path. Keep a bounded 8GiB
-	// mapped virtual-address window for sealed leaf generations so large native
-	// fast-path datasets do not fall back to ReadAt once a few generations rotate;
-	// OS page-cache policy still controls physical memory residency.
+	defaultLeafSealedBytesMultiplier = 32
+	// Leaf-log reads are on the BTree traversal hot path, but long sync/restore
+	// workloads can keep multiple GiB of sealed leaf generations mapped into the
+	// process RSS. Keep a bounded 2GiB sealed-leaf window by default and let older
+	// generations fall back to ReadAt; operators can raise the env cap for
+	// throughput-biased experiments.
 	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * defaultLeafSealedBytesMultiplier
 	defaultCurrentWritableMapTarget = 32 << 20
 )
