@@ -555,6 +555,70 @@ func TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchPayloadSoftCapWritesAndReopens(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	b.payloadSoftCapBytes = 1
+	for _, kv := range []struct {
+		key   string
+		value string
+	}{
+		{"alpha", "one"},
+		{"bravo", "two"},
+	} {
+		if err := b.SetView([]byte(kv.key), []byte(kv.value)); err != nil {
+			_ = b.Close()
+			_ = db.Close()
+			t.Fatalf("SetView(%s): %v", kv.key, err)
+		}
+	}
+	if !b.payloadBypass || b.payload.Count() != 0 || b.opCount != 2 {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("pre-Write bypass=%t payload_count=%d opCount=%d, want true/0/2", b.payloadBypass, b.payload.Count(), b.opCount)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	requireRawKVValue(t, db, []byte("alpha"), []byte("one"))
+	requireRawKVValue(t, db, []byte("bravo"), []byte("two"))
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{
+		Dir:                 dir,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	requireRawKVValue(t, reopen, []byte("alpha"), []byte("one"))
+	requireRawKVValue(t, reopen, []byte("bravo"), []byte("two"))
+}
+
 func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),
