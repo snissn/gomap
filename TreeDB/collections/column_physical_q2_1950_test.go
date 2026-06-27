@@ -751,8 +751,11 @@ func assertTypedColumnQ2DensePreparedGlobalCodes1950(tb testing.TB, runner *Colu
 		if len(part.Group.GlobalCodes) != part.Rows || len(part.Distinct.GlobalCodes) != part.Rows {
 			tb.Fatalf("part %d global code rows group=%d distinct=%d want %d", partIdx, len(part.Group.GlobalCodes), len(part.Distinct.GlobalCodes), part.Rows)
 		}
-		if !sort.StringsAreSorted(part.Group.GlobalDictionary) || !sort.StringsAreSorted(part.Distinct.GlobalDictionary) {
-			tb.Fatalf("part %d global dictionaries not lexicographically sorted group=%v distinct=%v", partIdx, part.Group.GlobalDictionary, part.Distinct.GlobalDictionary)
+		if !sort.StringsAreSorted(part.Group.GlobalDictionary) {
+			tb.Fatalf("part %d group global dictionary not lexicographically sorted group=%v", partIdx, part.Group.GlobalDictionary)
+		}
+		if len(part.Distinct.GlobalLocalRanks) != len(part.Distinct.Dictionary) {
+			tb.Fatalf("part %d distinct global local ranks=%d want dictionary=%d", partIdx, len(part.Distinct.GlobalLocalRanks), len(part.Distinct.Dictionary))
 		}
 		localDidM := -1
 		for code, value := range part.Distinct.Dictionary {
@@ -764,15 +767,12 @@ func assertTypedColumnQ2DensePreparedGlobalCodes1950(tb testing.TB, runner *Colu
 		if localDidM < 0 {
 			continue
 		}
-		partDidMRank := -1
-		for rank, value := range part.Distinct.GlobalDictionary {
-			if value == "did:m" {
-				partDidMRank = rank
-				break
-			}
+		if localDidM >= len(part.Distinct.GlobalLocalRanks) {
+			tb.Fatalf("part %d local did:m code=%d outside distinct global local ranks=%d", partIdx, localDidM, len(part.Distinct.GlobalLocalRanks))
 		}
-		if partDidMRank < 0 {
-			tb.Fatalf("part %d distinct global dictionary missing did:m", partIdx)
+		partDidMRank := int(part.Distinct.GlobalLocalRanks[localDidM])
+		if partDidMRank >= len(part.Distinct.GlobalDictionary) {
+			tb.Fatalf("part %d did:m global rank=%d outside distinct cardinality=%d", partIdx, partDidMRank, len(part.Distinct.GlobalDictionary))
 		}
 		if didMRank < 0 {
 			didMRank = partDidMRank
