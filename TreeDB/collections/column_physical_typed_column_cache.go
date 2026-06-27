@@ -85,6 +85,7 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		entry.lastUse = c.typedColumnOneShotClock
 		c.typedColumnOneShotMu.Unlock()
 		result, err := entry.run(view, req)
+		result.Diagnostics.TypedColumnOneShotCacheHit = true
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
@@ -95,17 +96,23 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
 	if err != nil {
 		result := ColumnPhysicalQueryResult{}
+		result.Diagnostics.TypedColumnOneShotCacheMiss = true
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
 	readCache.returnViews = true
 	defer func() { _ = readCache.close() }()
 
+	buildStart := time.Now()
 	runner, candidate, err := prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, &readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
 		prepareDenseGroupCountDistinctGlobalCodes: columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req),
 	})
+	buildNanos := time.Since(buildStart).Nanoseconds()
 	if err != nil || !candidate {
 		result := ColumnPhysicalQueryResult{}
+		result.Diagnostics.TypedColumnOneShotCacheMiss = true
+		result.Diagnostics.TypedColumnOneShotCacheBuild = true
+		result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, candidate, err
 	}
@@ -122,6 +129,9 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		c.typedColumnOneShotMu.Unlock()
 		entry.close()
 		result, err := current.run(view, req)
+		result.Diagnostics.TypedColumnOneShotCacheMiss = true
+		result.Diagnostics.TypedColumnOneShotCacheBuild = true
+		result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, err
 	}
@@ -146,11 +156,17 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 		c.typedColumnOneShotMu.Unlock()
 		entry.close()
 		result := ColumnPhysicalQueryResult{}
+		result.Diagnostics.TypedColumnOneShotCacheMiss = true
+		result.Diagnostics.TypedColumnOneShotCacheBuild = true
+		result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
 		result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 		return result, true, backenddb.ErrClosed
 	}
 
 	result, err := entry.run(view, req)
+	result.Diagnostics.TypedColumnOneShotCacheMiss = true
+	result.Diagnostics.TypedColumnOneShotCacheBuild = true
+	result.Diagnostics.TypedColumnOneShotBuildNanos = buildNanos
 	result.Diagnostics.ScanNanos = time.Since(start).Nanoseconds()
 	return result, true, err
 }

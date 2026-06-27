@@ -179,6 +179,10 @@ type ColumnPhysicalQueryDiagnostics struct {
 	WorkerCount                         int
 	SegmentFileCacheHits                uint64
 	SegmentFileCacheMisses              uint64
+	TypedColumnOneShotCacheHit          bool
+	TypedColumnOneShotCacheMiss         bool
+	TypedColumnOneShotCacheBuild        bool
+	TypedColumnOneShotBuildNanos        int64
 	ColumnAssetReadIntegrity            string
 	StorageSource                       ColumnPhysicalQueryStorageSource
 	FallbackReason                      ColumnPhysicalQueryFallbackReason
