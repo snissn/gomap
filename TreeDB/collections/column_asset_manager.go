@@ -545,19 +545,72 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 }
 
 type columnPhysicalAssetSegmentAppender struct {
-	cfg        ColumnStoreConfig
-	namespace  columnAssetManagerNamespace
-	fileID     uint32
-	assetPath  string
-	file       *os.File
-	offset     int64
-	failed     bool
-	lock       *sync.Mutex
-	closeFile  bool
-	unlockLock bool
+	cfg           ColumnStoreConfig
+	namespace     columnAssetManagerNamespace
+	fileID        uint32
+	assetPath     string
+	file          *os.File
+	offset        int64
+	failed        bool
+	lock          *sync.Mutex
+	closeFile     bool
+	unlockLock    bool
+	removeOnClose bool
 }
 
 func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
+	if cfg.AssetManager == nil {
+		return nil, errors.New("collections: column physical asset append requires asset manager")
+	}
+	if cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
+		return nil, fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
+	}
+	if !cfg.AssetManager.IsolatedNamespace {
+		return nil, errors.New("collections: column physical asset append requires isolated namespace")
+	}
+	if fileID == 0 {
+		return nil, errors.New("collections: column physical asset append requires file_id")
+	}
+	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
+		return nil, err
+	}
+	ref := ColumnAssetRef{
+		Kind:      ColumnAssetKindTCS1PartImage,
+		Namespace: cfg.AssetManager.Namespace,
+		FileID:    fileID,
+		Offset:    0,
+		Length:    1,
+	}
+	assetPath, err := columnAssetSegmentPath(rootDir, ref)
+	if err != nil {
+		return nil, err
+	}
+	segmentLock := columnAssetSegmentWriteLock(assetPath)
+	segmentLock.Lock()
+	appender := &columnPhysicalAssetSegmentAppender{
+		cfg:           cfg,
+		namespace:     namespace,
+		fileID:        fileID,
+		assetPath:     assetPath,
+		lock:          segmentLock,
+		unlockLock:    true,
+		removeOnClose: true,
+	}
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		appender.releaseLock()
+		return nil, err
+	}
+	appender.file = file
+	appender.closeFile = true
+	return appender, nil
+}
+
+func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
 	if cfg.AssetManager == nil {
 		return nil, errors.New("collections: column physical asset append requires asset manager")
 	}
@@ -598,12 +651,19 @@ func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig
 		lock:       segmentLock,
 		unlockLock: true,
 	}
-	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		appender.releaseLock()
 		return nil, err
 	}
+	offset, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		_ = file.Close()
+		appender.releaseLock()
+		return nil, err
+	}
 	appender.file = file
+	appender.offset = offset
 	appender.closeFile = true
 	return appender, nil
 }
@@ -754,7 +814,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	}
 	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
 	var removeErr error
-	removeOnClose := columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)
+	removeOnClose := a.removeOnClose && columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)
 	if removeOnClose && a.assetPath != "" {
 		removeErr = os.Remove(a.assetPath)
 		if errors.Is(removeErr, os.ErrNotExist) {
@@ -784,13 +844,16 @@ func (a *columnPhysicalAssetSegmentAppender) abort() error {
 		a.file = nil
 	}
 	var removeErr error
-	if a.assetPath != "" {
+	if a.removeOnClose && a.assetPath != "" {
 		removeErr = os.Remove(a.assetPath)
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
 	}
-	syncErr := syncColumnAssetDir(a.namespace.SegmentDir)
+	var syncErr error
+	if a.removeOnClose {
+		syncErr = syncColumnAssetDir(a.namespace.SegmentDir)
+	}
 	a.releaseLock()
 	return errors.Join(closeErr, removeErr, syncErr)
 }
