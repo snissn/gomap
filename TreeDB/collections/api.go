@@ -405,7 +405,8 @@ type Collection struct {
 	vectorBufferedSearchErrors        uint64
 
 	typedColumnOneShotMu            sync.Mutex
-	typedColumnOneShot              *collectionTypedColumnOneShotCacheEntry
+	typedColumnOneShot              map[collectionTypedColumnOneShotCacheSlot]*collectionTypedColumnOneShotCacheEntry
+	typedColumnOneShotClock         uint64
 	typedColumnOneShotHits          uint64
 	typedColumnOneShotMisses        uint64
 	typedColumnOneShotBuilds        uint64

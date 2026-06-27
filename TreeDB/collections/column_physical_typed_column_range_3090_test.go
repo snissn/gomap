@@ -46,7 +46,7 @@ func TestColumnPhysicalDenseTypedColumnTargetedRangeReads3090(t *testing.T) {
 			t.Fatalf("RunColumnPhysicalQuery(q2 verify): %v", err)
 		}
 		assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 verify", full, rowHash, want)
-		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 verify", full.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
+		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 verify", full.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 
 		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
 		ranged, err := col.RunColumnPhysicalQuery(req)
@@ -54,7 +54,7 @@ func TestColumnPhysicalDenseTypedColumnTargetedRangeReads3090(t *testing.T) {
 			t.Fatalf("RunColumnPhysicalQuery(q2 skip checksums): %v", err)
 		}
 		assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 targeted ranges", ranged, rowHash, want)
-		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 targeted ranges", ranged.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
+		assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 targeted ranges", ranged.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 		assertColumnPhysicalTargetedRangeBytes3090(t, "q2", full.Diagnostics, ranged.Diagnostics)
 	})
 

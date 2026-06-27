@@ -136,7 +136,7 @@ func TestTypedColumnQ2DenseGroupCountDistinctNoSortLocalDictionaries1950(t *test
 		t.Fatalf("RunColumnPhysicalQuery(q2 dense no-sort): %v", err)
 	}
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "dense no-sort", direct, rowHash, want)
-	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "dense no-sort", direct.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerLocalBitset)
+	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "dense no-sort", direct.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
