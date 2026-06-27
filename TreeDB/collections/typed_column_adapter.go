@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/columnsemantics"
@@ -1722,12 +1723,14 @@ func typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared *typedColum
 		}
 		adapterColumn.Definition = preparedColumn.Column.Definition
 		if preparedColumn.Dictionaries != nil {
-			if err := validateTypedColumnAdapterStringDictionary(adapterColumn, adapterColumn.Definition.Cardinality, preparedColumn.Dictionaries); err != nil {
-				return nil, err
-			}
 			adapterColumn.Dictionary = preparedColumn.Dictionaries
-			adapterColumn.ReverseDictionary = reverseTypedColumnAdapterDictionary(preparedColumn.Dictionaries)
 			dictionaries[adapterColumn.Definition.Name] = preparedColumn.Dictionaries
+		}
+		if preparedColumn.ReverseDictionaries != nil {
+			adapterColumn.ReverseDictionary = preparedColumn.ReverseDictionaries
+		}
+		if adapterColumn.ReverseDictionary == nil && adapterColumn.Dictionary != nil {
+			adapterColumn.ReverseDictionary = reverseTypedColumnAdapterDictionary(adapterColumn.Dictionary)
 		}
 		partColumn, err := typedColumnPreparedColumnWithOptionalPayloads(preparedColumn, readRange, !opts.LazyPayloads)
 		if err != nil {
@@ -2407,6 +2410,17 @@ func validateTypedColumnTimeOrderTopKMarks(part *typedcolumn.ColumnPart, valueCo
 }
 
 func timeOrderTopKAllowedCodes(column typedColumnAdapterColumn, cardinality int, spec columnPhysicalQueryPredicateSpec) ([]uint64, bool, bool, error) {
+	needsDictionary := false
+	for _, value := range spec.values {
+		if column.Field.Nullable && value == "" {
+			continue
+		}
+		needsDictionary = true
+		break
+	}
+	if column.Dictionary == nil && needsDictionary {
+		return nil, false, false, fmt.Errorf("collections: time-order topK predicate column %q missing forward dictionary", column.Definition.Name)
+	}
 	allowed := make([]uint64, (cardinality+63)/64)
 	matchedLiterals := 0
 	missingMatchesEmpty := false
@@ -3045,15 +3059,25 @@ func typedColumnDenseStringCodeColumn(adapterPart *typedColumnAdapterPart, field
 		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s cardinality=%d exceeds host int", role, partColumn.Definition.Cardinality)
 	}
 	cardinality := int(partColumn.Definition.Cardinality)
-	if len(adapterColumn.ReverseDictionary) != cardinality {
-		return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s dictionary cardinality=%d want %d for column %q", role, len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
+	if typedColumnDenseStringCodeColumnNeedsForwardDictionary(role) {
+		if err := validateTypedColumnAdapterStringDictionary(adapterColumn, partColumn.Definition.Cardinality, adapterColumn.Dictionary); err != nil {
+			return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s forward dictionary: %w", role, err)
+		}
 	}
-	for code := 0; code < cardinality; code++ {
-		if _, ok := adapterColumn.ReverseDictionary[int64(code)]; !ok {
-			return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s dictionary missing local code %d for column %q", role, code, adapterColumn.Definition.Name)
+	if typedColumnDenseStringCodeColumnNeedsReverseDictionary(role) {
+		if len(adapterColumn.ReverseDictionary) != cardinality {
+			return typedColumnAdapterColumn{}, typedcolumn.ColumnPartColumn{}, 0, fmt.Errorf("collections: dense typed-column %s dictionary cardinality=%d want %d for column %q", role, len(adapterColumn.ReverseDictionary), cardinality, adapterColumn.Definition.Name)
 		}
 	}
 	return adapterColumn, partColumn, cardinality, nil
+}
+
+func typedColumnDenseStringCodeColumnNeedsForwardDictionary(role string) bool {
+	return strings.Contains(role, "predicate")
+}
+
+func typedColumnDenseStringCodeColumnNeedsReverseDictionary(role string) bool {
+	return !typedColumnDenseStringCodeColumnNeedsForwardDictionary(role)
 }
 
 func decodeTypedColumnDensePredicatePart(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, spec columnPhysicalQueryPredicateSpec, rows int) (columnTypedColumnDensePredicatePart, uint64, int, error) {
