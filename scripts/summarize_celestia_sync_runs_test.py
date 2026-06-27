@@ -110,6 +110,11 @@ def write_treedb_debug_vars(home: Path, *, instance_key: str = "db_1#0xbeef") ->
                             "treedb.cache.vlog_generation.gc.deleted_bytes": "1024",
                             "treedb.cache.vlog_generation.gc.deleted_segments": "3",
                             "treedb.cache.vlog_generation.gc.last_eligible_bytes": "128",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.runs": "3",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.deleted_bytes": "1536",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.deleted_files": "6",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations": "2",
+                            "treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations": "5",
                             "treedb.cache.vlog_retained_segments": "4",
                             "treedb.cache.vlog_retained_bytes_estimate": "4096",
                             "treedb.cache.vlog_retained_prune.closed_bytes": "2048",
@@ -367,13 +372,19 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertEqual(maintenance["instance"], "db_1#0xbeef")
             self.assertEqual(maintenance["counters"]["maintenance_attempts"], 7)
             self.assertEqual(maintenance["counters"]["gc_deleted_bytes"], 1024)
+            self.assertEqual(maintenance["counters"]["leaf_pack_gc_deleted_bytes"], 1536)
+            self.assertEqual(maintenance["counters"]["leaf_pack_gc_deleted_files"], 6)
             self.assertEqual(maintenance["counters"]["retained_prune_closed_bytes"], 2048)
             self.assertEqual(maintenance["counters"]["vlog_retained_bytes_estimate"], 4096)
             self.assertEqual(summary["dwell"]["app_db_apparent_shrink_from_peak_bytes"], 2000)
             self.assertEqual(summary["treedb_disk_reclaim"]["dwell_app_db_physical_shrink_from_peak_bytes"], 2500)
+            self.assertEqual(summary["treedb_disk_reclaim"]["leaf_pack_gc_deleted_bytes"], 1536)
+            self.assertEqual(summary["treedb_disk_reclaim"]["named_delete_or_remove_bytes"], 3072)
 
             markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")
             self.assertIn("## TreeDB Maintenance", markdown)
+            self.assertIn("leaf-pack deleted", markdown)
+            self.assertIn("1.50 KiB", markdown)
             self.assertIn("retained estimate", markdown)
             self.assertIn("db_1#0xbeef", markdown)
 

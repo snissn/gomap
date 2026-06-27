@@ -41,6 +41,11 @@ TREEDB_MAINTENANCE_COUNTERS = [
     "gc_last_eligible_bytes",
     "gc_last_pending_bytes",
     "gc_last_protected_retained_bytes",
+    "leaf_pack_gc_runs",
+    "leaf_pack_gc_deleted_bytes",
+    "leaf_pack_gc_deleted_files",
+    "leaf_pack_gc_deleted_generations",
+    "leaf_pack_gc_eligible_generations",
     "retained_prune_runs",
     "vlog_retained_segments",
     "vlog_retained_bytes_estimate",
@@ -308,6 +313,9 @@ def summarize_treedb_disk_reclaim(dwell: dict[str, Any], maintenance: dict[str, 
         "dwell_app_db_physical_shrink_from_peak_bytes": physical_shrink,
         "gc_deleted_bytes": safe_int(counters.get("gc_deleted_bytes"), 0),
         "gc_deleted_segments": safe_int(counters.get("gc_deleted_segments"), 0),
+        "leaf_pack_gc_deleted_bytes": safe_int(counters.get("leaf_pack_gc_deleted_bytes"), 0),
+        "leaf_pack_gc_deleted_files": safe_int(counters.get("leaf_pack_gc_deleted_files"), 0),
+        "leaf_pack_gc_deleted_generations": safe_int(counters.get("leaf_pack_gc_deleted_generations"), 0),
         "retained_prune_closed_bytes": safe_int(counters.get("retained_prune_closed_bytes"), 0),
         "vlog_retained_bytes_estimate": safe_int(counters.get("vlog_retained_bytes_estimate"), 0),
         "vlog_retained_segments": safe_int(counters.get("vlog_retained_segments"), 0),
@@ -316,6 +324,7 @@ def summarize_treedb_disk_reclaim(dwell: dict[str, Any], maintenance: dict[str, 
         "rewrite_reclaimed_bytes": safe_int(counters.get("rewrite_reclaimed_bytes"), 0),
         "vlog_zombie_bytes": safe_int(counters.get("vlog_zombie_bytes"), 0),
         "named_delete_or_remove_bytes": safe_int(counters.get("gc_deleted_bytes"), 0)
+        + safe_int(counters.get("leaf_pack_gc_deleted_bytes"), 0)
         + safe_int(counters.get("retained_prune_removed_bytes"), 0)
         + safe_int(counters.get("rewrite_reclaimed_bytes"), 0),
     }
@@ -569,6 +578,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         maint_rows = [[
             "backend",
             "app shrink",
+            "leaf-pack deleted",
+            "leaf-pack files",
             "gc deleted",
             "retained closed",
             "retained estimate",
@@ -586,6 +597,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
             maint_rows.append([
                 str(run.get("db_backend", "")),
                 human_bytes(reclaim.get("dwell_app_db_apparent_shrink_from_peak_bytes", 0)),
+                human_bytes(counters.get("leaf_pack_gc_deleted_bytes", 0)),
+                str(counters.get("leaf_pack_gc_deleted_files", 0)),
                 human_bytes(counters.get("gc_deleted_bytes", 0)),
                 human_bytes(counters.get("retained_prune_closed_bytes", 0)),
                 human_bytes(counters.get("vlog_retained_bytes_estimate", 0)),

@@ -457,6 +457,11 @@ def build_summary(stats: dict[str, Any]) -> dict[str, Any]:
         "gc_last_eligible_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_eligible_bytes"),
         "gc_last_pending_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_pending_bytes"),
         "gc_last_protected_retained_bytes": metric_int(stats, "treedb.cache.vlog_generation.gc.last_protected_retained_bytes"),
+        "leaf_pack_gc_runs": metric_int(stats, "treedb.cache.vlog_generation.leaf_pack.gc.runs"),
+        "leaf_pack_gc_deleted_bytes": metric_int(stats, "treedb.cache.vlog_generation.leaf_pack.gc.deleted_bytes"),
+        "leaf_pack_gc_deleted_files": metric_int(stats, "treedb.cache.vlog_generation.leaf_pack.gc.deleted_files"),
+        "leaf_pack_gc_deleted_generations": metric_int(stats, "treedb.cache.vlog_generation.leaf_pack.gc.deleted_generations"),
+        "leaf_pack_gc_eligible_generations": metric_int(stats, "treedb.cache.vlog_generation.leaf_pack.gc.eligible_generations"),
         "retained_prune_closed_bytes": metric_int(stats, "treedb.cache.vlog_retained_prune.closed_bytes"),
         "vlog_retained_segments": metric_int(stats, "treedb.cache.vlog_retained_segments"),
         "vlog_retained_bytes_estimate": metric_int(stats, "treedb.cache.vlog_retained_bytes_estimate"),
@@ -1004,6 +1009,12 @@ def print_report(summary: dict[str, Any], source_file: Path, run_home: str, inst
     print(
         "  runs/deleted: "
         f"{summary['gc_runs']} / {summary['gc_deleted_segments']} segments, {human_bytes(summary['gc_deleted_bytes'])}"
+    )
+    print(
+        "  leaf-pack deleted: "
+        f"runs={summary['leaf_pack_gc_runs']} files={summary['leaf_pack_gc_deleted_files']} "
+        f"generations={summary['leaf_pack_gc_deleted_generations']}/{summary['leaf_pack_gc_eligible_generations']} "
+        f"bytes={human_bytes(summary['leaf_pack_gc_deleted_bytes'])}"
     )
     print(
         "  exec: "
