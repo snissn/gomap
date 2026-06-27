@@ -484,6 +484,13 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
+	if b.db != nil {
+		unlock, err := b.db.beginPublicOperation()
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	if b.dirty {
 		writer, ok := b.inner.(interface {
 			WriteAfterCommandWALAppend(sync bool, appendCommand func() error) error
