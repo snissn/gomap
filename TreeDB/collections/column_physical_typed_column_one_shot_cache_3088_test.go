@@ -36,6 +36,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ1Q3NoMetadata3088(t *testing.T) {
 	}
 	assertColumnPhysicalQ3DenseResult1950(t, "q3 first one-shot", q3First, q3Want, len(events), q3MatchedRows, q3MatchedRows)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q3 first", 2, 1, 2, 2, 0)
+	assertTypedColumnQ3OneShotDenseDictionaryValuesByCode3175(t, col, q3Req)
 
 	q3Second, err := col.RunColumnPhysicalQuery(q3Req)
 	if err != nil {
@@ -262,6 +263,47 @@ func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 		}
 		if len(dense.DictionaryByCode) != 0 {
 			tb.Fatalf("q5 typed-column one-shot part %d reverse dictionary retained=%d want 0", partIdx, len(dense.DictionaryByCode))
+		}
+	}
+}
+
+func assertTypedColumnQ3OneShotDenseDictionaryValuesByCode3175(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) {
+	tb.Helper()
+	if col == nil {
+		tb.Fatalf("nil collection")
+	}
+	wantPredicates := collectionTypedColumnOneShotPredicateKey(req)
+	var entry *collectionTypedColumnOneShotCacheEntry
+	col.typedColumnOneShotMu.Lock()
+	for slot, current := range col.typedColumnOneShot {
+		if slot.kind == req.Kind &&
+			slot.groupColumn == req.GroupColumn &&
+			slot.valueColumn == req.ValueColumn &&
+			slot.predicates == wantPredicates {
+			entry = current
+			break
+		}
+	}
+	col.typedColumnOneShotMu.Unlock()
+	if entry == nil {
+		tb.Fatalf("q3 typed-column one-shot cache entry not found")
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	runner := entry.runner
+	if runner == nil {
+		tb.Fatalf("q3 typed-column one-shot cache entry has nil runner")
+	}
+	for partIdx := range runner.parts {
+		dense := runner.parts[partIdx].DenseGroupHourCount
+		if dense == nil {
+			tb.Fatalf("q3 typed-column one-shot part %d missing dense group-hour-count state", partIdx)
+		}
+		if len(dense.Dictionary) != dense.Cardinality {
+			tb.Fatalf("q3 typed-column one-shot part %d dictionary values-by-code=%d want cardinality=%d", partIdx, len(dense.Dictionary), dense.Cardinality)
+		}
+		if len(dense.DictionaryByCode) != 0 {
+			tb.Fatalf("q3 typed-column one-shot part %d reverse dictionary retained=%d want 0", partIdx, len(dense.DictionaryByCode))
 		}
 	}
 }
