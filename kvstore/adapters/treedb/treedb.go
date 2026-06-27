@@ -278,12 +278,19 @@ func (d *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	return val, err
 }
 
+func ignoreClosedWrite(err error) error {
+	if errors.Is(err, treedb.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
 func (d *DB) Set(key, value []byte) error {
-	return d.DB.Set(key, value)
+	return ignoreClosedWrite(d.DB.Set(key, value))
 }
 
 func (d *DB) Delete(key []byte) error {
-	return d.DB.Delete(key)
+	return ignoreClosedWrite(d.DB.Delete(key))
 }
 
 func (d *DB) RangeDeleteMode() string {
@@ -299,11 +306,11 @@ func (d *DB) Has(key []byte) (bool, error) {
 }
 
 func (d *DB) SetSync(key, value []byte) error {
-	return d.DB.SetSync(key, value)
+	return ignoreClosedWrite(d.DB.SetSync(key, value))
 }
 
 func (d *DB) DeleteSync(key []byte) error {
-	return d.DB.DeleteSync(key)
+	return ignoreClosedWrite(d.DB.DeleteSync(key))
 }
 
 // Stats is safe to call after Close. The unified-bench harness uses that
@@ -409,11 +416,11 @@ func (b *batch) DeleteView(key []byte) error {
 }
 
 func (b *batch) Commit() error {
-	return b.b.Write()
+	return ignoreClosedWrite(b.b.Write())
 }
 
 func (b *batch) CommitSync() error {
-	return b.b.WriteSync()
+	return ignoreClosedWrite(b.b.WriteSync())
 }
 
 func (b *batch) Close() error { return b.b.Close() }

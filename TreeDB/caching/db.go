@@ -21500,11 +21500,15 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
-func (db *DB) beginDirectWrite() {
+func (db *DB) beginDirectWrite() error {
 	for {
 		db.writeMu.RLock()
+		if db.closing.Load() {
+			db.writeMu.RUnlock()
+			return backenddb.ErrClosed
+		}
 		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
-			return
+			return nil
 		}
 		db.writeMu.RUnlock()
 		db.waitForCheckpoint()
@@ -23433,7 +23437,9 @@ func (db *DB) set(key, value []byte, sync bool) error {
 }
 
 func (db *DB) setDirect(key, value []byte, sync bool) error {
-	db.beginDirectWrite()
+	if err := db.beginDirectWrite(); err != nil {
+		return err
+	}
 	needRotate := false
 	needSyncBarrier := false
 	var ptr page.ValuePtr
@@ -23613,7 +23619,9 @@ func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand fu
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
-	db.beginDirectWrite()
+	if err := db.beginDirectWrite(); err != nil {
+		return err
+	}
 	needRotate := false
 	var ptr page.ValuePtr
 	var retainPath string
@@ -24622,7 +24630,9 @@ func (db *DB) delete(key []byte, sync bool) error {
 }
 
 func (db *DB) deleteDirect(key []byte, sync bool) error {
-	db.beginDirectWrite()
+	if err := db.beginDirectWrite(); err != nil {
+		return err
+	}
 	needRotate := false
 	needSyncBarrier := false
 
@@ -24698,7 +24708,9 @@ func (db *DB) deleteDirectAfterCommandWALAppend(key []byte, appendCommand func()
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
-	db.beginDirectWrite()
+	if err := db.beginDirectWrite(); err != nil {
+		return err
+	}
 	needRotate := false
 
 	shard := db.shardForKey(key)
@@ -32594,7 +32606,9 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeRegular(syncWrite bool) error {
-	b.db.beginDirectWrite()
+	if err := b.db.beginDirectWrite(); err != nil {
+		return err
+	}
 	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
 }
 

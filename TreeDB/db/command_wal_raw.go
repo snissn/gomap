@@ -30,6 +30,13 @@ type commandWALBatchIntent struct {
 	staged             bool
 }
 
+func (db *DB) commandWALJournalUnavailableError() error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	return fmt.Errorf("treedb: command wal journal unavailable")
+}
+
 // CommandWALIntent is an opaque command-WAL append/finalize token used by
 // higher-level deterministic command executors such as collections.
 type CommandWALIntent struct {
@@ -704,8 +711,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if op.Op == commitlog.RawKVOpSetRID {
 		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -749,8 +759,11 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
 		return 0, err
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -804,8 +817,11 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
 		return 0, err
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -931,8 +947,11 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 		}
 		return intent.lsn, nil
 	}
-	if db == nil || db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	if db == nil {
+		return 0, ErrClosed
+	}
+	if db.closing.Load() || db.commandJournal == nil {
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)

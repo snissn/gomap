@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1844,5 +1845,91 @@ func TestPublicCommandWALBatchDeleteRangeCachedReopen(t *testing.T) {
 	got, err = reopen.Get([]byte("d"))
 	if err != nil || string(got) != "vd" {
 		t.Fatalf("Get(d)=(%q,%v), want vd,nil", got, err)
+	}
+}
+
+func TestPublicCommandWALCloseRejectsLateSetSyncWithErrClosed(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	if err := db.Set([]byte("seed"), []byte("v1")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set(seed): %v", err)
+	}
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	var once sync.Once
+	testDuringPublicCloseAfterCheckpoint = func() {
+		once.Do(func() {
+			go func() {
+				close(started)
+				done <- db.SetSync([]byte("late-shutdown"), []byte("v2"))
+			}()
+			<-started
+			select {
+			case err := <-done:
+				t.Fatalf("late SetSync completed before Close released lifecycle lock: %v", err)
+			default:
+			}
+		})
+	}
+	defer func() { testDuringPublicCloseAfterCheckpoint = nil }()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	err = <-done
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("late SetSync error=%v, want ErrClosed", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "command wal journal unavailable") {
+		t.Fatalf("late SetSync leaked command journal shutdown error: %v", err)
+	}
+}
+
+func TestPublicCommandWALBatchWriteAfterCloseReturnsErrClosed(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	b := db.NewBatch()
+	if b == nil {
+		_ = db.Close()
+		t.Fatalf("NewBatch returned nil")
+	}
+	if err := b.Set([]byte("late-batch"), []byte("v1")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Close: %v", err)
+	}
+	err = b.WriteSync()
+	if !errors.Is(err, ErrClosed) {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync after close error=%v, want ErrClosed", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "command wal journal unavailable") {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync leaked command journal shutdown error: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
 	}
 }

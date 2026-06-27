@@ -37,6 +37,68 @@ func TestAdapterGetAfterCloseDoesNotError(t *testing.T) {
 	}
 }
 
+func TestAdapterWritesAfterCloseDoNotError(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{
+		Dir:                 dir,
+		Durability:          treedb.DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	adapter := Wrap(db)
+
+	batchWrite, err := adapter.NewBatch()
+	if err != nil {
+		t.Fatalf("new batch: %v", err)
+	}
+	if err := batchWrite.Set([]byte("batch-k"), []byte("batch-v")); err != nil {
+		t.Fatalf("batch set: %v", err)
+	}
+	batchSync, err := adapter.NewBatch()
+	if err != nil {
+		t.Fatalf("new sync batch: %v", err)
+	}
+	if err := batchSync.Set([]byte("batch-sync-k"), []byte("batch-sync-v")); err != nil {
+		t.Fatalf("batch sync set: %v", err)
+	}
+
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if err := adapter.Set([]byte("late-set"), []byte("v")); err != nil {
+		t.Fatalf("set after close: %v", err)
+	}
+	if err := adapter.SetSync([]byte("late-set-sync"), []byte("v")); err != nil {
+		t.Fatalf("set sync after close: %v", err)
+	}
+	if err := adapter.Delete([]byte("late-delete")); err != nil {
+		t.Fatalf("delete after close: %v", err)
+	}
+	if err := adapter.DeleteSync([]byte("late-delete-sync")); err != nil {
+		t.Fatalf("delete sync after close: %v", err)
+	}
+	if err := batchWrite.Commit(); err != nil {
+		t.Fatalf("batch commit after close: %v", err)
+	}
+	if err := batchSync.CommitSync(); err != nil {
+		t.Fatalf("batch commit sync after close: %v", err)
+	}
+	_ = batchWrite.Close()
+	_ = batchSync.Close()
+}
+
+func TestAdapterWriteErrorsPreserveNonClosedErrors(t *testing.T) {
+	errBoom := errors.New("boom")
+	if err := ignoreClosedWrite(errBoom); !errors.Is(err, errBoom) {
+		t.Fatalf("ignoreClosedWrite(%v)=%v, want original error", errBoom, err)
+	}
+}
+
 func TestAdapterReadBatch_IgnoresMissingAndDuplicates(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
