@@ -61,6 +61,7 @@ var columnAssetVerifiedChecksumCache = struct {
 }{}
 
 var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
+var columnAssetSegmentDirSyncCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentDirSyncCache
 
 type columnAssetVerifiedChecksumEntry struct {
 	key   columnAssetVerifiedChecksumKey
@@ -95,6 +96,12 @@ type columnAssetSegmentAllocationCache struct {
 	segmentDir string
 	nextFileID uint32
 	valid      bool
+}
+
+type columnAssetSegmentDirSyncCache struct {
+	sync.Mutex
+	assetPath string
+	known     bool
 }
 
 type columnAssetManagerNamespacePathCache struct {
@@ -394,6 +401,7 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
+	needsDirSync := created || !columnAssetSegmentDirSyncKnown(assetPath)
 	closeFile := true
 	defer func() {
 		if closeFile {
@@ -430,10 +438,11 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 		return ColumnAssetRef{}, err
 	}
 	closeFile = false
-	if created {
+	if needsDirSync {
 		if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
 			return ColumnAssetRef{}, err
 		}
+		markColumnAssetSegmentDirSynced(assetPath)
 	}
 	ref.Offset = offset
 	return ref, nil
@@ -675,7 +684,7 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 	}
 	appender.file = file
 	appender.offset = offset
-	appender.syncDirOnClose = created
+	appender.syncDirOnClose = created || !columnAssetSegmentDirSyncKnown(assetPath)
 	appender.closeFile = true
 	return appender, nil
 }
@@ -916,6 +925,9 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	if a.syncDirOnClose {
 		dirSyncErr = syncColumnAssetDir(a.namespace.SegmentDir)
 	}
+	if a.syncDirOnClose && dirSyncErr == nil && !a.failed && fileSyncErr == nil && fileCloseErr == nil {
+		markColumnAssetSegmentDirSynced(a.assetPath)
+	}
 	var removeErr error
 	removeOnClose := a.removeOnClose && columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)
 	if removeOnClose && a.assetPath != "" {
@@ -923,6 +935,9 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
+	}
+	if removeOnClose && removeErr == nil {
+		clearColumnAssetSegmentDirSyncKnown(a.assetPath)
 	}
 	var removeDirSyncErr error
 	if removeOnClose && removeErr == nil {
@@ -952,6 +967,9 @@ func (a *columnPhysicalAssetSegmentAppender) abort() error {
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
+	}
+	if a.removeOnClose && removeErr == nil {
+		clearColumnAssetSegmentDirSyncKnown(a.assetPath)
 	}
 	var syncErr error
 	if a.removeOnClose {
@@ -1790,6 +1808,40 @@ func columnAssetSegmentAllocationLockIndex(segmentDir string) uint64 {
 
 func columnAssetSegmentWriteLock(assetPath string) *sync.Mutex {
 	return &columnAssetSegmentWriteLocks[columnAssetSegmentLockIndex(filepath.Clean(assetPath))]
+}
+
+func columnAssetSegmentDirSyncKnown(assetPath string) bool {
+	cleanPath := filepath.Clean(assetPath)
+	cache := &columnAssetSegmentDirSyncCaches[columnAssetSegmentLockIndex(cleanPath)]
+	cache.Lock()
+	defer cache.Unlock()
+	return cache.known && cache.assetPath == cleanPath
+}
+
+func markColumnAssetSegmentDirSynced(assetPath string) {
+	if assetPath == "" {
+		return
+	}
+	cleanPath := filepath.Clean(assetPath)
+	cache := &columnAssetSegmentDirSyncCaches[columnAssetSegmentLockIndex(cleanPath)]
+	cache.Lock()
+	cache.assetPath = cleanPath
+	cache.known = true
+	cache.Unlock()
+}
+
+func clearColumnAssetSegmentDirSyncKnown(assetPath string) {
+	if assetPath == "" {
+		return
+	}
+	cleanPath := filepath.Clean(assetPath)
+	cache := &columnAssetSegmentDirSyncCaches[columnAssetSegmentLockIndex(cleanPath)]
+	cache.Lock()
+	if cache.known && cache.assetPath == cleanPath {
+		cache.known = false
+		cache.assetPath = ""
+	}
+	cache.Unlock()
 }
 
 func columnAssetSegmentLockIndex(name string) uint64 {
