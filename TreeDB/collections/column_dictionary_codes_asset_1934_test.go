@@ -17,6 +17,9 @@ func TestColumnDictionaryCodesAssetLittleEndianPayloadDirectView1934(t *testing.
 	if err != nil {
 		t.Fatalf("encodeColumnDictionaryCodesAsset: %v", err)
 	}
+	if size := columnDictionaryCodesEncodedSize(asset); size != len(raw) {
+		t.Fatalf("encoded dictionary codes size=%d want len=%d", size, len(raw))
+	}
 	ref := columnDictionaryCodesAssetTestRef1934(cfg, asset, raw)
 	ref.Offset = int64(columnDictionaryCodesPayloadAlignment)
 

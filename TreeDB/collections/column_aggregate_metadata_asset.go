@@ -78,6 +78,7 @@ func encodeColumnAggregateMetadataAsset(asset columnAggregateMetadataAsset) ([]b
 		return nil, errors.New("collections: aggregate metadata asset rows must be non-negative")
 	}
 	var b bytes.Buffer
+	b.Grow(columnAggregateMetadataEncodedSize(asset))
 	writeManifestUint32(&b, columnAggregateMetadataAssetMagic)
 	writeManifestUint16(&b, columnAggregateMetadataAssetVersion)
 	writeManifestString(&b, asset.Collection)
@@ -120,6 +121,36 @@ func encodeColumnAggregateMetadataAsset(asset columnAggregateMetadataAsset) ([]b
 		writeManifestUint64(&b, uint64(entry.Max))
 	}
 	return b.Bytes(), nil
+}
+
+func columnAggregateMetadataEncodedSize(asset columnAggregateMetadataAsset) int {
+	size := 4 + 2
+	size += manifestStringEncodedSize(asset.Collection)
+	size += manifestStringEncodedSize(asset.Namespace)
+	size += 4 * 8
+	size += manifestStringEncodedSize(asset.AggregateName)
+	size += manifestStringEncodedSize(asset.GroupColumn)
+	size += manifestStringEncodedSize(asset.ValueColumn)
+	size += 8
+	for _, predicate := range asset.Predicates {
+		kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
+		size += manifestStringEncodedSize(predicate.Column)
+		size += manifestStringEncodedSize(string(kind))
+		size += 8
+		if kind == ColumnPhysicalQueryPredicateInList {
+			for _, value := range predicate.Values {
+				size += manifestStringEncodedSize(value)
+			}
+		} else {
+			size += manifestStringEncodedSize(predicate.Value)
+		}
+	}
+	size += 2 * 8
+	for _, entry := range asset.Entries {
+		size += manifestStringEncodedSize(entry.Group)
+		size += 4 * 8
+	}
+	return size
 }
 
 func decodeColumnAggregateMetadataAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, collection, name string) (columnAggregateMetadataAsset, error) {

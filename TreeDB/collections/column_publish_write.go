@@ -737,9 +737,18 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Reason:       metadata.AggregateName,
 			})
 		}
-		dictionaryAssets, err := buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
+		rowSidecarAssets, fusedRowSidecars, err := buildColumnRowSidecarAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
+			rowSidecarAssets = columnRowSidecarAssets{}
+			fusedRowSidecars = false
+			err = nil
+		}
+		dictionaryAssets := rowSidecarAssets.DictionaryCodes
+		if !fusedRowSidecars {
+			dictionaryAssets, err = buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
 		}
 		for _, dictionary := range dictionaryAssets {
 			encodedDictionary, err := encodeColumnDictionaryCodesAsset(dictionary)
@@ -764,9 +773,12 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Reason:       dictionary.ColumnName,
 			})
 		}
-		int64Assets, err := buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
+		int64Assets := rowSidecarAssets.Int64Values
+		if !fusedRowSidecars {
+			int64Assets, err = buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
 		}
 		for _, values := range int64Assets {
 			encodedValues, err := encodeColumnInt64ValuesAsset(values)
@@ -791,9 +803,12 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				Reason:       values.ColumnName,
 			})
 		}
-		rowMetadataAssets, err := buildColumnAggregateMetadataAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
+		rowMetadataAssets := rowSidecarAssets.AggregateMetadata
+		if !fusedRowSidecars {
+			rowMetadataAssets, err = buildColumnAggregateMetadataAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return ColumnPublishPreparedAssets{}, err
+			}
 		}
 		for _, metadata := range rowMetadataAssets {
 			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
