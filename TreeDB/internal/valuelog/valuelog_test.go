@@ -416,12 +416,42 @@ func TestValueLogManager_MmapReadAppend(t *testing.T) {
 		t.Fatalf("expected mmap data to be present")
 	}
 
+	before := GrowBufferStatsSnapshot()
 	got, err := m.ReadAppend(ptr, nil)
 	if err != nil {
 		t.Fatalf("read append: %v", err)
 	}
 	if string(got) != "hello" {
 		t.Fatalf("mmap read mismatch: %q", string(got))
+	}
+	afterNil := GrowBufferStatsSnapshot()
+	if got := afterNil.ReadAppendDecodedPayloadCallsTotal - before.ReadAppendDecodedPayloadCallsTotal; got != 1 {
+		t.Fatalf("decoded payload calls after nil dst=%d want 1", got)
+	}
+	if got := afterNil.ReadAppendDecodedPayloadRequestedBytesTotal - before.ReadAppendDecodedPayloadRequestedBytesTotal; got != uint64(len("hello")) {
+		t.Fatalf("decoded payload requested after nil dst=%d want %d", got, len("hello"))
+	}
+	if got := afterNil.ReadAppendDecodedPayloadDstFitCallsTotal - before.ReadAppendDecodedPayloadDstFitCallsTotal; got != 0 {
+		t.Fatalf("decoded payload dst-fit calls after nil dst=%d want 0", got)
+	}
+
+	dst := make([]byte, 0, 16)
+	got, err = m.ReadAppend(ptr, dst)
+	if err != nil {
+		t.Fatalf("read append reused dst: %v", err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("mmap read reused dst mismatch: %q", string(got))
+	}
+	afterDst := GrowBufferStatsSnapshot()
+	if got := afterDst.ReadAppendDecodedPayloadDstPresentCallsTotal - afterNil.ReadAppendDecodedPayloadDstPresentCallsTotal; got != 1 {
+		t.Fatalf("decoded payload dst-present calls after reused dst=%d want 1", got)
+	}
+	if got := afterDst.ReadAppendDecodedPayloadDstFitCallsTotal - afterNil.ReadAppendDecodedPayloadDstFitCallsTotal; got != 1 {
+		t.Fatalf("decoded payload dst-fit calls after reused dst=%d want 1", got)
+	}
+	if got := afterDst.ReadAppendDecodedPayloadDstFitRequestedBytesTotal - afterNil.ReadAppendDecodedPayloadDstFitRequestedBytesTotal; got != uint64(len("hello")) {
+		t.Fatalf("decoded payload dst-fit requested after reused dst=%d want %d", got, len("hello"))
 	}
 }
 

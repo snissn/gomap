@@ -46,6 +46,8 @@ func TestGrowBufferStatsSnapshotTracksReadAppendSites(t *testing.T) {
 	noteGrowReadAppendCompressedFallback(11)
 	noteGrowReadAppendPayload(7)
 	noteGrowReadAppendCurrentMmapDirectDecode(5)
+	noteGrowReadAppendDecodedPayload(nil, 13)
+	noteGrowReadAppendTemplateEncodedPayload(17)
 
 	after := GrowBufferStatsSnapshot()
 
@@ -78,5 +80,29 @@ func TestGrowBufferStatsSnapshotTracksReadAppendSites(t *testing.T) {
 	}
 	if got := after.ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal - before.ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal; got != 5 {
 		t.Fatalf("current mmap direct decode requested delta=%d want 5", got)
+	}
+	if got := after.ReadAppendDecodedPayloadCallsTotal - before.ReadAppendDecodedPayloadCallsTotal; got != 1 {
+		t.Fatalf("decoded payload calls delta=%d want 1", got)
+	}
+	if got := after.ReadAppendDecodedPayloadRequestedBytesTotal - before.ReadAppendDecodedPayloadRequestedBytesTotal; got != 13 {
+		t.Fatalf("decoded payload requested delta=%d want 13", got)
+	}
+	if got := after.ReadAppendTemplateEncodedPayloadCallsTotal - before.ReadAppendTemplateEncodedPayloadCallsTotal; got != 1 {
+		t.Fatalf("template encoded payload calls delta=%d want 1", got)
+	}
+	if got := after.ReadAppendTemplateEncodedPayloadRequestedBytesTotal - before.ReadAppendTemplateEncodedPayloadRequestedBytesTotal; got != 17 {
+		t.Fatalf("template encoded payload requested delta=%d want 17", got)
+	}
+
+	noteGrowReadAppendDecodedPayload(buf, 8)
+	afterDecodedDstFit := GrowBufferStatsSnapshot()
+	if got := afterDecodedDstFit.ReadAppendDecodedPayloadDstPresentCallsTotal - after.ReadAppendDecodedPayloadDstPresentCallsTotal; got != 1 {
+		t.Fatalf("decoded payload dst-present calls delta=%d want 1", got)
+	}
+	if got := afterDecodedDstFit.ReadAppendDecodedPayloadDstFitCallsTotal - after.ReadAppendDecodedPayloadDstFitCallsTotal; got != 1 {
+		t.Fatalf("decoded payload dst-fit calls delta=%d want 1", got)
+	}
+	if got := afterDecodedDstFit.ReadAppendDecodedPayloadDstFitRequestedBytesTotal - after.ReadAppendDecodedPayloadDstFitRequestedBytesTotal; got != 8 {
+		t.Fatalf("decoded payload dst-fit requested delta=%d want 8", got)
 	}
 }
