@@ -119,7 +119,7 @@ func TestDefaultLeafMmapPolicyBudget(t *testing.T) {
 	if got, want := MaxMappedLeafSealedSegments, 512; got != want {
 		t.Fatalf("MaxMappedLeafSealedSegments=%d want %d", got, want)
 	}
-	if got, want := MaxMappedLeafSealedBytes, int64(8<<30); got != want {
+	if got, want := MaxMappedLeafSealedBytes, int64(2<<30); got != want {
 		t.Fatalf("MaxMappedLeafSealedBytes=%d want %d", got, want)
 	}
 }
