@@ -430,7 +430,7 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	if written != len(payload) {
 		return ColumnAssetRef{}, io.ErrShortWrite
 	}
-	if err := file.Sync(); err != nil {
+	if err := syncColumnAssetSegmentFile(file); err != nil {
 		return ColumnAssetRef{}, err
 	}
 	if err := file.Close(); err != nil {
@@ -914,7 +914,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	}
 	if a.file != nil && a.closeFile {
 		if !a.failed {
-			fileSyncErr = a.file.Sync()
+			fileSyncErr = syncColumnAssetSegmentFile(a.file)
 		}
 		fileCloseErr = a.file.Close()
 		a.closeFile = false

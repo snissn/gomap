@@ -2243,6 +2243,34 @@ func TestColumnPhysicalAssetSegmentAppendWriterSyncsUnknownExistingSegment3152(t
 	}
 }
 
+func TestColumnAssetSegmentFileDataSyncKeepsBytesReadable3151(t *testing.T) {
+	dir := t.TempDir()
+	file, err := os.CreateTemp(dir, "segment-*.tca")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	path := file.Name()
+	payload := []byte("durable column asset payload")
+	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	if err := syncColumnAssetSegmentFile(file); err != nil {
+		_ = file.Close()
+		t.Fatalf("syncColumnAssetSegmentFile: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("payload=%q want %q", got, payload)
+	}
+}
+
 func TestColumnPhysicalAssetSegmentAppendWriterBatchesMixedRegularAssets3145(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)
