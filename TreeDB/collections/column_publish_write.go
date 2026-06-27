@@ -739,7 +739,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		rowSidecarAssets, fusedRowSidecars, err := buildColumnRowSidecarAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
+			rowSidecarAssets = columnRowSidecarAssets{}
+			fusedRowSidecars = false
+			err = nil
 		}
 		dictionaryAssets := rowSidecarAssets.DictionaryCodes
 		if !fusedRowSidecars {
