@@ -61,6 +61,7 @@ var columnAssetVerifiedChecksumCache = struct {
 }{}
 
 var columnAssetManagerNamespacePathCaches [columnAssetSegmentWriteLockStripes]columnAssetManagerNamespacePathCache
+var columnAssetSegmentDirSyncCaches [columnAssetSegmentWriteLockStripes]columnAssetSegmentDirSyncCache
 
 type columnAssetVerifiedChecksumEntry struct {
 	key   columnAssetVerifiedChecksumKey
@@ -95,6 +96,12 @@ type columnAssetSegmentAllocationCache struct {
 	segmentDir string
 	nextFileID uint32
 	valid      bool
+}
+
+type columnAssetSegmentDirSyncCache struct {
+	sync.Mutex
+	assetPath string
+	known     bool
 }
 
 type columnAssetManagerNamespacePathCache struct {
@@ -390,7 +397,7 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
-	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, needsDirSync, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
 		return ColumnAssetRef{}, err
 	}
@@ -430,8 +437,11 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 		return ColumnAssetRef{}, err
 	}
 	closeFile = false
-	if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
-		return ColumnAssetRef{}, err
+	if needsDirSync {
+		if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
+			return ColumnAssetRef{}, err
+		}
+		markColumnAssetSegmentDirSynced(assetPath)
 	}
 	ref.Offset = offset
 	return ref, nil
@@ -545,17 +555,25 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 }
 
 type columnPhysicalAssetSegmentAppender struct {
-	cfg           ColumnStoreConfig
-	namespace     columnAssetManagerNamespace
-	fileID        uint32
-	assetPath     string
-	file          *os.File
-	offset        int64
-	failed        bool
-	lock          *sync.Mutex
-	closeFile     bool
-	unlockLock    bool
-	removeOnClose bool
+	cfg            ColumnStoreConfig
+	namespace      columnAssetManagerNamespace
+	fileID         uint32
+	assetPath      string
+	file           *os.File
+	offset         int64
+	failed         bool
+	lock           *sync.Mutex
+	syncDirOnClose bool
+	closeFile      bool
+	unlockLock     bool
+	removeOnClose  bool
+}
+
+type columnPhysicalAssetAppendItem struct {
+	payload    []byte
+	kind       ColumnAssetKind
+	generation uint64
+	partID     uint64
 }
 
 func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
@@ -592,13 +610,14 @@ func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	appender := &columnPhysicalAssetSegmentAppender{
-		cfg:           cfg,
-		namespace:     namespace,
-		fileID:        fileID,
-		assetPath:     assetPath,
-		lock:          segmentLock,
-		unlockLock:    true,
-		removeOnClose: true,
+		cfg:            cfg,
+		namespace:      namespace,
+		fileID:         fileID,
+		assetPath:      assetPath,
+		lock:           segmentLock,
+		syncDirOnClose: true,
+		unlockLock:     true,
+		removeOnClose:  true,
 	}
 	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
@@ -651,7 +670,7 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 		lock:       segmentLock,
 		unlockLock: true,
 	}
-	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	file, needsDirSync, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
 		appender.releaseLock()
 		return nil, err
@@ -664,8 +683,24 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 	}
 	appender.file = file
 	appender.offset = offset
+	appender.syncDirOnClose = needsDirSync
 	appender.closeFile = true
 	return appender, nil
+}
+
+func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, error) {
+	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
+	if err == nil {
+		return file, true, nil
+	}
+	if !errors.Is(err, os.ErrExist) {
+		return nil, false, err
+	}
+	file, err = os.OpenFile(assetPath, os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, false, err
+	}
+	return file, !columnAssetSegmentDirSyncKnown(assetPath), nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
@@ -723,6 +758,79 @@ func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []b
 		return ColumnAssetRef{}, err
 	}
 	return ref, nil
+}
+
+func (a *columnPhysicalAssetSegmentAppender) appendKinds(items []columnPhysicalAssetAppendItem) ([]ColumnAssetRef, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	if a == nil || a.file == nil {
+		return nil, errors.New("collections: nil column physical asset appender")
+	}
+	if a.failed {
+		return nil, errors.New("collections: column physical asset appender is failed")
+	}
+	const maxInt64 = int64(1<<63 - 1)
+	maxInt := int(^uint(0) >> 1)
+	refs := make([]ColumnAssetRef, len(items))
+	totalLength := 0
+	nextOffset := a.offset
+	for i, item := range items {
+		if len(item.payload) == 0 {
+			return nil, errors.New("collections: column physical asset payload is empty")
+		}
+		if item.generation == 0 || item.partID == 0 {
+			return nil, errors.New("collections: column physical asset append requires generation and part_id")
+		}
+		padding := columnAssetSegmentPrefixPadding(nextOffset, columnAssetSegmentPayloadAlignment(item.kind, a.cfg))
+		if totalLength > maxInt-padding-len(item.payload) {
+			return nil, errors.New("collections: column physical asset append batch is too large")
+		}
+		if nextOffset > maxInt64-int64(padding)-int64(len(item.payload)) {
+			return nil, errors.New("collections: column physical asset append offset overflow")
+		}
+		nextOffset += int64(padding)
+		refs[i] = ColumnAssetRef{
+			Kind:       item.kind,
+			Namespace:  a.cfg.AssetManager.Namespace,
+			Generation: item.generation,
+			PartID:     item.partID,
+			FileID:     a.fileID,
+			Offset:     nextOffset,
+			Length:     int64(len(item.payload)),
+			Checksum:   page.Checksum(item.payload),
+		}
+		nextOffset += int64(len(item.payload))
+		totalLength += padding + len(item.payload)
+	}
+	payload := make([]byte, 0, totalLength)
+	cursor := a.offset
+	var zeros [typedColumnPartDirectViewAssetAlignment]byte
+	for i, item := range items {
+		padding := int(refs[i].Offset - cursor)
+		for padding > 0 {
+			chunk := padding
+			if chunk > len(zeros) {
+				chunk = len(zeros)
+			}
+			payload = append(payload, zeros[:chunk]...)
+			padding -= chunk
+		}
+		payload = append(payload, item.payload...)
+		cursor = refs[i].Offset + refs[i].Length
+	}
+	written, err := writeColumnAssetSegmentPayload(a.file, payload)
+	a.offset += int64(written)
+	if err != nil {
+		a.failed = true
+		return nil, err
+	}
+	if written != len(payload) {
+		a.failed = true
+		return nil, io.ErrShortWrite
+	}
+	a.offset = nextOffset
+	return refs, nil
 }
 
 func columnAssetSegmentPayloadAlignment(kind ColumnAssetKind, cfg ColumnStoreConfig) int64 {
@@ -812,7 +920,13 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		a.closeFile = false
 		a.file = nil
 	}
-	dirSyncErr := syncColumnAssetDir(a.namespace.SegmentDir)
+	var dirSyncErr error
+	if a.syncDirOnClose {
+		dirSyncErr = syncColumnAssetDir(a.namespace.SegmentDir)
+	}
+	if a.syncDirOnClose && dirSyncErr == nil && !a.failed && fileSyncErr == nil && fileCloseErr == nil {
+		markColumnAssetSegmentDirSynced(a.assetPath)
+	}
 	var removeErr error
 	removeOnClose := a.removeOnClose && columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)
 	if removeOnClose && a.assetPath != "" {
@@ -820,6 +934,9 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
+	}
+	if removeOnClose && removeErr == nil {
+		clearColumnAssetSegmentDirSyncKnown(a.assetPath)
 	}
 	var removeDirSyncErr error
 	if removeOnClose && removeErr == nil {
@@ -849,6 +966,9 @@ func (a *columnPhysicalAssetSegmentAppender) abort() error {
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
+	}
+	if a.removeOnClose && removeErr == nil {
+		clearColumnAssetSegmentDirSyncKnown(a.assetPath)
 	}
 	var syncErr error
 	if a.removeOnClose {
@@ -1687,6 +1807,40 @@ func columnAssetSegmentAllocationLockIndex(segmentDir string) uint64 {
 
 func columnAssetSegmentWriteLock(assetPath string) *sync.Mutex {
 	return &columnAssetSegmentWriteLocks[columnAssetSegmentLockIndex(filepath.Clean(assetPath))]
+}
+
+func columnAssetSegmentDirSyncKnown(assetPath string) bool {
+	cleanPath := filepath.Clean(assetPath)
+	cache := &columnAssetSegmentDirSyncCaches[columnAssetSegmentLockIndex(cleanPath)]
+	cache.Lock()
+	defer cache.Unlock()
+	return cache.known && cache.assetPath == cleanPath
+}
+
+func markColumnAssetSegmentDirSynced(assetPath string) {
+	if assetPath == "" {
+		return
+	}
+	cleanPath := filepath.Clean(assetPath)
+	cache := &columnAssetSegmentDirSyncCaches[columnAssetSegmentLockIndex(cleanPath)]
+	cache.Lock()
+	cache.assetPath = cleanPath
+	cache.known = true
+	cache.Unlock()
+}
+
+func clearColumnAssetSegmentDirSyncKnown(assetPath string) {
+	if assetPath == "" {
+		return
+	}
+	cleanPath := filepath.Clean(assetPath)
+	cache := &columnAssetSegmentDirSyncCaches[columnAssetSegmentLockIndex(cleanPath)]
+	cache.Lock()
+	if cache.known && cache.assetPath == cleanPath {
+		cache.known = false
+		cache.assetPath = ""
+	}
+	cache.Unlock()
 }
 
 func columnAssetSegmentLockIndex(name string) uint64 {

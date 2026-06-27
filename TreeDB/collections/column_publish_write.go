@@ -444,6 +444,9 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishAggregateMetadataPrepare += metrics.AssetMetrics.AggregateMetadataDuration
 	stats.ColumnPublishRowSidecarSharedBuild += metrics.AssetMetrics.RowSidecarSharedBuildDuration
 	stats.ColumnPublishAssetAppend += metrics.AssetMetrics.SharedAppendDuration
+	stats.ColumnPublishAssetAppendOpen += metrics.AssetMetrics.SharedAppendOpenDuration
+	stats.ColumnPublishAssetAppendWrite += metrics.AssetMetrics.SharedAppendWriteDuration
+	stats.ColumnPublishAssetAppendClose += metrics.AssetMetrics.SharedAppendCloseDuration
 	stats.ColumnPublishManifestEncode += metrics.ManifestEncode
 	stats.ColumnPublishAssetClosureValidation += metrics.AssetClosureValidation
 	stats.ColumnPublishRootDeltaConstruction += metrics.RootDeltaConstruction
@@ -729,7 +732,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		var appender *columnPhysicalAssetSegmentAppender
 		closed := false
-		var appendDuration time.Duration
+		var appendOpenDuration time.Duration
+		var appendWriteDuration time.Duration
+		var appendCloseDuration time.Duration
 		if needsAppender {
 			appendStart := time.Now()
 			var err error
@@ -737,7 +742,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return err
 			}
-			appendDuration += time.Since(appendStart)
+			appendOpenDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
 					retErr = errors.Join(retErr, appender.abort())
@@ -746,23 +751,55 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		var appendedBytes int64
 		var appendedCount int
-		for _, asset := range pendingAssets {
-			ref := asset.ref
-			if !asset.hasRef {
-				appendStart := time.Now()
-				var err error
-				ref, err = appender.appendKind(asset.payload, asset.kind, generation, asset.partID)
-				if err != nil {
-					return err
+		appendedRefs := make([]ColumnAssetRef, len(pendingAssets))
+		appendedRefSet := make([]bool, len(pendingAssets))
+		if needsAppender {
+			appendIndexes := make([]int, 0, len(pendingAssets))
+			appendItems := make([]columnPhysicalAssetAppendItem, 0, len(pendingAssets))
+			for i, asset := range pendingAssets {
+				if asset.hasRef {
+					continue
 				}
-				appendDuration += time.Since(appendStart)
+				appendIndexes = append(appendIndexes, i)
+				appendItems = append(appendItems, columnPhysicalAssetAppendItem{
+					payload:    asset.payload,
+					kind:       asset.kind,
+					generation: generation,
+					partID:     asset.partID,
+				})
+			}
+			appendStart := time.Now()
+			refs, err := appender.appendKinds(appendItems)
+			if err != nil {
+				return err
+			}
+			appendWriteDuration += time.Since(appendStart)
+			if len(refs) != len(appendIndexes) {
+				return fmt.Errorf("collections: column physical asset append refs=%d want %d", len(refs), len(appendIndexes))
+			}
+			for _, ref := range refs {
+				trackCleanupAsset(ref)
+			}
+			for i, ref := range refs {
+				assetIndex := appendIndexes[i]
+				asset := pendingAssets[assetIndex]
+				appendedRefs[assetIndex] = ref
+				appendedRefSet[assetIndex] = true
 				appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
 				appendedCount++
-				trackCleanupAsset(ref)
 				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
 					ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
 					return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
 				}
+			}
+		}
+		for i, asset := range pendingAssets {
+			ref := asset.ref
+			if !asset.hasRef {
+				if !appendedRefSet[i] {
+					return fmt.Errorf("collections: missing appended ref for %s asset part_id=%d", asset.kind, asset.partID)
+				}
+				ref = appendedRefs[i]
 			}
 			if asset.validate != nil {
 				if err := asset.validate(ref); err != nil {
@@ -785,11 +822,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err := appender.close(); err != nil {
 				return err
 			}
-			appendDuration += time.Since(appendStart)
+			appendCloseDuration += time.Since(appendStart)
 			closed = true
 		}
 		if needsAppender {
+			appendDuration := appendOpenDuration + appendWriteDuration + appendCloseDuration
 			prepared.AssetMetrics.SharedAppendDuration += appendDuration
+			prepared.AssetMetrics.SharedAppendOpenDuration += appendOpenDuration
+			prepared.AssetMetrics.SharedAppendWriteDuration += appendWriteDuration
+			prepared.AssetMetrics.SharedAppendCloseDuration += appendCloseDuration
 			prepared.AssetMetrics.SharedAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedAppendBytes, appendedBytes)
 			prepared.AssetMetrics.SharedAppendCount += appendedCount
 		}
