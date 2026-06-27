@@ -239,6 +239,107 @@ func (b *RawKVBatchPayloadBuilder) Len() int {
 	return len(b.payload)
 }
 
+// RetainedCap returns the backing capacity retained by the canonical payload.
+func (b *RawKVBatchPayloadBuilder) RetainedCap() int {
+	if b == nil {
+		return 0
+	}
+	return cap(b.payload)
+}
+
+// RetainedCapAfterAppend returns the backing capacity that would be retained
+// after appending needed bytes with the same growth rule used by Append.
+func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppend(needed int) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	payloadLen, payloadCap := b.payloadLenCapForAppend()
+	_, newCap, err := b.payloadGrowthFrom(payloadLen, payloadCap, needed)
+	return newCap, err
+}
+
+// RetainedCapAfterAppendSet returns the payload-builder backing capacity that
+// AppendSet would retain. If the append stays compact-zero, the returned
+// capacity includes the compact-zero payload and zero-value view buffers. If the
+// append must expand compact-zero sets first, it includes that materialization.
+func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendSet(key, value []byte) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	if key == nil || value == nil {
+		return 0, ErrCorrupt
+	}
+	if commandFrameIntExceedsUint32(b.count+1) || commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(len(value)) {
+		return 0, ErrRecordTooLarge
+	}
+	if b.zeroSetCompactOnly && b.canAppendCompactZeroSet(value) {
+		return b.retainedCapAfterCompactZeroSetAppend(key, value)
+	}
+	needed := rawKVOpHeaderSize + len(key) + len(value)
+	if b.zeroSetCompactOnly {
+		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
+	}
+	payloadCap, err := b.RetainedCapAfterAppend(needed)
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
+}
+
+// RetainedCapAfterAppendDelete returns the payload-builder backing capacity
+// that AppendDelete would retain.
+func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDelete(key []byte) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	if key == nil {
+		return 0, ErrCorrupt
+	}
+	if commandFrameIntExceedsUint32(b.count+1) || commandFrameIntExceedsUint32(len(key)) {
+		return 0, ErrRecordTooLarge
+	}
+	needed := rawKVOpHeaderSize + len(key)
+	if b.zeroSetCompactOnly {
+		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
+	}
+	payloadCap, err := b.RetainedCapAfterAppend(needed)
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
+}
+
+// RetainedCapAfterAppendDeleteRange returns the payload-builder backing capacity
+// that AppendDeleteRange would retain.
+func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDeleteRange(start, end []byte) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	if err := validateRawKVDeleteRangeBounds(start, end); err != nil {
+		return 0, err
+	}
+	if commandFrameIntExceedsUint32(b.count + 1) {
+		return 0, ErrRecordTooLarge
+	}
+	_, startBytes, err := rawKVRangeBoundEncodedLen(start)
+	if err != nil {
+		return 0, err
+	}
+	_, endBytes, err := rawKVRangeBoundEncodedLen(end)
+	if err != nil {
+		return 0, err
+	}
+	needed := rawKVOpHeaderSize + startBytes + endBytes
+	if b.zeroSetCompactOnly {
+		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
+	}
+	payloadCap, err := b.RetainedCapAfterAppend(needed)
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
+}
+
 func (b *RawKVBatchPayloadBuilder) Truncate(payloadLen, count int) {
 	if b == nil || payloadLen < rawKVBatchHeaderSize || payloadLen > len(b.payload) || count < 0 {
 		return
@@ -436,22 +537,12 @@ func (b *RawKVBatchPayloadBuilder) AppendDeleteRange(start, end []byte) (startVi
 }
 
 func (b *RawKVBatchPayloadBuilder) appendRawKVPayloadSpace(needed int) (int, error) {
-	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
-		return 0, ErrRecordTooLarge
-	}
 	off := len(b.payload)
-	newLen := off + needed
+	newLen, newCap, err := b.payloadGrowth(needed)
+	if err != nil {
+		return 0, err
+	}
 	if newLen > cap(b.payload) {
-		newCap := cap(b.payload) * 2
-		if newCap < newLen {
-			newCap = newLen
-		}
-		if b.payloadCapHint > newCap {
-			newCap = b.payloadCapHint
-		}
-		if newCap < 0 {
-			return 0, ErrRecordTooLarge
-		}
 		next := make([]byte, newLen, newCap)
 		copy(next, b.payload)
 		b.payload = next
@@ -459,6 +550,171 @@ func (b *RawKVBatchPayloadBuilder) appendRawKVPayloadSpace(needed int) (int, err
 		b.payload = b.payload[:newLen]
 	}
 	return off, nil
+}
+
+func (b *RawKVBatchPayloadBuilder) payloadGrowth(needed int) (newLen, newCap int, err error) {
+	if b == nil {
+		return 0, 0, ErrCorrupt
+	}
+	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
+		return 0, 0, ErrRecordTooLarge
+	}
+	newLen = len(b.payload) + needed
+	newCap = cap(b.payload)
+	if newLen > newCap {
+		newCap *= 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if b.payloadCapHint > newCap {
+			newCap = b.payloadCapHint
+		}
+		if newCap < 0 {
+			return 0, 0, ErrRecordTooLarge
+		}
+	}
+	return newLen, newCap, nil
+}
+
+func (b *RawKVBatchPayloadBuilder) payloadGrowthFrom(payloadLen, payloadCap, needed int) (newLen, newCap int, err error) {
+	if needed < 0 || payloadLen < 0 || payloadCap < 0 {
+		return 0, 0, ErrRecordTooLarge
+	}
+	if needed > int(^uint32(0))-payloadLen || needed > int(^uint(0)>>1)-payloadLen {
+		return 0, 0, ErrRecordTooLarge
+	}
+	newLen = payloadLen + needed
+	newCap = payloadCap
+	if newLen > newCap {
+		newCap *= 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if b.payloadCapHint > newCap {
+			newCap = b.payloadCapHint
+		}
+		if newCap < 0 {
+			return 0, 0, ErrRecordTooLarge
+		}
+	}
+	return newLen, newCap, nil
+}
+
+func (b *RawKVBatchPayloadBuilder) payloadLenCapForAppend() (payloadLen, payloadCap int) {
+	if b == nil {
+		return 0, 0
+	}
+	payloadLen = len(b.payload)
+	payloadCap = cap(b.payload)
+	if payloadLen < rawKVBatchHeaderSize {
+		payloadLen = rawKVBatchHeaderSize
+	}
+	if payloadCap < payloadLen {
+		payloadCap = payloadLen
+	}
+	return payloadLen, payloadCap
+}
+
+func (b *RawKVBatchPayloadBuilder) retainedCapAfterCompactZeroMaterializeAppend(needed int) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	if !b.zeroSetCompactOnly || b.count == 0 {
+		return b.RetainedCapAfterAppend(needed)
+	}
+	if b.zeroSetValueLen <= 0 || len(b.zeroPayload) < rawKVZeroBatchHeaderSize {
+		return 0, ErrCorrupt
+	}
+	expandedLen, ok := rawKVExpandedZeroBatchPayloadSize(b.count, b.zeroSetKeyBytes, b.zeroSetValueLen)
+	if !ok || commandFrameIntExceedsUint32(expandedLen) {
+		return 0, ErrRecordTooLarge
+	}
+	_, payloadCap := b.payloadLenCapForAppend()
+	if payloadCap < expandedLen {
+		payloadCap = expandedLen
+	}
+	_, newCap, err := b.payloadGrowthFrom(expandedLen, payloadCap, needed)
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(newCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
+}
+
+func (b *RawKVBatchPayloadBuilder) retainedCapAfterCompactZeroSetAppend(key, value []byte) (int, error) {
+	if b == nil {
+		return 0, nil
+	}
+	zeroLen := len(b.zeroPayload)
+	zeroCap := cap(b.zeroPayload)
+	if zeroLen == 0 {
+		zeroLen = rawKVZeroBatchHeaderSize
+	}
+	version := b.zeroSetCompactVersion
+	if version == 0 {
+		version = rawKVZeroBatchPayloadV3
+		if len(key) > int(^uint16(0)) {
+			version = rawKVZeroBatchPayloadV2
+		}
+		capHint := rawKVZeroBatchHeaderSize
+		if b.opHint > 0 {
+			if hint, ok := rawKVZeroBatchPayloadSizeHint(b.opHint, len(key)); ok {
+				capHint = hint
+			}
+		}
+		if zeroCap < rawKVZeroBatchHeaderSize {
+			zeroCap = capHint
+		}
+	}
+	if version == rawKVZeroBatchPayloadV3 && len(key) > int(^uint16(0)) {
+		promotedLen := rawKVZeroBatchHeaderSize
+		if b.count > (int(^uint(0)>>1)-promotedLen)/rawKVZeroOpHeaderSize {
+			return 0, ErrRecordTooLarge
+		}
+		promotedLen += b.count * rawKVZeroOpHeaderSize
+		if b.zeroSetKeyBytes > int(^uint(0)>>1)-promotedLen {
+			return 0, ErrRecordTooLarge
+		}
+		promotedLen += b.zeroSetKeyBytes
+		if commandFrameIntExceedsUint32(promotedLen) {
+			return 0, ErrRecordTooLarge
+		}
+		zeroLen = promotedLen
+		zeroCap = promotedLen
+		version = rawKVZeroBatchPayloadV2
+	}
+	opHeaderSize := rawKVZeroOpHeaderSizeForVersion(version)
+	needed := opHeaderSize + len(key)
+	if needed > int(^uint32(0))-zeroLen || needed > int(^uint(0)>>1)-zeroLen {
+		return 0, ErrRecordTooLarge
+	}
+	zeroLen += needed
+	if zeroLen > zeroCap {
+		zeroCap *= 2
+		if zeroCap < zeroLen {
+			zeroCap = zeroLen
+		}
+		if zeroCap < 0 {
+			return 0, ErrRecordTooLarge
+		}
+	}
+	_, payloadCap := b.payloadLenCapForAppend()
+	zeroSetValueViewCap := cap(b.zeroSetValueView)
+	if zeroSetValueViewCap < len(value) {
+		zeroSetValueViewCap = len(value)
+	}
+	return b.retainedPayloadBufferCap(payloadCap, zeroCap, zeroSetValueViewCap)
+}
+
+func (b *RawKVBatchPayloadBuilder) retainedPayloadBufferCap(caps ...int) (int, error) {
+	total := 0
+	maxInt := int(^uint(0) >> 1)
+	for _, retained := range caps {
+		if retained < 0 || retained > maxInt-total {
+			return 0, ErrRecordTooLarge
+		}
+		total += retained
+	}
+	return total, nil
 }
 
 func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte) (keyView, valueView []byte, err error) {
