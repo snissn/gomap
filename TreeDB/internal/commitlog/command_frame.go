@@ -239,6 +239,21 @@ func (b *RawKVBatchPayloadBuilder) Len() int {
 	return len(b.payload)
 }
 
+// RetainedCap returns the backing capacity retained by the canonical payload.
+func (b *RawKVBatchPayloadBuilder) RetainedCap() int {
+	if b == nil {
+		return 0
+	}
+	return cap(b.payload)
+}
+
+// RetainedCapAfterAppend returns the backing capacity that would be retained
+// after appending needed bytes with the same growth rule used by Append.
+func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppend(needed int) (int, error) {
+	_, newCap, err := b.payloadGrowth(needed)
+	return newCap, err
+}
+
 func (b *RawKVBatchPayloadBuilder) Truncate(payloadLen, count int) {
 	if b == nil || payloadLen < rawKVBatchHeaderSize || payloadLen > len(b.payload) || count < 0 {
 		return
@@ -436,22 +451,12 @@ func (b *RawKVBatchPayloadBuilder) AppendDeleteRange(start, end []byte) (startVi
 }
 
 func (b *RawKVBatchPayloadBuilder) appendRawKVPayloadSpace(needed int) (int, error) {
-	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
-		return 0, ErrRecordTooLarge
-	}
 	off := len(b.payload)
-	newLen := off + needed
+	newLen, newCap, err := b.payloadGrowth(needed)
+	if err != nil {
+		return 0, err
+	}
 	if newLen > cap(b.payload) {
-		newCap := cap(b.payload) * 2
-		if newCap < newLen {
-			newCap = newLen
-		}
-		if b.payloadCapHint > newCap {
-			newCap = b.payloadCapHint
-		}
-		if newCap < 0 {
-			return 0, ErrRecordTooLarge
-		}
 		next := make([]byte, newLen, newCap)
 		copy(next, b.payload)
 		b.payload = next
@@ -459,6 +464,27 @@ func (b *RawKVBatchPayloadBuilder) appendRawKVPayloadSpace(needed int) (int, err
 		b.payload = b.payload[:newLen]
 	}
 	return off, nil
+}
+
+func (b *RawKVBatchPayloadBuilder) payloadGrowth(needed int) (newLen, newCap int, err error) {
+	if needed > int(^uint32(0))-len(b.payload) || needed > int(^uint(0)>>1)-len(b.payload) {
+		return 0, 0, ErrRecordTooLarge
+	}
+	newLen = len(b.payload) + needed
+	newCap = cap(b.payload)
+	if newLen > newCap {
+		newCap *= 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if b.payloadCapHint > newCap {
+			newCap = b.payloadCapHint
+		}
+		if newCap < 0 {
+			return 0, 0, ErrRecordTooLarge
+		}
+	}
+	return newLen, newCap, nil
 }
 
 func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte) (keyView, valueView []byte, err error) {

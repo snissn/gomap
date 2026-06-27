@@ -619,6 +619,80 @@ func TestPublicCommandWALBatchPayloadSoftCapWritesAndReopens(t *testing.T) {
 	requireRawKVValue(t, reopen, []byte("bravo"), []byte("two"))
 }
 
+func TestPublicCommandWALBatchPayloadSoftCapRangePointerReopens(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	if err := db.Set([]byte("b"), []byte("old-pointer-value")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set old value: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint old value: %v", err)
+	}
+
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	b.payloadSoftCapBytes = 1
+	want := bytes.Repeat([]byte("p"), 2048)
+	if err := b.DeleteRange([]byte("a"), []byte("z")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	if err := b.Set([]byte("m"), want); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	requireRawKVValue(t, db, []byte("m"), want)
+	hasOld, err := db.Has([]byte("b"))
+	if err != nil || hasOld {
+		_ = db.Close()
+		t.Fatalf("Has(b)=(%t,%v), want false,nil before reopen", hasOld, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	requireRawKVValue(t, reopen, []byte("m"), want)
+	hasOld, err = reopen.Has([]byte("b"))
+	if err != nil || hasOld {
+		t.Fatalf("reopen Has(b)=(%t,%v), want false,nil", hasOld, err)
+	}
+}
+
 func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),
@@ -1216,6 +1290,37 @@ func TestPublicCommandWALBatchPayloadSoftCapSwitchesToReplay(t *testing.T) {
 	}
 	if len(got) != 2 || string(got[0].Key) != "a" || string(got[0].Value) != "b" || string(got[1].Key) != "second" || string(got[1].Value) != strings.Repeat("x", 128) {
 		t.Fatalf("replayed payload mismatch: %+v", got)
+	}
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapAccountsForRetainedCapGrowth(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 100
+
+	if err := wrapped.SetView([]byte("a"), bytes.Repeat([]byte("x"), 70)); err != nil {
+		t.Fatalf("SetView first: %v", err)
+	}
+	firstLen := wrapped.payload.Len()
+	firstCap := wrapped.payload.RetainedCap()
+	if wrapped.payloadBypass {
+		t.Fatal("first append unexpectedly bypassed")
+	}
+	if firstCap <= 0 || firstCap >= wrapped.payloadSoftCapBytes || firstLen >= wrapped.payloadSoftCapBytes {
+		t.Fatalf("first retained len=%d cap=%d soft_cap=%d, want both below cap", firstLen, firstCap, wrapped.payloadSoftCapBytes)
+	}
+
+	if err := wrapped.SetView([]byte("b"), []byte("y")); err != nil {
+		t.Fatalf("SetView second: %v", err)
+	}
+	if !wrapped.payloadBypass {
+		t.Fatal("second append did not bypass retained-cap growth")
+	}
+	if wrapped.payload.Len() != firstLen || wrapped.payload.RetainedCap() != firstCap {
+		t.Fatalf("payload grew after retained-cap bypass: len/cap=%d/%d want %d/%d", wrapped.payload.Len(), wrapped.payload.RetainedCap(), firstLen, firstCap)
+	}
+	if inner.setViewCalls != 1 || inner.setCalls != 1 {
+		t.Fatalf("inner calls after retained-cap bypass: setView=%d set=%d, want 1/1", inner.setViewCalls, inner.setCalls)
 	}
 }
 

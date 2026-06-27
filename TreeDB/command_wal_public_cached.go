@@ -519,11 +519,11 @@ func (b *commandWALPublicBatch) shouldBypassPayloadAppend(needed int, retainRepl
 	if b.payloadBypass {
 		return true
 	}
-	current := b.payload.Len()
-	if current >= b.payloadSoftCapBytes {
+	retainedCap, err := b.payload.RetainedCapAfterAppend(needed)
+	if err != nil {
 		return true
 	}
-	return needed > b.payloadSoftCapBytes-current
+	return retainedCap > b.payloadSoftCapBytes
 }
 
 func commandWALPublicRangeBoundBytes(bound []byte) int {
@@ -677,7 +677,8 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	if !b.hasDeleteRange && b.db != nil && b.db.commandWALCached && b.db.backend != nil {
+	usePointerEntries := !b.hasDeleteRange || b.payloadBypass || b.payload.Count() != b.opCount
+	if usePointerEntries && b.db != nil && b.db.commandWALCached && b.db.backend != nil {
 		var entries []batch.Entry
 		hasPointer := false
 		if err := b.inner.Replay(func(entry batch.Entry) error {
