@@ -17,6 +17,9 @@ func TestColumnInt64ValuesAssetLittleEndianPayloadDirectView1935(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeColumnInt64ValuesAsset: %v", err)
 	}
+	if size := columnInt64ValuesEncodedSize(asset); size != len(raw) {
+		t.Fatalf("encoded int64 values size=%d want len=%d", size, len(raw))
+	}
 	ref := columnInt64ValuesAssetTestRef1935(cfg.AssetManager.Namespace, asset, raw)
 	ref.Offset = int64(columnInt64ValuesPayloadAlignment)
 

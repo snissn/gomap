@@ -66,7 +66,7 @@ func buildColumnInt64ValuesAssetForColumn(cfg ColumnStoreConfig, rows []columnDe
 	if len(rows) == 0 {
 		return columnInt64ValuesAsset{}, false, nil
 	}
-	values := make([]int64, len(rows))
+	builder := newColumnInt64ValuesAssetBuilder(col, colIdx, len(rows))
 	for rowIdx, row := range rows {
 		if row.Deleted {
 			return columnInt64ValuesAsset{}, false, nil
@@ -74,14 +74,51 @@ func buildColumnInt64ValuesAssetForColumn(cfg ColumnStoreConfig, rows []columnDe
 		if len(row.Values) != len(cfg.Columns) {
 			return columnInt64ValuesAsset{}, false, fmt.Errorf("collections: int64 values row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(cfg.Columns))
 		}
-		value := row.Values[colIdx]
-		if value.Type != ColumnStoreValueInt64 {
-			return columnInt64ValuesAsset{}, false, fmt.Errorf("collections: int64 values row[%d] column[%d] type=%q want int64", rowIdx, colIdx, value.Type)
+		if err := builder.appendValue(rowIdx, row.Values[colIdx]); err != nil {
+			return columnInt64ValuesAsset{}, false, err
 		}
-		if !value.Present || value.Null {
+		if !builder.valid {
 			return columnInt64ValuesAsset{}, false, nil
 		}
-		values[rowIdx] = value.Int64
+	}
+	asset, ok := builder.asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedCommandLSN)
+	return asset, ok, nil
+}
+
+type columnInt64ValuesAssetBuilder struct {
+	column      ColumnStoreColumn
+	columnIndex int
+	values      []int64
+	valid       bool
+}
+
+func newColumnInt64ValuesAssetBuilder(col ColumnStoreColumn, colIdx, rows int) columnInt64ValuesAssetBuilder {
+	return columnInt64ValuesAssetBuilder{
+		column:      col,
+		columnIndex: colIdx,
+		values:      make([]int64, rows),
+		valid:       true,
+	}
+}
+
+func (b *columnInt64ValuesAssetBuilder) appendValue(rowIdx int, value columnDeclaredValue) error {
+	if !b.valid {
+		return nil
+	}
+	if value.Type != ColumnStoreValueInt64 {
+		return fmt.Errorf("collections: int64 values row[%d] column[%d] type=%q want int64", rowIdx, b.columnIndex, value.Type)
+	}
+	if !value.Present || value.Null {
+		b.valid = false
+		return nil
+	}
+	b.values[rowIdx] = value.Int64
+	return nil
+}
+
+func (b *columnInt64ValuesAssetBuilder) asset(schemaHash uint64, collection, namespace string, generation, partID, appliedCommandLSN uint64) (columnInt64ValuesAsset, bool) {
+	if !b.valid || len(b.values) == 0 {
+		return columnInt64ValuesAsset{}, false
 	}
 	return columnInt64ValuesAsset{
 		Collection:        collection,
@@ -89,11 +126,11 @@ func buildColumnInt64ValuesAssetForColumn(cfg ColumnStoreConfig, rows []columnDe
 		Generation:        generation,
 		PartID:            partID,
 		AppliedCommandLSN: appliedCommandLSN,
-		SchemaHash:        cfg.SchemaHash,
-		ColumnName:        col.Name,
-		ColumnIndex:       colIdx,
-		Values:            values,
-	}, true, nil
+		SchemaHash:        schemaHash,
+		ColumnName:        b.column.Name,
+		ColumnIndex:       b.columnIndex,
+		Values:            b.values,
+	}, true
 }
 
 func encodeColumnInt64ValuesAsset(asset columnInt64ValuesAsset) ([]byte, error) {
@@ -107,6 +144,7 @@ func encodeColumnInt64ValuesAsset(asset columnInt64ValuesAsset) ([]byte, error) 
 		return nil, errors.New("collections: int64 values asset requires values")
 	}
 	var b bytes.Buffer
+	b.Grow(columnInt64ValuesEncodedSize(asset))
 	writeManifestUint32(&b, columnInt64ValuesAssetMagic)
 	writeManifestUint16(&b, columnInt64ValuesAssetVersion)
 	writeManifestString(&b, asset.Collection)
@@ -125,6 +163,18 @@ func encodeColumnInt64ValuesAsset(asset columnInt64ValuesAsset) ([]byte, error) 
 		_, _ = b.Write(valueBuf[:])
 	}
 	return b.Bytes(), nil
+}
+
+func columnInt64ValuesEncodedSize(asset columnInt64ValuesAsset) int {
+	size := 4 + 2
+	size += manifestStringEncodedSize(asset.Collection)
+	size += manifestStringEncodedSize(asset.Namespace)
+	size += 4 * 8
+	size += manifestStringEncodedSize(asset.ColumnName)
+	size += 2 * 8
+	size += columnSidecarPayloadPadding(size, columnInt64ValuesPayloadAlignment)
+	size += len(asset.Values) * columnInt64ValuesPayloadElemBytes
+	return size
 }
 
 func decodeColumnInt64ValuesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string, verifyChecksum bool) (columnInt64ValuesAsset, error) {
