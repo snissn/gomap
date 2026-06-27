@@ -29849,6 +29849,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_decode_buffer_grow.read_append_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadRequestedBytesTotal)
 	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeCallsTotal)
 	stats["treedb.cache.vlog_decode_buffer_grow.read_append_current_mmap_direct_decode.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.dst_present_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadDstPresentCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.dst_fit_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadDstFitCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.dst_fit_requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadDstFitRequestedBytesTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_template_encoded_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendTemplateEncodedPayloadCallsTotal)
+	stats["treedb.cache.vlog_decode_buffer_grow.read_append_template_encoded_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendTemplateEncodedPayloadRequestedBytesTotal)
 	if growStats.CallsTotal > 0 {
 		stats["treedb.cache.vlog_decode_buffer_grow.realloc_rate"] = fmt.Sprintf("%.6f", float64(growStats.ReallocCallsTotal)/float64(growStats.CallsTotal))
 	}
