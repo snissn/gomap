@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"testing"
 	"unsafe"
 
@@ -138,6 +139,54 @@ func TestColumnRetainedSemanticStreamV1LookupStringDoesNotEscapeRetainedPaths320
 	copy(document[start+1:], []byte("mutained"))
 	if got := retainedStream.segments[0]; got != "retained" {
 		t.Fatalf("retained path changed after source mutation: %q", got)
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1LocatorArenaMatchesStandalone3208(t *testing.T) {
+	blockKey := make([]byte, sha256.Size)
+	for i := range blockKey {
+		blockKey[i] = byte(i)
+	}
+	rows := 300
+	arena := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
+	locators := make([][]byte, rows)
+	for row := 0; row < rows; row++ {
+		start := len(arena)
+		arena = appendColumnRetainedSemanticStreamV1Locator(arena, blockKey, uint64(row))
+		locators[row] = arena[start:len(arena):len(arena)]
+
+		standalone := encodeColumnRetainedSemanticStreamV1Locator(blockKey, uint64(row))
+		if !bytes.Equal(locators[row], standalone) {
+			t.Fatalf("row %d packed locator=%x want standalone=%x", row, locators[row], standalone)
+		}
+		gotBlockKey, gotRow, ok, err := parseColumnRetainedSemanticStreamV1Locator(locators[row])
+		if err != nil {
+			t.Fatalf("row %d parse packed locator: %v", row, err)
+		}
+		if !ok {
+			t.Fatalf("row %d packed locator not recognized", row)
+		}
+		if gotRow != uint64(row) {
+			t.Fatalf("row %d parsed row=%d", row, gotRow)
+		}
+		if !bytes.Equal(gotBlockKey, blockKey) {
+			t.Fatalf("row %d parsed block key=%x want %x", row, gotBlockKey, blockKey)
+		}
+		if cap(locators[row]) != len(locators[row]) {
+			t.Fatalf("row %d locator cap=%d len=%d; appends must not reach the shared arena", row, cap(locators[row]), len(locators[row]))
+		}
+	}
+	if len(arena) != cap(arena) {
+		t.Fatalf("locator arena len=%d cap=%d; capacity helper should be exact", len(arena), cap(arena))
+	}
+
+	nextBefore := append([]byte(nil), locators[1]...)
+	appended := append(locators[0], 0xff)
+	if unsafe.SliceData(appended) == unsafe.SliceData(locators[0]) {
+		t.Fatal("append to a packed locator reused the shared arena backing")
+	}
+	if !bytes.Equal(locators[1], nextBefore) {
+		t.Fatalf("append to first locator corrupted second locator: got %x want %x", locators[1], nextBefore)
 	}
 }
 
