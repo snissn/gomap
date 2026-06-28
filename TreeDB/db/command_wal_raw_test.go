@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
@@ -121,6 +122,207 @@ func TestAppendRawKVSingleCommandWALSupportsDeleteRange(t *testing.T) {
 	}
 	if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpDeleteRange || ops[0].Key != nil || string(ops[0].Value) != "m" {
 		t.Fatalf("decoded DeleteRange ops=%+v, want single [nil,m)", ops)
+	}
+}
+
+func TestRawKVCommandWALIntentUsesDirectEntries(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	bi := d.NewBatch()
+	b, ok := bi.(*Batch)
+	if !ok {
+		_ = d.Close()
+		t.Fatalf("NewBatch type=%T, want *Batch", bi)
+	}
+	if err := b.Set([]byte("alpha"), []byte("one")); err != nil {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("Set alpha: %v", err)
+	}
+	if err := b.Delete([]byte("bravo")); err != nil {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("Delete bravo: %v", err)
+	}
+	if err := b.DeleteRange(nil, []byte("charlie")); err != nil {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	intent, err := d.prepareRawKVCommandWALIntent(b)
+	if err != nil {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("prepareRawKVCommandWALIntent: %v", err)
+	}
+	if intent == nil || !intent.rawKVDirect || len(intent.payload) != 0 || intent.rawKVPlan.Count != 3 {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("intent direct=%t payload_len=%d plan=%+v", intent != nil && intent.rawKVDirect, len(intent.payload), intent.rawKVPlan)
+	}
+	lsn, err := d.appendRawKVCommandWALIntent(intent, false)
+	if err != nil {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("appendRawKVCommandWALIntent: %v", err)
+	}
+	if lsn == 0 || intent.lsn != lsn {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("lsn=%d intent=%d, want non-zero match", lsn, intent.lsn)
+	}
+	if err := b.Close(); err != nil {
+		_ = d.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	if env.LSN != lsn || env.Kind != commitlog.CommandKindRawKVBatch || env.Scope != commitlog.CommandScopeRawKV || env.PayloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+		t.Fatalf("decoded direct command identity mismatch: %+v", env)
+	}
+	var got []batchpkg.Entry
+	if err := commitlog.ScanRawKVBatchPayload(env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		got = append(got, batchpkg.Entry{Type: rawKVOpTypeForTest(op), Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if len(got) != 3 || got[0].Type != batchpkg.OpPut || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || got[1].Type != batchpkg.OpDelete || string(got[1].Key) != "bravo" || got[2].Type != batchpkg.OpDeleteRange || got[2].Key != nil || string(got[2].Value) != "charlie" {
+		t.Fatalf("decoded direct ops=%+v", got)
+	}
+}
+
+func TestAppendRawKVCommandWALOrderedEntryScanStreamsReplay(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: []byte("alpha"), Value: []byte("one")},
+		{Type: batchpkg.OpDelete, Key: []byte("bravo")},
+		{Type: batchpkg.OpPut, Key: []byte("charlie"), Value: []byte(strings.Repeat("x", 128))},
+	}
+	replayCalls := 0
+	lsn, err := d.AppendRawKVCommandWALOrderedEntryScan(func(emit func(batchpkg.Entry) error) error {
+		replayCalls++
+		for i := range entries {
+			if err := emit(entries[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, false)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("AppendRawKVCommandWALOrderedEntryScan: %v", err)
+	}
+	if lsn == 0 {
+		_ = d.Close()
+		t.Fatal("AppendRawKVCommandWALOrderedEntryScan lsn=0")
+	}
+	if replayCalls != 2 {
+		_ = d.Close()
+		t.Fatalf("replay calls=%d, want 2 planning/writing scans", replayCalls)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	var got []batchpkg.Entry
+	if err := commitlog.ScanRawKVBatchPayload(env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		got = append(got, batchpkg.Entry{Type: rawKVOpTypeForTest(op), Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if len(got) != 3 || got[0].Type != batchpkg.OpPut || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || got[1].Type != batchpkg.OpDelete || string(got[1].Key) != "bravo" || got[2].Type != batchpkg.OpPut || string(got[2].Key) != "charlie" || string(got[2].Value) != strings.Repeat("x", 128) {
+		t.Fatalf("decoded scan ops=%+v", got)
+	}
+}
+
+func TestRawKVOrderedEntriesIntentOwnsPayloadBytes(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	key := []byte("alpha")
+	value := []byte("one")
+	entries := []batchpkg.Entry{{Type: batchpkg.OpPut, Key: key, Value: value}}
+	intent, err := d.NewRawKVCommandWALIntentFromOrderedEntries(entries)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("NewRawKVCommandWALIntentFromOrderedEntries: %v", err)
+	}
+	key[0] = 'X'
+	value[0] = 'Y'
+	entries[0] = batchpkg.Entry{Type: batchpkg.OpDelete, Key: []byte("mutated")}
+
+	lsn, err := d.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	if lsn == 0 {
+		_ = d.Close()
+		t.Fatal("AppendCommandWALIntent lsn=0")
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSet || string(ops[0].Key) != "alpha" || string(ops[0].Value) != "one" {
+		t.Fatalf("decoded mutable ordered-entry intent ops=%+v, want alpha=one", ops)
+	}
+}
+
+func rawKVOpTypeForTest(op commitlog.RawKVOp) batchpkg.OpType {
+	switch op {
+	case commitlog.RawKVOpSet, commitlog.RawKVOpSetRID:
+		return batchpkg.OpPut
+	case commitlog.RawKVOpDelete:
+		return batchpkg.OpDelete
+	case commitlog.RawKVOpDeleteRange:
+		return batchpkg.OpDeleteRange
+	default:
+		return batchpkg.OpPut
 	}
 }
 

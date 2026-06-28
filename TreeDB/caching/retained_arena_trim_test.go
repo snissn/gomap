@@ -16,6 +16,7 @@ func TestTrimRetainedArenasAfterFlush_CheckpointPathTrimsAppendOnlyCaches(t *tes
 	db := &DB{
 		mutableShards: make([]memShard, 1),
 	}
+	db.storeMemtableMode(memtable.ModeAppendOnly)
 
 	leaseCount := postCheckpointAppendOnlyMemLeaseKeep + 6
 	for i := 0; i < leaseCount; i++ {
@@ -43,6 +44,7 @@ func TestTrimRetainedArenasAfterFlush_CheckpointPathTrimsAppendOnlyCaches(t *tes
 
 func TestTrimAppendOnlyMemLeases_DroppedLeasesReturnToPool(t *testing.T) {
 	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
 
 	keep := 2
 	leaseCount := keep + 6
@@ -58,5 +60,156 @@ func TestTrimAppendOnlyMemLeases_DroppedLeasesReturnToPool(t *testing.T) {
 	}
 	if want := leaseCount - keep; returned != want {
 		t.Fatalf("returned append-only leases=%d want %d", returned, want)
+	}
+}
+
+func TestTrimAppendOnlyMemLeases_DropsColdWhenModeNotAppendOnly(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeBTree)
+
+	const leaseCount = 6
+	leases := make([]*memtable.AppendOnly, 0, leaseCount)
+	for i := 0; i < leaseCount; i++ {
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(4<<20, appendOnlyEstimatedBytesPerEntryDefault)
+		if mt.EntryCapacity() == 0 {
+			t.Fatal("test setup produced zero append-only entry capacity")
+		}
+		leases = append(leases, mt)
+		db.appendOnlyMemLeases = append(db.appendOnlyMemLeases, mt)
+	}
+
+	returned := db.trimAppendOnlyMemLeases(2, 4<<20)
+
+	if got := len(db.appendOnlyMemLeases); got != 0 {
+		t.Fatalf("append-only mem leases=%d want 0 after non-append-only trim", got)
+	}
+	if returned != leaseCount {
+		t.Fatalf("returned append-only leases=%d want %d", returned, leaseCount)
+	}
+	for i, mt := range leases {
+		if got := mt.EntryCapacity(); got != 0 {
+			t.Fatalf("lease %d retained entry capacity=%d want 0", i, got)
+		}
+	}
+}
+
+func TestRecycleAppendOnlyMemtables_DropsColdWhenModeNotAppendOnly(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeBTree)
+
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(4<<20, appendOnlyEstimatedBytesPerEntryDefault)
+	if mt.EntryCapacity() == 0 || mt.EntryBackingBytes() == 0 {
+		t.Fatal("test setup produced zero append-only entry backing")
+	}
+
+	db.recycleMemtables([]memtable.Table{mt})
+
+	if got := len(db.appendOnlyMemLeases); got != 0 {
+		t.Fatalf("append-only mem leases=%d want 0", got)
+	}
+	if got := mt.EntryCapacity(); got != 0 {
+		t.Fatalf("released append-only entry capacity=%d want 0", got)
+	}
+	count, entryCapacity, entryBackingBytes := db.appendOnlyMemLeaseStats()
+	if count != 0 || entryCapacity != 0 || entryBackingBytes != 0 {
+		t.Fatalf("append-only lease stats count=%d capacity=%d bytes=%d want all zero", count, entryCapacity, entryBackingBytes)
+	}
+}
+
+func TestStoreMemtableMode_DropsAppendOnlyPoolsOnColdTransition(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	beforePool := db.appendOnlyMemtablePool()
+	if beforePool == nil {
+		t.Fatal("expected append-only memtable pool")
+	}
+	beforeEntryPoolDrops := memtable.AppendOnlyEntryPoolDropTotal()
+
+	db.storeMemtableMode(memtable.ModeBTree)
+
+	afterPool := db.appendOnlyMemtablePool()
+	if afterPool == nil {
+		t.Fatal("expected replacement append-only memtable pool")
+	}
+	if afterPool == beforePool {
+		t.Fatal("append-only memtable pool was not replaced on cold transition")
+	}
+	if got := db.appendOnlyMemPoolDropTotal.Load(); got != 1 {
+		t.Fatalf("append-only memtable pool drops=%d want 1", got)
+	}
+	if got := memtable.AppendOnlyEntryPoolDropTotal(); got != beforeEntryPoolDrops+1 {
+		t.Fatalf("append-only entry pool drops=%d want %d", got, beforeEntryPoolDrops+1)
+	}
+}
+
+func TestTrimEmptyAppendOnlyMutableShards_DropsWarmEntryBacking(t *testing.T) {
+	const capacityBytes = 4 << 10
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	db.mutableShards = make([]memShard, 1)
+	db.memtableCap = capacityBytes
+
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, appendOnlyEstimatedBytesPerEntryDefault)
+	for i := 0; i < 1024; i++ {
+		mt.Set([]byte{byte(i), byte(i >> 8)}, []byte("value"))
+	}
+	mt.ResetWithCapacity(capacityBytes, appendOnlyEstimatedBytesPerEntryDefault)
+	warmCap := mt.EntryCapacity()
+	if warmCap <= 0 {
+		t.Fatal("test setup produced zero warm entry capacity")
+	}
+	db.mutableShards[0].mem = mt
+
+	trimmed := db.trimEmptyAppendOnlyMutableShards(capacityBytes)
+
+	if trimmed != 1 {
+		t.Fatalf("trimmed mutable shards=%d want 1", trimmed)
+	}
+	if got := mt.EntryCapacity(); got >= warmCap {
+		t.Fatalf("entry capacity after trim=%d want below warm capacity=%d", got, warmCap)
+	}
+	if got := db.appendOnlyMutableTrimTotal.Load(); got != 1 {
+		t.Fatalf("mutable trim total=%d want 1", got)
+	}
+	if got := db.appendOnlyMutableTrimDropped.Load(); got == 0 {
+		t.Fatal("mutable trim dropped bytes=0 want >0")
+	}
+}
+
+func TestAppendOnlyIdleMutableRetainCapacity_CapsEmptyShardBacking(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	db.memtableCap = 64 << 20
+	db.mutableShards = make([]memShard, 1)
+
+	activeCap := db.checkpointRotateCapacity()
+	if activeCap <= appendOnlyIdleMutableRetainCapacity {
+		t.Fatalf("checkpoint rotate capacity=%d want above idle cap=%d", activeCap, appendOnlyIdleMutableRetainCapacity)
+	}
+	idleCap := db.appendOnlyIdleMutableRetainCapacity()
+	if idleCap != appendOnlyIdleMutableRetainCapacity {
+		t.Fatalf("idle mutable retain capacity=%d want %d", idleCap, appendOnlyIdleMutableRetainCapacity)
+	}
+
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(activeCap, appendOnlyEstimatedBytesPerEntryDefault)
+	for i := 0; i < 4096; i++ {
+		mt.Set([]byte{byte(i), byte(i >> 8)}, []byte("value"))
+	}
+	mt.ResetWithCapacity(activeCap, appendOnlyEstimatedBytesPerEntryDefault)
+	before := mt.EntryBackingBytes()
+	if before <= 0 {
+		t.Fatal("test setup produced zero append-only entry backing")
+	}
+	db.mutableShards[0].mem = mt
+
+	if trimmed := db.trimEmptyAppendOnlyMutableShards(idleCap); trimmed != 1 {
+		t.Fatalf("trimmed mutable shards=%d want 1", trimmed)
+	}
+	after := mt.EntryBackingBytes()
+	if after >= before {
+		t.Fatalf("entry backing after trim=%d want below before=%d", after, before)
+	}
+	if after > int64(appendOnlyIdleMutableRetainCapacity) {
+		t.Fatalf("entry backing after trim=%d want <= idle cap=%d", after, appendOnlyIdleMutableRetainCapacity)
 	}
 }

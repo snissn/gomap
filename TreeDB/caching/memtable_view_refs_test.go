@@ -48,6 +48,7 @@ func TestRetainMemtableViewSelfHealsZeroRefPublishedView(t *testing.T) {
 
 func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testing.T) {
 	db := &DB{}
+	db.storeMemtableMode(memtable.ModeAppendOnly)
 	retired := memtable.NewAppendOnlyWithCapacity(0)
 	retired.Set([]byte("k"), []byte("v"))
 	retired.Freeze()

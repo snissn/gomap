@@ -69,6 +69,31 @@ func TestAppendOnlyEntryPoolClassForReusableCapacity(t *testing.T) {
 	}
 }
 
+func TestDropAppendOnlyEntryPoolsReplacesPools(t *testing.T) {
+	class, _, ok := appendOnlyEntryPoolClassForLength(1024)
+	if !ok {
+		t.Fatal("test setup failed to map entry length to pool class")
+	}
+	before := appendOnlyEntryPoolForClass(class)
+	if before == nil {
+		t.Fatal("expected initial append-only entry pool")
+	}
+	beforeDrop := AppendOnlyEntryPoolDropTotal()
+
+	DropAppendOnlyEntryPools()
+
+	after := appendOnlyEntryPoolForClass(class)
+	if after == nil {
+		t.Fatal("expected replacement append-only entry pool")
+	}
+	if before == after {
+		t.Fatal("drop did not replace append-only entry pool")
+	}
+	if got := AppendOnlyEntryPoolDropTotal(); got != beforeDrop+1 {
+		t.Fatalf("entry pool drop total=%d want %d", got, beforeDrop+1)
+	}
+}
+
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].key = []byte("k0")

@@ -123,18 +123,39 @@ func TestChooseAdaptiveMode(t *testing.T) {
 		t.Errorf("sequential mode = %v, want %v", got, memtable.ModeAppendOnly)
 	}
 
-	// 3. High range scans -> BTree
+	// 3. Shallow range scans should not force BTree or hash-sorted on a small
+	// absolute sample when overwrite pressure is low.
 	// Reset
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10) // Low seq
 	db.memtableStats.overwriteWrites.Store(0)
 	db.memtableStats.iterators.Store(100)
 	db.memtableStats.rangeIters.Store(80) // 80% range
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeAppendOnly {
+		t.Errorf("shallow range scan mode = %v, want %v", got, memtable.ModeAppendOnly)
+	}
+
+	// 4. High range scans with enough absolute samples -> BTree
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10) // Low seq
+	db.memtableStats.overwriteWrites.Store(0)
+	db.memtableStats.iterators.Store(adaptiveBTreeMinIteratorSamplesDefault * 2)
+	db.memtableStats.rangeIters.Store(adaptiveBTreeMinIteratorSamplesDefault)
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeBTree {
 		t.Errorf("range scan mode = %v, want %v", got, memtable.ModeBTree)
 	}
 
-	// 4. High overwrites -> HashSorted
+	// 5. Blocked BTree with high overwrites -> HashSorted
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10)
+	db.memtableStats.overwriteWrites.Store(adaptiveMinWrites / 2)
+	db.memtableStats.iterators.Store(100)
+	db.memtableStats.rangeIters.Store(80)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
+		t.Errorf("blocked range overwrite mode = %v, want %v", got, memtable.ModeHashSorted)
+	}
+
+	// 6. High overwrites -> HashSorted
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites)
 	db.memtableStats.overwriteWrites.Store(adaptiveMinWrites / 2)
@@ -142,6 +163,25 @@ func TestChooseAdaptiveMode(t *testing.T) {
 	db.memtableStats.rangeIters.Store(0)
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
 		t.Errorf("overwrite mode = %v, want %v", got, memtable.ModeHashSorted)
+	}
+}
+
+func TestChooseAdaptiveMode_BTreeMinIteratorSamplesExplicitZero(t *testing.T) {
+	db := newAdaptiveStatsDB(memtable.ModeSkiplist)
+	db.memtableAdaptiveBTreeMinItersSet = true
+
+	if got := db.adaptiveBTreeMinIteratorSamples(); got != 0 {
+		t.Fatalf("effective min iterator samples=%d want 0", got)
+	}
+
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10)
+	db.memtableStats.overwriteWrites.Store(0)
+	db.memtableStats.iterators.Store(100)
+	db.memtableStats.rangeIters.Store(80)
+
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeBTree {
+		t.Fatalf("explicit-zero range-heavy mode = %v, want %v", got, memtable.ModeBTree)
 	}
 }
 
@@ -155,8 +195,8 @@ func TestChooseAdaptiveMode_BTreeMinIteratorSamplesOverride(t *testing.T) {
 	db.memtableStats.iterators.Store(32)
 	db.memtableStats.rangeIters.Store(32)
 
-	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
-		t.Fatalf("blocked-btree mode = %v, want %v", got, memtable.ModeHashSorted)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeAppendOnly {
+		t.Fatalf("blocked-btree mode = %v, want %v", got, memtable.ModeAppendOnly)
 	}
 	if got := db.memtableAdaptiveDecisionBTreeBlockedMinItersTotal.Load(); got != 1 {
 		t.Fatalf("blocked-min-iters count=%d want 1", got)
@@ -175,6 +215,16 @@ func TestChooseAdaptiveMode_BTreeMinIteratorSamplesOverride(t *testing.T) {
 	}
 	if got := adaptiveDecisionReasonString(db.memtableAdaptiveDecisionReason.Load()); got != "btree_range" {
 		t.Fatalf("last reason=%q want btree_range", got)
+	}
+}
+
+func TestMutableMemtableCapacityForMode_CapsHashSortedPrealloc(t *testing.T) {
+	oversized := hashSortedMutablePreallocCap * 32
+	if got := mutableMemtableCapacityForMode(oversized, memtable.ModeHashSorted); got != hashSortedMutablePreallocCap {
+		t.Fatalf("hash_sorted capacity hint=%d want %d", got, hashSortedMutablePreallocCap)
+	}
+	if got := mutableMemtableCapacityForMode(oversized, memtable.ModeAppendOnly); got != oversized {
+		t.Fatalf("append_only capacity hint=%d want %d", got, oversized)
 	}
 }
 

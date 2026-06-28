@@ -48,11 +48,21 @@ func (tdb *DB) appendPublicRawKVCommandEntries(entries []batch.Entry, sync bool)
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	intent, err := tdb.backend.NewRawKVCommandWALIntentFromOrderedEntries(entries)
-	if err != nil {
-		return err
+	lsn, err := tdb.backend.AppendRawKVCommandWALOrderedEntries(entries, sync)
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
-	lsn, err := tdb.backend.AppendCommandWALIntent(intent, sync)
+	return err
+}
+
+func (tdb *DB) appendPublicRawKVCommandEntryScan(scanEntries func(func(batch.Entry) error) error, sync bool) error {
+	if tdb == nil || !tdb.commandWALCached || scanEntries == nil {
+		return nil
+	}
+	if tdb.backend == nil {
+		return ErrClosed
+	}
+	lsn, err := tdb.backend.AppendRawKVCommandWALOrderedEntryScan(scanEntries, sync)
 	if lsn != 0 {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
@@ -63,12 +73,11 @@ func (tdb *DB) appendPublicRawKVDeleteRangeCommand(start, end []byte, sync bool)
 	if tdb == nil || !tdb.commandWALCached || batch.IsDeleteRangeNoop(start, end) {
 		return nil
 	}
-	var payload commitlog.RawKVBatchPayloadBuilder
-	_ = payload.ResetWithHint(1, len(start)+len(end))
-	if _, err := payload.AppendDeleteRange(start, end); err != nil {
-		return err
-	}
-	return tdb.appendPublicRawKVCommandPayload(payload.Payload(), sync)
+	return tdb.appendPublicRawKVCommandEntries([]batch.Entry{{
+		Type:  batch.OpDeleteRange,
+		Key:   start,
+		Value: end,
+	}}, sync)
 }
 
 func (tdb *DB) recordPublicCommandWALPendingLSN(lsn uint64) {
@@ -379,6 +388,15 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews boo
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
+	if !retainReplayViews {
+		if err := b.inner.Set(key, value); err != nil {
+			return nil, nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.dirty = true
+		return nil, nil, nil
+	}
 	if retainReplayViews && commandWALPublicAllZeroBytes(value) {
 		// The raw-KV payload builder tracks the first zero value by backing-array
 		// identity so repeated immutable zero buffers can avoid rescanning. Adapter
@@ -436,6 +454,15 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews bool) (
 	}
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
+	if !retainReplayViews {
+		if err := b.inner.Delete(key); err != nil {
+			return nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.dirty = true
+		return nil, nil
+	}
 	if b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
 		if err := b.inner.Delete(key); err != nil {
 			return nil, err
@@ -470,24 +497,10 @@ func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
 		return nil
 	}
 	b.preparePayloadForAppend()
-	if b.shouldBypassPayloadAppendDeleteRange(start, end) {
-		if err := b.inner.DeleteRange(start, end); err != nil {
-			return err
-		}
-		b.payloadBypass = true
-		b.opCount++
-		b.hasDeleteRange = true
-		b.dirty = true
-		return nil
-	}
-	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	if _, err := b.payload.AppendDeleteRange(start, end); err != nil {
-		return err
-	}
 	if err := b.inner.DeleteRange(start, end); err != nil {
-		b.payload.Truncate(oldLen, oldCount)
 		return err
 	}
+	b.payloadBypass = true
 	b.opCount++
 	b.hasDeleteRange = true
 	b.dirty = true
@@ -680,28 +693,14 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	usePointerEntries := !b.hasDeleteRange || b.payloadBypass || b.payload.Count() != b.opCount
-	if usePointerEntries && b.db != nil && b.db.commandWALCached && b.db.backend != nil {
-		var entries []batch.Entry
-		hasPointer := false
-		if err := b.inner.Replay(func(entry batch.Entry) error {
-			if entry.Type == batch.OpPut && entry.IsPtr {
-				hasPointer = true
-			}
-			entries = append(entries, entry)
-			return nil
-		}); err != nil {
+	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+		payload, err := b.commandWALPayload()
+		if err != nil {
 			return err
 		}
-		if hasPointer {
-			return b.db.appendPublicRawKVCommandEntries(entries, sync)
-		}
+		return b.db.appendPublicRawKVCommandPayload(payload, sync)
 	}
-	payload, err := b.commandWALPayload()
-	if err != nil {
-		return err
-	}
-	return b.db.appendPublicRawKVCommandPayload(payload, sync)
+	return b.db.appendPublicRawKVCommandEntryScan(b.inner.Replay, sync)
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {

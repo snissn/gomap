@@ -347,12 +347,14 @@ func applyCommandWALDurableProfile(opts *Options) {
 	opts.CommandWAL = true
 	opts.Durability = DurabilityDurable
 	opts.ValueLog.ReadIntegrity = IntegrityVerify
+	opts.ValueLog.CurrentWritableMmap = false
 	applyCommandWALProfileSegmentDefaults(opts)
 }
 
 func applyCommandWALRelaxedProfile(opts *Options) {
 	applyWALOnFastProfile(opts)
 	opts.CommandWAL = true
+	opts.ValueLog.CurrentWritableMmap = false
 	applyCommandWALProfileSegmentDefaults(opts)
 }
 

@@ -19,6 +19,11 @@ type commandWALBatchIntent struct {
 	scope              commitlog.CommandScope
 	payloadFormat      commitlog.PayloadFormat
 	payload            []byte
+	rawKVEntries       []batchpkg.Entry
+	rawKVScan          commitlog.RawKVBatchOperationScanner
+	rawKVPlan          commitlog.RawKVBatchPayloadPlan
+	rawKVRIDCache      map[page.ValuePtr]uint64
+	rawKVDirect        bool
 	trustedPayload     bool
 	externalRefs       bool
 	externalRefFileIDs []uint32
@@ -415,53 +420,108 @@ func (db *DB) NewRawKVCommandWALIntentFromOrderedEntries(entries []batchpkg.Entr
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	intent, err := db.newRawKVCommandWALIntentFromEntries(entries)
+	intent, err := db.newRawKVCommandWALPayloadIntentFromEntries(entries)
 	if intent == nil || err != nil {
 		return nil, err
 	}
 	return &CommandWALIntent{inner: *intent}, nil
 }
 
+// AppendRawKVCommandWALOrderedEntries appends a raw-KV command frame directly
+// from entries that are already in the caller's required application order. The
+// caller must keep entries and their key/value buffers immutable until this
+// method returns.
+func (db *DB) AppendRawKVCommandWALOrderedEntries(entries []batchpkg.Entry, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntries(entries)
+	if intent == nil || err != nil {
+		return 0, err
+	}
+	return db.AppendCommandWALIntent(&CommandWALIntent{inner: *intent}, sync)
+}
+
+// AppendRawKVCommandWALOrderedEntryScan appends a raw-KV command frame by
+// replaying already-ordered entries directly into the command encoder. The
+// replay source must be deterministic and replayable because planning and
+// writing scan it separately. Callers must keep replayed entry buffers immutable
+// until this method returns.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScan(scanEntries func(func(batchpkg.Entry) error) error, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if scanEntries == nil {
+		return 0, nil
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntryScan(scanEntries)
+	if intent == nil || err != nil {
+		return 0, err
+	}
+	return db.AppendCommandWALIntent(&CommandWALIntent{inner: *intent}, sync)
+}
+
 func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
-	externalRefs := false
-	var ridCache map[page.ValuePtr]uint64
-	var smallOps [16]commitlog.RawKVOperation
-	ops := smallOps[:0]
-	if len(entries) > len(smallOps) {
-		ops = make([]commitlog.RawKVOperation, 0, len(entries))
-	}
-	for i := range entries {
-		entry := entries[i]
-		switch entry.Type {
-		case batchpkg.OpDeleteRange:
-			if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
-				continue
-			}
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value})
-		case batchpkg.OpDelete:
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
-		case batchpkg.OpPut:
-			if entry.IsPtr {
-				externalRefs = true
-				if ridCache == nil {
-					ridCache = make(map[page.ValuePtr]uint64)
-				}
-				rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, ridCache)
-				if err != nil {
-					return nil, err
-				}
-				ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid})
-				continue
-			}
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value})
-		default:
-			return nil, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
-		}
-	}
-	if len(ops) == 0 {
+	if len(entries) == 0 {
 		return nil, nil
 	}
-	payload, err := commitlog.EncodeRawKVBatchPayload(ops)
+	return db.newRawKVCommandWALIntentFromEntryScan(func(emit func(batchpkg.Entry) error) error {
+		for i := range entries {
+			if err := emit(entries[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error) (*commandWALBatchIntent, error) {
+	externalRefs := false
+	var ridCache map[page.ValuePtr]uint64
+	var externalRefFileIDs []uint32
+	planScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, &externalRefs, &externalRefFileIDs)
+	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Count == 0 {
+		return nil, nil
+	}
+	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil)
+	return &commandWALBatchIntent{
+		kind:               commitlog.CommandKindRawKVBatch,
+		scope:              commitlog.CommandScopeRawKV,
+		payloadFormat:      commitlog.PayloadFormatRawKVBatchV1,
+		rawKVScan:          writeScan,
+		rawKVPlan:          plan,
+		rawKVRIDCache:      ridCache,
+		rawKVDirect:        true,
+		externalRefs:       externalRefs,
+		externalRefFileIDs: externalRefFileIDs,
+	}, nil
+}
+
+func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
+	externalRefs := false
+	var ridCache map[page.ValuePtr]uint64
+	scan := db.rawKVCommandWALOperationScanner(entries, &ridCache, &externalRefs)
+	plan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Count == 0 {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeRawKVBatchPayloadScanWithHint(scan, plan.Count, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -479,6 +539,70 @@ func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*co
 	}, nil
 }
 
+func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool) commitlog.RawKVBatchOperationScanner {
+	return db.rawKVCommandWALOperationScannerFromEntryScan(func(emit func(batchpkg.Entry) error) error {
+		for i := range entries {
+			if err := emit(entries[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, ridCache, externalRefs, nil)
+}
+
+func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32) commitlog.RawKVBatchOperationScanner {
+	return func(emit func(commitlog.RawKVOperation) error) error {
+		if scanEntries == nil {
+			return nil
+		}
+		return scanEntries(func(entry batchpkg.Entry) error {
+			op, ok, err := db.rawKVCommandWALOperationFromEntry(entry, ridCache, externalRefs, externalRefFileIDs)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			return emit(op)
+		})
+	}
+}
+
+func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32) (commitlog.RawKVOperation, bool, error) {
+	switch entry.Type {
+	case batchpkg.OpDeleteRange:
+		if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
+			return commitlog.RawKVOperation{}, false, nil
+		}
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value}, true, nil
+	case batchpkg.OpDelete:
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key}, true, nil
+	case batchpkg.OpPut:
+		if entry.IsPtr {
+			if externalRefs != nil {
+				*externalRefs = true
+			}
+			if externalRefFileIDs != nil {
+				appendRawKVCommandWALExternalRefFileID(externalRefFileIDs, entry.ValuePtr.FileID)
+			}
+			if ridCache == nil {
+				return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
+			}
+			if *ridCache == nil {
+				*ridCache = make(map[page.ValuePtr]uint64)
+			}
+			rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, *ridCache)
+			if err != nil {
+				return commitlog.RawKVOperation{}, false, err
+			}
+			return commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid}, true, nil
+		}
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value}, true, nil
+	default:
+		return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
+	}
+}
+
 func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
 	var ids []uint32
 	for i := range entries {
@@ -486,18 +610,21 @@ func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
 		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.ValuePtr.FileID == 0 {
 			continue
 		}
-		seen := false
-		for _, id := range ids {
-			if id == entry.ValuePtr.FileID {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			ids = append(ids, entry.ValuePtr.FileID)
-		}
+		appendRawKVCommandWALExternalRefFileID(&ids, entry.ValuePtr.FileID)
 	}
 	return ids
+}
+
+func appendRawKVCommandWALExternalRefFileID(ids *[]uint32, fileID uint32) {
+	if ids == nil || fileID == 0 {
+		return
+	}
+	for _, id := range *ids {
+		if id == fileID {
+			return
+		}
+	}
+	*ids = append(*ids, fileID)
 }
 
 func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.ValuePtr]uint64) (uint64, error) {
@@ -971,7 +1098,13 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	db.mu.RUnlock()
 	var lsn uint64
 	var err error
-	if intent.trustedPayload && !intent.externalRefs {
+	if intent.rawKVDirect {
+		scan := intent.rawKVScan
+		if scan == nil {
+			scan = db.rawKVCommandWALOperationScanner(intent.rawKVEntries, &intent.rawKVRIDCache, nil)
+		}
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, intent.rawKVPlan, scan)
+	} else if intent.trustedPayload && !intent.externalRefs {
 		lsn, err = db.commandJournal.AppendCommandPayloadTrusted(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
 	} else {
 		lsn, err = db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
