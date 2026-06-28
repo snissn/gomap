@@ -478,7 +478,7 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	}
 	var retainedRootValueStack [8]retainedRootValue
 	retainedRootValues := retainedRootValueStack[:0]
-	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
 		path := string(key)
 		if indexes := plan.declaredColumnIndexesByPath[path]; len(indexes) > 0 {
 			if plan.declaredRowsReady {
@@ -488,7 +488,7 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 			}
 			return nil
 		}
-		raw, err := columnRetainedSemanticStreamV1JSONParserRawValue(value, dataType)
+		raw, err := columnRetainedSemanticStreamV1JSONParserRawValue(document, value, dataType, valueEndOffset)
 		if err != nil {
 			return err
 		}
@@ -532,9 +532,12 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	return values, nil
 }
 
-func columnRetainedSemanticStreamV1JSONParserRawValue(value []byte, dataType jsonparser.ValueType) ([]byte, error) {
+func columnRetainedSemanticStreamV1JSONParserRawValue(source []byte, value []byte, dataType jsonparser.ValueType, valueEndOffset int) ([]byte, error) {
 	switch dataType {
 	case jsonparser.String:
+		if raw, ok := columnRetainedSemanticStreamV1JSONParserQuotedString(source, value, valueEndOffset); ok {
+			return raw, nil
+		}
 		out := make([]byte, 0, len(value)+2)
 		out = append(out, '"')
 		out = append(out, value...)
@@ -545,6 +548,17 @@ func columnRetainedSemanticStreamV1JSONParserRawValue(value []byte, dataType jso
 	default:
 		return nil, fmt.Errorf("unsupported semantic-stream-v1 retained value type %s", dataType)
 	}
+}
+
+func columnRetainedSemanticStreamV1JSONParserQuotedString(source []byte, value []byte, valueEndOffset int) ([]byte, bool) {
+	valueStartOffset := valueEndOffset - len(value) - 2
+	if valueStartOffset < 0 || valueEndOffset > len(source) || valueStartOffset >= valueEndOffset {
+		return nil, false
+	}
+	if source[valueStartOffset] != '"' || source[valueEndOffset-1] != '"' {
+		return nil, false
+	}
+	return source[valueStartOffset:valueEndOffset], true
 }
 
 func encodeColumnRetainedSemanticStreamV1Locator(blockKey []byte, row uint64) []byte {
@@ -1260,8 +1274,8 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path [
 	}
 	var retainedObjectValueStack [8]retainedObjectValue
 	retainedObjectValues := retainedObjectValueStack[:0]
-	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
-		valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(value, dataType)
+	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
+		valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
 		if err != nil {
 			return err
 		}
@@ -1315,7 +1329,7 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 	}
 	var retainedObjectValueStack [8]retainedObjectValue
 	retainedObjectValues := retainedObjectValueStack[:0]
-	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
 		valuePath := string(key)
 		var childSkip *columnRetainedSemanticStreamV1RetainedSkipTrie
 		if skip != nil {
@@ -1325,7 +1339,7 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		if childSkip != nil && childSkip.terminal {
 			nextValue.deleted = true
 		} else {
-			valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(value, dataType)
+			valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
 			if err != nil {
 				return err
 			}
