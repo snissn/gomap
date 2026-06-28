@@ -333,7 +333,7 @@ type typedStorageLegacyNameAllowlistEntry struct {
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 60, occurrences: 66},
 	{path: "TreeDB/collections/column_aggregate_metadata_asset.go", classification: typedStorageLegacyDerived, matchingLines: 22, occurrences: 24},
-	{path: "TreeDB/collections/column_aggregate_metadata_asset_3121_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 22, occurrences: 22},
+	{path: "TreeDB/collections/column_aggregate_metadata_asset_3121_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 25, occurrences: 25},
 	{path: "TreeDB/collections/column_aggregate_metadata_predicate.go", classification: typedStorageLegacyDerived, matchingLines: 6, occurrences: 6},
 	{path: "TreeDB/collections/column_aggregate_metadata_predicate_1951_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 77, occurrences: 78},
 	{path: "TreeDB/collections/column_aggregate_metadata_typed_column_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 19, occurrences: 21},
