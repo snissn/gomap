@@ -673,8 +673,19 @@ func TestColumnRetainedSemanticStreamV1InsertFastPathMatchesRetainedJSONPipeline
 	if err != nil {
 		t.Fatalf("legacy semantic-stream-v1 block: %v", err)
 	}
-	if !bytes.Equal(gotBlock, wantBlock) {
-		t.Fatalf("semantic-stream-v1 fast path block mismatch: got %d bytes want %d", len(gotBlock), len(wantBlock))
+	gotRows, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(gotBlock)
+	if err != nil {
+		t.Fatalf("decode semantic-stream-v1 fast path rows: %v", err)
+	}
+	wantRows, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(wantBlock)
+	if err != nil {
+		t.Fatalf("decode legacy semantic-stream-v1 rows: %v", err)
+	}
+	if len(gotRows) != len(wantRows) {
+		t.Fatalf("semantic-stream-v1 fast path row count=%d want %d", len(gotRows), len(wantRows))
+	}
+	for i := range gotRows {
+		assertJSONEqualM13C(t, gotRows[i], wantRows[i])
 	}
 }
 
