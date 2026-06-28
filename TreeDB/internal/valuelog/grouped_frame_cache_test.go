@@ -471,6 +471,18 @@ func TestGroupedFrameCache_ConcurrentReadsAndEvictions(t *testing.T) {
 	if got, _, err, hit := f.groupedFrameCacheReadTo(1, false, 2, baseOffsets, uint32(len(baseRaw)), 0, nil); err != nil || !hit || !bytes.Equal(got, []byte("left")) {
 		t.Fatalf("warm cache hit failed: hit=%v err=%v got=%q", hit, err, got)
 	}
+	if _, _, err, hit := f.groupedFrameCacheReadTo(2, false, 2, baseOffsets, uint32(len(baseRaw)), 0, nil); err != nil || hit {
+		t.Fatalf("expected deterministic cache miss before concurrent phase: hit=%v err=%v", hit, err)
+	}
+
+	cache := f.ensureGroupedFrameCache()
+	baseShard := cache.shardFor(1, false)
+	evictStarts := make([]int64, 0, 200)
+	for start := int64(100); len(evictStarts) < cap(evictStarts); start++ {
+		if cache.shardFor(start, false) == baseShard {
+			evictStarts = append(evictStarts, start)
+		}
+	}
 
 	var wg sync.WaitGroup
 	for g := 0; g < 16; g++ {
@@ -499,10 +511,10 @@ func TestGroupedFrameCache_ConcurrentReadsAndEvictions(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 200; i++ {
+		for i, start := range evictStarts {
 			raw := bytes.Repeat([]byte{byte(i)}, 32)
 			offsets := groupedCacheOffsets(32)
-			_ = f.groupedFrameCacheStore(int64(100+i), false, 1, offsets, raw, false)
+			_ = f.groupedFrameCacheStore(start, false, 1, offsets, raw, false)
 		}
 	}()
 	wg.Wait()
