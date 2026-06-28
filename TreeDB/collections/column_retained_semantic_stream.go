@@ -479,8 +479,7 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	var retainedRootValueStack [8]retainedRootValue
 	retainedRootValues := retainedRootValueStack[:0]
 	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
-		path := string(key)
-		if indexes := plan.declaredColumnIndexesByPath[path]; len(indexes) > 0 {
+		if indexes := plan.declaredColumnIndexesByPath[string(key)]; len(indexes) > 0 {
 			if plan.declaredRowsReady {
 				for _, colIdx := range indexes {
 					valuesRaw[colIdx] = jsonParserIndexValue{raw: value, valueType: dataType}
@@ -488,6 +487,7 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 			}
 			return nil
 		}
+		path := string(key)
 		raw, err := columnRetainedSemanticStreamV1JSONParserRawValue(document, value, dataType, valueEndOffset)
 		if err != nil {
 			return err
@@ -1325,29 +1325,27 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		raw       []byte
 		valueType jsonparser.ValueType
 		skip      *columnRetainedSemanticStreamV1RetainedSkipTrie
-		deleted   bool
 	}
 	var retainedObjectValueStack [8]retainedObjectValue
 	retainedObjectValues := retainedObjectValueStack[:0]
 	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
-		valuePath := string(key)
 		var childSkip *columnRetainedSemanticStreamV1RetainedSkipTrie
 		if skip != nil {
-			childSkip = skip.children[valuePath]
+			childSkip = skip.children[string(key)]
 		}
-		nextValue := retainedObjectValue{path: valuePath}
 		if childSkip != nil && childSkip.terminal {
-			nextValue.deleted = true
-		} else {
-			valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
-			if err != nil {
-				return err
-			}
-			nextValue.raw = valueRaw
-			nextValue.valueType = dataType
-			if childSkip != nil && len(childSkip.children) > 0 && dataType == jsonparser.Object {
-				nextValue.skip = childSkip
-			}
+			return nil
+		}
+		valuePath := string(key)
+		nextValue := retainedObjectValue{path: valuePath}
+		valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
+		if err != nil {
+			return err
+		}
+		nextValue.raw = valueRaw
+		nextValue.valueType = dataType
+		if childSkip != nil && len(childSkip.children) > 0 && dataType == jsonparser.Object {
+			nextValue.skip = childSkip
 		}
 		for i := range retainedObjectValues {
 			if retainedObjectValues[i].path == valuePath {
@@ -1360,13 +1358,7 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 	}); err != nil {
 		return err
 	}
-	retainedCount := 0
-	for _, value := range retainedObjectValues {
-		if !value.deleted {
-			retainedCount++
-		}
-	}
-	if retainedCount == 0 {
+	if len(retainedObjectValues) == 0 {
 		if len(path) > 0 {
 			appendColumnRetainedSemanticStreamValueNoCopy(path, row, []byte("{}"), streamEntryCapacity, streams)
 		}
@@ -1377,9 +1369,6 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 	})
 	var pathStack [8]string
 	for _, value := range retainedObjectValues {
-		if value.deleted {
-			continue
-		}
 		var nextPath []string
 		if len(path) == 0 && cap(path) == 0 {
 			nextPath = append(pathStack[:0], value.path)
