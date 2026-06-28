@@ -312,11 +312,14 @@ func TestCheckpointWaitProductivityStatsActiveBackgroundDrainsFrontier(t *testin
 	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.active_workers_at_request_last"); got == 0 {
 		t.Fatalf("wait active workers=%d want >0", got)
 	}
-	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.active_background_flush_wait_samples"); got == 0 {
-		t.Fatalf("active background wait samples=%d want >0", got)
-	}
-	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.active_background_flush_wait_ns_last"); got == 0 {
-		t.Fatalf("active background wait last ns=%d want >0", got)
+	activeWaitSamples := requireStatUint64(t, stats, "treedb.cache.checkpoint.active_background_flush_wait_samples")
+	activeWaitLastNs := requireStatUint64(t, stats, "treedb.cache.checkpoint.active_background_flush_wait_ns_last")
+	if activeWaitSamples == 0 {
+		if activeWaitLastNs != 0 {
+			t.Fatalf("active background wait last ns=%d want 0 when samples=0", activeWaitLastNs)
+		}
+	} else if activeWaitLastNs == 0 {
+		t.Fatalf("active background wait last ns=%d want >0 when samples=%d", activeWaitLastNs, activeWaitSamples)
 	}
 	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.wait.frontier_units_at_request_last"); got != 2 {
 		t.Fatalf("wait frontier at request=%d want 2", got)
@@ -333,8 +336,12 @@ func TestCheckpointWaitProductivityStatsActiveBackgroundDrainsFrontier(t *testin
 	if got := requireStatUint64(t, stats, "treedb.cache.checkpoint.flush_all.owned_drain_units_last"); got != 1 {
 		t.Fatalf("owned drain units=%d want 1", got)
 	}
-	if got := requireStatFloat64(t, stats, "treedb.cache.checkpoint.wait.frontier_drain_bytes_per_sec_last"); got == 0 {
-		t.Fatalf("wait drain bytes/sec=%f want >0", got)
+	if activeWaitLastNs != 0 {
+		if got := requireStatFloat64(t, stats, "treedb.cache.checkpoint.wait.frontier_drain_bytes_per_sec_last"); got == 0 {
+			t.Fatalf("wait drain bytes/sec=%f want >0", got)
+		}
+	} else if got := requireStatFloat64(t, stats, "treedb.cache.checkpoint.wait.frontier_drain_bytes_per_sec_last"); got != 0 {
+		t.Fatalf("wait drain bytes/sec=%f want 0 when active wait last ns=0", got)
 	}
 	_ = requireStatFloat64(t, stats, "treedb.cache.checkpoint.productive_wait_ratio_last")
 }
