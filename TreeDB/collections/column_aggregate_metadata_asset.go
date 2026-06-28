@@ -304,7 +304,15 @@ func buildColumnAggregateMetadataAsset(cfg ColumnStoreConfig, rows []columnDecla
 	return spec.asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedLSN, len(metadataRows), entries), true, nil
 }
 
+type columnAggregateMetadataAssetBuildOptions struct {
+	TypedGranuleRowOrder []int
+}
+
 func buildColumnAggregateMetadataAssets(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregates []ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) ([]columnAggregateMetadataAsset, error) {
+	return buildColumnAggregateMetadataAssetsWithOptions(cfg, rows, aggregates, collection, namespace, generation, partID, appliedLSN, columnAggregateMetadataAssetBuildOptions{})
+}
+
+func buildColumnAggregateMetadataAssetsWithOptions(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregates []ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64, opts columnAggregateMetadataAssetBuildOptions) ([]columnAggregateMetadataAsset, error) {
 	if len(aggregates) == 0 {
 		return nil, nil
 	}
@@ -330,17 +338,31 @@ func buildColumnAggregateMetadataAssets(cfg ColumnStoreConfig, rows []columnDecl
 	}
 	rowsPerMetadataEntrySet := len(rows)
 	metadataRows := rows
+	var typedGranuleRowOrder []int
 	if usesTypedGranules {
-		var err error
-		metadataRows, err = columnAggregateMetadataRowsForTypedColumnGranules(cfg, aggregates[0], rows)
-		if err != nil {
-			return nil, fmt.Errorf("collections: aggregate metadata %q typed-column granule rows: %w", aggregates[0].Name, err)
+		if len(opts.TypedGranuleRowOrder) != 0 {
+			if err := validateColumnAggregateMetadataTypedGranuleRowOrder(opts.TypedGranuleRowOrder, len(rows)); err != nil {
+				return nil, fmt.Errorf("collections: aggregate metadata %q typed-column granule row order: %w", aggregates[0].Name, err)
+			}
+			typedGranuleRowOrder = opts.TypedGranuleRowOrder
+		} else {
+			var err error
+			metadataRows, err = columnAggregateMetadataRowsForTypedColumnGranules(cfg, aggregates[0], rows)
+			if err != nil {
+				return nil, fmt.Errorf("collections: aggregate metadata %q typed-column granule rows: %w", aggregates[0].Name, err)
+			}
 		}
 		rowsPerMetadataEntrySet = typedColumnDefaultRowsPerGranule()
 	} else if rowsPerMetadataEntrySet == 0 {
 		rowsPerMetadataEntrySet = typedColumnDefaultRowsPerGranule()
 	}
-	entriesBySpec, err := buildColumnAggregateMetadataEntriesForSpecs(specs, metadataRows, rowsPerMetadataEntrySet)
+	var entriesBySpec [][]columnAggregateMetadataEntry
+	var err error
+	if typedGranuleRowOrder != nil {
+		entriesBySpec, err = buildColumnAggregateMetadataEntriesForSpecsByRowOrder(specs, rows, typedGranuleRowOrder, rowsPerMetadataEntrySet)
+	} else {
+		entriesBySpec, err = buildColumnAggregateMetadataEntriesForSpecs(specs, metadataRows, rowsPerMetadataEntrySet)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -349,6 +371,23 @@ func buildColumnAggregateMetadataAssets(cfg ColumnStoreConfig, rows []columnDecl
 		assets = append(assets, specs[idx].asset(cfg.SchemaHash, collection, namespace, generation, partID, appliedLSN, len(metadataRows), entries))
 	}
 	return assets, nil
+}
+
+func validateColumnAggregateMetadataTypedGranuleRowOrder(order []int, rows int) error {
+	if len(order) != rows {
+		return fmt.Errorf("order rows=%d want %d", len(order), rows)
+	}
+	seen := make([]bool, rows)
+	for partRow, rowIdx := range order {
+		if rowIdx < 0 || rowIdx >= rows {
+			return fmt.Errorf("order[%d]=%d outside rows=%d", partRow, rowIdx, rows)
+		}
+		if seen[rowIdx] {
+			return fmt.Errorf("duplicate source row=%d", rowIdx)
+		}
+		seen[rowIdx] = true
+	}
+	return nil
 }
 
 func buildColumnAggregateMetadataAssetsSequential(cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregates []ColumnAggregateMetadata, collection, namespace string, generation, partID, appliedLSN uint64) ([]columnAggregateMetadataAsset, error) {
@@ -462,6 +501,32 @@ func buildColumnAggregateMetadataEntriesForSpecs(specs []columnAggregateMetadata
 		}
 		accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(specs)
 		for _, row := range rows[start:end] {
+			if row.Deleted {
+				continue
+			}
+			for idx := range accumulators {
+				if err := accumulators[idx].spec.appendRow(accumulators[idx].entries, row); err != nil {
+					return nil, err
+				}
+			}
+		}
+		for idx := range specs {
+			entriesBySpec[idx] = append(entriesBySpec[idx], sortedColumnAggregateMetadataEntries(accumulators[specAccumulatorIdx[idx]].entries)...)
+		}
+	}
+	return entriesBySpec, nil
+}
+
+func buildColumnAggregateMetadataEntriesForSpecsByRowOrder(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, order []int, rowsPerMetadataEntrySet int) ([][]columnAggregateMetadataEntry, error) {
+	entriesBySpec := make([][]columnAggregateMetadataEntry, len(specs))
+	for start := 0; start < len(order); start += rowsPerMetadataEntrySet {
+		end := start + rowsPerMetadataEntrySet
+		if end > len(order) {
+			end = len(order)
+		}
+		accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(specs)
+		for _, rowIdx := range order[start:end] {
+			row := rows[rowIdx]
 			if row.Deleted {
 				continue
 			}

@@ -883,12 +883,16 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	queueRegularManifestAsset(encoded, ColumnAssetKindTCS1PartImage, columnPhysicalRowAssetPartID, summary.RowCount, string(input.operation), role, "", func(ref ColumnAssetRef) error {
 		return validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded))
 	})
+	var typedGranuleRowOrder []int
 	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
 		typedColumnStart := time.Now()
-		typedColumnImage, typedColumnRows, err := buildTypedColumnPartImageForDeclaredRows(hookInput.ColumnStore, generation, typedColumnPartAssetPartID, rows)
+		typedColumnBuild, err := buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedColumnPartAssetPartID, rows)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
 		}
+		typedColumnImage := typedColumnBuild.Bytes
+		typedColumnRows := typedColumnBuild.Rows
+		typedGranuleRowOrder = typedColumnBuild.TypedGranuleRowOrder
 		if len(typedColumnImage) != 0 {
 			typedColumnSortKey, err := typedColumnPartPublicationSortKey(hookInput.ColumnStore, columnStoreTypedColumnPartFields(hookInput.ColumnStore))
 			if err != nil {
@@ -930,7 +934,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
 		typedMetadataStart := time.Now()
-		typedMetadataAssets, err := buildColumnAggregateMetadataAssets(hookInput.ColumnStore, rows, columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore), hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedColumnPartAssetPartID, hookInput.AppliedCommandLSN)
+		typedMetadataAssets, err := buildColumnAggregateMetadataAssetsWithOptions(hookInput.ColumnStore, rows, columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore), hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedColumnPartAssetPartID, hookInput.AppliedCommandLSN, columnAggregateMetadataAssetBuildOptions{
+			TypedGranuleRowOrder: typedGranuleRowOrder,
+		})
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
 		}

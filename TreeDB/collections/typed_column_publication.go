@@ -270,31 +270,82 @@ func typedColumnAdapterRowsFromDeclaredRows(allColumns []ColumnStoreColumn, fiel
 	return out, nil
 }
 
+type typedColumnPartImageBuildResult struct {
+	Bytes                []byte
+	Rows                 int
+	TypedGranuleRowOrder []int
+}
+
 func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation, partID uint64, rows []columnDeclaredRow) ([]byte, int, error) {
+	result, err := buildTypedColumnPartImageForDeclaredRowsWithResult(cfg, generation, partID, rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return result.Bytes, result.Rows, nil
+}
+
+func buildTypedColumnPartImageForDeclaredRowsWithResult(cfg ColumnStoreConfig, generation, partID uint64, rows []columnDeclaredRow) (typedColumnPartImageBuildResult, error) {
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
-		return nil, 0, nil
+		return typedColumnPartImageBuildResult{}, nil
 	}
 	fields := columnStoreTypedColumnPartFields(cfg)
 	if len(fields) == 0 {
-		return nil, 0, nil
+		return typedColumnPartImageBuildResult{}, nil
 	}
 	sortKey, err := typedColumnPartPublicationSortKey(cfg, fields)
 	if err != nil {
-		return nil, 0, err
+		return typedColumnPartImageBuildResult{}, err
 	}
 	adapterOpts, err := typedColumnPublicationAdapterOptionsFromConfig(cfg, partID, fields, sortKey)
 	if err != nil {
-		return nil, 0, err
+		return typedColumnPartImageBuildResult{}, err
 	}
 	part, err := buildTypedColumnAdapterPartFromDeclaredRows(adapterOpts, cfg.Columns, rows)
 	if err != nil {
-		return nil, 0, err
+		return typedColumnPartImageBuildResult{}, err
 	}
 	image, err := part.buildImage()
 	if err != nil {
-		return nil, 0, err
+		return typedColumnPartImageBuildResult{}, err
 	}
-	return image.Bytes, image.Rows, nil
+	rowOrder, err := typedColumnPartDeclaredRowOrder(part, image.Rows)
+	if err != nil {
+		return typedColumnPartImageBuildResult{}, err
+	}
+	return typedColumnPartImageBuildResult{Bytes: image.Bytes, Rows: image.Rows, TypedGranuleRowOrder: rowOrder}, nil
+}
+
+func typedColumnPartDeclaredRowOrder(part *typedColumnAdapterPart, rows int) ([]int, error) {
+	if rows == 0 {
+		return nil, nil
+	}
+	if part == nil || part.Part == nil {
+		return nil, errors.New("collections: typed-column part row order requires built part")
+	}
+	if len(part.Part.Locators) != rows {
+		return nil, fmt.Errorf("collections: typed-column part locators=%d want rows=%d", len(part.Part.Locators), rows)
+	}
+	order := make([]int, rows)
+	seen := make([]bool, rows)
+	for _, locator := range part.Part.Locators {
+		if locator.PartRow < 0 || locator.PartRow >= rows {
+			return nil, fmt.Errorf("collections: typed-column part row order part_row=%d outside rows=%d", locator.PartRow, rows)
+		}
+		if locator.PrimaryID < 0 || locator.PrimaryID >= int64(rows) {
+			return nil, fmt.Errorf("collections: typed-column part row order primary_id=%d outside rows=%d", locator.PrimaryID, rows)
+		}
+		if seen[locator.PartRow] {
+			return nil, fmt.Errorf("collections: typed-column part row order duplicate part_row=%d", locator.PartRow)
+		}
+		order[locator.PartRow] = int(locator.PrimaryID)
+		seen[locator.PartRow] = true
+	}
+	for idx, ok := range seen {
+		if !ok {
+			return nil, fmt.Errorf("collections: typed-column part row order missing part_row=%d", idx)
+		}
+	}
+	return order, nil
 }
 
 type typedColumnPartVisibleValues struct {
