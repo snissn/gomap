@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/buger/jsonparser"
 	"github.com/golang/snappy"
@@ -27,6 +29,7 @@ const maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes = 512 << 20
 const columnRetainedSemanticStreamV1ZSTDWindowSize = 1 << 20
 const columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes = 8 << 20
 const columnRetainedSemanticStreamV1RawBlockScratchPoolSlots = 4
+const columnRetainedSemanticStreamV1PrepareMaxWorkers = 8
 const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
 const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
 const minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock = 512
@@ -129,6 +132,15 @@ type columnRetainedSemanticStreamV1DecodedBlock struct {
 type columnRetainedSemanticStreamV1StoredBlockEncoder struct {
 	enc             *zstd.Encoder
 	rawBlockScratch []byte
+}
+
+type columnRetainedSemanticStreamV1PreparedBlock struct {
+	start    int
+	rows     int
+	blockKey []byte
+	block    []byte
+	locators [][]byte
+	declared []columnDeclaredRow
 }
 
 type columnRetainedSemanticStreamV1RootFastPathPlan struct {
@@ -409,19 +421,13 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 	}
 	rootPlan, useRootFastPath := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(documents))
 	declaredPathTrie, useSemanticParserDeclaredRows := columnRetainedSemanticStreamV1DeclaredPathTrieForConfig(cfg, ids, len(documents))
-	var declaredRowIDBytes []byte
-	var declaredRowValues []columnDeclaredValue
 	if useRootFastPath && rootPlan.declaredRowsReady {
 		out.declaredRows = make([]columnDeclaredRow, len(documents))
 		out.declaredRowsReady = true
-		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids))
-		declaredRowValues = make([]columnDeclaredValue, len(documents)*len(cfg.Columns))
 		useSemanticParserDeclaredRows = false
 	} else if useSemanticParserDeclaredRows {
 		out.declaredRows = make([]columnDeclaredRow, len(documents))
 		out.declaredRowsReady = true
-		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids))
-		declaredRowValues = make([]columnDeclaredValue, len(documents)*len(cfg.Columns))
 	} else if ids != nil && len(ids) == len(documents) {
 		// Keep semantic-stream retained encoding unchanged while preparing
 		// declared rows early enough for column publish to reuse them.
@@ -433,84 +439,192 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		out.declaredRowsReady = true
 	}
 	retainedSkipTrie := columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg)
-	blockTable := newCollectionRunTable((len(documents) + columnRetainedSemanticStreamV1BlockRows - 1) / columnRetainedSemanticStreamV1BlockRows)
-	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
-	if err != nil {
-		resetCollectionRunTable(blockTable)
-		return columnRetainedPayloadStorageDocuments{}, err
-	}
-	defer storedBlockEncoder.close()
-	for start := 0; start < len(documents); start += columnRetainedSemanticStreamV1BlockRows {
+	blockCount := (len(documents) + columnRetainedSemanticStreamV1BlockRows - 1) / columnRetainedSemanticStreamV1BlockRows
+	preparedBlocks := make([]columnRetainedSemanticStreamV1PreparedBlock, blockCount)
+	prepareBlock := func(blockIdx int) error {
+		start := blockIdx * columnRetainedSemanticStreamV1BlockRows
 		end := start + columnRetainedSemanticStreamV1BlockRows
 		if end > len(documents) {
 			end = len(documents)
 		}
-		rows := end - start
-		streams := newColumnRetainedSemanticStreamStreams()
-		pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
-		var declaredStringInterner *columnDeclaredStringInterner
-		if rootPlan.declaredRowsReady || useSemanticParserDeclaredRows {
-			declaredStringInterner = &columnDeclaredStringInterner{}
-		}
-		for row, i := 0, start; i < end; row, i = row+1, i+1 {
-			if useRootFastPath {
-				var declaredValuesDest []columnDeclaredValue
-				if rootPlan.declaredRowsReady {
-					valuesStart := i * len(cfg.Columns)
-					declaredValuesDest = declaredRowValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
-				}
-				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner, declaredValuesDest, declaredStringInterner)
-				if err != nil {
-					resetCollectionRunTable(blockTable)
-					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
-				}
-				if rootPlan.declaredRowsReady {
-					idStart := len(declaredRowIDBytes)
-					declaredRowIDBytes = append(declaredRowIDBytes, ids[i]...)
-					out.declaredRows[i] = columnDeclaredRow{
-						ID:     declaredRowIDBytes[idStart:len(declaredRowIDBytes):len(declaredRowIDBytes)],
-						Values: declaredValues,
-					}
-				}
-			} else {
-				var declaredValuesDest []columnDeclaredValue
-				if useSemanticParserDeclaredRows {
-					valuesStart := i * len(cfg.Columns)
-					declaredValuesDest = declaredRowValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
-				}
-				declaredValues, err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner)
-				if err != nil {
-					resetCollectionRunTable(blockTable)
-					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
-				}
-				if useSemanticParserDeclaredRows {
-					idStart := len(declaredRowIDBytes)
-					declaredRowIDBytes = append(declaredRowIDBytes, ids[i]...)
-					out.declaredRows[i] = columnDeclaredRow{
-						ID:     declaredRowIDBytes[idStart:len(declaredRowIDBytes):len(declaredRowIDBytes)],
-						Values: declaredValues,
-					}
-				}
-			}
-		}
-		block, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows, streams, storedBlockEncoder)
+		prepared, err := prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
+			cfg,
+			ids,
+			documents,
+			start,
+			end,
+			rootPlan,
+			useRootFastPath,
+			retainedSkipTrie,
+			declaredPathTrie,
+			useSemanticParserDeclaredRows,
+		)
 		if err != nil {
-			resetCollectionRunTable(blockTable)
+			return err
+		}
+		preparedBlocks[blockIdx] = prepared
+		return nil
+	}
+	if workers := columnRetainedSemanticStreamV1PrepareWorkers(blockCount); workers > 1 {
+		if err := columnRetainedSemanticStreamV1RunPrepareWorkers(blockCount, workers, prepareBlock); err != nil {
 			return columnRetainedPayloadStorageDocuments{}, err
 		}
-		sum := sha256.Sum256(block)
-		blockKey := append([]byte(nil), sum[:]...)
-		locators := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
-		for i := 0; i < rows; i++ {
-			locatorStart := len(locators)
-			locators = appendColumnRetainedSemanticStreamV1Locator(locators, blockKey, uint64(i))
-			out.documents[start+i] = locators[locatorStart:len(locators):len(locators)]
+	} else {
+		for blockIdx := 0; blockIdx < blockCount; blockIdx++ {
+			if err := prepareBlock(blockIdx); err != nil {
+				return columnRetainedPayloadStorageDocuments{}, err
+			}
 		}
-		setCollectionRunValue(blockTable, blockKey, block)
+	}
+	blockTable := newCollectionRunTable(blockCount)
+	for blockIdx := range preparedBlocks {
+		prepared := preparedBlocks[blockIdx]
+		copy(out.documents[prepared.start:prepared.start+prepared.rows], prepared.locators)
+		if len(prepared.declared) > 0 {
+			copy(out.declaredRows[prepared.start:prepared.start+prepared.rows], prepared.declared)
+		}
+		setCollectionRunValue(blockTable, prepared.blockKey, prepared.block)
 	}
 	blockTable.Freeze()
 	out.semanticStreamBlocks = blockTable
 	return out, nil
+}
+
+func columnRetainedSemanticStreamV1PrepareWorkers(blocks int) int {
+	if blocks < 2 {
+		return 1
+	}
+	procs := runtime.GOMAXPROCS(0)
+	if procs <= 1 {
+		return 1
+	}
+	workers := min(blocks, procs)
+	workers = min(workers, columnRetainedSemanticStreamV1PrepareMaxWorkers)
+	if workers < 2 {
+		return 1
+	}
+	return workers
+}
+
+func columnRetainedSemanticStreamV1RunPrepareWorkers(blocks, workers int, runBlock func(blockIdx int) error) error {
+	jobs := make(chan int)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for blockIdx := range jobs {
+				if err := runBlock(blockIdx); err != nil {
+					select {
+					case errs <- err:
+					default:
+					}
+				}
+			}
+		}()
+	}
+	for blockIdx := 0; blockIdx < blocks; blockIdx++ {
+		jobs <- blockIdx
+	}
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errs:
+		return err
+	default:
+		return nil
+	}
+}
+
+func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
+	cfg ColumnStoreConfig,
+	ids, documents [][]byte,
+	start, end int,
+	rootPlan columnRetainedSemanticStreamV1RootFastPathPlan,
+	useRootFastPath bool,
+	retainedSkipTrie *columnRetainedSemanticStreamV1RetainedSkipTrie,
+	declaredPathTrie *columnRetainedSemanticStreamV1DeclaredPathTrie,
+	useSemanticParserDeclaredRows bool,
+) (columnRetainedSemanticStreamV1PreparedBlock, error) {
+	rows := end - start
+	streams := newColumnRetainedSemanticStreamStreams()
+	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	var declaredStringInterner *columnDeclaredStringInterner
+	var declaredRows []columnDeclaredRow
+	var declaredValues []columnDeclaredValue
+	var declaredRowIDBytes []byte
+	if rootPlan.declaredRowsReady || useSemanticParserDeclaredRows {
+		declaredStringInterner = &columnDeclaredStringInterner{}
+		declaredRows = make([]columnDeclaredRow, rows)
+		declaredValues = make([]columnDeclaredValue, rows*len(cfg.Columns))
+		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids[start:end]))
+	}
+	for row, i := 0, start; i < end; row, i = row+1, i+1 {
+		if useRootFastPath {
+			var declaredValuesDest []columnDeclaredValue
+			if rootPlan.declaredRowsReady {
+				valuesStart := row * len(cfg.Columns)
+				declaredValuesDest = declaredValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
+			}
+			values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner, declaredValuesDest, declaredStringInterner)
+			if err != nil {
+				return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+			}
+			if rootPlan.declaredRowsReady {
+				idStart := len(declaredRowIDBytes)
+				declaredRowIDBytes = append(declaredRowIDBytes, ids[i]...)
+				declaredRows[row] = columnDeclaredRow{
+					ID:     declaredRowIDBytes[idStart:len(declaredRowIDBytes):len(declaredRowIDBytes)],
+					Values: values,
+				}
+			}
+			continue
+		}
+		var declaredValuesDest []columnDeclaredValue
+		if useSemanticParserDeclaredRows {
+			valuesStart := row * len(cfg.Columns)
+			declaredValuesDest = declaredValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
+		}
+		values, err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner)
+		if err != nil {
+			return columnRetainedSemanticStreamV1PreparedBlock{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+		}
+		if useSemanticParserDeclaredRows {
+			idStart := len(declaredRowIDBytes)
+			declaredRowIDBytes = append(declaredRowIDBytes, ids[i]...)
+			declaredRows[row] = columnDeclaredRow{
+				ID:     declaredRowIDBytes[idStart:len(declaredRowIDBytes):len(declaredRowIDBytes)],
+				Values: values,
+			}
+		}
+	}
+	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	defer storedBlockEncoder.close()
+	block, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows, streams, storedBlockEncoder)
+	if err != nil {
+		return columnRetainedSemanticStreamV1PreparedBlock{}, err
+	}
+	sum := sha256.Sum256(block)
+	blockKey := append([]byte(nil), sum[:]...)
+	locatorArena := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
+	locators := make([][]byte, rows)
+	for row := 0; row < rows; row++ {
+		locatorStart := len(locatorArena)
+		locatorArena = appendColumnRetainedSemanticStreamV1Locator(locatorArena, blockKey, uint64(row))
+		locators[row] = locatorArena[locatorStart:len(locatorArena):len(locatorArena)]
+	}
+	return columnRetainedSemanticStreamV1PreparedBlock{
+		start:    start,
+		rows:     rows,
+		blockKey: blockKey,
+		block:    block,
+		locators: locators,
+		declared: declaredRows,
+	}, nil
 }
 
 func prepareColumnRetainedSemanticStreamV1DeclaredRowsFromJSONDocuments(cfg ColumnStoreConfig, ids, documents [][]byte) ([]columnDeclaredRow, error) {
