@@ -118,6 +118,25 @@ type columnRetainedSemanticStreamV1RetainedSkipTrie struct {
 	children map[string]*columnRetainedSemanticStreamV1RetainedSkipTrie
 }
 
+type columnRetainedSemanticStreamV1PathSegmentInterner struct {
+	segments map[string]string
+}
+
+func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) string {
+	if i == nil {
+		return string(key)
+	}
+	if value, ok := i.segments[string(key)]; ok {
+		return value
+	}
+	value := string(key)
+	if i.segments == nil {
+		i.segments = make(map[string]string)
+	}
+	i.segments[value] = value
+	return value
+}
+
 type columnRetainedSemanticStreamV1DecodeCache struct {
 	blocks        map[string]*columnRetainedSemanticStreamV1DecodedBlock
 	order         []string
@@ -380,9 +399,10 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		}
 		rows := end - start
 		streams := newColumnRetainedSemanticStreamStreams()
+		pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 		for row, i := 0, start; i < end; row, i = row+1, i+1 {
 			if useRootFastPath {
-				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams)
+				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner)
 				if err != nil {
 					resetCollectionRunTable(blockTable)
 					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
@@ -394,7 +414,7 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 					}
 				}
 			} else {
-				if err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams); err != nil {
+				if err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner); err != nil {
 					resetCollectionRunTable(blockTable)
 					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 				}
@@ -457,7 +477,7 @@ func columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg ColumnStoreConf
 	return root
 }
 
-func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams) ([]columnDeclaredValue, error) {
+func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) ([]columnDeclaredValue, error) {
 	if !gjson.ValidBytes(document) {
 		return nil, errors.New("invalid JSON: invalid JSON")
 	}
@@ -487,7 +507,7 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 			}
 			return nil
 		}
-		path := string(key)
+		path := pathInterner.intern(key)
 		raw, err := columnRetainedSemanticStreamV1JSONParserRawValue(document, value, dataType, valueEndOffset)
 		if err != nil {
 			return err
@@ -512,7 +532,7 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 		var pathStack [8]string
 		for _, value := range retainedRootValues {
 			path := append(pathStack[:0], value.path)
-			if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, path, row, streamEntryCapacity, streams); err != nil {
+			if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, path, row, streamEntryCapacity, streams, pathInterner); err != nil {
 				return nil, err
 			}
 		}
@@ -1238,7 +1258,7 @@ func collectColumnRetainedSemanticStreamPaths(raw json.RawMessage, path []string
 	return nil
 }
 
-func collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg ColumnStoreConfig, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams) error {
+func collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg ColumnStoreConfig, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
 	if cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
 		return fmt.Errorf("collections: retained payload policy %q cannot produce object payload", cfg.RetainedPayload)
 	}
@@ -1248,13 +1268,13 @@ func collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg ColumnS
 	if !jsonDocumentLooksObject(document) {
 		return errors.New("collections: column retained payload root must be a JSON object")
 	}
-	return collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(document, nil, row, streamEntryCapacity, skip, streams)
+	return collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(document, nil, row, streamEntryCapacity, skip, streams, pathInterner)
 }
 
-func collectColumnRetainedSemanticStreamJSONParserPaths(raw []byte, dataType jsonparser.ValueType, path []string, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams) error {
+func collectColumnRetainedSemanticStreamJSONParserPaths(raw []byte, dataType jsonparser.ValueType, path []string, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
 	switch dataType {
 	case jsonparser.Object:
-		return collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw, path, row, streamEntryCapacity, streams)
+		return collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw, path, row, streamEntryCapacity, streams, pathInterner)
 	case jsonparser.Array, jsonparser.String, jsonparser.Number, jsonparser.Boolean, jsonparser.Null:
 		if len(path) == 0 {
 			return errors.New("semantic-stream-v1 retained root must be a JSON object")
@@ -1266,7 +1286,7 @@ func collectColumnRetainedSemanticStreamJSONParserPaths(raw []byte, dataType jso
 	}
 }
 
-func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path []string, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams) error {
+func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path []string, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
 	type retainedObjectValue struct {
 		path      string
 		raw       []byte
@@ -1279,7 +1299,7 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path [
 		if err != nil {
 			return err
 		}
-		valuePath := string(key)
+		valuePath := pathInterner.intern(key)
 		for i := range retainedObjectValues {
 			if retainedObjectValues[i].path == valuePath {
 				retainedObjectValues[i] = retainedObjectValue{path: valuePath, raw: valueRaw, valueType: dataType}
@@ -1312,14 +1332,14 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path [
 		} else {
 			nextPath = append(path, value.path)
 		}
-		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams); err != nil {
+		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams, pathInterner); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte, path []string, row uint64, streamEntryCapacity int, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, streams *columnRetainedSemanticStreamStreams) error {
+func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte, path []string, row uint64, streamEntryCapacity int, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
 	type retainedObjectValue struct {
 		path      string
 		raw       []byte
@@ -1336,7 +1356,7 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		if childSkip != nil && childSkip.terminal {
 			return nil
 		}
-		valuePath := string(key)
+		valuePath := pathInterner.intern(key)
 		nextValue := retainedObjectValue{path: valuePath}
 		valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
 		if err != nil {
@@ -1376,12 +1396,12 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 			nextPath = append(path, value.path)
 		}
 		if value.skip != nil {
-			if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(value.raw, nextPath, row, streamEntryCapacity, value.skip, streams); err != nil {
+			if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(value.raw, nextPath, row, streamEntryCapacity, value.skip, streams, pathInterner); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams); err != nil {
+		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams, pathInterner); err != nil {
 			return err
 		}
 	}
