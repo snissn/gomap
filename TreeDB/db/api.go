@@ -855,6 +855,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.read.crc32_checks_total"] = fmt.Sprintf("%d", readStats.RecordCRCChecks)
 
 		valuelog.AppendDecodeScratchStats(stats, "treedb.vlog.decode_scratch", db.valueLogManager.DecodeScratchStats())
+		valuelog.AppendWriterAppendBufferStats(stats, "treedb.vlog.writer_append_buf", valuelog.WriterAppendBufferStatsSnapshot())
 
 		gStats := db.valueLogManager.GroupedFrameCacheDetailedStats()
 		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gStats.Hits)

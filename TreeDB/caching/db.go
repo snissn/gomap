@@ -30121,6 +30121,7 @@ func (db *DB) Stats() map[string]string {
 		scratchStats = db.valueLogReader.DecodeScratchStats()
 	}
 	valuelog.AppendDecodeScratchStats(stats, "treedb.cache.vlog_decode_scratch", scratchStats)
+	valuelog.AppendWriterAppendBufferStats(stats, "treedb.cache.vlog_writer_append_buf", valuelog.WriterAppendBufferStatsSnapshot())
 	cacheVlogMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
 	if db.valueLogReader != nil {
 		remaps, deadMappings := db.valueLogReader.RemapStats()

@@ -337,6 +337,12 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	if _, ok := stats["treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores"]; !ok {
 		t.Fatalf("missing treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores")
 	}
+	if _, ok := stats["treedb.vlog.writer_append_buf.pool.max_entries"]; !ok {
+		t.Fatalf("missing treedb.vlog.writer_append_buf.pool.max_entries")
+	}
+	if _, ok := stats["treedb.vlog.writer_append_buf.pool.retained_bytes"]; !ok {
+		t.Fatalf("missing treedb.vlog.writer_append_buf.pool.retained_bytes")
+	}
 }
 
 func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {

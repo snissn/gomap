@@ -191,7 +191,8 @@ func TestWriterCloseSinkFlushesAndReleasesBuffers(t *testing.T) {
 func drainWriterAppendBufPoolForTest() {
 	for {
 		select {
-		case <-writerAppendBufPool:
+		case buf := <-writerAppendBufPool:
+			noteWriterAppendBufPoolTake(cap(buf))
 		default:
 			return
 		}
@@ -217,6 +218,42 @@ func TestWriterAppendBufPool_BoundedDefaultBuffers(t *testing.T) {
 	}
 	if got := len(writerAppendBufPool); got != 0 {
 		t.Fatalf("writer append pool entries after get=%d want=0", got)
+	}
+}
+
+func TestWriterAppendBufStats_PoolAndDropCounters(t *testing.T) {
+	drainWriterAppendBufPoolForTest()
+	t.Cleanup(drainWriterAppendBufPoolForTest)
+
+	before := WriterAppendBufferStatsSnapshot()
+	putWriterAppendBuf(make([]byte, 0, defaultBufferSize))
+	afterPut := WriterAppendBufferStatsSnapshot()
+	if got, want := afterPut.PoolRetainedBytes-before.PoolRetainedBytes, uint64(defaultBufferSize); got != want {
+		t.Fatalf("pool retained bytes delta=%d want=%d", got, want)
+	}
+	if got := afterPut.PutsTotal - before.PutsTotal; got != 1 {
+		t.Fatalf("puts delta=%d want=1", got)
+	}
+
+	buf := getWriterAppendBuf(defaultBufferSize)
+	afterGet := WriterAppendBufferStatsSnapshot()
+	if cap(buf) != defaultBufferSize {
+		t.Fatalf("pooled append buffer cap=%d want=%d", cap(buf), defaultBufferSize)
+	}
+	if got := afterGet.HitsTotal - afterPut.HitsTotal; got != 1 {
+		t.Fatalf("hits delta=%d want=1", got)
+	}
+	if got, want := afterPut.PoolRetainedBytes-afterGet.PoolRetainedBytes, uint64(defaultBufferSize); got != want {
+		t.Fatalf("pool retained bytes released delta=%d want=%d", got, want)
+	}
+
+	putWriterAppendBuf(make([]byte, 0, defaultBufferSize+1))
+	afterDrop := WriterAppendBufferStatsSnapshot()
+	if got := afterDrop.DropsTotal - afterGet.DropsTotal; got != 1 {
+		t.Fatalf("drops delta=%d want=1", got)
+	}
+	if got, want := afterDrop.DroppedBytesTotal-afterGet.DroppedBytesTotal, uint64(defaultBufferSize+1); got != want {
+		t.Fatalf("dropped bytes delta=%d want=%d", got, want)
 	}
 }
 
@@ -252,6 +289,50 @@ func TestWriterEnsureAppendBufCapReturnsDefaultBufferOnGrowth(t *testing.T) {
 	}
 	if got := len(writerAppendBufPool); got != 1 {
 		t.Fatalf("writer append pool entries=%d want=1", got)
+	}
+}
+
+func TestWriterFlushKeepsIdleAppendBufferForReuse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	writer.appendBuf = make([]byte, 0, defaultBufferSize)
+	if err := writer.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if cap(writer.appendBuf) != defaultBufferSize {
+		t.Fatalf("appendBuf cap after Flush=%d want=%d", cap(writer.appendBuf), defaultBufferSize)
+	}
+}
+
+func TestWriterSyncReleasesIdleAppendBuffer(t *testing.T) {
+	drainWriterAppendBufPoolForTest()
+	t.Cleanup(drainWriterAppendBufPoolForTest)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+
+	writer.appendBuf = append(make([]byte, 0, defaultBufferSize), "pending"...)
+	if err := writer.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if writer.appendBuf != nil {
+		t.Fatalf("appendBuf retained after Sync: len=%d cap=%d", len(writer.appendBuf), cap(writer.appendBuf))
+	}
+	if got := len(writerAppendBufPool); got != 1 {
+		t.Fatalf("writer append pool entries after Sync=%d want=1", got)
 	}
 }
 
