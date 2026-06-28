@@ -119,15 +119,139 @@ func TestCreateCollectionApplyCreatesCatalogAndDeterministicResult(t *testing.T)
 		t.Fatalf("duplicate result digest=%s, want %s", duplicate.ResultDigest.Hex(), result.ResultDigest.Hex())
 	}
 	frames = readCommandWALFrames(t, dir)
-	if len(frames) != 2 {
-		t.Fatalf("command WAL frames after same-schema duplicate=%d, want 2", len(frames))
+	if len(frames) != 1 {
+		t.Fatalf("command WAL frames after idempotency replay=%d, want 1", len(frames))
 	}
-	assertCatalogCreateFrame(t, frames[1], "users")
-	if got := db.State().AppliedCommandLSN; got != frames[1].LSN {
-		t.Fatalf("AppliedCommandLSN=%d, want duplicate no-op frame LSN %d", got, frames[1].LSN)
+	if got := db.State().AppliedCommandLSN; got != frames[0].LSN {
+		t.Fatalf("AppliedCommandLSN=%d, want original catalog frame LSN %d", got, frames[0].LSN)
 	}
 	if progress.Len() != 2 || results.Len() != 2 {
 		t.Fatalf("store lengths after duplicate progress=%d results=%d, want 2/2", progress.Len(), results.Len())
+	}
+}
+
+func TestIdempotencyDuplicateProgressFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:duplicate-progress-failure", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	}
+
+	duplicate, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 2), Options{
+		ProgressStore: recordProgressStoreFailAfterPreflight{},
+		ResultStore:   results,
+	})
+	assertRecoveryRequired(t, duplicate, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if results.Len() != 2 {
+		t.Fatalf("result records after duplicate progress failure=%d, want 2", results.Len())
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after duplicate progress failure=%d, want %d", got, len(beforeFrames))
+	}
+}
+
+func TestIdempotencyDuplicateResultStoreFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:duplicate-result-failure", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	}
+
+	duplicate, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   recordDuplicateApplyResultStoreFailAfterPreflight{base: results},
+	})
+	assertRecoveryRequired(t, duplicate, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if results.Len() != 1 {
+		t.Fatalf("result records after duplicate result failure=%d, want 1", results.Len())
+	}
+	if progress.Len() != 1 {
+		t.Fatalf("progress records after duplicate result failure=%d, want 1", progress.Len())
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after duplicate result failure=%d, want %d", got, len(beforeFrames))
+	}
+}
+
+func TestIdempotencyDuplicateRecordsCurrentAppliedCommandLSN(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	rawUsers := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:duplicate-current-lsn", testCreateCollectionMetaOptions{})
+	first, err := ApplyCommittedEntryV1(db, rawUsers, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, first, raftentry.ApplyStatusApplied, 1)
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(frames))
+	}
+	originalLSN := frames[0].LSN
+
+	rawOrders := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders:advance-lsn", testCreateCollectionMetaOptions{})
+	advanced, err := ApplyCommittedEntryV1(db, rawOrders, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, advanced, raftentry.ApplyStatusApplied, 1)
+	currentLSN := db.State().AppliedCommandLSN
+	if currentLSN <= originalLSN {
+		t.Fatalf("AppliedCommandLSN after intervening command=%d, want greater than original %d", currentLSN, originalLSN)
+	}
+
+	duplicateID := raftentry.ApplyEntryID{Term: 1, Index: 3}
+	duplicate, err := ApplyCommittedEntryV1(db, rawUsers, applyMeta(duplicateID.Term, duplicateID.Index), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, duplicate, raftentry.ApplyStatusAlreadyApplied, 0)
+	if duplicate.ResultDigest != first.ResultDigest {
+		t.Fatalf("duplicate result digest=%s, want %s", duplicate.ResultDigest.Hex(), first.ResultDigest.Hex())
+	}
+	record, ok, err := results.LookupApplyResult(duplicateID)
+	if err != nil {
+		t.Fatalf("LookupApplyResult duplicate: %v", err)
+	}
+	if !ok {
+		t.Fatal("duplicate result record missing")
+	}
+	if record.AppliedCommandLSN != currentLSN {
+		t.Fatalf("duplicate result AppliedCommandLSN=%d, want current %d", record.AppliedCommandLSN, currentLSN)
+	}
+	progress.mu.Lock()
+	progressRecord, ok := progress.records[duplicateID]
+	progress.mu.Unlock()
+	if !ok {
+		t.Fatal("duplicate progress record missing")
+	}
+	if progressRecord.AppliedCommandLSN != currentLSN {
+		t.Fatalf("duplicate progress AppliedCommandLSN=%d, want current %d", progressRecord.AppliedCommandLSN, currentLSN)
 	}
 }
 
@@ -191,26 +315,19 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 
 	id := raftentry.ApplyEntryID{Term: 1, Index: 1}
 	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users", testCreateCollectionMetaOptions{})
-	entry, err := raftentry.DecodeCommandEntryV1(raw, raftentry.DecodeOptions{ApplyEntryID: id})
+	results := NewMemoryApplyResultStore(8)
+
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
+		ResultStore: results,
+	})
 	if err != nil {
-		t.Fatalf("DecodeCommandEntryV1: %v", err)
+		t.Fatalf("ApplyCommittedEntryV1 seed result: %v result=%+v", err, result)
 	}
-	result := raftentry.ApplyResultV1{
-		Status:                 raftentry.ApplyStatusApplied,
-		CommandDigest:          entry.Digest,
-		DeterministicErrorCode: raftentry.ErrorNoneV1,
-		AffectedCount:          1,
-		ResultDigest:           entry.Digest,
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
 	}
 	progress := NewMemoryApplyProgressStore(8, 8)
-	results := NewMemoryApplyResultStore(8)
-	if err := results.RecordApplyResult(ApplyResultRecordV1{
-		EntryID:       id,
-		CommandDigest: entry.Digest,
-		Result:        result,
-	}); err != nil {
-		t.Fatalf("RecordApplyResult: %v", err)
-	}
 
 	seam := &countingCommandWALApplySeam{}
 	replayed, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
@@ -230,8 +347,259 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
 		t.Fatalf("stored result replay reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
 	}
-	if got := len(readCommandWALFrames(t, dir)); got != 0 {
-		t.Fatalf("command WAL frames after stored result replay=%d, want 0", got)
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after stored result replay=%d, want %d", got, len(beforeFrames))
+	}
+}
+
+func TestStoredResultReplayProgressFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	id := raftentry.ApplyEntryID{Term: 1, Index: 1}
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:stored-progress-failure", testCreateCollectionMetaOptions{})
+	results := NewMemoryApplyResultStore(8)
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
+		ResultStore: results,
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	}
+
+	replayed, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
+		ProgressStore: recordProgressStoreFailAfterPreflight{},
+		ResultStore:   results,
+	})
+	assertRecoveryRequired(t, replayed, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if results.Len() != 1 {
+		t.Fatalf("result records after stored result progress failure=%d, want 1", results.Len())
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after stored result progress failure=%d, want %d", got, len(beforeFrames))
+	}
+}
+
+func TestFaultBeforeLocalWALAppendDoesNotAdvanceMetadata(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:fault-before-append", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+		FaultInjector: singlePointFaultInjector{point: FaultBeforeLocalWALAppendV1},
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after pre-append fault=%d, want 0", got)
+	}
+	if len(readCommandWALFrames(t, dir)) != 0 || progress.Len() != 0 || results.Len() != 0 {
+		t.Fatalf("pre-append fault frames/progress/results=%d/%d/%d, want 0/0/0", len(readCommandWALFrames(t, dir)), progress.Len(), results.Len())
+	}
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after pre-append fault err=%v, want ErrCollectionNotFound", openErr)
+	}
+}
+
+func TestFaultAfterLocalWALAppendBeforeVisibilityDoesNotAdvanceMetadata(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:fault-after-append", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+		FaultInjector: singlePointFaultInjector{point: FaultAfterLocalWALAppendBeforeVisibleV1},
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := db.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after post-append/pre-visible fault=%d, want 0", got)
+	}
+	if progress.Len() != 0 || results.Len() != 0 {
+		t.Fatalf("post-append/pre-visible fault progress/results=%d/%d, want 0/0", progress.Len(), results.Len())
+	}
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after post-append/pre-visible fault err=%v, want ErrCollectionNotFound", openErr)
+	}
+}
+
+func TestCollectionMutationFaultAfterLocalWALAppendBeforeVisibilityRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs", testCreateCollectionMetaOptions{})
+	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 create: %v result=%+v", err, createResult)
+	}
+	assertApplied(t, createResult, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	beforeLSN := db.State().AppliedCommandLSN
+
+	doc := []byte(`{"name":"one"}`)
+	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:fault-after-append", nativewire.DocumentFormatJSON, [][]byte{[]byte("d1")}, [][]byte{doc})
+	result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+		FaultInjector: singlePointFaultInjector{point: FaultAfterLocalWALAppendBeforeVisibleV1},
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after mutation post-append/pre-visible fault=%d, want %d", got, beforeLSN)
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after mutation post-append/pre-visible fault progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != len(beforeFrames)+1 {
+		t.Fatalf("command WAL frames after mutation post-append/pre-visible fault=%d, want %d", len(frames), len(beforeFrames)+1)
+	}
+	assertCollectionInsertFrame(t, frames[len(frames)-1], "docs", map[string][]byte{"d1": doc})
+	if err := db.CheckStorageMaintenanceReady(); !errors.Is(err, backenddb.ErrRecoveryRequired) {
+		t.Fatalf("CheckStorageMaintenanceReady after mutation post-append/pre-visible fault error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestFaultAfterVisibleBeforeResultRecordRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:fault-visible", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+		FaultInjector: singlePointFaultInjector{point: FaultAfterVisibleBeforeResultRecordV1},
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); openErr != nil {
+		t.Fatalf("OpenCollection users after visible fault: %v", openErr)
+	}
+	if len(readCommandWALFrames(t, dir)) != 1 || progress.Len() != 0 || results.Len() != 0 {
+		t.Fatalf("visible-before-result fault frames/progress/results=%d/%d/%d, want 1/0/0", len(readCommandWALFrames(t, dir)), progress.Len(), results.Len())
+	}
+}
+
+func TestFaultAfterResultRecordBeforeProgressReplaysWithoutMutation(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:fault-result", testCreateCollectionMetaOptions{})
+	first, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+		FaultInjector: singlePointFaultInjector{point: FaultAfterResultRecordBeforeProgressV1},
+	})
+	assertRecoveryRequired(t, first, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 || progress.Len() != 0 || results.Len() != 1 {
+		t.Fatalf("result-before-progress fault frames/progress/results=%d/%d/%d, want 1/0/1", len(beforeFrames), progress.Len(), results.Len())
+	}
+
+	replayed, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	if err != nil {
+		t.Fatalf("replay after result-before-progress fault: %v", err)
+	}
+	assertApplied(t, replayed, raftentry.ApplyStatusApplied, 1)
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("frames after result-store replay=%d, want %d", got, len(beforeFrames))
+	}
+	if progress.Len() != 1 || results.Len() != 1 {
+		t.Fatalf("store lengths after result-store replay progress/results=%d/%d, want 1/1", progress.Len(), results.Len())
+	}
+}
+
+func TestStoredResultCoverageCannotOutrunAppliedLSN(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	id := raftentry.ApplyEntryID{Term: 1, Index: 1}
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:uncovered-result", testCreateCollectionMetaOptions{})
+	entry, err := raftentry.DecodeCommandEntryV1(raw, raftentry.DecodeOptions{ApplyEntryID: id})
+	if err != nil {
+		t.Fatalf("DecodeCommandEntryV1: %v", err)
+	}
+	results := NewMemoryApplyResultStore(8)
+	if err := results.RecordApplyResult(ApplyResultRecordV1{
+		EntryID:           id,
+		CommandDigest:     entry.Digest,
+		IdempotencyKey:    entry.IdempotencyKey,
+		AppliedCommandLSN: 1,
+		Result: raftentry.ApplyResultV1{
+			Status:                 raftentry.ApplyStatusApplied,
+			CommandDigest:          entry.Digest,
+			DeterministicErrorCode: raftentry.ErrorNoneV1,
+			AffectedCount:          1,
+			ResultDigest:           entry.Digest,
+		},
+	}); err != nil {
+		t.Fatalf("RecordApplyResult: %v", err)
+	}
+	progress := NewMemoryApplyProgressStore(8, 8)
+	seam := &countingCommandWALApplySeam{}
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(id.Term, id.Index), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if progress.Len() != 0 || seam.appendCalls != 0 || len(readCommandWALFrames(t, dir)) != 0 {
+		t.Fatalf("uncovered result replay progress/append/frames=%d/%d/%d, want 0/0/0", progress.Len(), seam.appendCalls, len(readCommandWALFrames(t, dir)))
+	}
+}
+
+func TestIdempotencyDifferentDigestFailsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	first := deterministicCreateCollectionEntry(t, "users", "client-a:create:shared-idempotency", testCreateCollectionMetaOptions{})
+	applied, err := ApplyCommittedEntryV1(db, first, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, applied, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+
+	seam := &countingCommandWALApplySeam{}
+	conflict := deterministicCreateCollectionEntry(t, "orders", "client-a:create:shared-idempotency", testCreateCollectionMetaOptions{})
+	rejected, err := ApplyCommittedEntryV1(db, conflict, applyMetaWithCatalogVersion(1, 2, testCatalogVersionStart+1), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	assertRejected(t, rejected, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if seam.appendCalls != 0 || len(readCommandWALFrames(t, dir)) != len(beforeFrames) {
+		t.Fatalf("idempotency conflict append/frames=%d/%d, want 0/%d", seam.appendCalls, len(readCommandWALFrames(t, dir)), len(beforeFrames))
+	}
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("orders"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection orders after idempotency conflict err=%v, want ErrCollectionNotFound", openErr)
 	}
 }
 
@@ -1434,8 +1802,10 @@ func TestSameApplyEntryIDDifferentDigestConflictsBeforeAppend(t *testing.T) {
 	var otherDigest raftentry.CommandDigestV1
 	otherDigest[0] = 1
 	if err := results.RecordApplyResult(ApplyResultRecordV1{
-		EntryID:       id,
-		CommandDigest: otherDigest,
+		EntryID:           id,
+		CommandDigest:     otherDigest,
+		IdempotencyKey:    []byte("seed-conflict"),
+		AppliedCommandLSN: 1,
 		Result: raftentry.ApplyResultV1{
 			Status:                 raftentry.ApplyStatusApplied,
 			CommandDigest:          otherDigest,
@@ -1467,23 +1837,23 @@ func TestMemoryStoresAreBounded(t *testing.T) {
 	digest[0] = 7
 
 	results := NewMemoryApplyResultStore(1)
-	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id1, CommandDigest: digest}); err != nil {
+	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id1, CommandDigest: digest, IdempotencyKey: []byte("key-1"), AppliedCommandLSN: 1}); err != nil {
 		t.Fatalf("RecordApplyResult id1: %v", err)
 	}
-	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id2, CommandDigest: digest}); codeOf(err) != raftentry.ErrorResourceExhaustedV1 {
+	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id2, CommandDigest: digest, IdempotencyKey: []byte("key-2"), AppliedCommandLSN: 2}); codeOf(err) != raftentry.ErrorResourceExhaustedV1 {
 		t.Fatalf("RecordApplyResult id2 error=%v code=%s, want resource exhausted", err, codeOf(err))
 	}
 
 	progress := NewMemoryApplyProgressStore(1, 8)
-	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: id1, CommandDigest: digest}); err != nil {
+	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: id1, CommandDigest: digest, AppliedCommandLSN: 1}); err != nil {
 		t.Fatalf("RecordApplied id1: %v", err)
 	}
-	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: id2, CommandDigest: digest}); codeOf(err) != raftentry.ErrorResourceExhaustedV1 {
+	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: id2, CommandDigest: digest, AppliedCommandLSN: 2}); codeOf(err) != raftentry.ErrorResourceExhaustedV1 {
 		t.Fatalf("RecordApplied id2 error=%v code=%s, want resource exhausted", err, codeOf(err))
 	}
 
 	progress = NewMemoryApplyProgressStore(8, 8)
-	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: id1, CommandDigest: digest}); err != nil {
+	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: id1, CommandDigest: digest, AppliedCommandLSN: 1}); err != nil {
 		t.Fatalf("RecordApplied lower-index setup: %v", err)
 	}
 	if err := progress.CheckCanApply(id1); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
@@ -1513,10 +1883,10 @@ func TestMemoryApplyResultStorePreservesFirstResultForSameDigest(t *testing.T) {
 	}
 
 	results := NewMemoryApplyResultStore(1)
-	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id, CommandDigest: digest, Result: first}); err != nil {
+	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id, CommandDigest: digest, IdempotencyKey: []byte("key-1"), AppliedCommandLSN: 1, Result: first}); err != nil {
 		t.Fatalf("RecordApplyResult first: %v", err)
 	}
-	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id, CommandDigest: digest, Result: second}); err != nil {
+	if err := results.RecordApplyResult(ApplyResultRecordV1{EntryID: id, CommandDigest: digest, IdempotencyKey: []byte("key-1"), AppliedCommandLSN: 1, Result: second}); err != nil {
 		t.Fatalf("RecordApplyResult second: %v", err)
 	}
 	record, ok, err := results.LookupApplyResult(id)
@@ -1528,12 +1898,12 @@ func TestMemoryApplyResultStorePreservesFirstResultForSameDigest(t *testing.T) {
 	}
 }
 
-func openApplyHarnessDB(t *testing.T, dir string) *backenddb.DB {
+func openApplyHarnessDB(t testing.TB, dir string) *backenddb.DB {
 	t.Helper()
 	return openApplyHarnessDBWithOptions(t, dir, backenddb.Options{})
 }
 
-func openApplyHarnessDBWithOptions(t *testing.T, dir string, opts backenddb.Options) *backenddb.DB {
+func openApplyHarnessDBWithOptions(t testing.TB, dir string, opts backenddb.Options) *backenddb.DB {
 	t.Helper()
 	opts.Dir = dir
 	opts.CommandWAL = true
@@ -1772,12 +2142,36 @@ func (recordApplyResultStoreFailAfterPreflight) LookupApplyResult(raftentry.Appl
 	return ApplyResultRecordV1{}, false, nil
 }
 
+func (recordApplyResultStoreFailAfterPreflight) LookupApplyResultByIdempotencyKey([]byte) (ApplyResultRecordV1, bool, error) {
+	return ApplyResultRecordV1{}, false, nil
+}
+
 func (recordApplyResultStoreFailAfterPreflight) CheckCanRecordApplyResult(ApplyResultRecordV1) error {
 	return nil
 }
 
 func (recordApplyResultStoreFailAfterPreflight) RecordApplyResult(ApplyResultRecordV1) error {
 	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "result store unavailable after apply")
+}
+
+type recordDuplicateApplyResultStoreFailAfterPreflight struct {
+	base *MemoryApplyResultStore
+}
+
+func (s recordDuplicateApplyResultStoreFailAfterPreflight) LookupApplyResult(id raftentry.ApplyEntryID) (ApplyResultRecordV1, bool, error) {
+	return s.base.LookupApplyResult(id)
+}
+
+func (s recordDuplicateApplyResultStoreFailAfterPreflight) LookupApplyResultByIdempotencyKey(key []byte) (ApplyResultRecordV1, bool, error) {
+	return s.base.LookupApplyResultByIdempotencyKey(key)
+}
+
+func (s recordDuplicateApplyResultStoreFailAfterPreflight) CheckCanRecordApplyResult(record ApplyResultRecordV1) error {
+	return s.base.CheckCanRecordApplyResult(record)
+}
+
+func (recordDuplicateApplyResultStoreFailAfterPreflight) RecordApplyResult(ApplyResultRecordV1) error {
+	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "result store unavailable during duplicate apply")
 }
 
 type recordProgressStoreFailAfterPreflight struct{}
@@ -2101,6 +2495,17 @@ type countingCommandWALApplySeam struct {
 	finalizeCalls int
 }
 
+type singlePointFaultInjector struct {
+	point FaultPointV1
+}
+
+func (f singlePointFaultInjector) InjectApplyFault(point FaultPointV1, _ ApplyFaultContextV1) error {
+	if point != f.point {
+		return nil
+	}
+	return errors.New("injected apply fault")
+}
+
 func (s *countingCommandWALApplySeam) Append(db *backenddb.DB, frame commandwalapply.LoweredFrame, meta commandwalapply.ApplyMetadata, opts commandwalapply.Options) (commandwalapply.Handle, commandwalapply.Result, error) {
 	s.appendCalls++
 	return commandwalapply.Handle{}, commandwalapply.Result{}, errors.New("unexpected append")
@@ -2139,6 +2544,104 @@ func (s *failingFinalizeCommandWALApplySeam) Abort(db *backenddb.DB, handle comm
 }
 
 var benchmarkCollectionMutationSink collectionMutationV1
+var benchmarkApplyResultSink raftentry.ApplyResultV1
+
+func BenchmarkApplyCommittedEntryCloseout3043(b *testing.B) {
+	b.Run("supported_create_collection", func(b *testing.B) {
+		baseDir := b.TempDir()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			dir := filepath.Join(baseDir, fmt.Sprintf("supported-%06d", i))
+			db := openApplyHarnessDB(b, dir)
+			raw := deterministicCreateCollectionEntryForBenchmark(b, "users", fmt.Sprintf("bench:create:%d", i))
+			result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+				ProgressStore: NewMemoryApplyProgressStore(8, 8),
+				ResultStore:   NewMemoryApplyResultStore(8),
+			})
+			if err != nil {
+				_ = db.Close()
+				b.Fatalf("ApplyCommittedEntryV1 supported: %v result=%+v", err, result)
+			}
+			benchmarkApplyResultSink = result
+			if err := db.Close(); err != nil {
+				b.Fatalf("Close DB: %v", err)
+			}
+		}
+	})
+	b.Run("rejected_unsupported_before_append", func(b *testing.B) {
+		dir := b.TempDir()
+		db := openApplyHarnessDB(b, dir)
+		defer func() { _ = db.Close() }()
+		raw := readHexFixtureForBenchmark(b, "../nativewire/testdata/v1/update_bson_set_entry.hex")
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, uint64(i)+1), Options{})
+			if err == nil || result.Status != raftentry.ApplyStatusRejectedUnsupported {
+				b.Fatalf("ApplyCommittedEntryV1 rejected result=%+v err=%v", result, err)
+			}
+			benchmarkApplyResultSink = result
+		}
+	})
+	b.Run("duplicate_result_replay", func(b *testing.B) {
+		dir := b.TempDir()
+		db := openApplyHarnessDB(b, dir)
+		defer func() { _ = db.Close() }()
+		progress := NewMemoryApplyProgressStore(8, 8)
+		results := NewMemoryApplyResultStore(8)
+		raw := deterministicCreateCollectionEntryForBenchmark(b, "users", "bench:create:duplicate")
+		seed, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+			ProgressStore: progress,
+			ResultStore:   results,
+		})
+		if err != nil {
+			b.Fatalf("seed duplicate replay: %v result=%+v", err, seed)
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+				ProgressStore: progress,
+				ResultStore:   results,
+			})
+			if err != nil {
+				b.Fatalf("duplicate replay: %v result=%+v", err, result)
+			}
+			benchmarkApplyResultSink = result
+		}
+	})
+	b.Run("close_reopen_replay_boundary", func(b *testing.B) {
+		baseDir := b.TempDir()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			dir := filepath.Join(baseDir, fmt.Sprintf("reopen-%06d", i))
+			db := openApplyHarnessDB(b, dir)
+			raw := deterministicCreateCollectionEntryForBenchmark(b, "users", fmt.Sprintf("bench:create:reopen:%d", i))
+			result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+				ProgressStore: NewMemoryApplyProgressStore(8, 8),
+				ResultStore:   NewMemoryApplyResultStore(8),
+			})
+			if err != nil {
+				_ = db.Close()
+				b.Fatalf("ApplyCommittedEntryV1 close/reopen: %v result=%+v", err, result)
+			}
+			if err := db.Close(); err != nil {
+				b.Fatalf("Close DB: %v", err)
+			}
+			reopened := openApplyHarnessDB(b, dir)
+			if _, err := collections.NewCollectionManager(reopened).OpenCollection("users"); err != nil {
+				_ = reopened.Close()
+				b.Fatalf("OpenCollection after reopen: %v", err)
+			}
+			benchmarkApplyResultSink = result
+			if err := reopened.Close(); err != nil {
+				b.Fatalf("Close reopened DB: %v", err)
+			}
+		}
+	})
+}
 
 func BenchmarkDecodeLowerCollectionMutationV1(b *testing.B) {
 	ids := make([][]byte, 16)
@@ -2184,4 +2687,37 @@ func deterministicMutationEntryForBenchmark(b *testing.B, command nativewire.Com
 		b.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 	return entry
+}
+
+func deterministicCreateCollectionEntryForBenchmark(b *testing.B, collection, idempotency string) []byte {
+	b.Helper()
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandCreateCollection, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: nativewire.SectionCollectionMeta, Bytes: testCreateCollectionMetaPayload(collection, testCreateCollectionMetaOptions{})},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+	}
+	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		b.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		b.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
+
+func readHexFixtureForBenchmark(b *testing.B, rel string) []byte {
+	b.Helper()
+	raw, err := os.ReadFile(rel)
+	if err != nil {
+		b.Fatalf("read fixture %s: %v", rel, err)
+	}
+	hexText := strings.Join(strings.Fields(string(raw)), "")
+	out, err := hex.DecodeString(hexText)
+	if err != nil {
+		b.Fatalf("decode fixture %s: %v", rel, err)
+	}
+	return out
 }

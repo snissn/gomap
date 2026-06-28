@@ -61,6 +61,9 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
 	}
 	handleAppended = true
+	if err := h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest); err != nil {
+		return commandWALPostAppendRecoveryRequired(entry, err)
+	}
 	intent := handle.CommandWALIntent()
 	if intent == nil || handle.LSN() == 0 {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
@@ -127,6 +130,11 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 }
 
 func commandWALFinalizeRecoveryRequired(entry raftentry.CommandEntryV1, err error) (raftentry.ApplyResultV1, error) {
+	code, _ := ErrorCodeOf(err)
+	return recoveryRequired(entry.Digest, code, err)
+}
+
+func commandWALPostAppendRecoveryRequired(entry raftentry.CommandEntryV1, err error) (raftentry.ApplyResultV1, error) {
 	code, _ := ErrorCodeOf(err)
 	return recoveryRequired(entry.Digest, code, err)
 }

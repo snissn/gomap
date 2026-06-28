@@ -60,6 +60,7 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 	if manager == nil {
 		return raftentry.ApplyResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil collection manager cannot apply create collection")
 	}
+	postAppendFaultRequiresRecovery := false
 	_, alreadyApplied, err := manager.CreateCollectionWithPreparedCommandWALIntentStatusAndPreflight(collectionMeta, func() (*backenddb.CommandWALIntent, error) {
 		var err error
 		handle, _, err = h.walApply.Append(h.db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL})
@@ -67,6 +68,10 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 			return nil, codeCommandWALApplyError(err)
 		}
 		handleAppended = true
+		if err := h.injectFault(FaultAfterLocalWALAppendBeforeVisibleV1, meta.EntryID, entry.Digest); err != nil {
+			postAppendFaultRequiresRecovery = true
+			return nil, err
+		}
 		intent := handle.CommandWALIntent()
 		if intent == nil || handle.LSN() == 0 {
 			return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: command WAL append did not return a usable intent")
@@ -74,6 +79,9 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 		return intent, nil
 	}, checkPublishCatalogVersion)
 	if err != nil {
+		if postAppendFaultRequiresRecovery {
+			return commandWALPostAppendRecoveryRequired(entry, err)
+		}
 		if _, ok := ErrorCodeOf(err); ok {
 			return raftentry.ApplyResultV1{}, err
 		}
@@ -92,7 +100,7 @@ func (h *Harness) applyCreateCollectionV1(entry raftentry.CommandEntryV1, meta A
 		return recoveryRequired(entry.Digest, code, err)
 	}
 	if _, err := h.walApply.Finalize(h.db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{Sync: meta.SyncLocalCommandWAL}); err != nil {
-		return raftentry.ApplyResultV1{}, codeCommandWALApplyError(err)
+		return commandWALFinalizeRecoveryRequired(entry, err)
 	}
 	handleFinalized = true
 	status := raftentry.ApplyStatusApplied
