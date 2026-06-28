@@ -356,6 +356,7 @@ type columnStoreQueryMetric struct {
 	TypedColumnOneShotCacheMiss            bool                              `json:"typed_column_one_shot_cache_miss,omitempty"`
 	TypedColumnOneShotCacheBuild           bool                              `json:"typed_column_one_shot_cache_build,omitempty"`
 	TypedColumnOneShotBuildDurationMS      float64                           `json:"typed_column_one_shot_build_duration_ms,omitempty"`
+	TypedColumnPrepareWorkerCount          int                               `json:"typed_column_prepare_worker_count,omitempty"`
 	TypedColumnPreparePlanDurationMS       float64                           `json:"typed_column_prepare_plan_duration_ms,omitempty"`
 	TypedColumnPrepareRefsDurationMS       float64                           `json:"typed_column_prepare_refs_duration_ms,omitempty"`
 	TypedColumnPreparePairDurationMS       float64                           `json:"typed_column_prepare_pairing_duration_ms,omitempty"`
@@ -468,6 +469,7 @@ type columnStoreJSONBenchCell struct {
 	TypedColumnOneShotCacheMiss            bool                              `json:"typed_column_one_shot_cache_miss,omitempty"`
 	TypedColumnOneShotCacheBuild           bool                              `json:"typed_column_one_shot_cache_build,omitempty"`
 	TypedColumnOneShotBuildDurationMS      float64                           `json:"typed_column_one_shot_build_duration_ms,omitempty"`
+	TypedColumnPrepareWorkerCount          int                               `json:"typed_column_prepare_worker_count,omitempty"`
 	TypedColumnPreparePlanDurationMS       float64                           `json:"typed_column_prepare_plan_duration_ms,omitempty"`
 	TypedColumnPrepareRefsDurationMS       float64                           `json:"typed_column_prepare_refs_duration_ms,omitempty"`
 	TypedColumnPreparePairDurationMS       float64                           `json:"typed_column_prepare_pairing_duration_ms,omitempty"`
@@ -593,6 +595,7 @@ type columnStoreQueryExecution struct {
 	TypedColumnOneShotCacheMiss          bool
 	TypedColumnOneShotCacheBuild         bool
 	TypedColumnOneShotBuildDuration      time.Duration
+	TypedColumnPrepareWorkerCount        int
 	TypedColumnPreparePlanDuration       time.Duration
 	TypedColumnPrepareRefsDuration       time.Duration
 	TypedColumnPreparePairDuration       time.Duration
@@ -2057,6 +2060,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			SkippedGranules:                        exec.SkippedGranules,
 			ScheduledGranules:                      exec.ScheduledGranules,
 			WorkerCount:                            exec.WorkerCount,
+			TypedColumnPrepareWorkerCount:          exec.TypedColumnPrepareWorkerCount,
 			PlannerDurationMS:                      durationMS(plannerElapsed),
 			ScanDurationMS:                         durationMS(exec.ScanDuration),
 			ReduceDurationMS:                       durationMS(exec.ReduceDuration),
@@ -2536,6 +2540,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		TypedColumnOneShotCacheMiss:          diag.TypedColumnOneShotCacheMiss,
 		TypedColumnOneShotCacheBuild:         diag.TypedColumnOneShotCacheBuild,
 		TypedColumnOneShotBuildDuration:      time.Duration(diag.TypedColumnOneShotBuildNanos),
+		TypedColumnPrepareWorkerCount:        diag.TypedColumnPrepareWorkerCount,
 		TypedColumnPreparePlanDuration:       time.Duration(diag.TypedColumnPreparePlanNanos),
 		TypedColumnPrepareRefsDuration:       time.Duration(diag.TypedColumnPrepareRefsNanos),
 		TypedColumnPreparePairDuration:       time.Duration(diag.TypedColumnPreparePairingNanos),
@@ -2664,6 +2669,7 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 		WorkerCount:                          workers,
 		SegmentFileCacheHits:                 diag.SegmentFileCacheHits,
 		SegmentFileCacheMisses:               diag.SegmentFileCacheMisses,
+		TypedColumnPrepareWorkerCount:        setupDiagnostics.TypedColumnPrepareWorkerCount,
 		TypedColumnPreparePlanDuration:       time.Duration(setupDiagnostics.TypedColumnPreparePlanNanos),
 		TypedColumnPrepareRefsDuration:       time.Duration(setupDiagnostics.TypedColumnPrepareRefsNanos),
 		TypedColumnPreparePairDuration:       time.Duration(setupDiagnostics.TypedColumnPreparePairingNanos),
@@ -3111,6 +3117,7 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.TypedColumnOneShotCacheMiss = q.TypedColumnOneShotCacheMiss
 	cell.TypedColumnOneShotCacheBuild = q.TypedColumnOneShotCacheBuild
 	cell.TypedColumnOneShotBuildDurationMS = q.TypedColumnOneShotBuildDurationMS
+	cell.TypedColumnPrepareWorkerCount = q.TypedColumnPrepareWorkerCount
 	cell.TypedColumnPreparePlanDurationMS = q.TypedColumnPreparePlanDurationMS
 	cell.TypedColumnPrepareRefsDurationMS = q.TypedColumnPrepareRefsDurationMS
 	cell.TypedColumnPreparePairDurationMS = q.TypedColumnPreparePairDurationMS
@@ -3250,6 +3257,7 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.TypedColumnPrepareDenseValueDurationMS = durationMS(exec.TypedColumnPrepareDenseValueDuration)
 	cell.TypedColumnPrepareDensePredDurationMS = durationMS(exec.TypedColumnPrepareDensePredDuration)
 	cell.TypedColumnPrepareDensePreapplyMS = durationMS(exec.TypedColumnPrepareDensePreapply)
+	cell.TypedColumnPrepareWorkerCount = exec.TypedColumnPrepareWorkerCount
 	cell.MetadataHits = exec.MetadataHits
 	cell.RowsScanned = exec.RowsScanned
 	cell.RowsMatched = exec.RowsMatched
@@ -4692,8 +4700,8 @@ func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, qu
 		return
 	}
 	sb.WriteString("## " + title + "\n\n")
-	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | typed prep plan ms | typed prep refs ms | typed prep pair ms | typed prep decode ms | typed prep post ms | typed prep summary ms | one-shot cache store ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | rows materialized | docs materialized | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---|---|---|\n")
+	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | typed prep plan ms | typed prep refs ms | typed prep pair ms | typed prep decode ms | typed prep post ms | typed prep summary ms | one-shot cache store ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | typed prep workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | rows materialized | docs materialized | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | segment file cache hit/miss | hash parity | note |\n")
+	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---|---|---|---|\n")
 	for _, q := range queries {
 		parity := "pass"
 		if p, ok := parityByName[q.Name]; ok && !p.Pass {
@@ -4715,8 +4723,8 @@ func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, qu
 		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
 			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.TypedColumnPreparePlanDurationMS, q.TypedColumnPrepareRefsDurationMS, q.TypedColumnPreparePairDurationMS, q.TypedColumnPrepareDecodeDurationMS, q.TypedColumnPreparePostDurationMS, q.TypedColumnPrepareSummaryDurationMS, q.TypedColumnOneShotCacheStoreDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.DecodedBytes, q.DecodedPayloadBytes, q.DecodedMetadataBytes, q.MappedBytes, q.HeapCopyBytes, q.RowsScanned, q.ProjectedColumns, q.PredicateCount, q.TypedCellsVisited, markdownCodeTableText(q.TypedCellsVisitedBasis), q.RowMaterializations, q.DocumentMaterializations, q.AggregateMetadataUsed, q.MetadataCostStorageBytes, q.MetadataCostInsertMS, markdownCodeTableText(columnStoreMetadataCostBasisTableText(q.MetadataCostStorageBasis, q.MetadataCostInsertBasis)), q.SortTopKPruningUsed, q.TopKLimit, q.TopKCandidates, markdownCodeTableText(q.TopKOrder), q.JSONReconstruction, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.TypedColumnPreparePlanDurationMS, q.TypedColumnPrepareRefsDurationMS, q.TypedColumnPreparePairDurationMS, q.TypedColumnPrepareDecodeDurationMS, q.TypedColumnPreparePostDurationMS, q.TypedColumnPrepareSummaryDurationMS, q.TypedColumnOneShotCacheStoreDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.TypedColumnPrepareWorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.DecodedBytes, q.DecodedPayloadBytes, q.DecodedMetadataBytes, q.MappedBytes, q.HeapCopyBytes, q.RowsScanned, q.ProjectedColumns, q.PredicateCount, q.TypedCellsVisited, markdownCodeTableText(q.TypedCellsVisitedBasis), q.RowMaterializations, q.DocumentMaterializations, q.AggregateMetadataUsed, q.MetadataCostStorageBytes, q.MetadataCostInsertMS, markdownCodeTableText(columnStoreMetadataCostBasisTableText(q.MetadataCostStorageBasis, q.MetadataCostInsertBasis)), q.SortTopKPruningUsed, q.TopKLimit, q.TopKCandidates, markdownCodeTableText(q.TopKOrder), q.JSONReconstruction, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 }
@@ -4810,19 +4818,20 @@ func renderColumnStoreTypedColumnSetupDiagnosticsMarkdown(sb *strings.Builder, r
 		return
 	}
 	sb.WriteString("## Typed Column Setup Diagnostics\n\n")
-	sb.WriteString("| cell | query | mode | query mode | metadata mode | prepare/setup ms | one-shot build ms | prep plan ms | prep refs ms | prep pair ms | prep decode ms | prep post ms | prep summary ms | cache store ms | read image ms | state build ms | dictionary ms | pruning ms | sort key ms | stats ms | range read ms | range read B | adapter ms | dense group ms | dense value ms | dense predicate ms | dense preapply ms |\n")
-	sb.WriteString("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("| cell | query | mode | query mode | metadata mode | prepare/setup ms | typed prep workers | one-shot build ms | prep plan ms | prep refs ms | prep pair ms | prep decode ms | prep post ms | prep summary ms | cache store ms | read image ms | state build ms | dictionary ms | pruning ms | sort key ms | stats ms | range read ms | range read B | adapter ms | dense group ms | dense value ms | dense predicate ms | dense preapply ms |\n")
+	sb.WriteString("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, cell := range report.JSONBenchCells {
 		if !columnStoreJSONBenchCellHasTypedColumnSetupDiagnostics(cell) {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
 			markdownCodeTableText(cell.CellLabel),
 			markdownCodeTableText(cell.Query),
 			markdownCodeTableText(cell.ExecutionMode),
 			markdownCodeTableText(cell.QueryMode),
 			markdownCodeTableText(cell.MetadataMode),
 			cell.PrepareSetupDurationMS,
+			cell.TypedColumnPrepareWorkerCount,
 			cell.TypedColumnOneShotBuildDurationMS,
 			cell.TypedColumnPreparePlanDurationMS,
 			cell.TypedColumnPrepareRefsDurationMS,
@@ -4870,7 +4879,8 @@ func columnStoreJSONBenchCellHasTypedColumnSetupDiagnostics(cell columnStoreJSON
 		cell.TypedColumnPrepareDenseGroupDurationMS != 0 ||
 		cell.TypedColumnPrepareDenseValueDurationMS != 0 ||
 		cell.TypedColumnPrepareDensePredDurationMS != 0 ||
-		cell.TypedColumnPrepareDensePreapplyMS != 0
+		cell.TypedColumnPrepareDensePreapplyMS != 0 ||
+		cell.TypedColumnPrepareWorkerCount != 0
 }
 
 func renderColumnStoreColgranuleReuseMarkdown(sb *strings.Builder, report columnStoreSuiteReport) {
