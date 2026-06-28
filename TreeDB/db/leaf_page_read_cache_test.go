@@ -1309,6 +1309,23 @@ func TestConfiguredLeafPageReadCacheEntriesReadsEnvAtOpenTime(t *testing.T) {
 	}
 }
 
+func TestConfiguredLeafPageReadCacheEntriesDefaultCapsRetainedBytes(t *testing.T) {
+	prev := LeafPageReadCacheEntries
+	LeafPageReadCacheEntries = defaultLeafPageReadCacheEntries
+	t.Cleanup(func() {
+		LeafPageReadCacheEntries = prev
+	})
+	t.Setenv(LeafPageReadCacheEntriesEnvKey, "")
+
+	got := configuredLeafPageReadCacheEntries(0)
+	if got != 8192 {
+		t.Fatalf("configuredLeafPageReadCacheEntries()=%d, want 8192", got)
+	}
+	if got*page.PageSize != 32<<20 {
+		t.Fatalf("default leaf-page read cache data bytes=%d, want 32MiB", got*page.PageSize)
+	}
+}
+
 func TestConfiguredLeafPageReadCacheEntriesOptionOverridesEnv(t *testing.T) {
 	prev := LeafPageReadCacheEntries
 	LeafPageReadCacheEntries = 8

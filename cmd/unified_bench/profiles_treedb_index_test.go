@@ -70,7 +70,7 @@ func TestBuildTreeDBOptions_LeafPageReadCacheEntriesDefaultReportsEffective(t *t
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions default leaf page read cache entries: %v", err)
 	}
-	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=default/env (effective=32768)") {
+	if got := rep.formatText(""); !strings.Contains(got, "outer_leaf_read_cache_entries=default/env (effective=8192)") {
 		t.Fatalf("resolved options missing effective default cache entries: %q", got)
 	}
 }

@@ -340,9 +340,11 @@ publish, update, read, and maintenance work.
   the process default/env override, `<0` disables the cache, and `>0` sets an
   explicit entry count.
 - `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default entry count when the
-  option is left at `0`. The default is 32768 entries, or about 128 MiB of
-  leaf-page payloads. Set the env var to `0` to disable the cache for DBs that
-  do not set `Options.LeafPageReadCacheEntries`.
+  option is left at `0`. The default is 8192 entries, or about 32 MiB of
+  leaf-page payloads. Set the env var to `32768` to restore the historical
+  128 MiB cache when a workload has evidence that the larger cache improves
+  throughput enough to justify the retained heap. Set the env var to `0` to
+  disable the cache for DBs that do not set `Options.LeafPageReadCacheEntries`.
 - Explicit and env-derived cache sizes are capped at 262144 entries to fail
   early with a clear configuration error instead of risking an accidental huge
   cache.

@@ -17,7 +17,7 @@ const (
 	// LeafPageReadCacheEntriesEnvKey names the environment variable that
 	// overrides the process default when Options.LeafPageReadCacheEntries is 0.
 	LeafPageReadCacheEntriesEnvKey  = "TREEDB_LEAF_PAGE_CACHE_ENTRIES"
-	defaultLeafPageReadCacheEntries = 32768
+	defaultLeafPageReadCacheEntries = 8192
 	maxLeafPageReadCacheEntries     = 1 << 18
 	leafPageReadCacheWays           = 4
 	// Bound miss-admission observer retries so high contention yields a skipped
