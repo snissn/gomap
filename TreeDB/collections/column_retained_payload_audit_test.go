@@ -673,6 +673,8 @@ func TestColumnRetainedSemanticStreamV1InsertFastPathMatchesRetainedJSONPipeline
 	if err != nil {
 		t.Fatalf("legacy semantic-stream-v1 block: %v", err)
 	}
+	assertColumnRetainedSemanticStreamV1BlockShapeEqual(t, gotBlock, wantBlock)
+
 	gotRows, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(gotBlock)
 	if err != nil {
 		t.Fatalf("decode semantic-stream-v1 fast path rows: %v", err)
@@ -687,6 +689,107 @@ func TestColumnRetainedSemanticStreamV1InsertFastPathMatchesRetainedJSONPipeline
 	for i := range gotRows {
 		assertJSONEqualM13C(t, gotRows[i], wantRows[i])
 	}
+}
+
+func assertColumnRetainedSemanticStreamV1BlockShapeEqual(t *testing.T, gotBlock, wantBlock []byte) {
+	t.Helper()
+	got := canonicalColumnRetainedSemanticStreamV1BlockValueBytesForTest(t, gotBlock)
+	want := canonicalColumnRetainedSemanticStreamV1BlockValueBytesForTest(t, wantBlock)
+	if bytes.Equal(got, want) {
+		return
+	}
+	gotSum := sha256.Sum256(got)
+	wantSum := sha256.Sum256(want)
+	t.Fatalf("semantic-stream-v1 block shape mismatch after canonical value JSON: got len=%d sha256=%x want len=%d sha256=%x", len(got), gotSum, len(want), wantSum)
+}
+
+func canonicalColumnRetainedSemanticStreamV1BlockValueBytesForTest(t *testing.T, block []byte) []byte {
+	t.Helper()
+	raw, err := decodeColumnRetainedSemanticStreamV1StoredBlock(block)
+	if err != nil {
+		t.Fatalf("decode semantic-stream-v1 stored block: %v", err)
+	}
+	reader := bytes.NewReader(raw[len(columnRetainedSemanticStreamV1BlockMagic):])
+	out := make([]byte, 0, len(raw))
+	out = append(out, columnRetainedSemanticStreamV1BlockMagic...)
+
+	rows := readColumnRetainedSemanticStreamV1TestUvarint(t, reader, "row count")
+	if err := validateColumnRetainedSemanticStreamV1BlockRows(rows); err != nil {
+		t.Fatalf("validate semantic-stream-v1 row count: %v", err)
+	}
+	out = binary.AppendUvarint(out, rows)
+
+	pathCount := readColumnRetainedSemanticStreamV1TestUvarint(t, reader, "path count")
+	out = binary.AppendUvarint(out, pathCount)
+	for pathOrdinal := uint64(0); pathOrdinal < pathCount; pathOrdinal++ {
+		segmentCount := readColumnRetainedSemanticStreamV1TestUvarint(t, reader, "path segment count")
+		out = binary.AppendUvarint(out, segmentCount)
+		for segmentOrdinal := uint64(0); segmentOrdinal < segmentCount; segmentOrdinal++ {
+			segmentLen := readColumnRetainedSemanticStreamV1TestUvarint(t, reader, "path segment length")
+			segment := readColumnRetainedSemanticStreamV1TestBytes(t, reader, segmentLen, "path segment")
+			out = binary.AppendUvarint(out, segmentLen)
+			out = append(out, segment...)
+		}
+
+		entryCount := readColumnRetainedSemanticStreamV1TestUvarint(t, reader, "entry count")
+		out = binary.AppendUvarint(out, entryCount)
+		var last uint64
+		for entryOrdinal := uint64(0); entryOrdinal < entryCount; entryOrdinal++ {
+			delta := readColumnRetainedSemanticStreamV1TestUvarint(t, reader, "row delta")
+			entryRow, err := columnRetainedSemanticStreamV1EntryRow(last, delta, entryOrdinal, rows)
+			if err != nil {
+				t.Fatalf("validate semantic-stream-v1 row delta: %v", err)
+			}
+			last = entryRow
+			out = binary.AppendUvarint(out, delta)
+
+			valueLen := readColumnRetainedSemanticStreamV1TestUvarint(t, reader, "value length")
+			value := readColumnRetainedSemanticStreamV1TestBytes(t, reader, valueLen, "value")
+			canonical := canonicalJSONValueForSemanticStreamV1Test(t, value)
+			out = binary.AppendUvarint(out, uint64(len(canonical)))
+			out = append(out, canonical...)
+		}
+	}
+	if reader.Len() != 0 {
+		t.Fatalf("semantic-stream-v1 block has %d trailing bytes", reader.Len())
+	}
+	return out
+}
+
+func readColumnRetainedSemanticStreamV1TestUvarint(t *testing.T, reader *bytes.Reader, label string) uint64 {
+	t.Helper()
+	value, err := binary.ReadUvarint(reader)
+	if err != nil {
+		t.Fatalf("read semantic-stream-v1 %s: %v", label, err)
+	}
+	return value
+}
+
+func readColumnRetainedSemanticStreamV1TestBytes(t *testing.T, reader *bytes.Reader, length uint64, label string) []byte {
+	t.Helper()
+	if length > uint64(reader.Len()) {
+		t.Fatalf("read semantic-stream-v1 %s: length %d exceeds remaining %d", label, length, reader.Len())
+	}
+	buf := make([]byte, int(length))
+	if _, err := reader.Read(buf); err != nil {
+		t.Fatalf("read semantic-stream-v1 %s bytes: %v", label, err)
+	}
+	return buf
+}
+
+func canonicalJSONValueForSemanticStreamV1Test(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var value any
+	if err := dec.Decode(&value); err != nil {
+		t.Fatalf("decode semantic-stream-v1 value JSON: %v", err)
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("canonicalize semantic-stream-v1 value JSON: %v", err)
+	}
+	return canonical
 }
 
 func TestColumnRetainedSemanticStreamV1StoredBlockZSTDRawLimitFallback2662(t *testing.T) {
