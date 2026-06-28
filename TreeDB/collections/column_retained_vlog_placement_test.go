@@ -480,6 +480,42 @@ func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderReuse(t *testing
 	}
 }
 
+func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderRawFallbackDoesNotAliasScratch3221(t *testing.T) {
+	_, docsA := retainedSemanticStreamDocuments(96)
+	_, docsB := retainedSemanticStreamDocumentsFrom(96, 96)
+	streamsA := retainedSemanticStreamTestStreamsFromDocuments(t, docsA)
+	streamsB := retainedSemanticStreamTestStreamsFromDocuments(t, docsB)
+
+	encoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatalf("new stored block encoder: %v", err)
+	}
+	defer encoder.close()
+
+	blockA, err := encoder.encodeStreamsWithRawLimit(len(docsA), streamsA, 1)
+	if err != nil {
+		t.Fatalf("encode raw fallback block A: %v", err)
+	}
+	if !bytes.HasPrefix(blockA, columnRetainedSemanticStreamV1BlockMagic) {
+		t.Fatalf("block A magic=%q want raw semantic-stream block", blockA[:len(columnRetainedSemanticStreamV1BlockMagic)])
+	}
+	blockACopy := append([]byte(nil), blockA...)
+
+	if _, err := encoder.encodeStreamsWithRawLimit(len(docsB), streamsB, 1); err != nil {
+		t.Fatalf("encode raw fallback block B: %v", err)
+	}
+	if !bytes.Equal(blockA, blockACopy) {
+		t.Fatal("raw fallback block A aliases reusable encoder scratch and changed after block B")
+	}
+	decodedA, err := decodeColumnRetainedSemanticStreamV1StoredBlock(blockA)
+	if err != nil {
+		t.Fatalf("decode raw fallback block A after reuse: %v", err)
+	}
+	if !bytes.Equal(decodedA, blockACopy) {
+		t.Fatal("decoded raw fallback block A differs after encoder scratch reuse")
+	}
+}
+
 func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t *testing.T) {
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -1178,6 +1214,45 @@ func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareRootFastPath(b *testin
 	}
 }
 
+func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareRootFastPathMultiBlock(b *testing.B) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids, docs := retainedSemanticStreamDocuments(columnRetainedSemanticStreamV1BlockRows * 4)
+	var bytesPerIteration int64
+	for _, doc := range docs {
+		bytesPerIteration += int64(len(doc))
+	}
+	b.ReportAllocs()
+	b.SetBytes(bytesPerIteration)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
+		if err != nil {
+			b.Fatalf("prepare semantic-stream-v1 documents with ids: %v", err)
+		}
+		if !prepared.declaredRowsReady || len(prepared.declaredRows) != len(docs) {
+			b.Fatalf("prepared declared rows ready=%t len=%d want %d", prepared.declaredRowsReady, len(prepared.declaredRows), len(docs))
+		}
+		if prepared.semanticStreamBlocks == nil {
+			b.Fatal("prepare semantic-stream-v1 documents did not return block table")
+		}
+		if i == 0 {
+			b.StopTimer()
+			reportColumnRetainedSemanticStreamBenchmarkStoredBlockBytes(b, prepared.semanticStreamBlocks, bytesPerIteration)
+			b.StartTimer()
+		}
+		resetCollectionRunTable(prepared.semanticStreamBlocks)
+	}
+}
+
 func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareNestedDeclaredPaths(b *testing.B) {
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -1217,6 +1292,25 @@ func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareNestedDeclaredPaths(b 
 
 func retainedSemanticStreamDocuments(count int) ([][]byte, [][]byte) {
 	return retainedSemanticStreamDocumentsFrom(0, count)
+}
+
+func retainedSemanticStreamTestStreamsFromDocuments(t testing.TB, docs [][]byte) *columnRetainedSemanticStreamStreams {
+	t.Helper()
+	streams := newColumnRetainedSemanticStreamStreams()
+	for row, document := range docs {
+		trimmed := bytes.TrimSpace(document)
+		if len(trimmed) == 0 {
+			trimmed = []byte("{}")
+		}
+		var root json.RawMessage
+		if err := json.Unmarshal(trimmed, &root); err != nil {
+			t.Fatalf("unmarshal retained semantic stream test row %d: %v", row, err)
+		}
+		if err := collectColumnRetainedSemanticStreamPaths(root, nil, uint64(row), streams); err != nil {
+			t.Fatalf("collect retained semantic stream test row %d: %v", row, err)
+		}
+	}
+	return streams
 }
 
 func retainedSemanticStreamDocumentsFrom(start, count int) ([][]byte, [][]byte) {
