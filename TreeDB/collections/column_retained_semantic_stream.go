@@ -380,9 +380,13 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		return out, nil
 	}
 	rootPlan, useRootFastPath := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(documents))
+	var declaredRowIDBytes []byte
+	var declaredRowValues []columnDeclaredValue
 	if useRootFastPath && rootPlan.declaredRowsReady {
 		out.declaredRows = make([]columnDeclaredRow, len(documents))
 		out.declaredRowsReady = true
+		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids))
+		declaredRowValues = make([]columnDeclaredValue, len(documents)*len(cfg.Columns))
 	}
 	retainedSkipTrie := columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg)
 	blockTable := newCollectionRunTable((len(documents) + columnRetainedSemanticStreamV1BlockRows - 1) / columnRetainedSemanticStreamV1BlockRows)
@@ -402,14 +406,21 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 		for row, i := 0, start; i < end; row, i = row+1, i+1 {
 			if useRootFastPath {
-				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner)
+				var declaredValuesDest []columnDeclaredValue
+				if rootPlan.declaredRowsReady {
+					valuesStart := i * len(cfg.Columns)
+					declaredValuesDest = declaredRowValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
+				}
+				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner, declaredValuesDest)
 				if err != nil {
 					resetCollectionRunTable(blockTable)
 					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 				}
 				if rootPlan.declaredRowsReady {
+					idStart := len(declaredRowIDBytes)
+					declaredRowIDBytes = append(declaredRowIDBytes, ids[i]...)
 					out.declaredRows[i] = columnDeclaredRow{
-						ID:     bytes.Clone(ids[i]),
+						ID:     declaredRowIDBytes[idStart:len(declaredRowIDBytes):len(declaredRowIDBytes)],
 						Values: declaredValues,
 					}
 				}
@@ -438,6 +449,14 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 	blockTable.Freeze()
 	out.semanticStreamBlocks = blockTable
 	return out, nil
+}
+
+func columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids [][]byte) int {
+	capacity := 0
+	for _, id := range ids {
+		capacity += len(id)
+	}
+	return capacity
 }
 
 func columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg ColumnStoreConfig, ids [][]byte, documentCount int) (columnRetainedSemanticStreamV1RootFastPathPlan, bool) {
@@ -480,7 +499,7 @@ func columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg ColumnStoreConf
 	return root
 }
 
-func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) ([]columnDeclaredValue, error) {
+func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner, declaredValues []columnDeclaredValue) ([]columnDeclaredValue, error) {
 	if !gjson.ValidBytes(document) {
 		return nil, errors.New("invalid JSON: invalid JSON")
 	}
@@ -543,7 +562,13 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	if !plan.declaredRowsReady {
 		return nil, nil
 	}
-	values := make([]columnDeclaredValue, len(cfg.Columns))
+	values := declaredValues
+	if values == nil && len(cfg.Columns) == 0 {
+		values = make([]columnDeclaredValue, 0)
+	}
+	if len(values) != len(cfg.Columns) {
+		values = make([]columnDeclaredValue, len(cfg.Columns))
+	}
 	var scratch []byte
 	for colIdx, col := range cfg.Columns {
 		value, err := convertColumnDeclaredJSONParserValue(col, valuesRaw[colIdx], &scratch)
