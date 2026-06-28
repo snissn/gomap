@@ -2318,6 +2318,19 @@ func TestColumnAssetSegmentAppenderCloseRequiresFileSyncBeforeRef3151(t *testing
 	if err := appender.close(); !errors.Is(err, syncErr) {
 		t.Fatalf("appender close err=%v want %v", err, syncErr)
 	}
+	closeStats := appender.closeStats
+	if closeStats.FileSync <= 0 {
+		t.Fatalf("file sync close stats=%+v want positive file sync duration", closeStats)
+	}
+	if closeStats.FileClose <= 0 {
+		t.Fatalf("file close stats=%+v want positive file close duration", closeStats)
+	}
+	if runtime.GOOS != "windows" && closeStats.DirSync <= 0 {
+		t.Fatalf("dir sync close stats=%+v want positive dir sync duration", closeStats)
+	}
+	if closeStats.CleanupDuration() <= 0 {
+		t.Fatalf("cleanup close stats=%+v want positive cleanup duration", closeStats)
+	}
 	if calls != 1 {
 		t.Fatalf("sync calls=%d want 1", calls)
 	}

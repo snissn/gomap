@@ -586,7 +586,9 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 		report.InsertStats.ColumnPublishAssetAppendDurationMS <= 0 ||
 		report.InsertStats.ColumnPublishAssetAppendOpenDurationMS <= 0 ||
 		report.InsertStats.ColumnPublishAssetAppendWriteDurationMS <= 0 ||
-		report.InsertStats.ColumnPublishAssetAppendCloseDurationMS <= 0 {
+		report.InsertStats.ColumnPublishAssetAppendCloseDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendFileSyncMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendFileCloseMS <= 0 {
 		t.Fatalf("column publish asset-family timing missing: %+v", report.InsertStats)
 	}
 	if report.InsertStats.ColumnPublishRowAssetBytes <= 0 ||
@@ -709,7 +711,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store JSON missing WAL-excluded durable storage field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`, `"column_publish_build_column_delta_duration_ms"`, `"column_publish_commit_duration_ms"`, `"column_publish_asset_preparation_duration_ms"`, `"column_publish_row_asset_prepare_duration_ms"`, `"column_publish_aggregate_metadata_prepare_duration_ms"`, `"column_publish_asset_append_duration_ms"`, `"column_publish_asset_append_open_duration_ms"`, `"column_publish_asset_append_write_duration_ms"`, `"column_publish_asset_append_close_duration_ms"`, `"column_publish_aggregate_metadata_bytes"`, `"column_publish_shared_asset_append_bytes"`, `"column_publish_required_asset_bytes"`} {
+	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`, `"column_publish_build_column_delta_duration_ms"`, `"column_publish_commit_duration_ms"`, `"column_publish_asset_preparation_duration_ms"`, `"column_publish_row_asset_prepare_duration_ms"`, `"column_publish_aggregate_metadata_prepare_duration_ms"`, `"column_publish_asset_append_duration_ms"`, `"column_publish_asset_append_open_duration_ms"`, `"column_publish_asset_append_write_duration_ms"`, `"column_publish_asset_append_close_duration_ms"`, `"column_publish_asset_append_file_sync_duration_ms"`, `"column_publish_asset_append_file_close_duration_ms"`, `"column_publish_asset_append_dir_sync_duration_ms"`, `"column_publish_asset_append_cleanup_duration_ms"`, `"column_publish_aggregate_metadata_bytes"`, `"column_publish_shared_asset_append_bytes"`, `"column_publish_required_asset_bytes"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing insert phase field %s:\n%s", want, data)
 		}
@@ -742,7 +744,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing WAL-excluded durable storage field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio", "column_publish_rows", "column_publish_aggregate_metadata_bytes", "column publish subphase", "build_column_delta_callback", "publish_commit_total", "aggregate_metadata_prepare", "asset_append", "asset_append_open", "asset_append_write", "asset_append_close"} {
+	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio", "column_publish_rows", "column_publish_aggregate_metadata_bytes", "column publish subphase", "build_column_delta_callback", "publish_commit_total", "aggregate_metadata_prepare", "asset_append", "asset_append_open", "asset_append_write", "asset_append_close", "asset_append_file_sync", "asset_append_file_close", "asset_append_dir_sync", "asset_append_cleanup"} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
@@ -2691,6 +2693,10 @@ func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *test
 		ColumnPublishAssetAppendOpen:          2 * time.Millisecond,
 		ColumnPublishAssetAppendWrite:         3 * time.Millisecond,
 		ColumnPublishAssetAppendClose:         4 * time.Millisecond,
+		ColumnPublishAssetAppendFileSync:      11 * time.Millisecond,
+		ColumnPublishAssetAppendFileClose:     12 * time.Millisecond,
+		ColumnPublishAssetAppendDirSync:       13 * time.Millisecond,
+		ColumnPublishAssetAppendCleanup:       14 * time.Millisecond,
 		ColumnPublishRowAssetBytes:            101,
 		ColumnPublishRowAssetCount:            1,
 		ColumnPublishTypedColumnBytes:         202,
@@ -2742,6 +2748,18 @@ func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *test
 	}
 	if got, want := metric.ColumnPublishAssetAppendCloseDurationMS, 4.0; got != want {
 		t.Fatalf("shared append close duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendFileSyncMS, 11.0; got != want {
+		t.Fatalf("shared append file sync duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendFileCloseMS, 12.0; got != want {
+		t.Fatalf("shared append file close duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendDirSyncMS, 13.0; got != want {
+		t.Fatalf("shared append dir sync duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendCleanupMS, 14.0; got != want {
+		t.Fatalf("shared append cleanup duration ms=%v want %v", got, want)
 	}
 	if got, want := metric.RetainedPayloadValueLogPointerizeMS, 8.0; got != want {
 		t.Fatalf("retained payload pointerize duration ms=%v want %v", got, want)
