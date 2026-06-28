@@ -366,6 +366,7 @@ const (
 	postCheckpointEntrySliceLeaseKeepPerBucket = 8
 	postFlushAppendOnlyMemLeaseKeep            = 24
 	postCheckpointAppendOnlyMemLeaseKeep       = 8
+	appendOnlyEntryPoolHighPressureDropBytes   = uint64(32 << 20)
 )
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -723,6 +724,22 @@ func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt t
 	if droppedBytes > 0 {
 		entrySlicePoolTrimDropBytesTotal.Add(uint64(droppedBytes))
 	}
+	maybeDropAppendOnlyEntryPoolsUnderPressure(level)
+}
+
+func maybeDropAppendOnlyEntryPoolsUnderPressure(level poolPressureLevel) {
+	if level == poolPressureNormal {
+		return
+	}
+	stats := memtable.AppendOnlyEntryPoolStatsSnapshot()
+	retainedBytes := stats.RetainedBytesEstimate
+	if retainedBytes == 0 {
+		return
+	}
+	if level != poolPressureCritical && retainedBytes < appendOnlyEntryPoolHighPressureDropBytes {
+		return
+	}
+	memtable.DropAppendOnlyEntryPools()
 }
 
 func publishPoolPressureSnapshot(snap poolPressureSnapshot, sampledAt time.Time) {
@@ -28910,14 +28927,19 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyMemNewAllocWithQueue := db.appendOnlyMemNewAllocWithQueue.Load()
 	appendOnlyMemNewAllocQueueBytes := db.appendOnlyMemNewAllocQueueBytes.Load()
 	appendOnlyMemPoolDropTotal := db.appendOnlyMemPoolDropTotal.Load()
-	appendOnlyEntryPoolDropTotal := memtable.AppendOnlyEntryPoolDropTotal()
+	appendOnlyEntryPoolStats := memtable.AppendOnlyEntryPoolStatsSnapshot()
 	appendOnlyMemLeaseCount, appendOnlyMemLeaseEntryCapacity, appendOnlyMemLeaseEntryBackingBytes := db.appendOnlyMemLeaseStats()
 	appendOnlyMutableCount, appendOnlyMutableEntryCapacity, appendOnlyMutableEntryBackingBytes := db.appendOnlyMutableShardEntryStats()
 	appendOnlyMutableTrimTotal := db.appendOnlyMutableTrimTotal.Load()
 	appendOnlyMutableTrimDropped := db.appendOnlyMutableTrimDropped.Load()
 	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
 	stats["treedb.cache.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
-	stats["treedb.cache.append_only.entry_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolDropTotal)
+	stats["treedb.cache.append_only.entry_pool_retained_bytes_estimate"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.RetainedBytesEstimate)
+	stats["treedb.cache.append_only.entry_pool_retained_bytes_max_estimate"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.RetainedBytesMaxEstimate)
+	stats["treedb.cache.append_only.entry_pool_gets_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.GetsTotal)
+	stats["treedb.cache.append_only.entry_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.PutsTotal)
+	stats["treedb.cache.append_only.entry_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropsTotal)
+	stats["treedb.cache.append_only.entry_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropBytesTotal)
 	stats["treedb.cache.append_only.mem_lease_count"] = fmt.Sprintf("%d", appendOnlyMemLeaseCount)
 	stats["treedb.cache.append_only.mem_lease_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryCapacity)
 	stats["treedb.cache.append_only.mem_lease_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryBackingBytes)
@@ -28934,7 +28956,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", appendOnlyMemNewAllocQueueBytes)
 	stats["treedb.process.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
 	stats["treedb.process.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
-	stats["treedb.process.append_only.entry_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolDropTotal)
+	stats["treedb.process.append_only.entry_pool_retained_bytes_estimate"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.RetainedBytesEstimate)
+	stats["treedb.process.append_only.entry_pool_retained_bytes_max_estimate"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.RetainedBytesMaxEstimate)
+	stats["treedb.process.append_only.entry_pool_gets_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.GetsTotal)
+	stats["treedb.process.append_only.entry_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.PutsTotal)
+	stats["treedb.process.append_only.entry_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropsTotal)
+	stats["treedb.process.append_only.entry_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropBytesTotal)
 	stats["treedb.process.append_only.mem_lease_count"] = fmt.Sprintf("%d", appendOnlyMemLeaseCount)
 	stats["treedb.process.append_only.mem_lease_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryCapacity)
 	stats["treedb.process.append_only.mem_lease_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryBackingBytes)

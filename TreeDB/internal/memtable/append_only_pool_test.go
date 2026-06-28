@@ -94,6 +94,50 @@ func TestDropAppendOnlyEntryPoolsReplacesPools(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyEntryPoolStatsTrackRetainedBacking(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	before := AppendOnlyEntryPoolStatsSnapshot()
+	entries := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries)
+	wantBytes := appendOnlyEntryPoolBytes(cap(entries))
+
+	putAppendOnlyEntries(entries)
+	afterPut := AppendOnlyEntryPoolStatsSnapshot()
+	if got := afterPut.RetainedBytesEstimate; got != wantBytes {
+		t.Fatalf("retained bytes after put=%d want %d", got, wantBytes)
+	}
+	if got := afterPut.PutsTotal; got != before.PutsTotal+1 {
+		t.Fatalf("puts total=%d want %d", got, before.PutsTotal+1)
+	}
+
+	got := getAppendOnlyEntries(appendOnlyMinInitialEntries)
+	afterGet := AppendOnlyEntryPoolStatsSnapshot()
+	if cap(got) != cap(entries) {
+		t.Fatalf("pooled cap=%d want %d", cap(got), cap(entries))
+	}
+	if gotRetained := afterGet.RetainedBytesEstimate; gotRetained != 0 {
+		t.Fatalf("retained bytes after get=%d want 0", gotRetained)
+	}
+	if gotGets := afterGet.GetsTotal; gotGets != before.GetsTotal+1 {
+		t.Fatalf("gets total=%d want %d", gotGets, before.GetsTotal+1)
+	}
+
+	putAppendOnlyEntries(got)
+	beforeDrop := AppendOnlyEntryPoolStatsSnapshot()
+	DropAppendOnlyEntryPools()
+	afterDrop := AppendOnlyEntryPoolStatsSnapshot()
+	if gotRetained := afterDrop.RetainedBytesEstimate; gotRetained != 0 {
+		t.Fatalf("retained bytes after drop=%d want 0", gotRetained)
+	}
+	if gotDrops := afterDrop.DropsTotal; gotDrops != beforeDrop.DropsTotal+1 {
+		t.Fatalf("drops total=%d want %d", gotDrops, beforeDrop.DropsTotal+1)
+	}
+	if gotDropBytes := afterDrop.DropBytesTotal; gotDropBytes < beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate {
+		t.Fatalf("drop bytes total=%d want at least %d", gotDropBytes, beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate)
+	}
+}
+
 func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
 	entries[0].key = []byte("k0")
