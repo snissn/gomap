@@ -22430,7 +22430,10 @@ func (db *DB) Checkpoint() error {
 			db.TriggerFlush()
 		}
 	}
-	activeBackgroundFlushBeforeWait := db.flushCoordinatorActive.Load() > 0 && db.flushCoordinatorInFlightBytes.Load() > 0
+	// Attribute the wait using the same request-time debt snapshot reported in
+	// checkpoint stats; live coordinator flags can clear before slow platforms
+	// take the flushMu sample.
+	activeBackgroundFlushBeforeWait := checkpointDebt.activeWorkers > 0 && checkpointDebt.activeInFlightBytes > 0
 	db.checkpointFlushPreemptActive.Add(1)
 	db.checkpointFlushPreemptRequests.Add(1)
 	defer addAtomicInt64FloorZero(&db.checkpointFlushPreemptActive, -1)
