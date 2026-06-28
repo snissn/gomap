@@ -52,6 +52,9 @@ const (
 	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
 )
 
+// Serializes package-pool replacement with retained-byte accounting. sync.Pool
+// is concurrent, but the estimate is for the currently reachable pool set.
+var appendOnlyEntryPoolMu sync.Mutex
 var appendOnlyEntryPoolPtrs [appendOnlyEntryPoolClassCount]atomic.Pointer[sync.Pool]
 var appendOnlyEntryPoolRetainedBytes atomic.Uint64
 var appendOnlyEntryPoolRetainedBytesMax atomic.Uint64
@@ -269,6 +272,9 @@ func subtractAppendOnlyEntryPoolRetainedBytes(bytes uint64) {
 // where retaining restore-sized warm buffers hurts steady-state RSS more than it
 // helps near-term reuse.
 func DropAppendOnlyEntryPools() {
+	appendOnlyEntryPoolMu.Lock()
+	defer appendOnlyEntryPoolMu.Unlock()
+
 	for i := range appendOnlyEntryPoolPtrs {
 		appendOnlyEntryPoolPtrs[i].Store(&sync.Pool{})
 	}
@@ -324,17 +330,20 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 	if !ok {
 		return make([]appendOnlyEntry, length)
 	}
+	appendOnlyEntryPoolMu.Lock()
 	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
 		if v := pool.Get(); v != nil {
 			if entries, ok := v.([]appendOnlyEntry); ok {
 				appendOnlyEntryPoolGetTotal.Add(1)
 				subtractAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(entries)))
 				if cap(entries) >= length && cap(entries) <= appendOnlyMaxReuseEntries(length) {
+					appendOnlyEntryPoolMu.Unlock()
 					return entries[:length]
 				}
 			}
 		}
 	}
+	appendOnlyEntryPoolMu.Unlock()
 	return make([]appendOnlyEntry, length)
 }
 
@@ -348,6 +357,8 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	if !ok {
 		return
 	}
+	appendOnlyEntryPoolMu.Lock()
+	defer appendOnlyEntryPoolMu.Unlock()
 	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
 		appendOnlyEntryPoolPutTotal.Add(1)
 		addAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(full)))
