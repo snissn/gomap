@@ -210,6 +210,7 @@ type columnTypedColumnPhysicalQueryPartDecodeOptions struct {
 }
 
 type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
+	WorkerCount         int
 	PlanNanos           int64
 	RefsNanos           int64
 	PairingNanos        int64
@@ -235,6 +236,9 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 	if diag == nil {
 		return
 	}
+	if d.WorkerCount > diag.TypedColumnPrepareWorkerCount {
+		diag.TypedColumnPrepareWorkerCount = d.WorkerCount
+	}
 	diag.TypedColumnPreparePlanNanos += d.PlanNanos
 	diag.TypedColumnPrepareRefsNanos += d.RefsNanos
 	diag.TypedColumnPreparePairingNanos += d.PairingNanos
@@ -259,6 +263,9 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedColumnPhysicalQueryPrepareDiagnostics) {
 	if d == nil {
 		return
+	}
+	if src.WorkerCount > d.WorkerCount {
+		d.WorkerCount = src.WorkerCount
 	}
 	d.PlanNanos += src.PlanNanos
 	d.RefsNanos += src.RefsNanos
@@ -640,6 +647,10 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 	}
 	phaseStart := time.Now()
 	if columnTypedColumnPhysicalQueryUseParallelPartDecode(plan, req, readCache, len(inputs), includePhysicalRows, allowDenseGroupCountDistinct, prepareDenseInt64SpanGlobalCodes, prepareDenseGroupCountDistinctGlobalCodes, prepareDenseGroupCountDistinctGlobalRanks) {
+		workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(inputs))
+		if prepareDiagnostics != nil && workers > prepareDiagnostics.WorkerCount {
+			prepareDiagnostics.WorkerCount = workers
+		}
 		// Worker read caches close after decode, so parallel TopK runners must
 		// own payload bytes instead of retaining lazy range readers.
 		decodeOpts := columnTypedColumnPhysicalQueryPartDecodeOptions{
@@ -661,6 +672,9 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			}
 		}
 	} else {
+		if prepareDiagnostics != nil && len(inputs) > 0 && prepareDiagnostics.WorkerCount < 1 {
+			prepareDiagnostics.WorkerCount = 1
+		}
 		var rawScratch []byte
 		for _, input := range inputs {
 			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, columnTypedColumnPhysicalQueryPartDecodeOptions{}, rawScratch, prepareDiagnostics)

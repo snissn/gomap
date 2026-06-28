@@ -1,6 +1,9 @@
 package collections
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestColumnPhysicalTypedColumnOneShotCacheQ1Q3NoMetadata3088(t *testing.T) {
 	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBatchA1950(), columnPhysicalQ3DenseBatchB1950()}
@@ -54,6 +57,11 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ1Q3NoMetadata3088(t *testing.T) {
 }
 
 func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
+	oldGOMAXPROCS := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() {
+		runtime.GOMAXPROCS(oldGOMAXPROCS)
+	})
+
 	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ5DenseBatchA1950(), columnPhysicalQ5DenseBatchB1950()}
 	events := flattenColumnPhysicalEvents1950(batches)
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
@@ -61,8 +69,13 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 
 	scanned := scanColumnPhysicalJSONBenchParityEventsP0(t, col, len(events))
 	req := columnPhysicalQ5DenseRequest1950()
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
 	want := columnPhysicalQ5DenseReferenceGroups1950(scanned, req.TopK)
 	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned)
+	wantPrepareWorkers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(batches))
+	if wantPrepareWorkers < 2 {
+		t.Fatalf("q5 test setup prepare workers=%d want parallel decode workers", wantPrepareWorkers)
+	}
 
 	first, err := col.RunColumnPhysicalQuery(req)
 	if err != nil {
@@ -70,6 +83,9 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	}
 	assertColumnPhysicalQ5DenseResult1950(t, "q5 first one-shot", first, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q5 first", 1, 0, 1, 1, 0)
+	if got := first.Diagnostics.TypedColumnPrepareWorkerCount; got != wantPrepareWorkers {
+		t.Fatalf("q5 first one-shot typed-column prepare workers=%d want %d diagnostics=%+v", got, wantPrepareWorkers, first.Diagnostics)
+	}
 	assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(t, col, req)
 
 	second, err := col.RunColumnPhysicalQuery(req)
@@ -78,6 +94,9 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	}
 	assertColumnPhysicalQ5DenseResult1950(t, "q5 second one-shot", second, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q5 second", 1, 1, 1, 1, 0)
+	if got := second.Diagnostics.TypedColumnPrepareWorkerCount; got != 0 {
+		t.Fatalf("q5 second cache-hit typed-column prepare workers=%d want 0 diagnostics=%+v", got, second.Diagnostics)
+	}
 }
 
 func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {

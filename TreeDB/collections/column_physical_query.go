@@ -183,6 +183,7 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnOneShotCacheMiss           bool
 	TypedColumnOneShotCacheBuild          bool
 	TypedColumnOneShotBuildNanos          int64
+	TypedColumnPrepareWorkerCount         int
 	TypedColumnPreparePlanNanos           int64
 	TypedColumnPrepareRefsNanos           int64
 	TypedColumnPreparePairingNanos        int64
