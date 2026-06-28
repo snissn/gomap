@@ -1068,6 +1068,8 @@ func reportProfileBenchBackendVlogMmapStats(b *testing.B, after, before map[stri
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.mmap_active_bytes")), "backend_vlog_mmap_active_bytes")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.grouped_frame_cache.entries")), "backend_vlog_grouped_frame_cache_entries")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.grouped_frame_cache.capacity")), "backend_vlog_grouped_frame_cache_capacity")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.grouped_frame_cache.allocated_shards")), "backend_vlog_grouped_frame_cache_allocated_shards")
+	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.vlog.grouped_frame_cache.allocated_slots")), "backend_vlog_grouped_frame_cache_allocated_slots")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.entries")), "backend_outer_leaf_cache_entries")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.capacity")), "backend_outer_leaf_cache_capacity")
 	b.ReportMetric(float64(profileBenchUintStat(after, "treedb.process.read_path.outer_leaf.cache.bytes")), "backend_outer_leaf_cache_bytes")

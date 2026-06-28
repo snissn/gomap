@@ -123,7 +123,6 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	var commandBuf []byte
 	commandBufLimit := 0
 	if opts.DeferredCommandBufferSize > 0 {
-		commandBuf = make([]byte, 0, opts.DeferredCommandBufferSize)
 		commandBufLimit = opts.DeferredCommandBufferSize
 	}
 	return &Writer{
@@ -854,6 +853,66 @@ func (w *Writer) AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN
 	return w.appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN, payload, size)
 }
 
+// AppendRawKVBatchPayloadScanCommandDirectTrusted appends a RawKVBatch command
+// from a replayable operation scanner without materializing the canonical
+// payload slice first.
+func (w *Writer) AppendRawKVBatchPayloadScanCommandDirectTrusted(lsn, baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) error {
+	if err := w.commandBufferError(); err != nil {
+		return err
+	}
+	if lsn == 0 {
+		return fmt.Errorf("%w: zero lsn", ErrCorrupt)
+	}
+	if err := plan.validate(); err != nil {
+		return err
+	}
+	size, err := commandFrameEncodedSizeFromLengths(plan.PayloadLen, 0, 0, 0)
+	if err != nil {
+		return err
+	}
+	if w.maxSegmentSize > 0 && int64(size) > w.maxSegmentSize {
+		return ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return ErrRecordTooLarge
+	}
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	total := segmentHeaderSize + size
+	if plan.PayloadLen >= directCommandPayloadMinLen {
+		return w.appendRawKVBatchPayloadScanCommandDirect(lsn, baseAppliedLSN, plan, scan, size)
+	}
+	if w.canBufferCommandFrame(total) {
+		off, err := w.reserveCommandBufferSpace(total)
+		if err != nil {
+			return err
+		}
+		newLen := off + total
+		buf := w.commandBuf[off:newLen]
+		frame := buf[segmentHeaderSize : segmentHeaderSize+size]
+		fillRawKVCommandFrameHeader(frame[:commandFrameHeaderSize], lsn, baseAppliedLSN, plan.PayloadLen)
+		payloadOff := commandFrameHeaderSize
+		if err := writeRawKVBatchPayloadPieces(plan, scan, func(part []byte) error {
+			copy(frame[payloadOff:], part)
+			payloadOff += len(part)
+			return nil
+		}); err != nil {
+			w.commandBuf = w.commandBuf[:off]
+			return err
+		}
+		if payloadOff != size {
+			w.commandBuf = w.commandBuf[:off]
+			return ErrCorrupt
+		}
+		binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
+		return nil
+	}
+	return w.appendRawKVBatchPayloadScanCommandDirect(lsn, baseAppliedLSN, plan, scan, size)
+}
+
 // AppendCommandPayloadDirectTrusted appends a canonical command payload whose
 // bytes were constructed by the matching payload encoder.
 func (w *Writer) AppendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, kind CommandKind, scope CommandScope, format PayloadFormat, payload []byte) error {
@@ -917,10 +976,7 @@ func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 	}
 	var prefix [segmentHeaderSize + commandFrameHeaderSize]byte
 	frameHeader := prefix[segmentHeaderSize:]
-	copy(frameHeader, rawKVCommandFrameHeaderTemplate[:])
-	binary.LittleEndian.PutUint64(frameHeader[20:28], lsn)
-	binary.LittleEndian.PutUint64(frameHeader[44:52], baseAppliedLSN)
-	binary.LittleEndian.PutUint32(frameHeader[56:60], uint32(len(payload)))
+	fillRawKVCommandFrameHeader(frameHeader, lsn, baseAppliedLSN, len(payload))
 	binary.LittleEndian.PutUint32(prefix[0:4], uint32(size))
 	binary.LittleEndian.PutUint32(prefix[4:8], crc.ChecksumParts(frameHeader, payload))
 	if len(payload) >= directCommandPayloadMinLen {
@@ -940,6 +996,76 @@ func (w *Writer) appendRawKVBatchPayloadCommandDirect(lsn, baseAppliedLSN uint64
 	if _, err := w.bw.Write(payload); err != nil {
 		return err
 	}
+	w.size += int64(segmentHeaderSize + size)
+	return nil
+}
+
+func (w *Writer) appendRawKVBatchPayloadScanCommandDirect(lsn, baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner, size int) error {
+	if w.pendingBatchRecs != 0 {
+		if err := w.flushPendingBatch(); err != nil {
+			return err
+		}
+	}
+	if err := w.flushBufferedCommandFrames(); err != nil {
+		return err
+	}
+	var prefix [segmentHeaderSize + commandFrameHeaderSize]byte
+	frameHeader := prefix[segmentHeaderSize:]
+	fillRawKVCommandFrameHeader(frameHeader, lsn, baseAppliedLSN, plan.PayloadLen)
+	sum := crc.Checksum(frameHeader)
+	if err := writeRawKVBatchPayloadPieces(plan, scan, func(part []byte) error {
+		sum = crc.Update(sum, part)
+		return nil
+	}); err != nil {
+		return err
+	}
+	binary.LittleEndian.PutUint32(prefix[0:4], uint32(size))
+	binary.LittleEndian.PutUint32(prefix[4:8], sum)
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	if err := writeFull(w.f, prefix[:]); err != nil {
+		return w.poisonCommandBuffer(err)
+	}
+	scratch := w.scratch[:0]
+	if cap(scratch) < batchChecksumChunkBytes {
+		scratch = make([]byte, 0, batchChecksumChunkBytes)
+	}
+	flushScratch := func() error {
+		if len(scratch) == 0 {
+			return nil
+		}
+		if err := writeFull(w.f, scratch); err != nil {
+			return err
+		}
+		scratch = scratch[:0]
+		return nil
+	}
+	if err := writeRawKVBatchPayloadPieces(plan, scan, func(part []byte) error {
+		for len(part) > 0 {
+			free := cap(scratch) - len(scratch)
+			if free == 0 {
+				if err := flushScratch(); err != nil {
+					return err
+				}
+				free = cap(scratch)
+			}
+			if free > len(part) {
+				free = len(part)
+			}
+			scratch = append(scratch, part[:free]...)
+			part = part[free:]
+		}
+		return nil
+	}); err != nil {
+		w.scratch = scratch[:0]
+		return w.poisonCommandBuffer(err)
+	}
+	if err := flushScratch(); err != nil {
+		w.scratch = scratch[:0]
+		return w.poisonCommandBuffer(err)
+	}
+	w.scratch = scratch[:0]
 	w.size += int64(segmentHeaderSize + size)
 	return nil
 }
@@ -977,6 +1103,13 @@ func (w *Writer) appendCommandPayloadDirectTrusted(lsn, baseAppliedLSN uint64, k
 	}
 	w.size += int64(segmentHeaderSize + size)
 	return nil
+}
+
+func fillRawKVCommandFrameHeader(frame []byte, lsn, baseAppliedLSN uint64, payloadLen int) {
+	copy(frame, rawKVCommandFrameHeaderTemplate[:])
+	binary.LittleEndian.PutUint64(frame[20:28], lsn)
+	binary.LittleEndian.PutUint64(frame[44:52], baseAppliedLSN)
+	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
 }
 
 func fillTrustedCommandFrameHeader(frame []byte, lsn, baseAppliedLSN uint64, kind CommandKind, scope CommandScope, format PayloadFormat, payloadLen int) {
@@ -1029,7 +1162,7 @@ func (w *Writer) canBufferCommandFrame(total int) bool {
 }
 
 func (w *Writer) commandBufferLimit() int {
-	if w == nil || w.commandBufLimit <= 0 || cap(w.commandBuf) == 0 {
+	if w == nil || w.commandBufLimit <= 0 {
 		return 0
 	}
 	return w.commandBufLimit

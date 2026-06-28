@@ -1068,6 +1068,10 @@ func writeManifestString(b *bytes.Buffer, value string) {
 	_, _ = b.WriteString(value)
 }
 
+func manifestStringEncodedSize(value string) int {
+	return 8 + len(value)
+}
+
 func writeColumnManifestSortKey(b *bytes.Buffer, sortKeys []ColumnSortKey) {
 	// Callers validate the cap before encoding; keep this defensive marker local
 	// to the manifest format so readers and writers share one bound.

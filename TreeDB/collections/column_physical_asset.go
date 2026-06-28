@@ -222,7 +222,50 @@ func columnDeclaredJSONParserValueSupported(valueType ColumnStoreValueType) bool
 	}
 }
 
+type columnDeclaredStringInterner struct {
+	values []string
+	lookup map[string]string
+}
+
+const columnDeclaredStringInternerLinearLimit = 16
+
+func (i *columnDeclaredStringInterner) intern(value []byte) string {
+	if i == nil {
+		return string(value)
+	}
+	if len(value) == 0 {
+		return ""
+	}
+	if i.lookup != nil {
+		if interned, ok := i.lookup[string(value)]; ok {
+			return interned
+		}
+		interned := string(value)
+		i.lookup[interned] = interned
+		return interned
+	}
+	for _, interned := range i.values {
+		if interned == string(value) {
+			return interned
+		}
+	}
+	interned := string(value)
+	i.values = append(i.values, interned)
+	if len(i.values) > columnDeclaredStringInternerLinearLimit {
+		i.lookup = make(map[string]string, len(i.values)*2)
+		for _, value := range i.values {
+			i.lookup[value] = value
+		}
+		i.values = nil
+	}
+	return interned
+}
+
 func convertColumnDeclaredJSONParserValue(col ColumnStoreColumn, raw jsonParserIndexValue, scratch *[]byte) (columnDeclaredValue, error) {
+	return convertColumnDeclaredJSONParserValueWithStringInterner(col, raw, scratch, nil)
+}
+
+func convertColumnDeclaredJSONParserValueWithStringInterner(col ColumnStoreColumn, raw jsonParserIndexValue, scratch *[]byte, stringInterner *columnDeclaredStringInterner) (columnDeclaredValue, error) {
 	exists := raw.valueType != jsonparser.NotExist
 	value := columnDeclaredValue{Type: col.ValueType, Present: exists}
 	if !exists || raw.valueType == jsonparser.Null {
@@ -247,7 +290,7 @@ func convertColumnDeclaredJSONParserValue(col ColumnStoreColumn, raw jsonParserI
 		if err != nil {
 			return columnDeclaredValue{}, err
 		}
-		value.String = string(unescaped)
+		value.String = stringInterner.intern(unescaped)
 	case ColumnStoreValueFloat32Vector:
 		values, err := convertColumnJSONParserFloat32Vector(raw, columnStoreFloat32VectorElementsPerRow(col))
 		if err != nil {

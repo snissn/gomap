@@ -30,6 +30,8 @@ const (
 	leafGenerationPlanSkipWholeGenerationGC  = "whole_generation_gc_candidate"
 	leafGenerationPlanSkipFreshGeneration    = "fresh_generation"
 	leafGenerationPlanSkipNoDeadBytes        = "no_dead_bytes"
+
+	leafGenerationGroupedFrameScanCacheEntries = 2048
 )
 
 type LeafGenerationPlanOptions struct {
@@ -116,7 +118,7 @@ type leafGenerationScanContext struct {
 	lastFileID    uint32
 	lastFileState *leafGenerationScanFileState
 	childStacks   [][]uint64
-	groupedFrames map[groupedRecordKey]leafGenerationGroupedFrameInfo
+	groupedFrames leafGenerationGroupedFrameScanCache
 }
 
 type leafGenerationLiveStatsScanOptions struct {
@@ -600,6 +602,58 @@ type leafGenerationGroupedFrameInfo struct {
 	offsets   [valuelog.MaxFrameK + 1]uint32
 }
 
+type leafGenerationGroupedFrameScanCache struct {
+	max    int
+	frames map[groupedRecordKey]leafGenerationGroupedFrameInfo
+	order  []groupedRecordKey
+	next   int
+}
+
+func newLeafGenerationGroupedFrameScanCache(max int) leafGenerationGroupedFrameScanCache {
+	return leafGenerationGroupedFrameScanCache{max: max}
+}
+
+func (cache *leafGenerationGroupedFrameScanCache) get(key groupedRecordKey) (leafGenerationGroupedFrameInfo, bool) {
+	if cache == nil || cache.frames == nil {
+		return leafGenerationGroupedFrameInfo{}, false
+	}
+	info, ok := cache.frames[key]
+	return info, ok
+}
+
+func (cache *leafGenerationGroupedFrameScanCache) store(key groupedRecordKey, info leafGenerationGroupedFrameInfo) {
+	if cache == nil || cache.max <= 0 {
+		return
+	}
+	if cache.frames == nil {
+		cache.frames = make(map[groupedRecordKey]leafGenerationGroupedFrameInfo, min(cache.max, 64))
+	}
+	if _, ok := cache.frames[key]; ok {
+		cache.frames[key] = info
+		return
+	}
+	if len(cache.frames) < cache.max {
+		cache.frames[key] = info
+		cache.order = append(cache.order, key)
+		return
+	}
+	if cache.next < 0 || cache.next >= len(cache.order) {
+		cache.next = 0
+	}
+	evict := cache.order[cache.next]
+	delete(cache.frames, evict)
+	cache.order[cache.next] = key
+	cache.next = (cache.next + 1) % len(cache.order)
+	cache.frames[key] = info
+}
+
+func (cache *leafGenerationGroupedFrameScanCache) len() int {
+	if cache == nil {
+		return 0
+	}
+	return len(cache.frames)
+}
+
 func (info leafGenerationGroupedFrameInfo) liveByteContribution(subIndex uint16) (uint32, bool) {
 	if info.k <= 1 {
 		if info.recordLen == 0 {
@@ -643,10 +697,8 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 	if err != nil {
 		return leafGenerationGroupedFrameInfo{}, false, err
 	}
-	if scan.groupedFrames != nil {
-		if info, ok := scan.groupedFrames[key]; ok {
-			return info, true, nil
-		}
+	if info, ok := scan.groupedFrames.get(key); ok {
+		return info, true, nil
 	}
 	f := scan.snap.state.ValueLogSet.Files[vptr.FileID]
 	if f == nil || f.File == nil {
@@ -720,10 +772,7 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 		off += 4
 	}
 	info.rawLen = info.offsets[k]
-	if scan.groupedFrames == nil {
-		scan.groupedFrames = make(map[groupedRecordKey]leafGenerationGroupedFrameInfo, 64)
-	}
-	scan.groupedFrames[key] = info
+	scan.groupedFrames.store(key, info)
 	return info, true, nil
 }
 
@@ -913,6 +962,7 @@ func (db *DB) scanLeafGenerationLiveStatsWithOptions(ctx context.Context, snap *
 		fileStateByID: fileStateByID,
 		memo:          make(map[uint64]leafGenerationSubtreeStats, 64),
 		cacheEnabled:  !opts.DisableCache && !verifyAlways,
+		groupedFrames: newLeafGenerationGroupedFrameScanCache(leafGenerationGroupedFrameScanCacheEntries),
 	}
 	roots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
 	if err != nil {

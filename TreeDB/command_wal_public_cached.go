@@ -41,16 +41,43 @@ func (tdb *DB) appendPublicRawKVCommandPayload(payload []byte, sync bool) error 
 	return err
 }
 
+func (tdb *DB) appendPublicRawKVCommandEntries(entries []batch.Entry, sync bool) error {
+	if tdb == nil || !tdb.commandWALCached || len(entries) == 0 {
+		return nil
+	}
+	if tdb.backend == nil {
+		return ErrClosed
+	}
+	lsn, err := tdb.backend.AppendRawKVCommandWALOrderedEntries(entries, sync)
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+	}
+	return err
+}
+
+func (tdb *DB) appendPublicRawKVCommandEntryScan(scanEntries func(func(batch.Entry) error) error, sync bool) error {
+	if tdb == nil || !tdb.commandWALCached || scanEntries == nil {
+		return nil
+	}
+	if tdb.backend == nil {
+		return ErrClosed
+	}
+	lsn, err := tdb.backend.AppendRawKVCommandWALOrderedEntryScan(scanEntries, sync)
+	if lsn != 0 {
+		tdb.recordPublicCommandWALPendingLSN(lsn)
+	}
+	return err
+}
+
 func (tdb *DB) appendPublicRawKVDeleteRangeCommand(start, end []byte, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || batch.IsDeleteRangeNoop(start, end) {
 		return nil
 	}
-	var payload commitlog.RawKVBatchPayloadBuilder
-	_ = payload.ResetWithHint(1, len(start)+len(end))
-	if _, err := payload.AppendDeleteRange(start, end); err != nil {
-		return err
-	}
-	return tdb.appendPublicRawKVCommandPayload(payload.Payload(), sync)
+	return tdb.appendPublicRawKVCommandEntries([]batch.Entry{{
+		Type:  batch.OpDeleteRange,
+		Key:   start,
+		Value: end,
+	}}, sync)
 }
 
 func (tdb *DB) recordPublicCommandWALPendingLSN(lsn uint64) {
@@ -225,15 +252,18 @@ func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
 }
 
 type commandWALPublicBatch struct {
-	db                *DB
-	inner             Batch
-	innerSetViewFn    func(key, value []byte) error
-	innerDeleteViewFn func(key []byte) error
-	payload           commitlog.RawKVBatchPayloadBuilder
-	payloadOpHint     int
-	payloadByteHint   int
-	opCount           int
-	dirty             bool
+	db                  *DB
+	inner               Batch
+	innerSetViewFn      func(key, value []byte) error
+	innerDeleteViewFn   func(key []byte) error
+	payload             commitlog.RawKVBatchPayloadBuilder
+	payloadOpHint       int
+	payloadByteHint     int
+	payloadSoftCapBytes int
+	payloadBypass       bool
+	opCount             int
+	hasDeleteRange      bool
+	dirty               bool
 	// retainPayloadAfterWrite is set by adapter-only replay-view helpers. It
 	// keeps payload-owned key/value views valid after a successful Write until
 	// Reset/Close or the next mutation. Ordinary public Batch callers do not use
@@ -246,6 +276,10 @@ type commandWALPublicBatch struct {
 // bounded, so this avoids repeated grow/copy churn without unbounded retention.
 const commandWALPublicBatchEstimatedKeyValueBytes = 192
 
+// Keep the public command-WAL batch payload builder below the Celestia-observed
+// large-batch peak while preserving the compact fast path for ordinary batches.
+const commandWALPublicBatchPayloadSoftCapBytes = 128 << 20
+
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	b := &commandWALPublicBatch{db: tdb, inner: inner}
 	b.disableInnerStreamingBypass()
@@ -257,6 +291,7 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
 	}
 	b.payloadOpHint = opHint
 	b.payloadByteHint = byteHint
+	b.payloadSoftCapBytes = commandWALPublicBatchPayloadSoftCapBytes
 	b.resetPayloadWithHint()
 	return b
 }
@@ -266,6 +301,8 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 		return
 	}
 	_ = b.payload.ResetWithHint(b.payloadOpHint, b.payloadByteHint)
+	b.payloadBypass = false
+	b.hasDeleteRange = false
 }
 
 func (b *commandWALPublicBatch) preparePayloadForAppend() {
@@ -279,6 +316,7 @@ func (b *commandWALPublicBatch) preparePayloadForAppend() {
 	// path after Write.
 	b.resetPayloadWithHint()
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.retainPayloadAfterWrite = false
 }
 
@@ -350,12 +388,30 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews boo
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
+	if !retainReplayViews {
+		if err := b.inner.Set(key, value); err != nil {
+			return nil, nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.dirty = true
+		return nil, nil, nil
+	}
 	if retainReplayViews && commandWALPublicAllZeroBytes(value) {
 		// The raw-KV payload builder tracks the first zero value by backing-array
 		// identity so repeated immutable zero buffers can avoid rescanning. Adapter
 		// replay-byte callers may reuse and mutate their value buffer between Put
 		// calls, so keep that compact-zero identity tied to an immutable copy.
 		value = append([]byte(nil), value...)
+	}
+	if b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
+		if err := b.inner.Set(key, value); err != nil {
+			return nil, nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.dirty = true
+		return nil, nil, nil
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, valueView, err = b.payload.AppendSet(key, value)
@@ -398,6 +454,24 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews bool) (
 	}
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
+	if !retainReplayViews {
+		if err := b.inner.Delete(key); err != nil {
+			return nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.dirty = true
+		return nil, nil
+	}
+	if b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
+		if err := b.inner.Delete(key); err != nil {
+			return nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.dirty = true
+		return nil, nil
+	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, err = b.payload.AppendDelete(key)
 	if err != nil {
@@ -423,15 +497,12 @@ func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
 		return nil
 	}
 	b.preparePayloadForAppend()
-	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	if _, err := b.payload.AppendDeleteRange(start, end); err != nil {
-		return err
-	}
 	if err := b.inner.DeleteRange(start, end); err != nil {
-		b.payload.Truncate(oldLen, oldCount)
 		return err
 	}
+	b.payloadBypass = true
 	b.opCount++
+	b.hasDeleteRange = true
 	b.dirty = true
 	return nil
 }
@@ -450,6 +521,34 @@ func (b *commandWALPublicBatch) innerDeleteView(key []byte) error {
 	return b.inner.Delete(key)
 }
 
+func (b *commandWALPublicBatch) shouldBypassPayloadAppendSet(key, value []byte, retainReplayViews bool) bool {
+	retainedCap, err := b.payload.RetainedCapAfterAppendSet(key, value)
+	return b.shouldBypassPayloadAppendRetainedCap(retainedCap, err, retainReplayViews)
+}
+
+func (b *commandWALPublicBatch) shouldBypassPayloadAppendDelete(key []byte, retainReplayViews bool) bool {
+	retainedCap, err := b.payload.RetainedCapAfterAppendDelete(key)
+	return b.shouldBypassPayloadAppendRetainedCap(retainedCap, err, retainReplayViews)
+}
+
+func (b *commandWALPublicBatch) shouldBypassPayloadAppendDeleteRange(start, end []byte) bool {
+	retainedCap, err := b.payload.RetainedCapAfterAppendDeleteRange(start, end)
+	return b.shouldBypassPayloadAppendRetainedCap(retainedCap, err, false)
+}
+
+func (b *commandWALPublicBatch) shouldBypassPayloadAppendRetainedCap(retainedCap int, predictionErr error, retainReplayViews bool) bool {
+	if b == nil || retainReplayViews || b.payloadSoftCapBytes <= 0 {
+		return false
+	}
+	if b.payloadBypass {
+		return true
+	}
+	if predictionErr != nil {
+		return true
+	}
+	return retainedCap > b.payloadSoftCapBytes
+}
+
 func (b *commandWALPublicBatch) Write() error {
 	return b.write(false)
 }
@@ -461,6 +560,13 @@ func (b *commandWALPublicBatch) WriteSync() error {
 func (b *commandWALPublicBatch) write(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
+	}
+	if b.db != nil {
+		unlock, err := b.db.beginPublicOperation()
+		if err != nil {
+			return err
+		}
+		defer unlock()
 	}
 	if b.dirty {
 		writer, ok := b.inner.(interface {
@@ -479,6 +585,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 			b.resetPayloadWithHint()
 		}
 		b.opCount = 0
+		b.hasDeleteRange = false
 		b.dirty = false
 		return nil
 	}
@@ -496,6 +603,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		b.resetPayloadWithHint()
 	}
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.dirty = false
 	return nil
 }
@@ -513,6 +621,7 @@ func (b *commandWALPublicBatch) Close() error {
 	b.innerDeleteViewFn = nil
 	b.resetPayloadWithHint()
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = true
@@ -528,6 +637,7 @@ func (b *commandWALPublicBatch) Reset() {
 		b.disableInnerStreamingBypass()
 		b.resetPayloadWithHint()
 		b.opCount = 0
+		b.hasDeleteRange = false
 		b.dirty = false
 		b.retainPayloadAfterWrite = false
 		b.closed = false
@@ -538,6 +648,7 @@ func (b *commandWALPublicBatch) Reset() {
 	b.disableInnerStreamingBypass()
 	b.resetPayloadWithHint()
 	b.opCount = 0
+	b.hasDeleteRange = false
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = false
@@ -556,7 +667,7 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
-	if b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
 		return b.payload.Payload(), nil
 	}
 	byteHint, _ := b.inner.GetByteSize()
@@ -582,11 +693,14 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
-	payload, err := b.commandWALPayload()
-	if err != nil {
-		return err
+	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+		payload, err := b.commandWALPayload()
+		if err != nil {
+			return err
+		}
+		return b.db.appendPublicRawKVCommandPayload(payload, sync)
 	}
-	return b.db.appendPublicRawKVCommandPayload(payload, sync)
+	return b.db.appendPublicRawKVCommandEntryScan(b.inner.Replay, sync)
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {

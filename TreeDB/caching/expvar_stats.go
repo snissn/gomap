@@ -134,13 +134,19 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 		if isProcessWideExpvarKey(k) ||
 			strings.HasPrefix(k, "treedb.process.identity.") ||
 			strings.HasPrefix(k, "treedb.vlog.mmap") ||
+			strings.HasPrefix(k, "treedb.vlog.decode_buffer_grow.") ||
+			strings.HasPrefix(k, "treedb.vlog.decode_scratch.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_grouped_frame_cache.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_decode_buffer_grow.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_decode_scratch.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_write_mode.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_payload_split.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_auto.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_dict.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_generation.") ||
+			k == "treedb.cache.vlog_retained_segments" ||
+			k == "treedb.cache.vlog_retained_bytes_estimate" ||
 			strings.HasPrefix(k, "treedb.cache.vlog_retained_prune.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_zombie.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_payload_kind.") ||

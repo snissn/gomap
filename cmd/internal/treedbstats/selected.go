@@ -53,6 +53,8 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.vlog.grouped_frame_cache."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_grouped_frame_cache."):
+		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_zombie."):
 		return true
 	case strings.HasPrefix(key, "treedb.process.memory."):
@@ -84,6 +86,10 @@ func isSelectedKey(key string) bool {
 	case key == "treedb.cache.queue_len":
 		return true
 	case key == "treedb.cache.queue_backlog_bytes":
+		return true
+	case key == "treedb.cache.vlog_retained_segments":
+		return true
+	case key == "treedb.cache.vlog_retained_bytes_estimate":
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_retained_prune."):
 		return true

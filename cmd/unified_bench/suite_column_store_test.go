@@ -579,6 +579,35 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if report.InsertStats.ColumnPublishAssetPreparationDurationMS <= 0 {
 		t.Fatalf("column publish asset preparation timing missing: %+v", report.InsertStats)
 	}
+	if report.InsertStats.ColumnPublishRowAssetPrepareDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishDictionaryPrepareDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishInt64PrepareDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAggregateMetadataDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendOpenDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendWriteDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendCloseDurationMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendFileSyncMS <= 0 ||
+		report.InsertStats.ColumnPublishAssetAppendFileCloseMS <= 0 {
+		t.Fatalf("column publish asset-family timing missing: %+v", report.InsertStats)
+	}
+	if report.InsertStats.ColumnPublishRowAssetBytes <= 0 ||
+		report.InsertStats.ColumnPublishDictionaryBytes <= 0 ||
+		report.InsertStats.ColumnPublishDictionaryCount <= 0 ||
+		report.InsertStats.ColumnPublishInt64Bytes <= 0 ||
+		report.InsertStats.ColumnPublishInt64Count <= 0 ||
+		report.InsertStats.ColumnPublishAggregateMetadataBytes <= 0 ||
+		report.InsertStats.ColumnPublishAggregateMetadataCount <= 0 ||
+		report.InsertStats.ColumnPublishSharedAppendBytes <= 0 {
+		t.Fatalf("column publish asset-family byte counters missing: %+v", report.InsertStats)
+	}
+	if report.MetadataCost.AggregateMetadataPrepareMS <= 0 || report.MetadataCost.InsertCostDurationMS <= 0 || report.MetadataCost.InsertCostUpperBoundMS <= 0 {
+		t.Fatalf("metadata cost missing split insert accounting: %+v", report.MetadataCost)
+	}
+	if report.MetadataCost.InsertCostBasis == "column_publish_asset_preparation_total_current_upper_bound" ||
+		report.MetadataCost.InsertCostBasis == "column_publish_asset_preparation_total_upper_bound_all_asset_families" {
+		t.Fatalf("metadata cost basis should not be full asset-preparation upper bound when metadata refs exist: %+v", report.MetadataCost)
+	}
 	if report.InsertStats.ColumnPublishManifestEncodeDurationMS < 0 || report.InsertStats.ColumnPublishRootDeltaDurationMS < 0 {
 		t.Fatalf("column publish tiny subphase timing invalid: %+v", report.InsertStats)
 	}
@@ -682,12 +711,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store JSON missing WAL-excluded durable storage field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`, `"column_publish_build_column_delta_duration_ms"`, `"column_publish_commit_duration_ms"`, `"column_publish_asset_preparation_duration_ms"`, `"column_publish_required_asset_bytes"`} {
+	for _, want := range []string{`"insert_stats"`, `"retained_payload_prepare_duration_ms"`, `"retained_payload_prepare_ns_per_row"`, `"retained_payload_declared_rows"`, `"column_store_declared_row_reuse_coverage_ratio"`, `"column_publish_build_column_delta_duration_ms"`, `"column_publish_commit_duration_ms"`, `"column_publish_asset_preparation_duration_ms"`, `"column_publish_row_asset_prepare_duration_ms"`, `"column_publish_aggregate_metadata_prepare_duration_ms"`, `"column_publish_asset_append_duration_ms"`, `"column_publish_asset_append_open_duration_ms"`, `"column_publish_asset_append_write_duration_ms"`, `"column_publish_asset_append_close_duration_ms"`, `"column_publish_asset_append_file_sync_duration_ms"`, `"column_publish_asset_append_file_close_duration_ms"`, `"column_publish_asset_append_dir_sync_duration_ms"`, `"column_publish_asset_append_cleanup_duration_ms"`, `"column_publish_aggregate_metadata_bytes"`, `"column_publish_shared_asset_append_bytes"`, `"column_publish_required_asset_bytes"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing insert phase field %s:\n%s", want, data)
 		}
 	}
-	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"metadata_cost"`, `"aggregate_metadata_storage_bytes"`, `"aggregate_metadata_sidecar_bytes"`, `"aggregate_metadata_embedded_bytes"`, `"aggregate_metadata_refs"`, `"insert_cost_basis"`, `"storage_cost_basis"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
+	for _, want := range []string{`"jsonbench_cells"`, `"cell_label"`, `"sort_layout"`, `"execution_mode"`, `"metadata_data_scan_path"`, `"metadata_cost"`, `"aggregate_metadata_storage_bytes"`, `"aggregate_metadata_sidecar_bytes"`, `"aggregate_metadata_embedded_bytes"`, `"aggregate_metadata_refs"`, `"aggregate_metadata_prepare_duration_ms"`, `"aggregate_metadata_append_share_duration_ms"`, `"insert_cost_upper_bound_duration_ms"`, `"insert_cost_basis"`, `"insert_cost_upper_bound_basis"`, `"storage_cost_basis"`, `"mutation_mode"`, `"retained_payload_policy"`, `"retained_payload_encoding"`, `"retained_payload_encoding_status"`, `"retained_payload_compression"`, `"retained_payload_compression_policy"`, `"retained_payload_compression_status"`, `"typed_storage_owner"`, `"row_count"`, `"reconstruction_status"`, `"full_data_caveat"`, `"storage_accounting_caveat"`, `"external_jsonbench_status"`, `"colgranule_reuse_map"`, `"codec_layouts"`, `"compression_attribution"`, `"codec_layout_label"`, `"compression_policy_label"`, `"compressed_bytes"`, `"decompressed_bytes"`, `"raw_bytes"`, `"compression_ratio"`, `"compression_duration_source"`, `"decompression_duration_source"`, `"benchmark_b_per_op"`, `"benchmark_allocs_per_op"`, `"benchmark_allocation_source"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("column store JSON missing reporting field %s:\n%s", want, data)
 		}
@@ -715,12 +744,12 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing WAL-excluded durable storage field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio", "column_publish_rows", "column publish subphase", "build_column_delta_callback", "publish_commit_total"} {
+	for _, want := range []string{"## Insert Phase Stats", "retained_payload_prepare", "retained_payload_declared_rows", "column_store_declared_row_reuse_coverage_ratio", "column_publish_rows", "column_publish_aggregate_metadata_bytes", "column publish subphase", "build_column_delta_callback", "publish_commit_total", "aggregate_metadata_prepare", "asset_append", "asset_append_open", "asset_append_write", "asset_append_close", "asset_append_file_sync", "asset_append_file_close", "asset_append_dir_sync", "asset_append_cleanup"} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "insert_cost_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "aggregate_metadata_prepare_duration_ms", "aggregate_metadata_append_share_duration_ms", "insert_cost_upper_bound_duration_ms", "insert_cost_basis", "insert_cost_upper_bound_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "typed prep decode ms", "one-shot cache store ms", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
 		}
@@ -2368,52 +2397,75 @@ func TestColumnStoreJSONBenchPreparedParityMismatchIsFatal1955(t *testing.T) {
 
 func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *testing.T) {
 	q := columnStoreQueryMetric{
-		Name:                     "q4a",
-		PlanLabel:                columnStorePathSerialColumnScan,
-		StorageSource:            string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
-		FallbackReason:           string(collections.ColumnPhysicalQueryFallbackNone),
-		Rows:                     7,
-		RowsProcessed:            5,
-		RowsProcessedKnown:       true,
-		ResultCount:              2,
-		RawHash:                  11,
-		ProductionHash:           11,
-		ScanDurationMS:           1.5,
-		ReduceDurationMS:         2.5,
-		AdapterDurationMS:        0.75,
-		PrepareSetupDurationMS:   0.50,
-		RunDurationMS:            6.00,
-		RenderHashDurationMS:     0.25,
-		TotalQueryDurationMS:     6.75,
-		hotRunDuration:           6 * time.Millisecond,
-		BytesRead:                2048,
-		DecodedBytes:             1536,
-		DecodedPayloadBytes:      1024,
-		DecodedMetadataBytes:     512,
-		MappedBytes:              384,
-		HeapCopyBytes:            1152,
-		ProjectedColumns:         2,
-		PredicateCount:           1,
-		TypedCellsVisited:        26,
-		TypedCellsVisitedBasis:   "rows_scanned_x_projected_columns",
-		RowMaterializations:      1,
-		DocumentMaterializations: 2,
-		MetadataCostStorageBytes: 4096,
-		MetadataCostStorageBasis: "storage_basis",
-		MetadataCostInsertMS:     7.25,
-		MetadataCostInsertNsRow:  250,
-		MetadataCostInsertBasis:  "insert_basis",
-		SortTopKPruningUsed:      true,
-		JSONReconstruction:       true,
-		RowsScanned:              13,
-		RowsMatched:              3,
-		ReduceRows:               2,
-		TopKLimit:                3,
-		TopKCandidates:           9,
-		TopKOrder:                string(collections.ColumnPhysicalQueryTopKInt64Asc),
-		TimeOrderTopKUsed:        true,
-		DecodedBlocks:            2,
-		DecodedGranules:          4,
+		Name:                                   "q4a",
+		PlanLabel:                              columnStorePathSerialColumnScan,
+		StorageSource:                          string(collections.ColumnPhysicalQueryStorageSourceCompatibilityDictionaryCodeInt64Asset),
+		FallbackReason:                         string(collections.ColumnPhysicalQueryFallbackNone),
+		Rows:                                   7,
+		RowsProcessed:                          5,
+		RowsProcessedKnown:                     true,
+		ResultCount:                            2,
+		RawHash:                                11,
+		ProductionHash:                         11,
+		ScanDurationMS:                         1.5,
+		ReduceDurationMS:                       2.5,
+		AdapterDurationMS:                      0.75,
+		PrepareSetupDurationMS:                 0.50,
+		RunDurationMS:                          6.00,
+		RenderHashDurationMS:                   0.25,
+		TotalQueryDurationMS:                   6.75,
+		hotRunDuration:                         6 * time.Millisecond,
+		BytesRead:                              2048,
+		DecodedBytes:                           1536,
+		DecodedPayloadBytes:                    1024,
+		DecodedMetadataBytes:                   512,
+		MappedBytes:                            384,
+		HeapCopyBytes:                          1152,
+		ProjectedColumns:                       2,
+		PredicateCount:                         1,
+		TypedCellsVisited:                      26,
+		TypedCellsVisitedBasis:                 "rows_scanned_x_projected_columns",
+		RowMaterializations:                    1,
+		DocumentMaterializations:               2,
+		MetadataCostStorageBytes:               4096,
+		MetadataCostStorageBasis:               "storage_basis",
+		MetadataCostInsertMS:                   7.25,
+		MetadataCostInsertNsRow:                250,
+		MetadataCostInsertBasis:                "insert_basis",
+		SortTopKPruningUsed:                    true,
+		JSONReconstruction:                     true,
+		RowsScanned:                            13,
+		RowsMatched:                            3,
+		ReduceRows:                             2,
+		TopKLimit:                              3,
+		TopKCandidates:                         9,
+		TopKOrder:                              string(collections.ColumnPhysicalQueryTopKInt64Asc),
+		TimeOrderTopKUsed:                      true,
+		DecodedBlocks:                          2,
+		DecodedGranules:                        4,
+		TypedColumnOneShotCacheMiss:            true,
+		TypedColumnOneShotCacheBuild:           true,
+		TypedColumnOneShotBuildDurationMS:      0.125,
+		TypedColumnPreparePlanDurationMS:       0.010,
+		TypedColumnPrepareRefsDurationMS:       0.011,
+		TypedColumnPreparePairDurationMS:       0.012,
+		TypedColumnPrepareDecodeDurationMS:     0.080,
+		TypedColumnPreparePostDurationMS:       0.013,
+		TypedColumnPrepareSummaryDurationMS:    0.014,
+		TypedColumnOneShotCacheStoreDurationMS: 0.015,
+		TypedColumnPrepareReadImageDurationMS:  0.016,
+		TypedColumnPrepareStateBuildDurationMS: 0.017,
+		TypedColumnPrepareDictionaryDurationMS: 0.018,
+		TypedColumnPreparePruningDurationMS:    0.019,
+		TypedColumnPrepareSortKeyDurationMS:    0.020,
+		TypedColumnPrepareStatsDurationMS:      0.021,
+		TypedColumnPrepareRangeReadDurationMS:  0.022,
+		TypedColumnPrepareRangeReadBytes:       256,
+		TypedColumnPrepareAdapterDurationMS:    0.023,
+		TypedColumnPrepareDenseGroupDurationMS: 0.024,
+		TypedColumnPrepareDenseValueDurationMS: 0.025,
+		TypedColumnPrepareDensePredDurationMS:  0.026,
+		TypedColumnPrepareDensePreapplyMS:      0.027,
 		CompressionAttribution: columnStoreCompressionAttribution{
 			CompressionPolicyLabel: "default",
 			RequestedCompression:   "snappy",
@@ -2442,6 +2494,76 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 	if got := cell.HotRunDurationMS; got != 0 {
 		t.Fatalf("direct one-shot hot_run_duration_ms=%v want unset", got)
+	}
+	if !cell.TypedColumnOneShotCacheMiss || !cell.TypedColumnOneShotCacheBuild || cell.TypedColumnOneShotCacheHit {
+		t.Fatalf("typed-column one-shot cache diagnostics hit/miss/build=%t/%t/%t want false/true/true: %+v",
+			cell.TypedColumnOneShotCacheHit,
+			cell.TypedColumnOneShotCacheMiss,
+			cell.TypedColumnOneShotCacheBuild,
+			cell)
+	}
+	if got, want := cell.TypedColumnOneShotBuildDurationMS, q.TypedColumnOneShotBuildDurationMS; got != want {
+		t.Fatalf("typed_column_one_shot_build_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPreparePlanDurationMS, q.TypedColumnPreparePlanDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_plan_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareRefsDurationMS, q.TypedColumnPrepareRefsDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_refs_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPreparePairDurationMS, q.TypedColumnPreparePairDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_pairing_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDecodeDurationMS, q.TypedColumnPrepareDecodeDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_part_decode_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPreparePostDurationMS, q.TypedColumnPreparePostDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_post_prepare_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareSummaryDurationMS, q.TypedColumnPrepareSummaryDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_summary_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnOneShotCacheStoreDurationMS, q.TypedColumnOneShotCacheStoreDurationMS; got != want {
+		t.Fatalf("typed_column_one_shot_cache_store_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareReadImageDurationMS, q.TypedColumnPrepareReadImageDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_read_image_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareStateBuildDurationMS, q.TypedColumnPrepareStateBuildDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_state_build_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDictionaryDurationMS, q.TypedColumnPrepareDictionaryDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dictionary_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPreparePruningDurationMS, q.TypedColumnPreparePruningDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_pruning_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareSortKeyDurationMS, q.TypedColumnPrepareSortKeyDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_sort_key_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareStatsDurationMS, q.TypedColumnPrepareStatsDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_stats_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareRangeReadDurationMS, q.TypedColumnPrepareRangeReadDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_range_read_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareRangeReadBytes, q.TypedColumnPrepareRangeReadBytes; got != want {
+		t.Fatalf("typed_column_prepare_range_read_bytes=%d want %d", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareAdapterDurationMS, q.TypedColumnPrepareAdapterDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_adapter_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDenseGroupDurationMS, q.TypedColumnPrepareDenseGroupDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_group_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDenseValueDurationMS, q.TypedColumnPrepareDenseValueDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_value_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDensePredDurationMS, q.TypedColumnPrepareDensePredDurationMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_predicate_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareDensePreapplyMS, q.TypedColumnPrepareDensePreapplyMS; got != want {
+		t.Fatalf("typed_column_prepare_dense_preapply_duration_ms=%v want %v", got, want)
 	}
 	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
 		t.Fatalf("rows_scanned=%d want %d", got, want)
@@ -2555,6 +2677,187 @@ func TestColumnStoreApplyMetadataCostOnlyAggregateRowsM3070(t *testing.T) {
 	}
 	if queries[1].MetadataCostStorageBytes != 0 || queries[1].MetadataCostStorageBasis != "" || queries[1].MetadataCostInsertMS != 0 || queries[1].MetadataCostInsertBasis != "" {
 		t.Fatalf("no-metadata query should not carry metadata cost: %+v", queries[1])
+	}
+}
+
+func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *testing.T) {
+	stats := collections.CollectionInsertStats{
+		Documents:                             10,
+		ColumnPublishRowAssetPreparation:      1 * time.Millisecond,
+		ColumnPublishTypedColumnPreparation:   2 * time.Millisecond,
+		ColumnPublishDictionaryPreparation:    3 * time.Millisecond,
+		ColumnPublishInt64Preparation:         4 * time.Millisecond,
+		ColumnPublishAggregateMetadataPrepare: 5 * time.Millisecond,
+		ColumnPublishRowSidecarSharedBuild:    6 * time.Millisecond,
+		ColumnPublishAssetAppend:              7 * time.Millisecond,
+		ColumnPublishAssetAppendOpen:          2 * time.Millisecond,
+		ColumnPublishAssetAppendWrite:         3 * time.Millisecond,
+		ColumnPublishAssetAppendClose:         4 * time.Millisecond,
+		ColumnPublishAssetAppendFileSync:      11 * time.Millisecond,
+		ColumnPublishAssetAppendFileClose:     12 * time.Millisecond,
+		ColumnPublishAssetAppendDirSync:       13 * time.Millisecond,
+		ColumnPublishAssetAppendCleanup:       14 * time.Millisecond,
+		ColumnPublishRowAssetBytes:            101,
+		ColumnPublishRowAssetCount:            1,
+		ColumnPublishTypedColumnBytes:         202,
+		ColumnPublishTypedColumnCount:         2,
+		ColumnPublishDictionaryBytes:          303,
+		ColumnPublishDictionaryCount:          3,
+		ColumnPublishInt64Bytes:               404,
+		ColumnPublishInt64Count:               4,
+		ColumnPublishAggregateMetadataBytes:   505,
+		ColumnPublishAggregateMetadataCount:   5,
+		ColumnPublishSharedAppendBytes:        606,
+		ColumnPublishSharedAppendCount:        6,
+		RetainedPayloadValueLogPointerize:     8 * time.Millisecond,
+		RetainedPayloadValueLogValues:         7,
+		RetainedPayloadValueLogBytes:          707,
+		RetainedStreamValueLogPointerize:      9 * time.Millisecond,
+		RetainedStreamValueLogValues:          8,
+		RetainedStreamValueLogBytes:           808,
+	}
+
+	metric := columnStoreInsertPhaseMetricFromStats(stats, 1)
+
+	if got, want := metric.ColumnPublishRowAssetPrepareDurationMS, 1.0; got != want {
+		t.Fatalf("row asset duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnPrepareDurationMS, 2.0; got != want {
+		t.Fatalf("typed-column duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishDictionaryPrepareDurationMS, 3.0; got != want {
+		t.Fatalf("dictionary duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishInt64PrepareDurationMS, 4.0; got != want {
+		t.Fatalf("int64 duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAggregateMetadataDurationMS, 5.0; got != want {
+		t.Fatalf("aggregate metadata duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishRowSidecarSharedBuildMS, 6.0; got != want {
+		t.Fatalf("row sidecar shared duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendDurationMS, 7.0; got != want {
+		t.Fatalf("shared append duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendOpenDurationMS, 2.0; got != want {
+		t.Fatalf("shared append open duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendWriteDurationMS, 3.0; got != want {
+		t.Fatalf("shared append write duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendCloseDurationMS, 4.0; got != want {
+		t.Fatalf("shared append close duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendFileSyncMS, 11.0; got != want {
+		t.Fatalf("shared append file sync duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendFileCloseMS, 12.0; got != want {
+		t.Fatalf("shared append file close duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendDirSyncMS, 13.0; got != want {
+		t.Fatalf("shared append dir sync duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendCleanupMS, 14.0; got != want {
+		t.Fatalf("shared append cleanup duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.RetainedPayloadValueLogPointerizeMS, 8.0; got != want {
+		t.Fatalf("retained payload pointerize duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.RetainedPayloadValueLogValues, 7; got != want {
+		t.Fatalf("retained payload pointerized values=%d want %d", got, want)
+	}
+	if got, want := metric.RetainedPayloadValueLogBytes, int64(707); got != want {
+		t.Fatalf("retained payload pointerized bytes=%d want %d", got, want)
+	}
+	if got, want := metric.RetainedStreamValueLogPointerizeMS, 9.0; got != want {
+		t.Fatalf("retained stream pointerize duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.RetainedStreamValueLogValues, 8; got != want {
+		t.Fatalf("retained stream pointerized values=%d want %d", got, want)
+	}
+	if got, want := metric.RetainedStreamValueLogBytes, int64(808); got != want {
+		t.Fatalf("retained stream pointerized bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnBytes, int64(202); got != want {
+		t.Fatalf("typed-column bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnCount, 2; got != want {
+		t.Fatalf("typed-column count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDictionaryBytes, int64(303); got != want {
+		t.Fatalf("dictionary bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDictionaryCount, 3; got != want {
+		t.Fatalf("dictionary count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishInt64Bytes, int64(404); got != want {
+		t.Fatalf("int64 bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishInt64Count, 4; got != want {
+		t.Fatalf("int64 count=%d want %d", got, want)
+	}
+}
+
+func TestColumnStoreMetadataCostMetricUsesSplitAggregateAccountingM3148(t *testing.T) {
+	insert := columnStoreInsertPhaseMetric{
+		Documents:                                99,
+		ColumnPublishRows:                        10,
+		ColumnPublishAssetPreparationDurationMS:  100,
+		ColumnPublishAggregateMetadataDurationMS: 7.5,
+		ColumnPublishAssetAppendDurationMS:       20,
+		ColumnPublishAggregateMetadataBytes:      400,
+		ColumnPublishSharedAppendBytes:           1000,
+	}
+	accounting := collections.ColumnStorePhysicalAccounting{
+		AggregateMetadataRefs: 2,
+		Totals: collections.ColumnStorePhysicalAccountingTotals{
+			AggregateMetadataBytes: 300,
+		},
+	}
+
+	cost := columnStoreMetadataCostMetricFromAccounting(insert, accounting, nil)
+
+	if got, want := cost.AggregateMetadataStorageBytes, int64(300); got != want {
+		t.Fatalf("aggregate metadata storage bytes=%d want %d", got, want)
+	}
+	if got, want := cost.AggregateMetadataPrepareMS, 7.5; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("aggregate metadata prepare ms=%v want %v", got, want)
+	}
+	if got, want := cost.AggregateMetadataAppendShareMS, 8.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("aggregate metadata append share ms=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostDurationMS, 15.5; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("metadata insert cost ms=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostUpperBoundMS, 100.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("metadata insert cost upper bound ms=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostNsPerRow, 1_550_000.0; math.Abs(got-want) > 1e-3 {
+		t.Fatalf("metadata insert cost ns/row=%v want %v", got, want)
+	}
+	if got, want := cost.InsertCostBasis, "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"; got != want {
+		t.Fatalf("metadata insert cost basis=%q want %q", got, want)
+	}
+	if got, want := cost.InsertCostUpperBoundBasis, "column_publish_asset_preparation_total_upper_bound_all_asset_families"; got != want {
+		t.Fatalf("metadata insert cost upper bound basis=%q want %q", got, want)
+	}
+	if got, want := cost.StorageCostBasis, "active_manifest_aggregate_metadata_sidecars_plus_typed_column_embedded_aggregate_sections"; got != want {
+		t.Fatalf("metadata storage cost basis=%q want %q", got, want)
+	}
+
+	unavailable := columnStoreMetadataCostMetricFromAccounting(insert, collections.ColumnStorePhysicalAccounting{}, errors.New("unavailable"))
+	if got, want := unavailable.AggregateMetadataAppendShareMS, 8.0; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("unavailable accounting append share ms=%v want %v", got, want)
+	}
+	if got, want := unavailable.InsertCostDurationMS, 15.5; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("unavailable accounting insert cost ms=%v want %v", got, want)
+	}
+	if got, want := unavailable.InsertCostBasis, "aggregate_metadata_prepare_duration_plus_byte_weighted_share_of_shared_batched_asset_append"; got != want {
+		t.Fatalf("unavailable accounting insert cost basis=%q want %q", got, want)
+	}
+	if !strings.Contains(unavailable.StorageCostBasis, "physical_accounting_unavailable") {
+		t.Fatalf("unavailable accounting storage basis=%q", unavailable.StorageCostBasis)
 	}
 }
 

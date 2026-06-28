@@ -22,6 +22,33 @@ import (
 
 var typedColumnNullableBenchSink1784 int64
 
+func TestTimeOrderTopKAllowedCodesNullableEmptyOnlyNoDictionary3175(t *testing.T) {
+	column := typedColumnAdapterColumn{
+		Field:      typedColumnAdapterNullableField("maybe_kind", "string"),
+		Definition: typedcolumn.ColumnDefinition{Name: "maybe_kind", Type: typedcolumn.ColumnTypeLowCardinalityCode, Encoding: typedcolumn.EncodingNullableInt64, Cardinality: 2},
+	}
+	allowed, missingMatchesEmpty, rejectsAll, err := timeOrderTopKAllowedCodes(column, 2, columnPhysicalQueryPredicateSpec{
+		column: "maybe_kind",
+		values: []string{""},
+	})
+	if err != nil {
+		t.Fatalf("nullable empty-only allowed codes: %v", err)
+	}
+	if !missingMatchesEmpty || rejectsAll {
+		t.Fatalf("missingMatchesEmpty=%v rejectsAll=%v want missing match without reject-all", missingMatchesEmpty, rejectsAll)
+	}
+	if len(allowed) != 1 || allowed[0] != 0 {
+		t.Fatalf("allowed=%v want no concrete dictionary codes", allowed)
+	}
+
+	if _, _, _, err := timeOrderTopKAllowedCodes(column, 2, columnPhysicalQueryPredicateSpec{
+		column: "maybe_kind",
+		values: []string{"app.bsky.feed.post"},
+	}); err == nil || !strings.Contains(err.Error(), "missing forward dictionary") {
+		t.Fatalf("non-empty predicate without dictionary err=%v want missing forward dictionary", err)
+	}
+}
+
 func TestTypedColumnAdapterMapsTreeDBDeclaredTypes(t *testing.T) {
 	want := map[ColumnStoreValueType]typedColumnAdapterTypeStatus{
 		ColumnStoreValueBool:          typedColumnAdapterRepresented,

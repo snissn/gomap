@@ -405,7 +405,8 @@ type Collection struct {
 	vectorBufferedSearchErrors        uint64
 
 	typedColumnOneShotMu            sync.Mutex
-	typedColumnOneShot              *collectionTypedColumnOneShotCacheEntry
+	typedColumnOneShot              map[collectionTypedColumnOneShotCacheSlot]*collectionTypedColumnOneShotCacheEntry
+	typedColumnOneShotClock         uint64
 	typedColumnOneShotHits          uint64
 	typedColumnOneShotMisses        uint64
 	typedColumnOneShotBuilds        uint64
@@ -492,6 +493,12 @@ type CollectionInsertStats struct {
 	RetainedPayloadRows                 int
 	RetainedPayloadDeclaredRows         int
 	RetainedPayloadSemanticStreamBlocks int
+	RetainedPayloadValueLogPointerize   time.Duration
+	RetainedPayloadValueLogValues       int
+	RetainedPayloadValueLogBytes        int64
+	RetainedStreamValueLogPointerize    time.Duration
+	RetainedStreamValueLogValues        int
+	RetainedStreamValueLogBytes         int64
 	// ColumnPublish* fields are populated for typed-column InsertBatch paths
 	// that route through the command-WAL column manifest publish path.
 	ColumnPublishBuildColumnDelta         time.Duration
@@ -500,6 +507,20 @@ type CollectionInsertStats struct {
 	ColumnPublishDocumentExtraction       time.Duration
 	ColumnPublishDeclaredColumnEncoding   time.Duration
 	ColumnPublishAssetPreparation         time.Duration
+	ColumnPublishRowAssetPreparation      time.Duration
+	ColumnPublishTypedColumnPreparation   time.Duration
+	ColumnPublishDictionaryPreparation    time.Duration
+	ColumnPublishInt64Preparation         time.Duration
+	ColumnPublishAggregateMetadataPrepare time.Duration
+	ColumnPublishRowSidecarSharedBuild    time.Duration
+	ColumnPublishAssetAppend              time.Duration
+	ColumnPublishAssetAppendOpen          time.Duration
+	ColumnPublishAssetAppendWrite         time.Duration
+	ColumnPublishAssetAppendClose         time.Duration
+	ColumnPublishAssetAppendFileSync      time.Duration
+	ColumnPublishAssetAppendFileClose     time.Duration
+	ColumnPublishAssetAppendDirSync       time.Duration
+	ColumnPublishAssetAppendCleanup       time.Duration
 	ColumnPublishManifestEncode           time.Duration
 	ColumnPublishAssetClosureValidation   time.Duration
 	ColumnPublishRootDeltaConstruction    time.Duration
@@ -507,6 +528,18 @@ type CollectionInsertStats struct {
 	ColumnPublishRootDeltaMaterialization time.Duration
 	ColumnPublishRows                     int
 	ColumnPublishPreparedAssets           int
+	ColumnPublishRowAssetBytes            int64
+	ColumnPublishRowAssetCount            int
+	ColumnPublishTypedColumnBytes         int64
+	ColumnPublishTypedColumnCount         int
+	ColumnPublishDictionaryBytes          int64
+	ColumnPublishDictionaryCount          int
+	ColumnPublishInt64Bytes               int64
+	ColumnPublishInt64Count               int
+	ColumnPublishAggregateMetadataBytes   int64
+	ColumnPublishAggregateMetadataCount   int
+	ColumnPublishSharedAppendBytes        int64
+	ColumnPublishSharedAppendCount        int
 	ColumnPublishRequiredAssetBytes       int64
 	ColumnPublishManifestBytes            int64
 	UniqueIndexPreflight                  time.Duration
@@ -1330,6 +1363,7 @@ func (m *CollectionManager) closeForBackend() error {
 		}
 	}()
 	m.stopUpdateCombiners()
+	m.closeCollectionTypedColumnOneShotCaches()
 	cacheErr := m.closeCollectionVectorIndexPreparedSearchCaches()
 	flushErr := m.FlushAll()
 	return errors.Join(cacheErr, flushErr)
@@ -5365,6 +5399,11 @@ type collectionPointerizeOptions struct {
 	packRetainedTemplateV1Values bool
 }
 
+type collectionPointerizeStats struct {
+	Values int
+	Bytes  int64
+}
+
 func collectionRunTableHasStableUnsafeSlices(table memtable.Table) bool {
 	stable, ok := table.(memtable.StableUnsafeIteratorTable)
 	return ok && stable.StableUnsafeIteratorSlices()
@@ -5375,7 +5414,12 @@ func pointerizeCollectionRunTableValues(db *backenddb.DB, table memtable.Table) 
 }
 
 func pointerizeCollectionRunTableValuesForRoot(db *backenddb.DB, meta CollectionMeta, rootName string, table memtable.Table) (memtable.Table, bool, error) {
-	return pointerizeCollectionRunTableValuesWithOptions(db, table, collectionPointerizeOptions{
+	out, pointerized, _, err := pointerizeCollectionRunTableValuesForRootWithStats(db, meta, rootName, table)
+	return out, pointerized, err
+}
+
+func pointerizeCollectionRunTableValuesForRootWithStats(db *backenddb.DB, meta CollectionMeta, rootName string, table memtable.Table) (memtable.Table, bool, collectionPointerizeStats, error) {
+	return pointerizeCollectionRunTableValuesWithOptionsAndStats(db, table, collectionPointerizeOptions{
 		inlineThresholdForKey:        collectionValueLogInlineThresholdResolverForRoot(db, meta, rootName),
 		packRetainedTemplateV1Values: collectionRootStoresRetainedPayloadBodies(meta, rootName) && columnStoreRetainedPayloadUsesTemplateV1(meta.Options.ColumnStore),
 	})
@@ -5423,8 +5467,14 @@ func collectionRootStoresRetainedSemanticStreamBlocks(meta CollectionMeta, rootN
 }
 
 func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memtable.Table, opts collectionPointerizeOptions) (memtable.Table, bool, error) {
+	out, pointerized, _, err := pointerizeCollectionRunTableValuesWithOptionsAndStats(db, table, opts)
+	return out, pointerized, err
+}
+
+func pointerizeCollectionRunTableValuesWithOptionsAndStats(db *backenddb.DB, table memtable.Table, opts collectionPointerizeOptions) (memtable.Table, bool, collectionPointerizeStats, error) {
+	var stats collectionPointerizeStats
 	if db == nil || table == nil || !db.HasValueLogAppender() {
-		return table, false, nil
+		return table, false, stats, nil
 	}
 	inlineThresholdForKey := opts.inlineThresholdForKey
 	if inlineThresholdForKey == nil {
@@ -5445,10 +5495,10 @@ func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memta
 	probeErr := probe.Error()
 	_ = probe.Close()
 	if probeErr != nil {
-		return table, false, probeErr
+		return table, false, stats, probeErr
 	}
 	if !needsPointer {
-		return table, false, nil
+		return table, false, stats, nil
 	}
 
 	entries := make([]collectionPointerizedRunEntry, 0, table.Len())
@@ -5516,9 +5566,11 @@ func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memta
 			batchValues = append(batchValues, appendValue)
 			batchEntryIndexes = append(batchEntryIndexes, len(entries)-1)
 			batchBytes += len(appendValue)
+			stats.Values++
+			stats.Bytes = saturatingAddNonNegativeInt64(stats.Bytes, int64(len(appendValue)))
 			if len(batchValues) >= collectionPointerizeBatchMaxValues || batchBytes >= collectionPointerizeBatchMaxBytes {
 				if err := flushBatch(); err != nil {
-					return table, false, err
+					return table, false, stats, err
 				}
 			}
 		} else if value != nil {
@@ -5530,13 +5582,13 @@ func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memta
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
-		return table, false, err
+		return table, false, stats, err
 	}
 	if err := flushBatch(); err != nil {
-		return table, false, err
+		return table, false, stats, err
 	}
 	if !pointerized {
-		return table, false, nil
+		return table, false, stats, nil
 	}
 	out := newCollectionRunTable(len(entries))
 	for i := range entries {
@@ -5545,7 +5597,7 @@ func pointerizeCollectionRunTableValuesWithOptions(db *backenddb.DB, table memta
 	}
 	out.Freeze()
 	success = true
-	return &collectionPointerizedRunTable{Table: out, db: db, ptrs: appendedPtrs}, true, nil
+	return &collectionPointerizedRunTable{Table: out, db: db, ptrs: appendedPtrs}, true, stats, nil
 }
 
 type collectionPointerizedRunTable struct {
@@ -10946,9 +10998,15 @@ func (c *Collection) insertBatchNoIndex(
 	}
 	table.Freeze()
 	stats.PrimaryRunBuild = time.Since(phaseStart)
-	publishTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, rootName, table)
+	phaseStart = time.Now()
+	publishTable, pointerized, pointerizeStats, err := pointerizeCollectionRunTableValuesForRootWithStats(c.db, c.meta, rootName, table)
 	if err != nil {
 		return nil, err
+	}
+	if columnStoreNeedsRetainedPayloadTransform(c.meta) {
+		stats.RetainedPayloadValueLogPointerize = time.Since(phaseStart)
+		stats.RetainedPayloadValueLogValues = pointerizeStats.Values
+		stats.RetainedPayloadValueLogBytes = pointerizeStats.Bytes
 	}
 	if pointerized {
 		defer resetCollectionRunTable(publishTable)
@@ -11014,12 +11072,16 @@ func (c *Collection) insertBatchNoIndex(
 		}
 		streamPublishTable := retainedSemanticStreamBlocks
 		retainedSemanticStreamTables = append(retainedSemanticStreamTables, retainedSemanticStreamBlocks)
-		if pointerizedStreamTable, pointerized, err := pointerizeCollectionRunTableValuesForRoot(c.db, c.meta, streamRootName, retainedSemanticStreamBlocks); err != nil {
+		phaseStart := time.Now()
+		if pointerizedStreamTable, pointerized, pointerizeStats, err := pointerizeCollectionRunTableValuesForRootWithStats(c.db, c.meta, streamRootName, retainedSemanticStreamBlocks); err != nil {
 			return nil, err
 		} else if pointerized {
 			streamPublishTable = pointerizedStreamTable
 			retainedSemanticStreamTables = append(retainedSemanticStreamTables, pointerizedStreamTable)
+			stats.RetainedStreamValueLogValues = pointerizeStats.Values
+			stats.RetainedStreamValueLogBytes = pointerizeStats.Bytes
 		}
+		stats.RetainedStreamValueLogPointerize = time.Since(phaseStart)
 		streamIter := streamPublishTable.NewIterator(nil, nil)
 		retainedSemanticStreamIters = append(retainedSemanticStreamIters, streamIter)
 		rootNames = append(rootNames, streamRootName)

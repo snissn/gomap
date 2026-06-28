@@ -1,11 +1,14 @@
 package treedb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -549,6 +552,144 @@ func TestPublicCommandWALBatchWriteFailureDoesNotAppendFrame(t *testing.T) {
 	}
 	if frames != 0 {
 		t.Fatalf("command_wal.frames=%d, want 0 after failed batch Write", frames)
+	}
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapWritesAndReopens(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	b.payloadSoftCapBytes = 1
+	for _, kv := range []struct {
+		key   string
+		value string
+	}{
+		{"alpha", "one"},
+		{"bravo", "two"},
+	} {
+		if err := b.SetView([]byte(kv.key), []byte(kv.value)); err != nil {
+			_ = b.Close()
+			_ = db.Close()
+			t.Fatalf("SetView(%s): %v", kv.key, err)
+		}
+	}
+	if !b.payloadBypass || b.payload.Count() != 0 || b.opCount != 2 {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("pre-Write bypass=%t payload_count=%d opCount=%d, want true/0/2", b.payloadBypass, b.payload.Count(), b.opCount)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	requireRawKVValue(t, db, []byte("alpha"), []byte("one"))
+	requireRawKVValue(t, db, []byte("bravo"), []byte("two"))
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{
+		Dir:                 dir,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	requireRawKVValue(t, reopen, []byte("alpha"), []byte("one"))
+	requireRawKVValue(t, reopen, []byte("bravo"), []byte("two"))
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapRangePointerReopens(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	if err := db.Set([]byte("b"), []byte("old-pointer-value")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set old value: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint old value: %v", err)
+	}
+
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	b.payloadSoftCapBytes = 1
+	want := bytes.Repeat([]byte("p"), 2048)
+	if err := b.DeleteRange([]byte("a"), []byte("z")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	if err := b.Set([]byte("m"), want); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	requireRawKVValue(t, db, []byte("m"), want)
+	hasOld, err := db.Has([]byte("b"))
+	if err != nil || hasOld {
+		_ = db.Close()
+		t.Fatalf("Has(b)=(%t,%v), want false,nil before reopen", hasOld, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	requireRawKVValue(t, reopen, []byte("m"), want)
+	hasOld, err = reopen.Has([]byte("b"))
+	if err != nil || hasOld {
+		t.Fatalf("reopen Has(b)=(%t,%v), want false,nil", hasOld, err)
 	}
 }
 
@@ -1097,8 +1238,257 @@ func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T
 	}
 }
 
+func TestPublicCommandWALBatchOrdinarySetBypassesPayloadBuilder(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 64
+	initialPayloadLen := wrapped.payload.Len()
+	initialPayloadCap := wrapped.payload.RetainedCap()
+
+	if err := wrapped.SetView([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("SetView first: %v", err)
+	}
+	if !wrapped.payloadBypass || wrapped.payload.Count() != 0 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload after first set: bypass=%t count=%d len/cap=%d/%d, want true/0/%d/%d", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+
+	key := []byte("second")
+	value := bytes.Repeat([]byte("x"), 128)
+	if err := wrapped.SetView(key, value); err != nil {
+		t.Fatalf("SetView second: %v", err)
+	}
+	key[0] = 'X'
+	value[0] = 'Y'
+	if wrapped.payload.Count() != 0 || wrapped.opCount != 2 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload count=%d opCount=%d len/cap=%d/%d, want 0/2/%d/%d", wrapped.payload.Count(), wrapped.opCount, wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+	if inner.setViewCalls != 0 || inner.setCalls != 2 {
+		t.Fatalf("inner calls: setView=%d set=%d, want 0/2", inner.setViewCalls, inner.setCalls)
+	}
+	if got := inner.entries[1]; string(got.Key) != "second" || string(got.Value) != strings.Repeat("x", 128) {
+		t.Fatalf("bypassed entry mutated or not copied: key=%q value_prefix=%q", got.Key, got.Value[:1])
+	}
+
+	payload, err := wrapped.commandWALPayload()
+	if err != nil {
+		t.Fatalf("commandWALPayload after bypass: %v", err)
+	}
+	var got []batch.Entry
+	if err := commitlog.ScanRawKVBatchPayload(payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		got = append(got, batch.Entry{Type: batch.OpPut, Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if len(got) != 2 || string(got[0].Key) != "a" || string(got[0].Value) != "b" || string(got[1].Key) != "second" || string(got[1].Value) != strings.Repeat("x", 128) {
+		t.Fatalf("replayed payload mismatch: %+v", got)
+	}
+}
+
+func TestPublicCommandWALBatchBypassStreamsReplayToCommandWAL(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(db, inner, 0)
+	wrapped.payloadSoftCapBytes = 64
+
+	if err := wrapped.SetView([]byte("alpha"), []byte("one")); err != nil {
+		t.Fatalf("SetView alpha: %v", err)
+	}
+	if err := wrapped.SetView([]byte("bravo"), bytes.Repeat([]byte("v"), 128)); err != nil {
+		t.Fatalf("SetView bravo: %v", err)
+	}
+	if !wrapped.payloadBypass {
+		t.Fatal("batch did not take payload-bypass path")
+	}
+	if err := wrapped.appendCommandWAL(false); err != nil {
+		t.Fatalf("appendCommandWAL: %v", err)
+	}
+	if inner.replayCalls != 2 {
+		t.Fatalf("inner replay calls=%d, want 2 planning/writing scans", inner.replayCalls)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewReader: %v", err)
+	}
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	var got []batch.Entry
+	if err := commitlog.ScanRawKVBatchPayload(env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		got = append(got, batch.Entry{Type: batch.OpPut, Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("reader Close: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if len(got) != 2 || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || string(got[1].Key) != "bravo" || string(got[1].Value) != strings.Repeat("v", 128) {
+		t.Fatalf("decoded streamed command WAL ops=%+v", got)
+	}
+}
+
+func TestPublicCommandWALBatchOrdinaryRetainedCapDoesNotGrow(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 100
+	initialPayloadLen := wrapped.payload.Len()
+	initialPayloadCap := wrapped.payload.RetainedCap()
+
+	if err := wrapped.SetView([]byte("a"), bytes.Repeat([]byte("x"), 70)); err != nil {
+		t.Fatalf("SetView first: %v", err)
+	}
+	if !wrapped.payloadBypass || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload after first ordinary set: bypass=%t len/cap=%d/%d, want true/%d/%d", wrapped.payloadBypass, wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+
+	if err := wrapped.SetView([]byte("b"), []byte("y")); err != nil {
+		t.Fatalf("SetView second: %v", err)
+	}
+	if wrapped.payload.Count() != 0 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap || wrapped.opCount != 2 {
+		t.Fatalf("payload after second ordinary set: count=%d len/cap=%d/%d opCount=%d, want 0/%d/%d/2", wrapped.payload.Count(), wrapped.payload.Len(), wrapped.payload.RetainedCap(), wrapped.opCount, initialPayloadLen, initialPayloadCap)
+	}
+	if inner.setViewCalls != 0 || inner.setCalls != 2 {
+		t.Fatalf("inner calls: setView=%d set=%d, want 0/2", inner.setViewCalls, inner.setCalls)
+	}
+}
+
+func TestPublicCommandWALBatchOrdinaryCompactZeroDoesNotRetainPayload(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 96
+	initialPayloadLen := wrapped.payload.Len()
+	initialPayloadCap := wrapped.payload.RetainedCap()
+
+	for i := 0; i < 3; i++ {
+		key := []byte(fmt.Sprintf("zero-%03d", i))
+		if err := wrapped.SetView(key, make([]byte, 32)); err != nil {
+			t.Fatalf("SetView compact zero %d: %v", i, err)
+		}
+	}
+	if !wrapped.payloadBypass || wrapped.payload.Count() != 0 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload after compact zeros: bypass=%t count=%d len/cap=%d/%d, want true/0/%d/%d", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+
+	if err := wrapped.SetView([]byte("nz"), []byte("x")); err != nil {
+		t.Fatalf("SetView non-zero after compact zeros: %v", err)
+	}
+	if wrapped.payload.Count() != 0 || wrapped.opCount != 4 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload count=%d opCount=%d len/cap=%d/%d, want 0/4/%d/%d", wrapped.payload.Count(), wrapped.opCount, wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+	if inner.setViewCalls != 0 || inner.setCalls != 4 {
+		t.Fatalf("inner calls after compact zeros: setView=%d set=%d, want 0/4", inner.setViewCalls, inner.setCalls)
+	}
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapAccountsForCompactZeroRetainedBuffers(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 64
+
+	key := bytes.Repeat([]byte("k"), 80)
+	value := []byte{0}
+	if err := wrapped.SetView(key, value); err != nil {
+		t.Fatalf("SetView large compact-zero key: %v", err)
+	}
+	if !wrapped.payloadBypass {
+		t.Fatal("compact-zero append did not bypass retained compact buffers")
+	}
+	if wrapped.payload.Count() != 0 || wrapped.opCount != 1 {
+		t.Fatalf("payload count=%d opCount=%d, want 0/1", wrapped.payload.Count(), wrapped.opCount)
+	}
+	if inner.setViewCalls != 0 || inner.setCalls != 1 {
+		t.Fatalf("inner calls after compact buffer bypass: setView=%d set=%d, want 0/1", inner.setViewCalls, inner.setCalls)
+	}
+	if got := wrapped.payload.RetainedCap(); got > wrapped.payloadSoftCapBytes {
+		t.Fatalf("retained canonical payload cap=%d, soft_cap=%d", got, wrapped.payloadSoftCapBytes)
+	}
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapBoundsLargeValueBuilder(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 256 << 10
+
+	value := bytes.Repeat([]byte("v"), 512<<10)
+	for i := 0; i < 8; i++ {
+		key := []byte(fmt.Sprintf("large-%02d", i))
+		if err := wrapped.SetView(key, value); err != nil {
+			t.Fatalf("SetView large %d: %v", i, err)
+		}
+	}
+	if !wrapped.payloadBypass {
+		t.Fatal("large-value batch did not bypass retained payload")
+	}
+	if got := wrapped.payload.RetainedCap(); got > wrapped.payloadSoftCapBytes {
+		t.Fatalf("retained payload cap=%d, soft_cap=%d", got, wrapped.payloadSoftCapBytes)
+	}
+	if wrapped.payload.Count() != 0 || wrapped.opCount != 8 {
+		t.Fatalf("payload count=%d opCount=%d, want 0/8", wrapped.payload.Count(), wrapped.opCount)
+	}
+	if inner.setViewCalls != 0 || inner.setCalls != 8 {
+		t.Fatalf("inner calls after large values: setView=%d set=%d, want 0/8", inner.setViewCalls, inner.setCalls)
+	}
+	totalCopied := 0
+	for _, entry := range inner.entries {
+		totalCopied += len(entry.Value)
+	}
+	if totalCopied != 8*len(value) {
+		t.Fatalf("inner copied value bytes=%d, want %d", totalCopied, 8*len(value))
+	}
+}
+
+func TestPublicCommandWALBatchPayloadSoftCapPreservesReplayViews(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 1
+
+	key := []byte("alpha")
+	value := []byte("value")
+	keyView, valueView, err := wrapped.SetViewWithReplayBytes(key, value)
+	if err != nil {
+		t.Fatalf("SetViewWithReplayBytes: %v", err)
+	}
+	key[0] = 'X'
+	value[0] = 'Y'
+	if wrapped.payloadBypass {
+		t.Fatal("replay-view append used payload bypass")
+	}
+	if inner.setViewCalls != 1 || inner.setCalls != 0 {
+		t.Fatalf("inner calls=%d/%d, want replay views through SetViewValidated", inner.setViewCalls, inner.setCalls)
+	}
+	if string(keyView) != "alpha" || string(valueView) != "value" {
+		t.Fatalf("replay views changed: key=%q value=%q", keyView, valueView)
+	}
+	if wrapped.payload.Count() != 1 || wrapped.opCount != 1 {
+		t.Fatalf("payload count=%d opCount=%d, want 1/1", wrapped.payload.Count(), wrapped.opCount)
+	}
+}
+
 type commandWALNoResetBatch struct {
-	entries []batch.Entry
+	entries     []batch.Entry
+	replayCalls int
 }
 
 type commandWALResetBatch struct {
@@ -1110,12 +1500,29 @@ type commandWALHookBatch struct {
 	writeAfterCalls int
 }
 
+type commandWALPayloadSoftCapBatch struct {
+	commandWALResetBatch
+	setCalls     int
+	setViewCalls int
+}
+
 func (b *commandWALHookBatch) WriteAfterCommandWALAppend(_ bool, appendCommand func() error) error {
 	if err := appendCommand(); err != nil {
 		return err
 	}
 	b.writeAfterCalls++
 	b.Reset()
+	return nil
+}
+
+func (b *commandWALPayloadSoftCapBatch) Set(key, value []byte) error {
+	b.setCalls++
+	return b.commandWALResetBatch.Set(key, value)
+}
+
+func (b *commandWALPayloadSoftCapBatch) SetViewValidated(key, value []byte) error {
+	b.setViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 	return nil
 }
 
@@ -1152,6 +1559,7 @@ func (b *commandWALNoResetBatch) WriteSync() error { return nil }
 func (b *commandWALNoResetBatch) Close() error { return nil }
 
 func (b *commandWALNoResetBatch) Replay(fn func(batch.Entry) error) error {
+	b.replayCalls++
 	for _, entry := range b.entries {
 		if err := fn(entry); err != nil {
 			return err
@@ -1595,6 +2003,209 @@ func TestPublicCommandWALDeleteRangeValueLogPointersReopen(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchValueLogPointersStayBelowFrameCap(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		WALMaxSegmentBytes:           4096,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	values := make(map[string][]byte)
+	b := db.NewBatch()
+	for i := 0; i < 8; i++ {
+		key := fmt.Sprintf("large-%02d", i)
+		value := bytes.Repeat([]byte{byte('a' + i)}, 2048)
+		values[key] = value
+		if err := b.Set([]byte(key), value); err != nil {
+			_ = b.Close()
+			_ = db.Close()
+			t.Fatalf("batch Set %s: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write should encode pointer ops as SetRID below the command frame cap: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	assertPublicCommandWALFrames(t, db, 1)
+	if frames := publicCommandWALFrameCount(t, db); frames != 1 {
+		_ = db.Close()
+		t.Fatalf("command_wal.frames=%d, want exactly 1", frames)
+	}
+	for key, value := range values {
+		requireRawKVValue(t, db, []byte(key), value)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true, BackgroundCheckpointInterval: -1})
+	if err != nil {
+		t.Fatalf("Reopen: %v", err)
+	}
+	defer reopen.Close()
+	for key, value := range values {
+		requireRawKVValue(t, reopen, []byte(key), value)
+	}
+}
+
+func TestPublicCommandWALBatchValueLogPointersFlushMultiLaneRefs(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		FlushThreshold:               1 << 30,
+		WALMaxSegmentBytes:           1 << 20,
+		JournalLanes:                 4,
+		MemtableShards:               16,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	const entries = 1100
+	b := db.NewBatchWithSize(entries)
+	for i := 0; i < entries; i++ {
+		key := []byte(fmt.Sprintf("multi-lane-%06d", i))
+		value := bytes.Repeat([]byte{byte(i%251 + 1)}, 2048)
+		if err := b.Set(key, value); err != nil {
+			_ = b.Close()
+			t.Fatalf("batch Set %d: %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	lanes := publicCommandWALValueLogLanes(t, dir)
+	if len(lanes) < 2 {
+		t.Fatalf("value-log lanes used=%v, want at least 2 to cover multi-lane SetRID flushing", lanes)
+	}
+	for _, i := range []int{0, entries / 2, entries - 1} {
+		key := []byte(fmt.Sprintf("multi-lane-%06d", i))
+		want := bytes.Repeat([]byte{byte(i%251 + 1)}, 2048)
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("Get %q: %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get %q len=%d, want len=%d", key, len(got), len(want))
+		}
+	}
+}
+
+func publicCommandWALValueLogLanes(t *testing.T, dir string) map[int]struct{} {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "value_vlog", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob value-log segments: %v", err)
+	}
+	lanes := make(map[int]struct{})
+	for _, path := range paths {
+		var lane, seq int
+		if n, _ := fmt.Sscanf(filepath.Base(path), "value-l%d-%d.log", &lane, &seq); n == 2 {
+			lanes[lane] = struct{}{}
+		}
+	}
+	return lanes
+}
+
+func TestPublicCommandWALBatchDeleteRangeWithPointerUsesCompactRangeFrame(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                          dir,
+		Durability:                   DurabilityWALOnRelaxed,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		WALMaxSegmentBytes:           4096,
+	}
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	for i := 0; i < 400; i++ {
+		key := []byte(fmt.Sprintf("range-%04d", i))
+		if err := db.Set(key, []byte("seed")); err != nil {
+			_ = db.Close()
+			t.Fatalf("seed Set %q: %v", key, err)
+		}
+	}
+	before := publicCommandWALFrameCount(t, db)
+
+	b := db.NewBatch()
+	if err := b.DeleteRange([]byte("range-"), []byte("range-\xff")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch DeleteRange: %v", err)
+	}
+	wantValue := bytes.Repeat([]byte("z"), 2048)
+	if err := b.Set([]byte("z-pointer"), wantValue); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write should log compact DeleteRange instead of materialized point deletes: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	if frames := publicCommandWALFrameCount(t, db); frames != before+1 {
+		_ = db.Close()
+		t.Fatalf("command_wal.frames=%d want %d", frames, before+1)
+	}
+	has, err := db.Has([]byte("range-0000"))
+	if err != nil || has {
+		_ = db.Close()
+		t.Fatalf("Has(range-0000)=(%t,%v), want false,nil", has, err)
+	}
+	requireRawKVValue(t, db, []byte("z-pointer"), wantValue)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestPublicCommandWALBatchDeleteRangeCachedReopen(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true})
@@ -1639,5 +2250,91 @@ func TestPublicCommandWALBatchDeleteRangeCachedReopen(t *testing.T) {
 	got, err = reopen.Get([]byte("d"))
 	if err != nil || string(got) != "vd" {
 		t.Fatalf("Get(d)=(%q,%v), want vd,nil", got, err)
+	}
+}
+
+func TestPublicCommandWALCloseRejectsLateSetSyncWithErrClosed(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	if err := db.Set([]byte("seed"), []byte("v1")); err != nil {
+		_ = db.Close()
+		t.Fatalf("Set(seed): %v", err)
+	}
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	var once sync.Once
+	testDuringPublicCloseAfterCheckpoint = func() {
+		once.Do(func() {
+			go func() {
+				close(started)
+				done <- db.SetSync([]byte("late-shutdown"), []byte("v2"))
+			}()
+			<-started
+			select {
+			case err := <-done:
+				t.Fatalf("late SetSync completed before Close released lifecycle lock: %v", err)
+			default:
+			}
+		})
+	}
+	defer func() { testDuringPublicCloseAfterCheckpoint = nil }()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	err = <-done
+	if !errors.Is(err, ErrClosed) {
+		t.Fatalf("late SetSync error=%v, want ErrClosed", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "command wal journal unavailable") {
+		t.Fatalf("late SetSync leaked command journal shutdown error: %v", err)
+	}
+}
+
+func TestPublicCommandWALBatchWriteAfterCloseReturnsErrClosed(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	b := db.NewBatch()
+	if b == nil {
+		_ = db.Close()
+		t.Fatalf("NewBatch returned nil")
+	}
+	if err := b.Set([]byte("late-batch"), []byte("v1")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Close: %v", err)
+	}
+	err = b.WriteSync()
+	if !errors.Is(err, ErrClosed) {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync after close error=%v, want ErrClosed", err)
+	}
+	if err != nil && strings.Contains(err.Error(), "command wal journal unavailable") {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync leaked command journal shutdown error: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
 	}
 }

@@ -173,6 +173,7 @@ func encodeColumnDictionaryCodesAsset(asset columnDictionaryCodesAsset) ([]byte,
 		return nil, errors.New("collections: dictionary codes asset requires dictionary and codes")
 	}
 	var b bytes.Buffer
+	b.Grow(columnDictionaryCodesEncodedSize(asset))
 	writeManifestUint32(&b, columnDictionaryCodesAssetMagic)
 	writeManifestUint16(&b, columnDictionaryCodesAssetVersion)
 	writeManifestString(&b, asset.Collection)
@@ -198,6 +199,21 @@ func encodeColumnDictionaryCodesAsset(asset columnDictionaryCodesAsset) ([]byte,
 		_, _ = b.Write(codeBuf[:])
 	}
 	return b.Bytes(), nil
+}
+
+func columnDictionaryCodesEncodedSize(asset columnDictionaryCodesAsset) int {
+	size := 4 + 2
+	size += manifestStringEncodedSize(asset.Collection)
+	size += manifestStringEncodedSize(asset.Namespace)
+	size += 4 * 8
+	size += manifestStringEncodedSize(asset.ColumnName)
+	size += 3 * 8
+	for _, value := range asset.Dictionary {
+		size += manifestStringEncodedSize(value)
+	}
+	size += columnSidecarPayloadPadding(size, columnDictionaryCodesPayloadAlignment)
+	size += len(asset.Codes) * columnDictionaryCodesPayloadElemBytes
+	return size
 }
 
 func decodeColumnDictionaryCodesAsset(raw []byte, ref ColumnAssetRef, cfg ColumnStoreConfig, expectedCollection, expectedColumn string, verifyChecksum bool) (columnDictionaryCodesAsset, error) {

@@ -30,6 +30,9 @@ func TestStatsReportsValueLogReadIntegrityAndReadCounters(t *testing.T) {
 			if !statsHasAny(stats, "treedb.vlog.grouped_frame_cache.hits", "treedb.cache.vlog_grouped_frame_cache.hits") {
 				t.Fatalf("Stats missing grouped-frame cache counters")
 			}
+			if !statsHasAny(stats, "treedb.vlog.grouped_frame_cache.allocated_slots", "treedb.cache.vlog_grouped_frame_cache.allocated_slots") {
+				t.Fatalf("Stats missing grouped-frame cache allocation counters")
+			}
 		})
 	}
 }

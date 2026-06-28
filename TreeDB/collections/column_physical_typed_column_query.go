@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"math/bits"
+	"runtime"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -59,11 +61,16 @@ type columnTypedColumnDensePredicatePart struct {
 }
 
 type columnTypedColumnDenseStringCodeColumn struct {
-	Codes            []uint32
-	Valid            []bool
-	Dictionary       []string
-	GlobalCodes      []uint32
-	GlobalDictionary []string
+	Codes               []uint32
+	Valid               []bool
+	Dictionary          []string
+	GlobalCodes         []uint32
+	GlobalDictionary    []string
+	GlobalCardinality   int
+	GlobalCardinalityOK bool
+	GlobalLocalRanks    []uint32
+	GlobalEmptyRank     uint32
+	GlobalEmptyRankOK   bool
 }
 
 type columnTypedColumnDenseGroupCountDistinctPart struct {
@@ -75,6 +82,7 @@ type columnTypedColumnDenseGroupCountDistinctPart struct {
 
 type columnTypedColumnDenseGroupHourCountPart struct {
 	Cardinality      int
+	Dictionary       []string
 	DictionaryByCode map[int64]string
 	GroupCodes       []uint32
 	GroupValid       []bool
@@ -83,14 +91,18 @@ type columnTypedColumnDenseGroupHourCountPart struct {
 }
 
 type columnTypedColumnDenseInt64SpanPart struct {
-	Cardinality      int
-	DictionaryByCode map[int64]string
-	GroupCodes       []uint32
-	GroupValid       []bool
-	GlobalRanks      []uint32
-	GlobalDictionary []string
-	Values           []int64
-	Predicates       []columnTypedColumnDensePredicatePart
+	Cardinality           int
+	Dictionary            []string
+	DictionaryByCode      map[int64]string
+	GroupCodes            []uint32
+	GroupValid            []bool
+	GlobalRanks           []uint32
+	GlobalDictionary      []string
+	Values                []int64
+	Predicates            []columnTypedColumnDensePredicatePart
+	PredicatesPreApplied  bool
+	PredicateRows         []uint32
+	PreAppliedRowsScanned int
 }
 
 type columnTypedColumnSortedGroupedDistinctCodeColumn struct {
@@ -146,6 +158,7 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	plan                                  columnTypedColumnPhysicalQueryPlan
 	parts                                 []columnTypedColumnPhysicalQueryPart
 	aggregateSummary                      *columnTypedColumnPhysicalAggregateSummary
+	prepareDiagnostics                    columnTypedColumnPhysicalQueryPrepareDiagnostics
 	assetBytes                            int64
 	sections                              int
 	sectionBytes                          uint64
@@ -181,12 +194,144 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	resultGroups                          []ColumnPhysicalQueryGroup
 }
 
+type columnTypedColumnPhysicalQueryPartDecodeInput struct {
+	outputIdx int
+	typedRef  columnManifestAssetRefForScan
+	physical  columnManifestAssetRefForScan
+}
+
+type columnTypedColumnPhysicalQueryPartDecodeOutput struct {
+	part               columnTypedColumnPhysicalQueryPart
+	prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+}
+
+type columnTypedColumnPhysicalQueryPartDecodeOptions struct {
+	eagerTimeOrderTopKPayloads bool
+}
+
+type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
+	PlanNanos           int64
+	RefsNanos           int64
+	PairingNanos        int64
+	PartDecodeNanos     int64
+	PostPrepareNanos    int64
+	SummaryNanos        int64
+	ReadImageNanos      int64
+	StateBuildNanos     int64
+	DictionaryNanos     int64
+	PruningNanos        int64
+	SortKeyNanos        int64
+	StatsNanos          int64
+	RangeReadNanos      int64
+	RangeReadBytes      int64
+	AdapterNanos        int64
+	DenseGroupNanos     int64
+	DenseValueNanos     int64
+	DensePredicateNanos int64
+	DensePreapplyNanos  int64
+}
+
+func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPhysicalQueryDiagnostics) {
+	if diag == nil {
+		return
+	}
+	diag.TypedColumnPreparePlanNanos += d.PlanNanos
+	diag.TypedColumnPrepareRefsNanos += d.RefsNanos
+	diag.TypedColumnPreparePairingNanos += d.PairingNanos
+	diag.TypedColumnPreparePartDecodeNanos += d.PartDecodeNanos
+	diag.TypedColumnPreparePostPrepareNanos += d.PostPrepareNanos
+	diag.TypedColumnPrepareSummaryNanos += d.SummaryNanos
+	diag.TypedColumnPrepareReadImageNanos += d.ReadImageNanos
+	diag.TypedColumnPrepareStateBuildNanos += d.StateBuildNanos
+	diag.TypedColumnPrepareDictionaryNanos += d.DictionaryNanos
+	diag.TypedColumnPreparePruningNanos += d.PruningNanos
+	diag.TypedColumnPrepareSortKeyNanos += d.SortKeyNanos
+	diag.TypedColumnPrepareStatsNanos += d.StatsNanos
+	diag.TypedColumnPrepareRangeReadNanos += d.RangeReadNanos
+	diag.TypedColumnPrepareRangeReadBytes += d.RangeReadBytes
+	diag.TypedColumnPrepareAdapterNanos += d.AdapterNanos
+	diag.TypedColumnPrepareDenseGroupNanos += d.DenseGroupNanos
+	diag.TypedColumnPrepareDenseValueNanos += d.DenseValueNanos
+	diag.TypedColumnPrepareDensePredicateNanos += d.DensePredicateNanos
+	diag.TypedColumnPrepareDensePreapplyNanos += d.DensePreapplyNanos
+}
+
+func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedColumnPhysicalQueryPrepareDiagnostics) {
+	if d == nil {
+		return
+	}
+	d.PlanNanos += src.PlanNanos
+	d.RefsNanos += src.RefsNanos
+	d.PairingNanos += src.PairingNanos
+	d.PartDecodeNanos += src.PartDecodeNanos
+	d.PostPrepareNanos += src.PostPrepareNanos
+	d.SummaryNanos += src.SummaryNanos
+	d.ReadImageNanos += src.ReadImageNanos
+	d.StateBuildNanos += src.StateBuildNanos
+	d.DictionaryNanos += src.DictionaryNanos
+	d.PruningNanos += src.PruningNanos
+	d.SortKeyNanos += src.SortKeyNanos
+	d.StatsNanos += src.StatsNanos
+	d.RangeReadNanos += src.RangeReadNanos
+	d.RangeReadBytes += src.RangeReadBytes
+	d.AdapterNanos += src.AdapterNanos
+	d.DenseGroupNanos += src.DenseGroupNanos
+	d.DenseValueNanos += src.DenseValueNanos
+	d.DensePredicateNanos += src.DensePredicateNanos
+	d.DensePreapplyNanos += src.DensePreapplyNanos
+}
+
 type columnTypedColumnPhysicalAggregateSummary struct {
 	groups              []ColumnPhysicalQueryGroup
 	matchedRows         int
 	reduceRows          int
 	denseGroupCount     bool
 	denseGroupHourCount bool
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) close() {
+	if r == nil {
+		return
+	}
+	r.parts = nil
+	r.aggregateSummary = nil
+	r.denseGroupCounts = nil
+	r.denseLocalCounts = nil
+	r.denseGroupCountDistinctCounts = nil
+	r.denseGroupCountDistinctDistinctCounts = nil
+	r.denseGroupCountDistinctPairBits = nil
+	r.denseGroupCountDistinctGroupActive = nil
+	r.denseGroupCountDistinctGroupOffsets = nil
+	r.denseGroupCountDistinctActiveGroups = nil
+	r.denseGroupCountDistinctPairList = nil
+	r.denseGroupHourCounts = nil
+	r.denseLocalHourCounts = nil
+	r.denseSpanValues = nil
+	r.denseLocalSpans = nil
+	r.denseLocalSpanSeen = nil
+	r.timeOrderMinValues = nil
+	r.timeOrderHeap.items = nil
+	r.timeOrderTopKScratch = nil
+	r.resultGroups = nil
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) addDecodedPart(part columnTypedColumnPhysicalQueryPart) {
+	if r == nil {
+		return
+	}
+	r.assetBytes += part.Bytes
+	r.sections += part.Sections
+	r.sectionBytes += part.SectionBytes
+	r.granulesConsidered += part.GranulesConsidered
+	r.granulesDecoded += part.GranulesDecoded
+	r.granulesSkipped += part.GranulesSkipped
+	r.decodedBlocks += part.DecodedBlocks
+	r.decodedPayloadBytes += part.DecodedPayloadBytes
+	r.sortKeyMarkChecks += part.SortKeyMarkChecks
+	r.sortKeyMarkMatches += part.SortKeyMarkMatches
+	r.sortKeyMarkSkips += part.SortKeyMarkSkips
+	r.sortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(r.sortKeyMarkFallbackReason, part.SortKeyMarkFallbackReason)
+	r.parts = append(r.parts, part)
 }
 
 func (c *Collection) runColumnPhysicalQueryTypedColumnPartInSnapshotView(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, bool, error) {
@@ -339,7 +484,7 @@ func runColumnPhysicalQueryTypedColumnPartLatestVisibleInSnapshotView(view colum
 		return result, true, fmt.Errorf("%w: typed-column sorted latest-visible physical query requires sorted typed_column_part assets", ErrColumnQueryPlanUnsupported)
 	}
 
-	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, &readCache, columnTypedColumnPhysicalQueryUseSortedLatestVisible(plan, req), false, false)
+	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, &readCache, columnTypedColumnPhysicalQueryUseSortedLatestVisible(plan, req), false, false, false, nil)
 	if err != nil {
 		result := ColumnPhysicalQueryResult{Diagnostics: columnTypedColumnPhysicalMutationDiagnostics(view, req)}
 		annotateColumnPhysicalQueryResult(&result, ColumnPhysicalQueryStorageSourceTypedColumnPartSection, ColumnPhysicalQueryFallbackMutationVisibilityUnsupported)
@@ -392,11 +537,29 @@ func applyTypedColumnLatestVisibilityDiagnostics(diag *ColumnPhysicalQueryDiagno
 	diag.VisibilityNanos = visibilityNanos
 }
 
+type columnTypedColumnPhysicalQueryRunnerPrepareOptions struct {
+	prepareAggregateSummaries                 bool
+	prepareDenseInt64SpanGlobalCodes          bool
+	prepareDenseGroupCountDistinctGlobalCodes bool
+	prepareDenseGroupCountDistinctGlobalRanks bool
+}
+
 func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, prepareSummaries bool) (*columnTypedColumnPhysicalQueryRunner, bool, error) {
+	return prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
+		prepareAggregateSummaries:                 prepareSummaries,
+		prepareDenseInt64SpanGlobalCodes:          prepareSummaries,
+		prepareDenseGroupCountDistinctGlobalCodes: prepareSummaries,
+	})
+}
+
+func prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, opts columnTypedColumnPhysicalQueryRunnerPrepareOptions) (*columnTypedColumnPhysicalQueryRunner, bool, error) {
 	if !columnTypedColumnPhysicalQueryTouchesTypedColumnPart(view.FullConfig, req) {
 		return nil, false, nil
 	}
+	var prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+	phaseStart := time.Now()
 	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
+	prepareDiagnostics.PlanNanos = time.Since(phaseStart).Nanoseconds()
 	if err != nil || !candidate {
 		return nil, candidate, err
 	}
@@ -406,33 +569,42 @@ func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshot
 	if readCache == nil {
 		return nil, true, errors.New("collections: typed-column part physical query missing read cache")
 	}
+	phaseStart = time.Now()
 	refsByGeneration, err := typedColumnPhysicalQueryRefsByGeneration(view)
+	prepareDiagnostics.RefsNanos = time.Since(phaseStart).Nanoseconds()
 	if err != nil {
 		return nil, true, err
 	}
 	if len(refsByGeneration) == 0 {
-		runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs))}
+		runner := &columnTypedColumnPhysicalQueryRunner{plan: plan, parts: make([]columnTypedColumnPhysicalQueryPart, 0, len(view.AssetRefs)), prepareDiagnostics: prepareDiagnostics}
 		if len(view.AssetRefs) == 0 {
 			return runner, true, nil
 		}
 		return nil, true, errors.New("collections: missing typed_column_part assets for typed-column part physical query")
 	}
+	phaseStart = time.Now()
 	if _, err := validateTypedColumnPhysicalAssetPairing(refsByGeneration, view.AssetRefs); err != nil {
+		prepareDiagnostics.PairingNanos = time.Since(phaseStart).Nanoseconds()
 		return nil, true, typedColumnPhysicalQueryPairingError(err)
 	}
-	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, readCache, false, prepareSummaries, prepareSummaries)
+	prepareDiagnostics.PairingNanos = time.Since(phaseStart).Nanoseconds()
+	runner, err := decodeColumnTypedColumnPhysicalQueryRunnerParts(view, req, plan, refsByGeneration, readCache, false, opts.prepareDenseInt64SpanGlobalCodes, opts.prepareDenseGroupCountDistinctGlobalCodes, opts.prepareDenseGroupCountDistinctGlobalRanks, &prepareDiagnostics)
 	if err != nil {
 		return nil, true, err
 	}
-	if prepareSummaries {
+	if opts.prepareAggregateSummaries {
+		phaseStart = time.Now()
 		if err := prepareColumnTypedColumnPhysicalAggregateSummary(runner, req); err != nil {
+			prepareDiagnostics.SummaryNanos = time.Since(phaseStart).Nanoseconds()
 			return nil, true, err
 		}
+		prepareDiagnostics.SummaryNanos = time.Since(phaseStart).Nanoseconds()
 	}
+	runner.prepareDiagnostics = prepareDiagnostics
 	return runner, true, nil
 }
 
-func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, refsByGeneration map[uint64]columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, prepareDenseInt64SpanGlobalCodes bool, prepareDenseGroupCountDistinctGlobalCodes bool) (*columnTypedColumnPhysicalQueryRunner, error) {
+func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, refsByGeneration map[uint64]columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, prepareDenseInt64SpanGlobalCodes bool, prepareDenseGroupCountDistinctGlobalCodes bool, prepareDenseGroupCountDistinctGlobalRanks bool, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (*columnTypedColumnPhysicalQueryRunner, error) {
 	if readCache == nil {
 		return nil, errors.New("collections: typed-column part physical query missing read cache")
 	}
@@ -450,8 +622,8 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 	readCache.returnViews = false
 	defer func() { readCache.returnViews = savedReturnViews }()
 
-	var rawScratch []byte
 	allowDenseGroupCountDistinct := view.MutationParts == 0
+	inputs := make([]columnTypedColumnPhysicalQueryPartDecodeInput, 0, len(view.AssetRefs))
 	for _, physical := range view.AssetRefs {
 		if physical.Role == ColumnManifestPartRoleTombstone || physical.Reason == ColumnPublishOperationDelete {
 			continue
@@ -460,75 +632,233 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 		if !ok {
 			return nil, fmt.Errorf("collections: missing typed_column_part asset for generation=%d", physical.Ref.Generation)
 		}
-		var part columnTypedColumnPhysicalQueryPart
-		part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct, includePhysicalRows)
-		runner.segmentFileCacheHits = readCache.hits
-		runner.segmentFileCacheMisses = readCache.misses
-		if err != nil {
-			return nil, fmt.Errorf("collections: typed-column part physical query range decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+		inputs = append(inputs, columnTypedColumnPhysicalQueryPartDecodeInput{
+			outputIdx: len(inputs),
+			typedRef:  typedRef,
+			physical:  physical,
+		})
+	}
+	phaseStart := time.Now()
+	if columnTypedColumnPhysicalQueryUseParallelPartDecode(plan, req, readCache, len(inputs), includePhysicalRows, allowDenseGroupCountDistinct, prepareDenseInt64SpanGlobalCodes, prepareDenseGroupCountDistinctGlobalCodes, prepareDenseGroupCountDistinctGlobalRanks) {
+		// Worker read caches close after decode, so parallel TopK runners must
+		// own payload bytes instead of retaining lazy range readers.
+		decodeOpts := columnTypedColumnPhysicalQueryPartDecodeOptions{
+			eagerTimeOrderTopKPayloads: columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req),
 		}
-		if !rangeOK {
-			raw, err := readCache.read(typedRef.Ref, rawScratch)
+		outputs, hits, misses, err := decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view, req, plan, inputs, readCache, includePhysicalRows, allowDenseGroupCountDistinct, decodeOpts)
+		if err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PartDecodeNanos += time.Since(phaseStart).Nanoseconds()
+			}
+			return nil, err
+		}
+		runner.segmentFileCacheHits = hits
+		runner.segmentFileCacheMisses = misses
+		for _, output := range outputs {
+			runner.addDecodedPart(output.part)
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.add(output.prepareDiagnostics)
+			}
+		}
+	} else {
+		var rawScratch []byte
+		for _, input := range inputs {
+			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, columnTypedColumnPhysicalQueryPartDecodeOptions{}, rawScratch, prepareDiagnostics)
 			runner.segmentFileCacheHits = readCache.hits
 			runner.segmentFileCacheMisses = readCache.misses
 			if err != nil {
-				if errors.Is(err, io.ErrUnexpectedEOF) {
-					return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+				if prepareDiagnostics != nil {
+					prepareDiagnostics.PartDecodeNanos += time.Since(phaseStart).Nanoseconds()
 				}
-				return nil, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+				return nil, err
 			}
-			rawScratch = raw
-			switch {
-			case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
-				part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-			case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
-				part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-			case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
-				part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-			case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
-				part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
-			case columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req):
-				part, err = decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
-			case allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
-				part, err = decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
-			default:
-				part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
-			}
+			rawScratch = scratch
+			runner.addDecodedPart(part)
 		}
-		if err != nil {
-			return nil, fmt.Errorf("collections: typed-column part physical query decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
-		}
-		runner.assetBytes += part.Bytes
-		runner.sections += part.Sections
-		runner.sectionBytes += part.SectionBytes
-		runner.granulesConsidered += part.GranulesConsidered
-		runner.granulesDecoded += part.GranulesDecoded
-		runner.granulesSkipped += part.GranulesSkipped
-		runner.decodedBlocks += part.DecodedBlocks
-		runner.decodedPayloadBytes += part.DecodedPayloadBytes
-		runner.sortKeyMarkChecks += part.SortKeyMarkChecks
-		runner.sortKeyMarkMatches += part.SortKeyMarkMatches
-		runner.sortKeyMarkSkips += part.SortKeyMarkSkips
-		runner.sortKeyMarkFallbackReason = mergeColumnPhysicalSortKeyFallbackReason(runner.sortKeyMarkFallbackReason, part.SortKeyMarkFallbackReason)
-		runner.parts = append(runner.parts, part)
+	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.PartDecodeNanos += time.Since(phaseStart).Nanoseconds()
 	}
 	if len(runner.parts) == 0 && len(view.AssetRefs) != 0 {
 		return nil, errors.New("collections: typed-column part physical query has no live typed_column_part assets")
 	}
+	phaseStart = time.Now()
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) {
 		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
 	} else if prepareDenseGroupCountDistinctGlobalCodes && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req) {
 		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalCodes(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
+			return nil, err
+		}
+	} else if prepareDenseGroupCountDistinctGlobalRanks && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req) {
+		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
 	} else if prepareDenseInt64SpanGlobalCodes && columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req) {
 		if err := prepareColumnTypedColumnDenseInt64SpanGlobalCodes(runner.parts); err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+			}
 			return nil, err
 		}
 	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	return runner, nil
+}
+
+func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, typedRef, physical columnManifestAssetRefForScan, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions, rawScratch []byte, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, []byte, error) {
+	part, rangeOK, err := decodeTypedColumnPhysicalQueryDensePartFromRanges(plan, req, view.FullConfig.SchemaHash, typedRef, physical, readCache, allowDenseGroupCountDistinct, includePhysicalRows, opts, prepareDiagnostics)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, rawScratch, fmt.Errorf("collections: typed-column part physical query range decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+	}
+	if rangeOK {
+		return part, rawScratch, nil
+	}
+	raw, err := readCache.read(typedRef.Ref, rawScratch)
+	if err != nil {
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return columnTypedColumnPhysicalQueryPart{}, rawScratch, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+		}
+		return columnTypedColumnPhysicalQueryPart{}, rawScratch, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+	}
+	rawScratch = raw
+	switch {
+	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
+		part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
+		part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+	case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
+		part, err = decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, true)
+	case columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req):
+		part, err = decodeTypedColumnPhysicalQueryTimeOrderTopKPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+	case columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req):
+		part, err = decodeTypedColumnPhysicalQuerySortedGroupedDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+	case allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req):
+		part, err = decodeTypedColumnPhysicalQueryDenseGroupCountDistinctPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+	default:
+		part, err = decodeTypedColumnPhysicalQueryPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, includePhysicalRows)
+	}
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, rawScratch, fmt.Errorf("collections: typed-column part physical query decode generation=%d part_id=%d: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
+	}
+	return part, rawScratch, nil
+}
+
+func columnTypedColumnPhysicalQueryUseParallelPartDecode(plan columnTypedColumnPhysicalQueryPlan, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, partCount int, includePhysicalRows bool, allowDenseGroupCountDistinct bool, prepareDenseInt64SpanGlobalCodes bool, prepareDenseGroupCountDistinctGlobalCodes bool, prepareDenseGroupCountDistinctGlobalRanks bool) bool {
+	if partCount < 2 || readCache == nil || readCache.resourceManager != nil {
+		return false
+	}
+	if includePhysicalRows || prepareDenseInt64SpanGlobalCodes || prepareDenseGroupCountDistinctGlobalCodes {
+		return false
+	}
+	if !typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity) {
+		return false
+	}
+	if columnTypedColumnPhysicalQueryPartDecodeWorkers(partCount) <= 1 {
+		return false
+	}
+	if prepareDenseGroupCountDistinctGlobalRanks {
+		return allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req)
+	}
+	return columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req) ||
+		columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req) ||
+		columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req) ||
+		columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req)
+}
+
+func columnTypedColumnPhysicalQueryPartDecodeWorkers(partCount int) int {
+	if partCount < 2 {
+		return 0
+	}
+	workers := min(runtime.GOMAXPROCS(0), partCount)
+	workers = min(workers, typedColumnDenseParallelMaxWorkers)
+	if workers < 2 {
+		return 0
+	}
+	return workers
+}
+
+func decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan, inputs []columnTypedColumnPhysicalQueryPartDecodeInput, readCache *columnPhysicalAssetReadCache, includePhysicalRows bool, allowDenseGroupCountDistinct bool, opts columnTypedColumnPhysicalQueryPartDecodeOptions) ([]columnTypedColumnPhysicalQueryPartDecodeOutput, uint64, uint64, error) {
+	workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(inputs))
+	if workers < 2 {
+		return nil, 0, 0, errors.New("collections: typed-column part physical query parallel decode missing workers")
+	}
+	workerCaches := make([]columnPhysicalAssetReadCache, workers)
+	for workerIdx := range workerCaches {
+		workerCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(readCache.rootDir, readCache.namespace, readCache.readIntegrity)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		workerCache.returnViews = false
+		workerCache.forceReadAtFallback = readCache.forceReadAtFallback
+		workerCache.trustCachedVerifyFileIdentity = readCache.trustCachedVerifyFileIdentity
+		workerCaches[workerIdx] = workerCache
+	}
+
+	outputs := make([]columnTypedColumnPhysicalQueryPartDecodeOutput, len(inputs))
+	jobs := make(chan columnTypedColumnPhysicalQueryPartDecodeInput)
+	var wg sync.WaitGroup
+	var firstErr error
+	var errOnce sync.Once
+	setErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errOnce.Do(func() {
+			firstErr = err
+		})
+	}
+	for workerIdx := range workerCaches {
+		wg.Add(1)
+		go func(workerIdx int) {
+			defer wg.Done()
+			cache := &workerCaches[workerIdx]
+			defer func() {
+				setErr(cache.close())
+			}()
+			var rawScratch []byte
+			for input := range jobs {
+				var partDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+				part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, cache, includePhysicalRows, allowDenseGroupCountDistinct, opts, rawScratch, &partDiagnostics)
+				if err != nil {
+					setErr(err)
+					continue
+				}
+				rawScratch = scratch
+				outputs[input.outputIdx] = columnTypedColumnPhysicalQueryPartDecodeOutput{
+					part:               part,
+					prepareDiagnostics: partDiagnostics,
+				}
+			}
+		}(workerIdx)
+	}
+	for _, input := range inputs {
+		jobs <- input
+	}
+	close(jobs)
+	wg.Wait()
+	if firstErr != nil {
+		return nil, 0, 0, firstErr
+	}
+	var hits uint64
+	var misses uint64
+	for _, cache := range workerCaches {
+		hits += cache.hits
+		misses += cache.misses
+	}
+	return outputs, hits, misses, nil
 }
 
 func prepareColumnTypedColumnPhysicalAggregateSummary(runner *columnTypedColumnPhysicalQueryRunner, req ColumnPhysicalQueryRequest) error {
@@ -682,7 +1012,7 @@ func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnP
 				}
 				if !seen {
 					var ok bool
-					key, ok = dense.DictionaryByCode[int64(localCode)]
+					key, ok = columnTypedColumnDenseGroupHourDictionaryValue(dense, localCode)
 					if !ok {
 						return nil, fmt.Errorf("collections: dense typed-column group-hour part %d dictionary missing local code %d", partIdx, localCode)
 					}
@@ -791,35 +1121,102 @@ func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(column *colu
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalCodes(parts []columnTypedColumnPhysicalQueryPart) error {
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes)
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts []columnTypedColumnPhysicalQueryPart) error {
+	groupDict, groupRanks, distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalPrep(parts)
+	if err != nil {
+		return err
+	}
+	workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(parts))
+	if workers < 2 {
+		return prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+	}
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, workers)
+}
+
+type columnTypedColumnDenseGroupCountDistinctColumnPrep func(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts []columnTypedColumnPhysicalQueryPart, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
+	groupDict, groupRanks, distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalPrep(parts)
+	if err != nil {
+		return err
+	}
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumn)
+}
+
+func columnTypedColumnDenseGroupCountDistinctGlobalPrep(parts []columnTypedColumnPhysicalQueryPart) ([]string, map[string]uint32, map[string]uint32, int, error) {
 	groupDict, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Group
 	})
 	if err != nil {
-		return err
+		return nil, nil, nil, 0, err
 	}
-	distinctDict, distinctRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+	distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Distinct
 	})
 	if err != nil {
-		return err
+		return nil, nil, nil, 0, err
+	}
+	return groupDict, groupRanks, distinctRanks, distinctCardinality, nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts []columnTypedColumnPhysicalQueryPart, groupDict []string, groupRanks map[string]uint32, distinctRanks map[string]uint32, distinctCardinality int, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
+	for partIdx := range parts {
+		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalPart(parts, partIdx, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalPart(parts []columnTypedColumnPhysicalQueryPart, partIdx int, groupDict []string, groupRanks map[string]uint32, distinctRanks map[string]uint32, distinctCardinality int, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
+	part := parts[partIdx].DenseGroupCountDistinct
+	if part == nil {
+		return fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
+	}
+	if err := prepareColumn(&part.Group, groupDict, len(groupDict), groupRanks); err != nil {
+		return fmt.Errorf("collections: dense grouped count-distinct group part %d: %w", partIdx, err)
+	}
+	if err := prepareColumn(&part.Distinct, nil, distinctCardinality, distinctRanks); err != nil {
+		return fmt.Errorf("collections: dense grouped count-distinct distinct part %d: %w", partIdx, err)
+	}
+	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts []columnTypedColumnPhysicalQueryPart, groupDict []string, groupRanks map[string]uint32, distinctRanks map[string]uint32, distinctCardinality int, workers int) error {
+	errs := make([]error, len(parts))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for workerIdx := 0; workerIdx < workers; workerIdx++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for partIdx := range jobs {
+				errs[partIdx] = prepareColumnTypedColumnDenseGroupCountDistinctGlobalPart(parts, partIdx, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+			}
+		}()
 	}
 	for partIdx := range parts {
-		part := parts[partIdx].DenseGroupCountDistinct
-		if part == nil {
-			return fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
-		}
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(&part.Group, groupDict, groupRanks); err != nil {
-			return fmt.Errorf("collections: dense grouped count-distinct group part %d: %w", partIdx, err)
-		}
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(&part.Distinct, distinctDict, distinctRanks); err != nil {
-			return fmt.Errorf("collections: dense grouped count-distinct distinct part %d: %w", partIdx, err)
+		jobs <- partIdx
+	}
+	close(jobs)
+	wg.Wait()
+	for partIdx := range errs {
+		if errs[partIdx] != nil {
+			return errs[partIdx]
 		}
 	}
 	return nil
 }
 
 func columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) ([]string, map[string]uint32, error) {
-	values := make(map[string]struct{})
+	capacity, err := columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts, selectColumn)
+	if err != nil {
+		return nil, nil, err
+	}
+	values := make(map[string]struct{}, capacity)
 	for partIdx := range parts {
 		part := parts[partIdx].DenseGroupCountDistinct
 		if part == nil {
@@ -852,7 +1249,12 @@ func columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts []columnType
 }
 
 func columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) (map[string]uint32, int, error) {
-	ranks := make(map[string]uint32)
+	capacity, err := columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts, selectColumn)
+	if err != nil {
+		return nil, 0, err
+	}
+	capacity = columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity)
+	ranks := make(map[string]uint32, capacity)
 	addValue := func(value string) error {
 		if _, ok := ranks[value]; ok {
 			return nil
@@ -886,16 +1288,44 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts []columnTypedColu
 	return ranks, len(ranks), nil
 }
 
-func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, ranks map[string]uint32) error {
-	localRanks := make([]uint32, len(column.Dictionary))
-	for localCode, value := range column.Dictionary {
-		rank, ok := ranks[value]
-		if !ok {
-			return fmt.Errorf("local dictionary value %q missing from global dictionary", value)
+func columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) (int, error) {
+	capacity := 1 // reserve one optional empty-string slot for nullable values.
+	maxInt := int(^uint(0) >> 1)
+	for partIdx := range parts {
+		part := parts[partIdx].DenseGroupCountDistinct
+		if part == nil {
+			return 0, fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
 		}
-		localRanks[localCode] = rank
+		column := selectColumn(part)
+		if column == nil {
+			return 0, fmt.Errorf("collections: dense grouped count-distinct missing selected column for part %d", partIdx)
+		}
+		if len(column.Dictionary) > maxInt-capacity {
+			return 0, fmt.Errorf("collections: dense grouped count-distinct dictionary capacity exceeds int")
+		}
+		capacity += len(column.Dictionary)
 	}
-	emptyRank, emptyOK := ranks[""]
+	return capacity, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctRankMapCapacity(dictionaryCapacity int) int {
+	const (
+		rankMapShrinkThreshold = 1 << 15
+		rankMapShrinkDivisor   = 3
+	)
+	if dictionaryCapacity <= rankMapShrinkThreshold {
+		return dictionaryCapacity
+	}
+	return dictionaryCapacity / rankMapShrinkDivisor
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error {
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(column, globalDictionary, cardinality, ranks); err != nil {
+		return err
+	}
+	localRanks := column.GlobalLocalRanks
+	emptyRank := column.GlobalEmptyRank
+	emptyOK := column.GlobalEmptyRankOK
 	globalCodes := make([]uint32, len(column.Codes))
 	for row, localCode := range column.Codes {
 		if !columnTypedColumnDenseCodeValid(column.Valid, row) {
@@ -911,7 +1341,28 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnCodes(column *co
 		globalCodes[row] = localRanks[localCode]
 	}
 	column.GlobalCodes = globalCodes
+	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error {
+	if cardinality != len(ranks) {
+		return fmt.Errorf("global cardinality=%d want ranks=%d", cardinality, len(ranks))
+	}
+	localRanks := make([]uint32, len(column.Dictionary))
+	for localCode, value := range column.Dictionary {
+		rank, ok := ranks[value]
+		if !ok {
+			return fmt.Errorf("local dictionary value %q missing from global dictionary", value)
+		}
+		localRanks[localCode] = rank
+	}
+	emptyRank, emptyOK := ranks[""]
 	column.GlobalDictionary = globalDictionary
+	column.GlobalCardinality = cardinality
+	column.GlobalCardinalityOK = true
+	column.GlobalLocalRanks = localRanks
+	column.GlobalEmptyRank = emptyRank
+	column.GlobalEmptyRankOK = emptyOK
 	return nil
 }
 
@@ -957,7 +1408,7 @@ func prepareColumnTypedColumnDenseInt64SpanGlobalCodes(parts []columnTypedColumn
 		}
 		globalRanks := make([]uint32, dense.Cardinality)
 		for localCode := 0; localCode < dense.Cardinality; localCode++ {
-			value, ok := dense.DictionaryByCode[int64(localCode)]
+			value, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				return fmt.Errorf("collections: dense typed-column int64-span part %d dictionary missing local code %d", partIdx, localCode)
 			}
@@ -981,7 +1432,7 @@ func columnTypedColumnDenseInt64SpanGlobalDictionary(parts []columnTypedColumnPh
 			return nil, nil, fmt.Errorf("collections: dense typed-column int64-span missing prepared part %d", partIdx)
 		}
 		for localCode := 0; localCode < dense.Cardinality; localCode++ {
-			value, ok := dense.DictionaryByCode[int64(localCode)]
+			value, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				return nil, nil, fmt.Errorf("collections: dense typed-column int64-span part %d dictionary missing local code %d", partIdx, localCode)
 			}
@@ -1001,6 +1452,34 @@ func columnTypedColumnDenseInt64SpanGlobalDictionary(parts []columnTypedColumnPh
 		ranks[value] = uint32(rank)
 	}
 	return dictionary, ranks, nil
+}
+
+func columnTypedColumnDenseInt64SpanDictionaryValue(dense *columnTypedColumnDenseInt64SpanPart, localCode int) (string, bool) {
+	if dense == nil || localCode < 0 {
+		return "", false
+	}
+	if localCode < len(dense.Dictionary) {
+		return dense.Dictionary[localCode], true
+	}
+	if dense.DictionaryByCode != nil {
+		value, ok := dense.DictionaryByCode[int64(localCode)]
+		return value, ok
+	}
+	return "", false
+}
+
+func columnTypedColumnDenseGroupHourDictionaryValue(dense *columnTypedColumnDenseGroupHourCountPart, localCode int) (string, bool) {
+	if dense == nil || localCode < 0 {
+		return "", false
+	}
+	if localCode < len(dense.Dictionary) {
+		return dense.Dictionary[localCode], true
+	}
+	if dense.DictionaryByCode != nil {
+		value, ok := dense.DictionaryByCode[int64(localCode)]
+		return value, ok
+	}
+	return "", false
 }
 
 func columnTypedColumnPhysicalQueryTouchesTypedColumnPart(cfg ColumnStoreConfig, req ColumnPhysicalQueryRequest) bool {
@@ -1410,6 +1889,9 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	if columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(r.plan, req) {
 		return r.runDenseGroupCountDistinct(view, req)
 	}
+	if columnTypedColumnPhysicalQueryUseSumSecondOfDaySquare(req) {
+		return r.runSumSecondOfDaySquare(view, req)
+	}
 
 	start := time.Now()
 	acc := newColumnTypedColumnPhysicalQueryAccumulator(req.Kind)
@@ -1441,6 +1923,65 @@ func (r *columnTypedColumnPhysicalQueryRunner) run(view columnPhysicalScanSnapsh
 	groups := acc.groups(req, r.resultGroups)
 	r.resultGroups = groups
 	diag := r.diagnostics(view, req, rowsScanned, matchedRows, acc.reduceRows, time.Since(start).Nanoseconds())
+	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
+	finalizeColumnPhysicalQueryResultGroups(req, &result)
+	r.resultGroups = result.Groups
+	return result, nil
+}
+
+func columnTypedColumnPhysicalQueryUseSumSecondOfDaySquare(req ColumnPhysicalQueryRequest) bool {
+	return req.Kind == ColumnPhysicalQuerySumSecondOfDaySquare &&
+		req.ValueColumn != "" &&
+		req.GroupColumn == "" &&
+		req.DistinctColumn == "" &&
+		req.AggregateMetadataName == "" &&
+		req.TopK == 0
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) runSumSecondOfDaySquare(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
+	start := time.Now()
+	rowsScanned := 0
+	matchedRows := 0
+	var sum TypedColumnInt64PredicateAggregateResult
+	for _, part := range r.parts {
+		partRows := len(part.RowIndexes)
+		if part.RowIndexes == nil {
+			partRows = part.Rows
+		}
+		values, err := typedColumnPhysicalQueryInt64ColumnValues(part.Values, req.ValueColumn, partRows)
+		if err != nil {
+			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+		}
+		if len(values) != partRows {
+			return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, fmt.Errorf("collections: typed-column part physical query column %q rows=%d want %d", req.ValueColumn, len(values), partRows)
+		}
+		for rowIdx := 0; rowIdx < partRows; rowIdx++ {
+			rowsScanned++
+			matched, err := typedColumnPhysicalQueryPredicatesMatch(part.Values, r.plan.PredicateSpecs, rowIdx)
+			if err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+			}
+			if !matched {
+				continue
+			}
+			if len(r.plan.PredicateSpecs) != 0 {
+				matchedRows++
+			}
+			value, err := typedColumnPhysicalQueryInt64ColumnValue(values, req.ValueColumn, rowIdx)
+			if err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+			}
+			if err := addTypedColumnInt64PredicateAggregateSecondOfDaySquareValue(&sum, value); err != nil {
+				return ColumnPhysicalQueryResult{Diagnostics: r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())}, err
+			}
+		}
+	}
+	groups := r.resultGroups[:0]
+	if sum.Count > 0 {
+		groups = append(groups, ColumnPhysicalQueryGroup{Key: columnPhysicalQuerySumSecondOfDaySquareKey(req.ValueColumn), Count: int(sum.Count), Int64: sum.Sum})
+	}
+	r.resultGroups = groups
+	diag := r.diagnostics(view, req, rowsScanned, matchedRows, int(sum.Count), time.Since(start).Nanoseconds())
 	result := ColumnPhysicalQueryResult{Groups: groups, Diagnostics: diag}
 	finalizeColumnPhysicalQueryResultGroups(req, &result)
 	r.resultGroups = result.Groups
@@ -1720,7 +2261,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseGroupHourCou
 				}
 				if !seen {
 					var ok bool
-					key, ok = dense.DictionaryByCode[int64(localCode)]
+					key, ok = columnTypedColumnDenseGroupHourDictionaryValue(dense, localCode)
 					if !ok {
 						diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 						diag.DenseGroupHourCountUsed = true
@@ -1795,22 +2336,35 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseInt64Span(vi
 			r.denseLocalSpanSeen = r.denseLocalSpanSeen[:dense.Cardinality]
 			clear(r.denseLocalSpanSeen)
 		}
-		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		preAppliedPredicates := dense.PredicatesPreApplied
+		if preAppliedPredicates {
+			rowsScanned += dense.PreAppliedRowsScanned
+		} else if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += len(dense.GroupCodes)
 			continue
 		}
-		for rowIdx, code := range dense.GroupCodes {
-			rowsScanned++
+		rowCount := len(dense.GroupCodes)
+		if preAppliedPredicates {
+			rowCount = len(dense.PredicateRows)
+		}
+		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
+			rowIdx := selectedIdx
+			if preAppliedPredicates {
+				rowIdx = int(dense.PredicateRows[selectedIdx])
+			} else {
+				rowsScanned++
+			}
 			if !visibility.rowVisible(rowIdx) {
 				continue
 			}
-			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
 			}
 			if len(dense.Predicates) != 0 {
 				matchedRows++
 			}
 			reduceRows++
+			code := dense.GroupCodes[rowIdx]
 			if !columnTypedColumnDenseCodeValid(dense.GroupValid, rowIdx) {
 				if req.SkipEmptyGroupKey {
 					continue
@@ -1846,7 +2400,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runLatestVisibleDenseInt64Span(vi
 			if !seen {
 				continue
 			}
-			key, ok := dense.DictionaryByCode[int64(localCode)]
+			key, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				diag := r.latestVisibleDiagnostics(view, req, state, visibilityBytes, visibilityNanos, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 				diag.DenseInt64SpanUsed = true
@@ -2519,7 +3073,7 @@ func columnTypedColumnDenseGroupCountDistinctPartsHaveGlobalCodes(parts []column
 		if dense == nil {
 			return false
 		}
-		if dense.Group.GlobalDictionary == nil || dense.Distinct.GlobalDictionary == nil {
+		if dense.Group.GlobalDictionary == nil || !dense.Group.GlobalCardinalityOK || !dense.Distinct.GlobalCardinalityOK {
 			return false
 		}
 		if len(dense.Group.GlobalCodes) != dense.Rows || len(dense.Distinct.GlobalCodes) != dense.Rows {
@@ -2527,6 +3081,46 @@ func columnTypedColumnDenseGroupCountDistinctPartsHaveGlobalCodes(parts []column
 		}
 	}
 	return true
+}
+
+func columnTypedColumnDenseGroupCountDistinctPreparedGlobalRankInfo(parts []columnTypedColumnPhysicalQueryPart) ([]string, int, bool, error) {
+	var groupDictionary []string
+	distinctCardinality := 0
+	havePreparedRanks := false
+	for partIdx := range parts {
+		dense := parts[partIdx].DenseGroupCountDistinct
+		if dense == nil {
+			return nil, 0, false, nil
+		}
+		if !columnTypedColumnDenseGroupCountDistinctColumnHasGlobalRanks(&dense.Group) || !columnTypedColumnDenseGroupCountDistinctColumnHasGlobalRanks(&dense.Distinct) {
+			return nil, 0, false, nil
+		}
+		if dense.Group.GlobalDictionary == nil {
+			return nil, 0, false, nil
+		}
+		if dense.Group.GlobalCardinality != len(dense.Group.GlobalDictionary) {
+			return nil, 0, true, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want dictionary=%d", partIdx, dense.Group.GlobalCardinality, len(dense.Group.GlobalDictionary))
+		}
+		if !havePreparedRanks {
+			groupDictionary = dense.Group.GlobalDictionary
+			distinctCardinality = dense.Distinct.GlobalCardinality
+			havePreparedRanks = true
+			continue
+		}
+		if len(dense.Group.GlobalDictionary) != len(groupDictionary) {
+			return nil, 0, true, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want %d", partIdx, len(dense.Group.GlobalDictionary), len(groupDictionary))
+		}
+		if dense.Distinct.GlobalCardinality != distinctCardinality {
+			return nil, 0, true, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, dense.Distinct.GlobalCardinality, distinctCardinality)
+		}
+	}
+	return groupDictionary, distinctCardinality, havePreparedRanks, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctColumnHasGlobalRanks(column *columnTypedColumnDenseStringCodeColumn) bool {
+	return column != nil &&
+		column.GlobalCardinalityOK &&
+		len(column.GlobalLocalRanks) == len(column.Dictionary)
 }
 
 func columnTypedColumnDenseTwoSingleCodePredicates(predicates []columnTypedColumnDensePredicatePart, rows int) (leftCodes, rightCodes []uint32, leftCode, rightCode uint32, ok bool) {
@@ -2553,18 +3147,33 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctGlobalC
 			diag.DenseGroupCountDistinctUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct missing prepared part %d", partIdx)
 		}
+		if dense.Group.GlobalDictionary == nil {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d missing group global dictionary", partIdx)
+		}
+		if !dense.Group.GlobalCardinalityOK || dense.Group.GlobalCardinality != len(dense.Group.GlobalDictionary) {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d ok=%t want dictionary=%d", partIdx, dense.Group.GlobalCardinality, dense.Group.GlobalCardinalityOK, len(dense.Group.GlobalDictionary))
+		}
+		if !dense.Distinct.GlobalCardinalityOK {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d missing distinct global cardinality", partIdx)
+		}
 		if !haveCardinality {
 			groupCardinality = len(dense.Group.GlobalDictionary)
-			distinctCardinality = len(dense.Distinct.GlobalDictionary)
+			distinctCardinality = dense.Distinct.GlobalCardinality
 			haveCardinality = true
 		} else if len(dense.Group.GlobalDictionary) != groupCardinality {
 			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
 			diag.DenseGroupCountDistinctUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want %d", partIdx, len(dense.Group.GlobalDictionary), groupCardinality)
-		} else if len(dense.Distinct.GlobalDictionary) != distinctCardinality {
+		} else if dense.Distinct.GlobalCardinality != distinctCardinality {
 			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
 			diag.DenseGroupCountDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, len(dense.Distinct.GlobalDictionary), distinctCardinality)
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, dense.Distinct.GlobalCardinality, distinctCardinality)
 		}
 	}
 	if cap(r.denseGroupCountDistinctCounts) < groupCardinality {
@@ -2638,10 +3247,10 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctGlobalC
 			diag.DenseGroupCountDistinctUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group global cardinality=%d want %d", partIdx, len(dense.Group.GlobalDictionary), groupCardinality)
 		}
-		if len(dense.Distinct.GlobalDictionary) != distinctCardinality {
+		if dense.Distinct.GlobalCardinality != distinctCardinality {
 			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 			diag.DenseGroupCountDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, len(dense.Distinct.GlobalDictionary), distinctCardinality)
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct global cardinality=%d want %d", partIdx, dense.Distinct.GlobalCardinality, distinctCardinality)
 		}
 		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += dense.Rows
@@ -2792,21 +3401,31 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctGlobalC
 
 func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctLocalCodes(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	start := time.Now()
-	groupDictionary, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(r.parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
-		return &part.Group
-	})
+	groupDictionary, distinctCardinality, havePreparedRanks, err := columnTypedColumnDenseGroupCountDistinctPreparedGlobalRankInfo(r.parts)
 	if err != nil {
 		diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
 		diag.DenseGroupCountDistinctUsed = true
 		return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 	}
-	distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(r.parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
-		return &part.Distinct
-	})
-	if err != nil {
-		diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
-		diag.DenseGroupCountDistinctUsed = true
-		return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+	var groupRanks map[string]uint32
+	var distinctRanks map[string]uint32
+	if !havePreparedRanks {
+		groupDictionary, groupRanks, err = columnTypedColumnDenseGroupCountDistinctGlobalDictionary(r.parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+			return &part.Group
+		})
+		if err != nil {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
+		distinctRanks, distinctCardinality, err = columnTypedColumnDenseGroupCountDistinctGlobalRanks(r.parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+			return &part.Distinct
+		})
+		if err != nil {
+			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
+			diag.DenseGroupCountDistinctUsed = true
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
+		}
 	}
 	groupCardinality := len(groupDictionary)
 	if cap(r.denseGroupCountDistinctCounts) < groupCardinality {
@@ -2871,20 +3490,81 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCountDistinctLocalCo
 			diag.DenseGroupCountDistinctUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d rows=%d group_local=%d distinct_local=%d", partIdx, dense.Rows, len(dense.Group.Codes), len(dense.Distinct.Codes))
 		}
-		groupLocalRanks, groupEmptyRank, groupEmptyOK, err := columnTypedColumnDenseGroupCountDistinctLocalRanks(&dense.Group, groupRanks)
-		if err != nil {
-			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
-			diag.DenseGroupCountDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct group part %d: %w", partIdx, err)
-		}
-		distinctLocalRanks, distinctEmptyRank, distinctEmptyOK, err := columnTypedColumnDenseGroupCountDistinctLocalRanks(&dense.Distinct, distinctRanks)
-		if err != nil {
-			diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
-			diag.DenseGroupCountDistinctUsed = true
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct distinct part %d: %w", partIdx, err)
+		var groupLocalRanks []uint32
+		var groupEmptyRank uint32
+		var groupEmptyOK bool
+		var distinctLocalRanks []uint32
+		var distinctEmptyRank uint32
+		var distinctEmptyOK bool
+		if havePreparedRanks {
+			groupLocalRanks = dense.Group.GlobalLocalRanks
+			groupEmptyRank = dense.Group.GlobalEmptyRank
+			groupEmptyOK = dense.Group.GlobalEmptyRankOK
+			distinctLocalRanks = dense.Distinct.GlobalLocalRanks
+			distinctEmptyRank = dense.Distinct.GlobalEmptyRank
+			distinctEmptyOK = dense.Distinct.GlobalEmptyRankOK
+		} else {
+			groupLocalRanks, groupEmptyRank, groupEmptyOK, err = columnTypedColumnDenseGroupCountDistinctLocalRanks(&dense.Group, groupRanks)
+			if err != nil {
+				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseGroupCountDistinctUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct group part %d: %w", partIdx, err)
+			}
+			distinctLocalRanks, distinctEmptyRank, distinctEmptyOK, err = columnTypedColumnDenseGroupCountDistinctLocalRanks(&dense.Distinct, distinctRanks)
+			if err != nil {
+				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+				diag.DenseGroupCountDistinctUsed = true
+				return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct distinct part %d: %w", partIdx, err)
+			}
 		}
 		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += dense.Rows
+			continue
+		}
+		leftPredicateCodes, rightPredicateCodes, leftPredicateCode, rightPredicateCode, useTwoSinglePredicates := columnTypedColumnDenseTwoSingleCodePredicates(dense.Predicates, dense.Rows)
+		if usePairBitset && useTwoSinglePredicates && dense.Group.Valid == nil && dense.Distinct.Valid == nil {
+			reducer = columnTypedColumnDenseGroupCountDistinctReducerPairBitset
+			for rowIdx := 0; rowIdx < dense.Rows; rowIdx++ {
+				rowsScanned++
+				if leftPredicateCodes[rowIdx] != leftPredicateCode || rightPredicateCodes[rowIdx] != rightPredicateCode {
+					continue
+				}
+				matchedRows++
+				reduceRows++
+				groupLocalCode := dense.Group.Codes[rowIdx]
+				if uint64(groupLocalCode) >= uint64(len(groupLocalRanks)) {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group code[%d]=%d outside cardinality=%d", partIdx, rowIdx, groupLocalCode, len(groupLocalRanks))
+				}
+				groupCode := groupLocalRanks[groupLocalCode]
+				groupIdx, ok := columnDictionaryCodeIndex(groupCode, len(r.denseGroupCountDistinctCounts))
+				if !ok {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d group rank[%d]=%d outside cardinality=%d", partIdx, rowIdx, groupCode, len(r.denseGroupCountDistinctCounts))
+				}
+				r.denseGroupCountDistinctCounts[groupIdx]++
+				distinctLocalCode := dense.Distinct.Codes[rowIdx]
+				if uint64(distinctLocalCode) >= uint64(len(distinctLocalRanks)) {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct code[%d]=%d outside cardinality=%d", partIdx, rowIdx, distinctLocalCode, len(distinctLocalRanks))
+				}
+				distinctCode := distinctLocalRanks[distinctLocalCode]
+				distinctIdx, ok := columnDictionaryCodeIndex(distinctCode, distinctCardinality)
+				if !ok {
+					diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountDistinctUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column grouped count-distinct part %d distinct rank[%d]=%d outside cardinality=%d", partIdx, rowIdx, distinctCode, distinctCardinality)
+				}
+				wordIdx := groupIdx*wordsPerGroup + distinctIdx/64
+				mask := uint64(1) << uint(distinctIdx&63)
+				if r.denseGroupCountDistinctPairBits[wordIdx]&mask == 0 {
+					r.denseGroupCountDistinctPairBits[wordIdx] |= mask
+					r.denseGroupCountDistinctDistinctCounts[groupIdx]++
+				}
+			}
 			continue
 		}
 		for rowIdx := 0; rowIdx < dense.Rows; rowIdx++ {
@@ -3118,7 +3798,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupHourCount(view colum
 				}
 				if !seen {
 					var ok bool
-					key, ok = dense.DictionaryByCode[int64(localCode)]
+					key, ok = columnTypedColumnDenseGroupHourDictionaryValue(dense, localCode)
 					if !ok {
 						diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 						diag.DenseGroupHourCountUsed = true
@@ -3223,13 +3903,25 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanGlobalCodes(view
 	reduceRows := 0
 	for partIdx := range r.parts {
 		dense := r.parts[partIdx].DenseInt64Span
-		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		preAppliedPredicates := dense.PredicatesPreApplied
+		if preAppliedPredicates {
+			rowsScanned += dense.PreAppliedRowsScanned
+		} else if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += len(dense.GroupCodes)
 			continue
 		}
-		for rowIdx := range dense.GroupCodes {
-			rowsScanned++
-			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+		rowCount := len(dense.GroupCodes)
+		if preAppliedPredicates {
+			rowCount = len(dense.PredicateRows)
+		}
+		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
+			rowIdx := selectedIdx
+			if preAppliedPredicates {
+				rowIdx = int(dense.PredicateRows[selectedIdx])
+			} else {
+				rowsScanned++
+			}
+			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
 			}
 			if len(dense.Predicates) != 0 {
@@ -3352,19 +4044,32 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanLocalMap(view co
 			r.denseLocalSpanSeen = r.denseLocalSpanSeen[:dense.Cardinality]
 			clear(r.denseLocalSpanSeen)
 		}
-		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		preAppliedPredicates := dense.PredicatesPreApplied
+		if preAppliedPredicates {
+			rowsScanned += dense.PreAppliedRowsScanned
+		} else if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 			rowsScanned += len(dense.GroupCodes)
 			continue
 		}
-		for rowIdx, code := range dense.GroupCodes {
-			rowsScanned++
-			if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
+		rowCount := len(dense.GroupCodes)
+		if preAppliedPredicates {
+			rowCount = len(dense.PredicateRows)
+		}
+		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
+			rowIdx := selectedIdx
+			if preAppliedPredicates {
+				rowIdx = int(dense.PredicateRows[selectedIdx])
+			} else {
+				rowsScanned++
+			}
+			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
 			}
 			if len(dense.Predicates) != 0 {
 				matchedRows++
 			}
 			reduceRows++
+			code := dense.GroupCodes[rowIdx]
 			if !columnTypedColumnDenseCodeValid(dense.GroupValid, rowIdx) {
 				if req.SkipEmptyGroupKey {
 					continue
@@ -3400,7 +4105,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanLocalMap(view co
 			if !seen {
 				continue
 			}
-			key, ok := dense.DictionaryByCode[int64(localCode)]
+			key, ok := columnTypedColumnDenseInt64SpanDictionaryValue(dense, localCode)
 			if !ok {
 				diag := r.diagnostics(view, req, rowsScanned, matchedRows, reduceRows, time.Since(start).Nanoseconds())
 				diag.DenseInt64SpanUsed = true
@@ -4396,10 +5101,25 @@ func typedColumnPhysicalQueryStringValueAt(values map[string][]columnDeclaredVal
 }
 
 func typedColumnPhysicalQueryInt64At(values map[string][]columnDeclaredValue, column string, rowIdx int) (int64, error) {
+	columnValues, err := typedColumnPhysicalQueryInt64ColumnValues(values, column, rowIdx+1)
+	if err != nil {
+		return 0, err
+	}
+	return typedColumnPhysicalQueryInt64ColumnValue(columnValues, column, rowIdx)
+}
+
+func typedColumnPhysicalQueryInt64ColumnValues(values map[string][]columnDeclaredValue, column string, wantRows int) ([]columnDeclaredValue, error) {
 	columnValues, ok := values[column]
 	if !ok {
-		return 0, fmt.Errorf("collections: typed-column part physical query missing int64 column %q", column)
+		return nil, fmt.Errorf("collections: typed-column part physical query missing int64 column %q", column)
 	}
+	if len(columnValues) < wantRows {
+		return nil, fmt.Errorf("collections: typed-column part physical query column %q rows=%d want at least %d", column, len(columnValues), wantRows)
+	}
+	return columnValues, nil
+}
+
+func typedColumnPhysicalQueryInt64ColumnValue(columnValues []columnDeclaredValue, column string, rowIdx int) (int64, error) {
 	if rowIdx < 0 || rowIdx >= len(columnValues) {
 		return 0, fmt.Errorf("collections: typed-column part physical query row_index=%d outside column %q rows=%d", rowIdx, column, len(columnValues))
 	}

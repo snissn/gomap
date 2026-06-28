@@ -18,6 +18,13 @@ type GrowBufferStats struct {
 	ReadAppendPayloadRequestedBytesTotal                  uint64
 	ReadAppendCurrentMmapDirectDecodeCallsTotal           uint64
 	ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal  uint64
+	ReadAppendDecodedPayloadCallsTotal                    uint64
+	ReadAppendDecodedPayloadRequestedBytesTotal           uint64
+	ReadAppendDecodedPayloadDstPresentCallsTotal          uint64
+	ReadAppendDecodedPayloadDstFitCallsTotal              uint64
+	ReadAppendDecodedPayloadDstFitRequestedBytesTotal     uint64
+	ReadAppendTemplateEncodedPayloadCallsTotal            uint64
+	ReadAppendTemplateEncodedPayloadRequestedBytesTotal   uint64
 }
 
 var growCallsTotal atomic.Uint64
@@ -35,6 +42,13 @@ var growReadAppendPayloadCallsTotal atomic.Uint64
 var growReadAppendPayloadRequestedBytesTotal atomic.Uint64
 var growReadAppendCurrentMmapDirectDecodeCallsTotal atomic.Uint64
 var growReadAppendCurrentMmapDirectDecodeRequestedBytesTotal atomic.Uint64
+var growReadAppendDecodedPayloadCallsTotal atomic.Uint64
+var growReadAppendDecodedPayloadRequestedBytesTotal atomic.Uint64
+var growReadAppendDecodedPayloadDstPresentCallsTotal atomic.Uint64
+var growReadAppendDecodedPayloadDstFitCallsTotal atomic.Uint64
+var growReadAppendDecodedPayloadDstFitRequestedBytesTotal atomic.Uint64
+var growReadAppendTemplateEncodedPayloadCallsTotal atomic.Uint64
+var growReadAppendTemplateEncodedPayloadRequestedBytesTotal atomic.Uint64
 
 func GrowBufferStatsSnapshot() GrowBufferStats {
 	return GrowBufferStats{
@@ -53,6 +67,13 @@ func GrowBufferStatsSnapshot() GrowBufferStats {
 		ReadAppendPayloadRequestedBytesTotal:                  growReadAppendPayloadRequestedBytesTotal.Load(),
 		ReadAppendCurrentMmapDirectDecodeCallsTotal:           growReadAppendCurrentMmapDirectDecodeCallsTotal.Load(),
 		ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal:  growReadAppendCurrentMmapDirectDecodeRequestedBytesTotal.Load(),
+		ReadAppendDecodedPayloadCallsTotal:                    growReadAppendDecodedPayloadCallsTotal.Load(),
+		ReadAppendDecodedPayloadRequestedBytesTotal:           growReadAppendDecodedPayloadRequestedBytesTotal.Load(),
+		ReadAppendDecodedPayloadDstPresentCallsTotal:          growReadAppendDecodedPayloadDstPresentCallsTotal.Load(),
+		ReadAppendDecodedPayloadDstFitCallsTotal:              growReadAppendDecodedPayloadDstFitCallsTotal.Load(),
+		ReadAppendDecodedPayloadDstFitRequestedBytesTotal:     growReadAppendDecodedPayloadDstFitRequestedBytesTotal.Load(),
+		ReadAppendTemplateEncodedPayloadCallsTotal:            growReadAppendTemplateEncodedPayloadCallsTotal.Load(),
+		ReadAppendTemplateEncodedPayloadRequestedBytesTotal:   growReadAppendTemplateEncodedPayloadRequestedBytesTotal.Load(),
 	}
 }
 
@@ -91,6 +112,29 @@ func noteGrowReadAppendCurrentMmapDirectDecode(n int) {
 	}
 	growReadAppendCurrentMmapDirectDecodeCallsTotal.Add(1)
 	growReadAppendCurrentMmapDirectDecodeRequestedBytesTotal.Add(uint64(n))
+}
+
+func noteGrowReadAppendDecodedPayload(dst []byte, n int) {
+	if n <= 0 {
+		return
+	}
+	growReadAppendDecodedPayloadCallsTotal.Add(1)
+	growReadAppendDecodedPayloadRequestedBytesTotal.Add(uint64(n))
+	if dst != nil {
+		growReadAppendDecodedPayloadDstPresentCallsTotal.Add(1)
+	}
+	if cap(dst)-len(dst) >= n {
+		growReadAppendDecodedPayloadDstFitCallsTotal.Add(1)
+		growReadAppendDecodedPayloadDstFitRequestedBytesTotal.Add(uint64(n))
+	}
+}
+
+func noteGrowReadAppendTemplateEncodedPayload(n int) {
+	if n <= 0 {
+		return
+	}
+	growReadAppendTemplateEncodedPayloadCallsTotal.Add(1)
+	growReadAppendTemplateEncodedPayloadRequestedBytesTotal.Add(uint64(n))
 }
 
 func grow(dst []byte, n int) []byte {

@@ -110,83 +110,107 @@ type ColumnPhysicalQueryGroup struct {
 // ColumnPhysicalQueryDiagnostics reports scan and reduce work for a physical
 // query without counting full-document row materialization.
 type ColumnPhysicalQueryDiagnostics struct {
-	ManifestRoot                        uint64
-	ManifestRootName                    string
-	ManifestGeneration                  uint64
-	ActiveManifestChecksum              uint64
-	RecoveryManifestGeneration          uint64
-	RecoveryManifestChecksum            uint64
-	AppliedCommandLSN                   uint64
-	ManifestRecords                     int
-	AssetRefs                           int
-	MutationParts                       int
-	DecodedBlocks                       int
-	DirectReduceBlocks                  int
-	TypedColumnPartSections             int
-	TypedColumnPartSectionBytes         uint64
-	MetadataHits                        int
-	MetadataEntries                     int
-	MetadataMisses                      int
-	DictionaryCodeHits                  int
-	PredicateDictionaryCodeHits         int
-	Int64ValueHits                      int
-	ScheduledGranules                   int
-	SkippedGranules                     int
-	DecodedGranules                     int
-	RowsScanned                         int
-	RowsMatched                         int
-	DeletedRows                         int
-	ProjectedColumns                    int
-	PredicateCount                      int
-	PredicateColumns                    []string
-	PredicateKinds                      []string
-	PredicateLiterals                   int
-	SortKeyPrefixPlanned                bool
-	SortKeyPrefixColumns                []string
-	SortKeyPrefixLiterals               int
-	SortKeyMarkChecks                   int
-	SortKeyMarkMatches                  int
-	SortKeyMarkSkips                    int
-	SortKeyMarkFallbackReason           string
-	SortedGroupedDistinctReady          bool
-	SortedGroupedDistinctUsed           bool
-	SortedGroupedDistinctFallbackReason string
-	DenseGroupCountUsed                 bool
-	DenseGroupCountDistinctUsed         bool
-	DenseGroupCountDistinctReducer      string
-	DenseGroupCountDistinctGroups       int
-	DenseGroupCountDistinctValues       int
-	DenseGroupCountDistinctPairBitWords int
-	DenseGroupHourCountUsed             bool
-	DenseInt64SpanUsed                  bool
-	DenseInt64SpanReducer               string
-	TimeOrderTopKUsed                   bool
-	DecodedPayloadBytes                 uint64
-	FallbackReads                       int
-	RowMaterializations                 int
-	DocumentMaterializations            int
-	PhysicalBytesScanned                int64
-	DecodedMetadataBytes                uint64
-	MappedBytes                         uint64
-	HeapCopyBytes                       uint64
-	ReduceRows                          int
-	TopKLimit                           int
-	TopKCandidates                      int
-	TopKOrder                           string
-	VisibilityRows                      int
-	ReconstructionRows                  int
-	ResultGroups                        int
-	WorkerCount                         int
-	SegmentFileCacheHits                uint64
-	SegmentFileCacheMisses              uint64
-	ColumnAssetReadIntegrity            string
-	StorageSource                       ColumnPhysicalQueryStorageSource
-	FallbackReason                      ColumnPhysicalQueryFallbackReason
-	ScanNanos                           int64
-	VisibilityNanos                     int64
-	ReduceNanos                         int64
-	ResultShapeNanos                    int64
-	ReconstructionNanos                 int64
+	ManifestRoot                          uint64
+	ManifestRootName                      string
+	ManifestGeneration                    uint64
+	ActiveManifestChecksum                uint64
+	RecoveryManifestGeneration            uint64
+	RecoveryManifestChecksum              uint64
+	AppliedCommandLSN                     uint64
+	ManifestRecords                       int
+	AssetRefs                             int
+	MutationParts                         int
+	DecodedBlocks                         int
+	DirectReduceBlocks                    int
+	TypedColumnPartSections               int
+	TypedColumnPartSectionBytes           uint64
+	MetadataHits                          int
+	MetadataEntries                       int
+	MetadataMisses                        int
+	DictionaryCodeHits                    int
+	PredicateDictionaryCodeHits           int
+	Int64ValueHits                        int
+	ScheduledGranules                     int
+	SkippedGranules                       int
+	DecodedGranules                       int
+	RowsScanned                           int
+	RowsMatched                           int
+	DeletedRows                           int
+	ProjectedColumns                      int
+	PredicateCount                        int
+	PredicateColumns                      []string
+	PredicateKinds                        []string
+	PredicateLiterals                     int
+	SortKeyPrefixPlanned                  bool
+	SortKeyPrefixColumns                  []string
+	SortKeyPrefixLiterals                 int
+	SortKeyMarkChecks                     int
+	SortKeyMarkMatches                    int
+	SortKeyMarkSkips                      int
+	SortKeyMarkFallbackReason             string
+	SortedGroupedDistinctReady            bool
+	SortedGroupedDistinctUsed             bool
+	SortedGroupedDistinctFallbackReason   string
+	DenseGroupCountUsed                   bool
+	DenseGroupCountDistinctUsed           bool
+	DenseGroupCountDistinctReducer        string
+	DenseGroupCountDistinctGroups         int
+	DenseGroupCountDistinctValues         int
+	DenseGroupCountDistinctPairBitWords   int
+	DenseGroupHourCountUsed               bool
+	DenseInt64SpanUsed                    bool
+	DenseInt64SpanReducer                 string
+	TimeOrderTopKUsed                     bool
+	DecodedPayloadBytes                   uint64
+	FallbackReads                         int
+	RowMaterializations                   int
+	DocumentMaterializations              int
+	PhysicalBytesScanned                  int64
+	DecodedMetadataBytes                  uint64
+	MappedBytes                           uint64
+	HeapCopyBytes                         uint64
+	ReduceRows                            int
+	TopKLimit                             int
+	TopKCandidates                        int
+	TopKOrder                             string
+	VisibilityRows                        int
+	ReconstructionRows                    int
+	ResultGroups                          int
+	WorkerCount                           int
+	SegmentFileCacheHits                  uint64
+	SegmentFileCacheMisses                uint64
+	TypedColumnOneShotCacheHit            bool
+	TypedColumnOneShotCacheMiss           bool
+	TypedColumnOneShotCacheBuild          bool
+	TypedColumnOneShotBuildNanos          int64
+	TypedColumnPreparePlanNanos           int64
+	TypedColumnPrepareRefsNanos           int64
+	TypedColumnPreparePairingNanos        int64
+	TypedColumnPreparePartDecodeNanos     int64
+	TypedColumnPreparePostPrepareNanos    int64
+	TypedColumnPrepareSummaryNanos        int64
+	TypedColumnOneShotCacheStoreNanos     int64
+	TypedColumnPrepareReadImageNanos      int64
+	TypedColumnPrepareStateBuildNanos     int64
+	TypedColumnPrepareDictionaryNanos     int64
+	TypedColumnPreparePruningNanos        int64
+	TypedColumnPrepareSortKeyNanos        int64
+	TypedColumnPrepareStatsNanos          int64
+	TypedColumnPrepareRangeReadNanos      int64
+	TypedColumnPrepareRangeReadBytes      int64
+	TypedColumnPrepareAdapterNanos        int64
+	TypedColumnPrepareDenseGroupNanos     int64
+	TypedColumnPrepareDenseValueNanos     int64
+	TypedColumnPrepareDensePredicateNanos int64
+	TypedColumnPrepareDensePreapplyNanos  int64
+	ColumnAssetReadIntegrity              string
+	StorageSource                         ColumnPhysicalQueryStorageSource
+	FallbackReason                        ColumnPhysicalQueryFallbackReason
+	ScanNanos                             int64
+	VisibilityNanos                       int64
+	ReduceNanos                           int64
+	ResultShapeNanos                      int64
+	ReconstructionNanos                   int64
 }
 
 // ColumnPhysicalQueryResult is the reduced result and diagnostics from an
@@ -522,6 +546,18 @@ func (r *ColumnPhysicalQueryRunner) Close() error {
 		r.closeView = nil
 	}
 	return closeErr
+}
+
+// PrepareDiagnostics reports setup work captured while constructing this
+// prepared runner. It is intentionally sparse for runner types without
+// instrumented setup subphases.
+func (r *ColumnPhysicalQueryRunner) PrepareDiagnostics() ColumnPhysicalQueryDiagnostics {
+	var diag ColumnPhysicalQueryDiagnostics
+	if r == nil || r.typedColumn == nil {
+		return diag
+	}
+	r.typedColumn.prepareDiagnostics.applyTo(&diag)
+	return diag
 }
 
 // Run executes the prepared direct physical query against the pinned snapshot.
@@ -1416,6 +1452,26 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.ReconstructionRows += right.ReconstructionRows
 	left.SegmentFileCacheHits += right.SegmentFileCacheHits
 	left.SegmentFileCacheMisses += right.SegmentFileCacheMisses
+	left.TypedColumnPreparePlanNanos += right.TypedColumnPreparePlanNanos
+	left.TypedColumnPrepareRefsNanos += right.TypedColumnPrepareRefsNanos
+	left.TypedColumnPreparePairingNanos += right.TypedColumnPreparePairingNanos
+	left.TypedColumnPreparePartDecodeNanos += right.TypedColumnPreparePartDecodeNanos
+	left.TypedColumnPreparePostPrepareNanos += right.TypedColumnPreparePostPrepareNanos
+	left.TypedColumnPrepareSummaryNanos += right.TypedColumnPrepareSummaryNanos
+	left.TypedColumnOneShotCacheStoreNanos += right.TypedColumnOneShotCacheStoreNanos
+	left.TypedColumnPrepareReadImageNanos += right.TypedColumnPrepareReadImageNanos
+	left.TypedColumnPrepareStateBuildNanos += right.TypedColumnPrepareStateBuildNanos
+	left.TypedColumnPrepareDictionaryNanos += right.TypedColumnPrepareDictionaryNanos
+	left.TypedColumnPreparePruningNanos += right.TypedColumnPreparePruningNanos
+	left.TypedColumnPrepareSortKeyNanos += right.TypedColumnPrepareSortKeyNanos
+	left.TypedColumnPrepareStatsNanos += right.TypedColumnPrepareStatsNanos
+	left.TypedColumnPrepareRangeReadNanos += right.TypedColumnPrepareRangeReadNanos
+	left.TypedColumnPrepareRangeReadBytes += right.TypedColumnPrepareRangeReadBytes
+	left.TypedColumnPrepareAdapterNanos += right.TypedColumnPrepareAdapterNanos
+	left.TypedColumnPrepareDenseGroupNanos += right.TypedColumnPrepareDenseGroupNanos
+	left.TypedColumnPrepareDenseValueNanos += right.TypedColumnPrepareDenseValueNanos
+	left.TypedColumnPrepareDensePredicateNanos += right.TypedColumnPrepareDensePredicateNanos
+	left.TypedColumnPrepareDensePreapplyNanos += right.TypedColumnPrepareDensePreapplyNanos
 	return left
 }
 
@@ -2062,7 +2118,7 @@ func (e *columnPhysicalQueryExecutor) visitDirectSumSecondOfDaySquare(value int6
 
 func (e *columnPhysicalQueryExecutor) addSumSecondOfDaySquareValue(value int64) error {
 	result := TypedColumnInt64PredicateAggregateResult{Sum: e.int64Sum}
-	if err := addTypedColumnInt64PredicateAggregateExpressionValue(&result, TypedColumnInt64AggregateSecondOfDaySquare, value); err != nil {
+	if err := addTypedColumnInt64PredicateAggregateSecondOfDaySquareValue(&result, value); err != nil {
 		return err
 	}
 	e.int64Sum = result.Sum

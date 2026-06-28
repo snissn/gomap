@@ -733,6 +733,22 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.vlog.decode_buffer_grow.allocated_bytes_total"] = fmt.Sprintf("%d", growStats.AllocatedBytesTotal)
 	stats["treedb.vlog.decode_buffer_grow.copied_bytes_total"] = fmt.Sprintf("%d", growStats.CopiedBytesTotal)
 	stats["treedb.vlog.decode_buffer_grow.capacity_waste_bytes_total"] = fmt.Sprintf("%d", growStats.CapacityWasteBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_compressed_fallback.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_compressed_fallback.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackRequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_compressed_fallback.dst_present_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstPresentCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_compressed_fallback.dst_fit_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_compressed_fallback.dst_fit_requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCompressedFallbackDstFitRequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendPayloadRequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_current_mmap_direct_decode.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_current_mmap_direct_decode.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendCurrentMmapDirectDecodeRequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadRequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.dst_present_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadDstPresentCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.dst_fit_calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadDstFitCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.dst_fit_requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendDecodedPayloadDstFitRequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_template_encoded_payload.calls_total"] = fmt.Sprintf("%d", growStats.ReadAppendTemplateEncodedPayloadCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.read_append_template_encoded_payload.requested_bytes_total"] = fmt.Sprintf("%d", growStats.ReadAppendTemplateEncodedPayloadRequestedBytesTotal)
 	if growStats.CallsTotal > 0 {
 		stats["treedb.vlog.decode_buffer_grow.realloc_rate"] = fmt.Sprintf("%.6f", float64(growStats.ReallocCallsTotal)/float64(growStats.CallsTotal))
 	}
@@ -838,6 +854,8 @@ func (db *DB) Stats() map[string]string {
 		readStats := db.valueLogManager.ReadStats()
 		stats["treedb.vlog.read.crc32_checks_total"] = fmt.Sprintf("%d", readStats.RecordCRCChecks)
 
+		valuelog.AppendDecodeScratchStats(stats, "treedb.vlog.decode_scratch", db.valueLogManager.DecodeScratchStats())
+
 		gStats := db.valueLogManager.GroupedFrameCacheDetailedStats()
 		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gStats.Hits)
 		stats["treedb.vlog.grouped_frame_cache.misses"] = fmt.Sprintf("%d", gStats.Misses)
@@ -852,6 +870,8 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.grouped_frame_cache.skipped_contention"] = fmt.Sprintf("%d", gStats.SkippedContention)
 		stats["treedb.vlog.grouped_frame_cache.entries"] = fmt.Sprintf("%d", gStats.Entries)
 		stats["treedb.vlog.grouped_frame_cache.capacity"] = fmt.Sprintf("%d", gStats.Capacity)
+		stats["treedb.vlog.grouped_frame_cache.allocated_shards"] = fmt.Sprintf("%d", gStats.AllocatedShards)
+		stats["treedb.vlog.grouped_frame_cache.allocated_slots"] = fmt.Sprintf("%d", gStats.AllocatedSlots)
 		if total := gStats.Hits + gStats.Misses; total > 0 {
 			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gStats.Hits)/float64(total))
 		}

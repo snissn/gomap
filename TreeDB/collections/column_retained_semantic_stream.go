@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,9 @@ import (
 
 const columnRetainedSemanticStreamV1BlockRows = 4096
 const maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes = 512 << 20
+const columnRetainedSemanticStreamV1ZSTDWindowSize = 1 << 20
+const columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes = 8 << 20
+const columnRetainedSemanticStreamV1RawBlockScratchPoolSlots = 4
 const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
 const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
 const minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock = 512
@@ -37,14 +41,85 @@ var (
 	columnRetainedSemanticStreamV1LocatorMagic   = []byte("crss1loc\x00")
 )
 
-type columnRetainedSemanticStreamEntry struct {
-	row uint64
-	raw []byte
-}
+var columnRetainedSemanticStreamV1RawBlockScratchPool = make(chan []byte, columnRetainedSemanticStreamV1RawBlockScratchPoolSlots)
 
 type columnRetainedSemanticStreamPath struct {
-	segments []string
-	entries  []columnRetainedSemanticStreamEntry
+	segments                []string
+	rows                    []uint64
+	rawValues               [][]byte
+	rawValueBytes           int
+	valueLengthUvarintBytes int
+}
+
+type columnRetainedSemanticStreamStreams struct {
+	byKey map[string]*columnRetainedSemanticStreamPath
+	root  columnRetainedSemanticStreamPathNode
+}
+
+type columnRetainedSemanticStreamPathNode struct {
+	children map[string]*columnRetainedSemanticStreamPathNode
+	stream   *columnRetainedSemanticStreamPath
+}
+
+func newColumnRetainedSemanticStreamStreams() *columnRetainedSemanticStreamStreams {
+	return &columnRetainedSemanticStreamStreams{
+		byKey: make(map[string]*columnRetainedSemanticStreamPath),
+	}
+}
+
+func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uint64, raw []byte, streamEntryCapacity int) {
+	current := &s.root
+	for _, segment := range path {
+		if current.children == nil {
+			current.children = make(map[string]*columnRetainedSemanticStreamPathNode)
+		}
+		child := current.children[segment]
+		if child == nil {
+			child = &columnRetainedSemanticStreamPathNode{}
+			current.children[segment] = child
+		}
+		current = child
+	}
+	stream := current.stream
+	if stream == nil {
+		key := columnRetainedSemanticStreamPathKey(path)
+		stream = s.byKey[key]
+		if stream == nil {
+			stream = &columnRetainedSemanticStreamPath{
+				segments:  append([]string(nil), path...),
+				rawValues: make([][]byte, 0, streamEntryCapacity),
+			}
+			s.byKey[key] = stream
+		}
+		current.stream = stream
+	}
+	stream.appendValue(row, raw)
+}
+
+func (p *columnRetainedSemanticStreamPath) appendValue(row uint64, raw []byte) {
+	if p.rows != nil {
+		p.rows = append(p.rows, row)
+	} else if row != uint64(len(p.rawValues)) {
+		p.rows = make([]uint64, len(p.rawValues), cap(p.rawValues))
+		for i := range p.rawValues {
+			p.rows[i] = uint64(i)
+		}
+		p.rows = append(p.rows, row)
+	}
+	p.rawValueBytes += len(raw)
+	p.valueLengthUvarintBytes += columnRetainedSemanticStreamV1UvarintSize(uint64(len(raw)))
+	p.rawValues = append(p.rawValues, raw)
+}
+
+func (p *columnRetainedSemanticStreamPath) entryCount() int {
+	return len(p.rawValues)
+}
+
+func (p *columnRetainedSemanticStreamPath) rowAt(idx int) uint64 {
+	if p.rows == nil {
+		return uint64(idx)
+	}
+	return p.rows[idx]
 }
 
 type columnRetainedSemanticStreamV1DecodedBlock struct {
@@ -52,12 +127,37 @@ type columnRetainedSemanticStreamV1DecodedBlock struct {
 }
 
 type columnRetainedSemanticStreamV1StoredBlockEncoder struct {
-	enc *zstd.Encoder
+	enc             *zstd.Encoder
+	rawBlockScratch []byte
 }
 
 type columnRetainedSemanticStreamV1RootFastPathPlan struct {
 	declaredColumnIndexesByPath map[string][]int
 	declaredRowsReady           bool
+}
+
+type columnRetainedSemanticStreamV1RetainedSkipTrie struct {
+	terminal bool
+	children map[string]*columnRetainedSemanticStreamV1RetainedSkipTrie
+}
+
+type columnRetainedSemanticStreamV1PathSegmentInterner struct {
+	segments map[string]string
+}
+
+func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) string {
+	if i == nil {
+		return string(key)
+	}
+	if value, ok := i.segments[string(key)]; ok {
+		return value
+	}
+	value := string(key)
+	if i.segments == nil {
+		i.segments = make(map[string]string)
+	}
+	i.segments[value] = value
+	return value
 }
 
 type columnRetainedSemanticStreamV1DecodeCache struct {
@@ -303,10 +403,15 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		return out, nil
 	}
 	rootPlan, useRootFastPath := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(documents))
+	var declaredRowIDBytes []byte
+	var declaredRowValues []columnDeclaredValue
 	if useRootFastPath && rootPlan.declaredRowsReady {
 		out.declaredRows = make([]columnDeclaredRow, len(documents))
 		out.declaredRowsReady = true
+		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids))
+		declaredRowValues = make([]columnDeclaredValue, len(documents)*len(cfg.Columns))
 	}
+	retainedSkipTrie := columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg)
 	blockTable := newCollectionRunTable((len(documents) + columnRetainedSemanticStreamV1BlockRows - 1) / columnRetainedSemanticStreamV1BlockRows)
 	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
 	if err != nil {
@@ -320,27 +425,34 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 			end = len(documents)
 		}
 		rows := end - start
-		streams := make(map[string]*columnRetainedSemanticStreamPath)
+		streams := newColumnRetainedSemanticStreamStreams()
+		pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+		var declaredStringInterner *columnDeclaredStringInterner
+		if rootPlan.declaredRowsReady {
+			declaredStringInterner = &columnDeclaredStringInterner{}
+		}
 		for row, i := 0, start; i < end; row, i = row+1, i+1 {
 			if useRootFastPath {
-				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), streams)
+				var declaredValuesDest []columnDeclaredValue
+				if rootPlan.declaredRowsReady {
+					valuesStart := i * len(cfg.Columns)
+					declaredValuesDest = declaredRowValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
+				}
+				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner, declaredValuesDest, declaredStringInterner)
 				if err != nil {
 					resetCollectionRunTable(blockTable)
 					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 				}
 				if rootPlan.declaredRowsReady {
+					idStart := len(declaredRowIDBytes)
+					declaredRowIDBytes = append(declaredRowIDBytes, ids[i]...)
 					out.declaredRows[i] = columnDeclaredRow{
-						ID:     bytes.Clone(ids[i]),
+						ID:     declaredRowIDBytes[idStart:len(declaredRowIDBytes):len(declaredRowIDBytes)],
 						Values: declaredValues,
 					}
 				}
 			} else {
-				retained, err := columnRetainedPayloadJSONObjectFromJSONDocument(cfg, documents[i])
-				if err != nil {
-					resetCollectionRunTable(blockTable)
-					return columnRetainedPayloadStorageDocuments{}, err
-				}
-				if err := collectColumnRetainedSemanticStreamObjectPaths(retained, nil, uint64(row), streams); err != nil {
+				if err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner); err != nil {
 					resetCollectionRunTable(blockTable)
 					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
 				}
@@ -353,14 +465,25 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		}
 		sum := sha256.Sum256(block)
 		blockKey := append([]byte(nil), sum[:]...)
+		locators := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
 		for i := 0; i < rows; i++ {
-			out.documents[start+i] = encodeColumnRetainedSemanticStreamV1Locator(blockKey, uint64(i))
+			locatorStart := len(locators)
+			locators = appendColumnRetainedSemanticStreamV1Locator(locators, blockKey, uint64(i))
+			out.documents[start+i] = locators[locatorStart:len(locators):len(locators)]
 		}
 		setCollectionRunValue(blockTable, blockKey, block)
 	}
 	blockTable.Freeze()
 	out.semanticStreamBlocks = blockTable
 	return out, nil
+}
+
+func columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids [][]byte) int {
+	capacity := 0
+	for _, id := range ids {
+		capacity += len(id)
+	}
+	return capacity
 }
 
 func columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg ColumnStoreConfig, ids [][]byte, documentCount int) (columnRetainedSemanticStreamV1RootFastPathPlan, bool) {
@@ -380,7 +503,30 @@ func columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg ColumnStoreConf
 	return plan, true
 }
 
-func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streams map[string]*columnRetainedSemanticStreamPath) ([]columnDeclaredValue, error) {
+func columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg ColumnStoreConfig) *columnRetainedSemanticStreamV1RetainedSkipTrie {
+	root := &columnRetainedSemanticStreamV1RetainedSkipTrie{}
+	for _, col := range cfg.Columns {
+		if col.Path == "" {
+			continue
+		}
+		current := root
+		for _, segment := range strings.Split(col.Path, ".") {
+			if current.children == nil {
+				current.children = make(map[string]*columnRetainedSemanticStreamV1RetainedSkipTrie)
+			}
+			child := current.children[segment]
+			if child == nil {
+				child = &columnRetainedSemanticStreamV1RetainedSkipTrie{}
+				current.children[segment] = child
+			}
+			current = child
+		}
+		current.terminal = true
+	}
+	return root
+}
+
+func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner, declaredValues []columnDeclaredValue, declaredStringInterner *columnDeclaredStringInterner) ([]columnDeclaredValue, error) {
 	if !gjson.ValidBytes(document) {
 		return nil, errors.New("invalid JSON: invalid JSON")
 	}
@@ -395,14 +541,14 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 		valuesRaw = valuesRaw[:len(cfg.Columns)]
 	}
 	type retainedRootValue struct {
-		path string
-		raw  []byte
+		path      string
+		raw       []byte
+		valueType jsonparser.ValueType
 	}
 	var retainedRootValueStack [8]retainedRootValue
 	retainedRootValues := retainedRootValueStack[:0]
-	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
-		path := string(key)
-		if indexes := plan.declaredColumnIndexesByPath[path]; len(indexes) > 0 {
+	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
+		if indexes := plan.declaredColumnIndexesByPath[string(key)]; len(indexes) > 0 {
 			if plan.declaredRowsReady {
 				for _, colIdx := range indexes {
 					valuesRaw[colIdx] = jsonParserIndexValue{raw: value, valueType: dataType}
@@ -410,28 +556,32 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 			}
 			return nil
 		}
-		raw, err := columnRetainedSemanticStreamV1JSONParserRawValue(value, dataType)
+		path := pathInterner.intern(key)
+		raw, err := columnRetainedSemanticStreamV1JSONParserRawValue(document, value, dataType, valueEndOffset)
 		if err != nil {
 			return err
 		}
 		for i := range retainedRootValues {
 			if retainedRootValues[i].path == path {
 				retainedRootValues[i].raw = raw
+				retainedRootValues[i].valueType = dataType
 				return nil
 			}
 		}
-		retainedRootValues = append(retainedRootValues, retainedRootValue{path: path, raw: raw})
+		retainedRootValues = append(retainedRootValues, retainedRootValue{path: path, raw: raw, valueType: dataType})
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	if len(retainedRootValues) > 0 {
-		sort.Slice(retainedRootValues, func(i, j int) bool {
-			return retainedRootValues[i].path < retainedRootValues[j].path
+		slices.SortFunc(retainedRootValues, func(a, b retainedRootValue) int {
+			return strings.Compare(a.path, b.path)
 		})
+		var pathStack [8]string
 		for _, value := range retainedRootValues {
-			if err := collectColumnRetainedSemanticStreamPaths(json.RawMessage(value.raw), []string{value.path}, row, streams); err != nil {
+			path := append(pathStack[:0], value.path)
+			if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, path, row, streamEntryCapacity, streams, pathInterner); err != nil {
 				return nil, err
 			}
 		}
@@ -439,10 +589,20 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	if !plan.declaredRowsReady {
 		return nil, nil
 	}
-	values := make([]columnDeclaredValue, len(cfg.Columns))
+	values := declaredValues
+	if values == nil && len(cfg.Columns) == 0 {
+		values = make([]columnDeclaredValue, 0)
+	}
+	if len(values) != len(cfg.Columns) {
+		values = make([]columnDeclaredValue, len(cfg.Columns))
+	}
 	var scratch []byte
 	for colIdx, col := range cfg.Columns {
-		value, err := convertColumnDeclaredJSONParserValue(col, valuesRaw[colIdx], &scratch)
+		var stringInterner *columnDeclaredStringInterner
+		if col.ValueType == ColumnStoreValueString && col.Dictionary {
+			stringInterner = declaredStringInterner
+		}
+		value, err := convertColumnDeclaredJSONParserValueWithStringInterner(col, valuesRaw[colIdx], &scratch, stringInterner)
 		if err != nil {
 			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
 		}
@@ -451,9 +611,12 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	return values, nil
 }
 
-func columnRetainedSemanticStreamV1JSONParserRawValue(value []byte, dataType jsonparser.ValueType) ([]byte, error) {
+func columnRetainedSemanticStreamV1JSONParserRawValue(source []byte, value []byte, dataType jsonparser.ValueType, valueEndOffset int) ([]byte, error) {
 	switch dataType {
 	case jsonparser.String:
+		if raw, ok := columnRetainedSemanticStreamV1JSONParserQuotedString(source, value, valueEndOffset); ok {
+			return raw, nil
+		}
 		out := make([]byte, 0, len(value)+2)
 		out = append(out, '"')
 		out = append(out, value...)
@@ -466,12 +629,37 @@ func columnRetainedSemanticStreamV1JSONParserRawValue(value []byte, dataType jso
 	}
 }
 
+func columnRetainedSemanticStreamV1JSONParserQuotedString(source []byte, value []byte, valueEndOffset int) ([]byte, bool) {
+	valueStartOffset := valueEndOffset - len(value) - 2
+	if valueStartOffset < 0 || valueEndOffset > len(source) || valueStartOffset >= valueEndOffset {
+		return nil, false
+	}
+	if source[valueStartOffset] != '"' || source[valueEndOffset-1] != '"' {
+		return nil, false
+	}
+	return source[valueStartOffset:valueEndOffset], true
+}
+
 func encodeColumnRetainedSemanticStreamV1Locator(blockKey []byte, row uint64) []byte {
-	out := make([]byte, 0, len(columnRetainedSemanticStreamV1LocatorMagic)+sha256.Size+binary.MaxVarintLen64)
+	return appendColumnRetainedSemanticStreamV1Locator(make([]byte, 0, columnRetainedSemanticStreamV1LocatorLen(row)), blockKey, row)
+}
+
+func appendColumnRetainedSemanticStreamV1Locator(out []byte, blockKey []byte, row uint64) []byte {
 	out = append(out, columnRetainedSemanticStreamV1LocatorMagic...)
 	out = append(out, blockKey...)
-	out = binary.AppendUvarint(out, row)
-	return out
+	return binary.AppendUvarint(out, row)
+}
+
+func columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows int) int {
+	capacity := 0
+	for row := 0; row < rows; row++ {
+		capacity += columnRetainedSemanticStreamV1LocatorLen(uint64(row))
+	}
+	return capacity
+}
+
+func columnRetainedSemanticStreamV1LocatorLen(row uint64) int {
+	return len(columnRetainedSemanticStreamV1LocatorMagic) + sha256.Size + columnRetainedSemanticStreamV1UvarintSize(row)
 }
 
 func parseColumnRetainedSemanticStreamV1Locator(raw []byte) ([]byte, uint64, bool, error) {
@@ -594,9 +782,7 @@ func columnRetainedSemanticStreamV1ReclaimDeleteKeys(
 	for _, key := range candidates {
 		deleteKeys = append(deleteKeys, key)
 	}
-	sort.Slice(deleteKeys, func(i, j int) bool {
-		return bytes.Compare(deleteKeys[i], deleteKeys[j]) < 0
-	})
+	slices.SortFunc(deleteKeys, bytes.Compare)
 	return deleteKeys, nil
 }
 
@@ -913,7 +1099,7 @@ func encodeColumnRetainedSemanticStreamV1Block(documents [][]byte) ([]byte, erro
 }
 
 func encodeColumnRetainedSemanticStreamV1RawBlock(documents [][]byte) ([]byte, error) {
-	streams := make(map[string]*columnRetainedSemanticStreamPath)
+	streams := newColumnRetainedSemanticStreamStreams()
 	for row, document := range documents {
 		trimmed := bytes.TrimSpace(document)
 		if len(trimmed) == 0 {
@@ -930,58 +1116,100 @@ func encodeColumnRetainedSemanticStreamV1RawBlock(documents [][]byte) ([]byte, e
 	return encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(len(documents), streams)
 }
 
-func encodeColumnRetainedSemanticStreamV1BlockFromStreams(rows int, streams map[string]*columnRetainedSemanticStreamPath) ([]byte, error) {
+func encodeColumnRetainedSemanticStreamV1BlockFromStreams(rows int, streams *columnRetainedSemanticStreamStreams) ([]byte, error) {
 	return encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows, streams, nil)
 }
 
-func encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows int, streams map[string]*columnRetainedSemanticStreamPath, encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) ([]byte, error) {
+func encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows int, streams *columnRetainedSemanticStreamStreams, encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) ([]byte, error) {
+	if encoder != nil {
+		return encoder.encodeStreamsWithRawLimit(rows, streams, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
+	}
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows, streams)
 	if err != nil {
 		return nil, err
 	}
-	if encoder != nil {
-		return encoder.encodeWithRawLimit(raw, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
-	}
 	return encodeColumnRetainedSemanticStreamV1StoredBlock(raw)
 }
 
-func encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows int, streams map[string]*columnRetainedSemanticStreamPath) ([]byte, error) {
+func encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows int, streams *columnRetainedSemanticStreamStreams) ([]byte, error) {
+	return encodeColumnRetainedSemanticStreamV1RawBlockFromStreamsInto(rows, streams, nil)
+}
+
+func encodeColumnRetainedSemanticStreamV1RawBlockFromStreamsInto(rows int, streams *columnRetainedSemanticStreamStreams, dst []byte) ([]byte, error) {
 	if rows <= 0 {
 		return nil, errors.New("collections: semantic-stream-v1 retained block requires at least one row")
 	}
 	if err := validateColumnRetainedSemanticStreamV1BlockRows(uint64(rows)); err != nil {
 		return nil, err
 	}
-	keys := make([]string, 0, len(streams))
-	for key := range streams {
+	keys := make([]string, 0, len(streams.byKey))
+	for key := range streams.byKey {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockMagic)+rows*16)
+	sizeHint := columnRetainedSemanticStreamV1RawBlockSizeHint(rows, keys, streams)
+	out := dst[:0]
+	if cap(out) < sizeHint {
+		capacity := sizeHint
+		if dst != nil {
+			capacity += columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(sizeHint)
+		}
+		out = make([]byte, 0, capacity)
+	}
 	out = append(out, columnRetainedSemanticStreamV1BlockMagic...)
 	out = binary.AppendUvarint(out, uint64(rows))
 	out = binary.AppendUvarint(out, uint64(len(keys)))
 	for _, key := range keys {
-		stream := streams[key]
+		stream := streams.byKey[key]
 		out = binary.AppendUvarint(out, uint64(len(stream.segments)))
 		for _, segment := range stream.segments {
 			out = binary.AppendUvarint(out, uint64(len(segment)))
 			out = append(out, segment...)
 		}
-		out = binary.AppendUvarint(out, uint64(len(stream.entries)))
+		out = binary.AppendUvarint(out, uint64(stream.entryCount()))
 		var last uint64
-		for i, entry := range stream.entries {
+		for i, raw := range stream.rawValues {
+			row := stream.rowAt(i)
 			if i == 0 {
-				out = binary.AppendUvarint(out, entry.row)
+				out = binary.AppendUvarint(out, row)
 			} else {
-				out = binary.AppendUvarint(out, entry.row-last)
+				out = binary.AppendUvarint(out, row-last)
 			}
-			last = entry.row
-			out = binary.AppendUvarint(out, uint64(len(entry.raw)))
-			out = append(out, entry.raw...)
+			last = row
+			out = binary.AppendUvarint(out, uint64(len(raw)))
+			out = append(out, raw...)
 		}
 	}
 	return out, nil
+}
+
+func columnRetainedSemanticStreamV1RawBlockSizeHint(rows int, keys []string, streams *columnRetainedSemanticStreamStreams) int {
+	size := len(columnRetainedSemanticStreamV1BlockMagic) +
+		columnRetainedSemanticStreamV1UvarintSize(uint64(rows)) +
+		columnRetainedSemanticStreamV1UvarintSize(uint64(len(keys)))
+	for _, key := range keys {
+		stream := streams.byKey[key]
+		size += columnRetainedSemanticStreamV1UvarintSize(uint64(len(stream.segments)))
+		for _, segment := range stream.segments {
+			size += columnRetainedSemanticStreamV1UvarintSize(uint64(len(segment))) + len(segment)
+		}
+		entryCount := stream.entryCount()
+		size += columnRetainedSemanticStreamV1UvarintSize(uint64(entryCount))
+		// Row deltas are bounded by the per-block row count. At 4096 rows this is
+		// at most two bytes per entry, and value-length uvarint bytes are tracked
+		// when entries are appended.
+		size += entryCount*2 + stream.valueLengthUvarintBytes + stream.rawValueBytes
+	}
+	return size
+}
+
+func columnRetainedSemanticStreamV1RawBlockScratchGrowthSlack(sizeHint int) int {
+	const maxSlack = 64 << 10
+	slack := sizeHint / 16
+	if slack > maxSlack {
+		return maxSlack
+	}
+	return slack
 }
 
 func encodeColumnRetainedSemanticStreamV1StoredBlock(raw []byte) ([]byte, error) {
@@ -1002,19 +1230,77 @@ func newColumnRetainedSemanticStreamV1StoredBlockEncoder() (*columnRetainedSeman
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
 		zstd.WithEncoderCRC(false),
 		zstd.WithEncoderConcurrency(1),
+		zstd.WithWindowSize(columnRetainedSemanticStreamV1ZSTDWindowSize),
+		zstd.WithLowerEncoderMem(true),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("collections: create semantic-stream-v1 retained block zstd encoder: %w", err)
 	}
-	return &columnRetainedSemanticStreamV1StoredBlockEncoder{enc: enc}, nil
+	return &columnRetainedSemanticStreamV1StoredBlockEncoder{
+		enc:             enc,
+		rawBlockScratch: getColumnRetainedSemanticStreamV1RawBlockScratch(),
+	}, nil
 }
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) close() {
-	if e == nil || e.enc == nil {
+	if e == nil {
 		return
 	}
-	e.enc.Close()
-	e.enc = nil
+	putColumnRetainedSemanticStreamV1RawBlockScratch(e.rawBlockScratch)
+	e.rawBlockScratch = nil
+	if e.enc != nil {
+		e.enc.Close()
+		e.enc = nil
+	}
+}
+
+func getColumnRetainedSemanticStreamV1RawBlockScratch() []byte {
+	select {
+	case pooled := <-columnRetainedSemanticStreamV1RawBlockScratchPool:
+		if cap(pooled) <= columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes {
+			return pooled[:0]
+		}
+	default:
+	}
+	return nil
+}
+
+func putColumnRetainedSemanticStreamV1RawBlockScratch(scratch []byte) {
+	if scratch == nil || cap(scratch) == 0 || cap(scratch) > columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes {
+		return
+	}
+	select {
+	case columnRetainedSemanticStreamV1RawBlockScratchPool <- scratch[:0]:
+	default:
+	}
+}
+
+func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeStreamsWithRawLimit(rows int, streams *columnRetainedSemanticStreamStreams, compressedRawLimit int) ([]byte, error) {
+	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreamsInto(rows, streams, e.rawBlockScratch)
+	if err != nil {
+		return nil, err
+	}
+	block, err := e.encodeWithRawLimit(raw, compressedRawLimit)
+	if err != nil {
+		return nil, err
+	}
+	if columnRetainedSemanticStreamSlicesShareStart(block, raw) {
+		block = append([]byte(nil), block...)
+	}
+	e.retainRawBlockScratch(raw)
+	return block, nil
+}
+
+func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) retainRawBlockScratch(raw []byte) {
+	if cap(raw) > columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes {
+		e.rawBlockScratch = nil
+		return
+	}
+	e.rawBlockScratch = raw[:0]
+}
+
+func columnRetainedSemanticStreamSlicesShareStart(a, b []byte) bool {
+	return len(a) > 0 && len(b) > 0 && &a[0] == &b[0]
 }
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeWithRawLimit(raw []byte, compressedRawLimit int) ([]byte, error) {
@@ -1086,7 +1372,7 @@ func decodeColumnRetainedSemanticStreamV1StoredBlock(block []byte) ([]byte, erro
 	return raw, nil
 }
 
-func collectColumnRetainedSemanticStreamPaths(raw json.RawMessage, path []string, row uint64, streams map[string]*columnRetainedSemanticStreamPath) error {
+func collectColumnRetainedSemanticStreamPaths(raw json.RawMessage, path []string, row uint64, streams *columnRetainedSemanticStreamStreams) error {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		trimmed = []byte("null")
@@ -1126,7 +1412,157 @@ func collectColumnRetainedSemanticStreamPaths(raw json.RawMessage, path []string
 	return nil
 }
 
-func collectColumnRetainedSemanticStreamObjectPaths(obj map[string]any, path []string, row uint64, streams map[string]*columnRetainedSemanticStreamPath) error {
+func collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg ColumnStoreConfig, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
+	if cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
+		return fmt.Errorf("collections: retained payload policy %q cannot produce object payload", cfg.RetainedPayload)
+	}
+	if !gjson.ValidBytes(document) {
+		return errors.New("collections: invalid JSON document for column retained payload: invalid JSON")
+	}
+	if !jsonDocumentLooksObject(document) {
+		return errors.New("collections: column retained payload root must be a JSON object")
+	}
+	return collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(document, nil, row, streamEntryCapacity, skip, streams, pathInterner)
+}
+
+func collectColumnRetainedSemanticStreamJSONParserPaths(raw []byte, dataType jsonparser.ValueType, path []string, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
+	switch dataType {
+	case jsonparser.Object:
+		return collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw, path, row, streamEntryCapacity, streams, pathInterner)
+	case jsonparser.Array, jsonparser.String, jsonparser.Number, jsonparser.Boolean, jsonparser.Null:
+		if len(path) == 0 {
+			return errors.New("semantic-stream-v1 retained root must be a JSON object")
+		}
+		appendColumnRetainedSemanticStreamValueNoCopy(path, row, raw, streamEntryCapacity, streams)
+		return nil
+	default:
+		return fmt.Errorf("unsupported semantic-stream-v1 retained value type %s", dataType)
+	}
+}
+
+func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path []string, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
+	type retainedObjectValue struct {
+		path      string
+		raw       []byte
+		valueType jsonparser.ValueType
+	}
+	var retainedObjectValueStack [8]retainedObjectValue
+	retainedObjectValues := retainedObjectValueStack[:0]
+	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
+		valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
+		if err != nil {
+			return err
+		}
+		valuePath := pathInterner.intern(key)
+		for i := range retainedObjectValues {
+			if retainedObjectValues[i].path == valuePath {
+				retainedObjectValues[i] = retainedObjectValue{path: valuePath, raw: valueRaw, valueType: dataType}
+				return nil
+			}
+		}
+		retainedObjectValues = append(retainedObjectValues, retainedObjectValue{path: valuePath, raw: valueRaw, valueType: dataType})
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(retainedObjectValues) == 0 {
+		if len(path) > 0 {
+			trimmed := bytes.TrimSpace(raw)
+			if len(trimmed) == 0 {
+				trimmed = []byte("{}")
+			}
+			appendColumnRetainedSemanticStreamValueNoCopy(path, row, trimmed, streamEntryCapacity, streams)
+		}
+		return nil
+	}
+	slices.SortFunc(retainedObjectValues, func(a, b retainedObjectValue) int {
+		return strings.Compare(a.path, b.path)
+	})
+	var pathStack [8]string
+	for _, value := range retainedObjectValues {
+		var nextPath []string
+		if len(path) == 0 && cap(path) == 0 {
+			nextPath = append(pathStack[:0], value.path)
+		} else {
+			nextPath = append(path, value.path)
+		}
+		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams, pathInterner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte, path []string, row uint64, streamEntryCapacity int, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
+	type retainedObjectValue struct {
+		path      string
+		raw       []byte
+		valueType jsonparser.ValueType
+		skip      *columnRetainedSemanticStreamV1RetainedSkipTrie
+	}
+	var retainedObjectValueStack [8]retainedObjectValue
+	retainedObjectValues := retainedObjectValueStack[:0]
+	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
+		var childSkip *columnRetainedSemanticStreamV1RetainedSkipTrie
+		if skip != nil {
+			childSkip = skip.children[string(key)]
+		}
+		if childSkip != nil && childSkip.terminal {
+			return nil
+		}
+		valuePath := pathInterner.intern(key)
+		nextValue := retainedObjectValue{path: valuePath}
+		valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
+		if err != nil {
+			return err
+		}
+		nextValue.raw = valueRaw
+		nextValue.valueType = dataType
+		if childSkip != nil && len(childSkip.children) > 0 && dataType == jsonparser.Object {
+			nextValue.skip = childSkip
+		}
+		for i := range retainedObjectValues {
+			if retainedObjectValues[i].path == valuePath {
+				retainedObjectValues[i] = nextValue
+				return nil
+			}
+		}
+		retainedObjectValues = append(retainedObjectValues, nextValue)
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(retainedObjectValues) == 0 {
+		if len(path) > 0 {
+			appendColumnRetainedSemanticStreamValueNoCopy(path, row, []byte("{}"), streamEntryCapacity, streams)
+		}
+		return nil
+	}
+	slices.SortFunc(retainedObjectValues, func(a, b retainedObjectValue) int {
+		return strings.Compare(a.path, b.path)
+	})
+	var pathStack [8]string
+	for _, value := range retainedObjectValues {
+		var nextPath []string
+		if len(path) == 0 && cap(path) == 0 {
+			nextPath = append(pathStack[:0], value.path)
+		} else {
+			nextPath = append(path, value.path)
+		}
+		if value.skip != nil {
+			if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(value.raw, nextPath, row, streamEntryCapacity, value.skip, streams, pathInterner); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams, pathInterner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func collectColumnRetainedSemanticStreamObjectPaths(obj map[string]any, path []string, row uint64, streams *columnRetainedSemanticStreamStreams) error {
 	if len(obj) == 0 {
 		if len(path) > 0 {
 			return appendColumnRetainedSemanticStreamJSONValue(path, row, obj, streams)
@@ -1138,8 +1574,14 @@ func collectColumnRetainedSemanticStreamObjectPaths(obj map[string]any, path []s
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	var pathStack [8]string
 	for _, key := range keys {
-		nextPath := append(append([]string(nil), path...), key)
+		var nextPath []string
+		if len(path) == 0 && cap(path) == 0 {
+			nextPath = append(pathStack[:0], key)
+		} else {
+			nextPath = append(path, key)
+		}
 		if err := collectColumnRetainedSemanticStreamAnyPaths(obj[key], nextPath, row, streams); err != nil {
 			return err
 		}
@@ -1147,7 +1589,7 @@ func collectColumnRetainedSemanticStreamObjectPaths(obj map[string]any, path []s
 	return nil
 }
 
-func collectColumnRetainedSemanticStreamAnyPaths(value any, path []string, row uint64, streams map[string]*columnRetainedSemanticStreamPath) error {
+func collectColumnRetainedSemanticStreamAnyPaths(value any, path []string, row uint64, streams *columnRetainedSemanticStreamStreams) error {
 	switch typed := value.(type) {
 	case map[string]any:
 		return collectColumnRetainedSemanticStreamObjectPaths(typed, path, row, streams)
@@ -1156,7 +1598,7 @@ func collectColumnRetainedSemanticStreamAnyPaths(value any, path []string, row u
 	}
 }
 
-func appendColumnRetainedSemanticStreamJSONValue(path []string, row uint64, value any, streams map[string]*columnRetainedSemanticStreamPath) error {
+func appendColumnRetainedSemanticStreamJSONValue(path []string, row uint64, value any, streams *columnRetainedSemanticStreamStreams) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("collections: encode semantic-stream-v1 retained value: %w", err)
@@ -1165,21 +1607,24 @@ func appendColumnRetainedSemanticStreamJSONValue(path []string, row uint64, valu
 	return nil
 }
 
-func appendColumnRetainedSemanticStreamValue(path []string, row uint64, raw []byte, streams map[string]*columnRetainedSemanticStreamPath) {
-	key := columnRetainedSemanticStreamPathKey(path)
-	stream := streams[key]
-	if stream == nil {
-		stream = &columnRetainedSemanticStreamPath{segments: append([]string(nil), path...)}
-		streams[key] = stream
-	}
-	stream.entries = append(stream.entries, columnRetainedSemanticStreamEntry{
-		row: row,
-		raw: append([]byte(nil), raw...),
-	})
+func appendColumnRetainedSemanticStreamValue(path []string, row uint64, raw []byte, streams *columnRetainedSemanticStreamStreams) {
+	appendColumnRetainedSemanticStreamValueWithOwnership(path, row, append([]byte(nil), raw...), 0, streams)
+}
+
+func appendColumnRetainedSemanticStreamValueNoCopy(path []string, row uint64, raw []byte, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams) {
+	appendColumnRetainedSemanticStreamValueWithOwnership(path, row, raw, streamEntryCapacity, streams)
+}
+
+func appendColumnRetainedSemanticStreamValueWithOwnership(path []string, row uint64, raw []byte, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams) {
+	streams.appendValue(path, row, raw, streamEntryCapacity)
 }
 
 func columnRetainedSemanticStreamPathKey(path []string) string {
-	var out []byte
+	capacity := 0
+	for _, segment := range path {
+		capacity += columnRetainedSemanticStreamDecimalSize(len(segment)) + 1 + len(segment) + 1
+	}
+	out := make([]byte, 0, capacity)
 	for _, segment := range path {
 		out = strconv.AppendInt(out, int64(len(segment)), 10)
 		out = append(out, ':')
@@ -1187,6 +1632,27 @@ func columnRetainedSemanticStreamPathKey(path []string) string {
 		out = append(out, 0)
 	}
 	return string(out)
+}
+
+func columnRetainedSemanticStreamDecimalSize(n int) int {
+	if n < 10 {
+		return 1
+	}
+	size := 0
+	for n > 0 {
+		size++
+		n /= 10
+	}
+	return size
+}
+
+func columnRetainedSemanticStreamV1UvarintSize(v uint64) int {
+	size := 1
+	for v >= 0x80 {
+		size++
+		v >>= 7
+	}
+	return size
 }
 
 func decodeColumnRetainedSemanticStreamV1BlockRowJSON(block []byte, row uint64) ([]byte, error) {
@@ -1715,17 +2181,23 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) result(rows, maxPat
 		out.PathZSTDEncodedBytes += stat.ZSTDBytes
 		paths = append(paths, pathLayoutResult{key: pathKey, stat: stat})
 	}
-	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].stat.TotalBytes != paths[j].stat.TotalBytes {
-			return paths[i].stat.TotalBytes > paths[j].stat.TotalBytes
+	slices.SortFunc(paths, func(a, b pathLayoutResult) int {
+		if a.stat.TotalBytes != b.stat.TotalBytes {
+			if a.stat.TotalBytes > b.stat.TotalBytes {
+				return -1
+			}
+			return 1
 		}
-		if paths[i].stat.Occurrences != paths[j].stat.Occurrences {
-			return paths[i].stat.Occurrences > paths[j].stat.Occurrences
+		if a.stat.Occurrences != b.stat.Occurrences {
+			if a.stat.Occurrences > b.stat.Occurrences {
+				return -1
+			}
+			return 1
 		}
-		if paths[i].stat.Path != paths[j].stat.Path {
-			return paths[i].stat.Path < paths[j].stat.Path
+		if a.stat.Path != b.stat.Path {
+			return strings.Compare(a.stat.Path, b.stat.Path)
 		}
-		return paths[i].key < paths[j].key
+		return strings.Compare(a.key, b.key)
 	})
 	outPaths := make([]ColumnRetainedSemanticStreamV1PathLayoutStat, 0, len(paths))
 	for _, path := range paths {

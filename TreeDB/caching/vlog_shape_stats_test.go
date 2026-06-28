@@ -71,4 +71,14 @@ func TestStats_ExportsVlogShapeKeys(t *testing.T) {
 	needInt("treedb.cache.vlog_shape.lane.0.bytes_live")
 	needUint("treedb.cache.vlog_shape.lane.0.rotations_total")
 	needUint("treedb.cache.vlog_shape.lane.0.rotations_idle_total")
+
+	needUint("treedb.cache.vlog_decode_scratch.small_pool.max_entries")
+	needUint("treedb.cache.vlog_decode_scratch.small_pool.retained_bytes")
+	needUint("treedb.cache.vlog_decode_scratch.large_pool.max_entries")
+	needUint("treedb.cache.vlog_decode_scratch.large_pool.retained_bytes")
+	needUint("treedb.cache.vlog_decode_scratch.file_stash.retain_max_bytes")
+	needUint("treedb.cache.vlog_decode_scratch.file_stash.retained_bytes")
+	needUint("treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.calls_total")
+	needUint("treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.dst_fit_calls_total")
+	needUint("treedb.cache.vlog_decode_buffer_grow.read_append_template_encoded_payload.calls_total")
 }

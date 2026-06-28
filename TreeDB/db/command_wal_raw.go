@@ -19,6 +19,11 @@ type commandWALBatchIntent struct {
 	scope              commitlog.CommandScope
 	payloadFormat      commitlog.PayloadFormat
 	payload            []byte
+	rawKVEntries       []batchpkg.Entry
+	rawKVScan          commitlog.RawKVBatchOperationScanner
+	rawKVPlan          commitlog.RawKVBatchPayloadPlan
+	rawKVRIDCache      map[page.ValuePtr]uint64
+	rawKVDirect        bool
 	trustedPayload     bool
 	externalRefs       bool
 	externalRefFileIDs []uint32
@@ -28,6 +33,13 @@ type commandWALBatchIntent struct {
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
 	staged             bool
+}
+
+func (db *DB) commandWALJournalUnavailableError() error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	return fmt.Errorf("treedb: command wal journal unavailable")
 }
 
 // CommandWALIntent is an opaque command-WAL append/finalize token used by
@@ -390,42 +402,126 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	return db.newRawKVCommandWALIntentFromEntries(entries)
+}
+
+// NewRawKVCommandWALIntentFromOrderedEntries builds a public raw-KV command
+// intent from entries that are already in the caller's required application
+// order. Unlike prepareRawKVCommandWALIntent, this does not sort or compact
+// point ops; public cached batches rely on replay order to preserve mixed
+// set/delete/range-delete semantics.
+func (db *DB) NewRawKVCommandWALIntentFromOrderedEntries(entries []batchpkg.Entry) (*CommandWALIntent, error) {
+	if db == nil || !db.commandWAL {
+		return nil, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	intent, err := db.newRawKVCommandWALPayloadIntentFromEntries(entries)
+	if intent == nil || err != nil {
+		return nil, err
+	}
+	return &CommandWALIntent{inner: *intent}, nil
+}
+
+// AppendRawKVCommandWALOrderedEntries appends a raw-KV command frame directly
+// from entries that are already in the caller's required application order. The
+// caller must keep entries and their key/value buffers immutable until this
+// method returns.
+func (db *DB) AppendRawKVCommandWALOrderedEntries(entries []batchpkg.Entry, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntries(entries)
+	if intent == nil || err != nil {
+		return 0, err
+	}
+	return db.AppendCommandWALIntent(&CommandWALIntent{inner: *intent}, sync)
+}
+
+// AppendRawKVCommandWALOrderedEntryScan appends a raw-KV command frame by
+// replaying already-ordered entries directly into the command encoder. The
+// replay source must be deterministic and replayable because planning and
+// writing scan it separately. Callers must keep replayed entry buffers immutable
+// until this method returns.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScan(scanEntries func(func(batchpkg.Entry) error) error, sync bool) (uint64, error) {
+	if db == nil || !db.commandWAL {
+		return 0, nil
+	}
+	if db.durability == DurabilityWALOffRelaxed {
+		return 0, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if scanEntries == nil {
+		return 0, nil
+	}
+	intent, err := db.newRawKVCommandWALIntentFromEntryScan(scanEntries)
+	if intent == nil || err != nil {
+		return 0, err
+	}
+	return db.AppendCommandWALIntent(&CommandWALIntent{inner: *intent}, sync)
+}
+
+func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	return db.newRawKVCommandWALIntentFromEntryScan(func(emit func(batchpkg.Entry) error) error {
+		for i := range entries {
+			if err := emit(entries[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error) (*commandWALBatchIntent, error) {
 	externalRefs := false
 	var ridCache map[page.ValuePtr]uint64
-	var smallOps [16]commitlog.RawKVOperation
-	ops := smallOps[:0]
-	if len(entries) > len(smallOps) {
-		ops = make([]commitlog.RawKVOperation, 0, len(entries))
+	var externalRefFileIDs []uint32
+	planScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, &externalRefs, &externalRefFileIDs)
+	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
+	if err != nil {
+		return nil, err
 	}
-	for i := range entries {
-		entry := entries[i]
-		switch entry.Type {
-		case batchpkg.OpDeleteRange:
-			if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
-				continue
-			}
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value})
-		case batchpkg.OpDelete:
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
-		case batchpkg.OpPut:
-			if entry.IsPtr {
-				externalRefs = true
-				if ridCache == nil {
-					ridCache = make(map[page.ValuePtr]uint64)
-				}
-				rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, ridCache)
-				if err != nil {
-					return nil, err
-				}
-				ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid})
-				continue
-			}
-			ops = append(ops, commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value})
-		default:
-			return nil, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
-		}
+	if plan.Count == 0 {
+		return nil, nil
 	}
-	payload, err := commitlog.EncodeRawKVBatchPayload(ops)
+	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil)
+	return &commandWALBatchIntent{
+		kind:               commitlog.CommandKindRawKVBatch,
+		scope:              commitlog.CommandScopeRawKV,
+		payloadFormat:      commitlog.PayloadFormatRawKVBatchV1,
+		rawKVScan:          writeScan,
+		rawKVPlan:          plan,
+		rawKVRIDCache:      ridCache,
+		rawKVDirect:        true,
+		externalRefs:       externalRefs,
+		externalRefFileIDs: externalRefFileIDs,
+	}, nil
+}
+
+func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
+	externalRefs := false
+	var ridCache map[page.ValuePtr]uint64
+	scan := db.rawKVCommandWALOperationScanner(entries, &ridCache, &externalRefs)
+	plan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Count == 0 {
+		return nil, nil
+	}
+	payload, err := commitlog.EncodeRawKVBatchPayloadScanWithHint(scan, plan.Count, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +539,70 @@ func (db *DB) prepareRawKVCommandWALIntent(b *Batch) (*commandWALBatchIntent, er
 	}, nil
 }
 
+func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool) commitlog.RawKVBatchOperationScanner {
+	return db.rawKVCommandWALOperationScannerFromEntryScan(func(emit func(batchpkg.Entry) error) error {
+		for i := range entries {
+			if err := emit(entries[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, ridCache, externalRefs, nil)
+}
+
+func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32) commitlog.RawKVBatchOperationScanner {
+	return func(emit func(commitlog.RawKVOperation) error) error {
+		if scanEntries == nil {
+			return nil
+		}
+		return scanEntries(func(entry batchpkg.Entry) error {
+			op, ok, err := db.rawKVCommandWALOperationFromEntry(entry, ridCache, externalRefs, externalRefFileIDs)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			return emit(op)
+		})
+	}
+}
+
+func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32) (commitlog.RawKVOperation, bool, error) {
+	switch entry.Type {
+	case batchpkg.OpDeleteRange:
+		if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
+			return commitlog.RawKVOperation{}, false, nil
+		}
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value}, true, nil
+	case batchpkg.OpDelete:
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key}, true, nil
+	case batchpkg.OpPut:
+		if entry.IsPtr {
+			if externalRefs != nil {
+				*externalRefs = true
+			}
+			if externalRefFileIDs != nil {
+				appendRawKVCommandWALExternalRefFileID(externalRefFileIDs, entry.ValuePtr.FileID)
+			}
+			if ridCache == nil {
+				return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
+			}
+			if *ridCache == nil {
+				*ridCache = make(map[page.ValuePtr]uint64)
+			}
+			rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, *ridCache)
+			if err != nil {
+				return commitlog.RawKVOperation{}, false, err
+			}
+			return commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid}, true, nil
+		}
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value}, true, nil
+	default:
+		return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
+	}
+}
+
 func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
 	var ids []uint32
 	for i := range entries {
@@ -450,18 +610,21 @@ func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
 		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.ValuePtr.FileID == 0 {
 			continue
 		}
-		seen := false
-		for _, id := range ids {
-			if id == entry.ValuePtr.FileID {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			ids = append(ids, entry.ValuePtr.FileID)
-		}
+		appendRawKVCommandWALExternalRefFileID(&ids, entry.ValuePtr.FileID)
 	}
 	return ids
+}
+
+func appendRawKVCommandWALExternalRefFileID(ids *[]uint32, fileID uint32) {
+	if ids == nil || fileID == 0 {
+		return
+	}
+	for _, id := range *ids {
+		if id == fileID {
+			return
+		}
+	}
+	*ids = append(*ids, fileID)
 }
 
 func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.ValuePtr]uint64) (uint64, error) {
@@ -480,7 +643,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.V
 	path := db.valueLogManager.SegmentPath(ptr.FileID)
 	rid, err := readCommandWALValueLogRIDAt(path, ptr)
 	if isCommandWALRIDLookupVisibilityError(err) {
-		if flushErr := db.flushCommandWALExternalRefs(false, nil); flushErr != nil {
+		if flushErr := db.flushCommandWALExternalRefs(false, []uint32{ptr.FileID}); flushErr != nil {
 			return 0, flushErr
 		}
 		rid, err = readCommandWALValueLogRIDAt(path, ptr)
@@ -514,6 +677,14 @@ func (db *DB) flushCommandWALExternalRefs(sync bool, fileIDs []uint32) error {
 	}
 	var activeFileID uint32
 	if appender != nil {
+		if len(fileIDs) > 0 {
+			if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
+				if err := flusher.FlushValueLogExternalRefs(fileIDs, sync); err != nil {
+					return err
+				}
+				return nil
+			}
+		}
 		if _, fileID, ok := appender.CurrentValueLogSegment(); ok {
 			activeFileID = fileID
 		}
@@ -567,6 +738,11 @@ func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) 
 		return 0, err
 	}
 	if intent.inner.lsn != 0 {
+		if !intent.inner.fromReplay {
+			if err := db.commandWALPoisonedError(); err != nil {
+				return 0, err
+			}
+		}
 		// Replay intents already refer to a durable frame; recovery must only
 		// publish that covered LSN, never append a duplicate command.
 		return intent.inner.lsn, nil
@@ -581,6 +757,8 @@ func commandWALIntentFrameAlreadyAppended(intent *CommandWALIntent) bool {
 // AppendCommandWALIntent appends a deterministic command frame without
 // publishing roots. It is used by cached public command-WAL writers that must
 // make a typed frame replay-visible before inserting the mutation into memory.
+// If the append succeeds but the post-append flush fails, the returned LSN is
+// still the allocated LSN and the open handle is poisoned for recovery.
 func (db *DB) AppendCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
 	if db != nil && db.readOnly {
 		return 0, ErrReadOnly
@@ -660,8 +838,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if op.Op == commitlog.RawKVOpSetRID {
 		return 0, fmt.Errorf("%w: public single-op command WAL cannot carry external refs", ErrCommandWALUnsupported)
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -705,8 +886,11 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
 		return 0, err
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -760,8 +944,11 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	if err := db.runCommandWALRawPublishBarriers(); err != nil {
 		return 0, err
 	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
 	if db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -887,8 +1074,11 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 		}
 		return intent.lsn, nil
 	}
-	if db == nil || db.commandJournal == nil {
-		return 0, fmt.Errorf("treedb: command wal journal unavailable")
+	if db == nil {
+		return 0, ErrClosed
+	}
+	if db.closing.Load() || db.commandJournal == nil {
+		return 0, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -908,7 +1098,13 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	db.mu.RUnlock()
 	var lsn uint64
 	var err error
-	if intent.trustedPayload && !intent.externalRefs {
+	if intent.rawKVDirect {
+		scan := intent.rawKVScan
+		if scan == nil {
+			scan = db.rawKVCommandWALOperationScanner(intent.rawKVEntries, &intent.rawKVRIDCache, nil)
+		}
+		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, intent.rawKVPlan, scan)
+	} else if intent.trustedPayload && !intent.externalRefs {
 		lsn, err = db.commandJournal.AppendCommandPayloadTrusted(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
 	} else {
 		lsn, err = db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
@@ -922,17 +1118,19 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	if err != nil {
 		return 0, err
 	}
+	if lsn != 0 {
+		intent.lsn = lsn
+		intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
+	}
 	if err := db.FlushCommandWAL(sync); err != nil {
 		// AppendCommand already assigned a logical LSN, and the frame may be
 		// replayed if the append reached disk. A later flush/sync failure is
 		// commit-ambiguous: reopen recovery may apply the frame, so this handle
 		// must fail closed instead of allowing a retry to create an LSN gap.
 		// FlushCommandWAL owns the relaxed-sync downgrade and poison state.
-		return 0, err
+		return lsn, err
 	}
 	db.observeCommandWALAccepted(lsn)
-	intent.lsn = lsn
-	intent.coveredRange[0] = CommandWALLSNRange{First: lsn, Last: lsn}
 	return lsn, nil
 }
 
@@ -963,8 +1161,8 @@ func commandWALFinalizeOptionsForPublicIntent(intent *CommandWALIntent) finalize
 func (db *DB) poisonCommandWALAfterPostAppendFailure(intent *commandWALBatchIntent) {
 	if db == nil || intent == nil || intent.lsn == 0 {
 		// intent.lsn == 0 means the frame was never durably appended
-		// (appendRawKVCommandWALIntent sets lsn only on success). No need
-		// to poison; appendRawKVCommandWALIntent already poisons its own
+		// (appendCommandWALIntent sets lsn once AppendCommand succeeds).
+		// No need to poison; appendCommandWALIntent already poisons its own
 		// flush/sync failures.
 		return
 	}

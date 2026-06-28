@@ -54,6 +54,8 @@ import (
 // can always override any field directly after applying a profile.
 type Profile string
 
+const commandWALProfileSegmentBytes int64 = 256 << 20
+
 const (
 	// ProfileCommandWALDurable is the explicit command-WAL production profile for
 	// callers that want command-WAL recovery, durable fsync boundaries, corruption
@@ -345,11 +347,24 @@ func applyCommandWALDurableProfile(opts *Options) {
 	opts.CommandWAL = true
 	opts.Durability = DurabilityDurable
 	opts.ValueLog.ReadIntegrity = IntegrityVerify
+	opts.ValueLog.CurrentWritableMmap = false
+	applyCommandWALProfileSegmentDefaults(opts)
 }
 
 func applyCommandWALRelaxedProfile(opts *Options) {
 	applyWALOnFastProfile(opts)
 	opts.CommandWAL = true
+	opts.ValueLog.CurrentWritableMmap = false
+	applyCommandWALProfileSegmentDefaults(opts)
+}
+
+func applyCommandWALProfileSegmentDefaults(opts *Options) {
+	if opts.WALMaxSegmentBytes == 0 {
+		opts.WALMaxSegmentBytes = commandWALProfileSegmentBytes
+	}
+	if opts.CommandWALSegmentTargetBytes == 0 {
+		opts.CommandWALSegmentTargetBytes = opts.WALMaxSegmentBytes
+	}
 }
 
 func applyBenchProfile(opts *Options) {

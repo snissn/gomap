@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -234,6 +235,60 @@ func TestRawKVBatchPayloadBuilderZeroCompactionFallsBackForMixedValues(t *testin
 	}
 	if !bytes.Equal(decoded[0].Value, make([]byte, 4)) {
 		t.Fatalf("materialized omitted zero value = %x, want zeros", decoded[0].Value)
+	}
+}
+
+func TestRawKVBatchPayloadBuilderRetainedCapPredictsCompactZeroMaterialization(t *testing.T) {
+	var nilBuilder *RawKVBatchPayloadBuilder
+	if got, err := nilBuilder.RetainedCapAfterAppend(1); err != nil || got != 0 {
+		t.Fatalf("nil RetainedCapAfterAppend=%d, %v; want 0, nil", got, err)
+	}
+
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(0, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := builder.AppendSet([]byte(fmt.Sprintf("zero-%03d", i)), make([]byte, 32)); err != nil {
+			t.Fatalf("AppendSet compact zero %d: %v", i, err)
+		}
+	}
+	if got := builder.RetainedCap(); got != rawKVBatchHeaderSize {
+		t.Fatalf("compact zero canonical retained cap=%d, want %d", got, rawKVBatchHeaderSize)
+	}
+
+	retainedCap, err := builder.RetainedCapAfterAppendSet([]byte("nz"), []byte("x"))
+	if err != nil {
+		t.Fatalf("RetainedCapAfterAppendSet non-zero: %v", err)
+	}
+	expandedLen, ok := rawKVExpandedZeroBatchPayloadSize(3, len("zero-000")*3, 32)
+	if !ok {
+		t.Fatal("expanded zero batch size overflow")
+	}
+	wantMin := expandedLen + rawKVOpHeaderSize + len("nz") + len("x")
+	if retainedCap < wantMin {
+		t.Fatalf("retained cap after compact materialization=%d, want at least %d", retainedCap, wantMin)
+	}
+}
+
+func TestRawKVBatchPayloadBuilderRetainedCapPredictsCompactZeroBuffers(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(0, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	retainedCap, err := builder.RetainedCapAfterAppendSet([]byte("zero"), make([]byte, 128))
+	if err != nil {
+		t.Fatalf("RetainedCapAfterAppendSet compact zero: %v", err)
+	}
+	wantMin := rawKVBatchHeaderSize + rawKVZeroBatchHeaderSize + rawKVZeroOpHeaderSizeV3 + len("zero") + 128
+	if retainedCap < wantMin {
+		t.Fatalf("compact zero retained cap=%d, want at least %d", retainedCap, wantMin)
+	}
+	if got := builder.RetainedCap(); got != rawKVBatchHeaderSize {
+		t.Fatalf("prediction mutated canonical retained cap=%d, want %d", got, rawKVBatchHeaderSize)
+	}
+	if cap(builder.zeroPayload) != 0 || cap(builder.zeroSetValueView) != 0 {
+		t.Fatalf("prediction mutated compact buffers: zeroPayload cap=%d zeroSetValueView cap=%d", cap(builder.zeroPayload), cap(builder.zeroSetValueView))
 	}
 }
 
@@ -818,6 +873,108 @@ func TestWriterAppendRawKVBatchPayloadCommandDirect(t *testing.T) {
 	}
 }
 
+func TestWriterAppendRawKVBatchPayloadScanCommandDirectBuffered(t *testing.T) {
+	ops := []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpDelete, Key: []byte("bravo")},
+		{Op: RawKVOpDeleteRange, Key: nil, Value: []byte("delta")},
+		{Op: RawKVOpSetRID, Key: []byte("external"), RID: 42},
+	}
+	payload, err := EncodeRawKVBatchPayload(ops)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	scan := rawKVOperationSliceScanner(ops)
+	plan, err := PlanRawKVBatchPayloadScan(scan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 4096})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(7, 3, plan, scan); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendRawKVBatchPayloadScanCommandDirectTrusted: %v", err)
+	}
+	if got := len(w.commandBuf); got == 0 {
+		_ = w.Close()
+		t.Fatal("direct scan command frame was not buffered")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	assertRawKVCommandFramePayload(t, path, 7, 3, payload)
+}
+
+func TestWriterAppendRawKVBatchPayloadScanCommandDirectLarge(t *testing.T) {
+	ops := []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("large"), Value: bytes.Repeat([]byte("x"), directCommandPayloadMinLen)},
+		{Op: RawKVOpDeleteRange, Key: []byte("m"), Value: nil},
+	}
+	payload, err := EncodeRawKVBatchPayload(ops)
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	scan := rawKVOperationSliceScanner(ops)
+	plan, err := PlanRawKVBatchPayloadScan(scan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 64 << 20})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(9, 4, plan, scan); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendRawKVBatchPayloadScanCommandDirectTrusted: %v", err)
+	}
+	if got := len(w.commandBuf); got != 0 {
+		_ = w.Close()
+		t.Fatalf("deferred command buffer len=%d, want 0 for large direct scan frame", got)
+	}
+	if got := w.Size(); got == 0 {
+		_ = w.Close()
+		t.Fatal("writer size after large direct scan append=0, want direct bytes accounted")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	assertRawKVCommandFramePayload(t, path, 9, 4, payload)
+}
+
+func rawKVOperationSliceScanner(ops []RawKVOperation) RawKVBatchOperationScanner {
+	return func(emit func(RawKVOperation) error) error {
+		for i := range ops {
+			if err := emit(ops[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func assertRawKVCommandFramePayload(t *testing.T, path string, lsn, baseAppliedLSN uint64, payload []byte) {
+	t.Helper()
+	r, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	if env.LSN != lsn || env.BaseAppliedLSN != baseAppliedLSN || env.Kind != CommandKindRawKVBatch || env.Scope != CommandScopeRawKV || env.PayloadFormat != PayloadFormatRawKVBatchV1 {
+		t.Fatalf("decoded command identity mismatch: %+v", env)
+	}
+	if !bytes.Equal(env.Payload, payload) {
+		t.Fatalf("payload mismatch\ngot  %x\nwant %x", env.Payload, payload)
+	}
+}
+
 func TestWriterAppendCommandPayloadDirectTrustedCollectionInsert(t *testing.T) {
 	payload, err := EncodeCollectionInsertBatchByIDPayload("users", []CollectionDocument{
 		{ID: []byte("user-001"), Document: []byte(`{"_id":"user-001","field0":"value0"}`)},
@@ -939,6 +1096,36 @@ func TestWriterDeferredCommandBufferHonorsConfiguredLimit(t *testing.T) {
 	}
 	if got := w.Size(); got == 0 {
 		t.Fatal("writer size after oversized deferred frame=0, want direct append accounted")
+	}
+}
+
+func TestWriterDeferredCommandBufferAllocatesLazily(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("small"), Value: []byte("value")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 64 << 20})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if got := w.commandBufferLimit(); got != 64<<20 {
+		t.Fatalf("commandBufferLimit=%d want %d", got, 64<<20)
+	}
+	if got := cap(w.commandBuf); got != 0 {
+		t.Fatalf("deferred command buffer cap after open=%d, want 0", got)
+	}
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(1, 0, payload); err != nil {
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
+	}
+	if got := len(w.commandBuf); got == 0 {
+		t.Fatal("small command frame was not buffered")
+	}
+	if got := cap(w.commandBuf); got >= 1<<20 {
+		t.Fatalf("deferred command buffer cap after first small frame=%d, want below 1MiB", got)
 	}
 }
 

@@ -209,8 +209,9 @@ type TypedColumnInt64PredicateAggregateSessionDiagnostics struct {
 var errTypedColumnInt64PredicateAggregateSessionClosed = errors.New("collections: typed-column int64 predicate aggregate session is closed")
 
 const (
-	typedColumnInt64PredicateAggregateMaxSum = int64(1<<63 - 1)
-	typedColumnInt64PredicateAggregateMinSum = -typedColumnInt64PredicateAggregateMaxSum - 1
+	typedColumnInt64PredicateAggregateMaxSum           = int64(1<<63 - 1)
+	typedColumnInt64PredicateAggregateMinSum           = -typedColumnInt64PredicateAggregateMaxSum - 1
+	typedColumnInt64AggregateSecondOfDaySquareMaxValue = (typedColumnInt64AggregateDaySecond - 1) * (typedColumnInt64AggregateDaySecond - 1)
 )
 
 func addTypedColumnInt64PredicateAggregateValue(result *TypedColumnInt64PredicateAggregateResult, value int64) error {
@@ -229,11 +230,18 @@ func addTypedColumnInt64PredicateAggregateValue(result *TypedColumnInt64Predicat
 }
 
 func addTypedColumnInt64PredicateAggregateExpressionValue(result *TypedColumnInt64PredicateAggregateResult, expression TypedColumnInt64AggregateExpression, value int64) error {
+	if expression == TypedColumnInt64AggregateSecondOfDaySquare {
+		return addTypedColumnInt64PredicateAggregateSecondOfDaySquareValue(result, value)
+	}
 	transformed, err := typedColumnInt64AggregateExpressionValue(expression, value)
 	if err != nil {
 		return err
 	}
 	return addTypedColumnInt64PredicateAggregateValue(result, transformed)
+}
+
+func addTypedColumnInt64PredicateAggregateSecondOfDaySquareValue(result *TypedColumnInt64PredicateAggregateResult, value int64) error {
+	return addTypedColumnInt64PredicateAggregateValue(result, typedColumnInt64AggregateSecondOfDaySquareValue(value))
 }
 
 // RunTypedColumnInt64PredicateScan executes the scoped #1757 scalar predicate MVP.
@@ -422,15 +430,19 @@ func typedColumnInt64AggregateExpressionValue(expression TypedColumnInt64Aggrega
 	case TypedColumnInt64AggregateIdentity:
 		return value, nil
 	case TypedColumnInt64AggregateSecondOfDaySquare:
-		seconds := typedColumnInt64AggregateFloorUnixSeconds(value)
-		secondOfDay := seconds % typedColumnInt64AggregateDaySecond
-		if secondOfDay < 0 {
-			secondOfDay += typedColumnInt64AggregateDaySecond
-		}
-		return secondOfDay * secondOfDay, nil
+		return typedColumnInt64AggregateSecondOfDaySquareValue(value), nil
 	default:
 		return 0, fmt.Errorf("%w: unsupported typed-column int64 aggregate expression %q", ErrColumnQueryPlanUnsupported, expression)
 	}
+}
+
+func typedColumnInt64AggregateSecondOfDaySquareValue(value int64) int64 {
+	seconds := typedColumnInt64AggregateFloorUnixSeconds(value)
+	secondOfDay := seconds % typedColumnInt64AggregateDaySecond
+	if secondOfDay < 0 {
+		secondOfDay += typedColumnInt64AggregateDaySecond
+	}
+	return secondOfDay * secondOfDay
 }
 
 func typedColumnInt64AggregateFloorUnixSeconds(timeUS int64) int64 {

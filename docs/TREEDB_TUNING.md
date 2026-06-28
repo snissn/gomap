@@ -312,11 +312,18 @@ remapping on every append.
 - `TREEDB_VLOG_CURRENT_WRITABLE_MMAP_TARGET_BYTES` sets the map-ahead target
   for current writable value-log files. The default is 32 MiB, matching the
   default leaf segment scale. Set to `0` to map only the current file size.
+- `TREEDB_VLOG_MAX_MAPPED_LEAF_SEALED_BYTES` caps sealed `leaf_vlog` files kept
+  on the mmap read path. The default is 2 GiB, after which older sealed leaf
+  generations use `ReadAt` fallback to reduce process RSS high-water during
+  long sync/restore workloads. Raise it to restore the older throughput-biased
+  larger mmap window when memory headroom is not the limiting factor.
 - `TREEDB_VLOG_MAX_DEAD_MAPPINGS` still caps retained stale mappings for safety;
   frequent current-writable remaps can hit this cap and force `ReadAt` fallback.
 
 Useful stats:
 - `treedb.vlog.mmap_current_writable_map_target_bytes`
+- `treedb.vlog.mmap_max_mapped_leaf_sealed_bytes`
+- `treedb.vlog.mmap_sealed_bytes`
 - `treedb.vlog.mmap_remaps`
 - `treedb.vlog.mmap_dead_mappings`
 - `treedb.vlog.mmap_read.fallback_readat`
@@ -333,9 +340,11 @@ publish, update, read, and maintenance work.
   the process default/env override, `<0` disables the cache, and `>0` sets an
   explicit entry count.
 - `TREEDB_LEAF_PAGE_CACHE_ENTRIES` sets the process default entry count when the
-  option is left at `0`. The default is 32768 entries, or about 128 MiB of
-  leaf-page payloads. Set the env var to `0` to disable the cache for DBs that
-  do not set `Options.LeafPageReadCacheEntries`.
+  option is left at `0`. The default is 8192 entries, or about 32 MiB of
+  leaf-page payloads. Set the env var to `32768` to restore the historical
+  128 MiB cache when a workload has evidence that the larger cache improves
+  throughput enough to justify the retained heap. Set the env var to `0` to
+  disable the cache for DBs that do not set `Options.LeafPageReadCacheEntries`.
 - Explicit and env-derived cache sizes are capped at 262144 entries to fail
   early with a clear configuration error instead of risking an accidental huge
   cache.

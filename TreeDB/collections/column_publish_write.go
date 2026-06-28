@@ -437,12 +437,38 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishDocumentExtraction += metrics.DocumentExtraction
 	stats.ColumnPublishDeclaredColumnEncoding += metrics.DeclaredColumnEncoding
 	stats.ColumnPublishAssetPreparation += metrics.AssetPreparation
+	stats.ColumnPublishRowAssetPreparation += metrics.AssetMetrics.RowAssetDuration
+	stats.ColumnPublishTypedColumnPreparation += metrics.AssetMetrics.TypedColumnPartDuration
+	stats.ColumnPublishDictionaryPreparation += metrics.AssetMetrics.DictionarySidecarDuration
+	stats.ColumnPublishInt64Preparation += metrics.AssetMetrics.Int64SidecarDuration
+	stats.ColumnPublishAggregateMetadataPrepare += metrics.AssetMetrics.AggregateMetadataDuration
+	stats.ColumnPublishRowSidecarSharedBuild += metrics.AssetMetrics.RowSidecarSharedBuildDuration
+	stats.ColumnPublishAssetAppend += metrics.AssetMetrics.SharedAppendDuration
+	stats.ColumnPublishAssetAppendOpen += metrics.AssetMetrics.SharedAppendOpenDuration
+	stats.ColumnPublishAssetAppendWrite += metrics.AssetMetrics.SharedAppendWriteDuration
+	stats.ColumnPublishAssetAppendClose += metrics.AssetMetrics.SharedAppendCloseDuration
+	stats.ColumnPublishAssetAppendFileSync += metrics.AssetMetrics.SharedAppendFileSyncDuration
+	stats.ColumnPublishAssetAppendFileClose += metrics.AssetMetrics.SharedAppendFileCloseDuration
+	stats.ColumnPublishAssetAppendDirSync += metrics.AssetMetrics.SharedAppendDirSyncDuration
+	stats.ColumnPublishAssetAppendCleanup += metrics.AssetMetrics.SharedAppendCleanupDuration
 	stats.ColumnPublishManifestEncode += metrics.ManifestEncode
 	stats.ColumnPublishAssetClosureValidation += metrics.AssetClosureValidation
 	stats.ColumnPublishRootDeltaConstruction += metrics.RootDeltaConstruction
 	stats.ColumnPublishSystemDeltaConstruction += metrics.SystemDeltaConstruction
 	stats.ColumnPublishRows += plan.Rows
 	stats.ColumnPublishPreparedAssets += len(plan.PreparedAssets)
+	stats.ColumnPublishRowAssetBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishRowAssetBytes, metrics.AssetMetrics.RowAssetBytes)
+	stats.ColumnPublishRowAssetCount += metrics.AssetMetrics.RowAssetCount
+	stats.ColumnPublishTypedColumnBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishTypedColumnBytes, metrics.AssetMetrics.TypedColumnPartBytes)
+	stats.ColumnPublishTypedColumnCount += metrics.AssetMetrics.TypedColumnPartCount
+	stats.ColumnPublishDictionaryBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishDictionaryBytes, metrics.AssetMetrics.DictionarySidecarBytes)
+	stats.ColumnPublishDictionaryCount += metrics.AssetMetrics.DictionarySidecarCount
+	stats.ColumnPublishInt64Bytes = saturatingAddNonNegativeInt64(stats.ColumnPublishInt64Bytes, metrics.AssetMetrics.Int64SidecarBytes)
+	stats.ColumnPublishInt64Count += metrics.AssetMetrics.Int64SidecarCount
+	stats.ColumnPublishAggregateMetadataBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishAggregateMetadataBytes, metrics.AssetMetrics.AggregateMetadataBytes)
+	stats.ColumnPublishAggregateMetadataCount += metrics.AssetMetrics.AggregateMetadataCount
+	stats.ColumnPublishSharedAppendBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishSharedAppendBytes, metrics.AssetMetrics.SharedAppendBytes)
+	stats.ColumnPublishSharedAppendCount += metrics.AssetMetrics.SharedAppendCount
 	stats.ColumnPublishRequiredAssetBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishRequiredAssetBytes, plan.RequiredAssetBytes)
 	stats.ColumnPublishManifestBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishManifestBytes, plan.ManifestBytes)
 }
@@ -636,6 +662,197 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		generation = hookInput.CurrentManifest.Generation + 1
 	}
 	role := columnManifestPartRoleForPublish(hookInput.Operation)
+	type pendingColumnAsset struct {
+		payload  []byte
+		ref      ColumnAssetRef
+		hasRef   bool
+		kind     ColumnAssetKind
+		partID   uint64
+		rows     int
+		reason   string
+		partRole ColumnManifestPartRole
+		sortKey  string
+		validate func(ColumnAssetRef) error
+	}
+	pendingAssets := make([]pendingColumnAsset, 0, 8)
+	queueRegularAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string) {
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
+			payload: payload,
+			kind:    kind,
+			partID:  partID,
+			rows:    rows,
+			reason:  reason,
+		})
+	}
+	queueRegularManifestAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, validate func(ColumnAssetRef) error) {
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
+			payload:  payload,
+			kind:     kind,
+			partID:   partID,
+			rows:     rows,
+			reason:   reason,
+			partRole: partRole,
+			sortKey:  sortKey,
+			validate: validate,
+		})
+	}
+	queuePreparedManifestAsset := func(asset ColumnPreparedAsset) {
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
+			ref:      asset.Ref,
+			hasRef:   true,
+			kind:     asset.Ref.Kind,
+			partID:   asset.Ref.PartID,
+			rows:     asset.Rows,
+			reason:   asset.Reason,
+			partRole: asset.PartRole,
+			sortKey:  asset.SortKey,
+			validate: func(ref ColumnAssetRef) error {
+				if !columnPreparedAssetsEqual(asset, ColumnPreparedAsset{
+					Ref:          ref,
+					Rows:         asset.Rows,
+					Bytes:        ref.Length,
+					PublishID:    asset.PublishID,
+					GenerationID: asset.GenerationID,
+					Reason:       asset.Reason,
+					PartRole:     asset.PartRole,
+					SortKey:      asset.SortKey,
+				}) {
+					return fmt.Errorf("collections: prepared asset ref %+v does not match queued asset %+v", ref, asset)
+				}
+				return nil
+			},
+		})
+	}
+	flushPendingAssets := func() (retErr error) {
+		if len(pendingAssets) == 0 {
+			return nil
+		}
+		needsAppender := false
+		for _, asset := range pendingAssets {
+			if !asset.hasRef {
+				needsAppender = true
+				break
+			}
+		}
+		var appender *columnPhysicalAssetSegmentAppender
+		closed := false
+		var appendOpenDuration time.Duration
+		var appendWriteDuration time.Duration
+		var appendCloseDuration time.Duration
+		var appendFileSyncDuration time.Duration
+		var appendFileCloseDuration time.Duration
+		var appendDirSyncDuration time.Duration
+		var appendCleanupDuration time.Duration
+		if needsAppender {
+			appendStart := time.Now()
+			var err error
+			appender, err = newColumnPhysicalAssetSegmentAppendWriter(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, columnAssetM12ASegmentFileID)
+			if err != nil {
+				return err
+			}
+			appendOpenDuration += time.Since(appendStart)
+			defer func() {
+				if retErr != nil && !closed {
+					retErr = errors.Join(retErr, appender.abort())
+				}
+			}()
+		}
+		var appendedBytes int64
+		var appendedCount int
+		appendedRefs := make([]ColumnAssetRef, len(pendingAssets))
+		appendedRefSet := make([]bool, len(pendingAssets))
+		if needsAppender {
+			appendIndexes := make([]int, 0, len(pendingAssets))
+			appendItems := make([]columnPhysicalAssetAppendItem, 0, len(pendingAssets))
+			for i, asset := range pendingAssets {
+				if asset.hasRef {
+					continue
+				}
+				appendIndexes = append(appendIndexes, i)
+				appendItems = append(appendItems, columnPhysicalAssetAppendItem{
+					payload:    asset.payload,
+					kind:       asset.kind,
+					generation: generation,
+					partID:     asset.partID,
+				})
+			}
+			appendStart := time.Now()
+			refs, err := appender.appendKinds(appendItems)
+			if err != nil {
+				return err
+			}
+			appendWriteDuration += time.Since(appendStart)
+			if len(refs) != len(appendIndexes) {
+				return fmt.Errorf("collections: column physical asset append refs=%d want %d", len(refs), len(appendIndexes))
+			}
+			for _, ref := range refs {
+				trackCleanupAsset(ref)
+			}
+			for i, ref := range refs {
+				assetIndex := appendIndexes[i]
+				asset := pendingAssets[assetIndex]
+				appendedRefs[assetIndex] = ref
+				appendedRefSet[assetIndex] = true
+				appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
+				appendedCount++
+				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
+					ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
+					return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
+				}
+			}
+		}
+		for i, asset := range pendingAssets {
+			ref := asset.ref
+			if !asset.hasRef {
+				if !appendedRefSet[i] {
+					return fmt.Errorf("collections: missing appended ref for %s asset part_id=%d", asset.kind, asset.partID)
+				}
+				ref = appendedRefs[i]
+			}
+			if asset.validate != nil {
+				if err := asset.validate(ref); err != nil {
+					return err
+				}
+			}
+			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
+				Ref:          ref,
+				Rows:         asset.rows,
+				Bytes:        ref.Length,
+				PublishID:    hookInput.AppliedCommandLSN,
+				GenerationID: generation,
+				Reason:       asset.reason,
+				PartRole:     asset.partRole,
+				SortKey:      asset.sortKey,
+			})
+		}
+		if appender != nil {
+			appendStart := time.Now()
+			if err := appender.close(); err != nil {
+				return err
+			}
+			appendCloseDuration += time.Since(appendStart)
+			appendFileSyncDuration += appender.closeStats.FileSync
+			appendFileCloseDuration += appender.closeStats.FileClose
+			appendDirSyncDuration += appender.closeStats.DirSync
+			appendCleanupDuration += appender.closeStats.CleanupDuration()
+			closed = true
+		}
+		if needsAppender {
+			appendDuration := appendOpenDuration + appendWriteDuration + appendCloseDuration
+			prepared.AssetMetrics.SharedAppendDuration += appendDuration
+			prepared.AssetMetrics.SharedAppendOpenDuration += appendOpenDuration
+			prepared.AssetMetrics.SharedAppendWriteDuration += appendWriteDuration
+			prepared.AssetMetrics.SharedAppendCloseDuration += appendCloseDuration
+			prepared.AssetMetrics.SharedAppendFileSyncDuration += appendFileSyncDuration
+			prepared.AssetMetrics.SharedAppendFileCloseDuration += appendFileCloseDuration
+			prepared.AssetMetrics.SharedAppendDirSyncDuration += appendDirSyncDuration
+			prepared.AssetMetrics.SharedAppendCleanupDuration += appendCleanupDuration
+			prepared.AssetMetrics.SharedAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedAppendBytes, appendedBytes)
+			prepared.AssetMetrics.SharedAppendCount += appendedCount
+		}
+		return nil
+	}
+	rowAssetStart := time.Now()
 	rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
 	rowAssetRows, err := projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
 	if err != nil {
@@ -655,29 +872,19 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	if err != nil {
 		return ColumnPublishPreparedAssets{}, err
 	}
-	ref, err := writeColumnPhysicalAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encoded, generation, columnPhysicalRowAssetPartID)
-	if err != nil {
-		return ColumnPublishPreparedAssets{}, err
-	}
-	trackCleanupAsset(ref)
-	if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded)); err != nil {
-		return ColumnPublishPreparedAssets{}, err
-	}
 	if prepared.CommandBytes == 0 {
 		prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
 	}
 	prepared.RowCount = summary.RowCount
 	prepared.ColumnPayloadBytes = summary.PayloadBytes
-	prepared.Assets = []ColumnPreparedAsset{{
-		Ref:          ref,
-		Rows:         summary.RowCount,
-		Bytes:        ref.Length,
-		PublishID:    hookInput.AppliedCommandLSN,
-		GenerationID: generation,
-		Reason:       string(input.operation),
-		PartRole:     role,
-	}}
+	prepared.AssetMetrics.RowAssetDuration += time.Since(rowAssetStart)
+	prepared.AssetMetrics.RowAssetBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.RowAssetBytes, int64(len(encoded)))
+	prepared.AssetMetrics.RowAssetCount++
+	queueRegularManifestAsset(encoded, ColumnAssetKindTCS1PartImage, columnPhysicalRowAssetPartID, summary.RowCount, string(input.operation), role, "", func(ref ColumnAssetRef) error {
+		return validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAssetConfig, generation, columnPhysicalRowAssetPartID, len(encoded))
+	})
 	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
+		typedColumnStart := time.Now()
 		typedColumnImage, typedColumnRows, err := buildTypedColumnPartImageForDeclaredRows(hookInput.ColumnStore, generation, typedColumnPartAssetPartID, rows)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
@@ -687,140 +894,156 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			typedColumnRef, err := writeTypedColumnPartAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
+			validateTypedColumnRef := func(ref ColumnAssetRef) error {
+				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != ColumnAssetKindTCS1TypedColumnPart ||
+					ref.Generation != generation || ref.PartID != typedColumnPartAssetPartID || ref.Length != int64(len(typedColumnImage)) {
+					return fmt.Errorf("collections: invalid typed-column part asset ref %+v", ref)
+				}
+				return nil
 			}
-			trackCleanupAsset(typedColumnRef)
-			if typedColumnRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || typedColumnRef.Kind != ColumnAssetKindTCS1TypedColumnPart ||
-				typedColumnRef.Generation != generation || typedColumnRef.PartID != typedColumnPartAssetPartID || typedColumnRef.Length != int64(len(typedColumnImage)) {
-				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid typed-column part asset ref %+v", typedColumnRef)
+			if columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
+				typedColumnRef, err := writeTypedColumnPartAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
+				if err != nil {
+					return ColumnPublishPreparedAssets{}, err
+				}
+				trackCleanupAsset(typedColumnRef)
+				if err := validateTypedColumnRef(typedColumnRef); err != nil {
+					return ColumnPublishPreparedAssets{}, err
+				}
+				queuePreparedManifestAsset(ColumnPreparedAsset{
+					Ref:          typedColumnRef,
+					Rows:         typedColumnRows,
+					Bytes:        typedColumnRef.Length,
+					PublishID:    hookInput.AppliedCommandLSN,
+					GenerationID: generation,
+					Reason:       string(input.operation),
+					PartRole:     role,
+					SortKey:      columnSortKeyMatchString(typedColumnSortKey),
+				})
+			} else {
+				queueRegularManifestAsset(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedColumnPartAssetPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), validateTypedColumnRef)
 			}
-			prepped := ColumnPreparedAsset{
-				Ref:          typedColumnRef,
-				Rows:         typedColumnRows,
-				Bytes:        typedColumnRef.Length,
-				PublishID:    hookInput.AppliedCommandLSN,
-				GenerationID: generation,
-				Reason:       string(input.operation),
-				PartRole:     role,
-				SortKey:      columnSortKeyMatchString(typedColumnSortKey),
-			}
-			prepared.Assets = append(prepared.Assets, prepped)
+			prepared.AssetMetrics.TypedColumnPartDuration += time.Since(typedColumnStart)
+			prepared.AssetMetrics.TypedColumnPartBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.TypedColumnPartBytes, int64(len(typedColumnImage)))
+			prepared.AssetMetrics.TypedColumnPartCount++
 		}
 	}
 	if hookInput.Operation == ColumnPublishOperationInsert {
+		typedMetadataStart := time.Now()
 		typedMetadataAssets, err := buildColumnAggregateMetadataAssets(hookInput.ColumnStore, rows, columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore), hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedColumnPartAssetPartID, hookInput.AppliedCommandLSN)
 		if err != nil {
 			return ColumnPublishPreparedAssets{}, err
 		}
+		var typedMetadataBytes int64
 		for _, metadata := range typedMetadataAssets {
 			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			metadataRef, err := writeColumnAggregateMetadataAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedMetadata, generation, typedColumnPartAssetPartID)
+			typedMetadataBytes = saturatingAddNonNegativeInt64(typedMetadataBytes, int64(len(encodedMetadata)))
+			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, typedColumnPartAssetPartID, len(rows), metadata.AggregateName)
+		}
+		if typedMetadataBytes > 0 {
+			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(typedMetadataStart)
+			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, typedMetadataBytes)
+			prepared.AssetMetrics.AggregateMetadataCount += len(typedMetadataAssets)
+		}
+		rowSidecarStart := time.Now()
+		rowSidecarAssets, fusedRowSidecars, err := buildColumnRowSidecarAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
+		rowSidecarBuildDuration := time.Since(rowSidecarStart)
+		if err != nil {
+			rowSidecarAssets = columnRowSidecarAssets{}
+			fusedRowSidecars = false
+			err = nil
+		}
+		if fusedRowSidecars {
+			prepared.AssetMetrics.RowSidecarSharedBuildDuration += rowSidecarBuildDuration
+		}
+		dictionaryStart := time.Now()
+		dictionaryAssets := rowSidecarAssets.DictionaryCodes
+		if !fusedRowSidecars {
+			dictionaryAssets, err = buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			trackCleanupAsset(metadataRef)
-			if metadataRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || metadataRef.Kind != ColumnAssetKindTCS1AggregateMetadata ||
-				metadataRef.Generation != generation || metadataRef.PartID != typedColumnPartAssetPartID || metadataRef.Length != int64(len(encodedMetadata)) {
-				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid typed-column aggregate metadata asset ref %+v", metadataRef)
-			}
-			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
-				Ref:          metadataRef,
-				Rows:         len(rows),
-				Bytes:        metadataRef.Length,
-				PublishID:    hookInput.AppliedCommandLSN,
-				GenerationID: generation,
-				Reason:       metadata.AggregateName,
-			})
 		}
-		dictionaryAssets, err := buildColumnDictionaryCodesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
+		var dictionaryBytes int64
 		for _, dictionary := range dictionaryAssets {
 			encodedDictionary, err := encodeColumnDictionaryCodesAsset(dictionary)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			dictionaryRef, err := writeColumnDictionaryCodesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedDictionary, generation, columnPhysicalRowAssetPartID)
+			dictionaryBytes = saturatingAddNonNegativeInt64(dictionaryBytes, int64(len(encodedDictionary)))
+			queueRegularAsset(encodedDictionary, ColumnAssetKindTCS1DictionaryCodes, columnPhysicalRowAssetPartID, summary.RowCount, dictionary.ColumnName)
+		}
+		if dictionaryBytes > 0 {
+			prepared.AssetMetrics.DictionarySidecarDuration += time.Since(dictionaryStart)
+			prepared.AssetMetrics.DictionarySidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.DictionarySidecarBytes, dictionaryBytes)
+			prepared.AssetMetrics.DictionarySidecarCount += len(dictionaryAssets)
+		}
+		int64Start := time.Now()
+		int64Assets := rowSidecarAssets.Int64Values
+		if !fusedRowSidecars {
+			int64Assets, err = buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			trackCleanupAsset(dictionaryRef)
-			if dictionaryRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || dictionaryRef.Kind != ColumnAssetKindTCS1DictionaryCodes ||
-				dictionaryRef.Generation != generation || dictionaryRef.PartID != columnPhysicalRowAssetPartID || dictionaryRef.Length != int64(len(encodedDictionary)) {
-				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid dictionary codes asset ref %+v", dictionaryRef)
-			}
-			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
-				Ref:          dictionaryRef,
-				Rows:         summary.RowCount,
-				Bytes:        dictionaryRef.Length,
-				PublishID:    hookInput.AppliedCommandLSN,
-				GenerationID: generation,
-				Reason:       dictionary.ColumnName,
-			})
 		}
-		int64Assets, err := buildColumnInt64ValuesAssets(rowAssetConfig, rowAssetRows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
+		var int64Bytes int64
 		for _, values := range int64Assets {
 			encodedValues, err := encodeColumnInt64ValuesAsset(values)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			valuesRef, err := writeColumnInt64ValuesAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedValues, generation, columnPhysicalRowAssetPartID)
+			int64Bytes = saturatingAddNonNegativeInt64(int64Bytes, int64(len(encodedValues)))
+			queueRegularAsset(encodedValues, ColumnAssetKindTCS1Int64Values, columnPhysicalRowAssetPartID, summary.RowCount, values.ColumnName)
+		}
+		if int64Bytes > 0 {
+			prepared.AssetMetrics.Int64SidecarDuration += time.Since(int64Start)
+			prepared.AssetMetrics.Int64SidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.Int64SidecarBytes, int64Bytes)
+			prepared.AssetMetrics.Int64SidecarCount += len(int64Assets)
+		}
+		rowMetadataStart := time.Now()
+		rowMetadataAssets := rowSidecarAssets.AggregateMetadata
+		if !fusedRowSidecars {
+			rowMetadataAssets, err = buildColumnAggregateMetadataAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			trackCleanupAsset(valuesRef)
-			if valuesRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || valuesRef.Kind != ColumnAssetKindTCS1Int64Values ||
-				valuesRef.Generation != generation || valuesRef.PartID != columnPhysicalRowAssetPartID || valuesRef.Length != int64(len(encodedValues)) {
-				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid int64 values asset ref %+v", valuesRef)
-			}
-			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
-				Ref:          valuesRef,
-				Rows:         summary.RowCount,
-				Bytes:        valuesRef.Length,
-				PublishID:    hookInput.AppliedCommandLSN,
-				GenerationID: generation,
-				Reason:       values.ColumnName,
-			})
 		}
-		rowMetadataAssets, err := buildColumnAggregateMetadataAssets(rowAssetConfig, rowAssetRows, rowAssetConfig.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, columnPhysicalRowAssetPartID, hookInput.AppliedCommandLSN)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
+		var rowMetadataBytes int64
 		for _, metadata := range rowMetadataAssets {
 			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
 			if err != nil {
 				return ColumnPublishPreparedAssets{}, err
 			}
-			metadataRef, err := writeColumnAggregateMetadataAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, encodedMetadata, generation, columnPhysicalRowAssetPartID)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			trackCleanupAsset(metadataRef)
-			if metadataRef.Namespace != hookInput.ColumnStore.AssetManager.Namespace || metadataRef.Kind != ColumnAssetKindTCS1AggregateMetadata ||
-				metadataRef.Generation != generation || metadataRef.PartID != columnPhysicalRowAssetPartID || metadataRef.Length != int64(len(encodedMetadata)) {
-				return ColumnPublishPreparedAssets{}, fmt.Errorf("collections: invalid aggregate metadata asset ref %+v", metadataRef)
-			}
-			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
-				Ref:          metadataRef,
-				Rows:         summary.RowCount,
-				Bytes:        metadataRef.Length,
-				PublishID:    hookInput.AppliedCommandLSN,
-				GenerationID: generation,
-				Reason:       metadata.AggregateName,
-			})
+			rowMetadataBytes = saturatingAddNonNegativeInt64(rowMetadataBytes, int64(len(encodedMetadata)))
+			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, columnPhysicalRowAssetPartID, summary.RowCount, metadata.AggregateName)
 		}
+		if rowMetadataBytes > 0 {
+			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(rowMetadataStart)
+			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, rowMetadataBytes)
+			prepared.AssetMetrics.AggregateMetadataCount += len(rowMetadataAssets)
+		}
+		if fusedRowSidecars {
+			totalFusedBytes := saturatingAddNonNegativeInt64(saturatingAddNonNegativeInt64(dictionaryBytes, int64Bytes), rowMetadataBytes)
+			prepared.AssetMetrics.DictionarySidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, dictionaryBytes, totalFusedBytes)
+			prepared.AssetMetrics.Int64SidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, int64Bytes, totalFusedBytes)
+			prepared.AssetMetrics.AggregateMetadataDuration += columnPublishDurationShare(rowSidecarBuildDuration, rowMetadataBytes, totalFusedBytes)
+		}
+	}
+	if err := flushPendingAssets(); err != nil {
+		return ColumnPublishPreparedAssets{}, err
 	}
 	cleanupAssets = nil
 	return prepared, nil
+}
+
+func columnPublishDurationShare(total time.Duration, partBytes, totalBytes int64) time.Duration {
+	if total <= 0 || partBytes <= 0 || totalBytes <= 0 {
+		return 0
+	}
+	return time.Duration(float64(total) * (float64(partBytes) / float64(totalBytes)))
 }
 
 func columnManifestPartRoleForPublish(operation ColumnPublishOperation) ColumnManifestPartRole {

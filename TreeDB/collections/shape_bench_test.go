@@ -36,12 +36,32 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.RetainedPayloadRows += src.RetainedPayloadRows
 	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
 	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	dst.RetainedPayloadValueLogPointerize += src.RetainedPayloadValueLogPointerize
+	dst.RetainedPayloadValueLogValues += src.RetainedPayloadValueLogValues
+	dst.RetainedPayloadValueLogBytes += src.RetainedPayloadValueLogBytes
+	dst.RetainedStreamValueLogPointerize += src.RetainedStreamValueLogPointerize
+	dst.RetainedStreamValueLogValues += src.RetainedStreamValueLogValues
+	dst.RetainedStreamValueLogBytes += src.RetainedStreamValueLogBytes
 	dst.ColumnPublishBuildColumnDelta += src.ColumnPublishBuildColumnDelta
 	dst.ColumnPublishBuildSystemDelta += src.ColumnPublishBuildSystemDelta
 	dst.ColumnPublishCommit += src.ColumnPublishCommit
 	dst.ColumnPublishDocumentExtraction += src.ColumnPublishDocumentExtraction
 	dst.ColumnPublishDeclaredColumnEncoding += src.ColumnPublishDeclaredColumnEncoding
 	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
+	dst.ColumnPublishRowAssetPreparation += src.ColumnPublishRowAssetPreparation
+	dst.ColumnPublishTypedColumnPreparation += src.ColumnPublishTypedColumnPreparation
+	dst.ColumnPublishDictionaryPreparation += src.ColumnPublishDictionaryPreparation
+	dst.ColumnPublishInt64Preparation += src.ColumnPublishInt64Preparation
+	dst.ColumnPublishAggregateMetadataPrepare += src.ColumnPublishAggregateMetadataPrepare
+	dst.ColumnPublishRowSidecarSharedBuild += src.ColumnPublishRowSidecarSharedBuild
+	dst.ColumnPublishAssetAppend += src.ColumnPublishAssetAppend
+	dst.ColumnPublishAssetAppendOpen += src.ColumnPublishAssetAppendOpen
+	dst.ColumnPublishAssetAppendWrite += src.ColumnPublishAssetAppendWrite
+	dst.ColumnPublishAssetAppendClose += src.ColumnPublishAssetAppendClose
+	dst.ColumnPublishAssetAppendFileSync += src.ColumnPublishAssetAppendFileSync
+	dst.ColumnPublishAssetAppendFileClose += src.ColumnPublishAssetAppendFileClose
+	dst.ColumnPublishAssetAppendDirSync += src.ColumnPublishAssetAppendDirSync
+	dst.ColumnPublishAssetAppendCleanup += src.ColumnPublishAssetAppendCleanup
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -49,6 +69,18 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishRootDeltaMaterialization += src.ColumnPublishRootDeltaMaterialization
 	dst.ColumnPublishRows += src.ColumnPublishRows
 	dst.ColumnPublishPreparedAssets += src.ColumnPublishPreparedAssets
+	dst.ColumnPublishRowAssetBytes += src.ColumnPublishRowAssetBytes
+	dst.ColumnPublishRowAssetCount += src.ColumnPublishRowAssetCount
+	dst.ColumnPublishTypedColumnBytes += src.ColumnPublishTypedColumnBytes
+	dst.ColumnPublishTypedColumnCount += src.ColumnPublishTypedColumnCount
+	dst.ColumnPublishDictionaryBytes += src.ColumnPublishDictionaryBytes
+	dst.ColumnPublishDictionaryCount += src.ColumnPublishDictionaryCount
+	dst.ColumnPublishInt64Bytes += src.ColumnPublishInt64Bytes
+	dst.ColumnPublishInt64Count += src.ColumnPublishInt64Count
+	dst.ColumnPublishAggregateMetadataBytes += src.ColumnPublishAggregateMetadataBytes
+	dst.ColumnPublishAggregateMetadataCount += src.ColumnPublishAggregateMetadataCount
+	dst.ColumnPublishSharedAppendBytes += src.ColumnPublishSharedAppendBytes
+	dst.ColumnPublishSharedAppendCount += src.ColumnPublishSharedAppendCount
 	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
 	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
@@ -77,12 +109,28 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("index_state_extract_ns/doc", stats.IndexStateExtraction)
 	reportDuration("duplicate_preflight_ns/doc", stats.DuplicateDocumentPreflight)
 	reportDuration("retained_payload_prepare_ns/doc", stats.RetainedPayloadPrepare)
+	reportDuration("retained_payload_vlog_pointerize_ns/doc", stats.RetainedPayloadValueLogPointerize)
+	reportDuration("retained_stream_vlog_pointerize_ns/doc", stats.RetainedStreamValueLogPointerize)
 	reportDuration("column_publish_build_column_delta_ns/doc", stats.ColumnPublishBuildColumnDelta)
 	reportDuration("column_publish_build_system_delta_ns/doc", stats.ColumnPublishBuildSystemDelta)
 	reportDuration("column_publish_commit_ns/doc", stats.ColumnPublishCommit)
 	reportDuration("column_publish_document_extraction_ns/doc", stats.ColumnPublishDocumentExtraction)
 	reportDuration("column_publish_declared_column_encoding_ns/doc", stats.ColumnPublishDeclaredColumnEncoding)
 	reportDuration("column_publish_asset_prepare_ns/doc", stats.ColumnPublishAssetPreparation)
+	reportDuration("column_publish_row_asset_prepare_ns/doc", stats.ColumnPublishRowAssetPreparation)
+	reportDuration("column_publish_typed_column_prepare_ns/doc", stats.ColumnPublishTypedColumnPreparation)
+	reportDuration("column_publish_dictionary_prepare_ns/doc", stats.ColumnPublishDictionaryPreparation)
+	reportDuration("column_publish_int64_prepare_ns/doc", stats.ColumnPublishInt64Preparation)
+	reportDuration("column_publish_aggregate_metadata_prepare_ns/doc", stats.ColumnPublishAggregateMetadataPrepare)
+	reportDuration("column_publish_row_sidecar_shared_build_ns/doc", stats.ColumnPublishRowSidecarSharedBuild)
+	reportDuration("column_publish_asset_append_ns/doc", stats.ColumnPublishAssetAppend)
+	reportDuration("column_publish_asset_append_open_ns/doc", stats.ColumnPublishAssetAppendOpen)
+	reportDuration("column_publish_asset_append_write_ns/doc", stats.ColumnPublishAssetAppendWrite)
+	reportDuration("column_publish_asset_append_close_ns/doc", stats.ColumnPublishAssetAppendClose)
+	reportDuration("column_publish_asset_append_file_sync_ns/doc", stats.ColumnPublishAssetAppendFileSync)
+	reportDuration("column_publish_asset_append_file_close_ns/doc", stats.ColumnPublishAssetAppendFileClose)
+	reportDuration("column_publish_asset_append_dir_sync_ns/doc", stats.ColumnPublishAssetAppendDirSync)
+	reportDuration("column_publish_asset_append_cleanup_ns/doc", stats.ColumnPublishAssetAppendCleanup)
 	reportDuration("column_publish_manifest_encode_ns/doc", stats.ColumnPublishManifestEncode)
 	reportDuration("column_publish_asset_closure_ns/doc", stats.ColumnPublishAssetClosureValidation)
 	reportDuration("column_publish_root_delta_ns/doc", stats.ColumnPublishRootDeltaConstruction)
@@ -99,6 +147,18 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	}
 	if stats.ColumnPublishManifestBytes > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishManifestBytes)/float64(docs), "column_publish_manifest_bytes/doc")
+	}
+	if stats.RetainedPayloadValueLogValues > 0 {
+		b.ReportMetric(float64(stats.RetainedPayloadValueLogValues)/float64(docs), "retained_payload_vlog_values/doc")
+	}
+	if stats.RetainedPayloadValueLogBytes > 0 {
+		b.ReportMetric(float64(stats.RetainedPayloadValueLogBytes)/float64(docs), "retained_payload_vlog_bytes/doc")
+	}
+	if stats.RetainedStreamValueLogValues > 0 {
+		b.ReportMetric(float64(stats.RetainedStreamValueLogValues)/float64(docs), "retained_stream_vlog_values/doc")
+	}
+	if stats.RetainedStreamValueLogBytes > 0 {
+		b.ReportMetric(float64(stats.RetainedStreamValueLogBytes)/float64(docs), "retained_stream_vlog_bytes/doc")
 	}
 	reportDuration("unique_preflight_ns/doc", stats.UniqueIndexPreflight)
 	reportDuration("template_run_ns/doc", stats.TemplateRunBuild)
@@ -168,6 +228,54 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 	}
 	if got := result.Extra["column_publish_manifest_bytes/doc"]; got <= 0 {
 		t.Fatalf("column publish manifest bytes metric=%v want positive", got)
+	}
+}
+
+func TestCollectionShapeInsertStatsIncludesRetainedValueLogPointerization(t *testing.T) {
+	var stats collections.CollectionInsertStats
+	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		RetainedPayloadValueLogPointerize: 10 * time.Microsecond,
+		RetainedPayloadValueLogValues:     3,
+		RetainedPayloadValueLogBytes:      300,
+		RetainedStreamValueLogPointerize:  20 * time.Microsecond,
+		RetainedStreamValueLogValues:      4,
+		RetainedStreamValueLogBytes:       400,
+	})
+	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		RetainedPayloadValueLogPointerize: 5 * time.Microsecond,
+		RetainedPayloadValueLogValues:     2,
+		RetainedPayloadValueLogBytes:      200,
+		RetainedStreamValueLogPointerize:  7 * time.Microsecond,
+		RetainedStreamValueLogValues:      1,
+		RetainedStreamValueLogBytes:       100,
+	})
+	if stats.RetainedPayloadValueLogPointerize != 15*time.Microsecond {
+		t.Fatalf("payload pointerize=%s want 15us", stats.RetainedPayloadValueLogPointerize)
+	}
+	if stats.RetainedPayloadValueLogValues != 5 || stats.RetainedPayloadValueLogBytes != 500 {
+		t.Fatalf("payload value-log values=%d bytes=%d want 5/500", stats.RetainedPayloadValueLogValues, stats.RetainedPayloadValueLogBytes)
+	}
+	if stats.RetainedStreamValueLogPointerize != 27*time.Microsecond {
+		t.Fatalf("stream pointerize=%s want 27us", stats.RetainedStreamValueLogPointerize)
+	}
+	if stats.RetainedStreamValueLogValues != 5 || stats.RetainedStreamValueLogBytes != 500 {
+		t.Fatalf("stream value-log values=%d bytes=%d want 5/500", stats.RetainedStreamValueLogValues, stats.RetainedStreamValueLogBytes)
+	}
+
+	result := testing.Benchmark(func(b *testing.B) {
+		benchmarkReportCollectionInsertStats(b, 10, 1, stats)
+	})
+	for _, name := range []string{
+		"retained_payload_vlog_pointerize_ns/doc",
+		"retained_payload_vlog_values/doc",
+		"retained_payload_vlog_bytes/doc",
+		"retained_stream_vlog_pointerize_ns/doc",
+		"retained_stream_vlog_values/doc",
+		"retained_stream_vlog_bytes/doc",
+	} {
+		if got := result.Extra[name]; got <= 0 {
+			t.Fatalf("%s metric=%v want positive", name, got)
+		}
 	}
 }
 

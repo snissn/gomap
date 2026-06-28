@@ -201,6 +201,37 @@ func TestLeafGenerationGroupedFrameInfo_LiveByteContributionKeepsSparseRefsNonZe
 	}
 }
 
+func TestLeafGenerationGroupedFrameScanCache_BoundsEntries(t *testing.T) {
+	cache := newLeafGenerationGroupedFrameScanCache(2)
+	first := groupedRecordKey{fileID: 1, start: 100}
+	second := groupedRecordKey{fileID: 1, start: 200}
+	third := groupedRecordKey{fileID: 1, start: 300}
+
+	cache.store(first, leafGenerationGroupedFrameInfo{recordLen: 10, k: 2})
+	cache.store(second, leafGenerationGroupedFrameInfo{recordLen: 20, k: 2})
+	cache.store(first, leafGenerationGroupedFrameInfo{recordLen: 11, k: 2})
+	if got := cache.len(); got != 2 {
+		t.Fatalf("cache len after update=%d, want 2", got)
+	}
+	if info, ok := cache.get(first); !ok || info.recordLen != 11 {
+		t.Fatalf("updated first entry=(%+v,%t), want recordLen 11 hit", info, ok)
+	}
+
+	cache.store(third, leafGenerationGroupedFrameInfo{recordLen: 30, k: 2})
+	if got := cache.len(); got != 2 {
+		t.Fatalf("cache len after eviction=%d, want 2", got)
+	}
+	if _, ok := cache.get(first); ok {
+		t.Fatalf("first entry still cached after bounded FIFO eviction")
+	}
+	if _, ok := cache.get(second); !ok {
+		t.Fatalf("second entry missing after eviction")
+	}
+	if _, ok := cache.get(third); !ok {
+		t.Fatalf("third entry missing after insert")
+	}
+}
+
 func TestLeafGenerationPlan_SeparatesWholeGenerationGCFromPack(t *testing.T) {
 	db, leafLog := openLeafGenerationGCTestDB(t)
 

@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func countCommitLogFiles(entries []os.DirEntry) int {
@@ -103,12 +106,15 @@ func TestCachingDB_DirectWriteGateRechecksCheckpointAfterPublicWait(t *testing.T
 	db.checkpointMu.Unlock()
 
 	acquired := make(chan struct{})
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		db.beginDirectWrite()
+		if err := db.beginDirectWrite(); err != nil {
+			done <- err
+			return
+		}
 		close(acquired)
 		db.writeMu.RUnlock()
-		close(done)
+		done <- nil
 	}()
 
 	select {
@@ -123,9 +129,52 @@ func TestCachingDB_DirectWriteGateRechecksCheckpointAfterPublicWait(t *testing.T
 	db.checkpointMu.Unlock()
 
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("beginDirectWrite: %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("direct write gate did not resume after checkpoint")
+	}
+}
+
+func TestCachingDBCommandWALAppendCallbacksRejectAfterCloseStarts(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.closing.Store(true)
+	called := false
+	err = db.SetAfterCommandWALAppend([]byte("k"), []byte("v"), func() error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("SetAfterCommandWALAppend error=%v, want ErrClosed", err)
+	}
+	if called {
+		t.Fatalf("SetAfterCommandWALAppend called command WAL append after close started")
+	}
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("batch-k"), []byte("batch-v")); err != nil {
+		t.Fatalf("batch Set: %v", err)
+	}
+	err = b.WriteAfterCommandWALAppend(true, func() error {
+		called = true
+		return nil
+	})
+	if !errors.Is(err, backenddb.ErrClosed) {
+		t.Fatalf("WriteAfterCommandWALAppend error=%v, want ErrClosed", err)
+	}
+	if called {
+		t.Fatalf("WriteAfterCommandWALAppend called command WAL append after close started")
 	}
 }
 

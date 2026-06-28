@@ -15,11 +15,13 @@ import (
 
 func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, cache *templateDefCache, opts templ.DecodeOptions) ([]byte, error) {
 	if lookup == nil || !templ.IsEncodedPayload(payload) {
+		noteGrowReadAppendDecodedPayload(dst, len(payload))
 		oldLen := len(dst)
 		dst = grow(dst, len(payload))
 		copy(dst[oldLen:], payload)
 		return dst, nil
 	}
+	noteGrowReadAppendTemplateEncodedPayload(len(payload))
 	return templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
 		return resolveTemplateDef(id, lookup, cache)
 	}, opts)
@@ -75,11 +77,12 @@ const (
 	defaultMaxMappedSealed           = 8
 	defaultMaxMappedSealedBytes      = 64 << 20
 	defaultMaxMappedLeafSealed       = defaultMaxMappedSealed * 64
-	defaultLeafSealedBytesMultiplier = 128
-	// Leaf-log reads are on the BTree traversal hot path. Keep a bounded 8GiB
-	// mapped virtual-address window for sealed leaf generations so large native
-	// fast-path datasets do not fall back to ReadAt once a few generations rotate;
-	// OS page-cache policy still controls physical memory residency.
+	defaultLeafSealedBytesMultiplier = 24
+	// Leaf-log reads are on the BTree traversal hot path, but long sync/restore
+	// workloads can keep multiple GiB of sealed leaf generations mapped into the
+	// process RSS. Keep a bounded 1.5GiB sealed-leaf window by default and let
+	// older generations fall back to ReadAt; operators can raise the env cap for
+	// throughput-biased experiments.
 	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * defaultLeafSealedBytesMultiplier
 	defaultCurrentWritableMapTarget = 32 << 20
 )
@@ -88,7 +91,7 @@ var (
 	maxDeadMappingsExplicit        bool
 	adaptiveDeadMappings                 = defaultAdaptiveCapEnabled
 	enableCurrentWritableMmap            = false
-	enableCurrentLeafWritableMmap        = true
+	enableCurrentLeafWritableMmap        = false
 	CurrentWritableMmapTargetBytes       = int64(defaultCurrentWritableMapTarget)
 	MaxMappedSealedSegments              = defaultMaxMappedSealed
 	MaxMappedSealedBytes           int64 = defaultMaxMappedSealedBytes

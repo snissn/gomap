@@ -16,35 +16,43 @@ func containsAll(s string, subs ...string) bool {
 
 func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	stats := map[string]string{
-		"treedb.process.identity.wal_dir":                               "/tmp/app.db/wal",
-		"treedb.vlog.mmap_active_bytes":                                 "22222",
-		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                 "8589934592",
-		"treedb.cache.vlog_mmap.active_bytes":                           "12345",
-		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments":        "512",
-		"treedb.cache.vlog_mmap.read.hit_ratio":                         "0.625000",
-		"treedb.cache.vlog_mmap.enabled":                                "true",
-		"treedb.cache.vlog_decode_buffer_grow.calls_total":              "42",
-		"treedb.cache.vlog_write_mode.raw_bytes.dict":                   "40960",
-		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf":          "1024",
-		"treedb.cache.vlog_auto.bytes.dict":                             "8192",
-		"treedb.cache.vlog_dict.current_k":                              "32",
-		"treedb.cache.vlog_payload_kind.raw_bytes.single_value":         "2048",
-		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4":              "512",
-		"treedb.cache.vlog_generation.rewrite.reclaimed_bytes":          "1234",
-		"treedb.cache.vlog_retained_prune.runs":                         "3",
-		"treedb.cache.vlog_zombie.pinned_bytes":                         "4096",
-		"treedb.process.memory.heap_inuse_bytes":                        "4096",
-		"treedb.process.memory.pool_pressure_level":                     "critical",
-		"treedb.cache.batch_arena.pool_bytes_estimate":                  "65536",
-		"treedb.process.batch_arena.retained_bytes_global_max_estimate": "1048576",
-		"treedb.process.memtable_residency.queue.total.size_bytes":      "2048",
-		"treedb.process.read_path.snapshot.backend_bytes_total":         "8192",
-		"treedb.process.batch.set.bytes_total":                          "4096",
-		"treedb.process.batch.set_caller.top.0.frame":                   "snissn/iavl.batchSetOwned <= cosmossdk.io/store/rootmulti.(*Store).Restore",
-		"treedb.process.flush_merge.applied_ops_total":                  "12",
-		"treedb.cache.backpressure_mode":                                "adaptive",
-		"treedb.cache.entry_slice.trim_runs_total":                      "77",
-		"treedb.process.memory.pool_pressure_high_pct":                  "85.5",
+		"treedb.process.identity.wal_dir":                                        "/tmp/app.db/wal",
+		"treedb.vlog.mmap_active_bytes":                                          "22222",
+		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                          "1610612736",
+		"treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total": "17",
+		"treedb.vlog.decode_scratch.small_pool.retained_bytes":                   "16384",
+		"treedb.cache.vlog_mmap.active_bytes":                                    "12345",
+		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments":                 "512",
+		"treedb.cache.vlog_mmap.read.hit_ratio":                                  "0.625000",
+		"treedb.cache.vlog_mmap.enabled":                                         "true",
+		"treedb.cache.vlog_grouped_frame_cache.retained_bytes":                   "65536",
+		"treedb.cache.vlog_grouped_frame_cache.allocated_slots":                  "64",
+		"treedb.cache.vlog_grouped_frame_cache.hit_ratio":                        "0.750000",
+		"treedb.cache.vlog_decode_buffer_grow.calls_total":                       "42",
+		"treedb.cache.vlog_decode_scratch.small_pool.retained_bytes":             "32768",
+		"treedb.cache.vlog_write_mode.raw_bytes.dict":                            "40960",
+		"treedb.cache.vlog_payload_split.raw_bytes.outer_leaf":                   "1024",
+		"treedb.cache.vlog_auto.bytes.dict":                                      "8192",
+		"treedb.cache.vlog_dict.current_k":                                       "32",
+		"treedb.cache.vlog_payload_kind.raw_bytes.single_value":                  "2048",
+		"treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4":                       "512",
+		"treedb.cache.vlog_generation.rewrite.reclaimed_bytes":                   "1234",
+		"treedb.cache.vlog_retained_segments":                                    "9",
+		"treedb.cache.vlog_retained_bytes_estimate":                              "987654",
+		"treedb.cache.vlog_retained_prune.runs":                                  "3",
+		"treedb.cache.vlog_zombie.pinned_bytes":                                  "4096",
+		"treedb.process.memory.heap_inuse_bytes":                                 "4096",
+		"treedb.process.memory.pool_pressure_level":                              "critical",
+		"treedb.cache.batch_arena.pool_bytes_estimate":                           "65536",
+		"treedb.process.batch_arena.retained_bytes_global_max_estimate":          "1048576",
+		"treedb.process.memtable_residency.queue.total.size_bytes":               "2048",
+		"treedb.process.read_path.snapshot.backend_bytes_total":                  "8192",
+		"treedb.process.batch.set.bytes_total":                                   "4096",
+		"treedb.process.batch.set_caller.top.0.frame":                            "snissn/iavl.batchSetOwned <= cosmossdk.io/store/rootmulti.(*Store).Restore",
+		"treedb.process.flush_merge.applied_ops_total":                           "12",
+		"treedb.cache.backpressure_mode":                                         "adaptive",
+		"treedb.cache.entry_slice.trim_runs_total":                               "77",
+		"treedb.process.memory.pool_pressure_high_pct":                           "85.5",
 	}
 
 	got := selectTreeDBExpvarStats(stats)
@@ -58,8 +66,14 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	if v, ok := got["treedb.cache.vlog_mmap.active_bytes"].(int64); !ok || v != 12345 {
 		t.Fatalf("active_bytes=%T(%v) want int64(12345)", got["treedb.cache.vlog_mmap.active_bytes"], got["treedb.cache.vlog_mmap.active_bytes"])
 	}
-	if v, ok := got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"].(int64); !ok || v != 8589934592 {
-		t.Fatalf("backend leaf mmap byte cap=%T(%v) want int64(8589934592)", got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"], got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"])
+	if v, ok := got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"].(int64); !ok || v != 1610612736 {
+		t.Fatalf("backend leaf mmap byte cap=%T(%v) want int64(1610612736)", got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"], got["treedb.vlog.mmap_max_mapped_leaf_sealed_bytes"])
+	}
+	if v, ok := got["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total"].(int64); !ok || v != 17 {
+		t.Fatalf("backend decoded payload calls=%T(%v) want int64(17)", got["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total"], got["treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total"])
+	}
+	if v, ok := got["treedb.vlog.decode_scratch.small_pool.retained_bytes"].(int64); !ok || v != 16384 {
+		t.Fatalf("backend decode_scratch.small_pool.retained_bytes=%T(%v) want int64(16384)", got["treedb.vlog.decode_scratch.small_pool.retained_bytes"], got["treedb.vlog.decode_scratch.small_pool.retained_bytes"])
 	}
 	if v, ok := got["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"].(int64); !ok || v != 512 {
 		t.Fatalf("cache leaf mmap segment cap=%T(%v) want int64(512)", got["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"], got["treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments"])
@@ -70,8 +84,20 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	if v, ok := got["treedb.cache.vlog_mmap.enabled"].(bool); !ok || !v {
 		t.Fatalf("enabled=%T(%v) want bool(true)", got["treedb.cache.vlog_mmap.enabled"], got["treedb.cache.vlog_mmap.enabled"])
 	}
+	if v, ok := got["treedb.cache.vlog_grouped_frame_cache.retained_bytes"].(int64); !ok || v != 65536 {
+		t.Fatalf("grouped cache retained_bytes=%T(%v) want int64(65536)", got["treedb.cache.vlog_grouped_frame_cache.retained_bytes"], got["treedb.cache.vlog_grouped_frame_cache.retained_bytes"])
+	}
+	if v, ok := got["treedb.cache.vlog_grouped_frame_cache.allocated_slots"].(int64); !ok || v != 64 {
+		t.Fatalf("grouped cache allocated_slots=%T(%v) want int64(64)", got["treedb.cache.vlog_grouped_frame_cache.allocated_slots"], got["treedb.cache.vlog_grouped_frame_cache.allocated_slots"])
+	}
+	if v, ok := got["treedb.cache.vlog_grouped_frame_cache.hit_ratio"].(float64); !ok || v != 0.75 {
+		t.Fatalf("grouped cache hit_ratio=%T(%v) want float64(0.75)", got["treedb.cache.vlog_grouped_frame_cache.hit_ratio"], got["treedb.cache.vlog_grouped_frame_cache.hit_ratio"])
+	}
 	if v, ok := got["treedb.cache.vlog_decode_buffer_grow.calls_total"].(int64); !ok || v != 42 {
 		t.Fatalf("decode_buffer_grow.calls_total=%T(%v) want int64(42)", got["treedb.cache.vlog_decode_buffer_grow.calls_total"], got["treedb.cache.vlog_decode_buffer_grow.calls_total"])
+	}
+	if v, ok := got["treedb.cache.vlog_decode_scratch.small_pool.retained_bytes"].(int64); !ok || v != 32768 {
+		t.Fatalf("decode_scratch.small_pool.retained_bytes=%T(%v) want int64(32768)", got["treedb.cache.vlog_decode_scratch.small_pool.retained_bytes"], got["treedb.cache.vlog_decode_scratch.small_pool.retained_bytes"])
 	}
 	if v, ok := got["treedb.cache.vlog_write_mode.raw_bytes.dict"].(int64); !ok || v != 40960 {
 		t.Fatalf("vlog_write_mode.raw_bytes.dict=%T(%v) want int64(40960)", got["treedb.cache.vlog_write_mode.raw_bytes.dict"], got["treedb.cache.vlog_write_mode.raw_bytes.dict"])
@@ -93,6 +119,12 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.vlog_generation.rewrite.reclaimed_bytes"].(int64); !ok || v != 1234 {
 		t.Fatalf("vlog_generation.rewrite.reclaimed_bytes=%T(%v) want int64(1234)", got["treedb.cache.vlog_generation.rewrite.reclaimed_bytes"], got["treedb.cache.vlog_generation.rewrite.reclaimed_bytes"])
+	}
+	if v, ok := got["treedb.cache.vlog_retained_segments"].(int64); !ok || v != 9 {
+		t.Fatalf("vlog_retained_segments=%T(%v) want int64(9)", got["treedb.cache.vlog_retained_segments"], got["treedb.cache.vlog_retained_segments"])
+	}
+	if v, ok := got["treedb.cache.vlog_retained_bytes_estimate"].(int64); !ok || v != 987654 {
+		t.Fatalf("vlog_retained_bytes_estimate=%T(%v) want int64(987654)", got["treedb.cache.vlog_retained_bytes_estimate"], got["treedb.cache.vlog_retained_bytes_estimate"])
 	}
 	if v, ok := got["treedb.cache.vlog_retained_prune.runs"].(int64); !ok || v != 3 {
 		t.Fatalf("vlog_retained_prune.runs=%T(%v) want int64(3)", got["treedb.cache.vlog_retained_prune.runs"], got["treedb.cache.vlog_retained_prune.runs"])

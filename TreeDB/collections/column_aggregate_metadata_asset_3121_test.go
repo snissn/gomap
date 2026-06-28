@@ -82,6 +82,67 @@ func TestAggregateMetadataAssetsFallbackSkipsUnsupportedAggregates3121(t *testin
 	}
 }
 
+func TestColumnRowSidecarAssetsFusedMatchesSeparateBuilders3137(t *testing.T) {
+	cfg := aggregateMetadataBatchConfig3121()
+	rows := aggregateMetadataBatchRows3121()[:4]
+
+	got, ok, err := buildColumnRowSidecarAssets(cfg, rows, cfg.AggregateMetadata, "events", "events/column-assets", 7, 11, 13)
+	if err != nil {
+		t.Fatalf("buildColumnRowSidecarAssets: %v", err)
+	}
+	if !ok {
+		t.Fatalf("buildColumnRowSidecarAssets did not use fused path")
+	}
+	wantDictionaries, err := buildColumnDictionaryCodesAssets(cfg, rows, "events", "events/column-assets", 7, 11, 13)
+	if err != nil {
+		t.Fatalf("buildColumnDictionaryCodesAssets: %v", err)
+	}
+	wantInt64, err := buildColumnInt64ValuesAssets(cfg, rows, "events", "events/column-assets", 7, 11, 13)
+	if err != nil {
+		t.Fatalf("buildColumnInt64ValuesAssets: %v", err)
+	}
+	wantMetadata, err := buildColumnAggregateMetadataAssets(cfg, rows, cfg.AggregateMetadata, "events", "events/column-assets", 7, 11, 13)
+	if err != nil {
+		t.Fatalf("buildColumnAggregateMetadataAssets: %v", err)
+	}
+	assertColumnDictionaryCodesAssetsEqual3137(t, got.DictionaryCodes, wantDictionaries)
+	assertColumnInt64ValuesAssetsEqual3137(t, got.Int64Values, wantInt64)
+	assertColumnAggregateMetadataAssetsEqual3121(t, got.AggregateMetadata, wantMetadata)
+}
+
+func TestColumnRowSidecarAssetsFallsBackForPredicateAggregates3137(t *testing.T) {
+	cfg := aggregateMetadataBatchConfig3121()
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{{
+		Name:        "post_time_min",
+		Column:      "time_us",
+		GroupColumn: "did",
+		Kind:        ColumnAggregateMin,
+		Predicates:  []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "post"}},
+	}}
+	rows := aggregateMetadataBatchRows3121()[:4]
+
+	_, ok, err := buildColumnRowSidecarAssets(cfg, rows, cfg.AggregateMetadata, "events", "events/column-assets", 7, 11, 13)
+	if err != nil {
+		t.Fatalf("buildColumnRowSidecarAssets: %v", err)
+	}
+	if ok {
+		t.Fatalf("predicate aggregate unexpectedly used fused path")
+	}
+}
+
+func TestColumnRowSidecarAssetsFallsBackForDeletedRows3137(t *testing.T) {
+	cfg := aggregateMetadataBatchConfig3121()
+	rows := aggregateMetadataBatchRows3121()
+
+	_, ok, err := buildColumnRowSidecarAssets(cfg, rows, cfg.AggregateMetadata, "events", "events/column-assets", 7, 11, 13)
+	if err != nil {
+		t.Fatalf("buildColumnRowSidecarAssets: %v", err)
+	}
+	if ok {
+		t.Fatalf("deleted rows unexpectedly used fused path")
+	}
+}
+
 func aggregateMetadataBatchConfig3121() ColumnStoreConfig {
 	return ColumnStoreConfig{
 		SchemaHash: 3121,
@@ -128,6 +189,46 @@ func aggregateMetadataBatchRows3121() []columnDeclaredRow {
 	}
 }
 
+func assertColumnDictionaryCodesAssetsEqual3137(t *testing.T, got, want []columnDictionaryCodesAsset) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("dictionary assets mismatch\ngot:  %+v\nwant: %+v", got, want)
+	}
+	for idx := range got {
+		gotEncoded, err := encodeColumnDictionaryCodesAsset(got[idx])
+		if err != nil {
+			t.Fatalf("encode got dictionary[%d]: %v", idx, err)
+		}
+		wantEncoded, err := encodeColumnDictionaryCodesAsset(want[idx])
+		if err != nil {
+			t.Fatalf("encode want dictionary[%d]: %v", idx, err)
+		}
+		if !bytes.Equal(gotEncoded, wantEncoded) {
+			t.Fatalf("encoded dictionary asset[%d] mismatch", idx)
+		}
+	}
+}
+
+func assertColumnInt64ValuesAssetsEqual3137(t *testing.T, got, want []columnInt64ValuesAsset) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("int64 assets mismatch\ngot:  %+v\nwant: %+v", got, want)
+	}
+	for idx := range got {
+		gotEncoded, err := encodeColumnInt64ValuesAsset(got[idx])
+		if err != nil {
+			t.Fatalf("encode got int64[%d]: %v", idx, err)
+		}
+		wantEncoded, err := encodeColumnInt64ValuesAsset(want[idx])
+		if err != nil {
+			t.Fatalf("encode want int64[%d]: %v", idx, err)
+		}
+		if !bytes.Equal(gotEncoded, wantEncoded) {
+			t.Fatalf("encoded int64 asset[%d] mismatch", idx)
+		}
+	}
+}
+
 func buildColumnAggregateMetadataAssetsSequential3121(t *testing.T, cfg ColumnStoreConfig, rows []columnDeclaredRow, aggregates []ColumnAggregateMetadata) []columnAggregateMetadataAsset {
 	t.Helper()
 	assets := make([]columnAggregateMetadataAsset, 0, len(aggregates))
@@ -152,6 +253,9 @@ func assertColumnAggregateMetadataAssetsEqual3121(t *testing.T, got, want []colu
 		gotEncoded, err := encodeColumnAggregateMetadataAsset(got[idx])
 		if err != nil {
 			t.Fatalf("encode got[%d]: %v", idx, err)
+		}
+		if size := columnAggregateMetadataEncodedSize(got[idx]); size != len(gotEncoded) {
+			t.Fatalf("encoded aggregate metadata size[%d]=%d want len=%d", idx, size, len(gotEncoded))
 		}
 		wantEncoded, err := encodeColumnAggregateMetadataAsset(want[idx])
 		if err != nil {

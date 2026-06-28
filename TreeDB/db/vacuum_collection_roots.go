@@ -320,12 +320,12 @@ func vacuumCopyCollectionRoot(oldPager *pager.Pager, rootID uint64, alloc vacuum
 		return 0, errors.New("vacuum: missing pager/allocator")
 	}
 
-	children, allLeafRefs, err := vacuumCollectLeafRefChildrenIfComplete(oldPager, rootID)
+	allLeafRefs, err := vacuumTreeAllLeafRefsIfComplete(oldPager, rootID)
 	if err != nil {
 		return 0, err
 	}
 	if allLeafRefs {
-		return vacuumBuildInternalTreeFromChildren(newPager, alloc, children, false)
+		return vacuumBuildInternalTreeFromLeafRefs(oldPager, rootID, newPager, alloc, false)
 	}
 	return vacuumClonePagerTreeWithLeafRefs(oldPager, rootID, alloc, newPager, false)
 }
