@@ -11215,6 +11215,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	memCap = shardCapacity(memCap, shardCount)
 	warmupCap := shardCapacity(memtableCapacity(warmupThreshold), shardCount)
+	warmupCap = mutableMemtableCapacityForMode(warmupCap, mode)
 	indexer := memtable.NewHashSortedIndexer()
 	mutableShards := make([]memShard, shardCount)
 	appendOnlyEstimate := appendOnlyEstimatedBytesPerEntryDefault
