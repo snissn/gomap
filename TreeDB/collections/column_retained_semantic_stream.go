@@ -509,8 +509,10 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 		slices.SortFunc(retainedRootValues, func(a, b retainedRootValue) int {
 			return strings.Compare(a.path, b.path)
 		})
+		var pathStack [8]string
 		for _, value := range retainedRootValues {
-			if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, []string{value.path}, row, streamEntryCapacity, streams); err != nil {
+			path := append(pathStack[:0], value.path)
+			if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, path, row, streamEntryCapacity, streams); err != nil {
 				return nil, err
 			}
 		}
@@ -1288,8 +1290,14 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path [
 	slices.SortFunc(retainedObjectValues, func(a, b retainedObjectValue) int {
 		return strings.Compare(a.path, b.path)
 	})
+	var pathStack [8]string
 	for _, value := range retainedObjectValues {
-		nextPath := append(append([]string(nil), path...), value.path)
+		var nextPath []string
+		if len(path) == 0 && cap(path) == 0 {
+			nextPath = append(pathStack[:0], value.path)
+		} else {
+			nextPath = append(path, value.path)
+		}
 		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams); err != nil {
 			return err
 		}
@@ -1353,11 +1361,17 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 	slices.SortFunc(retainedObjectValues, func(a, b retainedObjectValue) int {
 		return strings.Compare(a.path, b.path)
 	})
+	var pathStack [8]string
 	for _, value := range retainedObjectValues {
 		if value.deleted {
 			continue
 		}
-		nextPath := append(append([]string(nil), path...), value.path)
+		var nextPath []string
+		if len(path) == 0 && cap(path) == 0 {
+			nextPath = append(pathStack[:0], value.path)
+		} else {
+			nextPath = append(path, value.path)
+		}
 		if value.skip != nil {
 			if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(value.raw, nextPath, row, streamEntryCapacity, value.skip, streams); err != nil {
 				return err
@@ -1383,8 +1397,14 @@ func collectColumnRetainedSemanticStreamObjectPaths(obj map[string]any, path []s
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	var pathStack [8]string
 	for _, key := range keys {
-		nextPath := append(append([]string(nil), path...), key)
+		var nextPath []string
+		if len(path) == 0 && cap(path) == 0 {
+			nextPath = append(pathStack[:0], key)
+		} else {
+			nextPath = append(path, key)
+		}
 		if err := collectColumnRetainedSemanticStreamAnyPaths(obj[key], nextPath, row, streams); err != nil {
 			return err
 		}
