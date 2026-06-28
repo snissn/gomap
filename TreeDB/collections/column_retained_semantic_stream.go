@@ -427,8 +427,11 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		}
 		sum := sha256.Sum256(block)
 		blockKey := append([]byte(nil), sum[:]...)
+		locators := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
 		for i := 0; i < rows; i++ {
-			out.documents[start+i] = encodeColumnRetainedSemanticStreamV1Locator(blockKey, uint64(i))
+			locatorStart := len(locators)
+			locators = appendColumnRetainedSemanticStreamV1Locator(locators, blockKey, uint64(i))
+			out.documents[start+i] = locators[locatorStart:len(locators):len(locators)]
 		}
 		setCollectionRunValue(blockTable, blockKey, block)
 	}
@@ -582,11 +585,25 @@ func columnRetainedSemanticStreamV1JSONParserQuotedString(source []byte, value [
 }
 
 func encodeColumnRetainedSemanticStreamV1Locator(blockKey []byte, row uint64) []byte {
-	out := make([]byte, 0, len(columnRetainedSemanticStreamV1LocatorMagic)+sha256.Size+binary.MaxVarintLen64)
+	return appendColumnRetainedSemanticStreamV1Locator(make([]byte, 0, columnRetainedSemanticStreamV1LocatorLen(row)), blockKey, row)
+}
+
+func appendColumnRetainedSemanticStreamV1Locator(out []byte, blockKey []byte, row uint64) []byte {
 	out = append(out, columnRetainedSemanticStreamV1LocatorMagic...)
 	out = append(out, blockKey...)
-	out = binary.AppendUvarint(out, row)
-	return out
+	return binary.AppendUvarint(out, row)
+}
+
+func columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows int) int {
+	capacity := 0
+	for row := 0; row < rows; row++ {
+		capacity += columnRetainedSemanticStreamV1LocatorLen(uint64(row))
+	}
+	return capacity
+}
+
+func columnRetainedSemanticStreamV1LocatorLen(row uint64) int {
+	return len(columnRetainedSemanticStreamV1LocatorMagic) + sha256.Size + columnRetainedSemanticStreamV1UvarintSize(row)
 }
 
 func parseColumnRetainedSemanticStreamV1Locator(raw []byte) ([]byte, uint64, bool, error) {
