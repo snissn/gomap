@@ -2210,6 +2210,7 @@ const (
 	envEnableLeafGenerationPackMaintenance                     = "TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE"
 	envLeafGenerationPackMaintenanceMaxBytesToCopy             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY"
 	envLeafGenerationPackMaintenanceMaxGenerations             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS"
+	envLeafGenerationPackMaintenanceMinIntervalMillis          = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_INTERVAL_MS"
 	envLeafGenerationPackMaintenanceMinPublishedAgeSeq         = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS"
 	envLeafGenerationPackMaintenanceMinCandidateGenerations    = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_CANDIDATE_GENERATIONS"
 	envLeafGenerationPackMaintenanceTimeoutSeconds             = "TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_TIMEOUT_SECONDS"
@@ -2237,7 +2238,8 @@ const (
 	envDisableCheckpointAutoVacuum                                 = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc                                            = 64 * 1024
 	leafGenerationPackMaintenanceDefaultMaxBytesToCopy             = 256 << 20
-	leafGenerationPackMaintenanceDefaultMaxGenerations             = 8
+	leafGenerationPackMaintenanceDefaultMaxGenerations             = 32
+	leafGenerationPackMaintenanceDefaultMinInterval                = 30 * time.Second
 	leafGenerationPackMaintenanceDefaultMinPublishedAgeSeq         = 1
 	leafGenerationPackMaintenanceDefaultMinCandidateGenerations    = 2
 	leafGenerationPackMaintenanceDefaultTimeout                    = 30 * time.Second
@@ -8995,11 +8997,10 @@ const (
 )
 
 const (
-	vlogGenerationLoopInterval               = 1 * time.Second
-	vlogGenerationGCEvery                    = 5
-	vlogGenerationGCMinBytes                 = int64(1 << 20)
-	vlogGenerationRewriteMinInterval         = 30 * time.Second
-	leafGenerationPackMaintenanceMinInterval = 30 * time.Second
+	vlogGenerationLoopInterval       = 1 * time.Second
+	vlogGenerationGCEvery            = 5
+	vlogGenerationGCMinBytes         = int64(1 << 20)
+	vlogGenerationRewriteMinInterval = 30 * time.Second
 	// Rewrite staging uses a two-pass confirm flow: the first pass stages a plan,
 	// then a later pass re-plans and executes only if a stable subset persists.
 	//
@@ -12085,6 +12086,22 @@ func leafGenerationPackMaintenanceWriteBurstGrace() time.Duration {
 
 func leafGenerationPackMaintenanceMaxForegroundQueue() int {
 	return int(loadUintEnvDefault(envLeafGenerationPackMaintenanceMaxForegroundQueue, leafGenerationPackMaintenanceDefaultMaxForegroundQueue))
+}
+
+func leafGenerationPackMaintenanceMaxGenerations() int {
+	maxGenerations := int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations))
+	if maxGenerations <= 0 {
+		return leafGenerationPackMaintenanceDefaultMaxGenerations
+	}
+	return maxGenerations
+}
+
+func leafGenerationPackMaintenanceMinInterval() time.Duration {
+	intervalMS := envUint64(envLeafGenerationPackMaintenanceMinIntervalMillis, uint64(leafGenerationPackMaintenanceDefaultMinInterval/time.Millisecond))
+	if intervalMS == 0 {
+		return 0
+	}
+	return time.Duration(intervalMS) * time.Millisecond
 }
 
 func leafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM() int {
@@ -27884,18 +27901,16 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 	}
 	gcRunner, _ := db.backend.(backendLeafGenerationGCRunner)
 	lastRunNS := db.vlogGenerationLeafPackLastUnixNano.Load()
+	minInterval := leafGenerationPackMaintenanceMinInterval()
 	if lastRunNS > 0 {
-		if since := time.Since(time.Unix(0, lastRunNS)); since >= 0 && since < leafGenerationPackMaintenanceMinInterval {
+		if since := time.Since(time.Unix(0, lastRunNS)); since >= 0 && since < minInterval {
 			db.vlogGenerationLeafPackSkipMinInterval.Add(1)
 			db.storeVlogGenerationLeafPackLastSkipReason("min_interval")
 			return false, false, nil
 		}
 	}
 
-	maxGenerations := int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations))
-	if maxGenerations <= 0 {
-		maxGenerations = leafGenerationPackMaintenanceDefaultMaxGenerations
-	}
+	maxGenerations := leafGenerationPackMaintenanceMaxGenerations()
 	maxBytesToCopy := int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy))
 	if maxBytesToCopy <= 0 {
 		maxBytesToCopy = leafGenerationPackMaintenanceDefaultMaxBytesToCopy
@@ -29547,11 +29562,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.leaf_pack.selection.bytes_dead"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionBytesDead.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.selection.generations"] = fmt.Sprintf("%d", db.vlogGenerationLeafPackSelectionGenerations.Load())
 	stats["treedb.cache.vlog_generation.leaf_pack.last_wall_ms"] = fmt.Sprintf("%.3f", float64(db.vlogGenerationLeafPackLastWallNanos.Load())/float64(time.Millisecond))
-	stats["treedb.cache.vlog_generation.leaf_pack.min_interval_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinInterval.Milliseconds())
+	stats["treedb.cache.vlog_generation.leaf_pack.min_interval_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinInterval().Milliseconds())
 	stats["treedb.cache.vlog_generation.leaf_pack.timeout_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceTimeout().Milliseconds())
 	stats["treedb.cache.vlog_generation.leaf_pack.write_burst_grace_ms"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceWriteBurstGrace().Milliseconds())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_foreground_queue"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxForegroundQueue())
-	stats["treedb.cache.vlog_generation.leaf_pack.max_generations"] = fmt.Sprintf("%d", int(envUint64(envLeafGenerationPackMaintenanceMaxGenerations, leafGenerationPackMaintenanceDefaultMaxGenerations)))
+	stats["treedb.cache.vlog_generation.leaf_pack.max_generations"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMaxGenerations())
 	stats["treedb.cache.vlog_generation.leaf_pack.max_bytes_to_copy"] = fmt.Sprintf("%d", int64(envUint64(envLeafGenerationPackMaintenanceMaxBytesToCopy, leafGenerationPackMaintenanceDefaultMaxBytesToCopy)))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_candidate_generations"] = fmt.Sprintf("%d", loadPositiveIntEnvDefault(envLeafGenerationPackMaintenanceMinCandidateGenerations, leafGenerationPackMaintenanceDefaultMinCandidateGenerations))
 	stats["treedb.cache.vlog_generation.leaf_pack.min_reclaim_per_byte_copied_ppm"] = fmt.Sprintf("%d", leafGenerationPackMaintenanceMinReclaimPerByteCopiedPPM())

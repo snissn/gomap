@@ -11,7 +11,8 @@ DWELL_SECONDS=${LEAFGEN_DWELL_SECONDS:-180}
 SAMPLE_INTERVAL_SECONDS=${LEAFGEN_SAMPLE_INTERVAL_SECONDS:-15}
 PACK_ENABLED=${TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE:-1}
 PACK_MAX_BYTES=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY:-268435456}
-PACK_MAX_GENERATIONS=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS:-8}
+PACK_MAX_GENERATIONS=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS:-32}
+PACK_MIN_INTERVAL_MS=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_INTERVAL_MS:-30000}
 PACK_MIN_AGE_COMMITS=${TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS:-1}
 
 mkdir -p "$OUT"
@@ -56,6 +57,7 @@ capture_sizes() {
   echo "pack_enabled=$PACK_ENABLED"
   echo "pack_max_bytes=$PACK_MAX_BYTES"
   echo "pack_max_generations=$PACK_MAX_GENERATIONS"
+  echo "pack_min_interval_ms=$PACK_MIN_INTERVAL_MS"
   echo "pack_min_age_commits=$PACK_MIN_AGE_COMMITS"
 } > "$OUT/run.txt"
 
@@ -336,6 +338,7 @@ EOF
 TREEDB_ENABLE_LEAF_GENERATION_PACK_MAINTENANCE="$PACK_ENABLED" \
 TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_BYTES_TO_COPY="$PACK_MAX_BYTES" \
 TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MAX_GENERATIONS="$PACK_MAX_GENERATIONS" \
+TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_INTERVAL_MS="$PACK_MIN_INTERVAL_MS" \
 TREEDB_LEAF_GENERATION_PACK_MAINTENANCE_MIN_PUBLISHED_AGE_COMMITS="$PACK_MIN_AGE_COMMITS" \
 GOWORK=off go run "$OUT/leafgen_cached_dwell.go" \
   -db "$DST" \
@@ -359,6 +362,7 @@ jq -n \
   --argjson pack_enabled "$PACK_ENABLED" \
   --argjson pack_max_bytes "$PACK_MAX_BYTES" \
   --argjson pack_max_generations "$PACK_MAX_GENERATIONS" \
+  --argjson pack_min_interval_ms "$PACK_MIN_INTERVAL_MS" \
   --argjson pack_min_age_commits "$PACK_MIN_AGE_COMMITS" \
   --slurpfile before "$OUT/size-before.json" \
   --slurpfile after_dwell "$OUT/size-after-dwell.json" \
@@ -377,6 +381,7 @@ jq -n \
       enabled: ($pack_enabled != 0),
       max_bytes_to_copy: $pack_max_bytes,
       max_generations: $pack_max_generations,
+      min_interval_ms: $pack_min_interval_ms,
       min_published_age_commits: $pack_min_age_commits
     },
     sizes: {

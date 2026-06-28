@@ -2470,6 +2470,46 @@ func TestLeafGenerationPackMaintenance_SkipsWithinMinInterval(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPackMaintenance_ConfigurableMinInterval(t *testing.T) {
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envLeafGenerationPackMaintenanceMinIntervalMillis, "1")
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{DB: backend, leafPackResp: leafPackWindowExhaustingStats(2, 1024, 4096)}
+	defer recorder.Close()
+	db := &DB{
+		backend:                    recorder,
+		indexOuterLeavesInValueLog: true,
+		valueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationHotWarmCold),
+		closeCh:                    make(chan struct{}),
+	}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	attempted, ran, err := db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("first maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("first attempted=%t ran=%t want true/true", attempted, ran)
+	}
+	time.Sleep(2 * time.Millisecond)
+	attempted, ran, err = db.maybeRunLeafGenerationPackMaintenance(false, true, leafGenerationPackMaintenanceAdmission{allowed: true}, vlogGenerationMaintenanceOptions{skipCheckpoint: true})
+	if err != nil {
+		t.Fatalf("second maybeRunLeafGenerationPackMaintenance: %v", err)
+	}
+	if !attempted || !ran {
+		t.Fatalf("second attempted=%t ran=%t want true/true with configured min interval", attempted, ran)
+	}
+	_, calls := recorder.recordedLeafPack()
+	if calls != 2 {
+		t.Fatalf("leaf pack calls=%d want 2 after configured min interval", calls)
+	}
+	if got := db.Stats()["treedb.cache.vlog_generation.leaf_pack.min_interval_ms"]; got != "1" {
+		t.Fatalf("min_interval_ms=%q want 1", got)
+	}
+}
+
 func TestVlogGenerationRewritePlanContext_BudgetsPeriodicFreshPlans(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 	t.Setenv(envVlogGenerationPeriodicRewritePlanBudgetMillis, "25")
