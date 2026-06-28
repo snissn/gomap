@@ -404,6 +404,10 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		rows := end - start
 		streams := newColumnRetainedSemanticStreamStreams()
 		pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+		var declaredStringInterner *columnDeclaredStringInterner
+		if rootPlan.declaredRowsReady {
+			declaredStringInterner = &columnDeclaredStringInterner{}
+		}
 		for row, i := 0, start; i < end; row, i = row+1, i+1 {
 			if useRootFastPath {
 				var declaredValuesDest []columnDeclaredValue
@@ -411,7 +415,7 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 					valuesStart := i * len(cfg.Columns)
 					declaredValuesDest = declaredRowValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
 				}
-				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner, declaredValuesDest)
+				declaredValues, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, rootPlan, documents[i], uint64(row), rows, streams, pathInterner, declaredValuesDest, declaredStringInterner)
 				if err != nil {
 					resetCollectionRunTable(blockTable)
 					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
@@ -499,7 +503,7 @@ func columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg ColumnStoreConf
 	return root
 }
 
-func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner, declaredValues []columnDeclaredValue) ([]columnDeclaredValue, error) {
+func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner, declaredValues []columnDeclaredValue, declaredStringInterner *columnDeclaredStringInterner) ([]columnDeclaredValue, error) {
 	if !gjson.ValidBytes(document) {
 		return nil, errors.New("invalid JSON: invalid JSON")
 	}
@@ -571,7 +575,11 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	}
 	var scratch []byte
 	for colIdx, col := range cfg.Columns {
-		value, err := convertColumnDeclaredJSONParserValue(col, valuesRaw[colIdx], &scratch)
+		var stringInterner *columnDeclaredStringInterner
+		if col.ValueType == ColumnStoreValueString && col.Dictionary {
+			stringInterner = declaredStringInterner
+		}
+		value, err := convertColumnDeclaredJSONParserValueWithStringInterner(col, valuesRaw[colIdx], &scratch, stringInterner)
 		if err != nil {
 			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
 		}

@@ -104,7 +104,7 @@ func TestColumnRetainedSemanticStreamV1LookupStringDoesNotEscapeRetainedPaths320
 	document := []byte(`{"declared":7,"retained":2,"":3}`)
 	streams := newColumnRetainedSemanticStreamStreams()
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
-	values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, 0, 1, streams, pathInterner, nil)
+	values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, 0, 1, streams, pathInterner, nil, nil)
 	if err != nil {
 		t.Fatalf("collect root fast path document: %v", err)
 	}
@@ -273,6 +273,62 @@ func TestColumnRetainedSemanticStreamV1DeclaredRowArenaOwnsAndCapsRows3210(t *te
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1DictionaryStringInternerReusesDeclaredValues3213(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Dictionary: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids := [][]byte{[]byte("doc-0"), []byte("doc-1"), []byte("doc-2")}
+	documents := [][]byte{
+		[]byte(`{"kind":"shared","retained":1}`),
+		[]byte(`{"kind":"shared","retained":2}`),
+		[]byte(`{"kind":"other","retained":3}`),
+	}
+	prepared, err := prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg, ids, documents)
+	if err != nil {
+		t.Fatalf("prepare semantic-stream-v1 documents: %v", err)
+	}
+	defer resetCollectionRunTable(prepared.semanticStreamBlocks)
+
+	if !prepared.declaredRowsReady {
+		t.Fatal("declared rows were not prepared")
+	}
+	if len(prepared.declaredRows) != len(documents) {
+		t.Fatalf("declared rows=%d want %d", len(prepared.declaredRows), len(documents))
+	}
+	first := prepared.declaredRows[0].Values[0].String
+	second := prepared.declaredRows[1].Values[0].String
+	third := prepared.declaredRows[2].Values[0].String
+	if first != "shared" || second != "shared" || third != "other" {
+		t.Fatalf("declared strings=(%q, %q, %q), want shared/shared/other", first, second, third)
+	}
+	if !columnRetainedSemanticStreamV1TestStringsShareBacking(first, second) {
+		t.Fatal("repeated dictionary declared strings do not reuse string backing")
+	}
+	if columnRetainedSemanticStreamV1TestStringAliasesBytes(first, documents[0]) {
+		t.Fatal("first dictionary declared string aliases mutable input document")
+	}
+	if columnRetainedSemanticStreamV1TestStringAliasesBytes(second, documents[1]) {
+		t.Fatal("second dictionary declared string aliases mutable input document")
+	}
+
+	for _, document := range documents[:2] {
+		start := bytes.Index(document, []byte("shared"))
+		if start < 0 {
+			t.Fatal("shared token not found in source document")
+		}
+		copy(document[start:], []byte("mutant"))
+	}
+	if first != "shared" || second != "shared" {
+		t.Fatalf("dictionary strings changed after source mutation: first=%q second=%q", first, second)
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1PathSegmentInternerOwnsAndReusesSegments3206(t *testing.T) {
 	interner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 	source := []byte("shared")
@@ -313,7 +369,7 @@ func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesRetainedTraversa
 	streams := newColumnRetainedSemanticStreamStreams()
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 	for row, document := range documents {
-		values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, uint64(row), len(documents), streams, pathInterner, nil)
+		values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, uint64(row), len(documents), streams, pathInterner, nil, nil)
 		if err != nil {
 			t.Fatalf("collect row %d: %v", row, err)
 		}
