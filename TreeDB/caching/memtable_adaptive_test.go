@@ -135,6 +135,28 @@ func TestAdaptiveMemtableMode_DefaultAdaptiveStartsWarmup(t *testing.T) {
 	}
 }
 
+func TestAdaptiveMemtableMode_BTreeMinIteratorSamplesEnvExplicitZero(t *testing.T) {
+	t.Setenv(envAdaptiveBTreeMinIteratorSamples, "0")
+
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		FlushThreshold:           1 << 30,
+		MemtableMode:             "adaptive",
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.memtable_adaptive.btree_min_iterator_samples_effective"]; got != "0" {
+		t.Fatalf("expected explicit env zero to keep legacy BTree guard, got %q", got)
+	}
+}
+
 func TestAdaptiveMemtableMode_DefaultAdaptiveOverwriteHeavySwitchesToHashSorted(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

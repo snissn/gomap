@@ -803,6 +803,47 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	return lsn, nil
 }
 
+// AppendRawKVBatchPayloadScanCommandTrusted appends a caller-validated
+// replayable RawKVBatch operation source without materializing the canonical
+// payload slice.
+func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := plan.validate(); err != nil {
+		return 0, err
+	}
+	size, err := commandFrameEncodedSizeFromLengths(plan.PayloadLen, 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+		return 0, err
+	}
+	lsn, err := j.reserveLSNLocked()
+	if err != nil {
+		return 0, err
+	}
+	if err := j.writer.AppendRawKVBatchPayloadScanCommandDirectTrusted(lsn, baseAppliedLSN, plan, scan); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
+		return 0, err
+	}
+	return lsn, nil
+}
+
 // AppendCommandPayloadTrusted appends a caller-validated canonical command
 // payload. It validates only command identity and frame size; callers must use
 // this only for payloads built by the matching commitlog encoder.
@@ -891,6 +932,51 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppli
 		return 0, err
 	}
 	if err := j.writer.AppendRawKVBatchPayloadCommandDirectTrusted(lsn, baseAppliedLSN, payload); err != nil {
+		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
+			return 0, errors.Join(err, rollbackErr)
+		}
+		return 0, err
+	}
+	err = j.flushLocked(sync)
+	if err != nil {
+		return lsn, err
+	}
+	return lsn, nil
+}
+
+// AppendRawKVBatchPayloadScanCommandTrustedAndFlush appends a caller-validated
+// replayable RawKVBatch operation source and flushes/syncs the writer while
+// holding the journal lock.
+func (j *CommandJournal) AppendRawKVBatchPayloadScanCommandTrustedAndFlush(baseAppliedLSN uint64, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner, sync bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil || j.owner == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if err := plan.validate(); err != nil {
+		return 0, err
+	}
+	size, err := commandFrameEncodedSizeFromLengths(plan.PayloadLen, 0, 0, 0)
+	if err != nil {
+		return 0, err
+	}
+	if j.writer.maxSegmentSize > 0 && int64(size) > j.writer.maxSegmentSize {
+		return 0, ErrRecordTooLarge
+	}
+	if size > int(segmentLenMask) {
+		return 0, ErrRecordTooLarge
+	}
+	if err := j.maybeRotateForFrameLocked(size, sync); err != nil {
+		return 0, err
+	}
+	lsn, err := j.reserveLSNLocked()
+	if err != nil {
+		return 0, err
+	}
+	if err := j.writer.AppendRawKVBatchPayloadScanCommandDirectTrusted(lsn, baseAppliedLSN, plan, scan); err != nil {
 		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}

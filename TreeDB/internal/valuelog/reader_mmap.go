@@ -77,11 +77,11 @@ const (
 	defaultMaxMappedSealed           = 8
 	defaultMaxMappedSealedBytes      = 64 << 20
 	defaultMaxMappedLeafSealed       = defaultMaxMappedSealed * 64
-	defaultLeafSealedBytesMultiplier = 32
+	defaultLeafSealedBytesMultiplier = 24
 	// Leaf-log reads are on the BTree traversal hot path, but long sync/restore
 	// workloads can keep multiple GiB of sealed leaf generations mapped into the
-	// process RSS. Keep a bounded 2GiB sealed-leaf window by default and let older
-	// generations fall back to ReadAt; operators can raise the env cap for
+	// process RSS. Keep a bounded 1.5GiB sealed-leaf window by default and let
+	// older generations fall back to ReadAt; operators can raise the env cap for
 	// throughput-biased experiments.
 	defaultMaxMappedLeafSealedBytes = defaultMaxMappedSealedBytes * defaultLeafSealedBytesMultiplier
 	defaultCurrentWritableMapTarget = 32 << 20
@@ -91,7 +91,7 @@ var (
 	maxDeadMappingsExplicit        bool
 	adaptiveDeadMappings                 = defaultAdaptiveCapEnabled
 	enableCurrentWritableMmap            = false
-	enableCurrentLeafWritableMmap        = true
+	enableCurrentLeafWritableMmap        = false
 	CurrentWritableMmapTargetBytes       = int64(defaultCurrentWritableMapTarget)
 	MaxMappedSealedSegments              = defaultMaxMappedSealed
 	MaxMappedSealedBytes           int64 = defaultMaxMappedSealedBytes

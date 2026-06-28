@@ -52,7 +52,8 @@ const (
 	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
 )
 
-var appendOnlyEntryPools [appendOnlyEntryPoolClassCount]sync.Pool
+var appendOnlyEntryPoolPtrs [appendOnlyEntryPoolClassCount]atomic.Pointer[sync.Pool]
+var appendOnlyEntryPoolDropTotal atomic.Uint64
 var appendOnlyIteratorPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
@@ -196,6 +197,35 @@ func appendOnlyEntryPoolClassForReusableCapacity(capacity int) (int, bool) {
 	return class, true
 }
 
+func appendOnlyEntryPoolForClass(class int) *sync.Pool {
+	if class < 0 || class >= len(appendOnlyEntryPoolPtrs) {
+		return nil
+	}
+	if pool := appendOnlyEntryPoolPtrs[class].Load(); pool != nil {
+		return pool
+	}
+	pool := &sync.Pool{}
+	if appendOnlyEntryPoolPtrs[class].CompareAndSwap(nil, pool) {
+		return pool
+	}
+	return appendOnlyEntryPoolPtrs[class].Load()
+}
+
+// DropAppendOnlyEntryPools abandons package-level append-only entry slice pools.
+// It is intended for cold transitions away from append-only mutable memtables,
+// where retaining restore-sized warm buffers hurts steady-state RSS more than it
+// helps near-term reuse.
+func DropAppendOnlyEntryPools() {
+	for i := range appendOnlyEntryPoolPtrs {
+		appendOnlyEntryPoolPtrs[i].Store(&sync.Pool{})
+	}
+	appendOnlyEntryPoolDropTotal.Add(1)
+}
+
+func AppendOnlyEntryPoolDropTotal() uint64 {
+	return appendOnlyEntryPoolDropTotal.Load()
+}
+
 func getAppendOnlyEntriesFromPool(length int, pool *sync.Pool) []appendOnlyEntry {
 	if length < 0 {
 		length = 0
@@ -227,10 +257,12 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 	if !ok {
 		return make([]appendOnlyEntry, length)
 	}
-	if v := appendOnlyEntryPools[class].Get(); v != nil {
-		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
-			if cap(entries) <= appendOnlyMaxReuseEntries(length) {
-				return entries[:length]
+	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
+		if v := pool.Get(); v != nil {
+			if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
+				if cap(entries) <= appendOnlyMaxReuseEntries(length) {
+					return entries[:length]
+				}
 			}
 		}
 	}
@@ -247,7 +279,9 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	if !ok {
 		return
 	}
-	appendOnlyEntryPools[class].Put(full[:0])
+	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
+		pool.Put(full[:0])
+	}
 }
 
 func getAppendOnlyIteratorEntries(length int) []appendOnlyEntry {
@@ -1522,6 +1556,26 @@ func (m *AppendOnly) Len() int {
 	return m.count
 }
 
+// EntryCapacity reports the retained append-only entry-slot capacity.
+func (m *AppendOnly) EntryCapacity() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return cap(m.entries)
+}
+
+// EntryBackingBytes reports the retained backing bytes for entry slots.
+func (m *AppendOnly) EntryBackingBytes() int64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return int64(cap(m.entries)) * int64(unsafe.Sizeof(appendOnlyEntry{}))
+}
+
 func (m *AppendOnly) Freeze() {
 	m.mu.Lock()
 	if m.frozen {
@@ -1597,6 +1651,17 @@ func (m *AppendOnly) Reset() {
 // longer needed. Unlike Reset, it does not retain warm capacity on the table
 // itself, so callers should only use it for short-lived tables they will drop.
 func (m *AppendOnly) Release() {
+	m.release(true)
+}
+
+// ReleaseDropEntries releases the table without returning its entry backing
+// slice to the package pool. Use this for cold paths where the caller does not
+// expect near-term append-only reuse and wants to shed post-spike heap.
+func (m *AppendOnly) ReleaseDropEntries() {
+	m.release(false)
+}
+
+func (m *AppendOnly) release(poolEntries bool) {
 	if m == nil {
 		return
 	}
@@ -1627,7 +1692,9 @@ func (m *AppendOnly) Release() {
 	m.frozenFast.Store(false)
 	m.hasLast = false
 	m.lastIdx = -1
-	putAppendOnlyEntries(entries)
+	if poolEntries {
+		putAppendOnlyEntries(entries)
+	}
 }
 
 // ResetWithCapacity resets the memtable and, when needed, shrinks retained
@@ -1731,6 +1798,17 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	m.hasLast = false
 	m.lastIdx = -1
 
+	if !retainObserved {
+		if cap(m.entries) != retainedEntries {
+			m.replaceEntriesSliceWithPolicy(retainedEntries, false)
+			return
+		}
+		if len(m.entries) != retainedEntries {
+			m.entries = m.entries[:retainedEntries]
+		}
+		return
+	}
+
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
 	// spikes in write volume (common during state-sync restore), while still
@@ -1754,12 +1832,18 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 }
 
 func (m *AppendOnly) replaceEntriesSlice(length int) {
+	m.replaceEntriesSliceWithPolicy(length, true)
+}
+
+func (m *AppendOnly) replaceEntriesSliceWithPolicy(length int, poolPrev bool) {
 	if length < 0 {
 		length = 0
 	}
 	prev := m.entries
 	m.entries = getAppendOnlyEntries(length)
-	putAppendOnlyEntries(prev)
+	if poolPrev {
+		putAppendOnlyEntries(prev)
+	}
 }
 
 func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {

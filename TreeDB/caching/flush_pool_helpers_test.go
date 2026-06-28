@@ -833,6 +833,7 @@ func TestEntrySliceMaxReuseCapClampOverflow(t *testing.T) {
 
 func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 	db := &DB{}
+	db.storeMemtableMode(memtable.ModeAppendOnly)
 	mt := memtable.NewAppendOnlyWithCapacity(4096)
 
 	db.recycleMemtables([]memtable.Table{mt})

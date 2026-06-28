@@ -255,8 +255,8 @@ func TestApplyProfile_CommandWALDurableSetsCommandWALAndFastDurablePolicy(t *tes
 	if !opts.IndexOuterLeavesInValueLog || !opts.LeafPrefixCompression || !opts.IndexColumnarLeaves || !opts.IndexPackedValuePtr {
 		t.Fatalf("expected command_wal_durable to keep the fast collection/index layout bundle: %+v", opts)
 	}
-	if !opts.ValueLog.CurrentWritableMmap {
-		t.Fatalf("expected command_wal_durable to keep fast value-log mmap policy")
+	if opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected command_wal_durable to disable current writable mmap for production memory bounds")
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_durable profile")
@@ -285,8 +285,8 @@ func TestApplyProfile_CommandWALRelaxedSetsCommandWALAndRelaxedPolicy(t *testing
 	if !opts.IndexOuterLeavesInValueLog || !opts.LeafPrefixCompression || !opts.IndexColumnarLeaves || !opts.IndexPackedValuePtr {
 		t.Fatalf("expected command_wal_relaxed to keep the fast collection/index layout bundle: %+v", opts)
 	}
-	if !opts.ValueLog.CurrentWritableMmap {
-		t.Fatalf("expected command_wal_relaxed to keep fast value-log mmap policy")
+	if opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected command_wal_relaxed to disable current writable mmap for production memory bounds")
 	}
 	if opts.IndexInternalBaseDelta {
 		t.Fatalf("expected IndexInternalBaseDelta=false for command_wal_relaxed profile")
