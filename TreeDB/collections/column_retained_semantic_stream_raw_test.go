@@ -102,7 +102,8 @@ func TestColumnRetainedSemanticStreamV1LookupStringDoesNotEscapeRetainedPaths320
 	}
 	document := []byte(`{"declared":7,"retained":2,"":3}`)
 	streams := newColumnRetainedSemanticStreamStreams()
-	values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, 0, 1, streams)
+	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, 0, 1, streams, pathInterner)
 	if err != nil {
 		t.Fatalf("collect root fast path document: %v", err)
 	}
@@ -138,6 +139,132 @@ func TestColumnRetainedSemanticStreamV1LookupStringDoesNotEscapeRetainedPaths320
 	if got := retainedStream.segments[0]; got != "retained" {
 		t.Fatalf("retained path changed after source mutation: %q", got)
 	}
+}
+
+func TestColumnRetainedSemanticStreamV1PathSegmentInternerOwnsAndReusesSegments3206(t *testing.T) {
+	interner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	source := []byte("shared")
+	first := interner.intern(source)
+	copy(source, []byte("mutant"))
+	second := interner.intern([]byte("shared"))
+
+	if first != "shared" || second != "shared" {
+		t.Fatalf("interned values=(%q, %q) want shared", first, second)
+	}
+	if !columnRetainedSemanticStreamV1TestStringsShareBacking(first, second) {
+		t.Fatal("repeated interned segment does not reuse string backing")
+	}
+	if columnRetainedSemanticStreamV1TestStringAliasesBytes(first, source) {
+		t.Fatal("interned path segment aliases mutable source bytes")
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesRetainedTraversalSegments3206(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "declared", Path: "declared", ValueType: ColumnStoreValueInt64},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids := [][]byte{[]byte("doc-0"), []byte("doc-1")}
+	plan, ok := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(ids))
+	if !ok {
+		t.Fatal("root fast path plan not available")
+	}
+	documents := [][]byte{
+		[]byte(`{"declared":1,"payload":{"shared":1,"shared":10},"meta":{"shared":2}}`),
+		[]byte(`{"declared":2,"payload":{"shared":3},"meta":{"shared":4}}`),
+	}
+	streams := newColumnRetainedSemanticStreamStreams()
+	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	for row, document := range documents {
+		values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, uint64(row), len(documents), streams, pathInterner)
+		if err != nil {
+			t.Fatalf("collect row %d: %v", row, err)
+		}
+		if len(values) != 1 || values[0].Int64 != int64(row+1) {
+			t.Fatalf("row %d declared values=%+v", row, values)
+		}
+	}
+
+	payloadShared := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"payload", "shared"})]
+	if payloadShared == nil {
+		t.Fatal("payload.shared stream missing")
+	}
+	metaShared := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"meta", "shared"})]
+	if metaShared == nil {
+		t.Fatal("meta.shared stream missing")
+	}
+	if got := payloadShared.segments; len(got) != 2 || got[0] != "payload" || got[1] != "shared" {
+		t.Fatalf("payload.shared segments=%q", got)
+	}
+	if got := metaShared.segments; len(got) != 2 || got[0] != "meta" || got[1] != "shared" {
+		t.Fatalf("meta.shared segments=%q", got)
+	}
+	if !columnRetainedSemanticStreamV1TestStringsShareBacking(payloadShared.segments[1], metaShared.segments[1]) {
+		t.Fatal("shared child path segment was not interned across retained streams")
+	}
+	for _, document := range documents {
+		for _, segment := range append(append([]string(nil), payloadShared.segments...), metaShared.segments...) {
+			if columnRetainedSemanticStreamV1TestStringAliasesBytes(segment, document) {
+				t.Fatalf("path segment %q aliases mutable source document", segment)
+			}
+		}
+	}
+	if len(payloadShared.entries) != 2 {
+		t.Fatalf("payload.shared entries=%d want 2", len(payloadShared.entries))
+	}
+	if got := string(payloadShared.entries[0].raw); got != "10" {
+		t.Fatalf("duplicate key retained raw=%q want last value 10", got)
+	}
+	if got := string(payloadShared.entries[1].raw); got != "3" {
+		t.Fatalf("second row retained raw=%q want 3", got)
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesSkipTraversalSegments3206(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "declared", Path: "declared.nested", ValueType: ColumnStoreValueInt64},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	document := []byte(`{"declared":{"nested":1},"payload":{"shared":10},"meta":{"shared":11}}`)
+	streams := newColumnRetainedSemanticStreamStreams()
+	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	if err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg), document, 0, 1, streams, pathInterner); err != nil {
+		t.Fatalf("collect retained JSON parser document: %v", err)
+	}
+	if stream := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"declared", "nested"})]; stream != nil {
+		t.Fatalf("declared nested path leaked into retained streams: %+v", stream.segments)
+	}
+	payloadShared := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"payload", "shared"})]
+	if payloadShared == nil {
+		t.Fatal("payload.shared stream missing")
+	}
+	metaShared := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"meta", "shared"})]
+	if metaShared == nil {
+		t.Fatal("meta.shared stream missing")
+	}
+	if !columnRetainedSemanticStreamV1TestStringsShareBacking(payloadShared.segments[1], metaShared.segments[1]) {
+		t.Fatal("shared child path segment was not interned through skip traversal")
+	}
+	if columnRetainedSemanticStreamV1TestStringAliasesBytes(payloadShared.segments[1], document) {
+		t.Fatal("skip traversal path segment aliases mutable source document")
+	}
+}
+
+func columnRetainedSemanticStreamV1TestStringsShareBacking(a, b string) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return a == b
+	}
+	return unsafe.StringData(a) == unsafe.StringData(b)
 }
 
 func columnRetainedSemanticStreamV1TestStringAliasesBytes(value string, source []byte) bool {
