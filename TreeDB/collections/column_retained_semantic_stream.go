@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,8 +44,10 @@ type columnRetainedSemanticStreamEntry struct {
 }
 
 type columnRetainedSemanticStreamPath struct {
-	segments []string
-	entries  []columnRetainedSemanticStreamEntry
+	segments                []string
+	entries                 []columnRetainedSemanticStreamEntry
+	rawValueBytes           int
+	valueLengthUvarintBytes int
 }
 
 type columnRetainedSemanticStreamV1DecodedBlock struct {
@@ -453,8 +456,8 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 		return nil, err
 	}
 	if len(retainedRootValues) > 0 {
-		sort.Slice(retainedRootValues, func(i, j int) bool {
-			return retainedRootValues[i].path < retainedRootValues[j].path
+		slices.SortFunc(retainedRootValues, func(a, b retainedRootValue) int {
+			return strings.Compare(a.path, b.path)
 		})
 		for _, value := range retainedRootValues {
 			if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, []string{value.path}, row, streamEntryCapacity, streams); err != nil {
@@ -620,9 +623,7 @@ func columnRetainedSemanticStreamV1ReclaimDeleteKeys(
 	for _, key := range candidates {
 		deleteKeys = append(deleteKeys, key)
 	}
-	sort.Slice(deleteKeys, func(i, j int) bool {
-		return bytes.Compare(deleteKeys[i], deleteKeys[j]) < 0
-	})
+	slices.SortFunc(deleteKeys, bytes.Compare)
 	return deleteKeys, nil
 }
 
@@ -983,7 +984,7 @@ func encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows int, streams m
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	out := make([]byte, 0, len(columnRetainedSemanticStreamV1BlockMagic)+rows*16)
+	out := make([]byte, 0, columnRetainedSemanticStreamV1RawBlockSizeHint(rows, keys, streams))
 	out = append(out, columnRetainedSemanticStreamV1BlockMagic...)
 	out = binary.AppendUvarint(out, uint64(rows))
 	out = binary.AppendUvarint(out, uint64(len(keys)))
@@ -1008,6 +1009,25 @@ func encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows int, streams m
 		}
 	}
 	return out, nil
+}
+
+func columnRetainedSemanticStreamV1RawBlockSizeHint(rows int, keys []string, streams map[string]*columnRetainedSemanticStreamPath) int {
+	size := len(columnRetainedSemanticStreamV1BlockMagic) +
+		columnRetainedSemanticStreamV1UvarintSize(uint64(rows)) +
+		columnRetainedSemanticStreamV1UvarintSize(uint64(len(keys)))
+	for _, key := range keys {
+		stream := streams[key]
+		size += columnRetainedSemanticStreamV1UvarintSize(uint64(len(stream.segments)))
+		for _, segment := range stream.segments {
+			size += columnRetainedSemanticStreamV1UvarintSize(uint64(len(segment))) + len(segment)
+		}
+		size += columnRetainedSemanticStreamV1UvarintSize(uint64(len(stream.entries)))
+		// Row deltas are bounded by the per-block row count. At 4096 rows this is
+		// at most two bytes per entry, and value-length uvarint bytes are tracked
+		// when entries are appended.
+		size += len(stream.entries)*2 + stream.valueLengthUvarintBytes + stream.rawValueBytes
+	}
+	return size
 }
 
 func encodeColumnRetainedSemanticStreamV1StoredBlock(raw []byte) ([]byte, error) {
@@ -1215,8 +1235,8 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path [
 		}
 		return nil
 	}
-	sort.Slice(retainedObjectValues, func(i, j int) bool {
-		return retainedObjectValues[i].path < retainedObjectValues[j].path
+	slices.SortFunc(retainedObjectValues, func(a, b retainedObjectValue) int {
+		return strings.Compare(a.path, b.path)
 	})
 	for _, value := range retainedObjectValues {
 		nextPath := append(append([]string(nil), path...), value.path)
@@ -1280,8 +1300,8 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		}
 		return nil
 	}
-	sort.Slice(retainedObjectValues, func(i, j int) bool {
-		return retainedObjectValues[i].path < retainedObjectValues[j].path
+	slices.SortFunc(retainedObjectValues, func(a, b retainedObjectValue) int {
+		return strings.Compare(a.path, b.path)
 	})
 	for _, value := range retainedObjectValues {
 		if value.deleted {
@@ -1358,6 +1378,8 @@ func appendColumnRetainedSemanticStreamValueWithOwnership(path []string, row uin
 		}
 		streams[key] = stream
 	}
+	stream.rawValueBytes += len(raw)
+	stream.valueLengthUvarintBytes += columnRetainedSemanticStreamV1UvarintSize(uint64(len(raw)))
 	stream.entries = append(stream.entries, columnRetainedSemanticStreamEntry{
 		row: row,
 		raw: raw,
@@ -1365,7 +1387,11 @@ func appendColumnRetainedSemanticStreamValueWithOwnership(path []string, row uin
 }
 
 func columnRetainedSemanticStreamPathKey(path []string) string {
-	var out []byte
+	capacity := 0
+	for _, segment := range path {
+		capacity += columnRetainedSemanticStreamDecimalSize(len(segment)) + 1 + len(segment) + 1
+	}
+	out := make([]byte, 0, capacity)
 	for _, segment := range path {
 		out = strconv.AppendInt(out, int64(len(segment)), 10)
 		out = append(out, ':')
@@ -1373,6 +1399,27 @@ func columnRetainedSemanticStreamPathKey(path []string) string {
 		out = append(out, 0)
 	}
 	return string(out)
+}
+
+func columnRetainedSemanticStreamDecimalSize(n int) int {
+	if n < 10 {
+		return 1
+	}
+	size := 0
+	for n > 0 {
+		size++
+		n /= 10
+	}
+	return size
+}
+
+func columnRetainedSemanticStreamV1UvarintSize(v uint64) int {
+	size := 1
+	for v >= 0x80 {
+		size++
+		v >>= 7
+	}
+	return size
 }
 
 func decodeColumnRetainedSemanticStreamV1BlockRowJSON(block []byte, row uint64) ([]byte, error) {
@@ -1901,17 +1948,23 @@ func (c *columnRetainedSemanticStreamV1BlockLayoutCollector) result(rows, maxPat
 		out.PathZSTDEncodedBytes += stat.ZSTDBytes
 		paths = append(paths, pathLayoutResult{key: pathKey, stat: stat})
 	}
-	sort.Slice(paths, func(i, j int) bool {
-		if paths[i].stat.TotalBytes != paths[j].stat.TotalBytes {
-			return paths[i].stat.TotalBytes > paths[j].stat.TotalBytes
+	slices.SortFunc(paths, func(a, b pathLayoutResult) int {
+		if a.stat.TotalBytes != b.stat.TotalBytes {
+			if a.stat.TotalBytes > b.stat.TotalBytes {
+				return -1
+			}
+			return 1
 		}
-		if paths[i].stat.Occurrences != paths[j].stat.Occurrences {
-			return paths[i].stat.Occurrences > paths[j].stat.Occurrences
+		if a.stat.Occurrences != b.stat.Occurrences {
+			if a.stat.Occurrences > b.stat.Occurrences {
+				return -1
+			}
+			return 1
 		}
-		if paths[i].stat.Path != paths[j].stat.Path {
-			return paths[i].stat.Path < paths[j].stat.Path
+		if a.stat.Path != b.stat.Path {
+			return strings.Compare(a.stat.Path, b.stat.Path)
 		}
-		return paths[i].key < paths[j].key
+		return strings.Compare(a.key, b.key)
 	})
 	outPaths := make([]ColumnRetainedSemanticStreamV1PathLayoutStat, 0, len(paths))
 	for _, path := range paths {
