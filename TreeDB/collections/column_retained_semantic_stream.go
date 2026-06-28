@@ -410,6 +410,15 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		out.declaredRowsReady = true
 		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids))
 		declaredRowValues = make([]columnDeclaredValue, len(documents)*len(cfg.Columns))
+	} else if ids != nil && len(ids) == len(documents) {
+		// Keep semantic-stream retained encoding unchanged while preparing
+		// declared rows early enough for column publish to reuse them.
+		rows, err := prepareColumnRetainedSemanticStreamV1DeclaredRowsFromJSONDocuments(cfg, ids, documents)
+		if err != nil {
+			return columnRetainedPayloadStorageDocuments{}, err
+		}
+		out.declaredRows = rows
+		out.declaredRowsReady = true
 	}
 	retainedSkipTrie := columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg)
 	blockTable := newCollectionRunTable((len(documents) + columnRetainedSemanticStreamV1BlockRows - 1) / columnRetainedSemanticStreamV1BlockRows)
@@ -476,6 +485,18 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 	blockTable.Freeze()
 	out.semanticStreamBlocks = blockTable
 	return out, nil
+}
+
+func prepareColumnRetainedSemanticStreamV1DeclaredRowsFromJSONDocuments(cfg ColumnStoreConfig, ids, documents [][]byte) ([]columnDeclaredRow, error) {
+	docs := make([]columnWriteDocument, len(documents))
+	for i := range documents {
+		docs[i] = columnWriteDocument{ID: ids[i], Document: documents[i]}
+	}
+	rows, err := extractColumnDeclaredRowsFromJSONDocuments(cfg, docs)
+	if err != nil {
+		return nil, fmt.Errorf("collections: semantic-stream-v1 retained prepared declared rows: %w", err)
+	}
+	return rows, nil
 }
 
 func columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids [][]byte) int {

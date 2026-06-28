@@ -689,10 +689,73 @@ func TestColumnRetainedPayloadSemanticStreamV1NestedDeclaredPathsMatchRetainedJS
 		[]byte(`{"a":"scalar","commit":"scalar","other":{}}`),
 		[]byte(`{"a":{"b":"drop"},"commit":{"operation":"drop"}}`),
 		[]byte(`{"a.b":"literal","commit.operation":"literal","a":{"b":"drop","x":"keep"}}`),
+		[]byte(`{"a":{"b":null,"x":"keep"},"commit":{"operation":null,"collection":"keep"},"payload":"nulls"}`),
 	}
-	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(cfg, docs, nil)
+	ids := [][]byte{
+		[]byte("doc-nested-0"),
+		[]byte("doc-nested-1"),
+		[]byte("doc-nested-2"),
+		[]byte("doc-nested-3"),
+		[]byte("doc-nested-4"),
+		[]byte("doc-nested-5"),
+	}
+	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
 	if err != nil {
 		t.Fatalf("prepare semantic-stream-v1 nested declared documents: %v", err)
+	}
+	if !prepared.declaredRowsReady {
+		t.Fatal("semantic-stream-v1 nested declared paths did not prepare declared rows")
+	}
+	if len(prepared.declaredRows) != len(docs) {
+		t.Fatalf("declared rows=%d want %d", len(prepared.declaredRows), len(docs))
+	}
+	assertNestedRetainedSemanticStreamDeclaredRow := func(rowIdx int, wantID, wantAB, wantOperation string, wantABPresent, wantABNull, wantOperationPresent, wantOperationNull bool) {
+		t.Helper()
+		row := prepared.declaredRows[rowIdx]
+		if got := string(row.ID); got != wantID {
+			t.Fatalf("declared row %d ID=%q want %q", rowIdx, got, wantID)
+		}
+		if len(row.Values) != 2 {
+			t.Fatalf("declared row %d values=%d want 2", rowIdx, len(row.Values))
+		}
+		gotAB := row.Values[0]
+		if gotAB.Type != ColumnStoreValueString {
+			t.Fatalf("declared row %d a.b type=%q want string", rowIdx, gotAB.Type)
+		}
+		if gotAB.Present != wantABPresent {
+			t.Fatalf("declared row %d a.b present=%t want %t", rowIdx, gotAB.Present, wantABPresent)
+		}
+		if gotAB.Null != wantABNull {
+			t.Fatalf("declared row %d a.b null=%t want %t", rowIdx, gotAB.Null, wantABNull)
+		}
+		if !wantABNull && gotAB.String != wantAB {
+			t.Fatalf("declared row %d a.b=%q want %q", rowIdx, gotAB.String, wantAB)
+		}
+		gotOperation := row.Values[1]
+		if gotOperation.Type != ColumnStoreValueString {
+			t.Fatalf("declared row %d commit.operation type=%q want string", rowIdx, gotOperation.Type)
+		}
+		if gotOperation.Present != wantOperationPresent {
+			t.Fatalf("declared row %d commit.operation present=%t want %t", rowIdx, gotOperation.Present, wantOperationPresent)
+		}
+		if gotOperation.Null != wantOperationNull {
+			t.Fatalf("declared row %d commit.operation null=%t want %t", rowIdx, gotOperation.Null, wantOperationNull)
+		}
+		if !wantOperationNull && gotOperation.String != wantOperation {
+			t.Fatalf("declared row %d commit.operation=%q want %q", rowIdx, gotOperation.String, wantOperation)
+		}
+	}
+	assertNestedRetainedSemanticStreamDeclaredRow(0, "doc-nested-0", "drop", "create", true, false, true, false)
+	assertNestedRetainedSemanticStreamDeclaredRow(1, "doc-nested-1", "drop", "drop", true, false, true, false)
+	assertNestedRetainedSemanticStreamDeclaredRow(2, "doc-nested-2", "", "", false, true, false, true)
+	assertNestedRetainedSemanticStreamDeclaredRow(3, "doc-nested-3", "drop", "drop", true, false, true, false)
+	assertNestedRetainedSemanticStreamDeclaredRow(4, "doc-nested-4", "drop", "", true, false, false, true)
+	assertNestedRetainedSemanticStreamDeclaredRow(5, "doc-nested-5", "", "", true, true, true, true)
+	if columnRetainedSemanticStreamV1TestBytesAliasBytes(prepared.declaredRows[0].ID, ids[0]) {
+		t.Fatal("nested prepared declared row ID aliases mutable input ID")
+	}
+	if columnRetainedSemanticStreamV1TestStringAliasesBytes(prepared.declaredRows[0].Values[0].String, docs[0]) {
+		t.Fatal("nested prepared declared string aliases mutable input document")
 	}
 	if prepared.semanticStreamBlocks == nil {
 		t.Fatal("prepare semantic-stream-v1 documents did not return block table")
@@ -772,6 +835,19 @@ func TestColumnRetainedPayloadSemanticStreamV1NestedDeclaredPathsMatchRetainedJS
 	}
 	if got := row4["commit.operation"]; got != "literal" {
 		t.Fatalf("literal dotted root key commit.operation=%v want literal: %s", got, rowsJSON[4])
+	}
+
+	ids[0][0] = 'X'
+	dropStart := bytes.Index(docs[0], []byte("drop"))
+	if dropStart < 0 {
+		t.Fatal("drop token not found in source document")
+	}
+	copy(docs[0][dropStart:], []byte("mut!"))
+	if got := string(prepared.declaredRows[0].ID); got != "doc-nested-0" {
+		t.Fatalf("nested prepared declared row ID changed after source ID mutation: %q", got)
+	}
+	if got := prepared.declaredRows[0].Values[0].String; got != "drop" {
+		t.Fatalf("nested prepared declared string changed after source document mutation: %q", got)
 	}
 }
 
