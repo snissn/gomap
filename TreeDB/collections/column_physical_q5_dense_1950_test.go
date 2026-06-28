@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"testing"
 )
@@ -59,6 +60,36 @@ func TestColumnPhysicalQ5DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 	}
 	if !noPredicate.Diagnostics.DenseInt64SpanUsed || noPredicate.Diagnostics.DenseInt64SpanReducer != columnTypedColumnDenseInt64SpanReducerLocalMap || noPredicate.Diagnostics.RowsScanned != len(events) || noPredicate.Diagnostics.RowsMatched != 0 || noPredicate.Diagnostics.ReduceRows != len(events) {
 		t.Fatalf("no-predicate diagnostics=%+v want dense span with RowsMatched=0 and ReduceRows=%d", noPredicate.Diagnostics, len(events))
+	}
+}
+
+func TestColumnTypedColumnDenseInt64SpanSingleCodeTriplePreapply3175(t *testing.T) {
+	dense := &columnTypedColumnDenseInt64SpanPart{
+		Predicates: []columnTypedColumnDensePredicatePart{
+			{
+				Codes:             []uint32{1, 1, 2, 1, 1, 1},
+				Valid:             []bool{true, true, true, true, false, true},
+				SingleCode:        1,
+				SingleCodeAllowed: true,
+			},
+			{
+				Codes:             []uint32{2, 2, 2, 2, 2, 3},
+				Valid:             []bool{true, true, false, true, true, true},
+				SingleCode:        2,
+				SingleCodeAllowed: true,
+			},
+			{
+				Codes:             []uint32{3, 4, 3, 3, 3, 3},
+				SingleCode:        3,
+				SingleCodeAllowed: true,
+			},
+		},
+	}
+	if !preapplyColumnTypedColumnDenseInt64SpanSingleCodeTriplePredicates(dense, 6) {
+		t.Fatal("single-code triple preapply did not handle q5-shaped predicates")
+	}
+	if want := []uint32{0, 3}; !slices.Equal(dense.PredicateRows, want) {
+		t.Fatalf("predicate rows=%v want %v", dense.PredicateRows, want)
 	}
 }
 

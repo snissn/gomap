@@ -2217,6 +2217,9 @@ func preapplyColumnTypedColumnDenseInt64SpanPredicates(dense *columnTypedColumnD
 	if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
 		return
 	}
+	if preapplyColumnTypedColumnDenseInt64SpanSingleCodeTriplePredicates(dense, rows) {
+		return
+	}
 	selected := make([]uint32, 0, min(rows, 4096))
 	for rowIdx := 0; rowIdx < rows; rowIdx++ {
 		if columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
@@ -2224,6 +2227,46 @@ func preapplyColumnTypedColumnDenseInt64SpanPredicates(dense *columnTypedColumnD
 		}
 	}
 	dense.PredicateRows = selected
+}
+
+func preapplyColumnTypedColumnDenseInt64SpanSingleCodeTriplePredicates(dense *columnTypedColumnDenseInt64SpanPart, rows int) bool {
+	if dense == nil || len(dense.Predicates) != 3 {
+		return false
+	}
+	left := &dense.Predicates[0]
+	mid := &dense.Predicates[1]
+	right := &dense.Predicates[2]
+	if !columnTypedColumnDensePredicateCanUseSingleCodePreapply(left, rows) ||
+		!columnTypedColumnDensePredicateCanUseSingleCodePreapply(mid, rows) ||
+		!columnTypedColumnDensePredicateCanUseSingleCodePreapply(right, rows) {
+		return false
+	}
+	leftCode := left.SingleCode
+	midCode := mid.SingleCode
+	rightCode := right.SingleCode
+	leftValid := left.Valid
+	midValid := mid.Valid
+	rightValid := right.Valid
+	selected := make([]uint32, 0, min(rows, 4096))
+	for rowIdx := 0; rowIdx < rows; rowIdx++ {
+		if (leftValid == nil || leftValid[rowIdx]) &&
+			(midValid == nil || midValid[rowIdx]) &&
+			(rightValid == nil || rightValid[rowIdx]) &&
+			left.Codes[rowIdx] == leftCode &&
+			mid.Codes[rowIdx] == midCode &&
+			right.Codes[rowIdx] == rightCode {
+			selected = append(selected, uint32(rowIdx))
+		}
+	}
+	dense.PredicateRows = selected
+	return true
+}
+
+func columnTypedColumnDensePredicateCanUseSingleCodePreapply(predicate *columnTypedColumnDensePredicatePart, rows int) bool {
+	if predicate == nil || predicate.RejectsAll || !predicate.SingleCodeAllowed || predicate.MissingMatchesEmpty {
+		return false
+	}
+	return rows >= 0 && len(predicate.Codes) >= rows && (predicate.Valid == nil || len(predicate.Valid) >= rows)
 }
 
 func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionary []string, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {

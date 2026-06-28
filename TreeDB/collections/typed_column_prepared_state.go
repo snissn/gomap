@@ -1064,6 +1064,13 @@ func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, i
 	if err != nil {
 		return diag, err
 	}
+	type preparedDictionaryAttachRequest struct {
+		adapterColumn typedColumnAdapterColumn
+		column        *typedColumnPreparedColumnState
+		mode          typedColumnPreparedDictionaryRequestMode
+	}
+	attachRequests := make([]preparedDictionaryAttachRequest, 0, len(requests))
+	metadataColumns := make([]typedColumnAdapterColumn, 0, len(requests))
 	for _, request := range requests {
 		if !request.IncludeDictionaries {
 			continue
@@ -1076,10 +1083,20 @@ func typedColumnAttachPreparedDictionaries(part *typedColumnPreparedPartState, i
 		if column == nil {
 			return diag, fmt.Errorf("collections: typed-column prepared dictionaries missing column %q", adapterColumn.Definition.Name)
 		}
-		if err := validateTypedColumnAdapterMetadata(decoded.Forward, []typedColumnAdapterColumn{adapterColumn}); err != nil {
-			return diag, err
-		}
-		mode := requestedModes[adapterColumn.Definition.Name]
+		metadataColumns = append(metadataColumns, adapterColumn)
+		attachRequests = append(attachRequests, preparedDictionaryAttachRequest{
+			adapterColumn: adapterColumn,
+			column:        column,
+			mode:          requestedModes[adapterColumn.Definition.Name],
+		})
+	}
+	if err := validateTypedColumnAdapterMetadata(decoded.Forward, metadataColumns); err != nil {
+		return diag, err
+	}
+	for _, attach := range attachRequests {
+		adapterColumn := attach.adapterColumn
+		column := attach.column
+		mode := attach.mode
 		if mode.Forward {
 			dict, ok := decoded.Forward[adapterColumn.Definition.Name]
 			if !ok {
