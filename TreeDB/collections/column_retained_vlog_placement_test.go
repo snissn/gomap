@@ -492,7 +492,7 @@ func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t
 	}
 	ids, docs := retainedSemanticStreamDocuments(12)
 	docs[5] = []byte(`{"row_id":5,"kind":"kind-5","payload":"payload-005","note":"quote \" slash \\ smile \u263a","commit":{"cid":"bafy-test-000005"}}`)
-	docs[6] = []byte(`{"row_id":6,"kind":"old-kind","kind":"kind-6","payload":{"old":true},"payload":{"kept":true},"note":"old-note","note":["kept-note"],"commit":{"cid":"old-cid"},"commit":"kept-commit"}`)
+	docs[6] = []byte(`{"row_id":6,"kind":"old-kind","kind":"kind-6","payload":{"old":true},"payload":{"kept":false,"kept":true,"inner":{"old":1,"old":2}},"note":"old-note","note":["kept-note"],"commit":{"cid":"old-cid"},"commit":"kept-commit"}`)
 	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
 	if err != nil {
 		t.Fatalf("prepare semantic-stream-v1 documents with ids: %v", err)
@@ -563,6 +563,13 @@ func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t
 	if got, ok := payload["kept"].(bool); !ok || !got {
 		t.Fatalf("duplicate retained payload missing last root object: %s", rowsJSON[6])
 	}
+	inner, ok := payload["inner"].(map[string]any)
+	if !ok {
+		t.Fatalf("duplicate retained nested payload=%T want object: %s", payload["inner"], rowsJSON[6])
+	}
+	if got, want := inner["old"], float64(2); got != want {
+		t.Fatalf("duplicate retained nested old=%v want %v: %s", got, want, rowsJSON[6])
+	}
 	if got, want := duplicateRetained["commit"], "kept-commit"; got != want {
 		t.Fatalf("duplicate retained commit=%q want %q: %s", got, want, rowsJSON[6])
 	}
@@ -570,6 +577,118 @@ func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t
 	if !ok || len(note) != 1 || note[0] != "kept-note" {
 		t.Fatalf("duplicate retained note=%#v want last duplicate array: %s", duplicateRetained["note"], rowsJSON[6])
 	}
+}
+
+func TestColumnRetainedPayloadSemanticStreamV1NestedDeclaredPathsMatchRetainedJSONPipeline(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "a_b", Path: "a.b", ValueType: ColumnStoreValueString, Nullable: true},
+			{Name: "operation", Path: "commit.operation", ValueType: ColumnStoreValueString, Nullable: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	docs := [][]byte{
+		[]byte(`{"a":{"b":"drop","c":1},"commit":{"operation":"create","collection":"keep"},"literal.path":"keep","payload":{"body":"kept"}}`),
+		[]byte(`{"a":{"b":"old","old":true},"a":{"b":"drop","c":{"d":1,"d":2},"empty":{"b":"not declared"}},"commit":{"operation":"old","record":{"text":"old"}},"commit":{"operation":"drop","record":{"text":"keep-last"},"blank":{}}}`),
+		[]byte(`{"a":"scalar","commit":"scalar","other":{}}`),
+		[]byte(`{"a":{"b":"drop"},"commit":{"operation":"drop"}}`),
+		[]byte(`{"a.b":"literal","commit.operation":"literal","a":{"b":"drop","x":"keep"}}`),
+	}
+	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocuments(cfg, docs, nil)
+	if err != nil {
+		t.Fatalf("prepare semantic-stream-v1 nested declared documents: %v", err)
+	}
+	if prepared.semanticStreamBlocks == nil {
+		t.Fatal("prepare semantic-stream-v1 documents did not return block table")
+	}
+	defer resetCollectionRunTable(prepared.semanticStreamBlocks)
+
+	iter := prepared.semanticStreamBlocks.NewIterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+	if !iter.Valid() {
+		t.Fatal("semantic-stream-v1 block table is empty")
+	}
+	gotBlock := append([]byte(nil), iter.UnsafeValue()...)
+	iter.Next()
+	if iter.Valid() {
+		t.Fatal("semantic-stream-v1 block table has more than one block")
+	}
+	if err := iter.Error(); err != nil {
+		t.Fatalf("iterate semantic-stream-v1 block table: %v", err)
+	}
+
+	retainedJSON := make([][]byte, len(docs))
+	for i, doc := range docs {
+		retained, err := columnRetainedPayloadJSONFromJSONDocument(cfg, doc)
+		if err != nil {
+			t.Fatalf("legacy retained JSON row %d: %v", i, err)
+		}
+		retainedJSON[i] = retained
+	}
+	wantBlock, err := encodeColumnRetainedSemanticStreamV1Block(retainedJSON)
+	if err != nil {
+		t.Fatalf("legacy semantic-stream-v1 block: %v", err)
+	}
+
+	rowsJSON, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(gotBlock)
+	if err != nil {
+		t.Fatalf("decode semantic-stream-v1 rows: %v", err)
+	}
+	wantRowsJSON, err := decodeColumnRetainedSemanticStreamV1BlockRowsJSON(wantBlock)
+	if err != nil {
+		t.Fatalf("decode legacy semantic-stream-v1 rows: %v", err)
+	}
+	if len(rowsJSON) != len(wantRowsJSON) {
+		t.Fatalf("semantic-stream-v1 nested declared row count=%d want %d", len(rowsJSON), len(wantRowsJSON))
+	}
+	for i := range rowsJSON {
+		assertJSONEqualM13C(t, rowsJSON[i], wantRowsJSON[i])
+	}
+	row1 := decodeRetainedSemanticStreamTestObject(t, rowsJSON[1])
+	a1 := row1["a"].(map[string]any)
+	if _, ok := a1["b"]; ok {
+		t.Fatalf("declared nested a.b leaked in row 1: %s", rowsJSON[1])
+	}
+	c1 := a1["c"].(map[string]any)
+	if got, want := c1["d"], float64(2); got != want {
+		t.Fatalf("duplicate nested retained a.c.d=%v want %v: %s", got, want, rowsJSON[1])
+	}
+	if got := row1["commit"].(map[string]any)["record"].(map[string]any)["text"]; got != "keep-last" {
+		t.Fatalf("duplicate retained commit record text=%v want keep-last: %s", got, rowsJSON[1])
+	}
+	row2 := decodeRetainedSemanticStreamTestObject(t, rowsJSON[2])
+	if got := row2["a"]; got != "scalar" {
+		t.Fatalf("non-object declared ancestor a=%v want scalar: %s", got, rowsJSON[2])
+	}
+	if got := row2["commit"]; got != "scalar" {
+		t.Fatalf("non-object declared ancestor commit=%v want scalar: %s", got, rowsJSON[2])
+	}
+	row3 := decodeRetainedSemanticStreamTestObject(t, rowsJSON[3])
+	if got := len(row3["a"].(map[string]any)); got != 0 {
+		t.Fatalf("empty retained a len=%d want 0: %s", got, rowsJSON[3])
+	}
+	if got := len(row3["commit"].(map[string]any)); got != 0 {
+		t.Fatalf("empty retained commit len=%d want 0: %s", got, rowsJSON[3])
+	}
+	row4 := decodeRetainedSemanticStreamTestObject(t, rowsJSON[4])
+	if got := row4["a.b"]; got != "literal" {
+		t.Fatalf("literal dotted root key a.b=%v want literal: %s", got, rowsJSON[4])
+	}
+	if got := row4["commit.operation"]; got != "literal" {
+		t.Fatalf("literal dotted root key commit.operation=%v want literal: %s", got, rowsJSON[4])
+	}
+}
+
+func decodeRetainedSemanticStreamTestObject(t testing.TB, raw []byte) map[string]any {
+	t.Helper()
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("decode retained semantic-stream row %s: %v", raw, err)
+	}
+	return obj
 }
 
 func TestPrepareColumnWritePublishInputUsesPreparedDeclaredRows(t *testing.T) {
@@ -997,6 +1116,72 @@ func openColumnRetainedPlacementCollection(t testing.TB, d *backenddb.DB, name s
 
 func retainedPlacementDocument(payload string, rowID int) []byte {
 	return []byte(fmt.Sprintf(`{"row_id":%d,"kind":"kind-%d","payload":"%s"}`, rowID, rowID, strings.Repeat(payload, 10)))
+}
+
+func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareRootFastPath(b *testing.B) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids, docs := retainedSemanticStreamDocuments(columnRetainedSemanticStreamV1BlockRows)
+	var bytesPerIteration int64
+	for _, doc := range docs {
+		bytesPerIteration += int64(len(doc))
+	}
+	b.ReportAllocs()
+	b.SetBytes(bytesPerIteration)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
+		if err != nil {
+			b.Fatalf("prepare semantic-stream-v1 documents with ids: %v", err)
+		}
+		if !prepared.declaredRowsReady || len(prepared.declaredRows) != len(docs) {
+			b.Fatalf("prepared declared rows ready=%t len=%d want %d", prepared.declaredRowsReady, len(prepared.declaredRows), len(docs))
+		}
+		if prepared.semanticStreamBlocks == nil {
+			b.Fatal("prepare semantic-stream-v1 documents did not return block table")
+		}
+		resetCollectionRunTable(prepared.semanticStreamBlocks)
+	}
+}
+
+func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareNestedDeclaredPaths(b *testing.B) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "row_id", Path: "row_id", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerRowAsset},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+			{Name: "cid", Path: "commit.cid", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids, docs := retainedSemanticStreamDocuments(columnRetainedSemanticStreamV1BlockRows)
+	var bytesPerIteration int64
+	for _, doc := range docs {
+		bytesPerIteration += int64(len(doc))
+	}
+	b.ReportAllocs()
+	b.SetBytes(bytesPerIteration)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
+		if err != nil {
+			b.Fatalf("prepare semantic-stream-v1 documents with ids: %v", err)
+		}
+		if prepared.semanticStreamBlocks == nil {
+			b.Fatal("prepare semantic-stream-v1 documents did not return block table")
+		}
+		resetCollectionRunTable(prepared.semanticStreamBlocks)
+	}
 }
 
 func retainedSemanticStreamDocuments(count int) ([][]byte, [][]byte) {
