@@ -39,14 +39,10 @@ var (
 	columnRetainedSemanticStreamV1LocatorMagic   = []byte("crss1loc\x00")
 )
 
-type columnRetainedSemanticStreamEntry struct {
-	row uint64
-	raw []byte
-}
-
 type columnRetainedSemanticStreamPath struct {
 	segments                []string
-	entries                 []columnRetainedSemanticStreamEntry
+	rows                    []uint64
+	rawValues               [][]byte
 	rawValueBytes           int
 	valueLengthUvarintBytes int
 }
@@ -86,19 +82,40 @@ func (s *columnRetainedSemanticStreamStreams) appendValue(path []string, row uin
 		stream = s.byKey[key]
 		if stream == nil {
 			stream = &columnRetainedSemanticStreamPath{
-				segments: append([]string(nil), path...),
-				entries:  make([]columnRetainedSemanticStreamEntry, 0, streamEntryCapacity),
+				segments:  append([]string(nil), path...),
+				rawValues: make([][]byte, 0, streamEntryCapacity),
 			}
 			s.byKey[key] = stream
 		}
 		current.stream = stream
 	}
-	stream.rawValueBytes += len(raw)
-	stream.valueLengthUvarintBytes += columnRetainedSemanticStreamV1UvarintSize(uint64(len(raw)))
-	stream.entries = append(stream.entries, columnRetainedSemanticStreamEntry{
-		row: row,
-		raw: raw,
-	})
+	stream.appendValue(row, raw)
+}
+
+func (p *columnRetainedSemanticStreamPath) appendValue(row uint64, raw []byte) {
+	if p.rows != nil {
+		p.rows = append(p.rows, row)
+	} else if row != uint64(len(p.rawValues)) {
+		p.rows = make([]uint64, len(p.rawValues), cap(p.rawValues))
+		for i := range p.rawValues {
+			p.rows[i] = uint64(i)
+		}
+		p.rows = append(p.rows, row)
+	}
+	p.rawValueBytes += len(raw)
+	p.valueLengthUvarintBytes += columnRetainedSemanticStreamV1UvarintSize(uint64(len(raw)))
+	p.rawValues = append(p.rawValues, raw)
+}
+
+func (p *columnRetainedSemanticStreamPath) entryCount() int {
+	return len(p.rawValues)
+}
+
+func (p *columnRetainedSemanticStreamPath) rowAt(idx int) uint64 {
+	if p.rows == nil {
+		return uint64(idx)
+	}
+	return p.rows[idx]
 }
 
 type columnRetainedSemanticStreamV1DecodedBlock struct {
@@ -1132,17 +1149,18 @@ func encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows int, streams *
 			out = binary.AppendUvarint(out, uint64(len(segment)))
 			out = append(out, segment...)
 		}
-		out = binary.AppendUvarint(out, uint64(len(stream.entries)))
+		out = binary.AppendUvarint(out, uint64(stream.entryCount()))
 		var last uint64
-		for i, entry := range stream.entries {
+		for i, raw := range stream.rawValues {
+			row := stream.rowAt(i)
 			if i == 0 {
-				out = binary.AppendUvarint(out, entry.row)
+				out = binary.AppendUvarint(out, row)
 			} else {
-				out = binary.AppendUvarint(out, entry.row-last)
+				out = binary.AppendUvarint(out, row-last)
 			}
-			last = entry.row
-			out = binary.AppendUvarint(out, uint64(len(entry.raw)))
-			out = append(out, entry.raw...)
+			last = row
+			out = binary.AppendUvarint(out, uint64(len(raw)))
+			out = append(out, raw...)
 		}
 	}
 	return out, nil
@@ -1158,11 +1176,12 @@ func columnRetainedSemanticStreamV1RawBlockSizeHint(rows int, keys []string, str
 		for _, segment := range stream.segments {
 			size += columnRetainedSemanticStreamV1UvarintSize(uint64(len(segment))) + len(segment)
 		}
-		size += columnRetainedSemanticStreamV1UvarintSize(uint64(len(stream.entries)))
+		entryCount := stream.entryCount()
+		size += columnRetainedSemanticStreamV1UvarintSize(uint64(entryCount))
 		// Row deltas are bounded by the per-block row count. At 4096 rows this is
 		// at most two bytes per entry, and value-length uvarint bytes are tracked
 		// when entries are appended.
-		size += len(stream.entries)*2 + stream.valueLengthUvarintBytes + stream.rawValueBytes
+		size += entryCount*2 + stream.valueLengthUvarintBytes + stream.rawValueBytes
 	}
 	return size
 }

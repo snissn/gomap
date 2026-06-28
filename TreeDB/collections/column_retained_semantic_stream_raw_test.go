@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"crypto/sha256"
+	"slices"
 	"testing"
 	"unsafe"
 
@@ -402,14 +403,37 @@ func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesRetainedTraversa
 			}
 		}
 	}
-	if len(payloadShared.entries) != 2 {
-		t.Fatalf("payload.shared entries=%d want 2", len(payloadShared.entries))
+	if payloadShared.entryCount() != 2 {
+		t.Fatalf("payload.shared entries=%d want 2", payloadShared.entryCount())
 	}
-	if got := string(payloadShared.entries[0].raw); got != "10" {
+	if got := string(payloadShared.rawValues[0]); got != "10" {
 		t.Fatalf("duplicate key retained raw=%q want last value 10", got)
 	}
-	if got := string(payloadShared.entries[1].raw); got != "3" {
+	if got := string(payloadShared.rawValues[1]); got != "3" {
 		t.Fatalf("second row retained raw=%q want 3", got)
+	}
+}
+
+func TestColumnRetainedSemanticStreamV1DenseRowsStayImplicit3218(t *testing.T) {
+	stream := &columnRetainedSemanticStreamPath{
+		segments:  []string{"payload", "value"},
+		rawValues: make([][]byte, 0, 3),
+	}
+	stream.appendValue(0, []byte("a"))
+	stream.appendValue(1, []byte("b"))
+	if stream.rows != nil {
+		t.Fatalf("dense stream allocated explicit rows: %v", stream.rows)
+	}
+	if got := stream.rowAt(1); got != 1 {
+		t.Fatalf("dense rowAt(1)=%d want 1", got)
+	}
+
+	stream.appendValue(3, []byte("d"))
+	if got, want := stream.rows, []uint64{0, 1, 3}; !slices.Equal(got, want) {
+		t.Fatalf("sparse rows=%v want %v", got, want)
+	}
+	if got := stream.rowAt(2); got != 3 {
+		t.Fatalf("sparse rowAt(2)=%d want 3", got)
 	}
 }
 
