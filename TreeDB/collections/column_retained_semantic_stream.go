@@ -141,6 +141,11 @@ type columnRetainedSemanticStreamV1RetainedSkipTrie struct {
 	children map[string]*columnRetainedSemanticStreamV1RetainedSkipTrie
 }
 
+type columnRetainedSemanticStreamV1DeclaredPathTrie struct {
+	columnIndexes []int
+	children      map[string]*columnRetainedSemanticStreamV1DeclaredPathTrie
+}
+
 type columnRetainedSemanticStreamV1PathSegmentInterner struct {
 	segments map[string]string
 }
@@ -403,9 +408,16 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		return out, nil
 	}
 	rootPlan, useRootFastPath := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(documents))
+	declaredPathTrie, useSemanticParserDeclaredRows := columnRetainedSemanticStreamV1DeclaredPathTrieForConfig(cfg, ids, len(documents))
 	var declaredRowIDBytes []byte
 	var declaredRowValues []columnDeclaredValue
 	if useRootFastPath && rootPlan.declaredRowsReady {
+		out.declaredRows = make([]columnDeclaredRow, len(documents))
+		out.declaredRowsReady = true
+		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids))
+		declaredRowValues = make([]columnDeclaredValue, len(documents)*len(cfg.Columns))
+		useSemanticParserDeclaredRows = false
+	} else if useSemanticParserDeclaredRows {
 		out.declaredRows = make([]columnDeclaredRow, len(documents))
 		out.declaredRowsReady = true
 		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids))
@@ -437,7 +449,7 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		streams := newColumnRetainedSemanticStreamStreams()
 		pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 		var declaredStringInterner *columnDeclaredStringInterner
-		if rootPlan.declaredRowsReady {
+		if rootPlan.declaredRowsReady || useSemanticParserDeclaredRows {
 			declaredStringInterner = &columnDeclaredStringInterner{}
 		}
 		for row, i := 0, start; i < end; row, i = row+1, i+1 {
@@ -461,9 +473,23 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 					}
 				}
 			} else {
-				if err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner); err != nil {
+				var declaredValuesDest []columnDeclaredValue
+				if useSemanticParserDeclaredRows {
+					valuesStart := i * len(cfg.Columns)
+					declaredValuesDest = declaredRowValues[valuesStart : valuesStart+len(cfg.Columns) : valuesStart+len(cfg.Columns)]
+				}
+				declaredValues, err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, retainedSkipTrie, documents[i], uint64(row), rows, streams, pathInterner, declaredPathTrie, declaredValuesDest, declaredStringInterner)
+				if err != nil {
 					resetCollectionRunTable(blockTable)
 					return columnRetainedPayloadStorageDocuments{}, fmt.Errorf("collections: semantic-stream-v1 retained row %d: %w", row, err)
+				}
+				if useSemanticParserDeclaredRows {
+					idStart := len(declaredRowIDBytes)
+					declaredRowIDBytes = append(declaredRowIDBytes, ids[i]...)
+					out.declaredRows[i] = columnDeclaredRow{
+						ID:     declaredRowIDBytes[idStart:len(declaredRowIDBytes):len(declaredRowIDBytes)],
+						Values: declaredValues,
+					}
 				}
 			}
 		}
@@ -545,6 +571,32 @@ func columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg ColumnStoreConf
 		current.terminal = true
 	}
 	return root
+}
+
+func columnRetainedSemanticStreamV1DeclaredPathTrieForConfig(cfg ColumnStoreConfig, ids [][]byte, documentCount int) (*columnRetainedSemanticStreamV1DeclaredPathTrie, bool) {
+	if ids == nil || len(ids) != documentCount {
+		return nil, false
+	}
+	root := &columnRetainedSemanticStreamV1DeclaredPathTrie{}
+	for colIdx, col := range cfg.Columns {
+		if col.Path == "" || !columnDeclaredJSONParserValueSupported(col.ValueType) {
+			return nil, false
+		}
+		current := root
+		for _, segment := range strings.Split(col.Path, ".") {
+			if current.children == nil {
+				current.children = make(map[string]*columnRetainedSemanticStreamV1DeclaredPathTrie)
+			}
+			child := current.children[segment]
+			if child == nil {
+				child = &columnRetainedSemanticStreamV1DeclaredPathTrie{}
+				current.children[segment] = child
+			}
+			current = child
+		}
+		current.columnIndexes = append(current.columnIndexes, colIdx)
+	}
+	return root, true
 }
 
 func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreConfig, plan columnRetainedSemanticStreamV1RootFastPathPlan, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner, declaredValues []columnDeclaredValue, declaredStringInterner *columnDeclaredStringInterner) ([]columnDeclaredValue, error) {
@@ -1433,17 +1485,52 @@ func collectColumnRetainedSemanticStreamPaths(raw json.RawMessage, path []string
 	return nil
 }
 
-func collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg ColumnStoreConfig, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
+func collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg ColumnStoreConfig, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, document []byte, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner, declared *columnRetainedSemanticStreamV1DeclaredPathTrie, declaredValues []columnDeclaredValue, declaredStringInterner *columnDeclaredStringInterner) ([]columnDeclaredValue, error) {
 	if cfg.RetainedPayload != ColumnRetainedPayloadNonColumn {
-		return fmt.Errorf("collections: retained payload policy %q cannot produce object payload", cfg.RetainedPayload)
+		return nil, fmt.Errorf("collections: retained payload policy %q cannot produce object payload", cfg.RetainedPayload)
 	}
 	if !gjson.ValidBytes(document) {
-		return errors.New("collections: invalid JSON document for column retained payload: invalid JSON")
+		return nil, errors.New("collections: invalid JSON document for column retained payload: invalid JSON")
 	}
 	if !jsonDocumentLooksObject(document) {
-		return errors.New("collections: column retained payload root must be a JSON object")
+		return nil, errors.New("collections: column retained payload root must be a JSON object")
 	}
-	return collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(document, nil, row, streamEntryCapacity, skip, streams, pathInterner)
+	var valuesRaw []jsonParserIndexValue
+	if declared != nil {
+		var stackValues [8]jsonParserIndexValue
+		valuesRaw = stackValues[:]
+		if len(cfg.Columns) > len(stackValues) {
+			valuesRaw = make([]jsonParserIndexValue, len(cfg.Columns))
+		} else {
+			valuesRaw = valuesRaw[:len(cfg.Columns)]
+		}
+	}
+	if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(document, nil, row, streamEntryCapacity, skip, streams, pathInterner, declared, valuesRaw); err != nil {
+		return nil, err
+	}
+	if declared == nil {
+		return nil, nil
+	}
+	values := declaredValues
+	if values == nil && len(cfg.Columns) == 0 {
+		values = make([]columnDeclaredValue, 0)
+	}
+	if len(values) != len(cfg.Columns) {
+		values = make([]columnDeclaredValue, len(cfg.Columns))
+	}
+	var scratch []byte
+	for colIdx, col := range cfg.Columns {
+		var stringInterner *columnDeclaredStringInterner
+		if col.ValueType == ColumnStoreValueString && col.Dictionary {
+			stringInterner = declaredStringInterner
+		}
+		value, err := convertColumnDeclaredJSONParserValueWithStringInterner(col, valuesRaw[colIdx], &scratch, stringInterner)
+		if err != nil {
+			return nil, fmt.Errorf("%w: column[%d] %q: %v", ErrColumnDeclaredValueUnsupported, colIdx, col.Name, err)
+		}
+		values[colIdx] = value
+	}
+	return values, nil
 }
 
 func collectColumnRetainedSemanticStreamJSONParserPaths(raw []byte, dataType jsonparser.ValueType, path []string, row uint64, streamEntryCapacity int, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
@@ -1514,12 +1601,15 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPaths(raw []byte, path [
 	return nil
 }
 
-func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte, path []string, row uint64, streamEntryCapacity int, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner) error {
+func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte, path []string, row uint64, streamEntryCapacity int, skip *columnRetainedSemanticStreamV1RetainedSkipTrie, streams *columnRetainedSemanticStreamStreams, pathInterner *columnRetainedSemanticStreamV1PathSegmentInterner, declared *columnRetainedSemanticStreamV1DeclaredPathTrie, declaredValues []jsonParserIndexValue) error {
 	type retainedObjectValue struct {
-		path      string
-		raw       []byte
-		valueType jsonparser.ValueType
-		skip      *columnRetainedSemanticStreamV1RetainedSkipTrie
+		path         string
+		raw          []byte
+		declaredRaw  []byte
+		valueType    jsonparser.ValueType
+		skip         *columnRetainedSemanticStreamV1RetainedSkipTrie
+		skipTerminal bool
+		declared     *columnRetainedSemanticStreamV1DeclaredPathTrie
 	}
 	var retainedObjectValueStack [8]retainedObjectValue
 	retainedObjectValues := retainedObjectValueStack[:0]
@@ -1528,17 +1618,26 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		if skip != nil {
 			childSkip = skip.children[string(key)]
 		}
-		if childSkip != nil && childSkip.terminal {
+		var childDeclared *columnRetainedSemanticStreamV1DeclaredPathTrie
+		if declared != nil {
+			childDeclared = declared.children[string(key)]
+		}
+		if childSkip != nil && childSkip.terminal && childDeclared == nil {
 			return nil
 		}
 		valuePath := pathInterner.intern(key)
-		nextValue := retainedObjectValue{path: valuePath}
+		nextValue := retainedObjectValue{
+			path:         valuePath,
+			declaredRaw:  value,
+			valueType:    dataType,
+			declared:     childDeclared,
+			skipTerminal: childSkip != nil && childSkip.terminal,
+		}
 		valueRaw, err := columnRetainedSemanticStreamV1JSONParserRawValue(raw, value, dataType, valueEndOffset)
 		if err != nil {
 			return err
 		}
 		nextValue.raw = valueRaw
-		nextValue.valueType = dataType
 		if childSkip != nil && len(childSkip.children) > 0 && dataType == jsonparser.Object {
 			nextValue.skip = childSkip
 		}
@@ -1563,6 +1662,7 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		return strings.Compare(a.path, b.path)
 	})
 	var pathStack [8]string
+	retainedAny := false
 	for _, value := range retainedObjectValues {
 		var nextPath []string
 		if len(path) == 0 && cap(path) == 0 {
@@ -1570,14 +1670,84 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		} else {
 			nextPath = append(path, value.path)
 		}
+		if value.declared != nil {
+			if len(value.declared.columnIndexes) > 0 {
+				for _, colIdx := range value.declared.columnIndexes {
+					declaredValues[colIdx] = jsonParserIndexValue{raw: value.declaredRaw, valueType: value.valueType}
+				}
+			}
+			if value.skipTerminal {
+				if len(value.declared.children) > 0 && value.valueType == jsonparser.Object {
+					if err := collectColumnRetainedSemanticStreamJSONParserDeclaredPaths(value.raw, value.declared, declaredValues); err != nil {
+						return err
+					}
+				}
+				continue
+			}
+		}
 		if value.skip != nil {
-			if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(value.raw, nextPath, row, streamEntryCapacity, value.skip, streams, pathInterner); err != nil {
+			retainedAny = true
+			if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(value.raw, nextPath, row, streamEntryCapacity, value.skip, streams, pathInterner, value.declared, declaredValues); err != nil {
 				return err
 			}
 			continue
 		}
+		if value.declared != nil && len(value.declared.children) > 0 && value.valueType == jsonparser.Object {
+			retainedAny = true
+			if err := collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(value.raw, nextPath, row, streamEntryCapacity, nil, streams, pathInterner, value.declared, declaredValues); err != nil {
+				return err
+			}
+			continue
+		}
+		retainedAny = true
 		if err := collectColumnRetainedSemanticStreamJSONParserPaths(value.raw, value.valueType, nextPath, row, streamEntryCapacity, streams, pathInterner); err != nil {
 			return err
+		}
+	}
+	if !retainedAny && len(path) > 0 {
+		appendColumnRetainedSemanticStreamValueNoCopy(path, row, []byte("{}"), streamEntryCapacity, streams)
+	}
+	return nil
+}
+
+func collectColumnRetainedSemanticStreamJSONParserDeclaredPaths(raw []byte, declared *columnRetainedSemanticStreamV1DeclaredPathTrie, declaredValues []jsonParserIndexValue) error {
+	if declared == nil || len(declared.children) == 0 {
+		return nil
+	}
+	type declaredObjectValue struct {
+		raw       []byte
+		valueType jsonparser.ValueType
+		declared  *columnRetainedSemanticStreamV1DeclaredPathTrie
+	}
+	var stack [8]declaredObjectValue
+	values := stack[:0]
+	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+		child := declared.children[string(key)]
+		if child == nil {
+			return nil
+		}
+		nextValue := declaredObjectValue{raw: value, valueType: dataType, declared: child}
+		for i := range values {
+			if values[i].declared == child {
+				values[i] = nextValue
+				return nil
+			}
+		}
+		values = append(values, nextValue)
+		return nil
+	}); err != nil {
+		return err
+	}
+	for _, value := range values {
+		if len(value.declared.columnIndexes) > 0 {
+			for _, colIdx := range value.declared.columnIndexes {
+				declaredValues[colIdx] = jsonParserIndexValue{raw: value.raw, valueType: value.valueType}
+			}
+		}
+		if len(value.declared.children) > 0 && value.valueType == jsonparser.Object {
+			if err := collectColumnRetainedSemanticStreamJSONParserDeclaredPaths(value.raw, value.declared, declaredValues); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -450,7 +450,7 @@ func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesSkipTraversalSeg
 	document := []byte(`{"declared":{"nested":1},"payload":{"shared":10},"meta":{"shared":11}}`)
 	streams := newColumnRetainedSemanticStreamStreams()
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
-	if err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg), document, 0, 1, streams, pathInterner); err != nil {
+	if _, err := collectColumnRetainedSemanticStreamV1RetainedJSONParserDocument(cfg, columnRetainedSemanticStreamV1RetainedSkipTrieForConfig(cfg), document, 0, 1, streams, pathInterner, nil, nil, nil); err != nil {
 		t.Fatalf("collect retained JSON parser document: %v", err)
 	}
 	if stream := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"declared", "nested"})]; stream != nil {
