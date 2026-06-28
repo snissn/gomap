@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 var poolPressureTestMu sync.Mutex
@@ -147,6 +148,43 @@ func TestPoolPressureTrimsEntrySliceLeases(t *testing.T) {
 	_ = currentPoolPressureSnapshot()
 	if got := len(entrySliceLeases[0]); got != 0 {
 		t.Fatalf("critical pressure leases=%d want 0", got)
+	}
+}
+
+func TestPoolPressureDropsAppendOnlyEntryPools(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	memtable.DropAppendOnlyEntryPools()
+	t.Cleanup(func() {
+		memtable.DropAppendOnlyEntryPools()
+		resetPoolPressureStateForTest()
+	})
+
+	mt := memtable.NewAppendOnlyWithEntryCapacity(128)
+	for i := 0; i < 1024; i++ {
+		key := []byte{byte(i), byte(i >> 8)}
+		mt.Set(key, []byte("value"))
+	}
+	mt.Reset()
+
+	before := memtable.AppendOnlyEntryPoolStatsSnapshot()
+	if before.RetainedBytesEstimate == 0 {
+		t.Fatal("test setup did not retain append-only entry pool bytes")
+	}
+
+	maybeTrimEntrySliceLeasesUnderPressure(poolPressureCritical, time.Unix(1, 0))
+
+	after := memtable.AppendOnlyEntryPoolStatsSnapshot()
+	if got := after.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("append-only entry pool retained bytes=%d want 0", got)
+	}
+	if got := after.DropsTotal; got != before.DropsTotal+1 {
+		t.Fatalf("append-only entry pool drops=%d want %d", got, before.DropsTotal+1)
+	}
+	if got := after.DropBytesTotal; got < before.DropBytesTotal+before.RetainedBytesEstimate {
+		t.Fatalf("append-only entry pool drop bytes=%d want at least %d", got, before.DropBytesTotal+before.RetainedBytesEstimate)
 	}
 }
 

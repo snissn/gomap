@@ -53,7 +53,12 @@ const (
 )
 
 var appendOnlyEntryPoolPtrs [appendOnlyEntryPoolClassCount]atomic.Pointer[sync.Pool]
+var appendOnlyEntryPoolRetainedBytes atomic.Uint64
+var appendOnlyEntryPoolRetainedBytesMax atomic.Uint64
+var appendOnlyEntryPoolGetTotal atomic.Uint64
+var appendOnlyEntryPoolPutTotal atomic.Uint64
 var appendOnlyEntryPoolDropTotal atomic.Uint64
+var appendOnlyEntryPoolDropBytesTotal atomic.Uint64
 var appendOnlyIteratorPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
@@ -124,6 +129,15 @@ type AppendOnly struct {
 	iteratorLeaseMu   sync.Mutex
 	iteratorLeaseCond *sync.Cond
 	iteratorLeases    int
+}
+
+type AppendOnlyEntryPoolStats struct {
+	RetainedBytesEstimate    uint64
+	RetainedBytesMaxEstimate uint64
+	GetsTotal                uint64
+	PutsTotal                uint64
+	DropsTotal               uint64
+	DropBytesTotal           uint64
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -211,6 +225,45 @@ func appendOnlyEntryPoolForClass(class int) *sync.Pool {
 	return appendOnlyEntryPoolPtrs[class].Load()
 }
 
+func appendOnlyEntryPoolBytes(capacity int) uint64 {
+	if capacity <= 0 {
+		return 0
+	}
+	return uint64(capacity) * uint64(unsafe.Sizeof(appendOnlyEntry{}))
+}
+
+func addAppendOnlyEntryPoolRetainedBytes(bytes uint64) {
+	if bytes == 0 {
+		return
+	}
+	current := appendOnlyEntryPoolRetainedBytes.Add(bytes)
+	for {
+		prev := appendOnlyEntryPoolRetainedBytesMax.Load()
+		if current <= prev || appendOnlyEntryPoolRetainedBytesMax.CompareAndSwap(prev, current) {
+			return
+		}
+	}
+}
+
+func subtractAppendOnlyEntryPoolRetainedBytes(bytes uint64) {
+	if bytes == 0 {
+		return
+	}
+	for {
+		current := appendOnlyEntryPoolRetainedBytes.Load()
+		if current == 0 {
+			return
+		}
+		next := uint64(0)
+		if current > bytes {
+			next = current - bytes
+		}
+		if appendOnlyEntryPoolRetainedBytes.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
 // DropAppendOnlyEntryPools abandons package-level append-only entry slice pools.
 // It is intended for cold transitions away from append-only mutable memtables,
 // where retaining restore-sized warm buffers hurts steady-state RSS more than it
@@ -219,11 +272,25 @@ func DropAppendOnlyEntryPools() {
 	for i := range appendOnlyEntryPoolPtrs {
 		appendOnlyEntryPoolPtrs[i].Store(&sync.Pool{})
 	}
+	if dropped := appendOnlyEntryPoolRetainedBytes.Swap(0); dropped > 0 {
+		appendOnlyEntryPoolDropBytesTotal.Add(dropped)
+	}
 	appendOnlyEntryPoolDropTotal.Add(1)
 }
 
 func AppendOnlyEntryPoolDropTotal() uint64 {
 	return appendOnlyEntryPoolDropTotal.Load()
+}
+
+func AppendOnlyEntryPoolStatsSnapshot() AppendOnlyEntryPoolStats {
+	return AppendOnlyEntryPoolStats{
+		RetainedBytesEstimate:    appendOnlyEntryPoolRetainedBytes.Load(),
+		RetainedBytesMaxEstimate: appendOnlyEntryPoolRetainedBytesMax.Load(),
+		GetsTotal:                appendOnlyEntryPoolGetTotal.Load(),
+		PutsTotal:                appendOnlyEntryPoolPutTotal.Load(),
+		DropsTotal:               appendOnlyEntryPoolDropTotal.Load(),
+		DropBytesTotal:           appendOnlyEntryPoolDropBytesTotal.Load(),
+	}
 }
 
 func getAppendOnlyEntriesFromPool(length int, pool *sync.Pool) []appendOnlyEntry {
@@ -259,8 +326,10 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 	}
 	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
 		if v := pool.Get(); v != nil {
-			if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
-				if cap(entries) <= appendOnlyMaxReuseEntries(length) {
+			if entries, ok := v.([]appendOnlyEntry); ok {
+				appendOnlyEntryPoolGetTotal.Add(1)
+				subtractAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(entries)))
+				if cap(entries) >= length && cap(entries) <= appendOnlyMaxReuseEntries(length) {
 					return entries[:length]
 				}
 			}
@@ -280,6 +349,8 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 		return
 	}
 	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
+		appendOnlyEntryPoolPutTotal.Add(1)
+		addAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(full)))
 		pool.Put(full[:0])
 	}
 }
