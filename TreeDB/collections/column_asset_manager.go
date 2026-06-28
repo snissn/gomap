@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -568,6 +569,7 @@ type columnPhysicalAssetSegmentAppender struct {
 	closeFile      bool
 	unlockLock     bool
 	removeOnClose  bool
+	closeStats     columnPhysicalAssetSegmentCloseStats
 }
 
 type columnPhysicalAssetAppendItem struct {
@@ -575,6 +577,18 @@ type columnPhysicalAssetAppendItem struct {
 	kind       ColumnAssetKind
 	generation uint64
 	partID     uint64
+}
+
+type columnPhysicalAssetSegmentCloseStats struct {
+	FileSync      time.Duration
+	FileClose     time.Duration
+	DirSync       time.Duration
+	Remove        time.Duration
+	RemoveDirSync time.Duration
+}
+
+func (s columnPhysicalAssetSegmentCloseStats) CleanupDuration() time.Duration {
+	return s.Remove + s.RemoveDirSync
 }
 
 func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
@@ -907,6 +921,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	if a == nil {
 		return nil
 	}
+	a.closeStats = columnPhysicalAssetSegmentCloseStats{}
 	var appenderErr error
 	var fileSyncErr error
 	var fileCloseErr error
@@ -915,15 +930,21 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	}
 	if a.file != nil && a.closeFile {
 		if !a.failed {
+			start := time.Now()
 			fileSyncErr = syncColumnAssetSegmentFileForPublish(a.file)
+			a.closeStats.FileSync += time.Since(start)
 		}
+		start := time.Now()
 		fileCloseErr = a.file.Close()
+		a.closeStats.FileClose += time.Since(start)
 		a.closeFile = false
 		a.file = nil
 	}
 	var dirSyncErr error
 	if a.syncDirOnClose {
+		start := time.Now()
 		dirSyncErr = syncColumnAssetDir(a.namespace.SegmentDir)
+		a.closeStats.DirSync += time.Since(start)
 	}
 	if a.syncDirOnClose && dirSyncErr == nil && !a.failed && fileSyncErr == nil && fileCloseErr == nil {
 		markColumnAssetSegmentDirSynced(a.assetPath)
@@ -931,7 +952,9 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	var removeErr error
 	removeOnClose := a.removeOnClose && columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)
 	if removeOnClose && a.assetPath != "" {
+		start := time.Now()
 		removeErr = os.Remove(a.assetPath)
+		a.closeStats.Remove += time.Since(start)
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
@@ -941,7 +964,9 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	}
 	var removeDirSyncErr error
 	if removeOnClose && removeErr == nil {
+		start := time.Now()
 		removeDirSyncErr = syncColumnAssetDir(a.namespace.SegmentDir)
+		a.closeStats.RemoveDirSync += time.Since(start)
 	}
 	a.releaseLock()
 	return errors.Join(appenderErr, fileSyncErr, fileCloseErr, removeErr, dirSyncErr, removeDirSyncErr)

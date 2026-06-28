@@ -246,6 +246,10 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishAssetAppendOpenDurationMS    float64 `json:"column_publish_asset_append_open_duration_ms,omitempty"`
 	ColumnPublishAssetAppendWriteDurationMS   float64 `json:"column_publish_asset_append_write_duration_ms,omitempty"`
 	ColumnPublishAssetAppendCloseDurationMS   float64 `json:"column_publish_asset_append_close_duration_ms,omitempty"`
+	ColumnPublishAssetAppendFileSyncMS        float64 `json:"column_publish_asset_append_file_sync_duration_ms"`
+	ColumnPublishAssetAppendFileCloseMS       float64 `json:"column_publish_asset_append_file_close_duration_ms"`
+	ColumnPublishAssetAppendDirSyncMS         float64 `json:"column_publish_asset_append_dir_sync_duration_ms"`
+	ColumnPublishAssetAppendCleanupMS         float64 `json:"column_publish_asset_append_cleanup_duration_ms"`
 	ColumnPublishManifestEncodeDurationMS     float64 `json:"column_publish_manifest_encode_duration_ms,omitempty"`
 	ColumnPublishAssetClosureDurationMS       float64 `json:"column_publish_asset_closure_validation_duration_ms,omitempty"`
 	ColumnPublishRootDeltaDurationMS          float64 `json:"column_publish_root_delta_construction_duration_ms,omitempty"`
@@ -1536,6 +1540,10 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishAssetAppendOpen += src.ColumnPublishAssetAppendOpen
 	dst.ColumnPublishAssetAppendWrite += src.ColumnPublishAssetAppendWrite
 	dst.ColumnPublishAssetAppendClose += src.ColumnPublishAssetAppendClose
+	dst.ColumnPublishAssetAppendFileSync += src.ColumnPublishAssetAppendFileSync
+	dst.ColumnPublishAssetAppendFileClose += src.ColumnPublishAssetAppendFileClose
+	dst.ColumnPublishAssetAppendDirSync += src.ColumnPublishAssetAppendDirSync
+	dst.ColumnPublishAssetAppendCleanup += src.ColumnPublishAssetAppendCleanup
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -1611,6 +1619,10 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishAssetAppendOpenDurationMS:    durationMS(stats.ColumnPublishAssetAppendOpen),
 		ColumnPublishAssetAppendWriteDurationMS:   durationMS(stats.ColumnPublishAssetAppendWrite),
 		ColumnPublishAssetAppendCloseDurationMS:   durationMS(stats.ColumnPublishAssetAppendClose),
+		ColumnPublishAssetAppendFileSyncMS:        durationMS(stats.ColumnPublishAssetAppendFileSync),
+		ColumnPublishAssetAppendFileCloseMS:       durationMS(stats.ColumnPublishAssetAppendFileClose),
+		ColumnPublishAssetAppendDirSyncMS:         durationMS(stats.ColumnPublishAssetAppendDirSync),
+		ColumnPublishAssetAppendCleanupMS:         durationMS(stats.ColumnPublishAssetAppendCleanup),
 		ColumnPublishManifestEncodeDurationMS:     durationMS(stats.ColumnPublishManifestEncode),
 		ColumnPublishAssetClosureDurationMS:       durationMS(stats.ColumnPublishAssetClosureValidation),
 		ColumnPublishRootDeltaDurationMS:          durationMS(stats.ColumnPublishRootDeltaConstruction),
@@ -4597,6 +4609,10 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `asset_append_open` | %.3f |  |\n", stats.ColumnPublishAssetAppendOpenDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_append_write` | %.3f |  |\n", stats.ColumnPublishAssetAppendWriteDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_append_close` | %.3f |  |\n", stats.ColumnPublishAssetAppendCloseDurationMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append_file_sync` | %.3f |  |\n", stats.ColumnPublishAssetAppendFileSyncMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append_file_close` | %.3f |  |\n", stats.ColumnPublishAssetAppendFileCloseMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append_dir_sync` | %.3f |  |\n", stats.ColumnPublishAssetAppendDirSyncMS))
+		sb.WriteString(fmt.Sprintf("| `asset_append_cleanup` | %.3f |  |\n", stats.ColumnPublishAssetAppendCleanupMS))
 		sb.WriteString(fmt.Sprintf("| `manifest_encode` | %.3f |  |\n", stats.ColumnPublishManifestEncodeDurationMS))
 		sb.WriteString(fmt.Sprintf("| `asset_closure_validation` | %.3f |  |\n", stats.ColumnPublishAssetClosureDurationMS))
 		sb.WriteString(fmt.Sprintf("| `root_delta_construction` | %.3f |  |\n", stats.ColumnPublishRootDeltaDurationMS))
@@ -4622,6 +4638,10 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 		stats.ColumnPublishAssetAppendOpenDurationMS > 0 ||
 		stats.ColumnPublishAssetAppendWriteDurationMS > 0 ||
 		stats.ColumnPublishAssetAppendCloseDurationMS > 0 ||
+		stats.ColumnPublishAssetAppendFileSyncMS > 0 ||
+		stats.ColumnPublishAssetAppendFileCloseMS > 0 ||
+		stats.ColumnPublishAssetAppendDirSyncMS > 0 ||
+		stats.ColumnPublishAssetAppendCleanupMS > 0 ||
 		stats.ColumnPublishManifestEncodeDurationMS > 0 ||
 		stats.ColumnPublishAssetClosureDurationMS > 0 ||
 		stats.ColumnPublishRootDeltaDurationMS > 0 ||

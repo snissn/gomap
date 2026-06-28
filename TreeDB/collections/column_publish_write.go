@@ -447,6 +447,10 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishAssetAppendOpen += metrics.AssetMetrics.SharedAppendOpenDuration
 	stats.ColumnPublishAssetAppendWrite += metrics.AssetMetrics.SharedAppendWriteDuration
 	stats.ColumnPublishAssetAppendClose += metrics.AssetMetrics.SharedAppendCloseDuration
+	stats.ColumnPublishAssetAppendFileSync += metrics.AssetMetrics.SharedAppendFileSyncDuration
+	stats.ColumnPublishAssetAppendFileClose += metrics.AssetMetrics.SharedAppendFileCloseDuration
+	stats.ColumnPublishAssetAppendDirSync += metrics.AssetMetrics.SharedAppendDirSyncDuration
+	stats.ColumnPublishAssetAppendCleanup += metrics.AssetMetrics.SharedAppendCleanupDuration
 	stats.ColumnPublishManifestEncode += metrics.ManifestEncode
 	stats.ColumnPublishAssetClosureValidation += metrics.AssetClosureValidation
 	stats.ColumnPublishRootDeltaConstruction += metrics.RootDeltaConstruction
@@ -735,6 +739,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		var appendOpenDuration time.Duration
 		var appendWriteDuration time.Duration
 		var appendCloseDuration time.Duration
+		var appendFileSyncDuration time.Duration
+		var appendFileCloseDuration time.Duration
+		var appendDirSyncDuration time.Duration
+		var appendCleanupDuration time.Duration
 		if needsAppender {
 			appendStart := time.Now()
 			var err error
@@ -823,6 +831,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				return err
 			}
 			appendCloseDuration += time.Since(appendStart)
+			appendFileSyncDuration += appender.closeStats.FileSync
+			appendFileCloseDuration += appender.closeStats.FileClose
+			appendDirSyncDuration += appender.closeStats.DirSync
+			appendCleanupDuration += appender.closeStats.CleanupDuration()
 			closed = true
 		}
 		if needsAppender {
@@ -831,6 +843,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			prepared.AssetMetrics.SharedAppendOpenDuration += appendOpenDuration
 			prepared.AssetMetrics.SharedAppendWriteDuration += appendWriteDuration
 			prepared.AssetMetrics.SharedAppendCloseDuration += appendCloseDuration
+			prepared.AssetMetrics.SharedAppendFileSyncDuration += appendFileSyncDuration
+			prepared.AssetMetrics.SharedAppendFileCloseDuration += appendFileCloseDuration
+			prepared.AssetMetrics.SharedAppendDirSyncDuration += appendDirSyncDuration
+			prepared.AssetMetrics.SharedAppendCleanupDuration += appendCleanupDuration
 			prepared.AssetMetrics.SharedAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedAppendBytes, appendedBytes)
 			prepared.AssetMetrics.SharedAppendCount += appendedCount
 		}

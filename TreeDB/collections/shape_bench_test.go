@@ -58,6 +58,10 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishAssetAppendOpen += src.ColumnPublishAssetAppendOpen
 	dst.ColumnPublishAssetAppendWrite += src.ColumnPublishAssetAppendWrite
 	dst.ColumnPublishAssetAppendClose += src.ColumnPublishAssetAppendClose
+	dst.ColumnPublishAssetAppendFileSync += src.ColumnPublishAssetAppendFileSync
+	dst.ColumnPublishAssetAppendFileClose += src.ColumnPublishAssetAppendFileClose
+	dst.ColumnPublishAssetAppendDirSync += src.ColumnPublishAssetAppendDirSync
+	dst.ColumnPublishAssetAppendCleanup += src.ColumnPublishAssetAppendCleanup
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -123,6 +127,10 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("column_publish_asset_append_open_ns/doc", stats.ColumnPublishAssetAppendOpen)
 	reportDuration("column_publish_asset_append_write_ns/doc", stats.ColumnPublishAssetAppendWrite)
 	reportDuration("column_publish_asset_append_close_ns/doc", stats.ColumnPublishAssetAppendClose)
+	reportDuration("column_publish_asset_append_file_sync_ns/doc", stats.ColumnPublishAssetAppendFileSync)
+	reportDuration("column_publish_asset_append_file_close_ns/doc", stats.ColumnPublishAssetAppendFileClose)
+	reportDuration("column_publish_asset_append_dir_sync_ns/doc", stats.ColumnPublishAssetAppendDirSync)
+	reportDuration("column_publish_asset_append_cleanup_ns/doc", stats.ColumnPublishAssetAppendCleanup)
 	reportDuration("column_publish_manifest_encode_ns/doc", stats.ColumnPublishManifestEncode)
 	reportDuration("column_publish_asset_closure_ns/doc", stats.ColumnPublishAssetClosureValidation)
 	reportDuration("column_publish_root_delta_ns/doc", stats.ColumnPublishRootDeltaConstruction)

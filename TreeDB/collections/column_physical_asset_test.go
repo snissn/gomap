@@ -2299,6 +2299,7 @@ func TestColumnAssetSegmentAppenderCloseRequiresFileSyncBeforeRef3151(t *testing
 			t.Fatalf("syncColumnAssetSegmentFileForPublish called with nil file")
 		}
 		calls++
+		time.Sleep(time.Millisecond)
 		return syncErr
 	})
 	appender, err := newColumnPhysicalAssetSegmentAppender(root, cfg, columnAssetM12ASegmentFileID)
@@ -2317,6 +2318,10 @@ func TestColumnAssetSegmentAppenderCloseRequiresFileSyncBeforeRef3151(t *testing
 	}
 	if err := appender.close(); !errors.Is(err, syncErr) {
 		t.Fatalf("appender close err=%v want %v", err, syncErr)
+	}
+	closeStats := appender.closeStats
+	if closeStats.FileSync <= 0 {
+		t.Fatalf("file sync close stats=%+v want positive file sync duration", closeStats)
 	}
 	if calls != 1 {
 		t.Fatalf("sync calls=%d want 1", calls)
