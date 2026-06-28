@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -1118,6 +1119,26 @@ func retainedPlacementDocument(payload string, rowID int) []byte {
 	return []byte(fmt.Sprintf(`{"row_id":%d,"kind":"kind-%d","payload":"%s"}`, rowID, rowID, strings.Repeat(payload, 10)))
 }
 
+func reportColumnRetainedSemanticStreamBenchmarkStoredBlockBytes(b *testing.B, table memtable.Table, inputBytes int64) {
+	b.Helper()
+	iter := table.NewIterator(nil, nil)
+	defer func() { _ = iter.Close() }()
+	var storedBytes int64
+	var blocks int
+	for ; iter.Valid(); iter.Next() {
+		blocks++
+		storedBytes += int64(len(iter.UnsafeValue()))
+	}
+	if err := iter.Error(); err != nil {
+		b.Fatalf("iterate semantic-stream-v1 benchmark block table: %v", err)
+	}
+	if blocks == 0 {
+		b.Fatal("semantic-stream-v1 benchmark block table is empty")
+	}
+	b.ReportMetric(float64(storedBytes), "stored_block_B/op")
+	b.ReportMetric(float64(storedBytes)/float64(inputBytes), "stored/input")
+}
+
 func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareRootFastPath(b *testing.B) {
 	cfg := ColumnStoreConfig{
 		Enabled: true,
@@ -1147,6 +1168,11 @@ func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareRootFastPath(b *testin
 		}
 		if prepared.semanticStreamBlocks == nil {
 			b.Fatal("prepare semantic-stream-v1 documents did not return block table")
+		}
+		if i == 0 {
+			b.StopTimer()
+			reportColumnRetainedSemanticStreamBenchmarkStoredBlockBytes(b, prepared.semanticStreamBlocks, bytesPerIteration)
+			b.StartTimer()
 		}
 		resetCollectionRunTable(prepared.semanticStreamBlocks)
 	}
@@ -1179,6 +1205,11 @@ func BenchmarkColumnRetainedPayloadSemanticStreamV1PrepareNestedDeclaredPaths(b 
 		}
 		if prepared.semanticStreamBlocks == nil {
 			b.Fatal("prepare semantic-stream-v1 documents did not return block table")
+		}
+		if i == 0 {
+			b.StopTimer()
+			reportColumnRetainedSemanticStreamBenchmarkStoredBlockBytes(b, prepared.semanticStreamBlocks, bytesPerIteration)
+			b.StartTimer()
 		}
 		resetCollectionRunTable(prepared.semanticStreamBlocks)
 	}
