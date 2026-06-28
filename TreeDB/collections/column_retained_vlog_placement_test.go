@@ -516,6 +516,62 @@ func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderRawFallbackDoesN
 	}
 }
 
+func TestColumnRetainedPayloadSemanticStreamV1StoredBlockEncoderRawFallbackDoesNotAliasPooledScratch3223(t *testing.T) {
+	previousPool := columnRetainedSemanticStreamV1RawBlockScratchPool
+	columnRetainedSemanticStreamV1RawBlockScratchPool = make(chan []byte, columnRetainedSemanticStreamV1RawBlockScratchPoolSlots)
+	t.Cleanup(func() {
+		columnRetainedSemanticStreamV1RawBlockScratchPool = previousPool
+	})
+
+	_, docsA := retainedSemanticStreamDocuments(96)
+	_, docsB := retainedSemanticStreamDocumentsFrom(96, 96)
+	streamsA := retainedSemanticStreamTestStreamsFromDocuments(t, docsA)
+	streamsB := retainedSemanticStreamTestStreamsFromDocuments(t, docsB)
+
+	encoderA, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatalf("new stored block encoder A: %v", err)
+	}
+	blockA, err := encoderA.encodeStreamsWithRawLimit(len(docsA), streamsA, 1)
+	if err != nil {
+		encoderA.close()
+		t.Fatalf("encode raw fallback block A: %v", err)
+	}
+	if !bytes.HasPrefix(blockA, columnRetainedSemanticStreamV1BlockMagic) {
+		encoderA.close()
+		t.Fatalf("block A magic=%q want raw semantic-stream block", blockA[:len(columnRetainedSemanticStreamV1BlockMagic)])
+	}
+	blockACopy := append([]byte(nil), blockA...)
+	returnedScratchCap := cap(encoderA.rawBlockScratch)
+	if returnedScratchCap == 0 {
+		encoderA.close()
+		t.Fatal("encoder A did not retain raw block scratch")
+	}
+	encoderA.close()
+
+	encoderB, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
+	if err != nil {
+		t.Fatalf("new stored block encoder B: %v", err)
+	}
+	defer encoderB.close()
+	if cap(encoderB.rawBlockScratch) != returnedScratchCap {
+		t.Fatalf("encoder B scratch cap=%d want pooled cap %d", cap(encoderB.rawBlockScratch), returnedScratchCap)
+	}
+	if _, err := encoderB.encodeStreamsWithRawLimit(len(docsB), streamsB, 1); err != nil {
+		t.Fatalf("encode raw fallback block B: %v", err)
+	}
+	if !bytes.Equal(blockA, blockACopy) {
+		t.Fatal("raw fallback block A aliases pooled encoder scratch and changed after block B")
+	}
+	decodedA, err := decodeColumnRetainedSemanticStreamV1StoredBlock(blockA)
+	if err != nil {
+		t.Fatalf("decode raw fallback block A after pooled reuse: %v", err)
+	}
+	if !bytes.Equal(decodedA, blockACopy) {
+		t.Fatal("decoded raw fallback block A differs after pooled scratch reuse")
+	}
+}
+
 func TestColumnRetainedPayloadSemanticStreamV1RootFastPathPreparesDeclaredRows(t *testing.T) {
 	cfg := ColumnStoreConfig{
 		Enabled: true,
