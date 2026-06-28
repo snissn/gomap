@@ -186,7 +186,7 @@ func TestCompareDeadPerLive_ClampsNegativeInputs(t *testing.T) {
 }
 
 func TestLeafGenerationGroupedFrameInfo_LiveByteContributionKeepsSparseRefsNonZero(t *testing.T) {
-	info := leafGenerationGroupedFrameInfo{recordLen: 2, k: 4, rawLen: 4096}
+	info := leafGenerationGroupedFrameInfo{recordLen: 2, k: 4, rawLen: 4096, offsets: make([]uint32, 5)}
 	for i := 0; i <= info.k; i++ {
 		info.offsets[i] = uint32(i * 1024)
 	}
@@ -198,6 +198,13 @@ func TestLeafGenerationGroupedFrameInfo_LiveByteContributionKeepsSparseRefsNonZe
 		if got == 0 {
 			t.Fatalf("liveByteContribution(%d)=0, want non-zero so a referenced grouped sub-record keeps its segment live", i)
 		}
+	}
+}
+
+func TestLeafGenerationGroupedFrameInfo_LiveByteContributionRejectsShortOffsets(t *testing.T) {
+	info := leafGenerationGroupedFrameInfo{recordLen: 2, k: 4, rawLen: 4096, offsets: make([]uint32, 4)}
+	if got, ok := info.liveByteContribution(3); ok || got != 0 {
+		t.Fatalf("liveByteContribution(3)=(%d,%t), want (0,false)", got, ok)
 	}
 }
 

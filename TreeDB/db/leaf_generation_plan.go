@@ -599,7 +599,7 @@ type leafGenerationGroupedFrameInfo struct {
 	recordLen uint32
 	k         int
 	rawLen    uint32
-	offsets   [valuelog.MaxFrameK + 1]uint32
+	offsets   []uint32
 }
 
 type leafGenerationGroupedFrameScanCache struct {
@@ -673,6 +673,9 @@ func (info leafGenerationGroupedFrameInfo) liveByteContribution(subIndex uint16)
 			contribution = 1
 		}
 		return contribution, true
+	}
+	if idx+1 >= len(info.offsets) {
+		return 0, false
 	}
 	startRaw := info.offsets[idx]
 	endRaw := info.offsets[idx+1]
@@ -752,7 +755,11 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 		return leafGenerationGroupedFrameInfo{}, false, err
 	}
 
-	info := leafGenerationGroupedFrameInfo{recordLen: physicalLen, k: k}
+	info := leafGenerationGroupedFrameInfo{
+		recordLen: physicalLen,
+		k:         k,
+		offsets:   make([]uint32, k+1),
+	}
 	ridOff := valuelog.FrameHeaderSize
 	for i := 0; i < k; i++ {
 		if binary.LittleEndian.Uint64(prefix[ridOff:ridOff+8]) == 0 {
