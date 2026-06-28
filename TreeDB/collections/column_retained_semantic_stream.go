@@ -24,6 +24,7 @@ import (
 
 const columnRetainedSemanticStreamV1BlockRows = 4096
 const maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes = 512 << 20
+const columnRetainedSemanticStreamV1ZSTDWindowSize = 1 << 20
 const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
 const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
 const minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock = 512
@@ -1184,6 +1185,8 @@ func newColumnRetainedSemanticStreamV1StoredBlockEncoder() (*columnRetainedSeman
 		zstd.WithEncoderLevel(zstd.SpeedFastest),
 		zstd.WithEncoderCRC(false),
 		zstd.WithEncoderConcurrency(1),
+		zstd.WithWindowSize(columnRetainedSemanticStreamV1ZSTDWindowSize),
+		zstd.WithLowerEncoderMem(true),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("collections: create semantic-stream-v1 retained block zstd encoder: %w", err)
