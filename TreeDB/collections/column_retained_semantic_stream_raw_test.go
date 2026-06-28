@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"testing"
+	"unsafe"
 
 	"github.com/buger/jsonparser"
 )
@@ -82,4 +83,68 @@ func TestColumnRetainedSemanticStreamV1JSONParserRawValueFallsBackOnInvalidStrin
 	if string(raw) != `"value"` {
 		t.Fatalf("fallback raw=%q want quoted value", raw)
 	}
+}
+
+func TestColumnRetainedSemanticStreamV1LookupStringDoesNotEscapeRetainedPaths3204(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "declared", Path: "declared", ValueType: ColumnStoreValueInt64},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids := [][]byte{[]byte("doc-0")}
+	plan, ok := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, 1)
+	if !ok {
+		t.Fatal("root fast path plan not available")
+	}
+	document := []byte(`{"declared":7,"retained":2,"":3}`)
+	streams := newColumnRetainedSemanticStreamStreams()
+	values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, 0, 1, streams)
+	if err != nil {
+		t.Fatalf("collect root fast path document: %v", err)
+	}
+	if len(values) != 1 || values[0].Int64 != 7 {
+		t.Fatalf("declared values=%+v want declared int64 7", values)
+	}
+	if stream := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"declared"})]; stream != nil {
+		t.Fatalf("declared key leaked into retained streams: %+v", stream.segments)
+	}
+	retainedStream := streams.byKey[columnRetainedSemanticStreamPathKey([]string{"retained"})]
+	if retainedStream == nil {
+		t.Fatal("retained key missing from retained streams")
+	}
+	emptyKeyStream := streams.byKey[columnRetainedSemanticStreamPathKey([]string{""})]
+	if emptyKeyStream == nil {
+		t.Fatal("empty JSON key missing from retained streams")
+	}
+	if got := retainedStream.segments; len(got) != 1 || got[0] != "retained" {
+		t.Fatalf("retained stream segments=%q want [retained]", got)
+	}
+	if got := emptyKeyStream.segments; len(got) != 1 || got[0] != "" {
+		t.Fatalf("empty-key stream segments=%q want empty segment", got)
+	}
+	if columnRetainedSemanticStreamV1TestStringAliasesBytes(retainedStream.segments[0], document) {
+		t.Fatal("retained path segment aliases mutable JSON source")
+	}
+
+	start := bytes.Index(document, []byte(`"retained"`))
+	if start < 0 {
+		t.Fatal("retained key not found in source document")
+	}
+	copy(document[start+1:], []byte("mutained"))
+	if got := retainedStream.segments[0]; got != "retained" {
+		t.Fatalf("retained path changed after source mutation: %q", got)
+	}
+}
+
+func columnRetainedSemanticStreamV1TestStringAliasesBytes(value string, source []byte) bool {
+	if len(value) == 0 || len(source) == 0 {
+		return false
+	}
+	valuePtr := uintptr(unsafe.Pointer(unsafe.StringData(value)))
+	sourcePtr := uintptr(unsafe.Pointer(unsafe.SliceData(source)))
+	return valuePtr >= sourcePtr && valuePtr < sourcePtr+uintptr(len(source))
 }
