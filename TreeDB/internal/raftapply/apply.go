@@ -227,7 +227,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				Result:            duplicate,
 			}); err != nil {
 				code, _ := ErrorCodeOf(err)
-				return reject(entry.Digest, code, err)
+				return recoveryRequired(entry.Digest, code, err)
 			}
 			if h.opts.ProgressStore != nil {
 				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{

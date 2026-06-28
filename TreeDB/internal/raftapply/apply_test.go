@@ -161,6 +161,40 @@ func TestIdempotencyDuplicateProgressFailureRequiresRecovery(t *testing.T) {
 	}
 }
 
+func TestIdempotencyDuplicateResultStoreFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	raw := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:duplicate-result-failure", testCreateCollectionMetaOptions{})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 1 {
+		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	}
+
+	duplicate, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   recordDuplicateApplyResultStoreFailAfterPreflight{base: results},
+	})
+	assertRecoveryRequired(t, duplicate, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if results.Len() != 1 {
+		t.Fatalf("result records after duplicate result failure=%d, want 1", results.Len())
+	}
+	if progress.Len() != 1 {
+		t.Fatalf("progress records after duplicate result failure=%d, want 1", progress.Len())
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after duplicate result failure=%d, want %d", got, len(beforeFrames))
+	}
+}
+
 func TestIdempotencyDuplicateRecordsCurrentAppliedCommandLSN(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -2118,6 +2152,26 @@ func (recordApplyResultStoreFailAfterPreflight) CheckCanRecordApplyResult(ApplyR
 
 func (recordApplyResultStoreFailAfterPreflight) RecordApplyResult(ApplyResultRecordV1) error {
 	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "result store unavailable after apply")
+}
+
+type recordDuplicateApplyResultStoreFailAfterPreflight struct {
+	base *MemoryApplyResultStore
+}
+
+func (s recordDuplicateApplyResultStoreFailAfterPreflight) LookupApplyResult(id raftentry.ApplyEntryID) (ApplyResultRecordV1, bool, error) {
+	return s.base.LookupApplyResult(id)
+}
+
+func (s recordDuplicateApplyResultStoreFailAfterPreflight) LookupApplyResultByIdempotencyKey(key []byte) (ApplyResultRecordV1, bool, error) {
+	return s.base.LookupApplyResultByIdempotencyKey(key)
+}
+
+func (s recordDuplicateApplyResultStoreFailAfterPreflight) CheckCanRecordApplyResult(record ApplyResultRecordV1) error {
+	return s.base.CheckCanRecordApplyResult(record)
+}
+
+func (recordDuplicateApplyResultStoreFailAfterPreflight) RecordApplyResult(ApplyResultRecordV1) error {
+	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "result store unavailable during duplicate apply")
 }
 
 type recordProgressStoreFailAfterPreflight struct{}
