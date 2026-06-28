@@ -104,7 +104,7 @@ func TestColumnRetainedSemanticStreamV1LookupStringDoesNotEscapeRetainedPaths320
 	document := []byte(`{"declared":7,"retained":2,"":3}`)
 	streams := newColumnRetainedSemanticStreamStreams()
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
-	values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, 0, 1, streams, pathInterner)
+	values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, 0, 1, streams, pathInterner, nil)
 	if err != nil {
 		t.Fatalf("collect root fast path document: %v", err)
 	}
@@ -190,6 +190,89 @@ func TestColumnRetainedSemanticStreamV1LocatorArenaMatchesStandalone3208(t *test
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1DeclaredRowArenaOwnsAndCapsRows3210(t *testing.T) {
+	cfg := ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "declared", Path: "declared", ValueType: ColumnStoreValueInt64},
+			{Name: "label", Path: "label", ValueType: ColumnStoreValueString},
+		},
+		RetainedPayload:         ColumnRetainedPayloadNonColumn,
+		RetainedPayloadEncoding: ColumnRetainedPayloadEncodingSemanticStreamV1,
+		Reconstruction:          ColumnReconstructionRetainedPayloadAndColumns,
+	}
+	ids := [][]byte{[]byte("doc-0"), []byte("doc-1")}
+	documents := [][]byte{
+		[]byte(`{"declared":7,"label":"alpha","retained":1}`),
+		[]byte(`{"declared":8,"label":"bravo","retained":2}`),
+	}
+	prepared, err := prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg, ids, documents)
+	if err != nil {
+		t.Fatalf("prepare semantic-stream-v1 documents: %v", err)
+	}
+	defer resetCollectionRunTable(prepared.semanticStreamBlocks)
+
+	if !prepared.declaredRowsReady {
+		t.Fatal("declared rows were not prepared")
+	}
+	if len(prepared.declaredRows) != len(documents) {
+		t.Fatalf("declared rows=%d want %d", len(prepared.declaredRows), len(documents))
+	}
+	first := prepared.declaredRows[0]
+	second := prepared.declaredRows[1]
+	if got := string(first.ID); got != "doc-0" {
+		t.Fatalf("first row ID=%q want doc-0", got)
+	}
+	if len(first.Values) != 2 || first.Values[0].Int64 != 7 || first.Values[1].String != "alpha" {
+		t.Fatalf("first row values=%+v want declared=7 label=alpha", first.Values)
+	}
+	if len(second.Values) != 2 || second.Values[0].Int64 != 8 || second.Values[1].String != "bravo" {
+		t.Fatalf("second row values=%+v want declared=8 label=bravo", second.Values)
+	}
+	if columnRetainedSemanticStreamV1TestBytesAliasBytes(first.ID, ids[0]) {
+		t.Fatal("declared row ID aliases mutable input ID")
+	}
+	if columnRetainedSemanticStreamV1TestStringAliasesBytes(first.Values[1].String, documents[0]) {
+		t.Fatal("declared string aliases mutable input document")
+	}
+	if cap(first.ID) != len(first.ID) {
+		t.Fatalf("first row ID cap=%d len=%d; appends must not reach the shared arena", cap(first.ID), len(first.ID))
+	}
+	if cap(first.Values) != len(first.Values) {
+		t.Fatalf("first row values cap=%d len=%d; appends must not reach the shared arena", cap(first.Values), len(first.Values))
+	}
+
+	secondIDBefore := append([]byte(nil), second.ID...)
+	secondValuesBefore := append([]columnDeclaredValue(nil), second.Values...)
+	appendedID := append(first.ID, 'x')
+	if unsafe.SliceData(appendedID) == unsafe.SliceData(first.ID) {
+		t.Fatal("append to declared row ID reused the shared arena backing")
+	}
+	appendedValues := append(first.Values, columnDeclaredValue{Int64: 99})
+	if unsafe.SliceData(appendedValues) == unsafe.SliceData(first.Values) {
+		t.Fatal("append to declared row values reused the shared arena backing")
+	}
+	if !bytes.Equal(second.ID, secondIDBefore) {
+		t.Fatalf("append to first row ID corrupted second ID: got %q want %q", second.ID, secondIDBefore)
+	}
+	if len(second.Values) != len(secondValuesBefore) || second.Values[0].Int64 != secondValuesBefore[0].Int64 || second.Values[1].String != secondValuesBefore[1].String {
+		t.Fatalf("append to first row values corrupted second values: got %+v want %+v", second.Values, secondValuesBefore)
+	}
+
+	ids[0][0] = 'X'
+	labelStart := bytes.Index(documents[0], []byte("alpha"))
+	if labelStart < 0 {
+		t.Fatal("label token not found in source document")
+	}
+	copy(documents[0][labelStart:], []byte("omega"))
+	if got := string(first.ID); got != "doc-0" {
+		t.Fatalf("declared row ID changed after source ID mutation: %q", got)
+	}
+	if got := first.Values[1].String; got != "alpha" {
+		t.Fatalf("declared string changed after source document mutation: %q", got)
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1PathSegmentInternerOwnsAndReusesSegments3206(t *testing.T) {
 	interner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 	source := []byte("shared")
@@ -230,7 +313,7 @@ func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesRetainedTraversa
 	streams := newColumnRetainedSemanticStreamStreams()
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 	for row, document := range documents {
-		values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, uint64(row), len(documents), streams, pathInterner)
+		values, err := collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg, plan, document, uint64(row), len(documents), streams, pathInterner, nil)
 		if err != nil {
 			t.Fatalf("collect row %d: %v", row, err)
 		}
@@ -321,6 +404,15 @@ func columnRetainedSemanticStreamV1TestStringAliasesBytes(value string, source [
 		return false
 	}
 	valuePtr := uintptr(unsafe.Pointer(unsafe.StringData(value)))
+	sourcePtr := uintptr(unsafe.Pointer(unsafe.SliceData(source)))
+	return valuePtr >= sourcePtr && valuePtr < sourcePtr+uintptr(len(source))
+}
+
+func columnRetainedSemanticStreamV1TestBytesAliasBytes(value, source []byte) bool {
+	if len(value) == 0 || len(source) == 0 {
+		return false
+	}
+	valuePtr := uintptr(unsafe.Pointer(unsafe.SliceData(value)))
 	sourcePtr := uintptr(unsafe.Pointer(unsafe.SliceData(source)))
 	return valuePtr >= sourcePtr && valuePtr < sourcePtr+uintptr(len(source))
 }
