@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unsafe"
 
 	"github.com/buger/jsonparser"
 	"github.com/golang/snappy"
@@ -480,8 +479,7 @@ func collectColumnRetainedSemanticStreamV1RootFastPathDocument(cfg ColumnStoreCo
 	var retainedRootValueStack [8]retainedRootValue
 	retainedRootValues := retainedRootValueStack[:0]
 	err := jsonparser.ObjectEach(document, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
-		lookupPath := columnRetainedSemanticStreamV1LookupString(key)
-		if indexes := plan.declaredColumnIndexesByPath[lookupPath]; len(indexes) > 0 {
+		if indexes := plan.declaredColumnIndexesByPath[string(key)]; len(indexes) > 0 {
 			if plan.declaredRowsReady {
 				for _, colIdx := range indexes {
 					valuesRaw[colIdx] = jsonParserIndexValue{raw: value, valueType: dataType}
@@ -561,14 +559,6 @@ func columnRetainedSemanticStreamV1JSONParserQuotedString(source []byte, value [
 		return nil, false
 	}
 	return source[valueStartOffset:valueEndOffset], true
-}
-
-func columnRetainedSemanticStreamV1LookupString(value []byte) string {
-	if len(value) == 0 {
-		return ""
-	}
-	// Borrow only for immediate map lookups; callers must not retain the string.
-	return unsafe.String(unsafe.SliceData(value), len(value))
 }
 
 func encodeColumnRetainedSemanticStreamV1Locator(blockKey []byte, row uint64) []byte {
@@ -1339,10 +1329,9 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 	var retainedObjectValueStack [8]retainedObjectValue
 	retainedObjectValues := retainedObjectValueStack[:0]
 	if err := jsonparser.ObjectEach(raw, func(key, value []byte, dataType jsonparser.ValueType, valueEndOffset int) error {
-		lookupPath := columnRetainedSemanticStreamV1LookupString(key)
 		var childSkip *columnRetainedSemanticStreamV1RetainedSkipTrie
 		if skip != nil {
-			childSkip = skip.children[lookupPath]
+			childSkip = skip.children[string(key)]
 		}
 		if childSkip != nil && childSkip.terminal {
 			return nil
