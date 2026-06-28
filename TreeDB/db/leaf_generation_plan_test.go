@@ -186,7 +186,7 @@ func TestCompareDeadPerLive_ClampsNegativeInputs(t *testing.T) {
 }
 
 func TestLeafGenerationGroupedFrameInfo_LiveByteContributionKeepsSparseRefsNonZero(t *testing.T) {
-	info := leafGenerationGroupedFrameInfo{recordLen: 2, k: 4, rawLen: 4096}
+	info := leafGenerationGroupedFrameInfo{recordLen: 2, k: 4, rawLen: 4096, offsets: make([]uint32, 5)}
 	for i := 0; i <= info.k; i++ {
 		info.offsets[i] = uint32(i * 1024)
 	}
