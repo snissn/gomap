@@ -26,6 +26,7 @@ const columnRetainedSemanticStreamV1BlockRows = 4096
 const maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes = 512 << 20
 const columnRetainedSemanticStreamV1ZSTDWindowSize = 1 << 20
 const columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes = 8 << 20
+const columnRetainedSemanticStreamV1RawBlockScratchPoolSlots = 4
 const defaultColumnRetainedSemanticStreamV1DecodeCacheBlocks = 16
 const minColumnRetainedSemanticStreamV1DecodeCacheRows = 64
 const minColumnRetainedSemanticStreamV1DecodeCacheRowsPerBlock = 512
@@ -39,6 +40,8 @@ var (
 	columnRetainedSemanticStreamV1BlockZSTDMagic = []byte("crss1zst\x00")
 	columnRetainedSemanticStreamV1LocatorMagic   = []byte("crss1loc\x00")
 )
+
+var columnRetainedSemanticStreamV1RawBlockScratchPool = make(chan []byte, columnRetainedSemanticStreamV1RawBlockScratchPoolSlots)
 
 type columnRetainedSemanticStreamPath struct {
 	segments                []string
@@ -1233,16 +1236,43 @@ func newColumnRetainedSemanticStreamV1StoredBlockEncoder() (*columnRetainedSeman
 	if err != nil {
 		return nil, fmt.Errorf("collections: create semantic-stream-v1 retained block zstd encoder: %w", err)
 	}
-	return &columnRetainedSemanticStreamV1StoredBlockEncoder{enc: enc}, nil
+	return &columnRetainedSemanticStreamV1StoredBlockEncoder{
+		enc:             enc,
+		rawBlockScratch: getColumnRetainedSemanticStreamV1RawBlockScratch(),
+	}, nil
 }
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) close() {
-	if e == nil || e.enc == nil {
+	if e == nil {
 		return
 	}
-	e.enc.Close()
-	e.enc = nil
+	putColumnRetainedSemanticStreamV1RawBlockScratch(e.rawBlockScratch)
 	e.rawBlockScratch = nil
+	if e.enc != nil {
+		e.enc.Close()
+		e.enc = nil
+	}
+}
+
+func getColumnRetainedSemanticStreamV1RawBlockScratch() []byte {
+	select {
+	case pooled := <-columnRetainedSemanticStreamV1RawBlockScratchPool:
+		if cap(pooled) <= columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes {
+			return pooled[:0]
+		}
+	default:
+	}
+	return nil
+}
+
+func putColumnRetainedSemanticStreamV1RawBlockScratch(scratch []byte) {
+	if scratch == nil || cap(scratch) == 0 || cap(scratch) > columnRetainedSemanticStreamV1RawBlockScratchMaxRetainedBytes {
+		return
+	}
+	select {
+	case columnRetainedSemanticStreamV1RawBlockScratchPool <- scratch[:0]:
+	default:
+	}
 }
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeStreamsWithRawLimit(rows int, streams *columnRetainedSemanticStreamStreams, compressedRawLimit int) ([]byte, error) {
