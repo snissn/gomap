@@ -201,6 +201,13 @@ func TestLeafGenerationGroupedFrameInfo_LiveByteContributionKeepsSparseRefsNonZe
 	}
 }
 
+func TestLeafGenerationGroupedFrameInfo_LiveByteContributionRejectsShortOffsets(t *testing.T) {
+	info := leafGenerationGroupedFrameInfo{recordLen: 2, k: 4, rawLen: 4096, offsets: make([]uint32, 4)}
+	if got, ok := info.liveByteContribution(3); ok || got != 0 {
+		t.Fatalf("liveByteContribution(3)=(%d,%t), want (0,false)", got, ok)
+	}
+}
+
 func TestLeafGenerationGroupedFrameScanCache_BoundsEntries(t *testing.T) {
 	cache := newLeafGenerationGroupedFrameScanCache(2)
 	first := groupedRecordKey{fileID: 1, start: 100}
