@@ -93,6 +93,97 @@ func TestColumnTypedColumnDenseInt64SpanSingleCodeTriplePreapply3175(t *testing.
 	}
 }
 
+func TestColumnTypedColumnDenseInt64SpanGlobalCodesSortedMerge3175(t *testing.T) {
+	parts := []columnTypedColumnPhysicalQueryPart{
+		{
+			DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
+				Cardinality: 3,
+				Dictionary:  []string{"did:a", "did:c", "did:e"},
+			},
+		},
+		{
+			DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
+				Cardinality: 3,
+				Dictionary:  []string{"did:b", "did:c", "did:d"},
+			},
+		},
+		{
+			DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
+				Cardinality: 2,
+				Dictionary:  []string{"did:a", "did:f"},
+			},
+		},
+	}
+
+	ok, err := prepareColumnTypedColumnDenseInt64SpanSortedGlobalCodes(parts)
+	if err != nil {
+		t.Fatalf("prepare sorted global codes: %v", err)
+	}
+	if !ok {
+		t.Fatal("prepare sorted global codes declined sorted dictionaries")
+	}
+	wantDictionary := []string{"did:a", "did:b", "did:c", "did:d", "did:e", "did:f"}
+	wantRanks := [][]uint32{
+		{0, 2, 4},
+		{1, 2, 3},
+		{0, 5},
+	}
+	assertColumnTypedColumnDenseInt64SpanGlobalCodes3175(t, parts, wantDictionary, wantRanks)
+}
+
+func TestColumnTypedColumnDenseInt64SpanGlobalCodesFallbackUnsorted3175(t *testing.T) {
+	parts := []columnTypedColumnPhysicalQueryPart{
+		{
+			DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
+				Cardinality: 3,
+				Dictionary:  []string{"did:c", "did:a", "did:e"},
+			},
+		},
+		{
+			DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{
+				Cardinality: 2,
+				Dictionary:  []string{"did:b", "did:a"},
+			},
+		},
+	}
+
+	ok, err := prepareColumnTypedColumnDenseInt64SpanSortedGlobalCodes(parts)
+	if err != nil {
+		t.Fatalf("prepare sorted global codes: %v", err)
+	}
+	if ok {
+		t.Fatal("sorted global codes accepted unsorted dictionaries")
+	}
+	if err := prepareColumnTypedColumnDenseInt64SpanGlobalCodes(parts); err != nil {
+		t.Fatalf("prepare fallback global codes: %v", err)
+	}
+	wantDictionary := []string{"did:a", "did:b", "did:c", "did:e"}
+	wantRanks := [][]uint32{
+		{2, 0, 3},
+		{1, 0},
+	}
+	assertColumnTypedColumnDenseInt64SpanGlobalCodes3175(t, parts, wantDictionary, wantRanks)
+}
+
+func assertColumnTypedColumnDenseInt64SpanGlobalCodes3175(tb testing.TB, parts []columnTypedColumnPhysicalQueryPart, wantDictionary []string, wantRanks [][]uint32) {
+	tb.Helper()
+	if len(parts) != len(wantRanks) {
+		tb.Fatalf("parts=%d want rank rows=%d", len(parts), len(wantRanks))
+	}
+	for partIdx := range parts {
+		dense := parts[partIdx].DenseInt64Span
+		if dense == nil {
+			tb.Fatalf("part %d missing dense state", partIdx)
+		}
+		if !slices.Equal(dense.GlobalDictionary, wantDictionary) {
+			tb.Fatalf("part %d global dictionary=%v want %v", partIdx, dense.GlobalDictionary, wantDictionary)
+		}
+		if !slices.Equal(dense.GlobalRanks, wantRanks[partIdx]) {
+			tb.Fatalf("part %d global ranks=%v want %v", partIdx, dense.GlobalRanks, wantRanks[partIdx])
+		}
+	}
+}
+
 func BenchmarkColumnPhysicalQ5DenseTypedColumn1950(b *testing.B) {
 	events := columnPhysicalQ5DenseBenchmarkEvents1950(16_384)
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(b, nil, [][]columnPhysicalJSONBenchParityEventP0{events})

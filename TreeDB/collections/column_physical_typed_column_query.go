@@ -1557,6 +1557,14 @@ func columnTypedColumnDenseGroupCountDistinctRowRank(column *columnTypedColumnDe
 }
 
 func prepareColumnTypedColumnDenseInt64SpanGlobalCodes(parts []columnTypedColumnPhysicalQueryPart) error {
+	ok, err := prepareColumnTypedColumnDenseInt64SpanSortedGlobalCodes(parts)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+
 	dictionary, ranks, err := columnTypedColumnDenseInt64SpanGlobalDictionary(parts)
 	if err != nil {
 		return err
@@ -1582,6 +1590,92 @@ func prepareColumnTypedColumnDenseInt64SpanGlobalCodes(parts []columnTypedColumn
 		dense.GlobalDictionary = dictionary
 	}
 	return nil
+}
+
+func prepareColumnTypedColumnDenseInt64SpanSortedGlobalCodes(parts []columnTypedColumnPhysicalQueryPart) (bool, error) {
+	capacity, ok, err := columnTypedColumnDenseInt64SpanSortedDictionaryCapacity(parts)
+	if err != nil || !ok {
+		return ok, err
+	}
+	dictionary, ranksByPart, ok, err := columnTypedColumnDenseInt64SpanSortedGlobalRanks(parts, capacity)
+	if err != nil || !ok {
+		return ok, err
+	}
+	for partIdx := range parts {
+		dense := parts[partIdx].DenseInt64Span
+		dense.GlobalRanks = ranksByPart[partIdx]
+		dense.GlobalDictionary = dictionary
+	}
+	return true, nil
+}
+
+func columnTypedColumnDenseInt64SpanSortedDictionaryCapacity(parts []columnTypedColumnPhysicalQueryPart) (int, bool, error) {
+	capacity := 0
+	maxInt := int(^uint(0) >> 1)
+	for partIdx := range parts {
+		dense := parts[partIdx].DenseInt64Span
+		if dense == nil {
+			return 0, false, fmt.Errorf("collections: dense typed-column int64-span missing prepared part %d", partIdx)
+		}
+		if dense.Cardinality != len(dense.Dictionary) {
+			return 0, false, nil
+		}
+		if len(dense.Dictionary) > maxInt-capacity {
+			return 0, false, fmt.Errorf("collections: dense typed-column int64-span dictionary capacity exceeds int")
+		}
+		capacity += len(dense.Dictionary)
+	}
+	return capacity, true, nil
+}
+
+func columnTypedColumnDenseInt64SpanSortedGlobalRanks(parts []columnTypedColumnPhysicalQueryPart, capacity int) ([]string, [][]uint32, bool, error) {
+	positions := make([]int, len(parts))
+	ranksByPart := make([][]uint32, len(parts))
+	for partIdx := range parts {
+		dense := parts[partIdx].DenseInt64Span
+		if dense == nil {
+			return nil, nil, false, fmt.Errorf("collections: dense typed-column int64-span missing prepared part %d", partIdx)
+		}
+		ranksByPart[partIdx] = make([]uint32, dense.Cardinality)
+	}
+
+	dictionary := make([]string, 0, min(capacity, 1<<16))
+	for {
+		next := ""
+		haveNext := false
+		for partIdx := range parts {
+			dense := parts[partIdx].DenseInt64Span
+			pos := positions[partIdx]
+			if pos >= len(dense.Dictionary) {
+				continue
+			}
+			if pos > 0 && dense.Dictionary[pos-1] >= dense.Dictionary[pos] {
+				return nil, nil, false, nil
+			}
+			value := dense.Dictionary[pos]
+			if !haveNext || value < next {
+				next = value
+				haveNext = true
+			}
+		}
+		if !haveNext {
+			break
+		}
+		if uint64(len(dictionary)) > uint64(^uint32(0)) {
+			return nil, nil, false, fmt.Errorf("collections: dense typed-column int64-span global dictionary cardinality=%d exceeds uint32", len(dictionary))
+		}
+		globalRank := uint32(len(dictionary))
+		dictionary = append(dictionary, next)
+		for partIdx := range parts {
+			dense := parts[partIdx].DenseInt64Span
+			pos := positions[partIdx]
+			if pos < len(dense.Dictionary) && dense.Dictionary[pos] == next {
+				ranksByPart[partIdx][pos] = globalRank
+				positions[partIdx] = pos + 1
+			}
+		}
+	}
+	return dictionary, ranksByPart, true, nil
 }
 
 func columnTypedColumnDenseInt64SpanGlobalDictionary(parts []columnTypedColumnPhysicalQueryPart) ([]string, map[string]uint32, error) {
