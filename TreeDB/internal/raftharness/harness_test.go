@@ -3,6 +3,7 @@ package raftharness
 import (
 	"encoding/binary"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -286,6 +287,30 @@ func TestMixedMutationSequenceSurvivesReopenAndCatchUp(t *testing.T) {
 	assertDocumentCity(t, h, "node-b", "users", "u1", "sfo")
 	assertDocumentMissing(t, h, "node-a", "users", "u2")
 	assertDocumentMissing(t, h, "node-b", "users", "u2")
+}
+
+func TestOpenRejectsInvalidNodeIDBeforeOpeningPath(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	escaped := filepath.Join(base, "outside")
+	h, err := Open(Options{
+		RootDir: root,
+		Nodes: []NodeConfig{
+			{ID: "../../outside"},
+		},
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if err == nil {
+		if h != nil {
+			_ = h.Close()
+		}
+		t.Fatalf("Open with invalid node id succeeded, want error")
+	}
+	if _, statErr := os.Stat(escaped); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("escaped node path stat err=%v, want not exist", statErr)
+	}
 }
 
 func openTestHarness(t testing.TB) *Harness {

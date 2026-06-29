@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -360,8 +361,8 @@ func normalizeNodeConfigs(configs []NodeConfig) ([]NodeConfig, error) {
 	out := make([]NodeConfig, 0, len(configs))
 	seen := make(map[raftcluster.NodeID]struct{}, len(configs))
 	for _, cfg := range configs {
-		if cfg.ID == "" {
-			return nil, fmt.Errorf("raftharness: missing node id")
+		if err := validateNodeIDPathSegment(cfg.ID); err != nil {
+			return nil, err
 		}
 		if _, ok := seen[cfg.ID]; ok {
 			return nil, fmt.Errorf("raftharness: duplicate node id %s", cfg.ID)
@@ -374,6 +375,30 @@ func normalizeNodeConfigs(configs []NodeConfig) ([]NodeConfig, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+func validateNodeIDPathSegment(id raftcluster.NodeID) error {
+	raw := string(id)
+	if raw == "" {
+		return fmt.Errorf("raftharness: missing node id")
+	}
+	if strings.TrimSpace(raw) != raw {
+		return fmt.Errorf("raftharness: invalid node id %q: leading or trailing whitespace", raw)
+	}
+	if raw == "." || raw == ".." {
+		return fmt.Errorf("raftharness: invalid node id %q: not a valid path segment", raw)
+	}
+	for _, r := range raw {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.':
+		default:
+			return fmt.Errorf("raftharness: invalid node id %q: unsupported character %q", raw, r)
+		}
+	}
+	return nil
 }
 
 func peersForNodeConfigs(configs []NodeConfig) []raftcluster.Peer {
