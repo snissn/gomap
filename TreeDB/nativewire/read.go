@@ -471,12 +471,12 @@ func splitCursorBatch(records []collections.DocumentRecord, start int, limits Cu
 	return end, bytes
 }
 
-func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, start int, limits CursorLimits) (end, bytes int, err error) {
+func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, start int, limits CursorLimits, readMeta ReadMetadata) (end, bytes int, err error) {
 	end, bytes = splitCursorBatch(records, start, limits, s.defaultCursorBatchSize)
 	if end <= start {
 		return end, bytes, nil
 	}
-	if err := s.checkCursorResponseBounds(records[start:end], true); err == nil {
+	if err := s.checkCursorResponseBounds(records[start:end], true, readMeta); err == nil {
 		return end, bytes, nil
 	}
 	lo, hi := start, end
@@ -484,7 +484,7 @@ func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, s
 	for lo < hi {
 		mid := lo + (hi-lo+1)/2
 		midBytes := documentRecordsBytes(records[start:mid])
-		err := s.checkCursorResponseBounds(records[start:mid], true)
+		err := s.checkCursorResponseBounds(records[start:mid], true, readMeta)
 		if err == nil {
 			bestEnd, bestBytes = mid, midBytes
 			lo = mid
@@ -498,13 +498,16 @@ func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, s
 	return bestEnd, bestBytes, nil
 }
 
-func (s *Server) checkCursorResponseBounds(records []collections.DocumentRecord, includeTruncated bool) error {
+func (s *Server) checkCursorResponseBounds(records []collections.DocumentRecord, includeTruncated bool, readMeta ReadMetadata) error {
 	if s == nil {
 		return nil
 	}
 	if s.limits.MaxSections > 0 {
 		sections := 3
 		if includeTruncated {
+			sections++
+		}
+		if readMeta.Valid {
 			sections++
 		}
 		if sections > s.limits.MaxSections {
@@ -536,6 +539,16 @@ func (s *Server) checkCursorResponseBounds(records []collections.DocumentRecord,
 	}
 	if includeTruncated {
 		bodyLen, err = addResponseLen(bodyLen, sectionEnvelopeLen(iwire.SectionTruncated, 1))
+		if err != nil {
+			return err
+		}
+	}
+	if readMeta.Valid {
+		metaSection := readMetaSection(readMeta)
+		if err := s.checkCursorSectionLen("response_meta", len(metaSection.Bytes)); err != nil {
+			return err
+		}
+		bodyLen, err = addResponseLen(bodyLen, sectionEnvelopeLen(metaSection.ID, len(metaSection.Bytes)))
 		if err != nil {
 			return err
 		}

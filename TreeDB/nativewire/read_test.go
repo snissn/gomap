@@ -158,6 +158,42 @@ func TestReadStrongConsistencyRequiresCoordinator(t *testing.T) {
 	}
 }
 
+func TestReadConsistencyPolicyRejectedForUnsupportedReadCommands(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	handle, err := client.OpenCollection(ctx, "users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		commandID iwire.CommandID
+		sections  []iwire.Section
+	}{
+		{name: "list_collections", commandID: iwire.CommandListCollections},
+		{name: "list_indexes", commandID: iwire.CommandListIndexes, sections: []iwire.Section{collectionNameRef("users")}},
+		{name: "open_collection", commandID: iwire.CommandOpenCollection, sections: []iwire.Section{collectionNameRef("users")}},
+		{name: "close_collection", commandID: iwire.CommandCloseCollection, sections: []iwire.Section{collectionHandleRef(handle)}},
+		{name: "stats", commandID: iwire.CommandStats},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sections := append([]iwire.Section(nil), tt.sections...)
+			sections = append(sections, consistencyPolicySection(ConsistencyLinearizable))
+			_, err := client.commandSections(ctx, tt.commandID, sections...)
+			if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+				t.Fatalf("%s err=%v want unsupported_feature", tt.name, err)
+			}
+		})
+	}
+}
+
 func TestReadConsistencyPolicyRejectsMalformedOrUnknown(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -773,6 +809,33 @@ func TestOpenScanReportsTruncatedRetainedWindow(t *testing.T) {
 	}
 	if len(first.IDs) != 1 || first.Cursor.CursorID != 0 || first.Cursor.HasMore || !first.Truncated {
 		t.Fatalf("first=%+v want one truncated terminal batch", first)
+	}
+}
+
+func TestOpenScanReadMetadataCountsTowardSectionLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{
+		Collections:      mgr,
+		Backend:          db,
+		MaxScanDocuments: 1,
+		Limits:           iwire.Limits{MaxSections: 4},
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err = client.OpenScan(ctx, "users", CursorLimits{MaxItems: 10})
+	if !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("OpenScan err=%v want resource exhausted", err)
 	}
 }
 

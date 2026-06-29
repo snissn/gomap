@@ -57,6 +57,35 @@ func appendReadMetaSection(sections []iwire.Section, meta ReadMetadata) []iwire.
 	return append(sections, readMetaSection(meta))
 }
 
+func coordinatedReadCommand(commandID iwire.CommandID) bool {
+	switch commandID {
+	case iwire.CommandGetMany,
+		iwire.CommandIndexLookup,
+		iwire.CommandIndexRange,
+		iwire.CommandOpenScan,
+		iwire.CommandCursorNext,
+		iwire.CommandCursorClose:
+		return true
+	default:
+		return false
+	}
+}
+
+func rejectUnsupportedReadConsistencyPolicy(cmd iwire.ValidatedCommand) error {
+	raw, ok, err := singletonSection(cmd.Known, iwire.SectionConsistencyPolicy)
+	if err != nil || !ok {
+		return err
+	}
+	if _, err := consistencyPolicyFromPayload(raw); err != nil {
+		return err
+	}
+	name := "<unknown>"
+	if cmd.Schema != nil {
+		name = cmd.Schema.Name
+	}
+	return protocolError(iwire.ErrUnsupportedFeature, "consistency_policy is not supported for command %s", name)
+}
+
 func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	_, docs, present, err := s.getManyDocuments(state, sections)
 	if err != nil {
@@ -454,7 +483,7 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section, read
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits)
+	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits, readMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +539,7 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 	truncated := cursor.truncated
 	s.cursorMu.Unlock()
 
-	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits)
+	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits, readMeta)
 	if err != nil {
 		s.restoreCursor(cursorID, cursor)
 		return nil, ReadMetadata{}, err

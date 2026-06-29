@@ -708,6 +708,13 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
 		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
 	} else {
+		if cmd.Schema.Kind == iwire.CommandKindRead && !coordinatedReadCommand(cmd.Header.ID) {
+			if err := rejectUnsupportedReadConsistencyPolicy(cmd); err != nil {
+				s.counters.incRequestsFailed()
+				s.counters.incCommandError(cmd.Header.ID, cmd.Schema.Name)
+				return s.writeError(w, header, err)
+			}
+		}
 		switch cmd.Header.ID {
 		case iwire.CommandCreateCollection:
 			responseSections, err = s.handleCreateCollection(cmd.Known)
