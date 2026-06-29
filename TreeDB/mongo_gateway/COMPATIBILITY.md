@@ -234,7 +234,7 @@ before deciding whether to implement or reject them.
 | Surface | Status | Current gap |
 |---|---|---|
 | Mongo `writeConcern` | `not implemented` as Mongo semantics | Gateway success currently follows the underlying TreeDB collection API and durability profile. |
-| Mongo `readConcern` | `not implemented` | No read concern parser or server-side snapshot API mapping. |
+| Mongo `readConcern` | `supported subset` / `rejected` | Absent/empty, `{level: "local"}`, and `{level: "available"}` map to local_stale reads; stronger levels, cluster-time fields, unknown options, malformed documents, and duplicate `level` are rejected before serving data. |
 | Logical sessions | `supported subset` | Advertised for driver compatibility; `lsid` is accepted but does not add causal consistency, retryable-write, or transaction semantics. The gateway presents as standalone and does not advertise a replica-set `setName`. |
 | Multi-document transactions | `not implemented` | Transaction markers are rejected on supported read/write/metadata commands; full support is blocked on TreeDB collection transaction and collection WAL work. |
 | Retryable writes / idempotency | `not implemented` | Forced `txnNumber` command markers are rejected before read/write/metadata execution rather than silently pretending idempotency bookkeeping exists; support needs explicit idempotency metadata and error contract. |
@@ -254,8 +254,9 @@ before deciding whether to implement or reject them.
    unsupported command as a matrix row before implementing it.
 2. Decide whether unsupported filters should always fail closed or allow bounded
    scans behind a feature flag.
-3. Add explicit `writeConcern`/`readConcern` handling that either rejects
-   unsupported values or maps them to documented TreeDB durability boundaries.
+3. Extend explicit `writeConcern` handling beyond the current cluster submitter
+   subset, and add stronger readConcern modes only after a documented TreeDB
+   snapshot/causal-read boundary exists.
 4. Add count/distinct only after the desired TreeDB collection count/index
    semantics are clear.
 5. Keep multi-document transactions blocked until the local collection
