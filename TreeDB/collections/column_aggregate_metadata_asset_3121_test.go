@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -73,7 +74,157 @@ func TestAggregateMetadataAssetsTypedGranulePrecomputedOrderMatchesFallback3175(
 	assertColumnAggregateMetadataAssetsEqual3121(t, got, want)
 }
 
-func TestAggregateMetadataAssetsFallbackForPredicateAggregates3121(t *testing.T) {
+func TestAggregateMetadataAssetsTypedGranulePrecomputedOrderWithPredicatesMatchesSequential3235(t *testing.T) {
+	cfg := aggregateMetadataBatchConfig3121()
+	cfg.SortKey = []ColumnSortKey{{Column: "time_us"}}
+	cfg.AssetManager = &ColumnAssetManagerConfig{Namespace: "events/column-assets"}
+	for idx := range cfg.Columns {
+		cfg.Columns[idx].Path = cfg.Columns[idx].Name
+		cfg.Columns[idx].Owner = TypedStorageOwnerColumnPart
+	}
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{{
+		Name:        "like_time_min",
+		Column:      "time_us",
+		GroupColumn: "did",
+		Kind:        ColumnAggregateMin,
+		Predicates:  []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "like"}},
+	}}
+	rows := append([]columnDeclaredRow(nil), aggregateMetadataBatchRows3121()[:3]...)
+
+	typedPart, err := buildTypedColumnPartImageForDeclaredRowsWithResult(cfg, 7, typedColumnPartAssetPartID, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnPartImageForDeclaredRowsWithResult: %v", err)
+	}
+	if want := []int{1, 0, 2}; !reflect.DeepEqual(typedPart.TypedGranuleRowOrder, want) {
+		t.Fatalf("typed granule row order=%v want %v", typedPart.TypedGranuleRowOrder, want)
+	}
+
+	got, err := buildColumnAggregateMetadataAssetsWithOptions(cfg, rows, cfg.AggregateMetadata, "events", "events/column-assets", 7, 11, 13, columnAggregateMetadataAssetBuildOptions{
+		TypedGranuleRowOrder: typedPart.TypedGranuleRowOrder,
+	})
+	if err != nil {
+		t.Fatalf("buildColumnAggregateMetadataAssetsWithOptions: %v", err)
+	}
+	want := buildColumnAggregateMetadataAssetsSequential3121(t, cfg, rows, cfg.AggregateMetadata)
+	assertColumnAggregateMetadataAssetsEqual3121(t, got, want)
+}
+
+func TestAggregateMetadataAssetsPredicateAccumulatorsRemainSeparate3235(t *testing.T) {
+	cfg := aggregateMetadataBatchConfig3121()
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{
+		{
+			Name:        "like_time_min",
+			Column:      "time_us",
+			GroupColumn: "did",
+			Kind:        ColumnAggregateMin,
+			Predicates:  []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "like"}},
+		},
+		{
+			Name:        "post_time_min",
+			Column:      "time_us",
+			GroupColumn: "did",
+			Kind:        ColumnAggregateMin,
+			Predicates:  []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "post"}},
+		},
+	}
+	rows := aggregateMetadataBatchRows3121()
+
+	got, err := buildColumnAggregateMetadataAssets(cfg, rows, cfg.AggregateMetadata, "events", "events/column-assets", 7, 11, 13)
+	if err != nil {
+		t.Fatalf("buildColumnAggregateMetadataAssets: %v", err)
+	}
+	want := buildColumnAggregateMetadataAssetsSequential3121(t, cfg, rows, cfg.AggregateMetadata)
+	assertColumnAggregateMetadataAssetsEqual3121(t, got, want)
+	if gotLen, wantLen := len(got), 2; gotLen != wantLen {
+		t.Fatalf("got %d assets want %d", gotLen, wantLen)
+	}
+	if got[0].Entries[0].Group != "did:alpha" || got[0].Entries[0].Min != 10 || got[0].Entries[0].Max != 20 {
+		t.Fatalf("like aggregate entries=%+v", got[0].Entries)
+	}
+	if got[1].Entries[0].Group != "did:beta" || got[1].Entries[0].Min != 5 || got[1].Entries[0].Max != 5 {
+		t.Fatalf("post aggregate entries=%+v", got[1].Entries)
+	}
+}
+
+func TestColumnAggregateMetadataPredicateAccumulatorKeySeparatesInListBoundaries3236(t *testing.T) {
+	broadInList := []ColumnPhysicalQueryPredicate{{
+		Column: "a_col",
+		Kind:   ColumnPhysicalQueryPredicateInList,
+		Values: []string{"a", "b", string(ColumnPhysicalQueryPredicateEqual), "z"},
+	}}
+	inListAndEqual := []ColumnPhysicalQueryPredicate{
+		{
+			Column: "a_col",
+			Kind:   ColumnPhysicalQueryPredicateInList,
+			Values: []string{"a"},
+		},
+		{
+			Column: "b",
+			Kind:   ColumnPhysicalQueryPredicateEqual,
+			Value:  "z",
+		},
+	}
+
+	broadKey := columnAggregateMetadataPredicateAccumulatorKey(broadInList)
+	narrowKey := columnAggregateMetadataPredicateAccumulatorKey(inListAndEqual)
+	if broadKey == narrowKey {
+		t.Fatalf("ambiguous predicate accumulator keys: %q", broadKey)
+	}
+}
+
+func TestAggregateMetadataAssetsTypedGranuleParallelRowOrderWithPredicatesMatchesSequential3235(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(2)
+	defer runtime.GOMAXPROCS(oldProcs)
+	cfg := aggregateMetadataBatchConfig3121()
+	for idx := range cfg.Columns {
+		cfg.Columns[idx].Owner = TypedStorageOwnerColumnPart
+	}
+	cfg.AggregateMetadata = []ColumnAggregateMetadata{
+		{
+			Name:        "like_time_min",
+			Column:      "time_us",
+			GroupColumn: "did",
+			Kind:        ColumnAggregateMin,
+			Predicates:  []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "like"}},
+		},
+		{
+			Name:        "post_time_min",
+			Column:      "time_us",
+			GroupColumn: "did",
+			Kind:        ColumnAggregateMin,
+			Predicates:  []ColumnPhysicalQueryPredicate{{Column: "kind", Value: "post"}},
+		},
+	}
+	rows := make([]columnDeclaredRow, typedColumnDefaultRowsPerGranule()+3)
+	order := make([]int, len(rows))
+	for idx := range rows {
+		kind := "like"
+		if idx%3 == 0 {
+			kind = "post"
+		}
+		rows[idx] = columnDeclaredRow{ID: []byte("row"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: int64(idx)},
+			{Type: ColumnStoreValueString, Present: true, String: kind},
+			{Type: ColumnStoreValueString, Present: true, String: "did"},
+		}}
+		order[idx] = idx
+	}
+	entrySets := columnAggregateMetadataEntrySetCount(len(rows), typedColumnDefaultRowsPerGranule())
+	if workers := columnAggregateMetadataEntrySetWorkerCount(entrySets); workers < 2 {
+		t.Fatalf("worker count=%d want parallel path for entry_sets=%d", workers, entrySets)
+	}
+
+	got, err := buildColumnAggregateMetadataAssetsWithOptions(cfg, rows, cfg.AggregateMetadata, "events", "events/column-assets", 7, 11, 13, columnAggregateMetadataAssetBuildOptions{
+		TypedGranuleRowOrder: order,
+	})
+	if err != nil {
+		t.Fatalf("buildColumnAggregateMetadataAssetsWithOptions: %v", err)
+	}
+	want := buildColumnAggregateMetadataAssetsSequential3121(t, cfg, rows, cfg.AggregateMetadata)
+	assertColumnAggregateMetadataAssetsEqual3121(t, got, want)
+}
+
+func TestAggregateMetadataAssetsPredicateAggregatesMatchSequential3121(t *testing.T) {
 	cfg := aggregateMetadataBatchConfig3121()
 	cfg.AggregateMetadata = []ColumnAggregateMetadata{{
 		Name:        "post_time_min",

@@ -116,11 +116,17 @@ func TestAppendOnlyEntryPoolStatsTrackRetainedBacking(t *testing.T) {
 	if cap(got) != cap(entries) {
 		t.Fatalf("pooled cap=%d want %d", cap(got), cap(entries))
 	}
-	if gotRetained := afterGet.RetainedBytesEstimate; gotRetained != 0 {
-		t.Fatalf("retained bytes after get=%d want 0", gotRetained)
-	}
-	if gotGets := afterGet.GetsTotal; gotGets != before.GetsTotal+1 {
-		t.Fatalf("gets total=%d want %d", gotGets, before.GetsTotal+1)
+	switch gotGets := afterGet.GetsTotal; gotGets {
+	case before.GetsTotal + 1:
+		if gotRetained := afterGet.RetainedBytesEstimate; gotRetained != 0 {
+			t.Fatalf("retained bytes after pooled get=%d want 0", gotRetained)
+		}
+	case before.GetsTotal:
+		if gotRetained := afterGet.RetainedBytesEstimate; gotRetained != wantBytes {
+			t.Fatalf("retained bytes after sync.Pool miss=%d want estimate %d", gotRetained, wantBytes)
+		}
+	default:
+		t.Fatalf("gets total=%d want %d or %d", gotGets, before.GetsTotal, before.GetsTotal+1)
 	}
 
 	putAppendOnlyEntries(got)

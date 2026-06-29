@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
+	"strconv"
+	"strings"
+	"sync"
 )
 
 const (
@@ -41,6 +45,7 @@ type columnAggregateMetadataBuildSpec struct {
 	valueIdx          int
 	predicateSpecs    []columnAggregateMetadataPredicateSpec
 	predicateCoverage []ColumnPhysicalQueryPredicate
+	predicateKey      string
 }
 
 type columnAggregateMetadataEntryKey struct {
@@ -57,9 +62,10 @@ const (
 )
 
 type columnAggregateMetadataAccumulatorKey struct {
-	kind     columnAggregateMetadataAccumulatorKind
-	groupIdx int
-	valueIdx int
+	kind         columnAggregateMetadataAccumulatorKind
+	groupIdx     int
+	valueIdx     int
+	predicateKey string
 }
 
 type columnAggregateMetadataAccumulator struct {
@@ -324,7 +330,7 @@ func buildColumnAggregateMetadataAssetsWithOptions(cfg ColumnStoreConfig, rows [
 		if err != nil {
 			return nil, err
 		}
-		if !ok || len(spec.predicateSpecs) != 0 {
+		if !ok {
 			return buildColumnAggregateMetadataAssetsSequential(cfg, rows, aggregates, collection, namespace, generation, partID, appliedLSN)
 		}
 		aggregateUsesTypedGranules := columnAggregateMetadataUsesTypedColumnGranules(cfg, aggregate)
@@ -451,7 +457,44 @@ func newColumnAggregateMetadataBuildSpec(cfg ColumnStoreConfig, aggregate Column
 		valueIdx:          valueIdx,
 		predicateSpecs:    predicateSpecs,
 		predicateCoverage: predicateCoverage,
+		predicateKey:      columnAggregateMetadataPredicateAccumulatorKey(predicateCoverage),
 	}, true, nil
+}
+
+func columnAggregateMetadataPredicateAccumulatorKey(predicates []ColumnPhysicalQueryPredicate) string {
+	if len(predicates) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	writeColumnAggregateMetadataPredicateAccumulatorKeyInt(&b, len(predicates))
+	for _, predicate := range predicates {
+		kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
+		writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, predicate.Column)
+		writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, string(kind))
+		if kind == ColumnPhysicalQueryPredicateInList {
+			writeColumnAggregateMetadataPredicateAccumulatorKeyInt(&b, len(predicate.Values))
+			for _, value := range predicate.Values {
+				writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, value)
+			}
+		} else {
+			writeColumnAggregateMetadataPredicateAccumulatorKeyInt(&b, 1)
+			writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, predicate.Value)
+		}
+	}
+	return b.String()
+}
+
+func writeColumnAggregateMetadataPredicateAccumulatorKeyInt(b *strings.Builder, value int) {
+	b.WriteByte('#')
+	b.WriteString(strconv.Itoa(value))
+	b.WriteByte(';')
+}
+
+func writeColumnAggregateMetadataPredicateAccumulatorKeyString(b *strings.Builder, value string) {
+	b.WriteString(strconv.Itoa(len(value)))
+	b.WriteByte(':')
+	b.WriteString(value)
+	b.WriteByte(';')
 }
 
 func newColumnAggregateMetadataAccumulators(specs []columnAggregateMetadataBuildSpec) ([]columnAggregateMetadataAccumulator, []int) {
@@ -486,64 +529,207 @@ func (spec columnAggregateMetadataBuildSpec) accumulatorKey() columnAggregateMet
 		kind = columnAggregateMetadataAccumulatorMinMax
 	}
 	return columnAggregateMetadataAccumulatorKey{
-		kind:     kind,
-		groupIdx: spec.groupIdx,
-		valueIdx: spec.valueIdx,
+		kind:         kind,
+		groupIdx:     spec.groupIdx,
+		valueIdx:     spec.valueIdx,
+		predicateKey: spec.predicateKey,
 	}
 }
 
 func buildColumnAggregateMetadataEntriesForSpecs(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, rowsPerMetadataEntrySet int) ([][]columnAggregateMetadataEntry, error) {
+	if rowsPerMetadataEntrySet <= 0 {
+		return nil, errors.New("collections: aggregate metadata rows per entry set must be positive")
+	}
+	entrySets := columnAggregateMetadataEntrySetCount(len(rows), rowsPerMetadataEntrySet)
+	workers := columnAggregateMetadataEntrySetWorkerCount(entrySets)
+	if workers > 1 {
+		return buildColumnAggregateMetadataEntriesForSpecsParallel(specs, rows, rowsPerMetadataEntrySet, entrySets, workers)
+	}
 	entriesBySpec := make([][]columnAggregateMetadataEntry, len(specs))
 	for start := 0; start < len(rows); start += rowsPerMetadataEntrySet {
 		end := start + rowsPerMetadataEntrySet
 		if end > len(rows) {
 			end = len(rows)
 		}
-		accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(specs)
-		for _, row := range rows[start:end] {
-			if row.Deleted {
-				continue
-			}
-			for idx := range accumulators {
-				if err := accumulators[idx].spec.appendRow(accumulators[idx].entries, row); err != nil {
-					return nil, err
-				}
-			}
+		entrySet, err := buildColumnAggregateMetadataEntrySetForSpecs(specs, rows[start:end])
+		if err != nil {
+			return nil, err
 		}
 		for idx := range specs {
-			entriesBySpec[idx] = append(entriesBySpec[idx], sortedColumnAggregateMetadataEntries(accumulators[specAccumulatorIdx[idx]].entries)...)
+			entriesBySpec[idx] = append(entriesBySpec[idx], entrySet[idx]...)
 		}
 	}
 	return entriesBySpec, nil
 }
 
 func buildColumnAggregateMetadataEntriesForSpecsByRowOrder(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, order []int, rowsPerMetadataEntrySet int) ([][]columnAggregateMetadataEntry, error) {
+	if rowsPerMetadataEntrySet <= 0 {
+		return nil, errors.New("collections: aggregate metadata rows per entry set must be positive")
+	}
+	entrySets := columnAggregateMetadataEntrySetCount(len(order), rowsPerMetadataEntrySet)
+	workers := columnAggregateMetadataEntrySetWorkerCount(entrySets)
+	if workers > 1 {
+		return buildColumnAggregateMetadataEntriesForSpecsByRowOrderParallel(specs, rows, order, rowsPerMetadataEntrySet, entrySets, workers)
+	}
 	entriesBySpec := make([][]columnAggregateMetadataEntry, len(specs))
 	for start := 0; start < len(order); start += rowsPerMetadataEntrySet {
 		end := start + rowsPerMetadataEntrySet
 		if end > len(order) {
 			end = len(order)
 		}
-		accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(specs)
-		for _, rowIdx := range order[start:end] {
-			row := rows[rowIdx]
-			if row.Deleted {
-				continue
-			}
-			for idx := range accumulators {
-				if err := accumulators[idx].spec.appendRow(accumulators[idx].entries, row); err != nil {
-					return nil, err
-				}
-			}
+		entrySet, err := buildColumnAggregateMetadataEntrySetForSpecsByRowOrder(specs, rows, order[start:end])
+		if err != nil {
+			return nil, err
 		}
 		for idx := range specs {
-			entriesBySpec[idx] = append(entriesBySpec[idx], sortedColumnAggregateMetadataEntries(accumulators[specAccumulatorIdx[idx]].entries)...)
+			entriesBySpec[idx] = append(entriesBySpec[idx], entrySet[idx]...)
 		}
 	}
 	return entriesBySpec, nil
 }
 
+type columnAggregateMetadataEntrySetResult struct {
+	entriesBySpec [][]columnAggregateMetadataEntry
+	err           error
+}
+
+func columnAggregateMetadataEntrySetCount(rows, rowsPerMetadataEntrySet int) int {
+	if rows <= 0 || rowsPerMetadataEntrySet <= 0 {
+		return 0
+	}
+	return (rows + rowsPerMetadataEntrySet - 1) / rowsPerMetadataEntrySet
+}
+
+func columnAggregateMetadataEntrySetWorkerCount(entrySets int) int {
+	if entrySets < 2 {
+		return 1
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers > 8 {
+		workers = 8
+	}
+	if workers > entrySets {
+		workers = entrySets
+	}
+	if workers < 1 {
+		return 1
+	}
+	return workers
+}
+
+func columnAggregateMetadataEntrySetRange(setIdx, rows, rowsPerMetadataEntrySet int) (int, int) {
+	start := setIdx * rowsPerMetadataEntrySet
+	end := start + rowsPerMetadataEntrySet
+	if end > rows {
+		end = rows
+	}
+	return start, end
+}
+
+func buildColumnAggregateMetadataEntriesForSpecsParallel(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, rowsPerMetadataEntrySet, entrySets, workers int) ([][]columnAggregateMetadataEntry, error) {
+	results := make([]columnAggregateMetadataEntrySetResult, entrySets)
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for workerIdx := 0; workerIdx < workers; workerIdx++ {
+		go func() {
+			defer wg.Done()
+			for setIdx := range jobs {
+				start, end := columnAggregateMetadataEntrySetRange(setIdx, len(rows), rowsPerMetadataEntrySet)
+				results[setIdx].entriesBySpec, results[setIdx].err = buildColumnAggregateMetadataEntrySetForSpecs(specs, rows[start:end])
+			}
+		}()
+	}
+	for setIdx := 0; setIdx < entrySets; setIdx++ {
+		jobs <- setIdx
+	}
+	close(jobs)
+	wg.Wait()
+	return mergeColumnAggregateMetadataEntrySetResults(specs, results)
+}
+
+func buildColumnAggregateMetadataEntriesForSpecsByRowOrderParallel(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, order []int, rowsPerMetadataEntrySet, entrySets, workers int) ([][]columnAggregateMetadataEntry, error) {
+	results := make([]columnAggregateMetadataEntrySetResult, entrySets)
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for workerIdx := 0; workerIdx < workers; workerIdx++ {
+		go func() {
+			defer wg.Done()
+			for setIdx := range jobs {
+				start, end := columnAggregateMetadataEntrySetRange(setIdx, len(order), rowsPerMetadataEntrySet)
+				results[setIdx].entriesBySpec, results[setIdx].err = buildColumnAggregateMetadataEntrySetForSpecsByRowOrder(specs, rows, order[start:end])
+			}
+		}()
+	}
+	for setIdx := 0; setIdx < entrySets; setIdx++ {
+		jobs <- setIdx
+	}
+	close(jobs)
+	wg.Wait()
+	return mergeColumnAggregateMetadataEntrySetResults(specs, results)
+}
+
+func mergeColumnAggregateMetadataEntrySetResults(specs []columnAggregateMetadataBuildSpec, results []columnAggregateMetadataEntrySetResult) ([][]columnAggregateMetadataEntry, error) {
+	entriesBySpec := make([][]columnAggregateMetadataEntry, len(specs))
+	for setIdx := range results {
+		if results[setIdx].err != nil {
+			return nil, results[setIdx].err
+		}
+		for specIdx := range specs {
+			entriesBySpec[specIdx] = append(entriesBySpec[specIdx], results[setIdx].entriesBySpec[specIdx]...)
+		}
+	}
+	return entriesBySpec, nil
+}
+
+func buildColumnAggregateMetadataEntrySetForSpecs(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow) ([][]columnAggregateMetadataEntry, error) {
+	accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(specs)
+	for _, row := range rows {
+		if row.Deleted {
+			continue
+		}
+		for idx := range accumulators {
+			if err := accumulators[idx].spec.appendRow(accumulators[idx].entries, row); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return sortedColumnAggregateMetadataEntriesBySpec(specs, accumulators, specAccumulatorIdx), nil
+}
+
+func buildColumnAggregateMetadataEntrySetForSpecsByRowOrder(specs []columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, order []int) ([][]columnAggregateMetadataEntry, error) {
+	accumulators, specAccumulatorIdx := newColumnAggregateMetadataAccumulators(specs)
+	for _, rowIdx := range order {
+		row := rows[rowIdx]
+		if row.Deleted {
+			continue
+		}
+		for idx := range accumulators {
+			if err := accumulators[idx].spec.appendRow(accumulators[idx].entries, row); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return sortedColumnAggregateMetadataEntriesBySpec(specs, accumulators, specAccumulatorIdx), nil
+}
+
+func sortedColumnAggregateMetadataEntriesBySpec(specs []columnAggregateMetadataBuildSpec, accumulators []columnAggregateMetadataAccumulator, specAccumulatorIdx []int) [][]columnAggregateMetadataEntry {
+	entriesByAccumulator := make([][]columnAggregateMetadataEntry, len(accumulators))
+	for idx := range accumulators {
+		entriesByAccumulator[idx] = sortedColumnAggregateMetadataEntries(accumulators[idx].entries)
+	}
+	entriesBySpec := make([][]columnAggregateMetadataEntry, len(specs))
+	for idx := range specs {
+		entriesBySpec[idx] = entriesByAccumulator[specAccumulatorIdx[idx]]
+	}
+	return entriesBySpec
+}
+
 func buildColumnAggregateMetadataEntriesForSpec(spec columnAggregateMetadataBuildSpec, rows []columnDeclaredRow, rowsPerMetadataEntrySet int) ([]columnAggregateMetadataEntry, error) {
+	if rowsPerMetadataEntrySet <= 0 {
+		return nil, errors.New("collections: aggregate metadata rows per entry set must be positive")
+	}
 	entries := make([]columnAggregateMetadataEntry, 0)
 	for start := 0; start < len(rows); start += rowsPerMetadataEntrySet {
 		end := start + rowsPerMetadataEntrySet
