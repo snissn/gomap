@@ -32,10 +32,11 @@ need to repeat the default feature name.
 
 ## Storage Layout
 
-Given `Options.Dir = <dir>`, local Raft cluster state defaults to:
+Validation first resolves TreeDB's storage root and main DB directory from
+`Options.Dir`. Local Raft cluster state defaults under the resolved root:
 
 ```text
-<dir>/raftcluster/
+<root>/raftcluster/
   nodes/<node-id>/
     groups/<group-id>/
       log/
@@ -44,15 +45,22 @@ Given `Options.Dir = <dir>`, local Raft cluster state defaults to:
       peers/<peer-id>/
 ```
 
-An explicit `ClusterDir` may replace `<dir>/raftcluster`, but validation still
+An explicit `ClusterDir` may replace `<root>/raftcluster`, but validation still
 requires `Options.Dir` so the package can reject storage overlap with TreeDB's
-main DB paths.
+main DB paths. Supported layouts resolve as follows:
+
+- root layout: `Options.Dir = <root>` and main DB at `<root>/maindb`;
+- main-DB layout: `Options.Dir = <root>/maindb` and cluster state at
+  `<root>/raftcluster`;
+- flat or `DisableSideStores=true` layout: root and main DB both resolve to
+  `Options.Dir`, with cluster state at `<dir>/raftcluster`.
 
 The Raft paths must be distinct from:
 
-- `<dir>/maindb/wal/`
-- `<dir>/maindb/value_vlog/`
-- `<dir>/maindb/leaf_vlog/`
+- `<main-db>/wal/`
+- `<main-db>/value_vlog/`
+- `<main-db>/leaf_vlog/`
+- `<main-db>/index.db` for flat layouts
 
 The Raft log directory stores consensus-log bytes for the selected future Raft
 provider. It is not the TreeDB command WAL.
@@ -68,7 +76,7 @@ advance durable applied-index/idempotency metadata, or return
 
 ## Value Log Boundary
 
-`<dir>/maindb/value_vlog/` is persistent value storage for large values
+`<main-db>/value_vlog/` is persistent value storage for large values
 referenced by `ValuePtr` records in the index. Raft storage must not treat
 `value_vlog` as temporary WAL space, must not truncate it by age, and must not
 delete segments unless TreeDB value-log GC or rewrite/compaction proves they are

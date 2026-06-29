@@ -29,7 +29,7 @@ A TreeDB deployment uses:
   directory name),
 - optional single-group Raft provider state under
   `raftcluster/nodes/<node-id>/groups/<group-id>/` with separate `log/`,
-  `stable/`, and `snapshots/` directories,
+  `stable/`, `snapshots/`, and `peers/<peer-id>/` directories,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,

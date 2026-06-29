@@ -76,6 +76,13 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			want: ErrInvalidStoragePath,
 		},
 		{
+			name: "cluster dir inside leaf vlog",
+			mut: func(cfg *Config) {
+				cfg.ClusterDir = LeafLogDir(cfg.Dir) + "/raft"
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
 			name: "cluster dir inside command wal with mixed path forms",
 			mut: func(cfg *Config) {
 				cwd := t.TempDir()
@@ -116,6 +123,28 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 				}
 				cfg.Dir = root
 				cfg.ClusterDir = filepath.Join(root, "wal", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "cluster dir inside command wal with disable side stores",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				cfg.Dir = root
+				cfg.DisableSideStores = true
+				cfg.ClusterDir = filepath.Join(root, "wal", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "disable side stores rejects root layout",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				if err := os.MkdirAll(filepath.Join(root, "maindb"), 0o755); err != nil {
+					t.Fatalf("mkdir maindb: %v", err)
+				}
+				cfg.Dir = root
+				cfg.DisableSideStores = true
 			},
 			want: ErrInvalidStoragePath,
 		},
@@ -243,6 +272,9 @@ func TestStorageLayoutDeterministicAndSeparated(t *testing.T) {
 		if sameOrUnder(path, ValueLogDir(cfg.Dir)) {
 			t.Fatalf("layout path %q overlaps value_vlog dir %q", path, ValueLogDir(cfg.Dir))
 		}
+		if sameOrUnder(path, LeafLogDir(cfg.Dir)) {
+			t.Fatalf("layout path %q overlaps leaf_vlog dir %q", path, LeafLogDir(cfg.Dir))
+		}
 	}
 	for _, id := range []NodeID{"node-a", "node-b", "node-c"} {
 		if dir, ok := a.Layout.PeerDir(id); !ok || dir == "" {
@@ -272,6 +304,25 @@ func TestValidateAllowsDefaultClusterDirForExistingFlatDB(t *testing.T) {
 	}
 }
 
+func TestValidateDisableSideStoresAllowsDefaultClusterDir(t *testing.T) {
+	root := t.TempDir()
+	cfg := validConfig(t)
+	cfg.Dir = root
+	cfg.DisableSideStores = true
+	cfg.ClusterDir = ""
+
+	resolved, err := Validate(cfg)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got, want := resolved.ClusterDir, filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("ClusterDir=%q want %q", got, want)
+	}
+	if got, want := resolved.Layout.RootDir, filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("Layout.RootDir=%q want %q", got, want)
+	}
+}
+
 func TestStoragePathsResolveMainDirOptionsLayout(t *testing.T) {
 	root := t.TempDir()
 	mainDir := filepath.Join(root, "maindb")
@@ -280,9 +331,6 @@ func TestStoragePathsResolveMainDirOptionsLayout(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
 		t.Fatalf("write index.db: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "templatedb"), 0o755); err != nil {
-		t.Fatalf("mkdir templatedb: %v", err)
 	}
 	if got, want := DefaultClusterDir(mainDir), filepath.Join(root, "raftcluster"); got != want {
 		t.Fatalf("DefaultClusterDir(%q)=%q want %q", mainDir, got, want)
