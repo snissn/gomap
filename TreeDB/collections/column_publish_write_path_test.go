@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1574,11 +1575,11 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	if !sawRowAsset || !sawDirectTypedColumn {
 		t.Fatalf("prepared assets missing row=%t direct typed=%t: %+v", sawRowAsset, sawDirectTypedColumn, prepared.Assets)
 	}
-	if prepared.AssetMetrics.SharedAppendCount != 2 {
-		t.Fatalf("shared append count=%d want 2", prepared.AssetMetrics.SharedAppendCount)
+	if prepared.AssetMetrics.SharedAppendCount != 3 {
+		t.Fatalf("shared append count=%d want 3", prepared.AssetMetrics.SharedAppendCount)
 	}
-	if prepared.AssetMetrics.SharedAppendCloseCount != 1 {
-		t.Fatalf("shared append close count=%d want 1", prepared.AssetMetrics.SharedAppendCloseCount)
+	if prepared.AssetMetrics.SharedAppendCloseCount != 2 {
+		t.Fatalf("shared append close count=%d want 2", prepared.AssetMetrics.SharedAppendCloseCount)
 	}
 	if prepared.AssetMetrics.SharedAppendFileSyncCount != 2 {
 		t.Fatalf("shared append file sync count=%d want 2", prepared.AssetMetrics.SharedAppendFileSyncCount)
@@ -1588,6 +1589,87 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	}
 	if prepared.AssetMetrics.RowAssetCount != 1 || prepared.AssetMetrics.TypedColumnPartCount != 1 {
 		t.Fatalf("asset metrics=%+v want row=1 typed=1", prepared.AssetMetrics)
+	}
+}
+
+func TestPrepareColumnPhysicalAssetRowsRemovesDirectViewAfterSharedCloseFailure3151(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			{Name: "score", Path: "score", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+		},
+		SortKey: []ColumnSortKey{{Column: "score"}},
+	})
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := &Collection{db: d}
+	sharedSeedRef, err := writeColumnAssetToManagerSegment(d.ColumnAssetRootDir(), *cfg, []byte("existing-shared"), ColumnAssetKindTCS1PartImage, 99, columnPhysicalRowAssetPartID, columnAssetM12ASegmentFileID)
+	if err != nil {
+		t.Fatalf("writeColumnAssetToManagerSegment: %v", err)
+	}
+	sharedPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), sharedSeedRef)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath shared: %v", err)
+	}
+	directFileID, err := directViewTypedColumnSegmentFileID(1)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	directPath, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), ColumnAssetRef{
+		Namespace: cfg.AssetManager.Namespace,
+		FileID:    directFileID,
+	})
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath direct: %v", err)
+	}
+	if _, err := os.Stat(directPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("direct path before prepare stat=%v want not exist", err)
+	}
+	syncErr := errors.New("forced shared segment close sync failure")
+	withColumnAssetSegmentFileSyncForTest(t, func(file *os.File) error {
+		if file == nil {
+			t.Fatalf("syncColumnAssetSegmentFileForPublish called with nil file")
+		}
+		if file.Name() == sharedPath {
+			return syncErr
+		}
+		return nil
+	})
+	rows := []columnDeclaredRow{
+		{ID: []byte("e1"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 10},
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+		}},
+		{ID: []byte("e2"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 20},
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 2},
+		}},
+	}
+	_, err = col.prepareColumnPhysicalAssetRowsForCommand(ColumnPublishPreparedAssets{}, columnWritePublishInput{
+		meta:      CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}},
+		operation: ColumnPublishOperationInsert,
+		rows:      len(rows),
+	}, ColumnPublishAssetPrepareInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 77,
+	}, rows)
+	if !errors.Is(err, syncErr) {
+		t.Fatalf("prepareColumnPhysicalAssetRowsForCommand err=%v want %v", err, syncErr)
+	}
+	if _, err := os.Stat(sharedPath); err != nil {
+		t.Fatalf("shared path after failed prepare stat=%v want preserved existing segment", err)
+	}
+	if _, err := os.Stat(directPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("direct path after failed prepare stat=%v want removed new segment", err)
 	}
 }
 
