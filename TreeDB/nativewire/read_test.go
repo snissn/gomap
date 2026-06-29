@@ -118,6 +118,366 @@ func TestReadCommandsParity(t *testing.T) {
 	}
 }
 
+func TestReadDefaultReportsLocalStaleMetadata(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if !result.ReadMeta.Valid || result.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("read meta=%+v want local-stale", result.ReadMeta)
+	}
+	if result.ReadMeta.ServingNode != "" || result.ReadMeta.LeaderNode != "" || result.ReadMeta.HasAppliedIndex {
+		t.Fatalf("standalone read meta unexpectedly reported cluster fields: %+v", result.ReadMeta)
+	}
+}
+
+func TestReadMetadataUsesDocumentedConsistencyPolicyNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy ConsistencyPolicy
+		wire   string
+	}{
+		{name: "local_stale", policy: ConsistencyLocalStale, wire: "local_stale"},
+		{name: "leader_read", policy: ConsistencyLeaderRead, wire: "leader_read"},
+		{name: "linearizable", policy: ConsistencyLinearizable, wire: "linearizable"},
+		{name: "lease_read", policy: ConsistencyLeaseRead, wire: "lease_read"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := appendReadMetaPayload(nil, ReadMetadata{ActualConsistency: tt.policy})
+			fields, err := decodeStringMap(payload)
+			if err != nil {
+				t.Fatalf("decode fields: %v", err)
+			}
+			if got := fields["actual_consistency_policy"]; got != tt.wire {
+				t.Fatalf("actual_consistency_policy=%q want %q", got, tt.wire)
+			}
+			if got := fields["actual_consistency"]; got != tt.wire {
+				t.Fatalf("actual_consistency=%q want %q", got, tt.wire)
+			}
+			meta, err := decodeReadMetadataPayload(payload)
+			if err != nil {
+				t.Fatalf("decode read metadata: %v", err)
+			}
+			if !meta.Valid || meta.ActualConsistency != tt.policy {
+				t.Fatalf("decoded meta=%+v want policy %d", meta, tt.policy)
+			}
+		})
+	}
+}
+
+func TestReadStrongConsistencyRequiresCoordinator(t *testing.T) {
+	for _, policy := range []ConsistencyPolicy{ConsistencyLeaderRead, ConsistencyLinearizable, ConsistencyLeaseRead} {
+		t.Run(consistencyPolicyName(policy), func(t *testing.T) {
+			client, mgr, _ := serveCollectionPipe(t)
+			seedReadCollection(t, mgr)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+
+			_, err := client.OpenScanWithOptions(ctx, "users", CursorLimits{MaxItems: 1}, ReadOptions{ConsistencyPolicy: policy})
+			if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+				t.Fatalf("OpenScan policy=%s err=%v want consistency_unavailable", consistencyPolicyName(policy), err)
+			}
+		})
+	}
+}
+
+func TestReadConsistencyPolicyRejectedForUnsupportedReadCommands(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	handle, err := client.OpenCollection(ctx, "users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		commandID iwire.CommandID
+		sections  []iwire.Section
+	}{
+		{name: "list_collections", commandID: iwire.CommandListCollections},
+		{name: "list_indexes", commandID: iwire.CommandListIndexes, sections: []iwire.Section{collectionNameRef("users")}},
+		{name: "open_collection", commandID: iwire.CommandOpenCollection, sections: []iwire.Section{collectionNameRef("users")}},
+		{name: "close_collection", commandID: iwire.CommandCloseCollection, sections: []iwire.Section{collectionHandleRef(handle)}},
+		{name: "stats", commandID: iwire.CommandStats},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, policy := range []ConsistencyPolicy{ConsistencyLocalStale, ConsistencyLinearizable} {
+				t.Run(consistencyPolicyName(policy), func(t *testing.T) {
+					sections := append([]iwire.Section(nil), tt.sections...)
+					sections = append(sections, consistencyPolicySection(policy))
+					_, err := client.commandSections(ctx, tt.commandID, sections...)
+					if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+						t.Fatalf("%s policy=%s err=%v want unsupported_feature", tt.name, consistencyPolicyName(policy), err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestReadConsistencyPolicyRejectsMalformedOrUnknown(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  []byte
+		wantCode iwire.ErrorCode
+	}{
+		{name: "trailing-bytes", payload: []byte{byte(ConsistencyLocalStale), 0}, wantCode: iwire.ErrMalformedFrame},
+		{name: "unknown", payload: []byte{99}, wantCode: iwire.ErrInvalidCommand},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, mgr, _ := serveCollectionPipe(t)
+			seedReadCollection(t, mgr)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+
+			_, err := client.commandSections(ctx, iwire.CommandIndexLookup,
+				collectionNameRef("users"),
+				iwire.Section{ID: iwire.SectionIndexName, Bytes: encodeIndexName("email")},
+				iwire.Section{ID: iwire.SectionIndexValue, Bytes: mustEncodeScalar(t, "ada@example.com")},
+				iwire.Section{ID: iwire.SectionConsistencyPolicy, Bytes: tt.payload},
+			)
+			if !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("IndexLookup err=%v want code %d", err, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestReadCoordinatorProvesStrongConsistencyMetadata(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       "node-a",
+			LeaderNode:        "node-a",
+			AppliedIndex:      42,
+			HasAppliedIndex:   true,
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.GetManyWithOptions(ctx, "users", [][]byte{[]byte("u1")}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if err != nil {
+		t.Fatalf("GetManyWithOptions: %v", err)
+	}
+	if len(coord.calls) != 1 {
+		t.Fatalf("coordinator calls=%d want 1", len(coord.calls))
+	}
+	call := coord.calls[0]
+	if call.Policy != ConsistencyLinearizable || call.CommandID != iwire.CommandGetMany || call.CommandName != "get_many" {
+		t.Fatalf("coordinator call=%+v", call)
+	}
+	if got, want := result.Present, []bool{true}; !boolSlicesEqual(got, want) {
+		t.Fatalf("present=%v want %v", got, want)
+	}
+	if !bytes.Contains(result.Docs[0], []byte(`"Ada"`)) {
+		t.Fatalf("doc=%q want Ada", result.Docs[0])
+	}
+	if !result.ReadMeta.Valid ||
+		result.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
+		result.ReadMeta.ServingNode != "node-a" ||
+		result.ReadMeta.LeaderNode != "node-a" ||
+		!result.ReadMeta.HasAppliedIndex ||
+		result.ReadMeta.AppliedIndex != 42 {
+		t.Fatalf("read meta=%+v", result.ReadMeta)
+	}
+}
+
+func TestReadCoordinatorActualConsistencyMustSatisfyRequest(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{ActualConsistency: ConsistencyLocalStale},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: ConsistencyLeaderRead})
+	if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+		t.Fatalf("IndexLookupWithOptions err=%v want consistency_unavailable", err)
+	}
+	if len(coord.calls) != 1 || coord.calls[0].Policy != ConsistencyLeaderRead {
+		t.Fatalf("coordinator calls=%+v", coord.calls)
+	}
+}
+
+func TestReadMetadataSectionListResponsesRespectSectionLimit(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       strings.Repeat("s", 512),
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		ClusterReadCoordinator: coord,
+		Limits:                 iwire.Limits{MaxSectionLen: 256},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("IndexLookupWithOptions err=%v want resource_exhausted", err)
+	}
+}
+
+func TestReadMetadataSectionListResponsesRespectFrameLimit(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       strings.Repeat("s", 384),
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		ClusterReadCoordinator: coord,
+		Limits:                 iwire.Limits{MaxFrameSize: 320},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("IndexLookupWithOptions err=%v want resource_exhausted", err)
+	}
+}
+
+func TestCursorNextCannotStrengthenOpenScanConsistency(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{ActualConsistency: ConsistencyLinearizable},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 || !first.Cursor.HasMore {
+		t.Fatalf("first cursor=%+v", first.Cursor)
+	}
+	if !first.ReadMeta.Valid || first.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("open scan read meta=%+v want local-stale", first.ReadMeta)
+	}
+	if len(coord.calls) != 0 {
+		t.Fatalf("coordinator calls after local scan=%+v want none", coord.calls)
+	}
+
+	_, err = client.CursorNextWithOptions(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+		t.Fatalf("strong CursorNext err=%v want consistency_unavailable", err)
+	}
+	if len(coord.calls) != 0 {
+		t.Fatalf("coordinator calls after rejected cursor next=%+v want none", coord.calls)
+	}
+
+	second, err := client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("CursorNext after rejected strong request: %v", err)
+	}
+	if !second.ReadMeta.Valid || second.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("cursor next read meta=%+v want local-stale", second.ReadMeta)
+	}
+	assertDocumentsResult(t, second, []string{"u2"}, []string{`{"email":"grace@example.com","city":"hnl","name":"Grace"}`})
+}
+
+func TestCursorNextUsesOpenScanReadMetadata(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       "node-a",
+			LeaderNode:        "node-a",
+			AppliedIndex:      99,
+			HasAppliedIndex:   true,
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	first, err := client.OpenScanWithOptions(ctx, "users", CursorLimits{MaxItems: 1}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if err != nil {
+		t.Fatalf("OpenScanWithOptions: %v", err)
+	}
+	if first.Cursor.CursorID == 0 || !first.Cursor.HasMore {
+		t.Fatalf("first cursor=%+v", first.Cursor)
+	}
+	if len(coord.calls) != 1 || coord.calls[0].CommandID != iwire.CommandOpenScan {
+		t.Fatalf("coordinator calls after open scan=%+v", coord.calls)
+	}
+	if !first.ReadMeta.Valid ||
+		first.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
+		first.ReadMeta.ServingNode != "node-a" ||
+		first.ReadMeta.LeaderNode != "node-a" ||
+		!first.ReadMeta.HasAppliedIndex ||
+		first.ReadMeta.AppliedIndex != 99 {
+		t.Fatalf("open scan read meta=%+v", first.ReadMeta)
+	}
+
+	second, err := client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("CursorNext: %v", err)
+	}
+	if len(coord.calls) != 1 {
+		t.Fatalf("coordinator calls after cursor next=%+v want no additional call", coord.calls)
+	}
+	if !second.ReadMeta.Valid ||
+		second.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
+		second.ReadMeta.ServingNode != "node-a" ||
+		second.ReadMeta.LeaderNode != "node-a" ||
+		!second.ReadMeta.HasAppliedIndex ||
+		second.ReadMeta.AppliedIndex != 99 {
+		t.Fatalf("cursor next read meta=%+v", second.ReadMeta)
+	}
+	assertDocumentsResult(t, second, []string{"u2"}, []string{`{"email":"grace@example.com","city":"hnl","name":"Grace"}`})
+}
+
 func TestIndexLookupWithoutLimitsReturnsAllMatches(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
@@ -547,6 +907,96 @@ func TestOpenScanReportsTruncatedRetainedWindow(t *testing.T) {
 	}
 }
 
+func TestOpenScanReadMetadataCountsTowardSectionLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{
+		Collections:      mgr,
+		Backend:          db,
+		MaxScanDocuments: 1,
+		Limits:           iwire.Limits{MaxSections: 4},
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err = client.OpenScan(ctx, "users", CursorLimits{MaxItems: 10})
+	if !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("OpenScan err=%v want resource exhausted", err)
+	}
+}
+
+func TestOpenScanReadMetadataAllowsNonTruncatedSectionLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{
+		Collections: mgr,
+		Backend:     db,
+		Limits:      iwire.Limits{MaxSections: 4},
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 10})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if result.Truncated || result.Cursor.HasMore {
+		t.Fatalf("result=%+v want terminal non-truncated scan", result)
+	}
+	if !result.ReadMeta.Valid || result.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("read meta=%+v want local-stale", result.ReadMeta)
+	}
+	assertDocumentsResult(t, result,
+		[]string{"u1", "u2"},
+		[]string{
+			`{"email":"ada@example.com","city":"hnl","name":"Ada"}`,
+			`{"email":"grace@example.com","city":"hnl","name":"Grace"}`,
+		},
+	)
+}
+
+func TestGetManyReadMetadataCountsTowardSectionLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{
+		Collections: mgr,
+		Backend:     db,
+		Limits:      iwire.Limits{MaxSections: 2},
+	})
+	state := &connState{}
+	seedReadCollection(t, mgr)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = server.handleGetManyBody(state, []iwire.Section{
+		collectionNameRef("users"),
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+	}, nil, ReadMetadata{Valid: true, ActualConsistency: ConsistencyLocalStale})
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrResourceExhausted {
+		t.Fatalf("handleGetManyBody err=%v want resource exhausted", err)
+	}
+}
+
 func TestOpenScanReportsTruncatedWhenCursorRetentionExceeded(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -832,6 +1282,26 @@ func TestCursorCloseRequiresStreamID(t *testing.T) {
 	if err := client.CursorClose(ctx, 0); !isRemoteError(err, iwire.ErrInvalidCommand) {
 		t.Fatalf("CursorClose zero err=%v want invalid command", err)
 	}
+}
+
+type fakeClusterReadCoordinator struct {
+	result ClusterReadResult
+	err    error
+	calls  []ClusterReadRequest
+}
+
+func (f *fakeClusterReadCoordinator) CoordinateRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
+	f.calls = append(f.calls, request)
+	return f.result, f.err
+}
+
+func mustEncodeScalar(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := encodeScalar(value)
+	if err != nil {
+		t.Fatalf("encodeScalar(%v): %v", value, err)
+	}
+	return raw
 }
 
 func boolSlicesEqual(a, b []bool) bool {

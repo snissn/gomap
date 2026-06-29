@@ -1,11 +1,148 @@
 package nativewire
 
 import (
+	"context"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
+
+func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *connState, cmd iwire.ValidatedCommand) ([]iwire.Section, []byte, bool, error) {
+	var readMeta ReadMetadata
+	var err error
+	if cmd.Header.ID != iwire.CommandCursorNext {
+		readMeta, err = s.readMetadataForCommand(ctx, header, cmd)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	var responseSections []iwire.Section
+	var responseBody []byte
+	responseBodySet := false
+	switch cmd.Header.ID {
+	case iwire.CommandGetMany:
+		responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch(), readMeta)
+		responseBodySet = true
+	case iwire.CommandIndexLookup:
+		responseSections, err = s.handleIndexLookup(state, cmd.Known)
+	case iwire.CommandIndexRange:
+		responseSections, err = s.handleIndexRange(state, cmd.Known)
+	case iwire.CommandOpenScan:
+		responseSections, err = s.handleOpenScan(state, cmd.Known, readMeta)
+	case iwire.CommandCursorNext:
+		responseSections, readMeta, err = s.handleCursorNext(state, header.StreamID, cmd.Known)
+	case iwire.CommandCursorClose:
+		responseSections, err = s.handleCursorClose(state, header.StreamID, cmd.Known)
+	default:
+		name := "<unknown>"
+		if cmd.Schema != nil {
+			name = cmd.Schema.Name
+		}
+		err = protocolError(iwire.ErrUnsupportedFeature, "command %s is not implemented as a native read", name)
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if responseBodySet {
+		return nil, responseBody, true, nil
+	}
+	responseSections, err = s.appendReadMetaSection(responseSections, readMeta)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return responseSections, nil, false, nil
+}
+
+func (s *Server) appendReadMetaSection(sections []iwire.Section, meta ReadMetadata) ([]iwire.Section, error) {
+	if !meta.Valid {
+		return sections, nil
+	}
+	sections = append(sections, readMetaSection(meta))
+	if err := s.checkResponseSectionsBounds(sections); err != nil {
+		return nil, err
+	}
+	return sections, nil
+}
+
+func (s *Server) checkResponseSectionCount(sections int) error {
+	if s == nil || s.limits.MaxSections == 0 || sections <= s.limits.MaxSections {
+		return nil
+	}
+	return protocolError(iwire.ErrResourceExhausted, "response sections %d exceeds limit %d", sections, s.limits.MaxSections)
+}
+
+func (s *Server) checkResponseSectionsBounds(sections []iwire.Section) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.checkResponseSectionCount(len(sections)); err != nil {
+		return err
+	}
+	var bodyLen uint64
+	for _, section := range sections {
+		if err := s.checkResponseSectionLen(responseSectionName(section.ID), len(section.Bytes)); err != nil {
+			return err
+		}
+		sectionLen, err := responseSectionBodyLen(section.ID, len(section.Bytes))
+		if err != nil {
+			return err
+		}
+		bodyLen, err = addResponseLen(bodyLen, sectionLen)
+		if err != nil {
+			return err
+		}
+	}
+	return s.checkResponseBodyLen(bodyLen)
+}
+
+func responseSectionName(id iwire.SectionID) string {
+	switch id {
+	case iwire.SectionDocumentIDs:
+		return "document_ids"
+	case iwire.SectionDocuments:
+		return "documents"
+	case iwire.SectionPresenceBitmap:
+		return "presence_bitmap"
+	case iwire.SectionCursorMeta:
+		return "cursor_meta"
+	case iwire.SectionTruncated:
+		return "truncated"
+	case iwire.SectionResponseMeta:
+		return "response_meta"
+	default:
+		return "response"
+	}
+}
+
+func coordinatedReadCommand(commandID iwire.CommandID) bool {
+	switch commandID {
+	case iwire.CommandGetMany,
+		iwire.CommandIndexLookup,
+		iwire.CommandIndexRange,
+		iwire.CommandOpenScan,
+		iwire.CommandCursorNext,
+		iwire.CommandCursorClose:
+		return true
+	default:
+		return false
+	}
+}
+
+func rejectUnsupportedReadConsistencyPolicy(cmd iwire.ValidatedCommand) error {
+	raw, ok, err := singletonSection(cmd.Known, iwire.SectionConsistencyPolicy)
+	if err != nil || !ok {
+		return err
+	}
+	if _, err := consistencyPolicyFromPayload(raw); err != nil {
+		return err
+	}
+	name := "<unknown>"
+	if cmd.Schema != nil {
+		name = cmd.Schema.Name
+	}
+	return protocolError(iwire.ErrUnsupportedFeature, "consistency_policy is not supported for command %s", name)
+}
 
 func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	_, docs, present, err := s.getManyDocuments(state, sections)
@@ -18,7 +155,7 @@ func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iw
 	}, nil
 }
 
-func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, dst []byte, readMeta ReadMetadata) ([]byte, error) {
 	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
@@ -78,6 +215,20 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err := s.checkResponseByteVectorLen("documents", len(payload)); err != nil {
 		return nil, err
 	}
+	sectionCount := 2
+	var metaSection iwire.Section
+	if readMeta.Valid {
+		sectionCount++
+		metaSection = readMetaSection(readMeta)
+		if err := s.checkResponseSectionCount(sectionCount); err != nil {
+			return nil, err
+		}
+		if err := s.checkResponseSectionLen("response_meta", len(metaSection.Bytes)); err != nil {
+			return nil, err
+		}
+	} else if err := s.checkResponseSectionCount(sectionCount); err != nil {
+		return nil, err
+	}
 	presenceBodyLen, err := responseSectionBodyLen(iwire.SectionPresenceBitmap, len(presence))
 	if err != nil {
 		return nil, err
@@ -89,6 +240,17 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	bodyLen := presenceBodyLen + docBodyLen
 	if bodyLen < presenceBodyLen {
 		return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
+	}
+	if readMeta.Valid {
+		metaBodyLen, err := responseSectionBodyLen(metaSection.ID, len(metaSection.Bytes))
+		if err != nil {
+			return nil, err
+		}
+		nextBodyLen := bodyLen + metaBodyLen
+		if nextBodyLen < bodyLen {
+			return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
+		}
+		bodyLen = nextBodyLen
 	}
 	if err := s.checkResponseBodyLen(bodyLen); err != nil {
 		return nil, err
@@ -105,6 +267,12 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	body, err = iwire.AppendByteVectorPayload(body, lengths, payload)
 	if err != nil {
 		return nil, err
+	}
+	if readMeta.Valid {
+		body, err = iwire.AppendSection(body, metaSection)
+		if err != nil {
+			return nil, err
+		}
 	}
 	retainGetManyScratch(state, lengths, presence, payload)
 	return body, nil
@@ -374,7 +542,7 @@ func (s *Server) handleIndexRange(state *connState, sections []iwire.Section) ([
 	}, nil
 }
 
-func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
+func (s *Server) handleOpenScan(state *connState, sections []iwire.Section, readMeta ReadMetadata) ([]iwire.Section, error) {
 	limits, err := optionalCursorLimits(sections)
 	if err != nil {
 		return nil, err
@@ -387,15 +555,23 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]i
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits)
+	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits, truncated, readMeta)
 	if err != nil {
 		return nil, err
 	}
-	if end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes {
+	retentionTruncated := end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes
+	if retentionTruncated && !truncated {
+		end, bytes, err = s.splitCursorBatchForWire(records, 0, limits, true, readMeta)
+		if err != nil {
+			return nil, err
+		}
+		retentionTruncated = end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes
+	}
+	if retentionTruncated {
 		return responseForRecords(records[:end], CursorMeta{Items: end, Bytes: bytes}, true)
 	}
 	batch := append([]collections.DocumentRecord(nil), records[:end]...)
-	cursorID, err := s.storeCursor(state.id, records, end, truncated)
+	cursorID, err := s.storeCursor(state.id, records, end, truncated, readMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -403,27 +579,39 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section) ([]i
 	return responseForRecords(batch, CursorMeta{CursorID: cursorID, Items: end, Bytes: bytes, HasMore: hasMore}, truncated)
 }
 
-func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, error) {
+func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, ReadMetadata, error) {
 	if state == nil {
-		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_next requires connection state")
+		return nil, ReadMetadata{}, protocolError(iwire.ErrInvalidCommand, "cursor_next requires connection state")
 	}
 	sectionCursorID, err := cursorRefFromSections(sections)
 	if err != nil {
-		return nil, err
+		return nil, ReadMetadata{}, err
 	}
 	if cursorID != 0 && cursorID != sectionCursorID {
-		return nil, protocolError(iwire.ErrInvalidCommand, "cursor_ref %d does not match stream_id %d", sectionCursorID, cursorID)
+		return nil, ReadMetadata{}, protocolError(iwire.ErrInvalidCommand, "cursor_ref %d does not match stream_id %d", sectionCursorID, cursorID)
 	}
 	cursorID = sectionCursorID
 	limits, err := requiredCursorLimits(sections)
 	if err != nil {
-		return nil, err
+		return nil, ReadMetadata{}, err
+	}
+	requestedPolicy, err := consistencyPolicyFromSections(sections)
+	if err != nil {
+		return nil, ReadMetadata{}, err
 	}
 	s.cursorMu.Lock()
 	cursor := s.cursors[cursorID]
 	if cursor == nil || cursor.owner != state.id {
 		s.cursorMu.Unlock()
-		return nil, protocolError(iwire.ErrCursorNotFound, "cursor %d not found", cursorID)
+		return nil, ReadMetadata{}, protocolError(iwire.ErrCursorNotFound, "cursor %d not found", cursorID)
+	}
+	readMeta := cursor.readMeta
+	if !readMeta.Valid || !readConsistencySatisfies(requestedPolicy, readMeta.ActualConsistency) {
+		s.cursorMu.Unlock()
+		if !readMeta.Valid {
+			return nil, ReadMetadata{}, protocolError(iwire.ErrConsistencyUnavailable, "cursor %d has no recorded read consistency", cursorID)
+		}
+		return nil, ReadMetadata{}, protocolError(iwire.ErrConsistencyUnavailable, "cursor %d actual consistency %s does not satisfy requested %s", cursorID, consistencyPolicyName(readMeta.ActualConsistency), consistencyPolicyName(requestedPolicy))
 	}
 	delete(s.cursors, cursorID)
 	start := cursor.pos
@@ -431,10 +619,10 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 	truncated := cursor.truncated
 	s.cursorMu.Unlock()
 
-	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits)
+	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits, truncated, readMeta)
 	if err != nil {
 		s.restoreCursor(cursorID, cursor)
-		return nil, err
+		return nil, ReadMetadata{}, err
 	}
 	batch := append([]collections.DocumentRecord(nil), records[start:end]...)
 	cursor.lastUsed = time.Now()
@@ -453,7 +641,8 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 	if !hasMore {
 		meta.CursorID = 0
 	}
-	return responseForRecords(batch, meta, truncated)
+	responseSections, err := responseForRecords(batch, meta, truncated)
+	return responseSections, readMeta, err
 }
 
 func (s *Server) handleCursorClose(state *connState, cursorID uint64, sections []iwire.Section) ([]iwire.Section, error) {
