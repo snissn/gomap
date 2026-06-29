@@ -146,6 +146,12 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.cache.append_only.entry_pool_puts_total",
 		"treedb.cache.append_only.entry_pool_drops_total",
 		"treedb.cache.append_only.entry_pool_drop_bytes_total",
+		"treedb.cache.append_only.reserve.calls_total",
+		"treedb.cache.append_only.reserve.entries_total",
+		"treedb.cache.append_only.reserve.grow_calls_total",
+		"treedb.cache.append_only.reserve.grow_bytes_total",
+		"treedb.cache.append_only.reserve.skipped_growth_allocs_total",
+		"treedb.cache.append_only.reserve.skipped_growth_bytes_total",
 		"treedb.process.append_only.mutable_from_lease_total",
 		"treedb.process.append_only.mutable_from_pool_total",
 		"treedb.process.append_only.mutable_pool_puts_total",
@@ -157,6 +163,12 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.append_only.entry_pool_puts_total",
 		"treedb.process.append_only.entry_pool_drops_total",
 		"treedb.process.append_only.entry_pool_drop_bytes_total",
+		"treedb.process.append_only.reserve.calls_total",
+		"treedb.process.append_only.reserve.entries_total",
+		"treedb.process.append_only.reserve.grow_calls_total",
+		"treedb.process.append_only.reserve.grow_bytes_total",
+		"treedb.process.append_only.reserve.skipped_growth_allocs_total",
+		"treedb.process.append_only.reserve.skipped_growth_bytes_total",
 	}
 	for _, key := range requiredInt {
 		if got := mustStatInt64(t, stats, key); got < 0 {
@@ -190,6 +202,21 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.entry_pool_drop_bytes_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.entry_pool_drop_bytes_total") {
 		t.Fatalf("append_only entry pool drop bytes mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.entry_pool_drop_bytes_total"))
+	}
+	reserveMirrors := []string{
+		"calls_total",
+		"entries_total",
+		"grow_calls_total",
+		"grow_bytes_total",
+		"skipped_growth_allocs_total",
+		"skipped_growth_bytes_total",
+	}
+	for _, suffix := range reserveMirrors {
+		processKey := "treedb.process.append_only.reserve." + suffix
+		cacheKey := "treedb.cache.append_only.reserve." + suffix
+		if got := mustStatInt64(t, stats, processKey); got != mustStatInt64(t, stats, cacheKey) {
+			t.Fatalf("append_only reserve %s mismatch process=%d cache=%d", suffix, got, mustStatInt64(t, stats, cacheKey))
+		}
 	}
 
 	rawGCFraction, ok := stats["treedb.process.memory.gc_cpu_fraction"]

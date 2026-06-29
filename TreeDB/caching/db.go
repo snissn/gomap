@@ -9768,6 +9768,15 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	mt.Delete(key)
 }
 
+func reserveMemtableEntries(mt memtable.Table, additional int) {
+	if additional <= 0 {
+		return
+	}
+	if reserver, ok := mt.(memtable.EntryCapacityReserver); ok {
+		reserver.ReserveAdditionalEntries(additional)
+	}
+}
+
 // memtableBatchSet applies a cached batch write while preserving the ownership
 // rules selected by cachedBatchWriteUsesSteal. Pointer entries may still keep
 // inline bytes in memtables that do not use value-log pointers internally.
@@ -28957,6 +28966,7 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyMemNewAllocQueueBytes := db.appendOnlyMemNewAllocQueueBytes.Load()
 	appendOnlyMemPoolDropTotal := db.appendOnlyMemPoolDropTotal.Load()
 	appendOnlyEntryPoolStats := memtable.AppendOnlyEntryPoolStatsSnapshot()
+	appendOnlyEntryReserveStats := memtable.AppendOnlyEntryReserveStatsSnapshot()
 	appendOnlyMemLeaseCount, appendOnlyMemLeaseEntryCapacity, appendOnlyMemLeaseEntryBackingBytes := db.appendOnlyMemLeaseStats()
 	appendOnlyMutableCount, appendOnlyMutableEntryCapacity, appendOnlyMutableEntryBackingBytes := db.appendOnlyMutableShardEntryStats()
 	appendOnlyMutableTrimTotal := db.appendOnlyMutableTrimTotal.Load()
@@ -28969,6 +28979,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.append_only.entry_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.PutsTotal)
 	stats["treedb.cache.append_only.entry_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropsTotal)
 	stats["treedb.cache.append_only.entry_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropBytesTotal)
+	stats["treedb.cache.append_only.reserve.calls_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.CallsTotal)
+	stats["treedb.cache.append_only.reserve.entries_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.EntriesTotal)
+	stats["treedb.cache.append_only.reserve.grow_calls_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.GrowCallsTotal)
+	stats["treedb.cache.append_only.reserve.grow_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.GrowBytesTotal)
+	stats["treedb.cache.append_only.reserve.skipped_growth_allocs_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.SkippedGrowthAllocsTotal)
+	stats["treedb.cache.append_only.reserve.skipped_growth_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.SkippedGrowthBytesTotal)
 	stats["treedb.cache.append_only.mem_lease_count"] = fmt.Sprintf("%d", appendOnlyMemLeaseCount)
 	stats["treedb.cache.append_only.mem_lease_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryCapacity)
 	stats["treedb.cache.append_only.mem_lease_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryBackingBytes)
@@ -28993,6 +29009,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.append_only.entry_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.PutsTotal)
 	stats["treedb.process.append_only.entry_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropsTotal)
 	stats["treedb.process.append_only.entry_pool_drop_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.DropBytesTotal)
+	stats["treedb.process.append_only.reserve.calls_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.CallsTotal)
+	stats["treedb.process.append_only.reserve.entries_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.EntriesTotal)
+	stats["treedb.process.append_only.reserve.grow_calls_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.GrowCallsTotal)
+	stats["treedb.process.append_only.reserve.grow_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.GrowBytesTotal)
+	stats["treedb.process.append_only.reserve.skipped_growth_allocs_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.SkippedGrowthAllocsTotal)
+	stats["treedb.process.append_only.reserve.skipped_growth_bytes_total"] = fmt.Sprintf("%d", appendOnlyEntryReserveStats.SkippedGrowthBytesTotal)
 	stats["treedb.process.append_only.mem_lease_count"] = fmt.Sprintf("%d", appendOnlyMemLeaseCount)
 	stats["treedb.process.append_only.mem_lease_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryCapacity)
 	stats["treedb.process.append_only.mem_lease_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryBackingBytes)
@@ -33476,6 +33498,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
+			reserveMemtableEntries(shard.mem, len(idxs))
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
 			if stealSuppressedDeferred && allowBatchArenaBorrow {
@@ -33550,6 +33573,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
+			reserveMemtableEntries(shard.mem, len(entries))
 			useStream := b.streamEligible
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
