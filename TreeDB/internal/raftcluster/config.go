@@ -118,6 +118,7 @@ type StorageLayout struct {
 	GroupDir    string
 	LogDir      string
 	StableDir   string
+	ApplyDir    string
 	SnapshotDir string
 	PeerDirs    []PeerStorageDir
 }
@@ -503,6 +504,7 @@ func storageLayout(clusterDir string, nodeID NodeID, groupID GroupID, peers []Pe
 		GroupDir:    groupDir,
 		LogDir:      filepath.Join(groupDir, "log"),
 		StableDir:   filepath.Join(groupDir, "stable"),
+		ApplyDir:    filepath.Join(groupDir, "apply"),
 		SnapshotDir: filepath.Join(groupDir, "snapshots"),
 		PeerDirs:    peerDirs,
 	}

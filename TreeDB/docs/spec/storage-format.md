@@ -28,10 +28,10 @@ A TreeDB deployment uses:
   typed-storage physical assets (`column_assets` remains the compatibility
   directory name),
 - R3a/Raft apply metadata logs `apply-progress-v1.log` and
-  `apply-results-v1.log` under the caller-owned Raft/apply metadata directory,
+  `apply-results-v1.log` under the per-group Raft `apply/` metadata directory,
 - optional single-group Raft provider state under
   `raftcluster/nodes/<node-id>/groups/<group-id>/` with separate `log/`,
-  `stable/`, `snapshots/`, and `peers/<peer-id>/` directories,
+  `stable/`, `apply/`, `snapshots/`, and `peers/<peer-id>/` directories,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
@@ -148,17 +148,24 @@ Rules:
 ## 3.1.1 R3a Apply Metadata Logs
 
 Durable R3a apply stores persist metadata beside the future Raft node state, not
-inside `index.db`, `wal/`, or the value log. The current implementation accepts
-a caller-owned metadata directory. The default file names are:
+inside `index.db`, `wal/`, or the value log. For the single-group Raft layout the
+directory is:
+
+```text
+raftcluster/nodes/<node-id>/groups/<group-id>/apply/
+```
+
+The default file names are:
 
 - `apply-progress-v1.log` for `raftapply.ApplyProgressStore`;
 - `apply-results-v1.log` for `raftapply.ApplyResultStore`.
 
-The parent path is intentionally narrow and caller-owned so the #3044 storage
-boundary can place it under the final node/group directory without changing the
-record format. These files are not part of the local command WAL. They record
-the applied-index and idempotency/result replay metadata that lets a later Raft
-FSM recover after restart.
+The parent path is intentionally narrow so the #3044 storage boundary can place
+it under the node/group directory without changing the record format. These
+files are part of the local Raft group storage set for backup/restore purposes,
+but they are not part of the local command WAL and are not consensus-log bytes.
+They record the applied-index and idempotency/result replay metadata that lets a
+later Raft FSM recover after restart.
 
 Each file starts with a 20-byte header:
 

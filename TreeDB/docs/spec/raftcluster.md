@@ -15,8 +15,8 @@ The initial boundary owns:
 - one `GroupID`;
 - a peer membership set that must include the local node;
 - a fail-closed config format and required-feature floor;
-- deterministic local storage paths for Raft log, stable metadata, snapshots,
-  and peer metadata.
+- deterministic local storage paths for Raft log, stable metadata, apply
+  metadata, snapshots, and peer metadata.
 
 ## Feature And Version Floor
 
@@ -41,6 +41,7 @@ Validation first resolves TreeDB's storage root and main DB directory from
     groups/<group-id>/
       log/
       stable/
+      apply/
       snapshots/
       peers/<peer-id>/
 ```
@@ -66,6 +67,12 @@ The Raft paths must be distinct from:
 
 The Raft log directory stores consensus-log bytes for the selected future Raft
 provider. It is not the TreeDB command WAL.
+
+The `apply/` directory stores durable R3a/FSM apply metadata for this local
+node/group, including `apply-progress-v1.log` and `apply-results-v1.log`. These
+files are part of the Raft group storage layout and must be backed up/restored
+with the group; they are not consensus log bytes and are not stored under
+TreeDB's local command WAL.
 
 ## Local Command WAL Boundary
 

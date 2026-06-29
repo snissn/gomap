@@ -379,6 +379,19 @@ func (s *DurableApplyProgressStore) LastApplied() (raftentry.ApplyEntryID, bool)
 	return s.last, s.last.Index != 0
 }
 
+func (s *DurableApplyProgressStore) LastAppliedRecord() (ApplyProgressRecordV1, bool) {
+	if s == nil {
+		return ApplyProgressRecordV1{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.last.Index == 0 {
+		return ApplyProgressRecordV1{}, false
+	}
+	record, ok := s.records[s.last]
+	return record, ok
+}
+
 func (s *DurableApplyProgressStore) Close() error {
 	if s == nil {
 		return nil
