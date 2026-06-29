@@ -86,7 +86,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	if got := first.Diagnostics.TypedColumnPrepareWorkerCount; got != wantPrepareWorkers {
 		t.Fatalf("q5 first one-shot typed-column prepare workers=%d want %d diagnostics=%+v", got, wantPrepareWorkers, first.Diagnostics)
 	}
-	assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(t, col, req)
+	assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(t, col, req, true)
 
 	second, err := col.RunColumnPhysicalQuery(req)
 	if err != nil {
@@ -247,7 +247,7 @@ func TestColumnPhysicalTypedColumnParallelPartDecodeShapes3158(t *testing.T) {
 	}
 }
 
-func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) {
+func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest, wantCompact bool) {
 	tb.Helper()
 	if col == nil {
 		tb.Fatalf("nil collection")
@@ -274,6 +274,7 @@ func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 	if runner == nil {
 		tb.Fatalf("q5 typed-column one-shot cache entry has nil runner")
 	}
+	sawCompact := false
 	for partIdx := range runner.parts {
 		dense := runner.parts[partIdx].DenseInt64Span
 		if dense == nil {
@@ -288,11 +289,35 @@ func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 		if !dense.PredicatesPreApplied {
 			tb.Fatalf("q5 typed-column one-shot part %d predicates were not preapplied", partIdx)
 		}
-		if dense.PreAppliedRowsScanned != len(dense.GroupCodes) {
-			tb.Fatalf("q5 typed-column one-shot part %d preapplied rows scanned=%d want %d", partIdx, dense.PreAppliedRowsScanned, len(dense.GroupCodes))
+		if dense.PreAppliedRowsScanned < len(dense.GroupCodes) {
+			tb.Fatalf("q5 typed-column one-shot part %d preapplied rows scanned=%d below compact rows=%d", partIdx, dense.PreAppliedRowsScanned, len(dense.GroupCodes))
 		}
 		if len(dense.PredicateRows) == 0 {
 			tb.Fatalf("q5 typed-column one-shot part %d predicate rows empty", partIdx)
+		}
+		if len(dense.PredicateRows) > len(dense.GroupCodes) {
+			tb.Fatalf("q5 typed-column one-shot part %d predicate rows=%d group rows=%d", partIdx, len(dense.PredicateRows), len(dense.GroupCodes))
+		}
+		compact := dense.PreAppliedRowsScanned > len(dense.GroupCodes)
+		if compact {
+			if len(dense.PredicateRows) != len(dense.GroupCodes) {
+				tb.Fatalf("q5 typed-column one-shot part %d compact predicate rows=%d compact rows=%d", partIdx, len(dense.PredicateRows), len(dense.GroupCodes))
+			}
+			sawCompact = true
+		}
+		previousPredicateRow := -1
+		for rowIdx, predicateRow := range dense.PredicateRows {
+			row := int(predicateRow)
+			if row <= previousPredicateRow {
+				tb.Fatalf("q5 typed-column one-shot part %d predicate row[%d]=%d is not strictly ascending", partIdx, rowIdx, predicateRow)
+			}
+			if row >= len(dense.GroupCodes) {
+				tb.Fatalf("q5 typed-column one-shot part %d predicate row[%d]=%d outside group rows=%d", partIdx, rowIdx, predicateRow, len(dense.GroupCodes))
+			}
+			if compact && row != rowIdx {
+				tb.Fatalf("q5 typed-column one-shot part %d compact predicate row[%d]=%d", partIdx, rowIdx, predicateRow)
+			}
+			previousPredicateRow = row
 		}
 		if len(dense.Predicates) != 3 {
 			tb.Fatalf("q5 typed-column one-shot part %d predicates=%d want 3", partIdx, len(dense.Predicates))
@@ -305,6 +330,9 @@ func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 				tb.Fatalf("q5 typed-column one-shot part %d predicate %d metadata=%+v want single-code non-missing match", partIdx, predicateIdx, predicate)
 			}
 		}
+	}
+	if wantCompact && !sawCompact {
+		tb.Fatalf("q5 typed-column one-shot cache did not contain a compact predicate-first part")
 	}
 }
 

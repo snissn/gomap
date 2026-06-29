@@ -209,7 +209,8 @@ type columnTypedColumnPhysicalQueryPartDecodeOutput struct {
 }
 
 type columnTypedColumnPhysicalQueryPartDecodeOptions struct {
-	eagerTimeOrderTopKPayloads bool
+	eagerTimeOrderTopKPayloads         bool
+	compactDenseInt64SpanPredicateRows bool
 }
 
 type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
@@ -666,7 +667,8 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 		// Worker read caches close after decode, so parallel TopK runners must
 		// own payload bytes instead of retaining lazy range readers.
 		decodeOpts := columnTypedColumnPhysicalQueryPartDecodeOptions{
-			eagerTimeOrderTopKPayloads: columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req),
+			eagerTimeOrderTopKPayloads:         columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req),
+			compactDenseInt64SpanPredicateRows: !includePhysicalRows && allowDenseGroupCountDistinct,
 		}
 		outputs, hits, misses, err := decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view, req, plan, inputs, readCache, includePhysicalRows, allowDenseGroupCountDistinct, decodeOpts)
 		if err != nil {
@@ -689,7 +691,10 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 		}
 		var rawScratch []byte
 		for _, input := range inputs {
-			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, columnTypedColumnPhysicalQueryPartDecodeOptions{}, rawScratch, prepareDiagnostics)
+			decodeOpts := columnTypedColumnPhysicalQueryPartDecodeOptions{
+				compactDenseInt64SpanPredicateRows: !includePhysicalRows && allowDenseGroupCountDistinct,
+			}
+			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, decodeOpts, rawScratch, prepareDiagnostics)
 			runner.segmentFileCacheHits = readCache.hits
 			runner.segmentFileCacheMisses = readCache.misses
 			if err != nil {
