@@ -35,6 +35,12 @@ func TestSummarizeMemtableResidency_ByMode(t *testing.T) {
 	if got.total.size <= 0 {
 		t.Fatalf("total.size=%d want >0", got.total.size)
 	}
+	if got.total.entryCapacity <= 0 {
+		t.Fatalf("total.entryCapacity=%d want >0 from append-only table", got.total.entryCapacity)
+	}
+	if got.total.entryBackingBytes <= 0 {
+		t.Fatalf("total.entryBackingBytes=%d want >0 from append-only table", got.total.entryBackingBytes)
+	}
 
 	checkMode := func(name string, s memtableResidencySummary) {
 		t.Helper()
@@ -53,4 +59,19 @@ func TestSummarizeMemtableResidency_ByMode(t *testing.T) {
 	checkMode("hash_sorted", got.hashSorted)
 	checkMode("btree", got.btree)
 	checkMode("append_only", got.appendOnly)
+	if got.skiplist.entryCapacity != 0 || got.hashSorted.entryCapacity != 0 || got.btree.entryCapacity != 0 {
+		t.Fatalf("non-append-only entry capacities: skip=%d hash=%d btree=%d want all zero", got.skiplist.entryCapacity, got.hashSorted.entryCapacity, got.btree.entryCapacity)
+	}
+	if got.appendOnly.entryCapacity <= 0 {
+		t.Fatalf("append_only.entryCapacity=%d want >0", got.appendOnly.entryCapacity)
+	}
+	if got.appendOnly.entryBackingBytes <= 0 {
+		t.Fatalf("append_only.entryBackingBytes=%d want >0", got.appendOnly.entryBackingBytes)
+	}
+	if got.total.entryCapacity != got.appendOnly.entryCapacity {
+		t.Fatalf("total.entryCapacity=%d want append-only %d", got.total.entryCapacity, got.appendOnly.entryCapacity)
+	}
+	if got.total.entryBackingBytes != got.appendOnly.entryBackingBytes {
+		t.Fatalf("total.entryBackingBytes=%d want append-only %d", got.total.entryBackingBytes, got.appendOnly.entryBackingBytes)
+	}
 }

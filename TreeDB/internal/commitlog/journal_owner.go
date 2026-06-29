@@ -180,9 +180,12 @@ type CommandJournalOptions struct {
 	// BufferSize controls this command journal's buffered writer size. Zero
 	// uses the commitlog default.
 	BufferSize int
-	// DeferredCommandBufferSize preallocates a writer-owned buffer used to
-	// finalize trusted public command frames at flush/sync boundaries.
+	// DeferredCommandBufferSize caps the writer-owned buffer used to finalize
+	// trusted public command frames at flush/sync boundaries.
 	DeferredCommandBufferSize int
+	// DeferredCommandBufferRetainSize bounds retained command buffer capacity
+	// after flush. Zero keeps the writer default.
+	DeferredCommandBufferRetainSize int
 	// Compress enables commitlog frame compression.
 	Compress bool
 	// OnSegmentRotated is called after a successful active segment rotation with
@@ -260,7 +263,13 @@ func OpenCommandJournal(walDir string, opts CommandJournalOptions) (*CommandJour
 		_ = owner.Close()
 		return nil, err
 	}
-	writer, err := NewWriterWithOptions(path, Options{MaxSegmentSize: opts.MaxSegmentSize, BufferSize: opts.BufferSize, DeferredCommandBufferSize: opts.DeferredCommandBufferSize, Compress: opts.Compress})
+	writer, err := NewWriterWithOptions(path, Options{
+		MaxSegmentSize:                  opts.MaxSegmentSize,
+		BufferSize:                      opts.BufferSize,
+		DeferredCommandBufferSize:       opts.DeferredCommandBufferSize,
+		DeferredCommandBufferRetainSize: opts.DeferredCommandBufferRetainSize,
+		Compress:                        opts.Compress,
+	})
 	if err != nil {
 		_ = owner.Close()
 		return nil, err
@@ -523,6 +532,18 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 func (j *CommandJournal) ActiveBytes() int64 {
 	_, bytes := j.ActiveSegmentSnapshot()
 	return bytes
+}
+
+func (j *CommandJournal) WriterBufferStats() WriterBufferStats {
+	if j == nil {
+		return WriterBufferStats{}
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.writer == nil {
+		return WriterBufferStats{}
+	}
+	return j.writer.BufferStats()
 }
 
 // ActiveSegmentSnapshot reports the active segment path and accepted bytes under
