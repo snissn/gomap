@@ -327,6 +327,9 @@ func validateApplyProgressCoverage(db *backenddb.DB, record raftapply.ApplyProgr
 	if record.AppliedCommandLSN > localLSN {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "apply progress metadata AppliedCommandLSN %d outruns local coverage %d", record.AppliedCommandLSN, localLSN)
 	}
+	if record.AppliedCommandLSN < localLSN {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d outruns apply progress metadata %d", localLSN, record.AppliedCommandLSN)
+	}
 	return nil
 }
 

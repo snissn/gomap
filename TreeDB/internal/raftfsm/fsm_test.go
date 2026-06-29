@@ -187,6 +187,75 @@ func TestSingleGroupApplyLoopRejectsMissingProgressWithLocalCoverage(t *testing.
 	}
 }
 
+func TestSingleGroupApplyLoopRejectsProgressBehindLocalCoverage(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	fsm := openFSMForTest(t, db, dbDir)
+	users := deterministicCreateCollectionEntry(t, "users", "fsm:create:users:progress-behind")
+	first, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 1, users))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 first: %v result=%+v", err, first)
+	}
+	assertApplied(t, first, raftentry.ApplyStatusApplied, 1)
+	firstProgress, ok := fsm.progress.LastAppliedRecord()
+	if !ok {
+		t.Fatal("LastAppliedRecord after first apply missing")
+	}
+
+	orders := deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:progress-behind")
+	second, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 2, orders))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 second: %v result=%+v", err, second)
+	}
+	assertApplied(t, second, raftentry.ApplyStatusApplied, 1)
+	coveredLSN := db.State().AppliedCommandLSN
+	if coveredLSN <= firstProgress.AppliedCommandLSN {
+		t.Fatalf("AppliedCommandLSN after second apply=%d, want greater than first progress %d", coveredLSN, firstProgress.AppliedCommandLSN)
+	}
+	progressPath := raftapply.DurableApplyProgressStorePath(fsm.metadataDir)
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close FSM: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
+	}
+	if err := os.Remove(progressPath); err != nil {
+		t.Fatalf("Remove progress metadata: %v", err)
+	}
+	progress, err := raftapply.OpenDurableApplyProgressStoreFile(progressPath, raftapply.DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("Open rolled-back progress store: %v", err)
+	}
+	if err := progress.RecordApplied(firstProgress); err != nil {
+		t.Fatalf("Record rolled-back progress: %v", err)
+	}
+	if err := progress.Close(); err != nil {
+		t.Fatalf("Close rolled-back progress store: %v", err)
+	}
+
+	reopenedDB := openFSMTestDB(t, dbDir)
+	defer func() { _ = reopenedDB.Close() }()
+	if got := reopenedDB.State().AppliedCommandLSN; got != coveredLSN {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want %d", got, coveredLSN)
+	}
+	reopenedFSM, openErr := Open(Options{
+		DB:      reopenedDB,
+		Cluster: validFSMClusterConfig(dbDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if openErr == nil {
+		_ = reopenedFSM.Close()
+		t.Fatal("Open with progress behind local coverage succeeded, want unsafe durability error")
+	}
+	if code, ok := ErrorCodeOf(openErr); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("ErrorCodeOf(Open progress behind local coverage)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
+	}
+}
+
 func TestSingleGroupApplyLoopFailsClosedOnOrderingAndUnsupportedEntries(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
