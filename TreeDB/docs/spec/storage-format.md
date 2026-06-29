@@ -27,6 +27,9 @@ A TreeDB deployment uses:
   `column_assets/<namespace>/assets/segments/segment-*.tca` for production
   typed-storage physical assets (`column_assets` remains the compatibility
   directory name),
+- optional single-group Raft provider state under
+  `raftcluster/nodes/<node-id>/groups/<group-id>/` with separate `log/`,
+  `stable/`, and `snapshots/` directories,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
@@ -42,6 +45,12 @@ The operator restorable file set, live backup barrier, and restore validation
 procedure are defined in `TreeDB/docs/spec/backup-restore.md`. A live
 filesystem-level copy without that barrier is unsupported once command-WAL
 external refs can exist.
+
+Raft provider state is separate from the main DB. The local command WAL under
+`maindb/wal/` is not a Raft log, and `maindb/value_vlog/` remains persistent
+value storage managed by reachability-based GC and rewrite/compaction. The
+single-group provider/storage boundary is defined in
+`TreeDB/docs/spec/raftcluster.md`.
 
 ## 2. Index Page Basics
 
