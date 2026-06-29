@@ -6786,6 +6786,9 @@ func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration
 		if db.retainedPruneForceRequested.Swap(false) {
 			return true
 		}
+		if !db.shouldScheduleRetainedValueLogPruneWithForce(false) {
+			return false
+		}
 		if db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow) {
 			// Re-check immediately before returning so force requests racing with
 			// the quiet-window transition are not dropped.
