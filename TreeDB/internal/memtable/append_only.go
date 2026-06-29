@@ -309,6 +309,16 @@ func subtractAppendOnlyEntryPoolRetainedBytes(bytes uint64) {
 	}
 }
 
+func dropAppendOnlyEntryPoolsLocked() {
+	for i := range appendOnlyEntryPoolPtrs {
+		appendOnlyEntryPoolPtrs[i].Store(&sync.Pool{})
+	}
+	if dropped := appendOnlyEntryPoolRetainedBytes.Swap(0); dropped > 0 {
+		appendOnlyEntryPoolDropBytesTotal.Add(dropped)
+	}
+	appendOnlyEntryPoolDropTotal.Add(1)
+}
+
 // DropAppendOnlyEntryPools abandons package-level append-only entry slice pools.
 // It is intended for cold transitions away from append-only mutable memtables,
 // where retaining restore-sized warm buffers hurts steady-state RSS more than it
@@ -317,13 +327,7 @@ func DropAppendOnlyEntryPools() {
 	appendOnlyEntryPoolMu.Lock()
 	defer appendOnlyEntryPoolMu.Unlock()
 
-	for i := range appendOnlyEntryPoolPtrs {
-		appendOnlyEntryPoolPtrs[i].Store(&sync.Pool{})
-	}
-	if dropped := appendOnlyEntryPoolRetainedBytes.Swap(0); dropped > 0 {
-		appendOnlyEntryPoolDropBytesTotal.Add(dropped)
-	}
-	appendOnlyEntryPoolDropTotal.Add(1)
+	dropAppendOnlyEntryPoolsLocked()
 }
 
 func AppendOnlyEntryPoolDropTotal() uint64 {
@@ -422,8 +426,11 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
 		bytes := appendOnlyEntryPoolBytes(cap(full))
 		if !tryAddAppendOnlyEntryPoolRetainedBytes(bytes) {
-			recordAppendOnlyEntryPoolAdmissionDrop(bytes)
-			return
+			dropAppendOnlyEntryPoolsLocked()
+			if !tryAddAppendOnlyEntryPoolRetainedBytes(bytes) {
+				recordAppendOnlyEntryPoolAdmissionDrop(bytes)
+				return
+			}
 		}
 		appendOnlyEntryPoolPutTotal.Add(1)
 		pool.Put(full[:0])

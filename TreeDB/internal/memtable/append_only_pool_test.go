@@ -177,7 +177,7 @@ func TestPutAppendOnlyEntriesDropsOversizedRetainedSlice(t *testing.T) {
 	}
 }
 
-func TestPutAppendOnlyEntriesHonorsRetainBudget(t *testing.T) {
+func TestPutAppendOnlyEntriesRecyclesPoolsOnRetainBudgetPressure(t *testing.T) {
 	DropAppendOnlyEntryPools()
 	t.Cleanup(DropAppendOnlyEntryPools)
 
@@ -199,14 +199,20 @@ func TestPutAppendOnlyEntriesHonorsRetainBudget(t *testing.T) {
 	if got := after.RetainedBytesEstimate; got != wantBytes {
 		t.Fatalf("retained bytes=%d want budget %d", got, wantBytes)
 	}
-	if got := after.PutsTotal - before.PutsTotal; got != 1 {
-		t.Fatalf("puts delta=%d want 1", got)
+	if got := after.PutsTotal - before.PutsTotal; got != 2 {
+		t.Fatalf("puts delta=%d want 2", got)
 	}
-	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 1 {
-		t.Fatalf("admission drops delta=%d want 1", got)
+	if got := after.DropsTotal - before.DropsTotal; got != 1 {
+		t.Fatalf("drops delta=%d want 1", got)
 	}
-	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != wantBytes {
-		t.Fatalf("admission drop bytes delta=%d want %d", got, wantBytes)
+	if got := after.DropBytesTotal - before.DropBytesTotal; got < wantBytes {
+		t.Fatalf("drop bytes delta=%d want at least %d", got, wantBytes)
+	}
+	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 0 {
+		t.Fatalf("admission drops delta=%d want 0", got)
+	}
+	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != 0 {
+		t.Fatalf("admission drop bytes delta=%d want 0", got)
 	}
 }
 
