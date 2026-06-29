@@ -223,6 +223,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/native-query-raft-roadmap.md`
   - draft query feature roadmap and distributed/Raft sequencing policy for the
     native protocol.
+- `TreeDB/docs/spec/raftplacement.md`
+  - issue #3046 collection-level placement catalog and pure route resolver
+    contract for the first multi-group Raft slice.
 - `TreeDB/docs/spec/native-wire-r1-closeout.md`
   - R1 single-node native server performance closeout, including direct vs
     native microbenchmarks, workload profile commands, artifacts, findings, and
@@ -334,6 +337,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
 | Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
 | Single-group Raft provider/storage boundary | `raftcluster.md` | `native-query-raft-roadmap.md`, `storage-format.md`, `user-command-wal.md`. |
+| Collection-level Raft placement catalog | `raftplacement.md` | `native-query-raft-roadmap.md`, `raftcluster.md`. |
 | Verification mapping | `verification.md` | all normative specs. |
 
 ## Terminology Ownership
@@ -379,7 +383,7 @@ blocking questions live:
   `user-command-wal.md`.
 - Native-wire protocol questions: `native-wire-protocol.md`.
 - Raft sequencing and local recoverability questions:
-  `native-query-raft-roadmap.md` and `raftcluster.md`.
+  `native-query-raft-roadmap.md`, `raftcluster.md`, and `raftplacement.md`.
 - Typed-storage persistence and historical roadmap questions:
   `typed-storage-naming.md`, `typed-column-transplant.md`,
   `typed-column-adapter.md`, `typed-storage-closeout-1758.md`,
@@ -403,6 +407,7 @@ Docs lint treats this list as a manifest:
 - `TreeDB/docs/spec/recovery.md`
 - `TreeDB/docs/spec/verification.md`
 - `TreeDB/docs/spec/raftcluster.md`
+- `TreeDB/docs/spec/raftplacement.md`
 - `TreeDB/docs/spec/typed-column-schema-evolution.md`
 
 ## Relationship to Existing Docs
