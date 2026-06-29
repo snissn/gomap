@@ -249,6 +249,52 @@ func TestAppendOnlyIdleMutableRetainCapacity_CapsEmptyShardBacking(t *testing.T)
 	}
 }
 
+func TestTrimRetainedArenasAfterFlush_TrimsSparseAppendOnlyMutableBacking(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	db.memtableCap = 64 << 20
+	db.mutableShards = make([]memShard, 1)
+
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(db.checkpointRotateCapacity(), appendOnlyEstimatedBytesPerEntryDefault)
+	for i := 0; i < 1024; i++ {
+		mt.Set([]byte{byte(i >> 8), byte(i)}, []byte("value"))
+	}
+	before := mt.EntryBackingBytes()
+	if before <= int64(appendOnlyIdleMutableRetainCapacity) {
+		t.Fatalf("test setup entry backing=%d want above idle cap=%d", before, appendOnlyIdleMutableRetainCapacity)
+	}
+	db.mutableShards[0].mem = mt
+
+	db.trimRetainedArenasAfterFlush(false)
+
+	after := mt.EntryBackingBytes()
+	if after >= before {
+		t.Fatalf("entry backing after sparse trim=%d want below before=%d", after, before)
+	}
+	if after > int64(appendOnlyIdleMutableRetainCapacity) {
+		t.Fatalf("entry backing after sparse trim=%d want <= idle cap=%d", after, appendOnlyIdleMutableRetainCapacity)
+	}
+	if got := mt.Len(); got != 1024 {
+		t.Fatalf("len after sparse trim=%d want 1024", got)
+	}
+	value, deleted, found := mt.Get([]byte{0, 42})
+	if !found || deleted || string(value) != "value" {
+		t.Fatalf("Get after sparse trim=(%q,%t,%t), want value", value, deleted, found)
+	}
+	if got := db.appendOnlyMutableTrimTotal.Load(); got != 1 {
+		t.Fatalf("mutable trim total=%d want 1", got)
+	}
+	if got := db.appendOnlyMutableSparseTrimTotal.Load(); got != 1 {
+		t.Fatalf("mutable sparse trim total=%d want 1", got)
+	}
+	if got := db.appendOnlyMutableTrimDropped.Load(); got == 0 {
+		t.Fatal("mutable trim dropped bytes=0 want >0")
+	}
+	if got := db.appendOnlyMutableSparseTrimDropped.Load(); got == 0 {
+		t.Fatal("mutable sparse trim dropped bytes=0 want >0")
+	}
+}
+
 func TestTrimRetainedArenasAfterFlush_CheckpointDropsEmptyMutableBacking(t *testing.T) {
 	var db DB
 	db.storeMemtableMode(memtable.ModeAppendOnly)
