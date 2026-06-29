@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB/db"
@@ -13,12 +14,24 @@ import (
 
 type valueLogReadBarrierTrackingTreeDB struct {
 	*treedb.DB
-	barrierWithSize func(fileID uint32) (int64, error)
+	barrierWithSize   func(fileID uint32) (int64, error)
+	barrierCalls      atomic.Int64
+	lastBarrierFileID atomic.Uint32
 }
 
 func (b *valueLogReadBarrierTrackingTreeDB) SetCurrentValueLogReadBarrierWithSize(fn func(fileID uint32) (int64, error)) {
-	b.barrierWithSize = fn
-	b.DB.SetCurrentValueLogReadBarrierWithSize(fn)
+	if fn == nil {
+		b.barrierWithSize = nil
+		b.DB.SetCurrentValueLogReadBarrierWithSize(nil)
+		return
+	}
+	wrapped := func(fileID uint32) (int64, error) {
+		b.barrierCalls.Add(1)
+		b.lastBarrierFileID.Store(fileID)
+		return fn(fileID)
+	}
+	b.barrierWithSize = wrapped
+	b.DB.SetCurrentValueLogReadBarrierWithSize(wrapped)
 }
 
 func TestReadValueLogAppend_FlushesCurrentSegmentBufferedTailEvenWhenDirtyBitCleared(t *testing.T) {
@@ -261,8 +274,8 @@ func TestCachedModeValueLogPointerReadBarrierResolvesBackendRootRead(t *testing.
 
 	l.backendReadDirtySeq.Add(1)
 	db.backendReadVlogDirtySeq.Add(1)
-	if _, err := backend.barrierWithSize(ptr.FileID); err != nil {
-		t.Fatalf("backend value-log read barrier: %v", err)
+	if got := backend.barrierCalls.Load(); got != 0 {
+		t.Fatalf("backend read barrier calls before backend.Get=%d want 0", got)
 	}
 
 	got, err := backend.Get([]byte("root/doc"))
@@ -271,6 +284,12 @@ func TestCachedModeValueLogPointerReadBarrierResolvesBackendRootRead(t *testing.
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("backend value len=%d want %d", len(got), len(want))
+	}
+	if got := backend.barrierCalls.Load(); got == 0 {
+		t.Fatalf("backend.Get did not invoke backend value-log read barrier")
+	}
+	if got := backend.lastBarrierFileID.Load(); got != ptr.FileID {
+		t.Fatalf("backend read barrier fileID=%d want %d", got, ptr.FileID)
 	}
 
 	gotCached, err := db.Get([]byte("root/doc"))
