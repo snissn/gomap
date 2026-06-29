@@ -2,7 +2,7 @@
 
 This note maps the current TreeDB publication/readability contract for #2026 M0
 and the #3044 production gate. It describes existing commit surfaces and the
-fault model that tests should preserve.
+current behavior fault model that tests should preserve.
 
 ## Invariant
 
