@@ -20,6 +20,39 @@ type ClusterSubmitter interface {
 	SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata) (ClusterSubmitResult, error)
 }
 
+// ClusterAdmissionProvider exposes the node write-admission state backing a
+// ClusterSubmitter. A configured cluster submitter that does not implement
+// this interface fails closed as admission-unavailable.
+type ClusterAdmissionProvider interface {
+	ClusterAdmissionStatus(ctx context.Context) (ClusterAdmissionStatus, error)
+}
+
+// ClusterAdmissionStatus describes whether this node may accept cluster-owned
+// writes. A provider must set Leader for write admission; the zero value fails
+// closed as not-leader when returned by a configured provider.
+type ClusterAdmissionStatus struct {
+	Leader      bool
+	Unavailable bool
+	LeaderHint  string
+	Reason      string
+}
+
+// ClusterLeaderAdmission returns an admitted leader status.
+func ClusterLeaderAdmission() ClusterAdmissionStatus {
+	return ClusterAdmissionStatus{Leader: true}
+}
+
+// ClusterFollowerAdmission returns a fail-closed not-leader status. leaderHint
+// is optional and may carry a redirect target for callers that can use one.
+func ClusterFollowerAdmission(leaderHint, reason string) ClusterAdmissionStatus {
+	return ClusterAdmissionStatus{LeaderHint: leaderHint, Reason: reason}
+}
+
+// ClusterUnavailableAdmission returns a fail-closed cluster-unavailable status.
+func ClusterUnavailableAdmission(reason string) ClusterAdmissionStatus {
+	return ClusterAdmissionStatus{Unavailable: true, Reason: reason}
+}
+
 // ClusterSubmitResult is the submitter-owned response for an admitted command.
 // CommittedRecoverable must only be true when AckRaftCommitted reflects a real
 // consensus commit plus the serving node's selected local recoverability gate.
@@ -41,8 +74,14 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err != nil {
 		return nil, err
 	}
+	if ack == iwire.AckRaftCommitted {
+		return nil, protocolError(iwire.ErrDurabilityUnavailable, "raft_committed ack is deferred to the native Raft committed semantics gate")
+	}
 	metadata, err := clusterRequestMetadata(header, cmd.Header, cmd.Known, ack)
 	if err != nil {
+		return nil, err
+	}
+	if err := AdmitClusterMutation(ctx, s.clusterSubmitter); err != nil {
 		return nil, err
 	}
 	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, s.limits)
@@ -63,6 +102,50 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 		return nil, err
 	}
 	return cloneSections(result.ResponseSections), nil
+}
+
+// AdmitClusterMutation fails closed unless submitter is configured and, when
+// it exposes admission state, the node is currently the leader.
+func AdmitClusterMutation(ctx context.Context, submitter ClusterSubmitter) error {
+	if submitter == nil {
+		return protocolError(iwire.ErrInvalidCommand, "cluster submitter is not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	provider, ok := submitter.(ClusterAdmissionProvider)
+	if !ok {
+		return protocolError(iwire.ErrDurabilityUnavailable, "cluster admission provider is not configured")
+	}
+	status, err := provider.ClusterAdmissionStatus(ctx)
+	if err != nil {
+		return protocolError(iwire.ErrDurabilityUnavailable, "cluster admission unavailable: %v", err)
+	}
+	if status.Unavailable {
+		reason := status.Reason
+		if reason == "" {
+			reason = "cluster admission is unavailable"
+		}
+		return protocolError(iwire.ErrDurabilityUnavailable, "%s", reason)
+	}
+	if status.Leader {
+		return nil
+	}
+	message := "not cluster leader"
+	if status.Reason != "" {
+		message = status.Reason
+	}
+	if status.LeaderHint != "" {
+		message += "; leader_hint=" + status.LeaderHint
+	}
+	return protocolError(iwire.ErrReadOnly, "%s", message)
+}
+
+func (s *Server) rejectClusterLocalMutation(command string) error {
+	if s == nil || s.clusterSubmitter == nil {
+		return nil
+	}
+	return protocolError(iwire.ErrReadOnly, "nativewire cluster submitter mode requires %s through the cluster submitter", command)
 }
 
 func unsupportedClusterMutationError(cmd iwire.ValidatedCommand, row raftentry.CommandRowV1) error {
