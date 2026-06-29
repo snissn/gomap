@@ -1664,10 +1664,14 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		if prepareDiagnostics != nil {
 			adapterStart = time.Now()
 		}
-		adapterPart, err := typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, typedColumnPreparedAdapterPartOptions{
+		adapterOpts := typedColumnPreparedAdapterPartOptions{
 			LazyPayloads:    true,
 			DictionaryModes: adapterDictionaryModes,
-		})
+		}
+		adapterPart, minimalAdapterOK, err := typedColumnPhysicalQueryDenseInt64SpanMinimalPreparedAdapterPart(prepared, plan.Fields, plan, adapterOpts)
+		if err == nil && !minimalAdapterOK {
+			adapterPart, err = typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared, plan.Fields, reader.readRange, adapterOpts)
+		}
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.AdapterNanos += time.Since(adapterStart).Nanoseconds()
 		}
@@ -2020,6 +2024,101 @@ func typedColumnPhysicalQueryPreparedAdapterPartWithOptions(prepared *typedColum
 		Part:       &typedcolumn.ColumnPart{Descriptor: descriptor, Columns: partColumns, Marks: marks},
 		Dictionary: dictionaries,
 	}, nil
+}
+
+func typedColumnPhysicalQueryDenseInt64SpanMinimalPreparedAdapterPart(prepared *typedColumnPreparedPartState, fields []TypedStorageField, plan columnTypedColumnPhysicalQueryPlan, opts typedColumnPreparedAdapterPartOptions) (*typedColumnAdapterPart, bool, error) {
+	if prepared == nil || len(plan.PredicateSpecs) != 3 {
+		return nil, false, nil
+	}
+	adapterColumns, err := typedColumnAdapterColumnsForFields(fields)
+	if err != nil {
+		return nil, false, err
+	}
+	findColumn := func(column string) (typedColumnAdapterColumn, bool) {
+		for _, adapterColumn := range adapterColumns {
+			if adapterColumn.Field.Name == column || adapterColumn.Field.Path == column || adapterColumn.Definition.Name == column {
+				return adapterColumn, true
+			}
+		}
+		return typedColumnAdapterColumn{}, false
+	}
+	addColumn := func(adapterColumn typedColumnAdapterColumn, columns *[]typedColumnAdapterColumn, partColumns map[string]typedcolumn.ColumnPartColumn, dictionaries map[string]map[string]int64, seen map[string]struct{}) error {
+		name := adapterColumn.Definition.Name
+		if _, ok := seen[name]; ok {
+			return nil
+		}
+		preparedColumn := prepared.Columns[name]
+		if preparedColumn == nil {
+			return fmt.Errorf("collections: dense typed-column int64-span minimal prepared adapter missing column %q", name)
+		}
+		adapterColumn.Definition = preparedColumn.Column.Definition
+		if preparedColumn.Dictionaries != nil {
+			adapterColumn.Dictionary = preparedColumn.Dictionaries
+			dictionaries[adapterColumn.Definition.Name] = preparedColumn.Dictionaries
+		}
+		if preparedColumn.ReverseDictionaries != nil {
+			adapterColumn.ReverseDictionary = preparedColumn.ReverseDictionaries
+		}
+		mode := typedColumnPreparedAdapterDictionaryModeForColumn(opts, adapterColumn.Definition.Name)
+		if mode.ValuesByCode {
+			if preparedColumn.DictionaryValuesByCode != nil {
+				adapterColumn.DictionaryValuesByCode = preparedColumn.DictionaryValuesByCode
+			} else if preparedColumn.Dictionaries != nil {
+				valuesByCode, err := typedColumnAdapterDictionaryValuesByCodeFromForward(preparedColumn.Dictionaries, int(adapterColumn.Definition.Cardinality))
+				if err != nil {
+					return err
+				}
+				adapterColumn.DictionaryValuesByCode = valuesByCode
+			}
+		}
+		partColumn := preparedColumn.Column
+		if len(partColumn.Blocks) != 0 {
+			partColumn.Blocks = append([]typedcolumn.ColumnBlock(nil), partColumn.Blocks...)
+		}
+		*columns = append(*columns, adapterColumn)
+		partColumns[adapterColumn.Definition.Name] = partColumn
+		seen[name] = struct{}{}
+		return nil
+	}
+
+	columns := make([]typedColumnAdapterColumn, 0, 2+len(plan.PredicateSpecs))
+	partColumns := make(map[string]typedcolumn.ColumnPartColumn, 2+len(plan.PredicateSpecs))
+	dictionaries := make(map[string]map[string]int64, 1+len(plan.PredicateSpecs))
+	seen := make(map[string]struct{}, 2+len(plan.PredicateSpecs))
+	groupColumn, ok := findColumn(plan.GroupColumn)
+	if !ok {
+		return nil, false, fmt.Errorf("collections: dense typed-column int64-span group column %q is not owned by typed_column_part", plan.GroupColumn)
+	}
+	if err := addColumn(groupColumn, &columns, partColumns, dictionaries, seen); err != nil {
+		return nil, false, err
+	}
+	valueColumn, ok := findColumn(plan.ValueColumn)
+	if !ok {
+		return nil, false, fmt.Errorf("collections: dense typed-column int64-span value column %q is not owned by typed_column_part", plan.ValueColumn)
+	}
+	if err := addColumn(valueColumn, &columns, partColumns, dictionaries, seen); err != nil {
+		return nil, false, err
+	}
+	for _, spec := range plan.PredicateSpecs {
+		predicateColumn, ok := findColumn(spec.column)
+		if !ok {
+			return nil, false, fmt.Errorf("collections: dense typed-column predicate column %q is not owned by typed_column_part", spec.column)
+		}
+		if err := addColumn(predicateColumn, &columns, partColumns, dictionaries, seen); err != nil {
+			return nil, false, err
+		}
+	}
+	descriptor := prepared.Descriptor
+	if len(descriptor.SortKey) != 0 {
+		descriptor.SortKey = append([]typedcolumn.SortKeyColumn(nil), descriptor.SortKey...)
+	}
+	marks := append([]typedcolumn.SortKeyMark(nil), prepared.Marks...)
+	return &typedColumnAdapterPart{
+		Options:    typedColumnAdapterOptions{Fields: fields, SchemaVersion: prepared.Descriptor.SchemaVersion},
+		Columns:    columns,
+		Part:       &typedcolumn.ColumnPart{Descriptor: descriptor, Columns: partColumns, Marks: marks},
+		Dictionary: dictionaries,
+	}, true, nil
 }
 
 func typedColumnPreparedColumnWithPayloads(preparedColumn *typedColumnPreparedColumnState, readRange typedColumnPreparedRangeReader) (typedcolumn.ColumnPartColumn, error) {
