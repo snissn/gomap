@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -141,6 +142,53 @@ func TestAppendOnlyEntryPoolStatsTrackRetainedBacking(t *testing.T) {
 	}
 	if gotDropBytes := afterDrop.DropBytesTotal; gotDropBytes < beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate {
 		t.Fatalf("drop bytes total=%d want at least %d", gotDropBytes, beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate)
+	}
+}
+
+func TestAppendOnlyReserveAdditionalEntriesAvoidsIntermediateGrowth(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	m := NewAppendOnlyWithEntryCapacity(appendOnlyMinInitialEntries)
+	additional := appendOnlyMinInitialEntries * 8
+	before := AppendOnlyEntryReserveStatsSnapshot()
+
+	m.ReserveAdditionalEntries(additional)
+
+	after := AppendOnlyEntryReserveStatsSnapshot()
+	if got := after.CallsTotal - before.CallsTotal; got != 1 {
+		t.Fatalf("reserve calls delta=%d want 1", got)
+	}
+	if got := after.EntriesTotal - before.EntriesTotal; got != uint64(additional) {
+		t.Fatalf("reserve entries delta=%d want %d", got, additional)
+	}
+	if got := after.GrowCallsTotal - before.GrowCallsTotal; got != 1 {
+		t.Fatalf("reserve grow calls delta=%d want 1", got)
+	}
+	if got := after.GrowBytesTotal - before.GrowBytesTotal; got == 0 {
+		t.Fatalf("reserve grow bytes did not increase")
+	}
+	if got := after.SkippedGrowthAllocsTotal - before.SkippedGrowthAllocsTotal; got == 0 {
+		t.Fatalf("reserve skipped growth allocs did not increase")
+	}
+	if got := after.SkippedGrowthBytesTotal - before.SkippedGrowthBytesTotal; got == 0 {
+		t.Fatalf("reserve skipped growth bytes did not increase")
+	}
+
+	reservedLen := len(m.entries)
+	reservedCap := cap(m.entries)
+	if reservedLen < additional {
+		t.Fatalf("reserved len=%d want at least %d", reservedLen, additional)
+	}
+	for i := 0; i < additional; i++ {
+		key := []byte(fmt.Sprintf("k%08d", i))
+		m.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagInline)
+	}
+	if got := len(m.entries); got != reservedLen {
+		t.Fatalf("entry slice len changed during reserved appends: got %d want %d", got, reservedLen)
+	}
+	if got := cap(m.entries); got != reservedCap {
+		t.Fatalf("entry slice cap changed during reserved appends: got %d want %d", got, reservedCap)
 	}
 }
 

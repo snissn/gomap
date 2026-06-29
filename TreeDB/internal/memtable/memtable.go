@@ -102,6 +102,13 @@ type ValueBorrower interface {
 	SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte)
 }
 
+// EntryCapacityReserver marks memtables that can pre-size entry metadata before
+// a caller applies a known batch. It is a performance hint; implementations must
+// preserve normal Set/Delete semantics if the hint is absent or conservative.
+type EntryCapacityReserver interface {
+	ReserveAdditionalEntries(additional int)
+}
+
 // KeyPartsWriter marks memtables that can build and own common two-part keys
 // without forcing callers to allocate a concatenated key slice first.
 type KeyPartsWriter interface {
