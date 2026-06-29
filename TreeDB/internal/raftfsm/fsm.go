@@ -162,6 +162,54 @@ func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
 	return record.EntryID, true
 }
 
+func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.ApplyResultV1, error) {
+	if f == nil {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
+	}
+	if f.closed {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is closed"))
+	}
+	if f.db == nil || f.progress == nil || f.results == nil {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
+	}
+	record, ok, err := f.lastAppliedProgressRecord()
+	if err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(raftentry.CommandDigestV1{}, code, err)
+	}
+	if !ok {
+		if len(entries) == 0 {
+			return raftentry.ApplyResultV1{}, nil
+		}
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix has %d entries but FSM has no applied progress", len(entries)))
+	}
+	if uint64(len(entries)) != record.EntryID.Index {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match last applied index %d", len(entries), record.EntryID.Index))
+	}
+	for i, entry := range entries {
+		id := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
+		digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
+		if err := validateCommittedID(id); err != nil {
+			return reject(digest, raftentry.ErrorMalformedEntryV1, err)
+		}
+		if wantIndex := uint64(i + 1); id.Index != wantIndex {
+			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry index %d at offset %d; want %d", id.Index, i, wantIndex))
+		}
+		stored, ok, err := f.results.LookupApplyResult(id)
+		if err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(digest, code, err)
+		}
+		if !ok {
+			return reject(digest, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("missing durable result for applied prefix entry %d/%d", id.Term, id.Index))
+		}
+		if stored.CommandDigest != digest {
+			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix digest conflicts at %d/%d", id.Term, id.Index))
+		}
+	}
+	return raftentry.ApplyResultV1{}, nil
+}
+
 func (f *FSM) LogicalDigestV1(opts raftapply.LogicalDigestOptionsV1) (raftapply.LogicalDigestV1, error) {
 	if f == nil || f.db == nil {
 		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")

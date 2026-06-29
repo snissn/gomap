@@ -273,6 +273,7 @@ func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1,
 		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
 	}
 	start := 0
+	var prefix []raftfsm.CommittedEntryV1
 	if last, ok := node.LastApplied(); ok {
 		if last.Index == 0 {
 			h.mu.Unlock()
@@ -283,12 +284,22 @@ func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1,
 			return nil, fmt.Errorf("%w: node %s last applied index %d beyond committed log length %d", ErrCommittedLogConflict, id, last.Index, len(h.committed))
 		}
 		start = int(last.Index - 1)
+		prefix = make([]raftfsm.CommittedEntryV1, 0, last.Index)
+		for _, entry := range h.committed[:last.Index] {
+			prefix = append(prefix, cloneCommittedEntry(entry))
+		}
 	}
 	entries := make([]raftfsm.CommittedEntryV1, 0, len(h.committed)-start)
 	for _, entry := range h.committed[start:] {
 		entries = append(entries, cloneCommittedEntry(entry))
 	}
 	h.mu.Unlock()
+	if len(prefix) > 0 {
+		result, err := node.fsm.ValidateAppliedPrefixV1(prefix)
+		if err != nil {
+			return []raftentry.ApplyResultV1{result}, err
+		}
+	}
 	return node.ApplyCommittedEntriesV1(entries...)
 }
 

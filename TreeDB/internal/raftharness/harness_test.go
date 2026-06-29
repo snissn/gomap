@@ -180,6 +180,37 @@ func TestCatchUpNodeRejectsDivergentLastAppliedEntry(t *testing.T) {
 	assertCollectionMissing(t, h, "node-b", "orders")
 }
 
+func TestCatchUpNodeRejectsDivergentAppliedPrefix(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	committed := []raftfsm.CommittedEntryV1{
+		committedCommand(20, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:prefix")),
+		committedCommand(20, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:prefix")),
+		committedCommand(20, 3, deterministicCreateCollectionEntry(t, "audits", "harness:create:audits:prefix")),
+		committedCommand(20, 4, deterministicCreateCollectionEntry(t, "products", "harness:create:products:prefix")),
+	}
+	divergent := []raftfsm.CommittedEntryV1{
+		committed[0],
+		committedCommand(20, 2, deterministicCreateCollectionEntry(t, "admins", "harness:create:admins:divergent-prefix")),
+		committed[2],
+	}
+	seeded, err := h.ApplyCommittedEntriesToNode("node-b", divergent...)
+	if err != nil {
+		t.Fatalf("seed divergent prefix follower: %v results=%+v", err, seeded)
+	}
+	assertAppliedResults(t, "node-b divergent prefix seed", seeded, []int64{1, 1, 1})
+	if _, err := h.Commit(committed...); err != nil {
+		t.Fatalf("Commit committed log: %v", err)
+	}
+
+	catchup, err := h.CatchUpNode("node-b")
+	assertRejectedResult(t, "divergent applied-prefix catch-up", catchup, err, raftentry.ErrorRejectedConflictV1)
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 20, Index: 3})
+	assertCollectionMissing(t, h, "node-b", "orders")
+	assertCollectionMissing(t, h, "node-b", "products")
+}
+
 func TestCommitRejectsInvalidBatchAtomically(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()
