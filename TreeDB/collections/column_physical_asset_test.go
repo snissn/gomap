@@ -342,6 +342,79 @@ func TestColumnPhysicalAssetDenseIDRangeEncoding2663(t *testing.T) {
 	}
 }
 
+func TestColumnPhysicalAssetZeroColumnProjectionAliasesIDs3067(t *testing.T) {
+	allColumns := []ColumnStoreColumn{
+		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+	}
+	rows := []columnDeclaredRow{
+		{
+			ID: columnPhysicalAssetBigEndianUint64ID(42),
+			Values: []columnDeclaredValue{{
+				Type:    ColumnStoreValueString,
+				Present: true,
+				String:  "like",
+			}},
+		},
+		{
+			ID: columnPhysicalAssetBigEndianUint64ID(43),
+			Values: []columnDeclaredValue{{
+				Type:    ColumnStoreValueString,
+				Present: true,
+				String:  "post",
+			}},
+		},
+	}
+	projected, err := projectColumnDeclaredRowsForColumns(allColumns, nil, rows)
+	if err != nil {
+		t.Fatalf("projectColumnDeclaredRowsForColumns zero columns: %v", err)
+	}
+	if len(projected) != len(rows) {
+		t.Fatalf("projected rows=%d want %d", len(projected), len(rows))
+	}
+	for i := range projected {
+		if len(projected[i].Values) != 0 {
+			t.Fatalf("projected row[%d] values=%d want 0", i, len(projected[i].Values))
+		}
+		if len(projected[i].ID) == 0 || &projected[i].ID[0] != &rows[i].ID[0] {
+			t.Fatalf("projected row[%d] did not alias source id", i)
+		}
+	}
+	if _, err := projectColumnDeclaredRowsForColumns(allColumns, nil, []columnDeclaredRow{{ID: []byte("bad")}}); err == nil || !strings.Contains(err.Error(), "values=0 columns=1") {
+		t.Fatalf("zero-column projection malformed row err=%v want values/columns error", err)
+	}
+
+	cfg := testColumnPhysicalRowReaderFixedIDConfigV7(t)
+	encoded, summary, err := encodeColumnPhysicalAsset(columnPhysicalAssetEncodeInput{
+		Collection:        "events",
+		Namespace:         cfg.AssetManager.Namespace,
+		Generation:        7,
+		PartID:            3,
+		AppliedCommandLSN: 101,
+		Operation:         ColumnPublishOperationInsert,
+		SchemaHash:        cfg.SchemaHash,
+		Columns:           cfg.Columns,
+		Rows:              projected,
+	})
+	if err != nil {
+		t.Fatalf("encodeColumnPhysicalAsset zero-column projected rows: %v", err)
+	}
+	if summary.RowCount != len(rows) || summary.ColumnCount != 0 || summary.PayloadBytes != int64(len(encoded)) {
+		t.Fatalf("summary=%+v len=%d want zero-column row asset", summary, len(encoded))
+	}
+	decoded, err := decodeColumnPhysicalAsset(encoded)
+	if err != nil {
+		t.Fatalf("decodeColumnPhysicalAsset zero-column projected rows: %v", err)
+	}
+	for i, row := range decoded.Rows {
+		if row.Deleted || len(row.Values) != 0 {
+			t.Fatalf("decoded row[%d]=%+v want no projected values", i, row)
+		}
+		if !bytes.Equal(row.ID, rows[i].ID) {
+			t.Fatalf("decoded row[%d] id=%x want %x", i, row.ID, rows[i].ID)
+		}
+	}
+}
+
 func TestColumnPhysicalAssetVectorValueTypesRoundTrip(t *testing.T) {
 	cfg := &ColumnStoreConfig{
 		Enabled: true,
