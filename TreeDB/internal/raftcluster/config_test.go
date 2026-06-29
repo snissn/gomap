@@ -251,6 +251,27 @@ func TestStorageLayoutDeterministicAndSeparated(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsDefaultClusterDirForExistingFlatDB(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.db"), nil, 0o600); err != nil {
+		t.Fatalf("write index.db: %v", err)
+	}
+	cfg := validConfig(t)
+	cfg.Dir = root
+	cfg.ClusterDir = ""
+
+	resolved, err := Validate(cfg)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got, want := resolved.ClusterDir, filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("ClusterDir=%q want %q", got, want)
+	}
+	if got, want := resolved.Layout.RootDir, filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("Layout.RootDir=%q want %q", got, want)
+	}
+}
+
 func TestStoragePathsResolveMainDirOptionsLayout(t *testing.T) {
 	root := t.TempDir()
 	mainDir := filepath.Join(root, "maindb")

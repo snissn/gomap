@@ -331,11 +331,16 @@ func cleanStorageRoot(dir, clusterDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	layout := resolveTreeDBStorageLayout(dir)
 	reserved := []string{
-		MainDBDir(dir),
 		CommandWALDir(dir),
 		ValueLogDir(dir),
 		LeafLogDir(dir),
+	}
+	if layout.flat {
+		reserved = append(reserved, filepath.Join(layout.mainDir, "index.db"))
+	} else {
+		reserved = append(reserved, layout.mainDir)
 	}
 	for _, path := range reserved {
 		reservedAbs, err := realCleanStoragePath("reserved TreeDB path", path)
@@ -352,6 +357,7 @@ func cleanStorageRoot(dir, clusterDir string) (string, error) {
 type treeDBStorageLayout struct {
 	rootDir string
 	mainDir string
+	flat    bool
 }
 
 func resolveTreeDBStorageLayout(dir string) treeDBStorageLayout {
@@ -372,7 +378,7 @@ func resolveTreeDBStorageLayout(dir string) treeDBStorageLayout {
 				return treeDBStorageLayout{rootDir: parent, mainDir: clean}
 			}
 		}
-		return treeDBStorageLayout{rootDir: clean, mainDir: clean}
+		return treeDBStorageLayout{rootDir: clean, mainDir: clean, flat: true}
 	}
 	if filepath.Base(clean) == "maindb" {
 		return treeDBStorageLayout{
