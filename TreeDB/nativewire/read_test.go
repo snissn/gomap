@@ -256,6 +256,97 @@ func TestReadCoordinatorActualConsistencyMustSatisfyRequest(t *testing.T) {
 	}
 }
 
+func TestCursorNextCannotStrengthenOpenScanConsistency(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{ActualConsistency: ConsistencyLinearizable},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	first, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if first.Cursor.CursorID == 0 || !first.Cursor.HasMore {
+		t.Fatalf("first cursor=%+v", first.Cursor)
+	}
+	if !first.ReadMeta.Valid || first.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("open scan read meta=%+v want local-stale", first.ReadMeta)
+	}
+	if len(coord.calls) != 0 {
+		t.Fatalf("coordinator calls after local scan=%+v want none", coord.calls)
+	}
+
+	_, err = client.CursorNextWithOptions(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+		t.Fatalf("strong CursorNext err=%v want consistency_unavailable", err)
+	}
+	if len(coord.calls) != 0 {
+		t.Fatalf("coordinator calls after rejected cursor next=%+v want none", coord.calls)
+	}
+
+	second, err := client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("CursorNext after rejected strong request: %v", err)
+	}
+	if !second.ReadMeta.Valid || second.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("cursor next read meta=%+v want local-stale", second.ReadMeta)
+	}
+	assertDocumentsResult(t, second, []string{"u2"}, []string{`{"email":"grace@example.com","city":"hnl","name":"Grace"}`})
+}
+
+func TestCursorNextUsesOpenScanReadMetadata(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       "node-a",
+			LeaderNode:        "node-a",
+			AppliedIndex:      99,
+			HasAppliedIndex:   true,
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	first, err := client.OpenScanWithOptions(ctx, "users", CursorLimits{MaxItems: 1}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if err != nil {
+		t.Fatalf("OpenScanWithOptions: %v", err)
+	}
+	if first.Cursor.CursorID == 0 || !first.Cursor.HasMore {
+		t.Fatalf("first cursor=%+v", first.Cursor)
+	}
+	if len(coord.calls) != 1 || coord.calls[0].CommandID != iwire.CommandOpenScan {
+		t.Fatalf("coordinator calls after open scan=%+v", coord.calls)
+	}
+
+	second, err := client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("CursorNext: %v", err)
+	}
+	if len(coord.calls) != 1 {
+		t.Fatalf("coordinator calls after cursor next=%+v want no additional call", coord.calls)
+	}
+	if !second.ReadMeta.Valid ||
+		second.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
+		second.ReadMeta.ServingNode != "node-a" ||
+		second.ReadMeta.LeaderNode != "node-a" ||
+		!second.ReadMeta.HasAppliedIndex ||
+		second.ReadMeta.AppliedIndex != 99 {
+		t.Fatalf("cursor next read meta=%+v", second.ReadMeta)
+	}
+	assertDocumentsResult(t, second, []string{"u2"}, []string{`{"email":"grace@example.com","city":"hnl","name":"Grace"}`})
+}
+
 func TestIndexLookupWithoutLimitsReturnsAllMatches(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)

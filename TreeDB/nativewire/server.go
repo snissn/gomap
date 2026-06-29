@@ -149,6 +149,7 @@ type serverCursor struct {
 	lastUsed  time.Time
 	bytes     int
 	truncated bool
+	readMeta  ReadMetadata
 }
 
 type connState struct {

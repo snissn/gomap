@@ -739,7 +739,7 @@ func (s *Server) killCursorsForOwner(owner uint64) {
 	}
 }
 
-func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord, pos int, truncated bool) (uint64, error) {
+func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord, pos int, truncated bool, readMeta ReadMetadata) (uint64, error) {
 	if len(records) <= pos {
 		return 0, nil
 	}
@@ -758,7 +758,7 @@ func (s *Server) storeCursor(owner uint64, records []collections.DocumentRecord,
 	if s.cursors == nil {
 		s.cursors = make(map[uint64]*serverCursor)
 	}
-	s.cursors[id] = &serverCursor{owner: owner, records: tail, lastUsed: time.Now(), bytes: bytes, truncated: truncated}
+	s.cursors[id] = &serverCursor{owner: owner, records: tail, lastUsed: time.Now(), bytes: bytes, truncated: truncated, readMeta: readMeta}
 	s.cursorCount.Add(1)
 	s.counters.inc("cursors.opened_total")
 	return id, nil
