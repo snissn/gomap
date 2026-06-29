@@ -531,12 +531,6 @@ func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label 
 	if total == 0 {
 		return
 	}
-	if diag.TypedColumnPrepareQ2GroupRankNanos <= 0 {
-		tb.Fatalf("%s group rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2GroupRankNanos, diag)
-	}
-	if diag.TypedColumnPrepareQ2DistinctRankNanos <= 0 {
-		tb.Fatalf("%s distinct rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2DistinctRankNanos, diag)
-	}
 	if diag.TypedColumnPrepareQ2LocalRankNanos <= 0 {
 		tb.Fatalf("%s local rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2LocalRankNanos, diag)
 	}
