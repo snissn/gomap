@@ -100,7 +100,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		}
 		affected = int64(modified)
 	case nativewire.CommandUpdateBSONSet:
-		results, err := collection.UpdateBSONSetBatchWithCommandWALIntent(mutation.bsonSetItems, intent)
+		results, err := collection.UpdateBSONSetBatchWithCommandWALIntent(mutation.bsonSetItems, mutation.frameDocuments, intent)
 		if err != nil {
 			return h.collectionMutationApplyError(entry, handle, err)
 		}

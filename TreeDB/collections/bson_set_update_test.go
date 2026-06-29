@@ -16,6 +16,11 @@ func TestBSONSetUpdateBatchCommandWALPrepareAndIntent(t *testing.T) {
 		{Key: "city", Value: "hnl"},
 		{Key: "visits", Value: int32(1)},
 	})
+	intermediateDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+		{Key: "visits", Value: int32(2)},
+	})
 	updatedDoc := mustBSONCollectionDocument(t, bson.D{
 		{Key: "_id", Value: "u1"},
 		{Key: "city", Value: "sea"},
@@ -61,6 +66,27 @@ func TestBSONSetUpdateBatchCommandWALPrepareAndIntent(t *testing.T) {
 		t.Fatalf("prepare mutated city=%q, want hnl", gotCity)
 	}
 
+	_, modified, err := col.UpdateBSONSet([]byte("u1"), []BSONSetField{{
+		Key:   "visits",
+		Value: mustBSONRawValue(t, int32(2)),
+	}})
+	if err != nil {
+		t.Fatalf("intervening UpdateBSONSet: %v", err)
+	}
+	if !modified {
+		t.Fatal("intervening UpdateBSONSet modified=false, want true")
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("Flush intervening update: %v", err)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get after intervening update: %v", err)
+	}
+	if !bytes.Equal(got, intermediateDoc) {
+		t.Fatalf("intermediate doc=%x, want %x", got, intermediateDoc)
+	}
+
 	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", docs)
 	if err != nil {
 		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
@@ -73,7 +99,7 @@ func TestBSONSetUpdateBatchCommandWALPrepareAndIntent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Append command WAL frame: %v", err)
 	}
-	results, err = col.UpdateBSONSetBatchWithCommandWALIntent(items, handle.CommandWALIntent())
+	results, err = col.UpdateBSONSetBatchWithCommandWALIntent(items, docs, handle.CommandWALIntent())
 	if err != nil {
 		t.Fatalf("UpdateBSONSetBatchWithCommandWALIntent: %v", err)
 	}

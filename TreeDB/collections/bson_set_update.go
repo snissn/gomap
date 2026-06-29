@@ -189,11 +189,12 @@ func (c *Collection) PrepareBSONSetUpdateBatchCommandWAL(items []BSONSetUpdateBa
 	return cloneBSONSetUpdateBatchResults(plan.results), cloneBSONSetUpdateCommandWALDocuments(plan.commandWALDocuments), nil
 }
 
-// UpdateBSONSetBatchWithCommandWALIntent applies BSON $set updates with an
+// UpdateBSONSetBatchWithCommandWALIntent applies the exact BSON $set
+// replacement documents that were precomputed and encoded into an
 // already-appended collection update command-WAL frame. It is reserved for R3a
 // deterministic apply; ordinary callers should use UpdateBSONSet or
 // UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges.
-func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(items []BSONSetUpdateBatchItem, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
+func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(setItems []BSONSetUpdateBatchItem, commandWALDocuments []commitlog.CollectionDocument, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
 	if commandWALIntent == nil {
 		return nil, errors.New("collections: UpdateBSONSetBatchWithCommandWALIntent requires command WAL intent")
 	}
@@ -211,11 +212,18 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(items []BSONSetUpdat
 	if err := c.validateBSONSetDocumentFormat(); err != nil {
 		return nil, err
 	}
-	if len(items) == 0 {
-		c.setLastUpdateStats(CollectionUpdateStats{})
-		return nil, nil
+	if _, err := prepareBSONSetUpdateBatchItems(setItems); err != nil {
+		return nil, err
 	}
-	ownedItems, err := prepareBSONSetUpdateBatchItems(items)
+	if err := validateBSONSetCommandWALDocumentsForItems(setItems, commandWALDocuments); err != nil {
+		return nil, err
+	}
+	ids, documents := bsonSetCommandWALDocumentsBatchInput(commandWALDocuments)
+	replacementItems, err := replaceBatchUpdateItems(ids, documents)
+	if err != nil {
+		return nil, err
+	}
+	ownedItems, err := prepareUpdateBatchItems(replacementItems)
 	if err != nil {
 		return nil, err
 	}
@@ -230,9 +238,44 @@ func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(items []BSONSetUpdat
 		err = errors.New("collections: command WAL BSON $set update unexpectedly unbatched")
 	}
 	if err == nil {
-		err = commitAmbiguousError("UpdateBSONSetBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesBSONSetUpdateBatch(items, results))
+		err = commitAmbiguousError("UpdateBSONSetBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesUpdateBatch(replacementItems, results))
 	}
 	return results, err
+}
+
+func validateBSONSetCommandWALDocumentsForItems(items []BSONSetUpdateBatchItem, docs []commitlog.CollectionDocument) error {
+	itemIDs := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		itemIDs[string(item.DocumentID)] = struct{}{}
+	}
+	seenDocs := make(map[string]struct{}, len(docs))
+	for i, doc := range docs {
+		if len(doc.ID) == 0 {
+			return fmt.Errorf("collections: BSON $set command WAL document id cannot be empty at index %d", i)
+		}
+		if len(doc.Document) == 0 {
+			return fmt.Errorf("collections: BSON $set command WAL document cannot be empty at index %d", i)
+		}
+		key := string(doc.ID)
+		if _, ok := itemIDs[key]; !ok {
+			return fmt.Errorf("collections: BSON $set command WAL document id %q was not preflighted", string(doc.ID))
+		}
+		if _, ok := seenDocs[key]; ok {
+			return fmt.Errorf("%w at command WAL document index %d", ErrDuplicateDocumentID, i)
+		}
+		seenDocs[key] = struct{}{}
+	}
+	return nil
+}
+
+func bsonSetCommandWALDocumentsBatchInput(docs []commitlog.CollectionDocument) ([][]byte, [][]byte) {
+	ids := make([][]byte, len(docs))
+	documents := make([][]byte, len(docs))
+	for i := range docs {
+		ids[i] = docs[i].ID
+		documents[i] = docs[i].Document
+	}
+	return ids, documents
 }
 
 func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
