@@ -559,20 +559,27 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 
 func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, want bool) {
 	tb.Helper()
-	total := diag.TypedColumnPrepareQ2GroupRankNanos +
+	rankTotal := diag.TypedColumnPrepareQ2GroupRankNanos +
 		diag.TypedColumnPrepareQ2DistinctRankNanos +
 		diag.TypedColumnPrepareQ2LocalRankNanos
+	globalCodeTotal := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
+		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos +
+		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos +
+		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
 	if !want {
-		if total != 0 {
-			tb.Fatalf("%s q2 post-prepare subphase nanos=%d want 0 diagnostics=%+v", label, total, diag)
+		if rankTotal+globalCodeTotal != 0 {
+			tb.Fatalf("%s q2 post-prepare subphase nanos=%d want 0 diagnostics=%+v", label, rankTotal+globalCodeTotal, diag)
 		}
 		return
 	}
-	if total == 0 {
+	if rankTotal+globalCodeTotal == 0 {
 		return
 	}
-	if diag.TypedColumnPrepareQ2LocalRankNanos <= 0 {
+	if rankTotal != 0 && diag.TypedColumnPrepareQ2LocalRankNanos <= 0 {
 		tb.Fatalf("%s local rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2LocalRankNanos, diag)
+	}
+	if globalCodeTotal != 0 {
+		assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb, label, diag, true)
 	}
 }
 
