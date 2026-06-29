@@ -1641,6 +1641,8 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.flush_merge.parallel.shadowed_per_applied",
 		"treedb.cache.append_only.mutable_from_lease_total",
 		"treedb.cache.append_only.mutable_from_pool_total",
+		"treedb.cache.append_only.mutable_pool_puts_total",
+		"treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total",
 		"treedb.cache.append_only.mutable_new_alloc_total",
 		"treedb.cache.append_only.mutable_new_alloc_with_queue_total",
 		"treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum",

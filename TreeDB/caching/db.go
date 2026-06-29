@@ -8061,6 +8061,8 @@ type DB struct {
 	appendOnlyMemLeases              []*memtable.AppendOnly
 	appendOnlyMemLeaseHitTotal       atomic.Uint64
 	appendOnlyMemPoolHitTotal        atomic.Uint64
+	appendOnlyMemPoolPutTotal        atomic.Uint64
+	appendOnlyMemPoolEntryDropBytes  atomic.Uint64
 	appendOnlyMemNewAllocTotal       atomic.Uint64
 	appendOnlyMemNewAllocWithQueue   atomic.Uint64
 	appendOnlyMemNewAllocQueueBytes  atomic.Uint64
@@ -10023,6 +10025,20 @@ func (db *DB) putAppendOnlyMemLease(mt *memtable.AppendOnly) bool {
 	return true
 }
 
+func (db *DB) putAppendOnlyMemPoolDropEntries(mt *memtable.AppendOnly) {
+	if db == nil || mt == nil {
+		return
+	}
+	if before := mt.EntryBackingBytes(); before > 0 {
+		db.appendOnlyMemPoolEntryDropBytes.Add(uint64(before))
+	}
+	mt.ReleaseDropEntries()
+	if pool := db.appendOnlyMemtablePool(); pool != nil {
+		db.appendOnlyMemPoolPutTotal.Add(1)
+		pool.Put(mt)
+	}
+}
+
 func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
@@ -10042,9 +10058,7 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtableWithPolicy(typed, true)
 			if !db.putAppendOnlyMemLease(typed) {
-				if pool := db.appendOnlyMemtablePool(); pool != nil {
-					pool.Put(typed)
-				}
+				db.putAppendOnlyMemPoolDropEntries(typed)
 			}
 		}
 	}
@@ -10082,10 +10096,7 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, _ int) int {
 		if dropped[i] != nil {
 			if retainAppendOnly {
 				db.releaseAppendOnlyDirectArenaLeaseForMemtableWithPolicy(dropped[i], true)
-				dropped[i].ReleaseDropEntries()
-				if pool := db.appendOnlyMemtablePool(); pool != nil {
-					pool.Put(dropped[i])
-				}
+				db.putAppendOnlyMemPoolDropEntries(dropped[i])
 			} else {
 				db.releaseAppendOnlyDirectArenaLeaseForMemtableWithPolicy(dropped[i], false)
 				dropped[i].ReleaseDropEntries()
@@ -28923,6 +28934,8 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyHintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHint, appendOnlyEstimatedBytesPerEntryDefault)
 	appendOnlyMemLeaseHitTotal := db.appendOnlyMemLeaseHitTotal.Load()
 	appendOnlyMemPoolHitTotal := db.appendOnlyMemPoolHitTotal.Load()
+	appendOnlyMemPoolPutTotal := db.appendOnlyMemPoolPutTotal.Load()
+	appendOnlyMemPoolEntryDropBytes := db.appendOnlyMemPoolEntryDropBytes.Load()
 	appendOnlyMemNewAllocTotal := db.appendOnlyMemNewAllocTotal.Load()
 	appendOnlyMemNewAllocWithQueue := db.appendOnlyMemNewAllocWithQueue.Load()
 	appendOnlyMemNewAllocQueueBytes := db.appendOnlyMemNewAllocQueueBytes.Load()
@@ -28949,6 +28962,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.append_only.mutable_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimTotal)
 	stats["treedb.cache.append_only.mutable_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimDropped)
 	stats["treedb.cache.append_only.mutable_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyMemPoolDropTotal)
+	stats["treedb.cache.append_only.mutable_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyMemPoolPutTotal)
+	stats["treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMemPoolEntryDropBytes)
 	stats["treedb.cache.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
 	stats["treedb.cache.append_only.mutable_from_pool_total"] = fmt.Sprintf("%d", appendOnlyMemPoolHitTotal)
 	stats["treedb.cache.append_only.mutable_new_alloc_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocTotal)
@@ -28971,6 +28986,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.append_only.mutable_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimTotal)
 	stats["treedb.process.append_only.mutable_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimDropped)
 	stats["treedb.process.append_only.mutable_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyMemPoolDropTotal)
+	stats["treedb.process.append_only.mutable_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyMemPoolPutTotal)
+	stats["treedb.process.append_only.mutable_pool_entry_backing_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMemPoolEntryDropBytes)
 	stats["treedb.process.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
 	stats["treedb.process.append_only.mutable_from_pool_total"] = fmt.Sprintf("%d", appendOnlyMemPoolHitTotal)
 	stats["treedb.process.append_only.mutable_new_alloc_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocTotal)

@@ -129,6 +129,8 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.read_path.snapshot_get_caller.samples_total",
 		"treedb.cache.append_only.mutable_from_lease_total",
 		"treedb.cache.append_only.mutable_from_pool_total",
+		"treedb.cache.append_only.mutable_pool_puts_total",
+		"treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total",
 		"treedb.cache.append_only.mutable_new_alloc_total",
 		"treedb.cache.append_only.entry_pool_retained_bytes_estimate",
 		"treedb.cache.append_only.entry_pool_retained_bytes_max_estimate",
@@ -138,6 +140,8 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.cache.append_only.entry_pool_drop_bytes_total",
 		"treedb.process.append_only.mutable_from_lease_total",
 		"treedb.process.append_only.mutable_from_pool_total",
+		"treedb.process.append_only.mutable_pool_puts_total",
+		"treedb.process.append_only.mutable_pool_entry_backing_dropped_bytes_total",
 		"treedb.process.append_only.mutable_new_alloc_total",
 		"treedb.process.append_only.entry_pool_retained_bytes_estimate",
 		"treedb.process.append_only.entry_pool_retained_bytes_max_estimate",
@@ -163,6 +167,12 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.mutable_from_pool_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mutable_from_pool_total") {
 		t.Fatalf("append_only pool source mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mutable_from_pool_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.mutable_pool_puts_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mutable_pool_puts_total") {
+		t.Fatalf("append_only pool puts mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mutable_pool_puts_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.mutable_pool_entry_backing_dropped_bytes_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total") {
+		t.Fatalf("append_only pool entry backing dropped bytes mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total"))
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.mutable_new_alloc_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mutable_new_alloc_total") {
 		t.Fatalf("append_only new source mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mutable_new_alloc_total"))
