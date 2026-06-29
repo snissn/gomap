@@ -59,6 +59,131 @@ func TestRenderColumnStoreInsertStatsMarkdownIncludesLaterColumnPublishSubphaseM
 	}
 }
 
+func TestColumnStoreInsertStatsReportingIncludesAppendSegmentSplitsM3151(t *testing.T) {
+	var stats collections.CollectionInsertStats
+	columnStoreAddCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		Documents:                                          5,
+		ColumnPublishAssetAppenderCloseCount:               10,
+		ColumnPublishAssetAppendFileSyncCount:              11,
+		ColumnPublishAssetSyncEpochCount:                   12,
+		ColumnPublishSharedSegmentAppenderCloseCount:       3,
+		ColumnPublishSharedSegmentAppendFileSyncCount:      4,
+		ColumnPublishSharedSegmentAppendSyncEpochCount:     5,
+		ColumnPublishDirectViewSegmentAppenderCloseCount:   6,
+		ColumnPublishDirectViewSegmentAppendFileSyncCount:  7,
+		ColumnPublishDirectViewSegmentAppendSyncEpochCount: 8,
+		ColumnPublishSharedAppendBytes:                     1000,
+		ColumnPublishSharedAppendCount:                     10,
+		ColumnPublishSharedSegmentAppendBytes:              600,
+		ColumnPublishSharedSegmentAppendCount:              6,
+		ColumnPublishDirectViewSegmentAppendBytes:          400,
+		ColumnPublishDirectViewSegmentAppendCount:          4,
+	})
+	columnStoreAddCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		Documents:                                          2,
+		ColumnPublishAssetAppenderCloseCount:               1,
+		ColumnPublishAssetAppendFileSyncCount:              1,
+		ColumnPublishAssetSyncEpochCount:                   1,
+		ColumnPublishSharedSegmentAppenderCloseCount:       1,
+		ColumnPublishSharedSegmentAppendFileSyncCount:      1,
+		ColumnPublishSharedSegmentAppendSyncEpochCount:     1,
+		ColumnPublishDirectViewSegmentAppenderCloseCount:   1,
+		ColumnPublishDirectViewSegmentAppendFileSyncCount:  1,
+		ColumnPublishDirectViewSegmentAppendSyncEpochCount: 1,
+		ColumnPublishSharedAppendBytes:                     100,
+		ColumnPublishSharedAppendCount:                     1,
+		ColumnPublishSharedSegmentAppendBytes:              60,
+		ColumnPublishSharedSegmentAppendCount:              1,
+		ColumnPublishDirectViewSegmentAppendBytes:          40,
+		ColumnPublishDirectViewSegmentAppendCount:          1,
+	})
+
+	metric := columnStoreInsertPhaseMetricFromStats(stats, 2)
+
+	if got, want := metric.ColumnPublishSharedAppendBytes, int64(1100); got != want {
+		t.Fatalf("shared append bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishSharedAppendCount, 11; got != want {
+		t.Fatalf("shared append count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishSharedSegmentAppendBytes, int64(660); got != want {
+		t.Fatalf("shared segment append bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishSharedSegmentAppendCount, 7; got != want {
+		t.Fatalf("shared segment append count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDirectViewSegmentAppendBytes, int64(440); got != want {
+		t.Fatalf("direct-view segment append bytes=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDirectViewSegmentAppendCount, 5; got != want {
+		t.Fatalf("direct-view segment append count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppenderCloseCount, 11; got != want {
+		t.Fatalf("aggregate appender close count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishSharedSegmentAppenderCloseCount, 4; got != want {
+		t.Fatalf("shared segment appender close count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishSharedSegmentAppendFileSyncCount, 5; got != want {
+		t.Fatalf("shared segment file sync count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishSharedSegmentAppendSyncEpochCount, 6; got != want {
+		t.Fatalf("shared segment sync epoch count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDirectViewSegmentAppenderCloseCount, 7; got != want {
+		t.Fatalf("direct-view segment appender close count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDirectViewSegmentAppendFileSyncCount, 8; got != want {
+		t.Fatalf("direct-view segment file sync count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishDirectViewSegmentAppendSyncEpochCount, 9; got != want {
+		t.Fatalf("direct-view segment sync epoch count=%d want %d", got, want)
+	}
+
+	data, err := json.Marshal(struct {
+		InsertStats columnStoreInsertPhaseMetric `json:"insert_stats"`
+	}{InsertStats: metric})
+	if err != nil {
+		t.Fatalf("marshal insert stats: %v", err)
+	}
+	for _, want := range []string{
+		`"column_publish_shared_segment_append_bytes"`,
+		`"column_publish_shared_segment_append_count"`,
+		`"column_publish_direct_view_segment_append_bytes"`,
+		`"column_publish_direct_view_segment_append_count"`,
+		`"column_publish_shared_segment_appender_close_count"`,
+		`"column_publish_shared_segment_append_file_sync_count"`,
+		`"column_publish_shared_segment_append_sync_epoch_count"`,
+		`"column_publish_direct_view_segment_appender_close_count"`,
+		`"column_publish_direct_view_segment_append_file_sync_count"`,
+		`"column_publish_direct_view_segment_append_sync_epoch_count"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("insert stats JSON missing %s:\n%s", want, data)
+		}
+	}
+
+	var sb strings.Builder
+	renderColumnStoreInsertStatsMarkdown(&sb, metric)
+	markdown := sb.String()
+	for _, want := range []string{
+		"column_publish_shared_segment_append_bytes",
+		"column_publish_shared_segment_append_count",
+		"column_publish_direct_view_segment_append_bytes",
+		"column_publish_direct_view_segment_append_count",
+		"column_publish_shared_segment_appender_close_count",
+		"column_publish_shared_segment_append_file_sync_count",
+		"column_publish_shared_segment_append_sync_epoch_count",
+		"column_publish_direct_view_segment_appender_close_count",
+		"column_publish_direct_view_segment_append_file_sync_count",
+		"column_publish_direct_view_segment_append_sync_epoch_count",
+	} {
+		if !strings.Contains(markdown, want) {
+			t.Fatalf("insert stats markdown missing %q:\n%s", want, markdown)
+		}
+	}
+}
+
 func TestColumnStoreSuiteRetainedPayloadRejectsTrailingJSONM13C(t *testing.T) {
 	cfg := columnStoreSuiteConfig()
 	if _, err := columnStoreSuiteRetainedPayloadFromDocument([]byte(`{"payload":1} {"payload":2}`), cfg); err == nil {
