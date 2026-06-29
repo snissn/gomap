@@ -673,6 +673,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		payload  []byte
 		ref      ColumnAssetRef
 		hasRef   bool
+		fileID   uint32
 		kind     ColumnAssetKind
 		partID   uint64
 		rows     int
@@ -685,15 +686,17 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 	queueRegularAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string) {
 		pendingAssets = append(pendingAssets, pendingColumnAsset{
 			payload: payload,
+			fileID:  columnAssetM12ASegmentFileID,
 			kind:    kind,
 			partID:  partID,
 			rows:    rows,
 			reason:  reason,
 		})
 	}
-	queueRegularManifestAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, validate func(ColumnAssetRef) error) {
+	queueRegularManifestAssetToFile := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, fileID uint32, validate func(ColumnAssetRef) error) {
 		pendingAssets = append(pendingAssets, pendingColumnAsset{
 			payload:  payload,
+			fileID:   fileID,
 			kind:     kind,
 			partID:   partID,
 			rows:     rows,
@@ -703,32 +706,8 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			validate: validate,
 		})
 	}
-	queuePreparedManifestAsset := func(asset ColumnPreparedAsset) {
-		pendingAssets = append(pendingAssets, pendingColumnAsset{
-			ref:      asset.Ref,
-			hasRef:   true,
-			kind:     asset.Ref.Kind,
-			partID:   asset.Ref.PartID,
-			rows:     asset.Rows,
-			reason:   asset.Reason,
-			partRole: asset.PartRole,
-			sortKey:  asset.SortKey,
-			validate: func(ref ColumnAssetRef) error {
-				if !columnPreparedAssetsEqual(asset, ColumnPreparedAsset{
-					Ref:          ref,
-					Rows:         asset.Rows,
-					Bytes:        ref.Length,
-					PublishID:    asset.PublishID,
-					GenerationID: asset.GenerationID,
-					Reason:       asset.Reason,
-					PartRole:     asset.PartRole,
-					SortKey:      asset.SortKey,
-				}) {
-					return fmt.Errorf("collections: prepared asset ref %+v does not match queued asset %+v", ref, asset)
-				}
-				return nil
-			},
-		})
+	queueRegularManifestAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, validate func(ColumnAssetRef) error) {
+		queueRegularManifestAssetToFile(payload, kind, partID, rows, reason, partRole, sortKey, columnAssetM12ASegmentFileID, validate)
 	}
 	flushPendingAssets := func() (retErr error) {
 		if len(pendingAssets) == 0 {
@@ -741,7 +720,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				break
 			}
 		}
-		var appender *columnPhysicalAssetSegmentAppender
+		var session *columnPhysicalAssetAppendSession
 		closed := false
 		var appendOpenDuration time.Duration
 		var appendWriteDuration time.Duration
@@ -755,15 +734,11 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		var appendSyncEpochCount int
 		if needsAppender {
 			appendStart := time.Now()
-			var err error
-			appender, err = newColumnPhysicalAssetSegmentAppendWriter(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, columnAssetM12ASegmentFileID)
-			if err != nil {
-				return err
-			}
+			session = newColumnPhysicalAssetAppendSession(c.db.ColumnAssetRootDir(), hookInput.ColumnStore)
 			appendOpenDuration += time.Since(appendStart)
 			defer func() {
 				if retErr != nil && !closed {
-					retErr = errors.Join(retErr, appender.abort())
+					retErr = errors.Join(retErr, session.abort())
 				}
 			}()
 		}
@@ -772,42 +747,60 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		appendedRefs := make([]ColumnAssetRef, len(pendingAssets))
 		appendedRefSet := make([]bool, len(pendingAssets))
 		if needsAppender {
-			appendIndexes := make([]int, 0, len(pendingAssets))
-			appendItems := make([]columnPhysicalAssetAppendItem, 0, len(pendingAssets))
+			type appendGroup struct {
+				fileID  uint32
+				indexes []int
+				items   []columnPhysicalAssetAppendItem
+			}
+			appendGroups := make(map[uint32]*appendGroup)
+			appendGroupOrder := make([]uint32, 0, 2)
 			for i, asset := range pendingAssets {
 				if asset.hasRef {
 					continue
 				}
-				appendIndexes = append(appendIndexes, i)
-				appendItems = append(appendItems, columnPhysicalAssetAppendItem{
+				fileID := asset.fileID
+				if fileID == 0 {
+					fileID = columnAssetM12ASegmentFileID
+				}
+				group := appendGroups[fileID]
+				if group == nil {
+					group = &appendGroup{fileID: fileID}
+					appendGroups[fileID] = group
+					appendGroupOrder = append(appendGroupOrder, fileID)
+				}
+				group.indexes = append(group.indexes, i)
+				group.items = append(group.items, columnPhysicalAssetAppendItem{
 					payload:    asset.payload,
 					kind:       asset.kind,
 					generation: generation,
 					partID:     asset.partID,
 				})
 			}
-			appendStart := time.Now()
-			refs, err := appender.appendKinds(appendItems)
-			if err != nil {
-				return err
-			}
-			appendWriteDuration += time.Since(appendStart)
-			if len(refs) != len(appendIndexes) {
-				return fmt.Errorf("collections: column physical asset append refs=%d want %d", len(refs), len(appendIndexes))
-			}
-			for _, ref := range refs {
-				trackCleanupAsset(ref)
-			}
-			for i, ref := range refs {
-				assetIndex := appendIndexes[i]
-				asset := pendingAssets[assetIndex]
-				appendedRefs[assetIndex] = ref
-				appendedRefSet[assetIndex] = true
-				appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
-				appendedCount++
-				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
-					ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
-					return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
+			for _, fileID := range appendGroupOrder {
+				group := appendGroups[fileID]
+				refs, openDuration, writeDuration, err := session.appendKindsMeasured(group.fileID, group.items)
+				appendOpenDuration += openDuration
+				appendWriteDuration += writeDuration
+				if err != nil {
+					return err
+				}
+				if len(refs) != len(group.indexes) {
+					return fmt.Errorf("collections: column physical asset append refs=%d want %d for file_id=%d", len(refs), len(group.indexes), group.fileID)
+				}
+				for _, ref := range refs {
+					trackCleanupAsset(ref)
+				}
+				for i, ref := range refs {
+					assetIndex := group.indexes[i]
+					asset := pendingAssets[assetIndex]
+					appendedRefs[assetIndex] = ref
+					appendedRefSet[assetIndex] = true
+					appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
+					appendedCount++
+					if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
+						ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) || ref.FileID != group.fileID {
+						return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
+					}
 				}
 			}
 		}
@@ -835,20 +828,21 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				SortKey:      asset.sortKey,
 			})
 		}
-		if appender != nil {
+		if session != nil {
 			appendStart := time.Now()
-			if err := appender.close(); err != nil {
+			closeStats, err := session.close()
+			if err != nil {
 				return err
 			}
-			appendCloseDuration += time.Since(appendStart)
-			appendFileSyncDuration += appender.closeStats.FileSync
-			appendFileCloseDuration += appender.closeStats.FileClose
-			appendDirSyncDuration += appender.closeStats.DirSync
-			appendCleanupDuration += appender.closeStats.CleanupDuration()
-			appendCloseCount += appender.closeStats.CloseCount
-			appendFileSyncCount += appender.closeStats.FileSyncCount
-			appendSyncEpochCount += appender.closeStats.SyncEpochCount
 			closed = true
+			appendCloseDuration += time.Since(appendStart)
+			appendFileSyncDuration += closeStats.FileSync
+			appendFileCloseDuration += closeStats.FileClose
+			appendDirSyncDuration += closeStats.DirSync
+			appendCleanupDuration += closeStats.CleanupDuration()
+			appendCloseCount += closeStats.CloseCount
+			appendFileSyncCount += closeStats.FileSyncCount
+			appendSyncEpochCount += closeStats.SyncEpochCount
 		}
 		if needsAppender {
 			appendDuration := appendOpenDuration + appendWriteDuration + appendCloseDuration
@@ -968,28 +962,21 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				return nil
 			}
 			if columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
-				typedColumnRef, directStats, err := writeTypedColumnPartAssetToManagerWithStats(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
+				directFileID, err := directViewTypedColumnSegmentFileID(generation)
 				if err != nil {
 					return ColumnPublishPreparedAssets{}, err
 				}
-				prepared.AssetMetrics.SharedAppendFileSyncDuration += directStats.FileSync
-				prepared.AssetMetrics.SharedAppendFileCloseDuration += directStats.FileClose
-				prepared.AssetMetrics.SharedAppendDirSyncDuration += directStats.DirSync
-				prepared.AssetMetrics.SharedAppendFileSyncCount += directStats.FileSyncCount
-				prepared.AssetMetrics.SharedAppendSyncEpochCount += directStats.SyncEpochCount
-				trackCleanupAsset(typedColumnRef)
-				if err := validateTypedColumnRef(typedColumnRef); err != nil {
-					return ColumnPublishPreparedAssets{}, err
-				}
-				queuePreparedManifestAsset(ColumnPreparedAsset{
-					Ref:          typedColumnRef,
-					Rows:         typedColumnRows,
-					Bytes:        typedColumnRef.Length,
-					PublishID:    hookInput.AppliedCommandLSN,
-					GenerationID: generation,
-					Reason:       string(input.operation),
-					PartRole:     role,
-					SortKey:      columnSortKeyMatchString(typedColumnSortKey),
+				queueRegularManifestAssetToFile(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedColumnPartAssetPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), directFileID, func(ref ColumnAssetRef) error {
+					if err := validateTypedColumnRef(ref); err != nil {
+						return err
+					}
+					if ref.FileID != directFileID {
+						return fmt.Errorf("collections: invalid direct-view typed-column part asset file_id=%d want %d", ref.FileID, directFileID)
+					}
+					if ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
+						return fmt.Errorf("collections: invalid direct-view typed-column part asset offset=%d want %d-byte alignment", ref.Offset, typedColumnPartDirectViewAssetAlignment)
+					}
+					return nil
 				})
 			} else {
 				queueRegularManifestAsset(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedColumnPartAssetPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), validateTypedColumnRef)
