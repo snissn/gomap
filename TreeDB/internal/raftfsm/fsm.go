@@ -286,6 +286,9 @@ func (f *FSM) lastAppliedProgressRecord() (raftapply.ApplyProgressRecordV1, bool
 	}
 	record, ok := f.progress.LastAppliedRecord()
 	if !ok {
+		if err := validateMissingApplyProgressCoverage(f.db); err != nil {
+			return raftapply.ApplyProgressRecordV1{}, false, err
+		}
 		return raftapply.ApplyProgressRecordV1{}, false, nil
 	}
 	if err := validateApplyProgressCoverage(f.db, record); err != nil {
@@ -300,9 +303,20 @@ func validateProgressCoverage(db *backenddb.DB, progress *raftapply.DurableApply
 	}
 	record, ok := progress.LastAppliedRecord()
 	if !ok {
-		return nil
+		return validateMissingApplyProgressCoverage(db)
 	}
 	return validateApplyProgressCoverage(db, record)
+}
+
+func validateMissingApplyProgressCoverage(db *backenddb.DB) error {
+	if db == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
+	}
+	localLSN := db.State().AppliedCommandLSN
+	if localLSN != 0 {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing apply progress metadata for local AppliedCommandLSN coverage %d", localLSN)
+	}
+	return nil
 }
 
 func validateApplyProgressCoverage(db *backenddb.DB, record raftapply.ApplyProgressRecordV1) error {

@@ -3,6 +3,7 @@ package raftfsm
 import (
 	"encoding/binary"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -135,6 +136,54 @@ func TestSingleGroupApplyLoopRejectsProgressAheadOfLocalCoverage(t *testing.T) {
 	}
 	if code, ok := ErrorCodeOf(openErr); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
 		t.Fatalf("ErrorCodeOf(Open uncovered progress)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
+	}
+}
+
+func TestSingleGroupApplyLoopRejectsMissingProgressWithLocalCoverage(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	fsm := openFSMForTest(t, db, dbDir)
+	raw := deterministicCreateCollectionEntry(t, "users", "fsm:create:users:missing-progress")
+	result, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 1, raw))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1: %v result=%+v", err, result)
+	}
+	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
+	coveredLSN := db.State().AppliedCommandLSN
+	if coveredLSN == 0 {
+		t.Fatal("AppliedCommandLSN after apply is zero, want local coverage")
+	}
+	progressPath := raftapply.DurableApplyProgressStorePath(fsm.metadataDir)
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close FSM: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
+	}
+	if err := os.Remove(progressPath); err != nil {
+		t.Fatalf("Remove progress metadata: %v", err)
+	}
+
+	reopenedDB := openFSMTestDB(t, dbDir)
+	defer func() { _ = reopenedDB.Close() }()
+	if got := reopenedDB.State().AppliedCommandLSN; got != coveredLSN {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want %d", got, coveredLSN)
+	}
+	reopenedFSM, openErr := Open(Options{
+		DB:      reopenedDB,
+		Cluster: validFSMClusterConfig(dbDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if openErr == nil {
+		_ = reopenedFSM.Close()
+		t.Fatal("Open with missing progress and local coverage succeeded, want unsafe durability error")
+	}
+	if code, ok := ErrorCodeOf(openErr); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("ErrorCodeOf(Open missing progress)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
 	}
 }
 
