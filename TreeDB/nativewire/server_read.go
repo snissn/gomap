@@ -58,10 +58,11 @@ func (s *Server) appendReadMetaSection(sections []iwire.Section, meta ReadMetada
 	if !meta.Valid {
 		return sections, nil
 	}
-	if err := s.checkResponseSectionCount(len(sections) + 1); err != nil {
+	sections = append(sections, readMetaSection(meta))
+	if err := s.checkResponseSectionsBounds(sections); err != nil {
 		return nil, err
 	}
-	return append(sections, readMetaSection(meta)), nil
+	return sections, nil
 }
 
 func (s *Server) checkResponseSectionCount(sections int) error {
@@ -69,6 +70,49 @@ func (s *Server) checkResponseSectionCount(sections int) error {
 		return nil
 	}
 	return protocolError(iwire.ErrResourceExhausted, "response sections %d exceeds limit %d", sections, s.limits.MaxSections)
+}
+
+func (s *Server) checkResponseSectionsBounds(sections []iwire.Section) error {
+	if s == nil {
+		return nil
+	}
+	if err := s.checkResponseSectionCount(len(sections)); err != nil {
+		return err
+	}
+	var bodyLen uint64
+	for _, section := range sections {
+		if err := s.checkResponseSectionLen(responseSectionName(section.ID), len(section.Bytes)); err != nil {
+			return err
+		}
+		sectionLen, err := responseSectionBodyLen(section.ID, len(section.Bytes))
+		if err != nil {
+			return err
+		}
+		bodyLen, err = addResponseLen(bodyLen, sectionLen)
+		if err != nil {
+			return err
+		}
+	}
+	return s.checkResponseBodyLen(bodyLen)
+}
+
+func responseSectionName(id iwire.SectionID) string {
+	switch id {
+	case iwire.SectionDocumentIDs:
+		return "document_ids"
+	case iwire.SectionDocuments:
+		return "documents"
+	case iwire.SectionPresenceBitmap:
+		return "presence_bitmap"
+	case iwire.SectionCursorMeta:
+		return "cursor_meta"
+	case iwire.SectionTruncated:
+		return "truncated"
+	case iwire.SectionResponseMeta:
+		return "response_meta"
+	default:
+		return "response"
+	}
 }
 
 func coordinatedReadCommand(commandID iwire.CommandID) bool {

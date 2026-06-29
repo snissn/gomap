@@ -296,6 +296,54 @@ func TestReadCoordinatorActualConsistencyMustSatisfyRequest(t *testing.T) {
 	}
 }
 
+func TestReadMetadataSectionListResponsesRespectSectionLimit(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       strings.Repeat("s", 512),
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		ClusterReadCoordinator: coord,
+		Limits:                 iwire.Limits{MaxSectionLen: 256},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("IndexLookupWithOptions err=%v want resource_exhausted", err)
+	}
+}
+
+func TestReadMetadataSectionListResponsesRespectFrameLimit(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       strings.Repeat("s", 384),
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		ClusterReadCoordinator: coord,
+		Limits:                 iwire.Limits{MaxFrameSize: 320},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrResourceExhausted) {
+		t.Fatalf("IndexLookupWithOptions err=%v want resource_exhausted", err)
+	}
+}
+
 func TestCursorNextCannotStrengthenOpenScanConsistency(t *testing.T) {
 	coord := &fakeClusterReadCoordinator{
 		result: ClusterReadResult{ActualConsistency: ConsistencyLinearizable},
