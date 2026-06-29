@@ -2466,6 +2466,9 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		TypedColumnPrepareDenseValueDurationMS: 0.025,
 		TypedColumnPrepareDensePredDurationMS:  0.026,
 		TypedColumnPrepareDensePreapplyMS:      0.027,
+		TypedColumnPrepareQ2GroupRankMS:        0.028,
+		TypedColumnPrepareQ2DistinctRankMS:     0.029,
+		TypedColumnPrepareQ2LocalRankMS:        0.030,
 		CompressionAttribution: columnStoreCompressionAttribution{
 			CompressionPolicyLabel: "default",
 			RequestedCompression:   "snappy",
@@ -2564,6 +2567,15 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 	if got, want := cell.TypedColumnPrepareDensePreapplyMS, q.TypedColumnPrepareDensePreapplyMS; got != want {
 		t.Fatalf("typed_column_prepare_dense_preapply_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2GroupRankMS, q.TypedColumnPrepareQ2GroupRankMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_group_rank_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DistinctRankMS, q.TypedColumnPrepareQ2DistinctRankMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_distinct_rank_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2LocalRankMS, q.TypedColumnPrepareQ2LocalRankMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_local_rank_duration_ms=%v want %v", got, want)
 	}
 	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
 		t.Fatalf("rows_scanned=%d want %d", got, want)
