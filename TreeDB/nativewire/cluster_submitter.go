@@ -66,10 +66,6 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if s == nil || s.clusterSubmitter == nil {
 		return nil, protocolError(iwire.ErrInvalidCommand, "nativewire cluster submitter is not configured")
 	}
-	row := raftentry.ClassifyNativeWireCommandV1(cmd.Header.ID)
-	if !row.Known || row.Decision != raftentry.DecisionAccepted {
-		return nil, unsupportedClusterMutationError(cmd, row)
-	}
 	ack, err := ackPolicyFromSections(cmd.Known, s.defaultAckPolicy)
 	if err != nil {
 		return nil, err
@@ -77,11 +73,15 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if ack == iwire.AckRaftCommitted {
 		return nil, protocolError(iwire.ErrDurabilityUnavailable, "raft_committed ack is deferred to the native Raft committed semantics gate")
 	}
-	metadata, err := clusterRequestMetadata(header, cmd.Header, cmd.Known, ack)
-	if err != nil {
+	if err := AdmitClusterMutation(ctx, s.clusterSubmitter); err != nil {
 		return nil, err
 	}
-	if err := AdmitClusterMutation(ctx, s.clusterSubmitter); err != nil {
+	row := raftentry.ClassifyNativeWireCommandV1(cmd.Header.ID)
+	if !row.Known || row.Decision != raftentry.DecisionAccepted {
+		return nil, unsupportedClusterMutationError(cmd, row)
+	}
+	metadata, err := clusterRequestMetadata(header, cmd.Header, cmd.Known, ack)
+	if err != nil {
 		return nil, err
 	}
 	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, s.limits)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -244,6 +245,89 @@ func TestClusterAdmissionFollowerRejectsNativeMutationsBeforeLocalMutation(t *te
 	}
 	if calls := submitter.snapshot(); len(calls) != 0 {
 		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterAdmissionMetadataMutationsRejectBeforeLocalMutation(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   ClusterAdmissionStatus
+		wantCode iwire.ErrorCode
+	}{
+		{
+			name:     "follower",
+			status:   ClusterFollowerAdmission("node-a:7000", "not leader"),
+			wantCode: iwire.ErrReadOnly,
+		},
+		{
+			name:     "unavailable",
+			status:   ClusterUnavailableAdmission("cluster admission unavailable"),
+			wantCode: iwire.ErrDurabilityUnavailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			submitter := &admissionClusterSubmitter{
+				fakeClusterSubmitter: &fakeClusterSubmitter{},
+				status:               tt.status,
+			}
+			client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+			meta := collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					DocumentFormat: collections.DocumentFormatBSON,
+				},
+			}
+			if _, err := mgr.CreateCollection(&meta); err != nil {
+				t.Fatalf("direct CreateCollection users: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("OpenCollection users: %v", err)
+			}
+			if _, err := col.CreateIndex(collections.IndexDefinition{
+				Name:      "email",
+				Field:     "email",
+				ValueType: collections.IndexValueString,
+			}); err != nil {
+				t.Fatalf("direct CreateIndex email: %v", err)
+			}
+
+			if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "admins"}); !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("CreateCollection err=%v want code %d", err, tt.wantCode)
+			}
+			if _, err := mgr.OpenCollection("admins"); !errors.Is(err, collections.ErrCollectionNotFound) {
+				t.Fatalf("OpenCollection admins err=%v want collection not found", err)
+			}
+
+			if _, err := client.CreateIndex(ctx, "users", collections.IndexDefinition{
+				Name:      "name",
+				Field:     "name",
+				ValueType: collections.IndexValueString,
+			}); !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("CreateIndex err=%v want code %d", err, tt.wantCode)
+			}
+			indexes := col.Meta().Indexes
+			if len(indexes) != 1 || indexes[0].Name != "email" {
+				t.Fatalf("indexes after rejected create_index=%+v want only email", indexes)
+			}
+
+			if _, err := client.DropIndex(ctx, "users", "email"); !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("DropIndex err=%v want code %d", err, tt.wantCode)
+			}
+			indexes = col.Meta().Indexes
+			if len(indexes) != 1 || indexes[0].Name != "email" {
+				t.Fatalf("indexes after rejected drop_index=%+v want email retained", indexes)
+			}
+			if calls := submitter.snapshot(); len(calls) != 0 {
+				t.Fatalf("submitter calls=%d want 0", len(calls))
+			}
+		})
 	}
 }
 
