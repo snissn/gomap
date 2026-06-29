@@ -359,12 +359,12 @@ func (b *commandWALPublicBatch) disableInnerStreamingBypass() {
 }
 
 func (b *commandWALPublicBatch) Set(key, value []byte) error {
-	_, _, err := b.setView(key, value, false)
+	_, _, err := b.setView(key, value, false, false)
 	return err
 }
 
 func (b *commandWALPublicBatch) SetView(key, value []byte) error {
-	_, _, err := b.setView(key, value, false)
+	_, _, err := b.setView(key, value, false, true)
 	return err
 }
 
@@ -378,10 +378,10 @@ func (b *commandWALPublicBatch) SetView(key, value []byte) error {
 //
 // This method is intentionally not part of the public Batch interface.
 func (b *commandWALPublicBatch) SetViewWithReplayBytes(key, value []byte) (keyView, valueView []byte, err error) {
-	return b.setView(key, value, true)
+	return b.setView(key, value, true, true)
 }
 
-func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews bool) (keyView, valueView []byte, err error) {
+func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, useInnerView bool) (keyView, valueView []byte, err error) {
 	if b == nil || b.inner == nil {
 		return nil, nil, ErrClosed
 	}
@@ -389,7 +389,12 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews boo
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if !retainReplayViews {
-		if err := b.inner.Set(key, value); err != nil {
+		if useInnerView {
+			err = b.innerSetView(key, value)
+		} else {
+			err = b.inner.Set(key, value)
+		}
+		if err != nil {
 			return nil, nil, err
 		}
 		b.payloadBypass = true
@@ -431,12 +436,12 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews boo
 }
 
 func (b *commandWALPublicBatch) Delete(key []byte) error {
-	_, err := b.deleteView(key, false)
+	_, err := b.deleteView(key, false, false)
 	return err
 }
 
 func (b *commandWALPublicBatch) DeleteView(key []byte) error {
-	_, err := b.deleteView(key, false)
+	_, err := b.deleteView(key, false, true)
 	return err
 }
 
@@ -445,17 +450,22 @@ func (b *commandWALPublicBatch) DeleteView(key []byte) error {
 //
 // This method is intentionally not part of the public Batch interface.
 func (b *commandWALPublicBatch) DeleteViewWithReplayBytes(key []byte) (keyView []byte, err error) {
-	return b.deleteView(key, true)
+	return b.deleteView(key, true, true)
 }
 
-func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews bool) (keyView []byte, err error) {
+func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInnerView bool) (keyView []byte, err error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
 	if !retainReplayViews {
-		if err := b.inner.Delete(key); err != nil {
+		if useInnerView {
+			err = b.innerDeleteView(key)
+		} else {
+			err = b.inner.Delete(key)
+		}
+		if err != nil {
 			return nil, err
 		}
 		b.payloadBypass = true
