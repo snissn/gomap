@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"strings"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
@@ -32,12 +32,14 @@ type CommittedEntryV1 struct {
 	CurrentCatalogVersion    uint64
 	HasCurrentCatalogVersion bool
 	SyncLocalCommandWAL      bool
+	RequestMetadata          raftentry.RequestMetadataV1
+	ExpectedTarget           *raftentry.TargetIdentityV1
 }
 
 // Options configures one local single-group FSM instance.
 type Options struct {
-	DB          *backenddb.DB
-	MetadataDir string
+	DB      *backenddb.DB
+	Cluster raftcluster.Config
 
 	DecodeLimits nativewire.Limits
 	StoreOptions raftapply.DurableApplyStoreOptions
@@ -57,6 +59,7 @@ type FSM struct {
 	scopeRule    raftentry.ScopeRuleV1
 	database     string
 	catalog      string
+	cluster      raftcluster.ResolvedConfig
 
 	progress *raftapply.DurableApplyProgressStore
 	results  *raftapply.DurableApplyResultStore
@@ -98,9 +101,13 @@ func Open(opts Options) (*FSM, error) {
 	if opts.DB == nil {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil DB")
 	}
-	metadataDir := strings.TrimSpace(opts.MetadataDir)
+	cluster, err := raftcluster.Validate(opts.Cluster)
+	if err != nil {
+		return nil, errors.Join(codedError(raftentry.ErrorUnsafeDurabilityModeV1, "invalid raftcluster config"), err)
+	}
+	metadataDir := cluster.Layout.ApplyDir
 	if metadataDir == "" {
-		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing metadata dir")
+		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing raftcluster apply dir")
 	}
 	progress, err := raftapply.OpenDurableApplyProgressStore(metadataDir, opts.StoreOptions)
 	if err != nil {
@@ -119,6 +126,7 @@ func Open(opts Options) (*FSM, error) {
 		scopeRule:    opts.ScopeRule,
 		database:     opts.DatabaseScope,
 		catalog:      opts.CatalogScope,
+		cluster:      cluster,
 		progress:     progress,
 		results:      results,
 	}, nil
@@ -169,16 +177,16 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 	}
 	id := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
 	if err := validateCommittedID(id); err != nil {
-		return reject(commandDigest(entry.Bytes, f.decodeOptions(id)), raftentry.ErrorMalformedEntryV1, err)
+		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), raftentry.ErrorMalformedEntryV1, err)
 	}
 	if err := f.checkCommittedOrder(id); err != nil {
 		code, _ := ErrorCodeOf(err)
-		return reject(commandDigest(entry.Bytes, f.decodeOptions(id)), code, err)
+		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), code, err)
 	}
 	meta, err := f.applyMetadata(entry, id)
 	if err != nil {
 		code, _ := ErrorCodeOf(err)
-		return reject(commandDigest(entry.Bytes, f.decodeOptions(id)), code, err)
+		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), code, err)
 	}
 	return raftapply.ApplyCommittedEntryV1(f.db, entry.Bytes, meta, raftapply.Options{
 		DecodeLimits:  f.decodeLimits,
@@ -197,19 +205,27 @@ func (f *FSM) applyMetadata(entry CommittedEntryV1, id raftentry.ApplyEntryID) (
 		ScopeRule:                f.scopeRule,
 		DatabaseScope:            f.database,
 		CatalogScope:             f.catalog,
+		RequestMetadata:          cloneRequestMetadataV1(entry.RequestMetadata),
+		ExpectedTarget:           cloneExpectedTargetV1(entry.ExpectedTarget),
 	}, nil
 }
 
-func (f *FSM) decodeOptions(id raftentry.ApplyEntryID) raftentry.DecodeOptions {
+func (f *FSM) decodeOptions(entry CommittedEntryV1, id raftentry.ApplyEntryID) raftentry.DecodeOptions {
 	if f == nil {
-		return raftentry.DecodeOptions{ApplyEntryID: id}
+		return raftentry.DecodeOptions{
+			ApplyEntryID:    id,
+			RequestMetadata: cloneRequestMetadataV1(entry.RequestMetadata),
+			ExpectedTarget:  cloneExpectedTargetV1(entry.ExpectedTarget),
+		}
 	}
 	return raftentry.DecodeOptions{
-		Limits:        f.decodeLimits,
-		ScopeRule:     f.scopeRule,
-		DatabaseScope: f.database,
-		CatalogScope:  f.catalog,
-		ApplyEntryID:  id,
+		Limits:          f.decodeLimits,
+		ScopeRule:       f.scopeRule,
+		DatabaseScope:   f.database,
+		CatalogScope:    f.catalog,
+		ApplyEntryID:    id,
+		RequestMetadata: cloneRequestMetadataV1(entry.RequestMetadata),
+		ExpectedTarget:  cloneExpectedTargetV1(entry.ExpectedTarget),
 	}
 }
 
@@ -228,6 +244,9 @@ func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index gap: got %d after %d", id.Index, last.Index)
 	}
 	if id.Index == last.Index {
+		if id.Term != last.Term {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry term %d conflicts with last applied term %d at index %d", id.Term, last.Term, id.Index)
+		}
 		return nil
 	}
 	if id.Term < last.Term {
@@ -252,6 +271,19 @@ func commandDigest(src []byte, opts raftentry.DecodeOptions) raftentry.CommandDi
 		return digest
 	}
 	return raftentry.CommandDigestV1ForBytes(bytes.Clone(src), opts)
+}
+
+func cloneRequestMetadataV1(meta raftentry.RequestMetadataV1) raftentry.RequestMetadataV1 {
+	meta.TraceContext = bytes.Clone(meta.TraceContext)
+	return meta
+}
+
+func cloneExpectedTargetV1(target *raftentry.TargetIdentityV1) *raftentry.TargetIdentityV1 {
+	if target == nil {
+		return nil
+	}
+	cloned := target.Clone()
+	return &cloned
 }
 
 func codedError(code raftentry.DeterministicErrorCodeV1, format string, args ...any) error {

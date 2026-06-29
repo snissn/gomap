@@ -328,10 +328,15 @@ func TestStorageLayoutDeterministicAndSeparated(t *testing.T) {
 	if a.Layout.RootDir != DefaultClusterDir(cfg.Dir) {
 		t.Fatalf("root dir=%q want %q", a.Layout.RootDir, DefaultClusterDir(cfg.Dir))
 	}
-	if a.Layout.LogDir == a.Layout.StableDir || a.Layout.LogDir == a.Layout.SnapshotDir || a.Layout.StableDir == a.Layout.SnapshotDir {
-		t.Fatalf("log/stable/snapshot dirs must be distinct: %+v", a.Layout)
+	if a.Layout.LogDir == a.Layout.StableDir ||
+		a.Layout.LogDir == a.Layout.ApplyDir ||
+		a.Layout.LogDir == a.Layout.SnapshotDir ||
+		a.Layout.StableDir == a.Layout.ApplyDir ||
+		a.Layout.StableDir == a.Layout.SnapshotDir ||
+		a.Layout.ApplyDir == a.Layout.SnapshotDir {
+		t.Fatalf("log/stable/apply/snapshot dirs must be distinct: %+v", a.Layout)
 	}
-	for _, path := range []string{a.Layout.RootDir, a.Layout.NodeDir, a.Layout.GroupDir, a.Layout.LogDir, a.Layout.StableDir, a.Layout.SnapshotDir} {
+	for _, path := range []string{a.Layout.RootDir, a.Layout.NodeDir, a.Layout.GroupDir, a.Layout.LogDir, a.Layout.StableDir, a.Layout.ApplyDir, a.Layout.SnapshotDir} {
 		if sameOrUnder(path, CommandWALDir(cfg.Dir)) {
 			t.Fatalf("layout path %q overlaps command WAL dir %q", path, CommandWALDir(cfg.Dir))
 		}
