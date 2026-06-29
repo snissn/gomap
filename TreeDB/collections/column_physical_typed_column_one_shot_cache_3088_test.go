@@ -491,13 +491,16 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 
 func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, want bool) {
 	tb.Helper()
-	got := diag.TypedColumnPrepareQ2GroupRankNanos > 0 ||
-		diag.TypedColumnPrepareQ2DistinctRankNanos > 0 ||
-		diag.TypedColumnPrepareQ2LocalRankNanos > 0
-	if got != want {
-		tb.Fatalf("%s q2 post-prepare subphase present=%t want %t diagnostics=%+v", label, got, want, diag)
-	}
+	total := diag.TypedColumnPrepareQ2GroupRankNanos +
+		diag.TypedColumnPrepareQ2DistinctRankNanos +
+		diag.TypedColumnPrepareQ2LocalRankNanos
 	if !want {
+		if total != 0 {
+			tb.Fatalf("%s q2 post-prepare subphase nanos=%d want 0 diagnostics=%+v", label, total, diag)
+		}
+		return
+	}
+	if total == 0 {
 		return
 	}
 	if diag.TypedColumnPrepareQ2GroupRankNanos <= 0 {
