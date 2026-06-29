@@ -639,6 +639,9 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 }
 
 func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
+	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return findResponsePayload{document: doc}, err
+	}
 	if doc, rejected, err := rejectTransactionalCommand(command, "find"); rejected {
 		return findResponsePayload{document: doc}, err
 	}
@@ -1763,6 +1766,9 @@ func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequ
 }
 
 func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, error) {
+	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return doc, err
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -1806,6 +1812,9 @@ func (s *Server) listCollectionsResponse(command wire.Document) (wire.Document, 
 }
 
 func (s *Server) listDatabasesResponse(command wire.Document) (wire.Document, error) {
+	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return doc, err
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -1979,6 +1988,119 @@ func rejectTransactionalCommand(command wire.Document, commandName string) (wire
 	return doc, true, err
 }
 
+func rejectUnsupportedReadConcern(command wire.Document) (wire.Document, bool, error) {
+	if err := parseMongoReadConcern(command); err != nil {
+		doc, docErr := mongoReadConcernCommandError(err)
+		return doc, true, docErr
+	}
+	return nil, false, nil
+}
+
+type mongoReadConcernParseError struct {
+	code     int32
+	codeName string
+	message  string
+}
+
+func (e mongoReadConcernParseError) Error() string {
+	return e.message
+}
+
+func mongoReadConcernFailedToParse(format string, args ...any) error {
+	return mongoReadConcernParseError{
+		code:     commandCodeFailedToParse,
+		codeName: "FailedToParse",
+		message:  fmt.Sprintf(format, args...),
+	}
+}
+
+func mongoReadConcernBadValue(format string, args ...any) error {
+	return mongoReadConcernParseError{
+		code:     commandCodeBadValue,
+		codeName: "BadValue",
+		message:  fmt.Sprintf(format, args...),
+	}
+}
+
+func mongoReadConcernCommandError(err error) (wire.Document, error) {
+	var parseErr mongoReadConcernParseError
+	if errors.As(err, &parseErr) {
+		return commandError(parseErr.code, parseErr.codeName, parseErr.message)
+	}
+	return commandError(commandCodeBadValue, "BadValue", err.Error())
+}
+
+func parseMongoReadConcern(command wire.Document) error {
+	elements, err := bson.Raw(command).Elements()
+	if err != nil {
+		return mongoReadConcernFailedToParse("Mongo command is malformed: %v", err)
+	}
+	seenReadConcern := false
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return mongoReadConcernFailedToParse("Mongo command is malformed: %v", err)
+		}
+		if key != "readConcern" {
+			continue
+		}
+		if seenReadConcern {
+			return mongoReadConcernBadValue("Mongo command field \"readConcern\" is duplicated")
+		}
+		seenReadConcern = true
+		if err := parseMongoReadConcernValue(elem.Value()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseMongoReadConcernValue(value bson.RawValue) error {
+	readConcern, ok := value.DocumentOK()
+	if !ok {
+		return mongoReadConcernFailedToParse("Mongo command field \"readConcern\" must be a document")
+	}
+	elements, err := readConcern.Elements()
+	if err != nil {
+		return mongoReadConcernFailedToParse("Mongo command field \"readConcern\" is malformed: %v", err)
+	}
+	seenLevel := false
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return mongoReadConcernFailedToParse("Mongo command field \"readConcern\" is malformed: %v", err)
+		}
+		switch key {
+		case "level":
+			if seenLevel {
+				return mongoReadConcernBadValue("Mongo readConcern field \"level\" is duplicated")
+			}
+			seenLevel = true
+			level, ok := elem.Value().StringValueOK()
+			if !ok {
+				return mongoReadConcernFailedToParse("Mongo command field \"readConcern.level\" must be a string")
+			}
+			if !mongoReadConcernLevelIsLocalStale(level) {
+				return mongoReadConcernBadValue("Mongo gateway readConcern level %q is not supported; only local-stale reads are supported", level)
+			}
+		case "afterClusterTime", "atClusterTime":
+			return mongoReadConcernBadValue("Mongo gateway readConcern does not support %q", key)
+		default:
+			return mongoReadConcernBadValue("Mongo gateway readConcern does not support %q", key)
+		}
+	}
+	return nil
+}
+
+func mongoReadConcernLevelIsLocalStale(level string) bool {
+	switch level {
+	case "local", "available":
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
 		return mongoClusterUnsupportedLocalMutation("createIndexes")
@@ -2101,6 +2223,9 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 }
 
 func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, error) {
+	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return doc, err
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -2204,6 +2329,9 @@ func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, erro
 }
 
 func (s *Server) getMoreResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
+	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
+		return doc, err
+	}
 	cursorID, err := requiredInt64Field(command, "getMore")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())

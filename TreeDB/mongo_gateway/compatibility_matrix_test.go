@@ -243,6 +243,45 @@ func mongoCompatibilityMatrixRows() []mongoCompatibilityMatrixRow {
 			},
 		},
 		{
+			category: "read concern",
+			feature:  "local/available readConcern maps to local_stale",
+			status:   "supported subset",
+			probe: func(t *testing.T, server *Server) {
+				find := serveCommand(t, server, 901, bson.D{
+					{Key: "find", Value: "users"},
+					{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+					{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
+					{Key: "$db", Value: "app"},
+				})
+				assertBatchIDs(t, cursorFirstBatch(t, find), []string{"u1"})
+				list := serveCommand(t, server, 902, bson.D{
+					{Key: "listCollections", Value: int32(1)},
+					{Key: "nameOnly", Value: true},
+					{Key: "readConcern", Value: bson.D{{Key: "level", Value: "available"}}},
+					{Key: "$db", Value: "app"},
+				})
+				if batch := cursorFirstBatch(t, list); len(batch) != 1 {
+					t.Fatalf("listCollections batch len=%d want 1", len(batch))
+				}
+			},
+		},
+		{
+			category: "read concern gap",
+			feature:  "majority, linearizable, and snapshot readConcern",
+			status:   "rejected",
+			probe: func(t *testing.T, server *Server) {
+				for i, level := range []string{"majority", "linearizable", "snapshot"} {
+					resp := serveCommand(t, server, int32(910+i), bson.D{
+						{Key: "find", Value: "users"},
+						{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "readConcern", Value: bson.D{{Key: "level", Value: level}}},
+						{Key: "$db", Value: "app"},
+					})
+					assertCommandError(t, resp, "BadValue")
+				}
+			},
+		},
+		{
 			category: "crud",
 			feature:  "updateOne $set by _id",
 			status:   "supported subset",

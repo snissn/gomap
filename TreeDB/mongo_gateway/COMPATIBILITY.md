@@ -54,6 +54,8 @@ block drifts from the executable matrix rows.
 | query | $in on indexed scalar fields | supported subset |
 | query | projection, sort, skip, and limit | supported subset |
 | cursor | getMore and killCursors | supported |
+| read concern | local/available readConcern maps to local_stale | supported subset |
+| read concern gap | majority, linearizable, and snapshot readConcern | rejected |
 | crud | updateOne $set by _id | supported subset |
 | crud | delete by _id | supported subset |
 | metadata | listCollections | supported subset |
@@ -120,6 +122,7 @@ throughput check.
 | Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Standalone writeConcern durability remains minimal. In cluster submitter mode, absent/default and `{w: 1}` request visible ack, `{w: "majority"}` requests Raft-committed proof, and unsupported writeConcern options are rejected before submit. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
 | Command | `getMore` / `killCursors` | `supported subset` | `TestMongoCompatibilityMatrix`, cursor tests | Server cursor state is in-memory only. |
+| Command option | `readConcern` on `find`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
 | Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests | Only `_id`-targeted updateOne with accepted update shapes. |
 | Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Only `_id`-targeted deletes. |
 | Command | `listCollections` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Minimal filtering and response fields. |

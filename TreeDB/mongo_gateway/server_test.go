@@ -449,6 +449,179 @@ func TestServerInsertAndFindByID(t *testing.T) {
 	assertBool(t, firstBatch[0], "active", true)
 }
 
+func TestMongoReadConcernAcceptsLocalStaleReadSurfaces(t *testing.T) {
+	server := newMongoReadConcernTestServer(t)
+
+	findCases := []struct {
+		name        string
+		present     bool
+		readConcern bson.D
+	}{
+		{name: "absent"},
+		{name: "empty", present: true, readConcern: bson.D{}},
+		{name: "local", present: true, readConcern: bson.D{{Key: "level", Value: "local"}}},
+		{name: "available", present: true, readConcern: bson.D{{Key: "level", Value: "available"}}},
+	}
+	for _, tc := range findCases {
+		t.Run(tc.name, func(t *testing.T) {
+			command := bson.D{
+				{Key: "find", Value: "users"},
+				{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			}
+			if tc.present {
+				command = append(command, bson.E{Key: "readConcern", Value: tc.readConcern})
+			}
+			command = append(command, bson.E{Key: "$db", Value: "app"})
+			assertBatchIDs(t, cursorFirstBatch(t, serveCommand(t, server, 330400, command)), []string{"u1"})
+		})
+	}
+
+	listCollections := serveCommand(t, server, 330401, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "nameOnly", Value: true},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
+		{Key: "$db", Value: "app"},
+	})
+	if batch := cursorFirstBatch(t, listCollections); len(batch) != 1 {
+		t.Fatalf("listCollections batch len=%d want 1", len(batch))
+	}
+
+	listDatabases := serveCommand(t, server, 330402, bson.D{
+		{Key: "listDatabases", Value: int32(1)},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "available"}}},
+		{Key: "$db", Value: "admin"},
+	})
+	assertOK(t, listDatabases)
+
+	listIndexes := serveCommand(t, server, 330403, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertIndexNameSet(t, cursorFirstBatch(t, listIndexes), []string{"_id_", "city_1"})
+
+	find := serveCommand(t, server, 330404, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	cursorID := cursorIDFromResponse(t, find)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+	getMore := serveCommand(t, server, 330405, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "available"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorNextBatch(t, getMore), []string{"u2"})
+}
+
+func TestMongoReadConcernRejectsStrongLevelsBeforeServingData(t *testing.T) {
+	server := newMongoReadConcernTestServer(t)
+
+	for _, level := range []string{"majority", "linearizable", "snapshot"} {
+		t.Run("find_"+level, func(t *testing.T) {
+			resp := serveCommand(t, server, 330410, bson.D{
+				{Key: "find", Value: "users"},
+				{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "readConcern", Value: bson.D{{Key: "level", Value: level}}},
+				{Key: "$db", Value: "app"},
+			})
+			assertCommandError(t, resp, "BadValue")
+		})
+	}
+
+	listCollections := serveCommand(t, server, 330411, bson.D{
+		{Key: "listCollections", Value: int32(1)},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "majority"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, listCollections, "BadValue")
+
+	listDatabases := serveCommand(t, server, 330412, bson.D{
+		{Key: "listDatabases", Value: int32(1)},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "snapshot"}}},
+		{Key: "$db", Value: "admin"},
+	})
+	assertCommandError(t, listDatabases, "BadValue")
+
+	listIndexes := serveCommand(t, server, 330413, bson.D{
+		{Key: "listIndexes", Value: "users"},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "linearizable"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, listIndexes, "BadValue")
+
+	find := serveCommand(t, server, 330414, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{}},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: int32(1)}}},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	cursorID := cursorIDFromResponse(t, find)
+	if cursorID == 0 {
+		t.Fatal("cursor id=0 want open cursor")
+	}
+	rejectedGetMore := serveCommand(t, server, 330415, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "majority"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, rejectedGetMore, "BadValue")
+
+	next := serveCommand(t, server, 330416, bson.D{
+		{Key: "getMore", Value: cursorID},
+		{Key: "collection", Value: "users"},
+		{Key: "batchSize", Value: int32(1)},
+		{Key: "$db", Value: "app"},
+	})
+	assertBatchIDs(t, cursorNextBatch(t, next), []string{"u2"})
+}
+
+func TestMongoReadConcernRejectsMalformedDocumentsAndUnsupportedOptions(t *testing.T) {
+	server := newMongoReadConcernTestServer(t)
+
+	cases := []struct {
+		name        string
+		readConcern any
+		codeName    string
+	}{
+		{name: "non_document", readConcern: "local", codeName: "FailedToParse"},
+		{name: "bad_level_type", readConcern: bson.D{{Key: "level", Value: int32(1)}}, codeName: "FailedToParse"},
+		{name: "unknown_option", readConcern: bson.D{{Key: "level", Value: "local"}, {Key: "foo", Value: true}}, codeName: "BadValue"},
+		{name: "after_cluster_time", readConcern: bson.D{{Key: "afterClusterTime", Value: int64(42)}}, codeName: "BadValue"},
+		{name: "at_cluster_time", readConcern: bson.D{{Key: "atClusterTime", Value: int64(42)}}, codeName: "BadValue"},
+		{name: "duplicate_level", readConcern: bson.D{{Key: "level", Value: "local"}, {Key: "level", Value: "local"}}, codeName: "BadValue"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := serveCommand(t, server, 330420, bson.D{
+				{Key: "find", Value: "users"},
+				{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "readConcern", Value: tc.readConcern},
+				{Key: "$db", Value: "app"},
+			})
+			assertCommandError(t, resp, tc.codeName)
+		})
+	}
+
+	duplicateTopLevel := serveCommand(t, server, 330421, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
+		{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, duplicateTopLevel, "BadValue")
+}
+
 func TestServerUpdateAndDeleteByID(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -6149,6 +6322,37 @@ func TestServerMaxMessageLengthClampsToWireLimit(t *testing.T) {
 	if got := server.maxMessageLength(); got != wire.DefaultMaxMessageLength {
 		t.Fatalf("maxMessageLength=%d want %d", got, wire.DefaultMaxMessageLength)
 	}
+}
+
+func newMongoReadConcernTestServer(tb testing.TB) *Server {
+	tb.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
+	if err != nil {
+		tb.Fatalf("open db: %v", err)
+	}
+	tb.Cleanup(func() { _ = db.Close() })
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	}
+	assertOK(tb, serveCommand(tb, server, 330490, bson.D{
+		{Key: "createIndexes", Value: "users"},
+		{Key: "indexes", Value: bson.A{
+			bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	assertOK(tb, serveCommand(tb, server, 330491, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "city", Value: "sfo"}},
+		}},
+		{Key: "$db", Value: "app"},
+	}))
+	return server
 }
 
 func mustDocument(tb testing.TB, doc bson.D) wire.Document {
