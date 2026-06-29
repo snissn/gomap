@@ -272,15 +272,21 @@ func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1,
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
 	}
-	var after uint64
+	start := 0
 	if last, ok := node.LastApplied(); ok {
-		after = last.Index
-	}
-	entries := make([]raftfsm.CommittedEntryV1, 0, len(h.committed))
-	for _, entry := range h.committed {
-		if entry.Index > after {
-			entries = append(entries, cloneCommittedEntry(entry))
+		if last.Index == 0 {
+			h.mu.Unlock()
+			return nil, fmt.Errorf("%w: node %s has invalid last applied index 0", ErrCommittedLogConflict, id)
 		}
+		if last.Index > uint64(len(h.committed)) {
+			h.mu.Unlock()
+			return nil, fmt.Errorf("%w: node %s last applied index %d beyond committed log length %d", ErrCommittedLogConflict, id, last.Index, len(h.committed))
+		}
+		start = int(last.Index - 1)
+	}
+	entries := make([]raftfsm.CommittedEntryV1, 0, len(h.committed)-start)
+	for _, entry := range h.committed[start:] {
+		entries = append(entries, cloneCommittedEntry(entry))
 	}
 	h.mu.Unlock()
 	return node.ApplyCommittedEntriesV1(entries...)

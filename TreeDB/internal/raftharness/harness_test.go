@@ -113,14 +113,19 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 	if evidence, err := h.CommitAndApply([]raftcluster.NodeID{"node-a"}, entries...); err != nil {
 		t.Fatalf("CommitAndApply leader: %v evidence=%+v", err, evidence)
 	}
-	if results, err := h.ApplyCommittedEntriesToNode("node-b", entries[0]); err != nil {
-		t.Fatalf("seed follower: %v results=%+v", err, results)
+	seeded, err := h.ApplyCommittedEntriesToNode("node-b", entries[0])
+	if err != nil {
+		t.Fatalf("seed follower: %v results=%+v", err, seeded)
 	}
+	assertAppliedResults(t, "node-b seed", seeded, []int64{1})
 	catchup, err := h.CatchUpNode("node-b")
 	if err != nil {
 		t.Fatalf("CatchUpNode: %v results=%+v", err, catchup)
 	}
-	assertAppliedResults(t, "node-b catchup", catchup, []int64{1, 1})
+	assertAppliedResults(t, "node-b catchup", catchup, []int64{1, 1, 1})
+	if catchup[0] != seeded[0] {
+		t.Fatalf("node-b catchup first result=%+v, want replayed last result %+v", catchup[0], seeded[0])
+	}
 	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 14, Index: 3})
 	if leaderDigest, followerDigest := logicalDigest(t, h, "node-a"), logicalDigest(t, h, "node-b"); leaderDigest != followerDigest {
 		t.Fatalf("digest after catch-up mismatch leader=%s follower=%s", leaderDigest.Hex(), followerDigest.Hex())
@@ -148,6 +153,31 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 	assertRejectedResult(t, "divergent duplicate catch-up", divergentResults, err, raftentry.ErrorRejectedConflictV1)
 	assertLastApplied(t, bad, "node-b", raftentry.ApplyEntryID{Term: 13, Index: 1})
 	assertCollectionMissing(t, bad, "node-b", "admins")
+}
+
+func TestCatchUpNodeRejectsDivergentLastAppliedEntry(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	committed := []raftfsm.CommittedEntryV1{
+		committedCommand(19, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:committed")),
+		committedCommand(19, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:after-divergence")),
+	}
+	divergent := committedCommand(19, 1, deterministicCreateCollectionEntry(t, "admins", "harness:create:admins:divergent-last"))
+	seeded, err := h.ApplyCommittedEntriesToNode("node-b", divergent)
+	if err != nil {
+		t.Fatalf("seed divergent follower: %v results=%+v", err, seeded)
+	}
+	assertAppliedResults(t, "node-b divergent seed", seeded, []int64{1})
+	if _, err := h.Commit(committed...); err != nil {
+		t.Fatalf("Commit committed log: %v", err)
+	}
+
+	catchup, err := h.CatchUpNode("node-b")
+	assertRejectedResult(t, "divergent last-applied catch-up", catchup, err, raftentry.ErrorRejectedConflictV1)
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 19, Index: 1})
+	assertCollectionMissing(t, h, "node-b", "users")
+	assertCollectionMissing(t, h, "node-b", "orders")
 }
 
 func TestCommitRejectsInvalidBatchAtomically(t *testing.T) {
