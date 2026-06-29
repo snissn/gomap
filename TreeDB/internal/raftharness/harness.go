@@ -27,6 +27,7 @@ const (
 
 var (
 	ErrNodeNotFound         = errors.New("raftharness: node not found")
+	ErrNodeClosed           = errors.New("raftharness: node closed")
 	ErrHarnessClosed        = errors.New("raftharness: harness closed")
 	ErrCommittedLogGap      = errors.New("raftharness: committed log gap")
 	ErrCommittedLogConflict = errors.New("raftharness: committed log conflict")

@@ -47,12 +47,15 @@ func (b *ReadBarrier) WaitAppliedIndex(ctx context.Context, barrier raftcluster.
 	if _, err := b.h.CatchUpNode(b.nodeID); err != nil {
 		return progress, err
 	}
+	refreshed, refreshErr := b.AppliedProgress(context.Background())
+	if refreshErr == nil {
+		progress = refreshed
+	}
 	if err := ctx.Err(); err != nil {
 		return progress, err
 	}
-	progress, err = b.AppliedProgress(ctx)
-	if err != nil {
-		return progress, err
+	if refreshErr != nil {
+		return progress, refreshErr
 	}
 	if err := barrier.Check(progress); err != nil {
 		return progress, fmt.Errorf("raftharness: %w", err)
@@ -65,8 +68,11 @@ func (n *Node) AppliedProgress(ctx context.Context) (raftcluster.AppliedProgress
 	if err := ctx.Err(); err != nil {
 		return raftcluster.AppliedProgress{}, err
 	}
-	if n == nil || n.fsm == nil || n.closed {
-		return raftcluster.AppliedProgress{}, fmt.Errorf("%w: closed node", ErrNodeNotFound)
+	if n == nil {
+		return raftcluster.AppliedProgress{}, fmt.Errorf("%w: nil node", ErrNodeClosed)
+	}
+	if n.fsm == nil || n.closed {
+		return raftcluster.AppliedProgress{}, fmt.Errorf("%w: closed node", ErrNodeClosed)
 	}
 	return n.fsm.AppliedProgress(ctx)
 }
@@ -76,8 +82,11 @@ func (n *Node) WaitAppliedIndex(ctx context.Context, barrier raftcluster.Applied
 	if err := ctx.Err(); err != nil {
 		return raftcluster.AppliedProgress{}, err
 	}
-	if n == nil || n.fsm == nil || n.closed {
-		return raftcluster.AppliedProgress{}, fmt.Errorf("%w: closed node", ErrNodeNotFound)
+	if n == nil {
+		return raftcluster.AppliedProgress{}, fmt.Errorf("%w: nil node", ErrNodeClosed)
+	}
+	if n.fsm == nil || n.closed {
+		return raftcluster.AppliedProgress{}, fmt.Errorf("%w: closed node", ErrNodeClosed)
 	}
 	return n.fsm.WaitAppliedIndex(ctx, barrier)
 }

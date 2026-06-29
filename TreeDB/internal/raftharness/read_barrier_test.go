@@ -86,3 +86,25 @@ func TestReadBarrierValidatesCommittedPrefixBeforeSatisfiedAppliedIndex(t *testi
 	}
 	assertCollectionMissing(t, h, "node-b", "orders")
 }
+
+func TestNodeReadBarrierClosedNodeErrorsAreDistinct(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+	node, ok := h.Node("node-b")
+	if !ok {
+		t.Fatal("node-b not found")
+	}
+	if err := h.CloseNode("node-b"); err != nil {
+		t.Fatalf("CloseNode: %v", err)
+	}
+
+	if _, err := node.AppliedProgress(context.Background()); !errors.Is(err, ErrNodeClosed) || errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("AppliedProgress closed node err=%v, want ErrNodeClosed and not ErrNodeNotFound", err)
+	}
+	if _, err := node.WaitAppliedIndex(context.Background(), raftcluster.AppliedIndexReadBarrier{
+		NodeID:          "node-b",
+		MinAppliedIndex: 1,
+	}); !errors.Is(err, ErrNodeClosed) || errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("WaitAppliedIndex closed node err=%v, want ErrNodeClosed and not ErrNodeNotFound", err)
+	}
+}
