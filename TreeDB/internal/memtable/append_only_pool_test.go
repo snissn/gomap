@@ -151,6 +151,7 @@ func TestAppendOnlyReserveAdditionalEntriesAvoidsIntermediateGrowth(t *testing.T
 
 	m := NewAppendOnlyWithEntryCapacity(appendOnlyMinInitialEntries)
 	additional := appendOnlyMinInitialEntries * 8
+	needed := m.count + additional
 	before := AppendOnlyEntryReserveStatsSnapshot()
 
 	m.ReserveAdditionalEntries(additional)
@@ -174,6 +175,16 @@ func TestAppendOnlyReserveAdditionalEntriesAvoidsIntermediateGrowth(t *testing.T
 	if got := after.SkippedGrowthBytesTotal - before.SkippedGrowthBytesTotal; got == 0 {
 		t.Fatalf("reserve skipped growth bytes did not increase")
 	}
+	maxHeadroom := needed / appendOnlyReserveHeadroomDivisor
+	if maxHeadroom < appendOnlyMinInitialEntries {
+		maxHeadroom = appendOnlyMinInitialEntries
+	}
+	if got, max := cap(m.entries), needed+maxHeadroom; got > max {
+		t.Fatalf("reserve cap(entries)=%d want<=%d", got, max)
+	}
+	if got := cap(m.entries); got < needed {
+		t.Fatalf("reserve cap(entries)=%d want>=%d", got, needed)
+	}
 
 	reservedLen := len(m.entries)
 	reservedCap := cap(m.entries)
@@ -189,6 +200,30 @@ func TestAppendOnlyReserveAdditionalEntriesAvoidsIntermediateGrowth(t *testing.T
 	}
 	if got := cap(m.entries); got != reservedCap {
 		t.Fatalf("entry slice cap changed during reserved appends: got %d want %d", got, reservedCap)
+	}
+}
+
+func TestAppendOnlyReserveTargetCapacityBoundsOvershoot(t *testing.T) {
+	current := appendOnlyMinInitialEntries
+	needed := appendOnlyAggressiveGrowCutoff + 1
+
+	target, skippedAllocs, skippedBytes := appendOnlyReserveTargetCapacity(current, needed)
+
+	if target < needed {
+		t.Fatalf("target=%d want >= needed %d", target, needed)
+	}
+	maxHeadroom := needed / appendOnlyReserveHeadroomDivisor
+	if maxHeadroom < appendOnlyMinInitialEntries {
+		maxHeadroom = appendOnlyMinInitialEntries
+	}
+	if max := needed + maxHeadroom; target > max {
+		t.Fatalf("target=%d want <= %d", target, max)
+	}
+	if skippedAllocs == 0 {
+		t.Fatalf("skippedAllocs=0 want >0")
+	}
+	if skippedBytes == 0 {
+		t.Fatalf("skippedBytes=0 want >0")
 	}
 }
 

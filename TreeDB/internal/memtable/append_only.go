@@ -50,6 +50,7 @@ const (
 	appendOnlyReuseOversizeFactor       = 4
 	appendOnlyResetDropThresholdEntries = 1 << 15
 	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
+	appendOnlyReserveHeadroomDivisor    = 4
 )
 
 // Serializes package-pool replacement with retained-byte accounting. sync.Pool
@@ -751,6 +752,22 @@ func appendOnlyReserveTargetCapacity(current, needed int) (target int, skippedGr
 			skippedGrowthBytes += appendOnlyEntryPoolBytes(next)
 		}
 		target = next
+	}
+	if target > needed {
+		headroom := needed / appendOnlyReserveHeadroomDivisor
+		if headroom < appendOnlyMinInitialEntries {
+			headroom = appendOnlyMinInitialEntries
+		}
+		maxInt := int(^uint(0) >> 1)
+		boundedTarget := needed
+		if needed > maxInt-headroom {
+			boundedTarget = maxInt
+		} else {
+			boundedTarget += headroom
+		}
+		if target > boundedTarget {
+			target = boundedTarget
+		}
 	}
 	return target, skippedGrowthAllocs, skippedGrowthBytes
 }
