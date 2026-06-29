@@ -1043,10 +1043,13 @@ func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testi
 		}
 		return
 	}
+	if total == 0 {
+		return
+	}
 	if diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos <= 0 ||
 		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos <= 0 ||
 		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos <= 0 ||
 		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos <= 0 {
-		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want all four q2 global-code phases >0", label, diag)
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want all four q2 global-code phases >0 when timer resolution records split work", label, diag)
 	}
 }
