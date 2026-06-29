@@ -300,6 +300,7 @@ func buildTypedColumnPartImageForDeclaredRowsWithResult(cfg ColumnStoreConfig, g
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
+	adapterOpts.DictionaryModes = typedColumnPublicationDictionaryModes(fields)
 	part, err := buildTypedColumnAdapterPartFromDeclaredRows(adapterOpts, cfg.Columns, rows)
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
@@ -315,12 +316,36 @@ func buildTypedColumnPartImageForDeclaredRowsWithResult(cfg ColumnStoreConfig, g
 	return typedColumnPartImageBuildResult{Bytes: image.Bytes, Rows: image.Rows, TypedGranuleRowOrder: rowOrder}, nil
 }
 
+func typedColumnPublicationDictionaryModes(fields []TypedStorageField) map[string]typedColumnAdapterDictionaryMode {
+	modes := make(map[string]typedColumnAdapterDictionaryMode)
+	for _, field := range fields {
+		if field.ValueType != "string" {
+			continue
+		}
+		name := field.Name
+		if name == "" {
+			name = field.Path
+		}
+		if name == "" {
+			continue
+		}
+		modes[name] = typedColumnAdapterDictionaryMode{Forward: true}
+	}
+	if len(modes) == 0 {
+		return nil
+	}
+	return modes
+}
+
 func typedColumnPartDeclaredRowOrder(part *typedColumnAdapterPart, rows int) ([]int, error) {
 	if rows == 0 {
 		return nil, nil
 	}
 	if part == nil || part.Part == nil {
 		return nil, errors.New("collections: typed-column part row order requires built part")
+	}
+	if !typedColumnAdapterPartHasLogicalSortKey(part) {
+		return nil, nil
 	}
 	if len(part.Part.Locators) != rows {
 		return nil, fmt.Errorf("collections: typed-column part locators=%d want rows=%d", len(part.Part.Locators), rows)

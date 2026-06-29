@@ -198,6 +198,12 @@ type typedColumnAdapterRowSource interface {
 	Value(rowIdx int, column typedColumnAdapterColumn) (columnDeclaredValue, bool, error)
 }
 
+type typedColumnAdapterIndexedRowSource interface {
+	typedColumnAdapterRowSource
+	ValueIndex(column typedColumnAdapterColumn) (int, error)
+	ValueAt(rowIdx, valueIdx int) (columnDeclaredValue, bool, error)
+}
+
 type typedColumnAdapterRowsSource []typedColumnAdapterRow
 
 func (s typedColumnAdapterRowsSource) Len() int {
@@ -250,6 +256,31 @@ func (s typedColumnDeclaredRowSource) Value(rowIdx int, column typedColumnAdapte
 		return columnDeclaredValue{}, false, fmt.Errorf("typed-column part field %q not found", column.Field.Path)
 	}
 	return row.Values[allIdx], true, nil
+}
+
+func (s typedColumnDeclaredRowSource) ValueIndex(column typedColumnAdapterColumn) (int, error) {
+	allIdx, ok := s.indexByPath[column.Field.Path]
+	if !ok {
+		return -1, fmt.Errorf("typed-column part field %q not found", column.Field.Path)
+	}
+	return allIdx, nil
+}
+
+func (s typedColumnDeclaredRowSource) ValueAt(rowIdx, valueIdx int) (columnDeclaredValue, bool, error) {
+	if rowIdx < 0 || rowIdx >= len(s.rows) {
+		return columnDeclaredValue{}, false, fmt.Errorf("row index=%d outside rows=%d", rowIdx, len(s.rows))
+	}
+	if valueIdx < 0 || valueIdx >= len(s.allColumns) {
+		return columnDeclaredValue{}, false, fmt.Errorf("value index=%d outside columns=%d", valueIdx, len(s.allColumns))
+	}
+	row := s.rows[rowIdx]
+	if row.Deleted {
+		return columnDeclaredValue{}, false, fmt.Errorf("row[%d] is deleted", rowIdx)
+	}
+	if len(row.Values) != len(s.allColumns) {
+		return columnDeclaredValue{}, false, fmt.Errorf("row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(s.allColumns))
+	}
+	return row.Values[valueIdx], true, nil
 }
 
 type typedColumnAdapterPart struct {
@@ -653,17 +684,31 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 	if err != nil {
 		return nil, err
 	}
+	indexedSource, valueIndexes, err := typedColumnAdapterIndexedSourceColumns(rowSource, columns)
+	if err != nil {
+		return nil, err
+	}
 	for i := range columns {
 		if columns[i].Field.ValueType == ColumnStoreValueString {
-			dict, err := buildTypedColumnAdapterStringDictionaryFromSource(columns[i], rowSource)
+			var dict map[string]int64
+			if indexedSource != nil {
+				dict, err = buildTypedColumnAdapterStringDictionaryFromIndexedSource(columns[i], indexedSource, valueIndexes[i])
+			} else {
+				dict, err = buildTypedColumnAdapterStringDictionaryFromSource(columns[i], rowSource)
+			}
 			if err != nil {
 				return nil, err
 			}
 			columns[i].Dictionary = dict
-			columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
-			columns[i].DictionaryValuesByCode, err = typedColumnAdapterDictionaryValuesByCodeFromForward(dict, len(dict))
-			if err != nil {
-				return nil, err
+			mode := typedColumnAdapterBuildDictionaryModeForColumn(opts, columns[i].Definition.Name)
+			if mode.Reverse {
+				columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
+			}
+			if mode.ValuesByCode {
+				columns[i].DictionaryValuesByCode, err = typedColumnAdapterDictionaryValuesByCodeFromForward(dict, len(dict))
+				if err != nil {
+					return nil, err
+				}
 			}
 			columns[i].Definition.Cardinality = uint32(len(dict))
 		}
@@ -790,8 +835,15 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 	}
 	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
 		batch.Columns[typedColumnAdapterPrimaryIDColumn][rowIdx] = rowSource.PrimaryID(rowIdx)
-		for _, column := range columns {
-			value, ok, err := rowSource.Value(rowIdx, column)
+		for columnIdx, column := range columns {
+			var value columnDeclaredValue
+			var ok bool
+			var err error
+			if indexedSource != nil {
+				value, ok, err = indexedSource.ValueAt(rowIdx, valueIndexes[columnIdx])
+			} else {
+				value, ok, err = rowSource.Value(rowIdx, column)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 			}
@@ -5161,10 +5213,49 @@ func buildTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, ro
 	return buildTypedColumnAdapterStringDictionaryFromSource(column, typedColumnAdapterRowsSource(rows))
 }
 
+func typedColumnAdapterIndexedSourceColumns(rowSource typedColumnAdapterRowSource, columns []typedColumnAdapterColumn) (typedColumnAdapterIndexedRowSource, []int, error) {
+	indexed, ok := rowSource.(typedColumnAdapterIndexedRowSource)
+	if !ok {
+		return nil, nil, nil
+	}
+	indexes := make([]int, len(columns))
+	for i, column := range columns {
+		valueIdx, err := indexed.ValueIndex(column)
+		if err != nil {
+			return nil, nil, err
+		}
+		indexes[i] = valueIdx
+	}
+	return indexed, indexes, nil
+}
+
 func buildTypedColumnAdapterStringDictionaryFromSource(column typedColumnAdapterColumn, rowSource typedColumnAdapterRowSource) (map[string]int64, error) {
 	seen := make(map[string]struct{})
 	for rowIdx := 0; rowIdx < rowSource.Len(); rowIdx++ {
 		value, ok, err := rowSource.Value(rowIdx, column)
+		if err != nil {
+			return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
+		}
+		if ok && value.Present && !value.Null {
+			seen[value.String] = struct{}{}
+		}
+	}
+	values := make([]string, 0, len(seen))
+	for value := range seen {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	dict := make(map[string]int64, len(values))
+	for i, value := range values {
+		dict[value] = int64(i)
+	}
+	return dict, nil
+}
+
+func buildTypedColumnAdapterStringDictionaryFromIndexedSource(column typedColumnAdapterColumn, rowSource typedColumnAdapterIndexedRowSource, valueIdx int) (map[string]int64, error) {
+	seen := make(map[string]struct{})
+	for rowIdx := 0; rowIdx < rowSource.Len(); rowIdx++ {
+		value, ok, err := rowSource.ValueAt(rowIdx, valueIdx)
 		if err != nil {
 			return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 		}
@@ -5197,6 +5288,19 @@ func typedColumnAdapterDictionaryModeForColumn(opts typedColumnAdapterOptions, c
 		return opts.DictionaryModes[column]
 	}
 	return typedColumnAdapterDictionaryMode{Forward: true, Reverse: true, ValuesByCode: true}
+}
+
+func typedColumnAdapterBuildDictionaryModeForColumn(opts typedColumnAdapterOptions, column string) typedColumnAdapterDictionaryMode {
+	mode := typedColumnAdapterDictionaryMode{Forward: true, Reverse: true, ValuesByCode: true}
+	if opts.DictionaryModes != nil {
+		if requested, ok := opts.DictionaryModes[column]; ok {
+			mode = requested
+		} else {
+			mode = typedColumnAdapterDictionaryMode{}
+		}
+	}
+	mode.Forward = true
+	return mode
 }
 
 func typedColumnPreparedAdapterDictionaryModeForColumn(opts typedColumnPreparedAdapterPartOptions, column string) typedColumnAdapterDictionaryMode {
