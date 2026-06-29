@@ -35,6 +35,23 @@ Coverage:
   - `TestRecovery_TruncatedValueLogRecord`
   - `TestRecovery_MissingDictFails`
 
+## 2.1 Publication Readability
+
+Invariant:
+- Published commit state exposes roots, system-root collection catalog metadata,
+  value-log pointers, snapshots, and `AppliedCommandLSN` as a readable state
+  tuple. Bounded pre-commit catalog EOF is retriable; post-commit readability
+  failure is commit-ambiguous.
+
+Coverage:
+- `TreeDB/docs/spec/publication-readability-3245.md`
+- `TreeDB/collections/publication_readability_test.go`:
+  - `TestCollectionCatalogEOFInsertBatchPreCommitRetryUsesCatalogLoadFaults`
+  - `TestCollectionCatalogEOFInsertBatchRetryExhaustionIncludesCatalogContext`
+  - `TestCollectionCatalogEOFInsertBatchPostCommitReturnsCommitAmbiguous`
+- `TreeDB/caching/vlog_current_segment_readbarrier_test.go`:
+  - `TestCachedModeValueLogPointerReadBarrierResolvesBackendRootRead`
+
 ## 3. Value-Log Reachability GC
 
 Invariant:
