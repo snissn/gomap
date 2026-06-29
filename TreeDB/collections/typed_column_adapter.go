@@ -1659,7 +1659,7 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		}
 		return part, true, err
 	}
-	if !includePhysicalRows && columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req) && len(plan.PredicateSpecs) == 3 {
+	if opts.compactDenseInt64SpanPredicateRows && !includePhysicalRows && columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req) && len(plan.PredicateSpecs) == 3 {
 		var adapterStart time.Time
 		if prepareDiagnostics != nil {
 			adapterStart = time.Now()

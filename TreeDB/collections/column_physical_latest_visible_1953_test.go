@@ -129,6 +129,7 @@ func TestColumnPhysicalQ5DenseLatestVisibleMutation1953(t *testing.T) {
 
 	live := latestEvents1953(latest)
 	req := columnPhysicalQ5DenseRequest1950()
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
 	want := columnPhysicalQ5DenseReferenceGroups1950(live, req.TopK)
 	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", live)
 	result, err := col.RunColumnPhysicalQuery(req)
