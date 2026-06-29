@@ -116,6 +116,42 @@ func TestRecycleAppendOnlyMemtables_DropsColdWhenModeNotAppendOnly(t *testing.T)
 	}
 }
 
+func TestRecycleAppendOnlyMemtables_DropsOverflowEntryBackingBeforePool(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+
+	const capacityBytes = 4 << 20
+	mems := make([]memtable.Table, 0, maxAppendOnlyMemLeases+1)
+	for i := 0; i < cap(mems); i++ {
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, appendOnlyEstimatedBytesPerEntryDefault)
+		if mt.EntryBackingBytes() == 0 {
+			t.Fatal("test setup produced zero append-only entry backing")
+		}
+		mems = append(mems, mt)
+	}
+
+	db.recycleMemtables(mems)
+
+	if got := len(db.appendOnlyMemLeases); got != maxAppendOnlyMemLeases {
+		t.Fatalf("append-only mem leases=%d want %d", got, maxAppendOnlyMemLeases)
+	}
+	if got := db.appendOnlyMemPoolPutTotal.Load(); got != 1 {
+		t.Fatalf("append-only mem pool puts=%d want 1", got)
+	}
+	if got := db.appendOnlyMemPoolEntryDropBytes.Load(); got == 0 {
+		t.Fatal("append-only mem pool entry backing dropped bytes=0 want >0")
+	}
+
+	v := db.appendOnlyMemtablePool().Get()
+	mt, ok := v.(*memtable.AppendOnly)
+	if !ok || mt == nil {
+		t.Fatalf("append-only mem pool Get returned %T, want *AppendOnly", v)
+	}
+	if got := mt.EntryBackingBytes(); got != 0 {
+		t.Fatalf("pooled append-only entry backing bytes=%d want 0", got)
+	}
+}
+
 func TestStoreMemtableMode_DropsAppendOnlyPoolsOnColdTransition(t *testing.T) {
 	var db DB
 	db.storeMemtableMode(memtable.ModeAppendOnly)
