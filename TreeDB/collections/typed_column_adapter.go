@@ -288,6 +288,14 @@ type typedColumnAdapterPart struct {
 	Columns    []typedColumnAdapterColumn
 	Part       *typedcolumn.ColumnPart
 	Dictionary map[string]map[string]int64
+	Metrics    typedColumnAdapterBuildMetrics
+}
+
+type typedColumnAdapterBuildMetrics struct {
+	DictionaryBuild time.Duration
+	BatchAllocation time.Duration
+	BatchFill       time.Duration
+	PartBuild       time.Duration
 }
 
 type typedColumnPartDecodedValues struct {
@@ -680,6 +688,7 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 	if opts.PartID == 0 {
 		opts.PartID = 1
 	}
+	var metrics typedColumnAdapterBuildMetrics
 	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(opts.Fields, opts)
 	if err != nil {
 		return nil, err
@@ -688,6 +697,7 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 	if err != nil {
 		return nil, err
 	}
+	dictionaryStart := time.Now()
 	for i := range columns {
 		if columns[i].Field.ValueType == ColumnStoreValueString {
 			var dict map[string]int64
@@ -713,8 +723,10 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 			columns[i].Definition.Cardinality = uint32(len(dict))
 		}
 	}
+	metrics.DictionaryBuild += time.Since(dictionaryStart)
 
 	rowCount := rowSource.Len()
+	batchAllocStart := time.Now()
 	defs := make([]typedcolumn.ColumnDefinition, 0, len(columns)+1)
 	defs = append(defs, typedColumnAdapterPrimaryIDDefinition(opts))
 	for _, column := range columns {
@@ -833,6 +845,8 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 			}
 		}
 	}
+	metrics.BatchAllocation += time.Since(batchAllocStart)
+	batchFillStart := time.Now()
 	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
 		batch.Columns[typedColumnAdapterPrimaryIDColumn][rowIdx] = rowSource.PrimaryID(rowIdx)
 		for columnIdx, column := range columns {
@@ -943,6 +957,8 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 			}
 		}
 	}
+	metrics.BatchFill += time.Since(batchFillStart)
+	partBuildStart := time.Now()
 	rowsPerGranule := opts.RowsPerGranule
 	if rowsPerGranule == 0 {
 		rowsPerGranule = typedcolumn.DefaultRowsPerGranule
@@ -966,7 +982,8 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 	if err != nil {
 		return nil, err
 	}
-	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: typedColumnAdapterDictionaries(columns)}, nil
+	metrics.PartBuild += time.Since(partBuildStart)
+	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: typedColumnAdapterDictionaries(columns), Metrics: metrics}, nil
 }
 
 func typedColumnAdapterPartFromBytes(opts typedColumnAdapterOptions, raw []byte) (*typedColumnAdapterPart, error) {
