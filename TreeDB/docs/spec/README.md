@@ -224,8 +224,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - draft query feature roadmap and distributed/Raft sequencing policy for the
     native protocol.
 - `TreeDB/docs/spec/raftplacement.md`
-  - issue #3046 collection-level placement catalog and pure route resolver
-    contract for the first multi-group Raft slice.
+  - issue #3046 collection-level placement catalog, pure route resolver, and
+    simulation-only token-ring validation contract for early multi-group Raft
+    slices.
 - `TreeDB/docs/spec/native-wire-r1-closeout.md`
   - R1 single-node native server performance closeout, including direct vs
     native microbenchmarks, workload profile commands, artifacts, findings, and
@@ -337,7 +338,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
 | Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
 | Single-group Raft provider/storage boundary | `raftcluster.md` | `native-query-raft-roadmap.md`, `storage-format.md`, `user-command-wal.md`. |
-| Collection-level Raft placement catalog | `raftplacement.md` | `native-query-raft-roadmap.md`, `raftcluster.md`. |
+| Collection-level Raft placement catalog and token-ring simulation | `raftplacement.md` | `native-query-raft-roadmap.md`, `raftcluster.md`. |
 | Verification mapping | `verification.md` | all normative specs. |
 
 ## Terminology Ownership
