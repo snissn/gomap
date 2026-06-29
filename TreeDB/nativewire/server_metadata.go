@@ -9,6 +9,9 @@ func (s *Server) handleCreateCollection(sections []iwire.Section) ([]iwire.Secti
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	if err := s.rejectClusterLocalMutation("create_collection"); err != nil {
+		return nil, err
+	}
 	s.metadataMu.Lock()
 	defer s.metadataMu.Unlock()
 	replay, remember, err := s.beginMetadataIdempotency(iwire.CommandCreateCollection, sections)
@@ -63,6 +66,9 @@ func (s *Server) handleListCollections() ([]iwire.Section, error) {
 
 func (s *Server) handleCreateIndex(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	if err := s.rejectClusterLocalMutation("create_index"); err != nil {
 		return nil, err
 	}
 	s.metadataMu.Lock()
@@ -122,6 +128,9 @@ func (s *Server) handleListIndexes(state *connState, sections []iwire.Section) (
 
 func (s *Server) handleDropIndex(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	if err := s.rejectClusterLocalMutation("drop_index"); err != nil {
 		return nil, err
 	}
 	s.metadataMu.Lock()

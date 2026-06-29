@@ -67,6 +67,9 @@ func canCombineInsertBatchFastRequest(s *Server, req insertBatchFastRequest) boo
 	if s == nil || s.insertBatchCombineMaxBatch <= 1 {
 		return false
 	}
+	if s.clusterSubmitter != nil {
+		return false
+	}
 	if req.collection == nil || req.collectionName == "" {
 		return false
 	}
@@ -133,6 +136,12 @@ func yieldInsertBatchCombiner(s *Server) {
 
 func applyInsertBatchCombineItems(s *Server, batch []*nativewireInsertBatchCombineItem) {
 	if len(batch) == 0 {
+		return
+	}
+	if err := s.rejectClusterLocalMutation("insert_batch combiner"); err != nil {
+		for _, item := range batch {
+			finishInsertBatchCombineItem(item, nativewireInsertBatchCombineResult{err: err})
+		}
 		return
 	}
 	if len(batch) == 1 {

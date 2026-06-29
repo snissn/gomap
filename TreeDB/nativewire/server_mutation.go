@@ -44,6 +44,9 @@ func (s *Server) handleInsertBatchBody(state *connState, sections []iwire.Sectio
 }
 
 func (s *Server) handleInsertBatchFastBody(req insertBatchFastRequest, dst []byte) ([]byte, error) {
+	if err := s.rejectClusterLocalMutation("insert_batch fast path"); err != nil {
+		return nil, err
+	}
 	s.metadataMu.RLock()
 	defer s.metadataMu.RUnlock()
 	if err := s.checkCatalogGuard(req.sections); err != nil {
@@ -124,6 +127,9 @@ func (s *Server) insertBatch(state *connState, sections []iwire.Section, include
 }
 
 func (s *Server) insertBatchDecoded(collection *collections.Collection, format collections.DocumentFormat, ids, docs [][]byte, ack AckPolicy, includeResultIDs bool) ([][]byte, int, iwire.AckPolicy, uint64, bool, error) {
+	if err := s.rejectClusterLocalMutation("insert_batch"); err != nil {
+		return nil, 0, 0, 0, false, err
+	}
 	var err error
 	var resultIDs [][]byte
 	if format == collections.DocumentFormatBSON {
@@ -330,6 +336,9 @@ func (s *Server) handleReplaceBatch(state *connState, sections []iwire.Section) 
 	if err := managerRequired(s.collections); err != nil {
 		return nil, err
 	}
+	if err := s.rejectClusterLocalMutation("replace_batch"); err != nil {
+		return nil, err
+	}
 	s.metadataMu.RLock()
 	defer s.metadataMu.RUnlock()
 	if err := s.checkCatalogGuard(sections); err != nil {
@@ -423,6 +432,9 @@ func replaceBatchDocuments(collection *collections.Collection, ids, docs [][]byt
 
 func (s *Server) handleUpdateBSONSet(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	if err := s.rejectClusterLocalMutation("update_bson_set"); err != nil {
 		return nil, err
 	}
 	s.metadataMu.RLock()
@@ -586,6 +598,9 @@ func boolCount(v bool) int {
 
 func (s *Server) handleDeleteBatch(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	if err := managerRequired(s.collections); err != nil {
+		return nil, err
+	}
+	if err := s.rejectClusterLocalMutation("delete_batch"); err != nil {
 		return nil, err
 	}
 	s.metadataMu.Lock()
