@@ -135,6 +135,11 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 			opts: StandaloneOptions{Dir: t.TempDir(), InsertCoalescingMaxBatch: -1},
 			want: "InsertCoalescingMaxBatch must be >= 0",
 		},
+		{
+			name: "cluster submitter missing catalog version",
+			opts: StandaloneOptions{Dir: t.TempDir(), ClusterSubmitter: &mongoClusterFakeSubmitter{}},
+			want: "ClusterCatalogVersion is required",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

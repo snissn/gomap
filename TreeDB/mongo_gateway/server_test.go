@@ -262,7 +262,7 @@ func TestServerRetainsReadBufferForSafeCommands(t *testing.T) {
 		t.Fatalf("AppendMsgMessage: %v", err)
 	}
 	server := NewServer()
-	readBuf, _, err := server.serveOneWithOwner(&readWriter{r: bytes.NewReader(req)}, 1, make([]byte, 0, len(req)), nil)
+	readBuf, _, err := server.serveOneWithOwner(context.Background(), &readWriter{r: bytes.NewReader(req)}, 1, make([]byte, 0, len(req)), nil)
 	if err != nil {
 		t.Fatalf("serveOneWithOwner: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestServerDoesNotRetainReadBufferAfterBSONInsert(t *testing.T) {
 		t.Fatalf("AppendMsgMessage: %v", err)
 	}
 	rw := &readWriter{r: bytes.NewReader(req)}
-	readBuf, _, err := server.serveOneWithOwner(rw, 1, make([]byte, 0, len(req)), nil)
+	readBuf, _, err := server.serveOneWithOwner(context.Background(), rw, 1, make([]byte, 0, len(req)), nil)
 	if err != nil {
 		t.Fatalf("serveOneWithOwner: %v", err)
 	}
@@ -5943,14 +5943,14 @@ func TestServeConnBufferedMessageCoalescingAppendsResponses(t *testing.T) {
 
 	server := NewServer()
 	var writeBuf []byte
-	writeBuf, appended, err := server.appendBufferedMessageWithOwner(reader, 1, writeBuf)
+	writeBuf, appended, err := server.appendBufferedMessageWithOwner(context.Background(), reader, 1, writeBuf)
 	if err != nil {
 		t.Fatalf("append first buffered message: %v", err)
 	}
 	if !appended {
 		t.Fatal("first buffered message was not appended")
 	}
-	writeBuf, appended, err = server.appendBufferedMessageWithOwner(reader, 1, writeBuf)
+	writeBuf, appended, err = server.appendBufferedMessageWithOwner(context.Background(), reader, 1, writeBuf)
 	if err != nil {
 		t.Fatalf("append second buffered message: %v", err)
 	}
@@ -6002,7 +6002,7 @@ func TestServeConnBufferedMessageRejectsShortMessageLength(t *testing.T) {
 		t.Fatalf("prime buffered reader: %v", err)
 	}
 
-	_, appended, err := NewServer().appendBufferedMessageWithOwner(reader, 1, nil)
+	_, appended, err := NewServer().appendBufferedMessageWithOwner(context.Background(), reader, 1, nil)
 	if !errors.Is(err, wire.ErrMalformed) {
 		t.Fatalf("append buffered message err=%v want ErrMalformed", err)
 	}
