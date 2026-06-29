@@ -164,6 +164,28 @@ func TestReadBarrierDoesNotApplyBeyondAlreadySatisfiedIndex(t *testing.T) {
 	assertCollectionMissing(t, h, "node-b", "orders")
 }
 
+func TestReadBarrierZeroIndexDoesNotCatchUpCommittedLog(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	unsupported := committedCommand(29, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:read-barrier-zero"))
+	unsupported.Type = raftfsm.EntryTypeV1("snapshot-v1")
+	if evidence, err := h.Commit(unsupported); err != nil {
+		t.Fatalf("Commit: %v evidence=%+v", err, evidence)
+	}
+	assertNoLastApplied(t, h, "node-b")
+
+	progress, err := h.ReadBarrier("node-b").WaitAppliedIndex(context.Background(), raftcluster.AppliedIndexReadBarrier{})
+	if err != nil {
+		t.Fatalf("WaitAppliedIndex zero barrier: %v progress=%+v", err, progress)
+	}
+	if progress.NodeID != "node-b" || progress.GroupID != "default" || progress.HasApplied || progress.Index != 0 {
+		t.Fatalf("progress after zero barrier=%+v, want node-b default with no applied index", progress)
+	}
+	assertNoLastApplied(t, h, "node-b")
+	assertCollectionMissing(t, h, "node-b", "users")
+}
+
 func TestNodeReadBarrierClosedNodeErrorsAreDistinct(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()
