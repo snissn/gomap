@@ -220,11 +220,20 @@ func TestPutAppendOnlyEntriesRecyclesPoolsOnRetainBudgetPressure(t *testing.T) {
 	if cap(reused) != appendOnlyMinInitialEntries {
 		t.Fatalf("reused cap=%d want %d", cap(reused), appendOnlyMinInitialEntries)
 	}
-	if got := afterGet.GetsTotal - after.GetsTotal; got != 1 {
-		t.Fatalf("gets delta after replacement put=%d want 1", got)
-	}
-	if got := afterGet.RetainedBytesEstimate; got != 0 {
-		t.Fatalf("retained bytes after replacement get=%d want 0", got)
+	switch got := afterGet.GetsTotal - after.GetsTotal; got {
+	case 1:
+		if got := afterGet.RetainedBytesEstimate; got != 0 {
+			t.Fatalf("retained bytes after replacement get=%d want 0", got)
+		}
+	case 0:
+		if !testRaceEnabled {
+			t.Fatalf("gets delta after replacement put=%d want 1", got)
+		}
+		if got := afterGet.RetainedBytesEstimate; got != wantBytes {
+			t.Fatalf("retained bytes after sync.Pool race miss=%d want estimate %d", got, wantBytes)
+		}
+	default:
+		t.Fatalf("gets delta after replacement put=%d want 0 or 1", got)
 	}
 	putAppendOnlyEntries(reused)
 }
