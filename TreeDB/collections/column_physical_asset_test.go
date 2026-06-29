@@ -2205,6 +2205,112 @@ func TestColumnPhysicalAssetSegmentAppendWriterBatchesExistingSegment3142(t *tes
 	}
 }
 
+func TestColumnPhysicalAssetAppendSessionBatchesMixedTargets3151(t *testing.T) {
+	cfg, payloads := columnAssetDirectViewAlignmentTestPayloads(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	const generation = uint64(31)
+	directFileID, err := directViewTypedColumnSegmentFileID(generation)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	session := newColumnPhysicalAssetAppendSession(root, cfg)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = session.abort()
+		}
+	}()
+	sharedRefs, err := session.appendKinds(columnAssetM12ASegmentFileID, []columnPhysicalAssetAppendItem{
+		{payload: []byte("row-asset"), kind: ColumnAssetKindTCS1PartImage, generation: generation, partID: columnPhysicalRowAssetPartID},
+		{payload: []byte("int64-values"), kind: ColumnAssetKindTCS1Int64Values, generation: generation, partID: 2},
+	})
+	if err != nil {
+		t.Fatalf("shared appendKinds: %v", err)
+	}
+	directRefs, err := session.appendKinds(directFileID, []columnPhysicalAssetAppendItem{
+		{payload: payloads[0], kind: ColumnAssetKindTCS1TypedColumnPart, generation: generation, partID: typedColumnPartAssetPartID},
+	})
+	if err != nil {
+		t.Fatalf("direct appendKinds: %v", err)
+	}
+	closeStats, err := session.close()
+	closed = true
+	if err != nil {
+		t.Fatalf("session close: %v", err)
+	}
+	if len(sharedRefs) != 2 || len(directRefs) != 1 {
+		t.Fatalf("refs shared=%d direct=%d want 2/1", len(sharedRefs), len(directRefs))
+	}
+	if sharedRefs[0].FileID != columnAssetM12ASegmentFileID || sharedRefs[1].FileID != columnAssetM12ASegmentFileID {
+		t.Fatalf("shared refs=%+v want shared segment file_id=%d", sharedRefs, columnAssetM12ASegmentFileID)
+	}
+	directRef := directRefs[0]
+	if directRef.FileID != directFileID {
+		t.Fatalf("direct ref=%+v want direct file_id=%d", directRef, directFileID)
+	}
+	if directRef.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
+		t.Fatalf("direct ref offset=%d want %d-byte alignment", directRef.Offset, typedColumnPartDirectViewAssetAlignment)
+	}
+	if closeStats.CloseCount != 2 || closeStats.FileSyncCount != 2 || closeStats.SyncEpochCount != 2 {
+		t.Fatalf("close stats=%+v want two closed synced segments", closeStats)
+	}
+	sharedSegment := readColumnAssetSegmentFileForTest(t, root, sharedRefs[0])
+	if got := sharedSegment[sharedRefs[0].Offset : sharedRefs[0].Offset+sharedRefs[0].Length]; !bytes.Equal(got, []byte("row-asset")) {
+		t.Fatalf("shared row payload=%q want row-asset", got)
+	}
+	if got := sharedSegment[sharedRefs[1].Offset : sharedRefs[1].Offset+sharedRefs[1].Length]; !bytes.Equal(got, []byte("int64-values")) {
+		t.Fatalf("shared int64 payload=%q want int64-values", got)
+	}
+	directSegment := readColumnAssetSegmentFileForTest(t, root, directRef)
+	if got := directSegment[directRef.Offset : directRef.Offset+directRef.Length]; !bytes.Equal(got, payloads[0]) {
+		t.Fatalf("direct payload=%q want %q", got, payloads[0])
+	}
+}
+
+func TestColumnPhysicalAssetAppendSessionAbortRemovesOnlyNewTargets3151(t *testing.T) {
+	cfg, _ := columnAssetDirectViewAlignmentTestPayloads(t)
+	root := backenddb.ColumnAssetRootDirPath(t.TempDir())
+	const generation = uint64(32)
+	sharedRef, err := writeColumnAssetToManagerSegment(root, cfg, []byte("existing-shared"), ColumnAssetKindTCS1PartImage, generation, columnPhysicalRowAssetPartID, columnAssetM12ASegmentFileID)
+	if err != nil {
+		t.Fatalf("writeColumnAssetToManagerSegment: %v", err)
+	}
+	sharedPath, err := columnAssetSegmentPath(root, sharedRef)
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath shared: %v", err)
+	}
+	directFileID, err := directViewTypedColumnSegmentFileID(generation)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	directPath, err := columnAssetSegmentPath(root, ColumnAssetRef{
+		Namespace: cfg.AssetManager.Namespace,
+		FileID:    directFileID,
+	})
+	if err != nil {
+		t.Fatalf("columnAssetSegmentPath direct: %v", err)
+	}
+	session := newColumnPhysicalAssetAppendSession(root, cfg)
+	if _, err := session.appender(columnAssetM12ASegmentFileID); err != nil {
+		t.Fatalf("shared session appender: %v", err)
+	}
+	if _, err := session.appender(directFileID); err != nil {
+		t.Fatalf("direct session appender: %v", err)
+	}
+	if _, err := os.Stat(directPath); err != nil {
+		t.Fatalf("direct path before abort stat=%v want exists", err)
+	}
+	if err := session.abort(); err != nil {
+		t.Fatalf("session abort: %v", err)
+	}
+	if _, err := os.Stat(sharedPath); err != nil {
+		t.Fatalf("shared path after abort stat=%v want existing shared segment preserved", err)
+	}
+	if _, err := os.Stat(directPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("direct path after abort stat=%v want removed new segment", err)
+	}
+}
+
 func TestColumnPhysicalAssetSegmentAppendWriterSyncsDirectoryOnlyForCreate3150(t *testing.T) {
 	cfg := testColumnStoreConfig(nil)
 	normalized, err := normalizeColumnStoreConfig("events", cfg)

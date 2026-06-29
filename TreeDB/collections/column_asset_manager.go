@@ -414,7 +414,7 @@ func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreCo
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
-	file, needsDirSync, err := openColumnAssetSegmentAppendFile(assetPath)
+	file, needsDirSync, _, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
 		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
@@ -617,8 +617,107 @@ type columnPhysicalAssetSegmentCloseStats struct {
 	SyncEpochCount int
 }
 
+func (s *columnPhysicalAssetSegmentCloseStats) Add(other columnPhysicalAssetSegmentCloseStats) {
+	if s == nil {
+		return
+	}
+	s.FileSync += other.FileSync
+	s.FileClose += other.FileClose
+	s.DirSync += other.DirSync
+	s.Remove += other.Remove
+	s.RemoveDirSync += other.RemoveDirSync
+	s.CloseCount += other.CloseCount
+	s.FileSyncCount += other.FileSyncCount
+	s.SyncEpochCount += other.SyncEpochCount
+}
+
 func (s columnPhysicalAssetSegmentCloseStats) CleanupDuration() time.Duration {
 	return s.Remove + s.RemoveDirSync
+}
+
+type columnPhysicalAssetAppendSession struct {
+	rootDir   string
+	cfg       ColumnStoreConfig
+	appenders map[uint32]*columnPhysicalAssetSegmentAppender
+	fileIDs   []uint32
+}
+
+func newColumnPhysicalAssetAppendSession(rootDir string, cfg ColumnStoreConfig) *columnPhysicalAssetAppendSession {
+	return &columnPhysicalAssetAppendSession{
+		rootDir:   rootDir,
+		cfg:       cfg,
+		appenders: make(map[uint32]*columnPhysicalAssetSegmentAppender),
+	}
+}
+
+func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
+	if s == nil {
+		return nil, errors.New("collections: nil column physical asset append session")
+	}
+	if fileID == 0 {
+		return nil, errors.New("collections: column physical asset append session requires file_id")
+	}
+	if appender := s.appenders[fileID]; appender != nil {
+		return appender, nil
+	}
+	appender, err := newColumnPhysicalAssetSegmentAppendWriter(s.rootDir, s.cfg, fileID)
+	if err != nil {
+		return nil, err
+	}
+	s.appenders[fileID] = appender
+	s.fileIDs = append(s.fileIDs, fileID)
+	return appender, nil
+}
+
+func (s *columnPhysicalAssetAppendSession) appendKinds(fileID uint32, items []columnPhysicalAssetAppendItem) ([]ColumnAssetRef, error) {
+	refs, _, _, err := s.appendKindsMeasured(fileID, items)
+	return refs, err
+}
+
+func (s *columnPhysicalAssetAppendSession) appendKindsMeasured(fileID uint32, items []columnPhysicalAssetAppendItem) ([]ColumnAssetRef, time.Duration, time.Duration, error) {
+	if len(items) == 0 {
+		return nil, 0, 0, nil
+	}
+	openStart := time.Now()
+	appender, err := s.appender(fileID)
+	openDuration := time.Since(openStart)
+	if err != nil {
+		return nil, openDuration, 0, err
+	}
+	writeStart := time.Now()
+	refs, err := appender.appendKinds(items)
+	return refs, openDuration, time.Since(writeStart), err
+}
+
+func (s *columnPhysicalAssetAppendSession) close() (columnPhysicalAssetSegmentCloseStats, error) {
+	var stats columnPhysicalAssetSegmentCloseStats
+	if s == nil {
+		return stats, nil
+	}
+	var closeErr error
+	for _, fileID := range s.fileIDs {
+		appender := s.appenders[fileID]
+		if appender == nil {
+			continue
+		}
+		err := appender.close()
+		stats.Add(appender.closeStats)
+		closeErr = errors.Join(closeErr, err)
+	}
+	return stats, closeErr
+}
+
+func (s *columnPhysicalAssetAppendSession) abort() error {
+	if s == nil {
+		return nil
+	}
+	var abortErr error
+	for _, fileID := range s.fileIDs {
+		if appender := s.appenders[fileID]; appender != nil {
+			abortErr = errors.Join(abortErr, appender.abort())
+		}
+	}
+	return abortErr
 }
 
 func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
@@ -715,7 +814,7 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 		lock:       segmentLock,
 		unlockLock: true,
 	}
-	file, needsDirSync, err := openColumnAssetSegmentAppendFile(assetPath)
+	file, needsDirSync, created, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
 		appender.releaseLock()
 		return nil, err
@@ -730,22 +829,23 @@ func newColumnPhysicalAssetSegmentAppendWriter(rootDir string, cfg ColumnStoreCo
 	appender.offset = offset
 	appender.syncDirOnClose = needsDirSync
 	appender.closeFile = true
+	appender.removeOnClose = created
 	return appender, nil
 }
 
-func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, error) {
+func openColumnAssetSegmentAppendFile(assetPath string) (*os.File, bool, bool, error) {
 	file, err := os.OpenFile(assetPath, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_APPEND, 0o600)
 	if err == nil {
-		return file, true, nil
+		return file, true, true, nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	file, err = os.OpenFile(assetPath, os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	return file, !columnAssetSegmentDirSyncKnown(assetPath), nil
+	return file, !columnAssetSegmentDirSyncKnown(assetPath), false, nil
 }
 
 func (a *columnPhysicalAssetSegmentAppender) append(payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
