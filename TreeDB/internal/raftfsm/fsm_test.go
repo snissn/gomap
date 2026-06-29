@@ -85,6 +85,59 @@ func TestSingleGroupApplyLoopCloseReopenDurableProgressResult(t *testing.T) {
 	assertLastApplied(t, reopenedFSM, raftentry.ApplyEntryID{Term: 2, Index: 2})
 }
 
+func TestSingleGroupApplyLoopRejectsProgressAheadOfLocalCoverage(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	fsm := openFSMForTest(t, db, dbDir)
+	beforeLSN := db.State().AppliedCommandLSN
+	staleID := raftentry.ApplyEntryID{Term: 1, Index: 1}
+	if err := fsm.progress.RecordApplied(raftapply.ApplyProgressRecordV1{
+		EntryID:           staleID,
+		AppliedCommandLSN: beforeLSN + 1,
+	}); err != nil {
+		t.Fatalf("RecordApplied stale progress: %v", err)
+	}
+
+	if got, ok := fsm.LastApplied(); ok {
+		t.Fatalf("LastApplied with uncovered progress=(%+v,%t), want unset", got, ok)
+	}
+
+	raw := deterministicCreateCollectionEntry(t, "users", "fsm:create:users:uncovered-progress")
+	result, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 2, raw))
+	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after uncovered progress=%d, want unchanged %d", got, beforeLSN)
+	}
+	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after uncovered progress err=%v, want ErrCollectionNotFound", openErr)
+	}
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close FSM: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
+	}
+
+	reopenedDB := openFSMTestDB(t, dbDir)
+	defer func() { _ = reopenedDB.Close() }()
+	reopenedFSM, openErr := Open(Options{
+		DB:      reopenedDB,
+		Cluster: validFSMClusterConfig(dbDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if openErr == nil {
+		_ = reopenedFSM.Close()
+		t.Fatal("Open with uncovered progress succeeded, want unsafe durability error")
+	}
+	if code, ok := ErrorCodeOf(openErr); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("ErrorCodeOf(Open uncovered progress)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
+	}
+}
+
 func TestSingleGroupApplyLoopFailsClosedOnOrderingAndUnsupportedEntries(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")

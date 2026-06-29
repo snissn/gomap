@@ -118,6 +118,10 @@ func Open(opts Options) (*FSM, error) {
 		_ = progress.Close()
 		return nil, err
 	}
+	if err := validateProgressCoverage(opts.DB, progress); err != nil {
+		_ = errors.Join(progress.Close(), results.Close())
+		return nil, err
+	}
 	return &FSM{
 		db:           opts.DB,
 		metadataDir:  metadataDir,
@@ -151,7 +155,11 @@ func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
 	if f == nil || f.progress == nil {
 		return raftentry.ApplyEntryID{}, false
 	}
-	return f.progress.LastApplied()
+	record, ok, err := f.lastAppliedProgressRecord()
+	if err != nil || !ok {
+		return raftentry.ApplyEntryID{}, false
+	}
+	return record.EntryID, true
 }
 
 func (f *FSM) LogicalDigestV1(opts raftapply.LogicalDigestOptionsV1) (raftapply.LogicalDigestV1, error) {
@@ -243,13 +251,17 @@ func (f *FSM) decodeOptions(entry CommittedEntryV1, id raftentry.ApplyEntryID) r
 }
 
 func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
-	last, ok := f.progress.LastApplied()
+	record, ok, err := f.lastAppliedProgressRecord()
+	if err != nil {
+		return err
+	}
 	if !ok {
 		if id.Index != 1 {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry starts at index %d; want 1", id.Index)
 		}
 		return nil
 	}
+	last := record.EntryID
 	if id.Index < last.Index {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is below last applied %d", id.Index, last.Index)
 	}
@@ -264,6 +276,42 @@ func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
 	}
 	if id.Term < last.Term {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry term %d is below last applied term %d", id.Term, last.Term)
+	}
+	return nil
+}
+
+func (f *FSM) lastAppliedProgressRecord() (raftapply.ApplyProgressRecordV1, bool, error) {
+	if f == nil || f.db == nil || f.progress == nil {
+		return raftapply.ApplyProgressRecordV1{}, false, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	record, ok := f.progress.LastAppliedRecord()
+	if !ok {
+		return raftapply.ApplyProgressRecordV1{}, false, nil
+	}
+	if err := validateApplyProgressCoverage(f.db, record); err != nil {
+		return raftapply.ApplyProgressRecordV1{}, false, err
+	}
+	return record, true, nil
+}
+
+func validateProgressCoverage(db *backenddb.DB, progress *raftapply.DurableApplyProgressStore) error {
+	if progress == nil {
+		return nil
+	}
+	record, ok := progress.LastAppliedRecord()
+	if !ok {
+		return nil
+	}
+	return validateApplyProgressCoverage(db, record)
+}
+
+func validateApplyProgressCoverage(db *backenddb.DB, record raftapply.ApplyProgressRecordV1) error {
+	if db == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
+	}
+	localLSN := db.State().AppliedCommandLSN
+	if record.AppliedCommandLSN > localLSN {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "apply progress metadata AppliedCommandLSN %d outruns local coverage %d", record.AppliedCommandLSN, localLSN)
 	}
 	return nil
 }
