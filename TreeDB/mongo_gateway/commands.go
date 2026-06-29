@@ -41,6 +41,9 @@ const primaryKeyPrefixBSONValue byte = 1
 var maxInt = int(^uint(0) >> 1)
 
 func (s *Server) insertResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	if s.clusterSubmitterConfigured() {
+		return s.clusterInsertResponse(command, sequences)
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -843,6 +846,9 @@ func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Coll
 }
 
 func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	if s.clusterSubmitterConfigured() {
+		return s.clusterUpdateResponse(command, sequences)
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -1691,6 +1697,9 @@ func mongoBSONSetUpdateFields(updateDoc wire.Document) ([]collections.BSONSetFie
 }
 
 func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	if s.clusterSubmitterConfigured() {
+		return s.clusterDeleteResponse(command, sequences)
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}

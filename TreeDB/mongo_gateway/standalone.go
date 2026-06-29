@@ -12,6 +12,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	treenativewire "github.com/snissn/gomap/TreeDB/nativewire"
 )
 
 const (
@@ -48,6 +49,7 @@ type StandaloneOptions struct {
 	InsertCoalescingMaxBatchSet bool
 	InsertCoalescingMaxBatch    int
 	InsertCoalescingIdleTTL     time.Duration
+	ClusterSubmitter            treenativewire.ClusterSubmitter
 }
 
 // StandaloneServer owns the TreeDB backend, collection manager, and MongoDB
@@ -144,6 +146,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.Collections = manager
 	server.DefaultCollectionOptions = normalized.DefaultCollectionOptions
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy
+	server.ClusterSubmitter = normalized.ClusterSubmitter
 	if normalized.MaxMessageLength > 0 {
 		server.MaxMessageLength = normalized.MaxMessageLength
 	}

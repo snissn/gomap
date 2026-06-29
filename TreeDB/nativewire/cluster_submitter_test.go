@@ -299,11 +299,9 @@ func TestClusterSubmitterUnsupportedCommandFailsBeforeMutation(t *testing.T) {
 		t.Fatalf("seed InsertBatchValidatedBSON: %v", err)
 	}
 
-	_, _, err = client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
-		{Key: "field0", Value: mustNativewireBSONRawValue(t, "new")},
-	}, AckVisible)
+	err = client.FlushCollection(ctx, "users")
 	if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
-		t.Fatalf("UpdateBSONSet cluster err=%v want unsupported feature", err)
+		t.Fatalf("FlushCollection cluster err=%v want unsupported feature", err)
 	}
 	if len(submitter.snapshot()) != 0 {
 		t.Fatalf("unsupported command reached submitter")

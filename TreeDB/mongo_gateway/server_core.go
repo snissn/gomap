@@ -17,6 +17,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
+	treenativewire "github.com/snissn/gomap/TreeDB/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -81,9 +82,11 @@ type Server struct {
 	Collections               *collections.CollectionManager
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
+	ClusterSubmitter          treenativewire.ClusterSubmitter
 
 	nextResponseID    atomic.Int32
 	nextConnectionID  atomic.Int64
+	nextClusterSubmit atomic.Uint64
 	nextCursorID      atomic.Int64
 	cursorCount       atomic.Int64
 	connMu            sync.Mutex
