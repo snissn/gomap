@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -14,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
 
 const deterministicCollectionRefTagName = 1
@@ -25,6 +28,7 @@ type collectionMutationV1 struct {
 	trustedValidBSON bool
 	ids              [][]byte
 	documents        [][]byte
+	bsonSetItems     []collections.BSONSetUpdateBatchItem
 	frameDocuments   []commitlog.CollectionDocument
 }
 
@@ -96,6 +100,12 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 			return h.collectionMutationApplyError(entry, handle, err)
 		}
 		affected = int64(modified)
+	case nativewire.CommandUpdateBSONSet:
+		results, err := collection.UpdateBSONSetBatchWithCommandWALIntent(mutation.bsonSetItems, mutation.frameDocuments, intent)
+		if err != nil {
+			return h.collectionMutationApplyError(entry, handle, err)
+		}
+		affected = int64(countModifiedUpdateBatchResultsV1(results))
 	case nativewire.CommandDeleteBatch:
 		deleted, err := collection.DeleteBatchWithCommandWALIntent(mutation.ids, intent)
 		if err != nil {
@@ -206,6 +216,35 @@ func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire
 		mutation.trustedValidBSON = format == collections.DocumentFormatBSON
 		mutation.ids = ids
 		mutation.documents = documents
+	case nativewire.CommandUpdateBSONSet:
+		ids, err := lowerByteVectorSectionV1(entry, nativewire.SectionDocumentIDs, limits, "document_ids")
+		if err != nil {
+			return collectionMutationV1{}, err
+		}
+		if len(ids) != 1 {
+			return collectionMutationV1{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: update_bson_set requires exactly one document_id, got %d", len(ids))
+		}
+		if err := validateMutationDocumentIDsV1(ids); err != nil {
+			return collectionMutationV1{}, err
+		}
+		fieldNames, err := lowerByteVectorSectionV1(entry, nativewire.SectionUpdateFieldNames, limits, "update_field_names")
+		if err != nil {
+			return collectionMutationV1{}, err
+		}
+		fieldValues, err := lowerByteVectorSectionV1(entry, nativewire.SectionUpdateFieldValues, limits, "update_field_values")
+		if err != nil {
+			return collectionMutationV1{}, err
+		}
+		fields, err := lowerBSONSetFieldsV1(fieldNames, fieldValues)
+		if err != nil {
+			return collectionMutationV1{}, err
+		}
+		mutation.documentFormat = collections.DocumentFormatBSON
+		mutation.ids = ids
+		mutation.bsonSetItems = []collections.BSONSetUpdateBatchItem{{
+			DocumentID: bytes.Clone(ids[0]),
+			Fields:     fields,
+		}}
 	case nativewire.CommandDeleteBatch:
 		ids, err := lowerByteVectorSectionV1(entry, nativewire.SectionDocumentIDs, limits, "document_ids")
 		if err != nil {
@@ -236,7 +275,7 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 	if err != nil {
 		return nil, codeCollectionApplyError(err)
 	}
-	if mutation.command == nativewire.CommandInsertBatch || mutation.command == nativewire.CommandReplaceBatch {
+	if mutation.command == nativewire.CommandInsertBatch || mutation.command == nativewire.CommandReplaceBatch || mutation.command == nativewire.CommandUpdateBSONSet {
 		format, err := normalizeApplyDocumentFormat(collection.Meta().Options.DocumentFormat)
 		if err != nil {
 			return nil, codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: collection %q has unsupported document format: %v", mutation.collection, err)
@@ -244,8 +283,10 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if format != mutation.documentFormat {
 			return nil, codedError(raftentry.ErrorRejectedConflictV1, "raftapply: deterministic document format %q does not match collection %q format %q", mutation.documentFormat, mutation.collection, format)
 		}
-		if err := validateMutationDocumentsV1(format, mutation.documents); err != nil {
-			return nil, err
+		if mutation.command != nativewire.CommandUpdateBSONSet {
+			if err := validateMutationDocumentsV1(format, mutation.documents); err != nil {
+				return nil, err
+			}
 		}
 	}
 	switch mutation.command {
@@ -286,6 +327,15 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if err := collection.PreflightReplaceBatchConflicts(mutation.ids, mutation.documents); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
+	case nativewire.CommandUpdateBSONSet:
+		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
+			return nil, codeCollectionApplyError(err)
+		}
+		_, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
+		if err != nil {
+			return nil, codeCollectionApplyError(err)
+		}
+		mutation.frameDocuments = docs
 	case nativewire.CommandDeleteBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationDelete); err != nil {
 			return nil, codeCollectionApplyError(err)
@@ -308,7 +358,7 @@ func (m collectionMutationV1) loweredFrame() (commandwalapply.LoweredFrame, erro
 			return commandwalapply.LoweredFrame{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: lower collection insert: %v", err)
 		}
 		return frame, nil
-	case nativewire.CommandReplaceBatch:
+	case nativewire.CommandReplaceBatch, nativewire.CommandUpdateBSONSet:
 		payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload(m.collection, m.frameDocuments)
 		if err != nil {
 			return commandwalapply.LoweredFrame{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: encode collection update payload: %v", err)
@@ -346,6 +396,83 @@ func lowerCollectionNameV1(entry raftentry.CommandEntryV1) (string, error) {
 		return "", codedError(raftentry.ErrorMalformedEntryV1, "raftapply: invalid collection_ref: %v", err)
 	}
 	return name, nil
+}
+
+func lowerBSONSetFieldsV1(names, values [][]byte) ([]collections.BSONSetField, error) {
+	if len(names) == 0 {
+		return nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: update_bson_set requires at least one field")
+	}
+	if len(names) != len(values) {
+		return nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: update_field_names length %d does not match update_field_values length %d", len(names), len(values))
+	}
+	fields := make([]collections.BSONSetField, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for i := range names {
+		key := string(names[i])
+		if err := validateBSONSetFieldKeyV1(key); err != nil {
+			return nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: BSON $set field %q key: %v", key, err)
+		}
+		if _, ok := seen[key]; ok {
+			return nil, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: duplicate BSON $set field %q", key)
+		}
+		seen[key] = struct{}{}
+		value, err := lowerBSONSetRawValueV1(values[i])
+		if err != nil {
+			return nil, err
+		}
+		fields[i] = collections.BSONSetField{
+			Key:   key,
+			Value: value,
+		}
+	}
+	return fields, nil
+}
+
+func validateBSONSetFieldKeyV1(key string) error {
+	if key == "" {
+		return errors.New("field name cannot be empty")
+	}
+	if !utf8.ValidString(key) {
+		return errors.New("field name must be valid UTF-8")
+	}
+	if key == "_id" {
+		return errors.New("cannot modify _id")
+	}
+	if strings.Contains(key, ".") {
+		return errors.New("currently supports top-level fields only")
+	}
+	if strings.HasPrefix(key, "$") {
+		return errors.New("field names cannot start with $")
+	}
+	if strings.Contains(key, "\x00") {
+		return errors.New("field names cannot contain NUL")
+	}
+	return nil
+}
+
+func lowerBSONSetRawValueV1(raw []byte) (bson.RawValue, error) {
+	if len(raw) == 0 {
+		return bson.RawValue{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: BSON $set value missing type byte")
+	}
+	value := bson.RawValue{
+		Type:  bson.Type(raw[0]),
+		Value: bytes.Clone(raw[1:]),
+	}
+	_, rem, ok := bsoncore.ReadValue(value.Value, bsoncore.Type(value.Type))
+	if !ok || len(rem) != 0 {
+		return bson.RawValue{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: invalid BSON $set raw value")
+	}
+	return value, nil
+}
+
+func countModifiedUpdateBatchResultsV1(results []collections.UpdateBatchResult) int {
+	modified := 0
+	for _, result := range results {
+		if result.Modified {
+			modified++
+		}
+	}
+	return modified
 }
 
 func lowerDocumentFormatV1(entry raftentry.CommandEntryV1) (collections.DocumentFormat, error) {
