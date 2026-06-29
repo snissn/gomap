@@ -1802,6 +1802,12 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
 }
 
+// ResetDropEntries resets the table for reuse without retaining entry backing.
+// The next write will allocate from the normal minimum append-only capacity.
+func (m *AppendOnly) ResetDropEntries() {
+	m.release(false)
+}
+
 func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {

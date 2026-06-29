@@ -1129,6 +1129,61 @@ func TestWriterDeferredCommandBufferAllocatesLazily(t *testing.T) {
 	}
 }
 
+func TestWriterDeferredCommandBufferTrimsRetainedCapacityAfterFlush(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("small"), Value: bytes.Repeat([]byte("x"), 2048)},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 64 << 10, DeferredCommandBufferRetainSize: 1024})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	for i := uint64(1); i <= 8; i++ {
+		if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(i, 0, payload); err != nil {
+			t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted %d: %v", i, err)
+		}
+	}
+	before := w.BufferStats()
+	if before.CommandBufferCapacity <= before.CommandBufferRetainLimit {
+		t.Fatalf("command buffer cap before flush=%d, want above retain limit %d", before.CommandBufferCapacity, before.CommandBufferRetainLimit)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	after := w.BufferStats()
+	if after.CommandBufferLength != 0 {
+		t.Fatalf("command buffer len after flush=%d, want 0", after.CommandBufferLength)
+	}
+	if after.CommandBufferCapacity != 1024 {
+		t.Fatalf("command buffer cap after flush=%d, want retained cap 1024", after.CommandBufferCapacity)
+	}
+	if after.CommandBufferTrimCount != 1 {
+		t.Fatalf("command buffer trim count=%d, want 1", after.CommandBufferTrimCount)
+	}
+	if after.CommandBufferDroppedBytes == 0 {
+		t.Fatal("command buffer dropped bytes=0, want dropped capacity accounted")
+	}
+}
+
+func TestWriterScratchAllocatesLazily(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	defer w.Close()
+	if got := cap(w.scratch); got != 0 {
+		t.Fatalf("scratch cap after open=%d, want 0", got)
+	}
+	if got := w.BufferStats().ScratchCapacity; got != 0 {
+		t.Fatalf("scratch stat after open=%d, want 0", got)
+	}
+}
+
 func TestWriterLargeBatchPayloadBypassesDeferredCommandBufferAndPreservesOrder(t *testing.T) {
 	smallPayload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("small"), Value: []byte("value")},

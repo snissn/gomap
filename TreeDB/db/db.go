@@ -503,8 +503,9 @@ var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush fail
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
 
 const (
-	commandWALWriterBufferSize        = 16 << 20
-	commandWALDeferredPointBufferSize = 64 << 20
+	commandWALWriterBufferSize              = 16 << 20
+	commandWALDeferredPointBufferSize       = 64 << 20
+	commandWALDeferredPointBufferRetainSize = 4 << 20
 )
 
 type finalizeCommitError struct {
@@ -1863,14 +1864,15 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			commandSegmentSeq++
 		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
-			MaxSegmentSize:            opts.WALMaxSegmentBytes,
-			SegmentTargetBytes:        opts.CommandWALSegmentTargetBytes,
-			BufferSize:                commandWALWriterBufferSize,
-			DeferredCommandBufferSize: commandWALDeferredPointBufferSize,
-			Compress:                  opts.JournalCompression,
-			OnSegmentRotated:          db.observeCommandWALSegmentRotated,
-			InitialLSN:                db.meta.AppliedCommandLSN,
-			SegmentSeq:                commandSegmentSeq,
+			MaxSegmentSize:                  opts.WALMaxSegmentBytes,
+			SegmentTargetBytes:              opts.CommandWALSegmentTargetBytes,
+			BufferSize:                      commandWALWriterBufferSize,
+			DeferredCommandBufferSize:       commandWALDeferredPointBufferSize,
+			DeferredCommandBufferRetainSize: commandWALDeferredPointBufferRetainSize,
+			Compress:                        opts.JournalCompression,
+			OnSegmentRotated:                db.observeCommandWALSegmentRotated,
+			InitialLSN:                      db.meta.AppliedCommandLSN,
+			SegmentSeq:                      commandSegmentSeq,
 		})
 		if err != nil {
 			_ = db.Close()
