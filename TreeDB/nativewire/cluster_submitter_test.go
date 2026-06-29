@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -38,6 +41,67 @@ type noAdmissionClusterSubmitter struct{}
 
 func (noAdmissionClusterSubmitter) SubmitCommandEntryV1(context.Context, []byte, ClusterRequestMetadata) (ClusterSubmitResult, error) {
 	panic("unexpected submit")
+}
+
+type routingClusterSubmitter struct {
+	*fakeClusterSubmitter
+
+	routeMu sync.Mutex
+	target  ClusterRouteTarget
+	err     error
+	routes  []ClusterRouteRequest
+}
+
+func (r *routingClusterSubmitter) ClusterRoute(ctx context.Context, req ClusterRouteRequest) (ClusterRouteTarget, error) {
+	r.routeMu.Lock()
+	r.routes = append(r.routes, req)
+	r.routeMu.Unlock()
+	if r.err != nil {
+		return ClusterRouteTarget{}, r.err
+	}
+	target := r.target
+	target.Members = append([]string(nil), target.Members...)
+	return target, nil
+}
+
+func (r *routingClusterSubmitter) snapshotRoutes() []ClusterRouteRequest {
+	r.routeMu.Lock()
+	defer r.routeMu.Unlock()
+	return append([]ClusterRouteRequest(nil), r.routes...)
+}
+
+type placementRouteClusterSubmitter struct {
+	*fakeClusterSubmitter
+
+	routeMu sync.Mutex
+	catalog raftplacement.ResolvedCatalogV1
+	routes  []ClusterRouteRequest
+}
+
+func (p *placementRouteClusterSubmitter) ClusterRoute(ctx context.Context, req ClusterRouteRequest) (ClusterRouteTarget, error) {
+	p.routeMu.Lock()
+	p.routes = append(p.routes, req)
+	p.routeMu.Unlock()
+	decision, err := p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
+	if err != nil {
+		return ClusterRouteTarget{}, err
+	}
+	members := make([]string, len(decision.Group.Members))
+	for i, member := range decision.Group.Members {
+		members[i] = string(member)
+	}
+	return ClusterRouteTarget{
+		GroupID:       string(decision.GroupID()),
+		Members:       members,
+		LeaderHint:    string(decision.LeaderHint()),
+		PlacementMode: string(decision.PlacementMode),
+	}, nil
+}
+
+func (p *placementRouteClusterSubmitter) snapshotRoutes() []ClusterRouteRequest {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+	return append([]ClusterRouteRequest(nil), p.routes...)
 }
 
 func (f *admissionClusterSubmitter) ClusterAdmissionStatus(context.Context) (ClusterAdmissionStatus, error) {
@@ -158,6 +222,7 @@ func deterministicEntryDocumentIDs(entry raftentry.CommandEntryV1) ([][]byte, er
 
 func cloneClusterRequestMetadata(metadata ClusterRequestMetadata) ClusterRequestMetadata {
 	metadata.TraceContext = bytes.Clone(metadata.TraceContext)
+	metadata.ClusterRouteMembers = append([]string(nil), metadata.ClusterRouteMembers...)
 	return metadata
 }
 
@@ -424,6 +489,143 @@ func TestClusterSubmitterReceivesDecodableDeterministicEntries(t *testing.T) {
 			t.Fatalf("call %d ack=%d want visible", i, call.metadata.AckPolicy)
 		}
 	}
+}
+
+func TestClusterRoutePreflightAddsMetadata(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		target: ClusterRouteTarget{
+			GroupID:       "group-a",
+			Members:       []string{"node-a", "node-b"},
+			LeaderHint:    "node-a",
+			PlacementMode: "collection",
+		},
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "users"}); err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	routes := submitter.snapshotRoutes()
+	if len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if got := routes[0]; got.Database != "default" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != iwire.CommandCreateCollection || got.CommandName != "create_collection" {
+		t.Fatalf("route request=%+v want default/default/users create_collection", got)
+	}
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown {
+		t.Fatal("metadata missing cluster route")
+	}
+	if meta.ClusterRouteDatabase != "default" || meta.ClusterRouteCatalog != "default" || meta.ClusterRouteCollection != "users" {
+		t.Fatalf("metadata route identity=%s/%s/%s want default/default/users", meta.ClusterRouteDatabase, meta.ClusterRouteCatalog, meta.ClusterRouteCollection)
+	}
+	if meta.ClusterRouteGroupID != "group-a" || meta.ClusterRouteLeaderHint != "node-a" || meta.ClusterRoutePlacementMode != "collection" {
+		t.Fatalf("metadata route target group=%q leader=%q mode=%q", meta.ClusterRouteGroupID, meta.ClusterRouteLeaderHint, meta.ClusterRoutePlacementMode)
+	}
+	if !reflect.DeepEqual(meta.ClusterRouteMembers, []string{"node-a", "node-b"}) {
+		t.Fatalf("metadata route members=%v want [node-a node-b]", meta.ClusterRouteMembers)
+	}
+}
+
+func TestClusterRoutePreflightRejectsBeforeSubmitter(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		err:                  errors.New("unplaced collection"),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"Ada"}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterRoutePreflightRejectsTokenPlacementWithoutTokenContract(t *testing.T) {
+	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeTokenV1)
+	submitter := &placementRouteClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		catalog:              catalog,
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"Ada"}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
+func mustNativewireRouteTestCatalog(tb testing.TB, mode raftplacement.PlacementModeV1) raftplacement.ResolvedCatalogV1 {
+	tb.Helper()
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{
+				ID:         "group-a",
+				Members:    []raftcluster.NodeID{"node-a", "node-b"},
+				LeaderHint: "node-a",
+			},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{
+			{
+				Collection: raftplacement.CollectionRefV1{
+					Database:   "default",
+					Catalog:    "default",
+					Collection: "users",
+				},
+				Mode: mode,
+				TokenPartitions: []raftplacement.TokenPartitionV1{
+					{
+						ID:      "p0",
+						GroupID: "group-a",
+						Start:   0,
+						End:     ^uint64(0),
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		tb.Fatalf("Validate route test catalog: %v", err)
+	}
+	return catalog
 }
 
 func TestClusterSubmitterRequestOnlyFieldsDoNotAlterDeterministicEntry(t *testing.T) {

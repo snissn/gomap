@@ -79,6 +79,28 @@ Route decisions MUST fail closed for:
 Token route decisions include the matched token partition metadata. Collection
 route decisions do not infer shard keys or scatter across token partitions.
 
+## Cluster Submitter Adapter Preflight
+
+Native-wire and Mongo gateway cluster submitter adapters MAY run an optional
+collection-route preflight before handing an accepted R3a command entry to the
+submitter. The preflight is adapter metadata only. It records the catalog route
+identity, target group ID, group members, leader hint, and placement mode in
+request metadata that is excluded from deterministic command entry bytes.
+
+Native-wire route preflight uses the default database and catalog plus the
+collection name encoded in the deterministic command sections. `create_collection`
+uses the collection metadata name; mutation commands use the collection-name ref.
+
+Mongo gateway route preflight uses the original Mongo namespace: `$db` plus the
+command collection name before the gateway flattens it to TreeDB's internal
+`db.collection` collection name.
+
+If no route provider is configured, adapters keep the previous submitter
+behavior. If a route provider is configured, the provider MUST fail closed for
+unplaced collections and for token/ring placements that cannot be routed by the
+current collection-only adapter contract. Leader hints remain hints; they are
+not live leadership proof, read-index evidence, or a network routing guarantee.
+
 ## Token/Ring Catalog Placements
 
 Token/ring placement entries are accepted as internal catalog data for
