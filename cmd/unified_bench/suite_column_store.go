@@ -258,25 +258,39 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishAssetAppenderCloseCount      int     `json:"column_publish_asset_appender_close_count,omitempty"`
 	ColumnPublishAssetAppendFileSyncCount     int     `json:"column_publish_asset_append_file_sync_count,omitempty"`
 	ColumnPublishAssetSyncEpochCount          int     `json:"column_publish_asset_sync_epoch_count,omitempty"`
-	ColumnPublishManifestEncodeDurationMS     float64 `json:"column_publish_manifest_encode_duration_ms,omitempty"`
-	ColumnPublishAssetClosureDurationMS       float64 `json:"column_publish_asset_closure_validation_duration_ms,omitempty"`
-	ColumnPublishRootDeltaDurationMS          float64 `json:"column_publish_root_delta_construction_duration_ms,omitempty"`
-	ColumnPublishSystemDeltaDurationMS        float64 `json:"column_publish_system_delta_construction_duration_ms,omitempty"`
-	ColumnPublishRootDeltaMaterializeMS       float64 `json:"column_publish_root_delta_materialization_duration_ms,omitempty"`
-	ColumnPublishRows                         int     `json:"column_publish_rows,omitempty"`
-	ColumnPublishPreparedAssets               int     `json:"column_publish_prepared_assets,omitempty"`
-	ColumnPublishRowAssetBytes                int64   `json:"column_publish_row_asset_bytes,omitempty"`
-	ColumnPublishRowAssetCount                int     `json:"column_publish_row_asset_count,omitempty"`
-	ColumnPublishTypedColumnBytes             int64   `json:"column_publish_typed_column_bytes,omitempty"`
-	ColumnPublishTypedColumnCount             int     `json:"column_publish_typed_column_count,omitempty"`
-	ColumnPublishDictionaryBytes              int64   `json:"column_publish_dictionary_sidecar_bytes,omitempty"`
-	ColumnPublishDictionaryCount              int     `json:"column_publish_dictionary_sidecar_count,omitempty"`
-	ColumnPublishInt64Bytes                   int64   `json:"column_publish_int64_sidecar_bytes,omitempty"`
-	ColumnPublishInt64Count                   int     `json:"column_publish_int64_sidecar_count,omitempty"`
-	ColumnPublishAggregateMetadataBytes       int64   `json:"column_publish_aggregate_metadata_bytes,omitempty"`
-	ColumnPublishAggregateMetadataCount       int     `json:"column_publish_aggregate_metadata_count,omitempty"`
-	ColumnPublishSharedAppendBytes            int64   `json:"column_publish_shared_asset_append_bytes,omitempty"`
-	ColumnPublishSharedAppendCount            int     `json:"column_publish_shared_asset_append_count,omitempty"`
+
+	ColumnPublishSharedSegmentAppenderCloseCount       int `json:"column_publish_shared_segment_appender_close_count,omitempty"`
+	ColumnPublishSharedSegmentAppendFileSyncCount      int `json:"column_publish_shared_segment_append_file_sync_count,omitempty"`
+	ColumnPublishSharedSegmentAppendSyncEpochCount     int `json:"column_publish_shared_segment_append_sync_epoch_count,omitempty"`
+	ColumnPublishDirectViewSegmentAppenderCloseCount   int `json:"column_publish_direct_view_segment_appender_close_count,omitempty"`
+	ColumnPublishDirectViewSegmentAppendFileSyncCount  int `json:"column_publish_direct_view_segment_append_file_sync_count,omitempty"`
+	ColumnPublishDirectViewSegmentAppendSyncEpochCount int `json:"column_publish_direct_view_segment_append_sync_epoch_count,omitempty"`
+
+	ColumnPublishManifestEncodeDurationMS float64 `json:"column_publish_manifest_encode_duration_ms,omitempty"`
+	ColumnPublishAssetClosureDurationMS   float64 `json:"column_publish_asset_closure_validation_duration_ms,omitempty"`
+	ColumnPublishRootDeltaDurationMS      float64 `json:"column_publish_root_delta_construction_duration_ms,omitempty"`
+	ColumnPublishSystemDeltaDurationMS    float64 `json:"column_publish_system_delta_construction_duration_ms,omitempty"`
+	ColumnPublishRootDeltaMaterializeMS   float64 `json:"column_publish_root_delta_materialization_duration_ms,omitempty"`
+	ColumnPublishRows                     int     `json:"column_publish_rows,omitempty"`
+	ColumnPublishPreparedAssets           int     `json:"column_publish_prepared_assets,omitempty"`
+	ColumnPublishRowAssetBytes            int64   `json:"column_publish_row_asset_bytes,omitempty"`
+	ColumnPublishRowAssetCount            int     `json:"column_publish_row_asset_count,omitempty"`
+	ColumnPublishTypedColumnBytes         int64   `json:"column_publish_typed_column_bytes,omitempty"`
+	ColumnPublishTypedColumnCount         int     `json:"column_publish_typed_column_count,omitempty"`
+	ColumnPublishDictionaryBytes          int64   `json:"column_publish_dictionary_sidecar_bytes,omitempty"`
+	ColumnPublishDictionaryCount          int     `json:"column_publish_dictionary_sidecar_count,omitempty"`
+	ColumnPublishInt64Bytes               int64   `json:"column_publish_int64_sidecar_bytes,omitempty"`
+	ColumnPublishInt64Count               int     `json:"column_publish_int64_sidecar_count,omitempty"`
+	ColumnPublishAggregateMetadataBytes   int64   `json:"column_publish_aggregate_metadata_bytes,omitempty"`
+	ColumnPublishAggregateMetadataCount   int     `json:"column_publish_aggregate_metadata_count,omitempty"`
+	ColumnPublishSharedAppendBytes        int64   `json:"column_publish_shared_asset_append_bytes,omitempty"`
+	ColumnPublishSharedAppendCount        int     `json:"column_publish_shared_asset_append_count,omitempty"`
+
+	ColumnPublishSharedSegmentAppendBytes     int64 `json:"column_publish_shared_segment_append_bytes,omitempty"`
+	ColumnPublishSharedSegmentAppendCount     int   `json:"column_publish_shared_segment_append_count,omitempty"`
+	ColumnPublishDirectViewSegmentAppendBytes int64 `json:"column_publish_direct_view_segment_append_bytes,omitempty"`
+	ColumnPublishDirectViewSegmentAppendCount int   `json:"column_publish_direct_view_segment_append_count,omitempty"`
+
 	ColumnPublishRequiredAssetBytes           int64   `json:"column_publish_required_asset_bytes,omitempty"`
 	ColumnPublishManifestBytes                int64   `json:"column_publish_manifest_bytes,omitempty"`
 	PrimaryRunBuildDurationMS                 float64 `json:"primary_run_build_duration_ms,omitempty"`
@@ -1578,6 +1592,12 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishAssetAppenderCloseCount += src.ColumnPublishAssetAppenderCloseCount
 	dst.ColumnPublishAssetAppendFileSyncCount += src.ColumnPublishAssetAppendFileSyncCount
 	dst.ColumnPublishAssetSyncEpochCount += src.ColumnPublishAssetSyncEpochCount
+	dst.ColumnPublishSharedSegmentAppenderCloseCount += src.ColumnPublishSharedSegmentAppenderCloseCount
+	dst.ColumnPublishSharedSegmentAppendFileSyncCount += src.ColumnPublishSharedSegmentAppendFileSyncCount
+	dst.ColumnPublishSharedSegmentAppendSyncEpochCount += src.ColumnPublishSharedSegmentAppendSyncEpochCount
+	dst.ColumnPublishDirectViewSegmentAppenderCloseCount += src.ColumnPublishDirectViewSegmentAppenderCloseCount
+	dst.ColumnPublishDirectViewSegmentAppendFileSyncCount += src.ColumnPublishDirectViewSegmentAppendFileSyncCount
+	dst.ColumnPublishDirectViewSegmentAppendSyncEpochCount += src.ColumnPublishDirectViewSegmentAppendSyncEpochCount
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -1597,6 +1617,10 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishAggregateMetadataCount += src.ColumnPublishAggregateMetadataCount
 	dst.ColumnPublishSharedAppendBytes += src.ColumnPublishSharedAppendBytes
 	dst.ColumnPublishSharedAppendCount += src.ColumnPublishSharedAppendCount
+	dst.ColumnPublishSharedSegmentAppendBytes += src.ColumnPublishSharedSegmentAppendBytes
+	dst.ColumnPublishSharedSegmentAppendCount += src.ColumnPublishSharedSegmentAppendCount
+	dst.ColumnPublishDirectViewSegmentAppendBytes += src.ColumnPublishDirectViewSegmentAppendBytes
+	dst.ColumnPublishDirectViewSegmentAppendCount += src.ColumnPublishDirectViewSegmentAppendCount
 	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
 	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
@@ -1614,81 +1638,91 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertStats, batches int) columnStoreInsertPhaseMetric {
 	rows := stats.Documents
 	out := columnStoreInsertPhaseMetric{
-		Documents:                                 rows,
-		Batches:                                   batches,
-		Runs:                                      stats.Runs,
-		PrepareDocumentsDurationMS:                durationMS(stats.PrepareDocuments),
-		PrepareDocumentsNsPerRow:                  nsPerRow(stats.PrepareDocuments, rows),
-		DuplicateDocumentPreflightDurationMS:      durationMS(stats.DuplicateDocumentPreflight),
-		DuplicateDocumentPreflightNsPerRow:        nsPerRow(stats.DuplicateDocumentPreflight, rows),
-		RetainedPayloadPrepareDurationMS:          durationMS(stats.RetainedPayloadPrepare),
-		RetainedPayloadPrepareNsPerRow:            nsPerRow(stats.RetainedPayloadPrepare, rows),
-		RetainedPayloadRows:                       stats.RetainedPayloadRows,
-		RetainedPayloadDeclaredRows:               stats.RetainedPayloadDeclaredRows,
-		RetainedPayloadSemanticStreamBlocks:       stats.RetainedPayloadSemanticStreamBlocks,
-		RetainedPayloadValueLogPointerizeMS:       durationMS(stats.RetainedPayloadValueLogPointerize),
-		RetainedPayloadValueLogPointerizeNsPerRow: nsPerRow(stats.RetainedPayloadValueLogPointerize, rows),
-		RetainedPayloadValueLogValues:             stats.RetainedPayloadValueLogValues,
-		RetainedPayloadValueLogBytes:              stats.RetainedPayloadValueLogBytes,
-		RetainedStreamValueLogPointerizeMS:        durationMS(stats.RetainedStreamValueLogPointerize),
-		RetainedStreamValueLogPointerizeNsPerRow:  nsPerRow(stats.RetainedStreamValueLogPointerize, rows),
-		RetainedStreamValueLogValues:              stats.RetainedStreamValueLogValues,
-		RetainedStreamValueLogBytes:               stats.RetainedStreamValueLogBytes,
-		ColumnPublishBuildColumnDeltaDurationMS:   durationMS(stats.ColumnPublishBuildColumnDelta),
-		ColumnPublishBuildColumnDeltaNsPerRow:     nsPerRow(stats.ColumnPublishBuildColumnDelta, rows),
-		ColumnPublishBuildSystemDeltaDurationMS:   durationMS(stats.ColumnPublishBuildSystemDelta),
-		ColumnPublishBuildSystemDeltaNsPerRow:     nsPerRow(stats.ColumnPublishBuildSystemDelta, rows),
-		ColumnPublishCommitDurationMS:             durationMS(stats.ColumnPublishCommit),
-		ColumnPublishCommitNsPerRow:               nsPerRow(stats.ColumnPublishCommit, rows),
-		ColumnPublishDocumentExtractionDurationMS: durationMS(stats.ColumnPublishDocumentExtraction),
-		ColumnPublishDeclaredColumnDurationMS:     durationMS(stats.ColumnPublishDeclaredColumnEncoding),
-		ColumnPublishAssetPreparationDurationMS:   durationMS(stats.ColumnPublishAssetPreparation),
-		ColumnPublishRowAssetPrepareDurationMS:    durationMS(stats.ColumnPublishRowAssetPreparation),
-		ColumnPublishTypedColumnPrepareDurationMS: durationMS(stats.ColumnPublishTypedColumnPreparation),
-		ColumnPublishTypedColumnDictionaryBuildMS: durationMS(stats.ColumnPublishTypedColumnDictionaryBuild),
-		ColumnPublishTypedColumnRowMaterializeMS:  durationMS(stats.ColumnPublishTypedColumnRowMaterialization),
-		ColumnPublishTypedColumnPartBuildMS:       durationMS(stats.ColumnPublishTypedColumnPartBuild),
-		ColumnPublishTypedColumnImageBuildMS:      durationMS(stats.ColumnPublishTypedColumnImageBuild),
-		ColumnPublishDictionaryPrepareDurationMS:  durationMS(stats.ColumnPublishDictionaryPreparation),
-		ColumnPublishInt64PrepareDurationMS:       durationMS(stats.ColumnPublishInt64Preparation),
-		ColumnPublishAggregateMetadataDurationMS:  durationMS(stats.ColumnPublishAggregateMetadataPrepare),
-		ColumnPublishRowSidecarSharedBuildMS:      durationMS(stats.ColumnPublishRowSidecarSharedBuild),
-		ColumnPublishAssetAppendDurationMS:        durationMS(stats.ColumnPublishAssetAppend),
-		ColumnPublishAssetAppendOpenDurationMS:    durationMS(stats.ColumnPublishAssetAppendOpen),
-		ColumnPublishAssetAppendWriteDurationMS:   durationMS(stats.ColumnPublishAssetAppendWrite),
-		ColumnPublishAssetAppendCloseDurationMS:   durationMS(stats.ColumnPublishAssetAppendClose),
-		ColumnPublishAssetAppendFileSyncMS:        durationMS(stats.ColumnPublishAssetAppendFileSync),
-		ColumnPublishAssetAppendFileCloseMS:       durationMS(stats.ColumnPublishAssetAppendFileClose),
-		ColumnPublishAssetAppendDirSyncMS:         durationMS(stats.ColumnPublishAssetAppendDirSync),
-		ColumnPublishAssetAppendCleanupMS:         durationMS(stats.ColumnPublishAssetAppendCleanup),
-		ColumnPublishAssetAppenderCloseCount:      stats.ColumnPublishAssetAppenderCloseCount,
-		ColumnPublishAssetAppendFileSyncCount:     stats.ColumnPublishAssetAppendFileSyncCount,
-		ColumnPublishAssetSyncEpochCount:          stats.ColumnPublishAssetSyncEpochCount,
-		ColumnPublishManifestEncodeDurationMS:     durationMS(stats.ColumnPublishManifestEncode),
-		ColumnPublishAssetClosureDurationMS:       durationMS(stats.ColumnPublishAssetClosureValidation),
-		ColumnPublishRootDeltaDurationMS:          durationMS(stats.ColumnPublishRootDeltaConstruction),
-		ColumnPublishSystemDeltaDurationMS:        durationMS(stats.ColumnPublishSystemDeltaConstruction),
-		ColumnPublishRootDeltaMaterializeMS:       durationMS(stats.ColumnPublishRootDeltaMaterialization),
-		ColumnPublishRows:                         stats.ColumnPublishRows,
-		ColumnPublishPreparedAssets:               stats.ColumnPublishPreparedAssets,
-		ColumnPublishRowAssetBytes:                stats.ColumnPublishRowAssetBytes,
-		ColumnPublishRowAssetCount:                stats.ColumnPublishRowAssetCount,
-		ColumnPublishTypedColumnBytes:             stats.ColumnPublishTypedColumnBytes,
-		ColumnPublishTypedColumnCount:             stats.ColumnPublishTypedColumnCount,
-		ColumnPublishDictionaryBytes:              stats.ColumnPublishDictionaryBytes,
-		ColumnPublishDictionaryCount:              stats.ColumnPublishDictionaryCount,
-		ColumnPublishInt64Bytes:                   stats.ColumnPublishInt64Bytes,
-		ColumnPublishInt64Count:                   stats.ColumnPublishInt64Count,
-		ColumnPublishAggregateMetadataBytes:       stats.ColumnPublishAggregateMetadataBytes,
-		ColumnPublishAggregateMetadataCount:       stats.ColumnPublishAggregateMetadataCount,
-		ColumnPublishSharedAppendBytes:            stats.ColumnPublishSharedAppendBytes,
-		ColumnPublishSharedAppendCount:            stats.ColumnPublishSharedAppendCount,
-		ColumnPublishRequiredAssetBytes:           stats.ColumnPublishRequiredAssetBytes,
-		ColumnPublishManifestBytes:                stats.ColumnPublishManifestBytes,
-		PrimaryRunBuildDurationMS:                 durationMS(stats.PrimaryRunBuild),
-		PrimaryRunBuildNsPerRow:                   nsPerRow(stats.PrimaryRunBuild, rows),
-		PublishDurationMS:                         durationMS(stats.Publish),
-		PublishNsPerRow:                           nsPerRow(stats.Publish, rows),
+		Documents:                                          rows,
+		Batches:                                            batches,
+		Runs:                                               stats.Runs,
+		PrepareDocumentsDurationMS:                         durationMS(stats.PrepareDocuments),
+		PrepareDocumentsNsPerRow:                           nsPerRow(stats.PrepareDocuments, rows),
+		DuplicateDocumentPreflightDurationMS:               durationMS(stats.DuplicateDocumentPreflight),
+		DuplicateDocumentPreflightNsPerRow:                 nsPerRow(stats.DuplicateDocumentPreflight, rows),
+		RetainedPayloadPrepareDurationMS:                   durationMS(stats.RetainedPayloadPrepare),
+		RetainedPayloadPrepareNsPerRow:                     nsPerRow(stats.RetainedPayloadPrepare, rows),
+		RetainedPayloadRows:                                stats.RetainedPayloadRows,
+		RetainedPayloadDeclaredRows:                        stats.RetainedPayloadDeclaredRows,
+		RetainedPayloadSemanticStreamBlocks:                stats.RetainedPayloadSemanticStreamBlocks,
+		RetainedPayloadValueLogPointerizeMS:                durationMS(stats.RetainedPayloadValueLogPointerize),
+		RetainedPayloadValueLogPointerizeNsPerRow:          nsPerRow(stats.RetainedPayloadValueLogPointerize, rows),
+		RetainedPayloadValueLogValues:                      stats.RetainedPayloadValueLogValues,
+		RetainedPayloadValueLogBytes:                       stats.RetainedPayloadValueLogBytes,
+		RetainedStreamValueLogPointerizeMS:                 durationMS(stats.RetainedStreamValueLogPointerize),
+		RetainedStreamValueLogPointerizeNsPerRow:           nsPerRow(stats.RetainedStreamValueLogPointerize, rows),
+		RetainedStreamValueLogValues:                       stats.RetainedStreamValueLogValues,
+		RetainedStreamValueLogBytes:                        stats.RetainedStreamValueLogBytes,
+		ColumnPublishBuildColumnDeltaDurationMS:            durationMS(stats.ColumnPublishBuildColumnDelta),
+		ColumnPublishBuildColumnDeltaNsPerRow:              nsPerRow(stats.ColumnPublishBuildColumnDelta, rows),
+		ColumnPublishBuildSystemDeltaDurationMS:            durationMS(stats.ColumnPublishBuildSystemDelta),
+		ColumnPublishBuildSystemDeltaNsPerRow:              nsPerRow(stats.ColumnPublishBuildSystemDelta, rows),
+		ColumnPublishCommitDurationMS:                      durationMS(stats.ColumnPublishCommit),
+		ColumnPublishCommitNsPerRow:                        nsPerRow(stats.ColumnPublishCommit, rows),
+		ColumnPublishDocumentExtractionDurationMS:          durationMS(stats.ColumnPublishDocumentExtraction),
+		ColumnPublishDeclaredColumnDurationMS:              durationMS(stats.ColumnPublishDeclaredColumnEncoding),
+		ColumnPublishAssetPreparationDurationMS:            durationMS(stats.ColumnPublishAssetPreparation),
+		ColumnPublishRowAssetPrepareDurationMS:             durationMS(stats.ColumnPublishRowAssetPreparation),
+		ColumnPublishTypedColumnPrepareDurationMS:          durationMS(stats.ColumnPublishTypedColumnPreparation),
+		ColumnPublishTypedColumnDictionaryBuildMS:          durationMS(stats.ColumnPublishTypedColumnDictionaryBuild),
+		ColumnPublishTypedColumnRowMaterializeMS:           durationMS(stats.ColumnPublishTypedColumnRowMaterialization),
+		ColumnPublishTypedColumnPartBuildMS:                durationMS(stats.ColumnPublishTypedColumnPartBuild),
+		ColumnPublishTypedColumnImageBuildMS:               durationMS(stats.ColumnPublishTypedColumnImageBuild),
+		ColumnPublishDictionaryPrepareDurationMS:           durationMS(stats.ColumnPublishDictionaryPreparation),
+		ColumnPublishInt64PrepareDurationMS:                durationMS(stats.ColumnPublishInt64Preparation),
+		ColumnPublishAggregateMetadataDurationMS:           durationMS(stats.ColumnPublishAggregateMetadataPrepare),
+		ColumnPublishRowSidecarSharedBuildMS:               durationMS(stats.ColumnPublishRowSidecarSharedBuild),
+		ColumnPublishAssetAppendDurationMS:                 durationMS(stats.ColumnPublishAssetAppend),
+		ColumnPublishAssetAppendOpenDurationMS:             durationMS(stats.ColumnPublishAssetAppendOpen),
+		ColumnPublishAssetAppendWriteDurationMS:            durationMS(stats.ColumnPublishAssetAppendWrite),
+		ColumnPublishAssetAppendCloseDurationMS:            durationMS(stats.ColumnPublishAssetAppendClose),
+		ColumnPublishAssetAppendFileSyncMS:                 durationMS(stats.ColumnPublishAssetAppendFileSync),
+		ColumnPublishAssetAppendFileCloseMS:                durationMS(stats.ColumnPublishAssetAppendFileClose),
+		ColumnPublishAssetAppendDirSyncMS:                  durationMS(stats.ColumnPublishAssetAppendDirSync),
+		ColumnPublishAssetAppendCleanupMS:                  durationMS(stats.ColumnPublishAssetAppendCleanup),
+		ColumnPublishAssetAppenderCloseCount:               stats.ColumnPublishAssetAppenderCloseCount,
+		ColumnPublishAssetAppendFileSyncCount:              stats.ColumnPublishAssetAppendFileSyncCount,
+		ColumnPublishAssetSyncEpochCount:                   stats.ColumnPublishAssetSyncEpochCount,
+		ColumnPublishSharedSegmentAppenderCloseCount:       stats.ColumnPublishSharedSegmentAppenderCloseCount,
+		ColumnPublishSharedSegmentAppendFileSyncCount:      stats.ColumnPublishSharedSegmentAppendFileSyncCount,
+		ColumnPublishSharedSegmentAppendSyncEpochCount:     stats.ColumnPublishSharedSegmentAppendSyncEpochCount,
+		ColumnPublishDirectViewSegmentAppenderCloseCount:   stats.ColumnPublishDirectViewSegmentAppenderCloseCount,
+		ColumnPublishDirectViewSegmentAppendFileSyncCount:  stats.ColumnPublishDirectViewSegmentAppendFileSyncCount,
+		ColumnPublishDirectViewSegmentAppendSyncEpochCount: stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount,
+		ColumnPublishManifestEncodeDurationMS:              durationMS(stats.ColumnPublishManifestEncode),
+		ColumnPublishAssetClosureDurationMS:                durationMS(stats.ColumnPublishAssetClosureValidation),
+		ColumnPublishRootDeltaDurationMS:                   durationMS(stats.ColumnPublishRootDeltaConstruction),
+		ColumnPublishSystemDeltaDurationMS:                 durationMS(stats.ColumnPublishSystemDeltaConstruction),
+		ColumnPublishRootDeltaMaterializeMS:                durationMS(stats.ColumnPublishRootDeltaMaterialization),
+		ColumnPublishRows:                                  stats.ColumnPublishRows,
+		ColumnPublishPreparedAssets:                        stats.ColumnPublishPreparedAssets,
+		ColumnPublishRowAssetBytes:                         stats.ColumnPublishRowAssetBytes,
+		ColumnPublishRowAssetCount:                         stats.ColumnPublishRowAssetCount,
+		ColumnPublishTypedColumnBytes:                      stats.ColumnPublishTypedColumnBytes,
+		ColumnPublishTypedColumnCount:                      stats.ColumnPublishTypedColumnCount,
+		ColumnPublishDictionaryBytes:                       stats.ColumnPublishDictionaryBytes,
+		ColumnPublishDictionaryCount:                       stats.ColumnPublishDictionaryCount,
+		ColumnPublishInt64Bytes:                            stats.ColumnPublishInt64Bytes,
+		ColumnPublishInt64Count:                            stats.ColumnPublishInt64Count,
+		ColumnPublishAggregateMetadataBytes:                stats.ColumnPublishAggregateMetadataBytes,
+		ColumnPublishAggregateMetadataCount:                stats.ColumnPublishAggregateMetadataCount,
+		ColumnPublishSharedAppendBytes:                     stats.ColumnPublishSharedAppendBytes,
+		ColumnPublishSharedAppendCount:                     stats.ColumnPublishSharedAppendCount,
+		ColumnPublishSharedSegmentAppendBytes:              stats.ColumnPublishSharedSegmentAppendBytes,
+		ColumnPublishSharedSegmentAppendCount:              stats.ColumnPublishSharedSegmentAppendCount,
+		ColumnPublishDirectViewSegmentAppendBytes:          stats.ColumnPublishDirectViewSegmentAppendBytes,
+		ColumnPublishDirectViewSegmentAppendCount:          stats.ColumnPublishDirectViewSegmentAppendCount,
+		ColumnPublishRequiredAssetBytes:                    stats.ColumnPublishRequiredAssetBytes,
+		ColumnPublishManifestBytes:                         stats.ColumnPublishManifestBytes,
+		PrimaryRunBuildDurationMS:                          durationMS(stats.PrimaryRunBuild),
+		PrimaryRunBuildNsPerRow:                            nsPerRow(stats.PrimaryRunBuild, rows),
+		PublishDurationMS:                                  durationMS(stats.Publish),
+		PublishNsPerRow:                                    nsPerRow(stats.Publish, rows),
 	}
 	if stats.RetainedPayloadRows > 0 {
 		out.ColumnStoreDeclaredRowReuseCoverageRatio = float64(stats.RetainedPayloadDeclaredRows) / float64(stats.RetainedPayloadRows)
@@ -4657,9 +4691,20 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("- column_publish_int64_sidecar_bytes: %d\n", stats.ColumnPublishInt64Bytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_aggregate_metadata_bytes: %d\n", stats.ColumnPublishAggregateMetadataBytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_shared_asset_append_bytes: %d\n", stats.ColumnPublishSharedAppendBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_shared_asset_append_count: %d\n", stats.ColumnPublishSharedAppendCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_shared_segment_append_bytes: %d\n", stats.ColumnPublishSharedSegmentAppendBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_shared_segment_append_count: %d\n", stats.ColumnPublishSharedSegmentAppendCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_direct_view_segment_append_bytes: %d\n", stats.ColumnPublishDirectViewSegmentAppendBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_direct_view_segment_append_count: %d\n", stats.ColumnPublishDirectViewSegmentAppendCount))
 	sb.WriteString(fmt.Sprintf("- column_publish_asset_appender_close_count: %d\n", stats.ColumnPublishAssetAppenderCloseCount))
 	sb.WriteString(fmt.Sprintf("- column_publish_asset_append_file_sync_count: %d\n", stats.ColumnPublishAssetAppendFileSyncCount))
 	sb.WriteString(fmt.Sprintf("- column_publish_asset_sync_epoch_count: %d\n", stats.ColumnPublishAssetSyncEpochCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_shared_segment_appender_close_count: %d\n", stats.ColumnPublishSharedSegmentAppenderCloseCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_shared_segment_append_file_sync_count: %d\n", stats.ColumnPublishSharedSegmentAppendFileSyncCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_shared_segment_append_sync_epoch_count: %d\n", stats.ColumnPublishSharedSegmentAppendSyncEpochCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_direct_view_segment_appender_close_count: %d\n", stats.ColumnPublishDirectViewSegmentAppenderCloseCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_direct_view_segment_append_file_sync_count: %d\n", stats.ColumnPublishDirectViewSegmentAppendFileSyncCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_direct_view_segment_append_sync_epoch_count: %d\n", stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount))
 	sb.WriteString(fmt.Sprintf("- column_publish_required_asset_bytes: %d\n", stats.ColumnPublishRequiredAssetBytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_manifest_bytes: %d\n\n", stats.ColumnPublishManifestBytes))
 

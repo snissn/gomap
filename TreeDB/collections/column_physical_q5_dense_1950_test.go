@@ -93,6 +93,59 @@ func TestColumnTypedColumnDenseInt64SpanSingleCodeTriplePreapply3175(t *testing.
 	}
 }
 
+func TestColumnTypedColumnDenseInt64SpanLocalMapCapacity3175(t *testing.T) {
+	tests := []struct {
+		name  string
+		parts []columnTypedColumnPhysicalQueryPart
+		want  int
+	}{
+		{
+			name: "empty uses initial capacity",
+			want: columnTypedColumnDenseInt64SpanLocalMapInitialCapacity,
+		},
+		{
+			name: "nil and zero cardinality parts use initial capacity",
+			parts: []columnTypedColumnPhysicalQueryPart{
+				{},
+				{DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{}},
+			},
+			want: columnTypedColumnDenseInt64SpanLocalMapInitialCapacity,
+		},
+		{
+			name: "small sum keeps initial floor",
+			parts: []columnTypedColumnPhysicalQueryPart{
+				{DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{Cardinality: 3}},
+				{DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{Cardinality: 5}},
+			},
+			want: columnTypedColumnDenseInt64SpanLocalMapInitialCapacity,
+		},
+		{
+			name: "sums part cardinalities",
+			parts: []columnTypedColumnPhysicalQueryPart{
+				{DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{Cardinality: 20}},
+				{DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{Cardinality: 21}},
+			},
+			want: 41,
+		},
+		{
+			name: "caps large capacity",
+			parts: []columnTypedColumnPhysicalQueryPart{
+				{DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{Cardinality: columnTypedColumnDenseInt64SpanLocalMapMaxCapacity - 1}},
+				{DenseInt64Span: &columnTypedColumnDenseInt64SpanPart{Cardinality: 2}},
+			},
+			want: columnTypedColumnDenseInt64SpanLocalMapMaxCapacity,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := columnTypedColumnDenseInt64SpanLocalMapCapacity(tc.parts); got != tc.want {
+				t.Fatalf("capacity=%d want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func BenchmarkColumnPhysicalQ5DenseTypedColumn1950(b *testing.B) {
 	events := columnPhysicalQ5DenseBenchmarkEvents1950(16_384)
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(b, nil, [][]columnPhysicalJSONBenchParityEventP0{events})
