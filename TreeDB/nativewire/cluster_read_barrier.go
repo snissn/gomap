@@ -15,12 +15,14 @@ type AppliedIndexReadBarrierProvider interface {
 }
 
 // AppliedIndexReadCoordinator bridges nativewire leader_read requests to the
-// raftcluster applied-index read barrier foundation. It intentionally does not
-// claim linearizable or lease-read safety; those require a real read-index or
-// lease proof outside this adapter.
+// raftcluster applied-index read barrier foundation. Linearizable reads require
+// a configured read-index provider and then wait for local apply through the
+// proven read index. Lease reads remain unsupported until a lease proof exists.
 type AppliedIndexReadCoordinator struct {
-	BarrierProvider AppliedIndexReadBarrierProvider
-	Waiter          raftcluster.AppliedIndexReadBarrierWaiter
+	BarrierProvider   AppliedIndexReadBarrierProvider
+	Waiter            raftcluster.AppliedIndexReadBarrierWaiter
+	ReadIndexTarget   raftcluster.ReadIndexBarrier
+	ReadIndexProvider raftcluster.ReadIndexProvider
 }
 
 func (c AppliedIndexReadCoordinator) CoordinateRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
@@ -29,13 +31,17 @@ func (c AppliedIndexReadCoordinator) CoordinateRead(ctx context.Context, request
 	}
 	switch request.Policy {
 	case ConsistencyLeaderRead:
+		return c.coordinateLeaderRead(ctx, request)
 	case ConsistencyLinearizable:
-		return ClusterReadResult{}, errors.New("nativewire: linearizable reads require a read-index proof")
+		return c.coordinateLinearizableRead(ctx)
 	case ConsistencyLeaseRead:
 		return ClusterReadResult{}, errors.New("nativewire: lease reads require a lease proof")
 	default:
 		return ClusterReadResult{}, fmt.Errorf("nativewire: unsupported coordinated read policy %s", consistencyPolicyName(request.Policy))
 	}
+}
+
+func (c AppliedIndexReadCoordinator) coordinateLeaderRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
 	if c.BarrierProvider == nil {
 		return ClusterReadResult{}, errors.New("nativewire: applied-index read barrier provider is not configured")
 	}
@@ -63,6 +69,40 @@ func (c AppliedIndexReadCoordinator) CoordinateRead(ctx context.Context, request
 		ActualConsistency: ConsistencyLeaderRead,
 		ServingNode:       string(progress.NodeID),
 		LeaderNode:        string(barrier.NodeID),
+		AppliedIndex:      progress.Index,
+		HasAppliedIndex:   true,
+	}, nil
+}
+
+func (c AppliedIndexReadCoordinator) coordinateLinearizableRead(ctx context.Context) (ClusterReadResult, error) {
+	if c.ReadIndexProvider == nil {
+		return ClusterReadResult{}, errors.New("nativewire: read-index provider is not configured")
+	}
+	if c.Waiter == nil {
+		return ClusterReadResult{}, errors.New("nativewire: applied-index read barrier waiter is not configured")
+	}
+	proof, err := c.ReadIndexProvider.ReadIndex(ctx, c.ReadIndexTarget)
+	if err != nil {
+		return ClusterReadResult{}, err
+	}
+	if err := c.ReadIndexTarget.Check(proof); err != nil {
+		return ClusterReadResult{}, err
+	}
+	barrier := proof.AppliedIndexBarrier()
+	progress, err := c.Waiter.WaitAppliedIndex(ctx, barrier)
+	if err != nil {
+		return ClusterReadResult{}, err
+	}
+	if err := barrier.Check(progress); err != nil {
+		return ClusterReadResult{}, err
+	}
+	if !progress.HasApplied {
+		return ClusterReadResult{}, fmt.Errorf("%w: no applied progress for linearizable read", raftcluster.ErrReadBarrierNotSatisfied)
+	}
+	return ClusterReadResult{
+		ActualConsistency: ConsistencyLinearizable,
+		ServingNode:       string(progress.NodeID),
+		LeaderNode:        string(proof.NodeID),
 		AppliedIndex:      progress.Index,
 		HasAppliedIndex:   true,
 	}, nil
