@@ -2964,6 +2964,132 @@ func TestRetainedValueLogPruneQuietWaitDropsBelowPressure(t *testing.T) {
 	}
 }
 
+func TestRetainedValueLogPruneQuietWaitPressureReboundRequiresFreshQuiet(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		MaxValueLogRetainedBytes: 1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 197)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "value_vlog", "value-l0-000197.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("p"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<20)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+
+	reboundCh := make(chan struct{})
+	cache.testRetainedPruneQuietWaitExitHook = func(result retainedPruneQuietWaitResult) {
+		if result != retainedPruneQuietWaitBelowPressure {
+			return
+		}
+		seedRetainedPrunePressure(cache, retainedPath, 2<<20)
+		close(reboundCh)
+	}
+
+	cache.scheduleRetainedValueLogPrune()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		cache.retainedPruneMu.Lock()
+		waiting := cache.retainedPruneDone != nil
+		running := cache.retainedPruneRunningDone != nil
+		cache.retainedPruneMu.Unlock()
+		if waiting && !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retained prune did not enter quiet-wait state")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	seedRetainedPrunePressure(cache, retainedPath, 128)
+
+	select {
+	case <-reboundCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("retained prune did not observe below-pressure quiet-wait exit")
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		cache.retainedPruneMu.Lock()
+		waiting := cache.retainedPruneDone != nil
+		running := cache.retainedPruneRunningDone != nil
+		cache.retainedPruneMu.Unlock()
+		if !waiting && !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retained prune stayed in-flight after pressure rebound")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	select {
+	case <-backend.iteratorStartedCh:
+		t.Fatalf("background prune started after pressure rebound without fresh quiet window")
+	case <-time.After(retainedPruneNegativeAssertWait):
+	}
+
+	cache.testRetainedPruneQuietWaitExitHook = nil
+	cache.scheduleRetainedValueLogPrune()
+	select {
+	case <-backend.iteratorStartedCh:
+		t.Fatalf("retained prune started before fresh quiet window elapsed")
+	case <-time.After(retainedPruneNegativeAssertWait):
+	}
+
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("retained prune did not start after fresh quiet window elapsed")
+	}
+	close(backend.iteratorBlockCh)
+	cache.waitForRetainedValueLogPrune()
+
+	stats := cache.Stats()
+	if got := stats["treedb.cache.vlog_retained_prune.schedule_requests"]; got != "2" {
+		t.Fatalf("schedule_requests=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.schedule_skip.below_pressure"]; got != "1" {
+		t.Fatalf("schedule_skip.below_pressure=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_retained_prune.runs"]; got != "1" {
+		t.Fatalf("runs=%q want 1", got)
+	}
+}
+
 func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
