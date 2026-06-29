@@ -490,6 +490,12 @@ func openDurableApplyFile(path string, kind uint16, opts DurableApplyStoreOption
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: create durable metadata dir for %s: %v", path, err)
 	}
+	existed := false
+	if _, err := os.Stat(path); err == nil {
+		existed = true
+	} else if !os.IsNotExist(err) {
+		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: stat durable metadata %s before open: %v", path, err)
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: open durable metadata %s: %v", path, err)
@@ -500,6 +506,10 @@ func openDurableApplyFile(path string, kind uint16, opts DurableApplyStoreOption
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: stat durable metadata %s: %v", path, err)
 	}
 	if info.Size() == 0 {
+		if existed {
+			_ = file.Close()
+			return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: existing durable metadata %s is zero-length", path)
+		}
 		header := durableApplyFileHeader(kind)
 		if err := writeFull(file, header[:]); err != nil {
 			_ = file.Close()

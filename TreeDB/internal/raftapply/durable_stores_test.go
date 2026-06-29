@@ -180,6 +180,56 @@ func TestDurableApplyStoresFailClosedOnTruncatedAndCorruptMetadata(t *testing.T)
 	}
 }
 
+func TestDurableApplyStoresFailClosedOnExistingZeroLengthMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(string) string
+		open func(string) error
+	}{
+		{
+			name: "progress",
+			path: DurableApplyProgressStorePath,
+			open: func(dir string) error {
+				store, err := OpenDurableApplyProgressStore(dir, DurableApplyStoreOptions{DisableSync: true})
+				if store != nil {
+					_ = store.Close()
+				}
+				return err
+			},
+		},
+		{
+			name: "results",
+			path: DurableApplyResultStorePath,
+			open: func(dir string) error {
+				store, err := OpenDurableApplyResultStore(dir, DurableApplyStoreOptions{DisableSync: true})
+				if store != nil {
+					_ = store.Close()
+				}
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := tc.path(dir)
+			if err := os.WriteFile(path, nil, 0o600); err != nil {
+				t.Fatalf("Write zero-length metadata: %v", err)
+			}
+			if err := tc.open(dir); codeOf(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+				t.Fatalf("Open zero-length metadata error=%v code=%s, want unsafe durability", err, codeOf(err))
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("Stat zero-length metadata: %v", err)
+			}
+			if info.Size() != 0 {
+				t.Fatalf("zero-length metadata was rewritten to %d bytes", info.Size())
+			}
+		})
+	}
+}
+
 func TestDurableApplyStoresPoisonAfterAppendFailure(t *testing.T) {
 	results, err := OpenDurableApplyResultStore(t.TempDir(), DurableApplyStoreOptions{DisableSync: true})
 	if err != nil {
