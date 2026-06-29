@@ -53,6 +53,8 @@ const (
 
 var errServerClosed = errors.New("mongo gateway server is closed")
 
+type ClusterCatalogVersionProvider func(context.Context) (uint64, error)
+
 type Server struct {
 	MaxMessageLength       int32
 	MaxFindScanDocuments   int
@@ -83,6 +85,7 @@ type Server struct {
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
 	ClusterSubmitter          treenativewire.ClusterSubmitter
+	ClusterCatalogVersion     ClusterCatalogVersionProvider
 
 	nextResponseID    atomic.Int32
 	nextConnectionID  atomic.Int64
@@ -335,7 +338,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 
 		var err error
-		readBuf, writeBuf, err = s.appendOneWithOwner(rw, owner, readBuf, writeBuf[:0])
+		readBuf, writeBuf, err = s.appendOneWithOwner(ctx, rw, owner, readBuf, writeBuf[:0])
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -347,7 +350,7 @@ func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
 		}
 		for coalesced := 1; coalesced < maxCoalescedWireResponses && len(writeBuf) < maxRetainedWireWriteBuffer; coalesced++ {
 			var appended bool
-			writeBuf, appended, err = s.appendBufferedMessageWithOwner(rw.reader, owner, writeBuf)
+			writeBuf, appended, err = s.appendBufferedMessageWithOwner(ctx, rw.reader, owner, writeBuf)
 			if err != nil {
 				if len(writeBuf) > 0 {
 					if flushErr := writeFull(rw, writeBuf); flushErr != nil {
@@ -407,7 +410,7 @@ func (s *Server) ServeOne(rw io.ReadWriter) error {
 }
 
 func (s *Server) ServeOneWithOwner(rw io.ReadWriter, cursorOwner int64) error {
-	_, _, err := s.serveOneWithOwner(rw, cursorOwner, nil, nil)
+	_, _, err := s.serveOneWithOwner(context.Background(), rw, cursorOwner, nil, nil)
 	return err
 }
 
@@ -428,14 +431,14 @@ func (s *Server) ServeOneWithOwnerBuffered(rw io.ReadWriter, cursorOwner int64, 
 	if buffers == nil {
 		return s.ServeOneWithOwner(rw, cursorOwner)
 	}
-	readBuf, writeBuf, err := s.serveOneWithOwner(rw, cursorOwner, buffers.readBuf, buffers.writeBuf)
+	readBuf, writeBuf, err := s.serveOneWithOwner(context.Background(), rw, cursorOwner, buffers.readBuf, buffers.writeBuf)
 	buffers.readBuf = readBuf
 	buffers.writeBuf = writeBuf
 	return err
 }
 
-func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
-	readBuf, writeBuf, err := s.appendOneWithOwner(rw, cursorOwner, readBuf, writeBuf[:0])
+func (s *Server) serveOneWithOwner(ctx context.Context, rw io.ReadWriter, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
+	readBuf, writeBuf, err := s.appendOneWithOwner(ctx, rw, cursorOwner, readBuf, writeBuf[:0])
 	if err != nil {
 		return readBuf, writeBuf, err
 	}
@@ -453,7 +456,7 @@ func (s *Server) serveOneWithOwner(rw io.ReadWriter, cursorOwner int64, readBuf,
 	return readBuf, writeBuf, nil
 }
 
-func (s *Server) appendOneWithOwner(rw io.Reader, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
+func (s *Server) appendOneWithOwner(ctx context.Context, rw io.Reader, cursorOwner int64, readBuf, writeBuf []byte) ([]byte, []byte, error) {
 	if s.isClosed() {
 		return readBuf, writeBuf, errServerClosed
 	}
@@ -464,7 +467,7 @@ func (s *Server) appendOneWithOwner(rw io.Reader, cursorOwner int64, readBuf, wr
 		}
 		return readBuf, writeBuf, err
 	}
-	response, retainRequestBody, err := s.handleMessageInto(writeBuf[:0], h, body, cursorOwner)
+	response, retainRequestBody, err := s.handleMessageInto(ctx, writeBuf[:0], h, body, cursorOwner)
 	if err != nil {
 		return nil, writeBuf, err
 	}
@@ -479,7 +482,7 @@ func (s *Server) appendOneWithOwner(rw io.Reader, cursorOwner int64, readBuf, wr
 	return readBuf, response, nil
 }
 
-func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwner int64, writeBuf []byte) ([]byte, bool, error) {
+func (s *Server) appendBufferedMessageWithOwner(ctx context.Context, reader *bufio.Reader, cursorOwner int64, writeBuf []byte) ([]byte, bool, error) {
 	if s.isClosed() {
 		return writeBuf, false, errServerClosed
 	}
@@ -518,7 +521,7 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 	if !bufferedMessageCanRetainRequestBody(h, body) {
 		return writeBuf, false, nil
 	}
-	response, _, err := s.handleMessageInto(writeBuf, h, body, cursorOwner)
+	response, _, err := s.handleMessageInto(ctx, writeBuf, h, body, cursorOwner)
 	if err != nil {
 		return writeBuf, false, err
 	}
@@ -532,7 +535,7 @@ func (s *Server) appendBufferedMessageWithOwner(reader *bufio.Reader, cursorOwne
 }
 
 func (s *Server) handleMessage(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
-	response, _, err := s.handleMessageInto(nil, h, body, cursorOwner)
+	response, _, err := s.handleMessageInto(context.Background(), nil, h, body, cursorOwner)
 	return response, err
 }
 
@@ -621,16 +624,16 @@ func bsonDocumentCommandName(doc []byte) (string, bool) {
 	return "", false
 }
 
-func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
+func (s *Server) handleMessageInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
 	if s.isClosed() {
 		return nil, false, errServerClosed
 	}
 	s.reapExpiredCursors()
 	switch h.OpCode {
 	case wire.OpQuery:
-		return s.handleQueryInto(dst, h, body, cursorOwner)
+		return s.handleQueryInto(ctx, dst, h, body, cursorOwner)
 	case wire.OpMsg:
-		return s.handleMsgInto(dst, h, body, cursorOwner)
+		return s.handleMsgInto(ctx, dst, h, body, cursorOwner)
 	case wire.OpCompressed:
 		return nil, false, fmt.Errorf("%w: OP_COMPRESSED", wire.ErrUnsupported)
 	default:
@@ -639,11 +642,11 @@ func (s *Server) handleMessageInto(dst []byte, h wire.Header, body []byte, curso
 }
 
 func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
-	response, _, err := s.handleQueryInto(nil, h, body, cursorOwner)
+	response, _, err := s.handleQueryInto(context.Background(), nil, h, body, cursorOwner)
 	return response, err
 }
 
-func (s *Server) handleQueryInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
+func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
 	q, err := wire.ParseQuery(body)
 	if err != nil {
 		return nil, false, err
@@ -653,7 +656,7 @@ func (s *Server) handleQueryInto(dst []byte, h wire.Header, body []byte, cursorO
 		return nil, false, err
 	}
 
-	response, err := s.commandResponse(name, q.Query, nil, cursorOwner)
+	response, err := s.commandResponse(ctx, name, q.Query, nil, cursorOwner)
 	if err != nil {
 		return nil, name != "insert", err
 	}
@@ -662,11 +665,11 @@ func (s *Server) handleQueryInto(dst []byte, h wire.Header, body []byte, cursorO
 }
 
 func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
-	response, _, err := s.handleMsgInto(nil, h, body, cursorOwner)
+	response, _, err := s.handleMsgInto(context.Background(), nil, h, body, cursorOwner)
 	return response, err
 }
 
-func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
+func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, body []byte, cursorOwner int64) ([]byte, bool, error) {
 	msg, err := wire.ParseMsg(body)
 	if err != nil {
 		return nil, false, err
@@ -695,7 +698,7 @@ func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwn
 		return response, retainRequestBody, nil
 	}
 
-	response, err := s.commandResponse(name, msg.Body, msg.Sequences, cursorOwner)
+	response, err := s.commandResponse(ctx, name, msg.Body, msg.Sequences, cursorOwner)
 	if err != nil {
 		return nil, retainRequestBody, err
 	}
@@ -706,7 +709,7 @@ func (s *Server) handleMsgInto(dst []byte, h wire.Header, body []byte, cursorOwn
 	return msgResponse, retainRequestBody, err
 }
 
-func (s *Server) commandResponse(name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
+func (s *Server) commandResponse(ctx context.Context, name string, command wire.Document, sequences []wire.DocumentSequence, cursorOwner int64) (wire.Document, error) {
 	if commandRejectsTransactionMarkers(name) {
 		if doc, rejected, err := rejectTransactionalCommand(command, name); rejected {
 			return doc, err
@@ -720,7 +723,7 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	case "connectionStatus":
 		return marshalDocument(connectionStatusResponse())
 	case "create":
-		return s.createCollectionResponse(command)
+		return s.createCollectionResponse(ctx, command)
 	case "endSessions":
 		return endSessionsResponse(command)
 	case "hostInfo":
@@ -728,7 +731,7 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	case "ping":
 		return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 	case "insert":
-		return s.insertResponse(command, sequences)
+		return s.insertResponse(ctx, command, sequences)
 	case "find":
 		return s.findResponse(command, cursorOwner)
 	case "getMore":
@@ -736,9 +739,9 @@ func (s *Server) commandResponse(name string, command wire.Document, sequences [
 	case "killCursors":
 		return s.killCursorsResponse(command, cursorOwner)
 	case "update":
-		return s.updateResponse(command, sequences)
+		return s.updateResponse(ctx, command, sequences)
 	case "delete":
-		return s.deleteResponse(command, sequences)
+		return s.deleteResponse(ctx, command, sequences)
 	case "listCollections":
 		return s.listCollectionsResponse(command)
 	case "listDatabases":

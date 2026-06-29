@@ -50,6 +50,7 @@ type StandaloneOptions struct {
 	InsertCoalescingMaxBatch    int
 	InsertCoalescingIdleTTL     time.Duration
 	ClusterSubmitter            treenativewire.ClusterSubmitter
+	ClusterCatalogVersion       ClusterCatalogVersionProvider
 }
 
 // StandaloneServer owns the TreeDB backend, collection manager, and MongoDB
@@ -147,6 +148,16 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.DefaultCollectionOptions = normalized.DefaultCollectionOptions
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy
 	server.ClusterSubmitter = normalized.ClusterSubmitter
+	server.ClusterCatalogVersion = normalized.ClusterCatalogVersion
+	if server.ClusterCatalogVersion == nil && server.ClusterSubmitter != nil {
+		server.ClusterCatalogVersion = func(context.Context) (uint64, error) {
+			state := backend.State()
+			if state == nil {
+				return 0, errors.New("mongo gateway standalone: backend state is unavailable")
+			}
+			return state.CommitSeq, nil
+		}
+	}
 	if normalized.MaxMessageLength > 0 {
 		server.MaxMessageLength = normalized.MaxMessageLength
 	}

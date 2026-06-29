@@ -2,6 +2,7 @@ package mongogateway
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -40,9 +41,9 @@ const primaryKeyPrefixBSONValue byte = 1
 
 var maxInt = int(^uint(0) >> 1)
 
-func (s *Server) insertResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
-		return s.clusterInsertResponse(command, sequences)
+		return s.clusterInsertResponse(ctx, command, sequences)
 	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
@@ -845,9 +846,9 @@ func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Coll
 	}, true, nil
 }
 
-func (s *Server) updateResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
-		return s.clusterUpdateResponse(command, sequences)
+		return s.clusterUpdateResponse(ctx, command, sequences)
 	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
@@ -1696,9 +1697,9 @@ func mongoBSONSetUpdateFields(updateDoc wire.Document) ([]collections.BSONSetFie
 	return fields, fieldNames, true
 }
 
-func (s *Server) deleteResponse(command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+func (s *Server) deleteResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
-		return s.clusterDeleteResponse(command, sequences)
+		return s.clusterDeleteResponse(ctx, command, sequences)
 	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
@@ -1854,7 +1855,10 @@ func (s *Server) listDatabasesResponse(command wire.Document) (wire.Document, er
 	})
 }
 
-func (s *Server) createCollectionResponse(command wire.Document) (wire.Document, error) {
+func (s *Server) createCollectionResponse(ctx context.Context, command wire.Document) (wire.Document, error) {
+	if s.clusterSubmitterConfigured() {
+		return s.clusterCreateCollectionResponse(ctx, command)
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -1976,6 +1980,9 @@ func rejectTransactionalCommand(command wire.Document, commandName string) (wire
 }
 
 func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, error) {
+	if s.clusterSubmitterConfigured() {
+		return mongoClusterUnsupportedLocalMutation("createIndexes")
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
@@ -2120,6 +2127,9 @@ func (s *Server) listIndexesResponse(command wire.Document) (wire.Document, erro
 }
 
 func (s *Server) dropIndexesResponse(command wire.Document) (wire.Document, error) {
+	if s.clusterSubmitterConfigured() {
+		return mongoClusterUnsupportedLocalMutation("dropIndexes")
+	}
 	if s.Collections == nil {
 		return commandError(commandCodeBadValue, "BadValue", "Mongo gateway collection manager is not configured")
 	}
