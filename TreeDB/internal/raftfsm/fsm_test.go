@@ -139,7 +139,7 @@ func TestSingleGroupApplyLoopRejectsProgressAheadOfLocalCoverage(t *testing.T) {
 	}
 }
 
-func TestSingleGroupApplyLoopRejectsMissingProgressWithLocalCoverage(t *testing.T) {
+func TestSingleGroupApplyLoopRepairsMissingProgressWithStoredResult(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
 
@@ -179,15 +179,24 @@ func TestSingleGroupApplyLoopRejectsMissingProgressWithLocalCoverage(t *testing.
 		},
 	})
 	if openErr == nil {
-		_ = reopenedFSM.Close()
-		t.Fatal("Open with missing progress and local coverage succeeded, want unsafe durability error")
+		defer func() { _ = reopenedFSM.Close() }()
+	} else {
+		t.Fatalf("Open with missing progress and stored result: %v", openErr)
 	}
-	if code, ok := ErrorCodeOf(openErr); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
-		t.Fatalf("ErrorCodeOf(Open missing progress)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
+	if got, ok := reopenedFSM.LastApplied(); ok {
+		t.Fatalf("LastApplied with missing progress=(%+v,%t), want unset before replay repair", got, ok)
 	}
+	replayed, err := reopenedFSM.ApplyCommittedEntryV1(committedCommand(1, 1, raw))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 result-backed replay repair: %v result=%+v", err, replayed)
+	}
+	if replayed != result {
+		t.Fatalf("replayed result=%+v, want stored %+v", replayed, result)
+	}
+	assertLastApplied(t, reopenedFSM, raftentry.ApplyEntryID{Term: 1, Index: 1})
 }
 
-func TestSingleGroupApplyLoopRejectsProgressBehindLocalCoverage(t *testing.T) {
+func TestSingleGroupApplyLoopRepairsProgressBehindLocalCoverageWithStoredResult(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
 
@@ -248,11 +257,105 @@ func TestSingleGroupApplyLoopRejectsProgressBehindLocalCoverage(t *testing.T) {
 		},
 	})
 	if openErr == nil {
+		defer func() { _ = reopenedFSM.Close() }()
+	} else {
+		t.Fatalf("Open with progress behind local coverage and stored result: %v", openErr)
+	}
+	assertLastApplied(t, reopenedFSM, firstProgress.EntryID)
+	replayed, err := reopenedFSM.ApplyCommittedEntryV1(committedCommand(1, 2, orders))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 result-backed progress repair: %v result=%+v", err, replayed)
+	}
+	if replayed != second {
+		t.Fatalf("replayed second result=%+v, want stored %+v", replayed, second)
+	}
+	assertLastApplied(t, reopenedFSM, raftentry.ApplyEntryID{Term: 1, Index: 2})
+}
+
+func TestSingleGroupApplyLoopRejectsProgressBehindLocalCoverageWithoutStoredResult(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	fsm := openFSMForTest(t, db, dbDir)
+	users := deterministicCreateCollectionEntry(t, "users", "fsm:create:users:progress-behind-missing-result")
+	first, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 1, users))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 first: %v result=%+v", err, first)
+	}
+	assertApplied(t, first, raftentry.ApplyStatusApplied, 1)
+	firstProgress, ok := fsm.progress.LastAppliedRecord()
+	if !ok {
+		t.Fatal("LastAppliedRecord after first apply missing")
+	}
+	firstResult, ok, err := fsm.results.LookupApplyResult(firstProgress.EntryID)
+	if err != nil || !ok {
+		t.Fatalf("LookupApplyResult first=(%+v,%t,%v), want stored result", firstResult, ok, err)
+	}
+
+	orders := deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:progress-behind-missing-result")
+	second, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 2, orders))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 second: %v result=%+v", err, second)
+	}
+	assertApplied(t, second, raftentry.ApplyStatusApplied, 1)
+	coveredLSN := db.State().AppliedCommandLSN
+	if coveredLSN <= firstProgress.AppliedCommandLSN {
+		t.Fatalf("AppliedCommandLSN after second apply=%d, want greater than first progress %d", coveredLSN, firstProgress.AppliedCommandLSN)
+	}
+	progressPath := raftapply.DurableApplyProgressStorePath(fsm.metadataDir)
+	resultPath := raftapply.DurableApplyResultStorePath(fsm.metadataDir)
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close FSM: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
+	}
+	if err := os.Remove(progressPath); err != nil {
+		t.Fatalf("Remove progress metadata: %v", err)
+	}
+	progress, err := raftapply.OpenDurableApplyProgressStoreFile(progressPath, raftapply.DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("Open rolled-back progress store: %v", err)
+	}
+	if err := progress.RecordApplied(firstProgress); err != nil {
+		t.Fatalf("Record rolled-back progress: %v", err)
+	}
+	if err := progress.Close(); err != nil {
+		t.Fatalf("Close rolled-back progress store: %v", err)
+	}
+	if err := os.Remove(resultPath); err != nil {
+		t.Fatalf("Remove result metadata: %v", err)
+	}
+	results, err := raftapply.OpenDurableApplyResultStoreFile(resultPath, raftapply.DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("Open rolled-back result store: %v", err)
+	}
+	if err := results.RecordApplyResult(firstResult); err != nil {
+		t.Fatalf("Record rolled-back result: %v", err)
+	}
+	if err := results.Close(); err != nil {
+		t.Fatalf("Close rolled-back result store: %v", err)
+	}
+
+	reopenedDB := openFSMTestDB(t, dbDir)
+	defer func() { _ = reopenedDB.Close() }()
+	if got := reopenedDB.State().AppliedCommandLSN; got != coveredLSN {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want %d", got, coveredLSN)
+	}
+	reopenedFSM, openErr := Open(Options{
+		DB:      reopenedDB,
+		Cluster: validFSMClusterConfig(dbDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if openErr == nil {
 		_ = reopenedFSM.Close()
-		t.Fatal("Open with progress behind local coverage succeeded, want unsafe durability error")
+		t.Fatal("Open with progress behind local coverage and missing result succeeded, want unsafe durability error")
 	}
 	if code, ok := ErrorCodeOf(openErr); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
-		t.Fatalf("ErrorCodeOf(Open progress behind local coverage)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
+		t.Fatalf("ErrorCodeOf(Open progress behind missing result)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
 	}
 }
 
