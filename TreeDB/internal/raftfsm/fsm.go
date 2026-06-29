@@ -137,7 +137,14 @@ func (f *FSM) Close() error {
 		return nil
 	}
 	f.closed = true
-	return errors.Join(f.progress.Close(), f.results.Close())
+	var errs []error
+	if f.progress != nil {
+		errs = append(errs, f.progress.Close())
+	}
+	if f.results != nil {
+		errs = append(errs, f.results.Close())
+	}
+	return errors.Join(errs...)
 }
 
 func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
@@ -169,8 +176,14 @@ func (f *FSM) ApplyCommittedEntriesV1(entries []CommittedEntryV1) ([]raftentry.A
 }
 
 func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResultV1, error) {
-	if f == nil || f.closed {
+	if f == nil {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
+	}
+	if f.closed {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is closed"))
+	}
+	if f.db == nil || f.progress == nil || f.results == nil {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
 	}
 	if entry.Type != EntryTypeCommandEntryV1 {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsupportedVersionV1, fmt.Errorf("unsupported committed entry type %q", entry.Type))

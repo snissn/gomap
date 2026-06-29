@@ -104,20 +104,21 @@ func TestSingleGroupApplyLoopFailsClosedOnOrderingAndUnsupportedEntries(t *testi
 	orders := deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:gap")
 	gap, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 3, orders))
 	assertRejected(t, gap, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1})
+	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "orders")
 
 	lowerTerm, err := fsm.ApplyCommittedEntryV1(committedCommand(2, 2, orders))
 	assertRejected(t, lowerTerm, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1})
+	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "orders")
 
 	differentSameIndex := deterministicCreateCollectionEntry(t, "admins", "fsm:create:admins:duplicate-index")
 	duplicateConflict, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 1, differentSameIndex))
 	assertRejected(t, duplicateConflict, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1})
+	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "admins")
 
-	sameIndexDifferentTerm, err := fsm.ApplyCommittedEntryV1(committedCommand(4, 1, users))
+	audits := deterministicCreateCollectionEntry(t, "audits", "fsm:create:audits:duplicate-term")
+	sameIndexDifferentTerm, err := fsm.ApplyCommittedEntryV1(committedCommand(4, 1, audits))
 	assertRejected(t, sameIndexDifferentTerm, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1})
+	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "audits")
 
 	profiles := deterministicCreateCollectionEntry(t, "profiles", "fsm:create:profiles:advance")
 	advanced, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 2, profiles))
@@ -129,11 +130,11 @@ func TestSingleGroupApplyLoopFailsClosedOnOrderingAndUnsupportedEntries(t *testi
 
 	lowerIndex, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 1, orders))
 	assertRejected(t, lowerIndex, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 2})
+	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 2}, "orders")
 
 	unsupported, err := fsm.ApplyCommittedEntryV1(CommittedEntryV1{Type: EntryTypeV1("snapshot-v1"), Term: 3, Index: 2, Bytes: orders})
 	assertRejected(t, unsupported, err, raftentry.ApplyStatusRejectedUnsupported, raftentry.ErrorUnsupportedVersionV1)
-	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 2})
+	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 2}, "orders")
 }
 
 func TestSingleGroupApplyLoopLogicalDigestConvergesAcrossDBs(t *testing.T) {
@@ -253,6 +254,7 @@ func TestSingleGroupApplyLoopRejectsExpectedTargetMismatch(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	fsm := openFSMForTest(t, db, dbDir)
 	defer func() { _ = fsm.Close() }()
+	beforeLSN := db.State().AppliedCommandLSN
 
 	raw := deterministicCreateCollectionEntry(t, "users", "fsm:create:users:target-mismatch")
 	expected := decodedTargetForTest(t, raw)
@@ -269,9 +271,31 @@ func TestSingleGroupApplyLoopRejectsExpectedTargetMismatch(t *testing.T) {
 		ExpectedTarget:           &expected,
 	})
 	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorTargetMismatchV1)
+	if got := db.State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("AppliedCommandLSN after target mismatch=%d, want unchanged %d", got, beforeLSN)
+	}
+	if got, ok := fsm.LastApplied(); ok {
+		t.Fatalf("LastApplied after target mismatch=(%+v,%t), want unset", got, ok)
+	}
+	if record, ok, lookupErr := fsm.results.LookupApplyResult(raftentry.ApplyEntryID{Term: 1, Index: 1}); lookupErr != nil || ok {
+		t.Fatalf("LookupApplyResult after target mismatch=(%+v,%t,%v), want miss", record, ok, lookupErr)
+	}
 	if _, openErr := collections.NewCollectionManager(db).OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection users after target mismatch err=%v, want ErrCollectionNotFound", openErr)
 	}
+}
+
+func TestSingleGroupApplyLoopZeroValueFSMFailsClosed(t *testing.T) {
+	var fsm FSM
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("zero-value Close: %v", err)
+	}
+	result, err := fsm.ApplyCommittedEntryV1(CommittedEntryV1{
+		Type:  EntryTypeCommandEntryV1,
+		Term:  1,
+		Index: 1,
+	})
+	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorUnsafeDurabilityModeV1)
 }
 
 func TestSingleGroupApplyLoopMixedMutationEntriesContiguous(t *testing.T) {
@@ -543,15 +567,15 @@ func assertLastApplied(t testing.TB, fsm *FSM, want raftentry.ApplyEntryID) {
 	}
 }
 
-func assertNoApplyProgress(t *testing.T, db *backenddb.DB, wantLSN uint64, fsm *FSM, wantLast raftentry.ApplyEntryID) {
+func assertNoApplyProgress(t *testing.T, db *backenddb.DB, wantLSN uint64, fsm *FSM, wantLast raftentry.ApplyEntryID, absentCollection string) {
 	t.Helper()
 	if got := db.State().AppliedCommandLSN; got != wantLSN {
 		t.Fatalf("AppliedCommandLSN=%d, want unchanged %d", got, wantLSN)
 	}
 	assertLastApplied(t, fsm, wantLast)
-	if _, err := collections.NewCollectionManager(db).OpenCollection("orders"); err == nil {
-		t.Fatal("orders collection exists after rejected apply")
+	if _, err := collections.NewCollectionManager(db).OpenCollection(absentCollection); err == nil {
+		t.Fatalf("%s collection exists after rejected apply", absentCollection)
 	} else if !errors.Is(err, collections.ErrCollectionNotFound) {
-		t.Fatalf("OpenCollection orders: %v", err)
+		t.Fatalf("OpenCollection %s: %v", absentCollection, err)
 	}
 }
