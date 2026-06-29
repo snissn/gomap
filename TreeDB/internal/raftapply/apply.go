@@ -261,7 +261,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	switch entry.Target.CommandID {
 	case nativewire.CommandCreateCollection:
 		result, err = h.applyCreateCollectionV1(entry, meta)
-	case nativewire.CommandInsertBatch, nativewire.CommandReplaceBatch, nativewire.CommandDeleteBatch:
+	case nativewire.CommandInsertBatch, nativewire.CommandReplaceBatch, nativewire.CommandDeleteBatch, nativewire.CommandUpdateBSONSet:
 		result, err = h.applyCollectionMutationV1(entry, meta)
 	default:
 		return reject(entry.Digest, raftentry.ErrorUnsupportedCommandV1, fmt.Errorf("raftapply: %s is not accepted by R3a apply", entry.Row.NativeWireCommand))

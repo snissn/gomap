@@ -35,7 +35,7 @@ func TestUnsupportedDeterministicEntryRejectsBeforeAppendAndStores(t *testing.T)
 	progress := NewMemoryApplyProgressStore(8, 8)
 	results := NewMemoryApplyResultStore(8)
 	seam := &countingCommandWALApplySeam{}
-	raw := readHexFixture(t, "../nativewire/testdata/v1/update_bson_set_entry.hex")
+	raw := readHexFixture(t, "../nativewire/testdata/v1/create_index_entry.hex")
 
 	beforeLSN := db.State().AppliedCommandLSN
 	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{
@@ -1056,6 +1056,168 @@ func TestCollectionMutationStaleCatalogGuardFailsBeforeAppend(t *testing.T) {
 	}
 	if progress.Len() != 1 || results.Len() != 1 {
 		t.Fatalf("store lengths after stale mutation guard progress=%d results=%d, want 1/1", progress.Len(), results.Len())
+	}
+}
+
+func TestUpdateBSONSetApplyReplayNoopAffectedCountAndLogicalDigest(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	id := []byte("u1")
+	baseDoc := testBSONDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+		{Key: "visits", Value: int32(1)},
+	})
+	updatedDoc := testBSONDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "sfo"},
+		{Key: "visits", Value: int32(1)},
+	})
+	create := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-bson-set", testCreateCollectionMetaOptions{
+		documentFormat: uint64(nativewire.DocumentFormatBSON),
+	})
+	insert := deterministicInsertBatchEntry(t, "users", "client-a:insert:users-bson-set", nativewire.DocumentFormatBSON, [][]byte{id}, [][]byte{baseDoc})
+	applyCreateSequence(t, db, create, insert)
+	if frames := readCommandWALFrames(t, dir); len(frames) != 2 {
+		t.Fatalf("seed command WAL frames=%d, want 2", len(frames))
+	}
+
+	results := NewMemoryApplyResultStore(16)
+	update := deterministicUpdateBSONSetEntry(t, "users", "client-a:update-bson-set:city", id, []collections.BSONSetField{
+		{Key: "city", Value: testBSONSetRawValue(t, "sfo")},
+	})
+	applied, err := ApplyCommittedEntryV1(db, update, applyMeta(1, 3), Options{ResultStore: results})
+	assertApplied(t, applied, raftentry.ApplyStatusApplied, 1)
+	frames := readCommandWALFrames(t, dir)
+	if len(frames) != 3 {
+		t.Fatalf("command WAL frames after update=%d, want 3", len(frames))
+	}
+	assertCollectionUpdateFrame(t, frames[2], "users", map[string][]byte{"u1": updatedDoc})
+	opened, err := collections.NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	got, err := opened.Get(id)
+	if err != nil {
+		t.Fatalf("Get u1 after update: %v", err)
+	}
+	if gotCity := bson.Raw(got).Lookup("city").StringValue(); gotCity != "sfo" {
+		t.Fatalf("city after update=%q, want sfo", gotCity)
+	}
+
+	replayed, err := ApplyCommittedEntryV1(db, update, applyMeta(1, 3), Options{ResultStore: results})
+	if err != nil {
+		t.Fatalf("same ApplyEntryID replay: %v", err)
+	}
+	if replayed != applied {
+		t.Fatalf("same ApplyEntryID replay result=%+v, want %+v", replayed, applied)
+	}
+	duplicate, err := ApplyCommittedEntryV1(db, update, applyMeta(1, 4), Options{ResultStore: results})
+	assertApplied(t, duplicate, raftentry.ApplyStatusAlreadyApplied, 0)
+	if duplicate.ResultDigest != applied.ResultDigest {
+		t.Fatalf("duplicate digest=%s, want %s", duplicate.ResultDigest.Hex(), applied.ResultDigest.Hex())
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 3 {
+		t.Fatalf("command WAL frames after replay/idempotency=%d, want 3", got)
+	}
+
+	noOp := deterministicUpdateBSONSetEntry(t, "users", "client-a:update-bson-set:no-op", id, []collections.BSONSetField{
+		{Key: "city", Value: testBSONSetRawValue(t, "sfo")},
+	})
+	noOpResult, err := ApplyCommittedEntryV1(db, noOp, applyMeta(1, 5), Options{ResultStore: results})
+	assertApplied(t, noOpResult, raftentry.ApplyStatusApplied, 0)
+	frames = readCommandWALFrames(t, dir)
+	if len(frames) != 4 {
+		t.Fatalf("command WAL frames after no-op update=%d, want 4", len(frames))
+	}
+	assertCollectionUpdateFrame(t, frames[3], "users", map[string][]byte{})
+
+	missing := deterministicUpdateBSONSetEntry(t, "users", "client-a:update-bson-set:missing", []byte("missing"), []collections.BSONSetField{
+		{Key: "city", Value: testBSONSetRawValue(t, "sea")},
+	})
+	missingResult, err := ApplyCommittedEntryV1(db, missing, applyMeta(1, 6), Options{ResultStore: results})
+	assertApplied(t, missingResult, raftentry.ApplyStatusApplied, 0)
+	frames = readCommandWALFrames(t, dir)
+	if len(frames) != 5 {
+		t.Fatalf("command WAL frames after missing update=%d, want 5", len(frames))
+	}
+	assertCollectionUpdateFrame(t, frames[4], "users", map[string][]byte{})
+
+	dirB := t.TempDir()
+	dbB := openApplyHarnessDB(t, dirB)
+	defer func() { _ = dbB.Close() }()
+	applyCreateSequence(t, dbB, create, insert)
+	resultB, err := ApplyCommittedEntryV1(dbB, update, applyMeta(1, 3), Options{ResultStore: NewMemoryApplyResultStore(8)})
+	assertApplied(t, resultB, raftentry.ApplyStatusApplied, 1)
+	digestA, err := LogicalDigestV1ForDB(db, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB A: %v", err)
+	}
+	digestB, err := LogicalDigestV1ForDB(dbB, LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("LogicalDigestV1ForDB B: %v", err)
+	}
+	if digestA != digestB {
+		t.Fatalf("logical digest mismatch A=%s B=%s", digestA.Hex(), digestB.Hex())
+	}
+}
+
+func TestUpdateBSONSetInvalidBSONRejectsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	seam := &countingCommandWALApplySeam{}
+	raw := deterministicUpdateBSONSetEntryRawValues(t, "users", "client-a:update-bson-set:invalid-bson", []byte("u1"), []string{"city"}, [][]byte{
+		{byte(bson.TypeString), 0xff},
+	})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{CommandWALApplySeam: seam})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedMalformed, raftentry.ErrorMalformedEntryV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("invalid BSON reached command-WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 0 {
+		t.Fatalf("command WAL frames after invalid BSON=%d, want 0", got)
+	}
+}
+
+func TestUpdateBSONSetInvalidUTF8FieldRejectsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	seam := &countingCommandWALApplySeam{}
+	raw := deterministicUpdateBSONSetEntryRawFieldNames(t, "users", "client-a:update-bson-set:invalid-field-name", []byte("u1"), [][]byte{{0xff}}, [][]byte{
+		testBSONSetRawValueBytes(t, "sfo"),
+	})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{CommandWALApplySeam: seam})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedMalformed, raftentry.ErrorMalformedEntryV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("invalid UTF-8 field reached command-WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 0 {
+		t.Fatalf("command WAL frames after invalid UTF-8 field=%d, want 0", got)
+	}
+}
+
+func TestUpdateBSONSetNoIdempotencyRejectsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	seam := &countingCommandWALApplySeam{}
+	raw := deterministicUpdateBSONSetEntry(t, "users", raftentry.NoIdempotencyTokenV1, []byte("u1"), []collections.BSONSetField{
+		{Key: "city", Value: testBSONSetRawValue(t, "sfo")},
+	})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{CommandWALApplySeam: seam})
+	assertRejected(t, result, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorNoIdempotencyV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("no-idempotency update reached command-WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 0 {
+		t.Fatalf("command WAL frames after no-idempotency update=%d, want 0", got)
 	}
 }
 
@@ -2347,6 +2509,51 @@ func deterministicDeleteBatchEntry(t *testing.T, collection, idempotency string,
 	return entry
 }
 
+func deterministicUpdateBSONSetEntry(t *testing.T, collection, idempotency string, id []byte, fields []collections.BSONSetField) []byte {
+	t.Helper()
+	names := make([]string, len(fields))
+	values := make([][]byte, len(fields))
+	for i, field := range fields {
+		names[i] = field.Key
+		value := make([]byte, 1+len(field.Value.Value))
+		value[0] = byte(field.Value.Type)
+		copy(value[1:], field.Value.Value)
+		values[i] = value
+	}
+	return deterministicUpdateBSONSetEntryRawValues(t, collection, idempotency, id, names, values)
+}
+
+func deterministicUpdateBSONSetEntryRawValues(t *testing.T, collection, idempotency string, id []byte, names []string, values [][]byte) []byte {
+	t.Helper()
+	fieldNames := make([][]byte, len(names))
+	for i := range names {
+		fieldNames[i] = []byte(names[i])
+	}
+	return deterministicUpdateBSONSetEntryRawFieldNames(t, collection, idempotency, id, fieldNames, values)
+}
+
+func deterministicUpdateBSONSetEntryRawFieldNames(t *testing.T, collection, idempotency string, id []byte, fieldNames [][]byte, values [][]byte) []byte {
+	t.Helper()
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandUpdateBSONSet, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: nativewire.SectionCollectionRef, Bytes: deterministicTestCollectionNameRef(collection)},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, id)},
+		{ID: nativewire.SectionUpdateFieldNames, Bytes: nativewire.AppendByteVector(nil, fieldNames...)},
+		{ID: nativewire.SectionUpdateFieldValues, Bytes: nativewire.AppendByteVector(nil, values...)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+	}
+	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
+
 func deterministicMutationEntry(t *testing.T, command nativewire.CommandID, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte, extra []nativewire.Section) []byte {
 	t.Helper()
 	sections := []nativewire.Section{
@@ -2381,6 +2588,24 @@ func testBSONDocument(t *testing.T, document bson.D) []byte {
 		t.Fatalf("Marshal BSON: %v", err)
 	}
 	return encoded
+}
+
+func testBSONSetRawValue(t *testing.T, value any) bson.RawValue {
+	t.Helper()
+	typ, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		t.Fatalf("MarshalValue(%T): %v", value, err)
+	}
+	return bson.RawValue{Type: typ, Value: raw}
+}
+
+func testBSONSetRawValueBytes(t *testing.T, value any) []byte {
+	t.Helper()
+	raw := testBSONSetRawValue(t, value)
+	out := make([]byte, 1+len(raw.Value))
+	out[0] = byte(raw.Type)
+	copy(out[1:], raw.Value)
+	return out
 }
 
 func applyCreateSequence(t *testing.T, db *backenddb.DB, entries ...[]byte) []raftentry.ApplyResultV1 {
@@ -2573,7 +2798,7 @@ func BenchmarkApplyCommittedEntryCloseout3043(b *testing.B) {
 		dir := b.TempDir()
 		db := openApplyHarnessDB(b, dir)
 		defer func() { _ = db.Close() }()
-		raw := readHexFixtureForBenchmark(b, "../nativewire/testdata/v1/update_bson_set_entry.hex")
+		raw := readHexFixtureForBenchmark(b, "../nativewire/testdata/v1/create_index_entry.hex")
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -2643,6 +2868,49 @@ func BenchmarkApplyCommittedEntryCloseout3043(b *testing.B) {
 	})
 }
 
+func BenchmarkApplyCommittedEntryUpdateBSONSet(b *testing.B) {
+	dir := b.TempDir()
+	db := openApplyHarnessDB(b, dir)
+	defer func() { _ = db.Close() }()
+
+	id := []byte("u1")
+	create := deterministicCreateCollectionEntryForBenchmarkWithOptions(b, "users", "bench:create:update-bson-set", testCreateCollectionMetaOptions{
+		documentFormat: uint64(nativewire.DocumentFormatBSON),
+	})
+	insertDoc := testBSONDocumentForBenchmark(b, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+		{Key: "visits", Value: int32(1)},
+	})
+	insert := deterministicMutationEntryForBenchmark(b, nativewire.CommandInsertBatch, "users", "bench:insert:update-bson-set", nativewire.DocumentFormatBSON, [][]byte{id}, [][]byte{insertDoc}, nil)
+	for i, raw := range [][]byte{create, insert} {
+		result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, uint64(i)+1), Options{})
+		if err != nil {
+			b.Fatalf("seed ApplyCommittedEntryV1 %d: %v result=%+v", i, err, result)
+		}
+	}
+
+	updateA := deterministicUpdateBSONSetEntryForBenchmark(b, "users", "bench:update-bson-set:a", id, []collections.BSONSetField{
+		{Key: "city", Value: testBSONSetRawValueForBenchmark(b, "sfo")},
+	})
+	updateB := deterministicUpdateBSONSetEntryForBenchmark(b, "users", "bench:update-bson-set:b", id, []collections.BSONSetField{
+		{Key: "city", Value: testBSONSetRawValueForBenchmark(b, "sea")},
+	})
+	entries := [][]byte{updateA, updateB}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		result, err := ApplyCommittedEntryV1(db, entries[i&1], applyMeta(1, uint64(i)+3), Options{})
+		if err != nil {
+			b.Fatalf("ApplyCommittedEntryV1 update_bson_set: %v result=%+v", err, result)
+		}
+		if result.Status != raftentry.ApplyStatusApplied || result.AffectedCount != 1 {
+			b.Fatalf("update_bson_set result=%+v, want applied affected=1", result)
+		}
+		benchmarkApplyResultSink = result
+	}
+}
+
 func BenchmarkDecodeLowerCollectionMutationV1(b *testing.B) {
 	ids := make([][]byte, 16)
 	documents := make([][]byte, 16)
@@ -2691,10 +2959,15 @@ func deterministicMutationEntryForBenchmark(b *testing.B, command nativewire.Com
 
 func deterministicCreateCollectionEntryForBenchmark(b *testing.B, collection, idempotency string) []byte {
 	b.Helper()
+	return deterministicCreateCollectionEntryForBenchmarkWithOptions(b, collection, idempotency, testCreateCollectionMetaOptions{})
+}
+
+func deterministicCreateCollectionEntryForBenchmarkWithOptions(b *testing.B, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
+	b.Helper()
 	sections := []nativewire.Section{
 		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandCreateCollection, Version: 1})},
 		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
-		{ID: nativewire.SectionCollectionMeta, Bytes: testCreateCollectionMetaPayload(collection, testCreateCollectionMetaOptions{})},
+		{ID: nativewire.SectionCollectionMeta, Bytes: testCreateCollectionMetaPayload(collection, opts)},
 		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
 	}
 	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
@@ -2706,6 +2979,55 @@ func deterministicCreateCollectionEntryForBenchmark(b *testing.B, collection, id
 		b.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 	return entry
+}
+
+func deterministicUpdateBSONSetEntryForBenchmark(b *testing.B, collection, idempotency string, id []byte, fields []collections.BSONSetField) []byte {
+	b.Helper()
+	names := make([][]byte, len(fields))
+	values := make([][]byte, len(fields))
+	for i, field := range fields {
+		names[i] = []byte(field.Key)
+		value := make([]byte, 1+len(field.Value.Value))
+		value[0] = byte(field.Value.Type)
+		copy(value[1:], field.Value.Value)
+		values[i] = value
+	}
+	sections := []nativewire.Section{
+		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandUpdateBSONSet, Version: 1})},
+		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: nativewire.SectionCollectionRef, Bytes: deterministicTestCollectionNameRef(collection)},
+		{ID: nativewire.SectionDocumentIDs, Bytes: nativewire.AppendByteVector(nil, id)},
+		{ID: nativewire.SectionUpdateFieldNames, Bytes: nativewire.AppendByteVector(nil, names...)},
+		{ID: nativewire.SectionUpdateFieldValues, Bytes: nativewire.AppendByteVector(nil, values...)},
+		{ID: nativewire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, testCatalogVersionStart)},
+	}
+	cmd, err := nativewire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		b.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := nativewire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		b.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
+
+func testBSONDocumentForBenchmark(b *testing.B, document bson.D) []byte {
+	b.Helper()
+	encoded, err := bson.Marshal(document)
+	if err != nil {
+		b.Fatalf("Marshal BSON: %v", err)
+	}
+	return encoded
+}
+
+func testBSONSetRawValueForBenchmark(b *testing.B, value any) bson.RawValue {
+	b.Helper()
+	typ, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		b.Fatalf("MarshalValue(%T): %v", value, err)
+	}
+	return bson.RawValue{Type: typ, Value: raw}
 }
 
 func readHexFixtureForBenchmark(b *testing.B, rel string) []byte {

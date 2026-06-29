@@ -145,6 +145,30 @@ type testCreateCollectionPublishHook struct {
 	fn func(CollectionMeta)
 }
 
+type collectionCatalogLoadFaultStage string
+
+const (
+	collectionCatalogLoadFaultMeta collectionCatalogLoadFaultStage = "meta"
+	collectionCatalogLoadFaultRoot collectionCatalogLoadFaultStage = "root"
+)
+
+type collectionCatalogLoadFaultContext struct {
+	Collection string
+	Stage      collectionCatalogLoadFaultStage
+	RootName   string
+	CommitSeq  uint64
+	SystemRoot uint64
+}
+
+var testCollectionCatalogLoadHook struct {
+	installMu sync.Mutex
+	ptr       atomic.Pointer[collectionCatalogLoadHook]
+}
+
+type collectionCatalogLoadHook struct {
+	fn func(collectionCatalogLoadFaultContext) error
+}
+
 // CommitAmbiguousError reports that a collection mutation reached its logical
 // commit point before a later visibility, flush, checkpoint, response, or
 // bookkeeping step failed. The operation may already be visible or recoverable;
@@ -2505,6 +2529,31 @@ func runTestBeforeCommandWALBufferedUpdateStageLockHook() {
 	if hook != nil && hook.fn != nil {
 		hook.fn()
 	}
+}
+
+func setTestCollectionCatalogLoadHookForTest(fn func(collectionCatalogLoadFaultContext) error) func() {
+	testCollectionCatalogLoadHook.installMu.Lock()
+	prev := testCollectionCatalogLoadHook.ptr.Load()
+	var next *collectionCatalogLoadHook
+	if fn != nil {
+		next = &collectionCatalogLoadHook{fn: fn}
+	}
+	testCollectionCatalogLoadHook.ptr.Store(next)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			testCollectionCatalogLoadHook.ptr.Store(prev)
+			testCollectionCatalogLoadHook.installMu.Unlock()
+		})
+	}
+}
+
+func runTestCollectionCatalogLoadHook(ctx collectionCatalogLoadFaultContext) error {
+	hook := testCollectionCatalogLoadHook.ptr.Load()
+	if hook == nil || hook.fn == nil {
+		return nil
+	}
+	return hook.fn(ctx)
 }
 
 func (domain *collectionWriteDomain) observeIndexedFlush(units, docs int, bytes int64, rootRuns, roots int, duration, materialize, publish time.Duration, err error) {
@@ -20858,6 +20907,14 @@ func (c *Collection) scanDocumentsFuncWithColumnReconstruction(
 }
 
 func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCatalog, error) {
+	if err := runTestCollectionCatalogLoadHook(collectionCatalogLoadFaultContext{
+		Collection: name,
+		Stage:      collectionCatalogLoadFaultMeta,
+		CommitSeq:  snapshotCommitSeq(snap),
+		SystemRoot: snapshotSystemRoot(snap),
+	}); err != nil {
+		return nil, fmt.Errorf("collections: load catalog %q meta: %w", name, err)
+	}
 	raw, ok, err := getSystemValue(snap, systemCollectionMetaKey(name))
 	if err != nil || !ok {
 		if err != nil {
@@ -20872,6 +20929,15 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 	roots := make(map[string]uint64)
 	rootNames := collectionRootNames(meta)
 	for _, rootName := range rootNames {
+		if err := runTestCollectionCatalogLoadHook(collectionCatalogLoadFaultContext{
+			Collection: name,
+			Stage:      collectionCatalogLoadFaultRoot,
+			RootName:   rootName,
+			CommitSeq:  snapshotCommitSeq(snap),
+			SystemRoot: snapshotSystemRoot(snap),
+		}); err != nil {
+			return nil, fmt.Errorf("collections: load catalog %q root %q: %w", name, rootName, err)
+		}
 		rawRoot, ok, err := getSystemValue(snap, systemCollectionRootKey(rootName))
 		if err != nil {
 			return nil, fmt.Errorf("collections: load catalog %q root %q: %w", name, rootName, err)
