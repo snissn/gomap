@@ -271,6 +271,12 @@ fresh read-index barrier.
 `linearizable` performs the consensus read barrier required by the selected Raft
 implementation before reading.
 
+The current nativewire bridge for `linearizable` is a contract-only substrate:
+a configured read-index provider must return a quorum-backed read-index proof,
+then the existing applied-index waiter must prove the local node has applied
+through that read index. If either proof is unavailable, missing quorum, targets
+the wrong node/group, or local apply lags the read index, the read fails closed.
+
 `lease_read` is allowed only if leader leases are implemented and the server can
 prove the lease is valid.
 
