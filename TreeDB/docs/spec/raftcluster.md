@@ -83,6 +83,21 @@ command-WAL recoverability rule before that node can report local durability,
 advance durable applied-index/idempotency metadata, or return
 `ack_policy=raft_committed` success.
 
+## Read-Index Boundary
+
+The package exposes a small read-index contract for future Raft adapters:
+
+- `ReadIndexProvider` obtains a quorum-backed `ReadIndexProof`;
+- `ReadIndexBarrier` optionally pins the proof to an expected node/group;
+- `ReadIndexProof` must include node ID, group ID, a non-zero read index, and
+  `HasQuorum=true`;
+- linearizable nativewire reads must convert the proof into an
+  `AppliedIndexReadBarrier` and wait until the local node has applied through
+  that index before reading local state.
+
+This is only a contract. It does not implement a real Raft read-index provider,
+leader transfer handling, lease reads, follower reads, or production routing.
+
 ## Value Log Boundary
 
 `<main-db>/value_vlog/` is persistent value storage for large values
@@ -96,7 +111,7 @@ unreachable.
 - no real consensus loop;
 - no server write admission or redirects;
 - no `ack_policy=raft_committed` behavior;
-- no read-index or follower read semantics;
+- no real read-index provider, lease-read provider, or follower read routing;
 - no snapshot install/export behavior beyond reserving a local path;
 - no Raft log truncation;
 - no multi-group routing.
