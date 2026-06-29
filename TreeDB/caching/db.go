@@ -6770,33 +6770,54 @@ func (db *DB) shouldScheduleRetainedValueLogPruneWithForce(force bool) bool {
 	return closed >= db.retainedPrunePressureBytes()
 }
 
-func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration) bool {
+type retainedPruneQuietWaitResult uint8
+
+const (
+	retainedPruneQuietWaitAdmitted retainedPruneQuietWaitResult = iota
+	retainedPruneQuietWaitForced
+	retainedPruneQuietWaitBelowPressure
+	retainedPruneQuietWaitStopped
+)
+
+func (db *DB) waitForRetainedValueLogPruneQuietOrForce(quietWindow time.Duration) retainedPruneQuietWaitResult {
 	if db == nil {
-		return false
+		return retainedPruneQuietWaitStopped
 	}
 	if quietWindow <= 0 {
-		return db.retainedPruneForceRequested.Swap(false)
+		if db.retainedPruneForceRequested.Swap(false) {
+			return retainedPruneQuietWaitForced
+		}
+		return retainedPruneQuietWaitAdmitted
 	}
 	ticker := time.NewTicker(foregroundMaintenancePollInterval())
 	defer ticker.Stop()
 	for {
 		if db.closing.Load() {
-			return db.retainedPruneForceRequested.Swap(false)
+			if db.retainedPruneForceRequested.Swap(false) {
+				return retainedPruneQuietWaitForced
+			}
+			return retainedPruneQuietWaitStopped
 		}
 		if db.retainedPruneForceRequested.Swap(false) {
-			return true
+			return retainedPruneQuietWaitForced
+		}
+		if !db.shouldScheduleRetainedValueLogPruneWithForce(false) {
+			return retainedPruneQuietWaitBelowPressure
 		}
 		if db.foregroundVlogMaintenanceQuietFor(time.Now(), quietWindow) {
 			// Re-check immediately before returning so force requests racing with
 			// the quiet-window transition are not dropped.
 			if db.retainedPruneForceRequested.Swap(false) {
-				return true
+				return retainedPruneQuietWaitForced
 			}
-			return false
+			return retainedPruneQuietWaitAdmitted
 		}
 		select {
 		case <-db.closeCh:
-			return db.retainedPruneForceRequested.Swap(false)
+			if db.retainedPruneForceRequested.Swap(false) {
+				return retainedPruneQuietWaitForced
+			}
+			return retainedPruneQuietWaitStopped
 		case <-ticker.C:
 		}
 	}
@@ -7109,7 +7130,23 @@ func (db *DB) scheduleRetainedValueLogPruneWithForce(force bool) {
 		requestedForce := db.retainedPruneForceRequested.Swap(false)
 		effectiveForce := force || requestedForce
 		if !effectiveForce {
-			effectiveForce = db.waitForRetainedValueLogPruneQuietOrForce(retainedPruneQuietWindow)
+			quietWaitResult := db.waitForRetainedValueLogPruneQuietOrForce(retainedPruneQuietWindow)
+			if hook := db.testRetainedPruneQuietWaitExitHook; hook != nil {
+				hook(quietWaitResult)
+			}
+			switch quietWaitResult {
+			case retainedPruneQuietWaitForced:
+				effectiveForce = true
+			case retainedPruneQuietWaitBelowPressure:
+				db.retainedValueLogPruneScheduleSkipBelowPressure.Add(1)
+				return
+			case retainedPruneQuietWaitStopped:
+				if db.closing.Load() {
+					db.retainedValueLogPruneScheduleSkipClosing.Add(1)
+					db.observeRetainedValueLogPruneCloseAbort(false, false, 0)
+				}
+				return
+			}
 		}
 		if !db.shouldScheduleRetainedValueLogPruneWithForce(effectiveForce) {
 			closed := db.valueLogRetainedClosedBytes.Load()
@@ -8990,13 +9027,14 @@ type DB struct {
 	publishWatermarkLastBacklogBytes int64
 	publishWatermarkLastUnixNano     int64
 	// testing hooks
-	testOnVlogFlush              func(laneID int)
-	testOnVlogSync               func(laneID int)
-	testBeforeVlogUnlock         func(laneID int)
-	testRetainedPruneScanHook    func(context.Context, string) error
-	testSkipRetainedPrune        bool
-	testSkipVlogCheckpointKick   bool
-	testSkipCheckpointAutoVacuum bool
+	testOnVlogFlush                    func(laneID int)
+	testOnVlogSync                     func(laneID int)
+	testBeforeVlogUnlock               func(laneID int)
+	testRetainedPruneScanHook          func(context.Context, string) error
+	testRetainedPruneQuietWaitExitHook func(retainedPruneQuietWaitResult)
+	testSkipRetainedPrune              bool
+	testSkipVlogCheckpointKick         bool
+	testSkipCheckpointAutoVacuum       bool
 }
 
 const (
