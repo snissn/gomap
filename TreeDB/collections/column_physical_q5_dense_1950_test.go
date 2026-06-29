@@ -165,6 +165,33 @@ func TestColumnTypedColumnDenseInt64SpanGlobalCodesFallbackUnsorted3175(t *testi
 	assertColumnTypedColumnDenseInt64SpanGlobalCodes3175(t, parts, wantDictionary, wantRanks)
 }
 
+func TestColumnTypedColumnDenseInt64SpanGlobalCodesFallbackManyParts3175(t *testing.T) {
+	parts := make([]columnTypedColumnPhysicalQueryPart, columnTypedColumnDenseInt64SpanSortedMergeMaxParts+1)
+	wantDictionary := make([]string, len(parts))
+	wantRanks := make([][]uint32, len(parts))
+	for partIdx := range parts {
+		value := fmt.Sprintf("did:%03d", partIdx)
+		parts[partIdx].DenseInt64Span = &columnTypedColumnDenseInt64SpanPart{
+			Cardinality: 1,
+			Dictionary:  []string{value},
+		}
+		wantDictionary[partIdx] = value
+		wantRanks[partIdx] = []uint32{uint32(partIdx)}
+	}
+
+	ok, err := prepareColumnTypedColumnDenseInt64SpanSortedGlobalCodes(parts)
+	if err != nil {
+		t.Fatalf("prepare sorted global codes: %v", err)
+	}
+	if ok {
+		t.Fatal("sorted global codes accepted more than the capped number of parts")
+	}
+	if err := prepareColumnTypedColumnDenseInt64SpanGlobalCodes(parts); err != nil {
+		t.Fatalf("prepare fallback global codes: %v", err)
+	}
+	assertColumnTypedColumnDenseInt64SpanGlobalCodes3175(t, parts, wantDictionary, wantRanks)
+}
+
 func assertColumnTypedColumnDenseInt64SpanGlobalCodes3175(tb testing.TB, parts []columnTypedColumnPhysicalQueryPart, wantDictionary []string, wantRanks [][]uint32) {
 	tb.Helper()
 	if len(parts) != len(wantRanks) {

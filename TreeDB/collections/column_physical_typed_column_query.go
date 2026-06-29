@@ -16,6 +16,7 @@ import (
 const (
 	columnTypedColumnDenseGroupCountDistinctMaxBitsetWords      = 2 << 20
 	columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts = 32
+	columnTypedColumnDenseInt64SpanSortedMergeMaxParts          = 32
 )
 
 const (
@@ -1593,6 +1594,9 @@ func prepareColumnTypedColumnDenseInt64SpanGlobalCodes(parts []columnTypedColumn
 }
 
 func prepareColumnTypedColumnDenseInt64SpanSortedGlobalCodes(parts []columnTypedColumnPhysicalQueryPart) (bool, error) {
+	if len(parts) > columnTypedColumnDenseInt64SpanSortedMergeMaxParts {
+		return false, nil
+	}
 	capacity, ok, err := columnTypedColumnDenseInt64SpanSortedDictionaryCapacity(parts)
 	if err != nil || !ok {
 		return ok, err
