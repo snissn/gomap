@@ -66,6 +66,9 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishAssetAppendFileClose += src.ColumnPublishAssetAppendFileClose
 	dst.ColumnPublishAssetAppendDirSync += src.ColumnPublishAssetAppendDirSync
 	dst.ColumnPublishAssetAppendCleanup += src.ColumnPublishAssetAppendCleanup
+	dst.ColumnPublishAssetAppenderCloseCount += src.ColumnPublishAssetAppenderCloseCount
+	dst.ColumnPublishAssetAppendFileSyncCount += src.ColumnPublishAssetAppendFileSyncCount
+	dst.ColumnPublishAssetSyncEpochCount += src.ColumnPublishAssetSyncEpochCount
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -155,6 +158,15 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	}
 	if stats.ColumnPublishManifestBytes > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishManifestBytes)/float64(docs), "column_publish_manifest_bytes/doc")
+	}
+	if stats.ColumnPublishAssetAppenderCloseCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishAssetAppenderCloseCount)/float64(batches), "column_publish_asset_appender_closes/batch")
+	}
+	if stats.ColumnPublishAssetAppendFileSyncCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishAssetAppendFileSyncCount)/float64(batches), "column_publish_asset_file_syncs/batch")
+	}
+	if stats.ColumnPublishAssetSyncEpochCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishAssetSyncEpochCount)/float64(batches), "column_publish_asset_sync_epochs/batch")
 	}
 	if stats.RetainedPayloadValueLogValues > 0 {
 		b.ReportMetric(float64(stats.RetainedPayloadValueLogValues)/float64(docs), "retained_payload_vlog_values/doc")

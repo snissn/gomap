@@ -152,6 +152,71 @@ func TestCollectionCatalogEOFInsertBatchPostCommitReturnsCommitAmbiguous(t *test
 	}
 }
 
+func TestCollectionCatalogRootEOFInsertBatchPostCommitReturnsCommitAmbiguous(t *testing.T) {
+	d, col := newCatalogFaultTestCollection(t, CollectionMeta{
+		Name: "users",
+		VectorIndexes: []VectorIndexDefinition{{
+			Name:       "embedding",
+			Field:      "embedding",
+			Metric:     VectorMetricCosine,
+			Dimensions: 2,
+		}},
+	})
+	baseCommitSeq, baseSystemRoot := dbCommitSeqAndSystemRoot(d)
+
+	var faults atomic.Int32
+	var faultCommitSeq atomic.Uint64
+	var faultSystemRoot atomic.Uint64
+	restore := setTestCollectionCatalogLoadHookForTest(func(ctx collectionCatalogLoadFaultContext) error {
+		if ctx.Collection == "users" &&
+			ctx.Stage == collectionCatalogLoadFaultRoot &&
+			ctx.RootName == collectionPrimaryRootName("users") &&
+			ctx.CommitSeq > baseCommitSeq &&
+			ctx.SystemRoot != 0 &&
+			ctx.SystemRoot != baseSystemRoot &&
+			faults.CompareAndSwap(0, 1) {
+			faultCommitSeq.Store(ctx.CommitSeq)
+			faultSystemRoot.Store(ctx.SystemRoot)
+			return io.ErrUnexpectedEOF
+		}
+		return nil
+	})
+	doc := []byte(`{"name":"ada","embedding":[0.1,0.2]}`)
+	ids, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{doc},
+	)
+	restore()
+	if !errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("InsertBatch err=%v want ErrCommitAmbiguous", err)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("InsertBatch err=%v want unexpected EOF cause", err)
+	}
+	if !strings.Contains(err.Error(), `collections: load catalog "users" root "users/primary"`) {
+		t.Fatalf("InsertBatch err=%q missing committed root context", err)
+	}
+	if got := faults.Load(); got != 1 {
+		t.Fatalf("post-commit root fault count=%d want 1", got)
+	}
+	if got := faultCommitSeq.Load(); got <= baseCommitSeq {
+		t.Fatalf("fault commit seq=%d want > base %d", got, baseCommitSeq)
+	}
+	if got := faultSystemRoot.Load(); got == 0 || got == baseSystemRoot {
+		t.Fatalf("fault system root=%d want non-zero and different from base %d", got, baseSystemRoot)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids=%q want [u1]", ids)
+	}
+	got, getErr := col.Get([]byte("u1"))
+	if getErr != nil {
+		t.Fatalf("Get(u1): %v", getErr)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("document=%q want %q", got, doc)
+	}
+}
+
 func newCatalogFaultTestCollection(t *testing.T, meta CollectionMeta) (*backenddb.DB, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})

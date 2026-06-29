@@ -551,6 +551,9 @@ type CollectionInsertStats struct {
 	ColumnPublishAssetAppendFileClose     time.Duration
 	ColumnPublishAssetAppendDirSync       time.Duration
 	ColumnPublishAssetAppendCleanup       time.Duration
+	ColumnPublishAssetAppenderCloseCount  int
+	ColumnPublishAssetAppendFileSyncCount int
+	ColumnPublishAssetSyncEpochCount      int
 	ColumnPublishManifestEncode           time.Duration
 	ColumnPublishAssetClosureValidation   time.Duration
 	ColumnPublishRootDeltaConstruction    time.Duration

@@ -254,6 +254,9 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishAssetAppendFileCloseMS       float64 `json:"column_publish_asset_append_file_close_duration_ms"`
 	ColumnPublishAssetAppendDirSyncMS         float64 `json:"column_publish_asset_append_dir_sync_duration_ms"`
 	ColumnPublishAssetAppendCleanupMS         float64 `json:"column_publish_asset_append_cleanup_duration_ms"`
+	ColumnPublishAssetAppenderCloseCount      int     `json:"column_publish_asset_appender_close_count,omitempty"`
+	ColumnPublishAssetAppendFileSyncCount     int     `json:"column_publish_asset_append_file_sync_count,omitempty"`
+	ColumnPublishAssetSyncEpochCount          int     `json:"column_publish_asset_sync_epoch_count,omitempty"`
 	ColumnPublishManifestEncodeDurationMS     float64 `json:"column_publish_manifest_encode_duration_ms,omitempty"`
 	ColumnPublishAssetClosureDurationMS       float64 `json:"column_publish_asset_closure_validation_duration_ms,omitempty"`
 	ColumnPublishRootDeltaDurationMS          float64 `json:"column_publish_root_delta_construction_duration_ms,omitempty"`
@@ -1564,6 +1567,9 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishAssetAppendFileClose += src.ColumnPublishAssetAppendFileClose
 	dst.ColumnPublishAssetAppendDirSync += src.ColumnPublishAssetAppendDirSync
 	dst.ColumnPublishAssetAppendCleanup += src.ColumnPublishAssetAppendCleanup
+	dst.ColumnPublishAssetAppenderCloseCount += src.ColumnPublishAssetAppenderCloseCount
+	dst.ColumnPublishAssetAppendFileSyncCount += src.ColumnPublishAssetAppendFileSyncCount
+	dst.ColumnPublishAssetSyncEpochCount += src.ColumnPublishAssetSyncEpochCount
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -1647,6 +1653,9 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishAssetAppendFileCloseMS:       durationMS(stats.ColumnPublishAssetAppendFileClose),
 		ColumnPublishAssetAppendDirSyncMS:         durationMS(stats.ColumnPublishAssetAppendDirSync),
 		ColumnPublishAssetAppendCleanupMS:         durationMS(stats.ColumnPublishAssetAppendCleanup),
+		ColumnPublishAssetAppenderCloseCount:      stats.ColumnPublishAssetAppenderCloseCount,
+		ColumnPublishAssetAppendFileSyncCount:     stats.ColumnPublishAssetAppendFileSyncCount,
+		ColumnPublishAssetSyncEpochCount:          stats.ColumnPublishAssetSyncEpochCount,
 		ColumnPublishManifestEncodeDurationMS:     durationMS(stats.ColumnPublishManifestEncode),
 		ColumnPublishAssetClosureDurationMS:       durationMS(stats.ColumnPublishAssetClosureValidation),
 		ColumnPublishRootDeltaDurationMS:          durationMS(stats.ColumnPublishRootDeltaConstruction),
@@ -4621,6 +4630,9 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("- column_publish_int64_sidecar_bytes: %d\n", stats.ColumnPublishInt64Bytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_aggregate_metadata_bytes: %d\n", stats.ColumnPublishAggregateMetadataBytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_shared_asset_append_bytes: %d\n", stats.ColumnPublishSharedAppendBytes))
+	sb.WriteString(fmt.Sprintf("- column_publish_asset_appender_close_count: %d\n", stats.ColumnPublishAssetAppenderCloseCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_asset_append_file_sync_count: %d\n", stats.ColumnPublishAssetAppendFileSyncCount))
+	sb.WriteString(fmt.Sprintf("- column_publish_asset_sync_epoch_count: %d\n", stats.ColumnPublishAssetSyncEpochCount))
 	sb.WriteString(fmt.Sprintf("- column_publish_required_asset_bytes: %d\n", stats.ColumnPublishRequiredAssetBytes))
 	sb.WriteString(fmt.Sprintf("- column_publish_manifest_bytes: %d\n\n", stats.ColumnPublishManifestBytes))
 

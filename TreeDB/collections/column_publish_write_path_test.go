@@ -1488,10 +1488,106 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	if prepared.AssetMetrics.SharedAppendCount != len(want) {
 		t.Fatalf("shared append count=%d want %d", prepared.AssetMetrics.SharedAppendCount, len(want))
 	}
+	if prepared.AssetMetrics.SharedAppendCloseCount != 1 {
+		t.Fatalf("shared append close count=%d want 1", prepared.AssetMetrics.SharedAppendCloseCount)
+	}
+	if prepared.AssetMetrics.SharedAppendFileSyncCount != 1 {
+		t.Fatalf("shared append file sync count=%d want 1", prepared.AssetMetrics.SharedAppendFileSyncCount)
+	}
+	if prepared.AssetMetrics.SharedAppendSyncEpochCount != 1 {
+		t.Fatalf("shared append sync epoch count=%d want 1", prepared.AssetMetrics.SharedAppendSyncEpochCount)
+	}
 	if prepared.AssetMetrics.RowAssetCount != 1 || prepared.AssetMetrics.TypedColumnPartCount != 1 ||
 		prepared.AssetMetrics.DictionarySidecarCount != 1 || prepared.AssetMetrics.Int64SidecarCount != 1 ||
 		prepared.AssetMetrics.AggregateMetadataCount != 2 {
 		t.Fatalf("asset metrics=%+v want row=1 typed=1 dict=1 int64=1 aggregate=2", prepared.AssetMetrics)
+	}
+}
+
+func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			{Name: "score", Path: "score", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart, FixedWidthEncoding: ColumnFixedWidthEncodingLittleEndian},
+		},
+		SortKey: []ColumnSortKey{{Column: "score"}},
+	})
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	if !columnStoreConfigNeedsDirectViewTypedColumnAlignment(*cfg) {
+		t.Fatal("test config does not use direct-view typed-column alignment")
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := &Collection{db: d}
+	rows := []columnDeclaredRow{
+		{ID: []byte("e1"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 10},
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+		}},
+		{ID: []byte("e2"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 20},
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 2},
+		}},
+	}
+	prepared, err := col.prepareColumnPhysicalAssetRowsForCommand(ColumnPublishPreparedAssets{}, columnWritePublishInput{
+		meta:      CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}},
+		operation: ColumnPublishOperationInsert,
+		rows:      len(rows),
+	}, ColumnPublishAssetPrepareInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 77,
+	}, rows)
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalAssetRowsForCommand: %v", err)
+	}
+	directFileID, err := directViewTypedColumnSegmentFileID(1)
+	if err != nil {
+		t.Fatalf("directViewTypedColumnSegmentFileID: %v", err)
+	}
+	var sawRowAsset bool
+	var sawDirectTypedColumn bool
+	for _, asset := range prepared.Assets {
+		switch {
+		case asset.Ref.Kind == ColumnAssetKindTCS1PartImage && asset.Ref.PartID == columnPhysicalRowAssetPartID:
+			sawRowAsset = true
+			if asset.Ref.FileID != columnAssetM12ASegmentFileID {
+				t.Fatalf("row asset ref=%+v want shared segment file_id=%d", asset.Ref, columnAssetM12ASegmentFileID)
+			}
+		case asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart && asset.Ref.PartID == typedColumnPartAssetPartID:
+			sawDirectTypedColumn = true
+			if asset.Ref.FileID != directFileID {
+				t.Fatalf("typed-column ref=%+v want direct-view file_id=%d", asset.Ref, directFileID)
+			}
+			if asset.Ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
+				t.Fatalf("typed-column offset=%d want %d-byte alignment", asset.Ref.Offset, typedColumnPartDirectViewAssetAlignment)
+			}
+		}
+	}
+	if !sawRowAsset || !sawDirectTypedColumn {
+		t.Fatalf("prepared assets missing row=%t direct typed=%t: %+v", sawRowAsset, sawDirectTypedColumn, prepared.Assets)
+	}
+	if prepared.AssetMetrics.SharedAppendCount != 2 {
+		t.Fatalf("shared append count=%d want 2", prepared.AssetMetrics.SharedAppendCount)
+	}
+	if prepared.AssetMetrics.SharedAppendCloseCount != 1 {
+		t.Fatalf("shared append close count=%d want 1", prepared.AssetMetrics.SharedAppendCloseCount)
+	}
+	if prepared.AssetMetrics.SharedAppendFileSyncCount != 2 {
+		t.Fatalf("shared append file sync count=%d want 2", prepared.AssetMetrics.SharedAppendFileSyncCount)
+	}
+	if prepared.AssetMetrics.SharedAppendSyncEpochCount != 2 {
+		t.Fatalf("shared append sync epoch count=%d want 2", prepared.AssetMetrics.SharedAppendSyncEpochCount)
+	}
+	if prepared.AssetMetrics.RowAssetCount != 1 || prepared.AssetMetrics.TypedColumnPartCount != 1 {
+		t.Fatalf("asset metrics=%+v want row=1 typed=1", prepared.AssetMetrics)
 	}
 }
 
@@ -1693,6 +1789,11 @@ func TestRecordColumnPublishPlanStatsIncludesDocumentExtractionM10B(t *testing.T
 		Rows:    2,
 		StageMetrics: ColumnPublishStageMetrics{
 			DocumentExtraction: documentExtraction,
+			AssetMetrics: ColumnPublishAssetPreparationMetrics{
+				SharedAppendCloseCount:     3,
+				SharedAppendFileSyncCount:  2,
+				SharedAppendSyncEpochCount: 1,
+			},
 		},
 	})
 	if stats.ColumnPublishDocumentExtraction != documentExtraction {
@@ -1700,6 +1801,15 @@ func TestRecordColumnPublishPlanStatsIncludesDocumentExtractionM10B(t *testing.T
 	}
 	if stats.ColumnPublishDeclaredColumnEncoding != 0 {
 		t.Fatalf("declared column encoding=%s want 0", stats.ColumnPublishDeclaredColumnEncoding)
+	}
+	if stats.ColumnPublishAssetAppenderCloseCount != 3 {
+		t.Fatalf("asset appender close count=%d want 3", stats.ColumnPublishAssetAppenderCloseCount)
+	}
+	if stats.ColumnPublishAssetAppendFileSyncCount != 2 {
+		t.Fatalf("asset append file sync count=%d want 2", stats.ColumnPublishAssetAppendFileSyncCount)
+	}
+	if stats.ColumnPublishAssetSyncEpochCount != 1 {
+		t.Fatalf("asset sync epoch count=%d want 1", stats.ColumnPublishAssetSyncEpochCount)
 	}
 }
 
