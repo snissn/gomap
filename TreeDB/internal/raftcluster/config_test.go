@@ -2,6 +2,7 @@ package raftcluster
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -70,6 +71,16 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			name: "cluster dir inside value vlog",
 			mut: func(cfg *Config) {
 				cfg.ClusterDir = ValueLogDir(cfg.Dir) + "/raft"
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "cluster dir inside command wal with mixed path forms",
+			mut: func(cfg *Config) {
+				cwd := t.TempDir()
+				t.Chdir(cwd)
+				cfg.Dir = "./db"
+				cfg.ClusterDir = filepath.Join(cwd, "db", "maindb", "wal", "raft")
 			},
 			want: ErrInvalidStoragePath,
 		},

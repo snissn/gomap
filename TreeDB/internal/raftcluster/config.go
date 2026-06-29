@@ -326,6 +326,10 @@ func cleanStorageRoot(dir, clusterDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	clusterDirAbs, err := absCleanStoragePath("cluster dir", clusterDir)
+	if err != nil {
+		return "", err
+	}
 	reserved := []string{
 		MainDBDir(dir),
 		CommandWALDir(dir),
@@ -333,11 +337,23 @@ func cleanStorageRoot(dir, clusterDir string) (string, error) {
 		LeafLogDir(dir),
 	}
 	for _, path := range reserved {
-		if sameOrUnder(clusterDir, path) || sameOrUnder(path, clusterDir) {
+		reservedAbs, err := absCleanStoragePath("reserved TreeDB path", path)
+		if err != nil {
+			return "", err
+		}
+		if sameOrUnder(clusterDirAbs, reservedAbs) || sameOrUnder(reservedAbs, clusterDirAbs) {
 			return "", errors.Join(ErrInvalidConfig, ErrInvalidStoragePath, fmt.Errorf("cluster dir %q overlaps reserved TreeDB path %q", clusterDir, path))
 		}
 	}
 	return clusterDir, nil
+}
+
+func absCleanStoragePath(label, p string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(p))
+	if err != nil {
+		return "", errors.Join(ErrInvalidConfig, ErrInvalidStoragePath, fmt.Errorf("%s %q cannot be made absolute: %w", label, p, err))
+	}
+	return abs, nil
 }
 
 func sameOrUnder(path, root string) bool {
