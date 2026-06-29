@@ -77,7 +77,7 @@ func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, en
 	if actualAck == 0 {
 		actualAck = iwire.AckVisible
 	}
-	responseSections := mongoClusterFakeResponseSections(decoded.Decoded)
+	responseSections := mongoClusterFakeResponseSections(decoded.Decoded, actualAck)
 	if f.overrideResponseSections {
 		responseSections = append([]iwire.Section(nil), f.responseSections...)
 	}
@@ -94,25 +94,29 @@ func (f *mongoClusterFakeSubmitter) snapshotCalls() []mongoClusterSubmitterCall 
 	return append([]mongoClusterSubmitterCall(nil), f.calls...)
 }
 
-func mongoClusterFakeResponseSections(entry iwire.DeterministicEntry) []iwire.Section {
+func mongoClusterFakeResponseSections(entry iwire.DeterministicEntry, actualAck iwire.AckPolicy) []iwire.Section {
 	ids := mongoClusterTestIDs(entry.Sections)
 	switch entry.CommandID {
 	case iwire.CommandInsertBatch:
-		return []iwire.Section{mongoClusterTestMeta("inserted_count", len(ids))}
+		return []iwire.Section{mongoClusterTestMetaWithAck(actualAck, "inserted_count", len(ids))}
 	case iwire.CommandUpdateBSONSet:
-		return []iwire.Section{mongoClusterTestMeta("matched_count", 1, "modified_count", 1)}
+		return []iwire.Section{mongoClusterTestMetaWithAck(actualAck, "matched_count", 1, "modified_count", 1)}
 	case iwire.CommandDeleteBatch:
-		return []iwire.Section{mongoClusterTestMeta("deleted_count", len(ids))}
+		return []iwire.Section{mongoClusterTestMetaWithAck(actualAck, "deleted_count", len(ids))}
 	default:
-		return []iwire.Section{mongoClusterTestMeta()}
+		return []iwire.Section{mongoClusterTestMetaWithAck(actualAck)}
 	}
 }
 
 func mongoClusterTestMeta(counts ...any) iwire.Section {
+	return mongoClusterTestMetaWithAck(iwire.AckVisible, counts...)
+}
+
+func mongoClusterTestMetaWithAck(actualAck iwire.AckPolicy, counts ...any) iwire.Section {
 	values := []struct {
 		key   string
 		value string
-	}{{key: "actual_ack_policy", value: "1"}}
+	}{{key: "actual_ack_policy", value: fmt.Sprint(actualAck)}}
 	for i := 0; i+1 < len(counts); i += 2 {
 		values = append(values, struct {
 			key   string
@@ -212,6 +216,13 @@ func mongoClusterCallIdempotencyKey(tb testing.TB, call mongoClusterSubmitterCal
 	return string(call.entry.IdempotencyKey)
 }
 
+func assertMongoClusterCallAckPolicy(tb testing.TB, call mongoClusterSubmitterCall, want iwire.AckPolicy) {
+	tb.Helper()
+	if call.metadata.AckPolicy != want {
+		tb.Fatalf("metadata ack policy=%d want %d", call.metadata.AckPolicy, want)
+	}
+}
+
 func TestClusterAdmissionMongoLeaderRoutesThroughSubmitter(t *testing.T) {
 	submitter := &mongoClusterAdmissionSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
@@ -238,6 +249,8 @@ func TestClusterAdmissionMongoLeaderRoutesThroughSubmitter(t *testing.T) {
 	if got := calls[1].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
 		t.Fatalf("second command id=%d want insert_batch", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
+	assertMongoClusterCallAckPolicy(t, calls[1], iwire.AckVisible)
 }
 
 func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testing.T) {
@@ -266,7 +279,7 @@ func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testin
 		{Key: "create", Value: "admins"},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, createResponse, "BadValue")
+	assertCommandError(t, createResponse, "NotWritablePrimary")
 	assertErrmsgContains(t, createResponse, "node-a:27017")
 	if _, err := server.Collections.OpenCollection("app.admins"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection app.admins err=%v want collection not found", err)
@@ -277,7 +290,7 @@ func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testin
 		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, insertResponse, "BadValue")
+	assertCommandError(t, insertResponse, "NotWritablePrimary")
 	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
 
 	updateResponse := serveCommand(t, server, 326805, bson.D{
@@ -288,7 +301,7 @@ func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testin
 		}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, updateResponse, "BadValue")
+	assertCommandError(t, updateResponse, "NotWritablePrimary")
 	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
 
 	deleteResponse := serveCommand(t, server, 326806, bson.D{
@@ -296,7 +309,7 @@ func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testin
 		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, deleteResponse, "BadValue")
+	assertCommandError(t, deleteResponse, "NotWritablePrimary")
 	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
 	if calls := submitter.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("submit calls=%d want 0", len(calls))
@@ -327,7 +340,7 @@ func TestClusterAdmissionMongoFollowerRejectsMissingCollectionNoOps(t *testing.T
 		}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, updateResponse, "BadValue")
+	assertCommandError(t, updateResponse, "NotWritablePrimary")
 	assertErrmsgContains(t, updateResponse, "node-a:27017")
 
 	deleteResponse := serveCommand(t, server, 326809, bson.D{
@@ -335,7 +348,7 @@ func TestClusterAdmissionMongoFollowerRejectsMissingCollectionNoOps(t *testing.T
 		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, deleteResponse, "BadValue")
+	assertCommandError(t, deleteResponse, "NotWritablePrimary")
 	assertErrmsgContains(t, deleteResponse, "node-a:27017")
 	if calls := submitter.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("submit calls=%d want 0", len(calls))
@@ -358,10 +371,58 @@ func TestClusterAdmissionMongoUnavailableRejectsBeforeSubmit(t *testing.T) {
 		{Key: "create", Value: "users"},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, response, "BadValue")
+	assertCommandError(t, response, "ShutdownInProgress")
 	assertErrmsgContains(t, response, "cluster admission unavailable")
 	if calls := submitter.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterHelloReflectsAdmissionWritablePrimary(t *testing.T) {
+	tests := []struct {
+		name                string
+		submitter           treenativewire.ClusterSubmitter
+		wantWritablePrimary bool
+	}{
+		{
+			name: "leader",
+			submitter: &mongoClusterAdmissionSubmitter{
+				mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+				status:                    treenativewire.ClusterLeaderAdmission(),
+			},
+			wantWritablePrimary: true,
+		},
+		{
+			name: "follower",
+			submitter: &mongoClusterAdmissionSubmitter{
+				mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+				status:                    treenativewire.ClusterFollowerAdmission("node-a:27017", "not leader"),
+			},
+		},
+		{
+			name: "unavailable",
+			submitter: &mongoClusterAdmissionSubmitter{
+				mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+				status:                    treenativewire.ClusterUnavailableAdmission("cluster unavailable"),
+			},
+		},
+		{
+			name:      "admission error",
+			submitter: &mongoClusterFakeSubmitter{admissionErr: errors.New("admission check failed")},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewServer()
+			server.ClusterSubmitter = tc.submitter
+			response := serveCommand(t, server, 326810, bson.D{
+				{Key: "hello", Value: int32(1)},
+				{Key: "$db", Value: "admin"},
+			})
+			assertOK(t, response)
+			assertBool(t, response, "isWritablePrimary", tc.wantWritablePrimary)
+			assertBool(t, response, "ismaster", tc.wantWritablePrimary)
+		})
 	}
 }
 
@@ -422,6 +483,8 @@ func TestClusterSubmitterInsertRoutesCommandEntryNoLocalMutation(t *testing.T) {
 	if got := mongoClusterCallCatalogVersion(t, calls[1]); got != 7 {
 		t.Fatalf("insert expected catalog version=%d want 7", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
+	assertMongoClusterCallAckPolicy(t, calls[1], iwire.AckVisible)
 	if _, err := server.Collections.OpenCollection("app.users"); err == nil {
 		t.Fatal("cluster insert created local collection")
 	} else if err != collections.ErrCollectionNotFound {
@@ -459,6 +522,7 @@ func TestClusterSubmitterInsertSkipsAutoCreateForKnownLocalCollection(t *testing
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
 		t.Fatalf("command id=%d want insert_batch", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
 func TestClusterSubmitterIdempotencyKeysIncludeServerNonce(t *testing.T) {
@@ -538,6 +602,7 @@ func TestClusterSubmitterUpdateBSONSetRoutesCountsAndNoLocalMutation(t *testing.
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
 		t.Fatalf("command id=%d want update_bson_set", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 	found := serveCommand(t, server, 325804, bson.D{
 		{Key: "find", Value: "users"},
 		{Key: "filter", Value: bson.D{{Key: "_id", Value: "u1"}}},
@@ -581,6 +646,7 @@ func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupported(t *test
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
 		t.Fatalf("command id=%d want update_bson_set", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
 func TestClusterSubmitterUpdateMissingCollectionReturnsZeroCounts(t *testing.T) {
@@ -634,6 +700,7 @@ func TestClusterSubmitterDeleteRoutesCommandEntry(t *testing.T) {
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandDeleteBatch {
 		t.Fatalf("command id=%d want delete_batch", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 }
 
 func TestClusterSubmitterDeleteDeduplicatesDuplicateIDs(t *testing.T) {
@@ -686,6 +753,7 @@ func TestClusterSubmitterDeleteSubmitsPriorOrderedItemsBeforeUnsupported(t *test
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandDeleteBatch {
 		t.Fatalf("command id=%d want delete_batch", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
 	if len(ids) != 1 {
 		t.Fatalf("document ids=%d want 1", len(ids))
@@ -718,21 +786,271 @@ func TestClusterSubmitterDeleteMissingCollectionReturnsZeroCount(t *testing.T) {
 	}
 }
 
-func TestClusterSubmitterRejectsWriteConcern(t *testing.T) {
-	submitter := &mongoClusterFakeSubmitter{}
-	server := NewServer()
-	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	setMongoClusterTestSubmitter(server, submitter, 10)
+func TestClusterSubmitterWriteConcernAccepted(t *testing.T) {
+	tests := []struct {
+		name                 string
+		writeConcern         any
+		actualAck            iwire.AckPolicy
+		committedRecoverable bool
+		wantAck              iwire.AckPolicy
+	}{
+		{name: "absent", wantAck: iwire.AckVisible},
+		{name: "default document", writeConcern: bson.D{}, wantAck: iwire.AckVisible},
+		{name: "w one", writeConcern: bson.D{{Key: "w", Value: int32(1)}}, wantAck: iwire.AckVisible},
+		{name: "majority", writeConcern: bson.D{{Key: "w", Value: "majority"}}, actualAck: iwire.AckRaftCommitted, committedRecoverable: true, wantAck: iwire.AckRaftCommitted},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			submitter := &mongoClusterFakeSubmitter{
+				actualAck:            tc.actualAck,
+				committedRecoverable: tc.committedRecoverable,
+			}
+			server := NewServer()
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+			setMongoClusterTestSubmitter(server, submitter, 10)
 
-	response := serveCommand(t, server, 325806, bson.D{
-		{Key: "insert", Value: "users"},
-		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
-		{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
-		{Key: "$db", Value: "app"},
+			command := bson.D{
+				{Key: "create", Value: "users"},
+				{Key: "$db", Value: "app"},
+			}
+			if tc.writeConcern != nil {
+				command = append(command, bson.E{Key: "writeConcern", Value: tc.writeConcern})
+			}
+			response := serveCommand(t, server, 325806, command)
+			assertOK(t, response)
+			calls := submitter.snapshotCalls()
+			if len(calls) != 1 {
+				t.Fatalf("submit calls=%d want 1", len(calls))
+			}
+			assertMongoClusterCallAckPolicy(t, calls[0], tc.wantAck)
+		})
+	}
+}
+
+func TestClusterSubmitterRejectsUnsupportedWriteConcernBeforeSubmitOrLocalMutation(t *testing.T) {
+	tests := []struct {
+		name         string
+		writeConcern any
+		extraFields  bson.D
+	}{
+		{name: "writeConcern not document", writeConcern: "majority"},
+		{name: "journaling", writeConcern: bson.D{{Key: "j", Value: true}}},
+		{name: "wtimeout", writeConcern: bson.D{{Key: "wtimeout", Value: int32(1)}}},
+		{name: "wtimeoutMS", writeConcern: bson.D{{Key: "wtimeoutMS", Value: int32(1)}}},
+		{name: "unacknowledged", writeConcern: bson.D{{Key: "w", Value: int32(0)}}},
+		{name: "numeric greater than one", writeConcern: bson.D{{Key: "w", Value: int32(2)}}},
+		{name: "tag string", writeConcern: bson.D{{Key: "w", Value: "rack-a"}}},
+		{name: "malformed w type", writeConcern: bson.D{{Key: "w", Value: true}}},
+		{name: "unknown option", writeConcern: bson.D{{Key: "fsync", Value: true}}},
+		{name: "retryable write marker", extraFields: bson.D{{Key: "txnNumber", Value: int64(1)}}},
+		{name: "transaction start marker", extraFields: bson.D{{Key: "startTransaction", Value: true}}},
+		{name: "transaction autocommit marker", extraFields: bson.D{{Key: "autocommit", Value: false}}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("open db: %v", err)
+			}
+			defer func() { _ = db.Close() }()
+
+			server := NewServer()
+			server.Collections = collections.NewCollectionManager(db)
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+			assertOK(t, serveCommand(t, server, 325806, bson.D{
+				{Key: "insert", Value: "users"},
+				{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+				{Key: "$db", Value: "app"},
+			}))
+
+			submitter := &mongoClusterFakeSubmitter{}
+			setMongoClusterTestSubmitter(server, submitter, 10)
+			command := bson.D{
+				{Key: "insert", Value: "users"},
+				{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}}}},
+				{Key: "$db", Value: "app"},
+			}
+			if tc.writeConcern != nil {
+				command = append(command, bson.E{Key: "writeConcern", Value: tc.writeConcern})
+			}
+			command = append(command, tc.extraFields...)
+			response := serveCommand(t, server, 325807, command)
+			assertCommandError(t, response, "BadValue")
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+			assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
+		})
+	}
+}
+
+func TestClusterSubmitterMajorityWriteConcernRoutesAckPolicy(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		submitter := &mongoClusterFakeSubmitter{actualAck: iwire.AckRaftCommitted, committedRecoverable: true}
+		server := NewServer()
+		server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+		setMongoClusterTestSubmitter(server, submitter, 25)
+
+		response := serveCommand(t, server, 325825, bson.D{
+			{Key: "create", Value: "users"},
+			{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertOK(t, response)
+		calls := submitter.snapshotCalls()
+		if len(calls) != 1 {
+			t.Fatalf("submit calls=%d want 1", len(calls))
+		}
+		if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandCreateCollection {
+			t.Fatalf("command id=%d want create_collection", got)
+		}
+		assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckRaftCommitted)
 	})
-	assertCommandError(t, response, "BadValue")
-	if calls := submitter.snapshotCalls(); len(calls) != 0 {
-		t.Fatalf("submit calls=%d want 0", len(calls))
+
+	t.Run("insert", func(t *testing.T) {
+		submitter := &mongoClusterFakeSubmitter{actualAck: iwire.AckRaftCommitted, committedRecoverable: true}
+		server := NewServer()
+		server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+		setMongoClusterTestSubmitter(server, submitter, 26)
+
+		response := serveCommand(t, server, 325826, bson.D{
+			{Key: "insert", Value: "users"},
+			{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+			{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertOK(t, response)
+		assertInt32(t, response, "n", 1)
+		calls := submitter.snapshotCalls()
+		if len(calls) != 2 {
+			t.Fatalf("submit calls=%d want create+insert", len(calls))
+		}
+		if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandCreateCollection {
+			t.Fatalf("first command id=%d want create_collection", got)
+		}
+		if got := calls[1].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
+			t.Fatalf("second command id=%d want insert_batch", got)
+		}
+		assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckRaftCommitted)
+		assertMongoClusterCallAckPolicy(t, calls[1], iwire.AckRaftCommitted)
+	})
+
+	t.Run("update", func(t *testing.T) {
+		db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		server := NewServer()
+		server.Collections = collections.NewCollectionManager(db)
+		server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+		assertOK(t, serveCommand(t, server, 325827, bson.D{
+			{Key: "insert", Value: "users"},
+			{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+			{Key: "$db", Value: "app"},
+		}))
+
+		submitter := &mongoClusterFakeSubmitter{actualAck: iwire.AckRaftCommitted, committedRecoverable: true}
+		setMongoClusterTestSubmitter(server, submitter, 27)
+		response := serveCommand(t, server, 325828, bson.D{
+			{Key: "update", Value: "users"},
+			{Key: "updates", Value: bson.A{bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+			}}},
+			{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertOK(t, response)
+		assertInt32(t, response, "n", 1)
+		assertInt32(t, response, "nModified", 1)
+		calls := submitter.snapshotCalls()
+		if len(calls) != 1 {
+			t.Fatalf("submit calls=%d want 1", len(calls))
+		}
+		if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
+			t.Fatalf("command id=%d want update_bson_set", got)
+		}
+		assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckRaftCommitted)
+		assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		server := NewServer()
+		server.Collections = collections.NewCollectionManager(db)
+		server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+		assertOK(t, serveCommand(t, server, 325829, bson.D{
+			{Key: "insert", Value: "users"},
+			{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+			{Key: "$db", Value: "app"},
+		}))
+
+		submitter := &mongoClusterFakeSubmitter{actualAck: iwire.AckRaftCommitted, committedRecoverable: true}
+		setMongoClusterTestSubmitter(server, submitter, 28)
+		response := serveCommand(t, server, 325830, bson.D{
+			{Key: "delete", Value: "users"},
+			{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+			{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertOK(t, response)
+		assertInt32(t, response, "n", 1)
+		calls := submitter.snapshotCalls()
+		if len(calls) != 1 {
+			t.Fatalf("submit calls=%d want 1", len(calls))
+		}
+		if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandDeleteBatch {
+			t.Fatalf("command id=%d want delete_batch", got)
+		}
+		assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckRaftCommitted)
+		assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
+	})
+}
+
+func TestClusterSubmitterMajorityWriteConcernRequiresRaftCommittedProof(t *testing.T) {
+	tests := []struct {
+		name                 string
+		actualAck            iwire.AckPolicy
+		committedRecoverable bool
+		wantOK               bool
+	}{
+		{name: "raft committed recoverable", actualAck: iwire.AckRaftCommitted, committedRecoverable: true, wantOK: true},
+		{name: "visible ack", actualAck: iwire.AckVisible, committedRecoverable: true},
+		{name: "missing recoverability", actualAck: iwire.AckRaftCommitted},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			submitter := &mongoClusterFakeSubmitter{
+				actualAck:            tc.actualAck,
+				committedRecoverable: tc.committedRecoverable,
+			}
+			server := NewServer()
+			server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+			setMongoClusterTestSubmitter(server, submitter, 29)
+
+			response := serveCommand(t, server, 325831, bson.D{
+				{Key: "create", Value: "users"},
+				{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+				{Key: "$db", Value: "app"},
+			})
+			if tc.wantOK {
+				assertOK(t, response)
+			} else {
+				assertCommandError(t, response, "WriteConcernFailed")
+			}
+			calls := submitter.snapshotCalls()
+			if len(calls) != 1 {
+				t.Fatalf("submit calls=%d want 1", len(calls))
+			}
+			assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckRaftCommitted)
+		})
 	}
 }
 
@@ -843,6 +1161,7 @@ func TestClusterSubmitterCreateRoutesCommandEntryNoLocalMutation(t *testing.T) {
 	if got := mongoClusterCallCollectionMetaName(t, calls[0]); got != "app.users" {
 		t.Fatalf("collection_meta name=%q want app.users", got)
 	}
+	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 	if _, err := server.Collections.OpenCollection("app.users"); err == nil {
 		t.Fatal("cluster create created local collection")
 	} else if err != collections.ErrCollectionNotFound {
@@ -977,7 +1296,7 @@ func TestClusterSubmitterRejectsRaftCommittedForVisibleRequest(t *testing.T) {
 		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
 		{Key: "$db", Value: "app"},
 	})
-	assertCommandError(t, response, "BadValue")
+	assertCommandError(t, response, "WriteConcernFailed")
 	if calls := submitter.snapshotCalls(); len(calls) != 1 {
 		t.Fatalf("submit calls=%d want 1", len(calls))
 	}

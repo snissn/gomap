@@ -18,6 +18,10 @@ import (
 const (
 	clusterCollectionRefNameTag = byte(1)
 	clusterCollectionMetaV5     = uint64(5)
+
+	commandCodeWriteConcernFailed int32 = 64
+	commandCodeShutdownInProgress int32 = 91
+	commandCodeNotWritablePrimary int32 = 10107
 )
 
 func (s *Server) clusterSubmitterConfigured() bool {
@@ -35,7 +39,8 @@ func (s *Server) currentClusterCatalogVersion(ctx context.Context) (uint64, erro
 }
 
 func (s *Server) clusterCreateCollectionResponse(ctx context.Context, command wire.Document) (wire.Document, error) {
-	if err := rejectClusterWriteConcern(command); err != nil {
+	ack, err := parseClusterWriteConcern(command, "create")
+	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	collection, err := commandString(command, "create")
@@ -53,14 +58,15 @@ func (s *Server) clusterCreateCollectionResponse(ctx context.Context, command wi
 	if err := validateCreateCollectionCommand(command); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name)); err != nil {
+	if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name), ack); err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
 	return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
 }
 
 func (s *Server) clusterInsertResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
-	if err := rejectClusterWriteConcern(command); err != nil {
+	ack, err := parseClusterWriteConcern(command, "insert")
+	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	collection, err := commandString(command, "insert")
@@ -88,11 +94,11 @@ func (s *Server) clusterInsertResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
-		if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name)); err != nil {
+		if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name), ack); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
 	}
-	inserted, err := s.submitClusterInsert(ctx, name, format, ids, stored)
+	inserted, err := s.submitClusterInsert(ctx, name, format, ids, stored, ack)
 	if err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
@@ -103,7 +109,8 @@ func (s *Server) clusterInsertResponse(ctx context.Context, command wire.Documen
 }
 
 func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
-	if err := rejectClusterWriteConcern(command); err != nil {
+	ack, err := parseClusterWriteConcern(command, "update")
+	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	collection, err := commandString(command, "update")
@@ -141,7 +148,7 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		if !item.bsonSetFieldsOK {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
 		}
-		matchedOne, modifiedOne, err := s.submitClusterUpdateBSONSet(ctx, name, item)
+		matchedOne, modifiedOne, err := s.submitClusterUpdateBSONSet(ctx, name, item, ack)
 		if err != nil {
 			return mongoClusterMutationCommandError(mongoUpdateErrorWithIndex(item.index, err))
 		}
@@ -152,7 +159,8 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 }
 
 func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
-	if err := rejectClusterWriteConcern(command); err != nil {
+	ack, err := parseClusterWriteConcern(command, "delete")
+	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	collection, err := commandString(command, "delete")
@@ -187,7 +195,7 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		if len(ids) == 0 {
 			return nil
 		}
-		_, err := s.submitClusterDelete(ctx, name, ids)
+		_, err := s.submitClusterDelete(ctx, name, ids, ack)
 		return err
 	}
 	for i, deleteItem := range deletes {
@@ -230,7 +238,7 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		seenIDs[keyString] = struct{}{}
 		ids = append(ids, key)
 	}
-	deleted, err := s.submitClusterDelete(ctx, name, ids)
+	deleted, err := s.submitClusterDelete(ctx, name, ids, ack)
 	if err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
@@ -265,7 +273,7 @@ func (s *Server) clusterCollectionExists(name string) (bool, error) {
 	return false, err
 }
 
-func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collections.CollectionMeta) error {
+func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collections.CollectionMeta, ack iwire.AckPolicy) error {
 	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
 		return errors.New("Mongo gateway cluster create currently supports only collection metadata without indexes")
 	}
@@ -277,11 +285,11 @@ func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collect
 	if err != nil {
 		return err
 	}
-	_, err = s.submitClusterMutation(ctx, iwire.CommandCreateCollection, sections, seq)
+	_, err = s.submitClusterMutation(ctx, iwire.CommandCreateCollection, sections, seq, ack)
 	return err
 }
 
-func (s *Server) submitClusterInsert(ctx context.Context, name string, format collections.DocumentFormat, ids, docs [][]byte) (int32, error) {
+func (s *Server) submitClusterInsert(ctx context.Context, name string, format collections.DocumentFormat, ids, docs [][]byte, ack iwire.AckPolicy) (int32, error) {
 	catalogVersion, err := s.currentClusterCatalogVersion(ctx)
 	if err != nil {
 		return 0, err
@@ -294,7 +302,7 @@ func (s *Server) submitClusterInsert(ctx context.Context, name string, format co
 	if err != nil {
 		return 0, err
 	}
-	response, err := s.submitClusterMutation(ctx, iwire.CommandInsertBatch, sections, seq)
+	response, err := s.submitClusterMutation(ctx, iwire.CommandInsertBatch, sections, seq, ack)
 	if err != nil {
 		return 0, err
 	}
@@ -308,7 +316,7 @@ func (s *Server) submitClusterInsert(ctx context.Context, name string, format co
 	return inserted, nil
 }
 
-func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, item mongoUpdateItem) (int32, int32, error) {
+func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, item mongoUpdateItem, ack iwire.AckPolicy) (int32, int32, error) {
 	catalogVersion, err := s.currentClusterCatalogVersion(ctx)
 	if err != nil {
 		return 0, 0, err
@@ -321,7 +329,7 @@ func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, it
 	if err != nil {
 		return 0, 0, err
 	}
-	response, err := s.submitClusterMutation(ctx, iwire.CommandUpdateBSONSet, sections, seq)
+	response, err := s.submitClusterMutation(ctx, iwire.CommandUpdateBSONSet, sections, seq, ack)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -342,7 +350,7 @@ func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, it
 	return matched, modified, nil
 }
 
-func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]byte) (int32, error) {
+func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]byte, ack iwire.AckPolicy) (int32, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -356,7 +364,7 @@ func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]b
 	if err != nil {
 		return 0, err
 	}
-	response, err := s.submitClusterMutation(ctx, iwire.CommandDeleteBatch, sections, seq)
+	response, err := s.submitClusterMutation(ctx, iwire.CommandDeleteBatch, sections, seq, ack)
 	if err != nil {
 		return 0, err
 	}
@@ -418,7 +426,7 @@ func (s *Server) clusterIdempotencyKey(commandName string, seq uint64) ([]byte, 
 	return key, nil
 }
 
-func (s *Server) submitClusterMutation(ctx context.Context, command iwire.CommandID, sections []iwire.Section, seq uint64) ([]iwire.Section, error) {
+func (s *Server) submitClusterMutation(ctx context.Context, command iwire.CommandID, sections []iwire.Section, seq uint64, ack iwire.AckPolicy) ([]iwire.Section, error) {
 	if s == nil || s.ClusterSubmitter == nil {
 		return nil, errors.New("Mongo gateway cluster submitter is not configured")
 	}
@@ -438,7 +446,7 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	}
 	metadata := treenativewire.ClusterRequestMetadata{
 		RequestID: uint64(seq),
-		AckPolicy: iwire.AckVisible,
+		AckPolicy: ack,
 	}
 	if _, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata}); err != nil {
 		return nil, err
@@ -450,7 +458,7 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMongoClusterSubmitResult(result); err != nil {
+	if err := validateMongoClusterSubmitResult(ack, result); err != nil {
 		return nil, err
 	}
 	return result.ResponseSections, nil
@@ -463,13 +471,20 @@ func (s *Server) admitClusterMutation(ctx context.Context) error {
 	return treenativewire.AdmitClusterMutation(ctx, s.ClusterSubmitter)
 }
 
-func validateMongoClusterSubmitResult(result treenativewire.ClusterSubmitResult) error {
+func validateMongoClusterSubmitResult(requested iwire.AckPolicy, result treenativewire.ClusterSubmitResult) error {
 	switch result.ActualAck {
-	case iwire.AckVisible, iwire.AckFlushed, iwire.AckSynced:
-	case iwire.AckRaftCommitted:
-		return errors.New("cluster submitter returned raft_committed without proving requested local visibility")
+	case iwire.AckVisible, iwire.AckFlushed, iwire.AckSynced, iwire.AckRaftCommitted:
 	default:
 		return fmt.Errorf("cluster submitter returned unsupported ack policy %d", result.ActualAck)
+	}
+	if requested == iwire.AckRaftCommitted {
+		if result.ActualAck != iwire.AckRaftCommitted || !result.CommittedRecoverable {
+			return mongoWriteConcernFailedError("cluster submitter did not prove raft_committed durability")
+		}
+	} else if result.ActualAck == iwire.AckRaftCommitted {
+		return mongoWriteConcernFailedError(fmt.Sprintf("cluster submitter returned raft_committed without proving requested local ack policy %d", requested))
+	} else if requested != 0 && result.ActualAck < requested {
+		return mongoWriteConcernFailedError(fmt.Sprintf("cluster submitter actual ack policy %d is below requested policy %d", result.ActualAck, requested))
 	}
 	ack, ok, err := clusterResponseMetaAckPolicy(result.ResponseSections)
 	if err != nil || !ok {
@@ -677,20 +692,85 @@ func clusterReadUvarint(src []byte) (uint64, int, error) {
 	}
 }
 
-func rejectClusterWriteConcern(command wire.Document) error {
-	if bson.Raw(command).Lookup("writeConcern").IsZero() {
-		return nil
+func parseClusterWriteConcern(command wire.Document, commandName string) (iwire.AckPolicy, error) {
+	raw := bson.Raw(command)
+	if !raw.Lookup("startTransaction").IsZero() || !raw.Lookup("autocommit").IsZero() || !raw.Lookup("txnNumber").IsZero() {
+		return 0, fmt.Errorf("Mongo gateway %s does not support transactions or retryable writes", commandName)
 	}
-	return errors.New("Mongo gateway cluster submitter mode does not implement Mongo writeConcern semantics")
+	value := raw.Lookup("writeConcern")
+	if value.IsZero() {
+		return iwire.AckVisible, nil
+	}
+	writeConcern, ok := value.DocumentOK()
+	if !ok {
+		return 0, errors.New("Mongo command field \"writeConcern\" must be a document")
+	}
+	elements, err := writeConcern.Elements()
+	if err != nil {
+		return 0, fmt.Errorf("Mongo command field \"writeConcern\" is malformed: %v", err)
+	}
+	ack := iwire.AckVisible
+	seenW := false
+	for _, elem := range elements {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return 0, fmt.Errorf("Mongo command field \"writeConcern\" is malformed: %v", err)
+		}
+		switch key {
+		case "w":
+			if seenW {
+				return 0, errors.New("Mongo writeConcern field \"w\" is duplicated")
+			}
+			seenW = true
+			ack, err = parseClusterWriteConcernW(elem.Value())
+			if err != nil {
+				return 0, err
+			}
+		case "j", "wtimeout", "wtimeoutMS":
+			return 0, fmt.Errorf("Mongo gateway cluster writeConcern does not support %q", key)
+		default:
+			return 0, fmt.Errorf("Mongo gateway cluster writeConcern does not support %q", key)
+		}
+	}
+	return ack, nil
+}
+
+func parseClusterWriteConcernW(value bson.RawValue) (iwire.AckPolicy, error) {
+	if w, ok := strictBSONInt64(value); ok {
+		switch {
+		case w == 1:
+			return iwire.AckVisible, nil
+		case w == 0:
+			return 0, errors.New("Mongo gateway cluster writeConcern does not support unacknowledged w:0 writes")
+		case w > 1:
+			return 0, errors.New("Mongo gateway cluster writeConcern does not support numeric w greater than 1")
+		default:
+			return 0, errors.New("Mongo gateway cluster writeConcern does not support negative numeric w")
+		}
+	}
+	if w, ok := value.StringValueOK(); ok {
+		if w == "majority" {
+			return iwire.AckRaftCommitted, nil
+		}
+		return 0, fmt.Errorf("Mongo gateway cluster writeConcern does not support tag string w:%q", w)
+	}
+	return 0, errors.New("Mongo command field \"writeConcern.w\" must be integer 1 or string \"majority\"")
 }
 
 func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 	code, codeName := commandCodeBadValue, "BadValue"
-	if nativeCode, ok := iwire.ErrorCodeOf(err); ok {
+	var mongoErr mongoCommandError
+	if errors.As(err, &mongoErr) {
+		code, codeName = mongoErr.code, mongoErr.codeName
+	} else if nativeCode, ok := iwire.ErrorCodeOf(err); ok {
 		switch nativeCode {
 		case iwire.ErrUnsupportedFeature:
 			code, codeName = commandCodeBadValue, "BadValue"
-		case iwire.ErrDurabilityUnavailable, iwire.ErrReadOnly, iwire.ErrCatalogVersionMismatch:
+		case iwire.ErrReadOnly:
+			code, codeName = commandCodeNotWritablePrimary, "NotWritablePrimary"
+		case iwire.ErrDurabilityUnavailable:
+			code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
+		case iwire.ErrCatalogVersionMismatch:
 			code, codeName = commandCodeBadValue, "BadValue"
 		case iwire.ErrDuplicateDocumentID, iwire.ErrDocumentExists, iwire.ErrUniqueIndexConflict:
 			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
@@ -700,6 +780,20 @@ func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
 	return commandError(code, codeName, err.Error())
+}
+
+type mongoCommandError struct {
+	code     int32
+	codeName string
+	message  string
+}
+
+func (e mongoCommandError) Error() string {
+	return e.message
+}
+
+func mongoWriteConcernFailedError(message string) error {
+	return mongoCommandError{code: commandCodeWriteConcernFailed, codeName: "WriteConcernFailed", message: message}
 }
 
 func mongoClusterUnsupportedLocalMutation(command string) (wire.Document, error) {
