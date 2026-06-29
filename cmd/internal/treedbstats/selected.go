@@ -71,6 +71,14 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.process.memory."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.memtable_residency."):
+		return true
+	case strings.HasPrefix(key, "treedb.process.memtable_residency."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.append_only."):
+		return true
+	case strings.HasPrefix(key, "treedb.process.append_only."):
+		return true
 	case strings.HasPrefix(key, "treedb.vlog.outer_leaf_block_cache."):
 		return true
 	case strings.HasPrefix(key, "treedb.process.read_path.backend_tree."):
