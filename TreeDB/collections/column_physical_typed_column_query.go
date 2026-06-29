@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-const columnTypedColumnDenseGroupCountDistinctMaxBitsetWords = 2 << 20
+const (
+	columnTypedColumnDenseGroupCountDistinctMaxBitsetWords      = 2 << 20
+	columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts = 32
+)
 
 const (
 	columnTypedColumnDenseGroupCountDistinctReducerPairBitset   = "pair_bitset"
@@ -1230,6 +1233,17 @@ func columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts []columnType
 	if err != nil {
 		return nil, nil, err
 	}
+	dictionary, ranks, ok, err := columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts, selectColumn, capacity, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ok {
+		return dictionary, ranks, nil
+	}
+	return columnTypedColumnDenseGroupCountDistinctGlobalDictionaryMap(parts, selectColumn, capacity)
+}
+
+func columnTypedColumnDenseGroupCountDistinctGlobalDictionaryMap(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn, capacity int) ([]string, map[string]uint32, error) {
 	values := make(map[string]struct{}, capacity)
 	for partIdx := range parts {
 		part := parts[partIdx].DenseGroupCountDistinct
@@ -1267,8 +1281,18 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts []columnTypedColu
 	if err != nil {
 		return nil, 0, err
 	}
-	capacity = columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity)
-	ranks := make(map[string]uint32, capacity)
+	_, ranks, ok, err := columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts, selectColumn, capacity, false)
+	if err != nil {
+		return nil, 0, err
+	}
+	if ok {
+		return ranks, len(ranks), nil
+	}
+	return columnTypedColumnDenseGroupCountDistinctGlobalRanksMap(parts, selectColumn, capacity)
+}
+
+func columnTypedColumnDenseGroupCountDistinctGlobalRanksMap(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn, capacity int) (map[string]uint32, int, error) {
+	ranks := make(map[string]uint32, columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity))
 	addValue := func(value string) error {
 		if _, ok := ranks[value]; ok {
 			return nil
@@ -1300,6 +1324,85 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts []columnTypedColu
 		}
 	}
 	return ranks, len(ranks), nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn, capacity int, keepDictionary bool) ([]string, map[string]uint32, bool, error) {
+	if len(parts) > columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts {
+		return nil, nil, false, nil
+	}
+	columns := make([]*columnTypedColumnDenseStringCodeColumn, 0, len(parts))
+	includeEmpty := false
+	for partIdx := range parts {
+		part := parts[partIdx].DenseGroupCountDistinct
+		if part == nil {
+			return nil, nil, false, fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
+		}
+		column := selectColumn(part)
+		if column == nil {
+			return nil, nil, false, fmt.Errorf("collections: dense grouped count-distinct missing selected column for part %d", partIdx)
+		}
+		columns = append(columns, column)
+		if !includeEmpty {
+			for _, valid := range column.Valid {
+				if !valid {
+					includeEmpty = true
+					break
+				}
+			}
+		}
+	}
+
+	positions := make([]int, len(columns))
+	ranks := make(map[string]uint32, columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity))
+	var dictionary []string
+	if keepDictionary {
+		dictionary = make([]string, 0, min(capacity, 64))
+	}
+	for {
+		next := ""
+		haveNext := false
+		if includeEmpty {
+			next = ""
+			haveNext = true
+		}
+		for columnIdx, column := range columns {
+			pos := positions[columnIdx]
+			if pos >= len(column.Dictionary) {
+				continue
+			}
+			if pos > 0 && column.Dictionary[pos-1] >= column.Dictionary[pos] {
+				return nil, nil, false, nil
+			}
+			value := column.Dictionary[pos]
+			if !haveNext || value < next {
+				next = value
+				haveNext = true
+			}
+		}
+		if !haveNext {
+			break
+		}
+		if _, exists := ranks[next]; !exists {
+			if uint64(len(ranks)) > uint64(^uint32(0)) {
+				return nil, nil, false, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
+			}
+			ranks[next] = uint32(len(ranks))
+			if keepDictionary {
+				dictionary = append(dictionary, next)
+			}
+		}
+		if includeEmpty && next == "" {
+			includeEmpty = false
+		}
+		for columnIdx, column := range columns {
+			pos := positions[columnIdx]
+			for pos < len(column.Dictionary) && column.Dictionary[pos] == next {
+				pos++
+			}
+			positions[columnIdx] = pos
+		}
+	}
+	return dictionary, ranks, true, nil
 }
 
 func columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) (int, error) {

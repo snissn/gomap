@@ -259,6 +259,93 @@ func TestTypedColumnQ2DenseGroupCountDistinctRankMapCapacity3158(t *testing.T) {
 	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity(627_647), 209_215; got != want {
 		t.Fatalf("large rank map capacity=%d want %d", got, want)
 	}
+
+	parts := []columnTypedColumnPhysicalQueryPart{
+		{
+			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+				Group: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"app.a", "app.c"},
+					Valid:      []bool{true, false},
+				},
+				Distinct: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"did:a", "did:c"},
+				},
+			},
+		},
+		{
+			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+				Group: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"app.a", "app.b"},
+				},
+				Distinct: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"did:b", "did:c"},
+				},
+			},
+		},
+	}
+	groupDictionary, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Group
+	})
+	if err != nil {
+		t.Fatalf("global group dictionary: %v", err)
+	}
+	if want := []string{"", "app.a", "app.b", "app.c"}; !reflect.DeepEqual(groupDictionary, want) {
+		t.Fatalf("global group dictionary=%v want %v", groupDictionary, want)
+	}
+	for rank, value := range groupDictionary {
+		if groupRanks[value] != uint32(rank) {
+			t.Fatalf("group rank[%q]=%d want %d ranks=%v", value, groupRanks[value], rank, groupRanks)
+		}
+	}
+	distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
+	if err != nil {
+		t.Fatalf("global distinct ranks: %v", err)
+	}
+	if distinctCardinality != 3 {
+		t.Fatalf("distinct cardinality=%d want 3 ranks=%v", distinctCardinality, distinctRanks)
+	}
+	for value, want := range map[string]uint32{"did:a": 0, "did:b": 1, "did:c": 2} {
+		if got := distinctRanks[value]; got != want {
+			t.Fatalf("distinct rank[%q]=%d want %d ranks=%v", value, got, want, distinctRanks)
+		}
+	}
+
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts); err != nil {
+		t.Fatalf("prepare sorted global rank maps: %v", err)
+	}
+	group0 := parts[0].DenseGroupCountDistinct.Group
+	group1 := parts[1].DenseGroupCountDistinct.Group
+	if !reflect.DeepEqual(group0.GlobalDictionary, []string{"", "app.a", "app.b", "app.c"}) {
+		t.Fatalf("part 0 group global dictionary=%v", group0.GlobalDictionary)
+	}
+	if !reflect.DeepEqual(group1.GlobalDictionary, group0.GlobalDictionary) {
+		t.Fatalf("part 1 group global dictionary=%v want %v", group1.GlobalDictionary, group0.GlobalDictionary)
+	}
+	if !reflect.DeepEqual(group0.GlobalLocalRanks, []uint32{1, 3}) {
+		t.Fatalf("part 0 group local ranks=%v want [1 3]", group0.GlobalLocalRanks)
+	}
+	if !reflect.DeepEqual(group1.GlobalLocalRanks, []uint32{1, 2}) {
+		t.Fatalf("part 1 group local ranks=%v want [1 2]", group1.GlobalLocalRanks)
+	}
+	if !group0.GlobalEmptyRankOK || group0.GlobalEmptyRank != 0 || !group1.GlobalEmptyRankOK || group1.GlobalEmptyRank != 0 {
+		t.Fatalf("group empty ranks part0=(%d,%t) part1=(%d,%t) want (0,true)", group0.GlobalEmptyRank, group0.GlobalEmptyRankOK, group1.GlobalEmptyRank, group1.GlobalEmptyRankOK)
+	}
+	distinct0 := parts[0].DenseGroupCountDistinct.Distinct
+	distinct1 := parts[1].DenseGroupCountDistinct.Distinct
+	if distinct0.GlobalDictionary != nil || distinct1.GlobalDictionary != nil {
+		t.Fatalf("distinct global dictionary allocated part0=%v part1=%v", distinct0.GlobalDictionary, distinct1.GlobalDictionary)
+	}
+	if distinct0.GlobalCardinality != 3 || distinct1.GlobalCardinality != 3 || !distinct0.GlobalCardinalityOK || !distinct1.GlobalCardinalityOK {
+		t.Fatalf("distinct cardinality part0=(%d,%t) part1=(%d,%t) want (3,true)", distinct0.GlobalCardinality, distinct0.GlobalCardinalityOK, distinct1.GlobalCardinality, distinct1.GlobalCardinalityOK)
+	}
+	if !reflect.DeepEqual(distinct0.GlobalLocalRanks, []uint32{0, 2}) {
+		t.Fatalf("part 0 distinct local ranks=%v want [0 2]", distinct0.GlobalLocalRanks)
+	}
+	if !reflect.DeepEqual(distinct1.GlobalLocalRanks, []uint32{1, 2}) {
+		t.Fatalf("part 1 distinct local ranks=%v want [1 2]", distinct1.GlobalLocalRanks)
+	}
 }
 
 func TestTypedColumnQ2DenseGroupCountDistinctActiveGroupBitset1950(t *testing.T) {
