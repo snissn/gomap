@@ -1183,6 +1183,25 @@ func TestUpdateBSONSetInvalidBSONRejectsBeforeAppend(t *testing.T) {
 	}
 }
 
+func TestUpdateBSONSetInvalidUTF8FieldRejectsBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	seam := &countingCommandWALApplySeam{}
+	raw := deterministicUpdateBSONSetEntryRawFieldNames(t, "users", "client-a:update-bson-set:invalid-field-name", []byte("u1"), [][]byte{{0xff}}, [][]byte{
+		testBSONSetRawValueBytes(t, "sfo"),
+	})
+	result, err := ApplyCommittedEntryV1(db, raw, applyMeta(1, 1), Options{CommandWALApplySeam: seam})
+	assertRejected(t, result, err, raftentry.ApplyStatusRejectedMalformed, raftentry.ErrorMalformedEntryV1)
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("invalid UTF-8 field reached command-WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != 0 {
+		t.Fatalf("command WAL frames after invalid UTF-8 field=%d, want 0", got)
+	}
+}
+
 func TestUpdateBSONSetNoIdempotencyRejectsBeforeAppend(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
@@ -2510,6 +2529,11 @@ func deterministicUpdateBSONSetEntryRawValues(t *testing.T, collection, idempote
 	for i := range names {
 		fieldNames[i] = []byte(names[i])
 	}
+	return deterministicUpdateBSONSetEntryRawFieldNames(t, collection, idempotency, id, fieldNames, values)
+}
+
+func deterministicUpdateBSONSetEntryRawFieldNames(t *testing.T, collection, idempotency string, id []byte, fieldNames [][]byte, values [][]byte) []byte {
+	t.Helper()
 	sections := []nativewire.Section{
 		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandUpdateBSONSet, Version: 1})},
 		{ID: nativewire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
@@ -2573,6 +2597,15 @@ func testBSONSetRawValue(t *testing.T, value any) bson.RawValue {
 		t.Fatalf("MarshalValue(%T): %v", value, err)
 	}
 	return bson.RawValue{Type: typ, Value: raw}
+}
+
+func testBSONSetRawValueBytes(t *testing.T, value any) []byte {
+	t.Helper()
+	raw := testBSONSetRawValue(t, value)
+	out := make([]byte, 1+len(raw.Value))
+	out[0] = byte(raw.Type)
+	copy(out[1:], raw.Value)
+	return out
 }
 
 func applyCreateSequence(t *testing.T, db *backenddb.DB, entries ...[]byte) []raftentry.ApplyResultV1 {

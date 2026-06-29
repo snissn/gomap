@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -430,6 +431,9 @@ func lowerBSONSetFieldsV1(names, values [][]byte) ([]collections.BSONSetField, e
 func validateBSONSetFieldKeyV1(key string) error {
 	if key == "" {
 		return errors.New("field name cannot be empty")
+	}
+	if !utf8.ValidString(key) {
+		return errors.New("field name must be valid UTF-8")
 	}
 	if key == "_id" {
 		return errors.New("cannot modify _id")
