@@ -42,6 +42,8 @@ type PlacementModeV1 string
 
 const (
 	PlacementModeCollectionV1 PlacementModeV1 = "collection"
+	PlacementModeTokenV1      PlacementModeV1 = "token"
+	PlacementModeRingV1       PlacementModeV1 = "ring"
 )
 
 type CollectionRefV1 struct {
@@ -57,9 +59,10 @@ type GroupV1 struct {
 }
 
 type CollectionPlacementV1 struct {
-	Collection CollectionRefV1
-	GroupID    raftcluster.GroupID
-	Mode       PlacementModeV1
+	Collection      CollectionRefV1
+	GroupID         raftcluster.GroupID
+	Mode            PlacementModeV1
+	TokenPartitions []TokenPartitionV1
 }
 
 type CatalogV1 struct {
@@ -75,9 +78,10 @@ type ResolvedGroupV1 struct {
 }
 
 type ResolvedCollectionPlacementV1 struct {
-	Collection CollectionRefV1
-	GroupID    raftcluster.GroupID
-	Mode       PlacementModeV1
+	Collection      CollectionRefV1
+	GroupID         raftcluster.GroupID
+	Mode            PlacementModeV1
+	TokenPartitions []ResolvedTokenPartitionV1
 }
 
 type ResolvedCatalogV1 struct {
@@ -87,6 +91,7 @@ type ResolvedCatalogV1 struct {
 
 	groups     map[raftcluster.GroupID]ResolvedGroupV1
 	placements map[CollectionRefV1]ResolvedCollectionPlacementV1
+	tokens     map[CollectionRefV1]ResolvedTokenRingPlanV1
 }
 
 func DefaultFeatureSet() raftcluster.FeatureSet {
@@ -107,7 +112,7 @@ func Validate(c CatalogV1) (ResolvedCatalogV1, error) {
 	if err != nil {
 		return ResolvedCatalogV1{}, err
 	}
-	placements, placementIndex, err := validatePlacements(c.Placements, groupIndex)
+	placements, placementIndex, tokenIndex, err := validatePlacements(c.Placements, groupIndex)
 	if err != nil {
 		return ResolvedCatalogV1{}, err
 	}
@@ -117,6 +122,7 @@ func Validate(c CatalogV1) (ResolvedCatalogV1, error) {
 		Placements: cloneResolvedPlacements(placements),
 		groups:     cloneGroupIndex(groupIndex),
 		placements: clonePlacementIndex(placementIndex),
+		tokens:     cloneTokenPlacementIndex(tokenIndex),
 	}, nil
 }
 
@@ -128,11 +134,36 @@ func (c ResolvedCatalogV1) Resolve(ref CollectionRefV1) (raftcluster.GroupID, er
 	if !ok {
 		return "", errors.Join(ErrInvalidCatalog, ErrUnplacedCollection, fmt.Errorf("%s/%s/%s", ref.Database, ref.Catalog, ref.Collection))
 	}
+	if placement.Mode != PlacementModeCollectionV1 {
+		return "", errors.Join(ErrInvalidCatalog, ErrUnsupportedPlacementMode, fmt.Errorf("%s/%s/%s mode %q requires token-aware resolution", ref.Database, ref.Catalog, ref.Collection, placement.Mode))
+	}
 	return placement.GroupID, nil
 }
 
 func (c ResolvedCatalogV1) ResolveCollection(database, catalog, collection string) (raftcluster.GroupID, error) {
 	return c.Resolve(CollectionRefV1{Database: database, Catalog: catalog, Collection: collection})
+}
+
+func (c ResolvedCatalogV1) ResolveToken(ref CollectionRefV1, token uint64) (ResolvedTokenPartitionV1, error) {
+	if err := validateCollectionRef(ref); err != nil {
+		return ResolvedTokenPartitionV1{}, err
+	}
+	placement, ok := c.placements[ref]
+	if !ok {
+		return ResolvedTokenPartitionV1{}, errors.Join(ErrInvalidCatalog, ErrUnplacedCollection, fmt.Errorf("%s/%s/%s", ref.Database, ref.Catalog, ref.Collection))
+	}
+	if placement.Mode != PlacementModeTokenV1 && placement.Mode != PlacementModeRingV1 {
+		return ResolvedTokenPartitionV1{}, errors.Join(ErrInvalidCatalog, ErrUnsupportedPlacementMode, fmt.Errorf("%s/%s/%s mode %q has no token partitions", ref.Database, ref.Catalog, ref.Collection, placement.Mode))
+	}
+	plan, ok := c.tokens[ref]
+	if !ok {
+		return ResolvedTokenPartitionV1{}, errors.Join(ErrInvalidCatalog, ErrInvalidTokenRing, fmt.Errorf("%s/%s/%s has no resolved token plan", ref.Database, ref.Catalog, ref.Collection))
+	}
+	return plan.ResolveToken(token)
+}
+
+func (c ResolvedCatalogV1) ResolveCollectionToken(database, catalog, collection string, token uint64) (ResolvedTokenPartitionV1, error) {
+	return c.ResolveToken(CollectionRefV1{Database: database, Catalog: catalog, Collection: collection}, token)
 }
 
 func (c ResolvedCatalogV1) Group(id raftcluster.GroupID) (ResolvedGroupV1, bool) {
@@ -146,7 +177,18 @@ func (c ResolvedCatalogV1) Group(id raftcluster.GroupID) (ResolvedGroupV1, bool)
 
 func (c ResolvedCatalogV1) Placement(ref CollectionRefV1) (ResolvedCollectionPlacementV1, bool) {
 	placement, ok := c.placements[ref]
-	return placement, ok
+	if !ok {
+		return ResolvedCollectionPlacementV1{}, false
+	}
+	return cloneResolvedPlacement(placement), true
+}
+
+func (c ResolvedCatalogV1) TokenPlacement(ref CollectionRefV1) (ResolvedTokenRingPlanV1, bool) {
+	plan, ok := c.tokens[ref]
+	if !ok {
+		return ResolvedTokenRingPlanV1{}, false
+	}
+	return cloneResolvedTokenRingPlan(plan), true
 }
 
 func cloneFeatureSet(features raftcluster.FeatureSet) raftcluster.FeatureSet {
@@ -178,13 +220,30 @@ func cloneGroupIndex(groups map[raftcluster.GroupID]ResolvedGroupV1) map[raftclu
 }
 
 func cloneResolvedPlacements(placements []ResolvedCollectionPlacementV1) []ResolvedCollectionPlacementV1 {
-	return append([]ResolvedCollectionPlacementV1(nil), placements...)
+	out := make([]ResolvedCollectionPlacementV1, len(placements))
+	for i, placement := range placements {
+		out[i] = cloneResolvedPlacement(placement)
+	}
+	return out
+}
+
+func cloneResolvedPlacement(placement ResolvedCollectionPlacementV1) ResolvedCollectionPlacementV1 {
+	placement.TokenPartitions = cloneResolvedTokenPartitions(placement.TokenPartitions)
+	return placement
 }
 
 func clonePlacementIndex(placements map[CollectionRefV1]ResolvedCollectionPlacementV1) map[CollectionRefV1]ResolvedCollectionPlacementV1 {
 	out := make(map[CollectionRefV1]ResolvedCollectionPlacementV1, len(placements))
 	for ref, placement := range placements {
-		out[ref] = placement
+		out[ref] = cloneResolvedPlacement(placement)
+	}
+	return out
+}
+
+func cloneTokenPlacementIndex(tokens map[CollectionRefV1]ResolvedTokenRingPlanV1) map[CollectionRefV1]ResolvedTokenRingPlanV1 {
+	out := make(map[CollectionRefV1]ResolvedTokenRingPlanV1, len(tokens))
+	for ref, plan := range tokens {
+		out[ref] = cloneResolvedTokenRingPlan(plan)
 	}
 	return out
 }
@@ -290,37 +349,56 @@ func validateMembers(groupID raftcluster.GroupID, members []raftcluster.NodeID) 
 	return out, nil
 }
 
-func validatePlacements(placements []CollectionPlacementV1, groups map[raftcluster.GroupID]ResolvedGroupV1) ([]ResolvedCollectionPlacementV1, map[CollectionRefV1]ResolvedCollectionPlacementV1, error) {
+func validatePlacements(placements []CollectionPlacementV1, groups map[raftcluster.GroupID]ResolvedGroupV1) ([]ResolvedCollectionPlacementV1, map[CollectionRefV1]ResolvedCollectionPlacementV1, map[CollectionRefV1]ResolvedTokenRingPlanV1, error) {
 	out := make([]ResolvedCollectionPlacementV1, 0, len(placements))
 	index := make(map[CollectionRefV1]ResolvedCollectionPlacementV1, len(placements))
+	tokens := make(map[CollectionRefV1]ResolvedTokenRingPlanV1)
 	for i, placement := range placements {
 		ref := placement.Collection
 		if err := validateCollectionRef(ref); err != nil {
-			return nil, nil, errors.Join(err, fmt.Errorf("placement[%d]", i))
+			return nil, nil, nil, errors.Join(err, fmt.Errorf("placement[%d]", i))
 		}
 		mode := placement.Mode
 		if mode == "" {
 			mode = PlacementModeCollectionV1
 		}
-		if mode != PlacementModeCollectionV1 {
-			return nil, nil, errors.Join(ErrInvalidCatalog, ErrUnsupportedPlacementMode, fmt.Errorf("placement[%d] %s/%s/%s mode %q", i, ref.Database, ref.Catalog, ref.Collection, mode))
-		}
-		if err := validateID("placement group id", string(placement.GroupID)); err != nil {
-			return nil, nil, errors.Join(ErrInvalidCatalog, ErrUnknownGroup, fmt.Errorf("placement[%d]: %w", i, err))
-		}
-		if _, ok := groups[placement.GroupID]; !ok {
-			return nil, nil, errors.Join(ErrInvalidCatalog, ErrUnknownGroup, fmt.Errorf("placement[%d] references group %q", i, placement.GroupID))
-		}
 		if _, exists := index[ref]; exists {
-			return nil, nil, errors.Join(ErrInvalidCatalog, ErrDuplicatePlacement, fmt.Errorf("placement for %s/%s/%s appears more than once", ref.Database, ref.Catalog, ref.Collection))
+			return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrDuplicatePlacement, fmt.Errorf("placement for %s/%s/%s appears more than once", ref.Database, ref.Catalog, ref.Collection))
 		}
 		resolved := ResolvedCollectionPlacementV1{
 			Collection: ref,
-			GroupID:    placement.GroupID,
 			Mode:       mode,
 		}
+		switch mode {
+		case PlacementModeCollectionV1:
+			if len(placement.TokenPartitions) != 0 {
+				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrInvalidTokenRing, fmt.Errorf("placement[%d] %s/%s/%s collection mode includes token partitions", i, ref.Database, ref.Catalog, ref.Collection))
+			}
+			if err := validateID("placement group id", string(placement.GroupID)); err != nil {
+				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrUnknownGroup, fmt.Errorf("placement[%d]: %w", i, err))
+			}
+			if _, ok := groups[placement.GroupID]; !ok {
+				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrUnknownGroup, fmt.Errorf("placement[%d] references group %q", i, placement.GroupID))
+			}
+			resolved.GroupID = placement.GroupID
+		case PlacementModeTokenV1, PlacementModeRingV1:
+			if placement.GroupID != "" {
+				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrUnsupportedPlacementMode, fmt.Errorf("placement[%d] %s/%s/%s mode %q must not set collection group %q", i, ref.Database, ref.Catalog, ref.Collection, mode, placement.GroupID))
+			}
+			plan, err := validateTokenRingPartitions(placement.TokenPartitions, func(id raftcluster.GroupID) bool {
+				_, ok := groups[id]
+				return ok
+			})
+			if err != nil {
+				return nil, nil, nil, errors.Join(ErrInvalidCatalog, err, fmt.Errorf("placement[%d] %s/%s/%s", i, ref.Database, ref.Catalog, ref.Collection))
+			}
+			resolved.TokenPartitions = cloneResolvedTokenPartitions(plan.Partitions)
+			tokens[ref] = cloneResolvedTokenRingPlan(plan)
+		default:
+			return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrUnsupportedPlacementMode, fmt.Errorf("placement[%d] %s/%s/%s mode %q", i, ref.Database, ref.Catalog, ref.Collection, mode))
+		}
 		out = append(out, resolved)
-		index[ref] = resolved
+		index[ref] = cloneResolvedPlacement(resolved)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i].Collection, out[j].Collection
@@ -332,7 +410,7 @@ func validatePlacements(placements []CollectionPlacementV1, groups map[raftclust
 		}
 		return a.Collection < b.Collection
 	})
-	return out, index, nil
+	return out, index, tokens, nil
 }
 
 func validateCollectionRef(ref CollectionRefV1) error {

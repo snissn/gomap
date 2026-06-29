@@ -4,9 +4,10 @@ Status: normative for the initial `TreeDB/internal/raftplacement` package.
 
 This document records the first executable slices of #3046. The package defines
 a v1 placement catalog and a pure route resolver for collection-level Raft
-groups only. It also includes simulation-only token-ring helpers that validate
-virtual partition coverage against known groups without changing the accepted
-catalog format. It does not change native-wire read policies, Mongo gateway
+groups. It also accepts token/ring placement entries as validated internal
+catalog data and includes token-ring helpers that validate virtual partition
+coverage against known groups. It does not change native-wire read policies,
+Mongo gateway
 behavior, `raftentry` single-group scope handling, server routing, submitter
 APIs, meta-group replication, rebalancing, or production token/ring routing.
 
@@ -19,6 +20,9 @@ The catalog contains:
 - group members and optional leader hints keyed by `raftcluster.NodeID`;
 - collection placements keyed by `{database, catalog, collection}`;
 - one owning `raftcluster.GroupID` for each placed collection.
+- optional token/ring placements keyed by `{database, catalog, collection}`;
+- a full-cover token partition list for each token/ring placement, where every
+  partition names a known `raftcluster.GroupID`.
 
 The initial catalog format is version `1.0`.
 
@@ -40,19 +44,46 @@ Validation MUST reject:
 - collection placements that reference unknown groups;
 - invalid `{database, catalog, collection}` identities;
 - duplicate collection placements;
-- placement modes other than the default collection-level mode.
+- placement modes other than `collection`, `token`, or `ring`;
+- collection-mode placements that include token partitions;
+- token/ring placements that also set a collection-wide `GroupID`.
 
 The v1 resolver maps each placed `{database, catalog, collection}` identity to
 exactly one owning `GroupID`. Resolving an unplaced collection MUST fail closed.
+Collection-only resolution MUST also fail closed for token/ring placements;
+callers must use an explicit token-aware helper to resolve those placements.
+
+## Token/Ring Catalog Placements
+
+Token/ring placement entries are accepted as internal catalog data for
+validation and early integration only. Each token/ring placement contains token
+partitions with:
+
+- a unique token partition ID;
+- a known owning `raftcluster.GroupID`;
+- inclusive `Start` and `End` uint64 token bounds.
+
+Token/ring catalog validation MUST reject:
+
+- an empty token-partition set;
+- invalid or duplicate token partition IDs;
+- token partitions that reference unknown groups;
+- ranges whose start is greater than their end;
+- gaps in token coverage;
+- overlapping token ranges;
+- placements that do not cover the full uint64 token space exactly once.
+
+Resolved token partition data is defensively copied. Mutating exported resolved
+placement slices MUST NOT affect later token-aware resolution.
 
 ## Token Ring Simulation
 
-The token-ring helpers are a design and validation aid only. `PlanTokenRing`
+The token-ring planner remains a design and validation aid only. `PlanTokenRing`
 builds deterministic virtual token partitions over the full uint64 token space
 and assigns those logical partitions to known catalog groups in stable group-ID
-order. The planner is useful for exercising #3046 placement math before the
-single-group HA and read/snapshot dependencies are ready for production
-routing.
+order. The planner does not attach the plan to a catalog or route requests. It
+is useful for exercising #3046 placement math before the single-group HA and
+read/snapshot dependencies are ready for production routing.
 
 `ValidateTokenRingPlan` MUST reject:
 
@@ -70,8 +101,9 @@ request routing.
 
 ## Deferred Scope
 
-The v1 catalog intentionally rejects token and ring modes. The simulation helper
-does not make token/ring placement an accepted catalog mode. Future production
-token/ring work needs a separate catalog version, shard-key rules, query routing
-contract, unique-index semantics, rebalancing model, and benchmark evidence
-before those fields become accepted.
+The v1 catalog validates token/ring placement shape only. It makes no
+production routing, meta-group replication, rebalance execution, or
+horizontal-scale claim. Future production token/ring work needs shard-key rules,
+query routing contracts, unique-index semantics, rebalance execution,
+native-wire and Mongo gateway integration, and benchmark evidence before those
+fields can be used for request routing.
