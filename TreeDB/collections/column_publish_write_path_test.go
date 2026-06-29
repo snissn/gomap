@@ -1555,7 +1555,18 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	}
 	var sawRowAsset bool
 	var sawDirectTypedColumn bool
+	var sharedSegmentBytes int64
+	var sharedSegmentCount int
+	var directViewSegmentBytes int64
+	var directViewSegmentCount int
 	for _, asset := range prepared.Assets {
+		if columnAssetSegmentFileIDIsDirectView(asset.Ref.FileID) {
+			directViewSegmentBytes = saturatingAddNonNegativeInt64(directViewSegmentBytes, asset.Ref.Length)
+			directViewSegmentCount++
+		} else {
+			sharedSegmentBytes = saturatingAddNonNegativeInt64(sharedSegmentBytes, asset.Ref.Length)
+			sharedSegmentCount++
+		}
 		switch {
 		case asset.Ref.Kind == ColumnAssetKindTCS1PartImage && asset.Ref.PartID == columnPhysicalRowAssetPartID:
 			sawRowAsset = true
@@ -1586,6 +1597,27 @@ func TestPrepareColumnPhysicalAssetRowsCountsDirectViewTypedColumnSync3151(t *te
 	}
 	if prepared.AssetMetrics.SharedAppendSyncEpochCount != 2 {
 		t.Fatalf("shared append sync epoch count=%d want 2", prepared.AssetMetrics.SharedAppendSyncEpochCount)
+	}
+	if sharedSegmentCount != 2 || directViewSegmentCount != 1 {
+		t.Fatalf("prepared segment class counts shared/direct=%d/%d want 2/1", sharedSegmentCount, directViewSegmentCount)
+	}
+	if prepared.AssetMetrics.SharedSegmentAppendBytes != sharedSegmentBytes || prepared.AssetMetrics.SharedSegmentAppendCount != sharedSegmentCount {
+		t.Fatalf("shared segment append bytes/count=%d/%d want %d/%d", prepared.AssetMetrics.SharedSegmentAppendBytes, prepared.AssetMetrics.SharedSegmentAppendCount, sharedSegmentBytes, sharedSegmentCount)
+	}
+	if prepared.AssetMetrics.DirectViewSegmentAppendBytes != directViewSegmentBytes || prepared.AssetMetrics.DirectViewSegmentAppendCount != directViewSegmentCount {
+		t.Fatalf("direct-view segment append bytes/count=%d/%d want %d/%d", prepared.AssetMetrics.DirectViewSegmentAppendBytes, prepared.AssetMetrics.DirectViewSegmentAppendCount, directViewSegmentBytes, directViewSegmentCount)
+	}
+	if prepared.AssetMetrics.SharedSegmentAppendCloseCount != 1 || prepared.AssetMetrics.SharedSegmentAppendFileSyncCount != 1 || prepared.AssetMetrics.SharedSegmentAppendSyncEpochCount != 1 {
+		t.Fatalf("shared segment append close/file-sync/sync-epoch=%d/%d/%d want 1/1/1",
+			prepared.AssetMetrics.SharedSegmentAppendCloseCount,
+			prepared.AssetMetrics.SharedSegmentAppendFileSyncCount,
+			prepared.AssetMetrics.SharedSegmentAppendSyncEpochCount)
+	}
+	if prepared.AssetMetrics.DirectViewSegmentAppendCloseCount != 1 || prepared.AssetMetrics.DirectViewSegmentAppendFileSyncCount != 1 || prepared.AssetMetrics.DirectViewSegmentAppendSyncEpochCount != 1 {
+		t.Fatalf("direct-view segment append close/file-sync/sync-epoch=%d/%d/%d want 1/1/1",
+			prepared.AssetMetrics.DirectViewSegmentAppendCloseCount,
+			prepared.AssetMetrics.DirectViewSegmentAppendFileSyncCount,
+			prepared.AssetMetrics.DirectViewSegmentAppendSyncEpochCount)
 	}
 	if prepared.AssetMetrics.RowAssetCount != 1 || prepared.AssetMetrics.TypedColumnPartCount != 1 {
 		t.Fatalf("asset metrics=%+v want row=1 typed=1", prepared.AssetMetrics)
@@ -1872,9 +1904,19 @@ func TestRecordColumnPublishPlanStatsIncludesDocumentExtractionM10B(t *testing.T
 		StageMetrics: ColumnPublishStageMetrics{
 			DocumentExtraction: documentExtraction,
 			AssetMetrics: ColumnPublishAssetPreparationMetrics{
-				SharedAppendCloseCount:     3,
-				SharedAppendFileSyncCount:  2,
-				SharedAppendSyncEpochCount: 1,
+				SharedAppendCloseCount:                3,
+				SharedAppendFileSyncCount:             2,
+				SharedAppendSyncEpochCount:            1,
+				SharedSegmentAppendBytes:              100,
+				SharedSegmentAppendCount:              4,
+				SharedSegmentAppendCloseCount:         2,
+				SharedSegmentAppendFileSyncCount:      1,
+				SharedSegmentAppendSyncEpochCount:     1,
+				DirectViewSegmentAppendBytes:          200,
+				DirectViewSegmentAppendCount:          5,
+				DirectViewSegmentAppendCloseCount:     1,
+				DirectViewSegmentAppendFileSyncCount:  1,
+				DirectViewSegmentAppendSyncEpochCount: 0,
 			},
 		},
 	})
@@ -1892,6 +1934,24 @@ func TestRecordColumnPublishPlanStatsIncludesDocumentExtractionM10B(t *testing.T
 	}
 	if stats.ColumnPublishAssetSyncEpochCount != 1 {
 		t.Fatalf("asset sync epoch count=%d want 1", stats.ColumnPublishAssetSyncEpochCount)
+	}
+	if stats.ColumnPublishSharedSegmentAppendBytes != 100 || stats.ColumnPublishSharedSegmentAppendCount != 4 {
+		t.Fatalf("shared segment append bytes/count=%d/%d want 100/4", stats.ColumnPublishSharedSegmentAppendBytes, stats.ColumnPublishSharedSegmentAppendCount)
+	}
+	if stats.ColumnPublishSharedSegmentAppenderCloseCount != 2 || stats.ColumnPublishSharedSegmentAppendFileSyncCount != 1 || stats.ColumnPublishSharedSegmentAppendSyncEpochCount != 1 {
+		t.Fatalf("shared segment close/file-sync/sync-epoch=%d/%d/%d want 2/1/1",
+			stats.ColumnPublishSharedSegmentAppenderCloseCount,
+			stats.ColumnPublishSharedSegmentAppendFileSyncCount,
+			stats.ColumnPublishSharedSegmentAppendSyncEpochCount)
+	}
+	if stats.ColumnPublishDirectViewSegmentAppendBytes != 200 || stats.ColumnPublishDirectViewSegmentAppendCount != 5 {
+		t.Fatalf("direct-view segment append bytes/count=%d/%d want 200/5", stats.ColumnPublishDirectViewSegmentAppendBytes, stats.ColumnPublishDirectViewSegmentAppendCount)
+	}
+	if stats.ColumnPublishDirectViewSegmentAppenderCloseCount != 1 || stats.ColumnPublishDirectViewSegmentAppendFileSyncCount != 1 || stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount != 0 {
+		t.Fatalf("direct-view segment close/file-sync/sync-epoch=%d/%d/%d want 1/1/0",
+			stats.ColumnPublishDirectViewSegmentAppenderCloseCount,
+			stats.ColumnPublishDirectViewSegmentAppendFileSyncCount,
+			stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount)
 	}
 }
 
