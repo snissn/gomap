@@ -87,6 +87,30 @@ func TestReadBarrierValidatesCommittedPrefixBeforeSatisfiedAppliedIndex(t *testi
 	assertCollectionMissing(t, h, "node-b", "orders")
 }
 
+func TestReadBarrierRefreshesProgressAfterPartialCatchUpError(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	first := committedCommand(26, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:read-barrier-partial"))
+	second := committedCommand(26, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:read-barrier-unsupported"))
+	second.Type = raftfsm.EntryTypeV1("snapshot-v1")
+	if evidence, err := h.Commit(first, second); err != nil {
+		t.Fatalf("Commit: %v evidence=%+v", err, evidence)
+	}
+	assertNoLastApplied(t, h, "node-b")
+
+	progress, err := h.ReadBarrier("node-b").WaitAppliedIndex(context.Background(), raftcluster.AppliedIndexReadBarrier{
+		MinAppliedIndex: 2,
+	})
+	if code, ok := raftfsm.ErrorCodeOf(err); !ok || code != raftentry.ErrorUnsupportedVersionV1 {
+		t.Fatalf("WaitAppliedIndex err=%v code=(%s,%t), want %s", err, code, ok, raftentry.ErrorUnsupportedVersionV1)
+	}
+	if progress.NodeID != "node-b" || progress.GroupID != "default" || progress.Term != 26 || progress.Index != 1 || !progress.HasApplied {
+		t.Fatalf("progress after partial catch-up error=%+v, want node-b default 26/1", progress)
+	}
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 26, Index: 1})
+}
+
 func TestNodeReadBarrierClosedNodeErrorsAreDistinct(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()
