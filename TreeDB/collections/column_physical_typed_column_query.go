@@ -233,6 +233,9 @@ type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
 	DenseValueNanos     int64
 	DensePredicateNanos int64
 	DensePreapplyNanos  int64
+	Q2GroupRankNanos    int64
+	Q2DistinctRankNanos int64
+	Q2LocalRankNanos    int64
 }
 
 func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPhysicalQueryDiagnostics) {
@@ -261,6 +264,9 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 	diag.TypedColumnPrepareDenseValueNanos += d.DenseValueNanos
 	diag.TypedColumnPrepareDensePredicateNanos += d.DensePredicateNanos
 	diag.TypedColumnPrepareDensePreapplyNanos += d.DensePreapplyNanos
+	diag.TypedColumnPrepareQ2GroupRankNanos += d.Q2GroupRankNanos
+	diag.TypedColumnPrepareQ2DistinctRankNanos += d.Q2DistinctRankNanos
+	diag.TypedColumnPrepareQ2LocalRankNanos += d.Q2LocalRankNanos
 }
 
 func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedColumnPhysicalQueryPrepareDiagnostics) {
@@ -289,6 +295,9 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 	d.DenseValueNanos += src.DenseValueNanos
 	d.DensePredicateNanos += src.DensePredicateNanos
 	d.DensePreapplyNanos += src.DensePreapplyNanos
+	d.Q2GroupRankNanos += src.Q2GroupRankNanos
+	d.Q2DistinctRankNanos += src.Q2DistinctRankNanos
+	d.Q2LocalRankNanos += src.Q2LocalRankNanos
 }
 
 type columnTypedColumnPhysicalAggregateSummary struct {
@@ -715,7 +724,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			return nil, err
 		}
 	} else if prepareDenseGroupCountDistinctGlobalRanks && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req) {
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(runner.parts); err != nil {
+		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(runner.parts, prepareDiagnostics); err != nil {
 			if prepareDiagnostics != nil {
 				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
 			}
@@ -1142,15 +1151,41 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalCodes(parts []columnTy
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts []columnTypedColumnPhysicalQueryPart) error {
-	groupDict, groupRanks, distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalPrep(parts)
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(parts, nil)
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
+	phaseStart := time.Now()
+	groupDict, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Group
+	})
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2GroupRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return err
 	}
+	phaseStart = time.Now()
+	distinctRanks, distinctCardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2DistinctRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	if err != nil {
+		return err
+	}
+	phaseStart = time.Now()
 	workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(parts))
 	if workers < 2 {
-		return prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+		err = prepareColumnTypedColumnDenseGroupCountDistinctGlobalParts(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks)
+	} else {
+		err = prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, workers)
 	}
-	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, workers)
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2LocalRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	return err
 }
 
 type columnTypedColumnDenseGroupCountDistinctColumnPrep func(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error

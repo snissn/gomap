@@ -734,7 +734,7 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 	}
 	switch name {
 	case "hello", "isMaster", "ismaster":
-		return marshalDocument(helloResponse(s.maxMessageLength()))
+		return marshalDocument(s.helloResponse(ctx))
 	case "buildInfo":
 		return marshalDocument(buildInfoResponse())
 	case "connectionStatus":
@@ -783,11 +783,23 @@ func commandRejectsTransactionMarkers(name string) bool {
 	}
 }
 
-func helloResponse(maxMessageLength int32) bson.D {
+func (s *Server) helloResponse(ctx context.Context) bson.D {
+	writablePrimary := true
+	if s != nil && s.clusterSubmitterConfigured() {
+		writablePrimary = false
+		if provider, ok := s.ClusterSubmitter.(treenativewire.ClusterAdmissionProvider); ok {
+			status, err := provider.ClusterAdmissionStatus(ctx)
+			writablePrimary = err == nil && status.Leader && !status.Unavailable
+		}
+	}
+	return helloResponse(s.maxMessageLength(), writablePrimary)
+}
+
+func helloResponse(maxMessageLength int32, writablePrimary bool) bson.D {
 	return bson.D{
 		{Key: "ok", Value: 1.0},
-		{Key: "isWritablePrimary", Value: true},
-		{Key: "ismaster", Value: true},
+		{Key: "isWritablePrimary", Value: writablePrimary},
+		{Key: "ismaster", Value: writablePrimary},
 		{Key: "secondary", Value: false},
 		{Key: "helloOk", Value: true},
 		{Key: "minWireVersion", Value: int32(0)},

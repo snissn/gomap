@@ -117,6 +117,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 first one-shot", first, rowHash, want)
 	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 first one-shot", first.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 	assertTypedColumnOneShotCacheDiagnostics3158(t, "q2 first one-shot", first.Diagnostics, false, true, true)
+	assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(t, "q2 first one-shot", first.Diagnostics, true)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 first", 1, 0, 1, 1, 0)
 	assertTypedColumnQ2OneShotRankMapsNoGlobalCodes3158(t, col, req)
 
@@ -135,6 +136,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ2NoMetadata3123(t *testing.T) {
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "q2 second one-shot", second, rowHash, want)
 	assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(t, "q2 second one-shot", second.Diagnostics, len(events), matchedRows, columnTypedColumnDenseGroupCountDistinctReducerPairBitset)
 	assertTypedColumnOneShotCacheDiagnostics3158(t, "q2 second one-shot", second.Diagnostics, true, false, false)
+	assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(t, "q2 second one-shot", second.Diagnostics, false)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q2 second", 2, 1, 2, 2, 0)
 	assertTypedColumnQ2OneShotRankMapsNoGlobalCodes3158(t, col, req)
 }
@@ -484,6 +486,31 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 	}
 	if prepareNanos != 0 {
 		tb.Fatalf("%s typed-column one-shot prepare nanos sum=%d want 0 diagnostics=%+v", label, prepareNanos, diag)
+	}
+}
+
+func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, want bool) {
+	tb.Helper()
+	total := diag.TypedColumnPrepareQ2GroupRankNanos +
+		diag.TypedColumnPrepareQ2DistinctRankNanos +
+		diag.TypedColumnPrepareQ2LocalRankNanos
+	if !want {
+		if total != 0 {
+			tb.Fatalf("%s q2 post-prepare subphase nanos=%d want 0 diagnostics=%+v", label, total, diag)
+		}
+		return
+	}
+	if total == 0 {
+		return
+	}
+	if diag.TypedColumnPrepareQ2GroupRankNanos <= 0 {
+		tb.Fatalf("%s group rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2GroupRankNanos, diag)
+	}
+	if diag.TypedColumnPrepareQ2DistinctRankNanos <= 0 {
+		tb.Fatalf("%s distinct rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2DistinctRankNanos, diag)
+	}
+	if diag.TypedColumnPrepareQ2LocalRankNanos <= 0 {
+		tb.Fatalf("%s local rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2LocalRankNanos, diag)
 	}
 }
 
