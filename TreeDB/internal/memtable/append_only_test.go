@@ -114,6 +114,73 @@ func TestAppendOnlyInitialEntriesForCount(t *testing.T) {
 	})
 }
 
+func TestAppendOnlyTrimEntryCapacityPreservesUnorderedEntries(t *testing.T) {
+	m := NewAppendOnlyWithEntryCapacity(4096)
+
+	m.Set([]byte("k3"), []byte("old3"))
+	m.Set([]byte("k1"), []byte("old1"))
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k1"), []byte("new1"))
+	m.Delete([]byte("k3"))
+
+	beforeCap := m.EntryCapacity()
+	beforeBytes := m.EntryBackingBytes()
+	if beforeCap <= appendOnlyMinInitialEntries {
+		t.Fatalf("test setup capacity=%d want above min=%d", beforeCap, appendOnlyMinInitialEntries)
+	}
+
+	before, after := m.TrimEntryCapacity(1)
+	if before != beforeBytes {
+		t.Fatalf("trim before bytes=%d want %d", before, beforeBytes)
+	}
+	if after >= before {
+		t.Fatalf("trim after bytes=%d want below before=%d", after, before)
+	}
+	if got := m.EntryCapacity(); got < m.Len() {
+		t.Fatalf("entry capacity after trim=%d below len=%d", got, m.Len())
+	}
+
+	if got, del, ok := m.Get([]byte("k1")); !ok || del || string(got) != "new1" {
+		t.Fatalf("Get(k1)=(%q,%v,%v), want (new1,false,true)", string(got), del, ok)
+	}
+	if got, del, ok := m.Get([]byte("k2")); !ok || del || string(got) != "v2" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want (v2,false,true)", string(got), del, ok)
+	}
+	if got, del, ok := m.Get([]byte("k3")); !ok || !del || got != nil {
+		t.Fatalf("Get(k3)=(%v,%v,%v), want tombstone", got, del, ok)
+	}
+
+	it := m.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	want := []struct {
+		key     string
+		value   string
+		deleted bool
+	}{
+		{key: "k1", value: "new1"},
+		{key: "k2", value: "v2"},
+		{key: "k3", deleted: true},
+	}
+	for i, w := range want {
+		if !it.Valid() {
+			t.Fatalf("iterator ended at %d", i)
+		}
+		if got := string(it.Key()); got != w.key {
+			t.Fatalf("iterator key[%d]=%q want %q", i, got, w.key)
+		}
+		if got := it.IsDeleted(); got != w.deleted {
+			t.Fatalf("iterator deleted[%d]=%v want %v", i, got, w.deleted)
+		}
+		if !w.deleted && string(it.Value()) != w.value {
+			t.Fatalf("iterator value[%d]=%q want %q", i, string(it.Value()), w.value)
+		}
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatalf("iterator has extra key %q", string(it.Key()))
+	}
+}
+
 func TestAppendOnlyCRUD(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 
