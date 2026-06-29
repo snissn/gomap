@@ -35,7 +35,7 @@ func TestColumnPhysicalQ5DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q5 dense): %v", err)
 	}
-	assertColumnPhysicalQ5DenseResult1950(t, "direct", direct, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+	assertColumnPhysicalQ5DenseResult1950(t, "direct", direct, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestColumnPhysicalQ5DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q5 dense no predicates): %v", err)
 	}
-	if !noPredicate.Diagnostics.DenseInt64SpanUsed || noPredicate.Diagnostics.DenseInt64SpanReducer != columnTypedColumnDenseInt64SpanReducerLocalMap || noPredicate.Diagnostics.RowsScanned != len(events) || noPredicate.Diagnostics.RowsMatched != 0 || noPredicate.Diagnostics.ReduceRows != len(events) {
+	if !noPredicate.Diagnostics.DenseInt64SpanUsed || noPredicate.Diagnostics.DenseInt64SpanReducer != columnTypedColumnDenseInt64SpanReducerGlobalCodes || noPredicate.Diagnostics.RowsScanned != len(events) || noPredicate.Diagnostics.RowsMatched != 0 || noPredicate.Diagnostics.ReduceRows != len(events) {
 		t.Fatalf("no-predicate diagnostics=%+v want dense span with RowsMatched=0 and ReduceRows=%d", noPredicate.Diagnostics, len(events))
 	}
 }
@@ -105,7 +105,7 @@ func BenchmarkColumnPhysicalQ5DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview RunColumnPhysicalQuery: %v", err)
 		}
-		assertColumnPhysicalQ5DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, len(events), matchedRows, req.TopK, len(preview.Groups), columnTypedColumnDenseInt64SpanReducerLocalMap)
+		assertColumnPhysicalQ5DenseDiagnostics1950(b, "preview direct", preview.Diagnostics, len(events), matchedRows, req.TopK, len(preview.Groups), columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()

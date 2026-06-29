@@ -794,7 +794,7 @@ func columnTypedColumnPhysicalQueryUseParallelPartDecode(plan columnTypedColumnP
 	if partCount < 2 || readCache == nil || readCache.resourceManager != nil {
 		return false
 	}
-	if includePhysicalRows || prepareDenseInt64SpanGlobalCodes || prepareDenseGroupCountDistinctGlobalCodes {
+	if includePhysicalRows || prepareDenseGroupCountDistinctGlobalCodes {
 		return false
 	}
 	if !typedColumnStringUseTargetedRanges(req.ColumnAssetReadIntegrity) {
@@ -4003,17 +4003,17 @@ func columnTypedColumnDenseInt64SpanPartsHaveGlobalCodes(parts []columnTypedColu
 	if len(parts) == 0 {
 		return false
 	}
-	cardinality := -1
+	var dictionary []string
 	for partIdx := range parts {
 		dense := parts[partIdx].DenseInt64Span
 		if dense == nil || dense.GlobalDictionary == nil || len(dense.GlobalRanks) != dense.Cardinality {
 			return false
 		}
-		if cardinality < 0 {
-			cardinality = len(dense.GlobalDictionary)
+		if dictionary == nil {
+			dictionary = dense.GlobalDictionary
 			continue
 		}
-		if len(dense.GlobalDictionary) != cardinality {
+		if !slices.Equal(dense.GlobalDictionary, dictionary) {
 			return false
 		}
 	}
@@ -4041,11 +4041,11 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanGlobalCodes(view
 			groupDictionary = dense.GlobalDictionary
 			continue
 		}
-		if len(dense.GlobalDictionary) != len(groupDictionary) {
+		if !slices.Equal(dense.GlobalDictionary, groupDictionary) {
 			diag := r.diagnostics(view, req, 0, 0, 0, time.Since(start).Nanoseconds())
 			diag.DenseInt64SpanUsed = true
 			diag.DenseInt64SpanReducer = columnTypedColumnDenseInt64SpanReducerGlobalCodes
-			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d global cardinality=%d want %d", partIdx, len(dense.GlobalDictionary), len(groupDictionary))
+			return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column int64-span part %d global dictionary mismatch cardinality=%d want %d", partIdx, len(dense.GlobalDictionary), len(groupDictionary))
 		}
 	}
 	groupCardinality := len(groupDictionary)

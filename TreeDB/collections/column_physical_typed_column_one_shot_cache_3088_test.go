@@ -3,6 +3,7 @@ package collections
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first RunColumnPhysicalQuery(q5): %v", err)
 	}
-	assertColumnPhysicalQ5DenseResult1950(t, "q5 first one-shot", first, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+	assertColumnPhysicalQ5DenseResult1950(t, "q5 first one-shot", first, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q5 first", 1, 0, 1, 1, 0)
 	if got := first.Diagnostics.TypedColumnPrepareWorkerCount; got != wantPrepareWorkers {
 		t.Fatalf("q5 first one-shot typed-column prepare workers=%d want %d diagnostics=%+v", got, wantPrepareWorkers, first.Diagnostics)
@@ -96,7 +97,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second RunColumnPhysicalQuery(q5): %v", err)
 	}
-	assertColumnPhysicalQ5DenseResult1950(t, "q5 second one-shot", second, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+	assertColumnPhysicalQ5DenseResult1950(t, "q5 second one-shot", second, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q5 second", 1, 1, 1, 1, 0)
 	if got := second.Diagnostics.TypedColumnPrepareWorkerCount; got != 0 {
 		t.Fatalf("q5 second cache-hit typed-column prepare workers=%d want 0 diagnostics=%+v", got, second.Diagnostics)
@@ -120,7 +121,7 @@ func TestColumnPhysicalTypedColumnQ5PredicateBlockMinMaxSkips3088(t *testing.T) 
 	if err != nil {
 		t.Fatalf("first RunColumnPhysicalQuery(q5 predicate mask): %v", err)
 	}
-	assertColumnPhysicalQ5DenseResult1950(t, "q5 predicate mask first", first, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+	assertColumnPhysicalQ5DenseResult1950(t, "q5 predicate mask first", first, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 	if got := first.Diagnostics.DenseInt64SpanPredicateBlocksSkipped; got < 3 {
 		t.Fatalf("q5 predicate mask skipped predicate blocks=%d want at least one full row block skipped across three predicates diagnostics=%+v", got, first.Diagnostics)
 	}
@@ -133,7 +134,7 @@ func TestColumnPhysicalTypedColumnQ5PredicateBlockMinMaxSkips3088(t *testing.T) 
 	if err != nil {
 		t.Fatalf("second RunColumnPhysicalQuery(q5 predicate mask): %v", err)
 	}
-	assertColumnPhysicalQ5DenseResult1950(t, "q5 predicate mask second", second, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+	assertColumnPhysicalQ5DenseResult1950(t, "q5 predicate mask second", second, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 	if got := second.Diagnostics.DenseInt64SpanPredicateBlocksSkipped; got != first.Diagnostics.DenseInt64SpanPredicateBlocksSkipped {
 		t.Fatalf("q5 predicate mask cache-hit skipped predicate blocks=%d want %d diagnostics=%+v", got, first.Diagnostics.DenseInt64SpanPredicateBlocksSkipped, second.Diagnostics)
 	}
@@ -243,10 +244,11 @@ func TestColumnPhysicalTypedColumnParallelPartDecodeShapes3158(t *testing.T) {
 			want: true,
 		},
 		{
-			name:                             "global int64 codes stay serial",
+			name:                             "global int64 rank prep keeps parallel decode",
 			plan:                             columnTypedColumnPhysicalQueryPlan{DenseInt64Span: true, GroupColumn: "did", ValueColumn: "time_us"},
 			req:                              ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupInt64Span, GroupColumn: "did", ValueColumn: "time_us", ColumnAssetReadIntegrity: ColumnAssetReadIntegrityCachedVerify},
 			prepareDenseInt64SpanGlobalCodes: true,
+			want:                             true,
 		},
 		{
 			name:                         "global count-distinct codes stay serial",
@@ -315,6 +317,7 @@ func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 		tb.Fatalf("q5 typed-column one-shot cache entry has nil runner")
 	}
 	sawCompact := false
+	var globalDictionary []string
 	for partIdx := range runner.parts {
 		dense := runner.parts[partIdx].DenseInt64Span
 		if dense == nil {
@@ -325,6 +328,17 @@ func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 		}
 		if len(dense.DictionaryByCode) != 0 {
 			tb.Fatalf("q5 typed-column one-shot part %d reverse dictionary retained=%d want 0", partIdx, len(dense.DictionaryByCode))
+		}
+		if dense.GlobalDictionary == nil {
+			tb.Fatalf("q5 typed-column one-shot part %d global dictionary is nil", partIdx)
+		}
+		if len(dense.GlobalRanks) != dense.Cardinality {
+			tb.Fatalf("q5 typed-column one-shot part %d global rank entries=%d want cardinality=%d", partIdx, len(dense.GlobalRanks), dense.Cardinality)
+		}
+		if globalDictionary == nil {
+			globalDictionary = dense.GlobalDictionary
+		} else if !slices.Equal(dense.GlobalDictionary, globalDictionary) {
+			tb.Fatalf("q5 typed-column one-shot part %d global dictionary differs from first part", partIdx)
 		}
 		if !dense.PredicatesPreApplied {
 			tb.Fatalf("q5 typed-column one-shot part %d predicates were not preapplied", partIdx)

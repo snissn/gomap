@@ -128,14 +128,14 @@ func TestColumnPhysicalDenseTypedColumnTargetedRangeReads3090(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RunColumnPhysicalQuery(q5 verify): %v", err)
 		}
-		assertColumnPhysicalQ5DenseResult1950(t, "q5 verify", full, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+		assertColumnPhysicalQ5DenseResult1950(t, "q5 verify", full, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 
 		req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
 		ranged, err := col.RunColumnPhysicalQuery(req)
 		if err != nil {
 			t.Fatalf("RunColumnPhysicalQuery(q5 skip checksums): %v", err)
 		}
-		assertColumnPhysicalQ5DenseResult1950(t, "q5 targeted ranges", ranged, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+		assertColumnPhysicalQ5DenseResult1950(t, "q5 targeted ranges", ranged, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerGlobalCodes)
 		assertColumnPhysicalTargetedRangeBytes3090(t, "q5", full.Diagnostics, ranged.Diagnostics)
 	})
 }
