@@ -1,8 +1,12 @@
 package collections
 
 import (
+	"fmt"
 	"runtime"
+	"strconv"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestColumnPhysicalTypedColumnOneShotCacheQ1Q3NoMetadata3088(t *testing.T) {
@@ -96,6 +100,42 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ5NoMetadata3088(t *testing.T) {
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q5 second", 1, 1, 1, 1, 0)
 	if got := second.Diagnostics.TypedColumnPrepareWorkerCount; got != 0 {
 		t.Fatalf("q5 second cache-hit typed-column prepare workers=%d want 0 diagnostics=%+v", got, second.Diagnostics)
+	}
+}
+
+func TestColumnPhysicalTypedColumnQ5PredicateBlockMinMaxSkips3088(t *testing.T) {
+	const rowsPerGranule = 2
+	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ5PredicateBlockMaskBatch3088()}
+	events := flattenColumnPhysicalEvents1950(batches)
+	_, col, closeFn := openTypedColumnRowsPerGranuleFixtureBatches3088(t, nil, rowsPerGranule, batches)
+	defer closeFn()
+
+	scanned := scanColumnPhysicalJSONBenchParityEventsP0(t, col, len(events))
+	req := columnPhysicalQ5DenseRequest1950()
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+	want := columnPhysicalQ5DenseReferenceGroups1950(scanned, req.TopK)
+	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q5", scanned)
+
+	first, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("first RunColumnPhysicalQuery(q5 predicate mask): %v", err)
+	}
+	assertColumnPhysicalQ5DenseResult1950(t, "q5 predicate mask first", first, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+	if got := first.Diagnostics.DenseInt64SpanPredicateBlocksSkipped; got < 3 {
+		t.Fatalf("q5 predicate mask skipped predicate blocks=%d want at least one full row block skipped across three predicates diagnostics=%+v", got, first.Diagnostics)
+	}
+	if got, fullPredicateBlocks := first.Diagnostics.DecodedBlocks, 3*(len(events)/rowsPerGranule)+2; got >= fullPredicateBlocks {
+		t.Fatalf("q5 predicate mask decoded blocks=%d want below unfiltered predicate decode budget %d diagnostics=%+v", got, fullPredicateBlocks, first.Diagnostics)
+	}
+	assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(t, col, req, true)
+
+	second, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("second RunColumnPhysicalQuery(q5 predicate mask): %v", err)
+	}
+	assertColumnPhysicalQ5DenseResult1950(t, "q5 predicate mask second", second, want, len(events), matchedRows, columnTypedColumnDenseInt64SpanReducerLocalMap)
+	if got := second.Diagnostics.DenseInt64SpanPredicateBlocksSkipped; got != first.Diagnostics.DenseInt64SpanPredicateBlocksSkipped {
+		t.Fatalf("q5 predicate mask cache-hit skipped predicate blocks=%d want %d diagnostics=%+v", got, first.Diagnostics.DenseInt64SpanPredicateBlocksSkipped, second.Diagnostics)
 	}
 }
 
@@ -534,6 +574,74 @@ func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label 
 	if diag.TypedColumnPrepareQ2LocalRankNanos <= 0 {
 		tb.Fatalf("%s local rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2LocalRankNanos, diag)
 	}
+}
+
+func typedColumnQ5PredicateBlockMaskBatch3088() []columnPhysicalJSONBenchParityEventP0 {
+	const base = int64(1_900_000_000_000_000)
+	return []columnPhysicalJSONBenchParityEventP0{
+		{ID: "mask-m-1", TimeUS: base + 10, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:m"},
+		{ID: "mask-m-2", TimeUS: base + 90, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:m"},
+		{ID: "mask-kind-1", TimeUS: base + 110, Kind: "identity", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:guard-kind-1"},
+		{ID: "mask-kind-2", TimeUS: base + 120, Kind: "identity", Operation: "create", Collection: "app.bsky.feed.post", Did: "did:guard-kind-2"},
+		{ID: "mask-operation-1", TimeUS: base + 130, Kind: "commit", Operation: "delete", Collection: "app.bsky.feed.post", Did: "did:guard-operation-1"},
+		{ID: "mask-operation-2", TimeUS: base + 140, Kind: "commit", Operation: "delete", Collection: "app.bsky.feed.post", Did: "did:guard-operation-2"},
+		{ID: "mask-collection-1", TimeUS: base + 150, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.like", Did: "did:guard-collection-1"},
+		{ID: "mask-collection-2", TimeUS: base + 160, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.like", Did: "did:guard-collection-2"},
+	}
+}
+
+func openTypedColumnRowsPerGranuleFixtureBatches3088(tb testing.TB, sortKey []ColumnSortKey, rowsPerGranule int, batches [][]columnPhysicalJSONBenchParityEventP0) (*backenddb.DB, *Collection, func()) {
+	tb.Helper()
+	tb.Setenv(typedColumnBenchmarkRowsPerGranuleEnv, strconv.Itoa(rowsPerGranule))
+	dir := tb.TempDir()
+	if err := backenddb.SaveFormatConfig(dir, backenddb.FormatConfig{RequiredFeatures: []string{backenddb.RequiredFeatureCommandWALV1}}); err != nil {
+		tb.Fatalf("SaveFormatConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open setup DB: %v", err)
+	}
+	mgr := NewCollectionManager(d)
+	cfg := typedColumnSortKeyConfig1948(sortKey)
+	cfg.ProfileSupport = ColumnStoreProfileBenchmarkRelaxed
+	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}}); err != nil {
+		_ = d.Close()
+		tb.Fatalf("CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("events")
+	if err != nil {
+		_ = d.Close()
+		tb.Fatalf("OpenCollection setup: %v", err)
+	}
+	for batchIdx, batch := range batches {
+		ids := make([][]byte, len(batch))
+		docs := make([][]byte, len(batch))
+		for i, event := range batch {
+			ids[i] = []byte(event.ID)
+			docs[i] = []byte(fmt.Sprintf(`{"time_us":%d,"kind":%q,"operation":%q,"collection":%q,"did":%q}`, event.TimeUS, event.Kind, event.Operation, event.Collection, event.Did))
+		}
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			_ = d.Close()
+			tb.Fatalf("InsertBatch[%d]: %v", batchIdx, err)
+		}
+	}
+	if err := d.Checkpoint(); err != nil {
+		_ = d.Close()
+		tb.Fatalf("Checkpoint before reopen: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		tb.Fatalf("Close before reopen: %v", err)
+	}
+	reopen, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		tb.Fatalf("Open reopened DB: %v", err)
+	}
+	reopened, err := NewCollectionManager(reopen).OpenCollection("events")
+	if err != nil {
+		_ = reopen.Close()
+		tb.Fatalf("OpenCollection reopened: %v", err)
+	}
+	return reopen, reopened, func() { _ = reopen.Close() }
 }
 
 func assertTypedColumnOneShotCacheSnapshot3088(tb testing.TB, col *Collection, label string, entries int, hits uint64, misses uint64, builds uint64, invalidations uint64) {
