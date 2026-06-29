@@ -122,6 +122,9 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	if err := s.admitClusterMutation(ctx); err != nil {
+		return mongoClusterMutationCommandError(err)
+	}
 	exists, err := s.clusterCollectionExists(name)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
@@ -167,6 +170,9 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 	deletes, err := commandDocuments(command, sequences, "deletes")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	if err := s.admitClusterMutation(ctx); err != nil {
+		return mongoClusterMutationCommandError(err)
 	}
 	exists, err := s.clusterCollectionExists(name)
 	if err != nil {
@@ -416,7 +422,7 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	if s == nil || s.ClusterSubmitter == nil {
 		return nil, errors.New("Mongo gateway cluster submitter is not configured")
 	}
-	if err := treenativewire.AdmitClusterMutation(ctx, s.ClusterSubmitter); err != nil {
+	if err := s.admitClusterMutation(ctx); err != nil {
 		return nil, err
 	}
 	if row := raftentry.ClassifyNativeWireCommandV1(command); !row.Known || row.Decision != raftentry.DecisionAccepted {
@@ -448,6 +454,13 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 		return nil, err
 	}
 	return result.ResponseSections, nil
+}
+
+func (s *Server) admitClusterMutation(ctx context.Context) error {
+	if s == nil || s.ClusterSubmitter == nil {
+		return errors.New("Mongo gateway cluster submitter is not configured")
+	}
+	return treenativewire.AdmitClusterMutation(ctx, s.ClusterSubmitter)
 }
 
 func validateMongoClusterSubmitResult(result treenativewire.ClusterSubmitResult) error {

@@ -303,6 +303,48 @@ func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testin
 	}
 }
 
+func TestClusterAdmissionMongoFollowerRejectsMissingCollectionNoOps(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	submitter := &mongoClusterAdmissionSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		status:                    treenativewire.ClusterFollowerAdmission("node-a:27017", "not leader"),
+	}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterAdmissionTestSubmitter(server, submitter, 34)
+
+	updateResponse := serveCommand(t, server, 326808, bson.D{
+		{Key: "update", Value: "missing"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "BadValue")
+	assertErrmsgContains(t, updateResponse, "node-a:27017")
+
+	deleteResponse := serveCommand(t, server, 326809, bson.D{
+		{Key: "delete", Value: "missing"},
+		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, deleteResponse, "BadValue")
+	assertErrmsgContains(t, deleteResponse, "node-a:27017")
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
+	if _, err := server.Collections.OpenCollection("app.missing"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection app.missing err=%v want collection not found", err)
+	}
+}
+
 func TestClusterAdmissionMongoUnavailableRejectsBeforeSubmit(t *testing.T) {
 	submitter := &mongoClusterAdmissionSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
