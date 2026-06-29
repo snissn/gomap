@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -145,12 +146,22 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 	}
 
 	gapResults, err := bad.ApplyCommittedEntriesToNode("node-b", entries[2])
-	assertRejectedResult(t, "gap catch-up", gapResults, err, raftentry.ErrorRejectedConflictV1)
+	if !errors.Is(err, ErrCommittedLogGap) {
+		t.Fatalf("gap apply err=%v results=%+v, want ErrCommittedLogGap", err, gapResults)
+	}
+	if len(gapResults) != 0 {
+		t.Fatalf("gap apply results=%+v, want none before node mutation", gapResults)
+	}
 	assertLastApplied(t, bad, "node-b", raftentry.ApplyEntryID{Term: 13, Index: 1})
 	assertCollectionMissing(t, bad, "node-b", "orders")
 
 	divergentResults, err := bad.ApplyCommittedEntriesToNode("node-b", divergent)
-	assertRejectedResult(t, "divergent duplicate catch-up", divergentResults, err, raftentry.ErrorRejectedConflictV1)
+	if !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("divergent apply err=%v results=%+v, want ErrCommittedLogConflict", err, divergentResults)
+	}
+	if len(divergentResults) != 0 {
+		t.Fatalf("divergent apply results=%+v, want none before node mutation", divergentResults)
+	}
 	assertLastApplied(t, bad, "node-b", raftentry.ApplyEntryID{Term: 13, Index: 1})
 	assertCollectionMissing(t, bad, "node-b", "admins")
 }
@@ -164,10 +175,7 @@ func TestCatchUpNodeRejectsDivergentLastAppliedEntry(t *testing.T) {
 		committedCommand(19, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:after-divergence")),
 	}
 	divergent := committedCommand(19, 1, deterministicCreateCollectionEntry(t, "admins", "harness:create:admins:divergent-last"))
-	seeded, err := h.ApplyCommittedEntriesToNode("node-b", divergent)
-	if err != nil {
-		t.Fatalf("seed divergent follower: %v results=%+v", err, seeded)
-	}
+	seeded := applyEntriesDirectlyToNode(t, h, "node-b", divergent)
 	assertAppliedResults(t, "node-b divergent seed", seeded, []int64{1})
 	if _, err := h.Commit(committed...); err != nil {
 		t.Fatalf("Commit committed log: %v", err)
@@ -195,10 +203,7 @@ func TestCatchUpNodeRejectsDivergentAppliedPrefix(t *testing.T) {
 		committedCommand(20, 2, deterministicCreateCollectionEntry(t, "admins", "harness:create:admins:divergent-prefix")),
 		committed[2],
 	}
-	seeded, err := h.ApplyCommittedEntriesToNode("node-b", divergent...)
-	if err != nil {
-		t.Fatalf("seed divergent prefix follower: %v results=%+v", err, seeded)
-	}
+	seeded := applyEntriesDirectlyToNode(t, h, "node-b", divergent...)
 	assertAppliedResults(t, "node-b divergent prefix seed", seeded, []int64{1, 1, 1})
 	if _, err := h.Commit(committed...); err != nil {
 		t.Fatalf("Commit committed log: %v", err)
@@ -209,6 +214,63 @@ func TestCatchUpNodeRejectsDivergentAppliedPrefix(t *testing.T) {
 	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 20, Index: 3})
 	assertCollectionMissing(t, h, "node-b", "orders")
 	assertCollectionMissing(t, h, "node-b", "products")
+}
+
+func TestCatchUpNodeRejectsAppliedPrefixTermMismatch(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	createUsers := deterministicCreateCollectionEntry(t, "users", "harness:create:users:term-prefix")
+	createOrders := deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:term-prefix")
+	local := []raftfsm.CommittedEntryV1{
+		committedCommand(21, 1, createUsers),
+		committedCommand(21, 2, createOrders),
+	}
+	committed := []raftfsm.CommittedEntryV1{
+		committedCommand(20, 1, createUsers),
+		committedCommand(20, 2, createOrders),
+		committedCommand(21, 3, deterministicCreateCollectionEntry(t, "audits", "harness:create:audits:term-prefix")),
+	}
+	seeded := applyEntriesDirectlyToNode(t, h, "node-b", local...)
+	assertAppliedResults(t, "node-b term-mismatch prefix seed", seeded, []int64{1, 1})
+	if _, err := h.Commit(committed...); err != nil {
+		t.Fatalf("Commit committed log: %v", err)
+	}
+
+	catchup, err := h.CatchUpNode("node-b")
+	assertRejectedResult(t, "term-mismatch applied-prefix catch-up", catchup, err, raftentry.ErrorRejectedConflictV1)
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 21, Index: 2})
+	assertCollectionMissing(t, h, "node-b", "audits")
+}
+
+func TestCatchUpNodeRejectsLastAppliedBeyondCommittedLog(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	entries := []raftfsm.CommittedEntryV1{
+		committedCommand(22, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:short-log")),
+		committedCommand(22, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:short-log")),
+	}
+	if _, err := h.Commit(entries...); err != nil {
+		t.Fatalf("Commit committed log: %v", err)
+	}
+	seeded, err := h.ApplyCommittedEntriesToNode("node-b", entries...)
+	if err != nil {
+		t.Fatalf("seed follower through committed log: %v results=%+v", err, seeded)
+	}
+	assertAppliedResults(t, "node-b shortened-log seed", seeded, []int64{1, 1})
+	h.mu.Lock()
+	h.committed = h.committed[:1]
+	h.mu.Unlock()
+
+	catchup, err := h.CatchUpNode("node-b")
+	if !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("CatchUpNode shortened log err=%v results=%+v, want ErrCommittedLogConflict", err, catchup)
+	}
+	if len(catchup) != 0 {
+		t.Fatalf("CatchUpNode shortened log results=%+v, want none", catchup)
+	}
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 22, Index: 2})
 }
 
 func TestCommitRejectsInvalidBatchAtomically(t *testing.T) {
@@ -369,6 +431,9 @@ func TestOpenRejectsInvalidNodeIDBeforeOpeningPath(t *testing.T) {
 		}
 		t.Fatalf("Open with invalid node id succeeded, want error")
 	}
+	if got := err.Error(); !strings.Contains(got, "invalid node id") || !strings.Contains(got, "unsupported character '/'") {
+		t.Fatalf("Open err=%v, want invalid-node-id path-segment diagnostic", err)
+	}
 	if _, statErr := os.Stat(escaped); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("escaped node path stat err=%v, want not exist", statErr)
 	}
@@ -421,6 +486,19 @@ func openTestHarnessAt(t testing.TB, root string) *Harness {
 		t.Fatalf("Open harness: %v", err)
 	}
 	return h
+}
+
+func applyEntriesDirectlyToNode(t testing.TB, h *Harness, nodeID raftcluster.NodeID, entries ...raftfsm.CommittedEntryV1) []raftentry.ApplyResultV1 {
+	t.Helper()
+	node, ok := h.Node(nodeID)
+	if !ok {
+		t.Fatalf("node %s not found", nodeID)
+	}
+	results, err := node.ApplyCommittedEntriesV1(entries...)
+	if err != nil {
+		t.Fatalf("directly apply entries to %s: %v results=%+v", nodeID, err, results)
+	}
+	return results
 }
 
 func mixedUserEntries(t *testing.T, term uint64) []raftfsm.CommittedEntryV1 {

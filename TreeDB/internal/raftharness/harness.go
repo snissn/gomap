@@ -235,27 +235,52 @@ func (h *Harness) CommitAndApply(nodeIDs []raftcluster.NodeID, entries ...raftfs
 }
 
 func (h *Harness) ApplyCommittedEntriesToNode(id raftcluster.NodeID, entries ...raftfsm.CommittedEntryV1) ([]raftentry.ApplyResultV1, error) {
-	node, err := h.nodeForApply(id)
+	node, committed, err := h.committedEntriesForApply(id, entries)
 	if err != nil {
 		return nil, err
 	}
-	return node.ApplyCommittedEntriesV1(entries...)
+	return node.ApplyCommittedEntriesV1(committed...)
 }
 
-func (h *Harness) nodeForApply(id raftcluster.NodeID) (*Node, error) {
+func (h *Harness) committedEntriesForApply(id raftcluster.NodeID, entries []raftfsm.CommittedEntryV1) (*Node, []raftfsm.CommittedEntryV1, error) {
 	if h == nil {
-		return nil, ErrHarnessClosed
+		return nil, nil, ErrHarnessClosed
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {
-		return nil, ErrHarnessClosed
+		return nil, nil, ErrHarnessClosed
 	}
 	node, ok := h.nodes[id]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
+		return nil, nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
 	}
-	return node, nil
+	committed := make([]raftfsm.CommittedEntryV1, 0, len(entries))
+	var previous raftentry.ApplyEntryID
+	for i, entry := range entries {
+		entryID := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
+		if entryID.Term == 0 || entryID.Index == 0 {
+			return nil, nil, fmt.Errorf("%w: invalid committed id %+v", ErrCommittedLogGap, entryID)
+		}
+		if i > 0 {
+			if entryID.Index <= previous.Index {
+				return nil, nil, fmt.Errorf("%w: non-increasing apply index %d after %d", ErrCommittedLogConflict, entryID.Index, previous.Index)
+			}
+			if entryID.Index != previous.Index+1 {
+				return nil, nil, fmt.Errorf("%w: got index %d after %d", ErrCommittedLogGap, entryID.Index, previous.Index)
+			}
+		}
+		if entryID.Index > uint64(len(h.committed)) {
+			return nil, nil, fmt.Errorf("%w: apply entry index %d beyond committed log length %d", ErrCommittedLogGap, entryID.Index, len(h.committed))
+		}
+		want := h.committed[entryID.Index-1]
+		if !committedEntriesEqual(want, entry) {
+			return nil, nil, fmt.Errorf("%w: apply entry does not match committed log at index %d", ErrCommittedLogConflict, entryID.Index)
+		}
+		committed = append(committed, cloneCommittedEntry(want))
+		previous = entryID
+	}
+	return node, committed, nil
 }
 
 func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1, error) {

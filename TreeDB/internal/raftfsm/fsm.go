@@ -186,6 +186,17 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 	if uint64(len(entries)) != record.EntryID.Index {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match last applied index %d", len(entries), record.EntryID.Index))
 	}
+	if len(entries) > 0 {
+		last := entries[len(entries)-1]
+		lastID := raftentry.ApplyEntryID{Term: last.Term, Index: last.Index}
+		lastDigest := commandDigest(last.Bytes, f.decodeOptions(last, lastID))
+		if err := validateCommittedID(lastID); err != nil {
+			return reject(lastDigest, raftentry.ErrorMalformedEntryV1, err)
+		}
+		if lastID != record.EntryID {
+			return reject(lastDigest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix last entry %d/%d does not match durable last applied %d/%d", lastID.Term, lastID.Index, record.EntryID.Term, record.EntryID.Index))
+		}
+	}
 	for i, entry := range entries {
 		id := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
 		digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
