@@ -109,10 +109,13 @@ type columnTypedColumnDenseInt64SpanPart struct {
 }
 
 type columnTypedColumnSortedGroupedDistinctCodeColumn struct {
-	Codes            []int64
-	Dictionary       []string
-	GlobalCodes      []uint32
-	GlobalDictionary []string
+	Codes               []int64
+	Dictionary          []string
+	GlobalCodes         []uint32
+	GlobalDictionary    []string
+	GlobalCardinality   int
+	GlobalCardinalityOK bool
+	GlobalLocalRanks    []uint32
 }
 
 type columnTypedColumnSortedGroupedDistinctPredicate struct {
@@ -731,7 +734,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 	}
 	phaseStart = time.Now()
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) {
-		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalCodesWithDiagnostics(runner.parts, prepareDiagnostics); err != nil {
+		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalRankMapsWithDiagnostics(runner.parts, prepareDiagnostics); err != nil {
 			if prepareDiagnostics != nil {
 				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
 			}
@@ -1095,6 +1098,37 @@ func prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(parts []columnType
 	return prepareColumnTypedColumnSortedGroupedDistinctGlobalCodesWithDiagnostics(parts, nil)
 }
 
+func prepareColumnTypedColumnSortedGroupedDistinctGlobalRankMapsWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
+	phaseStart := time.Now()
+	groupDict, groupRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
+		return &part.Group
+	})
+	if err == nil {
+		err = prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRankMaps(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
+			return &part.Group
+		}, groupDict, len(groupDict), groupRanks, "group")
+	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2GroupGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	if err != nil {
+		return err
+	}
+	phaseStart = time.Now()
+	distinctRanks, distinctCardinality, err := columnTypedColumnSortedGroupedDistinctGlobalRanks(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
+		return &part.Distinct
+	})
+	if err == nil {
+		err = prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRankMaps(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
+			return &part.Distinct
+		}, nil, distinctCardinality, distinctRanks, "distinct")
+	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2DistinctGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	return err
+}
+
 func prepareColumnTypedColumnSortedGroupedDistinctGlobalCodesWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
 	phaseStart := time.Now()
 	groupDict, groupRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
@@ -1168,15 +1202,32 @@ func columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts []columnTypedC
 	return dictionary, ranks, nil
 }
 
-func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(column *columnTypedColumnSortedGroupedDistinctCodeColumn, globalDictionary []string, ranks map[string]uint32) error {
-	localRanks := make([]uint32, len(column.Dictionary))
-	for localCode, value := range column.Dictionary {
-		rank, ok := ranks[value]
-		if !ok {
-			return fmt.Errorf("local dictionary value %q missing from global dictionary", value)
-		}
-		localRanks[localCode] = rank
+func columnTypedColumnSortedGroupedDistinctGlobalRanks(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn) (map[string]uint32, int, error) {
+	_, ranks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, selectColumn)
+	if err != nil {
+		return nil, 0, err
 	}
+	return ranks, len(ranks), nil
+}
+
+func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRankMaps(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32, label string) error {
+	for partIdx := range parts {
+		part := parts[partIdx].SortedGroupedDistinct
+		if part == nil {
+			return fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
+		}
+		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRanks(selectColumn(part), globalDictionary, cardinality, ranks); err != nil {
+			return fmt.Errorf("collections: sorted grouped-distinct %s part %d: %w", label, partIdx, err)
+		}
+	}
+	return nil
+}
+
+func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(column *columnTypedColumnSortedGroupedDistinctCodeColumn, globalDictionary []string, ranks map[string]uint32) error {
+	if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRanks(column, globalDictionary, len(globalDictionary), ranks); err != nil {
+		return err
+	}
+	localRanks := column.GlobalLocalRanks
 	globalCodes := make([]uint32, len(column.Codes))
 	for row, localCode := range column.Codes {
 		if localCode < 0 || localCode >= int64(len(localRanks)) {
@@ -1185,7 +1236,29 @@ func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(column *colu
 		globalCodes[row] = localRanks[localCode]
 	}
 	column.GlobalCodes = globalCodes
+	return nil
+}
+
+func prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRanks(column *columnTypedColumnSortedGroupedDistinctCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error {
+	if cardinality != len(ranks) {
+		return fmt.Errorf("global cardinality=%d want ranks=%d", cardinality, len(ranks))
+	}
+	if globalDictionary != nil && len(globalDictionary) != cardinality {
+		return fmt.Errorf("global dictionary cardinality=%d want %d", len(globalDictionary), cardinality)
+	}
+	localRanks := make([]uint32, len(column.Dictionary))
+	for localCode, value := range column.Dictionary {
+		rank, ok := ranks[value]
+		if !ok {
+			return fmt.Errorf("local dictionary value %q missing from global dictionary", value)
+		}
+		localRanks[localCode] = rank
+	}
+	column.GlobalCodes = nil
 	column.GlobalDictionary = globalDictionary
+	column.GlobalCardinality = cardinality
+	column.GlobalCardinalityOK = true
+	column.GlobalLocalRanks = localRanks
 	return nil
 }
 
@@ -4557,7 +4630,7 @@ type columnTypedColumnSortedGroupedDistinctIterator struct {
 	currentDistinct     string
 	currentGroupCode    uint32
 	currentDistinctCode uint32
-	globalCodes         bool
+	globalRanks         bool
 	done                bool
 	rowsScanned         int
 	matchedRows         int
@@ -4572,7 +4645,7 @@ func newColumnTypedColumnSortedGroupedDistinctIterator(part *columnTypedColumnPh
 			physicalRows: part.SortedGroupedDistinct.PhysicalRows,
 			visibility:   visibility,
 			codePart:     part.SortedGroupedDistinct,
-			globalCodes:  columnTypedColumnSortedGroupedDistinctPartHasGlobalCodes(part.SortedGroupedDistinct),
+			globalRanks:  columnTypedColumnSortedGroupedDistinctPartHasGlobalRanks(part.SortedGroupedDistinct),
 		}, nil
 	}
 	partRows := len(part.RowIndexes)
@@ -4691,22 +4764,25 @@ func (it *columnTypedColumnSortedGroupedDistinctIterator) advanceCodes() error {
 		if len(it.codePart.Predicates) != 0 {
 			it.matchedRows++
 		}
-		if it.globalCodes {
-			if rowIdx >= len(it.codePart.Group.GlobalCodes) || rowIdx >= len(it.codePart.Distinct.GlobalCodes) {
-				return fmt.Errorf("collections: sorted grouped-distinct row=%d outside global code rows group=%d distinct=%d", rowIdx, len(it.codePart.Group.GlobalCodes), len(it.codePart.Distinct.GlobalCodes))
+		groupCode := it.codePart.Group.Codes[rowIdx]
+		distinctCode := it.codePart.Distinct.Codes[rowIdx]
+		if it.globalRanks {
+			if groupCode < 0 || groupCode >= int64(len(it.codePart.Group.GlobalLocalRanks)) {
+				return fmt.Errorf("collections: sorted grouped-distinct group code=%d outside global local-rank cardinality=%d", groupCode, len(it.codePart.Group.GlobalLocalRanks))
 			}
-			it.currentGroupCode = it.codePart.Group.GlobalCodes[rowIdx]
-			it.currentDistinctCode = it.codePart.Distinct.GlobalCodes[rowIdx]
-			if int(it.currentGroupCode) >= len(it.codePart.Group.GlobalDictionary) {
-				return fmt.Errorf("collections: sorted grouped-distinct global group code=%d outside cardinality=%d", it.currentGroupCode, len(it.codePart.Group.GlobalDictionary))
+			if distinctCode < 0 || distinctCode >= int64(len(it.codePart.Distinct.GlobalLocalRanks)) {
+				return fmt.Errorf("collections: sorted grouped-distinct distinct code=%d outside global local-rank cardinality=%d", distinctCode, len(it.codePart.Distinct.GlobalLocalRanks))
 			}
-			if int(it.currentDistinctCode) >= len(it.codePart.Distinct.GlobalDictionary) {
-				return fmt.Errorf("collections: sorted grouped-distinct global distinct code=%d outside cardinality=%d", it.currentDistinctCode, len(it.codePart.Distinct.GlobalDictionary))
+			it.currentGroupCode = it.codePart.Group.GlobalLocalRanks[groupCode]
+			it.currentDistinctCode = it.codePart.Distinct.GlobalLocalRanks[distinctCode]
+			if int(it.currentGroupCode) >= it.codePart.Group.GlobalCardinality {
+				return fmt.Errorf("collections: sorted grouped-distinct global group rank=%d outside cardinality=%d", it.currentGroupCode, it.codePart.Group.GlobalCardinality)
+			}
+			if int(it.currentDistinctCode) >= it.codePart.Distinct.GlobalCardinality {
+				return fmt.Errorf("collections: sorted grouped-distinct global distinct rank=%d outside cardinality=%d", it.currentDistinctCode, it.codePart.Distinct.GlobalCardinality)
 			}
 			return nil
 		}
-		groupCode := it.codePart.Group.Codes[rowIdx]
-		distinctCode := it.codePart.Distinct.Codes[rowIdx]
 		if groupCode < 0 || groupCode >= int64(len(it.codePart.Group.Dictionary)) {
 			return fmt.Errorf("collections: sorted grouped-distinct group code=%d outside cardinality=%d", groupCode, len(it.codePart.Group.Dictionary))
 		}
@@ -4725,22 +4801,23 @@ func (it *columnTypedColumnSortedGroupedDistinctIterator) advanceCodes() error {
 	return nil
 }
 
-func columnTypedColumnSortedGroupedDistinctPartHasGlobalCodes(part *columnTypedColumnSortedGroupedDistinctPart) bool {
+func columnTypedColumnSortedGroupedDistinctPartHasGlobalRanks(part *columnTypedColumnSortedGroupedDistinctPart) bool {
 	return part != nil &&
-		len(part.Group.GlobalCodes) == part.Rows &&
-		len(part.Distinct.GlobalCodes) == part.Rows &&
 		part.Group.GlobalDictionary != nil &&
-		part.Distinct.GlobalDictionary != nil
+		part.Group.GlobalCardinalityOK &&
+		part.Distinct.GlobalCardinalityOK &&
+		len(part.Group.GlobalLocalRanks) == len(part.Group.Dictionary) &&
+		len(part.Distinct.GlobalLocalRanks) == len(part.Distinct.Dictionary)
 }
 
 func (r *columnTypedColumnPhysicalQueryRunner) reduceSortedGroupedDistinct(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) ([]ColumnPhysicalQueryGroup, int, error) {
-	if columnTypedColumnSortedGroupedDistinctHeapUsesGlobalCodes(iterators, heap) {
-		return r.reduceSortedGroupedDistinctGlobalCodes(iterators, heap)
+	if columnTypedColumnSortedGroupedDistinctHeapUsesGlobalRanks(iterators, heap) {
+		return r.reduceSortedGroupedDistinctGlobalRanks(iterators, heap)
 	}
 	return r.reduceSortedGroupedDistinctStrings(iterators, heap)
 }
 
-func (r *columnTypedColumnPhysicalQueryRunner) reduceSortedGroupedDistinctGlobalCodes(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) ([]ColumnPhysicalQueryGroup, int, error) {
+func (r *columnTypedColumnPhysicalQueryRunner) reduceSortedGroupedDistinctGlobalRanks(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) ([]ColumnPhysicalQueryGroup, int, error) {
 	groups := r.resultGroups[:0]
 	firstGroup := true
 	var currentGroupCode uint32
@@ -4843,12 +4920,12 @@ func (r *columnTypedColumnPhysicalQueryRunner) reduceSortedGroupedDistinctString
 	return groups, reduceRows, nil
 }
 
-func columnTypedColumnSortedGroupedDistinctHeapUsesGlobalCodes(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) bool {
+func columnTypedColumnSortedGroupedDistinctHeapUsesGlobalRanks(iterators []*columnTypedColumnSortedGroupedDistinctIterator, heap *columnTypedColumnSortedGroupedDistinctHeap) bool {
 	if heap.len() == 0 {
 		return false
 	}
 	for _, iteratorIdx := range heap.items {
-		if iteratorIdx < 0 || iteratorIdx >= len(iterators) || !iterators[iteratorIdx].globalCodes {
+		if iteratorIdx < 0 || iteratorIdx >= len(iterators) || !iterators[iteratorIdx].globalRanks {
 			return false
 		}
 	}
@@ -4901,7 +4978,7 @@ func (h *columnTypedColumnSortedGroupedDistinctHeap) pop(iterators []*columnType
 }
 
 func columnTypedColumnSortedGroupedDistinctIteratorLess(left, right *columnTypedColumnSortedGroupedDistinctIterator) bool {
-	if left.globalCodes && right.globalCodes {
+	if left.globalRanks && right.globalRanks {
 		if left.currentGroupCode != right.currentGroupCode {
 			return left.currentGroupCode < right.currentGroupCode
 		}
