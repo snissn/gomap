@@ -28,6 +28,7 @@ const (
 	appendOnlyEntryPoolMaxShift      = 20
 	appendOnlyEntryPoolClassCount    = appendOnlyEntryPoolMaxShift - appendOnlyEntryPoolMinShift + 1
 	appendOnlyEntryPoolMaxCap        = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
+	appendOnlyEntryPoolRetainMaxCap  = 1 << 16
 	appendOnlyMinInitialEntries      = 1 << appendOnlyEntryPoolMinShift // 128
 	appendOnlyMaxInitialEntries      = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
 	appendOnlyIteratorPoolMaxCap     = 1 << 20
@@ -53,6 +54,8 @@ const (
 	appendOnlyReserveHeadroomDivisor    = 4
 )
 
+var appendOnlyEntryPoolRetainBudgetBytes = uint64(256 << 20)
+
 // Serializes package-pool replacement with retained-byte accounting. sync.Pool
 // is concurrent, but the estimate is for the currently reachable pool set.
 var appendOnlyEntryPoolMu sync.Mutex
@@ -63,6 +66,8 @@ var appendOnlyEntryPoolGetTotal atomic.Uint64
 var appendOnlyEntryPoolPutTotal atomic.Uint64
 var appendOnlyEntryPoolDropTotal atomic.Uint64
 var appendOnlyEntryPoolDropBytesTotal atomic.Uint64
+var appendOnlyEntryPoolAdmissionDropTotal atomic.Uint64
+var appendOnlyEntryPoolAdmissionDropBytesTotal atomic.Uint64
 var appendOnlyEntryReserveCallsTotal atomic.Uint64
 var appendOnlyEntryReserveEntriesTotal atomic.Uint64
 var appendOnlyEntryReserveGrowCallsTotal atomic.Uint64
@@ -148,6 +153,8 @@ type AppendOnlyEntryPoolStats struct {
 	PutsTotal                uint64
 	DropsTotal               uint64
 	DropBytesTotal           uint64
+	AdmissionDropsTotal      uint64
+	AdmissionDropBytesTotal  uint64
 }
 
 type AppendOnlyEntryReserveStats struct {
@@ -202,14 +209,14 @@ func appendOnlyEntryPoolClassForLength(length int) (int, int, bool) {
 	if length < 0 {
 		length = 0
 	}
-	if length > appendOnlyEntryPoolMaxCap {
+	if length > appendOnlyEntryPoolRetainMaxCap {
 		return 0, 0, false
 	}
 	capacity := appendOnlyMinInitialEntries
 	if length > appendOnlyMinInitialEntries {
 		capacity = 1 << bits.Len(uint(length-1))
 	}
-	if capacity > appendOnlyEntryPoolMaxCap {
+	if capacity > appendOnlyEntryPoolRetainMaxCap {
 		return 0, 0, false
 	}
 	class := bits.Len(uint(capacity)) - 1 - appendOnlyEntryPoolMinShift
@@ -220,7 +227,7 @@ func appendOnlyEntryPoolClassForLength(length int) (int, int, bool) {
 }
 
 func appendOnlyEntryPoolClassForReusableCapacity(capacity int) (int, bool) {
-	if capacity < appendOnlyMinInitialEntries || capacity > appendOnlyEntryPoolMaxCap {
+	if capacity < appendOnlyMinInitialEntries || capacity > appendOnlyEntryPoolRetainMaxCap {
 		return 0, false
 	}
 	class, _, ok := appendOnlyEntryPoolClassForLength(capacity)
@@ -251,16 +258,35 @@ func appendOnlyEntryPoolBytes(capacity int) uint64 {
 	return uint64(capacity) * uint64(unsafe.Sizeof(appendOnlyEntry{}))
 }
 
-func addAppendOnlyEntryPoolRetainedBytes(bytes uint64) {
+func tryAddAppendOnlyEntryPoolRetainedBytes(bytes uint64) bool {
 	if bytes == 0 {
-		return
+		return true
 	}
-	current := appendOnlyEntryPoolRetainedBytes.Add(bytes)
+	budget := appendOnlyEntryPoolRetainBudgetBytes
+	if budget == 0 {
+		return false
+	}
 	for {
-		prev := appendOnlyEntryPoolRetainedBytesMax.Load()
-		if current <= prev || appendOnlyEntryPoolRetainedBytesMax.CompareAndSwap(prev, current) {
-			return
+		current := appendOnlyEntryPoolRetainedBytes.Load()
+		if current >= budget || bytes > budget-current {
+			return false
 		}
+		next := current + bytes
+		if appendOnlyEntryPoolRetainedBytes.CompareAndSwap(current, next) {
+			for {
+				prev := appendOnlyEntryPoolRetainedBytesMax.Load()
+				if next <= prev || appendOnlyEntryPoolRetainedBytesMax.CompareAndSwap(prev, next) {
+					return true
+				}
+			}
+		}
+	}
+}
+
+func recordAppendOnlyEntryPoolAdmissionDrop(bytes uint64) {
+	appendOnlyEntryPoolAdmissionDropTotal.Add(1)
+	if bytes > 0 {
+		appendOnlyEntryPoolAdmissionDropBytesTotal.Add(bytes)
 	}
 }
 
@@ -312,6 +338,8 @@ func AppendOnlyEntryPoolStatsSnapshot() AppendOnlyEntryPoolStats {
 		PutsTotal:                appendOnlyEntryPoolPutTotal.Load(),
 		DropsTotal:               appendOnlyEntryPoolDropTotal.Load(),
 		DropBytesTotal:           appendOnlyEntryPoolDropBytesTotal.Load(),
+		AdmissionDropsTotal:      appendOnlyEntryPoolAdmissionDropTotal.Load(),
+		AdmissionDropBytesTotal:  appendOnlyEntryPoolAdmissionDropBytesTotal.Load(),
 	}
 }
 
@@ -375,20 +403,29 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 }
 
 func putAppendOnlyEntries(entries []appendOnlyEntry) {
-	if entries == nil || cap(entries) == 0 || cap(entries) > appendOnlyEntryPoolMaxCap {
+	if entries == nil || cap(entries) == 0 {
+		return
+	}
+	if cap(entries) > appendOnlyEntryPoolRetainMaxCap {
+		recordAppendOnlyEntryPoolAdmissionDrop(appendOnlyEntryPoolBytes(cap(entries)))
 		return
 	}
 	full := entries[:cap(entries)]
 	clear(full)
 	class, ok := appendOnlyEntryPoolClassForReusableCapacity(cap(entries))
 	if !ok {
+		recordAppendOnlyEntryPoolAdmissionDrop(appendOnlyEntryPoolBytes(cap(entries)))
 		return
 	}
 	appendOnlyEntryPoolMu.Lock()
 	defer appendOnlyEntryPoolMu.Unlock()
 	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
+		bytes := appendOnlyEntryPoolBytes(cap(full))
+		if !tryAddAppendOnlyEntryPoolRetainedBytes(bytes) {
+			recordAppendOnlyEntryPoolAdmissionDrop(bytes)
+			return
+		}
 		appendOnlyEntryPoolPutTotal.Add(1)
-		addAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(full)))
 		pool.Put(full[:0])
 	}
 }
