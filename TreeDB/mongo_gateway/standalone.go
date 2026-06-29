@@ -121,6 +121,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	if opts.InsertCoalescingMaxBatch < 0 {
 		return opts, errors.New("mongo gateway standalone: InsertCoalescingMaxBatch must be >= 0")
 	}
+	if opts.ClusterSubmitter != nil && opts.ClusterCatalogVersion == nil {
+		return opts, errors.New("mongo gateway standalone: ClusterCatalogVersion is required when ClusterSubmitter is configured")
+	}
 
 	return opts, nil
 }
@@ -149,15 +152,6 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy
 	server.ClusterSubmitter = normalized.ClusterSubmitter
 	server.ClusterCatalogVersion = normalized.ClusterCatalogVersion
-	if server.ClusterCatalogVersion == nil && server.ClusterSubmitter != nil {
-		server.ClusterCatalogVersion = func(context.Context) (uint64, error) {
-			state := backend.State()
-			if state == nil {
-				return 0, errors.New("mongo gateway standalone: backend state is unavailable")
-			}
-			return state.CommitSeq, nil
-		}
-	}
 	if normalized.MaxMessageLength > 0 {
 		server.MaxMessageLength = normalized.MaxMessageLength
 	}

@@ -27,6 +27,7 @@ type mongoClusterFakeSubmitter struct {
 	mu                       sync.Mutex
 	calls                    []mongoClusterSubmitterCall
 	actualAck                iwire.AckPolicy
+	committedRecoverable     bool
 	responseSections         []iwire.Section
 	overrideResponseSections bool
 }
@@ -55,8 +56,9 @@ func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, en
 		responseSections = append([]iwire.Section(nil), f.responseSections...)
 	}
 	return treenativewire.ClusterSubmitResult{
-		ActualAck:        actualAck,
-		ResponseSections: responseSections,
+		ActualAck:            actualAck,
+		CommittedRecoverable: f.committedRecoverable,
+		ResponseSections:     responseSections,
 	}, nil
 }
 
@@ -497,6 +499,26 @@ func TestClusterSubmitterRejectsAckPolicyMismatch(t *testing.T) {
 	setMongoClusterTestSubmitter(server, submitter, 16)
 
 	response := serveCommand(t, server, 325816, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	if calls := submitter.snapshotCalls(); len(calls) != 1 {
+		t.Fatalf("submit calls=%d want 1", len(calls))
+	}
+}
+
+func TestClusterSubmitterRejectsRaftCommittedForVisibleRequest(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{
+		actualAck:            iwire.AckRaftCommitted,
+		committedRecoverable: true,
+	}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 17)
+
+	response := serveCommand(t, server, 325817, bson.D{
 		{Key: "insert", Value: "users"},
 		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
 		{Key: "$db", Value: "app"},

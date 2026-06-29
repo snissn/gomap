@@ -350,9 +350,7 @@ func validateMongoClusterSubmitResult(result treenativewire.ClusterSubmitResult)
 	switch result.ActualAck {
 	case iwire.AckVisible, iwire.AckFlushed, iwire.AckSynced:
 	case iwire.AckRaftCommitted:
-		if !result.CommittedRecoverable {
-			return errors.New("cluster submitter returned raft_committed without committed recoverability")
-		}
+		return errors.New("cluster submitter returned raft_committed without proving requested local visibility")
 	default:
 		return fmt.Errorf("cluster submitter returned unsupported ack policy %d", result.ActualAck)
 	}
