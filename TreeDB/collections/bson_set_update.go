@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
@@ -147,6 +149,92 @@ func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []B
 	return results, batched, err
 }
 
+// PrepareBSONSetUpdateBatchCommandWAL plans a BSON $set batch without applying
+// it and returns the exact replacement documents that must be staged in an
+// externally-owned collection update command-WAL frame. It is reserved for R3a
+// deterministic apply.
+func (c *Collection) PrepareBSONSetUpdateBatchCommandWAL(items []BSONSetUpdateBatchItem) ([]UpdateBatchResult, []commitlog.CollectionDocument, error) {
+	if c == nil {
+		return nil, nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, nil, errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, nil, err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return nil, nil, err
+	}
+	if len(items) == 0 {
+		c.setLastUpdateStats(CollectionUpdateStats{})
+		return nil, nil, nil
+	}
+	ownedItems, err := prepareBSONSetUpdateBatchItems(items)
+	if err != nil {
+		return nil, nil, err
+	}
+	unlockMutation := c.lockMutation()
+	defer unlockMutation.Unlock()
+	if err := c.flushBufferedWrites(); err != nil {
+		return nil, nil, err
+	}
+	plan, err := c.buildUpdateBatchPlan(ownedItems, updateBatchModeAny, false, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer plan.close()
+	return cloneBSONSetUpdateBatchResults(plan.results), cloneBSONSetUpdateCommandWALDocuments(plan.commandWALDocuments), nil
+}
+
+// UpdateBSONSetBatchWithCommandWALIntent applies BSON $set updates with an
+// already-appended collection update command-WAL frame. It is reserved for R3a
+// deterministic apply; ordinary callers should use UpdateBSONSet or
+// UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges.
+func (c *Collection) UpdateBSONSetBatchWithCommandWALIntent(items []BSONSetUpdateBatchItem, commandWALIntent *backenddb.CommandWALIntent) ([]UpdateBatchResult, error) {
+	if commandWALIntent == nil {
+		return nil, errors.New("collections: UpdateBSONSetBatchWithCommandWALIntent requires command WAL intent")
+	}
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.db == nil {
+		return nil, errCollectionDBNil
+	}
+	if err := c.ensureWriteDomainOpen(); err != nil {
+		return nil, err
+	}
+	unlockSchema := c.lockCollectionSchemaRead()
+	defer unlockSchema()
+	if err := c.validateBSONSetDocumentFormat(); err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		c.setLastUpdateStats(CollectionUpdateStats{})
+		return nil, nil
+	}
+	ownedItems, err := prepareBSONSetUpdateBatchItems(items)
+	if err != nil {
+		return nil, err
+	}
+	if err := c.requireColumnStoreCommandWAL(c.meta, commandWALIntent); err != nil {
+		return nil, err
+	}
+	if err := requireColumnStoreWriteOperationSupported(c.meta, ColumnPublishOperationUpdate); err != nil {
+		return nil, err
+	}
+	results, batched, err := c.updateBatchOwnedItemsWithCommandWALIntent(ownedItems, updateBatchModeAny, commandWALIntent)
+	if err == nil && !batched {
+		err = errors.New("collections: command WAL BSON $set update unexpectedly unbatched")
+	}
+	if err == nil {
+		err = commitAmbiguousError("UpdateBSONSetBatchWithCommandWALIntent vector index maintenance", c.notifyVectorIndexesBSONSetUpdateBatch(items, results))
+	}
+	return results, err
+}
+
 func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode updateBatchMode) ([]UpdateBatchResult, bool, error) {
 	if c == nil {
 		return nil, false, errCollectionNil
@@ -171,6 +259,27 @@ func (c *Collection) updateBSONSetBatch(items []BSONSetUpdateBatchItem, mode upd
 		return nil, false, err
 	}
 	return c.updateBatchOwnedItems(ownedItems, mode)
+}
+
+func cloneBSONSetUpdateBatchResults(results []UpdateBatchResult) []UpdateBatchResult {
+	if len(results) == 0 {
+		return nil
+	}
+	return append([]UpdateBatchResult(nil), results...)
+}
+
+func cloneBSONSetUpdateCommandWALDocuments(docs []commitlog.CollectionDocument) []commitlog.CollectionDocument {
+	if len(docs) == 0 {
+		return nil
+	}
+	out := make([]commitlog.CollectionDocument, len(docs))
+	for i := range docs {
+		out[i] = commitlog.CollectionDocument{
+			ID:       bytes.Clone(docs[i].ID),
+			Document: bytes.Clone(docs[i].Document),
+		}
+	}
+	return out
 }
 
 func prepareBSONSetUpdateBatchItems(items []BSONSetUpdateBatchItem) ([]updateBatchItem, error) {

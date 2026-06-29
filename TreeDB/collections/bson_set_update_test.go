@@ -4,9 +4,93 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commandwalapply"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
 )
+
+func TestBSONSetUpdateBatchCommandWALPrepareAndIntent(t *testing.T) {
+	baseDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "hnl"},
+		{Key: "visits", Value: int32(1)},
+	})
+	updatedDoc := mustBSONCollectionDocument(t, bson.D{
+		{Key: "_id", Value: "u1"},
+		{Key: "city", Value: "sea"},
+		{Key: "visits", Value: int32(1)},
+	})
+	dir := prepareCollectionCommandWALDir(t, CollectionMeta{
+		Name: "users",
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}, collectionCommandWALSetupInsert{
+		ids:  [][]byte{[]byte("u1")},
+		docs: [][]byte{baseDoc},
+	})
+	db := openCollectionCommandWALDB(t, dir)
+	defer func() { _ = db.Close() }()
+	col, err := NewCollectionManager(db).OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	items := []BSONSetUpdateBatchItem{{
+		DocumentID: []byte("u1"),
+		Fields: []BSONSetField{{
+			Key:   "city",
+			Value: mustBSONRawValue(t, "sea"),
+		}},
+	}}
+	results, docs, err := col.PrepareBSONSetUpdateBatchCommandWAL(items)
+	if err != nil {
+		t.Fatalf("PrepareBSONSetUpdateBatchCommandWAL: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("prepare results=%+v, want one matched modified result", results)
+	}
+	if len(docs) != 1 || !bytes.Equal(docs[0].ID, []byte("u1")) || !bytes.Equal(docs[0].Document, updatedDoc) {
+		t.Fatalf("prepared command WAL docs=%+v, want u1 updated replacement", docs)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get after prepare: %v", err)
+	}
+	if gotCity := bson.Raw(got).Lookup("city").StringValue(); gotCity != "hnl" {
+		t.Fatalf("prepare mutated city=%q, want hnl", gotCity)
+	}
+
+	payload, err := commitlog.EncodeCollectionUpdateBatchByIDPayload("users", docs)
+	if err != nil {
+		t.Fatalf("EncodeCollectionUpdateBatchByIDPayload: %v", err)
+	}
+	frame, err := commandwalapply.CollectionUpdateBatchByIDFrame(payload)
+	if err != nil {
+		t.Fatalf("CollectionUpdateBatchByIDFrame: %v", err)
+	}
+	handle, _, err := commandwalapply.Append(db, frame, commandwalapply.ApplyMetadata{}, commandwalapply.Options{})
+	if err != nil {
+		t.Fatalf("Append command WAL frame: %v", err)
+	}
+	results, err = col.UpdateBSONSetBatchWithCommandWALIntent(items, handle.CommandWALIntent())
+	if err != nil {
+		t.Fatalf("UpdateBSONSetBatchWithCommandWALIntent: %v", err)
+	}
+	if len(results) != 1 || !results[0].Matched || !results[0].Modified {
+		t.Fatalf("apply results=%+v, want one matched modified result", results)
+	}
+	if _, err := commandwalapply.Finalize(db, handle, commandwalapply.ApplyMetadata{}, commandwalapply.Options{}); err != nil {
+		t.Fatalf("Finalize command WAL frame: %v", err)
+	}
+	got, err = col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get after command WAL intent apply: %v", err)
+	}
+	if !bytes.Equal(got, updatedDoc) {
+		t.Fatalf("updated doc=%x, want %x", got, updatedDoc)
+	}
+}
 
 func TestBSONSetUpdateAppendReplacementUsesDestinationArena(t *testing.T) {
 	doc := mustBSONCollectionDocument(t, bson.D{

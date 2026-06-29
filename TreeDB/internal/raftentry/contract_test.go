@@ -126,6 +126,7 @@ func TestDecodeCommandEntryV1AcceptsMutationWideningRows(t *testing.T) {
 		{"insert", "../nativewire/testdata/v1/insert_batch_entry.hex", nativewire.CommandInsertBatch},
 		{"replace", "../nativewire/testdata/v1/replace_batch_entry.hex", nativewire.CommandReplaceBatch},
 		{"delete", "../nativewire/testdata/v1/delete_batch_entry.hex", nativewire.CommandDeleteBatch},
+		{"update_bson_set", "../nativewire/testdata/v1/update_bson_set_entry.hex", nativewire.CommandUpdateBSONSet},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := ClassifyNativeWireCommandV1(tc.command)
@@ -140,16 +141,6 @@ func TestDecodeCommandEntryV1AcceptsMutationWideningRows(t *testing.T) {
 				t.Fatalf("target command=%d, want %d", entry.Target.CommandID, tc.command)
 			}
 		})
-	}
-}
-
-func TestDecodeCommandEntryV1RejectsUpdateBSONSetUntilExplicitResultMapping(t *testing.T) {
-	row := ClassifyNativeWireCommandV1(nativewire.CommandUpdateBSONSet)
-	if !row.Known || row.Decision != DecisionRejected || row.CommandWALStatus != "WAL-supported" {
-		t.Fatalf("row=%+v, want classified WAL-supported rejection", row)
-	}
-	if _, err := DecodeCommandEntryV1(readHexFixture(t, "../nativewire/testdata/v1/update_bson_set_entry.hex"), DecodeOptions{}); codeOf(err) != ErrorUnsupportedCommandV1 {
-		t.Fatalf("DecodeCommandEntryV1 err=%v code=%s, want unsupported command", err, codeOf(err))
 	}
 }
 
