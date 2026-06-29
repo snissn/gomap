@@ -458,6 +458,12 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishAssetAppenderCloseCount += metrics.AssetMetrics.SharedAppendCloseCount
 	stats.ColumnPublishAssetAppendFileSyncCount += metrics.AssetMetrics.SharedAppendFileSyncCount
 	stats.ColumnPublishAssetSyncEpochCount += metrics.AssetMetrics.SharedAppendSyncEpochCount
+	stats.ColumnPublishSharedSegmentAppenderCloseCount += metrics.AssetMetrics.SharedSegmentAppendCloseCount
+	stats.ColumnPublishSharedSegmentAppendFileSyncCount += metrics.AssetMetrics.SharedSegmentAppendFileSyncCount
+	stats.ColumnPublishSharedSegmentAppendSyncEpochCount += metrics.AssetMetrics.SharedSegmentAppendSyncEpochCount
+	stats.ColumnPublishDirectViewSegmentAppenderCloseCount += metrics.AssetMetrics.DirectViewSegmentAppendCloseCount
+	stats.ColumnPublishDirectViewSegmentAppendFileSyncCount += metrics.AssetMetrics.DirectViewSegmentAppendFileSyncCount
+	stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount += metrics.AssetMetrics.DirectViewSegmentAppendSyncEpochCount
 	stats.ColumnPublishManifestEncode += metrics.ManifestEncode
 	stats.ColumnPublishAssetClosureValidation += metrics.AssetClosureValidation
 	stats.ColumnPublishRootDeltaConstruction += metrics.RootDeltaConstruction
@@ -476,6 +482,10 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishAggregateMetadataCount += metrics.AssetMetrics.AggregateMetadataCount
 	stats.ColumnPublishSharedAppendBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishSharedAppendBytes, metrics.AssetMetrics.SharedAppendBytes)
 	stats.ColumnPublishSharedAppendCount += metrics.AssetMetrics.SharedAppendCount
+	stats.ColumnPublishSharedSegmentAppendBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishSharedSegmentAppendBytes, metrics.AssetMetrics.SharedSegmentAppendBytes)
+	stats.ColumnPublishSharedSegmentAppendCount += metrics.AssetMetrics.SharedSegmentAppendCount
+	stats.ColumnPublishDirectViewSegmentAppendBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishDirectViewSegmentAppendBytes, metrics.AssetMetrics.DirectViewSegmentAppendBytes)
+	stats.ColumnPublishDirectViewSegmentAppendCount += metrics.AssetMetrics.DirectViewSegmentAppendCount
 	stats.ColumnPublishRequiredAssetBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishRequiredAssetBytes, plan.RequiredAssetBytes)
 	stats.ColumnPublishManifestBytes = saturatingAddNonNegativeInt64(stats.ColumnPublishManifestBytes, plan.ManifestBytes)
 }
@@ -744,6 +754,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		}
 		var appendedBytes int64
 		var appendedCount int
+		var sharedSegmentAppendBytes int64
+		var sharedSegmentAppendCount int
+		var directViewSegmentAppendBytes int64
+		var directViewSegmentAppendCount int
 		appendedRefs := make([]ColumnAssetRef, len(pendingAssets))
 		appendedRefSet := make([]bool, len(pendingAssets))
 		if needsAppender {
@@ -778,6 +792,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			}
 			for _, fileID := range appendGroupOrder {
 				group := appendGroups[fileID]
+				directViewSegment := columnAssetSegmentFileIDIsDirectView(group.fileID)
 				refs, openDuration, writeDuration, err := session.appendKindsMeasured(group.fileID, group.items)
 				appendOpenDuration += openDuration
 				appendWriteDuration += writeDuration
@@ -795,8 +810,16 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 					asset := pendingAssets[assetIndex]
 					appendedRefs[assetIndex] = ref
 					appendedRefSet[assetIndex] = true
-					appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, int64(len(asset.payload)))
+					payloadBytes := int64(len(asset.payload))
+					appendedBytes = saturatingAddNonNegativeInt64(appendedBytes, payloadBytes)
 					appendedCount++
+					if directViewSegment {
+						directViewSegmentAppendBytes = saturatingAddNonNegativeInt64(directViewSegmentAppendBytes, payloadBytes)
+						directViewSegmentAppendCount++
+					} else {
+						sharedSegmentAppendBytes = saturatingAddNonNegativeInt64(sharedSegmentAppendBytes, payloadBytes)
+						sharedSegmentAppendCount++
+					}
 					if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
 						ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) || ref.FileID != group.fileID {
 						return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
@@ -843,6 +866,12 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			appendCloseCount += closeStats.CloseCount
 			appendFileSyncCount += closeStats.FileSyncCount
 			appendSyncEpochCount += closeStats.SyncEpochCount
+			prepared.AssetMetrics.SharedSegmentAppendCloseCount += closeStats.SharedSegment.CloseCount
+			prepared.AssetMetrics.SharedSegmentAppendFileSyncCount += closeStats.SharedSegment.FileSyncCount
+			prepared.AssetMetrics.SharedSegmentAppendSyncEpochCount += closeStats.SharedSegment.SyncEpochCount
+			prepared.AssetMetrics.DirectViewSegmentAppendCloseCount += closeStats.DirectViewSegment.CloseCount
+			prepared.AssetMetrics.DirectViewSegmentAppendFileSyncCount += closeStats.DirectViewSegment.FileSyncCount
+			prepared.AssetMetrics.DirectViewSegmentAppendSyncEpochCount += closeStats.DirectViewSegment.SyncEpochCount
 		}
 		if needsAppender {
 			appendDuration := appendOpenDuration + appendWriteDuration + appendCloseDuration
@@ -859,6 +888,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			prepared.AssetMetrics.SharedAppendSyncEpochCount += appendSyncEpochCount
 			prepared.AssetMetrics.SharedAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedAppendBytes, appendedBytes)
 			prepared.AssetMetrics.SharedAppendCount += appendedCount
+			prepared.AssetMetrics.SharedSegmentAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedSegmentAppendBytes, sharedSegmentAppendBytes)
+			prepared.AssetMetrics.SharedSegmentAppendCount += sharedSegmentAppendCount
+			prepared.AssetMetrics.DirectViewSegmentAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.DirectViewSegmentAppendBytes, directViewSegmentAppendBytes)
+			prepared.AssetMetrics.DirectViewSegmentAppendCount += directViewSegmentAppendCount
 		}
 		return nil
 	}

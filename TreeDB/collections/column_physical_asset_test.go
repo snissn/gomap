@@ -2254,6 +2254,15 @@ func TestColumnPhysicalAssetAppendSessionBatchesMixedTargets3151(t *testing.T) {
 	if closeStats.CloseCount != 2 || closeStats.FileSyncCount != 2 || closeStats.SyncEpochCount != 2 {
 		t.Fatalf("close stats=%+v want two closed synced segments", closeStats)
 	}
+	if closeStats.Total.CloseCount != 2 || closeStats.Total.FileSyncCount != 2 || closeStats.Total.SyncEpochCount != 2 {
+		t.Fatalf("total close stats=%+v want two closed synced segments", closeStats.Total)
+	}
+	if closeStats.SharedSegment.CloseCount != 1 || closeStats.SharedSegment.FileSyncCount != 1 || closeStats.SharedSegment.SyncEpochCount != 1 {
+		t.Fatalf("shared close stats=%+v want one closed synced shared segment", closeStats.SharedSegment)
+	}
+	if closeStats.DirectViewSegment.CloseCount != 1 || closeStats.DirectViewSegment.FileSyncCount != 1 || closeStats.DirectViewSegment.SyncEpochCount != 1 {
+		t.Fatalf("direct-view close stats=%+v want one closed synced direct-view segment", closeStats.DirectViewSegment)
+	}
 	sharedSegment := readColumnAssetSegmentFileForTest(t, root, sharedRefs[0])
 	if got := sharedSegment[sharedRefs[0].Offset : sharedRefs[0].Offset+sharedRefs[0].Length]; !bytes.Equal(got, []byte("row-asset")) {
 		t.Fatalf("shared row payload=%q want row-asset", got)
