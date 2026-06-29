@@ -17,6 +17,12 @@ func containsAll(s string, subs ...string) bool {
 func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	stats := map[string]string{
 		"treedb.process.identity.wal_dir":                                         "/tmp/app.db/wal",
+		"treedb.command_wal.enabled":                                              "true",
+		"treedb.command_wal.writer.command_buffer.capacity_bytes":                 "4194304",
+		"treedb.command_wal.writer.command_buffer.retain_limit_bytes":             "4194304",
+		"treedb.command_wal.writer.command_buffer.trim_count":                     "7",
+		"treedb.command_wal.writer.command_buffer.dropped_bytes_total":            "67108864",
+		"treedb.command_wal.writer.pending_batch.capacity_bytes":                  "32768",
 		"treedb.vlog.mmap_active_bytes":                                           "22222",
 		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                           "1610612736",
 		"treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total":  "17",
@@ -147,6 +153,24 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	if v, ok := got["treedb.process.identity.wal_dir"].(string); !ok || v != "/tmp/app.db/wal" {
 		t.Fatalf("identity.wal_dir=%T(%v) want /tmp/app.db/wal", got["treedb.process.identity.wal_dir"], got["treedb.process.identity.wal_dir"])
 	}
+	if v, ok := got["treedb.command_wal.enabled"].(bool); !ok || !v {
+		t.Fatalf("command_wal.enabled=%T(%v) want bool(true)", got["treedb.command_wal.enabled"], got["treedb.command_wal.enabled"])
+	}
+	if v, ok := got["treedb.command_wal.writer.command_buffer.capacity_bytes"].(int64); !ok || v != 4194304 {
+		t.Fatalf("command_buffer.capacity_bytes=%T(%v) want int64(4194304)", got["treedb.command_wal.writer.command_buffer.capacity_bytes"], got["treedb.command_wal.writer.command_buffer.capacity_bytes"])
+	}
+	if v, ok := got["treedb.command_wal.writer.command_buffer.retain_limit_bytes"].(int64); !ok || v != 4194304 {
+		t.Fatalf("command_buffer.retain_limit_bytes=%T(%v) want int64(4194304)", got["treedb.command_wal.writer.command_buffer.retain_limit_bytes"], got["treedb.command_wal.writer.command_buffer.retain_limit_bytes"])
+	}
+	if v, ok := got["treedb.command_wal.writer.command_buffer.trim_count"].(int64); !ok || v != 7 {
+		t.Fatalf("command_buffer.trim_count=%T(%v) want int64(7)", got["treedb.command_wal.writer.command_buffer.trim_count"], got["treedb.command_wal.writer.command_buffer.trim_count"])
+	}
+	if v, ok := got["treedb.command_wal.writer.command_buffer.dropped_bytes_total"].(int64); !ok || v != 67108864 {
+		t.Fatalf("command_buffer.dropped_bytes_total=%T(%v) want int64(67108864)", got["treedb.command_wal.writer.command_buffer.dropped_bytes_total"], got["treedb.command_wal.writer.command_buffer.dropped_bytes_total"])
+	}
+	if v, ok := got["treedb.command_wal.writer.pending_batch.capacity_bytes"].(int64); !ok || v != 32768 {
+		t.Fatalf("pending_batch.capacity_bytes=%T(%v) want int64(32768)", got["treedb.command_wal.writer.pending_batch.capacity_bytes"], got["treedb.command_wal.writer.pending_batch.capacity_bytes"])
+	}
 	if v, ok := got["treedb.process.memory.pool_pressure_level"].(string); !ok || v != "critical" {
 		t.Fatalf("pool_pressure_level=%T(%v) want string(critical)", got["treedb.process.memory.pool_pressure_level"], got["treedb.process.memory.pool_pressure_level"])
 	}
@@ -234,9 +258,11 @@ func TestCurrentTreeDBExpvarStatsIncludesInstances(t *testing.T) {
 		backend: &mockBackendWithStats{
 			MockBackend: NewMockBackend(),
 			stats: map[string]string{
-				"treedb.process.identity.wal_dir":        "/tmp/b/wal",
-				"treedb.process.memory.heap_inuse_bytes": "222",
-				"treedb.vlog.mmap_active_bytes":          "9",
+				"treedb.process.identity.wal_dir":                              "/tmp/b/wal",
+				"treedb.process.memory.heap_inuse_bytes":                       "222",
+				"treedb.command_wal.writer.command_buffer.capacity_bytes":      "4194304",
+				"treedb.command_wal.writer.command_buffer.dropped_bytes_total": "67108864",
+				"treedb.vlog.mmap_active_bytes":                                "9",
 			},
 		},
 	}
@@ -274,6 +300,12 @@ func TestCurrentTreeDBExpvarStatsIncludesInstances(t *testing.T) {
 	}
 	if instA["treedb.expvar.wal_dir"] != "/tmp/a/wal" || instB["treedb.expvar.wal_dir"] != "/tmp/b/wal" {
 		t.Fatalf("unexpected instance wal dirs: a=%v b=%v", instA["treedb.expvar.wal_dir"], instB["treedb.expvar.wal_dir"])
+	}
+	if instB["treedb.command_wal.writer.command_buffer.capacity_bytes"] != int64(4194304) {
+		t.Fatalf("instance b command buffer capacity=%T(%v) want int64(4194304)", instB["treedb.command_wal.writer.command_buffer.capacity_bytes"], instB["treedb.command_wal.writer.command_buffer.capacity_bytes"])
+	}
+	if instB["treedb.command_wal.writer.command_buffer.dropped_bytes_total"] != int64(67108864) {
+		t.Fatalf("instance b command buffer dropped bytes=%T(%v) want int64(67108864)", instB["treedb.command_wal.writer.command_buffer.dropped_bytes_total"], instB["treedb.command_wal.writer.command_buffer.dropped_bytes_total"])
 	}
 }
 
