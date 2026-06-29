@@ -27,6 +27,7 @@ const (
 
 var (
 	ErrNodeNotFound         = errors.New("raftharness: node not found")
+	ErrNodeClosed           = errors.New("raftharness: node closed")
 	ErrHarnessClosed        = errors.New("raftharness: harness closed")
 	ErrCommittedLogGap      = errors.New("raftharness: committed log gap")
 	ErrCommittedLogConflict = errors.New("raftharness: committed log conflict")
@@ -284,6 +285,16 @@ func (h *Harness) committedEntriesForApply(id raftcluster.NodeID, entries []raft
 }
 
 func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1, error) {
+	return h.catchUpNodeThrough(id, 0)
+}
+
+// CatchUpNodeThrough catches the node up only through maxIndex. A maxIndex of
+// zero catches up through the full committed log.
+func (h *Harness) CatchUpNodeThrough(id raftcluster.NodeID, maxIndex uint64) ([]raftentry.ApplyResultV1, error) {
+	return h.catchUpNodeThrough(id, maxIndex)
+}
+
+func (h *Harness) catchUpNodeThrough(id raftcluster.NodeID, maxIndex uint64) ([]raftentry.ApplyResultV1, error) {
 	if h == nil {
 		return nil, ErrHarnessClosed
 	}
@@ -314,8 +325,15 @@ func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1,
 			prefix = append(prefix, cloneCommittedEntry(entry))
 		}
 	}
-	entries := make([]raftfsm.CommittedEntryV1, 0, len(h.committed)-start)
-	for _, entry := range h.committed[start:] {
+	end := len(h.committed)
+	if maxIndex > 0 && maxIndex < uint64(end) {
+		end = int(maxIndex)
+	}
+	if start > end {
+		start = end
+	}
+	entries := make([]raftfsm.CommittedEntryV1, 0, end-start)
+	for _, entry := range h.committed[start:end] {
 		entries = append(entries, cloneCommittedEntry(entry))
 	}
 	h.mu.Unlock()
