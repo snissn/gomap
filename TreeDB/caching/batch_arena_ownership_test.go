@@ -505,3 +505,51 @@ func TestBatchSetView_MutationAfterWriteDoesNotCorruptStoredValue(t *testing.T) 
 		t.Fatalf("cache borrow_view_ops_blocked_total=%q want >0", got)
 	}
 }
+
+func TestBatchDeleteViewStats(t *testing.T) {
+	oldHotPathStatsEnabled := hotPathStatsEnabled
+	hotPathStatsEnabled = true
+	t.Cleanup(func() {
+		hotPathStatsEnabled = oldHotPathStatsEnabled
+	})
+
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	callsBefore := batchDeleteViewCallsTotal.Load()
+	bytesBefore := batchDeleteViewBytesTotal.Load()
+	key := []byte("delete-view-key")
+
+	b := db.NewBatchWithSize(1)
+	defer func() { _ = b.Close() }()
+	if err := b.DeleteView(key); err != nil {
+		t.Fatalf("delete view: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := batchDeleteViewCallsTotal.Load(); got != callsBefore+1 {
+		t.Fatalf("batchDeleteViewCallsTotal=%d before=%d want +1", got, callsBefore)
+	}
+	if got := batchDeleteViewBytesTotal.Load(); got != bytesBefore+uint64(len(key)) {
+		t.Fatalf("batchDeleteViewBytesTotal=%d before=%d want +%d", got, bytesBefore, len(key))
+	}
+	if got := stats["treedb.cache.batch.delete_view.calls_total"]; got == "" || got == "0" {
+		t.Fatalf("cache batch.delete_view.calls_total=%q want >0", got)
+	}
+	if got := stats["treedb.process.batch.delete_view.calls_total"]; got == "" || got == "0" {
+		t.Fatalf("process batch.delete_view.calls_total=%q want >0", got)
+	}
+}

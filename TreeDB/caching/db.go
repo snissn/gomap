@@ -141,6 +141,8 @@ var batchSetCallsTotal atomic.Uint64
 var batchSetBytesTotal atomic.Uint64
 var batchSetViewCallsTotal atomic.Uint64
 var batchSetViewBytesTotal atomic.Uint64
+var batchDeleteViewCallsTotal atomic.Uint64
+var batchDeleteViewBytesTotal atomic.Uint64
 var batchSetCallerSamplesTotal atomic.Uint64
 var batchSetCallerSampleSeq atomic.Uint64
 var batchSetCallerStatsMap sync.Map
@@ -28833,6 +28835,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
 	stats["treedb.cache.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
 	stats["treedb.cache.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.cache.batch.delete_view.calls_total"] = fmt.Sprintf("%d", batchDeleteViewCallsTotal.Load())
+	stats["treedb.cache.batch.delete_view.bytes_total"] = fmt.Sprintf("%d", batchDeleteViewBytesTotal.Load())
 	stats["treedb.cache.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
 	stats["treedb.cache.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
 	for i, caller := range batchSetCallerSnapshots(8) {
@@ -28903,6 +28907,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch.set.bytes_total"] = fmt.Sprintf("%d", batchSetBytesTotal.Load())
 	stats["treedb.process.batch.set_view.calls_total"] = fmt.Sprintf("%d", batchSetViewCallsTotal.Load())
 	stats["treedb.process.batch.set_view.bytes_total"] = fmt.Sprintf("%d", batchSetViewBytesTotal.Load())
+	stats["treedb.process.batch.delete_view.calls_total"] = fmt.Sprintf("%d", batchDeleteViewCallsTotal.Load())
+	stats["treedb.process.batch.delete_view.bytes_total"] = fmt.Sprintf("%d", batchDeleteViewBytesTotal.Load())
 	stats["treedb.process.batch.set_caller.sample_mod"] = fmt.Sprintf("%d", batchSetCallerSampleMod)
 	stats["treedb.process.batch.set_caller.samples_total"] = fmt.Sprintf("%d", batchSetCallerSamplesTotal.Load())
 	for i, caller := range batchSetCallerSnapshots(8) {
@@ -32467,6 +32473,11 @@ func (b *Batch) DeleteView(key []byte) error {
 // DeleteViewValidated is DeleteView for callers that already performed public
 // input validation. The caller must keep key immutable until Write/Close.
 func (b *Batch) DeleteViewValidated(key []byte) error {
+	if hotPathStatsEnabled {
+		batchDeleteViewCallsTotal.Add(1)
+		batchDeleteViewBytesTotal.Add(uint64(len(key)))
+	}
+
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key)

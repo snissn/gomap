@@ -341,6 +341,10 @@ func directViewTypedColumnSegmentFileID(generation uint64) (uint32, error) {
 	return uint32(base + generation), nil
 }
 
+func columnAssetSegmentFileIDIsDirectView(fileID uint32) bool {
+	return fileID >= columnAssetDirectViewSegmentFileIDBase
+}
+
 func writeColumnAggregateMetadataAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
 	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1AggregateMetadata, generation, partID)
 }
@@ -615,6 +619,21 @@ type columnPhysicalAssetSegmentCloseStats struct {
 	CloseCount     int
 	FileSyncCount  int
 	SyncEpochCount int
+
+	Total             columnPhysicalAssetSegmentCloseStatBucket
+	SharedSegment     columnPhysicalAssetSegmentCloseStatBucket
+	DirectViewSegment columnPhysicalAssetSegmentCloseStatBucket
+}
+
+type columnPhysicalAssetSegmentCloseStatBucket struct {
+	FileSync       time.Duration
+	FileClose      time.Duration
+	DirSync        time.Duration
+	Remove         time.Duration
+	RemoveDirSync  time.Duration
+	CloseCount     int
+	FileSyncCount  int
+	SyncEpochCount int
 }
 
 func (s *columnPhysicalAssetSegmentCloseStats) Add(other columnPhysicalAssetSegmentCloseStats) {
@@ -632,6 +651,37 @@ func (s *columnPhysicalAssetSegmentCloseStats) Add(other columnPhysicalAssetSegm
 }
 
 func (s columnPhysicalAssetSegmentCloseStats) CleanupDuration() time.Duration {
+	return s.Remove + s.RemoveDirSync
+}
+
+func (s *columnPhysicalAssetSegmentCloseStats) AddSegment(fileID uint32, other columnPhysicalAssetSegmentCloseStats) {
+	if s == nil {
+		return
+	}
+	s.Add(other)
+	s.Total.Add(other)
+	if columnAssetSegmentFileIDIsDirectView(fileID) {
+		s.DirectViewSegment.Add(other)
+		return
+	}
+	s.SharedSegment.Add(other)
+}
+
+func (s *columnPhysicalAssetSegmentCloseStatBucket) Add(other columnPhysicalAssetSegmentCloseStats) {
+	if s == nil {
+		return
+	}
+	s.FileSync += other.FileSync
+	s.FileClose += other.FileClose
+	s.DirSync += other.DirSync
+	s.Remove += other.Remove
+	s.RemoveDirSync += other.RemoveDirSync
+	s.CloseCount += other.CloseCount
+	s.FileSyncCount += other.FileSyncCount
+	s.SyncEpochCount += other.SyncEpochCount
+}
+
+func (s columnPhysicalAssetSegmentCloseStatBucket) CleanupDuration() time.Duration {
 	return s.Remove + s.RemoveDirSync
 }
 
@@ -719,10 +769,11 @@ func (s *columnPhysicalAssetAppendSession) closeActive() error {
 		return nil
 	}
 	appender := s.active
+	activeFile := s.activeFile
 	s.active = nil
 	s.activeFile = 0
 	err := appender.close()
-	s.closeStats.Add(appender.closeStats)
+	s.closeStats.AddSegment(activeFile, appender.closeStats)
 	s.closeErr = errors.Join(s.closeErr, err)
 	return err
 }

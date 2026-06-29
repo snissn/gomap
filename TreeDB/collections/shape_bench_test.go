@@ -69,6 +69,12 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishAssetAppenderCloseCount += src.ColumnPublishAssetAppenderCloseCount
 	dst.ColumnPublishAssetAppendFileSyncCount += src.ColumnPublishAssetAppendFileSyncCount
 	dst.ColumnPublishAssetSyncEpochCount += src.ColumnPublishAssetSyncEpochCount
+	dst.ColumnPublishSharedSegmentAppenderCloseCount += src.ColumnPublishSharedSegmentAppenderCloseCount
+	dst.ColumnPublishSharedSegmentAppendFileSyncCount += src.ColumnPublishSharedSegmentAppendFileSyncCount
+	dst.ColumnPublishSharedSegmentAppendSyncEpochCount += src.ColumnPublishSharedSegmentAppendSyncEpochCount
+	dst.ColumnPublishDirectViewSegmentAppenderCloseCount += src.ColumnPublishDirectViewSegmentAppenderCloseCount
+	dst.ColumnPublishDirectViewSegmentAppendFileSyncCount += src.ColumnPublishDirectViewSegmentAppendFileSyncCount
+	dst.ColumnPublishDirectViewSegmentAppendSyncEpochCount += src.ColumnPublishDirectViewSegmentAppendSyncEpochCount
 	dst.ColumnPublishManifestEncode += src.ColumnPublishManifestEncode
 	dst.ColumnPublishAssetClosureValidation += src.ColumnPublishAssetClosureValidation
 	dst.ColumnPublishRootDeltaConstruction += src.ColumnPublishRootDeltaConstruction
@@ -88,6 +94,10 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.ColumnPublishAggregateMetadataCount += src.ColumnPublishAggregateMetadataCount
 	dst.ColumnPublishSharedAppendBytes += src.ColumnPublishSharedAppendBytes
 	dst.ColumnPublishSharedAppendCount += src.ColumnPublishSharedAppendCount
+	dst.ColumnPublishSharedSegmentAppendBytes += src.ColumnPublishSharedSegmentAppendBytes
+	dst.ColumnPublishSharedSegmentAppendCount += src.ColumnPublishSharedSegmentAppendCount
+	dst.ColumnPublishDirectViewSegmentAppendBytes += src.ColumnPublishDirectViewSegmentAppendBytes
+	dst.ColumnPublishDirectViewSegmentAppendCount += src.ColumnPublishDirectViewSegmentAppendCount
 	dst.ColumnPublishRequiredAssetBytes += src.ColumnPublishRequiredAssetBytes
 	dst.ColumnPublishManifestBytes += src.ColumnPublishManifestBytes
 	dst.UniqueIndexPreflight += src.UniqueIndexPreflight
@@ -168,6 +178,36 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	if stats.ColumnPublishAssetSyncEpochCount > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishAssetSyncEpochCount)/float64(batches), "column_publish_asset_sync_epochs/batch")
 	}
+	if stats.ColumnPublishSharedSegmentAppendCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishSharedSegmentAppendCount)/float64(batches), "column_publish_shared_segment_asset_appends/batch")
+	}
+	if stats.ColumnPublishDirectViewSegmentAppendCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishDirectViewSegmentAppendCount)/float64(batches), "column_publish_direct_view_segment_asset_appends/batch")
+	}
+	if stats.ColumnPublishSharedSegmentAppenderCloseCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishSharedSegmentAppenderCloseCount)/float64(batches), "column_publish_shared_segment_appender_closes/batch")
+	}
+	if stats.ColumnPublishDirectViewSegmentAppenderCloseCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishDirectViewSegmentAppenderCloseCount)/float64(batches), "column_publish_direct_view_segment_appender_closes/batch")
+	}
+	if stats.ColumnPublishSharedSegmentAppendFileSyncCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishSharedSegmentAppendFileSyncCount)/float64(batches), "column_publish_shared_segment_file_syncs/batch")
+	}
+	if stats.ColumnPublishDirectViewSegmentAppendFileSyncCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishDirectViewSegmentAppendFileSyncCount)/float64(batches), "column_publish_direct_view_segment_file_syncs/batch")
+	}
+	if stats.ColumnPublishSharedSegmentAppendSyncEpochCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishSharedSegmentAppendSyncEpochCount)/float64(batches), "column_publish_shared_segment_sync_epochs/batch")
+	}
+	if stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount)/float64(batches), "column_publish_direct_view_segment_sync_epochs/batch")
+	}
+	if stats.ColumnPublishSharedSegmentAppendBytes > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishSharedSegmentAppendBytes)/float64(docs), "column_publish_shared_segment_append_bytes/doc")
+	}
+	if stats.ColumnPublishDirectViewSegmentAppendBytes > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishDirectViewSegmentAppendBytes)/float64(docs), "column_publish_direct_view_segment_append_bytes/doc")
+	}
 	if stats.RetainedPayloadValueLogValues > 0 {
 		b.ReportMetric(float64(stats.RetainedPayloadValueLogValues)/float64(docs), "retained_payload_vlog_values/doc")
 	}
@@ -223,12 +263,22 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B(t *testing.T) {
 	result := testing.Benchmark(func(b *testing.B) {
 		benchmarkReportCollectionInsertStats(b, 10, 1, collections.CollectionInsertStats{
-			ColumnPublishDocumentExtraction:     20 * time.Microsecond,
-			ColumnPublishDeclaredColumnEncoding: 30 * time.Microsecond,
-			ColumnPublishRows:                   10,
-			ColumnPublishPreparedAssets:         2,
-			ColumnPublishRequiredAssetBytes:     2048,
-			ColumnPublishManifestBytes:          512,
+			ColumnPublishDocumentExtraction:                    20 * time.Microsecond,
+			ColumnPublishDeclaredColumnEncoding:                30 * time.Microsecond,
+			ColumnPublishRows:                                  10,
+			ColumnPublishPreparedAssets:                        2,
+			ColumnPublishRequiredAssetBytes:                    2048,
+			ColumnPublishManifestBytes:                         512,
+			ColumnPublishSharedSegmentAppendBytes:              1000,
+			ColumnPublishSharedSegmentAppendCount:              3,
+			ColumnPublishSharedSegmentAppenderCloseCount:       1,
+			ColumnPublishSharedSegmentAppendFileSyncCount:      1,
+			ColumnPublishSharedSegmentAppendSyncEpochCount:     1,
+			ColumnPublishDirectViewSegmentAppendBytes:          2000,
+			ColumnPublishDirectViewSegmentAppendCount:          4,
+			ColumnPublishDirectViewSegmentAppenderCloseCount:   1,
+			ColumnPublishDirectViewSegmentAppendFileSyncCount:  1,
+			ColumnPublishDirectViewSegmentAppendSyncEpochCount: 1,
 		})
 	})
 	if got := result.Extra["column_publish_document_extraction_ns/doc"]; got <= 0 {
@@ -248,6 +298,60 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 	}
 	if got := result.Extra["column_publish_manifest_bytes/doc"]; got <= 0 {
 		t.Fatalf("column publish manifest bytes metric=%v want positive", got)
+	}
+	for _, name := range []string{
+		"column_publish_shared_segment_asset_appends/batch",
+		"column_publish_direct_view_segment_asset_appends/batch",
+		"column_publish_shared_segment_appender_closes/batch",
+		"column_publish_direct_view_segment_appender_closes/batch",
+		"column_publish_shared_segment_file_syncs/batch",
+		"column_publish_direct_view_segment_file_syncs/batch",
+		"column_publish_shared_segment_sync_epochs/batch",
+		"column_publish_direct_view_segment_sync_epochs/batch",
+		"column_publish_shared_segment_append_bytes/doc",
+		"column_publish_direct_view_segment_append_bytes/doc",
+	} {
+		if got := result.Extra[name]; got <= 0 {
+			t.Fatalf("%s metric=%v want positive", name, got)
+		}
+	}
+}
+
+func TestCollectionShapeInsertStatsAddsSegmentAppendMetrics(t *testing.T) {
+	var stats collections.CollectionInsertStats
+	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		ColumnPublishSharedSegmentAppendBytes:              100,
+		ColumnPublishSharedSegmentAppendCount:              1,
+		ColumnPublishSharedSegmentAppenderCloseCount:       2,
+		ColumnPublishSharedSegmentAppendFileSyncCount:      3,
+		ColumnPublishSharedSegmentAppendSyncEpochCount:     4,
+		ColumnPublishDirectViewSegmentAppendBytes:          200,
+		ColumnPublishDirectViewSegmentAppendCount:          5,
+		ColumnPublishDirectViewSegmentAppenderCloseCount:   6,
+		ColumnPublishDirectViewSegmentAppendFileSyncCount:  7,
+		ColumnPublishDirectViewSegmentAppendSyncEpochCount: 8,
+	})
+	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
+		ColumnPublishSharedSegmentAppendBytes:              10,
+		ColumnPublishSharedSegmentAppendCount:              2,
+		ColumnPublishSharedSegmentAppenderCloseCount:       3,
+		ColumnPublishSharedSegmentAppendFileSyncCount:      4,
+		ColumnPublishSharedSegmentAppendSyncEpochCount:     5,
+		ColumnPublishDirectViewSegmentAppendBytes:          20,
+		ColumnPublishDirectViewSegmentAppendCount:          6,
+		ColumnPublishDirectViewSegmentAppenderCloseCount:   7,
+		ColumnPublishDirectViewSegmentAppendFileSyncCount:  8,
+		ColumnPublishDirectViewSegmentAppendSyncEpochCount: 9,
+	})
+	if stats.ColumnPublishSharedSegmentAppendBytes != 110 || stats.ColumnPublishSharedSegmentAppendCount != 3 ||
+		stats.ColumnPublishSharedSegmentAppenderCloseCount != 5 || stats.ColumnPublishSharedSegmentAppendFileSyncCount != 7 ||
+		stats.ColumnPublishSharedSegmentAppendSyncEpochCount != 9 {
+		t.Fatalf("shared segment stats=%+v want accumulated bytes/count/close/file-sync/sync-epoch", stats)
+	}
+	if stats.ColumnPublishDirectViewSegmentAppendBytes != 220 || stats.ColumnPublishDirectViewSegmentAppendCount != 11 ||
+		stats.ColumnPublishDirectViewSegmentAppenderCloseCount != 13 || stats.ColumnPublishDirectViewSegmentAppendFileSyncCount != 15 ||
+		stats.ColumnPublishDirectViewSegmentAppendSyncEpochCount != 17 {
+		t.Fatalf("direct-view segment stats=%+v want accumulated bytes/count/close/file-sync/sync-epoch", stats)
 	}
 }
 
