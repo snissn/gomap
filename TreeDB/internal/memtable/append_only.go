@@ -1825,6 +1825,43 @@ func (m *AppendOnly) EntryBackingBytes() int64 {
 	return int64(cap(m.entries)) * int64(unsafe.Sizeof(appendOnlyEntry{}))
 }
 
+// TrimEntryCapacity shrinks retained entry-slot backing while preserving active
+// entries. It is intended for maintenance boundaries after a transient ingest
+// spike has left a live append-only memtable with large unused capacity.
+func (m *AppendOnly) TrimEntryCapacity(maxEntries int) (before, after int64) {
+	if m == nil {
+		return 0, 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+
+	before = int64(cap(m.entries)) * int64(unsafe.Sizeof(appendOnlyEntry{}))
+	if maxEntries < m.count {
+		maxEntries = m.count
+	}
+	if maxEntries > 0 && maxEntries < appendOnlyMinInitialEntries {
+		maxEntries = appendOnlyMinInitialEntries
+	}
+	if cap(m.entries) <= maxEntries {
+		return before, before
+	}
+
+	prev := m.entries
+	next := getAppendOnlyEntries(maxEntries)
+	copy(next, m.entries[:m.count])
+	m.entries = next
+	if m.baseEntriesLen > maxEntries {
+		m.baseEntriesLen = maxEntries
+	}
+	m.snapshot = nil
+	m.snapCount = 0
+	putAppendOnlyEntries(prev)
+
+	after = int64(cap(m.entries)) * int64(unsafe.Sizeof(appendOnlyEntry{}))
+	return before, after
+}
+
 func (m *AppendOnly) Freeze() {
 	m.mu.Lock()
 	if m.frozen {
