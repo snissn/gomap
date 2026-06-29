@@ -124,6 +124,39 @@ func TestInsertBatchCombinerSkipsIncompatibleRequests(t *testing.T) {
 	}
 }
 
+func TestInsertBatchCombinerRejectsClusterModeBypass(t *testing.T) {
+	server, col, cleanup := newInsertBatchCombinerTestServer(t)
+	defer cleanup()
+	server.clusterSubmitter = &admissionClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		status:               ClusterLeaderAdmission(),
+	}
+
+	req := insertBatchCombinerFastRequest(t, col, "user-cluster", insertBatchCombinerBSONDoc(t, "user-cluster", "cluster@example.com"))
+	if canCombineInsertBatchFastRequest(server, req) {
+		t.Fatal("cluster-owned insert request should not combine locally")
+	}
+	item := &nativewireInsertBatchCombineItem{
+		req:  req,
+		done: make(chan nativewireInsertBatchCombineResult, 1),
+	}
+	applyInsertBatchCombineItems(server, []*nativewireInsertBatchCombineItem{item})
+	select {
+	case result := <-item.done:
+		if nativeCodeOf(result.err) != iwire.ErrReadOnly {
+			t.Fatalf("combiner result err=%v code=%d want read-only", result.err, nativeCodeOf(result.err))
+		}
+	default:
+		t.Fatal("cluster bypass item was not completed")
+	}
+	if got, err := col.Get([]byte("user-cluster")); err != nil || got != nil {
+		t.Fatalf("user-cluster after rejected combiner got=%v err=%v want missing", got, err)
+	}
+	if calls := server.clusterSubmitter.(*admissionClusterSubmitter).snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
 func TestInsertBatchCombinerStatsStartAtZero(t *testing.T) {
 	server := NewServer(ServerOptions{})
 	stats := server.Stats()

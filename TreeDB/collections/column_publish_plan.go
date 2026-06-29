@@ -299,6 +299,10 @@ type ColumnPublishAssetPreparationMetrics struct {
 	RowAssetBytes                 int64
 	RowAssetCount                 int
 	TypedColumnPartDuration       time.Duration
+	TypedColumnDictionaryBuild    time.Duration
+	TypedColumnRowMaterialization time.Duration
+	TypedColumnPartBuild          time.Duration
+	TypedColumnImageBuild         time.Duration
 	TypedColumnPartBytes          int64
 	TypedColumnPartCount          int
 	DictionarySidecarDuration     time.Duration

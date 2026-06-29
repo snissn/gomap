@@ -238,6 +238,10 @@ type columnStoreInsertPhaseMetric struct {
 	ColumnPublishAssetPreparationDurationMS   float64 `json:"column_publish_asset_preparation_duration_ms,omitempty"`
 	ColumnPublishRowAssetPrepareDurationMS    float64 `json:"column_publish_row_asset_prepare_duration_ms,omitempty"`
 	ColumnPublishTypedColumnPrepareDurationMS float64 `json:"column_publish_typed_column_prepare_duration_ms,omitempty"`
+	ColumnPublishTypedColumnDictionaryBuildMS float64 `json:"column_publish_typed_column_dictionary_build_duration_ms,omitempty"`
+	ColumnPublishTypedColumnRowMaterializeMS  float64 `json:"column_publish_typed_column_row_materialization_duration_ms,omitempty"`
+	ColumnPublishTypedColumnPartBuildMS       float64 `json:"column_publish_typed_column_part_build_duration_ms,omitempty"`
+	ColumnPublishTypedColumnImageBuildMS      float64 `json:"column_publish_typed_column_image_build_duration_ms,omitempty"`
 	ColumnPublishDictionaryPrepareDurationMS  float64 `json:"column_publish_dictionary_sidecar_prepare_duration_ms,omitempty"`
 	ColumnPublishInt64PrepareDurationMS       float64 `json:"column_publish_int64_sidecar_prepare_duration_ms,omitempty"`
 	ColumnPublishAggregateMetadataDurationMS  float64 `json:"column_publish_aggregate_metadata_prepare_duration_ms,omitempty"`
@@ -1535,6 +1539,10 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.ColumnPublishAssetPreparation += src.ColumnPublishAssetPreparation
 	dst.ColumnPublishRowAssetPreparation += src.ColumnPublishRowAssetPreparation
 	dst.ColumnPublishTypedColumnPreparation += src.ColumnPublishTypedColumnPreparation
+	dst.ColumnPublishTypedColumnDictionaryBuild += src.ColumnPublishTypedColumnDictionaryBuild
+	dst.ColumnPublishTypedColumnRowMaterialization += src.ColumnPublishTypedColumnRowMaterialization
+	dst.ColumnPublishTypedColumnPartBuild += src.ColumnPublishTypedColumnPartBuild
+	dst.ColumnPublishTypedColumnImageBuild += src.ColumnPublishTypedColumnImageBuild
 	dst.ColumnPublishDictionaryPreparation += src.ColumnPublishDictionaryPreparation
 	dst.ColumnPublishInt64Preparation += src.ColumnPublishInt64Preparation
 	dst.ColumnPublishAggregateMetadataPrepare += src.ColumnPublishAggregateMetadataPrepare
@@ -1614,6 +1622,10 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		ColumnPublishAssetPreparationDurationMS:   durationMS(stats.ColumnPublishAssetPreparation),
 		ColumnPublishRowAssetPrepareDurationMS:    durationMS(stats.ColumnPublishRowAssetPreparation),
 		ColumnPublishTypedColumnPrepareDurationMS: durationMS(stats.ColumnPublishTypedColumnPreparation),
+		ColumnPublishTypedColumnDictionaryBuildMS: durationMS(stats.ColumnPublishTypedColumnDictionaryBuild),
+		ColumnPublishTypedColumnRowMaterializeMS:  durationMS(stats.ColumnPublishTypedColumnRowMaterialization),
+		ColumnPublishTypedColumnPartBuildMS:       durationMS(stats.ColumnPublishTypedColumnPartBuild),
+		ColumnPublishTypedColumnImageBuildMS:      durationMS(stats.ColumnPublishTypedColumnImageBuild),
 		ColumnPublishDictionaryPrepareDurationMS:  durationMS(stats.ColumnPublishDictionaryPreparation),
 		ColumnPublishInt64PrepareDurationMS:       durationMS(stats.ColumnPublishInt64Preparation),
 		ColumnPublishAggregateMetadataDurationMS:  durationMS(stats.ColumnPublishAggregateMetadataPrepare),
@@ -4609,6 +4621,10 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `asset_preparation` | %.3f |  |\n", stats.ColumnPublishAssetPreparationDurationMS))
 		sb.WriteString(fmt.Sprintf("| `row_asset_prepare` | %.3f |  |\n", stats.ColumnPublishRowAssetPrepareDurationMS))
 		sb.WriteString(fmt.Sprintf("| `typed_column_prepare` | %.3f |  |\n", stats.ColumnPublishTypedColumnPrepareDurationMS))
+		sb.WriteString(fmt.Sprintf("| `typed_column_dictionary_build` | %.3f |  |\n", stats.ColumnPublishTypedColumnDictionaryBuildMS))
+		sb.WriteString(fmt.Sprintf("| `typed_column_row_materialization` | %.3f |  |\n", stats.ColumnPublishTypedColumnRowMaterializeMS))
+		sb.WriteString(fmt.Sprintf("| `typed_column_part_build` | %.3f |  |\n", stats.ColumnPublishTypedColumnPartBuildMS))
+		sb.WriteString(fmt.Sprintf("| `typed_column_image_build` | %.3f |  |\n", stats.ColumnPublishTypedColumnImageBuildMS))
 		sb.WriteString(fmt.Sprintf("| `dictionary_sidecar_prepare` | %.3f |  |\n", stats.ColumnPublishDictionaryPrepareDurationMS))
 		sb.WriteString(fmt.Sprintf("| `int64_sidecar_prepare` | %.3f |  |\n", stats.ColumnPublishInt64PrepareDurationMS))
 		sb.WriteString(fmt.Sprintf("| `aggregate_metadata_prepare` | %.3f |  |\n", stats.ColumnPublishAggregateMetadataDurationMS))
@@ -4638,6 +4654,10 @@ func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhase
 		stats.ColumnPublishAssetPreparationDurationMS > 0 ||
 		stats.ColumnPublishRowAssetPrepareDurationMS > 0 ||
 		stats.ColumnPublishTypedColumnPrepareDurationMS > 0 ||
+		stats.ColumnPublishTypedColumnDictionaryBuildMS > 0 ||
+		stats.ColumnPublishTypedColumnRowMaterializeMS > 0 ||
+		stats.ColumnPublishTypedColumnPartBuildMS > 0 ||
+		stats.ColumnPublishTypedColumnImageBuildMS > 0 ||
 		stats.ColumnPublishDictionaryPrepareDurationMS > 0 ||
 		stats.ColumnPublishInt64PrepareDurationMS > 0 ||
 		stats.ColumnPublishAggregateMetadataDurationMS > 0 ||

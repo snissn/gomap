@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -15,13 +16,44 @@ import (
 )
 
 type fakeClusterSubmitter struct {
-	mu    sync.Mutex
-	calls []fakeClusterSubmitCall
+	mu           sync.Mutex
+	calls        []fakeClusterSubmitCall
+	status       ClusterAdmissionStatus
+	admissionErr error
+}
+
+type admissionClusterSubmitter struct {
+	*fakeClusterSubmitter
+	status ClusterAdmissionStatus
+	err    error
 }
 
 type fakeClusterSubmitCall struct {
 	entry    raftentry.CommandEntryV1
 	metadata ClusterRequestMetadata
+}
+
+type noAdmissionClusterSubmitter struct{}
+
+func (noAdmissionClusterSubmitter) SubmitCommandEntryV1(context.Context, []byte, ClusterRequestMetadata) (ClusterSubmitResult, error) {
+	panic("unexpected submit")
+}
+
+func (f *admissionClusterSubmitter) ClusterAdmissionStatus(context.Context) (ClusterAdmissionStatus, error) {
+	if f.err != nil {
+		return ClusterAdmissionStatus{}, f.err
+	}
+	return f.status, nil
+}
+
+func (f *fakeClusterSubmitter) ClusterAdmissionStatus(context.Context) (ClusterAdmissionStatus, error) {
+	if f.admissionErr != nil {
+		return ClusterAdmissionStatus{}, f.admissionErr
+	}
+	if f.status == (ClusterAdmissionStatus{}) {
+		return ClusterLeaderAdmission(), nil
+	}
+	return f.status, nil
 }
 
 func (f *fakeClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata) (ClusterSubmitResult, error) {
@@ -84,6 +116,15 @@ func fakeClusterSubmitResponse(entry raftentry.CommandEntryV1, metadata ClusterR
 			responseMetaCount{key: "matched_count", value: len(ids)},
 			responseMetaCount{key: "modified_count", value: len(ids)},
 		))
+	case iwire.CommandUpdateBSONSet:
+		ids, err := deterministicEntryDocumentIDs(entry)
+		if err != nil {
+			return ClusterSubmitResult{}, err
+		}
+		sections = append(sections, ackMetaCountsVersion(actualAck, 0, true,
+			responseMetaCount{key: "matched_count", value: len(ids)},
+			responseMetaCount{key: "modified_count", value: len(ids)},
+		))
 	case iwire.CommandDeleteBatch:
 		ids, err := deterministicEntryDocumentIDs(entry)
 		if err != nil {
@@ -110,6 +151,208 @@ func deterministicEntryDocumentIDs(entry raftentry.CommandEntryV1) ([][]byte, er
 func cloneClusterRequestMetadata(metadata ClusterRequestMetadata) ClusterRequestMetadata {
 	metadata.TraceContext = bytes.Clone(metadata.TraceContext)
 	return metadata
+}
+
+func TestClusterAdmissionMissingProviderFailsClosed(t *testing.T) {
+	err := AdmitClusterMutation(context.Background(), noAdmissionClusterSubmitter{})
+	if nativeCodeOf(err) != iwire.ErrDurabilityUnavailable {
+		t.Fatalf("admission err=%v code=%d want durability unavailable", err, nativeCodeOf(err))
+	}
+}
+
+func TestClusterAdmissionLeaderRoutesThroughSubmitter(t *testing.T) {
+	submitter := &admissionClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		status:               ClusterLeaderAdmission(),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"Ada"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch: %v", err)
+	}
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
+		t.Fatalf("command=%d want insert_batch", got)
+	}
+}
+
+func TestClusterAdmissionFollowerRejectsNativeMutationsBeforeLocalMutation(t *testing.T) {
+	submitter := &admissionClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		status:               ClusterFollowerAdmission("node-a:7000", "not leader"),
+	}
+	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	meta := collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}
+	if _, err := mgr.CreateCollection(&meta); err != nil {
+		t.Fatalf("direct CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection: %v", err)
+	}
+	original := mustBSONDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}})
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("u1")}, [][]byte{original}); err != nil {
+		t.Fatalf("seed InsertBatchValidatedBSON: %v", err)
+	}
+
+	insertDoc := mustBSONDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}})
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatBSON, [][]byte{[]byte("u2")}, [][]byte{insertDoc}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only", err)
+	}
+	if got, err := col.Get([]byte("u2")); err != nil || got != nil {
+		t.Fatalf("u2 after rejected insert got=%v err=%v want missing", got, err)
+	}
+
+	replaceDoc := mustBSONDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Grace"}})
+	if _, _, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatBSON, [][]byte{[]byte("u1")}, [][]byte{replaceDoc}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("ReplaceBatch err=%v want read-only", err)
+	}
+	if _, _, err := client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
+		{Key: "name", Value: mustNativewireBSONRawValue(t, "Grace")},
+	}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("UpdateBSONSet err=%v want read-only", err)
+	}
+	if _, err := client.DeleteBatch(ctx, "users", [][]byte{[]byte("u1")}, AckVisible); !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("DeleteBatch err=%v want read-only", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1 after rejected mutations: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("u1 changed after rejected mutations: got %v want %v", got, original)
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterAdmissionMetadataMutationsRejectBeforeLocalMutation(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   ClusterAdmissionStatus
+		wantCode iwire.ErrorCode
+	}{
+		{
+			name:     "follower",
+			status:   ClusterFollowerAdmission("node-a:7000", "not leader"),
+			wantCode: iwire.ErrReadOnly,
+		},
+		{
+			name:     "unavailable",
+			status:   ClusterUnavailableAdmission("cluster admission unavailable"),
+			wantCode: iwire.ErrDurabilityUnavailable,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			submitter := &admissionClusterSubmitter{
+				fakeClusterSubmitter: &fakeClusterSubmitter{},
+				status:               tt.status,
+			}
+			client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+			meta := collections.CollectionMeta{
+				Name: "users",
+				Options: collections.CollectionOptions{
+					DocumentFormat: collections.DocumentFormatBSON,
+				},
+			}
+			if _, err := mgr.CreateCollection(&meta); err != nil {
+				t.Fatalf("direct CreateCollection users: %v", err)
+			}
+			col, err := mgr.OpenCollection("users")
+			if err != nil {
+				t.Fatalf("OpenCollection users: %v", err)
+			}
+			if _, err := col.CreateIndex(collections.IndexDefinition{
+				Name:      "email",
+				Field:     "email",
+				ValueType: collections.IndexValueString,
+			}); err != nil {
+				t.Fatalf("direct CreateIndex email: %v", err)
+			}
+
+			if _, err := client.CreateCollection(ctx, collections.CollectionMeta{Name: "admins"}); !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("CreateCollection err=%v want code %d", err, tt.wantCode)
+			}
+			if _, err := mgr.OpenCollection("admins"); !errors.Is(err, collections.ErrCollectionNotFound) {
+				t.Fatalf("OpenCollection admins err=%v want collection not found", err)
+			}
+
+			if _, err := client.CreateIndex(ctx, "users", collections.IndexDefinition{
+				Name:      "name",
+				Field:     "name",
+				ValueType: collections.IndexValueString,
+			}); !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("CreateIndex err=%v want code %d", err, tt.wantCode)
+			}
+			indexes := col.Meta().Indexes
+			if len(indexes) != 1 || indexes[0].Name != "email" {
+				t.Fatalf("indexes after rejected create_index=%+v want only email", indexes)
+			}
+
+			if _, err := client.DropIndex(ctx, "users", "email"); !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("DropIndex err=%v want code %d", err, tt.wantCode)
+			}
+			indexes = col.Meta().Indexes
+			if len(indexes) != 1 || indexes[0].Name != "email" {
+				t.Fatalf("indexes after rejected drop_index=%+v want email retained", indexes)
+			}
+			if calls := submitter.snapshot(); len(calls) != 0 {
+				t.Fatalf("submitter calls=%d want 0", len(calls))
+			}
+		})
+	}
+}
+
+func TestClusterAdmissionUnavailableRejectsBeforeSubmit(t *testing.T) {
+	submitter := &admissionClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		status:               ClusterUnavailableAdmission("cluster admission unavailable"),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"Ada"}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("InsertBatch err=%v want durability unavailable", err)
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
 }
 
 func TestClusterSubmitterReceivesDecodableDeterministicEntries(t *testing.T) {
@@ -338,8 +581,8 @@ func TestClusterSubmitterRaftCommittedRequiresProvenResult(t *testing.T) {
 	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
 		t.Fatalf("InsertBatch raft_committed cluster err=%v want durability unavailable", err)
 	}
-	if got := len(submitter.snapshot()); got != 1 {
-		t.Fatalf("submitter calls=%d want 1", got)
+	if got := len(submitter.snapshot()); got != 0 {
+		t.Fatalf("submitter calls=%d want 0", got)
 	}
 }
 
