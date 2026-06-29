@@ -114,7 +114,7 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	parsed := make([]mongoUpdateItem, 0, len(updates))
+	var matched, modified int32
 	for i, update := range updates {
 		item, err := parseMongoUpdateItem(i, update)
 		if err != nil {
@@ -123,10 +123,6 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		if !item.bsonSetFieldsOK {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
 		}
-		parsed = append(parsed, item)
-	}
-	var matched, modified int32
-	for _, item := range parsed {
 		matchedOne, modifiedOne, err := s.submitClusterUpdateBSONSet(ctx, name, item)
 		if err != nil {
 			return mongoClusterMutationCommandError(mongoUpdateErrorWithIndex(item.index, err))
@@ -158,6 +154,7 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
 	ids := make([][]byte, 0, len(deletes))
+	seenIDs := make(map[string]struct{}, len(deletes))
 	for i, deleteItem := range deletes {
 		filter, err := requiredDocumentField(deleteItem, "q")
 		if err != nil {
@@ -176,6 +173,11 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		if err != nil {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
 		}
+		keyString := string(key)
+		if _, ok := seenIDs[keyString]; ok {
+			continue
+		}
+		seenIDs[keyString] = struct{}{}
 		ids = append(ids, key)
 	}
 	deleted, err := s.submitClusterDelete(ctx, name, ids)

@@ -245,6 +245,37 @@ func TestClusterSubmitterUpdateBSONSetRoutesCountsAndNoLocalMutation(t *testing.
 	}
 }
 
+func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupported(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 18)
+
+	response := serveCommand(t, server, 325818, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+			},
+			bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+				{Key: "u", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "age", Value: int32(1)}}}}},
+			},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+
+	calls := submitter.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("submit calls=%d want 1", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandUpdateBSONSet {
+		t.Fatalf("command id=%d want update_bson_set", got)
+	}
+}
+
 func TestClusterSubmitterDeleteRoutesCommandEntry(t *testing.T) {
 	submitter := &mongoClusterFakeSubmitter{}
 	server := NewServer()
@@ -265,6 +296,33 @@ func TestClusterSubmitterDeleteRoutesCommandEntry(t *testing.T) {
 	}
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandDeleteBatch {
 		t.Fatalf("command id=%d want delete_batch", got)
+	}
+}
+
+func TestClusterSubmitterDeleteDeduplicatesDuplicateIDs(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 19)
+
+	response := serveCommand(t, server, 325819, bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 1)
+
+	calls := submitter.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("submit calls=%d want 1", len(calls))
+	}
+	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
+	if len(ids) != 1 {
+		t.Fatalf("document ids=%d want 1", len(ids))
 	}
 }
 
