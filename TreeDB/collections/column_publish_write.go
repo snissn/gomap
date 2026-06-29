@@ -455,6 +455,9 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishAssetAppendFileClose += metrics.AssetMetrics.SharedAppendFileCloseDuration
 	stats.ColumnPublishAssetAppendDirSync += metrics.AssetMetrics.SharedAppendDirSyncDuration
 	stats.ColumnPublishAssetAppendCleanup += metrics.AssetMetrics.SharedAppendCleanupDuration
+	stats.ColumnPublishAssetAppenderCloseCount += metrics.AssetMetrics.SharedAppendCloseCount
+	stats.ColumnPublishAssetAppendFileSyncCount += metrics.AssetMetrics.SharedAppendFileSyncCount
+	stats.ColumnPublishAssetSyncEpochCount += metrics.AssetMetrics.SharedAppendSyncEpochCount
 	stats.ColumnPublishManifestEncode += metrics.ManifestEncode
 	stats.ColumnPublishAssetClosureValidation += metrics.AssetClosureValidation
 	stats.ColumnPublishRootDeltaConstruction += metrics.RootDeltaConstruction
@@ -747,6 +750,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 		var appendFileCloseDuration time.Duration
 		var appendDirSyncDuration time.Duration
 		var appendCleanupDuration time.Duration
+		var appendCloseCount int
+		var appendFileSyncCount int
+		var appendSyncEpochCount int
 		if needsAppender {
 			appendStart := time.Now()
 			var err error
@@ -839,6 +845,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			appendFileCloseDuration += appender.closeStats.FileClose
 			appendDirSyncDuration += appender.closeStats.DirSync
 			appendCleanupDuration += appender.closeStats.CleanupDuration()
+			appendCloseCount += appender.closeStats.CloseCount
+			appendFileSyncCount += appender.closeStats.FileSyncCount
+			appendSyncEpochCount += appender.closeStats.SyncEpochCount
 			closed = true
 		}
 		if needsAppender {
@@ -851,6 +860,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 			prepared.AssetMetrics.SharedAppendFileCloseDuration += appendFileCloseDuration
 			prepared.AssetMetrics.SharedAppendDirSyncDuration += appendDirSyncDuration
 			prepared.AssetMetrics.SharedAppendCleanupDuration += appendCleanupDuration
+			prepared.AssetMetrics.SharedAppendCloseCount += appendCloseCount
+			prepared.AssetMetrics.SharedAppendFileSyncCount += appendFileSyncCount
+			prepared.AssetMetrics.SharedAppendSyncEpochCount += appendSyncEpochCount
 			prepared.AssetMetrics.SharedAppendBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.SharedAppendBytes, appendedBytes)
 			prepared.AssetMetrics.SharedAppendCount += appendedCount
 		}

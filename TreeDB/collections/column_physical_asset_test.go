@@ -2396,6 +2396,15 @@ func TestColumnAssetSegmentAppenderCloseRequiresFileSyncBeforeRef3151(t *testing
 	if closeStats.FileSync <= 0 {
 		t.Fatalf("file sync close stats=%+v want positive file sync duration", closeStats)
 	}
+	if closeStats.CloseCount != 1 {
+		t.Fatalf("close count=%d want 1", closeStats.CloseCount)
+	}
+	if closeStats.FileSyncCount != 1 {
+		t.Fatalf("file sync count=%d want 1", closeStats.FileSyncCount)
+	}
+	if closeStats.SyncEpochCount != 0 {
+		t.Fatalf("sync epoch count=%d want 0 after failed sync", closeStats.SyncEpochCount)
+	}
 	if calls != 1 {
 		t.Fatalf("sync calls=%d want 1", calls)
 	}

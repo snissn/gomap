@@ -2715,6 +2715,9 @@ func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *test
 		ColumnPublishAssetAppendFileClose:     12 * time.Millisecond,
 		ColumnPublishAssetAppendDirSync:       13 * time.Millisecond,
 		ColumnPublishAssetAppendCleanup:       14 * time.Millisecond,
+		ColumnPublishAssetAppenderCloseCount:  3,
+		ColumnPublishAssetAppendFileSyncCount: 2,
+		ColumnPublishAssetSyncEpochCount:      1,
 		ColumnPublishRowAssetBytes:            101,
 		ColumnPublishRowAssetCount:            1,
 		ColumnPublishTypedColumnBytes:         202,
@@ -2790,6 +2793,15 @@ func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *test
 	}
 	if got, want := metric.ColumnPublishAssetAppendCleanupMS, 14.0; got != want {
 		t.Fatalf("shared append cleanup duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppenderCloseCount, 3; got != want {
+		t.Fatalf("shared append close count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetAppendFileSyncCount, 2; got != want {
+		t.Fatalf("shared append file sync count=%d want %d", got, want)
+	}
+	if got, want := metric.ColumnPublishAssetSyncEpochCount, 1; got != want {
+		t.Fatalf("shared append sync epoch count=%d want %d", got, want)
 	}
 	if got, want := metric.RetainedPayloadValueLogPointerizeMS, 8.0; got != want {
 		t.Fatalf("retained payload pointerize duration ms=%v want %v", got, want)

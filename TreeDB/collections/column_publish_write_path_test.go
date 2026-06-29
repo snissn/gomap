@@ -1488,6 +1488,15 @@ func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) 
 	if prepared.AssetMetrics.SharedAppendCount != len(want) {
 		t.Fatalf("shared append count=%d want %d", prepared.AssetMetrics.SharedAppendCount, len(want))
 	}
+	if prepared.AssetMetrics.SharedAppendCloseCount != 1 {
+		t.Fatalf("shared append close count=%d want 1", prepared.AssetMetrics.SharedAppendCloseCount)
+	}
+	if prepared.AssetMetrics.SharedAppendFileSyncCount != 1 {
+		t.Fatalf("shared append file sync count=%d want 1", prepared.AssetMetrics.SharedAppendFileSyncCount)
+	}
+	if prepared.AssetMetrics.SharedAppendSyncEpochCount != 1 {
+		t.Fatalf("shared append sync epoch count=%d want 1", prepared.AssetMetrics.SharedAppendSyncEpochCount)
+	}
 	if prepared.AssetMetrics.RowAssetCount != 1 || prepared.AssetMetrics.TypedColumnPartCount != 1 ||
 		prepared.AssetMetrics.DictionarySidecarCount != 1 || prepared.AssetMetrics.Int64SidecarCount != 1 ||
 		prepared.AssetMetrics.AggregateMetadataCount != 2 {
@@ -1693,6 +1702,11 @@ func TestRecordColumnPublishPlanStatsIncludesDocumentExtractionM10B(t *testing.T
 		Rows:    2,
 		StageMetrics: ColumnPublishStageMetrics{
 			DocumentExtraction: documentExtraction,
+			AssetMetrics: ColumnPublishAssetPreparationMetrics{
+				SharedAppendCloseCount:     3,
+				SharedAppendFileSyncCount:  2,
+				SharedAppendSyncEpochCount: 1,
+			},
 		},
 	})
 	if stats.ColumnPublishDocumentExtraction != documentExtraction {
@@ -1700,6 +1714,15 @@ func TestRecordColumnPublishPlanStatsIncludesDocumentExtractionM10B(t *testing.T
 	}
 	if stats.ColumnPublishDeclaredColumnEncoding != 0 {
 		t.Fatalf("declared column encoding=%s want 0", stats.ColumnPublishDeclaredColumnEncoding)
+	}
+	if stats.ColumnPublishAssetAppenderCloseCount != 3 {
+		t.Fatalf("asset appender close count=%d want 3", stats.ColumnPublishAssetAppenderCloseCount)
+	}
+	if stats.ColumnPublishAssetAppendFileSyncCount != 2 {
+		t.Fatalf("asset append file sync count=%d want 2", stats.ColumnPublishAssetAppendFileSyncCount)
+	}
+	if stats.ColumnPublishAssetSyncEpochCount != 1 {
+		t.Fatalf("asset sync epoch count=%d want 1", stats.ColumnPublishAssetSyncEpochCount)
 	}
 }
 

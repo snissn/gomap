@@ -580,11 +580,14 @@ type columnPhysicalAssetAppendItem struct {
 }
 
 type columnPhysicalAssetSegmentCloseStats struct {
-	FileSync      time.Duration
-	FileClose     time.Duration
-	DirSync       time.Duration
-	Remove        time.Duration
-	RemoveDirSync time.Duration
+	FileSync       time.Duration
+	FileClose      time.Duration
+	DirSync        time.Duration
+	Remove         time.Duration
+	RemoveDirSync  time.Duration
+	CloseCount     int
+	FileSyncCount  int
+	SyncEpochCount int
 }
 
 func (s columnPhysicalAssetSegmentCloseStats) CleanupDuration() time.Duration {
@@ -922,6 +925,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 		return nil
 	}
 	a.closeStats = columnPhysicalAssetSegmentCloseStats{}
+	a.closeStats.CloseCount = 1
 	var appenderErr error
 	var fileSyncErr error
 	var fileCloseErr error
@@ -931,6 +935,7 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	if a.file != nil && a.closeFile {
 		if !a.failed {
 			start := time.Now()
+			a.closeStats.FileSyncCount++
 			fileSyncErr = syncColumnAssetSegmentFileForPublish(a.file)
 			a.closeStats.FileSync += time.Since(start)
 		}
@@ -948,6 +953,9 @@ func (a *columnPhysicalAssetSegmentAppender) close() error {
 	}
 	if a.syncDirOnClose && dirSyncErr == nil && !a.failed && fileSyncErr == nil && fileCloseErr == nil {
 		markColumnAssetSegmentDirSynced(a.assetPath)
+	}
+	if a.closeStats.FileSyncCount > 0 && !a.failed && fileSyncErr == nil && fileCloseErr == nil && dirSyncErr == nil {
+		a.closeStats.SyncEpochCount = 1
 	}
 	var removeErr error
 	removeOnClose := a.removeOnClose && columnPhysicalAssetSegmentAppenderRemoveOnClose(a.failed, fileSyncErr, fileCloseErr, dirSyncErr)

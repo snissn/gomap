@@ -324,6 +324,9 @@ type ColumnPublishAssetPreparationMetrics struct {
 	SharedAppendFileCloseDuration time.Duration
 	SharedAppendDirSyncDuration   time.Duration
 	SharedAppendCleanupDuration   time.Duration
+	SharedAppendCloseCount        int
+	SharedAppendFileSyncCount     int
+	SharedAppendSyncEpochCount    int
 	SharedAppendDuration          time.Duration
 	SharedAppendBytes             int64
 	SharedAppendCount             int
