@@ -40,6 +40,27 @@ func TestAggregateMetadataAssetsTypedGranulePassMatchesPerAggregate3121(t *testi
 	assertColumnAggregateMetadataAssetsEqual3121(t, got, want)
 }
 
+func TestAggregateMetadataAssetsTypedGranulePrimaryIDOrderUsesFallback3175(t *testing.T) {
+	cfg := aggregateMetadataBatchConfig3121()
+	cfg.AssetManager = &ColumnAssetManagerConfig{Namespace: "events/column-assets"}
+	for idx := range cfg.Columns {
+		cfg.Columns[idx].Path = cfg.Columns[idx].Name
+		cfg.Columns[idx].Owner = TypedStorageOwnerColumnPart
+	}
+	rows := append([]columnDeclaredRow(nil), aggregateMetadataBatchRows3121()[:3]...)
+
+	typedPart, err := buildTypedColumnPartImageForDeclaredRowsWithResult(cfg, 7, typedColumnPartAssetPartID, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnPartImageForDeclaredRowsWithResult: %v", err)
+	}
+	if typedPart.Rows != len(rows) {
+		t.Fatalf("typed part rows=%d want %d", typedPart.Rows, len(rows))
+	}
+	if len(typedPart.TypedGranuleRowOrder) != 0 {
+		t.Fatalf("typed granule row order=%v want empty primary-id fallback", typedPart.TypedGranuleRowOrder)
+	}
+}
+
 func TestAggregateMetadataAssetsTypedGranulePrecomputedOrderMatchesFallback3175(t *testing.T) {
 	cfg := aggregateMetadataBatchConfig3121()
 	cfg.SortKey = []ColumnSortKey{{Column: "time_us"}}
