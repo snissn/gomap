@@ -27,6 +27,11 @@ const (
 	columnTypedColumnDenseInt64SpanReducerLocalMap              = "local_map"
 )
 
+const (
+	columnTypedColumnDenseInt64SpanLocalMapInitialCapacity = 16
+	columnTypedColumnDenseInt64SpanLocalMapMaxCapacity     = 64 << 10
+)
+
 type columnTypedColumnPhysicalQueryPlan struct {
 	Fields                  []TypedStorageField
 	Selected                []bool
@@ -191,6 +196,7 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	denseGroupHourCounts                  map[string][24]int
 	denseLocalHourCounts                  []int
 	denseSpanValues                       map[string]columnPhysicalQuerySpan
+	denseSpanValuesCapacity               int
 	denseLocalSpans                       []columnPhysicalQuerySpan
 	denseLocalSpanSeen                    []bool
 	timeOrderMinValues                    map[string]int64
@@ -329,6 +335,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) close() {
 	r.denseGroupHourCounts = nil
 	r.denseLocalHourCounts = nil
 	r.denseSpanValues = nil
+	r.denseSpanValuesCapacity = 0
 	r.denseLocalSpans = nil
 	r.denseLocalSpanSeen = nil
 	r.timeOrderMinValues = nil
@@ -4020,6 +4027,34 @@ func columnTypedColumnDenseInt64SpanPartsHaveGlobalCodes(parts []columnTypedColu
 	return true
 }
 
+func columnTypedColumnDenseInt64SpanLocalMapCapacity(parts []columnTypedColumnPhysicalQueryPart) int {
+	capacity := 0
+	for partIdx := range parts {
+		dense := parts[partIdx].DenseInt64Span
+		if dense == nil || dense.Cardinality <= 0 {
+			continue
+		}
+		if dense.Cardinality >= columnTypedColumnDenseInt64SpanLocalMapMaxCapacity-capacity {
+			return columnTypedColumnDenseInt64SpanLocalMapMaxCapacity
+		}
+		capacity += dense.Cardinality
+	}
+	if capacity < columnTypedColumnDenseInt64SpanLocalMapInitialCapacity {
+		return columnTypedColumnDenseInt64SpanLocalMapInitialCapacity
+	}
+	return capacity
+}
+
+func (r *columnTypedColumnPhysicalQueryRunner) resetDenseInt64SpanLocalMap() {
+	capacity := columnTypedColumnDenseInt64SpanLocalMapCapacity(r.parts)
+	if r.denseSpanValues == nil || r.denseSpanValuesCapacity < capacity {
+		r.denseSpanValues = make(map[string]columnPhysicalQuerySpan, capacity)
+		r.denseSpanValuesCapacity = capacity
+		return
+	}
+	clear(r.denseSpanValues)
+}
+
 func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanGlobalCodes(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	start := time.Now()
 	var groupDictionary []string
@@ -4173,11 +4208,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanGlobalCodes(view
 
 func (r *columnTypedColumnPhysicalQueryRunner) runDenseInt64SpanLocalMap(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	start := time.Now()
-	if r.denseSpanValues == nil {
-		r.denseSpanValues = make(map[string]columnPhysicalQuerySpan, 16)
-	} else {
-		clear(r.denseSpanValues)
-	}
+	r.resetDenseInt64SpanLocalMap()
 	rowsScanned := 0
 	matchedRows := 0
 	reduceRows := 0
