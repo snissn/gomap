@@ -90,6 +90,17 @@ func writeCommandWALStatsZeroCounters(stats map[string]string) {
 	stats["treedb.command_wal.cleanup.scans"] = "0"
 	stats["treedb.command_wal.cleanup.removed_segments"] = "0"
 	stats["treedb.command_wal.cleanup.removed_bytes"] = "0"
+	stats["treedb.command_wal.writer.buffer_size_bytes"] = "0"
+	stats["treedb.command_wal.writer.buffered_bytes"] = "0"
+	stats["treedb.command_wal.writer.scratch_capacity_bytes"] = "0"
+	stats["treedb.command_wal.writer.command_buffer.length_bytes"] = "0"
+	stats["treedb.command_wal.writer.command_buffer.capacity_bytes"] = "0"
+	stats["treedb.command_wal.writer.command_buffer.limit_bytes"] = "0"
+	stats["treedb.command_wal.writer.command_buffer.retain_limit_bytes"] = "0"
+	stats["treedb.command_wal.writer.command_buffer.trim_count"] = "0"
+	stats["treedb.command_wal.writer.command_buffer.dropped_bytes_total"] = "0"
+	stats["treedb.command_wal.writer.pending_batch.length_bytes"] = "0"
+	stats["treedb.command_wal.writer.pending_batch.capacity_bytes"] = "0"
 }
 
 func writeCommandWALLiveStats(stats map[string]string, db *DB) {
@@ -110,6 +121,25 @@ func writeCommandWALLifecycleStats(stats map[string]string, db *DB) {
 	stats["treedb.command_wal.cleanup.scans"] = fmt.Sprintf("%d", db.commandWALCleanupScans.Load())
 	stats["treedb.command_wal.cleanup.removed_segments"] = fmt.Sprintf("%d", db.commandWALCleanupRemoved.Load())
 	stats["treedb.command_wal.cleanup.removed_bytes"] = fmt.Sprintf("%d", db.commandWALCleanupBytes.Load())
+	writeCommandWALWriterBufferStats(stats, db)
+}
+
+func writeCommandWALWriterBufferStats(stats map[string]string, db *DB) {
+	if stats == nil || db == nil || db.commandJournal == nil {
+		return
+	}
+	snap := db.commandJournal.WriterBufferStats()
+	stats["treedb.command_wal.writer.buffer_size_bytes"] = fmt.Sprintf("%d", snap.BufferedWriterSize)
+	stats["treedb.command_wal.writer.buffered_bytes"] = fmt.Sprintf("%d", snap.BufferedWriterBufferedBytes)
+	stats["treedb.command_wal.writer.scratch_capacity_bytes"] = fmt.Sprintf("%d", snap.ScratchCapacity)
+	stats["treedb.command_wal.writer.command_buffer.length_bytes"] = fmt.Sprintf("%d", snap.CommandBufferLength)
+	stats["treedb.command_wal.writer.command_buffer.capacity_bytes"] = fmt.Sprintf("%d", snap.CommandBufferCapacity)
+	stats["treedb.command_wal.writer.command_buffer.limit_bytes"] = fmt.Sprintf("%d", snap.CommandBufferLimit)
+	stats["treedb.command_wal.writer.command_buffer.retain_limit_bytes"] = fmt.Sprintf("%d", snap.CommandBufferRetainLimit)
+	stats["treedb.command_wal.writer.command_buffer.trim_count"] = fmt.Sprintf("%d", snap.CommandBufferTrimCount)
+	stats["treedb.command_wal.writer.command_buffer.dropped_bytes_total"] = fmt.Sprintf("%d", snap.CommandBufferDroppedBytes)
+	stats["treedb.command_wal.writer.pending_batch.length_bytes"] = fmt.Sprintf("%d", snap.PendingBatchLength)
+	stats["treedb.command_wal.writer.pending_batch.capacity_bytes"] = fmt.Sprintf("%d", snap.PendingBatchCapacity)
 }
 
 func (db *DB) observeCommandWALAccepted(lsn uint64) {

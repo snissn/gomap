@@ -248,3 +248,99 @@ func TestAppendOnlyIdleMutableRetainCapacity_CapsEmptyShardBacking(t *testing.T)
 		t.Fatalf("entry backing after trim=%d want <= idle cap=%d", after, appendOnlyIdleMutableRetainCapacity)
 	}
 }
+
+func TestTrimRetainedArenasAfterFlush_CheckpointDropsEmptyMutableBacking(t *testing.T) {
+	var db DB
+	db.storeMemtableMode(memtable.ModeAppendOnly)
+	db.memtableCap = 64 << 20
+	db.mutableShards = make([]memShard, 1)
+
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(db.checkpointRotateCapacity(), appendOnlyEstimatedBytesPerEntryDefault)
+	if got := mt.EntryBackingBytes(); got == 0 {
+		t.Fatal("test setup produced zero append-only entry backing")
+	}
+	db.mutableShards[0].mem = mt
+
+	db.trimRetainedArenasAfterFlush(true)
+
+	if got := mt.EntryBackingBytes(); got != 0 {
+		t.Fatalf("entry backing after checkpoint trim=%d want 0", got)
+	}
+	if got := db.appendOnlyMutableTrimTotal.Load(); got != 1 {
+		t.Fatalf("mutable trim total=%d want 1", got)
+	}
+	if got := db.appendOnlyMutableTrimDropped.Load(); got == 0 {
+		t.Fatal("mutable trim dropped bytes=0 want >0")
+	}
+
+	mt.Set([]byte("k"), []byte("v"))
+	if got := mt.Len(); got != 1 {
+		t.Fatalf("len after post-trim write=%d want 1", got)
+	}
+	value, deleted, found := mt.Get([]byte("k"))
+	if !found || deleted || string(value) != "v" {
+		t.Fatalf("Get after post-trim write=(%q,%t,%t), want value", value, deleted, found)
+	}
+}
+
+func TestCheckpointDropsEmptyAppendOnlyMutableBackingStats(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("before"), []byte("value")); err != nil {
+		t.Fatalf("set before checkpoint: %v", err)
+	}
+	before := db.Stats()
+	beforeBacking := parseUintStat(before, "treedb.cache.append_only.mutable_entry_backing_bytes")
+	if beforeBacking == 0 {
+		t.Fatalf("mutable entry backing before checkpoint=0, stats=%v", before)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	after := db.Stats()
+	if got := parseUintStat(after, "treedb.cache.append_only.mutable_entry_backing_bytes"); got != 0 {
+		t.Fatalf("mutable entry backing after checkpoint=%d want 0", got)
+	}
+	if got := parseUintStat(after, "treedb.cache.memtable_residency.mutable.append_only.entry_backing_bytes"); got != 0 {
+		t.Fatalf("mutable residency append-only entry backing after checkpoint=%d want 0", got)
+	}
+	if got := parseUintStat(after, "treedb.cache.append_only.mutable_trim_total"); got == 0 {
+		t.Fatalf("mutable trim total after checkpoint=0, stats=%v", after)
+	}
+	if got := parseUintStat(after, "treedb.cache.append_only.mutable_trim_dropped_bytes_total"); got == 0 {
+		t.Fatalf("mutable trim dropped bytes after checkpoint=0, stats=%v", after)
+	}
+
+	gotBefore, err := db.Get([]byte("before"))
+	if err != nil {
+		t.Fatalf("get before after checkpoint: %v", err)
+	}
+	if string(gotBefore) != "value" {
+		t.Fatalf("get before after checkpoint=%q want value", gotBefore)
+	}
+	if err := db.Set([]byte("after"), []byte("reuse")); err != nil {
+		t.Fatalf("set after checkpoint: %v", err)
+	}
+	gotAfter, err := db.Get([]byte("after"))
+	if err != nil {
+		t.Fatalf("get after post-checkpoint write: %v", err)
+	}
+	if string(gotAfter) != "reuse" {
+		t.Fatalf("get after post-checkpoint write=%q want reuse", gotAfter)
+	}
+	postWrite := db.Stats()
+	if got := parseUintStat(postWrite, "treedb.cache.append_only.mutable_entry_backing_bytes"); got == 0 {
+		t.Fatalf("mutable entry backing after post-checkpoint write=0, stats=%v", postWrite)
+	}
+}

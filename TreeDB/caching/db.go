@@ -305,9 +305,11 @@ type poolPressureSnapshot struct {
 }
 
 type memtableResidencySummary struct {
-	count int
-	len   int
-	size  int64
+	count             int
+	len               int
+	size              int64
+	entryCapacity     int64
+	entryBackingBytes int64
 }
 
 type memtableResidencyBreakdown struct {
@@ -10157,7 +10159,11 @@ func (db *DB) trimEmptyAppendOnlyMutableShards(capacity int) int {
 			continue
 		}
 		before := mt.EntryBackingBytes()
-		mt.ResetWithCapacityHard(capacity, estimate)
+		if capacity <= 0 {
+			mt.ResetDropEntries()
+		} else {
+			mt.ResetWithCapacityHard(capacity, estimate)
+		}
 		after := mt.EntryBackingBytes()
 		shard.mu.Unlock()
 		if before > after {
@@ -10264,7 +10270,11 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	}
 
 	db.trimMutableShardAppendOnlyDirectArenas(checkpoint)
-	db.trimEmptyAppendOnlyMutableShards(db.appendOnlyIdleMutableRetainCapacity())
+	idleMutableRetainCapacity := db.appendOnlyIdleMutableRetainCapacity()
+	if checkpoint {
+		idleMutableRetainCapacity = 0
+	}
+	db.trimEmptyAppendOnlyMutableShards(idleMutableRetainCapacity)
 	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
 }
 
@@ -10425,6 +10435,10 @@ func addMemtableResidencySummary(dst *memtableResidencySummary, mt memtable.Tabl
 	dst.count++
 	dst.len += mt.Len()
 	dst.size += mt.Size()
+	if appendOnly, ok := mt.(*memtable.AppendOnly); ok {
+		dst.entryCapacity += int64(appendOnly.EntryCapacity())
+		dst.entryBackingBytes += appendOnly.EntryBackingBytes()
+	}
 }
 
 func summarizeMemtableResidency(tables []memtable.Table) memtableResidencyBreakdown {
@@ -10458,6 +10472,8 @@ func addMemtableResidencyStats(stats map[string]string, prefix string, summary m
 		stats[prefix+"."+name+".count"] = fmt.Sprintf("%d", s.count)
 		stats[prefix+"."+name+".entries"] = fmt.Sprintf("%d", s.len)
 		stats[prefix+"."+name+".size_bytes"] = fmt.Sprintf("%d", s.size)
+		stats[prefix+"."+name+".entry_capacity"] = fmt.Sprintf("%d", s.entryCapacity)
+		stats[prefix+"."+name+".entry_backing_bytes"] = fmt.Sprintf("%d", s.entryBackingBytes)
 	}
 	add("total", summary.total)
 	add("skiplist", summary.skiplist)
