@@ -366,6 +366,36 @@ func TestClusterSubmitterUpdateSubmitsPriorOrderedItemsBeforeUnsupported(t *test
 	}
 }
 
+func TestClusterSubmitterUpdateMissingCollectionReturnsZeroCounts(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 23)
+
+	response := serveCommand(t, server, 325823, bson.D{
+		{Key: "update", Value: "missing"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+	assertInt32(t, response, "nModified", 0)
+
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
+}
+
 func TestClusterSubmitterDeleteRoutesCommandEntry(t *testing.T) {
 	submitter := &mongoClusterFakeSubmitter{}
 	server := NewServer()
@@ -442,6 +472,32 @@ func TestClusterSubmitterDeleteSubmitsPriorOrderedItemsBeforeUnsupported(t *test
 	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
 	if len(ids) != 1 {
 		t.Fatalf("document ids=%d want 1", len(ids))
+	}
+}
+
+func TestClusterSubmitterDeleteMissingCollectionReturnsZeroCount(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 24)
+
+	response := serveCommand(t, server, 325824, bson.D{
+		{Key: "delete", Value: "missing"},
+		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 0)
+
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
 	}
 }
 

@@ -122,6 +122,13 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
+	exists, err := s.clusterCollectionExists(name)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if !exists {
+		return marshalUpdateResponse(0, 0)
+	}
 	var matched, modified int32
 	for i, update := range updates {
 		item, err := parseMongoUpdateItem(i, update)
@@ -160,6 +167,13 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 	deletes, err := commandDocuments(command, sequences, "deletes")
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
+	}
+	exists, err := s.clusterCollectionExists(name)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if !exists {
+		return marshalDeleteResponse(0)
 	}
 	ids := make([][]byte, 0, len(deletes))
 	seenIDs := make(map[string]struct{}, len(deletes))
@@ -229,6 +243,20 @@ func (s *Server) clusterCollectionFormat(name string) (collections.DocumentForma
 		}
 	}
 	return format, false, nil
+}
+
+func (s *Server) clusterCollectionExists(name string) (bool, error) {
+	if s == nil || s.Collections == nil {
+		return true, nil
+	}
+	col, err := s.Collections.OpenCollection(name)
+	if err == nil && col != nil {
+		return true, nil
+	}
+	if errors.Is(err, collections.ErrCollectionNotFound) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collections.CollectionMeta) error {
