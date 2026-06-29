@@ -41,9 +41,7 @@ func (b *ReadBarrier) WaitAppliedIndex(ctx context.Context, barrier raftcluster.
 	if err != nil {
 		return progress, err
 	}
-	if err := barrier.Check(progress); err == nil {
-		return progress, nil
-	} else if !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
+	if err := barrier.Check(progress); err != nil && !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
 		return progress, fmt.Errorf("raftharness: %w", err)
 	}
 	if _, err := b.h.CatchUpNode(b.nodeID); err != nil {

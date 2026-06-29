@@ -56,3 +56,33 @@ func TestReadBarrierFailsClosedWhenCommittedLogCannotSatisfyIndex(t *testing.T) 
 	}
 	assertLastApplied(t, h, "node-c", raftentry.ApplyEntryID{Term: 24, Index: 1})
 }
+
+func TestReadBarrierValidatesCommittedPrefixBeforeSatisfiedAppliedIndex(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	committed := []raftfsm.CommittedEntryV1{
+		committedCommand(25, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:read-barrier-prefix")),
+		committedCommand(25, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:read-barrier-prefix")),
+	}
+	divergent := []raftfsm.CommittedEntryV1{
+		committed[0],
+		committedCommand(25, 2, deterministicCreateCollectionEntry(t, "admins", "harness:create:admins:read-barrier-divergent-prefix")),
+	}
+	seeded := applyEntriesDirectlyToNode(t, h, "node-b", divergent...)
+	assertAppliedResults(t, "node-b divergent read-barrier seed", seeded, []int64{1, 1})
+	if _, err := h.Commit(committed...); err != nil {
+		t.Fatalf("Commit committed log: %v", err)
+	}
+
+	progress, err := h.ReadBarrier("node-b").WaitAppliedIndex(context.Background(), raftcluster.AppliedIndexReadBarrier{
+		MinAppliedIndex: 2,
+	})
+	if code, ok := raftfsm.ErrorCodeOf(err); !ok || code != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("WaitAppliedIndex err=%v code=(%s,%t), want %s", err, code, ok, raftentry.ErrorRejectedConflictV1)
+	}
+	if progress.NodeID != "node-b" || progress.Index != 2 || !progress.HasApplied {
+		t.Fatalf("progress after rejected read barrier=%+v, want node-b applied through 2", progress)
+	}
+	assertCollectionMissing(t, h, "node-b", "orders")
+}
