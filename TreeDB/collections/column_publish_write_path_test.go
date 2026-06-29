@@ -1400,6 +1400,101 @@ func TestEncodeColumnManifestIdentityForWriteRejectsNegativeBytesM10B(t *testing
 	}
 }
 
+func TestPrepareColumnPhysicalAssetRowsKeepsPendingAssetOrder3236(t *testing.T) {
+	cfg, err := normalizeColumnStoreConfig("events", &ColumnStoreConfig{
+		Enabled: true,
+		Columns: []ColumnStoreColumn{
+			{Name: "time_us", Path: "time_us", ValueType: ColumnStoreValueInt64},
+			{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Dictionary: true},
+			{Name: "score", Path: "score", ValueType: ColumnStoreValueInt64, Owner: TypedStorageOwnerColumnPart},
+			{Name: "did", Path: "did", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Dictionary: true},
+		},
+		SortKey: []ColumnSortKey{{Column: "score"}},
+		AggregateMetadata: []ColumnAggregateMetadata{
+			{Name: "typed_score_min_by_did", Column: "score", GroupColumn: "did", Kind: ColumnAggregateMin},
+			{Name: "row_time_min_by_kind", Column: "time_us", GroupColumn: "kind", Kind: ColumnAggregateMin},
+		},
+	})
+	if err != nil {
+		t.Fatalf("normalizeColumnStoreConfig: %v", err)
+	}
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	col := &Collection{db: d}
+	rows := []columnDeclaredRow{
+		{ID: []byte("e3"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 30},
+			{Type: ColumnStoreValueString, Present: true, String: "post"},
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 3},
+			{Type: ColumnStoreValueString, Present: true, String: "did:b"},
+		}},
+		{ID: []byte("e1"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 10},
+			{Type: ColumnStoreValueString, Present: true, String: "like"},
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 1},
+			{Type: ColumnStoreValueString, Present: true, String: "did:a"},
+		}},
+		{ID: []byte("e2"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 20},
+			{Type: ColumnStoreValueString, Present: true, String: "like"},
+			{Type: ColumnStoreValueInt64, Present: true, Int64: 2},
+			{Type: ColumnStoreValueString, Present: true, String: "did:a"},
+		}},
+	}
+	prepared, err := col.prepareColumnPhysicalAssetRowsForCommand(ColumnPublishPreparedAssets{}, columnWritePublishInput{
+		meta:      CollectionMeta{Name: "events", Options: CollectionOptions{ColumnStore: cfg}},
+		operation: ColumnPublishOperationInsert,
+		rows:      len(rows),
+	}, ColumnPublishAssetPrepareInput{
+		Collection:        "events",
+		ColumnStore:       *cfg,
+		Operation:         ColumnPublishOperationInsert,
+		AppliedCommandLSN: 77,
+	}, rows)
+	if err != nil {
+		t.Fatalf("prepareColumnPhysicalAssetRowsForCommand: %v", err)
+	}
+	want := []struct {
+		kind   ColumnAssetKind
+		partID uint64
+		reason string
+		role   ColumnManifestPartRole
+	}{
+		{kind: ColumnAssetKindTCS1PartImage, partID: columnPhysicalRowAssetPartID, reason: string(ColumnPublishOperationInsert), role: ColumnManifestPartRoleBase},
+		{kind: ColumnAssetKindTCS1TypedColumnPart, partID: typedColumnPartAssetPartID, reason: string(ColumnPublishOperationInsert), role: ColumnManifestPartRoleBase},
+		{kind: ColumnAssetKindTCS1AggregateMetadata, partID: typedColumnPartAssetPartID, reason: "typed_score_min_by_did"},
+		{kind: ColumnAssetKindTCS1DictionaryCodes, partID: columnPhysicalRowAssetPartID, reason: "kind"},
+		{kind: ColumnAssetKindTCS1Int64Values, partID: columnPhysicalRowAssetPartID, reason: "time_us"},
+		{kind: ColumnAssetKindTCS1AggregateMetadata, partID: columnPhysicalRowAssetPartID, reason: "row_time_min_by_kind"},
+	}
+	if len(prepared.Assets) != len(want) {
+		t.Fatalf("prepared assets=%d want %d: %+v", len(prepared.Assets), len(want), prepared.Assets)
+	}
+	for i, expected := range want {
+		asset := prepared.Assets[i]
+		if asset.Ref.Kind != expected.kind || asset.Ref.PartID != expected.partID || asset.Reason != expected.reason || asset.PartRole != expected.role {
+			t.Fatalf("asset[%d]=%+v want kind=%s part_id=%d reason=%q role=%q", i, asset, expected.kind, expected.partID, expected.reason, expected.role)
+		}
+		if asset.Ref.FileID != columnAssetM12ASegmentFileID {
+			t.Fatalf("asset[%d] ref=%+v want shared regular segment file_id=%d", i, asset.Ref, columnAssetM12ASegmentFileID)
+		}
+		if i > 0 && asset.Ref.Offset <= prepared.Assets[i-1].Ref.Offset {
+			t.Fatalf("asset offsets not in pending order at %d: prev=%+v current=%+v", i, prepared.Assets[i-1].Ref, asset.Ref)
+		}
+	}
+	if prepared.AssetMetrics.SharedAppendCount != len(want) {
+		t.Fatalf("shared append count=%d want %d", prepared.AssetMetrics.SharedAppendCount, len(want))
+	}
+	if prepared.AssetMetrics.RowAssetCount != 1 || prepared.AssetMetrics.TypedColumnPartCount != 1 ||
+		prepared.AssetMetrics.DictionarySidecarCount != 1 || prepared.AssetMetrics.Int64SidecarCount != 1 ||
+		prepared.AssetMetrics.AggregateMetadataCount != 2 {
+		t.Fatalf("asset metrics=%+v want row=1 typed=1 dict=1 int64=1 aggregate=2", prepared.AssetMetrics)
+	}
+}
+
 func TestColumnManifestRootDescriptorSystemDeltaRejectsPlanRootMismatchM10B(t *testing.T) {
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), DisableBackgroundPrune: true})
 	if err != nil {
