@@ -291,6 +291,8 @@ type ColumnPublishStageMetrics struct {
 
 // ColumnPublishAssetPreparationMetrics breaks the production asset-preparation
 // stage down by the asset families that make up column-store insert/load cost.
+// Subphase durations are producer-attributed and may overlap; AssetPreparation
+// remains the enclosing wall-clock duration for the full prepare stage.
 // Fused row-sidecar build time is byte-attributed to dictionary/int64/aggregate
 // families by the producer; SharedAppendDuration remains separately reported so
 // callers can choose exact upper-bound or byte-share accounting.
