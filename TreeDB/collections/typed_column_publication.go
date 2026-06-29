@@ -160,6 +160,19 @@ func columnStoreColumnNameSet(columns []ColumnStoreColumn) map[string]struct{} {
 }
 
 func projectColumnDeclaredRowsForColumns(allColumns, selected []ColumnStoreColumn, rows []columnDeclaredRow) ([]columnDeclaredRow, error) {
+	if len(selected) == 0 {
+		out := make([]columnDeclaredRow, len(rows))
+		for rowIdx, row := range rows {
+			out[rowIdx] = columnDeclaredRow{ID: row.ID, Deleted: row.Deleted}
+			if row.Deleted {
+				continue
+			}
+			if len(row.Values) != len(allColumns) {
+				return nil, fmt.Errorf("collections: typed-storage row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(allColumns))
+			}
+		}
+		return out, nil
+	}
 	if len(selected) == len(allColumns) {
 		all := true
 		for i := range selected {
