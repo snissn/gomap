@@ -27,6 +27,7 @@ const (
 
 var (
 	ErrNodeNotFound         = errors.New("raftharness: node not found")
+	ErrHarnessClosed        = errors.New("raftharness: harness closed")
 	ErrCommittedLogGap      = errors.New("raftharness: committed log gap")
 	ErrCommittedLogConflict = errors.New("raftharness: committed log conflict")
 )
@@ -147,6 +148,9 @@ func (h *Harness) Node(id raftcluster.NodeID) (*Node, bool) {
 func (h *Harness) CloseNode(id raftcluster.NodeID) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return ErrHarnessClosed
+	}
 	node, ok := h.nodes[id]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrNodeNotFound, id)
@@ -157,6 +161,9 @@ func (h *Harness) CloseNode(id raftcluster.NodeID) error {
 func (h *Harness) ReopenNode(id raftcluster.NodeID) (*Node, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return nil, ErrHarnessClosed
+	}
 	for _, cfg := range h.nodeConfigs {
 		if cfg.ID != id {
 			continue
@@ -194,6 +201,9 @@ func (h *Harness) Commit(entries ...raftfsm.CommittedEntryV1) (CommitEvidenceV1,
 		ProductionConsensus: false,
 		EntryIDs:            applyEntryIDs(entries),
 	}
+	if h.closed {
+		return evidence, ErrHarnessClosed
+	}
 	staged := make([]raftfsm.CommittedEntryV1, len(h.committed), len(h.committed)+len(entries))
 	copy(staged, h.committed)
 	for _, entry := range entries {
@@ -225,23 +235,47 @@ func (h *Harness) CommitAndApply(nodeIDs []raftcluster.NodeID, entries ...raftfs
 }
 
 func (h *Harness) ApplyCommittedEntriesToNode(id raftcluster.NodeID, entries ...raftfsm.CommittedEntryV1) ([]raftentry.ApplyResultV1, error) {
-	node, ok := h.Node(id)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
+	node, err := h.nodeForApply(id)
+	if err != nil {
+		return nil, err
 	}
 	return node.ApplyCommittedEntriesV1(entries...)
 }
 
-func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1, error) {
-	node, ok := h.Node(id)
+func (h *Harness) nodeForApply(id raftcluster.NodeID) (*Node, error) {
+	if h == nil {
+		return nil, ErrHarnessClosed
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return nil, ErrHarnessClosed
+	}
+	node, ok := h.nodes[id]
 	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
+	}
+	return node, nil
+}
+
+func (h *Harness) CatchUpNode(id raftcluster.NodeID) ([]raftentry.ApplyResultV1, error) {
+	if h == nil {
+		return nil, ErrHarnessClosed
+	}
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, ErrHarnessClosed
+	}
+	node, ok := h.nodes[id]
+	if !ok {
+		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
 	}
 	var after uint64
 	if last, ok := node.LastApplied(); ok {
 		after = last.Index
 	}
-	h.mu.Lock()
 	entries := make([]raftfsm.CommittedEntryV1, 0, len(h.committed))
 	for _, entry := range h.committed {
 		if entry.Index > after {

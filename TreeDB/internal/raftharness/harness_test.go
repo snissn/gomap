@@ -313,6 +313,36 @@ func TestOpenRejectsInvalidNodeIDBeforeOpeningPath(t *testing.T) {
 	}
 }
 
+func TestClosedHarnessRejectsMutatingOperations(t *testing.T) {
+	h := openTestHarness(t)
+	entry := committedCommand(18, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:closed"))
+	if err := h.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := h.ReopenNode("node-a"); !errors.Is(err, ErrHarnessClosed) {
+		t.Fatalf("ReopenNode after Close err=%v, want ErrHarnessClosed", err)
+	}
+	if err := h.CloseNode("node-a"); !errors.Is(err, ErrHarnessClosed) {
+		t.Fatalf("CloseNode after Close err=%v, want ErrHarnessClosed", err)
+	}
+	evidence, err := h.Commit(entry)
+	if !errors.Is(err, ErrHarnessClosed) {
+		t.Fatalf("Commit after Close err=%v, want ErrHarnessClosed evidence=%+v", err, evidence)
+	}
+	if evidence.Committed {
+		t.Fatalf("Commit after Close evidence=%+v, want not committed", evidence)
+	}
+	if _, err := h.ApplyCommittedEntriesToNode("node-a", entry); !errors.Is(err, ErrHarnessClosed) {
+		t.Fatalf("ApplyCommittedEntriesToNode after Close err=%v, want ErrHarnessClosed", err)
+	}
+	if _, err := h.CatchUpNode("node-a"); !errors.Is(err, ErrHarnessClosed) {
+		t.Fatalf("CatchUpNode after Close err=%v, want ErrHarnessClosed", err)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
 func openTestHarness(t testing.TB) *Harness {
 	t.Helper()
 	return openTestHarnessAt(t, t.TempDir())
