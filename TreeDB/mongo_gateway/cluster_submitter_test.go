@@ -786,6 +786,63 @@ func TestClusterSubmitterDeleteMissingCollectionReturnsZeroCount(t *testing.T) {
 	}
 }
 
+func TestClusterSubmitterMajorityWriteConcernRejectsMissingCollectionNoops(t *testing.T) {
+	t.Run("update", func(t *testing.T) {
+		db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		submitter := &mongoClusterFakeSubmitter{actualAck: iwire.AckRaftCommitted, committedRecoverable: true}
+		server := NewServer()
+		server.Collections = collections.NewCollectionManager(db)
+		server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+		setMongoClusterTestSubmitter(server, submitter, 30)
+
+		response := serveCommand(t, server, 325832, bson.D{
+			{Key: "update", Value: "missing"},
+			{Key: "updates", Value: bson.A{bson.D{
+				{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+				{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+			}}},
+			{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertCommandError(t, response, "WriteConcernFailed")
+		assertErrmsgContains(t, response, "missing collection no-op")
+		if calls := submitter.snapshotCalls(); len(calls) != 0 {
+			t.Fatalf("submit calls=%d want 0", len(calls))
+		}
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+		if err != nil {
+			t.Fatalf("open db: %v", err)
+		}
+		defer func() { _ = db.Close() }()
+
+		submitter := &mongoClusterFakeSubmitter{actualAck: iwire.AckRaftCommitted, committedRecoverable: true}
+		server := NewServer()
+		server.Collections = collections.NewCollectionManager(db)
+		server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+		setMongoClusterTestSubmitter(server, submitter, 31)
+
+		response := serveCommand(t, server, 325833, bson.D{
+			{Key: "delete", Value: "missing"},
+			{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+			{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertCommandError(t, response, "WriteConcernFailed")
+		assertErrmsgContains(t, response, "missing collection no-op")
+		if calls := submitter.snapshotCalls(); len(calls) != 0 {
+			t.Fatalf("submit calls=%d want 0", len(calls))
+		}
+	})
+}
+
 func TestClusterSubmitterWriteConcernAccepted(t *testing.T) {
 	tests := []struct {
 		name                 string

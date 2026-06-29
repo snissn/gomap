@@ -137,6 +137,9 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		if err := rejectClusterMissingCollectionMajorityNoop(ack); err != nil {
+			return mongoClusterMutationCommandError(err)
+		}
 		return marshalUpdateResponse(0, 0)
 	}
 	var matched, modified int32
@@ -187,6 +190,9 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
+		if err := rejectClusterMissingCollectionMajorityNoop(ack); err != nil {
+			return mongoClusterMutationCommandError(err)
+		}
 		return marshalDeleteResponse(0)
 	}
 	ids := make([][]byte, 0, len(deletes))
@@ -376,6 +382,13 @@ func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]b
 		return 0, errors.New("cluster submitter response_meta missing deleted_count")
 	}
 	return deleted, nil
+}
+
+func rejectClusterMissingCollectionMajorityNoop(ack iwire.AckPolicy) error {
+	if ack != iwire.AckRaftCommitted {
+		return nil
+	}
+	return mongoWriteConcernFailedError("cluster submitter cannot prove raft_committed durability for missing collection no-op")
 }
 
 func (s *Server) clusterCreateCollectionSections(meta collections.CollectionMeta, catalogVersion uint64) ([]iwire.Section, uint64, error) {
