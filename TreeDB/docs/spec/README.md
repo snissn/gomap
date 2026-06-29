@@ -95,6 +95,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     production benchmark matrix, target envelope, and fail-closed rollout gates.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
+- `TreeDB/docs/spec/publication-readability-3245.md`
+  - issue #3245 publication/readability map for collection catalog metadata and
+    root descriptors, ordered/system-root publication, value-log pointer
+    publication, snapshot acquisition, and `AppliedCommandLSN` visibility.
 - `TreeDB/docs/spec/recovery.md`
   - open-time recovery pipeline, replay ordering, truncated tail behavior, failure modes.
 - `TreeDB/docs/spec/user-command-wal.md`
