@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -185,14 +186,14 @@ func DefaultClusterDir(dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Clean(dir), "raftcluster")
+	return filepath.Join(resolveTreeDBStorageLayout(dir).rootDir, "raftcluster")
 }
 
 func MainDBDir(dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		return ""
 	}
-	return filepath.Join(filepath.Clean(dir), "maindb")
+	return resolveTreeDBStorageLayout(dir).mainDir
 }
 
 func CommandWALDir(dir string) string {
@@ -326,7 +327,7 @@ func cleanStorageRoot(dir, clusterDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	clusterDirAbs, err := absCleanStoragePath("cluster dir", clusterDir)
+	clusterDirAbs, err := realCleanStoragePath("cluster dir", clusterDir)
 	if err != nil {
 		return "", err
 	}
@@ -337,7 +338,7 @@ func cleanStorageRoot(dir, clusterDir string) (string, error) {
 		LeafLogDir(dir),
 	}
 	for _, path := range reserved {
-		reservedAbs, err := absCleanStoragePath("reserved TreeDB path", path)
+		reservedAbs, err := realCleanStoragePath("reserved TreeDB path", path)
 		if err != nil {
 			return "", err
 		}
@@ -348,12 +349,73 @@ func cleanStorageRoot(dir, clusterDir string) (string, error) {
 	return clusterDir, nil
 }
 
-func absCleanStoragePath(label, p string) (string, error) {
+type treeDBStorageLayout struct {
+	rootDir string
+	mainDir string
+}
+
+func resolveTreeDBStorageLayout(dir string) treeDBStorageLayout {
+	clean := filepath.Clean(dir)
+	if info, err := os.Stat(filepath.Join(clean, "maindb")); err == nil && info.IsDir() {
+		return treeDBStorageLayout{
+			rootDir: clean,
+			mainDir: filepath.Join(clean, "maindb"),
+		}
+	}
+	if info, err := os.Stat(filepath.Join(clean, "index.db")); err == nil && !info.IsDir() {
+		if filepath.Base(clean) == "maindb" {
+			parent := filepath.Dir(clean)
+			if info, err := os.Stat(filepath.Join(parent, "dictdb")); err == nil && info.IsDir() {
+				return treeDBStorageLayout{rootDir: parent, mainDir: clean}
+			}
+			if info, err := os.Stat(filepath.Join(parent, "templatedb")); err == nil && info.IsDir() {
+				return treeDBStorageLayout{rootDir: parent, mainDir: clean}
+			}
+		}
+		return treeDBStorageLayout{rootDir: clean, mainDir: clean}
+	}
+	if filepath.Base(clean) == "maindb" {
+		return treeDBStorageLayout{
+			rootDir: filepath.Dir(clean),
+			mainDir: clean,
+		}
+	}
+	return treeDBStorageLayout{
+		rootDir: clean,
+		mainDir: filepath.Join(clean, "maindb"),
+	}
+}
+
+func realCleanStoragePath(label, p string) (string, error) {
 	abs, err := filepath.Abs(filepath.Clean(p))
 	if err != nil {
 		return "", errors.Join(ErrInvalidConfig, ErrInvalidStoragePath, fmt.Errorf("%s %q cannot be made absolute: %w", label, p, err))
 	}
-	return abs, nil
+	real, err := evalExistingStoragePath(abs)
+	if err != nil {
+		return "", errors.Join(ErrInvalidConfig, ErrInvalidStoragePath, fmt.Errorf("%s %q cannot resolve symlinks: %w", label, p, err))
+	}
+	return real, nil
+}
+
+func evalExistingStoragePath(abs string) (string, error) {
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		return filepath.Clean(real), nil
+	}
+	var suffix []string
+	for cur := abs; ; cur = filepath.Dir(cur) {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				real = filepath.Join(real, suffix[i])
+			}
+			return filepath.Clean(real), nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return abs, nil
+		}
+		suffix = append(suffix, filepath.Base(cur))
+	}
 }
 
 func sameOrUnder(path, root string) bool {

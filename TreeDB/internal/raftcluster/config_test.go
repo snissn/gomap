@@ -2,6 +2,7 @@ package raftcluster
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -81,6 +82,57 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 				t.Chdir(cwd)
 				cfg.Dir = "./db"
 				cfg.ClusterDir = filepath.Join(cwd, "db", "maindb", "wal", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "cluster dir inside command wal with maindb options dir",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				mainDir := filepath.Join(root, "maindb")
+				if err := os.MkdirAll(filepath.Join(mainDir, "wal"), 0o755); err != nil {
+					t.Fatalf("mkdir wal: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
+					t.Fatalf("write index.db: %v", err)
+				}
+				if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+					t.Fatalf("mkdir dictdb: %v", err)
+				}
+				cfg.Dir = mainDir
+				cfg.ClusterDir = filepath.Join(mainDir, "wal", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "cluster dir inside command wal with flat options dir",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				if err := os.MkdirAll(filepath.Join(root, "wal"), 0o755); err != nil {
+					t.Fatalf("mkdir wal: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "index.db"), nil, 0o600); err != nil {
+					t.Fatalf("write index.db: %v", err)
+				}
+				cfg.Dir = root
+				cfg.ClusterDir = filepath.Join(root, "wal", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "symlinked cluster dir into command wal",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				walDir := filepath.Join(root, "maindb", "wal")
+				if err := os.MkdirAll(walDir, 0o755); err != nil {
+					t.Fatalf("mkdir wal: %v", err)
+				}
+				link := filepath.Join(root, "raft-link")
+				if err := os.Symlink(walDir, link); err != nil {
+					t.Skipf("symlink unsupported: %v", err)
+				}
+				cfg.Dir = root
+				cfg.ClusterDir = filepath.Join(link, "raft")
 			},
 			want: ErrInvalidStoragePath,
 		},
@@ -196,6 +248,26 @@ func TestStorageLayoutDeterministicAndSeparated(t *testing.T) {
 		if dir, ok := a.Layout.PeerDir(id); !ok || dir == "" {
 			t.Fatalf("PeerDir(%q)=%q,%v want non-empty", id, dir, ok)
 		}
+	}
+}
+
+func TestStoragePathsResolveMainDirOptionsLayout(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
+		t.Fatalf("write index.db: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "templatedb"), 0o755); err != nil {
+		t.Fatalf("mkdir templatedb: %v", err)
+	}
+	if got, want := DefaultClusterDir(mainDir), filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("DefaultClusterDir(%q)=%q want %q", mainDir, got, want)
+	}
+	if got, want := CommandWALDir(mainDir), filepath.Join(mainDir, "wal"); got != want {
+		t.Fatalf("CommandWALDir(%q)=%q want %q", mainDir, got, want)
 	}
 }
 
