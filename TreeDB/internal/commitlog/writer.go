@@ -67,23 +67,40 @@ func sameNonEmptyBytesData(a, b []byte) bool {
 }
 
 type Writer struct {
-	f                *os.File
-	bw               *bufio.Writer
-	scratch          []byte
-	encScratch       []byte
-	commandBuf       []byte
-	commandBufLimit  int
-	commandErr       error
-	pendingBatch     []byte
-	pendingBatchSeq  uint64
-	pendingBatchRecs uint32
-	headerBuf        [segmentHeaderSize]byte
-	rawLenPrefix     [4]byte
-	size             int64
-	maxSegmentSize   int64
-	compress         bool
-	enc              *zstd.Encoder
-	syncFn           func(*os.File) error
+	f                      *os.File
+	bw                     *bufio.Writer
+	scratch                []byte
+	encScratch             []byte
+	commandBuf             []byte
+	commandBufLimit        int
+	commandBufRetain       int
+	commandBufTrims        uint64
+	commandBufDroppedBytes uint64
+	commandErr             error
+	pendingBatch           []byte
+	pendingBatchSeq        uint64
+	pendingBatchRecs       uint32
+	headerBuf              [segmentHeaderSize]byte
+	rawLenPrefix           [4]byte
+	size                   int64
+	maxSegmentSize         int64
+	compress               bool
+	enc                    *zstd.Encoder
+	syncFn                 func(*os.File) error
+}
+
+type WriterBufferStats struct {
+	BufferedWriterSize          int
+	BufferedWriterBufferedBytes int
+	ScratchCapacity             int
+	CommandBufferLength         int
+	CommandBufferCapacity       int
+	CommandBufferLimit          int
+	CommandBufferRetainLimit    int
+	CommandBufferTrimCount      uint64
+	CommandBufferDroppedBytes   uint64
+	PendingBatchLength          int
+	PendingBatchCapacity        int
 }
 
 func (w *Writer) ActiveBytes() int64 {
@@ -125,17 +142,50 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	if opts.DeferredCommandBufferSize > 0 {
 		commandBufLimit = opts.DeferredCommandBufferSize
 	}
+	commandBufRetain := normalizeCommandBufferRetainSize(opts.DeferredCommandBufferRetainSize, commandBufLimit)
 	return &Writer{
-		f:               f,
-		bw:              bufio.NewWriterSize(f, normalizeBufferSize(opts.BufferSize)),
-		scratch:         make([]byte, 0, defaultBufferSize),
-		commandBuf:      commandBuf,
-		commandBufLimit: commandBufLimit,
-		size:            info.Size(),
-		maxSegmentSize:  normalizeMaxSegmentSize(opts.MaxSegmentSize),
-		compress:        opts.Compress,
-		syncFn:          func(file *os.File) error { return file.Sync() },
+		f:                f,
+		bw:               bufio.NewWriterSize(f, normalizeBufferSize(opts.BufferSize)),
+		commandBuf:       commandBuf,
+		commandBufLimit:  commandBufLimit,
+		commandBufRetain: commandBufRetain,
+		size:             info.Size(),
+		maxSegmentSize:   normalizeMaxSegmentSize(opts.MaxSegmentSize),
+		compress:         opts.Compress,
+		syncFn:           func(file *os.File) error { return file.Sync() },
 	}, nil
+}
+
+func normalizeCommandBufferRetainSize(retain, limit int) int {
+	if retain <= 0 || limit <= 0 {
+		return 0
+	}
+	if retain > limit {
+		return limit
+	}
+	return retain
+}
+
+func (w *Writer) BufferStats() WriterBufferStats {
+	if w == nil {
+		return WriterBufferStats{}
+	}
+	stats := WriterBufferStats{
+		ScratchCapacity:           cap(w.scratch),
+		CommandBufferLength:       len(w.commandBuf),
+		CommandBufferCapacity:     cap(w.commandBuf),
+		CommandBufferLimit:        w.commandBufferLimit(),
+		CommandBufferRetainLimit:  w.commandBufRetain,
+		CommandBufferTrimCount:    w.commandBufTrims,
+		CommandBufferDroppedBytes: w.commandBufDroppedBytes,
+		PendingBatchLength:        len(w.pendingBatch),
+		PendingBatchCapacity:      cap(w.pendingBatch),
+	}
+	if w.bw != nil {
+		stats.BufferedWriterSize = w.bw.Size()
+		stats.BufferedWriterBufferedBytes = w.bw.Buffered()
+	}
+	return stats
 }
 
 func newEncoder() (*zstd.Encoder, error) {
@@ -1221,8 +1271,23 @@ func (w *Writer) flushBufferedCommandFrames() error {
 		return w.poisonCommandBuffer(err)
 	}
 	w.size += int64(flushed)
-	w.commandBuf = w.commandBuf[:0]
+	w.trimCommandBufferAfterFlush()
 	return nil
+}
+
+func (w *Writer) trimCommandBufferAfterFlush() {
+	if w == nil || w.commandBuf == nil {
+		return
+	}
+	retain := w.commandBufRetain
+	if retain <= 0 || cap(w.commandBuf) <= retain {
+		w.commandBuf = w.commandBuf[:0]
+		return
+	}
+	dropped := cap(w.commandBuf) - retain
+	w.commandBuf = make([]byte, 0, retain)
+	w.commandBufTrims++
+	w.commandBufDroppedBytes += uint64(dropped)
 }
 
 func (w *Writer) commandBufferError() error {
@@ -1245,7 +1310,7 @@ func (w *Writer) poisonCommandBuffer(err error) error {
 		w.commandErr = err
 	}
 	if w.commandBuf != nil {
-		w.commandBuf = w.commandBuf[:0]
+		w.commandBuf = nil
 	}
 	return w.commandErr
 }

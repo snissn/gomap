@@ -1,9 +1,13 @@
 package db
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
 func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
@@ -52,6 +56,15 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	}
 	if got := stats["treedb.command_wal.stats_error"]; got != "" {
 		t.Fatalf("unexpected command WAL stats error %q (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.writer.command_buffer.limit_bytes"]; got != "67108864" {
+		t.Fatalf("command WAL command buffer limit=%q, want 67108864 (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.writer.command_buffer.retain_limit_bytes"]; got != "4194304" {
+		t.Fatalf("command WAL command buffer retain limit=%q, want 4194304 (stats=%#v)", got, stats)
+	}
+	if got := stats["treedb.command_wal.writer.buffer_size_bytes"]; got != "16777216" {
+		t.Fatalf("command WAL writer buffer size=%q, want 16777216 (stats=%#v)", got, stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -108,6 +121,46 @@ func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
 	}
 	if got := stats["treedb.command_wal.live_covered_max_lsn"]; got != "1" {
 		t.Fatalf("live covered max lsn=%q, want 1 without diagnostic scan (stats=%#v)", got, stats)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	dbClosed = true
+}
+
+func TestCommandWALStatsExposeDeferredCommandBufferTrim(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	dbClosed := false
+	t.Cleanup(func() {
+		if !dbClosed {
+			_ = db.Close()
+		}
+	})
+
+	value := bytes.Repeat([]byte("x"), commandWALDeferredPointBufferRetainSize+8192)
+	if _, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("large"), value, false); err != nil {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.command_wal.writer.command_buffer.length_bytes"]; got != "0" {
+		t.Fatalf("command buffer len=%q, want 0 after append flush (stats=%#v)", got, stats)
+	}
+	if got, want := stats["treedb.command_wal.writer.command_buffer.capacity_bytes"], strconv.Itoa(commandWALDeferredPointBufferRetainSize); got != want {
+		t.Fatalf("command buffer cap=%q, want retain cap %s (stats=%#v)", got, want, stats)
+	}
+	if got := stats["treedb.command_wal.writer.command_buffer.trim_count"]; got != "1" {
+		t.Fatalf("command buffer trim count=%q, want 1 (stats=%#v)", got, stats)
+	}
+	dropped, err := strconv.ParseUint(stats["treedb.command_wal.writer.command_buffer.dropped_bytes_total"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse dropped bytes: %v (stats=%#v)", err, stats)
+	}
+	if dropped == 0 {
+		t.Fatalf("command buffer dropped bytes=0, want retained capacity drop accounted (stats=%#v)", stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
