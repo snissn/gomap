@@ -736,6 +736,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read column_store_results.md: %v", err)
 	}
+	assertMarkdownTableDelimitersMatchHeaders(t, columnMarkdown)
 	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
 		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
 	}
@@ -4041,6 +4042,53 @@ func assertColumnStoreJSONBenchCellShapeM1955(t testing.TB, report columnStoreSu
 		}
 	}
 	return byQueryMode
+}
+
+func assertMarkdownTableDelimitersMatchHeaders(t testing.TB, markdown []byte) {
+	t.Helper()
+	lines := strings.Split(string(markdown), "\n")
+	for i := 1; i < len(lines); i++ {
+		if !isMarkdownTableDelimiterLine(lines[i]) {
+			continue
+		}
+		header := lines[i-1]
+		headerCols := markdownTableColumnCount(header)
+		delimiterCols := markdownTableColumnCount(lines[i])
+		if headerCols == 0 || headerCols != delimiterCols {
+			t.Fatalf("markdown table delimiter mismatch at line %d: header_cols=%d delimiter_cols=%d\nheader: %s\ndelimiter: %s", i+1, headerCols, delimiterCols, header, lines[i])
+		}
+	}
+}
+
+func isMarkdownTableDelimiterLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") || !strings.HasSuffix(trimmed, "|") {
+		return false
+	}
+	cells := strings.Split(strings.Trim(trimmed, "|"), "|")
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		if cell == "" || !strings.Contains(cell, "-") {
+			return false
+		}
+		for _, r := range cell {
+			if r != '-' && r != ':' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func markdownTableColumnCount(line string) int {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") || !strings.HasSuffix(trimmed, "|") {
+		return 0
+	}
+	return len(strings.Split(strings.Trim(trimmed, "|"), "|"))
 }
 
 func assertColumnStoreQueryMetricCoverageM11A(t testing.TB, queries []columnStoreQueryMetric) map[string]columnStoreQueryMetric {
