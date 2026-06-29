@@ -2682,9 +2682,15 @@ func TestColumnStoreApplyMetadataCostOnlyAggregateRowsM3070(t *testing.T) {
 
 func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *testing.T) {
 	stats := collections.CollectionInsertStats{
-		Documents:                             10,
-		ColumnPublishRowAssetPreparation:      1 * time.Millisecond,
-		ColumnPublishTypedColumnPreparation:   2 * time.Millisecond,
+		Documents:                           10,
+		ColumnPublishRowAssetPreparation:    1 * time.Millisecond,
+		ColumnPublishTypedColumnPreparation: 2 * time.Millisecond,
+
+		ColumnPublishTypedColumnDictionaryBuild:    21 * time.Millisecond,
+		ColumnPublishTypedColumnRowMaterialization: 22 * time.Millisecond,
+		ColumnPublishTypedColumnPartBuild:          23 * time.Millisecond,
+		ColumnPublishTypedColumnImageBuild:         24 * time.Millisecond,
+
 		ColumnPublishDictionaryPreparation:    3 * time.Millisecond,
 		ColumnPublishInt64Preparation:         4 * time.Millisecond,
 		ColumnPublishAggregateMetadataPrepare: 5 * time.Millisecond,
@@ -2724,6 +2730,18 @@ func TestColumnStoreInsertPhaseMetricFromStatsIncludesAssetFamiliesM3148(t *test
 	}
 	if got, want := metric.ColumnPublishTypedColumnPrepareDurationMS, 2.0; got != want {
 		t.Fatalf("typed-column duration ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnDictionaryBuildMS, 21.0; got != want {
+		t.Fatalf("typed-column dictionary build ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnRowMaterializeMS, 22.0; got != want {
+		t.Fatalf("typed-column row materialization ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnPartBuildMS, 23.0; got != want {
+		t.Fatalf("typed-column part build ms=%v want %v", got, want)
+	}
+	if got, want := metric.ColumnPublishTypedColumnImageBuildMS, 24.0; got != want {
+		t.Fatalf("typed-column image build ms=%v want %v", got, want)
 	}
 	if got, want := metric.ColumnPublishDictionaryPrepareDurationMS, 3.0; got != want {
 		t.Fatalf("dictionary duration ms=%v want %v", got, want)

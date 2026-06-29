@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -287,6 +288,14 @@ type typedColumnPartImageBuildResult struct {
 	Bytes                []byte
 	Rows                 int
 	TypedGranuleRowOrder []int
+	Metrics              typedColumnPartImageBuildMetrics
+}
+
+type typedColumnPartImageBuildMetrics struct {
+	DictionaryBuild    time.Duration
+	RowMaterialization time.Duration
+	PartBuild          time.Duration
+	ImageBuild         time.Duration
 }
 
 func buildTypedColumnPartImageForDeclaredRows(cfg ColumnStoreConfig, generation, partID uint64, rows []columnDeclaredRow) ([]byte, int, error) {
@@ -318,15 +327,22 @@ func buildTypedColumnPartImageForDeclaredRowsWithResult(cfg ColumnStoreConfig, g
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
+	metrics := typedColumnPartImageBuildMetrics{
+		DictionaryBuild:    part.Metrics.DictionaryBuild,
+		RowMaterialization: part.Metrics.BatchAllocation + part.Metrics.BatchFill,
+		PartBuild:          part.Metrics.PartBuild,
+	}
+	imageStart := time.Now()
 	image, err := part.buildImage()
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
+	metrics.ImageBuild += time.Since(imageStart)
 	rowOrder, err := typedColumnPartDeclaredRowOrder(part, image.Rows)
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
-	return typedColumnPartImageBuildResult{Bytes: image.Bytes, Rows: image.Rows, TypedGranuleRowOrder: rowOrder}, nil
+	return typedColumnPartImageBuildResult{Bytes: image.Bytes, Rows: image.Rows, TypedGranuleRowOrder: rowOrder, Metrics: metrics}, nil
 }
 
 func typedColumnPublicationDictionaryModes(fields []TypedStorageField) map[string]typedColumnAdapterDictionaryMode {

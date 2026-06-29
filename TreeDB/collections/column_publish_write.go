@@ -439,6 +439,10 @@ func recordColumnPublishPlanStats(stats *CollectionInsertStats, plan ColumnPubli
 	stats.ColumnPublishAssetPreparation += metrics.AssetPreparation
 	stats.ColumnPublishRowAssetPreparation += metrics.AssetMetrics.RowAssetDuration
 	stats.ColumnPublishTypedColumnPreparation += metrics.AssetMetrics.TypedColumnPartDuration
+	stats.ColumnPublishTypedColumnDictionaryBuild += metrics.AssetMetrics.TypedColumnDictionaryBuild
+	stats.ColumnPublishTypedColumnRowMaterialization += metrics.AssetMetrics.TypedColumnRowMaterialization
+	stats.ColumnPublishTypedColumnPartBuild += metrics.AssetMetrics.TypedColumnPartBuild
+	stats.ColumnPublishTypedColumnImageBuild += metrics.AssetMetrics.TypedColumnImageBuild
 	stats.ColumnPublishDictionaryPreparation += metrics.AssetMetrics.DictionarySidecarDuration
 	stats.ColumnPublishInt64Preparation += metrics.AssetMetrics.Int64SidecarDuration
 	stats.ColumnPublishAggregateMetadataPrepare += metrics.AssetMetrics.AggregateMetadataDuration
@@ -928,6 +932,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				queueRegularManifestAsset(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedColumnPartAssetPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), validateTypedColumnRef)
 			}
 			prepared.AssetMetrics.TypedColumnPartDuration += time.Since(typedColumnStart)
+			prepared.AssetMetrics.TypedColumnDictionaryBuild += typedColumnBuild.Metrics.DictionaryBuild
+			prepared.AssetMetrics.TypedColumnRowMaterialization += typedColumnBuild.Metrics.RowMaterialization
+			prepared.AssetMetrics.TypedColumnPartBuild += typedColumnBuild.Metrics.PartBuild
+			prepared.AssetMetrics.TypedColumnImageBuild += typedColumnBuild.Metrics.ImageBuild
 			prepared.AssetMetrics.TypedColumnPartBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.TypedColumnPartBytes, int64(len(typedColumnImage)))
 			prepared.AssetMetrics.TypedColumnPartCount++
 		}
