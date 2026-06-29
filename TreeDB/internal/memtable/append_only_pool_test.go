@@ -40,8 +40,9 @@ func TestAppendOnlyEntryPoolClassForLength(t *testing.T) {
 		{name: "minimum", length: appendOnlyMinInitialEntries, wantCap: appendOnlyMinInitialEntries, wantPool: true},
 		{name: "round-up", length: appendOnlyMinInitialEntries + 1, wantCap: appendOnlyMinInitialEntries * 2, wantPool: true},
 		{name: "bench-sized", length: 16000, wantCap: 1 << 14, wantPool: true},
-		{name: "maximum", length: appendOnlyEntryPoolMaxCap, wantCap: appendOnlyEntryPoolMaxCap, wantPool: true},
-		{name: "too-large", length: appendOnlyEntryPoolMaxCap + 1, wantPool: false},
+		{name: "retention-maximum", length: appendOnlyEntryPoolRetainMaxCap, wantCap: appendOnlyEntryPoolRetainMaxCap, wantPool: true},
+		{name: "above-retention-maximum", length: appendOnlyEntryPoolRetainMaxCap + 1, wantPool: false},
+		{name: "active-maximum-not-retained", length: appendOnlyEntryPoolMaxCap, wantPool: false},
 	}
 
 	for _, tc := range tests {
@@ -64,6 +65,12 @@ func TestAppendOnlyEntryPoolClassForReusableCapacity(t *testing.T) {
 	}
 	if _, ok := appendOnlyEntryPoolClassForReusableCapacity(16000); !ok {
 		t.Fatalf("bench-sized capacity should be pooled")
+	}
+	if _, ok := appendOnlyEntryPoolClassForReusableCapacity(appendOnlyEntryPoolRetainMaxCap); !ok {
+		t.Fatalf("retention maximum capacity should be pooled")
+	}
+	if _, ok := appendOnlyEntryPoolClassForReusableCapacity(appendOnlyEntryPoolRetainMaxCap + 1); ok {
+		t.Fatalf("above-retention capacity should not be pooled")
 	}
 	if _, ok := appendOnlyEntryPoolClassForReusableCapacity(appendOnlyEntryPoolMaxCap + 1); ok {
 		t.Fatalf("oversized capacity should not be pooled")
@@ -143,6 +150,83 @@ func TestAppendOnlyEntryPoolStatsTrackRetainedBacking(t *testing.T) {
 	if gotDropBytes := afterDrop.DropBytesTotal; gotDropBytes < beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate {
 		t.Fatalf("drop bytes total=%d want at least %d", gotDropBytes, beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate)
 	}
+}
+
+func TestPutAppendOnlyEntriesDropsOversizedRetainedSlice(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	before := AppendOnlyEntryPoolStatsSnapshot()
+	entries := make([]appendOnlyEntry, 0, appendOnlyEntryPoolRetainMaxCap+1)
+	wantBytes := appendOnlyEntryPoolBytes(cap(entries))
+
+	putAppendOnlyEntries(entries)
+
+	after := AppendOnlyEntryPoolStatsSnapshot()
+	if got := after.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained bytes after oversized put=%d want 0", got)
+	}
+	if got := after.PutsTotal - before.PutsTotal; got != 0 {
+		t.Fatalf("puts delta=%d want 0", got)
+	}
+	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 1 {
+		t.Fatalf("admission drops delta=%d want 1", got)
+	}
+	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != wantBytes {
+		t.Fatalf("admission drop bytes delta=%d want %d", got, wantBytes)
+	}
+}
+
+func TestPutAppendOnlyEntriesRecyclesPoolsOnRetainBudgetPressure(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	savedBudget := appendOnlyEntryPoolRetainBudgetBytes
+	appendOnlyEntryPoolRetainBudgetBytes = appendOnlyEntryPoolBytes(appendOnlyMinInitialEntries)
+	t.Cleanup(func() {
+		appendOnlyEntryPoolRetainBudgetBytes = savedBudget
+	})
+
+	before := AppendOnlyEntryPoolStatsSnapshot()
+	first := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries)
+	second := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries)
+	wantBytes := appendOnlyEntryPoolBytes(appendOnlyMinInitialEntries)
+
+	putAppendOnlyEntries(first)
+	putAppendOnlyEntries(second)
+
+	after := AppendOnlyEntryPoolStatsSnapshot()
+	if got := after.RetainedBytesEstimate; got != wantBytes {
+		t.Fatalf("retained bytes=%d want budget %d", got, wantBytes)
+	}
+	if got := after.PutsTotal - before.PutsTotal; got != 2 {
+		t.Fatalf("puts delta=%d want 2", got)
+	}
+	if got := after.DropsTotal - before.DropsTotal; got != 1 {
+		t.Fatalf("drops delta=%d want 1", got)
+	}
+	if got := after.DropBytesTotal - before.DropBytesTotal; got < wantBytes {
+		t.Fatalf("drop bytes delta=%d want at least %d", got, wantBytes)
+	}
+	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 0 {
+		t.Fatalf("admission drops delta=%d want 0", got)
+	}
+	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != 0 {
+		t.Fatalf("admission drop bytes delta=%d want 0", got)
+	}
+
+	reused := getAppendOnlyEntries(appendOnlyMinInitialEntries)
+	afterGet := AppendOnlyEntryPoolStatsSnapshot()
+	if cap(reused) != appendOnlyMinInitialEntries {
+		t.Fatalf("reused cap=%d want %d", cap(reused), appendOnlyMinInitialEntries)
+	}
+	if got := afterGet.GetsTotal - after.GetsTotal; got != 1 {
+		t.Fatalf("gets delta after replacement put=%d want 1", got)
+	}
+	if got := afterGet.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained bytes after replacement get=%d want 0", got)
+	}
+	putAppendOnlyEntries(reused)
 }
 
 func TestAppendOnlyReserveAdditionalEntriesAvoidsIntermediateGrowth(t *testing.T) {
