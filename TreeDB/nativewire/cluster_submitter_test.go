@@ -20,6 +20,7 @@ type fakeClusterSubmitter struct {
 	calls        []fakeClusterSubmitCall
 	status       ClusterAdmissionStatus
 	admissionErr error
+	resultHook   func(raftentry.CommandEntryV1, ClusterRequestMetadata, ClusterSubmitResult) (ClusterSubmitResult, error)
 }
 
 type admissionClusterSubmitter struct {
@@ -68,7 +69,14 @@ func (f *fakeClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	f.mu.Lock()
 	f.calls = append(f.calls, call)
 	f.mu.Unlock()
-	return fakeClusterSubmitResponse(decoded, metadata)
+	result, err := fakeClusterSubmitResponse(decoded, metadata)
+	if err != nil {
+		return ClusterSubmitResult{}, err
+	}
+	if f.resultHook != nil {
+		return f.resultHook(decoded, metadata, result)
+	}
+	return result, nil
 }
 
 func (f *fakeClusterSubmitter) snapshot() []fakeClusterSubmitCall {
@@ -565,7 +573,41 @@ func TestClusterSubmitterUnsupportedCommandFailsBeforeMutation(t *testing.T) {
 	}
 }
 
-func TestClusterSubmitterRaftCommittedRequiresProvenResult(t *testing.T) {
+func TestClusterSubmitterRaftCommittedSucceedsWithRecoverableCommit(t *testing.T) {
+	submitter := &fakeClusterSubmitter{
+		resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+			result.ActualAck = AckRaftCommitted
+			result.CommittedRecoverable = true
+			return replaceResponseAckPolicy(result, AckRaftCommitted), nil
+		},
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	sections, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+	if err != nil {
+		t.Fatalf("InsertBatch raft_committed cluster: %v", err)
+	}
+	actualAck, err := responseAckPolicy(sections)
+	if err != nil {
+		t.Fatalf("responseAckPolicy: %v", err)
+	}
+	if actualAck != AckRaftCommitted {
+		t.Fatalf("actual ack=%d want raft_committed", actualAck)
+	}
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	if calls[0].metadata.AckPolicy != AckRaftCommitted {
+		t.Fatalf("submitter ack=%d want raft_committed", calls[0].metadata.AckPolicy)
+	}
+}
+
+func TestClusterSubmitterRaftCommittedRequiresRecoverableCommit(t *testing.T) {
 	submitter := &fakeClusterSubmitter{}
 	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -573,26 +615,134 @@ func TestClusterSubmitterRaftCommittedRequiresProvenResult(t *testing.T) {
 	if err := client.Hello(ctx); err != nil {
 		t.Fatalf("Hello: %v", err)
 	}
-	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
-		[][]byte{[]byte("u1")},
-		[][]byte{[]byte(`{"name":"Ada"}`)},
-		AckRaftCommitted,
-	)
+	_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
 	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
 		t.Fatalf("InsertBatch raft_committed cluster err=%v want durability unavailable", err)
+	}
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	if calls[0].metadata.AckPolicy != AckRaftCommitted {
+		t.Fatalf("submitter ack=%d want raft_committed", calls[0].metadata.AckPolicy)
+	}
+}
+
+func TestClusterSubmitterRaftCommittedRequiresConsensusAck(t *testing.T) {
+	submitter := &fakeClusterSubmitter{
+		resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+			result.ActualAck = AckSynced
+			result.CommittedRecoverable = true
+			return replaceResponseAckPolicy(result, AckSynced), nil
+		},
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("InsertBatch uncommitted raft ack err=%v want durability unavailable", err)
+	}
+	if got := len(submitter.snapshot()); got != 1 {
+		t.Fatalf("submitter calls=%d want 1", got)
+	}
+}
+
+func TestClusterSubmitterRaftCommittedRejectsLyingResponseMetadata(t *testing.T) {
+	submitter := &fakeClusterSubmitter{
+		resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+			result.ActualAck = AckRaftCommitted
+			result.CommittedRecoverable = true
+			return replaceResponseAckPolicy(result, AckSynced), nil
+		},
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+	if !isRemoteError(err, iwire.ErrInternal) {
+		t.Fatalf("InsertBatch lying raft ack metadata err=%v want internal", err)
+	}
+	if got := len(submitter.snapshot()); got != 1 {
+		t.Fatalf("submitter calls=%d want 1", got)
+	}
+}
+
+func TestClusterSubmitterRaftCommittedDoesNotSatisfyLocalAck(t *testing.T) {
+	submitter := &fakeClusterSubmitter{
+		resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+			result.ActualAck = AckRaftCommitted
+			result.CommittedRecoverable = true
+			return replaceResponseAckPolicy(result, AckRaftCommitted), nil
+		},
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckVisible, "u1")...)
+	if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+		t.Fatalf("InsertBatch visible upgraded to raft_committed err=%v want durability unavailable", err)
+	}
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	if calls[0].metadata.AckPolicy != AckVisible {
+		t.Fatalf("submitter ack=%d want visible", calls[0].metadata.AckPolicy)
+	}
+}
+
+func TestClusterSubmitterRaftCommittedAdmissionFailsBeforeSubmit(t *testing.T) {
+	submitter := &fakeClusterSubmitter{
+		status: ClusterFollowerAdmission("node-a:7000", "not leader"),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+	if !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch follower raft_committed err=%v want read-only", err)
 	}
 	if got := len(submitter.snapshot()); got != 0 {
 		t.Fatalf("submitter calls=%d want 0", got)
 	}
 }
 
-func TestClusterSubmitterRaftCommittedDoesNotSatisfyLocalAck(t *testing.T) {
-	err := validateClusterSubmitResult(ClusterRequestMetadata{AckPolicy: AckSynced}, ClusterSubmitResult{
-		ActualAck:            AckRaftCommitted,
-		CommittedRecoverable: true,
-		ResponseSections:     []iwire.Section{ackMeta(AckRaftCommitted)},
-	})
-	if nativeCodeOf(err) != iwire.ErrDurabilityUnavailable {
-		t.Fatalf("validateClusterSubmitResult err=%v want durability unavailable", err)
+func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Context, ack AckPolicy, id string) []iwire.Section {
+	t.Helper()
+	sections := []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("cluster-insert-" + id)},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, clientCatalogVersion(t, client, ctx))},
+		collectionNameRef("users"),
+		documentFormatSection(collections.DocumentFormatJSON),
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte(id))},
+		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"name":"Ada"}`))},
 	}
+	if ack != 0 {
+		sections = append(sections, ackSection(ack))
+	}
+	return sections
+}
+
+func replaceResponseAckPolicy(result ClusterSubmitResult, policy AckPolicy) ClusterSubmitResult {
+	for i, section := range result.ResponseSections {
+		if section.ID == iwire.SectionResponseMeta {
+			result.ResponseSections[i] = ackMeta(policy)
+			return result
+		}
+	}
+	result.ResponseSections = append(result.ResponseSections, ackMeta(policy))
+	return result
 }

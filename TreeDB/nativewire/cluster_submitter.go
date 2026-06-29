@@ -70,9 +70,6 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err != nil {
 		return nil, err
 	}
-	if ack == iwire.AckRaftCommitted {
-		return nil, protocolError(iwire.ErrDurabilityUnavailable, "raft_committed ack is deferred to the native Raft committed semantics gate")
-	}
 	if err := AdmitClusterMutation(ctx, s.clusterSubmitter); err != nil {
 		return nil, err
 	}
