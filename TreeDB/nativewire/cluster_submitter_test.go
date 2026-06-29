@@ -299,12 +299,19 @@ func TestClusterSubmitterUnsupportedCommandFailsBeforeMutation(t *testing.T) {
 		t.Fatalf("seed InsertBatchValidatedBSON: %v", err)
 	}
 
-	err = client.FlushCollection(ctx, "users")
+	_, err = client.CreateIndex(ctx, "users", collections.IndexDefinition{
+		Name:      "field0",
+		Field:     "field0",
+		ValueType: collections.IndexValueString,
+	})
 	if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
-		t.Fatalf("FlushCollection cluster err=%v want unsupported feature", err)
+		t.Fatalf("CreateIndex cluster err=%v want unsupported feature", err)
 	}
 	if len(submitter.snapshot()) != 0 {
 		t.Fatalf("unsupported command reached submitter")
+	}
+	if indexes := col.Meta().Indexes; len(indexes) != 0 {
+		t.Fatalf("index created after unsupported cluster command: %+v", indexes)
 	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {
