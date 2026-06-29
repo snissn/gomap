@@ -525,14 +525,20 @@ type CollectionInsertStats struct {
 	RetainedStreamValueLogBytes         int64
 	// ColumnPublish* fields are populated for typed-column InsertBatch paths
 	// that route through the command-WAL column manifest publish path.
-	ColumnPublishBuildColumnDelta         time.Duration
-	ColumnPublishBuildSystemDelta         time.Duration
-	ColumnPublishCommit                   time.Duration
-	ColumnPublishDocumentExtraction       time.Duration
-	ColumnPublishDeclaredColumnEncoding   time.Duration
-	ColumnPublishAssetPreparation         time.Duration
-	ColumnPublishRowAssetPreparation      time.Duration
-	ColumnPublishTypedColumnPreparation   time.Duration
+	ColumnPublishBuildColumnDelta       time.Duration
+	ColumnPublishBuildSystemDelta       time.Duration
+	ColumnPublishCommit                 time.Duration
+	ColumnPublishDocumentExtraction     time.Duration
+	ColumnPublishDeclaredColumnEncoding time.Duration
+	ColumnPublishAssetPreparation       time.Duration
+	ColumnPublishRowAssetPreparation    time.Duration
+	ColumnPublishTypedColumnPreparation time.Duration
+
+	ColumnPublishTypedColumnDictionaryBuild    time.Duration
+	ColumnPublishTypedColumnRowMaterialization time.Duration
+	ColumnPublishTypedColumnPartBuild          time.Duration
+	ColumnPublishTypedColumnImageBuild         time.Duration
+
 	ColumnPublishDictionaryPreparation    time.Duration
 	ColumnPublishInt64Preparation         time.Duration
 	ColumnPublishAggregateMetadataPrepare time.Duration
