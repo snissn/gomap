@@ -471,15 +471,15 @@ func splitCursorBatch(records []collections.DocumentRecord, start int, limits Cu
 	return end, bytes
 }
 
-func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, start int, limits CursorLimits, includeTruncated func(int) bool, readMeta ReadMetadata) (end, bytes int, err error) {
+func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, start int, limits CursorLimits, includeTruncated bool, readMeta ReadMetadata) (end, bytes int, err error) {
 	end, bytes = splitCursorBatch(records, start, limits, s.defaultCursorBatchSize)
 	if end <= start {
+		if err := s.checkCursorResponseBounds(nil, includeTruncated, readMeta); err != nil {
+			return start, 0, err
+		}
 		return end, bytes, nil
 	}
-	if includeTruncated == nil {
-		includeTruncated = func(int) bool { return false }
-	}
-	if err := s.checkCursorResponseBounds(records[start:end], includeTruncated(end), readMeta); err == nil {
+	if err := s.checkCursorResponseBounds(records[start:end], includeTruncated, readMeta); err == nil {
 		return end, bytes, nil
 	}
 	lo, hi := start, end
@@ -487,7 +487,7 @@ func (s *Server) splitCursorBatchForWire(records []collections.DocumentRecord, s
 	for lo < hi {
 		mid := lo + (hi-lo+1)/2
 		midBytes := documentRecordsBytes(records[start:mid])
-		err := s.checkCursorResponseBounds(records[start:mid], includeTruncated(mid), readMeta)
+		err := s.checkCursorResponseBounds(records[start:mid], includeTruncated, readMeta)
 		if err == nil {
 			bestEnd, bestBytes = mid, midBytes
 			lo = mid

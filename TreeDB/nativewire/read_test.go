@@ -184,11 +184,15 @@ func TestReadConsistencyPolicyRejectedForUnsupportedReadCommands(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sections := append([]iwire.Section(nil), tt.sections...)
-			sections = append(sections, consistencyPolicySection(ConsistencyLinearizable))
-			_, err := client.commandSections(ctx, tt.commandID, sections...)
-			if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
-				t.Fatalf("%s err=%v want unsupported_feature", tt.name, err)
+			for _, policy := range []ConsistencyPolicy{ConsistencyLocalStale, ConsistencyLinearizable} {
+				t.Run(consistencyPolicyName(policy), func(t *testing.T) {
+					sections := append([]iwire.Section(nil), tt.sections...)
+					sections = append(sections, consistencyPolicySection(policy))
+					_, err := client.commandSections(ctx, tt.commandID, sections...)
+					if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+						t.Fatalf("%s policy=%s err=%v want unsupported_feature", tt.name, consistencyPolicyName(policy), err)
+					}
+				})
 			}
 		})
 	}
@@ -363,6 +367,14 @@ func TestCursorNextUsesOpenScanReadMetadata(t *testing.T) {
 	}
 	if len(coord.calls) != 1 || coord.calls[0].CommandID != iwire.CommandOpenScan {
 		t.Fatalf("coordinator calls after open scan=%+v", coord.calls)
+	}
+	if !first.ReadMeta.Valid ||
+		first.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
+		first.ReadMeta.ServingNode != "node-a" ||
+		first.ReadMeta.LeaderNode != "node-a" ||
+		!first.ReadMeta.HasAppliedIndex ||
+		first.ReadMeta.AppliedIndex != 99 {
+		t.Fatalf("open scan read meta=%+v", first.ReadMeta)
 	}
 
 	second, err := client.CursorNext(ctx, first.Cursor.CursorID, CursorLimits{MaxItems: 1})
@@ -876,6 +888,30 @@ func TestOpenScanReadMetadataAllowsNonTruncatedSectionLimit(t *testing.T) {
 			`{"email":"grace@example.com","city":"hnl","name":"Grace"}`,
 		},
 	)
+}
+
+func TestGetManyReadMetadataCountsTowardSectionLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{
+		Collections: mgr,
+		Backend:     db,
+		Limits:      iwire.Limits{MaxSections: 2},
+	})
+	state := &connState{}
+	seedReadCollection(t, mgr)
+	t.Cleanup(func() { _ = db.Close() })
+
+	_, err = server.handleGetManyBody(state, []iwire.Section{
+		collectionNameRef("users"),
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+	}, nil, ReadMetadata{Valid: true, ActualConsistency: ConsistencyLocalStale})
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrResourceExhausted {
+		t.Fatalf("handleGetManyBody err=%v want resource exhausted", err)
+	}
 }
 
 func TestOpenScanReportsTruncatedWhenCursorRetentionExceeded(t *testing.T) {

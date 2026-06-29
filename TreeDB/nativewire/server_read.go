@@ -47,14 +47,28 @@ func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *con
 	if responseBodySet {
 		return nil, responseBody, true, nil
 	}
-	return appendReadMetaSection(responseSections, readMeta), nil, false, nil
+	responseSections, err = s.appendReadMetaSection(responseSections, readMeta)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return responseSections, nil, false, nil
 }
 
-func appendReadMetaSection(sections []iwire.Section, meta ReadMetadata) []iwire.Section {
+func (s *Server) appendReadMetaSection(sections []iwire.Section, meta ReadMetadata) ([]iwire.Section, error) {
 	if !meta.Valid {
-		return sections
+		return sections, nil
 	}
-	return append(sections, readMetaSection(meta))
+	if err := s.checkResponseSectionCount(len(sections) + 1); err != nil {
+		return nil, err
+	}
+	return append(sections, readMetaSection(meta)), nil
+}
+
+func (s *Server) checkResponseSectionCount(sections int) error {
+	if s == nil || s.limits.MaxSections == 0 || sections <= s.limits.MaxSections {
+		return nil
+	}
+	return protocolError(iwire.ErrResourceExhausted, "response sections %d exceeds limit %d", sections, s.limits.MaxSections)
 }
 
 func coordinatedReadCommand(commandID iwire.CommandID) bool {
@@ -157,8 +171,18 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err := s.checkResponseByteVectorLen("documents", len(payload)); err != nil {
 		return nil, err
 	}
-	metaSection := readMetaSection(readMeta)
-	if err := s.checkResponseSectionLen("response_meta", len(metaSection.Bytes)); err != nil {
+	sectionCount := 2
+	var metaSection iwire.Section
+	if readMeta.Valid {
+		sectionCount++
+		metaSection = readMetaSection(readMeta)
+		if err := s.checkResponseSectionCount(sectionCount); err != nil {
+			return nil, err
+		}
+		if err := s.checkResponseSectionLen("response_meta", len(metaSection.Bytes)); err != nil {
+			return nil, err
+		}
+	} else if err := s.checkResponseSectionCount(sectionCount); err != nil {
 		return nil, err
 	}
 	presenceBodyLen, err := responseSectionBodyLen(iwire.SectionPresenceBitmap, len(presence))
@@ -169,19 +193,21 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err != nil {
 		return nil, err
 	}
-	metaBodyLen, err := responseSectionBodyLen(metaSection.ID, len(metaSection.Bytes))
-	if err != nil {
-		return nil, err
-	}
 	bodyLen := presenceBodyLen + docBodyLen
 	if bodyLen < presenceBodyLen {
 		return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
 	}
-	nextBodyLen := bodyLen + metaBodyLen
-	if nextBodyLen < bodyLen {
-		return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
+	if readMeta.Valid {
+		metaBodyLen, err := responseSectionBodyLen(metaSection.ID, len(metaSection.Bytes))
+		if err != nil {
+			return nil, err
+		}
+		nextBodyLen := bodyLen + metaBodyLen
+		if nextBodyLen < bodyLen {
+			return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
+		}
+		bodyLen = nextBodyLen
 	}
-	bodyLen = nextBodyLen
 	if err := s.checkResponseBodyLen(bodyLen); err != nil {
 		return nil, err
 	}
@@ -198,9 +224,11 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err != nil {
 		return nil, err
 	}
-	body, err = iwire.AppendSection(body, metaSection)
-	if err != nil {
-		return nil, err
+	if readMeta.Valid {
+		body, err = iwire.AppendSection(body, metaSection)
+		if err != nil {
+			return nil, err
+		}
 	}
 	retainGetManyScratch(state, lengths, presence, payload)
 	return body, nil
@@ -483,14 +511,19 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section, read
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	includeTruncated := func(end int) bool {
-		return truncated || (end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes)
-	}
-	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits, includeTruncated, readMeta)
+	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits, truncated, readMeta)
 	if err != nil {
 		return nil, err
 	}
-	if end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes {
+	retentionTruncated := end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes
+	if retentionTruncated && !truncated {
+		end, bytes, err = s.splitCursorBatchForWire(records, 0, limits, true, readMeta)
+		if err != nil {
+			return nil, err
+		}
+		retentionTruncated = end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes
+	}
+	if retentionTruncated {
 		return responseForRecords(records[:end], CursorMeta{Items: end, Bytes: bytes}, true)
 	}
 	batch := append([]collections.DocumentRecord(nil), records[:end]...)
@@ -542,8 +575,7 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 	truncated := cursor.truncated
 	s.cursorMu.Unlock()
 
-	includeTruncated := func(int) bool { return truncated }
-	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits, includeTruncated, readMeta)
+	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits, truncated, readMeta)
 	if err != nil {
 		s.restoreCursor(cursorID, cursor)
 		return nil, ReadMetadata{}, err
