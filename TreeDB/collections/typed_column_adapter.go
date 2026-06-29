@@ -2353,14 +2353,37 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPredicateFirstPreparedPart(plan
 		return columnTypedColumnPhysicalQueryPart{}, false, fmt.Errorf("%w: dense typed-column int64-span value column %q type=%s", ErrColumnQueryPlanUnsupported, plan.ValueColumn, valuePartColumn.Definition.Type)
 	}
 
-	if err := typedColumnPhysicalQueryAttachPredicatePayloads(prepared, adapterPart, plan.Fields, plan.PredicateSpecs, readRange); err != nil {
-		return columnTypedColumnPhysicalQueryPart{}, false, err
-	}
 	var phaseStart time.Time
 	if prepareDiagnostics != nil {
 		phaseStart = time.Now()
 	}
-	predicates, selectedRows, predicateDecodedBytes, predicateBlocks, ok, err := decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRows(adapterPart, plan.Fields, plan.PredicateSpecs, summary.Rows)
+	candidates, predicates, ok, err := typedColumnDenseInt64SpanSingleCodeTriplePredicateCandidates(adapterPart, plan.Fields, plan.PredicateSpecs, summary.Rows)
+	if err != nil || !ok {
+		return columnTypedColumnPhysicalQueryPart{}, ok, err
+	}
+	predicateBlocksMask, predicateRowBlocksSkipped, err := typedColumnDenseSingleCodeTriplePredicateBlockMask(candidates, summary.Rows)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, false, err
+	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.DensePredicateNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	selectedPredicateBlocks := predicateBlocksMask
+	if predicateRowBlocksSkipped == 0 {
+		selectedPredicateBlocks = nil
+	}
+	predicatePayloadColumns, err := typedColumnPhysicalQueryAttachPredicatePayloads(prepared, adapterPart, plan.Fields, plan.PredicateSpecs, selectedPredicateBlocks, readRange)
+	if err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, false, err
+	}
+	predicateBlocksSkipped := predicateRowBlocksSkipped * predicatePayloadColumns
+	if err := refreshTypedColumnDenseSingleCodePredicateCandidatePayloads(adapterPart, candidates); err != nil {
+		return columnTypedColumnPhysicalQueryPart{}, false, err
+	}
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
+	predicates, selectedRows, predicateDecodedBytes, predicateBlocks, ok, err := decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRowsFromCandidates(candidates, predicates, summary.Rows, selectedPredicateBlocks)
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.DensePredicateNanos += time.Since(phaseStart).Nanoseconds()
 	}
@@ -2444,40 +2467,43 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPredicateFirstPreparedPart(plan
 		partBytes = bytesRead()
 	}
 	return columnTypedColumnPhysicalQueryPart{
-		Ref:                 typedRef,
-		PhysicalRef:         physical,
-		Rows:                summary.Rows,
-		Bytes:               partBytes,
-		Sections:            summary.Sections,
-		SectionBytes:        summary.SectionBytes,
-		GranulesConsidered:  decodedBlocks,
-		GranulesDecoded:     decodedBlocks,
-		DecodedBlocks:       decodedBlocks,
-		DecodedPayloadBytes: groupDecodedBytes + valueDecodedBytes + predicateDecodedBytes,
-		DenseInt64Span:      denseSpan,
+		Ref:                                  typedRef,
+		PhysicalRef:                          physical,
+		Rows:                                 summary.Rows,
+		Bytes:                                partBytes,
+		Sections:                             summary.Sections,
+		SectionBytes:                         summary.SectionBytes,
+		GranulesConsidered:                   decodedBlocks,
+		GranulesDecoded:                      decodedBlocks,
+		DecodedBlocks:                        decodedBlocks,
+		DecodedPayloadBytes:                  groupDecodedBytes + valueDecodedBytes + predicateDecodedBytes,
+		DenseInt64SpanPredicateBlocksSkipped: predicateBlocksSkipped,
+		DenseInt64Span:                       denseSpan,
 	}, true, nil
 }
 
-func typedColumnPhysicalQueryAttachPredicatePayloads(prepared *typedColumnPreparedPartState, adapterPart *typedColumnAdapterPart, fields []TypedStorageField, specs []columnPhysicalQueryPredicateSpec, readRange typedColumnPreparedRangeReader) error {
+func typedColumnPhysicalQueryAttachPredicatePayloads(prepared *typedColumnPreparedPartState, adapterPart *typedColumnAdapterPart, fields []TypedStorageField, specs []columnPhysicalQueryPredicateSpec, selectedBlocks []bool, readRange typedColumnPreparedRangeReader) (int, error) {
 	seen := make(map[string]struct{}, len(specs))
+	attachedColumns := 0
 	for _, spec := range specs {
 		adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, spec.column)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if !ok {
-			return fmt.Errorf("collections: dense typed-column predicate column %q is not owned by typed_column_part", spec.column)
+			return 0, fmt.Errorf("collections: dense typed-column predicate column %q is not owned by typed_column_part", spec.column)
 		}
 		name := adapterColumn.Definition.Name
 		if _, ok := seen[name]; ok {
 			continue
 		}
 		seen[name] = struct{}{}
-		if _, _, err := typedColumnPhysicalQueryAttachPreparedPayloads(prepared, adapterPart, name, "predicate", nil, readRange); err != nil {
-			return err
+		if _, _, err := typedColumnPhysicalQueryAttachPreparedPayloads(prepared, adapterPart, name, "predicate", selectedBlocks, readRange); err != nil {
+			return 0, err
 		}
+		attachedColumns++
 	}
-	return nil
+	return attachedColumns, nil
 }
 
 func typedColumnPhysicalQueryAttachPreparedPayloads(prepared *typedColumnPreparedPartState, adapterPart *typedColumnAdapterPart, columnName, role string, selectedBlocks []bool, readRange typedColumnPreparedRangeReader) (uint64, int, error) {
@@ -2839,24 +2865,45 @@ type columnTypedColumnDenseSingleCodePredicateCandidate struct {
 }
 
 func decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRows(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, specs []columnPhysicalQueryPredicateSpec, rows int) ([]columnTypedColumnDensePredicatePart, []uint32, uint64, int, bool, error) {
+	candidates, predicates, ok, err := typedColumnDenseInt64SpanSingleCodeTriplePredicateCandidates(adapterPart, fields, specs, rows)
+	if err != nil || !ok {
+		return nil, nil, 0, 0, ok, err
+	}
+	return decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRowsFromCandidates(candidates, predicates, rows, nil)
+}
+
+func typedColumnDenseInt64SpanSingleCodeTriplePredicateCandidates(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, specs []columnPhysicalQueryPredicateSpec, rows int) ([]columnTypedColumnDenseSingleCodePredicateCandidate, []columnTypedColumnDensePredicatePart, bool, error) {
 	if rows <= 0 || uint64(rows) > uint64(^uint32(0)) || len(specs) != 3 {
-		return nil, nil, 0, 0, false, nil
+		return nil, nil, false, nil
 	}
 	candidates := make([]columnTypedColumnDenseSingleCodePredicateCandidate, len(specs))
 	predicates := make([]columnTypedColumnDensePredicatePart, len(specs))
 	for idx, spec := range specs {
 		candidate, ok, err := columnTypedColumnDenseSingleCodePredicateCandidateForSpec(adapterPart, fields, spec)
 		if err != nil {
-			return nil, nil, 0, 0, false, err
+			return nil, nil, false, err
 		}
 		if !ok {
-			return nil, nil, 0, 0, false, nil
+			return nil, nil, false, nil
 		}
 		candidates[idx] = candidate
 		predicates[idx] = candidate.predicate
 	}
 	if !columnTypedColumnDenseSingleCodePredicateBlocksAligned(candidates, rows) {
+		return nil, nil, false, nil
+	}
+	return candidates, predicates, true, nil
+}
+
+func decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRowsFromCandidates(candidates []columnTypedColumnDenseSingleCodePredicateCandidate, predicates []columnTypedColumnDensePredicatePart, rows int, selectedBlocks []bool) ([]columnTypedColumnDensePredicatePart, []uint32, uint64, int, bool, error) {
+	if rows <= 0 || uint64(rows) > uint64(^uint32(0)) || len(candidates) != 3 || len(predicates) != len(candidates) {
 		return nil, nil, 0, 0, false, nil
+	}
+	if !columnTypedColumnDenseSingleCodePredicateBlocksAligned(candidates, rows) {
+		return nil, nil, 0, 0, false, nil
+	}
+	if selectedBlocks != nil && len(selectedBlocks) != len(candidates[0].partColumn.Blocks) {
+		return nil, nil, 0, 0, false, fmt.Errorf("collections: dense typed-column predicate selected blocks=%d want %d", len(selectedBlocks), len(candidates[0].partColumn.Blocks))
 	}
 	selected := make([]uint32, 0, min(rows, 4096))
 	var readers [3]typedcolumn.GranuleReader
@@ -2869,6 +2916,10 @@ func decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRows(adapterPart *t
 	rowOffset := 0
 	for blockIdx := range candidates[0].partColumn.Blocks {
 		blockRows := candidates[0].partColumn.Blocks[blockIdx].Descriptor.RowCount
+		if selectedBlocks != nil && !selectedBlocks[blockIdx] {
+			rowOffset += blockRows
+			continue
+		}
 		for predicateIdx := range candidates {
 			block := candidates[predicateIdx].partColumn.Blocks[blockIdx]
 			g := block.Granule
@@ -3093,6 +3144,60 @@ func columnTypedColumnDenseSingleCodePredicateBlocksAligned(candidates []columnT
 		rowOffset += blockRows
 	}
 	return rowOffset == rows
+}
+
+func typedColumnDenseSingleCodeTriplePredicateBlockMask(candidates []columnTypedColumnDenseSingleCodePredicateCandidate, rows int) ([]bool, int, error) {
+	if len(candidates) != 3 {
+		return nil, 0, fmt.Errorf("collections: dense typed-column predicate block mask candidates=%d want 3", len(candidates))
+	}
+	if !columnTypedColumnDenseSingleCodePredicateBlocksAligned(candidates, rows) {
+		return nil, 0, fmt.Errorf("collections: dense typed-column predicate block mask candidates are not aligned")
+	}
+	mask := make([]bool, len(candidates[0].partColumn.Blocks))
+	skipped := 0
+	rowOffset := 0
+	for blockIdx := range candidates[0].partColumn.Blocks {
+		blockRows := candidates[0].partColumn.Blocks[blockIdx].Descriptor.RowCount
+		selected := true
+		for predicateIdx := range candidates {
+			block := candidates[predicateIdx].partColumn.Blocks[blockIdx]
+			g := block.Granule
+			if err := validateTypedColumnDenseSingleCodePredicateGranuleBounds(g, candidates[predicateIdx].cardinality, candidates[predicateIdx].partColumn.Definition.Name, blockIdx); err != nil {
+				return nil, 0, err
+			}
+			if !g.HasMinMax {
+				continue
+			}
+			code := int64(candidates[predicateIdx].predicate.SingleCode)
+			if code < g.Min || code > g.Max {
+				selected = false
+			}
+		}
+		mask[blockIdx] = selected
+		if !selected {
+			skipped++
+		}
+		rowOffset += blockRows
+	}
+	if rowOffset != rows {
+		return nil, 0, fmt.Errorf("collections: dense typed-column predicate block mask rows=%d want part rows=%d", rowOffset, rows)
+	}
+	return mask, skipped, nil
+}
+
+func refreshTypedColumnDenseSingleCodePredicateCandidatePayloads(adapterPart *typedColumnAdapterPart, candidates []columnTypedColumnDenseSingleCodePredicateCandidate) error {
+	if adapterPart == nil || adapterPart.Part == nil {
+		return errors.New("collections: dense typed-column predicate refresh missing part")
+	}
+	for idx := range candidates {
+		name := candidates[idx].partColumn.Definition.Name
+		partColumn, ok := adapterPart.Part.Columns[name]
+		if !ok {
+			return fmt.Errorf("collections: dense typed-column predicate refresh missing column %q", name)
+		}
+		candidates[idx].partColumn = partColumn
+	}
+	return nil
 }
 
 func validateTypedColumnDenseSingleCodePredicateGranuleBounds(g typedcolumn.EncodedGranule, cardinality int, column string, blockIdx int) error {
