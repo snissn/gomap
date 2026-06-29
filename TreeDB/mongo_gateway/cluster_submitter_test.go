@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -139,6 +140,14 @@ func mongoClusterCallCatalogVersion(tb testing.TB, call mongoClusterSubmitterCal
 	return version
 }
 
+func mongoClusterCallIdempotencyKey(tb testing.TB, call mongoClusterSubmitterCall) string {
+	tb.Helper()
+	if len(call.entry.IdempotencyKey) == 0 {
+		tb.Fatal("missing idempotency key")
+	}
+	return string(call.entry.IdempotencyKey)
+}
+
 func mongoClusterCallCollectionMetaName(tb testing.TB, call mongoClusterSubmitterCall) string {
 	tb.Helper()
 	raw := call.entry.Target.CollectionMeta
@@ -178,19 +187,100 @@ func TestClusterSubmitterInsertRoutesCommandEntryNoLocalMutation(t *testing.T) {
 	assertInt32(t, response, "n", 1)
 
 	calls := submitter.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("submit calls=%d want 2", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandCreateCollection {
+		t.Fatalf("first command id=%d want create_collection", got)
+	}
+	if got := mongoClusterCallCollectionMetaName(t, calls[0]); got != "app.users" {
+		t.Fatalf("collection_meta name=%q want app.users", got)
+	}
+	if got := calls[1].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
+		t.Fatalf("command id=%d want insert_batch", got)
+	}
+	if got := mongoClusterCallCatalogVersion(t, calls[0]); got != 7 {
+		t.Fatalf("create expected catalog version=%d want 7", got)
+	}
+	if got := mongoClusterCallCatalogVersion(t, calls[1]); got != 7 {
+		t.Fatalf("insert expected catalog version=%d want 7", got)
+	}
+	if _, err := server.Collections.OpenCollection("app.users"); err == nil {
+		t.Fatal("cluster insert created local collection")
+	} else if err != collections.ErrCollectionNotFound {
+		t.Fatalf("OpenCollection after cluster insert err=%v want collection not found", err)
+	}
+}
+
+func TestClusterSubmitterInsertSkipsAutoCreateForKnownLocalCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	if _, err := server.Collections.CreateCollection(server.defaultCollectionMeta("app.users")); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+
+	submitter := &mongoClusterFakeSubmitter{}
+	setMongoClusterTestSubmitter(server, submitter, 20)
+	response := serveCommand(t, server, 325820, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+
+	calls := submitter.snapshotCalls()
 	if len(calls) != 1 {
 		t.Fatalf("submit calls=%d want 1", len(calls))
 	}
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
 		t.Fatalf("command id=%d want insert_batch", got)
 	}
-	if got := mongoClusterCallCatalogVersion(t, calls[0]); got != 7 {
-		t.Fatalf("expected catalog version=%d want 7", got)
+}
+
+func TestClusterSubmitterIdempotencyKeysIncludeServerNonce(t *testing.T) {
+	serverA := NewServer()
+	serverA.ClusterIdempotencyNonce = "gateway-epoch-a"
+	serverA.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	submitterA := &mongoClusterFakeSubmitter{}
+	setMongoClusterTestSubmitter(serverA, submitterA, 21)
+
+	serverB := NewServer()
+	serverB.ClusterIdempotencyNonce = "gateway-epoch-b"
+	serverB.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	submitterB := &mongoClusterFakeSubmitter{}
+	setMongoClusterTestSubmitter(serverB, submitterB, 21)
+
+	for _, server := range []*Server{serverA, serverB} {
+		response := serveCommand(t, server, 325821, bson.D{
+			{Key: "insert", Value: "users"},
+			{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}}}},
+			{Key: "$db", Value: "app"},
+		})
+		assertOK(t, response)
 	}
-	if _, err := server.Collections.OpenCollection("app.users"); err == nil {
-		t.Fatal("cluster insert created local collection")
-	} else if err != collections.ErrCollectionNotFound {
-		t.Fatalf("OpenCollection after cluster insert err=%v want collection not found", err)
+
+	callsA := submitterA.snapshotCalls()
+	callsB := submitterB.snapshotCalls()
+	if len(callsA) != 2 || len(callsB) != 2 {
+		t.Fatalf("submit calls A=%d B=%d want 2 each", len(callsA), len(callsB))
+	}
+	keyA := mongoClusterCallIdempotencyKey(t, callsA[1])
+	keyB := mongoClusterCallIdempotencyKey(t, callsB[1])
+	if keyA == keyB {
+		t.Fatalf("idempotency keys matched across gateway epochs: %q", keyA)
+	}
+	if !strings.HasPrefix(keyA, "mongo-gateway/gateway-epoch-a/insert_batch/") {
+		t.Fatalf("idempotency key A=%q missing gateway epoch", keyA)
+	}
+	if !strings.HasPrefix(keyB, "mongo-gateway/gateway-epoch-b/insert_batch/") {
+		t.Fatalf("idempotency key B=%q missing gateway epoch", keyB)
 	}
 }
 
@@ -319,6 +409,35 @@ func TestClusterSubmitterDeleteDeduplicatesDuplicateIDs(t *testing.T) {
 	calls := submitter.snapshotCalls()
 	if len(calls) != 1 {
 		t.Fatalf("submit calls=%d want 1", len(calls))
+	}
+	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
+	if len(ids) != 1 {
+		t.Fatalf("document ids=%d want 1", len(ids))
+	}
+}
+
+func TestClusterSubmitterDeleteSubmitsPriorOrderedItemsBeforeUnsupported(t *testing.T) {
+	submitter := &mongoClusterFakeSubmitter{}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterTestSubmitter(server, submitter, 22)
+
+	response := serveCommand(t, server, 325822, bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{
+			bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}},
+			bson.D{{Key: "q", Value: bson.D{{Key: "name", Value: "Ada"}}}, {Key: "limit", Value: int32(1)}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+
+	calls := submitter.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("submit calls=%d want 1", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandDeleteBatch {
+		t.Fatalf("command id=%d want delete_batch", got)
 	}
 	ids := mongoClusterTestIDs(calls[0].entry.Decoded.Sections)
 	if len(ids) != 1 {
@@ -541,8 +660,12 @@ func TestClusterSubmitterRequiresInsertedCount(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, response, "BadValue")
-	if calls := submitter.snapshotCalls(); len(calls) != 1 {
-		t.Fatalf("submit calls=%d want 1", len(calls))
+	calls := submitter.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("submit calls=%d want 2", len(calls))
+	}
+	if got := calls[1].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
+		t.Fatalf("second command id=%d want insert_batch", got)
 	}
 }
 

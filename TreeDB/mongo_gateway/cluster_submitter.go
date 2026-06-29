@@ -79,10 +79,18 @@ func (s *Server) clusterInsertResponse(ctx context.Context, command wire.Documen
 	if err != nil {
 		return commandError(commandCodeFailedToParse, "FailedToParse", err.Error())
 	}
-	format := s.clusterCollectionFormat(name)
+	format, exists, err := s.clusterCollectionFormat(name)
+	if err != nil {
+		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
 	ids, stored, err := prepareInsertDocuments(documents, format)
 	if err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
+	}
+	if !exists {
+		if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name)); err != nil {
+			return mongoClusterMutationCommandError(err)
+		}
 	}
 	inserted, err := s.submitClusterInsert(ctx, name, format, ids, stored)
 	if err != nil {
@@ -155,22 +163,44 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 	}
 	ids := make([][]byte, 0, len(deletes))
 	seenIDs := make(map[string]struct{}, len(deletes))
+	submitPendingBeforeError := func() error {
+		if len(ids) == 0 {
+			return nil
+		}
+		_, err := s.submitClusterDelete(ctx, name, ids)
+		return err
+	}
 	for i, deleteItem := range deletes {
 		filter, err := requiredDocumentField(deleteItem, "q")
 		if err != nil {
+			if submitErr := submitPendingBeforeError(); submitErr != nil {
+				return mongoClusterMutationCommandError(submitErr)
+			}
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
 		}
 		id, err := idEqualityFilterValue(filter, "delete")
 		if err != nil {
+			if submitErr := submitPendingBeforeError(); submitErr != nil {
+				return mongoClusterMutationCommandError(submitErr)
+			}
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
 		}
 		if limit, err := optionalInt32Field(deleteItem, "limit"); err != nil {
+			if submitErr := submitPendingBeforeError(); submitErr != nil {
+				return mongoClusterMutationCommandError(submitErr)
+			}
 			return commandError(commandCodeFailedToParse, "FailedToParse", fmt.Sprintf("deletes[%d]: %v", i, err))
 		} else if limit != 0 && limit != 1 {
+			if submitErr := submitPendingBeforeError(); submitErr != nil {
+				return mongoClusterMutationCommandError(submitErr)
+			}
 			return commandError(commandCodeBadValue, "BadValue", "Mongo gateway delete limit must be 0 or 1")
 		}
 		key, err := encodePrimaryKey(id)
 		if err != nil {
+			if submitErr := submitPendingBeforeError(); submitErr != nil {
+				return mongoClusterMutationCommandError(submitErr)
+			}
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("deletes[%d]: %v", i, err))
 		}
 		keyString := string(key)
@@ -187,14 +217,18 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 	return marshalDeleteResponse(deleted)
 }
 
-func (s *Server) clusterCollectionFormat(name string) collections.DocumentFormat {
+func (s *Server) clusterCollectionFormat(name string) (collections.DocumentFormat, bool, error) {
 	format := s.DefaultCollectionOptions.DocumentFormat
 	if s != nil && s.Collections != nil {
-		if col, err := s.Collections.OpenCollection(name); err == nil && col != nil {
-			format = col.MetaView().Options.DocumentFormat
+		col, err := s.Collections.OpenCollection(name)
+		if err == nil && col != nil {
+			return col.MetaView().Options.DocumentFormat, true, nil
+		}
+		if err != nil && !errors.Is(err, collections.ErrCollectionNotFound) {
+			return format, false, err
 		}
 	}
-	return format
+	return format, false, nil
 }
 
 func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collections.CollectionMeta) error {
@@ -205,7 +239,10 @@ func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collect
 	if err != nil {
 		return err
 	}
-	sections, seq := s.clusterCreateCollectionSections(meta, catalogVersion)
+	sections, seq, err := s.clusterCreateCollectionSections(meta, catalogVersion)
+	if err != nil {
+		return err
+	}
 	_, err = s.submitClusterMutation(ctx, iwire.CommandCreateCollection, sections, seq)
 	return err
 }
@@ -215,11 +252,14 @@ func (s *Server) submitClusterInsert(ctx context.Context, name string, format co
 	if err != nil {
 		return 0, err
 	}
-	sections, seq := s.clusterMutationSections(iwire.CommandInsertBatch, "insert_batch", name, catalogVersion,
+	sections, seq, err := s.clusterMutationSections(iwire.CommandInsertBatch, "insert_batch", name, catalogVersion,
 		clusterDocumentFormatSection(format),
 		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
 		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, docs...)},
 	)
+	if err != nil {
+		return 0, err
+	}
 	response, err := s.submitClusterMutation(ctx, iwire.CommandInsertBatch, sections, seq)
 	if err != nil {
 		return 0, err
@@ -239,11 +279,14 @@ func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, it
 	if err != nil {
 		return 0, 0, err
 	}
-	sections, seq := s.clusterMutationSections(iwire.CommandUpdateBSONSet, "update_bson_set", name, catalogVersion,
+	sections, seq, err := s.clusterMutationSections(iwire.CommandUpdateBSONSet, "update_bson_set", name, catalogVersion,
 		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, item.key)},
 		clusterBSONSetFieldNamesSection(item.bsonSetFields),
 		clusterBSONSetFieldValuesSection(item.bsonSetFields),
 	)
+	if err != nil {
+		return 0, 0, err
+	}
 	response, err := s.submitClusterMutation(ctx, iwire.CommandUpdateBSONSet, sections, seq)
 	if err != nil {
 		return 0, 0, err
@@ -273,9 +316,12 @@ func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]b
 	if err != nil {
 		return 0, err
 	}
-	sections, seq := s.clusterMutationSections(iwire.CommandDeleteBatch, "delete_batch", name, catalogVersion,
+	sections, seq, err := s.clusterMutationSections(iwire.CommandDeleteBatch, "delete_batch", name, catalogVersion,
 		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)},
 	)
+	if err != nil {
+		return 0, err
+	}
 	response, err := s.submitClusterMutation(ctx, iwire.CommandDeleteBatch, sections, seq)
 	if err != nil {
 		return 0, err
@@ -290,27 +336,52 @@ func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]b
 	return deleted, nil
 }
 
-func (s *Server) clusterCreateCollectionSections(meta collections.CollectionMeta, catalogVersion uint64) ([]iwire.Section, uint64) {
+func (s *Server) clusterCreateCollectionSections(meta collections.CollectionMeta, catalogVersion uint64) ([]iwire.Section, uint64, error) {
 	seq := s.nextClusterSubmit.Add(1)
+	idempotencyKey, err := s.clusterIdempotencyKey("create_collection", seq)
+	if err != nil {
+		return nil, 0, err
+	}
 	sections := []iwire.Section{
 		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandCreateCollection, Version: 1})},
-		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("mongo-gateway/create_collection/" + strconv.FormatUint(seq, 10))},
+		{ID: iwire.SectionIdempotencyKey, Bytes: idempotencyKey},
 		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
 		clusterCollectionMetaSection(meta),
 	}
-	return sections, seq
+	return sections, seq, nil
 }
 
-func (s *Server) clusterMutationSections(command iwire.CommandID, commandName, collection string, catalogVersion uint64, payload ...iwire.Section) ([]iwire.Section, uint64) {
+func (s *Server) clusterMutationSections(command iwire.CommandID, commandName, collection string, catalogVersion uint64, payload ...iwire.Section) ([]iwire.Section, uint64, error) {
 	seq := s.nextClusterSubmit.Add(1)
+	idempotencyKey, err := s.clusterIdempotencyKey(commandName, seq)
+	if err != nil {
+		return nil, 0, err
+	}
 	sections := make([]iwire.Section, 0, 5+len(payload))
 	sections = append(sections,
 		iwire.Section{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: command, Version: 1})},
-		iwire.Section{ID: iwire.SectionIdempotencyKey, Bytes: []byte("mongo-gateway/" + commandName + "/" + strconv.FormatUint(seq, 10))},
+		iwire.Section{ID: iwire.SectionIdempotencyKey, Bytes: idempotencyKey},
 		iwire.Section{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
 		clusterCollectionNameRefSection(collection),
 	)
-	return append(sections, payload...), seq
+	return append(sections, payload...), seq, nil
+}
+
+func (s *Server) clusterIdempotencyKey(commandName string, seq uint64) ([]byte, error) {
+	if s == nil || s.ClusterIdempotencyNonce == "" {
+		return nil, errors.New("Mongo gateway cluster idempotency nonce is not configured")
+	}
+	key := make([]byte, 0, len("mongo-gateway/")+len(s.ClusterIdempotencyNonce)+1+len(commandName)+1+20)
+	key = append(key, "mongo-gateway/"...)
+	key = append(key, s.ClusterIdempotencyNonce...)
+	key = append(key, '/')
+	key = append(key, commandName...)
+	key = append(key, '/')
+	key = strconv.AppendUint(key, seq, 10)
+	if len(key) > raftentry.MaxIdempotencyKeyBytesV1 {
+		return nil, fmt.Errorf("Mongo gateway cluster idempotency key length %d exceeds %d", len(key), raftentry.MaxIdempotencyKeyBytesV1)
+	}
+	return key, nil
 }
 
 func (s *Server) submitClusterMutation(ctx context.Context, command iwire.CommandID, sections []iwire.Section, seq uint64) ([]iwire.Section, error) {

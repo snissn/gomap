@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -55,6 +57,8 @@ var errServerClosed = errors.New("mongo gateway server is closed")
 
 type ClusterCatalogVersionProvider func(context.Context) (uint64, error)
 
+var clusterIdempotencyNonceFallback atomic.Uint64
+
 type Server struct {
 	MaxMessageLength       int32
 	MaxFindScanDocuments   int
@@ -86,6 +90,10 @@ type Server struct {
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
 	ClusterSubmitter          treenativewire.ClusterSubmitter
 	ClusterCatalogVersion     ClusterCatalogVersionProvider
+	// ClusterIdempotencyNonce scopes generated cluster mutation idempotency
+	// keys to one gateway process epoch. NewServer initializes a random nonce
+	// so sequence-based keys are not reused after restart.
+	ClusterIdempotencyNonce string
 
 	nextResponseID    atomic.Int32
 	nextConnectionID  atomic.Int64
@@ -126,9 +134,18 @@ func NewServer() *Server {
 		InsertCoalescingMaxDelay: defaultInsertCoalescingDelay,
 		InsertCoalescingMaxBatch: defaultInsertCoalescingBatch,
 		InsertCoalescingIdleTTL:  defaultInsertCoalescingIdleTTL,
+		ClusterIdempotencyNonce:  newClusterIdempotencyNonce(),
 	}
 	s.nextResponseID.Store(0)
 	return s
+}
+
+func newClusterIdempotencyNonce() string {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err == nil {
+		return hex.EncodeToString(nonce[:])
+	}
+	return fmt.Sprintf("fallback-%d-%d", time.Now().UnixNano(), clusterIdempotencyNonceFallback.Add(1))
 }
 
 func (s *Server) openCollectionCached(name string) (*collections.Collection, error) {
