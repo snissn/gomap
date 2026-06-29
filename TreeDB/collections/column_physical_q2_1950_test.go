@@ -357,6 +357,126 @@ func TestTypedColumnQ2DenseGroupCountDistinctRankMapCapacity3158(t *testing.T) {
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctManyPartSortedDistinctRanks3324(t *testing.T) {
+	const partCount = columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts + 8
+	parts := make([]columnTypedColumnPhysicalQueryPart, partCount)
+	for partIdx := range parts {
+		groupDictionary := []string{
+			fmt.Sprintf("app.%02d", (partCount-partIdx)%7),
+			fmt.Sprintf("app.%02d", 20+(partIdx%3)),
+		}
+		sort.Strings(groupDictionary)
+		distinctDictionary := []string{
+			fmt.Sprintf("did:%03d", (partIdx+7)%11),
+			fmt.Sprintf("did:%03d", 100+(partIdx%5)),
+		}
+		sort.Strings(distinctDictionary)
+		distinctValid := []bool{true}
+		if partIdx == partCount/2 {
+			distinctValid = []bool{true, false}
+		}
+		parts[partIdx].DenseGroupCountDistinct = &columnTypedColumnDenseGroupCountDistinctPart{
+			Group: columnTypedColumnDenseStringCodeColumn{
+				Dictionary: groupDictionary,
+			},
+			Distinct: columnTypedColumnDenseStringCodeColumn{
+				Dictionary: distinctDictionary,
+				Valid:      distinctValid,
+			},
+		}
+	}
+
+	expectedDistinctRanks := map[string]uint32{"": 0}
+	nextRank := uint32(1)
+	for valueIdx := 0; valueIdx < 11; valueIdx++ {
+		expectedDistinctRanks[fmt.Sprintf("did:%03d", valueIdx)] = nextRank
+		nextRank++
+	}
+	for valueIdx := 100; valueIdx < 105; valueIdx++ {
+		expectedDistinctRanks[fmt.Sprintf("did:%03d", valueIdx)] = nextRank
+		nextRank++
+	}
+
+	ranks, cardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
+	if err != nil {
+		t.Fatalf("many-part global distinct ranks: %v", err)
+	}
+	if cardinality != len(expectedDistinctRanks) {
+		t.Fatalf("many-part distinct cardinality=%d want %d ranks=%v", cardinality, len(expectedDistinctRanks), ranks)
+	}
+	for value, want := range expectedDistinctRanks {
+		if got, ok := ranks[value]; !ok || got != want {
+			t.Fatalf("many-part distinct rank[%q]=%d ok=%t want %d ranks=%v", value, got, ok, want, ranks)
+		}
+	}
+
+	var prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(parts, &prepareDiagnostics); err != nil {
+		t.Fatalf("prepare many-part sorted global rank maps: %v", err)
+	}
+	for partIdx := range parts {
+		column := parts[partIdx].DenseGroupCountDistinct.Distinct
+		if column.GlobalDictionary != nil {
+			t.Fatalf("part %d distinct global dictionary allocated=%v want nil", partIdx, column.GlobalDictionary)
+		}
+		if !column.GlobalCardinalityOK || column.GlobalCardinality != len(expectedDistinctRanks) {
+			t.Fatalf("part %d distinct cardinality=(%d,%t) want %d", partIdx, column.GlobalCardinality, column.GlobalCardinalityOK, len(expectedDistinctRanks))
+		}
+		if !column.GlobalEmptyRankOK || column.GlobalEmptyRank != 0 {
+			t.Fatalf("part %d empty rank=(%d,%t) want (0,true)", partIdx, column.GlobalEmptyRank, column.GlobalEmptyRankOK)
+		}
+		if len(column.GlobalLocalRanks) != len(column.Dictionary) {
+			t.Fatalf("part %d distinct local ranks=%d want dictionary=%d", partIdx, len(column.GlobalLocalRanks), len(column.Dictionary))
+		}
+		for localCode, value := range column.Dictionary {
+			if got, want := column.GlobalLocalRanks[localCode], expectedDistinctRanks[value]; got != want {
+				t.Fatalf("part %d local code %d value=%q rank=%d want %d", partIdx, localCode, value, got, want)
+			}
+		}
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctSortedRanksRejectUnsortedDictionary3324(t *testing.T) {
+	parts := []columnTypedColumnPhysicalQueryPart{
+		{
+			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+				Distinct: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"did:z", "did:a"},
+				},
+			},
+		},
+		{
+			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+				Distinct: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"did:b"},
+				},
+			},
+		},
+	}
+	capacity, err := columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
+	if err != nil {
+		t.Fatalf("dictionary capacity: %v", err)
+	}
+	if _, _, ok, err := columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	}, capacity, false); err != nil || ok {
+		t.Fatalf("sorted global ranks ok=%t err=%v want rejected unsorted local dictionary", ok, err)
+	}
+	ranks, cardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
+	if err != nil {
+		t.Fatalf("global distinct ranks map fallback: %v", err)
+	}
+	if cardinality != 3 || ranks["did:z"] != 0 || ranks["did:a"] != 1 || ranks["did:b"] != 2 {
+		t.Fatalf("fallback ranks cardinality=%d ranks=%v want existing map path order", cardinality, ranks)
+	}
+}
+
 func TestTypedColumnQ2DenseGroupCountDistinctActiveGroupBitset1950(t *testing.T) {
 	const (
 		groupCardinality    = 4096

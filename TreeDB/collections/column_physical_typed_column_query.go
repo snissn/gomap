@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"container/heap"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,9 @@ import (
 )
 
 const (
-	columnTypedColumnDenseGroupCountDistinctMaxBitsetWords      = 2 << 20
+	columnTypedColumnDenseGroupCountDistinctMaxBitsetWords = 2 << 20
+	// Above this threshold, sorted q2 rank setup uses a heap merge instead of
+	// repeatedly scanning every local dictionary head.
 	columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts = 32
 )
 
@@ -1428,9 +1431,6 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRanksMap(parts []columnTypedC
 }
 
 func columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn, capacity int, keepDictionary bool) ([]string, map[string]uint32, bool, error) {
-	if len(parts) > columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts {
-		return nil, nil, false, nil
-	}
 	columns := make([]*columnTypedColumnDenseStringCodeColumn, 0, len(parts))
 	includeEmpty := false
 	for partIdx := range parts {
@@ -1442,6 +1442,9 @@ func columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts []columnTyp
 		if column == nil {
 			return nil, nil, false, fmt.Errorf("collections: dense grouped count-distinct missing selected column for part %d", partIdx)
 		}
+		if !columnTypedColumnDenseGroupCountDistinctDictionarySorted(column.Dictionary) {
+			return nil, nil, false, nil
+		}
 		columns = append(columns, column)
 		if !includeEmpty {
 			for _, valid := range column.Valid {
@@ -1452,7 +1455,22 @@ func columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts []columnTyp
 			}
 		}
 	}
+	if len(parts) > columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts {
+		return columnTypedColumnDenseGroupCountDistinctHeapGlobalRanks(columns, includeEmpty, capacity, keepDictionary)
+	}
+	return columnTypedColumnDenseGroupCountDistinctLinearGlobalRanks(columns, includeEmpty, capacity, keepDictionary)
+}
 
+func columnTypedColumnDenseGroupCountDistinctDictionarySorted(dictionary []string) bool {
+	for idx := 1; idx < len(dictionary); idx++ {
+		if dictionary[idx-1] >= dictionary[idx] {
+			return false
+		}
+	}
+	return true
+}
+
+func columnTypedColumnDenseGroupCountDistinctLinearGlobalRanks(columns []*columnTypedColumnDenseStringCodeColumn, includeEmpty bool, capacity int, keepDictionary bool) ([]string, map[string]uint32, bool, error) {
 	positions := make([]int, len(columns))
 	ranks := make(map[string]uint32, columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity))
 	var dictionary []string
@@ -1470,9 +1488,6 @@ func columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts []columnTyp
 			pos := positions[columnIdx]
 			if pos >= len(column.Dictionary) {
 				continue
-			}
-			if pos > 0 && column.Dictionary[pos-1] >= column.Dictionary[pos] {
-				return nil, nil, false, nil
 			}
 			value := column.Dictionary[pos]
 			if !haveNext || value < next {
@@ -1504,6 +1519,106 @@ func columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts []columnTyp
 		}
 	}
 	return dictionary, ranks, true, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctHeapGlobalRanks(columns []*columnTypedColumnDenseStringCodeColumn, includeEmpty bool, capacity int, keepDictionary bool) ([]string, map[string]uint32, bool, error) {
+	ranks := make(map[string]uint32, columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity))
+	var dictionary []string
+	if keepDictionary {
+		dictionary = make([]string, 0, min(capacity, 64))
+	}
+	addValue := func(value string) error {
+		if _, exists := ranks[value]; exists {
+			return nil
+		}
+		if uint64(len(ranks)) > uint64(^uint32(0)) {
+			return fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
+		}
+		ranks[value] = uint32(len(ranks))
+		if keepDictionary {
+			dictionary = append(dictionary, value)
+		}
+		return nil
+	}
+
+	positions := make([]int, len(columns))
+	if includeEmpty {
+		if err := addValue(""); err != nil {
+			return nil, nil, false, err
+		}
+		for columnIdx, column := range columns {
+			if len(column.Dictionary) > 0 && column.Dictionary[0] == "" {
+				positions[columnIdx] = 1
+			}
+		}
+	}
+
+	items := make(columnTypedColumnDenseGroupCountDistinctRankMergeHeap, 0, len(columns))
+	for columnIdx, column := range columns {
+		pos := positions[columnIdx]
+		if pos < len(column.Dictionary) {
+			items = append(items, columnTypedColumnDenseGroupCountDistinctRankMergeItem{
+				value:     column.Dictionary[pos],
+				columnIdx: columnIdx,
+				pos:       pos,
+			})
+		}
+	}
+	heap.Init(&items)
+	for items.Len() > 0 {
+		value := items[0].value
+		if err := addValue(value); err != nil {
+			return nil, nil, false, err
+		}
+		for items.Len() > 0 && items[0].value == value {
+			item := heap.Pop(&items).(columnTypedColumnDenseGroupCountDistinctRankMergeItem)
+			nextPos := item.pos + 1
+			column := columns[item.columnIdx]
+			if nextPos < len(column.Dictionary) {
+				heap.Push(&items, columnTypedColumnDenseGroupCountDistinctRankMergeItem{
+					value:     column.Dictionary[nextPos],
+					columnIdx: item.columnIdx,
+					pos:       nextPos,
+				})
+			}
+		}
+	}
+	return dictionary, ranks, true, nil
+}
+
+type columnTypedColumnDenseGroupCountDistinctRankMergeItem struct {
+	value     string
+	columnIdx int
+	pos       int
+}
+
+type columnTypedColumnDenseGroupCountDistinctRankMergeHeap []columnTypedColumnDenseGroupCountDistinctRankMergeItem
+
+func (h columnTypedColumnDenseGroupCountDistinctRankMergeHeap) Len() int {
+	return len(h)
+}
+
+func (h columnTypedColumnDenseGroupCountDistinctRankMergeHeap) Less(i, j int) bool {
+	if h[i].value != h[j].value {
+		return h[i].value < h[j].value
+	}
+	return h[i].columnIdx < h[j].columnIdx
+}
+
+func (h columnTypedColumnDenseGroupCountDistinctRankMergeHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *columnTypedColumnDenseGroupCountDistinctRankMergeHeap) Push(x any) {
+	*h = append(*h, x.(columnTypedColumnDenseGroupCountDistinctRankMergeItem))
+}
+
+func (h *columnTypedColumnDenseGroupCountDistinctRankMergeHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 func columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) (int, error) {
