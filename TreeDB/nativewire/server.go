@@ -89,6 +89,7 @@ type ServerOptions struct {
 	InsertBatchCombineDrainYields int
 	Collections                   *collections.CollectionManager
 	Backend                       *backenddb.DB
+	ClusterSubmitter              ClusterSubmitter
 }
 
 // Server serves native-wire control and command frames for TreeDB.
@@ -110,6 +111,7 @@ type Server struct {
 	registry                      *iwire.Registry
 	collections                   *collections.CollectionManager
 	backend                       *backenddb.DB
+	clusterSubmitter              ClusterSubmitter
 	catalogVersion                atomic.Uint64
 	insertBatchCombiner           nativewireInsertBatchCombiner
 
@@ -362,6 +364,7 @@ func NewServer(opts ServerOptions) *Server {
 		registry:                      iwire.MustV1Registry(),
 		collections:                   opts.Collections,
 		backend:                       opts.Backend,
+		clusterSubmitter:              opts.ClusterSubmitter,
 		cursorReaperDone:              make(chan struct{}),
 	}
 	server.catalogVersion.Store(initialCatalogVersion(opts.Backend))
@@ -653,33 +656,35 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 		}
 		return nil
 	}
-	if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
-		commandName = "insert_batch_fast"
-		s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
-		if err != nil {
-			s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
+	if s.clusterSubmitter == nil {
+		if req, ok, err := s.decodeInsertBatchFastRequest(state, sections); ok {
+			commandName = "insert_batch_fast"
+			s.counters.incCommandRequest(iwire.CommandInsertBatch, "insert_batch")
+			if err != nil {
+				s.counters.addDispatchNanos(uint64(time.Since(start).Nanoseconds()))
+				s.counters.incRequestsFailed()
+				s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
+				return s.writeError(w, header, err)
+			}
+			responseBody, err := s.handleInsertBatchFastBody(req, state.responseScratch())
+			dispatchDone = time.Now()
+			s.counters.addDispatchNanos(uint64(dispatchDone.Sub(start).Nanoseconds()))
+			if err != nil {
+				requestErr = err
+				s.counters.incRequestsFailed()
+				s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
+				return s.writeError(w, header, err)
+			}
+			s.counters.incRequestsCompleted()
+			if state != nil {
+				state.responseBody = responseBody[:0]
+			}
+			requestErr = s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
+			return requestErr
+		} else if err != nil {
 			s.counters.incRequestsFailed()
-			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
 			return s.writeError(w, header, err)
 		}
-		responseBody, err := s.handleInsertBatchFastBody(req, state.responseScratch())
-		dispatchDone = time.Now()
-		s.counters.addDispatchNanos(uint64(dispatchDone.Sub(start).Nanoseconds()))
-		if err != nil {
-			requestErr = err
-			s.counters.incRequestsFailed()
-			s.counters.incCommandError(iwire.CommandInsertBatch, "insert_batch")
-			return s.writeError(w, header, err)
-		}
-		s.counters.incRequestsCompleted()
-		if state != nil {
-			state.responseBody = responseBody[:0]
-		}
-		requestErr = s.writeSimpleFrameBuffered(w, state, iwire.Header{Type: iwire.FrameResponse, StreamID: header.StreamID, RequestID: header.RequestID}, responseBody)
-		return requestErr
-	} else if err != nil {
-		s.counters.incRequestsFailed()
-		return s.writeError(w, header, err)
 	}
 	var cmd iwire.ValidatedCommand
 	if state != nil {
@@ -696,57 +701,61 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 	var responseSections []iwire.Section
 	var responseBody []byte
 	responseBodySet := false
-	switch cmd.Header.ID {
-	case iwire.CommandCreateCollection:
-		responseSections, err = s.handleCreateCollection(cmd.Known)
-	case iwire.CommandListCollections:
-		responseSections, err = s.handleListCollections()
-	case iwire.CommandCreateIndex:
-		responseSections, err = s.handleCreateIndex(state, cmd.Known)
-	case iwire.CommandListIndexes:
-		responseSections, err = s.handleListIndexes(state, cmd.Known)
-	case iwire.CommandDropIndex:
-		responseSections, err = s.handleDropIndex(state, cmd.Known)
-	case iwire.CommandOpenCollection:
-		responseSections, err = s.handleOpenCollection(state, cmd.Known)
-	case iwire.CommandCloseCollection:
-		responseSections, err = s.handleCloseCollection(state, cmd.Known)
-	case iwire.CommandDropCollection:
-		err = unsupportedDropCollection()
-	case iwire.CommandInsertBatch:
-		includeResultIDs := cmd.Header.Flags&iwire.CommandFlagOmitResultIDs == 0
-		includeMeta := cmd.Header.Flags&iwire.CommandFlagOmitResponseMeta == 0
-		responseBody, err = s.handleInsertBatchBody(state, cmd.Known, state.responseScratch(), includeResultIDs, includeMeta)
-		responseBodySet = true
-	case iwire.CommandReplaceBatch:
-		responseSections, err = s.handleReplaceBatch(state, cmd.Known)
-	case iwire.CommandDeleteBatch:
-		responseSections, err = s.handleDeleteBatch(state, cmd.Known)
-	case iwire.CommandUpdateBSONSet:
-		responseSections, err = s.handleUpdateBSONSet(state, cmd.Known)
-	case iwire.CommandFlushCollection:
-		responseSections, err = s.handleFlushCollection(state, cmd.Known)
-	case iwire.CommandFlushAll:
-		responseSections, err = s.handleFlushAll(cmd.Known)
-	case iwire.CommandCheckpoint:
-		responseSections, err = s.handleCheckpoint(cmd.Known)
-	case iwire.CommandGetMany:
-		responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch())
-		responseBodySet = true
-	case iwire.CommandIndexLookup:
-		responseSections, err = s.handleIndexLookup(state, cmd.Known)
-	case iwire.CommandIndexRange:
-		responseSections, err = s.handleIndexRange(state, cmd.Known)
-	case iwire.CommandOpenScan:
-		responseSections, err = s.handleOpenScan(state, cmd.Known)
-	case iwire.CommandCursorNext:
-		responseSections, err = s.handleCursorNext(state, header.StreamID, cmd.Known)
-	case iwire.CommandCursorClose:
-		responseSections, err = s.handleCursorClose(state, header.StreamID, cmd.Known)
-	case iwire.CommandStats:
-		responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
-	default:
-		err = protocolError(iwire.ErrUnsupportedFeature, "command %s is not implemented", cmd.Schema.Name)
+	if s.clusterSubmitter != nil && cmd.Schema.Kind == iwire.CommandKindMutation {
+		responseSections, err = s.handleClusterMutation(ctx, header, cmd)
+	} else {
+		switch cmd.Header.ID {
+		case iwire.CommandCreateCollection:
+			responseSections, err = s.handleCreateCollection(cmd.Known)
+		case iwire.CommandListCollections:
+			responseSections, err = s.handleListCollections()
+		case iwire.CommandCreateIndex:
+			responseSections, err = s.handleCreateIndex(state, cmd.Known)
+		case iwire.CommandListIndexes:
+			responseSections, err = s.handleListIndexes(state, cmd.Known)
+		case iwire.CommandDropIndex:
+			responseSections, err = s.handleDropIndex(state, cmd.Known)
+		case iwire.CommandOpenCollection:
+			responseSections, err = s.handleOpenCollection(state, cmd.Known)
+		case iwire.CommandCloseCollection:
+			responseSections, err = s.handleCloseCollection(state, cmd.Known)
+		case iwire.CommandDropCollection:
+			err = unsupportedDropCollection()
+		case iwire.CommandInsertBatch:
+			includeResultIDs := cmd.Header.Flags&iwire.CommandFlagOmitResultIDs == 0
+			includeMeta := cmd.Header.Flags&iwire.CommandFlagOmitResponseMeta == 0
+			responseBody, err = s.handleInsertBatchBody(state, cmd.Known, state.responseScratch(), includeResultIDs, includeMeta)
+			responseBodySet = true
+		case iwire.CommandReplaceBatch:
+			responseSections, err = s.handleReplaceBatch(state, cmd.Known)
+		case iwire.CommandDeleteBatch:
+			responseSections, err = s.handleDeleteBatch(state, cmd.Known)
+		case iwire.CommandUpdateBSONSet:
+			responseSections, err = s.handleUpdateBSONSet(state, cmd.Known)
+		case iwire.CommandFlushCollection:
+			responseSections, err = s.handleFlushCollection(state, cmd.Known)
+		case iwire.CommandFlushAll:
+			responseSections, err = s.handleFlushAll(cmd.Known)
+		case iwire.CommandCheckpoint:
+			responseSections, err = s.handleCheckpoint(cmd.Known)
+		case iwire.CommandGetMany:
+			responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch())
+			responseBodySet = true
+		case iwire.CommandIndexLookup:
+			responseSections, err = s.handleIndexLookup(state, cmd.Known)
+		case iwire.CommandIndexRange:
+			responseSections, err = s.handleIndexRange(state, cmd.Known)
+		case iwire.CommandOpenScan:
+			responseSections, err = s.handleOpenScan(state, cmd.Known)
+		case iwire.CommandCursorNext:
+			responseSections, err = s.handleCursorNext(state, header.StreamID, cmd.Known)
+		case iwire.CommandCursorClose:
+			responseSections, err = s.handleCursorClose(state, header.StreamID, cmd.Known)
+		case iwire.CommandStats:
+			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
+		default:
+			err = protocolError(iwire.ErrUnsupportedFeature, "command %s is not implemented", cmd.Schema.Name)
+		}
 	}
 	dispatchDone = time.Now()
 	s.counters.addDispatchNanos(uint64(dispatchDone.Sub(start).Nanoseconds()))
