@@ -60,6 +60,7 @@ The Raft paths must be distinct from:
 - `<main-db>/wal/`
 - `<main-db>/value_vlog/`
 - `<main-db>/leaf_vlog/`
+- `<main-db>/column_assets/`
 - `<main-db>/index.db` for flat layouts
 
 The Raft log directory stores consensus-log bytes for the selected future Raft

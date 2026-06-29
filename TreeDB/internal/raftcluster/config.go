@@ -222,6 +222,13 @@ func LeafLogDir(dir string) string {
 	return filepath.Join(MainDBDir(dir), "leaf_vlog")
 }
 
+func columnAssetDir(dir string) string {
+	if strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	return filepath.Join(MainDBDir(dir), "column_assets")
+}
+
 func validateFeatures(features FeatureSet) (FeatureSet, error) {
 	if features.ConfigVersion.isZero() && len(features.Required) == 0 {
 		return DefaultFeatureSet(), nil
@@ -340,6 +347,7 @@ func cleanStorageRoot(layout treeDBStorageLayout, clusterDir string) (string, er
 		filepath.Join(layout.mainDir, "wal"),
 		filepath.Join(layout.mainDir, "value_vlog"),
 		filepath.Join(layout.mainDir, "leaf_vlog"),
+		filepath.Join(layout.mainDir, "column_assets"),
 	}
 	if layout.flat {
 		reserved = append(reserved, filepath.Join(layout.mainDir, "index.db"))
@@ -378,7 +386,10 @@ func resolveTreeDBStorageLayout(dir string) treeDBStorageLayout {
 	}
 	if info, err := os.Stat(filepath.Join(clean, "index.db")); err == nil && !info.IsDir() {
 		if filepath.Base(clean) == "maindb" {
-			return treeDBStorageLayout{rootDir: filepath.Dir(clean), mainDir: clean}
+			parent := filepath.Dir(clean)
+			if treeDBSideStoreDirExists(parent) {
+				return treeDBStorageLayout{rootDir: parent, mainDir: clean}
+			}
 		}
 		return treeDBStorageLayout{rootDir: clean, mainDir: clean, flat: true}
 	}
@@ -392,6 +403,15 @@ func resolveTreeDBStorageLayout(dir string) treeDBStorageLayout {
 		rootDir: clean,
 		mainDir: filepath.Join(clean, "maindb"),
 	}
+}
+
+func treeDBSideStoreDirExists(parent string) bool {
+	for _, name := range []string{"dictdb", "templatedb"} {
+		if info, err := os.Stat(filepath.Join(parent, name)); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveConfigTreeDBStorageLayout(dir string, disableSideStores bool) (treeDBStorageLayout, error) {

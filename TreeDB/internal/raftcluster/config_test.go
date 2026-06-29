@@ -127,12 +127,37 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			want: ErrInvalidStoragePath,
 		},
 		{
+			name: "cluster dir inside column assets with flat options dir",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				if err := os.MkdirAll(filepath.Join(root, "column_assets"), 0o755); err != nil {
+					t.Fatalf("mkdir column_assets: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "index.db"), nil, 0o600); err != nil {
+					t.Fatalf("write index.db: %v", err)
+				}
+				cfg.Dir = root
+				cfg.ClusterDir = filepath.Join(root, "column_assets", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
 			name: "cluster dir inside command wal with disable side stores",
 			mut: func(cfg *Config) {
 				root := t.TempDir()
 				cfg.Dir = root
 				cfg.DisableSideStores = true
 				cfg.ClusterDir = filepath.Join(root, "wal", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "cluster dir inside column assets with disable side stores",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				cfg.Dir = root
+				cfg.DisableSideStores = true
+				cfg.ClusterDir = filepath.Join(root, "column_assets", "raft")
 			},
 			want: ErrInvalidStoragePath,
 		},
@@ -275,6 +300,9 @@ func TestStorageLayoutDeterministicAndSeparated(t *testing.T) {
 		if sameOrUnder(path, LeafLogDir(cfg.Dir)) {
 			t.Fatalf("layout path %q overlaps leaf_vlog dir %q", path, LeafLogDir(cfg.Dir))
 		}
+		if sameOrUnder(path, columnAssetDir(cfg.Dir)) {
+			t.Fatalf("layout path %q overlaps column_assets dir %q", path, columnAssetDir(cfg.Dir))
+		}
 	}
 	for _, id := range []NodeID{"node-a", "node-b", "node-c"} {
 		if dir, ok := a.Layout.PeerDir(id); !ok || dir == "" {
@@ -285,6 +313,31 @@ func TestStorageLayoutDeterministicAndSeparated(t *testing.T) {
 
 func TestValidateAllowsDefaultClusterDirForExistingFlatDB(t *testing.T) {
 	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.db"), nil, 0o600); err != nil {
+		t.Fatalf("write index.db: %v", err)
+	}
+	cfg := validConfig(t)
+	cfg.Dir = root
+	cfg.ClusterDir = ""
+
+	resolved, err := Validate(cfg)
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got, want := resolved.ClusterDir, filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("ClusterDir=%q want %q", got, want)
+	}
+	if got, want := resolved.Layout.RootDir, filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("Layout.RootDir=%q want %q", got, want)
+	}
+}
+
+func TestValidateAllowsDefaultClusterDirForExistingMaindbNamedFlatDB(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "maindb")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "index.db"), nil, 0o600); err != nil {
 		t.Fatalf("write index.db: %v", err)
 	}
@@ -332,11 +385,31 @@ func TestStoragePathsResolveMainDirOptionsLayout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
 		t.Fatalf("write index.db: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
 	if got, want := DefaultClusterDir(mainDir), filepath.Join(root, "raftcluster"); got != want {
 		t.Fatalf("DefaultClusterDir(%q)=%q want %q", mainDir, got, want)
 	}
 	if got, want := CommandWALDir(mainDir), filepath.Join(mainDir, "wal"); got != want {
 		t.Fatalf("CommandWALDir(%q)=%q want %q", mainDir, got, want)
+	}
+}
+
+func TestStoragePathsResolveMaindbNamedFlatOptionsLayout(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "maindb")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "index.db"), nil, 0o600); err != nil {
+		t.Fatalf("write index.db: %v", err)
+	}
+	if got, want := DefaultClusterDir(root), filepath.Join(root, "raftcluster"); got != want {
+		t.Fatalf("DefaultClusterDir(%q)=%q want %q", root, got, want)
+	}
+	if got, want := CommandWALDir(root), filepath.Join(root, "wal"); got != want {
+		t.Fatalf("CommandWALDir(%q)=%q want %q", root, got, want)
 	}
 }
 
