@@ -839,6 +839,45 @@ func TestOpenScanReadMetadataCountsTowardSectionLimit(t *testing.T) {
 	}
 }
 
+func TestOpenScanReadMetadataAllowsNonTruncatedSectionLimit(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	server := NewServer(ServerOptions{
+		Collections: mgr,
+		Backend:     db,
+		Limits:      iwire.Limits{MaxSections: 4},
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 10})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if result.Truncated || result.Cursor.HasMore {
+		t.Fatalf("result=%+v want terminal non-truncated scan", result)
+	}
+	if !result.ReadMeta.Valid || result.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("read meta=%+v want local-stale", result.ReadMeta)
+	}
+	assertDocumentsResult(t, result,
+		[]string{"u1", "u2"},
+		[]string{
+			`{"email":"ada@example.com","city":"hnl","name":"Ada"}`,
+			`{"email":"grace@example.com","city":"hnl","name":"Grace"}`,
+		},
+	)
+}
+
 func TestOpenScanReportsTruncatedWhenCursorRetentionExceeded(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {

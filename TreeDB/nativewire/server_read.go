@@ -483,7 +483,10 @@ func (s *Server) handleOpenScan(state *connState, sections []iwire.Section, read
 	if err != nil {
 		return nil, metadataWrap(err)
 	}
-	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits, readMeta)
+	includeTruncated := func(end int) bool {
+		return truncated || (end < len(records) && documentRecordsBytes(records[end:]) > s.maxCursorRetainedBytes)
+	}
+	end, bytes, err := s.splitCursorBatchForWire(records, 0, limits, includeTruncated, readMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +542,8 @@ func (s *Server) handleCursorNext(state *connState, cursorID uint64, sections []
 	truncated := cursor.truncated
 	s.cursorMu.Unlock()
 
-	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits, readMeta)
+	includeTruncated := func(int) bool { return truncated }
+	end, bytes, err := s.splitCursorBatchForWire(cursor.records, start, limits, includeTruncated, readMeta)
 	if err != nil {
 		s.restoreCursor(cursorID, cursor)
 		return nil, ReadMetadata{}, err
