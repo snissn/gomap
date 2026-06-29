@@ -184,6 +184,12 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	if stats.ColumnPublishDirectViewSegmentAppendCount > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishDirectViewSegmentAppendCount)/float64(batches), "column_publish_direct_view_segment_asset_appends/batch")
 	}
+	if stats.ColumnPublishSharedSegmentAppenderCloseCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishSharedSegmentAppenderCloseCount)/float64(batches), "column_publish_shared_segment_appender_closes/batch")
+	}
+	if stats.ColumnPublishDirectViewSegmentAppenderCloseCount > 0 {
+		b.ReportMetric(float64(stats.ColumnPublishDirectViewSegmentAppenderCloseCount)/float64(batches), "column_publish_direct_view_segment_appender_closes/batch")
+	}
 	if stats.ColumnPublishSharedSegmentAppendFileSyncCount > 0 {
 		b.ReportMetric(float64(stats.ColumnPublishSharedSegmentAppendFileSyncCount)/float64(batches), "column_publish_shared_segment_file_syncs/batch")
 	}
@@ -265,10 +271,12 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 			ColumnPublishManifestBytes:                         512,
 			ColumnPublishSharedSegmentAppendBytes:              1000,
 			ColumnPublishSharedSegmentAppendCount:              3,
+			ColumnPublishSharedSegmentAppenderCloseCount:       1,
 			ColumnPublishSharedSegmentAppendFileSyncCount:      1,
 			ColumnPublishSharedSegmentAppendSyncEpochCount:     1,
 			ColumnPublishDirectViewSegmentAppendBytes:          2000,
 			ColumnPublishDirectViewSegmentAppendCount:          4,
+			ColumnPublishDirectViewSegmentAppenderCloseCount:   1,
 			ColumnPublishDirectViewSegmentAppendFileSyncCount:  1,
 			ColumnPublishDirectViewSegmentAppendSyncEpochCount: 1,
 		})
@@ -294,6 +302,8 @@ func TestBenchmarkReportCollectionInsertStatsIncludesColumnPublishExtractionM10B
 	for _, name := range []string{
 		"column_publish_shared_segment_asset_appends/batch",
 		"column_publish_direct_view_segment_asset_appends/batch",
+		"column_publish_shared_segment_appender_closes/batch",
+		"column_publish_direct_view_segment_appender_closes/batch",
 		"column_publish_shared_segment_file_syncs/batch",
 		"column_publish_direct_view_segment_file_syncs/batch",
 		"column_publish_shared_segment_sync_epochs/batch",

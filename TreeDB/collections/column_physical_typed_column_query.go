@@ -131,30 +131,31 @@ type columnTypedColumnSortedGroupedDistinctPart struct {
 }
 
 type columnTypedColumnPhysicalQueryPart struct {
-	Ref                       columnManifestAssetRefForScan
-	PhysicalRef               columnManifestAssetRefForScan
-	Values                    map[string][]columnDeclaredValue
-	RowIndexes                []int
-	PhysicalRowIndexes        []int
-	Rows                      int
-	Bytes                     int64
-	Sections                  int
-	SectionBytes              uint64
-	GranulesConsidered        int
-	GranulesDecoded           int
-	GranulesSkipped           int
-	DecodedBlocks             int
-	DecodedPayloadBytes       uint64
-	SortKeyMarkChecks         int
-	SortKeyMarkMatches        int
-	SortKeyMarkSkips          int
-	SortKeyMarkFallbackReason string
-	DenseGroupCount           *columnTypedColumnDenseGroupCountPart
-	DenseGroupCountDistinct   *columnTypedColumnDenseGroupCountDistinctPart
-	DenseGroupHourCount       *columnTypedColumnDenseGroupHourCountPart
-	DenseInt64Span            *columnTypedColumnDenseInt64SpanPart
-	SortedGroupedDistinct     *columnTypedColumnSortedGroupedDistinctPart
-	TimeOrderTopK             *columnTypedColumnTimeOrderTopKPart
+	Ref                                  columnManifestAssetRefForScan
+	PhysicalRef                          columnManifestAssetRefForScan
+	Values                               map[string][]columnDeclaredValue
+	RowIndexes                           []int
+	PhysicalRowIndexes                   []int
+	Rows                                 int
+	Bytes                                int64
+	Sections                             int
+	SectionBytes                         uint64
+	GranulesConsidered                   int
+	GranulesDecoded                      int
+	GranulesSkipped                      int
+	DecodedBlocks                        int
+	DecodedPayloadBytes                  uint64
+	DenseInt64SpanPredicateBlocksSkipped int
+	SortKeyMarkChecks                    int
+	SortKeyMarkMatches                   int
+	SortKeyMarkSkips                     int
+	SortKeyMarkFallbackReason            string
+	DenseGroupCount                      *columnTypedColumnDenseGroupCountPart
+	DenseGroupCountDistinct              *columnTypedColumnDenseGroupCountDistinctPart
+	DenseGroupHourCount                  *columnTypedColumnDenseGroupHourCountPart
+	DenseInt64Span                       *columnTypedColumnDenseInt64SpanPart
+	SortedGroupedDistinct                *columnTypedColumnSortedGroupedDistinctPart
+	TimeOrderTopK                        *columnTypedColumnTimeOrderTopKPart
 }
 
 type columnTypedColumnPhysicalQueryRunner struct {
@@ -170,6 +171,7 @@ type columnTypedColumnPhysicalQueryRunner struct {
 	granulesSkipped                       int
 	decodedBlocks                         int
 	decodedPayloadBytes                   uint64
+	denseInt64SpanPredicateBlocksSkipped  int
 	sortKeyMarkChecks                     int
 	sortKeyMarkMatches                    int
 	sortKeyMarkSkips                      int
@@ -347,6 +349,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) addDecodedPart(part columnTypedCo
 	r.granulesSkipped += part.GranulesSkipped
 	r.decodedBlocks += part.DecodedBlocks
 	r.decodedPayloadBytes += part.DecodedPayloadBytes
+	r.denseInt64SpanPredicateBlocksSkipped += part.DenseInt64SpanPredicateBlocksSkipped
 	r.sortKeyMarkChecks += part.SortKeyMarkChecks
 	r.sortKeyMarkMatches += part.SortKeyMarkMatches
 	r.sortKeyMarkSkips += part.SortKeyMarkSkips
@@ -4980,6 +4983,7 @@ func (r *columnTypedColumnPhysicalQueryRunner) diagnostics(view columnPhysicalSc
 	diag.DecodedGranules = r.granulesDecoded
 	diag.DecodedBlocks = r.decodedBlocks
 	diag.DirectReduceBlocks = r.decodedBlocks
+	diag.DenseInt64SpanPredicateBlocksSkipped = r.denseInt64SpanPredicateBlocksSkipped
 	diag.TypedColumnPartSections = r.sections
 	diag.TypedColumnPartSectionBytes = r.sectionBytes
 	diag.RowsScanned = rowsScanned
