@@ -55,8 +55,8 @@ type ResolvedTokenRingPlanV1 struct {
 }
 
 // PlanTokenRing builds a deterministic simulation-only token ring over the
-// full uint64 token space. It does not change the v1 catalog format or enable
-// token/ring placement modes for production routing.
+// full uint64 token space. It does not attach the plan to a catalog or enable
+// token/ring production request routing.
 func PlanTokenRing(c ResolvedCatalogV1, opts TokenRingPlanOptions) (ResolvedTokenRingPlanV1, error) {
 	if opts.PartitionCount <= 0 {
 		return ResolvedTokenRingPlanV1{}, errors.Join(ErrInvalidTokenRing, ErrInvalidTokenPartitionCount, fmt.Errorf("partition count %d", opts.PartitionCount))
@@ -99,13 +99,20 @@ func PlanTokenRing(c ResolvedCatalogV1, opts TokenRingPlanOptions) (ResolvedToke
 }
 
 func ValidateTokenRingPlan(c ResolvedCatalogV1, plan TokenRingPlanV1) (ResolvedTokenRingPlanV1, error) {
-	if len(plan.Partitions) == 0 {
+	return validateTokenRingPartitions(plan.Partitions, func(id raftcluster.GroupID) bool {
+		_, ok := c.Group(id)
+		return ok
+	})
+}
+
+func validateTokenRingPartitions(partitions []TokenPartitionV1, groupExists func(raftcluster.GroupID) bool) (ResolvedTokenRingPlanV1, error) {
+	if len(partitions) == 0 {
 		return ResolvedTokenRingPlanV1{}, errors.Join(ErrInvalidTokenRing, ErrMissingTokenPartition, fmt.Errorf("at least one token partition is required"))
 	}
 
-	out := make([]ResolvedTokenPartitionV1, 0, len(plan.Partitions))
-	seenIDs := make(map[TokenPartitionID]struct{}, len(plan.Partitions))
-	for i, partition := range plan.Partitions {
+	out := make([]ResolvedTokenPartitionV1, 0, len(partitions))
+	seenIDs := make(map[TokenPartitionID]struct{}, len(partitions))
+	for i, partition := range partitions {
 		if err := validateID("token partition id", string(partition.ID)); err != nil {
 			return ResolvedTokenRingPlanV1{}, errors.Join(ErrInvalidTokenRing, ErrInvalidTokenPartition, fmt.Errorf("partition[%d]: %w", i, err))
 		}
@@ -116,7 +123,7 @@ func ValidateTokenRingPlan(c ResolvedCatalogV1, plan TokenRingPlanV1) (ResolvedT
 		if err := validateID("token partition group id", string(partition.GroupID)); err != nil {
 			return ResolvedTokenRingPlanV1{}, errors.Join(ErrInvalidTokenRing, ErrUnknownGroup, fmt.Errorf("partition[%d]: %w", i, err))
 		}
-		if _, ok := c.Group(partition.GroupID); !ok {
+		if !groupExists(partition.GroupID) {
 			return ResolvedTokenRingPlanV1{}, errors.Join(ErrInvalidTokenRing, ErrUnknownGroup, fmt.Errorf("partition[%d] references group %q", i, partition.GroupID))
 		}
 		if partition.Start > partition.End {
@@ -152,10 +159,10 @@ func ValidateTokenRingPlan(c ResolvedCatalogV1, plan TokenRingPlanV1) (ResolvedT
 		return ResolvedTokenRingPlanV1{}, errors.Join(ErrInvalidTokenRing, ErrTokenRingNotFull, fmt.Errorf("last partition ends at %d", out[len(out)-1].End))
 	}
 
-	partitions := cloneResolvedTokenPartitions(out)
+	resolvedPartitions := cloneResolvedTokenPartitions(out)
 	return ResolvedTokenRingPlanV1{
-		Partitions: cloneResolvedTokenPartitions(partitions),
-		partitions: partitions,
+		Partitions: cloneResolvedTokenPartitions(resolvedPartitions),
+		partitions: resolvedPartitions,
 	}, nil
 }
 
@@ -199,4 +206,12 @@ func tokenPartitionID(i int) TokenPartitionID {
 
 func cloneResolvedTokenPartitions(partitions []ResolvedTokenPartitionV1) []ResolvedTokenPartitionV1 {
 	return append([]ResolvedTokenPartitionV1(nil), partitions...)
+}
+
+func cloneResolvedTokenRingPlan(plan ResolvedTokenRingPlanV1) ResolvedTokenRingPlanV1 {
+	partitions := cloneResolvedTokenPartitions(plan.partitions)
+	return ResolvedTokenRingPlanV1{
+		Partitions: cloneResolvedTokenPartitions(partitions),
+		partitions: partitions,
+	}
 }
