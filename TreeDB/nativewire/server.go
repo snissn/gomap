@@ -90,6 +90,7 @@ type ServerOptions struct {
 	Collections                   *collections.CollectionManager
 	Backend                       *backenddb.DB
 	ClusterSubmitter              ClusterSubmitter
+	ClusterReadCoordinator        ClusterReadCoordinator
 }
 
 // Server serves native-wire control and command frames for TreeDB.
@@ -112,6 +113,7 @@ type Server struct {
 	collections                   *collections.CollectionManager
 	backend                       *backenddb.DB
 	clusterSubmitter              ClusterSubmitter
+	clusterReadCoordinator        ClusterReadCoordinator
 	catalogVersion                atomic.Uint64
 	insertBatchCombiner           nativewireInsertBatchCombiner
 
@@ -365,6 +367,7 @@ func NewServer(opts ServerOptions) *Server {
 		collections:                   opts.Collections,
 		backend:                       opts.Backend,
 		clusterSubmitter:              opts.ClusterSubmitter,
+		clusterReadCoordinator:        opts.ClusterReadCoordinator,
 		cursorReaperDone:              make(chan struct{}),
 	}
 	server.catalogVersion.Store(initialCatalogVersion(opts.Backend))
@@ -738,19 +741,13 @@ func (s *Server) handleRequest(ctx context.Context, w io.Writer, state *connStat
 			responseSections, err = s.handleFlushAll(cmd.Known)
 		case iwire.CommandCheckpoint:
 			responseSections, err = s.handleCheckpoint(cmd.Known)
-		case iwire.CommandGetMany:
-			responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch())
-			responseBodySet = true
-		case iwire.CommandIndexLookup:
-			responseSections, err = s.handleIndexLookup(state, cmd.Known)
-		case iwire.CommandIndexRange:
-			responseSections, err = s.handleIndexRange(state, cmd.Known)
-		case iwire.CommandOpenScan:
-			responseSections, err = s.handleOpenScan(state, cmd.Known)
-		case iwire.CommandCursorNext:
-			responseSections, err = s.handleCursorNext(state, header.StreamID, cmd.Known)
-		case iwire.CommandCursorClose:
-			responseSections, err = s.handleCursorClose(state, header.StreamID, cmd.Known)
+		case iwire.CommandGetMany,
+			iwire.CommandIndexLookup,
+			iwire.CommandIndexRange,
+			iwire.CommandOpenScan,
+			iwire.CommandCursorNext,
+			iwire.CommandCursorClose:
+			responseSections, responseBody, responseBodySet, err = s.handleRead(ctx, header, state, cmd)
 		case iwire.CommandStats:
 			responseSections = []iwire.Section{{ID: iwire.SectionResponseMeta, Bytes: appendStringMap(nil, s.Stats())}}
 		default:

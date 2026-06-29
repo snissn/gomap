@@ -118,6 +118,144 @@ func TestReadCommandsParity(t *testing.T) {
 	}
 }
 
+func TestReadDefaultReportsLocalStaleMetadata(t *testing.T) {
+	client, mgr, _ := serveCollectionPipe(t)
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.OpenScan(ctx, "users", CursorLimits{MaxItems: 1})
+	if err != nil {
+		t.Fatalf("OpenScan: %v", err)
+	}
+	if !result.ReadMeta.Valid || result.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("read meta=%+v want local-stale", result.ReadMeta)
+	}
+	if result.ReadMeta.ServingNode != "" || result.ReadMeta.LeaderNode != "" || result.ReadMeta.HasAppliedIndex {
+		t.Fatalf("standalone read meta unexpectedly reported cluster fields: %+v", result.ReadMeta)
+	}
+}
+
+func TestReadStrongConsistencyRequiresCoordinator(t *testing.T) {
+	for _, policy := range []ConsistencyPolicy{ConsistencyLeaderRead, ConsistencyLinearizable, ConsistencyLeaseRead} {
+		t.Run(consistencyPolicyName(policy), func(t *testing.T) {
+			client, mgr, _ := serveCollectionPipe(t)
+			seedReadCollection(t, mgr)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+
+			_, err := client.OpenScanWithOptions(ctx, "users", CursorLimits{MaxItems: 1}, ReadOptions{ConsistencyPolicy: policy})
+			if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+				t.Fatalf("OpenScan policy=%s err=%v want consistency_unavailable", consistencyPolicyName(policy), err)
+			}
+		})
+	}
+}
+
+func TestReadConsistencyPolicyRejectsMalformedOrUnknown(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  []byte
+		wantCode iwire.ErrorCode
+	}{
+		{name: "trailing-bytes", payload: []byte{byte(ConsistencyLocalStale), 0}, wantCode: iwire.ErrMalformedFrame},
+		{name: "unknown", payload: []byte{99}, wantCode: iwire.ErrInvalidCommand},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, mgr, _ := serveCollectionPipe(t)
+			seedReadCollection(t, mgr)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+
+			_, err := client.commandSections(ctx, iwire.CommandIndexLookup,
+				collectionNameRef("users"),
+				iwire.Section{ID: iwire.SectionIndexName, Bytes: encodeIndexName("email")},
+				iwire.Section{ID: iwire.SectionIndexValue, Bytes: mustEncodeScalar(t, "ada@example.com")},
+				iwire.Section{ID: iwire.SectionConsistencyPolicy, Bytes: tt.payload},
+			)
+			if !isRemoteError(err, tt.wantCode) {
+				t.Fatalf("IndexLookup err=%v want code %d", err, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestReadCoordinatorProvesStrongConsistencyMetadata(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{
+			ActualConsistency: ConsistencyLinearizable,
+			ServingNode:       "node-a",
+			LeaderNode:        "node-a",
+			AppliedIndex:      42,
+			HasAppliedIndex:   true,
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.GetManyWithOptions(ctx, "users", [][]byte{[]byte("u1")}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if err != nil {
+		t.Fatalf("GetManyWithOptions: %v", err)
+	}
+	if len(coord.calls) != 1 {
+		t.Fatalf("coordinator calls=%d want 1", len(coord.calls))
+	}
+	call := coord.calls[0]
+	if call.Policy != ConsistencyLinearizable || call.CommandID != iwire.CommandGetMany || call.CommandName != "get_many" {
+		t.Fatalf("coordinator call=%+v", call)
+	}
+	if got, want := result.Present, []bool{true}; !boolSlicesEqual(got, want) {
+		t.Fatalf("present=%v want %v", got, want)
+	}
+	if !bytes.Contains(result.Docs[0], []byte(`"Ada"`)) {
+		t.Fatalf("doc=%q want Ada", result.Docs[0])
+	}
+	if !result.ReadMeta.Valid ||
+		result.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
+		result.ReadMeta.ServingNode != "node-a" ||
+		result.ReadMeta.LeaderNode != "node-a" ||
+		!result.ReadMeta.HasAppliedIndex ||
+		result.ReadMeta.AppliedIndex != 42 {
+		t.Fatalf("read meta=%+v", result.ReadMeta)
+	}
+}
+
+func TestReadCoordinatorActualConsistencyMustSatisfyRequest(t *testing.T) {
+	coord := &fakeClusterReadCoordinator{
+		result: ClusterReadResult{ActualConsistency: ConsistencyLocalStale},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterReadCoordinator: coord})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: ConsistencyLeaderRead})
+	if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+		t.Fatalf("IndexLookupWithOptions err=%v want consistency_unavailable", err)
+	}
+	if len(coord.calls) != 1 || coord.calls[0].Policy != ConsistencyLeaderRead {
+		t.Fatalf("coordinator calls=%+v", coord.calls)
+	}
+}
+
 func TestIndexLookupWithoutLimitsReturnsAllMatches(t *testing.T) {
 	client, mgr, _ := serveCollectionPipe(t)
 	seedReadCollection(t, mgr)
@@ -832,6 +970,26 @@ func TestCursorCloseRequiresStreamID(t *testing.T) {
 	if err := client.CursorClose(ctx, 0); !isRemoteError(err, iwire.ErrInvalidCommand) {
 		t.Fatalf("CursorClose zero err=%v want invalid command", err)
 	}
+}
+
+type fakeClusterReadCoordinator struct {
+	result ClusterReadResult
+	err    error
+	calls  []ClusterReadRequest
+}
+
+func (f *fakeClusterReadCoordinator) CoordinateRead(ctx context.Context, request ClusterReadRequest) (ClusterReadResult, error) {
+	f.calls = append(f.calls, request)
+	return f.result, f.err
+}
+
+func mustEncodeScalar(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := encodeScalar(value)
+	if err != nil {
+		t.Fatalf("encodeScalar(%v): %v", value, err)
+	}
+	return raw
 }
 
 func boolSlicesEqual(a, b []bool) bool {

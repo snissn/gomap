@@ -1,11 +1,57 @@
 package nativewire
 
 import (
+	"context"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
+
+func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *connState, cmd iwire.ValidatedCommand) ([]iwire.Section, []byte, bool, error) {
+	readMeta, err := s.readMetadataForCommand(ctx, header, cmd)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	var responseSections []iwire.Section
+	var responseBody []byte
+	responseBodySet := false
+	switch cmd.Header.ID {
+	case iwire.CommandGetMany:
+		responseBody, err = s.handleGetManyBody(state, cmd.Known, state.responseScratch(), readMeta)
+		responseBodySet = true
+	case iwire.CommandIndexLookup:
+		responseSections, err = s.handleIndexLookup(state, cmd.Known)
+	case iwire.CommandIndexRange:
+		responseSections, err = s.handleIndexRange(state, cmd.Known)
+	case iwire.CommandOpenScan:
+		responseSections, err = s.handleOpenScan(state, cmd.Known)
+	case iwire.CommandCursorNext:
+		responseSections, err = s.handleCursorNext(state, header.StreamID, cmd.Known)
+	case iwire.CommandCursorClose:
+		responseSections, err = s.handleCursorClose(state, header.StreamID, cmd.Known)
+	default:
+		name := "<unknown>"
+		if cmd.Schema != nil {
+			name = cmd.Schema.Name
+		}
+		err = protocolError(iwire.ErrUnsupportedFeature, "command %s is not implemented as a native read", name)
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if responseBodySet {
+		return nil, responseBody, true, nil
+	}
+	return appendReadMetaSection(responseSections, readMeta), nil, false, nil
+}
+
+func appendReadMetaSection(sections []iwire.Section, meta ReadMetadata) []iwire.Section {
+	if !meta.Valid {
+		return sections
+	}
+	return append(sections, readMetaSection(meta))
+}
 
 func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iwire.Section, error) {
 	_, docs, present, err := s.getManyDocuments(state, sections)
@@ -18,7 +64,7 @@ func (s *Server) handleGetMany(state *connState, sections []iwire.Section) ([]iw
 	}, nil
 }
 
-func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
+func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, dst []byte, readMeta ReadMetadata) ([]byte, error) {
 	_, collection, err := s.openCollectionRef(state, sections)
 	if err != nil {
 		return nil, err
@@ -78,6 +124,10 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err := s.checkResponseByteVectorLen("documents", len(payload)); err != nil {
 		return nil, err
 	}
+	metaSection := readMetaSection(readMeta)
+	if err := s.checkResponseSectionLen("response_meta", len(metaSection.Bytes)); err != nil {
+		return nil, err
+	}
 	presenceBodyLen, err := responseSectionBodyLen(iwire.SectionPresenceBitmap, len(presence))
 	if err != nil {
 		return nil, err
@@ -86,10 +136,19 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 	if err != nil {
 		return nil, err
 	}
+	metaBodyLen, err := responseSectionBodyLen(metaSection.ID, len(metaSection.Bytes))
+	if err != nil {
+		return nil, err
+	}
 	bodyLen := presenceBodyLen + docBodyLen
 	if bodyLen < presenceBodyLen {
 		return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
 	}
+	nextBodyLen := bodyLen + metaBodyLen
+	if nextBodyLen < bodyLen {
+		return nil, protocolError(iwire.ErrResourceExhausted, "response body length overflow")
+	}
+	bodyLen = nextBodyLen
 	if err := s.checkResponseBodyLen(bodyLen); err != nil {
 		return nil, err
 	}
@@ -103,6 +162,10 @@ func (s *Server) handleGetManyBody(state *connState, sections []iwire.Section, d
 		return nil, err
 	}
 	body, err = iwire.AppendByteVectorPayload(body, lengths, payload)
+	if err != nil {
+		return nil, err
+	}
+	body, err = iwire.AppendSection(body, metaSection)
 	if err != nil {
 		return nil, err
 	}

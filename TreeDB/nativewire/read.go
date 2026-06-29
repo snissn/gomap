@@ -3,6 +3,7 @@ package nativewire
 import (
 	"encoding/binary"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -35,6 +36,177 @@ type CursorMeta struct {
 	Items    int
 	Bytes    int
 	HasMore  bool
+}
+
+type ConsistencyPolicy = iwire.ConsistencyPolicy
+
+const (
+	ConsistencyLocalStale   ConsistencyPolicy = iwire.ConsistencyLocalStale
+	ConsistencyLeaderRead   ConsistencyPolicy = iwire.ConsistencyLeaderRead
+	ConsistencyLinearizable ConsistencyPolicy = iwire.ConsistencyLinearizable
+	ConsistencyLeaseRead    ConsistencyPolicy = iwire.ConsistencyLeaseRead
+)
+
+// ReadOptions carries native read policy controls. The zero value preserves the
+// protocol default: serve locally and label the result local-stale.
+type ReadOptions struct {
+	ConsistencyPolicy ConsistencyPolicy
+}
+
+// ReadMetadata is returned from native read responses when the server can label
+// the read contract it actually served.
+type ReadMetadata struct {
+	Valid             bool
+	ActualConsistency ConsistencyPolicy
+	ServingNode       string
+	LeaderNode        string
+	AppliedIndex      uint64
+	HasAppliedIndex   bool
+}
+
+func consistencyPolicySection(policy ConsistencyPolicy) iwire.Section {
+	return iwire.Section{ID: iwire.SectionConsistencyPolicy, Bytes: binary.AppendUvarint(nil, uint64(policy))}
+}
+
+func consistencyPolicySectionFromOptions(opts ReadOptions) (iwire.Section, bool, error) {
+	if opts.ConsistencyPolicy == 0 {
+		return iwire.Section{}, false, nil
+	}
+	if !validConsistencyPolicy(opts.ConsistencyPolicy) {
+		return iwire.Section{}, false, protocolError(iwire.ErrInvalidCommand, "unsupported consistency policy %d", opts.ConsistencyPolicy)
+	}
+	return consistencyPolicySection(opts.ConsistencyPolicy), true, nil
+}
+
+func consistencyPolicyFromSections(sections []iwire.Section) (ConsistencyPolicy, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionConsistencyPolicy)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return iwire.ConsistencyLocalStale, nil
+	}
+	return consistencyPolicyFromPayload(raw)
+}
+
+func consistencyPolicyFromPayload(raw []byte) (ConsistencyPolicy, error) {
+	value, n, err := readUvarint(raw)
+	if err != nil {
+		return 0, err
+	}
+	if n != len(raw) {
+		return 0, protocolError(iwire.ErrMalformedFrame, "consistency_policy has trailing bytes")
+	}
+	policy := ConsistencyPolicy(value)
+	if !validConsistencyPolicy(policy) {
+		return 0, protocolError(iwire.ErrInvalidCommand, "unsupported consistency policy %d", value)
+	}
+	return policy, nil
+}
+
+func validConsistencyPolicy(policy ConsistencyPolicy) bool {
+	switch policy {
+	case iwire.ConsistencyLocalStale,
+		iwire.ConsistencyLeaderRead,
+		iwire.ConsistencyLinearizable,
+		iwire.ConsistencyLeaseRead:
+		return true
+	default:
+		return false
+	}
+}
+
+func consistencyPolicyName(policy ConsistencyPolicy) string {
+	switch policy {
+	case iwire.ConsistencyLocalStale:
+		return "local_stale"
+	case iwire.ConsistencyLeaderRead:
+		return "leader"
+	case iwire.ConsistencyLinearizable:
+		return "linearizable"
+	case iwire.ConsistencyLeaseRead:
+		return "lease"
+	default:
+		return ""
+	}
+}
+
+func consistencyPolicyFromName(name string) (ConsistencyPolicy, error) {
+	switch name {
+	case "local_stale":
+		return iwire.ConsistencyLocalStale, nil
+	case "leader":
+		return iwire.ConsistencyLeaderRead, nil
+	case "linearizable":
+		return iwire.ConsistencyLinearizable, nil
+	case "lease":
+		return iwire.ConsistencyLeaseRead, nil
+	default:
+		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta actual_consistency_policy %q is unknown", name)
+	}
+}
+
+func readMetaSection(meta ReadMetadata) iwire.Section {
+	return iwire.Section{ID: iwire.SectionResponseMeta, Bytes: appendReadMetaPayload(nil, meta)}
+}
+
+func appendReadMetaPayload(dst []byte, meta ReadMetadata) []byte {
+	name := consistencyPolicyName(meta.ActualConsistency)
+	fields := map[string]string{
+		"actual_consistency":        name,
+		"actual_consistency_policy": name,
+	}
+	if meta.ServingNode != "" {
+		fields["serving_node"] = meta.ServingNode
+	}
+	if meta.LeaderNode != "" {
+		fields["leader_node"] = meta.LeaderNode
+	}
+	if meta.HasAppliedIndex {
+		fields["applied_index"] = strconv.FormatUint(meta.AppliedIndex, 10)
+	}
+	return appendStringMap(dst, fields)
+}
+
+func decodeReadMetadataFromSections(sections []iwire.Section) (ReadMetadata, error) {
+	raw, ok, err := singletonSection(sections, iwire.SectionResponseMeta)
+	if err != nil || !ok {
+		return ReadMetadata{}, err
+	}
+	return decodeReadMetadataPayload(raw)
+}
+
+func decodeReadMetadataPayload(raw []byte) (ReadMetadata, error) {
+	fields, err := decodeStringMap(raw)
+	if err != nil {
+		return ReadMetadata{}, err
+	}
+	rawConsistency, ok := fields["actual_consistency_policy"]
+	if !ok {
+		rawConsistency, ok = fields["actual_consistency"]
+	}
+	if !ok {
+		return ReadMetadata{}, protocolError(iwire.ErrMalformedFrame, "response_meta missing actual_consistency_policy")
+	}
+	policy, err := consistencyPolicyFromName(rawConsistency)
+	if err != nil {
+		return ReadMetadata{}, err
+	}
+	meta := ReadMetadata{
+		Valid:             true,
+		ActualConsistency: policy,
+		ServingNode:       fields["serving_node"],
+		LeaderNode:        fields["leader_node"],
+	}
+	if rawApplied, ok := fields["applied_index"]; ok {
+		value, err := parseResponseMetaUint([]byte(rawApplied), "applied_index")
+		if err != nil {
+			return ReadMetadata{}, err
+		}
+		meta.AppliedIndex = value
+		meta.HasAppliedIndex = true
+	}
+	return meta, nil
 }
 
 func encodeScalar(value any) ([]byte, error) {
