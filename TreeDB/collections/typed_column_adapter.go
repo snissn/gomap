@@ -2152,20 +2152,35 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column int64-span group/value rows=%d/%d", len(groupCodes), len(values))
 	}
 
-	predicates := make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
 	predicateDecodedBytes := uint64(0)
 	predicateBlocks := 0
+	predicateRowsPreApplied := false
+	var predicateRows []uint32
+	var predicates []columnTypedColumnDensePredicatePart
 	if prepareDiagnostics != nil {
 		phaseStart = time.Now()
 	}
-	for _, spec := range plan.PredicateSpecs {
-		predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
+	if preapplyPredicates {
+		var ok bool
+		predicates, predicateRows, predicateDecodedBytes, predicateBlocks, ok, err = decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRows(adapterPart, plan.Fields, plan.PredicateSpecs, summary.Rows)
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
-		predicates = append(predicates, predicate)
-		predicateDecodedBytes += decodedBytes
-		predicateBlocks += blocks
+		predicateRowsPreApplied = ok
+	}
+	if !predicateRowsPreApplied {
+		predicates = make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
+		predicateDecodedBytes = 0
+		predicateBlocks = 0
+		for _, spec := range plan.PredicateSpecs {
+			predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
+			if err != nil {
+				return columnTypedColumnPhysicalQueryPart{}, err
+			}
+			predicates = append(predicates, predicate)
+			predicateDecodedBytes += decodedBytes
+			predicateBlocks += blocks
+		}
 	}
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.DensePredicateNanos += time.Since(phaseStart).Nanoseconds()
@@ -2180,7 +2195,11 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPreparedPart(plan columnTypedCo
 		Values:           values,
 		Predicates:       predicates,
 	}
-	if preapplyPredicates {
+	if predicateRowsPreApplied {
+		denseSpan.PredicatesPreApplied = true
+		denseSpan.PredicateRows = predicateRows
+		denseSpan.PreAppliedRowsScanned = summary.Rows
+	} else if preapplyPredicates {
 		if prepareDiagnostics != nil {
 			phaseStart = time.Now()
 		}
@@ -2267,6 +2286,279 @@ func columnTypedColumnDensePredicateCanUseSingleCodePreapply(predicate *columnTy
 		return false
 	}
 	return rows >= 0 && len(predicate.Codes) >= rows && (predicate.Valid == nil || len(predicate.Valid) >= rows)
+}
+
+type columnTypedColumnDenseSingleCodePredicateCandidate struct {
+	partColumn  typedcolumn.ColumnPartColumn
+	cardinality int
+	nullable    bool
+	predicate   columnTypedColumnDensePredicatePart
+}
+
+func decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRows(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, specs []columnPhysicalQueryPredicateSpec, rows int) ([]columnTypedColumnDensePredicatePart, []uint32, uint64, int, bool, error) {
+	if rows <= 0 || uint64(rows) > uint64(^uint32(0)) || len(specs) != 3 {
+		return nil, nil, 0, 0, false, nil
+	}
+	candidates := make([]columnTypedColumnDenseSingleCodePredicateCandidate, len(specs))
+	predicates := make([]columnTypedColumnDensePredicatePart, len(specs))
+	for idx, spec := range specs {
+		candidate, ok, err := columnTypedColumnDenseSingleCodePredicateCandidateForSpec(adapterPart, fields, spec)
+		if err != nil {
+			return nil, nil, 0, 0, false, err
+		}
+		if !ok {
+			return nil, nil, 0, 0, false, nil
+		}
+		candidates[idx] = candidate
+		predicates[idx] = candidate.predicate
+	}
+	if !columnTypedColumnDenseSingleCodePredicateBlocksAligned(candidates, rows) {
+		return nil, nil, 0, 0, false, nil
+	}
+	selected := make([]uint32, 0, min(rows, 4096))
+	var readers [3]typedcolumn.GranuleReader
+	var codeScratch [3][]uint32
+	var valueScratch [3][]int64
+	var nullScratch [3][]bool
+	var defaultScratch [3][]bool
+	decodedBytes := uint64(0)
+	decodedBlocks := 0
+	rowOffset := 0
+	for blockIdx := range candidates[0].partColumn.Blocks {
+		blockRows := candidates[0].partColumn.Blocks[blockIdx].Descriptor.RowCount
+		for predicateIdx := range candidates {
+			block := candidates[predicateIdx].partColumn.Blocks[blockIdx]
+			g := block.Granule
+			if err := validateTypedColumnDenseSingleCodePredicateGranuleBounds(g, candidates[predicateIdx].cardinality, candidates[predicateIdx].partColumn.Definition.Name, blockIdx); err != nil {
+				return nil, nil, 0, 0, false, err
+			}
+			if candidates[predicateIdx].nullable {
+				values, nulls, defaults, err := readers[predicateIdx].DecodeNullableInt64Into(valueScratch[predicateIdx][:0], nullScratch[predicateIdx][:0], defaultScratch[predicateIdx][:0], g)
+				if err != nil {
+					return nil, nil, 0, 0, false, fmt.Errorf("collections: dense typed-column predicate column %q block %d: %w", candidates[predicateIdx].partColumn.Definition.Name, blockIdx, err)
+				}
+				if len(values) != blockRows || len(nulls) != blockRows || len(defaults) != blockRows {
+					return nil, nil, 0, 0, false, fmt.Errorf("collections: dense typed-column predicate column %q block %d decoded rows values/nulls/defaults=%d/%d/%d want %d", candidates[predicateIdx].partColumn.Definition.Name, blockIdx, len(values), len(nulls), len(defaults), blockRows)
+				}
+				valueScratch[predicateIdx] = values
+				nullScratch[predicateIdx] = nulls
+				defaultScratch[predicateIdx] = defaults
+			} else {
+				decoded, err := readers[predicateIdx].DecodeUint32CodesInto(codeScratch[predicateIdx][:0], g)
+				if err != nil {
+					return nil, nil, 0, 0, false, fmt.Errorf("collections: dense typed-column predicate column %q block %d: %w", candidates[predicateIdx].partColumn.Definition.Name, blockIdx, err)
+				}
+				if len(decoded) != blockRows {
+					return nil, nil, 0, 0, false, fmt.Errorf("collections: dense typed-column predicate column %q block %d decoded rows=%d want %d", candidates[predicateIdx].partColumn.Definition.Name, blockIdx, len(decoded), blockRows)
+				}
+				codeScratch[predicateIdx] = decoded
+			}
+			decodedBytes += uint64(g.RawBytes)
+			decodedBlocks++
+		}
+		var err error
+		selected, err = appendTypedColumnDenseSingleCodeTriplePredicateRows(selected, candidates, codeScratch, valueScratch, nullScratch, defaultScratch, rowOffset, blockRows)
+		if err != nil {
+			return nil, nil, 0, 0, false, err
+		}
+		rowOffset += blockRows
+	}
+	if rowOffset != rows {
+		return nil, nil, 0, 0, false, fmt.Errorf("collections: dense typed-column predicate decoded rows=%d want part rows=%d", rowOffset, rows)
+	}
+	return predicates, selected, decodedBytes, decodedBlocks, true, nil
+}
+
+func appendTypedColumnDenseSingleCodeTriplePredicateRows(selected []uint32, candidates []columnTypedColumnDenseSingleCodePredicateCandidate, codeScratch [3][]uint32, valueScratch [3][]int64, nullScratch [3][]bool, defaultScratch [3][]bool, rowOffset, blockRows int) ([]uint32, error) {
+	leftCode := candidates[0].predicate.SingleCode
+	midCode := candidates[1].predicate.SingleCode
+	rightCode := candidates[2].predicate.SingleCode
+	if candidates[0].nullable && candidates[1].nullable && candidates[2].nullable {
+		leftValues := valueScratch[0]
+		midValues := valueScratch[1]
+		rightValues := valueScratch[2]
+		leftNulls := nullScratch[0]
+		midNulls := nullScratch[1]
+		rightNulls := nullScratch[2]
+		leftDefaults := defaultScratch[0]
+		midDefaults := defaultScratch[1]
+		rightDefaults := defaultScratch[2]
+		leftCardinality := candidates[0].cardinality
+		midCardinality := candidates[1].cardinality
+		rightCardinality := candidates[2].cardinality
+		for row := 0; row < blockRows; row++ {
+			leftValue := leftValues[row]
+			midValue := midValues[row]
+			rightValue := rightValues[row]
+			if !leftNulls[row] && !leftDefaults[row] && (leftValue < 0 || uint64(leftValue) >= uint64(leftCardinality) || leftValue > int64(^uint32(0))) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[0].partColumn.Definition.Name, rowOffset+row, leftValue, leftCardinality)
+			}
+			if !midNulls[row] && !midDefaults[row] && (midValue < 0 || uint64(midValue) >= uint64(midCardinality) || midValue > int64(^uint32(0))) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[1].partColumn.Definition.Name, rowOffset+row, midValue, midCardinality)
+			}
+			if !rightNulls[row] && !rightDefaults[row] && (rightValue < 0 || uint64(rightValue) >= uint64(rightCardinality) || rightValue > int64(^uint32(0))) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[2].partColumn.Definition.Name, rowOffset+row, rightValue, rightCardinality)
+			}
+			if !leftNulls[row] && !leftDefaults[row] && uint32(leftValue) == leftCode &&
+				!midNulls[row] && !midDefaults[row] && uint32(midValue) == midCode &&
+				!rightNulls[row] && !rightDefaults[row] && uint32(rightValue) == rightCode {
+				selected = append(selected, uint32(rowOffset+row))
+			}
+		}
+		return selected, nil
+	}
+	if !candidates[0].nullable && !candidates[1].nullable && !candidates[2].nullable {
+		left := codeScratch[0]
+		mid := codeScratch[1]
+		right := codeScratch[2]
+		leftCardinality := candidates[0].cardinality
+		midCardinality := candidates[1].cardinality
+		rightCardinality := candidates[2].cardinality
+		for row := 0; row < blockRows; row++ {
+			leftValue := left[row]
+			midValue := mid[row]
+			rightValue := right[row]
+			if uint64(leftValue) >= uint64(leftCardinality) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[0].partColumn.Definition.Name, rowOffset+row, leftValue, leftCardinality)
+			}
+			if uint64(midValue) >= uint64(midCardinality) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[1].partColumn.Definition.Name, rowOffset+row, midValue, midCardinality)
+			}
+			if uint64(rightValue) >= uint64(rightCardinality) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[2].partColumn.Definition.Name, rowOffset+row, rightValue, rightCardinality)
+			}
+			if leftValue == leftCode && midValue == midCode && rightValue == rightCode {
+				selected = append(selected, uint32(rowOffset+row))
+			}
+		}
+		return selected, nil
+	}
+	for row := 0; row < blockRows; row++ {
+		leftMatch, err := columnTypedColumnDenseSingleCodePredicateCandidateRowMatches(candidates[0], row, rowOffset, leftCode, codeScratch[0], valueScratch[0], nullScratch[0], defaultScratch[0])
+		if err != nil {
+			return nil, err
+		}
+		midMatch, err := columnTypedColumnDenseSingleCodePredicateCandidateRowMatches(candidates[1], row, rowOffset, midCode, codeScratch[1], valueScratch[1], nullScratch[1], defaultScratch[1])
+		if err != nil {
+			return nil, err
+		}
+		rightMatch, err := columnTypedColumnDenseSingleCodePredicateCandidateRowMatches(candidates[2], row, rowOffset, rightCode, codeScratch[2], valueScratch[2], nullScratch[2], defaultScratch[2])
+		if err != nil {
+			return nil, err
+		}
+		if leftMatch && midMatch && rightMatch {
+			selected = append(selected, uint32(rowOffset+row))
+		}
+	}
+	return selected, nil
+}
+
+func columnTypedColumnDenseSingleCodePredicateCandidateRowMatches(candidate columnTypedColumnDenseSingleCodePredicateCandidate, row, rowOffset int, want uint32, codes []uint32, values []int64, nulls []bool, defaults []bool) (bool, error) {
+	if candidate.nullable {
+		if nulls[row] || defaults[row] {
+			return false, nil
+		}
+		value := values[row]
+		if value < 0 || uint64(value) >= uint64(candidate.cardinality) || value > int64(^uint32(0)) {
+			return false, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidate.partColumn.Definition.Name, rowOffset+row, value, candidate.cardinality)
+		}
+		return uint32(value) == want, nil
+	}
+	value := codes[row]
+	if uint64(value) >= uint64(candidate.cardinality) {
+		return false, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidate.partColumn.Definition.Name, rowOffset+row, value, candidate.cardinality)
+	}
+	return value == want, nil
+}
+
+func columnTypedColumnDenseSingleCodePredicateCandidateForSpec(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDenseSingleCodePredicateCandidate, bool, error) {
+	adapterColumn, partColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, fields, spec.column, "predicate")
+	if err != nil {
+		return columnTypedColumnDenseSingleCodePredicateCandidate{}, false, err
+	}
+	allowed := make([]uint64, (cardinality+63)/64)
+	matchedLiterals := 0
+	singleCode := uint32(0)
+	singleCodeAllowed := false
+	multipleCodesAllowed := false
+	missingMatchesEmpty := false
+	for _, value := range spec.values {
+		if adapterColumn.Field.Nullable && value == "" {
+			missingMatchesEmpty = true
+		}
+		code, ok := adapterColumn.Dictionary[value]
+		if !ok {
+			continue
+		}
+		if code < 0 || uint64(code) >= uint64(cardinality) {
+			return columnTypedColumnDenseSingleCodePredicateCandidate{}, false, fmt.Errorf("collections: dense typed-column predicate dictionary code %d outside cardinality %d for column %q", code, cardinality, adapterColumn.Definition.Name)
+		}
+		idx := int(code)
+		mask := uint64(1) << uint(idx%64)
+		if allowed[idx/64]&mask == 0 {
+			if singleCodeAllowed && singleCode != uint32(idx) {
+				multipleCodesAllowed = true
+			} else {
+				singleCode = uint32(idx)
+				singleCodeAllowed = true
+			}
+		}
+		allowed[idx/64] |= mask
+		matchedLiterals++
+	}
+	if matchedLiterals == 0 || missingMatchesEmpty {
+		return columnTypedColumnDenseSingleCodePredicateCandidate{}, false, nil
+	}
+	singleCodeAllowed = singleCodeAllowed && !multipleCodesAllowed
+	if !singleCodeAllowed {
+		return columnTypedColumnDenseSingleCodePredicateCandidate{}, false, nil
+	}
+	predicate := columnTypedColumnDensePredicatePart{
+		Allowed:           allowed,
+		SingleCode:        singleCode,
+		SingleCodeAllowed: true,
+	}
+	return columnTypedColumnDenseSingleCodePredicateCandidate{
+		partColumn:  partColumn,
+		cardinality: cardinality,
+		nullable:    adapterColumn.Field.Nullable,
+		predicate:   predicate,
+	}, true, nil
+}
+
+func columnTypedColumnDenseSingleCodePredicateBlocksAligned(candidates []columnTypedColumnDenseSingleCodePredicateCandidate, rows int) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+	blocks := len(candidates[0].partColumn.Blocks)
+	for idx := 1; idx < len(candidates); idx++ {
+		if len(candidates[idx].partColumn.Blocks) != blocks {
+			return false
+		}
+	}
+	rowOffset := 0
+	for blockIdx := 0; blockIdx < blocks; blockIdx++ {
+		blockRows := candidates[0].partColumn.Blocks[blockIdx].Descriptor.RowCount
+		if blockRows < 0 || blockRows > rows-rowOffset {
+			return false
+		}
+		for idx := 1; idx < len(candidates); idx++ {
+			if candidates[idx].partColumn.Blocks[blockIdx].Descriptor.RowCount != blockRows {
+				return false
+			}
+		}
+		rowOffset += blockRows
+	}
+	return rowOffset == rows
+}
+
+func validateTypedColumnDenseSingleCodePredicateGranuleBounds(g typedcolumn.EncodedGranule, cardinality int, column string, blockIdx int) error {
+	if g.HasMinMax {
+		if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+			return fmt.Errorf("collections: dense typed-column predicate column %q block %d min/max [%d,%d] outside cardinality %d", column, blockIdx, g.Min, g.Max, cardinality)
+		}
+	}
+	return nil
 }
 
 func densePredicateFromDictionaryCodes(codes []uint32, valid []bool, dictionary []string, dictionaryByCode map[int64]string, cardinality int, spec columnPhysicalQueryPredicateSpec) (columnTypedColumnDensePredicatePart, error) {
@@ -3148,17 +3440,32 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("collections: dense typed-column int64-span group/value rows=%d/%d", len(groupCodes), len(values))
 	}
 
-	predicates := make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
 	predicateDecodedBytes := uint64(0)
 	predicateBlocks := 0
-	for _, spec := range plan.PredicateSpecs {
-		predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
+	predicateRowsPreApplied := false
+	var predicateRows []uint32
+	var predicates []columnTypedColumnDensePredicatePart
+	if preapplyPredicates {
+		var ok bool
+		predicates, predicateRows, predicateDecodedBytes, predicateBlocks, ok, err = decodeTypedColumnDenseInt64SpanSingleCodeTriplePredicateRows(adapterPart, plan.Fields, plan.PredicateSpecs, summary.Rows)
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, err
 		}
-		predicates = append(predicates, predicate)
-		predicateDecodedBytes += decodedBytes
-		predicateBlocks += blocks
+		predicateRowsPreApplied = ok
+	}
+	if !predicateRowsPreApplied {
+		predicates = make([]columnTypedColumnDensePredicatePart, 0, len(plan.PredicateSpecs))
+		predicateDecodedBytes = 0
+		predicateBlocks = 0
+		for _, spec := range plan.PredicateSpecs {
+			predicate, decodedBytes, blocks, err := decodeTypedColumnDensePredicatePart(adapterPart, plan.Fields, spec, summary.Rows)
+			if err != nil {
+				return columnTypedColumnPhysicalQueryPart{}, err
+			}
+			predicates = append(predicates, predicate)
+			predicateDecodedBytes += decodedBytes
+			predicateBlocks += blocks
+		}
 	}
 
 	denseSpan := &columnTypedColumnDenseInt64SpanPart{
@@ -3170,7 +3477,11 @@ func decodeTypedColumnPhysicalQueryDenseInt64SpanPart(plan columnTypedColumnPhys
 		Values:           values,
 		Predicates:       predicates,
 	}
-	if preapplyPredicates {
+	if predicateRowsPreApplied {
+		denseSpan.PredicatesPreApplied = true
+		denseSpan.PredicateRows = predicateRows
+		denseSpan.PreAppliedRowsScanned = summary.Rows
+	} else if preapplyPredicates {
 		preapplyColumnTypedColumnDenseInt64SpanPredicates(denseSpan, summary.Rows)
 	}
 

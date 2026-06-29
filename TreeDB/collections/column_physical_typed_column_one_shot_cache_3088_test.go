@@ -283,6 +283,26 @@ func assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 		if len(dense.DictionaryByCode) != 0 {
 			tb.Fatalf("q5 typed-column one-shot part %d reverse dictionary retained=%d want 0", partIdx, len(dense.DictionaryByCode))
 		}
+		if !dense.PredicatesPreApplied {
+			tb.Fatalf("q5 typed-column one-shot part %d predicates were not preapplied", partIdx)
+		}
+		if dense.PreAppliedRowsScanned != len(dense.GroupCodes) {
+			tb.Fatalf("q5 typed-column one-shot part %d preapplied rows scanned=%d want %d", partIdx, dense.PreAppliedRowsScanned, len(dense.GroupCodes))
+		}
+		if len(dense.PredicateRows) == 0 {
+			tb.Fatalf("q5 typed-column one-shot part %d predicate rows empty", partIdx)
+		}
+		if len(dense.Predicates) != 3 {
+			tb.Fatalf("q5 typed-column one-shot part %d predicates=%d want 3", partIdx, len(dense.Predicates))
+		}
+		for predicateIdx, predicate := range dense.Predicates {
+			if len(predicate.Codes) != 0 || len(predicate.Valid) != 0 {
+				tb.Fatalf("q5 typed-column one-shot part %d predicate %d retained decoded rows codes/valid=%d/%d want 0/0", partIdx, predicateIdx, len(predicate.Codes), len(predicate.Valid))
+			}
+			if !predicate.SingleCodeAllowed || predicate.MissingMatchesEmpty || predicate.RejectsAll {
+				tb.Fatalf("q5 typed-column one-shot part %d predicate %d metadata=%+v want single-code non-missing match", partIdx, predicateIdx, predicate)
+			}
+		}
 	}
 }
 
