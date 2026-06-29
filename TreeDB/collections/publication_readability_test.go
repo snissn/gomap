@@ -9,7 +9,10 @@ import (
 	"sync/atomic"
 	"testing"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCollectionCatalogEOFInsertBatchPreCommitRetryUsesCatalogLoadFaults(t *testing.T) {
@@ -217,6 +220,92 @@ func TestCollectionCatalogRootEOFInsertBatchPostCommitReturnsCommitAmbiguous(t *
 	}
 }
 
+func TestCollectionCatalogCachedForcedPointersReadableFromFreshSnapshot(t *testing.T) {
+	const collectionName = "ycsb.usertable"
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
+
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open cached backend: %v", err)
+	}
+	closeDB := collectionMaintenanceCloseOnce(cleanup)
+	t.Cleanup(func() { _ = closeDB() })
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: collectionName,
+		Options: CollectionOptions{
+			DocumentFormat: DocumentFormatBSON,
+		},
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection(collectionName)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	const docCount = 32
+	ids := make([][]byte, docCount)
+	docs := make([][]byte, docCount)
+	for i := 0; i < docCount; i++ {
+		id := []byte(fmt.Sprintf("user%06d", i))
+		ids[i] = id
+		docs[i] = ycsbBSONDocumentForID(t, string(id), i)
+	}
+	inserted, err := col.InsertBatchValidatedBSON(ids, docs)
+	if err != nil {
+		t.Fatalf("InsertBatchValidatedBSON: %v", err)
+	}
+	if len(inserted) != len(ids) {
+		t.Fatalf("inserted ids=%d want %d", len(inserted), len(ids))
+	}
+	for i := range inserted {
+		if !bytes.Equal(inserted[i], ids[i]) {
+			t.Fatalf("inserted id[%d]=%q want %q", i, inserted[i], ids[i])
+		}
+	}
+	if err := col.Flush(); err != nil {
+		t.Fatalf("flush collection: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	requireCollectionCatalogSnapshotDocument(t, d, collectionName, ids[0], docs[0])
+	requireCollectionCatalogSnapshotDocument(t, d, collectionName, ids[docCount-1], docs[docCount-1])
+	requireCollectionCatalogPrimaryEntryValueLogPointer(t, d, collectionName, ids[docCount-1])
+
+	if err := closeDB(); err != nil {
+		t.Fatalf("close cached backend: %v", err)
+	}
+	reopened, reopenedCleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("reopen cached backend: %v", err)
+	}
+	defer func() { _ = reopenedCleanup() }()
+	reopenedCol, err := NewCollectionManager(reopened).OpenCollection(collectionName)
+	if err != nil {
+		t.Fatalf("open reopened collection: %v", err)
+	}
+	reopenedDoc, found, err := reopenedCol.GetInto(ids[0], nil)
+	if err != nil {
+		t.Fatalf("reopened GetInto %q: %v", ids[0], err)
+	}
+	if !found {
+		t.Fatalf("reopened GetInto %q found=false", ids[0])
+	}
+	if !bytes.Equal(reopenedDoc, docs[0]) {
+		t.Fatalf("reopened document mismatch: got %d bytes want %d", len(reopenedDoc), len(docs[0]))
+	}
+	requireCollectionCatalogSnapshotDocument(t, reopened, collectionName, ids[docCount-1], docs[docCount-1])
+	requireCollectionCatalogPrimaryEntryValueLogPointer(t, reopened, collectionName, ids[docCount-1])
+}
+
 func newCatalogFaultTestCollection(t *testing.T, meta CollectionMeta) (*backenddb.DB, *Collection) {
 	t.Helper()
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
@@ -252,4 +341,56 @@ func clearCatalogFaultTestCaches(col *Collection) {
 	col.writeDomain.baseCommitSeq = 0
 	col.writeDomain.baseSystemRoot = 0
 	col.writeDomain.mu.Unlock()
+}
+
+func requireCollectionCatalogSnapshotDocument(t *testing.T, d *backenddb.DB, collectionName string, id, want []byte) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		t.Fatalf("load collection catalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection %q not found", collectionName)
+	}
+	got, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(collectionName), id, nil)
+	if err != nil {
+		t.Fatalf("fresh catalog Get %q: %v", id, err)
+	}
+	if !found {
+		t.Fatalf("fresh catalog Get %q found=false", id)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("fresh catalog document %q mismatch: got %d bytes want %d", id, len(got), len(want))
+	}
+}
+
+func requireCollectionCatalogPrimaryEntryValueLogPointer(t *testing.T, d *backenddb.DB, collectionName string, id []byte) {
+	t.Helper()
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("acquire snapshot")
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		t.Fatalf("load collection catalog: %v", err)
+	}
+	if catalog == nil {
+		t.Fatalf("collection %q not found", collectionName)
+	}
+	entry, rootID, err := collectionGetEntryAtCatalogRoot(snap, catalog, collectionPrimaryRootName(collectionName), id)
+	if err != nil {
+		t.Fatalf("fresh catalog GetEntry %q: %v", id, err)
+	}
+	if rootID == 0 {
+		t.Fatalf("fresh catalog GetEntry %q returned root 0", id)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("primary catalog entry %q root=%d flags=%#x ptr=%+v, want value-log pointer", id, rootID, entry.Flags, entry.ValuePtr)
+	}
 }
