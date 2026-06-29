@@ -431,6 +431,7 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 				recordAppendOnlyEntryPoolAdmissionDrop(bytes)
 				return
 			}
+			pool = appendOnlyEntryPoolForClass(class)
 		}
 		appendOnlyEntryPoolPutTotal.Add(1)
 		pool.Put(full[:0])

@@ -214,6 +214,19 @@ func TestPutAppendOnlyEntriesRecyclesPoolsOnRetainBudgetPressure(t *testing.T) {
 	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != 0 {
 		t.Fatalf("admission drop bytes delta=%d want 0", got)
 	}
+
+	reused := getAppendOnlyEntries(appendOnlyMinInitialEntries)
+	afterGet := AppendOnlyEntryPoolStatsSnapshot()
+	if cap(reused) != appendOnlyMinInitialEntries {
+		t.Fatalf("reused cap=%d want %d", cap(reused), appendOnlyMinInitialEntries)
+	}
+	if got := afterGet.GetsTotal - after.GetsTotal; got != 1 {
+		t.Fatalf("gets delta after replacement put=%d want 1", got)
+	}
+	if got := afterGet.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained bytes after replacement get=%d want 0", got)
+	}
+	putAppendOnlyEntries(reused)
 }
 
 func TestAppendOnlyReserveAdditionalEntriesAvoidsIntermediateGrowth(t *testing.T) {
