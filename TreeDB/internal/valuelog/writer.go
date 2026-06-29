@@ -209,25 +209,41 @@ func getWriterAppendBuf(capacity int) []byte {
 	if capacity <= 0 {
 		return nil
 	}
+	writerAppendBufGetsTotal.Add(1)
 	if capacity == defaultBufferSize {
 		select {
 		case buf := <-writerAppendBufPool:
+			noteWriterAppendBufPoolTake(cap(buf))
 			if cap(buf) >= capacity {
+				writerAppendBufHitsTotal.Add(1)
 				return buf[:0]
 			}
 		default:
 		}
+		writerAppendBufMissesTotal.Add(1)
 	}
+	writerAppendBufAllocCallsTotal.Add(1)
+	writerAppendBufAllocatedBytesTotal.Add(uint64(capacity))
 	return make([]byte, 0, capacity)
 }
 
 func putWriterAppendBuf(buf []byte) {
-	if cap(buf) != defaultBufferSize {
+	c := cap(buf)
+	if c == 0 {
 		return
 	}
+	if c != defaultBufferSize {
+		writerAppendBufDropsTotal.Add(1)
+		writerAppendBufDroppedBytesTotal.Add(uint64(c))
+		return
+	}
+	writerAppendBufPutsTotal.Add(1)
 	select {
 	case writerAppendBufPool <- buf[:0]:
+		noteWriterAppendBufPoolPut(c)
 	default:
+		writerAppendBufDropsTotal.Add(1)
+		writerAppendBufDroppedBytesTotal.Add(uint64(c))
 	}
 }
 
@@ -237,6 +253,13 @@ func (w *Writer) releaseAppendBuf() {
 	}
 	putWriterAppendBuf(w.appendBuf)
 	w.appendBuf = nil
+}
+
+func (w *Writer) releaseIdleAppendBuf() {
+	if w == nil || len(w.appendBuf) != 0 {
+		return
+	}
+	w.releaseAppendBuf()
 }
 
 func (w *Writer) ensureAppendBufCap(capacity int) {
@@ -2265,12 +2288,14 @@ func (w *Writer) Sync() error {
 			return err
 		}
 		w.trimTransientScratchBuffers()
+		w.releaseIdleAppendBuf()
 		return nil
 	}
 	if err := w.f.Sync(); err != nil {
 		return err
 	}
 	w.trimTransientScratchBuffers()
+	w.releaseIdleAppendBuf()
 	return nil
 }
 

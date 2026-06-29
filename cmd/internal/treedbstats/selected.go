@@ -31,6 +31,12 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_decode_buffer_grow."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_decode_scratch."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_writer_append_buf."):
+		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_auto."):
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_write_mode."):
@@ -50,6 +56,12 @@ func isSelectedKey(key string) bool {
 	case strings.HasPrefix(key, "treedb.cache.vlog_leaf_scan."):
 		return true
 	case strings.HasPrefix(key, "treedb.vlog.mmap"):
+		return true
+	case strings.HasPrefix(key, "treedb.vlog.decode_buffer_grow."):
+		return true
+	case strings.HasPrefix(key, "treedb.vlog.decode_scratch."):
+		return true
+	case strings.HasPrefix(key, "treedb.vlog.writer_append_buf."):
 		return true
 	case strings.HasPrefix(key, "treedb.vlog.grouped_frame_cache."):
 		return true
