@@ -40,6 +40,7 @@ const (
 	columnStoreQueryQ5                 = "q5"
 	columnStoreQueryQ5Metadata         = "q5_metadata"
 	columnStoreQuerySumSecondOfDaySq   = "sum_time_second_of_day_square"
+	columnStoreExpressionSecondOfDaySq = "sum(second_of_day_square(time_us))"
 	columnStoreSuiteBenchMetricPrefix  = "column_store_"
 	columnStoreSuiteAliasFullScanQ1    = "alias_full_scan_from_" + columnStoreQueryQ1
 	columnStoreSuiteAliasPrefixQ4A     = "alias_prefix_scan_from_" + columnStoreQueryQ4A
@@ -321,6 +322,8 @@ type columnStoreQueryMetric struct {
 	PredicateCount                         int                               `json:"predicate_count"`
 	TypedCellsVisited                      int64                             `json:"typed_cells_visited"`
 	TypedCellsVisitedBasis                 string                            `json:"typed_cells_visited_basis,omitempty"`
+	ExpressionKind                         string                            `json:"expression_kind,omitempty"`
+	PrecomputedExpressionUsed              *bool                             `json:"precomputed_expression_used,omitempty"`
 	RowMaterializations                    int                               `json:"row_materializations"`
 	DocumentMaterializations               int                               `json:"document_materializations"`
 	AggregateMetadataUsed                  bool                              `json:"aggregate_metadata_used"`
@@ -353,6 +356,7 @@ type columnStoreQueryMetric struct {
 	TopKOrder                              string                            `json:"topk_order,omitempty"`
 	TimeOrderTopKUsed                      bool                              `json:"time_order_topk_used,omitempty"`
 	DenseInt64SpanReducer                  string                            `json:"dense_int64_span_reducer,omitempty"`
+	DenseInt64SpanPredicateBlocksSkipped   int                               `json:"dense_int64_span_predicate_blocks_skipped,omitempty"`
 	DecodedBlocks                          int                               `json:"decoded_blocks"`
 	DecodedGranules                        int                               `json:"decoded_granules"`
 	PlannerCandidates                      int                               `json:"planner_candidates"`
@@ -433,6 +437,8 @@ type columnStoreJSONBenchCell struct {
 	PredicateCount                         int                               `json:"predicate_count"`
 	TypedCellsVisited                      int64                             `json:"typed_cells_visited"`
 	TypedCellsVisitedBasis                 string                            `json:"typed_cells_visited_basis,omitempty"`
+	ExpressionKind                         string                            `json:"expression_kind,omitempty"`
+	PrecomputedExpressionUsed              *bool                             `json:"precomputed_expression_used,omitempty"`
 	RowMaterializations                    int                               `json:"row_materializations"`
 	DocumentMaterializations               int                               `json:"document_materializations"`
 	AggregateMetadataUsed                  bool                              `json:"aggregate_metadata_used"`
@@ -471,6 +477,7 @@ type columnStoreJSONBenchCell struct {
 	TopKOrder                              string                            `json:"topk_order,omitempty"`
 	TimeOrderTopKUsed                      bool                              `json:"time_order_topk_used,omitempty"`
 	DenseInt64SpanReducer                  string                            `json:"dense_int64_span_reducer,omitempty"`
+	DenseInt64SpanPredicateBlocksSkipped   int                               `json:"dense_int64_span_predicate_blocks_skipped,omitempty"`
 	DecodedBlocks                          int                               `json:"decoded_blocks"`
 	DecodedGranules                        int                               `json:"decoded_granules"`
 	SkippedGranules                        int                               `json:"skipped_granules"`
@@ -584,6 +591,7 @@ type columnStoreQueryExecution struct {
 	TopKOrder                            string
 	TimeOrderTopKUsed                    bool
 	DenseInt64SpanReducer                string
+	DenseInt64SpanPredicateBlocksSkipped int
 	DecodedGranules                      int
 	DecodedBlocks                        int
 	DecodedPayloadBytes                  uint64
@@ -2036,6 +2044,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 		typedCellsVisited := columnStoreTypedCellsVisited(exec.RowsScanned, exec.ProjectedColumns)
 		typedCellsVisitedBasis := columnStoreTypedCellsVisitedBasis(exec.RowsScanned, exec.ProjectedColumns)
 		aggregateMetadataUsed := columnStoreAggregateMetadataUsed(storageSource, exec.MetadataHits)
+		expressionKind, precomputedExpressionUsed := columnStoreExpressionEvidence(name, aggregateMetadataUsed, typedCellsVisited)
 		sortTopKPruningUsed := columnStoreSortTopKPruningUsed(exec)
 		jsonReconstruction := exec.DocumentMaterializations > 0
 		metric := columnStoreQueryMetric{
@@ -2076,6 +2085,8 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			PredicateCount:                         exec.PredicateCount,
 			TypedCellsVisited:                      typedCellsVisited,
 			TypedCellsVisitedBasis:                 typedCellsVisitedBasis,
+			ExpressionKind:                         expressionKind,
+			PrecomputedExpressionUsed:              precomputedExpressionUsed,
 			RowMaterializations:                    exec.RowMaterializations,
 			DocumentMaterializations:               exec.DocumentMaterializations,
 			AggregateMetadataUsed:                  aggregateMetadataUsed,
@@ -2104,6 +2115,7 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			TopKOrder:                              exec.TopKOrder,
 			TimeOrderTopKUsed:                      exec.TimeOrderTopKUsed,
 			DenseInt64SpanReducer:                  exec.DenseInt64SpanReducer,
+			DenseInt64SpanPredicateBlocksSkipped:   exec.DenseInt64SpanPredicateBlocksSkipped,
 			DecodedBlocks:                          exec.DecodedBlocks,
 			DecodedGranules:                        exec.DecodedGranules,
 			PlannerCandidates:                      plan.Diagnostics.CandidatePlans,
@@ -2225,6 +2237,14 @@ func columnStoreTypedCellsVisitedBasis(rowsScanned, projectedColumns int) string
 		return "no_typed_cell_scan_reported"
 	}
 	return "rows_scanned_x_projected_columns"
+}
+
+func columnStoreExpressionEvidence(query string, aggregateMetadataUsed bool, typedCellsVisited int64) (string, *bool) {
+	if query != columnStoreQuerySumSecondOfDaySq || aggregateMetadataUsed || typedCellsVisited <= 0 {
+		return "", nil
+	}
+	precomputed := false
+	return columnStoreExpressionSecondOfDaySq, &precomputed
 }
 
 func columnStoreAggregateMetadataUsed(storageSource string, metadataHits int) bool {
@@ -2549,6 +2569,7 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		TopKOrder:                            diag.TopKOrder,
 		TimeOrderTopKUsed:                    diag.TimeOrderTopKUsed,
 		DenseInt64SpanReducer:                diag.DenseInt64SpanReducer,
+		DenseInt64SpanPredicateBlocksSkipped: diag.DenseInt64SpanPredicateBlocksSkipped,
 		DecodedGranules:                      diag.DecodedGranules,
 		DecodedBlocks:                        diag.DecodedBlocks,
 		DecodedPayloadBytes:                  diag.DecodedPayloadBytes,
@@ -2685,6 +2706,7 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 		TopKOrder:                            diag.TopKOrder,
 		TimeOrderTopKUsed:                    diag.TimeOrderTopKUsed,
 		DenseInt64SpanReducer:                diag.DenseInt64SpanReducer,
+		DenseInt64SpanPredicateBlocksSkipped: diag.DenseInt64SpanPredicateBlocksSkipped,
 		DecodedGranules:                      diag.DecodedGranules,
 		DecodedBlocks:                        diag.DecodedBlocks,
 		DecodedPayloadBytes:                  diag.DecodedPayloadBytes,
@@ -3129,6 +3151,8 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.PredicateCount = q.PredicateCount
 	cell.TypedCellsVisited = q.TypedCellsVisited
 	cell.TypedCellsVisitedBasis = q.TypedCellsVisitedBasis
+	cell.ExpressionKind = q.ExpressionKind
+	cell.PrecomputedExpressionUsed = q.PrecomputedExpressionUsed
 	cell.RowMaterializations = q.RowMaterializations
 	cell.DocumentMaterializations = q.DocumentMaterializations
 	cell.AggregateMetadataUsed = q.AggregateMetadataUsed
@@ -3193,6 +3217,7 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.TopKOrder = q.TopKOrder
 	cell.TimeOrderTopKUsed = q.TimeOrderTopKUsed
 	cell.DenseInt64SpanReducer = q.DenseInt64SpanReducer
+	cell.DenseInt64SpanPredicateBlocksSkipped = q.DenseInt64SpanPredicateBlocksSkipped
 	cell.DecodedBlocks = q.DecodedBlocks
 	cell.DecodedGranules = q.DecodedGranules
 	cell.SkippedGranules = q.SkippedGranules
@@ -3239,6 +3264,7 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.RowMaterializations = exec.RowMaterializations
 	cell.DocumentMaterializations = exec.DocumentMaterializations
 	cell.AggregateMetadataUsed = columnStoreAggregateMetadataUsed(cell.StorageSource, exec.MetadataHits)
+	cell.ExpressionKind, cell.PrecomputedExpressionUsed = columnStoreExpressionEvidence(name, cell.AggregateMetadataUsed, cell.TypedCellsVisited)
 	if cell.AggregateMetadataUsed {
 		directCost := columnStoreMetadataCostFromQuery(direct)
 		if directCost.StorageCostBasis != "" || directCost.InsertCostBasis != "" || directCost.AggregateMetadataStorageBytes != 0 {
@@ -3312,6 +3338,7 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.TopKOrder = exec.TopKOrder
 	cell.TimeOrderTopKUsed = exec.TimeOrderTopKUsed
 	cell.DenseInt64SpanReducer = exec.DenseInt64SpanReducer
+	cell.DenseInt64SpanPredicateBlocksSkipped = exec.DenseInt64SpanPredicateBlocksSkipped
 	cell.DecodedBlocks = exec.DecodedBlocks
 	cell.DecodedGranules = exec.DecodedGranules
 	cell.SkippedGranules = exec.SkippedGranules
@@ -4756,8 +4783,9 @@ func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, qu
 		return
 	}
 	sb.WriteString("## " + title + "\n\n")
-	sb.WriteString("| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | typed prep plan ms | typed prep refs ms | typed prep pair ms | typed prep decode ms | typed prep post ms | typed prep summary ms | one-shot cache store ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | typed prep workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | rows materialized | docs materialized | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | segment file cache hit/miss | hash parity | note |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---|---|---|---|\n")
+	header := "| query | query mode | metadata mode | plan | storage source | fallback | manifest root | active gen/checksum | rows/s | MiB/s | ns/row | prepare/setup ms | typed prep plan ms | typed prep refs ms | typed prep pair ms | typed prep decode ms | typed prep post ms | typed prep summary ms | one-shot cache store ms | run ms | render/hash ms | total query ms | planner ms | scan ms | reduce ms | adapter ms | parity hash ms | workers | typed prep workers | scheduled granules | skipped granules | metadata hits | dictionary code hits | int64 value hits | B/read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | expression kind | precomputed expression used | rows materialized | docs materialized | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | dense predicate blocks skipped | json reconstruction | segment file cache hit/miss | hash parity | note |\n"
+	sb.WriteString(header)
+	sb.WriteString(markdownTableDelimiterForHeader(header))
 	for _, q := range queries {
 		parity := "pass"
 		if p, ok := parityByName[q.Name]; ok && !p.Pass {
@@ -4779,8 +4807,8 @@ func renderColumnStoreQueryMetricsMarkdown(sb *strings.Builder, title string, qu
 		if q.ManifestGeneration != 0 || q.ActiveManifestChecksum != 0 {
 			activeManifestCell = fmt.Sprintf("%d/%d", q.ManifestGeneration, q.ActiveManifestChecksum)
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %d/%d | %s | %s |\n",
-			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.TypedColumnPreparePlanDurationMS, q.TypedColumnPrepareRefsDurationMS, q.TypedColumnPreparePairDurationMS, q.TypedColumnPrepareDecodeDurationMS, q.TypedColumnPreparePostDurationMS, q.TypedColumnPrepareSummaryDurationMS, q.TypedColumnOneShotCacheStoreDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.TypedColumnPrepareWorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.DecodedBytes, q.DecodedPayloadBytes, q.DecodedMetadataBytes, q.MappedBytes, q.HeapCopyBytes, q.RowsScanned, q.ProjectedColumns, q.PredicateCount, q.TypedCellsVisited, markdownCodeTableText(q.TypedCellsVisitedBasis), q.RowMaterializations, q.DocumentMaterializations, q.AggregateMetadataUsed, q.MetadataCostStorageBytes, q.MetadataCostInsertMS, markdownCodeTableText(columnStoreMetadataCostBasisTableText(q.MetadataCostStorageBasis, q.MetadataCostInsertBasis)), q.SortTopKPruningUsed, q.TopKLimit, q.TopKCandidates, markdownCodeTableText(q.TopKOrder), q.JSONReconstruction, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.1f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %d | %t | %d/%d | %s | %s |\n",
+			markdownCodeTableText(q.Name), markdownCodeTableText(q.QueryMode), markdownCodeTableText(q.MetadataMode), markdownCodeTableText(q.PlanLabel), markdownCodeTableText(q.StorageSource), markdownCodeTableText(q.FallbackReason), markdownCodeTableText(manifestRootCell), markdownCodeTableText(activeManifestCell), q.RowsPerSecond, q.MiBPerSecond, q.NsPerRow, q.PrepareSetupDurationMS, q.TypedColumnPreparePlanDurationMS, q.TypedColumnPrepareRefsDurationMS, q.TypedColumnPreparePairDurationMS, q.TypedColumnPrepareDecodeDurationMS, q.TypedColumnPreparePostDurationMS, q.TypedColumnPrepareSummaryDurationMS, q.TypedColumnOneShotCacheStoreDurationMS, q.RunDurationMS, q.RenderHashDurationMS, q.TotalQueryDurationMS, q.PlannerDurationMS, q.ScanDurationMS, q.ReduceDurationMS, q.AdapterDurationMS, q.ParityHashDurationMS, q.WorkerCount, q.TypedColumnPrepareWorkerCount, q.ScheduledGranules, q.SkippedGranules, q.MetadataHits, q.DictionaryCodeHits, q.Int64ValueHits, q.BytesRead, q.DecodedBytes, q.DecodedPayloadBytes, q.DecodedMetadataBytes, q.MappedBytes, q.HeapCopyBytes, q.RowsScanned, q.ProjectedColumns, q.PredicateCount, q.TypedCellsVisited, markdownCodeTableText(q.TypedCellsVisitedBasis), markdownCodeTableText(q.ExpressionKind), markdownBoolPtrTableText(q.PrecomputedExpressionUsed), q.RowMaterializations, q.DocumentMaterializations, q.AggregateMetadataUsed, q.MetadataCostStorageBytes, q.MetadataCostInsertMS, markdownCodeTableText(columnStoreMetadataCostBasisTableText(q.MetadataCostStorageBasis, q.MetadataCostInsertBasis)), q.SortTopKPruningUsed, q.TopKLimit, q.TopKCandidates, markdownCodeTableText(q.TopKOrder), q.DenseInt64SpanPredicateBlocksSkipped, q.JSONReconstruction, q.SegmentFileCacheHits, q.SegmentFileCacheMisses, parity, noteCell))
 	}
 	sb.WriteString("\n")
 }
@@ -4791,8 +4819,9 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		sb.WriteString("No JSONBench synthetic cells were recorded.\n\n")
 		return
 	}
-	sb.WriteString("| cell | query | query mode | metadata mode | sort layout | storage source | mode | metadata/data path | prepare/setup ms | typed prep plan ms | typed prep refs ms | typed prep pair ms | typed prep decode ms | typed prep post ms | typed prep summary ms | one-shot cache store ms | run ms | render/hash ms | total query ms | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | row materializations | document materializations | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | json reconstruction | result hash | parity | full-data caveat | reconstruction | status |\n")
-	sb.WriteString("|---|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|---:|---|---|---:|---:|---|---|---:|---|---|---|---|\n")
+	header := "| cell | query | query mode | metadata mode | sort layout | storage source | mode | metadata/data path | prepare/setup ms | typed prep plan ms | typed prep refs ms | typed prep pair ms | typed prep decode ms | typed prep post ms | typed prep summary ms | one-shot cache store ms | run ms | render/hash ms | total query ms | compression | mutation | retained payload | retained encoding | retained compression | typed owner | rows | rows processed | bytes read | decoded B | decoded payload B | decoded metadata B | mapped B | heap-copy B | rows scanned | projected cols | predicate count | typed cells visited | typed cells basis | expression kind | precomputed expression used | row materializations | document materializations | aggregate metadata used | metadata cost B | metadata cost insert ms | metadata cost basis | sort/topk pruning | topk limit | topk candidates | topk order | dense predicate blocks skipped | json reconstruction | result hash | parity | full-data caveat | reconstruction | status |\n"
+	sb.WriteString(header)
+	sb.WriteString(markdownTableDelimiterForHeader(header))
 	for _, cell := range report.JSONBenchCells {
 		parity := "pass"
 		if !cell.ParityWithRowScan {
@@ -4802,7 +4831,7 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 		if cell.CompatibilityStatusReason != "" {
 			status += ": " + cell.CompatibilityStatusReason
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %s | %s | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %t | %016x | %s | %s | %s | %s |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s | %s | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %s | %s | %s | %s | %s | %s | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %d | %s | %s | %s | %d | %d | %t | %d | %.3f | %s | %t | %d | %d | %s | %d | %t | %016x | %s | %s | %s | %s |\n",
 			markdownCodeTableText(cell.CellLabel),
 			markdownCodeTableText(cell.Query),
 			markdownCodeTableText(cell.QueryMode),
@@ -4841,6 +4870,8 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 			cell.PredicateCount,
 			cell.TypedCellsVisited,
 			markdownCodeTableText(cell.TypedCellsVisitedBasis),
+			markdownCodeTableText(cell.ExpressionKind),
+			markdownBoolPtrTableText(cell.PrecomputedExpressionUsed),
 			cell.RowMaterializations,
 			cell.DocumentMaterializations,
 			cell.AggregateMetadataUsed,
@@ -4851,6 +4882,7 @@ func renderColumnStoreJSONBenchCellsMarkdown(sb *strings.Builder, report columnS
 			cell.TopKLimit,
 			cell.TopKCandidates,
 			markdownCodeTableText(cell.TopKOrder),
+			cell.DenseInt64SpanPredicateBlocksSkipped,
 			cell.JSONReconstruction,
 			cell.ResultHash,
 			parity,
@@ -5053,6 +5085,27 @@ func markdownCodeList(values []string) string {
 
 const markdownTableEmptyCell = "(empty)"
 
+func markdownTableDelimiterForHeader(header string) string {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return ""
+	}
+	cells := strings.Split(header, "|")
+	if len(cells) > 0 && strings.TrimSpace(cells[0]) == "" {
+		cells = cells[1:]
+	}
+	if len(cells) > 0 && strings.TrimSpace(cells[len(cells)-1]) == "" {
+		cells = cells[:len(cells)-1]
+	}
+	var sb strings.Builder
+	sb.WriteByte('|')
+	for range cells {
+		sb.WriteString("---|")
+	}
+	sb.WriteByte('\n')
+	return sb.String()
+}
+
 func markdownTableText(value string) string {
 	value = markdownNormalizeTableCellLineBreaks(value)
 	value = strings.TrimSpace(value)
@@ -5077,6 +5130,16 @@ func markdownCodeTableText(value string) string {
 		padding = " "
 	}
 	return delimiter + padding + value + padding + delimiter
+}
+
+func markdownBoolPtrTableText(value *bool) string {
+	if value == nil {
+		return markdownCodeTableText("")
+	}
+	if *value {
+		return "true"
+	}
+	return "false"
 }
 
 func markdownNormalizeTableCell(value string, escapeHTML bool) string {

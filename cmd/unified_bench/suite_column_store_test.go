@@ -736,6 +736,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read column_store_results.md: %v", err)
 	}
+	assertMarkdownTableDelimitersMatchHeaders(t, columnMarkdown)
 	if !strings.Contains(string(columnMarkdown), "command_wal_bytes_before_checkpoint") {
 		t.Fatalf("column store markdown missing before-checkpoint command WAL label:\n%s", columnMarkdown)
 	}
@@ -749,7 +750,7 @@ func TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A(t *testing.T) {
 			t.Fatalf("column store markdown missing insert phase field %q:\n%s", want, columnMarkdown)
 		}
 	}
-	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "aggregate_metadata_prepare_duration_ms", "aggregate_metadata_append_share_duration_ms", "insert_cost_upper_bound_duration_ms", "insert_cost_basis", "insert_cost_upper_bound_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "typed prep decode ms", "one-shot cache store ms", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
+	for _, want := range []string{"## Metadata Cost", "aggregate_metadata_storage_bytes", "aggregate_metadata_prepare_duration_ms", "aggregate_metadata_append_share_duration_ms", "insert_cost_upper_bound_duration_ms", "insert_cost_basis", "insert_cost_upper_bound_basis", "storage_cost_basis", "## Production JSONBench Synthetic Cells", "## Colgranule Reuse Map", "metadata/data path", "typed prep decode ms", "one-shot cache store ms", "metadata cost B", "metadata cost insert ms", "metadata cost basis", "retained payload", "retained encoding", "retained compression", "typed owner", "typed cells visited", "typed cells basis", "expression kind", "precomputed expression used", "dense predicate blocks skipped", "document materializations", "aggregate metadata used", "sort/topk pruning", "json reconstruction", "full-data caveat", "## Query Compression And Allocation Attribution", "## Codec/Layout Matrix", "codec/layout", "compression policy", "compressed bytes", "decompressed bytes", "raw bytes", "B/op", "allocs/op", columnStoreCompressionPolicyOff, columnStoreCompressionPolicyDefault} {
 		if !strings.Contains(string(columnMarkdown), want) {
 			t.Fatalf("column store markdown missing reporting field %q:\n%s", want, columnMarkdown)
 		}
@@ -2396,6 +2397,7 @@ func TestColumnStoreJSONBenchPreparedParityMismatchIsFatal1955(t *testing.T) {
 }
 
 func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *testing.T) {
+	precomputedExpressionUsed := false
 	q := columnStoreQueryMetric{
 		Name:                                   "q4a",
 		PlanLabel:                              columnStorePathSerialColumnScan,
@@ -2425,6 +2427,8 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		PredicateCount:                         1,
 		TypedCellsVisited:                      26,
 		TypedCellsVisitedBasis:                 "rows_scanned_x_projected_columns",
+		ExpressionKind:                         columnStoreExpressionSecondOfDaySq,
+		PrecomputedExpressionUsed:              &precomputedExpressionUsed,
 		RowMaterializations:                    1,
 		DocumentMaterializations:               2,
 		MetadataCostStorageBytes:               4096,
@@ -2441,6 +2445,7 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		TopKCandidates:                         9,
 		TopKOrder:                              string(collections.ColumnPhysicalQueryTopKInt64Asc),
 		TimeOrderTopKUsed:                      true,
+		DenseInt64SpanPredicateBlocksSkipped:   12,
 		DecodedBlocks:                          2,
 		DecodedGranules:                        4,
 		TypedColumnOneShotCacheMiss:            true,
@@ -2586,6 +2591,12 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	if got, want := cell.TypedCellsVisitedBasis, q.TypedCellsVisitedBasis; got != want {
 		t.Fatalf("typed_cells_visited_basis=%q want %q", got, want)
 	}
+	if got, want := cell.ExpressionKind, q.ExpressionKind; got != want {
+		t.Fatalf("expression_kind=%q want %q", got, want)
+	}
+	if cell.PrecomputedExpressionUsed == nil || *cell.PrecomputedExpressionUsed != *q.PrecomputedExpressionUsed {
+		t.Fatalf("precomputed_expression_used=%v want %v", cell.PrecomputedExpressionUsed, q.PrecomputedExpressionUsed)
+	}
 	if got, want := cell.DecodedBytes, q.DecodedBytes; got != want {
 		t.Fatalf("decoded_bytes=%d want %d", got, want)
 	}
@@ -2657,6 +2668,9 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 	if got, want := cell.TimeOrderTopKUsed, q.TimeOrderTopKUsed; got != want {
 		t.Fatalf("time_order_topk_used=%t want %t", got, want)
+	}
+	if got, want := cell.DenseInt64SpanPredicateBlocksSkipped, q.DenseInt64SpanPredicateBlocksSkipped; got != want {
+		t.Fatalf("dense_int64_span_predicate_blocks_skipped=%d want %d", got, want)
 	}
 }
 
@@ -3751,6 +3765,12 @@ func TestRunColumnStoreSuiteExpressionQueryReportsNoMetadataTypedScanM3116(t *te
 	if q.RowsScanned != report.Rows || q.ReduceRows != report.Rows || q.BytesRead <= 0 {
 		t.Fatalf("expression query scan diagnostics=%+v want full typed value scan over %d rows", q, report.Rows)
 	}
+	if q.TypedCellsVisited != int64(report.Rows) || q.TypedCellsVisitedBasis != "rows_scanned_x_projected_columns" {
+		t.Fatalf("expression query typed-cell evidence=%d/%q want one typed cell per row", q.TypedCellsVisited, q.TypedCellsVisitedBasis)
+	}
+	if q.ExpressionKind != columnStoreExpressionSecondOfDaySq || q.PrecomputedExpressionUsed == nil || *q.PrecomputedExpressionUsed {
+		t.Fatalf("expression query expression evidence kind=%q precomputed=%v want typed-cell non-precomputed expression", q.ExpressionKind, q.PrecomputedExpressionUsed)
+	}
 	if !strings.Contains(q.ImplementationNote, "arbitrary_expression_second_of_day_square_no_aggregate_metadata_physical_cell_scan") {
 		t.Fatalf("expression query implementation note=%q", q.ImplementationNote)
 	}
@@ -3769,6 +3789,12 @@ func TestRunColumnStoreSuiteExpressionQueryReportsNoMetadataTypedScanM3116(t *te
 		}
 		if cell.StorageSource != string(collections.ColumnPhysicalQueryStorageSourceTypedColumnPartSection) || cell.ResultCount != 1 || !cell.ParityWithRowScan {
 			t.Fatalf("expression JSONBench cell diagnostics=%+v", cell)
+		}
+		if cell.TypedCellsVisited != int64(report.Rows) || cell.TypedCellsVisitedBasis != "rows_scanned_x_projected_columns" {
+			t.Fatalf("expression JSONBench cell typed-cell evidence=%d/%q want one typed cell per row: %+v", cell.TypedCellsVisited, cell.TypedCellsVisitedBasis, cell)
+		}
+		if cell.ExpressionKind != columnStoreExpressionSecondOfDaySq || cell.PrecomputedExpressionUsed == nil || *cell.PrecomputedExpressionUsed {
+			t.Fatalf("expression JSONBench cell expression evidence kind=%q precomputed=%v want typed-cell non-precomputed expression: %+v", cell.ExpressionKind, cell.PrecomputedExpressionUsed, cell)
 		}
 	}
 }
@@ -4037,6 +4063,53 @@ func assertColumnStoreJSONBenchCellShapeM1955(t testing.TB, report columnStoreSu
 		}
 	}
 	return byQueryMode
+}
+
+func assertMarkdownTableDelimitersMatchHeaders(t testing.TB, markdown []byte) {
+	t.Helper()
+	lines := strings.Split(string(markdown), "\n")
+	for i := 1; i < len(lines); i++ {
+		if !isMarkdownTableDelimiterLine(lines[i]) {
+			continue
+		}
+		header := lines[i-1]
+		headerCols := markdownTableColumnCount(header)
+		delimiterCols := markdownTableColumnCount(lines[i])
+		if headerCols == 0 || headerCols != delimiterCols {
+			t.Fatalf("markdown table delimiter mismatch at line %d: header_cols=%d delimiter_cols=%d\nheader: %s\ndelimiter: %s", i+1, headerCols, delimiterCols, header, lines[i])
+		}
+	}
+}
+
+func isMarkdownTableDelimiterLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") || !strings.HasSuffix(trimmed, "|") {
+		return false
+	}
+	cells := strings.Split(strings.Trim(trimmed, "|"), "|")
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		if cell == "" || !strings.Contains(cell, "-") {
+			return false
+		}
+		for _, r := range cell {
+			if r != '-' && r != ':' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func markdownTableColumnCount(line string) int {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") || !strings.HasSuffix(trimmed, "|") {
+		return 0
+	}
+	return len(strings.Split(strings.Trim(trimmed, "|"), "|"))
 }
 
 func assertColumnStoreQueryMetricCoverageM11A(t testing.TB, queries []columnStoreQueryMetric) map[string]columnStoreQueryMetric {

@@ -1245,8 +1245,8 @@ func TestPublicCommandWALBatchOrdinarySetBypassesPayloadBuilder(t *testing.T) {
 	initialPayloadLen := wrapped.payload.Len()
 	initialPayloadCap := wrapped.payload.RetainedCap()
 
-	if err := wrapped.SetView([]byte("a"), []byte("b")); err != nil {
-		t.Fatalf("SetView first: %v", err)
+	if err := wrapped.Set([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("Set first: %v", err)
 	}
 	if !wrapped.payloadBypass || wrapped.payload.Count() != 0 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
 		t.Fatalf("payload after first set: bypass=%t count=%d len/cap=%d/%d, want true/0/%d/%d", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
@@ -1254,8 +1254,8 @@ func TestPublicCommandWALBatchOrdinarySetBypassesPayloadBuilder(t *testing.T) {
 
 	key := []byte("second")
 	value := bytes.Repeat([]byte("x"), 128)
-	if err := wrapped.SetView(key, value); err != nil {
-		t.Fatalf("SetView second: %v", err)
+	if err := wrapped.Set(key, value); err != nil {
+		t.Fatalf("Set second: %v", err)
 	}
 	key[0] = 'X'
 	value[0] = 'Y'
@@ -1283,6 +1283,62 @@ func TestPublicCommandWALBatchOrdinarySetBypassesPayloadBuilder(t *testing.T) {
 	if len(got) != 2 || string(got[0].Key) != "a" || string(got[0].Value) != "b" || string(got[1].Key) != "second" || string(got[1].Value) != strings.Repeat("x", 128) {
 		t.Fatalf("replayed payload mismatch: %+v", got)
 	}
+}
+
+func TestPublicCommandWALBatchSetViewBypassesPayloadBuilderWithoutInnerCopy(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 64
+	initialPayloadLen := wrapped.payload.Len()
+	initialPayloadCap := wrapped.payload.RetainedCap()
+
+	if err := wrapped.SetView([]byte("a"), []byte("b")); err != nil {
+		t.Fatalf("SetView first: %v", err)
+	}
+	if !wrapped.payloadBypass || wrapped.payload.Count() != 0 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload after first setView: bypass=%t count=%d len/cap=%d/%d, want true/0/%d/%d", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+
+	key := []byte("second")
+	value := bytes.Repeat([]byte("x"), 128)
+	if err := wrapped.SetView(key, value); err != nil {
+		t.Fatalf("SetView second: %v", err)
+	}
+	if wrapped.payload.Count() != 0 || wrapped.opCount != 2 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload count=%d opCount=%d len/cap=%d/%d, want 0/2/%d/%d", wrapped.payload.Count(), wrapped.opCount, wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+	if inner.setViewCalls != 2 || inner.setCalls != 0 {
+		t.Fatalf("inner calls: setView=%d set=%d, want 2/0", inner.setViewCalls, inner.setCalls)
+	}
+	if got := inner.entries[1]; !sameTestBytesBacking(got.Key, key) || !sameTestBytesBacking(got.Value, value) {
+		t.Fatalf("SetView did not pass inner views: key_alias=%t value_alias=%t", sameTestBytesBacking(got.Key, key), sameTestBytesBacking(got.Value, value))
+	}
+}
+
+func TestPublicCommandWALBatchDeleteViewBypassesPayloadBuilderWithoutInnerCopy(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	wrapped.payloadSoftCapBytes = 64
+	initialPayloadLen := wrapped.payload.Len()
+	initialPayloadCap := wrapped.payload.RetainedCap()
+
+	key := []byte("second")
+	if err := wrapped.DeleteView(key); err != nil {
+		t.Fatalf("DeleteView: %v", err)
+	}
+	if !wrapped.payloadBypass || wrapped.payload.Count() != 0 || wrapped.opCount != 1 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
+		t.Fatalf("payload after deleteView: bypass=%t count=%d opCount=%d len/cap=%d/%d, want true/0/1/%d/%d", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount, wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	}
+	if inner.deleteViewCalls != 1 || inner.deleteCalls != 0 {
+		t.Fatalf("inner calls: deleteView=%d delete=%d, want 1/0", inner.deleteViewCalls, inner.deleteCalls)
+	}
+	if got := inner.entries[0]; got.Type != batch.OpDelete || !sameTestBytesBacking(got.Key, key) {
+		t.Fatalf("DeleteView did not pass inner view: type=%v key_alias=%t", got.Type, sameTestBytesBacking(got.Key, key))
+	}
+}
+
+func sameTestBytesBacking(a, b []byte) bool {
+	return len(a) > 0 && len(b) > 0 && &a[0] == &b[0]
 }
 
 func TestPublicCommandWALBatchBypassStreamsReplayToCommandWAL(t *testing.T) {
@@ -1369,8 +1425,8 @@ func TestPublicCommandWALBatchOrdinaryRetainedCapDoesNotGrow(t *testing.T) {
 	if wrapped.payload.Count() != 0 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap || wrapped.opCount != 2 {
 		t.Fatalf("payload after second ordinary set: count=%d len/cap=%d/%d opCount=%d, want 0/%d/%d/2", wrapped.payload.Count(), wrapped.payload.Len(), wrapped.payload.RetainedCap(), wrapped.opCount, initialPayloadLen, initialPayloadCap)
 	}
-	if inner.setViewCalls != 0 || inner.setCalls != 2 {
-		t.Fatalf("inner calls: setView=%d set=%d, want 0/2", inner.setViewCalls, inner.setCalls)
+	if inner.setViewCalls != 2 || inner.setCalls != 0 {
+		t.Fatalf("inner calls: setView=%d set=%d, want 2/0", inner.setViewCalls, inner.setCalls)
 	}
 }
 
@@ -1397,8 +1453,8 @@ func TestPublicCommandWALBatchOrdinaryCompactZeroDoesNotRetainPayload(t *testing
 	if wrapped.payload.Count() != 0 || wrapped.opCount != 4 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
 		t.Fatalf("payload count=%d opCount=%d len/cap=%d/%d, want 0/4/%d/%d", wrapped.payload.Count(), wrapped.opCount, wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
 	}
-	if inner.setViewCalls != 0 || inner.setCalls != 4 {
-		t.Fatalf("inner calls after compact zeros: setView=%d set=%d, want 0/4", inner.setViewCalls, inner.setCalls)
+	if inner.setViewCalls != 4 || inner.setCalls != 0 {
+		t.Fatalf("inner calls after compact zeros: setView=%d set=%d, want 4/0", inner.setViewCalls, inner.setCalls)
 	}
 }
 
@@ -1418,8 +1474,8 @@ func TestPublicCommandWALBatchPayloadSoftCapAccountsForCompactZeroRetainedBuffer
 	if wrapped.payload.Count() != 0 || wrapped.opCount != 1 {
 		t.Fatalf("payload count=%d opCount=%d, want 0/1", wrapped.payload.Count(), wrapped.opCount)
 	}
-	if inner.setViewCalls != 0 || inner.setCalls != 1 {
-		t.Fatalf("inner calls after compact buffer bypass: setView=%d set=%d, want 0/1", inner.setViewCalls, inner.setCalls)
+	if inner.setViewCalls != 1 || inner.setCalls != 0 {
+		t.Fatalf("inner calls after compact buffer bypass: setView=%d set=%d, want 1/0", inner.setViewCalls, inner.setCalls)
 	}
 	if got := wrapped.payload.RetainedCap(); got > wrapped.payloadSoftCapBytes {
 		t.Fatalf("retained canonical payload cap=%d, soft_cap=%d", got, wrapped.payloadSoftCapBytes)
@@ -1447,15 +1503,15 @@ func TestPublicCommandWALBatchPayloadSoftCapBoundsLargeValueBuilder(t *testing.T
 	if wrapped.payload.Count() != 0 || wrapped.opCount != 8 {
 		t.Fatalf("payload count=%d opCount=%d, want 0/8", wrapped.payload.Count(), wrapped.opCount)
 	}
-	if inner.setViewCalls != 0 || inner.setCalls != 8 {
-		t.Fatalf("inner calls after large values: setView=%d set=%d, want 0/8", inner.setViewCalls, inner.setCalls)
+	if inner.setViewCalls != 8 || inner.setCalls != 0 {
+		t.Fatalf("inner calls after large values: setView=%d set=%d, want 8/0", inner.setViewCalls, inner.setCalls)
 	}
-	totalCopied := 0
+	totalViewed := 0
 	for _, entry := range inner.entries {
-		totalCopied += len(entry.Value)
+		totalViewed += len(entry.Value)
 	}
-	if totalCopied != 8*len(value) {
-		t.Fatalf("inner copied value bytes=%d, want %d", totalCopied, 8*len(value))
+	if totalViewed != 8*len(value) {
+		t.Fatalf("inner viewed value bytes=%d, want %d", totalViewed, 8*len(value))
 	}
 }
 
@@ -1502,8 +1558,10 @@ type commandWALHookBatch struct {
 
 type commandWALPayloadSoftCapBatch struct {
 	commandWALResetBatch
-	setCalls     int
-	setViewCalls int
+	setCalls        int
+	setViewCalls    int
+	deleteCalls     int
+	deleteViewCalls int
 }
 
 func (b *commandWALHookBatch) WriteAfterCommandWALAppend(_ bool, appendCommand func() error) error {
@@ -1523,6 +1581,17 @@ func (b *commandWALPayloadSoftCapBatch) Set(key, value []byte) error {
 func (b *commandWALPayloadSoftCapBatch) SetViewValidated(key, value []byte) error {
 	b.setViewCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+	return nil
+}
+
+func (b *commandWALPayloadSoftCapBatch) Delete(key []byte) error {
+	b.deleteCalls++
+	return b.commandWALResetBatch.Delete(key)
+}
+
+func (b *commandWALPayloadSoftCapBatch) DeleteViewValidated(key []byte) error {
+	b.deleteViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
 	return nil
 }
 

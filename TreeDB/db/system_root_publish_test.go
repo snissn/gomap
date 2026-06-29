@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"reflect"
@@ -155,6 +156,109 @@ func TestPublishSystemRootIterator_PersistsAndPreservesUserRoot(t *testing.T) {
 	}
 	if got := string(entry.Value); got != "sv" {
 		t.Fatalf("reopen system value=%q want %q", got, "sv")
+	}
+}
+
+func TestPublishSystemRootIterator_CommittedValueLogPointerReadableViaSnapshotRoot(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	appender, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatalf("new replay inline appender: %v", err)
+	}
+	defer func() { _ = appender.close() }()
+	db.SetValueLogAppender(appender)
+	defer db.SetValueLogAppender(nil)
+
+	before := db.State()
+	if before == nil {
+		t.Fatal("expected initial state")
+	}
+
+	key := []byte("sys/collections/users/catalog-meta")
+	want := bytes.Repeat([]byte(`{"collection":"users","meta_version":5}|`), 8)
+	ptrs, err := db.AppendValueLogValues([][]byte{want})
+	if err != nil {
+		t.Fatalf("append system catalog value-log value: %v", err)
+	}
+	if len(ptrs) != 1 {
+		t.Fatalf("AppendValueLogValues returned %d ptrs, want 1", len(ptrs))
+	}
+	if ptrs[0].FileID == 0 || !page.IsValueLogFileID(ptrs[0].FileID) {
+		t.Fatalf("AppendValueLogValues returned non-value-log pointer: %+v", ptrs[0])
+	}
+
+	systemTable := mustFrozenSystemPointerMemtable(t, string(key), ptrs[0])
+	systemRoot, err := db.PublishSystemRootIterator(systemTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish system root: %v", err)
+	}
+	if systemRoot == 0 {
+		t.Fatal("publish system root returned root 0")
+	}
+
+	after := db.State()
+	if after == nil {
+		t.Fatal("expected state after publish")
+	}
+	if after.CommitSeq <= before.CommitSeq {
+		t.Fatalf("commit seq did not advance: before=%d after=%d", before.CommitSeq, after.CommitSeq)
+	}
+	if after.SystemRootPageID != systemRoot {
+		t.Fatalf("system root page=%d want %d", after.SystemRootPageID, systemRoot)
+	}
+	if after.ValueLogSet == nil {
+		t.Fatal("state missing value-log set after pointer system-root publish")
+	}
+	if _, ok := after.ValueLogSet.Files[ptrs[0].FileID]; !ok {
+		t.Fatalf("committed state missing value-log file %d", ptrs[0].FileID)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	entry, err := snap.GetEntryAtRoot(systemRoot, key)
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(system catalog pointer): %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("system catalog entry flags=%#x want value-log pointer", entry.Flags)
+	}
+	if entry.ValuePtr != ptrs[0] {
+		t.Fatalf("system catalog pointer=%+v want %+v", entry.ValuePtr, ptrs[0])
+	}
+
+	got, err := snap.GetAtRoot(systemRoot, key)
+	if err != nil {
+		t.Fatalf("GetAtRoot(system catalog value): %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("system catalog value mismatch: got %d bytes want %d", len(got), len(want))
+	}
+
+	rootReader, err := snap.ReaderAtRoot(systemRoot)
+	if err != nil {
+		t.Fatalf("ReaderAtRoot(system root): %v", err)
+	}
+	got, err = rootReader.GetAppend(key, nil)
+	if err != nil {
+		t.Fatalf("SnapshotRootReader.GetAppend(system catalog value): %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("system catalog root reader value mismatch: got %d bytes want %d", len(got), len(want))
 	}
 }
 
