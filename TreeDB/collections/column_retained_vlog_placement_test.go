@@ -690,6 +690,7 @@ func TestColumnRetainedPayloadSemanticStreamV1NestedDeclaredPathsMatchRetainedJS
 		[]byte(`{"a":{"b":"drop"},"commit":{"operation":"drop"}}`),
 		[]byte(`{"a.b":"literal","commit.operation":"literal","a":{"b":"drop","x":"keep"}}`),
 		[]byte(`{"a":{"b":null,"x":"keep"},"commit":{"operation":null,"collection":"keep"},"payload":"nulls"}`),
+		[]byte(`{"a":{"b":"old","b":"drop","x":"keep"},"commit":{"operation":"old","operation":"drop","record":{"text":"keep"}}}`),
 	}
 	ids := [][]byte{
 		[]byte("doc-nested-0"),
@@ -698,6 +699,7 @@ func TestColumnRetainedPayloadSemanticStreamV1NestedDeclaredPathsMatchRetainedJS
 		[]byte("doc-nested-3"),
 		[]byte("doc-nested-4"),
 		[]byte("doc-nested-5"),
+		[]byte("doc-nested-6"),
 	}
 	prepared, err := prepareColumnRetainedPayloadInsertBatchStorageDocumentsWithIDs(cfg, ids, docs, nil)
 	if err != nil {
@@ -751,6 +753,7 @@ func TestColumnRetainedPayloadSemanticStreamV1NestedDeclaredPathsMatchRetainedJS
 	assertNestedRetainedSemanticStreamDeclaredRow(3, "doc-nested-3", "drop", "drop", true, false, true, false)
 	assertNestedRetainedSemanticStreamDeclaredRow(4, "doc-nested-4", "drop", "", true, false, false, true)
 	assertNestedRetainedSemanticStreamDeclaredRow(5, "doc-nested-5", "", "", true, true, true, true)
+	assertNestedRetainedSemanticStreamDeclaredRow(6, "doc-nested-6", "drop", "drop", true, false, true, false)
 	if columnRetainedSemanticStreamV1TestBytesAliasBytes(prepared.declaredRows[0].ID, ids[0]) {
 		t.Fatal("nested prepared declared row ID aliases mutable input ID")
 	}
@@ -835,6 +838,21 @@ func TestColumnRetainedPayloadSemanticStreamV1NestedDeclaredPathsMatchRetainedJS
 	}
 	if got := row4["commit.operation"]; got != "literal" {
 		t.Fatalf("literal dotted root key commit.operation=%v want literal: %s", got, rowsJSON[4])
+	}
+	row6 := decodeRetainedSemanticStreamTestObject(t, rowsJSON[6])
+	a6 := row6["a"].(map[string]any)
+	if _, ok := a6["b"]; ok {
+		t.Fatalf("duplicate terminal declared a.b leaked in row 6: %s", rowsJSON[6])
+	}
+	if got := a6["x"]; got != "keep" {
+		t.Fatalf("duplicate terminal retained a.x=%v want keep: %s", got, rowsJSON[6])
+	}
+	commit6 := row6["commit"].(map[string]any)
+	if _, ok := commit6["operation"]; ok {
+		t.Fatalf("duplicate terminal declared commit.operation leaked in row 6: %s", rowsJSON[6])
+	}
+	if got := commit6["record"].(map[string]any)["text"]; got != "keep" {
+		t.Fatalf("duplicate terminal retained commit.record.text=%v want keep: %s", got, rowsJSON[6])
 	}
 
 	ids[0][0] = 'X'
