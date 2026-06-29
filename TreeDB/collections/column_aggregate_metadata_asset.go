@@ -466,19 +466,28 @@ func columnAggregateMetadataPredicateAccumulatorKey(predicates []ColumnPhysicalQ
 		return ""
 	}
 	var b strings.Builder
+	writeColumnAggregateMetadataPredicateAccumulatorKeyInt(&b, len(predicates))
 	for _, predicate := range predicates {
 		kind := columnPhysicalQueryPredicateKindOrDefault(predicate.Kind)
 		writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, predicate.Column)
 		writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, string(kind))
 		if kind == ColumnPhysicalQueryPredicateInList {
+			writeColumnAggregateMetadataPredicateAccumulatorKeyInt(&b, len(predicate.Values))
 			for _, value := range predicate.Values {
 				writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, value)
 			}
 		} else {
+			writeColumnAggregateMetadataPredicateAccumulatorKeyInt(&b, 1)
 			writeColumnAggregateMetadataPredicateAccumulatorKeyString(&b, predicate.Value)
 		}
 	}
 	return b.String()
+}
+
+func writeColumnAggregateMetadataPredicateAccumulatorKeyInt(b *strings.Builder, value int) {
+	b.WriteByte('#')
+	b.WriteString(strconv.Itoa(value))
+	b.WriteByte(';')
 }
 
 func writeColumnAggregateMetadataPredicateAccumulatorKeyString(b *strings.Builder, value string) {

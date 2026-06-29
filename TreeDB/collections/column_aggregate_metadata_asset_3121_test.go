@@ -146,6 +146,32 @@ func TestAggregateMetadataAssetsPredicateAccumulatorsRemainSeparate3235(t *testi
 	}
 }
 
+func TestColumnAggregateMetadataPredicateAccumulatorKeySeparatesInListBoundaries3236(t *testing.T) {
+	broadInList := []ColumnPhysicalQueryPredicate{{
+		Column: "a_col",
+		Kind:   ColumnPhysicalQueryPredicateInList,
+		Values: []string{"a", "b", string(ColumnPhysicalQueryPredicateEqual), "z"},
+	}}
+	inListAndEqual := []ColumnPhysicalQueryPredicate{
+		{
+			Column: "a_col",
+			Kind:   ColumnPhysicalQueryPredicateInList,
+			Values: []string{"a"},
+		},
+		{
+			Column: "b",
+			Kind:   ColumnPhysicalQueryPredicateEqual,
+			Value:  "z",
+		},
+	}
+
+	broadKey := columnAggregateMetadataPredicateAccumulatorKey(broadInList)
+	narrowKey := columnAggregateMetadataPredicateAccumulatorKey(inListAndEqual)
+	if broadKey == narrowKey {
+		t.Fatalf("ambiguous predicate accumulator keys: %q", broadKey)
+	}
+}
+
 func TestAggregateMetadataAssetsTypedGranuleParallelRowOrderWithPredicatesMatchesSequential3235(t *testing.T) {
 	oldProcs := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(oldProcs)
