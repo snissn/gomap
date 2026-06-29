@@ -185,42 +185,53 @@ func TestAppliedIndexReadCoordinatorFailsClosedForTargetMismatch(t *testing.T) {
 	}
 }
 
-func TestAppliedIndexReadCoordinatorKeepsLinearizableFailClosed(t *testing.T) {
-	provider := &fakeAppliedIndexBarrierProvider{
-		barrier: raftcluster.AppliedIndexReadBarrier{
-			NodeID:          "node-a",
-			GroupID:         "group-a",
-			MinAppliedIndex: 42,
-		},
+func TestAppliedIndexReadCoordinatorKeepsStrongReadPoliciesFailClosed(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy ConsistencyPolicy
+	}{
+		{name: "linearizable", policy: ConsistencyLinearizable},
+		{name: "lease-read", policy: ConsistencyLeaseRead},
 	}
-	waiter := &fakeAppliedIndexWaiter{
-		progress: raftcluster.AppliedProgress{
-			NodeID:     "node-a",
-			GroupID:    "group-a",
-			Term:       7,
-			Index:      44,
-			HasApplied: true,
-		},
-	}
-	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
-		ClusterReadCoordinator: AppliedIndexReadCoordinator{
-			BarrierProvider: provider,
-			Waiter:          waiter,
-		},
-	})
-	seedReadCollection(t, mgr)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := client.Hello(ctx); err != nil {
-		t.Fatalf("Hello: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &fakeAppliedIndexBarrierProvider{
+				barrier: raftcluster.AppliedIndexReadBarrier{
+					NodeID:          "node-a",
+					GroupID:         "group-a",
+					MinAppliedIndex: 42,
+				},
+			}
+			waiter := &fakeAppliedIndexWaiter{
+				progress: raftcluster.AppliedProgress{
+					NodeID:     "node-a",
+					GroupID:    "group-a",
+					Term:       7,
+					Index:      44,
+					HasApplied: true,
+				},
+			}
+			client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+				ClusterReadCoordinator: AppliedIndexReadCoordinator{
+					BarrierProvider: provider,
+					Waiter:          waiter,
+				},
+			})
+			seedReadCollection(t, mgr)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
 
-	_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
-	if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
-		t.Fatalf("IndexLookupWithOptions err=%v want consistency_unavailable", err)
-	}
-	if len(provider.calls) != 0 || len(waiter.calls) != 0 {
-		t.Fatalf("provider calls=%d waiter calls=%d want none", len(provider.calls), len(waiter.calls))
+			_, err := client.IndexLookupWithOptions(ctx, "users", "email", "ada@example.com", CursorLimits{}, ReadOptions{ConsistencyPolicy: tt.policy})
+			if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+				t.Fatalf("IndexLookupWithOptions err=%v want consistency_unavailable", err)
+			}
+			if len(provider.calls) != 0 || len(waiter.calls) != 0 {
+				t.Fatalf("provider calls=%d waiter calls=%d want none", len(provider.calls), len(waiter.calls))
+			}
+		})
 	}
 }
 
