@@ -289,14 +289,19 @@ func writeColumnPhysicalAssetToManager(rootDir string, cfg ColumnStoreConfig, pa
 }
 
 func writeTypedColumnPartAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, error) {
+	ref, _, err := writeTypedColumnPartAssetToManagerWithStats(rootDir, cfg, payload, generation, partID)
+	return ref, err
+}
+
+func writeTypedColumnPartAssetToManagerWithStats(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
 	if columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg) {
 		fileID, err := directViewTypedColumnSegmentFileID(generation)
 		if err != nil {
-			return ColumnAssetRef{}, err
+			return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 		}
-		return writeColumnAssetToManagerSegment(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, fileID)
+		return writeColumnAssetToManagerSegmentWithStats(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID, fileID)
 	}
-	return writeColumnAssetToManager(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID)
+	return writeColumnAssetToManagerWithStats(rootDir, cfg, payload, ColumnAssetKindTCS1TypedColumnPart, generation, partID)
 }
 
 func columnStoreConfigNeedsDirectViewTypedColumnAlignment(cfg ColumnStoreConfig) bool {
@@ -349,7 +354,12 @@ func writeColumnInt64ValuesAssetToManager(rootDir string, cfg ColumnStoreConfig,
 }
 
 func writeColumnAssetToManager(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, error) {
-	return writeColumnAssetToManagerSegment(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID)
+	ref, _, err := writeColumnAssetToManagerWithStats(rootDir, cfg, payload, kind, generation, partID)
+	return ref, err
+}
+
+func writeColumnAssetToManagerWithStats(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
+	return writeColumnAssetToManagerSegmentWithStats(rootDir, cfg, payload, kind, generation, partID, columnAssetM12ASegmentFileID)
 }
 
 func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
@@ -357,31 +367,36 @@ func writeColumnPhysicalAssetToManagerSegment(rootDir string, cfg ColumnStoreCon
 }
 
 func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32) (ColumnAssetRef, error) {
+	ref, _, err := writeColumnAssetToManagerSegmentWithStats(rootDir, cfg, payload, kind, generation, partID, fileID)
+	return ref, err
+}
+
+func writeColumnAssetToManagerSegmentWithStats(rootDir string, cfg ColumnStoreConfig, payload []byte, kind ColumnAssetKind, generation, partID uint64, fileID uint32) (ColumnAssetRef, columnPhysicalAssetSegmentCloseStats, error) {
 	if cfg.AssetManager == nil {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires asset manager")
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, errors.New("collections: column physical asset write requires asset manager")
 	}
 	if cfg.AssetManager.Kind != ColumnAssetManagerValueLogShaped {
-		return ColumnAssetRef{}, fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, fmt.Errorf("collections: unsupported column asset manager %q", cfg.AssetManager.Kind)
 	}
 	if !cfg.AssetManager.IsolatedNamespace {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires isolated namespace")
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, errors.New("collections: column physical asset write requires isolated namespace")
 	}
 	if len(payload) == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset payload is empty")
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, errors.New("collections: column physical asset payload is empty")
 	}
 	if generation == 0 || partID == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires generation and part_id")
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, errors.New("collections: column physical asset write requires generation and part_id")
 	}
 	if fileID == 0 {
-		return ColumnAssetRef{}, errors.New("collections: column physical asset write requires file_id")
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, errors.New("collections: column physical asset write requires file_id")
 	}
 	checksum := page.Checksum(payload)
 	namespace, err := columnAssetManagerNamespaceForRoot(rootDir, cfg.AssetManager.Namespace)
 	if err != nil {
-		return ColumnAssetRef{}, err
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
 	if err := ensureColumnAssetManagerNamespace(namespace); err != nil {
-		return ColumnAssetRef{}, err
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
 	ref := ColumnAssetRef{
 		Kind:       kind,
@@ -394,15 +409,16 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	}
 	assetPath, err := columnAssetSegmentPath(rootDir, ref)
 	if err != nil {
-		return ColumnAssetRef{}, err
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
 	segmentLock := columnAssetSegmentWriteLock(assetPath)
 	segmentLock.Lock()
 	defer segmentLock.Unlock()
 	file, needsDirSync, err := openColumnAssetSegmentAppendFile(assetPath)
 	if err != nil {
-		return ColumnAssetRef{}, err
+		return ColumnAssetRef{}, columnPhysicalAssetSegmentCloseStats{}, err
 	}
+	var closeStats columnPhysicalAssetSegmentCloseStats
 	closeFile := true
 	defer func() {
 		if closeFile {
@@ -411,42 +427,53 @@ func writeColumnAssetToManagerSegment(rootDir string, cfg ColumnStoreConfig, pay
 	}()
 	offset, err := file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return ColumnAssetRef{}, err
+		return ColumnAssetRef{}, closeStats, err
 	}
 	alignment := columnAssetSegmentPayloadAlignment(kind, cfg)
 	padding := columnAssetSegmentPrefixPadding(offset, alignment)
 	if padding > 0 {
 		written, err := writeColumnAssetSegmentZeroPadding(file, padding)
 		if err != nil {
-			return ColumnAssetRef{}, err
+			return ColumnAssetRef{}, closeStats, err
 		}
 		if written != padding {
-			return ColumnAssetRef{}, io.ErrShortWrite
+			return ColumnAssetRef{}, closeStats, io.ErrShortWrite
 		}
 		offset += int64(padding)
 	}
 	written, err := writeColumnAssetSegmentPayload(file, payload)
 	if err != nil {
-		return ColumnAssetRef{}, err
+		return ColumnAssetRef{}, closeStats, err
 	}
 	if written != len(payload) {
-		return ColumnAssetRef{}, io.ErrShortWrite
+		return ColumnAssetRef{}, closeStats, io.ErrShortWrite
 	}
+	start := time.Now()
+	closeStats.FileSyncCount++
 	if err := syncColumnAssetSegmentFileForPublish(file); err != nil {
-		return ColumnAssetRef{}, err
+		closeStats.FileSync += time.Since(start)
+		return ColumnAssetRef{}, closeStats, err
 	}
+	closeStats.FileSync += time.Since(start)
+	start = time.Now()
 	if err := file.Close(); err != nil {
-		return ColumnAssetRef{}, err
+		closeStats.FileClose += time.Since(start)
+		return ColumnAssetRef{}, closeStats, err
 	}
+	closeStats.FileClose += time.Since(start)
 	closeFile = false
 	if needsDirSync {
+		start = time.Now()
 		if err := syncColumnAssetDir(namespace.SegmentDir); err != nil {
-			return ColumnAssetRef{}, err
+			closeStats.DirSync += time.Since(start)
+			return ColumnAssetRef{}, closeStats, err
 		}
+		closeStats.DirSync += time.Since(start)
 		markColumnAssetSegmentDirSynced(assetPath)
 	}
+	closeStats.SyncEpochCount = 1
 	ref.Offset = offset
-	return ref, nil
+	return ref, closeStats, nil
 }
 
 func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32, error) {

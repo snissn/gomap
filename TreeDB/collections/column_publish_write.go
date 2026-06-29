@@ -968,10 +968,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsForCommand(prepared ColumnPub
 				return nil
 			}
 			if columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
-				typedColumnRef, err := writeTypedColumnPartAssetToManager(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
+				typedColumnRef, directStats, err := writeTypedColumnPartAssetToManagerWithStats(c.db.ColumnAssetRootDir(), hookInput.ColumnStore, typedColumnImage, generation, typedColumnPartAssetPartID)
 				if err != nil {
 					return ColumnPublishPreparedAssets{}, err
 				}
+				prepared.AssetMetrics.SharedAppendFileSyncDuration += directStats.FileSync
+				prepared.AssetMetrics.SharedAppendFileCloseDuration += directStats.FileClose
+				prepared.AssetMetrics.SharedAppendDirSyncDuration += directStats.DirSync
+				prepared.AssetMetrics.SharedAppendFileSyncCount += directStats.FileSyncCount
+				prepared.AssetMetrics.SharedAppendSyncEpochCount += directStats.SyncEpochCount
 				trackCleanupAsset(typedColumnRef)
 				if err := validateTypedColumnRef(typedColumnRef); err != nil {
 					return ColumnPublishPreparedAssets{}, err
