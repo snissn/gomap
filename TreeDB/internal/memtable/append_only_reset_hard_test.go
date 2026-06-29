@@ -82,3 +82,31 @@ func TestAppendOnlyReleaseDropEntries_DropsEntryBacking(t *testing.T) {
 		t.Fatalf("entry backing bytes after cold release=%d want 0", got)
 	}
 }
+
+func TestAppendOnlyResetDropEntries_AllowsReuseOnNextWrite(t *testing.T) {
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(4<<20, 96)
+	if got := mt.EntryBackingBytes(); got == 0 {
+		t.Fatal("test setup produced zero entry backing")
+	}
+
+	mt.ResetDropEntries()
+
+	if got := mt.EntryCapacity(); got != 0 {
+		t.Fatalf("entry capacity after reset/drop=%d want 0", got)
+	}
+	if got := mt.EntryBackingBytes(); got != 0 {
+		t.Fatalf("entry backing after reset/drop=%d want 0", got)
+	}
+
+	mt.Set([]byte("k"), []byte("v"))
+	if got := mt.Len(); got != 1 {
+		t.Fatalf("len after reuse write=%d want 1", got)
+	}
+	value, deleted, found := mt.Get([]byte("k"))
+	if !found || deleted || string(value) != "v" {
+		t.Fatalf("Get after reuse=(%q,%t,%t), want value", value, deleted, found)
+	}
+	if got := mt.EntryBackingBytes(); got == 0 {
+		t.Fatal("entry backing after reuse write=0 want >0")
+	}
+}

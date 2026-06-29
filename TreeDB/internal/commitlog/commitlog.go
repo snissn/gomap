@@ -64,10 +64,14 @@ type Options struct {
 	// commitlog default.
 	BufferSize int
 
-	// DeferredCommandBufferSize preallocates an internal command-frame buffer
-	// used by trusted public command appends. Values <= 0 disable deferred
-	// command-frame finalization.
+	// DeferredCommandBufferSize caps the internal command-frame buffer used by
+	// trusted public command appends. Values <= 0 disable deferred command-frame
+	// finalization.
 	DeferredCommandBufferSize int
+
+	// DeferredCommandBufferRetainSize bounds command-frame buffer capacity kept
+	// after flush. Values <= 0 retain the full allocated capacity.
+	DeferredCommandBufferRetainSize int
 
 	// Compress enables best-effort zstd compression for commitlog segments.
 	// Segments are only stored compressed when the compressed payload (plus a
