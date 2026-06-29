@@ -121,11 +121,11 @@ func consistencyPolicyName(policy ConsistencyPolicy) string {
 	case iwire.ConsistencyLocalStale:
 		return "local_stale"
 	case iwire.ConsistencyLeaderRead:
-		return "leader"
+		return "leader_read"
 	case iwire.ConsistencyLinearizable:
 		return "linearizable"
 	case iwire.ConsistencyLeaseRead:
-		return "lease"
+		return "lease_read"
 	default:
 		return ""
 	}
@@ -135,11 +135,11 @@ func consistencyPolicyFromName(name string) (ConsistencyPolicy, error) {
 	switch name {
 	case "local_stale":
 		return iwire.ConsistencyLocalStale, nil
-	case "leader":
+	case "leader_read":
 		return iwire.ConsistencyLeaderRead, nil
 	case "linearizable":
 		return iwire.ConsistencyLinearizable, nil
-	case "lease":
+	case "lease_read":
 		return iwire.ConsistencyLeaseRead, nil
 	default:
 		return 0, protocolError(iwire.ErrMalformedFrame, "response_meta actual_consistency_policy %q is unknown", name)

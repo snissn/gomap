@@ -139,6 +139,41 @@ func TestReadDefaultReportsLocalStaleMetadata(t *testing.T) {
 	}
 }
 
+func TestReadMetadataUsesDocumentedConsistencyPolicyNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy ConsistencyPolicy
+		wire   string
+	}{
+		{name: "local_stale", policy: ConsistencyLocalStale, wire: "local_stale"},
+		{name: "leader_read", policy: ConsistencyLeaderRead, wire: "leader_read"},
+		{name: "linearizable", policy: ConsistencyLinearizable, wire: "linearizable"},
+		{name: "lease_read", policy: ConsistencyLeaseRead, wire: "lease_read"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := appendReadMetaPayload(nil, ReadMetadata{ActualConsistency: tt.policy})
+			fields, err := decodeStringMap(payload)
+			if err != nil {
+				t.Fatalf("decode fields: %v", err)
+			}
+			if got := fields["actual_consistency_policy"]; got != tt.wire {
+				t.Fatalf("actual_consistency_policy=%q want %q", got, tt.wire)
+			}
+			if got := fields["actual_consistency"]; got != tt.wire {
+				t.Fatalf("actual_consistency=%q want %q", got, tt.wire)
+			}
+			meta, err := decodeReadMetadataPayload(payload)
+			if err != nil {
+				t.Fatalf("decode read metadata: %v", err)
+			}
+			if !meta.Valid || meta.ActualConsistency != tt.policy {
+				t.Fatalf("decoded meta=%+v want policy %d", meta, tt.policy)
+			}
+		})
+	}
+}
+
 func TestReadStrongConsistencyRequiresCoordinator(t *testing.T) {
 	for _, policy := range []ConsistencyPolicy{ConsistencyLeaderRead, ConsistencyLinearizable, ConsistencyLeaseRead} {
 		t.Run(consistencyPolicyName(policy), func(t *testing.T) {
