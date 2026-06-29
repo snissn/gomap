@@ -167,6 +167,7 @@ func (s *DurableApplyResultStore) RecordApplyResult(record ApplyResultRecordV1) 
 		return nil
 	}
 	if err := appendDurableApplyFrame(s.file, durableApplyFrameKindResult, payload, s.syncWrites); err != nil {
+		s.poisonAfterAppendFailureLocked()
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: append result metadata %s: %v", s.path, err)
 	}
 	s.records[record.EntryID] = cloneApplyResultRecord(record)
@@ -246,6 +247,14 @@ func (s *DurableApplyResultStore) checkOpenLocked(op string) error {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: durable result store is closed during %s", op)
 	}
 	return nil
+}
+
+func (s *DurableApplyResultStore) poisonAfterAppendFailureLocked() {
+	s.closed = true
+	if s.file != nil {
+		_ = s.file.Close()
+		s.file = nil
+	}
 }
 
 // DurableApplyProgressStore is an append-only implementation of
@@ -351,6 +360,7 @@ func (s *DurableApplyProgressStore) RecordApplied(record ApplyProgressRecordV1) 
 		return nil
 	}
 	if err := appendDurableApplyFrame(s.file, durableApplyFrameKindProgress, payload, s.syncWrites); err != nil {
+		s.poisonAfterAppendFailureLocked()
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: append progress metadata %s: %v", s.path, err)
 	}
 	s.records[record.EntryID] = record
@@ -456,6 +466,14 @@ func (s *DurableApplyProgressStore) checkOpenLocked(op string) error {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: durable progress store is closed during %s", op)
 	}
 	return nil
+}
+
+func (s *DurableApplyProgressStore) poisonAfterAppendFailureLocked() {
+	s.closed = true
+	if s.file != nil {
+		_ = s.file.Close()
+		s.file = nil
+	}
 }
 
 func normalizeDurableApplyMaxRecords(maxRecords int) int {

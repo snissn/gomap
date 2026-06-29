@@ -180,6 +180,42 @@ func TestDurableApplyStoresFailClosedOnTruncatedAndCorruptMetadata(t *testing.T)
 	}
 }
 
+func TestDurableApplyStoresPoisonAfterAppendFailure(t *testing.T) {
+	results, err := OpenDurableApplyResultStore(t.TempDir(), DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("OpenDurableApplyResultStore: %v", err)
+	}
+	if err := results.file.Close(); err != nil {
+		t.Fatalf("close underlying result file: %v", err)
+	}
+	if err := results.RecordApplyResult(testDurableApplyResultRecord(1, 1, "durable:append-fail")); codeOf(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("RecordApplyResult append failure error=%v code=%s, want unsafe durability", err, codeOf(err))
+	}
+	if err := results.RecordApplyResult(testDurableApplyResultRecord(2, 2, "durable:after-poison")); codeOf(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("RecordApplyResult after poison error=%v code=%s, want unsafe durability", err, codeOf(err))
+	}
+	if _, _, err := results.LookupApplyResult(raftentry.ApplyEntryID{Term: 1, Index: 1}); codeOf(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("LookupApplyResult after poison error=%v code=%s, want unsafe durability", err, codeOf(err))
+	}
+
+	progress, err := OpenDurableApplyProgressStore(t.TempDir(), DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("OpenDurableApplyProgressStore: %v", err)
+	}
+	if err := progress.file.Close(); err != nil {
+		t.Fatalf("close underlying progress file: %v", err)
+	}
+	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: raftentry.ApplyEntryID{Term: 1, Index: 1}, CommandDigest: testDurableDigest(1), AppliedCommandLSN: 1}); codeOf(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("RecordApplied append failure error=%v code=%s, want unsafe durability", err, codeOf(err))
+	}
+	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: raftentry.ApplyEntryID{Term: 1, Index: 2}, CommandDigest: testDurableDigest(2), AppliedCommandLSN: 2}); codeOf(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("RecordApplied after poison error=%v code=%s, want unsafe durability", err, codeOf(err))
+	}
+	if err := progress.CheckCanApply(raftentry.ApplyEntryID{Term: 1, Index: 2}); codeOf(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("CheckCanApply after poison error=%v code=%s, want unsafe durability", err, codeOf(err))
+	}
+}
+
 func TestDurableApplyResultStoreRejectsUnsupportedVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := DurableApplyResultStorePath(dir)
