@@ -118,7 +118,7 @@ func Open(opts Options) (*FSM, error) {
 		_ = progress.Close()
 		return nil, err
 	}
-	if err := validateProgressCoverage(opts.DB, progress); err != nil {
+	if err := validateProgressCoverage(opts.DB, progress, results); err != nil {
 		_ = errors.Join(progress.Close(), results.Close())
 		return nil, err
 	}
@@ -204,10 +204,15 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 		code, _ := ErrorCodeOf(err)
 		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), code, err)
 	}
+	digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
+	if err := f.requireStoredResultForLocalCoverageGap(id, digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(digest, code, err)
+	}
 	meta, err := f.applyMetadata(entry, id)
 	if err != nil {
 		code, _ := ErrorCodeOf(err)
-		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), code, err)
+		return reject(digest, code, err)
 	}
 	return raftapply.ApplyCommittedEntryV1(f.db, entry.Bytes, meta, raftapply.Options{
 		DecodeLimits:  f.decodeLimits,
@@ -286,9 +291,6 @@ func (f *FSM) lastAppliedProgressRecord() (raftapply.ApplyProgressRecordV1, bool
 	}
 	record, ok := f.progress.LastAppliedRecord()
 	if !ok {
-		if err := validateMissingApplyProgressCoverage(f.db); err != nil {
-			return raftapply.ApplyProgressRecordV1{}, false, err
-		}
 		return raftapply.ApplyProgressRecordV1{}, false, nil
 	}
 	if err := validateApplyProgressCoverage(f.db, record); err != nil {
@@ -297,38 +299,88 @@ func (f *FSM) lastAppliedProgressRecord() (raftapply.ApplyProgressRecordV1, bool
 	return record, true, nil
 }
 
-func validateProgressCoverage(db *backenddb.DB, progress *raftapply.DurableApplyProgressStore) error {
+func validateProgressCoverage(db *backenddb.DB, progress *raftapply.DurableApplyProgressStore, results *raftapply.DurableApplyResultStore) error {
 	if progress == nil {
 		return nil
 	}
+	localLSN, err := localAppliedCommandLSN(db)
+	if err != nil {
+		return err
+	}
 	record, ok := progress.LastAppliedRecord()
 	if !ok {
-		return validateMissingApplyProgressCoverage(db)
+		if localLSN != 0 && (results == nil || results.Len() == 0) {
+			return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing apply progress metadata for local AppliedCommandLSN coverage %d without durable result metadata", localLSN)
+		}
+		return nil
 	}
-	return validateApplyProgressCoverage(db, record)
-}
-
-func validateMissingApplyProgressCoverage(db *backenddb.DB) error {
-	if db == nil {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
+	if record.AppliedCommandLSN > localLSN {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "apply progress metadata AppliedCommandLSN %d outruns local coverage %d", record.AppliedCommandLSN, localLSN)
 	}
-	localLSN := db.State().AppliedCommandLSN
-	if localLSN != 0 {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing apply progress metadata for local AppliedCommandLSN coverage %d", localLSN)
+	if record.AppliedCommandLSN < localLSN && (results == nil || results.Len() <= progress.Len()) {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d outruns apply progress metadata %d without durable result metadata beyond progress", localLSN, record.AppliedCommandLSN)
 	}
 	return nil
 }
 
-func validateApplyProgressCoverage(db *backenddb.DB, record raftapply.ApplyProgressRecordV1) error {
+func localAppliedCommandLSN(db *backenddb.DB) (uint64, error) {
 	if db == nil {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
+		return 0, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
 	}
-	localLSN := db.State().AppliedCommandLSN
+	return db.State().AppliedCommandLSN, nil
+}
+
+func validateApplyProgressCoverage(db *backenddb.DB, record raftapply.ApplyProgressRecordV1) error {
+	localLSN, err := localAppliedCommandLSN(db)
+	if err != nil {
+		return err
+	}
 	if record.AppliedCommandLSN > localLSN {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "apply progress metadata AppliedCommandLSN %d outruns local coverage %d", record.AppliedCommandLSN, localLSN)
 	}
-	if record.AppliedCommandLSN < localLSN {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d outruns apply progress metadata %d", localLSN, record.AppliedCommandLSN)
+	return nil
+}
+
+func (f *FSM) requireStoredResultForLocalCoverageGap(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1) error {
+	if f == nil || f.db == nil || f.progress == nil || f.results == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	localLSN, err := localAppliedCommandLSN(f.db)
+	if err != nil {
+		return err
+	}
+	record, ok := f.progress.LastAppliedRecord()
+	if !ok {
+		if localLSN == 0 {
+			return nil
+		}
+		if id.Index != 1 {
+			return nil
+		}
+		return f.requireStoredResultCoveredByLocalLSN(id, digest, localLSN, 0)
+	}
+	if err := validateApplyProgressCoverage(f.db, record); err != nil {
+		return err
+	}
+	if localLSN <= record.AppliedCommandLSN || id.Index <= record.EntryID.Index {
+		return nil
+	}
+	return f.requireStoredResultCoveredByLocalLSN(id, digest, localLSN, record.AppliedCommandLSN)
+}
+
+func (f *FSM) requireStoredResultCoveredByLocalLSN(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1, localLSN, progressLSN uint64) error {
+	record, ok, err := f.results.LookupApplyResult(id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d outruns apply progress metadata %d without durable result for apply entry %d/%d", localLSN, progressLSN, id.Term, id.Index)
+	}
+	if record.CommandDigest != digest {
+		return codedError(raftentry.ErrorRejectedConflictV1, "durable result digest conflicts with apply entry %d/%d", id.Term, id.Index)
+	}
+	if record.AppliedCommandLSN > localLSN {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "durable result AppliedCommandLSN %d outruns local coverage %d for apply entry %d/%d", record.AppliedCommandLSN, localLSN, id.Term, id.Index)
 	}
 	return nil
 }
