@@ -204,6 +204,9 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPrepareDenseValueNanos     int64
 	TypedColumnPrepareDensePredicateNanos int64
 	TypedColumnPrepareDensePreapplyNanos  int64
+	TypedColumnPrepareQ2GroupRankNanos    int64
+	TypedColumnPrepareQ2DistinctRankNanos int64
+	TypedColumnPrepareQ2LocalRankNanos    int64
 	ColumnAssetReadIntegrity              string
 	StorageSource                         ColumnPhysicalQueryStorageSource
 	FallbackReason                        ColumnPhysicalQueryFallbackReason
@@ -1473,6 +1476,9 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.TypedColumnPrepareDenseValueNanos += right.TypedColumnPrepareDenseValueNanos
 	left.TypedColumnPrepareDensePredicateNanos += right.TypedColumnPrepareDensePredicateNanos
 	left.TypedColumnPrepareDensePreapplyNanos += right.TypedColumnPrepareDensePreapplyNanos
+	left.TypedColumnPrepareQ2GroupRankNanos += right.TypedColumnPrepareQ2GroupRankNanos
+	left.TypedColumnPrepareQ2DistinctRankNanos += right.TypedColumnPrepareQ2DistinctRankNanos
+	left.TypedColumnPrepareQ2LocalRankNanos += right.TypedColumnPrepareQ2LocalRankNanos
 	return left
 }
 
