@@ -8080,41 +8080,43 @@ type DB struct {
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
-	memtables                        atomic.Pointer[memtableView]
-	rootDomainVersion                atomic.Uint64
-	rootPointStates                  []rootDomainState
-	rootSystemState                  rootDomainState
-	rootIteratorState                rootDomainState
-	rootPublishedSet                 *publishedRootSet
-	rootPublishStats                 rootDomainPublishTelemetry
-	rootPublishHook                  func(*rootPublishGroup) error
-	commandWALCheckpointPublish      atomic.Pointer[commandWALCheckpointPublishHookBox]
-	commandWALCheckpointCutover      atomic.Pointer[commandWALCheckpointCutoverHookBox]
-	commandWALCheckpointCleanup      atomic.Pointer[commandWALCheckpointCleanupHookBox]
-	dirtyRootPublishGroupID          uint64
-	dirtyRootPublishGroupPending     bool
-	rootPublishRetryPending          bool
-	hashSortedIndexer                *memtable.HashSortedIndexer
-	appendOnlyMemPool                atomic.Pointer[sync.Pool]
-	appendOnlyMemLeaseMu             sync.Mutex
-	appendOnlyMemLeases              []*memtable.AppendOnly
-	appendOnlyMemLeaseHitTotal       atomic.Uint64
-	appendOnlyMemPoolHitTotal        atomic.Uint64
-	appendOnlyMemPoolPutTotal        atomic.Uint64
-	appendOnlyMemPoolEntryDropBytes  atomic.Uint64
-	appendOnlyMemNewAllocTotal       atomic.Uint64
-	appendOnlyMemNewAllocWithQueue   atomic.Uint64
-	appendOnlyMemNewAllocQueueBytes  atomic.Uint64
-	appendOnlyMemPoolDropTotal       atomic.Uint64
-	appendOnlyMutableTrimTotal       atomic.Uint64
-	appendOnlyMutableTrimDropped     atomic.Uint64
-	appendOnlyDirectArenaLeaseMu     sync.Mutex
-	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
-	pendingRetiredMems               []memtable.Table
-	retiredMemtablesMu               sync.Mutex
-	retainedMemtableViews            map[*memtableView]int
-	deferredRetiredMemtables         []deferredRetiredMemtablesHold
-	memtableViewReaders              atomic.Int64
+	memtables                          atomic.Pointer[memtableView]
+	rootDomainVersion                  atomic.Uint64
+	rootPointStates                    []rootDomainState
+	rootSystemState                    rootDomainState
+	rootIteratorState                  rootDomainState
+	rootPublishedSet                   *publishedRootSet
+	rootPublishStats                   rootDomainPublishTelemetry
+	rootPublishHook                    func(*rootPublishGroup) error
+	commandWALCheckpointPublish        atomic.Pointer[commandWALCheckpointPublishHookBox]
+	commandWALCheckpointCutover        atomic.Pointer[commandWALCheckpointCutoverHookBox]
+	commandWALCheckpointCleanup        atomic.Pointer[commandWALCheckpointCleanupHookBox]
+	dirtyRootPublishGroupID            uint64
+	dirtyRootPublishGroupPending       bool
+	rootPublishRetryPending            bool
+	hashSortedIndexer                  *memtable.HashSortedIndexer
+	appendOnlyMemPool                  atomic.Pointer[sync.Pool]
+	appendOnlyMemLeaseMu               sync.Mutex
+	appendOnlyMemLeases                []*memtable.AppendOnly
+	appendOnlyMemLeaseHitTotal         atomic.Uint64
+	appendOnlyMemPoolHitTotal          atomic.Uint64
+	appendOnlyMemPoolPutTotal          atomic.Uint64
+	appendOnlyMemPoolEntryDropBytes    atomic.Uint64
+	appendOnlyMemNewAllocTotal         atomic.Uint64
+	appendOnlyMemNewAllocWithQueue     atomic.Uint64
+	appendOnlyMemNewAllocQueueBytes    atomic.Uint64
+	appendOnlyMemPoolDropTotal         atomic.Uint64
+	appendOnlyMutableTrimTotal         atomic.Uint64
+	appendOnlyMutableTrimDropped       atomic.Uint64
+	appendOnlyMutableSparseTrimTotal   atomic.Uint64
+	appendOnlyMutableSparseTrimDropped atomic.Uint64
+	appendOnlyDirectArenaLeaseMu       sync.Mutex
+	appendOnlyDirectArenaLeasesByMem   map[memtable.Table]*appendOnlyDirectArenaLease
+	pendingRetiredMems                 []memtable.Table
+	retiredMemtablesMu                 sync.Mutex
+	retainedMemtableViews              map[*memtableView]int
+	deferredRetiredMemtables           []deferredRetiredMemtablesHold
+	memtableViewReaders                atomic.Int64
 	// closingEmptyMemsMu guards closingEmptyByView. The map holds per-view
 	// lists of mutable memtables that should be released once the last reader
 	// drops the view, registered by releaseClosingEmptyMemtables at DB close.
@@ -10227,6 +10229,75 @@ func (db *DB) trimEmptyAppendOnlyMutableShards(capacity int) int {
 	return trimmed
 }
 
+func appendOnlyEntryCapacityForBytes(capacity, estimatedBytesPerEntry int) int {
+	if capacity <= 0 {
+		return 0
+	}
+	if estimatedBytesPerEntry <= 0 {
+		estimatedBytesPerEntry = appendOnlyEstimatedBytesPerEntryDefault
+	}
+	entries := capacity / estimatedBytesPerEntry
+	if entries < appendOnlyEntryHintMinEntries {
+		entries = appendOnlyEntryHintMinEntries
+	}
+	return entries
+}
+
+func appendOnlySparseMutableTrimTargetEntries(liveEntries, retainCapacity, estimatedBytesPerEntry int) int {
+	if liveEntries <= 0 {
+		return 0
+	}
+	headroom := liveEntries / 4
+	if headroom < appendOnlyEntryHintMinEntries {
+		headroom = appendOnlyEntryHintMinEntries
+	}
+	target := liveEntries + headroom
+	if retainEntries := appendOnlyEntryCapacityForBytes(retainCapacity, estimatedBytesPerEntry); retainEntries > target {
+		target = retainEntries
+	}
+	return target
+}
+
+func (db *DB) trimSparseAppendOnlyMutableShards(capacity int) int {
+	if db == nil || db.currentMemtableMode() != memtable.ModeAppendOnly || len(db.mutableShards) == 0 {
+		return 0
+	}
+	estimate := appendOnlyEstimatedBytesPerEntryDefault
+	trimmed := 0
+	var droppedBytes uint64
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		mt, ok := shard.mem.(*memtable.AppendOnly)
+		if !ok || mt == nil {
+			shard.mu.Unlock()
+			continue
+		}
+		liveEntries := mt.Len()
+		if liveEntries == 0 {
+			shard.mu.Unlock()
+			continue
+		}
+		targetEntries := appendOnlySparseMutableTrimTargetEntries(liveEntries, capacity, estimate)
+		before, after := mt.TrimEntryCapacity(targetEntries)
+		shard.mu.Unlock()
+		if before <= after {
+			continue
+		}
+		trimmed++
+		droppedBytes += uint64(before - after)
+	}
+	if trimmed > 0 {
+		db.appendOnlyMutableTrimTotal.Add(uint64(trimmed))
+		db.appendOnlyMutableSparseTrimTotal.Add(uint64(trimmed))
+		if droppedBytes > 0 {
+			db.appendOnlyMutableTrimDropped.Add(droppedBytes)
+			db.appendOnlyMutableSparseTrimDropped.Add(droppedBytes)
+		}
+	}
+	return trimmed
+}
+
 func (db *DB) trimMutableShardAppendOnlyDirectArenas(checkpoint bool) {
 	if db == nil || len(db.mutableShards) == 0 {
 		return
@@ -10322,6 +10393,7 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 		idleMutableRetainCapacity = 0
 	}
 	db.trimEmptyAppendOnlyMutableShards(idleMutableRetainCapacity)
+	db.trimSparseAppendOnlyMutableShards(idleMutableRetainCapacity)
 	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
 }
 
@@ -29009,6 +29081,8 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyMutableCount, appendOnlyMutableEntryCapacity, appendOnlyMutableEntryBackingBytes := db.appendOnlyMutableShardEntryStats()
 	appendOnlyMutableTrimTotal := db.appendOnlyMutableTrimTotal.Load()
 	appendOnlyMutableTrimDropped := db.appendOnlyMutableTrimDropped.Load()
+	appendOnlyMutableSparseTrimTotal := db.appendOnlyMutableSparseTrimTotal.Load()
+	appendOnlyMutableSparseTrimDropped := db.appendOnlyMutableSparseTrimDropped.Load()
 	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
 	stats["treedb.cache.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
 	stats["treedb.cache.append_only.entry_pool_retained_bytes_estimate"] = fmt.Sprintf("%d", appendOnlyEntryPoolStats.RetainedBytesEstimate)
@@ -29033,6 +29107,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.append_only.mutable_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMutableEntryBackingBytes)
 	stats["treedb.cache.append_only.mutable_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimTotal)
 	stats["treedb.cache.append_only.mutable_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimDropped)
+	stats["treedb.cache.append_only.mutable_sparse_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableSparseTrimTotal)
+	stats["treedb.cache.append_only.mutable_sparse_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableSparseTrimDropped)
 	stats["treedb.cache.append_only.mutable_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyMemPoolDropTotal)
 	stats["treedb.cache.append_only.mutable_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyMemPoolPutTotal)
 	stats["treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMemPoolEntryDropBytes)
@@ -29065,6 +29141,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.append_only.mutable_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMutableEntryBackingBytes)
 	stats["treedb.process.append_only.mutable_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimTotal)
 	stats["treedb.process.append_only.mutable_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimDropped)
+	stats["treedb.process.append_only.mutable_sparse_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableSparseTrimTotal)
+	stats["treedb.process.append_only.mutable_sparse_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableSparseTrimDropped)
 	stats["treedb.process.append_only.mutable_pool_drops_total"] = fmt.Sprintf("%d", appendOnlyMemPoolDropTotal)
 	stats["treedb.process.append_only.mutable_pool_puts_total"] = fmt.Sprintf("%d", appendOnlyMemPoolPutTotal)
 	stats["treedb.process.append_only.mutable_pool_entry_backing_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMemPoolEntryDropBytes)
