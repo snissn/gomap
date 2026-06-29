@@ -27,6 +27,8 @@ A TreeDB deployment uses:
   `column_assets/<namespace>/assets/segments/segment-*.tca` for production
   typed-storage physical assets (`column_assets` remains the compatibility
   directory name),
+- R3a/Raft apply metadata logs `apply-progress-v1.log` and
+  `apply-results-v1.log` under the caller-owned Raft/apply metadata directory,
 - optional side-store DBs (`dictdb`, `templatedb`) using their own `index.db` files.
 
 The old collection root-delta WAL storage class (`wal/collection-l*.log`,
@@ -133,6 +135,83 @@ Rules:
 - PR2 must add meta-page tests covering `AppliedCommandLSN` encode/decode,
   in-page marker gating for legacy/reserved bytes, alternating meta pages,
   old/new tuple selection, and checksum validation over the extended body.
+
+## 3.1.1 R3a Apply Metadata Logs
+
+Durable R3a apply stores persist metadata beside the future Raft node state, not
+inside `index.db`, `wal/`, or the value log. The current implementation accepts
+a caller-owned metadata directory. The default file names are:
+
+- `apply-progress-v1.log` for `raftapply.ApplyProgressStore`;
+- `apply-results-v1.log` for `raftapply.ApplyResultStore`.
+
+The parent path is intentionally narrow and caller-owned so the #3044 storage
+boundary can place it under the final node/group directory without changing the
+record format. These files are not part of the local command WAL. They record
+the applied-index and idempotency/result replay metadata that lets a later Raft
+FSM recover after restart.
+
+Each file starts with a 20-byte header:
+
+```text
+bytes[8] Magic     = "TDBR3A1\n"
+u32      Version   = 1
+u16      Kind      = 1 for progress, 2 for results
+u16      HeaderLen = 20
+u32      HeaderCRC = CRC-32/IEEE over bytes 0..15
+```
+
+Each appended frame has a 16-byte header followed by the payload:
+
+```text
+bytes[4] Magic      = "R3AF"
+u16      Kind       = file kind
+u16      Version    = 1
+u32      PayloadLen
+u32      FrameCRC   = CRC-32/IEEE over the first 12 header bytes plus payload
+bytes    Payload
+```
+
+Progress payload:
+
+```text
+u64       ApplyTerm
+u64       ApplyIndex
+bytes[32] CommandDigestV1
+u64       AppliedCommandLSN
+```
+
+Result payload:
+
+```text
+u64       ApplyTerm
+u64       ApplyIndex
+bytes[32] CommandDigestV1
+u64       AppliedCommandLSN
+u64       IdempotencyKeyLen
+bytes     IdempotencyKey
+u64       ResultStatusLen
+bytes     ResultStatus
+bytes[32] ResultCommandDigest
+u64       DeterministicErrorCodeLen
+bytes     DeterministicErrorCode
+i64       AffectedCount
+bytes[32] ResultDigest   // LogicalDigestV1 bytes when apply succeeded
+```
+
+Open-time recovery scans complete frames and rebuilds in-memory lookup indexes.
+Frame truncation, checksum mismatch, unsupported file or frame versions, kind
+mismatches, malformed payloads, same-`ApplyEntryID` different-digest conflicts,
+same-idempotency different-digest conflicts, and non-contiguous progress records
+MUST fail closed. A duplicate same-`ApplyEntryID`/same-digest frame MAY be
+treated as an idempotent append retry and ignored after the first record.
+
+Accepted records are appended after the store interface's preflight checks pass.
+By default each accepted frame is fsynced before the in-memory store state is
+advanced; test and benchmark code may explicitly disable that sync to isolate
+CPU/allocation costs. New-file header creation also fsyncs the file and, where
+supported, the parent directory. TreeDB is pre-alpha, so later binaries may
+reject older metadata versions instead of migrating them.
 
 ## 3.2 Collection Document Payloads
 
