@@ -135,6 +135,35 @@ func TestReadBarrierAllowsSatisfiedPrefixWhenLaterCatchUpEntryFails(t *testing.T
 	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 27, Index: 1})
 }
 
+func TestReadBarrierDoesNotApplyBeyondAlreadySatisfiedIndex(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	first := committedCommand(28, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:read-barrier-already-satisfied"))
+	second := committedCommand(28, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:read-barrier-already-satisfied-unsupported"))
+	second.Type = raftfsm.EntryTypeV1("snapshot-v1")
+	if evidence, err := h.Commit(first, second); err != nil {
+		t.Fatalf("Commit: %v evidence=%+v", err, evidence)
+	}
+	seeded, err := h.ApplyCommittedEntriesToNode("node-b", first)
+	if err != nil {
+		t.Fatalf("seed node-b: %v results=%+v", err, seeded)
+	}
+	assertAppliedResults(t, "node-b already-satisfied seed", seeded, []int64{1})
+
+	progress, err := h.ReadBarrier("node-b").WaitAppliedIndex(context.Background(), raftcluster.AppliedIndexReadBarrier{
+		MinAppliedIndex: 1,
+	})
+	if err != nil {
+		t.Fatalf("WaitAppliedIndex: %v progress=%+v", err, progress)
+	}
+	if progress.NodeID != "node-b" || progress.GroupID != "default" || progress.Term != 28 || progress.Index != 1 || !progress.HasApplied {
+		t.Fatalf("progress after already-satisfied barrier=%+v, want node-b default 28/1", progress)
+	}
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 28, Index: 1})
+	assertCollectionMissing(t, h, "node-b", "orders")
+}
+
 func TestNodeReadBarrierClosedNodeErrorsAreDistinct(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()

@@ -9,7 +9,7 @@ import (
 )
 
 // ReadBarrier is a per-node test adapter for injected committed-entry harnesses.
-// It may catch the target node up to the harness's committed log before proving
+// It may catch the target node up through the requested index before proving
 // local applied progress. It does not prove production consensus.
 type ReadBarrier struct {
 	h      *Harness
@@ -45,7 +45,7 @@ func (b *ReadBarrier) WaitAppliedIndex(ctx context.Context, barrier raftcluster.
 	if initialBarrierErr != nil && !errors.Is(initialBarrierErr, raftcluster.ErrReadBarrierNotSatisfied) {
 		return progress, fmt.Errorf("raftharness: %w", initialBarrierErr)
 	}
-	if _, err := b.h.CatchUpNode(b.nodeID); err != nil {
+	if _, err := b.h.CatchUpNodeThrough(b.nodeID, barrier.MinAppliedIndex); err != nil {
 		if refreshed, refreshErr := b.AppliedProgress(context.Background()); refreshErr == nil {
 			progress = refreshed
 		}
