@@ -37,9 +37,6 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if !row.Known || row.Decision != raftentry.DecisionAccepted {
 		return nil, unsupportedClusterMutationError(cmd, row)
 	}
-	if err := s.checkCatalogGuard(cmd.Known); err != nil {
-		return nil, err
-	}
 	ack, err := ackPolicyFromSections(cmd.Known, s.defaultAckPolicy)
 	if err != nil {
 		return nil, err
@@ -140,6 +137,8 @@ func validateClusterSubmitResult(metadata ClusterRequestMetadata, result Cluster
 		if result.ActualAck != iwire.AckRaftCommitted || !result.CommittedRecoverable {
 			return protocolError(iwire.ErrDurabilityUnavailable, "cluster submitter did not prove raft_committed durability")
 		}
+	} else if result.ActualAck == iwire.AckRaftCommitted {
+		return protocolError(iwire.ErrDurabilityUnavailable, "cluster submitter returned raft_committed without proving requested local ack policy %d", metadata.AckPolicy)
 	} else if metadata.AckPolicy != 0 && result.ActualAck < metadata.AckPolicy {
 		return protocolError(iwire.ErrDurabilityUnavailable, "cluster submitter actual ack policy %d is below requested policy %d", result.ActualAck, metadata.AckPolicy)
 	}

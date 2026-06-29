@@ -238,6 +238,41 @@ func TestClusterSubmitterRequestOnlyFieldsDoNotAlterDeterministicEntry(t *testin
 	}
 }
 
+func TestClusterSubmitterCatalogGuardDoesNotBlockSubmitterReplay(t *testing.T) {
+	submitter := &fakeClusterSubmitter{}
+	client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version, err := server.currentCatalogVersion()
+	if err != nil {
+		t.Fatalf("currentCatalogVersion: %v", err)
+	}
+	server.catalogVersion.Add(1)
+
+	sections := []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("stale-catalog-replay")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
+		collectionNameRef("users"),
+		documentFormatSection(collections.DocumentFormatJSON),
+		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"name":"Ada"}`))},
+		ackSection(AckVisible),
+	}
+	if _, err := client.commandSections(ctx, iwire.CommandInsertBatch, sections...); err != nil {
+		t.Fatalf("guarded InsertBatch should reach submitter despite stale local catalog guard: %v", err)
+	}
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	if calls[0].entry.Decoded.CommandID != iwire.CommandInsertBatch {
+		t.Fatalf("command=%d want InsertBatch", calls[0].entry.Decoded.CommandID)
+	}
+}
+
 func TestClusterSubmitterUnsupportedCommandFailsBeforeMutation(t *testing.T) {
 	submitter := &fakeClusterSubmitter{}
 	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
@@ -300,5 +335,16 @@ func TestClusterSubmitterRaftCommittedRequiresProvenResult(t *testing.T) {
 	}
 	if got := len(submitter.snapshot()); got != 1 {
 		t.Fatalf("submitter calls=%d want 1", got)
+	}
+}
+
+func TestClusterSubmitterRaftCommittedDoesNotSatisfyLocalAck(t *testing.T) {
+	err := validateClusterSubmitResult(ClusterRequestMetadata{AckPolicy: AckSynced}, ClusterSubmitResult{
+		ActualAck:            AckRaftCommitted,
+		CommittedRecoverable: true,
+		ResponseSections:     []iwire.Section{ackMeta(AckRaftCommitted)},
+	})
+	if nativeCodeOf(err) != iwire.ErrDurabilityUnavailable {
+		t.Fatalf("validateClusterSubmitResult err=%v want durability unavailable", err)
 	}
 }
