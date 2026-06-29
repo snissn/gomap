@@ -54,6 +54,8 @@ block drifts from the executable matrix rows.
 | query | $in on indexed scalar fields | supported subset |
 | query | projection, sort, skip, and limit | supported subset |
 | cursor | getMore and killCursors | supported |
+| read concern | local/available readConcern maps to local_stale | supported subset |
+| read concern gap | majority, linearizable, and snapshot readConcern | rejected |
 | crud | updateOne $set by _id | supported subset |
 | crud | delete by _id | supported subset |
 | metadata | listCollections | supported subset |
@@ -120,6 +122,7 @@ throughput check.
 | Command | `insert` / `insertMany` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, `TestServerOfficialGoDriverBasicCRUD` | Standalone writeConcern durability remains minimal. In cluster submitter mode, absent/default and `{w: 1}` request visible ack, `{w: "majority"}` requests Raft-committed proof, and unsupported writeConcern options are rejected before submit. |
 | Command | `find` | `supported subset` | `TestMongoCompatibilityMatrix`, find planner tests | Query language is intentionally limited. |
 | Command | `getMore` / `killCursors` | `supported subset` | `TestMongoCompatibilityMatrix`, cursor tests | Server cursor state is in-memory only. |
+| Command option | `readConcern` on `find`, `getMore`, `listCollections`, `listDatabases`, and `listIndexes` | `supported subset` / `rejected` | `TestMongoReadConcernAcceptsLocalStaleReadSurfaces`, `TestMongoReadConcernRejectsStrongLevelsBeforeServingData`, `TestMongoCompatibilityMatrix` | Absent/empty, `{level: "local"}`, and `{level: "available"}` are accepted and map to local_stale reads. `majority`, `linearizable`, `snapshot`, cluster-time fields, unknown options, malformed documents, bad `level` types, and duplicate `level` are rejected before serving data. |
 | Command | `update` / `updateOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, update tests | Only `_id`-targeted updateOne with accepted update shapes. |
 | Command | `delete` / `deleteOne` helper path | `supported subset` | `TestMongoCompatibilityMatrix`, CRUD tests | Only `_id`-targeted deletes. |
 | Command | `listCollections` | `supported subset` | `TestMongoCompatibilityMatrix`, metadata tests | Minimal filtering and response fields. |
@@ -231,7 +234,7 @@ before deciding whether to implement or reject them.
 | Surface | Status | Current gap |
 |---|---|---|
 | Mongo `writeConcern` | `not implemented` as Mongo semantics | Gateway success currently follows the underlying TreeDB collection API and durability profile. |
-| Mongo `readConcern` | `not implemented` | No read concern parser or server-side snapshot API mapping. |
+| Mongo `readConcern` | `supported subset` / `rejected` | Absent/empty, `{level: "local"}`, and `{level: "available"}` map to local_stale reads; stronger levels, cluster-time fields, unknown options, malformed documents, and duplicate `level` are rejected before serving data. |
 | Logical sessions | `supported subset` | Advertised for driver compatibility; `lsid` is accepted but does not add causal consistency, retryable-write, or transaction semantics. The gateway presents as standalone and does not advertise a replica-set `setName`. |
 | Multi-document transactions | `not implemented` | Transaction markers are rejected on supported read/write/metadata commands; full support is blocked on TreeDB collection transaction and collection WAL work. |
 | Retryable writes / idempotency | `not implemented` | Forced `txnNumber` command markers are rejected before read/write/metadata execution rather than silently pretending idempotency bookkeeping exists; support needs explicit idempotency metadata and error contract. |
@@ -251,8 +254,9 @@ before deciding whether to implement or reject them.
    unsupported command as a matrix row before implementing it.
 2. Decide whether unsupported filters should always fail closed or allow bounded
    scans behind a feature flag.
-3. Add explicit `writeConcern`/`readConcern` handling that either rejects
-   unsupported values or maps them to documented TreeDB durability boundaries.
+3. Extend explicit `writeConcern` handling beyond the current cluster submitter
+   subset, and add stronger readConcern modes only after a documented TreeDB
+   snapshot/causal-read boundary exists.
 4. Add count/distinct only after the desired TreeDB collection count/index
    semantics are clear.
 5. Keep multi-document transactions blocked until the local collection
