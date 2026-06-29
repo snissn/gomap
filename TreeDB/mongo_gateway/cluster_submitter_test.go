@@ -31,6 +31,31 @@ type mongoClusterFakeSubmitter struct {
 	committedRecoverable     bool
 	responseSections         []iwire.Section
 	overrideResponseSections bool
+	status                   treenativewire.ClusterAdmissionStatus
+	admissionErr             error
+}
+
+type mongoClusterAdmissionSubmitter struct {
+	*mongoClusterFakeSubmitter
+	status treenativewire.ClusterAdmissionStatus
+	err    error
+}
+
+func (f *mongoClusterAdmissionSubmitter) ClusterAdmissionStatus(context.Context) (treenativewire.ClusterAdmissionStatus, error) {
+	if f.err != nil {
+		return treenativewire.ClusterAdmissionStatus{}, f.err
+	}
+	return f.status, nil
+}
+
+func (f *mongoClusterFakeSubmitter) ClusterAdmissionStatus(context.Context) (treenativewire.ClusterAdmissionStatus, error) {
+	if f.admissionErr != nil {
+		return treenativewire.ClusterAdmissionStatus{}, f.admissionErr
+	}
+	if f.status == (treenativewire.ClusterAdmissionStatus{}) {
+		return treenativewire.ClusterLeaderAdmission(), nil
+	}
+	return f.status, nil
 }
 
 func (f *mongoClusterFakeSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata treenativewire.ClusterRequestMetadata) (treenativewire.ClusterSubmitResult, error) {
@@ -131,6 +156,45 @@ func setMongoClusterTestSubmitter(server *Server, submitter *mongoClusterFakeSub
 	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(catalogVersion)
 }
 
+func setMongoClusterAdmissionTestSubmitter(server *Server, submitter *mongoClusterAdmissionSubmitter, catalogVersion uint64) {
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(catalogVersion)
+}
+
+func assertErrmsgContains(tb testing.TB, doc wire.Document, want string) {
+	tb.Helper()
+	got, ok := bson.Raw(doc).Lookup("errmsg").StringValueOK()
+	if !ok || !strings.Contains(got, want) {
+		tb.Fatalf("errmsg=%q typeOK=%v want containing %q", got, ok, want)
+	}
+}
+
+func assertMongoUsers(tb testing.TB, server *Server, want map[string]string) {
+	tb.Helper()
+	found := serveCommand(tb, server, 326899, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	batch := cursorFirstBatch(tb, found)
+	got := make(map[string]string, len(batch))
+	for _, doc := range batch {
+		id, idOK := doc.Lookup("_id").StringValueOK()
+		name, nameOK := doc.Lookup("name").StringValueOK()
+		if !idOK || !nameOK {
+			tb.Fatalf("user doc missing string _id/name: %v", doc)
+		}
+		got[id] = name
+	}
+	if len(got) != len(want) {
+		tb.Fatalf("users=%v want %v", got, want)
+	}
+	for id, wantName := range want {
+		if gotName, ok := got[id]; !ok || gotName != wantName {
+			tb.Fatalf("user %q name=%q present=%v want %q", id, gotName, ok, wantName)
+		}
+	}
+}
+
 func mongoClusterCallCatalogVersion(tb testing.TB, call mongoClusterSubmitterCall) uint64 {
 	tb.Helper()
 	version, n := binary.Uvarint(call.entry.Target.ExpectedCatalogVersion)
@@ -146,6 +210,117 @@ func mongoClusterCallIdempotencyKey(tb testing.TB, call mongoClusterSubmitterCal
 		tb.Fatal("missing idempotency key")
 	}
 	return string(call.entry.IdempotencyKey)
+}
+
+func TestClusterAdmissionMongoLeaderRoutesThroughSubmitter(t *testing.T) {
+	submitter := &mongoClusterAdmissionSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		status:                    treenativewire.ClusterLeaderAdmission(),
+	}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterAdmissionTestSubmitter(server, submitter, 31)
+
+	response := serveCommand(t, server, 326801, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 1)
+	calls := submitter.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("submit calls=%d want create+insert", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandCreateCollection {
+		t.Fatalf("first command id=%d want create_collection", got)
+	}
+	if got := calls[1].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
+		t.Fatalf("second command id=%d want insert_batch", got)
+	}
+}
+
+func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 326802, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	}))
+
+	submitter := &mongoClusterAdmissionSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		status:                    treenativewire.ClusterFollowerAdmission("node-a:27017", "not leader"),
+	}
+	setMongoClusterAdmissionTestSubmitter(server, submitter, 32)
+
+	createResponse := serveCommand(t, server, 326803, bson.D{
+		{Key: "create", Value: "admins"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, createResponse, "BadValue")
+	assertErrmsgContains(t, createResponse, "node-a:27017")
+	if _, err := server.Collections.OpenCollection("app.admins"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection app.admins err=%v want collection not found", err)
+	}
+
+	insertResponse := serveCommand(t, server, 326804, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, insertResponse, "BadValue")
+	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
+
+	updateResponse := serveCommand(t, server, 326805, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "BadValue")
+	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
+
+	deleteResponse := serveCommand(t, server, 326806, bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, deleteResponse, "BadValue")
+	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterAdmissionMongoUnavailableRejectsBeforeSubmit(t *testing.T) {
+	submitter := &mongoClusterAdmissionSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		status:                    treenativewire.ClusterUnavailableAdmission("cluster admission unavailable"),
+	}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	setMongoClusterAdmissionTestSubmitter(server, submitter, 33)
+
+	response := serveCommand(t, server, 326807, bson.D{
+		{Key: "create", Value: "users"},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "BadValue")
+	assertErrmsgContains(t, response, "cluster admission unavailable")
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
 }
 
 func mongoClusterCallCollectionMetaName(tb testing.TB, call mongoClusterSubmitterCall) string {

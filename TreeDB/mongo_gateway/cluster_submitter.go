@@ -416,6 +416,9 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	if s == nil || s.ClusterSubmitter == nil {
 		return nil, errors.New("Mongo gateway cluster submitter is not configured")
 	}
+	if err := treenativewire.AdmitClusterMutation(ctx, s.ClusterSubmitter); err != nil {
+		return nil, err
+	}
 	if row := raftentry.ClassifyNativeWireCommandV1(command); !row.Known || row.Decision != raftentry.DecisionAccepted {
 		return nil, fmt.Errorf("cluster submitter command %d is not accepted by R3a v1", command)
 	}
