@@ -142,13 +142,12 @@ func TestRecycleAppendOnlyMemtables_DropsOverflowEntryBackingBeforePool(t *testi
 		t.Fatal("append-only mem pool entry backing dropped bytes=0 want >0")
 	}
 
-	v := db.appendOnlyMemtablePool().Get()
-	mt, ok := v.(*memtable.AppendOnly)
-	if !ok || mt == nil {
-		t.Fatalf("append-only mem pool Get returned %T, want *AppendOnly", v)
+	overflow, ok := mems[maxAppendOnlyMemLeases].(*memtable.AppendOnly)
+	if !ok || overflow == nil {
+		t.Fatalf("overflow memtable is %T, want *AppendOnly", mems[maxAppendOnlyMemLeases])
 	}
-	if got := mt.EntryBackingBytes(); got != 0 {
-		t.Fatalf("pooled append-only entry backing bytes=%d want 0", got)
+	if got := overflow.EntryBackingBytes(); got != 0 {
+		t.Fatalf("overflow append-only entry backing bytes=%d want 0", got)
 	}
 }
 
