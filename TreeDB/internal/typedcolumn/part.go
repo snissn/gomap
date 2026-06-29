@@ -1567,6 +1567,12 @@ func (b *ColumnPartBuilder) sortedOrder(batch Batch, rows int, pkColumn string) 
 	} else {
 		b.order = b.order[:rows]
 	}
+	if b.canUseIdentitySortedOrder(batch, rows, pkColumn) {
+		for i := range b.order {
+			b.order[i] = i
+		}
+		return b.order, nil
+	}
 	for i := range b.order {
 		b.order[i] = i
 	}
@@ -1590,6 +1596,33 @@ func (b *ColumnPartBuilder) sortedOrder(batch Batch, rows int, pkColumn string) 
 		return left < right
 	})
 	return b.order, nil
+}
+
+func (b *ColumnPartBuilder) canUseIdentitySortedOrder(batch Batch, rows int, pkColumn string) bool {
+	if len(b.opts.SortKey.Columns) != 1 {
+		return false
+	}
+	sortColumn := b.opts.SortKey.Columns[0]
+	if sortColumn.Column != pkColumn || sortColumn.Direction != SortKeyAsc || sortColumn.Nulls != SortKeyNullsDefault {
+		return false
+	}
+	pkValues := batch.Columns[pkColumn]
+	if len(pkValues) != rows {
+		return false
+	}
+	if rows <= 1 {
+		return true
+	}
+	base := pkValues[0]
+	if base > math.MaxInt64-int64(rows-1) {
+		return false
+	}
+	for row := 1; row < rows; row++ {
+		if pkValues[row] != base+int64(row) {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *ColumnPartBuilder) buildGranulesAndLocators(part *ColumnPart, batch Batch, pkColumn string) error {
