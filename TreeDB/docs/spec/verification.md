@@ -277,6 +277,7 @@ to the V1 in-page-marked meta-page storage field.
 | Backup/restore either includes needed WAL/external refs or has durable cleanup proof. | `backup-restore.md` restore validation | `TestCommandWALBackupManifestRestoresUnappliedCommands`, `TestCommandWALRestoreMissingRequiredFrameFailsWithoutCleanupProof` | planned |
 | Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALNativeWireAlignmentManifestCoverage`, `TestNativeWireAndLocalCommandDigestStable` | planned |
 | Raft/local recoverability is not reported before local command WAL publish and `AppliedLSN`. | `native-query-raft-roadmap.md` local apply layering | `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN` | future |
+| R3a durable apply metadata preserves applied progress, idempotency/result replay, and logical digests across reopen and fails closed on corrupt metadata. | `storage-format.md` R3a apply metadata logs, `native-query-raft-roadmap.md` local apply layering | `TestDurableApplyStoresCloseReopenPreservesApplyProgressIdempotencyAndResult`, `TestDurableApplyStoresIdempotencyDuplicateSameDigestAndDifferentDigest`, `TestDurableApplyStoresFailClosedOnTruncatedAndCorruptMetadata`, `TestDurableApplyStoresLogicalDigestIndependentOfMetadataFiles` | implemented |
 
 ### 11.5.2 Milestone Test Slices
 
