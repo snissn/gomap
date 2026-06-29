@@ -352,7 +352,12 @@ func cleanStorageRoot(layout treeDBStorageLayout, clusterDir string) (string, er
 	if layout.flat {
 		reserved = append(reserved, filepath.Join(layout.mainDir, "index.db"))
 	} else {
-		reserved = append(reserved, layout.mainDir)
+		reserved = append(
+			reserved,
+			layout.mainDir,
+			filepath.Join(layout.rootDir, "dictdb"),
+			filepath.Join(layout.rootDir, "templatedb"),
+		)
 	}
 	for _, path := range reserved {
 		reservedAbs, err := realCleanStoragePath("reserved TreeDB path", path)
@@ -452,6 +457,13 @@ func evalExistingStoragePath(abs string) (string, error) {
 				real = filepath.Join(real, suffix[i])
 			}
 			return filepath.Clean(real), nil
+		}
+		if info, err := os.Lstat(cur); err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("path component %q is an unresolved symlink", cur)
+			}
+		} else if !os.IsNotExist(err) {
+			return "", err
 		}
 		parent := filepath.Dir(cur)
 		if parent == cur {

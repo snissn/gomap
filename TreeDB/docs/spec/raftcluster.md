@@ -62,6 +62,7 @@ The Raft paths must be distinct from:
 - `<main-db>/leaf_vlog/`
 - `<main-db>/column_assets/`
 - `<main-db>/index.db` for flat layouts
+- `<root>/dictdb/` and `<root>/templatedb/` for root/main-DB layouts
 
 The Raft log directory stores consensus-log bytes for the selected future Raft
 provider. It is not the TreeDB command WAL.

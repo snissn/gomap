@@ -112,6 +112,34 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			want: ErrInvalidStoragePath,
 		},
 		{
+			name: "cluster dir inside dict side store with root options dir",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				cfg.Dir = root
+				cfg.ClusterDir = filepath.Join(root, "dictdb", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "cluster dir inside template side store with maindb options dir",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				mainDir := filepath.Join(root, "maindb")
+				if err := os.MkdirAll(mainDir, 0o755); err != nil {
+					t.Fatalf("mkdir maindb: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o600); err != nil {
+					t.Fatalf("write index.db: %v", err)
+				}
+				if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+					t.Fatalf("mkdir dictdb: %v", err)
+				}
+				cfg.Dir = mainDir
+				cfg.ClusterDir = filepath.Join(root, "templatedb", "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
 			name: "cluster dir inside command wal with flat options dir",
 			mut: func(cfg *Config) {
 				root := t.TempDir()
@@ -183,6 +211,19 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 				}
 				link := filepath.Join(root, "raft-link")
 				if err := os.Symlink(walDir, link); err != nil {
+					t.Skipf("symlink unsupported: %v", err)
+				}
+				cfg.Dir = root
+				cfg.ClusterDir = filepath.Join(link, "raft")
+			},
+			want: ErrInvalidStoragePath,
+		},
+		{
+			name: "dangling symlinked cluster dir into command wal",
+			mut: func(cfg *Config) {
+				root := t.TempDir()
+				link := filepath.Join(root, "raft-link")
+				if err := os.Symlink(filepath.Join(root, "maindb", "wal"), link); err != nil {
 					t.Skipf("symlink unsupported: %v", err)
 				}
 				cfg.Dir = root
