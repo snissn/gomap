@@ -636,17 +636,18 @@ func (s columnPhysicalAssetSegmentCloseStats) CleanupDuration() time.Duration {
 }
 
 type columnPhysicalAssetAppendSession struct {
-	rootDir   string
-	cfg       ColumnStoreConfig
-	appenders map[uint32]*columnPhysicalAssetSegmentAppender
-	fileIDs   []uint32
+	rootDir    string
+	cfg        ColumnStoreConfig
+	active     *columnPhysicalAssetSegmentAppender
+	activeFile uint32
+	closeStats columnPhysicalAssetSegmentCloseStats
+	closeErr   error
 }
 
 func newColumnPhysicalAssetAppendSession(rootDir string, cfg ColumnStoreConfig) *columnPhysicalAssetAppendSession {
 	return &columnPhysicalAssetAppendSession{
-		rootDir:   rootDir,
-		cfg:       cfg,
-		appenders: make(map[uint32]*columnPhysicalAssetSegmentAppender),
+		rootDir: rootDir,
+		cfg:     cfg,
 	}
 }
 
@@ -657,15 +658,18 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 	if fileID == 0 {
 		return nil, errors.New("collections: column physical asset append session requires file_id")
 	}
-	if appender := s.appenders[fileID]; appender != nil {
-		return appender, nil
+	if s.active != nil && s.activeFile == fileID {
+		return s.active, nil
+	}
+	if err := s.closeActive(); err != nil {
+		return nil, err
 	}
 	appender, err := newColumnPhysicalAssetSegmentAppendWriter(s.rootDir, s.cfg, fileID)
 	if err != nil {
 		return nil, err
 	}
-	s.appenders[fileID] = appender
-	s.fileIDs = append(s.fileIDs, fileID)
+	s.active = appender
+	s.activeFile = fileID
 	return appender, nil
 }
 
@@ -690,34 +694,37 @@ func (s *columnPhysicalAssetAppendSession) appendKindsMeasured(fileID uint32, it
 }
 
 func (s *columnPhysicalAssetAppendSession) close() (columnPhysicalAssetSegmentCloseStats, error) {
-	var stats columnPhysicalAssetSegmentCloseStats
 	if s == nil {
-		return stats, nil
+		return columnPhysicalAssetSegmentCloseStats{}, nil
 	}
-	var closeErr error
-	for _, fileID := range s.fileIDs {
-		appender := s.appenders[fileID]
-		if appender == nil {
-			continue
-		}
-		err := appender.close()
-		stats.Add(appender.closeStats)
-		closeErr = errors.Join(closeErr, err)
-	}
-	return stats, closeErr
+	_ = s.closeActive()
+	return s.closeStats, s.closeErr
 }
 
 func (s *columnPhysicalAssetAppendSession) abort() error {
 	if s == nil {
 		return nil
 	}
-	var abortErr error
-	for _, fileID := range s.fileIDs {
-		if appender := s.appenders[fileID]; appender != nil {
-			abortErr = errors.Join(abortErr, appender.abort())
-		}
+	if s.active == nil {
+		return nil
 	}
-	return abortErr
+	appender := s.active
+	s.active = nil
+	s.activeFile = 0
+	return appender.abort()
+}
+
+func (s *columnPhysicalAssetAppendSession) closeActive() error {
+	if s == nil || s.active == nil {
+		return nil
+	}
+	appender := s.active
+	s.active = nil
+	s.activeFile = 0
+	err := appender.close()
+	s.closeStats.Add(appender.closeStats)
+	s.closeErr = errors.Join(s.closeErr, err)
+	return err
 }
 
 func newColumnPhysicalAssetSegmentAppender(rootDir string, cfg ColumnStoreConfig, fileID uint32) (*columnPhysicalAssetSegmentAppender, error) {
