@@ -329,6 +329,7 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 | Public API semantics | `contracts.md` | `write-path-and-durability.md`, `collections-write-domain.md`. |
 | Native-wire ack policies | `native-wire-protocol.md` | `user-command-wal.md`, `native-query-raft-roadmap.md`. |
 | Raft/local apply layering | `native-query-raft-roadmap.md` | `native-wire-protocol.md`, `user-command-wal.md`. |
+| Single-group Raft provider/storage boundary | `raftcluster.md` | `native-query-raft-roadmap.md`, `storage-format.md`, `user-command-wal.md`. |
 | Verification mapping | `verification.md` | all normative specs. |
 
 ## Terminology Ownership
@@ -374,7 +375,7 @@ blocking questions live:
   `user-command-wal.md`.
 - Native-wire protocol questions: `native-wire-protocol.md`.
 - Raft sequencing and local recoverability questions:
-  `native-query-raft-roadmap.md`.
+  `native-query-raft-roadmap.md` and `raftcluster.md`.
 - Typed-storage persistence and historical roadmap questions:
   `typed-storage-naming.md`, `typed-column-transplant.md`,
   `typed-column-adapter.md`, `typed-storage-closeout-1758.md`,
@@ -397,6 +398,7 @@ Docs lint treats this list as a manifest:
 - `TreeDB/docs/spec/write-path-and-durability.md`
 - `TreeDB/docs/spec/recovery.md`
 - `TreeDB/docs/spec/verification.md`
+- `TreeDB/docs/spec/raftcluster.md`
 - `TreeDB/docs/spec/typed-column-schema-evolution.md`
 
 ## Relationship to Existing Docs

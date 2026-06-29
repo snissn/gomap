@@ -1739,6 +1739,13 @@ func collectColumnRetainedSemanticStreamJSONParserObjectPathsWithSkip(raw []byte
 		if childSkip != nil && childSkip.terminal && childDeclared == nil {
 			return nil
 		}
+		if childSkip != nil && childSkip.terminal && childDeclared != nil && len(childDeclared.children) == 0 {
+			valueRaw := jsonParserIndexValue{raw: value, valueType: dataType}
+			for _, colIdx := range childDeclared.columnIndexes {
+				declaredValues[colIdx] = valueRaw
+			}
+			return nil
+		}
 		valuePath := pathInterner.intern(key)
 		nextValue := retainedObjectValue{
 			path:         valuePath,
