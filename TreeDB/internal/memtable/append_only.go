@@ -62,6 +62,12 @@ var appendOnlyEntryPoolGetTotal atomic.Uint64
 var appendOnlyEntryPoolPutTotal atomic.Uint64
 var appendOnlyEntryPoolDropTotal atomic.Uint64
 var appendOnlyEntryPoolDropBytesTotal atomic.Uint64
+var appendOnlyEntryReserveCallsTotal atomic.Uint64
+var appendOnlyEntryReserveEntriesTotal atomic.Uint64
+var appendOnlyEntryReserveGrowCallsTotal atomic.Uint64
+var appendOnlyEntryReserveGrowBytesTotal atomic.Uint64
+var appendOnlyEntryReserveSkippedGrowthAllocsTotal atomic.Uint64
+var appendOnlyEntryReserveSkippedGrowthBytesTotal atomic.Uint64
 var appendOnlyIteratorPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
 var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
@@ -141,6 +147,15 @@ type AppendOnlyEntryPoolStats struct {
 	PutsTotal                uint64
 	DropsTotal               uint64
 	DropBytesTotal           uint64
+}
+
+type AppendOnlyEntryReserveStats struct {
+	CallsTotal               uint64
+	EntriesTotal             uint64
+	GrowCallsTotal           uint64
+	GrowBytesTotal           uint64
+	SkippedGrowthAllocsTotal uint64
+	SkippedGrowthBytesTotal  uint64
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -296,6 +311,17 @@ func AppendOnlyEntryPoolStatsSnapshot() AppendOnlyEntryPoolStats {
 		PutsTotal:                appendOnlyEntryPoolPutTotal.Load(),
 		DropsTotal:               appendOnlyEntryPoolDropTotal.Load(),
 		DropBytesTotal:           appendOnlyEntryPoolDropBytesTotal.Load(),
+	}
+}
+
+func AppendOnlyEntryReserveStatsSnapshot() AppendOnlyEntryReserveStats {
+	return AppendOnlyEntryReserveStats{
+		CallsTotal:               appendOnlyEntryReserveCallsTotal.Load(),
+		EntriesTotal:             appendOnlyEntryReserveEntriesTotal.Load(),
+		GrowCallsTotal:           appendOnlyEntryReserveGrowCallsTotal.Load(),
+		GrowBytesTotal:           appendOnlyEntryReserveGrowBytesTotal.Load(),
+		SkippedGrowthAllocsTotal: appendOnlyEntryReserveSkippedGrowthAllocsTotal.Load(),
+		SkippedGrowthBytesTotal:  appendOnlyEntryReserveSkippedGrowthBytesTotal.Load(),
 	}
 }
 
@@ -707,6 +733,85 @@ func appendOnlyNextCapacity(current int) int {
 	return next
 }
 
+func appendOnlyReserveTargetCapacity(current, needed int) (target int, skippedGrowthAllocs int, skippedGrowthBytes uint64) {
+	target = current
+	if target < 0 {
+		target = 0
+	}
+	if needed <= target {
+		return target, 0, 0
+	}
+	for target < needed {
+		next := appendOnlyNextCapacity(target)
+		if next <= target || next < 0 {
+			next = needed
+		}
+		if next < needed {
+			skippedGrowthAllocs++
+			skippedGrowthBytes += appendOnlyEntryPoolBytes(next)
+		}
+		target = next
+	}
+	return target, skippedGrowthAllocs, skippedGrowthBytes
+}
+
+func (m *AppendOnly) growEntriesLocked(length int, poolPrev bool) bool {
+	if length <= len(m.entries) {
+		return false
+	}
+	if length <= cap(m.entries) {
+		oldLen := len(m.entries)
+		m.entries = m.entries[:length]
+		clear(m.entries[oldLen:])
+		return false
+	}
+	prev := m.entries
+	grown := getAppendOnlyEntries(length)
+	copy(grown, m.entries[:m.count])
+	m.entries = grown
+	if poolPrev {
+		putAppendOnlyEntries(prev)
+	}
+	return true
+}
+
+func (m *AppendOnly) reserveAdditionalEntriesLocked(additional int) bool {
+	if additional <= 0 {
+		return false
+	}
+	needed := m.count + additional
+	if needed < m.count {
+		needed = int(^uint(0) >> 1)
+	}
+	if needed <= len(m.entries) {
+		return false
+	}
+	target, skippedGrowthAllocs, skippedGrowthBytes := appendOnlyReserveTargetCapacity(len(m.entries), needed)
+	if target <= len(m.entries) {
+		return false
+	}
+	appendOnlyEntryReserveCallsTotal.Add(1)
+	appendOnlyEntryReserveEntriesTotal.Add(uint64(additional))
+	if skippedGrowthAllocs > 0 {
+		appendOnlyEntryReserveSkippedGrowthAllocsTotal.Add(uint64(skippedGrowthAllocs))
+		appendOnlyEntryReserveSkippedGrowthBytesTotal.Add(skippedGrowthBytes)
+	}
+	if m.growEntriesLocked(target, true) {
+		appendOnlyEntryReserveGrowCallsTotal.Add(1)
+		appendOnlyEntryReserveGrowBytesTotal.Add(appendOnlyEntryPoolBytes(target))
+	}
+	return true
+}
+
+func (m *AppendOnly) ReserveAdditionalEntries(additional int) {
+	if additional <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.reserveAdditionalEntriesLocked(additional)
+	m.mu.Unlock()
+}
+
 func appendOnlyKeyString(key []byte) string {
 	if len(key) == 0 {
 		return ""
@@ -1069,11 +1174,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) (idx int, ent *appendOnlyEntry, storedKey []byte) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
-		prev := m.entries
-		grown := getAppendOnlyEntries(nextCap)
-		copy(grown, m.entries[:m.count])
-		m.entries = grown
-		putAppendOnlyEntries(prev)
+		m.growEntriesLocked(nextCap, true)
 	}
 	idx = m.count
 	m.count++
@@ -1276,6 +1377,7 @@ func (m *AppendOnly) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borro
 	}
 	borrowedValues := false
 	m.mu.Lock()
+	m.reserveAdditionalEntriesLocked(len(entries))
 	trustedOrdered := m.canAppendTrustedSortedBatchLocked(entries)
 	for i := range entries {
 		op := entries[i]
@@ -1303,6 +1405,7 @@ func (m *AppendOnly) ApplyCopySortedBatchWithValueCopierTrusted(entries []batchp
 	}
 	copiedValues := false
 	m.mu.Lock()
+	m.reserveAdditionalEntriesLocked(len(entries))
 	trustedOrdered := m.canAppendTrustedSortedBatchLocked(entries)
 	for i := range entries {
 		op := entries[i]
@@ -1337,6 +1440,7 @@ func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.reserveAdditionalEntriesLocked(count)
 	for i := 0; i < count; i++ {
 		key, value, ptr, flags, err := emit(i)
 		if err != nil {
@@ -1349,6 +1453,7 @@ func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value
 
 func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []byte), trustedOrder bool) {
 	m.mu.Lock()
+	m.reserveAdditionalEntriesLocked(len(entries))
 	trustedOrdered := trustedOrder && m.canAppendTrustedSortedBatchLocked(entries)
 	for i := range entries {
 		op := entries[i]

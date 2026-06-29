@@ -12,9 +12,11 @@ import (
 
 type recordingCopySortedMem struct {
 	memtable.Table
-	calls  int
-	hasMax bool
-	maxKey []byte
+	calls             int
+	reserveCalls      int
+	reserveAdditional int
+	hasMax            bool
+	maxKey            []byte
 }
 
 func (m *recordingCopySortedMem) noteKey(key []byte) {
@@ -68,6 +70,14 @@ func (m *recordingCopySortedMem) Delete(key []byte) {
 func (m *recordingCopySortedMem) DeleteSteal(key []byte) {
 	m.noteKey(key)
 	m.Table.DeleteSteal(key)
+}
+
+func (m *recordingCopySortedMem) ReserveAdditionalEntries(additional int) {
+	m.reserveCalls++
+	m.reserveAdditional += additional
+	if reserver, ok := m.Table.(memtable.EntryCapacityReserver); ok {
+		reserver.ReserveAdditionalEntries(additional)
+	}
 }
 
 func (m *recordingCopySortedMem) ApplyCopySortedBatchTrusted(entries []batch.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
@@ -148,6 +158,38 @@ func TestBatchWriteSortedUniqueUsesCopySortedFastPath(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
+	if rec.calls != 1 {
+		t.Fatalf("copy sorted fast path calls=%d want 1", rec.calls)
+	}
+	requireCachedValue(t, db, []byte("a"), []byte("va"))
+	requireCachedValue(t, db, []byte("b"), []byte("vb"))
+	requireCachedValue(t, db, []byte("c"), []byte("vc"))
+}
+
+func TestBatchWriteAppendOnlyReservesShardEntriesBeforeApply(t *testing.T) {
+	db, rec := newSortedWriteFastPathDB(t)
+	defer db.Close()
+
+	b := db.NewBatchWithSize(3)
+	if err := b.Set([]byte("a"), []byte("va")); err != nil {
+		t.Fatalf("Set(a): %v", err)
+	}
+	if err := b.Set([]byte("b"), []byte("vb")); err != nil {
+		t.Fatalf("Set(b): %v", err)
+	}
+	if err := b.Set([]byte("c"), []byte("vc")); err != nil {
+		t.Fatalf("Set(c): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if rec.reserveCalls != 1 {
+		t.Fatalf("reserve calls=%d want 1", rec.reserveCalls)
+	}
+	if rec.reserveAdditional != 3 {
+		t.Fatalf("reserve additional=%d want 3", rec.reserveAdditional)
+	}
 	if rec.calls != 1 {
 		t.Fatalf("copy sorted fast path calls=%d want 1", rec.calls)
 	}
