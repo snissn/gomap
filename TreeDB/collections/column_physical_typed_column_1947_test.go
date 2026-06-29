@@ -356,7 +356,7 @@ func TestColumnPhysicalJSONBenchTypedColumnPartNullableFullDataTopKFastPaths2878
 			tb.Fatalf("%s diagnostics=%+v want three non-empty topK candidates", label, diag)
 		}
 	})
-	assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(t, collection, q5)
+	assertTypedColumnQ5OneShotDenseDictionaryValuesByCode3175(t, collection, q5, false)
 
 	missingOperation := []ColumnPhysicalQueryPredicate{
 		{Column: "kind", Value: "commit"},
