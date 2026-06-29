@@ -719,11 +719,13 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 	return nil
 }
 
-func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, last bool, spanNativeFallbackReason backenddb.FlushSpanRunFallbackReason) error {
+func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, commandPublish *checkpointCommandWALPublish, last bool, mode flushCollectionMode) error {
 	if db == nil || len(ops) == 0 {
 		return nil
 	}
 	backendBatch := db.newBackendBatchWithSize(len(ops))
+	attachesCommandPublish := last && commandPublish != nil && commandPublish.appliedLSN != 0 && !commandPublish.consumed
+	spanNativeFallbackReason := flushPointChunkSpanNativeFallbackReasonForCollectionMode(mode, commandPublish, attachesCommandPublish)
 	setBackendBatchSpanNativeFallback(backendBatch, spanNativeFallbackReason)
 	reserveBackendBatchOps(backendBatch, len(ops))
 	if err := appendCanonicalFlushRunChunkToBackendBatch(backendBatch, ops); err != nil {
@@ -761,7 +763,7 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 	return nil
 }
 
-func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []backenddb.FlushSpanRunBackendChunk, syncFlush bool, commandPublish *checkpointCommandWALPublish, spanNativeFallbackReason backenddb.FlushSpanRunFallbackReason) (int, error) {
+func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []backenddb.FlushSpanRunBackendChunk, syncFlush bool, commandPublish *checkpointCommandWALPublish, mode flushCollectionMode) (int, error) {
 	if db == nil || run == nil || len(run.pointOps) == 0 {
 		return 0, nil
 	}
@@ -784,7 +786,7 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 				break
 			}
 		}
-		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, last, spanNativeFallbackReason); err != nil {
+		if err := db.writeCanonicalFlushRunOpsChunk(run.pointOps[chunk.PointOpStart:chunk.PointOpEnd], syncFlush, commandPublish, last, mode); err != nil {
 			return emitted, err
 		}
 		emitted++
@@ -794,7 +796,6 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 
 func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int, mode flushCollectionMode) bool {
 	flushStart := time.Now()
-	spanNativeFallbackReason := flushPointRunSpanNativeFallbackReasonForCollectionMode(mode, commandPublish)
 	buildStart := flushStart
 	build, err := db.buildCanonicalUnitRuns(units, totalLen, totalSpans)
 	if err != nil {
@@ -862,7 +863,7 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		if err := db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, spanNativeFallbackReason); err != nil {
+		if err := db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode); err != nil {
 			return err
 		}
 		putEntrySlice(ops)
@@ -990,7 +991,6 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 		return db.flushCanonicalPointUnitsStreamed(syncFlush, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans, mode)
 	}
 	flushStart := time.Now()
-	spanNativeFallbackReason := flushPointRunSpanNativeFallbackReasonForCollectionMode(mode, commandPublish)
 	buildStart := flushStart
 	run, err := db.buildCanonicalFlushRun(units, totalLen, totalSpans)
 	if err != nil {
@@ -1038,7 +1038,7 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 	}
 
 	writeStart := time.Now()
-	if _, err := db.writeCanonicalFlushRunChunks(run, chunks, syncFlush, commandPublish, spanNativeFallbackReason); err != nil {
+	if _, err := db.writeCanonicalFlushRunChunks(run, chunks, syncFlush, commandPublish, mode); err != nil {
 		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 		return false
 	}

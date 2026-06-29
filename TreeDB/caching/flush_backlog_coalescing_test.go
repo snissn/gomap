@@ -459,6 +459,42 @@ func TestFlushCollectionModeCheckpointCommandWALPublishForcesFallback(t *testing
 	}
 }
 
+func TestFlushCollectionModeCheckpointCommandWALPublishOnlyFencesPublishChunk(t *testing.T) {
+	db, backend := newCoalescingTestDB(t, Options{
+		FlushApplySpanNative:       true,
+		FlushApplyConcurrency:      4,
+		FlushApplyMinEntries:       1,
+		FlushApplyMinSpans:         1,
+		FlushApplyMinBytes:         1,
+		FlushBackendMaxEntries:     2,
+		FlushBackendMaxBatches:     -1,
+		FlushSpanRunTargetPlanning: true,
+	}, highSingleOpCoalescingSnapshot())
+	enqueuePointMemtablesWithOps(t, db, []int{5}, "commandwal-chunk")
+	db.checkpointing.Store(true)
+	publish := &checkpointCommandWALPublish{appliedLSN: 7, ranges: []backenddb.CommandWALLSNRange{{First: 1, Last: 7}}}
+	if !db.flushLaneOnceWithCollectionMode(false, 0, publish, flushCollectionBackground) {
+		t.Fatalf("flushLaneOnceWithCollectionMode returned false")
+	}
+	db.checkpointing.Store(false)
+	if !publish.consumed {
+		t.Fatalf("command WAL publish was not consumed")
+	}
+	backend.mu.RLock()
+	writeCalls := backend.writeCalls
+	reasons := append([]backenddb.FlushSpanRunFallbackReason(nil), backend.spanNativeFallbackReasons...)
+	backend.mu.RUnlock()
+	if writeCalls < 2 {
+		t.Fatalf("backend write calls=%d want multi-chunk flush", writeCalls)
+	}
+	if len(reasons) != 1 {
+		t.Fatalf("explicit fallback reasons=%v want only final publish chunk fenced", reasons)
+	}
+	if got := reasons[0]; got != backenddb.FlushSpanRunFallbackCommandWALBarrier {
+		t.Fatalf("publish chunk fallback reason=%s want %s", got, backenddb.FlushSpanRunFallbackCommandWALBarrier)
+	}
+}
+
 func TestFlushCollectionModeRangeOnlyCheckpointFallbackReason(t *testing.T) {
 	db, backend := newCoalescingTestDB(t, Options{
 		DisableWAL:                 true,
