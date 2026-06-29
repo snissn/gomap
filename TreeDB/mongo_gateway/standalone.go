@@ -12,6 +12,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	treenativewire "github.com/snissn/gomap/TreeDB/nativewire"
 )
 
 const (
@@ -48,6 +49,8 @@ type StandaloneOptions struct {
 	InsertCoalescingMaxBatchSet bool
 	InsertCoalescingMaxBatch    int
 	InsertCoalescingIdleTTL     time.Duration
+	ClusterSubmitter            treenativewire.ClusterSubmitter
+	ClusterCatalogVersion       ClusterCatalogVersionProvider
 }
 
 // StandaloneServer owns the TreeDB backend, collection manager, and MongoDB
@@ -118,6 +121,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	if opts.InsertCoalescingMaxBatch < 0 {
 		return opts, errors.New("mongo gateway standalone: InsertCoalescingMaxBatch must be >= 0")
 	}
+	if opts.ClusterSubmitter != nil && opts.ClusterCatalogVersion == nil {
+		return opts, errors.New("mongo gateway standalone: ClusterCatalogVersion is required when ClusterSubmitter is configured")
+	}
 
 	return opts, nil
 }
@@ -144,6 +150,8 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	server.Collections = manager
 	server.DefaultCollectionOptions = normalized.DefaultCollectionOptions
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy
+	server.ClusterSubmitter = normalized.ClusterSubmitter
+	server.ClusterCatalogVersion = normalized.ClusterCatalogVersion
 	if normalized.MaxMessageLength > 0 {
 		server.MaxMessageLength = normalized.MaxMessageLength
 	}
