@@ -149,6 +149,70 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 	assertCollectionMissing(t, bad, "node-b", "admins")
 }
 
+func TestCommitRejectsInvalidBatchAtomically(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	valid := committedCommand(16, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:atomic"))
+	gap := committedCommand(16, 3, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:atomic-gap"))
+	evidence, err := h.Commit(valid, gap)
+	if !errors.Is(err, ErrCommittedLogGap) {
+		t.Fatalf("Commit invalid batch err=%v, want ErrCommittedLogGap evidence=%+v", err, evidence)
+	}
+	if evidence.Committed {
+		t.Fatalf("Commit invalid batch evidence=%+v, want not committed", evidence)
+	}
+	catchup, err := h.CatchUpNode("node-a")
+	if err != nil {
+		t.Fatalf("CatchUpNode after rejected batch: %v results=%+v", err, catchup)
+	}
+	if len(catchup) != 0 {
+		t.Fatalf("CatchUpNode after rejected batch results=%+v, want no committed entries", catchup)
+	}
+	assertNoLastApplied(t, h, "node-a")
+	assertCollectionMissing(t, h, "node-a", "users")
+	assertCollectionMissing(t, h, "node-a", "orders")
+}
+
+func TestCommitRejectsTermRegressionBeforeMutation(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	highTerm := committedCommand(5, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:term-regression"))
+	lowerTerm := committedCommand(4, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:term-regression"))
+	evidence, err := h.Commit(highTerm, lowerTerm)
+	if !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("Commit term regression batch err=%v, want ErrCommittedLogConflict evidence=%+v", err, evidence)
+	}
+	if evidence.Committed {
+		t.Fatalf("Commit term regression batch evidence=%+v, want not committed", evidence)
+	}
+	catchup, err := h.CatchUpNode("node-a")
+	if err != nil {
+		t.Fatalf("CatchUpNode after rejected term regression: %v results=%+v", err, catchup)
+	}
+	if len(catchup) != 0 {
+		t.Fatalf("CatchUpNode after rejected term regression results=%+v, want no committed entries", catchup)
+	}
+	assertNoLastApplied(t, h, "node-a")
+	assertCollectionMissing(t, h, "node-a", "users")
+	assertCollectionMissing(t, h, "node-a", "orders")
+
+	if _, err := h.Commit(highTerm); err != nil {
+		t.Fatalf("Commit high-term seed after rejected batch: %v", err)
+	}
+	if _, err := h.Commit(lowerTerm); !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("Commit lower-term continuation err=%v, want ErrCommittedLogConflict", err)
+	}
+	catchup, err = h.CatchUpNode("node-a")
+	if err != nil {
+		t.Fatalf("CatchUpNode after rejected continuation: %v results=%+v", err, catchup)
+	}
+	assertAppliedResults(t, "node-a catchup after rejected continuation", catchup, []int64{1})
+	assertLastApplied(t, h, "node-a", raftentry.ApplyEntryID{Term: 5, Index: 1})
+	assertCollectionMissing(t, h, "node-a", "orders")
+}
+
 func TestPostCommitCrashReadableAndPreCommitCrashNoSuccess(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()
@@ -188,6 +252,40 @@ func TestPostCommitCrashReadableAndPreCommitCrashNoSuccess(t *testing.T) {
 		assertDocumentCity(t, h, nodeID, "users", "u1", "hnl")
 		assertLastApplied(t, h, nodeID, raftentry.ApplyEntryID{Term: 15, Index: 2})
 	}
+}
+
+func TestMixedMutationSequenceSurvivesReopenAndCatchUp(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	entries := mixedUserEntries(t, 17)
+	evidence, err := h.CommitAndApply([]raftcluster.NodeID{"node-a"}, entries...)
+	if err != nil {
+		t.Fatalf("CommitAndApply mixed sequence: %v evidence=%+v", err, evidence)
+	}
+	assertInjectedCommittedEvidence(t, evidence)
+	assertAppliedResults(t, "node-a mixed sequence", evidence.Applied["node-a"], []int64{1, 2, 1, 1})
+	if err := h.CloseNode("node-a"); err != nil {
+		t.Fatalf("CloseNode node-a: %v", err)
+	}
+	if _, err := h.ReopenNode("node-a"); err != nil {
+		t.Fatalf("ReopenNode node-a: %v", err)
+	}
+	assertLastApplied(t, h, "node-a", raftentry.ApplyEntryID{Term: 17, Index: 4})
+
+	catchup, err := h.CatchUpNode("node-b")
+	if err != nil {
+		t.Fatalf("CatchUpNode node-b: %v results=%+v", err, catchup)
+	}
+	assertAppliedResults(t, "node-b mixed catchup", catchup, []int64{1, 2, 1, 1})
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 17, Index: 4})
+	if leaderDigest, followerDigest := logicalDigest(t, h, "node-a"), logicalDigest(t, h, "node-b"); leaderDigest != followerDigest {
+		t.Fatalf("digest after mixed reopen/catch-up mismatch leader=%s follower=%s", leaderDigest.Hex(), followerDigest.Hex())
+	}
+	assertDocumentCity(t, h, "node-a", "users", "u1", "sfo")
+	assertDocumentCity(t, h, "node-b", "users", "u1", "sfo")
+	assertDocumentMissing(t, h, "node-a", "users", "u2")
+	assertDocumentMissing(t, h, "node-b", "users", "u2")
 }
 
 func openTestHarness(t testing.TB) *Harness {
@@ -413,6 +511,17 @@ func assertLastApplied(t *testing.T, h *Harness, nodeID raftcluster.NodeID, want
 	}
 }
 
+func assertNoLastApplied(t *testing.T, h *Harness, nodeID raftcluster.NodeID) {
+	t.Helper()
+	node, ok := h.Node(nodeID)
+	if !ok {
+		t.Fatalf("node %s not found", nodeID)
+	}
+	if got, ok := node.LastApplied(); ok {
+		t.Fatalf("%s LastApplied=(%+v,%t), want none", nodeID, got, ok)
+	}
+}
+
 func logicalDigest(t *testing.T, h *Harness, nodeID raftcluster.NodeID) raftapply.LogicalDigestV1 {
 	t.Helper()
 	node, ok := h.Node(nodeID)
@@ -457,5 +566,24 @@ func assertDocumentCity(t *testing.T, h *Harness, nodeID raftcluster.NodeID, col
 	}
 	if city := bson.Raw(got).Lookup("city").StringValue(); city != wantCity {
 		t.Fatalf("%s %s.Get(%q).city=%q, want %q", nodeID, collection, id, city, wantCity)
+	}
+}
+
+func assertDocumentMissing(t *testing.T, h *Harness, nodeID raftcluster.NodeID, collection, id string) {
+	t.Helper()
+	node, ok := h.Node(nodeID)
+	if !ok {
+		t.Fatalf("node %s not found", nodeID)
+	}
+	opened, err := collections.NewCollectionManager(node.DB()).OpenCollection(collection)
+	if err != nil {
+		t.Fatalf("%s OpenCollection %s: %v", nodeID, collection, err)
+	}
+	got, err := opened.Get([]byte(id))
+	if err != nil {
+		t.Fatalf("%s %s.Get(%q): %v", nodeID, collection, id, err)
+	}
+	if got != nil {
+		t.Fatalf("%s %s.Get(%q)=%x, want missing document", nodeID, collection, id, got)
 	}
 }

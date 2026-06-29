@@ -193,11 +193,16 @@ func (h *Harness) Commit(entries ...raftfsm.CommittedEntryV1) (CommitEvidenceV1,
 		ProductionConsensus: false,
 		EntryIDs:            applyEntryIDs(entries),
 	}
+	staged := make([]raftfsm.CommittedEntryV1, len(h.committed), len(h.committed)+len(entries))
+	copy(staged, h.committed)
 	for _, entry := range entries {
-		if err := h.appendCommittedLocked(entry); err != nil {
+		next, err := appendCommitted(staged, entry)
+		if err != nil {
 			return evidence, err
 		}
+		staged = next
 	}
+	h.committed = staged
 	evidence.Committed = len(entries) > 0
 	return evidence, nil
 }
@@ -276,24 +281,29 @@ func (h *Harness) openNode(cfg NodeConfig) (*Node, error) {
 	return &Node{id: cfg.ID, db: db, fsm: fsm}, nil
 }
 
-func (h *Harness) appendCommittedLocked(entry raftfsm.CommittedEntryV1) error {
+func appendCommitted(committed []raftfsm.CommittedEntryV1, entry raftfsm.CommittedEntryV1) ([]raftfsm.CommittedEntryV1, error) {
 	id := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
 	if id.Term == 0 || id.Index == 0 {
-		return fmt.Errorf("%w: invalid committed id %+v", ErrCommittedLogGap, id)
+		return nil, fmt.Errorf("%w: invalid committed id %+v", ErrCommittedLogGap, id)
 	}
-	wantNext := uint64(len(h.committed) + 1)
+	wantNext := uint64(len(committed) + 1)
 	if id.Index > wantNext {
-		return fmt.Errorf("%w: got index %d after %d", ErrCommittedLogGap, id.Index, len(h.committed))
+		return nil, fmt.Errorf("%w: got index %d after %d", ErrCommittedLogGap, id.Index, len(committed))
 	}
 	if id.Index < wantNext {
-		existing := h.committed[id.Index-1]
+		existing := committed[id.Index-1]
 		if !committedEntriesEqual(existing, entry) {
-			return fmt.Errorf("%w: divergent entry at index %d", ErrCommittedLogConflict, id.Index)
+			return nil, fmt.Errorf("%w: divergent entry at index %d", ErrCommittedLogConflict, id.Index)
 		}
-		return nil
+		return committed, nil
 	}
-	h.committed = append(h.committed, cloneCommittedEntry(entry))
-	return nil
+	if len(committed) > 0 {
+		previous := committed[len(committed)-1]
+		if id.Term < previous.Term {
+			return nil, fmt.Errorf("%w: term regression at index %d: term %d after term %d", ErrCommittedLogConflict, id.Index, id.Term, previous.Term)
+		}
+	}
+	return append(committed, cloneCommittedEntry(entry)), nil
 }
 
 func (n *Node) ID() raftcluster.NodeID {
