@@ -110,10 +110,7 @@ func flushRangeOnlySpanNativeFallbackReasonForCollectionMode(mode flushCollectio
 	return backenddb.FlushSpanRunFallbackRangeDeleteBarrier
 }
 
-func flushPointChunkSpanNativeFallbackReasonForCollectionMode(mode flushCollectionMode, commandPublish *checkpointCommandWALPublish, attachesCommandPublish bool) backenddb.FlushSpanRunFallbackReason {
-	if attachesCommandPublish && commandPublish != nil && commandPublish.appliedLSN != 0 && !commandPublish.consumed {
-		return backenddb.FlushSpanRunFallbackCommandWALBarrier
-	}
+func flushPointChunkSpanNativeFallbackReasonForCollectionMode(mode flushCollectionMode, _ *checkpointCommandWALPublish, _ bool) backenddb.FlushSpanRunFallbackReason {
 	return flushSpanNativeFallbackReasonForCollectionMode(mode)
 }
 
