@@ -75,6 +75,31 @@ func (r *routingClusterSubmitter) snapshotRoutes() []ClusterRouteRequest {
 	return append([]ClusterRouteRequest(nil), r.routes...)
 }
 
+type staticClusterRouteProvider struct {
+	mu     sync.Mutex
+	target ClusterRouteTarget
+	err    error
+	routes []ClusterRouteRequest
+}
+
+func (p *staticClusterRouteProvider) ClusterRoute(ctx context.Context, req ClusterRouteRequest) (ClusterRouteTarget, error) {
+	p.mu.Lock()
+	p.routes = append(p.routes, req)
+	p.mu.Unlock()
+	if p.err != nil {
+		return ClusterRouteTarget{}, p.err
+	}
+	target := p.target
+	target.Members = append([]string(nil), target.Members...)
+	return target, nil
+}
+
+func (p *staticClusterRouteProvider) snapshotRoutes() []ClusterRouteRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]ClusterRouteRequest(nil), p.routes...)
+}
+
 type placementRouteClusterSubmitter struct {
 	*fakeClusterSubmitter
 
@@ -1741,6 +1766,13 @@ func TestRaftClusterSubmitterLocalAckUnavailableMapsToNativeError(t *testing.T) 
 	}
 }
 
+func TestRaftClusterSubmitterRouteGroupMismatchMapsToReadOnly(t *testing.T) {
+	err := nativeErrorForRaftClusterSubmit(raftcluster.ErrRouteGroupMismatch)
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrReadOnly {
+		t.Fatalf("nativeErrorForRaftClusterSubmit code=%v ok=%v err=%v, want read-only", code, ok, err)
+	}
+}
+
 func TestRaftClusterSubmitterPreservesCollectionConflictCodes(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1770,6 +1802,38 @@ func TestRaftClusterSubmitterPreservesCollectionConflictCodes(t *testing.T) {
 				t.Fatalf("nativeErrorForDeterministicCode code=%v ok=%v err=%v, want %v", code, ok, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestRaftClusterSubmitterRouteGroupMismatchRejectsBeforeLocalMutation(t *testing.T) {
+	provider := &staticClusterRouteProvider{
+		target: ClusterRouteTarget{
+			GroupID:       "group-b",
+			Members:       []string{"node-c", "node-d"},
+			LeaderHint:    "node-c",
+			PlacementMode: "collection",
+		},
+	}
+	client, _, mgr, _ := serveRaftClusterBridgePipeWithRoute(t, raftcluster.LeaderAdmission(), provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	_, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...)
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route group") {
+		t.Fatalf("CreateCollection route mismatch err=%v want read-only route group mismatch", err)
+	}
+	if _, openErr := mgr.OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after route mismatch err=%v want ErrCollectionNotFound", openErr)
+	}
+	routes := provider.snapshotRoutes()
+	if len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if got := routes[0]; got.Database != "default" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != iwire.CommandCreateCollection {
+		t.Fatalf("route request=%+v want default/default/users create_collection", got)
 	}
 }
 
@@ -1831,6 +1895,11 @@ func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Contex
 
 func serveRaftClusterBridgePipe(t testing.TB, admission raftcluster.AdmissionStatus) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
 	t.Helper()
+	return serveRaftClusterBridgePipeWithRoute(t, admission, nil)
+}
+
+func serveRaftClusterBridgePipeWithRoute(t testing.TB, admission raftcluster.AdmissionStatus, routeProvider ClusterRouteProvider) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{
 		Dir:                          t.TempDir(),
 		CommandWAL:                   true,
@@ -1879,10 +1948,14 @@ func serveRaftClusterBridgePipe(t testing.TB, admission raftcluster.AdmissionSta
 		_ = db.Close()
 		t.Fatalf("NewSingleGroupSubmitter: %v", err)
 	}
+	var submitter ClusterSubmitter = NewRaftClusterSubmitter(bridge, mgr)
+	if routeProvider != nil {
+		submitter = NewRoutedRaftClusterSubmitter(bridge, routeProvider, mgr)
+	}
 	server := NewServer(ServerOptions{
 		Collections:      mgr,
 		Backend:          db,
-		ClusterSubmitter: NewRaftClusterSubmitter(bridge, mgr),
+		ClusterSubmitter: submitter,
 	})
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() {

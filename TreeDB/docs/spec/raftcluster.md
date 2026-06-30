@@ -95,6 +95,9 @@ is intentionally one group only:
 
 - admission is checked through `AdmissionProvider` and fails closed for
   follower or unavailable states;
+- request route metadata, when present, is binding: `ClusterRouteGroupID` must
+  match the local single-group submitter before command preflight, commit, or
+  local apply can run;
 - submitted deterministic native-wire `CommandEntryV1` bytes are decoded before
   commit so unsupported or malformed R3a commands fail before local mutation;
 - decoded entries are preflighted against the local deterministic apply/catalog
