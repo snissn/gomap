@@ -25,6 +25,7 @@ var (
 	ErrMissingCatalogVersion     = errors.New("raftcluster: missing catalog version")
 	ErrCatalogVersionMismatch    = errors.New("raftcluster: catalog version mismatch")
 	ErrUnexpectedCommittedTarget = errors.New("raftcluster: committed target mismatch")
+	ErrRouteGroupMismatch        = errors.New("raftcluster: route group mismatch")
 )
 
 // AdmissionProvider exposes the single-group write-admission state. Returning
@@ -357,6 +358,9 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err := s.admit(ctx); err != nil {
 		return SubmitResultV1{}, err
 	}
+	if err := s.checkRouteBinding(metadata); err != nil {
+		return SubmitResultV1{}, err
+	}
 	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{
 		Limits:          s.decodeLimits,
 		ScopeRule:       s.scopeRule,
@@ -524,6 +528,20 @@ func (s *SingleGroupSubmitter) admit(ctx context.Context) error {
 			msg += "; leader_hint=" + string(status.LeaderHint)
 		}
 		return errors.Join(ErrNotLeader, fmt.Errorf("%s", msg))
+	}
+	return nil
+}
+
+func (s *SingleGroupSubmitter) checkRouteBinding(metadata raftentry.RequestMetadataV1) error {
+	if !metadata.ClusterRouteKnown {
+		return nil
+	}
+	localGroup := string(s.cluster.GroupID)
+	if metadata.ClusterRouteGroupID == "" {
+		return errors.Join(ErrRouteGroupMismatch, fmt.Errorf("route metadata missing group id for local group %q", localGroup))
+	}
+	if metadata.ClusterRouteGroupID != localGroup {
+		return errors.Join(ErrRouteGroupMismatch, fmt.Errorf("route group %q does not match local group %q", metadata.ClusterRouteGroupID, localGroup))
 	}
 	return nil
 }

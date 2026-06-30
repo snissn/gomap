@@ -20,12 +20,35 @@ type RaftClusterSubmitter struct {
 	Collections *collections.CollectionManager
 }
 
+// RoutedRaftClusterSubmitter composes the concrete single-group Raft bridge
+// with a catalog-backed route provider. The base RaftClusterSubmitter does not
+// implement ClusterRouteProvider so existing no-provider behavior stays
+// unchanged.
+type RoutedRaftClusterSubmitter struct {
+	*RaftClusterSubmitter
+	RouteProvider ClusterRouteProvider
+}
+
 func NewRaftClusterSubmitter(bridge *raftcluster.SingleGroupSubmitter, managers ...*collections.CollectionManager) *RaftClusterSubmitter {
 	submitter := &RaftClusterSubmitter{Bridge: bridge}
 	if len(managers) > 0 {
 		submitter.Collections = managers[0]
 	}
 	return submitter
+}
+
+func NewRoutedRaftClusterSubmitter(bridge *raftcluster.SingleGroupSubmitter, provider ClusterRouteProvider, managers ...*collections.CollectionManager) *RoutedRaftClusterSubmitter {
+	return &RoutedRaftClusterSubmitter{
+		RaftClusterSubmitter: NewRaftClusterSubmitter(bridge, managers...),
+		RouteProvider:        provider,
+	}
+}
+
+func (s *RoutedRaftClusterSubmitter) ClusterRoute(ctx context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error) {
+	if s == nil || s.RouteProvider == nil {
+		return ClusterRouteTarget{}, protocolError(iwire.ErrReadOnly, "raft cluster route provider is not configured")
+	}
+	return s.RouteProvider.ClusterRoute(ctx, request)
 }
 
 func (s *RaftClusterSubmitter) ClusterAdmissionStatus(ctx context.Context) (ClusterAdmissionStatus, error) {
@@ -156,6 +179,8 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 	case err == nil:
 		return nil
 	case errors.Is(err, raftcluster.ErrNotLeader):
+		return protocolError(iwire.ErrReadOnly, "%v", err)
+	case errors.Is(err, raftcluster.ErrRouteGroupMismatch):
 		return protocolError(iwire.ErrReadOnly, "%v", err)
 	case errors.Is(err, raftcluster.ErrCatalogVersionMismatch):
 		return protocolError(iwire.ErrCatalogVersionMismatch, "%v", err)

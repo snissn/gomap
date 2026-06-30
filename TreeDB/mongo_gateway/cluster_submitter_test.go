@@ -351,6 +351,11 @@ func newMongoPlacementRouteTestServer(tb testing.TB, mode raftplacement.Placemen
 
 func newMongoRaftBridgeTestServer(tb testing.TB, admission raftcluster.AdmissionStatus) *Server {
 	tb.Helper()
+	return newMongoRaftBridgeTestServerWithRoute(tb, admission, nil)
+}
+
+func newMongoRaftBridgeTestServerWithRoute(tb testing.TB, admission raftcluster.AdmissionStatus, routeProvider treenativewire.ClusterRouteProvider) *Server {
+	tb.Helper()
 	db, err := backenddb.Open(backenddb.Options{
 		Dir:                          tb.TempDir(),
 		CommandWAL:                   true,
@@ -401,7 +406,11 @@ func newMongoRaftBridgeTestServer(tb testing.TB, admission raftcluster.Admission
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	server.ClusterSubmitter = treenativewire.NewRaftClusterSubmitter(bridge, server.Collections)
+	var submitter treenativewire.ClusterSubmitter = treenativewire.NewRaftClusterSubmitter(bridge, server.Collections)
+	if routeProvider != nil {
+		submitter = treenativewire.NewRoutedRaftClusterSubmitter(bridge, routeProvider, server.Collections)
+	}
+	server.ClusterSubmitter = submitter
 	server.ClusterCatalogVersion = func(context.Context) (uint64, error) {
 		state := db.State()
 		if state == nil {
@@ -1395,6 +1404,37 @@ func TestClusterSubmitterConcreteBridgeMajorityInsert(t *testing.T) {
 		t.Fatalf("insert n=%d ok=%v want 1/true", got, ok)
 	}
 	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
+}
+
+func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *testing.T) {
+	provider := &mongoRoutingClusterSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		target: treenativewire.ClusterRouteTarget{
+			GroupID:       "group-b",
+			Members:       []string{"node-c", "node-d"},
+			LeaderHint:    "node-c",
+			PlacementMode: "collection",
+		},
+	}
+	server := newMongoRaftBridgeTestServerWithRoute(t, raftcluster.LeaderAdmission(), provider)
+
+	response := serveCommand(t, server, 325808, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "route group")
+	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection app.users after route mismatch err=%v want collection not found", err)
+	}
+	routes := provider.snapshotRoutes()
+	if len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if got := routes[0]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != iwire.CommandCreateCollection {
+		t.Fatalf("route request=%+v want app/default/users create_collection", got)
+	}
 }
 
 func TestClusterSubmitterRejectsUnsupportedWriteConcernBeforeSubmitOrLocalMutation(t *testing.T) {
