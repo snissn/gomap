@@ -111,11 +111,13 @@ encoded TreeDB primary-key bytes, not the raw BSON value display form.
 
 Native-wire and Mongo gateway cluster submitter adapters MAY run an optional
 route preflight before handing an accepted R3a command entry to the submitter.
-The preflight is adapter metadata only. It records the catalog route identity,
-route shape, target group ID, group members, leader hint, placement mode, and,
-for token/ring decisions, the document token and token partition ID in request
-metadata that is excluded from deterministic command entry bytes and command
-digests.
+The preflight records request-only metadata: catalog route identity, route
+shape, target group ID, group members, leader hint, placement mode, and, for
+token/ring decisions, the document token and token partition ID. That metadata
+is excluded from deterministic command entry bytes and command digests, but it
+is binding at the single-group submit boundary. A `SingleGroupSubmitter` for
+`group-a` must reject a request whose route metadata targets `group-b` before
+command preflight, commit-source invocation, or local apply.
 
 `nativewire.CatalogClusterRouteProvider` is the reusable adapter from
 `ResolvedCatalogV1` to `nativewire.ClusterRouteTarget`. It converts collection
@@ -154,7 +156,9 @@ token-batch classifications. Collection placements may still accept
 token-capable single-ID and multi-ID requests by returning a collection route
 decision, preserving collection-mode write behavior. Leader hints remain hints;
 they are not live leadership proof, read-index evidence, or a network routing
-guarantee.
+guarantee. Route group mismatches are local not-owned/not-writable rejections;
+this layer does not forward writes, fan out token batches, or choose another
+network target.
 
 ## Token/Ring Catalog Placements
 

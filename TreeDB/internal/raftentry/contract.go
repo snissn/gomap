@@ -48,8 +48,9 @@ type RequestMetadataV1 struct {
 	OmitResultIDs     bool
 	OmitResponseMeta  bool
 
-	// ClusterRoute* fields are adapter metadata for cluster submitters. They
-	// are intentionally excluded from deterministic command entry bytes.
+	// ClusterRoute* fields are request-only metadata for cluster submitters.
+	// They are intentionally excluded from deterministic command entry bytes,
+	// but submit admission may still treat them as binding local-route guards.
 	ClusterRouteKnown         bool
 	ClusterRouteDatabase      string
 	ClusterRouteCatalog       string
