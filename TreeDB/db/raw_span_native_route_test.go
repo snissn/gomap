@@ -303,7 +303,7 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 	})
 }
 
-func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackUsesBackendFallback(t *testing.T) {
+func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackPreservesBarrierReason(t *testing.T) {
 	d := openExplicitRawSpanNativeRouteTestDB(t)
 	batch := d.NewPhysicalBatch()
 	b, ok := batch.(*Batch)
@@ -325,17 +325,17 @@ func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackUsesBackendFallback
 	}
 
 	stats := d.Stats()
-	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.command_wal_barrier.count_total"); got != 0 {
-		t.Fatalf("point_put command_wal_barrier count=%d, want 0 for backend raw route stats", got)
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.command_wal_barrier.count_total"); got != 1 {
+		t.Fatalf("point_put command_wal_barrier count=%d, want 1 for raw route stats", got)
 	}
-	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.span_native_not_implemented.count_total"); got != 1 {
-		t.Fatalf("point_put span_native_not_implemented count=%d, want 1 for backend raw fallback", got)
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.span_native_not_implemented.count_total"); got != 0 {
+		t.Fatalf("point_put span_native_not_implemented count=%d, want 0 for explicit command WAL barrier", got)
 	}
-	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.command_wal_barrier.count_total"); got != 0 {
-		t.Fatalf("backend raw command_wal_barrier count=%d, want 0", got)
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.command_wal_barrier.count_total"); got != 1 {
+		t.Fatalf("raw command_wal_barrier count=%d, want 1", got)
 	}
-	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.span_native_not_implemented.count_total"); got != 1 {
-		t.Fatalf("backend raw span_native_not_implemented count=%d, want 1", got)
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.span_native_not_implemented.count_total"); got != 0 {
+		t.Fatalf("raw span_native_not_implemented count=%d, want 0", got)
 	}
 }
 
