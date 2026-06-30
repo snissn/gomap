@@ -323,9 +323,20 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyCommittedEntryV1 seed result: %v result=%+v", err, result)
 	}
+	laterID := raftentry.ApplyEntryID{Term: 1, Index: 2}
+	laterRaw := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders", testCreateCollectionMetaOptions{})
+	later, err := ApplyCommittedEntryV1(db, laterRaw, applyMeta(laterID.Term, laterID.Index), Options{
+		ResultStore: results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 later result: %v result=%+v", err, later)
+	}
+	if later.ResultDigest == result.ResultDigest {
+		t.Fatalf("later result digest=%s unexpectedly equals first boundary", later.ResultDigest.Hex())
+	}
 	beforeFrames := readCommandWALFrames(t, dir)
-	if len(beforeFrames) != 1 {
-		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	if len(beforeFrames) != 2 {
+		t.Fatalf("seed command WAL frames=%d, want 2", len(beforeFrames))
 	}
 	progress := NewMemoryApplyProgressStore(8, 8)
 
@@ -344,11 +355,99 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 	if progress.Len() != 1 {
 		t.Fatalf("progress records after stored result replay=%d, want 1", progress.Len())
 	}
+	progressRecord, ok, err := progress.LookupApplyProgress(id)
+	if err != nil || !ok {
+		t.Fatalf("LookupApplyProgress stored result=(%+v,%t,%v), want repaired progress", progressRecord, ok, err)
+	}
+	if progressRecord.LogicalDigestV1 != LogicalDigestV1(result.ResultDigest) {
+		t.Fatalf("stored result progress digest=%s, want stored boundary %s", progressRecord.LogicalDigestV1.Hex(), result.ResultDigest.Hex())
+	}
+	if progressRecord.LogicalDigestV1 == LogicalDigestV1(later.ResultDigest) {
+		t.Fatalf("stored result progress digest=%s used later DB boundary", progressRecord.LogicalDigestV1.Hex())
+	}
 	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
 		t.Fatalf("stored result replay reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
 	}
 	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
 		t.Fatalf("command WAL frames after stored result replay=%d, want %d", got, len(beforeFrames))
+	}
+}
+
+func TestStoredDuplicateResultReplayRecordsBoundaryProgressDigest(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	progress := NewMemoryApplyProgressStore(8, 8)
+	results := NewMemoryApplyResultStore(8)
+	rawUsers := deterministicCreateCollectionEntry(t, "users", "client-a:create:users:stored-duplicate-replay", testCreateCollectionMetaOptions{})
+	first, err := ApplyCommittedEntryV1(db, rawUsers, applyMeta(1, 1), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, first, raftentry.ApplyStatusApplied, 1)
+
+	rawOrders := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders:stored-duplicate-replay", testCreateCollectionMetaOptions{})
+	advanced, err := ApplyCommittedEntryV1(db, rawOrders, applyMeta(1, 2), Options{
+		ProgressStore: progress,
+		ResultStore:   results,
+	})
+	assertApplied(t, advanced, raftentry.ApplyStatusApplied, 1)
+	if advanced.ResultDigest == first.ResultDigest {
+		t.Fatalf("advanced result digest=%s unexpectedly equals original boundary", advanced.ResultDigest.Hex())
+	}
+	beforeFrames := readCommandWALFrames(t, dir)
+	if len(beforeFrames) != 2 {
+		t.Fatalf("seed command WAL frames=%d, want 2", len(beforeFrames))
+	}
+
+	duplicateID := raftentry.ApplyEntryID{Term: 1, Index: 3}
+	failed, err := ApplyCommittedEntryV1(db, rawUsers, applyMeta(duplicateID.Term, duplicateID.Index), Options{
+		ProgressStore: recordProgressStoreFailAfterPreflight{},
+		ResultStore:   results,
+	})
+	assertRecoveryRequired(t, failed, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	record, ok, err := results.LookupApplyResult(duplicateID)
+	if err != nil || !ok {
+		t.Fatalf("LookupApplyResult duplicate=(%+v,%t,%v), want stored duplicate result", record, ok, err)
+	}
+	if record.Result.ResultDigest != first.ResultDigest {
+		t.Fatalf("stored duplicate result digest=%s, want original result boundary %s", record.Result.ResultDigest.Hex(), first.ResultDigest.Hex())
+	}
+	if record.ProgressLogicalDigestV1 != LogicalDigestV1(advanced.ResultDigest) {
+		t.Fatalf("stored duplicate progress digest=%s, want duplicate boundary %s", record.ProgressLogicalDigestV1.Hex(), advanced.ResultDigest.Hex())
+	}
+	if progress.Len() != 2 {
+		t.Fatalf("progress records after duplicate progress failure=%d, want original two records", progress.Len())
+	}
+
+	seam := &countingCommandWALApplySeam{}
+	replayed, err := ApplyCommittedEntryV1(db, rawUsers, applyMeta(duplicateID.Term, duplicateID.Index), Options{
+		ProgressStore:       progress,
+		ResultStore:         results,
+		CommandWALApplySeam: seam,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 stored duplicate replay: %v result=%+v", err, replayed)
+	}
+	if replayed != record.Result {
+		t.Fatalf("stored duplicate replay=%+v, want stored duplicate %+v", replayed, record.Result)
+	}
+	progressRecord, ok, err := progress.LookupApplyProgress(duplicateID)
+	if err != nil || !ok {
+		t.Fatalf("LookupApplyProgress duplicate=(%+v,%t,%v), want repaired progress", progressRecord, ok, err)
+	}
+	if progressRecord.LogicalDigestV1 != LogicalDigestV1(advanced.ResultDigest) {
+		t.Fatalf("repaired duplicate progress digest=%s, want duplicate boundary %s", progressRecord.LogicalDigestV1.Hex(), advanced.ResultDigest.Hex())
+	}
+	if progressRecord.LogicalDigestV1 == LogicalDigestV1(first.ResultDigest) {
+		t.Fatalf("repaired duplicate progress digest=%s used original result boundary", progressRecord.LogicalDigestV1.Hex())
+	}
+	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
+		t.Fatalf("stored duplicate replay reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)
+	}
+	if got := len(readCommandWALFrames(t, dir)); got != len(beforeFrames) {
+		t.Fatalf("command WAL frames after stored duplicate replay=%d, want %d", got, len(beforeFrames))
 	}
 }
 
@@ -2348,6 +2447,10 @@ func (recordProgressStoreFailAfterPreflight) CheckCanRecordApplied(ApplyProgress
 
 func (recordProgressStoreFailAfterPreflight) RecordApplied(ApplyProgressRecordV1) error {
 	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "progress store unavailable after apply")
+}
+
+func (recordProgressStoreFailAfterPreflight) LookupApplyProgress(raftentry.ApplyEntryID) (ApplyProgressRecordV1, bool, error) {
+	return ApplyProgressRecordV1{}, false, nil
 }
 
 func (recordProgressStoreFailAfterPreflight) LastApplied() (raftentry.ApplyEntryID, bool) {

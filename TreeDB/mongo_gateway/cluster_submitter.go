@@ -29,6 +29,14 @@ func (s *Server) clusterSubmitterConfigured() bool {
 	return s != nil && s.ClusterSubmitter != nil
 }
 
+func (s *Server) clusterRouteProviderConfigured() bool {
+	if s == nil || s.ClusterSubmitter == nil {
+		return false
+	}
+	_, ok := s.ClusterSubmitter.(treenativewire.ClusterRouteProvider)
+	return ok
+}
+
 func (s *Server) currentClusterCatalogVersion(ctx context.Context) (uint64, error) {
 	if s == nil || s.ClusterCatalogVersion == nil {
 		return 0, errors.New("Mongo gateway cluster catalog version provider is not configured")
@@ -144,7 +152,11 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		return marshalUpdateResponse(0, 0)
 	}
 	if len(updates) != 1 {
-		if err := s.preflightClusterRoute(ctx, mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")); err != nil {
+		route := mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
+		if s.clusterRouteProviderConfigured() {
+			route = mongoClusterUpdateBatchRouteRequest(db, collection, updates)
+		}
+		if err := s.preflightClusterRoute(ctx, route); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
 	}
@@ -206,7 +218,11 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		return marshalDeleteResponse(0)
 	}
 	if len(deletes) != 1 {
-		if err := s.preflightClusterRoute(ctx, mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")); err != nil {
+		route := mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
+		if s.clusterRouteProviderConfigured() {
+			route = mongoClusterDeleteBatchRouteRequest(db, collection, deletes)
+		}
+		if err := s.preflightClusterRoute(ctx, route); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
 	}
@@ -553,7 +569,56 @@ func mongoClusterDocumentIDsRouteRequest(db, collection string, command iwire.Co
 	if len(ids) == 1 {
 		return mongoClusterDocumentIDRouteRequest(db, collection, command, commandName, ids[0])
 	}
-	return mongoClusterRouteRequest(db, collection, command, commandName)
+	req := mongoClusterRouteRequest(db, collection, command, commandName)
+	if len(ids) > 1 {
+		req.Shape = treenativewire.ClusterRouteShapeTokenBatch
+		req.Tokens = make([]uint64, len(ids))
+		for i, id := range ids {
+			req.Tokens[i] = raftplacement.DocumentIDTokenV1(id)
+		}
+	}
+	return req
+}
+
+func mongoClusterUpdateBatchRouteRequest(db, collection string, updates []wire.Document) *treenativewire.ClusterRouteRequest {
+	ids := make([][]byte, 0, len(updates))
+	for i, update := range updates {
+		item, err := parseMongoUpdateItem(i, update)
+		if err != nil || !item.bsonSetFieldsOK {
+			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
+		}
+		ids = append(ids, item.key)
+	}
+	return mongoClusterDocumentIDsRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set", ids)
+}
+
+func mongoClusterDeleteBatchRouteRequest(db, collection string, deletes []wire.Document) *treenativewire.ClusterRouteRequest {
+	ids := make([][]byte, 0, len(deletes))
+	seenIDs := make(map[string]struct{}, len(deletes))
+	for _, deleteItem := range deletes {
+		filter, err := requiredDocumentField(deleteItem, "q")
+		if err != nil {
+			return mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
+		}
+		id, err := idEqualityFilterValue(filter, "delete")
+		if err != nil {
+			return mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
+		}
+		if limit, err := optionalInt32Field(deleteItem, "limit"); err != nil || (limit != 0 && limit != 1) {
+			return mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
+		}
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
+		}
+		keyString := string(key)
+		if _, ok := seenIDs[keyString]; ok {
+			continue
+		}
+		seenIDs[keyString] = struct{}{}
+		ids = append(ids, key)
+	}
+	return mongoClusterDocumentIDsRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch", ids)
 }
 
 func validateMongoClusterSubmitResult(requested iwire.AckPolicy, result treenativewire.ClusterSubmitResult) error {

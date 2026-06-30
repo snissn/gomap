@@ -418,6 +418,29 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 			diag.TypedColumnPrepareDensePreapplyNanos,
 			diag)
 	}
+	if diag.TypedColumnPrepareDenseGroupNanos < 0 {
+		tb.Fatalf("%s setup negative dense group diagnostics=%d diagnostics=%+v", label, diag.TypedColumnPrepareDenseGroupNanos, diag)
+	}
+	rawSetupNanos := diag.TypedColumnPrepareReadImageNanos +
+		diag.TypedColumnPrepareStateBuildNanos +
+		diag.TypedColumnPrepareDictionaryNanos +
+		diag.TypedColumnPrepareAdapterNanos
+	if diag.TypedColumnPrepareRangeReadNanos != 0 || diag.TypedColumnPrepareRangeReadBytes != 0 {
+		tb.Fatalf("%s setup range-read diagnostics=%d/%d want 0 for raw q1 setup diagnostics=%+v",
+			label,
+			diag.TypedColumnPrepareRangeReadNanos,
+			diag.TypedColumnPrepareRangeReadBytes,
+			diag)
+	}
+	if diag.TypedColumnPreparePartDecodeNanos != 0 && rawSetupNanos == 0 {
+		tb.Fatalf("%s setup missing raw split diagnostics read_image=%d state_build=%d dictionary=%d adapter=%d diagnostics=%+v",
+			label,
+			diag.TypedColumnPrepareReadImageNanos,
+			diag.TypedColumnPrepareStateBuildNanos,
+			diag.TypedColumnPrepareDictionaryNanos,
+			diag.TypedColumnPrepareAdapterNanos,
+			diag)
+	}
 }
 
 func reportColumnPhysicalQ1DenseBenchMetrics1950(b *testing.B, diag ColumnPhysicalQueryDiagnostics) {
@@ -439,6 +462,13 @@ func reportColumnPhysicalQ1DenseOneShotSetupBenchMetrics1950(b *testing.B, diag 
 	b.ReportMetric(float64(diag.TypedColumnPreparePairingNanos), "typed_column_prepare_pairing_nanos/op")
 	b.ReportMetric(float64(diag.TypedColumnPreparePartDecodeNanos), "typed_column_prepare_part_decode_nanos/op")
 	b.ReportMetric(float64(diag.TypedColumnPreparePostPrepareNanos), "typed_column_prepare_post_prepare_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareReadImageNanos), "typed_column_prepare_read_image_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareStateBuildNanos), "typed_column_prepare_state_build_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareDictionaryNanos), "typed_column_prepare_dictionary_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareRangeReadNanos), "typed_column_prepare_range_read_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareRangeReadBytes), "typed_column_prepare_range_read_bytes/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareAdapterNanos), "typed_column_prepare_adapter_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareDenseGroupNanos), "typed_column_prepare_dense_group_nanos/op")
 }
 
 func totalQ1DenseRows1950(batches [][]columnPhysicalJSONBenchParityEventP0) int {

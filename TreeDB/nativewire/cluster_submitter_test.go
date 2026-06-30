@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,42 +74,16 @@ func (r *routingClusterSubmitter) snapshotRoutes() []ClusterRouteRequest {
 type placementRouteClusterSubmitter struct {
 	*fakeClusterSubmitter
 
-	routeMu sync.Mutex
-	catalog raftplacement.ResolvedCatalogV1
-	routes  []ClusterRouteRequest
+	routeMu  sync.Mutex
+	provider CatalogClusterRouteProvider
+	routes   []ClusterRouteRequest
 }
 
 func (p *placementRouteClusterSubmitter) ClusterRoute(ctx context.Context, req ClusterRouteRequest) (ClusterRouteTarget, error) {
 	p.routeMu.Lock()
 	p.routes = append(p.routes, req)
 	p.routeMu.Unlock()
-	var decision raftplacement.RouteDecisionV1
-	var err error
-	if req.Shape == ClusterRouteShapeToken && req.TokenKnown {
-		decision, err = p.catalog.RouteDocumentToken(req.Database, req.Catalog, req.Collection, req.Token)
-	} else {
-		decision, err = p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
-	}
-	if err != nil {
-		return ClusterRouteTarget{}, err
-	}
-	members := make([]string, len(decision.Group.Members))
-	for i, member := range decision.Group.Members {
-		members[i] = string(member)
-	}
-	target := ClusterRouteTarget{
-		GroupID:       string(decision.GroupID()),
-		Members:       members,
-		LeaderHint:    string(decision.LeaderHint()),
-		PlacementMode: string(decision.PlacementMode),
-		Shape:         ClusterRouteShape(decision.Shape),
-	}
-	if decision.Token.Present {
-		target.TokenKnown = true
-		target.Token = decision.Token.Token
-		target.PartitionID = string(decision.Token.Partition.ID)
-	}
-	return target, nil
+	return p.provider.ClusterRoute(ctx, req)
 }
 
 func (p *placementRouteClusterSubmitter) snapshotRoutes() []ClusterRouteRequest {
@@ -630,6 +605,125 @@ func TestClusterRoutePreflightRejectsMissingPlacementMode(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightRejectsFanoutTokenBatch(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		target: ClusterRouteTarget{
+			PlacementMode:   string(raftplacement.PlacementModeRingV1),
+			Shape:           ClusterRouteShapeTokenBatch,
+			TokenBatchClass: string(raftplacement.TokenBatchRouteFanoutRequiredV1),
+		},
+	}
+	request := ClusterRouteRequest{
+		Database:    "default",
+		Catalog:     "default",
+		Collection:  "users",
+		CommandID:   iwire.CommandInsertBatch,
+		CommandName: "insert_batch",
+		Shape:       ClusterRouteShapeTokenBatch,
+		Tokens:      []uint64{1, 2},
+	}
+	if _, _, err := PreflightClusterRoute(context.Background(), submitter, request); codeOf(err) != iwire.ErrReadOnly || !strings.Contains(err.Error(), "requires fanout before submit") {
+		t.Fatalf("token batch fanout preflight err=%v want fanout read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
+func TestCatalogClusterRouteProviderRoutesResolvedCatalog(t *testing.T) {
+	collectionProvider := NewCatalogClusterRouteProvider(mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeCollectionV1))
+	collectionTarget, err := collectionProvider.ClusterRoute(context.Background(), ClusterRouteRequest{
+		Database:   "default",
+		Catalog:    "default",
+		Collection: "users",
+		Shape:      ClusterRouteShapeCollection,
+	})
+	if err != nil {
+		t.Fatalf("ClusterRoute collection: %v", err)
+	}
+	if collectionTarget.GroupID != "group-a" || collectionTarget.LeaderHint != "node-a" || collectionTarget.PlacementMode != string(raftplacement.PlacementModeCollectionV1) || collectionTarget.Shape != ClusterRouteShapeCollection {
+		t.Fatalf("collection target=%+v want group-a/node-a collection", collectionTarget)
+	}
+	if !reflect.DeepEqual(collectionTarget.Members, []string{"node-a", "node-b"}) {
+		t.Fatalf("collection members=%v want [node-a node-b]", collectionTarget.Members)
+	}
+
+	for _, mode := range []raftplacement.PlacementModeV1{raftplacement.PlacementModeTokenV1, raftplacement.PlacementModeRingV1} {
+		t.Run(string(mode), func(t *testing.T) {
+			provider := NewCatalogClusterRouteProvider(mustNativewireRouteBatchTestCatalog(t, mode))
+			tokenTarget, err := provider.ClusterRoute(context.Background(), ClusterRouteRequest{
+				Database:   "default",
+				Catalog:    "default",
+				Collection: "users",
+				Shape:      ClusterRouteShapeToken,
+				TokenKnown: true,
+				Token:      12,
+			})
+			if err != nil {
+				t.Fatalf("ClusterRoute token: %v", err)
+			}
+			if tokenTarget.GroupID != "group-a" || tokenTarget.LeaderHint != "node-a" || tokenTarget.PlacementMode != string(mode) || tokenTarget.Shape != ClusterRouteShapeToken {
+				t.Fatalf("token target=%+v want group-a/node-a %s token", tokenTarget, mode)
+			}
+			if !tokenTarget.TokenKnown || tokenTarget.Token != 12 || tokenTarget.PartitionID != "p1" {
+				t.Fatalf("token target token known/token/partition=%v/%d/%q want true/12/p1", tokenTarget.TokenKnown, tokenTarget.Token, tokenTarget.PartitionID)
+			}
+
+			tests := []struct {
+				name      string
+				tokens    []uint64
+				wantClass raftplacement.TokenBatchRouteClassV1
+				wantGroup string
+			}{
+				{
+					name:      "same_partition",
+					tokens:    []uint64{1, 2},
+					wantClass: raftplacement.TokenBatchRouteSamePartitionV1,
+					wantGroup: "group-a",
+				},
+				{
+					name:      "same_group_multi_partition",
+					tokens:    []uint64{1, 12},
+					wantClass: raftplacement.TokenBatchRouteSameGroupV1,
+					wantGroup: "group-a",
+				},
+				{
+					name:      "fanout_required",
+					tokens:    []uint64{1, 20},
+					wantClass: raftplacement.TokenBatchRouteFanoutRequiredV1,
+				},
+			}
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					target, err := provider.ClusterRoute(context.Background(), ClusterRouteRequest{
+						Database:   "default",
+						Catalog:    "default",
+						Collection: "users",
+						Shape:      ClusterRouteShapeTokenBatch,
+						Tokens:     tc.tokens,
+					})
+					if err != nil {
+						t.Fatalf("ClusterRoute token batch: %v", err)
+					}
+					if target.PlacementMode != string(mode) || target.Shape != ClusterRouteShapeTokenBatch || target.TokenBatchClass != string(tc.wantClass) {
+						t.Fatalf("token batch target=%+v want mode=%s class=%s", target, mode, tc.wantClass)
+					}
+					if target.GroupID != tc.wantGroup {
+						t.Fatalf("token batch group=%q want %q", target.GroupID, tc.wantGroup)
+					}
+					if tc.wantClass == raftplacement.TokenBatchRouteFanoutRequiredV1 && (target.LeaderHint != "" || len(target.Members) != 0) {
+						t.Fatalf("fanout target unexpectedly selected leader/members: %+v", target)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestClusterRoutePreflightSkipsMalformedDeterministicEntry(t *testing.T) {
 	submitter := &routingClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
@@ -671,7 +765,7 @@ func TestClusterRoutePreflightTokenPlacementAcceptsSingleID(t *testing.T) {
 	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeTokenV1)
 	submitter := &placementRouteClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
-		catalog:              catalog,
+		provider:             NewCatalogClusterRouteProvider(catalog),
 	}
 	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -779,7 +873,7 @@ func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.
 				catalog := mustNativewireRouteTestCatalog(t, mode)
 				submitter := &placementRouteClusterSubmitter{
 					fakeClusterSubmitter: &fakeClusterSubmitter{},
-					catalog:              catalog,
+					provider:             NewCatalogClusterRouteProvider(catalog),
 				}
 				client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -808,6 +902,43 @@ func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.
 				assertNativeClusterTokenRouteMetadata(t, calls[0], mode, "p0", token)
 			})
 		}
+	}
+}
+
+func TestClusterRoutePreflightCollectionPlacementAcceptsMultiIDBatch(t *testing.T) {
+	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeCollectionV1)
+	submitter := &placementRouteClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		provider:             NewCatalogClusterRouteProvider(catalog),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"name":"Ada"}`), []byte(`{"name":"Grace"}`)},
+		AckVisible,
+	); err != nil {
+		t.Fatalf("InsertBatch collection placement multi-ID: %v", err)
+	}
+	routes := submitter.snapshotRoutes()
+	if len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	wantTokens := []uint64{raftplacement.DocumentIDTokenV1([]byte("u1")), raftplacement.DocumentIDTokenV1([]byte("u2"))}
+	if got := routes[0]; got.Shape != ClusterRouteShapeTokenBatch || got.TokenKnown || !reflect.DeepEqual(got.Tokens, wantTokens) {
+		t.Fatalf("multi-ID route request=%+v want token_batch tokens=%v", got, wantTokens)
+	}
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeCollection) || meta.ClusterRoutePlacementMode != string(raftplacement.PlacementModeCollectionV1) {
+		t.Fatalf("metadata route known/shape/mode=%v/%q/%q want collection", meta.ClusterRouteKnown, meta.ClusterRouteShape, meta.ClusterRoutePlacementMode)
 	}
 }
 
@@ -851,7 +982,7 @@ func TestClusterRoutePreflightTokenPlacementRejectsMultiID(t *testing.T) {
 			catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeRingV1)
 			submitter := &placementRouteClusterSubmitter{
 				fakeClusterSubmitter: &fakeClusterSubmitter{},
-				catalog:              catalog,
+				provider:             NewCatalogClusterRouteProvider(catalog),
 			}
 			client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -859,13 +990,13 @@ func TestClusterRoutePreflightTokenPlacementRejectsMultiID(t *testing.T) {
 			if err := client.Hello(ctx); err != nil {
 				t.Fatalf("Hello: %v", err)
 			}
-			if err := tc.run(ctx, client); !isRemoteError(err, iwire.ErrReadOnly) {
+			if err := tc.run(ctx, client); !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "requires command split before submit") {
 				t.Fatalf("%s multi-ID token placement err=%v want read-only", tc.name, err)
 			}
 			if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 				t.Fatalf("route calls=%d want 1", len(routes))
-			} else if routes[0].Shape != ClusterRouteShapeCollection || routes[0].TokenKnown {
-				t.Fatalf("multi-ID route request=%+v want collection-shaped without token", routes[0])
+			} else if routes[0].Shape != ClusterRouteShapeTokenBatch || routes[0].TokenKnown || len(routes[0].Tokens) != 2 {
+				t.Fatalf("multi-ID route request=%+v want token_batch with two tokens", routes[0])
 			}
 			if calls := submitter.snapshot(); len(calls) != 0 {
 				t.Fatalf("submitter calls=%d want 0", len(calls))
@@ -886,6 +1017,32 @@ func mustNativewireRouteTestCatalog(tb testing.TB, mode raftplacement.PlacementM
 			},
 		},
 		Placements: []raftplacement.CollectionPlacementV1{
+			nativewireRouteTestPlacement(mode),
+		},
+	})
+	if err != nil {
+		tb.Fatalf("Validate route test catalog: %v", err)
+	}
+	return catalog
+}
+
+func mustNativewireRouteBatchTestCatalog(tb testing.TB, mode raftplacement.PlacementModeV1) raftplacement.ResolvedCatalogV1 {
+	tb.Helper()
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{
+				ID:         "group-a",
+				Members:    []raftcluster.NodeID{"node-a", "node-b"},
+				LeaderHint: "node-a",
+			},
+			{
+				ID:         "group-b",
+				Members:    []raftcluster.NodeID{"node-c", "node-d"},
+				LeaderHint: "node-c",
+			},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{
 			{
 				Collection: raftplacement.CollectionRefV1{
 					Database:   "default",
@@ -894,20 +1051,41 @@ func mustNativewireRouteTestCatalog(tb testing.TB, mode raftplacement.PlacementM
 				},
 				Mode: mode,
 				TokenPartitions: []raftplacement.TokenPartitionV1{
-					{
-						ID:      "p0",
-						GroupID: "group-a",
-						Start:   0,
-						End:     ^uint64(0),
-					},
+					{ID: "p0", GroupID: "group-a", Start: 0, End: 9},
+					{ID: "p1", GroupID: "group-a", Start: 10, End: 19},
+					{ID: "p2", GroupID: "group-b", Start: 20, End: ^uint64(0)},
 				},
 			},
 		},
 	})
 	if err != nil {
-		tb.Fatalf("Validate route test catalog: %v", err)
+		tb.Fatalf("Validate batch route test catalog: %v", err)
 	}
 	return catalog
+}
+
+func nativewireRouteTestPlacement(mode raftplacement.PlacementModeV1) raftplacement.CollectionPlacementV1 {
+	placement := raftplacement.CollectionPlacementV1{
+		Collection: raftplacement.CollectionRefV1{
+			Database:   "default",
+			Catalog:    "default",
+			Collection: "users",
+		},
+		Mode: mode,
+	}
+	if mode == raftplacement.PlacementModeCollectionV1 {
+		placement.GroupID = "group-a"
+		return placement
+	}
+	placement.TokenPartitions = []raftplacement.TokenPartitionV1{
+		{
+			ID:      "p0",
+			GroupID: "group-a",
+			Start:   0,
+			End:     ^uint64(0),
+		},
+	}
+	return placement
 }
 
 func TestClusterSubmitterRequestOnlyFieldsDoNotAlterDeterministicEntry(t *testing.T) {

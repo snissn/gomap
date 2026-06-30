@@ -1,8 +1,10 @@
 # TreeDB Nativewire YCSB Closeout Evidence
 
 Status: external `go-ycsb` nativewire load-only closeout evidence for #2026
-and #3355 refreshed on current `origin/main` commit
-`61910b8eac108c5f2c35f07a374879d1fb2dc5c8`.
+and #3355 refreshed on `origin/main` commit
+`61910b8eac108c5f2c35f07a374879d1fb2dc5c8`; reconciled by merged PR #3385
+with the #3374 diagnostic classification at
+`3f2c712bb700806b29deb872ed90531d4828ab79`.
 
 This refresh includes the later Raft snapshot/route-preflight merges that the
 first closeout capture predated, including
@@ -15,8 +17,40 @@ coverage at `61910b8eac108c5f2c35f07a374879d1fb2dc5c8`.
 This report records the final 100k and 1M nativewire YCSB load checks requested
 by #2026 after the deterministic publication/readability slices landed. It is
 developer-machine correctness and throughput evidence for the nativewire load
-path. It does not replace the full MongoDB / TreeDB comparison matrix in
-`docs/benchmarks/ycsb_latest_main_2026-06-03.md`.
+path, and #3385 classifies the remaining invalid intermediate YCSB caveat as
+non-current TreeDB publication evidence. Together with the deterministic
+publication/readability proofs and #3374 classification, this is sufficient to
+close the local storage-publication/readability tracker #2026. It does not
+replace the full MongoDB / TreeDB comparison matrix in
+`docs/benchmarks/ycsb_latest_main_2026-06-03.md`, and it does not claim
+distributed HA, Raft read-index/snapshots/rejoin, or routing/fanout readiness.
+Those distributed scopes remain out of #2026 and are tracked by
+#3044/#3045/#3046.
+
+## #3385 Reconciliation
+
+The local #2026 closeout state is:
+
+- deterministic publication/readability tests cover collection catalog EOF
+  fault boundaries, forced value-log pointers, current-writable value-log read
+  barriers, snapshot/reopen readability, and the nativewire YCSB-shaped path;
+- this report covers the external 100k and 1M nativewire load evidence with
+  zero `INSERT_ERROR`;
+- `docs/benchmarks/nativewire_ycsb_insert_error_classification_2026-06-30.md`
+  classifies the invalid intermediate 1M `INSERT_ERROR` artifact as a
+  non-reproduced client/harness/protocol/server-lifecycle interruption, not as
+  evidence of a current catalog/value-log publication failure.
+
+#3385 did not rerun `scripts/nativewire_ycsb_diagnostic.sh`. The diagnostic
+evidence at `3f2c712bb700806b29deb872ed90531d4828ab79` already includes the
+later route-preflight context that made the original `61910b8e...` evidence
+worth refreshing. #3385 merged after the #3384 catalog-backed cluster route
+provider delta (`2e03fb95`) and on top of `origin/main` `fef8b711`, so this
+no-rerun boundary already includes that nativewire route-provider change. The
+remaining delta introduced here is docs-only closeout text, not changes to the
+nativewire insert path, collection catalog publication path, route-provider
+selection path, or value-log pointer read-boundary code. That makes this PR a
+docs-only closeout reconciliation rather than a fresh benchmark run.
 
 ## Benchmark Boundary
 
@@ -157,13 +191,30 @@ This closeout run proves the compatible external nativewire YCSB client can load
 100k and 1M records against the current `command_wal_relaxed` TreeDB nativewire
 server with zero insert errors on this host. The refreshed capture removes the
 stale-head caveat from the earlier `2b784debb05028f706b46127a41f6d578c3d4c13`
-run. It supports #2026 closeout for the external YCSB evidence requirement,
-while the deterministic publication and readability proof remains documented by
-the issue and its earlier test PRs.
+run. Together with the deterministic publication/readability tests and the
+#3374 diagnostic classification, it supports closing #2026 for the local
+single-node publication/readability invariant now that PR #3385 has merged.
 
 During the current-base refresh, an invalid intermediate 1M run at
 `/tmp/treedb_native_ycsb_current_head_20260629_202356` stopped at 768,001
 successful inserts and reported `INSERT_ERROR`; its server log had no panic,
 fatal error, EOF, or ambiguous-commit marker. A clean 1M rerun and the final
-paired capture above both completed with zero `INSERT_ERROR`. Keep #2026 open
-for the deeper publication/readability invariant and intermittent-failure proof.
+paired capture above both completed with zero `INSERT_ERROR`. The #3374
+diagnostic below classifies that artifact, so it no longer blocks local #2026
+publication/readability closeout.
+
+Follow-up #3374 classification lives in
+`docs/benchmarks/nativewire_ycsb_insert_error_classification_2026-06-30.md`.
+That diagnostic reran current-head 100k and 1M nativewire loads at
+`3f2c712bb700806b29deb872ed90531d4828ab79` with
+`TREEDB_YCSB_LOG_ERRORS=1` and `-p silence=false`; both loads completed with
+zero `INSERT_ERROR`, empty stderr, and zero raw matches for `EOF`, `ambiguous`,
+`panic`, `fatal`, `ERROR`, or `Failed`. The old intermediate artifact remains
+invalid because it lacks client-side error strings, but it is now classified as
+a non-reproduced client/harness/protocol/server-lifecycle interruption rather
+than evidence of a current catalog/value-log publication failure.
+
+This remains single-host nativewire load evidence. Distributed single-group HA,
+linearizable reads/snapshots/rejoin, and multi-group routing/ring partitioning
+remain out of scope for #2026 and are tracked by #3044, #3045, and #3046
+respectively.

@@ -182,10 +182,15 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				return recoveryRequired(entry.Digest, code, err)
 			}
 			if h.opts.ProgressStore != nil {
+				progressDigest := record.ProgressLogicalDigestV1
+				if progressDigest == (LogicalDigestV1{}) {
+					progressDigest = LogicalDigestV1(record.Result.ResultDigest)
+				}
 				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
 					EntryID:           meta.EntryID,
 					CommandDigest:     entry.Digest,
 					AppliedCommandLSN: record.AppliedCommandLSN,
+					LogicalDigestV1:   progressDigest,
 				}); err != nil {
 					code, _ := ErrorCodeOf(err)
 					return recoveryRequired(entry.Digest, code, err)
@@ -216,15 +221,21 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				code, _ := ErrorCodeOf(err)
 				return recoveryRequired(entry.Digest, code, err)
 			}
+			logical, err := h.logicalDigestForProgressV1(meta)
+			if err != nil {
+				code, _ := ErrorCodeOf(err)
+				return recoveryRequired(entry.Digest, code, err)
+			}
 			duplicate := record.Result
 			duplicate.Status = raftentry.ApplyStatusAlreadyApplied
 			duplicate.AffectedCount = 0
 			if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
-				EntryID:           meta.EntryID,
-				CommandDigest:     entry.Digest,
-				IdempotencyKey:    entry.IdempotencyKey,
-				AppliedCommandLSN: duplicateLSN,
-				Result:            duplicate,
+				EntryID:                 meta.EntryID,
+				CommandDigest:           entry.Digest,
+				IdempotencyKey:          entry.IdempotencyKey,
+				AppliedCommandLSN:       duplicateLSN,
+				ProgressLogicalDigestV1: logical,
+				Result:                  duplicate,
 			}); err != nil {
 				code, _ := ErrorCodeOf(err)
 				return recoveryRequired(entry.Digest, code, err)
@@ -234,6 +245,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 					EntryID:           meta.EntryID,
 					CommandDigest:     entry.Digest,
 					AppliedCommandLSN: duplicateLSN,
+					LogicalDigestV1:   logical,
 				}); err != nil {
 					code, _ := ErrorCodeOf(err)
 					return recoveryRequired(entry.Digest, code, err)
@@ -284,11 +296,12 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	}
 	if h.opts.ResultStore != nil {
 		if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
-			EntryID:           meta.EntryID,
-			CommandDigest:     entry.Digest,
-			IdempotencyKey:    entry.IdempotencyKey,
-			AppliedCommandLSN: appliedLSN,
-			Result:            result,
+			EntryID:                 meta.EntryID,
+			CommandDigest:           entry.Digest,
+			IdempotencyKey:          entry.IdempotencyKey,
+			AppliedCommandLSN:       appliedLSN,
+			ProgressLogicalDigestV1: LogicalDigestV1(result.ResultDigest),
+			Result:                  result,
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
 			return recoveryRequired(entry.Digest, code, err)
@@ -303,6 +316,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			EntryID:           meta.EntryID,
 			CommandDigest:     entry.Digest,
 			AppliedCommandLSN: appliedLSN,
+			LogicalDigestV1:   LogicalDigestV1(result.ResultDigest),
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
 			return recoveryRequired(entry.Digest, code, err)
@@ -366,6 +380,14 @@ func (h *Harness) appliedCommandLSN() uint64 {
 		return 0
 	}
 	return h.db.State().AppliedCommandLSN
+}
+
+func (h *Harness) logicalDigestForProgressV1(meta ApplyMetadataV1) (LogicalDigestV1, error) {
+	return h.logicalDigestV1(LogicalDigestOptionsV1{
+		ScopeRule:     meta.ScopeRule,
+		DatabaseScope: meta.DatabaseScope,
+		CatalogScope:  meta.CatalogScope,
+	})
 }
 
 func (h *Harness) requireApplyRecordCoverage(appliedLSN uint64) error {

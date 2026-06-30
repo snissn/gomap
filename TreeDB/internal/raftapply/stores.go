@@ -53,11 +53,12 @@ func codedError(code raftentry.DeterministicErrorCodeV1, format string, args ...
 // ApplyEntryID. The result payload is intentionally bounded separately from the
 // deterministic entry bytes.
 type ApplyResultRecordV1 struct {
-	EntryID           raftentry.ApplyEntryID
-	CommandDigest     raftentry.CommandDigestV1
-	IdempotencyKey    []byte
-	AppliedCommandLSN uint64
-	Result            raftentry.ApplyResultV1
+	EntryID                 raftentry.ApplyEntryID
+	CommandDigest           raftentry.CommandDigestV1
+	IdempotencyKey          []byte
+	AppliedCommandLSN       uint64
+	ProgressLogicalDigestV1 LogicalDigestV1
+	Result                  raftentry.ApplyResultV1
 }
 
 // ApplyResultStore records deterministic apply results for idempotency/replay.
@@ -74,6 +75,7 @@ type ApplyProgressRecordV1 struct {
 	EntryID           raftentry.ApplyEntryID
 	CommandDigest     raftentry.CommandDigestV1
 	AppliedCommandLSN uint64
+	LogicalDigestV1   LogicalDigestV1
 }
 
 // ApplyProgressStore checks monotonic apply order and records durable progress.
@@ -81,6 +83,7 @@ type ApplyProgressStore interface {
 	CheckCanApply(raftentry.ApplyEntryID) error
 	CheckCanRecordApplied(ApplyProgressRecordV1) error
 	RecordApplied(ApplyProgressRecordV1) error
+	LookupApplyProgress(raftentry.ApplyEntryID) (ApplyProgressRecordV1, bool, error)
 	LastApplied() (raftentry.ApplyEntryID, bool)
 }
 
@@ -169,6 +172,11 @@ func (s *MemoryApplyResultStore) checkCanRecordApplyResultLocked(record ApplyRes
 	if existing, ok := s.records[record.EntryID]; ok {
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply result digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
+		if existing.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.ProgressLogicalDigestV1 != record.ProgressLogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply result progress logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
 		return nil
 	}
@@ -263,6 +271,11 @@ func (s *MemoryApplyProgressStore) checkCanRecordAppliedLocked(record ApplyProgr
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply progress digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
+		if existing.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.LogicalDigestV1 != record.LogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply progress logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
 		return nil
 	}
 	if err := s.checkCanApplyLocked(record.EntryID); err != nil {
@@ -281,6 +294,16 @@ func (s *MemoryApplyProgressStore) LastApplied() (raftentry.ApplyEntryID, bool) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.last, s.last.Index != 0
+}
+
+func (s *MemoryApplyProgressStore) LookupApplyProgress(id raftentry.ApplyEntryID) (ApplyProgressRecordV1, bool, error) {
+	if s == nil {
+		return ApplyProgressRecordV1{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.records[id]
+	return record, ok, nil
 }
 
 func (s *MemoryApplyProgressStore) LastAppliedRecord() (ApplyProgressRecordV1, bool) {
@@ -361,7 +384,7 @@ func validateApplyProgressRecordV1(record ApplyProgressRecordV1, requireCoverage
 
 func applyResultRecordSizeV1(record ApplyResultRecordV1) int {
 	return 8 + 8 + 32 + len(record.IdempotencyKey) + 8 +
-		len(record.Result.Status) + 32 + len(record.Result.DeterministicErrorCode) + 8 + 32
+		len(record.Result.Status) + 32 + len(record.Result.DeterministicErrorCode) + 8 + 32 + 32
 }
 
 func cloneApplyResultRecord(record ApplyResultRecordV1) ApplyResultRecordV1 {
