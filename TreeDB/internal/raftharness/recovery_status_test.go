@@ -173,6 +173,11 @@ func TestRecoveryStatusUnsupportedOperationsFailClosed(t *testing.T) {
 			run:  func() (raftcluster.RecoveryStatusV1, error) { return h.ProductionRejoinRecoveryStatusV1("node-b") },
 			want: raftcluster.RecoveryUnsupportedProductionRejoinV1,
 		},
+		{
+			name: "production snapshot transfer",
+			run:  func() (raftcluster.RecoveryStatusV1, error) { return h.ProductionSnapshotTransferRecoveryStatusV1("node-b") },
+			want: raftcluster.RecoveryUnsupportedProductionSnapshotTransferV1,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
