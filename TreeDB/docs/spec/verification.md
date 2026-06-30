@@ -42,6 +42,12 @@ Invariant:
   value-log pointers, snapshots, and `AppliedCommandLSN` as a readable state
   tuple. Bounded pre-commit catalog EOF is retriable; post-commit readability
   failure is commit-ambiguous.
+- The #2026 local closeout state is final after #3382: collection catalog
+  publication/readability, forced-pointer value-log readability, current-writable
+  value-log read barriers, nativewire forced-pointer publication, and external
+  nativewire YCSB diagnostic evidence are covered locally. Distributed HA,
+  read-index/snapshot/rejoin, and routing/fanout remain owned by #3044, #3045,
+  and #3046.
 
 Coverage:
 - `TreeDB/docs/spec/publication-readability-3245.md`
@@ -49,8 +55,25 @@ Coverage:
   - `TestCollectionCatalogEOFInsertBatchPreCommitRetryUsesCatalogLoadFaults`
   - `TestCollectionCatalogEOFInsertBatchRetryExhaustionIncludesCatalogContext`
   - `TestCollectionCatalogEOFInsertBatchPostCommitReturnsCommitAmbiguous`
+  - `TestCollectionCatalogRootEOFInsertBatchPostCommitReturnsCommitAmbiguous`
+  - `TestCollectionCatalogCachedForcedPointersReadableFromFreshSnapshot`
+  - `TestCollectionCatalogCurrentWritableValueLogReadBarrier`
 - `TreeDB/caching/vlog_current_segment_readbarrier_test.go`:
   - `TestCachedModeValueLogPointerReadBarrierResolvesBackendRootRead`
+- `TreeDB/nativewire/forced_pointer_readability_test.go`:
+  - `TestNativewireYCSBForcedPointerPublicationReadability`
+  - `TestNativewireYCSBCurrentWritableValueLogReadBarrier`
+- `docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md`:
+  - current-head external 100k and 1M nativewire load evidence with zero
+    `INSERT_ERROR`.
+- `docs/benchmarks/nativewire_ycsb_insert_error_classification_2026-06-30.md`:
+  - diagnostic gate with `TREEDB_YCSB_LOG_ERRORS=1`, `-p silence=false`, empty
+    stderr, zero raw matches for `INSERT_ERROR`, `EOF`, `ambiguous`, `panic`,
+    `fatal`, `ERROR`, and `Failed`, and classification of the invalid
+    intermediate artifact as non-current TreeDB publication evidence.
+- `scripts/nativewire_ycsb_diagnostic.sh`:
+  - reusable diagnostic gate that exits nonzero on detected load failures,
+    `INSERT_ERROR`, or raw error-scan matches.
 
 ## 3. Value-Log Reachability GC
 
