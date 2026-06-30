@@ -38,6 +38,20 @@ func TestReadIndexProviderReturnsLatestCommittedProofWithoutApplying(t *testing.
 	assertCollectionMissing(t, h, "node-b", "orders")
 }
 
+func TestReadIndexProviderAllowsUnconstrainedTargetFields(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+	commitReadIndexEntry(t, h, 32, 1, "users", "unconstrained-target")
+
+	proof, err := h.ReadIndexProvider("node-a").ReadIndex(context.Background(), raftcluster.ReadIndexBarrier{})
+	if err != nil {
+		t.Fatalf("ReadIndex unconstrained target: %v proof=%+v", err, proof)
+	}
+	if proof.NodeID != "node-a" || proof.GroupID != "default" || proof.Term != 32 || proof.Index != 1 || !proof.HasQuorum {
+		t.Fatalf("proof=%+v, want node-a/default 32/1 quorum", proof)
+	}
+}
+
 func TestReadIndexProviderFailsClosed(t *testing.T) {
 	t.Run("empty log", func(t *testing.T) {
 		h := openTestHarness(t)
@@ -49,30 +63,6 @@ func TestReadIndexProviderFailsClosed(t *testing.T) {
 		})
 		if !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
 			t.Fatalf("ReadIndex err=%v, want ErrReadBarrierNotSatisfied", err)
-		}
-	})
-
-	t.Run("missing target node", func(t *testing.T) {
-		h := openTestHarness(t)
-		defer func() { _ = h.Close() }()
-
-		_, err := h.ReadIndexProvider("node-a").ReadIndex(context.Background(), raftcluster.ReadIndexBarrier{
-			GroupID: "default",
-		})
-		if !errors.Is(err, raftcluster.ErrReadBarrierTargetMismatch) {
-			t.Fatalf("ReadIndex err=%v, want ErrReadBarrierTargetMismatch", err)
-		}
-	})
-
-	t.Run("missing target group", func(t *testing.T) {
-		h := openTestHarness(t)
-		defer func() { _ = h.Close() }()
-
-		_, err := h.ReadIndexProvider("node-a").ReadIndex(context.Background(), raftcluster.ReadIndexBarrier{
-			NodeID: "node-a",
-		})
-		if !errors.Is(err, raftcluster.ErrReadBarrierTargetMismatch) {
-			t.Fatalf("ReadIndex err=%v, want ErrReadBarrierTargetMismatch", err)
 		}
 	})
 
