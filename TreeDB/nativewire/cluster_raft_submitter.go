@@ -178,6 +178,9 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 }
 
 func nativeErrorForDeterministicCode(code raftentry.DeterministicErrorCodeV1, err error) error {
+	if wireCode, ok := nativeCollectionConflictCode(err); ok {
+		return protocolError(wireCode, "%v", err)
+	}
 	switch code {
 	case raftentry.ErrorUnsupportedCommandV1, raftentry.ErrorReadOnlyV1, raftentry.ErrorUnsupportedFeatureV1:
 		return protocolError(iwire.ErrUnsupportedFeature, "%v", err)
@@ -189,5 +192,18 @@ func nativeErrorForDeterministicCode(code raftentry.DeterministicErrorCodeV1, er
 		return protocolError(iwire.ErrDurabilityUnavailable, "%v", err)
 	default:
 		return protocolError(iwire.ErrInvalidCommand, "%v", err)
+	}
+}
+
+func nativeCollectionConflictCode(err error) (iwire.ErrorCode, bool) {
+	switch {
+	case errors.Is(err, collections.ErrDuplicateDocumentID):
+		return iwire.ErrDuplicateDocumentID, true
+	case errors.Is(err, collections.ErrDocumentExists):
+		return iwire.ErrDocumentExists, true
+	case errors.Is(err, collections.ErrUniqueIndexConflict):
+		return iwire.ErrUniqueIndexConflict, true
+	default:
+		return 0, false
 	}
 }

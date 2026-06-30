@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -1659,6 +1660,38 @@ func TestRaftClusterSubmitterLocalAckUnavailableMapsToNativeError(t *testing.T) 
 	err := nativeErrorForRaftClusterSubmit(raftcluster.ErrLocalAckUnavailable)
 	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrDurabilityUnavailable {
 		t.Fatalf("nativeErrorForRaftClusterSubmit code=%v ok=%v err=%v, want durability-unavailable", code, ok, err)
+	}
+}
+
+func TestRaftClusterSubmitterPreservesCollectionConflictCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want iwire.ErrorCode
+	}{
+		{
+			name: "duplicate_document_id",
+			err:  fmt.Errorf("raftapply: %w", collections.ErrDuplicateDocumentID),
+			want: iwire.ErrDuplicateDocumentID,
+		},
+		{
+			name: "document_exists",
+			err:  fmt.Errorf("raftapply: %w", collections.ErrDocumentExists),
+			want: iwire.ErrDocumentExists,
+		},
+		{
+			name: "unique_index_conflict",
+			err:  fmt.Errorf("raftapply: %w", collections.ErrUniqueIndexConflict),
+			want: iwire.ErrUniqueIndexConflict,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := nativeErrorForDeterministicCode(raftentry.ErrorRejectedConflictV1, tt.err)
+			if code, ok := iwire.ErrorCodeOf(err); !ok || code != tt.want {
+				t.Fatalf("nativeErrorForDeterministicCode code=%v ok=%v err=%v, want %v", code, ok, err, tt.want)
+			}
+		})
 	}
 }
 

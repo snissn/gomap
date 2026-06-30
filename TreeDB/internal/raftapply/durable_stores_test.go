@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -130,6 +131,30 @@ func TestDecodeDurableApplyResultRecordV1ToleratesLegacyMissingMatchedCount(t *t
 	want.Result.MatchedCount = 0
 	if !reflect.DeepEqual(decoded, want) {
 		t.Fatalf("decoded legacy record=%+v want %+v", decoded, want)
+	}
+}
+
+func TestDurableApplyResultStorePreflightRejectsEncodedRecordOverLimit(t *testing.T) {
+	results, err := OpenDurableApplyResultStore(t.TempDir(), DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("OpenDurableApplyResultStore: %v", err)
+	}
+	defer func() { _ = results.Close() }()
+
+	record := testDurableApplyResultRecord(1, 1, "durable:oversized")
+	base := applyResultRecordSizeV1(record) - len(record.Result.Status)
+	if base >= raftentry.MaxResultRecordBytesV1 {
+		t.Fatalf("base result record size=%d unexpectedly exceeds max %d", base, raftentry.MaxResultRecordBytesV1)
+	}
+	record.Result.Status = raftentry.ApplyStatusV1(strings.Repeat("s", raftentry.MaxResultRecordBytesV1-base+1))
+	if oldSize := applyResultRecordSizeV1(record) - int64SizeV1; oldSize > raftentry.MaxResultRecordBytesV1 {
+		t.Fatalf("test record would not cover missed matched_count: old estimated size=%d max=%d", oldSize, raftentry.MaxResultRecordBytesV1)
+	}
+	if err := results.CheckCanRecordApplyResult(record); codeOf(err) != raftentry.ErrorResourceExhaustedV1 {
+		t.Fatalf("CheckCanRecordApplyResult oversized error=%v code=%s, want resource exhausted", err, codeOf(err))
+	}
+	if _, ok, err := results.LookupApplyResult(record.EntryID); err != nil || ok {
+		t.Fatalf("LookupApplyResult after oversized preflight=(ok=%t, err=%v), want absent without store error", ok, err)
 	}
 }
 
