@@ -46,13 +46,14 @@ func (p *ReadIndexProvider) ReadIndex(ctx context.Context, target raftcluster.Re
 	}
 	last := p.h.committed[len(p.h.committed)-1]
 	proof := raftcluster.ReadIndexProof{
-		NodeID:    p.nodeID,
-		GroupID:   p.h.groupID,
-		Term:      last.Term,
-		Index:     last.Index,
-		HasQuorum: true,
+		NodeID:       p.nodeID,
+		GroupID:      p.h.groupID,
+		Term:         last.Term,
+		Index:        last.Index,
+		HasQuorum:    true,
+		EvidenceKind: raftcluster.ReadIndexEvidenceTestHarness,
 	}
-	if err := target.Check(proof); err != nil {
+	if err := target.CheckWithOptions(proof, raftcluster.ReadIndexCheckOptions{AllowNonProductionEvidence: true}); err != nil {
 		return raftcluster.ReadIndexProof{}, fmt.Errorf("raftharness: %w", err)
 	}
 	if err := ctx.Err(); err != nil {

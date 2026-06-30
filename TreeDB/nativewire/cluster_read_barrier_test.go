@@ -200,14 +200,15 @@ func TestAppliedIndexReadCoordinatorFailsClosedForTargetMismatch(t *testing.T) {
 	}
 }
 
-func TestAppliedIndexReadCoordinatorProvesLinearizableReadMetadata(t *testing.T) {
+func TestAppliedIndexReadCoordinatorProvesLinearizableReadMetadataWithProductionProof(t *testing.T) {
 	readIndex := &fakeReadIndexProvider{
 		proof: raftcluster.ReadIndexProof{
-			NodeID:    "node-a",
-			GroupID:   "group-a",
-			Term:      7,
-			Index:     42,
-			HasQuorum: true,
+			NodeID:       "node-a",
+			GroupID:      "group-a",
+			Term:         7,
+			Index:        42,
+			HasQuorum:    true,
+			EvidenceKind: raftcluster.ReadIndexEvidenceProduction,
 		},
 	}
 	waiter := &fakeAppliedIndexWaiter{
@@ -262,7 +263,7 @@ func TestAppliedIndexReadCoordinatorProvesLinearizableReadMetadata(t *testing.T)
 	}
 }
 
-func TestAppliedIndexReadCoordinatorLinearizableUsesHarnessReadIndexAndWaiter(t *testing.T) {
+func TestAppliedIndexReadCoordinatorLinearizableRejectsHarnessReadIndexEvidence(t *testing.T) {
 	h, err := raftharness.Open(raftharness.Options{
 		RootDir: t.TempDir(),
 		GroupID: "group-a",
@@ -305,23 +306,12 @@ func TestAppliedIndexReadCoordinatorLinearizableUsesHarnessReadIndexAndWaiter(t 
 		t.Fatalf("Hello: %v", err)
 	}
 
-	result, err := client.GetManyWithOptions(ctx, "users", [][]byte{[]byte("u1")}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
-	if err != nil {
-		t.Fatalf("GetManyWithOptions: %v", err)
+	_, err = client.GetManyWithOptions(ctx, "users", [][]byte{[]byte("u1")}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+		t.Fatalf("GetManyWithOptions err=%v want consistency_unavailable", err)
 	}
-	if got, want := result.Present, []bool{true}; !boolSlicesEqual(got, want) {
-		t.Fatalf("present=%v want %v", got, want)
-	}
-	if !result.ReadMeta.Valid ||
-		result.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
-		result.ReadMeta.ServingNode != "node-b" ||
-		result.ReadMeta.LeaderNode != "node-b" ||
-		!result.ReadMeta.HasAppliedIndex ||
-		result.ReadMeta.AppliedIndex != 1 {
-		t.Fatalf("read meta=%+v", result.ReadMeta)
-	}
-	if last, ok := node.LastApplied(); !ok || last.Term != 41 || last.Index != 1 {
-		t.Fatalf("node-b last applied after read=%+v ok=%t, want 41/1", last, ok)
+	if last, ok := node.LastApplied(); ok {
+		t.Fatalf("node-b last applied after failed read=%+v, want none", last)
 	}
 }
 
@@ -357,10 +347,11 @@ func TestAppliedIndexReadCoordinatorLinearizableFailsClosedWithoutReadIndexProvi
 func TestAppliedIndexReadCoordinatorLinearizableFailsClosedWithoutQuorumProof(t *testing.T) {
 	readIndex := &fakeReadIndexProvider{
 		proof: raftcluster.ReadIndexProof{
-			NodeID:  "node-a",
-			GroupID: "group-a",
-			Term:    7,
-			Index:   42,
+			NodeID:       "node-a",
+			GroupID:      "group-a",
+			Term:         7,
+			Index:        42,
+			EvidenceKind: raftcluster.ReadIndexEvidenceProduction,
 		},
 	}
 	waiter := &fakeAppliedIndexWaiter{}
@@ -419,11 +410,12 @@ func TestAppliedIndexReadCoordinatorLinearizableFailsClosedForTargetMismatch(t *
 		t.Run(tt.name, func(t *testing.T) {
 			readIndex := &fakeReadIndexProvider{
 				proof: raftcluster.ReadIndexProof{
-					NodeID:    "node-a",
-					GroupID:   "group-a",
-					Term:      7,
-					Index:     42,
-					HasQuorum: true,
+					NodeID:       "node-a",
+					GroupID:      "group-a",
+					Term:         7,
+					Index:        42,
+					HasQuorum:    true,
+					EvidenceKind: raftcluster.ReadIndexEvidenceProduction,
 				},
 			}
 			waiter := &fakeAppliedIndexWaiter{progress: tt.progress}
@@ -454,11 +446,12 @@ func TestAppliedIndexReadCoordinatorLinearizableFailsClosedForTargetMismatch(t *
 func TestAppliedIndexReadCoordinatorLinearizableFailsClosedForLocalApplyLag(t *testing.T) {
 	readIndex := &fakeReadIndexProvider{
 		proof: raftcluster.ReadIndexProof{
-			NodeID:    "node-a",
-			GroupID:   "group-a",
-			Term:      7,
-			Index:     42,
-			HasQuorum: true,
+			NodeID:       "node-a",
+			GroupID:      "group-a",
+			Term:         7,
+			Index:        42,
+			HasQuorum:    true,
+			EvidenceKind: raftcluster.ReadIndexEvidenceProduction,
 		},
 	}
 	waiter := &fakeAppliedIndexWaiter{
@@ -495,11 +488,12 @@ func TestAppliedIndexReadCoordinatorLinearizableFailsClosedForLocalApplyLag(t *t
 func TestAppliedIndexReadCoordinatorKeepsLeaseReadFailClosed(t *testing.T) {
 	readIndex := &fakeReadIndexProvider{
 		proof: raftcluster.ReadIndexProof{
-			NodeID:    "node-a",
-			GroupID:   "group-a",
-			Term:      7,
-			Index:     42,
-			HasQuorum: true,
+			NodeID:       "node-a",
+			GroupID:      "group-a",
+			Term:         7,
+			Index:        42,
+			HasQuorum:    true,
+			EvidenceKind: raftcluster.ReadIndexEvidenceProduction,
 		},
 	}
 	waiter := &fakeAppliedIndexWaiter{
