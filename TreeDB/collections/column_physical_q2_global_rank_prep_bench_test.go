@@ -479,15 +479,9 @@ func newQ2DenseGlobalRankPrepParts(partCount int, shape q2DenseGlobalRankPrepDic
 		parts[partIdx] = columnTypedColumnPhysicalQueryPart{
 			Rows: q2DenseGlobalRankPrepDistinctValuesPerPart,
 			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
-				Rows: q2DenseGlobalRankPrepDistinctValuesPerPart,
-				Group: columnTypedColumnDenseStringCodeColumn{
-					Dictionary: groupDict,
-					Valid:      q2DenseGlobalRankPrepValidity(partIdx, 17),
-				},
-				Distinct: columnTypedColumnDenseStringCodeColumn{
-					Dictionary: distinctDict,
-					Valid:      q2DenseGlobalRankPrepValidity(partIdx, 19),
-				},
+				Rows:     q2DenseGlobalRankPrepDistinctValuesPerPart,
+				Group:    q2DenseGlobalRankPrepColumn(groupDict, q2DenseGlobalRankPrepValidity(partIdx, 17)),
+				Distinct: q2DenseGlobalRankPrepColumn(distinctDict, q2DenseGlobalRankPrepValidity(partIdx, 19)),
 			},
 		}
 	}
@@ -512,9 +506,11 @@ func cloneQ2DenseGlobalRankPrepParts(parts []columnTypedColumnPhysicalQueryPart)
 
 func cloneQ2DenseGlobalRankPrepColumn(column columnTypedColumnDenseStringCodeColumn) columnTypedColumnDenseStringCodeColumn {
 	return columnTypedColumnDenseStringCodeColumn{
-		Dictionary: append([]string(nil), column.Dictionary...),
-		Valid:      append([]bool(nil), column.Valid...),
-		Codes:      append([]uint32(nil), column.Codes...),
+		Dictionary:      append([]string(nil), column.Dictionary...),
+		Valid:           append([]bool(nil), column.Valid...),
+		HasMissing:      column.HasMissing,
+		HasMissingKnown: column.HasMissingKnown,
+		Codes:           append([]uint32(nil), column.Codes...),
 	}
 }
 
@@ -635,6 +631,15 @@ func q2DenseGlobalRankPrepValidity(partIdx, period int) []bool {
 	}
 	valid[partIdx%len(valid)] = false
 	return valid
+}
+
+func q2DenseGlobalRankPrepColumn(dictionary []string, valid []bool) columnTypedColumnDenseStringCodeColumn {
+	return columnTypedColumnDenseStringCodeColumn{
+		Dictionary:      dictionary,
+		Valid:           valid,
+		HasMissing:      columnTypedColumnDenseValidityHasMissing(valid),
+		HasMissingKnown: true,
+	}
 }
 
 func q2DenseGlobalRankPrepStats(parts []columnTypedColumnPhysicalQueryPart) q2DenseGlobalRankPrepFixtureStats {
