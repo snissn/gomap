@@ -48,6 +48,9 @@ func (s *RaftClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if s == nil || s.Bridge == nil {
 		return ClusterSubmitResult{}, protocolError(iwire.ErrInvalidCommand, "raft cluster submitter is not configured")
 	}
+	if s.Collections == nil {
+		return ClusterSubmitResult{}, protocolError(iwire.ErrInvalidCommand, "raft cluster submitter collection manager is not configured")
+	}
 	result, err := s.Bridge.SubmitCommandEntryV1(ctx, entry, metadata)
 	if err != nil {
 		return ClusterSubmitResult{}, nativeErrorForRaftClusterSubmit(err)

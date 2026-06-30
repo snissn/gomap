@@ -1573,6 +1573,75 @@ func TestRaftClusterSubmitterConcreteBridgeOmitResponseMetaAdvancesCatalogVersio
 	}
 }
 
+func TestRaftClusterSubmitterRequiresCollectionManagerBeforeSubmit(t *testing.T) {
+	sections := append([]iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandCreateCollection, Version: 1})},
+	}, raftClusterCreateCollectionSections("users", 7, AckRaftCommitted)...)
+	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := iwire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+
+	cluster := raftClusterBridgeTestConfig(nil)
+	cluster.Dir = t.TempDir()
+	preflightCalls := 0
+	commitCalls := 0
+	applier := &recordingRaftClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied}}
+	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+		Cluster:           cluster,
+		AdmissionProvider: raftcluster.StaticAdmissionProvider{Status: raftcluster.LeaderAdmission()},
+		CommitSource: raftcluster.CommitSourceFunc(func(_ context.Context, req raftcluster.CommitCommandEntryV1Request) (raftcluster.CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return raftcluster.CommitCommandEntryV1Result{
+				Entry: raftcluster.CommittedCommandEntryV1{
+					Term:                     1,
+					Index:                    1,
+					Bytes:                    bytes.Clone(req.EntryBytes),
+					CurrentCatalogVersion:    req.CurrentCatalogVersion,
+					HasCurrentCatalogVersion: req.HasCurrentCatalogVersion,
+					SyncLocalCommandWAL:      req.SyncLocalCommandWAL,
+					RequestMetadata:          req.RequestMetadata,
+					ExpectedTarget:           req.ExpectedTarget,
+				},
+				Evidence: raftcluster.CommitEvidenceV1{
+					Kind:                raftcluster.CommitEvidenceProductionConsensusV1,
+					GroupID:             cluster.GroupID,
+					NodeID:              cluster.NodeID,
+					LeaderID:            cluster.NodeID,
+					Term:                1,
+					Index:               1,
+					Committed:           true,
+					ProductionConsensus: true,
+				},
+			}, nil
+		}),
+		Preflight: raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) error {
+			preflightCalls++
+			return nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) { return 7, true, nil }),
+	})
+	if err != nil {
+		t.Fatalf("NewSingleGroupSubmitter: %v", err)
+	}
+
+	_, err = NewRaftClusterSubmitter(bridge).SubmitCommandEntryV1(context.Background(), entry, ClusterRequestMetadata{
+		RequestID: 17,
+		AckPolicy: AckRaftCommitted,
+	})
+	if nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("SubmitCommandEntryV1 err=%v code=%d want invalid-command", err, nativeCodeOf(err))
+	}
+	if preflightCalls != 0 || commitCalls != 0 || applier.calls != 0 {
+		t.Fatalf("bridge touched before collection-manager validation: preflight=%d commit=%d apply=%d", preflightCalls, commitCalls, applier.calls)
+	}
+}
+
 func TestRaftClusterSubmitterConcreteBridgeMissingCollectionPreflightDoesNotConsumeIndex(t *testing.T) {
 	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1598,6 +1667,13 @@ func TestRaftClusterSubmitterConcreteBridgeMissingCollectionPreflightDoesNotCons
 }
 
 func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open DB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+
 	defaultLimits := iwire.DefaultLimits()
 	limits := defaultLimits
 	limits.MaxSectionLen = defaultLimits.MaxSectionLen + (1 << 20)
@@ -1624,7 +1700,7 @@ func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) 
 		t.Fatalf("NewSingleGroupSubmitter: %v", err)
 	}
 
-	result, err := NewRaftClusterSubmitter(bridge).SubmitCommandEntryV1(context.Background(), entry, ClusterRequestMetadata{
+	result, err := NewRaftClusterSubmitter(bridge, manager).SubmitCommandEntryV1(context.Background(), entry, ClusterRequestMetadata{
 		RequestID: 17,
 		AckPolicy: AckRaftCommitted,
 	})
