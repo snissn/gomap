@@ -744,11 +744,13 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 	db.backendWriteBatchesTotal.Add(1)
 	db.observeFlushSpanRunBackendChunks(1)
 	var err error
+	batchWriteStart := time.Now()
 	if last && syncFlush {
 		err = backendBatch.WriteSync()
 	} else {
 		err = backendBatch.Write()
 	}
+	db.observeFlushApplyBackendBatchWrite(time.Since(batchWriteStart))
 	cerr := backendBatch.Close()
 	if err == nil {
 		err = cerr
@@ -871,9 +873,7 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		batchWriteStart := time.Now()
 		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode)
-		db.observeFlushApplyBackendBatchWrite(time.Since(batchWriteStart))
 		if err != nil {
 			return err
 		}
@@ -1061,13 +1061,11 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 	if _, err := db.writeCanonicalFlushRunChunks(run, chunks, syncFlush, commandPublish, mode); err != nil {
 		writeDur := time.Since(writeStart)
 		db.observeFlushApplyBackendWrite(writeDur)
-		db.observeFlushApplyBackendBatchWrite(writeDur)
 		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 		return false
 	}
 	writeDur := time.Since(writeStart)
 	db.observeFlushApplyBackendWrite(writeDur)
-	db.observeFlushApplyBackendBatchWrite(writeDur)
 
 	db.finishFlushedCanonicalUnits(syncFlush, units, ids, totalBytes)
 	flushDur := time.Since(flushStart)
