@@ -3551,6 +3551,51 @@ func appendTypedColumnDenseSingleCodeTriplePredicateRows(selected []uint32, cand
 func appendTypedColumnDenseSingleCodePairPredicateRows(selected []uint32, candidates []columnTypedColumnDenseSingleCodePredicateCandidate, codeScratch [2][]uint32, valueScratch [2][]int64, nullScratch [2][]bool, defaultScratch [2][]bool, rowOffset, blockRows int) ([]uint32, error) {
 	leftCode := candidates[0].predicate.SingleCode
 	rightCode := candidates[1].predicate.SingleCode
+	if candidates[0].nullable && candidates[1].nullable {
+		leftValues := valueScratch[0]
+		rightValues := valueScratch[1]
+		leftNulls := nullScratch[0]
+		rightNulls := nullScratch[1]
+		leftDefaults := defaultScratch[0]
+		rightDefaults := defaultScratch[1]
+		leftCardinality := candidates[0].cardinality
+		rightCardinality := candidates[1].cardinality
+		for row := 0; row < blockRows; row++ {
+			leftValue := leftValues[row]
+			rightValue := rightValues[row]
+			if !leftNulls[row] && !leftDefaults[row] && (leftValue < 0 || uint64(leftValue) >= uint64(leftCardinality) || leftValue > int64(^uint32(0))) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[0].partColumn.Definition.Name, rowOffset+row, leftValue, leftCardinality)
+			}
+			if !rightNulls[row] && !rightDefaults[row] && (rightValue < 0 || uint64(rightValue) >= uint64(rightCardinality) || rightValue > int64(^uint32(0))) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[1].partColumn.Definition.Name, rowOffset+row, rightValue, rightCardinality)
+			}
+			if !leftNulls[row] && !leftDefaults[row] && uint32(leftValue) == leftCode &&
+				!rightNulls[row] && !rightDefaults[row] && uint32(rightValue) == rightCode {
+				selected = append(selected, uint32(rowOffset+row))
+			}
+		}
+		return selected, nil
+	}
+	if !candidates[0].nullable && !candidates[1].nullable {
+		left := codeScratch[0]
+		right := codeScratch[1]
+		leftCardinality := candidates[0].cardinality
+		rightCardinality := candidates[1].cardinality
+		for row := 0; row < blockRows; row++ {
+			leftValue := left[row]
+			rightValue := right[row]
+			if uint64(leftValue) >= uint64(leftCardinality) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[0].partColumn.Definition.Name, rowOffset+row, leftValue, leftCardinality)
+			}
+			if uint64(rightValue) >= uint64(rightCardinality) {
+				return nil, fmt.Errorf("collections: dense typed-column predicate column %q code[%d]=%d outside cardinality=%d", candidates[1].partColumn.Definition.Name, rowOffset+row, rightValue, rightCardinality)
+			}
+			if leftValue == leftCode && rightValue == rightCode {
+				selected = append(selected, uint32(rowOffset+row))
+			}
+		}
+		return selected, nil
+	}
 	for row := 0; row < blockRows; row++ {
 		leftMatch, err := columnTypedColumnDenseSingleCodePredicateCandidateRowMatches(candidates[0], row, rowOffset, leftCode, codeScratch[0], valueScratch[0], nullScratch[0], defaultScratch[0])
 		if err != nil {
