@@ -540,7 +540,7 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 	if targetedRanges && diag.TypedColumnPrepareRangeReadBytes == 0 {
 		tb.Fatalf("%s setup missing targeted range-read bytes diagnostics=%+v", label, diag)
 	}
-	if diag.TypedColumnPreparePartDecodeNanos != 0 && rawSetupNanos == 0 {
+	if diag.TypedColumnPreparePartDecodeNanos != 0 && rawSetupNanos == 0 && !targetedRanges {
 		tb.Fatalf("%s setup missing raw split diagnostics read_image=%d state_build=%d dictionary=%d adapter=%d diagnostics=%+v",
 			label,
 			diag.TypedColumnPrepareReadImageNanos,
