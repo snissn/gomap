@@ -1040,13 +1040,13 @@ func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnP
 			continue
 		}
 		rowCount := len(dense.GroupCodes)
-		if preAppliedPredicates {
+		if preAppliedPredicates && len(dense.PredicateRows) != 0 {
 			rowCount = len(dense.PredicateRows)
 		}
 		var missingHourCounts [24]int
 		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
 			rowIdx := selectedIdx
-			if preAppliedPredicates {
+			if preAppliedPredicates && len(dense.PredicateRows) != 0 {
 				rowIdx = int(dense.PredicateRows[selectedIdx])
 			}
 			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
@@ -3601,13 +3601,15 @@ func validateColumnTypedColumnDenseGroupHourCountPart(dense *columnTypedColumnDe
 		if dense.PreAppliedRowsScanned != partRows {
 			return fmt.Errorf("collections: dense typed-column group-hour part %d preapplied rows scanned=%d want part rows=%d", partIdx, dense.PreAppliedRowsScanned, partRows)
 		}
-		if len(dense.PredicateRows) != len(dense.GroupCodes) {
-			return fmt.Errorf("collections: dense typed-column group-hour part %d predicate rows=%d want compact rows=%d", partIdx, len(dense.PredicateRows), len(dense.GroupCodes))
-		}
-		for idx, row := range dense.PredicateRows {
-			rowIdx := int(row)
-			if rowIdx != idx {
-				return fmt.Errorf("collections: dense typed-column group-hour part %d compact predicate row[%d]=%d want identity", partIdx, idx, rowIdx)
+		if len(dense.PredicateRows) != 0 {
+			if len(dense.PredicateRows) != len(dense.GroupCodes) {
+				return fmt.Errorf("collections: dense typed-column group-hour part %d predicate rows=%d want compact rows=%d", partIdx, len(dense.PredicateRows), len(dense.GroupCodes))
+			}
+			for idx, row := range dense.PredicateRows {
+				rowIdx := int(row)
+				if rowIdx != idx {
+					return fmt.Errorf("collections: dense typed-column group-hour part %d compact predicate row[%d]=%d want identity", partIdx, idx, rowIdx)
+				}
 			}
 		}
 	}
@@ -4349,14 +4351,16 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupHourCount(view colum
 			continue
 		}
 		rowCount := len(dense.GroupCodes)
-		if preAppliedPredicates {
+		if preAppliedPredicates && len(dense.PredicateRows) != 0 {
 			rowCount = len(dense.PredicateRows)
 		}
 		var missingHourCounts [24]int
 		for selectedIdx := 0; selectedIdx < rowCount; selectedIdx++ {
 			rowIdx := selectedIdx
 			if preAppliedPredicates {
-				rowIdx = int(dense.PredicateRows[selectedIdx])
+				if len(dense.PredicateRows) != 0 {
+					rowIdx = int(dense.PredicateRows[selectedIdx])
+				}
 			} else {
 				rowsScanned++
 				if !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {

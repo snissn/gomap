@@ -2475,10 +2475,6 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPredicateFirstSelectedRows
 	if len(groupCodes) != len(values) {
 		return columnTypedColumnPhysicalQueryPart{}, true, fmt.Errorf("collections: dense typed-column group-hour selected rows group/value=%d/%d", len(groupCodes), len(values))
 	}
-	predicateRows := make([]uint32, len(filteredRows))
-	for idx := range filteredRows {
-		predicateRows[idx] = uint32(idx)
-	}
 	decodedBlocks := predicateBlocks + groupBlocks + valueBlocks
 	partBytes := int64(0)
 	if bytesRead != nil {
@@ -2504,7 +2500,6 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPredicateFirstSelectedRows
 			Values:                values,
 			Predicates:            predicates,
 			PredicatesPreApplied:  true,
-			PredicateRows:         predicateRows,
 			PreAppliedRowsScanned: summary.Rows,
 		},
 	}, true, nil

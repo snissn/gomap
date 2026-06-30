@@ -425,16 +425,11 @@ func assertTypedColumnQ3OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 		if len(dense.Values) != len(dense.GroupCodes) {
 			tb.Fatalf("q3 typed-column one-shot part %d values=%d want group rows=%d", partIdx, len(dense.Values), len(dense.GroupCodes))
 		}
-		if len(dense.PredicateRows) != len(dense.GroupCodes) {
-			tb.Fatalf("q3 typed-column one-shot part %d predicate rows=%d want compact rows=%d", partIdx, len(dense.PredicateRows), len(dense.GroupCodes))
+		if len(dense.PredicateRows) != 0 {
+			tb.Fatalf("q3 typed-column one-shot part %d retained identity predicate rows=%d want 0", partIdx, len(dense.PredicateRows))
 		}
 		if dense.PreAppliedRowsScanned > len(dense.GroupCodes) {
 			sawCompact = true
-		}
-		for rowIdx, predicateRow := range dense.PredicateRows {
-			if int(predicateRow) != rowIdx {
-				tb.Fatalf("q3 typed-column one-shot part %d compact predicate row[%d]=%d want identity compact index", partIdx, rowIdx, predicateRow)
-			}
 		}
 		if len(dense.Predicates) != 3 {
 			tb.Fatalf("q3 typed-column one-shot part %d predicates=%d want 3", partIdx, len(dense.Predicates))
