@@ -5,14 +5,15 @@ import (
 	"testing"
 )
 
-func TestReadIndexBarrierAcceptsQuorumProof(t *testing.T) {
+func TestReadIndexBarrierAcceptsProductionQuorumProof(t *testing.T) {
 	barrier := ReadIndexBarrier{NodeID: "node-a", GroupID: "group-a"}
 	proof := ReadIndexProof{
-		NodeID:    "node-a",
-		GroupID:   "group-a",
-		Term:      7,
-		Index:     42,
-		HasQuorum: true,
+		NodeID:       "node-a",
+		GroupID:      "group-a",
+		Term:         7,
+		Index:        42,
+		HasQuorum:    true,
+		EvidenceKind: ReadIndexEvidenceProduction,
 	}
 	if err := barrier.Check(proof); err != nil {
 		t.Fatalf("Check: %v", err)
@@ -29,13 +30,51 @@ func TestReadIndexBarrierAcceptsQuorumProof(t *testing.T) {
 	}
 }
 
+func TestReadIndexBarrierRejectsNonProductionEvidence(t *testing.T) {
+	barrier := ReadIndexBarrier{NodeID: "node-a", GroupID: "group-a"}
+	proof := ReadIndexProof{
+		NodeID:       "node-a",
+		GroupID:      "group-a",
+		Term:         7,
+		Index:        42,
+		HasQuorum:    true,
+		EvidenceKind: ReadIndexEvidenceTestHarness,
+	}
+	err := barrier.Check(proof)
+	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("Check err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+	if barrier.SatisfiedBy(proof) {
+		t.Fatalf("SatisfiedBy=true want false")
+	}
+	if err := barrier.CheckWithOptions(proof, ReadIndexCheckOptions{AllowNonProductionEvidence: true}); err != nil {
+		t.Fatalf("CheckWithOptions allow non-production: %v", err)
+	}
+}
+
+func TestReadIndexBarrierRejectsMissingEvidenceKind(t *testing.T) {
+	barrier := ReadIndexBarrier{NodeID: "node-a", GroupID: "group-a"}
+	proof := ReadIndexProof{
+		NodeID:    "node-a",
+		GroupID:   "group-a",
+		Term:      7,
+		Index:     42,
+		HasQuorum: true,
+	}
+	err := barrier.Check(proof)
+	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("Check err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+}
+
 func TestReadIndexBarrierRejectsMissingQuorumProof(t *testing.T) {
 	barrier := ReadIndexBarrier{NodeID: "node-a", GroupID: "group-a"}
 	proof := ReadIndexProof{
-		NodeID:  "node-a",
-		GroupID: "group-a",
-		Term:    7,
-		Index:   42,
+		NodeID:       "node-a",
+		GroupID:      "group-a",
+		Term:         7,
+		Index:        42,
+		EvidenceKind: ReadIndexEvidenceProduction,
 	}
 	err := barrier.Check(proof)
 	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
@@ -49,10 +88,11 @@ func TestReadIndexBarrierRejectsMissingQuorumProof(t *testing.T) {
 func TestReadIndexBarrierRejectsMissingReadIndex(t *testing.T) {
 	barrier := ReadIndexBarrier{NodeID: "node-a", GroupID: "group-a"}
 	proof := ReadIndexProof{
-		NodeID:    "node-a",
-		GroupID:   "group-a",
-		Term:      7,
-		HasQuorum: true,
+		NodeID:       "node-a",
+		GroupID:      "group-a",
+		Term:         7,
+		HasQuorum:    true,
+		EvidenceKind: ReadIndexEvidenceProduction,
 	}
 	err := barrier.Check(proof)
 	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
@@ -70,42 +110,46 @@ func TestReadIndexBarrierRejectsTargetMismatch(t *testing.T) {
 			name:    "node",
 			barrier: ReadIndexBarrier{NodeID: "node-a", GroupID: "group-a"},
 			proof: ReadIndexProof{
-				NodeID:    "node-b",
-				GroupID:   "group-a",
-				Term:      7,
-				Index:     42,
-				HasQuorum: true,
+				NodeID:       "node-b",
+				GroupID:      "group-a",
+				Term:         7,
+				Index:        42,
+				HasQuorum:    true,
+				EvidenceKind: ReadIndexEvidenceProduction,
 			},
 		},
 		{
 			name:    "group",
 			barrier: ReadIndexBarrier{NodeID: "node-a", GroupID: "group-a"},
 			proof: ReadIndexProof{
-				NodeID:    "node-a",
-				GroupID:   "group-b",
-				Term:      7,
-				Index:     42,
-				HasQuorum: true,
+				NodeID:       "node-a",
+				GroupID:      "group-b",
+				Term:         7,
+				Index:        42,
+				HasQuorum:    true,
+				EvidenceKind: ReadIndexEvidenceProduction,
 			},
 		},
 		{
 			name:    "missing-node",
 			barrier: ReadIndexBarrier{GroupID: "group-a"},
 			proof: ReadIndexProof{
-				GroupID:   "group-a",
-				Term:      7,
-				Index:     42,
-				HasQuorum: true,
+				GroupID:      "group-a",
+				Term:         7,
+				Index:        42,
+				HasQuorum:    true,
+				EvidenceKind: ReadIndexEvidenceProduction,
 			},
 		},
 		{
 			name:    "missing-group",
 			barrier: ReadIndexBarrier{NodeID: "node-a"},
 			proof: ReadIndexProof{
-				NodeID:    "node-a",
-				Term:      7,
-				Index:     42,
-				HasQuorum: true,
+				NodeID:       "node-a",
+				Term:         7,
+				Index:        42,
+				HasQuorum:    true,
+				EvidenceKind: ReadIndexEvidenceProduction,
 			},
 		},
 	}
