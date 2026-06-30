@@ -2,14 +2,15 @@
 
 Status: external `go-ycsb` nativewire load-only closeout evidence for #2026
 and #3355 refreshed on current `origin/main` commit
-`12b2bf3b17ea3455551a9c47243f0194a59ee1a0`.
+`61910b8eac108c5f2c35f07a374879d1fb2dc5c8`.
 
 This refresh includes the later Raft snapshot/route-preflight merges that the
 first closeout capture predated, including
 `febc1992e58307d8b1edd2c68657faef9bd67c88` and
 `66819cd00fe10aaae2f0da3b7dbfc1ebc0c4113d`, plus the latest
 span-native command-WAL publish merge at
-`12b2bf3b17ea3455551a9c47243f0194a59ee1a0`.
+`12b2bf3b17ea3455551a9c47243f0194a59ee1a0` and mixed-maintenance fallback
+coverage at `61910b8eac108c5f2c35f07a374879d1fb2dc5c8`.
 
 This report records the final 100k and 1M nativewire YCSB load checks requested
 by #2026 after the deterministic publication/readability slices landed. It is
@@ -33,8 +34,8 @@ TreeDB:
 
 - profile: `command_wal_relaxed`
 - server: `cmd/treedb-native-server`
-- gomap code base: `12b2bf3b17ea3455551a9c47243f0194a59ee1a0`
-- capture branch commit: `73678ffa9b65ece9c02bd4cab88a8793768e05ca`
+- gomap code base: `61910b8eac108c5f2c35f07a374879d1fb2dc5c8`
+- capture branch commit: `2041a2a2de55e0bb8b6d7d6201c57c989fa4e272`
 - gomap branch: `codex/2026-current-head-ycsb-20260630`
 
 External client:
@@ -67,20 +68,20 @@ clocksource: tsc
 Primary artifact root:
 
 ```text
-/tmp/treedb_native_ycsb_current_head_20260629_210053
+/tmp/treedb_native_ycsb_current_head_20260629_212711
 ```
 
 Primary artifacts:
 
 ```text
-/tmp/treedb_native_ycsb_current_head_20260629_210053/host.txt
-/tmp/treedb_native_ycsb_current_head_20260629_210053/commands.txt
-/tmp/treedb_native_ycsb_current_head_20260629_210053/summary_raw.tsv
-/tmp/treedb_native_ycsb_current_head_20260629_210053/error_counts.txt
-/tmp/treedb_native_ycsb_current_head_20260629_210053/100000/load.out
-/tmp/treedb_native_ycsb_current_head_20260629_210053/100000/server.log
-/tmp/treedb_native_ycsb_current_head_20260629_210053/1000000/load.out
-/tmp/treedb_native_ycsb_current_head_20260629_210053/1000000/server.log
+/tmp/treedb_native_ycsb_current_head_20260629_212711/host.txt
+/tmp/treedb_native_ycsb_current_head_20260629_212711/commands.txt
+/tmp/treedb_native_ycsb_current_head_20260629_212711/summary_raw.tsv
+/tmp/treedb_native_ycsb_current_head_20260629_212711/error_counts.txt
+/tmp/treedb_native_ycsb_current_head_20260629_212711/100000/load.out
+/tmp/treedb_native_ycsb_current_head_20260629_212711/100000/server.log
+/tmp/treedb_native_ycsb_current_head_20260629_212711/1000000/load.out
+/tmp/treedb_native_ycsb_current_head_20260629_212711/1000000/server.log
 ```
 
 ## Focused Gates
@@ -107,8 +108,8 @@ make build
 
 | recordcount | INSERT count | INSERT ops/sec | INSERT avg us | INSERT p50 us | INSERT p95 us | INSERT p99 us | INSERT p99.9 us | INSERT max us | INSERT_ERROR |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100,000 | 100,000 | 61,837.1 | 241.0 | 217.0 | 405.0 | 586.0 | 1,269.0 | 17,887.0 | 0 |
-| 1,000,000 | 1,000,000 | 44,379.0 | 340.0 | 265.0 | 560.0 | 925.0 | 2,611.0 | 1,030,655.0 | 0 |
+| 100,000 | 100,000 | 59,711.0 | 250.0 | 222.0 | 439.0 | 714.0 | 1,523.0 | 14,607.0 | 0 |
+| 1,000,000 | 1,000,000 | 45,196.8 | 334.0 | 259.0 | 538.0 | 902.0 | 2,539.0 | 939,007.0 | 0 |
 
 The 1M load emitted periodic progress rows at 10s and 20s before the final
 1,000,000-row summary. The table above uses the final post-run row.
@@ -128,23 +129,23 @@ cd /home/mikers/dev/pingcap/go-ycsb-2026-meta-v5
 make build
 
 /home/mikers/dev/snissn/gomap-2026-current-head-ycsb-20260630/bin/treedb-native-server \
-  -dir /tmp/treedb_native_ycsb_current_head_20260629_210053/100000/db \
+  -dir /tmp/treedb_native_ycsb_current_head_20260629_212711/100000/db \
   -profile command_wal_relaxed \
-  -addr 127.0.0.1:17280
+  -addr 127.0.0.1:17282
 
 /home/mikers/dev/pingcap/go-ycsb-2026-meta-v5/bin/go-ycsb load treedb-native \
-  -p treedb.addr=127.0.0.1:17280 \
+  -p treedb.addr=127.0.0.1:17282 \
   -p recordcount=100000 \
   -p operationcount=10000 \
   -p threadcount=16
 
 /home/mikers/dev/snissn/gomap-2026-current-head-ycsb-20260630/bin/treedb-native-server \
-  -dir /tmp/treedb_native_ycsb_current_head_20260629_210053/1000000/db \
+  -dir /tmp/treedb_native_ycsb_current_head_20260629_212711/1000000/db \
   -profile command_wal_relaxed \
-  -addr 127.0.0.1:17281
+  -addr 127.0.0.1:17283
 
 /home/mikers/dev/pingcap/go-ycsb-2026-meta-v5/bin/go-ycsb load treedb-native \
-  -p treedb.addr=127.0.0.1:17281 \
+  -p treedb.addr=127.0.0.1:17283 \
   -p recordcount=1000000 \
   -p operationcount=10000 \
   -p threadcount=16
