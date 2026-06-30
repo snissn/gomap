@@ -514,6 +514,7 @@ func applyEntryIDs(entries []raftfsm.CommittedEntryV1) []raftentry.ApplyEntryID 
 func cloneCommittedEntry(entry raftfsm.CommittedEntryV1) raftfsm.CommittedEntryV1 {
 	entry.Bytes = bytes.Clone(entry.Bytes)
 	entry.RequestMetadata.TraceContext = bytes.Clone(entry.RequestMetadata.TraceContext)
+	entry.RequestMetadata.ClusterRouteMembers = append([]string(nil), entry.RequestMetadata.ClusterRouteMembers...)
 	if entry.ExpectedTarget != nil {
 		target := entry.ExpectedTarget.Clone()
 		entry.ExpectedTarget = &target
@@ -534,6 +535,18 @@ func committedEntriesEqual(a, b raftfsm.CommittedEntryV1) bool {
 		a.RequestMetadata.Compression != b.RequestMetadata.Compression ||
 		a.RequestMetadata.OmitResultIDs != b.RequestMetadata.OmitResultIDs ||
 		a.RequestMetadata.OmitResponseMeta != b.RequestMetadata.OmitResponseMeta ||
+		a.RequestMetadata.ClusterRouteKnown != b.RequestMetadata.ClusterRouteKnown ||
+		a.RequestMetadata.ClusterRouteDatabase != b.RequestMetadata.ClusterRouteDatabase ||
+		a.RequestMetadata.ClusterRouteCatalog != b.RequestMetadata.ClusterRouteCatalog ||
+		a.RequestMetadata.ClusterRouteCollection != b.RequestMetadata.ClusterRouteCollection ||
+		a.RequestMetadata.ClusterRouteShape != b.RequestMetadata.ClusterRouteShape ||
+		a.RequestMetadata.ClusterRouteGroupID != b.RequestMetadata.ClusterRouteGroupID ||
+		a.RequestMetadata.ClusterRouteLeaderHint != b.RequestMetadata.ClusterRouteLeaderHint ||
+		a.RequestMetadata.ClusterRoutePlacementMode != b.RequestMetadata.ClusterRoutePlacementMode ||
+		a.RequestMetadata.ClusterRouteTokenKnown != b.RequestMetadata.ClusterRouteTokenKnown ||
+		a.RequestMetadata.ClusterRouteToken != b.RequestMetadata.ClusterRouteToken ||
+		a.RequestMetadata.ClusterRoutePartitionID != b.RequestMetadata.ClusterRoutePartitionID ||
+		!equalStringSlices(a.RequestMetadata.ClusterRouteMembers, b.RequestMetadata.ClusterRouteMembers) ||
 		!bytes.Equal(a.RequestMetadata.TraceContext, b.RequestMetadata.TraceContext) ||
 		!bytes.Equal(a.Bytes, b.Bytes) {
 		return false
@@ -546,4 +559,16 @@ func committedEntriesEqual(a, b raftfsm.CommittedEntryV1) bool {
 	default:
 		return a.ExpectedTarget.Equal(*b.ExpectedTarget)
 	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

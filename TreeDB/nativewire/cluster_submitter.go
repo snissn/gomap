@@ -7,6 +7,7 @@ import (
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 )
 
 // ClusterRequestMetadata carries request-scoped fields that influence response
@@ -18,6 +19,43 @@ type ClusterRequestMetadata = raftentry.RequestMetadataV1
 // sections before retaining them after SubmitCommandEntryV1 returns.
 type ClusterSubmitter interface {
 	SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata ClusterRequestMetadata) (ClusterSubmitResult, error)
+}
+
+// ClusterRouteProvider is an optional ClusterSubmitter extension for
+// collection-level route preflight. Providers should use catalog-derived route
+// decisions only; leader hints are metadata and are not live leadership proof.
+type ClusterRouteProvider interface {
+	ClusterRoute(ctx context.Context, request ClusterRouteRequest) (ClusterRouteTarget, error)
+}
+
+type ClusterRouteShape string
+
+const (
+	ClusterRouteShapeCollection ClusterRouteShape = "collection"
+	ClusterRouteShapeToken      ClusterRouteShape = "token"
+)
+
+type ClusterRouteRequest struct {
+	Database    string
+	Catalog     string
+	Collection  string
+	CommandID   iwire.CommandID
+	CommandName string
+	Shape       ClusterRouteShape
+	TokenKnown  bool
+	Token       uint64
+}
+
+type ClusterRouteTarget struct {
+	GroupID       string
+	Members       []string
+	LeaderHint    string
+	PlacementMode string
+	Reason        string
+	Shape         ClusterRouteShape
+	TokenKnown    bool
+	Token         uint64
+	PartitionID   string
 }
 
 // ClusterAdmissionProvider exposes the node write-admission state backing a
@@ -91,6 +129,23 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	}); err != nil {
 		return nil, nativeErrorForRaftEntryValidation(err)
 	}
+	var routeReq ClusterRouteRequest
+	var route ClusterRouteTarget
+	var routed bool
+	if _, ok := s.clusterSubmitter.(ClusterRouteProvider); ok {
+		var err error
+		routeReq, err = clusterMutationRouteRequest(cmd, s.limits)
+		if err != nil {
+			return nil, err
+		}
+		route, routed, err = PreflightClusterRoute(ctx, s.clusterSubmitter, routeReq)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if routed {
+		applyClusterRouteMetadata(&metadata, routeReq, route)
+	}
 	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
 	if err != nil {
 		return nil, err
@@ -138,6 +193,122 @@ func AdmitClusterMutation(ctx context.Context, submitter ClusterSubmitter) error
 	return protocolError(iwire.ErrReadOnly, "%s", message)
 }
 
+// PreflightClusterRoute checks the optional cluster route provider. A missing
+// provider preserves existing submitter behavior; a configured provider must
+// return a supported route target with a group ID. Token/ring targets require
+// an exactly-one-ID token route request.
+func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, request ClusterRouteRequest) (ClusterRouteTarget, bool, error) {
+	provider, ok := submitter.(ClusterRouteProvider)
+	if !ok {
+		return ClusterRouteTarget{}, false, nil
+	}
+	request.Shape = normalizeClusterRouteShape(request.Shape)
+	switch request.Shape {
+	case ClusterRouteShapeCollection:
+	case ClusterRouteShapeToken:
+		if !request.TokenKnown {
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster token route request missing document token")
+		}
+	default:
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster route shape %q is not supported", request.Shape)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target, err := provider.ClusterRoute(ctx, request)
+	if err != nil {
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster route rejected %s/%s/%s: %v", request.Database, request.Catalog, request.Collection, err)
+	}
+	if target.GroupID == "" {
+		reason := target.Reason
+		if reason == "" {
+			reason = "cluster route target missing group id"
+		}
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+	}
+	if target.PlacementMode == "" {
+		reason := target.Reason
+		if reason == "" {
+			reason = "cluster route target missing collection placement mode"
+		}
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+	}
+	target.Shape = normalizeClusterRouteTargetShape(target.Shape, target.PlacementMode)
+	switch target.PlacementMode {
+	case "collection":
+		if target.Shape != ClusterRouteShapeCollection {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster collection route target must use collection route shape"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
+	case "token", "ring":
+		if request.Shape != ClusterRouteShapeToken || !request.TokenKnown {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster token/ring route target requires exactly one document id"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
+		if target.Shape != ClusterRouteShapeToken {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster token/ring route target must use token route shape"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
+		if !target.TokenKnown {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster token/ring route target missing document token"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
+		if target.Token != request.Token {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster token/ring route target token does not match request token"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
+		if target.PartitionID == "" {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster token/ring route target missing token partition id"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
+	default:
+		reason := target.Reason
+		if reason == "" {
+			reason = "cluster route target placement mode " + target.PlacementMode + " is not supported"
+		}
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+	}
+	target.Members = append([]string(nil), target.Members...)
+	return target, true, nil
+}
+
+func normalizeClusterRouteShape(shape ClusterRouteShape) ClusterRouteShape {
+	if shape == "" {
+		return ClusterRouteShapeCollection
+	}
+	return shape
+}
+
+func normalizeClusterRouteTargetShape(shape ClusterRouteShape, placementMode string) ClusterRouteShape {
+	if shape != "" {
+		return shape
+	}
+	switch placementMode {
+	case "token", "ring":
+		return ClusterRouteShapeToken
+	default:
+		return ClusterRouteShapeCollection
+	}
+}
+
 func (s *Server) rejectClusterLocalMutation(command string) error {
 	if s == nil || s.clusterSubmitter == nil {
 		return nil
@@ -155,6 +326,83 @@ func unsupportedClusterMutationError(cmd iwire.ValidatedCommand, row raftentry.C
 		reason = row.Reason
 	}
 	return protocolError(iwire.ErrUnsupportedFeature, "cluster submitter does not support %s: %s", name, reason)
+}
+
+func clusterMutationRouteRequest(cmd iwire.ValidatedCommand, limits iwire.Limits) (ClusterRouteRequest, error) {
+	name := ""
+	if cmd.Schema != nil {
+		name = cmd.Schema.Name
+	}
+	collection, err := clusterMutationRouteCollection(cmd)
+	if err != nil {
+		return ClusterRouteRequest{}, err
+	}
+	req := ClusterRouteRequest{
+		Database:    "default",
+		Catalog:     "default",
+		Collection:  collection,
+		CommandID:   cmd.Header.ID,
+		CommandName: name,
+		Shape:       ClusterRouteShapeCollection,
+	}
+	token, ok, err := clusterMutationDocumentToken(cmd, limits)
+	if err != nil {
+		return ClusterRouteRequest{}, err
+	}
+	if ok {
+		req.Shape = ClusterRouteShapeToken
+		req.TokenKnown = true
+		req.Token = token
+	}
+	return req, nil
+}
+
+func clusterMutationDocumentToken(cmd iwire.ValidatedCommand, limits iwire.Limits) (uint64, bool, error) {
+	switch cmd.Header.ID {
+	case iwire.CommandInsertBatch, iwire.CommandReplaceBatch, iwire.CommandDeleteBatch, iwire.CommandUpdateBSONSet:
+	default:
+		return 0, false, nil
+	}
+	raw, err := metadataSection(cmd.Known, iwire.SectionDocumentIDs)
+	if err != nil {
+		return 0, false, err
+	}
+	ids, err := iwire.DecodeByteVectorItems(raw, limits)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(ids) != 1 {
+		return 0, false, nil
+	}
+	return raftplacement.DocumentIDTokenV1(ids[0]), true, nil
+}
+
+func clusterMutationRouteCollection(cmd iwire.ValidatedCommand) (string, error) {
+	switch cmd.Header.ID {
+	case iwire.CommandCreateCollection:
+		raw, err := metadataSection(cmd.Known, iwire.SectionCollectionMeta)
+		if err != nil {
+			return "", err
+		}
+		meta, err := decodeCollectionMeta(raw)
+		if err != nil {
+			return "", err
+		}
+		return meta.Name, nil
+	default:
+		raw, err := metadataSection(cmd.Known, iwire.SectionCollectionRef)
+		if err != nil {
+			return "", err
+		}
+		name, wasHandle, err := decodeCollectionRef(nil, raw)
+		if err != nil {
+			return "", err
+		}
+		if wasHandle {
+			return "", protocolError(iwire.ErrInvalidCommand, "cluster route preflight requires collection name ref")
+		}
+		return name, nil
+	}
 }
 
 func clusterRequestMetadata(header iwire.Header, command iwire.CommandHeader, sections []iwire.Section, ack AckPolicy) (ClusterRequestMetadata, error) {
@@ -179,6 +427,24 @@ func clusterRequestMetadata(header iwire.Header, command iwire.CommandHeader, se
 		OmitResultIDs:     command.Flags&iwire.CommandFlagOmitResultIDs != 0,
 		OmitResponseMeta:  command.Flags&iwire.CommandFlagOmitResponseMeta != 0,
 	}, nil
+}
+
+func applyClusterRouteMetadata(metadata *ClusterRequestMetadata, request ClusterRouteRequest, target ClusterRouteTarget) {
+	if metadata == nil {
+		return
+	}
+	metadata.ClusterRouteKnown = true
+	metadata.ClusterRouteDatabase = request.Database
+	metadata.ClusterRouteCatalog = request.Catalog
+	metadata.ClusterRouteCollection = request.Collection
+	metadata.ClusterRouteShape = string(target.Shape)
+	metadata.ClusterRouteGroupID = target.GroupID
+	metadata.ClusterRouteMembers = append([]string(nil), target.Members...)
+	metadata.ClusterRouteLeaderHint = target.LeaderHint
+	metadata.ClusterRoutePlacementMode = target.PlacementMode
+	metadata.ClusterRouteTokenKnown = target.TokenKnown
+	metadata.ClusterRouteToken = target.Token
+	metadata.ClusterRoutePartitionID = target.PartitionID
 }
 
 func deadlineUnixNanosFromSections(sections []iwire.Section) (int64, error) {

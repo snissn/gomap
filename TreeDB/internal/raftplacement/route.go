@@ -1,6 +1,8 @@
 package raftplacement
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 
@@ -12,6 +14,8 @@ var (
 	ErrUnsupportedRouteShape = errors.New("raftplacement: unsupported route shape")
 	ErrMissingRouteToken     = errors.New("raftplacement: missing route token")
 )
+
+const documentIDTokenDomainV1 = "TreeDB/RaftPlacement/DocumentIDTokenV1\x00"
 
 type RouteShapeV1 string
 
@@ -122,6 +126,39 @@ func (c ResolvedCatalogV1) RouteToken(database, catalog, collection string, toke
 		Shape:      RouteShapeTokenV1,
 		Token:      &token,
 	})
+}
+
+// DocumentIDTokenV1 maps a deterministic document ID byte identity to the v1
+// uint64 token space. The rule is stable across processes and platforms.
+func DocumentIDTokenV1(documentID []byte) uint64 {
+	h := sha256.New()
+	_, _ = h.Write([]byte(documentIDTokenDomainV1))
+	_, _ = h.Write(documentID)
+	sum := h.Sum(nil)
+	return binary.BigEndian.Uint64(sum[:8])
+}
+
+func (c ResolvedCatalogV1) RouteDocumentID(database, catalog, collection string, documentID []byte) (RouteDecisionV1, error) {
+	return c.RouteDocumentToken(database, catalog, collection, DocumentIDTokenV1(documentID))
+}
+
+func (c ResolvedCatalogV1) RouteDocumentToken(database, catalog, collection string, token uint64) (RouteDecisionV1, error) {
+	ref := CollectionRefV1{Database: database, Catalog: catalog, Collection: collection}
+	if err := validateCollectionRef(ref); err != nil {
+		return RouteDecisionV1{}, errors.Join(ErrInvalidRouteRequest, err)
+	}
+	placement, ok := c.placements[ref]
+	if !ok {
+		return RouteDecisionV1{}, errors.Join(ErrInvalidRouteRequest, ErrUnplacedCollection, fmt.Errorf("%s/%s/%s", ref.Database, ref.Catalog, ref.Collection))
+	}
+	switch placement.Mode {
+	case PlacementModeCollectionV1:
+		return c.RouteCollection(database, catalog, collection)
+	case PlacementModeTokenV1, PlacementModeRingV1:
+		return c.RouteToken(database, catalog, collection, token)
+	default:
+		return RouteDecisionV1{}, errors.Join(ErrInvalidRouteRequest, ErrUnsupportedPlacementMode, fmt.Errorf("%s/%s/%s mode %q", ref.Database, ref.Catalog, ref.Collection, placement.Mode))
+	}
 }
 
 func (c ResolvedCatalogV1) routeGroup(id raftcluster.GroupID) (ResolvedGroupV1, error) {

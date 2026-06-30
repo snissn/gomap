@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	treenativewire "github.com/snissn/gomap/TreeDB/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -58,7 +59,7 @@ func (s *Server) clusterCreateCollectionResponse(ctx context.Context, command wi
 	if err := validateCreateCollectionCommand(command); err != nil {
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
-	if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name), ack); err != nil {
+	if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name), ack, mongoClusterRouteRequest(db, collection, iwire.CommandCreateCollection, "create_collection")); err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
 	return marshalDocument(bson.D{{Key: "ok", Value: 1.0}})
@@ -94,11 +95,11 @@ func (s *Server) clusterInsertResponse(ctx context.Context, command wire.Documen
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
 	if !exists {
-		if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name), ack); err != nil {
+		if err := s.submitClusterCreateCollection(ctx, *s.defaultCollectionMeta(name), ack, mongoClusterRouteRequest(db, collection, iwire.CommandCreateCollection, "create_collection")); err != nil {
 			return mongoClusterMutationCommandError(err)
 		}
 	}
-	inserted, err := s.submitClusterInsert(ctx, name, format, ids, stored, ack)
+	inserted, err := s.submitClusterInsert(ctx, name, format, ids, stored, ack, mongoClusterDocumentIDsRouteRequest(db, collection, iwire.CommandInsertBatch, "insert_batch", ids))
 	if err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
@@ -142,6 +143,11 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		}
 		return marshalUpdateResponse(0, 0)
 	}
+	if len(updates) != 1 {
+		if err := s.preflightClusterRoute(ctx, mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")); err != nil {
+			return mongoClusterMutationCommandError(err)
+		}
+	}
 	var matched, modified int32
 	for i, update := range updates {
 		item, err := parseMongoUpdateItem(i, update)
@@ -151,7 +157,11 @@ func (s *Server) clusterUpdateResponse(ctx context.Context, command wire.Documen
 		if !item.bsonSetFieldsOK {
 			return commandError(commandCodeBadValue, "BadValue", fmt.Sprintf("updates[%d]: cluster Mongo gateway currently supports only top-level BSON $set updateOne by _id", i))
 		}
-		matchedOne, modifiedOne, err := s.submitClusterUpdateBSONSet(ctx, name, item, ack)
+		route := mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
+		if len(updates) == 1 {
+			route = mongoClusterDocumentIDRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set", item.key)
+		}
+		matchedOne, modifiedOne, err := s.submitClusterUpdateBSONSet(ctx, name, item, ack, route)
 		if err != nil {
 			return mongoClusterMutationCommandError(mongoUpdateErrorWithIndex(item.index, err))
 		}
@@ -195,13 +205,18 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		}
 		return marshalDeleteResponse(0)
 	}
+	if len(deletes) != 1 {
+		if err := s.preflightClusterRoute(ctx, mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")); err != nil {
+			return mongoClusterMutationCommandError(err)
+		}
+	}
 	ids := make([][]byte, 0, len(deletes))
 	seenIDs := make(map[string]struct{}, len(deletes))
 	submitPendingBeforeError := func() error {
 		if len(ids) == 0 {
 			return nil
 		}
-		_, err := s.submitClusterDelete(ctx, name, ids, ack)
+		_, err := s.submitClusterDelete(ctx, name, ids, ack, mongoClusterDocumentIDsRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch", ids))
 		return err
 	}
 	for i, deleteItem := range deletes {
@@ -244,7 +259,7 @@ func (s *Server) clusterDeleteResponse(ctx context.Context, command wire.Documen
 		seenIDs[keyString] = struct{}{}
 		ids = append(ids, key)
 	}
-	deleted, err := s.submitClusterDelete(ctx, name, ids, ack)
+	deleted, err := s.submitClusterDelete(ctx, name, ids, ack, mongoClusterDocumentIDsRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch", ids))
 	if err != nil {
 		return mongoClusterMutationCommandError(err)
 	}
@@ -279,7 +294,7 @@ func (s *Server) clusterCollectionExists(name string) (bool, error) {
 	return false, err
 }
 
-func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collections.CollectionMeta, ack iwire.AckPolicy) error {
+func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collections.CollectionMeta, ack iwire.AckPolicy, route *treenativewire.ClusterRouteRequest) error {
 	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
 		return errors.New("Mongo gateway cluster create currently supports only collection metadata without indexes")
 	}
@@ -291,11 +306,11 @@ func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collect
 	if err != nil {
 		return err
 	}
-	_, err = s.submitClusterMutation(ctx, iwire.CommandCreateCollection, sections, seq, ack)
+	_, err = s.submitClusterMutation(ctx, iwire.CommandCreateCollection, sections, seq, ack, route)
 	return err
 }
 
-func (s *Server) submitClusterInsert(ctx context.Context, name string, format collections.DocumentFormat, ids, docs [][]byte, ack iwire.AckPolicy) (int32, error) {
+func (s *Server) submitClusterInsert(ctx context.Context, name string, format collections.DocumentFormat, ids, docs [][]byte, ack iwire.AckPolicy, route *treenativewire.ClusterRouteRequest) (int32, error) {
 	catalogVersion, err := s.currentClusterCatalogVersion(ctx)
 	if err != nil {
 		return 0, err
@@ -308,7 +323,7 @@ func (s *Server) submitClusterInsert(ctx context.Context, name string, format co
 	if err != nil {
 		return 0, err
 	}
-	response, err := s.submitClusterMutation(ctx, iwire.CommandInsertBatch, sections, seq, ack)
+	response, err := s.submitClusterMutation(ctx, iwire.CommandInsertBatch, sections, seq, ack, route)
 	if err != nil {
 		return 0, err
 	}
@@ -322,7 +337,7 @@ func (s *Server) submitClusterInsert(ctx context.Context, name string, format co
 	return inserted, nil
 }
 
-func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, item mongoUpdateItem, ack iwire.AckPolicy) (int32, int32, error) {
+func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, item mongoUpdateItem, ack iwire.AckPolicy, route *treenativewire.ClusterRouteRequest) (int32, int32, error) {
 	catalogVersion, err := s.currentClusterCatalogVersion(ctx)
 	if err != nil {
 		return 0, 0, err
@@ -335,7 +350,7 @@ func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, it
 	if err != nil {
 		return 0, 0, err
 	}
-	response, err := s.submitClusterMutation(ctx, iwire.CommandUpdateBSONSet, sections, seq, ack)
+	response, err := s.submitClusterMutation(ctx, iwire.CommandUpdateBSONSet, sections, seq, ack, route)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -356,7 +371,7 @@ func (s *Server) submitClusterUpdateBSONSet(ctx context.Context, name string, it
 	return matched, modified, nil
 }
 
-func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]byte, ack iwire.AckPolicy) (int32, error) {
+func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]byte, ack iwire.AckPolicy, route *treenativewire.ClusterRouteRequest) (int32, error) {
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -370,7 +385,7 @@ func (s *Server) submitClusterDelete(ctx context.Context, name string, ids [][]b
 	if err != nil {
 		return 0, err
 	}
-	response, err := s.submitClusterMutation(ctx, iwire.CommandDeleteBatch, sections, seq, ack)
+	response, err := s.submitClusterMutation(ctx, iwire.CommandDeleteBatch, sections, seq, ack, route)
 	if err != nil {
 		return 0, err
 	}
@@ -439,12 +454,21 @@ func (s *Server) clusterIdempotencyKey(commandName string, seq uint64) ([]byte, 
 	return key, nil
 }
 
-func (s *Server) submitClusterMutation(ctx context.Context, command iwire.CommandID, sections []iwire.Section, seq uint64, ack iwire.AckPolicy) ([]iwire.Section, error) {
+func (s *Server) submitClusterMutation(ctx context.Context, command iwire.CommandID, sections []iwire.Section, seq uint64, ack iwire.AckPolicy, routeReq *treenativewire.ClusterRouteRequest) ([]iwire.Section, error) {
 	if s == nil || s.ClusterSubmitter == nil {
 		return nil, errors.New("Mongo gateway cluster submitter is not configured")
 	}
 	if err := s.admitClusterMutation(ctx); err != nil {
 		return nil, err
+	}
+	var route treenativewire.ClusterRouteTarget
+	var routed bool
+	if routeReq != nil {
+		var err error
+		route, routed, err = treenativewire.PreflightClusterRoute(ctx, s.ClusterSubmitter, *routeReq)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if row := raftentry.ClassifyNativeWireCommandV1(command); !row.Known || row.Decision != raftentry.DecisionAccepted {
 		return nil, fmt.Errorf("cluster submitter command %d is not accepted by R3a v1", command)
@@ -460,6 +484,20 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 	metadata := treenativewire.ClusterRequestMetadata{
 		RequestID: uint64(seq),
 		AckPolicy: ack,
+	}
+	if routed {
+		metadata.ClusterRouteKnown = true
+		metadata.ClusterRouteDatabase = routeReq.Database
+		metadata.ClusterRouteCatalog = routeReq.Catalog
+		metadata.ClusterRouteCollection = routeReq.Collection
+		metadata.ClusterRouteShape = string(route.Shape)
+		metadata.ClusterRouteGroupID = route.GroupID
+		metadata.ClusterRouteMembers = append([]string(nil), route.Members...)
+		metadata.ClusterRouteLeaderHint = route.LeaderHint
+		metadata.ClusterRoutePlacementMode = route.PlacementMode
+		metadata.ClusterRouteTokenKnown = route.TokenKnown
+		metadata.ClusterRouteToken = route.Token
+		metadata.ClusterRoutePartitionID = route.PartitionID
 	}
 	if _, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata}); err != nil {
 		return nil, err
@@ -482,6 +520,40 @@ func (s *Server) admitClusterMutation(ctx context.Context) error {
 		return errors.New("Mongo gateway cluster submitter is not configured")
 	}
 	return treenativewire.AdmitClusterMutation(ctx, s.ClusterSubmitter)
+}
+
+func (s *Server) preflightClusterRoute(ctx context.Context, routeReq *treenativewire.ClusterRouteRequest) error {
+	if routeReq == nil || s == nil || s.ClusterSubmitter == nil {
+		return nil
+	}
+	_, _, err := treenativewire.PreflightClusterRoute(ctx, s.ClusterSubmitter, *routeReq)
+	return err
+}
+
+func mongoClusterRouteRequest(db, collection string, command iwire.CommandID, commandName string) *treenativewire.ClusterRouteRequest {
+	return &treenativewire.ClusterRouteRequest{
+		Database:    db,
+		Catalog:     "default",
+		Collection:  collection,
+		CommandID:   command,
+		CommandName: commandName,
+		Shape:       treenativewire.ClusterRouteShapeCollection,
+	}
+}
+
+func mongoClusterDocumentIDRouteRequest(db, collection string, command iwire.CommandID, commandName string, id []byte) *treenativewire.ClusterRouteRequest {
+	req := mongoClusterRouteRequest(db, collection, command, commandName)
+	req.Shape = treenativewire.ClusterRouteShapeToken
+	req.TokenKnown = true
+	req.Token = raftplacement.DocumentIDTokenV1(id)
+	return req
+}
+
+func mongoClusterDocumentIDsRouteRequest(db, collection string, command iwire.CommandID, commandName string, ids [][]byte) *treenativewire.ClusterRouteRequest {
+	if len(ids) == 1 {
+		return mongoClusterDocumentIDRouteRequest(db, collection, command, commandName, ids[0])
+	}
+	return mongoClusterRouteRequest(db, collection, command, commandName)
 }
 
 func validateMongoClusterSubmitResult(requested iwire.AckPolicy, result treenativewire.ClusterSubmitResult) error {

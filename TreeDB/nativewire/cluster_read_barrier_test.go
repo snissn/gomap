@@ -2,12 +2,16 @@ package nativewire
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
+	"github.com/snissn/gomap/TreeDB/internal/raftharness"
 )
 
 type fakeAppliedIndexBarrierProvider struct {
@@ -255,6 +259,69 @@ func TestAppliedIndexReadCoordinatorProvesLinearizableReadMetadata(t *testing.T)
 	}
 	if len(waiter.calls) != 1 || waiter.calls[0] != wantBarrier {
 		t.Fatalf("waiter calls=%+v want %+v", waiter.calls, wantBarrier)
+	}
+}
+
+func TestAppliedIndexReadCoordinatorLinearizableUsesHarnessReadIndexAndWaiter(t *testing.T) {
+	h, err := raftharness.Open(raftharness.Options{
+		RootDir: t.TempDir(),
+		GroupID: "group-a",
+		Nodes: []raftharness.NodeConfig{
+			{ID: "node-a"},
+			{ID: "node-b"},
+			{ID: "node-c"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open harness: %v", err)
+	}
+	defer func() { _ = h.Close() }()
+
+	entry := nativewireHarnessCommittedCreateCollectionEntry(t, 41, 1, "users", "nativewire:harness-read-index:users")
+	evidence, err := h.Commit(entry)
+	if err != nil {
+		t.Fatalf("Commit harness entry: %v evidence=%+v", err, evidence)
+	}
+	node, ok := h.Node("node-b")
+	if !ok {
+		t.Fatal("node-b not found")
+	}
+	if last, ok := node.LastApplied(); ok {
+		t.Fatalf("node-b last applied before read=%+v, want none", last)
+	}
+
+	target := raftcluster.ReadIndexBarrier{NodeID: "node-b", GroupID: "group-a"}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		ClusterReadCoordinator: AppliedIndexReadCoordinator{
+			Waiter:            h.ReadBarrier("node-b"),
+			ReadIndexTarget:   target,
+			ReadIndexProvider: h.ReadIndexProvider("node-b"),
+		},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.GetManyWithOptions(ctx, "users", [][]byte{[]byte("u1")}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if err != nil {
+		t.Fatalf("GetManyWithOptions: %v", err)
+	}
+	if got, want := result.Present, []bool{true}; !boolSlicesEqual(got, want) {
+		t.Fatalf("present=%v want %v", got, want)
+	}
+	if !result.ReadMeta.Valid ||
+		result.ReadMeta.ActualConsistency != ConsistencyLinearizable ||
+		result.ReadMeta.ServingNode != "node-b" ||
+		result.ReadMeta.LeaderNode != "node-b" ||
+		!result.ReadMeta.HasAppliedIndex ||
+		result.ReadMeta.AppliedIndex != 1 {
+		t.Fatalf("read meta=%+v", result.ReadMeta)
+	}
+	if last, ok := node.LastApplied(); !ok || last.Term != 41 || last.Index != 1 {
+		t.Fatalf("node-b last applied after read=%+v ok=%t, want 41/1", last, ok)
 	}
 }
 
@@ -535,5 +602,38 @@ func TestAppliedIndexReadCoordinatorPropagatesWaiterFailure(t *testing.T) {
 	}).CoordinateRead(context.Background(), ClusterReadRequest{Policy: ConsistencyLeaderRead})
 	if !errors.Is(err, waiterErr) {
 		t.Fatalf("CoordinateRead err=%v want waiter error", err)
+	}
+}
+
+const nativewireHarnessCatalogVersionStart = 7
+
+func nativewireHarnessCommittedCreateCollectionEntry(t *testing.T, term, index uint64, collection, idempotency string) raftfsm.CommittedEntryV1 {
+	t.Helper()
+	sections := []iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandCreateCollection, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{
+			Name: collection,
+			Options: collections.CollectionOptions{
+				DocumentFormat: collections.DocumentFormatJSON,
+			},
+		})},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, nativewireHarnessCatalogVersionStart)},
+	}
+	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	raw, err := iwire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return raftfsm.CommittedEntryV1{
+		Type:                     raftfsm.EntryTypeCommandEntryV1,
+		Term:                     term,
+		Index:                    index,
+		Bytes:                    raw,
+		CurrentCatalogVersion:    nativewireHarnessCatalogVersionStart,
+		HasCurrentCatalogVersion: true,
 	}
 }

@@ -12,7 +12,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	treenativewire "github.com/snissn/gomap/TreeDB/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -39,6 +41,80 @@ type mongoClusterAdmissionSubmitter struct {
 	*mongoClusterFakeSubmitter
 	status treenativewire.ClusterAdmissionStatus
 	err    error
+}
+
+type mongoRoutingClusterSubmitter struct {
+	*mongoClusterFakeSubmitter
+
+	routeMu sync.Mutex
+	target  treenativewire.ClusterRouteTarget
+	err     error
+	routes  []treenativewire.ClusterRouteRequest
+}
+
+func (r *mongoRoutingClusterSubmitter) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
+	r.routeMu.Lock()
+	r.routes = append(r.routes, req)
+	r.routeMu.Unlock()
+	if r.err != nil {
+		return treenativewire.ClusterRouteTarget{}, r.err
+	}
+	target := r.target
+	target.Members = append([]string(nil), target.Members...)
+	return target, nil
+}
+
+func (r *mongoRoutingClusterSubmitter) snapshotRoutes() []treenativewire.ClusterRouteRequest {
+	r.routeMu.Lock()
+	defer r.routeMu.Unlock()
+	return append([]treenativewire.ClusterRouteRequest(nil), r.routes...)
+}
+
+type mongoPlacementRouteClusterSubmitter struct {
+	*mongoClusterFakeSubmitter
+
+	routeMu sync.Mutex
+	catalog raftplacement.ResolvedCatalogV1
+	routes  []treenativewire.ClusterRouteRequest
+}
+
+func (p *mongoPlacementRouteClusterSubmitter) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
+	p.routeMu.Lock()
+	p.routes = append(p.routes, req)
+	p.routeMu.Unlock()
+	var decision raftplacement.RouteDecisionV1
+	var err error
+	if req.Shape == treenativewire.ClusterRouteShapeToken && req.TokenKnown {
+		decision, err = p.catalog.RouteDocumentToken(req.Database, req.Catalog, req.Collection, req.Token)
+	} else {
+		decision, err = p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
+	}
+	if err != nil {
+		return treenativewire.ClusterRouteTarget{}, err
+	}
+	members := make([]string, len(decision.Group.Members))
+	for i, member := range decision.Group.Members {
+		members[i] = string(member)
+	}
+	target := treenativewire.ClusterRouteTarget{
+		GroupID:       string(decision.GroupID()),
+		Members:       members,
+		LeaderHint:    string(decision.LeaderHint()),
+		PlacementMode: string(decision.PlacementMode),
+		Shape:         treenativewire.ClusterRouteShape(decision.Shape),
+	}
+	if decision.Token.Present {
+		target.TokenKnown = true
+		target.Token = decision.Token.Token
+		target.PartitionID = string(decision.Token.Partition.ID)
+	}
+	return target, nil
+}
+
+func (p *mongoPlacementRouteClusterSubmitter) snapshotRoutes() []treenativewire.ClusterRouteRequest {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+	return append([]treenativewire.ClusterRouteRequest(nil), p.routes...)
 }
 
 func (f *mongoClusterAdmissionSubmitter) ClusterAdmissionStatus(context.Context) (treenativewire.ClusterAdmissionStatus, error) {
@@ -223,6 +299,119 @@ func assertMongoClusterCallAckPolicy(tb testing.TB, call mongoClusterSubmitterCa
 	}
 }
 
+func assertMongoClusterRouteMetadata(tb testing.TB, call mongoClusterSubmitterCall, database, collection string) {
+	tb.Helper()
+	meta := call.metadata
+	if !meta.ClusterRouteKnown {
+		tb.Fatal("metadata missing cluster route")
+	}
+	if meta.ClusterRouteDatabase != database || meta.ClusterRouteCatalog != "default" || meta.ClusterRouteCollection != collection {
+		tb.Fatalf("metadata route identity=%s/%s/%s want %s/default/%s", meta.ClusterRouteDatabase, meta.ClusterRouteCatalog, meta.ClusterRouteCollection, database, collection)
+	}
+	if meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeCollection) {
+		tb.Fatalf("metadata route shape=%q want collection", meta.ClusterRouteShape)
+	}
+	if meta.ClusterRouteGroupID != "group-a" || meta.ClusterRouteLeaderHint != "node-a" || meta.ClusterRoutePlacementMode != "collection" {
+		tb.Fatalf("metadata route target group=%q leader=%q mode=%q", meta.ClusterRouteGroupID, meta.ClusterRouteLeaderHint, meta.ClusterRoutePlacementMode)
+	}
+	if meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != 0 || meta.ClusterRoutePartitionID != "" {
+		tb.Fatalf("collection route unexpectedly included token metadata known/token/partition=%v/%d/%q", meta.ClusterRouteTokenKnown, meta.ClusterRouteToken, meta.ClusterRoutePartitionID)
+	}
+	if len(meta.ClusterRouteMembers) != 2 || meta.ClusterRouteMembers[0] != "node-a" || meta.ClusterRouteMembers[1] != "node-b" {
+		tb.Fatalf("metadata route members=%v want [node-a node-b]", meta.ClusterRouteMembers)
+	}
+}
+
+func assertMongoClusterTokenRouteMetadata(tb testing.TB, call mongoClusterSubmitterCall, database, collection string, mode raftplacement.PlacementModeV1, partition string, token uint64) {
+	tb.Helper()
+	meta := call.metadata
+	if !meta.ClusterRouteKnown {
+		tb.Fatal("metadata missing cluster route")
+	}
+	if meta.ClusterRouteDatabase != database || meta.ClusterRouteCatalog != "default" || meta.ClusterRouteCollection != collection {
+		tb.Fatalf("metadata route identity=%s/%s/%s want %s/default/%s", meta.ClusterRouteDatabase, meta.ClusterRouteCatalog, meta.ClusterRouteCollection, database, collection)
+	}
+	if meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) {
+		tb.Fatalf("route shape=%q want token", meta.ClusterRouteShape)
+	}
+	if meta.ClusterRouteGroupID != "group-a" || meta.ClusterRouteLeaderHint != "node-a" || meta.ClusterRoutePlacementMode != string(mode) {
+		tb.Fatalf("metadata route target group=%q leader=%q mode=%q", meta.ClusterRouteGroupID, meta.ClusterRouteLeaderHint, meta.ClusterRoutePlacementMode)
+	}
+	if !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != partition {
+		tb.Fatalf("metadata token known/token/partition=%v/%d/%q want true/%d/%q", meta.ClusterRouteTokenKnown, meta.ClusterRouteToken, meta.ClusterRoutePartitionID, token, partition)
+	}
+}
+
+func mongoClusterRouteTokenForValue(tb testing.TB, value any) uint64 {
+	tb.Helper()
+	key, err := encodePrimaryKey(mustRawValue(tb, value))
+	if err != nil {
+		tb.Fatalf("encode primary key: %v", err)
+	}
+	return raftplacement.DocumentIDTokenV1(key)
+}
+
+func newMongoPlacementRouteTestServer(tb testing.TB, mode raftplacement.PlacementModeV1) (*Server, *mongoPlacementRouteClusterSubmitter) {
+	tb.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
+	if err != nil {
+		tb.Fatalf("open db: %v", err)
+	}
+	tb.Cleanup(func() { _ = db.Close() })
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	if _, err := server.Collections.CreateCollection(server.defaultCollectionMeta("app.users")); err != nil {
+		tb.Fatalf("create app.users: %v", err)
+	}
+	submitter := &mongoPlacementRouteClusterSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		catalog:                   mustMongoRouteTestCatalog(tb, mode),
+	}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
+	return server, submitter
+}
+
+func mustMongoRouteTestCatalog(tb testing.TB, mode raftplacement.PlacementModeV1) raftplacement.ResolvedCatalogV1 {
+	tb.Helper()
+	placement := raftplacement.CollectionPlacementV1{
+		Collection: raftplacement.CollectionRefV1{
+			Database:   "app",
+			Catalog:    "default",
+			Collection: "users",
+		},
+		Mode: mode,
+	}
+	if mode == raftplacement.PlacementModeCollectionV1 {
+		placement.GroupID = "group-a"
+	} else {
+		placement.TokenPartitions = []raftplacement.TokenPartitionV1{
+			{
+				ID:      "p0",
+				GroupID: "group-a",
+				Start:   0,
+				End:     ^uint64(0),
+			},
+		}
+	}
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{
+				ID:         "group-a",
+				Members:    []raftcluster.NodeID{"node-a", "node-b"},
+				LeaderHint: "node-a",
+			},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{placement},
+	})
+	if err != nil {
+		tb.Fatalf("Validate route test catalog: %v", err)
+	}
+	return catalog
+}
+
 func TestClusterAdmissionMongoLeaderRoutesThroughSubmitter(t *testing.T) {
 	submitter := &mongoClusterAdmissionSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
@@ -251,6 +440,223 @@ func TestClusterAdmissionMongoLeaderRoutesThroughSubmitter(t *testing.T) {
 	}
 	assertMongoClusterCallAckPolicy(t, calls[0], iwire.AckVisible)
 	assertMongoClusterCallAckPolicy(t, calls[1], iwire.AckVisible)
+}
+
+func TestClusterRoutePreflightMongoUsesNamespaceBeforeGatewayName(t *testing.T) {
+	submitter := &mongoRoutingClusterSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		target: treenativewire.ClusterRouteTarget{
+			GroupID:       "group-a",
+			Members:       []string{"node-a", "node-b"},
+			LeaderHint:    "node-a",
+			PlacementMode: "collection",
+		},
+	}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(50)
+
+	response := serveCommand(t, server, 326811, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+
+	routes := submitter.snapshotRoutes()
+	if len(routes) != 2 {
+		t.Fatalf("route calls=%d want create+insert", len(routes))
+	}
+	if got := routes[0]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != iwire.CommandCreateCollection || got.CommandName != "create_collection" {
+		t.Fatalf("first route request=%+v want app/default/users create_collection", got)
+	}
+	insertKey, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode primary key: %v", err)
+	}
+	insertToken := raftplacement.DocumentIDTokenV1(insertKey)
+	if got := routes[1]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != iwire.CommandInsertBatch || got.CommandName != "insert_batch" || got.Shape != treenativewire.ClusterRouteShapeToken || !got.TokenKnown || got.Token != insertToken {
+		t.Fatalf("second route request=%+v want app/default/users insert_batch token=%d", got, insertToken)
+	}
+	calls := submitter.snapshotCalls()
+	if len(calls) != 2 {
+		t.Fatalf("submit calls=%d want 2", len(calls))
+	}
+	if got := mongoClusterCallCollectionMetaName(t, calls[0]); got != "app.users" {
+		t.Fatalf("collection_meta name=%q want app.users", got)
+	}
+	assertMongoClusterRouteMetadata(t, calls[0], "app", "users")
+	assertMongoClusterRouteMetadata(t, calls[1], "app", "users")
+}
+
+func TestClusterRoutePreflightMongoRejectsBeforeSubmitter(t *testing.T) {
+	submitter := &mongoRoutingClusterSubmitter{
+		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
+		err:                       errors.New("token placement requires explicit token"),
+	}
+	server := NewServer()
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = submitter
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(51)
+
+	response := serveCommand(t, server, 326812, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "token placement requires explicit token")
+	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterRoutePreflightMongoTokenPlacementSingleIDWrites(t *testing.T) {
+	tests := []struct {
+		name        string
+		command     iwire.CommandID
+		commandName string
+		run         func(testing.TB, *Server) wire.Document
+	}{
+		{
+			name:        "insert",
+			command:     iwire.CommandInsertBatch,
+			commandName: "insert_batch",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336101, bson.D{
+					{Key: "insert", Value: "users"},
+					{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+		{
+			name:        "update",
+			command:     iwire.CommandUpdateBSONSet,
+			commandName: "update_bson_set",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336102, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{bson.D{
+						{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+						{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+					}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+		{
+			name:        "delete",
+			command:     iwire.CommandDeleteBatch,
+			commandName: "delete_batch",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336103, bson.D{
+					{Key: "delete", Value: "users"},
+					{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+	}
+	for _, mode := range []raftplacement.PlacementModeV1{raftplacement.PlacementModeTokenV1, raftplacement.PlacementModeRingV1} {
+		for _, tc := range tests {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				server, submitter := newMongoPlacementRouteTestServer(t, mode)
+				response := tc.run(t, server)
+				assertOK(t, response)
+				token := mongoClusterRouteTokenForValue(t, "u1")
+				routes := submitter.snapshotRoutes()
+				if len(routes) != 1 {
+					t.Fatalf("route calls=%d want 1", len(routes))
+				}
+				if got := routes[0]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != tc.command || got.CommandName != tc.commandName || got.Shape != treenativewire.ClusterRouteShapeToken || !got.TokenKnown || got.Token != token {
+					t.Fatalf("route request=%+v want app/default/users %s token=%d", got, tc.commandName, token)
+				}
+				calls := submitter.snapshotCalls()
+				if len(calls) != 1 {
+					t.Fatalf("submit calls=%d want 1", len(calls))
+				}
+				if got := calls[0].entry.Decoded.CommandID; got != tc.command {
+					t.Fatalf("submitted command id=%d want %d", got, tc.command)
+				}
+				assertMongoClusterTokenRouteMetadata(t, calls[0], "app", "users", mode, "p0", token)
+			})
+		}
+	}
+}
+
+func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(testing.TB, *Server) wire.Document
+	}{
+		{
+			name: "insert",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336104, bson.D{
+					{Key: "insert", Value: "users"},
+					{Key: "documents", Value: bson.A{
+						bson.D{{Key: "_id", Value: "u1"}},
+						bson.D{{Key: "_id", Value: "u2"}},
+					}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+		{
+			name: "update",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336105, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{
+						bson.D{
+							{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+							{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Ada"}}}}},
+						},
+						bson.D{
+							{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+							{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+						},
+					}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+		{
+			name: "delete",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336106, bson.D{
+					{Key: "delete", Value: "users"},
+					{Key: "deletes", Value: bson.A{
+						bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}},
+						bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "limit", Value: int32(1)}},
+					}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+			response := tc.run(t, server)
+			assertCommandError(t, response, "NotWritablePrimary")
+			routes := submitter.snapshotRoutes()
+			if len(routes) != 1 {
+				t.Fatalf("route calls=%d want 1", len(routes))
+			}
+			if got := routes[0]; got.Shape != treenativewire.ClusterRouteShapeCollection || got.TokenKnown {
+				t.Fatalf("multi-ID route request=%+v want collection-shaped without token", got)
+			}
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+		})
+	}
 }
 
 func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testing.T) {

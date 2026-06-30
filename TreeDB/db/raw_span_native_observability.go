@@ -229,19 +229,11 @@ func (db *DB) rawSpanNativeEligibility(req rawSpanNativeEligibilityRequest) rawS
 	if !hasExplicitReason {
 		reason = db.classifyRawSpanNativeFallback(req, ops)
 	}
-	reason = rawSpanNativeBackendFallbackReason(reason)
 	if !reason.Valid() {
 		reason = FlushSpanRunFallbackUnknown
 	}
 	observation.fallbackReason = reason
 	return observation
-}
-
-func rawSpanNativeBackendFallbackReason(reason FlushSpanRunFallbackReason) FlushSpanRunFallbackReason {
-	if reason == FlushSpanRunFallbackCommandWALBarrier {
-		return FlushSpanRunFallbackSpanNativeNotImplemented
-	}
-	return reason
 }
 
 func rawSpanNativeOpsAndSpans(summary zipper.ReadOnlyLeafSpanSummary, deltaOps int) (uint64, uint64) {

@@ -79,6 +79,53 @@ Route decisions MUST fail closed for:
 Token route decisions include the matched token partition metadata. Collection
 route decisions do not infer shard keys or scatter across token partitions.
 
+## Document-ID Token Rule
+
+`DocumentIDTokenV1` maps a deterministic document ID byte identity to a uint64
+token by hashing:
+
+- the fixed domain string `TreeDB/RaftPlacement/DocumentIDTokenV1\0`;
+- the exact document ID bytes.
+
+The hash is SHA-256, and the token is the first eight digest bytes interpreted
+as a big-endian uint64. The rule is stable across processes and platforms and
+MUST NOT use Go's randomized `maphash` seed. Native-wire document IDs use the
+bytes in `SectionDocumentIDs`. Mongo gateway document IDs use the already
+encoded TreeDB primary-key bytes, not the raw BSON value display form.
+
+## Cluster Submitter Adapter Preflight
+
+Native-wire and Mongo gateway cluster submitter adapters MAY run an optional
+route preflight before handing an accepted R3a command entry to the submitter.
+The preflight is adapter metadata only. It records the catalog route identity,
+route shape, target group ID, group members, leader hint, placement mode, and,
+for token/ring decisions, the document token and token partition ID in request
+metadata that is excluded from deterministic command entry bytes and command
+digests.
+
+Native-wire route preflight uses the default database and catalog plus the
+collection name encoded in the deterministic command sections. `create_collection`
+uses the collection metadata name; mutation commands use the collection-name
+ref. Exactly-one-ID `insert_batch`, `replace_batch`, `delete_batch`, and
+`update_bson_set` requests carry a document-token route request. Multi-ID
+native-wire batches remain collection-shaped so token/ring placements fail
+closed instead of being split or fanned out.
+
+Mongo gateway route preflight uses the original Mongo namespace: `$db` plus the
+command collection name before the gateway flattens it to TreeDB's internal
+`db.collection` collection name. Exactly-one-ID insert, update, and delete
+writes carry a document-token route request derived from the prepared encoded
+primary key. Multi-document insert/delete batches and multi-update commands
+remain collection-shaped so token/ring placements fail closed before submit.
+
+If no route provider is configured, adapters keep the previous submitter
+behavior. If a route provider is configured, the provider MUST fail closed for
+unplaced collections, missing token/ring token metadata, and multi-ID token/ring
+requests. Collection placements may still accept token-capable single-ID
+requests by returning a collection route decision, preserving collection-mode
+write behavior. Leader hints remain hints; they are not live leadership proof,
+read-index evidence, or a network routing guarantee.
+
 ## Token/Ring Catalog Placements
 
 Token/ring placement entries are accepted as internal catalog data for
@@ -123,8 +170,10 @@ read/snapshot dependencies are ready for production routing.
 
 `ResolveToken` maps a token to its simulated virtual partition only after the
 plan has passed validation. `RouteToken` can wrap catalog-backed token/ring
-placements in a route decision when the caller supplies an explicit token. It
-MUST NOT be treated as native-wire or Mongo request routing.
+placements in a route decision when the caller supplies an explicit token.
+Native-wire and Mongo gateway adapters may use that decision as fail-closed
+request preflight metadata only; it is not live network routing or leadership
+proof.
 
 ## Deferred Scope
 
