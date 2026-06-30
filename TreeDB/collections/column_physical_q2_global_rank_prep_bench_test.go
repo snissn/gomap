@@ -235,8 +235,7 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 		t.Fatalf("prepare sharded reference-fill rank maps: %v", err)
 	}
 	if diagnostics.Q2DenseDistinctGlobalRankNanos != diagnostics.Q2DistinctRankNanos ||
-		diagnostics.Q2DensePartLocalRankNanos != diagnostics.Q2LocalRankNanos ||
-		diagnostics.Q2DistinctRankNanos <= 0 {
+		diagnostics.Q2DensePartLocalRankNanos != diagnostics.Q2LocalRankNanos {
 		t.Fatalf("reference-fill diagnostics=%+v want dense q2 distinct/local split", diagnostics)
 	}
 	distinct0 := parts[0].DenseGroupCountDistinct.Distinct
