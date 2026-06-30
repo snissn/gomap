@@ -564,6 +564,36 @@ func TestClusterRoutePreflightRejectsBeforeSubmitter(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightRejectsMissingPlacementMode(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		target: ClusterRouteTarget{
+			GroupID: "group-a",
+			Members: []string{"node-a", "node-b"},
+		},
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"Ada"}`)},
+		AckVisible,
+	)
+	if !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("InsertBatch err=%v want read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
 func TestClusterRoutePreflightSkipsMalformedDeterministicEntry(t *testing.T) {
 	submitter := &routingClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},

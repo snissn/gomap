@@ -200,7 +200,14 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 		}
 		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
 	}
-	if target.PlacementMode != "" && target.PlacementMode != "collection" {
+	if target.PlacementMode == "" {
+		reason := target.Reason
+		if reason == "" {
+			reason = "cluster route target missing collection placement mode"
+		}
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+	}
+	if target.PlacementMode != "collection" {
 		reason := target.Reason
 		if reason == "" {
 			reason = "cluster route target placement mode " + target.PlacementMode + " is not supported by collection preflight"
