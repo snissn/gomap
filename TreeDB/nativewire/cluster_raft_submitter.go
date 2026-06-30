@@ -152,6 +152,7 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 	case errors.Is(err, raftcluster.ErrAdmissionUnavailable),
 		errors.Is(err, raftcluster.ErrCommitNotProven),
 		errors.Is(err, raftcluster.ErrLocalApplyNotRecoverable),
+		errors.Is(err, raftcluster.ErrLocalAckUnavailable),
 		errors.Is(err, raftcluster.ErrInvalidSubmitter),
 		errors.Is(err, raftcluster.ErrMissingCatalogVersion):
 		return protocolError(iwire.ErrDurabilityUnavailable, "%v", err)

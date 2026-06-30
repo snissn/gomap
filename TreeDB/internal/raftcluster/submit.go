@@ -19,6 +19,7 @@ var (
 	ErrNotLeader                 = errors.New("raftcluster: not leader")
 	ErrCommitNotProven           = errors.New("raftcluster: commit not proven")
 	ErrLocalApplyNotRecoverable  = errors.New("raftcluster: local apply not recoverable")
+	ErrLocalAckUnavailable       = errors.New("raftcluster: local ack policy unavailable")
 	ErrInvalidCommittedEntry     = errors.New("raftcluster: invalid committed entry")
 	ErrUnsupportedSubmitAck      = errors.New("raftcluster: unsupported submit ack")
 	ErrMissingCatalogVersion     = errors.New("raftcluster: missing catalog version")
@@ -463,8 +464,10 @@ func actualSubmitAck(requested iwire.AckPolicy) (iwire.AckPolicy, error) {
 	switch requested {
 	case 0:
 		return iwire.AckVisible, nil
-	case iwire.AckVisible, iwire.AckFlushed, iwire.AckSynced, iwire.AckRaftCommitted:
+	case iwire.AckVisible, iwire.AckRaftCommitted:
 		return requested, nil
+	case iwire.AckFlushed, iwire.AckSynced:
+		return 0, errors.Join(ErrLocalAckUnavailable, fmt.Errorf("ack policy %d requires a local flush/sync barrier", requested))
 	default:
 		return 0, errors.Join(ErrUnsupportedSubmitAck, fmt.Errorf("ack policy %d", requested))
 	}

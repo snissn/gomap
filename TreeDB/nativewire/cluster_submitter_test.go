@@ -1622,6 +1622,13 @@ func TestRaftClusterSubmitterCatalogVersionMismatchMapsToNativeError(t *testing.
 	}
 }
 
+func TestRaftClusterSubmitterLocalAckUnavailableMapsToNativeError(t *testing.T) {
+	err := nativeErrorForRaftClusterSubmit(raftcluster.ErrLocalAckUnavailable)
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrDurabilityUnavailable {
+		t.Fatalf("nativeErrorForRaftClusterSubmit code=%v ok=%v err=%v, want durability-unavailable", code, ok, err)
+	}
+}
+
 func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing.T) {
 	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.FollowerAdmission("node-b", "not leader"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
