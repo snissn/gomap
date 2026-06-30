@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestClusterAdapterAppliesProviderCommittedEntryDurably(t *testing.T) {
@@ -86,6 +88,49 @@ func TestClusterAdapterPreflightRejectsDecodedRawMismatch(t *testing.T) {
 	})
 	if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorMalformedEntryV1 {
 		t.Fatalf("PreflightCommandEntryV1 mismatch code=(%s,%t) err=%v, want malformed", code, ok, err)
+	}
+}
+
+func TestClusterAdapterPreflightAllowsKnownIdempotencyReplay(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	create := deterministicCreateCollectionEntryWithOptions(t, "users", "fsm:cluster-adapter:preflight-replay:create", testCreateCollectionMetaOptions{
+		documentFormat: uint64(nativewire.DocumentFormatBSON),
+	})
+	if result, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 1, create)); err != nil {
+		t.Fatalf("ApplyCommittedCommandEntryV1 create: %v result=%+v", err, result)
+	}
+	doc := testBSONDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})
+	insert := deterministicInsertBatchEntry(t, "users", "fsm:cluster-adapter:preflight-replay:insert", nativewire.DocumentFormatBSON, [][]byte{[]byte("u1")}, [][]byte{doc})
+	insertResult, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 2, insert))
+	if err != nil {
+		t.Fatalf("ApplyCommittedCommandEntryV1 insert: %v result=%+v", err, insertResult)
+	}
+	assertApplied(t, insertResult, raftentry.ApplyStatusApplied, 1)
+	decoded, err := raftentry.DecodeCommandEntryV1(insert, raftentry.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("DecodeCommandEntryV1 insert: %v", err)
+	}
+
+	for _, currentCatalogVersion := range []uint64{testCatalogVersionStart, testCatalogVersionStart + 1} {
+		err := fsm.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{
+			GroupID:                  fsm.cluster.GroupID,
+			NodeID:                   fsm.cluster.NodeID,
+			EntryBytes:               insert,
+			DecodedEntry:             decoded,
+			CurrentCatalogVersion:    currentCatalogVersion,
+			HasCurrentCatalogVersion: true,
+			SyncLocalCommandWAL:      true,
+		})
+		if err != nil {
+			t.Fatalf("PreflightCommandEntryV1 known retry catalog %d: %v", currentCatalogVersion, err)
+		}
 	}
 }
 

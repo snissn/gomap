@@ -49,7 +49,7 @@ func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.Comma
 		RequestMetadata:          cloneRequestMetadataV1(req.RequestMetadata),
 		ExpectedTarget:           cloneExpectedTargetV1(req.ExpectedTarget),
 	}
-	opts := raftapply.Options{DecodeLimits: f.decodeLimits}
+	opts := raftapply.Options{DecodeLimits: f.decodeLimits, ResultStore: f.results}
 	if len(req.DecodedEntry.Bytes) != 0 {
 		if !bytes.Equal(req.DecodedEntry.Bytes, req.EntryBytes) {
 			return codedError(raftentry.ErrorMalformedEntryV1, "decoded command entry does not match raw entry bytes")

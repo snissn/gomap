@@ -185,6 +185,9 @@ func (h *Harness) PreflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1,
 }
 
 func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) error {
+	if ok, err := h.preflightKnownIdempotencyReplayV1(entry); err != nil || ok {
+		return err
+	}
 	switch entry.Target.CommandID {
 	case nativewire.CommandCreateCollection:
 		expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
@@ -219,6 +222,26 @@ func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1,
 	default:
 		return codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: %s is not accepted by R3a apply", entry.Row.NativeWireCommand)
 	}
+}
+
+func (h *Harness) preflightKnownIdempotencyReplayV1(entry raftentry.CommandEntryV1) (bool, error) {
+	if h == nil || h.opts.ResultStore == nil || len(entry.IdempotencyKey) == 0 {
+		return false, nil
+	}
+	record, ok, err := h.opts.ResultStore.LookupApplyResultByIdempotencyKey(entry.IdempotencyKey)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if record.CommandDigest != entry.Digest {
+		return false, codedError(raftentry.ErrorRejectedConflictV1, "raftapply: preflight idempotency key conflicts with existing result")
+	}
+	if err := h.requireApplyRecordCoverage(record.AppliedCommandLSN); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ApplyCommittedEntryV1 decodes, validates, classifies, and applies the first
