@@ -88,11 +88,16 @@ Any nonzero YCSB operation error counter such as `INSERT_ERROR`, `READ_ERROR`,
 or `UPDATE_ERROR` invalidates that phase unless the report explicitly marks it
 as exploratory known-bad evidence.
 
-As of gomap `d7407b81cc5712374ca8c1588cfb05f6f7d8490d`, the external
-`go-ycsb` `treedb-native` binding must understand `collection_meta` version 3.
-If upstream `go-ycsb` has not yet been updated, apply the one-line compatibility
-patch recorded in `docs/benchmarks/ycsb_latest_main_2026-06-03.md` before
-rerunning the nativewire cells.
+The June 3 report was captured against gomap
+`d7407b81cc5712374ca8c1588cfb05f6f7d8490d`, where the external `go-ycsb`
+`treedb-native` binding needed the version 3 `collection_meta` compatibility
+patch recorded in `docs/benchmarks/ycsb_latest_main_2026-06-03.md`.
+
+Current nativewire reruns for the #2026 closeout must use a `go-ycsb` client
+that accepts `collection_meta` version 5. The June 30 closeout used
+`/home/mikers/dev/pingcap/go-ycsb-2026-meta-v5` on branch
+`codex/2026-treedb-native-meta-v5`; use that branch or an upstream client with
+equivalent v5 support before rerunning current nativewire cells.
 
 ## Standard Full Rerun Matrix
 
