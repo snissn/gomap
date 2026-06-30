@@ -2,20 +2,43 @@ package collections
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"testing"
 )
 
 type q2DenseGlobalRankPrepVariant struct {
-	name    string
-	prepare func([]columnTypedColumnPhysicalQueryPart, *columnTypedColumnPhysicalQueryPrepareDiagnostics) error
+	name     string
+	prepare  func([]columnTypedColumnPhysicalQueryPart, *columnTypedColumnPhysicalQueryPrepareDiagnostics) error
+	strategy func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy
 }
 
 var q2DenseGlobalRankPrepVariants = []q2DenseGlobalRankPrepVariant{
 	{
-		name:    "current_map_fallback",
+		name:    "current_map",
 		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics,
+		strategy: func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+		},
 	},
+	{
+		name:    "sharded_hash_rank",
+		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics,
+		strategy: func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
+		},
+	},
+	{
+		name:     "adaptive",
+		prepare:  prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics,
+		strategy: q2DenseGlobalRankPrepAdaptiveStrategy,
+	},
+}
+
+func q2DenseGlobalRankPrepAdaptiveStrategy(parts []columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+	return columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
 }
 
 type q2DenseGlobalRankPrepDictionaryShape struct {
@@ -67,6 +90,203 @@ func TestTypedColumnQ2DenseGroupCountDistinctGlobalRankPrepHarness(t *testing.T)
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankPrepEquivalence(t *testing.T) {
+	for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
+		for _, unsorted := range []bool{false, true} {
+			name := shape.name + "/sorted"
+			if unsorted {
+				name = shape.name + "/unsorted"
+			}
+			t.Run(name, func(t *testing.T) {
+				baseFixture := newQ2DenseGlobalRankPrepParts(40, shape)
+				if unsorted {
+					unsortQ2DenseGlobalRankPrepDictionaries(baseFixture)
+				}
+				stats := q2DenseGlobalRankPrepStats(baseFixture)
+				baseline := cloneQ2DenseGlobalRankPrepParts(baseFixture)
+				prototype := cloneQ2DenseGlobalRankPrepParts(baseFixture)
+				var baselineDiagnostics, prototypeDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+				if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(baseline, &baselineDiagnostics); err != nil {
+					t.Fatalf("prepare current map fallback: %v", err)
+				}
+				if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics(prototype, &prototypeDiagnostics); err != nil {
+					t.Fatalf("prepare sharded hash rank: %v", err)
+				}
+				assertQ2DenseGlobalRankPrepParts(t, baseline, stats)
+				assertQ2DenseGlobalRankPrepParts(t, prototype, stats)
+				assertQ2DenseGlobalRankPrepEquivalent(t, baseline, prototype, stats)
+			})
+		}
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankPrepPolicy(t *testing.T) {
+	for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			parts := newQ2DenseGlobalRankPrepParts(40, shape)
+			strategy := columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+				return &part.Distinct
+			})
+			want := columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
+			if shape.name == "shared_heavy" {
+				want = columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+			}
+			if strategy != want {
+				t.Fatalf("adaptive rank strategy=%v want %v", strategy, want)
+			}
+
+			baseline := cloneQ2DenseGlobalRankPrepParts(parts)
+			adaptive := cloneQ2DenseGlobalRankPrepParts(parts)
+			stats := q2DenseGlobalRankPrepStats(parts)
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(baseline, nil); err != nil {
+				t.Fatalf("prepare current map fallback: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(adaptive, nil); err != nil {
+				t.Fatalf("prepare adaptive rank: %v", err)
+			}
+			assertQ2DenseGlobalRankPrepParts(t, adaptive, stats)
+			assertQ2DenseGlobalRankPrepEquivalent(t, baseline, adaptive, stats)
+		})
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctOneShotRankPrepMatchesAdaptivePolicy(t *testing.T) {
+	for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			fixture := newQ2DenseGlobalRankPrepParts(40, shape)
+			unsortQ2DenseGlobalRankPrepDictionaries(fixture)
+			stats := q2DenseGlobalRankPrepStats(fixture)
+			oneShot := cloneQ2DenseGlobalRankPrepParts(fixture)
+			adaptive := cloneQ2DenseGlobalRankPrepParts(fixture)
+			current := cloneQ2DenseGlobalRankPrepParts(fixture)
+
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsOneShotWithDiagnostics(oneShot, nil); err != nil {
+				t.Fatalf("prepare one-shot adaptive rank: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(adaptive, nil); err != nil {
+				t.Fatalf("prepare explicit adaptive rank: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(current, nil); err != nil {
+				t.Fatalf("prepare current map fallback: %v", err)
+			}
+
+			assertQ2DenseGlobalRankPrepParts(t, oneShot, stats)
+			assertQ2DenseGlobalRankPrepEquivalent(t, adaptive, oneShot, stats)
+			if !q2DenseGlobalRankPrepExactDistinctRanksEqual(oneShot, adaptive) {
+				t.Fatalf("one-shot rank prep differs from adaptive policy")
+			}
+			strategy := columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(fixture, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+				return &part.Distinct
+			})
+			if strategy == columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash && q2DenseGlobalRankPrepExactDistinctRanksEqual(oneShot, current) {
+				t.Fatalf("one-shot rank prep used current-map ranks for adaptive sharded shape %s", shape.name)
+			}
+		})
+	}
+}
+
+// Dense q2 distinct ranks are reducer-local equality IDs, not externally visible
+// lexical order. This verifies the q2-visible result invariant after rank renumbering.
+func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankRunEquivalence(t *testing.T) {
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "collection",
+		DistinctColumn: "did",
+	}
+	fixture := newQ2DenseGlobalRankPrepParts(40, q2DenseGlobalRankPrepDictionaryShape{name: "mixed"})
+	unsortQ2DenseGlobalRankPrepDictionaries(fixture)
+	populateQ2DenseGlobalRankPrepCodes(fixture, 512)
+	baseline := cloneQ2DenseGlobalRankPrepParts(fixture)
+	prototype := cloneQ2DenseGlobalRankPrepParts(fixture)
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(baseline, nil); err != nil {
+		t.Fatalf("prepare current map fallback: %v", err)
+	}
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics(prototype, nil); err != nil {
+		t.Fatalf("prepare sharded hash rank: %v", err)
+	}
+	baselineRunner := &columnTypedColumnPhysicalQueryRunner{
+		plan: columnTypedColumnPhysicalQueryPlan{
+			ProjectedColumns:        []string{"collection", "did"},
+			PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+			DenseGroupCountDistinct: true,
+		},
+		parts: baseline,
+	}
+	prototypeRunner := &columnTypedColumnPhysicalQueryRunner{
+		plan: columnTypedColumnPhysicalQueryPlan{
+			ProjectedColumns:        []string{"collection", "did"},
+			PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+			DenseGroupCountDistinct: true,
+		},
+		parts: prototype,
+	}
+	baselineResult, err := baselineRunner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+	if err != nil {
+		t.Fatalf("run current map fallback: %v", err)
+	}
+	prototypeResult, err := prototypeRunner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+	if err != nil {
+		t.Fatalf("run sharded hash rank: %v", err)
+	}
+	baselineCounts := columnPhysicalJSONBenchQ2CountsP0(baselineResult.Groups)
+	prototypeCounts := columnPhysicalJSONBenchQ2CountsP0(prototypeResult.Groups)
+	if !reflect.DeepEqual(prototypeCounts, baselineCounts) {
+		t.Fatalf("prototype counts=%v want current map fallback %v", prototypeCounts, baselineCounts)
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankRunEquivalence(t *testing.T) {
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "collection",
+		DistinctColumn: "did",
+	}
+	for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			fixture := newQ2DenseGlobalRankPrepParts(40, shape)
+			unsortQ2DenseGlobalRankPrepDictionaries(fixture)
+			populateQ2DenseGlobalRankPrepCodes(fixture, 512)
+			baseline := cloneQ2DenseGlobalRankPrepParts(fixture)
+			adaptive := cloneQ2DenseGlobalRankPrepParts(fixture)
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(baseline, nil); err != nil {
+				t.Fatalf("prepare current map fallback: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(adaptive, nil); err != nil {
+				t.Fatalf("prepare adaptive rank: %v", err)
+			}
+			baselineRunner := &columnTypedColumnPhysicalQueryRunner{
+				plan: columnTypedColumnPhysicalQueryPlan{
+					ProjectedColumns:        []string{"collection", "did"},
+					PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+					DenseGroupCountDistinct: true,
+				},
+				parts: baseline,
+			}
+			adaptiveRunner := &columnTypedColumnPhysicalQueryRunner{
+				plan: columnTypedColumnPhysicalQueryPlan{
+					ProjectedColumns:        []string{"collection", "did"},
+					PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+					DenseGroupCountDistinct: true,
+				},
+				parts: adaptive,
+			}
+			baselineResult, err := baselineRunner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+			if err != nil {
+				t.Fatalf("run current map fallback: %v", err)
+			}
+			adaptiveResult, err := adaptiveRunner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+			if err != nil {
+				t.Fatalf("run adaptive rank: %v", err)
+			}
+			baselineCounts := columnPhysicalJSONBenchQ2CountsP0(baselineResult.Groups)
+			adaptiveCounts := columnPhysicalJSONBenchQ2CountsP0(adaptiveResult.Groups)
+			if !reflect.DeepEqual(adaptiveCounts, baselineCounts) {
+				t.Fatalf("adaptive counts=%v want current map fallback %v", adaptiveCounts, baselineCounts)
+			}
+		})
+	}
+}
+
 func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 	for _, variant := range q2DenseGlobalRankPrepVariants {
 		for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
@@ -74,6 +294,7 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 				b.Run(fmt.Sprintf("%s/%s/parts=%d", variant.name, shape.name, partCount), func(b *testing.B) {
 					fixture := newQ2DenseGlobalRankPrepParts(partCount, shape)
 					stats := q2DenseGlobalRankPrepStats(fixture)
+					currentStrategy, shardedStrategy := q2DenseGlobalRankPrepStrategyMetrics(variant.strategy(fixture))
 					var diagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
 					b.ReportAllocs()
 
@@ -96,10 +317,23 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 						b.ReportMetric(float64(diagnostics.Q2GroupRankNanos)/float64(b.N), "diag_group_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2DistinctRankNanos)/float64(b.N), "diag_distinct_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2LocalRankNanos)/float64(b.N), "diag_local_rank_ns/op")
+						b.ReportMetric(currentStrategy, "current_strategy/op")
+						b.ReportMetric(shardedStrategy, "sharded_strategy/op")
 					}
 				})
 			}
 		}
+	}
+}
+
+func q2DenseGlobalRankPrepStrategyMetrics(strategy columnTypedColumnDenseGroupCountDistinctRankStrategy) (float64, float64) {
+	switch strategy {
+	case columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap:
+		return 1, 0
+	case columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash:
+		return 0, 1
+	default:
+		panic(fmt.Sprintf("unknown q2 dense global rank prep strategy %d", strategy))
 	}
 }
 
@@ -146,7 +380,72 @@ func cloneQ2DenseGlobalRankPrepColumn(column columnTypedColumnDenseStringCodeCol
 	return columnTypedColumnDenseStringCodeColumn{
 		Dictionary: append([]string(nil), column.Dictionary...),
 		Valid:      append([]bool(nil), column.Valid...),
+		Codes:      append([]uint32(nil), column.Codes...),
 	}
+}
+
+func unsortQ2DenseGlobalRankPrepDictionaries(parts []columnTypedColumnPhysicalQueryPart) {
+	for partIdx := range parts {
+		part := parts[partIdx].DenseGroupCountDistinct
+		if part == nil {
+			continue
+		}
+		reverseQ2DenseGlobalRankPrepStrings(part.Group.Dictionary)
+		if partIdx%2 == 0 && len(part.Group.Dictionary) > 1 {
+			first := part.Group.Dictionary[0]
+			copy(part.Group.Dictionary, part.Group.Dictionary[1:])
+			part.Group.Dictionary[len(part.Group.Dictionary)-1] = first
+		}
+		reverseQ2DenseGlobalRankPrepStrings(part.Distinct.Dictionary)
+		if partIdx%3 == 0 && len(part.Distinct.Dictionary) > 1 {
+			last := part.Distinct.Dictionary[len(part.Distinct.Dictionary)-1]
+			copy(part.Distinct.Dictionary[1:], part.Distinct.Dictionary)
+			part.Distinct.Dictionary[0] = last
+		}
+	}
+}
+
+func reverseQ2DenseGlobalRankPrepStrings(values []string) {
+	for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
+		values[left], values[right] = values[right], values[left]
+	}
+}
+
+func populateQ2DenseGlobalRankPrepCodes(parts []columnTypedColumnPhysicalQueryPart, rows int) {
+	for partIdx := range parts {
+		part := parts[partIdx].DenseGroupCountDistinct
+		if part == nil {
+			continue
+		}
+		part.Rows = rows
+		parts[partIdx].Rows = rows
+		part.Group.Codes = make([]uint32, rows)
+		part.Distinct.Codes = make([]uint32, rows)
+		for row := 0; row < rows; row++ {
+			part.Group.Codes[row] = uint32((row + partIdx) % len(part.Group.Dictionary))
+			part.Distinct.Codes[row] = uint32((row*31 + partIdx) % len(part.Distinct.Dictionary))
+		}
+		if partIdx%17 == 0 {
+			part.Group.Valid = q2DenseGlobalRankPrepFullValidity(rows)
+			part.Group.Valid[(partIdx*7)%rows] = false
+		} else {
+			part.Group.Valid = nil
+		}
+		if partIdx%19 == 0 {
+			part.Distinct.Valid = q2DenseGlobalRankPrepFullValidity(rows)
+			part.Distinct.Valid[(partIdx*11+3)%rows] = false
+		} else {
+			part.Distinct.Valid = nil
+		}
+	}
+}
+
+func q2DenseGlobalRankPrepFullValidity(rows int) []bool {
+	valid := make([]bool, rows)
+	for idx := range valid {
+		valid[idx] = true
+	}
+	return valid
 }
 
 func q2DenseGlobalRankPrepDictionary(shape q2DenseGlobalRankPrepDictionaryShape, role string, partIdx, valuesPerPart int) []string {
@@ -314,4 +613,132 @@ func assertQ2DenseGlobalRankPrepDistinctRanks(t *testing.T, partIdx int, localDi
 		}
 		seen[rank] = value
 	}
+}
+
+func assertQ2DenseGlobalRankPrepEquivalent(t *testing.T, baseline, prototype []columnTypedColumnPhysicalQueryPart, stats q2DenseGlobalRankPrepFixtureStats) {
+	t.Helper()
+	if len(prototype) != len(baseline) {
+		t.Fatalf("prototype parts=%d want baseline parts=%d", len(prototype), len(baseline))
+	}
+	baselineDistinctRanks := newQ2DenseGlobalRankPrepRankInvariant("baseline", stats.distinctGlobalValues)
+	prototypeDistinctRanks := newQ2DenseGlobalRankPrepRankInvariant("prototype", stats.distinctGlobalValues)
+	for partIdx := range baseline {
+		basePart := baseline[partIdx].DenseGroupCountDistinct
+		protoPart := prototype[partIdx].DenseGroupCountDistinct
+		if basePart == nil || protoPart == nil {
+			t.Fatalf("part %d missing baseline/prototype dense prep baseline=%t prototype=%t", partIdx, basePart != nil, protoPart != nil)
+		}
+		if !reflect.DeepEqual(protoPart.Group.GlobalDictionary, basePart.Group.GlobalDictionary) {
+			t.Fatalf("part %d group global dictionary changed prototype=%v baseline=%v", partIdx, protoPart.Group.GlobalDictionary, basePart.Group.GlobalDictionary)
+		}
+		if !reflect.DeepEqual(protoPart.Group.GlobalLocalRanks, basePart.Group.GlobalLocalRanks) {
+			t.Fatalf("part %d group local ranks changed prototype=%v baseline=%v", partIdx, protoPart.Group.GlobalLocalRanks, basePart.Group.GlobalLocalRanks)
+		}
+		assertQ2DenseGlobalRankPrepColumnRankInvariant(t, baselineDistinctRanks, partIdx, "distinct", basePart.Distinct.Dictionary, basePart.Distinct.GlobalLocalRanks, basePart.Distinct.GlobalCardinality)
+		assertQ2DenseGlobalRankPrepColumnRankInvariant(t, prototypeDistinctRanks, partIdx, "distinct", protoPart.Distinct.Dictionary, protoPart.Distinct.GlobalLocalRanks, protoPart.Distinct.GlobalCardinality)
+		if basePart.Distinct.GlobalEmptyRankOK {
+			baselineDistinctRanks.record(t, partIdx, "distinct", "", basePart.Distinct.GlobalEmptyRank, basePart.Distinct.GlobalCardinality)
+		}
+		if protoPart.Distinct.GlobalEmptyRankOK {
+			prototypeDistinctRanks.record(t, partIdx, "distinct", "", protoPart.Distinct.GlobalEmptyRank, protoPart.Distinct.GlobalCardinality)
+		}
+		if protoPart.Distinct.GlobalCardinality != basePart.Distinct.GlobalCardinality ||
+			protoPart.Distinct.GlobalCardinalityOK != basePart.Distinct.GlobalCardinalityOK ||
+			protoPart.Distinct.GlobalEmptyRankOK != basePart.Distinct.GlobalEmptyRankOK {
+			t.Fatalf("part %d distinct metadata prototype=(card=%d ok=%t empty=%t) baseline=(card=%d ok=%t empty=%t)",
+				partIdx,
+				protoPart.Distinct.GlobalCardinality,
+				protoPart.Distinct.GlobalCardinalityOK,
+				protoPart.Distinct.GlobalEmptyRankOK,
+				basePart.Distinct.GlobalCardinality,
+				basePart.Distinct.GlobalCardinalityOK,
+				basePart.Distinct.GlobalEmptyRankOK)
+		}
+		if protoPart.Distinct.GlobalDictionary != nil {
+			t.Fatalf("part %d prototype distinct global dictionary allocated len=%d", partIdx, len(protoPart.Distinct.GlobalDictionary))
+		}
+	}
+	baselineDistinctRanks.finish(t)
+	prototypeDistinctRanks.finish(t)
+	if !reflect.DeepEqual(q2DenseGlobalRankPrepRankKeys(prototypeDistinctRanks.valueToRank), q2DenseGlobalRankPrepRankKeys(baselineDistinctRanks.valueToRank)) {
+		t.Fatalf("prototype distinct value set differs from baseline")
+	}
+}
+
+func q2DenseGlobalRankPrepExactDistinctRanksEqual(left, right []columnTypedColumnPhysicalQueryPart) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for partIdx := range left {
+		leftPart := left[partIdx].DenseGroupCountDistinct
+		rightPart := right[partIdx].DenseGroupCountDistinct
+		if leftPart == nil || rightPart == nil {
+			return leftPart == rightPart
+		}
+		if leftPart.Distinct.GlobalCardinality != rightPart.Distinct.GlobalCardinality ||
+			leftPart.Distinct.GlobalCardinalityOK != rightPart.Distinct.GlobalCardinalityOK ||
+			leftPart.Distinct.GlobalEmptyRank != rightPart.Distinct.GlobalEmptyRank ||
+			leftPart.Distinct.GlobalEmptyRankOK != rightPart.Distinct.GlobalEmptyRankOK ||
+			!reflect.DeepEqual(leftPart.Distinct.GlobalLocalRanks, rightPart.Distinct.GlobalLocalRanks) {
+			return false
+		}
+	}
+	return true
+}
+
+type q2DenseGlobalRankPrepRankInvariant struct {
+	label       string
+	cardinality int
+	valueToRank map[string]uint32
+	rankToValue map[uint32]string
+}
+
+func newQ2DenseGlobalRankPrepRankInvariant(label string, cardinality int) *q2DenseGlobalRankPrepRankInvariant {
+	return &q2DenseGlobalRankPrepRankInvariant{
+		label:       label,
+		cardinality: cardinality,
+		valueToRank: make(map[string]uint32, cardinality),
+		rankToValue: make(map[uint32]string, cardinality),
+	}
+}
+
+func assertQ2DenseGlobalRankPrepColumnRankInvariant(t *testing.T, invariant *q2DenseGlobalRankPrepRankInvariant, partIdx int, role string, localDictionary []string, localRanks []uint32, globalCardinality int) {
+	t.Helper()
+	if globalCardinality != invariant.cardinality {
+		t.Fatalf("%s part %d %s cardinality=%d want %d", invariant.label, partIdx, role, globalCardinality, invariant.cardinality)
+	}
+	for localCode, value := range localDictionary {
+		invariant.record(t, partIdx, role, value, localRanks[localCode], globalCardinality)
+	}
+}
+
+func (invariant *q2DenseGlobalRankPrepRankInvariant) record(t *testing.T, partIdx int, role, value string, rank uint32, globalCardinality int) {
+	t.Helper()
+	if uint64(rank) >= uint64(globalCardinality) {
+		t.Fatalf("%s part %d %s value %q rank=%d outside cardinality=%d", invariant.label, partIdx, role, value, rank, globalCardinality)
+	}
+	if priorRank, ok := invariant.valueToRank[value]; ok && priorRank != rank {
+		t.Fatalf("%s part %d %s value %q rank changed %d -> %d", invariant.label, partIdx, role, value, priorRank, rank)
+	}
+	if priorValue, ok := invariant.rankToValue[rank]; ok && priorValue != value {
+		t.Fatalf("%s part %d %s rank collision rank=%d values=%q/%q", invariant.label, partIdx, role, rank, priorValue, value)
+	}
+	invariant.valueToRank[value] = rank
+	invariant.rankToValue[rank] = value
+}
+
+func (invariant *q2DenseGlobalRankPrepRankInvariant) finish(t *testing.T) {
+	t.Helper()
+	if len(invariant.valueToRank) != invariant.cardinality || len(invariant.rankToValue) != invariant.cardinality {
+		t.Fatalf("%s rank coverage values=%d ranks=%d want cardinality=%d", invariant.label, len(invariant.valueToRank), len(invariant.rankToValue), invariant.cardinality)
+	}
+}
+
+func q2DenseGlobalRankPrepRankKeys(values map[string]uint32) []string {
+	keys := make([]string, 0, len(values))
+	for value := range values {
+		keys = append(keys, value)
+	}
+	sort.Strings(keys)
+	return keys
 }
