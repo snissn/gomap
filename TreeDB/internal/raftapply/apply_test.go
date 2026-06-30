@@ -323,9 +323,20 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyCommittedEntryV1 seed result: %v result=%+v", err, result)
 	}
+	laterID := raftentry.ApplyEntryID{Term: 1, Index: 2}
+	laterRaw := deterministicCreateCollectionEntry(t, "orders", "client-a:create:orders", testCreateCollectionMetaOptions{})
+	later, err := ApplyCommittedEntryV1(db, laterRaw, applyMeta(laterID.Term, laterID.Index), Options{
+		ResultStore: results,
+	})
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 later result: %v result=%+v", err, later)
+	}
+	if later.ResultDigest == result.ResultDigest {
+		t.Fatalf("later result digest=%s unexpectedly equals first boundary", later.ResultDigest.Hex())
+	}
 	beforeFrames := readCommandWALFrames(t, dir)
-	if len(beforeFrames) != 1 {
-		t.Fatalf("seed command WAL frames=%d, want 1", len(beforeFrames))
+	if len(beforeFrames) != 2 {
+		t.Fatalf("seed command WAL frames=%d, want 2", len(beforeFrames))
 	}
 	progress := NewMemoryApplyProgressStore(8, 8)
 
@@ -343,6 +354,16 @@ func TestStoredResultReplayRecordsMissingProgress(t *testing.T) {
 	}
 	if progress.Len() != 1 {
 		t.Fatalf("progress records after stored result replay=%d, want 1", progress.Len())
+	}
+	progressRecord, ok, err := progress.LookupApplyProgress(id)
+	if err != nil || !ok {
+		t.Fatalf("LookupApplyProgress stored result=(%+v,%t,%v), want repaired progress", progressRecord, ok, err)
+	}
+	if progressRecord.LogicalDigestV1 != LogicalDigestV1(result.ResultDigest) {
+		t.Fatalf("stored result progress digest=%s, want stored boundary %s", progressRecord.LogicalDigestV1.Hex(), result.ResultDigest.Hex())
+	}
+	if progressRecord.LogicalDigestV1 == LogicalDigestV1(later.ResultDigest) {
+		t.Fatalf("stored result progress digest=%s used later DB boundary", progressRecord.LogicalDigestV1.Hex())
 	}
 	if seam.appendCalls != 0 || seam.finalizeCalls != 0 {
 		t.Fatalf("stored result replay reached command WAL seam append=%d finalize=%d, want 0/0", seam.appendCalls, seam.finalizeCalls)

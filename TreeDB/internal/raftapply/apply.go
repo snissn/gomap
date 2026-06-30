@@ -182,16 +182,11 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				return recoveryRequired(entry.Digest, code, err)
 			}
 			if h.opts.ProgressStore != nil {
-				logical, err := h.logicalDigestForProgressV1(meta)
-				if err != nil {
-					code, _ := ErrorCodeOf(err)
-					return recoveryRequired(entry.Digest, code, err)
-				}
 				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
 					EntryID:           meta.EntryID,
 					CommandDigest:     entry.Digest,
 					AppliedCommandLSN: record.AppliedCommandLSN,
-					LogicalDigestV1:   logical,
+					LogicalDigestV1:   LogicalDigestV1(record.Result.ResultDigest),
 				}); err != nil {
 					code, _ := ErrorCodeOf(err)
 					return recoveryRequired(entry.Digest, code, err)

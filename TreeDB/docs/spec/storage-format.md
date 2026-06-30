@@ -195,6 +195,7 @@ u64       ApplyTerm
 u64       ApplyIndex
 bytes[32] CommandDigestV1
 u64       AppliedCommandLSN
+bytes[32] LogicalDigestV1 // logical DB digest at this apply boundary
 ```
 
 Result payload:
