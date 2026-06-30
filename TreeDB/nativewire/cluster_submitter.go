@@ -156,7 +156,21 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err := validateClusterSubmitResult(metadata, result); err != nil {
 		return nil, err
 	}
+	if err := s.updateCatalogVersionFromClusterSubmitResult(result.ResponseSections); err != nil {
+		return nil, err
+	}
 	return cloneSections(result.ResponseSections), nil
+}
+
+func (s *Server) updateCatalogVersionFromClusterSubmitResult(sections []iwire.Section) error {
+	version, ok, err := catalogVersionFromResponseMeta(sections)
+	if err != nil {
+		return err
+	}
+	if ok && s != nil {
+		s.catalogVersion.Store(version)
+	}
+	return nil
 }
 
 // AdmitClusterMutation fails closed unless submitter is configured and, when

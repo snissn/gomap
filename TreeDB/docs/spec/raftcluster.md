@@ -2,10 +2,10 @@
 
 Status: normative for the initial `TreeDB/internal/raftcluster` package.
 
-This document records the #3044-0 storage and configuration boundary that later
-single-group Raft slices may depend on. It does not choose a Raft library, start
-a consensus loop, admit writes, enable `ack_policy=raft_committed`, install
-snapshots, truncate logs, or route multiple groups.
+This document records the single-group Raft storage/configuration boundary and
+the first submit/apply bridge that later #3044 slices may depend on. It does
+not choose a Raft library, start a consensus loop, install snapshots, truncate
+logs, implement recovery-status reporting, or route multiple groups.
 
 ## Scope
 
@@ -16,7 +16,10 @@ The initial boundary owns:
 - a peer membership set that must include the local node;
 - a fail-closed config format and required-feature floor;
 - deterministic local storage paths for Raft log, stable metadata, apply
-  metadata, snapshots, and peer metadata.
+  metadata, snapshots, and peer metadata;
+- a single-group write-admission boundary;
+- a commit-source boundary for deterministic `CommandEntryV1` bytes;
+- a committed-entry applier boundary for applying locally through R3a/raftfsm.
 
 ## Feature And Version Floor
 
@@ -77,11 +80,43 @@ TreeDB's local command WAL.
 ## Local Command WAL Boundary
 
 The TreeDB command WAL is local physical crash-recovery state and is not a Raft
-log. A future Raft provider may commit deterministic command entries by quorum,
-but applying those entries to a local TreeDB still has to satisfy the local
+log. A Raft provider may commit deterministic command entries by quorum, but
+applying those entries to a local TreeDB still has to satisfy the local
 command-WAL recoverability rule before that node can report local durability,
 advance durable applied-index/idempotency metadata, or return
 `ack_policy=raft_committed` success.
+
+## Submit/Apply Bridge
+
+`SingleGroupSubmitter` is the first production-facing submit/apply bridge. It
+is intentionally one group only:
+
+- admission is checked through `AdmissionProvider` and fails closed for
+  follower or unavailable states;
+- submitted deterministic native-wire `CommandEntryV1` bytes are decoded before
+  commit so unsupported or malformed R3a commands fail before local mutation;
+- the commit source must return a committed entry with a non-zero term/index
+  and explicit `CommitEvidenceProductionConsensusV1` evidence;
+- deterministic harness evidence is a separate evidence kind and never proves
+  production quorum commitment;
+- the committed entry is applied through a `CommittedCommandApplierV1`, currently
+  provided by the raftfsm adapter;
+- `AckRaftCommitted` is returned only after production-consensus evidence plus
+  local recoverability are both true;
+- lower ack requests may pass through the same bridge but must not be upgraded
+  to `raft_committed` in the adapter response.
+
+The bridge is a provider boundary, not a complete consensus integration. The
+`SequencedCommitSource` helper supplies deterministic in-process term/index
+assignment and is useful for adapter tests and smoke wiring. It only proves
+`AckRaftCommitted` when the caller explicitly sets production-consensus
+evidence; a production Raft adapter is responsible for setting that evidence
+only after quorum commit.
+
+Nativewire and Mongo gateway cluster submitter adapters use this bridge for the
+single-group create/insert slice. Response metadata carries the post-apply
+catalog version so follow-on guarded commands do not build entries from a stale
+catalog guard.
 
 ## Read-Index Boundary
 
@@ -114,10 +149,10 @@ unreachable.
 
 ## Non-Goals
 
-- no real consensus loop;
-- no server write admission or redirects;
-- no `ack_policy=raft_committed` behavior;
+- no full consensus loop or selected Raft library in this package;
+- no leader transfer, redirect handling, or lease reads;
 - no real read-index provider, lease-read provider, or follower read routing;
 - no snapshot install/export behavior beyond reserving a local path;
+- no recovery-status endpoint or rejoin protocol;
 - no Raft log truncation;
 - no multi-group routing.

@@ -12,8 +12,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	treenativewire "github.com/snissn/gomap/TreeDB/nativewire"
@@ -411,6 +413,89 @@ func newMongoPlacementRouteTestServer(tb testing.TB, mode raftplacement.Placemen
 	server.ClusterSubmitter = submitter
 	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
 	return server, submitter
+}
+
+func newMongoRaftBridgeTestServer(tb testing.TB, admission raftcluster.AdmissionStatus) *Server {
+	tb.Helper()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                          tb.TempDir(),
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		CommandWALSegmentTargetBytes: 1 << 20,
+		DisableBackgroundPrune:       true,
+	})
+	if err != nil {
+		tb.Fatalf("open command WAL db: %v", err)
+	}
+	cluster := mongoRaftBridgeTestConfig(db)
+	fsm, err := raftfsm.Open(raftfsm.Options{
+		DB:      db,
+		Cluster: cluster,
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if err != nil {
+		_ = db.Close()
+		tb.Fatalf("open raft FSM: %v", err)
+	}
+	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+		Cluster:           cluster,
+		AdmissionProvider: raftcluster.StaticAdmissionProvider{Status: admission},
+		CommitSource: raftcluster.NewSequencedCommitSource(raftcluster.SequencedCommitSourceOptions{
+			GroupID:             cluster.GroupID,
+			NodeID:              cluster.NodeID,
+			LeaderID:            cluster.NodeID,
+			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Applier: fsm,
+		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
+			state := db.State()
+			if state == nil {
+				return 0, false, nil
+			}
+			return state.CommitSeq, true, nil
+		}),
+	})
+	if err != nil {
+		_ = fsm.Close()
+		_ = db.Close()
+		tb.Fatalf("NewSingleGroupSubmitter: %v", err)
+	}
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	server.ClusterSubmitter = treenativewire.NewRaftClusterSubmitter(bridge)
+	server.ClusterCatalogVersion = func(context.Context) (uint64, error) {
+		state := db.State()
+		if state == nil {
+			return 0, errors.New("missing DB state")
+		}
+		return state.CommitSeq, nil
+	}
+	tb.Cleanup(func() {
+		_ = fsm.Close()
+		_ = db.Close()
+	})
+	return server
+}
+
+func mongoRaftBridgeTestConfig(db *backenddb.DB) raftcluster.Config {
+	dir := ""
+	if db != nil {
+		dir = db.Dir()
+	}
+	return raftcluster.Config{
+		Dir:     dir,
+		NodeID:  "node-a",
+		GroupID: "group-a",
+		Peers: []raftcluster.Peer{
+			{ID: "node-a", Address: "127.0.0.1:9401"},
+			{ID: "node-b", Address: "127.0.0.1:9402"},
+			{ID: "node-c", Address: "127.0.0.1:9403"},
+		},
+	}
 }
 
 func mustMongoRouteTestCatalog(tb testing.TB, mode raftplacement.PlacementModeV1) raftplacement.ResolvedCatalogV1 {
@@ -1359,6 +1444,22 @@ func TestClusterSubmitterWriteConcernAccepted(t *testing.T) {
 			assertMongoClusterCallAckPolicy(t, calls[0], tc.wantAck)
 		})
 	}
+}
+
+func TestClusterSubmitterConcreteBridgeMajorityInsert(t *testing.T) {
+	server := newMongoRaftBridgeTestServer(t, raftcluster.LeaderAdmission())
+
+	response := serveCommand(t, server, 325807, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "writeConcern", Value: bson.D{{Key: "w", Value: "majority"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	if got, ok := bson.Raw(response).Lookup("n").Int32OK(); !ok || got != 1 {
+		t.Fatalf("insert n=%d ok=%v want 1/true", got, ok)
+	}
+	assertMongoUsers(t, server, map[string]string{"u1": "Ada"})
 }
 
 func TestClusterSubmitterRejectsUnsupportedWriteConcernBeforeSubmitOrLocalMutation(t *testing.T) {

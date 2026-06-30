@@ -12,9 +12,12 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -1320,6 +1323,101 @@ func TestClusterSubmitterRaftCommittedAdmissionFailsBeforeSubmit(t *testing.T) {
 	}
 }
 
+func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.T) {
+	client, server, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	before := clientCatalogVersion(t, client, ctx)
+	createSections := raftClusterCreateCollectionSections("users", before, AckRaftCommitted)
+	createResponse, err := client.commandSections(ctx, iwire.CommandCreateCollection, createSections...)
+	if err != nil {
+		t.Fatalf("CreateCollection raft bridge: %v", err)
+	}
+	meta, err := firstMetaFromResponse(createResponse)
+	if err != nil {
+		t.Fatalf("CreateCollection response meta: %v", err)
+	}
+	if meta.Name != "users" {
+		t.Fatalf("created collection=%q want users", meta.Name)
+	}
+	if ack, ok, err := responseMetaAckPolicy(createResponse); err != nil || !ok || ack != AckRaftCommitted {
+		t.Fatalf("create response ack=(%d,%v,%v) want raft_committed", ack, ok, err)
+	}
+	afterCreate, err := server.currentCatalogVersion()
+	if err != nil {
+		t.Fatalf("server currentCatalogVersion: %v", err)
+	}
+	if afterCreate <= before {
+		t.Fatalf("catalog version after create=%d want > %d", afterCreate, before)
+	}
+
+	insertResponse, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+	if err != nil {
+		t.Fatalf("InsertBatch raft bridge: %v", err)
+	}
+	if ack, ok, err := responseMetaAckPolicy(insertResponse); err != nil || !ok || ack != AckRaftCommitted {
+		t.Fatalf("insert response ack=(%d,%v,%v) want raft_committed", ack, ok, err)
+	}
+	inserted, err := responseCount(insertResponse, "inserted_count")
+	if err != nil {
+		t.Fatalf("inserted_count: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted_count=%d want 1", inserted)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Equal(got, []byte(`{"name":"Ada"}`)) {
+		t.Fatalf("stored doc=%s want Ada JSON", got)
+	}
+}
+
+func TestRaftClusterSubmitterConcreteBridgeVisibleAckDoesNotClaimRaft(t *testing.T) {
+	client, _, _, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...); err != nil {
+		t.Fatalf("CreateCollection raft bridge: %v", err)
+	}
+	insertResponse, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckVisible, "u1")...)
+	if err != nil {
+		t.Fatalf("InsertBatch visible bridge: %v", err)
+	}
+	if ack, ok, err := responseMetaAckPolicy(insertResponse); err != nil || !ok || ack != AckVisible {
+		t.Fatalf("visible response ack=(%d,%v,%v) want visible", ack, ok, err)
+	}
+}
+
+func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing.T) {
+	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.FollowerAdmission("node-b", "not leader"))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	_, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...)
+	if !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("CreateCollection follower err=%v want read-only", err)
+	}
+	if _, openErr := mgr.OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after follower rejection err=%v want ErrCollectionNotFound", openErr)
+	}
+}
+
 func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Context, ack AckPolicy, id string) []iwire.Section {
 	t.Helper()
 	sections := []iwire.Section{
@@ -1329,6 +1427,97 @@ func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Contex
 		documentFormatSection(collections.DocumentFormatJSON),
 		iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte(id))},
 		iwire.Section{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, []byte(`{"name":"Ada"}`))},
+	}
+	if ack != 0 {
+		sections = append(sections, ackSection(ack))
+	}
+	return sections
+}
+
+func serveRaftClusterBridgePipe(t *testing.T, admission raftcluster.AdmissionStatus) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                          t.TempDir(),
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		CommandWALSegmentTargetBytes: 1 << 20,
+		DisableBackgroundPrune:       true,
+	})
+	if err != nil {
+		t.Fatalf("open command WAL db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	cluster := raftClusterBridgeTestConfig(db)
+	fsm, err := raftfsm.Open(raftfsm.Options{
+		DB:      db,
+		Cluster: cluster,
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("open raft FSM: %v", err)
+	}
+	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+		Cluster:           cluster,
+		AdmissionProvider: raftcluster.StaticAdmissionProvider{Status: admission},
+		CommitSource: raftcluster.NewSequencedCommitSource(raftcluster.SequencedCommitSourceOptions{
+			GroupID:             cluster.GroupID,
+			NodeID:              cluster.NodeID,
+			LeaderID:            cluster.NodeID,
+			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Applier: fsm,
+		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
+			state := db.State()
+			if state == nil {
+				return 0, false, nil
+			}
+			return state.CommitSeq, true, nil
+		}),
+	})
+	if err != nil {
+		_ = fsm.Close()
+		_ = db.Close()
+		t.Fatalf("NewSingleGroupSubmitter: %v", err)
+	}
+	server := NewServer(ServerOptions{
+		Collections:      mgr,
+		Backend:          db,
+		ClusterSubmitter: NewRaftClusterSubmitter(bridge),
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() {
+		_ = fsm.Close()
+		_ = db.Close()
+	})
+	return client, server, mgr, db
+}
+
+func raftClusterBridgeTestConfig(db *backenddb.DB) raftcluster.Config {
+	dir := ""
+	if db != nil {
+		dir = db.Dir()
+	}
+	return raftcluster.Config{
+		Dir:     dir,
+		NodeID:  "node-a",
+		GroupID: "group-a",
+		Peers: []raftcluster.Peer{
+			{ID: "node-a", Address: "127.0.0.1:9301"},
+			{ID: "node-b", Address: "127.0.0.1:9302"},
+			{ID: "node-c", Address: "127.0.0.1:9303"},
+		},
+	}
+}
+
+func raftClusterCreateCollectionSections(name string, catalogVersion uint64, ack AckPolicy) []iwire.Section {
+	sections := []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("cluster-create-" + name)},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
+		{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: name})},
 	}
 	if ack != 0 {
 		sections = append(sections, ackSection(ack))
