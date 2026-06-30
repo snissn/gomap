@@ -44,12 +44,13 @@ The local #2026 closeout state is:
 #3385 did not rerun `scripts/nativewire_ycsb_diagnostic.sh`. The diagnostic
 evidence at `3f2c712bb700806b29deb872ed90531d4828ab79` already includes the
 later route-preflight context that made the original `61910b8e...` evidence
-worth refreshing. The remaining delta to current `origin/main` `f42a7002b` is
-Raft snapshot-tail work, diagnostic script/docs changes, and Q2 query
-benchmark/reference-fill work, not changes to the nativewire insert path,
-collection catalog publication path, or value-log pointer read-boundary code.
-That makes #3385 a docs-only closeout reconciliation rather than a fresh
-benchmark run.
+worth refreshing. #3385 merged after the #3384 catalog-backed cluster route
+provider delta (`2e03fb95`) and on top of `origin/main` `fef8b711`, so this
+no-rerun boundary already includes that nativewire route-provider change. The
+remaining delta introduced here is docs-only closeout text, not changes to the
+nativewire insert path, collection catalog publication path, route-provider
+selection path, or value-log pointer read-boundary code. That makes this PR a
+docs-only closeout reconciliation rather than a fresh benchmark run.
 
 ## Benchmark Boundary
 
