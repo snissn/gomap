@@ -607,6 +607,66 @@ func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 	}
 }
 
+func TestEntrySliceLeaseOversizeReuseNarrowsUnderPressure(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 512 << 20
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		entrySlicePoolBudgetBytes = savedBudget
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	const requestCap = 1 << 15
+	normalOversize := make([]batch.Entry, 1, 1<<18)
+	normalFirst := &normalOversize[0]
+	putEntrySlice(normalOversize)
+
+	publishPoolPressureSnapshot(poolPressureSnapshot{
+		sampledUnixNano: now.UnixNano(),
+		level:           poolPressureNormal,
+	}, now)
+	got := getEntrySlice(requestCap)
+	got = append(got, batch.Entry{})
+	if &got[0] != normalFirst {
+		t.Fatalf("normal pressure should preserve bounded oversize lease reuse")
+	}
+
+	entrySliceLeaseMu.Lock()
+	entrySliceLeases = [entrySliceLeaseClassCount][][]batch.Entry{}
+	entrySliceLeaseMu.Unlock()
+	entrySlicePoolBytes.Store(0)
+	for i := range entrySlicePools {
+		entrySlicePools[i] = sync.Pool{}
+	}
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	highOversize := make([]batch.Entry, 0, 1<<18)
+	putEntrySlice(highOversize)
+	publishPoolPressureSnapshot(poolPressureSnapshot{
+		sampledUnixNano: now.UnixNano(),
+		level:           poolPressureHigh,
+	}, now)
+
+	got = getEntrySlice(requestCap)
+	if cap(got) > requestCap*2 {
+		t.Fatalf("high pressure reused oversized lease cap=%d want <=%d", cap(got), requestCap*2)
+	}
+}
+
 func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySlicePoolStateForTest(t)
@@ -826,8 +886,28 @@ func TestOuterLeafArenaMaxReuseCapClampOverflow(t *testing.T) {
 
 func TestEntrySliceMaxReuseCapClampOverflow(t *testing.T) {
 	huge := int(^uint(0) >> 1)
-	if got := entrySliceMaxReuseCap(huge); got != maxEntryPoolCap {
-		t.Fatalf("entrySliceMaxReuseCap(huge)=%d want=%d", got, maxEntryPoolCap)
+	if got := entrySliceMaxReuseCapForPressure(huge, poolPressureNormal); got != maxEntryPoolCap {
+		t.Fatalf("entrySliceMaxReuseCapForPressure(huge, normal)=%d want=%d", got, maxEntryPoolCap)
+	}
+}
+
+func TestEntrySliceMaxReuseCapScalesWithPressure(t *testing.T) {
+	const capacity = 1 << 15
+	tests := []struct {
+		name  string
+		level poolPressureLevel
+		want  int
+	}{
+		{name: "normal", level: poolPressureNormal, want: capacity * 8},
+		{name: "high", level: poolPressureHigh, want: capacity * 2},
+		{name: "critical", level: poolPressureCritical, want: capacity},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := entrySliceMaxReuseCapForPressure(capacity, tc.level); got != tc.want {
+				t.Fatalf("entrySliceMaxReuseCapForPressure(%d, %s)=%d want=%d", capacity, tc.name, got, tc.want)
+			}
+		})
 	}
 }
 

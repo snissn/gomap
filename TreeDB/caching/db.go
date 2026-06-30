@@ -13226,17 +13226,28 @@ func entrySliceLeaseClassForCap(capacity int) (idx int, ok bool) {
 	return idx, true
 }
 
-func entrySliceMaxReuseCap(capacity int) int {
+func entrySliceMaxReuseCapForPressure(capacity int, level poolPressureLevel) int {
 	if capacity <= 0 {
 		return 1 << entrySliceLeaseMinShift
 	}
+
+	factor := 8
+	minReuseCap := 1 << 12
+	switch level {
+	case poolPressureCritical:
+		factor = 1
+		minReuseCap = 0
+	case poolPressureHigh:
+		factor = 2
+	}
+
 	// Clamp before multiplication to avoid potential integer overflow.
-	if capacity > maxEntryPoolCap/8 {
+	if capacity > maxEntryPoolCap/factor {
 		return maxEntryPoolCap
 	}
-	maxCap := capacity * 8
-	if maxCap < 1<<12 {
-		maxCap = 1 << 12
+	maxCap := capacity * factor
+	if minReuseCap > 0 && maxCap < minReuseCap {
+		maxCap = minReuseCap
 	}
 	if maxCap > maxEntryPoolCap {
 		maxCap = maxEntryPoolCap
@@ -13253,7 +13264,8 @@ func getEntrySlice(capacity int) []batch.Entry {
 	if !ok {
 		return make([]batch.Entry, 0, capacity)
 	}
-	maxReuseCap := entrySliceMaxReuseCap(capacity)
+	pressure := currentPoolPressureLevelFast()
+	maxReuseCap := entrySliceMaxReuseCapForPressure(capacity, pressure)
 	maxIdx, _, maxOK := entrySliceLeaseClassForLen(maxReuseCap)
 	if !maxOK {
 		maxIdx = idx
