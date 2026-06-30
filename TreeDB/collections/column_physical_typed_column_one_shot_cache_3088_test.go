@@ -34,6 +34,7 @@ func TestColumnPhysicalTypedColumnOneShotCacheQ1Q3NoMetadata3088(t *testing.T) {
 	assertTypedColumnOneShotCacheSnapshot3088(t, col, "after q1 second", 1, 1, 1, 1, 0)
 
 	q3Req := columnPhysicalQ3DenseRequest1950()
+	q3Req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
 	q3Want := columnPhysicalQ3DenseReferenceGroups1950(scanned)
 	q3MatchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q3", scanned)
 
@@ -403,6 +404,7 @@ func assertTypedColumnQ3OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 	if runner == nil {
 		tb.Fatalf("q3 typed-column one-shot cache entry has nil runner")
 	}
+	sawCompact := false
 	for partIdx := range runner.parts {
 		dense := runner.parts[partIdx].DenseGroupHourCount
 		if dense == nil {
@@ -414,6 +416,49 @@ func assertTypedColumnQ3OneShotDenseDictionaryValuesByCode3175(tb testing.TB, co
 		if len(dense.DictionaryByCode) != 0 {
 			tb.Fatalf("q3 typed-column one-shot part %d reverse dictionary retained=%d want 0", partIdx, len(dense.DictionaryByCode))
 		}
+		if !dense.PredicatesPreApplied {
+			tb.Fatalf("q3 typed-column one-shot part %d predicates were not preapplied", partIdx)
+		}
+		if dense.PreAppliedRowsScanned != runner.parts[partIdx].Rows {
+			tb.Fatalf("q3 typed-column one-shot part %d preapplied rows scanned=%d want part rows=%d", partIdx, dense.PreAppliedRowsScanned, runner.parts[partIdx].Rows)
+		}
+		if len(dense.Values) != len(dense.GroupCodes) {
+			tb.Fatalf("q3 typed-column one-shot part %d values=%d want group rows=%d", partIdx, len(dense.Values), len(dense.GroupCodes))
+		}
+		if len(dense.PredicateRows) != len(dense.GroupCodes) {
+			tb.Fatalf("q3 typed-column one-shot part %d predicate rows=%d want compact rows=%d", partIdx, len(dense.PredicateRows), len(dense.GroupCodes))
+		}
+		if dense.PreAppliedRowsScanned > len(dense.GroupCodes) {
+			sawCompact = true
+		}
+		for rowIdx, predicateRow := range dense.PredicateRows {
+			if int(predicateRow) != rowIdx {
+				tb.Fatalf("q3 typed-column one-shot part %d compact predicate row[%d]=%d want identity compact index", partIdx, rowIdx, predicateRow)
+			}
+		}
+		if len(dense.Predicates) != 3 {
+			tb.Fatalf("q3 typed-column one-shot part %d predicates=%d want 3", partIdx, len(dense.Predicates))
+		}
+		for predicateIdx, predicate := range dense.Predicates {
+			if len(predicate.Codes) != 0 || len(predicate.Valid) != 0 {
+				tb.Fatalf("q3 typed-column one-shot part %d predicate %d retained decoded rows codes/valid=%d/%d want 0/0", partIdx, predicateIdx, len(predicate.Codes), len(predicate.Valid))
+			}
+			if predicate.RejectsAll {
+				tb.Fatalf("q3 typed-column one-shot part %d predicate %d rejects all", partIdx, predicateIdx)
+			}
+			if predicateIdx < 2 {
+				if !predicate.SingleCodeAllowed || predicate.MissingMatchesEmpty {
+					tb.Fatalf("q3 typed-column one-shot part %d predicate %d metadata=%+v want single-code non-missing match", partIdx, predicateIdx, predicate)
+				}
+				continue
+			}
+			if len(predicate.Allowed) == 0 || predicate.MissingMatchesEmpty {
+				tb.Fatalf("q3 typed-column one-shot part %d group predicate metadata=%+v want allowed-code bitset without missing match", partIdx, predicate)
+			}
+		}
+	}
+	if !sawCompact {
+		tb.Fatalf("q3 typed-column one-shot cache did not contain a compact predicate-first part")
 	}
 }
 
