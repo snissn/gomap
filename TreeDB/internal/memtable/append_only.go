@@ -75,7 +75,6 @@ var appendOnlyEntryReserveGrowCallsTotal atomic.Uint64
 var appendOnlyEntryReserveGrowBytesTotal atomic.Uint64
 var appendOnlyEntryReserveSkippedGrowthAllocsTotal atomic.Uint64
 var appendOnlyEntryReserveSkippedGrowthBytesTotal atomic.Uint64
-var appendOnlyValueArenaPoolMu sync.Mutex
 var appendOnlyValueArenaPoolPtrs [appendOnlyValueArenaClassCount]atomic.Pointer[sync.Pool]
 var appendOnlyValueArenaPoolRetainedBytes atomic.Uint64
 var appendOnlyValueArenaPoolRetainedBytesMax atomic.Uint64
@@ -458,7 +457,7 @@ func subtractAppendOnlyValueArenaPoolRetainedBytes(bytes uint64) {
 	}
 }
 
-func dropAppendOnlyValueArenaPoolsLocked() {
+func dropAppendOnlyValueArenaPools() {
 	for i := range appendOnlyValueArenaPoolPtrs {
 		appendOnlyValueArenaPoolPtrs[i].Store(&sync.Pool{})
 	}
@@ -471,10 +470,7 @@ func dropAppendOnlyValueArenaPoolsLocked() {
 // DropAppendOnlyValueArenaPools abandons package-level append-only value-arena
 // chunk pools. Per-memtable active/retained arenas are unaffected.
 func DropAppendOnlyValueArenaPools() {
-	appendOnlyValueArenaPoolMu.Lock()
-	defer appendOnlyValueArenaPoolMu.Unlock()
-
-	dropAppendOnlyValueArenaPoolsLocked()
+	dropAppendOnlyValueArenaPools()
 }
 
 func AppendOnlyValueArenaPoolDropTotal() uint64 {
@@ -770,20 +766,17 @@ func getAppendOnlyValueArenaChunk(capacity int) []byte {
 		capacity = appendOnlyValueArenaDefaultChunk
 	}
 	if idx, classCap, ok := appendOnlyValueArenaClassForLen(capacity); ok {
-		appendOnlyValueArenaPoolMu.Lock()
 		if pool := appendOnlyValueArenaPoolForClass(idx); pool != nil {
 			if v := pool.Get(); v != nil {
 				if b, ok := v.([]byte); ok {
 					appendOnlyValueArenaPoolGetTotal.Add(1)
 					subtractAppendOnlyValueArenaPoolRetainedBytes(appendOnlyValueArenaPoolBytes(cap(b)))
 					if cap(b) >= classCap {
-						appendOnlyValueArenaPoolMu.Unlock()
 						return b[:0]
 					}
 				}
 			}
 		}
-		appendOnlyValueArenaPoolMu.Unlock()
 		return make([]byte, 0, classCap)
 	}
 	return make([]byte, 0, capacity)
@@ -795,20 +788,17 @@ func putAppendOnlyValueArenaChunk(chunk []byte) {
 	}
 	bytes := appendOnlyValueArenaPoolBytes(cap(chunk))
 	if idx, ok := appendOnlyValueArenaClassForCap(cap(chunk)); ok {
-		appendOnlyValueArenaPoolMu.Lock()
-		defer appendOnlyValueArenaPoolMu.Unlock()
+		if !tryAddAppendOnlyValueArenaPoolRetainedBytes(bytes) {
+			recordAppendOnlyValueArenaPoolAdmissionDrop(bytes)
+			return
+		}
 		if pool := appendOnlyValueArenaPoolForClass(idx); pool != nil {
-			if !tryAddAppendOnlyValueArenaPoolRetainedBytes(bytes) {
-				dropAppendOnlyValueArenaPoolsLocked()
-				if !tryAddAppendOnlyValueArenaPoolRetainedBytes(bytes) {
-					recordAppendOnlyValueArenaPoolAdmissionDrop(bytes)
-					return
-				}
-				pool = appendOnlyValueArenaPoolForClass(idx)
-			}
 			appendOnlyValueArenaPoolPutTotal.Add(1)
 			pool.Put(chunk[:0])
+			return
 		}
+		subtractAppendOnlyValueArenaPoolRetainedBytes(bytes)
+		recordAppendOnlyValueArenaPoolAdmissionDrop(bytes)
 	} else if bytes > 0 {
 		recordAppendOnlyValueArenaPoolAdmissionDrop(bytes)
 	}

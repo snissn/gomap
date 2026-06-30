@@ -734,7 +734,7 @@ func TestPutAppendOnlyValueArenaChunkDropsOversizedRetainedChunk(t *testing.T) {
 	}
 }
 
-func TestPutAppendOnlyValueArenaChunkRecyclesPoolsOnRetainBudgetPressure(t *testing.T) {
+func TestPutAppendOnlyValueArenaChunkAdmissionDropsOnRetainBudgetPressure(t *testing.T) {
 	DropAppendOnlyValueArenaPools()
 	t.Cleanup(DropAppendOnlyValueArenaPools)
 
@@ -756,20 +756,20 @@ func TestPutAppendOnlyValueArenaChunkRecyclesPoolsOnRetainBudgetPressure(t *test
 	if got := after.RetainedBytesEstimate; got != wantBytes {
 		t.Fatalf("retained bytes=%d want budget %d", got, wantBytes)
 	}
-	if got := after.PutsTotal - before.PutsTotal; got != 2 {
-		t.Fatalf("puts delta=%d want 2", got)
+	if got := after.PutsTotal - before.PutsTotal; got != 1 {
+		t.Fatalf("puts delta=%d want 1", got)
 	}
-	if got := after.DropsTotal - before.DropsTotal; got != 1 {
-		t.Fatalf("drops delta=%d want 1", got)
+	if got := after.DropsTotal - before.DropsTotal; got != 0 {
+		t.Fatalf("drops delta=%d want 0", got)
 	}
-	if got := after.DropBytesTotal - before.DropBytesTotal; got < wantBytes {
-		t.Fatalf("drop bytes delta=%d want at least %d", got, wantBytes)
+	if got := after.DropBytesTotal - before.DropBytesTotal; got != 0 {
+		t.Fatalf("drop bytes delta=%d want 0", got)
 	}
-	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 0 {
-		t.Fatalf("admission drops delta=%d want 0", got)
+	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 1 {
+		t.Fatalf("admission drops delta=%d want 1", got)
 	}
-	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != 0 {
-		t.Fatalf("admission drop bytes delta=%d want 0", got)
+	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != wantBytes {
+		t.Fatalf("admission drop bytes delta=%d want %d", got, wantBytes)
 	}
 
 	reused := getAppendOnlyValueArenaChunk(1)
@@ -780,7 +780,7 @@ func TestPutAppendOnlyValueArenaChunkRecyclesPoolsOnRetainBudgetPressure(t *test
 	switch got := afterGet.GetsTotal - after.GetsTotal; got {
 	case 1:
 		if got := afterGet.RetainedBytesEstimate; got != 0 {
-			t.Fatalf("retained bytes after replacement get=%d want 0", got)
+			t.Fatalf("retained bytes after pooled get=%d want 0", got)
 		}
 	case 0:
 		if !testRaceEnabled {
