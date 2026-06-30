@@ -667,6 +667,53 @@ func TestEntrySliceLeaseOversizeReuseNarrowsUnderPressure(t *testing.T) {
 	}
 }
 
+func TestEntrySliceLeaseRejectsRoundedBucketAbovePressureCap(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 512 << 20
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		entrySlicePoolBudgetBytes = savedBudget
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(2, 0)
+	poolPressureNow = func() time.Time { return now }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+	publishPoolPressureSnapshot(poolPressureSnapshot{
+		sampledUnixNano: now.UnixNano(),
+		level:           poolPressureHigh,
+	}, now)
+
+	const requestCap = (1 << 16) + 1
+	maxReuseCap := entrySliceMaxReuseCapForPressure(requestCap, poolPressureHigh)
+	roundedBucketLease := make([]batch.Entry, 1, 1<<18)
+	roundedBucketFirst := &roundedBucketLease[0]
+	putEntrySlice(roundedBucketLease)
+
+	got := getEntrySlice(requestCap)
+	got = append(got, batch.Entry{})
+	if &got[0] == roundedBucketFirst {
+		t.Fatalf("reused rounded bucket cap=%d above high-pressure max=%d", cap(roundedBucketLease), maxReuseCap)
+	}
+	if cap(got) > maxReuseCap {
+		t.Fatalf("entry slice cap=%d exceeds high-pressure max=%d", cap(got), maxReuseCap)
+	}
+	if gotPoolBytes := entrySlicePoolBytes.Load(); gotPoolBytes != 0 {
+		t.Fatalf("entrySlicePoolBytes=%d after dropping over-cap lease, want 0", gotPoolBytes)
+	}
+}
+
 func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySlicePoolStateForTest(t)
@@ -893,19 +940,31 @@ func TestEntrySliceMaxReuseCapClampOverflow(t *testing.T) {
 
 func TestEntrySliceMaxReuseCapScalesWithPressure(t *testing.T) {
 	const capacity = 1 << 15
+	const smallCapacity = 1
+	const nonPowerOfTwoCapacity = (1 << 16) + 1
+	_, nonPowerOfTwoClassCap, ok := entrySliceLeaseClassForLen(nonPowerOfTwoCapacity)
+	if !ok {
+		t.Fatalf("entrySliceLeaseClassForLen(%d) failed", nonPowerOfTwoCapacity)
+	}
 	tests := []struct {
-		name  string
-		level poolPressureLevel
-		want  int
+		name     string
+		capacity int
+		level    poolPressureLevel
+		want     int
 	}{
-		{name: "normal", level: poolPressureNormal, want: capacity * 8},
-		{name: "high", level: poolPressureHigh, want: capacity * 2},
-		{name: "critical", level: poolPressureCritical, want: capacity},
+		{name: "normal", capacity: capacity, level: poolPressureNormal, want: capacity * 8},
+		{name: "high", capacity: capacity, level: poolPressureHigh, want: capacity * 2},
+		{name: "critical", capacity: capacity, level: poolPressureCritical, want: capacity},
+		{name: "normal-small-keeps-floor", capacity: smallCapacity, level: poolPressureNormal, want: 1 << 12},
+		{name: "high-small-drops-floor", capacity: smallCapacity, level: poolPressureHigh, want: 1 << entrySliceLeaseMinShift},
+		{name: "critical-small-uses-request-class", capacity: smallCapacity, level: poolPressureCritical, want: 1 << entrySliceLeaseMinShift},
+		{name: "high-non-power-of-two", capacity: nonPowerOfTwoCapacity, level: poolPressureHigh, want: nonPowerOfTwoCapacity * 2},
+		{name: "critical-non-power-of-two-uses-request-class", capacity: nonPowerOfTwoCapacity, level: poolPressureCritical, want: nonPowerOfTwoClassCap},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := entrySliceMaxReuseCapForPressure(capacity, tc.level); got != tc.want {
-				t.Fatalf("entrySliceMaxReuseCapForPressure(%d, %s)=%d want=%d", capacity, tc.name, got, tc.want)
+			if got := entrySliceMaxReuseCapForPressure(tc.capacity, tc.level); got != tc.want {
+				t.Fatalf("entrySliceMaxReuseCapForPressure(%d, %s)=%d want=%d", tc.capacity, tc.name, got, tc.want)
 			}
 		})
 	}

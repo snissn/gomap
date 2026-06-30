@@ -13231,6 +13231,11 @@ func entrySliceMaxReuseCapForPressure(capacity int, level poolPressureLevel) int
 		return 1 << entrySliceLeaseMinShift
 	}
 
+	minClassCap := 1 << entrySliceLeaseMinShift
+	if _, classCap, ok := entrySliceLeaseClassForLen(capacity); ok {
+		minClassCap = classCap
+	}
+
 	factor := 8
 	minReuseCap := 1 << 12
 	switch level {
@@ -13239,6 +13244,7 @@ func entrySliceMaxReuseCapForPressure(capacity int, level poolPressureLevel) int
 		minReuseCap = 0
 	case poolPressureHigh:
 		factor = 2
+		minReuseCap = 0
 	}
 
 	// Clamp before multiplication to avoid potential integer overflow.
@@ -13246,6 +13252,9 @@ func entrySliceMaxReuseCapForPressure(capacity int, level poolPressureLevel) int
 		return maxEntryPoolCap
 	}
 	maxCap := capacity * factor
+	if maxCap < minClassCap {
+		maxCap = minClassCap
+	}
 	if minReuseCap > 0 && maxCap < minReuseCap {
 		maxCap = minReuseCap
 	}
@@ -13280,7 +13289,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 			entrySliceLeaseMu.Unlock()
 			leaseBytes := int64(cap(s)) * entrySliceEntrySizeBytes
 			releaseEntrySlicePoolBytes(leaseBytes)
-			if cap(s) >= capacity {
+			if cap(s) >= capacity && cap(s) <= maxReuseCap {
 				entrySliceLeaseHitTotal.Add(1)
 				entrySliceLeaseHitBytesTotal.Add(uint64(leaseBytes))
 				entrySliceLeaseHitRequestedBytesTotal.Add(requestedBytes)
@@ -13289,14 +13298,16 @@ func getEntrySlice(capacity int) []batch.Entry {
 				}
 				return s[:0]
 			}
-			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
+			if cap(s) < capacity {
 				// The slice is too small for this request; return it to the pool if
 				// we're within budget so smaller requests can reuse it.
-				if ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes); ok {
-					if transitioned {
-						noteEntrySlicePoolGC(entrySlicePoolNumGC())
+				if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
+					if ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes); ok {
+						if transitioned {
+							noteEntrySlicePoolGC(entrySlicePoolNumGC())
+						}
+						entrySlicePools[capIdx].Put(s[:0])
 					}
-					entrySlicePools[capIdx].Put(s[:0])
 				}
 			}
 			entrySliceFreshAllocTotal.Add(1)
