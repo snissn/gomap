@@ -161,10 +161,6 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 					stats := q2DenseGlobalRankPrepStats(fixture)
 					var diagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
 					b.ReportAllocs()
-					b.ReportMetric(float64(partCount), "parts/op")
-					b.ReportMetric(float64(stats.groupGlobalValues), "group_global_values/op")
-					b.ReportMetric(float64(stats.distinctGlobalValues), "distinct_global_values/op")
-					b.ReportMetric(float64(stats.totalLocalDictionaryLen), "local_dictionary_values/op")
 
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
@@ -178,6 +174,10 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 					b.StopTimer()
 
 					if b.N > 0 {
+						b.ReportMetric(float64(partCount), "parts/op")
+						b.ReportMetric(float64(stats.groupGlobalValues), "group_global_values/op")
+						b.ReportMetric(float64(stats.distinctGlobalValues), "distinct_global_values/op")
+						b.ReportMetric(float64(stats.totalLocalDictionaryLen), "local_dictionary_values/op")
 						b.ReportMetric(float64(diagnostics.Q2GroupRankNanos)/float64(b.N), "diag_group_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2DistinctRankNanos)/float64(b.N), "diag_distinct_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2LocalRankNanos)/float64(b.N), "diag_local_rank_ns/op")
