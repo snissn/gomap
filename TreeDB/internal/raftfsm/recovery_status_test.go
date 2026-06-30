@@ -1,0 +1,129 @@
+package raftfsm
+
+import (
+	"context"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+)
+
+func TestRecoveryStatusV1BeforeSnapshotInstallIsUnsafe(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	status, err := fsm.RecoveryStatusV1(context.Background(), RecoveryStatusOptionsV1{
+		TailTargetIndex:   1,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1: %v", err)
+	}
+	if status.Readiness != raftcluster.RecoveryReadinessUnsafeNoSnapshotV1 ||
+		status.SnapshotState != raftcluster.RecoverySnapshotStateNoneV1 ||
+		status.TailState != raftcluster.RecoveryTailStateNoSnapshotV1 ||
+		status.ReadSafetyState != raftcluster.RecoveryReadSafetyAppliedIndexLaggingV1 ||
+		status.SafeToServeReads {
+		t.Fatalf("status=%+v, want unsafe no-snapshot with lagging applied-index read safety", status)
+	}
+}
+
+func TestRecoveryStatusV1TracksSnapshotTailAndAppliedIndexReadiness(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	users := deterministicCreateCollectionEntry(t, "users", "fsm:recovery-status:users")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(9, 1, users)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 users: %v result=%+v", err, result)
+	}
+	manifest, err := fsm.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712347000, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+
+	status, err := fsm.RecoveryStatusV1(context.Background(), RecoveryStatusOptionsV1{
+		SnapshotManifest:  &manifest,
+		TailTargetIndex:   2,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 pending tail: %v", err)
+	}
+	if status.Readiness != raftcluster.RecoveryReadinessTailPendingV1 ||
+		status.SnapshotState != raftcluster.RecoverySnapshotStateManifestVerifiedV1 ||
+		status.TailState != raftcluster.RecoveryTailStatePendingV1 ||
+		status.TailLagEntries != 1 ||
+		status.ReadSafetyState != raftcluster.RecoveryReadSafetyAppliedIndexLaggingV1 ||
+		status.RequiredAppliedIndex != 2 ||
+		status.SafeToServeReads {
+		t.Fatalf("pending status=%+v", status)
+	}
+
+	orders := deterministicCreateCollectionEntry(t, "orders", "fsm:recovery-status:orders")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(9, 2, orders)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 orders: %v result=%+v", err, result)
+	}
+	status, err = fsm.RecoveryStatusV1(context.Background(), RecoveryStatusOptionsV1{
+		SnapshotManifest:  &manifest,
+		TailTargetIndex:   2,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 tail complete: %v", err)
+	}
+	if status.Readiness != raftcluster.RecoveryReadinessReadyAppliedIndexV1 ||
+		status.SnapshotState != raftcluster.RecoverySnapshotStateManifestVerifiedV1 ||
+		status.TailState != raftcluster.RecoveryTailStateCompleteV1 ||
+		status.TailLagEntries != 0 ||
+		status.ReadSafetyState != raftcluster.RecoveryReadSafetyAppliedIndexSatisfiedV1 ||
+		!status.SafeToServeReads {
+		t.Fatalf("tail-complete status=%+v", status)
+	}
+	if status.SnapshotManifest == nil || status.SnapshotManifest.LogicalDigestV1 != manifest.LogicalDigestV1 {
+		t.Fatalf("status manifest=%+v, want copied manifest digest %s", status.SnapshotManifest, manifest.LogicalDigestV1)
+	}
+}
+
+func TestRecoveryStatusV1MismatchedManifestRemainsUnsafe(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "fsm:recovery-status:mismatch")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(10, 1, raw)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1: %v result=%+v", err, result)
+	}
+	manifest, err := fsm.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712347001, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+	manifest.LogicalDigestV1 = strings.Repeat("0", 64)
+
+	status, err := fsm.RecoveryStatusV1(context.Background(), RecoveryStatusOptionsV1{
+		SnapshotManifest:  &manifest,
+		TailTargetIndex:   1,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 mismatched manifest: %v", err)
+	}
+	if status.Readiness != raftcluster.RecoveryReadinessUnsafeManifestUnverifiedV1 ||
+		status.SnapshotState != raftcluster.RecoverySnapshotStateManifestRejectedV1 ||
+		status.SafeToServeReads ||
+		len(status.Errors) == 0 {
+		t.Fatalf("status=%+v, want unsafe rejected manifest with error detail", status)
+	}
+}
