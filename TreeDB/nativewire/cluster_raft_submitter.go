@@ -147,6 +147,8 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 		return nil
 	case errors.Is(err, raftcluster.ErrNotLeader):
 		return protocolError(iwire.ErrReadOnly, "%v", err)
+	case errors.Is(err, raftcluster.ErrCatalogVersionMismatch):
+		return protocolError(iwire.ErrCatalogVersionMismatch, "%v", err)
 	case errors.Is(err, raftcluster.ErrAdmissionUnavailable),
 		errors.Is(err, raftcluster.ErrCommitNotProven),
 		errors.Is(err, raftcluster.ErrLocalApplyNotRecoverable),

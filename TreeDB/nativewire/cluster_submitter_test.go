@@ -1615,6 +1615,13 @@ func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) 
 	}
 }
 
+func TestRaftClusterSubmitterCatalogVersionMismatchMapsToNativeError(t *testing.T) {
+	err := nativeErrorForRaftClusterSubmit(raftcluster.ErrCatalogVersionMismatch)
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrCatalogVersionMismatch {
+		t.Fatalf("nativeErrorForRaftClusterSubmit code=%v ok=%v err=%v, want catalog-version-mismatch", code, ok, err)
+	}
+}
+
 func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing.T) {
 	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.FollowerAdmission("node-b", "not leader"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

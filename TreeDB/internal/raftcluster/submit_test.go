@@ -126,6 +126,32 @@ func TestSingleGroupSubmitterRejectsUnsupportedAckBeforeCommitApply(t *testing.T
 	}
 }
 
+func TestSingleGroupSubmitterRejectsStaleCatalogGuardBeforeCommitApply(t *testing.T) {
+	entry := testClusterCommandEntry(t, 6)
+	commitCalls := 0
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(context.Context, CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return CommitCommandEntryV1Result{}, nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+
+	_, err := submitter.SubmitCommandEntryV1(context.Background(), entry, raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted})
+	if !errors.Is(err, ErrCatalogVersionMismatch) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want catalog-version-mismatch", err)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("commit calls=%d want 0", commitCalls)
+	}
+	if got := len(applier.snapshot()); got != 0 {
+		t.Fatalf("apply calls=%d want 0", got)
+	}
+}
+
 func TestSingleGroupSubmitterAdmissionRejectsBeforeCommitApply(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

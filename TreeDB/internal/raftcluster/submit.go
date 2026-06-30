@@ -3,6 +3,7 @@ package raftcluster
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -21,6 +22,7 @@ var (
 	ErrInvalidCommittedEntry     = errors.New("raftcluster: invalid committed entry")
 	ErrUnsupportedSubmitAck      = errors.New("raftcluster: unsupported submit ack")
 	ErrMissingCatalogVersion     = errors.New("raftcluster: missing catalog version")
+	ErrCatalogVersionMismatch    = errors.New("raftcluster: catalog version mismatch")
 	ErrUnexpectedCommittedTarget = errors.New("raftcluster: committed target mismatch")
 )
 
@@ -322,6 +324,9 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{}, err
 	}
+	if err := checkSubmitCatalogGuardV1(decoded, catalogVersion); err != nil {
+		return SubmitResultV1{}, err
+	}
 	expectedTarget := decoded.Target.Clone()
 	request := CommitCommandEntryV1Request{
 		GroupID:                  s.cluster.GroupID,
@@ -365,6 +370,31 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		CatalogVersion:       postCatalogVersion,
 		HasCatalogVersion:    postHasCatalogVersion,
 	}, nil
+}
+
+func checkSubmitCatalogGuardV1(entry raftentry.CommandEntryV1, catalogVersion uint64) error {
+	expected, err := decodeSubmitExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
+	if err != nil {
+		return err
+	}
+	if catalogVersion != expected {
+		return errors.Join(ErrCatalogVersionMismatch, fmt.Errorf("catalog version %d does not match expected %d", catalogVersion, expected))
+	}
+	return nil
+}
+
+func decodeSubmitExpectedCatalogVersionV1(raw []byte) (uint64, error) {
+	if len(raw) == 0 {
+		return 0, errors.Join(ErrInvalidCommittedEntry, &raftentry.ValidationError{Code: raftentry.ErrorMissingGuardV1, Err: fmt.Errorf("raftcluster: missing expected catalog version")})
+	}
+	value, n := binary.Uvarint(raw)
+	if n <= 0 {
+		return 0, errors.Join(ErrInvalidCommittedEntry, &raftentry.ValidationError{Code: raftentry.ErrorMalformedEntryV1, Err: fmt.Errorf("raftcluster: malformed expected catalog version")})
+	}
+	if n != len(raw) {
+		return 0, errors.Join(ErrInvalidCommittedEntry, &raftentry.ValidationError{Code: raftentry.ErrorMalformedEntryV1, Err: fmt.Errorf("raftcluster: expected catalog version has %d trailing bytes", len(raw)-n)})
+	}
+	return value, nil
 }
 
 func (s *SingleGroupSubmitter) admit(ctx context.Context) error {
