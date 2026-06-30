@@ -600,6 +600,40 @@ func TestAppendOnlyResetRetainsArenaChunksForReuse(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyValueArenaBackingStatsTrackActiveAndRetainedChunks(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("long-key-arena"), make([]byte, 4096))
+
+	active := m.ValueArenaBackingStats()
+	if active.ActiveChunks == 0 {
+		t.Fatalf("active chunks=0 after set")
+	}
+	if active.ActiveBytes == 0 {
+		t.Fatalf("active bytes=0 after set")
+	}
+	if active.RetainedChunks != 0 || active.RetainedBytes != 0 {
+		t.Fatalf("retained before reset=%+v want zero retained", active)
+	}
+
+	m.Reset()
+	retained := m.ValueArenaBackingStats()
+	if retained.ActiveChunks != 0 || retained.ActiveBytes != 0 {
+		t.Fatalf("active after reset=%+v want zero active", retained)
+	}
+	if retained.RetainedChunks == 0 {
+		t.Fatalf("retained chunks=0 after reset")
+	}
+	if retained.RetainedBytes == 0 {
+		t.Fatalf("retained bytes=0 after reset")
+	}
+
+	m.ResetWithCapacityHard(0, 0)
+	dropped := m.ValueArenaBackingStats()
+	if dropped.ActiveChunks != 0 || dropped.ActiveBytes != 0 || dropped.RetainedChunks != 0 || dropped.RetainedBytes != 0 {
+		t.Fatalf("value arena stats after hard reset=%+v want all zero", dropped)
+	}
+}
+
 func TestAppendOnlyResetRetainedArenaBounded(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k")

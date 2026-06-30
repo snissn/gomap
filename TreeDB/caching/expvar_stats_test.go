@@ -55,6 +55,8 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.process.batch_arena.retained_bytes_global_max_estimate":                               "1048576",
 		"treedb.process.memtable_residency.queue.total.size_bytes":                                    "2048",
 		"treedb.process.memtable_residency.queue.append_only.entry_backing_bytes":                     "7340032",
+		"treedb.process.memtable_residency.queue.append_only.value_arena_retained_bytes":              "32768",
+		"treedb.process.append_only.mem_lease_value_arena_retained_bytes":                             "65536",
 		"treedb.process.read_path.snapshot.backend_bytes_total":                                       "8192",
 		"treedb.process.batch.set.bytes_total":                                                        "4096",
 		"treedb.process.batch.delete_view.calls_total":                                                "5",
@@ -199,6 +201,12 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.process.memtable_residency.queue.append_only.entry_backing_bytes"].(int64); !ok || v != 7340032 {
 		t.Fatalf("memtable_residency.queue.append_only.entry_backing_bytes=%T(%v) want int64(7340032)", got["treedb.process.memtable_residency.queue.append_only.entry_backing_bytes"], got["treedb.process.memtable_residency.queue.append_only.entry_backing_bytes"])
+	}
+	if v, ok := got["treedb.process.memtable_residency.queue.append_only.value_arena_retained_bytes"].(int64); !ok || v != 32768 {
+		t.Fatalf("memtable_residency.queue.append_only.value_arena_retained_bytes=%T(%v) want int64(32768)", got["treedb.process.memtable_residency.queue.append_only.value_arena_retained_bytes"], got["treedb.process.memtable_residency.queue.append_only.value_arena_retained_bytes"])
+	}
+	if v, ok := got["treedb.process.append_only.mem_lease_value_arena_retained_bytes"].(int64); !ok || v != 65536 {
+		t.Fatalf("append_only.mem_lease_value_arena_retained_bytes=%T(%v) want int64(65536)", got["treedb.process.append_only.mem_lease_value_arena_retained_bytes"], got["treedb.process.append_only.mem_lease_value_arena_retained_bytes"])
 	}
 	if v, ok := got["treedb.process.read_path.snapshot.backend_bytes_total"].(int64); !ok || v != 8192 {
 		t.Fatalf("read_path.snapshot.backend_bytes_total=%T(%v) want int64(8192)", got["treedb.process.read_path.snapshot.backend_bytes_total"], got["treedb.process.read_path.snapshot.backend_bytes_total"])

@@ -307,11 +307,15 @@ type poolPressureSnapshot struct {
 }
 
 type memtableResidencySummary struct {
-	count             int
-	len               int
-	size              int64
-	entryCapacity     int64
-	entryBackingBytes int64
+	count                    int
+	len                      int
+	size                     int64
+	entryCapacity            int64
+	entryBackingBytes        int64
+	valueArenaActiveChunks   int64
+	valueArenaActiveBytes    int64
+	valueArenaRetainedChunks int64
+	valueArenaRetainedBytes  int64
 }
 
 type memtableResidencyBreakdown struct {
@@ -10160,9 +10164,9 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, _ int) int {
 	return returned
 }
 
-func (db *DB) appendOnlyMemLeaseStats() (count int, entryCapacity int64, entryBackingBytes int64) {
+func (db *DB) appendOnlyMemLeaseStats() (count int, entryCapacity int64, entryBackingBytes int64, valueArena memtable.AppendOnlyValueArenaStats) {
 	if db == nil {
-		return 0, 0, 0
+		return 0, 0, 0, memtable.AppendOnlyValueArenaStats{}
 	}
 	db.appendOnlyMemLeaseMu.Lock()
 	defer db.appendOnlyMemLeaseMu.Unlock()
@@ -10173,13 +10177,18 @@ func (db *DB) appendOnlyMemLeaseStats() (count int, entryCapacity int64, entryBa
 		count++
 		entryCapacity += int64(mt.EntryCapacity())
 		entryBackingBytes += mt.EntryBackingBytes()
+		stats := mt.ValueArenaBackingStats()
+		valueArena.ActiveChunks += stats.ActiveChunks
+		valueArena.ActiveBytes += stats.ActiveBytes
+		valueArena.RetainedChunks += stats.RetainedChunks
+		valueArena.RetainedBytes += stats.RetainedBytes
 	}
-	return count, entryCapacity, entryBackingBytes
+	return count, entryCapacity, entryBackingBytes, valueArena
 }
 
-func (db *DB) appendOnlyMutableShardEntryStats() (count int, entryCapacity int64, entryBackingBytes int64) {
+func (db *DB) appendOnlyMutableShardEntryStats() (count int, entryCapacity int64, entryBackingBytes int64, valueArena memtable.AppendOnlyValueArenaStats) {
 	if db == nil {
-		return 0, 0, 0
+		return 0, 0, 0, memtable.AppendOnlyValueArenaStats{}
 	}
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
@@ -10188,10 +10197,15 @@ func (db *DB) appendOnlyMutableShardEntryStats() (count int, entryCapacity int64
 			count++
 			entryCapacity += int64(mt.EntryCapacity())
 			entryBackingBytes += mt.EntryBackingBytes()
+			stats := mt.ValueArenaBackingStats()
+			valueArena.ActiveChunks += stats.ActiveChunks
+			valueArena.ActiveBytes += stats.ActiveBytes
+			valueArena.RetainedChunks += stats.RetainedChunks
+			valueArena.RetainedBytes += stats.RetainedBytes
 		}
 		shard.mu.Unlock()
 	}
-	return count, entryCapacity, entryBackingBytes
+	return count, entryCapacity, entryBackingBytes, valueArena
 }
 
 func (db *DB) trimEmptyAppendOnlyMutableShards(capacity int) int {
@@ -10559,6 +10573,11 @@ func addMemtableResidencySummary(dst *memtableResidencySummary, mt memtable.Tabl
 	if appendOnly, ok := mt.(*memtable.AppendOnly); ok {
 		dst.entryCapacity += int64(appendOnly.EntryCapacity())
 		dst.entryBackingBytes += appendOnly.EntryBackingBytes()
+		stats := appendOnly.ValueArenaBackingStats()
+		dst.valueArenaActiveChunks += stats.ActiveChunks
+		dst.valueArenaActiveBytes += stats.ActiveBytes
+		dst.valueArenaRetainedChunks += stats.RetainedChunks
+		dst.valueArenaRetainedBytes += stats.RetainedBytes
 	}
 }
 
@@ -10595,6 +10614,10 @@ func addMemtableResidencyStats(stats map[string]string, prefix string, summary m
 		stats[prefix+"."+name+".size_bytes"] = fmt.Sprintf("%d", s.size)
 		stats[prefix+"."+name+".entry_capacity"] = fmt.Sprintf("%d", s.entryCapacity)
 		stats[prefix+"."+name+".entry_backing_bytes"] = fmt.Sprintf("%d", s.entryBackingBytes)
+		stats[prefix+"."+name+".value_arena_active_chunks"] = fmt.Sprintf("%d", s.valueArenaActiveChunks)
+		stats[prefix+"."+name+".value_arena_active_bytes"] = fmt.Sprintf("%d", s.valueArenaActiveBytes)
+		stats[prefix+"."+name+".value_arena_retained_chunks"] = fmt.Sprintf("%d", s.valueArenaRetainedChunks)
+		stats[prefix+"."+name+".value_arena_retained_bytes"] = fmt.Sprintf("%d", s.valueArenaRetainedBytes)
 	}
 	add("total", summary.total)
 	add("skiplist", summary.skiplist)
@@ -29106,8 +29129,8 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyMemPoolDropTotal := db.appendOnlyMemPoolDropTotal.Load()
 	appendOnlyEntryPoolStats := memtable.AppendOnlyEntryPoolStatsSnapshot()
 	appendOnlyEntryReserveStats := memtable.AppendOnlyEntryReserveStatsSnapshot()
-	appendOnlyMemLeaseCount, appendOnlyMemLeaseEntryCapacity, appendOnlyMemLeaseEntryBackingBytes := db.appendOnlyMemLeaseStats()
-	appendOnlyMutableCount, appendOnlyMutableEntryCapacity, appendOnlyMutableEntryBackingBytes := db.appendOnlyMutableShardEntryStats()
+	appendOnlyMemLeaseCount, appendOnlyMemLeaseEntryCapacity, appendOnlyMemLeaseEntryBackingBytes, appendOnlyMemLeaseValueArena := db.appendOnlyMemLeaseStats()
+	appendOnlyMutableCount, appendOnlyMutableEntryCapacity, appendOnlyMutableEntryBackingBytes, appendOnlyMutableValueArena := db.appendOnlyMutableShardEntryStats()
 	appendOnlyMutableTrimTotal := db.appendOnlyMutableTrimTotal.Load()
 	appendOnlyMutableTrimDropped := db.appendOnlyMutableTrimDropped.Load()
 	appendOnlyMutableSparseTrimTotal := db.appendOnlyMutableSparseTrimTotal.Load()
@@ -29131,9 +29154,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.append_only.mem_lease_count"] = fmt.Sprintf("%d", appendOnlyMemLeaseCount)
 	stats["treedb.cache.append_only.mem_lease_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryCapacity)
 	stats["treedb.cache.append_only.mem_lease_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryBackingBytes)
+	stats["treedb.cache.append_only.mem_lease_value_arena_active_chunks"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.ActiveChunks)
+	stats["treedb.cache.append_only.mem_lease_value_arena_active_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.ActiveBytes)
+	stats["treedb.cache.append_only.mem_lease_value_arena_retained_chunks"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.RetainedChunks)
+	stats["treedb.cache.append_only.mem_lease_value_arena_retained_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.RetainedBytes)
 	stats["treedb.cache.append_only.mutable_count"] = fmt.Sprintf("%d", appendOnlyMutableCount)
 	stats["treedb.cache.append_only.mutable_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMutableEntryCapacity)
 	stats["treedb.cache.append_only.mutable_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMutableEntryBackingBytes)
+	stats["treedb.cache.append_only.mutable_value_arena_active_chunks"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.ActiveChunks)
+	stats["treedb.cache.append_only.mutable_value_arena_active_bytes"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.ActiveBytes)
+	stats["treedb.cache.append_only.mutable_value_arena_retained_chunks"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.RetainedChunks)
+	stats["treedb.cache.append_only.mutable_value_arena_retained_bytes"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.RetainedBytes)
 	stats["treedb.cache.append_only.mutable_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimTotal)
 	stats["treedb.cache.append_only.mutable_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimDropped)
 	stats["treedb.cache.append_only.mutable_sparse_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableSparseTrimTotal)
@@ -29165,9 +29196,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.append_only.mem_lease_count"] = fmt.Sprintf("%d", appendOnlyMemLeaseCount)
 	stats["treedb.process.append_only.mem_lease_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryCapacity)
 	stats["treedb.process.append_only.mem_lease_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseEntryBackingBytes)
+	stats["treedb.process.append_only.mem_lease_value_arena_active_chunks"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.ActiveChunks)
+	stats["treedb.process.append_only.mem_lease_value_arena_active_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.ActiveBytes)
+	stats["treedb.process.append_only.mem_lease_value_arena_retained_chunks"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.RetainedChunks)
+	stats["treedb.process.append_only.mem_lease_value_arena_retained_bytes"] = fmt.Sprintf("%d", appendOnlyMemLeaseValueArena.RetainedBytes)
 	stats["treedb.process.append_only.mutable_count"] = fmt.Sprintf("%d", appendOnlyMutableCount)
 	stats["treedb.process.append_only.mutable_entry_capacity"] = fmt.Sprintf("%d", appendOnlyMutableEntryCapacity)
 	stats["treedb.process.append_only.mutable_entry_backing_bytes"] = fmt.Sprintf("%d", appendOnlyMutableEntryBackingBytes)
+	stats["treedb.process.append_only.mutable_value_arena_active_chunks"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.ActiveChunks)
+	stats["treedb.process.append_only.mutable_value_arena_active_bytes"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.ActiveBytes)
+	stats["treedb.process.append_only.mutable_value_arena_retained_chunks"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.RetainedChunks)
+	stats["treedb.process.append_only.mutable_value_arena_retained_bytes"] = fmt.Sprintf("%d", appendOnlyMutableValueArena.RetainedBytes)
 	stats["treedb.process.append_only.mutable_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimTotal)
 	stats["treedb.process.append_only.mutable_trim_dropped_bytes_total"] = fmt.Sprintf("%d", appendOnlyMutableTrimDropped)
 	stats["treedb.process.append_only.mutable_sparse_trim_total"] = fmt.Sprintf("%d", appendOnlyMutableSparseTrimTotal)
