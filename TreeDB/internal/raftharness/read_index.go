@@ -28,12 +28,6 @@ func (p *ReadIndexProvider) ReadIndex(ctx context.Context, target raftcluster.Re
 	if p == nil || p.h == nil {
 		return raftcluster.ReadIndexProof{}, ErrHarnessClosed
 	}
-	if target.NodeID == "" {
-		return raftcluster.ReadIndexProof{}, fmt.Errorf("%w: read-index target missing node id", raftcluster.ErrReadBarrierTargetMismatch)
-	}
-	if target.GroupID == "" {
-		return raftcluster.ReadIndexProof{}, fmt.Errorf("%w: read-index target missing group id", raftcluster.ErrReadBarrierTargetMismatch)
-	}
 
 	p.h.mu.Lock()
 	defer p.h.mu.Unlock()
@@ -46,12 +40,6 @@ func (p *ReadIndexProvider) ReadIndex(ctx context.Context, target raftcluster.Re
 	}
 	if node == nil || node.closed {
 		return raftcluster.ReadIndexProof{}, fmt.Errorf("%w: %s", ErrNodeClosed, p.nodeID)
-	}
-	if target.NodeID != p.nodeID {
-		return raftcluster.ReadIndexProof{}, fmt.Errorf("%w: read-index target node %q does not match harness node %q", raftcluster.ErrReadBarrierTargetMismatch, target.NodeID, p.nodeID)
-	}
-	if target.GroupID != p.h.groupID {
-		return raftcluster.ReadIndexProof{}, fmt.Errorf("%w: read-index target group %q does not match harness group %q", raftcluster.ErrReadBarrierTargetMismatch, target.GroupID, p.h.groupID)
 	}
 	if len(p.h.committed) == 0 {
 		return raftcluster.ReadIndexProof{}, fmt.Errorf("%w: read-index has no committed entries", raftcluster.ErrReadBarrierNotSatisfied)
