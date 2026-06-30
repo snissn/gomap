@@ -4805,13 +4805,13 @@ func typedColumnDenseGroupCountDistinctCodeColumn(adapterPart *typedColumnAdapte
 		if err != nil {
 			return columnTypedColumnDenseStringCodeColumn{}, 0, 0, err
 		}
-		return columnTypedColumnDenseStringCodeColumn{Codes: codes, Valid: valid, Dictionary: dictionary}, decodedBytes, blocks, nil
+		return columnTypedColumnDenseStringCodeColumn{Codes: codes, Valid: valid, HasMissing: columnTypedColumnDenseValidityHasMissing(valid), HasMissingKnown: true, Dictionary: dictionary}, decodedBytes, blocks, nil
 	}
 	codes, decodedBytes, blocks, err := decodeTypedColumnDenseUint32Codes(partColumn, cardinality, rows, role)
 	if err != nil {
 		return columnTypedColumnDenseStringCodeColumn{}, 0, 0, err
 	}
-	return columnTypedColumnDenseStringCodeColumn{Codes: codes, Dictionary: dictionary}, decodedBytes, blocks, nil
+	return columnTypedColumnDenseStringCodeColumn{Codes: codes, HasMissingKnown: true, Dictionary: dictionary}, decodedBytes, blocks, nil
 }
 
 func typedColumnDenseGroupCountCodeColumn(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, column string, rows int, role string) (columnTypedColumnDenseGroupCountPart, uint64, int, error) {

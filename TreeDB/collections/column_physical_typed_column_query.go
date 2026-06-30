@@ -77,6 +77,8 @@ type columnTypedColumnDensePredicatePart struct {
 type columnTypedColumnDenseStringCodeColumn struct {
 	Codes               []uint32
 	Valid               []bool
+	HasMissing          bool
+	HasMissingKnown     bool
 	Dictionary          []string
 	GlobalCodes         []uint32
 	GlobalDictionary    []string
@@ -1527,6 +1529,33 @@ type columnTypedColumnDenseGroupCountDistinctReferenceFillTiming struct {
 	localRankNanos    int64
 }
 
+func columnTypedColumnDenseStringCodeHasMissing(column *columnTypedColumnDenseStringCodeColumn) bool {
+	if column == nil {
+		return false
+	}
+	if column.HasMissingKnown {
+		return column.HasMissing
+	}
+	if len(column.Valid) == 0 {
+		return false
+	}
+	for _, valid := range column.Valid {
+		if !valid {
+			return true
+		}
+	}
+	return false
+}
+
+func columnTypedColumnDenseValidityHasMissing(valid []bool) bool {
+	for _, ok := range valid {
+		if !ok {
+			return true
+		}
+	}
+	return false
+}
+
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferenceFill(parts []columnTypedColumnPhysicalQueryPart, groupDict []string, groupRanks map[string]uint32) (columnTypedColumnDenseGroupCountDistinctReferenceFillTiming, error) {
 	var timing columnTypedColumnDenseGroupCountDistinctReferenceFillTiming
 	phaseStart := time.Now()
@@ -1563,13 +1592,8 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 		column.GlobalLocalRanks = make([]uint32, len(column.Dictionary))
 		column.GlobalEmptyRank = 0
 		column.GlobalEmptyRankOK = false
-		if !includeEmpty {
-			for _, valid := range column.Valid {
-				if !valid {
-					includeEmpty = true
-					break
-				}
-			}
+		if !includeEmpty && columnTypedColumnDenseStringCodeHasMissing(column) {
+			includeEmpty = true
 		}
 	}
 	timing.localRankNanos += time.Since(phaseStart).Nanoseconds()
@@ -1975,13 +1999,8 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRankLookup(parts []columnType
 			shardIdx := int(columnTypedColumnDenseGroupCountDistinctStableRankHash(value) & uint64(shardCount-1))
 			shardValues[shardIdx] = append(shardValues[shardIdx], value)
 		}
-		if !includeEmpty {
-			for _, valid := range column.Valid {
-				if !valid {
-					includeEmpty = true
-					break
-				}
-			}
+		if !includeEmpty && columnTypedColumnDenseStringCodeHasMissing(column) {
+			includeEmpty = true
 		}
 	}
 	if includeEmpty {
@@ -2038,12 +2057,9 @@ func columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(pa
 			values[value] = struct{}{}
 			localValues++
 		}
-		for _, valid := range column.Valid {
-			if !valid {
-				values[""] = struct{}{}
-				localValues++
-				break
-			}
+		if columnTypedColumnDenseStringCodeHasMissing(column) {
+			values[""] = struct{}{}
+			localValues++
 		}
 		if localValues >= minSampleValues && len(values)*uniqueToLocalDenominator <= localValues*maxUniqueToLocalNumerator {
 			return columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
@@ -2150,11 +2166,8 @@ func columnTypedColumnDenseGroupCountDistinctGlobalDictionaryMap(parts []columnT
 		for _, value := range column.Dictionary {
 			values[value] = struct{}{}
 		}
-		for _, valid := range column.Valid {
-			if !valid {
-				values[""] = struct{}{}
-				break
-			}
+		if columnTypedColumnDenseStringCodeHasMissing(column) {
+			values[""] = struct{}{}
 		}
 	}
 	dictionary := make([]string, 0, len(values))
@@ -2210,12 +2223,9 @@ func columnTypedColumnDenseGroupCountDistinctGlobalRanksMap(parts []columnTypedC
 				return nil, 0, err
 			}
 		}
-		for _, valid := range column.Valid {
-			if !valid {
-				if err := addValue(""); err != nil {
-					return nil, 0, err
-				}
-				break
+		if columnTypedColumnDenseStringCodeHasMissing(column) {
+			if err := addValue(""); err != nil {
+				return nil, 0, err
 			}
 		}
 	}
@@ -2238,13 +2248,8 @@ func columnTypedColumnDenseGroupCountDistinctSortedGlobalRanks(parts []columnTyp
 			return nil, nil, false, fmt.Errorf("collections: dense grouped count-distinct missing selected column for part %d", partIdx)
 		}
 		columns = append(columns, column)
-		if !includeEmpty {
-			for _, valid := range column.Valid {
-				if !valid {
-					includeEmpty = true
-					break
-				}
-			}
+		if !includeEmpty && columnTypedColumnDenseStringCodeHasMissing(column) {
+			includeEmpty = true
 		}
 	}
 
