@@ -125,6 +125,31 @@ type CommitCommandEntryV1Request struct {
 	ExpectedTarget           *raftentry.TargetIdentityV1
 }
 
+// CommandEntryPreflightRequestV1 asks the local deterministic apply provider
+// to reject commands that cannot apply against the current local catalog and
+// collection state before the commit source assigns a Raft log identity.
+type CommandEntryPreflightRequestV1 struct {
+	GroupID GroupID
+	NodeID  NodeID
+
+	EntryBytes   []byte
+	DecodedEntry raftentry.CommandEntryV1
+
+	CurrentCatalogVersion    uint64
+	HasCurrentCatalogVersion bool
+	SyncLocalCommandWAL      bool
+	RequestMetadata          raftentry.RequestMetadataV1
+	ExpectedTarget           *raftentry.TargetIdentityV1
+}
+
+func (r CommandEntryPreflightRequestV1) Clone() CommandEntryPreflightRequestV1 {
+	r.EntryBytes = bytes.Clone(r.EntryBytes)
+	r.DecodedEntry = cloneCommandEntryV1(r.DecodedEntry)
+	r.RequestMetadata = cloneRequestMetadataV1(r.RequestMetadata)
+	r.ExpectedTarget = cloneExpectedTargetV1(r.ExpectedTarget)
+	return r
+}
+
 func (r CommitCommandEntryV1Request) Clone() CommitCommandEntryV1Request {
 	r.EntryBytes = bytes.Clone(r.EntryBytes)
 	r.RequestMetadata = cloneRequestMetadataV1(r.RequestMetadata)
@@ -189,6 +214,22 @@ func (f CommitSourceFunc) CommitCommandEntryV1(ctx context.Context, req CommitCo
 	return f(ctx, req)
 }
 
+// CommandEntryPreflightV1 validates deterministic/catalog apply acceptability
+// before the entry is admitted to the commit source. Implementations must treat
+// the request as read-only and clone any data retained after return.
+type CommandEntryPreflightV1 interface {
+	PreflightCommandEntryV1(context.Context, CommandEntryPreflightRequestV1) error
+}
+
+type CommandEntryPreflightFunc func(context.Context, CommandEntryPreflightRequestV1) error
+
+func (f CommandEntryPreflightFunc) PreflightCommandEntryV1(ctx context.Context, req CommandEntryPreflightRequestV1) error {
+	if f == nil {
+		return ErrInvalidSubmitter
+	}
+	return f(ctx, req)
+}
+
 // CommittedCommandApplierV1 is implemented by the local raftfsm adapter.
 type CommittedCommandApplierV1 interface {
 	ApplyCommittedCommandEntryV1(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error)
@@ -207,6 +248,7 @@ type SingleGroupSubmitterOptions struct {
 	Cluster                Config
 	AdmissionProvider      AdmissionProvider
 	CommitSource           CommitSource
+	Preflight              CommandEntryPreflightV1
 	Applier                CommittedCommandApplierV1
 	CatalogVersionProvider CatalogVersionProvider
 
@@ -225,6 +267,7 @@ type SingleGroupSubmitter struct {
 	cluster         ResolvedConfig
 	admission       AdmissionProvider
 	commit          CommitSource
+	preflight       CommandEntryPreflightV1
 	applier         CommittedCommandApplierV1
 	catalogProvider CatalogVersionProvider
 
@@ -257,6 +300,9 @@ func NewSingleGroupSubmitter(opts SingleGroupSubmitterOptions) (*SingleGroupSubm
 	if opts.CommitSource == nil {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("commit source is required"))
 	}
+	if opts.Preflight == nil {
+		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("command preflight provider is required"))
+	}
 	if opts.Applier == nil {
 		return nil, errors.Join(ErrInvalidSubmitter, fmt.Errorf("committed command applier is required"))
 	}
@@ -267,6 +313,7 @@ func NewSingleGroupSubmitter(opts SingleGroupSubmitterOptions) (*SingleGroupSubm
 		cluster:         cluster,
 		admission:       opts.AdmissionProvider,
 		commit:          opts.CommitSource,
+		preflight:       opts.Preflight,
 		applier:         opts.Applier,
 		catalogProvider: opts.CatalogVersionProvider,
 		decodeLimits:    opts.DecodeLimits,
@@ -295,7 +342,7 @@ func (s *SingleGroupSubmitter) ClusterAdmissionStatus(ctx context.Context) (Admi
 }
 
 func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
-	if s == nil || s.commit == nil || s.applier == nil || s.catalogProvider == nil {
+	if s == nil || s.commit == nil || s.preflight == nil || s.applier == nil || s.catalogProvider == nil {
 		return SubmitResultV1{}, ErrInvalidSubmitter
 	}
 	if ctx == nil {
@@ -329,6 +376,20 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		return SubmitResultV1{}, err
 	}
 	expectedTarget := decoded.Target.Clone()
+	preflightRequest := CommandEntryPreflightRequestV1{
+		GroupID:                  s.cluster.GroupID,
+		NodeID:                   s.cluster.NodeID,
+		EntryBytes:               entry,
+		DecodedEntry:             decoded,
+		CurrentCatalogVersion:    catalogVersion,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      s.syncLocalWAL,
+		RequestMetadata:          metadata,
+		ExpectedTarget:           &expectedTarget,
+	}
+	if err := s.preflight.PreflightCommandEntryV1(ctx, preflightRequest); err != nil {
+		return SubmitResultV1{}, err
+	}
 	request := CommitCommandEntryV1Request{
 		GroupID:                  s.cluster.GroupID,
 		NodeID:                   s.cluster.NodeID,
@@ -579,6 +640,26 @@ func (s *SequencedCommitSource) CommitCommandEntryV1(ctx context.Context, req Co
 			ProductionConsensus: productionConsensus,
 		},
 	}, nil
+}
+
+func cloneCommandEntryV1(entry raftentry.CommandEntryV1) raftentry.CommandEntryV1 {
+	entry.Bytes = bytes.Clone(entry.Bytes)
+	entry.Decoded.Sections = cloneSections(entry.Decoded.Sections)
+	entry.Target = entry.Target.Clone()
+	entry.IdempotencyKey = bytes.Clone(entry.IdempotencyKey)
+	return entry
+}
+
+func cloneSections(sections []iwire.Section) []iwire.Section {
+	if len(sections) == 0 {
+		return nil
+	}
+	out := make([]iwire.Section, len(sections))
+	for i := range sections {
+		out[i] = sections[i]
+		out[i].Bytes = bytes.Clone(sections[i].Bytes)
+	}
+	return out
 }
 
 func cloneRequestMetadataV1(meta raftentry.RequestMetadataV1) raftentry.RequestMetadataV1 {

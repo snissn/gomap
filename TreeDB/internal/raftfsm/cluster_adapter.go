@@ -3,9 +3,63 @@ package raftfsm
 import (
 	"context"
 
+	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
+
+// PreflightCommandEntryV1 adapts the raftcluster pre-commit deterministic
+// preflight request into the local FSM apply preflight shape.
+func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.CommandEntryPreflightRequestV1) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if f == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	if f.closed {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
+	}
+	if f.db == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	if req.GroupID != "" && req.GroupID != f.cluster.GroupID {
+		return codedError(raftentry.ErrorRejectedConflictV1, "preflight group %q does not match local group %q", req.GroupID, f.cluster.GroupID)
+	}
+	if req.NodeID != "" && req.NodeID != f.cluster.NodeID {
+		return codedError(raftentry.ErrorRejectedConflictV1, "preflight node %q does not match local node %q", req.NodeID, f.cluster.NodeID)
+	}
+	if len(req.EntryBytes) == 0 {
+		return codedError(raftentry.ErrorMalformedEntryV1, "empty command entry")
+	}
+	meta := raftapply.ApplyMetadataV1{
+		LocalDurabilityBoundary:  raftapply.LocalDurabilityCommandWALV1,
+		SyncLocalCommandWAL:      req.SyncLocalCommandWAL,
+		CurrentCatalogVersion:    req.CurrentCatalogVersion,
+		HasCurrentCatalogVersion: req.HasCurrentCatalogVersion,
+		ScopeRule:                f.scopeRule,
+		DatabaseScope:            f.database,
+		CatalogScope:             f.catalog,
+		RequestMetadata:          cloneRequestMetadataV1(req.RequestMetadata),
+		ExpectedTarget:           cloneExpectedTargetV1(req.ExpectedTarget),
+	}
+	opts := raftapply.Options{DecodeLimits: f.decodeLimits}
+	if len(req.DecodedEntry.Bytes) != 0 {
+		if err := raftapply.PreflightDecodedCommandEntryV1(f.db, req.DecodedEntry, meta, opts); err != nil {
+			return err
+		}
+		return nil
+	}
+	if err := raftapply.PreflightCommandEntryV1(f.db, req.EntryBytes, meta, opts); err != nil {
+		return err
+	}
+	return nil
+}
 
 // ApplyCommittedCommandEntryV1 adapts the raftcluster provider-delivered
 // committed command shape into the local FSM committed-entry shape.

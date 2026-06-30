@@ -266,6 +266,15 @@ func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire
 }
 
 func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) (*collections.Collection, error) {
+	return h.preflightCollectionMutationWithOptionsV1(mutation, true)
+}
+
+func (h *Harness) preflightCollectionMutationOnlyV1(mutation *collectionMutationV1) error {
+	_, err := h.preflightCollectionMutationWithOptionsV1(mutation, false)
+	return err
+}
+
+func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionMutationV1, prepareFrameDocuments bool) (*collections.Collection, error) {
 	if h == nil || h.db == nil {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil DB cannot preflight collection mutation")
 	}
@@ -299,7 +308,9 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationInsert); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
-		mutation.frameDocuments = collectionDocumentsFromMutationV1(mutation.ids, mutation.documents)
+		if prepareFrameDocuments {
+			mutation.frameDocuments = collectionDocumentsFromMutationV1(mutation.ids, mutation.documents)
+		}
 		if err := collection.PreflightInsertBatchConflicts(mutation.ids, mutation.documents, mutation.trustedValidBSON); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
@@ -307,7 +318,10 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
-		changed := make([]commitlog.CollectionDocument, 0, len(mutation.ids))
+		var changed []commitlog.CollectionDocument
+		if prepareFrameDocuments {
+			changed = make([]commitlog.CollectionDocument, 0, len(mutation.ids))
+		}
 		for i, id := range mutation.ids {
 			current, err := collection.Get(id)
 			if err != nil {
@@ -321,7 +335,7 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 					return nil, err
 				}
 			}
-			if !bytes.Equal(current, mutation.documents[i]) {
+			if prepareFrameDocuments && !bytes.Equal(current, mutation.documents[i]) {
 				changed = append(changed, commitlog.CollectionDocument{
 					ID:       mutation.ids[i],
 					Document: mutation.documents[i],
@@ -335,6 +349,9 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 	case nativewire.CommandUpdateBSONSet:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
 			return nil, codeCollectionApplyError(err)
+		}
+		if !prepareFrameDocuments && collectionHasNoSecondaryIndexesV1(collection) {
+			return collection, nil
 		}
 		results, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
 		if err != nil {
@@ -350,6 +367,11 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		return nil, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
 	}
 	return collection, nil
+}
+
+func collectionHasNoSecondaryIndexesV1(collection *collections.Collection) bool {
+	meta := collection.MetaView()
+	return len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0
 }
 
 func (m collectionMutationV1) loweredFrame() (commandwalapply.LoweredFrame, error) {

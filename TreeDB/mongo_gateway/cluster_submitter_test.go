@@ -383,7 +383,8 @@ func newMongoRaftBridgeTestServer(tb testing.TB, admission raftcluster.Admission
 			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
 			ProductionConsensus: true,
 		}),
-		Applier: fsm,
+		Preflight: fsm,
+		Applier:   fsm,
 		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
 			state := db.State()
 			if state == nil {

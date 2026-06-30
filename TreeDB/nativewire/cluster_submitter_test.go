@@ -1564,6 +1564,30 @@ func TestRaftClusterSubmitterConcreteBridgeOmitResponseMetaAdvancesCatalogVersio
 	}
 }
 
+func TestRaftClusterSubmitterConcreteBridgeMissingCollectionPreflightDoesNotConsumeIndex(t *testing.T) {
+	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u-missing")}, [][]byte{[]byte(`{"name":"Missing"}`)}, AckRaftCommitted)
+	if err == nil {
+		t.Fatal("InsertBatch missing collection unexpectedly succeeded")
+	}
+	if _, openErr := mgr.OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after rejected insert err=%v want ErrCollectionNotFound", openErr)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...); err != nil {
+		t.Fatalf("CreateCollection after rejected insert: %v", err)
+	}
+	_ = clientCatalogVersion(t, client, ctx)
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckRaftCommitted); err != nil {
+		t.Fatalf("InsertBatch after create: %v", err)
+	}
+}
+
 func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) {
 	defaultLimits := iwire.DefaultLimits()
 	limits := defaultLimits
@@ -1582,6 +1606,7 @@ func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) 
 			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
 			ProductionConsensus: true,
 		}),
+		Preflight:              raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) error { return nil }),
 		Applier:                applier,
 		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) { return 7, true, nil }),
 		DecodeLimits:           limits,
@@ -1720,7 +1745,8 @@ func serveRaftClusterBridgePipe(t testing.TB, admission raftcluster.AdmissionSta
 			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
 			ProductionConsensus: true,
 		}),
-		Applier: fsm,
+		Preflight: fsm,
+		Applier:   fsm,
 		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
 			state := db.State()
 			if state == nil {

@@ -182,6 +182,50 @@ func TestSingleGroupSubmitterRejectsStaleCatalogGuardBeforeCommitApply(t *testin
 	}
 }
 
+func TestSingleGroupSubmitterPreflightsBeforeCommitApply(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	commitCalls := 0
+	preflightCalls := 0
+	preflightErr := errors.New("missing collection preflight")
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(context.Context, CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return CommitCommandEntryV1Result{}, nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(ctx context.Context, req CommandEntryPreflightRequestV1) error {
+			preflightCalls++
+			if req.GroupID != "group-a" || req.NodeID != "node-a" {
+				t.Fatalf("preflight group/node=%q/%q want group-a/node-a", req.GroupID, req.NodeID)
+			}
+			if req.DecodedEntry.Target.CommandID != iwire.CommandInsertBatch {
+				t.Fatalf("preflight command=%d want insert_batch", req.DecodedEntry.Target.CommandID)
+			}
+			if req.CurrentCatalogVersion != 7 || !req.HasCurrentCatalogVersion {
+				t.Fatalf("preflight catalog=%d/%v want 7/true", req.CurrentCatalogVersion, req.HasCurrentCatalogVersion)
+			}
+			return preflightErr
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+
+	_, err := submitter.SubmitCommandEntryV1(context.Background(), entry, raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted})
+	if !errors.Is(err, preflightErr) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want preflight error", err)
+	}
+	if preflightCalls != 1 {
+		t.Fatalf("preflight calls=%d want 1", preflightCalls)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("commit calls=%d want 0", commitCalls)
+	}
+	if got := len(applier.snapshot()); got != 0 {
+		t.Fatalf("apply calls=%d want 0", got)
+	}
+}
+
 func TestSingleGroupSubmitterAdmissionRejectsBeforeCommitApply(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -343,6 +387,11 @@ func newTestSingleGroupSubmitter(tb testing.TB, opts SingleGroupSubmitterOptions
 			{ID: "node-b", Address: "127.0.0.1:7001"},
 			{ID: "node-c", Address: "127.0.0.1:7002"},
 		},
+	}
+	if opts.Preflight == nil {
+		opts.Preflight = CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) error {
+			return nil
+		})
 	}
 	submitter, err := NewSingleGroupSubmitter(opts)
 	if err != nil {

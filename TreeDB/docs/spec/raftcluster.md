@@ -19,6 +19,7 @@ The initial boundary owns:
 - deterministic local storage paths for Raft log, stable metadata, apply
   metadata, snapshots, and peer metadata;
 - a single-group write-admission boundary;
+- a pre-commit deterministic/catalog preflight boundary;
 - a commit-source boundary for deterministic `CommandEntryV1` bytes;
 - a committed-entry applier boundary for applying locally through R3a/raftfsm.
 
@@ -96,6 +97,9 @@ is intentionally one group only:
   follower or unavailable states;
 - submitted deterministic native-wire `CommandEntryV1` bytes are decoded before
   commit so unsupported or malformed R3a commands fail before local mutation;
+- decoded entries are preflighted against the local deterministic apply/catalog
+  boundary before the commit source assigns a Raft log identity, so conflicts
+  such as missing collections reject without consuming an index;
 - the commit source must return a committed entry with a non-zero term/index
   and explicit `CommitEvidenceProductionConsensusV1` evidence;
 - deterministic harness evidence is a separate evidence kind and never proves
