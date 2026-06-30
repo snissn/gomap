@@ -95,6 +95,54 @@ func TestRawSpanNativeRouteStatsPointShapeMatrix(t *testing.T) {
 	}
 }
 
+func TestRawSpanNativeRouteStatsMixedPointDeleteMaintenanceFallback(t *testing.T) {
+	d := openExplicitRawSpanNativeRouteTestDB(t)
+	if err := d.Set([]byte("delete-me"), []byte("old")); err != nil {
+		t.Fatalf("Set delete-me seed: %v", err)
+	}
+
+	b := d.NewBatch()
+	if err := b.Set([]byte("new"), []byte("value")); err != nil {
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Delete([]byte("delete-me")); err != nil {
+		t.Fatalf("batch Delete: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	stats := d.Stats()
+	prefix := "treedb.raw.span_native.route.mixed_point."
+	if got := rawSpanNativeRouteStatUint(t, stats, prefix+"observations_total"); got == 0 {
+		t.Fatalf("mixed_point observations=0, want observed route")
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, prefix+"candidate_ops_total"); got == 0 {
+		t.Fatalf("mixed_point candidate_ops_total=0, want delete-maintenance batch to remain a visible candidate")
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, prefix+"used_ops_total"); got != 0 {
+		t.Fatalf("mixed_point used_ops_total=%d, want raw delete-maintenance fallback", got)
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, prefix+"fallback.reason."+FlushSpanRunFallbackMaintenance.String()+".count_total"); got == 0 {
+		t.Fatalf("mixed_point maintenance fallback count=0, want raw delete-maintenance fallback")
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, prefix+"fallback.reason.unknown.count_total"); got != 0 {
+		t.Fatalf("mixed_point unknown fallback count=%d, want classified maintenance fallback", got)
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason."+FlushSpanRunFallbackMaintenance.String()+".ops_total"); got == 0 {
+		t.Fatalf("raw maintenance fallback ops=0, want aggregate maintenance fallback")
+	}
+	if got, err := d.Get([]byte("new")); err != nil || !bytes.Equal(got, []byte("value")) {
+		t.Fatalf("Get new=%q err=%v, want value", got, err)
+	}
+	if got, err := d.Get([]byte("delete-me")); err != nil || got != nil {
+		t.Fatalf("Get delete-me=%q err=%v, want deleted key", got, err)
+	}
+}
+
 func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) {
 	t.Run("range delete barrier", func(t *testing.T) {
 		d := openExplicitRawSpanNativeRouteTestDB(t)
