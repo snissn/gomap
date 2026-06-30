@@ -166,6 +166,13 @@ type AppendOnlyEntryReserveStats struct {
 	SkippedGrowthBytesTotal  uint64
 }
 
+type AppendOnlyValueArenaStats struct {
+	ActiveChunks   int64
+	ActiveBytes    int64
+	RetainedChunks int64
+	RetainedBytes  int64
+}
+
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
 
 // PreferSortedPointProbes reports whether a sorted batch of point probes should
@@ -707,6 +714,35 @@ func (a *appendOnlyValueArena) alloc(length int) []byte {
 	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
 	a.curPos += length
 	return out
+}
+
+func appendOnlyValueArenaChunksBytes(chunks [][]byte) int64 {
+	var bytes int64
+	for _, chunk := range chunks {
+		bytes += int64(cap(chunk))
+	}
+	return bytes
+}
+
+func (a *appendOnlyValueArena) backingStats() AppendOnlyValueArenaStats {
+	if a == nil {
+		return AppendOnlyValueArenaStats{}
+	}
+	return AppendOnlyValueArenaStats{
+		ActiveChunks:   int64(len(a.chunks)),
+		ActiveBytes:    appendOnlyValueArenaChunksBytes(a.chunks),
+		RetainedChunks: int64(len(a.retained)),
+		RetainedBytes:  int64(a.retainedB),
+	}
+}
+
+func (m *AppendOnly) ValueArenaBackingStats() AppendOnlyValueArenaStats {
+	if m == nil {
+		return AppendOnlyValueArenaStats{}
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.valueArena.backingStats()
 }
 
 func (a *appendOnlyValueArena) reset() {
