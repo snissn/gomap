@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
@@ -58,20 +59,7 @@ func TestColumnPhysicalQ1DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 }
 
 func BenchmarkColumnPhysicalQ1DenseTypedColumn1950(b *testing.B) {
-	collections := make([][]string, 4)
-	patterns := [][]string{
-		{"app.m", "app.z", "app.feed", "app.m"},
-		{"app.a", "app.m", "app.graph", "app.a"},
-		{"app.chat", "app.z", "app.m", "app.chat"},
-		{"app.a", "app.video", "app.m", "app.video"},
-	}
-	for batch := range collections {
-		collections[batch] = make([]string, 4096)
-		for i := range collections[batch] {
-			collections[batch][i] = patterns[batch][i%len(patterns[batch])]
-		}
-	}
-	batches := columnPhysicalQ1DenseEventBatches1950(collections)
+	batches := columnPhysicalQ1DenseBenchmarkBatches1950(4096)
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(b, nil, batches)
 	defer closeFn()
 	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
@@ -133,6 +121,62 @@ func BenchmarkColumnPhysicalQ1DenseTypedColumn1950(b *testing.B) {
 		}
 		reportColumnPhysicalQ1DenseBenchMetrics1950(b, last)
 	})
+}
+
+func TestColumnPhysicalQ1DenseTypedColumnOneShotSetupDiagnostics1950(t *testing.T) {
+	batches := columnPhysicalQ1DenseEventBatches1950([][]string{
+		{"app.m", "app.z", "app.m", "app.z"},
+		{"app.a", "app.m", "app.a", "app.m"},
+	})
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
+	view, plan, closeView := openColumnPhysicalQ1DenseOneShotSetupView1950(t, col, req)
+	defer closeView()
+
+	diag := prepareColumnPhysicalQ1DenseOneShotSetup1950(t, view, req, plan)
+	assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(t, "q1 one-shot setup", diag)
+}
+
+func BenchmarkColumnPhysicalQ1DenseTypedColumnOneShotSetup1950(b *testing.B) {
+	batches := columnPhysicalQ1DenseBenchmarkBatches1950(4096)
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(b, nil, batches)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
+	view, plan, closeView := openColumnPhysicalQ1DenseOneShotSetupView1950(b, col, req)
+	defer closeView()
+
+	preview := prepareColumnPhysicalQ1DenseOneShotSetup1950(b, view, req, plan)
+	assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(b, "preview q1 one-shot setup", preview)
+	b.SetBytes(int64(preview.DecodedPayloadBytes))
+	b.ReportAllocs()
+	b.ResetTimer()
+	var last ColumnPhysicalQueryDiagnostics
+	for i := 0; i < b.N; i++ {
+		last = prepareColumnPhysicalQ1DenseOneShotSetup1950(b, view, req, plan)
+	}
+	b.StopTimer()
+	assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(b, "last q1 one-shot setup", last)
+	reportColumnPhysicalQ1DenseOneShotSetupBenchMetrics1950(b, last)
+}
+
+func columnPhysicalQ1DenseBenchmarkBatches1950(rowsPerBatch int) [][]columnPhysicalJSONBenchParityEventP0 {
+	collections := make([][]string, 4)
+	patterns := [][]string{
+		{"app.m", "app.z", "app.feed", "app.m"},
+		{"app.a", "app.m", "app.graph", "app.a"},
+		{"app.chat", "app.z", "app.m", "app.chat"},
+		{"app.a", "app.video", "app.m", "app.video"},
+	}
+	for batch := range collections {
+		collections[batch] = make([]string, rowsPerBatch)
+		for i := range collections[batch] {
+			collections[batch][i] = patterns[batch][i%len(patterns[batch])]
+		}
+	}
+	return columnPhysicalQ1DenseEventBatches1950(collections)
 }
 
 func columnPhysicalQ1DenseEventBatches1950(collections [][]string) [][]columnPhysicalJSONBenchParityEventP0 {
@@ -218,6 +262,90 @@ func assertColumnPhysicalQ1DenseResult1950(tb testing.TB, label string, result C
 	assertColumnPhysicalQ1DenseDiagnostics1950(tb, label, result.Diagnostics, wantRowsScanned, wantReduceRows)
 }
 
+func openColumnPhysicalQ1DenseOneShotSetupView1950(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) (columnPhysicalScanSnapshotView, columnTypedColumnPhysicalQueryPlan, func()) {
+	tb.Helper()
+	if req.AggregateMetadataName != "" || !columnTypedColumnOneShotCacheRequestCandidate(req) {
+		tb.Fatalf("q1 setup request is not a no-metadata one-shot candidate: %+v", req)
+	}
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
+	if closeView == nil {
+		closeView = func() {}
+	}
+	if err != nil {
+		closeView()
+		tb.Fatalf("prepare q1 setup snapshot view: %v", err)
+	}
+	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
+	if err != nil {
+		closeView()
+		tb.Fatalf("plan q1 setup typed-column query: %v", err)
+	}
+	if !candidate || !columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req) {
+		closeView()
+		tb.Fatalf("q1 setup plan candidate=%t dense_group_count=%t plan=%+v", candidate, columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req), plan)
+	}
+	return view, plan, closeView
+}
+
+func prepareColumnPhysicalQ1DenseOneShotSetup1950(tb testing.TB, view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan) ColumnPhysicalQueryDiagnostics {
+	tb.Helper()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		tb.Fatalf("open q1 setup read cache: %v", err)
+	}
+	readCache.returnViews = true
+	buildStart := time.Now()
+	runner, candidate, err := prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, &readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
+		prepareDenseGroupCountDistinctGlobalRanks: columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req),
+	})
+	buildNanos := time.Since(buildStart).Nanoseconds()
+	if err != nil {
+		if runner != nil {
+			runner.close()
+		}
+		_ = readCache.close()
+		tb.Fatalf("prepare q1 one-shot setup runner: %v", err)
+	}
+	if !candidate || runner == nil {
+		_ = readCache.close()
+		tb.Fatalf("prepare q1 one-shot setup candidate=%t runner=%p", candidate, runner)
+	}
+	diag := columnPhysicalQ1DenseOneShotSetupDiagnostics1950(runner, req, buildNanos)
+	runner.close()
+	if err := readCache.close(); err != nil {
+		tb.Fatalf("close q1 setup read cache: %v", err)
+	}
+	return diag
+}
+
+func columnPhysicalQ1DenseOneShotSetupDiagnostics1950(runner *columnTypedColumnPhysicalQueryRunner, req ColumnPhysicalQueryRequest, buildNanos int64) ColumnPhysicalQueryDiagnostics {
+	var diag ColumnPhysicalQueryDiagnostics
+	diag.TypedColumnOneShotCacheMiss = true
+	diag.TypedColumnOneShotCacheBuild = true
+	diag.TypedColumnOneShotBuildNanos = buildNanos
+	if runner == nil {
+		return diag
+	}
+	runner.prepareDiagnostics.applyTo(&diag)
+	diag.ProjectedColumns = len(runner.plan.ProjectedColumns)
+	diag.ScheduledGranules = runner.granulesConsidered
+	diag.SkippedGranules = runner.granulesSkipped
+	diag.DecodedGranules = runner.granulesDecoded
+	diag.DecodedBlocks = runner.decodedBlocks
+	diag.TypedColumnPartSections = runner.sections
+	diag.TypedColumnPartSectionBytes = runner.sectionBytes
+	diag.PhysicalBytesScanned = runner.assetBytes
+	diag.DecodedPayloadBytes = runner.decodedPayloadBytes
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
+	diag.StorageSource = ColumnPhysicalQueryStorageSourceTypedColumnPartSection
+	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
+	diag.SegmentFileCacheHits = runner.segmentFileCacheHits
+	diag.SegmentFileCacheMisses = runner.segmentFileCacheMisses
+	diag.DenseGroupCountUsed = columnTypedColumnPhysicalQueryUseDenseGroupCount(runner.plan, req)
+	applyColumnPhysicalQueryPredicateDiagnostics(&diag, runner.plan.PredicateDiagnostics, 0, 0)
+	return diag
+}
+
 func assertColumnPhysicalQ1DenseDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, wantRowsScanned, wantReduceRows int) {
 	tb.Helper()
 	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
@@ -240,11 +368,62 @@ func assertColumnPhysicalQ1DenseDiagnostics1950(tb testing.TB, label string, dia
 	}
 }
 
+func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+	tb.Helper()
+	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		tb.Fatalf("%s setup diagnostics storage/fallback=%+v", label, diag)
+	}
+	if !diag.DenseGroupCountUsed || diag.DenseGroupCountDistinctUsed || diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed {
+		tb.Fatalf("%s setup dense path diagnostics=%+v want only dense group-count", label, diag)
+	}
+	if diag.RowsScanned != 0 || diag.RowsMatched != 0 || diag.ReduceRows != 0 || diag.ResultGroups != 0 {
+		tb.Fatalf("%s setup ran query rows scanned/matched/reduced/groups=%d/%d/%d/%d diagnostics=%+v", label, diag.RowsScanned, diag.RowsMatched, diag.ReduceRows, diag.ResultGroups, diag)
+	}
+	if diag.PredicateCount != 0 || diag.PredicateLiterals != 0 {
+		tb.Fatalf("%s setup q1 should not report predicates: %+v", label, diag)
+	}
+	if diag.TypedColumnPartSections == 0 || diag.TypedColumnPartSectionBytes == 0 || diag.DecodedPayloadBytes == 0 || diag.DecodedBlocks == 0 {
+		tb.Fatalf("%s setup missing typed-column section/decode diagnostics: %+v", label, diag)
+	}
+	if diag.TypedColumnOneShotBuildNanos <= 0 || diag.TypedColumnPreparePartDecodeNanos <= 0 {
+		tb.Fatalf("%s setup missing build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
+			label,
+			diag.TypedColumnOneShotBuildNanos,
+			diag.TypedColumnPreparePartDecodeNanos,
+			diag)
+	}
+	if diag.TypedColumnPrepareSummaryNanos != 0 {
+		tb.Fatalf("%s setup summary nanos=%d want 0 for no-metadata one-shot setup diagnostics=%+v", label, diag.TypedColumnPrepareSummaryNanos, diag)
+	}
+	if diag.TypedColumnPrepareDenseValueNanos != 0 || diag.TypedColumnPrepareDensePredicateNanos != 0 || diag.TypedColumnPrepareDensePreapplyNanos != 0 {
+		tb.Fatalf("%s setup dense value/predicate/preapply diagnostics=%d/%d/%d want 0 for q1 group-count setup diagnostics=%+v",
+			label,
+			diag.TypedColumnPrepareDenseValueNanos,
+			diag.TypedColumnPrepareDensePredicateNanos,
+			diag.TypedColumnPrepareDensePreapplyNanos,
+			diag)
+	}
+}
+
 func reportColumnPhysicalQ1DenseBenchMetrics1950(b *testing.B, diag ColumnPhysicalQueryDiagnostics) {
 	b.Helper()
 	b.ReportMetric(float64(diag.RowsScanned), "rows_scanned/op")
 	b.ReportMetric(float64(diag.DecodedPayloadBytes), "decoded_bytes/op")
 	b.ReportMetric(float64(diag.TypedColumnPartSections), "typed_sections/op")
+}
+
+func reportColumnPhysicalQ1DenseOneShotSetupBenchMetrics1950(b *testing.B, diag ColumnPhysicalQueryDiagnostics) {
+	b.Helper()
+	b.ReportMetric(float64(diag.DecodedBlocks), "decoded_blocks/op")
+	b.ReportMetric(float64(diag.DecodedPayloadBytes), "decoded_bytes/op")
+	b.ReportMetric(float64(diag.TypedColumnPartSections), "typed_sections/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareWorkerCount), "typed_column_prepare_workers/op")
+	b.ReportMetric(float64(diag.TypedColumnOneShotBuildNanos), "typed_column_one_shot_build_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePlanNanos), "typed_column_prepare_plan_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareRefsNanos), "typed_column_prepare_refs_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePairingNanos), "typed_column_prepare_pairing_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePartDecodeNanos), "typed_column_prepare_part_decode_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePostPrepareNanos), "typed_column_prepare_post_prepare_nanos/op")
 }
 
 func totalQ1DenseRows1950(batches [][]columnPhysicalJSONBenchParityEventP0) int {
