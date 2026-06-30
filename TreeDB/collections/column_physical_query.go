@@ -205,9 +205,13 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPrepareDenseValueNanos     int64
 	TypedColumnPrepareDensePredicateNanos int64
 	TypedColumnPrepareDensePreapplyNanos  int64
-	TypedColumnPrepareQ2GroupRankNanos    int64
-	TypedColumnPrepareQ2DistinctRankNanos int64
-	TypedColumnPrepareQ2LocalRankNanos    int64
+
+	TypedColumnPrepareQ2GroupRankNanos               int64
+	TypedColumnPrepareQ2DistinctRankNanos            int64
+	TypedColumnPrepareQ2LocalRankNanos               int64
+	TypedColumnPrepareQ2DenseGroupGlobalRankNanos    int64
+	TypedColumnPrepareQ2DenseDistinctGlobalRankNanos int64
+	TypedColumnPrepareQ2DensePartLocalRankNanos      int64
 
 	TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos    int64
 	TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos int64
@@ -1487,6 +1491,9 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.TypedColumnPrepareQ2GroupRankNanos += right.TypedColumnPrepareQ2GroupRankNanos
 	left.TypedColumnPrepareQ2DistinctRankNanos += right.TypedColumnPrepareQ2DistinctRankNanos
 	left.TypedColumnPrepareQ2LocalRankNanos += right.TypedColumnPrepareQ2LocalRankNanos
+	left.TypedColumnPrepareQ2DenseGroupGlobalRankNanos += right.TypedColumnPrepareQ2DenseGroupGlobalRankNanos
+	left.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos += right.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos
+	left.TypedColumnPrepareQ2DensePartLocalRankNanos += right.TypedColumnPrepareQ2DensePartLocalRankNanos
 	left.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos
 	left.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
 	left.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += right.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos

@@ -562,21 +562,35 @@ func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label 
 	rankTotal := diag.TypedColumnPrepareQ2GroupRankNanos +
 		diag.TypedColumnPrepareQ2DistinctRankNanos +
 		diag.TypedColumnPrepareQ2LocalRankNanos
+	denseRankTotal := diag.TypedColumnPrepareQ2DenseGroupGlobalRankNanos +
+		diag.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos +
+		diag.TypedColumnPrepareQ2DensePartLocalRankNanos
 	globalCodeTotal := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
 		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos +
 		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos +
 		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
 	if !want {
-		if rankTotal+globalCodeTotal != 0 {
-			tb.Fatalf("%s q2 post-prepare subphase nanos=%d want 0 diagnostics=%+v", label, rankTotal+globalCodeTotal, diag)
+		if rankTotal+denseRankTotal+globalCodeTotal != 0 {
+			tb.Fatalf("%s q2 post-prepare subphase nanos=%d want 0 diagnostics=%+v", label, rankTotal+denseRankTotal+globalCodeTotal, diag)
 		}
 		return
 	}
-	if rankTotal+globalCodeTotal == 0 {
+	if rankTotal+denseRankTotal+globalCodeTotal == 0 {
 		return
 	}
 	if rankTotal != 0 && diag.TypedColumnPrepareQ2LocalRankNanos <= 0 {
 		tb.Fatalf("%s local rank prep nanos=%d want >0 diagnostics=%+v", label, diag.TypedColumnPrepareQ2LocalRankNanos, diag)
+	}
+	if denseRankTotal != 0 {
+		if diag.TypedColumnPrepareQ2DenseGroupGlobalRankNanos != diag.TypedColumnPrepareQ2GroupRankNanos ||
+			diag.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos != diag.TypedColumnPrepareQ2DistinctRankNanos ||
+			diag.TypedColumnPrepareQ2DensePartLocalRankNanos != diag.TypedColumnPrepareQ2LocalRankNanos {
+			tb.Fatalf("%s dense q2 rank split diagnostics=%+v want explicit dense phases to mirror legacy rank phases", label, diag)
+		}
+		if diag.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos <= 0 ||
+			diag.TypedColumnPrepareQ2DensePartLocalRankNanos <= 0 {
+			tb.Fatalf("%s dense q2 rank split diagnostics=%+v want distinct-global and part-local rank phases >0 when timer resolution records dense rank work", label, diag)
+		}
 	}
 	if globalCodeTotal != 0 {
 		assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb, label, diag, true)
