@@ -59,6 +59,9 @@ type columnTypedColumnDenseGroupCountPart struct {
 	Dictionary  []string
 	Codes       []uint32
 	Valid       []bool
+	Counts      []int
+	Missing     int
+	Rows        int
 }
 
 type columnTypedColumnDensePredicatePart struct {
@@ -226,6 +229,8 @@ type columnTypedColumnPhysicalQueryPartDecodeOptions struct {
 	eagerTimeOrderTopKPayloads         bool
 	compactDenseInt64SpanPredicateRows bool
 	compactDenseGroupHourPredicateRows bool
+	// Latest-visible q1 still needs row codes so visibility can filter per row.
+	decodeDenseGroupCountRows bool
 }
 
 type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
@@ -341,6 +346,7 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 
 type columnTypedColumnPhysicalAggregateSummary struct {
 	groups              []ColumnPhysicalQueryGroup
+	rowsScanned         int
 	matchedRows         int
 	reduceRows          int
 	denseGroupCount     bool
@@ -710,6 +716,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			eagerTimeOrderTopKPayloads:         columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req),
 			compactDenseInt64SpanPredicateRows: !includePhysicalRows && allowDenseGroupCountDistinct,
 			compactDenseGroupHourPredicateRows: !includePhysicalRows && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req),
+			decodeDenseGroupCountRows:          !allowDenseGroupCountDistinct,
 		}
 		outputs, hits, misses, err := decodeColumnTypedColumnPhysicalQueryRunnerPartsParallel(view, req, plan, inputs, readCache, includePhysicalRows, allowDenseGroupCountDistinct, decodeOpts)
 		if err != nil {
@@ -735,6 +742,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			decodeOpts := columnTypedColumnPhysicalQueryPartDecodeOptions{
 				compactDenseInt64SpanPredicateRows: !includePhysicalRows && allowDenseGroupCountDistinct,
 				compactDenseGroupHourPredicateRows: !includePhysicalRows && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req),
+				decodeDenseGroupCountRows:          !allowDenseGroupCountDistinct,
 			}
 			part, scratch, err := decodeColumnTypedColumnPhysicalQueryRunnerPart(view, req, plan, input.typedRef, input.physical, readCache, includePhysicalRows, allowDenseGroupCountDistinct, decodeOpts, rawScratch, prepareDiagnostics)
 			runner.segmentFileCacheHits = readCache.hits
@@ -816,7 +824,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnaps
 	rawScratch = raw
 	switch {
 	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
-		part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, prepareDiagnostics)
+		part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, opts.decodeDenseGroupCountRows, prepareDiagnostics)
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
 		part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 	case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):
@@ -964,6 +972,7 @@ func prepareColumnTypedColumnPhysicalAggregateSummary(runner *columnTypedColumnP
 
 func buildColumnTypedColumnDenseGroupCountSummary(parts []columnTypedColumnPhysicalQueryPart) (*columnTypedColumnPhysicalAggregateSummary, error) {
 	counts := make(map[string]int, 16)
+	rowsScanned := 0
 	reduceRows := 0
 	var localCounts []int
 	for partIdx := range parts {
@@ -973,6 +982,24 @@ func buildColumnTypedColumnDenseGroupCountSummary(parts []columnTypedColumnPhysi
 		}
 		if err := validateColumnTypedColumnDenseGroupCountPart(dense, partIdx); err != nil {
 			return nil, err
+		}
+		if dense.Counts != nil {
+			rowsScanned += dense.Rows
+			reduceRows += dense.Rows
+			if dense.Missing != 0 {
+				counts[""] += dense.Missing
+			}
+			for localCode, count := range dense.Counts {
+				if count == 0 {
+					continue
+				}
+				key, ok := columnTypedColumnDenseGroupCountDictionaryValue(dense, localCode)
+				if !ok {
+					return nil, fmt.Errorf("collections: dense typed-column group-count part %d dictionary missing local code %d", partIdx, localCode)
+				}
+				counts[key] += count
+			}
+			continue
 		}
 		if cap(localCounts) < dense.Cardinality {
 			localCounts = make([]int, dense.Cardinality)
@@ -992,6 +1019,7 @@ func buildColumnTypedColumnDenseGroupCountSummary(parts []columnTypedColumnPhysi
 			}
 			localCounts[localIdx]++
 		}
+		rowsScanned += len(dense.Codes)
 		reduceRows += len(dense.Codes)
 		if missingCount != 0 {
 			counts[""] += missingCount
@@ -1017,6 +1045,7 @@ func buildColumnTypedColumnDenseGroupCountSummary(parts []columnTypedColumnPhysi
 	sortColumnPhysicalQueryGroupsByKey(groups)
 	return &columnTypedColumnPhysicalAggregateSummary{
 		groups:          groups,
+		rowsScanned:     rowsScanned,
 		reduceRows:      reduceRows,
 		denseGroupCount: true,
 	}, nil
@@ -1024,6 +1053,7 @@ func buildColumnTypedColumnDenseGroupCountSummary(parts []columnTypedColumnPhysi
 
 func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnPhysicalQueryPart) (*columnTypedColumnPhysicalAggregateSummary, error) {
 	counts := make(map[string][24]int, 16)
+	rowsScanned := 0
 	matchedRows := 0
 	reduceRows := 0
 	var localHourCounts []int
@@ -1043,7 +1073,10 @@ func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnP
 			clear(localHourCounts)
 		}
 		preAppliedPredicates := dense.PredicatesPreApplied
-		if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+		if preAppliedPredicates {
+			rowsScanned += dense.PreAppliedRowsScanned
+		} else if columnTypedColumnDensePredicatesRejectAll(dense.Predicates) {
+			rowsScanned += len(dense.GroupCodes)
 			continue
 		}
 		rowCount := len(dense.GroupCodes)
@@ -1055,6 +1088,8 @@ func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnP
 			rowIdx := selectedIdx
 			if preAppliedPredicates && len(dense.PredicateRows) != 0 {
 				rowIdx = int(dense.PredicateRows[selectedIdx])
+			} else if !preAppliedPredicates {
+				rowsScanned++
 			}
 			if !preAppliedPredicates && !columnTypedColumnDensePredicatesMatch(dense.Predicates, rowIdx) {
 				continue
@@ -1128,6 +1163,7 @@ func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnP
 	sortColumnPhysicalQueryGroupsByKeyHour(groups)
 	return &columnTypedColumnPhysicalAggregateSummary{
 		groups:              groups,
+		rowsScanned:         rowsScanned,
 		matchedRows:         matchedRows,
 		reduceRows:          reduceRows,
 		denseGroupHourCount: true,
@@ -2829,7 +2865,7 @@ func decodeTypedColumnPhysicalQueryPart(plan columnTypedColumnPhysicalQueryPlan,
 func (s *columnTypedColumnPhysicalAggregateSummary) run(r *columnTypedColumnPhysicalQueryRunner, view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest) (ColumnPhysicalQueryResult, error) {
 	start := time.Now()
 	r.resultGroups = append(r.resultGroups[:0], s.groups...)
-	diag := r.diagnostics(view, req, 0, s.matchedRows, s.reduceRows, time.Since(start).Nanoseconds())
+	diag := r.diagnostics(view, req, s.rowsScanned, s.matchedRows, s.reduceRows, time.Since(start).Nanoseconds())
 	diag.DenseGroupCountUsed = s.denseGroupCount
 	diag.DenseGroupHourCountUsed = s.denseGroupHourCount
 	result := ColumnPhysicalQueryResult{Groups: r.resultGroups, Diagnostics: diag}
@@ -3913,6 +3949,25 @@ func (r *columnTypedColumnPhysicalQueryRunner) runDenseGroupCount(view columnPhy
 			diag.DenseGroupCountUsed = true
 			return ColumnPhysicalQueryResult{Diagnostics: diag}, err
 		}
+		if dense.Counts != nil {
+			rowsScanned += dense.Rows
+			if dense.Missing != 0 {
+				r.denseGroupCounts[""] += dense.Missing
+			}
+			for localCode, count := range dense.Counts {
+				if count == 0 {
+					continue
+				}
+				key, ok := columnTypedColumnDenseGroupCountDictionaryValue(dense, localCode)
+				if !ok {
+					diag := r.diagnostics(view, req, rowsScanned, 0, rowsScanned, time.Since(start).Nanoseconds())
+					diag.DenseGroupCountUsed = true
+					return ColumnPhysicalQueryResult{Diagnostics: diag}, fmt.Errorf("collections: dense typed-column group-count part %d dictionary missing local code %d", partIdx, localCode)
+				}
+				r.denseGroupCounts[key] += count
+			}
+			continue
+		}
 		if cap(r.denseLocalCounts) < dense.Cardinality {
 			r.denseLocalCounts = make([]int, dense.Cardinality)
 		} else {
@@ -3971,8 +4026,33 @@ func validateColumnTypedColumnDenseGroupCountPart(dense *columnTypedColumnDenseG
 	if dense.Cardinality != len(dense.Dictionary) {
 		return fmt.Errorf("collections: dense typed-column group-count part %d dictionary cardinality=%d want %d", partIdx, len(dense.Dictionary), dense.Cardinality)
 	}
+	if dense.Rows < 0 {
+		return fmt.Errorf("collections: dense typed-column group-count part %d rows=%d is negative", partIdx, dense.Rows)
+	}
+	if dense.Missing < 0 {
+		return fmt.Errorf("collections: dense typed-column group-count part %d missing=%d is negative", partIdx, dense.Missing)
+	}
+	if dense.Counts != nil {
+		if len(dense.Counts) != dense.Cardinality {
+			return fmt.Errorf("collections: dense typed-column group-count part %d counts=%d want cardinality=%d", partIdx, len(dense.Counts), dense.Cardinality)
+		}
+		total := dense.Missing
+		for localCode, count := range dense.Counts {
+			if count < 0 {
+				return fmt.Errorf("collections: dense typed-column group-count part %d count[%d]=%d is negative", partIdx, localCode, count)
+			}
+			total += count
+		}
+		if total != dense.Rows {
+			return fmt.Errorf("collections: dense typed-column group-count part %d counts rows=%d want %d", partIdx, total, dense.Rows)
+		}
+		return nil
+	}
 	if dense.Valid != nil && len(dense.Valid) != len(dense.Codes) {
 		return fmt.Errorf("collections: dense typed-column group-count part %d valid rows=%d want codes rows=%d", partIdx, len(dense.Valid), len(dense.Codes))
+	}
+	if dense.Rows != 0 && dense.Rows != len(dense.Codes) {
+		return fmt.Errorf("collections: dense typed-column group-count part %d rows=%d want codes rows=%d", partIdx, dense.Rows, len(dense.Codes))
 	}
 	if dense.Cardinality == 0 && dense.Valid == nil && len(dense.Codes) != 0 {
 		return fmt.Errorf("collections: dense typed-column group-count part %d has empty dictionary", partIdx)
