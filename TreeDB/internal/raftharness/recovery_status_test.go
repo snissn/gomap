@@ -154,6 +154,49 @@ func TestRecoveryStatusDirtyTargetAndMismatchedManifestRemainUnsafe(t *testing.T
 	}
 }
 
+func TestRecoveryStatusReadSafetyRejectsDivergentAppliedTail(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	committed := []raftfsm.CommittedEntryV1{
+		committedCommand(43, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:recovery-status-prefix")),
+		committedCommand(43, 2, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:recovery-status-tail")),
+	}
+	if _, err := h.Commit(committed...); err != nil {
+		t.Fatalf("Commit committed log: %v", err)
+	}
+	if _, err := h.ApplyCommittedEntriesToNode("node-a", committed[:1]...); err != nil {
+		t.Fatalf("apply source prefix: %v", err)
+	}
+	manifest, err := mustNode(t, h, "node-a").fsm.ExportSnapshotManifestV1(raftfsm.SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712348002, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+	if install, err := h.InstallSnapshotPrefixToNodeV1("node-b", manifest); err != nil {
+		t.Fatalf("InstallSnapshotPrefixToNodeV1: %v evidence=%+v", err, install)
+	}
+
+	divergentTail := committedCommand(43, 2, deterministicCreateCollectionEntry(t, "admins", "harness:create:admins:recovery-status-divergent-tail"))
+	seeded := applyEntriesDirectlyToNode(t, h, "node-b", divergentTail)
+	assertAppliedResults(t, "node-b divergent recovery-status tail", seeded, []int64{1})
+
+	status, err := h.RecoveryStatusV1(context.Background(), "node-b", RecoveryStatusOptionsV1{
+		SnapshotManifest:  &manifest,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 divergent tail: %v", err)
+	}
+	if status.Readiness == raftcluster.RecoveryReadinessReadyAppliedIndexV1 ||
+		status.SafeToServeReads ||
+		status.ReadSafetyState != raftcluster.RecoveryReadSafetyTargetMismatchV1 {
+		t.Fatalf("divergent tail status=%+v, want unsafe read-safety mismatch", status)
+	}
+	if got := strings.Join(status.Errors, "\n"); !strings.Contains(got, "committed-prefix read safety validation failed") {
+		t.Fatalf("divergent tail errors=%q, want committed-prefix validation error", got)
+	}
+}
+
 func TestRecoveryStatusUnsupportedOperationsFailClosed(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()

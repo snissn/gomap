@@ -38,17 +38,28 @@ func (h *Harness) RecoveryStatusV1(ctx context.Context, nodeID raftcluster.NodeI
 	if opts.TailTargetIndex == 0 && len(h.committed) > 0 {
 		opts.TailTargetIndex = h.committed[len(h.committed)-1].Index
 	}
+	committed := make([]raftfsm.CommittedEntryV1, 0, len(h.committed))
+	for _, entry := range h.committed {
+		committed = append(committed, cloneCommittedEntry(entry))
+	}
 	h.mu.Unlock()
 
 	if opts.RequireReadSafety && opts.ReadBarrier.MinAppliedIndex == 0 {
 		opts.ReadBarrier.MinAppliedIndex = opts.TailTargetIndex
 	}
-	return node.fsm.RecoveryStatusV1(ctx, raftfsm.RecoveryStatusOptionsV1{
+	status, err := node.fsm.RecoveryStatusV1(ctx, raftfsm.RecoveryStatusOptionsV1{
 		SnapshotManifest:  opts.SnapshotManifest,
 		TailTargetIndex:   opts.TailTargetIndex,
 		RequireReadSafety: opts.RequireReadSafety,
 		ReadBarrier:       opts.ReadBarrier,
 	})
+	if err != nil {
+		return status, err
+	}
+	if opts.RequireReadSafety && status.SafeToServeReads {
+		status = validateHarnessReadSafetyPrefixV1(status, node, committed)
+	}
+	return status, nil
 }
 
 func (h *Harness) LogTruncationRecoveryStatusV1(nodeID raftcluster.NodeID) (raftcluster.RecoveryStatusV1, error) {
@@ -72,4 +83,33 @@ func (h *Harness) unsupportedRecoveryStatusV1(nodeID raftcluster.NodeID, op raft
 	}
 	status := raftcluster.UnsupportedRecoveryStatusV1(nodeID, groupID, op)
 	return status, fmt.Errorf("%w: %s", raftcluster.ErrRecoveryOperationUnsupported, op)
+}
+
+func validateHarnessReadSafetyPrefixV1(status raftcluster.RecoveryStatusV1, node *Node, committed []raftfsm.CommittedEntryV1) raftcluster.RecoveryStatusV1 {
+	progress := status.AppliedProgress
+	if node == nil || node.fsm == nil {
+		return failHarnessReadSafetyPrefixV1(status, fmt.Errorf("%w: closed node", ErrNodeClosed))
+	}
+	if !progress.HasApplied || progress.Index == 0 {
+		return failHarnessReadSafetyPrefixV1(status, fmt.Errorf("%w: node %s has no applied progress", ErrCommittedLogConflict, status.NodeID))
+	}
+	if progress.Index > uint64(len(committed)) {
+		return failHarnessReadSafetyPrefixV1(status, fmt.Errorf("%w: node %s applied index %d beyond committed log length %d", ErrCommittedLogConflict, status.NodeID, progress.Index, len(committed)))
+	}
+	prefix := make([]raftfsm.CommittedEntryV1, 0, progress.Index)
+	for _, entry := range committed[:progress.Index] {
+		prefix = append(prefix, cloneCommittedEntry(entry))
+	}
+	if _, err := node.fsm.ValidateAppliedPrefixV1(prefix); err != nil {
+		return failHarnessReadSafetyPrefixV1(status, err)
+	}
+	return status
+}
+
+func failHarnessReadSafetyPrefixV1(status raftcluster.RecoveryStatusV1, err error) raftcluster.RecoveryStatusV1 {
+	status.SafeToServeReads = false
+	status.Readiness = raftcluster.RecoveryReadinessReadSafetyPendingV1
+	status.ReadSafetyState = raftcluster.RecoveryReadSafetyTargetMismatchV1
+	status.Errors = append(status.Errors, fmt.Sprintf("raftharness: committed-prefix read safety validation failed: %v", err))
+	return status
 }
