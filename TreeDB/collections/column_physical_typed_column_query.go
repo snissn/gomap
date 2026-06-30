@@ -242,9 +242,13 @@ type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
 	DenseValueNanos     int64
 	DensePredicateNanos int64
 	DensePreapplyNanos  int64
-	Q2GroupRankNanos    int64
-	Q2DistinctRankNanos int64
-	Q2LocalRankNanos    int64
+
+	Q2GroupRankNanos               int64
+	Q2DistinctRankNanos            int64
+	Q2LocalRankNanos               int64
+	Q2DenseGroupGlobalRankNanos    int64
+	Q2DenseDistinctGlobalRankNanos int64
+	Q2DensePartLocalRankNanos      int64
 
 	Q2GroupGlobalDictionaryRankNanos    int64
 	Q2DistinctGlobalDictionaryRankNanos int64
@@ -281,6 +285,9 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 	diag.TypedColumnPrepareQ2GroupRankNanos += d.Q2GroupRankNanos
 	diag.TypedColumnPrepareQ2DistinctRankNanos += d.Q2DistinctRankNanos
 	diag.TypedColumnPrepareQ2LocalRankNanos += d.Q2LocalRankNanos
+	diag.TypedColumnPrepareQ2DenseGroupGlobalRankNanos += d.Q2DenseGroupGlobalRankNanos
+	diag.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos += d.Q2DenseDistinctGlobalRankNanos
+	diag.TypedColumnPrepareQ2DensePartLocalRankNanos += d.Q2DensePartLocalRankNanos
 	diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += d.Q2GroupGlobalDictionaryRankNanos
 	diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += d.Q2DistinctGlobalDictionaryRankNanos
 	diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += d.Q2GroupGlobalCodeRemapNanos
@@ -316,6 +323,9 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 	d.Q2GroupRankNanos += src.Q2GroupRankNanos
 	d.Q2DistinctRankNanos += src.Q2DistinctRankNanos
 	d.Q2LocalRankNanos += src.Q2LocalRankNanos
+	d.Q2DenseGroupGlobalRankNanos += src.Q2DenseGroupGlobalRankNanos
+	d.Q2DenseDistinctGlobalRankNanos += src.Q2DenseDistinctGlobalRankNanos
+	d.Q2DensePartLocalRankNanos += src.Q2DensePartLocalRankNanos
 	d.Q2GroupGlobalDictionaryRankNanos += src.Q2GroupGlobalDictionaryRankNanos
 	d.Q2DistinctGlobalDictionaryRankNanos += src.Q2DistinctGlobalDictionaryRankNanos
 	d.Q2GroupGlobalCodeRemapNanos += src.Q2GroupGlobalCodeRemapNanos
@@ -1210,7 +1220,9 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostic
 		return &part.Group
 	})
 	if prepareDiagnostics != nil {
-		prepareDiagnostics.Q2GroupRankNanos += time.Since(phaseStart).Nanoseconds()
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2GroupRankNanos += elapsed
+		prepareDiagnostics.Q2DenseGroupGlobalRankNanos += elapsed
 	}
 	if err != nil {
 		return err
@@ -1220,7 +1232,9 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostic
 		return &part.Distinct
 	})
 	if prepareDiagnostics != nil {
-		prepareDiagnostics.Q2DistinctRankNanos += time.Since(phaseStart).Nanoseconds()
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2DistinctRankNanos += elapsed
+		prepareDiagnostics.Q2DenseDistinctGlobalRankNanos += elapsed
 	}
 	if err != nil {
 		return err
@@ -1233,7 +1247,9 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostic
 		err = prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts, groupDict, groupRanks, distinctRanks, distinctCardinality, workers)
 	}
 	if prepareDiagnostics != nil {
-		prepareDiagnostics.Q2LocalRankNanos += time.Since(phaseStart).Nanoseconds()
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2LocalRankNanos += elapsed
+		prepareDiagnostics.Q2DensePartLocalRankNanos += elapsed
 	}
 	return err
 }
