@@ -35,6 +35,7 @@ const (
 	FlushSpanRunFallbackReducerValidationFailed
 	FlushSpanRunFallbackRouteIneligible
 	FlushSpanRunFallbackAdmissionPolicyDecline
+	FlushSpanRunFallbackReducerValidationGuard
 
 	flushSpanRunFallbackReasonCount
 )
@@ -65,6 +66,7 @@ var flushSpanRunFallbackReasonNames = [...]string{
 	FlushSpanRunFallbackReducerValidationFailed:  "reducer_validation_failed",
 	FlushSpanRunFallbackRouteIneligible:          "route_ineligible",
 	FlushSpanRunFallbackAdmissionPolicyDecline:   "admission_policy_decline",
+	FlushSpanRunFallbackReducerValidationGuard:   "reducer_validation_guard",
 }
 
 func (r FlushSpanRunFallbackReason) String() string {

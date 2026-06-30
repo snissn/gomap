@@ -542,6 +542,8 @@ func (db *DB) appendFlushApplyStats(stats map[string]string) {
 	stats["treedb.flush_apply.span_native.used_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeUsedSpans.Load())
 	stats["treedb.flush_apply.span_native.ineligible_ops_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleOps.Load())
 	stats["treedb.flush_apply.span_native.ineligible_spans_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeIneligibleSpans.Load())
+	stats["treedb.flush_apply.span_native.reducer_validation_guard.active"] = fmt.Sprintf("%t", db.flushApplySpanNativeReducerValidationGuard.Load())
+	stats["treedb.flush_apply.span_native.reducer_validation_guard.trips_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeReducerValidationGuardTrips.Load())
 	stats["treedb.flush_apply.span_native.scheduler.worker_busy_ns_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeWorkerBusyNs.Load())
 	stats["treedb.flush_apply.span_native.scheduler.worker_idle_ns_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeWorkerIdleNs.Load())
 	stats["treedb.flush_apply.span_native.scheduler.worker_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplySpanNativeWorkerWaitNs.Load())

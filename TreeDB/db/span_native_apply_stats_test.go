@@ -211,3 +211,47 @@ func TestFlushApplyOptionsEnableSpanNativePrepareWithoutParallelWorkers(t *testi
 		t.Fatalf("ParallelApplyConcurrency=%d want 0", opts.ParallelApplyConcurrency)
 	}
 }
+
+func TestFlushApplySpanNativeReducerValidationGuardForcesFutureFallback(t *testing.T) {
+	db := &DB{flushApplyConcurrency: 4, flushApplySpanNative: true}
+	prepared := zipper.ReadOnlyPrepareResult{
+		Ops:            8,
+		PointOps:       8,
+		ExactLeafSpans: true,
+		LeafSpans:      make([]zipper.ReadOnlyLeafSpan, 2),
+	}
+	failed := zipper.ApplyResult{
+		ReadOnlyPrepareRequested: true,
+		ReadOnlyPrepare:          prepared,
+		SpanNativeEligible:       true,
+		SpanNativeFallbackReason: FlushSpanRunFallbackReducerValidationFailed.String(),
+	}
+	db.observeFlushApplyPrepareResult(failed, zipper.ErrSpanNativeReducerValidation)
+	if !db.flushApplySpanNativeReducerValidationGuard.Load() {
+		t.Fatalf("reducer validation guard inactive after reducer validation failure")
+	}
+	if got := db.flushApplySpanNativeReducerValidationGuardTrips.Load(); got != 1 {
+		t.Fatalf("guard trips=%d want 1", got)
+	}
+
+	opts := db.flushApplyOptions()
+	if got := opts.SpanNativeForceFallbackReason; got != FlushSpanRunFallbackReducerValidationGuard.String() {
+		t.Fatalf("forced fallback=%q want %q", got, FlushSpanRunFallbackReducerValidationGuard.String())
+	}
+
+	guarded := zipper.ApplyResult{
+		ReadOnlyPrepareRequested: true,
+		ReadOnlyPrepare:          prepared,
+		SpanNativeFallbackReason: opts.SpanNativeForceFallbackReason,
+	}
+	db.observeFlushApplyPrepareResult(guarded, nil)
+	if got := db.flushApplySpanNativeReducerValidationGuardTrips.Load(); got != 1 {
+		t.Fatalf("guard trips after forced fallback=%d want 1", got)
+	}
+	if got := db.flushApplySpanNativeFallbackOps[FlushSpanRunFallbackReducerValidationFailed].Load(); got != 8 {
+		t.Fatalf("reducer validation failed fallback ops=%d want 8", got)
+	}
+	if got := db.flushApplySpanNativeFallbackOps[FlushSpanRunFallbackReducerValidationGuard].Load(); got != 8 {
+		t.Fatalf("reducer validation guard fallback ops=%d want 8", got)
+	}
+}
