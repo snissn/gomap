@@ -32,7 +32,7 @@ For the #2026 publication/readability closeout, use
 nativewire load-only closeout evidence refreshed on current `origin/main`.
 That report uses the compatible external `go-ycsb` branch for
 `collection_meta` version 5, runs 100k and 1M `treedb-native` loads on commit
-`be2cfe6fb0ac4bec62a4b8c89915a910f8ac011a`, and records zero `INSERT_ERROR`
+`12b2bf3b17ea3455551a9c47243f0194a59ee1a0`, and records zero `INSERT_ERROR`
 counts. It includes the later Raft snapshot/route-preflight merges, but does
 not replace the full comparison matrix above. The report also records one
 invalid intermediate 1M run that hit `INSERT_ERROR`; keep #2026 open for the
@@ -57,7 +57,7 @@ UTC latest-main report.
 
 | report | status | use |
 | --- | --- | --- |
-| `docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` | #2026 nativewire load-only closeout evidence refreshed after later Raft merges. | Use for the 100k and 1M external `go-ycsb treedb-native` load proof on commit `be2cfe6fb0ac4bec62a4b8c89915a910f8ac011a` with `collection_meta` v5 compatibility; note the recorded invalid intermediate 1M run before claiming intermittent-failure closure. |
+| `docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` | #2026 nativewire load-only closeout evidence refreshed after later Raft merges. | Use for the 100k and 1M external `go-ycsb treedb-native` load proof on commit `12b2bf3b17ea3455551a9c47243f0194a59ee1a0` with `collection_meta` v5 compatibility; note the recorded invalid intermediate 1M run before claiming intermittent-failure closure. |
 | `docs/benchmarks/ycsb_latest_main_2026-06-03.md` | Current external YCSB report. | Use for current headline MongoDB / TreeDB nativewire / TreeDB Mongo gateway results on latest `origin/main` after the June 3 rerun. |
 | `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` | Superseded latest-current report. | Keep for post-update-path-stack evidence before the latest main rerun and for comparison deltas. |
 | `docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md` | Historical legacy-profile report. | Keep for the original MongoDB / TreeDB native / TreeDB Mongo comparison and the post-load Mongo-gateway cliff attribution. Do not use its `fast` rows as current public-profile guidance. |
