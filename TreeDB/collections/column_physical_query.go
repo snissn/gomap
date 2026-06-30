@@ -206,12 +206,19 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPrepareDensePredicateNanos int64
 	TypedColumnPrepareDensePreapplyNanos  int64
 
-	TypedColumnPrepareQ2GroupRankNanos               int64
-	TypedColumnPrepareQ2DistinctRankNanos            int64
-	TypedColumnPrepareQ2LocalRankNanos               int64
-	TypedColumnPrepareQ2DenseGroupGlobalRankNanos    int64
-	TypedColumnPrepareQ2DenseDistinctGlobalRankNanos int64
-	TypedColumnPrepareQ2DensePartLocalRankNanos      int64
+	TypedColumnPrepareQ2GroupRankNanos                    int64
+	TypedColumnPrepareQ2DistinctRankNanos                 int64
+	TypedColumnPrepareQ2LocalRankNanos                    int64
+	TypedColumnPrepareQ2DenseGroupGlobalRankNanos         int64
+	TypedColumnPrepareQ2DenseDistinctGlobalRankNanos      int64
+	TypedColumnPrepareQ2DensePartLocalRankNanos           int64
+	TypedColumnPrepareQ2DenseDistinctRankPlanNanos        int64
+	TypedColumnPrepareQ2DenseDistinctRankCollectRefsNanos int64
+	TypedColumnPrepareQ2DenseDistinctRankBuildShardsNanos int64
+	TypedColumnPrepareQ2DenseDistinctRankShardCount       int
+	TypedColumnPrepareQ2DenseDistinctRankRefs             int
+	TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs     int
+	TypedColumnPrepareQ2DenseDistinctGlobalRanks          int
 
 	TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos    int64
 	TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos int64
@@ -1494,6 +1501,19 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.TypedColumnPrepareQ2DenseGroupGlobalRankNanos += right.TypedColumnPrepareQ2DenseGroupGlobalRankNanos
 	left.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos += right.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos
 	left.TypedColumnPrepareQ2DensePartLocalRankNanos += right.TypedColumnPrepareQ2DensePartLocalRankNanos
+	left.TypedColumnPrepareQ2DenseDistinctRankPlanNanos += right.TypedColumnPrepareQ2DenseDistinctRankPlanNanos
+	left.TypedColumnPrepareQ2DenseDistinctRankCollectRefsNanos += right.TypedColumnPrepareQ2DenseDistinctRankCollectRefsNanos
+	left.TypedColumnPrepareQ2DenseDistinctRankBuildShardsNanos += right.TypedColumnPrepareQ2DenseDistinctRankBuildShardsNanos
+	if right.TypedColumnPrepareQ2DenseDistinctRankShardCount > left.TypedColumnPrepareQ2DenseDistinctRankShardCount {
+		left.TypedColumnPrepareQ2DenseDistinctRankShardCount = right.TypedColumnPrepareQ2DenseDistinctRankShardCount
+	}
+	left.TypedColumnPrepareQ2DenseDistinctRankRefs += right.TypedColumnPrepareQ2DenseDistinctRankRefs
+	if right.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs > left.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs {
+		left.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs = right.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs
+	}
+	if right.TypedColumnPrepareQ2DenseDistinctGlobalRanks > left.TypedColumnPrepareQ2DenseDistinctGlobalRanks {
+		left.TypedColumnPrepareQ2DenseDistinctGlobalRanks = right.TypedColumnPrepareQ2DenseDistinctGlobalRanks
+	}
 	left.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos
 	left.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
 	left.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += right.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos

@@ -2603,6 +2603,14 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		TypedColumnPrepareQ2DenseDistinctMS:    0.032,
 		TypedColumnPrepareQ2DensePartLocalMS:   0.033,
 
+		TypedColumnPrepareQ2DenseDistinctRankPlanMS:        0.038,
+		TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS: 0.039,
+		TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS: 0.040,
+		TypedColumnPrepareQ2DenseDistinctRankShardCount:    32,
+		TypedColumnPrepareQ2DenseDistinctRankRefs:          123,
+		TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs:  7,
+		TypedColumnPrepareQ2DenseDistinctGlobalRanks:       99,
+
 		TypedColumnPrepareQ2GroupGlobalDictionaryRankMS:    0.034,
 		TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS: 0.035,
 		TypedColumnPrepareQ2GroupGlobalCodeRemapMS:         0.036,
@@ -2725,6 +2733,27 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	if got, want := cell.TypedColumnPrepareQ2DensePartLocalMS, q.TypedColumnPrepareQ2DensePartLocalMS; got != want {
 		t.Fatalf("typed_column_prepare_q2_dense_part_local_rank_duration_ms=%v want %v", got, want)
 	}
+	if got, want := cell.TypedColumnPrepareQ2DenseDistinctRankPlanMS, q.TypedColumnPrepareQ2DenseDistinctRankPlanMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_dense_distinct_rank_plan_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS, q.TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_dense_distinct_rank_collect_refs_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS, q.TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_dense_distinct_rank_build_shards_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DenseDistinctRankShardCount, q.TypedColumnPrepareQ2DenseDistinctRankShardCount; got != want {
+		t.Fatalf("typed_column_prepare_q2_dense_distinct_rank_shard_count=%d want %d", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DenseDistinctRankRefs, q.TypedColumnPrepareQ2DenseDistinctRankRefs; got != want {
+		t.Fatalf("typed_column_prepare_q2_dense_distinct_rank_refs=%d want %d", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs, q.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs; got != want {
+		t.Fatalf("typed_column_prepare_q2_dense_distinct_rank_max_shard_refs=%d want %d", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DenseDistinctGlobalRanks, q.TypedColumnPrepareQ2DenseDistinctGlobalRanks; got != want {
+		t.Fatalf("typed_column_prepare_q2_dense_distinct_global_ranks=%d want %d", got, want)
+	}
 	if got, want := cell.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS, q.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS; got != want {
 		t.Fatalf("typed_column_prepare_q2_group_global_dictionary_rank_duration_ms=%v want %v", got, want)
 	}
@@ -2838,6 +2867,14 @@ func TestRenderColumnStoreTypedColumnSetupDiagnosticsMarkdownQ2Splits3324(t *tes
 				TypedColumnPrepareQ2DenseGroupRankMS: 0.125,
 				TypedColumnPrepareQ2DenseDistinctMS:  0.5,
 				TypedColumnPrepareQ2DensePartLocalMS: 0.75,
+
+				TypedColumnPrepareQ2DenseDistinctRankPlanMS:        0.875,
+				TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS: 1.0,
+				TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS: 1.125,
+				TypedColumnPrepareQ2DenseDistinctRankShardCount:    32,
+				TypedColumnPrepareQ2DenseDistinctRankRefs:          123,
+				TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs:  7,
+				TypedColumnPrepareQ2DenseDistinctGlobalRanks:       99,
 				TypedColumnPrepareQ2GroupGlobalDictionaryRankMS:    1.25,
 				TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS: 2.5,
 				TypedColumnPrepareQ2GroupGlobalCodeRemapMS:         3.75,
@@ -2854,9 +2891,19 @@ func TestRenderColumnStoreTypedColumnSetupDiagnosticsMarkdownQ2Splits3324(t *tes
 		"q2 dense group global rank ms",
 		"q2 dense distinct global rank ms",
 		"q2 dense part local rank ms",
+		"q2 dense distinct rank plan ms",
+		"q2 dense distinct rank collect refs ms",
+		"q2 dense distinct rank build shards ms",
+		"q2 dense distinct rank refs",
+		"q2 dense distinct global ranks",
 		"0.125",
 		"0.500",
 		"0.750",
+		"0.875",
+		"1.000",
+		"1.125",
+		"123",
+		"99",
 		"q2 group global-code remap ms",
 		"q2 distinct global-code remap ms",
 		"1.250",

@@ -257,12 +257,19 @@ type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
 	DensePredicateNanos int64
 	DensePreapplyNanos  int64
 
-	Q2GroupRankNanos               int64
-	Q2DistinctRankNanos            int64
-	Q2LocalRankNanos               int64
-	Q2DenseGroupGlobalRankNanos    int64
-	Q2DenseDistinctGlobalRankNanos int64
-	Q2DensePartLocalRankNanos      int64
+	Q2GroupRankNanos                    int64
+	Q2DistinctRankNanos                 int64
+	Q2LocalRankNanos                    int64
+	Q2DenseGroupGlobalRankNanos         int64
+	Q2DenseDistinctGlobalRankNanos      int64
+	Q2DensePartLocalRankNanos           int64
+	Q2DenseDistinctRankPlanNanos        int64
+	Q2DenseDistinctRankCollectRefsNanos int64
+	Q2DenseDistinctRankBuildShardsNanos int64
+	Q2DenseDistinctRankShardCount       int
+	Q2DenseDistinctRankRefs             int
+	Q2DenseDistinctRankMaxShardRefs     int
+	Q2DenseDistinctGlobalRanks          int
 
 	Q2GroupGlobalDictionaryRankNanos    int64
 	Q2DistinctGlobalDictionaryRankNanos int64
@@ -302,6 +309,19 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 	diag.TypedColumnPrepareQ2DenseGroupGlobalRankNanos += d.Q2DenseGroupGlobalRankNanos
 	diag.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos += d.Q2DenseDistinctGlobalRankNanos
 	diag.TypedColumnPrepareQ2DensePartLocalRankNanos += d.Q2DensePartLocalRankNanos
+	diag.TypedColumnPrepareQ2DenseDistinctRankPlanNanos += d.Q2DenseDistinctRankPlanNanos
+	diag.TypedColumnPrepareQ2DenseDistinctRankCollectRefsNanos += d.Q2DenseDistinctRankCollectRefsNanos
+	diag.TypedColumnPrepareQ2DenseDistinctRankBuildShardsNanos += d.Q2DenseDistinctRankBuildShardsNanos
+	if d.Q2DenseDistinctRankShardCount > diag.TypedColumnPrepareQ2DenseDistinctRankShardCount {
+		diag.TypedColumnPrepareQ2DenseDistinctRankShardCount = d.Q2DenseDistinctRankShardCount
+	}
+	diag.TypedColumnPrepareQ2DenseDistinctRankRefs += d.Q2DenseDistinctRankRefs
+	if d.Q2DenseDistinctRankMaxShardRefs > diag.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs {
+		diag.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs = d.Q2DenseDistinctRankMaxShardRefs
+	}
+	if d.Q2DenseDistinctGlobalRanks > diag.TypedColumnPrepareQ2DenseDistinctGlobalRanks {
+		diag.TypedColumnPrepareQ2DenseDistinctGlobalRanks = d.Q2DenseDistinctGlobalRanks
+	}
 	diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += d.Q2GroupGlobalDictionaryRankNanos
 	diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += d.Q2DistinctGlobalDictionaryRankNanos
 	diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += d.Q2GroupGlobalCodeRemapNanos
@@ -340,6 +360,19 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 	d.Q2DenseGroupGlobalRankNanos += src.Q2DenseGroupGlobalRankNanos
 	d.Q2DenseDistinctGlobalRankNanos += src.Q2DenseDistinctGlobalRankNanos
 	d.Q2DensePartLocalRankNanos += src.Q2DensePartLocalRankNanos
+	d.Q2DenseDistinctRankPlanNanos += src.Q2DenseDistinctRankPlanNanos
+	d.Q2DenseDistinctRankCollectRefsNanos += src.Q2DenseDistinctRankCollectRefsNanos
+	d.Q2DenseDistinctRankBuildShardsNanos += src.Q2DenseDistinctRankBuildShardsNanos
+	if src.Q2DenseDistinctRankShardCount > d.Q2DenseDistinctRankShardCount {
+		d.Q2DenseDistinctRankShardCount = src.Q2DenseDistinctRankShardCount
+	}
+	d.Q2DenseDistinctRankRefs += src.Q2DenseDistinctRankRefs
+	if src.Q2DenseDistinctRankMaxShardRefs > d.Q2DenseDistinctRankMaxShardRefs {
+		d.Q2DenseDistinctRankMaxShardRefs = src.Q2DenseDistinctRankMaxShardRefs
+	}
+	if src.Q2DenseDistinctGlobalRanks > d.Q2DenseDistinctGlobalRanks {
+		d.Q2DenseDistinctGlobalRanks = src.Q2DenseDistinctGlobalRanks
+	}
 	d.Q2GroupGlobalDictionaryRankNanos += src.Q2GroupGlobalDictionaryRankNanos
 	d.Q2DistinctGlobalDictionaryRankNanos += src.Q2DistinctGlobalDictionaryRankNanos
 	d.Q2GroupGlobalCodeRemapNanos += src.Q2GroupGlobalCodeRemapNanos
@@ -1363,6 +1396,19 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPolicyW
 			prepareDiagnostics.Q2DenseDistinctGlobalRankNanos += timing.distinctRankNanos
 			prepareDiagnostics.Q2LocalRankNanos += timing.localRankNanos
 			prepareDiagnostics.Q2DensePartLocalRankNanos += timing.localRankNanos
+			prepareDiagnostics.Q2DenseDistinctRankPlanNanos += timing.distinctRankPlanNanos
+			prepareDiagnostics.Q2DenseDistinctRankCollectRefsNanos += timing.distinctRankCollectRefsNanos
+			prepareDiagnostics.Q2DenseDistinctRankBuildShardsNanos += timing.distinctRankBuildShardsNanos
+			if timing.distinctRankShardCount > prepareDiagnostics.Q2DenseDistinctRankShardCount {
+				prepareDiagnostics.Q2DenseDistinctRankShardCount = timing.distinctRankShardCount
+			}
+			prepareDiagnostics.Q2DenseDistinctRankRefs += timing.distinctRankRefs
+			if timing.distinctRankMaxShardRefs > prepareDiagnostics.Q2DenseDistinctRankMaxShardRefs {
+				prepareDiagnostics.Q2DenseDistinctRankMaxShardRefs = timing.distinctRankMaxShardRefs
+			}
+			if timing.distinctRankGlobalDistinctRankCount > prepareDiagnostics.Q2DenseDistinctGlobalRanks {
+				prepareDiagnostics.Q2DenseDistinctGlobalRanks = timing.distinctRankGlobalDistinctRankCount
+			}
 		}
 		return err
 	}
@@ -1525,8 +1571,15 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPartsPa
 }
 
 type columnTypedColumnDenseGroupCountDistinctReferenceFillTiming struct {
-	distinctRankNanos int64
-	localRankNanos    int64
+	distinctRankNanos                   int64
+	localRankNanos                      int64
+	distinctRankPlanNanos               int64
+	distinctRankCollectRefsNanos        int64
+	distinctRankBuildShardsNanos        int64
+	distinctRankShardCount              int
+	distinctRankRefs                    int
+	distinctRankMaxShardRefs            int
+	distinctRankGlobalDistinctRankCount int
 }
 
 func columnTypedColumnDenseStringCodeHasMissing(column *columnTypedColumnDenseStringCodeColumn) bool {
@@ -1567,11 +1620,16 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 		return &part.Distinct
 	})
 	if err != nil {
-		timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		timing.distinctRankPlanNanos += elapsed
+		timing.distinctRankNanos += elapsed
 		return timing, err
 	}
 	shardCount := columnTypedColumnDenseGroupCountDistinctShardedRankShardCount(capacity, workers)
-	timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+	timing.distinctRankShardCount = shardCount
+	elapsed := time.Since(phaseStart).Nanoseconds()
+	timing.distinctRankPlanNanos += elapsed
+	timing.distinctRankNanos += elapsed
 
 	var shardRefs [][]uint64
 	includeEmpty := false
@@ -1601,10 +1659,15 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 	phaseStart = time.Now()
 	shardRefs, err = columnTypedColumnDenseGroupCountDistinctCollectShardRankRefs(parts, shardCount, capacity, workers)
 	if err != nil {
-		timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		timing.distinctRankCollectRefsNanos += elapsed
+		timing.distinctRankNanos += elapsed
 		return timing, err
 	}
-	timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+	timing.distinctRankRefs, timing.distinctRankMaxShardRefs = columnTypedColumnDenseGroupCountDistinctShardRankRefStats(shardRefs)
+	elapsed = time.Since(phaseStart).Nanoseconds()
+	timing.distinctRankCollectRefsNanos += elapsed
+	timing.distinctRankNanos += elapsed
 
 	phaseStart = time.Now()
 	emptyShardIdx := -1
@@ -1613,7 +1676,9 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 	}
 	shards, err := columnTypedColumnDenseGroupCountDistinctBuildShardedRanksFromRefs(parts, shardRefs, emptyShardIdx, workers)
 	if err != nil {
-		timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		timing.distinctRankBuildShardsNanos += elapsed
+		timing.distinctRankNanos += elapsed
 		return timing, err
 	}
 	offsets := make([]uint32, len(shards))
@@ -1623,7 +1688,9 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 			continue
 		}
 		if cardinality > int(^uint32(0)) || len(shard) > int(^uint32(0))-cardinality {
-			timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+			elapsed := time.Since(phaseStart).Nanoseconds()
+			timing.distinctRankBuildShardsNanos += elapsed
+			timing.distinctRankNanos += elapsed
 			return timing, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
 		}
 		offsets[shardIdx] = uint32(cardinality)
@@ -1636,10 +1703,15 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 		emptyRank = offsets[emptyLookupShardIdx] + localRank
 		emptyOK = true
 	} else if includeEmpty {
-		timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		timing.distinctRankBuildShardsNanos += elapsed
+		timing.distinctRankNanos += elapsed
 		return timing, fmt.Errorf("collections: dense grouped count-distinct empty-string global rank missing")
 	}
-	timing.distinctRankNanos += time.Since(phaseStart).Nanoseconds()
+	timing.distinctRankGlobalDistinctRankCount = cardinality
+	elapsed = time.Since(phaseStart).Nanoseconds()
+	timing.distinctRankBuildShardsNanos += elapsed
+	timing.distinctRankNanos += elapsed
 
 	phaseStart = time.Now()
 	if err := columnTypedColumnDenseGroupCountDistinctAddShardedRankOffsets(parts, shardRefs, offsets, workers); err != nil {
@@ -1743,6 +1815,16 @@ func columnTypedColumnDenseGroupCountDistinctNewShardRankRefs(shardCount, capaci
 		refs[shardIdx] = make([]uint64, 0, shardCapacity)
 	}
 	return refs
+}
+
+func columnTypedColumnDenseGroupCountDistinctShardRankRefStats(shardRefs [][]uint64) (total, maxShard int) {
+	for _, refs := range shardRefs {
+		total += len(refs)
+		if len(refs) > maxShard {
+			maxShard = len(refs)
+		}
+	}
+	return total, maxShard
 }
 
 func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsPart(parts []columnTypedColumnPhysicalQueryPart, partIdx int, shardRefs [][]uint64) error {

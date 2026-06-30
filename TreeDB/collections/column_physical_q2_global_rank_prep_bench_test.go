@@ -238,6 +238,18 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 		diagnostics.Q2DensePartLocalRankNanos != diagnostics.Q2LocalRankNanos {
 		t.Fatalf("reference-fill diagnostics=%+v want dense q2 distinct/local split", diagnostics)
 	}
+	distinctSubphaseTotal := diagnostics.Q2DenseDistinctRankPlanNanos +
+		diagnostics.Q2DenseDistinctRankCollectRefsNanos +
+		diagnostics.Q2DenseDistinctRankBuildShardsNanos
+	if distinctSubphaseTotal != diagnostics.Q2DenseDistinctGlobalRankNanos {
+		t.Fatalf("reference-fill distinct rank subphases=%d want aggregate=%d diagnostics=%+v", distinctSubphaseTotal, diagnostics.Q2DenseDistinctGlobalRankNanos, diagnostics)
+	}
+	if diagnostics.Q2DenseDistinctRankShardCount == 0 ||
+		diagnostics.Q2DenseDistinctRankRefs != 4 ||
+		diagnostics.Q2DenseDistinctRankMaxShardRefs == 0 ||
+		diagnostics.Q2DenseDistinctGlobalRanks != 4 {
+		t.Fatalf("reference-fill count diagnostics=%+v want shard count, 4 refs, max shard refs, 4 global ranks", diagnostics)
+	}
 	distinct0 := parts[0].DenseGroupCountDistinct.Distinct
 	distinct1 := parts[1].DenseGroupCountDistinct.Distinct
 	if distinct0.GlobalDictionary != nil || distinct1.GlobalDictionary != nil {
@@ -451,6 +463,13 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 						b.ReportMetric(float64(diagnostics.Q2GroupRankNanos)/float64(b.N), "diag_group_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2DistinctRankNanos)/float64(b.N), "diag_distinct_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2LocalRankNanos)/float64(b.N), "diag_local_rank_ns/op")
+						b.ReportMetric(float64(diagnostics.Q2DenseDistinctRankPlanNanos)/float64(b.N), "diag_dense_distinct_rank_plan_ns/op")
+						b.ReportMetric(float64(diagnostics.Q2DenseDistinctRankCollectRefsNanos)/float64(b.N), "diag_dense_distinct_rank_collect_refs_ns/op")
+						b.ReportMetric(float64(diagnostics.Q2DenseDistinctRankBuildShardsNanos)/float64(b.N), "diag_dense_distinct_rank_build_shards_ns/op")
+						b.ReportMetric(float64(diagnostics.Q2DenseDistinctRankShardCount), "diag_dense_distinct_rank_shards/op")
+						b.ReportMetric(float64(diagnostics.Q2DenseDistinctRankRefs)/float64(b.N), "diag_dense_distinct_rank_refs/op")
+						b.ReportMetric(float64(diagnostics.Q2DenseDistinctRankMaxShardRefs), "diag_dense_distinct_rank_max_shard_refs/op")
+						b.ReportMetric(float64(diagnostics.Q2DenseDistinctGlobalRanks), "diag_dense_distinct_global_ranks/op")
 						b.ReportMetric(currentStrategy, "current_strategy/op")
 						b.ReportMetric(shardedStrategy, "sharded_strategy/op")
 					}
