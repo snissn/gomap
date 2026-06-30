@@ -809,7 +809,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnaps
 	rawScratch = raw
 	switch {
 	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
-		part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
+		part, err = decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw, prepareDiagnostics)
 	case columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req):
 		part, err = decodeTypedColumnPhysicalQueryDenseGroupHourCountPart(plan, view.FullConfig.SchemaHash, typedRef, physical, raw)
 	case columnTypedColumnPhysicalQueryUseDenseInt64Span(plan, req):

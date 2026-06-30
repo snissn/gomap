@@ -195,6 +195,7 @@ u64       ApplyTerm
 u64       ApplyIndex
 bytes[32] CommandDigestV1
 u64       AppliedCommandLSN
+bytes[32] LogicalDigestV1 // logical DB digest at this apply boundary
 ```
 
 Result payload:
@@ -214,6 +215,7 @@ bytes     DeterministicErrorCode
 i64       AffectedCount
 i64       MatchedCount
 bytes[32] ResultDigest   // LogicalDigestV1 bytes when apply succeeded
+bytes[32] ProgressLogicalDigestV1 // logical digest to repair missing progress
 ```
 
 New v1 writers include `MatchedCount`. V1 decoders MUST also accept legacy

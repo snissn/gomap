@@ -116,11 +116,11 @@ func TestDecodeDurableApplyResultRecordV1ToleratesLegacyMissingMatchedCount(t *t
 	if err != nil {
 		t.Fatalf("encodeDurableApplyResultRecordV1: %v", err)
 	}
-	if len(payload) < 40 {
-		t.Fatalf("encoded payload length=%d, want at least matched count plus digest", len(payload))
+	if len(payload) < 72 {
+		t.Fatalf("encoded payload length=%d, want at least matched count plus result/progress digests", len(payload))
 	}
-	legacy := append([]byte(nil), payload[:len(payload)-40]...)
-	legacy = append(legacy, payload[len(payload)-32:]...)
+	legacy := append([]byte(nil), payload[:len(payload)-72]...)
+	legacy = append(legacy, payload[len(payload)-64:]...)
 
 	decoded, err := decodeDurableApplyResultRecordV1(legacy)
 	if err != nil {
@@ -130,6 +130,38 @@ func TestDecodeDurableApplyResultRecordV1ToleratesLegacyMissingMatchedCount(t *t
 	want.Result.MatchedCount = 0
 	if !reflect.DeepEqual(decoded, want) {
 		t.Fatalf("decoded legacy record=%+v want %+v", decoded, want)
+	}
+}
+
+func TestDurableApplyResultStorePreservesProgressLogicalDigest(t *testing.T) {
+	dir := t.TempDir()
+	results, err := OpenDurableApplyResultStore(dir, DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("OpenDurableApplyResultStore: %v", err)
+	}
+	record := testDurableApplyResultRecord(9, 1, "durable:progress-digest")
+	record.ProgressLogicalDigestV1 = LogicalDigestV1(testDurableDigest(200))
+	if err := results.RecordApplyResult(record); err != nil {
+		t.Fatalf("RecordApplyResult: %v", err)
+	}
+	if err := results.Close(); err != nil {
+		t.Fatalf("Close results: %v", err)
+	}
+
+	reopened, err := OpenDurableApplyResultStore(dir, DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("Reopen DurableApplyResultStore: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	got, ok, err := reopened.LookupApplyResult(record.EntryID)
+	if err != nil || !ok {
+		t.Fatalf("LookupApplyResult after reopen=(%+v,%t,%v), want record", got, ok, err)
+	}
+	if got.ProgressLogicalDigestV1 != record.ProgressLogicalDigestV1 {
+		t.Fatalf("progress logical digest after reopen=%s, want %s", got.ProgressLogicalDigestV1.Hex(), record.ProgressLogicalDigestV1.Hex())
+	}
+	if got.Result.ResultDigest != record.Result.ResultDigest {
+		t.Fatalf("result digest after reopen=%s, want %s", got.Result.ResultDigest.Hex(), record.Result.ResultDigest.Hex())
 	}
 }
 
@@ -455,10 +487,11 @@ func testDurableApplyResultRecord(seed byte, index uint64, key string) ApplyResu
 func testDurableApplyResultRecordBytes(seed byte, index uint64, key []byte) ApplyResultRecordV1 {
 	digest := testDurableDigest(seed)
 	return ApplyResultRecordV1{
-		EntryID:           raftentry.ApplyEntryID{Term: 1, Index: index},
-		CommandDigest:     digest,
-		IdempotencyKey:    append([]byte(nil), key...),
-		AppliedCommandLSN: index,
+		EntryID:                 raftentry.ApplyEntryID{Term: 1, Index: index},
+		CommandDigest:           digest,
+		IdempotencyKey:          append([]byte(nil), key...),
+		AppliedCommandLSN:       index,
+		ProgressLogicalDigestV1: LogicalDigestV1(testDurableDigest(seed + 100)),
 		Result: raftentry.ApplyResultV1{
 			Status:        raftentry.ApplyStatusApplied,
 			CommandDigest: digest,
