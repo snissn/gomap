@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -23,6 +24,10 @@ const (
 	// that the test injected as already committed. It is not production Raft
 	// consensus evidence.
 	EvidenceInjectedCommittedEntryReplayV1 EvidenceKindV1 = "injected-committed-entry-replay-v1"
+	// EvidenceInjectedSnapshotInstallV1 means the harness reconstructed a
+	// logical snapshot cut from injected committed entries. It is not production
+	// Raft snapshot-transfer evidence.
+	EvidenceInjectedSnapshotInstallV1 EvidenceKindV1 = "injected-snapshot-install-v1"
 )
 
 var (
@@ -69,6 +74,19 @@ type CommitEvidenceV1 struct {
 	ProductionConsensus bool
 	EntryIDs            []raftentry.ApplyEntryID
 	Applied             map[raftcluster.NodeID][]raftentry.ApplyResultV1
+}
+
+type SnapshotInstallEvidenceV1 struct {
+	Kind               EvidenceKindV1
+	Installed          bool
+	ProductionSnapshot bool
+	Manifest           raftcluster.SnapshotManifestV1
+	EntryIDs           []raftentry.ApplyEntryID
+	Applied            []raftentry.ApplyResultV1
+}
+
+func (e SnapshotInstallEvidenceV1) ProvesProductionSnapshot() bool {
+	return e.ProductionSnapshot
 }
 
 func (e CommitEvidenceV1) ProvesProductionConsensus() bool {
@@ -294,6 +312,101 @@ func (h *Harness) CatchUpNodeThrough(id raftcluster.NodeID, maxIndex uint64) ([]
 	return h.catchUpNodeThrough(id, maxIndex)
 }
 
+func (h *Harness) InstallSnapshotPrefixToNodeV1(id raftcluster.NodeID, manifest raftcluster.SnapshotManifestV1) (SnapshotInstallEvidenceV1, error) {
+	evidence := SnapshotInstallEvidenceV1{
+		Kind:               EvidenceInjectedSnapshotInstallV1,
+		ProductionSnapshot: false,
+		Manifest:           manifest,
+	}
+	if h == nil {
+		return evidence, ErrHarnessClosed
+	}
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return evidence, ErrHarnessClosed
+	}
+	node, ok := h.nodes[id]
+	if !ok {
+		h.mu.Unlock()
+		return evidence, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
+	}
+	if _, ok := node.LastApplied(); ok {
+		h.mu.Unlock()
+		return evidence, fmt.Errorf("%w: node %s already has local applied progress", ErrCommittedLogConflict, id)
+	}
+	if manifest.LastIncludedIndex == 0 || manifest.LastIncludedIndex > uint64(len(h.committed)) {
+		h.mu.Unlock()
+		return evidence, fmt.Errorf("%w: snapshot index %d beyond committed log length %d", ErrCommittedLogGap, manifest.LastIncludedIndex, len(h.committed))
+	}
+	last := h.committed[manifest.LastIncludedIndex-1]
+	if last.Term != manifest.LastIncludedTerm || last.Index != manifest.LastIncludedIndex {
+		h.mu.Unlock()
+		return evidence, fmt.Errorf("%w: snapshot last included %d/%d does not match committed log %d/%d", ErrCommittedLogConflict, manifest.LastIncludedTerm, manifest.LastIncludedIndex, last.Term, last.Index)
+	}
+	prefix := make([]raftfsm.CommittedEntryV1, 0, manifest.LastIncludedIndex)
+	for _, entry := range h.committed[:manifest.LastIncludedIndex] {
+		prefix = append(prefix, cloneCommittedEntry(entry))
+	}
+	evidence.EntryIDs = applyEntryIDs(prefix)
+	rootDir := h.rootDir
+	groupID := h.groupID
+	nodeConfigs := append([]NodeConfig(nil), h.nodeConfigs...)
+	storeOptions := h.storeOptions
+	h.mu.Unlock()
+
+	if err := verifySnapshotPrefix(rootDir, groupID, id, nodeConfigs, storeOptions, manifest, prefix); err != nil {
+		return evidence, err
+	}
+	results, err := node.ApplyCommittedEntriesV1(prefix...)
+	evidence.Applied = results
+	if err != nil {
+		return evidence, err
+	}
+	if err := node.fsm.VerifyInstalledSnapshotManifestV1(manifest); err != nil {
+		return evidence, err
+	}
+	evidence.Installed = true
+	return evidence, nil
+}
+
+// ReplaySnapshotTailToNodeV1 verifies that id contains the manifest boundary,
+// then replays only committed entries after LastIncludedIndex.
+func (h *Harness) ReplaySnapshotTailToNodeV1(id raftcluster.NodeID, manifest raftcluster.SnapshotManifestV1) ([]raftentry.ApplyResultV1, error) {
+	if h == nil {
+		return nil, ErrHarnessClosed
+	}
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, ErrHarnessClosed
+	}
+	node, ok := h.nodes[id]
+	if !ok {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
+	}
+	if manifest.LastIncludedIndex == 0 || manifest.LastIncludedIndex > uint64(len(h.committed)) {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("%w: snapshot index %d beyond committed log length %d", ErrCommittedLogGap, manifest.LastIncludedIndex, len(h.committed))
+	}
+	last := h.committed[manifest.LastIncludedIndex-1]
+	if last.Term != manifest.LastIncludedTerm || last.Index != manifest.LastIncludedIndex {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("%w: snapshot last included %d/%d does not match committed log %d/%d", ErrCommittedLogConflict, manifest.LastIncludedTerm, manifest.LastIncludedIndex, last.Term, last.Index)
+	}
+	tail := make([]raftfsm.CommittedEntryV1, 0, len(h.committed)-int(manifest.LastIncludedIndex))
+	for _, entry := range h.committed[manifest.LastIncludedIndex:] {
+		tail = append(tail, cloneCommittedEntry(entry))
+	}
+	h.mu.Unlock()
+
+	if err := node.fsm.VerifyInstalledSnapshotManifestV1(manifest); err != nil {
+		return nil, err
+	}
+	return node.ApplyCommittedEntriesV1(tail...)
+}
+
 func (h *Harness) catchUpNodeThrough(id raftcluster.NodeID, maxIndex uint64) ([]raftentry.ApplyResultV1, error) {
 	if h == nil {
 		return nil, ErrHarnessClosed
@@ -344,6 +457,44 @@ func (h *Harness) catchUpNodeThrough(id raftcluster.NodeID, maxIndex uint64) ([]
 		}
 	}
 	return node.ApplyCommittedEntriesV1(entries...)
+}
+
+func verifySnapshotPrefix(rootDir string, groupID raftcluster.GroupID, targetID raftcluster.NodeID, nodeConfigs []NodeConfig, storeOptions raftapply.DurableApplyStoreOptions, manifest raftcluster.SnapshotManifestV1, prefix []raftfsm.CommittedEntryV1) error {
+	probeRoot, err := os.MkdirTemp(rootDir, "snapshot-install-probe-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(probeRoot) }()
+	dbDir := filepath.Join(probeRoot, "nodes", string(targetID), "db")
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                          dbDir,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		CommandWALSegmentTargetBytes: 1 << 20,
+		DisableBackgroundPrune:       true,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	fsm, err := raftfsm.Open(raftfsm.Options{
+		DB: db,
+		Cluster: raftcluster.Config{
+			Dir:     dbDir,
+			NodeID:  targetID,
+			GroupID: groupID,
+			Peers:   peersForNodeConfigs(nodeConfigs),
+		},
+		StoreOptions: storeOptions,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = fsm.Close() }()
+	if _, err := fsm.ApplyCommittedEntriesV1(prefix); err != nil {
+		return err
+	}
+	return fsm.VerifyInstalledSnapshotManifestV1(manifest)
 }
 
 func (h *Harness) openNode(cfg NodeConfig) (*Node, error) {
