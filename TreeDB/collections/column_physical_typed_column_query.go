@@ -345,7 +345,8 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 }
 
 type columnTypedColumnPhysicalAggregateSummary struct {
-	groups              []ColumnPhysicalQueryGroup
+	groups []ColumnPhysicalQueryGroup
+	// Logical rows consumed while building the summary; summary run reuses groups.
 	rowsScanned         int
 	matchedRows         int
 	reduceRows          int
