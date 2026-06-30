@@ -94,6 +94,55 @@ func TestRecoveryStatusV1TracksSnapshotTailAndAppliedIndexReadiness(t *testing.T
 	}
 }
 
+func TestRecoveryStatusV1VerifiesDuplicateSnapshotBoundaryLogicalDigest(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	users := deterministicCreateCollectionEntry(t, "users", "fsm:recovery-status:duplicate-users")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(9, 1, users)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 users: %v result=%+v", err, result)
+	}
+	orders := deterministicCreateCollectionEntry(t, "orders", "fsm:recovery-status:orders-before-duplicate")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(9, 2, orders)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 orders: %v result=%+v", err, result)
+	}
+	duplicate, err := fsm.ApplyCommittedEntryV1(committedCommand(9, 3, users))
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 duplicate users: %v result=%+v", err, duplicate)
+	}
+	manifest, err := fsm.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712347002, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+	if duplicate.ResultDigest.Hex() == manifest.LogicalDigestV1 {
+		t.Fatalf("duplicate result digest unexpectedly equals manifest digest %s", manifest.LogicalDigestV1)
+	}
+
+	audits := deterministicCreateCollectionEntry(t, "audits", "fsm:recovery-status:tail-after-duplicate")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(9, 4, audits)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 audits: %v result=%+v", err, result)
+	}
+	status, err := fsm.RecoveryStatusV1(context.Background(), RecoveryStatusOptionsV1{
+		SnapshotManifest:  &manifest,
+		TailTargetIndex:   4,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 duplicate boundary: %v", err)
+	}
+	if status.Readiness != raftcluster.RecoveryReadinessReadyAppliedIndexV1 ||
+		status.SnapshotState != raftcluster.RecoverySnapshotStateManifestVerifiedV1 ||
+		status.TailState != raftcluster.RecoveryTailStateCompleteV1 ||
+		status.ReadSafetyState != raftcluster.RecoveryReadSafetyAppliedIndexSatisfiedV1 ||
+		!status.SafeToServeReads {
+		t.Fatalf("status=%+v, want verified duplicate snapshot boundary with complete tail and safe reads", status)
+	}
+}
+
 func TestRecoveryStatusV1MismatchedManifestRemainsUnsafe(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")

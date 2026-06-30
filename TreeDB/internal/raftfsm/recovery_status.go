@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
@@ -115,7 +116,7 @@ func (f *FSM) verifyRecoverySnapshotManifestV1(manifest raftcluster.SnapshotMani
 	if localLSN < manifest.AppliedCommandLSN {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "snapshot manifest AppliedCommandLSN %d is ahead of local coverage %d", manifest.AppliedCommandLSN, localLSN)
 	}
-	result, ok, err := f.results.LookupApplyResult(raftentry.ApplyEntryID{
+	boundary, ok, err := f.progress.LookupApplyProgress(raftentry.ApplyEntryID{
 		Term:  manifest.LastIncludedTerm,
 		Index: manifest.LastIncludedIndex,
 	})
@@ -123,13 +124,16 @@ func (f *FSM) verifyRecoverySnapshotManifestV1(manifest raftcluster.SnapshotMani
 		return err
 	}
 	if !ok {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable result for snapshot boundary %d/%d", manifest.LastIncludedTerm, manifest.LastIncludedIndex)
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable progress for snapshot boundary %d/%d", manifest.LastIncludedTerm, manifest.LastIncludedIndex)
 	}
-	if result.AppliedCommandLSN != manifest.AppliedCommandLSN {
-		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest AppliedCommandLSN %d does not match boundary result coverage %d", manifest.AppliedCommandLSN, result.AppliedCommandLSN)
+	if boundary.AppliedCommandLSN != manifest.AppliedCommandLSN {
+		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest AppliedCommandLSN %d does not match boundary progress coverage %d", manifest.AppliedCommandLSN, boundary.AppliedCommandLSN)
 	}
-	if result.Result.ResultDigest.Hex() != manifest.LogicalDigestV1 {
-		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest logical digest %s does not match boundary result digest %s", manifest.LogicalDigestV1, result.Result.ResultDigest.Hex())
+	if boundary.LogicalDigestV1 == (raftapply.LogicalDigestV1{}) {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable logical digest for snapshot boundary %d/%d", manifest.LastIncludedTerm, manifest.LastIncludedIndex)
+	}
+	if boundary.LogicalDigestV1.Hex() != manifest.LogicalDigestV1 {
+		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest logical digest %s does not match boundary logical digest %s", manifest.LogicalDigestV1, boundary.LogicalDigestV1.Hex())
 	}
 	return nil
 }

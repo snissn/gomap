@@ -2350,6 +2350,10 @@ func (recordProgressStoreFailAfterPreflight) RecordApplied(ApplyProgressRecordV1
 	return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "progress store unavailable after apply")
 }
 
+func (recordProgressStoreFailAfterPreflight) LookupApplyProgress(raftentry.ApplyEntryID) (ApplyProgressRecordV1, bool, error) {
+	return ApplyProgressRecordV1{}, false, nil
+}
+
 func (recordProgressStoreFailAfterPreflight) LastApplied() (raftentry.ApplyEntryID, bool) {
 	return raftentry.ApplyEntryID{}, false
 }

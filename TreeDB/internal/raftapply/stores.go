@@ -74,6 +74,7 @@ type ApplyProgressRecordV1 struct {
 	EntryID           raftentry.ApplyEntryID
 	CommandDigest     raftentry.CommandDigestV1
 	AppliedCommandLSN uint64
+	LogicalDigestV1   LogicalDigestV1
 }
 
 // ApplyProgressStore checks monotonic apply order and records durable progress.
@@ -81,6 +82,7 @@ type ApplyProgressStore interface {
 	CheckCanApply(raftentry.ApplyEntryID) error
 	CheckCanRecordApplied(ApplyProgressRecordV1) error
 	RecordApplied(ApplyProgressRecordV1) error
+	LookupApplyProgress(raftentry.ApplyEntryID) (ApplyProgressRecordV1, bool, error)
 	LastApplied() (raftentry.ApplyEntryID, bool)
 }
 
@@ -263,6 +265,11 @@ func (s *MemoryApplyProgressStore) checkCanRecordAppliedLocked(record ApplyProgr
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply progress digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
+		if existing.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.LogicalDigestV1 != record.LogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply progress logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
 		return nil
 	}
 	if err := s.checkCanApplyLocked(record.EntryID); err != nil {
@@ -281,6 +288,16 @@ func (s *MemoryApplyProgressStore) LastApplied() (raftentry.ApplyEntryID, bool) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.last, s.last.Index != 0
+}
+
+func (s *MemoryApplyProgressStore) LookupApplyProgress(id raftentry.ApplyEntryID) (ApplyProgressRecordV1, bool, error) {
+	if s == nil {
+		return ApplyProgressRecordV1{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record, ok := s.records[id]
+	return record, ok, nil
 }
 
 func (s *MemoryApplyProgressStore) LastAppliedRecord() (ApplyProgressRecordV1, bool) {

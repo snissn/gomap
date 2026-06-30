@@ -379,6 +379,19 @@ func (s *DurableApplyProgressStore) LastApplied() (raftentry.ApplyEntryID, bool)
 	return s.last, s.last.Index != 0
 }
 
+func (s *DurableApplyProgressStore) LookupApplyProgress(id raftentry.ApplyEntryID) (ApplyProgressRecordV1, bool, error) {
+	if s == nil {
+		return ApplyProgressRecordV1{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkOpenLocked("lookup apply progress"); err != nil {
+		return ApplyProgressRecordV1{}, false, err
+	}
+	record, ok := s.records[id]
+	return record, ok, nil
+}
+
 func (s *DurableApplyProgressStore) LastAppliedRecord() (ApplyProgressRecordV1, bool) {
 	if s == nil {
 		return ApplyProgressRecordV1{}, false
@@ -424,6 +437,11 @@ func (s *DurableApplyProgressStore) replayApplyProgressRecord(record ApplyProgre
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: durable progress metadata digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
+		if existing.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.LogicalDigestV1 != record.LogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: durable progress metadata logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
 		return nil
 	}
 	if err := s.checkCanRecordAppliedLocked(record); err != nil {
@@ -440,6 +458,11 @@ func (s *DurableApplyProgressStore) checkCanRecordAppliedLocked(record ApplyProg
 	if existing, ok := s.records[record.EntryID]; ok {
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply progress digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
+		if existing.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.LogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.LogicalDigestV1 != record.LogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply progress logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
 		return nil
 	}
@@ -683,6 +706,7 @@ func encodeDurableApplyProgressRecordV1(record ApplyProgressRecordV1) ([]byte, e
 	dst = appendApplyEntryID(dst, record.EntryID)
 	dst = append(dst, record.CommandDigest[:]...)
 	dst = appendU64(dst, record.AppliedCommandLSN)
+	dst = append(dst, record.LogicalDigestV1[:]...)
 	return dst, nil
 }
 
@@ -700,10 +724,14 @@ func decodeDurableApplyProgressRecordV1(payload []byte) (ApplyProgressRecordV1, 
 	if err != nil {
 		return ApplyProgressRecordV1{}, err
 	}
+	logical, err := r.logicalDigest()
+	if err != nil {
+		return ApplyProgressRecordV1{}, err
+	}
 	if err := r.done(); err != nil {
 		return ApplyProgressRecordV1{}, err
 	}
-	return ApplyProgressRecordV1{EntryID: id, CommandDigest: digest, AppliedCommandLSN: lsn}, nil
+	return ApplyProgressRecordV1{EntryID: id, CommandDigest: digest, AppliedCommandLSN: lsn, LogicalDigestV1: logical}, nil
 }
 
 func encodeDurableApplyResultRecordV1(record ApplyResultRecordV1) ([]byte, error) {
@@ -802,6 +830,16 @@ func (r *durableApplyPayloadReader) digest() (raftentry.CommandDigestV1, error) 
 		return raftentry.CommandDigestV1{}, err
 	}
 	var out raftentry.CommandDigestV1
+	copy(out[:], b)
+	return out, nil
+}
+
+func (r *durableApplyPayloadReader) logicalDigest() (LogicalDigestV1, error) {
+	b, err := r.fixed(32)
+	if err != nil {
+		return LogicalDigestV1{}, err
+	}
+	var out LogicalDigestV1
 	copy(out[:], b)
 	return out, nil
 }
