@@ -46,6 +46,7 @@ type MockBackend struct {
 	pointerEntries               map[string]page.ValuePtr
 	setOpsInlineValueLimit       int
 	lastSpanNativeFallbackReason db.FlushSpanRunFallbackReason
+	spanNativeFallbackReasons    []db.FlushSpanRunFallbackReason
 	fragReport                   map[string]string
 	fragErr                      error
 	vacuumErr                    error
@@ -770,6 +771,7 @@ func (b *MockBatch) WriteSync() error {
 func (b *MockBatch) SetFlushApplySpanNativeFallback(reason db.FlushSpanRunFallbackReason) {
 	b.mb.mu.Lock()
 	b.mb.lastSpanNativeFallbackReason = reason
+	b.mb.spanNativeFallbackReasons = append(b.mb.spanNativeFallbackReasons, reason)
 	b.mb.mu.Unlock()
 }
 
