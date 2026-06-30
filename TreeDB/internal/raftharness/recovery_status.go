@@ -56,10 +56,14 @@ func (h *Harness) RecoveryStatusV1(ctx context.Context, nodeID raftcluster.NodeI
 	if err != nil {
 		return status, err
 	}
-	if opts.RequireReadSafety && status.SafeToServeReads {
+	if harnessRecoveryReadSafetyRequestedV1(opts) && status.SafeToServeReads {
 		status = validateHarnessReadSafetyPrefixV1(status, node, committed)
 	}
 	return status, nil
+}
+
+func harnessRecoveryReadSafetyRequestedV1(opts RecoveryStatusOptionsV1) bool {
+	return opts.RequireReadSafety || opts.ReadBarrier != (raftcluster.AppliedIndexReadBarrier{})
 }
 
 func (h *Harness) LogTruncationRecoveryStatusV1(nodeID raftcluster.NodeID) (raftcluster.RecoveryStatusV1, error) {

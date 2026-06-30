@@ -195,6 +195,21 @@ func TestRecoveryStatusReadSafetyRejectsDivergentAppliedTail(t *testing.T) {
 	if got := strings.Join(status.Errors, "\n"); !strings.Contains(got, "committed-prefix read safety validation failed") {
 		t.Fatalf("divergent tail errors=%q, want committed-prefix validation error", got)
 	}
+
+	status, err = h.RecoveryStatusV1(context.Background(), "node-b", RecoveryStatusOptionsV1{
+		SnapshotManifest: &manifest,
+		ReadBarrier: raftcluster.AppliedIndexReadBarrier{
+			MinAppliedIndex: 2,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 explicit read barrier divergent tail: %v", err)
+	}
+	if status.Readiness == raftcluster.RecoveryReadinessReadyAppliedIndexV1 ||
+		status.SafeToServeReads ||
+		status.ReadSafetyState != raftcluster.RecoveryReadSafetyTargetMismatchV1 {
+		t.Fatalf("divergent tail explicit barrier status=%+v, want unsafe read-safety mismatch", status)
+	}
 }
 
 func TestRecoveryStatusUnsupportedOperationsFailClosed(t *testing.T) {
