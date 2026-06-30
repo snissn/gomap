@@ -1445,6 +1445,14 @@ func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.
 		meta.Indexes[0].StoragePolicy != collections.RootStorageFast {
 		t.Fatalf("created storage policies data=%q index=%q indexes=%+v, want fast policies", meta.Options.DataRootStoragePolicy, meta.Options.IndexStateStoragePolicy, meta.Indexes)
 	}
+	created, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users after create: %v", err)
+	}
+	applied := created.Meta()
+	if got, want := encodeCollectionMeta(meta), encodeCollectionMeta(applied); !bytes.Equal(got, want) {
+		t.Fatalf("create response meta=%+v want applied catalog meta=%+v", meta, applied)
+	}
 	if ack, ok, err := responseMetaAckPolicy(createResponse); err != nil || !ok || ack != AckRaftCommitted {
 		t.Fatalf("create response ack=(%d,%v,%v) want raft_committed", ack, ok, err)
 	}
@@ -1763,7 +1771,7 @@ func serveRaftClusterBridgePipe(t testing.TB, admission raftcluster.AdmissionSta
 	server := NewServer(ServerOptions{
 		Collections:      mgr,
 		Backend:          db,
-		ClusterSubmitter: NewRaftClusterSubmitter(bridge),
+		ClusterSubmitter: NewRaftClusterSubmitter(bridge, mgr),
 	})
 	client, _ := servePipe(t, server)
 	t.Cleanup(func() {

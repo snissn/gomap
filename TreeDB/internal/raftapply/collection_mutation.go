@@ -350,12 +350,14 @@ func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionM
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
-		if !prepareFrameDocuments && collectionHasNoSecondaryIndexesV1(collection) {
-			return collection, nil
-		}
 		results, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
 		if err != nil {
 			return nil, codeCollectionApplyError(err)
+		}
+		// No-index preflight can skip retaining command-WAL frame documents,
+		// but it must still run the BSON-set prepare validation above.
+		if !prepareFrameDocuments && collectionHasNoSecondaryIndexesV1(collection) {
+			return collection, nil
 		}
 		mutation.bsonSetMatched = countMatchedUpdateBatchResultsV1(results)
 		mutation.frameDocuments = docs

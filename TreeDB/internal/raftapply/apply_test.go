@@ -1335,6 +1335,30 @@ func TestUpdateBSONSetNoIdempotencyRejectsBeforeAppend(t *testing.T) {
 	}
 }
 
+func TestUpdateBSONSetPreflightRejectsJSONNoIndexBeforeCommit(t *testing.T) {
+	dir := t.TempDir()
+	db := openApplyHarnessDB(t, dir)
+	defer func() { _ = db.Close() }()
+
+	create := deterministicCreateCollectionEntry(t, "users", "client-a:create:users-json", testCreateCollectionMetaOptions{})
+	insert := deterministicInsertBatchEntry(t, "users", "client-a:insert:users-json", nativewire.DocumentFormatJSON,
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"Ada","city":"hnl"}`)},
+	)
+	applyCreateSequence(t, db, create, insert)
+
+	update := deterministicUpdateBSONSetEntry(t, "users", "client-a:update-bson-set:json-no-index", []byte("u1"), []collections.BSONSetField{
+		{Key: "city", Value: testBSONSetRawValue(t, "sfo")},
+	})
+	err := PreflightCommandEntryV1(db, update, applyMeta(1, 3), Options{})
+	if got := codeOf(err); got != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("PreflightCommandEntryV1 code=%s err=%v, want rejected-conflict", got, err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "bson") {
+		t.Fatalf("PreflightCommandEntryV1 err=%v, want BSON format rejection", err)
+	}
+}
+
 func TestLowerCollectionMutationRejectsInvalidIDs(t *testing.T) {
 	tests := []struct {
 		name      string

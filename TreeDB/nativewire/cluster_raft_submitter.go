@@ -16,11 +16,16 @@ import (
 // RaftClusterSubmitter adapts the internal single-group raftcluster bridge to
 // the public nativewire ClusterSubmitter contract.
 type RaftClusterSubmitter struct {
-	Bridge *raftcluster.SingleGroupSubmitter
+	Bridge      *raftcluster.SingleGroupSubmitter
+	Collections *collections.CollectionManager
 }
 
-func NewRaftClusterSubmitter(bridge *raftcluster.SingleGroupSubmitter) *RaftClusterSubmitter {
-	return &RaftClusterSubmitter{Bridge: bridge}
+func NewRaftClusterSubmitter(bridge *raftcluster.SingleGroupSubmitter, managers ...*collections.CollectionManager) *RaftClusterSubmitter {
+	submitter := &RaftClusterSubmitter{Bridge: bridge}
+	if len(managers) > 0 {
+		submitter.Collections = managers[0]
+	}
+	return submitter
 }
 
 func (s *RaftClusterSubmitter) ClusterAdmissionStatus(ctx context.Context) (ClusterAdmissionStatus, error) {
@@ -47,7 +52,7 @@ func (s *RaftClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return ClusterSubmitResult{}, nativeErrorForRaftClusterSubmit(err)
 	}
-	sections, err := raftClusterResponseSections(result.DecodedEntry, metadata, result)
+	sections, err := raftClusterResponseSections(result.DecodedEntry, metadata, result, s.Collections)
 	if err != nil {
 		return ClusterSubmitResult{}, err
 	}
@@ -60,7 +65,7 @@ func (s *RaftClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	}, nil
 }
 
-func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result raftcluster.SubmitResultV1) ([]iwire.Section, error) {
+func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result raftcluster.SubmitResultV1, manager *collections.CollectionManager) ([]iwire.Section, error) {
 	actualAck := AckPolicy(result.ActualAck)
 	catalogVersion := result.CatalogVersion
 	hasCatalogVersion := result.HasCatalogVersion
@@ -70,7 +75,7 @@ func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata Cluste
 	}
 	switch entry.Decoded.CommandID {
 	case iwire.CommandCreateCollection:
-		rawMeta, err := raftClusterCreateCollectionResponseMeta(entry)
+		rawMeta, err := raftClusterCreateCollectionResponseMeta(entry, manager)
 		if err != nil {
 			return nil, err
 		}
@@ -110,7 +115,7 @@ func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata Cluste
 	}
 }
 
-func raftClusterCreateCollectionResponseMeta(entry raftentry.CommandEntryV1) ([]byte, error) {
+func raftClusterCreateCollectionResponseMeta(entry raftentry.CommandEntryV1, manager *collections.CollectionManager) ([]byte, error) {
 	rawMeta, err := metadataSection(entry.Decoded.Sections, iwire.SectionCollectionMeta)
 	if err != nil {
 		return nil, err
@@ -123,12 +128,14 @@ func raftClusterCreateCollectionResponseMeta(entry raftentry.CommandEntryV1) ([]
 	if err != nil {
 		return nil, err
 	}
-	meta.Options.DataRootStoragePolicy = collections.RootStorageFast
-	meta.Options.IndexStateStoragePolicy = collections.RootStorageFast
-	for i := range meta.Indexes {
-		meta.Indexes[i].StoragePolicy = collections.RootStorageFast
+	if manager == nil {
+		return nil, protocolError(iwire.ErrInternal, "raft cluster submitter cannot return applied create_collection metadata without a collection manager")
 	}
-	return encodeCollectionMeta(meta), nil
+	collection, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		return nil, protocolError(iwire.ErrInternal, "raft cluster submitter applied create_collection but collection %q is not readable: %v", meta.Name, err)
+	}
+	return encodeCollectionMeta(collection.Meta()), nil
 }
 
 func raftClusterMatchedAndAffectedCounts(result raftentry.ApplyResultV1) (int, int, error) {

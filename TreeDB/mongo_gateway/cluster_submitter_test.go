@@ -401,7 +401,7 @@ func newMongoRaftBridgeTestServer(tb testing.TB, admission raftcluster.Admission
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
 	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	server.ClusterSubmitter = treenativewire.NewRaftClusterSubmitter(bridge)
+	server.ClusterSubmitter = treenativewire.NewRaftClusterSubmitter(bridge, server.Collections)
 	server.ClusterCatalogVersion = func(context.Context) (uint64, error) {
 		state := db.State()
 		if state == nil {
