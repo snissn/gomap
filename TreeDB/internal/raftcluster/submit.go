@@ -241,6 +241,12 @@ type CommittedCommandApplierV1 interface {
 	ApplyCommittedCommandEntryV1(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error)
 }
 
+// InitialIndexGapSupportV1 is implemented by durable appliers that can report
+// whether their first applied Raft command may start above index 1.
+type InitialIndexGapSupportV1 interface {
+	AllowsInitialIndexGapV1() bool
+}
+
 type CommittedCommandApplierFunc func(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error)
 
 func (f CommittedCommandApplierFunc) ApplyCommittedCommandEntryV1(ctx context.Context, entry CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {

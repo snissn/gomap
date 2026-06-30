@@ -151,6 +151,10 @@ func (f *FSM) Close() error {
 	return errors.Join(errs...)
 }
 
+func (f *FSM) AllowsInitialIndexGapV1() bool {
+	return f != nil && f.storeOptions.AllowInitialIndexGap
+}
+
 func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
 	if f == nil || f.progress == nil {
 		return raftentry.ApplyEntryID{}, false

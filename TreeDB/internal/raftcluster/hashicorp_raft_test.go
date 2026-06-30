@@ -173,6 +173,58 @@ func TestHashicorpRaftProviderEvidenceFailsClosedWhenNotProven(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftProviderRejectsFSMWithoutInitialIndexGapSupport(t *testing.T) {
+	root := t.TempDir()
+	cfg := Config{
+		Dir:     filepath.Join(root, "db"),
+		NodeID:  "node-a",
+		GroupID: "group-a",
+		Peers: []Peer{
+			{ID: "node-a", Address: "node-a"},
+		},
+	}
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                          cfg.Dir,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		CommandWALSegmentTargetBytes: 1 << 20,
+		DisableBackgroundPrune:       true,
+	})
+	if err != nil {
+		t.Fatalf("Open DB: %v", err)
+	}
+	defer db.Close()
+	fsm, err := raftfsm.Open(raftfsm.Options{
+		DB:      db,
+		Cluster: cfg,
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open FSM: %v", err)
+	}
+	defer fsm.Close()
+	_, transport := hraft.NewInmemTransport(hraft.ServerAddress("node-a"))
+	defer transport.Close()
+
+	provider, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{
+		Cluster:   cfg,
+		Applier:   fsm,
+		Transport: transport,
+	})
+	if provider != nil {
+		_ = provider.Close()
+		t.Fatalf("OpenHashicorpRaftProvider returned provider with invalid FSM gap support")
+	}
+	if !errors.Is(err, ErrInvalidHashicorpRaftProvider) {
+		t.Fatalf("OpenHashicorpRaftProvider err=%v want ErrInvalidHashicorpRaftProvider", err)
+	}
+	if !strings.Contains(err.Error(), "initial Raft log index gaps") {
+		t.Fatalf("OpenHashicorpRaftProvider err=%v missing initial gap reason", err)
+	}
+}
+
 type hashicorpRaftTestCluster struct {
 	nodes map[NodeID]*hashicorpRaftTestNode
 }

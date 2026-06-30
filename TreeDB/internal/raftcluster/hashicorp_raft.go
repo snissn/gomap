@@ -71,6 +71,9 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 	if opts.Applier == nil {
 		return nil, errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("committed command applier is required"))
 	}
+	if err := validateHashicorpRaftApplier(opts.Applier); err != nil {
+		return nil, err
+	}
 	if opts.Transport == nil {
 		return nil, errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("transport is required"))
 	}
@@ -235,6 +238,13 @@ func (p *HashicorpRaftProvider) CommitCommandEntryV1(ctx context.Context, req Co
 			ProductionConsensus: true,
 		},
 	}, nil
+}
+
+func validateHashicorpRaftApplier(applier CommittedCommandApplierV1) error {
+	if gapSupport, ok := applier.(InitialIndexGapSupportV1); ok && !gapSupport.AllowsInitialIndexGapV1() {
+		return errors.Join(ErrInvalidHashicorpRaftProvider, fmt.Errorf("committed command applier must allow initial Raft log index gaps for HashiCorp Raft"))
+	}
+	return nil
 }
 
 func localPeerAddress(cluster ResolvedConfig) (string, bool) {
