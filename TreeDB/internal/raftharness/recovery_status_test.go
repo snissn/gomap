@@ -175,7 +175,9 @@ func TestRecoveryStatusUnsupportedOperationsFailClosed(t *testing.T) {
 		},
 		{
 			name: "production snapshot transfer",
-			run:  func() (raftcluster.RecoveryStatusV1, error) { return h.ProductionSnapshotTransferRecoveryStatusV1("node-b") },
+			run: func() (raftcluster.RecoveryStatusV1, error) {
+				return h.ProductionSnapshotTransferRecoveryStatusV1("node-b")
+			},
 			want: raftcluster.RecoveryUnsupportedProductionSnapshotTransferV1,
 		},
 	}
