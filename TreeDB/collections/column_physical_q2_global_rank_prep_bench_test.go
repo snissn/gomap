@@ -229,6 +229,24 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 			},
 		},
 	}
+	expectedDistinctRankRefs := 0
+	expectedDistinctValues := make(map[string]struct{})
+	expectedDistinctEmptyRank := false
+	for _, part := range parts {
+		distinct := part.DenseGroupCountDistinct.Distinct
+		expectedDistinctRankRefs += len(distinct.Dictionary)
+		for localCode, value := range distinct.Dictionary {
+			if distinct.Valid != nil && localCode < len(distinct.Valid) && !distinct.Valid[localCode] {
+				expectedDistinctEmptyRank = true
+				continue
+			}
+			expectedDistinctValues[value] = struct{}{}
+		}
+	}
+	expectedDistinctGlobalRanks := len(expectedDistinctValues)
+	if expectedDistinctEmptyRank {
+		expectedDistinctGlobalRanks++
+	}
 
 	var diagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
 	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics(parts, &diagnostics); err != nil {
@@ -245,20 +263,20 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 		t.Fatalf("reference-fill distinct rank subphases=%d want aggregate=%d diagnostics=%+v", distinctSubphaseTotal, diagnostics.Q2DenseDistinctGlobalRankNanos, diagnostics)
 	}
 	if diagnostics.Q2DenseDistinctRankShardCount == 0 ||
-		diagnostics.Q2DenseDistinctRankRefs != 4 ||
+		diagnostics.Q2DenseDistinctRankRefs != expectedDistinctRankRefs ||
 		diagnostics.Q2DenseDistinctRankMaxShardRefs == 0 ||
-		diagnostics.Q2DenseDistinctGlobalRanks != 4 {
-		t.Fatalf("reference-fill count diagnostics=%+v want shard count, 4 refs, max shard refs, 4 global ranks", diagnostics)
+		diagnostics.Q2DenseDistinctGlobalRanks != expectedDistinctGlobalRanks {
+		t.Fatalf("reference-fill count diagnostics=%+v want shard count, %d refs, max shard refs, %d global ranks", diagnostics, expectedDistinctRankRefs, expectedDistinctGlobalRanks)
 	}
 	distinct0 := parts[0].DenseGroupCountDistinct.Distinct
 	distinct1 := parts[1].DenseGroupCountDistinct.Distinct
 	if distinct0.GlobalDictionary != nil || distinct1.GlobalDictionary != nil {
 		t.Fatalf("distinct global dictionary allocated part0=%v part1=%v", distinct0.GlobalDictionary, distinct1.GlobalDictionary)
 	}
-	if !distinct0.GlobalCardinalityOK || distinct0.GlobalCardinality != 4 || !distinct1.GlobalCardinalityOK || distinct1.GlobalCardinality != 4 {
-		t.Fatalf("distinct cardinality part0=(%d,%t) part1=(%d,%t) want (4,true)", distinct0.GlobalCardinality, distinct0.GlobalCardinalityOK, distinct1.GlobalCardinality, distinct1.GlobalCardinalityOK)
+	if !distinct0.GlobalCardinalityOK || distinct0.GlobalCardinality != expectedDistinctGlobalRanks || !distinct1.GlobalCardinalityOK || distinct1.GlobalCardinality != expectedDistinctGlobalRanks {
+		t.Fatalf("distinct cardinality part0=(%d,%t) part1=(%d,%t) want (%d,true)", distinct0.GlobalCardinality, distinct0.GlobalCardinalityOK, distinct1.GlobalCardinality, distinct1.GlobalCardinalityOK, expectedDistinctGlobalRanks)
 	}
-	if !distinct0.GlobalEmptyRankOK || !distinct1.GlobalEmptyRankOK || distinct0.GlobalEmptyRank != distinct1.GlobalEmptyRank || distinct0.GlobalEmptyRank >= 4 {
+	if !distinct0.GlobalEmptyRankOK || !distinct1.GlobalEmptyRankOK || distinct0.GlobalEmptyRank != distinct1.GlobalEmptyRank || distinct0.GlobalEmptyRank >= uint32(expectedDistinctGlobalRanks) {
 		t.Fatalf("distinct empty ranks part0=(%d,%t) part1=(%d,%t) want shared rank below cardinality", distinct0.GlobalEmptyRank, distinct0.GlobalEmptyRankOK, distinct1.GlobalEmptyRank, distinct1.GlobalEmptyRankOK)
 	}
 	rankByValue := func(column columnTypedColumnDenseStringCodeColumn, value string) (uint32, bool) {
@@ -270,12 +288,12 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 		return 0, false
 	}
 	shared0, ok := rankByValue(distinct0, "did:shared")
-	if !ok || shared0 >= 4 {
-		t.Fatalf("part 0 shared rank=(%d,%t) cardinality=4 ranks=%v", shared0, ok, distinct0.GlobalLocalRanks)
+	if !ok || shared0 >= uint32(expectedDistinctGlobalRanks) {
+		t.Fatalf("part 0 shared rank=(%d,%t) cardinality=%d ranks=%v", shared0, ok, expectedDistinctGlobalRanks, distinct0.GlobalLocalRanks)
 	}
 	shared1, ok := rankByValue(distinct1, "did:shared")
-	if !ok || shared1 >= 4 {
-		t.Fatalf("part 1 shared rank=(%d,%t) cardinality=4 ranks=%v", shared1, ok, distinct1.GlobalLocalRanks)
+	if !ok || shared1 >= uint32(expectedDistinctGlobalRanks) {
+		t.Fatalf("part 1 shared rank=(%d,%t) cardinality=%d ranks=%v", shared1, ok, expectedDistinctGlobalRanks, distinct1.GlobalLocalRanks)
 	}
 	if shared0 != shared1 {
 		t.Fatalf("shared did ranks part0=%d part1=%d want equal", shared0, shared1)
