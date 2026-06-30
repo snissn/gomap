@@ -799,7 +799,14 @@ func decodeColumnTypedColumnPhysicalQueryRunnerPart(view columnPhysicalScanSnaps
 	if rangeOK {
 		return part, rawScratch, nil
 	}
+	var phaseStart time.Time
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	raw, err := readCache.read(typedRef.Ref, rawScratch)
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.ReadImageNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		if errors.Is(err, io.ErrUnexpectedEOF) {
 			return columnTypedColumnPhysicalQueryPart{}, rawScratch, fmt.Errorf("collections: typed-column part physical query read generation=%d part_id=%d short read: %w", typedRef.Ref.Generation, typedRef.Ref.PartID, err)
