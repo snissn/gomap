@@ -28,12 +28,13 @@ this rerun used a temporary external `go-ycsb` compatibility patch so the
 `treedb-native` binding accepts TreeDB `collection_meta` version 3.
 
 For the #2026 publication/readability closeout, use
-`docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` as the current
-nativewire load-only evidence. That report uses the compatible external
-`go-ycsb` branch for `collection_meta` version 5, runs 100k and 1M
-`treedb-native` loads on `origin/main` commit
+`docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` as the #2026
+nativewire load-only closeout evidence captured on then-current `origin/main`.
+That report uses the compatible external `go-ycsb` branch for
+`collection_meta` version 5, runs 100k and 1M `treedb-native` loads on commit
 `2b784debb05028f706b46127a41f6d578c3d4c13`, and records zero `INSERT_ERROR`
-counts. It does not replace the full comparison matrix above.
+counts. It predates later Raft snapshot/route-preflight merges and does not
+replace the full comparison matrix above.
 
 ## Current Headline
 
@@ -54,7 +55,7 @@ UTC latest-main report.
 
 | report | status | use |
 | --- | --- | --- |
-| `docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` | Current #2026 nativewire load-only closeout evidence. | Use for the 100k and 1M external `go-ycsb treedb-native` load proof on current `origin/main` with `collection_meta` v5 compatibility. |
+| `docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` | #2026 nativewire load-only closeout evidence captured before later Raft merges. | Use for the 100k and 1M external `go-ycsb treedb-native` load proof on commit `2b784debb05028f706b46127a41f6d578c3d4c13` with `collection_meta` v5 compatibility; rerun before treating it as proof for newer heads. |
 | `docs/benchmarks/ycsb_latest_main_2026-06-03.md` | Current external YCSB report. | Use for current headline MongoDB / TreeDB nativewire / TreeDB Mongo gateway results on latest `origin/main` after the June 3 rerun. |
 | `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` | Superseded latest-current report. | Keep for post-update-path-stack evidence before the latest main rerun and for comparison deltas. |
 | `docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md` | Historical legacy-profile report. | Keep for the original MongoDB / TreeDB native / TreeDB Mongo comparison and the post-load Mongo-gateway cliff attribution. Do not use its `fast` rows as current public-profile guidance. |

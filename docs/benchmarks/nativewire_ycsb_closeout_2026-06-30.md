@@ -1,8 +1,13 @@
 # TreeDB Nativewire YCSB Closeout Evidence
 
 Status: external `go-ycsb` nativewire load-only closeout evidence for #2026
-and #3355 on current `origin/main` commit
+and #3355 captured on then-current `origin/main` commit
 `2b784debb05028f706b46127a41f6d578c3d4c13`.
+
+This evidence predates later Raft snapshot/route-preflight merges, including
+`febc1992e58307d8b1edd2c68657faef9bd67c88` and
+`66819cd00fe10aaae2f0da3b7dbfc1ebc0c4113d`; rerun the closeout before using it
+as proof for those newer heads.
 
 This report records the final 100k and 1M nativewire YCSB load checks requested
 by #2026 after the deterministic publication/readability slices landed. It is
