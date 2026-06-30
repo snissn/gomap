@@ -259,7 +259,7 @@ type SingleGroupSubmitterOptions struct {
 
 	// DisableLocalCommandWALSync is for tests that intentionally model weaker
 	// local recovery. The default bridge syncs local command-WAL coverage before
-	// reporting CommittedRecoverable.
+	// reporting CommittedRecoverable; when disabled, AckRaftCommitted is rejected.
 	DisableLocalCommandWALSync bool
 }
 
@@ -363,7 +363,7 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{}, err
 	}
-	actualAck, err := actualSubmitAck(metadata.AckPolicy)
+	actualAck, err := actualSubmitAck(metadata.AckPolicy, s.syncLocalWAL)
 	if err != nil {
 		return SubmitResultV1{}, err
 	}
@@ -442,7 +442,7 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	}
 	result := SubmitResultV1{
 		ActualAck:            actualAck,
-		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
+		CommittedRecoverable: actualAck == iwire.AckRaftCommitted && s.syncLocalWAL,
 		DecodedEntry:         decoded,
 		ApplyResult:          applyResult,
 		CommittedEntry:       committed,
@@ -547,11 +547,16 @@ func (s *SingleGroupSubmitter) validateCommitResult(request CommitCommandEntryV1
 	return committed, nil
 }
 
-func actualSubmitAck(requested iwire.AckPolicy) (iwire.AckPolicy, error) {
+func actualSubmitAck(requested iwire.AckPolicy, syncLocalWAL bool) (iwire.AckPolicy, error) {
 	switch requested {
 	case 0:
 		return iwire.AckVisible, nil
-	case iwire.AckVisible, iwire.AckRaftCommitted:
+	case iwire.AckVisible:
+		return requested, nil
+	case iwire.AckRaftCommitted:
+		if !syncLocalWAL {
+			return 0, errors.Join(ErrLocalAckUnavailable, fmt.Errorf("ack policy %d requires local command-WAL sync", requested))
+		}
 		return requested, nil
 	case iwire.AckFlushed, iwire.AckSynced:
 		return 0, errors.Join(ErrLocalAckUnavailable, fmt.Errorf("ack policy %d requires a local flush/sync barrier", requested))
