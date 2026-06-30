@@ -219,6 +219,97 @@ func TestSingleGroupSubmitterRejectsStaleCatalogGuardBeforeCommitApply(t *testin
 	}
 }
 
+func TestSingleGroupSubmitterRejectsRouteGroupMismatchBeforePreflightCommitApply(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	preflightCalls := 0
+	commitCalls := 0
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(context.Context, CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return CommitCommandEntryV1Result{}, nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+			preflightCalls++
+			return CommandEntryPreflightResultV1{}, nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+
+	_, err := submitter.SubmitCommandEntryV1(context.Background(), entry, routeMetadata("group-b", iwire.AckRaftCommitted))
+	if !errors.Is(err, ErrRouteGroupMismatch) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want route group mismatch", err)
+	}
+	if preflightCalls != 0 {
+		t.Fatalf("preflight calls=%d want 0", preflightCalls)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("commit calls=%d want 0", commitCalls)
+	}
+	if got := len(applier.snapshot()); got != 0 {
+		t.Fatalf("apply calls=%d want 0", got)
+	}
+}
+
+func TestSingleGroupSubmitterAllowsMatchingRouteGroup(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: NewSequencedCommitSource(SequencedCommitSourceOptions{
+			GroupID:             "group-a",
+			NodeID:              "node-a",
+			EvidenceKind:        CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+
+	result, err := submitter.SubmitCommandEntryV1(context.Background(), entry, routeMetadata("group-a", iwire.AckRaftCommitted))
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1 matching route group: %v", err)
+	}
+	if result.ActualAck != iwire.AckRaftCommitted || !result.CommittedRecoverable {
+		t.Fatalf("ack/recoverable=%d/%v want raft_committed/true", result.ActualAck, result.CommittedRecoverable)
+	}
+	if result.CommittedEntry.RequestMetadata.ClusterRouteGroupID != "group-a" {
+		t.Fatalf("committed route group=%q want group-a", result.CommittedEntry.RequestMetadata.ClusterRouteGroupID)
+	}
+	if got := len(applier.snapshot()); got != 1 {
+		t.Fatalf("apply calls=%d want 1", got)
+	}
+}
+
+func TestSingleGroupSubmitterPreservesNoRouteMetadataBehavior(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: NewSequencedCommitSource(SequencedCommitSourceOptions{
+			GroupID:             "group-a",
+			NodeID:              "node-a",
+			EvidenceKind:        CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+
+	metadata := raftentry.RequestMetadataV1{
+		AckPolicy:           iwire.AckRaftCommitted,
+		ClusterRouteGroupID: "group-b",
+	}
+	if _, err := submitter.SubmitCommandEntryV1(context.Background(), entry, metadata); err != nil {
+		t.Fatalf("SubmitCommandEntryV1 without known route metadata: %v", err)
+	}
+	if got := len(applier.snapshot()); got != 1 {
+		t.Fatalf("apply calls=%d want 1", got)
+	}
+}
+
 func TestSingleGroupSubmitterLetsIdempotentCreateRetryReachPreflightApply(t *testing.T) {
 	entry := testClusterCreateCollectionEntry(t, 7)
 	commitCalls := 0
@@ -650,6 +741,21 @@ func staticCatalogVersion(version uint64) CatalogVersionProvider {
 	return CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
 		return version, true, nil
 	})
+}
+
+func routeMetadata(group string, ack iwire.AckPolicy) raftentry.RequestMetadataV1 {
+	return raftentry.RequestMetadataV1{
+		AckPolicy:                 ack,
+		ClusterRouteKnown:         true,
+		ClusterRouteDatabase:      "default",
+		ClusterRouteCatalog:       "default",
+		ClusterRouteCollection:    "users",
+		ClusterRouteShape:         "collection",
+		ClusterRouteGroupID:       group,
+		ClusterRouteMembers:       []string{"node-a", "node-b"},
+		ClusterRouteLeaderHint:    "node-a",
+		ClusterRoutePlacementMode: "collection",
+	}
 }
 
 func productionCommittedResult(req CommitCommandEntryV1Request, term, index uint64) CommitCommandEntryV1Result {

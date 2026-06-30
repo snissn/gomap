@@ -286,6 +286,10 @@ Invariant:
   request-only cluster route metadata, supports collection and single-token
   token/ring targets, classifies token batches, and fails closed before submit
   for token/ring multi-ID writes until split/fanout exists.
+- Once route metadata is present, the single-group submitter treats the target
+  group as binding and rejects group mismatches before command preflight,
+  commit-source invocation, or local apply. Route metadata remains excluded
+  from deterministic entry bytes and command digests.
 
 Coverage:
 - `TreeDB/internal/raftplacement/route_test.go`:
@@ -298,10 +302,16 @@ Coverage:
   - `TestCatalogClusterRouteProviderRoutesResolvedCatalog`
   - `TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands`
   - `TestClusterRoutePreflightTokenPlacementRejectsMultiID`
+  - `TestRaftClusterSubmitterRouteGroupMismatchRejectsBeforeLocalMutation`
   - `TestClusterSubmitterRequestOnlyFieldsDoNotAlterDeterministicEntry`
 - `TreeDB/mongo_gateway/cluster_submitter_test.go`:
   - `TestClusterRoutePreflightMongoTokenPlacementSingleIDWrites`
   - `TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites`
+  - `TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary`
+- `TreeDB/internal/raftcluster/submit_test.go`:
+  - `TestSingleGroupSubmitterRejectsRouteGroupMismatchBeforePreflightCommitApply`
+  - `TestSingleGroupSubmitterAllowsMatchingRouteGroup`
+  - `TestSingleGroupSubmitterPreservesNoRouteMetadataBehavior`
 - `TreeDB/internal/raftentry/contract_test.go`:
   - `TestDigestV1StabilityAcrossMetadataAndApplyEntryID`
 
@@ -344,7 +354,7 @@ to the V1 in-page-marked meta-page storage field.
 | Native-wire deterministic command schemas align with local command WAL payload schemas. | `native-wire-protocol.md`, `user-command-wal.md` Raft/native-wire relationship | `TestCommandWALNativeWireAlignmentManifestCoverage`, `TestNativeWireAndLocalCommandDigestStable` | planned |
 | Raft/local recoverability is not reported before local command WAL publish and `AppliedLSN`. | `native-query-raft-roadmap.md` local apply layering | `TestRaftApplyDoesNotReportRecoverableBeforeCommandWALAppliedLSN` | future |
 | R3a durable apply metadata preserves applied progress, idempotency/result replay, and logical digests across reopen and fails closed on corrupt metadata. | `storage-format.md` R3a apply metadata logs, `native-query-raft-roadmap.md` local apply layering | `TestDurableApplyStoresCloseReopenPreservesApplyProgressIdempotencyAndResult`, `TestDurableApplyStoresIdempotencyDuplicateSameDigestAndDifferentDigest`, `TestDurableApplyStoresFailClosedOnTruncatedAndCorruptMetadata`, `TestDurableApplyStoresLogicalDigestIndependentOfMetadataFiles` | implemented |
-| Collection-level Raft placement resolves each placed `{database,catalog,collection}` to exactly one group and fails closed for unplaced collections, duplicate placements, unknown groups/features, and invalid leader hints. Token/ring catalog placements validate partition coverage, exactly-one-ID token routes resolve one partition/group, token batches classify single-token, same-partition, same-group, and fanout-required cases, and adapters reject multi-ID token/ring writes before submit until explicit split/fanout execution exists. | `raftplacement.md` #3046 first slice, token-partition catalog slice, and token-batch preflight slice | `TestValidateResolvesCollectionLevelPlacements`, `TestValidateRejectsInvalidCatalog`, `TestValidateFeatureFloorFailsClosed`, `TestResolveFailsClosedForUnplacedCollection`, `TestValidateAcceptsTokenRingCatalogPlacements`, `TestValidateRejectsInvalidTokenRingCatalogPlacements`, `TestValidateRejectsDuplicateCollectionAcrossTokenAndCollectionPlacement`, `TestRouteTokenDecisionIncludesPartitionAndGroupMetadata`, `TestRouteTokenBatchClassifiesDocumentTokens`, `TestRouteTokenBatchFailsClosed`, `TestClusterRoutePreflightTokenPlacementRejectsMultiID`, `TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites` | implemented |
+| Collection-level Raft placement resolves each placed `{database,catalog,collection}` to exactly one group and fails closed for unplaced collections, duplicate placements, unknown groups/features, and invalid leader hints. Token/ring catalog placements validate partition coverage, exactly-one-ID token routes resolve one partition/group, token batches classify single-token, same-partition, same-group, and fanout-required cases, adapters reject multi-ID token/ring writes before submit until explicit split/fanout execution exists, and single-group submit admission rejects mismatched route group metadata before preflight/commit/apply. | `raftplacement.md` #3046 first slice, token-partition catalog slice, token-batch preflight slice, and route-binding admission slice | `TestValidateResolvesCollectionLevelPlacements`, `TestValidateRejectsInvalidCatalog`, `TestValidateFeatureFloorFailsClosed`, `TestResolveFailsClosedForUnplacedCollection`, `TestValidateAcceptsTokenRingCatalogPlacements`, `TestValidateRejectsInvalidTokenRingCatalogPlacements`, `TestValidateRejectsDuplicateCollectionAcrossTokenAndCollectionPlacement`, `TestRouteTokenDecisionIncludesPartitionAndGroupMetadata`, `TestRouteTokenBatchClassifiesDocumentTokens`, `TestRouteTokenBatchFailsClosed`, `TestClusterRoutePreflightTokenPlacementRejectsMultiID`, `TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites`, `TestSingleGroupSubmitterRejectsRouteGroupMismatchBeforePreflightCommitApply`, `TestRaftClusterSubmitterRouteGroupMismatchRejectsBeforeLocalMutation`, `TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary` | implemented |
 | Simulation-only token-ring plans cover the uint64 token space exactly once, assign each virtual partition to a known catalog group, and fail closed for empty plans, invalid or duplicate partition IDs, unknown groups, invalid ranges, gaps, overlaps, and incomplete coverage. | `raftplacement.md` #3046 token-ring simulation slice | `TestPlanTokenRingDistributesVirtualPartitions`, `TestPlanTokenRingRejectsInvalidInputs`, `TestValidateTokenRingPlanRejectsInvalidPlans`, `TestValidateTokenRingPlanSortsAndProtectsResolvedPlan` | implemented |
 
 ### 11.5.2 Milestone Test Slices
