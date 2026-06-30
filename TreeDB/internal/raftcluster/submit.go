@@ -17,6 +17,7 @@ var (
 	ErrInvalidSubmitter          = errors.New("raftcluster: invalid submitter")
 	ErrAdmissionUnavailable      = errors.New("raftcluster: admission unavailable")
 	ErrNotLeader                 = errors.New("raftcluster: not leader")
+	ErrCommitAmbiguous           = errors.New("raftcluster: commit ambiguous")
 	ErrCommitNotProven           = errors.New("raftcluster: commit not proven")
 	ErrLocalApplyNotRecoverable  = errors.New("raftcluster: local apply not recoverable")
 	ErrLocalAckUnavailable       = errors.New("raftcluster: local ack policy unavailable")
@@ -238,6 +239,12 @@ func (f CommandEntryPreflightFunc) PreflightCommandEntryV1(ctx context.Context, 
 // CommittedCommandApplierV1 is implemented by the local raftfsm adapter.
 type CommittedCommandApplierV1 interface {
 	ApplyCommittedCommandEntryV1(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error)
+}
+
+// InitialIndexGapSupportV1 is implemented by durable appliers that can report
+// whether their first applied Raft command may start above index 1.
+type InitialIndexGapSupportV1 interface {
+	AllowsInitialIndexGapV1() bool
 }
 
 type CommittedCommandApplierFunc func(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error)

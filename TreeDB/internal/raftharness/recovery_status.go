@@ -97,12 +97,9 @@ func validateHarnessReadSafetyPrefixV1(status raftcluster.RecoveryStatusV1, node
 	if !progress.HasApplied || progress.Index == 0 {
 		return failHarnessReadSafetyPrefixV1(status, fmt.Errorf("%w: node %s has no applied progress", ErrCommittedLogConflict, status.NodeID))
 	}
-	if progress.Index > uint64(len(committed)) {
-		return failHarnessReadSafetyPrefixV1(status, fmt.Errorf("%w: node %s applied index %d beyond committed log length %d", ErrCommittedLogConflict, status.NodeID, progress.Index, len(committed)))
-	}
-	prefix := make([]raftfsm.CommittedEntryV1, 0, progress.Index)
-	for _, entry := range committed[:progress.Index] {
-		prefix = append(prefix, cloneCommittedEntry(entry))
+	prefix, ok := committedPrefixThroughIndex(committed, progress.Index)
+	if !ok {
+		return failHarnessReadSafetyPrefixV1(status, fmt.Errorf("%w: node %s applied index %d is not committed", ErrCommittedLogConflict, status.NodeID, progress.Index))
 	}
 	if _, err := node.fsm.ValidateAppliedPrefixV1(prefix); err != nil {
 		return failHarnessReadSafetyPrefixV1(status, err)

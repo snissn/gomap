@@ -103,6 +103,49 @@ func TestRecoveryStatusTransitionsAcrossSnapshotInstallTailReplayAndReopen(t *te
 	}
 }
 
+func TestRecoveryStatusReadSafetyAcceptsSparseCommittedPrefix(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	entries := []raftfsm.CommittedEntryV1{
+		committedCommand(44, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:recovery-status-sparse")),
+		committedCommand(44, 3, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:recovery-status-sparse")),
+	}
+	if _, err := h.Commit(entries...); err != nil {
+		t.Fatalf("Commit sparse recovery entries: %v", err)
+	}
+	if _, err := h.ApplyCommittedEntriesToNode("node-a", entries[:1]...); err != nil {
+		t.Fatalf("apply sparse source prefix: %v", err)
+	}
+	manifest, err := mustNode(t, h, "node-a").fsm.ExportSnapshotManifestV1(raftfsm.SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712348003, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+	if install, err := h.InstallSnapshotPrefixToNodeV1("node-b", manifest); err != nil {
+		t.Fatalf("InstallSnapshotPrefixToNodeV1 sparse: %v evidence=%+v", err, install)
+	}
+	if tail, err := h.ReplaySnapshotTailToNodeV1("node-b", manifest); err != nil {
+		t.Fatalf("ReplaySnapshotTailToNodeV1 sparse: %v results=%+v", err, tail)
+	}
+
+	status, err := h.RecoveryStatusV1(context.Background(), "node-b", RecoveryStatusOptionsV1{
+		SnapshotManifest:  &manifest,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 sparse: %v", err)
+	}
+	if status.Readiness != raftcluster.RecoveryReadinessReadyAppliedIndexV1 ||
+		status.SnapshotState != raftcluster.RecoverySnapshotStateManifestVerifiedV1 ||
+		status.TailState != raftcluster.RecoveryTailStateCompleteV1 ||
+		status.ReadSafetyState != raftcluster.RecoveryReadSafetyAppliedIndexSatisfiedV1 ||
+		status.TailTargetIndex != 3 ||
+		status.RequiredAppliedIndex != 3 ||
+		!status.SafeToServeReads {
+		t.Fatalf("sparse ready status=%+v", status)
+	}
+}
+
 func TestRecoveryStatusDirtyTargetAndMismatchedManifestRemainUnsafe(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()

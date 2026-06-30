@@ -1967,7 +1967,7 @@ func TestProgressBoundOverflowFailsBeforeAppendOrMutation(t *testing.T) {
 	}
 }
 
-func TestProgressGapFailsBeforeAppendOrMutation(t *testing.T) {
+func TestProgressInitialGapFailsBeforeAppendOrMutation(t *testing.T) {
 	dir := t.TempDir()
 	db := openApplyHarnessDB(t, dir)
 	defer func() { _ = db.Close() }()
@@ -1980,14 +1980,14 @@ func TestProgressGapFailsBeforeAppendOrMutation(t *testing.T) {
 	})
 	assertRejected(t, result, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
 	if seam.appendCalls != 0 || len(readCommandWALFrames(t, dir)) != 0 {
-		t.Fatalf("gap reached append path append=%d frames=%d", seam.appendCalls, len(readCommandWALFrames(t, dir)))
+		t.Fatalf("initial gap reached append path append=%d frames=%d", seam.appendCalls, len(readCommandWALFrames(t, dir)))
 	}
 	if got := db.State().AppliedCommandLSN; got != 0 {
-		t.Fatalf("AppliedCommandLSN after gap=%d, want 0", got)
+		t.Fatalf("AppliedCommandLSN after initial gap=%d, want 0", got)
 	}
 	_, openErr := collections.NewCollectionManager(db).OpenCollection("users")
 	if !errors.Is(openErr, collections.ErrCollectionNotFound) {
-		t.Fatalf("OpenCollection users after gap error=%v, want ErrCollectionNotFound", openErr)
+		t.Fatalf("OpenCollection users after initial gap error=%v, want ErrCollectionNotFound", openErr)
 	}
 }
 
@@ -2153,15 +2153,20 @@ func TestMemoryStoresAreBounded(t *testing.T) {
 	}
 
 	progress = NewMemoryApplyProgressStore(8, 8)
-	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: id1, CommandDigest: digest, AppliedCommandLSN: 1}); err != nil {
+	highTermID1 := raftentry.ApplyEntryID{Term: 2, Index: 1}
+	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: highTermID1, CommandDigest: digest, AppliedCommandLSN: 1}); err != nil {
 		t.Fatalf("RecordApplied lower-index setup: %v", err)
 	}
-	if err := progress.CheckCanApply(id1); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
+	if err := progress.CheckCanApply(highTermID1); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
 		t.Fatalf("CheckCanApply duplicate/lower error=%v code=%s, want conflict", err, codeOf(err))
 	}
-	id3 := raftentry.ApplyEntryID{Term: 1, Index: 3}
-	if err := progress.CheckCanApply(id3); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
-		t.Fatalf("CheckCanApply gap error=%v code=%s, want conflict", err, codeOf(err))
+	id3 := raftentry.ApplyEntryID{Term: 2, Index: 3}
+	if err := progress.CheckCanApply(id3); err != nil {
+		t.Fatalf("CheckCanApply gap: %v", err)
+	}
+	lowerTermAfterGap := raftentry.ApplyEntryID{Term: 1, Index: 3}
+	if err := progress.CheckCanApply(lowerTermAfterGap); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("CheckCanApply lower-term gap error=%v code=%s, want conflict", err, codeOf(err))
 	}
 }
 

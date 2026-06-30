@@ -151,6 +151,10 @@ func (f *FSM) Close() error {
 	return errors.Join(errs...)
 }
 
+func (f *FSM) AllowsInitialIndexGapV1() bool {
+	return f != nil && f.storeOptions.AllowInitialIndexGap
+}
+
 func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
 	if f == nil || f.progress == nil {
 		return raftentry.ApplyEntryID{}, false
@@ -179,32 +183,60 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 	}
 	if !ok {
 		if len(entries) == 0 {
+			localLSN, err := localAppliedCommandLSN(f.db)
+			if err != nil {
+				code, _ := ErrorCodeOf(err)
+				return reject(raftentry.CommandDigestV1{}, code, err)
+			}
+			resultCount := f.results.Len()
+			if localLSN != 0 || resultCount != 0 {
+				err := fmt.Errorf("applied prefix is empty but FSM has local AppliedCommandLSN coverage %d and %d durable results without applied progress", localLSN, resultCount)
+				return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, err)
+			}
 			return raftentry.ApplyResultV1{}, nil
 		}
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix has %d entries but FSM has no applied progress", len(entries)))
 	}
-	if uint64(len(entries)) != record.EntryID.Index {
-		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match last applied index %d", len(entries), record.EntryID.Index))
+	progressCount := f.progress.Len()
+	if len(entries) != progressCount {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match durable progress count %d", len(entries), progressCount))
 	}
-	if len(entries) > 0 {
-		last := entries[len(entries)-1]
-		lastID := raftentry.ApplyEntryID{Term: last.Term, Index: last.Index}
-		lastDigest := commandDigest(last.Bytes, f.decodeOptions(last, lastID))
-		if err := validateCommittedID(lastID); err != nil {
-			return reject(lastDigest, raftentry.ErrorMalformedEntryV1, err)
-		}
-		if lastID != record.EntryID {
-			return reject(lastDigest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix last entry %d/%d does not match durable last applied %d/%d", lastID.Term, lastID.Index, record.EntryID.Term, record.EntryID.Index))
-		}
+	if len(entries) == 0 {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix is empty but FSM last applied index is %d", record.EntryID.Index))
 	}
+	var previous raftentry.ApplyEntryID
 	for i, entry := range entries {
 		id := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
 		digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
 		if err := validateCommittedID(id); err != nil {
 			return reject(digest, raftentry.ErrorMalformedEntryV1, err)
 		}
-		if wantIndex := uint64(i + 1); id.Index != wantIndex {
-			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry index %d at offset %d; want %d", id.Index, i, wantIndex))
+		if i == 0 {
+			if id.Index != 1 && !f.storeOptions.AllowInitialIndexGap {
+				return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix starts at index %d; want 1", id.Index))
+			}
+		} else {
+			if id.Index <= previous.Index {
+				return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry index %d at offset %d is not after previous index %d", id.Index, i, previous.Index))
+			}
+			if id.Term < previous.Term {
+				return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry term %d at offset %d is below previous term %d", id.Term, i, previous.Term))
+			}
+		}
+		progress, ok, err := f.progress.LookupApplyProgress(id)
+		if err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(digest, code, err)
+		}
+		if !ok {
+			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("missing durable progress for applied prefix entry %d/%d", id.Term, id.Index))
+		}
+		if err := validateApplyProgressCoverage(f.db, progress); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(digest, code, err)
+		}
+		if progress.CommandDigest != digest {
+			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix progress digest conflicts at %d/%d", id.Term, id.Index))
 		}
 		stored, ok, err := f.results.LookupApplyResult(id)
 		if err != nil {
@@ -217,6 +249,10 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 		if stored.CommandDigest != digest {
 			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix digest conflicts at %d/%d", id.Term, id.Index))
 		}
+		previous = id
+	}
+	if previous != record.EntryID {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix last entry %d/%d does not match durable last applied %d/%d", previous.Term, previous.Index, record.EntryID.Term, record.EntryID.Index))
 	}
 	return raftentry.ApplyResultV1{}, nil
 }
@@ -259,11 +295,11 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 	if err := validateCommittedID(id); err != nil {
 		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), raftentry.ErrorMalformedEntryV1, err)
 	}
-	if err := f.checkCommittedOrder(id); err != nil {
-		code, _ := ErrorCodeOf(err)
-		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), code, err)
-	}
 	digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
+	if err := f.checkCommittedOrder(id, digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(digest, code, err)
+	}
 	if err := f.requireStoredResultForLocalCoverageGap(id, digest); err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(digest, code, err)
@@ -314,23 +350,54 @@ func (f *FSM) decodeOptions(entry CommittedEntryV1, id raftentry.ApplyEntryID) r
 	}
 }
 
-func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
+func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1) error {
 	record, ok, err := f.lastAppliedProgressRecord()
 	if err != nil {
 		return err
 	}
 	if !ok {
-		if id.Index != 1 {
+		if id.Index != 1 && !f.storeOptions.AllowInitialIndexGap {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry starts at index %d; want 1", id.Index)
+		}
+		localLSN, err := localAppliedCommandLSN(f.db)
+		if err != nil {
+			return err
+		}
+		if localLSN != 0 || f.results.Len() != 0 {
+			if _, ok, err := f.results.LookupApplyResult(id); err != nil {
+				return err
+			} else if !ok {
+				return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable result for apply entry %d/%d while local coverage exists without progress metadata", id.Term, id.Index)
+			}
 		}
 		return nil
 	}
 	last := record.EntryID
 	if id.Index < last.Index {
-		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is below last applied %d", id.Index, last.Index)
-	}
-	if id.Index > last.Index+1 {
-		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index gap: got %d after %d", id.Index, last.Index)
+		stored, ok, err := f.results.LookupApplyResult(id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is below last applied %d and is not a durable exact replay", id.Index, last.Index)
+		}
+		if stored.CommandDigest != digest {
+			return codedError(raftentry.ErrorRejectedConflictV1, "replayed apply entry digest conflicts at %d/%d", id.Term, id.Index)
+		}
+		progress, ok, err := f.progress.LookupApplyProgress(id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable progress for replayed apply entry %d/%d below last applied %d/%d", id.Term, id.Index, last.Term, last.Index)
+		}
+		if err := validateApplyProgressCoverage(f.db, progress); err != nil {
+			return err
+		}
+		if progress.CommandDigest != digest {
+			return codedError(raftentry.ErrorRejectedConflictV1, "replayed apply progress digest conflicts at %d/%d", id.Term, id.Index)
+		}
+		return nil
 	}
 	if id.Index == last.Index {
 		if id.Term != last.Term {
@@ -410,10 +477,7 @@ func (f *FSM) requireStoredResultForLocalCoverageGap(id raftentry.ApplyEntryID, 
 	}
 	record, ok := f.progress.LastAppliedRecord()
 	if !ok {
-		if localLSN == 0 {
-			return nil
-		}
-		if id.Index != 1 {
+		if localLSN == 0 && f.results.Len() == 0 {
 			return nil
 		}
 		return f.requireStoredResultCoveredByLocalLSN(id, digest, localLSN, 0)
