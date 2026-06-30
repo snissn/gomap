@@ -4,11 +4,12 @@ Status: normative for the initial `TreeDB/internal/raftplacement` package.
 
 This document records the first executable slices of #3046. The package defines
 a v1 placement catalog and a pure route-decision boundary for collection-level
-Raft groups. It also accepts token/ring placement entries as validated internal
-catalog data and includes token-ring helpers that validate virtual partition
-coverage against known groups. It does not change native-wire read policies,
-Mongo gateway behavior, `raftentry` single-group scope handling, server routing,
-submitter APIs, meta-group replication, rebalancing, or horizontal-scale claims.
+Raft groups plus document-token batch classification. It also accepts token/ring
+placement entries as validated internal catalog data and includes token-ring
+helpers that validate virtual partition coverage against known groups. It does
+not change native-wire read policies, `raftentry` single-group scope handling,
+server routing, submitter APIs, meta-group replication, rebalancing, request
+fanout, command splitting, or horizontal-scale claims.
 
 ## V1 Catalog Shape
 
@@ -79,6 +80,19 @@ Route decisions MUST fail closed for:
 Token route decisions include the matched token partition metadata. Collection
 route decisions do not infer shard keys or scatter across token partitions.
 
+`ResolvedCatalogV1.ClassifyDocumentTokenBatch` accepts an explicit document-token
+batch for token/ring placements and classifies it as:
+
+- `single_token`: one token, equivalent to the exactly-one-ID route boundary;
+- `same_partition`: multiple tokens resolved to the same token partition;
+- `same_group_multi_partition`: multiple partitions owned by one Raft group;
+- `fanout_required`: tokens cross Raft group ownership.
+
+This classifier is pure catalog metadata. It does not split commands, submit to
+Raft, open network routes, or perform fanout. For non-fanout classes it returns
+the single resolved group metadata; for `fanout_required` it returns the involved
+groups without selecting one submit target.
+
 ## Document-ID Token Rule
 
 `DocumentIDTokenV1` maps a deterministic document ID byte identity to a uint64
@@ -108,23 +122,29 @@ collection name encoded in the deterministic command sections. `create_collectio
 uses the collection metadata name; mutation commands use the collection-name
 ref. Exactly-one-ID `insert_batch`, `replace_batch`, `delete_batch`, and
 `update_bson_set` requests carry a document-token route request. Multi-ID
-native-wire batches remain collection-shaped so token/ring placements fail
-closed instead of being split or fanned out.
+native-wire batches carry a token-batch route request. Collection-mode placements
+may accept that request by returning a collection route decision. Token/ring
+placements classify the tokens and then fail closed before
+`SubmitCommandEntryV1`: same-partition and same-group batches require an
+explicit command split, while cross-group batches require fanout.
 
 Mongo gateway route preflight uses the original Mongo namespace: `$db` plus the
 command collection name before the gateway flattens it to TreeDB's internal
 `db.collection` collection name. Exactly-one-ID insert, update, and delete
 writes carry a document-token route request derived from the prepared encoded
 primary key. Multi-document insert/delete batches and multi-update commands
-remain collection-shaped so token/ring placements fail closed before submit.
+carry token-batch route requests when their document IDs are known. Collection
+placements preserve collection-mode routing; token/ring placements reject before
+submit with an explicit split-required or fanout-required error.
 
 If no route provider is configured, adapters keep the previous submitter
 behavior. If a route provider is configured, the provider MUST fail closed for
-unplaced collections, missing token/ring token metadata, and multi-ID token/ring
-requests. Collection placements may still accept token-capable single-ID
-requests by returning a collection route decision, preserving collection-mode
-write behavior. Leader hints remain hints; they are not live leadership proof,
-read-index evidence, or a network routing guarantee.
+unplaced collections, missing token/ring token metadata, and unsupported
+token-batch classifications. Collection placements may still accept
+token-capable single-ID and multi-ID requests by returning a collection route
+decision, preserving collection-mode write behavior. Leader hints remain hints;
+they are not live leadership proof, read-index evidence, or a network routing
+guarantee.
 
 ## Token/Ring Catalog Placements
 
@@ -170,10 +190,11 @@ read/snapshot dependencies are ready for production routing.
 
 `ResolveToken` maps a token to its simulated virtual partition only after the
 plan has passed validation. `RouteToken` can wrap catalog-backed token/ring
-placements in a route decision when the caller supplies an explicit token.
-Native-wire and Mongo gateway adapters may use that decision as fail-closed
-request preflight metadata only; it is not live network routing or leadership
-proof.
+placements in a route decision when the caller supplies an explicit token, and
+`ClassifyDocumentTokenBatch` can classify multiple explicit tokens without
+choosing a multi-group submit target. Native-wire and Mongo gateway adapters may
+use those decisions as fail-closed request preflight metadata only; they are not
+live network routing or leadership proof.
 
 ## Deferred Scope
 
