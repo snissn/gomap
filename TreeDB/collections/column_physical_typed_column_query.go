@@ -1949,7 +1949,7 @@ func (s *columnTypedColumnDenseGroupCountDistinctHashRankShard) addHash(hash uin
 	if rank, ok := s.lookupHash(hash, value); ok {
 		return rank, nil
 	}
-	if uint64(len(s.values)) > uint64(^uint32(0)) {
+	if uint64(len(s.values)) >= uint64(^uint32(0)) {
 		return 0, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
 	}
 	rank := uint32(len(s.values))
