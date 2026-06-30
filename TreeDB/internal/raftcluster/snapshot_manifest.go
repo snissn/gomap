@@ -57,7 +57,7 @@ type SnapshotManifestV1 struct {
 	NodeID            NodeID                  `json:"node_id"`
 	LastIncludedTerm  uint64                  `json:"last_included_term"`
 	LastIncludedIndex uint64                  `json:"last_included_index"`
-	AppliedCommandLSN uint64                  `json:"applied_command_lsn,omitempty"`
+	AppliedCommandLSN uint64                  `json:"applied_command_lsn"`
 	LogicalDigestV1   string                  `json:"logical_digest_v1"`
 	Scope             SnapshotScopeIdentityV1 `json:"scope"`
 	CreatedAt         time.Time               `json:"created_at"`
@@ -81,6 +81,9 @@ func (m SnapshotManifestV1) Validate(expectedScope SnapshotScopeIdentityV1) erro
 	}
 	if m.LastIncludedTerm == 0 {
 		return fmt.Errorf("%w: missing last included term", ErrInvalidSnapshotManifest)
+	}
+	if m.AppliedCommandLSN == 0 {
+		return fmt.Errorf("%w: missing applied command LSN", ErrInvalidSnapshotManifest)
 	}
 	if err := validateLogicalDigestV1Hex(m.LogicalDigestV1); err != nil {
 		return err

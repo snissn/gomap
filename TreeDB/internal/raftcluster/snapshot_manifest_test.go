@@ -58,6 +58,10 @@ func TestSnapshotManifestV1ValidationFailsClosed(t *testing.T) {
 			mut:  func(m *SnapshotManifestV1) { m.LastIncludedTerm = 0 },
 		},
 		{
+			name: "missing applied command lsn",
+			mut:  func(m *SnapshotManifestV1) { m.AppliedCommandLSN = 0 },
+		},
+		{
 			name: "missing logical digest",
 			mut:  func(m *SnapshotManifestV1) { m.LogicalDigestV1 = "" },
 		},
@@ -106,6 +110,21 @@ func TestSnapshotManifestV1DecodeRejectsUnknownFields(t *testing.T) {
 	withUnknown := bytes.Replace(encoded, []byte(`"version":1`), []byte(`"version":1,"snapshot_path":"/tmp/snap"`), 1)
 	if _, err := DecodeSnapshotManifestV1(withUnknown, manifest.Scope); !errors.Is(err, ErrInvalidSnapshotManifest) {
 		t.Fatalf("DecodeSnapshotManifestV1 unknown field error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
+func TestSnapshotManifestV1DecodeRejectsMissingAppliedCommandLSN(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	encoded, err := EncodeSnapshotManifestV1(manifest)
+	if err != nil {
+		t.Fatalf("EncodeSnapshotManifestV1: %v", err)
+	}
+	withoutLSN := bytes.Replace(encoded, []byte(`"applied_command_lsn":12,`), nil, 1)
+	if bytes.Equal(withoutLSN, encoded) {
+		t.Fatalf("test fixture did not remove applied_command_lsn: %s", encoded)
+	}
+	if _, err := DecodeSnapshotManifestV1(withoutLSN, manifest.Scope); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("DecodeSnapshotManifestV1 missing applied_command_lsn error=%v, want ErrInvalidSnapshotManifest", err)
 	}
 }
 
