@@ -101,6 +101,10 @@ type ClusterSubmitResult struct {
 	ActualAck            AckPolicy
 	CommittedRecoverable bool
 	ResponseSections     []iwire.Section
+	// CatalogVersion is internal post-apply evidence. It lets response shaping
+	// omit response_meta without hiding catalog-cache progress from the server.
+	CatalogVersion    uint64
+	HasCatalogVersion bool
 }
 
 func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header, cmd iwire.ValidatedCommand) ([]iwire.Section, error) {
@@ -156,14 +160,20 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err := validateClusterSubmitResult(metadata, result); err != nil {
 		return nil, err
 	}
-	if err := s.updateCatalogVersionFromClusterSubmitResult(result.ResponseSections); err != nil {
+	if err := s.updateCatalogVersionFromClusterSubmitResult(result); err != nil {
 		return nil, err
 	}
 	return cloneSections(result.ResponseSections), nil
 }
 
-func (s *Server) updateCatalogVersionFromClusterSubmitResult(sections []iwire.Section) error {
-	version, ok, err := catalogVersionFromResponseMeta(sections)
+func (s *Server) updateCatalogVersionFromClusterSubmitResult(result ClusterSubmitResult) error {
+	if result.HasCatalogVersion {
+		if s != nil {
+			s.catalogVersion.Store(result.CatalogVersion)
+		}
+		return nil
+	}
+	version, ok, err := catalogVersionFromResponseMeta(result.ResponseSections)
 	if err != nil {
 		return err
 	}
@@ -547,6 +557,15 @@ func validateClusterSubmitResult(metadata ClusterRequestMetadata, result Cluster
 		return err
 	} else if ok && ack != result.ActualAck {
 		return protocolError(iwire.ErrInternal, "cluster submitter response ack policy %d does not match result ack policy %d", ack, result.ActualAck)
+	}
+	if result.HasCatalogVersion {
+		version, ok, err := catalogVersionFromResponseMeta(result.ResponseSections)
+		if err != nil {
+			return err
+		}
+		if ok && version != result.CatalogVersion {
+			return protocolError(iwire.ErrInternal, "cluster submitter response catalog version %d does not match result catalog version %d", version, result.CatalogVersion)
+		}
 	}
 	return nil
 }

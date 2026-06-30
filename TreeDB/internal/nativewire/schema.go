@@ -371,6 +371,7 @@ func v1CommandSchemas() []CommandSchema {
 			Version:              1,
 			Name:                 "create_collection",
 			Kind:                 CommandKindMutation,
+			AllowedCommandFlags:  CommandFlagOmitResponseMeta,
 			Replicated:           true,
 			RequiresIdempotency:  true,
 			RequiresCatalogGuard: true,

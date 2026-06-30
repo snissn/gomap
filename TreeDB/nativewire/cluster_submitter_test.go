@@ -1508,6 +1508,35 @@ func TestRaftClusterSubmitterConcreteBridgeVisibleAckDoesNotClaimRaft(t *testing
 	}
 }
 
+func TestRaftClusterSubmitterConcreteBridgeOmitResponseMetaAdvancesCatalogVersion(t *testing.T) {
+	client, server, _, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	before := clientCatalogVersion(t, client, ctx)
+	createSections := raftClusterCreateCollectionSections("users", before, AckRaftCommitted)
+	response := commandSectionsWithFlags(t, client, ctx, iwire.CommandCreateCollection, iwire.CommandFlagOmitResponseMeta, createSections...)
+	if _, ok, err := responseMetaAckPolicy(response); err != nil || ok {
+		t.Fatalf("response meta ack=(%v,%v) want omitted", ok, err)
+	}
+	meta, err := firstMetaFromResponse(response)
+	if err != nil {
+		t.Fatalf("CreateCollection response meta: %v", err)
+	}
+	if meta.Name != "users" {
+		t.Fatalf("created collection=%q want users", meta.Name)
+	}
+	afterCreate, err := server.currentCatalogVersion()
+	if err != nil {
+		t.Fatalf("server currentCatalogVersion: %v", err)
+	}
+	if afterCreate <= before {
+		t.Fatalf("catalog version after omitted response_meta create=%d want > %d", afterCreate, before)
+	}
+}
+
 func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing.T) {
 	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.FollowerAdmission("node-b", "not leader"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1523,6 +1552,29 @@ func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing
 	if _, openErr := mgr.OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection users after follower rejection err=%v want ErrCollectionNotFound", openErr)
 	}
+}
+
+func commandSectionsWithFlags(t testing.TB, client *Client, ctx context.Context, commandID iwire.CommandID, flags uint64, sections ...iwire.Section) []iwire.Section {
+	t.Helper()
+	body, err := appendCommandHeaderSectionFlags(nil, commandID, flags)
+	if err != nil {
+		t.Fatalf("append command header: %v", err)
+	}
+	for _, section := range sections {
+		body, err = iwire.AppendSection(body, section)
+		if err != nil {
+			t.Fatalf("append section %d: %v", section.ID, err)
+		}
+	}
+	_, response, err := client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if err != nil {
+		t.Fatalf("roundTrip: %v", err)
+	}
+	decoded, err := iwire.DecodeSections(response, client.limits)
+	if err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return decoded
 }
 
 func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Context, ack AckPolicy, id string) []iwire.Section {

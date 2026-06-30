@@ -59,6 +59,8 @@ func (s *RaftClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		ActualAck:            AckPolicy(result.ActualAck),
 		CommittedRecoverable: result.CommittedRecoverable,
 		ResponseSections:     sections,
+		CatalogVersion:       result.CatalogVersion,
+		HasCatalogVersion:    result.HasCatalogVersion,
 	}, nil
 }
 
