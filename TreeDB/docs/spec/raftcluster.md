@@ -98,6 +98,12 @@ The package exposes a small read-index contract for future Raft adapters:
 This is only a contract. It does not implement a real Raft read-index provider,
 leader transfer handling, lease reads, follower reads, or production routing.
 
+`raftharness.ReadIndexProvider` is the in-process test adapter for this
+contract. It derives read-index proofs from an injected committed-entry log so
+tests can exercise nativewire read-index/read-barrier composition, but that
+evidence is not production quorum evidence and the provider does not apply
+entries by itself.
+
 ## Value Log Boundary
 
 `<main-db>/value_vlog/` is persistent value storage for large values
