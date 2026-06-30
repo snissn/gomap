@@ -315,8 +315,14 @@ func TestTypedColumnQ2DenseGroupCountDistinctRankMapCapacity3158(t *testing.T) {
 		}
 	}
 
-	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts); err != nil {
+	var prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(parts, &prepareDiagnostics); err != nil {
 		t.Fatalf("prepare sorted global rank maps: %v", err)
+	}
+	if prepareDiagnostics.Q2DenseGroupGlobalRankNanos != prepareDiagnostics.Q2GroupRankNanos ||
+		prepareDiagnostics.Q2DenseDistinctGlobalRankNanos != prepareDiagnostics.Q2DistinctRankNanos ||
+		prepareDiagnostics.Q2DensePartLocalRankNanos != prepareDiagnostics.Q2LocalRankNanos {
+		t.Fatalf("dense q2 rank diagnostics=%+v want explicit dense split to mirror legacy phases", prepareDiagnostics)
 	}
 	group0 := parts[0].DenseGroupCountDistinct.Group
 	group1 := parts[1].DenseGroupCountDistinct.Group
