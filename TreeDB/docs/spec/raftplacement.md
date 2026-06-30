@@ -117,6 +117,16 @@ for token/ring decisions, the document token and token partition ID in request
 metadata that is excluded from deterministic command entry bytes and command
 digests.
 
+`nativewire.CatalogClusterRouteProvider` is the reusable adapter from
+`ResolvedCatalogV1` to `nativewire.ClusterRouteTarget`. It converts collection
+route decisions to collection targets, exactly-one-token token/ring decisions to
+token targets with partition metadata, and token-batch decisions to
+`token_batch` targets that carry the catalog classification
+(`same_partition`, `same_group_multi_partition`, or `fanout_required`).
+Non-fanout token-batch targets may include the single resolved group metadata,
+but adapters still reject token/ring multi-ID writes before submit until command
+split or fanout execution exists.
+
 Native-wire route preflight uses the default database and catalog plus the
 collection name encoded in the deterministic command sections. `create_collection`
 uses the collection metadata name; mutation commands use the collection-name

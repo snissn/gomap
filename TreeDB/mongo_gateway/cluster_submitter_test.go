@@ -75,82 +75,16 @@ func (r *mongoRoutingClusterSubmitter) snapshotRoutes() []treenativewire.Cluster
 type mongoPlacementRouteClusterSubmitter struct {
 	*mongoClusterFakeSubmitter
 
-	routeMu sync.Mutex
-	catalog raftplacement.ResolvedCatalogV1
-	routes  []treenativewire.ClusterRouteRequest
+	routeMu  sync.Mutex
+	provider treenativewire.CatalogClusterRouteProvider
+	routes   []treenativewire.ClusterRouteRequest
 }
 
 func (p *mongoPlacementRouteClusterSubmitter) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
 	p.routeMu.Lock()
 	p.routes = append(p.routes, req)
 	p.routeMu.Unlock()
-	var decision raftplacement.RouteDecisionV1
-	var err error
-	switch {
-	case req.Shape == treenativewire.ClusterRouteShapeToken && req.TokenKnown:
-		decision, err = p.catalog.RouteDocumentToken(req.Database, req.Catalog, req.Collection, req.Token)
-	case req.Shape == treenativewire.ClusterRouteShapeTokenBatch:
-		return p.clusterRouteTokenBatch(req)
-	default:
-		decision, err = p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
-	}
-	if err != nil {
-		return treenativewire.ClusterRouteTarget{}, err
-	}
-	target := mongoClusterRouteTargetFromDecision(decision)
-	if decision.Token.Present {
-		target.TokenKnown = true
-		target.Token = decision.Token.Token
-		target.PartitionID = string(decision.Token.Partition.ID)
-	}
-	return target, nil
-}
-
-func (p *mongoPlacementRouteClusterSubmitter) clusterRouteTokenBatch(req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
-	ref := raftplacement.CollectionRefV1{Database: req.Database, Catalog: req.Catalog, Collection: req.Collection}
-	if placement, ok := p.catalog.Placement(ref); ok && placement.Mode == raftplacement.PlacementModeCollectionV1 {
-		decision, err := p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
-		if err != nil {
-			return treenativewire.ClusterRouteTarget{}, err
-		}
-		return mongoClusterRouteTargetFromDecision(decision), nil
-	}
-	decision, err := p.catalog.ClassifyDocumentTokenBatch(req.Database, req.Catalog, req.Collection, req.Tokens)
-	if err != nil {
-		return treenativewire.ClusterRouteTarget{}, err
-	}
-	return mongoClusterRouteTargetFromTokenBatch(decision), nil
-}
-
-func mongoClusterRouteTargetFromDecision(decision raftplacement.RouteDecisionV1) treenativewire.ClusterRouteTarget {
-	members := make([]string, len(decision.Group.Members))
-	for i, member := range decision.Group.Members {
-		members[i] = string(member)
-	}
-	return treenativewire.ClusterRouteTarget{
-		GroupID:       string(decision.GroupID()),
-		Members:       members,
-		LeaderHint:    string(decision.LeaderHint()),
-		PlacementMode: string(decision.PlacementMode),
-		Shape:         treenativewire.ClusterRouteShape(decision.Shape),
-	}
-}
-
-func mongoClusterRouteTargetFromTokenBatch(decision raftplacement.RouteTokenBatchDecisionV1) treenativewire.ClusterRouteTarget {
-	target := treenativewire.ClusterRouteTarget{
-		PlacementMode:   string(decision.PlacementMode),
-		Shape:           treenativewire.ClusterRouteShapeTokenBatch,
-		TokenBatchClass: string(decision.Class),
-	}
-	if !decision.FanoutRequired() {
-		target.GroupID = string(decision.GroupID())
-		target.LeaderHint = string(decision.LeaderHint())
-		target.Members = make([]string, len(decision.Group.Members))
-		for i, member := range decision.Group.Members {
-			target.Members[i] = string(member)
-		}
-	}
-	return target
+	return p.provider.ClusterRoute(ctx, req)
 }
 
 func (p *mongoPlacementRouteClusterSubmitter) snapshotRoutes() []treenativewire.ClusterRouteRequest {
@@ -408,7 +342,7 @@ func newMongoPlacementRouteTestServer(tb testing.TB, mode raftplacement.Placemen
 	}
 	submitter := &mongoPlacementRouteClusterSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
-		catalog:                   mustMongoRouteTestCatalog(tb, mode),
+		provider:                  treenativewire.NewCatalogClusterRouteProvider(mustMongoRouteTestCatalog(tb, mode)),
 	}
 	server.ClusterSubmitter = submitter
 	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
