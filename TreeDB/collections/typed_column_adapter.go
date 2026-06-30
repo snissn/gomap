@@ -1026,15 +1026,26 @@ func typedColumnAdapterPartFromImage(opts typedColumnAdapterOptions, image typed
 }
 
 func typedColumnAdapterPartFromImageWithoutRowLocators(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromImageWithoutRowLocatorsWithDiagnostics(opts, image, nil)
+}
+
+func typedColumnAdapterPartFromImageWithoutRowLocatorsWithDiagnostics(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (*typedColumnAdapterPart, error) {
+	var phaseStart time.Time
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	part, err := typedcolumn.ColumnPartFromImageWithOptions(image, typedcolumn.ColumnPartImageReadOptions{
 		IncludeRowLocators:       false,
 		ValidateRowLocators:      false,
 		IncludeAggregateMetadata: false,
 	})
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.StateBuildNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return nil, err
 	}
-	return typedColumnAdapterPartFromDecodedImage(opts, image, part)
+	return typedColumnAdapterPartFromDecodedImageWithDiagnostics(opts, image, part, prepareDiagnostics)
 }
 
 func typedColumnAdapterPartFromImageForInt64PredicateScan(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage) (*typedColumnAdapterPart, error) {
@@ -1091,19 +1102,43 @@ func validateTypedColumnAdapterInt64AggregateImage(part *typedcolumn.ColumnPart,
 }
 
 func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart) (*typedColumnAdapterPart, error) {
+	return typedColumnAdapterPartFromDecodedImageWithDiagnostics(opts, image, part, nil)
+}
+
+func typedColumnAdapterPartFromDecodedImageWithDiagnostics(opts typedColumnAdapterOptions, image typedcolumn.ColumnPartImage, part *typedcolumn.ColumnPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (*typedColumnAdapterPart, error) {
+	var phaseStart time.Time
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(opts.Fields, opts)
 	if err != nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.AdapterNanos += time.Since(phaseStart).Nanoseconds()
+		}
 		return nil, err
 	}
 	if err := validateTypedColumnAdapterImageSchema(part, columns, opts.SchemaVersion); err != nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.AdapterNanos += time.Since(phaseStart).Nanoseconds()
+		}
 		return nil, err
 	}
 	applyTypedColumnAdapterStoredDefinitions(columns, part)
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.AdapterNanos += time.Since(phaseStart).Nanoseconds()
+		phaseStart = time.Now()
+	}
 	dictionaries, err := image.Dictionaries()
 	if err != nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.DictionaryNanos += time.Since(phaseStart).Nanoseconds()
+		}
 		return nil, err
 	}
 	if err := validateTypedColumnAdapterMetadata(dictionaries, columns); err != nil {
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.DictionaryNanos += time.Since(phaseStart).Nanoseconds()
+		}
 		return nil, err
 	}
 	for i := range columns {
@@ -1114,6 +1149,9 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 				return nil, fmt.Errorf("collections: typed-column adapter image missing dictionary for %q", columns[i].Definition.Name)
 			}
 			if err := validateTypedColumnAdapterStringDictionary(columns[i], partColumn.Definition.Cardinality, dict); err != nil {
+				if prepareDiagnostics != nil {
+					prepareDiagnostics.DictionaryNanos += time.Since(phaseStart).Nanoseconds()
+				}
 				return nil, err
 			}
 			columns[i].Definition.Cardinality = partColumn.Definition.Cardinality
@@ -1127,11 +1165,17 @@ func typedColumnAdapterPartFromDecodedImage(opts typedColumnAdapterOptions, imag
 			if mode.ValuesByCode {
 				valuesByCode, err := typedColumnAdapterDictionaryValuesByCodeFromForward(dict, int(partColumn.Definition.Cardinality))
 				if err != nil {
+					if prepareDiagnostics != nil {
+						prepareDiagnostics.DictionaryNanos += time.Since(phaseStart).Nanoseconds()
+					}
 					return nil, err
 				}
 				columns[i].DictionaryValuesByCode = valuesByCode
 			}
 		}
+	}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.DictionaryNanos += time.Since(phaseStart).Nanoseconds()
 	}
 	return &typedColumnAdapterPart{Options: opts, Columns: columns, Part: part, Dictionary: dictionaries}, nil
 }
@@ -1489,15 +1533,22 @@ func columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan columnTypedColumn
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
 func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, error) {
+	var phaseStart time.Time
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	image, err := typedcolumn.ParseColumnPartImage(raw)
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.ReadImageNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
-	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{
+	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocatorsWithDiagnostics(typedColumnAdapterOptions{
 		Fields:          plan.Fields,
 		SchemaVersion:   uint32(schemaHash),
 		DictionaryModes: columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan, []string{plan.GroupColumn}, nil),
-	}, image)
+	}, image, prepareDiagnostics)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -1514,7 +1565,6 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	if plan.SortKeyPrefix.Planned {
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count does not support sort-key row pruning", ErrColumnQueryPlanUnsupported)
 	}
-	var phaseStart time.Time
 	if prepareDiagnostics != nil {
 		phaseStart = time.Now()
 	}
