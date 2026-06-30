@@ -35,6 +35,26 @@ var q2DenseGlobalRankPrepVariants = []q2DenseGlobalRankPrepVariant{
 	},
 }
 
+var q2DenseGlobalRankPrepBenchmarkVariants = []q2DenseGlobalRankPrepVariant{
+	{
+		name:    "current_map",
+		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics,
+		strategy: func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+		},
+	},
+	{
+		name:     "adaptive_baseline",
+		prepare:  prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveBaselineWithDiagnostics,
+		strategy: q2DenseGlobalRankPrepAdaptiveStrategy,
+	},
+	{
+		name:     "adaptive",
+		prepare:  prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics,
+		strategy: q2DenseGlobalRankPrepAdaptiveStrategy,
+	},
+}
+
 func q2DenseGlobalRankPrepAdaptiveStrategy(parts []columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
 	return columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Distinct
@@ -185,6 +205,76 @@ func TestTypedColumnQ2DenseGroupCountDistinctOneShotRankPrepMatchesAdaptivePolic
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t *testing.T) {
+	parts := []columnTypedColumnPhysicalQueryPart{
+		{
+			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+				Group: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"app.a"},
+				},
+				Distinct: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"did:a", "did:shared"},
+					Valid:      []bool{true, false},
+				},
+			},
+		},
+		{
+			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+				Group: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"app.b"},
+				},
+				Distinct: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: []string{"did:b", "did:shared"},
+				},
+			},
+		},
+	}
+
+	var diagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics(parts, &diagnostics); err != nil {
+		t.Fatalf("prepare sharded reference-fill rank maps: %v", err)
+	}
+	if diagnostics.Q2DenseDistinctGlobalRankNanos != diagnostics.Q2DistinctRankNanos ||
+		diagnostics.Q2DensePartLocalRankNanos != diagnostics.Q2LocalRankNanos {
+		t.Fatalf("reference-fill diagnostics=%+v want dense q2 distinct/local split", diagnostics)
+	}
+	distinct0 := parts[0].DenseGroupCountDistinct.Distinct
+	distinct1 := parts[1].DenseGroupCountDistinct.Distinct
+	if distinct0.GlobalDictionary != nil || distinct1.GlobalDictionary != nil {
+		t.Fatalf("distinct global dictionary allocated part0=%v part1=%v", distinct0.GlobalDictionary, distinct1.GlobalDictionary)
+	}
+	if !distinct0.GlobalCardinalityOK || distinct0.GlobalCardinality != 4 || !distinct1.GlobalCardinalityOK || distinct1.GlobalCardinality != 4 {
+		t.Fatalf("distinct cardinality part0=(%d,%t) part1=(%d,%t) want (4,true)", distinct0.GlobalCardinality, distinct0.GlobalCardinalityOK, distinct1.GlobalCardinality, distinct1.GlobalCardinalityOK)
+	}
+	if !distinct0.GlobalEmptyRankOK || !distinct1.GlobalEmptyRankOK || distinct0.GlobalEmptyRank != distinct1.GlobalEmptyRank || distinct0.GlobalEmptyRank >= 4 {
+		t.Fatalf("distinct empty ranks part0=(%d,%t) part1=(%d,%t) want shared rank below cardinality", distinct0.GlobalEmptyRank, distinct0.GlobalEmptyRankOK, distinct1.GlobalEmptyRank, distinct1.GlobalEmptyRankOK)
+	}
+	rankByValue := func(column columnTypedColumnDenseStringCodeColumn, value string) (uint32, bool) {
+		for localCode, localValue := range column.Dictionary {
+			if localValue == value {
+				return column.GlobalLocalRanks[localCode], true
+			}
+		}
+		return 0, false
+	}
+	shared0, ok := rankByValue(distinct0, "did:shared")
+	if !ok || shared0 >= 4 {
+		t.Fatalf("part 0 shared rank=(%d,%t) cardinality=4 ranks=%v", shared0, ok, distinct0.GlobalLocalRanks)
+	}
+	shared1, ok := rankByValue(distinct1, "did:shared")
+	if !ok || shared1 >= 4 {
+		t.Fatalf("part 1 shared rank=(%d,%t) cardinality=4 ranks=%v", shared1, ok, distinct1.GlobalLocalRanks)
+	}
+	if shared0 != shared1 {
+		t.Fatalf("shared did ranks part0=%d part1=%d want equal", shared0, shared1)
+	}
+	for label, rank := range map[string]uint32{"did:a": distinct0.GlobalLocalRanks[0], "did:b": distinct1.GlobalLocalRanks[0], "did:shared": shared0, "empty": distinct0.GlobalEmptyRank} {
+		if rank >= 4 {
+			t.Fatalf("%s rank=%d outside cardinality 4", label, rank)
+		}
+	}
+}
+
 // Dense q2 distinct ranks are reducer-local equality IDs, not externally visible
 // lexical order. This verifies the q2-visible result invariant after rank renumbering.
 func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankRunEquivalence(t *testing.T) {
@@ -288,7 +378,7 @@ func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankRunEquivalence(t *testi
 }
 
 func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
-	for _, variant := range q2DenseGlobalRankPrepVariants {
+	for _, variant := range q2DenseGlobalRankPrepBenchmarkVariants {
 		for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
 			for _, partCount := range q2DenseGlobalRankPrepPartCounts {
 				b.Run(fmt.Sprintf("%s/%s/parts=%d", variant.name, shape.name, partCount), func(b *testing.B) {
