@@ -183,8 +183,20 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 		}
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix has %d entries but FSM has no applied progress", len(entries)))
 	}
-	if uint64(len(entries)) != record.EntryID.Index {
-		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match last applied index %d", len(entries), record.EntryID.Index))
+	resultCount := f.results.Len()
+	if len(entries) != resultCount {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match durable result count %d", len(entries), resultCount))
+	}
+	prefixLen := uint64(len(entries))
+	if prefixLen == 0 {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix is empty but FSM last applied index is %d", record.EntryID.Index))
+	}
+	if prefixLen > record.EntryID.Index {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d exceeds last applied index %d", len(entries), record.EntryID.Index))
+	}
+	firstIndex := record.EntryID.Index - prefixLen + 1
+	if firstIndex != 1 && !f.storeOptions.AllowInitialIndexGap {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix starts at index %d; want 1", firstIndex))
 	}
 	if len(entries) > 0 {
 		last := entries[len(entries)-1]
@@ -203,7 +215,7 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 		if err := validateCommittedID(id); err != nil {
 			return reject(digest, raftentry.ErrorMalformedEntryV1, err)
 		}
-		if wantIndex := uint64(i + 1); id.Index != wantIndex {
+		if wantIndex := firstIndex + uint64(i); id.Index != wantIndex {
 			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry index %d at offset %d; want %d", id.Index, i, wantIndex))
 		}
 		stored, ok, err := f.results.LookupApplyResult(id)

@@ -411,6 +411,50 @@ func TestSingleGroupApplyLoopFailsClosedOnOrderingAndUnsupportedEntries(t *testi
 	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 2}, "orders")
 }
 
+func TestValidateAppliedPrefixAllowsInitialIndexGap(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm, err := Open(Options{
+		DB:      db,
+		Cluster: validFSMClusterConfig(dbDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync:          true,
+			AllowInitialIndexGap: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open FSM: %v", err)
+	}
+	defer func() { _ = fsm.Close() }()
+
+	first := committedCommand(6, 2, deterministicCreateCollectionEntry(t, "users", "fsm:create:users:initial-gap"))
+	firstResult, err := fsm.ApplyCommittedEntryV1(first)
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 first gap entry: %v result=%+v", err, firstResult)
+	}
+	assertApplied(t, firstResult, raftentry.ApplyStatusApplied, 1)
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{first}); err != nil {
+		t.Fatalf("ValidateAppliedPrefixV1 initial gap: %v result=%+v", err, result)
+	}
+
+	second := committedCommand(6, 3, deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:initial-gap"))
+	secondResult, err := fsm.ApplyCommittedEntryV1(second)
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 second gap entry: %v result=%+v", err, secondResult)
+	}
+	assertApplied(t, secondResult, raftentry.ApplyStatusApplied, 1)
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{second}); err == nil {
+		t.Fatalf("ValidateAppliedPrefixV1 suffix-only result=%+v, want conflict", result)
+	} else if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("ValidateAppliedPrefixV1 suffix-only code=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorRejectedConflictV1, err)
+	}
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{first, second}); err != nil {
+		t.Fatalf("ValidateAppliedPrefixV1 full initial-gap prefix: %v result=%+v", err, result)
+	}
+}
+
 func TestSingleGroupApplyLoopLogicalDigestConvergesAcrossDBs(t *testing.T) {
 	raw := deterministicCreateCollectionEntry(t, "users", "fsm:create:users:converge")
 	entries := []CommittedEntryV1{committedCommand(5, 1, raw)}
