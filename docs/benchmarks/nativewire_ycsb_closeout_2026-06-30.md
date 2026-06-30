@@ -167,3 +167,14 @@ successful inserts and reported `INSERT_ERROR`; its server log had no panic,
 fatal error, EOF, or ambiguous-commit marker. A clean 1M rerun and the final
 paired capture above both completed with zero `INSERT_ERROR`. Keep #2026 open
 for the deeper publication/readability invariant and intermittent-failure proof.
+
+Follow-up #3374 classification lives in
+`docs/benchmarks/nativewire_ycsb_insert_error_classification_2026-06-30.md`.
+That diagnostic reran current-head 100k and 1M nativewire loads at
+`3f2c712bb700806b29deb872ed90531d4828ab79` with
+`TREEDB_YCSB_LOG_ERRORS=1` and `-p silence=false`; both loads completed with
+zero `INSERT_ERROR`, empty stderr, and zero raw matches for `EOF`, `ambiguous`,
+`panic`, `fatal`, `ERROR`, or `Failed`. The old intermediate artifact remains
+invalid because it lacks client-side error strings, but it is now classified as
+a non-reproduced client/harness/protocol/server-lifecycle interruption rather
+than evidence of a current catalog/value-log publication failure.
