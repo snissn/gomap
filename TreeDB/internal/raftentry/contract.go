@@ -54,10 +54,14 @@ type RequestMetadataV1 struct {
 	ClusterRouteDatabase      string
 	ClusterRouteCatalog       string
 	ClusterRouteCollection    string
+	ClusterRouteShape         string
 	ClusterRouteGroupID       string
 	ClusterRouteMembers       []string
 	ClusterRouteLeaderHint    string
 	ClusterRoutePlacementMode string
+	ClusterRouteTokenKnown    bool
+	ClusterRouteToken         uint64
+	ClusterRoutePartitionID   string
 }
 
 type CommandDigestV1 [32]byte

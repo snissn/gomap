@@ -3,6 +3,7 @@ package collections
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestColumnPhysicalQ3DenseTypedColumnDirectPreparedParity1950(t *testing.T) {
@@ -124,6 +125,42 @@ func BenchmarkColumnPhysicalQ3DenseTypedColumn1950(b *testing.B) {
 	})
 }
 
+func TestColumnPhysicalQ3DenseTypedColumnOneShotSetupDiagnostics1950(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBatchA1950(), columnPhysicalQ3DenseBatchB1950()}
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
+	defer closeFn()
+
+	req := columnPhysicalQ3DenseRequest1950()
+	view, plan, closeView := openColumnPhysicalQ3DenseOneShotSetupView1950(t, col, req)
+	defer closeView()
+
+	diag := prepareColumnPhysicalQ3DenseOneShotSetup1950(t, view, req, plan)
+	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(t, "q3 one-shot setup", diag)
+}
+
+func BenchmarkColumnPhysicalQ3DenseTypedColumnOneShotSetup1950(b *testing.B) {
+	events := columnPhysicalQ3DenseBenchmarkEvents1950(16_384)
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(b, nil, [][]columnPhysicalJSONBenchParityEventP0{events})
+	defer closeFn()
+
+	req := columnPhysicalQ3DenseRequest1950()
+	view, plan, closeView := openColumnPhysicalQ3DenseOneShotSetupView1950(b, col, req)
+	defer closeView()
+
+	preview := prepareColumnPhysicalQ3DenseOneShotSetup1950(b, view, req, plan)
+	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(b, "preview q3 one-shot setup", preview)
+	b.SetBytes(int64(preview.DecodedPayloadBytes))
+	b.ReportAllocs()
+	b.ResetTimer()
+	var last ColumnPhysicalQueryDiagnostics
+	for i := 0; i < b.N; i++ {
+		last = prepareColumnPhysicalQ3DenseOneShotSetup1950(b, view, req, plan)
+	}
+	b.StopTimer()
+	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(b, "last q3 one-shot setup", last)
+	reportColumnPhysicalQ3DenseOneShotSetupBenchMetrics1950(b, last)
+}
+
 func columnPhysicalQ3DenseRequest1950() ColumnPhysicalQueryRequest {
 	return ColumnPhysicalQueryRequest{
 		Kind:        ColumnPhysicalQueryGroupHourCount,
@@ -203,6 +240,95 @@ func columnPhysicalQ3DenseReferenceGroups1950(events []columnPhysicalJSONBenchPa
 	return groups
 }
 
+func openColumnPhysicalQ3DenseOneShotSetupView1950(tb testing.TB, col *Collection, req ColumnPhysicalQueryRequest) (columnPhysicalScanSnapshotView, columnTypedColumnPhysicalQueryPlan, func()) {
+	tb.Helper()
+	if req.AggregateMetadataName != "" || !columnTypedColumnOneShotCacheRequestCandidate(req) {
+		tb.Fatalf("q3 setup request is not a no-metadata one-shot candidate: %+v", req)
+	}
+	view, closeView, err := col.prepareColumnPhysicalScanSnapshotViewWithSidecars(columnManifestScanSidecarsForPhysicalQuery(req))
+	if closeView == nil {
+		closeView = func() {}
+	}
+	if err != nil {
+		closeView()
+		tb.Fatalf("prepare q3 setup snapshot view: %v", err)
+	}
+	if view.MutationParts != 0 {
+		closeView()
+		tb.Fatalf("q3 setup view has mutation parts=%d; not a production one-shot candidate", view.MutationParts)
+	}
+	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
+	if err != nil {
+		closeView()
+		tb.Fatalf("plan q3 setup typed-column query: %v", err)
+	}
+	if !candidate || !columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req) {
+		closeView()
+		tb.Fatalf("q3 setup plan candidate=%t dense_group_hour=%t plan=%+v", candidate, columnTypedColumnPhysicalQueryUseDenseGroupHourCount(plan, req), plan)
+	}
+	return view, plan, closeView
+}
+
+func prepareColumnPhysicalQ3DenseOneShotSetup1950(tb testing.TB, view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, plan columnTypedColumnPhysicalQueryPlan) ColumnPhysicalQueryDiagnostics {
+	tb.Helper()
+	readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(view.ColumnAssetRootDir, view.AssetNamespace, req.ColumnAssetReadIntegrity)
+	if err != nil {
+		tb.Fatalf("open q3 setup read cache: %v", err)
+	}
+	readCache.returnViews = true
+	// Mirror the one-shot cache build boundary without running the reducer or storing a cache entry.
+	buildStart := time.Now()
+	runner, candidate, err := prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, &readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
+		prepareDenseGroupCountDistinctGlobalRanks: columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req),
+	})
+	buildNanos := time.Since(buildStart).Nanoseconds()
+	if err != nil {
+		if runner != nil {
+			runner.close()
+		}
+		_ = readCache.close()
+		tb.Fatalf("prepare q3 one-shot setup runner: %v", err)
+	}
+	if !candidate || runner == nil {
+		_ = readCache.close()
+		tb.Fatalf("prepare q3 one-shot setup candidate=%t runner=%p", candidate, runner)
+	}
+	diag := columnPhysicalQ3DenseOneShotSetupDiagnostics1950(runner, req, buildNanos)
+	runner.close()
+	if err := readCache.close(); err != nil {
+		tb.Fatalf("close q3 setup read cache: %v", err)
+	}
+	return diag
+}
+
+func columnPhysicalQ3DenseOneShotSetupDiagnostics1950(runner *columnTypedColumnPhysicalQueryRunner, req ColumnPhysicalQueryRequest, buildNanos int64) ColumnPhysicalQueryDiagnostics {
+	var diag ColumnPhysicalQueryDiagnostics
+	diag.TypedColumnOneShotCacheMiss = true
+	diag.TypedColumnOneShotCacheBuild = true
+	diag.TypedColumnOneShotBuildNanos = buildNanos
+	if runner == nil {
+		return diag
+	}
+	runner.prepareDiagnostics.applyTo(&diag)
+	diag.ProjectedColumns = len(runner.plan.ProjectedColumns)
+	diag.ScheduledGranules = runner.granulesConsidered
+	diag.SkippedGranules = runner.granulesSkipped
+	diag.DecodedGranules = runner.granulesDecoded
+	diag.DecodedBlocks = runner.decodedBlocks
+	diag.TypedColumnPartSections = runner.sections
+	diag.TypedColumnPartSectionBytes = runner.sectionBytes
+	diag.PhysicalBytesScanned = runner.assetBytes
+	diag.DecodedPayloadBytes = runner.decodedPayloadBytes
+	diag.ColumnAssetReadIntegrity = columnAssetReadIntegrityLabel(req.ColumnAssetReadIntegrity)
+	diag.StorageSource = ColumnPhysicalQueryStorageSourceTypedColumnPartSection
+	diag.FallbackReason = ColumnPhysicalQueryFallbackNone
+	diag.SegmentFileCacheHits = runner.segmentFileCacheHits
+	diag.SegmentFileCacheMisses = runner.segmentFileCacheMisses
+	diag.DenseGroupHourCountUsed = columnTypedColumnPhysicalQueryUseDenseGroupHourCount(runner.plan, req)
+	applyColumnPhysicalQueryPredicateDiagnostics(&diag, runner.plan.PredicateDiagnostics, 0, 0)
+	return diag
+}
+
 func assertColumnPhysicalQ3DenseResult1950(tb testing.TB, label string, result ColumnPhysicalQueryResult, want []ColumnPhysicalQueryGroup, wantRowsScanned, wantRowsMatched, wantReduceRows int) {
 	tb.Helper()
 	if len(result.Groups) != len(want) {
@@ -241,6 +367,52 @@ func assertColumnPhysicalQ3DenseDiagnostics1950(tb testing.TB, label string, dia
 	}
 }
 
+func assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics) {
+	tb.Helper()
+	if diag.StorageSource != ColumnPhysicalQueryStorageSourceTypedColumnPartSection || diag.FallbackReason != ColumnPhysicalQueryFallbackNone {
+		tb.Fatalf("%s setup diagnostics storage/fallback=%+v", label, diag)
+	}
+	if !diag.DenseGroupHourCountUsed || diag.DenseInt64SpanUsed || diag.DenseGroupCountUsed || diag.DenseGroupCountDistinctUsed {
+		tb.Fatalf("%s setup dense path diagnostics=%+v want only dense group-hour", label, diag)
+	}
+	if diag.RowsScanned != 0 || diag.RowsMatched != 0 || diag.ReduceRows != 0 || diag.ResultGroups != 0 {
+		tb.Fatalf("%s setup ran query rows scanned/matched/reduced/groups=%d/%d/%d/%d diagnostics=%+v", label, diag.RowsScanned, diag.RowsMatched, diag.ReduceRows, diag.ResultGroups, diag)
+	}
+	if diag.PredicateCount != 3 || diag.PredicateLiterals != 5 {
+		tb.Fatalf("%s setup predicate diagnostics=%+v want two equal predicates plus three-value IN", label, diag)
+	}
+	if diag.TypedColumnPartSections == 0 || diag.TypedColumnPartSectionBytes == 0 || diag.DecodedPayloadBytes == 0 || diag.DecodedBlocks == 0 {
+		tb.Fatalf("%s setup missing typed-column section/decode diagnostics: %+v", label, diag)
+	}
+	if diag.TypedColumnPrepareWorkerCount <= 0 {
+		tb.Fatalf("%s setup missing prepare worker diagnostics workers=%d diagnostics=%+v", label, diag.TypedColumnPrepareWorkerCount, diag)
+	}
+	setupTimingNanos := diag.TypedColumnOneShotBuildNanos + diag.TypedColumnPreparePartDecodeNanos
+	if setupTimingNanos != 0 && (diag.TypedColumnOneShotBuildNanos <= 0 || diag.TypedColumnPreparePartDecodeNanos <= 0) {
+		tb.Fatalf("%s setup partially missing build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
+			label,
+			diag.TypedColumnOneShotBuildNanos,
+			diag.TypedColumnPreparePartDecodeNanos,
+			diag)
+	}
+	if diag.TypedColumnPrepareSummaryNanos != 0 {
+		tb.Fatalf("%s setup summary nanos=%d want 0 for no-metadata one-shot setup diagnostics=%+v", label, diag.TypedColumnPrepareSummaryNanos, diag)
+	}
+	denseNanos := diag.TypedColumnPrepareDenseGroupNanos +
+		diag.TypedColumnPrepareDenseValueNanos +
+		diag.TypedColumnPrepareDensePredicateNanos +
+		diag.TypedColumnPrepareDensePreapplyNanos
+	if denseNanos != 0 && (diag.TypedColumnPrepareDenseGroupNanos <= 0 || diag.TypedColumnPrepareDenseValueNanos <= 0 || diag.TypedColumnPrepareDensePredicateNanos <= 0) {
+		tb.Fatalf("%s setup dense split diagnostics group=%d value=%d predicate=%d preapply=%d diagnostics=%+v",
+			label,
+			diag.TypedColumnPrepareDenseGroupNanos,
+			diag.TypedColumnPrepareDenseValueNanos,
+			diag.TypedColumnPrepareDensePredicateNanos,
+			diag.TypedColumnPrepareDensePreapplyNanos,
+			diag)
+	}
+}
+
 func reportColumnPhysicalQ3DenseBenchMetrics1950(b *testing.B, diag ColumnPhysicalQueryDiagnostics) {
 	b.Helper()
 	b.ReportMetric(float64(diag.RowsScanned), "rows_scanned/op")
@@ -248,4 +420,31 @@ func reportColumnPhysicalQ3DenseBenchMetrics1950(b *testing.B, diag ColumnPhysic
 	b.ReportMetric(float64(diag.ReduceRows), "reduce_rows/op")
 	b.ReportMetric(float64(diag.DecodedPayloadBytes), "decoded_bytes/op")
 	b.ReportMetric(float64(diag.TypedColumnPartSections), "typed_sections/op")
+}
+
+func reportColumnPhysicalQ3DenseOneShotSetupBenchMetrics1950(b *testing.B, diag ColumnPhysicalQueryDiagnostics) {
+	b.Helper()
+	b.ReportMetric(float64(diag.DecodedBlocks), "decoded_blocks/op")
+	b.ReportMetric(float64(diag.DecodedPayloadBytes), "decoded_bytes/op")
+	b.ReportMetric(float64(diag.TypedColumnPartSections), "typed_sections/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareWorkerCount), "typed_column_prepare_workers/op")
+	b.ReportMetric(float64(diag.TypedColumnOneShotBuildNanos), "typed_column_one_shot_build_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePlanNanos), "typed_column_prepare_plan_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareRefsNanos), "typed_column_prepare_refs_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePairingNanos), "typed_column_prepare_pairing_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePartDecodeNanos), "typed_column_prepare_part_decode_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePostPrepareNanos), "typed_column_prepare_post_prepare_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareReadImageNanos), "typed_column_prepare_read_image_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareStateBuildNanos), "typed_column_prepare_state_build_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareDictionaryNanos), "typed_column_prepare_dictionary_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPreparePruningNanos), "typed_column_prepare_pruning_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareSortKeyNanos), "typed_column_prepare_sort_key_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareStatsNanos), "typed_column_prepare_stats_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareRangeReadNanos), "typed_column_prepare_range_read_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareRangeReadBytes), "typed_column_prepare_range_read_bytes/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareAdapterNanos), "typed_column_prepare_adapter_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareDenseGroupNanos), "typed_column_prepare_dense_group_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareDenseValueNanos), "typed_column_prepare_dense_value_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareDensePredicateNanos), "typed_column_prepare_dense_predicate_nanos/op")
+	b.ReportMetric(float64(diag.TypedColumnPrepareDensePreapplyNanos), "typed_column_prepare_dense_preapply_nanos/op")
 }

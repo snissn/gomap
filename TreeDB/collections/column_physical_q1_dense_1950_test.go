@@ -275,6 +275,10 @@ func openColumnPhysicalQ1DenseOneShotSetupView1950(tb testing.TB, col *Collectio
 		closeView()
 		tb.Fatalf("prepare q1 setup snapshot view: %v", err)
 	}
+	if view.MutationParts != 0 {
+		closeView()
+		tb.Fatalf("q1 setup view has mutation parts=%d; not a production one-shot candidate", view.MutationParts)
+	}
 	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
 	if err != nil {
 		closeView()

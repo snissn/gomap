@@ -71,10 +71,14 @@ func TestDigestV1StabilityAcrossMetadataAndApplyEntryID(t *testing.T) {
 			ClusterRouteDatabase:      "default",
 			ClusterRouteCatalog:       "default",
 			ClusterRouteCollection:    "users",
+			ClusterRouteShape:         "token",
 			ClusterRouteGroupID:       "group-a",
 			ClusterRouteMembers:       []string{"node-a", "node-b"},
 			ClusterRouteLeaderHint:    "node-a",
 			ClusterRoutePlacementMode: "collection",
+			ClusterRouteTokenKnown:    true,
+			ClusterRouteToken:         11,
+			ClusterRoutePartitionID:   "token-000000",
 		},
 	})
 	if err != nil {
@@ -94,10 +98,14 @@ func TestDigestV1StabilityAcrossMetadataAndApplyEntryID(t *testing.T) {
 			ClusterRouteDatabase:      "tenant",
 			ClusterRouteCatalog:       "catalog-b",
 			ClusterRouteCollection:    "events",
+			ClusterRouteShape:         "collection",
 			ClusterRouteGroupID:       "group-b",
 			ClusterRouteMembers:       []string{"node-c", "node-d"},
 			ClusterRouteLeaderHint:    "node-c",
 			ClusterRoutePlacementMode: "collection",
+			ClusterRouteTokenKnown:    true,
+			ClusterRouteToken:         99,
+			ClusterRoutePartitionID:   "token-000099",
 		},
 	})
 	if err != nil {
