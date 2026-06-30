@@ -32,7 +32,8 @@ func TestColumnPhysicalQ1DenseLatestVisibleMutation1953(t *testing.T) {
 	delete(latest, deleteID)
 
 	want := collectionCounts1953(latestEvents1953(latest))
-	result, err := col.RunColumnPhysicalQuery(ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"})
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection", ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums}
+	result, err := col.RunColumnPhysicalQuery(req)
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q1 latest-visible): %v", err)
 	}
@@ -40,7 +41,7 @@ func TestColumnPhysicalQ1DenseLatestVisibleMutation1953(t *testing.T) {
 		t.Fatalf("q1 latest-visible groups=%v want %v full=%+v", got, want, result.Groups)
 	}
 	assertLatestVisibleDenseDiagnostics1953(t, "q1", result.Diagnostics, len(latest), -1, "q1")
-	assertPreparedMutationFailsClosed1953(t, col, ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"})
+	assertPreparedMutationFailsClosed1953(t, col, req)
 }
 
 func TestColumnPhysicalQ3DenseLatestVisibleMutationReopen1953(t *testing.T) {
@@ -81,7 +82,9 @@ func TestColumnPhysicalQ3DenseLatestVisibleMutationReopen1953(t *testing.T) {
 	live := latestEvents1953(latest)
 	want := columnPhysicalQ3DenseReferenceGroups1950(live)
 	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q3", live)
-	result, err := col.RunColumnPhysicalQuery(columnPhysicalQ3DenseRequest1950())
+	req := columnPhysicalQ3DenseRequest1950()
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+	result, err := col.RunColumnPhysicalQuery(req)
 	if err != nil {
 		t.Fatalf("RunColumnPhysicalQuery(q3 latest-visible): %v", err)
 	}
@@ -89,7 +92,7 @@ func TestColumnPhysicalQ3DenseLatestVisibleMutationReopen1953(t *testing.T) {
 		t.Fatalf("q3 latest-visible groups=%+v want %+v", result.Groups, want)
 	}
 	assertLatestVisibleDenseDiagnostics1953(t, "q3", result.Diagnostics, len(live), matchedRows, "q3")
-	assertPreparedMutationFailsClosed1953(t, col, columnPhysicalQ3DenseRequest1950())
+	assertPreparedMutationFailsClosed1953(t, col, req)
 }
 
 func TestColumnPhysicalQ5DenseLatestVisibleMutation1953(t *testing.T) {
