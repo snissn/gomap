@@ -634,6 +634,167 @@ func TestAppendOnlyValueArenaBackingStatsTrackActiveAndRetainedChunks(t *testing
 	}
 }
 
+func TestDropAppendOnlyValueArenaPoolsReplacesPools(t *testing.T) {
+	class, _, ok := appendOnlyValueArenaClassForLen(appendOnlyValueArenaDefaultChunk)
+	if !ok {
+		t.Fatal("test setup failed to map value arena chunk to pool class")
+	}
+	before := appendOnlyValueArenaPoolForClass(class)
+	if before == nil {
+		t.Fatal("expected initial append-only value arena pool")
+	}
+	beforeDrop := AppendOnlyValueArenaPoolDropTotal()
+
+	DropAppendOnlyValueArenaPools()
+
+	after := appendOnlyValueArenaPoolForClass(class)
+	if after == nil {
+		t.Fatal("expected replacement append-only value arena pool")
+	}
+	if before == after {
+		t.Fatal("drop did not replace append-only value arena pool")
+	}
+	if got := AppendOnlyValueArenaPoolDropTotal(); got != beforeDrop+1 {
+		t.Fatalf("value arena pool drop total=%d want %d", got, beforeDrop+1)
+	}
+}
+
+func TestAppendOnlyValueArenaPoolStatsTrackRetainedChunks(t *testing.T) {
+	DropAppendOnlyValueArenaPools()
+	t.Cleanup(DropAppendOnlyValueArenaPools)
+
+	before := AppendOnlyValueArenaPoolStatsSnapshot()
+	chunk := make([]byte, 0, appendOnlyValueArenaDefaultChunk)
+	wantBytes := appendOnlyValueArenaPoolBytes(cap(chunk))
+
+	putAppendOnlyValueArenaChunk(chunk)
+	afterPut := AppendOnlyValueArenaPoolStatsSnapshot()
+	if got := afterPut.RetainedBytesEstimate; got != wantBytes {
+		t.Fatalf("retained bytes after put=%d want %d", got, wantBytes)
+	}
+	if got := afterPut.PutsTotal; got != before.PutsTotal+1 {
+		t.Fatalf("puts total=%d want %d", got, before.PutsTotal+1)
+	}
+
+	got := getAppendOnlyValueArenaChunk(1)
+	afterGet := AppendOnlyValueArenaPoolStatsSnapshot()
+	if cap(got) != appendOnlyValueArenaDefaultChunk {
+		t.Fatalf("pooled cap=%d want %d", cap(got), appendOnlyValueArenaDefaultChunk)
+	}
+	switch gotGets := afterGet.GetsTotal; gotGets {
+	case before.GetsTotal + 1:
+		if gotRetained := afterGet.RetainedBytesEstimate; gotRetained != 0 {
+			t.Fatalf("retained bytes after pooled get=%d want 0", gotRetained)
+		}
+	case before.GetsTotal:
+		if gotRetained := afterGet.RetainedBytesEstimate; gotRetained != wantBytes {
+			t.Fatalf("retained bytes after sync.Pool miss=%d want estimate %d", gotRetained, wantBytes)
+		}
+	default:
+		t.Fatalf("gets total=%d want %d or %d", gotGets, before.GetsTotal, before.GetsTotal+1)
+	}
+
+	putAppendOnlyValueArenaChunk(got)
+	beforeDrop := AppendOnlyValueArenaPoolStatsSnapshot()
+	DropAppendOnlyValueArenaPools()
+	afterDrop := AppendOnlyValueArenaPoolStatsSnapshot()
+	if gotRetained := afterDrop.RetainedBytesEstimate; gotRetained != 0 {
+		t.Fatalf("retained bytes after drop=%d want 0", gotRetained)
+	}
+	if gotDrops := afterDrop.DropsTotal; gotDrops != beforeDrop.DropsTotal+1 {
+		t.Fatalf("drops total=%d want %d", gotDrops, beforeDrop.DropsTotal+1)
+	}
+	if gotDropBytes := afterDrop.DropBytesTotal; gotDropBytes < beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate {
+		t.Fatalf("drop bytes total=%d want at least %d", gotDropBytes, beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate)
+	}
+}
+
+func TestPutAppendOnlyValueArenaChunkDropsOversizedRetainedChunk(t *testing.T) {
+	DropAppendOnlyValueArenaPools()
+	t.Cleanup(DropAppendOnlyValueArenaPools)
+
+	before := AppendOnlyValueArenaPoolStatsSnapshot()
+	chunk := make([]byte, 0, appendOnlyValueArenaPoolMaxCap+1)
+	wantBytes := appendOnlyValueArenaPoolBytes(cap(chunk))
+
+	putAppendOnlyValueArenaChunk(chunk)
+
+	after := AppendOnlyValueArenaPoolStatsSnapshot()
+	if got := after.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained bytes after oversized put=%d want 0", got)
+	}
+	if got := after.PutsTotal - before.PutsTotal; got != 0 {
+		t.Fatalf("puts delta=%d want 0", got)
+	}
+	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 1 {
+		t.Fatalf("admission drops delta=%d want 1", got)
+	}
+	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != wantBytes {
+		t.Fatalf("admission drop bytes delta=%d want %d", got, wantBytes)
+	}
+}
+
+func TestPutAppendOnlyValueArenaChunkAdmissionDropsOnRetainBudgetPressure(t *testing.T) {
+	DropAppendOnlyValueArenaPools()
+	t.Cleanup(DropAppendOnlyValueArenaPools)
+
+	savedBudget := appendOnlyValueArenaPoolRetainBudgetBytes
+	appendOnlyValueArenaPoolRetainBudgetBytes = appendOnlyValueArenaPoolBytes(appendOnlyValueArenaDefaultChunk)
+	t.Cleanup(func() {
+		appendOnlyValueArenaPoolRetainBudgetBytes = savedBudget
+	})
+
+	before := AppendOnlyValueArenaPoolStatsSnapshot()
+	first := make([]byte, 0, appendOnlyValueArenaDefaultChunk)
+	second := make([]byte, 0, appendOnlyValueArenaDefaultChunk)
+	wantBytes := appendOnlyValueArenaPoolBytes(appendOnlyValueArenaDefaultChunk)
+
+	putAppendOnlyValueArenaChunk(first)
+	putAppendOnlyValueArenaChunk(second)
+
+	after := AppendOnlyValueArenaPoolStatsSnapshot()
+	if got := after.RetainedBytesEstimate; got != wantBytes {
+		t.Fatalf("retained bytes=%d want budget %d", got, wantBytes)
+	}
+	if got := after.PutsTotal - before.PutsTotal; got != 1 {
+		t.Fatalf("puts delta=%d want 1", got)
+	}
+	if got := after.DropsTotal - before.DropsTotal; got != 0 {
+		t.Fatalf("drops delta=%d want 0", got)
+	}
+	if got := after.DropBytesTotal - before.DropBytesTotal; got != 0 {
+		t.Fatalf("drop bytes delta=%d want 0", got)
+	}
+	if got := after.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 1 {
+		t.Fatalf("admission drops delta=%d want 1", got)
+	}
+	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != wantBytes {
+		t.Fatalf("admission drop bytes delta=%d want %d", got, wantBytes)
+	}
+
+	reused := getAppendOnlyValueArenaChunk(1)
+	afterGet := AppendOnlyValueArenaPoolStatsSnapshot()
+	if cap(reused) != appendOnlyValueArenaDefaultChunk {
+		t.Fatalf("reused cap=%d want %d", cap(reused), appendOnlyValueArenaDefaultChunk)
+	}
+	switch got := afterGet.GetsTotal - after.GetsTotal; got {
+	case 1:
+		if got := afterGet.RetainedBytesEstimate; got != 0 {
+			t.Fatalf("retained bytes after pooled get=%d want 0", got)
+		}
+	case 0:
+		if !testRaceEnabled {
+			t.Fatalf("gets delta after replacement put=%d want 1", got)
+		}
+		if got := afterGet.RetainedBytesEstimate; got != wantBytes {
+			t.Fatalf("retained bytes after sync.Pool race miss=%d want estimate %d", got, wantBytes)
+		}
+	default:
+		t.Fatalf("gets delta after replacement put=%d want 0 or 1", got)
+	}
+	putAppendOnlyValueArenaChunk(reused)
+}
+
 func TestAppendOnlyResetRetainedArenaBounded(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("k")

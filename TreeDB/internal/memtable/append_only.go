@@ -55,6 +55,7 @@ const (
 )
 
 var appendOnlyEntryPoolRetainBudgetBytes = uint64(256 << 20)
+var appendOnlyValueArenaPoolRetainBudgetBytes = uint64(64 << 20)
 
 // Serializes package-pool replacement with retained-byte accounting. sync.Pool
 // is concurrent, but the estimate is for the currently reachable pool set.
@@ -74,9 +75,17 @@ var appendOnlyEntryReserveGrowCallsTotal atomic.Uint64
 var appendOnlyEntryReserveGrowBytesTotal atomic.Uint64
 var appendOnlyEntryReserveSkippedGrowthAllocsTotal atomic.Uint64
 var appendOnlyEntryReserveSkippedGrowthBytesTotal atomic.Uint64
+var appendOnlyValueArenaPoolPtrs [appendOnlyValueArenaClassCount]atomic.Pointer[sync.Pool]
+var appendOnlyValueArenaPoolRetainedBytes atomic.Uint64
+var appendOnlyValueArenaPoolRetainedBytesMax atomic.Uint64
+var appendOnlyValueArenaPoolGetTotal atomic.Uint64
+var appendOnlyValueArenaPoolPutTotal atomic.Uint64
+var appendOnlyValueArenaPoolDropTotal atomic.Uint64
+var appendOnlyValueArenaPoolDropBytesTotal atomic.Uint64
+var appendOnlyValueArenaPoolAdmissionDropTotal atomic.Uint64
+var appendOnlyValueArenaPoolAdmissionDropBytesTotal atomic.Uint64
 var appendOnlyIteratorPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
-var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
 
 type appendOnlyEntry struct {
 	key         []byte
@@ -171,6 +180,17 @@ type AppendOnlyValueArenaStats struct {
 	ActiveBytes    int64
 	RetainedChunks int64
 	RetainedBytes  int64
+}
+
+type AppendOnlyValueArenaPoolStats struct {
+	RetainedBytesEstimate    uint64
+	RetainedBytesMaxEstimate uint64
+	GetsTotal                uint64
+	PutsTotal                uint64
+	DropsTotal               uint64
+	DropBytesTotal           uint64
+	AdmissionDropsTotal      uint64
+	AdmissionDropBytesTotal  uint64
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -362,6 +382,111 @@ func AppendOnlyEntryReserveStatsSnapshot() AppendOnlyEntryReserveStats {
 		GrowBytesTotal:           appendOnlyEntryReserveGrowBytesTotal.Load(),
 		SkippedGrowthAllocsTotal: appendOnlyEntryReserveSkippedGrowthAllocsTotal.Load(),
 		SkippedGrowthBytesTotal:  appendOnlyEntryReserveSkippedGrowthBytesTotal.Load(),
+	}
+}
+
+func appendOnlyValueArenaPoolForClass(class int) *sync.Pool {
+	if class < 0 || class >= len(appendOnlyValueArenaPoolPtrs) {
+		return nil
+	}
+	if pool := appendOnlyValueArenaPoolPtrs[class].Load(); pool != nil {
+		return pool
+	}
+	pool := &sync.Pool{}
+	if appendOnlyValueArenaPoolPtrs[class].CompareAndSwap(nil, pool) {
+		return pool
+	}
+	return appendOnlyValueArenaPoolPtrs[class].Load()
+}
+
+func appendOnlyValueArenaPoolBytes(capacity int) uint64 {
+	if capacity <= 0 {
+		return 0
+	}
+	return uint64(capacity)
+}
+
+func tryAddAppendOnlyValueArenaPoolRetainedBytes(bytes uint64) bool {
+	if bytes == 0 {
+		return true
+	}
+	budget := appendOnlyValueArenaPoolRetainBudgetBytes
+	if budget == 0 {
+		return false
+	}
+	for {
+		current := appendOnlyValueArenaPoolRetainedBytes.Load()
+		if current >= budget || bytes > budget-current {
+			return false
+		}
+		next := current + bytes
+		if appendOnlyValueArenaPoolRetainedBytes.CompareAndSwap(current, next) {
+			for {
+				prev := appendOnlyValueArenaPoolRetainedBytesMax.Load()
+				if next <= prev || appendOnlyValueArenaPoolRetainedBytesMax.CompareAndSwap(prev, next) {
+					return true
+				}
+			}
+		}
+	}
+}
+
+func recordAppendOnlyValueArenaPoolAdmissionDrop(bytes uint64) {
+	appendOnlyValueArenaPoolAdmissionDropTotal.Add(1)
+	if bytes > 0 {
+		appendOnlyValueArenaPoolAdmissionDropBytesTotal.Add(bytes)
+	}
+}
+
+func subtractAppendOnlyValueArenaPoolRetainedBytes(bytes uint64) {
+	if bytes == 0 {
+		return
+	}
+	for {
+		current := appendOnlyValueArenaPoolRetainedBytes.Load()
+		if current == 0 {
+			return
+		}
+		next := uint64(0)
+		if current > bytes {
+			next = current - bytes
+		}
+		if appendOnlyValueArenaPoolRetainedBytes.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func dropAppendOnlyValueArenaPools() {
+	for i := range appendOnlyValueArenaPoolPtrs {
+		appendOnlyValueArenaPoolPtrs[i].Store(&sync.Pool{})
+	}
+	if dropped := appendOnlyValueArenaPoolRetainedBytes.Swap(0); dropped > 0 {
+		appendOnlyValueArenaPoolDropBytesTotal.Add(dropped)
+	}
+	appendOnlyValueArenaPoolDropTotal.Add(1)
+}
+
+// DropAppendOnlyValueArenaPools abandons package-level append-only value-arena
+// chunk pools. Per-memtable active/retained arenas are unaffected.
+func DropAppendOnlyValueArenaPools() {
+	dropAppendOnlyValueArenaPools()
+}
+
+func AppendOnlyValueArenaPoolDropTotal() uint64 {
+	return appendOnlyValueArenaPoolDropTotal.Load()
+}
+
+func AppendOnlyValueArenaPoolStatsSnapshot() AppendOnlyValueArenaPoolStats {
+	return AppendOnlyValueArenaPoolStats{
+		RetainedBytesEstimate:    appendOnlyValueArenaPoolRetainedBytes.Load(),
+		RetainedBytesMaxEstimate: appendOnlyValueArenaPoolRetainedBytesMax.Load(),
+		GetsTotal:                appendOnlyValueArenaPoolGetTotal.Load(),
+		PutsTotal:                appendOnlyValueArenaPoolPutTotal.Load(),
+		DropsTotal:               appendOnlyValueArenaPoolDropTotal.Load(),
+		DropBytesTotal:           appendOnlyValueArenaPoolDropBytesTotal.Load(),
+		AdmissionDropsTotal:      appendOnlyValueArenaPoolAdmissionDropTotal.Load(),
+		AdmissionDropBytesTotal:  appendOnlyValueArenaPoolAdmissionDropBytesTotal.Load(),
 	}
 }
 
@@ -641,9 +766,15 @@ func getAppendOnlyValueArenaChunk(capacity int) []byte {
 		capacity = appendOnlyValueArenaDefaultChunk
 	}
 	if idx, classCap, ok := appendOnlyValueArenaClassForLen(capacity); ok {
-		if v := appendOnlyValueArenaPools[idx].Get(); v != nil {
-			if b, ok := v.([]byte); ok && cap(b) >= classCap {
-				return b[:0]
+		if pool := appendOnlyValueArenaPoolForClass(idx); pool != nil {
+			if v := pool.Get(); v != nil {
+				if b, ok := v.([]byte); ok {
+					appendOnlyValueArenaPoolGetTotal.Add(1)
+					subtractAppendOnlyValueArenaPoolRetainedBytes(appendOnlyValueArenaPoolBytes(cap(b)))
+					if cap(b) >= classCap {
+						return b[:0]
+					}
+				}
 			}
 		}
 		return make([]byte, 0, classCap)
@@ -655,8 +786,21 @@ func putAppendOnlyValueArenaChunk(chunk []byte) {
 	if chunk == nil {
 		return
 	}
+	bytes := appendOnlyValueArenaPoolBytes(cap(chunk))
 	if idx, ok := appendOnlyValueArenaClassForCap(cap(chunk)); ok {
-		appendOnlyValueArenaPools[idx].Put(chunk[:0])
+		if !tryAddAppendOnlyValueArenaPoolRetainedBytes(bytes) {
+			recordAppendOnlyValueArenaPoolAdmissionDrop(bytes)
+			return
+		}
+		if pool := appendOnlyValueArenaPoolForClass(idx); pool != nil {
+			appendOnlyValueArenaPoolPutTotal.Add(1)
+			pool.Put(chunk[:0])
+			return
+		}
+		subtractAppendOnlyValueArenaPoolRetainedBytes(bytes)
+		recordAppendOnlyValueArenaPoolAdmissionDrop(bytes)
+	} else if bytes > 0 {
+		recordAppendOnlyValueArenaPoolAdmissionDrop(bytes)
 	}
 }
 

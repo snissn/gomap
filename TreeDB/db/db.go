@@ -397,6 +397,9 @@ type DB struct {
 	flushApplyRetries                             atomic.Uint64
 	flushApplyMismatches                          atomic.Uint64
 
+	flushApplySpanNativeReducerValidationGuard      atomic.Bool
+	flushApplySpanNativeReducerValidationGuardTrips atomic.Uint64
+
 	flushAdmission FlushAdmissionDecision
 
 	flushApplyConcurrency int
