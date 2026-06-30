@@ -275,6 +275,50 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctShardRankRefsParallelMatchesSerial(t *testing.T) {
+	newPart := func(dictionary []string, valid []bool) columnTypedColumnPhysicalQueryPart {
+		return columnTypedColumnPhysicalQueryPart{
+			DenseGroupCountDistinct: &columnTypedColumnDenseGroupCountDistinctPart{
+				Distinct: columnTypedColumnDenseStringCodeColumn{
+					Dictionary: dictionary,
+					Valid:      valid,
+				},
+			},
+		}
+	}
+	parts := []columnTypedColumnPhysicalQueryPart{
+		newPart([]string{"did:shared", "", "did:a"}, []bool{true, false, true}),
+		newPart([]string{"did:b", "did:shared"}, nil),
+		newPart([]string{"did:c", "did:b", "did:c2"}, []bool{true, true, false}),
+		newPart([]string{"", "did:d"}, nil),
+		newPart([]string{"did:e", "did:shared", "did:a"}, []bool{false, true, true}),
+	}
+	capacity := 0
+	for partIdx := range parts {
+		capacity += len(parts[partIdx].DenseGroupCountDistinct.Distinct.Dictionary)
+	}
+	shardCount := 8
+	serialRefs, err := columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsSerial(parts, shardCount, capacity)
+	if err != nil {
+		t.Fatalf("collect serial refs: %v", err)
+	}
+	parallelRefs, err := columnTypedColumnDenseGroupCountDistinctCollectShardRankRefs(parts, shardCount, capacity, 3)
+	if err != nil {
+		t.Fatalf("collect parallel refs: %v", err)
+	}
+	if !reflect.DeepEqual(parallelRefs, serialRefs) {
+		t.Fatalf("parallel refs mismatch\nserial=%v\nparallel=%v", serialRefs, parallelRefs)
+	}
+	wantRanges := []columnTypedColumnDenseGroupCountDistinctShardRankRefWorkerRange{
+		{start: 0, end: 2},
+		{start: 2, end: 4},
+		{start: 4, end: 5},
+	}
+	if got := columnTypedColumnDenseGroupCountDistinctShardRankRefWorkerRanges(len(parts), 3); !reflect.DeepEqual(got, wantRanges) {
+		t.Fatalf("worker ranges=%+v want %+v", got, wantRanges)
+	}
+}
+
 // Dense q2 distinct ranks are reducer-local equality IDs, not externally visible
 // lexical order. This verifies the q2-visible result invariant after rank renumbering.
 func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankRunEquivalence(t *testing.T) {
