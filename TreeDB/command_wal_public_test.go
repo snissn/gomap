@@ -358,14 +358,19 @@ func publicCommandWALFrameCount(t *testing.T, db *DB) uint64 {
 	return frames
 }
 
-func publicStatUint64(t *testing.T, db *DB, key string) uint64 {
+func statMapUint64(t *testing.T, stats map[string]string, key string) uint64 {
 	t.Helper()
-	raw := db.Stats()[key]
+	raw := stats[key]
 	got, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
 		t.Fatalf("parse %s=%q: %v", key, raw, err)
 	}
 	return got
+}
+
+func publicStatUint64(t *testing.T, db *DB, key string) uint64 {
+	t.Helper()
+	return statMapUint64(t, db.Stats(), key)
 }
 
 func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
@@ -426,6 +431,12 @@ func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
 	for _, tt := range tests {
 		if got := publicStatUint64(t, db, tt.key); got != tt.want {
 			t.Fatalf("%s=%d want %d", tt.key, got, tt.want)
+		}
+	}
+	cachedStats := db.cached.Stats()
+	for _, tt := range tests {
+		if got := statMapUint64(t, cachedStats, tt.key); got != tt.want {
+			t.Fatalf("cached stats %s=%d want %d", tt.key, got, tt.want)
 		}
 	}
 }
