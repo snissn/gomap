@@ -455,6 +455,93 @@ func TestValidateAppliedPrefixAllowsInitialIndexGap(t *testing.T) {
 	}
 }
 
+func TestInitialIndexGapReplaysResultAheadBeforeLaterEntry(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForInitialGapTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	first := committedCommand(6, 2, deterministicCreateCollectionEntry(t, "users", "fsm:create:users:gap-result-ahead"))
+	firstResult, err := applyCommittedEntryWithFaultForTest(t, fsm, first, raftapply.FaultAfterResultRecordBeforeProgressV1)
+	assertRejected(t, firstResult, err, raftentry.ApplyStatusRecoveryRequired, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := fsm.progress.Len(); got != 0 {
+		t.Fatalf("progress records after result-ahead fault=%d, want 0", got)
+	}
+	if got := fsm.results.Len(); got != 1 {
+		t.Fatalf("result records after result-ahead fault=%d, want 1", got)
+	}
+	if got := db.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after result-ahead fault=%d, want 1", got)
+	}
+
+	second := committedCommand(6, 3, deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:gap-result-ahead"))
+	skipped, err := fsm.ApplyCommittedEntryV1(second)
+	assertRejected(t, skipped, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := fsm.progress.Len(); got != 0 {
+		t.Fatalf("progress records after skipped later entry=%d, want 0", got)
+	}
+
+	replayedFirst, err := fsm.ApplyCommittedEntryV1(first)
+	if err != nil {
+		t.Fatalf("replay first result-ahead entry: %v result=%+v", err, replayedFirst)
+	}
+	assertApplied(t, replayedFirst, raftentry.ApplyStatusApplied, 1)
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 6, Index: 2})
+
+	appliedSecond, err := fsm.ApplyCommittedEntryV1(second)
+	if err != nil {
+		t.Fatalf("apply second after replaying first: %v result=%+v", err, appliedSecond)
+	}
+	assertApplied(t, appliedSecond, raftentry.ApplyStatusApplied, 1)
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 6, Index: 3})
+}
+
+func TestValidateAppliedPrefixAllowsResultAheadRecoveryState(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForInitialGapTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	first := committedCommand(6, 2, deterministicCreateCollectionEntry(t, "users", "fsm:create:users:prefix-result-ahead"))
+	firstResult, err := fsm.ApplyCommittedEntryV1(first)
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 first: %v result=%+v", err, firstResult)
+	}
+	assertApplied(t, firstResult, raftentry.ApplyStatusApplied, 1)
+
+	second := committedCommand(6, 3, deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:prefix-result-ahead"))
+	secondResult, err := applyCommittedEntryWithFaultForTest(t, fsm, second, raftapply.FaultAfterResultRecordBeforeProgressV1)
+	assertRejected(t, secondResult, err, raftentry.ApplyStatusRecoveryRequired, raftentry.ErrorUnsafeDurabilityModeV1)
+	if got := fsm.progress.Len(); got != 1 {
+		t.Fatalf("progress records after second result-ahead fault=%d, want 1", got)
+	}
+	if got := fsm.results.Len(); got != 2 {
+		t.Fatalf("result records after second result-ahead fault=%d, want 2", got)
+	}
+
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{first}); err != nil {
+		t.Fatalf("ValidateAppliedPrefixV1 progress prefix with result-ahead state: %v result=%+v", err, result)
+	}
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{first, second}); err == nil {
+		t.Fatalf("ValidateAppliedPrefixV1 result-ahead full prefix result=%+v, want conflict before replay", result)
+	} else if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("ValidateAppliedPrefixV1 result-ahead full prefix code=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorRejectedConflictV1, err)
+	}
+
+	replayedSecond, err := fsm.ApplyCommittedEntryV1(second)
+	if err != nil {
+		t.Fatalf("replay second result-ahead entry: %v result=%+v", err, replayedSecond)
+	}
+	assertApplied(t, replayedSecond, raftentry.ApplyStatusApplied, 1)
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{first, second}); err != nil {
+		t.Fatalf("ValidateAppliedPrefixV1 full prefix after replay: %v result=%+v", err, result)
+	}
+}
+
 func TestSingleGroupApplyLoopLogicalDigestConvergesAcrossDBs(t *testing.T) {
 	raw := deterministicCreateCollectionEntry(t, "users", "fsm:create:users:converge")
 	entries := []CommittedEntryV1{committedCommand(5, 1, raw)}
@@ -699,6 +786,48 @@ func openFSMForTest(t testing.TB, db *backenddb.DB, dbDir string) *FSM {
 		t.Fatalf("Open FSM: %v", err)
 	}
 	return fsm
+}
+
+func openFSMForInitialGapTest(t testing.TB, db *backenddb.DB, dbDir string) *FSM {
+	t.Helper()
+	fsm, err := Open(Options{
+		DB:      db,
+		Cluster: validFSMClusterConfig(dbDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync:          true,
+			AllowInitialIndexGap: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Open FSM: %v", err)
+	}
+	return fsm
+}
+
+func applyCommittedEntryWithFaultForTest(t *testing.T, fsm *FSM, entry CommittedEntryV1, point raftapply.FaultPointV1) (raftentry.ApplyResultV1, error) {
+	t.Helper()
+	id := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
+	meta, err := fsm.applyMetadata(entry, id)
+	if err != nil {
+		t.Fatalf("applyMetadata: %v", err)
+	}
+	return raftapply.ApplyCommittedEntryV1(fsm.db, entry.Bytes, meta, raftapply.Options{
+		DecodeLimits:  fsm.decodeLimits,
+		ProgressStore: fsm.progress,
+		ResultStore:   fsm.results,
+		FaultInjector: fsmSinglePointFaultInjector{point: point},
+	})
+}
+
+type fsmSinglePointFaultInjector struct {
+	point raftapply.FaultPointV1
+}
+
+func (f fsmSinglePointFaultInjector) InjectApplyFault(point raftapply.FaultPointV1, _ raftapply.ApplyFaultContextV1) error {
+	if point != f.point {
+		return nil
+	}
+	return errors.New("injected apply fault")
 }
 
 func validFSMClusterConfig(dbDir string) raftcluster.Config {

@@ -183,9 +183,9 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 		}
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix has %d entries but FSM has no applied progress", len(entries)))
 	}
-	resultCount := f.results.Len()
-	if len(entries) != resultCount {
-		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match durable result count %d", len(entries), resultCount))
+	progressCount := f.progress.Len()
+	if len(entries) != progressCount {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match durable progress count %d", len(entries), progressCount))
 	}
 	prefixLen := uint64(len(entries))
 	if prefixLen == 0 {
@@ -335,6 +335,17 @@ func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
 		if id.Index != 1 && !f.storeOptions.AllowInitialIndexGap {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry starts at index %d; want 1", id.Index)
 		}
+		localLSN, err := localAppliedCommandLSN(f.db)
+		if err != nil {
+			return err
+		}
+		if localLSN != 0 || f.results.Len() != 0 {
+			if _, ok, err := f.results.LookupApplyResult(id); err != nil {
+				return err
+			} else if !ok {
+				return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable result for apply entry %d/%d while local coverage exists without progress metadata", id.Term, id.Index)
+			}
+		}
 		return nil
 	}
 	last := record.EntryID
@@ -422,10 +433,7 @@ func (f *FSM) requireStoredResultForLocalCoverageGap(id raftentry.ApplyEntryID, 
 	}
 	record, ok := f.progress.LastAppliedRecord()
 	if !ok {
-		if localLSN == 0 {
-			return nil
-		}
-		if id.Index != 1 {
+		if localLSN == 0 && f.results.Len() == 0 {
 			return nil
 		}
 		return f.requireStoredResultCoveredByLocalLSN(id, digest, localLSN, 0)
