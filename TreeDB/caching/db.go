@@ -8520,6 +8520,10 @@ type DB struct {
 	flushApplyPlanningNs                                         atomic.Uint64
 	flushApplyBuildNs                                            atomic.Uint64
 	flushApplyBackendWriteNs                                     atomic.Uint64
+	flushApplyBackendBatchWriteNs                                atomic.Uint64
+	flushApplyDeferredVLogPointerMaterializeNs                   atomic.Uint64
+	flushApplyVLogFlushNs                                        atomic.Uint64
+	flushApplyVLogSyncNs                                         atomic.Uint64
 	flushApplyLeafLogEncodeCompressNs                            atomic.Uint64
 	flushApplyLeafLogAppendWaitNs                                atomic.Uint64
 	flushApplyLeafLogAppendNs                                    atomic.Uint64
@@ -26694,7 +26698,9 @@ func (db *DB) flushLaneOnceWithCollectionModeFrontier(sync bool, laneID int, com
 			} else {
 				err = backendBatch.Write()
 			}
-			db.observeFlushApplyBackendWrite(time.Since(writeStart))
+			writeDur := time.Since(writeStart)
+			db.observeFlushApplyBackendWrite(writeDur)
+			db.observeFlushApplyBackendBatchWrite(writeDur)
 			cerr := backendBatch.Close()
 			if err == nil {
 				err = cerr

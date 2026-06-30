@@ -138,6 +138,7 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 			strings.HasPrefix(k, "treedb.flush_apply.") ||
 			strings.HasPrefix(k, "treedb.raw.span_native.") ||
 			strings.HasPrefix(k, "treedb.publish.ordered_root_delta_group.") ||
+			strings.HasPrefix(k, "treedb.leaf_generation.") ||
 			strings.HasPrefix(k, "treedb.vlog.mmap") ||
 			strings.HasPrefix(k, "treedb.vlog.decode_buffer_grow.") ||
 			strings.HasPrefix(k, "treedb.vlog.decode_scratch.") ||
