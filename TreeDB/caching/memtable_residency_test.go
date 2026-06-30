@@ -41,6 +41,12 @@ func TestSummarizeMemtableResidency_ByMode(t *testing.T) {
 	if got.total.entryBackingBytes <= 0 {
 		t.Fatalf("total.entryBackingBytes=%d want >0 from append-only table", got.total.entryBackingBytes)
 	}
+	if got.total.valueArenaActiveChunks <= 0 {
+		t.Fatalf("total.valueArenaActiveChunks=%d want >0 from append-only table", got.total.valueArenaActiveChunks)
+	}
+	if got.total.valueArenaActiveBytes <= 0 {
+		t.Fatalf("total.valueArenaActiveBytes=%d want >0 from append-only table", got.total.valueArenaActiveBytes)
+	}
 
 	checkMode := func(name string, s memtableResidencySummary) {
 		t.Helper()
@@ -62,16 +68,28 @@ func TestSummarizeMemtableResidency_ByMode(t *testing.T) {
 	if got.skiplist.entryCapacity != 0 || got.hashSorted.entryCapacity != 0 || got.btree.entryCapacity != 0 {
 		t.Fatalf("non-append-only entry capacities: skip=%d hash=%d btree=%d want all zero", got.skiplist.entryCapacity, got.hashSorted.entryCapacity, got.btree.entryCapacity)
 	}
+	if got.skiplist.valueArenaActiveBytes != 0 || got.hashSorted.valueArenaActiveBytes != 0 || got.btree.valueArenaActiveBytes != 0 {
+		t.Fatalf("non-append-only value arena active bytes: skip=%d hash=%d btree=%d want all zero", got.skiplist.valueArenaActiveBytes, got.hashSorted.valueArenaActiveBytes, got.btree.valueArenaActiveBytes)
+	}
 	if got.appendOnly.entryCapacity <= 0 {
 		t.Fatalf("append_only.entryCapacity=%d want >0", got.appendOnly.entryCapacity)
 	}
 	if got.appendOnly.entryBackingBytes <= 0 {
 		t.Fatalf("append_only.entryBackingBytes=%d want >0", got.appendOnly.entryBackingBytes)
 	}
+	if got.appendOnly.valueArenaActiveChunks <= 0 {
+		t.Fatalf("append_only.valueArenaActiveChunks=%d want >0", got.appendOnly.valueArenaActiveChunks)
+	}
+	if got.appendOnly.valueArenaActiveBytes <= 0 {
+		t.Fatalf("append_only.valueArenaActiveBytes=%d want >0", got.appendOnly.valueArenaActiveBytes)
+	}
 	if got.total.entryCapacity != got.appendOnly.entryCapacity {
 		t.Fatalf("total.entryCapacity=%d want append-only %d", got.total.entryCapacity, got.appendOnly.entryCapacity)
 	}
 	if got.total.entryBackingBytes != got.appendOnly.entryBackingBytes {
 		t.Fatalf("total.entryBackingBytes=%d want append-only %d", got.total.entryBackingBytes, got.appendOnly.entryBackingBytes)
+	}
+	if got.total.valueArenaActiveBytes != got.appendOnly.valueArenaActiveBytes {
+		t.Fatalf("total.valueArenaActiveBytes=%d want append-only %d", got.total.valueArenaActiveBytes, got.appendOnly.valueArenaActiveBytes)
 	}
 }
