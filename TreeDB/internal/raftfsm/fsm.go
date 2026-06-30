@@ -464,6 +464,7 @@ func commandDigest(src []byte, opts raftentry.DecodeOptions) raftentry.CommandDi
 
 func cloneRequestMetadataV1(meta raftentry.RequestMetadataV1) raftentry.RequestMetadataV1 {
 	meta.TraceContext = bytes.Clone(meta.TraceContext)
+	meta.ClusterRouteMembers = append([]string(nil), meta.ClusterRouteMembers...)
 	return meta
 }
 

@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,6 +68,73 @@ func TestNativewireYCSBForcedPointerPublicationReadability(t *testing.T) {
 	requirePublishedValueLogFiles(t, reopened.server.backend)
 }
 
+func TestNativewireYCSBCurrentWritableValueLogReadBarrier(t *testing.T) {
+	const docCount = 16
+	dir := t.TempDir()
+	opts := forcedPointerYCSBNativewireOptions(dir)
+	keys, docs := forcedPointerYCSBDocuments(t, docCount)
+	samples := []int{0, docCount - 1}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	env := newForcedPointerYCSBNativewireCurrentWritableEnv(t, opts, true)
+	clients, handles, cleanups := forcedPointerYCSBNativewireClients(t, ctx, env, 1)
+	loadForcedPointerYCSBThroughNativewire(t, ctx, clients, handles, keys, docs)
+	requirePublishedValueLogFiles(t, env.server.backend)
+	requireNativewireYCSBReadable(t, ctx, clients[0], handles[0], keys, docs, samples, "current-writable before flush")
+	closeForcedPointerYCSBNativewireClients(t, cleanups)
+	if err := env.cleanup(); err != nil {
+		t.Fatalf("close readable env: %v", err)
+	}
+
+	faultDir := t.TempDir()
+	faultOpts := forcedPointerYCSBNativewireOptions(faultDir)
+	faultEnv := newForcedPointerYCSBNativewireCurrentWritableEnv(t, faultOpts, true)
+	defer func() {
+		if err := faultEnv.cleanup(); err != nil {
+			t.Fatalf("close fault env: %v", err)
+		}
+	}()
+	faultClients, faultHandles, faultCleanups := forcedPointerYCSBNativewireClients(t, ctx, faultEnv, 1)
+	defer closeForcedPointerYCSBNativewireClients(t, faultCleanups)
+	loadForcedPointerYCSBThroughNativewire(t, ctx, faultClients, faultHandles, keys, docs)
+	requirePublishedValueLogFiles(t, faultEnv.server.backend)
+
+	var barrierCalls atomic.Int32
+	faultEnv.server.backend.SetCurrentValueLogReadBarrierWithSize(func(fileID uint32) (int64, error) {
+		barrierCalls.Add(1)
+		return -1, io.ErrUnexpectedEOF
+	})
+
+	_, directErr := faultEnv.server.handleGetManyBody(&connState{}, []iwire.Section{
+		collectionNameRef(ycsbBenchCollection),
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, keys[docCount-1])},
+	}, nil, ReadMetadata{})
+	if directErr == nil {
+		t.Fatalf("direct GetMany handler succeeded through injected current-writable read-boundary EOF")
+	}
+	if !errors.Is(directErr, io.ErrUnexpectedEOF) {
+		t.Fatalf("direct GetMany handler err=%v want injected unexpected EOF", directErr)
+	}
+	if errors.Is(directErr, collections.ErrCommitAmbiguous) {
+		t.Fatalf("direct GetMany handler err=%v unexpectedly classified as ErrCommitAmbiguous", directErr)
+	}
+	if !strings.Contains(directErr.Error(), "nativewire metadata") || !strings.Contains(directErr.Error(), "unexpected EOF") {
+		t.Fatalf("direct GetMany handler err=%q missing nativewire unexpected EOF context", directErr)
+	}
+
+	got, present, err := faultClients[0].GetMany(ctx, ycsbBenchCollection, [][]byte{keys[docCount-1]})
+	if err == nil {
+		t.Fatalf("GetMany succeeded through injected current-writable read-boundary EOF: docs=%d present=%v", len(got), present)
+	}
+	if !isRemoteError(err, iwire.ErrInternal) {
+		t.Fatalf("GetMany err=%v want remote internal error", err)
+	}
+	if calls := barrierCalls.Load(); calls == 0 {
+		t.Fatalf("current-writable read barrier was not reached")
+	}
+}
+
 func forcedPointerYCSBNativewireOptions(dir string) treedb.Options {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
 	opts.ValueLog.PointerThreshold = 1
@@ -77,6 +146,22 @@ func forcedPointerYCSBNativewireOptions(dir string) treedb.Options {
 
 func newForcedPointerYCSBNativewireEnv(t testing.TB, opts treedb.Options, create bool) *ycsbBenchEnv {
 	t.Helper()
+	return newForcedPointerYCSBNativewireEnvWithOptions(t, opts, create, collections.CollectionOptions{
+		DocumentFormat: collections.DocumentFormatBSON,
+	})
+}
+
+func newForcedPointerYCSBNativewireCurrentWritableEnv(t testing.TB, opts treedb.Options, create bool) *ycsbBenchEnv {
+	t.Helper()
+	return newForcedPointerYCSBNativewireEnvWithOptions(t, opts, create, collections.CollectionOptions{
+		DocumentFormat:                   collections.DocumentFormatBSON,
+		BufferedIndexedWriteMaxDocuments: 1,
+		DisableBufferedIndexedAsyncFlush: true,
+	})
+}
+
+func newForcedPointerYCSBNativewireEnvWithOptions(t testing.TB, opts treedb.Options, create bool, collectionOptions collections.CollectionOptions) *ycsbBenchEnv {
+	t.Helper()
 	db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
 	if err != nil {
 		t.Fatalf("OpenBackendWithCachedLeafLog: %v", err)
@@ -84,10 +169,8 @@ func newForcedPointerYCSBNativewireEnv(t testing.TB, opts treedb.Options, create
 	mgr := collections.NewCollectionManager(db)
 	if create {
 		if _, err := mgr.CreateCollection(&collections.CollectionMeta{
-			Name: ycsbBenchCollection,
-			Options: collections.CollectionOptions{
-				DocumentFormat: collections.DocumentFormatBSON,
-			},
+			Name:    ycsbBenchCollection,
+			Options: collectionOptions,
 			Indexes: []collections.IndexDefinition{
 				{
 					Name:      ycsbBenchKeyIndex,

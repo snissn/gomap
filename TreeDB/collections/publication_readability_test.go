@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -222,41 +223,12 @@ func TestCollectionCatalogRootEOFInsertBatchPostCommitReturnsCommitAmbiguous(t *
 
 func TestCollectionCatalogCachedForcedPointersReadableFromFreshSnapshot(t *testing.T) {
 	const collectionName = "ycsb.usertable"
-	dir := t.TempDir()
-	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
-	opts.ValueLog.PointerThreshold = 1
-	opts.ValueLog.ForcePointers = true
-	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
-
-	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
-	if err != nil {
-		t.Fatalf("open cached backend: %v", err)
-	}
+	d, col, opts, cleanup := newForcedPointerCatalogReadabilityCollection(t, collectionName)
 	closeDB := collectionMaintenanceCloseOnce(cleanup)
 	t.Cleanup(func() { _ = closeDB() })
 
-	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name: collectionName,
-		Options: CollectionOptions{
-			DocumentFormat: DocumentFormatBSON,
-		},
-	}); err != nil {
-		t.Fatalf("create collection: %v", err)
-	}
-	col, err := mgr.OpenCollection(collectionName)
-	if err != nil {
-		t.Fatalf("open collection: %v", err)
-	}
-
 	const docCount = 32
-	ids := make([][]byte, docCount)
-	docs := make([][]byte, docCount)
-	for i := 0; i < docCount; i++ {
-		id := []byte(fmt.Sprintf("user%06d", i))
-		ids[i] = id
-		docs[i] = ycsbBSONDocumentForID(t, string(id), i)
-	}
+	ids, docs := forcedPointerCatalogReadabilityDocuments(t, docCount)
 	inserted, err := col.InsertBatchValidatedBSON(ids, docs)
 	if err != nil {
 		t.Fatalf("InsertBatchValidatedBSON: %v", err)
@@ -269,6 +241,12 @@ func TestCollectionCatalogCachedForcedPointersReadableFromFreshSnapshot(t *testi
 			t.Fatalf("inserted id[%d]=%q want %q", i, inserted[i], ids[i])
 		}
 	}
+
+	requireCollectionCatalogSnapshotDocument(t, d, collectionName, ids[0], docs[0])
+	requireCollectionCatalogSnapshotDocument(t, d, collectionName, ids[docCount-1], docs[docCount-1])
+	ptr := requireCollectionCatalogPrimaryEntryValueLogPointer(t, d, collectionName, ids[docCount-1])
+	requireValueLogFileRegistered(t, d, ptr.FileID)
+
 	if err := col.Flush(); err != nil {
 		t.Fatalf("flush collection: %v", err)
 	}
@@ -304,6 +282,112 @@ func TestCollectionCatalogCachedForcedPointersReadableFromFreshSnapshot(t *testi
 	}
 	requireCollectionCatalogSnapshotDocument(t, reopened, collectionName, ids[docCount-1], docs[docCount-1])
 	requireCollectionCatalogPrimaryEntryValueLogPointer(t, reopened, collectionName, ids[docCount-1])
+}
+
+func TestCollectionCatalogCurrentWritableValueLogReadBarrier(t *testing.T) {
+	const collectionName = "ycsb.usertable"
+
+	t.Run("fresh snapshot reads current-writable forced pointer", func(t *testing.T) {
+		d, col, _, cleanup := newForcedPointerCatalogReadabilityCollection(t, collectionName)
+		closeDB := collectionMaintenanceCloseOnce(cleanup)
+		t.Cleanup(func() { _ = closeDB() })
+
+		ids, docs := forcedPointerCatalogReadabilityDocuments(t, 12)
+		if _, err := col.InsertBatchValidatedBSON(ids, docs); err != nil {
+			t.Fatalf("InsertBatchValidatedBSON: %v", err)
+		}
+
+		ptr := requireCollectionCatalogPrimaryEntryValueLogPointer(t, d, collectionName, ids[len(ids)-1])
+		requireValueLogFileRegistered(t, d, ptr.FileID)
+		requireCollectionCatalogSnapshotDocument(t, d, collectionName, ids[0], docs[0])
+		requireCollectionCatalogSnapshotDocument(t, d, collectionName, ids[len(ids)-1], docs[len(docs)-1])
+	})
+
+	t.Run("unexpected EOF at current-writable read barrier is surfaced", func(t *testing.T) {
+		d, col, _, cleanup := newForcedPointerCatalogReadabilityCollection(t, collectionName)
+		closeDB := collectionMaintenanceCloseOnce(cleanup)
+		t.Cleanup(func() { _ = closeDB() })
+
+		ids, docs := forcedPointerCatalogReadabilityDocuments(t, 12)
+		if _, err := col.InsertBatchValidatedBSON(ids, docs); err != nil {
+			t.Fatalf("InsertBatchValidatedBSON: %v", err)
+		}
+
+		ptr := requireCollectionCatalogPrimaryEntryValueLogPointer(t, d, collectionName, ids[len(ids)-1])
+		requireValueLogFileRegistered(t, d, ptr.FileID)
+
+		var barrierCalls atomic.Int32
+		d.SetCurrentValueLogReadBarrierWithSize(func(fileID uint32) (int64, error) {
+			if fileID == ptr.FileID {
+				barrierCalls.Add(1)
+				return -1, io.ErrUnexpectedEOF
+			}
+			return currentValueLogFileSize(d, fileID)
+		})
+
+		got, found, err := collectionCatalogSnapshotDocument(d, collectionName, ids[len(ids)-1])
+		if err == nil {
+			t.Fatalf("fresh catalog document read succeeded through injected read-boundary EOF: found=%v len=%d", found, len(got))
+		}
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("fresh catalog document err=%v want io.ErrUnexpectedEOF", err)
+		}
+		if errors.Is(err, ErrCommitAmbiguous) {
+			t.Fatalf("fresh catalog document read err=%v unexpectedly classified as ErrCommitAmbiguous", err)
+		}
+		if !strings.Contains(err.Error(), "collections: fresh catalog document") &&
+			!strings.Contains(err.Error(), "collections: load catalog") {
+			t.Fatalf("fresh catalog document err=%q missing contextual catalog/read boundary", err)
+		}
+		if got := barrierCalls.Load(); got == 0 {
+			t.Fatalf("current-writable read barrier was not reached for value-log file %d", ptr.FileID)
+		}
+	})
+}
+
+func newForcedPointerCatalogReadabilityCollection(t *testing.T, collectionName string) (*backenddb.DB, *Collection, treedb.Options, func() error) {
+	t.Helper()
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+	opts.ValueLog.PointerThreshold = 1
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
+
+	d, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+	if err != nil {
+		t.Fatalf("open cached backend: %v", err)
+	}
+
+	mgr := NewCollectionManager(d)
+	if _, err := mgr.CreateCollection(&CollectionMeta{
+		Name: collectionName,
+		Options: CollectionOptions{
+			DocumentFormat:                   DocumentFormatBSON,
+			BufferedIndexedWriteMaxDocuments: 1,
+			DisableBufferedIndexedAsyncFlush: true,
+		},
+	}); err != nil {
+		_ = cleanup()
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection(collectionName)
+	if err != nil {
+		_ = cleanup()
+		t.Fatalf("open collection: %v", err)
+	}
+	return d, col, opts, cleanup
+}
+
+func forcedPointerCatalogReadabilityDocuments(t *testing.T, count int) ([][]byte, [][]byte) {
+	t.Helper()
+	ids := make([][]byte, count)
+	docs := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		id := []byte(fmt.Sprintf("user%06d", i))
+		ids[i] = id
+		docs[i] = ycsbBSONDocumentForID(t, string(id), i)
+	}
+	return ids, docs
 }
 
 func newCatalogFaultTestCollection(t *testing.T, meta CollectionMeta) (*backenddb.DB, *Collection) {
@@ -345,19 +429,7 @@ func clearCatalogFaultTestCaches(col *Collection) {
 
 func requireCollectionCatalogSnapshotDocument(t *testing.T, d *backenddb.DB, collectionName string, id, want []byte) {
 	t.Helper()
-	snap := d.AcquireSnapshot()
-	if snap == nil {
-		t.Fatal("acquire snapshot")
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := loadCollectionCatalog(snap, collectionName)
-	if err != nil {
-		t.Fatalf("load collection catalog: %v", err)
-	}
-	if catalog == nil {
-		t.Fatalf("collection %q not found", collectionName)
-	}
-	got, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(collectionName), id, nil)
+	got, found, err := collectionCatalogSnapshotDocument(d, collectionName, id)
 	if err != nil {
 		t.Fatalf("fresh catalog Get %q: %v", id, err)
 	}
@@ -369,7 +441,27 @@ func requireCollectionCatalogSnapshotDocument(t *testing.T, d *backenddb.DB, col
 	}
 }
 
-func requireCollectionCatalogPrimaryEntryValueLogPointer(t *testing.T, d *backenddb.DB, collectionName string, id []byte) {
+func collectionCatalogSnapshotDocument(d *backenddb.DB, collectionName string, id []byte) ([]byte, bool, error) {
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		return nil, false, backenddb.ErrClosed
+	}
+	defer func() { _ = snap.Close() }()
+	catalog, err := loadCollectionCatalog(snap, collectionName)
+	if err != nil {
+		return nil, false, err
+	}
+	if catalog == nil {
+		return nil, false, fmt.Errorf("collections: collection %q not found", collectionName)
+	}
+	got, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, collectionPrimaryRootName(collectionName), id, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("collections: fresh catalog document %q root %q: %w", id, collectionPrimaryRootName(collectionName), err)
+	}
+	return got, found, nil
+}
+
+func requireCollectionCatalogPrimaryEntryValueLogPointer(t *testing.T, d *backenddb.DB, collectionName string, id []byte) page.ValuePtr {
 	t.Helper()
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -393,4 +485,45 @@ func requireCollectionCatalogPrimaryEntryValueLogPointer(t *testing.T, d *backen
 	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
 		t.Fatalf("primary catalog entry %q root=%d flags=%#x ptr=%+v, want value-log pointer", id, rootID, entry.Flags, entry.ValuePtr)
 	}
+	return entry.ValuePtr
+}
+
+func requireValueLogFileRegistered(t *testing.T, d *backenddb.DB, fileID uint32) {
+	t.Helper()
+	if fileID == 0 {
+		t.Fatalf("value-log file id is zero")
+	}
+	state := d.State()
+	if state == nil || state.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := state.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("state value-log set missing file %d", fileID)
+	}
+}
+
+func currentValueLogFileSize(d *backenddb.DB, fileID uint32) (int64, error) {
+	state := d.State()
+	if state == nil || state.ValueLogSet == nil {
+		return -1, fmt.Errorf("collections: value-log file %d unavailable: missing current set", fileID)
+	}
+	file := state.ValueLogSet.Files[fileID]
+	if file == nil {
+		return -1, fmt.Errorf("collections: value-log file %d unavailable: not registered", fileID)
+	}
+	if file.Path != "" {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return -1, fmt.Errorf("collections: stat value-log file %d: %w", fileID, err)
+		}
+		return info.Size(), nil
+	}
+	if file.File != nil {
+		info, err := file.File.Stat()
+		if err != nil {
+			return -1, fmt.Errorf("collections: stat value-log file %d: %w", fileID, err)
+		}
+		return info.Size(), nil
+	}
+	return -1, fmt.Errorf("collections: value-log file %d unavailable: missing path", fileID)
 }
