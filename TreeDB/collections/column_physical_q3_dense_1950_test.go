@@ -138,6 +138,20 @@ func TestColumnPhysicalQ3DenseTypedColumnOneShotSetupDiagnostics1950(t *testing.
 	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(t, "q3 one-shot setup", diag)
 }
 
+func TestColumnPhysicalQ3DenseTypedColumnOneShotTargetedSetupDiagnostics1950(t *testing.T) {
+	batches := [][]columnPhysicalJSONBenchParityEventP0{columnPhysicalQ3DenseBatchA1950(), columnPhysicalQ3DenseBatchB1950()}
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
+	defer closeFn()
+
+	req := columnPhysicalQ3DenseRequest1950()
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+	view, plan, closeView := openColumnPhysicalQ3DenseOneShotSetupView1950(t, col, req)
+	defer closeView()
+
+	diag := prepareColumnPhysicalQ3DenseOneShotSetup1950(t, view, req, plan)
+	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(t, "q3 targeted one-shot setup", diag)
+}
+
 func BenchmarkColumnPhysicalQ3DenseTypedColumnOneShotSetup1950(b *testing.B) {
 	events := columnPhysicalQ3DenseBenchmarkEvents1950(16_384)
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(b, nil, [][]columnPhysicalJSONBenchParityEventP0{events})
@@ -158,6 +172,30 @@ func BenchmarkColumnPhysicalQ3DenseTypedColumnOneShotSetup1950(b *testing.B) {
 	}
 	b.StopTimer()
 	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(b, "last q3 one-shot setup", last)
+	reportColumnPhysicalQ3DenseOneShotSetupBenchMetrics1950(b, last)
+}
+
+func BenchmarkColumnPhysicalQ3DenseTypedColumnOneShotTargetedSetup1950(b *testing.B) {
+	events := columnPhysicalQ3DenseBenchmarkEvents1950(16_384)
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(b, nil, [][]columnPhysicalJSONBenchParityEventP0{events})
+	defer closeFn()
+
+	req := columnPhysicalQ3DenseRequest1950()
+	req.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
+	view, plan, closeView := openColumnPhysicalQ3DenseOneShotSetupView1950(b, col, req)
+	defer closeView()
+
+	preview := prepareColumnPhysicalQ3DenseOneShotSetup1950(b, view, req, plan)
+	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(b, "preview targeted q3 one-shot setup", preview)
+	b.SetBytes(int64(preview.DecodedPayloadBytes))
+	b.ReportAllocs()
+	b.ResetTimer()
+	var last ColumnPhysicalQueryDiagnostics
+	for i := 0; i < b.N; i++ {
+		last = prepareColumnPhysicalQ3DenseOneShotSetup1950(b, view, req, plan)
+	}
+	b.StopTimer()
+	assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(b, "last targeted q3 one-shot setup", last)
 	reportColumnPhysicalQ3DenseOneShotSetupBenchMetrics1950(b, last)
 }
 
@@ -398,11 +436,34 @@ func assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 	if diag.TypedColumnPrepareSummaryNanos != 0 {
 		tb.Fatalf("%s setup summary nanos=%d want 0 for no-metadata one-shot setup diagnostics=%+v", label, diag.TypedColumnPrepareSummaryNanos, diag)
 	}
+	targetedRanges := typedColumnStringUseTargetedRanges(ColumnAssetReadIntegrity(diag.ColumnAssetReadIntegrity))
+	if !targetedRanges && (diag.TypedColumnPrepareRangeReadNanos != 0 || diag.TypedColumnPrepareRangeReadBytes != 0) {
+		tb.Fatalf("%s setup range-read diagnostics=%d/%d want 0 for raw q3 setup diagnostics=%+v",
+			label,
+			diag.TypedColumnPrepareRangeReadNanos,
+			diag.TypedColumnPrepareRangeReadBytes,
+			diag)
+	}
+	if targetedRanges && diag.TypedColumnPrepareRangeReadBytes == 0 {
+		tb.Fatalf("%s setup missing targeted range-read bytes diagnostics=%+v", label, diag)
+	}
 	denseNanos := diag.TypedColumnPrepareDenseGroupNanos +
 		diag.TypedColumnPrepareDenseValueNanos +
 		diag.TypedColumnPrepareDensePredicateNanos +
 		diag.TypedColumnPrepareDensePreapplyNanos
-	if denseNanos != 0 && (diag.TypedColumnPrepareDenseGroupNanos <= 0 || diag.TypedColumnPrepareDenseValueNanos <= 0 || diag.TypedColumnPrepareDensePredicateNanos <= 0) {
+	if diag.TypedColumnPrepareDenseGroupNanos < 0 ||
+		diag.TypedColumnPrepareDenseValueNanos < 0 ||
+		diag.TypedColumnPrepareDensePredicateNanos < 0 ||
+		diag.TypedColumnPrepareDensePreapplyNanos < 0 {
+		tb.Fatalf("%s setup negative dense split diagnostics group=%d value=%d predicate=%d preapply=%d diagnostics=%+v",
+			label,
+			diag.TypedColumnPrepareDenseGroupNanos,
+			diag.TypedColumnPrepareDenseValueNanos,
+			diag.TypedColumnPrepareDensePredicateNanos,
+			diag.TypedColumnPrepareDensePreapplyNanos,
+			diag)
+	}
+	if !targetedRanges && denseNanos != 0 && (diag.TypedColumnPrepareDenseGroupNanos <= 0 || diag.TypedColumnPrepareDenseValueNanos <= 0 || diag.TypedColumnPrepareDensePredicateNanos <= 0) {
 		tb.Fatalf("%s setup dense split diagnostics group=%d value=%d predicate=%d preapply=%d diagnostics=%+v",
 			label,
 			diag.TypedColumnPrepareDenseGroupNanos,
