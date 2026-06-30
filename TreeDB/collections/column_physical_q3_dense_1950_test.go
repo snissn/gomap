@@ -451,7 +451,19 @@ func assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 		diag.TypedColumnPrepareDenseValueNanos +
 		diag.TypedColumnPrepareDensePredicateNanos +
 		diag.TypedColumnPrepareDensePreapplyNanos
-	if denseNanos != 0 && (diag.TypedColumnPrepareDenseGroupNanos <= 0 || diag.TypedColumnPrepareDenseValueNanos <= 0 || diag.TypedColumnPrepareDensePredicateNanos <= 0) {
+	if diag.TypedColumnPrepareDenseGroupNanos < 0 ||
+		diag.TypedColumnPrepareDenseValueNanos < 0 ||
+		diag.TypedColumnPrepareDensePredicateNanos < 0 ||
+		diag.TypedColumnPrepareDensePreapplyNanos < 0 {
+		tb.Fatalf("%s setup negative dense split diagnostics group=%d value=%d predicate=%d preapply=%d diagnostics=%+v",
+			label,
+			diag.TypedColumnPrepareDenseGroupNanos,
+			diag.TypedColumnPrepareDenseValueNanos,
+			diag.TypedColumnPrepareDensePredicateNanos,
+			diag.TypedColumnPrepareDensePreapplyNanos,
+			diag)
+	}
+	if !targetedRanges && denseNanos != 0 && (diag.TypedColumnPrepareDenseGroupNanos <= 0 || diag.TypedColumnPrepareDenseValueNanos <= 0 || diag.TypedColumnPrepareDensePredicateNanos <= 0) {
 		tb.Fatalf("%s setup dense split diagnostics group=%d value=%d predicate=%d preapply=%d diagnostics=%+v",
 			label,
 			diag.TypedColumnPrepareDenseGroupNanos,
