@@ -215,6 +215,26 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 			t.Fatalf("%s=%d want >=0", key, got)
 		}
 	}
+	directArenaSuffixes := []string{
+		"active_chunks",
+		"active_bytes",
+		"active_used_bytes",
+		"retained_chunks",
+		"retained_bytes",
+		"lease_count",
+		"lease_chunks",
+		"lease_bytes",
+	}
+	for _, suffix := range directArenaSuffixes {
+		cacheKey := "treedb.cache.append_only_direct_arena." + suffix
+		processKey := "treedb.process.append_only_direct_arena." + suffix
+		if got := mustStatInt64(t, stats, cacheKey); got < 0 {
+			t.Fatalf("%s=%d want >=0", cacheKey, got)
+		}
+		if got := mustStatInt64(t, stats, processKey); got != mustStatInt64(t, stats, cacheKey) {
+			t.Fatalf("append_only_direct_arena %s mismatch process=%d cache=%d", suffix, got, mustStatInt64(t, stats, cacheKey))
+		}
+	}
 	if got := stats["treedb.process.read_path.outer_leaf.cache.write_admission_policy"]; got == "" {
 		t.Fatalf("missing non-empty write admission policy stat")
 	}
