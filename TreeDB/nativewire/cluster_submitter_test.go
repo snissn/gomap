@@ -1393,7 +1393,14 @@ func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.
 		t.Fatalf("Hello: %v", err)
 	}
 	before := clientCatalogVersion(t, client, ctx)
-	createSections := raftClusterCreateCollectionSections("users", before, AckRaftCommitted)
+	createSections := raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{
+		Name: "users",
+		Indexes: []collections.IndexDefinition{{
+			Name:      "by_name",
+			Field:     "name",
+			ValueType: collections.IndexValueString,
+		}},
+	}, before, AckRaftCommitted)
 	createResponse, err := client.commandSections(ctx, iwire.CommandCreateCollection, createSections...)
 	if err != nil {
 		t.Fatalf("CreateCollection raft bridge: %v", err)
@@ -1404,6 +1411,12 @@ func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.
 	}
 	if meta.Name != "users" {
 		t.Fatalf("created collection=%q want users", meta.Name)
+	}
+	if meta.Options.DataRootStoragePolicy != collections.RootStorageFast ||
+		meta.Options.IndexStateStoragePolicy != collections.RootStorageFast ||
+		len(meta.Indexes) != 1 ||
+		meta.Indexes[0].StoragePolicy != collections.RootStorageFast {
+		t.Fatalf("created storage policies data=%q index=%q indexes=%+v, want fast policies", meta.Options.DataRootStoragePolicy, meta.Options.IndexStateStoragePolicy, meta.Indexes)
 	}
 	if ack, ok, err := responseMetaAckPolicy(createResponse); err != nil || !ok || ack != AckRaftCommitted {
 		t.Fatalf("create response ack=(%d,%v,%v) want raft_committed", ack, ok, err)
@@ -1440,6 +1453,38 @@ func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.
 	}
 	if !bytes.Equal(got, []byte(`{"name":"Ada"}`)) {
 		t.Fatalf("stored doc=%s want Ada JSON", got)
+	}
+	_ = clientCatalogVersion(t, client, ctx)
+
+	replaceMatched, replaceModified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckRaftCommitted)
+	if err != nil {
+		t.Fatalf("ReplaceBatch no-op raft bridge: %v", err)
+	}
+	if replaceMatched != 1 || replaceModified != 0 {
+		t.Fatalf("ReplaceBatch no-op matched/modified=%d/%d want 1/0", replaceMatched, replaceModified)
+	}
+
+	bsonCreateVersion := clientCatalogVersion(t, client, ctx)
+	bsonCreateSections := raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{
+		Name: "bson_users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}, bsonCreateVersion, AckRaftCommitted)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, bsonCreateSections...); err != nil {
+		t.Fatalf("CreateCollection BSON raft bridge: %v", err)
+	}
+	_ = clientCatalogVersion(t, client, ctx)
+	bsonDoc := testNativewireBSONDocument(t, bson.D{{Key: "_id", Value: "b1"}, {Key: "city", Value: "hnl"}})
+	if _, err := client.InsertBatch(ctx, "bson_users", collections.DocumentFormatBSON, [][]byte{[]byte("b1")}, [][]byte{bsonDoc}, AckRaftCommitted); err != nil {
+		t.Fatalf("InsertBatch BSON raft bridge: %v", err)
+	}
+	updateMatched, updateModified, err := client.UpdateBSONSet(ctx, "bson_users", []byte("b1"), []collections.BSONSetField{{Key: "city", Value: testNativewireBSONSetRawValue(t, "hnl")}}, AckRaftCommitted)
+	if err != nil {
+		t.Fatalf("UpdateBSONSet no-op raft bridge: %v", err)
+	}
+	if updateMatched != 1 || updateModified != 0 {
+		t.Fatalf("UpdateBSONSet no-op matched/modified=%d/%d want 1/0", updateMatched, updateModified)
 	}
 }
 
@@ -1496,7 +1541,7 @@ func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Contex
 	return sections
 }
 
-func serveRaftClusterBridgePipe(t *testing.T, admission raftcluster.AdmissionStatus) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+func serveRaftClusterBridgePipe(t testing.TB, admission raftcluster.AdmissionStatus) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
 	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{
 		Dir:                          t.TempDir(),
@@ -1576,15 +1621,74 @@ func raftClusterBridgeTestConfig(db *backenddb.DB) raftcluster.Config {
 }
 
 func raftClusterCreateCollectionSections(name string, catalogVersion uint64, ack AckPolicy) []iwire.Section {
+	return raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{Name: name}, catalogVersion, ack)
+}
+
+func raftClusterCreateCollectionSectionsWithMeta(meta collections.CollectionMeta, catalogVersion uint64, ack AckPolicy) []iwire.Section {
 	sections := []iwire.Section{
-		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("cluster-create-" + name)},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("cluster-create-" + meta.Name)},
 		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
-		{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(collections.CollectionMeta{Name: name})},
+		{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(meta)},
 	}
 	if ack != 0 {
 		sections = append(sections, ackSection(ack))
 	}
 	return sections
+}
+
+func BenchmarkRaftClusterSubmitterConcreteBridgeUpdateBSONSet(b *testing.B) {
+	client, _, _, _ := serveRaftClusterBridgePipe(b, raftcluster.LeaderAdmission())
+	ctx := context.Background()
+	if err := client.Hello(ctx); err != nil {
+		b.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(b, client, ctx)
+	createSections := raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}, version, AckRaftCommitted)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, createSections...); err != nil {
+		b.Fatalf("CreateCollection raft bridge: %v", err)
+	}
+	_ = clientCatalogVersion(b, client, ctx)
+	id := []byte("u1")
+	doc := testNativewireBSONDocument(b, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatBSON, [][]byte{id}, [][]byte{doc}, AckRaftCommitted); err != nil {
+		b.Fatalf("InsertBatch seed raft bridge: %v", err)
+	}
+	fields := []collections.BSONSetField{{Key: "city", Value: testNativewireBSONSetRawValue(b, "hnl")}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		matched, modified, err := client.UpdateBSONSet(ctx, "users", id, fields, AckRaftCommitted)
+		if err != nil {
+			b.Fatalf("UpdateBSONSet raft bridge: %v", err)
+		}
+		if matched != 1 || modified != 0 {
+			b.Fatalf("UpdateBSONSet matched/modified=%d/%d want 1/0", matched, modified)
+		}
+	}
+	b.ReportMetric(float64(b.N), "ops_total")
+}
+
+func testNativewireBSONDocument(tb testing.TB, document bson.D) []byte {
+	tb.Helper()
+	encoded, err := bson.Marshal(document)
+	if err != nil {
+		tb.Fatalf("Marshal BSON: %v", err)
+	}
+	return encoded
+}
+
+func testNativewireBSONSetRawValue(tb testing.TB, value any) bson.RawValue {
+	tb.Helper()
+	typ, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		tb.Fatalf("MarshalValue(%T): %v", value, err)
+	}
+	return bson.RawValue{Type: typ, Value: raw}
 }
 
 func replaceResponseAckPolicy(result ClusterSubmitResult, policy AckPolicy) ClusterSubmitResult {

@@ -114,6 +114,7 @@ type ApplyResultV1 struct {
 	CommandDigest          CommandDigestV1
 	DeterministicErrorCode DeterministicErrorCodeV1
 	AffectedCount          int64
+	MatchedCount           int64
 	ResultDigest           CommandDigestV1
 }
 

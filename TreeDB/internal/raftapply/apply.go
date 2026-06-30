@@ -219,6 +219,7 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			duplicate := record.Result
 			duplicate.Status = raftentry.ApplyStatusAlreadyApplied
 			duplicate.AffectedCount = 0
+			duplicate.MatchedCount = 0
 			if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
 				EntryID:           meta.EntryID,
 				CommandDigest:     entry.Digest,

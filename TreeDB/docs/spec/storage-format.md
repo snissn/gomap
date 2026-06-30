@@ -212,6 +212,7 @@ bytes[32] ResultCommandDigest
 u64       DeterministicErrorCodeLen
 bytes     DeterministicErrorCode
 i64       AffectedCount
+i64       MatchedCount
 bytes[32] ResultDigest   // LogicalDigestV1 bytes when apply succeeded
 ```
 

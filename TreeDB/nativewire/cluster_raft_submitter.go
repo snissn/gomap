@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -65,13 +66,13 @@ func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata Cluste
 	actualAck := AckPolicy(result.ActualAck)
 	catalogVersion := result.CatalogVersion
 	hasCatalogVersion := result.HasCatalogVersion
-	affected, err := raftClusterAffectedCount(result.ApplyResult)
+	affected, matched, err := raftClusterMatchedAndAffectedCounts(result.ApplyResult)
 	if err != nil {
 		return nil, err
 	}
 	switch entry.Decoded.CommandID {
 	case iwire.CommandCreateCollection:
-		rawMeta, err := metadataSection(entry.Decoded.Sections, iwire.SectionCollectionMeta)
+		rawMeta, err := raftClusterCreateCollectionResponseMeta(entry)
 		if err != nil {
 			return nil, err
 		}
@@ -98,7 +99,7 @@ func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata Cluste
 			return nil, nil
 		}
 		return []iwire.Section{ackMetaCountsVersion(actualAck, catalogVersion, hasCatalogVersion,
-			responseMetaCount{key: "matched_count", value: affected},
+			responseMetaCount{key: "matched_count", value: matched},
 			responseMetaCount{key: "modified_count", value: affected},
 		)}, nil
 	case iwire.CommandDeleteBatch:
@@ -111,11 +112,35 @@ func raftClusterResponseSections(entry raftentry.CommandEntryV1, metadata Cluste
 	}
 }
 
-func raftClusterAffectedCount(result raftentry.ApplyResultV1) (int, error) {
-	if result.AffectedCount < 0 || result.AffectedCount > int64(maxInt) {
-		return 0, protocolError(iwire.ErrInternal, "raft cluster apply affected count %d is outside int range", result.AffectedCount)
+func raftClusterCreateCollectionResponseMeta(entry raftentry.CommandEntryV1) ([]byte, error) {
+	rawMeta, err := metadataSection(entry.Decoded.Sections, iwire.SectionCollectionMeta)
+	if err != nil {
+		return nil, err
 	}
-	return int(result.AffectedCount), nil
+	meta, err := decodeCollectionMeta(rawMeta)
+	if err != nil {
+		return nil, err
+	}
+	meta, err = normalizeClientCollectionMeta(meta)
+	if err != nil {
+		return nil, err
+	}
+	meta.Options.DataRootStoragePolicy = collections.RootStorageFast
+	meta.Options.IndexStateStoragePolicy = collections.RootStorageFast
+	for i := range meta.Indexes {
+		meta.Indexes[i].StoragePolicy = collections.RootStorageFast
+	}
+	return encodeCollectionMeta(meta), nil
+}
+
+func raftClusterMatchedAndAffectedCounts(result raftentry.ApplyResultV1) (int, int, error) {
+	if result.AffectedCount < 0 || result.AffectedCount > int64(maxInt) {
+		return 0, 0, protocolError(iwire.ErrInternal, "raft cluster apply affected count %d is outside int range", result.AffectedCount)
+	}
+	if result.MatchedCount < 0 || result.MatchedCount > int64(maxInt) {
+		return 0, 0, protocolError(iwire.ErrInternal, "raft cluster apply matched count %d is outside int range", result.MatchedCount)
+	}
+	return int(result.AffectedCount), int(result.MatchedCount), nil
 }
 
 func nativeErrorForRaftClusterSubmit(err error) error {

@@ -103,8 +103,9 @@ is intentionally one group only:
   provided by the raftfsm adapter;
 - `AckRaftCommitted` is returned only after production-consensus evidence plus
   local recoverability are both true;
-- lower ack requests may pass through the same bridge but must not be upgraded
-  to `raft_committed` in the adapter response.
+- every accepted submit currently requires production-consensus evidence; lower
+  ack policies only control the response durability level after that commit and
+  must not be upgraded to `raft_committed` in the adapter response.
 
 The bridge is a provider boundary, not a complete consensus integration. The
 `SequencedCommitSource` helper supplies deterministic in-process term/index

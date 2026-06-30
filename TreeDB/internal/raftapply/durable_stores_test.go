@@ -89,7 +89,7 @@ func TestDurableApplyStoresIdempotencyDuplicateSameDigestAndDifferentDigest(t *t
 	if err != nil {
 		t.Fatalf("ApplyCommittedEntryV1 duplicate: %v result=%+v", err, duplicate)
 	}
-	if duplicate.Status != raftentry.ApplyStatusAlreadyApplied || duplicate.CommandDigest != first.CommandDigest || duplicate.AffectedCount != 0 {
+	if duplicate.Status != raftentry.ApplyStatusAlreadyApplied || duplicate.CommandDigest != first.CommandDigest || duplicate.AffectedCount != 0 || duplicate.MatchedCount != 0 {
 		t.Fatalf("duplicate result=%+v, want already-applied replay of digest %s", duplicate, first.CommandDigest.Hex())
 	}
 	record, ok, err := results.LookupApplyResult(raftentry.ApplyEntryID{Term: 1, Index: 2})
@@ -439,6 +439,7 @@ func testDurableApplyResultRecordBytes(seed byte, index uint64, key []byte) Appl
 			Status:        raftentry.ApplyStatusApplied,
 			CommandDigest: digest,
 			AffectedCount: 1,
+			MatchedCount:  2,
 			ResultDigest:  testDurableDigest(seed + 100),
 		},
 	}

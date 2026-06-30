@@ -29,6 +29,7 @@ type collectionMutationV1 struct {
 	ids              [][]byte
 	documents        [][]byte
 	bsonSetItems     []collections.BSONSetUpdateBatchItem
+	bsonSetMatched   int
 	frameDocuments   []commitlog.CollectionDocument
 }
 
@@ -81,6 +82,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	}
 
 	var affected int64
+	var matched int64
 	switch mutation.command {
 	case nativewire.CommandInsertBatch:
 		if len(mutation.documents) == 0 {
@@ -95,16 +97,18 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		}
 		affected = int64(len(resultIDs))
 	case nativewire.CommandReplaceBatch:
-		_, modified, err := collection.ReplaceBatchWithCommandWALIntent(mutation.ids, mutation.documents, intent)
+		matchedCount, modified, err := collection.ReplaceBatchWithCommandWALIntent(mutation.ids, mutation.documents, intent)
 		if err != nil {
 			return h.collectionMutationApplyError(entry, handle, err)
 		}
+		matched = int64(matchedCount)
 		affected = int64(modified)
 	case nativewire.CommandUpdateBSONSet:
 		results, err := collection.UpdateBSONSetBatchWithCommandWALIntent(mutation.bsonSetItems, mutation.frameDocuments, intent)
 		if err != nil {
 			return h.collectionMutationApplyError(entry, handle, err)
 		}
+		matched = int64(mutation.bsonSetMatched)
 		affected = int64(countModifiedUpdateBatchResultsV1(results))
 	case nativewire.CommandDeleteBatch:
 		deleted, err := collection.DeleteBatchWithCommandWALIntent(mutation.ids, intent)
@@ -135,6 +139,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		CommandDigest:          entry.Digest,
 		DeterministicErrorCode: raftentry.ErrorNoneV1,
 		AffectedCount:          affected,
+		MatchedCount:           matched,
 		ResultDigest:           raftentry.CommandDigestV1(logical),
 	}, nil
 }
@@ -331,10 +336,11 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
-		_, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
+		results, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
 		if err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
+		mutation.bsonSetMatched = countMatchedUpdateBatchResultsV1(results)
 		mutation.frameDocuments = docs
 	case nativewire.CommandDeleteBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationDelete); err != nil {
@@ -473,6 +479,16 @@ func countModifiedUpdateBatchResultsV1(results []collections.UpdateBatchResult) 
 		}
 	}
 	return modified
+}
+
+func countMatchedUpdateBatchResultsV1(results []collections.UpdateBatchResult) int {
+	matched := 0
+	for _, result := range results {
+		if result.Matched {
+			matched++
+		}
+	}
+	return matched
 }
 
 func lowerDocumentFormatV1(entry raftentry.CommandEntryV1) (collections.DocumentFormat, error) {

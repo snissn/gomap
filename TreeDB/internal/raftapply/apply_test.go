@@ -638,6 +638,9 @@ func TestCollectionMutationApplyInsertReplaceDeleteFramesAndDigest(t *testing.T)
 	assertApplied(t, insertResult, raftentry.ApplyStatusApplied, 2)
 	replaceResult := apply(3, replace)
 	assertApplied(t, replaceResult, raftentry.ApplyStatusApplied, 1)
+	if replaceResult.MatchedCount != 1 {
+		t.Fatalf("replace matched=%d want 1", replaceResult.MatchedCount)
+	}
 	deleteResult := apply(4, deleteEntry)
 	assertApplied(t, deleteResult, raftentry.ApplyStatusApplied, 1)
 	if insertResult.ResultDigest == replaceResult.ResultDigest || replaceResult.ResultDigest == deleteResult.ResultDigest {
@@ -1090,6 +1093,9 @@ func TestUpdateBSONSetApplyReplayNoopAffectedCountAndLogicalDigest(t *testing.T)
 	})
 	applied, err := ApplyCommittedEntryV1(db, update, applyMeta(1, 3), Options{ResultStore: results})
 	assertApplied(t, applied, raftentry.ApplyStatusApplied, 1)
+	if applied.MatchedCount != 1 {
+		t.Fatalf("update matched=%d want 1", applied.MatchedCount)
+	}
 	frames := readCommandWALFrames(t, dir)
 	if len(frames) != 3 {
 		t.Fatalf("command WAL frames after update=%d, want 3", len(frames))
@@ -1116,6 +1122,9 @@ func TestUpdateBSONSetApplyReplayNoopAffectedCountAndLogicalDigest(t *testing.T)
 	}
 	duplicate, err := ApplyCommittedEntryV1(db, update, applyMeta(1, 4), Options{ResultStore: results})
 	assertApplied(t, duplicate, raftentry.ApplyStatusAlreadyApplied, 0)
+	if duplicate.MatchedCount != 0 {
+		t.Fatalf("duplicate matched=%d want 0", duplicate.MatchedCount)
+	}
 	if duplicate.ResultDigest != applied.ResultDigest {
 		t.Fatalf("duplicate digest=%s, want %s", duplicate.ResultDigest.Hex(), applied.ResultDigest.Hex())
 	}
@@ -1128,6 +1137,9 @@ func TestUpdateBSONSetApplyReplayNoopAffectedCountAndLogicalDigest(t *testing.T)
 	})
 	noOpResult, err := ApplyCommittedEntryV1(db, noOp, applyMeta(1, 5), Options{ResultStore: results})
 	assertApplied(t, noOpResult, raftentry.ApplyStatusApplied, 0)
+	if noOpResult.MatchedCount != 1 {
+		t.Fatalf("no-op update matched=%d want 1", noOpResult.MatchedCount)
+	}
 	frames = readCommandWALFrames(t, dir)
 	if len(frames) != 4 {
 		t.Fatalf("command WAL frames after no-op update=%d, want 4", len(frames))
@@ -1139,6 +1151,9 @@ func TestUpdateBSONSetApplyReplayNoopAffectedCountAndLogicalDigest(t *testing.T)
 	})
 	missingResult, err := ApplyCommittedEntryV1(db, missing, applyMeta(1, 6), Options{ResultStore: results})
 	assertApplied(t, missingResult, raftentry.ApplyStatusApplied, 0)
+	if missingResult.MatchedCount != 0 {
+		t.Fatalf("missing update matched=%d want 0", missingResult.MatchedCount)
+	}
 	frames = readCommandWALFrames(t, dir)
 	if len(frames) != 5 {
 		t.Fatalf("command WAL frames after missing update=%d, want 5", len(frames))

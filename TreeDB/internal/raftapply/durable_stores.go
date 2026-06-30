@@ -716,6 +716,7 @@ func encodeDurableApplyResultRecordV1(record ApplyResultRecordV1) ([]byte, error
 	dst = append(dst, record.Result.CommandDigest[:]...)
 	dst = appendBytes(dst, []byte(record.Result.DeterministicErrorCode))
 	dst = appendI64(dst, record.Result.AffectedCount)
+	dst = appendI64(dst, record.Result.MatchedCount)
 	dst = append(dst, record.Result.ResultDigest[:]...)
 	if len(dst) > raftentry.MaxResultRecordBytesV1 {
 		return nil, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: durable result record payload %d exceeds %d", len(dst), raftentry.MaxResultRecordBytesV1)
@@ -757,6 +758,10 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 	if err != nil {
 		return ApplyResultRecordV1{}, err
 	}
+	matched, err := r.i64()
+	if err != nil {
+		return ApplyResultRecordV1{}, err
+	}
 	logicalDigest, err := r.digest()
 	if err != nil {
 		return ApplyResultRecordV1{}, err
@@ -774,6 +779,7 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 			CommandDigest:          resultDigest,
 			DeterministicErrorCode: raftentry.DeterministicErrorCodeV1(code),
 			AffectedCount:          affected,
+			MatchedCount:           matched,
 			ResultDigest:           logicalDigest,
 		},
 	}, nil
