@@ -358,15 +358,36 @@ func (h *Harness) InstallSnapshotPrefixToNodeV1(id raftcluster.NodeID, manifest 
 	if err := verifySnapshotPrefix(rootDir, groupID, id, nodeConfigs, storeOptions, manifest, prefix); err != nil {
 		return evidence, err
 	}
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return evidence, ErrHarnessClosed
+	}
+	node, ok = h.nodes[id]
+	if !ok {
+		h.mu.Unlock()
+		return evidence, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
+	}
+	if err := rejectNonEmptySnapshotInstallTarget(node); err != nil {
+		h.mu.Unlock()
+		return evidence, err
+	}
+	if err := verifyCommittedPrefixLocked(h.committed, prefix, manifest); err != nil {
+		h.mu.Unlock()
+		return evidence, err
+	}
 	results, err := node.ApplyCommittedEntriesV1(prefix...)
 	evidence.Applied = results
 	if err != nil {
+		h.mu.Unlock()
 		return evidence, err
 	}
 	if err := node.fsm.VerifyInstalledSnapshotManifestV1(manifest); err != nil {
+		h.mu.Unlock()
 		return evidence, err
 	}
 	evidence.Installed = true
+	h.mu.Unlock()
 	return evidence, nil
 }
 
@@ -416,6 +437,25 @@ func rejectNonEmptySnapshotInstallTarget(node *Node) error {
 	}
 	if lsn := node.db.State().AppliedCommandLSN; lsn != 0 {
 		return fmt.Errorf("%w: node %s has local AppliedCommandLSN coverage %d without apply progress", ErrCommittedLogConflict, node.id, lsn)
+	}
+	return nil
+}
+
+func verifyCommittedPrefixLocked(committed, prefix []raftfsm.CommittedEntryV1, manifest raftcluster.SnapshotManifestV1) error {
+	if manifest.LastIncludedIndex == 0 || manifest.LastIncludedIndex > uint64(len(committed)) {
+		return fmt.Errorf("%w: snapshot index %d beyond committed log length %d", ErrCommittedLogGap, manifest.LastIncludedIndex, len(committed))
+	}
+	if uint64(len(prefix)) != manifest.LastIncludedIndex {
+		return fmt.Errorf("%w: snapshot prefix length %d does not match last included index %d", ErrCommittedLogGap, len(prefix), manifest.LastIncludedIndex)
+	}
+	for i, entry := range prefix {
+		if !committedEntriesEqual(committed[i], entry) {
+			return fmt.Errorf("%w: snapshot prefix diverged at index %d", ErrCommittedLogConflict, i+1)
+		}
+	}
+	last := committed[manifest.LastIncludedIndex-1]
+	if last.Term != manifest.LastIncludedTerm || last.Index != manifest.LastIncludedIndex {
+		return fmt.Errorf("%w: snapshot last included %d/%d does not match committed log %d/%d", ErrCommittedLogConflict, manifest.LastIncludedTerm, manifest.LastIncludedIndex, last.Term, last.Index)
 	}
 	return nil
 }
