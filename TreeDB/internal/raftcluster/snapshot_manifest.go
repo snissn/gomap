@@ -49,23 +49,35 @@ func (s SnapshotScopeIdentityV1) normalizeExpected() SnapshotScopeIdentityV1 {
 	}
 }
 
-func (s SnapshotScopeIdentityV1) normalizeManifest() SnapshotScopeIdentityV1 {
-	return SnapshotScopeIdentityV1{
-		ScopeRule:     strings.TrimSpace(s.ScopeRule),
-		DatabaseScope: strings.TrimSpace(s.DatabaseScope),
-		CatalogScope:  strings.TrimSpace(s.CatalogScope),
+func (s SnapshotScopeIdentityV1) validate() error {
+	if err := validateScopeIdentityField("scope rule", s.ScopeRule); err != nil {
+		return err
 	}
+	if err := validateScopeIdentityField("database scope", s.DatabaseScope); err != nil {
+		return err
+	}
+	if err := validateScopeIdentityField("catalog scope", s.CatalogScope); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s SnapshotScopeIdentityV1) validate() error {
-	if strings.TrimSpace(s.ScopeRule) == "" {
-		return fmt.Errorf("%w: missing scope rule", ErrInvalidSnapshotManifest)
+func validateScopeIdentityField(name, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		switch name {
+		case "scope rule":
+			return fmt.Errorf("%w: missing scope rule", ErrInvalidSnapshotManifest)
+		case "database scope":
+			return fmt.Errorf("%w: missing database scope", ErrInvalidSnapshotManifest)
+		case "catalog scope":
+			return fmt.Errorf("%w: missing catalog scope", ErrInvalidSnapshotManifest)
+		default:
+			return fmt.Errorf("%w: missing %s", ErrInvalidSnapshotManifest, name)
+		}
 	}
-	if strings.TrimSpace(s.DatabaseScope) == "" {
-		return fmt.Errorf("%w: missing database scope", ErrInvalidSnapshotManifest)
-	}
-	if strings.TrimSpace(s.CatalogScope) == "" {
-		return fmt.Errorf("%w: missing catalog scope", ErrInvalidSnapshotManifest)
+	if trimmed != value {
+		return fmt.Errorf("%w: non-canonical %s", ErrInvalidSnapshotManifest, name)
 	}
 	return nil
 }
@@ -115,7 +127,7 @@ func (m SnapshotManifestV1) Validate(expectedScope SnapshotScopeIdentityV1) erro
 	if err := m.Scope.validate(); err != nil {
 		return err
 	}
-	if m.Scope.normalizeManifest() != expectedScope.normalizeExpected() {
+	if m.Scope != expectedScope.normalizeExpected() {
 		return fmt.Errorf("%w: mismatched scope identity", ErrInvalidSnapshotManifest)
 	}
 	if m.CreatedAt.IsZero() {

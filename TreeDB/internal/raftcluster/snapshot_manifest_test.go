@@ -149,6 +149,21 @@ func TestSnapshotManifestV1DecodeNormalizesZeroExpectedScopeToDefault(t *testing
 	}
 }
 
+func TestSnapshotManifestV1DecodeRejectsPaddedManifestScope(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	encoded, err := EncodeSnapshotManifestV1(manifest)
+	if err != nil {
+		t.Fatalf("EncodeSnapshotManifestV1: %v", err)
+	}
+	padded := bytes.Replace(encoded, []byte(`"database_scope":"database/default"`), []byte(`"database_scope":"database/default "`), 1)
+	if bytes.Equal(padded, encoded) {
+		t.Fatalf("test fixture did not pad database_scope: %s", encoded)
+	}
+	if _, err := DecodeSnapshotManifestV1(padded, SnapshotScopeIdentityV1{}); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("DecodeSnapshotManifestV1 padded scope error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
 func validSnapshotManifestV1() SnapshotManifestV1 {
 	return SnapshotManifestV1{
 		Format:            SnapshotManifestFormatV1,
