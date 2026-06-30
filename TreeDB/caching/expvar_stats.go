@@ -163,6 +163,7 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 			strings.HasPrefix(k, "treedb.cache.vlog_zombie.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_payload_kind.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_outer_leaf_codec.") ||
+			strings.HasPrefix(k, "treedb.cache.append_only_direct_arena.") ||
 			strings.HasPrefix(k, "treedb.cache.batch_arena.") {
 			out[k] = coerceStatsValue(v)
 		}

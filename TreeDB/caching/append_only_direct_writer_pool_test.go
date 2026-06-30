@@ -42,6 +42,19 @@ func TestAppendOnlyDirectWriterArena_RetainsAcrossRotateCheckpointAndReuse(t *te
 	if got := countMutableAppendOnlyDirectArenaRetainedChunks(shard); got != 0 {
 		t.Fatalf("expected no retained chunks before rotate, got=%d", got)
 	}
+	statsAfterFirstSet := db.Stats()
+	if got := mustStatInt64(t, statsAfterFirstSet, "treedb.cache.append_only_direct_arena.active_chunks"); got == 0 {
+		t.Fatalf("active direct arena chunks stat=0 after first set")
+	}
+	if got := mustStatInt64(t, statsAfterFirstSet, "treedb.cache.append_only_direct_arena.active_bytes"); got == 0 {
+		t.Fatalf("active direct arena bytes stat=0 after first set")
+	}
+	if got := mustStatInt64(t, statsAfterFirstSet, "treedb.cache.append_only_direct_arena.active_used_bytes"); got == 0 {
+		t.Fatalf("active direct arena used bytes stat=0 after first set")
+	}
+	if got := mustStatInt64(t, statsAfterFirstSet, "treedb.cache.append_only_direct_arena.retained_bytes"); got != 0 {
+		t.Fatalf("retained direct arena bytes before rotate=%d want 0", got)
+	}
 
 	db.mu.Lock()
 	err = db.rotateMemtableLocked(false)
@@ -54,6 +67,19 @@ func TestAppendOnlyDirectWriterArena_RetainsAcrossRotateCheckpointAndReuse(t *te
 	}
 	if got := countMutableAppendOnlyDirectArenaActiveChunks(&db.mutableShards[0]); got != 0 {
 		t.Fatalf("expected new mutable writer arena to start empty, got=%d", got)
+	}
+	statsAfterRotate := db.Stats()
+	if got := mustStatInt64(t, statsAfterRotate, "treedb.cache.append_only_direct_arena.active_chunks"); got != 0 {
+		t.Fatalf("active direct arena chunks after rotate=%d want 0", got)
+	}
+	if got := mustStatInt64(t, statsAfterRotate, "treedb.cache.append_only_direct_arena.lease_count"); got != 1 {
+		t.Fatalf("direct arena lease count after rotate=%d want 1", got)
+	}
+	if got := mustStatInt64(t, statsAfterRotate, "treedb.cache.append_only_direct_arena.lease_bytes"); got == 0 {
+		t.Fatalf("direct arena lease bytes after rotate=0")
+	}
+	if got := mustStatInt64(t, statsAfterRotate, "treedb.process.append_only_direct_arena.lease_bytes"); got != mustStatInt64(t, statsAfterRotate, "treedb.cache.append_only_direct_arena.lease_bytes") {
+		t.Fatalf("direct arena process/cache lease bytes mismatch process=%d cache=%d", got, mustStatInt64(t, statsAfterRotate, "treedb.cache.append_only_direct_arena.lease_bytes"))
 	}
 
 	got, err := db.Get(firstKey)
@@ -73,6 +99,13 @@ func TestAppendOnlyDirectWriterArena_RetainsAcrossRotateCheckpointAndReuse(t *te
 	retainedAfterCheckpoint := countMutableAppendOnlyDirectArenaRetainedChunks(&db.mutableShards[0])
 	if retainedAfterCheckpoint == 0 {
 		t.Fatalf("expected checkpoint to return pinned chunks to shard-local retained pool")
+	}
+	statsAfterCheckpoint := db.Stats()
+	if got := mustStatInt64(t, statsAfterCheckpoint, "treedb.cache.append_only_direct_arena.lease_count"); got != 0 {
+		t.Fatalf("direct arena lease count after checkpoint=%d want 0", got)
+	}
+	if got := mustStatInt64(t, statsAfterCheckpoint, "treedb.cache.append_only_direct_arena.retained_bytes"); got == 0 {
+		t.Fatalf("direct arena retained bytes after checkpoint=0")
 	}
 
 	secondKey := []byte("k2")

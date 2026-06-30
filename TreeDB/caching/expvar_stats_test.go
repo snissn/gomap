@@ -59,6 +59,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.process.memtable_residency.queue.append_only.value_arena_retained_bytes":              "32768",
 		"treedb.process.append_only.mem_lease_value_arena_retained_bytes":                             "65536",
 		"treedb.process.append_only.value_arena_pool_retained_bytes_estimate":                         "33554432",
+		"treedb.cache.append_only_direct_arena.active_bytes":                                          "262144",
+		"treedb.cache.append_only_direct_arena.lease_bytes":                                           "131072",
+		"treedb.process.append_only_direct_arena.retained_bytes":                                      "65536",
 		"treedb.process.read_path.snapshot.backend_bytes_total":                                       "8192",
 		"treedb.process.batch.set.bytes_total":                                                        "4096",
 		"treedb.process.batch.delete_view.calls_total":                                                "5",
@@ -138,6 +141,15 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.process.append_only.value_arena_pool_retained_bytes_estimate"].(int64); !ok || v != 33554432 {
 		t.Fatalf("append_only value arena pool retained=%T(%v) want int64(33554432)", got["treedb.process.append_only.value_arena_pool_retained_bytes_estimate"], got["treedb.process.append_only.value_arena_pool_retained_bytes_estimate"])
+	}
+	if v, ok := got["treedb.cache.append_only_direct_arena.active_bytes"].(int64); !ok || v != 262144 {
+		t.Fatalf("append_only_direct_arena active bytes=%T(%v) want int64(262144)", got["treedb.cache.append_only_direct_arena.active_bytes"], got["treedb.cache.append_only_direct_arena.active_bytes"])
+	}
+	if v, ok := got["treedb.cache.append_only_direct_arena.lease_bytes"].(int64); !ok || v != 131072 {
+		t.Fatalf("append_only_direct_arena lease bytes=%T(%v) want int64(131072)", got["treedb.cache.append_only_direct_arena.lease_bytes"], got["treedb.cache.append_only_direct_arena.lease_bytes"])
+	}
+	if v, ok := got["treedb.process.append_only_direct_arena.retained_bytes"].(int64); !ok || v != 65536 {
+		t.Fatalf("process append_only_direct_arena retained bytes=%T(%v) want int64(65536)", got["treedb.process.append_only_direct_arena.retained_bytes"], got["treedb.process.append_only_direct_arena.retained_bytes"])
 	}
 	if v, ok := got["treedb.cache.vlog_payload_split.raw_bytes.outer_leaf"].(int64); !ok || v != 1024 {
 		t.Fatalf("vlog_payload_split.raw_bytes.outer_leaf=%T(%v) want int64(1024)", got["treedb.cache.vlog_payload_split.raw_bytes.outer_leaf"], got["treedb.cache.vlog_payload_split.raw_bytes.outer_leaf"])
