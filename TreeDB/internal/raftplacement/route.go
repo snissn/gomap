@@ -26,6 +26,15 @@ const (
 	RouteShapeScatterGatherV1 RouteShapeV1 = "scatter_gather"
 )
 
+type TokenBatchRouteClassV1 string
+
+const (
+	TokenBatchRouteSingleTokenV1    TokenBatchRouteClassV1 = "single_token"
+	TokenBatchRouteSamePartitionV1  TokenBatchRouteClassV1 = "same_partition"
+	TokenBatchRouteSameGroupV1      TokenBatchRouteClassV1 = "same_group_multi_partition"
+	TokenBatchRouteFanoutRequiredV1 TokenBatchRouteClassV1 = "fanout_required"
+)
+
 type RouteRequestV1 struct {
 	Collection CollectionRefV1
 	Shape      RouteShapeV1
@@ -46,12 +55,34 @@ type RouteDecisionV1 struct {
 	Token         RouteTokenDecisionV1
 }
 
+type RouteTokenBatchDecisionV1 struct {
+	Collection    CollectionRefV1
+	PlacementMode PlacementModeV1
+	Class         TokenBatchRouteClassV1
+	Tokens        []uint64
+	Partitions    []ResolvedTokenPartitionV1
+	Group         ResolvedGroupV1
+	Groups        []ResolvedGroupV1
+}
+
 func (d RouteDecisionV1) GroupID() raftcluster.GroupID {
 	return d.Group.ID
 }
 
 func (d RouteDecisionV1) LeaderHint() raftcluster.NodeID {
 	return d.Group.LeaderHint
+}
+
+func (d RouteTokenBatchDecisionV1) GroupID() raftcluster.GroupID {
+	return d.Group.ID
+}
+
+func (d RouteTokenBatchDecisionV1) LeaderHint() raftcluster.NodeID {
+	return d.Group.LeaderHint
+}
+
+func (d RouteTokenBatchDecisionV1) FanoutRequired() bool {
+	return d.Class == TokenBatchRouteFanoutRequiredV1
 }
 
 func (c ResolvedCatalogV1) Route(req RouteRequestV1) (RouteDecisionV1, error) {
@@ -159,6 +190,83 @@ func (c ResolvedCatalogV1) RouteDocumentToken(database, catalog, collection stri
 	default:
 		return RouteDecisionV1{}, errors.Join(ErrInvalidRouteRequest, ErrUnsupportedPlacementMode, fmt.Errorf("%s/%s/%s mode %q", ref.Database, ref.Catalog, ref.Collection, placement.Mode))
 	}
+}
+
+func (c ResolvedCatalogV1) ClassifyDocumentTokenBatch(database, catalog, collection string, tokens []uint64) (RouteTokenBatchDecisionV1, error) {
+	ref := CollectionRefV1{Database: database, Catalog: catalog, Collection: collection}
+	if err := validateCollectionRef(ref); err != nil {
+		return RouteTokenBatchDecisionV1{}, errors.Join(ErrInvalidRouteRequest, err)
+	}
+	if len(tokens) == 0 {
+		return RouteTokenBatchDecisionV1{}, errors.Join(ErrInvalidRouteRequest, ErrMissingRouteToken, fmt.Errorf("%s/%s/%s token batch route request requires at least one token", ref.Database, ref.Catalog, ref.Collection))
+	}
+	placement, ok := c.placements[ref]
+	if !ok {
+		return RouteTokenBatchDecisionV1{}, errors.Join(ErrInvalidRouteRequest, ErrUnplacedCollection, fmt.Errorf("%s/%s/%s", ref.Database, ref.Catalog, ref.Collection))
+	}
+	if placement.Mode != PlacementModeTokenV1 && placement.Mode != PlacementModeRingV1 {
+		return RouteTokenBatchDecisionV1{}, errors.Join(ErrInvalidRouteRequest, ErrUnsupportedPlacementMode, fmt.Errorf("%s/%s/%s mode %q has no token partitions", ref.Database, ref.Catalog, ref.Collection, placement.Mode))
+	}
+	plan, ok := c.tokens[ref]
+	if !ok {
+		return RouteTokenBatchDecisionV1{}, errors.Join(ErrInvalidRouteRequest, ErrInvalidTokenRing, fmt.Errorf("%s/%s/%s has no resolved token plan", ref.Database, ref.Catalog, ref.Collection))
+	}
+
+	partitions := make([]ResolvedTokenPartitionV1, len(tokens))
+	uniqueGroupIDs := make([]raftcluster.GroupID, 0, len(tokens))
+	seenGroupIDs := make(map[raftcluster.GroupID]struct{}, len(tokens))
+	for i, token := range tokens {
+		partition, err := plan.ResolveToken(token)
+		if err != nil {
+			return RouteTokenBatchDecisionV1{}, errors.Join(ErrInvalidRouteRequest, err)
+		}
+		partitions[i] = partition
+		if _, seen := seenGroupIDs[partition.GroupID]; !seen {
+			seenGroupIDs[partition.GroupID] = struct{}{}
+			uniqueGroupIDs = append(uniqueGroupIDs, partition.GroupID)
+		}
+	}
+
+	class := TokenBatchRouteSingleTokenV1
+	if len(tokens) > 1 {
+		class = TokenBatchRouteSamePartitionV1
+		first := partitions[0]
+		for _, partition := range partitions[1:] {
+			if partition.ID != first.ID {
+				class = TokenBatchRouteSameGroupV1
+				break
+			}
+		}
+		if class == TokenBatchRouteSameGroupV1 {
+			for _, partition := range partitions[1:] {
+				if partition.GroupID != first.GroupID {
+					class = TokenBatchRouteFanoutRequiredV1
+					break
+				}
+			}
+		}
+	}
+
+	groups := make([]ResolvedGroupV1, 0, len(uniqueGroupIDs))
+	for _, groupID := range uniqueGroupIDs {
+		group, err := c.routeGroup(groupID)
+		if err != nil {
+			return RouteTokenBatchDecisionV1{}, err
+		}
+		groups = append(groups, group)
+	}
+	decision := RouteTokenBatchDecisionV1{
+		Collection:    ref,
+		PlacementMode: placement.Mode,
+		Class:         class,
+		Tokens:        append([]uint64(nil), tokens...),
+		Partitions:    append([]ResolvedTokenPartitionV1(nil), partitions...),
+		Groups:        groups,
+	}
+	if class != TokenBatchRouteFanoutRequiredV1 && len(groups) == 1 {
+		decision.Group = groups[0]
+	}
+	return decision, nil
 }
 
 func (c ResolvedCatalogV1) routeGroup(id raftcluster.GroupID) (ResolvedGroupV1, error) {
