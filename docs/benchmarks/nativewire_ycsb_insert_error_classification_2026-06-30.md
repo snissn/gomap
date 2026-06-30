@@ -1,13 +1,34 @@
 # TreeDB Nativewire YCSB INSERT_ERROR Classification
 
-Status: diagnostic classification evidence for #3374 under parent #2026.
+Status: diagnostic classification evidence for #3374 under parent #2026,
+reconciled by #3382 as the final nativewire YCSB caveat classification for
+local publication/readability closeout.
 
 This report classifies the invalid intermediate 1M nativewire YCSB load at
 `/tmp/treedb_native_ycsb_current_head_20260629_202356` and records a fresh
 current-head diagnostic gate with client-side operation error logging enabled.
 It only covers the remaining intermittent `INSERT_ERROR` caveat from the #3364
-refresh. It does not claim Raft HA, snapshot/read-index/routing, or full #2026
-root-cause closeout.
+refresh. By itself it does not claim Raft HA, snapshot/read-index/routing, or a
+full #2026 closeout. Combined with the deterministic local
+publication/readability tests and the #3382 verification-matrix update, it
+removes the nativewire YCSB caveat as a blocker to closing #2026 for local
+single-node storage publication/readability.
+
+## #3382 Reconciliation
+
+The diagnostic commit recorded by this artifact is
+`3f2c712bb700806b29deb872ed90531d4828ab79`. #3382 did not rerun the diagnostic
+script because the delta to current `origin/main` `f42a7002b` is Raft
+snapshot-tail work, this diagnostic script/docs merge, and Q2 query
+benchmark/reference-fill work; it does not modify the nativewire insert path,
+collection catalog publication path, or value-log pointer read-boundary code
+that #2026 owns.
+
+After #3382 merges, this classification should be read as final for the invalid
+intermediate YCSB artifact: it is a non-reproduced
+client/harness/protocol/server-lifecycle interruption, not current evidence of
+a TreeDB catalog/value-log publication failure. The residual distributed
+cluster work remains outside #2026 and is owned by #3044, #3045, and #3046.
 
 ## Boundary
 
@@ -175,11 +196,11 @@ fatal, `ERROR`, or `Failed` text.
 | Artifact | Classification | Evidence | Residual Risk |
 | --- | --- | --- | --- |
 | `/tmp/treedb_native_ycsb_current_head_20260629_202356` | Invalid, non-reproduced intermediate client/harness/protocol/server-lifecycle interruption. Not evidence of a current TreeDB catalog/value-log publication/readability failure. | The 1M run reports client-side `INSERT_ERROR` counters, but no server-side `EOF`, ambiguous commit, panic, fatal error, or failure marker. The original command lacked error logging, so it cannot identify the exact client error string. Later clean #3364 evidence and the logged current-head #3374 diagnostic both complete 100k and 1M loads with zero raw scan matches. | The exact old client error is unavailable. If this shape recurs with `TREEDB_YCSB_LOG_ERRORS=1`, preserve the artifact and classify the logged error string as client harness, nativewire protocol, server lifecycle, or storage. |
-| `/tmp/treedb_native_ycsb_diagnostic_20260629_224839` | Current-head diagnostic pass. | 100k and 1M loads both exit 0, complete all requested inserts, produce empty stderr, and scan clean for `INSERT_ERROR`, `EOF`, `ambiguous`, `panic`, `fatal`, `ERROR`, and `Failed`. | This is a single-host developer-machine diagnostic gate, not a distributed HA proof. #2026 remains open for the broader publication/readability invariant and any final closeout decision. |
+| `/tmp/treedb_native_ycsb_diagnostic_20260629_224839` | Current-head diagnostic pass. | 100k and 1M loads both exit 0, complete all requested inserts, produce empty stderr, and scan clean for `INSERT_ERROR`, `EOF`, `ambiguous`, `panic`, `fatal`, `ERROR`, and `Failed`. | This is a single-host developer-machine diagnostic gate, not a distributed HA proof. After #3382 merges it supports #2026 local closeout, while #3044/#3045/#3046 retain distributed HA/read/routing scope. |
 
 Conclusion: the preserved intermediate `INSERT_ERROR` artifact should be treated
 as a non-reproduced diagnostic caveat, not as current evidence of a TreeDB-owned
 storage publication bug. The old artifact is still useful because it explains
 why #2026 stayed open after #3364, but the current logged gate makes the caveat
-defensible: if the failure recurs, the harness now captures the missing
-client-side error strings needed to assign ownership.
+defensible and final for #3382: if the failure recurs, the harness now captures
+the missing client-side error strings needed to assign ownership.
