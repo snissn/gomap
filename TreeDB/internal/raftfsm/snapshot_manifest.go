@@ -34,6 +34,13 @@ func (f *FSM) ExportSnapshotManifestV1(opts SnapshotManifestExportOptionsV1) (ra
 	if !ok {
 		return raftcluster.SnapshotManifestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM has no durable applied progress")
 	}
+	localLSN, err := localAppliedCommandLSN(f.db)
+	if err != nil {
+		return raftcluster.SnapshotManifestV1{}, err
+	}
+	if localLSN != record.AppliedCommandLSN {
+		return raftcluster.SnapshotManifestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d does not match snapshot progress metadata %d", localLSN, record.AppliedCommandLSN)
+	}
 	digest, err := f.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{
 		ScopeRule:     f.scopeRule,
 		DatabaseScope: f.database,

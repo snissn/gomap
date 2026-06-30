@@ -1,6 +1,7 @@
 package raftfsm
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -87,6 +88,70 @@ func TestSnapshotManifestExportRefusesNilClosedAndMissingProgress(t *testing.T) 
 	}
 	if _, err := fsm.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{}); codeOfFSMErr(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
 		t.Fatalf("closed ExportSnapshotManifestV1 error=%v, want unsafe durability", err)
+	}
+}
+
+func TestSnapshotManifestExportRejectsProgressBehindLocalCoverage(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	fsm := openFSMForTest(t, db, dbDir)
+
+	users := deterministicCreateCollectionEntry(t, "users", "fsm:snapshot-manifest:users")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 1, users)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 users: %v result=%+v", err, result)
+	}
+	firstProgress, ok := fsm.progress.LastAppliedRecord()
+	if !ok {
+		t.Fatal("LastAppliedRecord missing after first apply")
+	}
+	orders := deterministicCreateCollectionEntry(t, "orders", "fsm:snapshot-manifest:orders")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(1, 2, orders)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 orders: %v result=%+v", err, result)
+	}
+	coveredLSN := db.State().AppliedCommandLSN
+	if coveredLSN <= firstProgress.AppliedCommandLSN {
+		t.Fatalf("AppliedCommandLSN after second apply=%d, want greater than first progress %d", coveredLSN, firstProgress.AppliedCommandLSN)
+	}
+	progressPath := raftapply.DurableApplyProgressStorePath(fsm.metadataDir)
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close FSM: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close DB: %v", err)
+	}
+	if err := os.Remove(progressPath); err != nil {
+		t.Fatalf("Remove progress metadata: %v", err)
+	}
+	progress, err := raftapply.OpenDurableApplyProgressStoreFile(progressPath, raftapply.DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("Open rolled-back progress store: %v", err)
+	}
+	if err := progress.RecordApplied(firstProgress); err != nil {
+		t.Fatalf("Record rolled-back progress: %v", err)
+	}
+	if err := progress.Close(); err != nil {
+		t.Fatalf("Close rolled-back progress store: %v", err)
+	}
+
+	reopenedDB := openFSMTestDB(t, dbDir)
+	defer func() { _ = reopenedDB.Close() }()
+	if got := reopenedDB.State().AppliedCommandLSN; got != coveredLSN {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want %d", got, coveredLSN)
+	}
+	reopenedFSM, openErr := Open(Options{
+		DB:      reopenedDB,
+		Cluster: validFSMClusterConfig(dbDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if openErr != nil {
+		t.Fatalf("Open with progress behind local coverage and stored result: %v", openErr)
+	}
+	defer func() { _ = reopenedFSM.Close() }()
+	if _, err := reopenedFSM.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{}); codeOfFSMErr(err) != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("ExportSnapshotManifestV1 lagging progress error=%v, want unsafe durability", err)
 	}
 }
 
