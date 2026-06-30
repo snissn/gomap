@@ -235,6 +235,7 @@ type SingleGroupSubmitter struct {
 type SubmitResultV1 struct {
 	ActualAck            iwire.AckPolicy
 	CommittedRecoverable bool
+	DecodedEntry         raftentry.CommandEntryV1
 	ApplyResult          raftentry.ApplyResultV1
 	CommittedEntry       CommittedCommandEntryV1
 	Evidence             CommitEvidenceV1
@@ -317,6 +318,10 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{}, err
 	}
+	actualAck, err := actualSubmitAck(metadata.AckPolicy)
+	if err != nil {
+		return SubmitResultV1{}, err
+	}
 	expectedTarget := decoded.Target.Clone()
 	request := CommitCommandEntryV1Request{
 		GroupID:                  s.cluster.GroupID,
@@ -347,13 +352,10 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, err)
 	}
-	actualAck, err := actualSubmitAck(metadata.AckPolicy)
-	if err != nil {
-		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, err
-	}
 	return SubmitResultV1{
 		ActualAck:            actualAck,
 		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
+		DecodedEntry:         decoded,
 		ApplyResult:          applyResult,
 		CommittedEntry:       committed,
 		Evidence:             commitResult.Evidence,

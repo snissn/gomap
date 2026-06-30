@@ -47,11 +47,7 @@ func (s *RaftClusterSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return ClusterSubmitResult{}, nativeErrorForRaftClusterSubmit(err)
 	}
-	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata})
-	if err != nil {
-		return ClusterSubmitResult{}, nativeErrorForRaftEntryValidation(err)
-	}
-	sections, err := raftClusterResponseSections(decoded, metadata, result)
+	sections, err := raftClusterResponseSections(result.DecodedEntry, metadata, result)
 	if err != nil {
 		return ClusterSubmitResult{}, err
 	}

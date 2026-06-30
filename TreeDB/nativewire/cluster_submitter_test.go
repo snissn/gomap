@@ -1537,6 +1537,57 @@ func TestRaftClusterSubmitterConcreteBridgeOmitResponseMetaAdvancesCatalogVersio
 	}
 }
 
+func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) {
+	defaultLimits := iwire.DefaultLimits()
+	limits := defaultLimits
+	limits.MaxSectionLen = defaultLimits.MaxSectionLen + (1 << 20)
+	entry := raftClusterLargeInsertBatchEntry(t, limits, int(defaultLimits.MaxSectionLen)+1)
+	applier := &recordingRaftClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	cluster := raftClusterBridgeTestConfig(nil)
+	cluster.Dir = t.TempDir()
+	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+		Cluster:           cluster,
+		AdmissionProvider: raftcluster.StaticAdmissionProvider{Status: raftcluster.LeaderAdmission()},
+		CommitSource: raftcluster.NewSequencedCommitSource(raftcluster.SequencedCommitSourceOptions{
+			GroupID:             cluster.GroupID,
+			NodeID:              cluster.NodeID,
+			LeaderID:            cluster.NodeID,
+			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) { return 7, true, nil }),
+		DecodeLimits:           limits,
+	})
+	if err != nil {
+		t.Fatalf("NewSingleGroupSubmitter: %v", err)
+	}
+
+	result, err := NewRaftClusterSubmitter(bridge).SubmitCommandEntryV1(context.Background(), entry, ClusterRequestMetadata{
+		RequestID: 17,
+		AckPolicy: AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	if result.ActualAck != AckRaftCommitted || !result.CommittedRecoverable {
+		t.Fatalf("ack/recoverable=%d/%v want raft_committed/true", result.ActualAck, result.CommittedRecoverable)
+	}
+	if applier.calls != 1 {
+		t.Fatalf("apply calls=%d want 1", applier.calls)
+	}
+	if _, err := metadataSection(result.ResponseSections, iwire.SectionDocumentIDs); err != nil {
+		t.Fatalf("document_ids response section: %v", err)
+	}
+	inserted, err := responseCount(result.ResponseSections, "inserted_count")
+	if err != nil {
+		t.Fatalf("inserted_count: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted_count=%d want 1", inserted)
+	}
+}
+
 func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing.T) {
 	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.FollowerAdmission("node-b", "not leader"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1655,6 +1706,17 @@ func serveRaftClusterBridgePipe(t testing.TB, admission raftcluster.AdmissionSta
 	return client, server, mgr, db
 }
 
+type recordingRaftClusterApplier struct {
+	calls  int
+	result raftentry.ApplyResultV1
+	err    error
+}
+
+func (a *recordingRaftClusterApplier) ApplyCommittedCommandEntryV1(context.Context, raftcluster.CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+	a.calls++
+	return a.result, a.err
+}
+
 func raftClusterBridgeTestConfig(db *backenddb.DB) raftcluster.Config {
 	dir := ""
 	if db != nil {
@@ -1670,6 +1732,29 @@ func raftClusterBridgeTestConfig(db *backenddb.DB) raftcluster.Config {
 			{ID: "node-c", Address: "127.0.0.1:9303"},
 		},
 	}
+}
+
+func raftClusterLargeInsertBatchEntry(tb testing.TB, limits iwire.Limits, documentLen int) []byte {
+	tb.Helper()
+	document := bytes.Repeat([]byte{'x'}, documentLen)
+	sections := []iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("raftcluster/large-insert")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 7)},
+		collectionNameRef("users"),
+		documentFormatSection(collections.DocumentFormatJSON),
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("large-1"))},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, document)},
+	}
+	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		tb.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, limits)
+	if err != nil {
+		tb.Fatalf("AppendDeterministicEntryWithLimits: %v", err)
+	}
+	return entry
 }
 
 func raftClusterCreateCollectionSections(name string, catalogVersion uint64, ack AckPolicy) []iwire.Section {
