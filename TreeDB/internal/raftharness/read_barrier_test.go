@@ -36,6 +36,56 @@ func TestReadBarrierCatchesUpNodeBeforeProvingAppliedIndex(t *testing.T) {
 	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 23, Index: 2})
 }
 
+func TestReadBarrierCatchesUpSparseCommittedCommandIndex(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	entries := []raftfsm.CommittedEntryV1{
+		committedCommand(30, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:read-barrier-sparse")),
+		committedCommand(30, 3, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:read-barrier-sparse")),
+	}
+	if evidence, err := h.Commit(entries...); err != nil {
+		t.Fatalf("Commit sparse read-barrier entries: %v evidence=%+v", err, evidence)
+	}
+	assertNoLastApplied(t, h, "node-b")
+
+	progress, err := h.ReadBarrier("node-b").WaitAppliedIndex(context.Background(), raftcluster.AppliedIndexReadBarrier{
+		MinAppliedIndex: 3,
+	})
+	if err != nil {
+		t.Fatalf("WaitAppliedIndex sparse command: %v progress=%+v", err, progress)
+	}
+	if progress.NodeID != "node-b" || progress.GroupID != "default" || progress.Term != 30 || progress.Index != 3 || !progress.HasApplied {
+		t.Fatalf("progress=%+v, want node-b default 30/3", progress)
+	}
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 30, Index: 3})
+}
+
+func TestReadBarrierFailsClosedWhenBarrierIndexIsSparseNonCommandGap(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	entries := []raftfsm.CommittedEntryV1{
+		committedCommand(31, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:read-barrier-gap")),
+		committedCommand(31, 3, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:read-barrier-gap")),
+	}
+	if evidence, err := h.Commit(entries...); err != nil {
+		t.Fatalf("Commit sparse read-barrier gap entries: %v evidence=%+v", err, evidence)
+	}
+
+	progress, err := h.ReadBarrier("node-b").WaitAppliedIndex(context.Background(), raftcluster.AppliedIndexReadBarrier{
+		MinAppliedIndex: 2,
+	})
+	if !errors.Is(err, raftcluster.ErrReadBarrierNotSatisfied) {
+		t.Fatalf("WaitAppliedIndex sparse gap err=%v progress=%+v, want ErrReadBarrierNotSatisfied", err, progress)
+	}
+	if progress.NodeID != "node-b" || progress.GroupID != "default" || progress.Term != 31 || progress.Index != 1 || !progress.HasApplied {
+		t.Fatalf("progress after sparse gap barrier=%+v, want node-b default 31/1", progress)
+	}
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 31, Index: 1})
+	assertCollectionMissing(t, h, "node-b", "orders")
+}
+
 func TestReadBarrierFailsClosedWhenCommittedLogCannotSatisfyIndex(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()

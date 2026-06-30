@@ -217,26 +217,38 @@ func TestDurableApplyResultStorePreservesProgressLogicalDigest(t *testing.T) {
 	}
 }
 
-func TestDurableApplyProgressStoreRejectsGapAndLowerIndex(t *testing.T) {
+func TestDurableApplyProgressStoreAllowsGapAndRejectsLowerIndex(t *testing.T) {
 	dir := t.TempDir()
 	progress, err := OpenDurableApplyProgressStore(dir, DurableApplyStoreOptions{DisableSync: true})
 	if err != nil {
 		t.Fatalf("OpenDurableApplyProgressStore: %v", err)
 	}
-	defer func() { _ = progress.Close() }()
 	digest := testDurableDigest(1)
 	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: raftentry.ApplyEntryID{Term: 2, Index: 1}, CommandDigest: digest, AppliedCommandLSN: 1}); err != nil {
 		t.Fatalf("RecordApplied index 1: %v", err)
 	}
-	if err := progress.CheckCanApply(raftentry.ApplyEntryID{Term: 2, Index: 3}); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
-		t.Fatalf("gap CheckCanApply error=%v code=%s, want rejected conflict", err, codeOf(err))
+	if err := progress.CheckCanApply(raftentry.ApplyEntryID{Term: 2, Index: 3}); err != nil {
+		t.Fatalf("gap CheckCanApply: %v", err)
+	}
+	if err := progress.RecordApplied(ApplyProgressRecordV1{EntryID: raftentry.ApplyEntryID{Term: 2, Index: 3}, CommandDigest: testDurableDigest(3), AppliedCommandLSN: 2}); err != nil {
+		t.Fatalf("RecordApplied index 3: %v", err)
 	}
 	if err := progress.CheckCanApply(raftentry.ApplyEntryID{Term: 2, Index: 1}); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
 		t.Fatalf("lower CheckCanApply error=%v code=%s, want rejected conflict", err, codeOf(err))
 	}
-	if err := progress.CheckCanApply(raftentry.ApplyEntryID{Term: 1, Index: 2}); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
+	if err := progress.CheckCanApply(raftentry.ApplyEntryID{Term: 1, Index: 4}); codeOf(err) != raftentry.ErrorRejectedConflictV1 {
 		t.Fatalf("lower-term CheckCanApply error=%v code=%s, want rejected conflict", err, codeOf(err))
 	}
+	if err := progress.Close(); err != nil {
+		t.Fatalf("Close progress: %v", err)
+	}
+
+	reopened, err := OpenDurableApplyProgressStore(dir, DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("Reopen durable progress with raft index gap: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	assertDurableLastApplied(t, reopened, raftentry.ApplyEntryID{Term: 2, Index: 3})
 }
 
 func TestDurableApplyStoresFailClosedOnTruncatedAndCorruptMetadata(t *testing.T) {

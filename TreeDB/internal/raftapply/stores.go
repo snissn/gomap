@@ -204,7 +204,9 @@ func (s *MemoryApplyResultStore) Len() int {
 }
 
 // MemoryApplyProgressStore is a bounded fake apply-progress store for tests and
-// early harness wiring. It enforces contiguous indexes and non-decreasing terms.
+// early harness wiring. The first in-memory entry must start at index 1; later
+// entries enforce strictly increasing indexes, allowing gaps, and
+// non-decreasing terms.
 type MemoryApplyProgressStore struct {
 	mu       sync.Mutex
 	max      int
@@ -340,9 +342,6 @@ func (s *MemoryApplyProgressStore) checkCanApplyLocked(id raftentry.ApplyEntryID
 	}
 	if id.Index <= s.last.Index {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is not after last applied %d", id.Index, s.last.Index)
-	}
-	if id.Index != s.last.Index+1 {
-		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index gap: got %d after %d", id.Index, s.last.Index)
 	}
 	if id.Term < s.last.Term {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry term %d is below last applied term %d", id.Term, s.last.Term)

@@ -98,7 +98,7 @@ func TestCloseReopenPreservesProgressReplayAndIdempotency(t *testing.T) {
 	}
 }
 
-func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequences(t *testing.T) {
+func TestFollowerCatchUpAppliesMissingSparseEntriesAndRejectsInvalidSequences(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()
 
@@ -109,7 +109,7 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 		committedCommand(13, 2, deterministicInsertBatchEntry(t, "users", "harness:insert:users:catchup", nativewire.DocumentFormatBSON, [][]byte{[]byte("u1")}, [][]byte{
 			testBSONDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}}),
 		})),
-		committedCommand(14, 3, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:catchup")),
+		committedCommand(14, 4, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:catchup")),
 	}
 	if evidence, err := h.CommitAndApply([]raftcluster.NodeID{"node-a"}, entries...); err != nil {
 		t.Fatalf("CommitAndApply leader: %v evidence=%+v", err, evidence)
@@ -127,7 +127,7 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 	if catchup[0] != seeded[0] {
 		t.Fatalf("node-b catchup first result=%+v, want replayed last result %+v", catchup[0], seeded[0])
 	}
-	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 14, Index: 3})
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 14, Index: 4})
 	if leaderDigest, followerDigest := logicalDigest(t, h, "node-a"), logicalDigest(t, h, "node-b"); leaderDigest != followerDigest {
 		t.Fatalf("digest after catch-up mismatch leader=%s follower=%s", leaderDigest.Hex(), followerDigest.Hex())
 	}
@@ -137,15 +137,16 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 	if evidence, err := bad.CommitAndApply([]raftcluster.NodeID{"node-b"}, entries[0]); err != nil {
 		t.Fatalf("seed bad follower: %v evidence=%+v", err, evidence)
 	}
-	if _, err := bad.Commit(entries[2]); !errors.Is(err, ErrCommittedLogGap) {
-		t.Fatalf("Commit gap err=%v, want ErrCommittedLogGap", err)
+	if _, err := bad.Commit(entries[2]); err != nil {
+		t.Fatalf("Commit sparse entry: %v", err)
 	}
 	divergent := committedCommand(13, 1, deterministicCreateCollectionEntry(t, "admins", "harness:create:admins:divergent"))
 	if _, err := bad.Commit(divergent); !errors.Is(err, ErrCommittedLogConflict) {
 		t.Fatalf("Commit divergent err=%v, want ErrCommittedLogConflict", err)
 	}
 
-	gapResults, err := bad.ApplyCommittedEntriesToNode("node-b", entries[2])
+	missing := committedCommand(13, 3, deterministicCreateCollectionEntry(t, "audits", "harness:create:audits:missing-commit"))
+	gapResults, err := bad.ApplyCommittedEntriesToNode("node-b", missing)
 	if !errors.Is(err, ErrCommittedLogGap) {
 		t.Fatalf("gap apply err=%v results=%+v, want ErrCommittedLogGap", err, gapResults)
 	}
@@ -153,6 +154,7 @@ func TestFollowerCatchUpAppliesMissingContiguousEntriesAndRejectsInvalidSequence
 		t.Fatalf("gap apply results=%+v, want none before node mutation", gapResults)
 	}
 	assertLastApplied(t, bad, "node-b", raftentry.ApplyEntryID{Term: 13, Index: 1})
+	assertCollectionMissing(t, bad, "node-b", "audits")
 	assertCollectionMissing(t, bad, "node-b", "orders")
 
 	divergentResults, err := bad.ApplyCommittedEntriesToNode("node-b", divergent)
@@ -291,7 +293,12 @@ func TestCatchUpNodeRejectsAppliedPrefixTermMismatch(t *testing.T) {
 	}
 
 	catchup, err := h.CatchUpNode("node-b")
-	assertRejectedResult(t, "term-mismatch applied-prefix catch-up", catchup, err, raftentry.ErrorRejectedConflictV1)
+	if !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("term-mismatch applied-prefix catch-up err=%v results=%+v, want ErrCommittedLogConflict", err, catchup)
+	}
+	if len(catchup) != 0 {
+		t.Fatalf("term-mismatch applied-prefix catch-up results=%+v, want none", catchup)
+	}
 	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 21, Index: 2})
 	assertCollectionMissing(t, h, "node-b", "audits")
 }
@@ -331,10 +338,10 @@ func TestCommitRejectsInvalidBatchAtomically(t *testing.T) {
 	defer func() { _ = h.Close() }()
 
 	valid := committedCommand(16, 1, deterministicCreateCollectionEntry(t, "users", "harness:create:users:atomic"))
-	gap := committedCommand(16, 3, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:atomic-gap"))
-	evidence, err := h.Commit(valid, gap)
-	if !errors.Is(err, ErrCommittedLogGap) {
-		t.Fatalf("Commit invalid batch err=%v, want ErrCommittedLogGap evidence=%+v", err, evidence)
+	lowerTerm := committedCommand(15, 3, deterministicCreateCollectionEntry(t, "orders", "harness:create:orders:atomic-term"))
+	evidence, err := h.Commit(valid, lowerTerm)
+	if !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("Commit invalid batch err=%v, want ErrCommittedLogConflict evidence=%+v", err, evidence)
 	}
 	if evidence.Committed {
 		t.Fatalf("Commit invalid batch evidence=%+v, want not committed", evidence)

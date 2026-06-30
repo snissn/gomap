@@ -11,5 +11,5 @@
 // apply-results-v1.log. Each file has a versioned header and checksummed frames;
 // open rebuilds lookup indexes from the log and fails closed on truncation,
 // corruption, unsupported versions, digest conflicts, idempotency conflicts, or
-// non-contiguous progress metadata.
+// non-monotonic progress metadata.
 package raftapply

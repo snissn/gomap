@@ -137,7 +137,7 @@ func TestClusterAdapterPreflightAllowsKnownIdempotencyReplay(t *testing.T) {
 	}
 }
 
-func TestClusterAdapterPreservesOrderingRejections(t *testing.T) {
+func TestClusterAdapterAllowsRaftLogIndexGapsAndPreservesOrderingRejections(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
 
@@ -155,10 +155,26 @@ func TestClusterAdapterPreservesOrderingRejections(t *testing.T) {
 
 	gapRaw := deterministicCreateCollectionEntry(t, "orders", "fsm:cluster-adapter:ordering:gap")
 	gap, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 3, gapRaw))
-	assertRejected(t, gap, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+	if err != nil {
+		t.Fatalf("ApplyCommittedCommandEntryV1 raft log index gap: %v result=%+v", err, gap)
+	}
+	assertApplied(t, gap, raftentry.ApplyStatusApplied, 1)
 
-	regressionRaw := deterministicCreateCollectionEntry(t, "orders", "fsm:cluster-adapter:ordering:term")
-	regression, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(1, 2, regressionRaw))
+	replayed, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 1, firstRaw))
+	if err != nil {
+		t.Fatalf("ApplyCommittedCommandEntryV1 replay below last applied: %v result=%+v", err, replayed)
+	}
+	if replayed != first {
+		t.Fatalf("replayed result=%+v want stored %+v", replayed, first)
+	}
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 2, Index: 3})
+
+	conflictRaw := deterministicCreateCollectionEntry(t, "profiles", "fsm:cluster-adapter:ordering:conflict")
+	conflict, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(2, 1, conflictRaw))
+	assertRejected(t, conflict, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+
+	regressionRaw := deterministicCreateCollectionEntry(t, "profiles", "fsm:cluster-adapter:ordering:term")
+	regression, err := fsm.ApplyCommittedCommandEntryV1(context.Background(), clusterCommittedCommand(1, 4, regressionRaw))
 	assertRejected(t, regression, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
 }
 
