@@ -245,6 +245,11 @@ type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
 	Q2GroupRankNanos    int64
 	Q2DistinctRankNanos int64
 	Q2LocalRankNanos    int64
+
+	Q2GroupGlobalDictionaryRankNanos    int64
+	Q2DistinctGlobalDictionaryRankNanos int64
+	Q2GroupGlobalCodeRemapNanos         int64
+	Q2DistinctGlobalCodeRemapNanos      int64
 }
 
 func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPhysicalQueryDiagnostics) {
@@ -276,6 +281,10 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 	diag.TypedColumnPrepareQ2GroupRankNanos += d.Q2GroupRankNanos
 	diag.TypedColumnPrepareQ2DistinctRankNanos += d.Q2DistinctRankNanos
 	diag.TypedColumnPrepareQ2LocalRankNanos += d.Q2LocalRankNanos
+	diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += d.Q2GroupGlobalDictionaryRankNanos
+	diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += d.Q2DistinctGlobalDictionaryRankNanos
+	diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += d.Q2GroupGlobalCodeRemapNanos
+	diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos += d.Q2DistinctGlobalCodeRemapNanos
 }
 
 func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedColumnPhysicalQueryPrepareDiagnostics) {
@@ -307,6 +316,10 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 	d.Q2GroupRankNanos += src.Q2GroupRankNanos
 	d.Q2DistinctRankNanos += src.Q2DistinctRankNanos
 	d.Q2LocalRankNanos += src.Q2LocalRankNanos
+	d.Q2GroupGlobalDictionaryRankNanos += src.Q2GroupGlobalDictionaryRankNanos
+	d.Q2DistinctGlobalDictionaryRankNanos += src.Q2DistinctGlobalDictionaryRankNanos
+	d.Q2GroupGlobalCodeRemapNanos += src.Q2GroupGlobalCodeRemapNanos
+	d.Q2DistinctGlobalCodeRemapNanos += src.Q2DistinctGlobalCodeRemapNanos
 }
 
 type columnTypedColumnPhysicalAggregateSummary struct {
@@ -725,7 +738,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 	}
 	phaseStart = time.Now()
 	if columnTypedColumnPhysicalQueryUseSortedGroupedDistinct(plan, req) {
-		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(runner.parts); err != nil {
+		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalCodesWithDiagnostics(runner.parts, prepareDiagnostics); err != nil {
 			if prepareDiagnostics != nil {
 				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
 			}
@@ -1086,15 +1099,27 @@ func buildColumnTypedColumnDenseGroupHourCountSummary(parts []columnTypedColumnP
 }
 
 func prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(parts []columnTypedColumnPhysicalQueryPart) error {
+	return prepareColumnTypedColumnSortedGroupedDistinctGlobalCodesWithDiagnostics(parts, nil)
+}
+
+func prepareColumnTypedColumnSortedGroupedDistinctGlobalCodesWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
+	phaseStart := time.Now()
 	groupDict, groupRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
 		return &part.Group
 	})
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2GroupGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return err
 	}
+	phaseStart = time.Now()
 	distinctDict, distinctRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
 		return &part.Distinct
 	})
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2DistinctGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return err
 	}
@@ -1103,10 +1128,20 @@ func prepareColumnTypedColumnSortedGroupedDistinctGlobalCodes(parts []columnType
 		if part == nil {
 			return fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
 		}
-		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(&part.Group, groupDict, groupRanks); err != nil {
+		phaseStart = time.Now()
+		err := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(&part.Group, groupDict, groupRanks)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.Q2GroupGlobalCodeRemapNanos += time.Since(phaseStart).Nanoseconds()
+		}
+		if err != nil {
 			return fmt.Errorf("collections: sorted grouped-distinct group part %d: %w", partIdx, err)
 		}
-		if err := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(&part.Distinct, distinctDict, distinctRanks); err != nil {
+		phaseStart = time.Now()
+		err = prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnCodes(&part.Distinct, distinctDict, distinctRanks)
+		if prepareDiagnostics != nil {
+			prepareDiagnostics.Q2DistinctGlobalCodeRemapNanos += time.Since(phaseStart).Nanoseconds()
+		}
+		if err != nil {
 			return fmt.Errorf("collections: sorted grouped-distinct distinct part %d: %w", partIdx, err)
 		}
 	}

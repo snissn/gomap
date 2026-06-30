@@ -2599,6 +2599,12 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 		TypedColumnPrepareQ2GroupRankMS:        0.028,
 		TypedColumnPrepareQ2DistinctRankMS:     0.029,
 		TypedColumnPrepareQ2LocalRankMS:        0.030,
+
+		TypedColumnPrepareQ2GroupGlobalDictionaryRankMS:    0.031,
+		TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS: 0.032,
+		TypedColumnPrepareQ2GroupGlobalCodeRemapMS:         0.033,
+		TypedColumnPrepareQ2DistinctGlobalCodeRemapMS:      0.034,
+
 		CompressionAttribution: columnStoreCompressionAttribution{
 			CompressionPolicyLabel: "default",
 			RequestedCompression:   "snappy",
@@ -2707,6 +2713,18 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	if got, want := cell.TypedColumnPrepareQ2LocalRankMS, q.TypedColumnPrepareQ2LocalRankMS; got != want {
 		t.Fatalf("typed_column_prepare_q2_local_rank_duration_ms=%v want %v", got, want)
 	}
+	if got, want := cell.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS, q.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_group_global_dictionary_rank_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS, q.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_distinct_global_dictionary_rank_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2GroupGlobalCodeRemapMS, q.TypedColumnPrepareQ2GroupGlobalCodeRemapMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_group_global_code_remap_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DistinctGlobalCodeRemapMS, q.TypedColumnPrepareQ2DistinctGlobalCodeRemapMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_distinct_global_code_remap_duration_ms=%v want %v", got, want)
+	}
 	if got, want := cell.RowsScanned, q.RowsScanned; got != want {
 		t.Fatalf("rows_scanned=%d want %d", got, want)
 	}
@@ -2796,6 +2814,38 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	}
 	if got, want := cell.DenseInt64SpanPredicateBlocksSkipped, q.DenseInt64SpanPredicateBlocksSkipped; got != want {
 		t.Fatalf("dense_int64_span_predicate_blocks_skipped=%d want %d", got, want)
+	}
+}
+
+func TestRenderColumnStoreTypedColumnSetupDiagnosticsMarkdownQ2Splits3324(t *testing.T) {
+	report := columnStoreSuiteReport{
+		JSONBenchCells: []columnStoreJSONBenchCell{
+			{
+				CellLabel: "column_prepared",
+				Query:     columnStoreQueryQ2,
+				TypedColumnPrepareQ2GroupGlobalDictionaryRankMS:    1.25,
+				TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS: 2.5,
+				TypedColumnPrepareQ2GroupGlobalCodeRemapMS:         3.75,
+				TypedColumnPrepareQ2DistinctGlobalCodeRemapMS:      4.5,
+			},
+		},
+	}
+	var sb strings.Builder
+	renderColumnStoreTypedColumnSetupDiagnosticsMarkdown(&sb, report)
+	got := sb.String()
+	for _, want := range []string{
+		"q2 group global dict/rank ms",
+		"q2 distinct global dict/rank ms",
+		"q2 group global-code remap ms",
+		"q2 distinct global-code remap ms",
+		"1.250",
+		"2.500",
+		"3.750",
+		"4.500",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, got)
+		}
 	}
 }
 

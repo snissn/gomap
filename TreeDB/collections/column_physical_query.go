@@ -208,14 +208,20 @@ type ColumnPhysicalQueryDiagnostics struct {
 	TypedColumnPrepareQ2GroupRankNanos    int64
 	TypedColumnPrepareQ2DistinctRankNanos int64
 	TypedColumnPrepareQ2LocalRankNanos    int64
-	ColumnAssetReadIntegrity              string
-	StorageSource                         ColumnPhysicalQueryStorageSource
-	FallbackReason                        ColumnPhysicalQueryFallbackReason
-	ScanNanos                             int64
-	VisibilityNanos                       int64
-	ReduceNanos                           int64
-	ResultShapeNanos                      int64
-	ReconstructionNanos                   int64
+
+	TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos    int64
+	TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos int64
+	TypedColumnPrepareQ2GroupGlobalCodeRemapNanos         int64
+	TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos      int64
+
+	ColumnAssetReadIntegrity string
+	StorageSource            ColumnPhysicalQueryStorageSource
+	FallbackReason           ColumnPhysicalQueryFallbackReason
+	ScanNanos                int64
+	VisibilityNanos          int64
+	ReduceNanos              int64
+	ResultShapeNanos         int64
+	ReconstructionNanos      int64
 }
 
 // ColumnPhysicalQueryResult is the reduced result and diagnostics from an
@@ -1481,6 +1487,10 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	left.TypedColumnPrepareQ2GroupRankNanos += right.TypedColumnPrepareQ2GroupRankNanos
 	left.TypedColumnPrepareQ2DistinctRankNanos += right.TypedColumnPrepareQ2DistinctRankNanos
 	left.TypedColumnPrepareQ2LocalRankNanos += right.TypedColumnPrepareQ2LocalRankNanos
+	left.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos
+	left.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
+	left.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += right.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos
+	left.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos += right.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
 	return left
 }
 
