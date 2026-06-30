@@ -5,6 +5,8 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -89,7 +91,7 @@ func TestDurableApplyStoresIdempotencyDuplicateSameDigestAndDifferentDigest(t *t
 	if err != nil {
 		t.Fatalf("ApplyCommittedEntryV1 duplicate: %v result=%+v", err, duplicate)
 	}
-	if duplicate.Status != raftentry.ApplyStatusAlreadyApplied || duplicate.CommandDigest != first.CommandDigest || duplicate.AffectedCount != 0 {
+	if duplicate.Status != raftentry.ApplyStatusAlreadyApplied || duplicate.CommandDigest != first.CommandDigest || duplicate.AffectedCount != 0 || duplicate.MatchedCount != 0 {
 		t.Fatalf("duplicate result=%+v, want already-applied replay of digest %s", duplicate, first.CommandDigest.Hex())
 	}
 	record, ok, err := results.LookupApplyResult(raftentry.ApplyEntryID{Term: 1, Index: 2})
@@ -107,6 +109,80 @@ func TestDurableApplyStoresIdempotencyDuplicateSameDigestAndDifferentDigest(t *t
 		ResultStore:   results,
 	})
 	assertRejected(t, rejected, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+}
+
+func TestDecodeDurableApplyResultRecordV1ToleratesLegacyMissingMatchedCount(t *testing.T) {
+	record := testDurableApplyResultRecord(1, 1, "durable:legacy-result")
+	payload, err := encodeDurableApplyResultRecordV1(record)
+	if err != nil {
+		t.Fatalf("encodeDurableApplyResultRecordV1: %v", err)
+	}
+	if len(payload) < 72 {
+		t.Fatalf("encoded payload length=%d, want at least matched count plus result/progress digests", len(payload))
+	}
+	legacy := append([]byte(nil), payload[:len(payload)-72]...)
+	legacy = append(legacy, payload[len(payload)-64:]...)
+
+	decoded, err := decodeDurableApplyResultRecordV1(legacy)
+	if err != nil {
+		t.Fatalf("decodeDurableApplyResultRecordV1 legacy: %v", err)
+	}
+	want := record
+	want.Result.MatchedCount = 0
+	if !reflect.DeepEqual(decoded, want) {
+		t.Fatalf("decoded legacy record=%+v want %+v", decoded, want)
+	}
+}
+
+func TestDurableApplyResultStorePreflightRejectsEncodedRecordOverLimit(t *testing.T) {
+	results, err := OpenDurableApplyResultStore(t.TempDir(), DurableApplyStoreOptions{DisableSync: true})
+	if err != nil {
+		t.Fatalf("OpenDurableApplyResultStore: %v", err)
+	}
+	defer func() { _ = results.Close() }()
+
+	record := testDurableApplyResultRecord(1, 1, "durable:oversized")
+	base := applyResultRecordSizeV1(record) - len(record.Result.Status)
+	if base >= raftentry.MaxResultRecordBytesV1 {
+		t.Fatalf("base result record size=%d unexpectedly exceeds max %d", base, raftentry.MaxResultRecordBytesV1)
+	}
+	record.Result.Status = raftentry.ApplyStatusV1(strings.Repeat("s", raftentry.MaxResultRecordBytesV1-base+1))
+	if oldSize := applyResultRecordSizeV1(record) - int64SizeV1; oldSize > raftentry.MaxResultRecordBytesV1 {
+		t.Fatalf("test record would not cover missed matched_count: old estimated size=%d max=%d", oldSize, raftentry.MaxResultRecordBytesV1)
+	}
+	if err := results.CheckCanRecordApplyResult(record); codeOf(err) != raftentry.ErrorResourceExhaustedV1 {
+		t.Fatalf("CheckCanRecordApplyResult oversized error=%v code=%s, want resource exhausted", err, codeOf(err))
+	}
+	if _, ok, err := results.LookupApplyResult(record.EntryID); err != nil || ok {
+		t.Fatalf("LookupApplyResult after oversized preflight=(ok=%t, err=%v), want absent without store error", ok, err)
+	}
+}
+
+func TestDecodeDurableApplyProgressRecordV1ToleratesLegacyMissingLogicalDigest(t *testing.T) {
+	record := ApplyProgressRecordV1{
+		EntryID:           raftentry.ApplyEntryID{Term: 1, Index: 1},
+		CommandDigest:     testDurableDigest(1),
+		AppliedCommandLSN: 7,
+		LogicalDigestV1:   LogicalDigestV1(testDurableDigest(101)),
+	}
+	payload, err := encodeDurableApplyProgressRecordV1(record)
+	if err != nil {
+		t.Fatalf("encodeDurableApplyProgressRecordV1: %v", err)
+	}
+	if len(payload) < 32 {
+		t.Fatalf("encoded payload length=%d, want logical digest tail", len(payload))
+	}
+	legacy := append([]byte(nil), payload[:len(payload)-32]...)
+
+	decoded, err := decodeDurableApplyProgressRecordV1(legacy)
+	if err != nil {
+		t.Fatalf("decodeDurableApplyProgressRecordV1 legacy: %v", err)
+	}
+	want := record
+	want.LogicalDigestV1 = LogicalDigestV1{}
+	if decoded != want {
+		t.Fatalf("decoded legacy progress=%+v want %+v", decoded, want)
+	}
 }
 
 func TestDurableApplyResultStorePreservesProgressLogicalDigest(t *testing.T) {
@@ -472,6 +548,7 @@ func testDurableApplyResultRecordBytes(seed byte, index uint64, key []byte) Appl
 			Status:        raftentry.ApplyStatusApplied,
 			CommandDigest: digest,
 			AffectedCount: 1,
+			MatchedCount:  2,
 			ResultDigest:  testDurableDigest(seed + 100),
 		},
 	}

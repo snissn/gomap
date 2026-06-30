@@ -596,7 +596,7 @@ func catalogVersion(t *testing.T, db *backenddb.DB) uint64 {
 	return snap.State().CommitSeq
 }
 
-func clientCatalogVersion(t *testing.T, client *Client, ctx context.Context) uint64 {
+func clientCatalogVersion(t testing.TB, client *Client, ctx context.Context) uint64 {
 	t.Helper()
 	version, err := client.CurrentCatalogVersion(ctx)
 	if err != nil {

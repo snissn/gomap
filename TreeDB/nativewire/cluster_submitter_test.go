@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -12,9 +13,12 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
 	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -1186,6 +1190,33 @@ func TestClusterSubmitterCatalogGuardDoesNotBlockSubmitterReplay(t *testing.T) {
 	}
 }
 
+func TestClusterSubmitterCatalogVersionUpdateIsMonotonic(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{HasCatalogVersion: true, CatalogVersion: 10}); err != nil {
+		t.Fatalf("update explicit version 10: %v", err)
+	}
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{HasCatalogVersion: true, CatalogVersion: 8}); err != nil {
+		t.Fatalf("update explicit version 8: %v", err)
+	}
+	if got := server.catalogVersion.Load(); got != 10 {
+		t.Fatalf("catalog version after stale explicit update=%d want 10", got)
+	}
+
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{
+		ResponseSections: []iwire.Section{ackMetaCountsVersion(AckVisible, 12, true)},
+	}); err != nil {
+		t.Fatalf("update response-meta version 12: %v", err)
+	}
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{
+		ResponseSections: []iwire.Section{ackMetaCountsVersion(AckVisible, 11, true)},
+	}); err != nil {
+		t.Fatalf("update response-meta version 11: %v", err)
+	}
+	if got := server.catalogVersion.Load(); got != 12 {
+		t.Fatalf("catalog version after stale response-meta update=%d want 12", got)
+	}
+}
+
 func TestClusterSubmitterUnsupportedCommandFailsBeforeMutation(t *testing.T) {
 	submitter := &fakeClusterSubmitter{}
 	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
@@ -1382,6 +1413,406 @@ func TestClusterSubmitterRaftCommittedAdmissionFailsBeforeSubmit(t *testing.T) {
 	}
 }
 
+func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.T) {
+	client, server, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	before := clientCatalogVersion(t, client, ctx)
+	createSections := raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{
+		Name: "users",
+		Indexes: []collections.IndexDefinition{{
+			Name:      "by_name",
+			Field:     "name",
+			ValueType: collections.IndexValueString,
+		}},
+	}, before, AckRaftCommitted)
+	createResponse, err := client.commandSections(ctx, iwire.CommandCreateCollection, createSections...)
+	if err != nil {
+		t.Fatalf("CreateCollection raft bridge: %v", err)
+	}
+	meta, err := firstMetaFromResponse(createResponse)
+	if err != nil {
+		t.Fatalf("CreateCollection response meta: %v", err)
+	}
+	if meta.Name != "users" {
+		t.Fatalf("created collection=%q want users", meta.Name)
+	}
+	if meta.Options.DataRootStoragePolicy != collections.RootStorageFast ||
+		meta.Options.IndexStateStoragePolicy != collections.RootStorageFast ||
+		len(meta.Indexes) != 1 ||
+		meta.Indexes[0].StoragePolicy != collections.RootStorageFast {
+		t.Fatalf("created storage policies data=%q index=%q indexes=%+v, want fast policies", meta.Options.DataRootStoragePolicy, meta.Options.IndexStateStoragePolicy, meta.Indexes)
+	}
+	created, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users after create: %v", err)
+	}
+	applied := created.Meta()
+	if got, want := encodeCollectionMeta(meta), encodeCollectionMeta(applied); !bytes.Equal(got, want) {
+		t.Fatalf("create response meta=%+v want applied catalog meta=%+v", meta, applied)
+	}
+	if ack, ok, err := responseMetaAckPolicy(createResponse); err != nil || !ok || ack != AckRaftCommitted {
+		t.Fatalf("create response ack=(%d,%v,%v) want raft_committed", ack, ok, err)
+	}
+	afterCreate, err := server.currentCatalogVersion()
+	if err != nil {
+		t.Fatalf("server currentCatalogVersion: %v", err)
+	}
+	if afterCreate <= before {
+		t.Fatalf("catalog version after create=%d want > %d", afterCreate, before)
+	}
+
+	insertResponse, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+	if err != nil {
+		t.Fatalf("InsertBatch raft bridge: %v", err)
+	}
+	if ack, ok, err := responseMetaAckPolicy(insertResponse); err != nil || !ok || ack != AckRaftCommitted {
+		t.Fatalf("insert response ack=(%d,%v,%v) want raft_committed", ack, ok, err)
+	}
+	inserted, err := responseCount(insertResponse, "inserted_count")
+	if err != nil {
+		t.Fatalf("inserted_count: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted_count=%d want 1", inserted)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1: %v", err)
+	}
+	if !bytes.Equal(got, []byte(`{"name":"Ada"}`)) {
+		t.Fatalf("stored doc=%s want Ada JSON", got)
+	}
+	_ = clientCatalogVersion(t, client, ctx)
+
+	replaceMatched, replaceModified, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckRaftCommitted)
+	if err != nil {
+		t.Fatalf("ReplaceBatch no-op raft bridge: %v", err)
+	}
+	if replaceMatched != 1 || replaceModified != 0 {
+		t.Fatalf("ReplaceBatch no-op matched/modified=%d/%d want 1/0", replaceMatched, replaceModified)
+	}
+
+	bsonCreateVersion := clientCatalogVersion(t, client, ctx)
+	bsonCreateSections := raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{
+		Name: "bson_users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}, bsonCreateVersion, AckRaftCommitted)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, bsonCreateSections...); err != nil {
+		t.Fatalf("CreateCollection BSON raft bridge: %v", err)
+	}
+	_ = clientCatalogVersion(t, client, ctx)
+	bsonDoc := testNativewireBSONDocument(t, bson.D{{Key: "_id", Value: "b1"}, {Key: "city", Value: "hnl"}})
+	if _, err := client.InsertBatch(ctx, "bson_users", collections.DocumentFormatBSON, [][]byte{[]byte("b1")}, [][]byte{bsonDoc}, AckRaftCommitted); err != nil {
+		t.Fatalf("InsertBatch BSON raft bridge: %v", err)
+	}
+	updateMatched, updateModified, err := client.UpdateBSONSet(ctx, "bson_users", []byte("b1"), []collections.BSONSetField{{Key: "city", Value: testNativewireBSONSetRawValue(t, "hnl")}}, AckRaftCommitted)
+	if err != nil {
+		t.Fatalf("UpdateBSONSet no-op raft bridge: %v", err)
+	}
+	if updateMatched != 1 || updateModified != 0 {
+		t.Fatalf("UpdateBSONSet no-op matched/modified=%d/%d want 1/0", updateMatched, updateModified)
+	}
+}
+
+func TestRaftClusterSubmitterConcreteBridgeVisibleAckDoesNotClaimRaft(t *testing.T) {
+	client, _, _, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...); err != nil {
+		t.Fatalf("CreateCollection raft bridge: %v", err)
+	}
+	insertResponse, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckVisible, "u1")...)
+	if err != nil {
+		t.Fatalf("InsertBatch visible bridge: %v", err)
+	}
+	if ack, ok, err := responseMetaAckPolicy(insertResponse); err != nil || !ok || ack != AckVisible {
+		t.Fatalf("visible response ack=(%d,%v,%v) want visible", ack, ok, err)
+	}
+}
+
+func TestRaftClusterSubmitterConcreteBridgeOmitResponseMetaAdvancesCatalogVersion(t *testing.T) {
+	client, server, _, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	before := clientCatalogVersion(t, client, ctx)
+	createSections := raftClusterCreateCollectionSections("users", before, AckRaftCommitted)
+	response := commandSectionsWithFlags(t, client, ctx, iwire.CommandCreateCollection, iwire.CommandFlagOmitResponseMeta, createSections...)
+	if _, ok, err := responseMetaAckPolicy(response); err != nil || ok {
+		t.Fatalf("response meta ack=(%v,%v) want omitted", ok, err)
+	}
+	meta, err := firstMetaFromResponse(response)
+	if err != nil {
+		t.Fatalf("CreateCollection response meta: %v", err)
+	}
+	if meta.Name != "users" {
+		t.Fatalf("created collection=%q want users", meta.Name)
+	}
+	afterCreate, err := server.currentCatalogVersion()
+	if err != nil {
+		t.Fatalf("server currentCatalogVersion: %v", err)
+	}
+	if afterCreate <= before {
+		t.Fatalf("catalog version after omitted response_meta create=%d want > %d", afterCreate, before)
+	}
+}
+
+func TestRaftClusterSubmitterRequiresCollectionManagerBeforeSubmit(t *testing.T) {
+	sections := append([]iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandCreateCollection, Version: 1})},
+	}, raftClusterCreateCollectionSections("users", 7, AckRaftCommitted)...)
+	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := iwire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		t.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+
+	cluster := raftClusterBridgeTestConfig(nil)
+	cluster.Dir = t.TempDir()
+	preflightCalls := 0
+	commitCalls := 0
+	applier := &recordingRaftClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied}}
+	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+		Cluster:           cluster,
+		AdmissionProvider: raftcluster.StaticAdmissionProvider{Status: raftcluster.LeaderAdmission()},
+		CommitSource: raftcluster.CommitSourceFunc(func(_ context.Context, req raftcluster.CommitCommandEntryV1Request) (raftcluster.CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return raftcluster.CommitCommandEntryV1Result{
+				Entry: raftcluster.CommittedCommandEntryV1{
+					Term:                     1,
+					Index:                    1,
+					Bytes:                    bytes.Clone(req.EntryBytes),
+					CurrentCatalogVersion:    req.CurrentCatalogVersion,
+					HasCurrentCatalogVersion: req.HasCurrentCatalogVersion,
+					SyncLocalCommandWAL:      req.SyncLocalCommandWAL,
+					RequestMetadata:          req.RequestMetadata,
+					ExpectedTarget:           req.ExpectedTarget,
+				},
+				Evidence: raftcluster.CommitEvidenceV1{
+					Kind:                raftcluster.CommitEvidenceProductionConsensusV1,
+					GroupID:             cluster.GroupID,
+					NodeID:              cluster.NodeID,
+					LeaderID:            cluster.NodeID,
+					Term:                1,
+					Index:               1,
+					Committed:           true,
+					ProductionConsensus: true,
+				},
+			}, nil
+		}),
+		Preflight: raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {
+			preflightCalls++
+			return raftcluster.CommandEntryPreflightResultV1{}, nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) { return 7, true, nil }),
+	})
+	if err != nil {
+		t.Fatalf("NewSingleGroupSubmitter: %v", err)
+	}
+
+	_, err = NewRaftClusterSubmitter(bridge).SubmitCommandEntryV1(context.Background(), entry, ClusterRequestMetadata{
+		RequestID: 17,
+		AckPolicy: AckRaftCommitted,
+	})
+	if nativeCodeOf(err) != iwire.ErrInvalidCommand {
+		t.Fatalf("SubmitCommandEntryV1 err=%v code=%d want invalid-command", err, nativeCodeOf(err))
+	}
+	if preflightCalls != 0 || commitCalls != 0 || applier.calls != 0 {
+		t.Fatalf("bridge touched before collection-manager validation: preflight=%d commit=%d apply=%d", preflightCalls, commitCalls, applier.calls)
+	}
+}
+
+func TestRaftClusterSubmitterConcreteBridgeMissingCollectionPreflightDoesNotConsumeIndex(t *testing.T) {
+	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u-missing")}, [][]byte{[]byte(`{"name":"Missing"}`)}, AckRaftCommitted)
+	if err == nil {
+		t.Fatal("InsertBatch missing collection unexpectedly succeeded")
+	}
+	if _, openErr := mgr.OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after rejected insert err=%v want ErrCollectionNotFound", openErr)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...); err != nil {
+		t.Fatalf("CreateCollection after rejected insert: %v", err)
+	}
+	_ = clientCatalogVersion(t, client, ctx)
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckRaftCommitted); err != nil {
+		t.Fatalf("InsertBatch after create: %v", err)
+	}
+}
+
+func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open DB: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+
+	defaultLimits := iwire.DefaultLimits()
+	limits := defaultLimits
+	limits.MaxSectionLen = defaultLimits.MaxSectionLen + (1 << 20)
+	entry := raftClusterLargeInsertBatchEntry(t, limits, int(defaultLimits.MaxSectionLen)+1)
+	applier := &recordingRaftClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	cluster := raftClusterBridgeTestConfig(nil)
+	cluster.Dir = t.TempDir()
+	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+		Cluster:           cluster,
+		AdmissionProvider: raftcluster.StaticAdmissionProvider{Status: raftcluster.LeaderAdmission()},
+		CommitSource: raftcluster.NewSequencedCommitSource(raftcluster.SequencedCommitSourceOptions{
+			GroupID:             cluster.GroupID,
+			NodeID:              cluster.NodeID,
+			LeaderID:            cluster.NodeID,
+			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Preflight: raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {
+			return raftcluster.CommandEntryPreflightResultV1{}, nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) { return 7, true, nil }),
+		DecodeLimits:           limits,
+	})
+	if err != nil {
+		t.Fatalf("NewSingleGroupSubmitter: %v", err)
+	}
+
+	result, err := NewRaftClusterSubmitter(bridge, manager).SubmitCommandEntryV1(context.Background(), entry, ClusterRequestMetadata{
+		RequestID: 17,
+		AckPolicy: AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	if result.ActualAck != AckRaftCommitted || !result.CommittedRecoverable {
+		t.Fatalf("ack/recoverable=%d/%v want raft_committed/true", result.ActualAck, result.CommittedRecoverable)
+	}
+	if applier.calls != 1 {
+		t.Fatalf("apply calls=%d want 1", applier.calls)
+	}
+	if _, err := metadataSection(result.ResponseSections, iwire.SectionDocumentIDs); err != nil {
+		t.Fatalf("document_ids response section: %v", err)
+	}
+	inserted, err := responseCount(result.ResponseSections, "inserted_count")
+	if err != nil {
+		t.Fatalf("inserted_count: %v", err)
+	}
+	if inserted != 1 {
+		t.Fatalf("inserted_count=%d want 1", inserted)
+	}
+}
+
+func TestRaftClusterSubmitterCatalogVersionMismatchMapsToNativeError(t *testing.T) {
+	err := nativeErrorForRaftClusterSubmit(raftcluster.ErrCatalogVersionMismatch)
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrCatalogVersionMismatch {
+		t.Fatalf("nativeErrorForRaftClusterSubmit code=%v ok=%v err=%v, want catalog-version-mismatch", code, ok, err)
+	}
+}
+
+func TestRaftClusterSubmitterLocalAckUnavailableMapsToNativeError(t *testing.T) {
+	err := nativeErrorForRaftClusterSubmit(raftcluster.ErrLocalAckUnavailable)
+	if code, ok := iwire.ErrorCodeOf(err); !ok || code != iwire.ErrDurabilityUnavailable {
+		t.Fatalf("nativeErrorForRaftClusterSubmit code=%v ok=%v err=%v, want durability-unavailable", code, ok, err)
+	}
+}
+
+func TestRaftClusterSubmitterPreservesCollectionConflictCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want iwire.ErrorCode
+	}{
+		{
+			name: "duplicate_document_id",
+			err:  fmt.Errorf("raftapply: %w", collections.ErrDuplicateDocumentID),
+			want: iwire.ErrDuplicateDocumentID,
+		},
+		{
+			name: "document_exists",
+			err:  fmt.Errorf("raftapply: %w", collections.ErrDocumentExists),
+			want: iwire.ErrDocumentExists,
+		},
+		{
+			name: "unique_index_conflict",
+			err:  fmt.Errorf("raftapply: %w", collections.ErrUniqueIndexConflict),
+			want: iwire.ErrUniqueIndexConflict,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := nativeErrorForDeterministicCode(raftentry.ErrorRejectedConflictV1, tt.err)
+			if code, ok := iwire.ErrorCodeOf(err); !ok || code != tt.want {
+				t.Fatalf("nativeErrorForDeterministicCode code=%v ok=%v err=%v, want %v", code, ok, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing.T) {
+	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.FollowerAdmission("node-b", "not leader"))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	_, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckRaftCommitted)...)
+	if !isRemoteError(err, iwire.ErrReadOnly) {
+		t.Fatalf("CreateCollection follower err=%v want read-only", err)
+	}
+	if _, openErr := mgr.OpenCollection("users"); !errors.Is(openErr, collections.ErrCollectionNotFound) {
+		t.Fatalf("OpenCollection users after follower rejection err=%v want ErrCollectionNotFound", openErr)
+	}
+}
+
+func commandSectionsWithFlags(t testing.TB, client *Client, ctx context.Context, commandID iwire.CommandID, flags uint64, sections ...iwire.Section) []iwire.Section {
+	t.Helper()
+	body, err := appendCommandHeaderSectionFlags(nil, commandID, flags)
+	if err != nil {
+		t.Fatalf("append command header: %v", err)
+	}
+	for _, section := range sections {
+		body, err = iwire.AppendSection(body, section)
+		if err != nil {
+			t.Fatalf("append section %d: %v", section.ID, err)
+		}
+	}
+	_, response, err := client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if err != nil {
+		t.Fatalf("roundTrip: %v", err)
+	}
+	decoded, err := iwire.DecodeSections(response, client.limits)
+	if err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return decoded
+}
+
 func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Context, ack AckPolicy, id string) []iwire.Section {
 	t.Helper()
 	sections := []iwire.Section{
@@ -1396,6 +1827,191 @@ func clusterInsertBatchSections(t *testing.T, client *Client, ctx context.Contex
 		sections = append(sections, ackSection(ack))
 	}
 	return sections
+}
+
+func serveRaftClusterBridgePipe(t testing.TB, admission raftcluster.AdmissionStatus) (*Client, *Server, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
+	db, err := backenddb.Open(backenddb.Options{
+		Dir:                          t.TempDir(),
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		CommandWALSegmentTargetBytes: 1 << 20,
+		DisableBackgroundPrune:       true,
+	})
+	if err != nil {
+		t.Fatalf("open command WAL db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	cluster := raftClusterBridgeTestConfig(db)
+	fsm, err := raftfsm.Open(raftfsm.Options{
+		DB:      db,
+		Cluster: cluster,
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("open raft FSM: %v", err)
+	}
+	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+		Cluster:           cluster,
+		AdmissionProvider: raftcluster.StaticAdmissionProvider{Status: admission},
+		CommitSource: raftcluster.NewSequencedCommitSource(raftcluster.SequencedCommitSourceOptions{
+			GroupID:             cluster.GroupID,
+			NodeID:              cluster.NodeID,
+			LeaderID:            cluster.NodeID,
+			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Preflight: fsm,
+		Applier:   fsm,
+		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
+			state := db.State()
+			if state == nil {
+				return 0, false, nil
+			}
+			return state.CommitSeq, true, nil
+		}),
+	})
+	if err != nil {
+		_ = fsm.Close()
+		_ = db.Close()
+		t.Fatalf("NewSingleGroupSubmitter: %v", err)
+	}
+	server := NewServer(ServerOptions{
+		Collections:      mgr,
+		Backend:          db,
+		ClusterSubmitter: NewRaftClusterSubmitter(bridge, mgr),
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() {
+		_ = fsm.Close()
+		_ = db.Close()
+	})
+	return client, server, mgr, db
+}
+
+type recordingRaftClusterApplier struct {
+	calls  int
+	result raftentry.ApplyResultV1
+	err    error
+}
+
+func (a *recordingRaftClusterApplier) ApplyCommittedCommandEntryV1(context.Context, raftcluster.CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+	a.calls++
+	return a.result, a.err
+}
+
+func raftClusterBridgeTestConfig(db *backenddb.DB) raftcluster.Config {
+	dir := ""
+	if db != nil {
+		dir = db.Dir()
+	}
+	return raftcluster.Config{
+		Dir:     dir,
+		NodeID:  "node-a",
+		GroupID: "group-a",
+		Peers: []raftcluster.Peer{
+			{ID: "node-a", Address: "127.0.0.1:9301"},
+			{ID: "node-b", Address: "127.0.0.1:9302"},
+			{ID: "node-c", Address: "127.0.0.1:9303"},
+		},
+	}
+}
+
+func raftClusterLargeInsertBatchEntry(tb testing.TB, limits iwire.Limits, documentLen int) []byte {
+	tb.Helper()
+	document := bytes.Repeat([]byte{'x'}, documentLen)
+	sections := []iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandInsertBatch, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("raftcluster/large-insert")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, 7)},
+		collectionNameRef("users"),
+		documentFormatSection(collections.DocumentFormatJSON),
+		{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("large-1"))},
+		{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, document)},
+	}
+	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		tb.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, limits)
+	if err != nil {
+		tb.Fatalf("AppendDeterministicEntryWithLimits: %v", err)
+	}
+	return entry
+}
+
+func raftClusterCreateCollectionSections(name string, catalogVersion uint64, ack AckPolicy) []iwire.Section {
+	return raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{Name: name}, catalogVersion, ack)
+}
+
+func raftClusterCreateCollectionSectionsWithMeta(meta collections.CollectionMeta, catalogVersion uint64, ack AckPolicy) []iwire.Section {
+	sections := []iwire.Section{
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("cluster-create-" + meta.Name)},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
+		{ID: iwire.SectionCollectionMeta, Bytes: encodeCollectionMeta(meta)},
+	}
+	if ack != 0 {
+		sections = append(sections, ackSection(ack))
+	}
+	return sections
+}
+
+func BenchmarkRaftClusterSubmitterConcreteBridgeUpdateBSONSet(b *testing.B) {
+	client, _, _, _ := serveRaftClusterBridgePipe(b, raftcluster.LeaderAdmission())
+	ctx := context.Background()
+	if err := client.Hello(ctx); err != nil {
+		b.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(b, client, ctx)
+	createSections := raftClusterCreateCollectionSectionsWithMeta(collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}, version, AckRaftCommitted)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, createSections...); err != nil {
+		b.Fatalf("CreateCollection raft bridge: %v", err)
+	}
+	_ = clientCatalogVersion(b, client, ctx)
+	id := []byte("u1")
+	doc := testNativewireBSONDocument(b, bson.D{{Key: "_id", Value: "u1"}, {Key: "city", Value: "hnl"}})
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatBSON, [][]byte{id}, [][]byte{doc}, AckRaftCommitted); err != nil {
+		b.Fatalf("InsertBatch seed raft bridge: %v", err)
+	}
+	fields := []collections.BSONSetField{{Key: "city", Value: testNativewireBSONSetRawValue(b, "hnl")}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		matched, modified, err := client.UpdateBSONSet(ctx, "users", id, fields, AckRaftCommitted)
+		if err != nil {
+			b.Fatalf("UpdateBSONSet raft bridge: %v", err)
+		}
+		if matched != 1 || modified != 0 {
+			b.Fatalf("UpdateBSONSet matched/modified=%d/%d want 1/0", matched, modified)
+		}
+	}
+	b.ReportMetric(float64(b.N), "ops_total")
+}
+
+func testNativewireBSONDocument(tb testing.TB, document bson.D) []byte {
+	tb.Helper()
+	encoded, err := bson.Marshal(document)
+	if err != nil {
+		tb.Fatalf("Marshal BSON: %v", err)
+	}
+	return encoded
+}
+
+func testNativewireBSONSetRawValue(tb testing.TB, value any) bson.RawValue {
+	tb.Helper()
+	typ, raw, err := bson.MarshalValue(value)
+	if err != nil {
+		tb.Fatalf("MarshalValue(%T): %v", value, err)
+	}
+	return bson.RawValue{Type: typ, Value: raw}
 }
 
 func replaceResponseAckPolicy(result ClusterSubmitResult, policy AckPolicy) ClusterSubmitResult {

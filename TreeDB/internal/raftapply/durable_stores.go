@@ -734,9 +734,12 @@ func decodeDurableApplyProgressRecordV1(payload []byte) (ApplyProgressRecordV1, 
 	if err != nil {
 		return ApplyProgressRecordV1{}, err
 	}
-	logical, err := r.logicalDigest()
-	if err != nil {
-		return ApplyProgressRecordV1{}, err
+	var logical LogicalDigestV1
+	if r.remaining() > 0 {
+		logical, err = r.logicalDigest()
+		if err != nil {
+			return ApplyProgressRecordV1{}, err
+		}
 	}
 	if err := r.done(); err != nil {
 		return ApplyProgressRecordV1{}, err
@@ -754,6 +757,7 @@ func encodeDurableApplyResultRecordV1(record ApplyResultRecordV1) ([]byte, error
 	dst = append(dst, record.Result.CommandDigest[:]...)
 	dst = appendBytes(dst, []byte(record.Result.DeterministicErrorCode))
 	dst = appendI64(dst, record.Result.AffectedCount)
+	dst = appendI64(dst, record.Result.MatchedCount)
 	dst = append(dst, record.Result.ResultDigest[:]...)
 	dst = append(dst, record.ProgressLogicalDigestV1[:]...)
 	if len(dst) > raftentry.MaxResultRecordBytesV1 {
@@ -796,13 +800,27 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 	if err != nil {
 		return ApplyResultRecordV1{}, err
 	}
+	var matched int64
+	switch r.remaining() {
+	case 32, 64:
+		// Legacy records omitted matched_count; preserve compatibility by
+		// treating it as zero before reading result/progress digests.
+	default:
+		matched, err = r.i64()
+		if err != nil {
+			return ApplyResultRecordV1{}, err
+		}
+	}
 	logicalDigest, err := r.digest()
 	if err != nil {
 		return ApplyResultRecordV1{}, err
 	}
-	progressLogicalDigest, err := r.logicalDigest()
-	if err != nil {
-		return ApplyResultRecordV1{}, err
+	var progressLogicalDigest LogicalDigestV1
+	if r.remaining() > 0 {
+		progressLogicalDigest, err = r.logicalDigest()
+		if err != nil {
+			return ApplyResultRecordV1{}, err
+		}
 	}
 	if err := r.done(); err != nil {
 		return ApplyResultRecordV1{}, err
@@ -818,6 +836,7 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 			CommandDigest:          resultDigest,
 			DeterministicErrorCode: raftentry.DeterministicErrorCodeV1(code),
 			AffectedCount:          affected,
+			MatchedCount:           matched,
 			ResultDigest:           logicalDigest,
 		},
 	}, nil
@@ -903,6 +922,10 @@ func (r *durableApplyPayloadReader) done() error {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: durable metadata payload has %d trailing bytes", len(r.buf)-r.off)
 	}
 	return nil
+}
+
+func (r *durableApplyPayloadReader) remaining() int {
+	return len(r.buf) - r.off
 }
 
 func appendApplyEntryID(dst []byte, id raftentry.ApplyEntryID) []byte {
