@@ -171,6 +171,7 @@ write_scan_counts() {
 write_host_info
 printf 'recordcount\taddr\texit_code\tinsert_error_lines\terror_scan_lines\tload_out\tload_err\tserver_log\n' >"$OUT_DIR/summary.tsv"
 
+diagnostic_failures=0
 index=0
 for recordcount in $RECORDCOUNTS; do
   addr="$ADDR_BASE_HOST:$((ADDR_BASE_PORT + index))"
@@ -212,6 +213,9 @@ for recordcount in $RECORDCOUNTS; do
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$recordcount" "$addr" "$exit_code" "$insert_error_lines" "$error_scan_lines" \
     "$run_dir/load.out" "$run_dir/load.err" "$run_dir/server.log" >>"$OUT_DIR/summary.tsv"
+  if (( exit_code != 0 || insert_error_lines != 0 || error_scan_lines != 0 )); then
+    diagnostic_failures=$((diagnostic_failures + 1))
+  fi
 
   kill "$server_pid" 2>/dev/null || true
   wait "$server_pid" 2>/dev/null || true
@@ -230,3 +234,8 @@ done
 write_scan_counts
 
 printf 'nativewire YCSB diagnostic artifacts: %s\n' "$OUT_DIR"
+if (( diagnostic_failures != 0 )); then
+  printf 'nativewire YCSB diagnostic detected %d failing run(s); inspect %s/summary.tsv and %s/raw_scan.txt\n' \
+    "$diagnostic_failures" "$OUT_DIR" "$OUT_DIR" >&2
+  exit 1
+fi
