@@ -307,7 +307,7 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 
 func TestTypedColumnQ2DenseGroupCountDistinctHashRankShardCollision(t *testing.T) {
 	shard := newColumnTypedColumnDenseGroupCountDistinctHashRankShard(3)
-	const hash = uint64(42)
+	const hash = uint32(42)
 	first, err := shard.addHash(hash, "did:first")
 	if err != nil {
 		t.Fatalf("add first: %v", err)
@@ -371,8 +371,8 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardRankRefsParallelMatchesSerial(
 	}
 	for shardIdx, refs := range parallelRefs {
 		for refIdx := 1; refIdx < len(refs); refIdx++ {
-			if refs[refIdx].ref < refs[refIdx-1].ref {
-				t.Fatalf("shard %d refs not monotonic at %d: %d < %d", shardIdx, refIdx, refs[refIdx].ref, refs[refIdx-1].ref)
+			if refs[refIdx].packed() < refs[refIdx-1].packed() {
+				t.Fatalf("shard %d refs not monotonic at %d: %d < %d", shardIdx, refIdx, refs[refIdx].packed(), refs[refIdx-1].packed())
 			}
 		}
 	}
