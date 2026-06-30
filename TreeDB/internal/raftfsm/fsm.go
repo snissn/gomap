@@ -320,7 +320,7 @@ func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
 		return err
 	}
 	if !ok {
-		if id.Index != 1 {
+		if id.Index != 1 && !f.storeOptions.AllowInitialIndexGap {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry starts at index %d; want 1", id.Index)
 		}
 		return nil

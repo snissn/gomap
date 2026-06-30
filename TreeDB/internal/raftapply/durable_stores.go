@@ -37,6 +37,10 @@ type DurableApplyStoreOptions struct {
 	MaxRecords  int
 	MaxIndex    uint64
 	DisableSync bool
+
+	// AllowInitialIndexGap accepts a first TreeDB command index above 1 for
+	// consensus logs that reserve lower indexes for internal membership entries.
+	AllowInitialIndexGap bool
 }
 
 // DurableApplyProgressStorePath returns the default progress metadata file
@@ -272,15 +276,16 @@ func (s *DurableApplyResultStore) poisonAfterAppendFailureLocked() {
 // term rules as MemoryApplyProgressStore, then fsyncs each accepted record by
 // default.
 type DurableApplyProgressStore struct {
-	mu         sync.Mutex
-	path       string
-	file       *os.File
-	max        int
-	maxIndex   uint64
-	syncWrites bool
-	last       raftentry.ApplyEntryID
-	records    map[raftentry.ApplyEntryID]ApplyProgressRecordV1
-	closed     bool
+	mu                   sync.Mutex
+	path                 string
+	file                 *os.File
+	max                  int
+	maxIndex             uint64
+	syncWrites           bool
+	allowInitialIndexGap bool
+	last                 raftentry.ApplyEntryID
+	records              map[raftentry.ApplyEntryID]ApplyProgressRecordV1
+	closed               bool
 }
 
 // OpenDurableApplyProgressStore opens the default progress metadata file in dir.
@@ -291,11 +296,12 @@ func OpenDurableApplyProgressStore(dir string, opts DurableApplyStoreOptions) (*
 // OpenDurableApplyProgressStoreFile opens a progress metadata file at path.
 func OpenDurableApplyProgressStoreFile(path string, opts DurableApplyStoreOptions) (*DurableApplyProgressStore, error) {
 	s := &DurableApplyProgressStore{
-		path:       path,
-		max:        normalizeDurableApplyMaxRecords(opts.MaxRecords),
-		maxIndex:   opts.MaxIndex,
-		syncWrites: !opts.DisableSync,
-		records:    make(map[raftentry.ApplyEntryID]ApplyProgressRecordV1),
+		path:                 path,
+		max:                  normalizeDurableApplyMaxRecords(opts.MaxRecords),
+		maxIndex:             opts.MaxIndex,
+		syncWrites:           !opts.DisableSync,
+		allowInitialIndexGap: opts.AllowInitialIndexGap,
+		records:              make(map[raftentry.ApplyEntryID]ApplyProgressRecordV1),
 	}
 	file, err := openDurableApplyFile(path, durableApplyFrameKindProgress, opts, func(payload []byte) error {
 		record, err := decodeDurableApplyProgressRecordV1(payload)
@@ -490,7 +496,7 @@ func (s *DurableApplyProgressStore) checkCanApplyLocked(id raftentry.ApplyEntryI
 		return codedError(raftentry.ErrorResourceExhaustedV1, "apply entry index %d exceeds bound %d", id.Index, s.maxIndex)
 	}
 	if s.last.Index == 0 {
-		if id.Index != 1 {
+		if id.Index != 1 && !s.allowInitialIndexGap {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry starts at index %d; want 1", id.Index)
 		}
 		return nil

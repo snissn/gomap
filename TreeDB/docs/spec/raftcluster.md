@@ -3,10 +3,10 @@
 Status: normative for the initial `TreeDB/internal/raftcluster` package.
 
 This document records the single-group Raft storage/configuration boundary,
-recovery-status reporting boundary, and first submit/apply bridge that later
-issue `#3044` slices may depend on. It does not choose a Raft library, start a
-consensus loop, perform production snapshot transfer, truncate logs, rejoin
-nodes, or route multiple groups.
+recovery-status reporting boundary, first submit/apply bridge, and first
+HashiCorp Raft backed quorum provider that later issue `#3044` slices may
+depend on. It does not implement production snapshot transfer, truncate logs,
+rejoin nodes, provide read-index routing, or route multiple groups.
 
 ## Scope
 
@@ -21,7 +21,9 @@ The initial boundary owns:
 - a single-group write-admission boundary;
 - a pre-commit deterministic/catalog preflight boundary;
 - a commit-source boundary for deterministic `CommandEntryV1` bytes;
-- a committed-entry applier boundary for applying locally through R3a/raftfsm.
+- a committed-entry applier boundary for applying locally through R3a/raftfsm;
+- `HashicorpRaftProvider`, the first real single-group quorum commit provider
+  behind `SingleGroupSubmitter`.
 
 ## Feature And Version Floor
 
@@ -70,8 +72,10 @@ The Raft paths must be distinct from:
 - `<main-db>/index.db` for flat layouts
 - `<root>/dictdb/` and `<root>/templatedb/` for root/main-DB layouts
 
-The Raft log directory stores consensus-log bytes for the selected future Raft
-provider. It is not the TreeDB command WAL.
+For `HashicorpRaftProvider`, the Raft log directory stores
+`raft-log.bolt` and the stable metadata directory stores
+`raft-stable.bolt`. These are HashiCorp Raft consensus/stable-state stores,
+not the TreeDB command WAL.
 
 The `apply/` directory stores durable R3a/FSM apply metadata for this local
 node/group, including `apply-progress-v1.log` and `apply-results-v1.log`. These
@@ -114,12 +118,27 @@ is intentionally one group only:
   ack policies only control the response durability level after that commit and
   must not be upgraded to `raft_committed` in the adapter response.
 
-The bridge is a provider boundary, not a complete consensus integration. The
-`SequencedCommitSource` helper supplies deterministic in-process term/index
+The bridge is a provider boundary. `HashicorpRaftProvider` is the first
+production consensus adapter for that boundary. It implements
+`AdmissionProvider` from live HashiCorp Raft node state and implements
+`CommitSource` by submitting the deterministic entry bytes through
+`Raft.Apply`; it returns `CommitEvidenceProductionConsensusV1` only after the
+Apply future completes with a committed log term/index. The provider persists
+its Raft log/stable stores under the raftcluster storage layout and applies
+committed command entries through the local `CommittedCommandApplierV1`.
+
+HashiCorp Raft stores an initial configuration entry before user command
+entries. The raftfsm durable apply store may therefore be opened with
+`AllowInitialIndexGap` for this provider so the first applied TreeDB command can
+use the committed Raft log index even when index `1` is an internal Raft
+configuration entry. Once the first command is applied, later command indexes
+must remain contiguous.
+
+The `SequencedCommitSource` helper supplies deterministic in-process term/index
 assignment and is useful for adapter tests and smoke wiring. It only proves
 `AckRaftCommitted` when the caller explicitly sets production-consensus
-evidence; a production Raft adapter is responsible for setting that evidence
-only after quorum commit.
+evidence; real production evidence should come from `HashicorpRaftProvider` or
+a future quorum adapter after quorum commit.
 
 Nativewire and Mongo gateway cluster submitter adapters use this bridge for the
 single-group create/insert slice. Response metadata carries the post-apply
@@ -220,11 +239,11 @@ unreachable.
 
 ## Non-Goals
 
-- no full consensus loop or selected Raft library in this package;
+- no bespoke consensus implementation beyond the narrow HashiCorp Raft adapter;
 - no leader transfer, redirect handling, or lease reads;
 - no real read-index provider, lease-read provider, or follower read routing;
 - no production snapshot transfer/install beyond metadata contracts and injected
-  harness evidence;
+  harness evidence; `HashicorpRaftProvider` snapshots currently fail closed;
 - no Raft log truncation;
 - no production node replacement or rejoin protocol;
 - no multi-group routing.
