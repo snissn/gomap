@@ -179,6 +179,16 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 	}
 	if !ok {
 		if len(entries) == 0 {
+			localLSN, err := localAppliedCommandLSN(f.db)
+			if err != nil {
+				code, _ := ErrorCodeOf(err)
+				return reject(raftentry.CommandDigestV1{}, code, err)
+			}
+			resultCount := f.results.Len()
+			if localLSN != 0 || resultCount != 0 {
+				err := fmt.Errorf("applied prefix is empty but FSM has local AppliedCommandLSN coverage %d and %d durable results without applied progress", localLSN, resultCount)
+				return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, err)
+			}
 			return raftentry.ApplyResultV1{}, nil
 		}
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix has %d entries but FSM has no applied progress", len(entries)))

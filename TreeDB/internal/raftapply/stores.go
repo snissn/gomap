@@ -204,7 +204,8 @@ func (s *MemoryApplyResultStore) Len() int {
 }
 
 // MemoryApplyProgressStore is a bounded fake apply-progress store for tests and
-// early harness wiring. It enforces strictly increasing indexes and
+// early harness wiring. The first in-memory entry must start at index 1; later
+// entries enforce strictly increasing indexes, allowing gaps, and
 // non-decreasing terms.
 type MemoryApplyProgressStore struct {
 	mu       sync.Mutex

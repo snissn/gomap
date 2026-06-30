@@ -515,6 +515,11 @@ func TestInitialIndexGapReplaysResultAheadBeforeLaterEntry(t *testing.T) {
 	if got := db.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN after result-ahead fault=%d, want 1", got)
 	}
+	if result, err := fsm.ValidateAppliedPrefixV1(nil); err == nil {
+		t.Fatalf("ValidateAppliedPrefixV1 empty result-ahead prefix result=%+v, want conflict", result)
+	} else if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("ValidateAppliedPrefixV1 empty result-ahead prefix code=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorRejectedConflictV1, err)
+	}
 
 	second := committedCommand(6, 4, deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:gap-result-ahead"))
 	skipped, err := fsm.ApplyCommittedEntryV1(second)
