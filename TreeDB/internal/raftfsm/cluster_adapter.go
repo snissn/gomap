@@ -1,6 +1,7 @@
 package raftfsm
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
@@ -50,6 +51,9 @@ func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.Comma
 	}
 	opts := raftapply.Options{DecodeLimits: f.decodeLimits}
 	if len(req.DecodedEntry.Bytes) != 0 {
+		if !bytes.Equal(req.DecodedEntry.Bytes, req.EntryBytes) {
+			return codedError(raftentry.ErrorMalformedEntryV1, "decoded command entry does not match raw entry bytes")
+		}
 		if err := raftapply.PreflightDecodedCommandEntryV1(f.db, req.DecodedEntry, meta, opts); err != nil {
 			return err
 		}

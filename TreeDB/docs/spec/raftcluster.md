@@ -4,9 +4,9 @@ Status: normative for the initial `TreeDB/internal/raftcluster` package.
 
 This document records the single-group Raft storage/configuration boundary,
 recovery-status reporting boundary, and first submit/apply bridge that later
-#3044 slices may depend on. It does not choose a Raft library, start a consensus
-loop, perform production snapshot transfer, truncate logs, rejoin nodes, or route
-multiple groups.
+issue `#3044` slices may depend on. It does not choose a Raft library, start a
+consensus loop, perform production snapshot transfer, truncate logs, rejoin
+nodes, or route multiple groups.
 
 ## Scope
 

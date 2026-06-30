@@ -734,9 +734,12 @@ func decodeDurableApplyProgressRecordV1(payload []byte) (ApplyProgressRecordV1, 
 	if err != nil {
 		return ApplyProgressRecordV1{}, err
 	}
-	logical, err := r.logicalDigest()
-	if err != nil {
-		return ApplyProgressRecordV1{}, err
+	var logical LogicalDigestV1
+	if r.remaining() > 0 {
+		logical, err = r.logicalDigest()
+		if err != nil {
+			return ApplyProgressRecordV1{}, err
+		}
 	}
 	if err := r.done(); err != nil {
 		return ApplyProgressRecordV1{}, err

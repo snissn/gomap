@@ -133,6 +133,33 @@ func TestDecodeDurableApplyResultRecordV1ToleratesLegacyMissingMatchedCount(t *t
 	}
 }
 
+func TestDecodeDurableApplyProgressRecordV1ToleratesLegacyMissingLogicalDigest(t *testing.T) {
+	record := ApplyProgressRecordV1{
+		EntryID:           raftentry.ApplyEntryID{Term: 1, Index: 1},
+		CommandDigest:     testDurableDigest(1),
+		AppliedCommandLSN: 7,
+		LogicalDigestV1:   LogicalDigestV1(testDurableDigest(101)),
+	}
+	payload, err := encodeDurableApplyProgressRecordV1(record)
+	if err != nil {
+		t.Fatalf("encodeDurableApplyProgressRecordV1: %v", err)
+	}
+	if len(payload) < 32 {
+		t.Fatalf("encoded payload length=%d, want logical digest tail", len(payload))
+	}
+	legacy := append([]byte(nil), payload[:len(payload)-32]...)
+
+	decoded, err := decodeDurableApplyProgressRecordV1(legacy)
+	if err != nil {
+		t.Fatalf("decodeDurableApplyProgressRecordV1 legacy: %v", err)
+	}
+	want := record
+	want.LogicalDigestV1 = LogicalDigestV1{}
+	if decoded != want {
+		t.Fatalf("decoded legacy progress=%+v want %+v", decoded, want)
+	}
+}
+
 func TestDurableApplyResultStorePreservesProgressLogicalDigest(t *testing.T) {
 	dir := t.TempDir()
 	results, err := OpenDurableApplyResultStore(dir, DurableApplyStoreOptions{DisableSync: true})

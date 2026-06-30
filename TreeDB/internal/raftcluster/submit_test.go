@@ -297,6 +297,42 @@ func TestSingleGroupSubmitterRejectsStaleIdempotentCreateWhenPreflightRejects(t 
 	}
 }
 
+func TestAllowPreflightIdempotentCreateRetryRequiresCatalogMismatch(t *testing.T) {
+	entry := raftentry.CommandEntryV1{
+		Target: raftentry.TargetIdentityV1{
+			CommandID:              iwire.CommandCreateCollection,
+			ExpectedCatalogVersion: []byte{0x80},
+		},
+		Idempotency:    raftentry.IdempotencyRequiredV1,
+		IdempotencyKey: []byte("raftcluster/create/users"),
+	}
+	guardErr := checkSubmitCatalogGuardV1(entry, 8)
+	if guardErr == nil || errors.Is(guardErr, ErrCatalogVersionMismatch) {
+		t.Fatalf("malformed guard err=%v, want non-mismatch guard error", guardErr)
+	}
+	if allowPreflightIdempotentCreateRetryV1(entry, guardErr) {
+		t.Fatal("malformed create guard was allowed through stale-create retry path")
+	}
+
+	entry.Target.ExpectedCatalogVersion = nil
+	guardErr = checkSubmitCatalogGuardV1(entry, 8)
+	if guardErr == nil || errors.Is(guardErr, ErrCatalogVersionMismatch) {
+		t.Fatalf("missing guard err=%v, want non-mismatch guard error", guardErr)
+	}
+	if allowPreflightIdempotentCreateRetryV1(entry, guardErr) {
+		t.Fatal("missing create guard was allowed through stale-create retry path")
+	}
+
+	entry.Target.ExpectedCatalogVersion = binary.AppendUvarint(nil, 7)
+	guardErr = checkSubmitCatalogGuardV1(entry, 8)
+	if !errors.Is(guardErr, ErrCatalogVersionMismatch) {
+		t.Fatalf("stale guard err=%v, want catalog-version mismatch", guardErr)
+	}
+	if !allowPreflightIdempotentCreateRetryV1(entry, guardErr) {
+		t.Fatal("stale idempotent create guard was not allowed to reach preflight")
+	}
+}
+
 func TestSingleGroupSubmitterSerializesLocalApplyByCommittedIndex(t *testing.T) {
 	entry := testClusterCommandEntry(t, 7)
 	applier := newOrderedBlockingApplier()

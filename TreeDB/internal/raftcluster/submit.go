@@ -380,7 +380,8 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		return SubmitResultV1{}, ErrMissingCatalogVersion
 	}
 	guardErr := checkSubmitCatalogGuardV1(decoded, catalogVersion)
-	if guardErr != nil && !canPreflightIdempotentCreateRetryV1(decoded) {
+	allowStaleCreateRetry := allowPreflightIdempotentCreateRetryV1(decoded, guardErr)
+	if guardErr != nil && !allowStaleCreateRetry {
 		s.submitMu.Unlock()
 		return SubmitResultV1{}, guardErr
 	}
@@ -397,7 +398,7 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	}
 	if err := s.preflight.PreflightCommandEntryV1(ctx, preflightRequest); err != nil {
 		s.submitMu.Unlock()
-		if guardErr != nil {
+		if allowStaleCreateRetry {
 			return SubmitResultV1{}, guardErr
 		}
 		return SubmitResultV1{}, err
@@ -452,6 +453,12 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	}
 	s.submitMu.Unlock()
 	return result, nil
+}
+
+func allowPreflightIdempotentCreateRetryV1(entry raftentry.CommandEntryV1, guardErr error) bool {
+	return guardErr != nil &&
+		errors.Is(guardErr, ErrCatalogVersionMismatch) &&
+		canPreflightIdempotentCreateRetryV1(entry)
 }
 
 func canPreflightIdempotentCreateRetryV1(entry raftentry.CommandEntryV1) bool {

@@ -59,6 +59,36 @@ func TestClusterAdapterAppliesProviderCommittedEntryDurably(t *testing.T) {
 	}
 }
 
+func TestClusterAdapterPreflightRejectsDecodedRawMismatch(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "fsm:cluster-adapter:preflight-raw")
+	decodedRaw := deterministicCreateCollectionEntry(t, "orders", "fsm:cluster-adapter:preflight-decoded")
+	decoded, err := raftentry.DecodeCommandEntryV1(decodedRaw, raftentry.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("DecodeCommandEntryV1 decodedRaw: %v", err)
+	}
+
+	err = fsm.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{
+		GroupID:                  fsm.cluster.GroupID,
+		NodeID:                   fsm.cluster.NodeID,
+		EntryBytes:               raw,
+		DecodedEntry:             decoded,
+		CurrentCatalogVersion:    testCatalogVersionStart,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      true,
+	})
+	if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorMalformedEntryV1 {
+		t.Fatalf("PreflightCommandEntryV1 mismatch code=(%s,%t) err=%v, want malformed", code, ok, err)
+	}
+}
+
 func TestClusterAdapterPreservesOrderingRejections(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
