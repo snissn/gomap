@@ -100,6 +100,20 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if !row.Known || row.Decision != raftentry.DecisionAccepted {
 		return nil, unsupportedClusterMutationError(cmd, row)
 	}
+	metadata, err := clusterRequestMetadata(header, cmd.Header, cmd.Known, ack)
+	if err != nil {
+		return nil, err
+	}
+	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, s.limits)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{
+		Limits:          s.limits,
+		RequestMetadata: metadata,
+	}); err != nil {
+		return nil, nativeErrorForRaftEntryValidation(err)
+	}
 	var routeReq ClusterRouteRequest
 	var route ClusterRouteTarget
 	var routed bool
@@ -114,22 +128,8 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 			return nil, err
 		}
 	}
-	metadata, err := clusterRequestMetadata(header, cmd.Header, cmd.Known, ack)
-	if err != nil {
-		return nil, err
-	}
 	if routed {
 		applyClusterRouteMetadata(&metadata, routeReq, route)
-	}
-	entry, err := iwire.AppendDeterministicEntryWithLimits(nil, cmd, s.limits)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{
-		Limits:          s.limits,
-		RequestMetadata: metadata,
-	}); err != nil {
-		return nil, nativeErrorForRaftEntryValidation(err)
 	}
 	result, err := s.clusterSubmitter.SubmitCommandEntryV1(ctx, entry, metadata)
 	if err != nil {

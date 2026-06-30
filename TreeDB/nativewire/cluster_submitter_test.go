@@ -564,6 +564,43 @@ func TestClusterRoutePreflightRejectsBeforeSubmitter(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightSkipsMalformedDeterministicEntry(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		err:                  errors.New("unplaced collection"),
+	}
+	client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	guard, err := client.replicatedMutationGuard(ctx, "malformed_insert_before_route")
+	if err != nil {
+		t.Fatalf("mutation guard: %v", err)
+	}
+	body, err := appendInsertBatchRequestBodyRefFlags(nil, "users", 0, false, collections.DocumentFormatJSON,
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"name":"Ada"}`)},
+		AckVisible,
+		0,
+		guard,
+	)
+	if err != nil {
+		t.Fatalf("append insert: %v", err)
+	}
+	_, _, err = client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse)
+	if !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("InsertBatch err=%v want invalid command", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("route calls=%d want 0", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
 func TestClusterRoutePreflightRejectsTokenPlacementWithoutTokenContract(t *testing.T) {
 	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeTokenV1)
 	submitter := &placementRouteClusterSubmitter{
