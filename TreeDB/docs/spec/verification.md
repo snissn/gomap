@@ -256,6 +256,32 @@ Coverage:
   - `TestSearchTextReopenParityM4`
   - `BenchmarkSearchTextM4`
 
+## 11.2 Raft Placement Route Preflight
+
+Invariant:
+- Catalog-backed route preflight converts validated placement decisions to
+  request-only cluster route metadata, supports collection and single-token
+  token/ring targets, classifies token batches, and fails closed before submit
+  for token/ring multi-ID writes until split/fanout exists.
+
+Coverage:
+- `TreeDB/internal/raftplacement/route_test.go`:
+  - `TestRouteCollectionDecisionIncludesGroupMetadata`
+  - `TestRouteTokenDecisionIncludesPartitionAndGroupMetadata`
+  - `TestRouteDocumentTokenPreservesCollectionModeAndRoutesTokenModes`
+  - `TestRouteTokenBatchClassifiesDocumentTokens`
+  - `TestRouteTokenBatchFailsClosed`
+- `TreeDB/nativewire/cluster_submitter_test.go`:
+  - `TestCatalogClusterRouteProviderRoutesResolvedCatalog`
+  - `TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands`
+  - `TestClusterRoutePreflightTokenPlacementRejectsMultiID`
+  - `TestClusterSubmitterRequestOnlyFieldsDoNotAlterDeterministicEntry`
+- `TreeDB/mongo_gateway/cluster_submitter_test.go`:
+  - `TestClusterRoutePreflightMongoTokenPlacementSingleIDWrites`
+  - `TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites`
+- `TreeDB/internal/raftentry/contract_test.go`:
+  - `TestDigestV1StabilityAcrossMetadataAndApplyEntryID`
+
 ## 11.5 Planned User-Command WAL Durability Gate
 
 This section owns the canonical planned test matrix for the user-command WAL
