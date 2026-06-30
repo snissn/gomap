@@ -195,6 +195,9 @@ func (p *HashicorpRaftProvider) CommitCommandEntryV1(ctx context.Context, req Co
 	if err != nil {
 		return CommitCommandEntryV1Result{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return CommitCommandEntryV1Result{}, err
+	}
 	future := p.raft.Apply(payload, p.applyTimeout)
 	if err := waitHashicorpRaftFuture(ctx, future); err != nil {
 		return CommitCommandEntryV1Result{}, mapHashicorpRaftApplyError(err)

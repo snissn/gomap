@@ -9,6 +9,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -116,6 +117,35 @@ func TestHashicorpRaftProviderLocalRecoverabilityFailureDoesNotReportCommittedRe
 	}
 	if result.CommittedEntry.Term != 0 || result.CommittedEntry.Index != 0 {
 		t.Fatalf("committed entry id=%d/%d, want zero after local apply failure", result.CommittedEntry.Term, result.CommittedEntry.Index)
+	}
+}
+
+func TestHashicorpRaftProviderDoesNotEnqueueCanceledContext(t *testing.T) {
+	applier := &countingClusterApplier{
+		result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := leader.provider.CommitCommandEntryV1(ctx, CommitCommandEntryV1Request{
+		GroupID:                  "group-a",
+		NodeID:                   leader.id,
+		EntryBytes:               testClusterCreateCollectionEntry(t, 7),
+		CurrentCatalogVersion:    7,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      true,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CommitCommandEntryV1 err=%v want context.Canceled", err)
+	}
+	if errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("CommitCommandEntryV1 err=%v should not be ErrCommitAmbiguous before Raft.Apply enqueue", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := applier.count(); got != 0 {
+		t.Fatalf("applier calls=%d want 0 for canceled context before enqueue", got)
 	}
 }
 
@@ -467,6 +497,25 @@ func (a *recordingClusterApplier) ApplyCommittedCommandEntryV1(_ context.Context
 
 func (a *recordingClusterApplier) snapshot() []CommittedCommandEntryV1 {
 	return append([]CommittedCommandEntryV1(nil), a.entries...)
+}
+
+type countingClusterApplier struct {
+	mu     sync.Mutex
+	result raftentry.ApplyResultV1
+	counts int
+}
+
+func (a *countingClusterApplier) ApplyCommittedCommandEntryV1(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.counts++
+	return a.result, nil
+}
+
+func (a *countingClusterApplier) count() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.counts
 }
 
 func testClusterCommandEntry(tb testing.TB, catalogVersion uint64) []byte {
