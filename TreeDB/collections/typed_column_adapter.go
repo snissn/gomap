@@ -1488,7 +1488,7 @@ func columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan columnTypedColumn
 // decodeTypedColumnPhysicalQueryDenseGroupCountPart prepares the q1 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
-func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, error) {
 	image, err := typedcolumn.ParseColumnPartImage(raw)
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
@@ -1514,7 +1514,14 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	if plan.SortKeyPrefix.Planned {
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count does not support sort-key row pruning", ErrColumnQueryPlanUnsupported)
 	}
+	var phaseStart time.Time
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	group, decodedBytes, blocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
@@ -1740,7 +1747,7 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	}
 	switch {
 	case columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req):
-		part, err := decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead)
+		part, err := decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan, summary, typedRef, physical, adapterPart, reader.bytesRead, prepareDiagnostics)
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.RangeReadNanos += reader.readNanos
 			prepareDiagnostics.RangeReadBytes += reader.bytesRead
@@ -2215,11 +2222,18 @@ func typedColumnPhysicalQueryPreparedSummary(prepared *typedColumnPreparedPartSt
 	return summary, nil
 }
 
-func decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, adapterPart *typedColumnAdapterPart, bytesRead int64, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, error) {
 	if plan.SortKeyPrefix.Planned {
 		return columnTypedColumnPhysicalQueryPart{}, fmt.Errorf("%w: dense typed-column group-count does not support sort-key row pruning", ErrColumnQueryPlanUnsupported)
 	}
+	var phaseStart time.Time
+	if prepareDiagnostics != nil {
+		phaseStart = time.Now()
+	}
 	group, decodedBytes, blocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
+	}
 	if err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, err
 	}
