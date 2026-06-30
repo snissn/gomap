@@ -209,6 +209,11 @@ func (s *DurableApplyResultStore) replayApplyResultRecord(record ApplyResultReco
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: durable result metadata digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
+		if existing.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.ProgressLogicalDigestV1 != record.ProgressLogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "raftapply: durable result metadata progress logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
 		return nil
 	}
 	if err := s.checkCanRecordApplyResultLocked(record); err != nil {
@@ -225,6 +230,11 @@ func (s *DurableApplyResultStore) checkCanRecordApplyResultLocked(record ApplyRe
 	if existing, ok := s.records[record.EntryID]; ok {
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply result digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
+		if existing.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.ProgressLogicalDigestV1 != record.ProgressLogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply result progress logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
 		return nil
 	}
@@ -745,6 +755,7 @@ func encodeDurableApplyResultRecordV1(record ApplyResultRecordV1) ([]byte, error
 	dst = appendBytes(dst, []byte(record.Result.DeterministicErrorCode))
 	dst = appendI64(dst, record.Result.AffectedCount)
 	dst = append(dst, record.Result.ResultDigest[:]...)
+	dst = append(dst, record.ProgressLogicalDigestV1[:]...)
 	if len(dst) > raftentry.MaxResultRecordBytesV1 {
 		return nil, codedError(raftentry.ErrorResourceExhaustedV1, "raftapply: durable result record payload %d exceeds %d", len(dst), raftentry.MaxResultRecordBytesV1)
 	}
@@ -789,14 +800,19 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 	if err != nil {
 		return ApplyResultRecordV1{}, err
 	}
+	progressLogicalDigest, err := r.logicalDigest()
+	if err != nil {
+		return ApplyResultRecordV1{}, err
+	}
 	if err := r.done(); err != nil {
 		return ApplyResultRecordV1{}, err
 	}
 	return ApplyResultRecordV1{
-		EntryID:           id,
-		CommandDigest:     digest,
-		IdempotencyKey:    key,
-		AppliedCommandLSN: lsn,
+		EntryID:                 id,
+		CommandDigest:           digest,
+		IdempotencyKey:          key,
+		AppliedCommandLSN:       lsn,
+		ProgressLogicalDigestV1: progressLogicalDigest,
 		Result: raftentry.ApplyResultV1{
 			Status:                 raftentry.ApplyStatusV1(status),
 			CommandDigest:          resultDigest,

@@ -53,11 +53,12 @@ func codedError(code raftentry.DeterministicErrorCodeV1, format string, args ...
 // ApplyEntryID. The result payload is intentionally bounded separately from the
 // deterministic entry bytes.
 type ApplyResultRecordV1 struct {
-	EntryID           raftentry.ApplyEntryID
-	CommandDigest     raftentry.CommandDigestV1
-	IdempotencyKey    []byte
-	AppliedCommandLSN uint64
-	Result            raftentry.ApplyResultV1
+	EntryID                 raftentry.ApplyEntryID
+	CommandDigest           raftentry.CommandDigestV1
+	IdempotencyKey          []byte
+	AppliedCommandLSN       uint64
+	ProgressLogicalDigestV1 LogicalDigestV1
+	Result                  raftentry.ApplyResultV1
 }
 
 // ApplyResultStore records deterministic apply results for idempotency/replay.
@@ -171,6 +172,11 @@ func (s *MemoryApplyResultStore) checkCanRecordApplyResultLocked(record ApplyRes
 	if existing, ok := s.records[record.EntryID]; ok {
 		if existing.CommandDigest != record.CommandDigest {
 			return codedError(raftentry.ErrorRejectedConflictV1, "apply result digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
+		}
+		if existing.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			record.ProgressLogicalDigestV1 != (LogicalDigestV1{}) &&
+			existing.ProgressLogicalDigestV1 != record.ProgressLogicalDigestV1 {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply result progress logical digest conflict for %d/%d", record.EntryID.Term, record.EntryID.Index)
 		}
 		return nil
 	}
@@ -378,7 +384,7 @@ func validateApplyProgressRecordV1(record ApplyProgressRecordV1, requireCoverage
 
 func applyResultRecordSizeV1(record ApplyResultRecordV1) int {
 	return 8 + 8 + 32 + len(record.IdempotencyKey) + 8 +
-		len(record.Result.Status) + 32 + len(record.Result.DeterministicErrorCode) + 8 + 32
+		len(record.Result.Status) + 32 + len(record.Result.DeterministicErrorCode) + 8 + 32 + 32
 }
 
 func cloneApplyResultRecord(record ApplyResultRecordV1) ApplyResultRecordV1 {

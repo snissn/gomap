@@ -214,6 +214,7 @@ u64       DeterministicErrorCodeLen
 bytes     DeterministicErrorCode
 i64       AffectedCount
 bytes[32] ResultDigest   // LogicalDigestV1 bytes when apply succeeded
+bytes[32] ProgressLogicalDigestV1 // logical digest to repair missing progress
 ```
 
 Open-time recovery scans complete frames and rebuilds in-memory lookup indexes.

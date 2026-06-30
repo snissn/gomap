@@ -182,11 +182,15 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 				return recoveryRequired(entry.Digest, code, err)
 			}
 			if h.opts.ProgressStore != nil {
+				progressDigest := record.ProgressLogicalDigestV1
+				if progressDigest == (LogicalDigestV1{}) {
+					progressDigest = LogicalDigestV1(record.Result.ResultDigest)
+				}
 				if err := h.opts.ProgressStore.RecordApplied(ApplyProgressRecordV1{
 					EntryID:           meta.EntryID,
 					CommandDigest:     entry.Digest,
 					AppliedCommandLSN: record.AppliedCommandLSN,
-					LogicalDigestV1:   LogicalDigestV1(record.Result.ResultDigest),
+					LogicalDigestV1:   progressDigest,
 				}); err != nil {
 					code, _ := ErrorCodeOf(err)
 					return recoveryRequired(entry.Digest, code, err)
@@ -226,11 +230,12 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 			duplicate.Status = raftentry.ApplyStatusAlreadyApplied
 			duplicate.AffectedCount = 0
 			if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
-				EntryID:           meta.EntryID,
-				CommandDigest:     entry.Digest,
-				IdempotencyKey:    entry.IdempotencyKey,
-				AppliedCommandLSN: duplicateLSN,
-				Result:            duplicate,
+				EntryID:                 meta.EntryID,
+				CommandDigest:           entry.Digest,
+				IdempotencyKey:          entry.IdempotencyKey,
+				AppliedCommandLSN:       duplicateLSN,
+				ProgressLogicalDigestV1: logical,
+				Result:                  duplicate,
 			}); err != nil {
 				code, _ := ErrorCodeOf(err)
 				return recoveryRequired(entry.Digest, code, err)
@@ -291,11 +296,12 @@ func (h *Harness) ApplyCommittedEntryV1(entryBytes []byte, meta ApplyMetadataV1)
 	}
 	if h.opts.ResultStore != nil {
 		if err := h.opts.ResultStore.RecordApplyResult(ApplyResultRecordV1{
-			EntryID:           meta.EntryID,
-			CommandDigest:     entry.Digest,
-			IdempotencyKey:    entry.IdempotencyKey,
-			AppliedCommandLSN: appliedLSN,
-			Result:            result,
+			EntryID:                 meta.EntryID,
+			CommandDigest:           entry.Digest,
+			IdempotencyKey:          entry.IdempotencyKey,
+			AppliedCommandLSN:       appliedLSN,
+			ProgressLogicalDigestV1: LogicalDigestV1(result.ResultDigest),
+			Result:                  result,
 		}); err != nil {
 			code, _ := ErrorCodeOf(err)
 			return recoveryRequired(entry.Digest, code, err)
