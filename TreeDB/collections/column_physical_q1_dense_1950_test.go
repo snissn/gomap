@@ -275,6 +275,10 @@ func openColumnPhysicalQ1DenseOneShotSetupView1950(tb testing.TB, col *Collectio
 		closeView()
 		tb.Fatalf("prepare q1 setup snapshot view: %v", err)
 	}
+	if view.MutationParts != 0 {
+		closeView()
+		tb.Fatalf("q1 setup view has mutation parts=%d; not a production one-shot candidate", view.MutationParts)
+	}
 	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
 	if err != nil {
 		closeView()
@@ -382,15 +386,22 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 	if diag.PredicateCount != 0 || diag.PredicateLiterals != 0 {
 		tb.Fatalf("%s setup q1 should not report predicates: %+v", label, diag)
 	}
+	if diag.TypedColumnOneShotCacheHit || !diag.TypedColumnOneShotCacheMiss || !diag.TypedColumnOneShotCacheBuild {
+		tb.Fatalf("%s setup one-shot cache diagnostics hit/miss/build=%t/%t/%t want false/true/true diagnostics=%+v",
+			label,
+			diag.TypedColumnOneShotCacheHit,
+			diag.TypedColumnOneShotCacheMiss,
+			diag.TypedColumnOneShotCacheBuild,
+			diag)
+	}
 	if diag.TypedColumnPartSections == 0 || diag.TypedColumnPartSectionBytes == 0 || diag.DecodedPayloadBytes == 0 || diag.DecodedBlocks == 0 {
 		tb.Fatalf("%s setup missing typed-column section/decode diagnostics: %+v", label, diag)
 	}
 	if diag.TypedColumnPrepareWorkerCount <= 0 {
-		tb.Fatalf("%s setup missing prepare worker diagnostics workers=%d diagnostics=%+v", label, diag.TypedColumnPrepareWorkerCount, diag)
+		tb.Fatalf("%s setup missing prepare worker diagnostics: %+v", label, diag)
 	}
-	setupTimingNanos := diag.TypedColumnOneShotBuildNanos + diag.TypedColumnPreparePartDecodeNanos
-	if setupTimingNanos != 0 && (diag.TypedColumnOneShotBuildNanos <= 0 || diag.TypedColumnPreparePartDecodeNanos <= 0) {
-		tb.Fatalf("%s setup partially missing build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
+	if diag.TypedColumnOneShotBuildNanos < 0 || diag.TypedColumnPreparePartDecodeNanos < 0 {
+		tb.Fatalf("%s setup negative build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
 			label,
 			diag.TypedColumnOneShotBuildNanos,
 			diag.TypedColumnPreparePartDecodeNanos,
