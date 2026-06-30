@@ -170,5 +170,8 @@ func validateLogicalDigestV1Hex(digest string) error {
 	if len(decoded) != 32 {
 		return fmt.Errorf("%w: logical digest has %d bytes, want 32", ErrInvalidSnapshotManifest, len(decoded))
 	}
+	if hex.EncodeToString(decoded) != digest {
+		return fmt.Errorf("%w: non-canonical logical digest", ErrInvalidSnapshotManifest)
+	}
 	return nil
 }

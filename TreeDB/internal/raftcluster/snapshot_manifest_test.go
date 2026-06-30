@@ -128,6 +128,22 @@ func TestSnapshotManifestV1DecodeRejectsMissingAppliedCommandLSN(t *testing.T) {
 	}
 }
 
+func TestSnapshotManifestV1DecodeRejectsNonCanonicalLogicalDigest(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	encoded, err := EncodeSnapshotManifestV1(manifest)
+	if err != nil {
+		t.Fatalf("EncodeSnapshotManifestV1: %v", err)
+	}
+	upperDigest := strings.ToUpper(manifest.LogicalDigestV1)
+	nonCanonical := bytes.Replace(encoded, []byte(`"logical_digest_v1":"`+manifest.LogicalDigestV1+`"`), []byte(`"logical_digest_v1":"`+upperDigest+`"`), 1)
+	if bytes.Equal(nonCanonical, encoded) {
+		t.Fatalf("test fixture did not replace logical_digest_v1: %s", encoded)
+	}
+	if _, err := DecodeSnapshotManifestV1(nonCanonical, manifest.Scope); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("DecodeSnapshotManifestV1 non-canonical digest error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
 func TestSnapshotManifestV1DecodeNormalizesZeroExpectedScopeToDefault(t *testing.T) {
 	manifest := validSnapshotManifestV1()
 	encoded, err := EncodeSnapshotManifestV1(manifest)
