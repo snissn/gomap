@@ -20,6 +20,7 @@ const (
 	hashicorpRaftCommandEntryFormatV1  = "treedb.raftcluster.hashicorp.command-entry-v1"
 	hashicorpRaftDefaultApplyTimeout   = 5 * time.Second
 	hashicorpRaftDefaultSnapshotRetain = 2
+	hashicorpRaftSnapshotCheckInterval = 24 * time.Hour
 )
 
 var (
@@ -46,6 +47,11 @@ type HashicorpRaftProviderOptions struct {
 	Bootstrap      bool
 	ApplyTimeout   time.Duration
 	SnapshotRetain int
+
+	// ApplyFailureHandler is invoked before the FSM returns a local apply error.
+	// Nil panics, which fails the Raft node closed so followers cannot advance
+	// their applied index past an unapplied TreeDB command.
+	ApplyFailureHandler func(error)
 }
 
 // HashicorpRaftProvider implements AdmissionProvider and CommitSource on top
@@ -83,6 +89,10 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 	defer stores.closeOnError(&err)
 
 	conf := hashicorpRaftConfig(cluster.NodeID, opts.RaftConfig)
+	applyFailureHandler := opts.ApplyFailureHandler
+	if applyFailureHandler == nil {
+		applyFailureHandler = panicHashicorpRaftApplyFailure
+	}
 	if opts.Bootstrap {
 		hasState, hasStateErr := hraft.HasExistingState(stores.log, stores.stable, stores.snapshots)
 		if hasStateErr != nil {
@@ -97,8 +107,9 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 		}
 	}
 	r, err := hraft.NewRaft(conf, hashicorpRaftFSM{
-		groupID: cluster.GroupID,
-		applier: opts.Applier,
+		groupID:             cluster.GroupID,
+		applier:             opts.Applier,
+		applyFailureHandler: applyFailureHandler,
 	}, stores.log, stores.stable, stores.snapshots, opts.Transport)
 	if err != nil {
 		err = errors.Join(ErrInvalidHashicorpRaftProvider, err)
@@ -195,10 +206,10 @@ func (p *HashicorpRaftProvider) CommitCommandEntryV1(ctx context.Context, req Co
 		}
 		return CommitCommandEntryV1Result{}, errors.Join(ErrHashicorpRaftLogEntry, fmt.Errorf("unexpected FSM response %T", future.Response()))
 	}
+	if response.ApplyErr != nil {
+		return CommitCommandEntryV1Result{}, hashicorpRaftLogEntryError(response.ApplyErr)
+	}
 	if response.Entry.Term == 0 || response.Entry.Index == 0 {
-		if response.ApplyErr != nil {
-			return CommitCommandEntryV1Result{}, errors.Join(ErrHashicorpRaftLogEntry, response.ApplyErr)
-		}
 		return CommitCommandEntryV1Result{}, errors.Join(ErrHashicorpRaftLogEntry, fmt.Errorf("FSM response missing committed entry id"))
 	}
 	if !bytes.Equal(response.Entry.Bytes, req.EntryBytes) {
@@ -306,8 +317,7 @@ func hashicorpRaftConfig(nodeID NodeID, src *hraft.Config) *hraft.Config {
 		conf.ElectionTimeout = 100 * time.Millisecond
 		conf.CommitTimeout = 10 * time.Millisecond
 		conf.LeaderLeaseTimeout = 50 * time.Millisecond
-		conf.SnapshotInterval = 24 * time.Hour
-		conf.SnapshotThreshold = ^uint64(0) / 2
+		conf.SnapshotInterval = hashicorpRaftSnapshotCheckInterval
 	} else {
 		conf = *src
 	}
@@ -319,12 +329,13 @@ func hashicorpRaftConfig(nodeID NodeID, src *hraft.Config) *hraft.Config {
 		conf.LogLevel = "ERROR"
 	}
 	conf.NoLegacyTelemetry = true
-	if conf.SnapshotInterval == 0 {
-		conf.SnapshotInterval = 24 * time.Hour
+	if conf.SnapshotInterval < 5*time.Millisecond {
+		conf.SnapshotInterval = hashicorpRaftSnapshotCheckInterval
 	}
-	if conf.SnapshotThreshold == 0 {
-		conf.SnapshotThreshold = ^uint64(0) / 2
-	}
+	// HashiCorp Raft v1.7.3 rejects SnapshotInterval=0, so this provider
+	// suppresses unsupported snapshot attempts by making shouldSnapshot false for
+	// any practical log index instead of letting Snapshot() be scheduled.
+	conf.SnapshotThreshold = ^uint64(0)
 	return &conf
 }
 
@@ -360,6 +371,8 @@ func mapHashicorpRaftApplyError(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return errors.Join(ErrCommitAmbiguous, err)
 	case errors.Is(err, hraft.ErrNotLeader), errors.Is(err, hraft.ErrLeadershipTransferInProgress):
 		return errors.Join(ErrNotLeader, err)
 	case errors.Is(err, hraft.ErrLeadershipLost),
@@ -435,20 +448,21 @@ type hashicorpRaftApplyResponseV1 struct {
 }
 
 type hashicorpRaftFSM struct {
-	groupID GroupID
-	applier CommittedCommandApplierV1
+	groupID             GroupID
+	applier             CommittedCommandApplierV1
+	applyFailureHandler func(error)
 }
 
 func (f hashicorpRaftFSM) Apply(log *hraft.Log) interface{} {
 	if log == nil || log.Type != hraft.LogCommand {
-		return hashicorpRaftApplyResponseV1{ApplyErr: errors.Join(ErrHashicorpRaftLogEntry, fmt.Errorf("unsupported log"))}
+		return f.applyFailureResponse(CommittedCommandEntryV1{}, raftentry.ApplyResultV1{}, fmt.Errorf("unsupported log"))
 	}
 	payload, err := decodeHashicorpRaftCommandEntryV1(log.Data)
 	if err != nil {
-		return hashicorpRaftApplyResponseV1{ApplyErr: err}
+		return f.applyFailureResponse(CommittedCommandEntryV1{}, raftentry.ApplyResultV1{}, err)
 	}
 	if f.groupID != "" && payload.GroupID != f.groupID {
-		return hashicorpRaftApplyResponseV1{ApplyErr: errors.Join(ErrHashicorpRaftLogEntry, fmt.Errorf("entry group %q does not match local group %q", payload.GroupID, f.groupID))}
+		return f.applyFailureResponse(CommittedCommandEntryV1{}, raftentry.ApplyResultV1{}, fmt.Errorf("entry group %q does not match local group %q", payload.GroupID, f.groupID))
 	}
 	entry := CommittedCommandEntryV1{
 		Term:                     log.Term,
@@ -461,11 +475,41 @@ func (f hashicorpRaftFSM) Apply(log *hraft.Log) interface{} {
 		ExpectedTarget:           cloneExpectedTargetV1(payload.ExpectedTarget),
 	}
 	result, applyErr := f.applier.ApplyCommittedCommandEntryV1(context.Background(), entry.Clone())
+	if applyErr != nil {
+		return f.applyFailureResponse(entry, result, applyErr)
+	}
 	return hashicorpRaftApplyResponseV1{
 		Entry:       entry,
 		ApplyResult: result,
-		ApplyErr:    applyErr,
 	}
+}
+
+func (f hashicorpRaftFSM) applyFailureResponse(entry CommittedCommandEntryV1, result raftentry.ApplyResultV1, err error) hashicorpRaftApplyResponseV1 {
+	err = hashicorpRaftLogEntryError(err)
+	handler := f.applyFailureHandler
+	if handler == nil {
+		handler = panicHashicorpRaftApplyFailure
+	}
+	handler(err)
+	return hashicorpRaftApplyResponseV1{
+		Entry:       entry,
+		ApplyResult: result,
+		ApplyErr:    err,
+	}
+}
+
+func panicHashicorpRaftApplyFailure(err error) {
+	panic(err)
+}
+
+func hashicorpRaftLogEntryError(err error) error {
+	if err == nil {
+		return ErrHashicorpRaftLogEntry
+	}
+	if errors.Is(err, ErrHashicorpRaftLogEntry) {
+		return err
+	}
+	return errors.Join(ErrHashicorpRaftLogEntry, err)
 }
 
 func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {

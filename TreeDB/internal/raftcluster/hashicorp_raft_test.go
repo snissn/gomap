@@ -27,9 +27,9 @@ func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T
 	leader := cluster.waitForLeader(t)
 
 	entry := testClusterCreateCollectionEntry(t, 7)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	result, err := leader.submitter.SubmitCommandEntryV1(ctx, entry, raftentry.RequestMetadataV1{
+	leaderCtx, leaderCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer leaderCancel()
+	result, err := leader.submitter.SubmitCommandEntryV1(leaderCtx, entry, raftentry.RequestMetadataV1{
 		RequestID: 701,
 		AckPolicy: iwire.AckRaftCommitted,
 	})
@@ -61,7 +61,9 @@ func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T
 
 	follower := cluster.firstFollower(t, leader.id)
 	cluster.waitFollowerHint(t, follower, leader.id)
-	_, err = follower.submitter.SubmitCommandEntryV1(ctx, testClusterCreateCollectionEntry(t, 7), raftentry.RequestMetadataV1{
+	followerCtx, followerCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer followerCancel()
+	_, err = follower.submitter.SubmitCommandEntryV1(followerCtx, testClusterCreateCollectionEntry(t, 7), raftentry.RequestMetadataV1{
 		RequestID: 702,
 		AckPolicy: iwire.AckRaftCommitted,
 	})
@@ -103,17 +105,17 @@ func TestHashicorpRaftProviderLocalRecoverabilityFailureDoesNotReportCommittedRe
 		RequestID: 801,
 		AckPolicy: iwire.AckRaftCommitted,
 	})
-	if !errors.Is(err, ErrLocalApplyNotRecoverable) {
-		t.Fatalf("SubmitCommandEntryV1 err=%v want ErrLocalApplyNotRecoverable", err)
+	if !errors.Is(err, ErrHashicorpRaftLogEntry) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want ErrHashicorpRaftLogEntry", err)
 	}
 	if result.CommittedRecoverable {
 		t.Fatalf("CommittedRecoverable=true after local apply failure")
 	}
-	if !result.Evidence.ProvesProductionConsensus() {
-		t.Fatalf("evidence=%+v should still prove the quorum commit", result.Evidence)
+	if result.Evidence.ProvesProductionConsensus() {
+		t.Fatalf("evidence=%+v should not prove the quorum commit after local apply failure", result.Evidence)
 	}
-	if result.CommittedEntry.Term == 0 || result.CommittedEntry.Index == 0 {
-		t.Fatalf("committed entry id=%d/%d, want non-zero", result.CommittedEntry.Term, result.CommittedEntry.Index)
+	if result.CommittedEntry.Term != 0 || result.CommittedEntry.Index != 0 {
+		t.Fatalf("committed entry id=%d/%d, want zero after local apply failure", result.CommittedEntry.Term, result.CommittedEntry.Index)
 	}
 }
 
@@ -214,13 +216,18 @@ func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (
 			Peers:   peers,
 		}
 		db, applier, _ := nodeStores(t, cfg)
+		var applyFailureHandler func(error)
+		if db == nil {
+			applyFailureHandler = func(error) {}
+		}
 		provider, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{
-			Cluster:      cfg,
-			Applier:      applier,
-			Transport:    transports[peer.ID],
-			RaftConfig:   hashicorpRaftFastTestConfig(),
-			Bootstrap:    true,
-			ApplyTimeout: 2 * time.Second,
+			Cluster:             cfg,
+			Applier:             applier,
+			Transport:           transports[peer.ID],
+			RaftConfig:          hashicorpRaftFastTestConfig(),
+			Bootstrap:           true,
+			ApplyTimeout:        2 * time.Second,
+			ApplyFailureHandler: applyFailureHandler,
 		})
 		if err != nil {
 			t.Fatalf("%s OpenHashicorpRaftProvider: %v", peer.ID, err)
@@ -292,7 +299,7 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 	conf.LeaderLeaseTimeout = 100 * time.Millisecond
 	conf.CommitTimeout = 10 * time.Millisecond
 	conf.SnapshotInterval = time.Hour
-	conf.SnapshotThreshold = ^uint64(0) / 2
+	conf.SnapshotThreshold = ^uint64(0)
 	conf.LogOutput = io.Discard
 	conf.LogLevel = "ERROR"
 	conf.NoLegacyTelemetry = true

@@ -184,6 +184,8 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 		return protocolError(iwire.ErrReadOnly, "%v", err)
 	case errors.Is(err, raftcluster.ErrCatalogVersionMismatch):
 		return protocolError(iwire.ErrCatalogVersionMismatch, "%v", err)
+	case errors.Is(err, raftcluster.ErrCommitAmbiguous):
+		return protocolError(iwire.ErrCommitAmbiguous, "%v", err)
 	case errors.Is(err, raftcluster.ErrAdmissionUnavailable),
 		errors.Is(err, raftcluster.ErrCommitNotProven),
 		errors.Is(err, raftcluster.ErrLocalApplyNotRecoverable),

@@ -17,6 +17,7 @@ var (
 	ErrInvalidSubmitter          = errors.New("raftcluster: invalid submitter")
 	ErrAdmissionUnavailable      = errors.New("raftcluster: admission unavailable")
 	ErrNotLeader                 = errors.New("raftcluster: not leader")
+	ErrCommitAmbiguous           = errors.New("raftcluster: commit ambiguous")
 	ErrCommitNotProven           = errors.New("raftcluster: commit not proven")
 	ErrLocalApplyNotRecoverable  = errors.New("raftcluster: local apply not recoverable")
 	ErrLocalAckUnavailable       = errors.New("raftcluster: local ack policy unavailable")
