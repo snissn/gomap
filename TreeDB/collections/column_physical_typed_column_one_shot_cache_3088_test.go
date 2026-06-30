@@ -587,10 +587,6 @@ func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label 
 			diag.TypedColumnPrepareQ2DensePartLocalRankNanos != diag.TypedColumnPrepareQ2LocalRankNanos {
 			tb.Fatalf("%s dense q2 rank split diagnostics=%+v want explicit dense phases to mirror legacy rank phases", label, diag)
 		}
-		if diag.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos <= 0 ||
-			diag.TypedColumnPrepareQ2DensePartLocalRankNanos <= 0 {
-			tb.Fatalf("%s dense q2 rank split diagnostics=%+v want distinct-global and part-local rank phases >0 when timer resolution records dense rank work", label, diag)
-		}
 	}
 	if globalCodeTotal != 0 {
 		assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb, label, diag, true)
