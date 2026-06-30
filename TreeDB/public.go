@@ -815,6 +815,7 @@ func Open(opts Options) (*DB, error) {
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
 		cached.SetCommandWALCheckpointCleanupHook(out.cleanupPublicCommandWALCheckpoint)
 		cached.SetAutoCheckpointWALBytesHook(out.publicCommandWALAutoCheckpointBytes)
+		cached.SetStatsHook(out.publicCommandWALBatchStatsInto)
 	}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth

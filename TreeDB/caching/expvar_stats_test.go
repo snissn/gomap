@@ -385,6 +385,43 @@ func TestCurrentTreeDBExpvarStatsIncludesInstances(t *testing.T) {
 	}
 }
 
+func TestCurrentTreeDBExpvarStatsIncludesStatsHook(t *testing.T) {
+	resetTreeDBExpvarRegistryForTest(t)
+
+	db := &DB{
+		dir: "/tmp/hook/wal",
+		backend: &mockBackendWithStats{
+			MockBackend: NewMockBackend(),
+			stats: map[string]string{
+				"treedb.process.identity.wal_dir":        "/tmp/hook/wal",
+				"treedb.process.memory.heap_inuse_bytes": "333",
+			},
+		},
+	}
+	db.SetStatsHook(func(stats map[string]string) {
+		stats["treedb.command_wal.public_batch.set_view.calls_total"] = "13"
+		stats["treedb.command_wal.public_batch.delete_view.calls_total"] = "5"
+	})
+
+	registerTreeDBExpvarStatsDB(db)
+
+	got := currentTreeDBExpvarStats()
+	if got["treedb.command_wal.public_batch.set_view.calls_total"] != int64(13) {
+		t.Fatalf("current set_view calls=%T(%v) want int64(13)", got["treedb.command_wal.public_batch.set_view.calls_total"], got["treedb.command_wal.public_batch.set_view.calls_total"])
+	}
+	instances, ok := got["instances"].(map[string]any)
+	if !ok {
+		t.Fatalf("instances=%T want map[string]any", got["instances"])
+	}
+	inst, ok := findExpvarInstanceByWalDir(instances, "/tmp/hook/wal")
+	if !ok {
+		t.Fatalf("instance /tmp/hook/wal missing")
+	}
+	if inst["treedb.command_wal.public_batch.delete_view.calls_total"] != int64(5) {
+		t.Fatalf("instance delete_view calls=%T(%v) want int64(5)", inst["treedb.command_wal.public_batch.delete_view.calls_total"], inst["treedb.command_wal.public_batch.delete_view.calls_total"])
+	}
+}
+
 func TestCurrentTreeDBExpvarStatsDuplicateWalDirKeepsDistinctInstances(t *testing.T) {
 	resetTreeDBExpvarRegistryForTest(t)
 

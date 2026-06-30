@@ -62,6 +62,10 @@ type autoCheckpointBytesHookBox struct {
 	fn func() int64
 }
 
+type statsHookBox struct {
+	fn func(map[string]string)
+}
+
 var ErrKeyEmpty = fmt.Errorf("key cannot be empty")
 var ErrValueNil = fmt.Errorf("value cannot be nil")
 var ErrBatchClosed = fmt.Errorf("batch has been written or closed")
@@ -4019,6 +4023,20 @@ func (db *DB) SetCommandWALCheckpointCleanupHook(h func(sync bool) error) {
 		return
 	}
 	db.commandWALCheckpointCleanup.Store(&commandWALCheckpointCleanupHookBox{fn: h})
+}
+
+// SetStatsHook installs an optional stats decorator for outer wrappers that own
+// counters not stored on the cached layer itself. The hook must not call
+// DB.Stats.
+func (db *DB) SetStatsHook(h func(map[string]string)) {
+	if db == nil {
+		return
+	}
+	if h == nil {
+		db.statsHook.Store(nil)
+		return
+	}
+	db.statsHook.Store(&statsHookBox{fn: h})
 }
 
 // SetTemplateStore installs the template store used for template compression.
@@ -8114,6 +8132,7 @@ type DB struct {
 	commandWALCheckpointPublish        atomic.Pointer[commandWALCheckpointPublishHookBox]
 	commandWALCheckpointCutover        atomic.Pointer[commandWALCheckpointCutoverHookBox]
 	commandWALCheckpointCleanup        atomic.Pointer[commandWALCheckpointCleanupHookBox]
+	statsHook                          atomic.Pointer[statsHookBox]
 	dirtyRootPublishGroupID            uint64
 	dirtyRootPublishGroupPending       bool
 	rootPublishRetryPending            bool
@@ -23159,6 +23178,17 @@ func (db *DB) loadAutoCheckpointBytesHook() func() int64 {
 	return box.fn
 }
 
+func (db *DB) loadStatsHook() func(map[string]string) {
+	if db == nil {
+		return nil
+	}
+	box := db.statsHook.Load()
+	if box == nil {
+		return nil
+	}
+	return box.fn
+}
+
 func (db *DB) snapshotCommandWALCheckpointCutover() {
 	cutoverHook := db.loadCommandWALCheckpointCutoverHook()
 	if cutoverHook == nil {
@@ -30740,6 +30770,9 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_autotune.io_ns_per_stored_byte"] = fmt.Sprintf("%.3f", snap.IoNsPerStoredByte)
 		stats["treedb.cache.vlog_autotune.throughput_raw_MBps"] = fmt.Sprintf("%.3f", snap.ThroughputRawMBps)
 		stats["treedb.cache.vlog_autotune.observed_ratio"] = fmt.Sprintf("%.6f", snap.ObservedRatio)
+	}
+	if hook := db.loadStatsHook(); hook != nil {
+		hook(stats)
 	}
 	return stats
 }
