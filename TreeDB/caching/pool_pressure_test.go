@@ -157,8 +157,10 @@ func TestPoolPressureDropsAppendOnlyEntryPools(t *testing.T) {
 
 	resetPoolPressureStateForTest()
 	memtable.DropAppendOnlyEntryPools()
+	memtable.DropAppendOnlyValueArenaPools()
 	t.Cleanup(func() {
 		memtable.DropAppendOnlyEntryPools()
+		memtable.DropAppendOnlyValueArenaPools()
 		resetPoolPressureStateForTest()
 	})
 
@@ -173,6 +175,13 @@ func TestPoolPressureDropsAppendOnlyEntryPools(t *testing.T) {
 	if before.RetainedBytesEstimate == 0 {
 		t.Fatal("test setup did not retain append-only entry pool bytes")
 	}
+	valueArena := memtable.NewAppendOnlyWithCapacity(0)
+	valueArena.Set([]byte("value-arena-key"), make([]byte, 4096))
+	valueArena.ResetDropEntries()
+	beforeValueArena := memtable.AppendOnlyValueArenaPoolStatsSnapshot()
+	if beforeValueArena.RetainedBytesEstimate == 0 {
+		t.Fatal("test setup did not retain append-only value arena pool bytes")
+	}
 
 	maybeTrimEntrySliceLeasesUnderPressure(poolPressureCritical, time.Unix(1, 0))
 
@@ -185,6 +194,16 @@ func TestPoolPressureDropsAppendOnlyEntryPools(t *testing.T) {
 	}
 	if got := after.DropBytesTotal; got < before.DropBytesTotal+before.RetainedBytesEstimate {
 		t.Fatalf("append-only entry pool drop bytes=%d want at least %d", got, before.DropBytesTotal+before.RetainedBytesEstimate)
+	}
+	afterValueArena := memtable.AppendOnlyValueArenaPoolStatsSnapshot()
+	if got := afterValueArena.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("append-only value arena pool retained bytes=%d want 0", got)
+	}
+	if got := afterValueArena.DropsTotal; got != beforeValueArena.DropsTotal+1 {
+		t.Fatalf("append-only value arena pool drops=%d want %d", got, beforeValueArena.DropsTotal+1)
+	}
+	if got := afterValueArena.DropBytesTotal; got < beforeValueArena.DropBytesTotal+beforeValueArena.RetainedBytesEstimate {
+		t.Fatalf("append-only value arena pool drop bytes=%d want at least %d", got, beforeValueArena.DropBytesTotal+beforeValueArena.RetainedBytesEstimate)
 	}
 }
 

@@ -88,6 +88,9 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 	for _, key := range []string{
 		"treedb.cache.flush_apply.planning_ns_total",
 		"treedb.cache.flush_apply.build_ns_total",
+		"treedb.cache.flush_apply.deferred_vlog_pointer_materialize_ns_total",
+		"treedb.cache.flush_apply.vlog_flush_ns_total",
+		"treedb.cache.flush_apply.vlog_sync_ns_total",
 		"treedb.cache.flush_apply.leaf_log_encode_compress_ns_total",
 		"treedb.flush_apply.apply_ns_total",
 		"treedb.cache.checkpoint.active_background_flush_wait_ns_total",
@@ -113,6 +116,7 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.cache.flush_apply.batches_total",
 		"treedb.cache.flush_apply.bytes_total",
 		"treedb.cache.flush_apply.backend_write_ns_total",
+		"treedb.cache.flush_apply.backend_batch_write_ns_total",
 		"treedb.cache.flush_span_run.runs_total",
 		"treedb.cache.flush_span_run.source_point_ops_total",
 		"treedb.cache.flush_span_run.planned_ops_total",

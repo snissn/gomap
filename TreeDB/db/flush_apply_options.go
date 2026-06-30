@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
@@ -11,7 +13,7 @@ func (db *DB) flushApplyOptions() zipper.ApplyOptions {
 	if db.flushApplyConcurrency <= 1 && !db.flushApplySpanNative {
 		return zipper.ApplyOptions{}
 	}
-	return zipper.ApplyOptions{
+	opts := zipper.ApplyOptions{
 		PrepareReadOnly:           db.flushApplyConcurrency > 1 || db.flushApplySpanNative,
 		ReadOnlyPrepareWorkers:    db.flushApplyConcurrency,
 		ParallelApplyConcurrency:  db.flushApplyConcurrency,
@@ -21,6 +23,10 @@ func (db *DB) flushApplyOptions() zipper.ApplyOptions {
 		ParallelApplyMinSpanBytes: db.flushApplyMinBytes,
 		SpanNativeApply:           db.flushApplySpanNative,
 	}
+	if opts.SpanNativeApply && db.flushApplySpanNativeReducerValidationGuard.Load() {
+		opts.SpanNativeForceFallbackReason = FlushSpanRunFallbackReducerValidationGuard.String()
+	}
+	return opts
 }
 
 func flushApplyUseOptions(opts zipper.ApplyOptions) bool {
@@ -38,6 +44,7 @@ func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err erro
 	}
 	db.observeFlushApplyReadOnlyPrepare(summary, workerSummary, result.ReadOnlyPrepareNs, err, result.ReadOnlyPrepareValidationFailed)
 	explicitReason, hasExplicitReason := parseFlushApplySpanNativeFallbackReason(result.SpanNativeFallbackReason)
+	db.maybeTripFlushApplySpanNativeReducerValidationGuard(explicitReason, hasExplicitReason, err)
 	if result.SpanNativeEligible {
 		db.observeFlushApplySpanNativeEligible(summary)
 		if result.SpanNativeUsed {
@@ -55,6 +62,18 @@ func (db *DB) observeFlushApplyPrepareResult(result zipper.ApplyResult, err erro
 		return
 	}
 	db.observeFlushApplySpanNativeFallback(summary, classifyFlushApplySpanNativeFallback(summary, err, result.ReadOnlyPrepareValidationFailed))
+}
+
+func (db *DB) maybeTripFlushApplySpanNativeReducerValidationGuard(reason FlushSpanRunFallbackReason, hasReason bool, err error) {
+	if db == nil || err == nil {
+		return
+	}
+	if !errors.Is(err, zipper.ErrSpanNativeReducerValidation) && (!hasReason || reason != FlushSpanRunFallbackReducerValidationFailed) {
+		return
+	}
+	if db.flushApplySpanNativeReducerValidationGuard.CompareAndSwap(false, true) {
+		db.flushApplySpanNativeReducerValidationGuardTrips.Add(1)
+	}
 }
 
 type flushApplySpanNativePublishSnapshot struct {

@@ -29,6 +29,7 @@ func TestFlushSpanRunFallbackReasonStringsAreStable(t *testing.T) {
 		FlushSpanRunFallbackReducerValidationFailed:  "reducer_validation_failed",
 		FlushSpanRunFallbackRouteIneligible:          "route_ineligible",
 		FlushSpanRunFallbackAdmissionPolicyDecline:   "admission_policy_decline",
+		FlushSpanRunFallbackReducerValidationGuard:   "reducer_validation_guard",
 	}
 	if got := len(FlushSpanRunFallbackReasons()); got != len(want) {
 		t.Fatalf("fallback reason count=%d want %d", got, len(want))
