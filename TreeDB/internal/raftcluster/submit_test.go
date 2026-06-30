@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -179,6 +181,145 @@ func TestSingleGroupSubmitterRejectsStaleCatalogGuardBeforeCommitApply(t *testin
 	}
 	if got := len(applier.snapshot()); got != 0 {
 		t.Fatalf("apply calls=%d want 0", got)
+	}
+}
+
+func TestSingleGroupSubmitterLetsIdempotentCreateRetryReachPreflightApply(t *testing.T) {
+	entry := testClusterCreateCollectionEntry(t, 7)
+	commitCalls := 0
+	preflightCalls := 0
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusAlreadyApplied}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(ctx context.Context, req CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return productionCommittedResult(req, 3, uint64(commitCalls)), nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(ctx context.Context, req CommandEntryPreflightRequestV1) error {
+			preflightCalls++
+			if req.DecodedEntry.Target.CommandID != iwire.CommandCreateCollection {
+				t.Fatalf("preflight command=%d want create_collection", req.DecodedEntry.Target.CommandID)
+			}
+			if req.CurrentCatalogVersion != 8 || !req.HasCurrentCatalogVersion {
+				t.Fatalf("preflight catalog=%d/%v want 8/true", req.CurrentCatalogVersion, req.HasCurrentCatalogVersion)
+			}
+			return nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(8),
+	})
+
+	result, err := submitter.SubmitCommandEntryV1(context.Background(), entry, raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted})
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1 idempotent create retry: %v", err)
+	}
+	if result.ApplyResult.Status != raftentry.ApplyStatusAlreadyApplied {
+		t.Fatalf("apply status=%s want already-applied", result.ApplyResult.Status)
+	}
+	if preflightCalls != 1 || commitCalls != 1 {
+		t.Fatalf("preflight/commit calls=%d/%d want 1/1", preflightCalls, commitCalls)
+	}
+	if got := len(applier.snapshot()); got != 1 {
+		t.Fatalf("apply calls=%d want 1", got)
+	}
+}
+
+func TestSingleGroupSubmitterRejectsStaleIdempotentCreateWhenPreflightRejects(t *testing.T) {
+	entry := testClusterCreateCollectionEntry(t, 7)
+	commitCalls := 0
+	preflightCalls := 0
+	preflightErr := errors.New("create preflight rejected")
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusAlreadyApplied}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(context.Context, CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return CommitCommandEntryV1Result{}, nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) error {
+			preflightCalls++
+			return preflightErr
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(8),
+	})
+
+	_, err := submitter.SubmitCommandEntryV1(context.Background(), entry, raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted})
+	if !errors.Is(err, ErrCatalogVersionMismatch) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want catalog-version-mismatch", err)
+	}
+	if errors.Is(err, preflightErr) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v should preserve stale guard mismatch over preflight rejection", err)
+	}
+	if preflightCalls != 1 {
+		t.Fatalf("preflight calls=%d want 1", preflightCalls)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("commit calls=%d want 0", commitCalls)
+	}
+	if got := len(applier.snapshot()); got != 0 {
+		t.Fatalf("apply calls=%d want 0", got)
+	}
+}
+
+func TestSingleGroupSubmitterSerializesLocalApplyByCommittedIndex(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	applier := newOrderedBlockingApplier()
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: NewSequencedCommitSource(SequencedCommitSourceOptions{
+			GroupID:             "group-a",
+			NodeID:              "node-a",
+			LeaderID:            "node-a",
+			Term:                3,
+			EvidenceKind:        CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := submitter.SubmitCommandEntryV1(ctx, entry, raftentry.RequestMetadataV1{RequestID: 1, AckPolicy: iwire.AckRaftCommitted})
+		firstErr <- err
+	}()
+	select {
+	case <-applier.firstEntered:
+	case <-ctx.Done():
+		t.Fatalf("first submit did not reach apply: %v", ctx.Err())
+	}
+
+	secondErr := make(chan error, 1)
+	go func() {
+		_, err := submitter.SubmitCommandEntryV1(ctx, entry, raftentry.RequestMetadataV1{RequestID: 2, AckPolicy: iwire.AckRaftCommitted})
+		secondErr <- err
+	}()
+	select {
+	case index := <-applier.outOfOrder:
+		t.Fatalf("submitter let index %d reach local apply before index 1 completed", index)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(applier.releaseFirst)
+
+	for name, ch := range map[string]<-chan error{"first": firstErr, "second": secondErr} {
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("%s submit err=%v", name, err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("%s submit timed out: %v", name, ctx.Err())
+		}
+	}
+	entries := applier.snapshot()
+	if len(entries) != 2 {
+		t.Fatalf("applied entries=%d want 2", len(entries))
+	}
+	if entries[0].Index != 1 || entries[1].Index != 2 {
+		t.Fatalf("applied indexes=%d,%d want 1,2", entries[0].Index, entries[1].Index)
 	}
 }
 
@@ -406,6 +547,32 @@ func staticCatalogVersion(version uint64) CatalogVersionProvider {
 	})
 }
 
+func productionCommittedResult(req CommitCommandEntryV1Request, term, index uint64) CommitCommandEntryV1Result {
+	entry := CommittedCommandEntryV1{
+		Term:                     term,
+		Index:                    index,
+		Bytes:                    bytes.Clone(req.EntryBytes),
+		CurrentCatalogVersion:    req.CurrentCatalogVersion,
+		HasCurrentCatalogVersion: req.HasCurrentCatalogVersion,
+		SyncLocalCommandWAL:      req.SyncLocalCommandWAL,
+		RequestMetadata:          cloneRequestMetadataV1(req.RequestMetadata),
+		ExpectedTarget:           cloneExpectedTargetV1(req.ExpectedTarget),
+	}
+	return CommitCommandEntryV1Result{
+		Entry: entry,
+		Evidence: CommitEvidenceV1{
+			Kind:                CommitEvidenceProductionConsensusV1,
+			GroupID:             req.GroupID,
+			NodeID:              req.NodeID,
+			LeaderID:            req.NodeID,
+			Term:                term,
+			Index:               index,
+			Committed:           true,
+			ProductionConsensus: true,
+		},
+	}
+}
+
 func testClusterCommandEntry(tb testing.TB, catalogVersion uint64) []byte {
 	tb.Helper()
 	sections := []iwire.Section{
@@ -426,4 +593,101 @@ func testClusterCommandEntry(tb testing.TB, catalogVersion uint64) []byte {
 		tb.Fatalf("AppendDeterministicEntry: %v", err)
 	}
 	return entry
+}
+
+func testClusterCreateCollectionEntry(tb testing.TB, catalogVersion uint64) []byte {
+	tb.Helper()
+	sections := []iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandCreateCollection, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("raftcluster/create/users")},
+		{ID: iwire.SectionCollectionMeta, Bytes: testClusterCollectionMetaPayload("users")},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
+	}
+	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		tb.Fatalf("ValidateRequestSections: %v", err)
+	}
+	entry, err := iwire.AppendDeterministicEntry(nil, cmd)
+	if err != nil {
+		tb.Fatalf("AppendDeterministicEntry: %v", err)
+	}
+	return entry
+}
+
+func testClusterCollectionMetaPayload(collection string) []byte {
+	dst := binary.AppendUvarint(nil, 1) // collection_meta version
+	dst = appendTestString(dst, collection)
+	dst = binary.AppendUvarint(dst, 0) // document_format
+	dst = binary.AppendUvarint(dst, 0) // data_root_storage_policy
+	dst = binary.AppendUvarint(dst, 0) // index_state_storage_policy
+	dst = append(dst, 0)               // allow_array_values_in_index
+	dst = append(dst, 0)               // disable_indexed_write_memtables
+	dst = append(dst, 0)               // buffered_indexed_writes
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_documents
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_bytes
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_write_max_root_runs
+	dst = append(dst, 0)               // buffered_indexed_async_flush
+	dst = append(dst, 0)               // buffered_indexed_overlay_roots
+	dst = binary.AppendVarint(dst, 0)  // buffered_indexed_async_flush_max_queued_units
+	dst = binary.AppendUvarint(dst, 0) // index_count
+	return dst
+}
+
+func appendTestString(dst []byte, value string) []byte {
+	dst = binary.AppendUvarint(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
+type orderedBlockingApplier struct {
+	mu           sync.Mutex
+	entries      []CommittedCommandEntryV1
+	firstEntered chan struct{}
+	releaseFirst chan struct{}
+	outOfOrder   chan uint64
+	firstDone    bool
+}
+
+func newOrderedBlockingApplier() *orderedBlockingApplier {
+	return &orderedBlockingApplier{
+		firstEntered: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+		outOfOrder:   make(chan uint64, 1),
+	}
+}
+
+func (a *orderedBlockingApplier) ApplyCommittedCommandEntryV1(ctx context.Context, entry CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+	clone := entry.Clone()
+	a.mu.Lock()
+	a.entries = append(a.entries, clone)
+	if clone.Index == 1 && len(a.entries) == 1 {
+		close(a.firstEntered)
+		a.mu.Unlock()
+		select {
+		case <-a.releaseFirst:
+		case <-ctx.Done():
+			return raftentry.ApplyResultV1{}, ctx.Err()
+		}
+		a.mu.Lock()
+		a.firstDone = true
+		a.mu.Unlock()
+		return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}, nil
+	}
+	if clone.Index != uint64(len(a.entries)) || !a.firstDone {
+		select {
+		case a.outOfOrder <- clone.Index:
+		default:
+		}
+	}
+	a.mu.Unlock()
+	return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}, nil
+}
+
+func (a *orderedBlockingApplier) snapshot() []CommittedCommandEntryV1 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]CommittedCommandEntryV1, len(a.entries))
+	for i := range a.entries {
+		out[i] = a.entries[i].Clone()
+	}
+	return out
 }

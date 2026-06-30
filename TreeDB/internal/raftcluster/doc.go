@@ -11,8 +11,9 @@
 // The local TreeDB command WAL remains node-local crash-recovery state. It is
 // not a Raft log. Commit sources may append deterministic command entries to a
 // Raft log and then apply committed entries through R3a, but the application of
-// a committed entry still has to satisfy TreeDB's local command-WAL
-// recoverability rules before the node reports raft-committed durability.
+// a committed entry is serialized by this single-group bridge and still has to
+// satisfy TreeDB's local command-WAL recoverability rules before the node
+// reports raft-committed durability.
 //
 // The TreeDB value log under maindb/value_vlog is persistent value storage.
 // Raft storage must not treat value_vlog segments as temporary WAL bytes or

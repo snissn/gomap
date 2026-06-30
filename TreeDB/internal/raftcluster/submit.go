@@ -264,6 +264,8 @@ type SingleGroupSubmitterOptions struct {
 }
 
 type SingleGroupSubmitter struct {
+	submitMu sync.Mutex
+
 	cluster         ResolvedConfig
 	admission       AdmissionProvider
 	commit          CommitSource
@@ -351,13 +353,6 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err := s.admit(ctx); err != nil {
 		return SubmitResultV1{}, err
 	}
-	catalogVersion, hasCatalogVersion, err := s.catalogProvider.CurrentCatalogVersion(ctx)
-	if err != nil {
-		return SubmitResultV1{}, errors.Join(ErrMissingCatalogVersion, err)
-	}
-	if !hasCatalogVersion {
-		return SubmitResultV1{}, ErrMissingCatalogVersion
-	}
 	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{
 		Limits:          s.decodeLimits,
 		ScopeRule:       s.scopeRule,
@@ -372,10 +367,23 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{}, err
 	}
-	if err := checkSubmitCatalogGuardV1(decoded, catalogVersion); err != nil {
-		return SubmitResultV1{}, err
-	}
 	expectedTarget := decoded.Target.Clone()
+
+	s.submitMu.Lock()
+	catalogVersion, hasCatalogVersion, err := s.catalogProvider.CurrentCatalogVersion(ctx)
+	if err != nil {
+		s.submitMu.Unlock()
+		return SubmitResultV1{}, errors.Join(ErrMissingCatalogVersion, err)
+	}
+	if !hasCatalogVersion {
+		s.submitMu.Unlock()
+		return SubmitResultV1{}, ErrMissingCatalogVersion
+	}
+	guardErr := checkSubmitCatalogGuardV1(decoded, catalogVersion)
+	if guardErr != nil && !canPreflightIdempotentCreateRetryV1(decoded) {
+		s.submitMu.Unlock()
+		return SubmitResultV1{}, guardErr
+	}
 	preflightRequest := CommandEntryPreflightRequestV1{
 		GroupID:                  s.cluster.GroupID,
 		NodeID:                   s.cluster.NodeID,
@@ -388,6 +396,10 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		ExpectedTarget:           &expectedTarget,
 	}
 	if err := s.preflight.PreflightCommandEntryV1(ctx, preflightRequest); err != nil {
+		s.submitMu.Unlock()
+		if guardErr != nil {
+			return SubmitResultV1{}, guardErr
+		}
 		return SubmitResultV1{}, err
 	}
 	request := CommitCommandEntryV1Request{
@@ -402,27 +414,33 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	}
 	commitResult, err := s.commit.CommitCommandEntryV1(ctx, request.Clone())
 	if err != nil {
+		s.submitMu.Unlock()
 		return SubmitResultV1{}, err
 	}
 	committed, err := s.validateCommitResult(request, commitResult)
 	if err != nil {
+		s.submitMu.Unlock()
 		return SubmitResultV1{}, err
 	}
 	applyResult, err := s.applier.ApplyCommittedCommandEntryV1(ctx, committed.Clone())
 	if err != nil {
+		s.submitMu.Unlock()
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, err)
 	}
 	if applyResult.Status != raftentry.ApplyStatusApplied && applyResult.Status != raftentry.ApplyStatusAlreadyApplied {
+		s.submitMu.Unlock()
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, fmt.Errorf("apply status %s", applyResult.Status))
 	}
 	postCatalogVersion, postHasCatalogVersion, err := s.catalogProvider.CurrentCatalogVersion(ctx)
 	if err != nil {
+		s.submitMu.Unlock()
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, err)
 	}
 	if !postHasCatalogVersion {
+		s.submitMu.Unlock()
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, ErrMissingCatalogVersion)
 	}
-	return SubmitResultV1{
+	result := SubmitResultV1{
 		ActualAck:            actualAck,
 		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
 		DecodedEntry:         decoded,
@@ -431,7 +449,15 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		Evidence:             commitResult.Evidence,
 		CatalogVersion:       postCatalogVersion,
 		HasCatalogVersion:    postHasCatalogVersion,
-	}, nil
+	}
+	s.submitMu.Unlock()
+	return result, nil
+}
+
+func canPreflightIdempotentCreateRetryV1(entry raftentry.CommandEntryV1) bool {
+	return entry.Target.CommandID == iwire.CommandCreateCollection &&
+		entry.Idempotency == raftentry.IdempotencyRequiredV1 &&
+		len(entry.IdempotencyKey) > 0
 }
 
 func checkSubmitCatalogGuardV1(entry raftentry.CommandEntryV1, catalogVersion uint64) error {

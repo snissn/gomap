@@ -105,7 +105,9 @@ is intentionally one group only:
 - deterministic harness evidence is a separate evidence kind and never proves
   production quorum commitment;
 - the committed entry is applied through a `CommittedCommandApplierV1`, currently
-  provided by the raftfsm adapter;
+  provided by the raftfsm adapter, and local apply acknowledgements are
+  serialized by the single-group bridge so a later committed index cannot race
+  ahead of an earlier committed index;
 - `AckRaftCommitted` is returned only after production-consensus evidence plus
   local recoverability are both true;
 - every accepted submit currently requires production-consensus evidence; lower
