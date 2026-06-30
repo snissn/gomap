@@ -146,29 +146,37 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
-	cached                              *caching.DB
-	backend                             *db.DB
-	dictdb                              *db.DB
-	templateDB                          *DB
-	writePath                           writePathInfo
-	lifecycleMu                         sync.RWMutex
-	commandWALCached                    bool
-	commandWALPendingMu                 sync.Mutex
-	commandWALFirst                     atomic.Uint64
-	commandWALLast                      atomic.Uint64
-	commandWALCheckpointCutoverLast     atomic.Uint64
-	commandWALCheckpointCutoverErr      error
-	commandWALLiveFrames                atomic.Uint64
-	rawSpanNativePublicUpdateReject     atomic.Uint64
-	rawSpanNativePublicUpdateSyncReject atomic.Uint64
-	bgVac                               bgIndexVacuumWorker
-	notifyError                         func(error)
-	bgErrMu                             sync.Mutex
-	bgErr                               error
-	durabilityMode                      string
-	valueLogReadIntegrity               string
-	dir                                 string
-	maintenance                         maintenanceCoordinator
+	cached                               *caching.DB
+	backend                              *db.DB
+	dictdb                               *db.DB
+	templateDB                           *DB
+	writePath                            writePathInfo
+	lifecycleMu                          sync.RWMutex
+	commandWALCached                     bool
+	commandWALPendingMu                  sync.Mutex
+	commandWALFirst                      atomic.Uint64
+	commandWALLast                       atomic.Uint64
+	commandWALCheckpointCutoverLast      atomic.Uint64
+	commandWALCheckpointCutoverErr       error
+	commandWALLiveFrames                 atomic.Uint64
+	commandWALPublicBatchSetCalls        atomic.Uint64
+	commandWALPublicBatchSetBytes        atomic.Uint64
+	commandWALPublicBatchSetViewCalls    atomic.Uint64
+	commandWALPublicBatchSetViewBytes    atomic.Uint64
+	commandWALPublicBatchDeleteCalls     atomic.Uint64
+	commandWALPublicBatchDeleteBytes     atomic.Uint64
+	commandWALPublicBatchDeleteViewCalls atomic.Uint64
+	commandWALPublicBatchDeleteViewBytes atomic.Uint64
+	rawSpanNativePublicUpdateReject      atomic.Uint64
+	rawSpanNativePublicUpdateSyncReject  atomic.Uint64
+	bgVac                                bgIndexVacuumWorker
+	notifyError                          func(error)
+	bgErrMu                              sync.Mutex
+	bgErr                                error
+	durabilityMode                       string
+	valueLogReadIntegrity                string
+	dir                                  string
+	maintenance                          maintenanceCoordinator
 }
 
 var (
@@ -1857,6 +1865,7 @@ func (db *DB) Stats() map[string]string {
 		}
 		writePathStatsInto(stats, db.writePath)
 		db.publicCommandWALLiveStatsInto(stats)
+		db.publicCommandWALBatchStatsInto(stats)
 		db.publicRawSpanNativeStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity

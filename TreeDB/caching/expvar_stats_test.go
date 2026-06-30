@@ -23,6 +23,7 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.command_wal.writer.command_buffer.trim_count":                                         "7",
 		"treedb.command_wal.writer.command_buffer.dropped_bytes_total":                                "67108864",
 		"treedb.command_wal.writer.pending_batch.capacity_bytes":                                      "32768",
+		"treedb.command_wal.public_batch.set_view.calls_total":                                        "11",
 		"treedb.vlog.mmap_active_bytes":                                                               "22222",
 		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                                               "1610612736",
 		"treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total":                      "17",
@@ -191,6 +192,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.command_wal.writer.pending_batch.capacity_bytes"].(int64); !ok || v != 32768 {
 		t.Fatalf("pending_batch.capacity_bytes=%T(%v) want int64(32768)", got["treedb.command_wal.writer.pending_batch.capacity_bytes"], got["treedb.command_wal.writer.pending_batch.capacity_bytes"])
+	}
+	if v, ok := got["treedb.command_wal.public_batch.set_view.calls_total"].(int64); !ok || v != 11 {
+		t.Fatalf("public_batch.set_view.calls_total=%T(%v) want int64(11)", got["treedb.command_wal.public_batch.set_view.calls_total"], got["treedb.command_wal.public_batch.set_view.calls_total"])
 	}
 	if v, ok := got["treedb.process.memory.pool_pressure_level"].(string); !ok || v != "critical" {
 		t.Fatalf("pool_pressure_level=%T(%v) want string(critical)", got["treedb.process.memory.pool_pressure_level"], got["treedb.process.memory.pool_pressure_level"])
