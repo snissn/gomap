@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 func TestRecoveryStatusV1BeforeSnapshotInstallIsUnsafe(t *testing.T) {
@@ -140,6 +142,69 @@ func TestRecoveryStatusV1VerifiesDuplicateSnapshotBoundaryLogicalDigest(t *testi
 		status.ReadSafetyState != raftcluster.RecoveryReadSafetyAppliedIndexSatisfiedV1 ||
 		!status.SafeToServeReads {
 		t.Fatalf("status=%+v, want verified duplicate snapshot boundary with complete tail and safe reads", status)
+	}
+}
+
+func TestRecoveryStatusV1RejectsLocalCoverageBeyondDurableProgress(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	users := deterministicCreateCollectionEntry(t, "users", "fsm:recovery-status:coverage-users")
+	if result, err := fsm.ApplyCommittedEntryV1(committedCommand(9, 1, users)); err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 users: %v result=%+v", err, result)
+	}
+	manifest, err := fsm.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712347003, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+	progressBefore, ok, err := fsm.lastAppliedProgressRecord()
+	if err != nil {
+		t.Fatalf("lastAppliedProgressRecord before uncovered apply: %v", err)
+	}
+	if !ok {
+		t.Fatal("missing progress after first apply")
+	}
+
+	ordersEntry := committedCommand(9, 2, deterministicCreateCollectionEntry(t, "orders", "fsm:recovery-status:coverage-orders"))
+	ordersID := raftentry.ApplyEntryID{Term: ordersEntry.Term, Index: ordersEntry.Index}
+	meta, err := fsm.applyMetadata(ordersEntry, ordersID)
+	if err != nil {
+		t.Fatalf("applyMetadata orders: %v", err)
+	}
+	if result, err := raftapply.ApplyCommittedEntryV1(db, ordersEntry.Bytes, meta, raftapply.Options{DecodeLimits: fsm.decodeLimits}); err != nil {
+		t.Fatalf("lower ApplyCommittedEntryV1 orders: %v result=%+v", err, result)
+	}
+	if got := db.State().AppliedCommandLSN; got <= progressBefore.AppliedCommandLSN {
+		t.Fatalf("AppliedCommandLSN after uncovered apply=%d, want greater than durable progress %d", got, progressBefore.AppliedCommandLSN)
+	}
+	progressAfter, ok, err := fsm.lastAppliedProgressRecord()
+	if err != nil {
+		t.Fatalf("lastAppliedProgressRecord after uncovered apply: %v", err)
+	}
+	if !ok || progressAfter != progressBefore {
+		t.Fatalf("progress after uncovered apply=%+v ok=%v, want unchanged %+v", progressAfter, ok, progressBefore)
+	}
+
+	status, err := fsm.RecoveryStatusV1(context.Background(), RecoveryStatusOptionsV1{
+		SnapshotManifest:  &manifest,
+		TailTargetIndex:   1,
+		RequireReadSafety: true,
+	})
+	if err != nil {
+		t.Fatalf("RecoveryStatusV1 uncovered coverage: %v", err)
+	}
+	if status.Readiness != raftcluster.RecoveryReadinessUnsafeManifestUnverifiedV1 ||
+		status.SnapshotState != raftcluster.RecoverySnapshotStateManifestRejectedV1 ||
+		status.SafeToServeReads ||
+		len(status.Errors) == 0 {
+		t.Fatalf("status=%+v, want unsafe rejected manifest after uncovered local coverage", status)
+	}
+	if !strings.Contains(strings.Join(status.Errors, "\n"), "does not match durable progress coverage") {
+		t.Fatalf("status errors=%v, want durable progress coverage mismatch", status.Errors)
 	}
 }
 

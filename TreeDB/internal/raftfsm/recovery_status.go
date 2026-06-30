@@ -113,6 +113,9 @@ func (f *FSM) verifyRecoverySnapshotManifestV1(manifest raftcluster.SnapshotMani
 	if err != nil {
 		return err
 	}
+	if localLSN != record.AppliedCommandLSN {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d does not match durable progress coverage %d for recovery status", localLSN, record.AppliedCommandLSN)
+	}
 	if localLSN < manifest.AppliedCommandLSN {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "snapshot manifest AppliedCommandLSN %d is ahead of local coverage %d", manifest.AppliedCommandLSN, localLSN)
 	}
