@@ -154,9 +154,7 @@ write_scan_counts() {
   {
     printf 'scope\tterm\tcount\n'
     local scope term count load_out load_err server_log
-    for scope in "$OUT_DIR"/*; do
-      [[ -d "$scope" ]] || continue
-      [[ "$(basename "$scope")" =~ ^[0-9]+$ ]] || continue
+    for scope in "$@"; do
       load_out="$scope/load.out"
       load_err="$scope/load.err"
       server_log="$scope/server.log"
@@ -172,12 +170,14 @@ write_host_info
 printf 'recordcount\taddr\texit_code\tinsert_error_lines\terror_scan_lines\tload_out\tload_err\tserver_log\n' >"$OUT_DIR/summary.tsv"
 
 diagnostic_failures=0
+run_dirs=()
 index=0
 for recordcount in $RECORDCOUNTS; do
   addr="$ADDR_BASE_HOST:$((ADDR_BASE_PORT + index))"
   run_dir="$OUT_DIR/$recordcount"
   db_dir="$run_dir/db"
   mkdir -p "$run_dir"
+  run_dirs+=("$run_dir")
   rm -rf "$db_dir"
 
   server_cmd=(
@@ -224,14 +224,12 @@ for recordcount in $RECORDCOUNTS; do
 done
 
 : >"$OUT_DIR/raw_scan.txt"
-for scope in "$OUT_DIR"/*; do
-  [[ -d "$scope" ]] || continue
-  [[ "$(basename "$scope")" =~ ^[0-9]+$ ]] || continue
+for scope in "${run_dirs[@]}"; do
   if [[ -s "$scope/raw_scan.txt" ]]; then
     sed "s#^#$(basename "$scope")/#" "$scope/raw_scan.txt" >>"$OUT_DIR/raw_scan.txt"
   fi
 done
-write_scan_counts
+write_scan_counts "${run_dirs[@]}"
 
 printf 'nativewire YCSB diagnostic artifacts: %s\n' "$OUT_DIR"
 if (( diagnostic_failures != 0 )); then
