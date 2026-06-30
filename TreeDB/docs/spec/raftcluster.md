@@ -130,12 +130,14 @@ Apply future completes with a committed log term/index. The provider persists
 its Raft log/stable stores under the raftcluster storage layout and applies
 committed command entries through the local `CommittedCommandApplierV1`.
 
-HashiCorp Raft stores an initial configuration entry before user command
-entries. The raftfsm durable apply store may therefore be opened with
+HashiCorp Raft stores internal log entries, including initial configuration
+entries and leader-term no-op entries, in the same log index space as user
+commands. The raftfsm durable apply store may therefore be opened with
 `AllowInitialIndexGap` for this provider so the first applied TreeDB command can
-use the committed Raft log index even when index `1` is an internal Raft
-configuration entry. Once the first command is applied, later command indexes
-must remain contiguous.
+use the committed Raft log index even when index `1` is an internal Raft entry.
+After that, command indexes must remain strictly increasing with non-decreasing
+terms, but they may have gaps where committed Raft log entries did not deliver a
+TreeDB command to the FSM.
 
 The `SequencedCommitSource` helper supplies deterministic in-process term/index
 assignment and is useful for adapter tests and smoke wiring. It only proves
@@ -160,8 +162,14 @@ The package exposes a small read-index contract for future Raft adapters:
   which a real Raft adapter may set only after a read-index or equivalent
   production quorum proof;
 - linearizable nativewire reads must convert the proof into an
-  `AppliedIndexReadBarrier` and wait until the local node has applied through
-  that index before reading local state.
+  `AppliedIndexReadBarrier` and wait until local state covers every TreeDB
+  command at or below that proof index before reading local state.
+
+HashiCorp Raft read-index proofs may land on internal no-op or configuration
+log entries. A production read-index adapter must therefore track applied Raft
+log coverage or translate the proof to the latest TreeDB command index at or
+below the proof; it must not assume the FSM's last applied TreeDB command index
+is identical to the provider's latest applied Raft log index.
 
 This is only a contract. It does not implement a real Raft read-index provider,
 leader transfer handling, lease reads, follower reads, or production routing.

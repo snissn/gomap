@@ -225,9 +225,11 @@ decode with `MatchedCount=0`.
 Open-time recovery scans complete frames and rebuilds in-memory lookup indexes.
 Frame truncation, checksum mismatch, unsupported file or frame versions, kind
 mismatches, malformed payloads, same-`ApplyEntryID` different-digest conflicts,
-same-idempotency different-digest conflicts, and non-contiguous progress records
-MUST fail closed. A duplicate same-`ApplyEntryID`/same-digest frame MAY be
-treated as an idempotent append retry and ignored after the first record.
+same-idempotency different-digest conflicts, non-increasing progress indexes,
+and term-regressing progress records MUST fail closed. Gaps between progress
+indexes MAY represent committed non-command Raft log entries. A duplicate
+same-`ApplyEntryID`/same-digest frame MAY be treated as an idempotent append
+retry and ignored after the first record.
 
 Accepted records are appended after the store interface's preflight checks pass.
 By default each accepted frame is fsynced before the in-memory store state is

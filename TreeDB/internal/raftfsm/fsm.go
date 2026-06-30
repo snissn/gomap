@@ -187,36 +187,42 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 	if len(entries) != progressCount {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d does not match durable progress count %d", len(entries), progressCount))
 	}
-	prefixLen := uint64(len(entries))
-	if prefixLen == 0 {
+	if len(entries) == 0 {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix is empty but FSM last applied index is %d", record.EntryID.Index))
 	}
-	if prefixLen > record.EntryID.Index {
-		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix length %d exceeds last applied index %d", len(entries), record.EntryID.Index))
-	}
-	firstIndex := record.EntryID.Index - prefixLen + 1
-	if firstIndex != 1 && !f.storeOptions.AllowInitialIndexGap {
-		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix starts at index %d; want 1", firstIndex))
-	}
-	if len(entries) > 0 {
-		last := entries[len(entries)-1]
-		lastID := raftentry.ApplyEntryID{Term: last.Term, Index: last.Index}
-		lastDigest := commandDigest(last.Bytes, f.decodeOptions(last, lastID))
-		if err := validateCommittedID(lastID); err != nil {
-			return reject(lastDigest, raftentry.ErrorMalformedEntryV1, err)
-		}
-		if lastID != record.EntryID {
-			return reject(lastDigest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix last entry %d/%d does not match durable last applied %d/%d", lastID.Term, lastID.Index, record.EntryID.Term, record.EntryID.Index))
-		}
-	}
+	var previous raftentry.ApplyEntryID
 	for i, entry := range entries {
 		id := raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
 		digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
 		if err := validateCommittedID(id); err != nil {
 			return reject(digest, raftentry.ErrorMalformedEntryV1, err)
 		}
-		if wantIndex := firstIndex + uint64(i); id.Index != wantIndex {
-			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry index %d at offset %d; want %d", id.Index, i, wantIndex))
+		if i == 0 {
+			if id.Index != 1 && !f.storeOptions.AllowInitialIndexGap {
+				return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix starts at index %d; want 1", id.Index))
+			}
+		} else {
+			if id.Index <= previous.Index {
+				return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry index %d at offset %d is not after previous index %d", id.Index, i, previous.Index))
+			}
+			if id.Term < previous.Term {
+				return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix entry term %d at offset %d is below previous term %d", id.Term, i, previous.Term))
+			}
+		}
+		progress, ok, err := f.progress.LookupApplyProgress(id)
+		if err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(digest, code, err)
+		}
+		if !ok {
+			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("missing durable progress for applied prefix entry %d/%d", id.Term, id.Index))
+		}
+		if err := validateApplyProgressCoverage(f.db, progress); err != nil {
+			code, _ := ErrorCodeOf(err)
+			return reject(digest, code, err)
+		}
+		if progress.CommandDigest != digest {
+			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix progress digest conflicts at %d/%d", id.Term, id.Index))
 		}
 		stored, ok, err := f.results.LookupApplyResult(id)
 		if err != nil {
@@ -229,6 +235,10 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 		if stored.CommandDigest != digest {
 			return reject(digest, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix digest conflicts at %d/%d", id.Term, id.Index))
 		}
+		previous = id
+	}
+	if previous != record.EntryID {
+		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorRejectedConflictV1, fmt.Errorf("applied prefix last entry %d/%d does not match durable last applied %d/%d", previous.Term, previous.Index, record.EntryID.Term, record.EntryID.Index))
 	}
 	return raftentry.ApplyResultV1{}, nil
 }
@@ -351,9 +361,6 @@ func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
 	last := record.EntryID
 	if id.Index < last.Index {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is below last applied %d", id.Index, last.Index)
-	}
-	if id.Index > last.Index+1 {
-		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index gap: got %d after %d", id.Index, last.Index)
 	}
 	if id.Index == last.Index {
 		if id.Term != last.Term {

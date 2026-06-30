@@ -276,11 +276,14 @@ implementation before reading.
 The current nativewire bridge for `linearizable` is a contract-only substrate:
 a configured read-index provider must return a read-index proof marked with
 production evidence provenance, then the existing applied-index waiter must
-prove the local node has applied through that read index. Harness and other
-test-only evidence can exercise lower-level composition but must not satisfy
-nativewire `linearizable`. If either proof is unavailable, non-production,
-missing quorum, targets the wrong node/group, or local apply lags the read
-index, the read fails closed.
+prove local state covers every TreeDB command at or below that read index.
+Harness and other test-only evidence can exercise lower-level composition but
+must not satisfy nativewire `linearizable`. If either proof is unavailable,
+non-production, missing quorum, targets the wrong node/group, or local apply
+lags the read index, the read fails closed. A production provider whose
+read-index proof can land on no-op/config Raft log entries must add applied
+Raft-index tracking or translate the proof to the latest TreeDB command index at
+or below the proof before relying on the command FSM progress.
 
 `lease_read` is allowed only if leader leases are implemented and the server can
 prove the lease is valid.

@@ -373,42 +373,48 @@ func TestSingleGroupApplyLoopFailsClosedOnOrderingAndUnsupportedEntries(t *testi
 		t.Fatalf("seed apply: %v result=%+v", err, seed)
 	}
 	assertApplied(t, seed, raftentry.ApplyStatusApplied, 1)
-	beforeLSN := db.State().AppliedCommandLSN
 
 	orders := deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:gap")
 	gap, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 3, orders))
-	assertRejected(t, gap, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "orders")
+	if err != nil {
+		t.Fatalf("apply raft log index gap: %v result=%+v", err, gap)
+	}
+	assertApplied(t, gap, raftentry.ApplyStatusApplied, 1)
+	gapLSN := db.State().AppliedCommandLSN
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 3, Index: 3})
 
-	lowerTerm, err := fsm.ApplyCommittedEntryV1(committedCommand(2, 2, orders))
+	profiles := deterministicCreateCollectionEntry(t, "profiles", "fsm:create:profiles:lower-term")
+	lowerTerm, err := fsm.ApplyCommittedEntryV1(committedCommand(2, 4, profiles))
 	assertRejected(t, lowerTerm, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "orders")
+	assertNoApplyProgress(t, db, gapLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 3}, "profiles")
 
 	differentSameIndex := deterministicCreateCollectionEntry(t, "admins", "fsm:create:admins:duplicate-index")
-	duplicateConflict, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 1, differentSameIndex))
+	duplicateConflict, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 3, differentSameIndex))
 	assertRejected(t, duplicateConflict, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "admins")
+	assertNoApplyProgress(t, db, gapLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 3}, "admins")
 
 	audits := deterministicCreateCollectionEntry(t, "audits", "fsm:create:audits:duplicate-term")
-	sameIndexDifferentTerm, err := fsm.ApplyCommittedEntryV1(committedCommand(4, 1, audits))
+	sameIndexDifferentTerm, err := fsm.ApplyCommittedEntryV1(committedCommand(4, 3, audits))
 	assertRejected(t, sameIndexDifferentTerm, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, beforeLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 1}, "audits")
+	assertNoApplyProgress(t, db, gapLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 3}, "audits")
 
-	profiles := deterministicCreateCollectionEntry(t, "profiles", "fsm:create:profiles:advance")
-	advanced, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 2, profiles))
+	profiles = deterministicCreateCollectionEntry(t, "profiles", "fsm:create:profiles:advance")
+	advanced, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 4, profiles))
 	if err != nil {
 		t.Fatalf("advance apply: %v result=%+v", err, advanced)
 	}
 	assertApplied(t, advanced, raftentry.ApplyStatusApplied, 1)
 	advancedLSN := db.State().AppliedCommandLSN
 
-	lowerIndex, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 1, orders))
+	customers := deterministicCreateCollectionEntry(t, "customers", "fsm:create:customers:lower-index")
+	lowerIndex, err := fsm.ApplyCommittedEntryV1(committedCommand(3, 3, customers))
 	assertRejected(t, lowerIndex, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
-	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 2}, "orders")
+	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 4}, "customers")
 
-	unsupported, err := fsm.ApplyCommittedEntryV1(CommittedEntryV1{Type: EntryTypeV1("snapshot-v1"), Term: 3, Index: 2, Bytes: orders})
+	snapshots := deterministicCreateCollectionEntry(t, "snapshots", "fsm:create:snapshots:unsupported")
+	unsupported, err := fsm.ApplyCommittedEntryV1(CommittedEntryV1{Type: EntryTypeV1("snapshot-v1"), Term: 3, Index: 4, Bytes: snapshots})
 	assertRejected(t, unsupported, err, raftentry.ApplyStatusRejectedUnsupported, raftentry.ErrorUnsupportedVersionV1)
-	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 2}, "orders")
+	assertNoApplyProgress(t, db, advancedLSN, fsm, raftentry.ApplyEntryID{Term: 3, Index: 4}, "snapshots")
 }
 
 func TestValidateAppliedPrefixAllowsInitialIndexGap(t *testing.T) {
@@ -455,6 +461,40 @@ func TestValidateAppliedPrefixAllowsInitialIndexGap(t *testing.T) {
 	}
 }
 
+func TestValidateAppliedPrefixAllowsRaftLogIndexGaps(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	defer func() { _ = fsm.Close() }()
+
+	first := committedCommand(6, 1, deterministicCreateCollectionEntry(t, "users", "fsm:create:users:raft-gap"))
+	firstResult, err := fsm.ApplyCommittedEntryV1(first)
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 first: %v result=%+v", err, firstResult)
+	}
+	assertApplied(t, firstResult, raftentry.ApplyStatusApplied, 1)
+
+	second := committedCommand(7, 3, deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:raft-gap"))
+	secondResult, err := fsm.ApplyCommittedEntryV1(second)
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntryV1 second with raft gap: %v result=%+v", err, secondResult)
+	}
+	assertApplied(t, secondResult, raftentry.ApplyStatusApplied, 1)
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 7, Index: 3})
+
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{first, second}); err != nil {
+		t.Fatalf("ValidateAppliedPrefixV1 raft gap prefix: %v result=%+v", err, result)
+	}
+	divergentGap := committedCommand(7, 2, deterministicCreateCollectionEntry(t, "admins", "fsm:create:admins:raft-gap"))
+	if result, err := fsm.ValidateAppliedPrefixV1([]CommittedEntryV1{first, divergentGap}); err == nil {
+		t.Fatalf("ValidateAppliedPrefixV1 missing gap progress result=%+v, want conflict", result)
+	} else if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("ValidateAppliedPrefixV1 missing gap progress code=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorRejectedConflictV1, err)
+	}
+}
+
 func TestInitialIndexGapReplaysResultAheadBeforeLaterEntry(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
@@ -476,7 +516,7 @@ func TestInitialIndexGapReplaysResultAheadBeforeLaterEntry(t *testing.T) {
 		t.Fatalf("AppliedCommandLSN after result-ahead fault=%d, want 1", got)
 	}
 
-	second := committedCommand(6, 3, deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:gap-result-ahead"))
+	second := committedCommand(6, 4, deterministicCreateCollectionEntry(t, "orders", "fsm:create:orders:gap-result-ahead"))
 	skipped, err := fsm.ApplyCommittedEntryV1(second)
 	assertRejected(t, skipped, err, raftentry.ApplyStatusDeterministicGuardFailure, raftentry.ErrorUnsafeDurabilityModeV1)
 	if got := fsm.progress.Len(); got != 0 {
@@ -495,7 +535,7 @@ func TestInitialIndexGapReplaysResultAheadBeforeLaterEntry(t *testing.T) {
 		t.Fatalf("apply second after replaying first: %v result=%+v", err, appliedSecond)
 	}
 	assertApplied(t, appliedSecond, raftentry.ApplyStatusApplied, 1)
-	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 6, Index: 3})
+	assertLastApplied(t, fsm, raftentry.ApplyEntryID{Term: 6, Index: 4})
 }
 
 func TestValidateAppliedPrefixAllowsResultAheadRecoveryState(t *testing.T) {

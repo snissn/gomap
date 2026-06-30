@@ -40,6 +40,7 @@ type DurableApplyStoreOptions struct {
 
 	// AllowInitialIndexGap accepts a first TreeDB command index above 1 for
 	// consensus logs that reserve lower indexes for internal membership entries.
+	// Later gaps are accepted when indexes strictly increase.
 	AllowInitialIndexGap bool
 }
 
@@ -272,9 +273,9 @@ func (s *DurableApplyResultStore) poisonAfterAppendFailureLocked() {
 }
 
 // DurableApplyProgressStore is an append-only implementation of
-// ApplyProgressStore. It enforces the same contiguous-index and non-decreasing
-// term rules as MemoryApplyProgressStore, then fsyncs each accepted record by
-// default.
+// ApplyProgressStore. It enforces the same strictly-increasing-index and
+// non-decreasing-term rules as MemoryApplyProgressStore, then fsyncs each
+// accepted record by default.
 type DurableApplyProgressStore struct {
 	mu                   sync.Mutex
 	path                 string
@@ -503,9 +504,6 @@ func (s *DurableApplyProgressStore) checkCanApplyLocked(id raftentry.ApplyEntryI
 	}
 	if id.Index <= s.last.Index {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is not after last applied %d", id.Index, s.last.Index)
-	}
-	if id.Index != s.last.Index+1 {
-		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index gap: got %d after %d", id.Index, s.last.Index)
 	}
 	if id.Term < s.last.Term {
 		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry term %d is below last applied term %d", id.Term, s.last.Term)

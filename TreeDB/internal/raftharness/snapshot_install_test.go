@@ -67,6 +67,51 @@ func TestSnapshotInstallPrefixPlusTailReplayMatchesFullReplayDigest(t *testing.T
 	assertDocumentMissing(t, h, "node-b", "users", "u2")
 }
 
+func TestSnapshotInstallReplaysSparseCommittedTail(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	entries := mixedUserEntries(t, 35)
+	entries[2].Index = 4
+	entries[3].Index = 5
+	if _, err := h.Commit(entries...); err != nil {
+		t.Fatalf("Commit sparse mixed entries: %v", err)
+	}
+	prefix := entries[:2]
+	if sourcePrefix, err := h.ApplyCommittedEntriesToNode("node-a", prefix...); err != nil {
+		t.Fatalf("apply source sparse prefix: %v results=%+v", err, sourcePrefix)
+	}
+	source := mustNode(t, h, "node-a")
+	manifest, err := source.fsm.ExportSnapshotManifestV1(raftfsm.SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712346004, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+	if manifest.LastIncludedIndex != 2 {
+		t.Fatalf("manifest last index=%d, want 2", manifest.LastIncludedIndex)
+	}
+
+	install, err := h.InstallSnapshotPrefixToNodeV1("node-b", manifest)
+	if err != nil {
+		t.Fatalf("InstallSnapshotPrefixToNodeV1 sparse: %v evidence=%+v", err, install)
+	}
+	assertAppliedResults(t, "sparse snapshot prefix install", install.Applied, []int64{1, 2})
+	tail, err := h.ReplaySnapshotTailToNodeV1("node-b", manifest)
+	if err != nil {
+		t.Fatalf("ReplaySnapshotTailToNodeV1 sparse tail: %v results=%+v", err, tail)
+	}
+	assertAppliedResults(t, "sparse snapshot tail replay", tail, []int64{1, 1})
+	fullReplay, err := h.ApplyCommittedEntriesToNode("node-c", entries...)
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntriesToNode sparse full replay: %v results=%+v", err, fullReplay)
+	}
+	assertAppliedResults(t, "sparse full replay", fullReplay, []int64{1, 2, 1, 1})
+	assertLastApplied(t, h, "node-b", raftentry.ApplyEntryID{Term: 35, Index: 5})
+	assertLastApplied(t, h, "node-c", raftentry.ApplyEntryID{Term: 35, Index: 5})
+	if fullDigest, targetDigest := logicalDigest(t, h, "node-c"), logicalDigest(t, h, "node-b"); fullDigest != targetDigest {
+		t.Fatalf("sparse snapshot+tail digest mismatch full=%s target=%s", fullDigest.Hex(), targetDigest.Hex())
+	}
+}
+
 func TestSnapshotInstallRejectsManifestMismatchBeforeTargetMutation(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()

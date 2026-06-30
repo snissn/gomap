@@ -285,14 +285,14 @@ func (h *Harness) committedEntriesForApply(id raftcluster.NodeID, entries []raft
 			if entryID.Index <= previous.Index {
 				return nil, nil, fmt.Errorf("%w: non-increasing apply index %d after %d", ErrCommittedLogConflict, entryID.Index, previous.Index)
 			}
-			if entryID.Index != previous.Index+1 {
-				return nil, nil, fmt.Errorf("%w: got index %d after %d", ErrCommittedLogGap, entryID.Index, previous.Index)
+			if entryID.Term < previous.Term {
+				return nil, nil, fmt.Errorf("%w: term regression at index %d: term %d after term %d", ErrCommittedLogConflict, entryID.Index, entryID.Term, previous.Term)
 			}
 		}
-		if entryID.Index > uint64(len(h.committed)) {
-			return nil, nil, fmt.Errorf("%w: apply entry index %d beyond committed log length %d", ErrCommittedLogGap, entryID.Index, len(h.committed))
+		want, _, ok := committedEntryByIndex(h.committed, entryID.Index)
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: apply entry index %d is not committed", ErrCommittedLogGap, entryID.Index)
 		}
-		want := h.committed[entryID.Index-1]
 		if !committedEntriesEqual(want, entry) {
 			return nil, nil, fmt.Errorf("%w: apply entry does not match committed log at index %d", ErrCommittedLogConflict, entryID.Index)
 		}
@@ -335,18 +335,15 @@ func (h *Harness) InstallSnapshotPrefixToNodeV1(id raftcluster.NodeID, manifest 
 		h.mu.Unlock()
 		return evidence, err
 	}
-	if manifest.LastIncludedIndex == 0 || manifest.LastIncludedIndex > uint64(len(h.committed)) {
+	prefix, ok := committedPrefixThroughIndex(h.committed, manifest.LastIncludedIndex)
+	if !ok {
 		h.mu.Unlock()
-		return evidence, fmt.Errorf("%w: snapshot index %d beyond committed log length %d", ErrCommittedLogGap, manifest.LastIncludedIndex, len(h.committed))
+		return evidence, fmt.Errorf("%w: snapshot index %d is not committed", ErrCommittedLogGap, manifest.LastIncludedIndex)
 	}
-	last := h.committed[manifest.LastIncludedIndex-1]
+	last := prefix[len(prefix)-1]
 	if last.Term != manifest.LastIncludedTerm || last.Index != manifest.LastIncludedIndex {
 		h.mu.Unlock()
 		return evidence, fmt.Errorf("%w: snapshot last included %d/%d does not match committed log %d/%d", ErrCommittedLogConflict, manifest.LastIncludedTerm, manifest.LastIncludedIndex, last.Term, last.Index)
-	}
-	prefix := make([]raftfsm.CommittedEntryV1, 0, manifest.LastIncludedIndex)
-	for _, entry := range h.committed[:manifest.LastIncludedIndex] {
-		prefix = append(prefix, cloneCommittedEntry(entry))
 	}
 	evidence.EntryIDs = applyEntryIDs(prefix)
 	rootDir := h.rootDir
@@ -407,19 +404,17 @@ func (h *Harness) ReplaySnapshotTailToNodeV1(id raftcluster.NodeID, manifest raf
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
 	}
-	if manifest.LastIncludedIndex == 0 || manifest.LastIncludedIndex > uint64(len(h.committed)) {
+	prefix, ok := committedPrefixThroughIndex(h.committed, manifest.LastIncludedIndex)
+	if !ok {
 		h.mu.Unlock()
-		return nil, fmt.Errorf("%w: snapshot index %d beyond committed log length %d", ErrCommittedLogGap, manifest.LastIncludedIndex, len(h.committed))
+		return nil, fmt.Errorf("%w: snapshot index %d is not committed", ErrCommittedLogGap, manifest.LastIncludedIndex)
 	}
-	last := h.committed[manifest.LastIncludedIndex-1]
+	last := prefix[len(prefix)-1]
 	if last.Term != manifest.LastIncludedTerm || last.Index != manifest.LastIncludedIndex {
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: snapshot last included %d/%d does not match committed log %d/%d", ErrCommittedLogConflict, manifest.LastIncludedTerm, manifest.LastIncludedIndex, last.Term, last.Index)
 	}
-	tail := make([]raftfsm.CommittedEntryV1, 0, len(h.committed)-int(manifest.LastIncludedIndex))
-	for _, entry := range h.committed[manifest.LastIncludedIndex:] {
-		tail = append(tail, cloneCommittedEntry(entry))
-	}
+	tail := committedEntriesFromIndexThrough(h.committed, manifest.LastIncludedIndex, 0, false)
 	h.mu.Unlock()
 
 	if err := node.fsm.VerifyInstalledSnapshotManifestV1(manifest); err != nil {
@@ -442,18 +437,19 @@ func rejectNonEmptySnapshotInstallTarget(node *Node) error {
 }
 
 func verifyCommittedPrefixLocked(committed, prefix []raftfsm.CommittedEntryV1, manifest raftcluster.SnapshotManifestV1) error {
-	if manifest.LastIncludedIndex == 0 || manifest.LastIncludedIndex > uint64(len(committed)) {
-		return fmt.Errorf("%w: snapshot index %d beyond committed log length %d", ErrCommittedLogGap, manifest.LastIncludedIndex, len(committed))
+	wantPrefix, ok := committedPrefixThroughIndex(committed, manifest.LastIncludedIndex)
+	if !ok {
+		return fmt.Errorf("%w: snapshot index %d is not committed", ErrCommittedLogGap, manifest.LastIncludedIndex)
 	}
-	if uint64(len(prefix)) != manifest.LastIncludedIndex {
-		return fmt.Errorf("%w: snapshot prefix length %d does not match last included index %d", ErrCommittedLogGap, len(prefix), manifest.LastIncludedIndex)
+	if len(prefix) != len(wantPrefix) {
+		return fmt.Errorf("%w: snapshot prefix length %d does not match committed prefix length %d through index %d", ErrCommittedLogGap, len(prefix), len(wantPrefix), manifest.LastIncludedIndex)
 	}
 	for i, entry := range prefix {
-		if !committedEntriesEqual(committed[i], entry) {
-			return fmt.Errorf("%w: snapshot prefix diverged at index %d", ErrCommittedLogConflict, i+1)
+		if !committedEntriesEqual(wantPrefix[i], entry) {
+			return fmt.Errorf("%w: snapshot prefix diverged at entry offset %d", ErrCommittedLogConflict, i)
 		}
 	}
-	last := committed[manifest.LastIncludedIndex-1]
+	last := wantPrefix[len(wantPrefix)-1]
 	if last.Term != manifest.LastIncludedTerm || last.Index != manifest.LastIncludedIndex {
 		return fmt.Errorf("%w: snapshot last included %d/%d does not match committed log %d/%d", ErrCommittedLogConflict, manifest.LastIncludedTerm, manifest.LastIncludedIndex, last.Term, last.Index)
 	}
@@ -474,34 +470,29 @@ func (h *Harness) catchUpNodeThrough(id raftcluster.NodeID, maxIndex uint64) ([]
 		h.mu.Unlock()
 		return nil, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
 	}
-	start := 0
+	var startIndex uint64
+	includeStart := false
 	var prefix []raftfsm.CommittedEntryV1
 	if last, ok := node.LastApplied(); ok {
 		if last.Index == 0 {
 			h.mu.Unlock()
 			return nil, fmt.Errorf("%w: node %s has invalid last applied index 0", ErrCommittedLogConflict, id)
 		}
-		if last.Index > uint64(len(h.committed)) {
+		var ok bool
+		prefix, ok = committedPrefixThroughIndex(h.committed, last.Index)
+		if !ok {
 			h.mu.Unlock()
-			return nil, fmt.Errorf("%w: node %s last applied index %d beyond committed log length %d", ErrCommittedLogConflict, id, last.Index, len(h.committed))
+			return nil, fmt.Errorf("%w: node %s last applied index %d is not committed", ErrCommittedLogConflict, id, last.Index)
 		}
-		start = int(last.Index - 1)
-		prefix = make([]raftfsm.CommittedEntryV1, 0, last.Index)
-		for _, entry := range h.committed[:last.Index] {
-			prefix = append(prefix, cloneCommittedEntry(entry))
+		lastCommitted := prefix[len(prefix)-1]
+		if lastCommitted.Term != last.Term {
+			h.mu.Unlock()
+			return nil, fmt.Errorf("%w: node %s last applied %d/%d does not match committed log term %d", ErrCommittedLogConflict, id, last.Term, last.Index, lastCommitted.Term)
 		}
+		startIndex = last.Index
+		includeStart = true
 	}
-	end := len(h.committed)
-	if maxIndex > 0 && maxIndex < uint64(end) {
-		end = int(maxIndex)
-	}
-	if start > end {
-		start = end
-	}
-	entries := make([]raftfsm.CommittedEntryV1, 0, end-start)
-	for _, entry := range h.committed[start:end] {
-		entries = append(entries, cloneCommittedEntry(entry))
-	}
+	entries := committedEntriesFromIndexThrough(h.committed, startIndex, maxIndex, includeStart)
 	h.mu.Unlock()
 	if len(prefix) > 0 {
 		result, err := node.fsm.ValidateAppliedPrefixV1(prefix)
@@ -585,12 +576,7 @@ func appendCommitted(committed []raftfsm.CommittedEntryV1, entry raftfsm.Committ
 	if id.Term == 0 || id.Index == 0 {
 		return nil, fmt.Errorf("%w: invalid committed id %+v", ErrCommittedLogGap, id)
 	}
-	wantNext := uint64(len(committed) + 1)
-	if id.Index > wantNext {
-		return nil, fmt.Errorf("%w: got index %d after %d", ErrCommittedLogGap, id.Index, len(committed))
-	}
-	if id.Index < wantNext {
-		existing := committed[id.Index-1]
+	if existing, _, ok := committedEntryByIndex(committed, id.Index); ok {
 		if !committedEntriesEqual(existing, entry) {
 			return nil, fmt.Errorf("%w: divergent entry at index %d", ErrCommittedLogConflict, id.Index)
 		}
@@ -598,11 +584,57 @@ func appendCommitted(committed []raftfsm.CommittedEntryV1, entry raftfsm.Committ
 	}
 	if len(committed) > 0 {
 		previous := committed[len(committed)-1]
+		if id.Index <= previous.Index {
+			return nil, fmt.Errorf("%w: non-increasing committed index %d after %d", ErrCommittedLogConflict, id.Index, previous.Index)
+		}
 		if id.Term < previous.Term {
 			return nil, fmt.Errorf("%w: term regression at index %d: term %d after term %d", ErrCommittedLogConflict, id.Index, id.Term, previous.Term)
 		}
 	}
 	return append(committed, cloneCommittedEntry(entry)), nil
+}
+
+func committedEntryByIndex(committed []raftfsm.CommittedEntryV1, index uint64) (raftfsm.CommittedEntryV1, int, bool) {
+	if index == 0 {
+		return raftfsm.CommittedEntryV1{}, -1, false
+	}
+	for i, entry := range committed {
+		switch {
+		case entry.Index == index:
+			return entry, i, true
+		case entry.Index > index:
+			return raftfsm.CommittedEntryV1{}, -1, false
+		}
+	}
+	return raftfsm.CommittedEntryV1{}, -1, false
+}
+
+func committedPrefixThroughIndex(committed []raftfsm.CommittedEntryV1, index uint64) ([]raftfsm.CommittedEntryV1, bool) {
+	_, pos, ok := committedEntryByIndex(committed, index)
+	if !ok {
+		return nil, false
+	}
+	prefix := make([]raftfsm.CommittedEntryV1, 0, pos+1)
+	for _, entry := range committed[:pos+1] {
+		prefix = append(prefix, cloneCommittedEntry(entry))
+	}
+	return prefix, true
+}
+
+func committedEntriesFromIndexThrough(committed []raftfsm.CommittedEntryV1, startIndex, maxIndex uint64, includeStart bool) []raftfsm.CommittedEntryV1 {
+	entries := make([]raftfsm.CommittedEntryV1, 0, len(committed))
+	for _, entry := range committed {
+		if maxIndex != 0 && entry.Index > maxIndex {
+			break
+		}
+		if startIndex != 0 {
+			if entry.Index < startIndex || (!includeStart && entry.Index == startIndex) {
+				continue
+			}
+		}
+		entries = append(entries, cloneCommittedEntry(entry))
+	}
+	return entries
 }
 
 func (n *Node) ID() raftcluster.NodeID {
