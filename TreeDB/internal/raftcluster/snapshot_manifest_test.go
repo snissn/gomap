@@ -164,6 +164,19 @@ func TestSnapshotManifestV1DecodeRejectsPaddedManifestScope(t *testing.T) {
 	}
 }
 
+func TestSnapshotManifestV1DecodeRejectsPaddedExpectedScope(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	encoded, err := EncodeSnapshotManifestV1(manifest)
+	if err != nil {
+		t.Fatalf("EncodeSnapshotManifestV1: %v", err)
+	}
+	expectedScope := manifest.Scope
+	expectedScope.DatabaseScope += " "
+	if _, err := DecodeSnapshotManifestV1(encoded, expectedScope); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("DecodeSnapshotManifestV1 padded expected scope error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
 func validSnapshotManifestV1() SnapshotManifestV1 {
 	return SnapshotManifestV1{
 		Format:            SnapshotManifestFormatV1,

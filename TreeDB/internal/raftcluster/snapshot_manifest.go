@@ -30,15 +30,15 @@ type SnapshotScopeIdentityV1 struct {
 }
 
 func (s SnapshotScopeIdentityV1) normalizeExpected() SnapshotScopeIdentityV1 {
-	scopeRule := strings.TrimSpace(s.ScopeRule)
+	scopeRule := s.ScopeRule
 	if scopeRule == "" {
 		scopeRule = string(raftentry.ScopeRuleSingleGroupV1)
 	}
-	databaseScope := strings.TrimSpace(s.DatabaseScope)
+	databaseScope := s.DatabaseScope
 	if databaseScope == "" {
 		databaseScope = raftentry.DatabaseScopeDefaultV1
 	}
-	catalogScope := strings.TrimSpace(s.CatalogScope)
+	catalogScope := s.CatalogScope
 	if catalogScope == "" {
 		catalogScope = raftentry.CatalogScopeDefaultV1
 	}
