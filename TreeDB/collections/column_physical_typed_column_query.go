@@ -765,7 +765,7 @@ func decodeColumnTypedColumnPhysicalQueryRunnerParts(view columnPhysicalScanSnap
 			return nil, err
 		}
 	} else if prepareDenseGroupCountDistinctGlobalRanks && allowDenseGroupCountDistinct && columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req) {
-		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(runner.parts, prepareDiagnostics); err != nil {
+		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsOneShotWithDiagnostics(runner.parts, prepareDiagnostics); err != nil {
 			if prepareDiagnostics != nil {
 				prepareDiagnostics.PostPrepareNanos += time.Since(phaseStart).Nanoseconds()
 			}
@@ -1255,6 +1255,10 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostic
 		prepareDiagnostics.Q2DensePartLocalRankNanos += elapsed
 	}
 	return err
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsOneShotWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(parts, prepareDiagnostics)
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {

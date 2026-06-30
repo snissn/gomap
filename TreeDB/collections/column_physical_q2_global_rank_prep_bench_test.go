@@ -150,6 +150,41 @@ func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankPrepPolicy(t *testing.T
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctOneShotRankPrepMatchesAdaptivePolicy(t *testing.T) {
+	for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			fixture := newQ2DenseGlobalRankPrepParts(40, shape)
+			unsortQ2DenseGlobalRankPrepDictionaries(fixture)
+			stats := q2DenseGlobalRankPrepStats(fixture)
+			oneShot := cloneQ2DenseGlobalRankPrepParts(fixture)
+			adaptive := cloneQ2DenseGlobalRankPrepParts(fixture)
+			current := cloneQ2DenseGlobalRankPrepParts(fixture)
+
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsOneShotWithDiagnostics(oneShot, nil); err != nil {
+				t.Fatalf("prepare one-shot adaptive rank: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(adaptive, nil); err != nil {
+				t.Fatalf("prepare explicit adaptive rank: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(current, nil); err != nil {
+				t.Fatalf("prepare current map fallback: %v", err)
+			}
+
+			assertQ2DenseGlobalRankPrepParts(t, oneShot, stats)
+			assertQ2DenseGlobalRankPrepEquivalent(t, adaptive, oneShot, stats)
+			if !q2DenseGlobalRankPrepExactDistinctRanksEqual(oneShot, adaptive) {
+				t.Fatalf("one-shot rank prep differs from adaptive policy")
+			}
+			strategy := columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(fixture, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+				return &part.Distinct
+			})
+			if strategy == columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash && q2DenseGlobalRankPrepExactDistinctRanksEqual(oneShot, current) {
+				t.Fatalf("one-shot rank prep used current-map ranks for adaptive sharded shape %s", shape.name)
+			}
+		})
+	}
+}
+
 // Dense q2 distinct ranks are reducer-local equality IDs, not externally visible
 // lexical order. This verifies the q2-visible result invariant after rank renumbering.
 func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankRunEquivalence(t *testing.T) {
@@ -628,6 +663,27 @@ func assertQ2DenseGlobalRankPrepEquivalent(t *testing.T, baseline, prototype []c
 	if !reflect.DeepEqual(q2DenseGlobalRankPrepRankKeys(prototypeDistinctRanks.valueToRank), q2DenseGlobalRankPrepRankKeys(baselineDistinctRanks.valueToRank)) {
 		t.Fatalf("prototype distinct value set differs from baseline")
 	}
+}
+
+func q2DenseGlobalRankPrepExactDistinctRanksEqual(left, right []columnTypedColumnPhysicalQueryPart) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for partIdx := range left {
+		leftPart := left[partIdx].DenseGroupCountDistinct
+		rightPart := right[partIdx].DenseGroupCountDistinct
+		if leftPart == nil || rightPart == nil {
+			return leftPart == rightPart
+		}
+		if leftPart.Distinct.GlobalCardinality != rightPart.Distinct.GlobalCardinality ||
+			leftPart.Distinct.GlobalCardinalityOK != rightPart.Distinct.GlobalCardinalityOK ||
+			leftPart.Distinct.GlobalEmptyRank != rightPart.Distinct.GlobalEmptyRank ||
+			leftPart.Distinct.GlobalEmptyRankOK != rightPart.Distinct.GlobalEmptyRankOK ||
+			!reflect.DeepEqual(leftPart.Distinct.GlobalLocalRanks, rightPart.Distinct.GlobalLocalRanks) {
+			return false
+		}
+	}
+	return true
 }
 
 type q2DenseGlobalRankPrepRankInvariant struct {
