@@ -281,11 +281,11 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 	if err := validateCommittedID(id); err != nil {
 		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), raftentry.ErrorMalformedEntryV1, err)
 	}
-	if err := f.checkCommittedOrder(id); err != nil {
-		code, _ := ErrorCodeOf(err)
-		return reject(commandDigest(entry.Bytes, f.decodeOptions(entry, id)), code, err)
-	}
 	digest := commandDigest(entry.Bytes, f.decodeOptions(entry, id))
+	if err := f.checkCommittedOrder(id, digest); err != nil {
+		code, _ := ErrorCodeOf(err)
+		return reject(digest, code, err)
+	}
 	if err := f.requireStoredResultForLocalCoverageGap(id, digest); err != nil {
 		code, _ := ErrorCodeOf(err)
 		return reject(digest, code, err)
@@ -336,7 +336,7 @@ func (f *FSM) decodeOptions(entry CommittedEntryV1, id raftentry.ApplyEntryID) r
 	}
 }
 
-func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
+func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID, digest raftentry.CommandDigestV1) error {
 	record, ok, err := f.lastAppliedProgressRecord()
 	if err != nil {
 		return err
@@ -360,7 +360,30 @@ func (f *FSM) checkCommittedOrder(id raftentry.ApplyEntryID) error {
 	}
 	last := record.EntryID
 	if id.Index < last.Index {
-		return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is below last applied %d", id.Index, last.Index)
+		stored, ok, err := f.results.LookupApplyResult(id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return codedError(raftentry.ErrorRejectedConflictV1, "apply entry index %d is below last applied %d and is not a durable exact replay", id.Index, last.Index)
+		}
+		if stored.CommandDigest != digest {
+			return codedError(raftentry.ErrorRejectedConflictV1, "replayed apply entry digest conflicts at %d/%d", id.Term, id.Index)
+		}
+		progress, ok, err := f.progress.LookupApplyProgress(id)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing durable progress for replayed apply entry %d/%d below last applied %d/%d", id.Term, id.Index, last.Term, last.Index)
+		}
+		if err := validateApplyProgressCoverage(f.db, progress); err != nil {
+			return err
+		}
+		if progress.CommandDigest != digest {
+			return codedError(raftentry.ErrorRejectedConflictV1, "replayed apply progress digest conflicts at %d/%d", id.Term, id.Index)
+		}
+		return nil
 	}
 	if id.Index == last.Index {
 		if id.Term != last.Term {

@@ -375,8 +375,9 @@ func mapHashicorpRaftApplyError(err error) error {
 		return errors.Join(ErrCommitAmbiguous, err)
 	case errors.Is(err, hraft.ErrNotLeader), errors.Is(err, hraft.ErrLeadershipTransferInProgress):
 		return errors.Join(ErrNotLeader, err)
-	case errors.Is(err, hraft.ErrLeadershipLost),
-		errors.Is(err, hraft.ErrAbortedByRestore),
+	case errors.Is(err, hraft.ErrLeadershipLost):
+		return errors.Join(ErrCommitAmbiguous, err)
+	case errors.Is(err, hraft.ErrAbortedByRestore),
 		errors.Is(err, hraft.ErrRaftShutdown),
 		errors.Is(err, hraft.ErrEnqueueTimeout):
 		return errors.Join(ErrAdmissionUnavailable, err)

@@ -20,6 +20,16 @@ func TestHashicorpRaftApplyTimeoutIsCommitAmbiguous(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftLeadershipLostIsCommitAmbiguous(t *testing.T) {
+	err := mapHashicorpRaftApplyError(hraft.ErrLeadershipLost)
+	if !errors.Is(err, ErrCommitAmbiguous) {
+		t.Fatalf("mapHashicorpRaftApplyError=%v want ErrCommitAmbiguous", err)
+	}
+	if errors.Is(err, ErrAdmissionUnavailable) {
+		t.Fatalf("mapHashicorpRaftApplyError=%v should not be ErrAdmissionUnavailable", err)
+	}
+}
+
 func TestHashicorpRaftConfigSuppressesSnapshots(t *testing.T) {
 	src := hraft.DefaultConfig()
 	src.SnapshotInterval = time.Millisecond
