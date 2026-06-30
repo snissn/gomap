@@ -299,8 +299,8 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 		t.Fatalf("shared did ranks part0=%d part1=%d want equal", shared0, shared1)
 	}
 	for label, rank := range map[string]uint32{"did:a": distinct0.GlobalLocalRanks[0], "did:b": distinct1.GlobalLocalRanks[0], "did:shared": shared0, "empty": distinct0.GlobalEmptyRank} {
-		if rank >= 4 {
-			t.Fatalf("%s rank=%d outside cardinality 4", label, rank)
+		if rank >= uint32(expectedDistinctGlobalRanks) {
+			t.Fatalf("%s rank=%d outside cardinality %d", label, rank, expectedDistinctGlobalRanks)
 		}
 	}
 }
@@ -338,6 +338,13 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardRankRefsParallelMatchesSerial(
 	}
 	if !reflect.DeepEqual(parallelRefs, serialRefs) {
 		t.Fatalf("parallel refs mismatch\nserial=%v\nparallel=%v", serialRefs, parallelRefs)
+	}
+	for shardIdx, refs := range parallelRefs {
+		for refIdx := 1; refIdx < len(refs); refIdx++ {
+			if refs[refIdx] < refs[refIdx-1] {
+				t.Fatalf("shard %d refs not monotonic at %d: %d < %d", shardIdx, refIdx, refs[refIdx], refs[refIdx-1])
+			}
+		}
 	}
 	wantRanges := []columnTypedColumnDenseGroupCountDistinctShardRankRefWorkerRange{
 		{start: 0, end: 2},
