@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"runtime"
 	"strconv"
@@ -303,21 +304,34 @@ func TestRawSpanNativeRouteStatsUnsupportedRowsHaveNamedFallbacks(t *testing.T) 
 	})
 }
 
-func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackPreservesBarrierReason(t *testing.T) {
-	d := openExplicitRawSpanNativeRouteTestDB(t)
+func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackUsesSpanNativeApply(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                   dir,
+		FlushAdmissionPolicy:  FlushAdmissionPolicyExplicit,
+		FlushApplySpanNative:  true,
+		FlushApplyConcurrency: 4,
+		FlushApplyMinEntries:  1,
+		FlushApplyMinSpans:    1,
+		FlushApplyMinBytes:    1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	key := []byte("checkpoint-command-wal-piggyback")
+	value := []byte("v")
 	batch := d.NewPhysicalBatch()
 	b, ok := batch.(*Batch)
 	if !ok {
 		t.Fatalf("NewPhysicalBatch type=%T, want *Batch", batch)
 	}
-	if err := b.Set([]byte("checkpoint-command-wal-piggyback"), []byte("v")); err != nil {
+	if err := b.Set(key, value); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	b.SetFlushApplySpanNativeFallback(FlushSpanRunFallbackCommandWALBarrier)
 	if err := b.SetCommandWALPublish(1, []CommandWALLSNRange{{First: 1, Last: 1}}); err != nil {
 		t.Fatalf("SetCommandWALPublish: %v", err)
 	}
-	if err := b.Write(); err != nil {
+	if err := b.WriteSync(); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if err := b.Close(); err != nil {
@@ -325,17 +339,41 @@ func TestRawSpanNativeRouteStatsCommandWALCheckpointPiggybackPreservesBarrierRea
 	}
 
 	stats := d.Stats()
-	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.command_wal_barrier.count_total"); got != 1 {
-		t.Fatalf("point_put command_wal_barrier count=%d, want 1 for raw route stats", got)
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.used_ops_total"); got == 0 {
+		t.Fatalf("point_put used_ops_total=0, want command WAL publish piggyback to use span-native apply")
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.command_wal_barrier.count_total"); got != 0 {
+		t.Fatalf("point_put command_wal_barrier count=%d, want 0 for span-native command WAL publish", got)
 	}
 	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.span_native_not_implemented.count_total"); got != 0 {
 		t.Fatalf("point_put span_native_not_implemented count=%d, want 0 for explicit command WAL barrier", got)
 	}
-	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.command_wal_barrier.count_total"); got != 1 {
-		t.Fatalf("raw command_wal_barrier count=%d, want 1", got)
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.command_wal_barrier.count_total"); got != 0 {
+		t.Fatalf("raw command_wal_barrier count=%d, want 0", got)
 	}
 	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.fallback.reason.span_native_not_implemented.count_total"); got != 0 {
 		t.Fatalf("raw span_native_not_implemented count=%d, want 0", got)
+	}
+	if got := d.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopened, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got := reopened.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("reopened AppliedCommandLSN=%d, want 1", got)
+	}
+	got, err := reopened.Get(key)
+	if err != nil {
+		t.Fatalf("reopened Get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("reopened value=%q want %q", got, value)
 	}
 }
 
