@@ -11,11 +11,14 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 const (
-	columnTypedColumnDenseGroupCountDistinctMaxBitsetWords      = 2 << 20
-	columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts = 32
+	columnTypedColumnDenseGroupCountDistinctMaxBitsetWords       = 2 << 20
+	columnTypedColumnDenseGroupCountDistinctSortedMergeMaxParts  = 32
+	columnTypedColumnDenseGroupCountDistinctShardedRankMaxShards = 64
 )
 
 const (
@@ -1254,6 +1257,46 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostic
 	return err
 }
 
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
+	phaseStart := time.Now()
+	groupDict, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Group
+	})
+	if prepareDiagnostics != nil {
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2GroupRankNanos += elapsed
+		prepareDiagnostics.Q2DenseGroupGlobalRankNanos += elapsed
+	}
+	if err != nil {
+		return err
+	}
+	phaseStart = time.Now()
+	distinctRanks, err := columnTypedColumnDenseGroupCountDistinctShardedGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
+	if prepareDiagnostics != nil {
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2DistinctRankNanos += elapsed
+		prepareDiagnostics.Q2DenseDistinctGlobalRankNanos += elapsed
+	}
+	if err != nil {
+		return err
+	}
+	phaseStart = time.Now()
+	workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(parts))
+	if workers < 2 {
+		err = prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedParts(parts, groupDict, groupRanks, distinctRanks)
+	} else {
+		err = prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPartsParallel(parts, groupDict, groupRanks, distinctRanks, workers)
+	}
+	if prepareDiagnostics != nil {
+		elapsed := time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2LocalRankNanos += elapsed
+		prepareDiagnostics.Q2DensePartLocalRankNanos += elapsed
+	}
+	return err
+}
+
 type columnTypedColumnDenseGroupCountDistinctColumnPrep func(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobal(parts []columnTypedColumnPhysicalQueryPart, prepareColumn columnTypedColumnDenseGroupCountDistinctColumnPrep) error {
@@ -1327,6 +1370,285 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsParallel(parts
 		}
 	}
 	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedParts(parts []columnTypedColumnPhysicalQueryPart, groupDict []string, groupRanks map[string]uint32, distinctRanks *columnTypedColumnDenseGroupCountDistinctShardedRanks) error {
+	for partIdx := range parts {
+		if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPart(parts, partIdx, groupDict, groupRanks, distinctRanks); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPart(parts []columnTypedColumnPhysicalQueryPart, partIdx int, groupDict []string, groupRanks map[string]uint32, distinctRanks *columnTypedColumnDenseGroupCountDistinctShardedRanks) error {
+	part := parts[partIdx].DenseGroupCountDistinct
+	if part == nil {
+		return fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
+	}
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanks(&part.Group, groupDict, len(groupDict), groupRanks); err != nil {
+		return fmt.Errorf("collections: dense grouped count-distinct group part %d: %w", partIdx, err)
+	}
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanksSharded(&part.Distinct, distinctRanks); err != nil {
+		return fmt.Errorf("collections: dense grouped count-distinct distinct part %d: %w", partIdx, err)
+	}
+	return nil
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPartsParallel(parts []columnTypedColumnPhysicalQueryPart, groupDict []string, groupRanks map[string]uint32, distinctRanks *columnTypedColumnDenseGroupCountDistinctShardedRanks, workers int) error {
+	errs := make([]error, len(parts))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for workerIdx := 0; workerIdx < workers; workerIdx++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for partIdx := range jobs {
+				errs[partIdx] = prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPart(parts, partIdx, groupDict, groupRanks, distinctRanks)
+			}
+		}()
+	}
+	for partIdx := range parts {
+		jobs <- partIdx
+	}
+	close(jobs)
+	wg.Wait()
+	for partIdx := range errs {
+		if errs[partIdx] != nil {
+			return errs[partIdx]
+		}
+	}
+	return nil
+}
+
+type columnTypedColumnDenseGroupCountDistinctShardedRanks struct {
+	shards      []map[string]uint32
+	offsets     []uint32
+	fallback    map[string]uint32
+	cardinality int
+}
+
+func (r *columnTypedColumnDenseGroupCountDistinctShardedRanks) lookup(value string) (uint32, bool) {
+	if r == nil {
+		return 0, false
+	}
+	if r.fallback != nil {
+		rank, ok := r.fallback[value]
+		return rank, ok
+	}
+	if len(r.shards) == 0 {
+		return 0, false
+	}
+	shardIdx := int(columnTypedColumnDenseGroupCountDistinctStableRankHash(value) & uint64(len(r.shards)-1))
+	localRank, ok := r.shards[shardIdx][value]
+	if !ok {
+		return 0, false
+	}
+	return r.offsets[shardIdx] + localRank, true
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanksSharded(column *columnTypedColumnDenseStringCodeColumn, ranks *columnTypedColumnDenseGroupCountDistinctShardedRanks) error {
+	if ranks == nil {
+		return errors.New("missing sharded global ranks")
+	}
+	localRanks := make([]uint32, len(column.Dictionary))
+	for localCode, value := range column.Dictionary {
+		rank, ok := ranks.lookup(value)
+		if !ok {
+			return fmt.Errorf("local dictionary value %q missing from global dictionary", value)
+		}
+		localRanks[localCode] = rank
+	}
+	emptyRank, emptyOK := ranks.lookup("")
+	column.GlobalDictionary = nil
+	column.GlobalCardinality = ranks.cardinality
+	column.GlobalCardinalityOK = true
+	column.GlobalLocalRanks = localRanks
+	column.GlobalEmptyRank = emptyRank
+	column.GlobalEmptyRankOK = emptyOK
+	return nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctShardedGlobalRanks(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) (*columnTypedColumnDenseGroupCountDistinctShardedRanks, error) {
+	capacity, err := columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts, selectColumn)
+	if err != nil {
+		return nil, err
+	}
+	workers := columnTypedColumnPhysicalQueryPartDecodeWorkers(len(parts))
+	if workers < 1 {
+		workers = 1
+	}
+	if columnTypedColumnDenseGroupCountDistinctUseMapRankFallback(parts, selectColumn) {
+		ranks, cardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanksMap(parts, selectColumn, capacity)
+		if err != nil {
+			return nil, err
+		}
+		return &columnTypedColumnDenseGroupCountDistinctShardedRanks{
+			fallback:    ranks,
+			cardinality: cardinality,
+		}, nil
+	}
+	shardCount := columnTypedColumnDenseGroupCountDistinctShardedRankShardCount(capacity, workers)
+	shardValues := make([][]string, shardCount)
+	shardCapacity := max(1, capacity/shardCount)
+	for shardIdx := range shardValues {
+		shardValues[shardIdx] = make([]string, 0, shardCapacity)
+	}
+	includeEmpty := false
+	for partIdx := range parts {
+		part := parts[partIdx].DenseGroupCountDistinct
+		if part == nil {
+			return nil, fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
+		}
+		column := selectColumn(part)
+		if column == nil {
+			return nil, fmt.Errorf("collections: dense grouped count-distinct missing selected column for part %d", partIdx)
+		}
+		for _, value := range column.Dictionary {
+			shardIdx := int(columnTypedColumnDenseGroupCountDistinctStableRankHash(value) & uint64(shardCount-1))
+			shardValues[shardIdx] = append(shardValues[shardIdx], value)
+		}
+		if !includeEmpty {
+			for _, valid := range column.Valid {
+				if !valid {
+					includeEmpty = true
+					break
+				}
+			}
+		}
+	}
+	if includeEmpty {
+		shardIdx := int(columnTypedColumnDenseGroupCountDistinctStableRankHash("") & uint64(shardCount-1))
+		shardValues[shardIdx] = append(shardValues[shardIdx], "")
+	}
+
+	shards, err := columnTypedColumnDenseGroupCountDistinctBuildShardedRanks(shardValues, workers)
+	if err != nil {
+		return nil, err
+	}
+	offsets := make([]uint32, len(shards))
+	cardinality := 0
+	for shardIdx, shard := range shards {
+		if len(shard) == 0 {
+			continue
+		}
+		if cardinality > int(^uint32(0)) {
+			return nil, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
+		}
+		offsets[shardIdx] = uint32(cardinality)
+		if len(shard) > int(^uint32(0))-cardinality+1 {
+			return nil, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
+		}
+		cardinality += len(shard)
+	}
+	return &columnTypedColumnDenseGroupCountDistinctShardedRanks{
+		shards:      shards,
+		offsets:     offsets,
+		cardinality: cardinality,
+	}, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctUseMapRankFallback(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) bool {
+	const (
+		sampleParts               = 4
+		minSampleValues           = 2048
+		maxUniqueToLocalNumerator = 2
+		uniqueToLocalDenominator  = 5
+	)
+	values := make(map[string]struct{}, minSampleValues/2)
+	localValues := 0
+	limit := min(len(parts), sampleParts)
+	for partIdx := 0; partIdx < limit; partIdx++ {
+		part := parts[partIdx].DenseGroupCountDistinct
+		if part == nil {
+			return false
+		}
+		column := selectColumn(part)
+		if column == nil {
+			return false
+		}
+		for _, value := range column.Dictionary {
+			values[value] = struct{}{}
+			localValues++
+		}
+		for _, valid := range column.Valid {
+			if !valid {
+				values[""] = struct{}{}
+				localValues++
+				break
+			}
+		}
+	}
+	if localValues < minSampleValues {
+		return false
+	}
+	return len(values)*uniqueToLocalDenominator <= localValues*maxUniqueToLocalNumerator
+}
+
+func columnTypedColumnDenseGroupCountDistinctBuildShardedRanks(shardValues [][]string, workers int) ([]map[string]uint32, error) {
+	shards := make([]map[string]uint32, len(shardValues))
+	errs := make([]error, len(shardValues))
+	if workers < 2 || len(shardValues) < 2 {
+		for shardIdx := range shardValues {
+			shards[shardIdx], errs[shardIdx] = columnTypedColumnDenseGroupCountDistinctBuildShardRanks(shardValues[shardIdx])
+			if errs[shardIdx] != nil {
+				return nil, errs[shardIdx]
+			}
+		}
+		return shards, nil
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for workerIdx := 0; workerIdx < workers; workerIdx++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for shardIdx := range jobs {
+				shards[shardIdx], errs[shardIdx] = columnTypedColumnDenseGroupCountDistinctBuildShardRanks(shardValues[shardIdx])
+			}
+		}()
+	}
+	for shardIdx := range shardValues {
+		jobs <- shardIdx
+	}
+	close(jobs)
+	wg.Wait()
+	for shardIdx := range errs {
+		if errs[shardIdx] != nil {
+			return nil, errs[shardIdx]
+		}
+	}
+	return shards, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctBuildShardRanks(values []string) (map[string]uint32, error) {
+	ranks := make(map[string]uint32, columnTypedColumnDenseGroupCountDistinctRankMapCapacity(len(values)))
+	for _, value := range values {
+		if _, ok := ranks[value]; ok {
+			continue
+		}
+		if uint64(len(ranks)) > uint64(^uint32(0)) {
+			return nil, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
+		}
+		ranks[value] = uint32(len(ranks))
+	}
+	return ranks, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctShardedRankShardCount(capacity, workers int) int {
+	if capacity <= 1 || workers <= 1 {
+		return 1
+	}
+	shards := 1
+	target := workers * 4
+	for shards < target && shards < columnTypedColumnDenseGroupCountDistinctShardedRankMaxShards {
+		shards <<= 1
+	}
+	return shards
+}
+
+func columnTypedColumnDenseGroupCountDistinctStableRankHash(value string) uint64 {
+	return xxhash.Sum64String(value)
 }
 
 func columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) ([]string, map[string]uint32, error) {
