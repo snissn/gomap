@@ -126,6 +126,46 @@ func TestSnapshotInstallRejectsManifestMismatchBeforeTargetMutation(t *testing.T
 	}
 }
 
+func TestSnapshotInstallRejectsDirtyTargetBeforeMutation(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	entries := mixedUserEntries(t, 34)
+	if _, err := h.Commit(entries...); err != nil {
+		t.Fatalf("Commit mixed entries: %v", err)
+	}
+	if _, err := h.ApplyCommittedEntriesToNode("node-a", entries[:2]...); err != nil {
+		t.Fatalf("apply source prefix: %v", err)
+	}
+	source := mustNode(t, h, "node-a")
+	manifest, err := source.fsm.ExportSnapshotManifestV1(raftfsm.SnapshotManifestExportOptionsV1{CreatedAt: time.Unix(1712346003, 0).UTC()})
+	if err != nil {
+		t.Fatalf("ExportSnapshotManifestV1: %v", err)
+	}
+
+	target := mustNode(t, h, "node-b")
+	if _, err := collections.NewCollectionManager(target.DB()).CreateCollection(&collections.CollectionMeta{Name: "localdirty"}); err != nil {
+		t.Fatalf("dirty target CreateCollection: %v", err)
+	}
+	beforeLSN := target.DB().State().AppliedCommandLSN
+	if beforeLSN == 0 {
+		t.Fatal("dirty target AppliedCommandLSN=0, want local coverage")
+	}
+
+	install, err := h.InstallSnapshotPrefixToNodeV1("node-b", manifest)
+	if !errors.Is(err, ErrCommittedLogConflict) || install.Installed {
+		t.Fatalf("InstallSnapshotPrefixToNodeV1 dirty target err=%v evidence=%+v, want conflict without install", err, install)
+	}
+	assertNoLastApplied(t, h, "node-b")
+	if got := target.DB().State().AppliedCommandLSN; got != beforeLSN {
+		t.Fatalf("dirty target AppliedCommandLSN after rejected install=%d, want unchanged %d", got, beforeLSN)
+	}
+	if _, openErr := collections.NewCollectionManager(target.DB()).OpenCollection("localdirty"); openErr != nil {
+		t.Fatalf("localdirty collection missing after rejected install: %v", openErr)
+	}
+	assertCollectionMissing(t, h, "node-b", "users")
+}
+
 func TestSnapshotInstallRejectsUnsafeTargetAndTailConflict(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()

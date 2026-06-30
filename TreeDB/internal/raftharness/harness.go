@@ -331,9 +331,9 @@ func (h *Harness) InstallSnapshotPrefixToNodeV1(id raftcluster.NodeID, manifest 
 		h.mu.Unlock()
 		return evidence, fmt.Errorf("%w: %s", ErrNodeNotFound, id)
 	}
-	if _, ok := node.LastApplied(); ok {
+	if err := rejectNonEmptySnapshotInstallTarget(node); err != nil {
 		h.mu.Unlock()
-		return evidence, fmt.Errorf("%w: node %s already has local applied progress", ErrCommittedLogConflict, id)
+		return evidence, err
 	}
 	if manifest.LastIncludedIndex == 0 || manifest.LastIncludedIndex > uint64(len(h.committed)) {
 		h.mu.Unlock()
@@ -405,6 +405,19 @@ func (h *Harness) ReplaySnapshotTailToNodeV1(id raftcluster.NodeID, manifest raf
 		return nil, err
 	}
 	return node.ApplyCommittedEntriesV1(tail...)
+}
+
+func rejectNonEmptySnapshotInstallTarget(node *Node) error {
+	if node == nil || node.db == nil || node.closed {
+		return fmt.Errorf("%w: closed node", ErrNodeClosed)
+	}
+	if _, ok := node.LastApplied(); ok {
+		return fmt.Errorf("%w: node %s already has local applied progress", ErrCommittedLogConflict, node.id)
+	}
+	if lsn := node.db.State().AppliedCommandLSN; lsn != 0 {
+		return fmt.Errorf("%w: node %s has local AppliedCommandLSN coverage %d without apply progress", ErrCommittedLogConflict, node.id, lsn)
+	}
+	return nil
 }
 
 func (h *Harness) catchUpNodeThrough(id raftcluster.NodeID, maxIndex uint64) ([]raftentry.ApplyResultV1, error) {
