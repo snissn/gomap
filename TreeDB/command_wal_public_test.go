@@ -358,6 +358,78 @@ func publicCommandWALFrameCount(t *testing.T, db *DB) uint64 {
 	return frames
 }
 
+func publicStatUint64(t *testing.T, db *DB, key string) uint64 {
+	t.Helper()
+	raw := db.Stats()[key]
+	got, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("parse %s=%q: %v", key, raw, err)
+	}
+	return got
+}
+
+func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	if err := b.Set([]byte("plain-set"), []byte("one")); err != nil {
+		_ = b.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.SetView([]byte("view-set"), []byte("two")); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetView: %v", err)
+	}
+	if err := b.Delete([]byte("plain-delete")); err != nil {
+		_ = b.Close()
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := b.DeleteView([]byte("view-delete")); err != nil {
+		_ = b.Close()
+		t.Fatalf("DeleteView: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	assertPublicCommandWALFrames(t, db, 1)
+
+	tests := []struct {
+		key  string
+		want uint64
+	}{
+		{"treedb.command_wal.public_batch.set.calls_total", 1},
+		{"treedb.command_wal.public_batch.set.bytes_total", uint64(len("plain-set") + len("one"))},
+		{"treedb.command_wal.public_batch.set_view.calls_total", 1},
+		{"treedb.command_wal.public_batch.set_view.bytes_total", uint64(len("view-set") + len("two"))},
+		{"treedb.command_wal.public_batch.delete.calls_total", 1},
+		{"treedb.command_wal.public_batch.delete.bytes_total", uint64(len("plain-delete"))},
+		{"treedb.command_wal.public_batch.delete_view.calls_total", 1},
+		{"treedb.command_wal.public_batch.delete_view.bytes_total", uint64(len("view-delete"))},
+	}
+	for _, tt := range tests {
+		if got := publicStatUint64(t, db, tt.key); got != tt.want {
+			t.Fatalf("%s=%d want %d", tt.key, got, tt.want)
+		}
+	}
+}
+
 func TestPublicCommandWALLiveCountersDoNotRequireStatsScan(t *testing.T) {
 	db, err := Open(Options{
 		Dir:               t.TempDir(),
