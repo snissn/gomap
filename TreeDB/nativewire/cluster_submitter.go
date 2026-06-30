@@ -134,7 +134,7 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	var routed bool
 	if _, ok := s.clusterSubmitter.(ClusterRouteProvider); ok {
 		var err error
-		routeReq, err = clusterMutationRouteRequest(cmd)
+		routeReq, err = clusterMutationRouteRequest(cmd, s.limits)
 		if err != nil {
 			return nil, err
 		}
@@ -328,7 +328,7 @@ func unsupportedClusterMutationError(cmd iwire.ValidatedCommand, row raftentry.C
 	return protocolError(iwire.ErrUnsupportedFeature, "cluster submitter does not support %s: %s", name, reason)
 }
 
-func clusterMutationRouteRequest(cmd iwire.ValidatedCommand) (ClusterRouteRequest, error) {
+func clusterMutationRouteRequest(cmd iwire.ValidatedCommand, limits iwire.Limits) (ClusterRouteRequest, error) {
 	name := ""
 	if cmd.Schema != nil {
 		name = cmd.Schema.Name
@@ -345,7 +345,7 @@ func clusterMutationRouteRequest(cmd iwire.ValidatedCommand) (ClusterRouteReques
 		CommandName: name,
 		Shape:       ClusterRouteShapeCollection,
 	}
-	token, ok, err := clusterMutationDocumentToken(cmd)
+	token, ok, err := clusterMutationDocumentToken(cmd, limits)
 	if err != nil {
 		return ClusterRouteRequest{}, err
 	}
@@ -357,7 +357,7 @@ func clusterMutationRouteRequest(cmd iwire.ValidatedCommand) (ClusterRouteReques
 	return req, nil
 }
 
-func clusterMutationDocumentToken(cmd iwire.ValidatedCommand) (uint64, bool, error) {
+func clusterMutationDocumentToken(cmd iwire.ValidatedCommand, limits iwire.Limits) (uint64, bool, error) {
 	switch cmd.Header.ID {
 	case iwire.CommandInsertBatch, iwire.CommandReplaceBatch, iwire.CommandDeleteBatch, iwire.CommandUpdateBSONSet:
 	default:
@@ -367,7 +367,7 @@ func clusterMutationDocumentToken(cmd iwire.ValidatedCommand) (uint64, bool, err
 	if err != nil {
 		return 0, false, err
 	}
-	ids, err := iwire.DecodeByteVectorItems(raw, iwire.Limits{})
+	ids, err := iwire.DecodeByteVectorItems(raw, limits)
 	if err != nil {
 		return 0, false, err
 	}

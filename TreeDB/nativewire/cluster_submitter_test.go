@@ -702,6 +702,28 @@ func TestClusterRoutePreflightTokenPlacementAcceptsSingleID(t *testing.T) {
 	assertNativeClusterTokenRouteMetadata(t, calls[0], raftplacement.PlacementModeTokenV1, "p0", raftplacement.DocumentIDTokenV1([]byte("u1")))
 }
 
+func TestClusterMutationDocumentTokenHonorsDecodeLimits(t *testing.T) {
+	id := []byte("configured-limit-id")
+	rawIDs := iwire.AppendByteVector(nil, id)
+	cmd := iwire.ValidatedCommand{
+		Header: iwire.CommandHeader{ID: iwire.CommandInsertBatch},
+		Known: []iwire.Section{
+			{ID: iwire.SectionDocumentIDs, Bytes: rawIDs},
+		},
+	}
+
+	if _, _, err := clusterMutationDocumentToken(cmd, iwire.Limits{MaxByteVectorBytes: uint64(len(id) - 1)}); codeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("clusterMutationDocumentToken low limit err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	token, ok, err := clusterMutationDocumentToken(cmd, iwire.Limits{MaxByteVectorBytes: uint64(len(id))})
+	if err != nil {
+		t.Fatalf("clusterMutationDocumentToken configured limit: %v", err)
+	}
+	if !ok || token != raftplacement.DocumentIDTokenV1(id) {
+		t.Fatalf("token ok/token=%v/%d want true/%d", ok, token, raftplacement.DocumentIDTokenV1(id))
+	}
+}
+
 func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.T) {
 	tests := []struct {
 		name    string
