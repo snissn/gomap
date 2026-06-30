@@ -30,8 +30,9 @@ func TestReadIndexProviderReturnsLatestCommittedProofWithoutApplying(t *testing.
 	if err != nil {
 		t.Fatalf("ReadIndex: %v proof=%+v", err, proof)
 	}
-	if proof.NodeID != "node-b" || proof.GroupID != "default" || proof.Term != 31 || proof.Index != 2 || !proof.HasQuorum {
-		t.Fatalf("proof=%+v, want node-b/default 31/2 quorum", proof)
+	if proof.NodeID != "node-b" || proof.GroupID != "default" || proof.Term != 31 || proof.Index != 2 ||
+		!proof.HasQuorum || proof.EvidenceKind != raftcluster.ReadIndexEvidenceTestHarness {
+		t.Fatalf("proof=%+v, want node-b/default 31/2 quorum test_harness evidence", proof)
 	}
 	assertNoLastApplied(t, h, "node-b")
 	assertCollectionMissing(t, h, "node-b", "users")
@@ -47,8 +48,9 @@ func TestReadIndexProviderAllowsUnconstrainedTargetFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadIndex unconstrained target: %v proof=%+v", err, proof)
 	}
-	if proof.NodeID != "node-a" || proof.GroupID != "default" || proof.Term != 32 || proof.Index != 1 || !proof.HasQuorum {
-		t.Fatalf("proof=%+v, want node-a/default 32/1 quorum", proof)
+	if proof.NodeID != "node-a" || proof.GroupID != "default" || proof.Term != 32 || proof.Index != 1 ||
+		!proof.HasQuorum || proof.EvidenceKind != raftcluster.ReadIndexEvidenceTestHarness {
+		t.Fatalf("proof=%+v, want node-a/default 32/1 quorum test_harness evidence", proof)
 	}
 }
 
@@ -193,6 +195,9 @@ func TestReadIndexProviderComposesWithReadBarrierCatchUp(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("ReadIndex: %v proof=%+v", err, proof)
+	}
+	if proof.EvidenceKind != raftcluster.ReadIndexEvidenceTestHarness {
+		t.Fatalf("proof evidence=%s want test_harness", proof.EvidenceKind)
 	}
 	assertNoLastApplied(t, h, "node-c")
 

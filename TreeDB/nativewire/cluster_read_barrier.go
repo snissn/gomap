@@ -16,8 +16,9 @@ type AppliedIndexReadBarrierProvider interface {
 
 // AppliedIndexReadCoordinator bridges nativewire leader_read requests to the
 // raftcluster applied-index read barrier foundation. Linearizable reads require
-// a configured read-index provider and then wait for local apply through the
-// proven read index. Lease reads remain unsupported until a lease proof exists.
+// a configured read-index provider with production evidence and then wait for
+// local apply through the proven read index. Lease reads remain unsupported
+// until a lease proof exists.
 type AppliedIndexReadCoordinator struct {
 	BarrierProvider   AppliedIndexReadBarrierProvider
 	Waiter            raftcluster.AppliedIndexReadBarrierWaiter

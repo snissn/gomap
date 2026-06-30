@@ -132,8 +132,11 @@ The package exposes a small read-index contract for future Raft adapters:
 
 - `ReadIndexProvider` obtains a quorum-backed `ReadIndexProof`;
 - `ReadIndexBarrier` optionally pins the proof to an expected node/group;
-- `ReadIndexProof` must include node ID, group ID, a non-zero read index, and
-  `HasQuorum=true`;
+- `ReadIndexProof` must include node ID, group ID, a non-zero read index,
+  `HasQuorum=true`, and explicit evidence provenance;
+- production linearizable reads accept only `ReadIndexEvidenceProduction`,
+  which a real Raft adapter may set only after a read-index or equivalent
+  production quorum proof;
 - linearizable nativewire reads must convert the proof into an
   `AppliedIndexReadBarrier` and wait until the local node has applied through
   that index before reading local state.
@@ -145,7 +148,8 @@ leader transfer handling, lease reads, follower reads, or production routing.
 contract. It derives read-index proofs from an injected committed-entry log so
 tests can exercise nativewire read-index/read-barrier composition, but that
 evidence is not production quorum evidence and the provider does not apply
-entries by itself.
+entries by itself. Harness proofs are marked `ReadIndexEvidenceTestHarness` and
+must fail closed at nativewire's production `linearizable` read boundary.
 
 ## Recovery Status Boundary
 
