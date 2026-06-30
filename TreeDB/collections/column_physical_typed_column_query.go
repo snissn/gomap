@@ -1258,6 +1258,16 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostic
 }
 
 func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPolicyWithDiagnostics(parts, prepareDiagnostics, columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash)
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) error {
+	return prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPolicyWithDiagnostics(parts, prepareDiagnostics, columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	}))
+}
+
+func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedPolicyWithDiagnostics(parts []columnTypedColumnPhysicalQueryPart, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics, rankStrategy columnTypedColumnDenseGroupCountDistinctRankStrategy) error {
 	phaseStart := time.Now()
 	groupDict, groupRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalDictionary(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Group
@@ -1271,9 +1281,9 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDia
 		return err
 	}
 	phaseStart = time.Now()
-	distinctRanks, err := columnTypedColumnDenseGroupCountDistinctShardedGlobalRanks(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+	distinctRanks, err := columnTypedColumnDenseGroupCountDistinctGlobalRankLookup(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
 		return &part.Distinct
-	})
+	}, rankStrategy)
 	if prepareDiagnostics != nil {
 		elapsed := time.Since(phaseStart).Nanoseconds()
 		prepareDiagnostics.Q2DistinctRankNanos += elapsed
@@ -1296,6 +1306,13 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDia
 	}
 	return err
 }
+
+type columnTypedColumnDenseGroupCountDistinctRankStrategy uint8
+
+const (
+	columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap columnTypedColumnDenseGroupCountDistinctRankStrategy = iota
+	columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
+)
 
 type columnTypedColumnDenseGroupCountDistinctColumnPrep func(column *columnTypedColumnDenseStringCodeColumn, globalDictionary []string, cardinality int, ranks map[string]uint32) error
 
@@ -1469,7 +1486,7 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalColumnRanksSharded(col
 	return nil
 }
 
-func columnTypedColumnDenseGroupCountDistinctShardedGlobalRanks(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) (*columnTypedColumnDenseGroupCountDistinctShardedRanks, error) {
+func columnTypedColumnDenseGroupCountDistinctGlobalRankLookup(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn, strategy columnTypedColumnDenseGroupCountDistinctRankStrategy) (*columnTypedColumnDenseGroupCountDistinctShardedRanks, error) {
 	capacity, err := columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts, selectColumn)
 	if err != nil {
 		return nil, err
@@ -1478,7 +1495,7 @@ func columnTypedColumnDenseGroupCountDistinctShardedGlobalRanks(parts []columnTy
 	if workers < 1 {
 		workers = 1
 	}
-	if columnTypedColumnDenseGroupCountDistinctUseMapRankFallback(parts, selectColumn) {
+	if strategy == columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap {
 		ranks, cardinality, err := columnTypedColumnDenseGroupCountDistinctGlobalRanksMap(parts, selectColumn, capacity)
 		if err != nil {
 			return nil, err
@@ -1548,7 +1565,7 @@ func columnTypedColumnDenseGroupCountDistinctShardedGlobalRanks(parts []columnTy
 	}, nil
 }
 
-func columnTypedColumnDenseGroupCountDistinctUseMapRankFallback(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) bool {
+func columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts []columnTypedColumnPhysicalQueryPart, selectColumn func(*columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn) columnTypedColumnDenseGroupCountDistinctRankStrategy {
 	const (
 		sampleParts               = 4
 		minSampleValues           = 2048
@@ -1561,11 +1578,11 @@ func columnTypedColumnDenseGroupCountDistinctUseMapRankFallback(parts []columnTy
 	for partIdx := 0; partIdx < limit; partIdx++ {
 		part := parts[partIdx].DenseGroupCountDistinct
 		if part == nil {
-			return false
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
 		}
 		column := selectColumn(part)
 		if column == nil {
-			return false
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
 		}
 		for _, value := range column.Dictionary {
 			values[value] = struct{}{}
@@ -1580,9 +1597,12 @@ func columnTypedColumnDenseGroupCountDistinctUseMapRankFallback(parts []columnTy
 		}
 	}
 	if localValues < minSampleValues {
-		return false
+		return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
 	}
-	return len(values)*uniqueToLocalDenominator <= localValues*maxUniqueToLocalNumerator
+	if len(values)*uniqueToLocalDenominator <= localValues*maxUniqueToLocalNumerator {
+		return columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+	}
+	return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
 }
 
 func columnTypedColumnDenseGroupCountDistinctBuildShardedRanks(shardValues [][]string, workers int) ([]map[string]uint32, error) {

@@ -14,12 +14,16 @@ type q2DenseGlobalRankPrepVariant struct {
 
 var q2DenseGlobalRankPrepVariants = []q2DenseGlobalRankPrepVariant{
 	{
-		name:    "current_map_fallback",
+		name:    "current_map",
 		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics,
 	},
 	{
 		name:    "sharded_hash_rank",
 		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics,
+	},
+	{
+		name:    "adaptive",
+		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics,
 	},
 }
 
@@ -102,6 +106,36 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankPrepEquivalence(t *t
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankPrepPolicy(t *testing.T) {
+	for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			parts := newQ2DenseGlobalRankPrepParts(40, shape)
+			strategy := columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+				return &part.Distinct
+			})
+			want := columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
+			if shape.name == "shared_heavy" {
+				want = columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+			}
+			if strategy != want {
+				t.Fatalf("adaptive rank strategy=%v want %v", strategy, want)
+			}
+
+			baseline := cloneQ2DenseGlobalRankPrepParts(parts)
+			adaptive := cloneQ2DenseGlobalRankPrepParts(parts)
+			stats := q2DenseGlobalRankPrepStats(parts)
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(baseline, nil); err != nil {
+				t.Fatalf("prepare current map fallback: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(adaptive, nil); err != nil {
+				t.Fatalf("prepare adaptive rank: %v", err)
+			}
+			assertQ2DenseGlobalRankPrepParts(t, adaptive, stats)
+			assertQ2DenseGlobalRankPrepEquivalent(t, baseline, adaptive, stats)
+		})
+	}
+}
+
 // Dense q2 distinct ranks are reducer-local equality IDs, not externally visible
 // lexical order. This verifies the q2-visible result invariant after rank renumbering.
 func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankRunEquivalence(t *testing.T) {
@@ -149,6 +183,58 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedHashRankRunEquivalence(t *te
 	prototypeCounts := columnPhysicalJSONBenchQ2CountsP0(prototypeResult.Groups)
 	if !reflect.DeepEqual(prototypeCounts, baselineCounts) {
 		t.Fatalf("prototype counts=%v want current map fallback %v", prototypeCounts, baselineCounts)
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankRunEquivalence(t *testing.T) {
+	req := ColumnPhysicalQueryRequest{
+		Kind:           ColumnPhysicalQueryGroupCountAndDistinct,
+		GroupColumn:    "collection",
+		DistinctColumn: "did",
+	}
+	for _, shape := range q2DenseGlobalRankPrepDictionaryShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			fixture := newQ2DenseGlobalRankPrepParts(40, shape)
+			unsortQ2DenseGlobalRankPrepDictionaries(fixture)
+			populateQ2DenseGlobalRankPrepCodes(fixture, 512)
+			baseline := cloneQ2DenseGlobalRankPrepParts(fixture)
+			adaptive := cloneQ2DenseGlobalRankPrepParts(fixture)
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(baseline, nil); err != nil {
+				t.Fatalf("prepare current map fallback: %v", err)
+			}
+			if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics(adaptive, nil); err != nil {
+				t.Fatalf("prepare adaptive rank: %v", err)
+			}
+			baselineRunner := &columnTypedColumnPhysicalQueryRunner{
+				plan: columnTypedColumnPhysicalQueryPlan{
+					ProjectedColumns:        []string{"collection", "did"},
+					PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+					DenseGroupCountDistinct: true,
+				},
+				parts: baseline,
+			}
+			adaptiveRunner := &columnTypedColumnPhysicalQueryRunner{
+				plan: columnTypedColumnPhysicalQueryPlan{
+					ProjectedColumns:        []string{"collection", "did"},
+					PredicateDiagnostics:    newColumnPhysicalQueryPredicateDiagnosticPlan(req),
+					DenseGroupCountDistinct: true,
+				},
+				parts: adaptive,
+			}
+			baselineResult, err := baselineRunner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+			if err != nil {
+				t.Fatalf("run current map fallback: %v", err)
+			}
+			adaptiveResult, err := adaptiveRunner.runDenseGroupCountDistinct(columnPhysicalScanSnapshotView{}, req)
+			if err != nil {
+				t.Fatalf("run adaptive rank: %v", err)
+			}
+			baselineCounts := columnPhysicalJSONBenchQ2CountsP0(baselineResult.Groups)
+			adaptiveCounts := columnPhysicalJSONBenchQ2CountsP0(adaptiveResult.Groups)
+			if !reflect.DeepEqual(adaptiveCounts, baselineCounts) {
+				t.Fatalf("adaptive counts=%v want current map fallback %v", adaptiveCounts, baselineCounts)
+			}
+		})
 	}
 }
 
