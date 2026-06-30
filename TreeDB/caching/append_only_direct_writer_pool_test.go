@@ -196,6 +196,23 @@ func TestAppendOnlyDirectWriterArena_SkipsPointerOnlyMemtableValues(t *testing.T
 	}
 }
 
+func TestAppendOnlyDirectWriterArenaStatsExcludeAbandonedTail(t *testing.T) {
+	var arena appendOnlyDirectValueArena
+	first := arena.alloc(20 << 10)
+	second := arena.alloc(20 << 10)
+
+	stats := arena.backingStats()
+	wantUsed := int64(len(first) + len(second))
+	if got := stats.activeUsedBytes; got != wantUsed {
+		t.Fatalf("active used bytes=%d want %d", got, wantUsed)
+	}
+	if got := stats.activeBytes; got <= stats.activeUsedBytes {
+		t.Fatalf("active capacity bytes=%d want > used bytes %d to expose abandoned tail", got, stats.activeUsedBytes)
+	}
+
+	arena.recycleAll()
+}
+
 func TestAppendOnlyDirectWriterArena_ReusesRetainedChunksOnReset(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir, NewMockBackend(), Options{

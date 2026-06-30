@@ -1794,11 +1794,12 @@ func appendOnlyDirectArenaChunksBytes(chunks [][]byte) int64 {
 }
 
 type appendOnlyDirectValueArena struct {
-	retained      [][]byte
-	retainedBytes int64
-	active        [][]byte
-	cur           []byte
-	curPos        int
+	retained        [][]byte
+	retainedBytes   int64
+	active          [][]byte
+	activeUsedBytes int64
+	cur             []byte
+	curPos          int
 }
 
 func (a *appendOnlyDirectValueArena) takeRetainedChunk(length int) []byte {
@@ -1835,12 +1836,14 @@ func (a *appendOnlyDirectValueArena) alloc(length int) []byte {
 	}
 	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
 	a.curPos += length
+	a.activeUsedBytes += int64(length)
 	return out
 }
 
 func (a *appendOnlyDirectValueArena) drainActiveChunks() [][]byte {
 	chunks := a.active
 	a.active = nil
+	a.activeUsedBytes = 0
 	a.cur = nil
 	a.curPos = 0
 	return chunks
@@ -1851,24 +1854,14 @@ func (a *appendOnlyDirectValueArena) backingStats() appendOnlyDirectArenaBacking
 		return appendOnlyDirectArenaBackingStats{}
 	}
 	stats := appendOnlyDirectArenaBackingStats{
-		activeChunks:   int64(len(a.active)),
-		activeBytes:    appendOnlyDirectArenaChunksBytes(a.active),
-		retainedChunks: int64(len(a.retained)),
-		retainedBytes:  a.retainedBytes,
+		activeChunks:    int64(len(a.active)),
+		activeBytes:     appendOnlyDirectArenaChunksBytes(a.active),
+		activeUsedBytes: a.activeUsedBytes,
+		retainedChunks:  int64(len(a.retained)),
+		retainedBytes:   a.retainedBytes,
 	}
-	for i := range a.active {
-		chunk := a.active[i]
-		if chunk == nil {
-			continue
-		}
-		used := cap(chunk)
-		if i == len(a.active)-1 && a.cur != nil {
-			used = a.curPos
-			if used > cap(chunk) {
-				used = cap(chunk)
-			}
-		}
-		stats.activeUsedBytes += int64(used)
+	if stats.activeUsedBytes > stats.activeBytes {
+		stats.activeUsedBytes = stats.activeBytes
 	}
 	return stats
 }
