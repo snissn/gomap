@@ -12,7 +12,7 @@ import (
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
-func servePipe(t *testing.T, server *Server) (*Client, <-chan error) {
+func servePipe(t testing.TB, server *Server) (*Client, <-chan error) {
 	t.Helper()
 	left, right := net.Pipe()
 	errCh := make(chan error, 1)

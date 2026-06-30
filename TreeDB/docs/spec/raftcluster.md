@@ -2,11 +2,11 @@
 
 Status: normative for the initial `TreeDB/internal/raftcluster` package.
 
-This document records the #3044-0 storage and configuration boundary that later
-single-group Raft slices may depend on. It does not choose a Raft library, start
-a consensus loop, admit writes, enable `ack_policy=raft_committed`, perform
-production snapshot transfer, truncate logs, rejoin nodes, or route multiple
-groups.
+This document records the single-group Raft storage/configuration boundary,
+recovery-status reporting boundary, and first submit/apply bridge that later
+issue `#3044` slices may depend on. It does not choose a Raft library, start a
+consensus loop, perform production snapshot transfer, truncate logs, rejoin
+nodes, or route multiple groups.
 
 ## Scope
 
@@ -17,7 +17,11 @@ The initial boundary owns:
 - a peer membership set that must include the local node;
 - a fail-closed config format and required-feature floor;
 - deterministic local storage paths for Raft log, stable metadata, apply
-  metadata, snapshots, and peer metadata.
+  metadata, snapshots, and peer metadata;
+- a single-group write-admission boundary;
+- a pre-commit deterministic/catalog preflight boundary;
+- a commit-source boundary for deterministic `CommandEntryV1` bytes;
+- a committed-entry applier boundary for applying locally through R3a/raftfsm.
 
 ## Feature And Version Floor
 
@@ -78,11 +82,49 @@ TreeDB's local command WAL.
 ## Local Command WAL Boundary
 
 The TreeDB command WAL is local physical crash-recovery state and is not a Raft
-log. A future Raft provider may commit deterministic command entries by quorum,
-but applying those entries to a local TreeDB still has to satisfy the local
+log. A Raft provider may commit deterministic command entries by quorum, but
+applying those entries to a local TreeDB still has to satisfy the local
 command-WAL recoverability rule before that node can report local durability,
 advance durable applied-index/idempotency metadata, or return
 `ack_policy=raft_committed` success.
+
+## Submit/Apply Bridge
+
+`SingleGroupSubmitter` is the first production-facing submit/apply bridge. It
+is intentionally one group only:
+
+- admission is checked through `AdmissionProvider` and fails closed for
+  follower or unavailable states;
+- submitted deterministic native-wire `CommandEntryV1` bytes are decoded before
+  commit so unsupported or malformed R3a commands fail before local mutation;
+- decoded entries are preflighted against the local deterministic apply/catalog
+  boundary before the commit source assigns a Raft log identity, so conflicts
+  such as missing collections reject without consuming an index;
+- the commit source must return a committed entry with a non-zero term/index
+  and explicit `CommitEvidenceProductionConsensusV1` evidence;
+- deterministic harness evidence is a separate evidence kind and never proves
+  production quorum commitment;
+- the committed entry is applied through a `CommittedCommandApplierV1`, currently
+  provided by the raftfsm adapter, and local apply acknowledgements are
+  serialized by the single-group bridge so a later committed index cannot race
+  ahead of an earlier committed index;
+- `AckRaftCommitted` is returned only after production-consensus evidence plus
+  local recoverability are both true;
+- every accepted submit currently requires production-consensus evidence; lower
+  ack policies only control the response durability level after that commit and
+  must not be upgraded to `raft_committed` in the adapter response.
+
+The bridge is a provider boundary, not a complete consensus integration. The
+`SequencedCommitSource` helper supplies deterministic in-process term/index
+assignment and is useful for adapter tests and smoke wiring. It only proves
+`AckRaftCommitted` when the caller explicitly sets production-consensus
+evidence; a production Raft adapter is responsible for setting that evidence
+only after quorum commit.
+
+Nativewire and Mongo gateway cluster submitter adapters use this bridge for the
+single-group create/insert slice. Response metadata carries the post-apply
+catalog version so follow-on guarded commands do not build entries from a stale
+catalog guard.
 
 ## Read-Index Boundary
 
@@ -178,9 +220,8 @@ unreachable.
 
 ## Non-Goals
 
-- no real consensus loop;
-- no server write admission or redirects;
-- no `ack_policy=raft_committed` behavior;
+- no full consensus loop or selected Raft library in this package;
+- no leader transfer, redirect handling, or lease reads;
 - no real read-index provider, lease-read provider, or follower read routing;
 - no production snapshot transfer/install beyond metadata contracts and injected
   harness evidence;

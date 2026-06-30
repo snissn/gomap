@@ -29,6 +29,7 @@ type collectionMutationV1 struct {
 	ids              [][]byte
 	documents        [][]byte
 	bsonSetItems     []collections.BSONSetUpdateBatchItem
+	bsonSetMatched   int
 	frameDocuments   []commitlog.CollectionDocument
 }
 
@@ -81,6 +82,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 	}
 
 	var affected int64
+	var matched int64
 	switch mutation.command {
 	case nativewire.CommandInsertBatch:
 		if len(mutation.documents) == 0 {
@@ -95,16 +97,18 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		}
 		affected = int64(len(resultIDs))
 	case nativewire.CommandReplaceBatch:
-		_, modified, err := collection.ReplaceBatchWithCommandWALIntent(mutation.ids, mutation.documents, intent)
+		matchedCount, modified, err := collection.ReplaceBatchWithCommandWALIntent(mutation.ids, mutation.documents, intent)
 		if err != nil {
 			return h.collectionMutationApplyError(entry, handle, err)
 		}
+		matched = int64(matchedCount)
 		affected = int64(modified)
 	case nativewire.CommandUpdateBSONSet:
 		results, err := collection.UpdateBSONSetBatchWithCommandWALIntent(mutation.bsonSetItems, mutation.frameDocuments, intent)
 		if err != nil {
 			return h.collectionMutationApplyError(entry, handle, err)
 		}
+		matched = int64(mutation.bsonSetMatched)
 		affected = int64(countModifiedUpdateBatchResultsV1(results))
 	case nativewire.CommandDeleteBatch:
 		deleted, err := collection.DeleteBatchWithCommandWALIntent(mutation.ids, intent)
@@ -135,6 +139,7 @@ func (h *Harness) applyCollectionMutationV1(entry raftentry.CommandEntryV1, meta
 		CommandDigest:          entry.Digest,
 		DeterministicErrorCode: raftentry.ErrorNoneV1,
 		AffectedCount:          affected,
+		MatchedCount:           matched,
 		ResultDigest:           raftentry.CommandDigestV1(logical),
 	}, nil
 }
@@ -261,6 +266,15 @@ func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire
 }
 
 func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) (*collections.Collection, error) {
+	return h.preflightCollectionMutationWithOptionsV1(mutation, true)
+}
+
+func (h *Harness) preflightCollectionMutationOnlyV1(mutation *collectionMutationV1) error {
+	_, err := h.preflightCollectionMutationWithOptionsV1(mutation, false)
+	return err
+}
+
+func (h *Harness) preflightCollectionMutationWithOptionsV1(mutation *collectionMutationV1, prepareFrameDocuments bool) (*collections.Collection, error) {
 	if h == nil || h.db == nil {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil DB cannot preflight collection mutation")
 	}
@@ -294,7 +308,9 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationInsert); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
-		mutation.frameDocuments = collectionDocumentsFromMutationV1(mutation.ids, mutation.documents)
+		if prepareFrameDocuments {
+			mutation.frameDocuments = collectionDocumentsFromMutationV1(mutation.ids, mutation.documents)
+		}
 		if err := collection.PreflightInsertBatchConflicts(mutation.ids, mutation.documents, mutation.trustedValidBSON); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
@@ -302,7 +318,10 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
-		changed := make([]commitlog.CollectionDocument, 0, len(mutation.ids))
+		var changed []commitlog.CollectionDocument
+		if prepareFrameDocuments {
+			changed = make([]commitlog.CollectionDocument, 0, len(mutation.ids))
+		}
 		for i, id := range mutation.ids {
 			current, err := collection.Get(id)
 			if err != nil {
@@ -316,7 +335,7 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 					return nil, err
 				}
 			}
-			if !bytes.Equal(current, mutation.documents[i]) {
+			if prepareFrameDocuments && !bytes.Equal(current, mutation.documents[i]) {
 				changed = append(changed, commitlog.CollectionDocument{
 					ID:       mutation.ids[i],
 					Document: mutation.documents[i],
@@ -331,10 +350,16 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationUpdate); err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
-		_, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
+		results, docs, err := collection.PrepareBSONSetUpdateBatchCommandWAL(mutation.bsonSetItems)
 		if err != nil {
 			return nil, codeCollectionApplyError(err)
 		}
+		// No-index preflight can skip retaining command-WAL frame documents,
+		// but it must still run the BSON-set prepare validation above.
+		if !prepareFrameDocuments && collectionHasNoSecondaryIndexesV1(collection) {
+			return collection, nil
+		}
+		mutation.bsonSetMatched = countMatchedUpdateBatchResultsV1(results)
 		mutation.frameDocuments = docs
 	case nativewire.CommandDeleteBatch:
 		if err := collection.PreflightCommandWALMutation(collections.ColumnPublishOperationDelete); err != nil {
@@ -344,6 +369,11 @@ func (h *Harness) preflightCollectionMutationV1(mutation *collectionMutationV1) 
 		return nil, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: unsupported mutation command %d", mutation.command)
 	}
 	return collection, nil
+}
+
+func collectionHasNoSecondaryIndexesV1(collection *collections.Collection) bool {
+	meta := collection.MetaView()
+	return len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0
 }
 
 func (m collectionMutationV1) loweredFrame() (commandwalapply.LoweredFrame, error) {
@@ -473,6 +503,16 @@ func countModifiedUpdateBatchResultsV1(results []collections.UpdateBatchResult) 
 		}
 	}
 	return modified
+}
+
+func countMatchedUpdateBatchResultsV1(results []collections.UpdateBatchResult) int {
+	matched := 0
+	for _, result := range results {
+		if result.Matched {
+			matched++
+		}
+	}
+	return matched
 }
 
 func lowerDocumentFormatV1(entry raftentry.CommandEntryV1) (collections.DocumentFormat, error) {

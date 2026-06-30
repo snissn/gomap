@@ -383,8 +383,27 @@ func validateApplyProgressRecordV1(record ApplyProgressRecordV1, requireCoverage
 }
 
 func applyResultRecordSizeV1(record ApplyResultRecordV1) int {
-	return 8 + 8 + 32 + len(record.IdempotencyKey) + 8 +
-		len(record.Result.Status) + 32 + len(record.Result.DeterministicErrorCode) + 8 + 32 + 32
+	return applyEntryIDSizeV1 +
+		len(record.CommandDigest) +
+		uint64SizeV1 +
+		encodedBytesSizeV1(record.IdempotencyKey) +
+		encodedBytesSizeV1([]byte(record.Result.Status)) +
+		len(record.Result.CommandDigest) +
+		encodedBytesSizeV1([]byte(record.Result.DeterministicErrorCode)) +
+		int64SizeV1 +
+		int64SizeV1 +
+		len(record.Result.ResultDigest) +
+		len(record.ProgressLogicalDigestV1)
+}
+
+const (
+	applyEntryIDSizeV1 = uint64SizeV1 + uint64SizeV1
+	uint64SizeV1       = 8
+	int64SizeV1        = 8
+)
+
+func encodedBytesSizeV1(value []byte) int {
+	return uint64SizeV1 + len(value)
 }
 
 func cloneApplyResultRecord(record ApplyResultRecordV1) ApplyResultRecordV1 {

@@ -76,6 +76,21 @@ func TestRegistryValidatesRequestSections(t *testing.T) {
 	}
 }
 
+func TestCreateCollectionAllowsOmitResponseMetaFlag(t *testing.T) {
+	registry := MustV1Registry()
+	sections := createCollectionSections()
+	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1, Flags: CommandFlagOmitResponseMeta})
+	if _, err := registry.ValidateRequestSections(sections); err != nil {
+		t.Fatalf("create_collection omit response_meta: %v", err)
+	}
+
+	sections = createCollectionSections()
+	sections[0].Bytes = AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1, Flags: CommandFlagOmitResultIDs})
+	if _, err := registry.ValidateRequestSections(sections); codeOf(err) != ErrUnsupportedFeature {
+		t.Fatalf("create_collection omit result IDs err=%v code=%d", err, codeOf(err))
+	}
+}
+
 func TestNilRegistryRejectsValidation(t *testing.T) {
 	var registry *Registry
 	_, err := registry.ValidateRequestSections(insertBatchSections())
@@ -263,6 +278,15 @@ func insertBatchSections() []Section {
 		{ID: SectionDocumentFormat, Bytes: []byte{byte(DocumentFormatBSON)}},
 		{ID: SectionDocumentIDs, Bytes: []byte("doc-id-vector")},
 		{ID: SectionDocuments, Bytes: []byte("document-vector")},
+		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
+	}
+}
+
+func createCollectionSections() []Section {
+	return []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandCreateCollection, Version: 1})},
+		{ID: SectionIdempotencyKey, Bytes: []byte("id1")},
+		{ID: SectionCollectionMeta, Bytes: []byte("meta")},
 		{ID: SectionExpectedCatalogVersion, Bytes: []byte{7}},
 	}
 }
