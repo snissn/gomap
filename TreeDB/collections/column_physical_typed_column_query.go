@@ -1674,7 +1674,7 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 	if includeEmpty {
 		emptyShardIdx = int(columnTypedColumnDenseGroupCountDistinctStableRankHash("") & uint64(shardCount-1))
 	}
-	shards, err := columnTypedColumnDenseGroupCountDistinctBuildShardedRanksFromRefPartitions(parts, shardRefPartitions, shardCount, emptyShardIdx, workers)
+	shards, err := columnTypedColumnDenseGroupCountDistinctBuildHashShardedRanksFromRefPartitions(parts, shardRefPartitions, shardCount, emptyShardIdx, workers)
 	if err != nil {
 		elapsed := time.Since(phaseStart).Nanoseconds()
 		timing.distinctRankBuildShardsNanos += elapsed
@@ -1684,22 +1684,24 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 	offsets := make([]uint32, len(shards))
 	cardinality := 0
 	for shardIdx, shard := range shards {
-		if len(shard) == 0 {
+		if shard.cardinality() == 0 {
 			continue
 		}
-		if cardinality > int(^uint32(0)) || len(shard) > int(^uint32(0))-cardinality {
+		shardCardinality := shard.cardinality()
+		if cardinality > int(^uint32(0)) || shardCardinality > int(^uint32(0))-cardinality {
 			elapsed := time.Since(phaseStart).Nanoseconds()
 			timing.distinctRankBuildShardsNanos += elapsed
 			timing.distinctRankNanos += elapsed
 			return timing, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
 		}
 		offsets[shardIdx] = uint32(cardinality)
-		cardinality += len(shard)
+		cardinality += shardCardinality
 	}
 	emptyRank := uint32(0)
 	emptyOK := false
-	emptyLookupShardIdx := int(columnTypedColumnDenseGroupCountDistinctStableRankHash("") & uint64(shardCount-1))
-	if localRank, ok := shards[emptyLookupShardIdx][""]; ok {
+	emptyHash := columnTypedColumnDenseGroupCountDistinctStableRankHash("")
+	emptyLookupShardIdx := int(emptyHash & uint64(shardCount-1))
+	if localRank, ok := shards[emptyLookupShardIdx].lookupHash(emptyHash, ""); ok {
 		emptyRank = offsets[emptyLookupShardIdx] + localRank
 		emptyOK = true
 	} else if includeEmpty {
@@ -1735,9 +1737,14 @@ func prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedReferen
 	return timing, nil
 }
 
-type columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions [][][]uint64
+type columnTypedColumnDenseGroupCountDistinctShardRankRef struct {
+	ref  uint64
+	hash uint64
+}
 
-func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefs(parts []columnTypedColumnPhysicalQueryPart, shardCount, capacity, workers int) ([][]uint64, error) {
+type columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions [][][]columnTypedColumnDenseGroupCountDistinctShardRankRef
+
+func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefs(parts []columnTypedColumnPhysicalQueryPart, shardCount, capacity, workers int) ([][]columnTypedColumnDenseGroupCountDistinctShardRankRef, error) {
 	partitions, err := columnTypedColumnDenseGroupCountDistinctCollectShardRankRefPartitions(parts, shardCount, capacity, workers)
 	if err != nil {
 		return nil, err
@@ -1755,7 +1762,7 @@ func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefPartitions(parts
 	}
 	workerCount := min(workers, len(parts))
 	ranges := columnTypedColumnDenseGroupCountDistinctShardRankRefWorkerRanges(len(parts), workerCount)
-	workerRefs := make([][][]uint64, workerCount)
+	workerRefs := make([][][]columnTypedColumnDenseGroupCountDistinctShardRankRef, workerCount)
 	errs := make([]error, workerCount)
 	var wg sync.WaitGroup
 	for workerIdx := 0; workerIdx < workerCount; workerIdx++ {
@@ -1781,14 +1788,14 @@ func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefPartitions(parts
 	return columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions(workerRefs), nil
 }
 
-func columnTypedColumnDenseGroupCountDistinctMergeShardRankRefPartitions(partitions columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions, shardCount int) [][]uint64 {
-	refs := make([][]uint64, shardCount)
+func columnTypedColumnDenseGroupCountDistinctMergeShardRankRefPartitions(partitions columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions, shardCount int) [][]columnTypedColumnDenseGroupCountDistinctShardRankRef {
+	refs := make([][]columnTypedColumnDenseGroupCountDistinctShardRankRef, shardCount)
 	for shardIdx := 0; shardIdx < shardCount; shardIdx++ {
 		total := 0
 		for partitionIdx := range partitions {
 			total += len(partitions[partitionIdx][shardIdx])
 		}
-		refs[shardIdx] = make([]uint64, 0, total)
+		refs[shardIdx] = make([]columnTypedColumnDenseGroupCountDistinctShardRankRef, 0, total)
 		for partitionIdx := range partitions {
 			refs[shardIdx] = append(refs[shardIdx], partitions[partitionIdx][shardIdx]...)
 		}
@@ -1816,7 +1823,7 @@ func columnTypedColumnDenseGroupCountDistinctShardRankRefWorkerRanges(partCount,
 	return ranges
 }
 
-func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsSerial(parts []columnTypedColumnPhysicalQueryPart, shardCount, capacity int) ([][]uint64, error) {
+func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsSerial(parts []columnTypedColumnPhysicalQueryPart, shardCount, capacity int) ([][]columnTypedColumnDenseGroupCountDistinctShardRankRef, error) {
 	refs := columnTypedColumnDenseGroupCountDistinctNewShardRankRefs(shardCount, capacity)
 	for partIdx := range parts {
 		if err := columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsPart(parts, partIdx, refs); err != nil {
@@ -1826,16 +1833,16 @@ func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsSerial(parts []
 	return refs, nil
 }
 
-func columnTypedColumnDenseGroupCountDistinctNewShardRankRefs(shardCount, capacity int) [][]uint64 {
-	refs := make([][]uint64, shardCount)
+func columnTypedColumnDenseGroupCountDistinctNewShardRankRefs(shardCount, capacity int) [][]columnTypedColumnDenseGroupCountDistinctShardRankRef {
+	refs := make([][]columnTypedColumnDenseGroupCountDistinctShardRankRef, shardCount)
 	shardCapacity := max(1, capacity/shardCount)
 	for shardIdx := range refs {
-		refs[shardIdx] = make([]uint64, 0, shardCapacity)
+		refs[shardIdx] = make([]columnTypedColumnDenseGroupCountDistinctShardRankRef, 0, shardCapacity)
 	}
 	return refs
 }
 
-func columnTypedColumnDenseGroupCountDistinctShardRankRefStats(shardRefs [][]uint64) (total, maxShard int) {
+func columnTypedColumnDenseGroupCountDistinctShardRankRefStats(shardRefs [][]columnTypedColumnDenseGroupCountDistinctShardRankRef) (total, maxShard int) {
 	for _, refs := range shardRefs {
 		total += len(refs)
 		if len(refs) > maxShard {
@@ -1859,7 +1866,7 @@ func columnTypedColumnDenseGroupCountDistinctShardRankRefPartitionStats(partitio
 	return total, maxShard
 }
 
-func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsPart(parts []columnTypedColumnPhysicalQueryPart, partIdx int, shardRefs [][]uint64) error {
+func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsPart(parts []columnTypedColumnPhysicalQueryPart, partIdx int, shardRefs [][]columnTypedColumnDenseGroupCountDistinctShardRankRef) error {
 	if partIdx < 0 || partIdx >= len(parts) {
 		return fmt.Errorf("collections: dense grouped count-distinct part index=%d outside parts=%d", partIdx, len(parts))
 	}
@@ -1875,8 +1882,9 @@ func columnTypedColumnDenseGroupCountDistinctCollectShardRankRefsPart(parts []co
 		if err != nil {
 			return err
 		}
-		shardIdx := int(columnTypedColumnDenseGroupCountDistinctStableRankHash(value) & uint64(len(shardRefs)-1))
-		shardRefs[shardIdx] = append(shardRefs[shardIdx], ref)
+		hash := columnTypedColumnDenseGroupCountDistinctStableRankHash(value)
+		shardIdx := int(hash & uint64(len(shardRefs)-1))
+		shardRefs[shardIdx] = append(shardRefs[shardIdx], columnTypedColumnDenseGroupCountDistinctShardRankRef{ref: ref, hash: hash})
 	}
 	return nil
 }
@@ -1892,12 +1900,71 @@ func columnTypedColumnDenseGroupCountDistinctUnpackRankRef(ref uint64) (int, int
 	return int(uint32(ref >> 32)), int(uint32(ref))
 }
 
-func columnTypedColumnDenseGroupCountDistinctBuildShardedRanksFromRefPartitions(parts []columnTypedColumnPhysicalQueryPart, partitions columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions, shardCount, emptyShardIdx int, workers int) ([]map[string]uint32, error) {
-	shards := make([]map[string]uint32, shardCount)
+type columnTypedColumnDenseGroupCountDistinctHashRankShard struct {
+	ranks      map[uint64]uint32
+	values     []string
+	collisions map[uint64][]uint32
+}
+
+func newColumnTypedColumnDenseGroupCountDistinctHashRankShard(capacity int) columnTypedColumnDenseGroupCountDistinctHashRankShard {
+	return columnTypedColumnDenseGroupCountDistinctHashRankShard{
+		ranks:  make(map[uint64]uint32, columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity)),
+		values: make([]string, 0, capacity),
+	}
+}
+
+func (s *columnTypedColumnDenseGroupCountDistinctHashRankShard) cardinality() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.values)
+}
+
+func (s *columnTypedColumnDenseGroupCountDistinctHashRankShard) lookupHash(hash uint64, value string) (uint32, bool) {
+	if s == nil || len(s.ranks) == 0 {
+		return 0, false
+	}
+	rank, ok := s.ranks[hash]
+	if !ok {
+		return 0, false
+	}
+	if int(rank) < len(s.values) && s.values[rank] == value {
+		return rank, true
+	}
+	for _, collisionRank := range s.collisions[hash] {
+		if int(collisionRank) < len(s.values) && s.values[collisionRank] == value {
+			return collisionRank, true
+		}
+	}
+	return 0, false
+}
+
+func (s *columnTypedColumnDenseGroupCountDistinctHashRankShard) addHash(hash uint64, value string) (uint32, error) {
+	if rank, ok := s.lookupHash(hash, value); ok {
+		return rank, nil
+	}
+	if uint64(len(s.values)) > uint64(^uint32(0)) {
+		return 0, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
+	}
+	rank := uint32(len(s.values))
+	if _, exists := s.ranks[hash]; exists {
+		if s.collisions == nil {
+			s.collisions = make(map[uint64][]uint32)
+		}
+		s.collisions[hash] = append(s.collisions[hash], rank)
+	} else {
+		s.ranks[hash] = rank
+	}
+	s.values = append(s.values, value)
+	return rank, nil
+}
+
+func columnTypedColumnDenseGroupCountDistinctBuildHashShardedRanksFromRefPartitions(parts []columnTypedColumnPhysicalQueryPart, partitions columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions, shardCount, emptyShardIdx int, workers int) ([]columnTypedColumnDenseGroupCountDistinctHashRankShard, error) {
+	shards := make([]columnTypedColumnDenseGroupCountDistinctHashRankShard, shardCount)
 	errs := make([]error, shardCount)
 	if workers < 2 || shardCount < 2 {
 		for shardIdx := 0; shardIdx < shardCount; shardIdx++ {
-			shards[shardIdx], errs[shardIdx] = columnTypedColumnDenseGroupCountDistinctBuildShardRanksFromRefPartitions(parts, partitions, shardIdx, shardIdx == emptyShardIdx)
+			shards[shardIdx], errs[shardIdx] = columnTypedColumnDenseGroupCountDistinctBuildHashShardRanksFromRefPartitions(parts, partitions, shardIdx, shardIdx == emptyShardIdx)
 			if errs[shardIdx] != nil {
 				return nil, errs[shardIdx]
 			}
@@ -1912,7 +1979,7 @@ func columnTypedColumnDenseGroupCountDistinctBuildShardedRanksFromRefPartitions(
 		go func() {
 			defer wg.Done()
 			for shardIdx := range jobs {
-				shards[shardIdx], errs[shardIdx] = columnTypedColumnDenseGroupCountDistinctBuildShardRanksFromRefPartitions(parts, partitions, shardIdx, shardIdx == emptyShardIdx)
+				shards[shardIdx], errs[shardIdx] = columnTypedColumnDenseGroupCountDistinctBuildHashShardRanksFromRefPartitions(parts, partitions, shardIdx, shardIdx == emptyShardIdx)
 			}
 		}()
 	}
@@ -1929,7 +1996,7 @@ func columnTypedColumnDenseGroupCountDistinctBuildShardedRanksFromRefPartitions(
 	return shards, nil
 }
 
-func columnTypedColumnDenseGroupCountDistinctBuildShardRanksFromRefPartitions(parts []columnTypedColumnPhysicalQueryPart, partitions columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions, shardIdx int, includeEmpty bool) (map[string]uint32, error) {
+func columnTypedColumnDenseGroupCountDistinctBuildHashShardRanksFromRefPartitions(parts []columnTypedColumnPhysicalQueryPart, partitions columnTypedColumnDenseGroupCountDistinctShardRankRefPartitions, shardIdx int, includeEmpty bool) (columnTypedColumnDenseGroupCountDistinctHashRankShard, error) {
 	capacity := 0
 	for partitionIdx := range partitions {
 		capacity += len(partitions[partitionIdx][shardIdx])
@@ -1937,38 +2004,32 @@ func columnTypedColumnDenseGroupCountDistinctBuildShardRanksFromRefPartitions(pa
 	if includeEmpty {
 		capacity++
 	}
-	ranks := make(map[string]uint32, columnTypedColumnDenseGroupCountDistinctRankMapCapacity(capacity))
+	ranks := newColumnTypedColumnDenseGroupCountDistinctHashRankShard(capacity)
 	for partitionIdx := range partitions {
 		for _, ref := range partitions[partitionIdx][shardIdx] {
-			partIdx, localCode := columnTypedColumnDenseGroupCountDistinctUnpackRankRef(ref)
+			partIdx, localCode := columnTypedColumnDenseGroupCountDistinctUnpackRankRef(ref.ref)
 			if partIdx < 0 || partIdx >= len(parts) {
-				return nil, fmt.Errorf("collections: dense grouped count-distinct part reference=%d outside parts=%d", partIdx, len(parts))
+				return columnTypedColumnDenseGroupCountDistinctHashRankShard{}, fmt.Errorf("collections: dense grouped count-distinct part reference=%d outside parts=%d", partIdx, len(parts))
 			}
 			part := parts[partIdx].DenseGroupCountDistinct
 			if part == nil {
-				return nil, fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
+				return columnTypedColumnDenseGroupCountDistinctHashRankShard{}, fmt.Errorf("collections: dense grouped count-distinct missing prepared part %d", partIdx)
 			}
 			if localCode < 0 || localCode >= len(part.Distinct.Dictionary) || localCode >= len(part.Distinct.GlobalLocalRanks) {
-				return nil, fmt.Errorf("collections: dense grouped count-distinct distinct part %d local code=%d outside dictionary=%d ranks=%d", partIdx, localCode, len(part.Distinct.Dictionary), len(part.Distinct.GlobalLocalRanks))
+				return columnTypedColumnDenseGroupCountDistinctHashRankShard{}, fmt.Errorf("collections: dense grouped count-distinct distinct part %d local code=%d outside dictionary=%d ranks=%d", partIdx, localCode, len(part.Distinct.Dictionary), len(part.Distinct.GlobalLocalRanks))
 			}
 			value := part.Distinct.Dictionary[localCode]
-			rank, ok := ranks[value]
-			if !ok {
-				if uint64(len(ranks)) > uint64(^uint32(0)) {
-					return nil, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
-				}
-				rank = uint32(len(ranks))
-				ranks[value] = rank
+			rank, err := ranks.addHash(ref.hash, value)
+			if err != nil {
+				return columnTypedColumnDenseGroupCountDistinctHashRankShard{}, err
 			}
 			part.Distinct.GlobalLocalRanks[localCode] = rank
 		}
 	}
 	if includeEmpty {
-		if _, ok := ranks[""]; !ok {
-			if uint64(len(ranks)) > uint64(^uint32(0)) {
-				return nil, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
-			}
-			ranks[""] = uint32(len(ranks))
+		emptyHash := columnTypedColumnDenseGroupCountDistinctStableRankHash("")
+		if _, err := ranks.addHash(emptyHash, ""); err != nil {
+			return columnTypedColumnDenseGroupCountDistinctHashRankShard{}, err
 		}
 	}
 	return ranks, nil
@@ -2012,12 +2073,12 @@ func columnTypedColumnDenseGroupCountDistinctAddShardedRankOffsetsFromPartitions
 	return nil
 }
 
-func columnTypedColumnDenseGroupCountDistinctAddShardRankOffset(parts []columnTypedColumnPhysicalQueryPart, refs []uint64, offset uint32) error {
+func columnTypedColumnDenseGroupCountDistinctAddShardRankOffset(parts []columnTypedColumnPhysicalQueryPart, refs []columnTypedColumnDenseGroupCountDistinctShardRankRef, offset uint32) error {
 	if offset == 0 {
 		return nil
 	}
 	for _, ref := range refs {
-		partIdx, localCode := columnTypedColumnDenseGroupCountDistinctUnpackRankRef(ref)
+		partIdx, localCode := columnTypedColumnDenseGroupCountDistinctUnpackRankRef(ref.ref)
 		if partIdx < 0 || partIdx >= len(parts) {
 			return fmt.Errorf("collections: dense grouped count-distinct part reference=%d outside parts=%d", partIdx, len(parts))
 		}

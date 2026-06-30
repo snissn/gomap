@@ -305,6 +305,36 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardedReferenceFillNullableEmpty(t
 	}
 }
 
+func TestTypedColumnQ2DenseGroupCountDistinctHashRankShardCollision(t *testing.T) {
+	shard := newColumnTypedColumnDenseGroupCountDistinctHashRankShard(3)
+	const hash = uint64(42)
+	first, err := shard.addHash(hash, "did:first")
+	if err != nil {
+		t.Fatalf("add first: %v", err)
+	}
+	second, err := shard.addHash(hash, "did:second")
+	if err != nil {
+		t.Fatalf("add second: %v", err)
+	}
+	firstAgain, err := shard.addHash(hash, "did:first")
+	if err != nil {
+		t.Fatalf("add first again: %v", err)
+	}
+	secondAgain, ok := shard.lookupHash(hash, "did:second")
+	if !ok {
+		t.Fatalf("lookup second collision failed")
+	}
+	if first != 0 || second != 1 || firstAgain != first || secondAgain != second {
+		t.Fatalf("collision ranks first=%d second=%d firstAgain=%d secondAgain=%d", first, second, firstAgain, secondAgain)
+	}
+	if _, ok := shard.lookupHash(hash, "did:third"); ok {
+		t.Fatalf("lookup returned rank for missing colliding value")
+	}
+	if got := shard.cardinality(); got != 2 {
+		t.Fatalf("cardinality=%d want 2", got)
+	}
+}
+
 func TestTypedColumnQ2DenseGroupCountDistinctShardRankRefsParallelMatchesSerial(t *testing.T) {
 	newPart := func(dictionary []string, valid []bool) columnTypedColumnPhysicalQueryPart {
 		return columnTypedColumnPhysicalQueryPart{
@@ -341,8 +371,8 @@ func TestTypedColumnQ2DenseGroupCountDistinctShardRankRefsParallelMatchesSerial(
 	}
 	for shardIdx, refs := range parallelRefs {
 		for refIdx := 1; refIdx < len(refs); refIdx++ {
-			if refs[refIdx] < refs[refIdx-1] {
-				t.Fatalf("shard %d refs not monotonic at %d: %d < %d", shardIdx, refIdx, refs[refIdx], refs[refIdx-1])
+			if refs[refIdx].ref < refs[refIdx-1].ref {
+				t.Fatalf("shard %d refs not monotonic at %d: %d < %d", shardIdx, refIdx, refs[refIdx].ref, refs[refIdx-1].ref)
 			}
 		}
 	}
