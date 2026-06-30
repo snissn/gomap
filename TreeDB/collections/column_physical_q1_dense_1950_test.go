@@ -382,11 +382,22 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 	if diag.PredicateCount != 0 || diag.PredicateLiterals != 0 {
 		tb.Fatalf("%s setup q1 should not report predicates: %+v", label, diag)
 	}
+	if diag.TypedColumnOneShotCacheHit || !diag.TypedColumnOneShotCacheMiss || !diag.TypedColumnOneShotCacheBuild {
+		tb.Fatalf("%s setup one-shot cache diagnostics hit/miss/build=%t/%t/%t want false/true/true diagnostics=%+v",
+			label,
+			diag.TypedColumnOneShotCacheHit,
+			diag.TypedColumnOneShotCacheMiss,
+			diag.TypedColumnOneShotCacheBuild,
+			diag)
+	}
 	if diag.TypedColumnPartSections == 0 || diag.TypedColumnPartSectionBytes == 0 || diag.DecodedPayloadBytes == 0 || diag.DecodedBlocks == 0 {
 		tb.Fatalf("%s setup missing typed-column section/decode diagnostics: %+v", label, diag)
 	}
-	if diag.TypedColumnOneShotBuildNanos <= 0 || diag.TypedColumnPreparePartDecodeNanos <= 0 {
-		tb.Fatalf("%s setup missing build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
+	if diag.TypedColumnPrepareWorkerCount <= 0 {
+		tb.Fatalf("%s setup missing prepare worker diagnostics: %+v", label, diag)
+	}
+	if diag.TypedColumnOneShotBuildNanos < 0 || diag.TypedColumnPreparePartDecodeNanos < 0 {
+		tb.Fatalf("%s setup negative build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
 			label,
 			diag.TypedColumnOneShotBuildNanos,
 			diag.TypedColumnPreparePartDecodeNanos,
