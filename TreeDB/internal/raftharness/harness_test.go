@@ -199,10 +199,14 @@ func TestCommitClonesAndComparesClusterRouteMetadata(t *testing.T) {
 		ClusterRouteDatabase:      "default",
 		ClusterRouteCatalog:       "default",
 		ClusterRouteCollection:    "users",
+		ClusterRouteShape:         "token",
 		ClusterRouteGroupID:       "group-a",
 		ClusterRouteMembers:       []string{"node-a", "node-b"},
 		ClusterRouteLeaderHint:    "node-a",
 		ClusterRoutePlacementMode: "collection",
+		ClusterRouteTokenKnown:    true,
+		ClusterRouteToken:         42,
+		ClusterRoutePartitionID:   "token-000042",
 	}
 	if _, err := h.Commit(entry); err != nil {
 		t.Fatalf("Commit route metadata entry: %v", err)
@@ -215,10 +219,14 @@ func TestCommitClonesAndComparesClusterRouteMetadata(t *testing.T) {
 		ClusterRouteDatabase:      "default",
 		ClusterRouteCatalog:       "default",
 		ClusterRouteCollection:    "users",
+		ClusterRouteShape:         "token",
 		ClusterRouteGroupID:       "group-a",
 		ClusterRouteMembers:       []string{"node-a", "node-b"},
 		ClusterRouteLeaderHint:    "node-a",
 		ClusterRoutePlacementMode: "collection",
+		ClusterRouteTokenKnown:    true,
+		ClusterRouteToken:         42,
+		ClusterRoutePartitionID:   "token-000042",
 	}
 	results, err := h.ApplyCommittedEntriesToNode("node-a", want)
 	if err != nil {
@@ -227,7 +235,7 @@ func TestCommitClonesAndComparesClusterRouteMetadata(t *testing.T) {
 	assertAppliedResults(t, "route metadata apply", results, []int64{1})
 
 	divergent := want
-	divergent.RequestMetadata.ClusterRouteGroupID = "group-b"
+	divergent.RequestMetadata.ClusterRoutePartitionID = "token-000043"
 	if _, err := h.Commit(divergent); !errors.Is(err, ErrCommittedLogConflict) {
 		t.Fatalf("Commit divergent route metadata err=%v want ErrCommittedLogConflict", err)
 	}

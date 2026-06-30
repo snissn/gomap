@@ -539,9 +539,13 @@ func committedEntriesEqual(a, b raftfsm.CommittedEntryV1) bool {
 		a.RequestMetadata.ClusterRouteDatabase != b.RequestMetadata.ClusterRouteDatabase ||
 		a.RequestMetadata.ClusterRouteCatalog != b.RequestMetadata.ClusterRouteCatalog ||
 		a.RequestMetadata.ClusterRouteCollection != b.RequestMetadata.ClusterRouteCollection ||
+		a.RequestMetadata.ClusterRouteShape != b.RequestMetadata.ClusterRouteShape ||
 		a.RequestMetadata.ClusterRouteGroupID != b.RequestMetadata.ClusterRouteGroupID ||
 		a.RequestMetadata.ClusterRouteLeaderHint != b.RequestMetadata.ClusterRouteLeaderHint ||
 		a.RequestMetadata.ClusterRoutePlacementMode != b.RequestMetadata.ClusterRoutePlacementMode ||
+		a.RequestMetadata.ClusterRouteTokenKnown != b.RequestMetadata.ClusterRouteTokenKnown ||
+		a.RequestMetadata.ClusterRouteToken != b.RequestMetadata.ClusterRouteToken ||
+		a.RequestMetadata.ClusterRoutePartitionID != b.RequestMetadata.ClusterRoutePartitionID ||
 		!equalStringSlices(a.RequestMetadata.ClusterRouteMembers, b.RequestMetadata.ClusterRouteMembers) ||
 		!bytes.Equal(a.RequestMetadata.TraceContext, b.RequestMetadata.TraceContext) ||
 		!bytes.Equal(a.Bytes, b.Bytes) {
