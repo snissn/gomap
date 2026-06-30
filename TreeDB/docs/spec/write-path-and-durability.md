@@ -109,8 +109,9 @@ closed with named reasons such as `range_delete_barrier`, `below_threshold`,
 command-WAL `Update` and `UpdateSync` rejections are reported under
 `treedb.raw.span_native.public.route.<route>.fallback.reason.command_wal_barrier.*`
 because they return before a backend batch exists; backend
-`treedb.raw.span_native.route.<route>.*` counters do not emit
-`command_wal_barrier`.
+`treedb.raw.span_native.route.<route>.*` counters preserve
+`command_wal_barrier` only for backend batches that exist but are explicitly
+fenced by command-WAL publish or checkpoint applied-LSN boundaries.
 
 The user-command WAL is a local crash-recovery log, not a Raft log. Future Raft
 entries may share command-envelope payloads, but consensus ordering and local
