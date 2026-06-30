@@ -4,8 +4,9 @@ Status: normative for the initial `TreeDB/internal/raftcluster` package.
 
 This document records the #3044-0 storage and configuration boundary that later
 single-group Raft slices may depend on. It does not choose a Raft library, start
-a consensus loop, admit writes, enable `ack_policy=raft_committed`, install
-snapshots, truncate logs, or route multiple groups.
+a consensus loop, admit writes, enable `ack_policy=raft_committed`, perform
+production snapshot transfer, truncate logs, rejoin nodes, or route multiple
+groups.
 
 ## Scope
 
@@ -104,6 +105,69 @@ tests can exercise nativewire read-index/read-barrier composition, but that
 evidence is not production quorum evidence and the provider does not apply
 entries by itself.
 
+## Recovery Status Boundary
+
+`RecoveryStatusV1` is the report-only readiness contract for snapshot/tail
+replay recovery work. It is derived from local durable evidence:
+
+- durable FSM apply progress in `apply-progress-v1.log`;
+- local TreeDB `AppliedCommandLSN` coverage;
+- snapshot manifest validation and durable boundary-result digest checks;
+- optional `AppliedIndexReadBarrier` state for the local read-safety proof.
+
+The stable readiness labels are:
+
+```text
+unsafe_no_snapshot
+unsafe_manifest_unverified
+tail_pending
+tail_complete
+read_safety_pending
+ready_applied_index
+unsupported
+```
+
+`ready_applied_index` is the only label that may set `safe_to_serve_reads=true`,
+and only after a manifest is verified, the requested tail target is locally
+applied, and the applied-index read barrier is satisfied. `tail_complete`
+without an applied-index proof is not a read-serving claim.
+
+The stable snapshot, tail, and read-safety labels are:
+
+```text
+snapshot: no_snapshot, manifest_verified, manifest_rejected
+tail: no_snapshot, pending, complete, unknown
+read_safety: not_requested, applied_index_satisfied, applied_index_lagging, target_mismatch
+```
+
+`RecoveryMetricsV1` freezes the metric keys and low-cardinality labels exported
+from the status object. The required metric keys are:
+
+```text
+treedb.raftcluster.recovery.safe_to_serve_reads
+treedb.raftcluster.recovery.applied_index
+treedb.raftcluster.recovery.required_applied_index
+treedb.raftcluster.recovery.snapshot_last_included_index
+treedb.raftcluster.recovery.tail_target_index
+treedb.raftcluster.recovery.tail_lag_entries
+treedb.raftcluster.recovery.applied_command_lsn
+```
+
+Unsupported production operations must fail closed with explicit status instead
+of silently implying support. Current unsupported operation labels are:
+
+```text
+log_truncation
+production_rejoin
+production_snapshot_transfer
+```
+
+`raftharness` may report recovery status for injected committed-entry tests. Its
+snapshot install helper reconstructs a snapshot cut by replaying the committed
+prefix and then uses `ReplaySnapshotTailToNodeV1` for the tail. That is harness
+evidence only: it is not production Raft snapshot transfer, does not delete Raft
+log entries, and does not implement node replacement/rejoin.
+
 ## Value Log Boundary
 
 `<main-db>/value_vlog/` is persistent value storage for large values
@@ -118,6 +182,8 @@ unreachable.
 - no server write admission or redirects;
 - no `ack_policy=raft_committed` behavior;
 - no real read-index provider, lease-read provider, or follower read routing;
-- no snapshot install/export behavior beyond reserving a local path;
+- no production snapshot transfer/install beyond metadata contracts and injected
+  harness evidence;
 - no Raft log truncation;
+- no production node replacement or rejoin protocol;
 - no multi-group routing.

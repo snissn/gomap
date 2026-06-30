@@ -248,7 +248,9 @@ Acceptance:
 - the same committed entry sequence applied to fresh DBs in separate processes
   produces the same logical state digest,
 - snapshot restore plus log-tail replay produces the same logical state digest
-  as full log replay,
+  as full log replay, with `RecoveryStatusV1` reporting `tail_pending`,
+  `tail_complete`, and `ready_applied_index` from local durable evidence rather
+  than claiming production snapshot transfer, log truncation, or rejoin support,
 - mixed-version clusters refuse to advertise or append command versions that any
   voting replica cannot decode and apply.
 
