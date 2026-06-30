@@ -188,6 +188,51 @@ func TestCatchUpNodeRejectsDivergentLastAppliedEntry(t *testing.T) {
 	assertCollectionMissing(t, h, "node-b", "orders")
 }
 
+func TestCommitClonesAndComparesClusterRouteMetadata(t *testing.T) {
+	h := openTestHarness(t)
+	defer func() { _ = h.Close() }()
+
+	raw := deterministicCreateCollectionEntry(t, "users", "harness:create:users:route-metadata")
+	entry := committedCommand(29, 1, raw)
+	entry.RequestMetadata = raftentry.RequestMetadataV1{
+		ClusterRouteKnown:         true,
+		ClusterRouteDatabase:      "default",
+		ClusterRouteCatalog:       "default",
+		ClusterRouteCollection:    "users",
+		ClusterRouteGroupID:       "group-a",
+		ClusterRouteMembers:       []string{"node-a", "node-b"},
+		ClusterRouteLeaderHint:    "node-a",
+		ClusterRoutePlacementMode: "collection",
+	}
+	if _, err := h.Commit(entry); err != nil {
+		t.Fatalf("Commit route metadata entry: %v", err)
+	}
+	entry.RequestMetadata.ClusterRouteMembers[0] = "mutated-node"
+
+	want := committedCommand(29, 1, raw)
+	want.RequestMetadata = raftentry.RequestMetadataV1{
+		ClusterRouteKnown:         true,
+		ClusterRouteDatabase:      "default",
+		ClusterRouteCatalog:       "default",
+		ClusterRouteCollection:    "users",
+		ClusterRouteGroupID:       "group-a",
+		ClusterRouteMembers:       []string{"node-a", "node-b"},
+		ClusterRouteLeaderHint:    "node-a",
+		ClusterRoutePlacementMode: "collection",
+	}
+	results, err := h.ApplyCommittedEntriesToNode("node-a", want)
+	if err != nil {
+		t.Fatalf("ApplyCommittedEntriesToNode original route metadata: %v results=%+v", err, results)
+	}
+	assertAppliedResults(t, "route metadata apply", results, []int64{1})
+
+	divergent := want
+	divergent.RequestMetadata.ClusterRouteGroupID = "group-b"
+	if _, err := h.Commit(divergent); !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("Commit divergent route metadata err=%v want ErrCommittedLogConflict", err)
+	}
+}
+
 func TestCatchUpNodeRejectsDivergentAppliedPrefix(t *testing.T) {
 	h := openTestHarness(t)
 	defer func() { _ = h.Close() }()
