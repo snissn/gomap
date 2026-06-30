@@ -10068,6 +10068,7 @@ func (db *DB) dropColdAppendOnlyPools() {
 	db.appendOnlyMemPool.Store(&sync.Pool{})
 	db.appendOnlyMemPoolDropTotal.Add(1)
 	memtable.DropAppendOnlyEntryPools()
+	memtable.DropAppendOnlyValueArenaPools()
 }
 
 func (db *DB) popAppendOnlyMemLease() *memtable.AppendOnly {

@@ -162,6 +162,7 @@ func TestStoreMemtableMode_DropsAppendOnlyPoolsOnColdTransition(t *testing.T) {
 		t.Fatal("expected append-only memtable pool")
 	}
 	beforeEntryPoolDrops := memtable.AppendOnlyEntryPoolDropTotal()
+	beforeValueArenaPoolDrops := memtable.AppendOnlyValueArenaPoolDropTotal()
 
 	db.storeMemtableMode(memtable.ModeBTree)
 
@@ -177,6 +178,9 @@ func TestStoreMemtableMode_DropsAppendOnlyPoolsOnColdTransition(t *testing.T) {
 	}
 	if got := memtable.AppendOnlyEntryPoolDropTotal(); got != beforeEntryPoolDrops+1 {
 		t.Fatalf("append-only entry pool drops=%d want %d", got, beforeEntryPoolDrops+1)
+	}
+	if got := memtable.AppendOnlyValueArenaPoolDropTotal(); got != beforeValueArenaPoolDrops+1 {
+		t.Fatalf("append-only value arena pool drops=%d want %d", got, beforeValueArenaPoolDrops+1)
 	}
 }
 
