@@ -86,6 +86,34 @@ func (db *DB) observeFlushApplyBackendWrite(write time.Duration) {
 	addCacheDurationNs(&db.flushApplyBackendWriteNs, write)
 }
 
+func (db *DB) observeFlushApplyBackendBatchWrite(write time.Duration) {
+	if db == nil {
+		return
+	}
+	addCacheDurationNs(&db.flushApplyBackendBatchWriteNs, write)
+}
+
+func (db *DB) observeFlushApplyDeferredVLogPointerMaterialize(d time.Duration) {
+	if db == nil {
+		return
+	}
+	addCacheDurationNs(&db.flushApplyDeferredVLogPointerMaterializeNs, d)
+}
+
+func (db *DB) observeFlushApplyVLogFlush(d time.Duration) {
+	if db == nil {
+		return
+	}
+	addCacheDurationNs(&db.flushApplyVLogFlushNs, d)
+}
+
+func (db *DB) observeFlushApplyVLogSync(d time.Duration) {
+	if db == nil {
+		return
+	}
+	addCacheDurationNs(&db.flushApplyVLogSyncNs, d)
+}
+
 func (db *DB) observeFlushApplyLeafLogEncodeCompress(d time.Duration) {
 	if db == nil {
 		return
@@ -463,6 +491,10 @@ func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	stats["treedb.cache.flush_apply.planning_ns_total"] = fmt.Sprintf("%d", db.flushApplyPlanningNs.Load())
 	stats["treedb.cache.flush_apply.build_ns_total"] = fmt.Sprintf("%d", db.flushApplyBuildNs.Load())
 	stats["treedb.cache.flush_apply.backend_write_ns_total"] = fmt.Sprintf("%d", db.flushApplyBackendWriteNs.Load())
+	stats["treedb.cache.flush_apply.backend_batch_write_ns_total"] = fmt.Sprintf("%d", db.flushApplyBackendBatchWriteNs.Load())
+	stats["treedb.cache.flush_apply.deferred_vlog_pointer_materialize_ns_total"] = fmt.Sprintf("%d", db.flushApplyDeferredVLogPointerMaterializeNs.Load())
+	stats["treedb.cache.flush_apply.vlog_flush_ns_total"] = fmt.Sprintf("%d", db.flushApplyVLogFlushNs.Load())
+	stats["treedb.cache.flush_apply.vlog_sync_ns_total"] = fmt.Sprintf("%d", db.flushApplyVLogSyncNs.Load())
 	stats["treedb.cache.flush_apply.leaf_log_encode_compress_ns_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogEncodeCompressNs.Load())
 	stats["treedb.cache.flush_apply.leaf_log_append_wait_ns_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogAppendWaitNs.Load())
 	stats["treedb.cache.flush_apply.leaf_log_append_ns_total"] = fmt.Sprintf("%d", db.flushApplyLeafLogAppendNs.Load())

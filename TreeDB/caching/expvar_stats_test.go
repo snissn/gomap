@@ -71,6 +71,7 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.raw.span_native.route.mixed_range_delete.fallbacks_total":                             "2",
 		"treedb.publish.ordered_root_delta_group.span_native.used_ops_total":                          "77",
 		"treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.status": "eligible",
+		"treedb.leaf_generation.pack.runs":                                                            "5",
 		"treedb.cache.flush_apply.foreground_assist_wait_ns_total":                                    "12345",
 		"treedb.cache.flush_span_run.ops_per_span":                                                    "8.5",
 		"treedb.cache.flush_backlog_coalescing.skip.reason.not_enough_backlog_total":                  "6",
@@ -250,6 +251,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.status"].(string); !ok || v != "eligible" {
 		t.Fatalf("ordered-root triage status=%T(%v) want eligible", got["treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.status"], got["treedb.publish.ordered_root_delta_group.span_native.triage.route.delta_batch_publish.status"])
+	}
+	if v, ok := got["treedb.leaf_generation.pack.runs"].(int64); !ok || v != 5 {
+		t.Fatalf("leaf_generation pack runs=%T(%v) want int64(5)", got["treedb.leaf_generation.pack.runs"], got["treedb.leaf_generation.pack.runs"])
 	}
 	if v, ok := got["treedb.cache.flush_apply.foreground_assist_wait_ns_total"].(int64); !ok || v != 12345 {
 		t.Fatalf("cache flush_apply foreground assist wait=%T(%v) want int64(12345)", got["treedb.cache.flush_apply.foreground_assist_wait_ns_total"], got["treedb.cache.flush_apply.foreground_assist_wait_ns_total"])

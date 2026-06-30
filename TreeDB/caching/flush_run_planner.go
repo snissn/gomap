@@ -744,11 +744,13 @@ func (db *DB) writeCanonicalFlushRunOpsChunk(ops []batch.Entry, syncFlush bool, 
 	db.backendWriteBatchesTotal.Add(1)
 	db.observeFlushSpanRunBackendChunks(1)
 	var err error
+	batchWriteStart := time.Now()
 	if last && syncFlush {
 		err = backendBatch.WriteSync()
 	} else {
 		err = backendBatch.Write()
 	}
+	db.observeFlushApplyBackendBatchWrite(time.Since(batchWriteStart))
 	cerr := backendBatch.Close()
 	if err == nil {
 		err = cerr
@@ -838,11 +840,17 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if !valueLogNeedsFlush {
 			return nil
 		}
-		if err := db.flushValueLog(laneID); err != nil {
+		flushStart := time.Now()
+		err := db.flushValueLog(laneID)
+		db.observeFlushApplyVLogFlush(time.Since(flushStart))
+		if err != nil {
 			return err
 		}
 		if syncFlush && !db.relaxedSync {
-			if err := db.syncValueLog(laneID); err != nil {
+			syncStart := time.Now()
+			err := db.syncValueLog(laneID)
+			db.observeFlushApplyVLogSync(time.Since(syncStart))
+			if err != nil {
 				return err
 			}
 		}
@@ -853,7 +861,9 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if len(ops) == 0 {
 			return nil
 		}
+		materializeStart := time.Now()
 		wrotePointers, err := db.materializeCanonicalOpsDeferredValueLogPointers(ops, syncFlush, laneID)
+		db.observeFlushApplyDeferredVLogPointerMaterialize(time.Since(materializeStart))
 		if err != nil {
 			return fmt.Errorf("defer vlog: %w", err)
 		}
@@ -863,7 +873,8 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
-		if err := db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode); err != nil {
+		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode)
+		if err != nil {
 			return err
 		}
 		putEntrySlice(ops)
@@ -1014,10 +1025,13 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 		return false
 	}
 
+	materializeStart := time.Now()
 	if err := db.materializeCanonicalRunDeferredValueLogPointers(run, syncFlush, laneID); err != nil {
+		db.observeFlushApplyDeferredVLogPointerMaterialize(time.Since(materializeStart))
 		db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 		return false
 	}
+	db.observeFlushApplyDeferredVLogPointerMaterialize(time.Since(materializeStart))
 
 	backendEntriesCap := db.flushBackendEntriesCapForOps(run.plannedPointOps, run.deletePointOps, syncFlush)
 	_, chunks, spanStats := db.planCanonicalFlushRunMetadata(run, backendEntriesCap)
@@ -1025,12 +1039,18 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 	db.observeFlushSpanRunPlannedOps(run.plannedPointOps, totalSpans)
 
 	if db.valueLogEnabled() {
-		if err := db.flushValueLog(laneID); err != nil {
+		flushStart := time.Now()
+		err := db.flushValueLog(laneID)
+		db.observeFlushApplyVLogFlush(time.Since(flushStart))
+		if err != nil {
 			db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
 			return false
 		}
 		if syncFlush && !db.relaxedSync {
-			if err := db.syncValueLog(laneID); err != nil {
+			syncStart := time.Now()
+			err := db.syncValueLog(laneID)
+			db.observeFlushApplyVLogSync(time.Since(syncStart))
+			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
 				return false
 			}
@@ -1039,10 +1059,13 @@ func (db *DB) flushCanonicalPointUnits(syncFlush bool, laneID int, commandPublis
 
 	writeStart := time.Now()
 	if _, err := db.writeCanonicalFlushRunChunks(run, chunks, syncFlush, commandPublish, mode); err != nil {
+		writeDur := time.Since(writeStart)
+		db.observeFlushApplyBackendWrite(writeDur)
 		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 		return false
 	}
-	db.observeFlushApplyBackendWrite(time.Since(writeStart))
+	writeDur := time.Since(writeStart)
+	db.observeFlushApplyBackendWrite(writeDur)
 
 	db.finishFlushedCanonicalUnits(syncFlush, units, ids, totalBytes)
 	flushDur := time.Since(flushStart)
