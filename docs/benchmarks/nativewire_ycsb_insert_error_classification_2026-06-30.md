@@ -15,7 +15,7 @@ TreeDB:
 
 - Worktree: `/home/mikers/dev/snissn/gomap-3374-ycsb-diagnostic`
 - Branch: `codex/3374-ycsb-diagnostic`
-- Diagnostic commit: `6a512fdc8786c05895eda991bcc9aca70bca4441`
+- Diagnostic commit: `3f2c712bb700806b29deb872ed90531d4828ab79`
 - Server: `cmd/treedb-native-server`
 - Profile: `command_wal_relaxed`
 
@@ -29,8 +29,8 @@ External client:
 
 Host:
 
-- Captured at: `2026-06-30T08:36:56Z`
-- Local time: `2026-06-29T22:36:56-1000`
+- Captured at: `2026-06-30T08:48:41Z`
+- Local time: `2026-06-29T22:48:41-1000`
 - Host: `mikers-B560-DS3H-AC-Y1`
 - Kernel: `Linux 6.8.0-124-generic x86_64`
 - Go: `go version go1.25.7 linux/amd64`
@@ -59,14 +59,14 @@ INSERT_ERROR|EOF|ambiguous|panic|fatal|ERROR|Failed
 Final artifact root:
 
 ```text
-/tmp/treedb_native_ycsb_diagnostic_20260629_223656
+/tmp/treedb_native_ycsb_diagnostic_20260629_224839
 ```
 
 Expanded commands from `commands.txt`:
 
 ```sh
 /home/mikers/dev/snissn/gomap-3374-ycsb-diagnostic/bin/treedb-native-server \
-  -dir /tmp/treedb_native_ycsb_diagnostic_20260629_223656/100000/db \
+  -dir /tmp/treedb_native_ycsb_diagnostic_20260629_224839/100000/db \
   -profile command_wal_relaxed \
   -addr 127.0.0.1:17370
 
@@ -79,7 +79,7 @@ env TREEDB_YCSB_LOG_ERRORS=1 \
   -p silence=false
 
 /home/mikers/dev/snissn/gomap-3374-ycsb-diagnostic/bin/treedb-native-server \
-  -dir /tmp/treedb_native_ycsb_diagnostic_20260629_223656/1000000/db \
+  -dir /tmp/treedb_native_ycsb_diagnostic_20260629_224839/1000000/db \
   -profile command_wal_relaxed \
   -addr 127.0.0.1:17371
 
@@ -96,8 +96,8 @@ env TREEDB_YCSB_LOG_ERRORS=1 \
 
 | recordcount | exit code | INSERT count | INSERT ops/sec | avg us | p95 us | p99 us | max us | `load.err` bytes | raw scan lines |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100,000 | 0 | 100,000 | 60,851.7 | 245 | 417 | 625 | 10,431 | 0 | 0 |
-| 1,000,000 | 0 | 1,000,000 | 44,289.9 | 341 | 561 | 916 | 1,000,447 | 0 | 0 |
+| 100,000 | 0 | 100,000 | 51,799.5 | 290 | 485 | 864 | 95,295 | 0 | 0 |
+| 1,000,000 | 0 | 1,000,000 | 41,702.6 | 363 | 605 | 1,076 | 1,042,431 | 0 | 0 |
 
 Raw scan counts from `scan_counts.txt`:
 
@@ -175,7 +175,7 @@ fatal, `ERROR`, or `Failed` text.
 | Artifact | Classification | Evidence | Residual Risk |
 | --- | --- | --- | --- |
 | `/tmp/treedb_native_ycsb_current_head_20260629_202356` | Invalid, non-reproduced intermediate client/harness/protocol/server-lifecycle interruption. Not evidence of a current TreeDB catalog/value-log publication/readability failure. | The 1M run reports client-side `INSERT_ERROR` counters, but no server-side `EOF`, ambiguous commit, panic, fatal error, or failure marker. The original command lacked error logging, so it cannot identify the exact client error string. Later clean #3364 evidence and the logged current-head #3374 diagnostic both complete 100k and 1M loads with zero raw scan matches. | The exact old client error is unavailable. If this shape recurs with `TREEDB_YCSB_LOG_ERRORS=1`, preserve the artifact and classify the logged error string as client harness, nativewire protocol, server lifecycle, or storage. |
-| `/tmp/treedb_native_ycsb_diagnostic_20260629_223656` | Current-head diagnostic pass. | 100k and 1M loads both exit 0, complete all requested inserts, produce empty stderr, and scan clean for `INSERT_ERROR`, `EOF`, `ambiguous`, `panic`, `fatal`, `ERROR`, and `Failed`. | This is a single-host developer-machine diagnostic gate, not a distributed HA proof. #2026 remains open for the broader publication/readability invariant and any final closeout decision. |
+| `/tmp/treedb_native_ycsb_diagnostic_20260629_224839` | Current-head diagnostic pass. | 100k and 1M loads both exit 0, complete all requested inserts, produce empty stderr, and scan clean for `INSERT_ERROR`, `EOF`, `ambiguous`, `panic`, `fatal`, `ERROR`, and `Failed`. | This is a single-host developer-machine diagnostic gate, not a distributed HA proof. #2026 remains open for the broader publication/readability invariant and any final closeout decision. |
 
 Conclusion: the preserved intermediate `INSERT_ERROR` artifact should be treated
 as a non-reproduced diagnostic caveat, not as current evidence of a TreeDB-owned
