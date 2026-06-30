@@ -411,6 +411,14 @@ type columnStoreQueryMetric struct {
 	CacheLabel                             string                            `json:"cache_label"`
 	CompressionAttribution                 columnStoreCompressionAttribution `json:"compression_attribution"`
 
+	TypedColumnPrepareQ2DenseDistinctRankPlanMS        float64 `json:"typed_column_prepare_q2_dense_distinct_rank_plan_duration_ms,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS float64 `json:"typed_column_prepare_q2_dense_distinct_rank_collect_refs_duration_ms,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS float64 `json:"typed_column_prepare_q2_dense_distinct_rank_build_shards_duration_ms,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankShardCount    int     `json:"typed_column_prepare_q2_dense_distinct_rank_shard_count,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankRefs          int     `json:"typed_column_prepare_q2_dense_distinct_rank_refs,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs  int     `json:"typed_column_prepare_q2_dense_distinct_rank_max_shard_refs,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctGlobalRanks       int     `json:"typed_column_prepare_q2_dense_distinct_global_ranks,omitempty"`
+
 	TypedColumnPrepareQ2GroupGlobalDictionaryRankMS    float64 `json:"typed_column_prepare_q2_group_global_dictionary_rank_duration_ms,omitempty"`
 	TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS float64 `json:"typed_column_prepare_q2_distinct_global_dictionary_rank_duration_ms,omitempty"`
 	TypedColumnPrepareQ2GroupGlobalCodeRemapMS         float64 `json:"typed_column_prepare_q2_group_global_code_remap_duration_ms,omitempty"`
@@ -546,6 +554,14 @@ type columnStoreJSONBenchCell struct {
 	CompatibilityStatusReason              string                            `json:"compatibility_status_reason,omitempty"`
 	CompressionAttribution                 columnStoreCompressionAttribution `json:"compression_attribution"`
 
+	TypedColumnPrepareQ2DenseDistinctRankPlanMS        float64 `json:"typed_column_prepare_q2_dense_distinct_rank_plan_duration_ms,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS float64 `json:"typed_column_prepare_q2_dense_distinct_rank_collect_refs_duration_ms,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS float64 `json:"typed_column_prepare_q2_dense_distinct_rank_build_shards_duration_ms,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankShardCount    int     `json:"typed_column_prepare_q2_dense_distinct_rank_shard_count,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankRefs          int     `json:"typed_column_prepare_q2_dense_distinct_rank_refs,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs  int     `json:"typed_column_prepare_q2_dense_distinct_rank_max_shard_refs,omitempty"`
+	TypedColumnPrepareQ2DenseDistinctGlobalRanks       int     `json:"typed_column_prepare_q2_dense_distinct_global_ranks,omitempty"`
+
 	TypedColumnPrepareQ2GroupGlobalDictionaryRankMS    float64 `json:"typed_column_prepare_q2_group_global_dictionary_rank_duration_ms,omitempty"`
 	TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS float64 `json:"typed_column_prepare_q2_distinct_global_dictionary_rank_duration_ms,omitempty"`
 	TypedColumnPrepareQ2GroupGlobalCodeRemapMS         float64 `json:"typed_column_prepare_q2_group_global_code_remap_duration_ms,omitempty"`
@@ -673,6 +689,14 @@ type columnStoreQueryExecution struct {
 	TypedColumnPrepareQ2DenseGroupRank   time.Duration
 	TypedColumnPrepareQ2DenseDistinct    time.Duration
 	TypedColumnPrepareQ2DensePartLocal   time.Duration
+
+	TypedColumnPrepareQ2DenseDistinctRankPlan         time.Duration
+	TypedColumnPrepareQ2DenseDistinctRankCollectRefs  time.Duration
+	TypedColumnPrepareQ2DenseDistinctRankBuildShards  time.Duration
+	TypedColumnPrepareQ2DenseDistinctRankShardCount   int
+	TypedColumnPrepareQ2DenseDistinctRankRefs         int
+	TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs int
+	TypedColumnPrepareQ2DenseDistinctGlobalRanks      int
 
 	TypedColumnPrepareQ2GroupGlobalDictionaryRank    time.Duration
 	TypedColumnPrepareQ2DistinctGlobalDictionaryRank time.Duration
@@ -2211,7 +2235,16 @@ func runColumnStoreSuiteQueries(collection *collections.Collection, rows int, ra
 			TypedColumnPrepareQ2DenseGroupRankMS:   durationMS(exec.TypedColumnPrepareQ2DenseGroupRank),
 			TypedColumnPrepareQ2DenseDistinctMS:    durationMS(exec.TypedColumnPrepareQ2DenseDistinct),
 			TypedColumnPrepareQ2DensePartLocalMS:   durationMS(exec.TypedColumnPrepareQ2DensePartLocal),
-			CacheLabel:                             "reopened_warm_process",
+
+			TypedColumnPrepareQ2DenseDistinctRankPlanMS:        durationMS(exec.TypedColumnPrepareQ2DenseDistinctRankPlan),
+			TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS: durationMS(exec.TypedColumnPrepareQ2DenseDistinctRankCollectRefs),
+			TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS: durationMS(exec.TypedColumnPrepareQ2DenseDistinctRankBuildShards),
+			TypedColumnPrepareQ2DenseDistinctRankShardCount:    exec.TypedColumnPrepareQ2DenseDistinctRankShardCount,
+			TypedColumnPrepareQ2DenseDistinctRankRefs:          exec.TypedColumnPrepareQ2DenseDistinctRankRefs,
+			TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs:  exec.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs,
+			TypedColumnPrepareQ2DenseDistinctGlobalRanks:       exec.TypedColumnPrepareQ2DenseDistinctGlobalRanks,
+
+			CacheLabel: "reopened_warm_process",
 			CompressionAttribution: columnStoreQueryCompressionAttribution(
 				planLabel,
 				storageSource,
@@ -2688,12 +2721,21 @@ func executeColumnStoreSuitePhysicalQuery(collection *collections.Collection, qu
 		TypedColumnPrepareQ2DenseGroupRank:   time.Duration(diag.TypedColumnPrepareQ2DenseGroupGlobalRankNanos),
 		TypedColumnPrepareQ2DenseDistinct:    time.Duration(diag.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos),
 		TypedColumnPrepareQ2DensePartLocal:   time.Duration(diag.TypedColumnPrepareQ2DensePartLocalRankNanos),
-		HotRunDuration:                       elapsed,
-		ScanDuration:                         scanDuration,
-		ReduceDuration:                       reduceDuration,
-		AdapterDuration:                      resultShapeDuration,
-		ResultShapeDuration:                  resultShapeDuration,
-		ParityHashDuration:                   parityHashElapsed,
+
+		TypedColumnPrepareQ2DenseDistinctRankPlan:         time.Duration(diag.TypedColumnPrepareQ2DenseDistinctRankPlanNanos),
+		TypedColumnPrepareQ2DenseDistinctRankCollectRefs:  time.Duration(diag.TypedColumnPrepareQ2DenseDistinctRankCollectRefsNanos),
+		TypedColumnPrepareQ2DenseDistinctRankBuildShards:  time.Duration(diag.TypedColumnPrepareQ2DenseDistinctRankBuildShardsNanos),
+		TypedColumnPrepareQ2DenseDistinctRankShardCount:   diag.TypedColumnPrepareQ2DenseDistinctRankShardCount,
+		TypedColumnPrepareQ2DenseDistinctRankRefs:         diag.TypedColumnPrepareQ2DenseDistinctRankRefs,
+		TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs: diag.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs,
+		TypedColumnPrepareQ2DenseDistinctGlobalRanks:      diag.TypedColumnPrepareQ2DenseDistinctGlobalRanks,
+
+		HotRunDuration:      elapsed,
+		ScanDuration:        scanDuration,
+		ReduceDuration:      reduceDuration,
+		AdapterDuration:     resultShapeDuration,
+		ResultShapeDuration: resultShapeDuration,
+		ParityHashDuration:  parityHashElapsed,
 
 		TypedColumnPrepareQ2GroupGlobalDictionaryRank:    time.Duration(diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos),
 		TypedColumnPrepareQ2DistinctGlobalDictionaryRank: time.Duration(diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos),
@@ -2829,13 +2871,22 @@ func executeColumnStoreSuitePreparedPhysicalQuery(collection *collections.Collec
 		TypedColumnPrepareQ2DenseGroupRank:   time.Duration(setupDiagnostics.TypedColumnPrepareQ2DenseGroupGlobalRankNanos),
 		TypedColumnPrepareQ2DenseDistinct:    time.Duration(setupDiagnostics.TypedColumnPrepareQ2DenseDistinctGlobalRankNanos),
 		TypedColumnPrepareQ2DensePartLocal:   time.Duration(setupDiagnostics.TypedColumnPrepareQ2DensePartLocalRankNanos),
-		SetupDuration:                        setupElapsed,
-		HotRunDuration:                       hotRunElapsed,
-		ScanDuration:                         scanDuration,
-		ReduceDuration:                       reduceDuration,
-		AdapterDuration:                      resultShapeDuration,
-		ResultShapeDuration:                  resultShapeDuration,
-		ParityHashDuration:                   parityHashElapsed,
+
+		TypedColumnPrepareQ2DenseDistinctRankPlan:         time.Duration(setupDiagnostics.TypedColumnPrepareQ2DenseDistinctRankPlanNanos),
+		TypedColumnPrepareQ2DenseDistinctRankCollectRefs:  time.Duration(setupDiagnostics.TypedColumnPrepareQ2DenseDistinctRankCollectRefsNanos),
+		TypedColumnPrepareQ2DenseDistinctRankBuildShards:  time.Duration(setupDiagnostics.TypedColumnPrepareQ2DenseDistinctRankBuildShardsNanos),
+		TypedColumnPrepareQ2DenseDistinctRankShardCount:   setupDiagnostics.TypedColumnPrepareQ2DenseDistinctRankShardCount,
+		TypedColumnPrepareQ2DenseDistinctRankRefs:         setupDiagnostics.TypedColumnPrepareQ2DenseDistinctRankRefs,
+		TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs: setupDiagnostics.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs,
+		TypedColumnPrepareQ2DenseDistinctGlobalRanks:      setupDiagnostics.TypedColumnPrepareQ2DenseDistinctGlobalRanks,
+
+		SetupDuration:       setupElapsed,
+		HotRunDuration:      hotRunElapsed,
+		ScanDuration:        scanDuration,
+		ReduceDuration:      reduceDuration,
+		AdapterDuration:     resultShapeDuration,
+		ResultShapeDuration: resultShapeDuration,
+		ParityHashDuration:  parityHashElapsed,
 
 		TypedColumnPrepareQ2GroupGlobalDictionaryRank:    time.Duration(setupDiagnostics.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos),
 		TypedColumnPrepareQ2DistinctGlobalDictionaryRank: time.Duration(setupDiagnostics.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos),
@@ -3290,6 +3341,13 @@ func columnStoreJSONBenchCellFromQueryMetric(q columnStoreQueryMetric, cfg *coll
 	cell.TypedColumnPrepareQ2DenseGroupRankMS = q.TypedColumnPrepareQ2DenseGroupRankMS
 	cell.TypedColumnPrepareQ2DenseDistinctMS = q.TypedColumnPrepareQ2DenseDistinctMS
 	cell.TypedColumnPrepareQ2DensePartLocalMS = q.TypedColumnPrepareQ2DensePartLocalMS
+	cell.TypedColumnPrepareQ2DenseDistinctRankPlanMS = q.TypedColumnPrepareQ2DenseDistinctRankPlanMS
+	cell.TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS = q.TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS
+	cell.TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS = q.TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS
+	cell.TypedColumnPrepareQ2DenseDistinctRankShardCount = q.TypedColumnPrepareQ2DenseDistinctRankShardCount
+	cell.TypedColumnPrepareQ2DenseDistinctRankRefs = q.TypedColumnPrepareQ2DenseDistinctRankRefs
+	cell.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs = q.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs
+	cell.TypedColumnPrepareQ2DenseDistinctGlobalRanks = q.TypedColumnPrepareQ2DenseDistinctGlobalRanks
 	cell.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS = q.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS
 	cell.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS = q.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS
 	cell.TypedColumnPrepareQ2GroupGlobalCodeRemapMS = q.TypedColumnPrepareQ2GroupGlobalCodeRemapMS
@@ -3421,6 +3479,13 @@ func columnStoreJSONBenchCellFromPreparedExecution(name string, rawHash uint64, 
 	cell.TypedColumnPrepareQ2DenseGroupRankMS = durationMS(exec.TypedColumnPrepareQ2DenseGroupRank)
 	cell.TypedColumnPrepareQ2DenseDistinctMS = durationMS(exec.TypedColumnPrepareQ2DenseDistinct)
 	cell.TypedColumnPrepareQ2DensePartLocalMS = durationMS(exec.TypedColumnPrepareQ2DensePartLocal)
+	cell.TypedColumnPrepareQ2DenseDistinctRankPlanMS = durationMS(exec.TypedColumnPrepareQ2DenseDistinctRankPlan)
+	cell.TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS = durationMS(exec.TypedColumnPrepareQ2DenseDistinctRankCollectRefs)
+	cell.TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS = durationMS(exec.TypedColumnPrepareQ2DenseDistinctRankBuildShards)
+	cell.TypedColumnPrepareQ2DenseDistinctRankShardCount = exec.TypedColumnPrepareQ2DenseDistinctRankShardCount
+	cell.TypedColumnPrepareQ2DenseDistinctRankRefs = exec.TypedColumnPrepareQ2DenseDistinctRankRefs
+	cell.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs = exec.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs
+	cell.TypedColumnPrepareQ2DenseDistinctGlobalRanks = exec.TypedColumnPrepareQ2DenseDistinctGlobalRanks
 	cell.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS = durationMS(exec.TypedColumnPrepareQ2GroupGlobalDictionaryRank)
 	cell.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS = durationMS(exec.TypedColumnPrepareQ2DistinctGlobalDictionaryRank)
 	cell.TypedColumnPrepareQ2GroupGlobalCodeRemapMS = durationMS(exec.TypedColumnPrepareQ2GroupGlobalCodeRemap)
@@ -5014,13 +5079,13 @@ func renderColumnStoreTypedColumnSetupDiagnosticsMarkdown(sb *strings.Builder, r
 		return
 	}
 	sb.WriteString("## Typed Column Setup Diagnostics\n\n")
-	sb.WriteString("| cell | query | mode | query mode | metadata mode | prepare/setup ms | typed prep workers | one-shot build ms | prep plan ms | prep refs ms | prep pair ms | prep decode ms | prep post ms | q2 group rank ms | q2 distinct rank ms | q2 local rank ms | q2 dense group global rank ms | q2 dense distinct global rank ms | q2 dense part local rank ms | q2 group global dict/rank ms | q2 distinct global dict/rank ms | q2 group global-code remap ms | q2 distinct global-code remap ms | prep summary ms | cache store ms | read image ms | state build ms | dictionary ms | pruning ms | sort key ms | stats ms | range read ms | range read B | adapter ms | dense group ms | dense value ms | dense predicate ms | dense preapply ms |\n")
-	sb.WriteString("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	sb.WriteString("| cell | query | mode | query mode | metadata mode | prepare/setup ms | typed prep workers | one-shot build ms | prep plan ms | prep refs ms | prep pair ms | prep decode ms | prep post ms | q2 group rank ms | q2 distinct rank ms | q2 local rank ms | q2 dense group global rank ms | q2 dense distinct global rank ms | q2 dense part local rank ms | q2 dense distinct rank plan ms | q2 dense distinct rank collect refs ms | q2 dense distinct rank build shards ms | q2 dense distinct rank shards | q2 dense distinct rank refs | q2 dense distinct rank max shard refs | q2 dense distinct global ranks | q2 group global dict/rank ms | q2 distinct global dict/rank ms | q2 group global-code remap ms | q2 distinct global-code remap ms | prep summary ms | cache store ms | read image ms | state build ms | dictionary ms | pruning ms | sort key ms | stats ms | range read ms | range read B | adapter ms | dense group ms | dense value ms | dense predicate ms | dense preapply ms |\n")
+	sb.WriteString("|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, cell := range report.JSONBenchCells {
 		if !columnStoreJSONBenchCellHasTypedColumnSetupDiagnostics(cell) {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %s | %s | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %d | %d | %d | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f | %d | %.3f | %.3f | %.3f | %.3f | %.3f |\n",
 			markdownCodeTableText(cell.CellLabel),
 			markdownCodeTableText(cell.Query),
 			markdownCodeTableText(cell.ExecutionMode),
@@ -5040,6 +5105,13 @@ func renderColumnStoreTypedColumnSetupDiagnosticsMarkdown(sb *strings.Builder, r
 			cell.TypedColumnPrepareQ2DenseGroupRankMS,
 			cell.TypedColumnPrepareQ2DenseDistinctMS,
 			cell.TypedColumnPrepareQ2DensePartLocalMS,
+			cell.TypedColumnPrepareQ2DenseDistinctRankPlanMS,
+			cell.TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS,
+			cell.TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS,
+			cell.TypedColumnPrepareQ2DenseDistinctRankShardCount,
+			cell.TypedColumnPrepareQ2DenseDistinctRankRefs,
+			cell.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs,
+			cell.TypedColumnPrepareQ2DenseDistinctGlobalRanks,
 			cell.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS,
 			cell.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS,
 			cell.TypedColumnPrepareQ2GroupGlobalCodeRemapMS,
@@ -5092,6 +5164,13 @@ func columnStoreJSONBenchCellHasTypedColumnSetupDiagnostics(cell columnStoreJSON
 		cell.TypedColumnPrepareQ2DenseGroupRankMS != 0 ||
 		cell.TypedColumnPrepareQ2DenseDistinctMS != 0 ||
 		cell.TypedColumnPrepareQ2DensePartLocalMS != 0 ||
+		cell.TypedColumnPrepareQ2DenseDistinctRankPlanMS != 0 ||
+		cell.TypedColumnPrepareQ2DenseDistinctRankCollectRefsMS != 0 ||
+		cell.TypedColumnPrepareQ2DenseDistinctRankBuildShardsMS != 0 ||
+		cell.TypedColumnPrepareQ2DenseDistinctRankShardCount != 0 ||
+		cell.TypedColumnPrepareQ2DenseDistinctRankRefs != 0 ||
+		cell.TypedColumnPrepareQ2DenseDistinctRankMaxShardRefs != 0 ||
+		cell.TypedColumnPrepareQ2DenseDistinctGlobalRanks != 0 ||
 		cell.TypedColumnPrepareQ2GroupGlobalDictionaryRankMS != 0 ||
 		cell.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS != 0 ||
 		cell.TypedColumnPrepareQ2GroupGlobalCodeRemapMS != 0 ||
