@@ -33,6 +33,7 @@ func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
 	}
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "direct", direct, rowHash, wantCounts)
 	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "direct", direct.Diagnostics, len(events), matchedRows, true)
+	assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(t, "direct", direct.Diagnostics, true)
 
 	skipChecksumsReq := req
 	skipChecksumsReq.ColumnAssetReadIntegrity = ColumnAssetReadIntegritySkipChecksums
@@ -42,12 +43,14 @@ func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
 	}
 	assertTypedColumnQ2SortedGroupedDistinctResult1950(t, "skip checksums", skipChecksums, rowHash, wantCounts)
 	assertTypedColumnQ2SortedGroupedDistinctDiagnostics1950(t, "skip checksums", skipChecksums.Diagnostics, len(events), matchedRows, true)
+	assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(t, "skip checksums", skipChecksums.Diagnostics, true)
 
 	runner, err := col.PrepareColumnPhysicalQuery(req)
 	if err != nil {
 		t.Fatalf("PrepareColumnPhysicalQuery(q2): %v", err)
 	}
 	defer func() { _ = runner.Close() }()
+	assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(t, "prepared setup", runner.PrepareDiagnostics(), true)
 	prepared, err := runner.Run()
 	if err != nil {
 		t.Fatalf("prepared q2: %v", err)
@@ -312,8 +315,14 @@ func TestTypedColumnQ2DenseGroupCountDistinctRankMapCapacity3158(t *testing.T) {
 		}
 	}
 
-	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMaps(parts); err != nil {
+	var prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
+	if err := prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics(parts, &prepareDiagnostics); err != nil {
 		t.Fatalf("prepare sorted global rank maps: %v", err)
+	}
+	if prepareDiagnostics.Q2DenseGroupGlobalRankNanos != prepareDiagnostics.Q2GroupRankNanos ||
+		prepareDiagnostics.Q2DenseDistinctGlobalRankNanos != prepareDiagnostics.Q2DistinctRankNanos ||
+		prepareDiagnostics.Q2DensePartLocalRankNanos != prepareDiagnostics.Q2LocalRankNanos {
+		t.Fatalf("dense q2 rank diagnostics=%+v want explicit dense split to mirror legacy phases", prepareDiagnostics)
 	}
 	group0 := parts[0].DenseGroupCountDistinct.Group
 	group1 := parts[1].DenseGroupCountDistinct.Group
@@ -1025,5 +1034,28 @@ func assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(tb testing.TB, la
 	}
 	if diag.SortKeyMarkChecks != 0 || diag.SortKeyMarkSkips != 0 {
 		tb.Fatalf("%s mark diagnostics=%+v want no sort-key pruning in dense no-sort path", label, diag)
+	}
+}
+
+func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, want bool) {
+	tb.Helper()
+	total := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
+		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos +
+		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos +
+		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
+	if !want {
+		if total != 0 {
+			tb.Fatalf("%s sorted grouped-distinct post-prepare split nanos=%d want 0 diagnostics=%+v", label, total, diag)
+		}
+		return
+	}
+	if total == 0 {
+		return
+	}
+	if diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos <= 0 ||
+		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos <= 0 ||
+		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos <= 0 ||
+		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos <= 0 {
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want all four q2 global-code phases >0 when timer resolution records split work", label, diag)
 	}
 }
