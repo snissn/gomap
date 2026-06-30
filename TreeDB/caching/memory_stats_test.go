@@ -88,15 +88,27 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.memtable_residency.mutable.total.size_bytes",
 		"treedb.process.memtable_residency.mutable.total.entry_capacity",
 		"treedb.process.memtable_residency.mutable.total.entry_backing_bytes",
+		"treedb.process.memtable_residency.mutable.total.value_arena_active_bytes",
+		"treedb.process.memtable_residency.mutable.total.value_arena_retained_bytes",
 		"treedb.process.memtable_residency.mutable.append_only.entry_capacity",
 		"treedb.process.memtable_residency.mutable.append_only.entry_backing_bytes",
+		"treedb.process.memtable_residency.mutable.append_only.value_arena_active_chunks",
+		"treedb.process.memtable_residency.mutable.append_only.value_arena_active_bytes",
+		"treedb.process.memtable_residency.mutable.append_only.value_arena_retained_chunks",
+		"treedb.process.memtable_residency.mutable.append_only.value_arena_retained_bytes",
 		"treedb.process.memtable_residency.queue.total.count",
 		"treedb.process.memtable_residency.queue.total.entries",
 		"treedb.process.memtable_residency.queue.total.size_bytes",
 		"treedb.process.memtable_residency.queue.total.entry_capacity",
 		"treedb.process.memtable_residency.queue.total.entry_backing_bytes",
+		"treedb.process.memtable_residency.queue.total.value_arena_active_bytes",
+		"treedb.process.memtable_residency.queue.total.value_arena_retained_bytes",
 		"treedb.process.memtable_residency.queue.append_only.entry_capacity",
 		"treedb.process.memtable_residency.queue.append_only.entry_backing_bytes",
+		"treedb.process.memtable_residency.queue.append_only.value_arena_active_chunks",
+		"treedb.process.memtable_residency.queue.append_only.value_arena_active_bytes",
+		"treedb.process.memtable_residency.queue.append_only.value_arena_retained_chunks",
+		"treedb.process.memtable_residency.queue.append_only.value_arena_retained_bytes",
 		"treedb.process.read_path.snapshot.queue_inline_hits_total",
 		"treedb.process.read_path.snapshot.queue_inline_bytes_total",
 		"treedb.process.read_path.snapshot.queue_pointer_hits_total",
@@ -140,6 +152,10 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.cache.append_only.mutable_pool_puts_total",
 		"treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total",
 		"treedb.cache.append_only.mutable_new_alloc_total",
+		"treedb.cache.append_only.mem_lease_value_arena_active_bytes",
+		"treedb.cache.append_only.mem_lease_value_arena_retained_bytes",
+		"treedb.cache.append_only.mutable_value_arena_active_bytes",
+		"treedb.cache.append_only.mutable_value_arena_retained_bytes",
 		"treedb.cache.append_only.entry_pool_retained_bytes_estimate",
 		"treedb.cache.append_only.entry_pool_retained_bytes_max_estimate",
 		"treedb.cache.append_only.entry_pool_gets_total",
@@ -159,6 +175,10 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.append_only.mutable_pool_puts_total",
 		"treedb.process.append_only.mutable_pool_entry_backing_dropped_bytes_total",
 		"treedb.process.append_only.mutable_new_alloc_total",
+		"treedb.process.append_only.mem_lease_value_arena_active_bytes",
+		"treedb.process.append_only.mem_lease_value_arena_retained_bytes",
+		"treedb.process.append_only.mutable_value_arena_active_bytes",
+		"treedb.process.append_only.mutable_value_arena_retained_bytes",
 		"treedb.process.append_only.entry_pool_retained_bytes_estimate",
 		"treedb.process.append_only.entry_pool_retained_bytes_max_estimate",
 		"treedb.process.append_only.entry_pool_gets_total",
@@ -200,6 +220,12 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.mutable_new_alloc_total"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mutable_new_alloc_total") {
 		t.Fatalf("append_only new source mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mutable_new_alloc_total"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.mem_lease_value_arena_retained_bytes"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mem_lease_value_arena_retained_bytes") {
+		t.Fatalf("append_only lease value arena retained mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mem_lease_value_arena_retained_bytes"))
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.append_only.mutable_value_arena_active_bytes"); got != mustStatInt64(t, stats, "treedb.cache.append_only.mutable_value_arena_active_bytes") {
+		t.Fatalf("append_only mutable value arena active mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.mutable_value_arena_active_bytes"))
 	}
 	if got := mustStatInt64(t, stats, "treedb.process.append_only.entry_pool_retained_bytes_estimate"); got != mustStatInt64(t, stats, "treedb.cache.append_only.entry_pool_retained_bytes_estimate") {
 		t.Fatalf("append_only entry pool retained mismatch process=%d cache=%d", got, mustStatInt64(t, stats, "treedb.cache.append_only.entry_pool_retained_bytes_estimate"))

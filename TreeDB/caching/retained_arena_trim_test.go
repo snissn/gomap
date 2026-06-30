@@ -110,9 +110,12 @@ func TestRecycleAppendOnlyMemtables_DropsColdWhenModeNotAppendOnly(t *testing.T)
 	if got := mt.EntryCapacity(); got != 0 {
 		t.Fatalf("released append-only entry capacity=%d want 0", got)
 	}
-	count, entryCapacity, entryBackingBytes := db.appendOnlyMemLeaseStats()
+	count, entryCapacity, entryBackingBytes, valueArena := db.appendOnlyMemLeaseStats()
 	if count != 0 || entryCapacity != 0 || entryBackingBytes != 0 {
 		t.Fatalf("append-only lease stats count=%d capacity=%d bytes=%d want all zero", count, entryCapacity, entryBackingBytes)
+	}
+	if valueArena.ActiveBytes != 0 || valueArena.RetainedBytes != 0 {
+		t.Fatalf("append-only lease value arena stats=%+v want zero bytes", valueArena)
 	}
 }
 

@@ -33,6 +33,7 @@ type ClusterRouteShape string
 const (
 	ClusterRouteShapeCollection ClusterRouteShape = "collection"
 	ClusterRouteShapeToken      ClusterRouteShape = "token"
+	ClusterRouteShapeTokenBatch ClusterRouteShape = "token_batch"
 )
 
 type ClusterRouteRequest struct {
@@ -44,18 +45,20 @@ type ClusterRouteRequest struct {
 	Shape       ClusterRouteShape
 	TokenKnown  bool
 	Token       uint64
+	Tokens      []uint64
 }
 
 type ClusterRouteTarget struct {
-	GroupID       string
-	Members       []string
-	LeaderHint    string
-	PlacementMode string
-	Reason        string
-	Shape         ClusterRouteShape
-	TokenKnown    bool
-	Token         uint64
-	PartitionID   string
+	GroupID         string
+	Members         []string
+	LeaderHint      string
+	PlacementMode   string
+	Reason          string
+	Shape           ClusterRouteShape
+	TokenKnown      bool
+	Token           uint64
+	PartitionID     string
+	TokenBatchClass string
 }
 
 // ClusterAdmissionProvider exposes the node write-admission state backing a
@@ -196,7 +199,8 @@ func AdmitClusterMutation(ctx context.Context, submitter ClusterSubmitter) error
 // PreflightClusterRoute checks the optional cluster route provider. A missing
 // provider preserves existing submitter behavior; a configured provider must
 // return a supported route target with a group ID. Token/ring targets require
-// an exactly-one-ID token route request.
+// an exactly-one-ID token route request; multi-ID token batches are classified
+// only so adapters can fail closed until split/fanout execution exists.
 func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, request ClusterRouteRequest) (ClusterRouteTarget, bool, error) {
 	provider, ok := submitter.(ClusterRouteProvider)
 	if !ok {
@@ -209,6 +213,11 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 		if !request.TokenKnown {
 			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster token route request missing document token")
 		}
+	case ClusterRouteShapeTokenBatch:
+		if len(request.Tokens) < 2 {
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster token batch route request requires multiple document tokens")
+		}
+		request.Tokens = append([]uint64(nil), request.Tokens...)
 	default:
 		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster route shape %q is not supported", request.Shape)
 	}
@@ -219,13 +228,6 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 	if err != nil {
 		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster route rejected %s/%s/%s: %v", request.Database, request.Catalog, request.Collection, err)
 	}
-	if target.GroupID == "" {
-		reason := target.Reason
-		if reason == "" {
-			reason = "cluster route target missing group id"
-		}
-		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
-	}
 	if target.PlacementMode == "" {
 		reason := target.Reason
 		if reason == "" {
@@ -234,6 +236,18 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
 	}
 	target.Shape = normalizeClusterRouteTargetShape(target.Shape, target.PlacementMode)
+	if target.PlacementMode == "token" || target.PlacementMode == "ring" {
+		if request.Shape == ClusterRouteShapeTokenBatch {
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", clusterTokenBatchRouteRejection(request, target))
+		}
+	}
+	if target.GroupID == "" {
+		reason := target.Reason
+		if reason == "" {
+			reason = "cluster route target missing group id"
+		}
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+	}
 	switch target.PlacementMode {
 	case "collection":
 		if target.Shape != ClusterRouteShapeCollection {
@@ -288,6 +302,18 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 	}
 	target.Members = append([]string(nil), target.Members...)
 	return target, true, nil
+}
+
+func clusterTokenBatchRouteRejection(request ClusterRouteRequest, target ClusterRouteTarget) string {
+	class := target.TokenBatchClass
+	if class == "" {
+		class = "unclassified"
+	}
+	action := "command split"
+	if class == string(raftplacement.TokenBatchRouteFanoutRequiredV1) {
+		action = "fanout"
+	}
+	return "cluster token/ring multi-id write requires " + action + " before submit: route_class=" + class + " token_count=" + strconv.Itoa(len(request.Tokens))
 }
 
 func normalizeClusterRouteShape(shape ClusterRouteShape) ClusterRouteShape {
@@ -345,36 +371,51 @@ func clusterMutationRouteRequest(cmd iwire.ValidatedCommand, limits iwire.Limits
 		CommandName: name,
 		Shape:       ClusterRouteShapeCollection,
 	}
-	token, ok, err := clusterMutationDocumentToken(cmd, limits)
+	tokens, ok, err := clusterMutationDocumentTokens(cmd, limits)
 	if err != nil {
 		return ClusterRouteRequest{}, err
 	}
-	if ok {
+	if ok && len(tokens) == 1 {
 		req.Shape = ClusterRouteShapeToken
 		req.TokenKnown = true
-		req.Token = token
+		req.Token = tokens[0]
+	} else if len(tokens) > 1 {
+		req.Shape = ClusterRouteShapeTokenBatch
+		req.Tokens = tokens
 	}
 	return req, nil
 }
 
 func clusterMutationDocumentToken(cmd iwire.ValidatedCommand, limits iwire.Limits) (uint64, bool, error) {
+	tokens, ok, err := clusterMutationDocumentTokens(cmd, limits)
+	if err != nil || !ok || len(tokens) != 1 {
+		return 0, false, err
+	}
+	return tokens[0], true, nil
+}
+
+func clusterMutationDocumentTokens(cmd iwire.ValidatedCommand, limits iwire.Limits) ([]uint64, bool, error) {
 	switch cmd.Header.ID {
 	case iwire.CommandInsertBatch, iwire.CommandReplaceBatch, iwire.CommandDeleteBatch, iwire.CommandUpdateBSONSet:
 	default:
-		return 0, false, nil
+		return nil, false, nil
 	}
 	raw, err := metadataSection(cmd.Known, iwire.SectionDocumentIDs)
 	if err != nil {
-		return 0, false, err
+		return nil, false, err
 	}
 	ids, err := iwire.DecodeByteVectorItems(raw, limits)
 	if err != nil {
-		return 0, false, err
+		return nil, false, err
 	}
-	if len(ids) != 1 {
-		return 0, false, nil
+	if len(ids) == 0 {
+		return nil, false, nil
 	}
-	return raftplacement.DocumentIDTokenV1(ids[0]), true, nil
+	tokens := make([]uint64, len(ids))
+	for i, id := range ids {
+		tokens[i] = raftplacement.DocumentIDTokenV1(id)
+	}
+	return tokens, true, nil
 }
 
 func clusterMutationRouteCollection(cmd iwire.ValidatedCommand) (string, error) {

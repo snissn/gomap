@@ -159,6 +159,94 @@ func TestRouteDocumentTokenPreservesCollectionModeAndRoutesTokenModes(t *testing
 	}
 }
 
+func TestRouteTokenBatchClassifiesDocumentTokens(t *testing.T) {
+	tests := []struct {
+		name           string
+		tokens         []uint64
+		wantClass      TokenBatchRouteClassV1
+		wantGroup      raftcluster.GroupID
+		wantGroups     []raftcluster.GroupID
+		wantPartitions []TokenPartitionID
+	}{
+		{
+			name:           "single token",
+			tokens:         []uint64{1},
+			wantClass:      TokenBatchRouteSingleTokenV1,
+			wantGroup:      "group-a",
+			wantGroups:     []raftcluster.GroupID{"group-a"},
+			wantPartitions: []TokenPartitionID{"p0"},
+		},
+		{
+			name:           "same partition",
+			tokens:         []uint64{1, 2},
+			wantClass:      TokenBatchRouteSamePartitionV1,
+			wantGroup:      "group-a",
+			wantGroups:     []raftcluster.GroupID{"group-a"},
+			wantPartitions: []TokenPartitionID{"p0", "p0"},
+		},
+		{
+			name:           "same group multiple partitions",
+			tokens:         []uint64{1, 11},
+			wantClass:      TokenBatchRouteSameGroupV1,
+			wantGroup:      "group-a",
+			wantGroups:     []raftcluster.GroupID{"group-a"},
+			wantPartitions: []TokenPartitionID{"p0", "p1"},
+		},
+		{
+			name:           "cross group fanout required",
+			tokens:         []uint64{1, 21},
+			wantClass:      TokenBatchRouteFanoutRequiredV1,
+			wantGroups:     []raftcluster.GroupID{"group-a", "group-b"},
+			wantPartitions: []TokenPartitionID{"p0", "p2"},
+		},
+	}
+	for _, mode := range []PlacementModeV1{PlacementModeTokenV1, PlacementModeRingV1} {
+		for _, tc := range tests {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				resolved := mustTokenBatchRouteCatalog(t, mode)
+				decision, err := resolved.ClassifyDocumentTokenBatch(DefaultDatabase, DefaultCatalog, "events", tc.tokens)
+				if err != nil {
+					t.Fatalf("ClassifyDocumentTokenBatch: %v", err)
+				}
+				if decision.Collection.Collection != "events" || decision.PlacementMode != mode {
+					t.Fatalf("decision collection/mode=%s/%s want events/%s", decision.Collection.Collection, decision.PlacementMode, mode)
+				}
+				if decision.Class != tc.wantClass {
+					t.Fatalf("class=%q want %q", decision.Class, tc.wantClass)
+				}
+				if !reflect.DeepEqual(decision.Tokens, tc.tokens) {
+					t.Fatalf("tokens=%v want %v", decision.Tokens, tc.tokens)
+				}
+				if got := tokenBatchPartitionIDs(decision.Partitions); !reflect.DeepEqual(got, tc.wantPartitions) {
+					t.Fatalf("partitions=%v want %v", got, tc.wantPartitions)
+				}
+				if got := tokenBatchGroupIDs(decision.Groups); !reflect.DeepEqual(got, tc.wantGroups) {
+					t.Fatalf("groups=%v want %v", got, tc.wantGroups)
+				}
+				if decision.GroupID() != tc.wantGroup {
+					t.Fatalf("group=%q want %q", decision.GroupID(), tc.wantGroup)
+				}
+				if decision.FanoutRequired() != (tc.wantClass == TokenBatchRouteFanoutRequiredV1) {
+					t.Fatalf("FanoutRequired=%v class=%q", decision.FanoutRequired(), decision.Class)
+				}
+			})
+		}
+	}
+}
+
+func TestRouteTokenBatchFailsClosed(t *testing.T) {
+	resolved := mustTokenBatchRouteCatalog(t, PlacementModeRingV1)
+	_, err := resolved.ClassifyDocumentTokenBatch(DefaultDatabase, DefaultCatalog, "events", nil)
+	if !errors.Is(err, ErrInvalidRouteRequest) || !errors.Is(err, ErrMissingRouteToken) {
+		t.Fatalf("empty token batch err=%v want invalid route + missing token", err)
+	}
+
+	_, err = resolved.ClassifyDocumentTokenBatch(DefaultDatabase, DefaultCatalog, "users", []uint64{1, 2})
+	if !errors.Is(err, ErrInvalidRouteRequest) || !errors.Is(err, ErrUnsupportedPlacementMode) {
+		t.Fatalf("collection placement batch err=%v want invalid route + unsupported placement", err)
+	}
+}
+
 func TestRouteFailsClosed(t *testing.T) {
 	ref := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "events"}
 	catalog := validCatalog()
@@ -261,4 +349,40 @@ func TestRouteInvalidCollectionFailsClosed(t *testing.T) {
 	if !errors.Is(err, ErrInvalidCollection) {
 		t.Fatalf("Route err=%v want ErrInvalidCollection", err)
 	}
+}
+
+func mustTokenBatchRouteCatalog(tb testing.TB, mode PlacementModeV1) ResolvedCatalogV1 {
+	tb.Helper()
+	ref := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "events"}
+	catalog := validCatalog()
+	catalog.Placements = append(catalog.Placements, CollectionPlacementV1{
+		Collection: ref,
+		Mode:       mode,
+		TokenPartitions: []TokenPartitionV1{
+			{ID: "p0", GroupID: "group-a", Start: 0, End: 9},
+			{ID: "p1", GroupID: "group-a", Start: 10, End: 19},
+			{ID: "p2", GroupID: "group-b", Start: 20, End: maxTokenV1},
+		},
+	})
+	resolved, err := Validate(catalog)
+	if err != nil {
+		tb.Fatalf("Validate token batch catalog: %v", err)
+	}
+	return resolved
+}
+
+func tokenBatchPartitionIDs(partitions []ResolvedTokenPartitionV1) []TokenPartitionID {
+	out := make([]TokenPartitionID, len(partitions))
+	for i, partition := range partitions {
+		out[i] = partition.ID
+	}
+	return out
+}
+
+func tokenBatchGroupIDs(groups []ResolvedGroupV1) []raftcluster.GroupID {
+	out := make([]raftcluster.GroupID, len(groups))
+	for i, group := range groups {
+		out[i] = group.ID
+	}
+	return out
 }

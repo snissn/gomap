@@ -84,31 +84,71 @@ func (p *mongoPlacementRouteClusterSubmitter) ClusterRoute(ctx context.Context, 
 	p.routeMu.Unlock()
 	var decision raftplacement.RouteDecisionV1
 	var err error
-	if req.Shape == treenativewire.ClusterRouteShapeToken && req.TokenKnown {
+	switch {
+	case req.Shape == treenativewire.ClusterRouteShapeToken && req.TokenKnown:
 		decision, err = p.catalog.RouteDocumentToken(req.Database, req.Catalog, req.Collection, req.Token)
-	} else {
+	case req.Shape == treenativewire.ClusterRouteShapeTokenBatch:
+		return p.clusterRouteTokenBatch(req)
+	default:
 		decision, err = p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
 	}
 	if err != nil {
 		return treenativewire.ClusterRouteTarget{}, err
 	}
-	members := make([]string, len(decision.Group.Members))
-	for i, member := range decision.Group.Members {
-		members[i] = string(member)
-	}
-	target := treenativewire.ClusterRouteTarget{
-		GroupID:       string(decision.GroupID()),
-		Members:       members,
-		LeaderHint:    string(decision.LeaderHint()),
-		PlacementMode: string(decision.PlacementMode),
-		Shape:         treenativewire.ClusterRouteShape(decision.Shape),
-	}
+	target := mongoClusterRouteTargetFromDecision(decision)
 	if decision.Token.Present {
 		target.TokenKnown = true
 		target.Token = decision.Token.Token
 		target.PartitionID = string(decision.Token.Partition.ID)
 	}
 	return target, nil
+}
+
+func (p *mongoPlacementRouteClusterSubmitter) clusterRouteTokenBatch(req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
+	ref := raftplacement.CollectionRefV1{Database: req.Database, Catalog: req.Catalog, Collection: req.Collection}
+	if placement, ok := p.catalog.Placement(ref); ok && placement.Mode == raftplacement.PlacementModeCollectionV1 {
+		decision, err := p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
+		if err != nil {
+			return treenativewire.ClusterRouteTarget{}, err
+		}
+		return mongoClusterRouteTargetFromDecision(decision), nil
+	}
+	decision, err := p.catalog.ClassifyDocumentTokenBatch(req.Database, req.Catalog, req.Collection, req.Tokens)
+	if err != nil {
+		return treenativewire.ClusterRouteTarget{}, err
+	}
+	return mongoClusterRouteTargetFromTokenBatch(decision), nil
+}
+
+func mongoClusterRouteTargetFromDecision(decision raftplacement.RouteDecisionV1) treenativewire.ClusterRouteTarget {
+	members := make([]string, len(decision.Group.Members))
+	for i, member := range decision.Group.Members {
+		members[i] = string(member)
+	}
+	return treenativewire.ClusterRouteTarget{
+		GroupID:       string(decision.GroupID()),
+		Members:       members,
+		LeaderHint:    string(decision.LeaderHint()),
+		PlacementMode: string(decision.PlacementMode),
+		Shape:         treenativewire.ClusterRouteShape(decision.Shape),
+	}
+}
+
+func mongoClusterRouteTargetFromTokenBatch(decision raftplacement.RouteTokenBatchDecisionV1) treenativewire.ClusterRouteTarget {
+	target := treenativewire.ClusterRouteTarget{
+		PlacementMode:   string(decision.PlacementMode),
+		Shape:           treenativewire.ClusterRouteShapeTokenBatch,
+		TokenBatchClass: string(decision.Class),
+	}
+	if !decision.FanoutRequired() {
+		target.GroupID = string(decision.GroupID())
+		target.LeaderHint = string(decision.LeaderHint())
+		target.Members = make([]string, len(decision.Group.Members))
+		for i, member := range decision.Group.Members {
+			target.Members[i] = string(member)
+		}
+	}
+	return target
 }
 
 func (p *mongoPlacementRouteClusterSubmitter) snapshotRoutes() []treenativewire.ClusterRouteRequest {
@@ -589,6 +629,36 @@ func TestClusterRoutePreflightMongoTokenPlacementSingleIDWrites(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightMongoCollectionPlacementAcceptsMultiIDBatch(t *testing.T) {
+	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeCollectionV1)
+	response := serveCommand(t, server, 336107, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+
+	routes := submitter.snapshotRoutes()
+	if len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	wantTokens := []uint64{
+		mongoClusterRouteTokenForValue(t, "u1"),
+		mongoClusterRouteTokenForValue(t, "u2"),
+	}
+	if got := routes[0]; got.Shape != treenativewire.ClusterRouteShapeTokenBatch || got.TokenKnown || len(got.Tokens) != len(wantTokens) || got.Tokens[0] != wantTokens[0] || got.Tokens[1] != wantTokens[1] {
+		t.Fatalf("multi-ID route request=%+v want token_batch tokens=%v", got, wantTokens)
+	}
+	calls := submitter.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("submit calls=%d want 1", len(calls))
+	}
+	assertMongoClusterRouteMetadata(t, calls[0], "app", "users")
+}
+
 func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing.T) {
 	tests := []struct {
 		name string
@@ -645,12 +715,13 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
 			response := tc.run(t, server)
 			assertCommandError(t, response, "NotWritablePrimary")
+			assertErrmsgContains(t, response, "requires command split before submit")
 			routes := submitter.snapshotRoutes()
 			if len(routes) != 1 {
 				t.Fatalf("route calls=%d want 1", len(routes))
 			}
-			if got := routes[0]; got.Shape != treenativewire.ClusterRouteShapeCollection || got.TokenKnown {
-				t.Fatalf("multi-ID route request=%+v want collection-shaped without token", got)
+			if got := routes[0]; got.Shape != treenativewire.ClusterRouteShapeTokenBatch || got.TokenKnown || len(got.Tokens) != 2 {
+				t.Fatalf("multi-ID route request=%+v want token_batch with two tokens", got)
 			}
 			if calls := submitter.snapshotCalls(); len(calls) != 0 {
 				t.Fatalf("submit calls=%d want 0", len(calls))

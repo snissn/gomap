@@ -1,13 +1,16 @@
 # TreeDB Nativewire YCSB Closeout Evidence
 
 Status: external `go-ycsb` nativewire load-only closeout evidence for #2026
-and #3355 captured on then-current `origin/main` commit
-`2b784debb05028f706b46127a41f6d578c3d4c13`.
+and #3355 refreshed on current `origin/main` commit
+`61910b8eac108c5f2c35f07a374879d1fb2dc5c8`.
 
-This evidence predates later Raft snapshot/route-preflight merges, including
+This refresh includes the later Raft snapshot/route-preflight merges that the
+first closeout capture predated, including
 `febc1992e58307d8b1edd2c68657faef9bd67c88` and
-`66819cd00fe10aaae2f0da3b7dbfc1ebc0c4113d`; rerun the closeout before using it
-as proof for those newer heads.
+`66819cd00fe10aaae2f0da3b7dbfc1ebc0c4113d`, plus the latest
+span-native command-WAL publish merge at
+`12b2bf3b17ea3455551a9c47243f0194a59ee1a0` and mixed-maintenance fallback
+coverage at `61910b8eac108c5f2c35f07a374879d1fb2dc5c8`.
 
 This report records the final 100k and 1M nativewire YCSB load checks requested
 by #2026 after the deterministic publication/readability slices landed. It is
@@ -31,8 +34,9 @@ TreeDB:
 
 - profile: `command_wal_relaxed`
 - server: `cmd/treedb-native-server`
-- gomap commit: `2b784debb05028f706b46127a41f6d578c3d4c13`
-- gomap branch: `codex/2026-ycsb-closeout`
+- gomap code base: `61910b8eac108c5f2c35f07a374879d1fb2dc5c8`
+- capture branch commit: `2041a2a2de55e0bb8b6d7d6201c57c989fa4e272`
+- gomap branch: `codex/2026-current-head-ycsb-20260630`
 
 External client:
 
@@ -64,18 +68,20 @@ clocksource: tsc
 Primary artifact root:
 
 ```text
-/tmp/treedb_native_ycsb_closeout_20260629_173744
+/tmp/treedb_native_ycsb_current_head_20260629_212711
 ```
 
 Primary artifacts:
 
 ```text
-/tmp/treedb_native_ycsb_closeout_20260629_173744/host.txt
-/tmp/treedb_native_ycsb_closeout_20260629_173744/commands.txt
-/tmp/treedb_native_ycsb_closeout_20260629_173744/summary.tsv
-/tmp/treedb_native_ycsb_closeout_20260629_173744/summary.md
-/tmp/treedb_native_ycsb_closeout_20260629_173744/100000/load.out
-/tmp/treedb_native_ycsb_closeout_20260629_173744/1000000/load.out
+/tmp/treedb_native_ycsb_current_head_20260629_212711/host.txt
+/tmp/treedb_native_ycsb_current_head_20260629_212711/commands.txt
+/tmp/treedb_native_ycsb_current_head_20260629_212711/summary_raw.tsv
+/tmp/treedb_native_ycsb_current_head_20260629_212711/error_counts.txt
+/tmp/treedb_native_ycsb_current_head_20260629_212711/100000/load.out
+/tmp/treedb_native_ycsb_current_head_20260629_212711/100000/server.log
+/tmp/treedb_native_ycsb_current_head_20260629_212711/1000000/load.out
+/tmp/treedb_native_ycsb_current_head_20260629_212711/1000000/server.log
 ```
 
 ## Focused Gates
@@ -102,8 +108,8 @@ make build
 
 | recordcount | INSERT count | INSERT ops/sec | INSERT avg us | INSERT p50 us | INSERT p95 us | INSERT p99 us | INSERT p99.9 us | INSERT max us | INSERT_ERROR |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 100,000 | 100,000 | 69,863.1 | 211.0 | 187.0 | 348.0 | 544.0 | 3,149.0 | 8,767.0 | 0 |
-| 1,000,000 | 1,000,000 | 44,118.3 | 346.0 | 203.0 | 370.0 | 537.0 | 1,521.0 | 6,717,439.0 | 0 |
+| 100,000 | 100,000 | 59,711.0 | 250.0 | 222.0 | 439.0 | 714.0 | 1,523.0 | 14,607.0 | 0 |
+| 1,000,000 | 1,000,000 | 45,196.8 | 334.0 | 259.0 | 538.0 | 902.0 | 2,539.0 | 939,007.0 | 0 |
 
 The 1M load emitted periodic progress rows at 10s and 20s before the final
 1,000,000-row summary. The table above uses the final post-run row.
@@ -115,31 +121,31 @@ server command and keep it running while executing the matching `go-ycsb load`
 command, then stop it before starting the next recordcount:
 
 ```sh
-cd /home/mikers/dev/snissn/gomap-2026-ycsb-closeout
+cd /home/mikers/dev/snissn/gomap-2026-current-head-ycsb-20260630
 
 GOWORK=off go build -o bin/treedb-native-server ./cmd/treedb-native-server
 
 cd /home/mikers/dev/pingcap/go-ycsb-2026-meta-v5
 make build
 
-/home/mikers/dev/snissn/gomap-2026-ycsb-closeout/bin/treedb-native-server \
-  -dir /tmp/treedb_native_ycsb_closeout_20260629_173744/100000/db \
+/home/mikers/dev/snissn/gomap-2026-current-head-ycsb-20260630/bin/treedb-native-server \
+  -dir /tmp/treedb_native_ycsb_current_head_20260629_212711/100000/db \
   -profile command_wal_relaxed \
-  -addr 127.0.0.1:17155
+  -addr 127.0.0.1:17282
 
 /home/mikers/dev/pingcap/go-ycsb-2026-meta-v5/bin/go-ycsb load treedb-native \
-  -p treedb.addr=127.0.0.1:17155 \
+  -p treedb.addr=127.0.0.1:17282 \
   -p recordcount=100000 \
   -p operationcount=10000 \
   -p threadcount=16
 
-/home/mikers/dev/snissn/gomap-2026-ycsb-closeout/bin/treedb-native-server \
-  -dir /tmp/treedb_native_ycsb_closeout_20260629_173744/1000000/db \
+/home/mikers/dev/snissn/gomap-2026-current-head-ycsb-20260630/bin/treedb-native-server \
+  -dir /tmp/treedb_native_ycsb_current_head_20260629_212711/1000000/db \
   -profile command_wal_relaxed \
-  -addr 127.0.0.1:17156
+  -addr 127.0.0.1:17283
 
 /home/mikers/dev/pingcap/go-ycsb-2026-meta-v5/bin/go-ycsb load treedb-native \
-  -p treedb.addr=127.0.0.1:17156 \
+  -p treedb.addr=127.0.0.1:17283 \
   -p recordcount=1000000 \
   -p operationcount=10000 \
   -p threadcount=16
@@ -149,6 +155,26 @@ make build
 
 This closeout run proves the compatible external nativewire YCSB client can load
 100k and 1M records against the current `command_wal_relaxed` TreeDB nativewire
-server with zero insert errors on this host. It supports #2026 closeout for the
-external YCSB evidence requirement, while the deterministic publication and
-readability proof remains documented by the issue and its earlier test PRs.
+server with zero insert errors on this host. The refreshed capture removes the
+stale-head caveat from the earlier `2b784debb05028f706b46127a41f6d578c3d4c13`
+run. It supports #2026 closeout for the external YCSB evidence requirement,
+while the deterministic publication and readability proof remains documented by
+the issue and its earlier test PRs.
+
+During the current-base refresh, an invalid intermediate 1M run at
+`/tmp/treedb_native_ycsb_current_head_20260629_202356` stopped at 768,001
+successful inserts and reported `INSERT_ERROR`; its server log had no panic,
+fatal error, EOF, or ambiguous-commit marker. A clean 1M rerun and the final
+paired capture above both completed with zero `INSERT_ERROR`. Keep #2026 open
+for the deeper publication/readability invariant and intermittent-failure proof.
+
+Follow-up #3374 classification lives in
+`docs/benchmarks/nativewire_ycsb_insert_error_classification_2026-06-30.md`.
+That diagnostic reran current-head 100k and 1M nativewire loads at
+`3f2c712bb700806b29deb872ed90531d4828ab79` with
+`TREEDB_YCSB_LOG_ERRORS=1` and `-p silence=false`; both loads completed with
+zero `INSERT_ERROR`, empty stderr, and zero raw matches for `EOF`, `ambiguous`,
+`panic`, `fatal`, `ERROR`, or `Failed`. The old intermediate artifact remains
+invalid because it lacks client-side error strings, but it is now classified as
+a non-reproduced client/harness/protocol/server-lifecycle interruption rather
+than evidence of a current catalog/value-log publication failure.
