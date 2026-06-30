@@ -128,6 +128,27 @@ func TestSnapshotManifestV1DecodeRejectsMissingAppliedCommandLSN(t *testing.T) {
 	}
 }
 
+func TestSnapshotManifestV1DecodeNormalizesZeroExpectedScopeToDefault(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	encoded, err := EncodeSnapshotManifestV1(manifest)
+	if err != nil {
+		t.Fatalf("EncodeSnapshotManifestV1: %v", err)
+	}
+	if _, err := DecodeSnapshotManifestV1(encoded, SnapshotScopeIdentityV1{}); err != nil {
+		t.Fatalf("DecodeSnapshotManifestV1 default scope: %v", err)
+	}
+
+	other := manifest
+	other.Scope.DatabaseScope = "database/other"
+	encodedOther, err := EncodeSnapshotManifestV1(other)
+	if err != nil {
+		t.Fatalf("EncodeSnapshotManifestV1 other scope: %v", err)
+	}
+	if _, err := DecodeSnapshotManifestV1(encodedOther, SnapshotScopeIdentityV1{}); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("DecodeSnapshotManifestV1 other scope error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
 func validSnapshotManifestV1() SnapshotManifestV1 {
 	return SnapshotManifestV1{
 		Format:            SnapshotManifestFormatV1,

@@ -9,6 +9,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 )
 
 const (
@@ -27,10 +29,32 @@ type SnapshotScopeIdentityV1 struct {
 	CatalogScope  string `json:"catalog_scope"`
 }
 
-func (s SnapshotScopeIdentityV1) isZero() bool {
-	return strings.TrimSpace(s.ScopeRule) == "" &&
-		strings.TrimSpace(s.DatabaseScope) == "" &&
-		strings.TrimSpace(s.CatalogScope) == ""
+func (s SnapshotScopeIdentityV1) normalizeExpected() SnapshotScopeIdentityV1 {
+	scopeRule := strings.TrimSpace(s.ScopeRule)
+	if scopeRule == "" {
+		scopeRule = string(raftentry.ScopeRuleSingleGroupV1)
+	}
+	databaseScope := strings.TrimSpace(s.DatabaseScope)
+	if databaseScope == "" {
+		databaseScope = raftentry.DatabaseScopeDefaultV1
+	}
+	catalogScope := strings.TrimSpace(s.CatalogScope)
+	if catalogScope == "" {
+		catalogScope = raftentry.CatalogScopeDefaultV1
+	}
+	return SnapshotScopeIdentityV1{
+		ScopeRule:     scopeRule,
+		DatabaseScope: databaseScope,
+		CatalogScope:  catalogScope,
+	}
+}
+
+func (s SnapshotScopeIdentityV1) normalizeManifest() SnapshotScopeIdentityV1 {
+	return SnapshotScopeIdentityV1{
+		ScopeRule:     strings.TrimSpace(s.ScopeRule),
+		DatabaseScope: strings.TrimSpace(s.DatabaseScope),
+		CatalogScope:  strings.TrimSpace(s.CatalogScope),
+	}
 }
 
 func (s SnapshotScopeIdentityV1) validate() error {
@@ -91,7 +115,7 @@ func (m SnapshotManifestV1) Validate(expectedScope SnapshotScopeIdentityV1) erro
 	if err := m.Scope.validate(); err != nil {
 		return err
 	}
-	if !expectedScope.isZero() && m.Scope != expectedScope {
+	if m.Scope.normalizeManifest() != expectedScope.normalizeExpected() {
 		return fmt.Errorf("%w: mismatched scope identity", ErrInvalidSnapshotManifest)
 	}
 	if m.CreatedAt.IsZero() {
@@ -101,7 +125,7 @@ func (m SnapshotManifestV1) Validate(expectedScope SnapshotScopeIdentityV1) erro
 }
 
 func EncodeSnapshotManifestV1(manifest SnapshotManifestV1) ([]byte, error) {
-	if err := manifest.Validate(SnapshotScopeIdentityV1{}); err != nil {
+	if err := manifest.Validate(manifest.Scope); err != nil {
 		return nil, err
 	}
 	return json.Marshal(manifest)
