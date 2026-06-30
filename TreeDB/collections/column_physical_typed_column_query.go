@@ -1595,6 +1595,9 @@ func columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(pa
 				break
 			}
 		}
+		if localValues >= minSampleValues && len(values)*uniqueToLocalDenominator <= localValues*maxUniqueToLocalNumerator {
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+		}
 	}
 	if localValues < minSampleValues {
 		return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash

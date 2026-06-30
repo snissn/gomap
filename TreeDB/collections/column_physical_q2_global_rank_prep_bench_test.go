@@ -8,23 +8,37 @@ import (
 )
 
 type q2DenseGlobalRankPrepVariant struct {
-	name    string
-	prepare func([]columnTypedColumnPhysicalQueryPart, *columnTypedColumnPhysicalQueryPrepareDiagnostics) error
+	name     string
+	prepare  func([]columnTypedColumnPhysicalQueryPart, *columnTypedColumnPhysicalQueryPrepareDiagnostics) error
+	strategy func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy
 }
 
 var q2DenseGlobalRankPrepVariants = []q2DenseGlobalRankPrepVariant{
 	{
 		name:    "current_map",
 		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics,
+		strategy: func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+		},
 	},
 	{
 		name:    "sharded_hash_rank",
 		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics,
+		strategy: func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
+		},
 	},
 	{
-		name:    "adaptive",
-		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics,
+		name:     "adaptive",
+		prepare:  prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsAdaptiveWithDiagnostics,
+		strategy: q2DenseGlobalRankPrepAdaptiveStrategy,
 	},
+}
+
+func q2DenseGlobalRankPrepAdaptiveStrategy(parts []columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+	return columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
 }
 
 type q2DenseGlobalRankPrepDictionaryShape struct {
@@ -245,6 +259,7 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 				b.Run(fmt.Sprintf("%s/%s/parts=%d", variant.name, shape.name, partCount), func(b *testing.B) {
 					fixture := newQ2DenseGlobalRankPrepParts(partCount, shape)
 					stats := q2DenseGlobalRankPrepStats(fixture)
+					currentStrategy, shardedStrategy := q2DenseGlobalRankPrepStrategyMetrics(variant.strategy(fixture))
 					var diagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
 					b.ReportAllocs()
 
@@ -267,10 +282,23 @@ func BenchmarkTypedColumnQ2DenseGroupCountDistinctGlobalRankPrep(b *testing.B) {
 						b.ReportMetric(float64(diagnostics.Q2GroupRankNanos)/float64(b.N), "diag_group_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2DistinctRankNanos)/float64(b.N), "diag_distinct_rank_ns/op")
 						b.ReportMetric(float64(diagnostics.Q2LocalRankNanos)/float64(b.N), "diag_local_rank_ns/op")
+						b.ReportMetric(currentStrategy, "current_strategy/op")
+						b.ReportMetric(shardedStrategy, "sharded_strategy/op")
 					}
 				})
 			}
 		}
+	}
+}
+
+func q2DenseGlobalRankPrepStrategyMetrics(strategy columnTypedColumnDenseGroupCountDistinctRankStrategy) (float64, float64) {
+	switch strategy {
+	case columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap:
+		return 1, 0
+	case columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash:
+		return 0, 1
+	default:
+		panic(fmt.Sprintf("unknown q2 dense global rank prep strategy %d", strategy))
 	}
 }
 
