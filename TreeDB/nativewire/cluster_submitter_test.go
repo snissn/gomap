@@ -1189,6 +1189,33 @@ func TestClusterSubmitterCatalogGuardDoesNotBlockSubmitterReplay(t *testing.T) {
 	}
 }
 
+func TestClusterSubmitterCatalogVersionUpdateIsMonotonic(t *testing.T) {
+	server := NewServer(ServerOptions{})
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{HasCatalogVersion: true, CatalogVersion: 10}); err != nil {
+		t.Fatalf("update explicit version 10: %v", err)
+	}
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{HasCatalogVersion: true, CatalogVersion: 8}); err != nil {
+		t.Fatalf("update explicit version 8: %v", err)
+	}
+	if got := server.catalogVersion.Load(); got != 10 {
+		t.Fatalf("catalog version after stale explicit update=%d want 10", got)
+	}
+
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{
+		ResponseSections: []iwire.Section{ackMetaCountsVersion(AckVisible, 12, true)},
+	}); err != nil {
+		t.Fatalf("update response-meta version 12: %v", err)
+	}
+	if err := server.updateCatalogVersionFromClusterSubmitResult(ClusterSubmitResult{
+		ResponseSections: []iwire.Section{ackMetaCountsVersion(AckVisible, 11, true)},
+	}); err != nil {
+		t.Fatalf("update response-meta version 11: %v", err)
+	}
+	if got := server.catalogVersion.Load(); got != 12 {
+		t.Fatalf("catalog version after stale response-meta update=%d want 12", got)
+	}
+}
+
 func TestClusterSubmitterUnsupportedCommandFailsBeforeMutation(t *testing.T) {
 	submitter := &fakeClusterSubmitter{}
 	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})

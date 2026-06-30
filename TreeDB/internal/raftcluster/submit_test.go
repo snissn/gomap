@@ -212,6 +212,45 @@ func TestSingleGroupSubmitterRequiresLocalRecoverability(t *testing.T) {
 	}
 }
 
+func TestSingleGroupSubmitterRejectsMissingPostApplyCatalogVersion(t *testing.T) {
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	catalogCalls := 0
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: NewSequencedCommitSource(SequencedCommitSourceOptions{
+			GroupID:             "group-a",
+			NodeID:              "node-a",
+			EvidenceKind:        CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		Applier: applier,
+		CatalogVersionProvider: CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
+			catalogCalls++
+			if catalogCalls == 1 {
+				return 7, true, nil
+			}
+			return 0, false, nil
+		}),
+	})
+
+	result, err := submitter.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted})
+	if !errors.Is(err, ErrLocalApplyNotRecoverable) || !errors.Is(err, ErrMissingCatalogVersion) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want local-apply-not-recoverable and missing-catalog-version", err)
+	}
+	if result.CommittedRecoverable {
+		t.Fatal("missing post-apply catalog version reported committed recoverable")
+	}
+	if result.HasCatalogVersion {
+		t.Fatalf("result HasCatalogVersion=%v want false", result.HasCatalogVersion)
+	}
+	if got := len(applier.snapshot()); got != 1 {
+		t.Fatalf("apply calls=%d want 1", got)
+	}
+	if catalogCalls != 2 {
+		t.Fatalf("catalog calls=%d want 2", catalogCalls)
+	}
+}
+
 type recordingClusterApplier struct {
 	entries []CommittedCommandEntryV1
 	result  raftentry.ApplyResultV1

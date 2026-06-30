@@ -168,19 +168,32 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 
 func (s *Server) updateCatalogVersionFromClusterSubmitResult(result ClusterSubmitResult) error {
 	if result.HasCatalogVersion {
-		if s != nil {
-			s.catalogVersion.Store(result.CatalogVersion)
-		}
+		s.advanceCatalogVersion(result.CatalogVersion)
 		return nil
 	}
 	version, ok, err := catalogVersionFromResponseMeta(result.ResponseSections)
 	if err != nil {
 		return err
 	}
-	if ok && s != nil {
-		s.catalogVersion.Store(version)
+	if ok {
+		s.advanceCatalogVersion(version)
 	}
 	return nil
+}
+
+func (s *Server) advanceCatalogVersion(version uint64) {
+	if s == nil {
+		return
+	}
+	for {
+		current := s.catalogVersion.Load()
+		if version <= current {
+			return
+		}
+		if s.catalogVersion.CompareAndSwap(current, version) {
+			return
+		}
+	}
 }
 
 // AdmitClusterMutation fails closed unless submitter is configured and, when

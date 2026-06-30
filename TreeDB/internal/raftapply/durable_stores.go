@@ -758,9 +758,12 @@ func decodeDurableApplyResultRecordV1(payload []byte) (ApplyResultRecordV1, erro
 	if err != nil {
 		return ApplyResultRecordV1{}, err
 	}
-	matched, err := r.i64()
-	if err != nil {
-		return ApplyResultRecordV1{}, err
+	var matched int64
+	if r.remaining() != 32 {
+		matched, err = r.i64()
+		if err != nil {
+			return ApplyResultRecordV1{}, err
+		}
 	}
 	logicalDigest, err := r.digest()
 	if err != nil {
@@ -855,6 +858,10 @@ func (r *durableApplyPayloadReader) done() error {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: durable metadata payload has %d trailing bytes", len(r.buf)-r.off)
 	}
 	return nil
+}
+
+func (r *durableApplyPayloadReader) remaining() int {
+	return len(r.buf) - r.off
 }
 
 func appendApplyEntryID(dst []byte, id raftentry.ApplyEntryID) []byte {

@@ -5,6 +5,7 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -107,6 +108,29 @@ func TestDurableApplyStoresIdempotencyDuplicateSameDigestAndDifferentDigest(t *t
 		ResultStore:   results,
 	})
 	assertRejected(t, rejected, err, raftentry.ApplyStatusRejectedConflict, raftentry.ErrorRejectedConflictV1)
+}
+
+func TestDecodeDurableApplyResultRecordV1ToleratesLegacyMissingMatchedCount(t *testing.T) {
+	record := testDurableApplyResultRecord(1, 1, "durable:legacy-result")
+	payload, err := encodeDurableApplyResultRecordV1(record)
+	if err != nil {
+		t.Fatalf("encodeDurableApplyResultRecordV1: %v", err)
+	}
+	if len(payload) < 40 {
+		t.Fatalf("encoded payload length=%d, want at least matched count plus digest", len(payload))
+	}
+	legacy := append([]byte(nil), payload[:len(payload)-40]...)
+	legacy = append(legacy, payload[len(payload)-32:]...)
+
+	decoded, err := decodeDurableApplyResultRecordV1(legacy)
+	if err != nil {
+		t.Fatalf("decodeDurableApplyResultRecordV1 legacy: %v", err)
+	}
+	want := record
+	want.Result.MatchedCount = 0
+	if !reflect.DeepEqual(decoded, want) {
+		t.Fatalf("decoded legacy record=%+v want %+v", decoded, want)
+	}
 }
 
 func TestDurableApplyProgressStoreRejectsGapAndLowerIndex(t *testing.T) {

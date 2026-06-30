@@ -216,6 +216,10 @@ i64       MatchedCount
 bytes[32] ResultDigest   // LogicalDigestV1 bytes when apply succeeded
 ```
 
+New v1 writers include `MatchedCount`. V1 decoders MUST also accept legacy
+records where `ResultDigest` follows `AffectedCount` directly; those records
+decode with `MatchedCount=0`.
+
 Open-time recovery scans complete frames and rebuilds in-memory lookup indexes.
 Frame truncation, checksum mismatch, unsupported file or frame versions, kind
 mismatches, malformed payloads, same-`ApplyEntryID` different-digest conflicts,

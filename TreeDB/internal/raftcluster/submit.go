@@ -352,6 +352,9 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	if err != nil {
 		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, err)
 	}
+	if !postHasCatalogVersion {
+		return SubmitResultV1{ApplyResult: applyResult, CommittedEntry: committed, Evidence: commitResult.Evidence}, errors.Join(ErrLocalApplyNotRecoverable, ErrMissingCatalogVersion)
+	}
 	return SubmitResultV1{
 		ActualAck:            actualAck,
 		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
