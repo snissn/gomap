@@ -92,6 +92,73 @@ func TestRouteTokenDecisionIncludesPartitionAndGroupMetadata(t *testing.T) {
 	}
 }
 
+func TestDocumentIDTokenV1IsStable(t *testing.T) {
+	tests := []struct {
+		name string
+		id   []byte
+		want uint64
+	}{
+		{name: "ascii", id: []byte("u1"), want: 0x0cda0b01b1a4d746},
+		{name: "binary", id: []byte("mongo-key\x00"), want: 0xb50bd7be8fa239a1},
+		{name: "empty", id: nil, want: 0xddb8fc2412a24a19},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DocumentIDTokenV1(tc.id); got != tc.want {
+				t.Fatalf("DocumentIDTokenV1(%q)=%#x want %#x", tc.id, got, tc.want)
+			}
+			if got := DocumentIDTokenV1(append([]byte(nil), tc.id...)); got != tc.want {
+				t.Fatalf("DocumentIDTokenV1 cloned input=%#x want %#x", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRouteDocumentTokenPreservesCollectionModeAndRoutesTokenModes(t *testing.T) {
+	t.Run("collection", func(t *testing.T) {
+		resolved, err := Validate(validCatalog())
+		if err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		decision, err := resolved.RouteDocumentID(DefaultDatabase, DefaultCatalog, "users", []byte("u1"))
+		if err != nil {
+			t.Fatalf("RouteDocumentID collection: %v", err)
+		}
+		if decision.Shape != RouteShapeCollectionV1 || decision.PlacementMode != PlacementModeCollectionV1 {
+			t.Fatalf("decision shape/mode=%q/%q want collection/collection", decision.Shape, decision.PlacementMode)
+		}
+		if decision.Token.Present {
+			t.Fatalf("collection route should not expose token metadata: %+v", decision.Token)
+		}
+	})
+
+	for _, mode := range []PlacementModeV1{PlacementModeTokenV1, PlacementModeRingV1} {
+		t.Run(string(mode), func(t *testing.T) {
+			ref := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "events"}
+			catalog := validCatalog()
+			catalog.Placements = append(catalog.Placements, tokenPlacement(ref, mode))
+			resolved, err := Validate(catalog)
+			if err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			token := maxTokenV1
+			decision, err := resolved.RouteDocumentToken(DefaultDatabase, DefaultCatalog, "events", token)
+			if err != nil {
+				t.Fatalf("RouteDocumentToken: %v", err)
+			}
+			if decision.Shape != RouteShapeTokenV1 || decision.PlacementMode != mode {
+				t.Fatalf("decision shape/mode=%q/%q want token/%q", decision.Shape, decision.PlacementMode, mode)
+			}
+			if !decision.Token.Present || decision.Token.Token != token {
+				t.Fatalf("token metadata=%+v want token %d", decision.Token, token)
+			}
+			if decision.Token.Partition.ID != "token-000001" || decision.Token.Partition.GroupID != "group-b" {
+				t.Fatalf("partition=(%q,%q) want (token-000001,group-b)", decision.Token.Partition.ID, decision.Token.Partition.GroupID)
+			}
+		})
+	}
+}
+
 func TestRouteFailsClosed(t *testing.T) {
 	ref := CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "events"}
 	catalog := validCatalog()

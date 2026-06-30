@@ -82,7 +82,13 @@ func (p *placementRouteClusterSubmitter) ClusterRoute(ctx context.Context, req C
 	p.routeMu.Lock()
 	p.routes = append(p.routes, req)
 	p.routeMu.Unlock()
-	decision, err := p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
+	var decision raftplacement.RouteDecisionV1
+	var err error
+	if req.Shape == ClusterRouteShapeToken && req.TokenKnown {
+		decision, err = p.catalog.RouteDocumentToken(req.Database, req.Catalog, req.Collection, req.Token)
+	} else {
+		decision, err = p.catalog.RouteCollection(req.Database, req.Catalog, req.Collection)
+	}
 	if err != nil {
 		return ClusterRouteTarget{}, err
 	}
@@ -90,12 +96,19 @@ func (p *placementRouteClusterSubmitter) ClusterRoute(ctx context.Context, req C
 	for i, member := range decision.Group.Members {
 		members[i] = string(member)
 	}
-	return ClusterRouteTarget{
+	target := ClusterRouteTarget{
 		GroupID:       string(decision.GroupID()),
 		Members:       members,
 		LeaderHint:    string(decision.LeaderHint()),
 		PlacementMode: string(decision.PlacementMode),
-	}, nil
+		Shape:         ClusterRouteShape(decision.Shape),
+	}
+	if decision.Token.Present {
+		target.TokenKnown = true
+		target.Token = decision.Token.Token
+		target.PartitionID = string(decision.Token.Partition.ID)
+	}
+	return target, nil
 }
 
 func (p *placementRouteClusterSubmitter) snapshotRoutes() []ClusterRouteRequest {
@@ -224,6 +237,23 @@ func cloneClusterRequestMetadata(metadata ClusterRequestMetadata) ClusterRequest
 	metadata.TraceContext = bytes.Clone(metadata.TraceContext)
 	metadata.ClusterRouteMembers = append([]string(nil), metadata.ClusterRouteMembers...)
 	return metadata
+}
+
+func assertNativeClusterTokenRouteMetadata(tb testing.TB, call fakeClusterSubmitCall, mode raftplacement.PlacementModeV1, partition string, token uint64) {
+	tb.Helper()
+	meta := call.metadata
+	if !meta.ClusterRouteKnown {
+		tb.Fatal("metadata missing cluster route")
+	}
+	if meta.ClusterRouteShape != string(ClusterRouteShapeToken) {
+		tb.Fatalf("route shape=%q want token", meta.ClusterRouteShape)
+	}
+	if meta.ClusterRouteGroupID != "group-a" || meta.ClusterRouteLeaderHint != "node-a" || meta.ClusterRoutePlacementMode != string(mode) {
+		tb.Fatalf("metadata route target group=%q leader=%q mode=%q", meta.ClusterRouteGroupID, meta.ClusterRouteLeaderHint, meta.ClusterRoutePlacementMode)
+	}
+	if !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != partition {
+		tb.Fatalf("metadata token known/token/partition=%v/%d/%q want true/%d/%q", meta.ClusterRouteTokenKnown, meta.ClusterRouteToken, meta.ClusterRoutePartitionID, token, partition)
+	}
 }
 
 func TestClusterAdmissionMissingProviderFailsClosed(t *testing.T) {
@@ -529,8 +559,14 @@ func TestClusterRoutePreflightAddsMetadata(t *testing.T) {
 	if meta.ClusterRouteDatabase != "default" || meta.ClusterRouteCatalog != "default" || meta.ClusterRouteCollection != "users" {
 		t.Fatalf("metadata route identity=%s/%s/%s want default/default/users", meta.ClusterRouteDatabase, meta.ClusterRouteCatalog, meta.ClusterRouteCollection)
 	}
+	if meta.ClusterRouteShape != string(ClusterRouteShapeCollection) {
+		t.Fatalf("metadata route shape=%q want collection", meta.ClusterRouteShape)
+	}
 	if meta.ClusterRouteGroupID != "group-a" || meta.ClusterRouteLeaderHint != "node-a" || meta.ClusterRoutePlacementMode != "collection" {
 		t.Fatalf("metadata route target group=%q leader=%q mode=%q", meta.ClusterRouteGroupID, meta.ClusterRouteLeaderHint, meta.ClusterRoutePlacementMode)
+	}
+	if meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != 0 || meta.ClusterRoutePartitionID != "" {
+		t.Fatalf("collection route unexpectedly included token metadata known/token/partition=%v/%d/%q", meta.ClusterRouteTokenKnown, meta.ClusterRouteToken, meta.ClusterRoutePartitionID)
 	}
 	if !reflect.DeepEqual(meta.ClusterRouteMembers, []string{"node-a", "node-b"}) {
 		t.Fatalf("metadata route members=%v want [node-a node-b]", meta.ClusterRouteMembers)
@@ -631,7 +667,7 @@ func TestClusterRoutePreflightSkipsMalformedDeterministicEntry(t *testing.T) {
 	}
 }
 
-func TestClusterRoutePreflightRejectsTokenPlacementWithoutTokenContract(t *testing.T) {
+func TestClusterRoutePreflightTokenPlacementAcceptsSingleID(t *testing.T) {
 	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeTokenV1)
 	submitter := &placementRouteClusterSubmitter{
 		fakeClusterSubmitter: &fakeClusterSubmitter{},
@@ -648,14 +684,193 @@ func TestClusterRoutePreflightRejectsTokenPlacementWithoutTokenContract(t *testi
 		[][]byte{[]byte(`{"name":"Ada"}`)},
 		AckVisible,
 	)
-	if !isRemoteError(err, iwire.ErrReadOnly) {
-		t.Fatalf("InsertBatch err=%v want read-only", err)
+	if err != nil {
+		t.Fatalf("InsertBatch token placement: %v", err)
 	}
 	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 		t.Fatalf("route calls=%d want 1", len(routes))
+	} else {
+		token := raftplacement.DocumentIDTokenV1([]byte("u1"))
+		if routes[0].Shape != ClusterRouteShapeToken || !routes[0].TokenKnown || routes[0].Token != token {
+			t.Fatalf("route request=%+v want token route token=%d", routes[0], token)
+		}
 	}
-	if calls := submitter.snapshot(); len(calls) != 0 {
-		t.Fatalf("submitter calls=%d want 0", len(calls))
+	calls := submitter.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("submitter calls=%d want 1", len(calls))
+	}
+	assertNativeClusterTokenRouteMetadata(t, calls[0], raftplacement.PlacementModeTokenV1, "p0", raftplacement.DocumentIDTokenV1([]byte("u1")))
+}
+
+func TestClusterMutationDocumentTokenHonorsDecodeLimits(t *testing.T) {
+	id := []byte("configured-limit-id")
+	rawIDs := iwire.AppendByteVector(nil, id)
+	cmd := iwire.ValidatedCommand{
+		Header: iwire.CommandHeader{ID: iwire.CommandInsertBatch},
+		Known: []iwire.Section{
+			{ID: iwire.SectionDocumentIDs, Bytes: rawIDs},
+		},
+	}
+
+	if _, _, err := clusterMutationDocumentToken(cmd, iwire.Limits{MaxByteVectorBytes: uint64(len(id) - 1)}); codeOf(err) != iwire.ErrResourceExhausted {
+		t.Fatalf("clusterMutationDocumentToken low limit err=%v code=%d want resource exhausted", err, codeOf(err))
+	}
+	token, ok, err := clusterMutationDocumentToken(cmd, iwire.Limits{MaxByteVectorBytes: uint64(len(id))})
+	if err != nil {
+		t.Fatalf("clusterMutationDocumentToken configured limit: %v", err)
+	}
+	if !ok || token != raftplacement.DocumentIDTokenV1(id) {
+		t.Fatalf("token ok/token=%v/%d want true/%d", ok, token, raftplacement.DocumentIDTokenV1(id))
+	}
+}
+
+func TestClusterRoutePreflightTokenPlacementSingleIDMutationCommands(t *testing.T) {
+	tests := []struct {
+		name    string
+		command iwire.CommandID
+		run     func(context.Context, *Client) error
+	}{
+		{
+			name:    "insert_batch",
+			command: iwire.CommandInsertBatch,
+			run: func(ctx context.Context, client *Client) error {
+				_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+					[][]byte{[]byte("u1")},
+					[][]byte{[]byte(`{"name":"Ada"}`)},
+					AckVisible,
+				)
+				return err
+			},
+		},
+		{
+			name:    "replace_batch",
+			command: iwire.CommandReplaceBatch,
+			run: func(ctx context.Context, client *Client) error {
+				_, _, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+					[][]byte{[]byte("u1")},
+					[][]byte{[]byte(`{"name":"Ada"}`)},
+					AckVisible,
+				)
+				return err
+			},
+		},
+		{
+			name:    "delete_batch",
+			command: iwire.CommandDeleteBatch,
+			run: func(ctx context.Context, client *Client) error {
+				_, err := client.DeleteBatch(ctx, "users", [][]byte{[]byte("u1")}, AckVisible)
+				return err
+			},
+		},
+		{
+			name:    "update_bson_set",
+			command: iwire.CommandUpdateBSONSet,
+			run: func(ctx context.Context, client *Client) error {
+				_, _, err := client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
+					{Key: "name", Value: mustNativewireBSONRawValue(t, "Ada")},
+				}, AckVisible)
+				return err
+			},
+		},
+	}
+	for _, mode := range []raftplacement.PlacementModeV1{raftplacement.PlacementModeTokenV1, raftplacement.PlacementModeRingV1} {
+		for _, tc := range tests {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				catalog := mustNativewireRouteTestCatalog(t, mode)
+				submitter := &placementRouteClusterSubmitter{
+					fakeClusterSubmitter: &fakeClusterSubmitter{},
+					catalog:              catalog,
+				}
+				client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if err := client.Hello(ctx); err != nil {
+					t.Fatalf("Hello: %v", err)
+				}
+				if err := tc.run(ctx, client); err != nil {
+					t.Fatalf("%s: %v", tc.name, err)
+				}
+				token := raftplacement.DocumentIDTokenV1([]byte("u1"))
+				routes := submitter.snapshotRoutes()
+				if len(routes) != 1 {
+					t.Fatalf("route calls=%d want 1", len(routes))
+				}
+				if got := routes[0]; got.CommandID != tc.command || got.CommandName != tc.name || got.Shape != ClusterRouteShapeToken || !got.TokenKnown || got.Token != token {
+					t.Fatalf("route request=%+v want command=%d name=%s token=%d", got, tc.command, tc.name, token)
+				}
+				calls := submitter.snapshot()
+				if len(calls) != 1 {
+					t.Fatalf("submitter calls=%d want 1", len(calls))
+				}
+				if calls[0].entry.Decoded.CommandID != tc.command {
+					t.Fatalf("submitted command=%d want %d", calls[0].entry.Decoded.CommandID, tc.command)
+				}
+				assertNativeClusterTokenRouteMetadata(t, calls[0], mode, "p0", token)
+			})
+		}
+	}
+}
+
+func TestClusterRoutePreflightTokenPlacementRejectsMultiID(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(context.Context, *Client) error
+	}{
+		{
+			name: "insert_batch",
+			run: func(ctx context.Context, client *Client) error {
+				_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON,
+					[][]byte{[]byte("u1"), []byte("u2")},
+					[][]byte{[]byte(`{"name":"Ada"}`), []byte(`{"name":"Grace"}`)},
+					AckVisible,
+				)
+				return err
+			},
+		},
+		{
+			name: "replace_batch",
+			run: func(ctx context.Context, client *Client) error {
+				_, _, err := client.ReplaceBatch(ctx, "users", collections.DocumentFormatJSON,
+					[][]byte{[]byte("u1"), []byte("u2")},
+					[][]byte{[]byte(`{"name":"Ada"}`), []byte(`{"name":"Grace"}`)},
+					AckVisible,
+				)
+				return err
+			},
+		},
+		{
+			name: "delete_batch",
+			run: func(ctx context.Context, client *Client) error {
+				_, err := client.DeleteBatch(ctx, "users", [][]byte{[]byte("u1"), []byte("u2")}, AckVisible)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeRingV1)
+			submitter := &placementRouteClusterSubmitter{
+				fakeClusterSubmitter: &fakeClusterSubmitter{},
+				catalog:              catalog,
+			}
+			client, _, _ := serveCollectionPipeWithOptions(t, ServerOptions{ClusterSubmitter: submitter})
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := client.Hello(ctx); err != nil {
+				t.Fatalf("Hello: %v", err)
+			}
+			if err := tc.run(ctx, client); !isRemoteError(err, iwire.ErrReadOnly) {
+				t.Fatalf("%s multi-ID token placement err=%v want read-only", tc.name, err)
+			}
+			if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+				t.Fatalf("route calls=%d want 1", len(routes))
+			} else if routes[0].Shape != ClusterRouteShapeCollection || routes[0].TokenKnown {
+				t.Fatalf("multi-ID route request=%+v want collection-shaped without token", routes[0])
+			}
+			if calls := submitter.snapshot(); len(calls) != 0 {
+				t.Fatalf("submitter calls=%d want 0", len(calls))
+			}
+		})
 	}
 }
 
