@@ -218,14 +218,18 @@ func (f CommitSourceFunc) CommitCommandEntryV1(ctx context.Context, req CommitCo
 // before the entry is admitted to the commit source. Implementations must treat
 // the request as read-only and clone any data retained after return.
 type CommandEntryPreflightV1 interface {
-	PreflightCommandEntryV1(context.Context, CommandEntryPreflightRequestV1) error
+	PreflightCommandEntryV1(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error)
 }
 
-type CommandEntryPreflightFunc func(context.Context, CommandEntryPreflightRequestV1) error
+type CommandEntryPreflightResultV1 struct {
+	KnownIdempotencyReplay bool
+}
 
-func (f CommandEntryPreflightFunc) PreflightCommandEntryV1(ctx context.Context, req CommandEntryPreflightRequestV1) error {
+type CommandEntryPreflightFunc func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error)
+
+func (f CommandEntryPreflightFunc) PreflightCommandEntryV1(ctx context.Context, req CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
 	if f == nil {
-		return ErrInvalidSubmitter
+		return CommandEntryPreflightResultV1{}, ErrInvalidSubmitter
 	}
 	return f(ctx, req)
 }
@@ -396,12 +400,17 @@ func (s *SingleGroupSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 		RequestMetadata:          metadata,
 		ExpectedTarget:           &expectedTarget,
 	}
-	if err := s.preflight.PreflightCommandEntryV1(ctx, preflightRequest); err != nil {
+	preflightResult, err := s.preflight.PreflightCommandEntryV1(ctx, preflightRequest)
+	if err != nil {
 		s.submitMu.Unlock()
 		if allowStaleCreateRetry {
 			return SubmitResultV1{}, guardErr
 		}
 		return SubmitResultV1{}, err
+	}
+	if allowStaleCreateRetry && !preflightResult.KnownIdempotencyReplay {
+		s.submitMu.Unlock()
+		return SubmitResultV1{}, guardErr
 	}
 	request := CommitCommandEntryV1Request{
 		GroupID:                  s.cluster.GroupID,

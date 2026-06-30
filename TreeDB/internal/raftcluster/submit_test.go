@@ -169,9 +169,9 @@ func TestSingleGroupSubmitterRejectsRaftCommittedWhenLocalCommandWALSyncDisabled
 			commitCalls++
 			return CommitCommandEntryV1Result{}, nil
 		}),
-		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) error {
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
 			preflightCalls++
-			return nil
+			return CommandEntryPreflightResultV1{}, nil
 		}),
 		Applier:                    applier,
 		CatalogVersionProvider:     staticCatalogVersion(7),
@@ -230,7 +230,7 @@ func TestSingleGroupSubmitterLetsIdempotentCreateRetryReachPreflightApply(t *tes
 			commitCalls++
 			return productionCommittedResult(req, 3, uint64(commitCalls)), nil
 		}),
-		Preflight: CommandEntryPreflightFunc(func(ctx context.Context, req CommandEntryPreflightRequestV1) error {
+		Preflight: CommandEntryPreflightFunc(func(ctx context.Context, req CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
 			preflightCalls++
 			if req.DecodedEntry.Target.CommandID != iwire.CommandCreateCollection {
 				t.Fatalf("preflight command=%d want create_collection", req.DecodedEntry.Target.CommandID)
@@ -238,7 +238,7 @@ func TestSingleGroupSubmitterLetsIdempotentCreateRetryReachPreflightApply(t *tes
 			if req.CurrentCatalogVersion != 8 || !req.HasCurrentCatalogVersion {
 				t.Fatalf("preflight catalog=%d/%v want 8/true", req.CurrentCatalogVersion, req.HasCurrentCatalogVersion)
 			}
-			return nil
+			return CommandEntryPreflightResultV1{KnownIdempotencyReplay: true}, nil
 		}),
 		Applier:                applier,
 		CatalogVersionProvider: staticCatalogVersion(8),
@@ -271,9 +271,9 @@ func TestSingleGroupSubmitterRejectsStaleIdempotentCreateWhenPreflightRejects(t 
 			commitCalls++
 			return CommitCommandEntryV1Result{}, nil
 		}),
-		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) error {
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
 			preflightCalls++
-			return preflightErr
+			return CommandEntryPreflightResultV1{}, preflightErr
 		}),
 		Applier:                applier,
 		CatalogVersionProvider: staticCatalogVersion(8),
@@ -285,6 +285,40 @@ func TestSingleGroupSubmitterRejectsStaleIdempotentCreateWhenPreflightRejects(t 
 	}
 	if errors.Is(err, preflightErr) {
 		t.Fatalf("SubmitCommandEntryV1 err=%v should preserve stale guard mismatch over preflight rejection", err)
+	}
+	if preflightCalls != 1 {
+		t.Fatalf("preflight calls=%d want 1", preflightCalls)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("commit calls=%d want 0", commitCalls)
+	}
+	if got := len(applier.snapshot()); got != 0 {
+		t.Fatalf("apply calls=%d want 0", got)
+	}
+}
+
+func TestSingleGroupSubmitterRejectsStaleIdempotentCreateWithoutKnownReplay(t *testing.T) {
+	entry := testClusterCreateCollectionEntry(t, 7)
+	commitCalls := 0
+	preflightCalls := 0
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusAlreadyApplied}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(context.Context, CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return CommitCommandEntryV1Result{}, nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+			preflightCalls++
+			return CommandEntryPreflightResultV1{}, nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(8),
+	})
+
+	_, err := submitter.SubmitCommandEntryV1(context.Background(), entry, raftentry.RequestMetadataV1{AckPolicy: iwire.AckRaftCommitted})
+	if !errors.Is(err, ErrCatalogVersionMismatch) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want catalog-version-mismatch", err)
 	}
 	if preflightCalls != 1 {
 		t.Fatalf("preflight calls=%d want 1", preflightCalls)
@@ -406,7 +440,7 @@ func TestSingleGroupSubmitterPreflightsBeforeCommitApply(t *testing.T) {
 			commitCalls++
 			return CommitCommandEntryV1Result{}, nil
 		}),
-		Preflight: CommandEntryPreflightFunc(func(ctx context.Context, req CommandEntryPreflightRequestV1) error {
+		Preflight: CommandEntryPreflightFunc(func(ctx context.Context, req CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
 			preflightCalls++
 			if req.GroupID != "group-a" || req.NodeID != "node-a" {
 				t.Fatalf("preflight group/node=%q/%q want group-a/node-a", req.GroupID, req.NodeID)
@@ -417,7 +451,7 @@ func TestSingleGroupSubmitterPreflightsBeforeCommitApply(t *testing.T) {
 			if req.CurrentCatalogVersion != 7 || !req.HasCurrentCatalogVersion {
 				t.Fatalf("preflight catalog=%d/%v want 7/true", req.CurrentCatalogVersion, req.HasCurrentCatalogVersion)
 			}
-			return preflightErr
+			return CommandEntryPreflightResultV1{}, preflightErr
 		}),
 		Applier:                applier,
 		CatalogVersionProvider: staticCatalogVersion(7),
@@ -601,8 +635,8 @@ func newTestSingleGroupSubmitter(tb testing.TB, opts SingleGroupSubmitterOptions
 		},
 	}
 	if opts.Preflight == nil {
-		opts.Preflight = CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) error {
-			return nil
+		opts.Preflight = CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+			return CommandEntryPreflightResultV1{}, nil
 		})
 	}
 	submitter, err := NewSingleGroupSubmitter(opts)

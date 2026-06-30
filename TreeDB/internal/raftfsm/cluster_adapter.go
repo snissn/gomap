@@ -11,32 +11,32 @@ import (
 
 // PreflightCommandEntryV1 adapts the raftcluster pre-commit deterministic
 // preflight request into the local FSM apply preflight shape.
-func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.CommandEntryPreflightRequestV1) error {
+func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return raftcluster.CommandEntryPreflightResultV1{}, ctx.Err()
 	default:
 	}
 	if f == nil {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
 	if f.closed {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
+		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
 	}
 	if f.db == nil {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
 	if req.GroupID != "" && req.GroupID != f.cluster.GroupID {
-		return codedError(raftentry.ErrorRejectedConflictV1, "preflight group %q does not match local group %q", req.GroupID, f.cluster.GroupID)
+		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorRejectedConflictV1, "preflight group %q does not match local group %q", req.GroupID, f.cluster.GroupID)
 	}
 	if req.NodeID != "" && req.NodeID != f.cluster.NodeID {
-		return codedError(raftentry.ErrorRejectedConflictV1, "preflight node %q does not match local node %q", req.NodeID, f.cluster.NodeID)
+		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorRejectedConflictV1, "preflight node %q does not match local node %q", req.NodeID, f.cluster.NodeID)
 	}
 	if len(req.EntryBytes) == 0 {
-		return codedError(raftentry.ErrorMalformedEntryV1, "empty command entry")
+		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "empty command entry")
 	}
 	meta := raftapply.ApplyMetadataV1{
 		LocalDurabilityBoundary:  raftapply.LocalDurabilityCommandWALV1,
@@ -50,19 +50,20 @@ func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.Comma
 		ExpectedTarget:           cloneExpectedTargetV1(req.ExpectedTarget),
 	}
 	opts := raftapply.Options{DecodeLimits: f.decodeLimits, ResultStore: f.results}
+	var result raftapply.PreflightResultV1
+	var err error
 	if len(req.DecodedEntry.Bytes) != 0 {
 		if !bytes.Equal(req.DecodedEntry.Bytes, req.EntryBytes) {
-			return codedError(raftentry.ErrorMalformedEntryV1, "decoded command entry does not match raw entry bytes")
+			return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorMalformedEntryV1, "decoded command entry does not match raw entry bytes")
 		}
-		if err := raftapply.PreflightDecodedCommandEntryV1(f.db, req.DecodedEntry, meta, opts); err != nil {
-			return err
-		}
-		return nil
+		result, err = raftapply.PreflightDecodedCommandEntryV1(f.db, req.DecodedEntry, meta, opts)
+	} else {
+		result, err = raftapply.PreflightCommandEntryV1(f.db, req.EntryBytes, meta, opts)
 	}
-	if err := raftapply.PreflightCommandEntryV1(f.db, req.EntryBytes, meta, opts); err != nil {
-		return err
+	if err != nil {
+		return raftcluster.CommandEntryPreflightResultV1{}, err
 	}
-	return nil
+	return raftcluster.CommandEntryPreflightResultV1{KnownIdempotencyReplay: result.KnownIdempotencyReplay}, nil
 }
 
 // ApplyCommittedCommandEntryV1 adapts the raftcluster provider-delivered

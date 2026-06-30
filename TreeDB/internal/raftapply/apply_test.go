@@ -1350,7 +1350,7 @@ func TestUpdateBSONSetPreflightRejectsJSONNoIndexBeforeCommit(t *testing.T) {
 	update := deterministicUpdateBSONSetEntry(t, "users", "client-a:update-bson-set:json-no-index", []byte("u1"), []collections.BSONSetField{
 		{Key: "city", Value: testBSONSetRawValue(t, "sfo")},
 	})
-	err := PreflightCommandEntryV1(db, update, applyMeta(1, 3), Options{})
+	_, err := PreflightCommandEntryV1(db, update, applyMeta(1, 3), Options{})
 	if got := codeOf(err); got != raftentry.ErrorRejectedConflictV1 {
 		t.Fatalf("PreflightCommandEntryV1 code=%s err=%v, want rejected-conflict", got, err)
 	}

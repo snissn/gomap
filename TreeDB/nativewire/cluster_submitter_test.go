@@ -1619,9 +1619,9 @@ func TestRaftClusterSubmitterRequiresCollectionManagerBeforeSubmit(t *testing.T)
 				},
 			}, nil
 		}),
-		Preflight: raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) error {
+		Preflight: raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {
 			preflightCalls++
-			return nil
+			return raftcluster.CommandEntryPreflightResultV1{}, nil
 		}),
 		Applier:                applier,
 		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) { return 7, true, nil }),
@@ -1691,7 +1691,9 @@ func TestRaftClusterSubmitterShapesResponseFromBridgeDecodedEntry(t *testing.T) 
 			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
 			ProductionConsensus: true,
 		}),
-		Preflight:              raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) error { return nil }),
+		Preflight: raftcluster.CommandEntryPreflightFunc(func(context.Context, raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {
+			return raftcluster.CommandEntryPreflightResultV1{}, nil
+		}),
 		Applier:                applier,
 		CatalogVersionProvider: raftcluster.CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) { return 7, true, nil }),
 		DecodeLimits:           limits,

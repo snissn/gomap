@@ -77,7 +77,7 @@ func TestClusterAdapterPreflightRejectsDecodedRawMismatch(t *testing.T) {
 		t.Fatalf("DecodeCommandEntryV1 decodedRaw: %v", err)
 	}
 
-	err = fsm.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{
+	_, err = fsm.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{
 		GroupID:                  fsm.cluster.GroupID,
 		NodeID:                   fsm.cluster.NodeID,
 		EntryBytes:               raw,
@@ -119,7 +119,7 @@ func TestClusterAdapterPreflightAllowsKnownIdempotencyReplay(t *testing.T) {
 	}
 
 	for _, currentCatalogVersion := range []uint64{testCatalogVersionStart, testCatalogVersionStart + 1} {
-		err := fsm.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{
+		result, err := fsm.PreflightCommandEntryV1(context.Background(), raftcluster.CommandEntryPreflightRequestV1{
 			GroupID:                  fsm.cluster.GroupID,
 			NodeID:                   fsm.cluster.NodeID,
 			EntryBytes:               insert,
@@ -130,6 +130,9 @@ func TestClusterAdapterPreflightAllowsKnownIdempotencyReplay(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("PreflightCommandEntryV1 known retry catalog %d: %v", currentCatalogVersion, err)
+		}
+		if !result.KnownIdempotencyReplay {
+			t.Fatalf("PreflightCommandEntryV1 known retry catalog %d replay=%v want true", currentCatalogVersion, result.KnownIdempotencyReplay)
 		}
 	}
 }

@@ -138,25 +138,29 @@ func ApplyCommittedEntryV1(db *backenddb.DB, entryBytes []byte, meta ApplyMetada
 
 // PreflightCommandEntryV1 validates deterministic/catalog apply acceptability
 // without assigning, recording, or advancing an apply entry ID.
-func PreflightCommandEntryV1(db *backenddb.DB, entryBytes []byte, meta ApplyMetadataV1, opts Options) error {
+func PreflightCommandEntryV1(db *backenddb.DB, entryBytes []byte, meta ApplyMetadataV1, opts Options) (PreflightResultV1, error) {
 	return NewHarness(db, opts).PreflightCommandEntryV1(entryBytes, meta)
 }
 
 // PreflightDecodedCommandEntryV1 validates an entry that the submitter already
 // decoded with the same deterministic limits used for this apply boundary.
-func PreflightDecodedCommandEntryV1(db *backenddb.DB, entry raftentry.CommandEntryV1, meta ApplyMetadataV1, opts Options) error {
+func PreflightDecodedCommandEntryV1(db *backenddb.DB, entry raftentry.CommandEntryV1, meta ApplyMetadataV1, opts Options) (PreflightResultV1, error) {
 	return NewHarness(db, opts).PreflightDecodedCommandEntryV1(entry, meta)
+}
+
+type PreflightResultV1 struct {
+	KnownIdempotencyReplay bool
 }
 
 // PreflightCommandEntryV1 decodes and checks the local deterministic boundary
 // a command would need to pass before visible apply. It does not append local
 // command-WAL frames, record idempotency/results, or advance apply progress.
-func (h *Harness) PreflightCommandEntryV1(entryBytes []byte, meta ApplyMetadataV1) error {
+func (h *Harness) PreflightCommandEntryV1(entryBytes []byte, meta ApplyMetadataV1) (PreflightResultV1, error) {
 	if h == nil {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil harness")
+		return PreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil harness")
 	}
 	if err := h.preflightLocalBoundary(meta); err != nil {
-		return err
+		return PreflightResultV1{}, err
 	}
 	entry, err := raftentry.DecodeCommandEntryV1(entryBytes, raftentry.DecodeOptions{
 		Limits:          h.opts.DecodeLimits,
@@ -167,60 +171,65 @@ func (h *Harness) PreflightCommandEntryV1(entryBytes []byte, meta ApplyMetadataV
 		ExpectedTarget:  meta.ExpectedTarget,
 	})
 	if err != nil {
-		return err
+		return PreflightResultV1{}, err
 	}
 	return h.preflightDecodedCommandEntryV1(entry, meta)
 }
 
 // PreflightDecodedCommandEntryV1 checks a caller-provided decoded entry against
 // the local deterministic boundary without re-decoding entry bytes.
-func (h *Harness) PreflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) error {
+func (h *Harness) PreflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (PreflightResultV1, error) {
 	if h == nil {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil harness")
+		return PreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: nil harness")
 	}
 	if err := h.preflightLocalBoundary(meta); err != nil {
-		return err
+		return PreflightResultV1{}, err
 	}
 	return h.preflightDecodedCommandEntryV1(entry, meta)
 }
 
-func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) error {
+func (h *Harness) preflightDecodedCommandEntryV1(entry raftentry.CommandEntryV1, meta ApplyMetadataV1) (PreflightResultV1, error) {
 	if ok, err := h.preflightKnownIdempotencyReplayV1(entry); err != nil || ok {
-		return err
+		return PreflightResultV1{KnownIdempotencyReplay: ok}, err
 	}
 	switch entry.Target.CommandID {
 	case nativewire.CommandCreateCollection:
 		expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
 		if err != nil {
-			return err
+			return PreflightResultV1{}, err
 		}
 		collectionMeta, payload, err := lowerCreateCollectionV1(entry)
 		if err != nil {
-			return err
+			return PreflightResultV1{}, err
 		}
 		alreadyExisting, err := h.preflightCreateCollectionV1(collectionMeta, payload)
 		if err != nil {
-			return err
+			return PreflightResultV1{}, err
 		}
 		if !alreadyExisting {
-			return checkCatalogVersionGuardV1(meta, expectedCatalogVersion)
+			if err := checkCatalogVersionGuardV1(meta, expectedCatalogVersion); err != nil {
+				return PreflightResultV1{}, err
+			}
 		}
-		return nil
+		return PreflightResultV1{}, nil
 	case nativewire.CommandInsertBatch, nativewire.CommandReplaceBatch, nativewire.CommandDeleteBatch, nativewire.CommandUpdateBSONSet:
 		expectedCatalogVersion, err := decodeExpectedCatalogVersionV1(entry.Target.ExpectedCatalogVersion)
 		if err != nil {
-			return err
+			return PreflightResultV1{}, err
 		}
 		if err := checkCatalogVersionGuardV1(meta, expectedCatalogVersion); err != nil {
-			return err
+			return PreflightResultV1{}, err
 		}
 		mutation, err := lowerCollectionMutationV1(entry, h.opts.DecodeLimits)
 		if err != nil {
-			return err
+			return PreflightResultV1{}, err
 		}
-		return h.preflightCollectionMutationOnlyV1(&mutation)
+		if err := h.preflightCollectionMutationOnlyV1(&mutation); err != nil {
+			return PreflightResultV1{}, err
+		}
+		return PreflightResultV1{}, nil
 	default:
-		return codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: %s is not accepted by R3a apply", entry.Row.NativeWireCommand)
+		return PreflightResultV1{}, codedError(raftentry.ErrorUnsupportedCommandV1, "raftapply: %s is not accepted by R3a apply", entry.Row.NativeWireCommand)
 	}
 }
 
