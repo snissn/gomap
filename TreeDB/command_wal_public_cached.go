@@ -114,6 +114,20 @@ func (tdb *DB) publicCommandWALLiveStatsInto(stats map[string]string) {
 	publicCommandWALMaxStat(stats, "treedb.command_wal.max_lsn", acceptedMaxLSN)
 }
 
+func (tdb *DB) publicCommandWALBatchStatsInto(stats map[string]string) {
+	if tdb == nil || stats == nil || !tdb.commandWALCached {
+		return
+	}
+	stats["treedb.command_wal.public_batch.set.calls_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchSetCalls.Load())
+	stats["treedb.command_wal.public_batch.set.bytes_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchSetBytes.Load())
+	stats["treedb.command_wal.public_batch.set_view.calls_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchSetViewCalls.Load())
+	stats["treedb.command_wal.public_batch.set_view.bytes_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchSetViewBytes.Load())
+	stats["treedb.command_wal.public_batch.delete.calls_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchDeleteCalls.Load())
+	stats["treedb.command_wal.public_batch.delete.bytes_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchDeleteBytes.Load())
+	stats["treedb.command_wal.public_batch.delete_view.calls_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchDeleteViewCalls.Load())
+	stats["treedb.command_wal.public_batch.delete_view.bytes_total"] = fmt.Sprintf("%d", tdb.commandWALPublicBatchDeleteViewBytes.Load())
+}
+
 func publicCommandWALMaxStat(stats map[string]string, key string, value uint64) {
 	if value == 0 {
 		return
@@ -264,6 +278,14 @@ type commandWALPublicBatch struct {
 	opCount             int
 	hasDeleteRange      bool
 	dirty               bool
+	setCalls            int
+	setBytes            int
+	setViewCalls        int
+	setViewBytes        int
+	deleteCalls         int
+	deleteBytes         int
+	deleteViewCalls     int
+	deleteViewBytes     int
 	// retainPayloadAfterWrite is set by adapter-only replay-view helpers. It
 	// keeps payload-owned key/value views valid after a successful Write until
 	// Reset/Close or the next mutation. Ordinary public Batch callers do not use
@@ -399,6 +421,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		}
 		b.payloadBypass = true
 		b.opCount++
+		b.recordPointIngress(commitlog.RawKVOpSet, len(key)+len(value), useInnerView)
 		b.dirty = true
 		return nil, nil, nil
 	}
@@ -415,6 +438,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		}
 		b.payloadBypass = true
 		b.opCount++
+		b.recordPointIngress(commitlog.RawKVOpSet, len(key)+len(value), false)
 		b.dirty = true
 		return nil, nil, nil
 	}
@@ -428,6 +452,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		return nil, nil, err
 	}
 	b.opCount++
+	b.recordPointIngress(commitlog.RawKVOpSet, len(key)+len(value), true)
 	b.dirty = true
 	if retainReplayViews {
 		b.retainPayloadAfterWrite = true
@@ -470,6 +495,7 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 		}
 		b.payloadBypass = true
 		b.opCount++
+		b.recordPointIngress(commitlog.RawKVOpDelete, len(key), useInnerView)
 		b.dirty = true
 		return nil, nil
 	}
@@ -479,6 +505,7 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 		}
 		b.payloadBypass = true
 		b.opCount++
+		b.recordPointIngress(commitlog.RawKVOpDelete, len(key), false)
 		b.dirty = true
 		return nil, nil
 	}
@@ -492,6 +519,7 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 		return nil, err
 	}
 	b.opCount++
+	b.recordPointIngress(commitlog.RawKVOpDelete, len(key), true)
 	b.dirty = true
 	if retainReplayViews {
 		b.retainPayloadAfterWrite = true
@@ -515,6 +543,74 @@ func (b *commandWALPublicBatch) DeleteRange(start, end []byte) error {
 	b.hasDeleteRange = true
 	b.dirty = true
 	return nil
+}
+
+func (b *commandWALPublicBatch) recordPointIngress(op commitlog.RawKVOp, bytes int, view bool) {
+	if b == nil {
+		return
+	}
+	switch op {
+	case commitlog.RawKVOpSet:
+		if view {
+			b.setViewCalls++
+			b.setViewBytes += bytes
+			return
+		}
+		b.setCalls++
+		b.setBytes += bytes
+	case commitlog.RawKVOpDelete:
+		if view {
+			b.deleteViewCalls++
+			b.deleteViewBytes += bytes
+			return
+		}
+		b.deleteCalls++
+		b.deleteBytes += bytes
+	}
+}
+
+func (b *commandWALPublicBatch) publishPointIngressStats() {
+	if b == nil || b.db == nil {
+		return
+	}
+	if b.setCalls != 0 {
+		b.db.commandWALPublicBatchSetCalls.Add(uint64(b.setCalls))
+	}
+	if b.setBytes != 0 {
+		b.db.commandWALPublicBatchSetBytes.Add(uint64(b.setBytes))
+	}
+	if b.setViewCalls != 0 {
+		b.db.commandWALPublicBatchSetViewCalls.Add(uint64(b.setViewCalls))
+	}
+	if b.setViewBytes != 0 {
+		b.db.commandWALPublicBatchSetViewBytes.Add(uint64(b.setViewBytes))
+	}
+	if b.deleteCalls != 0 {
+		b.db.commandWALPublicBatchDeleteCalls.Add(uint64(b.deleteCalls))
+	}
+	if b.deleteBytes != 0 {
+		b.db.commandWALPublicBatchDeleteBytes.Add(uint64(b.deleteBytes))
+	}
+	if b.deleteViewCalls != 0 {
+		b.db.commandWALPublicBatchDeleteViewCalls.Add(uint64(b.deleteViewCalls))
+	}
+	if b.deleteViewBytes != 0 {
+		b.db.commandWALPublicBatchDeleteViewBytes.Add(uint64(b.deleteViewBytes))
+	}
+}
+
+func (b *commandWALPublicBatch) resetPointIngressStats() {
+	if b == nil {
+		return
+	}
+	b.setCalls = 0
+	b.setBytes = 0
+	b.setViewCalls = 0
+	b.setViewBytes = 0
+	b.deleteCalls = 0
+	b.deleteBytes = 0
+	b.deleteViewCalls = 0
+	b.deleteViewBytes = 0
 }
 
 func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
@@ -590,12 +686,14 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		}); err != nil {
 			return err
 		}
+		b.publishPointIngressStats()
 		b.disableInnerStreamingBypass()
 		if !b.retainPayloadAfterWrite {
 			b.resetPayloadWithHint()
 		}
 		b.opCount = 0
 		b.hasDeleteRange = false
+		b.resetPointIngressStats()
 		b.dirty = false
 		return nil
 	}
@@ -632,6 +730,7 @@ func (b *commandWALPublicBatch) Close() error {
 	b.resetPayloadWithHint()
 	b.opCount = 0
 	b.hasDeleteRange = false
+	b.resetPointIngressStats()
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = true
@@ -648,6 +747,7 @@ func (b *commandWALPublicBatch) Reset() {
 		b.resetPayloadWithHint()
 		b.opCount = 0
 		b.hasDeleteRange = false
+		b.resetPointIngressStats()
 		b.dirty = false
 		b.retainPayloadAfterWrite = false
 		b.closed = false
@@ -659,6 +759,7 @@ func (b *commandWALPublicBatch) Reset() {
 	b.resetPayloadWithHint()
 	b.opCount = 0
 	b.hasDeleteRange = false
+	b.resetPointIngressStats()
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = false
