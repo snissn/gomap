@@ -46,7 +46,7 @@ func TestColumnPhysicalQ3DenseTypedColumnDirectPreparedParity1950(t *testing.T) 
 		if err != nil {
 			t.Fatalf("prepared q3 dense run %d: %v", run, err)
 		}
-		assertColumnPhysicalQ3DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, 0, matchedRows, matchedRows)
+		assertColumnPhysicalQ3DenseResult1950(t, fmt.Sprintf("prepared run %d", run), prepared, want, len(events), matchedRows, matchedRows)
 	}
 
 	noPredicateReq := req
@@ -103,7 +103,7 @@ func BenchmarkColumnPhysicalQ3DenseTypedColumn1950(b *testing.B) {
 		if err != nil {
 			b.Fatalf("preview runner.Run: %v", err)
 		}
-		assertColumnPhysicalQ3DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, 0, matchedRows, matchedRows, len(preview.Groups))
+		assertColumnPhysicalQ3DenseDiagnostics1950(b, "preview prepared", preview.Diagnostics, len(events), matchedRows, matchedRows, len(preview.Groups))
 		b.SetBytes(int64(preview.Diagnostics.DecodedPayloadBytes))
 		b.ReportAllocs()
 		b.ResetTimer()

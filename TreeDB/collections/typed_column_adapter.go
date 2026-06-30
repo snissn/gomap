@@ -1532,7 +1532,7 @@ func columnTypedColumnPhysicalQueryAdapterDictionaryModes(plan columnTypedColumn
 // decodeTypedColumnPhysicalQueryDenseGroupCountPart prepares the q1 typed-column
 // section fast path from the adapter seam so production query routing does not
 // import the typedcolumn data plane directly.
-func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, error) {
+func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhysicalQueryPlan, schemaHash uint64, typedRef, physical columnManifestAssetRefForScan, raw []byte, decodeRows bool, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics) (columnTypedColumnPhysicalQueryPart, error) {
 	var phaseStart time.Time
 	if prepareDiagnostics != nil {
 		phaseStart = time.Now()
@@ -1568,12 +1568,34 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 	if prepareDiagnostics != nil {
 		phaseStart = time.Now()
 	}
-	group, decodedBytes, blocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
+	var (
+		group        columnTypedColumnDenseGroupCountPart
+		decodedBytes uint64
+		blocks       int
+	)
+	if decodeRows {
+		codes, codeDecodedBytes, codeBlocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
+		if err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
+			}
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+		decodedBytes = codeDecodedBytes
+		blocks = codeBlocks
+		group = columnTypedColumnDenseGroupCountPart{Cardinality: len(codes.Dictionary), Dictionary: codes.Dictionary, Codes: codes.Codes, Valid: codes.Valid, Rows: summary.Rows}
+	} else {
+		var err error
+		group, decodedBytes, blocks, err = typedColumnDenseGroupCountCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
+		if err != nil {
+			if prepareDiagnostics != nil {
+				prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
+			}
+			return columnTypedColumnPhysicalQueryPart{}, err
+		}
+	}
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
-	}
-	if err != nil {
-		return columnTypedColumnPhysicalQueryPart{}, err
 	}
 	return columnTypedColumnPhysicalQueryPart{
 		Ref:                 typedRef,
@@ -1586,7 +1608,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPart(plan columnTypedColumnPhy
 		GranulesDecoded:     blocks,
 		DecodedBlocks:       blocks,
 		DecodedPayloadBytes: decodedBytes,
-		DenseGroupCount:     &columnTypedColumnDenseGroupCountPart{Cardinality: len(group.Dictionary), Dictionary: group.Dictionary, Codes: group.Codes, Valid: group.Valid},
+		DenseGroupCount:     &group,
 	}, nil
 }
 
@@ -1628,6 +1650,9 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
 	if includePhysicalRows && columnTypedColumnPhysicalQueryUseTimeOrderTopK(plan, req) {
+		return columnTypedColumnPhysicalQueryPart{}, false, nil
+	}
+	if opts.decodeDenseGroupCountRows && columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req) {
 		return columnTypedColumnPhysicalQueryPart{}, false, nil
 	}
 	requests, ok, err := columnTypedColumnPhysicalQueryDensePreparedRequests(plan, req, allowDenseGroupCountDistinct)
@@ -2280,7 +2305,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan columnTypedC
 	if prepareDiagnostics != nil {
 		phaseStart = time.Now()
 	}
-	group, decodedBytes, blocks, err := typedColumnDenseGroupCountDistinctCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
+	group, decodedBytes, blocks, err := typedColumnDenseGroupCountCodeColumn(adapterPart, plan.Fields, plan.GroupColumn, summary.Rows, "group-count group")
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
 	}
@@ -2298,7 +2323,7 @@ func decodeTypedColumnPhysicalQueryDenseGroupCountPreparedPart(plan columnTypedC
 		GranulesDecoded:     blocks,
 		DecodedBlocks:       blocks,
 		DecodedPayloadBytes: decodedBytes,
-		DenseGroupCount:     &columnTypedColumnDenseGroupCountPart{Cardinality: len(group.Dictionary), Dictionary: group.Dictionary, Codes: group.Codes, Valid: group.Valid},
+		DenseGroupCount:     &group,
 	}, nil
 }
 
@@ -4744,6 +4769,33 @@ func typedColumnDenseGroupCountDistinctCodeColumn(adapterPart *typedColumnAdapte
 	return columnTypedColumnDenseStringCodeColumn{Codes: codes, Dictionary: dictionary}, decodedBytes, blocks, nil
 }
 
+func typedColumnDenseGroupCountCodeColumn(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, column string, rows int, role string) (columnTypedColumnDenseGroupCountPart, uint64, int, error) {
+	adapterColumn, partColumn, cardinality, err := typedColumnDenseStringCodeColumn(adapterPart, fields, column, role)
+	if err != nil {
+		return columnTypedColumnDenseGroupCountPart{}, 0, 0, err
+	}
+	return typedColumnDenseGroupCountFromStringColumn(adapterColumn, partColumn, cardinality, rows, role)
+}
+
+func typedColumnDenseGroupCountFromStringColumn(adapterColumn typedColumnAdapterColumn, partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string) (columnTypedColumnDenseGroupCountPart, uint64, int, error) {
+	dictionary, err := typedColumnDenseStringValuesByCode(adapterColumn, cardinality, role)
+	if err != nil {
+		return columnTypedColumnDenseGroupCountPart{}, 0, 0, err
+	}
+	if adapterColumn.Field.Nullable {
+		counts, missing, decodedBytes, blocks, err := decodeTypedColumnDenseNullableUint32CodeCounts(partColumn, cardinality, rows, role)
+		if err != nil {
+			return columnTypedColumnDenseGroupCountPart{}, 0, 0, err
+		}
+		return columnTypedColumnDenseGroupCountPart{Cardinality: cardinality, Dictionary: dictionary, Counts: counts, Missing: missing, Rows: rows}, decodedBytes, blocks, nil
+	}
+	counts, decodedBytes, blocks, err := decodeTypedColumnDenseUint32CodeCounts(partColumn, cardinality, rows, role)
+	if err != nil {
+		return columnTypedColumnDenseGroupCountPart{}, 0, 0, err
+	}
+	return columnTypedColumnDenseGroupCountPart{Cardinality: cardinality, Dictionary: dictionary, Counts: counts, Rows: rows}, decodedBytes, blocks, nil
+}
+
 func typedColumnDenseStringCodeColumn(adapterPart *typedColumnAdapterPart, fields []TypedStorageField, column, role string) (typedColumnAdapterColumn, typedcolumn.ColumnPartColumn, int, error) {
 	adapterColumn, ok, err := typedColumnStringPredicateAdapterColumn(fields, column)
 	if err != nil {
@@ -4981,6 +5033,55 @@ func decodeTypedColumnDenseUint32Codes(partColumn typedcolumn.ColumnPartColumn, 
 	return codes, decodedBytes, len(partColumn.Blocks), nil
 }
 
+func decodeTypedColumnDenseUint32CodeCounts(partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string) ([]int, uint64, int, error) {
+	if rows < 0 {
+		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s invalid rows=%d", role, rows)
+	}
+	if cardinality < 0 {
+		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s invalid cardinality=%d", role, cardinality)
+	}
+	counts := make([]int, cardinality)
+	var blockCounts []int
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	decodedRows := 0
+	for blockIdx, block := range partColumn.Blocks {
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d min/max [%d,%d] outside cardinality %d", role, blockIdx, g.Min, g.Max, cardinality)
+			}
+		}
+		blockCounts, err := reader.CountUint32Codes(g, blockCounts)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if len(blockCounts) > cardinality {
+			return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d cardinality=%d exceeds part cardinality=%d", role, blockIdx, len(blockCounts), cardinality)
+		}
+		total := 0
+		for code, count := range blockCounts {
+			if count < 0 {
+				return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d count[%d]=%d is negative", role, blockIdx, code, count)
+			}
+			if count == 0 {
+				continue
+			}
+			counts[code] += count
+			total += count
+		}
+		if total != block.Descriptor.RowCount {
+			return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d counted rows=%d want %d", role, blockIdx, total, block.Descriptor.RowCount)
+		}
+		decodedRows += total
+		decodedBytes += uint64(g.RawBytes)
+	}
+	if decodedRows != rows {
+		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want part rows=%d", role, decodedRows, rows)
+	}
+	return counts, decodedBytes, len(partColumn.Blocks), nil
+}
+
 func decodeTypedColumnDenseUint32CodesParallel(partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string, workers int) ([]uint32, uint64, error) {
 	offsets, decodedBytes, err := typedColumnDenseDecodeLayout(partColumn, rows, role)
 	if err != nil {
@@ -5028,6 +5129,57 @@ func decodeTypedColumnDenseNullableUint32Codes(partColumn typedcolumn.ColumnPart
 		return codes, valid, decodedBytes, len(partColumn.Blocks), nil
 	}
 	return decodeTypedColumnNullableUint32CodesForRowRange(partColumn, cardinality, 0, rows, role, make([]uint32, 0, rows), make([]bool, 0, rows))
+}
+
+func decodeTypedColumnDenseNullableUint32CodeCounts(partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string) ([]int, int, uint64, int, error) {
+	if rows < 0 {
+		return nil, 0, 0, 0, fmt.Errorf("collections: dense typed-column %s invalid rows=%d", role, rows)
+	}
+	if cardinality < 0 {
+		return nil, 0, 0, 0, fmt.Errorf("collections: dense typed-column %s invalid cardinality=%d", role, cardinality)
+	}
+	counts := make([]int, cardinality)
+	missing := 0
+	var valueScratch []int64
+	var nullScratch []bool
+	var defaultScratch []bool
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	decodedRows := 0
+	for blockIdx, block := range partColumn.Blocks {
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return nil, 0, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d min/max [%d,%d] outside cardinality %d", role, blockIdx, g.Min, g.Max, cardinality)
+			}
+		}
+		values, nulls, defaults, err := reader.DecodeNullableInt64Into(valueScratch[:0], nullScratch[:0], defaultScratch[:0], g)
+		if err != nil {
+			return nil, 0, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d: %w", role, blockIdx, err)
+		}
+		if len(values) != block.Descriptor.RowCount || len(nulls) != block.Descriptor.RowCount || len(defaults) != block.Descriptor.RowCount {
+			return nil, 0, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d decoded rows values/nulls/defaults=%d/%d/%d want %d", role, blockIdx, len(values), len(nulls), len(defaults), block.Descriptor.RowCount)
+		}
+		for row, code := range values {
+			if nulls[row] || defaults[row] {
+				missing++
+				continue
+			}
+			if code < 0 || uint64(code) >= uint64(cardinality) || code > int64(^uint32(0)) {
+				return nil, 0, 0, 0, fmt.Errorf("collections: dense typed-column %s code=%d outside cardinality=%d", role, code, cardinality)
+			}
+			counts[int(code)]++
+		}
+		decodedRows += len(values)
+		valueScratch = values
+		nullScratch = nulls
+		defaultScratch = defaults
+		decodedBytes += uint64(g.RawBytes)
+	}
+	if decodedRows != rows {
+		return nil, 0, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded rows=%d want part rows=%d", role, decodedRows, rows)
+	}
+	return counts, missing, decodedBytes, len(partColumn.Blocks), nil
 }
 
 func decodeTypedColumnDenseNullableUint32CodesParallel(partColumn typedcolumn.ColumnPartColumn, cardinality int, rows int, role string, workers int) ([]uint32, []bool, uint64, error) {
