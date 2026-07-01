@@ -483,7 +483,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -500,6 +500,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		opts := commandWALFinalizeOptions(intent)
 		opts.skipPrePublishFlush = true
+		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 		// Poison while still holding commitMu so that no concurrent writer can
@@ -636,7 +637,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -649,6 +650,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		opts := commandWALFinalizeOptions(intent)
 		opts.skipPrePublishFlush = true
+		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
@@ -686,19 +688,23 @@ func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
 	}
 	maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
 	intent := b.commandWALPublishIntent
+	var err error
 	if !b.physicalOnly && b.db.commandWAL {
 		unlockRawPublish := b.db.lockCommandWALRawPublish()
 		defer unlockRawPublish()
 		if err := b.db.runCommandWALRawPublishBarriers(); err != nil {
 			return err
 		}
-		var err error
 		intent, err = b.db.prepareRawKVCommandWALIntent(b)
 		if err != nil {
 			return err
 		}
 	}
-	return b.writeWithCommandWALIntentPreflight(sync, intent, maxEntryRevision, conditional)
+	err = b.writeWithCommandWALIntentPreflight(sync, intent, maxEntryRevision, conditional)
+	if err == nil && intent != nil && intent.lsn != 0 {
+		b.db.conditionalTxnCommandWALPayloads.Add(1)
+	}
+	return err
 }
 
 func (b *Batch) Close() error {

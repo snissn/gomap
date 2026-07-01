@@ -25,11 +25,12 @@ type CommandWALLSNRange struct {
 }
 
 type finalizeCommitOptions struct {
-	commandWALPublish   bool
-	appliedCommandLSN   uint64
-	appliedRanges       []CommandWALLSNRange
-	skipPrePublishFlush bool
-	maxEntryRevision    page.EntryRevision
+	commandWALPublish           bool
+	appliedCommandLSN           uint64
+	appliedRanges               []CommandWALLSNRange
+	skipPrePublishFlush         bool
+	skipConditionalRootConflict bool
+	maxEntryRevision            page.EntryRevision
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {

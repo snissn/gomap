@@ -48,11 +48,12 @@ type conditionalReadPrecondition struct {
 }
 
 type conditionalConflictOracle struct {
-	mu     sync.Mutex
-	nextID uint64
-	active map[uint64]uint64
-	recent map[string]uint64
-	ranges []conditionalRecentRange
+	mu      sync.Mutex
+	nextID  uint64
+	active  map[uint64]uint64
+	recent  map[string]uint64
+	ranges  []conditionalRecentRange
+	rootSeq uint64
 }
 
 type conditionalRecentRange struct {
@@ -92,6 +93,7 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 		_ = snap.Close()
 		return nil, ErrConditionalTxnUnsupported
 	}
+	db.conditionalTxnStarted.Add(1)
 	tx := &ConditionalTxn{
 		db:             db,
 		snap:           snap,
@@ -281,6 +283,7 @@ func (tx *ConditionalTxn) commit(sync bool) (err error) {
 		return err
 	}
 	defer func() {
+		tx.db.observeConditionalTxnCommit(len(tx.reads), err)
 		if closeErr := tx.finish(); err == nil {
 			err = closeErr
 		}
@@ -345,6 +348,7 @@ func (tx *ConditionalTxn) finish() error {
 	}
 	if db != nil && id != 0 {
 		db.conditionalUnregisterTxn(id)
+		db.conditionalTxnClosed.Add(1)
 	}
 	return err
 }
@@ -468,10 +472,12 @@ func (db *DB) conditionalRecordCommittedEntries(entries []batchpkg.Entry, ranges
 	if len(entries) > 0 && db.conditionalOracle.recent == nil {
 		db.conditionalOracle.recent = make(map[string]uint64, len(entries))
 	}
+	pointCount := 0
 	for i := range entries {
 		switch entries[i].Type {
 		case batchpkg.OpPut, batchpkg.OpDelete:
 			db.conditionalOracle.recent[string(entries[i].Key)] = commitSeq
+			pointCount++
 		}
 	}
 	for i := range ranges {
@@ -481,6 +487,41 @@ func (db *DB) conditionalRecordCommittedEntries(entries []batchpkg.Entry, ranges
 			seq:   commitSeq,
 		})
 	}
+	if pointCount > 0 {
+		db.conditionalOracleRecordedPoints.Add(uint64(pointCount))
+	}
+	if len(ranges) > 0 {
+		db.conditionalOracleRecordedRanges.Add(uint64(len(ranges)))
+	}
+}
+
+func (db *DB) conditionalRecordRootCommit(oldRootID uint64, newRootID uint64, commitSeq uint64) {
+	if db == nil || oldRootID == newRootID || commitSeq == 0 || db.conditionalActiveTxnCount.Load() <= 0 {
+		return
+	}
+	db.conditionalOracle.mu.Lock()
+	if len(db.conditionalOracle.active) > 0 && commitSeq > db.conditionalOracle.rootSeq {
+		db.conditionalOracle.rootSeq = commitSeq
+		db.conditionalOracleRootMarkers.Add(1)
+	}
+	db.conditionalOracle.mu.Unlock()
+}
+
+func (db *DB) observeConditionalTxnCommit(readSetLen int, err error) {
+	if db == nil {
+		return
+	}
+	db.conditionalTxnCommitAttempts.Add(1)
+	db.conditionalTxnReadSetSamples.Add(1)
+	addIntMetric(&db.conditionalTxnReadSetEntries, readSetLen)
+	storeUint64Max(&db.conditionalTxnReadSetMax, uint64(readSetLen))
+	if errors.Is(err, ErrConcurrentModification) {
+		db.conditionalTxnConflicts.Add(1)
+		return
+	}
+	if err == nil {
+		db.conditionalTxnCommits.Add(1)
+	}
 }
 
 func (db *DB) conditionalReadSetChangedSince(start uint64, reads []conditionalReadPrecondition) bool {
@@ -489,6 +530,9 @@ func (db *DB) conditionalReadSetChangedSince(start uint64, reads []conditionalRe
 	}
 	db.conditionalOracle.mu.Lock()
 	defer db.conditionalOracle.mu.Unlock()
+	if db.conditionalOracle.rootSeq > start {
+		return true
+	}
 	for i := range reads {
 		if db.conditionalOracle.recent[conditionalBytesString(reads[i].key)] > start {
 			return true
@@ -504,10 +548,16 @@ func (db *DB) conditionalReadSetChangedSince(start uint64, reads []conditionalRe
 }
 
 func (db *DB) conditionalPruneOracleLocked() {
+	db.conditionalOraclePrunes.Add(1)
+	pointsBefore := len(db.conditionalOracle.recent)
+	rangesBefore := len(db.conditionalOracle.ranges)
 	if len(db.conditionalOracle.active) == 0 {
 		clear(db.conditionalOracle.recent)
 		clear(db.conditionalOracle.ranges)
 		db.conditionalOracle.ranges = db.conditionalOracle.ranges[:0]
+		db.conditionalOracle.rootSeq = 0
+		addIntMetric(&db.conditionalOraclePrunedPoints, pointsBefore)
+		addIntMetric(&db.conditionalOraclePrunedRanges, rangesBefore)
 		return
 	}
 	oldest := uint64(^uint64(0))
@@ -529,6 +579,11 @@ func (db *DB) conditionalPruneOracleLocked() {
 	}
 	clear(db.conditionalOracle.ranges[len(kept):])
 	db.conditionalOracle.ranges = kept
+	if db.conditionalOracle.rootSeq <= oldest {
+		db.conditionalOracle.rootSeq = 0
+	}
+	addIntMetric(&db.conditionalOraclePrunedPoints, pointsBefore-len(db.conditionalOracle.recent))
+	addIntMetric(&db.conditionalOraclePrunedRanges, rangesBefore-len(db.conditionalOracle.ranges))
 }
 
 func conditionalBytesString(b []byte) string {

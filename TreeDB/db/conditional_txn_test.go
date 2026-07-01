@@ -170,6 +170,135 @@ func TestConditionalTxnAllowsDisjointConcurrentWrite(t *testing.T) {
 	assertDBValue(t, d, "target", "value")
 }
 
+func TestConditionalTxnRejectsDirectRootPublishChangingReadKey(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("guard"), []byte("before")); err != nil {
+		t.Fatalf("seed guard: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	if _, _, err := tx.GetVersioned([]byte("guard")); err != nil {
+		t.Fatalf("txn GetVersioned guard: %v", err)
+	}
+
+	newRoot := buildConditionalTxnManualRoot(t, d, "guard", "after")
+	if err := d.Commit(newRoot); err != nil {
+		t.Fatalf("direct Commit: %v", err)
+	}
+	if err := tx.Set([]byte("target"), []byte("value")); err != nil {
+		t.Fatalf("txn Set target: %v", err)
+	}
+	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("txn Commit error=%v, want ErrConcurrentModification", err)
+	}
+	if got, err := d.Get([]byte("target")); err != nil || got != nil {
+		t.Fatalf("target after rejected direct-root conflict=(%q,%v), want missing", got, err)
+	}
+}
+
+func TestConditionalTxnAllowsDirectSameRootPublish(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("guard"), []byte("before")); err != nil {
+		t.Fatalf("seed guard: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	if _, _, err := tx.GetVersioned([]byte("guard")); err != nil {
+		t.Fatalf("txn GetVersioned guard: %v", err)
+	}
+	state := d.State()
+	if state == nil {
+		t.Fatalf("missing DB state")
+	}
+	if err := d.Commit(state.RootPageID); err != nil {
+		t.Fatalf("same-root Commit: %v", err)
+	}
+	if err := tx.Set([]byte("target"), []byte("value")); err != nil {
+		t.Fatalf("txn Set target: %v", err)
+	}
+	if err := tx.CommitSync(); err != nil {
+		t.Fatalf("txn CommitSync: %v", err)
+	}
+	assertDBValue(t, d, "target", "value")
+}
+
+func TestConditionalTxnStatsExposeOracleAndCleanup(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("guard"), []byte("before")); err != nil {
+		t.Fatalf("seed guard: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	if _, _, err := tx.GetVersioned([]byte("guard")); err != nil {
+		t.Fatalf("txn GetVersioned guard: %v", err)
+	}
+	stats := d.Stats()
+	if got := stats["treedb.conditional_txn.active"]; got != "1" {
+		t.Fatalf("active stats=%q, want 1", got)
+	}
+	if got := stats["treedb.conditional_txn.started_total"]; got != "1" {
+		t.Fatalf("started stats=%q, want 1", got)
+	}
+
+	if err := d.SetSync([]byte("guard"), []byte("after")); err != nil {
+		t.Fatalf("concurrent guard write: %v", err)
+	}
+	stats = d.Stats()
+	if got := stats["treedb.conditional_oracle.retained_points"]; got != "1" {
+		t.Fatalf("retained point stats=%q, want 1", got)
+	}
+	if got := stats["treedb.conditional_oracle.recorded_points_total"]; got != "1" {
+		t.Fatalf("recorded point stats=%q, want 1", got)
+	}
+
+	if err := tx.Set([]byte("target"), []byte("value")); err != nil {
+		t.Fatalf("txn Set target: %v", err)
+	}
+	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("txn Commit error=%v, want ErrConcurrentModification", err)
+	}
+	stats = d.Stats()
+	if got := stats["treedb.conditional_txn.active"]; got != "0" {
+		t.Fatalf("active stats after conflict=%q, want 0", got)
+	}
+	if got := stats["treedb.conditional_txn.closed_total"]; got != "1" {
+		t.Fatalf("closed stats=%q, want 1", got)
+	}
+	if got := stats["treedb.conditional_txn.commit_attempts_total"]; got != "1" {
+		t.Fatalf("commit attempts stats=%q, want 1", got)
+	}
+	if got := stats["treedb.conditional_txn.conflicts_total"]; got != "1" {
+		t.Fatalf("conflict stats=%q, want 1", got)
+	}
+	if got := stats["treedb.conditional_txn.read_set.max"]; got != "1" {
+		t.Fatalf("read-set max stats=%q, want 1", got)
+	}
+	if got := stats["treedb.conditional_oracle.retained_points"]; got != "0" {
+		t.Fatalf("retained point stats after cleanup=%q, want 0", got)
+	}
+}
+
 func TestConditionalTxnReserveReadSetDeduplicatesEarlyReads(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -254,6 +383,10 @@ func TestConditionalTxnCommandWALReplayMatchesLiveRevisionContract(t *testing.T)
 		_ = d.Close()
 		t.Fatalf("txn CommitSync: %v", err)
 	}
+	if got := d.Stats()["treedb.conditional_txn.command_wal_payloads_total"]; got != "1" {
+		_ = d.Close()
+		t.Fatalf("conditional command-WAL payload stats=%q, want 1", got)
+	}
 
 	value, revision, err := d.GetVersioned([]byte("k"))
 	if err != nil {
@@ -333,4 +466,35 @@ func TestConditionalTxnCloseAndReuse(t *testing.T) {
 	if err := tx.Commit(); !errors.Is(err, ErrConditionalTxnClosed) {
 		t.Fatalf("Commit after Close error=%v, want ErrConditionalTxnClosed", err)
 	}
+}
+
+func buildConditionalTxnManualRoot(t *testing.T, d *DB, key, value string) uint64 {
+	t.Helper()
+	idx := d.idx.Load()
+	if idx == nil {
+		t.Fatalf("missing index")
+	}
+	d.mu.RLock()
+	rootID := d.meta.UserRootPageID
+	baseSeq := d.meta.CommitSeq
+	regID := idx.registry.Register(baseSeq)
+	d.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+
+	batch := d.NewBatch().(*Batch)
+	if err := batch.Set([]byte(key), []byte(value)); err != nil {
+		_ = batch.Close()
+		t.Fatalf("manual root Set: %v", err)
+	}
+	newRoot, _, _, err := idx.zipper.Apply(rootID, batch.batch)
+	if closeErr := batch.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatalf("manual root Apply: %v", err)
+	}
+	if newRoot == rootID {
+		t.Fatalf("manual root unchanged: %d", newRoot)
+	}
+	return newRoot
 }

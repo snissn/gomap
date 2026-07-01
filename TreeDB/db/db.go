@@ -138,27 +138,42 @@ type DB struct {
 	maintenanceOpsPerCoalesce      int
 	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
-	mu                              sync.RWMutex
-	writeMu                         sync.RWMutex
-	commitMu                        sync.Mutex
-	publishPrepareMu                sync.RWMutex
-	pendingValueLogAppendMu         sync.Mutex
-	pendingValueLogAppendFileIDRefs map[uint32]int
-	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
-	updateLocks                     keyupdate.Locks
-	maintenanceMu                   sync.Mutex
-	combineMu                       sync.RWMutex
-	combineReqCh                    chan *commitCombineReq
-	combineStopCh                   chan struct{}
-	combineDoneCh                   chan struct{}
-	vacuumInProgress                atomic.Bool
-	vacuum                          vacuumRecorder
-	meta                            page.MetaPageBody
-	metaPageID                      uint64
-	entryRevisionFloor              atomic.Uint64
-	commandJournal                  *commitlog.CommandJournal
-	conditionalActiveTxnCount       atomic.Int64
-	conditionalOracle               conditionalConflictOracle
+	mu                               sync.RWMutex
+	writeMu                          sync.RWMutex
+	commitMu                         sync.Mutex
+	publishPrepareMu                 sync.RWMutex
+	pendingValueLogAppendMu          sync.Mutex
+	pendingValueLogAppendFileIDRefs  map[uint32]int
+	pendingValueLogAppendPtrRefs     map[page.ValuePtr]int
+	updateLocks                      keyupdate.Locks
+	maintenanceMu                    sync.Mutex
+	combineMu                        sync.RWMutex
+	combineReqCh                     chan *commitCombineReq
+	combineStopCh                    chan struct{}
+	combineDoneCh                    chan struct{}
+	vacuumInProgress                 atomic.Bool
+	vacuum                           vacuumRecorder
+	meta                             page.MetaPageBody
+	metaPageID                       uint64
+	entryRevisionFloor               atomic.Uint64
+	commandJournal                   *commitlog.CommandJournal
+	conditionalActiveTxnCount        atomic.Int64
+	conditionalTxnStarted            atomic.Uint64
+	conditionalTxnClosed             atomic.Uint64
+	conditionalTxnCommitAttempts     atomic.Uint64
+	conditionalTxnCommits            atomic.Uint64
+	conditionalTxnConflicts          atomic.Uint64
+	conditionalTxnReadSetSamples     atomic.Uint64
+	conditionalTxnReadSetEntries     atomic.Uint64
+	conditionalTxnReadSetMax         atomic.Uint64
+	conditionalTxnCommandWALPayloads atomic.Uint64
+	conditionalOracleRecordedPoints  atomic.Uint64
+	conditionalOracleRecordedRanges  atomic.Uint64
+	conditionalOracleRootMarkers     atomic.Uint64
+	conditionalOraclePrunes          atomic.Uint64
+	conditionalOraclePrunedPoints    atomic.Uint64
+	conditionalOraclePrunedRanges    atomic.Uint64
+	conditionalOracle                conditionalConflictOracle
 
 	state atomic.Pointer[DBState]
 
@@ -2522,6 +2537,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	db.mu.Lock()
 	watermarkWait += time.Since(lockStart)
 	holdStart := time.Now()
+	oldUserRootID := db.meta.UserRootPageID
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
@@ -2686,6 +2702,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		post.durSync1 = durSync1
 		post.durMeta = durMeta
 		post.durSync2 = durSync2
+	}
+	if !opts.skipConditionalRootConflict {
+		db.conditionalRecordRootCommit(oldUserRootID, newRootID, post.commitSeq)
 	}
 
 	return post, nil
