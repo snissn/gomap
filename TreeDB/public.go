@@ -35,6 +35,9 @@ type EntryRevision = page.EntryRevision
 
 const LegacyEntryRevision = page.LegacyEntryRevision
 
+// ConditionalTxn is TreeDB's native snapshot-conditional transaction type.
+type ConditionalTxn = db.ConditionalTxn
+
 type MaintenancePhase = caching.MaintenancePhase
 
 type LeafPageReadCacheWriteAdmissionPolicy = db.LeafPageReadCacheWriteAdmissionPolicy
@@ -1708,6 +1711,25 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 		return db.cached.UpdateSync(key, fn)
 	}
 	return db.backend.UpdateSync(key, fn)
+}
+
+// NewConditionalTxn opens a native snapshot-conditional transaction when this
+// handle is backed directly by TreeDB's backend. Cached write handles fail
+// closed with ErrConditionalTxnUnsupported until cached memtable validation is
+// implemented natively.
+func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
+	unlock, err := db.beginPublicOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if db.cached != nil {
+		return nil, ErrConditionalTxnUnsupported
+	}
+	if db.backend == nil {
+		return nil, ErrClosed
+	}
+	return db.backend.NewConditionalTxn()
 }
 
 // Delete removes a key without forcing an fsync boundary.

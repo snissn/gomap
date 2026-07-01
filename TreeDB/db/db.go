@@ -157,6 +157,8 @@ type DB struct {
 	metaPageID                      uint64
 	entryRevisionFloor              atomic.Uint64
 	commandJournal                  *commitlog.CommandJournal
+	conditionalActiveTxnCount       atomic.Int64
+	conditionalOracle               conditionalConflictOracle
 
 	state atomic.Pointer[DBState]
 

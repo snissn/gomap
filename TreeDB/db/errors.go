@@ -17,6 +17,12 @@ var (
 	// ErrConcurrentModification indicates a publish or maintenance operation
 	// observed that a root changed after its validation point.
 	ErrConcurrentModification = errors.New("treedb: concurrent modification")
+	// ErrConditionalTxnClosed indicates a conditional transaction was used after
+	// Commit, CommitSync, or Close.
+	ErrConditionalTxnClosed = errors.New("treedb: conditional transaction is closed")
+	// ErrConditionalTxnUnsupported indicates the selected TreeDB mode cannot
+	// provide native conditional transaction semantics.
+	ErrConditionalTxnUnsupported = errors.New("treedb: conditional transactions unsupported")
 	// ErrRecoveryRequired indicates the DB must be opened read-write for recovery
 	// before the requested read-only or offline-maintenance operation can run.
 	ErrRecoveryRequired = collectionwal.ErrCollectionWALRecoveryRequired
