@@ -146,7 +146,7 @@ func decodeBatchRecords(payload []byte, withRevision bool) ([]Record, error) {
 		if withRevision {
 			revision = binary.LittleEndian.Uint64(payload[off+23 : off+31])
 		}
-		if recordSizeExceedsMax(keyLen, valLen) {
+		if recordSizeExceedsMaxWithHeader(headerSize, keyLen, valLen) {
 			return nil, ErrRecordTooLarge
 		}
 		recSize := headerSize + int(keyLen) + int(valLen)

@@ -133,6 +133,106 @@ func TestCommitLogWriteReadBatchWithEntryRevisions(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestCommitLogAppendEntryRevision(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	record := Record{Op: OpSetInline, Key: []byte("k1"), Value: []byte("v1"), Seq: 300, Revision: 201}
+	if err := writer.Append(record); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if got := data[segmentHeaderSize]; got != recordRevisionBatchVersion {
+		t.Fatalf("raw batch version=%d, want revision batch version %d", got, recordRevisionBatchVersion)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != 1 {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want 1", len(got))
+	}
+	if got[0].Op != record.Op || got[0].Seq != record.Seq || got[0].Revision != record.Revision ||
+		!bytes.Equal(got[0].Key, record.Key) || !bytes.Equal(got[0].Value, record.Value) {
+		_ = reader.Close()
+		t.Fatalf("record=%+v, want %+v", got[0], record)
+	}
+	if _, err := reader.ReadBatch(); !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	_ = reader.Close()
+}
+
+func TestCommitLogAppendSeqBackedRevisionUsesCompactVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	record := Record{Op: OpSetInline, Key: []byte("k1"), Value: []byte("v1"), Seq: 300, Revision: 300}
+	if err := writer.Append(record); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if got := data[segmentHeaderSize]; got != Version {
+		t.Fatalf("raw batch version=%d, want compact version %d", got, Version)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != 1 {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want 1", len(got))
+	}
+	if got[0].Op != record.Op || got[0].Seq != record.Seq || got[0].Revision != 0 ||
+		!bytes.Equal(got[0].Key, record.Key) || !bytes.Equal(got[0].Value, record.Value) {
+		_ = reader.Close()
+		t.Fatalf("record=%+v, want seq-backed compact revision", got[0])
+	}
+	if _, err := reader.ReadBatch(); !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	_ = reader.Close()
+}
+
 func TestCommitLogAppendCoalescesSameSeqSmallRecords(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

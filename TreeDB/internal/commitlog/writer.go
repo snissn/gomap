@@ -45,12 +45,33 @@ func normalizeBufferSize(size int) int {
 	return size
 }
 
-func recordSizeExceedsMax(keyLen uint16, valueLen uint32) bool {
+func recordSizeExceedsMaxWithHeader(headerSize int, keyLen uint16, valueLen uint32) bool {
 	if limits.MaxRecordSize <= 0 {
 		return false
 	}
-	recordLen := int64(recordHeaderSize) + int64(keyLen) + int64(valueLen)
+	recordLen := int64(headerSize) + int64(keyLen) + int64(valueLen)
 	return recordLen > limits.MaxRecordSize
+}
+
+func recordSizeExceedsMax(keyLen uint16, valueLen uint32) bool {
+	return recordSizeExceedsMaxWithHeader(recordHeaderSize, keyLen, valueLen)
+}
+
+func recordNeedsRevisionEncoding(r *Record, batchSeq uint64) bool {
+	return r != nil && r.Revision != 0 && r.Revision != batchSeq
+}
+
+func batchNeedsRevisionEncoding(records []Record, batchSeq uint64) (bool, error) {
+	needsRevision := false
+	for i := range records {
+		if records[i].Seq != batchSeq {
+			return false, ErrMixedBatchSeq
+		}
+		if recordNeedsRevisionEncoding(&records[i], batchSeq) {
+			needsRevision = true
+		}
+	}
+	return needsRevision, nil
 }
 
 func allZeroBytes(p []byte) bool {
@@ -426,15 +447,15 @@ func (w *Writer) Append(record Record) error {
 
 	keyLen := uint16(len(record.Key))
 	valLen := uint32(len(record.Value))
-	if recordSizeExceedsMax(keyLen, valLen) {
-		return ErrRecordTooLarge
-	}
 
 	headerSize := recordHeaderSize
 	version := byte(Version)
-	if record.Revision != 0 {
+	if recordNeedsRevisionEncoding(&record, record.Seq) {
 		headerSize = recordRevisionHeaderSize
 		version = recordRevisionBatchVersion
+	}
+	if recordSizeExceedsMaxWithHeader(headerSize, keyLen, valLen) {
+		return ErrRecordTooLarge
 	}
 
 	total := int64(batchHeaderSize) + int64(headerSize) + int64(len(record.Key)) + int64(len(record.Value))
@@ -449,7 +470,7 @@ func (w *Writer) Append(record Record) error {
 	if payloadLen > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	if record.Revision == 0 && !w.compress && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
+	if version == Version && !w.compress && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
 		return w.appendPendingRecord(record, keyLen, valLen)
 	}
 
@@ -467,7 +488,7 @@ func (w *Writer) Append(record Record) error {
 	binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
 	binary.LittleEndian.PutUint64(buf[off+7:off+15], record.RID)
 	binary.LittleEndian.PutUint64(buf[off+15:off+23], record.Seq)
-	if record.Revision != 0 {
+	if version == recordRevisionBatchVersion {
 		binary.LittleEndian.PutUint64(buf[off+23:off+31], record.Revision)
 	}
 	copy(buf[off+headerSize:], record.Key)
@@ -488,21 +509,18 @@ func (w *Writer) AppendBatch(records []Record) error {
 	}
 
 	batchSeq := records[0].Seq
-	hasRecordRevisions := false
-	for i := range records {
-		if records[i].Revision != 0 {
-			hasRecordRevisions = true
-			break
-		}
+	needsRevision, err := batchNeedsRevisionEncoding(records, batchSeq)
+	if err != nil {
+		return err
 	}
-	if !hasRecordRevisions && !w.compress {
+	if !needsRevision && !w.compress {
 		if ok, err := w.appendZeroInlineBatchIfCompact(records, batchSeq); ok || err != nil {
 			return err
 		}
 	}
 	headerSize := recordHeaderSize
 	version := byte(Version)
-	if hasRecordRevisions {
+	if needsRevision {
 		headerSize = recordRevisionHeaderSize
 		version = recordRevisionBatchVersion
 	}
@@ -525,9 +543,6 @@ func (w *Writer) AppendBatch(records []Record) error {
 		if err := validateRecord(r); err != nil {
 			return err
 		}
-		if r.Seq != batchSeq {
-			return ErrMixedBatchSeq
-		}
 		if len(r.Key) > int(^uint16(0)) {
 			return ErrRecordTooLarge
 		}
@@ -536,7 +551,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 		}
 		keyLen := uint16(len(r.Key))
 		valLen := uint32(len(r.Value))
-		if recordSizeExceedsMax(keyLen, valLen) {
+		if recordSizeExceedsMaxWithHeader(headerSize, keyLen, valLen) {
 			return ErrRecordTooLarge
 		}
 
@@ -580,7 +595,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 		binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
 		binary.LittleEndian.PutUint64(buf[off+7:off+15], r.RID)
 		binary.LittleEndian.PutUint64(buf[off+15:off+23], r.Seq)
-		if hasRecordRevisions {
+		if needsRevision {
 			binary.LittleEndian.PutUint64(buf[off+23:off+31], r.Revision)
 		}
 		copy(buf[off+headerSize:], r.Key)
@@ -610,7 +625,7 @@ func (w *Writer) appendZeroInlineBatchIfCompact(records []Record, batchSeq uint6
 	total := int64(zeroInlineBatchHeaderSize)
 	for i := range records {
 		r := &records[i]
-		if r.Revision != 0 {
+		if recordNeedsRevisionEncoding(r, batchSeq) {
 			return false, nil
 		}
 		if r.Op != OpSetInline {
