@@ -1071,12 +1071,12 @@ func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testi
 		}
 		return
 	}
-	if total == 0 {
-		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want nonzero split work", label, diag)
-	}
 	// Tiny fixture phases can round to zero on coarse platform timers. This live
-	// path gate checks that split accounting is emitted and bounded; the merge
+	// path gate checks that split accounting is bounded when emitted; the merge
 	// additivity test covers all four individual fields structurally.
+	if total == 0 && diag.TypedColumnPreparePostPrepareNanos > 0 {
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want split work when post-prepare elapsed", label, diag)
+	}
 	if diag.TypedColumnPreparePostPrepareNanos < total {
 		tb.Fatalf("%s typed-column post-prepare nanos=%d want >= split total %d diagnostics=%+v", label, diag.TypedColumnPreparePostPrepareNanos, total, diag)
 	}
