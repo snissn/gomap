@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/collectionwal"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -137,6 +138,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	db.seedEntryRevisionFloor()
 	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -158,6 +160,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
@@ -279,6 +282,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	db.seedEntryRevisionFloor()
 	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -300,6 +304,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,

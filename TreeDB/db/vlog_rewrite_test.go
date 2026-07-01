@@ -4439,6 +4439,69 @@ func TestRewriteWriter_AppendLeafPageLane0KeepsRawLeafPayload(t *testing.T) {
 	}
 }
 
+func TestRewriteWriter_AppendLeafPageDoesNotRetainCallerPageAsCompactScratch(t *testing.T) {
+	root := t.TempDir()
+	valueDir := filepath.Join(root, "value_vlog")
+	leafDir := filepath.Join(root, "leaf_vlog")
+	if err := os.MkdirAll(valueDir, 0o755); err != nil {
+		t.Fatalf("mkdir value dir: %v", err)
+	}
+	if err := os.MkdirAll(leafDir, 0o755); err != nil {
+		t.Fatalf("mkdir leaf dir: %v", err)
+	}
+
+	w := newRewriteWriter(valueDir, 254, 0, 64<<20)
+	w.blockCompression = false
+	w.ConfigureLeafLog(leafDir, rewriteLeafLogLaneID, 0)
+
+	denseLeaf := buildNonCompactRewriteLeafPage(t)
+	beforeDense := append([]byte(nil), denseLeaf...)
+	if _, err := w.AppendLeafPage(denseLeaf); err != nil {
+		t.Fatalf("AppendLeafPage dense: %v", err)
+	}
+
+	compactLeaf := buildCompactRewriteLeafPage(t)
+	if _, err := w.AppendLeafPage(compactLeaf); err != nil {
+		t.Fatalf("AppendLeafPage compact: %v", err)
+	}
+	if !bytes.Equal(denseLeaf, beforeDense) {
+		t.Fatalf("non-compact caller leaf page was mutated after later compact append: before=%x after=%x", beforeDense[:32], denseLeaf[:32])
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func buildCompactRewriteLeafPage(t *testing.T) []byte {
+	t.Helper()
+	leafBuf := make([]byte, page.PageSize)
+	leafBuilder := node.NewBuilderWithOptions(leafBuf, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	for i := 0; i < 4; i++ {
+		key := []byte(fmt.Sprintf("compact-leaf-key-%04d", i))
+		if err := leafBuilder.AddLeafEntry(key, []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry compact %d: %v", i, err)
+		}
+	}
+	leafBuilder.FinishNoNode()
+	if _, compacted := valuelog.MaybeCompactLeafLogPayloadLength(leafBuf); !compacted {
+		t.Fatal("compact leaf fixture did not produce compact payload")
+	}
+	return leafBuf
+}
+
+func buildNonCompactRewriteLeafPage(t *testing.T) []byte {
+	t.Helper()
+	leafBuf := bytes.Repeat([]byte{0x5a}, page.PageSize)
+	if _, compacted := valuelog.MaybeCompactLeafLogPayloadLength(leafBuf); compacted {
+		t.Fatal("non-compact fixture unexpectedly produced compact payload")
+	}
+	return leafBuf
+}
+
 func TestRewriteWriter_AppendLeafPageSkipsLeafDictWhenCompressionDisabled(t *testing.T) {
 	walDir := t.TempDir()
 	leafPage := bytes.Repeat([]byte("rewrite/leaf/page/dict/off/"), 256)

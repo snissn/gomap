@@ -89,6 +89,92 @@ func TestGetVersionedPreservesMutableMemtableRevision(t *testing.T) {
 	}
 }
 
+func TestGetVersionedAssignsMutableMemtableRevision(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "skiplist",
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	if err := db.Set([]byte("k"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	val, revision, err := db.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetVersioned: %v", err)
+	}
+	if !bytes.Equal(val, []byte("value")) || revision == page.LegacyEntryRevision {
+		t.Fatalf("GetVersioned=(%q,%d), want (value,non-legacy)", val, revision)
+	}
+
+	if err := db.Set([]byte("next"), []byte("value")); err != nil {
+		t.Fatalf("Set next: %v", err)
+	}
+	_, nextRevision, err := db.GetVersioned([]byte("next"))
+	if err != nil {
+		t.Fatalf("GetVersioned next: %v", err)
+	}
+	if nextRevision <= revision {
+		t.Fatalf("next revision=%d, want > first revision %d", nextRevision, revision)
+	}
+}
+
+func TestCommandWALPointCallbacksReceiveVisibleRevision(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "skiplist",
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	var setRevision page.EntryRevision
+	if err := db.SetAfterCommandWALAppendWithRevision([]byte("k"), []byte("value"), func(revision page.EntryRevision) error {
+		setRevision = revision
+		return nil
+	}); err != nil {
+		t.Fatalf("SetAfterCommandWALAppendWithRevision: %v", err)
+	}
+	val, revision, err := db.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetVersioned: %v", err)
+	}
+	if !bytes.Equal(val, []byte("value")) || revision == page.LegacyEntryRevision || revision != setRevision {
+		t.Fatalf("GetVersioned=(%q,%d), callback revision=%d; want (value,same non-legacy)", val, revision, setRevision)
+	}
+
+	var deleteRevision page.EntryRevision
+	if err := db.DeleteAfterCommandWALAppendWithRevision([]byte("k"), func(revision page.EntryRevision) error {
+		deleteRevision = revision
+		return nil
+	}); err != nil {
+		t.Fatalf("DeleteAfterCommandWALAppendWithRevision: %v", err)
+	}
+	val, revision, err = db.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetVersioned after delete: %v", err)
+	}
+	if val != nil || revision == page.LegacyEntryRevision || revision != deleteRevision || revision <= setRevision {
+		t.Fatalf("delete GetVersioned=(%q,%d), callback revision=%d set=%d; want tombstone same higher non-legacy revision", val, revision, deleteRevision, setRevision)
+	}
+}
+
 func TestGetVersionedPreservesMutableMemtableDeleteRevision(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
 		DisableWAL:     true,

@@ -29,6 +29,7 @@ type finalizeCommitOptions struct {
 	appliedCommandLSN   uint64
 	appliedRanges       []CommandWALLSNRange
 	skipPrePublishFlush bool
+	maxEntryRevision    page.EntryRevision
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {

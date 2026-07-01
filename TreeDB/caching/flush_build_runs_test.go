@@ -46,7 +46,9 @@ func TestMemtableBatchApplyPreservesEntryRevision(t *testing.T) {
 		Value:    []byte("value"),
 		Revision: 44,
 	})
-	memtableBatchDelete(mt, false, []byte("b"), 45)
+	if err := memtableBatchDelete(mt, false, []byte("b"), 45); err != nil {
+		t.Fatalf("memtableBatchDelete: %v", err)
+	}
 
 	revisions := mt.(memtable.RevisionTable)
 	value, _, flags, revision, found := revisions.GetEntryWithRevision([]byte("a"))
@@ -56,6 +58,13 @@ func TestMemtableBatchApplyPreservesEntryRevision(t *testing.T) {
 	_, _, flags, revision, found = revisions.GetEntryWithRevision([]byte("b"))
 	if !found || flags&node.FlagTombstone == 0 || revision != 45 {
 		t.Fatalf("delete entry=(%02x,%d,%v), want tombstone rev 45", flags, revision, found)
+	}
+}
+
+func TestMemtableBatchDeleteRejectsRevisionWithoutRevisionTable(t *testing.T) {
+	mt := &unstableRunTable{}
+	if err := memtableBatchDelete(mt, false, []byte("b"), 45); err == nil {
+		t.Fatalf("memtableBatchDelete succeeded without revision-preserving memtable")
 	}
 }
 

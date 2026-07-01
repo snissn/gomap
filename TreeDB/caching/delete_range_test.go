@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -854,8 +855,9 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 	}
 	db.mu.Unlock()
 
-	if err := db.DeleteRange([]byte("a"), []byte("z")); !errors.Is(err, failErr) {
-		t.Fatalf("expected delete range error %v, got %v", failErr, err)
+	err = db.DeleteRange([]byte("a"), []byte("z"))
+	if err == nil || !strings.Contains(err.Error(), "cannot preserve entry revision") {
+		t.Fatalf("expected delete range revision-preservation error, got %v", err)
 	}
 
 	db.mu.Lock()
@@ -870,8 +872,9 @@ func TestCachingDB_DeleteRange_WALApplyFailurePoisonsWrites(t *testing.T) {
 		t.Fatalf("unexpected AppendBatch calls: %d", stub.batchCalls)
 	}
 
-	if err := db.Set([]byte("c"), []byte("3")); !errors.Is(err, failErr) {
-		t.Fatalf("expected WAL error on Set, got %v", err)
+	err = db.Set([]byte("c"), []byte("3"))
+	if err == nil || !strings.Contains(err.Error(), "cannot preserve entry revision") {
+		t.Fatalf("expected poisoned WAL revision-preservation error on Set, got %v", err)
 	}
 }
 

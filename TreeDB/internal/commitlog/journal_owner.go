@@ -739,19 +739,37 @@ func (j *CommandJournal) AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN u
 	return lsn, nil
 }
 
+// AppendRawKVPointCommandTrustedWithRevisionAndFlush appends a caller-validated
+// public raw KV point command with native entry revision metadata and
+// flushes/syncs the writer while holding the journal lock.
+func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRevisionAndFlush(baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, sync bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if revision == 0 {
+		return j.AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN, op, key, value, sync)
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	lsn, err := j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, revision, sync)
+	if err != nil {
+		return 0, err
+	}
+	if err := j.flushLocked(sync); err != nil {
+		return lsn, err
+	}
+	return lsn, nil
+}
+
 func (j *CommandJournal) appendRawKVPointCommandTrustedLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent bool) (uint64, error) {
+	return j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, 0, syncCurrent)
+}
+
+func (j *CommandJournal) appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, syncCurrent bool) (uint64, error) {
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
-	valueLen := len(value)
-	if op == RawKVOpDelete {
-		valueLen = 0
-	}
-	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(valueLen) {
-		return 0, ErrRecordTooLarge
-	}
-	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(key) + valueLen
-	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	valueLen, payloadLen, size, err := trustedRawKVPointCommandFrameLens(op, key, value, revision)
 	if err != nil {
 		return 0, err
 	}
@@ -768,7 +786,7 @@ func (j *CommandJournal) appendRawKVPointCommandTrustedLocked(baseAppliedLSN uin
 	if err != nil {
 		return 0, err
 	}
-	if err := j.writer.appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size); err != nil {
+	if err := j.writer.appendRawKVPointCommandDirectTrustedSizedWithRevision(lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size); err != nil {
 		if rollbackErr := j.owner.rollbackReservedLSN(lsn); rollbackErr != nil {
 			return 0, errors.Join(err, rollbackErr)
 		}

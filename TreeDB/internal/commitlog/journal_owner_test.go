@@ -300,6 +300,52 @@ func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	}
 }
 
+func TestCommandJournalPointAppendWithRevisionWritesCanonicalPayload(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+
+	lsn, err := j.AppendRawKVPointCommandTrustedWithRevisionAndFlush(44, RawKVOpSet, []byte("k"), []byte("v"), 77, false)
+	if err != nil {
+		t.Fatalf("AppendRawKVPointCommandTrustedWithRevisionAndFlush: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("lsn=%d, want 1", lsn)
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	frames, err := ScanCommandFrames(j.Path(), Options{})
+	if err != nil {
+		t.Fatalf("ScanCommandFrames: %v", err)
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frames=%d, want 1", len(frames))
+	}
+	env := frames[0]
+	if env.LSN != 1 || env.BaseAppliedLSN != 44 {
+		t.Fatalf("frame identity lsn=%d base=%d, want 1/44", env.LSN, env.BaseAppliedLSN)
+	}
+	seen := 0
+	err = ScanRawKVBatchPayloadWithRevision(env.Payload, func(op RawKVOp, key, value []byte, revision uint64) error {
+		seen++
+		if op != RawKVOpSet || !bytes.Equal(key, []byte("k")) || !bytes.Equal(value, []byte("v")) || revision != 77 {
+			t.Fatalf("op=(%d,%q,%q,%d), want set k/v rev 77", op, key, value, revision)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanRawKVBatchPayloadWithRevision: %v", err)
+	}
+	if seen != 1 {
+		t.Fatalf("seen=%d, want 1", seen)
+	}
+}
+
 func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentTargetBytes: 1})

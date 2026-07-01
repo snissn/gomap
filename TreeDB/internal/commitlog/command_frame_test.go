@@ -1377,6 +1377,36 @@ func TestEncodeRawKVSingleCommandFrameMatchesEnvelopeEncoder(t *testing.T) {
 	}
 }
 
+func TestEncodeTrustedRawKVPointCommandFrameWithRevisionMatchesEnvelopeEncoder(t *testing.T) {
+	for _, op := range []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one"), Revision: 91},
+		{Op: RawKVOpDelete, Key: []byte("bravo"), Revision: 92},
+	} {
+		payload, err := EncodeRawKVBatchPayload([]RawKVOperation{op})
+		if err != nil {
+			t.Fatalf("EncodeRawKVBatchPayload(%v): %v", op.Op, err)
+		}
+		want, err := EncodeCommandFrame(CommandEnvelope{
+			LSN:            7,
+			Kind:           CommandKindRawKVBatch,
+			Scope:          CommandScopeRawKV,
+			BaseAppliedLSN: 3,
+			PayloadFormat:  PayloadFormatRawKVBatchV1,
+			Payload:        payload,
+		})
+		if err != nil {
+			t.Fatalf("EncodeCommandFrame(%v): %v", op.Op, err)
+		}
+		got, err := encodeTrustedRawKVPointCommandFrameWithRevisionTo(nil, 7, 3, op.Op, op.Key, op.Value, op.Revision)
+		if err != nil {
+			t.Fatalf("encodeTrustedRawKVPointCommandFrameWithRevisionTo(%v): %v", op.Op, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("trusted revision point frame mismatch for op %v\ngot  %x\nwant %x", op.Op, got, want)
+		}
+	}
+}
+
 func TestCommandWALRawKVBatchOneLSNAtomic(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("a"), Value: []byte("1")},

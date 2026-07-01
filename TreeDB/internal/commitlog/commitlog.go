@@ -7,6 +7,9 @@ const (
 	// zeroInlineBatchVersion is a compact batch payload for all-zero inline
 	// values. Readers normalize it to ordinary OpSetInline records.
 	zeroInlineBatchVersion = 2
+	// recordRevisionBatchVersion extends the v1 record header with an optional
+	// per-record entry revision. A zero revision means "use the batch Seq".
+	recordRevisionBatchVersion = 3
 
 	OpSetRID    = byte(0)
 	OpSetInline = byte(1)
@@ -18,6 +21,8 @@ const (
 	segmentHeaderSize = 8
 	batchHeaderSize   = 1 + 4
 	recordHeaderSize  = 1 + 2 + 4 + 8 + 8
+	// recordRevisionHeaderSize appends Revision after the v1 Seq field.
+	recordRevisionHeaderSize = recordHeaderSize + 8
 
 	zeroInlineBatchHeaderSize  = 1 + 4 + 8 + 4
 	zeroInlineRecordHeaderSize = 2
@@ -44,15 +49,16 @@ var (
 )
 
 func isBatchPayloadVersion(version byte) bool {
-	return version == Version || version == zeroInlineBatchVersion
+	return version == Version || version == zeroInlineBatchVersion || version == recordRevisionBatchVersion
 }
 
 type Record struct {
-	Op    byte
-	Key   []byte
-	Value []byte
-	RID   uint64
-	Seq   uint64
+	Op       byte
+	Key      []byte
+	Value    []byte
+	RID      uint64
+	Seq      uint64
+	Revision uint64
 }
 
 type Options struct {

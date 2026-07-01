@@ -100,15 +100,15 @@ func requireLeafPagesLogicallyEqual(t *testing.T, want, got []byte) {
 		t.Fatalf("page counts differ: got=%d want=%d", gotNode.Count(), wantNode.Count())
 	}
 	for i := uint16(0); i < wantNode.Count(); i++ {
-		wantKey, wantVal, wantPtr, wantFlags, err := wantNode.GetLeafEntryView(i)
+		wantKey, wantVal, wantPtr, wantFlags, wantRevision, err := wantNode.GetLeafEntryViewWithRevision(i)
 		if err != nil {
 			t.Fatalf("want GetLeafEntryView(%d): %v", i, err)
 		}
-		gotKey, gotVal, gotPtr, gotFlags, err := gotNode.GetLeafEntryView(i)
+		gotKey, gotVal, gotPtr, gotFlags, gotRevision, err := gotNode.GetLeafEntryViewWithRevision(i)
 		if err != nil {
 			t.Fatalf("got GetLeafEntryView(%d): %v", i, err)
 		}
-		if !bytes.Equal(gotKey, wantKey) || !bytes.Equal(gotVal, wantVal) || gotPtr != wantPtr || gotFlags != wantFlags {
+		if !bytes.Equal(gotKey, wantKey) || !bytes.Equal(gotVal, wantVal) || gotPtr != wantPtr || gotFlags != wantFlags || gotRevision != wantRevision {
 			t.Fatalf("leaf entry %d mismatch", i)
 		}
 	}
@@ -149,6 +149,49 @@ func TestMaybeCompactLeafLogPayload_SparseLeafRoundTrips(t *testing.T) {
 		t.Fatalf("decoded page checksum mismatch")
 	}
 	requireLeafPagesLogicallyEqual(t, leaf, decoded)
+}
+
+func TestMaybeCompactLeafLogPayload_PreservesEntryRevisions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts node.BuilderOptions
+	}{
+		{name: "columnar_v2", opts: node.BuilderOptions{LeafColumnar: true, EntryRevisions: true}},
+		{name: "columnar_prefix_v2", opts: node.BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true, EntryRevisions: true}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			leaf := make([]byte, page.PageSize)
+			b := node.NewBuilderWithOptions(leaf, page.PageTypeLeaf, tt.opts)
+			b.SetPageID(23)
+			for i := 0; i < 8; i++ {
+				key := []byte(fmt.Sprintf("revision-preserving-leaf-key-%02d", i))
+				value := []byte(fmt.Sprintf("value-%02d", i))
+				revision := page.EntryRevision(10_000 + i)
+				if err := b.AddLeafEntryWithRevision(key, value, node.FlagInline, page.ValuePtr{}, revision); err != nil {
+					t.Fatalf("AddLeafEntryWithRevision(%d): %v", i, err)
+				}
+			}
+			b.FinishNoNode()
+
+			payload, compacted, err := MaybeCompactLeafLogPayload(leaf)
+			if err != nil {
+				t.Fatalf("MaybeCompactLeafLogPayload: %v", err)
+			}
+			if !compacted {
+				t.Fatalf("expected revision-bearing sparse leaf page to compact")
+			}
+			decoded, _, decodedFlag, err := decodeCompactLeafLogPayloadTo(payload, nil)
+			if err != nil {
+				t.Fatalf("decodeCompactLeafLogPayloadTo: %v", err)
+			}
+			if !decodedFlag {
+				t.Fatalf("expected compact payload to decode")
+			}
+			requireLeafPagesLogicallyEqual(t, leaf, decoded)
+		})
+	}
 }
 
 func TestMaybeAppendCompactLeafLogPayloadTo_AppendsStablePayloads(t *testing.T) {
