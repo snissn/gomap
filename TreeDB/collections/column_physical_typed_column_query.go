@@ -644,6 +644,8 @@ type columnTypedColumnPhysicalQueryRunnerPrepareOptions struct {
 	prepareDenseInt64SpanGlobalCodes          bool
 	prepareDenseGroupCountDistinctGlobalCodes bool
 	prepareDenseGroupCountDistinctGlobalRanks bool
+	plannedQuery                              columnTypedColumnPhysicalQueryPlan
+	hasPlannedQuery                           bool
 }
 
 func prepareColumnTypedColumnPhysicalQueryRunner(view columnPhysicalScanSnapshotView, req ColumnPhysicalQueryRequest, readCache *columnPhysicalAssetReadCache, prepareSummaries bool) (*columnTypedColumnPhysicalQueryRunner, bool, error) {
@@ -659,11 +661,18 @@ func prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view columnPhysicalS
 		return nil, false, nil
 	}
 	var prepareDiagnostics columnTypedColumnPhysicalQueryPrepareDiagnostics
-	phaseStart := time.Now()
-	plan, candidate, err := planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
-	prepareDiagnostics.PlanNanos = time.Since(phaseStart).Nanoseconds()
-	if err != nil || !candidate {
-		return nil, candidate, err
+	var plan columnTypedColumnPhysicalQueryPlan
+	candidate := true
+	if opts.hasPlannedQuery {
+		plan = opts.plannedQuery
+	} else {
+		phaseStart := time.Now()
+		var err error
+		plan, candidate, err = planColumnTypedColumnPhysicalQuery(view.FullConfig, req)
+		prepareDiagnostics.PlanNanos = time.Since(phaseStart).Nanoseconds()
+		if err != nil || !candidate {
+			return nil, candidate, err
+		}
 	}
 	if view.MutationParts != 0 {
 		return nil, true, fmt.Errorf("%w: typed-column part physical query requires insert-only manifest", ErrColumnQueryPlanUnsupported)
@@ -671,7 +680,7 @@ func prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view columnPhysicalS
 	if readCache == nil {
 		return nil, true, errors.New("collections: typed-column part physical query missing read cache")
 	}
-	phaseStart = time.Now()
+	phaseStart := time.Now()
 	refsByGeneration, err := typedColumnPhysicalQueryRefsByGeneration(view)
 	prepareDiagnostics.RefsNanos = time.Since(phaseStart).Nanoseconds()
 	if err != nil {
