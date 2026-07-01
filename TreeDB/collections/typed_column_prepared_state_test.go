@@ -454,6 +454,49 @@ func TestTypedColumnPreparedMetadataPrefetchCoalescesSmallDictionary3417(t *test
 	}
 }
 
+func TestTypedColumnPreparedMetadataPrefetchUsesFullSectionBudget3417(t *testing.T) {
+	raw := make([]byte, 512)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	image := typedcolumn.ColumnPartImage{Sections: []typedcolumn.ColumnPartImageSection{
+		{Kind: typedcolumn.ColumnPartImageSectionDescriptor, Offset: 100, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMetadata, Offset: 108, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMarks, Offset: 116, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionColumnStats, Offset: 124, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionPruningMetadata, Offset: 132, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionDictionaries, Offset: 140, Length: 8},
+	}}
+	type readCall struct {
+		offset int
+		length int
+	}
+	var calls []readCall
+	cache := newTypedColumnPreparedRangeReadCache(func(offset int, length int, section bool) ([]byte, error) {
+		if !section {
+			t.Fatalf("section=%v want true", section)
+		}
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		calls = append(calls, readCall{offset: offset, length: length})
+		return raw[offset : offset+length], nil
+	})
+	requests := []typedColumnPreparedColumnRequest{{
+		IncludeDictionaries:    true,
+		IncludeStats:           true,
+		IncludePruning:         true,
+		IncludeSortKeyMetadata: true,
+		IncludeSortKeyMarks:    true,
+	}}
+	if err := typedColumnPreparedPrefetchMetadataSections(image, requests, cache); err != nil {
+		t.Fatalf("prefetch metadata: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != (readCall{offset: 100, length: 48}) {
+		t.Fatalf("prefetch calls=%+v want one full-budget coalesced metadata read", calls)
+	}
+}
+
 func TestTypedColumnPreparedMetadataPrefetchSkipsLargeDictionary3417(t *testing.T) {
 	dictLen := maxTypedColumnPreparedRangeCacheEntryBytes + 1
 	raw := make([]byte, 140+dictLen)

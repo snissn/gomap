@@ -539,28 +539,38 @@ func typedColumnPreparedPrefetchMetadataSections(image typedcolumn.ColumnPartIma
 	}
 	var sections [maxTypedColumnPreparedMetadataBatchSections]typedcolumn.ColumnPartImageSection
 	sectionN := 0
-	appendSection := func(section typedcolumn.ColumnPartImageSection) {
+	appendSection := func(section typedcolumn.ColumnPartImageSection) error {
+		if sectionN >= len(sections) {
+			return fmt.Errorf("collections: typed-column prepared metadata prefetch section count exceeds %d", len(sections))
+		}
 		sections[sectionN] = section
 		sectionN++
+		return nil
 	}
 	descriptorSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDescriptor)
 	if err != nil {
 		return err
 	}
-	appendSection(descriptorSection)
+	if err := appendSection(descriptorSection); err != nil {
+		return err
+	}
 	if typedColumnPreparedRequestsIncludeSortKeyMetadata(requests) {
 		metadataSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionSortKeyMetadata)
 		if err != nil {
 			return err
 		}
-		appendSection(metadataSection)
+		if err := appendSection(metadataSection); err != nil {
+			return err
+		}
 	}
 	if typedColumnPreparedRequestsIncludeSortKeyMarks(requests) {
 		marksSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionSortKeyMarks)
 		if err != nil {
 			return err
 		}
-		appendSection(marksSection)
+		if err := appendSection(marksSection); err != nil {
+			return err
+		}
 	}
 	if typedColumnPreparedRequestsIncludeStats(requests) {
 		statsSection, ok, err := image.ColumnStatsSection()
@@ -568,7 +578,9 @@ func typedColumnPreparedPrefetchMetadataSections(image typedcolumn.ColumnPartIma
 			return err
 		}
 		if ok {
-			appendSection(statsSection)
+			if err := appendSection(statsSection); err != nil {
+				return err
+			}
 		}
 	}
 	if typedColumnPreparedRequestsIncludePruning(requests) {
@@ -577,7 +589,9 @@ func typedColumnPreparedPrefetchMetadataSections(image typedcolumn.ColumnPartIma
 			return err
 		}
 		if ok {
-			appendSection(pruningSection)
+			if err := appendSection(pruningSection); err != nil {
+				return err
+			}
 		}
 	}
 	if typedColumnPreparedRequestsIncludeDictionaries(requests) {
@@ -586,7 +600,9 @@ func typedColumnPreparedPrefetchMetadataSections(image typedcolumn.ColumnPartIma
 			return err
 		}
 		if dictionarySection.Length <= maxTypedColumnPreparedRangeCacheEntryBytes {
-			appendSection(dictionarySection)
+			if err := appendSection(dictionarySection); err != nil {
+				return err
+			}
 		}
 	}
 	return readCache.prefetchSections(sections[:sectionN])
