@@ -9,7 +9,7 @@ import math
 import re
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from analyze_vlog_maintenance_capacity import build_summary as build_vlog_maintenance_summary
 from analyze_vlog_maintenance_capacity import extract_stats as extract_treedb_stats
@@ -296,7 +296,12 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
     return candidates
 
 
-def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[str, Any]:
+def load_treedb_application_stats(
+    home: Path,
+    *,
+    include_dwell: bool,
+    require_stats: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, Any]:
     def _has_flat_treedb_stats(payload: dict[str, Any]) -> bool:
         return any(str(key).startswith("treedb.") for key in payload.keys())
 
@@ -307,6 +312,8 @@ def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[st
         stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
         if not stats and _has_flat_treedb_stats(payload):
             stats = payload
+        if stats and require_stats is not None and not require_stats(stats):
+            continue
         if stats:
             return {
                 "available": True,
@@ -333,6 +340,8 @@ def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[st
     stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
     if not stats and _has_flat_treedb_stats(payload):
         stats = payload
+    if stats and require_stats is not None and not require_stats(stats):
+        stats = {}
     if not stats:
         return {
             "available": False,
@@ -420,8 +429,16 @@ def count_fatal_matches(node_log: Path) -> dict[str, Any]:
     return {"count": count, "matches": matches}
 
 
+def has_treedb_maintenance_stats(stats: dict[str, Any]) -> bool:
+    return any(str(key).startswith("treedb.cache.vlog_generation.") for key in stats.keys())
+
+
 def summarize_treedb_maintenance(home: Path) -> dict[str, Any]:
-    source = load_treedb_application_stats(home, include_dwell=False)
+    source = load_treedb_application_stats(
+        home,
+        include_dwell=False,
+        require_stats=has_treedb_maintenance_stats,
+    )
     if not source.get("available"):
         return {key: value for key, value in source.items() if key != "stats"}
 
