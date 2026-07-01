@@ -228,6 +228,10 @@ Required performance evidence:
 - `BenchmarkConditionalTxnReadSet10000`
 - Raw write baseline comparison showing entry revision metadata does not add a
   second ordered-root write or lookup per operation.
+- M0 placeholder benchmarks live in
+  `TreeDB/db/conditional_kv_contract_bench_test.go`; #3424/#3425 must replace
+  them with non-skipped benchmarks and allocation evidence before closing the
+  feature stack.
 
 ## 11. Collections Native Fast Path
 

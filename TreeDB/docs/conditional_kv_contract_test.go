@@ -62,6 +62,15 @@ func TestConditionalKVContractDocsPinNativeRevisionAndTxnGates(t *testing.T) {
 		"value, revision, root tuple, and local recoverability boundary are durable together",
 	)
 
+	raftCluster := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/raftcluster.md"))
+	assertContainsAll(t, raftCluster, "conditional raw KV raft cluster boundary",
+		"Target raw KV entry revisions are part of that local recoverability boundary",
+		"Raft apply identity is the `EntryRevision` authority",
+		"local apply must install the value or tombstone and its revision through the normal command-WAL/TreeDB executor",
+		"unsupported or malformed conditional frames must fail closed before commit when preflight can detect them",
+		"value, revision, root tuple, and local `AppliedLSN` boundary are durable together",
+	)
+
 	verification := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/verification.md"))
 	assertContainsAll(t, verification, "conditional raw KV verification",
 		"Target Conditional Raw KV Revisions And Transactions",
@@ -72,5 +81,6 @@ func TestConditionalKVContractDocsPinNativeRevisionAndTxnGates(t *testing.T) {
 		"TestConditionalTxnCommandWALReplayMatchesLiveRevisionContract",
 		"BenchmarkConditionalTxnReadSet10000",
 		"does not add a second ordered-root write or lookup per operation",
+		"`TreeDB/db/conditional_kv_contract_bench_test.go`; #3424/#3425 must replace them with non-skipped benchmarks",
 	)
 }

@@ -92,6 +92,17 @@ command-WAL recoverability rule before that node can report local durability,
 advance durable applied-index/idempotency metadata, or return
 `ack_policy=raft_committed` success.
 
+Target raw KV entry revisions are part of that local recoverability boundary.
+If a committed command mutates raw KV and the Raft apply identity is the
+`EntryRevision` authority, local apply must install the value or tombstone and
+its revision through the normal command-WAL/TreeDB executor before durable
+applied-index, idempotency-result metadata, or recovery status can advance past
+that command. Deterministic conditional raw KV preconditions are command input:
+unsupported or malformed conditional frames must fail closed before commit when
+preflight can detect them, and after commit they must not be marked applied or
+locally recoverable until the value, revision, root tuple, and local
+`AppliedLSN` boundary are durable together.
+
 ## Submit/Apply Bridge
 
 `SingleGroupSubmitter` is the first production-facing submit/apply bridge. It
