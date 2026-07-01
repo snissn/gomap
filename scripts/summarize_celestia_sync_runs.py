@@ -69,6 +69,15 @@ TREEDB_MAINTENANCE_COUNTERS = [
     "checkpoint_kick_skipped_hot_no_debt",
 ]
 
+RAW_SPAN_NATIVE_ROUTES = [
+    "point_put",
+    "point_delete",
+    "mixed_point",
+    "range_delete",
+    "mixed_range_delete",
+    "empty",
+]
+
 
 def parse_key_value_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -143,6 +152,10 @@ def human_seconds(value: Any) -> str:
     return f"{minutes / 60.0:.2f}h"
 
 
+def human_nanoseconds(value: Any) -> str:
+    return human_seconds(safe_float(value, 0.0) / 1_000_000_000.0)
+
+
 def backend_from_home(home: Path) -> str:
     match = re.match(r"\.celestia-app-mainnet-(.+)-[0-9]{14}$", home.name)
     if match:
@@ -189,6 +202,95 @@ def load_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def numeric_suffix_sort_key(path: Path) -> tuple[int, float, str]:
+    match = re.search(r"_([0-9]+)\.json$", path.name)
+    suffix = safe_int(match.group(1), -1) if match else -1
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return (suffix, mtime, path.name)
+
+
+def treedb_application_stats_candidates(home: Path) -> list[Path]:
+    sync = home / "sync"
+    candidates: list[Path] = []
+
+    dwell_candidates = list((sync / "dwell-stats").glob("treedb_app_*.json"))
+    candidates.extend(sorted(dwell_candidates, key=numeric_suffix_sort_key, reverse=True))
+
+    diagnostics = sync / "diagnostics"
+    if diagnostics.is_dir():
+        final_app_vars = sorted(
+            diagnostics.glob("*max-memory-final*.treedb_application_vars.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        app_vars = sorted(
+            diagnostics.glob("*.treedb_application_vars.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        candidates.extend(final_app_vars)
+        candidates.extend(path for path in app_vars if path not in final_app_vars)
+
+    maintenance_quiesce = sync / "maintenance-quiesce"
+    if maintenance_quiesce.is_dir():
+        quiesce_debug = sorted(
+            maintenance_quiesce.glob("debug_vars_*.json"),
+            key=numeric_suffix_sort_key,
+            reverse=True,
+        )
+        candidates.extend(quiesce_debug)
+
+    return candidates
+
+
+def load_treedb_application_stats(home: Path) -> dict[str, Any]:
+    for source in treedb_application_stats_candidates(home):
+        payload = load_json(source)
+        if not isinstance(payload, dict):
+            continue
+        stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
+        if stats:
+            return {
+                "available": True,
+                "source_file": str(source),
+                "instance": instance_name,
+                "stats": stats,
+            }
+
+    try:
+        source = find_diagnostics_file(home)
+    except OSError as exc:
+        return {"available": False, "reason": f"diagnostics_error:{exc}"}
+    if source is None:
+        return {"available": False, "reason": "diagnostics_not_found"}
+
+    payload = load_json(source)
+    if not isinstance(payload, dict):
+        return {
+            "available": False,
+            "reason": "diagnostics_json_invalid",
+            "source_file": str(source),
+        }
+
+    stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
+    if not stats:
+        return {
+            "available": False,
+            "reason": "treedb_app_stats_not_found",
+            "source_file": str(source),
+        }
+
+    return {
+        "available": True,
+        "source_file": str(source),
+        "instance": instance_name,
+        "stats": stats,
+    }
 
 
 def summarize_dwell_samples(dwell_dir: Path) -> dict[str, Any]:
@@ -264,37 +366,146 @@ def count_fatal_matches(node_log: Path) -> dict[str, Any]:
 
 
 def summarize_treedb_maintenance(home: Path) -> dict[str, Any]:
-    try:
-        source = find_diagnostics_file(home)
-    except OSError as exc:
-        return {"available": False, "reason": f"diagnostics_error:{exc}"}
-    if source is None:
-        return {"available": False, "reason": "diagnostics_not_found"}
+    source = load_treedb_application_stats(home)
+    if not source.get("available"):
+        return {key: value for key, value in source.items() if key != "stats"}
 
-    payload = load_json(source)
-    if not isinstance(payload, dict):
-        return {
-            "available": False,
-            "reason": "diagnostics_json_invalid",
-            "source_file": str(source),
-        }
-
-    stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
-    if not stats:
-        return {
-            "available": False,
-            "reason": "treedb_app_stats_not_found",
-            "source_file": str(source),
-        }
-
+    stats = source["stats"]
     summary = build_vlog_maintenance_summary(stats)
     counters = {key: summary.get(key, 0) for key in TREEDB_MAINTENANCE_COUNTERS}
     return {
         "available": True,
-        "source_file": str(source),
-        "instance": instance_name,
+        "source_file": source["source_file"],
+        "instance": source["instance"],
         "raw_stat_count": len(stats),
         "counters": counters,
+    }
+
+
+def stat_int(stats: dict[str, Any], *keys: str) -> int:
+    for key in keys:
+        if key in stats:
+            return safe_int(stats.get(key), 0)
+    return 0
+
+
+def fallback_reason_counters(stats: dict[str, Any], prefix: str) -> dict[str, dict[str, int]]:
+    pattern = re.compile(r"^" + re.escape(prefix) + r"\.fallback\.reason\.([^.]+)\.([^.]+)$")
+    reasons: dict[str, dict[str, int]] = {}
+    for key, raw in stats.items():
+        match = pattern.match(key)
+        if not match:
+            continue
+        value = safe_int(raw, 0)
+        if value == 0:
+            continue
+        reason, metric = match.groups()
+        reasons.setdefault(reason, {})[metric] = value
+    return reasons
+
+
+def span_route_summary(stats: dict[str, Any], prefix: str) -> dict[str, Any]:
+    return {
+        "observations_total": stat_int(stats, prefix + ".observations_total"),
+        "candidate_ops_total": stat_int(stats, prefix + ".candidate_ops_total"),
+        "eligible_ops_total": stat_int(stats, prefix + ".eligible_ops_total"),
+        "used_ops_total": stat_int(stats, prefix + ".used_ops_total"),
+        "ineligible_ops_total": stat_int(stats, prefix + ".ineligible_ops_total"),
+        "fallbacks_total": stat_int(stats, prefix + ".fallbacks_total"),
+        "fallback_reasons": fallback_reason_counters(stats, prefix),
+    }
+
+
+def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
+    source = load_treedb_application_stats(home)
+    if not source.get("available"):
+        return {key: value for key, value in source.items() if key != "stats"}
+
+    stats = source["stats"]
+    raw_routes = {
+        route: span_route_summary(stats, f"treedb.raw.span_native.route.{route}")
+        for route in RAW_SPAN_NATIVE_ROUTES
+    }
+    flush_prefix = "treedb.flush_apply.span_native"
+    ordered_prefix = "treedb.publish.ordered_root_delta_group.span_native"
+    return {
+        "available": True,
+        "source_file": source["source_file"],
+        "instance": source["instance"],
+        "public_batch": {
+            "set_calls_total": stat_int(stats, "treedb.command_wal.public_batch.set.calls_total"),
+            "set_view_calls_total": stat_int(stats, "treedb.command_wal.public_batch.set_view.calls_total"),
+            "delete_calls_total": stat_int(stats, "treedb.command_wal.public_batch.delete.calls_total"),
+            "delete_view_calls_total": stat_int(stats, "treedb.command_wal.public_batch.delete_view.calls_total"),
+        },
+        "raw_span_native": {
+            "used_ops_total": stat_int(stats, "treedb.raw.span_native.used_ops_total"),
+            "used_spans_total": stat_int(stats, "treedb.raw.span_native.used_spans_total"),
+            "routes": raw_routes,
+        },
+        "flush_apply_span_native": {
+            "enabled": str(stats.get("treedb.cache.flush_apply.span_native", "")).lower() == "true",
+            **span_route_summary(stats, flush_prefix),
+        },
+        "ordered_root": {
+            "calls_total": stat_int(stats, "treedb.publish.ordered_root_delta_group.calls_total"),
+            "roots_total": stat_int(stats, "treedb.publish.ordered_root_delta_group.roots_total"),
+            "root_apply_calls_total": stat_int(
+                stats,
+                "treedb.publish.ordered_root_delta_group.root_apply_calls_total",
+            ),
+            "span_native": span_route_summary(stats, ordered_prefix),
+        },
+        "apply_backend": {
+            "backend_write_ns_total": stat_int(stats, "treedb.cache.flush_apply.backend_write_ns_total"),
+            "backend_batch_write_ns_total": stat_int(stats, "treedb.cache.flush_apply.backend_batch_write_ns_total"),
+            "leaf_log_append_ns_total": stat_int(stats, "treedb.cache.flush_apply.leaf_log_append_ns_total"),
+            "leaf_log_encode_compress_ns_total": stat_int(
+                stats,
+                "treedb.cache.flush_apply.leaf_log_encode_compress_ns_total",
+            ),
+            "foreground_assist_wait_ns_total": stat_int(
+                stats,
+                "treedb.cache.flush_apply.foreground_assist_wait_ns_total",
+            ),
+            "coordinator_in_flight_bytes": stat_int(
+                stats,
+                "treedb.cache.flush_apply.coordinator.in_flight_bytes",
+            ),
+            "coordinator_active_workers": stat_int(
+                stats,
+                "treedb.cache.flush_apply.coordinator.active_workers",
+            ),
+            "entries_total": stat_int(stats, "treedb.cache.flush_apply.entries_total"),
+        },
+        "memory_residency": {
+            "batch_arena_retained_bytes_global_estimate": stat_int(
+                stats,
+                "treedb.cache.batch_arena.retained_bytes_global_estimate",
+            ),
+            "batch_arena_retained_bytes_global_max_estimate": stat_int(
+                stats,
+                "treedb.cache.batch_arena.retained_bytes_global_max_estimate",
+            ),
+            "batch_arena_tail_waste_bytes_total": stat_int(
+                stats,
+                "treedb.cache.batch_arena.tail_waste_bytes_total",
+            ),
+            "append_only_direct_arena_retained_bytes": stat_int(
+                stats,
+                "treedb.cache.append_only_direct_arena.retained_bytes",
+            ),
+            "vlog_mmap_active_bytes": stat_int(
+                stats,
+                "treedb.vlog.mmap_active_bytes",
+                "treedb.cache.vlog_mmap.active_bytes",
+            ),
+            "vlog_mmap_dead_bytes": stat_int(
+                stats,
+                "treedb.vlog.mmap_dead_bytes",
+                "treedb.cache.vlog_mmap.dead_bytes",
+            ),
+        },
     }
 
 
@@ -341,6 +552,7 @@ def summarize_home(home: Path) -> dict[str, Any]:
     fatal = count_fatal_matches(sync_dir / "node.log")
     treedb_maintenance = summarize_treedb_maintenance(home)
     treedb_disk_reclaim = summarize_treedb_disk_reclaim(dwell, treedb_maintenance)
+    treedb_decision_tree = summarize_treedb_decision_tree(home)
 
     db_backend = sync.get("db_backend") or backend_from_home(home)
     app_db_backend = sync.get("app_db_backend") or db_backend
@@ -384,6 +596,7 @@ def summarize_home(home: Path) -> dict[str, Any]:
         "dwell": dwell,
         "treedb_maintenance": treedb_maintenance,
         "treedb_disk_reclaim": treedb_disk_reclaim,
+        "treedb_decision_tree": treedb_decision_tree,
         "fatal_log_matches": fatal,
         "time_log": str(time_log) if time_log.exists() else "",
         "node_log": str(sync_dir / "node.log") if (sync_dir / "node.log").exists() else "",
@@ -615,12 +828,82 @@ def render_markdown(payload: dict[str, Any]) -> str:
             ])
         lines.append(markdown_table(maint_rows))
 
+    decision_runs = [
+        run
+        for run in runs
+        if isinstance(run.get("treedb_decision_tree"), dict) and run["treedb_decision_tree"].get("available")
+    ]
+    if decision_runs:
+        lines.extend(["", "## TreeDB Decision Counters", ""])
+        decision_rows = [[
+            "backend",
+            "public set/set_view/del/del_view",
+            "raw point-put cand/elig/used/fb",
+            "raw fb reasons",
+            "flush cand/elig/used/fb",
+            "ordered calls/roots/cand/used",
+            "backend write",
+            "assist wait",
+            "in-flight",
+            "vlog mmap",
+            "instance",
+        ]]
+        for run in decision_runs:
+            decision = run.get("treedb_decision_tree") or {}
+            public_batch = decision.get("public_batch") or {}
+            raw_routes = (decision.get("raw_span_native") or {}).get("routes") or {}
+            raw_point_put = raw_routes.get("point_put") or {}
+            raw_reasons = raw_point_put.get("fallback_reasons") or {}
+            raw_reason_text = ",".join(sorted(raw_reasons.keys())) if raw_reasons else "-"
+            flush = decision.get("flush_apply_span_native") or {}
+            ordered = decision.get("ordered_root") or {}
+            ordered_span = ordered.get("span_native") or {}
+            apply_backend = decision.get("apply_backend") or {}
+            memory = decision.get("memory_residency") or {}
+            decision_rows.append([
+                str(run.get("db_backend", "")),
+                (
+                    f"{public_batch.get('set_calls_total', 0)}"
+                    f"/{public_batch.get('set_view_calls_total', 0)}"
+                    f"/{public_batch.get('delete_calls_total', 0)}"
+                    f"/{public_batch.get('delete_view_calls_total', 0)}"
+                ),
+                (
+                    f"{raw_point_put.get('candidate_ops_total', 0)}"
+                    f"/{raw_point_put.get('eligible_ops_total', 0)}"
+                    f"/{raw_point_put.get('used_ops_total', 0)}"
+                    f"/{raw_point_put.get('fallbacks_total', 0)}"
+                ),
+                raw_reason_text,
+                (
+                    f"{flush.get('candidate_ops_total', 0)}"
+                    f"/{flush.get('eligible_ops_total', 0)}"
+                    f"/{flush.get('used_ops_total', 0)}"
+                    f"/{flush.get('fallbacks_total', 0)}"
+                ),
+                (
+                    f"{ordered.get('calls_total', 0)}"
+                    f"/{ordered.get('roots_total', 0)}"
+                    f"/{ordered_span.get('candidate_ops_total', 0)}"
+                    f"/{ordered_span.get('used_ops_total', 0)}"
+                ),
+                human_nanoseconds(apply_backend.get("backend_write_ns_total", 0)),
+                human_nanoseconds(apply_backend.get("foreground_assist_wait_ns_total", 0)),
+                human_bytes(apply_backend.get("coordinator_in_flight_bytes", 0)),
+                human_bytes(memory.get("vlog_mmap_active_bytes", 0)),
+                str(decision.get("instance", "")),
+            ])
+        lines.append(markdown_table(decision_rows))
+
     lines.extend(["", "## Artifacts", ""])
     for run in runs:
         lines.append(f"- `{run.get('db_backend')}` home: `{run.get('home')}`")
         maintenance = run.get("treedb_maintenance") or {}
         if maintenance.get("source_file"):
             lines.append(f"  - treedb_maintenance_source: `{maintenance['source_file']}`")
+        decision = run.get("treedb_decision_tree") or {}
+        if decision.get("source_file") and decision.get("source_file") != maintenance.get("source_file"):
+            lines.append(f"  - treedb_decision_source: `{decision['source_file']}`")
         for key in ["time_log", "node_log", "disk_breakdown_log"]:
             if run.get(key):
                 lines.append(f"  - {key}: `{run[key]}`")
