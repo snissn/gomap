@@ -24511,6 +24511,8 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		}
 	}
 
+	db.conditionalRecordPointWrite(batch.OpPut, key)
+
 	shard.mu.Lock()
 	if usePointer {
 		memVal := []byte(nil)
@@ -24540,10 +24542,6 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
-	if db.conditionalActiveTxnCount.Load() > 0 {
-		entry := [1]batch.Entry{{Type: batch.OpPut, Key: key}}
-		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
-	}
 
 	// 3. Check Threshold
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -24667,6 +24665,8 @@ func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appe
 		return err
 	}
 
+	db.conditionalRecordPointWrite(batch.OpPut, key)
+
 	shard.mu.Lock()
 	if usePointer {
 		memVal := []byte(nil)
@@ -24696,10 +24696,6 @@ func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appe
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
-	if db.conditionalActiveTxnCount.Load() > 0 {
-		entry := [1]batch.Entry{{Type: batch.OpPut, Key: key}}
-		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
-	}
 
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 		needRotate = true
@@ -25653,6 +25649,8 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 		}
 	}
 
+	db.conditionalRecordPointWrite(batch.OpDelete, key)
+
 	shard.mu.Lock()
 	if err := memtableBatchDelete(shard.mem, false, key, revision); err != nil {
 		shard.mu.Unlock()
@@ -25672,10 +25670,6 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
-	if db.conditionalActiveTxnCount.Load() > 0 {
-		entry := [1]batch.Entry{{Type: batch.OpDelete, Key: key}}
-		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
-	}
 
 	// 3. Threshold
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -25726,6 +25720,8 @@ func (db *DB) deleteDirectAfterCommandWALAppendWithRevision(key []byte, appendCo
 		return err
 	}
 
+	db.conditionalRecordPointWrite(batch.OpDelete, key)
+
 	shard.mu.Lock()
 	if err := memtableBatchDelete(shard.mem, false, key, revision); err != nil {
 		shard.mu.Unlock()
@@ -25740,10 +25736,6 @@ func (db *DB) deleteDirectAfterCommandWALAppendWithRevision(key []byte, appendCo
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
-	if db.conditionalActiveTxnCount.Load() > 0 {
-		entry := [1]batch.Entry{{Type: batch.OpDelete, Key: key}}
-		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
-	}
 
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 		needRotate = true
@@ -32109,27 +32101,28 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // batchOp removed, using batch.Entry directly
 
 type Batch struct {
-	db                 *DB
-	entries            []batch.Entry
-	backend            batch.Interface
-	size               int
-	copyArena          []byte
-	copyArenaChunks    [][]byte
-	copyArenaCap       int
-	copyBytes          int
-	ptrCopyArena       []byte
-	ptrCopyArenaChunks [][]byte
-	ptrCopyBytes       int
-	arenaInFlightBytes int64
-	ptrValueIdxs       []int
-	walBuf             []logRecord
-	shardIdxs          []int
-	eligibleIdxs       []int
-	shardAdds          []int64
-	shardCnts          []int
-	shardEntries       [][]batch.Entry
-	shardIdxSets       [][]int
-	maxEntries         int
+	db                        *DB
+	entries                   []batch.Entry
+	backend                   batch.Interface
+	backendConditionalEntries []batch.Entry
+	size                      int
+	copyArena                 []byte
+	copyArenaChunks           [][]byte
+	copyArenaCap              int
+	copyBytes                 int
+	ptrCopyArena              []byte
+	ptrCopyArenaChunks        [][]byte
+	ptrCopyBytes              int
+	arenaInFlightBytes        int64
+	ptrValueIdxs              []int
+	walBuf                    []logRecord
+	shardIdxs                 []int
+	eligibleIdxs              []int
+	shardAdds                 []int64
+	shardCnts                 []int
+	shardEntries              [][]batch.Entry
+	shardIdxSets              [][]int
+	maxEntries                int
 
 	closed bool
 	// SetView/DeleteView keep caller-owned bytes until Write/Close, so memtables
@@ -32686,6 +32679,7 @@ func (b *Batch) Reset() {
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
+	b.resetBackendConditionalEntries()
 	b.hasDeleteRanges = false
 	b.entryRevision = page.LegacyEntryRevision
 	b.maxEntries = 0
@@ -33042,6 +33036,70 @@ func (b *Batch) maybeCompactUnderfilledArenaTails() {
 	b.compactUnderfilledPtrArenaTail()
 }
 
+func (b *Batch) resetBackendConditionalEntries() {
+	if b == nil || b.backendConditionalEntries == nil {
+		return
+	}
+	if cap(b.backendConditionalEntries) > batchEntriesPoolMaxRetain {
+		putEntrySlice(b.backendConditionalEntries)
+		b.backendConditionalEntries = nil
+		return
+	}
+	clear(b.backendConditionalEntries[:cap(b.backendConditionalEntries)])
+	b.backendConditionalEntries = b.backendConditionalEntries[:0]
+}
+
+func (b *Batch) reserveBackendConditionalEntries(additional int) {
+	if b == nil || additional <= 0 {
+		return
+	}
+	needed := len(b.backendConditionalEntries) + additional
+	if cap(b.backendConditionalEntries) >= needed {
+		return
+	}
+	next := getEntrySlice(needed)
+	next = append(next, b.backendConditionalEntries...)
+	putEntrySlice(b.backendConditionalEntries)
+	b.backendConditionalEntries = next
+}
+
+func (b *Batch) appendBackendConditionalEntries(ops []batch.Entry) {
+	if b == nil || len(ops) == 0 {
+		return
+	}
+	b.reserveBackendConditionalEntries(len(ops))
+	for i := range ops {
+		op := ops[i]
+		switch op.Type {
+		case batch.OpPut, batch.OpDelete:
+			b.backendConditionalEntries = append(b.backendConditionalEntries, batch.Entry{
+				Type: op.Type,
+				Key:  op.Key,
+			})
+		case batch.OpDeleteRange:
+			if batch.IsDeleteRangeNoop(op.Key, op.Value) {
+				continue
+			}
+			b.backendConditionalEntries = append(b.backendConditionalEntries, batch.Entry{
+				Type:  op.Type,
+				Key:   op.Key,
+				Value: op.Value,
+			})
+		}
+	}
+}
+
+func (b *Batch) appendBackendConditionalPoint(op batch.OpType, key []byte) {
+	if b == nil {
+		return
+	}
+	b.reserveBackendConditionalEntries(1)
+	b.backendConditionalEntries = append(b.backendConditionalEntries, batch.Entry{
+		Type: op,
+		Key:  key,
+	})
+}
+
 func (b *Batch) shouldCopyValueToPtrArena(key, value []byte) bool {
 	if b == nil || b.db == nil || b.backend != nil {
 		return false
@@ -33136,6 +33194,7 @@ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) 
 		if err != nil {
 			return err
 		}
+		b.appendBackendConditionalPoint(batch.OpPut, keyCopy)
 		return nil
 	}
 
@@ -33219,6 +33278,7 @@ func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.En
 		if err != nil {
 			return err
 		}
+		b.appendBackendConditionalPoint(batch.OpPut, key)
 		return nil
 	}
 
@@ -33284,6 +33344,7 @@ func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) erro
 		if err != nil {
 			return err
 		}
+		b.appendBackendConditionalPoint(batch.OpDelete, keyCopy)
 		return nil
 	}
 
@@ -33332,6 +33393,7 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 		if err := b.backend.SetOps(single[:]); err != nil {
 			return err
 		}
+		b.appendBackendConditionalEntries(single[:])
 		if b.db != nil {
 			b.db.recordDeleteRangePlan(1, 1)
 		}
@@ -33398,6 +33460,7 @@ func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryR
 		if err != nil {
 			return err
 		}
+		b.appendBackendConditionalPoint(batch.OpDelete, key)
 		return nil
 	}
 
@@ -33461,6 +33524,7 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		if err := b.backend.SetOps(copied); err != nil {
 			return err
 		}
+		b.appendBackendConditionalEntries(copied)
 		return nil
 	}
 	for _, op := range ops {
@@ -33648,6 +33712,7 @@ func (b *Batch) maybeSwitchToStreaming() {
 		_ = backendBatch.Close()
 		return
 	}
+	b.appendBackendConditionalEntries(b.entries)
 	b.backend = backendBatch
 	b.entries = b.entries[:0]
 }
@@ -33711,7 +33776,7 @@ func (b *Batch) write(sync bool) error {
 				b.db.backendRange.add(b.batchRange.max)
 				b.db.mu.Unlock()
 			}
-			b.db.conditionalRecordGlobalWrite()
+			b.db.conditionalRecordCommittedEntries(b.backendConditionalEntries, nil, 0)
 		})
 		if cerr := b.backend.Close(); cerr != nil && err == nil {
 			err = cerr
@@ -34550,6 +34615,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		// entry slices. This converts a large retained tail into tight slices.
 		b.maybeCompactUnderfilledArenaTails()
 	}
+	b.db.conditionalRecordCommittedEntries(b.entries, nil, b.conditionalTxnID)
 
 	if allDeletes {
 		shardIdxSets := b.shardIdxSets
@@ -34812,7 +34878,6 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
-	b.db.conditionalRecordCommittedEntries(b.entries, nil, b.conditionalTxnID)
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
 	if retainPtrArena {

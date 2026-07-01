@@ -173,6 +173,72 @@ func TestConditionalTxnDirectBypassRecordsPointConflictsPrecisely(t *testing.T) 
 	}
 }
 
+func TestConditionalTxnLegacyBackendBatchRecordsPointConflictsPrecisely(t *testing.T) {
+	backend := NewMockBackend()
+	cache, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	if err := cache.Set([]byte("a"), []byte("before")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	tx, err := cache.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+	if _, _, err := tx.GetVersioned([]byte("a")); err != nil {
+		t.Fatalf("tx.GetVersioned: %v", err)
+	}
+
+	rootMarkersBefore := cache.conditionalOracleRootMarkers.Load()
+	recordedPointsBefore := cache.conditionalOracleRecordedPoints.Load()
+	wb := cache.NewBatch()
+	wb.backend = cache.backend.NewBatch()
+	const n = 32
+	for i := 0; i < n; i++ {
+		key := []byte(fmt.Sprintf("z%05d", i))
+		if err := wb.Set(key, []byte("outside")); err != nil {
+			_ = wb.Close()
+			t.Fatalf("backend batch Set %d: %v", i, err)
+		}
+	}
+	if err := wb.Write(); err != nil {
+		_ = wb.Close()
+		t.Fatalf("backend batch Write: %v", err)
+	}
+	if err := wb.Close(); err != nil {
+		t.Fatalf("backend batch Close: %v", err)
+	}
+	if got := cache.conditionalOracleRootMarkers.Load() - rootMarkersBefore; got != 0 {
+		t.Fatalf("conditional oracle root markers delta=%d want 0 for precise backend-batch metadata", got)
+	}
+	if got := cache.conditionalOracleRecordedPoints.Load() - recordedPointsBefore; got < n {
+		t.Fatalf("conditional oracle recorded points delta=%d want at least %d", got, n)
+	}
+
+	if err := tx.Set([]byte("a"), []byte("inside")); err != nil {
+		t.Fatalf("tx.Set: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit after disjoint backend batch: %v", err)
+	}
+	got, err := cache.Get([]byte("a"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "inside" {
+		t.Fatalf("Get=%q want inside", got)
+	}
+}
+
 type blockingWriteBackend struct {
 	*MockBackend
 	block    atomic.Bool

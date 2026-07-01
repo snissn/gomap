@@ -572,17 +572,12 @@ func (db *DB) conditionalRecordCommittedEntries(entries []batch.Entry, ranges []
 	}
 }
 
-func (db *DB) conditionalRecordGlobalWrite() {
+func (db *DB) conditionalRecordPointWrite(op batch.OpType, key []byte) {
 	if db == nil || db.conditionalActiveTxnCount.Load() <= 0 {
 		return
 	}
-	seq := db.conditionalSeq.Add(1)
-	db.conditionalOracle.mu.Lock()
-	if len(db.conditionalOracle.active) > 0 && seq > db.conditionalOracle.rootSeq {
-		db.conditionalOracle.rootSeq = seq
-		db.conditionalOracleRootMarkers.Add(1)
-	}
-	db.conditionalOracle.mu.Unlock()
+	entry := [1]batch.Entry{{Type: op, Key: key}}
+	db.conditionalRecordCommittedEntries(entry[:], nil, 0)
 }
 
 func (db *DB) observeConditionalTxnCommit(readSetLen int, err error) {
