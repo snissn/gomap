@@ -12,18 +12,13 @@ import (
 )
 
 func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
-	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
+	batches := typedColumnQ2SortedDiagnosticsBatches1950(256)
 	events := flattenColumnPhysicalEvents1950(batches)
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, typedColumnQ2ClickHouseSortKey1950(), batches)
 	defer closeFn()
 
 	rowHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q2", events))
-	wantCounts := map[string]columnPhysicalJSONBenchQ2CountP0{
-		"app.bsky.feed.like":    {Count: 3, Distinct: 2},
-		"app.bsky.feed.post":    {Count: 4, Distinct: 2},
-		"app.bsky.feed.repost":  {Count: 1, Distinct: 1},
-		"app.bsky.graph.follow": {Count: 1, Distinct: 1},
-	}
+	wantCounts := columnPhysicalJSONBenchQ2ReferenceCountsP0(events)
 	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events)
 	req := typedColumnQ2Request1950()
 
@@ -710,6 +705,33 @@ func typedColumnQ2SortedBatchB1950() []columnPhysicalJSONBenchParityEventP0 {
 	}
 }
 
+func typedColumnQ2SortedDiagnosticsBatches1950(repeats int) [][]columnPhysicalJSONBenchParityEventP0 {
+	return [][]columnPhysicalJSONBenchParityEventP0{
+		typedColumnQ2RepeatSortedBatch1950(typedColumnQ2SortedBatchA1950(), repeats),
+		typedColumnQ2RepeatSortedBatch1950(typedColumnQ2SortedBatchB1950(), repeats),
+	}
+}
+
+func typedColumnQ2RepeatSortedBatch1950(base []columnPhysicalJSONBenchParityEventP0, repeats int) []columnPhysicalJSONBenchParityEventP0 {
+	if repeats <= 0 {
+		repeats = 1
+	}
+	out := make([]columnPhysicalJSONBenchParityEventP0, 0, len(base)*repeats)
+	for i := 0; i < repeats; i++ {
+		suffix := fmt.Sprintf(".r%04d", i)
+		for _, event := range base {
+			event.ID = fmt.Sprintf("%s%s", event.ID, suffix)
+			event.TimeUS += int64(i) * 1_000
+			if event.Kind == "commit" && event.Operation == "create" {
+				event.Collection += suffix
+				event.Did += suffix
+			}
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
 func typedColumnQ2LocalDictBatchA1950() []columnPhysicalJSONBenchParityEventP0 {
 	const base = int64(1_810_000_000_000_000)
 	return []columnPhysicalJSONBenchParityEventP0{
@@ -1050,11 +1072,12 @@ func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testi
 		return
 	}
 	if total == 0 {
-		return
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want nonzero split work", label, diag)
 	}
-	dictionaryTotal := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
-		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
-	if dictionaryTotal <= 0 {
-		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want dictionary/rank split work when timer resolution records split work", label, diag)
+	// Tiny fixture phases can round to zero on coarse platform timers. This live
+	// path gate checks that split accounting is emitted and bounded; the merge
+	// additivity test covers all four individual fields structurally.
+	if diag.TypedColumnPreparePostPrepareNanos < total {
+		tb.Fatalf("%s typed-column post-prepare nanos=%d want >= split total %d diagnostics=%+v", label, diag.TypedColumnPreparePostPrepareNanos, total, diag)
 	}
 }

@@ -425,9 +425,8 @@ func assertColumnPhysicalQ3DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 	if diag.TypedColumnPrepareWorkerCount <= 0 {
 		tb.Fatalf("%s setup missing prepare worker diagnostics workers=%d diagnostics=%+v", label, diag.TypedColumnPrepareWorkerCount, diag)
 	}
-	setupTimingNanos := diag.TypedColumnOneShotBuildNanos + diag.TypedColumnPreparePartDecodeNanos
-	if setupTimingNanos != 0 && (diag.TypedColumnOneShotBuildNanos <= 0 || diag.TypedColumnPreparePartDecodeNanos <= 0) {
-		tb.Fatalf("%s setup partially missing build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
+	if diag.TypedColumnOneShotBuildNanos < 0 || diag.TypedColumnPreparePartDecodeNanos < 0 {
+		tb.Fatalf("%s setup negative build/decode diagnostics build=%d part_decode=%d diagnostics=%+v",
 			label,
 			diag.TypedColumnOneShotBuildNanos,
 			diag.TypedColumnPreparePartDecodeNanos,
