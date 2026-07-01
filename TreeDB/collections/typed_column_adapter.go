@@ -1667,7 +1667,9 @@ func decodeTypedColumnPhysicalQueryDensePartFromRanges(plan columnTypedColumnPhy
 	if err := reader.ensureFullAssetValidated(); err != nil {
 		return columnTypedColumnPhysicalQueryPart{}, true, err
 	}
-	prepared, diag, err := typedColumnPreparePartStateFromRanges(typedRef.Ref, physical.Ref, typedRef.Rows, physical.Rows, plan.Fields, schemaHash, requests, reader.readRange, nil)
+	prepared, diag, err := typedColumnPreparePartStateFromRangesWithOptions(typedRef.Ref, physical.Ref, typedRef.Rows, physical.Rows, plan.Fields, schemaHash, requests, reader.readRange, nil, typedColumnPreparePartStateOptions{
+		CoalescePreparedMetadataReads: true,
+	})
 	if prepareDiagnostics != nil {
 		prepareDiagnostics.ReadImageNanos += diag.ReadImageNanos
 		prepareDiagnostics.StateBuildNanos += diag.StateBuildNanos

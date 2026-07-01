@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/golang/snappy"
@@ -17,11 +18,161 @@ import (
 
 const maxTypedColumnPreparedCompressedDictionarySectionRawBytes = 256 << 20
 
+const (
+	maxTypedColumnPreparedMetadataBatchGapBytes      = 8 << 10
+	maxTypedColumnPreparedMetadataBatchOverreadBytes = 8 << 10
+	maxTypedColumnPreparedMetadataBatchSpanBytes     = 64 << 10
+	maxTypedColumnPreparedMetadataBatchSections      = 6
+	maxTypedColumnPreparedRangeCacheEntries          = 8
+)
+
 // typedColumnPreparedRangeReader is the caller-owned byte access boundary used
 // while preparing immutable typed-column state. It deliberately has no package
 // global cache; prepared callers decide how long returned metadata and mapped
 // resources stay alive.
 type typedColumnPreparedRangeReader func(offset int, length int, section bool) ([]byte, error)
+
+type typedColumnPreparePartStateOptions struct {
+	CoalescePreparedMetadataReads bool
+}
+
+type typedColumnPreparedRangeReadCache struct {
+	readRange typedColumnPreparedRangeReader
+	entries   [maxTypedColumnPreparedRangeCacheEntries]typedColumnPreparedRangeReadCacheEntry
+	entryN    int
+	overflow  []typedColumnPreparedRangeReadCacheEntry
+}
+
+type typedColumnPreparedRangeReadCacheEntry struct {
+	offset int
+	raw    []byte
+}
+
+func newTypedColumnPreparedRangeReadCache(readRange typedColumnPreparedRangeReader) *typedColumnPreparedRangeReadCache {
+	return &typedColumnPreparedRangeReadCache{readRange: readRange}
+}
+
+func (c *typedColumnPreparedRangeReadCache) read(offset int, length int, section bool) ([]byte, error) {
+	if c == nil || c.readRange == nil {
+		return nil, errors.New("collections: typed-column prepared range cache missing reader")
+	}
+	if err := validateTypedColumnPreparedRange(offset, length); err != nil {
+		return nil, err
+	}
+	for i := 0; i < c.entryN; i++ {
+		entry := c.entries[i]
+		if entry.raw == nil || offset < entry.offset {
+			continue
+		}
+		start := offset - entry.offset
+		if start > len(entry.raw) || length > len(entry.raw)-start {
+			continue
+		}
+		return entry.raw[start : start+length], nil
+	}
+	for _, entry := range c.overflow {
+		if entry.raw == nil || offset < entry.offset {
+			continue
+		}
+		start := offset - entry.offset
+		if start > len(entry.raw) || length > len(entry.raw)-start {
+			continue
+		}
+		return entry.raw[start : start+length], nil
+	}
+	return c.readAndStore(offset, length, section)
+}
+
+func (c *typedColumnPreparedRangeReadCache) readAndStore(offset int, length int, section bool) ([]byte, error) {
+	if c == nil || c.readRange == nil {
+		return nil, errors.New("collections: typed-column prepared range cache missing reader")
+	}
+	raw, err := c.readRange(offset, length, section)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) != length {
+		return nil, fmt.Errorf("collections: typed-column prepared range offset=%d length=%d returned bytes=%d", offset, length, len(raw))
+	}
+	entry := typedColumnPreparedRangeReadCacheEntry{offset: offset, raw: raw}
+	if c.entryN < len(c.entries) {
+		c.entries[c.entryN] = entry
+		c.entryN++
+	} else {
+		c.overflow = append(c.overflow, entry)
+	}
+	return raw, nil
+}
+
+func (c *typedColumnPreparedRangeReadCache) prefetchSections(sections []typedcolumn.ColumnPartImageSection) error {
+	if c == nil || len(sections) <= 1 {
+		return nil
+	}
+	var ordered [maxTypedColumnPreparedMetadataBatchSections]typedcolumn.ColumnPartImageSection
+	if len(sections) > len(ordered) {
+		return fmt.Errorf("collections: typed-column prepared metadata sections=%d exceed batch cap=%d", len(sections), len(ordered))
+	}
+	n := 0
+	for _, section := range sections {
+		if err := validateTypedColumnPreparedRange(section.Offset, section.Length); err != nil {
+			return err
+		}
+		ordered[n] = section
+		n++
+	}
+	sort.Slice(ordered[:n], func(i, j int) bool {
+		if ordered[i].Offset != ordered[j].Offset {
+			return ordered[i].Offset < ordered[j].Offset
+		}
+		return ordered[i].Length < ordered[j].Length
+	})
+
+	groupStart := ordered[0].Offset
+	groupEnd := ordered[0].Offset + ordered[0].Length
+	groupPayloadBytes := ordered[0].Length
+	flush := func() error {
+		_, err := c.read(groupStart, groupEnd-groupStart, true)
+		return err
+	}
+	for _, section := range ordered[1:n] {
+		sectionStart := section.Offset
+		sectionEnd := section.Offset + section.Length
+		if sectionStart < groupEnd {
+			if sectionEnd > groupEnd {
+				groupPayloadBytes += sectionEnd - groupEnd
+				groupEnd = sectionEnd
+			}
+			continue
+		}
+		gap := sectionStart - groupEnd
+		span := sectionEnd - groupStart
+		overread := span - (groupPayloadBytes + section.Length)
+		if gap <= maxTypedColumnPreparedMetadataBatchGapBytes &&
+			overread <= maxTypedColumnPreparedMetadataBatchOverreadBytes &&
+			span <= maxTypedColumnPreparedMetadataBatchSpanBytes {
+			groupEnd = sectionEnd
+			groupPayloadBytes += section.Length
+			continue
+		}
+		if err := flush(); err != nil {
+			return err
+		}
+		groupStart = sectionStart
+		groupEnd = sectionEnd
+		groupPayloadBytes = section.Length
+	}
+	return flush()
+}
+
+func validateTypedColumnPreparedRange(offset int, length int) error {
+	if offset < 0 || length <= 0 {
+		return fmt.Errorf("collections: typed-column prepared range offset=%d length=%d is invalid", offset, length)
+	}
+	if offset > maxCollectionInt-length {
+		return fmt.Errorf("collections: typed-column prepared range offset=%d length=%d overflows int", offset, length)
+	}
+	return nil
+}
 
 // typedColumnPreparedColumnRequest describes one logical column role needed by a
 // prepared operation. It separates collection semantics from typedcolumn
@@ -393,7 +544,68 @@ func typedColumnPreparedDependenciesForRequest(req typedColumnPreparedColumnRequ
 	return deps, nil
 }
 
+func typedColumnPreparedPrefetchMetadataSections(image typedcolumn.ColumnPartImage, requests []typedColumnPreparedColumnRequest, readCache *typedColumnPreparedRangeReadCache) error {
+	if readCache == nil {
+		return nil
+	}
+	var sections [maxTypedColumnPreparedMetadataBatchSections]typedcolumn.ColumnPartImageSection
+	sectionN := 0
+	appendSection := func(section typedcolumn.ColumnPartImageSection) {
+		sections[sectionN] = section
+		sectionN++
+	}
+	descriptorSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDescriptor)
+	if err != nil {
+		return err
+	}
+	appendSection(descriptorSection)
+	if typedColumnPreparedRequestsIncludeSortKeyMetadata(requests) {
+		metadataSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionSortKeyMetadata)
+		if err != nil {
+			return err
+		}
+		appendSection(metadataSection)
+	}
+	if typedColumnPreparedRequestsIncludeSortKeyMarks(requests) {
+		marksSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionSortKeyMarks)
+		if err != nil {
+			return err
+		}
+		appendSection(marksSection)
+	}
+	if typedColumnPreparedRequestsIncludeStats(requests) {
+		statsSection, ok, err := image.ColumnStatsSection()
+		if err != nil {
+			return err
+		}
+		if ok {
+			appendSection(statsSection)
+		}
+	}
+	if typedColumnPreparedRequestsIncludePruning(requests) {
+		pruningSection, ok, err := image.PruningMetadataSection()
+		if err != nil {
+			return err
+		}
+		if ok {
+			appendSection(pruningSection)
+		}
+	}
+	if typedColumnPreparedRequestsIncludeDictionaries(requests) {
+		dictionarySection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDictionaries)
+		if err != nil {
+			return err
+		}
+		appendSection(dictionarySection)
+	}
+	return readCache.prefetchSections(sections[:sectionN])
+}
+
 func typedColumnPreparedReadImageAndDescriptor(ref ColumnAssetRef, readRange typedColumnPreparedRangeReader) (typedcolumn.ColumnPartImage, typedcolumn.ColumnPartDescriptor, map[string]typedcolumn.ColumnPartColumn, int, []byte, []byte, error) {
+	return typedColumnPreparedReadImageAndDescriptorWithPrefetch(ref, readRange, nil, nil)
+}
+
+func typedColumnPreparedReadImageAndDescriptorWithPrefetch(ref ColumnAssetRef, readRange typedColumnPreparedRangeReader, readCache *typedColumnPreparedRangeReadCache, requests []typedColumnPreparedColumnRequest) (typedcolumn.ColumnPartImage, typedcolumn.ColumnPartDescriptor, map[string]typedcolumn.ColumnPartColumn, int, []byte, []byte, error) {
 	if readRange == nil {
 		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, errors.New("collections: typed-column prepared state requires range reader")
 	}
@@ -424,6 +636,9 @@ func typedColumnPreparedReadImageAndDescriptor(ref ColumnAssetRef, readRange typ
 	if err != nil {
 		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
 	}
+	if err := typedColumnPreparedPrefetchMetadataSections(image, requests, readCache); err != nil {
+		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
+	}
 	descriptorSection, err := typedColumnAdapterImageSingleSection(image, typedcolumn.ColumnPartImageSectionDescriptor)
 	if err != nil {
 		return typedcolumn.ColumnPartImage{}, typedcolumn.ColumnPartDescriptor{}, nil, 0, nil, nil, err
@@ -448,8 +663,18 @@ func typedColumnPreparedReadImageAndDescriptor(ref ColumnAssetRef, readRange typ
 }
 
 func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, fields []TypedStorageField, schemaHash uint64, columnRequests []typedColumnPreparedColumnRequest, readRange typedColumnPreparedRangeReader, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error)) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
+	return typedColumnPreparePartStateFromRangesWithOptions(ref, physical, typedRows, physicalRows, fields, schemaHash, columnRequests, readRange, blockSelection, typedColumnPreparePartStateOptions{})
+}
+
+func typedColumnPreparePartStateFromRangesWithOptions(ref ColumnAssetRef, physical ColumnAssetRef, typedRows int, physicalRows int, fields []TypedStorageField, schemaHash uint64, columnRequests []typedColumnPreparedColumnRequest, readRange typedColumnPreparedRangeReader, blockSelection func(typedcolumn.EncodedGranule, int) (typedcolumn.RowSelection, bool, error), opts typedColumnPreparePartStateOptions) (*typedColumnPreparedPartState, typedColumnPreparedStateDiagnostics, error) {
+	preparedReadRange := readRange
+	var readCache *typedColumnPreparedRangeReadCache
+	if opts.CoalescePreparedMetadataReads {
+		readCache = newTypedColumnPreparedRangeReadCache(readRange)
+		preparedReadRange = readCache.read
+	}
 	phaseStart := time.Now()
-	image, desc, columns, manifestBytes, descriptorRaw, contractRaw, err := typedColumnPreparedReadImageAndDescriptor(ref, readRange)
+	image, desc, columns, manifestBytes, descriptorRaw, contractRaw, err := typedColumnPreparedReadImageAndDescriptorWithPrefetch(ref, preparedReadRange, readCache, columnRequests)
 	readImageNanos := time.Since(phaseStart).Nanoseconds()
 	if err != nil {
 		return nil, typedColumnPreparedStateDiagnostics{ReadImageNanos: readImageNanos}, err
@@ -463,7 +688,7 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 	}
 	if typedColumnPreparedRequestsIncludeDictionaries(columnRequests) {
 		phaseStart = time.Now()
-		dictDiag, err := typedColumnAttachPreparedDictionaries(part, image, readRange, columnRequests)
+		dictDiag, err := typedColumnAttachPreparedDictionaries(part, image, preparedReadRange, columnRequests)
 		dictDiag.DictionaryNanos += time.Since(phaseStart).Nanoseconds()
 		typedColumnPreparedStateDiagnosticsAdd(&diag, dictDiag)
 		if err != nil {
@@ -472,7 +697,7 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 	}
 	if typedColumnPreparedRequestsIncludePruning(columnRequests) {
 		phaseStart = time.Now()
-		pruningDiag, err := typedColumnAttachPreparedPruning(part, image, readRange, columnRequests)
+		pruningDiag, err := typedColumnAttachPreparedPruning(part, image, preparedReadRange, columnRequests)
 		pruningDiag.PruningNanos += time.Since(phaseStart).Nanoseconds()
 		typedColumnPreparedStateDiagnosticsAdd(&diag, pruningDiag)
 		if err != nil {
@@ -483,7 +708,7 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 	}
 	if typedColumnPreparedRequestsIncludeSortKeyMetadata(columnRequests) || typedColumnPreparedRequestsIncludeSortKeyMarks(columnRequests) {
 		phaseStart = time.Now()
-		sortKeyDiag, err := typedColumnAttachPreparedSortKey(part, image, readRange, typedColumnPreparedRequestsIncludeSortKeyMarks(columnRequests))
+		sortKeyDiag, err := typedColumnAttachPreparedSortKey(part, image, preparedReadRange, typedColumnPreparedRequestsIncludeSortKeyMarks(columnRequests))
 		sortKeyDiag.SortKeyNanos += time.Since(phaseStart).Nanoseconds()
 		typedColumnPreparedStateDiagnosticsAdd(&diag, sortKeyDiag)
 		if err != nil {
@@ -494,7 +719,7 @@ func typedColumnPreparePartStateFromRanges(ref ColumnAssetRef, physical ColumnAs
 		return part, diag, nil
 	}
 	phaseStart = time.Now()
-	if err := typedColumnAttachPreparedStats(part, image, readRange); err != nil {
+	if err := typedColumnAttachPreparedStats(part, image, preparedReadRange); err != nil {
 		diag.StatsNanos += time.Since(phaseStart).Nanoseconds()
 		diag.StatsValidationFailures++
 		diag.StatsValidationFailureReason = err.Error()
