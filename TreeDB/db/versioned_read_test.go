@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -164,5 +165,21 @@ func TestEntryRevisionFloorAdvancesAfterExplicitRevision(t *testing.T) {
 	}
 	if got := db.State().MaxEntryRevision; got < revision {
 		t.Fatalf("MaxEntryRevision=%d, want >= next revision %d", got, revision)
+	}
+}
+
+func TestAssignBatchEntryRevisionsReservesExplicitOnlyFloor(t *testing.T) {
+	db := &DB{}
+	b := batchpkg.New(nil, -1)
+	defer b.Close()
+	if err := b.SetWithRevision([]byte("explicit"), []byte("value"), page.EntryRevision(100)); err != nil {
+		t.Fatalf("SetWithRevision: %v", err)
+	}
+
+	if got := db.assignBatchEntryRevisions(b); got != page.EntryRevision(100) {
+		t.Fatalf("assignBatchEntryRevisions=%d, want 100", got)
+	}
+	if got := db.nextEntryRevision(); got <= page.EntryRevision(100) {
+		t.Fatalf("nextEntryRevision=%d, want > explicit floor 100", got)
 	}
 }

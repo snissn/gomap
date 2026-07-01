@@ -44,8 +44,8 @@ func (db *DB) assignBatchEntryRevisions(batch *batchpkg.Batch) page.EntryRevisio
 		return page.LegacyEntryRevision
 	}
 	maxRevision, hasLegacy := batch.PointRevisionStats()
+	db.advanceEntryRevisionFloor(maxRevision)
 	if hasLegacy {
-		db.advanceEntryRevisionFloor(maxRevision)
 		return batch.AssignLegacyPointRevisions(db.nextEntryRevision())
 	}
 	return maxRevision
