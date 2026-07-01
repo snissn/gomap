@@ -753,6 +753,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.max_entry_revision"] = fmt.Sprintf("%d", state.MaxEntryRevision)
 	stats["treedb.command_wal.enabled"] = fmt.Sprintf("%t", db.commandWAL)
 	writeCommandWALStats(stats, db)
+	db.appendConditionalTxnStats(stats)
 	db.appendFlushApplyStats(stats)
 	db.appendRawSpanNativeStats(stats)
 	stats["treedb.keep_recent"] = fmt.Sprintf("%d", db.keepRecent)

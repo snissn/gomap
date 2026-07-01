@@ -35,6 +35,13 @@ type EntryRevision = page.EntryRevision
 
 const LegacyEntryRevision = page.LegacyEntryRevision
 
+// ConditionalTxn is TreeDB's native conditional transaction type.
+type ConditionalTxn struct {
+	backend      *db.ConditionalTxn
+	cached       caching.ConditionalTxn
+	cachedActive bool
+}
+
 type MaintenancePhase = caching.MaintenancePhase
 
 type LeafPageReadCacheWriteAdmissionPolicy = db.LeafPageReadCacheWriteAdmissionPolicy
@@ -1708,6 +1715,48 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 		return db.cached.UpdateSync(key, fn)
 	}
 	return db.backend.UpdateSync(key, fn)
+}
+
+// InitConditionalTxn initializes tx as a native conditional transaction.
+// Callers must pass zero-value or closed transaction storage.
+func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
+	if tx == nil || tx.cachedActive || tx.backend != nil {
+		return ErrConditionalTxnClosed
+	}
+	unlock, err := db.beginPublicOperation()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if db.cached != nil {
+		if db.commandWALCached {
+			return ErrConditionalTxnUnsupported
+		}
+		if err := db.cached.InitConditionalTxn(&tx.cached); err != nil {
+			return err
+		}
+		tx.backend = nil
+		tx.cachedActive = true
+		return nil
+	}
+	if db.backend == nil {
+		return ErrClosed
+	}
+	backendTx, err := db.backend.NewConditionalTxn()
+	if err != nil {
+		return err
+	}
+	*tx = ConditionalTxn{backend: backendTx}
+	return nil
+}
+
+// NewConditionalTxn opens a native conditional transaction.
+func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
+	tx := &ConditionalTxn{}
+	if err := db.InitConditionalTxn(tx); err != nil {
+		return nil, err
+	}
+	return tx, nil
 }
 
 // Delete removes a key without forcing an fsync boundary.

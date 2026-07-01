@@ -16,6 +16,7 @@ type Batch struct {
 	batch                              *batch.Batch
 	physicalOnly                       bool
 	commandWALPublishIntent            *commandWALBatchIntent
+	conditionalTxnID                   uint64
 	flushApplySpanNativeFallbackReason FlushSpanRunFallbackReason
 }
 
@@ -293,12 +294,16 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision) error {
+	return b.writeWithCommandWALIntentPreflight(sync, intent, maxEntryRevision, nil)
+}
+
+func (b *Batch) writeWithCommandWALIntentPreflight(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) error {
 	// If a command frame is appended but root publication later returns an
 	// error, the durable frame is intentionally left for reopen recovery. Reuse
 	// the same intent across optimistic/serialized attempts so one user batch
 	// keeps one command LSN.
 	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
-		committed, err := b.writeOptimistic(sync, intent, maxEntryRevision)
+		committed, err := b.writeOptimistic(sync, intent, maxEntryRevision, conditional)
 		if err != nil {
 			return err
 		}
@@ -307,10 +312,10 @@ func (b *Batch) writeWithCommandWALIntent(sync bool, intent *commandWALBatchInte
 		}
 		b.db.observeFlushApplyRetry()
 	}
-	return b.writeSerialized(sync, intent, maxEntryRevision)
+	return b.writeSerialized(sync, intent, maxEntryRevision, conditional)
 }
 
-func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision) (bool, error) {
+func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) (bool, error) {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
@@ -461,10 +466,24 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		return false, nil
 	}
+	if conditional != nil {
+		if err = conditional.validateReadSetAtPublish(); err != nil {
+			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
+			b.db.observeFlushApplyAbandonedOutput(metrics, len(retired))
+			b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), false)
+			b.db.commitMu.Unlock()
+			freeErr := tracker.FreeAll()
+			b.db.writeMu.RUnlock()
+			if freeErr != nil {
+				return false, freeErr
+			}
+			return false, err
+		}
+	}
 
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
 	} else {
 		if _, err = b.db.appendRawKVCommandWALIntent(intent, sync); err != nil {
 			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -481,6 +500,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		opts := commandWALFinalizeOptions(intent)
 		opts.skipPrePublishFlush = true
+		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 		// Poison while still holding commitMu so that no concurrent writer can
@@ -491,6 +511,11 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
+	if err == nil {
+		if b.db.conditionalActiveTxnCount.Load() > 0 {
+			b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
+		}
+	}
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
@@ -511,7 +536,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	return true, nil
 }
 
-func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision) error {
+func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEntryRevision page.EntryRevision, conditional *ConditionalTxn) error {
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 	rawSpanPlan := b.rawSpanNativeBatchPlan()
 
@@ -535,6 +560,12 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	b.db.mu.RUnlock()
 
 	defer idx.registry.Unregister(regID)
+	if conditional != nil {
+		if err := conditional.validateReadSetAtPublish(); err != nil {
+			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
+			return err
+		}
+	}
 
 	applyOpts := b.flushApplyOptions()
 	prepareBuf := b.db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
@@ -608,7 +639,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	guardedPublishStart := time.Now()
 	var post finalizeCommitPost
 	if intent == nil {
-		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, maxEntryRevision: maxEntryRevision})
+		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{skipPrePublishFlush: true, skipConditionalRootConflict: true, maxEntryRevision: maxEntryRevision})
 	} else {
 		// writeMu is released by the deferred unlock above even if the command
 		// journal append fails and poisons this open handle.
@@ -621,6 +652,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		opts := commandWALFinalizeOptions(intent)
 		opts.skipPrePublishFlush = true
+		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
 	}
@@ -634,6 +666,9 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		return err
 	}
+	if b.db.conditionalActiveTxnCount.Load() > 0 {
+		b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
+	}
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
 	vlogRefDelta = nil
 	b.db.finalizeCommitPostWork(post)
@@ -645,16 +680,49 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	return nil
 }
 
+func (b *Batch) writeConditional(sync bool, conditional *ConditionalTxn) error {
+	if b == nil || b.db == nil {
+		return fmt.Errorf("missing db")
+	}
+	if b.db.readOnly {
+		return ErrReadOnly
+	}
+	if b.db.closing.Load() {
+		return ErrClosed
+	}
+	maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)
+	intent := b.commandWALPublishIntent
+	var err error
+	if !b.physicalOnly && b.db.commandWAL {
+		unlockRawPublish := b.db.lockCommandWALRawPublish()
+		defer unlockRawPublish()
+		if err := b.db.runCommandWALRawPublishBarriers(); err != nil {
+			return err
+		}
+		intent, err = b.db.prepareRawKVCommandWALIntent(b)
+		if err != nil {
+			return err
+		}
+	}
+	err = b.writeWithCommandWALIntentPreflight(sync, intent, maxEntryRevision, conditional)
+	if err == nil && intent != nil && intent.lsn != 0 {
+		b.db.conditionalTxnCommandWALPayloads.Add(1)
+	}
+	return err
+}
+
 func (b *Batch) Close() error {
 	if b.batch != nil {
 		err := b.batch.Close()
 		b.batch = nil
 		b.commandWALPublishIntent = nil
+		b.conditionalTxnID = 0
 		b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 		return err
 	}
 	b.batch = nil
 	b.commandWALPublishIntent = nil
+	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 	return nil
 }
@@ -666,6 +734,7 @@ func (b *Batch) Reset() {
 	}
 	b.batch.Reset()
 	b.commandWALPublishIntent = nil
+	b.conditionalTxnID = 0
 	b.flushApplySpanNativeFallbackReason = FlushSpanRunFallbackUnknown
 }
 

@@ -32,6 +32,15 @@ var (
 	// ErrUnsupportedRequiredFeature indicates format.json requires a storage
 	// feature this binary does not understand.
 	ErrUnsupportedRequiredFeature = db.ErrUnsupportedRequiredFeature
+	// ErrConditionalTxnClosed indicates a conditional transaction was used after
+	// Commit, CommitSync, or Close.
+	ErrConditionalTxnClosed = db.ErrConditionalTxnClosed
+	// ErrConcurrentModification indicates a conditional publish observed a read
+	// precondition that changed after the transaction opened.
+	ErrConcurrentModification = db.ErrConcurrentModification
+	// ErrConditionalTxnUnsupported indicates the selected TreeDB mode cannot
+	// provide native conditional transaction semantics.
+	ErrConditionalTxnUnsupported = db.ErrConditionalTxnUnsupported
 
 	// ErrKeyNotFound indicates the key does not exist.
 	ErrKeyNotFound = tree.ErrKeyNotFound
