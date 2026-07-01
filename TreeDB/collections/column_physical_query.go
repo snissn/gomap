@@ -222,6 +222,8 @@ type ColumnPhysicalQueryDiagnostics struct {
 
 	TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos    int64
 	TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos int64
+	TypedColumnPrepareQ2GroupGlobalLocalRankNanos         int64
+	TypedColumnPrepareQ2DistinctGlobalLocalRankNanos      int64
 	TypedColumnPrepareQ2GroupGlobalCodeRemapNanos         int64
 	TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos      int64
 
@@ -1516,6 +1518,8 @@ func mergeColumnPhysicalQueryDiagnostics(left, right ColumnPhysicalQueryDiagnost
 	}
 	left.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos
 	left.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += right.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
+	left.TypedColumnPrepareQ2GroupGlobalLocalRankNanos += right.TypedColumnPrepareQ2GroupGlobalLocalRankNanos
+	left.TypedColumnPrepareQ2DistinctGlobalLocalRankNanos += right.TypedColumnPrepareQ2DistinctGlobalLocalRankNanos
 	left.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += right.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos
 	left.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos += right.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
 	return left

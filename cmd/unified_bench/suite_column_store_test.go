@@ -2613,8 +2613,10 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 
 		TypedColumnPrepareQ2GroupGlobalDictionaryRankMS:    0.034,
 		TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS: 0.035,
-		TypedColumnPrepareQ2GroupGlobalCodeRemapMS:         0.036,
-		TypedColumnPrepareQ2DistinctGlobalCodeRemapMS:      0.037,
+		TypedColumnPrepareQ2GroupGlobalLocalRankMS:         0.036,
+		TypedColumnPrepareQ2DistinctGlobalLocalRankMS:      0.037,
+		TypedColumnPrepareQ2GroupGlobalCodeRemapMS:         0.041,
+		TypedColumnPrepareQ2DistinctGlobalCodeRemapMS:      0.042,
 
 		CompressionAttribution: columnStoreCompressionAttribution{
 			CompressionPolicyLabel: "default",
@@ -2760,6 +2762,12 @@ func TestColumnStoreJSONBenchCellFromQueryMetricUsesDirectDiagnostics1955(t *tes
 	if got, want := cell.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS, q.TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS; got != want {
 		t.Fatalf("typed_column_prepare_q2_distinct_global_dictionary_rank_duration_ms=%v want %v", got, want)
 	}
+	if got, want := cell.TypedColumnPrepareQ2GroupGlobalLocalRankMS, q.TypedColumnPrepareQ2GroupGlobalLocalRankMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_group_global_local_rank_duration_ms=%v want %v", got, want)
+	}
+	if got, want := cell.TypedColumnPrepareQ2DistinctGlobalLocalRankMS, q.TypedColumnPrepareQ2DistinctGlobalLocalRankMS; got != want {
+		t.Fatalf("typed_column_prepare_q2_distinct_global_local_rank_duration_ms=%v want %v", got, want)
+	}
 	if got, want := cell.TypedColumnPrepareQ2GroupGlobalCodeRemapMS, q.TypedColumnPrepareQ2GroupGlobalCodeRemapMS; got != want {
 		t.Fatalf("typed_column_prepare_q2_group_global_code_remap_duration_ms=%v want %v", got, want)
 	}
@@ -2877,6 +2885,8 @@ func TestRenderColumnStoreTypedColumnSetupDiagnosticsMarkdownQ2Splits3324(t *tes
 				TypedColumnPrepareQ2DenseDistinctGlobalRanks:       99,
 				TypedColumnPrepareQ2GroupGlobalDictionaryRankMS:    1.25,
 				TypedColumnPrepareQ2DistinctGlobalDictionaryRankMS: 2.5,
+				TypedColumnPrepareQ2GroupGlobalLocalRankMS:         3.0,
+				TypedColumnPrepareQ2DistinctGlobalLocalRankMS:      3.5,
 				TypedColumnPrepareQ2GroupGlobalCodeRemapMS:         3.75,
 				TypedColumnPrepareQ2DistinctGlobalCodeRemapMS:      4.5,
 			},
@@ -2888,6 +2898,8 @@ func TestRenderColumnStoreTypedColumnSetupDiagnosticsMarkdownQ2Splits3324(t *tes
 	for _, want := range []string{
 		"q2 group global dict/rank ms",
 		"q2 distinct global dict/rank ms",
+		"q2 group global local-rank ms",
+		"q2 distinct global local-rank ms",
 		"q2 dense group global rank ms",
 		"q2 dense distinct global rank ms",
 		"q2 dense part local rank ms",
@@ -2908,6 +2920,8 @@ func TestRenderColumnStoreTypedColumnSetupDiagnosticsMarkdownQ2Splits3324(t *tes
 		"q2 distinct global-code remap ms",
 		"1.250",
 		"2.500",
+		"3.000",
+		"3.500",
 		"3.750",
 		"4.500",
 	} {

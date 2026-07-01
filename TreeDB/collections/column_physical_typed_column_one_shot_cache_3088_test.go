@@ -607,6 +607,8 @@ func assertTypedColumnQ2PostPrepareSubphaseDiagnostics3158(tb testing.TB, label 
 		diag.TypedColumnPrepareQ2DensePartLocalRankNanos
 	globalCodeTotal := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
 		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos +
+		diag.TypedColumnPrepareQ2GroupGlobalLocalRankNanos +
+		diag.TypedColumnPrepareQ2DistinctGlobalLocalRankNanos +
 		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos +
 		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
 	if !want {

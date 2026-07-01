@@ -1053,16 +1053,21 @@ func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testi
 	}
 	dictionaryTotal := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
 		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
+	localRankTotal := diag.TypedColumnPrepareQ2GroupGlobalLocalRankNanos +
+		diag.TypedColumnPrepareQ2DistinctGlobalLocalRankNanos
 	if !want {
-		if dictionaryTotal != 0 {
-			tb.Fatalf("%s sorted grouped-distinct dictionary/rank nanos=%d want 0 diagnostics=%+v", label, dictionaryTotal, diag)
+		if dictionaryTotal+localRankTotal != 0 {
+			tb.Fatalf("%s sorted grouped-distinct dictionary/rank/local-rank nanos=%d want 0 diagnostics=%+v", label, dictionaryTotal+localRankTotal, diag)
 		}
 		return
 	}
-	if dictionaryTotal == 0 {
+	if dictionaryTotal+localRankTotal == 0 {
 		return
 	}
 	if diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos <= 0 || diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos <= 0 {
 		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want group/distinct dictionary/rank work when timer resolution records split work", label, diag)
+	}
+	if diag.TypedColumnPrepareQ2GroupGlobalLocalRankNanos <= 0 || diag.TypedColumnPrepareQ2DistinctGlobalLocalRankNanos <= 0 {
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want group/distinct local-rank work when timer resolution records split work", label, diag)
 	}
 }

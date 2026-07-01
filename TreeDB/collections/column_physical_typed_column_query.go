@@ -276,6 +276,8 @@ type columnTypedColumnPhysicalQueryPrepareDiagnostics struct {
 
 	Q2GroupGlobalDictionaryRankNanos    int64
 	Q2DistinctGlobalDictionaryRankNanos int64
+	Q2GroupGlobalLocalRankNanos         int64
+	Q2DistinctGlobalLocalRankNanos      int64
 	Q2GroupGlobalCodeRemapNanos         int64
 	Q2DistinctGlobalCodeRemapNanos      int64
 }
@@ -327,6 +329,8 @@ func (d columnTypedColumnPhysicalQueryPrepareDiagnostics) applyTo(diag *ColumnPh
 	}
 	diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos += d.Q2GroupGlobalDictionaryRankNanos
 	diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos += d.Q2DistinctGlobalDictionaryRankNanos
+	diag.TypedColumnPrepareQ2GroupGlobalLocalRankNanos += d.Q2GroupGlobalLocalRankNanos
+	diag.TypedColumnPrepareQ2DistinctGlobalLocalRankNanos += d.Q2DistinctGlobalLocalRankNanos
 	diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos += d.Q2GroupGlobalCodeRemapNanos
 	diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos += d.Q2DistinctGlobalCodeRemapNanos
 }
@@ -378,6 +382,8 @@ func (d *columnTypedColumnPhysicalQueryPrepareDiagnostics) add(src columnTypedCo
 	}
 	d.Q2GroupGlobalDictionaryRankNanos += src.Q2GroupGlobalDictionaryRankNanos
 	d.Q2DistinctGlobalDictionaryRankNanos += src.Q2DistinctGlobalDictionaryRankNanos
+	d.Q2GroupGlobalLocalRankNanos += src.Q2GroupGlobalLocalRankNanos
+	d.Q2DistinctGlobalLocalRankNanos += src.Q2DistinctGlobalLocalRankNanos
 	d.Q2GroupGlobalCodeRemapNanos += src.Q2GroupGlobalCodeRemapNanos
 	d.Q2DistinctGlobalCodeRemapNanos += src.Q2DistinctGlobalCodeRemapNanos
 }
@@ -1218,21 +1224,26 @@ func prepareColumnTypedColumnSortedGroupedDistinctGlobalRanksWithDiagnostics(par
 	groupDict, groupRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
 		return &part.Group
 	})
-	if err == nil {
-		for partIdx := range parts {
-			part := parts[partIdx].SortedGroupedDistinct
-			if part == nil {
-				err = fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
-				break
-			}
-			if rankErr := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRanks(&part.Group, groupDict, len(groupDict), groupRanks); rankErr != nil {
-				err = fmt.Errorf("collections: sorted grouped-distinct group part %d: %w", partIdx, rankErr)
-				break
-			}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2GroupGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	if err != nil {
+		return err
+	}
+	phaseStart = time.Now()
+	for partIdx := range parts {
+		part := parts[partIdx].SortedGroupedDistinct
+		if part == nil {
+			err = fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
+			break
+		}
+		if rankErr := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRanks(&part.Group, groupDict, len(groupDict), groupRanks); rankErr != nil {
+			err = fmt.Errorf("collections: sorted grouped-distinct group part %d: %w", partIdx, rankErr)
+			break
 		}
 	}
 	if prepareDiagnostics != nil {
-		prepareDiagnostics.Q2GroupGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2GroupGlobalLocalRankNanos += time.Since(phaseStart).Nanoseconds()
 	}
 	if err != nil {
 		return err
@@ -1241,21 +1252,26 @@ func prepareColumnTypedColumnSortedGroupedDistinctGlobalRanksWithDiagnostics(par
 	distinctDict, distinctRanks, err := columnTypedColumnSortedGroupedDistinctGlobalDictionary(parts, func(part *columnTypedColumnSortedGroupedDistinctPart) *columnTypedColumnSortedGroupedDistinctCodeColumn {
 		return &part.Distinct
 	})
-	if err == nil {
-		for partIdx := range parts {
-			part := parts[partIdx].SortedGroupedDistinct
-			if part == nil {
-				err = fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
-				break
-			}
-			if rankErr := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRanks(&part.Distinct, nil, len(distinctDict), distinctRanks); rankErr != nil {
-				err = fmt.Errorf("collections: sorted grouped-distinct distinct part %d: %w", partIdx, rankErr)
-				break
-			}
+	if prepareDiagnostics != nil {
+		prepareDiagnostics.Q2DistinctGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+	}
+	if err != nil {
+		return err
+	}
+	phaseStart = time.Now()
+	for partIdx := range parts {
+		part := parts[partIdx].SortedGroupedDistinct
+		if part == nil {
+			err = fmt.Errorf("collections: sorted grouped-distinct missing prepared part %d", partIdx)
+			break
+		}
+		if rankErr := prepareColumnTypedColumnSortedGroupedDistinctGlobalColumnRanks(&part.Distinct, nil, len(distinctDict), distinctRanks); rankErr != nil {
+			err = fmt.Errorf("collections: sorted grouped-distinct distinct part %d: %w", partIdx, rankErr)
+			break
 		}
 	}
 	if prepareDiagnostics != nil {
-		prepareDiagnostics.Q2DistinctGlobalDictionaryRankNanos += time.Since(phaseStart).Nanoseconds()
+		prepareDiagnostics.Q2DistinctGlobalLocalRankNanos += time.Since(phaseStart).Nanoseconds()
 	}
 	if err != nil {
 		return err
