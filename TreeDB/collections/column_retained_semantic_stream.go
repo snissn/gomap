@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/buger/jsonparser"
 	"github.com/golang/snappy"
@@ -141,6 +142,36 @@ type columnRetainedSemanticStreamV1PreparedBlock struct {
 	block    []byte
 	locators [][]byte
 	declared []columnDeclaredRow
+	metrics  columnRetainedSemanticStreamV1PrepareMetrics
+}
+
+type columnRetainedSemanticStreamV1PrepareMetrics struct {
+	WorkerCount        int
+	DeclaredRowPrepare time.Duration
+	BlockPrepareWall   time.Duration
+	BlockCollect       time.Duration
+	BlockEncoderSetup  time.Duration
+	BlockRawEncode     time.Duration
+	BlockStoredEncode  time.Duration
+	BlockFinalize      time.Duration
+	TableBuild         time.Duration
+}
+
+func (m *columnRetainedSemanticStreamV1PrepareMetrics) add(other columnRetainedSemanticStreamV1PrepareMetrics) {
+	if m == nil {
+		return
+	}
+	if other.WorkerCount > m.WorkerCount {
+		m.WorkerCount = other.WorkerCount
+	}
+	m.DeclaredRowPrepare += other.DeclaredRowPrepare
+	m.BlockPrepareWall += other.BlockPrepareWall
+	m.BlockCollect += other.BlockCollect
+	m.BlockEncoderSetup += other.BlockEncoderSetup
+	m.BlockRawEncode += other.BlockRawEncode
+	m.BlockStoredEncode += other.BlockStoredEncode
+	m.BlockFinalize += other.BlockFinalize
+	m.TableBuild += other.TableBuild
 }
 
 type columnRetainedSemanticStreamV1RootFastPathPlan struct {
@@ -451,6 +482,7 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 	if len(documents) == 0 {
 		return out, nil
 	}
+	var metrics columnRetainedSemanticStreamV1PrepareMetrics
 	rootPlan, useRootFastPath := columnRetainedSemanticStreamV1RootFastPathPlanForConfig(cfg, ids, len(documents))
 	declaredPathTrie, useSemanticParserDeclaredRows := columnRetainedSemanticStreamV1DeclaredPathTrieForConfig(cfg, ids, len(documents))
 	if useRootFastPath && rootPlan.declaredRowsReady {
@@ -463,10 +495,12 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 	} else if ids != nil && len(ids) == len(documents) {
 		// Keep semantic-stream retained encoding unchanged while preparing
 		// declared rows early enough for column publish to reuse them.
+		declaredStart := time.Now()
 		rows, err := prepareColumnRetainedSemanticStreamV1DeclaredRowsFromJSONDocuments(cfg, ids, documents)
 		if err != nil {
 			return columnRetainedPayloadStorageDocuments{}, err
 		}
+		metrics.DeclaredRowPrepare = time.Since(declaredStart)
 		out.declaredRows = rows
 		out.declaredRowsReady = true
 	}
@@ -497,7 +531,10 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 		preparedBlocks[blockIdx] = prepared
 		return nil
 	}
-	if workers := columnRetainedSemanticStreamV1PrepareWorkers(blockCount); workers > 1 {
+	workers := columnRetainedSemanticStreamV1PrepareWorkers(blockCount)
+	metrics.WorkerCount = workers
+	blockPrepareStart := time.Now()
+	if workers > 1 {
 		if err := columnRetainedSemanticStreamV1RunPrepareWorkers(blockCount, workers, prepareBlock); err != nil {
 			return columnRetainedPayloadStorageDocuments{}, err
 		}
@@ -508,6 +545,11 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 			}
 		}
 	}
+	metrics.BlockPrepareWall = time.Since(blockPrepareStart)
+	for blockIdx := range preparedBlocks {
+		metrics.add(preparedBlocks[blockIdx].metrics)
+	}
+	tableStart := time.Now()
 	blockTable := newCollectionRunTable(blockCount)
 	for blockIdx := range preparedBlocks {
 		prepared := preparedBlocks[blockIdx]
@@ -519,6 +561,8 @@ func prepareColumnRetainedSemanticStreamV1StorageDocumentsWithIDs(cfg ColumnStor
 	}
 	blockTable.Freeze()
 	out.semanticStreamBlocks = blockTable
+	metrics.TableBuild = time.Since(tableStart)
+	out.semanticStreamPrepareMetrics = metrics
 	return out, nil
 }
 
@@ -580,6 +624,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 	useSemanticParserDeclaredRows bool,
 ) (columnRetainedSemanticStreamV1PreparedBlock, error) {
 	rows := end - start
+	var metrics columnRetainedSemanticStreamV1PrepareMetrics
 	streams := newColumnRetainedSemanticStreamStreams()
 	pathInterner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
 	var declaredStringInterner *columnDeclaredStringInterner
@@ -592,6 +637,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 		declaredValues = make([]columnDeclaredValue, rows*len(cfg.Columns))
 		declaredRowIDBytes = make([]byte, 0, columnRetainedSemanticStreamV1DeclaredRowIDArenaCapacity(ids[start:end]))
 	}
+	collectStart := time.Now()
 	for row, i := 0, start; i < end; row, i = row+1, i+1 {
 		if useRootFastPath {
 			var declaredValuesDest []columnDeclaredValue
@@ -631,15 +677,21 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 			}
 		}
 	}
+	metrics.BlockCollect = time.Since(collectStart)
+	encoderStart := time.Now()
 	storedBlockEncoder, err := newColumnRetainedSemanticStreamV1StoredBlockEncoder()
 	if err != nil {
 		return columnRetainedSemanticStreamV1PreparedBlock{}, err
 	}
+	metrics.BlockEncoderSetup = time.Since(encoderStart)
 	defer storedBlockEncoder.close()
-	block, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows, streams, storedBlockEncoder)
+	block, rawEncode, storedEncode, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoderMeasured(rows, streams, storedBlockEncoder)
 	if err != nil {
 		return columnRetainedSemanticStreamV1PreparedBlock{}, err
 	}
+	metrics.BlockRawEncode = rawEncode
+	metrics.BlockStoredEncode = storedEncode
+	finalizeStart := time.Now()
 	sum := sha256.Sum256(block)
 	blockKey := append([]byte(nil), sum[:]...)
 	locatorArena := make([]byte, 0, columnRetainedSemanticStreamV1LocatorBlockArenaCapacity(rows))
@@ -649,6 +701,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 		locatorArena = appendColumnRetainedSemanticStreamV1Locator(locatorArena, blockKey, uint64(row))
 		locators[row] = locatorArena[locatorStart:len(locatorArena):len(locatorArena)]
 	}
+	metrics.BlockFinalize = time.Since(finalizeStart)
 	return columnRetainedSemanticStreamV1PreparedBlock{
 		start:    start,
 		rows:     rows,
@@ -656,6 +709,7 @@ func prepareColumnRetainedSemanticStreamV1StorageBlockWithIDs(
 		block:    block,
 		locators: locators,
 		declared: declaredRows,
+		metrics:  metrics,
 	}, nil
 }
 
@@ -1340,14 +1394,23 @@ func encodeColumnRetainedSemanticStreamV1BlockFromStreams(rows int, streams *col
 }
 
 func encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoder(rows int, streams *columnRetainedSemanticStreamStreams, encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) ([]byte, error) {
+	block, _, _, err := encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoderMeasured(rows, streams, encoder)
+	return block, err
+}
+
+func encodeColumnRetainedSemanticStreamV1BlockFromStreamsWithEncoderMeasured(rows int, streams *columnRetainedSemanticStreamStreams, encoder *columnRetainedSemanticStreamV1StoredBlockEncoder) ([]byte, time.Duration, time.Duration, error) {
 	if encoder != nil {
-		return encoder.encodeStreamsWithRawLimit(rows, streams, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
+		return encoder.encodeStreamsWithRawLimitMeasured(rows, streams, maxColumnRetainedSemanticStreamV1CompressedRawBlockBytes)
 	}
+	rawStart := time.Now()
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows, streams)
 	if err != nil {
-		return nil, err
+		return nil, time.Since(rawStart), 0, err
 	}
-	return encodeColumnRetainedSemanticStreamV1StoredBlock(raw)
+	rawDuration := time.Since(rawStart)
+	storedStart := time.Now()
+	block, err := encodeColumnRetainedSemanticStreamV1StoredBlock(raw)
+	return block, rawDuration, time.Since(storedStart), err
 }
 
 func encodeColumnRetainedSemanticStreamV1RawBlockFromStreams(rows int, streams *columnRetainedSemanticStreamStreams) ([]byte, error) {
@@ -1495,19 +1558,28 @@ func putColumnRetainedSemanticStreamV1RawBlockScratch(scratch []byte) {
 }
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeStreamsWithRawLimit(rows int, streams *columnRetainedSemanticStreamStreams, compressedRawLimit int) ([]byte, error) {
+	block, _, _, err := e.encodeStreamsWithRawLimitMeasured(rows, streams, compressedRawLimit)
+	return block, err
+}
+
+func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeStreamsWithRawLimitMeasured(rows int, streams *columnRetainedSemanticStreamStreams, compressedRawLimit int) ([]byte, time.Duration, time.Duration, error) {
+	rawStart := time.Now()
 	raw, err := encodeColumnRetainedSemanticStreamV1RawBlockFromStreamsInto(rows, streams, e.rawBlockScratch)
 	if err != nil {
-		return nil, err
+		return nil, time.Since(rawStart), 0, err
 	}
+	rawDuration := time.Since(rawStart)
+	storedStart := time.Now()
 	block, err := e.encodeWithRawLimit(raw, compressedRawLimit)
 	if err != nil {
-		return nil, err
+		return nil, rawDuration, time.Since(storedStart), err
 	}
+	storedDuration := time.Since(storedStart)
 	if columnRetainedSemanticStreamSlicesShareStart(block, raw) {
 		block = append([]byte(nil), block...)
 	}
 	e.retainRawBlockScratch(raw)
-	return block, nil
+	return block, rawDuration, storedDuration, nil
 }
 
 func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) retainRawBlockScratch(raw []byte) {

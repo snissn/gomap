@@ -95,11 +95,12 @@ func columnRetainedPayloadFromJSONDocument(cfg ColumnStoreConfig, document []byt
 }
 
 type columnRetainedPayloadStorageDocuments struct {
-	documents            [][]byte
-	templateRecords      []templateV1Record
-	semanticStreamBlocks memtable.Table
-	declaredRows         []columnDeclaredRow
-	declaredRowsReady    bool
+	documents                    [][]byte
+	templateRecords              []templateV1Record
+	semanticStreamBlocks         memtable.Table
+	semanticStreamPrepareMetrics columnRetainedSemanticStreamV1PrepareMetrics
+	declaredRows                 []columnDeclaredRow
+	declaredRowsReady            bool
 }
 
 func prepareColumnRetainedPayloadStorageDocuments(cfg ColumnStoreConfig, documents [][]byte, fallback templateV1Resolver) (columnRetainedPayloadStorageDocuments, error) {

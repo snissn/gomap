@@ -513,16 +513,25 @@ type CollectionInsertStats struct {
 	DuplicateDocumentPreflight time.Duration
 	// RetainedPayloadPrepare includes retained-payload transforms for column
 	// stores before the primary run is built.
-	RetainedPayloadPrepare              time.Duration
-	RetainedPayloadRows                 int
-	RetainedPayloadDeclaredRows         int
-	RetainedPayloadSemanticStreamBlocks int
-	RetainedPayloadValueLogPointerize   time.Duration
-	RetainedPayloadValueLogValues       int
-	RetainedPayloadValueLogBytes        int64
-	RetainedStreamValueLogPointerize    time.Duration
-	RetainedStreamValueLogValues        int
-	RetainedStreamValueLogBytes         int64
+	RetainedPayloadPrepare                          time.Duration
+	RetainedPayloadRows                             int
+	RetainedPayloadDeclaredRows                     int
+	RetainedPayloadSemanticStreamBlocks             int
+	RetainedPayloadSemanticStreamWorkerCount        int
+	RetainedPayloadSemanticStreamDeclaredRowPrepare time.Duration
+	RetainedPayloadSemanticStreamBlockPrepareWall   time.Duration
+	RetainedPayloadSemanticStreamBlockCollect       time.Duration
+	RetainedPayloadSemanticStreamBlockEncoderSetup  time.Duration
+	RetainedPayloadSemanticStreamBlockRawEncode     time.Duration
+	RetainedPayloadSemanticStreamBlockStoredEncode  time.Duration
+	RetainedPayloadSemanticStreamBlockFinalize      time.Duration
+	RetainedPayloadSemanticStreamTableBuild         time.Duration
+	RetainedPayloadValueLogPointerize               time.Duration
+	RetainedPayloadValueLogValues                   int
+	RetainedPayloadValueLogBytes                    int64
+	RetainedStreamValueLogPointerize                time.Duration
+	RetainedStreamValueLogValues                    int
+	RetainedStreamValueLogBytes                     int64
 	// ColumnPublish* fields are populated for typed-column InsertBatch paths
 	// that route through the command-WAL column manifest publish path.
 	ColumnPublishBuildColumnDelta       time.Duration
@@ -11051,6 +11060,15 @@ func (c *Collection) insertBatchNoIndex(
 		if retainedSemanticStreamBlocks != nil {
 			stats.RetainedPayloadSemanticStreamBlocks = retainedSemanticStreamBlocks.Len()
 		}
+		stats.RetainedPayloadSemanticStreamWorkerCount = prepared.semanticStreamPrepareMetrics.WorkerCount
+		stats.RetainedPayloadSemanticStreamDeclaredRowPrepare = prepared.semanticStreamPrepareMetrics.DeclaredRowPrepare
+		stats.RetainedPayloadSemanticStreamBlockPrepareWall = prepared.semanticStreamPrepareMetrics.BlockPrepareWall
+		stats.RetainedPayloadSemanticStreamBlockCollect = prepared.semanticStreamPrepareMetrics.BlockCollect
+		stats.RetainedPayloadSemanticStreamBlockEncoderSetup = prepared.semanticStreamPrepareMetrics.BlockEncoderSetup
+		stats.RetainedPayloadSemanticStreamBlockRawEncode = prepared.semanticStreamPrepareMetrics.BlockRawEncode
+		stats.RetainedPayloadSemanticStreamBlockStoredEncode = prepared.semanticStreamPrepareMetrics.BlockStoredEncode
+		stats.RetainedPayloadSemanticStreamBlockFinalize = prepared.semanticStreamPrepareMetrics.BlockFinalize
+		stats.RetainedPayloadSemanticStreamTableBuild = prepared.semanticStreamPrepareMetrics.TableBuild
 	}
 
 	phaseStart = time.Now()
