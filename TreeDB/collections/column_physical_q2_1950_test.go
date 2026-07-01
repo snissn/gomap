@@ -12,18 +12,13 @@ import (
 )
 
 func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
-	batches := [][]columnPhysicalJSONBenchParityEventP0{typedColumnQ2SortedBatchA1950(), typedColumnQ2SortedBatchB1950()}
+	batches := typedColumnQ2SortedDiagnosticsBatches1950(256)
 	events := flattenColumnPhysicalEvents1950(batches)
 	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, typedColumnQ2ClickHouseSortKey1950(), batches)
 	defer closeFn()
 
 	rowHash := columnPhysicalJSONBenchHashLinesP0(columnPhysicalJSONBenchReferenceLinesP0("q2", events))
-	wantCounts := map[string]columnPhysicalJSONBenchQ2CountP0{
-		"app.bsky.feed.like":    {Count: 3, Distinct: 2},
-		"app.bsky.feed.post":    {Count: 4, Distinct: 2},
-		"app.bsky.feed.repost":  {Count: 1, Distinct: 1},
-		"app.bsky.graph.follow": {Count: 1, Distinct: 1},
-	}
+	wantCounts := columnPhysicalJSONBenchQ2ReferenceCountsP0(events)
 	matchedRows := columnPhysicalJSONBenchReferenceMatchedRowsP0("q2", events)
 	req := typedColumnQ2Request1950()
 
@@ -708,6 +703,33 @@ func typedColumnQ2SortedBatchB1950() []columnPhysicalJSONBenchParityEventP0 {
 		{ID: "b-repost", TimeUS: base + 34, Kind: "commit", Operation: "create", Collection: "app.bsky.feed.repost", Did: "did:repost"},
 		{ID: "b-graph", TimeUS: base + 35, Kind: "commit", Operation: "create", Collection: "app.bsky.graph.follow", Did: "did:graph"},
 	}
+}
+
+func typedColumnQ2SortedDiagnosticsBatches1950(repeats int) [][]columnPhysicalJSONBenchParityEventP0 {
+	return [][]columnPhysicalJSONBenchParityEventP0{
+		typedColumnQ2RepeatSortedBatch1950(typedColumnQ2SortedBatchA1950(), repeats),
+		typedColumnQ2RepeatSortedBatch1950(typedColumnQ2SortedBatchB1950(), repeats),
+	}
+}
+
+func typedColumnQ2RepeatSortedBatch1950(base []columnPhysicalJSONBenchParityEventP0, repeats int) []columnPhysicalJSONBenchParityEventP0 {
+	if repeats <= 0 {
+		repeats = 1
+	}
+	out := make([]columnPhysicalJSONBenchParityEventP0, 0, len(base)*repeats)
+	for i := 0; i < repeats; i++ {
+		suffix := fmt.Sprintf(".r%04d", i)
+		for _, event := range base {
+			event.ID = fmt.Sprintf("%s%s", event.ID, suffix)
+			event.TimeUS += int64(i) * 1_000
+			if event.Kind == "commit" && event.Operation == "create" {
+				event.Collection += suffix
+				event.Did += suffix
+			}
+			out = append(out, event)
+		}
+	}
+	return out
 }
 
 func typedColumnQ2LocalDictBatchA1950() []columnPhysicalJSONBenchParityEventP0 {
