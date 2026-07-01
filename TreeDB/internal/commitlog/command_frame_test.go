@@ -820,6 +820,57 @@ func TestRawKVBatchPayloadBuilderMatchesSliceEncoder(t *testing.T) {
 	}
 }
 
+func TestRawKVBatchPayloadBuilderStampsEntryRevisions(t *testing.T) {
+	builder := NewRawKVBatchPayloadBuilder(3, len("alpha")+len("one")+len("bravo")+len("charlie"))
+	if err := builder.EnableEntryRevisions(); err != nil {
+		t.Fatalf("EnableEntryRevisions: %v", err)
+	}
+	if _, _, err := builder.AppendSet([]byte("alpha"), []byte("one")); err != nil {
+		t.Fatalf("AppendSet: %v", err)
+	}
+	if _, err := builder.AppendDelete([]byte("bravo")); err != nil {
+		t.Fatalf("AppendDelete: %v", err)
+	}
+	if _, _, err := builder.Append(RawKVOperation{Op: RawKVOpSetRID, Key: []byte("charlie"), RID: 42, Revision: 33}); err != nil {
+		t.Fatalf("Append SetRID: %v", err)
+	}
+	if err := builder.StampEntryRevisions(func(emit func(uint64) error) error {
+		for _, revision := range []uint64{11, 22, 33} {
+			if err := emit(revision); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("StampEntryRevisions: %v", err)
+	}
+
+	payload := builder.Payload()
+	if got := binary.LittleEndian.Uint16(payload[0:2]); got != rawKVBatchPayloadVersionWithRevisions {
+		t.Fatalf("payload version=%d want %d", got, rawKVBatchPayloadVersionWithRevisions)
+	}
+	var got []RawKVOperation
+	err := ScanRawKVBatchPayloadWithRevision(payload, func(op RawKVOp, key, value []byte, revision uint64) error {
+		entry := RawKVOperation{Op: op, Key: cloneBytesPreserveEmpty(key), Revision: revision}
+		if op == RawKVOpSetRID {
+			entry.RID = binary.LittleEndian.Uint64(value)
+		} else {
+			entry.Value = cloneBytesPreserveEmpty(value)
+		}
+		got = append(got, entry)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanRawKVBatchPayloadWithRevision: %v", err)
+	}
+	if len(got) != 3 ||
+		got[0].Op != RawKVOpSet || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || got[0].Revision != 11 ||
+		got[1].Op != RawKVOpDelete || string(got[1].Key) != "bravo" || got[1].Revision != 22 ||
+		got[2].Op != RawKVOpSetRID || string(got[2].Key) != "charlie" || got[2].RID != 42 || got[2].Revision != 33 {
+		t.Fatalf("stamped ops=%+v, want revisions preserved", got)
+	}
+}
+
 func TestRawKVBatchPayloadBuilderResetWithHintReportsOverflow(t *testing.T) {
 	var builder RawKVBatchPayloadBuilder
 	if err := builder.ResetWithHint(int(^uint(0)>>1), int(^uint(0)>>1)); !errors.Is(err, ErrRecordTooLarge) {

@@ -1425,18 +1425,26 @@ func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T
 	}
 }
 
-func TestPublicCommandWALBatchOrdinarySetBypassesPayloadBuilder(t *testing.T) {
+func TestPublicCommandWALBatchOrdinarySetUsesPayloadBuilder(t *testing.T) {
 	inner := &commandWALPayloadSoftCapBatch{}
 	wrapped := newCommandWALPublicBatch(nil, inner, 0)
 	wrapped.payloadSoftCapBytes = 64
-	initialPayloadLen := wrapped.payload.Len()
-	initialPayloadCap := wrapped.payload.RetainedCap()
 
-	if err := wrapped.Set([]byte("a"), []byte("b")); err != nil {
+	firstKey := []byte("a")
+	firstValue := []byte("b")
+	if err := wrapped.Set(firstKey, firstValue); err != nil {
 		t.Fatalf("Set first: %v", err)
 	}
-	if !wrapped.payloadBypass || wrapped.payload.Count() != 0 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
-		t.Fatalf("payload after first set: bypass=%t count=%d len/cap=%d/%d, want true/0/%d/%d", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	firstKey[0] = 'A'
+	firstValue[0] = 'B'
+	if wrapped.payloadBypass || wrapped.payload.Count() != 1 || wrapped.payload.Len() == 0 {
+		t.Fatalf("payload after first set: bypass=%t count=%d len=%d, want false/1/>0", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.payload.Len())
+	}
+	if inner.setViewCalls != 1 || inner.setCalls != 0 {
+		t.Fatalf("inner calls after first set: setView=%d set=%d, want 1/0", inner.setViewCalls, inner.setCalls)
+	}
+	if got := inner.entries[0]; string(got.Key) != "a" || string(got.Value) != "b" {
+		t.Fatalf("payload-backed entry mutated or not copied: key=%q value=%q", got.Key, got.Value)
 	}
 
 	key := []byte("second")
@@ -1446,11 +1454,11 @@ func TestPublicCommandWALBatchOrdinarySetBypassesPayloadBuilder(t *testing.T) {
 	}
 	key[0] = 'X'
 	value[0] = 'Y'
-	if wrapped.payload.Count() != 0 || wrapped.opCount != 2 || wrapped.payload.Len() != initialPayloadLen || wrapped.payload.RetainedCap() != initialPayloadCap {
-		t.Fatalf("payload count=%d opCount=%d len/cap=%d/%d, want 0/2/%d/%d", wrapped.payload.Count(), wrapped.opCount, wrapped.payload.Len(), wrapped.payload.RetainedCap(), initialPayloadLen, initialPayloadCap)
+	if !wrapped.payloadBypass || wrapped.payload.Count() != 1 || wrapped.opCount != 2 {
+		t.Fatalf("payload state after soft-cap bypass: bypass=%t count=%d opCount=%d, want true/1/2", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
 	}
-	if inner.setViewCalls != 0 || inner.setCalls != 2 {
-		t.Fatalf("inner calls: setView=%d set=%d, want 0/2", inner.setViewCalls, inner.setCalls)
+	if inner.setViewCalls != 1 || inner.setCalls != 1 {
+		t.Fatalf("inner calls: setView=%d set=%d, want 1/1", inner.setViewCalls, inner.setCalls)
 	}
 	if got := inner.entries[1]; string(got.Key) != "second" || string(got.Value) != strings.Repeat("x", 128) {
 		t.Fatalf("bypassed entry mutated or not copied: key=%q value_prefix=%q", got.Key, got.Value[:1])
@@ -1758,6 +1766,145 @@ func TestPublicCommandWALBatchBypassStreamsReplayToCommandWAL(t *testing.T) {
 	}
 	if len(got) != 2 || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || string(got[1].Key) != "bravo" || string(got[1].Value) != strings.Repeat("v", 128) {
 		t.Fatalf("decoded streamed command WAL ops=%+v", got)
+	}
+}
+
+func TestPublicCommandWALBatchStablePayloadAppendsWithoutReplay(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(db, inner, 0)
+	wrapped.payloadSoftCapBytes = 64 << 10
+
+	if _, _, err := wrapped.SetViewWithReplayBytes([]byte("alpha"), []byte("one")); err != nil {
+		t.Fatalf("SetViewWithReplayBytes alpha: %v", err)
+	}
+	if _, _, err := wrapped.SetViewWithReplayBytes([]byte("bravo"), []byte("two")); err != nil {
+		t.Fatalf("SetViewWithReplayBytes bravo: %v", err)
+	}
+	if wrapped.payloadBypass || wrapped.payload.Count() != wrapped.opCount {
+		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable payload", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
+	}
+	if err := wrapped.appendCommandWAL(false); err != nil {
+		_ = db.Close()
+		t.Fatalf("appendCommandWAL: %v", err)
+	}
+	if inner.replayCalls != 0 {
+		_ = db.Close()
+		t.Fatalf("inner replay calls=%d, want 0 for stable payload append", inner.replayCalls)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewReader: %v", err)
+	}
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	var got []batch.Entry
+	if err := commitlog.ScanRawKVBatchPayload(env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		got = append(got, batch.Entry{Type: batch.OpPut, Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("reader Close: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if len(got) != 2 || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || string(got[1].Key) != "bravo" || string(got[1].Value) != "two" {
+		t.Fatalf("decoded payload command WAL ops=%+v", got)
+	}
+}
+
+func TestPublicCommandWALBatchOrdinarySetStablePayloadAppendsWithoutReplay(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(db, inner, 0)
+	wrapped.payloadSoftCapBytes = 64 << 10
+
+	alphaKey, alphaValue := []byte("alpha"), []byte("one")
+	bravoKey, bravoValue := []byte("bravo"), []byte("two")
+	if err := wrapped.Set(alphaKey, alphaValue); err != nil {
+		t.Fatalf("Set alpha: %v", err)
+	}
+	if err := wrapped.Set(bravoKey, bravoValue); err != nil {
+		t.Fatalf("Set bravo: %v", err)
+	}
+	alphaKey[0], alphaValue[0] = 'A', 'O'
+	bravoKey[0], bravoValue[0] = 'B', 'T'
+	if wrapped.payloadBypass || wrapped.payload.Count() != wrapped.opCount {
+		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable payload", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
+	}
+	if inner.setViewCalls != 2 || inner.setCalls != 0 {
+		t.Fatalf("inner calls: setView=%d set=%d, want 2/0", inner.setViewCalls, inner.setCalls)
+	}
+	if err := wrapped.appendCommandWAL(false); err != nil {
+		_ = db.Close()
+		t.Fatalf("appendCommandWAL: %v", err)
+	}
+	if inner.replayCalls != 0 {
+		_ = db.Close()
+		t.Fatalf("inner replay calls=%d, want 0 for ordinary stable payload append", inner.replayCalls)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewReader: %v", err)
+	}
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	var got []batch.Entry
+	if err := commitlog.ScanRawKVBatchPayload(env.Payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		got = append(got, batch.Entry{Type: batch.OpPut, Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("reader Close: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if len(got) != 2 || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || string(got[1].Key) != "bravo" || string(got[1].Value) != "two" {
+		t.Fatalf("decoded payload command WAL ops=%+v", got)
 	}
 }
 

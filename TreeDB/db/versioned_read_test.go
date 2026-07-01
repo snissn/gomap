@@ -2,9 +2,12 @@ package db
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -120,6 +123,63 @@ func TestGetVersionedAssignsDurableEntryRevision(t *testing.T) {
 	}
 	if got := reopen.State().MaxEntryRevision; got < revision {
 		t.Fatalf("reopen MaxEntryRevision=%d, want >= assigned revision %d", got, revision)
+	}
+}
+
+func TestCommitLogRecoveryPreservesRecordEntryRevisions(t *testing.T) {
+	dir := t.TempDir()
+	walDir := WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	writer, err := commitlog.NewWriter(filepath.Join(walDir, "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	records := []commitlog.Record{
+		{Op: commitlog.OpSetInline, Key: []byte("alpha"), Value: []byte("one"), Seq: 300, Revision: 201},
+		{Op: commitlog.OpSetInline, Key: []byte("bravo"), Value: []byte("two"), Seq: 300, Revision: 202},
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	if err := writer.Sync(); err != nil {
+		_ = writer.Close()
+		t.Fatalf("Sync: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	}()
+
+	for _, tc := range []struct {
+		key      string
+		value    string
+		revision page.EntryRevision
+	}{
+		{key: "alpha", value: "one", revision: 201},
+		{key: "bravo", value: "two", revision: 202},
+	} {
+		val, revision, err := db.GetVersioned([]byte(tc.key))
+		if err != nil {
+			t.Fatalf("GetVersioned %s: %v", tc.key, err)
+		}
+		if !bytes.Equal(val, []byte(tc.value)) || revision != tc.revision {
+			t.Fatalf("GetVersioned %s=(%q,%d), want (%s,%d)", tc.key, val, revision, tc.value, tc.revision)
+		}
+	}
+	if got := db.State().MaxEntryRevision; got < 202 {
+		t.Fatalf("MaxEntryRevision=%d, want >= 202", got)
 	}
 }
 

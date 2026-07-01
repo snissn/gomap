@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -222,4 +223,87 @@ func TestGetVersionedPreservesMutableMemtableDeleteRevision(t *testing.T) {
 	if !bytes.Equal(out, dst) || revision != 202 {
 		t.Fatalf("GetVersionedAppend after delete=(%q,%d), want (%q,202)", out, revision, dst)
 	}
+}
+
+func TestCachedWALBatchPersistsMixedExplicitEntryRevisions(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend Open: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "skiplist",
+		MemtableShards: 1,
+		JournalLanes:   1,
+		AllowUnsafe:    true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("Open: %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = db.Close()
+		}
+	}()
+
+	b := db.NewBatch()
+	if err := b.SetWithRevision([]byte("alpha"), []byte("one"), page.EntryRevision(201)); err != nil {
+		t.Fatalf("SetWithRevision alpha: %v", err)
+	}
+	if err := b.SetWithRevision([]byte("bravo"), []byte("two"), page.EntryRevision(202)); err != nil {
+		t.Fatalf("SetWithRevision bravo: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close batch: %v", err)
+	}
+
+	for _, tc := range []struct {
+		key      string
+		value    string
+		revision page.EntryRevision
+	}{
+		{key: "alpha", value: "one", revision: 201},
+		{key: "bravo", value: "two", revision: 202},
+	} {
+		val, revision, err := db.GetVersioned([]byte(tc.key))
+		if err != nil {
+			t.Fatalf("GetVersioned %s: %v", tc.key, err)
+		}
+		if !bytes.Equal(val, []byte(tc.value)) || revision != tc.revision {
+			t.Fatalf("GetVersioned %s=(%q,%d), want (%s,%d)", tc.key, val, revision, tc.value, tc.revision)
+		}
+	}
+
+	reader, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("commitlog.NewReader: %v", err)
+	}
+	records, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("ReadBatch: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("reader Close: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records=%+v, want 2 point records", records)
+	}
+	if records[0].Seq == 0 || records[0].Seq != records[1].Seq {
+		t.Fatalf("record seqs=%d/%d, want shared non-zero commit fence", records[0].Seq, records[1].Seq)
+	}
+	if records[0].Revision != 201 || records[1].Revision != 202 {
+		t.Fatalf("record revisions=%d/%d, want 201/202", records[0].Revision, records[1].Revision)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	closed = true
 }

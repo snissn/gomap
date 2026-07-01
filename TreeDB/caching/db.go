@@ -2676,6 +2676,19 @@ func (db *DB) shouldWriteViaValueLogForKeyValue(key, value []byte) bool {
 	return db.forceValueLogPointers || len(value) > db.valueLogThresholdForKey(key)
 }
 
+// CommandWALPayloadShouldBypassForValue reports whether the public command-WAL
+// wrapper should let cached write preflight promote this value to a value-log
+// pointer before command-frame encoding.
+func (db *DB) CommandWALPayloadShouldBypassForValue(key, value []byte) bool {
+	if db == nil || len(value) == 0 || !db.valueLogEnabled() || !db.allowValueLogPointers() {
+		return false
+	}
+	if db.disableJournal && !db.memtableValueLogPointers {
+		return false
+	}
+	return db.shouldWriteViaValueLogForKeyValue(key, value)
+}
+
 type outerLeafRecordGroup struct {
 	start int
 	end   int
@@ -10162,6 +10175,24 @@ func pointEntryRevisionStats(entries []batch.Entry) (page.EntryRevision, bool) {
 	return maxRevision, hasLegacy
 }
 
+// PointRevisionStats returns the highest point-entry revision and whether any
+// point entry is still legacy-versioned.
+func (b *Batch) PointRevisionStats() (page.EntryRevision, bool) {
+	if b == nil || len(b.entries) == 0 {
+		return page.LegacyEntryRevision, false
+	}
+	return pointEntryRevisionStats(b.entries)
+}
+
+// OrderedEntries returns the submission-order operation stream. The returned
+// slice aliases batch-owned storage and must be treated as read-only.
+func (b *Batch) OrderedEntries() []batch.Entry {
+	if b == nil || len(b.entries) == 0 {
+		return nil
+	}
+	return b.entries
+}
+
 func assignLegacyPointEntryRevisions(entries []batch.Entry, revision page.EntryRevision) page.EntryRevision {
 	maxRevision := page.LegacyEntryRevision
 	for i := range entries {
@@ -10177,6 +10208,26 @@ func assignLegacyPointEntryRevisions(entries []batch.Entry, revision page.EntryR
 		}
 	}
 	return maxRevision
+}
+
+func batchEntriesNeedWALRevisionEncoding(entries []batch.Entry, seq uint64) bool {
+	for i := range entries {
+		entry := &entries[i]
+		switch entry.Type {
+		case batch.OpDelete, batch.OpPut:
+			if batchEntryWALRevision(entry, seq) != 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func batchEntryWALRevision(entry *batch.Entry, seq uint64) uint64 {
+	if entry == nil || entry.Revision == page.LegacyEntryRevision || uint64(entry.Revision) == seq {
+		return 0
+	}
+	return uint64(entry.Revision)
 }
 
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
@@ -13287,9 +13338,10 @@ func (db *DB) minIdleCheckpointWALBytes() int64 {
 }
 
 const (
-	commitLogSegmentHeaderBytes = 8
-	commitLogBatchHeaderBytes   = 1 + 4
-	commitLogRecordHeaderBytes  = 1 + 2 + 4 + 8 + 8
+	commitLogSegmentHeaderBytes        = 8
+	commitLogBatchHeaderBytes          = 1 + 4
+	commitLogRecordHeaderBytes         = 1 + 2 + 4 + 8 + 8
+	commitLogRevisionRecordHeaderBytes = commitLogRecordHeaderBytes + 8
 )
 
 func (db *DB) logRecordSize(key, value []byte) int64 {
@@ -13302,9 +13354,16 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 	}
 	total := commitLogSegmentHeaderBytes + commitLogBatchHeaderBytes
 	for _, r := range records {
-		total += commitLogRecordHeaderBytes + len(r.Key) + len(r.Value)
+		total += commitLogRecordHeaderBytesFor(r) + len(r.Key) + len(r.Value)
 	}
 	return int64(total)
+}
+
+func commitLogRecordHeaderBytesFor(record logRecord) int {
+	if record.Revision != 0 && record.Revision != record.Seq {
+		return commitLogRevisionRecordHeaderBytes
+	}
+	return commitLogRecordHeaderBytes
 }
 
 func (db *DB) assignCommitSeq(records []logRecord) {
@@ -34314,21 +34373,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		if hasLegacyRevisions {
 			assignLegacyPointEntryRevisions(b.entries, page.EntryRevision(seq))
 		}
-		walRecordRevision := func(revision page.EntryRevision) uint64 {
-			if revision != page.LegacyEntryRevision && uint64(revision) != seq {
-				return uint64(revision)
-			}
-			return 0
-		}
-		hasWALRecordRevisions := false
-		for i := range b.entries {
-			if walRecordRevision(b.entries[i].Revision) != 0 {
-				hasWALRecordRevisions = true
-				break
-			}
-		}
 		handledZeroInline := false
-		if zeroInlineWALBatch && !hasWALRecordRevisions && rids == nil && zeroInlineValueLen > 0 {
+		needsWALRevisionEncoding := batchEntriesNeedWALRevisionEncoding(b.entries, seq)
+		if zeroInlineWALBatch && !needsWALRevisionEncoding && rids == nil && zeroInlineValueLen > 0 {
 			var err error
 			handledZeroInline, err = b.db.appendWALZeroInlineEntries(lane, b.entries, seq, zeroInlineValueLen, durability)
 			if err != nil {
@@ -34346,7 +34393,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 			for i := range b.entries {
 				op := &b.entries[i]
-				recordRevision := walRecordRevision(op.Revision)
+				recordRevision := batchEntryWALRevision(op, seq)
 				switch op.Type {
 				case batch.OpDelete:
 					records = append(records, logRecord{Op: logOpDelete, Key: op.Key, Seq: seq, Revision: recordRevision})
