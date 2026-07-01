@@ -1020,7 +1020,8 @@ func TestTypedColumnAdapterRoundTripString(t *testing.T) {
 
 func TestTypedColumnAdapterDeclaredRowsFusedStringDictionarySortedNullable(t *testing.T) {
 	kind := typedColumnAdapterField("kind", ColumnStoreValueString)
-	maybeKind := typedColumnAdapterNullableField("maybe_kind", ColumnStoreValueString)
+	stringType := kind.ValueType
+	maybeKind := typedColumnAdapterNullableField("maybe_kind", stringType)
 	fields := []TypedStorageField{kind, maybeKind}
 	allColumns := []ColumnStoreColumn{
 		{Name: kind.Name, Path: kind.Path, ValueType: kind.ValueType, Owner: kind.Owner},
@@ -1028,20 +1029,20 @@ func TestTypedColumnAdapterDeclaredRowsFusedStringDictionarySortedNullable(t *te
 	}
 	rows := []columnDeclaredRow{
 		{ID: []byte("r0"), Values: []columnDeclaredValue{
-			{Type: ColumnStoreValueString, Present: true, String: "zeta"},
-			{Type: ColumnStoreValueString, Present: true, Null: true},
+			{Type: stringType, Present: true, String: "zeta"},
+			{Type: stringType, Present: true, Null: true},
 		}},
 		{ID: []byte("r1"), Values: []columnDeclaredValue{
-			{Type: ColumnStoreValueString, Present: true, String: "alpha"},
-			{Type: ColumnStoreValueString, Present: false, Null: true},
+			{Type: stringType, Present: true, String: "alpha"},
+			{Type: stringType, Present: false, Null: true},
 		}},
 		{ID: []byte("r2"), Values: []columnDeclaredValue{
-			{Type: ColumnStoreValueString, Present: true, String: "mu"},
-			{Type: ColumnStoreValueString, Present: true, String: "beta"},
+			{Type: stringType, Present: true, String: "mu"},
+			{Type: stringType, Present: true, String: "beta"},
 		}},
 		{ID: []byte("r3"), Values: []columnDeclaredValue{
-			{Type: ColumnStoreValueString, Present: true, String: "alpha"},
-			{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+			{Type: stringType, Present: true, String: "alpha"},
+			{Type: stringType, Present: true, String: "alpha"},
 		}},
 	}
 	part, err := buildTypedColumnAdapterPartFromDeclaredRows(typedColumnAdapterOptions{PartID: 43, RowsPerGranule: 2, Fields: fields}, allColumns, rows)
@@ -1068,10 +1069,10 @@ func TestTypedColumnAdapterDeclaredRowsFusedStringDictionarySortedNullable(t *te
 	}
 	wantKind := []string{"zeta", "alpha", "mu", "alpha"}
 	wantMaybe := []columnDeclaredValue{
-		{Type: ColumnStoreValueString, Present: true, Null: true},
-		{Type: ColumnStoreValueString, Present: false, Null: true},
-		{Type: ColumnStoreValueString, Present: true, String: "beta"},
-		{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+		{Type: stringType, Present: true, Null: true},
+		{Type: stringType, Present: false, Null: true},
+		{Type: stringType, Present: true, String: "beta"},
+		{Type: stringType, Present: true, String: "alpha"},
 	}
 	for i := range gotRows {
 		if got := gotRows[i].Values["kind"].String; got != wantKind[i] {
