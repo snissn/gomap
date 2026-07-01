@@ -1568,6 +1568,59 @@ func TestCommandWALRecoveryPreservesEntryRevision(t *testing.T) {
 	if got := reopen.State().AppliedCommandLSN; got != 1 {
 		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
 	}
+	if got := reopen.State().MaxEntryRevision; got < page.EntryRevision(42) {
+		t.Fatalf("MaxEntryRevision=%d, want >= 42", got)
+	}
+}
+
+func TestCommandWALRecoveryAssignsLegacyEntryRevision(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	db.testFailFinalizeCommit.Store(true)
+	b := db.NewBatch().(*Batch)
+	if err := b.Set([]byte("legacy"), []byte("value")); err != nil {
+		t.Fatalf("Set legacy: %v", err)
+	}
+	err := b.WriteSync()
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("crash batch WriteSync error=%v, want failpoint", err)
+	}
+	_ = b.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close crashed db: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	value, revision, err := reopen.GetVersioned([]byte("legacy"))
+	if err != nil {
+		t.Fatalf("GetVersioned legacy: %v", err)
+	}
+	if !bytes.Equal(value, []byte("value")) || revision == page.LegacyEntryRevision {
+		t.Fatalf("GetVersioned legacy=(%q,%d), want (value,non-legacy)", value, revision)
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+	if got := reopen.State().MaxEntryRevision; got < revision {
+		t.Fatalf("MaxEntryRevision=%d, want >= assigned revision %d", got, revision)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("Close reopen: %v", err)
+	}
+
+	reopen = openCommandWALDB(t, dir)
+	defer reopen.Close()
+	value, reopenedRevision, err := reopen.GetVersioned([]byte("legacy"))
+	if err != nil {
+		t.Fatalf("second reopen GetVersioned legacy: %v", err)
+	}
+	if !bytes.Equal(value, []byte("value")) || reopenedRevision != revision {
+		t.Fatalf("second reopen GetVersioned legacy=(%q,%d), want (value,%d)", value, reopenedRevision, revision)
+	}
+	if got := reopen.State().MaxEntryRevision; got < revision {
+		t.Fatalf("second reopen MaxEntryRevision=%d, want >= assigned revision %d", got, revision)
+	}
 }
 
 func enableCommandWALFormat(t *testing.T, dir string) {

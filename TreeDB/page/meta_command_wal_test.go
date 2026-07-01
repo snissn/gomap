@@ -13,6 +13,7 @@ func TestMetaPageBodyAppliedCommandLSNRoundTrip(t *testing.T) {
 		ActiveSlabTail:    77,
 		LastCommitHeight:  88,
 		AppliedCommandLSN: 99,
+		MaxEntryRevision:  100,
 	}
 	buf := make([]byte, MetaPageBodySize)
 	want.Encode(buf)
@@ -24,7 +25,7 @@ func TestMetaPageBodyAppliedCommandLSNRoundTrip(t *testing.T) {
 
 func TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes(t *testing.T) {
 	full := make([]byte, MetaPageBodySize)
-	m := MetaPageBody{CommitSeq: 7, UserRootPageID: 8, SystemRootPageID: 9, AppliedCommandLSN: 12345}
+	m := MetaPageBody{CommitSeq: 7, UserRootPageID: 8, SystemRootPageID: 9, AppliedCommandLSN: 12345, MaxEntryRevision: 67890}
 	m.Encode(full)
 
 	got := DecodeMetaBody(full)
@@ -34,10 +35,13 @@ func TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes(t *te
 	if got.AppliedCommandLSN != 0 {
 		t.Fatalf("AppliedCommandLSN=%d, want 0 from legacy decoder", got.AppliedCommandLSN)
 	}
+	if got.MaxEntryRevision != 0 {
+		t.Fatalf("MaxEntryRevision=%d, want 0 from legacy decoder", got.MaxEntryRevision)
+	}
 
 	unmarked := append([]byte(nil), full...)
 	copy(unmarked[60:68], []byte("LEGACY!!"))
-	for i := 68; i < 76; i++ {
+	for i := 68; i < MetaPageBodySize; i++ {
 		unmarked[i] = 0xaa
 	}
 	got = DecodeMetaBodyCommandWALV1(unmarked)
@@ -46,6 +50,9 @@ func TestMetaPageBodyFullLegacyDecodeIgnoresReservedAppliedCommandLSNBytes(t *te
 	}
 	if got.AppliedCommandLSN != 0 {
 		t.Fatalf("AppliedCommandLSN=%d, want 0 without command WAL V1 in-page marker", got.AppliedCommandLSN)
+	}
+	if got.MaxEntryRevision != 0 {
+		t.Fatalf("MaxEntryRevision=%d, want 0 without command WAL V1 in-page marker", got.MaxEntryRevision)
 	}
 }
 
@@ -60,5 +67,23 @@ func TestMetaPageBodyLegacyDecodeDefaultsAppliedCommandLSN(t *testing.T) {
 	}
 	if got.AppliedCommandLSN != 0 {
 		t.Fatalf("AppliedCommandLSN=%d, want 0 for legacy body", got.AppliedCommandLSN)
+	}
+	if got.MaxEntryRevision != 0 {
+		t.Fatalf("MaxEntryRevision=%d, want 0 for legacy body", got.MaxEntryRevision)
+	}
+}
+
+func TestMetaPageBodyCommandWALV1DecodeDefaultsMaxEntryRevision(t *testing.T) {
+	full := make([]byte, MetaPageBodySize)
+	m := MetaPageBody{CommitSeq: 7, UserRootPageID: 8, SystemRootPageID: 9, AppliedCommandLSN: 12345, MaxEntryRevision: 67890}
+	m.Encode(full)
+
+	legacyV1 := append([]byte(nil), full[:MetaPageBodySizeCommandWALV1]...)
+	got := DecodeMetaBodyCommandWALV1(legacyV1)
+	if got.AppliedCommandLSN != 12345 {
+		t.Fatalf("AppliedCommandLSN=%d, want 12345", got.AppliedCommandLSN)
+	}
+	if got.MaxEntryRevision != 0 {
+		t.Fatalf("MaxEntryRevision=%d, want 0 for command-WAL V1 body", got.MaxEntryRevision)
 	}
 }

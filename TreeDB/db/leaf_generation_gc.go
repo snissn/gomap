@@ -524,6 +524,7 @@ func (db *DB) publishLeafGenerationState(refreshValueLogSet bool) error {
 		RootPageID:        oldState.RootPageID,
 		SystemRootPageID:  oldState.SystemRootPageID,
 		AppliedCommandLSN: oldState.AppliedCommandLSN,
+		MaxEntryRevision:  oldState.MaxEntryRevision,
 		ValueLogSet:       valueLogSet,
 		LeafGenerations:   db.currentLeafGenerationView(),
 	}

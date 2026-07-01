@@ -7787,6 +7787,22 @@ type BackendDB interface {
 	Stats() map[string]string
 }
 
+type backendStateReader interface {
+	State() *backenddb.DBState
+}
+
+func backendMaxEntryRevision(backend BackendDB) page.EntryRevision {
+	if backend == nil {
+		return page.LegacyEntryRevision
+	}
+	if reader, ok := backend.(backendStateReader); ok {
+		if state := reader.State(); state != nil {
+			return state.MaxEntryRevision
+		}
+	}
+	return page.EntryRevision(parseUintStat(backend.Stats(), "treedb.max_entry_revision"))
+}
+
 type backendCheckpointer interface {
 	Checkpoint() error
 }
@@ -9993,30 +10009,58 @@ func cachedBatchWriteUseSteal(db *DB, mt memtable.Table) (useSteal bool, suppres
 	return true, false
 }
 
-func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte, revision page.EntryRevision) {
+func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte, revision page.EntryRevision) error {
 	if revision != page.LegacyEntryRevision {
 		if useSteal {
 			if writer, ok := mt.(memtable.RevisionStealTable); ok {
 				writer.SetEntryStealWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, revision)
-				return
+				return nil
 			}
 		}
 		if writer, ok := mt.(memtable.RevisionTable); ok {
 			writer.SetEntryWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, revision)
-			return
+			return nil
 		}
 		if useSteal {
 			mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
-			return
+			return nil
 		}
-		mt.SetEntry(key, nil, page.ValuePtr{}, node.FlagTombstone)
-		return
+		return mt.DeleteWithCallback(key, nil)
 	}
 	if useSteal {
 		mt.DeleteSteal(key)
-		return
+		return nil
 	}
 	mt.Delete(key)
+	return nil
+}
+
+func memtableSetDirect(mt memtable.Table, key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	if revision != page.LegacyEntryRevision {
+		if writer, ok := mt.(memtable.RevisionTable); ok {
+			writer.SetEntryWithRevision(key, value, ptr, flags, revision)
+			return
+		}
+	}
+	mt.SetEntry(key, value, ptr, flags)
+}
+
+func memtableSetDirectBorrowValue(mt memtable.Table, key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	if revision != page.LegacyEntryRevision {
+		if borrower, ok := mt.(memtable.RevisionValueBorrower); ok && len(value) > 0 {
+			borrower.SetEntryBorrowValueWithRevision(key, value, ptr, flags, revision)
+			return
+		}
+		if writer, ok := mt.(memtable.RevisionTable); ok {
+			writer.SetEntryWithRevision(key, value, ptr, flags, revision)
+			return
+		}
+	}
+	if borrower, ok := mt.(memtable.ValueBorrower); ok && len(value) > 0 {
+		borrower.SetEntryBorrowValue(key, value, ptr, flags)
+		return
+	}
+	mt.SetEntry(key, value, ptr, flags)
 }
 
 func reserveMemtableEntries(mt memtable.Table, additional int) {
@@ -10101,6 +10145,42 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 		}
 	}
 	mt.Set(op.Key, op.Value)
+}
+
+func pointEntryRevisionStats(entries []batch.Entry) (page.EntryRevision, bool) {
+	maxRevision := page.LegacyEntryRevision
+	hasLegacy := false
+	for i := range entries {
+		entry := &entries[i]
+		if entry.Type == batch.OpDeleteRange {
+			continue
+		}
+		if entry.Revision == page.LegacyEntryRevision {
+			hasLegacy = true
+			continue
+		}
+		if entry.Revision > maxRevision {
+			maxRevision = entry.Revision
+		}
+	}
+	return maxRevision, hasLegacy
+}
+
+func assignLegacyPointEntryRevisions(entries []batch.Entry, revision page.EntryRevision) page.EntryRevision {
+	maxRevision := page.LegacyEntryRevision
+	for i := range entries {
+		entry := &entries[i]
+		if entry.Type == batch.OpDeleteRange {
+			continue
+		}
+		if entry.Revision == page.LegacyEntryRevision && revision != page.LegacyEntryRevision {
+			entry.Revision = revision
+		}
+		if entry.Revision > maxRevision {
+			maxRevision = entry.Revision
+		}
+	}
+	return maxRevision
 }
 
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
@@ -12036,6 +12116,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if maxExistingRID > 0 {
 		db.nextRID.Store(maxExistingRID)
 	}
+	db.advanceEntryRevisionFloor(backendMaxEntryRevision(backend))
 	db.rebuildGenerationLaneSets()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
@@ -13238,6 +13319,35 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	for i := range records {
 		records[i].Seq = seq
 	}
+}
+
+func (db *DB) advanceEntryRevisionFloor(revision page.EntryRevision) {
+	if db == nil || revision == page.LegacyEntryRevision {
+		return
+	}
+	target := uint64(revision)
+	for {
+		cur := db.nextCommitSeq.Load()
+		if cur >= target {
+			return
+		}
+		if db.nextCommitSeq.CompareAndSwap(cur, target) {
+			return
+		}
+	}
+}
+
+func (db *DB) nextEntryRevision() page.EntryRevision {
+	if db == nil {
+		return page.LegacyEntryRevision
+	}
+	return page.EntryRevision(db.nextCommitSeq.Add(1))
+}
+
+func (db *DB) prepareEntryRevisionAssignment(entries []batch.Entry) (page.EntryRevision, bool) {
+	maxRevision, hasLegacy := pointEntryRevisionStats(entries)
+	db.advanceEntryRevisionFloor(maxRevision)
+	return maxRevision, hasLegacy
 }
 
 func allZeroBytes(p []byte) bool {
@@ -15776,14 +15886,20 @@ func (db *DB) nextWALCoalesceSeqLocked(l *lane) uint64 {
 func (db *DB) appendWALOneChecked(l *lane, record logRecord, durability journalDurability) error {
 	switch durability {
 	case journalDurabilitySync:
-		record.Seq = db.nextCommitSeq.Add(1)
+		if record.Seq == 0 {
+			record.Seq = db.nextCommitSeq.Add(1)
+		}
 		return db.appendWALDirect(l, []logRecord{record}, true)
 	case journalDurabilityFlush:
-		record.Seq = db.nextCommitSeq.Add(1)
+		if record.Seq == 0 {
+			record.Seq = db.nextCommitSeq.Add(1)
+		}
 		return db.appendWALInlineOne(l, record, true)
 	default:
 		if !canCoalesceWALPointRecord(record) {
-			record.Seq = db.nextCommitSeq.Add(1)
+			if record.Seq == 0 {
+				record.Seq = db.nextCommitSeq.Add(1)
+			}
 		}
 		return db.appendWALInlineOne(l, record, false)
 	}
@@ -17663,7 +17779,9 @@ func (db *DB) appendWALFast(l *lane, record logRecord) error {
 		return errWALUnavailable
 	}
 
-	record.Seq = db.nextCommitSeq.Add(1)
+	if record.Seq == 0 {
+		record.Seq = db.nextCommitSeq.Add(1)
+	}
 
 	l.walFastMu.Lock()
 	for !l.walFastClosed && len(l.walFastQueue)-l.walFastHead >= walFastQueueMax {
@@ -24011,10 +24129,25 @@ func (db *DB) SetAfterCommandWALAppend(key, value []byte, appendCommand func() e
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
+	return db.SetAfterCommandWALAppendWithRevision(key, value, func(page.EntryRevision) error {
+		return appendCommand()
+	})
+}
+
+// SetAfterCommandWALAppendWithRevision applies a point Set after appendCommand
+// succeeds. The assigned revision is passed to appendCommand before the command
+// WAL frame is appended so replay can encode the same entry metadata that will
+// become visible in the mutable table.
+func (db *DB) SetAfterCommandWALAppendWithRevision(key, value []byte, appendCommand func(page.EntryRevision) error) error {
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
 	db.waitForCheckpoint()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
-	return db.setDirectAfterCommandWALAppend(key, value, appendCommand)
+	return db.setDirectAfterCommandWALAppendWithRevision(key, value, appendCommand)
 }
 
 // Update applies fn to the current value for key and writes the returned
@@ -24232,6 +24365,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		}
 	}
 
+	revision := db.nextEntryRevision()
 	if allowPointers {
 		dictID := uint64(0)
 		class := db.valueLogDictClassForValue(value)
@@ -24261,7 +24395,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		}
 
 		if !db.disableJournal {
-			rec := logRecord{Op: logOpSetRID, Key: key, RID: walRID}
+			rec := logRecord{Op: logOpSetRID, Key: key, RID: walRID, Seq: uint64(revision)}
 			if err := db.appendWALOne(lane, rec, durability); err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -24275,7 +24409,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 				db.debugPtrDenied.Add(1)
 			}
 		}
-		rec := logRecord{Op: logOpSetInline, Key: key, Value: value}
+		rec := logRecord{Op: logOpSetInline, Key: key, Value: value, Seq: uint64(revision)}
 		if err := db.appendWALOne(lane, rec, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -24294,20 +24428,20 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if !db.memtableValueLogPointers {
 			memVal = value
 		}
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+		if _, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
 			copy(owned, memVal)
-			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+			memtableSetDirectBorrowValue(shard.mem, key, owned, ptr, node.FlagPointer, revision)
 		} else {
-			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+			memtableSetDirect(shard.mem, key, memVal, ptr, node.FlagPointer, revision)
 		}
 	} else {
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
+		if _, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
 			copy(owned, value)
-			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+			memtableSetDirectBorrowValue(shard.mem, key, owned, page.ValuePtr{}, node.FlagInline, revision)
 		} else {
-			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+			memtableSetDirect(shard.mem, key, value, page.ValuePtr{}, node.FlagInline, revision)
 		}
 	}
 	shard.rng.add(key)
@@ -24347,7 +24481,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	return nil
 }
 
-func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand func() error) error {
+func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appendCommand func(page.EntryRevision) error) error {
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
@@ -24431,7 +24565,8 @@ func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand fu
 		}
 	}
 
-	if err := appendCommand(); err != nil {
+	revision := db.nextEntryRevision()
+	if err := appendCommand(revision); err != nil {
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
 		}
@@ -24445,20 +24580,20 @@ func (db *DB) setDirectAfterCommandWALAppend(key, value []byte, appendCommand fu
 		if !db.memtableValueLogPointers {
 			memVal = value
 		}
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+		if _, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
 			copy(owned, memVal)
-			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+			memtableSetDirectBorrowValue(shard.mem, key, owned, ptr, node.FlagPointer, revision)
 		} else {
-			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+			memtableSetDirect(shard.mem, key, memVal, ptr, node.FlagPointer, revision)
 		}
 	} else {
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
+		if _, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
 			copy(owned, value)
-			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+			memtableSetDirectBorrowValue(shard.mem, key, owned, page.ValuePtr{}, node.FlagInline, revision)
 		} else {
-			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+			memtableSetDirect(shard.mem, key, value, page.ValuePtr{}, node.FlagInline, revision)
 		}
 	}
 	shard.rng.add(key)
@@ -24680,6 +24815,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		defer func() { _ = it.Close() }()
 		db.deleteRangeIterators.Add(1)
 		var visitedKeys, tombstoneKeys uint64
+		rangeRevision := db.nextEntryRevision()
 
 		applyDelete := func(key []byte) error {
 			if maxMemtableBytesPerShard > 0 && int64(len(key)) > maxMemtableBytesPerShard {
@@ -24698,7 +24834,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 					}
 					continue
 				}
-				if err := shard.mem.DeleteWithCallback(key, nil); err != nil {
+				if err := memtableBatchDelete(shard.mem, false, key, rangeRevision); err != nil {
 					shard.mu.Unlock()
 					return err
 				}
@@ -24777,7 +24913,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 			if err := preRotate(key); err != nil {
 				return err
 			}
-			if err := db.appendWALOne(lane, logRecord{Op: logOpDelete, Key: key}, journalDurabilityNone); err != nil {
+			if err := db.appendWALOne(lane, logRecord{Op: logOpDelete, Key: key, Seq: uint64(rangeRevision)}, journalDurabilityNone); err != nil {
 				return err
 			}
 			if err := applyDelete(key); err != nil {
@@ -25219,6 +25355,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		}
 
 		db.mu.Lock()
+		rangeRevision := db.nextEntryRevision()
 		applyDelete := func(key []byte) error {
 			shard := db.shardForKey(key)
 			shard.mu.Lock()
@@ -25226,7 +25363,10 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 				shard.mu.Unlock()
 				return ErrMemtableFull
 			}
-			shard.mem.Delete(key)
+			if err := memtableBatchDelete(shard.mem, false, key, rangeRevision); err != nil {
+				shard.mu.Unlock()
+				return err
+			}
 			shard.rng.add(key)
 			newBytes := shard.mem.Size()
 			delta := newBytes - shard.bytes
@@ -25341,10 +25481,23 @@ func (db *DB) DeleteAfterCommandWALAppend(key []byte, appendCommand func() error
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
+	return db.DeleteAfterCommandWALAppendWithRevision(key, func(page.EntryRevision) error {
+		return appendCommand()
+	})
+}
+
+// DeleteAfterCommandWALAppendWithRevision applies a point Delete after
+// appendCommand succeeds and passes the assigned tombstone revision to the
+// command-WAL callback before the mutation becomes visible.
+func (db *DB) DeleteAfterCommandWALAppendWithRevision(key []byte, appendCommand func(page.EntryRevision) error) error {
+	key = normalizeRawKVPointKey(key)
+	if appendCommand == nil {
+		return fmt.Errorf("cachingdb: missing command wal append callback")
+	}
 	db.waitForCheckpoint()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
-	return db.deleteDirectAfterCommandWALAppend(key, appendCommand)
+	return db.deleteDirectAfterCommandWALAppendWithRevision(key, appendCommand)
 }
 
 func (db *DB) lockUpdateKey(key []byte) keyupdate.Guard {
@@ -25377,6 +25530,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	}
 	shard.mu.Unlock()
 
+	revision := db.nextEntryRevision()
 	if !db.disableJournal {
 		durability := journalDurabilityNone
 		if sync {
@@ -25394,7 +25548,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 		if durability == journalDurabilitySync {
 			defer db.releaseLaneSync(lane)
 		}
-		rec := logRecord{Op: logOpDelete, Key: key}
+		rec := logRecord{Op: logOpDelete, Key: key, Seq: uint64(revision)}
 		if err := db.appendWALOne(lane, rec, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
@@ -25402,7 +25556,17 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	}
 
 	shard.mu.Lock()
-	shard.mem.Delete(key)
+	if err := memtableBatchDelete(shard.mem, false, key, revision); err != nil {
+		shard.mu.Unlock()
+		db.writeMu.RUnlock()
+		db.reportError(fmt.Errorf("cachingdb: WAL apply failed: %w", err))
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return err
+	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
 	delta := newBytes - shard.bytes
@@ -25436,7 +25600,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	return nil
 }
 
-func (db *DB) deleteDirectAfterCommandWALAppend(key []byte, appendCommand func() error) error {
+func (db *DB) deleteDirectAfterCommandWALAppendWithRevision(key []byte, appendCommand func(page.EntryRevision) error) error {
 	if !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
 	}
@@ -25454,13 +25618,19 @@ func (db *DB) deleteDirectAfterCommandWALAppend(key []byte, appendCommand func()
 	}
 	shard.mu.Unlock()
 
-	if err := appendCommand(); err != nil {
+	revision := db.nextEntryRevision()
+	if err := appendCommand(revision); err != nil {
 		db.writeMu.RUnlock()
 		return err
 	}
 
 	shard.mu.Lock()
-	shard.mem.Delete(key)
+	if err := memtableBatchDelete(shard.mem, false, key, revision); err != nil {
+		shard.mu.Unlock()
+		db.writeMu.RUnlock()
+		db.reportError(fmt.Errorf("cachingdb: post-command-wal delete failed: %w", err))
+		return err
+	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
 	delta := newBytes - shard.bytes
@@ -31841,6 +32011,7 @@ type Batch struct {
 	lastKey          []byte
 	batchRange       keyRange
 	hasDeleteRanges  bool
+	entryRevision    page.EntryRevision
 	commandWALAppend func() error
 
 	commandWALCompactReplay     bool
@@ -32374,6 +32545,7 @@ func (b *Batch) Reset() {
 	b.lastKey = nil
 	b.batchRange = keyRange{}
 	b.hasDeleteRanges = false
+	b.entryRevision = page.LegacyEntryRevision
 	b.maxEntries = 0
 	b.commandWALAppend = nil
 	b.commandWALCompactReplay = false
@@ -32739,6 +32911,36 @@ func (b *Batch) shouldCopyValueToPtrArena(key, value []byte) bool {
 	return b.db.shouldWriteViaValueLogForKeyValue(key, value)
 }
 
+func (b *Batch) assignLegacyPointRevisions(entries []batch.Entry) {
+	if b == nil || b.db == nil || len(entries) == 0 {
+		return
+	}
+	_, hasLegacy := b.db.prepareEntryRevisionAssignment(entries)
+	if !hasLegacy {
+		return
+	}
+	if b.entryRevision == page.LegacyEntryRevision {
+		b.entryRevision = b.db.nextEntryRevision()
+	}
+	assignLegacyPointEntryRevisions(entries, b.entryRevision)
+}
+
+func (b *Batch) revisionForBackendPoint(revision page.EntryRevision) page.EntryRevision {
+	if revision != page.LegacyEntryRevision {
+		if b != nil && b.db != nil {
+			b.db.advanceEntryRevisionFloor(revision)
+		}
+		return revision
+	}
+	if b == nil || b.db == nil {
+		return page.LegacyEntryRevision
+	}
+	if b.entryRevision == page.LegacyEntryRevision {
+		b.entryRevision = b.db.nextEntryRevision()
+	}
+	return b.entryRevision
+}
+
 func (b *Batch) Set(key, value []byte) error {
 	return b.SetWithRevision(key, value, page.LegacyEntryRevision)
 }
@@ -32767,6 +32969,7 @@ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) 
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
+		revision = b.revisionForBackendPoint(revision)
 		// Use the backend's view method with owned copies to avoid aliasing.
 		if revision != page.LegacyEntryRevision {
 			if sv, ok := b.backend.(interface {
@@ -32845,6 +33048,7 @@ func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.En
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key) + len(value)
+		revision = b.revisionForBackendPoint(revision)
 		if revision != page.LegacyEntryRevision {
 			if sv, ok := b.backend.(interface {
 				SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
@@ -32904,6 +33108,7 @@ func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) erro
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
+		revision = b.revisionForBackendPoint(revision)
 		if revision != page.LegacyEntryRevision {
 			if dv, ok := b.backend.(interface {
 				DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
@@ -33012,6 +33217,7 @@ func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryR
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key)
+		revision = b.revisionForBackendPoint(revision)
 		if revision != page.LegacyEntryRevision {
 			if dv, ok := b.backend.(interface {
 				DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
@@ -33088,6 +33294,7 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 			b.size += len(copiedOp.Key) + len(copiedOp.Value)
 			b.batchRange.add(copiedOp.Key)
 		}
+		b.assignLegacyPointRevisions(copied)
 		return b.backend.SetOps(copied)
 	}
 	for _, op := range ops {
@@ -33270,6 +33477,7 @@ func (b *Batch) maybeSwitchToStreaming() {
 		b.batchRange.min = cloneKeyRangePointKey(b.firstKey)
 		b.batchRange.max = cloneKeyRangePointKey(b.lastKey)
 	}
+	b.assignLegacyPointRevisions(b.entries)
 	if err := backendBatch.SetOps(b.entries); err != nil {
 		_ = backendBatch.Close()
 		return
@@ -33612,6 +33820,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	ops = append(ops, b.entries...)
 	defer putEntrySlice(ops)
 
+	b.assignLegacyPointRevisions(ops)
 	ops, err := b.db.deferValueLogOps(ops, sync)
 	if err != nil {
 		return false, err
@@ -33664,6 +33873,24 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	needRotate := false
 	needSyncBarrier := false
 	commandWALAppended := false
+	failMemtableApply := func(shard *memShard, err error) error {
+		shard.mu.Unlock()
+		unlockWriteMu()
+		if err == nil {
+			return nil
+		}
+		if !b.db.disableJournal {
+			b.db.reportError(fmt.Errorf("cachingdb: WAL apply failed: %w", err))
+			b.db.walAckMu.Lock()
+			if b.db.walErr == nil {
+				b.db.walErr = err
+			}
+			b.db.walAckMu.Unlock()
+		} else if commandWALAppended {
+			b.db.reportError(fmt.Errorf("cachingdb: post-command-wal batch apply failed: %w", err))
+		}
+		return err
+	}
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
@@ -34081,8 +34308,16 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}
 	}
 
+	_, hasLegacyRevisions := b.db.prepareEntryRevisionAssignment(b.entries)
+	if b.db.disableJournal && hasLegacyRevisions {
+		assignLegacyPointEntryRevisions(b.entries, b.db.nextEntryRevision())
+	}
+
 	if !b.db.disableJournal {
 		seq := b.db.nextCommitSeq.Add(1)
+		if hasLegacyRevisions {
+			assignLegacyPointEntryRevisions(b.entries, page.EntryRevision(seq))
+		}
 		handledZeroInline := false
 		if zeroInlineWALBatch && rids == nil && zeroInlineValueLen > 0 {
 			var err error
@@ -34191,7 +34426,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
 					last = key
-					memtableBatchDelete(shard.mem, useSteal, key, b.entries[entryIdx].Revision)
+					if err := memtableBatchDelete(shard.mem, useSteal, key, b.entries[entryIdx].Revision); err != nil {
+						return failMemtableApply(shard, err)
+					}
 				}
 				shard.rng.add(first)
 				if len(idxs) > 1 {
@@ -34201,7 +34438,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			} else {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
-					memtableBatchDelete(shard.mem, useSteal, key, b.entries[entryIdx].Revision)
+					if err := memtableBatchDelete(shard.mem, useSteal, key, b.entries[entryIdx].Revision); err != nil {
+						return failMemtableApply(shard, err)
+					}
 					shard.rng.add(key)
 					b.db.noteWriteKey(key)
 				}
@@ -34272,7 +34511,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					} else {
 						for _, op := range entries {
 							if op.Type == batch.OpDelete {
-								memtableBatchDelete(shard.mem, true, op.Key, op.Revision)
+								if err := memtableBatchDelete(shard.mem, true, op.Key, op.Revision); err != nil {
+									return failMemtableApply(shard, err)
+								}
 							} else {
 								memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
 							}
@@ -34306,7 +34547,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			if !appliedSortedRun {
 				for _, op := range entries {
 					if op.Type == batch.OpDelete {
-						memtableBatchDelete(shard.mem, useSteal, op.Key, op.Revision)
+						if err := memtableBatchDelete(shard.mem, useSteal, op.Key, op.Revision); err != nil {
+							return failMemtableApply(shard, err)
+						}
 					} else {
 						borrowed := false
 						if allowBatchArenaBorrow && !useSteal {
@@ -34827,6 +35070,11 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 		}
 	}()
 
+	_, hasLegacyRevisions := b.db.prepareEntryRevisionAssignment(ops)
+	if hasLegacyRevisions {
+		assignLegacyPointEntryRevisions(ops, b.db.nextEntryRevision())
+	}
+
 	if rewritten, err := b.db.prepareBypassValueLogOps(ops, sync); err != nil {
 		return err
 	} else {
@@ -34938,6 +35186,7 @@ func (b *Batch) Close() error {
 	b.shardIdxSets = nil
 	b.firstKey = nil
 	b.lastKey = nil
+	b.entryRevision = page.LegacyEntryRevision
 	b.ptrValueIdxs = nil
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil

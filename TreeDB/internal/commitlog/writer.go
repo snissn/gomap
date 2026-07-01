@@ -795,12 +795,7 @@ func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64
 	if err := w.commandBufferError(); err != nil {
 		return err
 	}
-	valueLen := len(value)
-	if op == RawKVOpDelete {
-		valueLen = 0
-	}
-	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(key) + valueLen
-	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	valueLen, payloadLen, size, err := trustedRawKVPointCommandFrameLens(op, key, value, 0)
 	if err != nil {
 		return err
 	}
@@ -814,6 +809,10 @@ func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64
 }
 
 func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, size int) error {
+	return w.appendRawKVPointCommandDirectTrustedSizedWithRevision(lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, size)
+}
+
+func (w *Writer) appendRawKVPointCommandDirectTrustedSizedWithRevision(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, size int) error {
 	if w.pendingBatchRecs != 0 {
 		if err := w.flushPendingBatch(); err != nil {
 			return err
@@ -825,7 +824,7 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN u
 			w.scratch = make([]byte, total)
 		}
 		buf := w.scratch[:total]
-		frame, err := encodeTrustedRawKVPointCommandFrameSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
+		frame, err := encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
 		if err != nil {
 			return err
 		}
@@ -843,7 +842,7 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN u
 	}
 	newLen := off + total
 	buf := w.commandBuf[off:newLen]
-	encodeTrustedRawKVPointCommandFramePayloadSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
+	encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
 	return nil
 }

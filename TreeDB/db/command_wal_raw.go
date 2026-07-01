@@ -29,6 +29,7 @@ type commandWALBatchIntent struct {
 	externalRefFileIDs []uint32
 	fromReplay         bool
 	lsn                uint64
+	maxEntryRevision   page.EntryRevision
 	replayToken        uint64
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
@@ -488,7 +489,18 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchp
 	externalRefs := false
 	var ridCache map[page.ValuePtr]uint64
 	var externalRefFileIDs []uint32
-	planScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, &externalRefs, &externalRefFileIDs)
+	maxEntryRevision := page.LegacyEntryRevision
+	planScan := db.rawKVCommandWALOperationScannerFromEntryScan(func(emit func(batchpkg.Entry) error) error {
+		if scanEntries == nil {
+			return nil
+		}
+		return scanEntries(func(entry batchpkg.Entry) error {
+			if entry.Type != batchpkg.OpDeleteRange && entry.Revision > maxEntryRevision {
+				maxEntryRevision = entry.Revision
+			}
+			return emit(entry)
+		})
+	}, &ridCache, &externalRefs, &externalRefFileIDs)
 	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
 	if err != nil {
 		return nil, err
@@ -507,6 +519,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchp
 		rawKVDirect:        true,
 		externalRefs:       externalRefs,
 		externalRefFileIDs: externalRefFileIDs,
+		maxEntryRevision:   maxEntryRevision,
 	}, nil
 }
 
@@ -541,7 +554,22 @@ func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entr
 		payload:            payload,
 		externalRefs:       externalRefs,
 		externalRefFileIDs: externalRefFileIDs,
+		maxEntryRevision:   maxEntryRevisionFromEntries(entries),
 	}, nil
+}
+
+func maxEntryRevisionFromEntries(entries []batchpkg.Entry) page.EntryRevision {
+	maxRevision := page.LegacyEntryRevision
+	for i := range entries {
+		entry := &entries[i]
+		if entry.Type == batchpkg.OpDeleteRange {
+			continue
+		}
+		if entry.Revision > maxRevision {
+			maxRevision = entry.Revision
+		}
+	}
+	return maxRevision
 }
 
 func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool) commitlog.RawKVBatchOperationScanner {
@@ -880,6 +908,16 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 // the command as pending and treat subsequent command-WAL appends as
 // recovery-required until the DB is reopened.
 func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value []byte, sync bool) (uint64, error) {
+	return db.appendRawKVPointCommandWALTrustedWithRevision(op, key, value, 0, sync)
+}
+
+// AppendRawKVPointCommandWALTrustedWithRevision appends a caller-validated
+// public raw-KV point command with native entry revision metadata.
+func (db *DB) AppendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp, key, value []byte, revision page.EntryRevision, sync bool) (uint64, error) {
+	return db.appendRawKVPointCommandWALTrustedWithRevision(op, key, value, uint64(revision), sync)
+}
+
+func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp, key, value []byte, revision uint64, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
 	}
@@ -905,7 +943,13 @@ func (db *DB) AppendRawKVPointCommandWALTrusted(op commitlog.RawKVOp, key, value
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
 	flushSync := sync && db.durability != DurabilityWALOnRelaxed
-	lsn, err := db.commandJournal.AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN, op, key, value, flushSync)
+	var lsn uint64
+	var err error
+	if revision == 0 {
+		lsn, err = db.commandJournal.AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN, op, key, value, flushSync)
+	} else {
+		lsn, err = db.commandJournal.AppendRawKVPointCommandTrustedWithRevisionAndFlush(baseAppliedLSN, op, key, value, revision, flushSync)
+	}
 	if err == nil && db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint
 	}
@@ -1153,6 +1197,7 @@ func commandWALFinalizeOptions(intent *commandWALBatchIntent) finalizeCommitOpti
 		commandWALPublish: true,
 		appliedCommandLSN: intent.lsn,
 		appliedRanges:     []CommandWALLSNRange{appliedRange},
+		maxEntryRevision:  intent.maxEntryRevision,
 	}
 }
 
@@ -1305,8 +1350,9 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			return err
 		}
 	}
+	maxEntryRevision := db.assignBatchEntryRevisions(b.batch)
 	return b.writeWithCommandWALIntent(true, &commandWALBatchIntent{
 		lsn:          env.LSN,
 		coveredRange: [1]CommandWALLSNRange{{First: env.LSN, Last: env.LSN}},
-	})
+	}, maxEntryRevision)
 }

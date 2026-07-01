@@ -562,6 +562,110 @@ func TestPublicCommandWALPointWritesSerializeLSNWithCachedMutation(t *testing.T)
 	assertPublicCommandWALFrames(t, db, 2)
 }
 
+func TestPublicCommandWALPointWritesUseVisibleRevision(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var pointOps []commitlog.RawKVOperation
+	prevHook := testAfterPublicCommandWALPointAppend
+	testAfterPublicCommandWALPointAppend = func(op commitlog.RawKVOperation) {
+		pointOps = append(pointOps, op)
+	}
+	defer func() { testAfterPublicCommandWALPointAppend = prevHook }()
+
+	if err := db.Set([]byte("k"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	val, revision, err := db.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetVersioned: %v", err)
+	}
+	if len(pointOps) != 1 || pointOps[0].Revision == 0 {
+		t.Fatalf("point ops after Set=%+v, want one revision-bearing op", pointOps)
+	}
+	if !bytes.Equal(val, []byte("value")) || revision != EntryRevision(pointOps[0].Revision) {
+		t.Fatalf("GetVersioned after Set=(%q,%d), command revision=%d", val, revision, pointOps[0].Revision)
+	}
+
+	if err := db.Delete([]byte("k")); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	val, revision, err = db.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetVersioned after Delete: %v", err)
+	}
+	if len(pointOps) != 2 || pointOps[1].Revision == 0 {
+		t.Fatalf("point ops after Delete=%+v, want second revision-bearing op", pointOps)
+	}
+	if val != nil || revision != EntryRevision(pointOps[1].Revision) || revision <= EntryRevision(pointOps[0].Revision) {
+		t.Fatalf("GetVersioned after Delete=(%q,%d), command revisions=(%d,%d)", val, revision, pointOps[0].Revision, pointOps[1].Revision)
+	}
+}
+
+func TestPublicCommandWALBatchWritesPreserveVisibleRevisionOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("value")); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+	val, revision, err := db.GetVersioned([]byte("k"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("GetVersioned: %v", err)
+	}
+	if !bytes.Equal(val, []byte("value")) || revision == LegacyEntryRevision {
+		_ = db.Close()
+		t.Fatalf("GetVersioned=(%q,%d), want (value,non-legacy)", val, revision)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true})
+	if err != nil {
+		t.Fatalf("Reopen command WAL: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	val, reopenedRevision, err := reopen.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("reopen GetVersioned: %v", err)
+	}
+	if !bytes.Equal(val, []byte("value")) || reopenedRevision != revision {
+		t.Fatalf("reopen GetVersioned=(%q,%d), want (value,%d)", val, reopenedRevision, revision)
+	}
+}
+
 func TestPublicCommandWALBatchCloseDiscardsDirtyPayload(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),

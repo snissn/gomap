@@ -474,19 +474,27 @@ func (n *Node) liveByteBounds() (dirEnd, heapStart int, ok bool) {
 	}
 	if n.Type() == page.PageTypeLeaf && n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
 		// Combined columnar+prefix leaves use top-level metadata columns:
-		// KeyOff[u16], ValOff[u16], Flags[u8], PrefixLen[u16].
+		// KeyOff[u16], ValOff[u16], Flags[u8], PrefixLen[u16], and
+		// optionally Revision[u64].
 		dirEnd += int(count) * DirectoryEntrySize
 		dirEnd += int(count)
 		dirEnd += int(count) * DirectoryEntrySize
+		if n.leafEntryRevisions() {
+			dirEnd += int(count) * page.EntryRevisionSize
+		}
 		if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
 			return 0, 0, false
 		}
 	}
 	if n.Type() == page.PageTypeLeaf && n.leafColumnarV2() && !n.leafPrefixCompressed() {
 		// Columnar v2 leaves store additional per-entry metadata immediately after
-		// the key directory: ValOff (u16) + Flags (u8).
+		// the key directory: ValOff (u16) + Flags (u8), and optionally
+		// Revision[u64].
 		dirEnd += int(count) * DirectoryEntrySize
 		dirEnd += int(count)
+		if n.leafEntryRevisions() {
+			dirEnd += int(count) * page.EntryRevisionSize
+		}
 		if dirEnd < NodeHeaderSize || dirEnd > len(n.data) {
 			return 0, 0, false
 		}

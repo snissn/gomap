@@ -8,21 +8,22 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []byte, sync bool) error {
+func (tdb *DB) appendPublicRawKVPointCommand(op commitlog.RawKVOp, key, value []byte, revision EntryRevision, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached {
 		return nil
 	}
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	lsn, err := tdb.backend.AppendRawKVPointCommandWALTrusted(op, key, value, sync)
+	lsn, err := tdb.backend.AppendRawKVPointCommandWALTrustedWithRevision(op, key, value, page.EntryRevision(revision), sync)
 	if lsn != 0 {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
 	if err == nil && testAfterPublicCommandWALPointAppend != nil {
-		testAfterPublicCommandWALPointAppend(commitlog.RawKVOperation{Op: op, Key: key, Value: value})
+		testAfterPublicCommandWALPointAppend(commitlog.RawKVOperation{Op: op, Key: key, Value: value, Revision: uint64(revision)})
 	}
 	return err
 }
@@ -803,13 +804,6 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
-	}
-	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
-		payload, err := b.commandWALPayload()
-		if err != nil {
-			return err
-		}
-		return b.db.appendPublicRawKVCommandPayload(payload, sync)
 	}
 	return b.db.appendPublicRawKVCommandEntryScan(b.inner.Replay, sync)
 }

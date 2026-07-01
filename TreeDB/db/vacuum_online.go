@@ -607,6 +607,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			RootPageID:                 nextMeta.UserRootPageID,
 			SystemRootPageID:           nextMeta.SystemRootPageID,
 			AppliedCommandLSN:          nextMeta.AppliedCommandLSN,
+			MaxEntryRevision:           page.EntryRevision(nextMeta.MaxEntryRevision),
 			ValueLogSet:                valueLogSet,
 			LeafGenerations:            leafGenerationView,
 			LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,

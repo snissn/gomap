@@ -1484,7 +1484,13 @@ func validateLoadedLeafLogNode(data []byte) (node.Node, error) {
 	}
 	n := node.NewNodeView(data)
 	if n.Type() != page.PageTypeLeaf {
-		return node.Node{}, errors.New("zipper: leafref resolved to non-leaf page")
+		flags := uint16(0)
+		count := uint16(0)
+		if len(data) >= node.NodeHeaderSize {
+			flags = binary.LittleEndian.Uint16(data[12:14])
+			count = binary.LittleEndian.Uint16(data[14:16])
+		}
+		return node.Node{}, fmt.Errorf("zipper: leafref resolved to non-leaf page type=%d flags=0x%04x count=%d", n.Type(), flags, count)
 	}
 	return n, nil
 }
@@ -1736,7 +1742,7 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 				if scratch != nil {
 					releaseLeafPageScratch(scratchCtx, scratch)
 				}
-				return node.Node{}, false, nil, false, source, err
+				return node.Node{}, false, nil, false, source, fmt.Errorf("%w ptr=(file=%d off=%d len=0x%08x sub=%d)", err, ptr.FileID, ptr.Offset, ptr.RecordLengthHint, ptr.SubIndex)
 			}
 			if scratch != nil {
 				return n, false, scratch, true, source, nil
