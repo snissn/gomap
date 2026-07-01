@@ -281,7 +281,7 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
 
 
 def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[str, Any]:
-    def _flat_treedb_stats(payload: dict[str, Any]) -> dict[str, Any]:
+    def _extract_flat_treedb_stats(payload: dict[str, Any]) -> dict[str, Any]:
         if any(str(key).startswith("treedb.") for key in payload.keys()):
             return payload
         return {}
@@ -292,7 +292,7 @@ def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[st
             continue
         stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
         if not stats:
-            stats = _flat_treedb_stats(payload)
+            stats = _extract_flat_treedb_stats(payload)
         if stats:
             return {
                 "available": True,
@@ -318,7 +318,7 @@ def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[st
 
     stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
     if not stats:
-        stats = _flat_treedb_stats(payload)
+        stats = _extract_flat_treedb_stats(payload)
     if not stats:
         return {
             "available": False,
