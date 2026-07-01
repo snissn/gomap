@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -169,6 +170,34 @@ func TestConditionalTxnAllowsDisjointConcurrentWrite(t *testing.T) {
 	assertDBValue(t, d, "target", "value")
 }
 
+func TestConditionalTxnReserveReadSetDeduplicatesEarlyReads(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("guard"), []byte("value")); err != nil {
+		t.Fatalf("seed guard: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+
+	tx.ReserveReadSet(conditionalTxnReadMapThreshold)
+	if _, _, err := tx.GetVersioned([]byte("guard")); err != nil {
+		t.Fatalf("first GetVersioned: %v", err)
+	}
+	if _, _, err := tx.GetVersioned([]byte("guard")); err != nil {
+		t.Fatalf("second GetVersioned: %v", err)
+	}
+	if got := len(tx.reads); got != 1 {
+		t.Fatalf("read set size=%d, want 1", got)
+	}
+}
+
 func TestConditionalTxnConflictDoesNotReserveCommandWALLSN(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
@@ -252,7 +281,7 @@ func TestConditionalTxnCommandWALReplayMatchesLiveRevisionContract(t *testing.T)
 	if err := commitlog.ScanRawKVBatchPayloadWithRevision(env.Payload, func(op commitlog.RawKVOp, key, value []byte, gotRevision uint64) error {
 		visits++
 		if op != commitlog.RawKVOpSet || !bytes.Equal(key, []byte("k")) || !bytes.Equal(value, []byte("value")) {
-			t.Fatalf("command op=%v key=%q value=%q, want set k/value", op, key, value)
+			return fmt.Errorf("command op=%v key=%q value=%q, want set k/value", op, key, value)
 		}
 		commandRevision = gotRevision
 		return nil

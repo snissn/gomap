@@ -22,10 +22,7 @@ func BenchmarkGetVersioned(b *testing.B) {
 
 	const count = 10000
 	val := make([]byte, 100)
-	keys := make([][]byte, count)
-	for i := 0; i < count; i++ {
-		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
-	}
+	keys := benchmarkConditionalTxnKeys(count)
 	seedConditionalTxnBenchmarkData(b, d, keys, val)
 
 	b.ReportAllocs()
@@ -74,10 +71,7 @@ func BenchmarkConditionalTxnBaselineBatchWrite(b *testing.B) {
 
 	const count = 10000
 	seedVal := make([]byte, 100)
-	keys := make([][]byte, count)
-	for i := 0; i < count; i++ {
-		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
-	}
+	keys := benchmarkConditionalTxnKeys(count)
 	seedConditionalTxnBenchmarkData(b, d, keys, seedVal)
 
 	key := []byte("conditional-baseline-write")
@@ -116,10 +110,7 @@ func benchmarkConditionalTxnReadSet(b *testing.B, readSet int) {
 		count = readSet * 2
 	}
 	val := make([]byte, 100)
-	keys := make([][]byte, count)
-	for i := 0; i < count; i++ {
-		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
-	}
+	keys := benchmarkConditionalTxnKeys(count)
 	seedConditionalTxnBenchmarkData(b, d, keys, val)
 
 	writeKey := []byte("conditional-txn-write")
@@ -150,6 +141,14 @@ func benchmarkConditionalTxnReadSet(b *testing.B, readSet int) {
 			b.Fatalf("Commit: %v", err)
 		}
 	}
+}
+
+func benchmarkConditionalTxnKeys(count int) [][]byte {
+	keys := make([][]byte, count)
+	for i := 0; i < count; i++ {
+		keys[i] = []byte(fmt.Sprintf("key-%09d", i))
+	}
+	return keys
 }
 
 func seedConditionalTxnBenchmarkData(b *testing.B, d *DB, keys [][]byte, val []byte) {

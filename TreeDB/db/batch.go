@@ -559,6 +559,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	defer idx.registry.Unregister(regID)
 	if conditional != nil {
 		if err := conditional.validateReadSetAtPublish(); err != nil {
+			b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 			return err
 		}
 	}

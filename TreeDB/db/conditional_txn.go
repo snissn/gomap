@@ -366,7 +366,9 @@ func (tx *ConditionalTxn) recordRead(key []byte, revision page.EntryRevision, fo
 		revision: revision,
 		found:    found,
 	})
-	if len(tx.reads) >= conditionalTxnReadMapThreshold {
+	if tx.readIndex != nil {
+		tx.readIndex[conditionalBytesString(owned)] = idx
+	} else if len(tx.reads) >= conditionalTxnReadMapThreshold {
 		tx.ensureReadIndex(len(tx.reads) * 2)
 		tx.readIndex[conditionalBytesString(owned)] = idx
 	}
