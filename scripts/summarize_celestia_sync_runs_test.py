@@ -519,6 +519,79 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertIn("101/202/0/0", markdown)
             self.assertIn("303/303/303/0", markdown)
 
+    def test_treedb_maintenance_prefers_diagnostics_debug_vars_over_app_vars_and_quiesce(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000)
+            diagnostics = run / "sync" / "diagnostics"
+            diagnostics.mkdir(parents=True, exist_ok=True)
+            maintenance_quiesce = run / "sync" / "maintenance-quiesce"
+            maintenance_quiesce.mkdir(parents=True, exist_ok=True)
+            (diagnostics / "final.max-memory-final.treedb_application_vars.json").write_text(
+                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "11"}) + "\n",
+                encoding="utf-8",
+            )
+            (diagnostics / "final.max-memory-final.debug_vars.json").write_text(
+                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "22"}) + "\n",
+                encoding="utf-8",
+            )
+            (maintenance_quiesce / "debug_vars_9.json").write_text(
+                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "33"}) + "\n",
+                encoding="utf-8",
+            )
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(run)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            maintenance = payload["runs"][0]["treedb_maintenance"]
+            self.assertTrue(maintenance["source_file"].endswith("final.max-memory-final.debug_vars.json"))
+            self.assertEqual(maintenance["counters"]["maintenance_attempts"], 22)
+
+    def test_treedb_decision_tree_accepts_flat_non_cache_treedb_stats(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000)
+            write_treedb_debug_vars(run)
+            dwell = run / "sync" / "dwell-stats"
+            (dwell / "treedb_app_0.json").write_text(
+                json.dumps(
+                    {
+                        "treedb.command_wal.public_batch.set.calls_total": "77",
+                        "treedb.command_wal.public_batch.set_view.calls_total": "88",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(run)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            maintenance = payload["runs"][0]["treedb_maintenance"]
+            decision = payload["runs"][0]["treedb_decision_tree"]
+            self.assertTrue(maintenance["source_file"].endswith("final.debug_vars.json"))
+            self.assertTrue(decision["source_file"].endswith("treedb_app_0.json"))
+            self.assertEqual(decision["public_batch"]["set_calls_total"], 77)
+            self.assertEqual(decision["public_batch"]["set_view_calls_total"], 88)
+
 
 if __name__ == "__main__":
     unittest.main()

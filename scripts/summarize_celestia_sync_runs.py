@@ -223,15 +223,6 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
         dwell_candidates = list((sync / "dwell-stats").glob("treedb_app_*.json"))
         candidates.extend(sorted(dwell_candidates, key=numeric_suffix_sort_key, reverse=True))
 
-    maintenance_quiesce = sync / "maintenance-quiesce"
-    if maintenance_quiesce.is_dir() and not include_dwell:
-        quiesce_debug = sorted(
-            maintenance_quiesce.glob("debug_vars_*.json"),
-            key=numeric_suffix_sort_key,
-            reverse=True,
-        )
-        candidates.extend(quiesce_debug)
-
     diagnostics = sync / "diagnostics"
     if diagnostics.is_dir():
         def _mtime(path: Path) -> float:
@@ -240,6 +231,26 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
             except OSError:
                 return 0.0
 
+        final_debug_vars = sorted(
+            diagnostics.glob("*max-memory-final*.debug_vars.json"),
+            key=_mtime,
+            reverse=True,
+        )
+        debug_vars = sorted(
+            diagnostics.glob("*.debug_vars.json"),
+            key=_mtime,
+            reverse=True,
+        )
+        final_treedb_vars = sorted(
+            diagnostics.glob("*max-memory-final*.treedb_vars.json"),
+            key=_mtime,
+            reverse=True,
+        )
+        treedb_vars = sorted(
+            diagnostics.glob("*.treedb_vars.json"),
+            key=_mtime,
+            reverse=True,
+        )
         final_app_vars = sorted(
             diagnostics.glob("*max-memory-final*.treedb_application_vars.json"),
             key=_mtime,
@@ -250,10 +261,15 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
             key=_mtime,
             reverse=True,
         )
+        candidates.extend(final_debug_vars)
+        candidates.extend(path for path in debug_vars if path not in final_debug_vars)
+        candidates.extend(final_treedb_vars)
+        candidates.extend(path for path in treedb_vars if path not in final_treedb_vars)
         candidates.extend(final_app_vars)
         candidates.extend(path for path in app_vars if path not in final_app_vars)
 
-    if maintenance_quiesce.is_dir() and include_dwell:
+    maintenance_quiesce = sync / "maintenance-quiesce"
+    if maintenance_quiesce.is_dir():
         quiesce_debug = sorted(
             maintenance_quiesce.glob("debug_vars_*.json"),
             key=numeric_suffix_sort_key,
@@ -265,11 +281,18 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
 
 
 def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[str, Any]:
+    def _flat_treedb_stats(payload: dict[str, Any]) -> dict[str, Any]:
+        if any(str(key).startswith("treedb.") for key in payload.keys()):
+            return payload
+        return {}
+
     for source in treedb_application_stats_candidates(home, include_dwell=include_dwell):
         payload = load_json(source)
         if not isinstance(payload, dict):
             continue
         stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
+        if not stats:
+            stats = _flat_treedb_stats(payload)
         if stats:
             return {
                 "available": True,
@@ -294,6 +317,8 @@ def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[st
         }
 
     stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
+    if not stats:
+        stats = _flat_treedb_stats(payload)
     if not stats:
         return {
             "available": False,
