@@ -1074,6 +1074,9 @@ func TestTypedColumnAdapterDeclaredRowsFusedStringDictionarySortedNullable(t *te
 		{Type: stringType, Present: true, String: "beta"},
 		{Type: stringType, Present: true, String: "alpha"},
 	}
+	if len(gotRows) != len(wantKind) {
+		t.Fatalf("scanRows returned %d rows, want %d: %+v", len(gotRows), len(wantKind), gotRows)
+	}
 	for i := range gotRows {
 		if got := gotRows[i].Values["kind"].String; got != wantKind[i] {
 			t.Fatalf("row %d kind=%q want %q rows=%+v", i, got, wantKind[i], gotRows)
