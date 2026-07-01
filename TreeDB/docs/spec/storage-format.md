@@ -678,14 +678,16 @@ defines the storage constraints that layout must satisfy.
 
 - A live raw-KV entry may carry an `EntryRevision` token. Older entries without
   revision metadata decode as revision `0` until the format gate requires
-  revision support.
+  revision support. Revision `0` is a legacy/no-revision sentinel and is not a
+  valid assignment for new mutations once versioned reads are advertised.
 - Revision metadata must be stored with the visible entry data path. A per-write
   system-root sidecar, separate persistent revision map, or adapter-private
   metadata tree is not an accepted storage format for this feature.
 - The stored revision is the mutation revision assigned by the active write
-  authority: command-WAL LSN, backend commit sequence for WAL-off raw writes, or
-  future Raft apply identity. Leaf readers decode the stored token; they do not
-  infer it from page position, file offset, or a second root.
+  authority: command-WAL LSN, backend commit sequence for backend-only WAL-off
+  raw writes, cached mutation sequence for cached WAL-off writes, or future Raft
+  apply identity. Leaf readers decode the stored token; they do not infer it
+  from page position, file offset, or a second root.
 - Inline values and value-log pointer entries must both carry revisions without
   exposing revision bytes through ordinary `Get`, iterator, or `GetMany` value
   APIs.

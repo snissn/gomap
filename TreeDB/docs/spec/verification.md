@@ -185,7 +185,7 @@ Coverage:
 - `kvstore/adapters/treedb/read_snapshot_cached_writes_test.go`
 - Unified-bench correctness guardrail: `cmd/unified_bench/read_snapshot_guardrail_test.go` and `BenchConfig.ReadRequireHit`
 
-## 10.5 Target Conditional Raw KV Revisions And Transactions
+## 10.1 Target Conditional Raw KV Revisions And Transactions
 
 This section owns the planned verification gates for the target native
 conditional raw-KV feature tracked by

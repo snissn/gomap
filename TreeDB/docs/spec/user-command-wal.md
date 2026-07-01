@@ -114,7 +114,7 @@ the helper call.
 | `LSN` | Monotonic local WAL sequence number assigned by the shared command WAL journal before command visibility/durable acknowledgement. Raw KV, collection, catalog, and future native-wire commands share this one sequence stream. |
 | `AppliedLSN` | Highest contiguous command LSN covered by the durable checkpointed TreeDB state. This value is selected atomically with the roots that contain those command effects. |
 | `Checkpoint` | Durable root boundary that syncs required files and records `AppliedLSN`. |
-| `Publish boundary` | One backend commit/meta selection that makes user roots, system root metadata, value-log/leaf-log reachability, and `AppliedLSN` visible together. |
+| `Publish boundary` | One backend commit/meta selection that makes user roots, system root metadata, value-log/leaf-log reachability, target raw KV revision state, and `AppliedLSN` visible together. |
 | `ExternalRef` | Durable reference to bytes outside the command frame, such as value-log bytes, future column files, dictionaries, filters, manifests, or compression metadata. Required external refs must be prepared, synced/protected as required by the durability mode, and declared before the command frame is recoverable. |
 | `State root` | The TreeDB root state selected by meta/system-root recovery. In distributed mode this is not automatically a consensus digest. |
 | `Replay executor` | The same semantic command executor used by the normal write path, constrained to deterministic replay mode. |
@@ -332,12 +332,14 @@ recovery, any item-level mismatch that is not covered by a command-kind-specific
 idempotent-skip proof fails the whole command closed.
 
 Target conditional raw KV transaction commits use the same atomic command-frame
-rule. Preconditions cover the whole read set and are validated before LSN
-assignment where possible; if validation must be repeated during apply, failure
-prevents visibility and `AppliedLSN` advancement for that command. Range guards
-or unsupported range operations must fail closed before an LSN is assigned until
-a deterministic range-precondition payload is specified. Point-read
-preconditions and replay result assertions should use the existing
+rule. User-level point-read conflicts, unsupported range guards, and unsupported
+range operations must reject before LSN assignment so ordinary conflicts never
+create a command-WAL gap. If a future implementation needs to persist a failed
+conditional attempt after LSN assignment, it must log an explicit deterministic
+no-op/failure command that can advance `AppliedLSN` contiguously. Replay
+preconditions and result assertions are for deterministic drift/corruption
+detection, not for routine stale-transaction conflicts. Point-read preconditions
+and replay result assertions should use the existing
 `CommandEnvelope.Preconditions` and `CommandEnvelope.ResultAssertions` extension
 areas unless #3423 proves a new raw KV payload version is required.
 
@@ -390,8 +392,8 @@ For a WAL-supported command, the required ordering is:
     normal executor has accepted or installed the command according to the API
     visibility contract
 13. later checkpoint, flush, close, or synced ack boundaries publish roots,
-    system metadata, external-ref reachability, and `AppliedLSN` in one durable
-    publish boundary before WAL cleanup
+    system metadata, target raw KV revision state, external-ref reachability,
+    and `AppliedLSN` in one durable publish boundary before WAL cleanup
 ```
 
 For WAL-on collection writes, no owner-visible state may be installed before the
@@ -415,10 +417,10 @@ covers it.
 
 A checkpoint, flush, close, synced ack, or recovery publish that records durable
 command effects in roots must also record the highest contiguous `AppliedLSN`
-covered by those roots. `AppliedLSN` is not ordinary asynchronous checkpoint
-metadata; every durable root publish that makes command effects independent of
-WAL replay must make the corresponding `AppliedLSN` durable in the same publish
-boundary.
+covered by those roots and any target raw KV revision state selected by those
+roots. `AppliedLSN` is not ordinary asynchronous checkpoint metadata; every
+durable root publish that makes command effects independent of WAL replay must
+make the corresponding `AppliedLSN` durable in the same publish boundary.
 
 `AppliedLSN` is metadata for the same command WAL sequence stream, not a
 separate collection watermark. It is required because commands are not always
@@ -432,7 +434,8 @@ Required publish/checkpoint ordering:
 1. stop or fence admission for commands that must be included in this checkpoint
 2. wait for admitted command apply/publish through the chosen AppliedLSN
 3. sync value-log, leaf-log, side-file, and pager bytes needed by published roots
-4. write durable root metadata plus AppliedLSN in the same meta-selected state
+4. write durable root metadata, target raw KV revision state, and AppliedLSN in
+   the same meta-selected state
 5. sync the metadata boundary
 6. delete or mark clean WAL segments whose max LSN <= AppliedLSN
 ```
@@ -502,7 +505,7 @@ visible until a meta page selects them. For command WAL, the selected state tupl
 is:
 
 ```text
-(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, required value-log/leaf-log reachability)
+(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, EntryRevision state, required value-log/leaf-log reachability)
 ```
 
 That tuple is indivisible for recovery. If any element is missing or stale, open

@@ -77,10 +77,15 @@ Entry revisions are target native write metadata, not a separate write domain.
 - Command-WAL mode records deterministic logical raw KV commands before
   visibility. Live apply and replay use the accepted command LSN as the
   mutation revision for every raw key touched by that command frame.
-- WAL-off raw writes use the backend commit sequence that publishes their root
-  as the mutation revision. Future Raft-applied raw writes use the Raft apply
-  identity as the mutation revision, and any local command-WAL frame for that
-  apply must carry or derive that same identity.
+- Backend-only WAL-off raw writes use the backend commit sequence that publishes
+  their root as the mutation revision.
+- Cached WAL-off raw writes use a cached mutation sequence allocated before the
+  mutable memtable entry becomes visible. That same revision is carried through
+  queued memtables, flush/merge iterators, and backend publication; flush must
+  not rewrite a snapshot-visible revision.
+- Future Raft-applied raw writes use the Raft apply identity as the mutation
+  revision, and any local command-WAL frame for that apply must carry or derive
+  that same identity.
 - `WriteSync` and other sync boundaries cover the value, revision, root tuple,
   and any applied command boundary together. A crash must not recover a value
   without the matching revision or a revision without the matching value.

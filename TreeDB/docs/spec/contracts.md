@@ -75,13 +75,17 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 Target versioned entry APIs return the visible value together with an
 `EntryRevision` suitable for cache validation and stale-read detection.
 
-- `EntryRevision` is a monotonic non-zero token for a live raw-KV key. It
-  advances when that key is overwritten or deleted and reinserted.
+- `EntryRevision` is a monotonic token for a live raw-KV key. It advances when
+  that key is overwritten or deleted and reinserted. Revision `0` is reserved
+  for legacy/no-revision entries and must not be assigned to new raw mutations
+  once versioned reads are advertised.
 - `EntryRevision` is assigned by the write authority that orders visibility for
   the mutation: command-WAL LSN for command-WAL raw writes and replay, backend
-  commit sequence for WAL-off raw writes, and future Raft apply identity for
-  consensus-applied raw writes. The revision is stored with the entry rather
-  than recomputed by readers.
+  commit sequence for backend-only WAL-off raw writes, cached mutation sequence
+  for cached WAL-off writes, and future Raft apply identity for
+  consensus-applied raw writes. Cached mutation sequence is allocated before the
+  memtable entry becomes visible and is later carried into backend publication.
+  The revision is stored with the entry rather than recomputed by readers.
 - A snapshot reports the revision visible at the time that snapshot was
   acquired. Later writes do not mutate the revision observed through an older
   snapshot.
