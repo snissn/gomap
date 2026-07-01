@@ -297,18 +297,16 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
 
 
 def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[str, Any]:
-    def _flat_treedb_stats(payload: dict[str, Any]) -> dict[str, Any]:
-        if any(str(key).startswith("treedb.") for key in payload.keys()):
-            return payload
-        return {}
+    def _has_flat_treedb_stats(payload: dict[str, Any]) -> bool:
+        return any(str(key).startswith("treedb.") for key in payload.keys())
 
     for source in treedb_application_stats_candidates(home, include_dwell=include_dwell):
         payload = load_json(source)
         if not isinstance(payload, dict):
             continue
         stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
-        if not stats:
-            stats = _flat_treedb_stats(payload)
+        if not stats and _has_flat_treedb_stats(payload):
+            stats = payload
         if stats:
             return {
                 "available": True,
@@ -333,8 +331,8 @@ def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[st
         }
 
     stats, instance_name = extract_treedb_stats(payload, TREEDB_INSTANCE_PATTERN)
-    if not stats:
-        stats = _flat_treedb_stats(payload)
+    if not stats and _has_flat_treedb_stats(payload):
+        stats = payload
     if not stats:
         return {
             "available": False,
