@@ -51,6 +51,7 @@ func TestTypedColumnQ2SortedGroupedDistinctStreaming1950(t *testing.T) {
 	}
 	defer func() { _ = runner.Close() }()
 	assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(t, "prepared setup", runner.PrepareDiagnostics(), true)
+	assertTypedColumnQ2PreparedGlobalRanksNoGlobalCodes1950(t, runner, false)
 	prepared, err := runner.Run()
 	if err != nil {
 		t.Fatalf("prepared q2: %v", err)
@@ -574,7 +575,7 @@ func TestTypedColumnQ2SortedGroupedDistinctLocalDictionariesAndEmptyValues1950(t
 		t.Fatalf("PrepareColumnPhysicalQuery(q2 local dictionaries): %v", err)
 	}
 	defer func() { _ = runner.Close() }()
-	assertTypedColumnQ2PreparedGlobalCodes1950(t, runner)
+	assertTypedColumnQ2PreparedGlobalRanksNoGlobalCodes1950(t, runner, true)
 	prepared, err := runner.Run()
 	if err != nil {
 		t.Fatalf("prepared q2 local dictionaries: %v", err)
@@ -770,7 +771,7 @@ func flattenColumnPhysicalEvents1950(batches [][]columnPhysicalJSONBenchParityEv
 	return events
 }
 
-func assertTypedColumnQ2PreparedGlobalCodes1950(tb testing.TB, runner *ColumnPhysicalQueryRunner) {
+func assertTypedColumnQ2PreparedGlobalRanksNoGlobalCodes1950(tb testing.TB, runner *ColumnPhysicalQueryRunner, requireSharedDidM bool) {
 	tb.Helper()
 	if runner == nil || runner.typedColumn == nil {
 		tb.Fatalf("prepared q2 runner missing typed-column state")
@@ -785,20 +786,35 @@ func assertTypedColumnQ2PreparedGlobalCodes1950(tb testing.TB, runner *ColumnPhy
 		if part == nil {
 			tb.Fatalf("part %d missing sorted grouped-distinct state", partIdx)
 		}
-		if len(part.Group.GlobalCodes) != part.Rows || len(part.Distinct.GlobalCodes) != part.Rows {
-			tb.Fatalf("part %d global code rows group=%d distinct=%d want %d", partIdx, len(part.Group.GlobalCodes), len(part.Distinct.GlobalCodes), part.Rows)
+		if len(part.Group.GlobalCodes) != 0 || len(part.Distinct.GlobalCodes) != 0 {
+			tb.Fatalf("part %d global code rows group=%d distinct=%d want 0", partIdx, len(part.Group.GlobalCodes), len(part.Distinct.GlobalCodes))
 		}
-		if !sort.StringsAreSorted(part.Group.GlobalDictionary) || !sort.StringsAreSorted(part.Distinct.GlobalDictionary) {
-			tb.Fatalf("part %d global dictionaries not lexicographically sorted group=%v distinct=%v", partIdx, part.Group.GlobalDictionary, part.Distinct.GlobalDictionary)
+		if part.Group.GlobalDictionary == nil || !sort.StringsAreSorted(part.Group.GlobalDictionary) {
+			tb.Fatalf("part %d group global dictionary not lexicographically sorted group=%v", partIdx, part.Group.GlobalDictionary)
 		}
-		for row, code := range part.Group.GlobalCodes {
-			if int(code) >= len(part.Group.GlobalDictionary) {
-				tb.Fatalf("part %d group global code row=%d code=%d outside cardinality=%d", partIdx, row, code, len(part.Group.GlobalDictionary))
+		if !part.Group.GlobalCardinalityOK || part.Group.GlobalCardinality != len(part.Group.GlobalDictionary) {
+			tb.Fatalf("part %d group global cardinality=%d ok=%t want dictionary=%d", partIdx, part.Group.GlobalCardinality, part.Group.GlobalCardinalityOK, len(part.Group.GlobalDictionary))
+		}
+		if len(part.Group.GlobalLocalRanks) != len(part.Group.Dictionary) {
+			tb.Fatalf("part %d group local rank entries=%d want dictionary=%d", partIdx, len(part.Group.GlobalLocalRanks), len(part.Group.Dictionary))
+		}
+		for localCode, rank := range part.Group.GlobalLocalRanks {
+			if int(rank) >= part.Group.GlobalCardinality {
+				tb.Fatalf("part %d group local code=%d rank=%d outside cardinality=%d", partIdx, localCode, rank, part.Group.GlobalCardinality)
 			}
 		}
-		for row, code := range part.Distinct.GlobalCodes {
-			if int(code) >= len(part.Distinct.GlobalDictionary) {
-				tb.Fatalf("part %d distinct global code row=%d code=%d outside cardinality=%d", partIdx, row, code, len(part.Distinct.GlobalDictionary))
+		if part.Distinct.GlobalDictionary != nil {
+			tb.Fatalf("part %d distinct global dictionary allocated=%d want nil", partIdx, len(part.Distinct.GlobalDictionary))
+		}
+		if !part.Distinct.GlobalCardinalityOK || part.Distinct.GlobalCardinality == 0 {
+			tb.Fatalf("part %d distinct global cardinality=%d ok=%t want nonzero prepared cardinality", partIdx, part.Distinct.GlobalCardinality, part.Distinct.GlobalCardinalityOK)
+		}
+		if len(part.Distinct.GlobalLocalRanks) != len(part.Distinct.Dictionary) {
+			tb.Fatalf("part %d distinct local rank entries=%d want dictionary=%d", partIdx, len(part.Distinct.GlobalLocalRanks), len(part.Distinct.Dictionary))
+		}
+		for localCode, rank := range part.Distinct.GlobalLocalRanks {
+			if int(rank) >= part.Distinct.GlobalCardinality {
+				tb.Fatalf("part %d distinct local code=%d rank=%d outside cardinality=%d", partIdx, localCode, rank, part.Distinct.GlobalCardinality)
 			}
 		}
 		localDidM := -1
@@ -811,28 +827,19 @@ func assertTypedColumnQ2PreparedGlobalCodes1950(tb testing.TB, runner *ColumnPhy
 		if localDidM < 0 {
 			continue
 		}
-		partDidMRank := -1
-		for rank, value := range part.Distinct.GlobalDictionary {
-			if value == "did:m" {
-				partDidMRank = rank
-				break
-			}
+		if localDidM >= len(part.Distinct.GlobalLocalRanks) {
+			tb.Fatalf("part %d local did:m code=%d outside distinct global local ranks=%d", partIdx, localDidM, len(part.Distinct.GlobalLocalRanks))
 		}
-		if partDidMRank < 0 {
-			tb.Fatalf("part %d distinct global dictionary missing did:m", partIdx)
-		}
+		partDidMRank := int(part.Distinct.GlobalLocalRanks[localDidM])
 		if didMRank < 0 {
 			didMRank = partDidMRank
 		} else if didMRank != partDidMRank {
 			tb.Fatalf("did:m global rank part %d=%d want %d", partIdx, partDidMRank, didMRank)
 		}
 		seenDidMRow := false
-		for row, localCode := range part.Distinct.Codes {
+		for _, localCode := range part.Distinct.Codes {
 			if localCode == int64(localDidM) {
 				seenDidMRow = true
-				if part.Distinct.GlobalCodes[row] != uint32(partDidMRank) {
-					tb.Fatalf("part %d did:m row=%d global code=%d want %d", partIdx, row, part.Distinct.GlobalCodes[row], partDidMRank)
-				}
 			}
 		}
 		if !seenDidMRow {
@@ -840,7 +847,7 @@ func assertTypedColumnQ2PreparedGlobalCodes1950(tb testing.TB, runner *ColumnPhy
 		}
 		didMParts++
 	}
-	if didMParts < 2 {
+	if requireSharedDidM && didMParts < 2 {
 		tb.Fatalf("did:m appeared in %d parts want at least two to prove cross-part global rank reuse", didMParts)
 	}
 }
@@ -1039,22 +1046,23 @@ func assertTypedColumnQ2DenseGroupCountDistinctDiagnostics1950(tb testing.TB, la
 
 func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testing.TB, label string, diag ColumnPhysicalQueryDiagnostics, want bool) {
 	tb.Helper()
-	total := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
-		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos +
-		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos +
+	remapTotal := diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos +
 		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos
-	if !want {
-		if total != 0 {
-			tb.Fatalf("%s sorted grouped-distinct post-prepare split nanos=%d want 0 diagnostics=%+v", label, total, diag)
-		}
-		return
-	}
-	if total == 0 {
-		return
+	if remapTotal != 0 {
+		tb.Fatalf("%s sorted grouped-distinct per-row remap nanos=%d want 0 diagnostics=%+v", label, remapTotal, diag)
 	}
 	dictionaryTotal := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
 		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
-	if dictionaryTotal <= 0 {
-		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want dictionary/rank split work when timer resolution records split work", label, diag)
+	if !want {
+		if dictionaryTotal != 0 {
+			tb.Fatalf("%s sorted grouped-distinct dictionary/rank nanos=%d want 0 diagnostics=%+v", label, dictionaryTotal, diag)
+		}
+		return
+	}
+	if dictionaryTotal == 0 {
+		return
+	}
+	if diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos <= 0 || diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos <= 0 {
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want group/distinct dictionary/rank work when timer resolution records split work", label, diag)
 	}
 }
