@@ -79,7 +79,7 @@ var q2DenseGlobalRankPrepDictionaryShapes = []q2DenseGlobalRankPrepDictionarySha
 	{name: "mixed"},
 }
 
-var q2DenseGlobalRankPrepPartCounts = []int{40, 80, 160}
+var q2DenseGlobalRankPrepPartCounts = []int{40, 80, 160, 320}
 
 const (
 	q2DenseGlobalRankPrepGroupValuesPerPart    = 128

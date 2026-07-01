@@ -1946,21 +1946,31 @@ func (s *columnTypedColumnDenseGroupCountDistinctHashRankShard) lookupHash(hash 
 }
 
 func (s *columnTypedColumnDenseGroupCountDistinctHashRankShard) addHash(hash uint32, value string) (uint32, error) {
-	if rank, ok := s.lookupHash(hash, value); ok {
+	if existingRank, exists := s.ranks[hash]; exists {
+		if int(existingRank) < len(s.values) && s.values[existingRank] == value {
+			return existingRank, nil
+		}
+		for _, collisionRank := range s.collisions[hash] {
+			if int(collisionRank) < len(s.values) && s.values[collisionRank] == value {
+				return collisionRank, nil
+			}
+		}
+		if uint64(len(s.values)) >= uint64(^uint32(0)) {
+			return 0, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
+		}
+		rank := uint32(len(s.values))
+		if s.collisions == nil {
+			s.collisions = make(map[uint32][]uint32)
+		}
+		s.collisions[hash] = append(s.collisions[hash], rank)
+		s.values = append(s.values, value)
 		return rank, nil
 	}
 	if uint64(len(s.values)) >= uint64(^uint32(0)) {
 		return 0, fmt.Errorf("collections: dense grouped count-distinct global dictionary cardinality exceeds uint32")
 	}
 	rank := uint32(len(s.values))
-	if _, exists := s.ranks[hash]; exists {
-		if s.collisions == nil {
-			s.collisions = make(map[uint32][]uint32)
-		}
-		s.collisions[hash] = append(s.collisions[hash], rank)
-	} else {
-		s.ranks[hash] = rank
-	}
+	s.ranks[hash] = rank
 	s.values = append(s.values, value)
 	return rank, nil
 }
