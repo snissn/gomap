@@ -462,7 +462,7 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
                         "treedb.flush_apply.span_native.candidate_ops_total": "4",
                         "treedb.flush_apply.span_native.eligible_ops_total": "4",
                         "treedb.flush_apply.span_native.used_ops_total": "4",
-                        "treedb.cache.flush_apply.span_native": "true",
+                        "treedb.flush_admission.flush_apply_span_native": "true",
                         "treedb.publish.ordered_root_delta_group.calls_total": "0",
                     }
                 )
@@ -482,7 +482,7 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
                         "treedb.flush_apply.span_native.candidate_ops_total": "404",
                         "treedb.flush_apply.span_native.eligible_ops_total": "404",
                         "treedb.flush_apply.span_native.used_ops_total": "404",
-                        "treedb.cache.flush_apply.span_native": "true",
+                        "treedb.flush_admission.flush_apply_span_native": "true",
                         "treedb.publish.ordered_root_delta_group.calls_total": "0",
                         "treedb.cache.flush_apply.backend_write_ns_total": "5000000000",
                         "treedb.cache.flush_apply.coordinator.in_flight_bytes": "0",
@@ -512,6 +512,7 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertTrue(decision["source_file"].endswith("treedb_app_1.json"))
             self.assertEqual(decision["public_batch"]["set_view_calls_total"], 202)
             self.assertEqual(decision["raw_span_native"]["routes"]["point_put"]["used_ops_total"], 303)
+            self.assertTrue(decision["flush_apply_span_native"]["enabled"])
             self.assertEqual(decision["flush_apply_span_native"]["used_ops_total"], 404)
 
             markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")

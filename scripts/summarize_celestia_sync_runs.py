@@ -405,6 +405,16 @@ def stat_int(stats: dict[str, Any], *keys: str) -> int:
     return 0
 
 
+def stat_bool(stats: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        if key in stats:
+            value = stats.get(key)
+            if isinstance(value, bool):
+                return value
+            return str(value).lower() == "true"
+    return False
+
+
 def fallback_reason_counters(stats: dict[str, Any], prefix: str) -> dict[str, dict[str, int]]:
     pattern = re.compile(r"^" + re.escape(prefix) + r"\.fallback\.reason\.([^.]+)\.([^.]+)$")
     reasons: dict[str, dict[str, int]] = {}
@@ -499,7 +509,11 @@ def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
             "routes": raw_routes,
         },
         "flush_apply_span_native": {
-            "enabled": str(stats.get("treedb.cache.flush_apply.span_native", "")).lower() == "true",
+            "enabled": stat_bool(
+                stats,
+                "treedb.flush_admission.flush_apply_span_native",
+                "treedb.cache.flush_apply.span_native",
+            ),
             **span_route_summary(stats, flush_prefix),
         },
         "ordered_root": {
