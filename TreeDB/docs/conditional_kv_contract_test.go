@@ -45,8 +45,10 @@ func TestConditionalKVContractDocsPinNativeRevisionAndTxnGates(t *testing.T) {
 		"Cached WAL-off raw writes use a cached mutation sequence allocated before the mutable memtable entry becomes visible",
 		"flush must not rewrite a snapshot-visible revision",
 		"Future Raft-applied raw writes use the Raft apply identity as the mutation revision",
-		"`WriteSync` and other sync boundaries cover the value, revision, root tuple, and any applied command boundary together",
+		"In cached WAL-on mode, `WriteSync` must not require backend root publication per point write",
+		"it covers the accepted WAL frame, value/revision payload, and memtable replay input until a later flush/checkpoint publishes roots",
 		"Commit validation runs against the transaction's snapshot/read-set token and the recent-write oracle immediately before publish",
+		"The final validation, recent-write oracle update, and root/meta publication must be one serialized commit/CAS boundary",
 	)
 
 	recovery := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/recovery.md"))

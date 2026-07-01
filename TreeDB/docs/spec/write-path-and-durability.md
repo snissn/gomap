@@ -96,9 +96,14 @@ Entry revisions are target native write metadata, not a separate write domain.
 - Future Raft-applied raw writes use the Raft apply identity as the mutation
   revision, and any local command-WAL frame for that apply must carry or derive
   that same identity.
-- `WriteSync` and other sync boundaries cover the value, revision, root tuple,
-  and any applied command boundary together. A crash must not recover a value
-  without the matching revision or a revision without the matching value.
+- Sync boundaries cover the value, revision, and local recoverability boundary
+  together. When a backend root is published, the root tuple and any applied
+  command boundary are selected with that value/revision effect. In cached
+  WAL-on mode, `WriteSync` must not require backend root publication per point
+  write; it covers the accepted WAL frame, value/revision payload, and memtable
+  replay input until a later flush/checkpoint publishes roots. A crash must not
+  recover a value without the matching revision or a revision without the
+  matching value.
 - Implementations must treat a sidecar-per-write revision tree as a rejected
   design for this target because it adds a second publish to the hot raw write
   path.
@@ -173,9 +178,11 @@ Commit visibility sequence:
 Target conditional transactions use the same backend commit model for final
 publication. The transaction body may perform reads and stage writes without
 holding the final commit lock. Commit validation runs against the transaction's
-snapshot/read-set token and the recent-write oracle immediately before publish;
-only the final root/meta publication is serialized by existing commit
-machinery.
+snapshot/read-set token and the recent-write oracle immediately before publish.
+The final validation, recent-write oracle update, and root/meta publication
+must be one serialized commit/CAS boundary so two conflicting transactions
+cannot both validate against the same pre-publish state. The transaction body
+must remain outside that final serialized boundary.
 
 ## 5. API Durability Semantics
 
