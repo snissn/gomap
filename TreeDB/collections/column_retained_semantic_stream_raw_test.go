@@ -348,6 +348,54 @@ func TestColumnRetainedSemanticStreamV1PathSegmentInternerOwnsAndReusesSegments3
 	}
 }
 
+func TestColumnRetainedSemanticStreamV1PathSegmentInternerTransitionsToMap3067(t *testing.T) {
+	interner := &columnRetainedSemanticStreamV1PathSegmentInterner{}
+	sources := make([][]byte, columnRetainedSemanticStreamV1PathSegmentInternerLinearLimit+1)
+	values := make([]string, len(sources))
+	for i := range sources {
+		source := []byte{byte('a' + i)}
+		sources[i] = source
+		values[i] = interner.intern(source)
+		source[0] = byte('A' + i)
+	}
+	if interner.segments == nil {
+		t.Fatal("path segment interner did not transition to map after linear limit")
+	}
+	if len(interner.values) != 0 {
+		t.Fatalf("path segment interner retained %d linear values after map transition", len(interner.values))
+	}
+	if len(interner.segments) != len(sources) {
+		t.Fatalf("path segment interner map entries=%d want %d", len(interner.segments), len(sources))
+	}
+	for i, value := range values {
+		want := string([]byte{byte('a' + i)})
+		if value != want {
+			t.Fatalf("value %d=%q want %q", i, value, want)
+		}
+		got := interner.intern([]byte{byte('a' + i)})
+		if got != want {
+			t.Fatalf("reused value %d=%q want %q", i, got, want)
+		}
+		if !columnRetainedSemanticStreamV1TestStringsShareBacking(value, got) {
+			t.Fatalf("reused value %d does not share backing after map transition", i)
+		}
+		if columnRetainedSemanticStreamV1TestStringAliasesBytes(got, sources[i]) {
+			t.Fatalf("reused value %d aliases mutable source bytes after map transition", i)
+		}
+	}
+
+	postTransition := []byte("post")
+	first := interner.intern(postTransition)
+	copy(postTransition, []byte("mut!"))
+	second := interner.intern([]byte("post"))
+	if first != "post" || second != "post" {
+		t.Fatalf("post-transition values=(%q, %q) want post", first, second)
+	}
+	if !columnRetainedSemanticStreamV1TestStringsShareBacking(first, second) {
+		t.Fatal("post-transition repeated segment does not reuse string backing")
+	}
+}
+
 func TestColumnRetainedSemanticStreamV1PathSegmentInternerReusesRetainedTraversalSegments3206(t *testing.T) {
 	cfg := ColumnStoreConfig{
 		Enabled: true,

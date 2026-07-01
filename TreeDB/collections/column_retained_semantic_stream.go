@@ -159,22 +159,54 @@ type columnRetainedSemanticStreamV1DeclaredPathTrie struct {
 }
 
 type columnRetainedSemanticStreamV1PathSegmentInterner struct {
+	values   []string
 	segments map[string]string
 }
+
+const columnRetainedSemanticStreamV1PathSegmentInternerLinearLimit = 16
 
 func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) string {
 	if i == nil {
 		return string(key)
 	}
-	if value, ok := i.segments[string(key)]; ok {
+	if len(key) == 0 {
+		return ""
+	}
+	if i.segments != nil {
+		if value, ok := i.segments[string(key)]; ok {
+			return value
+		}
+		value := string(key)
+		i.segments[value] = value
 		return value
 	}
-	value := string(key)
-	if i.segments == nil {
-		i.segments = make(map[string]string)
+	for _, value := range i.values {
+		if columnRetainedSemanticStreamV1StringBytesEqual(value, key) {
+			return value
+		}
 	}
-	i.segments[value] = value
+	value := string(key)
+	i.values = append(i.values, value)
+	if len(i.values) > columnRetainedSemanticStreamV1PathSegmentInternerLinearLimit {
+		i.segments = make(map[string]string, len(i.values)*2)
+		for _, value := range i.values {
+			i.segments[value] = value
+		}
+		i.values = nil
+	}
 	return value
+}
+
+func columnRetainedSemanticStreamV1StringBytesEqual(value string, key []byte) bool {
+	if len(value) != len(key) {
+		return false
+	}
+	for i := range key {
+		if value[i] != key[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type columnRetainedSemanticStreamV1DecodeCache struct {
