@@ -2912,8 +2912,9 @@ func typedColumnPhysicalQueryAttachPreparedPayloads(prepared *typedColumnPrepare
 	}
 	decodedBytes := uint64(0)
 	decodedBlocks := 0
-	for blockIdx := range partColumn.Blocks {
+	for blockIdx := 0; blockIdx < len(partColumn.Blocks); {
 		if selectedBlocks != nil && !selectedBlocks[blockIdx] {
+			blockIdx++
 			continue
 		}
 		blockPlan := preparedColumn.BlockPlans[blockIdx]
@@ -2922,18 +2923,60 @@ func typedColumnPhysicalQueryAttachPreparedPayloads(prepared *typedColumnPrepare
 		}
 		block := &partColumn.Blocks[blockIdx]
 		if blockPlan.PayloadLength > 0 && len(block.Granule.Payload) == 0 {
-			payload, err := readRange(blockPlan.PayloadOffset, blockPlan.PayloadLength, false)
+			runEnd := blockIdx + 1
+			runOffset := blockPlan.PayloadOffset
+			runLength := blockPlan.PayloadLength
+			for runEnd < len(partColumn.Blocks) {
+				runEndOffset := runOffset + runLength
+				if runEndOffset < runOffset {
+					return 0, 0, fmt.Errorf("collections: dense typed-column prepared range %s column %q payload run end overflows at block %d", role, columnName, runEnd)
+				}
+				if selectedBlocks != nil && !selectedBlocks[runEnd] {
+					break
+				}
+				nextPlan := preparedColumn.BlockPlans[runEnd]
+				if nextPlan.Index != runEnd {
+					return 0, 0, fmt.Errorf("collections: dense typed-column prepared range %s column %q block plan index=%d want %d", role, columnName, nextPlan.Index, runEnd)
+				}
+				nextBlock := &partColumn.Blocks[runEnd]
+				if nextPlan.PayloadLength <= 0 || len(nextBlock.Granule.Payload) != 0 {
+					break
+				}
+				if nextPlan.PayloadOffset != runEndOffset {
+					break
+				}
+				if nextPlan.PayloadLength > maxCollectionInt-runLength {
+					return 0, 0, fmt.Errorf("collections: dense typed-column prepared range %s column %q payload run length overflows at block %d", role, columnName, runEnd)
+				}
+				runLength += nextPlan.PayloadLength
+				runEnd++
+			}
+			payload, err := readRange(runOffset, runLength, false)
 			if err != nil {
-				return 0, 0, fmt.Errorf("collections: dense typed-column prepared range read %s column %q block %d payload: %w", role, columnName, blockIdx, err)
+				return 0, 0, fmt.Errorf("collections: dense typed-column prepared range read %s column %q blocks %d-%d payload: %w", role, columnName, blockIdx, runEnd-1, err)
 			}
-			if len(payload) != blockPlan.PayloadLength {
-				return 0, 0, fmt.Errorf("collections: dense typed-column prepared range %s column %q block %d payload bytes=%d want %d", role, columnName, blockIdx, len(payload), blockPlan.PayloadLength)
+			if len(payload) != runLength {
+				return 0, 0, fmt.Errorf("collections: dense typed-column prepared range %s column %q blocks %d-%d payload bytes=%d want %d", role, columnName, blockIdx, runEnd-1, len(payload), runLength)
 			}
-			block.Granule.Payload = payload
-			block.Granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: len(payload)}
+			for runBlockIdx := blockIdx; runBlockIdx < runEnd; runBlockIdx++ {
+				runBlockPlan := preparedColumn.BlockPlans[runBlockIdx]
+				payloadStart := runBlockPlan.PayloadOffset - runOffset
+				payloadEnd := payloadStart + runBlockPlan.PayloadLength
+				if payloadStart < 0 || payloadEnd < payloadStart || payloadEnd > len(payload) {
+					return 0, 0, fmt.Errorf("collections: dense typed-column prepared range %s column %q block %d payload slice [%d,%d) outside run bytes=%d", role, columnName, runBlockIdx, payloadStart, payloadEnd, len(payload))
+				}
+				runBlock := &partColumn.Blocks[runBlockIdx]
+				runBlock.Granule.Payload = payload[payloadStart:payloadEnd]
+				runBlock.Granule.PayloadRef = typedcolumn.PayloadRef{Kind: typedcolumn.PayloadRefInline, Length: runBlockPlan.PayloadLength}
+				decodedBytes += uint64(runBlock.Granule.RawBytes)
+				decodedBlocks++
+			}
+			blockIdx = runEnd
+			continue
 		}
 		decodedBytes += uint64(block.Granule.RawBytes)
 		decodedBlocks++
+		blockIdx++
 	}
 	adapterPart.Part.Columns[columnName] = partColumn
 	return decodedBytes, decodedBlocks, nil
