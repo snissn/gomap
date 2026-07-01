@@ -219,10 +219,12 @@ must not change replay bytes.
   part of the same command effect as the value or tombstone. Replay must derive
   the same revision for the same accepted command input as live apply.
   Non-Raft local command-WAL raw KV frames use the command frame `LSN` as the
-  mutation revision for all raw keys touched by the frame. Future Raft-applied
-  raw KV frames must carry or deterministically derive the Raft apply identity
-  used as the mutation revision before appending/applying through the local
-  command-WAL durability boundary.
+  mutation revision for all raw keys touched by the frame only when the shared
+  LSN allocator is seeded above the durable raw-KV revision floor. Otherwise the
+  accepted command must carry one effective mutation revision from the same
+  persisted domain. Future Raft-applied raw KV frames must carry or
+  deterministically derive the Raft apply identity used as the mutation revision
+  before appending/applying through the local command-WAL durability boundary.
 - Every command kind declares whether replay is strict or has an explicit
   idempotent-skip rule. Strict commands fail closed if replay observes evidence
   that the command effect already exists while `AppliedLSN` does not cover it.

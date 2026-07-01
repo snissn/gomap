@@ -79,13 +79,23 @@ Target versioned entry APIs return the visible value together with an
   that key is overwritten or deleted and reinserted. Revision `0` is reserved
   for legacy/no-revision entries and must not be assigned to new raw mutations
   once versioned reads are advertised.
-- `EntryRevision` is assigned by the write authority that orders visibility for
-  the mutation: command-WAL LSN for command-WAL raw writes and replay, backend
-  commit sequence for backend-only WAL-off raw writes, cached mutation sequence
-  for cached WAL-off writes, and future Raft apply identity for
-  consensus-applied raw writes. Cached mutation sequence is allocated before the
-  memtable entry becomes visible and is later carried into backend publication.
-  The revision is stored with the entry rather than recomputed by readers.
+- `EntryRevision` is assigned from one persisted raw-KV revision domain for the
+  directory. The active write authority may derive the mutation revision from the
+  ordering source that makes the mutation visible: command-WAL LSN for
+  command-WAL raw writes and replay, backend commit sequence for backend-only
+  WAL-off raw writes, cached mutation sequence for cached WAL-off writes, and
+  future Raft apply identity for consensus-applied raw writes. Those authorities
+  are valid only when their allocator is seeded above the durable
+  `MaxEntryRevision`/revision floor selected with the current roots, or when the
+  accepted command carries an explicit effective mutation revision from that same
+  domain. Cached mutation sequence is allocated before the memtable entry
+  becomes visible and is later carried into backend publication. The revision is
+  stored with the entry rather than recomputed by readers.
+- Opening, replaying, restoring, or changing write profiles must not allow a
+  later overwrite of a live key to receive a lower revision than an earlier
+  visible value. If the implementation cannot prove the active authority is
+  seeded above the persisted revision domain, versioned mutation support must
+  fail closed before visibility.
 - A snapshot reports the revision visible at the time that snapshot was
   acquired. Later writes do not mutate the revision observed through an older
   snapshot.
@@ -172,7 +182,9 @@ read/precondition validation.
 - Command-WAL-backed transactions must append deterministic logical command
   frames before visibility. Recovery replay must produce the same value and
   revision contract as live apply by using the accepted command LSN as the
-  mutation revision.
+  mutation revision only when the command LSN stream is seeded above the durable
+  raw-KV revision floor; otherwise the accepted command input must carry the
+  effective mutation revision from the same persisted revision domain.
 
 ## 4. Range and Iterator Contracts
 

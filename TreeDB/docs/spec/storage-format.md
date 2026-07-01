@@ -683,11 +683,15 @@ defines the storage constraints that layout must satisfy.
 - Revision metadata must be stored with the visible entry data path. A per-write
   system-root sidecar, separate persistent revision map, or adapter-private
   metadata tree is not an accepted storage format for this feature.
-- The stored revision is the mutation revision assigned by the active write
-  authority: command-WAL LSN, backend commit sequence for backend-only WAL-off
-  raw writes, cached mutation sequence for cached WAL-off writes, or future Raft
-  apply identity. Leaf readers decode the stored token; they do not infer it
-  from page position, file offset, or a second root.
+- The stored revision is the mutation revision assigned from the directory's
+  shared raw-KV revision domain. The active write authority may use command-WAL
+  LSN, backend commit sequence, cached mutation sequence, or future Raft apply
+  identity only if that source is seeded above the durable revision floor
+  selected with the current roots. Leaf readers decode the stored token; they do
+  not infer it from page position, file offset, or a second root.
+- The format must persist the raw-KV revision floor/`MaxEntryRevision` in the
+  same root/meta selection that publishes the entries covered by it. This is
+  directory metadata, not a per-write sidecar tree.
 - Inline values and value-log pointer entries must both carry revisions without
   exposing revision bytes through ordinary `Get`, iterator, or `GetMany` value
   APIs.
@@ -1539,14 +1543,16 @@ empty or reversed range deletes as no-ops and do not emit dangerous command-WAL
 mutations for them.
 
 Target raw KV entry revisions do not require per-operation sequence fields in
-`RawKVBatchV1`: the command frame `LSN` is the mutation revision for all raw
-keys touched by the frame. Target conditional raw KV transactions should express
-point-read preconditions and replay result assertions through the existing
-`CommandEnvelope.Preconditions` and `CommandEnvelope.ResultAssertions`
-extension areas when that is sufficient. A new raw KV payload version is allowed
-only if #3423 proves the envelope extensions cannot encode the required
-deterministic guard data without compromising decode speed or replay
-correctness.
+`RawKVBatchV1`: one mutation revision applies to all raw keys touched by the
+frame. That revision is the command frame `LSN` when the LSN allocator is seeded
+above the persisted raw-KV revision floor; otherwise the command/envelope must
+carry one effective mutation revision from the same domain. Target conditional
+raw KV transactions should express point-read preconditions and replay result
+assertions through the existing `CommandEnvelope.Preconditions` and
+`CommandEnvelope.ResultAssertions` extension areas when that is sufficient. A
+new raw KV payload version is allowed only if #3423 proves the envelope
+extensions cannot encode the required deterministic guard data without
+compromising decode speed or replay correctness.
 
 Writers may use compact all-zero set payload variants when every operation is a
 set with the same non-empty zero-filled value length:

@@ -68,6 +68,11 @@ Entry revisions are target native write metadata, not a separate write domain.
 
 - Raw KV writes assign the next live-entry revision as part of the same logical
   mutation that installs the value/tombstone in the memtable or backend root.
+- All raw-KV write paths draw revisions from one persisted revision domain. The
+  hot path should be a scalar allocator/floor selected with the root metadata,
+  not a second ordered-root write. Open, replay, profile changes, and Raft
+  failover must seed the active allocator above the durable `MaxEntryRevision`;
+  otherwise versioned mutation support fails closed before visibility.
 - Cached mode must carry revisions through mutable memtables, queued memtables,
   flush iterators, merge iterators, and backend publication before versioned
   reads are advertised as supported.
@@ -76,9 +81,14 @@ Entry revisions are target native write metadata, not a separate write domain.
   metadata root per user commit.
 - Command-WAL mode records deterministic logical raw KV commands before
   visibility. Live apply and replay use the accepted command LSN as the
-  mutation revision for every raw key touched by that command frame.
+  mutation revision for every raw key touched by that command frame only when the
+  command LSN allocator is seeded above the persisted revision floor. Otherwise
+  the accepted command frame must carry one effective mutation revision for the
+  raw keys it touches.
 - Backend-only WAL-off raw writes use the backend commit sequence that publishes
-  their root as the mutation revision.
+  their root as the mutation revision only when that sequence is seeded above the
+  persisted revision floor; otherwise the backend path must allocate from the
+  shared revision domain before building/publishing the root.
 - Cached WAL-off raw writes use a cached mutation sequence allocated before the
   mutable memtable entry becomes visible. That same revision is carried through
   queued memtables, flush/merge iterators, and backend publication; flush must

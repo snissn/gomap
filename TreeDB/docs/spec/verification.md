@@ -198,6 +198,10 @@ Invariant:
   They are carried through memtables, batch entries, leaf construction, command
   WAL replay, recovery, and future Raft apply semantics with the value or
   tombstone.
+- All write paths share one persisted raw-KV revision domain. Tests must prove
+  cached, backend-only, command-WAL, reopen/replay, and future Raft authorities
+  seed above the durable revision floor or fail closed before versioned
+  visibility.
 - A sidecar-per-write metadata tree is rejected for this feature because it
   creates a second hot-path lookup/write and an independent durability boundary.
 - Conditional transactions validate recorded point-read preconditions against
