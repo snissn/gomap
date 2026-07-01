@@ -825,6 +825,13 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 	if b == nil || b.inner == nil {
 		return ErrClosed
 	}
+	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
+		payload, err := b.commandWALPayload()
+		if err != nil {
+			return err
+		}
+		return b.db.appendPublicRawKVCommandPayload(payload, sync)
+	}
 	return b.db.appendPublicRawKVCommandEntryScan(b.inner.Replay, sync)
 }
 

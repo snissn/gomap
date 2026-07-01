@@ -34314,8 +34314,21 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		if hasLegacyRevisions {
 			assignLegacyPointEntryRevisions(b.entries, page.EntryRevision(seq))
 		}
+		walRecordRevision := func(revision page.EntryRevision) uint64 {
+			if revision != page.LegacyEntryRevision && uint64(revision) != seq {
+				return uint64(revision)
+			}
+			return 0
+		}
+		hasWALRecordRevisions := false
+		for i := range b.entries {
+			if walRecordRevision(b.entries[i].Revision) != 0 {
+				hasWALRecordRevisions = true
+				break
+			}
+		}
 		handledZeroInline := false
-		if zeroInlineWALBatch && rids == nil && zeroInlineValueLen > 0 {
+		if zeroInlineWALBatch && !hasWALRecordRevisions && rids == nil && zeroInlineValueLen > 0 {
 			var err error
 			handledZeroInline, err = b.db.appendWALZeroInlineEntries(lane, b.entries, seq, zeroInlineValueLen, durability)
 			if err != nil {
@@ -34333,14 +34346,15 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 			for i := range b.entries {
 				op := &b.entries[i]
+				recordRevision := walRecordRevision(op.Revision)
 				switch op.Type {
 				case batch.OpDelete:
-					records = append(records, logRecord{Op: logOpDelete, Key: op.Key, Seq: seq})
+					records = append(records, logRecord{Op: logOpDelete, Key: op.Key, Seq: seq, Revision: recordRevision})
 				case batch.OpPut:
 					if rids != nil && rids[i] != 0 {
-						records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i], Seq: seq})
+						records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i], Seq: seq, Revision: recordRevision})
 					} else {
-						records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value, Seq: seq})
+						records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value, Seq: seq, Revision: recordRevision})
 					}
 				}
 			}

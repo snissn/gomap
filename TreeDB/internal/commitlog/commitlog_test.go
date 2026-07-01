@@ -75,6 +75,64 @@ func TestCommitLogWriteReadBatch(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestCommitLogWriteReadBatchWithEntryRevisions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := []Record{
+		{Op: OpSetRID, Key: []byte("k1"), RID: 1, Seq: 7, Revision: 41},
+		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 7},
+		{Op: OpSetInline, Key: []byte("k3"), Value: make([]byte, 8), Seq: 7, Revision: 42},
+		{Op: OpDelete, Key: []byte("k4"), Seq: 7, Revision: 43},
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if got := data[segmentHeaderSize]; got != recordRevisionBatchVersion {
+		t.Fatalf("raw batch version=%d, want revision batch version %d", got, recordRevisionBatchVersion)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	got, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read batch: %v", err)
+	}
+	if len(got) != len(records) {
+		_ = reader.Close()
+		t.Fatalf("record count: got %d want %d", len(got), len(records))
+	}
+	for i := range records {
+		if got[i].Op != records[i].Op || got[i].RID != records[i].RID ||
+			got[i].Seq != records[i].Seq || got[i].Revision != records[i].Revision ||
+			!bytes.Equal(got[i].Key, records[i].Key) || !bytes.Equal(got[i].Value, records[i].Value) {
+			_ = reader.Close()
+			t.Fatalf("record %d=%+v, want %+v", i, got[i], records[i])
+		}
+	}
+	if _, err := reader.ReadBatch(); !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	_ = reader.Close()
+}
+
 func TestCommitLogAppendCoalescesSameSeqSmallRecords(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

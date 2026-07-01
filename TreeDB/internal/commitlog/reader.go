@@ -103,28 +103,38 @@ func decodeBatch(payload []byte) ([]Record, error) {
 	}
 	switch payload[0] {
 	case Version:
-		return decodeBatchV1(payload)
+		return decodeBatchRecords(payload, false)
 	case zeroInlineBatchVersion:
 		return decodeZeroInlineBatch(payload)
+	case recordRevisionBatchVersion:
+		return decodeBatchRecords(payload, true)
 	default:
 		return nil, ErrCorrupt
 	}
 }
 
 func decodeBatchV1(payload []byte) ([]Record, error) {
+	return decodeBatchRecords(payload, false)
+}
+
+func decodeBatchRecords(payload []byte, withRevision bool) ([]Record, error) {
 	count := binary.LittleEndian.Uint32(payload[1:5])
-	minBytes := int64(count) * int64(recordHeaderSize)
+	headerSize := recordHeaderSize
+	if withRevision {
+		headerSize = recordRevisionHeaderSize
+	}
+	minBytes := int64(count) * int64(headerSize)
 	if minBytes < 0 || minBytes > int64(len(payload)) {
 		return nil, ErrCorrupt
 	}
-	if count > uint32(len(payload)/recordHeaderSize) {
+	if count > uint32(len(payload)/headerSize) {
 		return nil, ErrCorrupt
 	}
 
 	records := make([]Record, 0, count)
 	off := batchHeaderSize
 	for i := uint32(0); i < count; i++ {
-		if off+recordHeaderSize > len(payload) {
+		if off+headerSize > len(payload) {
 			return nil, ErrCorrupt
 		}
 		op := payload[off]
@@ -132,17 +142,21 @@ func decodeBatchV1(payload []byte) ([]Record, error) {
 		valLen := binary.LittleEndian.Uint32(payload[off+3 : off+7])
 		rid := binary.LittleEndian.Uint64(payload[off+7 : off+15])
 		seq := binary.LittleEndian.Uint64(payload[off+15 : off+23])
+		revision := uint64(0)
+		if withRevision {
+			revision = binary.LittleEndian.Uint64(payload[off+23 : off+31])
+		}
 		if recordSizeExceedsMax(keyLen, valLen) {
 			return nil, ErrRecordTooLarge
 		}
-		recSize := recordHeaderSize + int(keyLen) + int(valLen)
+		recSize := headerSize + int(keyLen) + int(valLen)
 		if op == OpSetInlineZero {
-			recSize = recordHeaderSize + int(keyLen)
+			recSize = headerSize + int(keyLen)
 		}
 		if off+recSize > len(payload) {
 			return nil, ErrCorrupt
 		}
-		keyStart := off + recordHeaderSize
+		keyStart := off + headerSize
 		valStart := keyStart + int(keyLen)
 		key := payload[keyStart:valStart]
 		var val []byte
@@ -173,7 +187,7 @@ func decodeBatchV1(payload []byte) ([]Record, error) {
 			return nil, ErrCorrupt
 		}
 
-		records = append(records, Record{Op: op, Key: key, Value: val, RID: rid, Seq: seq})
+		records = append(records, Record{Op: op, Key: key, Value: val, RID: rid, Seq: seq, Revision: revision})
 		off += recSize
 	}
 	if off != len(payload) {

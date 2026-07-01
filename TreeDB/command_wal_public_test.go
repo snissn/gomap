@@ -1515,6 +1515,27 @@ func TestPublicCommandWALBatchFallbackPreservesEntryRevisions(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchAppendUsesStablePayload(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+
+	if _, _, err := wrapped.SetViewWithReplayBytes([]byte("alpha"), []byte("one")); err != nil {
+		t.Fatalf("SetViewWithReplayBytes alpha: %v", err)
+	}
+	if _, _, err := wrapped.SetViewWithReplayBytes([]byte("bravo"), []byte("two")); err != nil {
+		t.Fatalf("SetViewWithReplayBytes bravo: %v", err)
+	}
+	if wrapped.payloadBypass || wrapped.payload.Count() != wrapped.opCount || wrapped.payload.Count() != 2 {
+		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable count 2", wrapped.payloadBypass, wrapped.payload.Count(), wrapped.opCount)
+	}
+	if err := wrapped.appendCommandWAL(false); err != nil {
+		t.Fatalf("appendCommandWAL: %v", err)
+	}
+	if inner.replayCalls != 0 {
+		t.Fatalf("inner replay calls=%d, want 0 for stable payload append", inner.replayCalls)
+	}
+}
+
 func TestPublicCommandWALBatchSetViewBypassesPayloadBuilderWithoutInnerCopy(t *testing.T) {
 	inner := &commandWALPayloadSoftCapBatch{}
 	wrapped := newCommandWALPublicBatch(nil, inner, 0)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -188,6 +189,143 @@ func TestUnifiedWAL_CrashRecoveryCompactZeroInlineBatch(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("value mismatch for %q: got %x want %x", key, got, want)
 		}
+	}
+}
+
+func runUnifiedWALRevisionCrashWriter(t *testing.T, dir string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperUnifiedWALRevisionCrashWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CACHING_WAL_REVISION_CRASH_HELPER=1",
+		"TREEDB_CACHING_WAL_REVISION_CRASH_DIR="+dir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
+func TestHelperUnifiedWALRevisionCrashWriter(t *testing.T) {
+	if os.Getenv("TREEDB_CACHING_WAL_REVISION_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("TREEDB_CACHING_WAL_REVISION_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEDB_CACHING_WAL_REVISION_CRASH_DIR")
+	}
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "skiplist",
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+
+	b := cache.NewBatch()
+	if err := b.SetWithRevision([]byte("explicit"), []byte("value"), page.EntryRevision(41)); err != nil {
+		t.Fatalf("SetWithRevision explicit: %v", err)
+	}
+	if err := b.Set([]byte("seq-backed"), []byte("value")); err != nil {
+		t.Fatalf("Set seq-backed: %v", err)
+	}
+	if err := b.DeleteWithRevision([]byte("deleted"), page.EntryRevision(43)); err != nil {
+		t.Fatalf("DeleteWithRevision deleted: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	_ = b.Close()
+
+	// Simulate a crash: do not close the cache or backend, because Close drains
+	// memtables and can avoid replaying the cached redo WAL.
+	os.Exit(0)
+}
+
+func TestUnifiedWAL_CrashRecoveryPreservesEntryRevision(t *testing.T) {
+	dir := t.TempDir()
+	runUnifiedWALRevisionCrashWriter(t, dir)
+
+	reader, err := commitlog.NewReader(filepath.Join(dir, "wal", "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("commitlog.NewReader: %v", err)
+	}
+	records, err := reader.ReadBatch()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("ReadBatch: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("reader Close: %v", err)
+	}
+	byKey := make(map[string]commitlog.Record, len(records))
+	for _, rec := range records {
+		byKey[string(rec.Key)] = rec
+	}
+	seqRecord, ok := byKey["seq-backed"]
+	if !ok {
+		t.Fatalf("missing seq-backed record: %+v", records)
+	}
+	if seqRecord.Seq == 0 || seqRecord.Revision != 0 {
+		t.Fatalf("seq-backed record seq=%d revision=%d, want nonzero seq and zero record revision", seqRecord.Seq, seqRecord.Revision)
+	}
+	explicitRecord, ok := byKey["explicit"]
+	if !ok {
+		t.Fatalf("missing explicit record: %+v", records)
+	}
+	if explicitRecord.Seq != seqRecord.Seq || explicitRecord.Revision != 41 {
+		t.Fatalf("explicit record seq=%d revision=%d, want seq %d revision 41", explicitRecord.Seq, explicitRecord.Revision, seqRecord.Seq)
+	}
+	deletedRecord, ok := byKey["deleted"]
+	if !ok {
+		t.Fatalf("missing deleted record: %+v", records)
+	}
+	if deletedRecord.Op != commitlog.OpDelete || deletedRecord.Seq != seqRecord.Seq || deletedRecord.Revision != 43 {
+		t.Fatalf("deleted record op=%d seq=%d revision=%d, want delete seq %d revision 43", deletedRecord.Op, deletedRecord.Seq, deletedRecord.Revision, seqRecord.Seq)
+	}
+
+	opened, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer opened.Close()
+
+	explicitValue, explicitRevision, err := opened.GetVersioned([]byte("explicit"))
+	if err != nil {
+		t.Fatalf("GetVersioned explicit: %v", err)
+	}
+	if !bytes.Equal(explicitValue, []byte("value")) || explicitRevision != page.EntryRevision(41) {
+		t.Fatalf("GetVersioned explicit=(%q,%d), want (value,41)", explicitValue, explicitRevision)
+	}
+	seqValue, seqRevision, err := opened.GetVersioned([]byte("seq-backed"))
+	if err != nil {
+		t.Fatalf("GetVersioned seq-backed: %v", err)
+	}
+	if !bytes.Equal(seqValue, []byte("value")) || seqRevision != page.EntryRevision(seqRecord.Seq) {
+		t.Fatalf("GetVersioned seq-backed=(%q,%d), want (value,%d)", seqValue, seqRevision, seqRecord.Seq)
+	}
+	deletedValue, deletedRevision, err := opened.GetVersioned([]byte("deleted"))
+	if err != nil {
+		t.Fatalf("GetVersioned deleted: %v", err)
+	}
+	if deletedValue != nil {
+		t.Fatalf("GetVersioned deleted=(%q,%d), want missing after replayed delete", deletedValue, deletedRevision)
+	}
+	if got := opened.State().MaxEntryRevision; got < page.EntryRevision(43) {
+		t.Fatalf("MaxEntryRevision=%d, want >= 43", got)
 	}
 }
 
