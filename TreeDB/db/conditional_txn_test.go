@@ -170,6 +170,93 @@ func TestConditionalTxnAllowsDisjointConcurrentWrite(t *testing.T) {
 	assertDBValue(t, d, "target", "value")
 }
 
+func TestConditionalTxnReadsStagedWritesBeforeSnapshot(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("k"), []byte("before")); err != nil {
+		t.Fatalf("seed k: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+
+	const stagedRevision page.EntryRevision = 12345
+	if err := tx.SetWithRevision([]byte("k"), []byte("staged"), stagedRevision); err != nil {
+		t.Fatalf("tx.SetWithRevision: %v", err)
+	}
+	value, revision, err := tx.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("tx.GetVersioned staged: %v", err)
+	}
+	if !bytes.Equal(value, []byte("staged")) || revision != stagedRevision {
+		t.Fatalf("staged GetVersioned=(%q,%d), want staged/%d", value, revision, stagedRevision)
+	}
+	has, err := tx.Has([]byte("k"))
+	if err != nil {
+		t.Fatalf("tx.Has staged: %v", err)
+	}
+	if !has {
+		t.Fatalf("tx.Has staged=false, want true")
+	}
+	if got := len(tx.reads); got != 0 {
+		t.Fatalf("staged-only reads recorded %d read preconditions, want 0", got)
+	}
+	if err := tx.CommitSync(); err != nil {
+		t.Fatalf("tx.CommitSync: %v", err)
+	}
+	assertDBValue(t, d, "k", "staged")
+}
+
+func TestConditionalTxnReadsStagedDeleteBeforeSnapshot(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("k"), []byte("before")); err != nil {
+		t.Fatalf("seed k: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+
+	if err := tx.Delete([]byte("k")); err != nil {
+		t.Fatalf("tx.Delete: %v", err)
+	}
+	value, revision, err := tx.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("tx.GetVersioned staged delete: %v", err)
+	}
+	if value != nil || revision != page.LegacyEntryRevision {
+		t.Fatalf("staged delete GetVersioned=(%q,%d), want nil/legacy", value, revision)
+	}
+	has, err := tx.Has([]byte("k"))
+	if err != nil {
+		t.Fatalf("tx.Has staged delete: %v", err)
+	}
+	if has {
+		t.Fatalf("tx.Has staged delete=true, want false")
+	}
+	if got := len(tx.reads); got != 0 {
+		t.Fatalf("staged-delete-only reads recorded %d read preconditions, want 0", got)
+	}
+	if err := tx.CommitSync(); err != nil {
+		t.Fatalf("tx.CommitSync: %v", err)
+	}
+	if got, err := d.Get([]byte("k")); err != nil || got != nil {
+		t.Fatalf("k after staged delete=(%q,%v), want missing", got, err)
+	}
+}
+
 func TestConditionalTxnRejectsDirectRootPublishChangingReadKey(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

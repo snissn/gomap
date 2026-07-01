@@ -104,7 +104,7 @@ func TestConditionalTxnDirectBypassCommitWaitsForOracleRecord(t *testing.T) {
 	}
 }
 
-func TestConditionalTxnBackendBatchRecordsPointConflictsPrecisely(t *testing.T) {
+func TestConditionalTxnDirectBypassRecordsPointConflictsPrecisely(t *testing.T) {
 	backend := NewMockBackend()
 	cache, err := Open(t.TempDir(), backend, Options{
 		DisableWAL:     true,
@@ -129,35 +129,33 @@ func TestConditionalTxnBackendBatchRecordsPointConflictsPrecisely(t *testing.T) 
 		t.Fatalf("tx.GetVersioned: %v", err)
 	}
 
+	rootMarkersBefore := cache.conditionalOracleRootMarkers.Load()
+	recordedPointsBefore := cache.conditionalOracleRecordedPoints.Load()
 	wb := cache.NewBatch()
 	value := make([]byte, 256)
 	for i := range value {
 		value[i] = 'v'
 	}
 	const n = 128
-	wb.backend = newBackendCommitBatch(backend.NewBatch(), n)
 	for i := 0; i < n; i++ {
 		key := []byte(fmt.Sprintf("z%05d", i))
 		if err := wb.Set(key, value); err != nil {
 			_ = wb.Close()
-			t.Fatalf("backend batch Set %d: %v", i, err)
+			t.Fatalf("direct bypass batch Set %d: %v", i, err)
 		}
 	}
-	if err := wb.Write(); err != nil {
+	if err := wb.writeBypass(false); err != nil {
 		_ = wb.Close()
-		t.Fatalf("backend batch Write: %v", err)
+		t.Fatalf("direct bypass batch Write: %v", err)
 	}
 	if err := wb.Close(); err != nil {
 		t.Fatalf("backend batch Close: %v", err)
 	}
-	if backend.writeCalls != 1 {
-		t.Fatalf("backend writeCalls=%d want 1 streaming backend commit", backend.writeCalls)
+	if got := cache.conditionalOracleRootMarkers.Load() - rootMarkersBefore; got != 0 {
+		t.Fatalf("conditional oracle root markers delta=%d want 0 for precise direct-bypass metadata", got)
 	}
-	if got := cache.conditionalOracleRootMarkers.Load(); got != 0 {
-		t.Fatalf("conditional oracle root markers=%d want 0 for precise streaming metadata", got)
-	}
-	if got := cache.conditionalOracleRecordedPoints.Load(); got < n {
-		t.Fatalf("conditional oracle recorded points=%d want at least %d", got, n)
+	if got := cache.conditionalOracleRecordedPoints.Load() - recordedPointsBefore; got < n {
+		t.Fatalf("conditional oracle recorded points delta=%d want at least %d", got, n)
 	}
 
 	if err := tx.Set([]byte("a"), []byte("inside")); err != nil {
@@ -295,8 +293,14 @@ func (b *blockingWriteBackend) applyBlockingBatchOps(ops []batch.Entry, syncWrit
 					delete(b.data, k)
 				}
 			}
+			for k := range b.pointerEntries {
+				if batch.DeleteRangeContainsKey(batch.DeleteRange{Start: op.Key, End: op.Value}, []byte(k)) {
+					delete(b.pointerEntries, k)
+				}
+			}
 		case batch.OpDelete:
 			delete(b.data, string(op.Key))
+			delete(b.pointerEntries, string(op.Key))
 		case batch.OpPut:
 			if op.IsPtr {
 				b.pointerEntries[string(op.Key)] = op.ValuePtr
@@ -305,6 +309,7 @@ func (b *blockingWriteBackend) applyBlockingBatchOps(ops []batch.Entry, syncWrit
 			}
 			value := append([]byte(nil), op.Value...)
 			b.data[string(op.Key)] = value
+			delete(b.pointerEntries, string(op.Key))
 		}
 	}
 	b.writeCalls++

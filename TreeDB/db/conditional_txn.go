@@ -11,9 +11,11 @@ import (
 )
 
 const (
-	conditionalTxnInlineReadSetCap = 8
-	conditionalTxnInlineKeyArena   = 256
-	conditionalTxnReadMapThreshold = 16
+	conditionalTxnInlineReadSetCap  = 8
+	conditionalTxnInlineWriteSetCap = 8
+	conditionalTxnInlineKeyArena    = 256
+	conditionalTxnReadMapThreshold  = 16
+	conditionalTxnWriteMapThreshold = 16
 )
 
 // ConditionalTxn is a native TreeDB snapshot transaction with optimistic
@@ -34,17 +36,25 @@ type ConditionalTxn struct {
 
 	closed bool
 
-	reads       []conditionalReadPrecondition
-	inlineReads [conditionalTxnInlineReadSetCap]conditionalReadPrecondition
-	readIndex   map[string]int
-	keyArena    []byte
-	inlineKeys  [conditionalTxnInlineKeyArena]byte
+	reads        []conditionalReadPrecondition
+	inlineReads  [conditionalTxnInlineReadSetCap]conditionalReadPrecondition
+	readIndex    map[string]int
+	writes       []conditionalStagedWrite
+	inlineWrites [conditionalTxnInlineWriteSetCap]conditionalStagedWrite
+	writeIndex   map[string]int
+	keyArena     []byte
+	inlineKeys   [conditionalTxnInlineKeyArena]byte
 }
 
 type conditionalReadPrecondition struct {
 	key      []byte
 	revision page.EntryRevision
 	found    bool
+}
+
+type conditionalStagedWrite struct {
+	key        []byte
+	entryIndex int
 }
 
 type conditionalConflictOracle struct {
@@ -102,6 +112,7 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 		startCommitSeq: start,
 	}
 	tx.reads = tx.inlineReads[:0]
+	tx.writes = tx.inlineWrites[:0]
 	tx.keyArena = tx.inlineKeys[:0]
 	return tx, nil
 }
@@ -124,6 +135,14 @@ func (tx *ConditionalTxn) ReserveReadSet(n int) {
 func (tx *ConditionalTxn) ReserveWrites(n int) {
 	if tx == nil || tx.batch == nil || n <= 0 {
 		return
+	}
+	if n > cap(tx.writes) {
+		next := make([]conditionalStagedWrite, len(tx.writes), n)
+		copy(next, tx.writes)
+		tx.writes = next
+		if n >= conditionalTxnWriteMapThreshold {
+			tx.ensureWriteIndex(n)
+		}
 	}
 	tx.batch.Reserve(n)
 }
@@ -166,6 +185,17 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 		return dst, page.LegacyEntryRevision, err
 	}
 	key = normalizeRawKVPointKey(key)
+	if staged, ok := tx.findStagedWrite(key); ok {
+		switch staged.Type {
+		case batchpkg.OpPut:
+			if staged.IsPtr {
+				return dst, staged.Revision, batchpkg.ErrMissingValueReader
+			}
+			return append(dst, staged.Value...), staged.Revision, nil
+		case batchpkg.OpDelete:
+			return dst, staged.Revision, tree.ErrKeyNotFound
+		}
+	}
 	out, revision, err := tx.snap.GetVersionedAppend(key, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		if recErr := tx.recordRead(key, revision, false); recErr != nil {
@@ -200,7 +230,12 @@ func (tx *ConditionalTxn) Set(key, value []byte) error {
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.Set(key, value)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.Set(key, value); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // SetWithRevision stages a put with an explicit native entry revision.
@@ -208,7 +243,12 @@ func (tx *ConditionalTxn) SetWithRevision(key, value []byte, revision page.Entry
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.SetWithRevision(key, value, revision)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.SetWithRevision(key, value, revision); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // SetView stages a put without copying key/value bytes. The caller must keep
@@ -217,7 +257,12 @@ func (tx *ConditionalTxn) SetView(key, value []byte) error {
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.SetView(key, value)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.SetView(key, value); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // SetViewWithRevision is SetView with an explicit native entry revision.
@@ -225,7 +270,12 @@ func (tx *ConditionalTxn) SetViewWithRevision(key, value []byte, revision page.E
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.SetViewWithRevision(key, value, revision)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.SetViewWithRevision(key, value, revision); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // Delete stages a snapshot-conditional tombstone in the native TreeDB batch.
@@ -233,7 +283,12 @@ func (tx *ConditionalTxn) Delete(key []byte) error {
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.Delete(key)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.Delete(key); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // DeleteWithRevision stages a tombstone with an explicit native entry revision.
@@ -241,7 +296,12 @@ func (tx *ConditionalTxn) DeleteWithRevision(key []byte, revision page.EntryRevi
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.DeleteWithRevision(key, revision)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.DeleteWithRevision(key, revision); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // DeleteView stages a tombstone without copying key bytes. The caller must keep
@@ -250,7 +310,12 @@ func (tx *ConditionalTxn) DeleteView(key []byte) error {
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.DeleteView(key)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.DeleteView(key); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // DeleteViewWithRevision is DeleteView with an explicit native entry revision.
@@ -258,7 +323,12 @@ func (tx *ConditionalTxn) DeleteViewWithRevision(key []byte, revision page.Entry
 	if err := tx.ensureOpen(); err != nil {
 		return err
 	}
-	return tx.batch.DeleteViewWithRevision(key, revision)
+	entryIndex := tx.batch.batch.Len()
+	if err := tx.batch.DeleteViewWithRevision(key, revision); err != nil {
+		return err
+	}
+	tx.recordStagedWriteAt(entryIndex)
+	return nil
 }
 
 // Commit validates recorded reads and publishes staged writes without forcing a
@@ -353,6 +423,89 @@ func (tx *ConditionalTxn) finish() error {
 	return err
 }
 
+func (tx *ConditionalTxn) recordStagedWriteAt(entryIndex int) {
+	if tx == nil || tx.batch == nil || tx.batch.batch == nil {
+		return
+	}
+	entries := tx.batch.batch.OrderedEntries()
+	if entryIndex < 0 || entryIndex >= len(entries) {
+		return
+	}
+	entry := entries[entryIndex]
+	switch entry.Type {
+	case batchpkg.OpPut, batchpkg.OpDelete:
+		tx.recordStagedPointWrite(entry.Key, entryIndex)
+	}
+}
+
+func (tx *ConditionalTxn) recordStagedPointWrite(key []byte, entryIndex int) {
+	if tx == nil {
+		return
+	}
+	if tx.writeIndex != nil {
+		mapKey := conditionalBytesString(key)
+		if idx, ok := tx.writeIndex[mapKey]; ok {
+			tx.writes[idx].key = key
+			tx.writes[idx].entryIndex = entryIndex
+			return
+		}
+		tx.writeIndex[mapKey] = len(tx.writes)
+		tx.writes = append(tx.writes, conditionalStagedWrite{key: key, entryIndex: entryIndex})
+		return
+	}
+	for i := len(tx.writes) - 1; i >= 0; i-- {
+		if bytesEqual(tx.writes[i].key, key) {
+			tx.writes[i].key = key
+			tx.writes[i].entryIndex = entryIndex
+			return
+		}
+	}
+	tx.writes = append(tx.writes, conditionalStagedWrite{key: key, entryIndex: entryIndex})
+	if len(tx.writes) >= conditionalTxnWriteMapThreshold {
+		tx.ensureWriteIndex(len(tx.writes) * 2)
+	}
+}
+
+func (tx *ConditionalTxn) findStagedWrite(key []byte) (batchpkg.Entry, bool) {
+	if tx == nil || tx.batch == nil || tx.batch.batch == nil || len(tx.writes) == 0 {
+		return batchpkg.Entry{}, false
+	}
+	var staged conditionalStagedWrite
+	if tx.writeIndex != nil {
+		idx, ok := tx.writeIndex[conditionalBytesString(key)]
+		if !ok {
+			return batchpkg.Entry{}, false
+		}
+		staged = tx.writes[idx]
+	} else {
+		found := false
+		for i := len(tx.writes) - 1; i >= 0; i-- {
+			if bytesEqual(tx.writes[i].key, key) {
+				staged = tx.writes[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			return batchpkg.Entry{}, false
+		}
+	}
+	entries := tx.batch.batch.OrderedEntries()
+	if staged.entryIndex < 0 || staged.entryIndex >= len(entries) {
+		return batchpkg.Entry{}, false
+	}
+	entry := entries[staged.entryIndex]
+	if !bytesEqual(entry.Key, key) {
+		return batchpkg.Entry{}, false
+	}
+	switch entry.Type {
+	case batchpkg.OpPut, batchpkg.OpDelete:
+		return entry, true
+	default:
+		return batchpkg.Entry{}, false
+	}
+}
+
 func (tx *ConditionalTxn) recordRead(key []byte, revision page.EntryRevision, found bool) error {
 	if idx, ok := tx.findRead(key); ok {
 		prev := tx.reads[idx]
@@ -402,6 +555,19 @@ func (tx *ConditionalTxn) ensureReadIndex(capHint int) {
 	tx.readIndex = make(map[string]int, capHint)
 	for i := range tx.reads {
 		tx.readIndex[conditionalBytesString(tx.reads[i].key)] = i
+	}
+}
+
+func (tx *ConditionalTxn) ensureWriteIndex(capHint int) {
+	if tx.writeIndex != nil {
+		return
+	}
+	if capHint < len(tx.writes) {
+		capHint = len(tx.writes)
+	}
+	tx.writeIndex = make(map[string]int, capHint)
+	for i := range tx.writes {
+		tx.writeIndex[conditionalBytesString(tx.writes[i].key)] = i
 	}
 }
 
