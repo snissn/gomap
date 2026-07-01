@@ -75,7 +75,8 @@ RAW_SPAN_NATIVE_ROUTES = [
     "mixed_point",
     "range_delete",
     "mixed_range_delete",
-    "empty",
+    "empty_batch",
+    "close_or_checkpoint_drain",
 ]
 
 
@@ -223,14 +224,20 @@ def treedb_application_stats_candidates(home: Path) -> list[Path]:
 
     diagnostics = sync / "diagnostics"
     if diagnostics.is_dir():
+        def _mtime(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                return 0.0
+
         final_app_vars = sorted(
             diagnostics.glob("*max-memory-final*.treedb_application_vars.json"),
-            key=lambda path: path.stat().st_mtime,
+            key=_mtime,
             reverse=True,
         )
         app_vars = sorted(
             diagnostics.glob("*.treedb_application_vars.json"),
-            key=lambda path: path.stat().st_mtime,
+            key=_mtime,
             reverse=True,
         )
         candidates.extend(final_app_vars)
