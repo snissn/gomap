@@ -1018,6 +1018,73 @@ func TestTypedColumnAdapterRoundTripString(t *testing.T) {
 	}
 }
 
+func TestTypedColumnAdapterDeclaredRowsFusedStringDictionarySortedNullable(t *testing.T) {
+	kind := typedColumnAdapterField("kind", ColumnStoreValueString)
+	maybeKind := typedColumnAdapterNullableField("maybe_kind", ColumnStoreValueString)
+	fields := []TypedStorageField{kind, maybeKind}
+	allColumns := []ColumnStoreColumn{
+		{Name: kind.Name, Path: kind.Path, ValueType: kind.ValueType, Owner: kind.Owner},
+		{Name: maybeKind.Name, Path: maybeKind.Path, ValueType: maybeKind.ValueType, Owner: maybeKind.Owner, Nullable: true},
+	}
+	rows := []columnDeclaredRow{
+		{ID: []byte("r0"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueString, Present: true, String: "zeta"},
+			{Type: ColumnStoreValueString, Present: true, Null: true},
+		}},
+		{ID: []byte("r1"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+			{Type: ColumnStoreValueString, Present: false, Null: true},
+		}},
+		{ID: []byte("r2"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueString, Present: true, String: "mu"},
+			{Type: ColumnStoreValueString, Present: true, String: "beta"},
+		}},
+		{ID: []byte("r3"), Values: []columnDeclaredValue{
+			{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+			{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+		}},
+	}
+	part, err := buildTypedColumnAdapterPartFromDeclaredRows(typedColumnAdapterOptions{PartID: 43, RowsPerGranule: 2, Fields: fields}, allColumns, rows)
+	if err != nil {
+		t.Fatalf("buildTypedColumnAdapterPartFromDeclaredRows: %v", err)
+	}
+	if dict := part.Dictionary["kind"]; dict["alpha"] != 0 || dict["mu"] != 1 || dict["zeta"] != 2 {
+		t.Fatalf("kind dictionary=%+v want lexical codes", dict)
+	}
+	if dict := part.Dictionary["maybe_kind"]; dict["alpha"] != 0 || dict["beta"] != 1 || len(dict) != 2 {
+		t.Fatalf("maybe_kind dictionary=%+v want lexical non-null codes", dict)
+	}
+	image, err := part.buildImage()
+	if err != nil {
+		t.Fatalf("buildImage: %v", err)
+	}
+	parsed, err := typedColumnAdapterPartFromImage(part.Options, image)
+	if err != nil {
+		t.Fatalf("typedColumnAdapterPartFromImage: %v", err)
+	}
+	gotRows, err := parsed.scanRows()
+	if err != nil {
+		t.Fatalf("scanRows: %v", err)
+	}
+	wantKind := []string{"zeta", "alpha", "mu", "alpha"}
+	wantMaybe := []columnDeclaredValue{
+		{Type: ColumnStoreValueString, Present: true, Null: true},
+		{Type: ColumnStoreValueString, Present: false, Null: true},
+		{Type: ColumnStoreValueString, Present: true, String: "beta"},
+		{Type: ColumnStoreValueString, Present: true, String: "alpha"},
+	}
+	for i := range gotRows {
+		if got := gotRows[i].Values["kind"].String; got != wantKind[i] {
+			t.Fatalf("row %d kind=%q want %q rows=%+v", i, got, wantKind[i], gotRows)
+		}
+		got := gotRows[i].Values["maybe_kind"]
+		want := wantMaybe[i]
+		if got.Present != want.Present || got.Null != want.Null || got.String != want.String {
+			t.Fatalf("row %d maybe_kind=%+v want %+v rows=%+v", i, got, want, gotRows)
+		}
+	}
+}
+
 func TestTypedColumnAdapterScalarExtremes(t *testing.T) {
 	t.Run("int64", func(t *testing.T) {
 		want := []int64{math.MinInt64, -1, 0, math.MaxInt64}

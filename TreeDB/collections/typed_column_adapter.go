@@ -298,6 +298,11 @@ type typedColumnAdapterBuildMetrics struct {
 	PartBuild       time.Duration
 }
 
+type typedColumnAdapterStringDictionaryBuildState struct {
+	codeByValue           map[string]int64
+	valuesByTemporaryCode []string
+}
+
 type typedColumnPartDecodedValues struct {
 	PrimaryIDs     []int64
 	RowByPrimaryID []int
@@ -697,42 +702,16 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 	if err != nil {
 		return nil, err
 	}
-	dictionaryStart := time.Now()
+	stringDictionaryStates := make([]*typedColumnAdapterStringDictionaryBuildState, len(columns))
 	for i := range columns {
 		if columns[i].Field.ValueType == ColumnStoreValueString {
-			var dict map[string]int64
-			if indexedSource != nil {
-				dict, err = buildTypedColumnAdapterStringDictionaryFromIndexedSource(columns[i], indexedSource, valueIndexes[i])
-			} else {
-				dict, err = buildTypedColumnAdapterStringDictionaryFromSource(columns[i], rowSource)
-			}
-			if err != nil {
-				return nil, err
-			}
-			columns[i].Dictionary = dict
-			mode := typedColumnAdapterBuildDictionaryModeForColumn(opts, columns[i].Definition.Name)
-			if mode.Reverse {
-				columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
-			}
-			if mode.ValuesByCode {
-				columns[i].DictionaryValuesByCode, err = typedColumnAdapterDictionaryValuesByCodeFromForward(dict, len(dict))
-				if err != nil {
-					return nil, err
-				}
-			}
-			columns[i].Definition.Cardinality = uint32(len(dict))
+			stringDictionaryStates[i] = newTypedColumnAdapterStringDictionaryBuildState()
 		}
 	}
-	metrics.DictionaryBuild += time.Since(dictionaryStart)
 
 	rowCount := rowSource.Len()
 	batchAllocStart := time.Now()
-	defs := make([]typedcolumn.ColumnDefinition, 0, len(columns)+1)
-	defs = append(defs, typedColumnAdapterPrimaryIDDefinition(opts))
-	for _, column := range columns {
-		defs = append(defs, column.Definition)
-	}
-	batch := typedcolumn.Batch{Rows: rowCount, Columns: make(map[string][]int64, len(defs)), Nulls: make(map[string][]bool), Defaults: make(map[string][]bool)}
+	batch := typedcolumn.Batch{Rows: rowCount, Columns: make(map[string][]int64, len(columns)+1), Nulls: make(map[string][]bool), Defaults: make(map[string][]bool)}
 	batch.Columns[typedColumnAdapterPrimaryIDColumn] = make([]int64, rowCount)
 	for _, column := range columns {
 		switch column.Definition.Type {
@@ -945,7 +924,13 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
 			default:
-				encoded, isNull, isDefault, err := encodeTypedColumnAdapterScalarValue(column, value)
+				var encoded int64
+				var isNull, isDefault bool
+				if stringDictionaryStates[columnIdx] != nil {
+					encoded, isNull, isDefault, err = encodeTypedColumnAdapterStringDictionaryValue(column, value, stringDictionaryStates[columnIdx])
+				} else {
+					encoded, isNull, isDefault, err = encodeTypedColumnAdapterScalarValue(column, value)
+				}
 				if err != nil {
 					return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
 				}
@@ -958,6 +943,16 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 		}
 	}
 	metrics.BatchFill += time.Since(batchFillStart)
+	dictionaryStart := time.Now()
+	if err := finalizeTypedColumnAdapterStringDictionaries(opts, columns, stringDictionaryStates, batch); err != nil {
+		return nil, err
+	}
+	metrics.DictionaryBuild += time.Since(dictionaryStart)
+	defs := make([]typedcolumn.ColumnDefinition, 0, len(columns)+1)
+	defs = append(defs, typedColumnAdapterPrimaryIDDefinition(opts))
+	for _, column := range columns {
+		defs = append(defs, column.Definition)
+	}
 	partBuildStart := time.Now()
 	rowsPerGranule := opts.RowsPerGranule
 	if rowsPerGranule == 0 {
@@ -6435,6 +6430,25 @@ func encodeTypedColumnAdapterScalarValue(column typedColumnAdapterColumn, value 
 	return encoded, false, false, err
 }
 
+func encodeTypedColumnAdapterStringDictionaryValue(column typedColumnAdapterColumn, value columnDeclaredValue, state *typedColumnAdapterStringDictionaryBuildState) (int64, bool, bool, error) {
+	if state == nil {
+		return encodeTypedColumnAdapterScalarValue(column, value)
+	}
+	if column.Field.ValueType != ColumnStoreValueString || column.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode {
+		return 0, false, false, fmt.Errorf("%w: %s is not a string dictionary column", errTypedColumnAdapterUnsupportedType, column.Field.ValueType)
+	}
+	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
+		return 0, false, false, err
+	}
+	if !value.Present {
+		return 0, false, true, nil
+	}
+	if value.Null {
+		return 0, true, false, nil
+	}
+	return state.temporaryCode(value.String), false, false, nil
+}
+
 func encodeTypedColumnAdapterValue(column typedColumnAdapterColumn, value columnDeclaredValue) (int64, error) {
 	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
 		return 0, err
@@ -6762,8 +6776,80 @@ func typedColumnAdapterRowValue(row typedColumnAdapterRow, column typedColumnAda
 	return pathValue, pathOK, nil
 }
 
-func buildTypedColumnAdapterStringDictionary(column typedColumnAdapterColumn, rows []typedColumnAdapterRow) (map[string]int64, error) {
-	return buildTypedColumnAdapterStringDictionaryFromSource(column, typedColumnAdapterRowsSource(rows))
+func newTypedColumnAdapterStringDictionaryBuildState() *typedColumnAdapterStringDictionaryBuildState {
+	return &typedColumnAdapterStringDictionaryBuildState{codeByValue: make(map[string]int64)}
+}
+
+func (s *typedColumnAdapterStringDictionaryBuildState) temporaryCode(value string) int64 {
+	if code, ok := s.codeByValue[value]; ok {
+		return code
+	}
+	code := int64(len(s.valuesByTemporaryCode))
+	s.codeByValue[value] = code
+	s.valuesByTemporaryCode = append(s.valuesByTemporaryCode, value)
+	return code
+}
+
+func (s *typedColumnAdapterStringDictionaryBuildState) sortedDictionaryAndRecode() (map[string]int64, []int64) {
+	values := append([]string(nil), s.valuesByTemporaryCode...)
+	sort.Strings(values)
+	dict := make(map[string]int64, len(values))
+	temporaryToFinal := make([]int64, len(values))
+	for finalCode, value := range values {
+		final := int64(finalCode)
+		dict[value] = final
+		temporaryToFinal[s.codeByValue[value]] = final
+	}
+	return dict, temporaryToFinal
+}
+
+func finalizeTypedColumnAdapterStringDictionaries(opts typedColumnAdapterOptions, columns []typedColumnAdapterColumn, states []*typedColumnAdapterStringDictionaryBuildState, batch typedcolumn.Batch) error {
+	for i := range columns {
+		if i >= len(states) || states[i] == nil {
+			continue
+		}
+		dict, temporaryToFinal := states[i].sortedDictionaryAndRecode()
+		if err := recodeTypedColumnAdapterStringBatchColumn(columns[i], batch, temporaryToFinal); err != nil {
+			return err
+		}
+		columns[i].Dictionary = dict
+		mode := typedColumnAdapterBuildDictionaryModeForColumn(opts, columns[i].Definition.Name)
+		if mode.Reverse {
+			columns[i].ReverseDictionary = reverseTypedColumnAdapterDictionary(dict)
+		}
+		if mode.ValuesByCode {
+			valuesByCode, err := typedColumnAdapterDictionaryValuesByCodeFromForward(dict, len(dict))
+			if err != nil {
+				return err
+			}
+			columns[i].DictionaryValuesByCode = valuesByCode
+		}
+		columns[i].Definition.Cardinality = uint32(len(dict))
+	}
+	return nil
+}
+
+func recodeTypedColumnAdapterStringBatchColumn(column typedColumnAdapterColumn, batch typedcolumn.Batch, temporaryToFinal []int64) error {
+	values, ok := batch.Columns[column.Definition.Name]
+	if !ok {
+		return fmt.Errorf("collections: typed-column adapter missing string batch column %q", column.Definition.Name)
+	}
+	nulls := batch.Nulls[column.Definition.Name]
+	defaults := batch.Defaults[column.Definition.Name]
+	for rowIdx, temporary := range values {
+		if typedColumnAdapterBoolAt(nulls, rowIdx) || typedColumnAdapterBoolAt(defaults, rowIdx) {
+			continue
+		}
+		if temporary < 0 || int64(len(temporaryToFinal)) <= temporary {
+			return fmt.Errorf("collections: typed-column adapter row %d column %q temporary dictionary code %d outside cardinality %d", rowIdx, column.Definition.Name, temporary, len(temporaryToFinal))
+		}
+		values[rowIdx] = temporaryToFinal[temporary]
+	}
+	return nil
+}
+
+func typedColumnAdapterBoolAt(values []bool, idx int) bool {
+	return idx >= 0 && idx < len(values) && values[idx]
 }
 
 func typedColumnAdapterIndexedSourceColumns(rowSource typedColumnAdapterRowSource, columns []typedColumnAdapterColumn) (typedColumnAdapterIndexedRowSource, []int, error) {
@@ -6780,52 +6866,6 @@ func typedColumnAdapterIndexedSourceColumns(rowSource typedColumnAdapterRowSourc
 		indexes[i] = valueIdx
 	}
 	return indexed, indexes, nil
-}
-
-func buildTypedColumnAdapterStringDictionaryFromSource(column typedColumnAdapterColumn, rowSource typedColumnAdapterRowSource) (map[string]int64, error) {
-	seen := make(map[string]struct{})
-	for rowIdx := 0; rowIdx < rowSource.Len(); rowIdx++ {
-		value, ok, err := rowSource.Value(rowIdx, column)
-		if err != nil {
-			return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
-		}
-		if ok && value.Present && !value.Null {
-			seen[value.String] = struct{}{}
-		}
-	}
-	values := make([]string, 0, len(seen))
-	for value := range seen {
-		values = append(values, value)
-	}
-	sort.Strings(values)
-	dict := make(map[string]int64, len(values))
-	for i, value := range values {
-		dict[value] = int64(i)
-	}
-	return dict, nil
-}
-
-func buildTypedColumnAdapterStringDictionaryFromIndexedSource(column typedColumnAdapterColumn, rowSource typedColumnAdapterIndexedRowSource, valueIdx int) (map[string]int64, error) {
-	seen := make(map[string]struct{})
-	for rowIdx := 0; rowIdx < rowSource.Len(); rowIdx++ {
-		value, ok, err := rowSource.ValueAt(rowIdx, valueIdx)
-		if err != nil {
-			return nil, fmt.Errorf("collections: typed-column adapter row %d field %q: %w", rowIdx, column.Field.Path, err)
-		}
-		if ok && value.Present && !value.Null {
-			seen[value.String] = struct{}{}
-		}
-	}
-	values := make([]string, 0, len(seen))
-	for value := range seen {
-		values = append(values, value)
-	}
-	sort.Strings(values)
-	dict := make(map[string]int64, len(values))
-	for i, value := range values {
-		dict[value] = int64(i)
-	}
-	return dict, nil
 }
 
 func reverseTypedColumnAdapterDictionary(dict map[string]int64) map[int64]string {
