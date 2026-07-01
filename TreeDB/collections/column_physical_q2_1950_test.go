@@ -1050,11 +1050,15 @@ func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testi
 		return
 	}
 	if total == 0 {
-		return
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want nonzero split work", label, diag)
 	}
-	dictionaryTotal := diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos +
-		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos
-	if dictionaryTotal <= 0 {
-		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want dictionary/rank split work when timer resolution records split work", label, diag)
+	if diag.TypedColumnPreparePostPrepareNanos < total {
+		tb.Fatalf("%s typed-column post-prepare nanos=%d want >= split total %d diagnostics=%+v", label, diag.TypedColumnPreparePostPrepareNanos, total, diag)
+	}
+	if diag.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos <= 0 ||
+		diag.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos <= 0 ||
+		diag.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos <= 0 ||
+		diag.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos <= 0 {
+		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want all four split fields populated", label, diag)
 	}
 }
