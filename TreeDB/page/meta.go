@@ -22,11 +22,12 @@ type MetaPageBody struct {
 const (
 	MetaPageBodySizeLegacy       = 60
 	MetaPageBodySizeCommandWALV1 = 76
-	MetaPageBodySizeRevisionV1   = 84
+	MetaPageBodySizeRevisionV1   = 92
 	MetaPageBodySize             = MetaPageBodySizeRevisionV1
 )
 
 var metaCommandWALV1Magic = [8]byte{'T', 'M', 'E', 'T', 'A', 'W', '1', 0}
+var metaRevisionV1Magic = [8]byte{'T', 'M', 'E', 'T', 'A', 'R', '1', 0}
 
 // EncodeMetaBody encodes the MetaPageBody into the provided buffer.
 func (m *MetaPageBody) Encode(buf []byte) {
@@ -41,7 +42,8 @@ func (m *MetaPageBody) Encode(buf []byte) {
 	binary.LittleEndian.PutUint64(buf[52:60], m.LastCommitHeight)
 	copy(buf[60:68], metaCommandWALV1Magic[:])
 	binary.LittleEndian.PutUint64(buf[68:76], m.AppliedCommandLSN)
-	binary.LittleEndian.PutUint64(buf[76:84], m.MaxEntryRevision)
+	copy(buf[76:84], metaRevisionV1Magic[:])
+	binary.LittleEndian.PutUint64(buf[84:92], m.MaxEntryRevision)
 }
 
 // DecodeMetaBody decodes the legacy-safe MetaPageBody fields from the provided
@@ -67,8 +69,8 @@ func DecodeMetaBodyCommandWALV1(buf []byte) MetaPageBody {
 	m := DecodeMetaBody(buf)
 	if len(buf) >= MetaPageBodySizeCommandWALV1 && bytes.Equal(buf[60:68], metaCommandWALV1Magic[:]) {
 		m.AppliedCommandLSN = binary.LittleEndian.Uint64(buf[68:76])
-		if len(buf) >= MetaPageBodySizeRevisionV1 {
-			m.MaxEntryRevision = binary.LittleEndian.Uint64(buf[76:84])
+		if len(buf) >= MetaPageBodySizeRevisionV1 && bytes.Equal(buf[76:84], metaRevisionV1Magic[:]) {
+			m.MaxEntryRevision = binary.LittleEndian.Uint64(buf[84:92])
 		}
 	}
 	return m

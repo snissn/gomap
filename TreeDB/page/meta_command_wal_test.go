@@ -86,4 +86,17 @@ func TestMetaPageBodyCommandWALV1DecodeDefaultsMaxEntryRevision(t *testing.T) {
 	if got.MaxEntryRevision != 0 {
 		t.Fatalf("MaxEntryRevision=%d, want 0 for command-WAL V1 body", got.MaxEntryRevision)
 	}
+
+	legacyFullPage := make([]byte, MetaPageBodySize)
+	copy(legacyFullPage, legacyV1)
+	for i := MetaPageBodySizeCommandWALV1; i < MetaPageBodySize; i++ {
+		legacyFullPage[i] = 0xaa
+	}
+	got = DecodeMetaBodyCommandWALV1(legacyFullPage)
+	if got.AppliedCommandLSN != 12345 {
+		t.Fatalf("AppliedCommandLSN=%d, want 12345 from full command-WAL V1 body", got.AppliedCommandLSN)
+	}
+	if got.MaxEntryRevision != 0 {
+		t.Fatalf("MaxEntryRevision=%d, want 0 for unmarked full command-WAL V1 body", got.MaxEntryRevision)
+	}
 }

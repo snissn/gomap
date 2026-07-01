@@ -10021,11 +10021,7 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte, revision 
 			writer.SetEntryWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, revision)
 			return nil
 		}
-		if useSteal {
-			mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
-			return nil
-		}
-		return mt.DeleteWithCallback(key, nil)
+		return fmt.Errorf("cachingdb: memtable %T cannot preserve entry revision %d for delete", mt, revision)
 	}
 	if useSteal {
 		mt.DeleteSteal(key)
