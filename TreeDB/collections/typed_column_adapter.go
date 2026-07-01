@@ -704,7 +704,7 @@ func buildTypedColumnAdapterPartFromSource(opts typedColumnAdapterOptions, rowSo
 	}
 	stringDictionaryStates := make([]*typedColumnAdapterStringDictionaryBuildState, len(columns))
 	for i := range columns {
-		if columns[i].Field.ValueType == ColumnStoreValueString {
+		if typedColumnAdapterFusedStringDictionaryColumn(columns[i]) {
 			stringDictionaryStates[i] = newTypedColumnAdapterStringDictionaryBuildState()
 		}
 	}
@@ -6434,7 +6434,7 @@ func encodeTypedColumnAdapterStringDictionaryValue(column typedColumnAdapterColu
 	if state == nil {
 		return encodeTypedColumnAdapterScalarValue(column, value)
 	}
-	if column.Field.ValueType != ColumnStoreValueString || column.Definition.Type != typedcolumn.ColumnTypeLowCardinalityCode {
+	if !typedColumnAdapterFusedStringDictionaryColumn(column) {
 		return 0, false, false, fmt.Errorf("%w: %s is not a string dictionary column", errTypedColumnAdapterUnsupportedType, column.Field.ValueType)
 	}
 	if err := validateTypedColumnAdapterDeclaredValue(column, value); err != nil {
@@ -6447,6 +6447,11 @@ func encodeTypedColumnAdapterStringDictionaryValue(column typedColumnAdapterColu
 		return 0, true, false, nil
 	}
 	return state.temporaryCode(value.String), false, false, nil
+}
+
+func typedColumnAdapterFusedStringDictionaryColumn(column typedColumnAdapterColumn) bool {
+	return column.Field.ValueType == ColumnStoreValueString &&
+		column.Definition.Type == typedcolumn.ColumnTypeLowCardinalityCode
 }
 
 func encodeTypedColumnAdapterValue(column typedColumnAdapterColumn, value columnDeclaredValue) (int64, error) {
@@ -6836,8 +6841,21 @@ func recodeTypedColumnAdapterStringBatchColumn(column typedColumnAdapterColumn, 
 	}
 	nulls := batch.Nulls[column.Definition.Name]
 	defaults := batch.Defaults[column.Definition.Name]
+	if column.Field.Nullable {
+		var err error
+		nulls, err = typedColumnAdapterRequiredBitmapForRows(batch.Nulls, column.Definition.Name, "null", len(values))
+		if err != nil {
+			return err
+		}
+		defaults, err = typedColumnAdapterRequiredBitmapForRows(batch.Defaults, column.Definition.Name, "default", len(values))
+		if err != nil {
+			return err
+		}
+	} else if len(nulls) != 0 || len(defaults) != 0 {
+		return fmt.Errorf("collections: typed-column adapter non-nullable column %q has null/default bitmap lengths %d/%d", column.Definition.Name, len(nulls), len(defaults))
+	}
 	for rowIdx, temporary := range values {
-		if typedColumnAdapterBoolAt(nulls, rowIdx) || typedColumnAdapterBoolAt(defaults, rowIdx) {
+		if column.Field.Nullable && (nulls[rowIdx] || defaults[rowIdx]) {
 			continue
 		}
 		if temporary < 0 || int64(len(temporaryToFinal)) <= temporary {
@@ -6848,8 +6866,15 @@ func recodeTypedColumnAdapterStringBatchColumn(column typedColumnAdapterColumn, 
 	return nil
 }
 
-func typedColumnAdapterBoolAt(values []bool, idx int) bool {
-	return idx >= 0 && idx < len(values) && values[idx]
+func typedColumnAdapterRequiredBitmapForRows(bitmaps map[string][]bool, columnName, bitmapName string, rows int) ([]bool, error) {
+	values, ok := bitmaps[columnName]
+	if !ok {
+		return nil, fmt.Errorf("collections: typed-column adapter missing %s bitmap for nullable column %q", bitmapName, columnName)
+	}
+	if len(values) != rows {
+		return nil, fmt.Errorf("collections: typed-column adapter %s bitmap for column %q has %d rows, want %d", bitmapName, columnName, len(values), rows)
+	}
+	return values, nil
 }
 
 func typedColumnAdapterIndexedSourceColumns(rowSource typedColumnAdapterRowSource, columns []typedColumnAdapterColumn) (typedColumnAdapterIndexedRowSource, []int, error) {
