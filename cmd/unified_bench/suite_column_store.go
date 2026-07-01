@@ -208,56 +208,65 @@ type columnStoreStageMetric struct {
 }
 
 type columnStoreInsertPhaseMetric struct {
-	Documents                                 int     `json:"documents"`
-	Batches                                   int     `json:"batches"`
-	Runs                                      int     `json:"runs"`
-	PrepareDocumentsDurationMS                float64 `json:"prepare_documents_duration_ms,omitempty"`
-	PrepareDocumentsNsPerRow                  float64 `json:"prepare_documents_ns_per_row,omitempty"`
-	DuplicateDocumentPreflightDurationMS      float64 `json:"duplicate_document_preflight_duration_ms,omitempty"`
-	DuplicateDocumentPreflightNsPerRow        float64 `json:"duplicate_document_preflight_ns_per_row,omitempty"`
-	RetainedPayloadPrepareDurationMS          float64 `json:"retained_payload_prepare_duration_ms,omitempty"`
-	RetainedPayloadPrepareNsPerRow            float64 `json:"retained_payload_prepare_ns_per_row,omitempty"`
-	RetainedPayloadRows                       int     `json:"retained_payload_rows,omitempty"`
-	RetainedPayloadDeclaredRows               int     `json:"retained_payload_declared_rows,omitempty"`
-	RetainedPayloadSemanticStreamBlocks       int     `json:"retained_payload_semantic_stream_blocks,omitempty"`
-	RetainedPayloadValueLogPointerizeMS       float64 `json:"retained_payload_value_log_pointerize_duration_ms,omitempty"`
-	RetainedPayloadValueLogPointerizeNsPerRow float64 `json:"retained_payload_value_log_pointerize_ns_per_row,omitempty"`
-	RetainedPayloadValueLogValues             int     `json:"retained_payload_value_log_values,omitempty"`
-	RetainedPayloadValueLogBytes              int64   `json:"retained_payload_value_log_bytes,omitempty"`
-	RetainedStreamValueLogPointerizeMS        float64 `json:"retained_stream_value_log_pointerize_duration_ms,omitempty"`
-	RetainedStreamValueLogPointerizeNsPerRow  float64 `json:"retained_stream_value_log_pointerize_ns_per_row,omitempty"`
-	RetainedStreamValueLogValues              int     `json:"retained_stream_value_log_values,omitempty"`
-	RetainedStreamValueLogBytes               int64   `json:"retained_stream_value_log_bytes,omitempty"`
-	ColumnPublishBuildColumnDeltaDurationMS   float64 `json:"column_publish_build_column_delta_duration_ms,omitempty"`
-	ColumnPublishBuildColumnDeltaNsPerRow     float64 `json:"column_publish_build_column_delta_ns_per_row,omitempty"`
-	ColumnPublishBuildSystemDeltaDurationMS   float64 `json:"column_publish_build_system_delta_duration_ms,omitempty"`
-	ColumnPublishBuildSystemDeltaNsPerRow     float64 `json:"column_publish_build_system_delta_ns_per_row,omitempty"`
-	ColumnPublishCommitDurationMS             float64 `json:"column_publish_commit_duration_ms,omitempty"`
-	ColumnPublishCommitNsPerRow               float64 `json:"column_publish_commit_ns_per_row,omitempty"`
-	ColumnPublishDocumentExtractionDurationMS float64 `json:"column_publish_document_extraction_duration_ms,omitempty"`
-	ColumnPublishDeclaredColumnDurationMS     float64 `json:"column_publish_declared_column_encoding_duration_ms,omitempty"`
-	ColumnPublishAssetPreparationDurationMS   float64 `json:"column_publish_asset_preparation_duration_ms,omitempty"`
-	ColumnPublishRowAssetPrepareDurationMS    float64 `json:"column_publish_row_asset_prepare_duration_ms,omitempty"`
-	ColumnPublishTypedColumnPrepareDurationMS float64 `json:"column_publish_typed_column_prepare_duration_ms,omitempty"`
-	ColumnPublishTypedColumnDictionaryBuildMS float64 `json:"column_publish_typed_column_dictionary_build_duration_ms,omitempty"`
-	ColumnPublishTypedColumnRowMaterializeMS  float64 `json:"column_publish_typed_column_row_materialization_duration_ms,omitempty"`
-	ColumnPublishTypedColumnPartBuildMS       float64 `json:"column_publish_typed_column_part_build_duration_ms,omitempty"`
-	ColumnPublishTypedColumnImageBuildMS      float64 `json:"column_publish_typed_column_image_build_duration_ms,omitempty"`
-	ColumnPublishDictionaryPrepareDurationMS  float64 `json:"column_publish_dictionary_sidecar_prepare_duration_ms,omitempty"`
-	ColumnPublishInt64PrepareDurationMS       float64 `json:"column_publish_int64_sidecar_prepare_duration_ms,omitempty"`
-	ColumnPublishAggregateMetadataDurationMS  float64 `json:"column_publish_aggregate_metadata_prepare_duration_ms,omitempty"`
-	ColumnPublishRowSidecarSharedBuildMS      float64 `json:"column_publish_row_sidecar_shared_build_duration_ms,omitempty"`
-	ColumnPublishAssetAppendDurationMS        float64 `json:"column_publish_asset_append_duration_ms,omitempty"`
-	ColumnPublishAssetAppendOpenDurationMS    float64 `json:"column_publish_asset_append_open_duration_ms,omitempty"`
-	ColumnPublishAssetAppendWriteDurationMS   float64 `json:"column_publish_asset_append_write_duration_ms,omitempty"`
-	ColumnPublishAssetAppendCloseDurationMS   float64 `json:"column_publish_asset_append_close_duration_ms,omitempty"`
-	ColumnPublishAssetAppendFileSyncMS        float64 `json:"column_publish_asset_append_file_sync_duration_ms"`
-	ColumnPublishAssetAppendFileCloseMS       float64 `json:"column_publish_asset_append_file_close_duration_ms"`
-	ColumnPublishAssetAppendDirSyncMS         float64 `json:"column_publish_asset_append_dir_sync_duration_ms"`
-	ColumnPublishAssetAppendCleanupMS         float64 `json:"column_publish_asset_append_cleanup_duration_ms"`
-	ColumnPublishAssetAppenderCloseCount      int     `json:"column_publish_asset_appender_close_count,omitempty"`
-	ColumnPublishAssetAppendFileSyncCount     int     `json:"column_publish_asset_append_file_sync_count,omitempty"`
-	ColumnPublishAssetSyncEpochCount          int     `json:"column_publish_asset_sync_epoch_count,omitempty"`
+	Documents                                  int     `json:"documents"`
+	Batches                                    int     `json:"batches"`
+	Runs                                       int     `json:"runs"`
+	PrepareDocumentsDurationMS                 float64 `json:"prepare_documents_duration_ms,omitempty"`
+	PrepareDocumentsNsPerRow                   float64 `json:"prepare_documents_ns_per_row,omitempty"`
+	DuplicateDocumentPreflightDurationMS       float64 `json:"duplicate_document_preflight_duration_ms,omitempty"`
+	DuplicateDocumentPreflightNsPerRow         float64 `json:"duplicate_document_preflight_ns_per_row,omitempty"`
+	RetainedPayloadPrepareDurationMS           float64 `json:"retained_payload_prepare_duration_ms,omitempty"`
+	RetainedPayloadPrepareNsPerRow             float64 `json:"retained_payload_prepare_ns_per_row,omitempty"`
+	RetainedPayloadRows                        int     `json:"retained_payload_rows,omitempty"`
+	RetainedPayloadDeclaredRows                int     `json:"retained_payload_declared_rows,omitempty"`
+	RetainedPayloadSemanticStreamBlocks        int     `json:"retained_payload_semantic_stream_blocks,omitempty"`
+	RetainedPayloadSemanticStreamWorkers       int     `json:"retained_payload_semantic_stream_worker_count,omitempty"`
+	RetainedPayloadSemanticStreamDeclaredMS    float64 `json:"retained_payload_semantic_stream_declared_row_prepare_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamBlockWallMS   float64 `json:"retained_payload_semantic_stream_block_prepare_wall_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamCollectMS     float64 `json:"retained_payload_semantic_stream_block_collect_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamEncoderMS     float64 `json:"retained_payload_semantic_stream_block_encoder_setup_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamRawEncodeMS   float64 `json:"retained_payload_semantic_stream_block_raw_encode_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamStoreEncodeMS float64 `json:"retained_payload_semantic_stream_block_stored_encode_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamFinalizeMS    float64 `json:"retained_payload_semantic_stream_block_finalize_duration_ms,omitempty"`
+	RetainedPayloadSemanticStreamTableBuildMS  float64 `json:"retained_payload_semantic_stream_table_build_duration_ms,omitempty"`
+	RetainedPayloadValueLogPointerizeMS        float64 `json:"retained_payload_value_log_pointerize_duration_ms,omitempty"`
+	RetainedPayloadValueLogPointerizeNsPerRow  float64 `json:"retained_payload_value_log_pointerize_ns_per_row,omitempty"`
+	RetainedPayloadValueLogValues              int     `json:"retained_payload_value_log_values,omitempty"`
+	RetainedPayloadValueLogBytes               int64   `json:"retained_payload_value_log_bytes,omitempty"`
+	RetainedStreamValueLogPointerizeMS         float64 `json:"retained_stream_value_log_pointerize_duration_ms,omitempty"`
+	RetainedStreamValueLogPointerizeNsPerRow   float64 `json:"retained_stream_value_log_pointerize_ns_per_row,omitempty"`
+	RetainedStreamValueLogValues               int     `json:"retained_stream_value_log_values,omitempty"`
+	RetainedStreamValueLogBytes                int64   `json:"retained_stream_value_log_bytes,omitempty"`
+	ColumnPublishBuildColumnDeltaDurationMS    float64 `json:"column_publish_build_column_delta_duration_ms,omitempty"`
+	ColumnPublishBuildColumnDeltaNsPerRow      float64 `json:"column_publish_build_column_delta_ns_per_row,omitempty"`
+	ColumnPublishBuildSystemDeltaDurationMS    float64 `json:"column_publish_build_system_delta_duration_ms,omitempty"`
+	ColumnPublishBuildSystemDeltaNsPerRow      float64 `json:"column_publish_build_system_delta_ns_per_row,omitempty"`
+	ColumnPublishCommitDurationMS              float64 `json:"column_publish_commit_duration_ms,omitempty"`
+	ColumnPublishCommitNsPerRow                float64 `json:"column_publish_commit_ns_per_row,omitempty"`
+	ColumnPublishDocumentExtractionDurationMS  float64 `json:"column_publish_document_extraction_duration_ms,omitempty"`
+	ColumnPublishDeclaredColumnDurationMS      float64 `json:"column_publish_declared_column_encoding_duration_ms,omitempty"`
+	ColumnPublishAssetPreparationDurationMS    float64 `json:"column_publish_asset_preparation_duration_ms,omitempty"`
+	ColumnPublishRowAssetPrepareDurationMS     float64 `json:"column_publish_row_asset_prepare_duration_ms,omitempty"`
+	ColumnPublishTypedColumnPrepareDurationMS  float64 `json:"column_publish_typed_column_prepare_duration_ms,omitempty"`
+	ColumnPublishTypedColumnDictionaryBuildMS  float64 `json:"column_publish_typed_column_dictionary_build_duration_ms,omitempty"`
+	ColumnPublishTypedColumnRowMaterializeMS   float64 `json:"column_publish_typed_column_row_materialization_duration_ms,omitempty"`
+	ColumnPublishTypedColumnPartBuildMS        float64 `json:"column_publish_typed_column_part_build_duration_ms,omitempty"`
+	ColumnPublishTypedColumnImageBuildMS       float64 `json:"column_publish_typed_column_image_build_duration_ms,omitempty"`
+	ColumnPublishDictionaryPrepareDurationMS   float64 `json:"column_publish_dictionary_sidecar_prepare_duration_ms,omitempty"`
+	ColumnPublishInt64PrepareDurationMS        float64 `json:"column_publish_int64_sidecar_prepare_duration_ms,omitempty"`
+	ColumnPublishAggregateMetadataDurationMS   float64 `json:"column_publish_aggregate_metadata_prepare_duration_ms,omitempty"`
+	ColumnPublishRowSidecarSharedBuildMS       float64 `json:"column_publish_row_sidecar_shared_build_duration_ms,omitempty"`
+	ColumnPublishAssetAppendDurationMS         float64 `json:"column_publish_asset_append_duration_ms,omitempty"`
+	ColumnPublishAssetAppendOpenDurationMS     float64 `json:"column_publish_asset_append_open_duration_ms,omitempty"`
+	ColumnPublishAssetAppendWriteDurationMS    float64 `json:"column_publish_asset_append_write_duration_ms,omitempty"`
+	ColumnPublishAssetAppendCloseDurationMS    float64 `json:"column_publish_asset_append_close_duration_ms,omitempty"`
+	ColumnPublishAssetAppendFileSyncMS         float64 `json:"column_publish_asset_append_file_sync_duration_ms"`
+	ColumnPublishAssetAppendFileCloseMS        float64 `json:"column_publish_asset_append_file_close_duration_ms"`
+	ColumnPublishAssetAppendDirSyncMS          float64 `json:"column_publish_asset_append_dir_sync_duration_ms"`
+	ColumnPublishAssetAppendCleanupMS          float64 `json:"column_publish_asset_append_cleanup_duration_ms"`
+	ColumnPublishAssetAppenderCloseCount       int     `json:"column_publish_asset_appender_close_count,omitempty"`
+	ColumnPublishAssetAppendFileSyncCount      int     `json:"column_publish_asset_append_file_sync_count,omitempty"`
+	ColumnPublishAssetSyncEpochCount           int     `json:"column_publish_asset_sync_epoch_count,omitempty"`
 
 	ColumnPublishSharedSegmentAppenderCloseCount       int `json:"column_publish_shared_segment_appender_close_count,omitempty"`
 	ColumnPublishSharedSegmentAppendFileSyncCount      int `json:"column_publish_shared_segment_append_file_sync_count,omitempty"`
@@ -1608,6 +1617,17 @@ func columnStoreAddCollectionInsertStats(dst *collections.CollectionInsertStats,
 	dst.RetainedPayloadRows += src.RetainedPayloadRows
 	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
 	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	if src.RetainedPayloadSemanticStreamWorkerCount > dst.RetainedPayloadSemanticStreamWorkerCount {
+		dst.RetainedPayloadSemanticStreamWorkerCount = src.RetainedPayloadSemanticStreamWorkerCount
+	}
+	dst.RetainedPayloadSemanticStreamDeclaredRowPrepare += src.RetainedPayloadSemanticStreamDeclaredRowPrepare
+	dst.RetainedPayloadSemanticStreamBlockPrepareWall += src.RetainedPayloadSemanticStreamBlockPrepareWall
+	dst.RetainedPayloadSemanticStreamBlockCollect += src.RetainedPayloadSemanticStreamBlockCollect
+	dst.RetainedPayloadSemanticStreamBlockEncoderSetup += src.RetainedPayloadSemanticStreamBlockEncoderSetup
+	dst.RetainedPayloadSemanticStreamBlockRawEncode += src.RetainedPayloadSemanticStreamBlockRawEncode
+	dst.RetainedPayloadSemanticStreamBlockStoredEncode += src.RetainedPayloadSemanticStreamBlockStoredEncode
+	dst.RetainedPayloadSemanticStreamBlockFinalize += src.RetainedPayloadSemanticStreamBlockFinalize
+	dst.RetainedPayloadSemanticStreamTableBuild += src.RetainedPayloadSemanticStreamTableBuild
 	dst.RetainedPayloadValueLogPointerize += src.RetainedPayloadValueLogPointerize
 	dst.RetainedPayloadValueLogValues += src.RetainedPayloadValueLogValues
 	dst.RetainedPayloadValueLogBytes += src.RetainedPayloadValueLogBytes
@@ -1699,6 +1719,15 @@ func columnStoreInsertPhaseMetricFromStats(stats collections.CollectionInsertSta
 		RetainedPayloadRows:                                stats.RetainedPayloadRows,
 		RetainedPayloadDeclaredRows:                        stats.RetainedPayloadDeclaredRows,
 		RetainedPayloadSemanticStreamBlocks:                stats.RetainedPayloadSemanticStreamBlocks,
+		RetainedPayloadSemanticStreamWorkers:               stats.RetainedPayloadSemanticStreamWorkerCount,
+		RetainedPayloadSemanticStreamDeclaredMS:            durationMS(stats.RetainedPayloadSemanticStreamDeclaredRowPrepare),
+		RetainedPayloadSemanticStreamBlockWallMS:           durationMS(stats.RetainedPayloadSemanticStreamBlockPrepareWall),
+		RetainedPayloadSemanticStreamCollectMS:             durationMS(stats.RetainedPayloadSemanticStreamBlockCollect),
+		RetainedPayloadSemanticStreamEncoderMS:             durationMS(stats.RetainedPayloadSemanticStreamBlockEncoderSetup),
+		RetainedPayloadSemanticStreamRawEncodeMS:           durationMS(stats.RetainedPayloadSemanticStreamBlockRawEncode),
+		RetainedPayloadSemanticStreamStoreEncodeMS:         durationMS(stats.RetainedPayloadSemanticStreamBlockStoredEncode),
+		RetainedPayloadSemanticStreamFinalizeMS:            durationMS(stats.RetainedPayloadSemanticStreamBlockFinalize),
+		RetainedPayloadSemanticStreamTableBuildMS:          durationMS(stats.RetainedPayloadSemanticStreamTableBuild),
 		RetainedPayloadValueLogPointerizeMS:                durationMS(stats.RetainedPayloadValueLogPointerize),
 		RetainedPayloadValueLogPointerizeNsPerRow:          nsPerRow(stats.RetainedPayloadValueLogPointerize, rows),
 		RetainedPayloadValueLogValues:                      stats.RetainedPayloadValueLogValues,
@@ -4805,6 +4834,7 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("- retained_payload_rows: %d\n", stats.RetainedPayloadRows))
 	sb.WriteString(fmt.Sprintf("- retained_payload_declared_rows: %d\n", stats.RetainedPayloadDeclaredRows))
 	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_blocks: %d\n", stats.RetainedPayloadSemanticStreamBlocks))
+	sb.WriteString(fmt.Sprintf("- retained_payload_semantic_stream_worker_count: %d\n", stats.RetainedPayloadSemanticStreamWorkers))
 	sb.WriteString(fmt.Sprintf("- retained_payload_value_log_values: %d\n", stats.RetainedPayloadValueLogValues))
 	sb.WriteString(fmt.Sprintf("- retained_payload_value_log_bytes: %d\n", stats.RetainedPayloadValueLogBytes))
 	sb.WriteString(fmt.Sprintf("- retained_stream_value_log_values: %d\n", stats.RetainedStreamValueLogValues))
@@ -4846,6 +4876,19 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 	sb.WriteString(fmt.Sprintf("| `primary_run_build` | %.3f | %.1f |\n", stats.PrimaryRunBuildDurationMS, stats.PrimaryRunBuildNsPerRow))
 	sb.WriteString(fmt.Sprintf("| `publish` | %.3f | %.1f |\n\n", stats.PublishDurationMS, stats.PublishNsPerRow))
 
+	if columnStoreInsertStatsHasRetainedSemanticStreamSubphase(stats) {
+		sb.WriteString("| retained semantic-stream prepare subphase | ms |\n")
+		sb.WriteString("|---|---:|\n")
+		sb.WriteString(fmt.Sprintf("| `declared_row_prepare` | %.3f |\n", stats.RetainedPayloadSemanticStreamDeclaredMS))
+		sb.WriteString(fmt.Sprintf("| `block_prepare_wall` | %.3f |\n", stats.RetainedPayloadSemanticStreamBlockWallMS))
+		sb.WriteString(fmt.Sprintf("| `block_collect_sum` | %.3f |\n", stats.RetainedPayloadSemanticStreamCollectMS))
+		sb.WriteString(fmt.Sprintf("| `block_encoder_setup_sum` | %.3f |\n", stats.RetainedPayloadSemanticStreamEncoderMS))
+		sb.WriteString(fmt.Sprintf("| `block_raw_encode_sum` | %.3f |\n", stats.RetainedPayloadSemanticStreamRawEncodeMS))
+		sb.WriteString(fmt.Sprintf("| `block_stored_encode_sum` | %.3f |\n", stats.RetainedPayloadSemanticStreamStoreEncodeMS))
+		sb.WriteString(fmt.Sprintf("| `block_finalize_sum` | %.3f |\n", stats.RetainedPayloadSemanticStreamFinalizeMS))
+		sb.WriteString(fmt.Sprintf("| `table_build` | %.3f |\n\n", stats.RetainedPayloadSemanticStreamTableBuildMS))
+	}
+
 	if columnStoreInsertStatsHasColumnPublishSubphase(stats) {
 		sb.WriteString("| column publish subphase | ms | ns/row |\n")
 		sb.WriteString("|---|---:|---:|\n")
@@ -4879,6 +4922,17 @@ func renderColumnStoreInsertStatsMarkdown(sb *strings.Builder, stats columnStore
 		sb.WriteString(fmt.Sprintf("| `root_delta_materialization` | %.3f |  |\n", stats.ColumnPublishRootDeltaMaterializeMS))
 		sb.WriteString(fmt.Sprintf("| `system_delta_construction` | %.3f |  |\n\n", stats.ColumnPublishSystemDeltaDurationMS))
 	}
+}
+
+func columnStoreInsertStatsHasRetainedSemanticStreamSubphase(stats columnStoreInsertPhaseMetric) bool {
+	return stats.RetainedPayloadSemanticStreamDeclaredMS > 0 ||
+		stats.RetainedPayloadSemanticStreamBlockWallMS > 0 ||
+		stats.RetainedPayloadSemanticStreamCollectMS > 0 ||
+		stats.RetainedPayloadSemanticStreamEncoderMS > 0 ||
+		stats.RetainedPayloadSemanticStreamRawEncodeMS > 0 ||
+		stats.RetainedPayloadSemanticStreamStoreEncodeMS > 0 ||
+		stats.RetainedPayloadSemanticStreamFinalizeMS > 0 ||
+		stats.RetainedPayloadSemanticStreamTableBuildMS > 0
 }
 
 func columnStoreInsertStatsHasColumnPublishSubphase(stats columnStoreInsertPhaseMetric) bool {

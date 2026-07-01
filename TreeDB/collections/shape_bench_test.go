@@ -36,6 +36,17 @@ func addCollectionInsertStats(dst *collections.CollectionInsertStats, src collec
 	dst.RetainedPayloadRows += src.RetainedPayloadRows
 	dst.RetainedPayloadDeclaredRows += src.RetainedPayloadDeclaredRows
 	dst.RetainedPayloadSemanticStreamBlocks += src.RetainedPayloadSemanticStreamBlocks
+	if src.RetainedPayloadSemanticStreamWorkerCount > dst.RetainedPayloadSemanticStreamWorkerCount {
+		dst.RetainedPayloadSemanticStreamWorkerCount = src.RetainedPayloadSemanticStreamWorkerCount
+	}
+	dst.RetainedPayloadSemanticStreamDeclaredRowPrepare += src.RetainedPayloadSemanticStreamDeclaredRowPrepare
+	dst.RetainedPayloadSemanticStreamBlockPrepareWall += src.RetainedPayloadSemanticStreamBlockPrepareWall
+	dst.RetainedPayloadSemanticStreamBlockCollect += src.RetainedPayloadSemanticStreamBlockCollect
+	dst.RetainedPayloadSemanticStreamBlockEncoderSetup += src.RetainedPayloadSemanticStreamBlockEncoderSetup
+	dst.RetainedPayloadSemanticStreamBlockRawEncode += src.RetainedPayloadSemanticStreamBlockRawEncode
+	dst.RetainedPayloadSemanticStreamBlockStoredEncode += src.RetainedPayloadSemanticStreamBlockStoredEncode
+	dst.RetainedPayloadSemanticStreamBlockFinalize += src.RetainedPayloadSemanticStreamBlockFinalize
+	dst.RetainedPayloadSemanticStreamTableBuild += src.RetainedPayloadSemanticStreamTableBuild
 	dst.RetainedPayloadValueLogPointerize += src.RetainedPayloadValueLogPointerize
 	dst.RetainedPayloadValueLogValues += src.RetainedPayloadValueLogValues
 	dst.RetainedPayloadValueLogBytes += src.RetainedPayloadValueLogBytes
@@ -126,6 +137,14 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 	reportDuration("index_state_extract_ns/doc", stats.IndexStateExtraction)
 	reportDuration("duplicate_preflight_ns/doc", stats.DuplicateDocumentPreflight)
 	reportDuration("retained_payload_prepare_ns/doc", stats.RetainedPayloadPrepare)
+	reportDuration("retained_payload_semantic_stream_declared_row_prepare_ns/doc", stats.RetainedPayloadSemanticStreamDeclaredRowPrepare)
+	reportDuration("retained_payload_semantic_stream_block_prepare_wall_ns/doc", stats.RetainedPayloadSemanticStreamBlockPrepareWall)
+	reportDuration("retained_payload_semantic_stream_block_collect_ns/doc", stats.RetainedPayloadSemanticStreamBlockCollect)
+	reportDuration("retained_payload_semantic_stream_block_encoder_setup_ns/doc", stats.RetainedPayloadSemanticStreamBlockEncoderSetup)
+	reportDuration("retained_payload_semantic_stream_block_raw_encode_ns/doc", stats.RetainedPayloadSemanticStreamBlockRawEncode)
+	reportDuration("retained_payload_semantic_stream_block_stored_encode_ns/doc", stats.RetainedPayloadSemanticStreamBlockStoredEncode)
+	reportDuration("retained_payload_semantic_stream_block_finalize_ns/doc", stats.RetainedPayloadSemanticStreamBlockFinalize)
+	reportDuration("retained_payload_semantic_stream_table_build_ns/doc", stats.RetainedPayloadSemanticStreamTableBuild)
 	reportDuration("retained_payload_vlog_pointerize_ns/doc", stats.RetainedPayloadValueLogPointerize)
 	reportDuration("retained_stream_vlog_pointerize_ns/doc", stats.RetainedStreamValueLogPointerize)
 	reportDuration("column_publish_build_column_delta_ns/doc", stats.ColumnPublishBuildColumnDelta)
@@ -257,6 +276,9 @@ func benchmarkReportCollectionInsertStats(b *testing.B, docs, batches int, stats
 		if stats.RetainedPayloadSemanticStreamBlocks > 0 {
 			b.ReportMetric(float64(stats.RetainedPayloadSemanticStreamBlocks)/float64(batches), "retained_payload_semantic_stream_blocks/batch")
 		}
+		if stats.RetainedPayloadSemanticStreamWorkerCount > 0 {
+			b.ReportMetric(float64(stats.RetainedPayloadSemanticStreamWorkerCount), "retained_payload_semantic_stream_workers")
+		}
 	}
 }
 
@@ -358,21 +380,52 @@ func TestCollectionShapeInsertStatsAddsSegmentAppendMetrics(t *testing.T) {
 func TestCollectionShapeInsertStatsIncludesRetainedValueLogPointerization(t *testing.T) {
 	var stats collections.CollectionInsertStats
 	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
-		RetainedPayloadValueLogPointerize: 10 * time.Microsecond,
-		RetainedPayloadValueLogValues:     3,
-		RetainedPayloadValueLogBytes:      300,
-		RetainedStreamValueLogPointerize:  20 * time.Microsecond,
-		RetainedStreamValueLogValues:      4,
-		RetainedStreamValueLogBytes:       400,
+		RetainedPayloadSemanticStreamWorkerCount:        2,
+		RetainedPayloadSemanticStreamDeclaredRowPrepare: 11 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockPrepareWall:   12 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockCollect:       13 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockEncoderSetup:  14 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockRawEncode:     15 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockStoredEncode:  16 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockFinalize:      17 * time.Microsecond,
+		RetainedPayloadSemanticStreamTableBuild:         18 * time.Microsecond,
+		RetainedPayloadValueLogPointerize:               10 * time.Microsecond,
+		RetainedPayloadValueLogValues:                   3,
+		RetainedPayloadValueLogBytes:                    300,
+		RetainedStreamValueLogPointerize:                20 * time.Microsecond,
+		RetainedStreamValueLogValues:                    4,
+		RetainedStreamValueLogBytes:                     400,
 	})
 	addCollectionInsertStats(&stats, collections.CollectionInsertStats{
-		RetainedPayloadValueLogPointerize: 5 * time.Microsecond,
-		RetainedPayloadValueLogValues:     2,
-		RetainedPayloadValueLogBytes:      200,
-		RetainedStreamValueLogPointerize:  7 * time.Microsecond,
-		RetainedStreamValueLogValues:      1,
-		RetainedStreamValueLogBytes:       100,
+		RetainedPayloadSemanticStreamWorkerCount:        4,
+		RetainedPayloadSemanticStreamDeclaredRowPrepare: 1 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockPrepareWall:   2 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockCollect:       3 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockEncoderSetup:  4 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockRawEncode:     5 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockStoredEncode:  6 * time.Microsecond,
+		RetainedPayloadSemanticStreamBlockFinalize:      7 * time.Microsecond,
+		RetainedPayloadSemanticStreamTableBuild:         8 * time.Microsecond,
+		RetainedPayloadValueLogPointerize:               5 * time.Microsecond,
+		RetainedPayloadValueLogValues:                   2,
+		RetainedPayloadValueLogBytes:                    200,
+		RetainedStreamValueLogPointerize:                7 * time.Microsecond,
+		RetainedStreamValueLogValues:                    1,
+		RetainedStreamValueLogBytes:                     100,
 	})
+	if stats.RetainedPayloadSemanticStreamWorkerCount != 4 {
+		t.Fatalf("semantic-stream workers=%d want max 4", stats.RetainedPayloadSemanticStreamWorkerCount)
+	}
+	if stats.RetainedPayloadSemanticStreamDeclaredRowPrepare != 12*time.Microsecond ||
+		stats.RetainedPayloadSemanticStreamBlockPrepareWall != 14*time.Microsecond ||
+		stats.RetainedPayloadSemanticStreamBlockCollect != 16*time.Microsecond ||
+		stats.RetainedPayloadSemanticStreamBlockEncoderSetup != 18*time.Microsecond ||
+		stats.RetainedPayloadSemanticStreamBlockRawEncode != 20*time.Microsecond ||
+		stats.RetainedPayloadSemanticStreamBlockStoredEncode != 22*time.Microsecond ||
+		stats.RetainedPayloadSemanticStreamBlockFinalize != 24*time.Microsecond ||
+		stats.RetainedPayloadSemanticStreamTableBuild != 26*time.Microsecond {
+		t.Fatalf("semantic-stream timing stats not accumulated: %+v", stats)
+	}
 	if stats.RetainedPayloadValueLogPointerize != 15*time.Microsecond {
 		t.Fatalf("payload pointerize=%s want 15us", stats.RetainedPayloadValueLogPointerize)
 	}
