@@ -1446,6 +1446,50 @@ func TestCommandWALRawKVBatchSetRIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCommandWALRawKVBatchRevisionRoundTrip(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("a"), Value: []byte("1"), Revision: 11},
+		{Op: RawKVOpDelete, Key: []byte("b"), Revision: 12},
+		{Op: RawKVOpSetRID, Key: []byte("c"), RID: 42, Revision: 13},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload revisions: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(payload[0:2]); got != rawKVBatchPayloadVersionWithRevisions {
+		t.Fatalf("payload version=%d want revision payload version %d", got, rawKVBatchPayloadVersionWithRevisions)
+	}
+
+	var scanned []RawKVOperation
+	err = ScanRawKVBatchPayloadWithRevision(payload, func(op RawKVOp, key, value []byte, revision uint64) error {
+		entry := RawKVOperation{Op: op, Key: cloneBytesPreserveEmpty(key), Revision: revision}
+		if op == RawKVOpSetRID {
+			entry.RID = binary.LittleEndian.Uint64(value)
+		} else {
+			entry.Value = cloneBytesPreserveEmpty(value)
+		}
+		scanned = append(scanned, entry)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ScanRawKVBatchPayloadWithRevision: %v", err)
+	}
+	decoded, err := DecodeRawKVBatchPayload(payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload revisions: %v", err)
+	}
+	for name, got := range map[string][]RawKVOperation{"scanned": scanned, "decoded": decoded} {
+		if len(got) != 3 ||
+			got[0].Op != RawKVOpSet || string(got[0].Key) != "a" || string(got[0].Value) != "1" || got[0].Revision != 11 ||
+			got[1].Op != RawKVOpDelete || string(got[1].Key) != "b" || len(got[1].Value) != 0 || got[1].Revision != 12 ||
+			got[2].Op != RawKVOpSetRID || string(got[2].Key) != "c" || got[2].RID != 42 || len(got[2].Value) != 0 || got[2].Revision != 13 {
+			t.Fatalf("%s ops=%+v, want revisions preserved", name, got)
+		}
+	}
+	if _, err := EncodeRawKVBatchPayload([]RawKVOperation{{Op: RawKVOpDeleteRange, Key: []byte("a"), Value: []byte("z"), Revision: 1}}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("EncodeRawKVBatchPayload revision range delete error=%v, want ErrCorrupt", err)
+	}
+}
+
 func TestCommandWALFeatureGateRejectsLegacyRawPayload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
 	w, err := NewWriter(path)

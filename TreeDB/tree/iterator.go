@@ -996,8 +996,11 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 }
 
 func (it *Iterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if it == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
 	val, ptr, flags := it.UnsafeEntry()
-	if it == nil || !it.valid || len(it.stack) == 0 {
+	if !it.valid || len(it.stack) == 0 {
 		return val, ptr, flags, page.LegacyEntryRevision
 	}
 	top := &it.stack[len(it.stack)-1]

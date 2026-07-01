@@ -62,7 +62,10 @@ func (it *valueLogIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 }
 
 func (it *valueLogIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
-	_, _, _, revision := iterator.UnsafeEntryWithRevision(it.iter)
+	revision := page.LegacyEntryRevision
+	if revIter, ok := it.iter.(iterator.RevisionUnsafeIterator); ok {
+		_, _, _, revision = revIter.UnsafeEntryWithRevision()
+	}
 	if it.iter.IsDeleted() {
 		return nil, page.ValuePtr{}, node.FlagTombstone, revision
 	}

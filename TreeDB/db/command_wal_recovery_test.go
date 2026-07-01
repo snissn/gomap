@@ -1521,6 +1521,55 @@ func TestCommandWALExistingRIDFenceTestsMappedToExternalRefFence(t *testing.T) {
 	assertDBValue(t, reopen, "b", "two")
 }
 
+func TestCommandWALRecoveryPreservesEntryRevision(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	db := openCommandWALDB(t, dir)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close bootstrap db: %v", err)
+	}
+	largeValue := strings.Repeat("large-value-", 1024)
+	ptr := writeValueLogRID(t, dir, 31, []byte(largeValue))
+
+	db = openCommandWALDB(t, dir)
+	db.testFailFinalizeCommit.Store(true)
+	b := db.NewBatch().(*Batch)
+	if err := b.SetWithRevision([]byte("inline"), []byte("value"), page.EntryRevision(41)); err != nil {
+		t.Fatalf("SetWithRevision inline: %v", err)
+	}
+	if err := b.SetPointerWithRevision([]byte("ptr"), ptr, page.EntryRevision(42)); err != nil {
+		t.Fatalf("SetPointerWithRevision ptr: %v", err)
+	}
+	err := b.WriteSync()
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("crash batch WriteSync error=%v, want failpoint", err)
+	}
+	_ = b.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close crashed db: %v", err)
+	}
+
+	reopen := openCommandWALDB(t, dir)
+	defer reopen.Close()
+	inlineValue, inlineRevision, err := reopen.GetVersioned([]byte("inline"))
+	if err != nil {
+		t.Fatalf("GetVersioned inline: %v", err)
+	}
+	if !bytes.Equal(inlineValue, []byte("value")) || inlineRevision != page.EntryRevision(41) {
+		t.Fatalf("GetVersioned inline=(%q,%d), want (value,41)", inlineValue, inlineRevision)
+	}
+	ptrValue, ptrRevision, err := reopen.GetVersioned([]byte("ptr"))
+	if err != nil {
+		t.Fatalf("GetVersioned ptr: %v", err)
+	}
+	if !bytes.Equal(ptrValue, []byte(largeValue)) || ptrRevision != page.EntryRevision(42) {
+		t.Fatalf("GetVersioned ptr=(len=%d,%d), want (len=%d,42)", len(ptrValue), ptrRevision, len(largeValue))
+	}
+	if got := reopen.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN=%d, want 1", got)
+	}
+}
+
 func enableCommandWALFormat(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
