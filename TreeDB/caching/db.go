@@ -8312,6 +8312,9 @@ type DB struct {
 	dirtyRootPublishGroupID            uint64
 	dirtyRootPublishGroupPending       bool
 	rootPublishRetryPending            bool
+	conditionalActiveTxnCount          atomic.Int64
+	conditionalSeq                     atomic.Uint64
+	conditionalOracle                  conditionalConflictOracle
 	hashSortedIndexer                  *memtable.HashSortedIndexer
 	appendOnlyMemPool                  atomic.Pointer[sync.Pool]
 	appendOnlyMemLeaseMu               sync.Mutex
@@ -8328,6 +8331,20 @@ type DB struct {
 	appendOnlyMutableTrimDropped       atomic.Uint64
 	appendOnlyMutableSparseTrimTotal   atomic.Uint64
 	appendOnlyMutableSparseTrimDropped atomic.Uint64
+	conditionalTxnStarted              atomic.Uint64
+	conditionalTxnClosed               atomic.Uint64
+	conditionalTxnCommitAttempts       atomic.Uint64
+	conditionalTxnCommits              atomic.Uint64
+	conditionalTxnConflicts            atomic.Uint64
+	conditionalTxnReadSetSamples       atomic.Uint64
+	conditionalTxnReadSetEntries       atomic.Uint64
+	conditionalTxnReadSetMax           atomic.Uint64
+	conditionalOracleRecordedPoints    atomic.Uint64
+	conditionalOracleRecordedRanges    atomic.Uint64
+	conditionalOracleRootMarkers       atomic.Uint64
+	conditionalOraclePrunes            atomic.Uint64
+	conditionalOraclePrunedPoints      atomic.Uint64
+	conditionalOraclePrunedRanges      atomic.Uint64
 	appendOnlyDirectArenaLeaseMu       sync.Mutex
 	appendOnlyDirectArenaLeasesByMem   map[memtable.Table]*appendOnlyDirectArenaLease
 	pendingRetiredMems                 []memtable.Table
@@ -24506,6 +24523,10 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
+	if db.conditionalActiveTxnCount.Load() > 0 {
+		entry := [1]batch.Entry{{Type: batch.OpPut, Key: key}}
+		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
+	}
 
 	// 3. Check Threshold
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -24658,6 +24679,10 @@ func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appe
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
+	if db.conditionalActiveTxnCount.Load() > 0 {
+		entry := [1]batch.Entry{{Type: batch.OpPut, Key: key}}
+		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
+	}
 
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 		needRotate = true
@@ -24814,6 +24839,7 @@ func (db *DB) publishCommandWALRangeSpanLayer(start, end []byte, appendCommand f
 		db.mu.Unlock()
 		return err
 	}
+	db.conditionalRecordCommittedEntries(nil, spans, 0)
 	db.publishMemtablesLocked()
 	db.mu.Unlock()
 
@@ -25629,6 +25655,10 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
+	if db.conditionalActiveTxnCount.Load() > 0 {
+		entry := [1]batch.Entry{{Type: batch.OpDelete, Key: key}}
+		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
+	}
 
 	// 3. Threshold
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
@@ -25693,6 +25723,10 @@ func (db *DB) deleteDirectAfterCommandWALAppendWithRevision(key []byte, appendCo
 	db.mutableBytes.Add(delta)
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
+	if db.conditionalActiveTxnCount.Load() > 0 {
+		entry := [1]batch.Entry{{Type: batch.OpDelete, Key: key}}
+		db.conditionalRecordCommittedEntries(entry[:], nil, 0)
+	}
 
 	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
 		needRotate = true
@@ -29167,6 +29201,31 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.range_span.range_only_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanRangeOnlyFlushed.Load())
 	stats["treedb.cache.range_span.spans_flushed_total"] = fmt.Sprintf("%d", db.rangeSpanSpansFlushed.Load())
 	stats["treedb.cache.range_span.flush_batches_total"] = fmt.Sprintf("%d", db.rangeSpanFlushBatches.Load())
+	db.conditionalOracle.mu.Lock()
+	conditionalActiveRecords := len(db.conditionalOracle.active)
+	conditionalRetainedPoints := len(db.conditionalOracle.recent)
+	conditionalRetainedRanges := len(db.conditionalOracle.ranges)
+	conditionalRootConflictActive := db.conditionalOracle.rootSeq != 0
+	db.conditionalOracle.mu.Unlock()
+	stats["treedb.cache.conditional_txn.active"] = fmt.Sprintf("%d", db.conditionalActiveTxnCount.Load())
+	stats["treedb.cache.conditional_txn.started_total"] = fmt.Sprintf("%d", db.conditionalTxnStarted.Load())
+	stats["treedb.cache.conditional_txn.closed_total"] = fmt.Sprintf("%d", db.conditionalTxnClosed.Load())
+	stats["treedb.cache.conditional_txn.commit_attempts_total"] = fmt.Sprintf("%d", db.conditionalTxnCommitAttempts.Load())
+	stats["treedb.cache.conditional_txn.commits_total"] = fmt.Sprintf("%d", db.conditionalTxnCommits.Load())
+	stats["treedb.cache.conditional_txn.conflicts_total"] = fmt.Sprintf("%d", db.conditionalTxnConflicts.Load())
+	stats["treedb.cache.conditional_txn.read_set_samples_total"] = fmt.Sprintf("%d", db.conditionalTxnReadSetSamples.Load())
+	stats["treedb.cache.conditional_txn.read_set_entries_total"] = fmt.Sprintf("%d", db.conditionalTxnReadSetEntries.Load())
+	stats["treedb.cache.conditional_txn.read_set_entries_max"] = fmt.Sprintf("%d", db.conditionalTxnReadSetMax.Load())
+	stats["treedb.cache.conditional_txn.oracle.active_records"] = fmt.Sprintf("%d", conditionalActiveRecords)
+	stats["treedb.cache.conditional_txn.oracle.retained_points"] = fmt.Sprintf("%d", conditionalRetainedPoints)
+	stats["treedb.cache.conditional_txn.oracle.retained_ranges"] = fmt.Sprintf("%d", conditionalRetainedRanges)
+	stats["treedb.cache.conditional_txn.oracle.root_conflict_active"] = fmt.Sprintf("%t", conditionalRootConflictActive)
+	stats["treedb.cache.conditional_txn.oracle.recorded_points_total"] = fmt.Sprintf("%d", db.conditionalOracleRecordedPoints.Load())
+	stats["treedb.cache.conditional_txn.oracle.recorded_ranges_total"] = fmt.Sprintf("%d", db.conditionalOracleRecordedRanges.Load())
+	stats["treedb.cache.conditional_txn.oracle.root_markers_total"] = fmt.Sprintf("%d", db.conditionalOracleRootMarkers.Load())
+	stats["treedb.cache.conditional_txn.oracle.prunes_total"] = fmt.Sprintf("%d", db.conditionalOraclePrunes.Load())
+	stats["treedb.cache.conditional_txn.oracle.pruned_points_total"] = fmt.Sprintf("%d", db.conditionalOraclePrunedPoints.Load())
+	stats["treedb.cache.conditional_txn.oracle.pruned_ranges_total"] = fmt.Sprintf("%d", db.conditionalOraclePrunedRanges.Load())
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
 	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)
@@ -32072,6 +32131,7 @@ type Batch struct {
 	commandWALCompactReplay     bool
 	commandWALCompactRanges     []batch.DeleteRange
 	commandWALCompactPointStart int
+	conditionalTxnID            uint64
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -32095,6 +32155,16 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
+}
+
+// Reserve ensures the batch has capacity for at least n staged entries.
+func (b *Batch) Reserve(n int) {
+	if b == nil || n <= cap(b.entries) {
+		return
+	}
+	next := make([]batch.Entry, len(b.entries), n)
+	copy(next, b.entries)
+	b.entries = next
 }
 
 // DisableStreamingBypass keeps subsequent writes on the cached memtable path.
@@ -32606,6 +32676,7 @@ func (b *Batch) Reset() {
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0
+	b.conditionalTxnID = 0
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
@@ -33611,6 +33682,7 @@ func (b *Batch) write(sync bool) error {
 			b.db.backendRange.add(b.batchRange.min)
 			b.db.backendRange.add(b.batchRange.max)
 			b.db.mu.Unlock()
+			b.db.conditionalRecordGlobalWrite()
 		}
 		b.backend = nil
 		if err == nil && b.size > 0 {
@@ -33805,6 +33877,7 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 		b.db.mu.Unlock()
 		return err
 	}
+	b.db.conditionalRecordCommittedEntries(nil, ranges, 0)
 	b.db.publishMemtablesLocked()
 	b.db.mu.Unlock()
 
@@ -33902,6 +33975,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	b.db.conditionalRecordCommittedEntries(ops, nil, 0)
 
 	b.db.mu.Lock()
 	b.db.backendRange.add(b.firstKey)
@@ -34689,6 +34763,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.ptrValueIdxs != nil {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
+	b.db.conditionalRecordCommittedEntries(b.entries, nil, b.conditionalTxnID)
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
 	if retainPtrArena {
@@ -35174,6 +35249,7 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 	if err != nil {
 		return err
 	}
+	b.db.conditionalRecordCommittedEntries(ops, nil, 0)
 	backendBatch = nil
 
 	b.db.mu.Lock()
@@ -35248,6 +35324,7 @@ func (b *Batch) Close() error {
 	b.lastKey = nil
 	b.entryRevision = page.LegacyEntryRevision
 	b.ptrValueIdxs = nil
+	b.conditionalTxnID = 0
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0

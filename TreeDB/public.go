@@ -35,8 +35,12 @@ type EntryRevision = page.EntryRevision
 
 const LegacyEntryRevision = page.LegacyEntryRevision
 
-// ConditionalTxn is TreeDB's native snapshot-conditional transaction type.
-type ConditionalTxn = db.ConditionalTxn
+// ConditionalTxn is TreeDB's native conditional transaction type.
+type ConditionalTxn struct {
+	backend      *db.ConditionalTxn
+	cached       caching.ConditionalTxn
+	cachedActive bool
+}
 
 type MaintenancePhase = caching.MaintenancePhase
 
@@ -1713,23 +1717,46 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 	return db.backend.UpdateSync(key, fn)
 }
 
-// NewConditionalTxn opens a native snapshot-conditional transaction when this
-// handle is backed directly by TreeDB's backend. Cached write handles fail
-// closed with ErrConditionalTxnUnsupported until cached memtable validation is
-// implemented natively.
-func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
+// InitConditionalTxn initializes tx as a native conditional transaction.
+// Callers must pass zero-value or closed transaction storage.
+func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
+	if tx == nil || tx.cachedActive || tx.backend != nil {
+		return ErrConditionalTxnClosed
+	}
 	unlock, err := db.beginPublicOperation()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer unlock()
 	if db.cached != nil {
-		return nil, ErrConditionalTxnUnsupported
+		if db.commandWALCached {
+			return ErrConditionalTxnUnsupported
+		}
+		if err := db.cached.InitConditionalTxn(&tx.cached); err != nil {
+			return err
+		}
+		tx.backend = nil
+		tx.cachedActive = true
+		return nil
 	}
 	if db.backend == nil {
-		return nil, ErrClosed
+		return ErrClosed
 	}
-	return db.backend.NewConditionalTxn()
+	backendTx, err := db.backend.NewConditionalTxn()
+	if err != nil {
+		return err
+	}
+	*tx = ConditionalTxn{backend: backendTx}
+	return nil
+}
+
+// NewConditionalTxn opens a native conditional transaction.
+func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
+	tx := &ConditionalTxn{}
+	if err := db.InitConditionalTxn(tx); err != nil {
+		return nil, err
+	}
+	return tx, nil
 }
 
 // Delete removes a key without forcing an fsync boundary.

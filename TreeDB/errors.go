@@ -35,6 +35,9 @@ var (
 	// ErrConditionalTxnClosed indicates a conditional transaction was used after
 	// Commit, CommitSync, or Close.
 	ErrConditionalTxnClosed = db.ErrConditionalTxnClosed
+	// ErrConcurrentModification indicates a conditional publish observed a read
+	// precondition that changed after the transaction opened.
+	ErrConcurrentModification = db.ErrConcurrentModification
 	// ErrConditionalTxnUnsupported indicates the selected TreeDB mode cannot
 	// provide native conditional transaction semantics.
 	ErrConditionalTxnUnsupported = db.ErrConditionalTxnUnsupported
