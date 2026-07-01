@@ -30,6 +30,16 @@ var getManyEmptyValue = []byte{}
 // found=false and value=nil.
 type GetManyViewFunc = tree.GetManyViewFunc
 
+// VersionedEntry is a value returned with the durable revision of its key.
+// Revision is advanced when that key is written and remains stable across
+// unrelated commits. Older entries created before revision tracking may report
+// Revision=0.
+type VersionedEntry struct {
+	Key      []byte
+	Value    []byte
+	Revision uint64
+}
+
 func getManyArenaCap(keyCount int) int {
 	if keyCount <= 0 {
 		return 0
@@ -176,6 +186,30 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 	return val, err
+}
+
+// GetVersioned returns the value for key plus its durable entry revision.
+// Missing keys return found=false and a zero revision.
+func (db *DB) GetVersioned(key []byte) (entry VersionedEntry, found bool, err error) {
+	key = normalizeRawKVPointKey(key)
+	readOnce := func() (VersionedEntry, bool, error) {
+		snap, err := db.acquireSnapshotOrErr()
+		if err != nil {
+			return VersionedEntry{}, false, err
+		}
+		defer snap.Close()
+		return snap.GetVersioned(key)
+	}
+
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	entry, found, err = readOnce()
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return VersionedEntry{}, false, refreshErr
+		}
+		entry, found, err = readOnce()
+	}
+	return entry, found, err
 }
 
 // DurabilityMode reports the backend durability mode configured at open.
@@ -691,6 +725,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 	stats["treedb.applied_command_lsn"] = fmt.Sprintf("%d", state.AppliedCommandLSN)
 	stats["treedb.command_wal.enabled"] = fmt.Sprintf("%t", db.commandWAL)
+	conditionalActive, conditionalRetained := db.conditionalOracle.stats()
+	stats["treedb.conditional_txn.active"] = fmt.Sprintf("%d", conditionalActive)
+	stats["treedb.conditional_txn.retained_write_sets"] = fmt.Sprintf("%d", conditionalRetained)
 	writeCommandWALStats(stats, db)
 	db.appendFlushApplyStats(stats)
 	db.appendRawSpanNativeStats(stats)

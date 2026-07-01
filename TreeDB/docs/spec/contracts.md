@@ -60,7 +60,18 @@ Status:
 - `Has(key)` returns `(true, nil)` only for a visible non-deleted key.
 - Deleted/missing keys return `(false, nil)`.
 
-### 2.5 Cached-mode visibility
+### 2.5 `GetVersioned`
+
+- `GetVersioned(key)` returns a safe-copy key/value pair plus the durable
+  revision of that live entry.
+- Revisions are monotonic commit revisions for the affected key. A write to an
+  unrelated key does not advance the returned revision for this key.
+- Missing keys return `found=false` and revision `0`.
+- Entries created before revision metadata existed may report revision `0`.
+- Current revision metadata is preserved across close/reopen and across
+  system-root publishes that update collection/maintenance metadata.
+
+### 2.6 Cached-mode visibility
 
 When the cached layer is enabled (default `treedb.Open` behavior):
 
@@ -107,6 +118,23 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 - `WriteSync` commits with sync guarantee only in durable mode.
 
 For WAL replay, commit-log batches are treated atomically at replay boundaries.
+
+### 3.3 Conditional transactions
+
+- `NewConditionalTxn` opens a raw-KV optimistic transaction backed by one
+  snapshot and one staged backend batch.
+- `Get`, `GetVersioned`, and `Has` inside the transaction record point reads,
+  including absent-key reads and the empty key.
+- `Commit` / `CommitSync` publish staged point writes/deletes only if no
+  committed point or range write touched any read key after the transaction
+  snapshot. Conflicts return `ErrConcurrentModification`.
+- Disjoint writes can commit without serializing the entire transaction body.
+- `DeleteRange` on a conditional transaction currently fails closed with
+  `ErrConditionalRangeUnsupported`; range-read conflict protection is not
+  silently inferred.
+- Conditional transaction state is process-local and is not persisted across
+  reopen. Durable values and entry revisions are persisted through normal raw
+  KV commit/recovery paths.
 
 ## 4. Range and Iterator Contracts
 

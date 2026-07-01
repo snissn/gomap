@@ -140,6 +140,7 @@ type DB struct {
 	mu                              sync.RWMutex
 	writeMu                         sync.RWMutex
 	commitMu                        sync.Mutex
+	conditionalOracle               conditionalConflictOracle
 	publishPrepareMu                sync.RWMutex
 	pendingValueLogAppendMu         sync.Mutex
 	pendingValueLogAppendFileIDRefs map[uint32]int
@@ -2648,6 +2649,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		db.leafGenerationStateVersion++
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
+	db.conditionalOracle.recordCommit(nextMeta.CommitSeq, opts.conditionalWrites)
 	db.state.Store(newState)
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
@@ -2894,6 +2896,31 @@ func (db *DB) Prune() {
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(normalizeRawKVPointKey(key))
+}
+
+// GetVersioned returns a safe-copy value together with its durable entry
+// revision.
+func (s *Snapshot) GetVersioned(key []byte) (VersionedEntry, bool, error) {
+	if s == nil || s.closed.Load() {
+		return VersionedEntry{}, false, ErrClosed
+	}
+	key = normalizeRawKVPointKey(key)
+	value, err := s.tree.GetAppend(key, nil)
+	if err == tree.ErrKeyNotFound {
+		return VersionedEntry{}, false, nil
+	}
+	if err != nil {
+		return VersionedEntry{}, false, err
+	}
+	revision, err := s.rawKVRevision(key)
+	if err != nil {
+		return VersionedEntry{}, false, err
+	}
+	return VersionedEntry{
+		Key:      cloneRawKVPointKey(key),
+		Value:    value,
+		Revision: revision,
+	}, true, nil
 }
 
 // GetAppend appends the value for key to dst and returns the grown slice.

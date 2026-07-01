@@ -1277,7 +1277,14 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		}
 
 		baseProbe := rootTree.Iterator(nil, nil)
-		hasExistingEntries := baseProbe.Valid()
+		hasExistingEntries := false
+		for baseProbe.Valid() {
+			if !trackValueLogRefs || !isRawKVRevisionMetadataKey(baseProbe.UnsafeKey()) {
+				hasExistingEntries = true
+				break
+			}
+			baseProbe.Next()
+		}
 		iterErr := baseProbe.Error()
 		baseProbe.Close()
 		if iterErr != nil {
@@ -1289,6 +1296,12 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		if materializeErr != nil {
 			err = materializeErr
 			return
+		}
+		if trackValueLogRefs {
+			if preserveErr := db.preserveRawKVRevisionMetadata(baseRoot, targetTable); preserveErr != nil {
+				err = preserveErr
+				return
+			}
 		}
 		if trackValueLogRefs {
 			stats.collectionRootDescriptorTargetEntries, err = orderedRootTableCollectionRootDescriptorEntries(targetTable)

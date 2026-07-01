@@ -28,6 +28,12 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
+// VersionedEntry is a raw key/value entry with its durable per-key revision.
+type VersionedEntry = db.VersionedEntry
+
+// ConditionalTxn is a backend-native optimistic raw key/value transaction.
+type ConditionalTxn = db.ConditionalTxn
+
 type MaintenancePhase = caching.MaintenancePhase
 
 type LeafPageReadCacheWriteAdmissionPolicy = db.LeafPageReadCacheWriteAdmissionPolicy
@@ -1458,6 +1464,22 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return db.cached.Get(key)
 	}
 	return db.backend.Get(key)
+}
+
+// GetVersioned returns the backend value for key plus its durable entry
+// revision. It is supported only when this public DB is backend-only, such as a
+// read-only Open. Cached mode can contain uncheckpointed memtable writes that do
+// not have durable backend revisions yet, so it fails closed instead of
+// returning stale revision metadata.
+func (db *DB) GetVersioned(key []byte) (VersionedEntry, bool, error) {
+	key = normalizeRawKVPointKey(key)
+	if err := db.ensureOpen(); err != nil {
+		return VersionedEntry{}, false, err
+	}
+	if db.cached != nil {
+		return VersionedEntry{}, false, ErrVersionedEntryCachedUnsupported
+	}
+	return db.backend.GetVersioned(key)
 }
 
 // GetMany returns values for keys.

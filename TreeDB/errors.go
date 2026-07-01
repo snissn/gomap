@@ -1,6 +1,8 @@
 package treedb
 
 import (
+	"errors"
+
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -17,6 +19,11 @@ var (
 
 	// ErrClosed indicates the DB handle has been closed.
 	ErrClosed = db.ErrClosed
+	// ErrReadOnly indicates a write operation was attempted on a read-only DB.
+	ErrReadOnly = db.ErrReadOnly
+	// ErrConcurrentModification indicates an optimistic write observed a
+	// concurrent change before commit.
+	ErrConcurrentModification = db.ErrConcurrentModification
 	// ErrRecoveryRequired indicates the DB must be opened read-write for recovery
 	// before the requested read-only or offline-maintenance operation can run.
 	ErrRecoveryRequired = db.ErrRecoveryRequired
@@ -32,6 +39,15 @@ var (
 	// ErrUnsupportedRequiredFeature indicates format.json requires a storage
 	// feature this binary does not understand.
 	ErrUnsupportedRequiredFeature = db.ErrUnsupportedRequiredFeature
+	// ErrConditionalTxnClosed indicates a conditional transaction was already
+	// committed or closed.
+	ErrConditionalTxnClosed = db.ErrConditionalTxnClosed
+	// ErrConditionalRangeUnsupported indicates conditional transactions do not
+	// yet support range-delete write intents.
+	ErrConditionalRangeUnsupported = db.ErrConditionalRangeUnsupported
+	// ErrVersionedEntryCachedUnsupported indicates durable per-entry revisions
+	// were requested through the cached public DB wrapper.
+	ErrVersionedEntryCachedUnsupported = errors.New("treedb: versioned entries require backend-only open")
 
 	// ErrKeyNotFound indicates the key does not exist.
 	ErrKeyNotFound = tree.ErrKeyNotFound
