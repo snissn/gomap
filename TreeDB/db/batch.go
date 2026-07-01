@@ -512,7 +512,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	}
 	b.db.observeFlushApplyGuardedPublish(time.Since(guardedPublishStart), err == nil)
 	if err == nil {
-		b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
+		if b.db.conditionalActiveTxnCount.Load() > 0 {
+			b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
+		}
 	}
 	b.db.commitMu.Unlock()
 	if err != nil {
@@ -664,7 +666,9 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		}
 		return err
 	}
-	b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
+	if b.db.conditionalActiveTxnCount.Load() > 0 {
+		b.db.conditionalRecordCommittedEntries(entries, ranges, b.conditionalTxnID, post.commitSeq)
+	}
 	b.db.observeFlushApplyInstalledOutput(metrics, len(retired))
 	vlogRefDelta = nil
 	b.db.finalizeCommitPostWork(post)

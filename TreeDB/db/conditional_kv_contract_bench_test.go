@@ -93,6 +93,71 @@ func BenchmarkConditionalTxnBaselineBatchWrite(b *testing.B) {
 	}
 }
 
+func BenchmarkConditionalTxnBaselineGet1BatchWrite(b *testing.B) {
+	benchmarkConditionalTxnBaselineGetBatchWrite(b, 1)
+}
+
+func BenchmarkConditionalTxnBaselineGet10BatchWrite(b *testing.B) {
+	benchmarkConditionalTxnBaselineGetBatchWrite(b, 10)
+}
+
+func BenchmarkConditionalTxnBaselineGet100BatchWrite(b *testing.B) {
+	benchmarkConditionalTxnBaselineGetBatchWrite(b, 100)
+}
+
+func BenchmarkConditionalTxnBaselineGet10000BatchWrite(b *testing.B) {
+	benchmarkConditionalTxnBaselineGetBatchWrite(b, 10000)
+}
+
+func benchmarkConditionalTxnBaselineGetBatchWrite(b *testing.B, readSet int) {
+	b.Helper()
+	d, err := Open(Options{Dir: b.TempDir()})
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	defer func() {
+		if err := d.Close(); err != nil {
+			b.Fatalf("Close: %v", err)
+		}
+	}()
+
+	count := 10000
+	if readSet*2 > count {
+		count = readSet * 2
+	}
+	val := make([]byte, 100)
+	keys := benchmarkConditionalTxnKeys(count)
+	seedConditionalTxnBenchmarkData(b, d, keys, val)
+
+	writeKey := []byte("conditional-baseline-get-write")
+	writeVal := []byte("value")
+	readScratch := make([]byte, 0, len(val))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < readSet; j++ {
+			out, revision, err := d.GetVersionedAppend(keys[(i+j)%count], readScratch[:0])
+			if err != nil {
+				b.Fatalf("GetVersionedAppend: %v", err)
+			}
+			if len(out) != len(val) || revision == page.LegacyEntryRevision {
+				b.Fatalf("GetVersionedAppend len=%d revision=%d, want len=%d non-legacy revision", len(out), revision, len(val))
+			}
+		}
+		batch := d.NewBatch().(*Batch)
+		batch.Reserve(1)
+		if err := batch.Set(writeKey, writeVal); err != nil {
+			b.Fatalf("Set: %v", err)
+		}
+		if err := batch.Write(); err != nil {
+			b.Fatalf("Write: %v", err)
+		}
+		if err := batch.Close(); err != nil {
+			b.Fatalf("Close batch: %v", err)
+		}
+	}
+}
+
 func benchmarkConditionalTxnReadSet(b *testing.B, readSet int) {
 	b.Helper()
 	d, err := Open(Options{Dir: b.TempDir()})

@@ -138,42 +138,27 @@ type DB struct {
 	maintenanceOpsPerCoalesce      int
 	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
-	mu                               sync.RWMutex
-	writeMu                          sync.RWMutex
-	commitMu                         sync.Mutex
-	publishPrepareMu                 sync.RWMutex
-	pendingValueLogAppendMu          sync.Mutex
-	pendingValueLogAppendFileIDRefs  map[uint32]int
-	pendingValueLogAppendPtrRefs     map[page.ValuePtr]int
-	updateLocks                      keyupdate.Locks
-	maintenanceMu                    sync.Mutex
-	combineMu                        sync.RWMutex
-	combineReqCh                     chan *commitCombineReq
-	combineStopCh                    chan struct{}
-	combineDoneCh                    chan struct{}
-	vacuumInProgress                 atomic.Bool
-	vacuum                           vacuumRecorder
-	meta                             page.MetaPageBody
-	metaPageID                       uint64
-	entryRevisionFloor               atomic.Uint64
-	commandJournal                   *commitlog.CommandJournal
-	conditionalActiveTxnCount        atomic.Int64
-	conditionalTxnStarted            atomic.Uint64
-	conditionalTxnClosed             atomic.Uint64
-	conditionalTxnCommitAttempts     atomic.Uint64
-	conditionalTxnCommits            atomic.Uint64
-	conditionalTxnConflicts          atomic.Uint64
-	conditionalTxnReadSetSamples     atomic.Uint64
-	conditionalTxnReadSetEntries     atomic.Uint64
-	conditionalTxnReadSetMax         atomic.Uint64
-	conditionalTxnCommandWALPayloads atomic.Uint64
-	conditionalOracleRecordedPoints  atomic.Uint64
-	conditionalOracleRecordedRanges  atomic.Uint64
-	conditionalOracleRootMarkers     atomic.Uint64
-	conditionalOraclePrunes          atomic.Uint64
-	conditionalOraclePrunedPoints    atomic.Uint64
-	conditionalOraclePrunedRanges    atomic.Uint64
-	conditionalOracle                conditionalConflictOracle
+	mu                              sync.RWMutex
+	writeMu                         sync.RWMutex
+	commitMu                        sync.Mutex
+	publishPrepareMu                sync.RWMutex
+	pendingValueLogAppendMu         sync.Mutex
+	pendingValueLogAppendFileIDRefs map[uint32]int
+	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
+	updateLocks                     keyupdate.Locks
+	maintenanceMu                   sync.Mutex
+	combineMu                       sync.RWMutex
+	combineReqCh                    chan *commitCombineReq
+	combineStopCh                   chan struct{}
+	combineDoneCh                   chan struct{}
+	vacuumInProgress                atomic.Bool
+	vacuum                          vacuumRecorder
+	meta                            page.MetaPageBody
+	metaPageID                      uint64
+	entryRevisionFloor              atomic.Uint64
+	commandJournal                  *commitlog.CommandJournal
+	conditionalActiveTxnCount       atomic.Int64
+	conditionalOracle               conditionalConflictOracle
 
 	state atomic.Pointer[DBState]
 
@@ -464,26 +449,41 @@ type DB struct {
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
-	commandWALFlushPoisoned    atomic.Bool
-	commandWALStatsMu          sync.Mutex
-	commandWALRequiredFeature  bool
-	commandWALRequiredErr      string
-	commandWALStatsAppliedLSN  uint64
-	commandWALStatsSummary     commandWALStatsSummary
-	commandWALStatsOK          bool
-	commandWALLiveAccepted     atomic.Uint64
-	commandWALLiveAcceptedMax  atomic.Uint64
-	commandWALLiveCovered      atomic.Uint64
-	commandWALLiveCoveredMax   atomic.Uint64
-	commandWALCleanupScans     atomic.Uint64
-	commandWALCleanupRemoved   atomic.Uint64
-	commandWALCleanupBytes     atomic.Uint64
-	commandWALClosedBytes      atomic.Int64
-	commandWALRawPublishMu     sync.RWMutex
-	commandWALRawBarrierMu     sync.Mutex
-	commandWALRawBarrierNextID uint64
-	commandWALRawBarriers      []*commandWALRawBarrier
-	closing                    atomic.Bool
+	commandWALFlushPoisoned          atomic.Bool
+	commandWALStatsMu                sync.Mutex
+	commandWALRequiredFeature        bool
+	commandWALRequiredErr            string
+	commandWALStatsAppliedLSN        uint64
+	commandWALStatsSummary           commandWALStatsSummary
+	commandWALStatsOK                bool
+	commandWALLiveAccepted           atomic.Uint64
+	commandWALLiveAcceptedMax        atomic.Uint64
+	commandWALLiveCovered            atomic.Uint64
+	commandWALLiveCoveredMax         atomic.Uint64
+	commandWALCleanupScans           atomic.Uint64
+	commandWALCleanupRemoved         atomic.Uint64
+	commandWALCleanupBytes           atomic.Uint64
+	commandWALClosedBytes            atomic.Int64
+	conditionalTxnStarted            atomic.Uint64
+	conditionalTxnClosed             atomic.Uint64
+	conditionalTxnCommitAttempts     atomic.Uint64
+	conditionalTxnCommits            atomic.Uint64
+	conditionalTxnConflicts          atomic.Uint64
+	conditionalTxnReadSetSamples     atomic.Uint64
+	conditionalTxnReadSetEntries     atomic.Uint64
+	conditionalTxnReadSetMax         atomic.Uint64
+	conditionalTxnCommandWALPayloads atomic.Uint64
+	conditionalOracleRecordedPoints  atomic.Uint64
+	conditionalOracleRecordedRanges  atomic.Uint64
+	conditionalOracleRootMarkers     atomic.Uint64
+	conditionalOraclePrunes          atomic.Uint64
+	conditionalOraclePrunedPoints    atomic.Uint64
+	conditionalOraclePrunedRanges    atomic.Uint64
+	commandWALRawPublishMu           sync.RWMutex
+	commandWALRawBarrierMu           sync.Mutex
+	commandWALRawBarrierNextID       uint64
+	commandWALRawBarriers            []*commandWALRawBarrier
+	closing                          atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
