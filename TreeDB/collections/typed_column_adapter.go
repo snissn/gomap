@@ -2485,13 +2485,13 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPredicateFirstPreparedPart
 func decodeTypedColumnPhysicalQueryDenseGroupHourCountPredicateFirstSelectedRows(plan columnTypedColumnPhysicalQueryPlan, summary typedColumnAdapterImageSummary, typedRef, physical columnManifestAssetRefForScan, prepared *typedColumnPreparedPartState, adapterPart *typedColumnAdapterPart, readRange typedColumnPreparedRangeReader, bytesRead func() int64, prepareDiagnostics *columnTypedColumnPhysicalQueryPrepareDiagnostics, groupColumn typedColumnAdapterColumn, groupPartColumn typedcolumn.ColumnPartColumn, valueColumn typedColumnAdapterColumn, valuePartColumn typedcolumn.ColumnPartColumn, cardinality int, groupPredicate columnTypedColumnDensePredicatePart, predicates []columnTypedColumnDensePredicatePart, selectedRows []uint32, predicateDecodedBytes uint64, predicateBlocks int) (columnTypedColumnPhysicalQueryPart, bool, error) {
 	var phaseStart time.Time
 	predicates = append(predicates, groupPredicate)
-	groupCodes := make([]uint32, 0, len(selectedRows))
+	var groupCodes []uint32
 	var groupValid []bool
-	filteredRows := make([]uint32, 0, len(selectedRows))
+	var filteredRows []uint32
 	groupDecodedBytes := uint64(0)
 	groupBlocks := 0
 	if len(selectedRows) != 0 && !groupPredicate.RejectsAll {
-		groupBlocksMask, err := typedColumnDenseSelectedBlockMask(groupPartColumn, selectedRows, summary.Rows, "group-hour group")
+		groupBlocksMask, err := typedColumnDenseSelectedPredicateBlockMask(groupPartColumn, selectedRows, summary.Rows, &groupPredicate, cardinality, "group-hour group")
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, true, err
 		}
@@ -2503,39 +2503,15 @@ func decodeTypedColumnPhysicalQueryDenseGroupHourCountPredicateFirstSelectedRows
 		}
 		groupPartColumn = adapterPart.Part.Columns[groupColumn.Definition.Name]
 		if groupColumn.Field.Nullable {
-			groupCodes, groupValid, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseNullableUint32CodesSelectedRows(groupPartColumn, cardinality, selectedRows, summary.Rows, "group-hour group")
+			groupCodes, groupValid, filteredRows, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseNullableUint32CodesSelectedRowsMatchingPredicate(groupPartColumn, cardinality, selectedRows, summary.Rows, &groupPredicate, groupBlocksMask, "group-hour group")
 		} else {
-			groupCodes, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseUint32CodesSelectedRows(groupPartColumn, cardinality, selectedRows, summary.Rows, "group-hour group")
+			groupCodes, filteredRows, groupDecodedBytes, groupBlocks, err = decodeTypedColumnDenseUint32CodesSelectedRowsMatchingPredicate(groupPartColumn, cardinality, selectedRows, summary.Rows, &groupPredicate, groupBlocksMask, "group-hour group")
 		}
 		if prepareDiagnostics != nil {
 			prepareDiagnostics.DenseGroupNanos += time.Since(phaseStart).Nanoseconds()
 		}
 		if err != nil {
 			return columnTypedColumnPhysicalQueryPart{}, true, err
-		}
-		if prepareDiagnostics != nil {
-			phaseStart = time.Now()
-		}
-		filteredCodes := groupCodes[:0]
-		var filteredValid []bool
-		if groupValid != nil {
-			filteredValid = groupValid[:0]
-		}
-		for idx, code := range groupCodes {
-			valid := columnTypedColumnDenseCodeValid(groupValid, idx)
-			if !columnTypedColumnDensePredicateAllowsCode(&groupPredicate, code, valid) {
-				continue
-			}
-			filteredRows = append(filteredRows, selectedRows[idx])
-			filteredCodes = append(filteredCodes, code)
-			if groupValid != nil {
-				filteredValid = append(filteredValid, groupValid[idx])
-			}
-		}
-		groupCodes = filteredCodes
-		groupValid = filteredValid
-		if prepareDiagnostics != nil {
-			prepareDiagnostics.DensePreapplyNanos += time.Since(phaseStart).Nanoseconds()
 		}
 	}
 	values := make([]int64, 0, len(filteredRows))
@@ -3006,6 +2982,98 @@ func typedColumnDenseSelectedBlockMask(partColumn typedcolumn.ColumnPartColumn, 
 	return mask, nil
 }
 
+func typedColumnDenseSelectedPredicateBlockMask(partColumn typedcolumn.ColumnPartColumn, selectedRows []uint32, rows int, predicate *columnTypedColumnDensePredicatePart, cardinality int, role string) ([]bool, error) {
+	mask := make([]bool, len(partColumn.Blocks))
+	if len(selectedRows) == 0 {
+		return mask, nil
+	}
+	selectedIdx := 0
+	rowOffset := 0
+	previous := -1
+	for blockIdx, block := range partColumn.Blocks {
+		blockRows := block.Descriptor.RowCount
+		if blockRows < 0 || blockRows > rows-rowOffset {
+			return nil, fmt.Errorf("collections: dense typed-column %s block %d rows=%d outside remaining rows=%d", role, blockIdx, blockRows, rows-rowOffset)
+		}
+		blockLimit := rowOffset + blockRows
+		selectedInBlock := false
+		for selectedIdx < len(selectedRows) {
+			row := int(selectedRows[selectedIdx])
+			if row <= previous {
+				return nil, fmt.Errorf("collections: dense typed-column %s selected rows are not strictly ascending at index %d", role, selectedIdx)
+			}
+			if row < rowOffset {
+				return nil, fmt.Errorf("collections: dense typed-column %s selected row %d precedes block offset %d", role, row, rowOffset)
+			}
+			if row >= blockLimit {
+				break
+			}
+			selectedInBlock = true
+			previous = row
+			selectedIdx++
+		}
+		if selectedInBlock {
+			mask[blockIdx] = typedColumnDensePredicateGranuleMayMatch(predicate, block.Granule, cardinality)
+		}
+		rowOffset = blockLimit
+	}
+	if rowOffset != rows {
+		return nil, fmt.Errorf("collections: dense typed-column %s block rows=%d want part rows=%d", role, rowOffset, rows)
+	}
+	if selectedIdx != len(selectedRows) {
+		return nil, fmt.Errorf("collections: dense typed-column %s selected row %d outside part rows=%d", role, selectedRows[selectedIdx], rows)
+	}
+	return mask, nil
+}
+
+func typedColumnDensePredicateGranuleMayMatch(predicate *columnTypedColumnDensePredicatePart, granule typedcolumn.EncodedGranule, cardinality int) bool {
+	if predicate == nil {
+		return true
+	}
+	if predicate.RejectsAll {
+		return false
+	}
+	if predicate.MissingMatchesEmpty {
+		return true
+	}
+	if !granule.HasMinMax {
+		return true
+	}
+	minCode := granule.Min
+	maxCode := granule.Max
+	if minCode < 0 {
+		minCode = 0
+	}
+	cardinalityMax := int64(cardinality) - 1
+	if maxCode > cardinalityMax {
+		maxCode = cardinalityMax
+	}
+	if maxCode < minCode || len(predicate.Allowed) == 0 {
+		return false
+	}
+	startWord := int(minCode / 64)
+	endWord := int(maxCode / 64)
+	if startWord >= len(predicate.Allowed) {
+		return false
+	}
+	if endWord >= len(predicate.Allowed) {
+		endWord = len(predicate.Allowed) - 1
+	}
+	for word := startWord; word <= endWord; word++ {
+		mask := ^uint64(0)
+		if word == startWord {
+			mask &= ^uint64(0) << uint(minCode%64)
+		}
+		if word == endWord {
+			mask &= ^uint64(0) >> uint(63-maxCode%64)
+		}
+		if predicate.Allowed[word]&mask != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func decodeTypedColumnDenseUint32CodesSelectedRows(partColumn typedcolumn.ColumnPartColumn, cardinality int, selectedRows []uint32, rows int, role string) ([]uint32, uint64, int, error) {
 	codes := make([]uint32, 0, len(selectedRows))
 	var scratch []uint32
@@ -3069,6 +3137,199 @@ func decodeTypedColumnDenseUint32CodesSelectedRows(partColumn typedcolumn.Column
 		return nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded selected rows=%d want %d", role, len(codes), len(selectedRows))
 	}
 	return codes, decodedBytes, decodedBlocks, nil
+}
+
+func decodeTypedColumnDenseUint32CodesSelectedRowsMatchingPredicate(partColumn typedcolumn.ColumnPartColumn, cardinality int, selectedRows []uint32, rows int, predicate *columnTypedColumnDensePredicatePart, selectedBlocks []bool, role string) ([]uint32, []uint32, uint64, int, error) {
+	codes := make([]uint32, 0, len(selectedRows))
+	filteredRows := make([]uint32, 0, len(selectedRows))
+	var scratch []uint32
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	decodedBlocks := 0
+	selectedIdx := 0
+	rowOffset := 0
+	previous := -1
+	for blockIdx, block := range partColumn.Blocks {
+		blockRows := block.Descriptor.RowCount
+		if blockRows < 0 || blockRows > rows-rowOffset {
+			return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d rows=%d outside remaining rows=%d", role, blockIdx, blockRows, rows-rowOffset)
+		}
+		blockLimit := rowOffset + blockRows
+		if selectedIdx >= len(selectedRows) || int(selectedRows[selectedIdx]) >= blockLimit {
+			rowOffset = blockLimit
+			continue
+		}
+		blockSelectedStart := selectedIdx
+		for selectedIdx < len(selectedRows) {
+			row := int(selectedRows[selectedIdx])
+			if row <= previous {
+				return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected rows are not strictly ascending at index %d", role, selectedIdx)
+			}
+			if row < rowOffset {
+				return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected row %d precedes block offset %d", role, row, rowOffset)
+			}
+			if row >= blockLimit {
+				break
+			}
+			previous = row
+			selectedIdx++
+		}
+		if selectedBlocks != nil {
+			if len(selectedBlocks) != len(partColumn.Blocks) {
+				return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected blocks=%d want %d", role, len(selectedBlocks), len(partColumn.Blocks))
+			}
+			if !selectedBlocks[blockIdx] {
+				rowOffset = blockLimit
+				continue
+			}
+		}
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d min/max [%d,%d] outside cardinality %d", role, blockIdx, g.Min, g.Max, cardinality)
+			}
+		}
+		decoded, err := reader.DecodeUint32CodesInto(scratch[:0], g)
+		if err != nil {
+			return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d: %w", role, blockIdx, err)
+		}
+		if len(decoded) != blockRows {
+			return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d decoded rows=%d want %d", role, blockIdx, len(decoded), blockRows)
+		}
+		for idx := blockSelectedStart; idx < selectedIdx; idx++ {
+			row := int(selectedRows[idx])
+			code := decoded[row-rowOffset]
+			if uint64(code) >= uint64(cardinality) {
+				return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s code[%d]=%d outside cardinality=%d", role, row, code, cardinality)
+			}
+			if !columnTypedColumnDensePredicateAllowsCode(predicate, code, true) {
+				continue
+			}
+			codes = append(codes, code)
+			filteredRows = append(filteredRows, selectedRows[idx])
+		}
+		scratch = decoded
+		decodedBytes += uint64(g.RawBytes)
+		decodedBlocks++
+		rowOffset = blockLimit
+	}
+	if rowOffset != rows {
+		return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block rows=%d want part rows=%d", role, rowOffset, rows)
+	}
+	if selectedIdx != len(selectedRows) {
+		return nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected row %d outside part rows=%d", role, selectedRows[selectedIdx], rows)
+	}
+	return codes, filteredRows, decodedBytes, decodedBlocks, nil
+}
+
+func decodeTypedColumnDenseNullableUint32CodesSelectedRowsMatchingPredicate(partColumn typedcolumn.ColumnPartColumn, cardinality int, selectedRows []uint32, rows int, predicate *columnTypedColumnDensePredicatePart, selectedBlocks []bool, role string) ([]uint32, []bool, []uint32, uint64, int, error) {
+	codes := make([]uint32, 0, len(selectedRows))
+	var valid []bool
+	if predicate != nil && predicate.MissingMatchesEmpty {
+		valid = make([]bool, 0, len(selectedRows))
+	}
+	filteredRows := make([]uint32, 0, len(selectedRows))
+	var valueScratch []int64
+	var nullScratch []bool
+	var defaultScratch []bool
+	var reader typedcolumn.GranuleReader
+	decodedBytes := uint64(0)
+	decodedBlocks := 0
+	selectedIdx := 0
+	rowOffset := 0
+	previous := -1
+	for blockIdx, block := range partColumn.Blocks {
+		blockRows := block.Descriptor.RowCount
+		if blockRows < 0 || blockRows > rows-rowOffset {
+			return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d rows=%d outside remaining rows=%d", role, blockIdx, blockRows, rows-rowOffset)
+		}
+		blockLimit := rowOffset + blockRows
+		if selectedIdx >= len(selectedRows) || int(selectedRows[selectedIdx]) >= blockLimit {
+			rowOffset = blockLimit
+			continue
+		}
+		blockSelectedStart := selectedIdx
+		for selectedIdx < len(selectedRows) {
+			row := int(selectedRows[selectedIdx])
+			if row <= previous {
+				return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected rows are not strictly ascending at index %d", role, selectedIdx)
+			}
+			if row < rowOffset {
+				return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected row %d precedes block offset %d", role, row, rowOffset)
+			}
+			if row >= blockLimit {
+				break
+			}
+			previous = row
+			selectedIdx++
+		}
+		if selectedBlocks != nil {
+			if len(selectedBlocks) != len(partColumn.Blocks) {
+				return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected blocks=%d want %d", role, len(selectedBlocks), len(partColumn.Blocks))
+			}
+			if !selectedBlocks[blockIdx] {
+				rowOffset = blockLimit
+				continue
+			}
+		}
+		g := block.Granule
+		if g.HasMinMax {
+			if g.Min < 0 || g.Max < 0 || g.Min > g.Max || uint64(g.Max) >= uint64(cardinality) {
+				return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d min/max [%d,%d] outside cardinality %d", role, blockIdx, g.Min, g.Max, cardinality)
+			}
+		}
+		values, nulls, defaults, err := reader.DecodeNullableInt64Into(valueScratch[:0], nullScratch[:0], defaultScratch[:0], g)
+		if err != nil {
+			return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d: %w", role, blockIdx, err)
+		}
+		if len(values) != blockRows || len(nulls) != blockRows || len(defaults) != blockRows {
+			return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block %d decoded rows values/nulls/defaults=%d/%d/%d want %d", role, blockIdx, len(values), len(nulls), len(defaults), blockRows)
+		}
+		for idx := blockSelectedStart; idx < selectedIdx; idx++ {
+			row := int(selectedRows[idx])
+			local := row - rowOffset
+			value := values[local]
+			if nulls[local] || defaults[local] {
+				if !columnTypedColumnDensePredicateAllowsCode(predicate, 0, false) {
+					continue
+				}
+				codes = append(codes, 0)
+				filteredRows = append(filteredRows, selectedRows[idx])
+				if valid != nil {
+					valid = append(valid, false)
+				}
+				continue
+			}
+			if value < 0 || uint64(value) >= uint64(cardinality) || value > int64(^uint32(0)) {
+				return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s code[%d]=%d outside cardinality=%d", role, row, value, cardinality)
+			}
+			code := uint32(value)
+			if !columnTypedColumnDensePredicateAllowsCode(predicate, code, true) {
+				continue
+			}
+			codes = append(codes, code)
+			filteredRows = append(filteredRows, selectedRows[idx])
+			if valid != nil {
+				valid = append(valid, true)
+			}
+		}
+		valueScratch = values
+		nullScratch = nulls
+		defaultScratch = defaults
+		decodedBytes += uint64(g.RawBytes)
+		decodedBlocks++
+		rowOffset = blockLimit
+	}
+	if rowOffset != rows {
+		return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s block rows=%d want part rows=%d", role, rowOffset, rows)
+	}
+	if selectedIdx != len(selectedRows) {
+		return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s selected row %d outside part rows=%d", role, selectedRows[selectedIdx], rows)
+	}
+	if valid != nil && len(valid) != len(codes) {
+		return nil, nil, nil, 0, 0, fmt.Errorf("collections: dense typed-column %s decoded filtered rows codes/valid=%d/%d", role, len(codes), len(valid))
+	}
+	return codes, valid, filteredRows, decodedBytes, decodedBlocks, nil
 }
 
 func decodeTypedColumnDenseNullableUint32CodesSelectedRows(partColumn typedcolumn.ColumnPartColumn, cardinality int, selectedRows []uint32, rows int, role string) ([]uint32, []bool, uint64, int, error) {
