@@ -450,6 +450,25 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000, dwell_samples=2)
             write_treedb_debug_vars(run)
             dwell = run / "sync" / "dwell-stats"
+            (dwell / "treedb_app_0.json").write_text(
+                json.dumps(
+                    {
+                        "treedb.cache.vlog_generation.maintenance.attempts": "3",
+                        "treedb.command_wal.public_batch.set.calls_total": "1",
+                        "treedb.command_wal.public_batch.set_view.calls_total": "2",
+                        "treedb.raw.span_native.route.point_put.candidate_ops_total": "3",
+                        "treedb.raw.span_native.route.point_put.eligible_ops_total": "3",
+                        "treedb.raw.span_native.route.point_put.used_ops_total": "3",
+                        "treedb.flush_apply.span_native.candidate_ops_total": "4",
+                        "treedb.flush_apply.span_native.eligible_ops_total": "4",
+                        "treedb.flush_apply.span_native.used_ops_total": "4",
+                        "treedb.cache.flush_apply.span_native": "true",
+                        "treedb.publish.ordered_root_delta_group.calls_total": "0",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             (dwell / "treedb_app_1.json").write_text(
                 json.dumps(
                     {

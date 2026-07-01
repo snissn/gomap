@@ -153,7 +153,7 @@ def human_seconds(value: Any) -> str:
     return f"{minutes / 60.0:.2f}h"
 
 
-def human_nanoseconds(value: Any) -> str:
+def human_nanoseconds(value: object) -> str:
     return human_seconds(safe_float(value, 0.0) / 1_000_000_000.0)
 
 
@@ -421,6 +421,45 @@ def span_route_summary(stats: dict[str, Any], prefix: str) -> dict[str, Any]:
         "fallbacks_total": stat_int(stats, prefix + ".fallbacks_total"),
         "fallback_reasons": fallback_reason_counters(stats, prefix),
     }
+
+
+def aggregate_span_routes(routes: object) -> dict[str, Any]:
+    if not isinstance(routes, dict):
+        return span_route_summary({}, "")
+    totals: dict[str, Any] = {
+        "observations_total": 0,
+        "candidate_ops_total": 0,
+        "eligible_ops_total": 0,
+        "used_ops_total": 0,
+        "ineligible_ops_total": 0,
+        "fallbacks_total": 0,
+        "fallback_reasons": {},
+    }
+    fallback_reasons: dict[str, dict[str, int]] = {}
+    for route in RAW_SPAN_NATIVE_ROUTES:
+        route_summary = routes.get(route)
+        if not isinstance(route_summary, dict):
+            continue
+        for key in [
+            "observations_total",
+            "candidate_ops_total",
+            "eligible_ops_total",
+            "used_ops_total",
+            "ineligible_ops_total",
+            "fallbacks_total",
+        ]:
+            totals[key] += safe_int(route_summary.get(key), 0)
+        route_reasons = route_summary.get("fallback_reasons")
+        if not isinstance(route_reasons, dict):
+            continue
+        for reason, metrics in route_reasons.items():
+            if not isinstance(metrics, dict):
+                continue
+            reason_totals = fallback_reasons.setdefault(str(reason), {})
+            for metric, value in metrics.items():
+                reason_totals[str(metric)] = reason_totals.get(str(metric), 0) + safe_int(value, 0)
+    totals["fallback_reasons"] = fallback_reasons
+    return totals
 
 
 def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
@@ -709,7 +748,7 @@ def markdown_table(rows: list[list[str]]) -> str:
     return "\n".join(out)
 
 
-def format_fallback_reasons(reasons: Any) -> str:
+def format_fallback_reasons(reasons: object) -> str:
     if not isinstance(reasons, dict) or not reasons:
         return "-"
     parts: list[str] = []
@@ -868,6 +907,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
             "backend",
             "public set/set_view/del/del_view",
             "raw point-put cand/elig/used/fb",
+            "raw routes cand/elig/used/fb",
             "raw fb reasons",
             "flush cand/elig/used/fb",
             "flush fb reasons",
@@ -883,6 +923,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
             public_batch = decision.get("public_batch") or {}
             raw_routes = (decision.get("raw_span_native") or {}).get("routes") or {}
             raw_point_put = raw_routes.get("point_put") or {}
+            raw_all_routes = aggregate_span_routes(raw_routes)
             flush = decision.get("flush_apply_span_native") or {}
             ordered = decision.get("ordered_root") or {}
             ordered_span = ordered.get("span_native") or {}
@@ -902,7 +943,13 @@ def render_markdown(payload: dict[str, Any]) -> str:
                     f"/{raw_point_put.get('used_ops_total', 0)}"
                     f"/{raw_point_put.get('fallbacks_total', 0)}"
                 ),
-                format_fallback_reasons(raw_point_put.get("fallback_reasons")),
+                (
+                    f"{raw_all_routes.get('candidate_ops_total', 0)}"
+                    f"/{raw_all_routes.get('eligible_ops_total', 0)}"
+                    f"/{raw_all_routes.get('used_ops_total', 0)}"
+                    f"/{raw_all_routes.get('fallbacks_total', 0)}"
+                ),
+                format_fallback_reasons(raw_all_routes.get("fallback_reasons")),
                 (
                     f"{flush.get('candidate_ops_total', 0)}"
                     f"/{flush.get('eligible_ops_total', 0)}"
