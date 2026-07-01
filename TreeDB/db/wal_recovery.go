@@ -537,6 +537,7 @@ func (db *DB) ensureCommandWALRecoverySnapshotView() {
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
 	}
@@ -1102,20 +1103,56 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 	ptrBatch, hasPtrBatch := batch.(interface {
 		SetPointer(key []byte, ptr page.ValuePtr) error
 	})
+	revisionBatch, hasRevisionBatch := batch.(interface {
+		SetWithRevision(key, value []byte, revision page.EntryRevision) error
+		DeleteWithRevision(key []byte, revision page.EntryRevision) error
+	})
+	ptrRevisionBatch, hasPtrRevisionBatch := batch.(interface {
+		SetPointerWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error
+	})
+
+	recordRevision := func(rec commitlog.Record) page.EntryRevision {
+		if rec.Revision != 0 {
+			return page.EntryRevision(rec.Revision)
+		}
+		if rec.Seq != 0 {
+			return page.EntryRevision(rec.Seq)
+		}
+		return page.LegacyEntryRevision
+	}
 
 	for _, rec := range records {
+		revision := recordRevision(rec)
 		switch rec.Op {
 		case commitlog.OpDelete:
-			if err := batch.Delete(rec.Key); err != nil {
-				return err
+			if revision != page.LegacyEntryRevision {
+				if !hasRevisionBatch {
+					return fmt.Errorf("commitlog: revision batch unavailable")
+				}
+				if err := revisionBatch.DeleteWithRevision(rec.Key, revision); err != nil {
+					return err
+				}
+			} else {
+				if err := batch.Delete(rec.Key); err != nil {
+					return err
+				}
 			}
 		case commitlog.OpSetInline:
-			if err := batch.Set(rec.Key, rec.Value); err != nil {
-				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+			var setErr error
+			if revision != page.LegacyEntryRevision {
+				if !hasRevisionBatch {
+					return fmt.Errorf("commitlog: revision batch unavailable")
+				}
+				setErr = revisionBatch.SetWithRevision(rec.Key, rec.Value, revision)
+			} else {
+				setErr = batch.Set(rec.Key, rec.Value)
+			}
+			if setErr != nil {
+				if !errors.Is(setErr, batchpkg.ErrValueTooLarge) {
 					// Abort this replay attempt on non-placement errors. The
 					// commit batch remains unapplied and the next open retries
 					// from the last published root.
-					return err
+					return setErr
 				}
 				if !hasPtrBatch {
 					return fmt.Errorf("commitlog: pointer batch unavailable")
@@ -1127,8 +1164,17 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 				if err != nil {
 					return err
 				}
-				if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
-					return err
+				if revision != page.LegacyEntryRevision {
+					if !hasPtrRevisionBatch {
+						return fmt.Errorf("commitlog: pointer revision batch unavailable")
+					}
+					if err := ptrRevisionBatch.SetPointerWithRevision(rec.Key, ptr, revision); err != nil {
+						return err
+					}
+				} else {
+					if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
+						return err
+					}
 				}
 			}
 		case commitlog.OpSetRID:
@@ -1139,8 +1185,17 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 			if !hasPtrBatch {
 				return fmt.Errorf("commitlog: pointer batch unavailable")
 			}
-			if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
-				return err
+			if revision != page.LegacyEntryRevision {
+				if !hasPtrRevisionBatch {
+					return fmt.Errorf("commitlog: pointer revision batch unavailable")
+				}
+				if err := ptrRevisionBatch.SetPointerWithRevision(rec.Key, ptr, revision); err != nil {
+					return err
+				}
+			} else {
+				if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
+					return err
+				}
 			}
 		default:
 			return fmt.Errorf("commitlog: unknown op %d", rec.Op)

@@ -1629,8 +1629,8 @@ func (db *DB) Set(key, value []byte) error {
 	defer unlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, false)
+			return db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), false)
 			})
 		}
 		return db.cached.Set(key, value)
@@ -1651,8 +1651,8 @@ func (db *DB) SetSync(key, value []byte) error {
 	defer unlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.SetAfterCommandWALAppend(key, value, func() error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, true)
+			return db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, EntryRevision(revision), true)
 			})
 		}
 		return db.cached.SetSync(key, value)
@@ -1720,8 +1720,8 @@ func (db *DB) Delete(key []byte) error {
 	defer unlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, false)
+			return db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), false)
 			})
 		}
 		return db.cached.Delete(key)
@@ -1792,8 +1792,8 @@ func (db *DB) DeleteSync(key []byte) error {
 	defer unlock()
 	if db.cached != nil {
 		if db.commandWALCached {
-			return db.cached.DeleteAfterCommandWALAppend(key, func() error {
-				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, true)
+			return db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
+				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpDelete, key, nil, EntryRevision(revision), true)
 			})
 		}
 		return db.cached.DeleteSync(key)

@@ -115,16 +115,26 @@ body offset 60 / page offset 76:
 
 body offset 68 / page offset 84:
 u64 AppliedCommandLSN
+
+body offset 76 / page offset 92:
+[8]byte RevisionV1Marker = "TMETAR1\x00"
+
+body offset 84 / page offset 100:
+u64 MaxEntryRevision
 ```
 
-The `command_wal_v1` meta body size is 76 bytes. Bytes after offset 76 are
-reserved and must be written as zero until assigned by a later required feature.
+The `command_wal_v1` meta body size is 76 bytes. The revision-extension meta
+body size is 92 bytes. Bytes after offset 76 are reserved unless the
+`RevisionV1Marker` is present.
 `AppliedCommandLSN` is the physical on-disk field for the logical `AppliedLSN`
 command stream boundary. Alternating meta-page selection must choose roots and
-`AppliedCommandLSN` from the same meta page candidate.
+`AppliedCommandLSN`/`MaxEntryRevision` from the same meta page candidate.
 
 The marker is checksummed with the selected meta page. A decoder must treat
 `AppliedCommandLSN` as zero unless the marker is present in that same page body.
+It must treat `MaxEntryRevision` as zero unless both the command-WAL marker and
+the revision-extension marker are present in that same page body; buffer length
+or full-page padding is not sufficient.
 `format.json`, manifests, stats, or any other sidecar file must not decide
 whether a meta page's `AppliedCommandLSN` bytes are authoritative.
 
@@ -1844,9 +1854,11 @@ executor before serving reads.
 
 The V1 physical storage target for `AppliedLSN` is the in-page-marked meta-page
 field named `AppliedCommandLSN`, encoded by the command-WAL meta extension in
-Section 3.1 at body offset 68 / page offset 84. It must be selected atomically
-with the roots that contain the corresponding command effects. PR1 may document
-a blocking reason to revisit this before PR2 starts, but storage-format
+Section 3.1 at body offset 68 / page offset 84. `MaxEntryRevision` is encoded
+in the same selected meta body only when the revision-extension marker at body
+offset 76 is present. These fields must be selected atomically with the roots
+that contain the corresponding command effects. PR1 may document a blocking
+reason to revisit this before PR2 starts, but storage-format
 implementation must not proceed with both meta-page and system-root storage as
 live options. A sidecar cleanup file, manifest, stats record, format-config
 marker, or post-commit maintenance record is not authoritative state for

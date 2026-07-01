@@ -3805,14 +3805,17 @@ func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page
 	encodedLeafPage := leafPage
 	if w.leafPagesUseCompactPayload() {
 		var err error
-		encodedLeafPage, _, err = valuelog.MaybeCompactLeafLogPayloadTo(w.leafCompactScratch[:0], leafPage)
+		var compacted bool
+		encodedLeafPage, compacted, err = valuelog.MaybeCompactLeafLogPayloadTo(w.leafCompactScratch[:0], leafPage)
 		if err != nil {
 			return page.LeafLogPtr{}, err
 		}
-		if cap(encodedLeafPage) > page.PageSize*2 {
-			w.leafCompactScratch = nil
-		} else {
-			w.leafCompactScratch = encodedLeafPage[:0]
+		if compacted {
+			if cap(encodedLeafPage) > page.PageSize*2 {
+				w.leafCompactScratch = nil
+			} else {
+				w.leafCompactScratch = encodedLeafPage[:0]
+			}
 		}
 	}
 	if w.leafDir != "" {

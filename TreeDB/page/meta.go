@@ -16,15 +16,18 @@ type MetaPageBody struct {
 	ActiveSlabTail    uint64
 	LastCommitHeight  uint64
 	AppliedCommandLSN uint64
+	MaxEntryRevision  uint64
 }
 
 const (
 	MetaPageBodySizeLegacy       = 60
 	MetaPageBodySizeCommandWALV1 = 76
-	MetaPageBodySize             = MetaPageBodySizeCommandWALV1
+	MetaPageBodySizeRevisionV1   = 92
+	MetaPageBodySize             = MetaPageBodySizeRevisionV1
 )
 
 var metaCommandWALV1Magic = [8]byte{'T', 'M', 'E', 'T', 'A', 'W', '1', 0}
+var metaRevisionV1Magic = [8]byte{'T', 'M', 'E', 'T', 'A', 'R', '1', 0}
 
 // EncodeMetaBody encodes the MetaPageBody into the provided buffer.
 func (m *MetaPageBody) Encode(buf []byte) {
@@ -39,6 +42,8 @@ func (m *MetaPageBody) Encode(buf []byte) {
 	binary.LittleEndian.PutUint64(buf[52:60], m.LastCommitHeight)
 	copy(buf[60:68], metaCommandWALV1Magic[:])
 	binary.LittleEndian.PutUint64(buf[68:76], m.AppliedCommandLSN)
+	copy(buf[76:84], metaRevisionV1Magic[:])
+	binary.LittleEndian.PutUint64(buf[84:92], m.MaxEntryRevision)
 }
 
 // DecodeMetaBody decodes the legacy-safe MetaPageBody fields from the provided
@@ -58,13 +63,15 @@ func DecodeMetaBody(buf []byte) MetaPageBody {
 	}
 }
 
-// DecodeMetaBodyCommandWALV1 decodes the command-WAL V1 meta extension only
-// when the in-page V1 marker is present. Legacy pages and unmarked buffers
-// decode as AppliedCommandLSN=0.
+// DecodeMetaBodyCommandWALV1 decodes marked meta extensions. Legacy pages and
+// unmarked buffers decode with zero extension fields.
 func DecodeMetaBodyCommandWALV1(buf []byte) MetaPageBody {
 	m := DecodeMetaBody(buf)
 	if len(buf) >= MetaPageBodySizeCommandWALV1 && bytes.Equal(buf[60:68], metaCommandWALV1Magic[:]) {
 		m.AppliedCommandLSN = binary.LittleEndian.Uint64(buf[68:76])
+		if len(buf) >= MetaPageBodySizeRevisionV1 && bytes.Equal(buf[76:84], metaRevisionV1Magic[:]) {
+			m.MaxEntryRevision = binary.LittleEndian.Uint64(buf[84:92])
+		}
 	}
 	return m
 }

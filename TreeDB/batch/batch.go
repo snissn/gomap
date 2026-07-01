@@ -952,6 +952,60 @@ func (b *Batch) HasDeleteRanges() bool {
 	return b != nil && b.hasDeleteRanges
 }
 
+// AssignLegacyPointRevisions assigns revision to point entries that do not
+// already carry explicit revision metadata. It returns the maximum point
+// revision observed after assignment.
+func (b *Batch) AssignLegacyPointRevisions(revision page.EntryRevision) page.EntryRevision {
+	if b == nil || len(b.entries) == 0 {
+		return page.LegacyEntryRevision
+	}
+	maxRevision := page.LegacyEntryRevision
+	for i := range b.entries {
+		entry := &b.entries[i]
+		if entry.Type == OpDeleteRange {
+			continue
+		}
+		if entry.Revision == page.LegacyEntryRevision && revision != page.LegacyEntryRevision {
+			entry.Revision = revision
+		}
+		if entry.Revision > maxRevision {
+			maxRevision = entry.Revision
+		}
+	}
+	return maxRevision
+}
+
+// PointRevisionStats returns the highest point-entry revision and whether any
+// point entry is still legacy-versioned.
+func (b *Batch) PointRevisionStats() (page.EntryRevision, bool) {
+	if b == nil || len(b.entries) == 0 {
+		return page.LegacyEntryRevision, false
+	}
+	maxRevision := page.LegacyEntryRevision
+	hasLegacy := false
+	for i := range b.entries {
+		entry := &b.entries[i]
+		if entry.Type == OpDeleteRange {
+			continue
+		}
+		if entry.Revision == page.LegacyEntryRevision {
+			hasLegacy = true
+			continue
+		}
+		if entry.Revision > maxRevision {
+			maxRevision = entry.Revision
+		}
+	}
+	return maxRevision, hasLegacy
+}
+
+// MaxPointRevision returns the highest explicit point-entry revision without
+// mutating the batch.
+func (b *Batch) MaxPointRevision() page.EntryRevision {
+	maxRevision, _ := b.PointRevisionStats()
+	return maxRevision
+}
+
 // OrderedEntries returns the submission-order operation stream. The returned
 // slice aliases batch-owned storage and must be treated as read-only.
 func (b *Batch) OrderedEntries() []Entry {

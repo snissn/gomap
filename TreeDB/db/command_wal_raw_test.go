@@ -8,6 +8,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
@@ -25,6 +26,42 @@ func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
 	}
 	if got, replay := zero.ReplayAssignedLSN(); got != 0 || replay {
 		t.Fatalf("zero ReplayAssignedLSN=(%d,%t), want (0,false)", got, replay)
+	}
+}
+
+func TestCommandWALIntentRawKVPayloadSetsMaxEntryRevision(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{
+		{Op: commitlog.RawKVOpSet, Key: []byte("alpha"), Value: []byte("one"), Revision: 17},
+		{Op: commitlog.RawKVOpDelete, Key: []byte("bravo"), Revision: 29},
+		{Op: commitlog.RawKVOpDeleteRange, Key: []byte("range-a"), Value: []byte("range-z")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := d.NewCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewCommandWALIntent: %v", err)
+	}
+	if got := intent.inner.maxEntryRevision; got != page.EntryRevision(29) {
+		t.Fatalf("intent maxEntryRevision=%d, want 29", got)
+	}
+	intent.inner.lsn = 7
+	if got := commandWALFinalizeOptionsForPublicIntent(intent).maxEntryRevision; got != page.EntryRevision(29) {
+		t.Fatalf("finalize maxEntryRevision=%d, want 29", got)
+	}
+
+	trusted, err := d.NewTrustedCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+	}
+	if got := trusted.inner.maxEntryRevision; got != page.EntryRevision(29) {
+		t.Fatalf("trusted maxEntryRevision=%d, want 29", got)
 	}
 }
 

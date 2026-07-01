@@ -72,15 +72,33 @@ func (b *pointerBatch) Set(key, value []byte) error {
 	return nil
 }
 
+func (b *pointerBatch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
+	b.setCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value, Revision: revision})
+	return nil
+}
+
 func (b *pointerBatch) SetView(key, value []byte) error {
 	b.setViewCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 	return nil
 }
 
+func (b *pointerBatch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
+	b.setViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value, Revision: revision})
+	return nil
+}
+
 func (b *pointerBatch) Delete(key []byte) error {
 	b.deleteCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
+	return nil
+}
+
+func (b *pointerBatch) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
+	b.deleteCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision})
 	return nil
 }
 
@@ -95,15 +113,33 @@ func (b *pointerBatch) DeleteView(key []byte) error {
 	return nil
 }
 
+func (b *pointerBatch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
+	b.deleteViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision})
+	return nil
+}
+
 func (b *pointerBatch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	b.setPointerCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
 	return nil
 }
 
+func (b *pointerBatch) SetPointerWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
+	b.setPointerCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision})
+	return nil
+}
+
 func (b *pointerBatch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 	b.setPointerViewCalls++
 	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
+	return nil
+}
+
+func (b *pointerBatch) SetPointerViewWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
+	b.setPointerViewCalls++
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision})
 	return nil
 }
 

@@ -1384,32 +1384,56 @@ func encodeRawKVSingleCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op 
 }
 
 func encodeTrustedRawKVPointCommandFrameTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte) ([]byte, error) {
+	return encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, 0)
+}
+
+func encodeTrustedRawKVPointCommandFrameWithRevisionTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64) ([]byte, error) {
 	if lsn == 0 {
 		return nil, fmt.Errorf("%w: zero lsn", ErrCorrupt)
 	}
-	if op != RawKVOpSet && op != RawKVOpDelete {
-		return nil, fmt.Errorf("commitlog: unsupported trusted raw kv point op %d", op)
+	valueLen, payloadLen, total, err := trustedRawKVPointCommandFrameLens(op, key, value, revision)
+	if err != nil {
+		return nil, err
 	}
-	valueLen := len(value)
+	return encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, total)
+}
+
+func trustedRawKVPointCommandFrameLens(op RawKVOp, key, value []byte, revision uint64) (valueLen, payloadLen, total int, err error) {
+	if op != RawKVOpSet && op != RawKVOpDelete {
+		return 0, 0, 0, fmt.Errorf("commitlog: unsupported trusted raw kv point op %d", op)
+	}
+	valueLen = len(value)
 	if op == RawKVOpDelete {
 		valueLen = 0
 	}
 	if commandFrameIntExceedsUint32(len(key)) || commandFrameIntExceedsUint32(valueLen) {
-		return nil, ErrRecordTooLarge
+		return 0, 0, 0, ErrRecordTooLarge
 	}
-	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(key) + valueLen
-	total, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	opHeaderSize := rawKVOpHeaderSize
+	if revision != 0 {
+		opHeaderSize = rawKVOpRevisionHeaderSize
+	}
+	payloadLen = rawKVBatchHeaderSize + opHeaderSize + len(key) + valueLen
+	total, err = commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
 	if err != nil {
-		return nil, err
+		return 0, 0, 0, err
 	}
-	return encodeTrustedRawKVPointCommandFrameSizedTo(dst, lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, total)
+	return valueLen, payloadLen, total, nil
 }
 
 func encodeTrustedRawKVPointCommandFrameSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) ([]byte, error) {
-	return encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst, lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, total), nil
+	return encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst, lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, total)
+}
+
+func encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, total int) ([]byte, error) {
+	return encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, total), nil
 }
 
 func encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, total int) []byte {
+	return encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst, lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, total)
+}
+
+func encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(dst []byte, lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, total int) []byte {
 	if cap(dst) < total {
 		dst = make([]byte, total)
 	} else {
@@ -1422,13 +1446,22 @@ func encodeTrustedRawKVPointCommandFramePayloadSizedTo(dst []byte, lsn, baseAppl
 	binary.LittleEndian.PutUint32(frame[56:60], uint32(payloadLen))
 
 	off := commandFrameHeaderSize
-	binary.LittleEndian.PutUint16(frame[off:off+2], 1)
+	payloadVersion := rawKVBatchPayloadVersion
+	opHeaderSize := rawKVOpHeaderSize
+	if revision != 0 {
+		payloadVersion = rawKVBatchPayloadVersionWithRevisions
+		opHeaderSize = rawKVOpRevisionHeaderSize
+	}
+	binary.LittleEndian.PutUint16(frame[off:off+2], payloadVersion)
 	binary.LittleEndian.PutUint32(frame[off+2:off+6], 1)
 	off += rawKVBatchHeaderSize
 	frame[off] = byte(op)
 	binary.LittleEndian.PutUint32(frame[off+1:off+5], uint32(len(key)))
 	binary.LittleEndian.PutUint32(frame[off+5:off+9], uint32(valueLen))
-	off += rawKVOpHeaderSize
+	if revision != 0 {
+		binary.LittleEndian.PutUint64(frame[off+9:off+17], revision)
+	}
+	off += opHeaderSize
 	copy(frame[off:], key)
 	off += len(key)
 	if op == RawKVOpSet {

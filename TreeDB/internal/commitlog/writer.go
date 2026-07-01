@@ -430,7 +430,14 @@ func (w *Writer) Append(record Record) error {
 		return ErrRecordTooLarge
 	}
 
-	total := int64(batchHeaderSize) + int64(recordHeaderSize) + int64(len(record.Key)) + int64(len(record.Value))
+	headerSize := recordHeaderSize
+	version := byte(Version)
+	if record.Revision != 0 {
+		headerSize = recordRevisionHeaderSize
+		version = recordRevisionBatchVersion
+	}
+
+	total := int64(batchHeaderSize) + int64(headerSize) + int64(len(record.Key)) + int64(len(record.Value))
 	if w.maxSegmentSize > 0 && total > w.maxSegmentSize {
 		return ErrRecordTooLarge
 	}
@@ -442,7 +449,7 @@ func (w *Writer) Append(record Record) error {
 	if payloadLen > int(segmentLenMask) {
 		return ErrRecordTooLarge
 	}
-	if !w.compress && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
+	if record.Revision == 0 && !w.compress && segmentHeaderSize+payloadLen < directSegmentPayloadMinLen {
 		return w.appendPendingRecord(record, keyLen, valLen)
 	}
 
@@ -451,7 +458,7 @@ func (w *Writer) Append(record Record) error {
 	}
 	buf := w.scratch[:payloadLen]
 
-	buf[0] = Version
+	buf[0] = version
 	binary.LittleEndian.PutUint32(buf[1:5], 1)
 
 	off := batchHeaderSize
@@ -460,8 +467,11 @@ func (w *Writer) Append(record Record) error {
 	binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
 	binary.LittleEndian.PutUint64(buf[off+7:off+15], record.RID)
 	binary.LittleEndian.PutUint64(buf[off+15:off+23], record.Seq)
-	copy(buf[off+recordHeaderSize:], record.Key)
-	copy(buf[off+recordHeaderSize+len(record.Key):], record.Value)
+	if record.Revision != 0 {
+		binary.LittleEndian.PutUint64(buf[off+23:off+31], record.Revision)
+	}
+	copy(buf[off+headerSize:], record.Key)
+	copy(buf[off+headerSize+len(record.Key):], record.Value)
 
 	if !w.compress {
 		return w.writeRawSegmentWithChecksum(buf, crc.ChecksumParts(buf[:batchHeaderSize], buf[batchHeaderSize:]))
@@ -478,10 +488,23 @@ func (w *Writer) AppendBatch(records []Record) error {
 	}
 
 	batchSeq := records[0].Seq
-	if !w.compress {
+	hasRecordRevisions := false
+	for i := range records {
+		if records[i].Revision != 0 {
+			hasRecordRevisions = true
+			break
+		}
+	}
+	if !hasRecordRevisions && !w.compress {
 		if ok, err := w.appendZeroInlineBatchIfCompact(records, batchSeq); ok || err != nil {
 			return err
 		}
+	}
+	headerSize := recordHeaderSize
+	version := byte(Version)
+	if hasRecordRevisions {
+		headerSize = recordRevisionHeaderSize
+		version = recordRevisionBatchVersion
 	}
 	if cap(w.scratch) < batchHeaderSize {
 		w.scratch = make([]byte, batchHeaderSize)
@@ -490,7 +513,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 	if len(buf) < batchHeaderSize {
 		buf = buf[:batchHeaderSize]
 	}
-	buf[0] = Version
+	buf[0] = version
 	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
 
 	off := batchHeaderSize
@@ -527,7 +550,7 @@ func (w *Writer) AppendBatch(records []Record) error {
 			}
 		}
 
-		recLen := recordHeaderSize + len(r.Key)
+		recLen := headerSize + len(r.Key)
 		if writeValue {
 			recLen += len(r.Value)
 		}
@@ -557,9 +580,12 @@ func (w *Writer) AppendBatch(records []Record) error {
 		binary.LittleEndian.PutUint32(buf[off+3:off+7], valLen)
 		binary.LittleEndian.PutUint64(buf[off+7:off+15], r.RID)
 		binary.LittleEndian.PutUint64(buf[off+15:off+23], r.Seq)
-		copy(buf[off+recordHeaderSize:], r.Key)
+		if hasRecordRevisions {
+			binary.LittleEndian.PutUint64(buf[off+23:off+31], r.Revision)
+		}
+		copy(buf[off+headerSize:], r.Key)
 		if writeValue {
-			valueStart := off + recordHeaderSize + len(r.Key)
+			valueStart := off + headerSize + len(r.Key)
 			valueEnd := valueStart + len(r.Value)
 			copy(buf[valueStart:valueEnd], r.Value)
 		}
@@ -584,6 +610,9 @@ func (w *Writer) appendZeroInlineBatchIfCompact(records []Record, batchSeq uint6
 	total := int64(zeroInlineBatchHeaderSize)
 	for i := range records {
 		r := &records[i]
+		if r.Revision != 0 {
+			return false, nil
+		}
 		if r.Op != OpSetInline {
 			return false, nil
 		}
@@ -795,12 +824,7 @@ func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64
 	if err := w.commandBufferError(); err != nil {
 		return err
 	}
-	valueLen := len(value)
-	if op == RawKVOpDelete {
-		valueLen = 0
-	}
-	payloadLen := rawKVBatchHeaderSize + rawKVOpHeaderSize + len(key) + valueLen
-	size, err := commandFrameEncodedSizeFromLengths(payloadLen, 0, 0, 0)
+	valueLen, payloadLen, size, err := trustedRawKVPointCommandFrameLens(op, key, value, 0)
 	if err != nil {
 		return err
 	}
@@ -814,6 +838,10 @@ func (w *Writer) AppendRawKVPointCommandDirectTrusted(lsn, baseAppliedLSN uint64
 }
 
 func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, valueLen, payloadLen, size int) error {
+	return w.appendRawKVPointCommandDirectTrustedSizedWithRevision(lsn, baseAppliedLSN, op, key, value, 0, valueLen, payloadLen, size)
+}
+
+func (w *Writer) appendRawKVPointCommandDirectTrustedSizedWithRevision(lsn, baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, valueLen, payloadLen, size int) error {
 	if w.pendingBatchRecs != 0 {
 		if err := w.flushPendingBatch(); err != nil {
 			return err
@@ -825,7 +853,7 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN u
 			w.scratch = make([]byte, total)
 		}
 		buf := w.scratch[:total]
-		frame, err := encodeTrustedRawKVPointCommandFrameSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
+		frame, err := encodeTrustedRawKVPointCommandFrameWithRevisionSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
 		if err != nil {
 			return err
 		}
@@ -843,7 +871,7 @@ func (w *Writer) appendRawKVPointCommandDirectTrustedSized(lsn, baseAppliedLSN u
 	}
 	newLen := off + total
 	buf := w.commandBuf[off:newLen]
-	encodeTrustedRawKVPointCommandFramePayloadSizedTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, valueLen, payloadLen, size)
+	encodeTrustedRawKVPointCommandFramePayloadSizedWithRevisionTo(buf[segmentHeaderSize:segmentHeaderSize+size], lsn, baseAppliedLSN, op, key, value, revision, valueLen, payloadLen, size)
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(size))
 	return nil
 }

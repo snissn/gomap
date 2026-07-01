@@ -31,6 +31,40 @@ func BenchmarkCommandJournalAllocateAndAppendRawKVBatch(b *testing.B) {
 	}
 }
 
+func BenchmarkCommandJournalAppendRawKVPointTrustedAndFlush(b *testing.B) {
+	key := []byte("bench-key")
+	value := []byte("bench-value")
+	for _, tc := range []struct {
+		name     string
+		revision uint64
+	}{
+		{name: "no_revision"},
+		{name: "revision", revision: 123},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			j, err := OpenCommandJournal(b.TempDir(), CommandJournalOptions{})
+			if err != nil {
+				b.Fatalf("OpenCommandJournal: %v", err)
+			}
+			b.Cleanup(func() { _ = j.Close() })
+			b.ReportAllocs()
+			b.SetBytes(int64(len(key) + len(value)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if tc.revision == 0 {
+					if _, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, key, value, false); err != nil {
+						b.Fatalf("AppendRawKVPointCommandTrustedAndFlush: %v", err)
+					}
+				} else {
+					if _, err := j.AppendRawKVPointCommandTrustedWithRevisionAndFlush(0, RawKVOpSet, key, value, tc.revision, false); err != nil {
+						b.Fatalf("AppendRawKVPointCommandTrustedWithRevisionAndFlush: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkCommandJournalAppendCollectionInsertPayload(b *testing.B) {
 	payload, err := EncodeCollectionInsertBatchByIDPayload("usertable", []CollectionDocument{
 		{

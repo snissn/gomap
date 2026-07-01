@@ -54,6 +54,7 @@ type DBState struct {
 	RootPageID                 uint64
 	SystemRootPageID           uint64
 	AppliedCommandLSN          uint64
+	MaxEntryRevision           page.EntryRevision
 	ValueLogSet                *valuelog.Set
 	LeafGenerations            *leafGenerationView
 	LeafGenerationStateVersion uint64
@@ -154,6 +155,7 @@ type DB struct {
 	vacuum                          vacuumRecorder
 	meta                            page.MetaPageBody
 	metaPageID                      uint64
+	entryRevisionFloor              atomic.Uint64
 	commandJournal                  *commitlog.CommandJournal
 
 	state atomic.Pointer[DBState]
@@ -1802,6 +1804,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	db.seedEntryRevisionFloor()
 
 	segments, err := listRecoverySegments(opts.Dir)
 	if err != nil {
@@ -1949,6 +1952,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		RootPageID:                 db.meta.UserRootPageID,
 		SystemRootPageID:           db.meta.SystemRootPageID,
 		AppliedCommandLSN:          db.meta.AppliedCommandLSN,
+		MaxEntryRevision:           page.EntryRevision(db.meta.MaxEntryRevision),
 		ValueLogSet:                vm.CurrentSet(),
 		LeafGenerations:            db.currentLeafGenerationView(),
 		LeafGenerationStateVersion: db.leafGenerationStateVersion,
@@ -2530,6 +2534,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		}
 		nextMeta.AppliedCommandLSN = opts.appliedCommandLSN
 	}
+	if opts.maxEntryRevision != page.LegacyEntryRevision && uint64(opts.maxEntryRevision) > nextMeta.MaxEntryRevision {
+		nextMeta.MaxEntryRevision = uint64(opts.maxEntryRevision)
+	}
 
 	targetPageID := uint64(0)
 	if db.metaPageID == 0 {
@@ -2589,6 +2596,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	watermarkWait += time.Since(lockStart)
 	holdStart = time.Now()
 	db.meta = nextMeta
+	db.advanceEntryRevisionFloor(page.EntryRevision(nextMeta.MaxEntryRevision))
 	db.metaPageID = targetPageID
 	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
 	post.oldState = db.state.Load()
@@ -2641,6 +2649,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		RootPageID:        nextMeta.UserRootPageID,
 		SystemRootPageID:  nextMeta.SystemRootPageID,
 		AppliedCommandLSN: nextMeta.AppliedCommandLSN,
+		MaxEntryRevision:  page.EntryRevision(nextMeta.MaxEntryRevision),
 		ValueLogSet:       valueLogSet,
 		LeafGenerations:   leafGenerationView,
 	}
@@ -3074,6 +3083,7 @@ func (db *DB) RefreshValueLogSet() error {
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
 		AppliedCommandLSN:          oldState.AppliedCommandLSN,
+		MaxEntryRevision:           oldState.MaxEntryRevision,
 		ValueLogSet:                db.valueLogManager.CurrentSetNoRefresh(),
 		LeafGenerations:            oldState.LeafGenerations,
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
@@ -3118,6 +3128,7 @@ func (db *DB) publishValueLogSetNoRefresh() error {
 		RootPageID:                 oldState.RootPageID,
 		SystemRootPageID:           oldState.SystemRootPageID,
 		AppliedCommandLSN:          oldState.AppliedCommandLSN,
+		MaxEntryRevision:           oldState.MaxEntryRevision,
 		ValueLogSet:                valueLogSet,
 		LeafGenerations:            oldState.LeafGenerations,
 		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
