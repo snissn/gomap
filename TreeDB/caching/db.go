@@ -22413,6 +22413,23 @@ func (db *DB) beginDirectWrite() error {
 	}
 }
 
+func (db *DB) beginDirectWriteWithFlushMuHeld() error {
+	for {
+		db.writeMu.RLock()
+		if db.closing.Load() {
+			db.writeMu.RUnlock()
+			return backenddb.ErrClosed
+		}
+		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			return nil
+		}
+		db.writeMu.RUnlock()
+		db.flushMu.Unlock()
+		db.waitForCheckpoint()
+		db.flushMu.Lock()
+	}
+}
+
 func (db *DB) beginExclusiveWrite() {
 	for {
 		db.writeMu.Lock()
@@ -33664,25 +33681,17 @@ func (b *Batch) write(sync bool) error {
 	}
 
 	if b.backend != nil {
-		var err error
-		if sync && !b.db.relaxedSync {
-			b.db.flushMu.Lock()
-			err = b.backend.WriteSync()
-			b.db.flushMu.Unlock()
-		} else {
-			b.db.flushMu.Lock()
-			err = b.backend.Write()
-			b.db.flushMu.Unlock()
-		}
+		err := b.writeBackendBatchSerialized(b.backend, sync, func() {
+			if b.batchRange.valid {
+				b.db.mu.Lock()
+				b.db.backendRange.add(b.batchRange.min)
+				b.db.backendRange.add(b.batchRange.max)
+				b.db.mu.Unlock()
+				b.db.conditionalRecordGlobalWrite()
+			}
+		})
 		if cerr := b.backend.Close(); cerr != nil && err == nil {
 			err = cerr
-		}
-		if err == nil && b.batchRange.valid {
-			b.db.mu.Lock()
-			b.db.backendRange.add(b.batchRange.min)
-			b.db.backendRange.add(b.batchRange.max)
-			b.db.mu.Unlock()
-			b.db.conditionalRecordGlobalWrite()
 		}
 		b.backend = nil
 		if err == nil && b.size > 0 {
@@ -33715,6 +33724,30 @@ func (b *Batch) write(sync bool) error {
 		return b.writeBypass(sync)
 	}
 	return b.writeRegular(sync)
+}
+
+func (b *Batch) writeBackendBatchSerialized(backendBatch batch.Interface, sync bool, recordCommitted func()) error {
+	if b == nil || b.db == nil || backendBatch == nil {
+		return backenddb.ErrClosed
+	}
+	b.db.flushMu.Lock()
+	if err := b.db.beginDirectWriteWithFlushMuHeld(); err != nil {
+		b.db.flushMu.Unlock()
+		return err
+	}
+	defer b.db.flushMu.Unlock()
+	defer b.db.writeMu.RUnlock()
+
+	var err error
+	if sync && !b.db.relaxedSync {
+		err = backendBatch.WriteSync()
+	} else {
+		err = backendBatch.Write()
+	}
+	if err == nil && recordCommitted != nil {
+		recordCommitted()
+	}
+	return err
 }
 
 func (b *Batch) writeRangeBatch(sync bool) error {
@@ -33960,22 +33993,15 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 		return false, err
 	}
 
-	if sync && !b.db.relaxedSync {
-		b.db.flushMu.Lock()
-		err = backendBatch.WriteSync()
-		b.db.flushMu.Unlock()
-	} else {
-		b.db.flushMu.Lock()
-		err = backendBatch.Write()
-		b.db.flushMu.Unlock()
-	}
+	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
+		b.db.conditionalRecordCommittedEntries(ops, nil, 0)
+	})
 	if cerr := backendBatch.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return false, err
 	}
-	b.db.conditionalRecordCommittedEntries(ops, nil, 0)
 
 	b.db.mu.Lock()
 	b.db.backendRange.add(b.firstKey)
@@ -35236,20 +35262,13 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 		return err
 	}
 
-	if sync && !b.db.relaxedSync {
-		b.db.flushMu.Lock()
-		err = backendBatch.WriteSync()
-		b.db.flushMu.Unlock()
-	} else {
-		b.db.flushMu.Lock()
-		err = backendBatch.Write()
-		b.db.flushMu.Unlock()
-	}
+	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
+		b.db.conditionalRecordCommittedEntries(ops, nil, 0)
+	})
 
 	if err != nil {
 		return err
 	}
-	b.db.conditionalRecordCommittedEntries(ops, nil, 0)
 	backendBatch = nil
 
 	b.db.mu.Lock()

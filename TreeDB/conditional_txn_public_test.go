@@ -108,6 +108,78 @@ func TestPublicConditionalTxnCachedHandleConflictsWhenKeyChangesBeforeFirstRead(
 	}
 }
 
+func TestPublicConditionalTxnCachedHandleReadsStagedWrites(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k"), []byte("before")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	tx, err := db.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+	if err := tx.Set([]byte("k"), []byte("staged")); err != nil {
+		t.Fatalf("tx.Set: %v", err)
+	}
+	if got, _, err := tx.GetVersionedAppend([]byte("k"), []byte("prefix:")); err != nil || !bytes.Equal(got, []byte("prefix:staged")) {
+		t.Fatalf("tx.GetVersionedAppend=(%q,%v), want prefix:staged,nil", got, err)
+	}
+	if got, err := tx.Get([]byte("k")); err != nil || !bytes.Equal(got, []byte("staged")) {
+		t.Fatalf("tx.Get=(%q,%v), want staged,nil", got, err)
+	}
+	if found, err := tx.Has([]byte("k")); err != nil || !found {
+		t.Fatalf("tx.Has=(%t,%v), want true,nil", found, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit: %v", err)
+	}
+	if got, err := db.Get([]byte("k")); err != nil || !bytes.Equal(got, []byte("staged")) {
+		t.Fatalf("Get=(%q,%v), want staged,nil", got, err)
+	}
+}
+
+func TestPublicConditionalTxnCachedHandleReadsStagedDelete(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k"), []byte("before")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	tx, err := db.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+	if err := tx.Delete([]byte("k")); err != nil {
+		t.Fatalf("tx.Delete: %v", err)
+	}
+	if found, err := tx.Has([]byte("k")); err != nil || found {
+		t.Fatalf("tx.Has=(%t,%v), want false,nil", found, err)
+	}
+	if got, err := tx.Get([]byte("k")); err != nil || got != nil {
+		t.Fatalf("tx.Get=(%q,%v), want nil,nil", got, err)
+	}
+	prefix := []byte("prefix:")
+	got, _, err := tx.GetVersionedAppend([]byte("k"), append([]byte(nil), prefix...))
+	if !errors.Is(err, ErrKeyNotFound) || !bytes.Equal(got, prefix) {
+		t.Fatalf("tx.GetVersionedAppend=(%q,%v), want prefix, ErrKeyNotFound", got, err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit: %v", err)
+	}
+	if got, err := db.Get([]byte("k")); err != nil || got != nil {
+		t.Fatalf("Get=(%q,%v), want nil,nil", got, err)
+	}
+}
+
 func TestPublicConditionalTxnCachedHandleConflictsOnAbsentInsertDelete(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

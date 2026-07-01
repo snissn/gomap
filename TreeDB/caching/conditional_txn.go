@@ -161,6 +161,18 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 		return dst, page.LegacyEntryRevision, err
 	}
 	key = normalizeRawKVPointKey(key)
+	if out, revision, staged, deleted, err := tx.stagedReadAppend(key, dst); staged {
+		if err != nil {
+			return dst, revision, err
+		}
+		if err := tx.recordCurrentReadPrecondition(key); err != nil {
+			return dst, revision, err
+		}
+		if deleted {
+			return dst, revision, tree.ErrKeyNotFound
+		}
+		return out, revision, nil
+	}
 	out, revision, err := tx.db.GetVersionedAppend(key, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		if recErr := tx.recordRead(key, revision, false); recErr != nil {
@@ -181,6 +193,58 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 		return dst, revision, backenddb.ErrConcurrentModification
 	}
 	return out, revision, nil
+}
+
+func (tx *ConditionalTxn) stagedReadAppend(key, dst []byte) ([]byte, page.EntryRevision, bool, bool, error) {
+	if tx == nil || tx.batch == nil || len(tx.batch.entries) == 0 {
+		return dst, page.LegacyEntryRevision, false, false, nil
+	}
+	for i := len(tx.batch.entries) - 1; i >= 0; i-- {
+		entry := tx.batch.entries[i]
+		switch entry.Type {
+		case batch.OpPut:
+			if !bytesEqual(entry.Key, key) {
+				continue
+			}
+			if entry.IsPtr {
+				out, err := tx.db.readValueLogAppend(entry.Key, entry.ValuePtr, dst)
+				return out, entry.Revision, true, false, err
+			}
+			return append(dst, entry.Value...), entry.Revision, true, false, nil
+		case batch.OpDelete:
+			if bytesEqual(entry.Key, key) {
+				return dst, entry.Revision, true, true, nil
+			}
+		case batch.OpDeleteRange:
+			if batch.DeleteRangeContainsKey(batch.DeleteRange{Start: entry.Key, End: entry.Value}, key) {
+				return dst, entry.Revision, true, true, nil
+			}
+		}
+	}
+	return dst, page.LegacyEntryRevision, false, false, nil
+}
+
+func (tx *ConditionalTxn) recordCurrentReadPrecondition(key []byte) error {
+	_, revision, err := tx.db.GetVersionedAppend(key, nil)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		if recErr := tx.recordRead(key, revision, false); recErr != nil {
+			return recErr
+		}
+		if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+			return backenddb.ErrConcurrentModification
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if recErr := tx.recordRead(key, revision, true); recErr != nil {
+		return recErr
+	}
+	if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+		return backenddb.ErrConcurrentModification
+	}
+	return nil
 }
 
 // Has reports whether key exists in the transaction-visible state and records
