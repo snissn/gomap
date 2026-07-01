@@ -537,6 +537,55 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertIn("9001/9002/0/0", markdown)
             self.assertIn("9003/9003/9003/0", markdown)
 
+    def test_treedb_decision_tree_prefers_final_app_vars_over_non_final_debug_vars(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000)
+            diagnostics = run / "sync" / "diagnostics"
+            diagnostics.mkdir(parents=True, exist_ok=True)
+            write_stats_json(
+                diagnostics / "pprof-heap-max-hwm-123.debug_vars.json",
+                {
+                    "treedb.command_wal.public_batch.set.calls_total": "1",
+                    "treedb.command_wal.public_batch.set_view.calls_total": "2",
+                    "treedb.raw.span_native.route.point_put.candidate_ops_total": "3",
+                    "treedb.raw.span_native.route.point_put.eligible_ops_total": "3",
+                    "treedb.raw.span_native.route.point_put.used_ops_total": "3",
+                },
+            )
+            write_stats_json(
+                diagnostics / "final.max-memory-final.treedb_application_vars.json",
+                {
+                    "treedb.command_wal.public_batch.set.calls_total": "101",
+                    "treedb.command_wal.public_batch.set_view.calls_total": "202",
+                    "treedb.raw.span_native.route.point_put.candidate_ops_total": "303",
+                    "treedb.raw.span_native.route.point_put.eligible_ops_total": "303",
+                    "treedb.raw.span_native.route.point_put.used_ops_total": "303",
+                    "treedb.flush_apply.span_native.used_ops_total": "404",
+                },
+            )
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(run)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            decision = payload["runs"][0]["treedb_decision_tree"]
+            self.assertTrue(
+                decision["source_file"].endswith("final.max-memory-final.treedb_application_vars.json")
+            )
+            self.assertEqual(decision["public_batch"]["set_calls_total"], 101)
+            self.assertEqual(decision["public_batch"]["set_view_calls_total"], 202)
+            self.assertEqual(decision["raw_span_native"]["routes"]["point_put"]["used_ops_total"], 303)
+            self.assertEqual(decision["flush_apply_span_native"]["used_ops_total"], 404)
+
     def test_treedb_maintenance_prefers_diagnostics_debug_vars_over_app_vars_and_quiesce(self) -> None:
         with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
             root = Path(tmp)

@@ -271,7 +271,10 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
             reverse=True,
         )
         final_treedb_vars = sorted(
-            diagnostics.glob("*max-memory-final*.treedb_vars.json"),
+            [
+                *diagnostics.glob("*max-memory-final*.treedb_vars.json"),
+                *diagnostics.glob("final*.treedb_vars.json"),
+            ],
             key=_mtime_sort_key,
             reverse=True,
         )
@@ -281,7 +284,10 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
             reverse=True,
         )
         final_app_vars = sorted(
-            diagnostics.glob("*max-memory-final*.treedb_application_vars.json"),
+            [
+                *diagnostics.glob("*max-memory-final*.treedb_application_vars.json"),
+                *diagnostics.glob("final*.treedb_application_vars.json"),
+            ],
             key=_mtime_sort_key,
             reverse=True,
         )
@@ -291,12 +297,11 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
             reverse=True,
         )
         extend_unique(final_debug_vars)
-        if not include_dwell:
-            extend_unique(quiesce_debug)
-        extend_unique(path for path in debug_vars if path not in final_debug_vars)
         extend_unique(final_treedb_vars)
-        extend_unique(path for path in treedb_vars if path not in final_treedb_vars)
         extend_unique(final_app_vars)
+        extend_unique(quiesce_debug)
+        extend_unique(path for path in debug_vars if path not in final_debug_vars)
+        extend_unique(path for path in treedb_vars if path not in final_treedb_vars)
         extend_unique(path for path in app_vars if path not in final_app_vars)
 
     if include_dwell or not diagnostics.is_dir():
