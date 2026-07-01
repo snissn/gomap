@@ -33770,13 +33770,14 @@ func (b *Batch) write(sync bool) error {
 
 	if b.backend != nil {
 		err := b.writeBackendBatchSerialized(b.backend, sync, func() {
+			b.db.conditionalRecordCommittedEntries(b.backendConditionalEntries, nil, 0)
+		}, func() {
 			if b.batchRange.valid {
 				b.db.mu.Lock()
 				b.db.backendRange.add(b.batchRange.min)
 				b.db.backendRange.add(b.batchRange.max)
 				b.db.mu.Unlock()
 			}
-			b.db.conditionalRecordCommittedEntries(b.backendConditionalEntries, nil, 0)
 		})
 		if cerr := b.backend.Close(); cerr != nil && err == nil {
 			err = cerr
@@ -33814,7 +33815,7 @@ func (b *Batch) write(sync bool) error {
 	return b.writeRegular(sync)
 }
 
-func (b *Batch) writeBackendBatchSerialized(backendBatch batch.Interface, sync bool, recordCommitted func()) error {
+func (b *Batch) writeBackendBatchSerialized(backendBatch batch.Interface, sync bool, recordBeforePublish, recordCommitted func()) error {
 	if b == nil || b.db == nil || backendBatch == nil {
 		return backenddb.ErrClosed
 	}
@@ -33826,6 +33827,9 @@ func (b *Batch) writeBackendBatchSerialized(backendBatch batch.Interface, sync b
 	defer b.db.flushMu.Unlock()
 	defer b.db.writeMu.RUnlock()
 
+	if recordBeforePublish != nil {
+		recordBeforePublish()
+	}
 	var err error
 	if sync && !b.db.relaxedSync {
 		err = backendBatch.WriteSync()
@@ -34083,7 +34087,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 
 	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
 		b.db.conditionalRecordCommittedEntries(ops, nil, 0)
-	})
+	}, nil)
 	if cerr := backendBatch.Close(); cerr != nil && err == nil {
 		err = cerr
 	}
@@ -35352,7 +35356,7 @@ func (b *Batch) writeBypass(sync bool) (err error) {
 
 	err = b.writeBackendBatchSerialized(backendBatch, sync, func() {
 		b.db.conditionalRecordCommittedEntries(ops, nil, 0)
-	})
+	}, nil)
 
 	if err != nil {
 		return err

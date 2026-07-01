@@ -104,6 +104,75 @@ func TestConditionalTxnDirectBypassCommitWaitsForOracleRecord(t *testing.T) {
 	}
 }
 
+func TestConditionalTxnBackendBypassReadConflictsBeforePublish(t *testing.T) {
+	backend := newBlockingWriteBackend()
+	cache, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	if err := cache.SetSync([]byte("k"), []byte("before")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	tx, err := cache.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+
+	wb := cache.NewBatch()
+	if wb == nil {
+		t.Fatal("NewBatch returned nil")
+	}
+	if err := wb.Set([]byte("k"), []byte("outside")); err != nil {
+		_ = wb.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+
+	backend.block.Store(true)
+	writeDone := make(chan error, 1)
+	go func() {
+		err := wb.WriteSync()
+		if cerr := wb.Close(); err == nil {
+			err = cerr
+		}
+		writeDone <- err
+	}()
+
+	select {
+	case <-backend.entered:
+	case err := <-writeDone:
+		t.Fatalf("outside write completed before block: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for backend write to enter blocked window")
+	}
+
+	released := false
+	release := func() {
+		if !released {
+			close(backend.release)
+			released = true
+		}
+	}
+	defer release()
+
+	got, _, err := tx.GetVersioned([]byte("k"))
+	if !errors.Is(err, backenddb.ErrConcurrentModification) {
+		t.Fatalf("tx.GetVersioned during backend publish gap value=%q error=%v, want ErrConcurrentModification", got, err)
+	}
+
+	release()
+	if err := <-writeDone; err != nil {
+		t.Fatalf("outside write: %v", err)
+	}
+}
+
 func TestConditionalTxnDirectBypassRecordsPointConflictsPrecisely(t *testing.T) {
 	backend := NewMockBackend()
 	cache, err := Open(t.TempDir(), backend, Options{
