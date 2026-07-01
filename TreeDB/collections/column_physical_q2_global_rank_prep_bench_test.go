@@ -3,6 +3,7 @@ package collections
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"sort"
 	"testing"
 )
@@ -41,6 +42,13 @@ var q2DenseGlobalRankPrepBenchmarkVariants = []q2DenseGlobalRankPrepVariant{
 		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsWithDiagnostics,
 		strategy: func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
 			return columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
+		},
+	},
+	{
+		name:    "sharded_hash_rank",
+		prepare: prepareColumnTypedColumnDenseGroupCountDistinctGlobalRankMapsShardedWithDiagnostics,
+		strategy: func([]columnTypedColumnPhysicalQueryPart) columnTypedColumnDenseGroupCountDistinctRankStrategy {
+			return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
 		},
 	},
 	{
@@ -148,9 +156,6 @@ func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankPrepPolicy(t *testing.T
 				return &part.Distinct
 			})
 			want := columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
-			if shape.name == "shared_heavy" {
-				want = columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap
-			}
 			if strategy != want {
 				t.Fatalf("adaptive rank strategy=%v want %v", strategy, want)
 			}
@@ -167,6 +172,19 @@ func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankPrepPolicy(t *testing.T
 			assertQ2DenseGlobalRankPrepParts(t, adaptive, stats)
 			assertQ2DenseGlobalRankPrepEquivalent(t, baseline, adaptive, stats)
 		})
+	}
+}
+
+func TestTypedColumnQ2DenseGroupCountDistinctAdaptiveRankPrepPolicySerialSharedFallback(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	parts := newQ2DenseGlobalRankPrepParts(40, q2DenseGlobalRankPrepDictionaryShape{name: "shared_heavy"})
+	strategy := columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(parts, func(part *columnTypedColumnDenseGroupCountDistinctPart) *columnTypedColumnDenseStringCodeColumn {
+		return &part.Distinct
+	})
+	if strategy != columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap {
+		t.Fatalf("serial shared adaptive rank strategy=%v want %v", strategy, columnTypedColumnDenseGroupCountDistinctRankStrategyCurrentMap)
 	}
 }
 

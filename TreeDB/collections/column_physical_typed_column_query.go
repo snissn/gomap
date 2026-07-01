@@ -2266,6 +2266,9 @@ func columnTypedColumnDenseGroupCountDistinctSelectAdaptiveGlobalRankStrategy(pa
 		maxUniqueToLocalNumerator = 2
 		uniqueToLocalDenominator  = 5
 	)
+	if columnTypedColumnPhysicalQueryPartDecodeWorkers(len(parts)) > 1 {
+		return columnTypedColumnDenseGroupCountDistinctRankStrategyShardedHash
+	}
 	values := make(map[string]struct{}, minSampleValues/2)
 	localValues := 0
 	limit := min(len(parts), sampleParts)
