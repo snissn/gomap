@@ -24,6 +24,7 @@ const (
 	maxTypedColumnPreparedMetadataBatchSpanBytes     = 64 << 10
 	maxTypedColumnPreparedMetadataBatchSections      = 6
 	maxTypedColumnPreparedRangeCacheEntries          = 8
+	maxTypedColumnPreparedRangeCacheEntryBytes       = maxTypedColumnPreparedMetadataBatchSpanBytes
 )
 
 // typedColumnPreparedRangeReader is the caller-owned byte access boundary used
@@ -40,7 +41,6 @@ type typedColumnPreparedRangeReadCache struct {
 	readRange typedColumnPreparedRangeReader
 	entries   [maxTypedColumnPreparedRangeCacheEntries]typedColumnPreparedRangeReadCacheEntry
 	entryN    int
-	overflow  []typedColumnPreparedRangeReadCacheEntry
 }
 
 type typedColumnPreparedRangeReadCacheEntry struct {
@@ -70,16 +70,6 @@ func (c *typedColumnPreparedRangeReadCache) read(offset int, length int, section
 		}
 		return entry.raw[start : start+length], nil
 	}
-	for _, entry := range c.overflow {
-		if entry.raw == nil || offset < entry.offset {
-			continue
-		}
-		start := offset - entry.offset
-		if start > len(entry.raw) || length > len(entry.raw)-start {
-			continue
-		}
-		return entry.raw[start : start+length], nil
-	}
 	return c.readAndStore(offset, length, section)
 }
 
@@ -94,13 +84,12 @@ func (c *typedColumnPreparedRangeReadCache) readAndStore(offset int, length int,
 	if len(raw) != length {
 		return nil, fmt.Errorf("collections: typed-column prepared range offset=%d length=%d returned bytes=%d", offset, length, len(raw))
 	}
-	entry := typedColumnPreparedRangeReadCacheEntry{offset: offset, raw: raw}
-	if c.entryN < len(c.entries) {
-		c.entries[c.entryN] = entry
-		c.entryN++
-	} else {
-		c.overflow = append(c.overflow, entry)
+	if length > maxTypedColumnPreparedRangeCacheEntryBytes || c.entryN >= len(c.entries) {
+		return raw, nil
 	}
+	entry := typedColumnPreparedRangeReadCacheEntry{offset: offset, raw: raw}
+	c.entries[c.entryN] = entry
+	c.entryN++
 	return raw, nil
 }
 
@@ -596,7 +585,9 @@ func typedColumnPreparedPrefetchMetadataSections(image typedcolumn.ColumnPartIma
 		if err != nil {
 			return err
 		}
-		appendSection(dictionarySection)
+		if dictionarySection.Length <= maxTypedColumnPreparedRangeCacheEntryBytes {
+			appendSection(dictionarySection)
+		}
 	}
 	return readCache.prefetchSections(sections[:sectionN])
 }
