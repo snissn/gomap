@@ -4,7 +4,30 @@ import (
 	"encoding/binary"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 )
+
+func TestColumnPartImageSectionDataChunkedPayloadHelpers(t *testing.T) {
+	chunks := [][]byte{
+		[]byte("alpha"),
+		[]byte(""),
+		[]byte("beta"),
+		[]byte("gamma"),
+	}
+	section := columnPartImageSectionData{chunks: chunks}
+	if got, want := section.payloadLen(), len("alphabetagamma"); got != want {
+		t.Fatalf("payloadLen=%d want %d", got, want)
+	}
+	got := section.appendPayloadTo([]byte("prefix:"))
+	want := []byte("prefix:alphabetagamma")
+	if string(got) != string(want) {
+		t.Fatalf("appendPayloadTo=%q want %q", got, want)
+	}
+	if got, want := section.payloadChecksum(), crc.Checksum([]byte("alphabetagamma")); got != want {
+		t.Fatalf("payloadChecksum=%08x want %08x", got, want)
+	}
+}
 
 func TestColumnPartLayoutContractCertifiesAlignedFixedWidthSections(t *testing.T) {
 	image := mustLayoutContractFixedWidthImage(t)
