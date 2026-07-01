@@ -8,8 +8,9 @@ import json
 import math
 import re
 import sys
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 from analyze_vlog_maintenance_capacity import build_summary as build_vlog_maintenance_summary
 from analyze_vlog_maintenance_capacity import extract_stats as extract_treedb_stats
@@ -311,7 +312,7 @@ def load_treedb_application_stats(
     require_stats: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     def _has_flat_treedb_stats(payload: dict[str, Any]) -> bool:
-        return any(str(key).startswith("treedb.") for key in payload.keys())
+        return any(str(key).startswith("treedb.") for key in payload)
 
     for source in treedb_application_stats_candidates(home, include_dwell=include_dwell):
         payload = load_json(source)
@@ -438,7 +439,7 @@ def count_fatal_matches(node_log: Path) -> dict[str, Any]:
 
 
 def has_treedb_maintenance_stats(stats: dict[str, Any]) -> bool:
-    return any(str(key).startswith("treedb.cache.vlog_generation.") for key in stats.keys())
+    return any(str(key).startswith("treedb.cache.vlog_generation.") for key in stats)
 
 
 def summarize_treedb_maintenance(home: Path) -> dict[str, Any]:
@@ -875,7 +876,8 @@ def format_fallback_reasons(reasons: object) -> str:
             detail_parts.append(f"{ops}ops")
         if spans:
             detail_parts.append(f"{spans}spans")
-        parts.append(f"{reason}:{'/'.join(detail_parts) if detail_parts else 'nonzero'}")
+        if detail_parts:
+            parts.append(f"{reason}:{'/'.join(detail_parts)}")
     return ",".join(parts) if parts else "-"
 
 

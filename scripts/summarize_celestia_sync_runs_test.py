@@ -173,6 +173,10 @@ def write_treedb_debug_vars(home: Path, *, instance_key: str = "db_1#0xbeef") ->
     return path
 
 
+def write_stats_json(path: Path, stats: dict[str, str]) -> None:
+    path.write_text(json.dumps(stats) + "\n", encoding="utf-8")
+
+
 class CelestiaSyncSummaryTest(unittest.TestCase):
     def test_summarizes_runs_and_writes_json_and_markdown(self) -> None:
         with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
@@ -450,47 +454,61 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000, dwell_samples=2)
             write_treedb_debug_vars(run)
             dwell = run / "sync" / "dwell-stats"
-            (dwell / "treedb_app_0.json").write_text(
-                json.dumps(
-                    {
-                        "treedb.cache.vlog_generation.maintenance.attempts": "3",
-                        "treedb.command_wal.public_batch.set.calls_total": "1",
-                        "treedb.command_wal.public_batch.set_view.calls_total": "2",
-                        "treedb.raw.span_native.route.point_put.candidate_ops_total": "3",
-                        "treedb.raw.span_native.route.point_put.eligible_ops_total": "3",
-                        "treedb.raw.span_native.route.point_put.used_ops_total": "3",
-                        "treedb.flush_apply.span_native.candidate_ops_total": "4",
-                        "treedb.flush_apply.span_native.eligible_ops_total": "4",
-                        "treedb.flush_apply.span_native.used_ops_total": "4",
-                        "treedb.flush_admission.flush_apply_span_native": "true",
-                        "treedb.publish.ordered_root_delta_group.calls_total": "0",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                dwell / "treedb_app_0.json",
+                {
+                    "treedb.cache.vlog_generation.maintenance.attempts": "3",
+                    "treedb.command_wal.public_batch.set.calls_total": "1",
+                    "treedb.command_wal.public_batch.set_view.calls_total": "2",
+                    "treedb.raw.span_native.route.point_put.candidate_ops_total": "3",
+                    "treedb.raw.span_native.route.point_put.eligible_ops_total": "3",
+                    "treedb.raw.span_native.route.point_put.used_ops_total": "3",
+                    "treedb.flush_apply.span_native.candidate_ops_total": "4",
+                    "treedb.flush_apply.span_native.eligible_ops_total": "4",
+                    "treedb.flush_apply.span_native.used_ops_total": "4",
+                    "treedb.flush_admission.flush_apply_span_native": "true",
+                    "treedb.publish.ordered_root_delta_group.calls_total": "0",
+                },
             )
-            (dwell / "treedb_app_1.json").write_text(
-                json.dumps(
-                    {
-                        "treedb.cache.vlog_generation.maintenance.attempts": "13",
-                        "treedb.command_wal.public_batch.set.calls_total": "101",
-                        "treedb.command_wal.public_batch.set_view.calls_total": "202",
-                        "treedb.raw.span_native.route.point_put.candidate_ops_total": "303",
-                        "treedb.raw.span_native.route.point_put.eligible_ops_total": "303",
-                        "treedb.raw.span_native.route.point_put.used_ops_total": "303",
-                        "treedb.raw.span_native.route.point_put.fallbacks_total": "0",
-                        "treedb.flush_apply.span_native.candidate_ops_total": "404",
-                        "treedb.flush_apply.span_native.eligible_ops_total": "404",
-                        "treedb.flush_apply.span_native.used_ops_total": "404",
-                        "treedb.flush_admission.flush_apply_span_native": "true",
-                        "treedb.publish.ordered_root_delta_group.calls_total": "0",
-                        "treedb.cache.flush_apply.backend_write_ns_total": "5000000000",
-                        "treedb.cache.flush_apply.coordinator.in_flight_bytes": "0",
-                        "treedb.vlog.mmap_active_bytes": "4096",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                dwell / "treedb_app_2.json",
+                {
+                    "treedb.cache.vlog_generation.maintenance.attempts": "13",
+                    "treedb.command_wal.public_batch.set.calls_total": "101",
+                    "treedb.command_wal.public_batch.set_view.calls_total": "202",
+                    "treedb.raw.span_native.route.point_put.candidate_ops_total": "303",
+                    "treedb.raw.span_native.route.point_put.eligible_ops_total": "303",
+                    "treedb.raw.span_native.route.point_put.used_ops_total": "303",
+                    "treedb.raw.span_native.route.point_put.fallbacks_total": "0",
+                    "treedb.flush_apply.span_native.candidate_ops_total": "404",
+                    "treedb.flush_apply.span_native.eligible_ops_total": "404",
+                    "treedb.flush_apply.span_native.used_ops_total": "404",
+                    "treedb.flush_admission.flush_apply_span_native": "true",
+                    "treedb.publish.ordered_root_delta_group.calls_total": "0",
+                    "treedb.cache.flush_apply.backend_write_ns_total": "5000000000",
+                    "treedb.cache.flush_apply.coordinator.in_flight_bytes": "0",
+                    "treedb.vlog.mmap_active_bytes": "4096",
+                },
+            )
+            write_stats_json(
+                dwell / "treedb_app_10.json",
+                {
+                    "treedb.cache.vlog_generation.maintenance.attempts": "23",
+                    "treedb.command_wal.public_batch.set.calls_total": "9001",
+                    "treedb.command_wal.public_batch.set_view.calls_total": "9002",
+                    "treedb.raw.span_native.route.point_put.candidate_ops_total": "9003",
+                    "treedb.raw.span_native.route.point_put.eligible_ops_total": "9003",
+                    "treedb.raw.span_native.route.point_put.used_ops_total": "9003",
+                    "treedb.raw.span_native.route.point_put.fallbacks_total": "0",
+                    "treedb.flush_apply.span_native.candidate_ops_total": "9004",
+                    "treedb.flush_apply.span_native.eligible_ops_total": "9004",
+                    "treedb.flush_apply.span_native.used_ops_total": "9004",
+                    "treedb.flush_admission.flush_apply_span_native": "true",
+                    "treedb.publish.ordered_root_delta_group.calls_total": "0",
+                    "treedb.cache.flush_apply.backend_write_ns_total": "5000000000",
+                    "treedb.cache.flush_apply.coordinator.in_flight_bytes": "0",
+                    "treedb.vlog.mmap_active_bytes": "4096",
+                },
             )
             out = root / "out"
 
@@ -509,15 +527,15 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertTrue(maintenance["source_file"].endswith("final.debug_vars.json"))
             self.assertEqual(maintenance["counters"]["maintenance_attempts"], 7)
             decision = payload["runs"][0]["treedb_decision_tree"]
-            self.assertTrue(decision["source_file"].endswith("treedb_app_1.json"))
-            self.assertEqual(decision["public_batch"]["set_view_calls_total"], 202)
-            self.assertEqual(decision["raw_span_native"]["routes"]["point_put"]["used_ops_total"], 303)
+            self.assertTrue(decision["source_file"].endswith("treedb_app_10.json"))
+            self.assertEqual(decision["public_batch"]["set_view_calls_total"], 9002)
+            self.assertEqual(decision["raw_span_native"]["routes"]["point_put"]["used_ops_total"], 9003)
             self.assertTrue(decision["flush_apply_span_native"]["enabled"])
-            self.assertEqual(decision["flush_apply_span_native"]["used_ops_total"], 404)
+            self.assertEqual(decision["flush_apply_span_native"]["used_ops_total"], 9004)
 
             markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")
-            self.assertIn("101/202/0/0", markdown)
-            self.assertIn("303/303/303/0", markdown)
+            self.assertIn("9001/9002/0/0", markdown)
+            self.assertIn("9003/9003/9003/0", markdown)
 
     def test_treedb_maintenance_prefers_diagnostics_debug_vars_over_app_vars_and_quiesce(self) -> None:
         with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
@@ -527,17 +545,17 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             diagnostics.mkdir(parents=True, exist_ok=True)
             maintenance_quiesce = run / "sync" / "maintenance-quiesce"
             maintenance_quiesce.mkdir(parents=True, exist_ok=True)
-            (diagnostics / "final.max-memory-final.treedb_application_vars.json").write_text(
-                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "11"}) + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                diagnostics / "final.max-memory-final.treedb_application_vars.json",
+                {"treedb.cache.vlog_generation.maintenance.attempts": "11"},
             )
-            (diagnostics / "final.max-memory-final.debug_vars.json").write_text(
-                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "22"}) + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                diagnostics / "final.max-memory-final.debug_vars.json",
+                {"treedb.cache.vlog_generation.maintenance.attempts": "22"},
             )
-            (maintenance_quiesce / "debug_vars_9.json").write_text(
-                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "33"}) + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                maintenance_quiesce / "debug_vars_9.json",
+                {"treedb.cache.vlog_generation.maintenance.attempts": "33"},
             )
             out = root / "out"
 
@@ -564,17 +582,17 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             diagnostics.mkdir(parents=True, exist_ok=True)
             maintenance_quiesce = run / "sync" / "maintenance-quiesce"
             maintenance_quiesce.mkdir(parents=True, exist_ok=True)
-            (diagnostics / "pprof-heap-max-hwm-123.debug_vars.json").write_text(
-                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "44"}) + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                diagnostics / "pprof-heap-max-hwm-123.debug_vars.json",
+                {"treedb.cache.vlog_generation.maintenance.attempts": "44"},
             )
-            (diagnostics / "pprof-heap-max-hwm-123.treedb_application_vars.json").write_text(
-                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "11"}) + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                diagnostics / "pprof-heap-max-hwm-123.treedb_application_vars.json",
+                {"treedb.cache.vlog_generation.maintenance.attempts": "11"},
             )
-            (maintenance_quiesce / "debug_vars_9.json").write_text(
-                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "33"}) + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                maintenance_quiesce / "debug_vars_9.json",
+                {"treedb.cache.vlog_generation.maintenance.attempts": "33"},
             )
             out = root / "out"
 
@@ -599,20 +617,17 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000)
             write_treedb_debug_vars(run)
             dwell = run / "sync" / "dwell-stats"
-            (dwell / "treedb_app_0.json").write_text(
-                json.dumps(
-                    {
-                        "treedb.command_wal.public_batch.set.calls_total": "77",
-                        "treedb.command_wal.public_batch.set_view.calls_total": "88",
-                        "treedb.raw.span_native.public.command_wal_rejections_total": "12",
-                        "treedb.raw.span_native.public.route.update.fallback.reason.command_wal_barrier.count_total": "5",
-                        "treedb.raw.span_native.public.route.update.fallback.reason.command_wal_barrier.ops_total": "5",
-                        "treedb.raw.span_native.public.route.update_sync.fallback.reason.command_wal_barrier.count_total": "7",
-                        "treedb.raw.span_native.public.route.update_sync.fallback.reason.command_wal_barrier.ops_total": "7",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                dwell / "treedb_app_0.json",
+                {
+                    "treedb.command_wal.public_batch.set.calls_total": "77",
+                    "treedb.command_wal.public_batch.set_view.calls_total": "88",
+                    "treedb.raw.span_native.public.command_wal_rejections_total": "12",
+                    "treedb.raw.span_native.public.route.update.fallback.reason.command_wal_barrier.count_total": "5",
+                    "treedb.raw.span_native.public.route.update.fallback.reason.command_wal_barrier.ops_total": "5",
+                    "treedb.raw.span_native.public.route.update_sync.fallback.reason.command_wal_barrier.count_total": "7",
+                    "treedb.raw.span_native.public.route.update_sync.fallback.reason.command_wal_barrier.ops_total": "7",
+                },
             )
             out = root / "out"
 
@@ -658,15 +673,12 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000)
             diagnostics = run / "sync" / "diagnostics"
             diagnostics.mkdir(parents=True, exist_ok=True)
-            (diagnostics / "final.max-memory-final.treedb_application_vars.json").write_text(
-                json.dumps(
-                    {
-                        "treedb.command_wal.public_batch.set.calls_total": "77",
-                        "treedb.command_wal.public_batch.set_view.calls_total": "88",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                diagnostics / "final.max-memory-final.treedb_application_vars.json",
+                {
+                    "treedb.command_wal.public_batch.set.calls_total": "77",
+                    "treedb.command_wal.public_batch.set_view.calls_total": "88",
+                },
             )
             out = root / "out"
 
@@ -695,9 +707,9 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000)
             maintenance_quiesce = run / "sync" / "maintenance-quiesce"
             maintenance_quiesce.mkdir(parents=True, exist_ok=True)
-            (maintenance_quiesce / "debug_vars_1.json").write_text(
-                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "55"}) + "\n",
-                encoding="utf-8",
+            write_stats_json(
+                maintenance_quiesce / "debug_vars_1.json",
+                {"treedb.cache.vlog_generation.maintenance.attempts": "55"},
             )
             out = root / "out"
 
