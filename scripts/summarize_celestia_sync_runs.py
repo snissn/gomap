@@ -79,6 +79,11 @@ RAW_SPAN_NATIVE_ROUTES = [
     "close_or_checkpoint_drain",
 ]
 
+PUBLIC_RAW_SPAN_NATIVE_ROUTES = [
+    "update",
+    "update_sync",
+]
+
 
 def parse_key_value_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -248,37 +253,40 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
             except OSError:
                 return 0.0
 
+        def _mtime_sort_key(path: Path) -> tuple[float, str]:
+            return (_mtime(path), path.name)
+
         final_debug_vars = sorted(
             [
                 *diagnostics.glob("*max-memory-final*.debug_vars.json"),
                 *diagnostics.glob("final*.debug_vars.json"),
             ],
-            key=_mtime,
+            key=_mtime_sort_key,
             reverse=True,
         )
         debug_vars = sorted(
             diagnostics.glob("*.debug_vars.json"),
-            key=_mtime,
+            key=_mtime_sort_key,
             reverse=True,
         )
         final_treedb_vars = sorted(
             diagnostics.glob("*max-memory-final*.treedb_vars.json"),
-            key=_mtime,
+            key=_mtime_sort_key,
             reverse=True,
         )
         treedb_vars = sorted(
             diagnostics.glob("*.treedb_vars.json"),
-            key=_mtime,
+            key=_mtime_sort_key,
             reverse=True,
         )
         final_app_vars = sorted(
             diagnostics.glob("*max-memory-final*.treedb_application_vars.json"),
-            key=_mtime,
+            key=_mtime_sort_key,
             reverse=True,
         )
         app_vars = sorted(
             diagnostics.glob("*.treedb_application_vars.json"),
-            key=_mtime,
+            key=_mtime_sort_key,
             reverse=True,
         )
         extend_unique(final_debug_vars)
@@ -290,7 +298,7 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
         extend_unique(final_app_vars)
         extend_unique(path for path in app_vars if path not in final_app_vars)
 
-    if include_dwell:
+    if include_dwell or not diagnostics.is_dir():
         extend_unique(quiesce_debug)
 
     return candidates
@@ -498,6 +506,19 @@ def span_route_summary(stats: dict[str, Any], prefix: str) -> dict[str, Any]:
     }
 
 
+def public_raw_span_route_summary(stats: dict[str, Any], route: str) -> dict[str, Any]:
+    reasons = fallback_reason_counters(stats, f"treedb.raw.span_native.public.route.{route}")
+    fallbacks = sum(safe_int(metrics.get("count_total"), 0) for metrics in reasons.values())
+    fallback_ops = sum(safe_int(metrics.get("ops_total"), 0) for metrics in reasons.values())
+    fallback_spans = sum(safe_int(metrics.get("spans_total"), 0) for metrics in reasons.values())
+    return {
+        "fallbacks_total": fallbacks,
+        "fallback_ops_total": fallback_ops,
+        "fallback_spans_total": fallback_spans,
+        "fallback_reasons": reasons,
+    }
+
+
 def aggregate_span_routes(routes: object) -> dict[str, Any]:
     if not isinstance(routes, dict):
         return span_route_summary({}, "")
@@ -547,6 +568,10 @@ def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
         route: span_route_summary(stats, f"treedb.raw.span_native.route.{route}")
         for route in RAW_SPAN_NATIVE_ROUTES
     }
+    public_raw_routes = {
+        route: public_raw_span_route_summary(stats, route)
+        for route in PUBLIC_RAW_SPAN_NATIVE_ROUTES
+    }
     flush_prefix = "treedb.flush_apply.span_native"
     ordered_prefix = "treedb.publish.ordered_root_delta_group.span_native"
     return {
@@ -562,6 +587,11 @@ def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
         "raw_span_native": {
             "used_ops_total": stat_int(stats, "treedb.raw.span_native.used_ops_total"),
             "used_spans_total": stat_int(stats, "treedb.raw.span_native.used_spans_total"),
+            "public_command_wal_rejections_total": stat_int(
+                stats,
+                "treedb.raw.span_native.public.command_wal_rejections_total",
+            ),
+            "public_routes": public_raw_routes,
             "routes": raw_routes,
         },
         "flush_apply_span_native": {
@@ -849,6 +879,20 @@ def format_fallback_reasons(reasons: object) -> str:
     return ",".join(parts) if parts else "-"
 
 
+def format_route_fallback_reasons(routes: object, route_names: Iterable[str]) -> str:
+    if not isinstance(routes, dict):
+        return "-"
+    parts: list[str] = []
+    for route in route_names:
+        route_summary = routes.get(route)
+        if not isinstance(route_summary, dict):
+            continue
+        formatted = format_fallback_reasons(route_summary.get("fallback_reasons"))
+        if formatted != "-":
+            parts.append(f"{route}:{formatted}")
+    return ",".join(parts) if parts else "-"
+
+
 def render_markdown(payload: dict[str, Any]) -> str:
     runs = payload["runs"]
     lines = ["# Celestia Sync Run Summary", ""]
@@ -988,6 +1032,7 @@ def render_markdown(payload: dict[str, Any]) -> str:
             "raw point-put cand/elig/used/fb",
             "raw routes cand/elig/used/fb",
             "raw fb reasons",
+            "public raw rejects/fb reasons",
             "flush cand/elig/used/fb",
             "flush fb reasons",
             "ordered calls/roots/cand/used",
@@ -1000,7 +1045,9 @@ def render_markdown(payload: dict[str, Any]) -> str:
         for run in decision_runs:
             decision = run.get("treedb_decision_tree") or {}
             public_batch = decision.get("public_batch") or {}
-            raw_routes = (decision.get("raw_span_native") or {}).get("routes") or {}
+            raw_span_native = decision.get("raw_span_native") or {}
+            raw_routes = raw_span_native.get("routes") or {}
+            public_raw_routes = raw_span_native.get("public_routes") or {}
             raw_point_put = raw_routes.get("point_put") or {}
             raw_all_routes = aggregate_span_routes(raw_routes)
             flush = decision.get("flush_apply_span_native") or {}
@@ -1029,6 +1076,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
                     f"/{raw_all_routes.get('fallbacks_total', 0)}"
                 ),
                 format_fallback_reasons(raw_all_routes.get("fallback_reasons")),
+                (
+                    f"{raw_span_native.get('public_command_wal_rejections_total', 0)}"
+                    f"/{format_route_fallback_reasons(public_raw_routes, PUBLIC_RAW_SPAN_NATIVE_ROUTES)}"
+                ),
                 (
                     f"{flush.get('candidate_ops_total', 0)}"
                     f"/{flush.get('eligible_ops_total', 0)}"

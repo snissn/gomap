@@ -604,6 +604,11 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
                     {
                         "treedb.command_wal.public_batch.set.calls_total": "77",
                         "treedb.command_wal.public_batch.set_view.calls_total": "88",
+                        "treedb.raw.span_native.public.command_wal_rejections_total": "12",
+                        "treedb.raw.span_native.public.route.update.fallback.reason.command_wal_barrier.count_total": "5",
+                        "treedb.raw.span_native.public.route.update.fallback.reason.command_wal_barrier.ops_total": "5",
+                        "treedb.raw.span_native.public.route.update_sync.fallback.reason.command_wal_barrier.count_total": "7",
+                        "treedb.raw.span_native.public.route.update_sync.fallback.reason.command_wal_barrier.ops_total": "7",
                     }
                 )
                 + "\n",
@@ -628,6 +633,24 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertTrue(decision["source_file"].endswith("treedb_app_0.json"))
             self.assertEqual(decision["public_batch"]["set_calls_total"], 77)
             self.assertEqual(decision["public_batch"]["set_view_calls_total"], 88)
+            self.assertEqual(decision["raw_span_native"]["public_command_wal_rejections_total"], 12)
+            self.assertEqual(
+                decision["raw_span_native"]["public_routes"]["update"]["fallback_reasons"]["command_wal_barrier"][
+                    "count_total"
+                ],
+                5,
+            )
+            self.assertEqual(
+                decision["raw_span_native"]["public_routes"]["update_sync"]["fallback_reasons"]["command_wal_barrier"][
+                    "ops_total"
+                ],
+                7,
+            )
+            markdown = (out / "celestia_sync_runs.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "12/update:command_wal_barrier:5count/5ops,update_sync:command_wal_barrier:7count/7ops",
+                markdown,
+            )
 
     def test_treedb_maintenance_rejects_flat_decision_only_stats(self) -> None:
         with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
@@ -665,6 +688,34 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
             self.assertTrue(decision["source_file"].endswith("final.max-memory-final.treedb_application_vars.json"))
             self.assertEqual(decision["public_batch"]["set_calls_total"], 77)
             self.assertEqual(decision["public_batch"]["set_view_calls_total"], 88)
+
+    def test_treedb_maintenance_uses_quiesce_without_diagnostics_dir(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="celestia_sync_summary_test_") as tmp:
+            root = Path(tmp)
+            run = write_run_home(root, "treedb", sync_seconds=10, rss_kb=1000, app_bytes=3000)
+            maintenance_quiesce = run / "sync" / "maintenance-quiesce"
+            maintenance_quiesce.mkdir(parents=True, exist_ok=True)
+            (maintenance_quiesce / "debug_vars_1.json").write_text(
+                json.dumps({"treedb.cache.vlog_generation.maintenance.attempts": "55"}) + "\n",
+                encoding="utf-8",
+            )
+            out = root / "out"
+
+            result = subprocess.run(
+                [str(SCRIPT), "--out-dir", str(out), str(run)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            maintenance = payload["runs"][0]["treedb_maintenance"]
+            self.assertTrue(maintenance["available"])
+            self.assertTrue(maintenance["source_file"].endswith("maintenance-quiesce/debug_vars_1.json"))
+            self.assertEqual(maintenance["counters"]["maintenance_attempts"], 55)
 
 
 if __name__ == "__main__":
