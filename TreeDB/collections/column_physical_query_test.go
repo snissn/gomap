@@ -731,6 +731,40 @@ func TestMergeColumnPhysicalQueryDiagnosticsTreatsMutationPartsAsViewLevelM14B(t
 	}
 }
 
+func TestMergeColumnPhysicalQueryDiagnosticsAddsQ2PostPrepareSplits3324(t *testing.T) {
+	left := ColumnPhysicalQueryDiagnostics{
+		TypedColumnPreparePostPrepareNanos:                    100,
+		TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos:    10,
+		TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos: 20,
+		TypedColumnPrepareQ2GroupGlobalCodeRemapNanos:         30,
+		TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos:      40,
+	}
+	right := ColumnPhysicalQueryDiagnostics{
+		TypedColumnPreparePostPrepareNanos:                    1000,
+		TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos:    1,
+		TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos: 2,
+		TypedColumnPrepareQ2GroupGlobalCodeRemapNanos:         3,
+		TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos:      4,
+	}
+
+	merged := mergeColumnPhysicalQueryDiagnostics(left, right)
+	if got, want := merged.TypedColumnPreparePostPrepareNanos, int64(1100); got != want {
+		t.Fatalf("post prepare nanos=%d want %d", got, want)
+	}
+	if got, want := merged.TypedColumnPrepareQ2GroupGlobalDictionaryRankNanos, int64(11); got != want {
+		t.Fatalf("q2 group global dictionary/rank nanos=%d want %d", got, want)
+	}
+	if got, want := merged.TypedColumnPrepareQ2DistinctGlobalDictionaryRankNanos, int64(22); got != want {
+		t.Fatalf("q2 distinct global dictionary/rank nanos=%d want %d", got, want)
+	}
+	if got, want := merged.TypedColumnPrepareQ2GroupGlobalCodeRemapNanos, int64(33); got != want {
+		t.Fatalf("q2 group global-code remap nanos=%d want %d", got, want)
+	}
+	if got, want := merged.TypedColumnPrepareQ2DistinctGlobalCodeRemapNanos, int64(44); got != want {
+		t.Fatalf("q2 distinct global-code remap nanos=%d want %d", got, want)
+	}
+}
+
 func TestMergeColumnPhysicalQueryDiagnosticsSortKeyNoneSentinel1949(t *testing.T) {
 	tests := []struct {
 		name                        string
