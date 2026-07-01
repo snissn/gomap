@@ -546,6 +546,48 @@ func TestTypedColumnPreparedMetadataPrefetchSkipsLargeDictionary3417(t *testing.
 	}
 }
 
+func TestTypedColumnPreparedMetadataPrefetchSkipsUncacheableSortMarks3417(t *testing.T) {
+	marksLen := maxTypedColumnPreparedRangeCacheEntryBytes + 1
+	raw := make([]byte, 156+marksLen)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	image := typedcolumn.ColumnPartImage{Sections: []typedcolumn.ColumnPartImageSection{
+		{Kind: typedcolumn.ColumnPartImageSectionDescriptor, Offset: 100, Length: 32},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMetadata, Offset: 140, Length: 16},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMarks, Offset: 156, Length: marksLen},
+	}}
+	type readCall struct {
+		offset int
+		length int
+	}
+	var calls []readCall
+	cache := newTypedColumnPreparedRangeReadCache(func(offset int, length int, section bool) ([]byte, error) {
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		calls = append(calls, readCall{offset: offset, length: length})
+		return raw[offset : offset+length], nil
+	})
+	requests := []typedColumnPreparedColumnRequest{{IncludeSortKeyMarks: true}}
+	if err := typedColumnPreparedPrefetchMetadataSections(image, requests, cache); err != nil {
+		t.Fatalf("prefetch metadata: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != (readCall{offset: 100, length: 56}) {
+		t.Fatalf("prefetch calls=%+v want descriptor+sort metadata only", calls)
+	}
+	callsBefore := len(calls)
+	if _, err := cache.read(156, marksLen, true); err != nil {
+		t.Fatalf("large sort marks read: %v", err)
+	}
+	if _, err := cache.read(156, marksLen, true); err != nil {
+		t.Fatalf("large sort marks second read: %v", err)
+	}
+	if len(calls) != callsBefore+2 {
+		t.Fatalf("large sort marks calls=%d want %d uncached reads", len(calls), callsBefore+2)
+	}
+}
+
 func TestTypedColumnPreparedPruningComposedSelectionsDoNotAliasScratch(t *testing.T) {
 	field := TypedStorageField{Name: "score", Path: "score", Owner: TypedStorageOwnerColumnPart, ValueType: "int64"}
 	values := []int64{

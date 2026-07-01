@@ -106,8 +106,14 @@ func (c *typedColumnPreparedRangeReadCache) prefetchSections(sections []typedcol
 		if err := validateTypedColumnPreparedRange(section.Offset, section.Length); err != nil {
 			return err
 		}
+		if section.Length > maxTypedColumnPreparedRangeCacheEntryBytes {
+			continue
+		}
 		ordered[n] = section
 		n++
+	}
+	if n <= 1 {
+		return nil
 	}
 	sort.Slice(ordered[:n], func(i, j int) bool {
 		if ordered[i].Offset != ordered[j].Offset {
