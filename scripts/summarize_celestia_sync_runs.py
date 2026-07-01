@@ -9,7 +9,7 @@ import math
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from analyze_vlog_maintenance_capacity import build_summary as build_vlog_maintenance_summary
 from analyze_vlog_maintenance_capacity import extract_stats as extract_treedb_stats
@@ -218,10 +218,27 @@ def numeric_suffix_sort_key(path: Path) -> tuple[int, float, str]:
 def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> list[Path]:
     sync = home / "sync"
     candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def extend_unique(paths: Iterable[Path]) -> None:
+        for path in paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            candidates.append(path)
 
     if include_dwell:
         dwell_candidates = list((sync / "dwell-stats").glob("treedb_app_*.json"))
-        candidates.extend(sorted(dwell_candidates, key=numeric_suffix_sort_key, reverse=True))
+        extend_unique(sorted(dwell_candidates, key=numeric_suffix_sort_key, reverse=True))
+
+    maintenance_quiesce = sync / "maintenance-quiesce"
+    quiesce_debug: list[Path] = []
+    if maintenance_quiesce.is_dir():
+        quiesce_debug = sorted(
+            maintenance_quiesce.glob("debug_vars_*.json"),
+            key=numeric_suffix_sort_key,
+            reverse=True,
+        )
 
     diagnostics = sync / "diagnostics"
     if diagnostics.is_dir():
@@ -232,7 +249,10 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
                 return 0.0
 
         final_debug_vars = sorted(
-            diagnostics.glob("*max-memory-final*.debug_vars.json"),
+            [
+                *diagnostics.glob("*max-memory-final*.debug_vars.json"),
+                *diagnostics.glob("final*.debug_vars.json"),
+            ],
             key=_mtime,
             reverse=True,
         )
@@ -261,21 +281,17 @@ def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> l
             key=_mtime,
             reverse=True,
         )
-        candidates.extend(final_debug_vars)
-        candidates.extend(path for path in debug_vars if path not in final_debug_vars)
-        candidates.extend(final_treedb_vars)
-        candidates.extend(path for path in treedb_vars if path not in final_treedb_vars)
-        candidates.extend(final_app_vars)
-        candidates.extend(path for path in app_vars if path not in final_app_vars)
+        extend_unique(final_debug_vars)
+        if not include_dwell:
+            extend_unique(quiesce_debug)
+        extend_unique(path for path in debug_vars if path not in final_debug_vars)
+        extend_unique(final_treedb_vars)
+        extend_unique(path for path in treedb_vars if path not in final_treedb_vars)
+        extend_unique(final_app_vars)
+        extend_unique(path for path in app_vars if path not in final_app_vars)
 
-    maintenance_quiesce = sync / "maintenance-quiesce"
-    if maintenance_quiesce.is_dir():
-        quiesce_debug = sorted(
-            maintenance_quiesce.glob("debug_vars_*.json"),
-            key=numeric_suffix_sort_key,
-            reverse=True,
-        )
-        candidates.extend(quiesce_debug)
+    if include_dwell:
+        extend_unique(quiesce_debug)
 
     return candidates
 
