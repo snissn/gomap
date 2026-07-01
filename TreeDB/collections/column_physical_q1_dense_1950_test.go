@@ -79,6 +79,8 @@ func TestColumnPhysicalQ1DenseTypedColumnOneShotSummaryUsesCounts1950(t *testing
 
 	runner, candidate, err := prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, &readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
 		prepareAggregateSummaries: columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req),
+		plannedQuery:              plan,
+		hasPlannedQuery:           true,
 	})
 	if err != nil {
 		if runner != nil {
@@ -202,6 +204,36 @@ func TestColumnPhysicalQ1DenseTypedColumnOneShotSetupDiagnostics1950(t *testing.
 
 	diag := prepareColumnPhysicalQ1DenseOneShotSetup1950(t, view, req, plan)
 	assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(t, "q1 one-shot setup", diag)
+}
+
+func TestColumnPhysicalQ1DenseTypedColumnOneShotReusesPlannedQuery1950(t *testing.T) {
+	batches := columnPhysicalQ1DenseEventBatches1950([][]string{
+		{"app.m", "app.z", "app.m", "app.z"},
+		{"app.a", "app.m", "app.a", "app.m"},
+	})
+	_, col, closeFn := openTypedColumnSortKeyFixtureBatches1950(t, nil, batches)
+	defer closeFn()
+
+	req := ColumnPhysicalQueryRequest{Kind: ColumnPhysicalQueryGroupCount, GroupColumn: "collection"}
+	totalRows := totalQ1DenseRows1950(batches)
+	want := rowScanCollectionCounts1950(t, col, totalRows)
+	result, err := col.RunColumnPhysicalQuery(req)
+	if err != nil {
+		t.Fatalf("RunColumnPhysicalQuery(q1 dense one-shot): %v", err)
+	}
+	assertColumnPhysicalQ1DenseResult1950(t, "q1 one-shot planned-query reuse", result, want, totalRows, totalRows)
+	if !result.Diagnostics.TypedColumnOneShotCacheMiss || !result.Diagnostics.TypedColumnOneShotCacheBuild || result.Diagnostics.TypedColumnOneShotCacheHit {
+		t.Fatalf("q1 one-shot cache diagnostics hit/miss/build=%t/%t/%t want false/true/true diagnostics=%+v",
+			result.Diagnostics.TypedColumnOneShotCacheHit,
+			result.Diagnostics.TypedColumnOneShotCacheMiss,
+			result.Diagnostics.TypedColumnOneShotCacheBuild,
+			result.Diagnostics)
+	}
+	if result.Diagnostics.TypedColumnPreparePlanNanos != 0 {
+		t.Fatalf("q1 one-shot prepare plan nanos=%d want 0 when reusing already planned query diagnostics=%+v",
+			result.Diagnostics.TypedColumnPreparePlanNanos,
+			result.Diagnostics)
+	}
 }
 
 func TestColumnPhysicalQ1DenseTypedColumnOneShotTargetedSetupDiagnostics1950(t *testing.T) {
@@ -405,6 +437,8 @@ func prepareColumnPhysicalQ1DenseOneShotSetup1950(tb testing.TB, view columnPhys
 	buildStart := time.Now()
 	runner, candidate, err := prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, &readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
 		prepareDenseGroupCountDistinctGlobalRanks: columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req),
+		plannedQuery:    plan,
+		hasPlannedQuery: true,
 	})
 	buildNanos := time.Since(buildStart).Nanoseconds()
 	if err != nil {
@@ -509,6 +543,12 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 			label,
 			diag.TypedColumnOneShotBuildNanos,
 			diag.TypedColumnPreparePartDecodeNanos,
+			diag)
+	}
+	if diag.TypedColumnPreparePlanNanos != 0 {
+		tb.Fatalf("%s setup prepare plan nanos=%d want 0 for reused typed-column query plan diagnostics=%+v",
+			label,
+			diag.TypedColumnPreparePlanNanos,
 			diag)
 	}
 	if diag.TypedColumnPrepareSummaryNanos != 0 {

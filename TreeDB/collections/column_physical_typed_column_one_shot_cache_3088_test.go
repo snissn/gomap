@@ -532,6 +532,9 @@ func assertTypedColumnOneShotCacheDiagnostics3158(tb testing.TB, label string, d
 	if !wantBuild && diag.TypedColumnOneShotBuildNanos != 0 {
 		tb.Fatalf("%s typed-column one-shot build nanos=%d want 0 diagnostics=%+v", label, diag.TypedColumnOneShotBuildNanos, diag)
 	}
+	if wantBuild && diag.TypedColumnPreparePlanNanos != 0 {
+		tb.Fatalf("%s typed-column one-shot prepare plan nanos=%d want 0 for reused query plan diagnostics=%+v", label, diag.TypedColumnPreparePlanNanos, diag)
+	}
 	prepareNanos := diag.TypedColumnPreparePlanNanos +
 		diag.TypedColumnPrepareRefsNanos +
 		diag.TypedColumnPreparePairingNanos +

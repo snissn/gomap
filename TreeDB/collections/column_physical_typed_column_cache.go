@@ -107,6 +107,8 @@ func (c *Collection) runColumnTypedColumnOneShotWithCache(view columnPhysicalSca
 	runner, candidate, err := prepareColumnTypedColumnPhysicalQueryRunnerWithOptions(view, req, &readCache, columnTypedColumnPhysicalQueryRunnerPrepareOptions{
 		prepareAggregateSummaries:                 columnTypedColumnPhysicalQueryUseDenseGroupCount(plan, req),
 		prepareDenseGroupCountDistinctGlobalRanks: columnTypedColumnPhysicalQueryUseDenseGroupCountDistinct(plan, req),
+		plannedQuery:    plan,
+		hasPlannedQuery: true,
 	})
 	buildNanos := time.Since(buildStart).Nanoseconds()
 	if err != nil || !candidate {
