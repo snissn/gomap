@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -783,7 +784,8 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 		return b.payload.Payload(), nil
 	}
 	byteHint, _ := b.inner.GetByteSize()
-	return commitlog.EncodeRawKVBatchPayloadScanWithHint(func(emit func(commitlog.RawKVOperation) error) error {
+	sawEntryRevision := false
+	scan := func(emit func(commitlog.RawKVOperation) error) error {
 		return b.inner.Replay(func(entry batch.Entry) error {
 			switch entry.Type {
 			case batch.OpDeleteRange:
@@ -792,13 +794,31 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 				}
 				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value})
 			case batch.OpDelete:
-				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key})
+				if entry.Revision != page.LegacyEntryRevision {
+					sawEntryRevision = true
+				}
+				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key, Revision: uint64(entry.Revision)})
 			case batch.OpPut:
-				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value})
+				if entry.Revision != page.LegacyEntryRevision {
+					sawEntryRevision = true
+				}
+				return emit(commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value, Revision: uint64(entry.Revision)})
 			}
 			return nil
 		})
-	}, b.opCount, byteHint)
+	}
+	payload, err := commitlog.EncodeRawKVBatchPayloadScanWithHint(scan, b.opCount, byteHint)
+	if err == nil {
+		return payload, nil
+	}
+	if !sawEntryRevision || !errors.Is(err, commitlog.ErrCommandWALUnsupportedVersion) {
+		return nil, err
+	}
+	plan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
+	if err != nil {
+		return nil, err
+	}
+	return commitlog.EncodeRawKVBatchPayloadPlanned(plan, scan)
 }
 
 func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {

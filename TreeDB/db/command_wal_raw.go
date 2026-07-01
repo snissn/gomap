@@ -283,11 +283,16 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	if db.durability == DurabilityWALOffRelaxed {
 		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
 	}
+	maxEntryRevision, err := maxEntryRevisionFromCommandWALPayload(kind, scope, payloadFormat, payload)
+	if err != nil {
+		return nil, err
+	}
 	return &CommandWALIntent{inner: commandWALBatchIntent{
-		kind:          kind,
-		scope:         scope,
-		payloadFormat: payloadFormat,
-		payload:       payload,
+		kind:             kind,
+		scope:            scope,
+		payloadFormat:    payloadFormat,
+		payload:          payload,
+		maxEntryRevision: maxEntryRevision,
 	}}, nil
 }
 
@@ -570,6 +575,27 @@ func maxEntryRevisionFromEntries(entries []batchpkg.Entry) page.EntryRevision {
 		}
 	}
 	return maxRevision
+}
+
+func maxEntryRevisionFromCommandWALPayload(kind commitlog.CommandKind, scope commitlog.CommandScope, payloadFormat commitlog.PayloadFormat, payload []byte) (page.EntryRevision, error) {
+	if kind != commitlog.CommandKindRawKVBatch || scope != commitlog.CommandScopeRawKV || payloadFormat != commitlog.PayloadFormatRawKVBatchV1 {
+		return page.LegacyEntryRevision, nil
+	}
+	maxRevision := page.LegacyEntryRevision
+	err := commitlog.ScanRawKVBatchPayloadWithRevision(payload, func(op commitlog.RawKVOp, _ []byte, _ []byte, revision uint64) error {
+		if op == commitlog.RawKVOpDeleteRange || revision == 0 {
+			return nil
+		}
+		entryRevision := page.EntryRevision(revision)
+		if entryRevision > maxRevision {
+			maxRevision = entryRevision
+		}
+		return nil
+	})
+	if err != nil {
+		return page.LegacyEntryRevision, err
+	}
+	return maxRevision, nil
 }
 
 func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool) commitlog.RawKVBatchOperationScanner {

@@ -1472,6 +1472,49 @@ func TestPublicCommandWALBatchOrdinarySetBypassesPayloadBuilder(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchFallbackPreservesEntryRevisions(t *testing.T) {
+	inner := &commandWALPayloadSoftCapBatch{}
+	wrapped := newCommandWALPublicBatch(nil, inner, 0)
+	inner.entries = append(inner.entries,
+		batch.Entry{Type: batch.OpPut, Key: []byte("alpha"), Value: []byte("one"), Revision: 41},
+		batch.Entry{Type: batch.OpDelete, Key: []byte("bravo"), Revision: 42},
+		batch.Entry{Type: batch.OpDeleteRange, Key: []byte("range-a"), Value: []byte("range-z"), Revision: 99},
+	)
+	wrapped.payloadBypass = true
+	wrapped.opCount = len(inner.entries)
+
+	payload, err := wrapped.commandWALPayload()
+	if err != nil {
+		t.Fatalf("commandWALPayload: %v", err)
+	}
+	type gotOp struct {
+		op       commitlog.RawKVOp
+		key      string
+		value    string
+		revision uint64
+	}
+	var got []gotOp
+	if err := commitlog.ScanRawKVBatchPayloadWithRevision(payload, func(op commitlog.RawKVOp, key, value []byte, revision uint64) error {
+		got = append(got, gotOp{op: op, key: string(key), value: string(value), revision: revision})
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanRawKVBatchPayloadWithRevision: %v", err)
+	}
+	want := []gotOp{
+		{op: commitlog.RawKVOpSet, key: "alpha", value: "one", revision: 41},
+		{op: commitlog.RawKVOpDelete, key: "bravo", revision: 42},
+		{op: commitlog.RawKVOpDeleteRange, key: "range-a", value: "range-z"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("decoded ops=%+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("decoded op %d=%+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestPublicCommandWALBatchSetViewBypassesPayloadBuilderWithoutInnerCopy(t *testing.T) {
 	inner := &commandWALPayloadSoftCapBatch{}
 	wrapped := newCommandWALPublicBatch(nil, inner, 0)
