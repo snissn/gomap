@@ -2443,6 +2443,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			if !z.outerLeavesInValueLog {
 				allocHint = target.PageID()
 			}
+			targetEntryRevisions := target.LeafEntryRevisionsEnabled()
 
 			// 1. Finish the current leaf.
 			if _, err := persistTarget(); err != nil {
@@ -2483,7 +2484,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 			splitBuilder := z.newPooledLeafBuilder(sdata, ops[startIdx:])
 			splitBuilder.SetPageID(sid)
-			if target.LeafEntryRevisionsEnabled() {
+			if targetEntryRevisions {
 				z.enableLeafBuilderEntryRevisions(splitBuilder, ops[startIdx:])
 			}
 
