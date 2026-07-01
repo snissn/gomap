@@ -670,6 +670,37 @@ bytes KeySuffixBlob
 
 Keys reconstruct using previous key prefix within restart blocks.
 
+### 5.6 Target raw-KV entry revisions
+
+Target entry revisions are native entry metadata for raw key/value leaves.
+Issue #3422 owns the exact byte layout and required feature gate. This section
+defines the storage constraints that layout must satisfy.
+
+- A live raw-KV entry may carry an `EntryRevision` token. Older entries without
+  revision metadata decode as revision `0` until the format gate requires
+  revision support.
+- Revision metadata must be stored with the visible entry data path. A per-write
+  system-root sidecar, separate persistent revision map, or adapter-private
+  metadata tree is not an accepted storage format for this feature.
+- The stored revision is the mutation revision assigned by the active write
+  authority: command-WAL LSN, backend commit sequence for WAL-off raw writes, or
+  future Raft apply identity. Leaf readers decode the stored token; they do not
+  infer it from page position, file offset, or a second root.
+- Inline values and value-log pointer entries must both carry revisions without
+  exposing revision bytes through ordinary `Get`, iterator, or `GetMany` value
+  APIs.
+- Tombstones and range deletes must hide older revisions. A delete followed by a
+  reinsert creates a later live revision.
+- Leaf split, rebuild, prefix compression, columnar encoding, packed-pointer
+  encoding, bulk/cold build, compact/vacuum, and split leaf-log storage must
+  preserve revision metadata for live entries.
+- Readers must validate revision metadata bounds before slicing or allocating.
+  Unsupported revision encodings, impossible lengths, truncated metadata, and
+  inconsistent pointer/value layout fail closed as page corruption.
+- The revision lookup path for a visible entry must be the same leaf/memtable
+  lookup that found the value. A second ordered-root lookup is not allowed for
+  the target API because it regresses raw write/read performance.
+
 ## 6. Internal Page Encodings
 
 Internal encoding flags:
@@ -1504,6 +1535,16 @@ sentinel. Malformed delete-range payloads (for example bounded `start >= end` or
 extra bytes after a nil-bound sentinel) fail closed as corrupt. Public APIs treat
 empty or reversed range deletes as no-ops and do not emit dangerous command-WAL
 mutations for them.
+
+Target raw KV entry revisions do not require per-operation sequence fields in
+`RawKVBatchV1`: the command frame `LSN` is the mutation revision for all raw
+keys touched by the frame. Target conditional raw KV transactions should express
+point-read preconditions and replay result assertions through the existing
+`CommandEnvelope.Preconditions` and `CommandEnvelope.ResultAssertions`
+extension areas when that is sufficient. A new raw KV payload version is allowed
+only if #3423 proves the envelope extensions cannot encode the required
+deterministic guard data without compromising decode speed or replay
+correctness.
 
 Writers may use compact all-zero set payload variants when every operation is a
 set with the same non-empty zero-filled value length:

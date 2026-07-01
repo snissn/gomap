@@ -215,6 +215,11 @@ must not change replay bytes.
 - `Preconditions` make stale or incompatible replay fail closed.
 - `ResultAssertions` allow recovery to detect semantic drift, for example
   expected matched/modified counts or optional document digests.
+- Raw KV command apply assigns and stores target `EntryRevision` metadata as
+  part of the same command effect as the value or tombstone. Replay must derive
+  the same revision for the same accepted command input as live apply. For
+  command-WAL raw KV frames, the command frame `LSN` is the mutation revision
+  for all raw keys touched by the frame.
 - Every command kind declares whether replay is strict or has an explicit
   idempotent-skip rule. Strict commands fail closed if replay observes evidence
   that the command effect already exists while `AppliedLSN` does not cover it.
@@ -241,6 +246,8 @@ Required integration points:
 - preserve the correctness properties of the current WAL implementation:
   append-before-visibility, checksum validation, terminal truncated-tail
   handling, rotation, flush/sync ordering, and cleanup only after durable proof;
+- make raw KV entry revision metadata part of the `RawKVBatch` command effect
+  instead of a physical sidecar record with a separate durability boundary;
 - fail closed on unknown required frame versions or command kinds.
 
 ### 5.4 Single Journal Owner
@@ -274,6 +281,7 @@ replayable without adding query-wide mutation semantics.
 | Surface | Current user-facing shape | V1 WAL command | Status policy |
 |---|---|---|---|
 | Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | PR1 has gated typed bytes and fixtures; production raw writes become `WAL-supported` after PR3 recovery dispatch and `AppliedCommandLSN` plumbing. |
+| Raw KV conditional transaction | target optimistic point-read transaction API | `RawKVBatch` with preconditions or a future `RawKVConditionalBatch` if payload extension is required | `future`; must reject before LSN assignment until point-read preconditions, entry revisions, and replay result assertions are implemented together. |
 | Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | PR4 implementation: `WAL-supported` for JSON, BSON, and template-v1 stored documents through the normal collection executor. |
 | Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | PR4 implementation: `WAL-supported`; missing IDs are explicit no-ops and recovery still advances `AppliedCommandLSN`. |
 | Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | PR5 implementation: callback and BSON-set update paths are `WAL-supported` by logging final accepted replacements; operator-native payloads remain future work. |
@@ -322,6 +330,16 @@ root/`AppliedLSN` publish rules.
 Batch preconditions and result assertions are evaluated for the whole batch. On
 recovery, any item-level mismatch that is not covered by a command-kind-specific
 idempotent-skip proof fails the whole command closed.
+
+Target conditional raw KV transaction commits use the same atomic command-frame
+rule. Preconditions cover the whole read set and are validated before LSN
+assignment where possible; if validation must be repeated during apply, failure
+prevents visibility and `AppliedLSN` advancement for that command. Range guards
+or unsupported range operations must fail closed before an LSN is assigned until
+a deterministic range-precondition payload is specified. Point-read
+preconditions and replay result assertions should use the existing
+`CommandEnvelope.Preconditions` and `CommandEnvelope.ResultAssertions` extension
+areas unless #3423 proves a new raw KV payload version is required.
 
 ### 6.2 Update API Categories
 
@@ -583,6 +601,11 @@ The implementation should remove or replace raw-record-specific writer and
 reader paths as part of the command WAL conversion. Tests should move from
 legacy raw record replay to `RawKVBatch` command replay.
 
+Target raw KV entry revisions are part of the logical `RawKVBatch` effect and
+must be recoverable through the selected root tuple. They must not be represented
+as an additional raw-record sidecar whose replay, cleanup, or checkpoint
+ordering can diverge from the user value.
+
 ## 11. Relationship to Raft and Distributed State
 
 Raft and local WAL should share command semantics but not the same durability
@@ -615,6 +638,13 @@ the user-command WAL and normal executor, and advances future `ApplyProgress` or
 applied-index metadata only after the selected local recoverability boundary is
 satisfied. If the selected boundary is root-recoverable, that means roots and
 `AppliedLSN` have been published atomically.
+
+If future Raft apply identity becomes the authority for target raw KV
+`EntryRevision` assignment, single-node command WAL apply and recovery must
+derive revisions from the same deterministic input. A replica may not advance
+future applied-index metadata past a revision-bearing raw KV mutation until the
+value, revision, root tuple, and local recoverability boundary are durable
+together.
 
 ## 12. Future Command Admission Policy
 

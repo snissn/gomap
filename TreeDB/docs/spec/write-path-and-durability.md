@@ -62,7 +62,33 @@ For each write batch, implementation conceptually performs:
 
 Journal and value-log writes are decoupled resources with separate rotation/sync paths.
 
-### 3.1 Commit Fence Metadata (WAL + Value Log)
+### 3.1 Target raw-KV revision flow
+
+Entry revisions are target native write metadata, not a separate write domain.
+
+- Raw KV writes assign the next live-entry revision as part of the same logical
+  mutation that installs the value/tombstone in the memtable or backend root.
+- Cached mode must carry revisions through mutable memtables, queued memtables,
+  flush iterators, merge iterators, and backend publication before versioned
+  reads are advertised as supported.
+- Backend-only mode must carry revisions through `batch.Entry`, zipper apply,
+  leaf builders, and root publication without publishing an additional
+  metadata root per user commit.
+- Command-WAL mode records deterministic logical raw KV commands before
+  visibility. Live apply and replay use the accepted command LSN as the
+  mutation revision for every raw key touched by that command frame.
+- WAL-off raw writes use the backend commit sequence that publishes their root
+  as the mutation revision. Future Raft-applied raw writes use the Raft apply
+  identity as the mutation revision, and any local command-WAL frame for that
+  apply must carry or derive that same identity.
+- `WriteSync` and other sync boundaries cover the value, revision, root tuple,
+  and any applied command boundary together. A crash must not recover a value
+  without the matching revision or a revision without the matching value.
+- Implementations must treat a sidecar-per-write revision tree as a rejected
+  design for this target because it adds a second publish to the hot raw write
+  path.
+
+### 3.2 Commit Fence Metadata (WAL + Value Log)
 
 For commit-log batches that carry sequence numbers (`Record.Seq > 0`), the
 sequence acts as a durable commit fence:
@@ -128,6 +154,13 @@ Commit visibility sequence:
 3. write next meta page (`MetaPage0` or `MetaPage1` alternating),
 4. optionally sync meta write,
 5. publish new state (commit sequence, roots, value-log set).
+
+Target conditional transactions use the same backend commit model for final
+publication. The transaction body may perform reads and stage writes without
+holding the final commit lock. Commit validation runs against the transaction's
+snapshot/read-set token and the recent-write oracle immediately before publish;
+only the final root/meta publication is serialized by existing commit
+machinery.
 
 ## 5. API Durability Semantics
 
@@ -238,6 +271,11 @@ Implementations and refactors must preserve:
 2. Pointer records remain readable across reopen and checkpoint.
 3. Sync API semantics depend on durability mode exactly as above.
 4. Checkpoint establishes a backend boundary and clears obsolete commit logs.
+5. Target revision metadata is covered by the same visibility and durability
+   boundary as its value.
+6. Target conditional transaction conflict detection must not rely on
+   persistent tombstones after all active transactions that can observe them
+   have closed.
 
 ## 10. Compatibility Note (Pre-Alpha)
 
