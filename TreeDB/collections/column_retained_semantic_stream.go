@@ -1574,10 +1574,10 @@ func (e *columnRetainedSemanticStreamV1StoredBlockEncoder) encodeStreamsWithRawL
 	if err != nil {
 		return nil, rawDuration, time.Since(storedStart), err
 	}
-	storedDuration := time.Since(storedStart)
 	if columnRetainedSemanticStreamSlicesShareStart(block, raw) {
 		block = append([]byte(nil), block...)
 	}
+	storedDuration := time.Since(storedStart)
 	e.retainRawBlockScratch(raw)
 	return block, rawDuration, storedDuration, nil
 }
