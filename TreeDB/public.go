@@ -22,11 +22,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
+
+// EntryRevision is TreeDB's native per-entry revision metadata. Revision zero is
+// reserved for legacy entries that do not carry revision metadata.
+type EntryRevision = page.EntryRevision
+
+const LegacyEntryRevision = page.LegacyEntryRevision
 
 type MaintenancePhase = caching.MaintenancePhase
 
@@ -1460,6 +1467,19 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return db.backend.Get(key)
 }
 
+// GetVersioned returns the value for a key plus TreeDB's native per-entry
+// revision. Missing keys return a nil value and nil error, matching Get.
+func (db *DB) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
+	key = normalizeRawKVPointKey(key)
+	if err := db.ensureOpen(); err != nil {
+		return nil, LegacyEntryRevision, err
+	}
+	if db.cached != nil {
+		return db.cached.GetVersioned(key)
+	}
+	return db.backend.GetVersioned(key)
+}
+
 // GetMany returns values for keys.
 //
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
@@ -1539,6 +1559,19 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 		return db.cached.GetAppend(key, dst)
 	}
 	return db.backend.GetAppend(key, dst)
+}
+
+// GetVersionedAppend appends the value for key to dst and returns TreeDB's
+// native per-entry revision. Missing/tombstoned keys return dst and
+// ErrKeyNotFound; tombstones preserve their stored revision.
+func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
+	if err := db.ensureOpen(); err != nil {
+		return dst, LegacyEntryRevision, err
+	}
+	if db.cached != nil {
+		return db.cached.GetVersionedAppend(key, dst)
+	}
+	return db.backend.GetVersionedAppend(key, dst)
 }
 
 // Has reports whether a key exists in the database.

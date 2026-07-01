@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -133,6 +134,40 @@ func TestFreezeSortRunTableApplyStealEntryFunc(t *testing.T) {
 	requireFreezeSortRunIterator(t, table.NewIterator(nil, nil), []string{"a", "b", "c"})
 	if got := table.Len(); got != 3 {
 		t.Fatalf("frozen Len=%d want 3", got)
+	}
+}
+
+func TestFreezeSortRunTableRevisionRoundTrip(t *testing.T) {
+	table := newFreezeSortRunTable()
+	revisions, ok := table.(interface {
+		SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision)
+		GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool)
+	})
+	if !ok {
+		t.Fatal("freeze-sort run table does not expose revision table contract")
+	}
+	revisions.SetEntryWithRevision([]byte("a"), []byte("old"), page.ValuePtr{}, node.FlagInline, 1)
+	revisions.SetEntryWithRevision([]byte("a"), []byte("new"), page.ValuePtr{}, node.FlagInline, 7)
+	revisions.SetEntryWithRevision([]byte("b"), nil, page.ValuePtr{}, node.FlagTombstone, 8)
+
+	if got, _, flags, rev, ok := revisions.GetEntryWithRevision([]byte("a")); !ok || flags&node.FlagTombstone != 0 || !bytes.Equal(got, []byte("new")) || rev != 7 {
+		t.Fatalf("mutable a=(%q,%02x,%d,%v), want new inline rev 7", got, flags, rev, ok)
+	}
+	table.Freeze()
+	if _, _, flags, rev, ok := revisions.GetEntryWithRevision([]byte("b")); !ok || flags&node.FlagTombstone == 0 || rev != 8 {
+		t.Fatalf("frozen b=(%02x,%d,%v), want tombstone rev 8", flags, rev, ok)
+	}
+
+	it := table.NewIterator(nil, nil)
+	defer func() { _ = it.Close() }()
+	_, _, _, rev := iterator.UnsafeEntryWithRevision(it)
+	if rev != 7 {
+		t.Fatalf("iterator first revision=%d want 7", rev)
+	}
+	it.Next()
+	_, _, flags, rev := iterator.UnsafeEntryWithRevision(it)
+	if flags&node.FlagTombstone == 0 || rev != 8 {
+		t.Fatalf("iterator second flags/rev=(%02x,%d), want tombstone rev 8", flags, rev)
 	}
 }
 

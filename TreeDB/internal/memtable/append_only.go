@@ -91,6 +91,7 @@ type appendOnlyEntry struct {
 	key         []byte
 	value       []byte
 	ptr         page.ValuePtr
+	revision    page.EntryRevision
 	inlineKey   [appendOnlyInlineKeyLen]byte
 	flags       byte
 	keyInline   bool
@@ -1413,7 +1414,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	m.latest[appendOnlyKeyString(key)] = idx
 }
 
-func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) (idx int, ent *appendOnlyEntry, storedKey []byte) {
+func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool, borrowValue bool) (idx int, ent *appendOnlyEntry, storedKey []byte) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries))
 		m.growEntriesLocked(nextCap, true)
@@ -1422,6 +1423,7 @@ func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr,
 	m.count++
 	ent = &m.entries[idx]
 	ent.ptr = ptr
+	ent.revision = revision
 	ent.flags = flags
 	ent.keyInline = false
 	ent.keyArena = false
@@ -1461,8 +1463,8 @@ func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr,
 	return idx, ent, storedKey
 }
 
-func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) *appendOnlyEntry {
-	idx, ent, k := m.appendEntryCoreLocked(key, value, ptr, flags, steal, borrowValue)
+func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool, borrowValue bool) *appendOnlyEntry {
+	idx, ent, k := m.appendEntryCoreLocked(key, value, ptr, flags, revision, steal, borrowValue)
 
 	if !m.hasLast {
 		m.lastIdx = idx
@@ -1491,8 +1493,8 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	return ent
 }
 
-func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) *appendOnlyEntry {
-	idx, ent, _ := m.appendEntryCoreLocked(key, value, ptr, flags, steal, borrowValue)
+func (m *AppendOnly) appendEntryTrustedOrderedLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool, borrowValue bool) *appendOnlyEntry {
+	idx, ent, _ := m.appendEntryCoreLocked(key, value, ptr, flags, revision, steal, borrowValue)
 	m.lastIdx = idx
 	m.hasLast = true
 	return ent
@@ -1507,14 +1509,22 @@ func (m *AppendOnly) SetSteal(key, value []byte) {
 }
 
 func (m *AppendOnly) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *AppendOnly) SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false, false)
+	m.appendEntryLocked(key, value, ptr, flags, revision, false, false)
 	m.mu.Unlock()
 }
 
 func (m *AppendOnly) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryStealWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *AppendOnly) SetEntryStealWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, true, false)
+	m.appendEntryLocked(key, value, ptr, flags, revision, true, false)
 	m.mu.Unlock()
 }
 
@@ -1535,14 +1545,18 @@ func (m *AppendOnly) copyKeyPartsLocked(first, second []byte) []byte {
 func (m *AppendOnly) SetInlineNilKeyParts(first, second []byte) {
 	m.mu.Lock()
 	key := m.copyKeyPartsLocked(first, second)
-	ent := m.appendEntryLocked(key, nil, page.ValuePtr{}, node.FlagInline, true, false)
+	ent := m.appendEntryLocked(key, nil, page.ValuePtr{}, node.FlagInline, page.LegacyEntryRevision, true, false)
 	ent.keyArena = true
 	m.mu.Unlock()
 }
 
 func (m *AppendOnly) SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryBorrowValueWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *AppendOnly) SetEntryBorrowValueWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false, true)
+	m.appendEntryLocked(key, value, ptr, flags, revision, false, true)
 	m.mu.Unlock()
 }
 
@@ -1559,7 +1573,7 @@ func (m *AppendOnly) DeleteSteal(key []byte) {
 func (m *AppendOnly) DeleteKeyParts(first, second []byte) {
 	m.mu.Lock()
 	key := m.copyKeyPartsLocked(first, second)
-	ent := m.appendEntryLocked(key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+	ent := m.appendEntryLocked(key, nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision, true, false)
 	ent.keyArena = true
 	m.mu.Unlock()
 }
@@ -1573,7 +1587,7 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true, false)
+	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, page.LegacyEntryRevision, true, false)
 	m.mu.Unlock()
 	return nil
 }
@@ -1586,7 +1600,7 @@ func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision, true, false)
 	m.mu.Unlock()
 	return nil
 }
@@ -1629,9 +1643,9 @@ func (m *AppendOnly) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borro
 			borrowedValues = true
 		}
 		if trustedOrdered {
-			m.appendEntryTrustedOrderedLocked(op.Key, value, ptr, flags, false, borrowValue)
+			m.appendEntryTrustedOrderedLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
 		} else {
-			m.appendEntryLocked(op.Key, value, ptr, flags, false, borrowValue)
+			m.appendEntryLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -1661,9 +1675,9 @@ func (m *AppendOnly) ApplyCopySortedBatchWithValueCopierTrusted(entries []batchp
 			}
 		}
 		if trustedOrdered {
-			m.appendEntryTrustedOrderedLocked(op.Key, value, ptr, flags, false, borrowValue)
+			m.appendEntryTrustedOrderedLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
 		} else {
-			m.appendEntryLocked(op.Key, value, ptr, flags, false, borrowValue)
+			m.appendEntryLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -1688,7 +1702,27 @@ func (m *AppendOnly) ApplyStealEntryFunc(count int, emit func(i int) (key, value
 		if err != nil {
 			return err
 		}
-		m.appendEntryLocked(key, value, ptr, flags, true, false)
+		m.appendEntryLocked(key, value, ptr, flags, page.LegacyEntryRevision, true, false)
+	}
+	return nil
+}
+
+func (m *AppendOnly) ApplyStealEntryFuncWithRevision(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, err error)) error {
+	if count <= 0 {
+		return nil
+	}
+	if emit == nil {
+		return errors.New("memtable: nil entry emitter")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reserveAdditionalEntriesLocked(count)
+	for i := 0; i < count; i++ {
+		key, value, ptr, flags, revision, err := emit(i)
+		if err != nil {
+			return err
+		}
+		m.appendEntryLocked(key, value, ptr, flags, revision, true, false)
 	}
 	return nil
 }
@@ -1702,21 +1736,21 @@ func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []
 		switch {
 		case op.Type == batchpkg.OpDelete:
 			if trustedOrdered {
-				m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+				m.appendEntryTrustedOrderedLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, op.Revision, true, false)
 			} else {
-				m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
+				m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, op.Revision, true, false)
 			}
 		case op.IsPtr:
 			if trustedOrdered {
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, op.Revision, true, false)
 			} else {
-				m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
+				m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, op.Revision, true, false)
 			}
 		default:
 			if trustedOrdered {
-				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+				m.appendEntryTrustedOrderedLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision, true, false)
 			} else {
-				m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
+				m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision, true, false)
 			}
 		}
 		if onKey != nil {
@@ -1775,32 +1809,32 @@ func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
 	return ent
 }
 
-func (m *AppendOnly) getEntryFrozen(key []byte) ([]byte, page.ValuePtr, byte, bool, bool) {
+func (m *AppendOnly) getEntryFrozen(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool, bool) {
 	if m == nil {
-		return nil, page.ValuePtr{}, 0, false, true
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, true
 	}
 	if m.ordered {
 		ent := m.orderedLookupEntryLocked(key)
 		if ent == nil {
-			return nil, page.ValuePtr{}, 0, false, true
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, true
 		}
-		return ent.value, ent.ptr, ent.flags, true, true
+		return ent.value, ent.ptr, ent.flags, ent.revision, true, true
 	}
 	if len(m.sortedRuns) > 0 {
 		ent := m.lookupSortedRunsEntryLocked(key)
 		if ent == nil {
-			return nil, page.ValuePtr{}, 0, false, true
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, true
 		}
-		return ent.value, ent.ptr, ent.flags, true, true
+		return ent.value, ent.ptr, ent.flags, ent.revision, true, true
 	}
 	if m.latestDirty {
-		return nil, page.ValuePtr{}, 0, false, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, false
 	}
 	if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 		if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
 			ent := &m.entries[idx]
 			if bytes.Equal(appendOnlyEntryKey(ent), key) {
-				return ent.value, ent.ptr, ent.flags, true, true
+				return ent.value, ent.ptr, ent.flags, ent.revision, true, true
 			}
 		}
 	}
@@ -1808,16 +1842,16 @@ func (m *AppendOnly) getEntryFrozen(key []byte) ([]byte, page.ValuePtr, byte, bo
 		if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
 			ent := &m.entries[idx]
 			if bytes.Equal(appendOnlyEntryKey(ent), key) {
-				return ent.value, ent.ptr, ent.flags, true, true
+				return ent.value, ent.ptr, ent.flags, ent.revision, true, true
 			}
 		}
 	}
-	return nil, page.ValuePtr{}, 0, false, true
+	return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, true
 }
 
 func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	if m.frozenFast.Load() {
-		val, _, flags, found, ok := m.getEntryFrozen(key)
+		val, _, flags, _, found, ok := m.getEntryFrozen(key)
 		if ok {
 			if !found {
 				return nil, false, false
@@ -1902,10 +1936,15 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 }
 
 func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	val, ptr, flags, _, found := m.GetEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+func (m *AppendOnly) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	if m.frozenFast.Load() {
-		val, ptr, flags, found, ok := m.getEntryFrozen(key)
+		val, ptr, flags, revision, found, ok := m.getEntryFrozen(key)
 		if ok {
-			return val, ptr, flags, found
+			return val, ptr, flags, revision, found
 		}
 	}
 	for {
@@ -1914,12 +1953,13 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 			val := ent.value
 			ptr := ent.ptr
 			flags := ent.flags
+			revision := ent.revision
 			m.mu.RUnlock()
-			return val, ptr, flags, true
+			return val, ptr, flags, revision, true
 		}
 		if m.ordered {
 			m.mu.RUnlock()
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
 
 		if len(m.sortedRuns) > 0 {
@@ -1927,11 +1967,12 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				val := ent.value
 				ptr := ent.ptr
 				flags := ent.flags
+				revision := ent.revision
 				m.mu.RUnlock()
-				return val, ptr, flags, true
+				return val, ptr, flags, revision, true
 			}
 			m.mu.RUnlock()
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
 
 		if !m.latestDirty {
@@ -1942,8 +1983,9 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 						val := ent.value
 						ptr := ent.ptr
 						flags := ent.flags
+						revision := ent.revision
 						m.mu.RUnlock()
-						return val, ptr, flags, true
+						return val, ptr, flags, revision, true
 					}
 				}
 			}
@@ -1954,13 +1996,14 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 						val := ent.value
 						ptr := ent.ptr
 						flags := ent.flags
+						revision := ent.revision
 						m.mu.RUnlock()
-						return val, ptr, flags, true
+						return val, ptr, flags, revision, true
 					}
 				}
 			}
 			m.mu.RUnlock()
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
 		m.mu.RUnlock()
 
@@ -2214,6 +2257,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
+		ent.revision = page.LegacyEntryRevision
 		ent.flags = 0
 		if ent.keyArena {
 			ent.key = nil
@@ -2620,11 +2664,16 @@ func (it *appendOnlyIterator) UnsafeValue() []byte {
 }
 
 func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *appendOnlyIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	ent := it.entryAt(it.idx)
 	if ent == nil || !it.validIndex() {
-		return nil, page.ValuePtr{}, 0
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
 	}
-	return ent.value, ent.ptr, ent.flags
+	return ent.value, ent.ptr, ent.flags, ent.revision
 }
 
 func (it *appendOnlyIterator) IsDeleted() bool {

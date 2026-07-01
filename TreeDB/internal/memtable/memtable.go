@@ -78,6 +78,19 @@ type Table interface {
 	Freeze()
 }
 
+// RevisionTable is implemented by memtables that carry native entry revisions
+// beside value/pointer/flags metadata.
+type RevisionTable interface {
+	SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision)
+	GetEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool)
+}
+
+// RevisionStealTable is implemented by memtables that can accept caller-owned
+// key/value buffers while preserving native entry revisions.
+type RevisionStealTable interface {
+	SetEntryStealWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision)
+}
+
 // SortedBatchApplier is an optional fast path for applying a strictly-increasing
 // batch under a single memtable lock.
 //
@@ -93,6 +106,12 @@ type StealEntryFuncApplier interface {
 	ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error
 }
 
+// RevisionStealEntryFuncApplier is the revision-preserving variant of
+// StealEntryFuncApplier.
+type RevisionStealEntryFuncApplier interface {
+	ApplyStealEntryFuncWithRevision(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, err error)) error
+}
+
 // ValueBorrower marks memtables that can safely retain caller-owned value
 // slices while still copying keys into their own storage.
 //
@@ -100,6 +119,11 @@ type StealEntryFuncApplier interface {
 // retired or reset.
 type ValueBorrower interface {
 	SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte)
+}
+
+// RevisionValueBorrower is the revision-preserving variant of ValueBorrower.
+type RevisionValueBorrower interface {
+	SetEntryBorrowValueWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision)
 }
 
 // EntryCapacityReserver marks memtables that can pre-size entry metadata before
@@ -210,9 +234,13 @@ func (m *Memtable) Set(key, value []byte) {
 }
 
 func (m *Memtable) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *Memtable) SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sl.PutEntry(key, value, ptr, flags)
+	m.sl.PutEntryWithRevision(key, value, ptr, flags, revision)
 }
 
 func (m *Memtable) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
@@ -245,20 +273,20 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 		if last == nil || bytes.Compare(entries[0].Key, last) > 0 {
 			for _, op := range entries {
 				if op.Type == batchpkg.OpDelete {
-					m.sl.AppendDelete(op.Key)
+					_ = m.sl.AppendDeleteWithRevision(op.Key, op.Revision)
 				} else if op.IsPtr {
 					if len(op.Value) > 0 {
 						buf := make([]byte, page.ValuePtrSize+len(op.Value))
 						op.ValuePtr.Encode(buf[:page.ValuePtrSize])
 						copy(buf[page.ValuePtrSize:], op.Value)
-						_ = m.sl.AppendWithCallback(op.Key, buf, node.FlagPointer, nil)
+						_ = m.sl.AppendWithCallbackRevision(op.Key, buf, node.FlagPointer, op.Revision, nil)
 					} else {
 						var buf [page.ValuePtrSize]byte
 						op.ValuePtr.Encode(buf[:])
-						_ = m.sl.AppendWithCallback(op.Key, buf[:], node.FlagPointer, nil)
+						_ = m.sl.AppendWithCallbackRevision(op.Key, buf[:], node.FlagPointer, op.Revision, nil)
 					}
 				} else {
-					m.sl.Append(op.Key, op.Value)
+					_ = m.sl.AppendWithCallbackRevision(op.Key, op.Value, node.FlagInline, op.Revision, nil)
 				}
 				if onKey != nil {
 					onKey(op.Key)
@@ -270,11 +298,11 @@ func (m *Memtable) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(ke
 
 	for _, op := range entries {
 		if op.Type == batchpkg.OpDelete {
-			m.sl.Delete(op.Key)
+			m.sl.PutEntryWithRevision(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, op.Revision)
 		} else if op.IsPtr {
-			m.sl.PutEntry(op.Key, op.Value, op.ValuePtr, node.FlagPointer)
+			m.sl.PutEntryWithRevision(op.Key, op.Value, op.ValuePtr, node.FlagPointer, op.Revision)
 		} else {
-			m.sl.Put(op.Key, op.Value)
+			m.sl.PutEntryWithRevision(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision)
 		}
 		if onKey != nil {
 			onKey(op.Key)
@@ -292,6 +320,10 @@ func (m *Memtable) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byt
 	m.SetEntry(key, value, ptr, flags)
 }
 
+func (m *Memtable) SetEntryStealWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	m.SetEntryWithRevision(key, value, ptr, flags, revision)
+}
+
 // DeleteSteal - SkipList copies data, so Steal is same as Delete.
 func (m *Memtable) DeleteSteal(key []byte) {
 	m.Delete(key)
@@ -304,9 +336,14 @@ func (m *Memtable) Get(key []byte) ([]byte, bool, bool) {
 }
 
 func (m *Memtable) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	val, ptr, flags, _, found := m.GetEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+func (m *Memtable) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.sl.GetEntry(key)
+	return m.sl.GetEntryWithRevision(key)
 }
 
 // Size returns the total memory usage (arena size).
@@ -393,6 +430,10 @@ func (it *Iterator) UnsafeValue() []byte {
 
 func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.iter.UnsafeEntry()
+}
+
+func (it *Iterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	return it.iter.UnsafeEntryWithRevision()
 }
 
 func (it *Iterator) IsDeleted() bool {
@@ -483,6 +524,10 @@ func (it *ReverseIterator) UnsafeValue() []byte {
 
 func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.iter.UnsafeEntry()
+}
+
+func (it *ReverseIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	return it.iter.UnsafeEntryWithRevision()
 }
 
 func (it *ReverseIterator) IsDeleted() bool {

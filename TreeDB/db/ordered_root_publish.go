@@ -461,8 +461,8 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 	}
 	table := memtable.NewAppendOnlyWithEntryCapacity(entries)
 	for iter.Valid() {
-		val, ptr, flags := iter.UnsafeEntry()
-		table.SetEntry(iter.UnsafeKey(), val, ptr, flags)
+		val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
+		table.SetEntryWithRevision(iter.UnsafeKey(), val, ptr, flags, revision)
 		iter.Next()
 	}
 	if err := iter.Error(); err != nil {
@@ -567,8 +567,11 @@ func (s orderedRootPublishStats) collectionRootDescriptorReachabilityMayChange()
 }
 
 func orderedRootEntryEqual(baseIter, targetIter iterator.UnsafeIterator) bool {
-	baseVal, basePtr, baseFlags := baseIter.UnsafeEntry()
-	targetVal, targetPtr, targetFlags := targetIter.UnsafeEntry()
+	baseVal, basePtr, baseFlags, baseRevision := iterator.UnsafeEntryWithRevision(baseIter)
+	targetVal, targetPtr, targetFlags, targetRevision := iterator.UnsafeEntryWithRevision(targetIter)
+	if baseRevision != targetRevision {
+		return false
+	}
 	if baseFlags != targetFlags {
 		return false
 	}
@@ -682,23 +685,32 @@ func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator, borro
 	if delta == nil || iter == nil || !iter.Valid() {
 		return nil
 	}
-	val, ptr, flags := iter.UnsafeEntry()
-	if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+	val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
+	if flags&node.FlagTombstone != 0 {
 		if borrowEntryViews && trustedSortedUnique {
-			return delta.AppendPointerViewTrustedSortedUnique(iter.UnsafeKey(), ptr)
+			return delta.AppendDeleteViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), revision)
 		}
 		if borrowEntryViews {
-			return delta.SetPointerView(iter.UnsafeKey(), ptr)
+			return delta.DeleteViewWithRevision(iter.UnsafeKey(), revision)
 		}
-		return delta.SetPointer(iter.UnsafeKey(), ptr)
+		return delta.DeleteWithRevision(iter.UnsafeKey(), revision)
+	}
+	if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+		if borrowEntryViews && trustedSortedUnique {
+			return delta.AppendPointerViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), ptr, revision)
+		}
+		if borrowEntryViews {
+			return delta.SetPointerViewWithRevision(iter.UnsafeKey(), ptr, revision)
+		}
+		return delta.SetPointerWithRevision(iter.UnsafeKey(), ptr, revision)
 	}
 	if borrowEntryViews && trustedSortedUnique {
-		return delta.AppendViewTrustedSortedUnique(iter.UnsafeKey(), val)
+		return delta.AppendViewTrustedSortedUniqueWithRevision(iter.UnsafeKey(), val, revision)
 	}
 	if borrowEntryViews {
-		return delta.SetView(iter.UnsafeKey(), val)
+		return delta.SetViewWithRevision(iter.UnsafeKey(), val, revision)
 	}
-	return delta.Set(iter.UnsafeKey(), val)
+	return delta.SetWithRevision(iter.UnsafeKey(), val, revision)
 }
 
 func orderedRootDeltaBatchFromIterator(iter iterator.UnsafeIterator) (*batch.Batch, error) {
@@ -803,17 +815,22 @@ func (it *orderedRootDeltaBatchIterator) UnsafeValue() []byte {
 }
 
 func (it *orderedRootDeltaBatchIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *orderedRootDeltaBatchIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.Valid() {
-		return nil, page.ValuePtr{}, node.FlagInline
+		return nil, page.ValuePtr{}, node.FlagInline, page.LegacyEntryRevision
 	}
 	entry := it.entries[it.idx]
 	if entry.Type == batch.OpDelete {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, entry.Revision
 	}
 	if entry.IsPtr {
-		return entry.Value, entry.ValuePtr, node.FlagPointer
+		return entry.Value, entry.ValuePtr, node.FlagPointer, entry.Revision
 	}
-	return entry.Value, page.ValuePtr{}, node.FlagInline
+	return entry.Value, page.ValuePtr{}, node.FlagInline, entry.Revision
 }
 
 func (it *orderedRootDeltaBatchIterator) Key() []byte {

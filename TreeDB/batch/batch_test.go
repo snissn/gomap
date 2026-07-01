@@ -241,6 +241,37 @@ func TestBatchAppendPointerViewTrustedSortedUniqueTracksTouchedSegment(t *testin
 	}
 }
 
+func TestBatchRevisionFastHelpers(t *testing.T) {
+	reader := newMapValueReader()
+	b := New(reader, page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	ptr := reader.Add([]byte("large-value"))
+	if err := b.SetViewWithRevision([]byte("a"), []byte("value-a"), 11); err != nil {
+		t.Fatalf("SetViewWithRevision: %v", err)
+	}
+	if err := b.SetPointerViewWithRevision([]byte("b"), ptr, 12); err != nil {
+		t.Fatalf("SetPointerViewWithRevision: %v", err)
+	}
+	if err := b.DeleteViewWithRevision([]byte("c"), 13); err != nil {
+		t.Fatalf("DeleteViewWithRevision: %v", err)
+	}
+
+	entries := b.SortedEntries()
+	if len(entries) != 3 {
+		t.Fatalf("entries=%d want 3", len(entries))
+	}
+	if entries[0].Revision != 11 || entries[0].Type != OpPut || string(entries[0].Value) != "value-a" {
+		t.Fatalf("entry[0]=%+v, want inline rev 11", entries[0])
+	}
+	if entries[1].Revision != 12 || !entries[1].IsPtr || entries[1].ValuePtr != ptr {
+		t.Fatalf("entry[1]=%+v, want pointer rev 12", entries[1])
+	}
+	if entries[2].Revision != 13 || entries[2].Type != OpDelete {
+		t.Fatalf("entry[2]=%+v, want delete rev 13", entries[2])
+	}
+}
+
 func TestBatchSetOps_UsesSlabPointersForLargeValues(t *testing.T) {
 	reader := newMapValueReader()
 	b := New(reader, page.DefaultInlineThreshold)

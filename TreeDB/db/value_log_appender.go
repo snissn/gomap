@@ -204,6 +204,12 @@ func (iter *pendingValueLogAppendPtrCollectingIterator) UnsafeEntry() (val []byt
 	return val, ptr, flags
 }
 
+func (iter *pendingValueLogAppendPtrCollectingIterator) UnsafeEntryWithRevision() (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	val, ptr, flags, revision = iterator.UnsafeEntryWithRevision(iter.UnsafeIterator)
+	iter.ptrCounts = collectPendingValueLogAppendPtrCount(iter.ptrCounts, ptr, flags)
+	return val, ptr, flags, revision
+}
+
 func (db *DB) releasePendingValueLogAppendPtrCollector(collector *pendingValueLogAppendPtrCollectingIterator) {
 	if db == nil || collector == nil || len(collector.ptrCounts) == 0 {
 		return

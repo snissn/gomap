@@ -597,7 +597,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 			}
 
 			// Zero-copy view
-			k, v, ptr, flags, err := n.GetLeafEntryView(idx)
+			k, v, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(idx)
 			if err != nil {
 				return node.LeafEntry{}, err
 			}
@@ -607,6 +607,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 				Value:    v,
 				ValuePtr: ptr,
 				Flags:    flags,
+				Revision: revision,
 			}, nil
 
 		default:
@@ -621,7 +622,7 @@ func (t *Tree) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	return t.GetEntry(key)
 }
 
-func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]byte, page.ValuePtr, byte, bool, error) {
+func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool, error) {
 	currRef := page.PageChildRef(t.rootPageID)
 	verifyAlways := false
 	if t.pager != nil {
@@ -649,7 +650,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					var ok bool
 					data, leafViewLease, ok, state, err = t.leafLogViewState.ReadLeafLogPageUnsafeViewWithState(ptr)
 					if err != nil {
-						return nil, page.ValuePtr{}, 0, false, err
+						return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 					}
 					if ok {
 						loadedLeafRef = true
@@ -658,7 +659,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					var ok bool
 					data, leafViewLease, ok, err = t.leafLogView.ReadLeafLogPageUnsafeView(ptr)
 					if err != nil {
-						return nil, page.ValuePtr{}, 0, false, err
+						return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 					}
 					if ok {
 						loadedLeafRef = true
@@ -671,7 +672,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						data, usedDst, state, err = t.leafLogToState.ReadLeafLogPageUnsafeToWithState(ptr, leafScratch.buf)
 						if err != nil {
 							putLeafRefPageScratch(leafScratch)
-							return nil, page.ValuePtr{}, 0, false, err
+							return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 						}
 						loadedLeafRef = true
 						leafScratchOwned = usedDst
@@ -684,7 +685,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						data, usedDst, err = t.leafLogToReader.ReadLeafLogPageUnsafeTo(ptr, leafScratch.buf)
 						if err != nil {
 							putLeafRefPageScratch(leafScratch)
-							return nil, page.ValuePtr{}, 0, false, err
+							return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 						}
 						loadedLeafRef = true
 						leafScratchOwned = usedDst
@@ -697,7 +698,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr.ValuePtr(), leafScratch.buf)
 						if err != nil {
 							putLeafRefPageScratch(leafScratch)
-							return nil, page.ValuePtr{}, 0, false, err
+							return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 						}
 						loadedLeafRef = true
 						leafScratchOwned = usedDst
@@ -709,7 +710,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						data, err = t.slabAppender.ReadUnsafeAppend(ptr.ValuePtr(), leafScratch.buf[:0])
 						if err != nil {
 							putLeafRefPageScratch(leafScratch)
-							return nil, page.ValuePtr{}, 0, false, err
+							return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 						}
 						loadedLeafRef = true
 						leafScratchOwned = true
@@ -727,7 +728,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						if leafScratchOwned {
 							putLeafRefPageScratch(leafScratch)
 						}
-						return nil, page.ValuePtr{}, 0, false, err
+						return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 					}
 					if verifiedNow && state.RecordChecksumVerified && state.CacheEntryPresent {
 						if leafViewLease != nil {
@@ -744,7 +745,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 
 		if !loadedLeafRef {
 			if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
-				return nil, page.ValuePtr{}, 0, false, err
+				return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 			}
 		}
 
@@ -752,26 +753,26 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 		case page.PageTypeInternal:
 			if depth == 0 {
 				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
-					return nil, page.ValuePtr{}, 0, false, err
+					return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 				} else if ok {
 					if len(low) > 0 && compareTreeKey(key, low) < 0 {
-						return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
+						return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, ErrKeyNotFound
 					}
 					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
-						return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
+						return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, ErrKeyNotFound
 					}
 				}
 			}
 			if n.InternalLeafLogRefsEnabled() {
 				childRef, _, err := n.SearchInternalChildRef(key)
 				if err != nil {
-					return nil, page.ValuePtr{}, 0, false, err
+					return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 				}
 				currRef = childRef
 			} else {
 				childID, _, err := n.SearchInternalChildID(key)
 				if err != nil {
-					return nil, page.ValuePtr{}, 0, false, err
+					return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 				}
 				currRef = page.PageChildRef(childID)
 			}
@@ -785,7 +786,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
-				return nil, page.ValuePtr{}, 0, false, err
+				return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 			}
 			if !found {
 				if leafViewLease != nil {
@@ -794,10 +795,10 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
-				return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
+				return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, ErrKeyNotFound
 			}
 
-			val, ptr, flags, err := n.GetLeafValueView(idx)
+			_, val, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(idx)
 			if err != nil {
 				if leafViewLease != nil {
 					leafViewLease.ReleaseLeafLogPageView()
@@ -805,7 +806,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
-				return nil, page.ValuePtr{}, 0, false, err
+				return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, err
 			}
 			if appendMode && flags&(node.FlagPointer|node.FlagTombstone) == 0 {
 				out := dst
@@ -818,7 +819,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
-				return out, ptr, flags, true, nil
+				return out, ptr, flags, revision, true, nil
 			}
 			if leafViewLease != nil {
 				leafViewLease.ReleaseLeafLogPageView()
@@ -826,7 +827,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 			if leafScratchOwned {
 				putLeafRefPageScratch(leafScratch)
 			}
-			return val, ptr, flags, false, nil
+			return val, ptr, flags, revision, false, nil
 
 		default:
 			if leafViewLease != nil {
@@ -835,15 +836,15 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 			if leafScratchOwned {
 				putLeafRefPageScratch(leafScratch)
 			}
-			return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d", n.Type())
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, fmt.Errorf("invalid page type %d", n.Type())
 		}
 	}
 
-	return nil, page.ValuePtr{}, 0, false, errors.New("tree too deep")
+	return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, errors.New("tree too deep")
 }
 
 func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
-	val, ptr, flags, _, err := t.lookupLeafValueView(key, nil, false)
+	val, ptr, flags, _, _, err := t.lookupLeafValueView(key, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -943,7 +944,7 @@ func (t *Tree) appendPointerValueForKey(key []byte, ptr page.ValuePtr, dst []byt
 // GetAppend appends the value for key to dst and returns the grown slice.
 // If key is missing/tombstoned, it returns dst and ErrKeyNotFound.
 func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
-	val, ptr, flags, appendedDirect, err := t.lookupLeafValueView(key, dst, true)
+	val, ptr, flags, _, appendedDirect, err := t.lookupLeafValueView(key, dst, true)
 	if err != nil {
 		return dst, err
 	}
@@ -963,6 +964,34 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 	recordTreeGetAppendInline(len(val))
 	return append(dst, val...), nil
+}
+
+// GetVersionedAppend appends the value for key to dst and returns the entry
+// revision stored beside the value/pointer metadata. Missing keys return
+// ErrKeyNotFound and LegacyEntryRevision; tombstones return ErrKeyNotFound with
+// their stored tombstone revision.
+func (t *Tree) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	val, ptr, flags, revision, appendedDirect, err := t.lookupLeafValueView(key, dst, true)
+	if err != nil {
+		return dst, revision, err
+	}
+	if appendedDirect {
+		recordTreeGetAppendInline(len(val) - len(dst))
+		return val, revision, nil
+	}
+	if flags&node.FlagTombstone != 0 {
+		return dst, revision, ErrKeyNotFound
+	}
+	if flags&node.FlagPointer != 0 {
+		out, err := t.appendPointerValueForKey(key, ptr, dst)
+		return out, revision, err
+	}
+	if val == nil {
+		recordTreeGetAppendInline(0)
+		return dst, revision, nil
+	}
+	recordTreeGetAppendInline(len(val))
+	return append(dst, val...), revision, nil
 }
 
 type getManyLeafProbe struct {

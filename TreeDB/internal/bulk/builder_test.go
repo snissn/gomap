@@ -158,6 +158,60 @@ func (m *mockKVIterator) Error() error                { return nil }
 func (m *mockKVIterator) Close() error                { return nil }
 func (m *mockKVIterator) Domain() (start, end []byte) { return nil, nil }
 
+type mockRevisionKVIterator struct {
+	mockKVIterator
+	revisions []page.EntryRevision
+}
+
+func (m *mockRevisionKVIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	revision := page.LegacyEntryRevision
+	if m.idx >= 0 && m.idx < len(m.revisions) {
+		revision = m.revisions[m.idx]
+	}
+	return m.UnsafeValue(), page.ValuePtr{}, node.FlagInline, revision
+}
+
+func TestBuildWithOptionsSparseEntryRevisionsDoNotVersionLegacyLeaves(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	iter := &mockRevisionKVIterator{}
+	const n = 128
+	for i := 0; i < n; i++ {
+		iter.keys = append(iter.keys, []byte(fmt.Sprintf("key-%04d", i)))
+		iter.values = append(iter.values, bytes.Repeat([]byte{byte('a' + i%26)}, 96))
+		iter.revisions = append(iter.revisions, page.LegacyEntryRevision)
+	}
+	iter.revisions[96] = 12345
+
+	leafLog := &mockLeafPageLog{}
+	if _, err := BuildWithOptions(iter, &MockAllocator{p: p}, p, BuildOptions{LeafPageLog: leafLog}); err != nil {
+		t.Fatalf("BuildWithOptions: %v", err)
+	}
+	if len(leafLog.pages) < 2 {
+		t.Fatalf("leaf pages=%d want at least 2", len(leafLog.pages))
+	}
+	first := node.NewNodeView(leafLog.pages[0])
+	if first.LeafEntryRevisionsEnabled() {
+		t.Fatal("first legacy-only leaf unexpectedly encoded entry revisions")
+	}
+	foundRevisionLeaf := false
+	for _, data := range leafLog.pages {
+		n := node.NewNodeView(data)
+		if n.LeafEntryRevisionsEnabled() {
+			foundRevisionLeaf = true
+			break
+		}
+	}
+	if !foundRevisionLeaf {
+		t.Fatal("no leaf encoded the non-legacy entry revision")
+	}
+}
+
 func TestBuildWithOptions_EmptyIteratorLeafPageLogReturnsLeafRefRoot(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)

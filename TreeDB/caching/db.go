@@ -3426,8 +3426,126 @@ type backendBatchPointerSetterView interface {
 	SetPointerView(key []byte, ptr page.ValuePtr) error
 }
 
+type backendBatchSetRevision interface {
+	SetWithRevision(key, value []byte, revision page.EntryRevision) error
+}
+
+type backendBatchSetViewRevision interface {
+	SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
+}
+
+type backendBatchDeleteRevision interface {
+	DeleteWithRevision(key []byte, revision page.EntryRevision) error
+}
+
+type backendBatchDeleteViewRevision interface {
+	DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
+}
+
+type backendBatchPointerSetterRevision interface {
+	SetPointerWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error
+}
+
+type backendBatchPointerSetterViewRevision interface {
+	SetPointerViewWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error
+}
+
+type backendBatchRevisionOps struct {
+	set     backendBatchSetRevision
+	setView backendBatchSetViewRevision
+	del     backendBatchDeleteRevision
+	delView backendBatchDeleteViewRevision
+	ptr     backendBatchPointerSetterRevision
+	ptrView backendBatchPointerSetterViewRevision
+}
+
+func resolveBackendBatchRevisionOps(backendBatch batch.Interface) backendBatchRevisionOps {
+	ops := backendBatchRevisionOps{}
+	ops.set, _ = backendBatch.(backendBatchSetRevision)
+	ops.setView, _ = backendBatch.(backendBatchSetViewRevision)
+	ops.del, _ = backendBatch.(backendBatchDeleteRevision)
+	ops.delView, _ = backendBatch.(backendBatchDeleteViewRevision)
+	ops.ptr, _ = backendBatch.(backendBatchPointerSetterRevision)
+	ops.ptrView, _ = backendBatch.(backendBatchPointerSetterViewRevision)
+	return ops
+}
+
 type backendBatchCommandWALPublisher interface {
 	SetCommandWALPublish(appliedLSN uint64, covered []backenddb.CommandWALLSNRange) error
+}
+
+func appendBackendBatchPointOp(
+	backendBatch batch.Interface,
+	op batch.Entry,
+	stableView bool,
+	sv backendBatchSetViewer,
+	dv backendBatchDeleteViewer,
+	psv backendBatchPointerSetterView,
+	ps backendBatchPointerSetter,
+	revOps backendBatchRevisionOps,
+) error {
+	if backendBatch == nil {
+		return errors.New("cachingdb: missing backend batch")
+	}
+	if op.Revision != page.LegacyEntryRevision {
+		switch {
+		case op.Type == batch.OpDelete:
+			if stableView && revOps.delView != nil {
+				return revOps.delView.DeleteViewWithRevision(op.Key, op.Revision)
+			}
+			if revOps.del != nil {
+				return revOps.del.DeleteWithRevision(op.Key, op.Revision)
+			}
+		case op.IsPtr:
+			if stableView && revOps.ptrView != nil {
+				return revOps.ptrView.SetPointerViewWithRevision(op.Key, op.ValuePtr, op.Revision)
+			}
+			if revOps.ptr != nil {
+				return revOps.ptr.SetPointerWithRevision(op.Key, op.ValuePtr, op.Revision)
+			}
+		default:
+			if stableView && revOps.setView != nil {
+				return revOps.setView.SetViewWithRevision(op.Key, op.Value, op.Revision)
+			}
+			if revOps.set != nil {
+				return revOps.set.SetWithRevision(op.Key, op.Value, op.Revision)
+			}
+		}
+		if !stableView {
+			op.Key = append([]byte(nil), op.Key...)
+			if op.Type == batch.OpPut && !op.IsPtr && op.Value != nil {
+				op.Value = append([]byte(nil), op.Value...)
+			}
+		}
+		var single [1]batch.Entry
+		single[0] = op
+		return backendBatch.SetOps(single[:])
+	}
+	switch {
+	case op.Type == batch.OpDelete:
+		if stableView && dv != nil {
+			return dv.DeleteView(op.Key)
+		}
+		return backendBatch.Delete(op.Key)
+	case op.IsPtr:
+		if stableView && psv != nil {
+			return psv.SetPointerView(op.Key, op.ValuePtr)
+		}
+		if ps != nil {
+			return ps.SetPointer(op.Key, op.ValuePtr)
+		}
+		if !stableView {
+			op.Key = append([]byte(nil), op.Key...)
+		}
+		var single [1]batch.Entry
+		single[0] = op
+		return backendBatch.SetOps(single[:])
+	default:
+		if stableView && sv != nil {
+			return sv.SetView(op.Key, op.Value)
+		}
+		return backendBatch.Set(op.Key, op.Value)
+	}
 }
 
 type checkpointCommandWALPublish struct {
@@ -3465,6 +3583,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	memLen int,
 	sync bool,
 	laneID int,
+	stableUnsafe bool,
 ) (int, error) {
 	if db == nil {
 		return 0, nil
@@ -3482,6 +3601,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	dv, _ := backendBatch.(backendBatchDeleteViewer)
 	psv, _ := backendBatch.(backendBatchPointerSetterView)
 	ps, _ := backendBatch.(backendBatchPointerSetter)
+	revOps := resolveBackendBatchRevisionOps(backendBatch)
 	reserveHint := memLen
 	if db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
 		reserveHint = db.flushBackendMaxEntries
@@ -3490,6 +3610,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 
 	var ptrKeys [][]byte
 	var ptrVals [][]byte
+	var ptrRevisions []page.EntryRevision
 	defer func() {
 		putValueLogKeys(ptrKeys)
 		putValueLogKeys(ptrVals)
@@ -3516,14 +3637,10 @@ func (db *DB) flushDeferredValueLogMemtable(
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if iter.IsDeleted() {
-			var err error
-			if dv != nil {
-				err = dv.DeleteView(key)
-			} else {
-				err = backendBatch.Delete(key)
-			}
-			if err != nil {
+		val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
+		if flags&node.FlagTombstone != 0 {
+			op := batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision}
+			if err := appendBackendBatchPointOp(backendBatch, op, stableUnsafe, sv, dv, psv, ps, revOps); err != nil {
 				return 0, err
 			}
 			emittedOps++
@@ -3531,17 +3648,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 			continue
 		}
 
-		val, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
-			var err error
-			if psv != nil {
-				err = psv.SetPointerView(key, ptr)
-			} else if ps != nil {
-				err = ps.SetPointer(key, ptr)
-			} else {
-				return 0, errors.New("cachingdb: backend batch missing SetPointer")
-			}
-			if err != nil {
+			op := batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision}
+			if err := appendBackendBatchPointOp(backendBatch, op, stableUnsafe, sv, dv, psv, ps, revOps); err != nil {
 				return 0, err
 			}
 			emittedOps++
@@ -3569,17 +3678,18 @@ func (db *DB) flushDeferredValueLogMemtable(
 			valCopy := append([]byte(nil), val...)
 			ptrKeys = append(ptrKeys, keyCopy)
 			ptrVals = append(ptrVals, valCopy)
+			if revision != page.LegacyEntryRevision || ptrRevisions != nil {
+				if ptrRevisions == nil {
+					ptrRevisions = make([]page.EntryRevision, len(ptrKeys)-1, cap(ptrKeys))
+				}
+				ptrRevisions = append(ptrRevisions, revision)
+			}
 			iter.Next()
 			continue
 		}
 
-		var err error
-		if sv != nil {
-			err = sv.SetView(key, val)
-		} else {
-			err = backendBatch.Set(key, val)
-		}
-		if err != nil {
+		op := batch.Entry{Type: batch.OpPut, Key: key, Value: val, Revision: revision}
+		if err := appendBackendBatchPointOp(backendBatch, op, stableUnsafe, sv, dv, psv, ps, revOps); err != nil {
 			return 0, err
 		}
 		emittedOps++
@@ -3594,6 +3704,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 	}
 	if len(ptrKeys) != len(ptrVals) {
 		return 0, errors.New("cachingdb: internal deferred value-log mismatch")
+	}
+	if ptrRevisions != nil && len(ptrRevisions) != len(ptrKeys) {
+		return 0, errors.New("cachingdb: internal deferred value-log revision mismatch")
 	}
 	if err := ensureVlogLane(); err != nil {
 		return 0, err
@@ -3637,16 +3750,13 @@ func (db *DB) flushDeferredValueLogMemtable(
 		}
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			key := ptrKeys[srcPos]
-			if psv != nil {
-				if err := psv.SetPointerView(key, ptr); err != nil {
-					return 0, err
-				}
-			} else if ps != nil {
-				if err := ps.SetPointer(key, ptr); err != nil {
-					return 0, err
-				}
-			} else {
-				return 0, errors.New("cachingdb: backend batch missing SetPointer")
+			revision := page.LegacyEntryRevision
+			if ptrRevisions != nil {
+				revision = ptrRevisions[srcPos]
+			}
+			op := batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision}
+			if err := appendBackendBatchPointOp(backendBatch, op, true, sv, dv, psv, ps, revOps); err != nil {
+				return 0, err
 			}
 			emittedOps++
 		}
@@ -3674,6 +3784,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	dv, _ := backendBatch.(backendBatchDeleteViewer)
 	psv, _ := backendBatch.(backendBatchPointerSetterView)
 	ps, _ := backendBatch.(backendBatchPointerSetter)
+	revOps := resolveBackendBatchRevisionOps(backendBatch)
 
 	chunkCap := db.flushBuildChunkCap
 	if chunkCap <= 0 {
@@ -3733,6 +3844,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	}
 	ptrKeys := getValueLogKeys(ptrCap)
 	ptrVals := getValueLogKeys(ptrCap)
+	var ptrRevisions []page.EntryRevision
 	defer func() {
 		putValueLogKeys(ptrKeys)
 		putValueLogKeys(ptrVals)
@@ -3752,17 +3864,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return nil
 	}
 
-	emitPointer := func(key []byte, ptr page.ValuePtr) error {
-		if psv != nil {
-			if err := psv.SetPointerView(key, ptr); err != nil {
-				return err
-			}
-		} else if ps != nil {
-			if err := ps.SetPointer(key, ptr); err != nil {
-				return err
-			}
-		} else {
-			return errors.New("cachingdb: backend batch missing SetPointer")
+	emitPointer := func(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
+		op := batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision}
+		if err := appendBackendBatchPointOp(backendBatch, op, true, sv, dv, psv, ps, revOps); err != nil {
+			return err
 		}
 		backendPendingOps++
 		return nil
@@ -3775,10 +3880,16 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if !allowPointers {
 			ptrKeys = ptrKeys[:0]
 			ptrVals = ptrVals[:0]
+			if ptrRevisions != nil {
+				ptrRevisions = ptrRevisions[:0]
+			}
 			return nil
 		}
 		if len(ptrKeys) != len(ptrVals) {
 			return errors.New("cachingdb: deferred inline pointer grouping mismatch")
+		}
+		if ptrRevisions != nil && len(ptrRevisions) != len(ptrKeys) {
+			return errors.New("cachingdb: deferred inline pointer revision mismatch")
 		}
 		if err := ensureVlogLane(); err != nil {
 			return err
@@ -3791,6 +3902,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			}
 			chunkKeys := ptrKeys[chunkStart:chunkEnd]
 			chunkVals := ptrVals[chunkStart:chunkEnd]
+			var chunkRevisions []page.EntryRevision
+			if ptrRevisions != nil {
+				chunkRevisions = ptrRevisions[chunkStart:chunkEnd]
+			}
 
 			records, groups, outerArena, err := db.buildOuterLeafValueRecords(chunkKeys, chunkVals)
 			if err != nil {
@@ -3829,7 +3944,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					return errors.New("cachingdb: deferred inline pointer source group out of range")
 				}
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
-					if err := emitPointer(chunkKeys[srcPos], ptr); err != nil {
+					revision := page.LegacyEntryRevision
+					if chunkRevisions != nil {
+						revision = chunkRevisions[srcPos]
+					}
+					if err := emitPointer(chunkKeys[srcPos], ptr, revision); err != nil {
 						putValueLogPtrs(ptrs)
 						return err
 					}
@@ -3843,6 +3962,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 		ptrKeys = ptrKeys[:0]
 		ptrVals = ptrVals[:0]
+		if ptrRevisions != nil {
+			ptrRevisions = ptrRevisions[:0]
+		}
 		return nil
 	}
 
@@ -3873,13 +3995,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
 			}
-			var err error
-			if dv != nil {
-				err = dv.DeleteView(entry.Key)
-			} else {
-				err = backendBatch.Delete(entry.Key)
-			}
-			if err != nil {
+			if err := appendBackendBatchPointOp(backendBatch, entry, true, sv, dv, psv, ps, revOps); err != nil {
 				return 0, err
 			}
 			backendPendingOps++
@@ -3888,7 +4004,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
 			}
-			if err := emitPointer(entry.Key, entry.ValuePtr); err != nil {
+			if err := emitPointer(entry.Key, entry.ValuePtr, entry.Revision); err != nil {
 				return 0, err
 			}
 		default:
@@ -3902,17 +4018,17 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				valCopy := append([]byte(nil), entry.Value...)
 				ptrKeys = append(ptrKeys, keyCopy)
 				ptrVals = append(ptrVals, valCopy)
+				if entry.Revision != page.LegacyEntryRevision || ptrRevisions != nil {
+					if ptrRevisions == nil {
+						ptrRevisions = make([]page.EntryRevision, len(ptrKeys)-1, cap(ptrKeys))
+					}
+					ptrRevisions = append(ptrRevisions, entry.Revision)
+				}
 			} else {
 				if err := flushInlinePointerGroup(); err != nil {
 					return 0, err
 				}
-				var err error
-				if sv != nil {
-					err = sv.SetView(entry.Key, entry.Value)
-				} else {
-					err = backendBatch.Set(entry.Key, entry.Value)
-				}
-				if err != nil {
+				if err := appendBackendBatchPointOp(backendBatch, entry, true, sv, dv, psv, ps, revOps); err != nil {
 					return 0, err
 				}
 				backendPendingOps++
@@ -9877,7 +9993,25 @@ func cachedBatchWriteUseSteal(db *DB, mt memtable.Table) (useSteal bool, suppres
 	return true, false
 }
 
-func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
+func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte, revision page.EntryRevision) {
+	if revision != page.LegacyEntryRevision {
+		if useSteal {
+			if writer, ok := mt.(memtable.RevisionStealTable); ok {
+				writer.SetEntryStealWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, revision)
+				return
+			}
+		}
+		if writer, ok := mt.(memtable.RevisionTable); ok {
+			writer.SetEntryWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, revision)
+			return
+		}
+		if useSteal {
+			mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
+			return
+		}
+		mt.SetEntry(key, nil, page.ValuePtr{}, node.FlagTombstone)
+		return
+	}
 	if useSteal {
 		mt.DeleteSteal(key)
 		return
@@ -9904,12 +10038,30 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 			memVal = op.Value
 		}
 		if useSteal {
+			if op.Revision != page.LegacyEntryRevision {
+				if writer, ok := mt.(memtable.RevisionStealTable); ok {
+					writer.SetEntryStealWithRevision(op.Key, memVal, op.ValuePtr, node.FlagPointer, op.Revision)
+					return
+				}
+			}
 			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 			return
 		}
 		if allowBorrow {
+			if op.Revision != page.LegacyEntryRevision {
+				if borrower, ok := mt.(memtable.RevisionValueBorrower); ok && len(memVal) > 0 {
+					borrower.SetEntryBorrowValueWithRevision(op.Key, memVal, op.ValuePtr, node.FlagPointer, op.Revision)
+					return
+				}
+			}
 			if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
 				borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				return
+			}
+		}
+		if op.Revision != page.LegacyEntryRevision {
+			if writer, ok := mt.(memtable.RevisionTable); ok {
+				writer.SetEntryWithRevision(op.Key, memVal, op.ValuePtr, node.FlagPointer, op.Revision)
 				return
 			}
 		}
@@ -9917,12 +10069,34 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 		return
 	}
 	if useSteal {
+		if op.Revision != page.LegacyEntryRevision {
+			if writer, ok := mt.(memtable.RevisionStealTable); ok {
+				writer.SetEntryStealWithRevision(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision)
+				return
+			}
+			if writer, ok := mt.(memtable.RevisionTable); ok {
+				writer.SetEntryWithRevision(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision)
+				return
+			}
+		}
 		mt.SetSteal(op.Key, op.Value)
 		return
 	}
 	if allowBorrow {
+		if op.Revision != page.LegacyEntryRevision {
+			if borrower, ok := mt.(memtable.RevisionValueBorrower); ok && len(op.Value) > 0 {
+				borrower.SetEntryBorrowValueWithRevision(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision)
+				return
+			}
+		}
 		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
 			borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			return
+		}
+	}
+	if op.Revision != page.LegacyEntryRevision {
+		if writer, ok := mt.(memtable.RevisionTable); ok {
+			writer.SetEntryWithRevision(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision)
 			return
 		}
 	}
@@ -12073,11 +12247,12 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
 	for iter.Valid() {
-		val, ptr, flags := iter.UnsafeEntry()
+		val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
 		if flags&node.FlagTombstone != 0 {
 			ops = append(ops, batch.Entry{
-				Type: batch.OpDelete,
-				Key:  iter.UnsafeKey(),
+				Type:     batch.OpDelete,
+				Key:      iter.UnsafeKey(),
+				Revision: revision,
 			})
 		} else if flags&node.FlagPointer != 0 {
 			ops = append(ops, batch.Entry{
@@ -12085,12 +12260,14 @@ func (job flushBuildJob) run(closeCh <-chan struct{}) {
 				Key:      iter.UnsafeKey(),
 				ValuePtr: ptr,
 				IsPtr:    true,
+				Revision: revision,
 			})
 		} else {
 			ops = append(ops, batch.Entry{
-				Type:  batch.OpPut,
-				Key:   iter.UnsafeKey(),
-				Value: val,
+				Type:     batch.OpPut,
+				Key:      iter.UnsafeKey(),
+				Value:    val,
+				Revision: revision,
 			})
 		}
 		iter.Next()
@@ -13643,11 +13820,12 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 		if i >= len(dst) {
 			return 0, fmt.Errorf("cachingdb: collectOpsInto overflow (have=%d need>=%d)", len(dst), i+1)
 		}
-		val, ptr, flags := iter.UnsafeEntry()
+		val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
 		if flags&node.FlagTombstone != 0 {
 			dst[i] = batch.Entry{
-				Type: batch.OpDelete,
-				Key:  iter.UnsafeKey(),
+				Type:     batch.OpDelete,
+				Key:      iter.UnsafeKey(),
+				Revision: revision,
 			}
 		} else if flags&node.FlagPointer != 0 {
 			dst[i] = batch.Entry{
@@ -13655,12 +13833,14 @@ func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
 				Key:      iter.UnsafeKey(),
 				ValuePtr: ptr,
 				IsPtr:    true,
+				Revision: revision,
 			}
 		} else {
 			dst[i] = batch.Entry{
-				Type:  batch.OpPut,
-				Key:   iter.UnsafeKey(),
-				Value: val,
+				Type:     batch.OpPut,
+				Key:      iter.UnsafeKey(),
+				Value:    val,
+				Revision: revision,
 			}
 		}
 		i++
@@ -13816,21 +13996,21 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 	ops = ops[:0]
 	stableUnsafe := stableUnsafeIteratorSlices(mem)
 	for iter.Valid() {
-		val, ptr, flags := iter.UnsafeEntry()
+		val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
 		key := iter.UnsafeKey()
 		if !stableUnsafe {
 			key = append([]byte(nil), key...)
 		}
 		if flags&node.FlagTombstone != 0 {
-			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key})
+			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision})
 			deleteOps++
 		} else if flags&node.FlagPointer != 0 {
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true})
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision})
 		} else {
 			if !stableUnsafe && val != nil {
 				val = append([]byte(nil), val...)
 			}
-			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val})
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: val, Revision: revision})
 		}
 		iter.Next()
 		if len(ops) >= cap(ops) {
@@ -26908,7 +27088,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
 			var err error
-			backendPendingOps, err = db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID)
+			backendPendingOps, err = db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, stableUnsafeIteratorSlices(mem))
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
@@ -26957,7 +27137,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			dv, _ := backendBatch.(backendBatchDeleteViewer)
 			psv, _ := backendBatch.(backendBatchPointerSetterView)
 			ps, _ := backendBatch.(backendBatchPointerSetter)
-			var single [1]batch.Entry
+			revOps := resolveBackendBatchRevisionOps(backendBatch)
 
 			flushBackendChunk := func() error {
 				if !chunkBackend || backendPendingOps < backendEntriesCap {
@@ -26984,6 +27164,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				dv, _ = backendBatch.(backendBatchDeleteViewer)
 				psv, _ = backendBatch.(backendBatchPointerSetterView)
 				ps, _ = backendBatch.(backendBatchPointerSetter)
+				revOps = resolveBackendBatchRevisionOps(backendBatch)
 				backendPendingOps = 0
 				return nil
 			}
@@ -26991,15 +27172,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			stableUnsafe := stableUnsafeIteratorSlices(mem)
 			for iter.Valid() {
 				key := iter.UnsafeKey()
-				val, ptr, flags := iter.UnsafeEntry()
+				val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
 				if flags&node.FlagTombstone != 0 {
-					var err error
-					if stableUnsafe && dv != nil {
-						err = dv.DeleteView(key)
-					} else {
-						err = backendBatch.Delete(key)
-					}
-					if err != nil {
+					op := batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision}
+					if err := appendBackendBatchPointOp(backendBatch, op, stableUnsafe, sv, dv, psv, ps, revOps); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
@@ -27013,32 +27189,12 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
-					if stableUnsafe && psv != nil {
-						if err := psv.SetPointerView(key, ptr); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else if ps != nil {
-						if err := ps.SetPointer(key, ptr); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else {
-						entryKey := key
-						if !stableUnsafe {
-							entryKey = append([]byte(nil), key...)
-						}
-						single[0] = batch.Entry{Type: batch.OpPut, Key: entryKey, ValuePtr: ptr, IsPtr: true}
-						if err := backendBatch.SetOps(single[:]); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
+					op := batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision}
+					if err := appendBackendBatchPointOp(backendBatch, op, stableUnsafe, sv, dv, psv, ps, revOps); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
 					}
 					backendPendingOps++
 					if err := flushBackendChunk(); err != nil {
@@ -27048,13 +27204,8 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						return false
 					}
 				} else {
-					var err error
-					if stableUnsafe && sv != nil {
-						err = sv.SetView(key, val)
-					} else {
-						err = backendBatch.Set(key, val)
-					}
-					if err != nil {
+					op := batch.Entry{Type: batch.OpPut, Key: key, Value: val, Revision: revision}
+					if err := appendBackendBatchPointOp(backendBatch, op, stableUnsafe, sv, dv, psv, ps, revOps); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
 						_ = backendBatch.Close()
@@ -27788,6 +27939,64 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	return dst, false, nil
 }
 
+func (db *DB) appendMemtableEntryValueWithRevision(key, dst []byte, val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) ([]byte, page.EntryRevision, error) {
+	if flags&node.FlagTombstone != 0 {
+		return dst, revision, tree.ErrKeyNotFound
+	}
+	if flags&node.FlagPointer != 0 {
+		if val == nil {
+			out, err := db.readValueLogAppend(key, ptr, dst)
+			if err != nil {
+				return dst, revision, err
+			}
+			return out, revision, nil
+		}
+		return append(dst, val...), revision, nil
+	}
+	if val == nil {
+		return dst, revision, nil
+	}
+	return append(dst, val...), revision, nil
+}
+
+func (db *DB) getMemtableAppendWithRevision(key, dst []byte) ([]byte, page.EntryRevision, bool, error) {
+	view := db.retainMemtableView()
+	if view != nil {
+		defer db.releaseMemtableView(view)
+		if memtableViewHasRangeSpans(view) {
+			rootSnap, haveRootSnap := livePointRootDomainSnapshot(view, db, key)
+			val, ptr, flags, revision, found, _ := db.lookupViewEntryWithRangeSpansAndRootRevisionSource(view, key, true, rootSnap, haveRootSnap)
+			if found {
+				out, revision, err := db.appendMemtableEntryValueWithRevision(key, dst, val, ptr, flags, revision)
+				return out, revision, true, err
+			}
+			return dst, page.LegacyEntryRevision, false, nil
+		}
+		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
+		if db.canBypassMemtableReadWithSnapshot(view, key, snap, haveSnapshot) {
+			return dst, page.LegacyEntryRevision, false, nil
+		}
+		if haveSnapshot {
+			val, ptr, flags, revision, found := snap.getEntryWithRevision(key)
+			if found {
+				out, revision, err := db.appendMemtableEntryValueWithRevision(key, dst, val, ptr, flags, revision)
+				return out, revision, true, err
+			}
+			return dst, page.LegacyEntryRevision, false, nil
+		}
+	}
+	val, ptr, flags, revision, found := db.rawPointRootDomainEntryWithRevision(key)
+	if found {
+		out, revision, err := db.appendMemtableEntryValueWithRevision(key, dst, val, ptr, flags, revision)
+		return out, revision, true, err
+	}
+	return dst, page.LegacyEntryRevision, false, nil
+}
+
+type backendVersionedAppender interface {
+	GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error)
+}
+
 type backendManyGetter interface {
 	GetMany(keys [][]byte) ([][]byte, error)
 }
@@ -27923,6 +28132,25 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		maybeRecordDBGetCallerSample(len(val))
 	}
 	return val, err
+}
+
+func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
+	key = normalizeRawKVPointKey(key)
+	scratch := getOwnedReadScratch()
+	defer putOwnedReadScratch(scratch)
+
+	val, revision, err := db.GetVersionedAppend(key, scratch.buf[:0])
+	if err != nil {
+		if err == tree.ErrKeyNotFound {
+			return nil, revision, nil
+		}
+		return nil, revision, err
+	}
+	if len(val) == 0 {
+		return []byte{}, revision, nil
+	}
+	maybeRecordDBGetCallerSample(len(val))
+	return ownedReadResult(val, scratch), revision, nil
 }
 
 // GetMany returns safe copies of values for keys.
@@ -28115,6 +28343,27 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, err
 	}
 	return db.backend.GetAppend(key, dst)
+}
+
+func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	key = normalizeRawKVPointKey(key)
+	db.noteRead()
+	out, revision, found, err := db.getMemtableAppendWithRevision(key, dst)
+	if err != nil {
+		return dst, revision, err
+	}
+	if found {
+		return out, revision, nil
+	}
+
+	if err := db.flushValueLogForBackendRead(); err != nil {
+		return dst, page.LegacyEntryRevision, err
+	}
+	if versioned, ok := db.backend.(backendVersionedAppender); ok {
+		return versioned.GetVersionedAppend(key, dst)
+	}
+	out, err = db.backend.GetAppend(key, dst)
+	return out, page.LegacyEntryRevision, err
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
@@ -32491,6 +32740,10 @@ func (b *Batch) shouldCopyValueToPtrArena(key, value []byte) bool {
 }
 
 func (b *Batch) Set(key, value []byte) error {
+	return b.SetWithRevision(key, value, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
@@ -32515,6 +32768,20 @@ func (b *Batch) Set(key, value []byte) error {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
 		// Use the backend's view method with owned copies to avoid aliasing.
+		if revision != page.LegacyEntryRevision {
+			if sv, ok := b.backend.(interface {
+				SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
+			}); ok {
+				return sv.SetViewWithRevision(keyCopy, valCopy, revision)
+			}
+			if s, ok := b.backend.(interface {
+				SetWithRevision(key, value []byte, revision page.EntryRevision) error
+			}); ok {
+				return s.SetWithRevision(keyCopy, valCopy, revision)
+			}
+			single := [1]batch.Entry{{Type: batch.OpPut, Key: keyCopy, Value: valCopy, Revision: revision}}
+			return b.backend.SetOps(single[:])
+		}
 		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
 			return sv.SetView(keyCopy, valCopy)
 		}
@@ -32536,9 +32803,10 @@ func (b *Batch) Set(key, value []byte) error {
 	// The backend will handle promotion to the value log if needed during
 	// writeBypass, or standard write will handle it via the journal/memtable.
 	b.entries = append(b.entries, batch.Entry{
-		Type:  batch.OpPut,
-		Key:   keyCopy,
-		Value: valCopy,
+		Type:     batch.OpPut,
+		Key:      keyCopy,
+		Value:    valCopy,
+		Revision: revision,
 	})
 	b.noteEntryAppend()
 	b.size += len(keyCopy) + len(valCopy)
@@ -32550,17 +32818,25 @@ func (b *Batch) Set(key, value []byte) error {
 // SetView records a Put without copying key/value bytes. Callers must treat
 // key/value as immutable until the batch is written or closed.
 func (b *Batch) SetView(key, value []byte) error {
+	return b.SetViewWithRevision(key, value, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
-	return b.SetViewValidated(key, value)
+	return b.SetViewValidatedWithRevision(key, value, revision)
 }
 
 // SetViewValidated is SetView for callers that already performed public input
 // validation. The caller must still keep key/value immutable until Write/Close.
 func (b *Batch) SetViewValidated(key, value []byte) error {
+	return b.SetViewValidatedWithRevision(key, value, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.EntryRevision) error {
 	if hotPathStatsEnabled {
 		batchSetViewCallsTotal.Add(1)
 		batchSetViewBytesTotal.Add(uint64(len(key) + len(value)))
@@ -32569,6 +32845,20 @@ func (b *Batch) SetViewValidated(key, value []byte) error {
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key) + len(value)
+		if revision != page.LegacyEntryRevision {
+			if sv, ok := b.backend.(interface {
+				SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
+			}); ok {
+				return sv.SetViewWithRevision(key, value, revision)
+			}
+			if s, ok := b.backend.(interface {
+				SetWithRevision(key, value []byte, revision page.EntryRevision) error
+			}); ok {
+				return s.SetWithRevision(key, value, revision)
+			}
+			single := [1]batch.Entry{{Type: batch.OpPut, Key: key, Value: value, Revision: revision}}
+			return b.backend.SetOps(single[:])
+		}
 		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
 			return sv.SetView(key, value)
 		}
@@ -32587,9 +32877,10 @@ func (b *Batch) SetViewValidated(key, value []byte) error {
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
-		Type:  batch.OpPut,
-		Key:   key,
-		Value: value,
+		Type:     batch.OpPut,
+		Key:      key,
+		Value:    value,
+		Revision: revision,
 	})
 	b.hasViewOps = true
 	b.noteEntryAppend()
@@ -32600,6 +32891,10 @@ func (b *Batch) SetViewValidated(key, value []byte) error {
 }
 
 func (b *Batch) Delete(key []byte) error {
+	return b.DeleteWithRevision(key, page.LegacyEntryRevision)
+}
+
+func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
@@ -32609,6 +32904,20 @@ func (b *Batch) Delete(key []byte) error {
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
+		if revision != page.LegacyEntryRevision {
+			if dv, ok := b.backend.(interface {
+				DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
+			}); ok {
+				return dv.DeleteViewWithRevision(keyCopy, revision)
+			}
+			if d, ok := b.backend.(interface {
+				DeleteWithRevision(key []byte, revision page.EntryRevision) error
+			}); ok {
+				return d.DeleteWithRevision(keyCopy, revision)
+			}
+			single := [1]batch.Entry{{Type: batch.OpDelete, Key: keyCopy, Revision: revision}}
+			return b.backend.SetOps(single[:])
+		}
 		if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
 			return dv.DeleteView(keyCopy)
 		}
@@ -32627,8 +32936,9 @@ func (b *Batch) Delete(key []byte) error {
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
-		Type: batch.OpDelete,
-		Key:  keyCopy,
+		Type:     batch.OpDelete,
+		Key:      keyCopy,
+		Revision: revision,
 	})
 	b.noteEntryAppend()
 	b.size += len(keyCopy)
@@ -32676,16 +32986,24 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 // DeleteView records a Delete without copying key bytes. Callers must treat
 // key as immutable until the batch is written or closed.
 func (b *Batch) DeleteView(key []byte) error {
+	return b.DeleteViewWithRevision(key, page.LegacyEntryRevision)
+}
+
+func (b *Batch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
 	key = normalizeRawKVPointKey(key)
-	return b.DeleteViewValidated(key)
+	return b.DeleteViewValidatedWithRevision(key, revision)
 }
 
 // DeleteViewValidated is DeleteView for callers that already performed public
 // input validation. The caller must keep key immutable until Write/Close.
 func (b *Batch) DeleteViewValidated(key []byte) error {
+	return b.DeleteViewValidatedWithRevision(key, page.LegacyEntryRevision)
+}
+
+func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryRevision) error {
 	if hotPathStatsEnabled {
 		batchDeleteViewCallsTotal.Add(1)
 		batchDeleteViewBytesTotal.Add(uint64(len(key)))
@@ -32694,6 +33012,20 @@ func (b *Batch) DeleteViewValidated(key []byte) error {
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key)
+		if revision != page.LegacyEntryRevision {
+			if dv, ok := b.backend.(interface {
+				DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
+			}); ok {
+				return dv.DeleteViewWithRevision(key, revision)
+			}
+			if d, ok := b.backend.(interface {
+				DeleteWithRevision(key []byte, revision page.EntryRevision) error
+			}); ok {
+				return d.DeleteWithRevision(key, revision)
+			}
+			single := [1]batch.Entry{{Type: batch.OpDelete, Key: key, Revision: revision}}
+			return b.backend.SetOps(single[:])
+		}
 		if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
 			return dv.DeleteView(key)
 		}
@@ -32712,8 +33044,9 @@ func (b *Batch) DeleteViewValidated(key []byte) error {
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
-		Type: batch.OpDelete,
-		Key:  key,
+		Type:     batch.OpDelete,
+		Key:      key,
+		Revision: revision,
 	})
 	b.hasViewOps = true
 	b.noteEntryAppend()
@@ -33858,7 +34191,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
 					last = key
-					memtableBatchDelete(shard.mem, useSteal, key)
+					memtableBatchDelete(shard.mem, useSteal, key, b.entries[entryIdx].Revision)
 				}
 				shard.rng.add(first)
 				if len(idxs) > 1 {
@@ -33868,7 +34201,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			} else {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
-					memtableBatchDelete(shard.mem, useSteal, key)
+					memtableBatchDelete(shard.mem, useSteal, key, b.entries[entryIdx].Revision)
 					shard.rng.add(key)
 					b.db.noteWriteKey(key)
 				}
@@ -33939,7 +34272,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					} else {
 						for _, op := range entries {
 							if op.Type == batch.OpDelete {
-								memtableBatchDelete(shard.mem, true, op.Key)
+								memtableBatchDelete(shard.mem, true, op.Key, op.Revision)
 							} else {
 								memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
 							}
@@ -33973,7 +34306,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			if !appliedSortedRun {
 				for _, op := range entries {
 					if op.Type == batch.OpDelete {
-						memtableBatchDelete(shard.mem, useSteal, op.Key)
+						memtableBatchDelete(shard.mem, useSteal, op.Key, op.Revision)
 					} else {
 						borrowed := false
 						if allowBatchArenaBorrow && !useSteal {
@@ -34714,6 +35047,13 @@ func (it *singleSourceIterator) UnsafeValue() []byte {
 		return nil
 	}
 	return it.iter.UnsafeValue()
+}
+
+func (it *singleSourceIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if it == nil || !it.valid {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	return iterator.UnsafeEntryWithRevision(it.iter)
 }
 
 func (it *singleSourceIterator) Valid() bool               { return it.valid }

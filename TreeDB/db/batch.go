@@ -184,6 +184,10 @@ func (b *Batch) Set(key, value []byte) error {
 	return b.batch.Set(key, value)
 }
 
+func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
+	return b.batch.SetWithRevision(key, value, revision)
+}
+
 // SetView records a Put without copying key/value bytes. Callers must treat
 // key/value as immutable until the batch is written or closed.
 //
@@ -193,8 +197,16 @@ func (b *Batch) SetView(key, value []byte) error {
 	return b.batch.SetView(key, value)
 }
 
+func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
+	return b.batch.SetViewWithRevision(key, value, revision)
+}
+
 func (b *Batch) Delete(key []byte) error {
 	return b.batch.Delete(key)
+}
+
+func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
+	return b.batch.DeleteWithRevision(key, revision)
 }
 
 func (b *Batch) DeleteRange(start, end []byte) error {
@@ -207,14 +219,26 @@ func (b *Batch) DeleteView(key []byte) error {
 	return b.batch.DeleteView(key)
 }
 
+func (b *Batch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
+	return b.batch.DeleteViewWithRevision(key, revision)
+}
+
 // SetPointer records a pointer without copying the value bytes.
 func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	return b.batch.SetPointer(key, ptr)
 }
 
+func (b *Batch) SetPointerWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
+	return b.batch.SetPointerWithRevision(key, ptr, revision)
+}
+
 // SetPointerView records a pointer without copying the key bytes.
 func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 	return b.batch.SetPointerView(key, ptr)
+}
+
+func (b *Batch) SetPointerViewWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
+	return b.batch.SetPointerViewWithRevision(key, ptr, revision)
 }
 
 func (b *Batch) SetOps(ops []batch.Entry) error {

@@ -37,6 +37,7 @@ type BuildOptions struct {
 	LeafColumnar          bool
 	InternalBaseDelta     bool
 	PackedValuePtr        bool
+	EntryRevisions        bool
 	LeafPageLog           LeafPageAppender
 }
 
@@ -249,14 +250,14 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		val, ptr, flags := iter.UnsafeEntry()
+		val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
 
 		lb := levels[0]
 		if lb.startKey == nil {
 			lb.startKey = append([]byte(nil), key...)
 		}
 
-		err := lb.builder.AddLeafEntry(key, val, flags, ptr)
+		err := lb.builder.AddLeafEntryWithRevision(key, val, flags, ptr, revision)
 		if err == node.ErrNodeFull {
 			if err := flush(0); err != nil {
 				return 0, err
@@ -265,7 +266,7 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			if lb.startKey == nil {
 				lb.startKey = append([]byte(nil), key...)
 			}
-			err = lb.builder.AddLeafEntry(key, val, flags, ptr)
+			err = lb.builder.AddLeafEntryWithRevision(key, val, flags, ptr, revision)
 		}
 
 		if err != nil {
@@ -360,12 +361,13 @@ func buildSingleLeafLogRoot(alloc Allocator, p *pager.Pager, key []byte, ptr pag
 }
 
 func newLeafBuilder(buf []byte, opts BuildOptions) *node.Builder {
-	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.InternalBaseDelta || opts.PackedValuePtr {
+	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.InternalBaseDelta || opts.PackedValuePtr || opts.EntryRevisions {
 		return node.NewBuilderWithOptions(buf, page.PageTypeLeaf, node.BuilderOptions{
 			LeafPrefixCompression: opts.LeafPrefixCompression,
 			LeafColumnar:          opts.LeafColumnar,
 			InternalBaseDelta:     opts.InternalBaseDelta,
 			PackedValuePtr:        opts.PackedValuePtr,
+			EntryRevisions:        opts.EntryRevisions,
 		})
 	}
 	return node.NewBuilder(buf, page.PageTypeLeaf)

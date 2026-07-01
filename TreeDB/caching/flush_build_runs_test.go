@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -35,6 +36,27 @@ func collectRunEntriesForTest(t *testing.T, m memtable.Table, chunkCap int) ([]b
 		out = append(out, run...)
 	}
 	return out, deletes
+}
+
+func TestMemtableBatchApplyPreservesEntryRevision(t *testing.T) {
+	var mt memtable.Table = memtable.NewAppendOnlyWithEntryCapacity(4)
+	memtableBatchSet(mt, false, false, false, batch.Entry{
+		Type:     batch.OpPut,
+		Key:      []byte("a"),
+		Value:    []byte("value"),
+		Revision: 44,
+	})
+	memtableBatchDelete(mt, false, []byte("b"), 45)
+
+	revisions := mt.(memtable.RevisionTable)
+	value, _, flags, revision, found := revisions.GetEntryWithRevision([]byte("a"))
+	if !found || flags != node.FlagInline || string(value) != "value" || revision != 44 {
+		t.Fatalf("put entry=(%q,%02x,%d,%v), want value inline rev 44", value, flags, revision, found)
+	}
+	_, _, flags, revision, found = revisions.GetEntryWithRevision([]byte("b"))
+	if !found || flags&node.FlagTombstone == 0 || revision != 45 {
+		t.Fatalf("delete entry=(%02x,%d,%v), want tombstone rev 45", flags, revision, found)
+	}
 }
 
 func TestBuildOpRunsAppendOnlySortedDuplicateTombstoneDeleteShapes(t *testing.T) {

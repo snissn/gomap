@@ -23,7 +23,11 @@ func TestConditionalKVContractDocsPinNativeRevisionAndTxnGates(t *testing.T) {
 	storageFormat := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/storage-format.md"))
 	assertContainsAll(t, storageFormat, "conditional raw KV storage format",
 		"Target entry revisions are native entry metadata for raw key/value leaves",
-		"Issue #3422 owns the exact byte layout and required feature gate",
+		"They are enabled per leaf by page header flag `0x0040`",
+		"every entry in the page carries one fixed-width little-endian `u64` revision",
+		"plain, legacy-prefix, prefix-v2, and columnar-v1 leaf entries store the revision directly after the visible key/value or pointer bytes",
+		"columnar-v2 leaves store `RevisionLE[Count]` immediately after `Flags[Count]`",
+		"columnar+prefix-v2 leaves store `RevisionLE[Count]` immediately after `PrefixLen[Count]`",
 		"A per-write system-root sidecar, separate persistent revision map, or adapter-private metadata tree is not an accepted storage format",
 		"Revision `0` is a legacy/no-revision sentinel",
 		"The stored revision is the mutation revision assigned from the directory's shared raw-KV revision domain",

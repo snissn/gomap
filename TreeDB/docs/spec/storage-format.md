@@ -606,6 +606,7 @@ Leaf encoding flags in page header:
 - `0x2000`: prefix v2 compact header enabled
 - `0x1000`: packed `ValuePtr` payload enabled
 - `0x0400`: columnar v2 layout enabled
+- `0x0040`: native per-entry `EntryRevision` metadata enabled
 
 Entry flags in payload (node flags) include inline/pointer/tombstone semantics.
 
@@ -617,6 +618,7 @@ u32 ValueLen        // ignored for pointer entries
 u8  EntryFlags
 bytes Key
 bytes Value | ValuePtr(16) | PackedValuePtr(12)
+u64 EntryRevisionLE // present only when page flag 0x0040 is set
 ```
 
 ### 5.2 Prefix-compressed leaf v1
@@ -628,6 +630,7 @@ u32 ValueLen
 u8  EntryFlags
 bytes KeySuffix
 bytes Value | Pointer
+u64 EntryRevisionLE // present only when page flag 0x0040 is set
 ```
 
 ### 5.3 Prefix-compressed leaf v2
@@ -640,6 +643,7 @@ u8 EntryFlags
 (optional) uvarint ValueLen for inline non-tombstone values
 bytes KeySuffix
 bytes Value | Pointer
+u64 EntryRevisionLE // present only when page flag 0x0040 is set
 ```
 
 Notes:
@@ -647,12 +651,27 @@ Notes:
 - Pointer/tombstone entries omit inline value length field.
 - Restart interval for prefix reconstruction: 16 entries.
 
-### 5.4 Columnar leaf v2 (non-prefix)
+### 5.4 Columnar leaf encodings
+
+Columnar v1 stores a compact per-entry header and keeps the key after the
+entry's visible value/pointer bytes:
+
+```text
+u16 KeyLen
+u32 ValueLen        // ignored for pointer entries
+u8  EntryFlags
+bytes Value | ValuePtr(16) | PackedValuePtr(12)
+bytes Key
+u64 EntryRevisionLE // present only when page flag 0x0040 is set
+```
+
+Columnar v2 stores per-entry metadata in top-of-page columns:
 
 ```text
 u16 KeyOff[Count]
 u16 ValOff[Count]
 u8  Flags[Count]
+u64 RevisionLE[Count] // present only when page flag 0x0040 is set
 bytes ValueBlob
 bytes KeyBlob
 ```
@@ -664,6 +683,7 @@ u16 KeyOff[Count]
 u16 ValOff[Count]
 u8  Flags[Count]
 u16 PrefixLen[Count]
+u64 RevisionLE[Count] // present only when page flag 0x0040 is set
 bytes ValueBlob
 bytes KeySuffixBlob
 ```
@@ -673,8 +693,15 @@ Keys reconstruct using previous key prefix within restart blocks.
 ### 5.6 Target raw-KV entry revisions
 
 Target entry revisions are native entry metadata for raw key/value leaves.
-Issue #3422 owns the exact byte layout and required feature gate. This section
-defines the storage constraints that layout must satisfy.
+They are enabled per leaf by page header flag `0x0040`. When the flag is clear,
+all entries in that page decode as revision `0`. When the flag is set, every
+entry in the page carries one fixed-width little-endian `u64` revision:
+
+- plain, legacy-prefix, prefix-v2, and columnar-v1 leaf entries store the
+  revision directly after the visible key/value or pointer bytes for that entry;
+- columnar-v2 leaves store `RevisionLE[Count]` immediately after `Flags[Count]`;
+- columnar+prefix-v2 leaves store `RevisionLE[Count]` immediately after
+  `PrefixLen[Count]`.
 
 - A live raw-KV entry may carry an `EntryRevision` token. Older entries without
   revision metadata decode as revision `0` until the format gate requires

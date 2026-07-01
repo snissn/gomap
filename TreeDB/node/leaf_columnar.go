@@ -33,7 +33,7 @@ const leafColumnarV2MetaSize = 3
 // Layout: keyOff(u16) | valOff(u16) | flags(u8) | prefixLen(u16)
 const leafColumnarPrefixV2MetaSize = 7
 
-func parseLeafColumnarLayout(data []byte, offset int, valPtrSize int) (leafEntryLayout, error) {
+func parseLeafColumnarLayout(data []byte, offset int, valPtrSize int, entryRevisions bool) (leafEntryLayout, error) {
 	if offset+leafColumnarHeaderSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
@@ -60,6 +60,10 @@ func parseLeafColumnarLayout(data []byte, offset int, valPtrSize int) (leafEntry
 	if valStart+valSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
+	revision, err := decodeEntryRevision(data, keyStart+keyLen, entryRevisions)
+	if err != nil {
+		return leafEntryLayout{}, err
+	}
 
 	return leafEntryLayout{
 		headerSize: leafColumnarHeaderSize,
@@ -67,6 +71,7 @@ func parseLeafColumnarLayout(data []byte, offset int, valPtrSize int) (leafEntry
 		keyLen:     keyLen,
 		valLen:     valLen,
 		flags:      flags,
+		revision:   revision,
 		keyOff:     keyOff,
 		valOff:     valOff,
 	}, nil

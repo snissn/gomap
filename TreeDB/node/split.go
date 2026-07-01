@@ -73,6 +73,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 					LeafPrefixCompression: n.leafPrefixCompressed(),
 					LeafColumnar:          n.leafColumnar(),
 					PackedValuePtr:        n.leafPackedValuePtr(),
+					EntryRevisions:        n.leafEntryRevisions(),
 				}
 				leafBuilder = NewBuilderWithOptions(newNode.data, page.PageTypeLeaf, opts)
 				leafBuilder.SetPageID(newNode.PageID())
@@ -97,7 +98,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 		// High-level requires decoding.
 
 		if n.Type() == page.PageTypeLeaf {
-			key, val, ptr, flags, err := n.GetLeafEntryView(srcIdx)
+			key, val, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(srcIdx)
 			if err != nil {
 				return nil, err
 			}
@@ -105,7 +106,7 @@ func (n *Node) Split(newNode *Node) ([]byte, error) {
 				pivotKey = append([]byte(nil), key...)
 			}
 			// AddLeafEntry copies data, so Views are safe here.
-			err = leafBuilder.AddLeafEntry(key, val, flags, ptr)
+			err = leafBuilder.AddLeafEntryWithRevision(key, val, flags, ptr, revision)
 			if err != nil {
 				return nil, err
 			}
@@ -185,6 +186,7 @@ func (n *Node) splitLeafColumnarV2Rebuild(newNode *Node) ([]byte, error) {
 		LeafPrefixCompression: n.leafPrefixCompressed(),
 		LeafColumnar:          n.leafColumnar(),
 		PackedValuePtr:        n.leafPackedValuePtr(),
+		EntryRevisions:        n.leafEntryRevisions(),
 	}
 	leftBuilder := NewBuilderWithOptions(n.data, page.PageTypeLeaf, opts)
 	leftBuilder.SetPageID(n.PageID())
@@ -192,25 +194,25 @@ func (n *Node) splitLeafColumnarV2Rebuild(newNode *Node) ([]byte, error) {
 	rightBuilder.SetPageID(newNode.PageID())
 
 	for i := uint16(0); i < splitIndex; i++ {
-		key, val, ptr, flags, err := src.GetLeafEntryView(i)
+		key, val, ptr, flags, revision, err := src.GetLeafEntryViewWithRevision(i)
 		if err != nil {
 			return nil, err
 		}
-		if err := leftBuilder.AddLeafEntry(key, val, flags, ptr); err != nil {
+		if err := leftBuilder.AddLeafEntryWithRevision(key, val, flags, ptr, revision); err != nil {
 			return nil, err
 		}
 	}
 
 	var pivotKey []byte
 	for i := splitIndex; i < count; i++ {
-		key, val, ptr, flags, err := src.GetLeafEntryView(i)
+		key, val, ptr, flags, revision, err := src.GetLeafEntryViewWithRevision(i)
 		if err != nil {
 			return nil, err
 		}
 		if i == splitIndex {
 			pivotKey = append([]byte(nil), key...)
 		}
-		if err := rightBuilder.AddLeafEntry(key, val, flags, ptr); err != nil {
+		if err := rightBuilder.AddLeafEntryWithRevision(key, val, flags, ptr, revision); err != nil {
 			return nil, err
 		}
 	}
@@ -244,6 +246,7 @@ func (n *Node) splitLeafColumnarPrefixV2Rebuild(newNode *Node) ([]byte, error) {
 		LeafPrefixCompression: true,
 		LeafColumnar:          true,
 		PackedValuePtr:        n.leafPackedValuePtr(),
+		EntryRevisions:        n.leafEntryRevisions(),
 	}
 	leftBuilder := NewBuilderWithOptions(n.data, page.PageTypeLeaf, opts)
 	leftBuilder.SetPageID(n.PageID())
@@ -251,25 +254,25 @@ func (n *Node) splitLeafColumnarPrefixV2Rebuild(newNode *Node) ([]byte, error) {
 	rightBuilder.SetPageID(newNode.PageID())
 
 	for i := uint16(0); i < splitIndex; i++ {
-		key, val, ptr, flags, err := src.GetLeafEntryView(i)
+		key, val, ptr, flags, revision, err := src.GetLeafEntryViewWithRevision(i)
 		if err != nil {
 			return nil, err
 		}
-		if err := leftBuilder.AddLeafEntry(key, val, flags, ptr); err != nil {
+		if err := leftBuilder.AddLeafEntryWithRevision(key, val, flags, ptr, revision); err != nil {
 			return nil, err
 		}
 	}
 
 	var pivotKey []byte
 	for i := splitIndex; i < count; i++ {
-		key, val, ptr, flags, err := src.GetLeafEntryView(i)
+		key, val, ptr, flags, revision, err := src.GetLeafEntryViewWithRevision(i)
 		if err != nil {
 			return nil, err
 		}
 		if i == splitIndex {
 			pivotKey = append([]byte(nil), key...)
 		}
-		if err := rightBuilder.AddLeafEntry(key, val, flags, ptr); err != nil {
+		if err := rightBuilder.AddLeafEntryWithRevision(key, val, flags, ptr, revision); err != nil {
 			return nil, err
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Iterator represents a generic iterator that yields key-value pairs.
@@ -238,6 +239,13 @@ func (mi *MergingIterator) Value() []byte {
 		return nil
 	}
 	return mi.cur.iter.UnsafeValue()
+}
+
+func (mi *MergingIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if !mi.valid || !mi.hasCur {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	return iterator.UnsafeEntryWithRevision(mi.cur.iter)
 }
 
 func (mi *MergingIterator) KeyCopy(dst []byte) []byte {

@@ -341,53 +341,74 @@ func (s *Snapshot) Close() error {
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
-	val, ptr, flags, found, _ = s.lookupRootDomainEntry(key)
+	val, ptr, flags, _, found, _ = s.lookupRootDomainEntryWithRevision(key)
 	return val, ptr, flags, found
 }
 
+func (s *Snapshot) lookupQueueEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
+	val, ptr, flags, revision, found, _ = s.lookupRootDomainEntryWithRevision(key)
+	return val, ptr, flags, revision, found
+}
+
 func (s *Snapshot) lookupRootDomainSnapshotEntry(key []byte) (snap rootDomainSnapshot, val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
-	if s == nil {
-		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
-	}
-	if memtableViewHasRangeSpans(s.view) {
-		snap = rootDomainSnapshotFromCachedSnapshot(s, key)
-		val, ptr, flags, found, source = s.db.lookupViewEntryWithRangeSpansAndRootSource(s.view, key, false, snap, true)
-		if found {
-			return snap, val, ptr, flags, true, source
-		}
-		return snap, nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
-	}
-	snap = rootDomainSnapshotFromCachedSnapshot(s, key)
-	val, ptr, flags, found, source = snap.getEntryWithSource(key)
+	snap, val, ptr, flags, _, found, source = s.lookupRootDomainSnapshotEntryWithRevision(key)
 	return snap, val, ptr, flags, found, source
 }
 
+func (s *Snapshot) lookupRootDomainSnapshotEntryWithRevision(key []byte) (snap rootDomainSnapshot, val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool, source rootDomainEntrySource) {
+	if s == nil {
+		return rootDomainSnapshot{}, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, rootDomainEntrySourceNone
+	}
+	if memtableViewHasRangeSpans(s.view) {
+		snap = rootDomainSnapshotFromCachedSnapshot(s, key)
+		val, ptr, flags, revision, found, source = s.db.lookupViewEntryWithRangeSpansAndRootRevisionSource(s.view, key, false, snap, true)
+		if found {
+			return snap, val, ptr, flags, revision, true, source
+		}
+		return snap, nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, rootDomainEntrySourceNone
+	}
+	snap = rootDomainSnapshotFromCachedSnapshot(s, key)
+	val, ptr, flags, revision, found, source = snap.getEntryWithRevisionSource(key)
+	return snap, val, ptr, flags, revision, found, source
+}
+
 func (s *Snapshot) lookupRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
-	_, val, ptr, flags, found, source = s.lookupRootDomainSnapshotEntry(key)
+	_, val, ptr, flags, _, found, source = s.lookupRootDomainSnapshotEntryWithRevision(key)
 	return val, ptr, flags, found, source
 }
 
+func (s *Snapshot) lookupRootDomainEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool, source rootDomainEntrySource) {
+	_, val, ptr, flags, revision, found, source = s.lookupRootDomainSnapshotEntryWithRevision(key)
+	return val, ptr, flags, revision, found, source
+}
+
 func (s *Snapshot) lookupCachedRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, _, found = s.lookupCachedRootDomainEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+func (s *Snapshot) lookupCachedRootDomainEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
 	if s == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	if memtableViewHasRangeSpans(s.view) {
-		return s.lookupEntryWithRangeSpans(key)
+		val, ptr, flags, revision, found, _ = s.lookupEntryWithRangeSpansRevisionSource(key)
+		return val, ptr, flags, revision, found
 	}
 	if len(s.rootPointShards) == 0 {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	shardIdx := 0
 	if s.db != nil {
 		shardIdx = s.db.shardIndex(key)
 	}
 	if shardIdx < 0 || shardIdx >= len(s.rootPointShards) {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	snap := s.rootPointShards[shardIdx]
 	snap.published = nil
 	snap.publishedRootID = 0
-	return snap.getEntry(key)
+	return snap.getEntryWithRevision(key)
 }
 
 func recordSnapshotRootDomainRead(source rootDomainEntrySource, pointer bool, bytes int) {
@@ -499,6 +520,42 @@ func (s *Snapshot) getAppendFromEntryWithSource(snap rootDomainSnapshot, key, ds
 	}
 	recordSnapshotRootDomainRead(source, false, len(val))
 	return append(dst, val...), true, nil
+}
+
+func (s *Snapshot) appendVersionedEntryValue(key, dst []byte, oldLen int, val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, source rootDomainEntrySource) ([]byte, page.EntryRevision, error) {
+	if flags&node.FlagTombstone != 0 {
+		return dst, revision, tree.ErrKeyNotFound
+	}
+	if flags&node.FlagPointer != 0 {
+		var valueLogDB *DB
+		if s != nil {
+			valueLogDB = s.db
+		}
+		if valueLogDB == nil {
+			return dst, revision, ErrSnapshotValueLogReaderUnavailable
+		}
+		out, err := valueLogDB.readValueLogAppend(key, ptr, dst)
+		if err != nil {
+			return dst, revision, err
+		}
+		recordSnapshotRootDomainRead(source, true, len(out)-oldLen)
+		return out, revision, nil
+	}
+	if val == nil {
+		recordSnapshotRootDomainRead(source, false, 0)
+		return dst, revision, nil
+	}
+	recordSnapshotRootDomainRead(source, false, len(val))
+	return append(dst, val...), revision, nil
+}
+
+func (s *Snapshot) getVersionedAppendFromEntryWithSource(snap rootDomainSnapshot, key, dst []byte, oldLen int) ([]byte, page.EntryRevision, bool, error) {
+	val, ptr, flags, revision, found, source := snap.getEntryWithRevisionSource(key)
+	if !found {
+		return dst, page.LegacyEntryRevision, false, nil
+	}
+	out, revision, err := s.appendVersionedEntryValue(key, dst, oldLen, val, ptr, flags, revision, source)
+	return out, revision, true, err
 }
 
 func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.IteratorSource, error) {
@@ -711,6 +768,67 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 		}
 	}
 	return out, nil
+}
+
+func (s *Snapshot) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	key = normalizeRawKVPointKey(key)
+	if s == nil {
+		return dst, page.LegacyEntryRevision, tree.ErrKeyNotFound
+	}
+	oldLen := len(dst)
+	val, ptr, flags, revision, found := s.lookupCachedRootDomainEntryWithRevision(key)
+	if found {
+		return s.appendVersionedEntryValue(key, dst, oldLen, val, ptr, flags, revision, rootDomainEntrySourceCached)
+	}
+	if memtableViewHasRangeSpans(s.view) {
+		if s.backend == nil || s.db == nil {
+			return dst, page.LegacyEntryRevision, tree.ErrKeyNotFound
+		}
+		if err := s.db.flushValueLogForBackendRead(); err != nil {
+			return dst, page.LegacyEntryRevision, err
+		}
+		return s.backend.GetVersionedAppend(key, dst)
+	}
+	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
+	if out, entryRevision, found, err := s.getVersionedAppendFromEntryWithSource(snap, key, dst, oldLen); found {
+		return out, entryRevision, err
+	}
+	if shouldShortCircuitPublishedAppendMiss(true, s.publishedRoots, snap) {
+		return dst, page.LegacyEntryRevision, tree.ErrKeyNotFound
+	}
+	if s.backend == nil || s.db == nil {
+		return dst, page.LegacyEntryRevision, tree.ErrKeyNotFound
+	}
+	if err := s.db.flushValueLogForBackendRead(); err != nil {
+		return dst, page.LegacyEntryRevision, err
+	}
+	out, entryRevision, err := s.backend.GetVersionedAppend(key, dst)
+	if err != nil {
+		return dst, entryRevision, err
+	}
+	if hotPathStatsEnabled {
+		snapshotReadBackendHitsTotal.Add(1)
+		if n := len(out) - oldLen; n > 0 {
+			snapshotReadBackendBytesTotal.Add(uint64(n))
+		}
+	}
+	return out, entryRevision, nil
+}
+
+func (s *Snapshot) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
+	out, revision, err := s.GetVersionedAppend(key, nil)
+	if err != nil {
+		return nil, revision, err
+	}
+	if len(out) == 0 {
+		return []byte{}, revision, nil
+	}
+	if cap(out) == len(out) {
+		return out, revision, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, revision, nil
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
@@ -1075,6 +1193,10 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 }
 
 func snapshotRawKVLeafEntry(key []byte, val []byte, ptr page.ValuePtr, flags byte) node.LeafEntry {
+	return snapshotRawKVLeafEntryWithRevision(key, val, ptr, flags, page.LegacyEntryRevision)
+}
+
+func snapshotRawKVLeafEntryWithRevision(key []byte, val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) node.LeafEntry {
 	if flags&(node.FlagPointer|node.FlagTombstone) == 0 {
 		val = normalizeRawKVValue(val)
 	}
@@ -1083,14 +1205,15 @@ func snapshotRawKVLeafEntry(key []byte, val []byte, ptr page.ValuePtr, flags byt
 		Value:    val,
 		ValuePtr: ptr,
 		Flags:    flags,
+		Revision: revision,
 	}
 }
 
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	key = normalizeRawKVPointKey(key)
-	val, ptr, flags, found := s.lookupQueueEntry(key)
+	val, ptr, flags, revision, found := s.lookupQueueEntryWithRevision(key)
 	if found {
-		return snapshotRawKVLeafEntry(key, val, ptr, flags), nil
+		return snapshotRawKVLeafEntryWithRevision(key, val, ptr, flags, revision), nil
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {
@@ -1104,9 +1227,9 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	key = normalizeRawKVPointKey(key)
-	val, ptr, flags, found := s.lookupQueueEntry(key)
+	val, ptr, flags, revision, found := s.lookupQueueEntryWithRevision(key)
 	if found {
-		return snapshotRawKVLeafEntry(key, val, ptr, flags), nil
+		return snapshotRawKVLeafEntryWithRevision(key, val, ptr, flags, revision), nil
 	}
 
 	if s == nil || s.backend == nil || s.db == nil {

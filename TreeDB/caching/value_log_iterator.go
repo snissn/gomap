@@ -57,15 +57,21 @@ func (it *valueLogIterator) UnsafeValue() []byte {
 }
 
 func (it *valueLogIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *valueLogIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	_, _, _, revision := iterator.UnsafeEntryWithRevision(it.iter)
 	if it.iter.IsDeleted() {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, revision
 	}
 	it.loadValue()
 	if it.cachedHasPtr {
 		// Value-log pointers are materialized here; report inline semantics.
-		return it.cachedValue, page.ValuePtr{}, node.FlagInline
+		return it.cachedValue, page.ValuePtr{}, node.FlagInline, revision
 	}
-	return it.cachedValue, page.ValuePtr{}, node.FlagInline
+	return it.cachedValue, page.ValuePtr{}, node.FlagInline, revision
 }
 
 func (it *valueLogIterator) Key() []byte {

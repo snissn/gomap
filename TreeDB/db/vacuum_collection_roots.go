@@ -447,6 +447,13 @@ func (it *vacuumSystemRootRewriteIterator) UnsafeEntry() ([]byte, page.ValuePtr,
 	return it.base.UnsafeEntry()
 }
 
+func (it *vacuumSystemRootRewriteIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if val, ok := it.replacement(); ok {
+		return val, page.ValuePtr{}, node.FlagInline, page.LegacyEntryRevision
+	}
+	return iterator.UnsafeEntryWithRevision(it.base)
+}
+
 func (it *vacuumSystemRootRewriteIterator) Key() []byte {
 	return it.UnsafeKey()
 }

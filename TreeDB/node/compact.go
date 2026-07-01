@@ -26,15 +26,16 @@ func (n *Node) Compact() error {
 		b := NewBuilderWithOptions(buf, page.PageTypeLeaf, BuilderOptions{
 			LeafColumnar:   true,
 			PackedValuePtr: n.leafPackedValuePtr(),
+			EntryRevisions: n.leafEntryRevisions(),
 		})
 		b.SetPageID(n.PageID())
 
 		for i := uint16(0); i < count; i++ {
-			k, v, ptr, f, err := n.GetLeafEntryView(i)
+			k, v, ptr, f, rev, err := n.GetLeafEntryViewWithRevision(i)
 			if err != nil {
 				return err
 			}
-			if err := b.AddLeafEntry(k, v, f, ptr); err != nil {
+			if err := b.AddLeafEntryWithRevision(k, v, f, ptr, rev); err != nil {
 				return err
 			}
 		}
@@ -51,15 +52,16 @@ func (n *Node) Compact() error {
 			LeafPrefixCompression: true,
 			LeafColumnar:          true,
 			PackedValuePtr:        n.leafPackedValuePtr(),
+			EntryRevisions:        n.leafEntryRevisions(),
 		})
 		b.SetPageID(n.PageID())
 
 		for i := uint16(0); i < count; i++ {
-			k, v, ptr, f, err := n.GetLeafEntryView(i)
+			k, v, ptr, f, rev, err := n.GetLeafEntryViewWithRevision(i)
 			if err != nil {
 				return err
 			}
-			if err := b.AddLeafEntry(k, v, f, ptr); err != nil {
+			if err := b.AddLeafEntryWithRevision(k, v, f, ptr, rev); err != nil {
 				return err
 			}
 		}
@@ -143,6 +145,9 @@ func entryLength(n *Node, offset int) (int, error) {
 		entryLen := keyEnd
 		if valEnd > entryLen {
 			entryLen = valEnd
+		}
+		if n.leafEntryRevisions() {
+			entryLen += page.EntryRevisionSize
 		}
 		if offset+entryLen > len(n.data) {
 			return 0, ErrCorruptedNode

@@ -13,9 +13,10 @@ import (
 )
 
 type hashEntry struct {
-	value []byte // inline bytes (pointer bytes stored separately in ptr)
-	ptr   page.ValuePtr
-	flags byte
+	value    []byte // inline bytes (pointer bytes stored separately in ptr)
+	ptr      page.ValuePtr
+	revision page.EntryRevision
+	flags    byte
 }
 
 const (
@@ -242,7 +243,7 @@ func (m *HashSorted) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borro
 	} else {
 		for _, op := range entries {
 			value, ptr, flags := hashSortedBatchEntryPayload(op, storeInlinePtrValues)
-			if chunk, seq := m.setEntryLocked(op.Key, value, ptr, flags, false); seq != 0 {
+			if chunk, seq := m.setEntryLocked(op.Key, value, ptr, flags, op.Revision, false); seq != 0 {
 				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 			}
 			if onKey != nil {
@@ -286,15 +287,15 @@ func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	} else {
 		for _, op := range entries {
 			if op.Type == batchpkg.OpDelete {
-				if chunk, seq := m.setEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true); seq != 0 {
+				if chunk, seq := m.setEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, op.Revision, true); seq != 0 {
 					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 				}
 			} else if op.IsPtr {
-				if chunk, seq := m.setEntryLocked(op.Key, nil, op.ValuePtr, node.FlagPointer, true); seq != 0 {
+				if chunk, seq := m.setEntryLocked(op.Key, nil, op.ValuePtr, node.FlagPointer, op.Revision, true); seq != 0 {
 					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 				}
 			} else {
-				if chunk, seq := m.setEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true); seq != 0 {
+				if chunk, seq := m.setEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, op.Revision, true); seq != 0 {
 					chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
 				}
 			}
@@ -323,8 +324,12 @@ func (m *HashSorted) SetSteal(key, value []byte) {
 }
 
 func (m *HashSorted) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *HashSorted) SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	m.mu.Lock()
-	chunk, seq := m.setEntryLocked(key, value, ptr, flags, false)
+	chunk, seq := m.setEntryLocked(key, value, ptr, flags, revision, false)
 	m.mu.Unlock()
 	if seq != 0 {
 		m.indexer.enqueue(m, seq, chunk, false)
@@ -332,8 +337,12 @@ func (m *HashSorted) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) 
 }
 
 func (m *HashSorted) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryStealWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *HashSorted) SetEntryStealWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	m.mu.Lock()
-	chunk, seq := m.setEntryLocked(key, value, ptr, flags, true)
+	chunk, seq := m.setEntryLocked(key, value, ptr, flags, revision, true)
 	m.mu.Unlock()
 	if seq != 0 {
 		m.indexer.enqueue(m, seq, chunk, false)
@@ -394,6 +403,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		ent.value = valCopy
 		ent.ptr = page.ValuePtr{}
 		ent.flags = node.FlagInline
+		ent.revision = page.LegacyEntryRevision
 		m.sizeBytes += int64(hashEntryValueSize(ent.flags, ent.value) - oldLen)
 		m.mu.Unlock()
 		return nil
@@ -457,6 +467,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 			ent.ptr = page.ValuePtr{}
 			ent.flags = node.FlagTombstone
 		}
+		ent.revision = page.LegacyEntryRevision
 		m.mu.Unlock()
 		return nil
 	}
@@ -510,13 +521,18 @@ func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 }
 
 func (m *HashSorted) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	val, ptr, flags, _, found := m.GetEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+func (m *HashSorted) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	keyLookup := bytesToStringNoCopy(key)
 
 	m.mu.RLock()
 	idx, ok := m.items[keyLookup]
 	if !ok {
 		m.mu.RUnlock()
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	i := int(idx)
 	if i < 0 || i >= len(m.entries) {
@@ -525,19 +541,19 @@ func (m *HashSorted) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 		ent, ok := m.entryForReadLocked(keyLookup)
 		m.mu.Unlock()
 		if !ok {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
 		if ent.flags&node.FlagPointer != 0 {
-			return ent.value, ent.ptr, ent.flags, true
+			return ent.value, ent.ptr, ent.flags, ent.revision, true
 		}
-		return ent.value, page.ValuePtr{}, ent.flags, true
+		return ent.value, page.ValuePtr{}, ent.flags, ent.revision, true
 	}
 	ent := m.entries[i]
 	m.mu.RUnlock()
 	if ent.flags&node.FlagPointer != 0 {
-		return ent.value, ent.ptr, ent.flags, true
+		return ent.value, ent.ptr, ent.flags, ent.revision, true
 	}
-	return ent.value, page.ValuePtr{}, ent.flags, true
+	return ent.value, page.ValuePtr{}, ent.flags, ent.revision, true
 }
 
 func (m *HashSorted) Size() int64 {
@@ -983,7 +999,7 @@ func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int, keysSor
 	return chunk, m.nextSeq, sorted
 }
 
-func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) ([]string, uint64) {
+func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool) ([]string, uint64) {
 	if key == nil {
 		return nil, 0
 	}
@@ -997,6 +1013,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 			ent.ptr = page.ValuePtr{}
 		}
 		ent.flags = flags
+		ent.revision = revision
 		m.sizeBytes += int64(hashEntryValueSize(ent.flags, ent.value) - oldLen)
 		if flags&node.FlagTombstone != 0 {
 			m.hasDeletes = true
@@ -1012,7 +1029,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
 	valCopy := m.encodeEntryValueLocked(value, ptr, flags, steal)
-	ent := hashEntry{value: valCopy, flags: flags}
+	ent := hashEntry{value: valCopy, flags: flags, revision: revision}
 	if flags&node.FlagPointer != 0 {
 		ent.ptr = ptr
 	}
@@ -1038,7 +1055,7 @@ func (m *HashSorted) setEntryNewCopyNoChunkLocked(op batchpkg.Entry, storeInline
 	keyStored := bytesToStringNoCopy(keyCopy)
 	value, ptr, flags := hashSortedBatchEntryPayload(op, storeInlinePtrValues)
 	valCopy := m.encodeEntryValueLocked(value, ptr, flags, false)
-	ent := hashEntry{value: valCopy, flags: flags}
+	ent := hashEntry{value: valCopy, flags: flags, revision: op.Revision}
 	if flags&node.FlagPointer != 0 {
 		ent.ptr = ptr
 	}
@@ -1072,7 +1089,7 @@ func (m *HashSorted) setEntryNewStealNoChunkLocked(op batchpkg.Entry) (string, i
 		ptr = op.ValuePtr
 	}
 
-	ent := hashEntry{value: val, flags: flags}
+	ent := hashEntry{value: val, flags: flags, revision: op.Revision}
 	if flags&node.FlagPointer != 0 {
 		ent.ptr = ptr
 	}
@@ -1148,11 +1165,11 @@ func (m *HashSorted) encodeEntryValueLocked(value []byte, ptr page.ValuePtr, fla
 }
 
 func (m *HashSorted) setStealLocked(key, value []byte) ([]string, uint64) {
-	return m.setEntryLocked(key, value, page.ValuePtr{}, node.FlagInline, true)
+	return m.setEntryLocked(key, value, page.ValuePtr{}, node.FlagInline, page.LegacyEntryRevision, true)
 }
 
 func (m *HashSorted) deleteStealLocked(key []byte) ([]string, uint64) {
-	return m.setEntryLocked(key, nil, page.ValuePtr{}, node.FlagTombstone, true)
+	return m.setEntryLocked(key, nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision, true)
 }
 
 func (idx *hashSortedIndex) reset() {
@@ -1424,17 +1441,22 @@ func (it *hashReverseIterator) UnsafeValue() []byte {
 }
 
 func (it *hashReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *hashReverseIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.valid {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision
 	}
 	it.ensureLoaded()
 	if it.cur.flags&node.FlagTombstone != 0 {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, it.cur.revision
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
-		return it.cur.value, it.cur.ptr, it.cur.flags
+		return it.cur.value, it.cur.ptr, it.cur.flags, it.cur.revision
 	}
-	return it.cur.value, page.ValuePtr{}, node.FlagInline
+	return it.cur.value, page.ValuePtr{}, node.FlagInline, it.cur.revision
 }
 
 func (it *hashReverseIterator) Key() []byte {
@@ -1587,17 +1609,22 @@ func (it *hashIterator) UnsafeValue() []byte {
 }
 
 func (it *hashIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *hashIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.valid {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision
 	}
 	it.ensureLoaded()
 	if it.cur.flags&node.FlagTombstone != 0 {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, it.cur.revision
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
-		return it.cur.value, it.cur.ptr, it.cur.flags
+		return it.cur.value, it.cur.ptr, it.cur.flags, it.cur.revision
 	}
-	return it.cur.value, page.ValuePtr{}, node.FlagInline
+	return it.cur.value, page.ValuePtr{}, node.FlagInline, it.cur.revision
 }
 
 func (it *hashIterator) Key() []byte {

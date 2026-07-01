@@ -26,3 +26,22 @@ type UnsafeIterator interface {
 	Close() error
 	Domain() (start, end []byte)
 }
+
+// RevisionUnsafeIterator is implemented by iterators whose entries carry native
+// per-entry revision metadata.
+type RevisionUnsafeIterator interface {
+	UnsafeEntryWithRevision() (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision)
+}
+
+// UnsafeEntryWithRevision returns native revision metadata when the iterator
+// supports it and legacy revision zero otherwise.
+func UnsafeEntryWithRevision(it UnsafeIterator) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	if it == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	if rit, ok := it.(RevisionUnsafeIterator); ok {
+		return rit.UnsafeEntryWithRevision()
+	}
+	val, ptr, flags = it.UnsafeEntry()
+	return val, ptr, flags, page.LegacyEntryRevision
+}

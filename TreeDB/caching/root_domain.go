@@ -20,6 +20,10 @@ type rootDomainLookup interface {
 	GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool)
 }
 
+type rootDomainRevisionLookup interface {
+	GetEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool)
+}
+
 type rootDomainIteratorFactory interface {
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 }
@@ -95,6 +99,28 @@ type rootDomainPublishStats struct {
 	retrySuccesses        uint64
 	nativeSystemPublishes uint64
 	batchReplayFallbacks  uint64
+}
+
+func rootDomainLookupEntryWithRevision(src rootDomainLookup, key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
+	if src == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	if revisions, ok := src.(rootDomainRevisionLookup); ok {
+		return revisions.GetEntryWithRevision(key)
+	}
+	val, ptr, flags, found = src.GetEntry(key)
+	return val, ptr, flags, page.LegacyEntryRevision, found
+}
+
+func memtableEntryWithRevision(mt memtable.Table, key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
+	if mt == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	if revisions, ok := mt.(memtable.RevisionTable); ok {
+		return revisions.GetEntryWithRevision(key)
+	}
+	val, ptr, flags, found = mt.GetEntry(key)
+	return val, ptr, flags, page.LegacyEntryRevision, found
 }
 
 var (
@@ -704,12 +730,17 @@ type backendSnapshotLookup struct {
 func (backendSnapshotLookup) rootDomainPublishedBackendLookupMarker() {}
 
 func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, _, found = l.GetEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+func (l backendSnapshotLookup) GetEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
 	if l.snapshot == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	if l.db != nil {
 		if err := l.db.flushValueLogForBackendRead(); err != nil {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
 	}
 	var (
@@ -723,11 +754,11 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 	}
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
-	return entry.Value, entry.ValuePtr, entry.Flags, true
+	return entry.Value, entry.ValuePtr, entry.Flags, entry.Revision, true
 }
 
 func (l backendSnapshotLookup) GetValueAppend(key, dst []byte) ([]byte, error) {
@@ -1069,8 +1100,13 @@ func rootDomainQueueRangesForTables(queue []memtable.Table, ranges []keyRange) [
 // newest-wins precedence under db.mu without constructing a synthetic snapshot,
 // keeping the fallback zero-allocation on queued-shard hits.
 func (db *DB) rawPointRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	val, ptr, flags, _, found = db.rawPointRootDomainEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+func (db *DB) rawPointRootDomainEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
 	if db == nil {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -1081,8 +1117,8 @@ func (db *DB) rawPointRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr
 	}
 	if shardIdx >= 0 && shardIdx < len(db.mutableShards) {
 		if mt := db.mutableShards[shardIdx].mem; mt != nil {
-			if val, ptr, flags, found = mt.GetEntry(key); found {
-				return val, ptr, flags, true
+			if val, ptr, flags, revision, found = memtableEntryWithRevision(mt, key); found {
+				return val, ptr, flags, revision, true
 			}
 		}
 	}
@@ -1094,11 +1130,11 @@ func (db *DB) rawPointRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr
 		if len(db.queueShardIDs) > idx && int(db.queueShardIDs[idx]) != shardIdx {
 			continue
 		}
-		if val, ptr, flags, found = mt.GetEntry(key); found {
-			return val, ptr, flags, true
+		if val, ptr, flags, revision, found = memtableEntryWithRevision(mt, key); found {
+			return val, ptr, flags, revision, true
 		}
 	}
-	return nil, page.ValuePtr{}, 0, false
+	return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 }
 
 func (db *DB) rawIteratorRootDomainSnapshot() (rootDomainSnapshot, []keyRange) {
@@ -1146,28 +1182,38 @@ func (s *rootDomainState) sealMutable(next memtable.Table) {
 }
 
 func (s rootDomainSnapshot) getEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
-	val, ptr, flags, found, _ = s.getEntryWithSource(key)
+	val, ptr, flags, _, found, _ = s.getEntryWithRevisionSource(key)
 	return val, ptr, flags, found
 }
 
 func (s rootDomainSnapshot) getEntryWithSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool, source rootDomainEntrySource) {
+	val, ptr, flags, _, found, source = s.getEntryWithRevisionSource(key)
+	return val, ptr, flags, found, source
+}
+
+func (s rootDomainSnapshot) getEntryWithRevision(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool) {
+	val, ptr, flags, revision, found, _ = s.getEntryWithRevisionSource(key)
+	return val, ptr, flags, revision, found
+}
+
+func (s rootDomainSnapshot) getEntryWithRevisionSource(key []byte) (val []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, found bool, source rootDomainEntrySource) {
 	if s.mutable != nil {
-		if val, ptr, flags, found = s.mutable.GetEntry(key); found {
-			return val, ptr, flags, true, rootDomainEntrySourceCached
+		if val, ptr, flags, revision, found = memtableEntryWithRevision(s.mutable, key); found {
+			return val, ptr, flags, revision, true, rootDomainEntrySourceCached
 		}
 	}
 	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
-		if val, ptr, flags, found = s.immutables[idx].GetEntry(key); found {
-			return val, ptr, flags, true, rootDomainEntrySourceCached
+		if val, ptr, flags, revision, found = memtableEntryWithRevision(s.immutables[idx], key); found {
+			return val, ptr, flags, revision, true, rootDomainEntrySourceCached
 		}
 	}
 	if s.published != nil {
-		val, ptr, flags, found = s.published.GetEntry(key)
+		val, ptr, flags, revision, found = rootDomainLookupEntryWithRevision(s.published, key)
 		if found {
-			return val, ptr, flags, true, rootDomainEntrySourcePublished
+			return val, ptr, flags, revision, true, rootDomainEntrySourcePublished
 		}
 	}
-	return nil, page.ValuePtr{}, 0, false, rootDomainEntrySourceNone
+	return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false, rootDomainEntrySourceNone
 }
 
 func (s rootDomainSnapshot) visibleValue(key []byte) ([]byte, bool) {
@@ -1302,6 +1348,13 @@ type leasedUnsafeIterator struct {
 	closeOnce sync.Once
 	closeErr  error
 	release   func()
+}
+
+func (it *leasedUnsafeIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if it == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	return iterator.UnsafeEntryWithRevision(it.UnsafeIterator)
 }
 
 func (it *leasedUnsafeIterator) Close() error {
@@ -1621,6 +1674,13 @@ func (it *rootDomainUnsafeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) 
 	return it.cur.iter.UnsafeEntry()
 }
 
+func (it *rootDomainUnsafeIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if !it.valid {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	return iterator.UnsafeEntryWithRevision(it.cur.iter)
+}
+
 func (it *rootDomainUnsafeIterator) Key() []byte {
 	if !it.valid {
 		panic("iterator invalid")
@@ -1690,6 +1750,10 @@ func (it *rootDomainEmptyUnsafeIterator) UnsafeKey() []byte   { return nil }
 func (it *rootDomainEmptyUnsafeIterator) UnsafeValue() []byte { return nil }
 func (it *rootDomainEmptyUnsafeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return nil, page.ValuePtr{}, 0
+}
+
+func (it *rootDomainEmptyUnsafeIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
 }
 func (it *rootDomainEmptyUnsafeIterator) Key() []byte                 { panic("iterator invalid") }
 func (it *rootDomainEmptyUnsafeIterator) Value() []byte               { panic("iterator invalid") }

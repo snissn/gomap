@@ -995,6 +995,24 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.currVal, it.currPtr, it.flags
 }
 
+func (it *Iterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	val, ptr, flags := it.UnsafeEntry()
+	if it == nil || !it.valid || len(it.stack) == 0 {
+		return val, ptr, flags, page.LegacyEntryRevision
+	}
+	top := &it.stack[len(it.stack)-1]
+	if top.Node.Type() != page.PageTypeLeaf || top.Index < 0 || top.Index >= int(top.Node.Count()) {
+		return val, ptr, flags, page.LegacyEntryRevision
+	}
+	_, _, _, _, revision, err := top.Node.GetLeafEntryViewWithRevision(uint16(top.Index))
+	if err != nil {
+		it.err = err
+		it.valid = false
+		return val, ptr, flags, page.LegacyEntryRevision
+	}
+	return val, ptr, flags, revision
+}
+
 func (it *Iterator) Key() []byte {
 	return it.UnsafeKey()
 }
