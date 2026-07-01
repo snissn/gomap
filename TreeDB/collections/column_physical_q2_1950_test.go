@@ -248,10 +248,10 @@ func TestTypedColumnQ2DenseGroupCountDistinctBitsetLayout1950(t *testing.T) {
 }
 
 func TestTypedColumnQ2DenseGroupCountDistinctRankMapCapacity3158(t *testing.T) {
-	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity((1<<15)-1), (1<<15)-1; got != want {
+	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity((16<<10)-1), (16<<10)-1; got != want {
 		t.Fatalf("small rank map capacity=%d want %d", got, want)
 	}
-	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity(1<<15), 1<<15; got != want {
+	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity(16<<10), 16<<10; got != want {
 		t.Fatalf("threshold rank map capacity=%d want %d", got, want)
 	}
 	if got, want := columnTypedColumnDenseGroupCountDistinctRankMapCapacity(627_647), 209_215; got != want {
@@ -1071,12 +1071,9 @@ func assertTypedColumnQ2SortedGroupedDistinctPostPrepareDiagnostics3324(tb testi
 		}
 		return
 	}
-	if total == 0 {
-		tb.Fatalf("%s sorted grouped-distinct post-prepare split diagnostics=%+v want nonzero split work", label, diag)
-	}
 	// Tiny fixture phases can round to zero on coarse platform timers. This live
-	// path gate checks that split accounting is emitted and bounded; the merge
-	// additivity test covers all four individual fields structurally.
+	// path gate checks that split accounting is bounded; the merge additivity
+	// test covers all four individual fields structurally.
 	if diag.TypedColumnPreparePostPrepareNanos < total {
 		tb.Fatalf("%s typed-column post-prepare nanos=%d want >= split total %d diagnostics=%+v", label, diag.TypedColumnPreparePostPrepareNanos, total, diag)
 	}

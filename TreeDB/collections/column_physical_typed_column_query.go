@@ -2565,7 +2565,7 @@ func columnTypedColumnDenseGroupCountDistinctDictionaryCapacity(parts []columnTy
 
 func columnTypedColumnDenseGroupCountDistinctRankMapCapacity(dictionaryCapacity int) int {
 	const (
-		rankMapShrinkThreshold = 1 << 15
+		rankMapShrinkThreshold = 16 << 10
 		rankMapShrinkDivisor   = 3
 	)
 	if dictionaryCapacity <= rankMapShrinkThreshold {
