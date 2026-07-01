@@ -173,6 +173,51 @@ func TestConditionalTxnBackendBypassReadConflictsBeforePublish(t *testing.T) {
 	}
 }
 
+func TestConditionalTxnStagedReadDoesNotExtendReadSet(t *testing.T) {
+	cache, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:  true,
+		RelaxedSync: true,
+		AllowUnsafe: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	tx, err := cache.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+	if err := tx.Set([]byte("k"), []byte("staged")); err != nil {
+		t.Fatalf("tx.Set: %v", err)
+	}
+	got, _, err := tx.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("tx.GetVersioned staged: %v", err)
+	}
+	if string(got) != "staged" {
+		t.Fatalf("tx.GetVersioned staged value=%q want staged", got)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit: %v", err)
+	}
+
+	stats := cache.Stats()
+	if got := stats["treedb.cache.conditional_txn.read_set.samples_total"]; got != "1" {
+		t.Fatalf("read_set.samples_total=%q want 1", got)
+	}
+	if got := stats["treedb.cache.conditional_txn.read_set.entries_total"]; got != "0" {
+		t.Fatalf("read_set.entries_total=%q want 0", got)
+	}
+	if got := stats["treedb.cache.conditional_txn.read_set.max"]; got != "0" {
+		t.Fatalf("read_set.max=%q want 0", got)
+	}
+	if got := stats["treedb.cache.conditional_txn.read_set_entries_total"]; got != "" {
+		t.Fatalf("legacy flat read_set_entries_total stat=%q want absent", got)
+	}
+}
+
 func TestConditionalTxnDirectBypassRecordsPointConflictsPrecisely(t *testing.T) {
 	backend := NewMockBackend()
 	cache, err := Open(t.TempDir(), backend, Options{

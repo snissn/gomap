@@ -45,7 +45,7 @@ func TestPublicConditionalTxnCachedHandleCommitsThroughMemtable(t *testing.T) {
 	stats := db.Stats()
 	assertUintStatAtLeast(t, stats, "treedb.cache.conditional_txn.started_total", 1)
 	assertUintStatAtLeast(t, stats, "treedb.cache.conditional_txn.commits_total", 1)
-	assertUintStatAtLeast(t, stats, "treedb.cache.conditional_txn.read_set_entries_total", 1)
+	assertUintStatAtLeast(t, stats, "treedb.cache.conditional_txn.read_set.entries_total", 1)
 	assertUintStatEquals(t, stats, "treedb.cache.conditional_txn.active", 0)
 }
 

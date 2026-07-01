@@ -165,9 +165,6 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 		if err != nil {
 			return dst, revision, err
 		}
-		if err := tx.recordCurrentReadPrecondition(key); err != nil {
-			return dst, revision, err
-		}
 		if deleted {
 			return dst, revision, tree.ErrKeyNotFound
 		}
@@ -222,29 +219,6 @@ func (tx *ConditionalTxn) stagedReadAppend(key, dst []byte) ([]byte, page.EntryR
 		}
 	}
 	return dst, page.LegacyEntryRevision, false, false, nil
-}
-
-func (tx *ConditionalTxn) recordCurrentReadPrecondition(key []byte) error {
-	_, revision, err := tx.db.GetVersionedAppend(key, nil)
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		if recErr := tx.recordRead(key, revision, false); recErr != nil {
-			return recErr
-		}
-		if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
-			return backenddb.ErrConcurrentModification
-		}
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if recErr := tx.recordRead(key, revision, true); recErr != nil {
-		return recErr
-	}
-	if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
-		return backenddb.ErrConcurrentModification
-	}
-	return nil
 }
 
 // Has reports whether key exists in the transaction-visible state and records
