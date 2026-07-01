@@ -27,6 +27,7 @@ const (
 	rawKVOpRevisionHeaderSize             = rawKVOpHeaderSize + 8
 	rawKVZeroOpHeaderSize                 = 4
 	rawKVZeroOpHeaderSizeV3               = 2
+	rawKVRevisionOffsetInlineCap          = 8
 	rawKVNilRangeBoundLenUint32           = uint32(^uint32(0))
 
 	collectionRebuildVectorIndexPayloadVersion      = uint16(1)
@@ -161,6 +162,9 @@ type RawKVBatchPayloadBuilder struct {
 	zeroSetMaxKeyLen      int
 	zeroSetCompactVersion uint16
 	zeroSetValueRef       []byte
+	entryRevisions        bool
+	revisionOffsets       []uint32
+	revisionOffsetInline  [rawKVRevisionOffsetInlineCap]uint32
 }
 
 // NewRawKVBatchPayloadBuilder returns a builder initialized with best-effort
@@ -208,10 +212,80 @@ func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) error {
 	b.zeroSetMaxKeyLen = 0
 	b.zeroSetCompactVersion = 0
 	b.zeroSetValueRef = nil
+	b.entryRevisions = false
+	if b.revisionOffsets != nil {
+		b.revisionOffsets = b.revisionOffsets[:0]
+	}
 	if b.zeroPayload != nil {
 		b.zeroPayload = b.zeroPayload[:0]
 	}
 	return err
+}
+
+// EnableEntryRevisions switches the builder to RawKVBatch v4 layout before
+// appending operations, reserving an 8-byte revision slot per operation.
+func (b *RawKVBatchPayloadBuilder) EnableEntryRevisions() error {
+	if b == nil {
+		return ErrCorrupt
+	}
+	if b.payload == nil {
+		_ = b.ResetWithHint(0, 0)
+	}
+	if b.entryRevisions {
+		return nil
+	}
+	if b.count != 0 {
+		return ErrCorrupt
+	}
+	b.entryRevisions = true
+	b.zeroSetCandidate = false
+	b.zeroSetCompactOnly = false
+	b.zeroSetValuesOmitted = false
+	b.zeroSetValueLen = -1
+	b.zeroSetKeyBytes = 0
+	b.zeroSetMaxKeyLen = 0
+	b.zeroSetCompactVersion = 0
+	b.zeroSetValueRef = nil
+	b.resetRevisionOffsetsForHint()
+	if len(b.payload) < rawKVBatchHeaderSize {
+		if cap(b.payload) < rawKVBatchHeaderSize {
+			b.payload = make([]byte, rawKVBatchHeaderSize, rawKVBatchHeaderSize)
+		} else {
+			b.payload = b.payload[:rawKVBatchHeaderSize]
+		}
+	}
+	binary.LittleEndian.PutUint16(b.payload[0:2], rawKVBatchPayloadVersionWithRevisions)
+	return nil
+}
+
+func (b *RawKVBatchPayloadBuilder) resetRevisionOffsetsForHint() {
+	if b == nil {
+		return
+	}
+	if b.opHint > rawKVRevisionOffsetInlineCap {
+		if cap(b.revisionOffsets) < b.opHint {
+			b.revisionOffsets = make([]uint32, 0, b.opHint)
+			return
+		}
+		b.revisionOffsets = b.revisionOffsets[:0]
+		return
+	}
+	b.revisionOffsets = b.revisionOffsetInline[:0]
+}
+
+// EntryRevisionsEnabled reports whether the builder is emitting revision-aware
+// RawKVBatch payloads.
+func (b *RawKVBatchPayloadBuilder) EntryRevisionsEnabled() bool {
+	return b != nil && b.entryRevisions
+}
+
+// RevisionSlotOffsets returns byte offsets of revision slots in the canonical
+// payload. The returned slice aliases builder-owned storage and is read-only.
+func (b *RawKVBatchPayloadBuilder) RevisionSlotOffsets() []uint32 {
+	if b == nil || !b.entryRevisions || len(b.revisionOffsets) == 0 {
+		return nil
+	}
+	return b.revisionOffsets
 }
 
 func (b *RawKVBatchPayloadBuilder) Payload() []byte {
@@ -219,7 +293,15 @@ func (b *RawKVBatchPayloadBuilder) Payload() []byte {
 		return nil
 	}
 	if len(b.payload) >= rawKVBatchHeaderSize {
+		version := rawKVBatchPayloadVersion
+		if b.entryRevisions {
+			version = rawKVBatchPayloadVersionWithRevisions
+		}
+		binary.LittleEndian.PutUint16(b.payload[0:2], version)
 		binary.LittleEndian.PutUint32(b.payload[2:6], uint32(b.count))
+	}
+	if b.entryRevisions {
+		return b.payload
 	}
 	if b.zeroSetCompactOnly && b.zeroSetCandidate && b.count > 0 && b.zeroSetValueLen > 0 && len(b.zeroPayload) >= rawKVZeroBatchHeaderSize {
 		version := b.zeroSetCompactVersion
@@ -244,6 +326,91 @@ func (b *RawKVBatchPayloadBuilder) Payload() []byte {
 	}
 	b.materializeOmittedZeroValues()
 	return b.payload
+}
+
+// StampEntryRevisions writes revision slots in payload order for builders that
+// were initialized with EnableEntryRevisions.
+func (b *RawKVBatchPayloadBuilder) StampEntryRevisions(scan func(func(uint64) error) error) error {
+	if b == nil || scan == nil {
+		return ErrCorrupt
+	}
+	payload := b.Payload()
+	if !b.entryRevisions || len(payload) < rawKVBatchHeaderSize || binary.LittleEndian.Uint16(payload[0:2]) != rawKVBatchPayloadVersionWithRevisions {
+		return ErrCommandWALUnsupportedVersion
+	}
+	count := int(binary.LittleEndian.Uint32(payload[2:6]))
+	if count < 0 || count > (len(payload)-rawKVBatchHeaderSize)/rawKVOpRevisionHeaderSize {
+		return ErrCorrupt
+	}
+	if len(b.revisionOffsets) == count {
+		seen := 0
+		err := scan(func(revision uint64) error {
+			if seen >= count {
+				return ErrCorrupt
+			}
+			off := int(b.revisionOffsets[seen])
+			if off < rawKVBatchHeaderSize || off+8 > len(payload) {
+				return ErrCorrupt
+			}
+			binary.LittleEndian.PutUint64(payload[off:off+8], revision)
+			seen++
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		if seen != count {
+			return ErrCorrupt
+		}
+		return nil
+	}
+	off := rawKVBatchHeaderSize
+	seen := 0
+	err := scan(func(revision uint64) error {
+		if seen >= count || off+rawKVOpRevisionHeaderSize > len(payload) {
+			return ErrCorrupt
+		}
+		op := RawKVOp(payload[off])
+		keyLen := binary.LittleEndian.Uint32(payload[off+1 : off+5])
+		valueLen := binary.LittleEndian.Uint32(payload[off+5 : off+9])
+		keyBytes := keyLen
+		valueBytes := valueLen
+		if op == RawKVOpDeleteRange {
+			if keyLen == rawKVNilRangeBoundLenUint32 {
+				keyBytes = 0
+			}
+			if valueLen == rawKVNilRangeBoundLenUint32 {
+				valueBytes = 0
+			}
+		}
+		need := uint64(rawKVOpRevisionHeaderSize) + uint64(keyBytes) + uint64(valueBytes)
+		if need > uint64(len(payload)-off) || need > uint64(^uint(0)>>1) {
+			return ErrCorrupt
+		}
+		binary.LittleEndian.PutUint64(payload[off+9:off+17], revision)
+		off += int(need)
+		seen++
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if seen != count || off != len(payload) {
+		return ErrCorrupt
+	}
+	return nil
+}
+
+func (b *RawKVBatchPayloadBuilder) appendRevisionOffset(headerStart int) error {
+	if b == nil || !b.entryRevisions {
+		return nil
+	}
+	slot := headerStart + rawKVOpHeaderSize
+	if commandFrameIntExceedsUint32(slot + 8) {
+		return ErrRecordTooLarge
+	}
+	b.revisionOffsets = append(b.revisionOffsets, uint32(slot))
+	return nil
 }
 
 func (b *RawKVBatchPayloadBuilder) Count() int {
@@ -296,7 +463,7 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendSet(key, value []byte) 
 	if b.zeroSetCompactOnly && b.canAppendCompactZeroSet(value) {
 		return b.retainedCapAfterCompactZeroSetAppend(key, value)
 	}
-	needed := rawKVOpHeaderSize + len(key) + len(value)
+	needed := rawKVOperationHeaderSize(b.entryRevisions) + len(key) + len(value)
 	if b.zeroSetCompactOnly {
 		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
 	}
@@ -304,7 +471,11 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendSet(key, value []byte) 
 	if err != nil {
 		return 0, err
 	}
-	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
+	revisionOffsetBytes, err := b.retainedRevisionOffsetBytesAfterAppend()
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView), revisionOffsetBytes)
 }
 
 // RetainedCapAfterAppendDelete returns the payload-builder backing capacity
@@ -319,7 +490,7 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDelete(key []byte) (int
 	if commandFrameIntExceedsUint32(b.count+1) || commandFrameIntExceedsUint32(len(key)) {
 		return 0, ErrRecordTooLarge
 	}
-	needed := rawKVOpHeaderSize + len(key)
+	needed := rawKVOperationHeaderSize(b.entryRevisions) + len(key)
 	if b.zeroSetCompactOnly {
 		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
 	}
@@ -327,7 +498,11 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDelete(key []byte) (int
 	if err != nil {
 		return 0, err
 	}
-	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
+	revisionOffsetBytes, err := b.retainedRevisionOffsetBytesAfterAppend()
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView), revisionOffsetBytes)
 }
 
 // RetainedCapAfterAppendDeleteRange returns the payload-builder backing capacity
@@ -350,7 +525,7 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDeleteRange(start, end 
 	if err != nil {
 		return 0, err
 	}
-	needed := rawKVOpHeaderSize + startBytes + endBytes
+	needed := rawKVOperationHeaderSize(b.entryRevisions) + startBytes + endBytes
 	if b.zeroSetCompactOnly {
 		return b.retainedCapAfterCompactZeroMaterializeAppend(needed)
 	}
@@ -358,7 +533,11 @@ func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppendDeleteRange(start, end 
 	if err != nil {
 		return 0, err
 	}
-	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView))
+	revisionOffsetBytes, err := b.retainedRevisionOffsetBytesAfterAppend()
+	if err != nil {
+		return 0, err
+	}
+	return b.retainedPayloadBufferCap(payloadCap, cap(b.zeroPayload), cap(b.zeroSetValueView), revisionOffsetBytes)
 }
 
 func (b *RawKVBatchPayloadBuilder) Truncate(payloadLen, count int) {
@@ -372,6 +551,9 @@ func (b *RawKVBatchPayloadBuilder) Truncate(payloadLen, count int) {
 	b.materializeOmittedZeroValues()
 	b.payload = b.payload[:payloadLen]
 	b.count = count
+	if b.entryRevisions && count <= len(b.revisionOffsets) {
+		b.revisionOffsets = b.revisionOffsets[:count]
+	}
 	binary.LittleEndian.PutUint32(b.payload[2:6], uint32(count))
 	b.recomputeZeroSetCandidate()
 }
@@ -389,7 +571,7 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 	if err := validateRawKVOperation(&op); err != nil {
 		return nil, nil, err
 	}
-	if op.Revision != 0 {
+	if op.Revision != 0 && !b.entryRevisions {
 		return nil, nil, ErrCommandWALUnsupportedVersion
 	}
 	if op.Op == RawKVOpDeleteRange {
@@ -409,7 +591,7 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 		binary.LittleEndian.PutUint64(ridBuf[:], op.RID)
 		value = ridBuf[:]
 	}
-	return b.appendValidated(op.Op, op.Key, value)
+	return b.appendValidatedWithRevision(op.Op, op.Key, value, op.Revision)
 }
 
 // AppendSet appends a validated RawKV Set operation without materializing a
@@ -443,14 +625,21 @@ func (b *RawKVBatchPayloadBuilder) AppendSet(key, value []byte) (keyView, valueV
 		}
 		b.zeroSetCompactOnly = false
 	}
-	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key) + len(value))
+	headerSize := rawKVOperationHeaderSize(b.entryRevisions)
+	off, err := b.appendRawKVPayloadSpace(headerSize + len(key) + len(value))
 	if err != nil {
 		return nil, nil, err
 	}
 	b.payload[off] = byte(RawKVOpSet)
 	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(key)))
 	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], uint32(len(value)))
-	off += rawKVOpHeaderSize
+	if b.entryRevisions {
+		binary.LittleEndian.PutUint64(b.payload[off+9:off+17], 0)
+		if err := b.appendRevisionOffset(off); err != nil {
+			return nil, nil, err
+		}
+	}
+	off += headerSize
 	keyStart := off
 	copy(b.payload[off:], key)
 	off += len(key)
@@ -492,14 +681,21 @@ func (b *RawKVBatchPayloadBuilder) AppendDelete(key []byte) (keyView []byte, err
 		}
 		b.zeroSetCompactOnly = false
 	}
-	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key))
+	headerSize := rawKVOperationHeaderSize(b.entryRevisions)
+	off, err := b.appendRawKVPayloadSpace(headerSize + len(key))
 	if err != nil {
 		return nil, err
 	}
 	b.payload[off] = byte(RawKVOpDelete)
 	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(key)))
 	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], 0)
-	off += rawKVOpHeaderSize
+	if b.entryRevisions {
+		binary.LittleEndian.PutUint64(b.payload[off+9:off+17], 0)
+		if err := b.appendRevisionOffset(off); err != nil {
+			return nil, err
+		}
+	}
+	off += headerSize
 	keyStart := off
 	copy(b.payload[off:], key)
 	off += len(key)
@@ -537,14 +733,21 @@ func (b *RawKVBatchPayloadBuilder) AppendDeleteRange(start, end []byte) (startVi
 		}
 		b.zeroSetCompactOnly = false
 	}
-	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + startBytes + endBytes)
+	headerSize := rawKVOperationHeaderSize(b.entryRevisions)
+	off, err := b.appendRawKVPayloadSpace(headerSize + startBytes + endBytes)
 	if err != nil {
 		return nil, err
 	}
 	b.payload[off] = byte(RawKVOpDeleteRange)
 	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], startLen)
 	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], endLen)
-	off += rawKVOpHeaderSize
+	if b.entryRevisions {
+		binary.LittleEndian.PutUint64(b.payload[off+9:off+17], 0)
+		if err := b.appendRevisionOffset(off); err != nil {
+			return nil, err
+		}
+	}
+	off += headerSize
 	if startBytes > 0 {
 		startStart := off
 		copy(b.payload[off:], start)
@@ -741,7 +944,35 @@ func (b *RawKVBatchPayloadBuilder) retainedPayloadBufferCap(caps ...int) (int, e
 	return total, nil
 }
 
-func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte) (keyView, valueView []byte, err error) {
+func (b *RawKVBatchPayloadBuilder) retainedRevisionOffsetBytesAfterAppend() (int, error) {
+	if b == nil || !b.entryRevisions {
+		return 0, nil
+	}
+	newLen := len(b.revisionOffsets) + 1
+	newCap := cap(b.revisionOffsets)
+	if newLen > newCap {
+		newCap *= 2
+		if newCap < newLen {
+			newCap = newLen
+		}
+		if b.opHint > newCap {
+			newCap = b.opHint
+		}
+		if newCap < rawKVRevisionOffsetInlineCap {
+			newCap = rawKVRevisionOffsetInlineCap
+		}
+	}
+	if newCap <= rawKVRevisionOffsetInlineCap {
+		return 0, nil
+	}
+	maxInt := int(^uint(0) >> 1)
+	if newCap > maxInt/4 {
+		return 0, ErrRecordTooLarge
+	}
+	return newCap * 4, nil
+}
+
+func (b *RawKVBatchPayloadBuilder) appendValidatedWithRevision(op RawKVOp, key, value []byte, revision uint64) (keyView, valueView []byte, err error) {
 	if b == nil {
 		return nil, nil, ErrCorrupt
 	}
@@ -764,14 +995,21 @@ func (b *RawKVBatchPayloadBuilder) appendValidated(op RawKVOp, key, value []byte
 		}
 		b.zeroSetCompactOnly = false
 	}
-	off, err := b.appendRawKVPayloadSpace(rawKVOpHeaderSize + len(key) + len(value))
+	headerSize := rawKVOperationHeaderSize(b.entryRevisions)
+	off, err := b.appendRawKVPayloadSpace(headerSize + len(key) + len(value))
 	if err != nil {
 		return nil, nil, err
 	}
 	b.payload[off] = byte(op)
 	binary.LittleEndian.PutUint32(b.payload[off+1:off+5], uint32(len(key)))
 	binary.LittleEndian.PutUint32(b.payload[off+5:off+9], uint32(len(value)))
-	off += rawKVOpHeaderSize
+	if b.entryRevisions {
+		binary.LittleEndian.PutUint64(b.payload[off+9:off+17], revision)
+		if err := b.appendRevisionOffset(off); err != nil {
+			return nil, nil, err
+		}
+	}
+	off += headerSize
 	keyStart := off
 	copy(b.payload[off:], key)
 	off += len(key)

@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strconv"
@@ -69,6 +70,10 @@ func (tdb *DB) appendPublicRawKVCommandEntryScan(scanEntries func(func(batch.Ent
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
 	return err
+}
+
+func (tdb *DB) commandWALPayloadShouldBypassForValue(key, value []byte) bool {
+	return tdb != nil && tdb.cached != nil && tdb.cached.CommandWALPayloadShouldBypassForValue(key, value)
 }
 
 func (tdb *DB) appendPublicRawKVDeleteRangeCommand(start, end []byte, sync bool) error {
@@ -304,6 +309,13 @@ const commandWALPublicBatchEstimatedKeyValueBytes = 192
 // large-batch peak while preserving the compact fast path for ordinary batches.
 const commandWALPublicBatchPayloadSoftCapBytes = 128 << 20
 
+const commandWALRawKVBatchHeaderSize = 2 + 4
+
+type commandWALPublicRevisionEntries interface {
+	PointRevisionStats() (page.EntryRevision, bool)
+	OrderedEntries() []batch.Entry
+}
+
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	b := &commandWALPublicBatch{db: tdb, inner: inner}
 	b.disableInnerStreamingBypass()
@@ -325,8 +337,19 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 		return
 	}
 	_ = b.payload.ResetWithHint(b.payloadOpHint, b.payloadByteHint)
+	if b.payloadShouldCarryEntryRevisions() {
+		_ = b.payload.EnableEntryRevisions()
+	}
 	b.payloadBypass = false
 	b.hasDeleteRange = false
+}
+
+func (b *commandWALPublicBatch) payloadShouldCarryEntryRevisions() bool {
+	if b == nil || b.db == nil || b.inner == nil {
+		return false
+	}
+	_, ok := b.inner.(commandWALPublicRevisionEntries)
+	return ok
 }
 
 func (b *commandWALPublicBatch) preparePayloadForAppend() {
@@ -412,7 +435,18 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
-	if !retainReplayViews {
+	if !retainReplayViews && useInnerView {
+		err = b.innerSetView(key, value)
+		if err != nil {
+			return nil, nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.recordPointIngress(commitlog.RawKVOpSet, len(key)+len(value), true)
+		b.dirty = true
+		return nil, nil, nil
+	}
+	if b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
 		if useInnerView {
 			err = b.innerSetView(key, value)
 		} else {
@@ -427,22 +461,15 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		b.dirty = true
 		return nil, nil, nil
 	}
-	if retainReplayViews && commandWALPublicAllZeroBytes(value) {
-		// The raw-KV payload builder tracks the first zero value by backing-array
-		// identity so repeated immutable zero buffers can avoid rescanning. Adapter
-		// replay-byte callers may reuse and mutate their value buffer between Put
-		// calls, so keep that compact-zero identity tied to an immutable copy.
+	if !useInnerView && commandWALPublicAllZeroBytes(value) {
+		// AppendSet compact-zero tracking keys off the first zero value backing
+		// array. Plain Set callers may reuse and mutate their input buffer, so pin
+		// compact-zero identity to an immutable batch-owned copy.
 		value = append([]byte(nil), value...)
-	}
-	if b.shouldBypassPayloadAppendSet(key, value, retainReplayViews) {
-		if err := b.inner.Set(key, value); err != nil {
-			return nil, nil, err
-		}
-		b.payloadBypass = true
-		b.opCount++
-		b.recordPointIngress(commitlog.RawKVOpSet, len(key)+len(value), false)
-		b.dirty = true
-		return nil, nil, nil
+	} else if retainReplayViews && commandWALPublicAllZeroBytes(value) {
+		// Adapter replay-byte callers may also reuse and mutate their value buffer
+		// between Put calls, so keep that compact-zero identity immutable.
+		value = append([]byte(nil), value...)
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, valueView, err = b.payload.AppendSet(key, value)
@@ -454,7 +481,7 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		return nil, nil, err
 	}
 	b.opCount++
-	b.recordPointIngress(commitlog.RawKVOpSet, len(key)+len(value), true)
+	b.recordPointIngress(commitlog.RawKVOpSet, len(key)+len(value), useInnerView)
 	b.dirty = true
 	if retainReplayViews {
 		b.retainPayloadAfterWrite = true
@@ -486,7 +513,18 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 	}
 	b.preparePayloadForAppend()
 	key = normalizeRawKVPointKey(key)
-	if !retainReplayViews {
+	if !retainReplayViews && useInnerView {
+		err = b.innerDeleteView(key)
+		if err != nil {
+			return nil, err
+		}
+		b.payloadBypass = true
+		b.opCount++
+		b.recordPointIngress(commitlog.RawKVOpDelete, len(key), true)
+		b.dirty = true
+		return nil, nil
+	}
+	if b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
 		if useInnerView {
 			err = b.innerDeleteView(key)
 		} else {
@@ -501,16 +539,6 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 		b.dirty = true
 		return nil, nil
 	}
-	if b.shouldBypassPayloadAppendDelete(key, retainReplayViews) {
-		if err := b.inner.Delete(key); err != nil {
-			return nil, err
-		}
-		b.payloadBypass = true
-		b.opCount++
-		b.recordPointIngress(commitlog.RawKVOpDelete, len(key), false)
-		b.dirty = true
-		return nil, nil
-	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, err = b.payload.AppendDelete(key)
 	if err != nil {
@@ -521,7 +549,7 @@ func (b *commandWALPublicBatch) deleteView(key []byte, retainReplayViews, useInn
 		return nil, err
 	}
 	b.opCount++
-	b.recordPointIngress(commitlog.RawKVOpDelete, len(key), true)
+	b.recordPointIngress(commitlog.RawKVOpDelete, len(key), useInnerView)
 	b.dirty = true
 	if retainReplayViews {
 		b.retainPayloadAfterWrite = true
@@ -630,6 +658,9 @@ func (b *commandWALPublicBatch) innerDeleteView(key []byte) error {
 }
 
 func (b *commandWALPublicBatch) shouldBypassPayloadAppendSet(key, value []byte, retainReplayViews bool) bool {
+	if !retainReplayViews && b != nil && b.db != nil && b.db.commandWALPayloadShouldBypassForValue(key, value) {
+		return true
+	}
 	retainedCap, err := b.payload.RetainedCapAfterAppendSet(key, value)
 	return b.shouldBypassPayloadAppendRetainedCap(retainedCap, err, retainReplayViews)
 }
@@ -776,49 +807,18 @@ func commandWALPublicAllZeroBytes(p []byte) bool {
 	return len(p) > 0
 }
 
-var errCommandWALPublicBatchHasEntryRevision = errors.New("treedb: command wal public batch has entry revision")
-
-func (b *commandWALPublicBatch) hasCommandWALPointEntryRevisions() (bool, error) {
-	if b == nil || b.inner == nil {
-		return false, ErrClosed
-	}
-	err := b.inner.Replay(func(entry batch.Entry) error {
-		switch entry.Type {
-		case batch.OpDelete, batch.OpPut:
-			if entry.Revision != page.LegacyEntryRevision {
-				return errCommandWALPublicBatchHasEntryRevision
-			}
-		}
-		return nil
-	})
-	if errors.Is(err, errCommandWALPublicBatchHasEntryRevision) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
 func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
 	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
-		// Stable payloads are built before cached WriteAfterCommandWALAppend assigns
-		// visible entry revisions. Actual DB-backed command-WAL batches must rebuild
-		// once those revisions are present; test wrappers with no DB keep the pure
-		// stable-payload fast path.
-		if b.db == nil {
+		if b.payload.EntryRevisionsEnabled() {
+			if err := b.stampPayloadEntryRevisions(); err != nil {
+				return nil, err
+			}
 			return b.payload.Payload(), nil
 		}
-		hasEntryRevisions, err := b.hasCommandWALPointEntryRevisions()
-		if err != nil {
-			return nil, err
-		}
-		if !hasEntryRevisions {
-			return b.payload.Payload(), nil
-		}
+		return b.payload.Payload(), nil
 	}
 	byteHint, _ := b.inner.GetByteSize()
 	sawEntryRevision := false
@@ -856,6 +856,89 @@ func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 		return nil, err
 	}
 	return commitlog.EncodeRawKVBatchPayloadPlanned(plan, scan)
+}
+
+func (b *commandWALPublicBatch) stampPayloadEntryRevisions() error {
+	if b == nil || b.inner == nil {
+		return ErrClosed
+	}
+	if entries, ok := b.inner.(interface{ OrderedEntries() []batch.Entry }); ok {
+		return b.stampPayloadEntryRevisionsFromEntries(entries.OrderedEntries())
+	}
+	return b.payload.StampEntryRevisions(func(emit func(uint64) error) error {
+		return b.inner.Replay(func(entry batch.Entry) error {
+			switch entry.Type {
+			case batch.OpDelete, batch.OpPut:
+				if entry.Revision != page.LegacyEntryRevision {
+					return emit(uint64(entry.Revision))
+				}
+				return emit(0)
+			case batch.OpDeleteRange:
+				return emit(0)
+			default:
+				return nil
+			}
+		})
+	})
+}
+
+func (b *commandWALPublicBatch) stampPayloadEntryRevisionsFromEntries(entries []batch.Entry) error {
+	if b == nil {
+		return ErrClosed
+	}
+	payload := b.payload.Payload()
+	offsets := b.payload.RevisionSlotOffsets()
+	if len(offsets) > 0 {
+		seen := 0
+		for i := range entries {
+			entry := &entries[i]
+			revision := uint64(0)
+			switch entry.Type {
+			case batch.OpDelete, batch.OpPut:
+				if entry.Revision != page.LegacyEntryRevision {
+					revision = uint64(entry.Revision)
+				}
+			case batch.OpDeleteRange:
+			default:
+				continue
+			}
+			if seen >= len(offsets) {
+				return commitlog.ErrCorrupt
+			}
+			off := int(offsets[seen])
+			if off < commandWALRawKVBatchHeaderSize || off+8 > len(payload) {
+				return commitlog.ErrCorrupt
+			}
+			binary.LittleEndian.PutUint64(payload[off:off+8], revision)
+			seen++
+		}
+		if seen != len(offsets) {
+			return commitlog.ErrCorrupt
+		}
+		return nil
+	}
+	return b.payload.StampEntryRevisions(func(emit func(uint64) error) error {
+		for i := range entries {
+			entry := &entries[i]
+			switch entry.Type {
+			case batch.OpDelete, batch.OpPut:
+				if entry.Revision != page.LegacyEntryRevision {
+					if err := emit(uint64(entry.Revision)); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := emit(0); err != nil {
+					return err
+				}
+			case batch.OpDeleteRange:
+				if err := emit(0); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }
 
 func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
