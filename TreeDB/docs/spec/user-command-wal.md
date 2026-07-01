@@ -217,9 +217,12 @@ must not change replay bytes.
   expected matched/modified counts or optional document digests.
 - Raw KV command apply assigns and stores target `EntryRevision` metadata as
   part of the same command effect as the value or tombstone. Replay must derive
-  the same revision for the same accepted command input as live apply. For
-  command-WAL raw KV frames, the command frame `LSN` is the mutation revision
-  for all raw keys touched by the frame.
+  the same revision for the same accepted command input as live apply.
+  Non-Raft local command-WAL raw KV frames use the command frame `LSN` as the
+  mutation revision for all raw keys touched by the frame. Future Raft-applied
+  raw KV frames must carry or deterministically derive the Raft apply identity
+  used as the mutation revision before appending/applying through the local
+  command-WAL durability boundary.
 - Every command kind declares whether replay is strict or has an explicit
   idempotent-skip rule. Strict commands fail closed if replay observes evidence
   that the command effect already exists while `AppliedLSN` does not cover it.
