@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,6 +101,77 @@ func TestConditionalTxnDirectBypassCommitWaitsForOracleRecord(t *testing.T) {
 	}
 	if err := <-commitDone; !errors.Is(err, backenddb.ErrConcurrentModification) {
 		t.Fatalf("tx.Commit error=%v, want ErrConcurrentModification", err)
+	}
+}
+
+func TestConditionalTxnBackendBatchRecordsPointConflictsPrecisely(t *testing.T) {
+	backend := NewMockBackend()
+	cache, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer cache.Close()
+
+	if err := cache.Set([]byte("a"), []byte("before")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	tx, err := cache.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+	if _, _, err := tx.GetVersioned([]byte("a")); err != nil {
+		t.Fatalf("tx.GetVersioned: %v", err)
+	}
+
+	wb := cache.NewBatch()
+	value := make([]byte, 256)
+	for i := range value {
+		value[i] = 'v'
+	}
+	const n = 128
+	wb.backend = newBackendCommitBatch(backend.NewBatch(), n)
+	for i := 0; i < n; i++ {
+		key := []byte(fmt.Sprintf("z%05d", i))
+		if err := wb.Set(key, value); err != nil {
+			_ = wb.Close()
+			t.Fatalf("backend batch Set %d: %v", i, err)
+		}
+	}
+	if err := wb.Write(); err != nil {
+		_ = wb.Close()
+		t.Fatalf("backend batch Write: %v", err)
+	}
+	if err := wb.Close(); err != nil {
+		t.Fatalf("backend batch Close: %v", err)
+	}
+	if backend.writeCalls != 1 {
+		t.Fatalf("backend writeCalls=%d want 1 streaming backend commit", backend.writeCalls)
+	}
+	if got := cache.conditionalOracleRootMarkers.Load(); got != 0 {
+		t.Fatalf("conditional oracle root markers=%d want 0 for precise streaming metadata", got)
+	}
+	if got := cache.conditionalOracleRecordedPoints.Load(); got < n {
+		t.Fatalf("conditional oracle recorded points=%d want at least %d", got, n)
+	}
+
+	if err := tx.Set([]byte("a"), []byte("inside")); err != nil {
+		t.Fatalf("tx.Set: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit after disjoint streaming write: %v", err)
+	}
+	got, err := cache.Get([]byte("a"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "inside" {
+		t.Fatalf("Get=%q want inside", got)
 	}
 }
 

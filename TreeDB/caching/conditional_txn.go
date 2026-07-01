@@ -534,15 +534,26 @@ func (db *DB) conditionalRecordCommittedEntries(entries []batch.Entry, ranges []
 		}
 	}
 	seq := db.conditionalSeq.Add(1)
-	if len(entries) > 0 && db.conditionalOracle.recent == nil {
-		db.conditionalOracle.recent = make(map[string]uint64, len(entries))
-	}
 	pointCount := 0
+	rangeCount := 0
 	for i := range entries {
 		switch entries[i].Type {
 		case batch.OpPut, batch.OpDelete:
+			if db.conditionalOracle.recent == nil {
+				db.conditionalOracle.recent = make(map[string]uint64, len(entries))
+			}
 			db.conditionalOracle.recent[string(entries[i].Key)] = seq
 			pointCount++
+		case batch.OpDeleteRange:
+			if batch.IsDeleteRangeNoop(entries[i].Key, entries[i].Value) {
+				continue
+			}
+			db.conditionalOracle.ranges = append(db.conditionalOracle.ranges, conditionalRecentRange{
+				start: string(entries[i].Key),
+				end:   string(entries[i].Value),
+				seq:   seq,
+			})
+			rangeCount++
 		}
 	}
 	for i := range ranges {
@@ -552,11 +563,12 @@ func (db *DB) conditionalRecordCommittedEntries(entries []batch.Entry, ranges []
 			seq:   seq,
 		})
 	}
+	rangeCount += len(ranges)
 	if pointCount > 0 {
 		db.conditionalOracleRecordedPoints.Add(uint64(pointCount))
 	}
-	if len(ranges) > 0 {
-		db.conditionalOracleRecordedRanges.Add(uint64(len(ranges)))
+	if rangeCount > 0 {
+		db.conditionalOracleRecordedRanges.Add(uint64(rangeCount))
 	}
 }
 

@@ -32786,6 +32786,149 @@ func (b *Batch) updateBatchCopyHint() {
 	}
 }
 
+type backendCommitBatch struct {
+	batch.Interface
+	entries []batch.Entry
+}
+
+func newBackendCommitBatch(inner batch.Interface, capHint int) *backendCommitBatch {
+	if capHint < 1 {
+		capHint = 1
+	}
+	return &backendCommitBatch{
+		Interface: inner,
+		entries:   getEntrySlice(capHint),
+	}
+}
+
+func (b *backendCommitBatch) appendEntry(entry batch.Entry) {
+	if b == nil {
+		return
+	}
+	switch entry.Type {
+	case batch.OpPut, batch.OpDelete:
+		entry = batch.Entry{Type: entry.Type, Key: entry.Key}
+	case batch.OpDeleteRange:
+		if batch.IsDeleteRangeNoop(entry.Key, entry.Value) {
+			return
+		}
+		entry = batch.Entry{Type: batch.OpDeleteRange, Key: entry.Key, Value: entry.Value}
+	default:
+		return
+	}
+	b.entries = append(b.entries, entry)
+}
+
+func (b *backendCommitBatch) appendEntries(entries []batch.Entry) {
+	if b == nil || len(entries) == 0 {
+		return
+	}
+	for i := range entries {
+		b.appendEntry(entries[i])
+	}
+}
+
+func (b *backendCommitBatch) SetView(key, value []byte) error {
+	if b == nil || b.Interface == nil {
+		return backenddb.ErrClosed
+	}
+	if sv, ok := b.Interface.(interface{ SetView(key, value []byte) error }); ok {
+		return sv.SetView(key, value)
+	}
+	return b.Interface.Set(key, value)
+}
+
+func (b *backendCommitBatch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
+	if b == nil || b.Interface == nil {
+		return backenddb.ErrClosed
+	}
+	if s, ok := b.Interface.(interface {
+		SetWithRevision(key, value []byte, revision page.EntryRevision) error
+	}); ok {
+		return s.SetWithRevision(key, value, revision)
+	}
+	single := [1]batch.Entry{{Type: batch.OpPut, Key: key, Value: value, Revision: revision}}
+	return b.Interface.SetOps(single[:])
+}
+
+func (b *backendCommitBatch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
+	if b == nil || b.Interface == nil {
+		return backenddb.ErrClosed
+	}
+	if sv, ok := b.Interface.(interface {
+		SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
+	}); ok {
+		return sv.SetViewWithRevision(key, value, revision)
+	}
+	return b.SetWithRevision(key, value, revision)
+}
+
+func (b *backendCommitBatch) DeleteView(key []byte) error {
+	if b == nil || b.Interface == nil {
+		return backenddb.ErrClosed
+	}
+	if dv, ok := b.Interface.(interface{ DeleteView(key []byte) error }); ok {
+		return dv.DeleteView(key)
+	}
+	return b.Interface.Delete(key)
+}
+
+func (b *backendCommitBatch) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
+	if b == nil || b.Interface == nil {
+		return backenddb.ErrClosed
+	}
+	if d, ok := b.Interface.(interface {
+		DeleteWithRevision(key []byte, revision page.EntryRevision) error
+	}); ok {
+		return d.DeleteWithRevision(key, revision)
+	}
+	single := [1]batch.Entry{{Type: batch.OpDelete, Key: key, Revision: revision}}
+	return b.Interface.SetOps(single[:])
+}
+
+func (b *backendCommitBatch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
+	if b == nil || b.Interface == nil {
+		return backenddb.ErrClosed
+	}
+	if dv, ok := b.Interface.(interface {
+		DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
+	}); ok {
+		return dv.DeleteViewWithRevision(key, revision)
+	}
+	return b.DeleteWithRevision(key, revision)
+}
+
+func (b *backendCommitBatch) Close() error {
+	var err error
+	if b != nil && b.Interface != nil {
+		err = b.Interface.Close()
+	}
+	if b != nil && b.entries != nil {
+		putEntrySlice(b.entries)
+		b.entries = nil
+	}
+	return err
+}
+
+func appendBackendCommitEntry(backendBatch batch.Interface, entry batch.Entry) {
+	if recorder, ok := backendBatch.(*backendCommitBatch); ok {
+		recorder.appendEntry(entry)
+	}
+}
+
+func appendBackendCommitEntries(backendBatch batch.Interface, entries []batch.Entry) {
+	if recorder, ok := backendBatch.(*backendCommitBatch); ok {
+		recorder.appendEntries(entries)
+	}
+}
+
+func backendCommitEntries(backendBatch batch.Interface) []batch.Entry {
+	if recorder, ok := backendBatch.(*backendCommitBatch); ok {
+		return recorder.entries
+	}
+	return nil
+}
+
 func (b *Batch) addArenaInFlightBytes(n int) {
 	if b == nil || n <= 0 {
 		return
@@ -33113,25 +33256,31 @@ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) 
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
 		revision = b.revisionForBackendPoint(revision)
+		var err error
 		// Use the backend's view method with owned copies to avoid aliasing.
 		if revision != page.LegacyEntryRevision {
 			if sv, ok := b.backend.(interface {
 				SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
 			}); ok {
-				return sv.SetViewWithRevision(keyCopy, valCopy, revision)
-			}
-			if s, ok := b.backend.(interface {
+				err = sv.SetViewWithRevision(keyCopy, valCopy, revision)
+			} else if s, ok := b.backend.(interface {
 				SetWithRevision(key, value []byte, revision page.EntryRevision) error
 			}); ok {
-				return s.SetWithRevision(keyCopy, valCopy, revision)
+				err = s.SetWithRevision(keyCopy, valCopy, revision)
+			} else {
+				single := [1]batch.Entry{{Type: batch.OpPut, Key: keyCopy, Value: valCopy, Revision: revision}}
+				err = b.backend.SetOps(single[:])
 			}
-			single := [1]batch.Entry{{Type: batch.OpPut, Key: keyCopy, Value: valCopy, Revision: revision}}
-			return b.backend.SetOps(single[:])
+		} else if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
+			err = sv.SetView(keyCopy, valCopy)
+		} else {
+			err = b.backend.Set(keyCopy, valCopy)
 		}
-		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
-			return sv.SetView(keyCopy, valCopy)
+		if err != nil {
+			return err
 		}
-		return b.backend.Set(keyCopy, valCopy)
+		appendBackendCommitEntry(b.backend, batch.Entry{Type: batch.OpPut, Key: keyCopy})
+		return nil
 	}
 
 	if b.streamEligible {
@@ -33192,24 +33341,30 @@ func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.En
 		b.batchRange.add(key)
 		b.size += len(key) + len(value)
 		revision = b.revisionForBackendPoint(revision)
+		var err error
 		if revision != page.LegacyEntryRevision {
 			if sv, ok := b.backend.(interface {
 				SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
 			}); ok {
-				return sv.SetViewWithRevision(key, value, revision)
-			}
-			if s, ok := b.backend.(interface {
+				err = sv.SetViewWithRevision(key, value, revision)
+			} else if s, ok := b.backend.(interface {
 				SetWithRevision(key, value []byte, revision page.EntryRevision) error
 			}); ok {
-				return s.SetWithRevision(key, value, revision)
+				err = s.SetWithRevision(key, value, revision)
+			} else {
+				single := [1]batch.Entry{{Type: batch.OpPut, Key: key, Value: value, Revision: revision}}
+				err = b.backend.SetOps(single[:])
 			}
-			single := [1]batch.Entry{{Type: batch.OpPut, Key: key, Value: value, Revision: revision}}
-			return b.backend.SetOps(single[:])
+		} else if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
+			err = sv.SetView(key, value)
+		} else {
+			err = b.backend.Set(key, value)
 		}
-		if sv, ok := b.backend.(interface{ SetView(key, value []byte) error }); ok {
-			return sv.SetView(key, value)
+		if err != nil {
+			return err
 		}
-		return b.backend.Set(key, value)
+		appendBackendCommitEntry(b.backend, batch.Entry{Type: batch.OpPut, Key: key})
+		return nil
 	}
 
 	if b.streamEligible {
@@ -33252,24 +33407,30 @@ func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) erro
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
 		revision = b.revisionForBackendPoint(revision)
+		var err error
 		if revision != page.LegacyEntryRevision {
 			if dv, ok := b.backend.(interface {
 				DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
 			}); ok {
-				return dv.DeleteViewWithRevision(keyCopy, revision)
-			}
-			if d, ok := b.backend.(interface {
+				err = dv.DeleteViewWithRevision(keyCopy, revision)
+			} else if d, ok := b.backend.(interface {
 				DeleteWithRevision(key []byte, revision page.EntryRevision) error
 			}); ok {
-				return d.DeleteWithRevision(keyCopy, revision)
+				err = d.DeleteWithRevision(keyCopy, revision)
+			} else {
+				single := [1]batch.Entry{{Type: batch.OpDelete, Key: keyCopy, Revision: revision}}
+				err = b.backend.SetOps(single[:])
 			}
-			single := [1]batch.Entry{{Type: batch.OpDelete, Key: keyCopy, Revision: revision}}
-			return b.backend.SetOps(single[:])
+		} else if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
+			err = dv.DeleteView(keyCopy)
+		} else {
+			err = b.backend.Delete(keyCopy)
 		}
-		if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
-			return dv.DeleteView(keyCopy)
+		if err != nil {
+			return err
 		}
-		return b.backend.Delete(keyCopy)
+		appendBackendCommitEntry(b.backend, batch.Entry{Type: batch.OpDelete, Key: keyCopy})
+		return nil
 	}
 
 	if b.streamEligible {
@@ -33317,6 +33478,7 @@ func (b *Batch) DeleteRange(start, end []byte) error {
 		if err := b.backend.SetOps(single[:]); err != nil {
 			return err
 		}
+		appendBackendCommitEntry(b.backend, single[0])
 		if b.db != nil {
 			b.db.recordDeleteRangePlan(1, 1)
 		}
@@ -33361,24 +33523,30 @@ func (b *Batch) DeleteViewValidatedWithRevision(key []byte, revision page.EntryR
 		b.batchRange.add(key)
 		b.size += len(key)
 		revision = b.revisionForBackendPoint(revision)
+		var err error
 		if revision != page.LegacyEntryRevision {
 			if dv, ok := b.backend.(interface {
 				DeleteViewWithRevision(key []byte, revision page.EntryRevision) error
 			}); ok {
-				return dv.DeleteViewWithRevision(key, revision)
-			}
-			if d, ok := b.backend.(interface {
+				err = dv.DeleteViewWithRevision(key, revision)
+			} else if d, ok := b.backend.(interface {
 				DeleteWithRevision(key []byte, revision page.EntryRevision) error
 			}); ok {
-				return d.DeleteWithRevision(key, revision)
+				err = d.DeleteWithRevision(key, revision)
+			} else {
+				single := [1]batch.Entry{{Type: batch.OpDelete, Key: key, Revision: revision}}
+				err = b.backend.SetOps(single[:])
 			}
-			single := [1]batch.Entry{{Type: batch.OpDelete, Key: key, Revision: revision}}
-			return b.backend.SetOps(single[:])
+		} else if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
+			err = dv.DeleteView(key)
+		} else {
+			err = b.backend.Delete(key)
 		}
-		if dv, ok := b.backend.(interface{ DeleteView(key []byte) error }); ok {
-			return dv.DeleteView(key)
+		if err != nil {
+			return err
 		}
-		return b.backend.Delete(key)
+		appendBackendCommitEntry(b.backend, batch.Entry{Type: batch.OpDelete, Key: key})
+		return nil
 	}
 
 	if b.streamEligible {
@@ -33438,7 +33606,11 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 			b.batchRange.add(copiedOp.Key)
 		}
 		b.assignLegacyPointRevisions(copied)
-		return b.backend.SetOps(copied)
+		if err := b.backend.SetOps(copied); err != nil {
+			return err
+		}
+		appendBackendCommitEntries(b.backend, copied)
+		return nil
 	}
 	for _, op := range ops {
 		copied := op
@@ -33625,7 +33797,9 @@ func (b *Batch) maybeSwitchToStreaming() {
 		_ = backendBatch.Close()
 		return
 	}
-	b.backend = backendBatch
+	recorder := newBackendCommitBatch(backendBatch, len(b.entries))
+	recorder.appendEntries(b.entries)
+	b.backend = recorder
 	b.entries = b.entries[:0]
 }
 
@@ -33687,8 +33861,8 @@ func (b *Batch) write(sync bool) error {
 				b.db.backendRange.add(b.batchRange.min)
 				b.db.backendRange.add(b.batchRange.max)
 				b.db.mu.Unlock()
-				b.db.conditionalRecordGlobalWrite()
 			}
+			b.db.conditionalRecordCommittedEntries(backendCommitEntries(b.backend), nil, 0)
 		})
 		if cerr := b.backend.Close(); cerr != nil && err == nil {
 			err = cerr
