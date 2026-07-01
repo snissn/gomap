@@ -666,6 +666,82 @@ func TestPublicCommandWALBatchWritesPreserveVisibleRevisionOnReopen(t *testing.T
 	}
 }
 
+func TestPublicCommandWALDurableBatchWriteSyncDoesNotCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileCommandWALDurable, dir)
+	opts.CommandWALStatsScan = true
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	opts.FlushThreshold = 1 << 30
+	opts.MaxQueuedMemtables = -1
+	opts.WriterFlushMaxMemtables = 0
+	opts.WriterFlushMaxDuration = 0
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	commitSeqBefore, err := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("parse commit_seq before: %v", err)
+	}
+
+	b := db.NewBatchWithSize(1)
+	key := []byte("durable-batch-sync")
+	want := []byte("visible-after-command-wal-replay")
+	if err := b.Set(key, want); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("immediate Get: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		_ = db.Close()
+		t.Fatalf("immediate Get=%q, want %q", got, want)
+	}
+
+	commitSeqAfterSync, err := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("parse commit_seq after sync: %v", err)
+	}
+	if commitSeqAfterSync != commitSeqBefore {
+		_ = db.Close()
+		t.Fatalf("commit_seq after batch WriteSync=%d want %d before explicit checkpoint", commitSeqAfterSync, commitSeqBefore)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopen, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Reopen command WAL: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	requireRawKVValue(t, reopen, key, want)
+}
+
 func TestPublicCommandWALBatchCloseDiscardsDirtyPayload(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),
@@ -2225,6 +2301,38 @@ func BenchmarkPublicCommandWALRawKVBatchWrite(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
+	opts := OptionsFor(ProfileCommandWALDurable, b.TempDir())
+	opts.DisableSideStores = true
+	opts.DisableBackgroundPrune = true
+	db, err := Open(opts)
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	value := []byte("public-command-wal-value")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch := db.NewBatchWithSize(1)
+		var keyBuf [32]byte
+		key := strconv.AppendInt(keyBuf[:0], int64(i), 10)
+		if err := batch.Set(key, value); err != nil {
+			_ = batch.Close()
+			b.Fatalf("batch Set: %v", err)
+		}
+		if err := batch.WriteSync(); err != nil {
+			_ = batch.Close()
+			b.Fatalf("batch WriteSync: %v", err)
+		}
+		if err := batch.Close(); err != nil {
+			b.Fatalf("batch Close: %v", err)
+		}
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "batches/s")
 }
 
 func assertPublicCommandWALFramesB(b *testing.B, db *DB, minFrames uint64) {

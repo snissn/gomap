@@ -34652,7 +34652,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
 		needRotate = true
 	}
-	if syncWrite && b.db.disableJournal {
+	// Command-WAL public writes already made the command frame durable before
+	// publishing to the mutable table; the cached backend checkpoint is not the
+	// per-WriteSync durability boundary for that path.
+	if syncWrite && b.db.disableJournal && b.commandWALAppend == nil {
 		needSyncBarrier = true
 	}
 	b.updateBatchEntryHint()
