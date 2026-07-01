@@ -505,6 +505,9 @@ class CelestiaSyncSummaryTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             payload = json.loads((out / "celestia_sync_runs.json").read_text(encoding="utf-8"))
+            maintenance = payload["runs"][0]["treedb_maintenance"]
+            self.assertTrue(maintenance["source_file"].endswith("final.debug_vars.json"))
+            self.assertEqual(maintenance["counters"]["maintenance_attempts"], 7)
             decision = payload["runs"][0]["treedb_decision_tree"]
             self.assertTrue(decision["source_file"].endswith("treedb_app_1.json"))
             self.assertEqual(decision["public_batch"]["set_view_calls_total"], 202)

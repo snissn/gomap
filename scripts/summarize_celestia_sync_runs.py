@@ -215,12 +215,22 @@ def numeric_suffix_sort_key(path: Path) -> tuple[int, float, str]:
     return (suffix, mtime, path.name)
 
 
-def treedb_application_stats_candidates(home: Path) -> list[Path]:
+def treedb_application_stats_candidates(home: Path, *, include_dwell: bool) -> list[Path]:
     sync = home / "sync"
     candidates: list[Path] = []
 
-    dwell_candidates = list((sync / "dwell-stats").glob("treedb_app_*.json"))
-    candidates.extend(sorted(dwell_candidates, key=numeric_suffix_sort_key, reverse=True))
+    if include_dwell:
+        dwell_candidates = list((sync / "dwell-stats").glob("treedb_app_*.json"))
+        candidates.extend(sorted(dwell_candidates, key=numeric_suffix_sort_key, reverse=True))
+
+    maintenance_quiesce = sync / "maintenance-quiesce"
+    if maintenance_quiesce.is_dir() and not include_dwell:
+        quiesce_debug = sorted(
+            maintenance_quiesce.glob("debug_vars_*.json"),
+            key=numeric_suffix_sort_key,
+            reverse=True,
+        )
+        candidates.extend(quiesce_debug)
 
     diagnostics = sync / "diagnostics"
     if diagnostics.is_dir():
@@ -243,8 +253,7 @@ def treedb_application_stats_candidates(home: Path) -> list[Path]:
         candidates.extend(final_app_vars)
         candidates.extend(path for path in app_vars if path not in final_app_vars)
 
-    maintenance_quiesce = sync / "maintenance-quiesce"
-    if maintenance_quiesce.is_dir():
+    if maintenance_quiesce.is_dir() and include_dwell:
         quiesce_debug = sorted(
             maintenance_quiesce.glob("debug_vars_*.json"),
             key=numeric_suffix_sort_key,
@@ -255,8 +264,8 @@ def treedb_application_stats_candidates(home: Path) -> list[Path]:
     return candidates
 
 
-def load_treedb_application_stats(home: Path) -> dict[str, Any]:
-    for source in treedb_application_stats_candidates(home):
+def load_treedb_application_stats(home: Path, *, include_dwell: bool) -> dict[str, Any]:
+    for source in treedb_application_stats_candidates(home, include_dwell=include_dwell):
         payload = load_json(source)
         if not isinstance(payload, dict):
             continue
@@ -373,7 +382,7 @@ def count_fatal_matches(node_log: Path) -> dict[str, Any]:
 
 
 def summarize_treedb_maintenance(home: Path) -> dict[str, Any]:
-    source = load_treedb_application_stats(home)
+    source = load_treedb_application_stats(home, include_dwell=False)
     if not source.get("available"):
         return {key: value for key, value in source.items() if key != "stats"}
 
@@ -463,7 +472,7 @@ def aggregate_span_routes(routes: object) -> dict[str, Any]:
 
 
 def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
-    source = load_treedb_application_stats(home)
+    source = load_treedb_application_stats(home, include_dwell=True)
     if not source.get("available"):
         return {key: value for key, value in source.items() if key != "stats"}
 
