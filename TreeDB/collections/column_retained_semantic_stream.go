@@ -173,12 +173,12 @@ func (i *columnRetainedSemanticStreamV1PathSegmentInterner) intern(key []byte) s
 		return ""
 	}
 	if i.segments != nil {
-		if value, ok := i.segments[string(key)]; ok {
+		keyStr := string(key)
+		if value, ok := i.segments[keyStr]; ok {
 			return value
 		}
-		value := string(key)
-		i.segments[value] = value
-		return value
+		i.segments[keyStr] = keyStr
+		return keyStr
 	}
 	for _, value := range i.values {
 		if columnRetainedSemanticStreamV1StringBytesEqual(value, key) {
