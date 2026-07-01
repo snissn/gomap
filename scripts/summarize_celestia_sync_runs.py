@@ -85,6 +85,15 @@ PUBLIC_RAW_SPAN_NATIVE_ROUTES = [
     "update_sync",
 ]
 
+TREEDB_DECISION_STAT_PREFIXES = [
+    "treedb.command_wal.public_batch.",
+    "treedb.raw.span_native.",
+    "treedb.flush_apply.span_native.",
+    "treedb.flush_admission.flush_apply_span_native",
+    "treedb.publish.ordered_root_delta_group.",
+    "treedb.cache.flush_apply.",
+]
+
 
 def parse_key_value_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -447,6 +456,14 @@ def has_treedb_maintenance_stats(stats: dict[str, Any]) -> bool:
     return any(str(key).startswith("treedb.cache.vlog_generation.") for key in stats)
 
 
+def has_treedb_decision_stats(stats: dict[str, Any]) -> bool:
+    for key in stats:
+        key_text = str(key)
+        if any(key_text.startswith(prefix) for prefix in TREEDB_DECISION_STAT_PREFIXES):
+            return True
+    return False
+
+
 def summarize_treedb_maintenance(home: Path) -> dict[str, Any]:
     source = load_treedb_application_stats(
         home,
@@ -565,7 +582,11 @@ def aggregate_span_routes(routes: object) -> dict[str, Any]:
 
 
 def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
-    source = load_treedb_application_stats(home, include_dwell=True)
+    source = load_treedb_application_stats(
+        home,
+        include_dwell=True,
+        require_stats=has_treedb_decision_stats,
+    )
     if not source.get("available"):
         return {key: value for key, value in source.items() if key != "stats"}
 
@@ -658,13 +679,15 @@ def summarize_treedb_decision_tree(home: Path) -> dict[str, Any]:
             ),
             "vlog_mmap_active_bytes": stat_int(
                 stats,
-                "treedb.vlog.mmap_active_bytes",
+                "treedb.process.memory.vlog_mmap_active_bytes",
                 "treedb.cache.vlog_mmap.active_bytes",
+                "treedb.vlog.mmap_active_bytes",
             ),
             "vlog_mmap_dead_bytes": stat_int(
                 stats,
-                "treedb.vlog.mmap_dead_bytes",
+                "treedb.process.memory.vlog_mmap_dead_bytes",
                 "treedb.cache.vlog_mmap.dead_bytes",
+                "treedb.vlog.mmap_dead_bytes",
             ),
         },
     }
