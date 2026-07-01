@@ -389,6 +389,7 @@ type columnPartImageBuilder struct {
 type columnPartImageSectionData struct {
 	section ColumnPartImageSection
 	data    []byte
+	chunks  [][]byte
 }
 
 func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
@@ -434,7 +435,7 @@ func (b *columnPartImageBuilder) build() (ColumnPartImage, error) {
 			return ColumnPartImage{}, fmt.Errorf("typedcolumn: section %s offset=%d overlaps image bytes=%d", section.section.Kind, section.section.Offset, len(out))
 		}
 		out = append(out, make([]byte, section.section.Offset-len(out))...)
-		out = append(out, section.data...)
+		out = section.appendPayloadTo(out)
 	}
 	image := ColumnPartImage{
 		Version:       columnPartImageVersion,
@@ -465,9 +466,9 @@ func (b *columnPartImageBuilder) layoutManifestAndSections() ([]ColumnPartImageS
 		for i := range b.sections {
 			offset = alignColumnPartImageOffset(offset)
 			b.sections[i].section.Offset = offset
-			b.sections[i].section.Length = len(b.sections[i].data)
+			b.sections[i].section.Length = b.sections[i].payloadLen()
 			sections[i] = b.sections[i].section
-			offset += len(b.sections[i].data)
+			offset += b.sections[i].payloadLen()
 		}
 		if err := b.refreshLayoutContractSection(sections, len(manifest)); err != nil {
 			return nil, nil, err
@@ -977,17 +978,15 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 			continue
 		}
 		totalPayloadBytes := 0
+		payloadChunks := make([][]byte, 0, len(column.Blocks))
 		for i, block := range column.Blocks {
 			if len(block.Granule.Payload) != block.Descriptor.StoredBytes {
 				return fmt.Errorf("typedcolumn: column %s block %d payload bytes=%d descriptor stored bytes=%d", columnDescriptor.Name, i, len(block.Granule.Payload), block.Descriptor.StoredBytes)
 			}
 			totalPayloadBytes += block.Descriptor.StoredBytes
+			payloadChunks = append(payloadChunks, block.Granule.Payload)
 		}
-		data := make([]byte, 0, totalPayloadBytes)
-		for _, block := range column.Blocks {
-			data = append(data, block.Granule.Payload...)
-		}
-		b.appendSection(ColumnPartImageSection{
+		b.appendChunkedSection(ColumnPartImageSection{
 			Kind:        ColumnPartImageSectionColumnData,
 			Category:    ColumnPartImageCategoryDeclaredColumns,
 			Column:      columnDescriptor.Name,
@@ -996,7 +995,7 @@ func (b *columnPartImageBuilder) addColumnDataSections() error {
 			Blocks:      len(column.Blocks),
 			Encoding:    column.Definition.Encoding,
 			Compression: column.Definition.Compression,
-		}, data)
+		}, payloadChunks, totalPayloadBytes)
 	}
 	return nil
 }
@@ -1182,6 +1181,17 @@ func (b *columnPartImageBuilder) appendSection(section ColumnPartImageSection, d
 	b.sections = append(b.sections, columnPartImageSectionData{
 		section: section,
 		data:    data,
+	})
+}
+
+func (b *columnPartImageBuilder) appendChunkedSection(section ColumnPartImageSection, chunks [][]byte, payloadBytes int) {
+	section.Length = payloadBytes
+	if section.RawBytes == 0 && (section.Compression == CompressionNone || section.Kind != ColumnPartImageSectionColumnData) {
+		section.RawBytes = payloadBytes
+	}
+	b.sections = append(b.sections, columnPartImageSectionData{
+		section: section,
+		chunks:  chunks,
 	})
 }
 
@@ -1413,9 +1423,30 @@ func countColumnBlocks(desc ColumnPartDescriptor) int {
 func sumImageSectionDataBytes(sections []columnPartImageSectionData) int {
 	total := 0
 	for _, section := range sections {
-		total += len(section.data)
+		total += section.payloadLen()
 	}
 	return total
+}
+
+func (s columnPartImageSectionData) payloadLen() int {
+	if len(s.chunks) == 0 {
+		return len(s.data)
+	}
+	total := 0
+	for _, chunk := range s.chunks {
+		total += len(chunk)
+	}
+	return total
+}
+
+func (s columnPartImageSectionData) appendPayloadTo(dst []byte) []byte {
+	if len(s.chunks) == 0 {
+		return append(dst, s.data...)
+	}
+	for _, chunk := range s.chunks {
+		dst = append(dst, chunk...)
+	}
+	return dst
 }
 
 func alignColumnPartImageOffset(offset int) int {

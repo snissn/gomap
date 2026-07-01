@@ -356,7 +356,7 @@ func encodeColumnPartLayoutContract(part *ColumnPart, opts ColumnPartImageOption
 	enc.u16(columnPartImageVersion)
 	enc.u16(0)
 	enc.i64(int64(manifestBytes))
-	encodeColumnPartLayoutContractSection(&enc, ColumnPartLayoutContractSection{Offset: descriptorData.section.Offset, Length: len(descriptorData.data), Checksum: crc.Checksum(descriptorData.data)})
+	encodeColumnPartLayoutContractSection(&enc, ColumnPartLayoutContractSection{Offset: descriptorData.section.Offset, Length: descriptorData.payloadLen(), Checksum: descriptorData.payloadChecksum()})
 	enc.u32(uint32(len(part.Descriptor.Columns)))
 	for _, columnDesc := range part.Descriptor.Columns {
 		column, ok := part.Columns[columnDesc.Name]
@@ -409,7 +409,7 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		sectionRows = sections.data.section.Rows
 		sectionEncoding = sections.data.section.Encoding
 		sectionCompression = sections.data.section.Compression
-		sectionContract = ColumnPartLayoutContractSection{Offset: sections.data.section.Offset, Length: len(sections.data.data), Checksum: crc.Checksum(sections.data.data)}
+		sectionContract = ColumnPartLayoutContractSection{Offset: sections.data.section.Offset, Length: sections.data.payloadLen(), Checksum: sections.data.payloadChecksum()}
 	}
 	contractDef := column.Definition
 	contractDef.Encoding = sectionEncoding
@@ -441,13 +441,13 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		Blocks:              make([]ColumnPartLayoutContractBlock, 0, len(column.Blocks)),
 	}
 	if column.Definition.Encoding == EncodingRawUint32OffsetsList || column.Definition.Encoding == EncodingRawBytesOffsets {
-		contract.OffsetsSection = ColumnPartLayoutContractSection{Offset: sections.offsets.section.Offset, Length: len(sections.offsets.data), Checksum: crc.Checksum(sections.offsets.data)}
-		contract.ValuesSection = ColumnPartLayoutContractSection{Offset: sections.values.section.Offset, Length: len(sections.values.data), Checksum: crc.Checksum(sections.values.data)}
-		contract.OffsetsBytes = len(sections.offsets.data)
-		contract.ValuesBytes = len(sections.values.data)
+		contract.OffsetsSection = ColumnPartLayoutContractSection{Offset: sections.offsets.section.Offset, Length: sections.offsets.payloadLen(), Checksum: sections.offsets.payloadChecksum()}
+		contract.ValuesSection = ColumnPartLayoutContractSection{Offset: sections.values.section.Offset, Length: sections.values.payloadLen(), Checksum: sections.values.payloadChecksum()}
+		contract.OffsetsBytes = sections.offsets.payloadLen()
+		contract.ValuesBytes = sections.values.payloadLen()
 	}
 	if contract.Dictionary && dictionaryData.section.Kind == ColumnPartImageSectionDictionaries {
-		contract.DictionarySection = ColumnPartLayoutContractSection{Offset: dictionaryData.section.Offset, Length: len(dictionaryData.data), Checksum: crc.Checksum(dictionaryData.data)}
+		contract.DictionarySection = ColumnPartLayoutContractSection{Offset: dictionaryData.section.Offset, Length: dictionaryData.payloadLen(), Checksum: dictionaryData.payloadChecksum()}
 	} else if contract.Dictionary {
 		contract.StreamingCertified = false
 		contract.StatsCertified = false
@@ -497,6 +497,13 @@ func buildColumnPartLayoutContractColumn(opts ColumnPartImageOptions, columnDesc
 		}
 	}
 	return contract, nil
+}
+
+func (s columnPartImageSectionData) payloadChecksum() uint32 {
+	if len(s.chunks) == 0 {
+		return crc.Checksum(s.data)
+	}
+	return crc.ChecksumParts(s.chunks...)
 }
 
 type columnPartContractLayout struct {
