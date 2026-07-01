@@ -1536,6 +1536,111 @@ func TestPublicCommandWALBatchAppendUsesStablePayload(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchReplayBytesPayloadPreservesAssignedRevision(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	keyView, valueView, err := b.SetViewWithReplayBytes([]byte("k"), []byte("value"))
+	if err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("SetViewWithReplayBytes: %v", err)
+	}
+	if b.payloadBypass || b.payload.Count() != b.opCount || b.payload.Count() != 1 {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("payload state bypass=%t count=%d opCount=%d, want stable count 1", b.payloadBypass, b.payload.Count(), b.opCount)
+	}
+	if string(keyView) != "k" || string(valueView) != "value" {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("replay views key=%q value=%q, want k/value", keyView, valueView)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	val, revision, err := db.GetVersioned([]byte("k"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("GetVersioned: %v", err)
+	}
+	if !bytes.Equal(val, []byte("value")) || revision == LegacyEntryRevision {
+		_ = db.Close()
+		t.Fatalf("GetVersioned=(%q,%d), want (value,non-legacy)", val, revision)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewReader: %v", err)
+	}
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	var gotRevision uint64
+	visits := 0
+	if err := commitlog.ScanRawKVBatchPayloadWithRevision(env.Payload, func(op commitlog.RawKVOp, gotKey, gotValue []byte, revision uint64) error {
+		visits++
+		if op != commitlog.RawKVOpSet || string(gotKey) != "k" || string(gotValue) != "value" {
+			t.Fatalf("decoded op=%v key=%q value=%q", op, gotKey, gotValue)
+		}
+		gotRevision = revision
+		return nil
+	}); err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ScanRawKVBatchPayloadWithRevision: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("reader Close: %v", err)
+	}
+	if visits != 1 || gotRevision != uint64(revision) {
+		_ = db.Close()
+		t.Fatalf("command WAL visits=%d revision=%d, want 1/%d", visits, gotRevision, revision)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	reopen, err := Open(Options{Dir: dir, CommandWALStatsScan: true, DisableSideStores: true})
+	if err != nil {
+		t.Fatalf("Reopen command WAL: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+	val, reopenedRevision, err := reopen.GetVersioned([]byte("k"))
+	if err != nil {
+		t.Fatalf("reopen GetVersioned: %v", err)
+	}
+	if !bytes.Equal(val, []byte("value")) || reopenedRevision != revision {
+		t.Fatalf("reopen GetVersioned=(%q,%d), want (value,%d)", val, reopenedRevision, revision)
+	}
+}
+
 func TestPublicCommandWALBatchSetViewBypassesPayloadBuilderWithoutInnerCopy(t *testing.T) {
 	inner := &commandWALPayloadSoftCapBatch{}
 	wrapped := newCommandWALPublicBatch(nil, inner, 0)

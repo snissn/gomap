@@ -776,12 +776,49 @@ func commandWALPublicAllZeroBytes(p []byte) bool {
 	return len(p) > 0
 }
 
+var errCommandWALPublicBatchHasEntryRevision = errors.New("treedb: command wal public batch has entry revision")
+
+func (b *commandWALPublicBatch) hasCommandWALPointEntryRevisions() (bool, error) {
+	if b == nil || b.inner == nil {
+		return false, ErrClosed
+	}
+	err := b.inner.Replay(func(entry batch.Entry) error {
+		switch entry.Type {
+		case batch.OpDelete, batch.OpPut:
+			if entry.Revision != page.LegacyEntryRevision {
+				return errCommandWALPublicBatchHasEntryRevision
+			}
+		}
+		return nil
+	})
+	if errors.Is(err, errCommandWALPublicBatchHasEntryRevision) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
 	if b == nil || b.inner == nil {
 		return nil, ErrClosed
 	}
 	if !b.payloadBypass && b.payload.Count() == b.opCount && b.payload.Count() > 0 {
-		return b.payload.Payload(), nil
+		// Stable payloads are built before cached WriteAfterCommandWALAppend assigns
+		// visible entry revisions. Actual DB-backed command-WAL batches must rebuild
+		// once those revisions are present; test wrappers with no DB keep the pure
+		// stable-payload fast path.
+		if b.db == nil {
+			return b.payload.Payload(), nil
+		}
+		hasEntryRevisions, err := b.hasCommandWALPointEntryRevisions()
+		if err != nil {
+			return nil, err
+		}
+		if !hasEntryRevisions {
+			return b.payload.Payload(), nil
+		}
 	}
 	byteHint, _ := b.inner.GetByteSize()
 	sawEntryRevision := false
