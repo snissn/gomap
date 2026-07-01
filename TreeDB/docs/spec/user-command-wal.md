@@ -114,7 +114,7 @@ the helper call.
 | `LSN` | Monotonic local WAL sequence number assigned by the shared command WAL journal before command visibility/durable acknowledgement. Raw KV, collection, catalog, and future native-wire commands share this one sequence stream. |
 | `AppliedLSN` | Highest contiguous command LSN covered by the durable checkpointed TreeDB state. This value is selected atomically with the roots that contain those command effects. |
 | `Checkpoint` | Durable root boundary that syncs required files and records `AppliedLSN`. |
-| `Publish boundary` | One backend commit/meta selection that makes user roots, system root metadata, value-log/leaf-log reachability, and `AppliedLSN` visible together. |
+| `Publish boundary` | One backend commit/meta selection that makes user roots, system root metadata, value-log/leaf-log reachability, target raw KV revision state, and `AppliedLSN` visible together. |
 | `ExternalRef` | Durable reference to bytes outside the command frame, such as value-log bytes, future column files, dictionaries, filters, manifests, or compression metadata. Required external refs must be prepared, synced/protected as required by the durability mode, and declared before the command frame is recoverable. |
 | `State root` | The TreeDB root state selected by meta/system-root recovery. In distributed mode this is not automatically a consensus digest. |
 | `Replay executor` | The same semantic command executor used by the normal write path, constrained to deterministic replay mode. |
@@ -215,6 +215,16 @@ must not change replay bytes.
 - `Preconditions` make stale or incompatible replay fail closed.
 - `ResultAssertions` allow recovery to detect semantic drift, for example
   expected matched/modified counts or optional document digests.
+- Raw KV command apply assigns and stores target `EntryRevision` metadata as
+  part of the same command effect as the value or tombstone. Replay must derive
+  the same revision for the same accepted command input as live apply.
+  Non-Raft local command-WAL raw KV frames use the command frame `LSN` as the
+  mutation revision for all raw keys touched by the frame only when the shared
+  LSN allocator is seeded above the durable raw-KV revision floor. Otherwise the
+  accepted command must carry one effective mutation revision from the same
+  persisted domain. Future Raft-applied raw KV frames must carry or
+  deterministically derive the Raft apply identity used as the mutation revision
+  before appending/applying through the local command-WAL durability boundary.
 - Every command kind declares whether replay is strict or has an explicit
   idempotent-skip rule. Strict commands fail closed if replay observes evidence
   that the command effect already exists while `AppliedLSN` does not cover it.
@@ -241,6 +251,8 @@ Required integration points:
 - preserve the correctness properties of the current WAL implementation:
   append-before-visibility, checksum validation, terminal truncated-tail
   handling, rotation, flush/sync ordering, and cleanup only after durable proof;
+- make raw KV entry revision metadata part of the `RawKVBatch` command effect
+  instead of a physical sidecar record with a separate durability boundary;
 - fail closed on unknown required frame versions or command kinds.
 
 ### 5.4 Single Journal Owner
@@ -274,6 +286,7 @@ replayable without adding query-wide mutation semantics.
 | Surface | Current user-facing shape | V1 WAL command | Status policy |
 |---|---|---|---|
 | Raw KV set/delete/batch | `Set`, `Delete`, `Batch.Write` | `RawKVBatch` | PR1 has gated typed bytes and fixtures; production raw writes become `WAL-supported` after PR3 recovery dispatch and `AppliedCommandLSN` plumbing. |
+| Raw KV conditional transaction | target optimistic point-read transaction API | `RawKVBatch` with preconditions or a future `RawKVConditionalBatch` if payload extension is required | `future`; must reject before LSN assignment until point-read preconditions, entry revisions, and replay result assertions are implemented together. |
 | Collection insert batch | explicit IDs plus stored documents | `CollectionInsertBatchByID` | PR4 implementation: `WAL-supported` for JSON, BSON, and template-v1 stored documents through the normal collection executor. |
 | Collection delete | explicit document ID or ID batch | `CollectionDeleteBatchByID` | PR4 implementation: `WAL-supported`; missing IDs are explicit no-ops and recovery still advances `AppliedCommandLSN`. |
 | Collection declarative update | explicit document ID plus canonical update ops over resolved literal values | `CollectionUpdateByIDOps` or final replacement | PR5 implementation: callback and BSON-set update paths are `WAL-supported` by logging final accepted replacements; operator-native payloads remain future work. |
@@ -322,6 +335,18 @@ root/`AppliedLSN` publish rules.
 Batch preconditions and result assertions are evaluated for the whole batch. On
 recovery, any item-level mismatch that is not covered by a command-kind-specific
 idempotent-skip proof fails the whole command closed.
+
+Target conditional raw KV transaction commits use the same atomic command-frame
+rule. User-level point-read conflicts, unsupported range guards, and unsupported
+range operations must reject before LSN assignment so ordinary conflicts never
+create a command-WAL gap. If a future implementation needs to persist a failed
+conditional attempt after LSN assignment, it must log an explicit deterministic
+no-op/failure command that can advance `AppliedLSN` contiguously. Replay
+preconditions and result assertions are for deterministic drift/corruption
+detection, not for routine stale-transaction conflicts. Point-read preconditions
+and replay result assertions should use the existing
+`CommandEnvelope.Preconditions` and `CommandEnvelope.ResultAssertions` extension
+areas unless #3423 proves a new raw KV payload version is required.
 
 ### 6.2 Update API Categories
 
@@ -372,8 +397,8 @@ For a WAL-supported command, the required ordering is:
     normal executor has accepted or installed the command according to the API
     visibility contract
 13. later checkpoint, flush, close, or synced ack boundaries publish roots,
-    system metadata, external-ref reachability, and `AppliedLSN` in one durable
-    publish boundary before WAL cleanup
+    system metadata, target raw KV revision state, external-ref reachability,
+    and `AppliedLSN` in one durable publish boundary before WAL cleanup
 ```
 
 For WAL-on collection writes, no owner-visible state may be installed before the
@@ -397,10 +422,10 @@ covers it.
 
 A checkpoint, flush, close, synced ack, or recovery publish that records durable
 command effects in roots must also record the highest contiguous `AppliedLSN`
-covered by those roots. `AppliedLSN` is not ordinary asynchronous checkpoint
-metadata; every durable root publish that makes command effects independent of
-WAL replay must make the corresponding `AppliedLSN` durable in the same publish
-boundary.
+covered by those roots and any target raw KV revision state selected by those
+roots. `AppliedLSN` is not ordinary asynchronous checkpoint metadata; every
+durable root publish that makes command effects independent of WAL replay must
+make the corresponding `AppliedLSN` durable in the same publish boundary.
 
 `AppliedLSN` is metadata for the same command WAL sequence stream, not a
 separate collection watermark. It is required because commands are not always
@@ -414,7 +439,8 @@ Required publish/checkpoint ordering:
 1. stop or fence admission for commands that must be included in this checkpoint
 2. wait for admitted command apply/publish through the chosen AppliedLSN
 3. sync value-log, leaf-log, side-file, and pager bytes needed by published roots
-4. write durable root metadata plus AppliedLSN in the same meta-selected state
+4. write durable root metadata, target raw KV revision state, and AppliedLSN in
+   the same meta-selected state
 5. sync the metadata boundary
 6. delete or mark clean WAL segments whose max LSN <= AppliedLSN
 ```
@@ -484,7 +510,7 @@ visible until a meta page selects them. For command WAL, the selected state tupl
 is:
 
 ```text
-(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, required value-log/leaf-log reachability)
+(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, EntryRevision state, required value-log/leaf-log reachability)
 ```
 
 That tuple is indivisible for recovery. If any element is missing or stale, open
@@ -583,6 +609,11 @@ The implementation should remove or replace raw-record-specific writer and
 reader paths as part of the command WAL conversion. Tests should move from
 legacy raw record replay to `RawKVBatch` command replay.
 
+Target raw KV entry revisions are part of the logical `RawKVBatch` effect and
+must be recoverable through the selected root tuple. They must not be represented
+as an additional raw-record sidecar whose replay, cleanup, or checkpoint
+ordering can diverge from the user value.
+
 ## 11. Relationship to Raft and Distributed State
 
 Raft and local WAL should share command semantics but not the same durability
@@ -615,6 +646,13 @@ the user-command WAL and normal executor, and advances future `ApplyProgress` or
 applied-index metadata only after the selected local recoverability boundary is
 satisfied. If the selected boundary is root-recoverable, that means roots and
 `AppliedLSN` have been published atomically.
+
+If future Raft apply identity becomes the authority for target raw KV
+`EntryRevision` assignment, single-node command WAL apply and recovery must
+derive revisions from the same deterministic input. A replica may not advance
+future applied-index metadata past a revision-bearing raw KV mutation until the
+value, revision, root tuple, and local recoverability boundary are durable
+together.
 
 ## 12. Future Command Admission Policy
 

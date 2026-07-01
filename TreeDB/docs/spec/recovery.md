@@ -24,11 +24,15 @@ external refs, replays complete commands with `LSN > AppliedLSN` through the
 deterministic command executor, then checkpoints the recovered `AppliedLSN`
 before cleaning replayed WAL.
 
+Target entry revisions are part of the same recovered command effect as the raw
+KV value or tombstone. Recovery must not reconstruct revisions from a
+post-commit sidecar whose durability can diverge from the selected root tuple.
+
 Command effects and `AppliedLSN` are one recovered state. Open must select a
 durable tuple equivalent to:
 
 ```text
-(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, required value-log/leaf-log reachability)
+(UserRootPageID, SystemRootPageID, AppliedLSN, CommitSeq, EntryRevision state, required value-log/leaf-log reachability)
 ```
 
 If a crash leaves command effects without matching `AppliedLSN`, or
@@ -147,6 +151,17 @@ advance `AppliedLSN` in the same backend durability boundary. A restart during
 replay must observe either the old root plus old `AppliedLSN`, or the new root
 plus advanced `AppliedLSN`; it must not observe command effects without the
 matching `AppliedLSN` or `AppliedLSN` without command effects.
+
+For target versioned raw-KV entries, the replay executor assigns the same
+revision contract as live apply from the persisted raw-KV revision domain.
+Command-WAL replay uses the accepted command LSN as the mutation revision only
+when that LSN stream was seeded above the durable revision floor; otherwise
+replay uses the effective mutation revision carried by the accepted command
+input. Future Raft replay uses the Raft apply identity if that identity is the
+revision authority for the command. A replayed value without its revision, a
+revision not reachable through the selected entry, a recovered revision below
+the selected revision floor for a new mutation, or an unsupported/malformed
+conditional raw KV frame is a recovery failure.
 
 Replay publishes must advance `AppliedLSN` only over a contiguous LSN prefix.
 If command LSN `N` is ready but a lower LSN is neither already applied nor part

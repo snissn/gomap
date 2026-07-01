@@ -7,6 +7,9 @@ Status:
 - Current shipped contract: sections that describe existing key/value, cached,
   read-only, and collection write-domain behavior are normative for current
   code.
+- Target conditional raw-KV behavior is tracked by issue
+  https://github.com/snissn/gomap/issues/3420 and its child stack. It is not
+  current behavior until the named implementation and verification gates land.
 - Target durable-at-ack collection behavior is the user-command WAL contract in
   `user-command-wal.md`. It is not current behavior until the named
   implementation and verification gates land.
@@ -67,6 +70,48 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 - Point reads (`Get`, `GetMany`, `Has`, `GetAppend`) MUST reflect writes buffered in memtables (mutable + queued), even if they have not been flushed to the backend B+Tree yet.
 - Newer memtable entries MUST shadow older backend state ("newest wins"), including tombstones.
 
+### 2.6 Target versioned entry reads
+
+Target versioned entry APIs return the visible value together with an
+`EntryRevision` suitable for cache validation and stale-read detection.
+
+- `EntryRevision` is a monotonic token for a live raw-KV key. It advances when
+  that key is overwritten or deleted and reinserted. Revision `0` is reserved
+  for legacy/no-revision entries and must not be assigned to new raw mutations
+  once versioned reads are advertised.
+- `EntryRevision` is assigned from one persisted raw-KV revision domain for the
+  directory. The active write authority may derive the mutation revision from the
+  ordering source that makes the mutation visible: command-WAL LSN for
+  command-WAL raw writes and replay, backend commit sequence for backend-only
+  WAL-off raw writes, cached mutation sequence for cached WAL-off writes, and
+  future Raft apply identity for consensus-applied raw writes. Those authorities
+  are valid only when their allocator is seeded above the durable
+  `MaxEntryRevision`/revision floor selected with the current roots, or when the
+  accepted command carries an explicit effective mutation revision from that same
+  domain. Cached mutation sequence is allocated before the memtable entry
+  becomes visible and is later carried into backend publication. The revision is
+  stored with the entry rather than recomputed by readers.
+- Opening, replaying, restoring, or changing write profiles must not allow a
+  later overwrite of a live key to receive a lower revision than an earlier
+  visible value. If the implementation cannot prove the active authority is
+  seeded above the persisted revision domain, versioned mutation support must
+  fail closed before visibility.
+- A snapshot reports the revision visible at the time that snapshot was
+  acquired. Later writes do not mutate the revision observed through an older
+  snapshot.
+- Missing/tombstoned keys report the same not-found behavior as the matching
+  existing point-read API and do not invent a live revision.
+- Public safe-copy APIs return caller-owned key/value bytes. View APIs may
+  return callback-scoped or iterator-scoped views, but revision metadata must
+  not change the existing lifetime rules.
+- Cached mode must include buffered memtable writes in versioned reads before
+  the API is advertised as supported. Until then, public cached versioned reads
+  must fail closed with a documented unsupported error rather than read only the
+  backend root.
+- Versioned reads must be a native read-path operation. Implementations must not
+  require a second ordered-root lookup, a system-root sidecar lookup, or adapter
+  private metadata storage to obtain the revision for the visible entry.
+
 ## 3. Write Contracts
 
 ### 3.1 Point ops
@@ -107,6 +152,39 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 - `WriteSync` commits with sync guarantee only in durable mode.
 
 For WAL replay, commit-log batches are treated atomically at replay boundaries.
+
+### 3.3 Target conditional raw-KV transactions
+
+Target conditional transactions provide optimistic raw-KV commits with explicit
+read/precondition validation.
+
+- A transaction is created from a snapshot token that includes the commit
+  sequence and root identity needed to validate its reads.
+- `Get`, target versioned reads, and `Has` record point-read preconditions.
+  Reading an absent key records an absent-key precondition.
+- `Set` and `Delete` stage unconditional point mutations inside the
+  transaction. Commit applies the staged mutations atomically only if all
+  recorded preconditions still hold.
+- If another committed write touches a key read by the transaction, commit
+  returns `ErrConcurrentModification`. This includes overwrite, delete,
+  absent-read insert, and insert/delete cycles that occur while the transaction
+  is active.
+- Disjoint concurrent transactions may both commit. The implementation may
+  serialize the final root publish through the existing commit machinery, but it
+  must not serialize the whole transaction body behind a coarse global
+  transaction lock as the production design.
+- Recent committed write fingerprints are retained only while active
+  transactions can conflict with them. They are in-memory conflict-detection
+  state, not persistent tombstones.
+- Range reads and `DeleteRange` must either participate in documented range
+  guards or fail closed with a stable unsupported/conflict error. They must not
+  silently under-detect conflicts.
+- Command-WAL-backed transactions must append deterministic logical command
+  frames before visibility. Recovery replay must produce the same value and
+  revision contract as live apply by using the accepted command LSN as the
+  mutation revision only when the command LSN stream is seeded above the durable
+  raw-KV revision floor; otherwise the accepted command input must carry the
+  effective mutation revision from the same persisted revision domain.
 
 ## 4. Range and Iterator Contracts
 

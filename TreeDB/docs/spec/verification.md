@@ -185,6 +185,58 @@ Coverage:
 - `kvstore/adapters/treedb/read_snapshot_cached_writes_test.go`
 - Unified-bench correctness guardrail: `cmd/unified_bench/read_snapshot_guardrail_test.go` and `BenchConfig.ReadRequireHit`
 
+## 10.1 Target Conditional Raw KV Revisions And Transactions
+
+This section owns the planned verification gates for the target native
+conditional raw-KV feature tracked by
+https://github.com/snissn/gomap/issues/3420. The feature is not complete until
+entry revisions, command-WAL recovery, and conditional transactions are all
+implemented on the native raw write/read path.
+
+Invariant:
+- Raw KV entry revisions are first-class metadata on the visible entry path.
+  They are carried through memtables, batch entries, leaf construction, command
+  WAL replay, recovery, and future Raft apply semantics with the value or
+  tombstone.
+- All write paths share one persisted raw-KV revision domain. Tests must prove
+  cached, backend-only, command-WAL, reopen/replay, and future Raft authorities
+  seed above the durable revision floor or fail closed before versioned
+  visibility.
+- A sidecar-per-write metadata tree is rejected for this feature because it
+  creates a second hot-path lookup/write and an independent durability boundary.
+- Conditional transactions validate recorded point-read preconditions against
+  committed intervening writes and commit disjoint writes without serializing
+  whole transaction bodies behind a coarse global lock.
+- Unsupported range reads and `DeleteRange` inside conditional transactions fail
+  closed until deterministic range guards are implemented.
+
+Required coverage:
+- `TestRawKVEntryRevisionMonotonicSetOverwriteDeleteReinsert`
+- `TestRawKVVersionedSnapshotRevisionStable`
+- `TestRawKVEntryRevisionVisibleThroughCachedMemtable`
+- `TestRawKVEntryRevisionSurvivesReopenAndCommandWALReplay`
+- `TestRawKVEntryRevisionPreservedByLeafRebuildAndCompaction`
+- `TestConditionalTxnConflictsOnExistingReadOverwrite`
+- `TestConditionalTxnConflictsOnExistingReadDelete`
+- `TestConditionalTxnConflictsOnAbsentReadInsert`
+- `TestConditionalTxnConflictsOnAbsentReadInsertDeleteCycle`
+- `TestConditionalTxnAllowsDisjointConcurrentCommit`
+- `TestConditionalTxnRejectsUnsupportedRangeGuard`
+- `TestConditionalTxnCommandWALReplayMatchesLiveRevisionContract`
+
+Required performance evidence:
+- `BenchmarkGetVersioned`
+- `BenchmarkConditionalTxnReadSet1`
+- `BenchmarkConditionalTxnReadSet10`
+- `BenchmarkConditionalTxnReadSet100`
+- `BenchmarkConditionalTxnReadSet10000`
+- Raw write baseline comparison showing entry revision metadata does not add a
+  second ordered-root write or lookup per operation.
+- M0 placeholder benchmarks live in
+  `TreeDB/db/conditional_kv_contract_bench_test.go`; #3424/#3425 must replace
+  them with non-skipped benchmarks and allocation evidence before closing the
+  feature stack.
+
 ## 11. Collections Native Fast Path
 
 Invariant:
