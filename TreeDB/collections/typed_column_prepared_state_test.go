@@ -343,6 +343,251 @@ func TestTypedColumnPreparedStateMultiColumnMismatchFailsClosed(t *testing.T) {
 	}
 }
 
+func TestTypedColumnPreparedRangeReadCacheBounds3417(t *testing.T) {
+	raw := make([]byte, maxTypedColumnPreparedRangeCacheEntryBytes+4096)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	calls := 0
+	readRange := func(offset int, length int, section bool) ([]byte, error) {
+		calls++
+		if !section {
+			t.Fatalf("section=%v want true", section)
+		}
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		return raw[offset : offset+length], nil
+	}
+	cache := newTypedColumnPreparedRangeReadCache(readRange)
+	for i := 0; i < maxTypedColumnPreparedRangeCacheEntries+4; i++ {
+		offset := i*16 + 1
+		got, err := cache.read(offset, 4, true)
+		if err != nil {
+			t.Fatalf("cache read %d: %v", i, err)
+		}
+		if string(got) != string(raw[offset:offset+4]) {
+			t.Fatalf("cache read %d returned wrong bytes", i)
+		}
+	}
+	if cache.entryN != maxTypedColumnPreparedRangeCacheEntries {
+		t.Fatalf("cache entries=%d want hard cap %d", cache.entryN, maxTypedColumnPreparedRangeCacheEntries)
+	}
+	callsBefore := calls
+	if _, err := cache.read(1, 4, true); err != nil {
+		t.Fatalf("cached first range: %v", err)
+	}
+	if calls != callsBefore {
+		t.Fatalf("cached range caused read calls=%d want %d", calls, callsBefore)
+	}
+	uncachedOffset := (maxTypedColumnPreparedRangeCacheEntries+1)*16 + 1
+	if _, err := cache.read(uncachedOffset, 4, true); err != nil {
+		t.Fatalf("uncached overflow range: %v", err)
+	}
+	if calls != callsBefore+1 {
+		t.Fatalf("uncached overflow calls=%d want %d", calls, callsBefore+1)
+	}
+
+	largeCalls := 0
+	largeCache := newTypedColumnPreparedRangeReadCache(func(offset int, length int, section bool) ([]byte, error) {
+		largeCalls++
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("large range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		return raw[offset : offset+length], nil
+	})
+	largeLen := maxTypedColumnPreparedRangeCacheEntryBytes + 1
+	if _, err := largeCache.read(0, largeLen, true); err != nil {
+		t.Fatalf("large first read: %v", err)
+	}
+	if largeCache.entryN != 0 {
+		t.Fatalf("large read cached entries=%d want 0", largeCache.entryN)
+	}
+	if _, err := largeCache.read(0, largeLen, true); err != nil {
+		t.Fatalf("large second read: %v", err)
+	}
+	if largeCalls != 2 {
+		t.Fatalf("large read calls=%d want 2 uncached reads", largeCalls)
+	}
+}
+
+func TestTypedColumnPreparedMetadataPrefetchCoalescesSmallDictionary3417(t *testing.T) {
+	raw := make([]byte, 512)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	image := typedcolumn.ColumnPartImage{Sections: []typedcolumn.ColumnPartImageSection{
+		{Kind: typedcolumn.ColumnPartImageSectionDescriptor, Offset: 100, Length: 32},
+		{Kind: typedcolumn.ColumnPartImageSectionDictionaries, Offset: 140, Length: 16},
+	}}
+	type readCall struct {
+		offset int
+		length int
+	}
+	var calls []readCall
+	cache := newTypedColumnPreparedRangeReadCache(func(offset int, length int, section bool) ([]byte, error) {
+		if !section {
+			t.Fatalf("section=%v want true", section)
+		}
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		calls = append(calls, readCall{offset: offset, length: length})
+		return raw[offset : offset+length], nil
+	})
+	requests := []typedColumnPreparedColumnRequest{{IncludeDictionaries: true}}
+	if err := typedColumnPreparedPrefetchMetadataSections(image, requests, cache); err != nil {
+		t.Fatalf("prefetch metadata: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != (readCall{offset: 100, length: 56}) {
+		t.Fatalf("prefetch calls=%+v want one coalesced descriptor+dictionary read", calls)
+	}
+	callsBefore := len(calls)
+	if _, err := cache.read(100, 32, true); err != nil {
+		t.Fatalf("cached descriptor read: %v", err)
+	}
+	if _, err := cache.read(140, 16, true); err != nil {
+		t.Fatalf("cached dictionary read: %v", err)
+	}
+	if len(calls) != callsBefore {
+		t.Fatalf("cached sections caused calls=%d want %d", len(calls), callsBefore)
+	}
+}
+
+func TestTypedColumnPreparedMetadataPrefetchUsesFullSectionBudget3417(t *testing.T) {
+	raw := make([]byte, 512)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	image := typedcolumn.ColumnPartImage{Sections: []typedcolumn.ColumnPartImageSection{
+		{Kind: typedcolumn.ColumnPartImageSectionDescriptor, Offset: 100, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMetadata, Offset: 108, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMarks, Offset: 116, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionColumnStats, Offset: 124, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionPruningMetadata, Offset: 132, Length: 8},
+		{Kind: typedcolumn.ColumnPartImageSectionDictionaries, Offset: 140, Length: 8},
+	}}
+	type readCall struct {
+		offset int
+		length int
+	}
+	var calls []readCall
+	cache := newTypedColumnPreparedRangeReadCache(func(offset int, length int, section bool) ([]byte, error) {
+		if !section {
+			t.Fatalf("section=%v want true", section)
+		}
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		calls = append(calls, readCall{offset: offset, length: length})
+		return raw[offset : offset+length], nil
+	})
+	requests := []typedColumnPreparedColumnRequest{{
+		IncludeDictionaries:    true,
+		IncludeStats:           true,
+		IncludePruning:         true,
+		IncludeSortKeyMetadata: true,
+		IncludeSortKeyMarks:    true,
+	}}
+	if err := typedColumnPreparedPrefetchMetadataSections(image, requests, cache); err != nil {
+		t.Fatalf("prefetch metadata: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != (readCall{offset: 100, length: 48}) {
+		t.Fatalf("prefetch calls=%+v want one full-budget coalesced metadata read", calls)
+	}
+}
+
+func TestTypedColumnPreparedMetadataPrefetchSkipsLargeDictionary3417(t *testing.T) {
+	dictLen := maxTypedColumnPreparedRangeCacheEntryBytes + 1
+	raw := make([]byte, 140+dictLen)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	image := typedcolumn.ColumnPartImage{Sections: []typedcolumn.ColumnPartImageSection{
+		{Kind: typedcolumn.ColumnPartImageSectionDescriptor, Offset: 100, Length: 32},
+		{Kind: typedcolumn.ColumnPartImageSectionDictionaries, Offset: 140, Length: dictLen},
+	}}
+	type readCall struct {
+		offset int
+		length int
+	}
+	var calls []readCall
+	cache := newTypedColumnPreparedRangeReadCache(func(offset int, length int, section bool) ([]byte, error) {
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		calls = append(calls, readCall{offset: offset, length: length})
+		return raw[offset : offset+length], nil
+	})
+	requests := []typedColumnPreparedColumnRequest{{IncludeDictionaries: true}}
+	if err := typedColumnPreparedPrefetchMetadataSections(image, requests, cache); err != nil {
+		t.Fatalf("prefetch metadata: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("prefetch calls=%+v want no prefetch when dictionary exceeds cache entry cap", calls)
+	}
+	if _, err := cache.read(100, 32, true); err != nil {
+		t.Fatalf("descriptor read: %v", err)
+	}
+	if cache.entryN != 1 {
+		t.Fatalf("cache entries after descriptor=%d want 1", cache.entryN)
+	}
+	if _, err := cache.read(140, dictLen, true); err != nil {
+		t.Fatalf("large dictionary read: %v", err)
+	}
+	if cache.entryN != 1 {
+		t.Fatalf("cache entries after large dictionary=%d want descriptor only", cache.entryN)
+	}
+	if _, err := cache.read(140, dictLen, true); err != nil {
+		t.Fatalf("large dictionary second read: %v", err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("calls=%+v want descriptor plus two uncached large dictionary reads", calls)
+	}
+}
+
+func TestTypedColumnPreparedMetadataPrefetchSkipsUncacheableSortMarks3417(t *testing.T) {
+	marksLen := maxTypedColumnPreparedRangeCacheEntryBytes + 1
+	raw := make([]byte, 156+marksLen)
+	for i := range raw {
+		raw[i] = byte(i)
+	}
+	image := typedcolumn.ColumnPartImage{Sections: []typedcolumn.ColumnPartImageSection{
+		{Kind: typedcolumn.ColumnPartImageSectionDescriptor, Offset: 100, Length: 32},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMetadata, Offset: 140, Length: 16},
+		{Kind: typedcolumn.ColumnPartImageSectionSortKeyMarks, Offset: 156, Length: marksLen},
+	}}
+	type readCall struct {
+		offset int
+		length int
+	}
+	var calls []readCall
+	cache := newTypedColumnPreparedRangeReadCache(func(offset int, length int, section bool) ([]byte, error) {
+		if offset < 0 || length <= 0 || offset+length > len(raw) {
+			t.Fatalf("range offset=%d length=%d outside bytes=%d", offset, length, len(raw))
+		}
+		calls = append(calls, readCall{offset: offset, length: length})
+		return raw[offset : offset+length], nil
+	})
+	requests := []typedColumnPreparedColumnRequest{{IncludeSortKeyMarks: true}}
+	if err := typedColumnPreparedPrefetchMetadataSections(image, requests, cache); err != nil {
+		t.Fatalf("prefetch metadata: %v", err)
+	}
+	if len(calls) != 1 || calls[0] != (readCall{offset: 100, length: 56}) {
+		t.Fatalf("prefetch calls=%+v want descriptor+sort metadata only", calls)
+	}
+	callsBefore := len(calls)
+	if _, err := cache.read(156, marksLen, true); err != nil {
+		t.Fatalf("large sort marks read: %v", err)
+	}
+	if _, err := cache.read(156, marksLen, true); err != nil {
+		t.Fatalf("large sort marks second read: %v", err)
+	}
+	if len(calls) != callsBefore+2 {
+		t.Fatalf("large sort marks calls=%d want %d uncached reads", len(calls), callsBefore+2)
+	}
+}
+
 func TestTypedColumnPreparedPruningComposedSelectionsDoNotAliasScratch(t *testing.T) {
 	field := TypedStorageField{Name: "score", Path: "score", Owner: TypedStorageOwnerColumnPart, ValueType: "int64"}
 	values := []int64{
