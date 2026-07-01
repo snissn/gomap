@@ -1203,6 +1203,7 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 		LeafColumnar:          z != nil && z.indexColumnarLeaves,
 		PackedValuePtr:        z != nil && z.indexPackedValuePtr,
 		InternalBaseDelta:     z != nil && z.indexInternalBaseDelta,
+		EntryRevisions:        batchHasEntryRevisions(ops),
 	}
 	if z == nil || !z.adaptiveLeafEncoding {
 		return base
@@ -1253,6 +1254,26 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 		})
 	}
 	return node.AdaptiveLeafBuilderOptions(base, entries)
+}
+
+func batchHasEntryRevisions(ops []batch.Entry) bool {
+	for i := range ops {
+		if ops[i].Revision != page.LegacyEntryRevision {
+			return true
+		}
+	}
+	return false
+}
+
+func (z *Zipper) enableLeafBuilderEntryRevisions(b *node.Builder, ops []batch.Entry) {
+	if b == nil || b.LeafEntryRevisionsEnabled() {
+		return
+	}
+	pageID := b.PageID()
+	opts := z.leafBuilderOptions(ops)
+	opts.EntryRevisions = true
+	b.ResetWithOptions(b.Data(), page.PageTypeLeaf, opts)
+	b.SetPageID(pageID)
 }
 
 func (z *Zipper) newPooledBuilderForType(data []byte, typ page.PageType, ops []batch.Entry) *node.Builder {
@@ -2173,6 +2194,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	opIdx := 0
+	if oldNode.LeafEntryRevisionsEnabled() {
+		z.enableLeafBuilderEntryRevisions(builder, ops)
+	}
 
 	var (
 		splits                  []Split
@@ -2284,6 +2308,13 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 		metrics.SlabDeadBytesByFile[ptr.FileID] += int64(ptr.Length)
 	}
+	leafEntrySizeWithRevision := func(b *node.Builder, key, val []byte, flags byte, revision page.EntryRevision) (entrySize, prefixLen, suffixLen int) {
+		entrySize, prefixLen, suffixLen = b.LeafEntrySizeWithPrefix(key, val, flags)
+		if revision != page.LegacyEntryRevision && !b.LeafEntryRevisionsEnabled() {
+			entrySize = b.LeafEntrySizeWithRevision(key, val, flags, revision)
+		}
+		return entrySize, prefixLen, suffixLen
+	}
 
 	for {
 		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
@@ -2291,6 +2322,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		var oldLoaded bool
 		var oldKey, oldVal []byte
 		var oldPtr page.ValuePtr
+		var oldRevision page.EntryRevision
 		var oldFlags byte
 
 		if oldIdx >= oldCount && opIdx >= len(ops) {
@@ -2305,7 +2337,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// Compare
 			// Optimization: decode old entry once; reuse it below when we
 			// consume from oldNode in the same loop iteration.
-			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
+			k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
 			if err != nil {
 				return page.ChildRef{}, nil, err
 			}
@@ -2313,6 +2345,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			oldKey = k
 			oldVal = v
 			oldPtr = ptr
+			oldRevision = rev
 			oldFlags = f
 			batchKey := ops[opIdx].Key
 
@@ -2335,6 +2368,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		var key, val []byte
 		var flags byte
 		var valPtr page.ValuePtr
+		revision := page.LegacyEntryRevision
 		insertedFromBatch := false
 
 		if useBatch {
@@ -2345,6 +2379,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 			insertedFromBatch = true
 			key = op.Key
+			revision = op.Revision
 			if op.IsPtr {
 				flags = node.FlagPointer
 				valPtr = op.ValuePtr
@@ -2357,6 +2392,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			if oldLoaded {
 				key = oldKey
 				flags = oldFlags
+				revision = oldRevision
 				if oldFlags&node.FlagPointer != 0 {
 					valPtr = oldPtr
 				} else {
@@ -2364,12 +2400,13 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				}
 			} else {
 				// Optimization: View
-				k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
+				k, v, ptr, f, rev, err := oldNode.GetLeafEntryViewWithRevision(oldIdx)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
 				key = k
 				flags = f
+				revision = rev
 				if f&node.FlagPointer != 0 {
 					valPtr = ptr
 				} else {
@@ -2387,12 +2424,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 
 		// Insert into target builder
-		entrySize, prefixLen, suffixLen := target.LeafEntrySizeWithPrefix(key, val, flags)
+		entrySize, prefixLen, suffixLen := leafEntrySizeWithRevision(target, key, val, flags, revision)
 		var err error
 		if z.leafSoftFull(target, entrySize) {
 			err = node.ErrNodeFull
 		} else {
-			err = target.AddLeafEntryWithPrefix(key, val, flags, valPtr, entrySize, prefixLen, suffixLen)
+			err = target.AddLeafEntryWithPrefixRevision(key, val, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
 		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
@@ -2440,6 +2477,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 			splitBuilder := z.newPooledLeafBuilder(sdata, ops[startIdx:])
 			splitBuilder.SetPageID(sid)
+			if target.LeafEntryRevisionsEnabled() {
+				z.enableLeafBuilderEntryRevisions(splitBuilder, ops[startIdx:])
+			}
 
 			// Record split
 			// Use the full first key of the right node as the parent separator.
@@ -2466,8 +2506,8 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			targetOuterLeafDataPooled = z.outerLeavesInValueLog && reuseOuterLeafPages
 
 			// Retry insert
-			entrySize, prefixLen, suffixLen = target.LeafEntrySizeWithPrefix(key, val, flags)
-			err = target.AddLeafEntryWithPrefix(key, val, flags, valPtr, entrySize, prefixLen, suffixLen)
+			entrySize, prefixLen, suffixLen = leafEntrySizeWithRevision(target, key, val, flags, revision)
+			err = target.AddLeafEntryWithPrefixRevision(key, val, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
 			if err != nil {
 				return page.ChildRef{}, nil, err
 			}
@@ -3188,27 +3228,31 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	const underfullPPM = 350_000
 	pageCap := page.PageSize - node.NodeHeaderSize
 
-	leafEntryBytes := func(key, val []byte, ptr page.ValuePtr, flags byte) int {
+	leafEntryBytes := func(key, val []byte, ptr page.ValuePtr, flags byte, entryRevisions bool) int {
 		entrySize := 7 + len(key)
 		if flags&node.FlagPointer != 0 {
 			entrySize += page.ValuePtrSize
 		} else {
 			entrySize += len(val)
 		}
+		if entryRevisions {
+			entrySize += page.EntryRevisionSize
+		}
 		return entrySize + node.DirectoryEntrySize
 	}
 
 	leafRequiredBytes := func(n *node.Node) (int, error) {
 		sum := 0
+		entryRevisions := n.LeafEntryRevisionsEnabled()
 		for i := uint16(0); i < n.Count(); i++ {
-			k, v, ptr, flags, err := n.GetLeafEntryView(i)
+			k, v, ptr, flags, _, err := n.GetLeafEntryViewWithRevision(i)
 			if err != nil {
 				return 0, err
 			}
 			if flags&node.FlagTombstone != 0 {
 				continue
 			}
-			sum += leafEntryBytes(k, v, ptr, flags)
+			sum += leafEntryBytes(k, v, ptr, flags, entryRevisions)
 			if sum > pageCap {
 				return sum, nil
 			}
@@ -3241,17 +3285,20 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		}
 		b := z.newLeafBuilder(data, nil)
 		b.SetPageID(pid)
+		if left.LeafEntryRevisionsEnabled() || right.LeafEntryRevisionsEnabled() {
+			z.enableLeafBuilderEntryRevisions(b, nil)
+		}
 
 		addAll := func(n *node.Node) error {
 			for i := uint16(0); i < n.Count(); i++ {
-				k, v, ptr, flags, err := n.GetLeafEntryView(i)
+				k, v, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(i)
 				if err != nil {
 					return err
 				}
 				if flags&node.FlagTombstone != 0 {
 					continue
 				}
-				if err := b.AddLeafEntry(k, v, flags, ptr); err != nil {
+				if err := b.AddLeafEntryWithRevision(k, v, flags, ptr, revision); err != nil {
 					return err
 				}
 			}
@@ -3325,16 +3372,19 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		}
 		b := z.newLeafBuilder(data, nil)
 		b.SetPageID(pid)
+		if n.LeafEntryRevisionsEnabled() {
+			z.enableLeafBuilderEntryRevisions(b, nil)
+		}
 
 		for i := uint16(0); i < n.Count(); i++ {
-			k, v, ptr, flags, err := n.GetLeafEntryView(i)
+			k, v, ptr, flags, revision, err := n.GetLeafEntryViewWithRevision(i)
 			if err != nil {
 				return page.ChildRef{}, err
 			}
 			if flags&node.FlagTombstone != 0 {
 				continue
 			}
-			if err := b.AddLeafEntry(k, v, flags, ptr); err != nil {
+			if err := b.AddLeafEntryWithRevision(k, v, flags, ptr, revision); err != nil {
 				return page.ChildRef{}, err
 			}
 		}
@@ -3402,19 +3452,24 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		}
 		lb := z.newLeafBuilder(ldata, nil)
 		lb.SetPageID(lid)
+		entryRevisions := left.LeafEntryRevisionsEnabled() || right.LeafEntryRevisionsEnabled()
+		if entryRevisions {
+			z.enableLeafBuilderEntryRevisions(lb, nil)
+		}
 
 		// Collect combined entries in-order without copying.
 		type ev struct {
-			k     []byte
-			v     []byte
-			ptr   page.ValuePtr
-			flags byte
-			size  int
+			k        []byte
+			v        []byte
+			ptr      page.ValuePtr
+			revision page.EntryRevision
+			flags    byte
+			size     int
 		}
 		combined := make([]ev, 0, int(left.Count()+right.Count()))
 		for _, src := range []*node.Node{left, right} {
 			for i := uint16(0); i < src.Count(); i++ {
-				k, v, ptr, flags, err := src.GetLeafEntryView(i)
+				k, v, ptr, flags, revision, err := src.GetLeafEntryViewWithRevision(i)
 				if err != nil {
 					if !z.outerLeavesInValueLog {
 						retired = append(retired, lid, rid)
@@ -3427,7 +3482,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 				if z.leafPrefixCompression {
 					k = append([]byte(nil), k...)
 				}
-				combined = append(combined, ev{k: k, v: v, ptr: ptr, flags: flags, size: leafEntryBytes(k, v, ptr, flags)})
+				combined = append(combined, ev{k: k, v: v, ptr: ptr, revision: revision, flags: flags, size: leafEntryBytes(k, v, ptr, flags, entryRevisions)})
 			}
 		}
 		if len(combined) < 2 {
@@ -3478,9 +3533,12 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 
 		rb := z.newLeafBuilder(rdata, nil)
 		rb.SetPageID(rid)
+		if entryRevisions {
+			z.enableLeafBuilderEntryRevisions(rb, nil)
+		}
 
 		for i := 0; i < bestSplitAt; i++ {
-			if err := lb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
+			if err := lb.AddLeafEntryWithRevision(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr, combined[i].revision); err != nil {
 				if !z.outerLeavesInValueLog {
 					retired = append(retired, lid, rid)
 				}
@@ -3489,7 +3547,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		}
 		rightStart = append([]byte(nil), combined[bestSplitAt].k...)
 		for i := bestSplitAt; i < len(combined); i++ {
-			if err := rb.AddLeafEntry(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr); err != nil {
+			if err := rb.AddLeafEntryWithRevision(combined[i].k, combined[i].v, combined[i].flags, combined[i].ptr, combined[i].revision); err != nil {
 				if !z.outerLeavesInValueLog {
 					retired = append(retired, lid, rid)
 				}

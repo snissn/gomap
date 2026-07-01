@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // TwoWayMerger implements MergingIterator for two sources (Memtable and Disk).
@@ -115,6 +116,13 @@ func (m *TwoWayMerger) Value() []byte {
 		return nil
 	}
 	return m.cur.UnsafeValue()
+}
+
+func (m *TwoWayMerger) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if !m.valid || m.cur == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	return iterator.UnsafeEntryWithRevision(m.cur)
 }
 
 func (m *TwoWayMerger) KeyCopy(dst []byte) []byte {

@@ -24,6 +24,7 @@ type Builder struct {
 	leafColumnar          bool
 	leafColumnarV2        bool
 	leafPackedValuePtr    bool
+	leafEntryRevisions    bool
 	internalBaseDelta     bool
 	internalLeafLogRefs   bool
 	internalBaseChildID   uint64
@@ -142,6 +143,7 @@ type BuilderOptions struct {
 	LeafColumnar          bool
 	InternalBaseDelta     bool
 	PackedValuePtr        bool
+	EntryRevisions        bool
 }
 
 // LeafHeuristicEntry describes one logical leaf entry for adaptive encoding
@@ -249,6 +251,7 @@ type leafColumnarV2Entry struct {
 	valueLen uint16
 	valPtr   page.ValuePtr
 	flags    byte
+	revision page.EntryRevision
 }
 
 type leafColumnarPrefixV2Entry struct {
@@ -259,6 +262,7 @@ type leafColumnarPrefixV2Entry struct {
 	valPtr    page.ValuePtr
 	flags     byte
 	prefixLen uint16
+	revision  page.EntryRevision
 }
 
 type internalBaseDeltaEntry struct {
@@ -294,6 +298,7 @@ func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts Builde
 		leafColumnar:          opts.LeafColumnar,
 		leafColumnarV2:        leafColumnarV2,
 		leafPackedValuePtr:    opts.PackedValuePtr,
+		leafEntryRevisions:    pType == page.PageTypeLeaf && opts.EntryRevisions,
 		internalBaseDelta:     opts.InternalBaseDelta,
 	}
 	if pType == page.PageTypeLeaf && opts.LeafColumnar {
@@ -364,6 +369,12 @@ func (b *Builder) Count() uint16 {
 	return b.count
 }
 
+// LeafEntryRevisionsEnabled reports whether this leaf builder will encode
+// native per-entry revision metadata.
+func (b *Builder) LeafEntryRevisionsEnabled() bool {
+	return b != nil && b.pType == page.PageTypeLeaf && b.leafEntryRevisions
+}
+
 // SetInternalFenceBounds configures exact subtree bounds for internal pages.
 // low is inclusive and high is exclusive; nil high means unbounded.
 func (b *Builder) SetInternalFenceBounds(low, high []byte) {
@@ -411,6 +422,17 @@ func (b *Builder) LeafEntrySizeWithPrefix(key, value []byte, flags byte) (entryS
 	return b.leafEntrySize(key, value, flags)
 }
 
+// LeafEntrySizeWithRevision returns the encoded size for a revision-bearing
+// leaf entry. Callers that use this must build the page with EntryRevisions.
+func (b *Builder) LeafEntrySizeWithRevision(key, value []byte, flags byte, revision page.EntryRevision) int {
+	_ = revision
+	entrySize, _, _ := b.leafEntrySize(key, value, flags)
+	if !b.leafEntryRevisions {
+		entrySize += page.EntryRevisionSize
+	}
+	return entrySize
+}
+
 func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, prefixLen int, suffixLen int) {
 	valPtrSize := page.ValuePtrSize
 	if b.leafPackedValuePtr {
@@ -433,6 +455,9 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 			valSize = len(value)
 		}
 		entrySize = suffixLen + valSize + leafColumnarPrefixV2MetaSize
+		if b.leafEntryRevisions {
+			entrySize += page.EntryRevisionSize
+		}
 		return entrySize, prefixLen, suffixLen
 	}
 	if b.leafColumnar && !b.leafPrefixCompression {
@@ -447,6 +472,9 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 		// Columnar v2 stores key/value bytes in separate blobs and writes
 		// per-entry metadata (val offset + flags) in a columnar header region.
 		entrySize = suffixLen + valSize + leafColumnarV2MetaSize
+		if b.leafEntryRevisions {
+			entrySize += page.EntryRevisionSize
+		}
 		return entrySize, prefixLen, suffixLen
 	}
 	prefixLen = 0
@@ -482,28 +510,53 @@ func (b *Builder) leafEntrySize(key, value []byte, flags byte) (entrySize int, p
 	}
 
 	entrySize = headerSize + suffixLen + valSize
+	if b.leafEntryRevisions {
+		entrySize += page.EntryRevisionSize
+	}
 	return entrySize, prefixLen, suffixLen
 }
 
 // AddLeafEntry appends a leaf entry. Assumes keys are added in sorted order.
 func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+	return b.AddLeafEntryWithRevision(key, value, flags, valPtr, page.LegacyEntryRevision)
+}
+
+// AddLeafEntryWithRevision appends a native revision-bearing leaf entry.
+func (b *Builder) AddLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
+	if err := b.requireLeafEntryRevisions(revision); err != nil {
+		return err
+	}
 	if b.leafColumnar && !b.leafPrefixCompression {
 		if b.leafColumnarV2 {
-			return b.addLeafEntryColumnarV2(key, value, flags, valPtr)
+			return b.addLeafEntryColumnarV2(key, value, flags, valPtr, revision)
 		}
-		return b.addLeafEntryColumnar(key, value, flags, valPtr)
+		return b.addLeafEntryColumnar(key, value, flags, valPtr, revision)
 	}
 
 	// 1. Calculate Entry Size
 	// KeyPrefixLen(2) + KeySuffixLen(2) + ValLen(4) + Flags(1) + KeySuffix + Value/Ptr
 	entrySize, prefixLen, suffixLen := b.leafEntrySize(key, value, flags)
-	return b.AddLeafEntryWithPrefix(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+	return b.AddLeafEntryWithPrefixRevision(key, value, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
 }
 
-func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+func (b *Builder) requireLeafEntryRevisions(revision page.EntryRevision) error {
+	if revision == page.LegacyEntryRevision || b.leafEntryRevisions {
+		return nil
+	}
+	if b.pType == page.PageTypeLeaf && b.count == 0 {
+		b.leafEntryRevisions = true
+		return nil
+	}
+	if b.pType == page.PageTypeLeaf {
+		return ErrNodeFull
+	}
+	return ErrInvalidType
+}
+
+func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
 	valPtrSize := page.ValuePtrSize
 	if b.leafPackedValuePtr {
 		valPtrSize = page.PackedValuePtrSize
@@ -518,6 +571,9 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 		valLen = len(value)
 		valSize = valLen
 		entrySize += valSize
+	}
+	if b.leafEntryRevisions {
+		entrySize += page.EntryRevisionSize
 	}
 
 	required := entrySize + DirectoryEntrySize
@@ -542,6 +598,10 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 
 	keyStart := valueStart + valSize
 	copy(b.data[keyStart:keyStart+len(key)], key)
+	if b.leafEntryRevisions {
+		revisionStart := keyStart + len(key)
+		binary.LittleEndian.PutUint64(b.data[revisionStart:revisionStart+page.EntryRevisionSize], uint64(revision))
+	}
 
 	b.data[b.dirEnd] = byte(entryStart)
 	b.data[b.dirEnd+1] = byte(entryStart >> 8)
@@ -553,7 +613,7 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 	return nil
 }
 
-func (b *Builder) addLeafEntryColumnarV2(key, value []byte, flags byte, valPtr page.ValuePtr) error {
+func (b *Builder) addLeafEntryColumnarV2(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
 	valPtrSize := page.ValuePtrSize
 	if b.leafPackedValuePtr {
 		valPtrSize = page.PackedValuePtrSize
@@ -567,6 +627,9 @@ func (b *Builder) addLeafEntryColumnarV2(key, value []byte, flags byte, valPtr p
 	}
 
 	entrySize := leafColumnarV2MetaSize + len(key) + valSize
+	if b.leafEntryRevisions {
+		entrySize += page.EntryRevisionSize
+	}
 	required := entrySize + DirectoryEntrySize // key offset slot
 	freeSpace := b.heapStart - b.dirEnd
 	if freeSpace < required {
@@ -586,18 +649,22 @@ func (b *Builder) addLeafEntryColumnarV2(key, value []byte, flags byte, valPtr p
 		valueLen: valueLen,
 		valPtr:   valPtr,
 		flags:    flags,
+		revision: revision,
 	})
 	b.leafColumnarV2KeyBytes += len(key)
 	b.leafColumnarV2ValBytes += valSize
 
 	b.dirEnd += DirectoryEntrySize + leafColumnarV2MetaSize
+	if b.leafEntryRevisions {
+		b.dirEnd += page.EntryRevisionSize
+	}
 	b.heapStart -= len(key) + valSize
 	b.count++
 	b.leafIndex++
 	return nil
 }
 
-func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
+func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision, entrySize, prefixLen, suffixLen int) error {
 	valPtrSize := page.ValuePtrSize
 	if b.leafPackedValuePtr {
 		valPtrSize = page.PackedValuePtrSize
@@ -626,6 +693,9 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 	nextKeyBytes := b.leafColumnarPrefixV2KeyBytes + suffixLen
 	nextValBytes := b.leafColumnarPrefixV2ValBytes + valSize
 	dirEnd := NodeHeaderSize + nextCount*leafColumnarPrefixV2MetaSize
+	if b.leafEntryRevisions {
+		dirEnd += nextCount * page.EntryRevisionSize
+	}
 	heapStart := len(b.data) - (nextKeyBytes + nextValBytes)
 	if heapStart < dirEnd {
 		return ErrNodeFull
@@ -650,6 +720,7 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		valPtr:    valPtr,
 		flags:     flags,
 		prefixLen: uint16(prefixLen),
+		revision:  revision,
 	})
 	b.leafColumnarPrefixV2KeyBytes = nextKeyBytes
 	b.leafColumnarPrefixV2ValBytes = nextValBytes
@@ -673,18 +744,27 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 // AddLeafEntryWithPrefix appends a leaf entry using precomputed size/prefix data.
 // The caller must ensure prefixLen/suffixLen are computed for this builder state.
 func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr page.ValuePtr, entrySize, prefixLen, suffixLen int) error {
+	return b.AddLeafEntryWithPrefixRevision(key, value, flags, valPtr, page.LegacyEntryRevision, entrySize, prefixLen, suffixLen)
+}
+
+// AddLeafEntryWithPrefixRevision appends a native revision-bearing leaf entry
+// using precomputed size/prefix data.
+func (b *Builder) AddLeafEntryWithPrefixRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision, entrySize, prefixLen, suffixLen int) error {
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
+	}
+	if err := b.requireLeafEntryRevisions(revision); err != nil {
+		return err
 	}
 
 	if b.leafColumnar {
 		if b.leafPrefixCompression {
-			return b.addLeafEntryColumnarPrefixV2(key, value, flags, valPtr, entrySize, prefixLen, suffixLen)
+			return b.addLeafEntryColumnarPrefixV2(key, value, flags, valPtr, revision, entrySize, prefixLen, suffixLen)
 		}
 		if b.leafColumnarV2 {
-			return b.addLeafEntryColumnarV2(key, value, flags, valPtr)
+			return b.addLeafEntryColumnarV2(key, value, flags, valPtr, revision)
 		}
-		return b.addLeafEntryColumnar(key, value, flags, valPtr)
+		return b.addLeafEntryColumnar(key, value, flags, valPtr, revision)
 	}
 
 	headerSize := 7
@@ -772,6 +852,20 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 		}
 	} else {
 		copy(b.data[valueStart:valueStart+len(value)], value)
+	}
+	if b.leafEntryRevisions {
+		valSize := 0
+		if flags&FlagPointer != 0 {
+			if b.leafPackedValuePtr {
+				valSize = page.PackedValuePtrSize
+			} else {
+				valSize = page.ValuePtrSize
+			}
+		} else if flags&FlagTombstone == 0 {
+			valSize = len(value)
+		}
+		revisionStart := valueStart + valSize
+		binary.LittleEndian.PutUint64(b.data[revisionStart:revisionStart+page.EntryRevisionSize], uint64(revision))
 	}
 
 	// 5. Write Directory Offset (Grow Up)
@@ -962,6 +1056,9 @@ func (b *Builder) finalize() {
 		if b.leafPackedValuePtr {
 			flags |= leafPackedValuePtrFlag
 		}
+		if b.leafEntryRevisions {
+			flags |= leafEntryRevisionFlag
+		}
 	} else if b.pType == page.PageTypeInternal {
 		if b.internalLeafLogRefs {
 			flags |= internalLeafLogRefsFlag
@@ -1015,7 +1112,11 @@ func (b *Builder) finishLeafColumnarV2() {
 	keyDirStart := NodeHeaderSize
 	valDirStart := keyDirStart + count*DirectoryEntrySize
 	flagsStart := valDirStart + count*DirectoryEntrySize
-	metaEnd := flagsStart + count
+	revisionsStart := flagsStart + count
+	metaEnd := revisionsStart
+	if b.leafEntryRevisions {
+		metaEnd += count * page.EntryRevisionSize
+	}
 
 	keysStart := len(b.data) - b.leafColumnarV2KeyBytes
 	valuesStart := keysStart - b.leafColumnarV2ValBytes
@@ -1033,6 +1134,9 @@ func (b *Builder) finishLeafColumnarV2() {
 		putUint16At(b.data, keyDirPos, uint16(keyOff))
 		putUint16At(b.data, valDirPos, uint16(valOff))
 		b.data[flagsStart+i] = e.flags
+		if b.leafEntryRevisions {
+			binary.LittleEndian.PutUint64(b.data[revisionsStart+i*page.EntryRevisionSize:], uint64(e.revision))
+		}
 
 		if e.flags&FlagPointer != 0 {
 			if b.leafPackedValuePtr {
@@ -1082,7 +1186,11 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	valDirStart := keyDirStart + count*DirectoryEntrySize
 	flagsStart := valDirStart + count*DirectoryEntrySize
 	prefixStart := flagsStart + count
-	metaEnd := prefixStart + count*DirectoryEntrySize
+	revisionsStart := prefixStart + count*DirectoryEntrySize
+	metaEnd := revisionsStart
+	if b.leafEntryRevisions {
+		metaEnd += count * page.EntryRevisionSize
+	}
 
 	suffixStart := len(b.data) - b.leafColumnarPrefixV2KeyBytes
 	valuesStart := suffixStart - b.leafColumnarPrefixV2ValBytes
@@ -1096,7 +1204,12 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	allInline := b.leafColumnarPrefixV2AllInline
 	allPointer := b.leafColumnarPrefixV2AllPointer
 	flagsCol := b.data[flagsStart:prefixStart]
-	prefixCol := b.data[prefixStart:metaEnd]
+	prefixCol := b.data[prefixStart:revisionsStart]
+	writeRevision := func(i int, revision page.EntryRevision) {
+		if b.leafEntryRevisions {
+			binary.LittleEndian.PutUint64(b.data[revisionsStart+i*page.EntryRevisionSize:], uint64(revision))
+		}
+	}
 
 	if allInline {
 		if len(valueArena) != b.leafColumnarPrefixV2ValBytes || len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
@@ -1116,6 +1229,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
 					flagsCol[i] = e.flags
 					prefixDirU16[i] = e.prefixLen
+					writeRevision(i, e.revision)
 				}
 			} else {
 				for i := 0; i < count; i++ {
@@ -1124,6 +1238,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 					valDirU16[i] = uint16(valuesStart + int(e.valueOff))
 					flagsCol[i] = e.flags
 					putUint16At(prefixCol, i*2, e.prefixLen)
+					writeRevision(i, e.revision)
 				}
 			}
 		} else {
@@ -1133,6 +1248,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				putUint16At(b.data, valDirStart+i*2, uint16(valuesStart+int(e.valueOff)))
 				flagsCol[i] = e.flags
 				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
+				writeRevision(i, e.revision)
 			}
 		}
 
@@ -1160,6 +1276,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 					valDirU16[i] = uint16(valOff)
 					flagsCol[i] = e.flags
 					prefixDirU16[i] = e.prefixLen
+					writeRevision(i, e.revision)
 					if b.leafPackedValuePtr {
 						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 					} else {
@@ -1174,6 +1291,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 					valDirU16[i] = uint16(valOff)
 					flagsCol[i] = e.flags
 					putUint16At(prefixCol, i*2, e.prefixLen)
+					writeRevision(i, e.revision)
 					if b.leafPackedValuePtr {
 						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 					} else {
@@ -1189,6 +1307,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				putUint16At(b.data, valDirStart+i*2, uint16(valOff))
 				flagsCol[i] = e.flags
 				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
+				writeRevision(i, e.revision)
 				if b.leafPackedValuePtr {
 					encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 				} else {
@@ -1223,6 +1342,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				valDirU16[i] = uint16(valOff)
 				flagsCol[i] = e.flags
 				prefixDirU16[i] = e.prefixLen
+				writeRevision(i, e.revision)
 
 				if e.flags&FlagPointer != 0 {
 					if b.leafPackedValuePtr {
@@ -1250,6 +1370,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				valDirU16[i] = uint16(valOff)
 				flagsCol[i] = e.flags
 				putUint16At(prefixCol, i*2, e.prefixLen)
+				writeRevision(i, e.revision)
 
 				if e.flags&FlagPointer != 0 {
 					if b.leafPackedValuePtr {
@@ -1281,6 +1402,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 			putUint16At(b.data, valDirPos, uint16(valOff))
 			flagsCol[i] = e.flags
 			putUint16At(b.data, prefixPos, e.prefixLen)
+			writeRevision(i, e.revision)
 
 			if e.flags&FlagPointer != 0 {
 				if b.leafPackedValuePtr {

@@ -49,7 +49,7 @@ func leafPrefixHeaderSizeV2(prefixLen, suffixLen int, flags byte, valLen int) in
 	return headerSize
 }
 
-func parseLeafPrefixV2Layout(data []byte, offset int) (leafEntryLayout, error) {
+func parseLeafPrefixV2Layout(data []byte, offset int, entryRevisions bool) (leafEntryLayout, error) {
 	if offset+leafPrefixV2HeaderBaseSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
@@ -107,6 +107,10 @@ func parseLeafPrefixV2Layout(data []byte, offset int) (leafEntryLayout, error) {
 	if valStart+valSize > len(data) {
 		return leafEntryLayout{}, ErrCorruptedNode
 	}
+	revision, err := decodeEntryRevision(data, valStart+valSize, entryRevisions)
+	if err != nil {
+		return leafEntryLayout{}, err
+	}
 
 	return leafEntryLayout{
 		headerSize: headerSize,
@@ -115,6 +119,7 @@ func parseLeafPrefixV2Layout(data []byte, offset int) (leafEntryLayout, error) {
 		keyLen:     prefixLen + suffixLen,
 		valLen:     valLen,
 		flags:      flags,
+		revision:   revision,
 		keyOff:     headerSize,
 		valOff:     headerSize + suffixLen,
 	}, nil

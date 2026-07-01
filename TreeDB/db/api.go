@@ -178,6 +178,34 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return val, err
 }
 
+// GetVersioned returns the value for key plus the native entry revision stored
+// beside that value. Missing keys return a nil value, LegacyEntryRevision, and
+// nil error; tombstones return a nil value with their tombstone revision.
+func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
+	key = normalizeRawKVPointKey(key)
+	readOnce := func() ([]byte, page.EntryRevision, error) {
+		snap, err := db.acquireSnapshotOrErr()
+		if err != nil {
+			return nil, page.LegacyEntryRevision, err
+		}
+		defer snap.Close()
+		return snap.GetVersioned(key)
+	}
+
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	val, revision, err := readOnce()
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return nil, page.LegacyEntryRevision, refreshErr
+		}
+		val, revision, err = readOnce()
+	}
+	if err == tree.ErrKeyNotFound {
+		return nil, revision, nil
+	}
+	return val, revision, err
+}
+
 // DurabilityMode reports the backend durability mode configured at open.
 func (db *DB) DurabilityMode() DurabilityMode {
 	if db == nil {
@@ -431,6 +459,34 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	return val, nil
 }
 
+// GetVersionedAppend appends the value for key to dst and returns the native
+// entry revision stored with the visible entry. Missing/tombstoned keys return
+// dst and tree.ErrKeyNotFound; tombstones preserve their stored revision.
+func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	key = normalizeRawKVPointKey(key)
+	readOnce := func(base []byte) ([]byte, page.EntryRevision, error) {
+		snap, err := db.acquireSnapshotOrErr()
+		if err != nil {
+			return base, page.LegacyEntryRevision, err
+		}
+		defer snap.Close()
+		return snap.GetVersionedAppend(key, base)
+	}
+
+	retryEpoch := db.readRetryRefreshEpoch.Load()
+	val, revision, err := readOnce(dst)
+	if db.refreshOnValueLogFileNotFound(err) {
+		if refreshErr := db.refreshValueLogSetForReadRetry(retryEpoch); refreshErr != nil {
+			return dst, page.LegacyEntryRevision, refreshErr
+		}
+		val, revision, err = readOnce(dst)
+	}
+	if err != nil {
+		return dst, revision, err
+	}
+	return val, revision, nil
+}
+
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
 	key = normalizeRawKVPointKey(key)
@@ -599,6 +655,10 @@ func (it *DBIterator) UnsafeValue() []byte {
 
 func (it *DBIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.iter.UnsafeEntry()
+}
+
+func (it *DBIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	return iterator.UnsafeEntryWithRevision(it.iter)
 }
 
 func (it *DBIterator) IsDeleted() bool {

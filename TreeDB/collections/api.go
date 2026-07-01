@@ -5431,6 +5431,34 @@ func compactTableRunMap(runs map[string][]memtable.Table) (map[string][]memtable
 	return out, obsolete, changed, nil
 }
 
+func setCollectionRunEntryStealWithRevision(table memtable.Table, key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	if revision != page.LegacyEntryRevision {
+		if writer, ok := table.(memtable.RevisionStealTable); ok {
+			writer.SetEntryStealWithRevision(key, value, ptr, flags, revision)
+			return
+		}
+		if writer, ok := table.(memtable.RevisionTable); ok {
+			writer.SetEntryWithRevision(key, value, ptr, flags, revision)
+			return
+		}
+	}
+	table.SetEntrySteal(key, value, ptr, flags)
+}
+
+func deleteCollectionRunEntryStealWithRevision(table memtable.Table, key []byte, revision page.EntryRevision) {
+	if revision != page.LegacyEntryRevision {
+		if writer, ok := table.(memtable.RevisionStealTable); ok {
+			writer.SetEntryStealWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, revision)
+			return
+		}
+		if writer, ok := table.(memtable.RevisionTable); ok {
+			writer.SetEntryWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, revision)
+			return
+		}
+	}
+	table.DeleteSteal(key)
+}
+
 func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 	entryCapacity := 0
 	for _, table := range runs {
@@ -5443,12 +5471,12 @@ func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 	defer func() { _ = iter.Close() }()
 	for ; iter.Valid(); iter.Next() {
 		key := bytes.Clone(iter.UnsafeKey())
-		value, ptr, flags := iter.UnsafeEntry()
+		value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
 		var valueCopy []byte
 		if value != nil {
 			valueCopy = bytes.Clone(value)
 		}
-		table.SetEntrySteal(key, valueCopy, ptr, flags)
+		setCollectionRunEntryStealWithRevision(table, key, valueCopy, ptr, flags, revision)
 	}
 	if err := iter.Error(); err != nil {
 		resetCollectionRunTable(table)
@@ -5459,10 +5487,11 @@ func compactTableRuns(runs []memtable.Table) (memtable.Table, error) {
 }
 
 type collectionPointerizedRunEntry struct {
-	key   []byte
-	value []byte
-	ptr   page.ValuePtr
-	flags byte
+	key      []byte
+	value    []byte
+	ptr      page.ValuePtr
+	flags    byte
+	revision page.EntryRevision
 }
 
 const (
@@ -5626,11 +5655,12 @@ func pointerizeCollectionRunTableValuesWithOptionsAndStats(db *backenddb.DB, tab
 	it := table.NewIterator(nil, nil)
 	defer func() { _ = it.Close() }()
 	for it.Valid() {
-		value, ptr, flags := it.UnsafeEntry()
+		value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(it)
 		entry := collectionPointerizedRunEntry{
-			key:   bytes.Clone(it.UnsafeKey()),
-			ptr:   ptr,
-			flags: flags,
+			key:      bytes.Clone(it.UnsafeKey()),
+			ptr:      ptr,
+			flags:    flags,
+			revision: revision,
 		}
 		if flags&node.FlagTombstone == 0 &&
 			flags&node.FlagPointer == 0 &&
@@ -5670,7 +5700,7 @@ func pointerizeCollectionRunTableValuesWithOptionsAndStats(db *backenddb.DB, tab
 	out := newCollectionRunTable(len(entries))
 	for i := range entries {
 		entry := entries[i]
-		out.SetEntrySteal(entry.key, entry.value, entry.ptr, entry.flags)
+		setCollectionRunEntryStealWithRevision(out, entry.key, entry.value, entry.ptr, entry.flags, entry.revision)
 	}
 	out.Freeze()
 	success = true
@@ -7849,8 +7879,8 @@ func cloneCollectionRunTable(run memtable.Table) (memtable.Table, error) {
 
 func cloneCollectionRunTableFromIterator(table memtable.Table, it iterator.UnsafeIterator) (memtable.Table, error) {
 	for it.Valid() {
-		value, ptr, flags := it.UnsafeEntry()
-		table.SetEntrySteal(bytes.Clone(it.UnsafeKey()), bytes.Clone(value), ptr, flags)
+		value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(it)
+		setCollectionRunEntryStealWithRevision(table, bytes.Clone(it.UnsafeKey()), bytes.Clone(value), ptr, flags, revision)
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
@@ -8158,10 +8188,15 @@ func (it *bufferedRootRunsIterator) UnsafeValue() []byte {
 }
 
 func (it *bufferedRootRunsIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *bufferedRootRunsIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.Valid() {
-		return nil, page.ValuePtr{}, node.FlagInline
+		return nil, page.ValuePtr{}, node.FlagInline, page.LegacyEntryRevision
 	}
-	return it.iters[it.cur.idx].UnsafeEntry()
+	return iterator.UnsafeEntryWithRevision(it.iters[it.cur.idx])
 }
 
 func (it *bufferedRootRunsIterator) Key() []byte {
@@ -8777,11 +8812,11 @@ func mergeCollectionRootDeltaTables(tables []memtable.Table) (memtable.Table, er
 		iter := table.NewIterator(nil, nil)
 		for iter.Valid() {
 			key := bytes.Clone(iter.UnsafeKey())
-			value, ptr, flags := iter.UnsafeEntry()
+			value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(iter)
 			if flags&node.FlagTombstone != 0 {
-				merged.DeleteSteal(key)
+				deleteCollectionRunEntryStealWithRevision(merged, key, revision)
 			} else {
-				merged.SetEntrySteal(key, bytes.Clone(value), ptr, flags)
+				setCollectionRunEntryStealWithRevision(merged, key, bytes.Clone(value), ptr, flags, revision)
 			}
 			iter.Next()
 		}
@@ -21453,18 +21488,23 @@ func (it *systemTargetIterator) UnsafeValue() []byte {
 }
 
 func (it *systemTargetIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *systemTargetIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.Valid() {
-		return nil, page.ValuePtr{}, node.FlagInline
+		return nil, page.ValuePtr{}, node.FlagInline, page.LegacyEntryRevision
 	}
 	entry := it.entries[it.idx]
 	if entry.flags&node.FlagTombstone != 0 {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision
 	}
 	flags := entry.flags
 	if flags == 0 {
 		flags = node.FlagInline
 	}
-	return entry.value, page.ValuePtr{}, flags
+	return entry.value, page.ValuePtr{}, flags, page.LegacyEntryRevision
 }
 
 func (it *systemTargetIterator) Key() []byte {

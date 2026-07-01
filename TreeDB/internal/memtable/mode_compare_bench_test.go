@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func benchModeTable(b *testing.B, mode Mode) Table {
@@ -56,6 +59,49 @@ func BenchmarkMemtableSetParallel_ModeCompare(b *testing.B) {
 						mt.Set(keys[int(n%uint64(pattern.keySpace))], value)
 					}
 				})
+			})
+		}
+	}
+}
+
+func BenchmarkMemtableSetEntryRevisionOverhead_ModeCompare(b *testing.B) {
+	const (
+		keySpace  = 1 << 14
+		valueSize = 16
+	)
+	modes := []Mode{ModeAppendOnly, ModeHashSorted, ModeBTree, ModeSkiplist}
+
+	for _, mode := range modes {
+		for _, withRevision := range []bool{false, true} {
+			name := "legacy"
+			if withRevision {
+				name = "revision"
+			}
+			b.Run(fmt.Sprintf("%s/%s", mode.String(), name), func(b *testing.B) {
+				mt := benchModeTable(b, mode)
+				keys := make([][]byte, keySpace)
+				for i := 0; i < keySpace; i++ {
+					k := make([]byte, 8)
+					binary.BigEndian.PutUint64(k, uint64(i))
+					keys[i] = k
+				}
+				value := make([]byte, valueSize)
+				for i := range value {
+					value[i] = byte(i)
+				}
+
+				revisions, _ := mt.(RevisionTable)
+				b.ReportAllocs()
+				b.SetBytes(int64(valueSize))
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					key := keys[i&(keySpace-1)]
+					if withRevision {
+						revisions.SetEntryWithRevision(key, value, page.ValuePtr{}, node.FlagInline, page.EntryRevision(i+1))
+					} else {
+						mt.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+					}
+				}
 			})
 		}
 	}

@@ -33,6 +33,7 @@ type Entry struct {
 	Value    []byte        // Inline value, or DeleteRange exclusive end bound (nil means unbounded)
 	ValuePtr page.ValuePtr // For large values
 	IsPtr    bool          // True if ValuePtr is valid
+	Revision page.EntryRevision
 }
 
 // DeleteRange describes a half-open range delete [Start, End). Nil Start or
@@ -424,6 +425,10 @@ func (b *Batch) EntriesCap() int {
 // key/value bytes. Callers must treat key/value as immutable until the batch is
 // committed (Write/WriteSync) or closed.
 func (b *Batch) SetView(key, value []byte) error {
+	return b.SetViewWithRevision(key, value, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -431,8 +436,9 @@ func (b *Batch) SetView(key, value []byte) error {
 	value = normalizeRawKVValue(value)
 
 	entry := Entry{
-		Type: OpPut,
-		Key:  key,
+		Type:     OpPut,
+		Key:      key,
+		Revision: revision,
 	}
 
 	if len(value) > b.inlineThresholdForKey(key) {
@@ -452,6 +458,10 @@ func (b *Batch) SetView(key, value []byte) error {
 // zero-length byte strings. Caller must guarantee key/value remain immutable
 // until commit/close, and appended keys are strictly increasing with no duplicates.
 func (b *Batch) AppendViewTrustedSortedUnique(key, value []byte) error {
+	return b.AppendViewTrustedSortedUniqueWithRevision(key, value, page.LegacyEntryRevision)
+}
+
+func (b *Batch) AppendViewTrustedSortedUniqueWithRevision(key, value []byte, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -461,9 +471,10 @@ func (b *Batch) AppendViewTrustedSortedUnique(key, value []byte) error {
 		return ErrValueTooLarge
 	}
 	b.entries = append(b.entries, Entry{
-		Type:  OpPut,
-		Key:   key,
-		Value: value,
+		Type:     OpPut,
+		Key:      key,
+		Value:    value,
+		Revision: revision,
 	})
 	b.byteSize += len(key) + len(value)
 	if b.sorted {
@@ -474,6 +485,10 @@ func (b *Batch) AppendViewTrustedSortedUnique(key, value []byte) error {
 
 // Set adds or replaces a key/value operation.
 func (b *Batch) Set(key, value []byte) error {
+	return b.SetWithRevision(key, value, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -491,8 +506,9 @@ func (b *Batch) Set(key, value []byte) error {
 	k, valCopy := b.arenaCopyPair(key, value)
 
 	entry := Entry{
-		Type: OpPut,
-		Key:  k,
+		Type:     OpPut,
+		Key:      k,
+		Revision: revision,
 	}
 
 	// Store inline
@@ -510,14 +526,19 @@ func (b *Batch) Set(key, value []byte) error {
 // copying the key bytes. Callers must treat key as immutable until the batch is
 // committed (Write/WriteSync) or closed.
 func (b *Batch) DeleteView(key []byte) error {
+	return b.DeleteViewWithRevision(key, page.LegacyEntryRevision)
+}
+
+func (b *Batch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
 	key = normalizeRawKVPointKey(key)
 
 	b.entries = append(b.entries, Entry{
-		Type: OpDelete,
-		Key:  key,
+		Type:     OpDelete,
+		Key:      key,
+		Revision: revision,
 	})
 	b.byteSize += len(key)
 	b.compacted = false
@@ -530,13 +551,18 @@ func (b *Batch) DeleteView(key []byte) error {
 // empty key. Caller must guarantee key remains immutable until commit/close,
 // and appended keys are strictly increasing with no duplicates.
 func (b *Batch) AppendDeleteViewTrustedSortedUnique(key []byte) error {
+	return b.AppendDeleteViewTrustedSortedUniqueWithRevision(key, page.LegacyEntryRevision)
+}
+
+func (b *Batch) AppendDeleteViewTrustedSortedUniqueWithRevision(key []byte, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
 	key = normalizeRawKVPointKey(key)
 	b.entries = append(b.entries, Entry{
-		Type: OpDelete,
-		Key:  key,
+		Type:     OpDelete,
+		Key:      key,
+		Revision: revision,
 	})
 	b.byteSize += len(key)
 	if b.sorted {
@@ -547,6 +573,10 @@ func (b *Batch) AppendDeleteViewTrustedSortedUnique(key []byte) error {
 
 // SetPointer adds a pointer directly to the batch (used by Compaction).
 func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
+	return b.SetPointerWithRevision(key, ptr, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetPointerWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -562,6 +592,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		Key:      k,
 		ValuePtr: ptr,
 		IsPtr:    true,
+		Revision: revision,
 	}
 	b.entries = append(b.entries, entry)
 	b.hasValueLogPointers = true
@@ -579,7 +610,11 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 // best-effort optimization used by higher-level layers (e.g. cached flush
 // streaming).
 func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
-	return b.setPointerViewInternal(key, ptr, true)
+	return b.SetPointerViewWithRevision(key, ptr, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetPointerViewWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
+	return b.setPointerViewInternal(key, ptr, true, revision)
 }
 
 // SetPointerViewNoTouch is an internal-performance helper that records a
@@ -587,7 +622,11 @@ func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 // segments. Callers must separately provide touched segment hints when commit
 // publication needs them.
 func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
-	return b.setPointerViewInternal(key, ptr, false)
+	return b.SetPointerViewNoTouchWithRevision(key, ptr, page.LegacyEntryRevision)
+}
+
+func (b *Batch) SetPointerViewNoTouchWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
+	return b.setPointerViewInternal(key, ptr, false, revision)
 }
 
 // AppendPointerViewTrustedSortedUnique records a pointer Put without copying key
@@ -596,6 +635,10 @@ func (b *Batch) SetPointerViewNoTouch(key []byte, ptr page.ValuePtr) error {
 // ptr is a value-log pointer, and appended keys are strictly increasing with no
 // duplicates.
 func (b *Batch) AppendPointerViewTrustedSortedUnique(key []byte, ptr page.ValuePtr) error {
+	return b.AppendPointerViewTrustedSortedUniqueWithRevision(key, ptr, page.LegacyEntryRevision)
+}
+
+func (b *Batch) AppendPointerViewTrustedSortedUniqueWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -608,6 +651,7 @@ func (b *Batch) AppendPointerViewTrustedSortedUnique(key []byte, ptr page.ValueP
 		Key:      key,
 		ValuePtr: ptr,
 		IsPtr:    true,
+		Revision: revision,
 	})
 	b.hasValueLogPointers = true
 	b.noteTouchedValueLog(ptr)
@@ -622,6 +666,10 @@ func (b *Batch) AppendPointerViewTrustedSortedUnique(key []byte, ptr page.ValueP
 // guarantee: batch is open, key is canonicalized if nil, ptr is a value-log
 // pointer, and appended keys are already non-decreasing.
 func (b *Batch) AppendPointerViewNoTouchTrustedSorted(key []byte, ptr page.ValuePtr) {
+	b.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptr, page.LegacyEntryRevision)
+}
+
+func (b *Batch) AppendPointerViewNoTouchTrustedSortedWithRevision(key []byte, ptr page.ValuePtr, revision page.EntryRevision) {
 	if b == nil {
 		return
 	}
@@ -630,6 +678,7 @@ func (b *Batch) AppendPointerViewNoTouchTrustedSorted(key []byte, ptr page.Value
 		Key:      key,
 		ValuePtr: ptr,
 		IsPtr:    true,
+		Revision: revision,
 	})
 	b.hasValueLogPointers = true
 	b.compacted = false
@@ -648,7 +697,7 @@ func (b *Batch) NoteTouchedValueLogFileID(fileID uint32) {
 	b.noteTouchedValueLogFileID(fileID)
 }
 
-func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouched bool) error {
+func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouched bool, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -661,6 +710,7 @@ func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouche
 		Key:      key,
 		ValuePtr: ptr,
 		IsPtr:    true,
+		Revision: revision,
 	})
 	b.hasValueLogPointers = true
 	if noteTouched {
@@ -673,6 +723,10 @@ func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouche
 
 // Delete adds or replaces a delete operation.
 func (b *Batch) Delete(key []byte) error {
+	return b.DeleteWithRevision(key, page.LegacyEntryRevision)
+}
+
+func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -681,8 +735,9 @@ func (b *Batch) Delete(key []byte) error {
 	k := b.arenaCopy(key)
 
 	b.entries = append(b.entries, Entry{
-		Type: OpDelete,
-		Key:  k,
+		Type:     OpDelete,
+		Key:      k,
+		Revision: revision,
 	})
 	b.byteSize += len(k)
 	b.compacted = false

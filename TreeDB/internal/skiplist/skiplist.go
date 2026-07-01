@@ -13,11 +13,12 @@ import (
 const (
 	maxHeight = 20
 
-	nodeHeightOff  = 0
-	nodeKeyLenOff  = 1
-	nodeValLenOff  = 3
-	nodeFlagsOff   = 7
-	nodeHeaderBase = 8 // Height + KeyLen + ValLen + Flags
+	nodeHeightOff   = 0
+	nodeKeyLenOff   = 1
+	nodeValLenOff   = 3
+	nodeFlagsOff    = 7
+	nodeRevisionOff = 8
+	nodeHeaderBase  = 16 // Height + KeyLen + ValLen + Flags + Revision
 
 	flagPointer = node.FlagPointer
 	flagDeleted = node.FlagTombstone
@@ -288,6 +289,14 @@ func (s *SkipList) setFlags(node uint32, f uint8) {
 	s.setValAt(node, nodeFlagsOff, f)
 }
 
+func (s *SkipList) getRevision(node uint32) page.EntryRevision {
+	return page.EntryRevision(binary.LittleEndian.Uint64(s.bytesAt(node+nodeRevisionOff, page.EntryRevisionSize)))
+}
+
+func (s *SkipList) setRevision(node uint32, revision page.EntryRevision) {
+	binary.LittleEndian.PutUint64(s.bytesAt(node+nodeRevisionOff, page.EntryRevisionSize), uint64(revision))
+}
+
 func (s *SkipList) getNext(node uint32, level int) uint32 {
 	offset := node + uint32(nodeHeaderBase) + uint32(4*level)
 	return binary.LittleEndian.Uint32(s.bytesAt(offset, 4))
@@ -302,36 +311,42 @@ func (s *SkipList) setNext(node uint32, level int, next uint32) {
 
 // Put inserts or updates a key.
 func (s *SkipList) Put(key, value []byte) {
-	s.put(key, value, 0, nil)
+	s.put(key, value, 0, page.LegacyEntryRevision, nil)
 }
 
 // PutWithCallback inserts key/value, calling cb with views into the arena before linking.
 func (s *SkipList) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
-	return s.put(key, value, 0, cb)
+	return s.put(key, value, 0, page.LegacyEntryRevision, cb)
 }
 
 // PutEntry inserts key/value with explicit flags and optional value pointer.
 // When flags include FlagPointer, ptr is encoded into the value area; if value is
 // non-nil, it is appended after the pointer bytes.
 func (s *SkipList) PutEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	s.PutEntryWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+// PutEntryWithRevision inserts key/value with explicit flags, pointer metadata,
+// and native entry revision.
+func (s *SkipList) PutEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	if flags&flagPointer != 0 {
 		if len(value) > 0 {
 			buf := make([]byte, page.ValuePtrSize+len(value))
 			ptr.Encode(buf[:page.ValuePtrSize])
 			copy(buf[page.ValuePtrSize:], value)
-			_ = s.put(key, buf, flags, nil)
+			_ = s.put(key, buf, flags, revision, nil)
 			return
 		}
 		var buf [page.ValuePtrSize]byte
 		ptr.Encode(buf[:])
-		_ = s.put(key, buf[:], flags, nil)
+		_ = s.put(key, buf[:], flags, revision, nil)
 		return
 	}
 	if flags&flagDeleted != 0 {
-		_ = s.put(key, nil, flags, nil)
+		_ = s.put(key, nil, flags, revision, nil)
 		return
 	}
-	_ = s.put(key, value, flags, nil)
+	_ = s.put(key, value, flags, revision, nil)
 }
 
 // LastKey returns the largest key currently in the skiplist, or nil if empty.
@@ -346,11 +361,17 @@ func (s *SkipList) LastKey() []byte {
 // AppendWithCallback inserts a new entry assuming the key is strictly greater
 // than the current maximum key in the skiplist.
 func (s *SkipList) AppendWithCallback(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
+	return s.AppendWithCallbackRevision(key, value, flags, page.LegacyEntryRevision, cb)
+}
+
+// AppendWithCallbackRevision inserts a new strictly-increasing entry with a
+// native revision token.
+func (s *SkipList) AppendWithCallbackRevision(key, value []byte, flags uint8, revision page.EntryRevision, cb func(k, v []byte) error) error {
 	var prev [maxHeight]uint32
 	for i := 0; i < maxHeight; i++ {
 		prev[i] = s.tail[i]
 	}
-	return s.insertNew(key, value, flags, cb, &prev)
+	return s.insertNew(key, value, flags, revision, cb, &prev)
 }
 
 // Append inserts a new key/value entry assuming the key is strictly greater
@@ -362,20 +383,25 @@ func (s *SkipList) Append(key, value []byte) {
 // AppendDelete inserts a tombstone for key assuming the key is strictly greater
 // than the current maximum key in the skiplist.
 func (s *SkipList) AppendDelete(key []byte) {
-	_ = s.AppendWithCallback(key, nil, flagDeleted, nil)
+	_ = s.AppendDeleteWithRevision(key, page.LegacyEntryRevision)
+}
+
+// AppendDeleteWithRevision appends a tombstone with a native revision token.
+func (s *SkipList) AppendDeleteWithRevision(key []byte, revision page.EntryRevision) error {
+	return s.AppendWithCallbackRevision(key, nil, flagDeleted, revision, nil)
 }
 
 // Delete marks a key as deleted (tombstone).
 func (s *SkipList) Delete(key []byte) {
-	s.put(key, nil, flagDeleted, nil)
+	s.put(key, nil, flagDeleted, page.LegacyEntryRevision, nil)
 }
 
 // DeleteWithCallback marks deleted with callback.
 func (s *SkipList) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
-	return s.put(key, nil, flagDeleted, cb)
+	return s.put(key, nil, flagDeleted, page.LegacyEntryRevision, cb)
 }
 
-func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte) error, prev *[maxHeight]uint32) error {
+func (s *SkipList) insertNew(key, value []byte, flags uint8, revision page.EntryRevision, cb func(k, v []byte) error, prev *[maxHeight]uint32) error {
 	h := s.randomHeight()
 	if h > s.height {
 		s.height = h
@@ -384,6 +410,7 @@ func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte
 	copy(s.getKey(newNode), key)
 	copy(s.getValue(newNode), value)
 	s.setFlags(newNode, flags)
+	s.setRevision(newNode, revision)
 
 	// Callback (Before linking)
 	if cb != nil {
@@ -408,13 +435,13 @@ func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte
 	return nil
 }
 
-func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
+func (s *SkipList) put(key, value []byte, flags uint8, revision page.EntryRevision, cb func(k, v []byte) error) error {
 	if s.count == 0 {
 		var prev [maxHeight]uint32
 		for i := 0; i < maxHeight; i++ {
 			prev[i] = s.tail[i]
 		}
-		return s.insertNew(key, value, flags, cb, &prev)
+		return s.insertNew(key, value, flags, revision, cb, &prev)
 	}
 
 	last := s.tail[0]
@@ -424,7 +451,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			for i := 0; i < maxHeight; i++ {
 				prev[i] = s.tail[i]
 			}
-			return s.insertNew(key, value, flags, cb, &prev)
+			return s.insertNew(key, value, flags, revision, cb, &prev)
 		}
 	}
 
@@ -476,7 +503,7 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 		// Now OldNode is gone.
 	}
 
-	return s.insertNew(key, value, flags, cb, &prev)
+	return s.insertNew(key, value, flags, revision, cb, &prev)
 }
 
 func (s *SkipList) randomHeight() int {
@@ -520,6 +547,12 @@ func (s *SkipList) Get(key []byte) ([]byte, bool, bool) {
 
 // GetEntry returns the raw entry, including pointer and flags, if present.
 func (s *SkipList) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	val, ptr, flags, _, found := s.GetEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+// GetEntryWithRevision returns the raw entry plus native revision metadata.
+func (s *SkipList) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	x := s.head
 	for i := maxHeight - 1; i >= 0; i-- {
 		for {
@@ -534,6 +567,7 @@ func (s *SkipList) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 			}
 			if cmp == 0 {
 				flags := s.getFlags(next)
+				revision := s.getRevision(next)
 				val := s.getValue(next)
 				if flags&flagPointer != 0 {
 					if len(val) >= page.ValuePtrSize {
@@ -541,16 +575,16 @@ func (s *SkipList) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 						if len(val) > page.ValuePtrSize {
 							inline = val[page.ValuePtrSize:]
 						}
-						return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags, true
+						return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags, revision, true
 					}
-					return nil, page.ValuePtr{}, flags, true
+					return nil, page.ValuePtr{}, flags, revision, true
 				}
-				return val, page.ValuePtr{}, flags, true
+				return val, page.ValuePtr{}, flags, revision, true
 			}
 			x = next
 		}
 	}
-	return nil, page.ValuePtr{}, 0, false
+	return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 }
 
 func (s *SkipList) Size() int64 {
@@ -669,19 +703,26 @@ func (it *Iterator) UnsafeValue() []byte {
 }
 
 func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+// UnsafeEntryWithRevision returns raw entry details plus native revision.
+func (it *Iterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	val := it.sl.getValue(it.curr)
 	flags := it.sl.getFlags(it.curr)
+	revision := it.sl.getRevision(it.curr)
 	if flags&flagPointer != 0 {
 		if len(val) >= page.ValuePtrSize {
 			inline := []byte(nil)
 			if len(val) > page.ValuePtrSize {
 				inline = val[page.ValuePtrSize:]
 			}
-			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
+			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags, revision
 		}
-		return nil, page.ValuePtr{}, flags
+		return nil, page.ValuePtr{}, flags, revision
 	}
-	return val, page.ValuePtr{}, flags
+	return val, page.ValuePtr{}, flags, revision
 }
 
 func (it *Iterator) IsDeleted() bool {
@@ -806,22 +847,29 @@ func (it *ReverseIterator) UnsafeValue() []byte {
 }
 
 func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+// UnsafeEntryWithRevision returns raw entry details plus native revision.
+func (it *ReverseIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.valid || it.curr == 0 {
-		return nil, page.ValuePtr{}, 0
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
 	}
 	val := it.sl.getValue(it.curr)
 	flags := it.sl.getFlags(it.curr)
+	revision := it.sl.getRevision(it.curr)
 	if flags&flagPointer != 0 {
 		if len(val) >= page.ValuePtrSize {
 			inline := []byte(nil)
 			if len(val) > page.ValuePtrSize {
 				inline = val[page.ValuePtrSize:]
 			}
-			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
+			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags, revision
 		}
-		return nil, page.ValuePtr{}, flags
+		return nil, page.ValuePtr{}, flags, revision
 	}
-	return val, page.ValuePtr{}, flags
+	return val, page.ValuePtr{}, flags, revision
 }
 
 func (it *ReverseIterator) IsDeleted() bool {

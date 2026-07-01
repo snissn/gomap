@@ -679,41 +679,11 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 	dv, _ := backendBatch.(backendBatchDeleteViewer)
 	psv, _ := backendBatch.(backendBatchPointerSetterView)
 	ps, _ := backendBatch.(backendBatchPointerSetter)
-	var single [1]batch.Entry
+	revOps := resolveBackendBatchRevisionOps(backendBatch)
 	for i := range ops {
 		op := ops[i]
-		switch {
-		case op.Type == batch.OpDelete:
-			if dv != nil {
-				if err := dv.DeleteView(op.Key); err != nil {
-					return err
-				}
-			} else if err := backendBatch.Delete(op.Key); err != nil {
-				return err
-			}
-		case op.IsPtr:
-			if psv != nil {
-				if err := psv.SetPointerView(op.Key, op.ValuePtr); err != nil {
-					return err
-				}
-			} else if ps != nil {
-				if err := ps.SetPointer(op.Key, op.ValuePtr); err != nil {
-					return err
-				}
-			} else {
-				single[0] = op
-				if err := backendBatch.SetOps(single[:]); err != nil {
-					return err
-				}
-			}
-		default:
-			if sv != nil {
-				if err := sv.SetView(op.Key, op.Value); err != nil {
-					return err
-				}
-			} else if err := backendBatch.Set(op.Key, op.Value); err != nil {
-				return err
-			}
+		if err := appendBackendBatchPointOp(backendBatch, op, true, sv, dv, psv, ps, revOps); err != nil {
+			return err
 		}
 	}
 	return nil

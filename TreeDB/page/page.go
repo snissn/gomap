@@ -28,6 +28,9 @@ const (
 	// Layout: Offset32 (u32 LE) | Length (u32 LE) | FileID (u32 LE).
 	// This is used by experimental leaf encodings to reduce pointer payload.
 	PackedValuePtrSize = 12
+
+	// EntryRevisionSize is the on-page size of a native raw-KV entry revision.
+	EntryRevisionSize = 8
 )
 
 var nativeLittleEndian = func() bool {
@@ -66,6 +69,14 @@ type ValuePtr struct {
 	Length uint32
 	FileID uint32
 }
+
+// EntryRevision is TreeDB's monotonic visible-entry token for raw KV values.
+//
+// A zero revision means legacy/no-revision metadata. Non-zero revisions travel
+// with native write data and leaf entries instead of through a side index.
+type EntryRevision uint64
+
+const LegacyEntryRevision EntryRevision = 0
 
 var checksumZeroField = [4]byte{}
 var checksumZeroBlock = [1024]byte{}

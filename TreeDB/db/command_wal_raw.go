@@ -521,7 +521,12 @@ func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entr
 	if plan.Count == 0 {
 		return nil, nil
 	}
-	payload, err := commitlog.EncodeRawKVBatchPayloadScanWithHint(scan, plan.Count, 0)
+	var payload []byte
+	if plan.EntryRevisions {
+		payload, err = commitlog.EncodeRawKVBatchPayloadPlanned(plan, scan)
+	} else {
+		payload, err = commitlog.EncodeRawKVBatchPayloadScanWithHint(scan, plan.Count, 0)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +581,7 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 		}
 		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDeleteRange, Key: entry.Key, Value: entry.Value}, true, nil
 	case batchpkg.OpDelete:
-		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key}, true, nil
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpDelete, Key: entry.Key, Revision: uint64(entry.Revision)}, true, nil
 	case batchpkg.OpPut:
 		if entry.IsPtr {
 			if externalRefs != nil {
@@ -595,9 +600,9 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 			if err != nil {
 				return commitlog.RawKVOperation{}, false, err
 			}
-			return commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid}, true, nil
+			return commitlog.RawKVOperation{Op: commitlog.RawKVOpSetRID, Key: entry.Key, RID: rid, Revision: uint64(entry.Revision)}, true, nil
 		}
-		return commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value}, true, nil
+		return commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value, Revision: uint64(entry.Revision)}, true, nil
 	default:
 		return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
 	}
@@ -1230,9 +1235,10 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 	defer func() { _ = b.Close() }()
 	for i := range ops {
 		entry := ops[i]
+		revision := page.EntryRevision(entry.Revision)
 		switch entry.Op {
 		case commitlog.RawKVOpSet:
-			if err := b.Set(entry.Key, entry.Value); err != nil {
+			if err := b.SetWithRevision(entry.Key, entry.Value, revision); err != nil {
 				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
 					// Non-ErrValueTooLarge errors abort frame replay entirely.
 					// The caller will propagate the error; recovery will retry
@@ -1260,12 +1266,12 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 				if err != nil {
 					return err
 				}
-				if err := b.SetPointer(entry.Key, ptr); err != nil {
+				if err := b.SetPointerWithRevision(entry.Key, ptr, revision); err != nil {
 					return err
 				}
 			}
 		case commitlog.RawKVOpDelete:
-			if err := b.Delete(entry.Key); err != nil {
+			if err := b.DeleteWithRevision(entry.Key, revision); err != nil {
 				return err
 			}
 		case commitlog.RawKVOpDeleteRange:
@@ -1287,7 +1293,7 @@ func applyRawKVCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map
 			if !ok {
 				return fmt.Errorf("%w: %d", ErrCommandWALMissingValueLogRID, entry.RID)
 			}
-			if err := b.SetPointer(entry.Key, ptr); err != nil {
+			if err := b.SetPointerWithRevision(entry.Key, ptr, revision); err != nil {
 				return err
 			}
 		default:

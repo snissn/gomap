@@ -14,11 +14,12 @@ import (
 )
 
 type freezeSortRunEntry struct {
-	key   []byte
-	value []byte
-	ptr   page.ValuePtr
-	seq   uint64
-	flags byte
+	key      []byte
+	value    []byte
+	ptr      page.ValuePtr
+	seq      uint64
+	flags    byte
+	revision page.EntryRevision
 }
 
 type freezeSortRunTable struct {
@@ -84,7 +85,11 @@ func (h freezeSortRunTableHandle) SetSteal(key, value []byte) {
 }
 
 func (h freezeSortRunTableHandle) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
-	h.SetEntrySteal(bytes.Clone(key), bytes.Clone(value), ptr, flags)
+	h.SetEntryWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (h freezeSortRunTableHandle) SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	h.SetEntryStealWithRevision(bytes.Clone(key), bytes.Clone(value), ptr, flags, revision)
 }
 
 func (h freezeSortRunTableHandle) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
@@ -100,10 +105,14 @@ func (h freezeSortRunTableHandle) PutWithCallback(key, value []byte, cb func(k, 
 }
 
 func (h freezeSortRunTableHandle) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	h.SetEntryStealWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (h freezeSortRunTableHandle) SetEntryStealWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	if h.table == nil {
 		return
 	}
-	h.table.setEntryStealOwned(h.ownerGeneration, key, value, ptr, flags)
+	h.table.setEntryStealOwned(h.ownerGeneration, key, value, ptr, flags, revision)
 }
 
 func (h freezeSortRunTableHandle) ApplyStealEntryFunc(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
@@ -111,6 +120,13 @@ func (h freezeSortRunTableHandle) ApplyStealEntryFunc(count int, emit func(i int
 		return nil
 	}
 	return h.table.applyStealEntryFuncOwned(h.ownerGeneration, count, emit)
+}
+
+func (h freezeSortRunTableHandle) ApplyStealEntryFuncWithRevision(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, err error)) error {
+	if h.table == nil {
+		return nil
+	}
+	return h.table.applyStealEntryFuncWithRevisionOwned(h.ownerGeneration, count, emit)
 }
 
 func (h freezeSortRunTableHandle) Delete(key []byte) {
@@ -158,6 +174,13 @@ func (h freezeSortRunTableHandle) GetEntry(key []byte) ([]byte, page.ValuePtr, b
 		return nil, page.ValuePtr{}, 0, false
 	}
 	return h.table.getEntryOwned(h.ownerGeneration, key)
+}
+
+func (h freezeSortRunTableHandle) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if h.table == nil {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
+	}
+	return h.table.getEntryWithRevisionOwned(h.ownerGeneration, key)
 }
 
 func (h freezeSortRunTableHandle) Size() int64 {
@@ -217,7 +240,11 @@ func (t *freezeSortRunTable) SetSteal(key, value []byte) {
 }
 
 func (t *freezeSortRunTable) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
-	t.SetEntrySteal(bytes.Clone(key), bytes.Clone(value), ptr, flags)
+	t.SetEntryWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (t *freezeSortRunTable) SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	t.SetEntryStealWithRevision(bytes.Clone(key), bytes.Clone(value), ptr, flags, revision)
 }
 
 func (t *freezeSortRunTable) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
@@ -233,10 +260,14 @@ func (t *freezeSortRunTable) PutWithCallback(key, value []byte, cb func(k, v []b
 }
 
 func (t *freezeSortRunTable) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
-	t.setEntryStealOwned(0, key, value, ptr, flags)
+	t.SetEntryStealWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
 }
 
-func (t *freezeSortRunTable) setEntryStealOwned(ownerGeneration uint64, key, value []byte, ptr page.ValuePtr, flags byte) {
+func (t *freezeSortRunTable) SetEntryStealWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
+	t.setEntryStealOwned(0, key, value, ptr, flags, revision)
+}
+
+func (t *freezeSortRunTable) setEntryStealOwned(ownerGeneration uint64, key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	if t == nil || len(key) == 0 {
 		return
 	}
@@ -249,11 +280,12 @@ func (t *freezeSortRunTable) setEntryStealOwned(ownerGeneration uint64, key, val
 	t.mustOwnedLocked(ownerGeneration)
 	idx := len(t.entries)
 	t.entries = append(t.entries, freezeSortRunEntry{
-		key:   key,
-		value: value,
-		ptr:   ptr,
-		seq:   t.nextSeq,
-		flags: flags,
+		key:      key,
+		value:    value,
+		ptr:      ptr,
+		seq:      t.nextSeq,
+		flags:    flags,
+		revision: revision,
 	})
 	t.nextSeq++
 	t.sizeBytes += int64(len(key) + entryLogicalValueSize(flags, value))
@@ -267,6 +299,20 @@ func (t *freezeSortRunTable) ApplyStealEntryFunc(count int, emit func(i int) (ke
 }
 
 func (t *freezeSortRunTable) applyStealEntryFuncOwned(ownerGeneration uint64, count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, err error)) error {
+	if emit == nil {
+		return errors.New("collections: nil freeze-sort entry emitter")
+	}
+	return t.applyStealEntryFuncWithRevisionOwned(ownerGeneration, count, func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, err error) {
+		key, value, ptr, flags, err = emit(i)
+		return key, value, ptr, flags, page.LegacyEntryRevision, err
+	})
+}
+
+func (t *freezeSortRunTable) ApplyStealEntryFuncWithRevision(count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, err error)) error {
+	return t.applyStealEntryFuncWithRevisionOwned(0, count, emit)
+}
+
+func (t *freezeSortRunTable) applyStealEntryFuncWithRevisionOwned(ownerGeneration uint64, count int, emit func(i int) (key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, err error)) error {
 	if count <= 0 {
 		return nil
 	}
@@ -281,7 +327,7 @@ func (t *freezeSortRunTable) applyStealEntryFuncOwned(ownerGeneration uint64, co
 	t.mustOwnedLocked(ownerGeneration)
 	t.entries = growFreezeSortRunEntries(t.entries, count)
 	for i := 0; i < count; i++ {
-		key, value, ptr, flags, err := emit(i)
+		key, value, ptr, flags, revision, err := emit(i)
 		if err != nil {
 			return err
 		}
@@ -294,11 +340,12 @@ func (t *freezeSortRunTable) applyStealEntryFuncOwned(ownerGeneration uint64, co
 		}
 		idx := len(t.entries)
 		t.entries = append(t.entries, freezeSortRunEntry{
-			key:   key,
-			value: value,
-			ptr:   ptr,
-			seq:   t.nextSeq,
-			flags: flags,
+			key:      key,
+			value:    value,
+			ptr:      ptr,
+			seq:      t.nextSeq,
+			flags:    flags,
+			revision: revision,
 		})
 		t.nextSeq++
 		t.sizeBytes += int64(len(key) + entryLogicalValueSize(flags, value))
@@ -358,9 +405,18 @@ func (t *freezeSortRunTable) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, 
 	return t.getEntryOwned(0, key)
 }
 
+func (t *freezeSortRunTable) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	return t.getEntryWithRevisionOwned(0, key)
+}
+
 func (t *freezeSortRunTable) getEntryOwned(ownerGeneration uint64, key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	value, ptr, flags, _, found := t.getEntryWithRevisionOwned(ownerGeneration, key)
+	return value, ptr, flags, found
+}
+
+func (t *freezeSortRunTable) getEntryWithRevisionOwned(ownerGeneration uint64, key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	if t == nil || len(key) == 0 {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	t.mu.RLock()
 	if !t.ownedLocked(ownerGeneration) {
@@ -371,9 +427,9 @@ func (t *freezeSortRunTable) getEntryOwned(ownerGeneration uint64, key []byte) (
 		entry, found := t.getFrozenEntryLocked(key)
 		t.mu.RUnlock()
 		if !found {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
-		return entry.value, entry.ptr, entry.flags, true
+		return entry.value, entry.ptr, entry.flags, entry.revision, true
 	}
 	t.mu.RUnlock()
 
@@ -383,20 +439,20 @@ func (t *freezeSortRunTable) getEntryOwned(ownerGeneration uint64, key []byte) (
 	if t.frozen {
 		entry, found := t.getFrozenEntryLocked(key)
 		if !found {
-			return nil, page.ValuePtr{}, 0, false
+			return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 		}
-		return entry.value, entry.ptr, entry.flags, true
+		return entry.value, entry.ptr, entry.flags, entry.revision, true
 	}
 	t.rebuildLatestLocked()
 	idx, ok := t.latest[unsafe.String(&key[0], len(key))]
 	if !ok || idx < 0 || idx >= len(t.entries) {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	entry := t.entries[idx]
 	if !bytes.Equal(entry.key, key) {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
-	return entry.value, entry.ptr, entry.flags, true
+	return entry.value, entry.ptr, entry.flags, entry.revision, true
 }
 
 func (t *freezeSortRunTable) getFrozenEntryLocked(key []byte) (freezeSortRunEntry, bool) {
@@ -777,11 +833,16 @@ func (it *freezeSortRunIterator) UnsafeValue() []byte {
 }
 
 func (it *freezeSortRunIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	value, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return value, ptr, flags
+}
+
+func (it *freezeSortRunIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.Valid() {
-		return nil, page.ValuePtr{}, 0
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
 	}
 	entry := it.entries[it.idx]
-	return entry.value, entry.ptr, entry.flags
+	return entry.value, entry.ptr, entry.flags, entry.revision
 }
 
 func (it *freezeSortRunIterator) Key() []byte { return it.UnsafeKey() }

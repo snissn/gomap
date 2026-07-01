@@ -4745,6 +4745,7 @@ type rewriteIterator struct {
 	cached     bool
 	val        []byte
 	ptr        page.ValuePtr
+	revision   page.EntryRevision
 	flags      byte
 
 	preferredDictByFile map[uint32]uint64
@@ -4793,7 +4794,7 @@ func (it *rewriteIterator) ensure() {
 	if !it.inner.Valid() {
 		return
 	}
-	val, ptr, flags := it.inner.UnsafeEntry()
+	val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(it.inner)
 	if flags&node.FlagPointer != 0 {
 		newPtr, err := it.rewritePtr(ptr)
 		if err != nil {
@@ -4804,6 +4805,7 @@ func (it *rewriteIterator) ensure() {
 	}
 	it.val = val
 	it.ptr = ptr
+	it.revision = revision
 	it.flags = flags
 	it.cached = true
 }
@@ -5267,6 +5269,11 @@ func (it *rewriteIterator) ValueCopy(dst []byte) []byte {
 func (it *rewriteIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	it.ensure()
 	return it.val, it.ptr, it.flags
+}
+
+func (it *rewriteIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	it.ensure()
+	return it.val, it.ptr, it.flags, it.revision
 }
 
 func (it *rewriteIterator) Error() error {

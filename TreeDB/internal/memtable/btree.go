@@ -16,9 +16,10 @@ const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
 
 type btreeEntry struct {
-	value []byte // inline bytes (if pointer, may store inline tail bytes)
-	ptr   page.ValuePtr
-	flags byte
+	value    []byte // inline bytes (if pointer, may store inline tail bytes)
+	ptr      page.ValuePtr
+	revision page.EntryRevision
+	flags    byte
 }
 
 func canonicalizeBTreePointerValue(flags byte, value []byte) []byte {
@@ -85,7 +86,7 @@ func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key [
 		var replaced bool
 
 		if op.Type == batchpkg.OpDelete {
-			entry := btreeEntry{flags: node.FlagTombstone}
+			entry := btreeEntry{flags: node.FlagTombstone, revision: op.Revision}
 			if m.hasLast && keyStr > m.lastKey {
 				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
@@ -99,7 +100,7 @@ func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key [
 				m.sizeBytes += int64(len(op.Key))
 			}
 		} else if op.IsPtr {
-			entry := btreeEntry{value: canonicalizeBTreePointerValue(node.FlagPointer, op.Value), ptr: op.ValuePtr, flags: node.FlagPointer}
+			entry := btreeEntry{value: canonicalizeBTreePointerValue(node.FlagPointer, op.Value), ptr: op.ValuePtr, flags: node.FlagPointer, revision: op.Revision}
 			if m.hasLast && keyStr > m.lastKey {
 				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
@@ -113,7 +114,7 @@ func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key [
 				m.sizeBytes += int64(len(op.Key) + newSize)
 			}
 		} else {
-			entry := btreeEntry{value: canonicalizeBTreeInlineValue(op.Value), flags: node.FlagInline}
+			entry := btreeEntry{value: canonicalizeBTreeInlineValue(op.Value), flags: node.FlagInline, revision: op.Revision}
 			if m.hasLast && keyStr > m.lastKey {
 				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
@@ -211,6 +212,10 @@ func (m *BTree) SetSteal(key, value []byte) {
 }
 
 func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *BTree) SetEntryWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	if key == nil {
 		return
 	}
@@ -219,7 +224,7 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 
 	keyCopy := m.arena.Copy(key)
 	keyStr := bytesToStringNoCopy(keyCopy)
-	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags), revision: revision}
 	switch {
 	case entry.flags&node.FlagTombstone != 0:
 		entry.value = nil
@@ -251,6 +256,10 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 }
 
 func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.SetEntryStealWithRevision(key, value, ptr, flags, page.LegacyEntryRevision)
+}
+
+func (m *BTree) SetEntryStealWithRevision(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision) {
 	if key == nil {
 		return
 	}
@@ -259,7 +268,7 @@ func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) 
 	defer m.mu.Unlock()
 
 	keyStr := bytesToStringNoCopy(key)
-	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags), revision: revision}
 	switch {
 	case entry.flags&node.FlagTombstone != 0:
 		entry.value = nil
@@ -334,16 +343,21 @@ func (m *BTree) Get(key []byte) ([]byte, bool, bool) {
 }
 
 func (m *BTree) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	val, ptr, flags, _, found := m.GetEntryWithRevision(key)
+	return val, ptr, flags, found
+}
+
+func (m *BTree) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	val, ok := m.tree.Get(bytesToStringNoCopy(key))
 	if !ok {
-		return nil, page.ValuePtr{}, 0, false
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision, false
 	}
 	if val.flags&node.FlagPointer != 0 {
-		return canonicalizeBTreePointerValue(val.flags, val.value), val.ptr, val.flags, true
+		return canonicalizeBTreePointerValue(val.flags, val.value), val.ptr, val.flags, val.revision, true
 	}
-	return val.value, page.ValuePtr{}, val.flags, true
+	return val.value, page.ValuePtr{}, val.flags, val.revision, true
 }
 
 func (m *BTree) Size() int64 {
@@ -486,16 +500,21 @@ func (it *btreeIterator) UnsafeValue() []byte {
 }
 
 func (it *btreeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *btreeIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.hasCur {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision
 	}
 	if it.cur.flags&node.FlagTombstone != 0 {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, it.cur.revision
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
-		return it.cur.value, it.cur.ptr, it.cur.flags
+		return it.cur.value, it.cur.ptr, it.cur.flags, it.cur.revision
 	}
-	return it.cur.value, page.ValuePtr{}, it.cur.flags
+	return it.cur.value, page.ValuePtr{}, it.cur.flags, it.cur.revision
 }
 
 func (it *btreeIterator) Key() []byte {
@@ -649,16 +668,21 @@ func (it *btreeReverseIterator) UnsafeValue() []byte {
 }
 
 func (it *btreeReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+
+func (it *btreeReverseIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !it.hasCur {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, page.LegacyEntryRevision
 	}
 	if it.cur.flags&node.FlagTombstone != 0 {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, node.FlagTombstone, it.cur.revision
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
-		return it.cur.value, it.cur.ptr, it.cur.flags
+		return it.cur.value, it.cur.ptr, it.cur.flags, it.cur.revision
 	}
-	return it.cur.value, page.ValuePtr{}, it.cur.flags
+	return it.cur.value, page.ValuePtr{}, it.cur.flags, it.cur.revision
 }
 
 func (it *btreeReverseIterator) Key() []byte {

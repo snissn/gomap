@@ -36,10 +36,11 @@ const (
 	internalBaseDeltaU16Flag uint16 = 0x0200
 	internalFenceBoundsFlag  uint16 = 0x0100
 	internalLeafLogRefsFlag  uint16 = 0x0080
+	leafEntryRevisionFlag    uint16 = 0x0040
 
 	// NOTE: TreeDB is currently pre-alpha; on-disk formats are not yet stable and
 	// backward compatibility is not guaranteed. Leaf/internal flags may change.
-	leafNodeFlagMask     = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag | leafColumnarV2Flag
+	leafNodeFlagMask     = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag | leafColumnarV2Flag | leafEntryRevisionFlag
 	internalNodeFlagMask = internalBaseDeltaFlag | internalBaseDeltaU16Flag | internalFenceBoundsFlag | internalLeafLogRefsFlag
 	nodeFlagMask         = leafNodeFlagMask | internalNodeFlagMask
 	pageTypeMask         = ^nodeFlagMask
@@ -98,13 +99,14 @@ type Node struct {
 	leafFlags  byte
 	leafValid  bool
 
-	leafColPrefixMetaValid    bool
-	leafColPrefixMetaCount    uint16
-	leafColPrefixValDirStart  int
-	leafColPrefixFlagsStart   int
-	leafColPrefixPrefixStart  int
-	leafColPrefixHeaderEnd    int
-	leafColPrefixKeysBlobBase int
+	leafColPrefixMetaValid     bool
+	leafColPrefixMetaCount     uint16
+	leafColPrefixValDirStart   int
+	leafColPrefixFlagsStart    int
+	leafColPrefixPrefixStart   int
+	leafColPrefixRevisionStart int
+	leafColPrefixHeaderEnd     int
+	leafColPrefixKeysBlobBase  int
 
 	internalMetaValid bool
 	internalMetaCount uint16
@@ -268,6 +270,19 @@ func (n *Node) leafPackedValuePtr() bool {
 	return n.rawFlags()&leafPackedValuePtrFlag != 0
 }
 
+func (n *Node) leafEntryRevisions() bool {
+	if n.ptype != page.PageTypeLeaf {
+		return false
+	}
+	return n.rawFlags()&leafEntryRevisionFlag != 0
+}
+
+// LeafEntryRevisionsEnabled reports whether this leaf stores native per-entry
+// revision metadata.
+func (n *Node) LeafEntryRevisionsEnabled() bool {
+	return n.leafEntryRevisions()
+}
+
 func (n *Node) internalBaseDelta() bool {
 	if n.ptype != page.PageTypeInternal {
 		return false
@@ -377,6 +392,16 @@ func (n *Node) setLeafPackedValuePtr(enabled bool) {
 		flags |= leafPackedValuePtrFlag
 	} else {
 		flags &^= leafPackedValuePtrFlag
+	}
+	n.setRawFlags(flags)
+}
+
+func (n *Node) setLeafEntryRevisions(enabled bool) {
+	flags := n.rawFlags()
+	if enabled {
+		flags |= leafEntryRevisionFlag
+	} else {
+		flags &^= leafEntryRevisionFlag
 	}
 	n.setRawFlags(flags)
 }

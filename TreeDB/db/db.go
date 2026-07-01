@@ -2902,6 +2902,30 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 	return s.tree.GetAppend(normalizeRawKVPointKey(key), dst)
 }
 
+// GetVersionedAppend appends the value for key to dst and returns the native
+// entry revision stored with the visible leaf entry.
+func (s *Snapshot) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	return s.tree.GetVersionedAppend(normalizeRawKVPointKey(key), dst)
+}
+
+// GetVersioned returns a safe value copy plus the native entry revision stored
+// with the visible leaf entry.
+func (s *Snapshot) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
+	out, revision, err := s.GetVersionedAppend(key, nil)
+	if err != nil {
+		return nil, revision, err
+	}
+	if len(out) == 0 {
+		return []byte{}, revision, nil
+	}
+	if cap(out) == len(out) {
+		return out, revision, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, revision, nil
+}
+
 // GetManyView calls fn once for each key with a read-only value view.
 // Values are valid until fn returns and must be copied before retaining.
 func (s *Snapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
