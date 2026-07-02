@@ -202,6 +202,13 @@ func (s RaftSnapshotV1) Validate() error {
 	if len(s.Payload) == 0 {
 		return fmt.Errorf("%w: empty snapshot payload", ErrInvalidSnapshotManifest)
 	}
+	payloadManifest, err := DecodeSnapshotManifestV1FromArchive(s.Payload)
+	if err != nil {
+		return err
+	}
+	if payloadManifest != s.Manifest {
+		return fmt.Errorf("%w: snapshot payload manifest does not match outer manifest", ErrInvalidSnapshotManifest)
+	}
 	return nil
 }
 
@@ -270,7 +277,14 @@ func DecodeRaftSnapshotArchiveHeaderV1(src []byte, expectedScope SnapshotScopeId
 }
 
 func DecodeSnapshotManifestV1FromArchive(payload []byte) (SnapshotManifestV1, error) {
-	tr := tar.NewReader(bytes.NewReader(payload))
+	return DecodeSnapshotManifestV1FromArchiveReader(bytes.NewReader(payload))
+}
+
+func DecodeSnapshotManifestV1FromArchiveReader(reader io.Reader) (SnapshotManifestV1, error) {
+	if reader == nil {
+		return SnapshotManifestV1{}, fmt.Errorf("%w: nil snapshot archive reader", ErrInvalidSnapshotManifest)
+	}
+	tr := tar.NewReader(reader)
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {

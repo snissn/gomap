@@ -715,12 +715,11 @@ func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnap
 		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
 	}
 	defer snapshot.Close()
-	payload, err := io.ReadAll(snapshot)
+	manifest, err := DecodeSnapshotManifestV1FromArchiveReader(snapshot)
 	if err != nil {
-		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+		return HashicorpRaftSnapshotResultV1{}, err
 	}
-	raftSnapshot, err := decodeHashicorpRaftSnapshotPayloadV1(payload)
-	if err != nil {
+	if err := validateHashicorpRaftSnapshotManifestV1(meta, manifest); err != nil {
 		return HashicorpRaftSnapshotResultV1{}, err
 	}
 	firstAfter, firstAfterErr := p.logStore.FirstIndex()
@@ -741,7 +740,7 @@ func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnap
 		FirstLogIndexAfter:  firstAfter,
 		LastLogIndexAfter:   lastAfter,
 		LogCompacted:        firstAfter > firstBefore || (firstAfter == 0 && lastAfter == 0 && lastBefore > 0),
-		Manifest:            raftSnapshot.Manifest,
+		Manifest:            manifest,
 	}
 	return result, nil
 }
@@ -1033,17 +1032,15 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 
 func (s hashicorpRaftSnapshotV1) Release() {}
 
-func decodeHashicorpRaftSnapshotPayloadV1(payload []byte) (RaftSnapshotV1, error) {
-	if len(payload) == 0 {
-		return RaftSnapshotV1{}, fmt.Errorf("%w: empty persisted snapshot payload", ErrInvalidSnapshotManifest)
+func validateHashicorpRaftSnapshotManifestV1(meta *hraft.SnapshotMeta, manifest SnapshotManifestV1) error {
+	if meta == nil {
+		return fmt.Errorf("%w: missing hashicorp snapshot metadata", ErrInvalidSnapshotManifest)
 	}
-	manifest, err := DecodeSnapshotManifestV1FromArchive(payload)
-	if err != nil {
-		return RaftSnapshotV1{}, err
+	if meta.Term != manifest.LastIncludedTerm {
+		return fmt.Errorf("%w: hashicorp snapshot term %d does not match manifest term %d", ErrInvalidSnapshotManifest, meta.Term, manifest.LastIncludedTerm)
 	}
-	snapshot := RaftSnapshotV1{Manifest: manifest, Payload: bytes.Clone(payload)}
-	if err := snapshot.Validate(); err != nil {
-		return RaftSnapshotV1{}, err
+	if meta.Index != manifest.LastIncludedIndex {
+		return fmt.Errorf("%w: hashicorp snapshot index %d does not match manifest index %d", ErrInvalidSnapshotManifest, meta.Index, manifest.LastIncludedIndex)
 	}
-	return snapshot, nil
+	return nil
 }

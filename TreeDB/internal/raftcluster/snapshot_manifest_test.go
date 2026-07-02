@@ -1,6 +1,7 @@
 package raftcluster
 
 import (
+	"archive/tar"
 	"bytes"
 	"errors"
 	"strings"
@@ -193,6 +194,30 @@ func TestSnapshotManifestV1DecodeRejectsPaddedExpectedScope(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1ValidateRejectsMismatchedPayloadManifest(t *testing.T) {
+	outer := validSnapshotManifestV1()
+	embedded := outer
+	embedded.LastIncludedIndex++
+	snapshot := RaftSnapshotV1{
+		Manifest: outer,
+		Payload:  validRaftSnapshotArchivePayloadV1(t, embedded),
+	}
+	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("Validate mismatched payload manifest error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
+func TestRaftSnapshotV1ValidateAcceptsMatchingPayloadManifest(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	snapshot := RaftSnapshotV1{
+		Manifest: manifest,
+		Payload:  validRaftSnapshotArchivePayloadV1(t, manifest),
+	}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("Validate matching payload manifest: %v", err)
+	}
+}
+
 func validSnapshotManifestV1() SnapshotManifestV1 {
 	return SnapshotManifestV1{
 		Format:            SnapshotManifestFormatV1,
@@ -210,4 +235,28 @@ func validSnapshotManifestV1() SnapshotManifestV1 {
 		},
 		CreatedAt: time.Unix(1700000000, 123).UTC(),
 	}
+}
+
+func validRaftSnapshotArchivePayloadV1(t *testing.T, manifest SnapshotManifestV1) []byte {
+	t.Helper()
+	headerBytes, err := EncodeRaftSnapshotArchiveHeaderV1(NewRaftSnapshotArchiveHeaderV1(manifest))
+	if err != nil {
+		t.Fatalf("EncodeRaftSnapshotArchiveHeaderV1: %v", err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: RaftSnapshotArchiveManifestPathV1,
+		Mode: 0o600,
+		Size: int64(len(headerBytes)),
+	}); err != nil {
+		t.Fatalf("WriteHeader manifest: %v", err)
+	}
+	if _, err := tw.Write(headerBytes); err != nil {
+		t.Fatalf("Write manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close archive: %v", err)
+	}
+	return buf.Bytes()
 }

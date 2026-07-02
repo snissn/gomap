@@ -1,6 +1,7 @@
 package raftfsm
 
 import (
+	"archive/tar"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -125,6 +126,10 @@ func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
 	if err := os.WriteFile(targetFormatPath, []byte(`{"version":999}`), 0o600); err != nil {
 		t.Fatalf("WriteFile stale target format config: %v", err)
 	}
+	staleTransientPath := filepath.Join(targetDir, "index.db.bak")
+	if err := os.WriteFile(staleTransientPath, []byte("stale-index-backup"), 0o600); err != nil {
+		t.Fatalf("WriteFile stale transient file: %v", err)
+	}
 
 	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
 		t.Fatalf("InstallRaftSnapshotV1 with stale target format config: %v", err)
@@ -135,6 +140,9 @@ func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
 	}
 	if !bytes.Equal(targetFormat, sourceFormat) {
 		t.Fatalf("target format config=%s want source %s", targetFormat, sourceFormat)
+	}
+	if _, err := os.Stat(staleTransientPath); !os.IsNotExist(err) {
+		t.Fatalf("stale transient file survived snapshot restore: err=%v", err)
 	}
 	assertSnapshotDocument(t, targetFSM, "u-large", sourceDoc)
 }
@@ -270,6 +278,26 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(targetDir, "index.db")); err != nil {
 		t.Fatalf("restored main DB index missing: %v", err)
+	}
+}
+
+func TestRaftSnapshotV1ExportRejectsTopLevelSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "outside")
+	if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+		t.Fatalf("WriteFile symlink target: %v", err)
+	}
+	link := filepath.Join(root, "value_vlog")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	err := appendRaftSnapshotStoragePathV1(tw, "value_vlog", link)
+	_ = tw.Close()
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("appendRaftSnapshotStoragePathV1 symlink error=%v, want symlink rejection", err)
 	}
 }
 

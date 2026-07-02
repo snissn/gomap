@@ -97,28 +97,35 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 // production snapshot archive. HashiCorp Raft calls Restore without concurrent
 // Apply calls, so the FSM can safely close and reopen its local stores here.
 func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
-	if err := f.requireRaftSnapshotOpenV1(); err != nil {
-		return err
+	if f == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
 	if reader == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil snapshot reader")
 	}
+	f.mu.RLock()
+	if err := f.requireRaftSnapshotOpenV1(); err != nil {
+		f.mu.RUnlock()
+		return err
+	}
 	mainDir := raftcluster.MainDBDir(f.cluster.Dir)
 	applyDir := f.cluster.Layout.ApplyDir
+	f.mu.RUnlock()
 	if mainDir == "" || applyDir == "" {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing snapshot install directories")
 	}
 
-	tmpMain, err := os.MkdirTemp(filepath.Dir(mainDir), ".raft-snapshot-main-*")
+	scratchParent := filepath.Dir(mainDir)
+	tmpMain, err := os.MkdirTemp(scratchParent, ".raft-snapshot-main-*")
 	if err != nil {
 		return err
 	}
-	tmpApply, err := os.MkdirTemp(filepath.Dir(applyDir), ".raft-snapshot-apply-*")
+	tmpApply, err := os.MkdirTemp(scratchParent, ".raft-snapshot-apply-*")
 	if err != nil {
 		_ = os.RemoveAll(tmpMain)
 		return err
 	}
-	tmpSide, err := os.MkdirTemp(filepath.Dir(mainDir), ".raft-snapshot-side-*")
+	tmpSide, err := os.MkdirTemp(scratchParent, ".raft-snapshot-side-*")
 	if err != nil {
 		_ = os.RemoveAll(tmpMain)
 		_ = os.RemoveAll(tmpApply)
@@ -160,6 +167,7 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if err := replaceSnapshotMainDBV1(mainDir, tmpMain); err != nil {
 		return err
 	}
+	cleanupMain = false
 	if err := replaceSnapshotSideStoresV1(mainDir, tmpSide); err != nil {
 		return err
 	}
@@ -330,12 +338,15 @@ func appendRaftSnapshotTreeDBSideStoresV1(tw *tar.Writer, prefix, mainDir string
 }
 
 func appendRaftSnapshotStoragePathV1(tw *tar.Writer, archiveName, src string) error {
-	info, err := os.Stat(src)
+	info, err := os.Lstat(src)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("raftfsm: snapshot path %q is a symlink", src)
 	}
 	if info.IsDir() {
 		return appendRaftSnapshotDirV1(tw, archiveName, src)
@@ -537,26 +548,13 @@ func replaceSnapshotMainDBV1(destMain, srcMain string) error {
 	if destMain == "" || srcMain == "" {
 		return fmt.Errorf("raftfsm: empty snapshot restore DB path")
 	}
-	if err := os.MkdirAll(destMain, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(destMain), 0o700); err != nil {
 		return err
 	}
-	for _, name := range raftSnapshotMainDBEntriesV1 {
-		src := filepath.Join(srcMain, name)
-		dest := filepath.Join(destMain, name)
-		if err := os.RemoveAll(dest); err != nil {
-			return err
-		}
-		if _, err := os.Stat(src); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		if err := os.Rename(src, dest); err != nil {
-			return err
-		}
+	if err := os.RemoveAll(destMain); err != nil {
+		return err
 	}
-	return nil
+	return os.Rename(srcMain, destMain)
 }
 
 func replaceSnapshotSideStoresV1(mainDir, srcSide string) error {
