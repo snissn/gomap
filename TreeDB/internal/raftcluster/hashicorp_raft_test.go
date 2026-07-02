@@ -146,6 +146,101 @@ func TestHashicorpRaftProviderReadIndexUsesAppliedProgressIndex(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftProviderReadIndexRejectsAppliedProgressIdentityMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		progress AppliedProgress
+	}{
+		{
+			name: "node",
+			progress: AppliedProgress{
+				NodeID:     "node-z",
+				GroupID:    "group-a",
+				Term:       3,
+				Index:      42,
+				HasApplied: true,
+			},
+		},
+		{
+			name: "group",
+			progress: AppliedProgress{
+				NodeID:     "node-a",
+				GroupID:    "group-z",
+				Term:       3,
+				Index:      42,
+				HasApplied: true,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			applier := &progressReportingApplier{progress: tt.progress}
+			cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+			leader := cluster.waitForLeader(t)
+			if tt.name == "group" {
+				applier.progress.NodeID = leader.id
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+			if !errors.Is(err, ErrReadBarrierTargetMismatch) {
+				t.Fatalf("ReadIndex err=%v want ErrReadBarrierTargetMismatch", err)
+			}
+		})
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsMissingAppliedProgressIndex(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.progress.NodeID = leader.id
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("ReadIndex err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsLeadershipLostAfterBarrier(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			Index:      42,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.progress.NodeID = leader.id
+
+	var closeOnce sync.Once
+	applier.beforeReport = func() {
+		closeOnce.Do(func() {
+			_ = leader.provider.Close()
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if !errors.Is(err, ErrNotLeader) && !errors.Is(err, ErrHashicorpRaftUnavailable) {
+		t.Fatalf("ReadIndex err=%v want not-leader or unavailable after leadership loss", err)
+	}
+}
+
 func TestHashicorpRaftProviderReadIndexRejectsFollowerStrongRead(t *testing.T) {
 	cluster := newHashicorpRaftDBCluster(t)
 	leader := cluster.waitForLeader(t)
@@ -695,7 +790,8 @@ func (a *recordingClusterApplier) snapshot() []CommittedCommandEntryV1 {
 }
 
 type progressReportingApplier struct {
-	progress AppliedProgress
+	progress     AppliedProgress
+	beforeReport func()
 }
 
 func (a *progressReportingApplier) ApplyCommittedCommandEntryV1(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
@@ -705,6 +801,9 @@ func (a *progressReportingApplier) ApplyCommittedCommandEntryV1(context.Context,
 func (a *progressReportingApplier) AppliedProgress(ctx context.Context) (AppliedProgress, error) {
 	if err := ctx.Err(); err != nil {
 		return a.progress, err
+	}
+	if a.beforeReport != nil {
+		a.beforeReport()
 	}
 	return a.progress, nil
 }

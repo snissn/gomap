@@ -201,17 +201,20 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 	if err := ctx.Err(); err != nil {
 		return ReadIndexProof{}, err
 	}
-	if state := p.raft.State(); state != hraft.Leader {
-		return ReadIndexProof{}, p.hashicorpReadIndexNotLeader(state)
+	if err := p.requireHashicorpReadIndexLeader(); err != nil {
+		return ReadIndexProof{}, err
 	}
 	if err := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader()); err != nil {
 		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
 	}
-	if state := p.raft.State(); state != hraft.Leader {
-		return ReadIndexProof{}, p.hashicorpReadIndexNotLeader(state)
+	if err := p.requireHashicorpReadIndexLeader(); err != nil {
+		return ReadIndexProof{}, err
 	}
 	if err := waitHashicorpRaftFuture(ctx, p.raft.Barrier(p.applyTimeout)); err != nil {
 		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
+	}
+	if err := p.requireHashicorpReadIndexLeader(); err != nil {
+		return ReadIndexProof{}, err
 	}
 	if p.appliedProgress == nil {
 		return ReadIndexProof{}, fmt.Errorf("%w: applied progress reader is not configured", ErrReadBarrierNotSatisfied)
@@ -220,8 +223,11 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 	if err != nil {
 		return ReadIndexProof{}, err
 	}
-	if !progress.HasApplied {
-		return ReadIndexProof{}, fmt.Errorf("%w: no applied TreeDB command index", ErrReadBarrierNotSatisfied)
+	if err := p.validateReadIndexAppliedProgress(progress); err != nil {
+		return ReadIndexProof{}, err
+	}
+	if err := p.requireHashicorpReadIndexLeader(); err != nil {
+		return ReadIndexProof{}, err
 	}
 	// HashiCorp Raft v1.7 has no native ReadIndex API. VerifyLeader sends an
 	// immediate heartbeat to voting peers and Barrier waits until preceding
@@ -240,6 +246,32 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 		return ReadIndexProof{}, err
 	}
 	return proof, nil
+}
+
+func (p *HashicorpRaftProvider) requireHashicorpReadIndexLeader() error {
+	if p == nil || p.raft == nil {
+		return ErrInvalidHashicorpRaftProvider
+	}
+	if state := p.raft.State(); state != hraft.Leader {
+		return p.hashicorpReadIndexNotLeader(state)
+	}
+	return nil
+}
+
+func (p *HashicorpRaftProvider) validateReadIndexAppliedProgress(progress AppliedProgress) error {
+	if p == nil {
+		return ErrInvalidHashicorpRaftProvider
+	}
+	if progress.NodeID != p.cluster.NodeID {
+		return fmt.Errorf("%w: applied progress node %q does not match local node %q", ErrReadBarrierTargetMismatch, progress.NodeID, p.cluster.NodeID)
+	}
+	if progress.GroupID != p.cluster.GroupID {
+		return fmt.Errorf("%w: applied progress group %q does not match local group %q", ErrReadBarrierTargetMismatch, progress.GroupID, p.cluster.GroupID)
+	}
+	if !progress.HasApplied || progress.Index == 0 {
+		return fmt.Errorf("%w: no applied TreeDB command index", ErrReadBarrierNotSatisfied)
+	}
+	return nil
 }
 
 func (p *HashicorpRaftProvider) CommitCommandEntryV1(ctx context.Context, req CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
