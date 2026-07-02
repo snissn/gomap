@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -245,6 +246,104 @@ func TestHashicorpRaftSnapshotPersistFileSourceAllocationGuard(t *testing.T) {
 	}
 	if !sink.closed || sink.canceled {
 		t.Fatalf("sink closed=%v canceled=%v, want close-only success", sink.closed, sink.canceled)
+	}
+}
+
+func TestHashicorpRaftSnapshotPersistCancelsOnInvalidArchivePathSource(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, archivePath string, manifest SnapshotManifestV1)
+	}{
+		{
+			name: "missing",
+			mutate: func(t *testing.T, archivePath string, _ SnapshotManifestV1) {
+				t.Helper()
+				if err := os.Remove(archivePath); err != nil {
+					t.Fatalf("Remove archive path: %v", err)
+				}
+			},
+		},
+		{
+			name: "replaced manifest",
+			mutate: func(t *testing.T, archivePath string, manifest SnapshotManifestV1) {
+				t.Helper()
+				replacement := manifest
+				replacement.LastIncludedIndex++
+				if err := os.WriteFile(archivePath, validRaftSnapshotArchivePayloadV1(t, replacement), 0o600); err != nil {
+					t.Fatalf("Replace archive path: %v", err)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest := validSnapshotManifestV1()
+			archivePath := writeRaftSnapshotArchiveFileForTest(t, validRaftSnapshotArchivePayloadV1(t, manifest))
+			tc.mutate(t, archivePath, manifest)
+			snapshot := hashicorpRaftSnapshotV1{
+				snapshot: RaftSnapshotV1{
+					Manifest:    manifest,
+					ArchivePath: archivePath,
+				},
+			}
+			sink := &boundaryTestSnapshotSink{}
+
+			err := snapshot.Persist(sink)
+			if !errors.Is(err, ErrInvalidSnapshotManifest) {
+				t.Fatalf("Persist err=%v want ErrInvalidSnapshotManifest", err)
+			}
+			if !sink.canceled {
+				t.Fatal("Persist did not cancel sink after invalid archive path source")
+			}
+			if sink.closed {
+				t.Fatal("Persist closed sink after invalid archive path source")
+			}
+			if sink.Len() != 0 {
+				t.Fatalf("Persist wrote %d bytes before rejecting archive path source", sink.Len())
+			}
+		})
+	}
+}
+
+func TestHashicorpRaftFileSnapshotStoreListIgnoresStagedSiblingDirectory(t *testing.T) {
+	baseDir := t.TempDir()
+	store, err := hraft.NewFileSnapshotStore(baseDir, 2, io.Discard)
+	if err != nil {
+		t.Fatalf("NewFileSnapshotStore: %v", err)
+	}
+	stagedDir := filepath.Join(baseDir, "staged")
+	if err := os.MkdirAll(stagedDir, 0o700); err != nil {
+		t.Fatalf("Mkdir staged dir: %v", err)
+	}
+	orphanPath := filepath.Join(stagedDir, "treedb-snapshot-orphan.tar")
+	if err := os.WriteFile(orphanPath, []byte("orphaned staged archive"), 0o600); err != nil {
+		t.Fatalf("Write staged archive: %v", err)
+	}
+
+	sink, err := store.Create(hraft.SnapshotVersionMax, 11, 7, hraft.Configuration{}, 0, nil)
+	if err != nil {
+		t.Fatalf("Create snapshot: %v", err)
+	}
+	if _, err := sink.Write(validRaftSnapshotArchivePayloadV1(t, validSnapshotManifestV1())); err != nil {
+		_ = sink.Cancel()
+		t.Fatalf("Write snapshot: %v", err)
+	}
+	if err := sink.Close(); err != nil {
+		t.Fatalf("Close snapshot: %v", err)
+	}
+
+	snapshots, err := store.List()
+	if err != nil {
+		t.Fatalf("List snapshots with staged sibling dir: %v", err)
+	}
+	if len(snapshots) != 1 {
+		t.Fatalf("List returned %d snapshots, want 1", len(snapshots))
+	}
+	if snapshots[0].Index != 11 || snapshots[0].Term != 7 {
+		t.Fatalf("snapshot meta index=%d term=%d, want index=11 term=7", snapshots[0].Index, snapshots[0].Term)
+	}
+	if _, err := os.Stat(orphanPath); err != nil {
+		t.Fatalf("staged sibling archive should be outside FileSnapshotStore retention/listing path: %v", err)
 	}
 }
 
