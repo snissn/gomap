@@ -305,6 +305,7 @@ func TestRaftSnapshotV1InstallRejectsCorruptArchiveBeforeReplacingLiveState(t *t
 
 	targetDir := filepath.Join(root, "target")
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	defer func() { _ = targetDB.Close() }()
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 	targetDoc := []byte(`{"_id":"u-large","name":"target-before-corrupt"}`)
@@ -612,6 +613,61 @@ func TestRaftSnapshotV1RestoreWiresRestoredSideStoreLookups(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1RestoreScrubsMainPlacementOptionsForSideStores(t *testing.T) {
+	opts := backenddb.Options{
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold: 1,
+			ForcePointers:    true,
+			DomainInlineThresholds: []backenddb.ValueLogDomainThreshold{
+				{Prefix: []byte("main/"), InlineThreshold: 0},
+			},
+			Compression: backenddb.ValueLogCompressionAuto,
+			DictLookup: func(uint64) ([]byte, error) {
+				return nil, nil
+			},
+			TemplateMode: template.TemplatePrepass,
+			TemplateLookup: func(uint64) ([]byte, error) {
+				return nil, nil
+			},
+			TemplateDecodeOptions: template.DecodeOptions{MaxDecodedBytes: 32, MaxGaps: 4, DefCacheSize: 2},
+		},
+	}
+
+	scrubRaftSnapshotSideStoreOptionsV1(&opts)
+
+	if opts.IndexOuterLeavesInValueLog {
+		t.Fatal("IndexOuterLeavesInValueLog was not cleared")
+	}
+	if opts.ValueLog.ForcePointers {
+		t.Fatal("ForcePointers was not cleared")
+	}
+	if opts.ValueLog.PointerThreshold != 0 {
+		t.Fatalf("PointerThreshold=%d want 0", opts.ValueLog.PointerThreshold)
+	}
+	if opts.ValueLog.DomainInlineThresholds != nil {
+		t.Fatalf("DomainInlineThresholds=%v want nil", opts.ValueLog.DomainInlineThresholds)
+	}
+	if opts.ValueLog.Compression != backenddb.ValueLogCompressionOff {
+		t.Fatalf("Compression=%v want off", opts.ValueLog.Compression)
+	}
+	if opts.ValueLog.DictLookup != nil {
+		t.Fatal("DictLookup was not cleared")
+	}
+	if opts.ValueLog.DictTrain.TrainBytes != -1 {
+		t.Fatalf("DictTrain.TrainBytes=%d want -1", opts.ValueLog.DictTrain.TrainBytes)
+	}
+	if opts.ValueLog.TemplateMode != template.TemplateOff {
+		t.Fatalf("TemplateMode=%v want off", opts.ValueLog.TemplateMode)
+	}
+	if opts.ValueLog.TemplateLookup != nil {
+		t.Fatal("TemplateLookup was not cleared")
+	}
+	if opts.ValueLog.TemplateDecodeOptions != (template.DecodeOptions{}) {
+		t.Fatalf("TemplateDecodeOptions=%+v want zero", opts.ValueLog.TemplateDecodeOptions)
+	}
+}
+
 func TestRaftSnapshotV1ExportRejectsTopLevelSymlink(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "outside")
@@ -629,6 +685,26 @@ func TestRaftSnapshotV1ExportRejectsTopLevelSymlink(t *testing.T) {
 	_ = tw.Close()
 	if err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("appendRaftSnapshotStoragePathV1 symlink error=%v, want symlink rejection", err)
+	}
+}
+
+func TestRaftSnapshotV1ExportRejectsDirectoryRootSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "outside")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatalf("MkdirAll symlink target: %v", err)
+	}
+	link := filepath.Join(root, "maindb")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	err := appendRaftSnapshotDirV1(tw, "db", link)
+	_ = tw.Close()
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("appendRaftSnapshotDirV1 symlink root error=%v, want symlink rejection", err)
 	}
 }
 

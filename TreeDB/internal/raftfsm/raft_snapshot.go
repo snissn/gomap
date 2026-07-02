@@ -321,9 +321,12 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 		return fmt.Errorf("raftfsm: nil snapshot archive writer")
 	}
 	root = filepath.Clean(root)
-	info, err := os.Stat(root)
+	info, err := os.Lstat(root)
 	if err != nil {
 		return fmt.Errorf("raftfsm: stat snapshot directory %q: %w", root, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 {
+		return fmt.Errorf("raftfsm: snapshot path %q is a symlink", root)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("raftfsm: snapshot path %q is not a directory", root)

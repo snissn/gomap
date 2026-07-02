@@ -207,10 +207,23 @@ func (s RaftSnapshotV1) Validate() error {
 	if err != nil {
 		return err
 	}
-	if payloadManifest != s.Manifest {
+	if !snapshotManifestV1Equal(payloadManifest, s.Manifest) {
 		return fmt.Errorf("%w: snapshot payload manifest does not match outer manifest", ErrInvalidSnapshotManifest)
 	}
 	return nil
+}
+
+func snapshotManifestV1Equal(a, b SnapshotManifestV1) bool {
+	return a.Format == b.Format &&
+		a.Version == b.Version &&
+		a.GroupID == b.GroupID &&
+		a.NodeID == b.NodeID &&
+		a.LastIncludedTerm == b.LastIncludedTerm &&
+		a.LastIncludedIndex == b.LastIncludedIndex &&
+		a.AppliedCommandLSN == b.AppliedCommandLSN &&
+		a.LogicalDigestV1 == b.LogicalDigestV1 &&
+		a.Scope == b.Scope &&
+		a.CreatedAt.Equal(b.CreatedAt)
 }
 
 // RaftSnapshotExporterV1 is implemented by FSMs that can export a production

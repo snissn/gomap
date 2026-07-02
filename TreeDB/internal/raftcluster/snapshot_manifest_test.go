@@ -218,6 +218,18 @@ func TestRaftSnapshotV1ValidateAcceptsMatchingPayloadManifest(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1ValidateAcceptsMatchingPayloadManifestWithMonotonicCreatedAt(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	manifest.CreatedAt = time.Now()
+	snapshot := RaftSnapshotV1{
+		Manifest: manifest,
+		Payload:  validRaftSnapshotArchivePayloadV1(t, manifest),
+	}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("Validate matching payload manifest with monotonic CreatedAt: %v", err)
+	}
+}
+
 func TestDecodeSnapshotManifestV1FromArchiveReaderRejectsOversizedHeader(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)

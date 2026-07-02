@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -107,12 +109,7 @@ func wireRaftSnapshotDictLookupV1(rootDir string, opts *backenddb.Options, close
 	dictOpts.DisableBackgroundPrune = true
 	dictOpts.IgnoreFormatConfig = false
 	dictOpts.CommandWAL = false
-	dictOpts.IndexOuterLeavesInValueLog = false
-	dictOpts.ValueLog.DictLookup = nil
-	dictOpts.ValueLog.Compression = backenddb.ValueLogCompressionOff
-	dictOpts.ValueLog.TemplateMode = template.TemplateOff
-	dictOpts.ValueLog.TemplateLookup = nil
-	dictOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
+	scrubRaftSnapshotSideStoreOptionsV1(&dictOpts)
 
 	dictBackend, err := backenddb.Open(dictOpts)
 	if err != nil {
@@ -170,12 +167,7 @@ func wireRaftSnapshotTemplateLookupV1(rootDir string, opts *backenddb.Options, c
 	templateOpts.DisableBackgroundPrune = true
 	templateOpts.IgnoreFormatConfig = false
 	templateOpts.CommandWAL = false
-	templateOpts.IndexOuterLeavesInValueLog = false
-	templateOpts.ValueLog.DictLookup = nil
-	templateOpts.ValueLog.Compression = backenddb.ValueLogCompressionOff
-	templateOpts.ValueLog.TemplateMode = template.TemplateOff
-	templateOpts.ValueLog.TemplateLookup = nil
-	templateOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
+	scrubRaftSnapshotSideStoreOptionsV1(&templateOpts)
 
 	templateBackend, err := backenddb.Open(templateOpts)
 	if err != nil {
@@ -198,4 +190,18 @@ func wireRaftSnapshotTemplateLookupV1(rootDir string, opts *backenddb.Options, c
 		return store.GetTemplateDef(context.Background(), templateID)
 	}
 	return nil
+}
+
+func scrubRaftSnapshotSideStoreOptionsV1(opts *backenddb.Options) {
+	opts.IndexOuterLeavesInValueLog = false
+	opts.ValueLog.DictLookup = nil
+	opts.ValueLog.DictTrain = compression.TrainConfig{TrainBytes: -1}
+	opts.ValueLog.ForcePointers = false
+	opts.ValueLog.PointerThreshold = 0
+	opts.ValueLog.DomainInlineThresholds = nil
+	opts.ValueLog.Compression = backenddb.ValueLogCompressionOff
+	opts.ValueLog.CompressionAutotune = valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff}
+	opts.ValueLog.TemplateMode = template.TemplateOff
+	opts.ValueLog.TemplateLookup = nil
+	opts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
 }
