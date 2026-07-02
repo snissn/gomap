@@ -6,7 +6,7 @@ This document records the single-group Raft storage/configuration boundary,
 recovery-status reporting boundary, first submit/apply bridge, and first
 HashiCorp Raft backed quorum provider that later issue `#3044` slices may
 depend on. It does not implement production snapshot transfer, truncate logs,
-rejoin nodes, provide read-index routing, or route multiple groups.
+rejoin nodes, follower read routing, lease reads, or route multiple groups.
 
 ## Scope
 
@@ -182,8 +182,14 @@ log coverage or translate the proof to the latest TreeDB command index at or
 below the proof; it must not assume the FSM's last applied TreeDB command index
 is identical to the provider's latest applied Raft log index.
 
-This is only a contract. It does not implement a real Raft read-index provider,
-leader transfer handling, lease reads, follower reads, or production routing.
+`HashicorpRaftProvider.ReadIndex` implements the first production leader-local
+provider for this contract. It uses HashiCorp Raft leader/quorum evidence,
+checks the committed prefix has the current term, scans command-free gaps, and
+waits for TreeDB applied progress before returning
+`ReadIndexEvidenceProduction`. It fails closed on follower state, leadership
+loss, target mismatch, missing applied progress, or missing log evidence. This
+does not add leader transfer handling, lease reads, follower reads, or
+production routing.
 
 `raftharness.ReadIndexProvider` is the in-process test adapter for this
 contract. It derives read-index proofs from an injected committed-entry log so
@@ -267,7 +273,8 @@ unreachable.
 
 - no bespoke consensus implementation beyond the narrow HashiCorp Raft adapter;
 - no leader transfer, redirect handling, or lease reads;
-- no real read-index provider, lease-read provider, or follower read routing;
+- no lease-read provider, follower read routing, or read-index routing beyond
+  the leader-local `HashicorpRaftProvider.ReadIndex` proof;
 - no production snapshot transfer/install beyond metadata contracts and injected
   harness evidence; `HashicorpRaftProvider` snapshots currently fail closed;
 - no Raft log truncation;

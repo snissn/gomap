@@ -77,6 +77,448 @@ func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T
 	}
 }
 
+func TestHashicorpRaftProviderReadIndexReturnsProductionProofForLeader(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := leader.submitter.SubmitCommandEntryV1(ctx, testClusterCreateCollectionEntry(t, 7), raftentry.RequestMetadataV1{
+		RequestID: 703,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	cluster.waitApplied(t, result.CommittedEntry.EntryID())
+
+	target := ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"}
+	proof, err := leader.provider.ReadIndex(ctx, target)
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if proof.NodeID != leader.id ||
+		proof.GroupID != "group-a" ||
+		proof.EvidenceKind != ReadIndexEvidenceProduction ||
+		!proof.HasQuorum ||
+		proof.Term == 0 ||
+		proof.Index < result.CommittedEntry.Index {
+		t.Fatalf("proof=%+v committed=%+v", proof, result.CommittedEntry)
+	}
+	if err := target.Check(proof); err != nil {
+		t.Fatalf("target.Check: %v", err)
+	}
+	progress, err := leader.fsm.WaitAppliedIndex(ctx, proof.AppliedIndexBarrier())
+	if err != nil {
+		t.Fatalf("WaitAppliedIndex(%+v): %v progress=%+v", proof.AppliedIndexBarrier(), err, progress)
+	}
+	if progress.NodeID != leader.id || progress.GroupID != "group-a" || progress.Index < proof.Index || !progress.HasApplied {
+		t.Fatalf("progress=%+v proof=%+v", progress, proof)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexUsesAppliedProgressIndex(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			Index:      42,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	if leader.id != "node-a" {
+		applier.setProgressNodeID(leader.id)
+	}
+	wantIndex := applier.progressIndex()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	proof, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if proof.Index != wantIndex {
+		t.Fatalf("proof index=%d want applied progress index %d", proof.Index, wantIndex)
+	}
+	if !proof.HasQuorum || proof.EvidenceKind != ReadIndexEvidenceProduction {
+		t.Fatalf("proof=%+v want production quorum proof", proof)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsAppliedProgressIdentityMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		progress AppliedProgress
+	}{
+		{
+			name: "node",
+			progress: AppliedProgress{
+				NodeID:     "node-z",
+				GroupID:    "group-a",
+				Term:       3,
+				Index:      42,
+				HasApplied: true,
+			},
+		},
+		{
+			name: "group",
+			progress: AppliedProgress{
+				NodeID:     "node-a",
+				GroupID:    "group-z",
+				Term:       3,
+				Index:      42,
+				HasApplied: true,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			applier := &progressReportingApplier{progress: tt.progress}
+			cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+			leader := cluster.waitForLeader(t)
+			if tt.name == "group" {
+				applier.setProgressNodeID(leader.id)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+			if !errors.Is(err, ErrReadBarrierTargetMismatch) {
+				t.Fatalf("ReadIndex err=%v want ErrReadBarrierTargetMismatch", err)
+			}
+		})
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsMissingAppliedProgressIndex(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.setProgressNodeID(leader.id)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("ReadIndex err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsWithoutBarrierWhenAppliedProgressUnavailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		applier CommittedCommandApplierV1
+	}{
+		{
+			name:    "reader-missing",
+			applier: &recordingClusterApplier{},
+		},
+		{
+			name: "no-applied-command",
+			applier: &progressReportingApplier{
+				progress: AppliedProgress{
+					NodeID:  "node-a",
+					GroupID: "group-a",
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cluster := newHashicorpRaftProviderOnlyCluster(t, tt.applier)
+			leader := cluster.waitForLeader(t)
+			if applier, ok := tt.applier.(*progressReportingApplier); ok {
+				applier.setProgressNodeID(leader.id)
+			}
+			if leader.barrierLogStore == nil {
+				t.Fatalf("%s has no barrier-counting log store", leader.id)
+			}
+			before := leader.barrierLogStore.barrierLogCount()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+			if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+				t.Fatalf("ReadIndex err=%v want ErrReadBarrierNotSatisfied", err)
+			}
+			if after := leader.barrierLogStore.barrierLogCount(); after != before {
+				t.Fatalf("ReadIndex appended %d barrier logs before proving applied progress", after-before)
+			}
+		})
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexDoesNotAppendBarrierLog(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			Index:      42,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.setProgressNodeID(leader.id)
+	if leader.barrierLogStore == nil {
+		t.Fatalf("%s has no barrier-counting log store", leader.id)
+	}
+	before := leader.barrierLogStore.barrierLogCount()
+	wantIndex := applier.progressIndex()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	target := ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"}
+	for i := 0; i < 3; i++ {
+		proof, err := leader.provider.ReadIndex(ctx, target)
+		if err != nil {
+			t.Fatalf("ReadIndex #%d: %v", i+1, err)
+		}
+		if proof.Index != wantIndex ||
+			proof.EvidenceKind != ReadIndexEvidenceProduction ||
+			!proof.HasQuorum {
+			t.Fatalf("ReadIndex #%d proof=%+v want production proof at applied progress index %d", i+1, proof, wantIndex)
+		}
+	}
+	if after := leader.barrierLogStore.barrierLogCount(); after != before {
+		t.Fatalf("ReadIndex appended %d barrier logs", after-before)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexWaitsForTreeDBCommandProgressInGap(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       1,
+			Index:      1,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.setProgressNodeID(leader.id)
+
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer commitCancel()
+	result, err := leader.provider.CommitCommandEntryV1(commitCtx, CommitCommandEntryV1Request{
+		GroupID:                  "group-a",
+		NodeID:                   leader.id,
+		EntryBytes:               testClusterCreateCollectionEntry(t, 7),
+		CurrentCatalogVersion:    7,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      true,
+	})
+	if err != nil {
+		t.Fatalf("CommitCommandEntryV1: %v", err)
+	}
+	if result.Entry.Index < 2 {
+		t.Fatalf("committed command index=%d, want room for stale progress", result.Entry.Index)
+	}
+	staleProgress := AppliedProgress{
+		NodeID:     leader.id,
+		GroupID:    "group-a",
+		Term:       result.Entry.Term,
+		Index:      result.Entry.Index - 1,
+		HasApplied: true,
+	}
+	applier.setProgress(staleProgress)
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer readCancel()
+	_, err = leader.provider.ReadIndex(readCtx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err == nil {
+		t.Fatalf("ReadIndex succeeded with committed command index %d ahead of TreeDB progress %d", result.Entry.Index, staleProgress.Index)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("ReadIndex err=%v want fail-closed deadline or ErrReadBarrierNotSatisfied", err)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexWaitsForInitialAppliedProgress(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:  "node-a",
+			GroupID: "group-a",
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.setProgress(AppliedProgress{
+		NodeID:  leader.id,
+		GroupID: "group-a",
+	})
+
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer commitCancel()
+	result, err := leader.provider.CommitCommandEntryV1(commitCtx, CommitCommandEntryV1Request{
+		GroupID:                  "group-a",
+		NodeID:                   leader.id,
+		EntryBytes:               testClusterCreateCollectionEntry(t, 7),
+		CurrentCatalogVersion:    7,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      true,
+	})
+	if err != nil {
+		t.Fatalf("CommitCommandEntryV1: %v", err)
+	}
+	if leader.barrierLogStore == nil {
+		t.Fatalf("%s has no barrier-counting log store", leader.id)
+	}
+	before := leader.barrierLogStore.barrierLogCount()
+
+	var mu sync.Mutex
+	progressReports := 0
+	applier.setBeforeReport(func() {
+		mu.Lock()
+		progressReports++
+		current := progressReports
+		mu.Unlock()
+		if current < 2 {
+			return
+		}
+		applier.setProgress(AppliedProgress{
+			NodeID:     leader.id,
+			GroupID:    "group-a",
+			Term:       result.Entry.Term,
+			Index:      result.Entry.Index,
+			HasApplied: true,
+		})
+	})
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	proof, err := leader.provider.ReadIndex(readCtx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if proof.Index != result.Entry.Index {
+		t.Fatalf("proof index=%d want first applied command index %d", proof.Index, result.Entry.Index)
+	}
+	mu.Lock()
+	gotReports := progressReports
+	mu.Unlock()
+	if gotReports < 2 {
+		t.Fatalf("AppliedProgress reports=%d want at least 2", gotReports)
+	}
+	if after := leader.barrierLogStore.barrierLogCount(); after != before {
+		t.Fatalf("ReadIndex appended %d barrier logs while waiting for initial progress", after-before)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsLeadershipLostBeforeProof(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			Index:      42,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.setProgressNodeID(leader.id)
+
+	var closeOnce sync.Once
+	applier.setBeforeReport(func() {
+		closeOnce.Do(func() {
+			_ = leader.provider.Close()
+		})
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if !errors.Is(err, ErrNotLeader) && !errors.Is(err, ErrHashicorpRaftUnavailable) {
+		t.Fatalf("ReadIndex err=%v want not-leader or unavailable after leadership loss", err)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsFollowerStrongRead(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+	follower := cluster.firstFollower(t, leader.id)
+	cluster.waitFollowerHint(t, follower, leader.id)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := follower.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: follower.id, GroupID: "group-a"})
+	if !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("follower ReadIndex err=%v want ErrNotLeader", err)
+	}
+	if !strings.Contains(err.Error(), "leader_hint="+string(leader.id)) {
+		t.Fatalf("follower ReadIndex err=%v missing leader hint %q", err, leader.id)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsTargetMismatch(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+
+	tests := []struct {
+		name   string
+		target ReadIndexBarrier
+	}{
+		{name: "node", target: ReadIndexBarrier{NodeID: "node-z", GroupID: "group-a"}},
+		{name: "group", target: ReadIndexBarrier{NodeID: leader.id, GroupID: "group-b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := leader.provider.ReadIndex(context.Background(), tt.target)
+			if !errors.Is(err, ErrReadBarrierTargetMismatch) {
+				t.Fatalf("ReadIndex err=%v want ErrReadBarrierTargetMismatch", err)
+			}
+		})
+	}
+}
+
+func BenchmarkHashicorpRaftProviderReadIndex(b *testing.B) {
+	cluster := newHashicorpRaftDBCluster(b)
+	leader := cluster.waitForLeader(b)
+	ctx := context.Background()
+	result, err := leader.submitter.SubmitCommandEntryV1(ctx, testClusterCreateCollectionEntry(b, 7), raftentry.RequestMetadataV1{
+		RequestID: 704,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		b.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	cluster.waitApplied(b, result.CommittedEntry.EntryID())
+
+	target := ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"}
+	proof, err := leader.provider.ReadIndex(ctx, target)
+	if err != nil {
+		b.Fatalf("warm ReadIndex: %v", err)
+	}
+	if proof.Index < result.CommittedEntry.Index {
+		b.Fatalf("warm proof=%+v committed=%+v", proof, result.CommittedEntry)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		proof, err := leader.provider.ReadIndex(ctx, target)
+		if err != nil {
+			b.Fatalf("ReadIndex: %v", err)
+		}
+		if proof.Index < result.CommittedEntry.Index {
+			b.Fatalf("proof=%+v committed=%+v", proof, result.CommittedEntry)
+		}
+	}
+}
+
 func TestHashicorpRaftProviderFollowerRejectsWithoutDirectMutation(t *testing.T) {
 	cluster := newHashicorpRaftDBCluster(t)
 	leader := cluster.waitForLeader(t)
@@ -404,35 +846,36 @@ type hashicorpRaftTestCluster struct {
 }
 
 type hashicorpRaftTestNode struct {
-	id        NodeID
-	cfg       Config
-	db        *backenddb.DB
-	fsm       *raftfsm.FSM
-	provider  *HashicorpRaftProvider
-	submitter *SingleGroupSubmitter
-	transport *hraft.InmemTransport
+	id              NodeID
+	cfg             Config
+	db              *backenddb.DB
+	fsm             *raftfsm.FSM
+	provider        *HashicorpRaftProvider
+	submitter       *SingleGroupSubmitter
+	transport       *hraft.InmemTransport
+	barrierLogStore *barrierCountingLogStore
 }
 
-func newHashicorpRaftDBCluster(t *testing.T) *hashicorpRaftTestCluster {
-	t.Helper()
-	cluster := newHashicorpRaftCluster(t, func(t *testing.T, cfg Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
-		t.Helper()
-		db, fsm := openHashicorpRaftTestDBAndFSM(t, cfg)
+func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
+	tb.Helper()
+	cluster := newHashicorpRaftCluster(tb, func(tb testing.TB, cfg Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
+		tb.Helper()
+		db, fsm := openHashicorpRaftTestDBAndFSM(tb, cfg)
 		return db, fsm, fsm
 	})
 	for _, node := range cluster.nodes {
-		node.submitter = newHashicorpRaftDBSubmitter(t, node, staticCatalogVersion(7))
+		node.submitter = newHashicorpRaftDBSubmitter(tb, node, staticCatalogVersion(7))
 	}
 	return cluster
 }
 
-func newHashicorpRaftDBSubmitter(t testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider) *SingleGroupSubmitter {
-	t.Helper()
-	return newHashicorpRaftDBSubmitterWithPreflight(t, node, catalogProvider, node.fsm)
+func newHashicorpRaftDBSubmitter(tb testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider) *SingleGroupSubmitter {
+	tb.Helper()
+	return newHashicorpRaftDBSubmitterWithPreflight(tb, node, catalogProvider, node.fsm)
 }
 
-func newHashicorpRaftDBSubmitterWithPreflight(t testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider, preflight CommandEntryPreflightV1) *SingleGroupSubmitter {
-	t.Helper()
+func newHashicorpRaftDBSubmitterWithPreflight(tb testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider, preflight CommandEntryPreflightV1) *SingleGroupSubmitter {
+	tb.Helper()
 	submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
 		Cluster:                node.cfg,
 		AdmissionProvider:      node.provider,
@@ -442,7 +885,7 @@ func newHashicorpRaftDBSubmitterWithPreflight(t testing.TB, node *hashicorpRaftT
 		CatalogVersionProvider: catalogProvider,
 	})
 	if err != nil {
-		t.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
+		tb.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
 	}
 	return submitter
 }
@@ -470,17 +913,17 @@ func (p *gatedCommandEntryPreflight) PreflightCommandEntryV1(ctx context.Context
 	}
 }
 
-func newHashicorpRaftProviderOnlyCluster(t *testing.T, applier CommittedCommandApplierV1) *hashicorpRaftTestCluster {
-	t.Helper()
-	return newHashicorpRaftCluster(t, func(t *testing.T, _ Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
-		t.Helper()
+func newHashicorpRaftProviderOnlyCluster(tb testing.TB, applier CommittedCommandApplierV1) *hashicorpRaftTestCluster {
+	tb.Helper()
+	return newHashicorpRaftCluster(tb, func(tb testing.TB, _ Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
+		tb.Helper()
 		return nil, applier, nil
 	})
 }
 
-func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1)) *hashicorpRaftTestCluster {
-	t.Helper()
-	root := t.TempDir()
+func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1)) *hashicorpRaftTestCluster {
+	tb.Helper()
+	root := tb.TempDir()
 	peers := []Peer{
 		{ID: "node-a", Address: "node-a"},
 		{ID: "node-b", Address: "node-b"},
@@ -504,36 +947,48 @@ func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (
 			GroupID: "group-a",
 			Peers:   peers,
 		}
-		db, applier, _ := nodeStores(t, cfg)
+		db, applier, _ := nodeStores(tb, cfg)
 		var applyFailureHandler func(error)
+		var logStore hraft.LogStore
+		var stableStore hraft.StableStore
+		var snapshotStore hraft.SnapshotStore
+		var barrierLogStore *barrierCountingLogStore
 		if db == nil {
 			applyFailureHandler = func(error) {}
+			barrierLogStore = newBarrierCountingLogStore()
+			logStore = barrierLogStore
+			stableStore = hraft.NewInmemStore()
+			snapshotStore = hraft.NewInmemSnapshotStore()
 		}
 		provider, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{
 			Cluster:             cfg,
 			Applier:             applier,
 			Transport:           transports[peer.ID],
 			RaftConfig:          hashicorpRaftFastTestConfig(),
+			LogStore:            logStore,
+			StableStore:         stableStore,
+			SnapshotStore:       snapshotStore,
 			Bootstrap:           true,
 			ApplyTimeout:        2 * time.Second,
 			ApplyFailureHandler: applyFailureHandler,
 		})
 		if err != nil {
-			t.Fatalf("%s OpenHashicorpRaftProvider: %v", peer.ID, err)
+			tb.Fatalf("%s OpenHashicorpRaftProvider: %v", peer.ID, err)
 		}
 		node := &hashicorpRaftTestNode{
-			id:        peer.ID,
-			cfg:       cfg,
-			db:        db,
-			provider:  provider,
-			transport: transports[peer.ID],
+			id:              peer.ID,
+			cfg:             cfg,
+			db:              db,
+			provider:        provider,
+			transport:       transports[peer.ID],
+			barrierLogStore: barrierLogStore,
 		}
 		if fsm, ok := applier.(*raftfsm.FSM); ok {
 			node.fsm = fsm
 		}
 		cluster.nodes[peer.ID] = node
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		for _, node := range cluster.nodes {
 			_ = node.closeLocal()
 			if node.transport != nil {
@@ -544,8 +999,8 @@ func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (
 	return cluster
 }
 
-func openHashicorpRaftTestDBAndFSM(t *testing.T, cfg Config) (*backenddb.DB, *raftfsm.FSM) {
-	t.Helper()
+func openHashicorpRaftTestDBAndFSM(tb testing.TB, cfg Config) (*backenddb.DB, *raftfsm.FSM) {
+	tb.Helper()
 	db, err := backenddb.Open(backenddb.Options{
 		Dir:                          cfg.Dir,
 		CommandWAL:                   true,
@@ -554,7 +1009,7 @@ func openHashicorpRaftTestDBAndFSM(t *testing.T, cfg Config) (*backenddb.DB, *ra
 		DisableBackgroundPrune:       true,
 	})
 	if err != nil {
-		t.Fatalf("%s Open DB: %v", cfg.NodeID, err)
+		tb.Fatalf("%s Open DB: %v", cfg.NodeID, err)
 	}
 	fsm, err := raftfsm.Open(raftfsm.Options{
 		DB:      db,
@@ -566,7 +1021,7 @@ func openHashicorpRaftTestDBAndFSM(t *testing.T, cfg Config) (*backenddb.DB, *ra
 	})
 	if err != nil {
 		_ = db.Close()
-		t.Fatalf("%s Open FSM: %v", cfg.NodeID, err)
+		tb.Fatalf("%s Open FSM: %v", cfg.NodeID, err)
 	}
 	return db, fsm
 }
@@ -585,8 +1040,8 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 	return conf
 }
 
-func (c *hashicorpRaftTestCluster) waitForLeader(t *testing.T) *hashicorpRaftTestNode {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTestNode {
+	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var leader *hashicorpRaftTestNode
@@ -596,11 +1051,11 @@ func (c *hashicorpRaftTestCluster) waitForLeader(t *testing.T) *hashicorpRaftTes
 			}
 			status, err := node.provider.ClusterAdmissionStatus(context.Background())
 			if err != nil {
-				t.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
+				tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
 			}
 			if status.Leader {
 				if leader != nil {
-					t.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
+					tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
 				}
 				leader = node
 			}
@@ -610,44 +1065,44 @@ func (c *hashicorpRaftTestCluster) waitForLeader(t *testing.T) *hashicorpRaftTes
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for leader; states=%s", c.admissionSummary())
+	tb.Fatalf("timed out waiting for leader; states=%s", c.admissionSummary())
 	return nil
 }
 
-func (c *hashicorpRaftTestCluster) firstFollower(t *testing.T, leaderID NodeID) *hashicorpRaftTestNode {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) firstFollower(tb testing.TB, leaderID NodeID) *hashicorpRaftTestNode {
+	tb.Helper()
 	for _, node := range c.nodes {
 		if node.id != leaderID && node.provider != nil {
 			return node
 		}
 	}
-	t.Fatalf("no follower found for leader %q", leaderID)
+	tb.Fatalf("no follower found for leader %q", leaderID)
 	return nil
 }
 
-func (c *hashicorpRaftTestCluster) waitFollowerHint(t *testing.T, node *hashicorpRaftTestNode, leaderID NodeID) {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) waitFollowerHint(tb testing.TB, node *hashicorpRaftTestNode, leaderID NodeID) {
+	tb.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		status, err := node.provider.ClusterAdmissionStatus(context.Background())
 		if err != nil {
-			t.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
+			tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
 		}
 		if !status.Leader && status.LeaderHint == leaderID {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("%s did not report leader hint %q; states=%s", node.id, leaderID, c.admissionSummary())
+	tb.Fatalf("%s did not report leader hint %q; states=%s", node.id, leaderID, c.admissionSummary())
 }
 
-func (c *hashicorpRaftTestCluster) waitApplied(t *testing.T, id raftentry.ApplyEntryID) {
-	t.Helper()
-	c.waitAppliedOn(t, id, c.allNodeIDs()...)
+func (c *hashicorpRaftTestCluster) waitApplied(tb testing.TB, id raftentry.ApplyEntryID) {
+	tb.Helper()
+	c.waitAppliedOn(tb, id, c.allNodeIDs()...)
 }
 
-func (c *hashicorpRaftTestCluster) waitAppliedOn(t *testing.T, id raftentry.ApplyEntryID, nodeIDs ...NodeID) {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) waitAppliedOn(tb testing.TB, id raftentry.ApplyEntryID, nodeIDs ...NodeID) {
+	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		allApplied := true
@@ -678,7 +1133,7 @@ func (c *hashicorpRaftTestCluster) waitAppliedOn(t *testing.T, id raftentry.Appl
 		got, ok := node.fsm.LastApplied()
 		states = append(states, fmt.Sprintf("%s=%d/%d ok=%t", node.id, got.Term, got.Index, ok))
 	}
-	t.Fatalf("timed out waiting for apply %d/%d; applied=%s", id.Term, id.Index, strings.Join(states, ", "))
+	tb.Fatalf("timed out waiting for apply %d/%d; applied=%s", id.Term, id.Index, strings.Join(states, ", "))
 }
 
 func (c *hashicorpRaftTestCluster) admissionSummary() string {
@@ -991,6 +1446,96 @@ func (a *recordingClusterApplier) ApplyCommittedCommandEntryV1(_ context.Context
 
 func (a *recordingClusterApplier) snapshot() []CommittedCommandEntryV1 {
 	return append([]CommittedCommandEntryV1(nil), a.entries...)
+}
+
+type progressReportingApplier struct {
+	mu           sync.Mutex
+	progress     AppliedProgress
+	beforeReport func()
+}
+
+func (a *progressReportingApplier) ApplyCommittedCommandEntryV1(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+	return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied}, nil
+}
+
+func (a *progressReportingApplier) AppliedProgress(ctx context.Context) (AppliedProgress, error) {
+	progress, beforeReport := a.snapshot()
+	if err := ctx.Err(); err != nil {
+		return progress, err
+	}
+	if beforeReport != nil {
+		beforeReport()
+	}
+	progress, _ = a.snapshot()
+	return progress, nil
+}
+
+func (a *progressReportingApplier) setProgress(progress AppliedProgress) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.progress = progress
+}
+
+func (a *progressReportingApplier) setProgressNodeID(id NodeID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.progress.NodeID = id
+}
+
+func (a *progressReportingApplier) progressIndex() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.progress.Index
+}
+
+func (a *progressReportingApplier) setBeforeReport(fn func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.beforeReport = fn
+}
+
+func (a *progressReportingApplier) snapshot() (AppliedProgress, func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.progress, a.beforeReport
+}
+
+type barrierCountingLogStore struct {
+	*hraft.InmemStore
+	mu          sync.Mutex
+	barrierLogs int
+}
+
+func newBarrierCountingLogStore() *barrierCountingLogStore {
+	return &barrierCountingLogStore{InmemStore: hraft.NewInmemStore()}
+}
+
+func (s *barrierCountingLogStore) StoreLog(log *hraft.Log) error {
+	return s.StoreLogs([]*hraft.Log{log})
+}
+
+func (s *barrierCountingLogStore) StoreLogs(logs []*hraft.Log) error {
+	var barriers int
+	for _, log := range logs {
+		if log != nil && log.Type == hraft.LogBarrier {
+			barriers++
+		}
+	}
+	if err := s.InmemStore.StoreLogs(logs); err != nil {
+		return err
+	}
+	if barriers > 0 {
+		s.mu.Lock()
+		s.barrierLogs += barriers
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+func (s *barrierCountingLogStore) barrierLogCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.barrierLogs
 }
 
 type countingClusterApplier struct {
