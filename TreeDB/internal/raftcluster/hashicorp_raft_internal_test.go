@@ -96,6 +96,50 @@ func TestHashicorpRaftReadIndexGapMissingLogFailsClosed(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftReadIndexCommitIndexHasCurrentTerm(t *testing.T) {
+	store := hraft.NewInmemStore()
+	if err := store.StoreLogs([]*hraft.Log{
+		{Index: 1, Term: 1, Type: hraft.LogCommand},
+		{Index: 2, Term: 2, Type: hraft.LogNoop},
+	}); err != nil {
+		t.Fatalf("StoreLogs: %v", err)
+	}
+	provider := &HashicorpRaftProvider{logStore: store}
+
+	ok, err := provider.readIndexCommitIndexHasCurrentTerm(2, 2)
+	if err != nil {
+		t.Fatalf("readIndexCommitIndexHasCurrentTerm current term: %v", err)
+	}
+	if !ok {
+		t.Fatal("readIndexCommitIndexHasCurrentTerm=false, want true for current-term committed entry")
+	}
+}
+
+func TestHashicorpRaftReadIndexCommitIndexPreviousTermNotEnough(t *testing.T) {
+	store := hraft.NewInmemStore()
+	if err := store.StoreLog(&hraft.Log{Index: 1, Term: 1, Type: hraft.LogCommand}); err != nil {
+		t.Fatalf("StoreLog: %v", err)
+	}
+	provider := &HashicorpRaftProvider{logStore: store}
+
+	ok, err := provider.readIndexCommitIndexHasCurrentTerm(1, 2)
+	if err != nil {
+		t.Fatalf("readIndexCommitIndexHasCurrentTerm previous term: %v", err)
+	}
+	if ok {
+		t.Fatal("readIndexCommitIndexHasCurrentTerm=true, want false for previous-term committed prefix")
+	}
+}
+
+func TestHashicorpRaftReadIndexCommitIndexMissingLogFailsClosed(t *testing.T) {
+	provider := &HashicorpRaftProvider{logStore: hraft.NewInmemStore()}
+
+	_, err := provider.readIndexCommitIndexHasCurrentTerm(2, 2)
+	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("readIndexCommitIndexHasCurrentTerm err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+}
+
 func TestHashicorpRaftFSMApplyFailureDefaultPanics(t *testing.T) {
 	applyErr := errors.New("command WAL fsync failed")
 	fsm := hashicorpRaftFSM{
