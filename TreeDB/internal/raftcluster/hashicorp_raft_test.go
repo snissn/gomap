@@ -130,8 +130,9 @@ func TestHashicorpRaftProviderReadIndexUsesAppliedProgressIndex(t *testing.T) {
 	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
 	leader := cluster.waitForLeader(t)
 	if leader.id != "node-a" {
-		applier.progress.NodeID = leader.id
+		applier.setProgressNodeID(leader.id)
 	}
+	wantIndex := applier.progressIndex()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -139,8 +140,8 @@ func TestHashicorpRaftProviderReadIndexUsesAppliedProgressIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadIndex: %v", err)
 	}
-	if proof.Index != applier.progress.Index {
-		t.Fatalf("proof index=%d want applied progress index %d", proof.Index, applier.progress.Index)
+	if proof.Index != wantIndex {
+		t.Fatalf("proof index=%d want applied progress index %d", proof.Index, wantIndex)
 	}
 	if !proof.HasQuorum || proof.EvidenceKind != ReadIndexEvidenceProduction {
 		t.Fatalf("proof=%+v want production quorum proof", proof)
@@ -179,7 +180,7 @@ func TestHashicorpRaftProviderReadIndexRejectsAppliedProgressIdentityMismatch(t 
 			cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
 			leader := cluster.waitForLeader(t)
 			if tt.name == "group" {
-				applier.progress.NodeID = leader.id
+				applier.setProgressNodeID(leader.id)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -203,7 +204,7 @@ func TestHashicorpRaftProviderReadIndexRejectsMissingAppliedProgressIndex(t *tes
 	}
 	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
 	leader := cluster.waitForLeader(t)
-	applier.progress.NodeID = leader.id
+	applier.setProgressNodeID(leader.id)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -237,7 +238,7 @@ func TestHashicorpRaftProviderReadIndexRejectsWithoutBarrierWhenAppliedProgressU
 			cluster := newHashicorpRaftProviderOnlyCluster(t, tt.applier)
 			leader := cluster.waitForLeader(t)
 			if applier, ok := tt.applier.(*progressReportingApplier); ok {
-				applier.progress.NodeID = leader.id
+				applier.setProgressNodeID(leader.id)
 			}
 			if leader.barrierLogStore == nil {
 				t.Fatalf("%s has no barrier-counting log store", leader.id)
@@ -269,11 +270,12 @@ func TestHashicorpRaftProviderReadIndexDoesNotAppendBarrierLog(t *testing.T) {
 	}
 	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
 	leader := cluster.waitForLeader(t)
-	applier.progress.NodeID = leader.id
+	applier.setProgressNodeID(leader.id)
 	if leader.barrierLogStore == nil {
 		t.Fatalf("%s has no barrier-counting log store", leader.id)
 	}
 	before := leader.barrierLogStore.barrierLogCount()
+	wantIndex := applier.progressIndex()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -283,10 +285,10 @@ func TestHashicorpRaftProviderReadIndexDoesNotAppendBarrierLog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadIndex #%d: %v", i+1, err)
 		}
-		if proof.Index != applier.progress.Index ||
+		if proof.Index != wantIndex ||
 			proof.EvidenceKind != ReadIndexEvidenceProduction ||
 			!proof.HasQuorum {
-			t.Fatalf("ReadIndex #%d proof=%+v want production proof at applied progress index %d", i+1, proof, applier.progress.Index)
+			t.Fatalf("ReadIndex #%d proof=%+v want production proof at applied progress index %d", i+1, proof, wantIndex)
 		}
 	}
 	if after := leader.barrierLogStore.barrierLogCount(); after != before {
@@ -306,7 +308,7 @@ func TestHashicorpRaftProviderReadIndexWaitsForTreeDBCommandProgressInGap(t *tes
 	}
 	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
 	leader := cluster.waitForLeader(t)
-	applier.progress.NodeID = leader.id
+	applier.setProgressNodeID(leader.id)
 
 	commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer commitCancel()
@@ -324,19 +326,20 @@ func TestHashicorpRaftProviderReadIndexWaitsForTreeDBCommandProgressInGap(t *tes
 	if result.Entry.Index < 2 {
 		t.Fatalf("committed command index=%d, want room for stale progress", result.Entry.Index)
 	}
-	applier.progress = AppliedProgress{
+	staleProgress := AppliedProgress{
 		NodeID:     leader.id,
 		GroupID:    "group-a",
 		Term:       result.Entry.Term,
 		Index:      result.Entry.Index - 1,
 		HasApplied: true,
 	}
+	applier.setProgress(staleProgress)
 
 	readCtx, readCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer readCancel()
 	_, err = leader.provider.ReadIndex(readCtx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
 	if err == nil {
-		t.Fatalf("ReadIndex succeeded with committed command index %d ahead of TreeDB progress %d", result.Entry.Index, applier.progress.Index)
+		t.Fatalf("ReadIndex succeeded with committed command index %d ahead of TreeDB progress %d", result.Entry.Index, staleProgress.Index)
 	}
 	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, ErrReadBarrierNotSatisfied) {
 		t.Fatalf("ReadIndex err=%v want fail-closed deadline or ErrReadBarrierNotSatisfied", err)
@@ -355,14 +358,14 @@ func TestHashicorpRaftProviderReadIndexRejectsLeadershipLostBeforeProof(t *testi
 	}
 	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
 	leader := cluster.waitForLeader(t)
-	applier.progress.NodeID = leader.id
+	applier.setProgressNodeID(leader.id)
 
 	var closeOnce sync.Once
-	applier.beforeReport = func() {
+	applier.setBeforeReport(func() {
 		closeOnce.Do(func() {
 			_ = leader.provider.Close()
 		})
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1375,6 +1378,7 @@ func (a *recordingClusterApplier) snapshot() []CommittedCommandEntryV1 {
 }
 
 type progressReportingApplier struct {
+	mu           sync.Mutex
 	progress     AppliedProgress
 	beforeReport func()
 }
@@ -1384,13 +1388,45 @@ func (a *progressReportingApplier) ApplyCommittedCommandEntryV1(context.Context,
 }
 
 func (a *progressReportingApplier) AppliedProgress(ctx context.Context) (AppliedProgress, error) {
+	progress, beforeReport := a.snapshot()
 	if err := ctx.Err(); err != nil {
-		return a.progress, err
+		return progress, err
 	}
-	if a.beforeReport != nil {
-		a.beforeReport()
+	if beforeReport != nil {
+		beforeReport()
 	}
-	return a.progress, nil
+	progress, _ = a.snapshot()
+	return progress, nil
+}
+
+func (a *progressReportingApplier) setProgress(progress AppliedProgress) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.progress = progress
+}
+
+func (a *progressReportingApplier) setProgressNodeID(id NodeID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.progress.NodeID = id
+}
+
+func (a *progressReportingApplier) progressIndex() uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.progress.Index
+}
+
+func (a *progressReportingApplier) setBeforeReport(fn func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.beforeReport = fn
+}
+
+func (a *progressReportingApplier) snapshot() (AppliedProgress, func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.progress, a.beforeReport
 }
 
 type barrierCountingLogStore struct {
@@ -1414,12 +1450,15 @@ func (s *barrierCountingLogStore) StoreLogs(logs []*hraft.Log) error {
 			barriers++
 		}
 	}
+	if err := s.InmemStore.StoreLogs(logs); err != nil {
+		return err
+	}
 	if barriers > 0 {
 		s.mu.Lock()
 		s.barrierLogs += barriers
 		s.mu.Unlock()
 	}
-	return s.InmemStore.StoreLogs(logs)
+	return nil
 }
 
 func (s *barrierCountingLogStore) barrierLogCount() int {
