@@ -966,7 +966,7 @@ func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 }
 
 func mongoClusterErrorFields(err error, nativeCode iwire.ErrorCode, codeName string) bson.D {
-	if err == nil {
+	if err == nil || !mongoClusterErrorMetadataApplies(err, nativeCode, codeName) {
 		return nil
 	}
 	fields := bson.D{
@@ -979,6 +979,18 @@ func mongoClusterErrorFields(err error, nativeCode iwire.ErrorCode, codeName str
 		fields = append(fields, bson.E{Key: "treedbLeaderHint", Value: leaderHint})
 	}
 	return fields
+}
+
+func mongoClusterErrorMetadataApplies(err error, nativeCode iwire.ErrorCode, codeName string) bool {
+	if err == nil {
+		return false
+	}
+	if nativeCode != 0 ||
+		errors.Is(err, collections.ErrCommitAmbiguous) ||
+		collections.IsDuplicateKeyError(err) {
+		return true
+	}
+	return codeName == "WriteConcernFailed"
 }
 
 func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName string) string {

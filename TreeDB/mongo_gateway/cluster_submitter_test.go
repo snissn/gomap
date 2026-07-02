@@ -358,6 +358,13 @@ func assertStringField(tb testing.TB, doc wire.Document, key, want string) {
 	}
 }
 
+func assertNoField(tb testing.TB, doc wire.Document, key string) {
+	tb.Helper()
+	if got := bson.Raw(doc).Lookup(key); got.Type != 0 {
+		tb.Fatalf("%s present with BSON type %v, want absent", key, got.Type)
+	}
+}
+
 func assertMongoUsers(tb testing.TB, server *Server, want map[string]string) {
 	tb.Helper()
 	found := serveCommand(tb, server, 326899, bson.D{
@@ -1934,6 +1941,17 @@ func TestMongoClusterLeaderHintUsesStructuredCarrier(t *testing.T) {
 	if got := mongoClusterLeaderHint(err); got != "node-c" {
 		t.Fatalf("mongoClusterLeaderHint=%q want node-c", got)
 	}
+}
+
+func TestMongoClusterMutationCommandErrorDoesNotLabelLocalConfigError(t *testing.T) {
+	response, err := mongoClusterMutationCommandError(errors.New("Mongo gateway cluster submitter is not configured"))
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "BadValue")
+	assertNoField(t, response, "treedbClusterError")
+	assertNoField(t, response, "treedbErrorClass")
+	assertNoField(t, response, "treedbLeaderHint")
 }
 
 type mongoClusterLeaderHintTestError struct {
