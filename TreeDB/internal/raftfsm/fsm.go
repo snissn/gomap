@@ -116,6 +116,9 @@ func Open(opts Options) (*FSM, error) {
 	if err != nil {
 		return nil, errors.Join(codedError(raftentry.ErrorUnsafeDurabilityModeV1, "invalid raftcluster config"), err)
 	}
+	if err := cleanupAbandonedRaftSnapshotArchivesV1(cluster.Layout.SnapshotDir); err != nil {
+		return nil, err
+	}
 	metadataDir := cluster.Layout.ApplyDir
 	if metadataDir == "" {
 		return nil, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing raftcluster apply dir")

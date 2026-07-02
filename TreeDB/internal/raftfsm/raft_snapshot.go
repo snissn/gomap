@@ -23,6 +23,7 @@ const (
 	raftSnapshotApplyPrefixV1 = "apply"
 
 	raftSnapshotFormatConfigFileV1 = "format.json"
+	raftSnapshotStagingDirNameV1   = "staged"
 )
 
 var raftSnapshotMainDBEntriesV1 = []string{
@@ -123,7 +124,7 @@ func createRaftSnapshotArchiveFileV1(snapshotDir string) (*os.File, string, erro
 	if strings.TrimSpace(snapshotDir) == "" {
 		return nil, "", fmt.Errorf("raftfsm: missing snapshot staging directory")
 	}
-	stagingDir := filepath.Join(snapshotDir, "staged")
+	stagingDir := raftSnapshotStagingDirV1(snapshotDir)
 	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("raftfsm: create snapshot staging directory: %w", err)
 	}
@@ -132,6 +133,34 @@ func createRaftSnapshotArchiveFileV1(snapshotDir string) (*os.File, string, erro
 		return nil, "", fmt.Errorf("raftfsm: create snapshot archive: %w", err)
 	}
 	return file, file.Name(), nil
+}
+
+func cleanupAbandonedRaftSnapshotArchivesV1(snapshotDir string) error {
+	if strings.TrimSpace(snapshotDir) == "" {
+		return nil
+	}
+	stagingDir := raftSnapshotStagingDirV1(snapshotDir)
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("raftfsm: read snapshot staging directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(stagingDir, entry.Name())
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("raftfsm: remove abandoned staged snapshot archive %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func raftSnapshotStagingDirV1(snapshotDir string) string {
+	return filepath.Join(snapshotDir, raftSnapshotStagingDirNameV1)
 }
 
 // InstallRaftSnapshotV1 discards the local TreeDB state and installs a

@@ -235,6 +235,40 @@ func TestRaftSnapshotV1ExportStagesArchiveWithoutPayloadAndReleaseCleans(t *test
 	}
 }
 
+func TestRaftSnapshotV1OpenCleansAbandonedStagedArchives(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
+	defer func() { _ = sourceDB.Close() }()
+
+	resolved, err := raftcluster.Validate(validFSMClusterConfig(sourceDir))
+	if err != nil {
+		t.Fatalf("Validate cluster config: %v", err)
+	}
+	stagingDir := raftSnapshotStagingDirV1(resolved.Layout.SnapshotDir)
+	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
+		t.Fatalf("Mkdir staging dir: %v", err)
+	}
+	orphanPath := filepath.Join(stagingDir, "treedb-snapshot-orphan.tar")
+	if err := os.WriteFile(orphanPath, []byte("abandoned snapshot archive"), 0o600); err != nil {
+		t.Fatalf("Write orphan staged archive: %v", err)
+	}
+	nestedDir := filepath.Join(stagingDir, "nested")
+	if err := os.MkdirAll(nestedDir, 0o700); err != nil {
+		t.Fatalf("Mkdir nested staging dir: %v", err)
+	}
+
+	fsm := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, false)
+	defer func() { _ = fsm.Close() }()
+
+	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
+		t.Fatalf("Open did not remove abandoned staged archive: stat err=%v", err)
+	}
+	if _, err := os.Stat(nestedDir); err != nil {
+		t.Fatalf("Open should leave staged subdirectories alone: %v", err)
+	}
+}
+
 func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")

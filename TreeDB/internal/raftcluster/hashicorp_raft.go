@@ -1040,7 +1040,7 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 	}
 	if closeSrcErr != nil {
 		_ = sink.Cancel()
-		return closeSrcErr
+		return fmt.Errorf("raftcluster: close raft snapshot archive source: %w", closeSrcErr)
 	}
 	if err := sink.Close(); err != nil {
 		_ = sink.Cancel()
