@@ -189,7 +189,7 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 		errors.Is(err, raftcluster.ErrRouteTargetUnknown),
 		errors.Is(err, raftcluster.ErrRouteTargetUnsupported),
 		errors.Is(err, raftcluster.ErrRouteFanoutRequired):
-		return protocolError(iwire.ErrReadOnly, "%v", err)
+		return clusterProtocolError(iwire.ErrReadOnly, err)
 	case errors.Is(err, raftcluster.ErrCatalogVersionMismatch):
 		return protocolError(iwire.ErrCatalogVersionMismatch, "%v", err)
 	case errors.Is(err, raftcluster.ErrCommitAmbiguous):
@@ -213,6 +213,50 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 		return nativeErrorForDeterministicCode(code, err)
 	}
 	return fmt.Errorf("raft cluster submitter: %w", err)
+}
+
+func clusterProtocolError(code iwire.ErrorCode, err error) error {
+	protocolErr := protocolError(code, "%v", err)
+	if leaderHint := clusterLeaderHint(err); leaderHint != "" {
+		return &clusterLeaderHintProtocolError{err: protocolErr, leaderHint: leaderHint}
+	}
+	return protocolErr
+}
+
+type clusterLeaderHintProtocolError struct {
+	err        error
+	leaderHint string
+}
+
+func (e *clusterLeaderHintProtocolError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *clusterLeaderHintProtocolError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *clusterLeaderHintProtocolError) ClusterLeaderHint() string {
+	if e == nil {
+		return ""
+	}
+	return e.leaderHint
+}
+
+func clusterLeaderHint(err error) string {
+	var hinted interface {
+		ClusterLeaderHint() string
+	}
+	if errors.As(err, &hinted) {
+		return hinted.ClusterLeaderHint()
+	}
+	return ""
 }
 
 func nativeErrorForDeterministicCode(code raftentry.DeterministicErrorCodeV1, err error) error {
