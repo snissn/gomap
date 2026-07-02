@@ -2,6 +2,7 @@ package merging
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -59,6 +60,38 @@ func (m *mockUnsafeReverseIter) Seek(key []byte) {
 }
 
 func (m *mockUnsafeReverseIter) Domain() (start, end []byte) { return nil, nil }
+
+type valueErrorUnsafeReverseIter struct {
+	*mockUnsafeReverseIter
+	err         error
+	valueLoaded bool
+	entryLoaded bool
+	valueCopied bool
+}
+
+func (m *valueErrorUnsafeReverseIter) UnsafeValue() []byte {
+	m.valueLoaded = true
+	return nil
+}
+
+func (m *valueErrorUnsafeReverseIter) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	m.entryLoaded = true
+	return nil, page.ValuePtr{}, 0
+}
+
+func (m *valueErrorUnsafeReverseIter) Value() []byte { return m.UnsafeValue() }
+
+func (m *valueErrorUnsafeReverseIter) ValueCopy(dst []byte) []byte {
+	m.valueCopied = true
+	return dst[:0]
+}
+
+func (m *valueErrorUnsafeReverseIter) Error() error {
+	if m.valueLoaded || m.entryLoaded || m.valueCopied {
+		return m.err
+	}
+	return nil
+}
 
 func TestReverseTwoWayMerger(t *testing.T) {
 	// Mutable (src1, higher precedence): A:1, B:del, C:1, E:1
@@ -131,6 +164,64 @@ func TestReverseTwoWayMerger(t *testing.T) {
 
 	if !reflect.DeepEqual(results2, expected2) {
 		t.Errorf("Reverse merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
+	}
+}
+
+func TestReverseTwoWayMergerSurfacesCurrentValueError(t *testing.T) {
+	want := errors.New("reverse value load failed")
+	broken := &valueErrorUnsafeReverseIter{
+		mockUnsafeReverseIter: &mockUnsafeReverseIter{
+			data: []entry{{k: "Z", v: "bad"}},
+			idx:  0,
+		},
+		err: want,
+	}
+	other := &mockUnsafeReverseIter{
+		data: []entry{{k: "A", v: "ok"}},
+		idx:  0,
+	}
+
+	merged := NewReverseTwoWayMerger(broken, other, nil, nil)
+	defer merged.Close()
+	if !merged.Valid() {
+		t.Fatal("merged iterator invalid, want first key Z")
+	}
+	if string(merged.Key()) != "Z" {
+		t.Fatalf("first key = %q, want Z", merged.Key())
+	}
+	_ = merged.Value()
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestReverseHeapMergingIteratorSurfacesCurrentValueError(t *testing.T) {
+	want := errors.New("reverse heap value load failed")
+	broken := &valueErrorUnsafeReverseIter{
+		mockUnsafeReverseIter: &mockUnsafeReverseIter{
+			data: []entry{{k: "Z", v: "bad"}},
+			idx:  0,
+		},
+		err: want,
+	}
+	middle := &mockUnsafeReverseIter{data: []entry{{k: "B", v: "ok"}}, idx: 0}
+	oldest := &mockUnsafeReverseIter{data: []entry{{k: "A", v: "ok"}}, idx: 0}
+
+	merged := NewReverseMergingIterator([]IteratorSource{
+		{Iter: broken, Priority: 0},
+		{Iter: middle, Priority: 1},
+		{Iter: oldest, Priority: 2},
+	}, nil, nil)
+	defer merged.Close()
+	if !merged.Valid() {
+		t.Fatal("merged iterator invalid, want first key Z")
+	}
+	if string(merged.Key()) != "Z" {
+		t.Fatalf("first key = %q, want Z", merged.Key())
+	}
+	_ = merged.Value()
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
 	}
 }
 

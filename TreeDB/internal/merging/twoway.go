@@ -39,6 +39,10 @@ func (m *TwoWayMerger) Next() {
 	if !m.valid {
 		panic("merging iterator invalid")
 	}
+	if m.err != nil {
+		m.valid = false
+		return
+	}
 	if m.cur != nil {
 		m.cur.Next()
 	}
@@ -116,14 +120,22 @@ func (m *TwoWayMerger) Value() []byte {
 	if m.cur == nil {
 		return nil
 	}
-	return m.cur.UnsafeValue()
+	value := m.cur.UnsafeValue()
+	if err := m.cur.Error(); err != nil {
+		m.err = err
+	}
+	return value
 }
 
 func (m *TwoWayMerger) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !m.valid || m.cur == nil {
 		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
 	}
-	return iterator.UnsafeEntryWithRevision(m.cur)
+	value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(m.cur)
+	if err := m.cur.Error(); err != nil {
+		m.err = err
+	}
+	return value, ptr, flags, revision
 }
 
 func (m *TwoWayMerger) KeyCopy(dst []byte) []byte {

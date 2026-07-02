@@ -155,6 +155,10 @@ func (mi *MergingIterator) Next() {
 	if !mi.valid {
 		panic("merging iterator invalid")
 	}
+	if mi.err != nil {
+		mi.valid = false
+		return
+	}
 
 	if mi.hasCur {
 		mi.cur.iter.Next()
@@ -239,14 +243,22 @@ func (mi *MergingIterator) Value() []byte {
 	if !mi.hasCur {
 		return nil
 	}
-	return mi.cur.iter.UnsafeValue()
+	value := mi.cur.iter.UnsafeValue()
+	if err := mi.cur.iter.Error(); err != nil {
+		mi.err = err
+	}
+	return value
 }
 
 func (mi *MergingIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
 	if !mi.valid || !mi.hasCur {
 		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
 	}
-	return iterator.UnsafeEntryWithRevision(mi.cur.iter)
+	value, ptr, flags, revision := iterator.UnsafeEntryWithRevision(mi.cur.iter)
+	if err := mi.cur.iter.Error(); err != nil {
+		mi.err = err
+	}
+	return value, ptr, flags, revision
 }
 
 func (mi *MergingIterator) KeyCopy(dst []byte) []byte {

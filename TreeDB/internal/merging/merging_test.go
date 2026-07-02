@@ -2,6 +2,7 @@ package merging
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -53,6 +54,38 @@ func (m *mockUnsafeIter) Seek(key []byte) {
 	m.idx = len(m.data) // Exhausted
 }
 func (m *mockUnsafeIter) Domain() (start, end []byte) { return nil, nil }
+
+type valueErrorUnsafeIter struct {
+	*mockUnsafeIter
+	err         error
+	valueLoaded bool
+	entryLoaded bool
+	valueCopied bool
+}
+
+func (m *valueErrorUnsafeIter) UnsafeValue() []byte {
+	m.valueLoaded = true
+	return nil
+}
+
+func (m *valueErrorUnsafeIter) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	m.entryLoaded = true
+	return nil, page.ValuePtr{}, 0
+}
+
+func (m *valueErrorUnsafeIter) Value() []byte { return m.UnsafeValue() }
+
+func (m *valueErrorUnsafeIter) ValueCopy(dst []byte) []byte {
+	m.valueCopied = true
+	return dst[:0]
+}
+
+func (m *valueErrorUnsafeIter) Error() error {
+	if m.valueLoaded || m.entryLoaded || m.valueCopied {
+		return m.err
+	}
+	return nil
+}
 
 type revisionEntry struct {
 	k, v string
@@ -170,6 +203,55 @@ func TestTwoWayMerger(t *testing.T) {
 
 	if !reflect.DeepEqual(results2, expected2) {
 		t.Errorf("Merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
+	}
+}
+
+func TestTwoWayMergerSurfacesCurrentValueError(t *testing.T) {
+	want := errors.New("value load failed")
+	broken := &valueErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", v: "bad"}}},
+		err:            want,
+	}
+	other := &mockUnsafeIter{data: []entry{{k: "B", v: "ok"}}}
+
+	merged := NewTwoWayMerger(broken, other, nil, nil)
+	defer merged.Close()
+	if !merged.Valid() {
+		t.Fatal("merged iterator invalid, want first key A")
+	}
+	if string(merged.Key()) != "A" {
+		t.Fatalf("first key = %q, want A", merged.Key())
+	}
+	_ = merged.Value()
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestHeapMergingIteratorSurfacesCurrentValueError(t *testing.T) {
+	want := errors.New("heap value load failed")
+	broken := &valueErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", v: "bad"}}},
+		err:            want,
+	}
+	middle := &mockUnsafeIter{data: []entry{{k: "B", v: "ok"}}}
+	oldest := &mockUnsafeIter{data: []entry{{k: "C", v: "ok"}}}
+
+	merged := NewMergingIterator([]IteratorSource{
+		{Iter: broken, Priority: 0},
+		{Iter: middle, Priority: 1},
+		{Iter: oldest, Priority: 2},
+	}, nil, nil)
+	defer merged.Close()
+	if !merged.Valid() {
+		t.Fatal("merged iterator invalid, want first key A")
+	}
+	if string(merged.Key()) != "A" {
+		t.Fatalf("first key = %q, want A", merged.Key())
+	}
+	_ = merged.Value()
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
 	}
 }
 
