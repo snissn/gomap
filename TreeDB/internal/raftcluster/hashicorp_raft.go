@@ -204,36 +204,35 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 	if err := p.requireHashicorpReadIndexLeader(); err != nil {
 		return ReadIndexProof{}, err
 	}
+	if _, err := p.readIndexAppliedProgress(ctx); err != nil {
+		return ReadIndexProof{}, err
+	}
+	if err := p.requireHashicorpReadIndexLeader(); err != nil {
+		return ReadIndexProof{}, err
+	}
 	if err := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader()); err != nil {
 		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
 	}
 	if err := p.requireHashicorpReadIndexLeader(); err != nil {
 		return ReadIndexProof{}, err
 	}
-	if err := waitHashicorpRaftFuture(ctx, p.raft.Barrier(p.applyTimeout)); err != nil {
-		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
-	}
-	if err := p.requireHashicorpReadIndexLeader(); err != nil {
+	readCommitIndex := p.raft.CommitIndex()
+	if err := p.waitHashicorpAppliedIndex(ctx, readCommitIndex); err != nil {
 		return ReadIndexProof{}, err
 	}
-	if p.appliedProgress == nil {
-		return ReadIndexProof{}, fmt.Errorf("%w: applied progress reader is not configured", ErrReadBarrierNotSatisfied)
-	}
-	progress, err := p.appliedProgress.AppliedProgress(ctx)
+	progress, err := p.readIndexAppliedProgress(ctx)
 	if err != nil {
-		return ReadIndexProof{}, err
-	}
-	if err := p.validateReadIndexAppliedProgress(progress); err != nil {
 		return ReadIndexProof{}, err
 	}
 	if err := p.requireHashicorpReadIndexLeader(); err != nil {
 		return ReadIndexProof{}, err
 	}
 	// HashiCorp Raft v1.7 has no native ReadIndex API. VerifyLeader sends an
-	// immediate heartbeat to voting peers and Barrier waits until preceding
-	// Raft logs have reached the local FSM. HashiCorp no-op/barrier indexes are
-	// not recorded by TreeDB's FSM, so the proof index is the latest TreeDB
-	// command index the applied-index waiter can actually prove.
+	// immediate heartbeat to voting peers; CommitIndex then captures the
+	// leader's committed prefix for that quorum-verified point. Wait for the
+	// local HashiCorp FSM to receive that prefix without appending LogBarrier
+	// entries, then return the latest TreeDB command index the applied-index
+	// waiter can actually prove.
 	proof := ReadIndexProof{
 		NodeID:       p.cluster.NodeID,
 		GroupID:      p.cluster.GroupID,
@@ -246,6 +245,61 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 		return ReadIndexProof{}, err
 	}
 	return proof, nil
+}
+
+func (p *HashicorpRaftProvider) readIndexAppliedProgress(ctx context.Context) (AppliedProgress, error) {
+	if p == nil {
+		return AppliedProgress{}, ErrInvalidHashicorpRaftProvider
+	}
+	if p.appliedProgress == nil {
+		return AppliedProgress{}, fmt.Errorf("%w: applied progress reader is not configured", ErrReadBarrierNotSatisfied)
+	}
+	progress, err := p.appliedProgress.AppliedProgress(ctx)
+	if err != nil {
+		return AppliedProgress{}, err
+	}
+	if err := p.validateReadIndexAppliedProgress(progress); err != nil {
+		return AppliedProgress{}, err
+	}
+	return progress, nil
+}
+
+func (p *HashicorpRaftProvider) waitHashicorpAppliedIndex(ctx context.Context, minIndex uint64) error {
+	if p == nil || p.raft == nil {
+		return ErrInvalidHashicorpRaftProvider
+	}
+	if err := p.requireHashicorpReadIndexLeader(); err != nil {
+		return err
+	}
+	if minIndex == 0 || p.raft.AppliedIndex() >= minIndex {
+		return nil
+	}
+	timeout := p.applyTimeout
+	if timeout <= 0 {
+		timeout = hashicorpRaftDefaultApplyTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := p.requireHashicorpReadIndexLeader(); err != nil {
+			return err
+		}
+		if p.raft.AppliedIndex() >= minIndex {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("%w: hashicorp raft applied index %d below read-index commit index %d", ErrReadBarrierNotSatisfied, p.raft.AppliedIndex(), minIndex)
+		case <-ticker.C:
+		}
+	}
 }
 
 func (p *HashicorpRaftProvider) requireHashicorpReadIndexLeader() error {

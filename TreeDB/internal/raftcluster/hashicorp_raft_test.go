@@ -212,7 +212,88 @@ func TestHashicorpRaftProviderReadIndexRejectsMissingAppliedProgressIndex(t *tes
 	}
 }
 
-func TestHashicorpRaftProviderReadIndexRejectsLeadershipLostAfterBarrier(t *testing.T) {
+func TestHashicorpRaftProviderReadIndexRejectsWithoutBarrierWhenAppliedProgressUnavailable(t *testing.T) {
+	tests := []struct {
+		name    string
+		applier CommittedCommandApplierV1
+	}{
+		{
+			name:    "reader-missing",
+			applier: &recordingClusterApplier{},
+		},
+		{
+			name: "no-applied-command",
+			applier: &progressReportingApplier{
+				progress: AppliedProgress{
+					NodeID:  "node-a",
+					GroupID: "group-a",
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cluster := newHashicorpRaftProviderOnlyCluster(t, tt.applier)
+			leader := cluster.waitForLeader(t)
+			if applier, ok := tt.applier.(*progressReportingApplier); ok {
+				applier.progress.NodeID = leader.id
+			}
+			if leader.barrierLogStore == nil {
+				t.Fatalf("%s has no barrier-counting log store", leader.id)
+			}
+			before := leader.barrierLogStore.barrierLogCount()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+			if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+				t.Fatalf("ReadIndex err=%v want ErrReadBarrierNotSatisfied", err)
+			}
+			if after := leader.barrierLogStore.barrierLogCount(); after != before {
+				t.Fatalf("ReadIndex appended %d barrier logs before proving applied progress", after-before)
+			}
+		})
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexDoesNotAppendBarrierLog(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			Index:      42,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.progress.NodeID = leader.id
+	if leader.barrierLogStore == nil {
+		t.Fatalf("%s has no barrier-counting log store", leader.id)
+	}
+	before := leader.barrierLogStore.barrierLogCount()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	target := ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"}
+	for i := 0; i < 3; i++ {
+		proof, err := leader.provider.ReadIndex(ctx, target)
+		if err != nil {
+			t.Fatalf("ReadIndex #%d: %v", i+1, err)
+		}
+		if proof.Index != applier.progress.Index ||
+			proof.EvidenceKind != ReadIndexEvidenceProduction ||
+			!proof.HasQuorum {
+			t.Fatalf("ReadIndex #%d proof=%+v want production proof at applied progress index %d", i+1, proof, applier.progress.Index)
+		}
+	}
+	if after := leader.barrierLogStore.barrierLogCount(); after != before {
+		t.Fatalf("ReadIndex appended %d barrier logs", after-before)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsLeadershipLostBeforeProof(t *testing.T) {
 	applier := &progressReportingApplier{
 		progress: AppliedProgress{
 			NodeID:     "node-a",
@@ -468,13 +549,14 @@ type hashicorpRaftTestCluster struct {
 }
 
 type hashicorpRaftTestNode struct {
-	id        NodeID
-	cfg       Config
-	db        *backenddb.DB
-	fsm       *raftfsm.FSM
-	provider  *HashicorpRaftProvider
-	submitter *SingleGroupSubmitter
-	transport *hraft.InmemTransport
+	id              NodeID
+	cfg             Config
+	db              *backenddb.DB
+	fsm             *raftfsm.FSM
+	provider        *HashicorpRaftProvider
+	submitter       *SingleGroupSubmitter
+	transport       *hraft.InmemTransport
+	barrierLogStore *barrierCountingLogStore
 }
 
 func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
@@ -537,14 +619,25 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 		}
 		db, applier, _ := nodeStores(tb, cfg)
 		var applyFailureHandler func(error)
+		var logStore hraft.LogStore
+		var stableStore hraft.StableStore
+		var snapshotStore hraft.SnapshotStore
+		var barrierLogStore *barrierCountingLogStore
 		if db == nil {
 			applyFailureHandler = func(error) {}
+			barrierLogStore = newBarrierCountingLogStore()
+			logStore = barrierLogStore
+			stableStore = hraft.NewInmemStore()
+			snapshotStore = hraft.NewInmemSnapshotStore()
 		}
 		provider, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{
 			Cluster:             cfg,
 			Applier:             applier,
 			Transport:           transports[peer.ID],
 			RaftConfig:          hashicorpRaftFastTestConfig(),
+			LogStore:            logStore,
+			StableStore:         stableStore,
+			SnapshotStore:       snapshotStore,
 			Bootstrap:           true,
 			ApplyTimeout:        2 * time.Second,
 			ApplyFailureHandler: applyFailureHandler,
@@ -553,11 +646,12 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 			tb.Fatalf("%s OpenHashicorpRaftProvider: %v", peer.ID, err)
 		}
 		node := &hashicorpRaftTestNode{
-			id:        peer.ID,
-			cfg:       cfg,
-			db:        db,
-			provider:  provider,
-			transport: transports[peer.ID],
+			id:              peer.ID,
+			cfg:             cfg,
+			db:              db,
+			provider:        provider,
+			transport:       transports[peer.ID],
+			barrierLogStore: barrierLogStore,
 		}
 		if fsm, ok := applier.(*raftfsm.FSM); ok {
 			node.fsm = fsm
@@ -806,6 +900,41 @@ func (a *progressReportingApplier) AppliedProgress(ctx context.Context) (Applied
 		a.beforeReport()
 	}
 	return a.progress, nil
+}
+
+type barrierCountingLogStore struct {
+	*hraft.InmemStore
+	mu          sync.Mutex
+	barrierLogs int
+}
+
+func newBarrierCountingLogStore() *barrierCountingLogStore {
+	return &barrierCountingLogStore{InmemStore: hraft.NewInmemStore()}
+}
+
+func (s *barrierCountingLogStore) StoreLog(log *hraft.Log) error {
+	return s.StoreLogs([]*hraft.Log{log})
+}
+
+func (s *barrierCountingLogStore) StoreLogs(logs []*hraft.Log) error {
+	var barriers int
+	for _, log := range logs {
+		if log != nil && log.Type == hraft.LogBarrier {
+			barriers++
+		}
+	}
+	if barriers > 0 {
+		s.mu.Lock()
+		s.barrierLogs += barriers
+		s.mu.Unlock()
+	}
+	return s.InmemStore.StoreLogs(logs)
+}
+
+func (s *barrierCountingLogStore) barrierLogCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.barrierLogs
 }
 
 type countingClusterApplier struct {
