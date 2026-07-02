@@ -300,7 +300,11 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 	if progress.HasApplied && progress.Index != 0 && (minIndex == 0 || progress.Index >= minIndex) {
 		return progress, nil
 	}
-	noCommands, firstCmd, err := p.readIndexGapHasNoCommands(progress.Index+1, minIndex)
+	firstIndex, err := readIndexGapFirstIndexAfterApplied(progress.Index)
+	if err != nil {
+		return AppliedProgress{}, err
+	}
+	noCommands, firstCmd, err := p.readIndexGapHasNoCommands(firstIndex, minIndex)
 	if err != nil {
 		return AppliedProgress{}, err
 	}
@@ -349,7 +353,11 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 		if firstCmd != 0 && progress.Index < firstCmd {
 			continue
 		}
-		noCommands, firstCmd, err = p.readIndexGapHasNoCommands(progress.Index+1, minIndex)
+		firstIndex, err := readIndexGapFirstIndexAfterApplied(progress.Index)
+		if err != nil {
+			return AppliedProgress{}, err
+		}
+		noCommands, firstCmd, err = p.readIndexGapHasNoCommands(firstIndex, minIndex)
 		if err != nil {
 			return AppliedProgress{}, err
 		}
@@ -426,6 +434,13 @@ func (p *HashicorpRaftProvider) readIndexCommitIndexHasCurrentTerm(commitIndex, 
 		return false, fmt.Errorf("%w: committed raft log %d has future term %d above current term %d", ErrReadBarrierNotSatisfied, commitIndex, entry.Term, term)
 	}
 	return entry.Term == term, nil
+}
+
+func readIndexGapFirstIndexAfterApplied(appliedIndex uint64) (uint64, error) {
+	if appliedIndex == ^uint64(0) {
+		return 0, fmt.Errorf("%w: applied raft index %d cannot advance read-index gap scan", ErrReadBarrierNotSatisfied, appliedIndex)
+	}
+	return appliedIndex + 1, nil
 }
 
 func (p *HashicorpRaftProvider) readIndexGapHasNoCommands(firstIndex, lastIndex uint64) (bool, uint64, error) {
