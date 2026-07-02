@@ -74,8 +74,10 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 	if err := appendRaftSnapshotTreeDBStorageV1(tw, raftSnapshotDBPrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
-	if err := appendRaftSnapshotTreeDBSideStoresV1(tw, raftSnapshotSidePrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
-		return raftcluster.RaftSnapshotV1{}, err
+	if !f.cluster.DisableSideStores {
+		if err := appendRaftSnapshotTreeDBSideStoresV1(tw, raftSnapshotSidePrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
+			return raftcluster.RaftSnapshotV1{}, err
+		}
 	}
 	if err := appendRaftSnapshotDirV1(tw, raftSnapshotApplyPrefixV1, f.cluster.Layout.ApplyDir); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
@@ -96,6 +98,8 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 // InstallRaftSnapshotV1 discards the local TreeDB state and installs a
 // production snapshot archive. HashiCorp Raft calls Restore without concurrent
 // Apply calls, so the FSM can safely close and reopen its local stores here.
+// Any caller-owned DB handle passed to Open is closed by a successful install
+// and must be recreated before direct use.
 func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if f == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
@@ -162,8 +166,11 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		return err
 	}
 	cleanupMain = false
-	if err := replaceSnapshotSideStoresV1(mainDir, tmpSide); err != nil {
-		return err
+	if !f.cluster.DisableSideStores {
+		if err := replaceSnapshotSideStoresV1(mainDir, tmpSide); err != nil {
+			return err
+		}
+		cleanupSide = false
 	}
 	if err := replaceSnapshotDirV1(applyDir, tmpApply); err != nil {
 		return err
@@ -211,15 +218,8 @@ func (f *FSM) closeForRaftSnapshotRestoreV1() error {
 }
 
 func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
-	opts := f.restoreDB
 	mainDir := raftcluster.MainDBDir(f.cluster.Dir)
-	opts.Dir = mainDir
-	opts.CommandWAL = true
-	opts.CommandWALStatsScan = true
-	if opts.CommandWALSegmentTargetBytes <= 0 {
-		opts.CommandWALSegmentTargetBytes = 1 << 20
-	}
-	opts.DisableBackgroundPrune = true
+	opts := f.snapshotRestoreDBOptionsV1(mainDir)
 	sideDBs, err := wireRaftSnapshotSideStoreLookupsV1(snapshotSideStoreRootV1(mainDir), &opts)
 	if err != nil {
 		return err
@@ -252,14 +252,7 @@ func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 }
 
 func (f *FSM) verifyExtractedRaftSnapshotV1(manifest raftcluster.SnapshotManifestV1, mainDir, sideDir, applyDir string) error {
-	opts := f.restoreDB
-	opts.Dir = mainDir
-	opts.CommandWAL = true
-	opts.CommandWALStatsScan = true
-	if opts.CommandWALSegmentTargetBytes <= 0 {
-		opts.CommandWALSegmentTargetBytes = 1 << 20
-	}
-	opts.DisableBackgroundPrune = true
+	opts := f.snapshotRestoreDBOptionsV1(mainDir)
 	sideDBs, err := wireRaftSnapshotSideStoreLookupsV1(sideDir, &opts)
 	if err != nil {
 		return err
@@ -296,6 +289,21 @@ func (f *FSM) verifyExtractedRaftSnapshotV1(manifest raftcluster.SnapshotManifes
 		return verifyErr
 	}
 	return closeErr
+}
+
+func (f *FSM) snapshotRestoreDBOptionsV1(dir string) backenddb.Options {
+	opts := f.restoreDB
+	opts.Dir = dir
+	opts.CommandWAL = true
+	opts.CommandWALStatsScan = true
+	if opts.CommandWALSegmentTargetBytes <= 0 {
+		opts.CommandWALSegmentTargetBytes = 1 << 20
+	}
+	opts.DisableBackgroundPrune = true
+	if f.cluster.DisableSideStores {
+		opts.DisableSideStores = true
+	}
+	return opts
 }
 
 func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
@@ -468,7 +476,7 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 			if tarHeader.Typeflag != tar.TypeReg && tarHeader.Typeflag != tar.TypeRegA {
 				return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot archive header is not a regular file")
 			}
-			raw, err := io.ReadAll(tr)
+			raw, err := readRaftSnapshotArchiveHeaderBytesV1(tr, tarHeader.Size)
 			if err != nil {
 				return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
 			}
@@ -520,6 +528,20 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 		return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot archive has no Raft apply metadata files")
 	}
 	return header, nil
+}
+
+func readRaftSnapshotArchiveHeaderBytesV1(reader io.Reader, size int64) ([]byte, error) {
+	if size > raftcluster.RaftSnapshotArchiveHeaderMaxBytes {
+		return nil, fmt.Errorf("raftfsm: snapshot archive header is %d bytes, max %d", size, raftcluster.RaftSnapshotArchiveHeaderMaxBytes)
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, raftcluster.RaftSnapshotArchiveHeaderMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("raftfsm: read snapshot archive header: %w", err)
+	}
+	if len(raw) > raftcluster.RaftSnapshotArchiveHeaderMaxBytes {
+		return nil, fmt.Errorf("raftfsm: snapshot archive header exceeds %d bytes", raftcluster.RaftSnapshotArchiveHeaderMaxBytes)
+	}
+	return raw, nil
 }
 
 func cleanSnapshotArchiveNameV1(name string) string {

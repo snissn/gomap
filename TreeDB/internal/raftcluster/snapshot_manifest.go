@@ -21,6 +21,7 @@ const (
 	RaftSnapshotArchiveFormatV1       = "treedb.raftcluster.raft-snapshot-archive"
 	RaftSnapshotArchiveVersion1       = uint16(1)
 	RaftSnapshotArchiveManifestPathV1 = "manifest.json"
+	RaftSnapshotArchiveHeaderMaxBytes = 1 << 20
 )
 
 var ErrInvalidSnapshotManifest = errors.New("raftcluster: invalid snapshot manifest")
@@ -296,9 +297,9 @@ func DecodeSnapshotManifestV1FromArchiveReader(reader io.Reader) (SnapshotManife
 		if header == nil || header.Name != RaftSnapshotArchiveManifestPathV1 {
 			continue
 		}
-		raw, err := io.ReadAll(tr)
+		raw, err := readRaftSnapshotArchiveHeaderBytesV1(tr, header.Size)
 		if err != nil {
-			return SnapshotManifestV1{}, fmt.Errorf("%w: read snapshot archive header: %v", ErrInvalidSnapshotManifest, err)
+			return SnapshotManifestV1{}, err
 		}
 		decoded, err := DecodeRaftSnapshotArchiveHeaderV1(raw, SnapshotScopeIdentityV1{})
 		if err != nil {
@@ -307,4 +308,18 @@ func DecodeSnapshotManifestV1FromArchiveReader(reader io.Reader) (SnapshotManife
 		return decoded.Manifest, nil
 	}
 	return SnapshotManifestV1{}, fmt.Errorf("%w: missing snapshot archive header", ErrInvalidSnapshotManifest)
+}
+
+func readRaftSnapshotArchiveHeaderBytesV1(reader io.Reader, size int64) ([]byte, error) {
+	if size > RaftSnapshotArchiveHeaderMaxBytes {
+		return nil, fmt.Errorf("%w: snapshot archive header is %d bytes, max %d", ErrInvalidSnapshotManifest, size, RaftSnapshotArchiveHeaderMaxBytes)
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, RaftSnapshotArchiveHeaderMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read snapshot archive header: %v", ErrInvalidSnapshotManifest, err)
+	}
+	if len(raw) > RaftSnapshotArchiveHeaderMaxBytes {
+		return nil, fmt.Errorf("%w: snapshot archive header exceeds %d bytes", ErrInvalidSnapshotManifest, RaftSnapshotArchiveHeaderMaxBytes)
+	}
+	return raw, nil
 }

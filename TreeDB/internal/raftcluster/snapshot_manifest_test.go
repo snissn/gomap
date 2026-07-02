@@ -218,6 +218,29 @@ func TestRaftSnapshotV1ValidateAcceptsMatchingPayloadManifest(t *testing.T) {
 	}
 }
 
+func TestDecodeSnapshotManifestV1FromArchiveReaderRejectsOversizedHeader(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	headerSize := int64(RaftSnapshotArchiveHeaderMaxBytes + 1)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: RaftSnapshotArchiveManifestPathV1,
+		Mode: 0o600,
+		Size: headerSize,
+	}); err != nil {
+		t.Fatalf("WriteHeader oversized manifest: %v", err)
+	}
+	if _, err := tw.Write(bytes.Repeat([]byte("x"), int(headerSize))); err != nil {
+		t.Fatalf("Write oversized manifest: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close archive: %v", err)
+	}
+
+	if _, err := DecodeSnapshotManifestV1FromArchiveReader(bytes.NewReader(buf.Bytes())); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("DecodeSnapshotManifestV1FromArchiveReader err=%v want ErrInvalidSnapshotManifest", err)
+	}
+}
+
 func validSnapshotManifestV1() SnapshotManifestV1 {
 	return SnapshotManifestV1{
 		Format:            SnapshotManifestFormatV1,
