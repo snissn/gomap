@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,41 @@ func TestRaftSnapshotV1ValidateAcceptsMatchingPayloadManifestWithMonotonicCreate
 	}
 	if err := snapshot.Validate(); err != nil {
 		t.Fatalf("Validate matching payload manifest with monotonic CreatedAt: %v", err)
+	}
+}
+
+func TestRaftSnapshotV1ValidateAcceptsMatchingArchivePathManifest(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	payload := validRaftSnapshotArchivePayloadV1(t, manifest)
+	file, err := os.CreateTemp(t.TempDir(), "snapshot-*.tar")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
+		t.Fatalf("Write payload: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close payload: %v", err)
+	}
+	snapshot := RaftSnapshotV1{
+		Manifest:    manifest,
+		ArchivePath: file.Name(),
+	}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("Validate matching archive path manifest: %v", err)
+	}
+}
+
+func TestRaftSnapshotV1ValidateRejectsAmbiguousArchiveSources(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	snapshot := RaftSnapshotV1{
+		Manifest:    manifest,
+		Payload:     validRaftSnapshotArchivePayloadV1(t, manifest),
+		ArchivePath: "snapshot.tar",
+	}
+	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("Validate ambiguous archive source error=%v, want ErrInvalidSnapshotManifest", err)
 	}
 }
 

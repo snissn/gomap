@@ -1,10 +1,15 @@
 package raftcluster
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"math"
+	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -134,6 +139,112 @@ func TestHashicorpRaftSnapshotPersistAcceptsMatchingBoundary(t *testing.T) {
 	}
 	if !bytes.Equal(sink.Bytes(), payload) {
 		t.Fatalf("Persist wrote %d bytes, want payload %d bytes", sink.Len(), len(payload))
+	}
+}
+
+func TestHashicorpRaftSnapshotPersistStreamsArchivePathInChunks(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	payload := validRaftSnapshotArchivePayloadWithBodyV1(t, manifest, hashicorpRaftSnapshotCopyBuffer*3)
+	archivePath := writeRaftSnapshotArchiveFileForTest(t, payload)
+	snapshot := hashicorpRaftSnapshotV1{
+		snapshot: RaftSnapshotV1{
+			Manifest:    manifest,
+			ArchivePath: archivePath,
+		},
+	}
+	sink := &chunkRejectingSnapshotSink{maxWrite: hashicorpRaftSnapshotCopyBuffer}
+
+	if err := snapshot.Persist(sink); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	if !sink.closed {
+		t.Fatal("Persist did not close sink")
+	}
+	if sink.canceled {
+		t.Fatal("Persist canceled sink after successful write")
+	}
+	if sink.writeCount < 2 {
+		t.Fatalf("Persist used %d writes, want chunked streaming", sink.writeCount)
+	}
+	if sink.maxSeen > hashicorpRaftSnapshotCopyBuffer {
+		t.Fatalf("Persist max write=%d want <= %d", sink.maxSeen, hashicorpRaftSnapshotCopyBuffer)
+	}
+	if !bytes.Equal(sink.Bytes(), payload) {
+		t.Fatalf("Persist wrote %d bytes, want archive %d bytes", sink.Len(), len(payload))
+	}
+}
+
+func TestHashicorpRaftSnapshotPersistWriteFailureCancelsNotCloses(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	payload := validRaftSnapshotArchivePayloadWithBodyV1(t, manifest, hashicorpRaftSnapshotCopyBuffer*2)
+	archivePath := writeRaftSnapshotArchiveFileForTest(t, payload)
+	snapshot := hashicorpRaftSnapshotV1{
+		snapshot: RaftSnapshotV1{
+			Manifest:    manifest,
+			ArchivePath: archivePath,
+		},
+	}
+	writeErr := errors.New("sink write failed")
+	sink := &chunkRejectingSnapshotSink{
+		maxWrite: hashicorpRaftSnapshotCopyBuffer,
+		writeErr: writeErr,
+	}
+
+	err := snapshot.Persist(sink)
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("Persist err=%v want write failure", err)
+	}
+	if !sink.canceled {
+		t.Fatal("Persist did not cancel sink after write failure")
+	}
+	if sink.closed {
+		t.Fatal("Persist closed sink after write failure")
+	}
+}
+
+func TestHashicorpRaftSnapshotReleaseRemovesArchivePath(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	archivePath := writeRaftSnapshotArchiveFileForTest(t, validRaftSnapshotArchivePayloadV1(t, manifest))
+	snapshot := hashicorpRaftSnapshotV1{
+		snapshot: RaftSnapshotV1{
+			Manifest:    manifest,
+			ArchivePath: archivePath,
+		},
+	}
+
+	snapshot.Release()
+	if _, err := os.Stat(archivePath); !os.IsNotExist(err) {
+		t.Fatalf("Release did not remove staged archive: stat err=%v", err)
+	}
+	snapshot.Release()
+}
+
+func TestHashicorpRaftSnapshotPersistFileSourceAllocationGuard(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	payload := validRaftSnapshotArchivePayloadWithBodyV1(t, manifest, 4<<20)
+	archivePath := writeRaftSnapshotArchiveFileForTest(t, payload)
+	snapshot := hashicorpRaftSnapshotV1{
+		snapshot: RaftSnapshotV1{
+			Manifest:    manifest,
+			ArchivePath: archivePath,
+		},
+	}
+	sink := &discardSnapshotSink{}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if err := snapshot.Persist(sink); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	runtime.ReadMemStats(&after)
+	allocated := after.TotalAlloc - before.TotalAlloc
+	t.Logf("streamed %d byte archive with %d bytes allocated during Persist", len(payload), allocated)
+	if allocated > uint64(len(payload)/2) {
+		t.Fatalf("Persist allocated %d bytes for %d byte archive; want streaming allocation below half archive size", allocated, len(payload))
+	}
+	if !sink.closed || sink.canceled {
+		t.Fatalf("sink closed=%v canceled=%v, want close-only success", sink.closed, sink.canceled)
 	}
 }
 
@@ -394,4 +505,130 @@ func (s *boundaryTestSnapshotSink) Cancel() error {
 
 func (s *boundaryTestSnapshotSink) hashicorpRaftSnapshotBoundaryV1() (hashicorpRaftSnapshotBoundaryV1, bool) {
 	return s.boundary, true
+}
+
+type chunkRejectingSnapshotSink struct {
+	buf        bytes.Buffer
+	id         string
+	maxWrite   int
+	writeErr   error
+	writeCount int
+	maxSeen    int
+	closed     bool
+	canceled   bool
+}
+
+func (s *chunkRejectingSnapshotSink) ID() string {
+	if s.id != "" {
+		return s.id
+	}
+	return "chunk-rejecting-test"
+}
+
+func (s *chunkRejectingSnapshotSink) Write(p []byte) (int, error) {
+	s.writeCount++
+	if len(p) > s.maxSeen {
+		s.maxSeen = len(p)
+	}
+	if s.writeErr != nil {
+		return 0, s.writeErr
+	}
+	if s.maxWrite > 0 && len(p) > s.maxWrite {
+		return 0, fmt.Errorf("write size %d exceeds max %d", len(p), s.maxWrite)
+	}
+	return s.buf.Write(p)
+}
+
+func (s *chunkRejectingSnapshotSink) Bytes() []byte {
+	return s.buf.Bytes()
+}
+
+func (s *chunkRejectingSnapshotSink) Len() int {
+	return s.buf.Len()
+}
+
+func (s *chunkRejectingSnapshotSink) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *chunkRejectingSnapshotSink) Cancel() error {
+	s.canceled = true
+	return nil
+}
+
+type discardSnapshotSink struct {
+	closed   bool
+	canceled bool
+}
+
+func (s *discardSnapshotSink) ID() string { return "discard-test" }
+
+func (s *discardSnapshotSink) Write(p []byte) (int, error) { return len(p), nil }
+
+func (s *discardSnapshotSink) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *discardSnapshotSink) Cancel() error {
+	s.canceled = true
+	return nil
+}
+
+func validRaftSnapshotArchivePayloadWithBodyV1(t *testing.T, manifest SnapshotManifestV1, bodySize int) []byte {
+	t.Helper()
+	headerBytes, err := EncodeRaftSnapshotArchiveHeaderV1(NewRaftSnapshotArchiveHeaderV1(manifest))
+	if err != nil {
+		t.Fatalf("EncodeRaftSnapshotArchiveHeaderV1: %v", err)
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: RaftSnapshotArchiveManifestPathV1,
+		Mode: 0o600,
+		Size: int64(len(headerBytes)),
+	}); err != nil {
+		t.Fatalf("WriteHeader manifest: %v", err)
+	}
+	if _, err := tw.Write(headerBytes); err != nil {
+		t.Fatalf("Write manifest: %v", err)
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "db/index.db",
+		Mode: 0o600,
+		Size: int64(bodySize),
+	}); err != nil {
+		t.Fatalf("WriteHeader body: %v", err)
+	}
+	if _, err := io.CopyN(tw, zeroReader{}, int64(bodySize)); err != nil {
+		t.Fatalf("Write body: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close archive: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func writeRaftSnapshotArchiveFileForTest(t *testing.T, payload []byte) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "snapshot-*.tar")
+	if err != nil {
+		t.Fatalf("CreateTemp archive: %v", err)
+	}
+	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
+		t.Fatalf("Write archive: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close archive: %v", err)
+	}
+	return file.Name()
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }

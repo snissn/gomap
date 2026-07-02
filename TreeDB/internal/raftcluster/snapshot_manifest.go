@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -184,11 +185,13 @@ func validateLogicalDigestV1Hex(digest string) error {
 
 // RaftSnapshotV1 is the production snapshot payload handed to the Raft
 // adapter. The manifest identifies the durable apply boundary and logical
-// digest; Payload is an implementation-owned archive that contains the local
-// TreeDB storage required to restore that boundary on another node.
+// digest. Production snapshots should use ArchivePath so persistence can stream
+// bytes from a stable staged source; Payload is retained for small byte-backed
+// tests and fixtures.
 type RaftSnapshotV1 struct {
-	Manifest SnapshotManifestV1
-	Payload  []byte
+	Manifest    SnapshotManifestV1
+	Payload     []byte
+	ArchivePath string
 }
 
 func (s RaftSnapshotV1) Clone() RaftSnapshotV1 {
@@ -200,15 +203,53 @@ func (s RaftSnapshotV1) Validate() error {
 	if err := s.Manifest.Validate(s.Manifest.Scope); err != nil {
 		return err
 	}
-	if len(s.Payload) == 0 {
-		return fmt.Errorf("%w: empty snapshot payload", ErrInvalidSnapshotManifest)
+	if len(s.Payload) != 0 && s.ArchivePath != "" {
+		return fmt.Errorf("%w: snapshot has both payload and archive path", ErrInvalidSnapshotManifest)
 	}
-	payloadManifest, err := DecodeSnapshotManifestV1FromArchive(s.Payload)
+	if len(s.Payload) == 0 && s.ArchivePath == "" {
+		return fmt.Errorf("%w: empty snapshot archive source", ErrInvalidSnapshotManifest)
+	}
+	src, err := s.OpenArchive()
 	if err != nil {
 		return err
 	}
+	payloadManifest, decodeErr := DecodeSnapshotManifestV1FromArchiveReader(src)
+	closeErr := src.Close()
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("%w: close snapshot archive source: %v", ErrInvalidSnapshotManifest, closeErr)
+	}
 	if !snapshotManifestV1Equal(payloadManifest, s.Manifest) {
 		return fmt.Errorf("%w: snapshot payload manifest does not match outer manifest", ErrInvalidSnapshotManifest)
+	}
+	return nil
+}
+
+func (s RaftSnapshotV1) OpenArchive() (io.ReadCloser, error) {
+	if len(s.Payload) != 0 && s.ArchivePath != "" {
+		return nil, fmt.Errorf("%w: snapshot has both payload and archive path", ErrInvalidSnapshotManifest)
+	}
+	if len(s.Payload) != 0 {
+		return io.NopCloser(bytes.NewReader(s.Payload)), nil
+	}
+	if s.ArchivePath == "" {
+		return nil, fmt.Errorf("%w: empty snapshot archive source", ErrInvalidSnapshotManifest)
+	}
+	file, err := os.Open(s.ArchivePath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: open snapshot archive source: %v", ErrInvalidSnapshotManifest, err)
+	}
+	return file, nil
+}
+
+func (s RaftSnapshotV1) Release() error {
+	if s.ArchivePath == "" {
+		return nil
+	}
+	if err := os.Remove(s.ArchivePath); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

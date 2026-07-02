@@ -169,7 +169,7 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
-	assertSnapshotArchiveHasNonEmptyApplyMetadata(t, snapshot.Payload)
+	assertSnapshotArchiveHasNonEmptyApplyMetadata(t, readRaftSnapshotArchiveForTest(t, snapshot))
 	assertSnapshotValueLogHasFile(t, raftcluster.ValueLogDir(sourceDir))
 	sourceDigest, err := sourceFSM.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
 	if err != nil {
@@ -181,9 +181,7 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
 
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	if err := targetFSM.VerifyInstalledSnapshotManifestV1(snapshot.Manifest); err != nil {
 		t.Fatalf("VerifyInstalledSnapshotManifestV1: %v", err)
 	}
@@ -196,6 +194,45 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 	}
 	assertSnapshotValueLogHasFile(t, raftcluster.ValueLogDir(targetDir))
 	assertSnapshotDocument(t, targetFSM, "u-large", largeDoc)
+}
+
+func TestRaftSnapshotV1ExportStagesArchiveWithoutPayloadAndReleaseCleans(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+
+	largeDoc := []byte(`{"_id":"u-large","name":"staged","payload":"` + stringsRepeatForSnapshotTest("x", 1<<20) + `"}`)
+	applySnapshotSourceEntries(t, sourceFSM, largeDoc)
+
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatalf("ExportRaftSnapshotV1: %v", err)
+	}
+	if len(snapshot.Payload) != 0 {
+		t.Fatalf("production snapshot payload len=%d, want file-backed archive", len(snapshot.Payload))
+	}
+	if snapshot.ArchivePath == "" {
+		t.Fatal("production snapshot missing staged archive path")
+	}
+	info, err := os.Stat(snapshot.ArchivePath)
+	if err != nil {
+		t.Fatalf("Stat staged archive: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("staged archive is empty")
+	}
+	if err := snapshot.Release(); err != nil {
+		t.Fatalf("Release staged archive: %v", err)
+	}
+	if err := snapshot.Release(); err != nil {
+		t.Fatalf("Release staged archive again: %v", err)
+	}
+	if _, err := os.Stat(snapshot.ArchivePath); !os.IsNotExist(err) {
+		t.Fatalf("staged archive survived Release: stat err=%v", err)
+	}
 }
 
 func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
@@ -224,9 +261,7 @@ func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
 	}
 	assertApplied(t, result, raftentry.ApplyStatusApplied, 1)
 
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1 over stale target: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	if err := targetFSM.VerifyInstalledSnapshotManifestV1(snapshot.Manifest); err != nil {
 		t.Fatalf("VerifyInstalledSnapshotManifestV1: %v", err)
 	}
@@ -269,9 +304,7 @@ func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
 		t.Fatalf("WriteFile stale transient file: %v", err)
 	}
 
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1 with stale target format config: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	targetFormat, err := os.ReadFile(targetFormatPath)
 	if err != nil {
 		t.Fatalf("ReadFile target format config: %v", err)
@@ -299,7 +332,7 @@ func TestRaftSnapshotV1InstallRejectsCorruptArchiveBeforeReplacingLiveState(t *t
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
-	corruptPayload := rewriteRaftSnapshotArchiveHeaderForTest(t, snapshot.Payload, func(header *raftcluster.RaftSnapshotArchiveHeaderV1) {
+	corruptPayload := rewriteRaftSnapshotArchiveHeaderForTest(t, readRaftSnapshotArchiveForTest(t, snapshot), func(header *raftcluster.RaftSnapshotArchiveHeaderV1) {
 		header.Manifest.LogicalDigestV1 = strings.Repeat("f", 64)
 	})
 
@@ -351,9 +384,7 @@ func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
 	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
 	defer func() { _ = targetFSM.Close() }()
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	result, err = targetFSM.ApplyCommittedEntryV1(tail)
 	if err != nil {
 		t.Fatalf("target tail ApplyCommittedEntryV1: %v result=%+v", err, result)
@@ -403,9 +434,7 @@ func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
 		t.Fatalf("WriteFile target stale side store: %v", err)
 	}
 
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	got, err := os.ReadFile(filepath.Join(targetRoot, "dictdb", "sentinel"))
 	if err != nil {
 		t.Fatalf("ReadFile restored side-store sentinel: %v", err)
@@ -440,9 +469,7 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	targetFSM := openRaftSnapshotFSMForTestWithClusterDir(t, targetDB, targetRoot, true)
 	defer func() { _ = targetFSM.Close() }()
 
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	if err := targetFSM.VerifyInstalledSnapshotManifestV1(snapshot.Manifest); err != nil {
 		t.Fatalf("VerifyInstalledSnapshotManifestV1: %v", err)
 	}
@@ -482,9 +509,7 @@ func TestRaftSnapshotV1InstallPreservesFlatLayoutRaftMetadata(t *testing.T) {
 		t.Fatalf("WriteFile raft sentinel: %v", err)
 	}
 
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	if err := targetFSM.VerifyInstalledSnapshotManifestV1(snapshot.Manifest); err != nil {
 		t.Fatalf("VerifyInstalledSnapshotManifestV1: %v", err)
 	}
@@ -526,9 +551,7 @@ func TestRaftSnapshotV1InstallDisabledSideStoresDoesNotTouchParentSideStores(t *
 		t.Fatalf("WriteFile parent side-store sentinel: %v", err)
 	}
 
-	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-		t.Fatalf("InstallRaftSnapshotV1: %v", err)
-	}
+	installRaftSnapshotForTest(t, targetFSM, snapshot)
 	assertSnapshotDocument(t, targetFSM, "u-large", sourceDoc)
 	got, err := os.ReadFile(parentSideStoreSentinel)
 	if err != nil {
@@ -730,9 +753,7 @@ func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {
 		if err != nil {
 			b.Fatalf("ExportRaftSnapshotV1: %v", err)
 		}
-		if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
-			b.Fatalf("InstallRaftSnapshotV1: %v", err)
-		}
+		installRaftSnapshotForTest(b, targetFSM, snapshot)
 		b.StopTimer()
 		_ = targetFSM.Close()
 	}
@@ -824,6 +845,35 @@ func applySnapshotSourceEntries(tb testing.TB, fsm *FSM, doc []byte) {
 	}
 	assertSnapshotApplyResult(tb, results[0], raftentry.ApplyStatusApplied, 1)
 	assertSnapshotApplyResult(tb, results[1], raftentry.ApplyStatusApplied, 2)
+}
+
+func installRaftSnapshotForTest(tb testing.TB, fsm *FSM, snapshot raftcluster.RaftSnapshotV1) {
+	tb.Helper()
+	reader := openRaftSnapshotArchiveForTest(tb, snapshot)
+	defer func() { _ = reader.Close() }()
+	if err := fsm.InstallRaftSnapshotV1(reader); err != nil {
+		tb.Fatalf("InstallRaftSnapshotV1: %v", err)
+	}
+}
+
+func readRaftSnapshotArchiveForTest(tb testing.TB, snapshot raftcluster.RaftSnapshotV1) []byte {
+	tb.Helper()
+	reader := openRaftSnapshotArchiveForTest(tb, snapshot)
+	defer func() { _ = reader.Close() }()
+	payload, err := io.ReadAll(reader)
+	if err != nil {
+		tb.Fatalf("ReadAll snapshot archive: %v", err)
+	}
+	return payload
+}
+
+func openRaftSnapshotArchiveForTest(tb testing.TB, snapshot raftcluster.RaftSnapshotV1) io.ReadCloser {
+	tb.Helper()
+	reader, err := snapshot.OpenArchive()
+	if err != nil {
+		tb.Fatalf("OpenArchive: %v", err)
+	}
+	return reader
 }
 
 func rewriteRaftSnapshotArchiveHeaderForTest(t testing.TB, payload []byte, mut func(*raftcluster.RaftSnapshotArchiveHeaderV1)) []byte {

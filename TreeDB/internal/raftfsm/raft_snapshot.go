@@ -2,7 +2,6 @@ package raftfsm
 
 import (
 	"archive/tar"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -69,33 +68,70 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+	archiveFile, archivePath, err := createRaftSnapshotArchiveFileV1(f.cluster.Layout.SnapshotDir)
+	if err != nil {
+		return raftcluster.RaftSnapshotV1{}, err
+	}
+	keepArchive := false
+	defer func() {
+		if !keepArchive {
+			_ = os.Remove(archivePath)
+		}
+	}()
+	tw := tar.NewWriter(archiveFile)
 	if err := writeRaftSnapshotFileV1(tw, raftcluster.RaftSnapshotArchiveManifestPathV1, headerBytes, 0o600); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if err := appendRaftSnapshotTreeDBStorageV1(tw, raftSnapshotDBPrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if !f.cluster.DisableSideStores {
 		if err := appendRaftSnapshotTreeDBSideStoresV1(tw, raftSnapshotSidePrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
+			_ = archiveFile.Close()
 			return raftcluster.RaftSnapshotV1{}, err
 		}
 	}
 	if err := appendRaftSnapshotDirV1(tw, raftSnapshotApplyPrefixV1, f.cluster.Layout.ApplyDir); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if err := tw.Close(); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: close snapshot archive: %w", err)
 	}
+	if err := archiveFile.Sync(); err != nil {
+		_ = archiveFile.Close()
+		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: sync snapshot archive: %w", err)
+	}
+	if err := archiveFile.Close(); err != nil {
+		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: close snapshot archive file: %w", err)
+	}
 	snapshot := raftcluster.RaftSnapshotV1{
-		Manifest: manifest,
-		Payload:  buf.Bytes(),
+		Manifest:    manifest,
+		ArchivePath: archivePath,
 	}
 	if err := snapshot.Validate(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
+	keepArchive = true
 	return snapshot, nil
+}
+
+func createRaftSnapshotArchiveFileV1(snapshotDir string) (*os.File, string, error) {
+	if strings.TrimSpace(snapshotDir) == "" {
+		return nil, "", fmt.Errorf("raftfsm: missing snapshot staging directory")
+	}
+	stagingDir := filepath.Join(snapshotDir, "staged")
+	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
+		return nil, "", fmt.Errorf("raftfsm: create snapshot staging directory: %w", err)
+	}
+	file, err := os.CreateTemp(stagingDir, "treedb-snapshot-*.tar")
+	if err != nil {
+		return nil, "", fmt.Errorf("raftfsm: create snapshot archive: %w", err)
+	}
+	return file, file.Name(), nil
 }
 
 // InstallRaftSnapshotV1 discards the local TreeDB state and installs a
