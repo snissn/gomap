@@ -93,6 +93,9 @@ func (s conditionalTxnSnapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) e
 		if err != nil {
 			return err
 		}
+		if len(value) == 0 {
+			value = []byte{}
+		}
 		if err := fn(i, key, value, true); err != nil {
 			return err
 		}

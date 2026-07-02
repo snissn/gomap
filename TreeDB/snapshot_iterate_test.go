@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
-	"strconv"
 	"testing"
 )
 
@@ -123,6 +122,9 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	if err := d.Set([]byte("snap/b"), []byte("2")); err != nil {
 		t.Fatalf("set b: %v", err)
 	}
+	if err := d.Set([]byte("snap/empty"), []byte{}); err != nil {
+		t.Fatalf("set empty: %v", err)
+	}
 
 	tx, err := d.NewConditionalTxnWithSnapshot()
 	if err != nil {
@@ -155,15 +157,32 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	if !bytes.Equal(gotB, []byte("2")) {
 		t.Fatalf("tx snapshot Get b=%q, want 2", gotB)
 	}
-	var seen []string
-	err = snap.GetManyView([][]byte{[]byte("snap/b"), []byte("snap/missing")}, func(index int, key, value []byte, found bool) error {
-		seen = append(seen, strconv.Itoa(index)+":"+string(key)+":"+string(value)+":"+strconv.FormatBool(found))
+	type seenMany struct {
+		index int
+		key   string
+		value string
+		found bool
+		nil   bool
+	}
+	var seen []seenMany
+	err = snap.GetManyView([][]byte{[]byte("snap/b"), []byte("snap/empty"), []byte("snap/missing")}, func(index int, key, value []byte, found bool) error {
+		seen = append(seen, seenMany{
+			index: index,
+			key:   string(key),
+			value: string(value),
+			found: found,
+			nil:   value == nil,
+		})
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("tx snapshot GetManyView: %v", err)
 	}
-	wantSeen := []string{"0:snap/b:2:true", "1:snap/missing::false"}
+	wantSeen := []seenMany{
+		{index: 0, key: "snap/b", value: "2", found: true},
+		{index: 1, key: "snap/empty", value: "", found: true},
+		{index: 2, key: "snap/missing", value: "", found: false, nil: true},
+	}
 	if !reflect.DeepEqual(seen, wantSeen) {
 		t.Fatalf("tx snapshot GetManyView=%v, want %v", seen, wantSeen)
 	}
