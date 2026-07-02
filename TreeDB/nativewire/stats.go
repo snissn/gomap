@@ -15,19 +15,30 @@ const maxTrackedErrorCode = int(iwire.MaxErrorCode)
 type Stats map[string]string
 
 type counters struct {
-	connectionsOpened atomic.Uint64
-	connectionsClosed atomic.Uint64
-	framesIn          atomic.Uint64
-	framesOut         atomic.Uint64
-	bytesIn           atomic.Uint64
-	bytesOut          atomic.Uint64
-	malformedFrames   atomic.Uint64
-	requestsStarted   atomic.Uint64
-	requestsCompleted atomic.Uint64
-	requestsFailed    atomic.Uint64
-	requestsCanceled  atomic.Uint64
-	errorsTotal       atomic.Uint64
-	dispatchNanos     atomic.Uint64
+	connectionsOpened                  atomic.Uint64
+	connectionsClosed                  atomic.Uint64
+	framesIn                           atomic.Uint64
+	framesOut                          atomic.Uint64
+	bytesIn                            atomic.Uint64
+	bytesOut                           atomic.Uint64
+	malformedFrames                    atomic.Uint64
+	requestsStarted                    atomic.Uint64
+	requestsCompleted                  atomic.Uint64
+	requestsFailed                     atomic.Uint64
+	requestsCanceled                   atomic.Uint64
+	errorsTotal                        atomic.Uint64
+	dispatchNanos                      atomic.Uint64
+	clusterSubmitRequests              atomic.Uint64
+	clusterSubmitSuccess               atomic.Uint64
+	clusterSubmitErrors                atomic.Uint64
+	clusterSubmitReadOnly              atomic.Uint64
+	clusterSubmitDurabilityUnavailable atomic.Uint64
+	clusterSubmitCommitAmbiguous       atomic.Uint64
+	clusterSubmitAckVisible            atomic.Uint64
+	clusterSubmitAckFlushed            atomic.Uint64
+	clusterSubmitAckSynced             atomic.Uint64
+	clusterSubmitAckRaftCommitted      atomic.Uint64
+	clusterSubmitNanos                 atomic.Uint64
 
 	errorCodes [maxTrackedErrorCode + 1]atomic.Uint64
 	commands   [64]commandCounters
@@ -168,6 +179,28 @@ func (c *counters) addHot(key string, delta uint64) bool {
 		c.errorsTotal.Add(delta)
 	case "dispatch_nanos_total":
 		c.dispatchNanos.Add(delta)
+	case "cluster_submit.requests_total":
+		c.clusterSubmitRequests.Add(delta)
+	case "cluster_submit.success_total":
+		c.clusterSubmitSuccess.Add(delta)
+	case "cluster_submit.errors_total":
+		c.clusterSubmitErrors.Add(delta)
+	case "cluster_submit.read_only_total":
+		c.clusterSubmitReadOnly.Add(delta)
+	case "cluster_submit.durability_unavailable_total":
+		c.clusterSubmitDurabilityUnavailable.Add(delta)
+	case "cluster_submit.commit_ambiguous_total":
+		c.clusterSubmitCommitAmbiguous.Add(delta)
+	case "cluster_submit.ack_visible_total":
+		c.clusterSubmitAckVisible.Add(delta)
+	case "cluster_submit.ack_flushed_total":
+		c.clusterSubmitAckFlushed.Add(delta)
+	case "cluster_submit.ack_synced_total":
+		c.clusterSubmitAckSynced.Add(delta)
+	case "cluster_submit.ack_raft_committed_total":
+		c.clusterSubmitAckRaftCommitted.Add(delta)
+	case "cluster_submit.nanos_total":
+		c.clusterSubmitNanos.Add(delta)
 	default:
 		return false
 	}
@@ -223,6 +256,17 @@ func (c *counters) snapshot() map[string]uint64 {
 	addIfNonZero("requests.canceled_total", c.requestsCanceled.Load())
 	addIfNonZero("errors.total", c.errorsTotal.Load())
 	addIfNonZero("dispatch_nanos_total", c.dispatchNanos.Load())
+	addIfNonZero("cluster_submit.requests_total", c.clusterSubmitRequests.Load())
+	addIfNonZero("cluster_submit.success_total", c.clusterSubmitSuccess.Load())
+	addIfNonZero("cluster_submit.errors_total", c.clusterSubmitErrors.Load())
+	addIfNonZero("cluster_submit.read_only_total", c.clusterSubmitReadOnly.Load())
+	addIfNonZero("cluster_submit.durability_unavailable_total", c.clusterSubmitDurabilityUnavailable.Load())
+	addIfNonZero("cluster_submit.commit_ambiguous_total", c.clusterSubmitCommitAmbiguous.Load())
+	addIfNonZero("cluster_submit.ack_visible_total", c.clusterSubmitAckVisible.Load())
+	addIfNonZero("cluster_submit.ack_flushed_total", c.clusterSubmitAckFlushed.Load())
+	addIfNonZero("cluster_submit.ack_synced_total", c.clusterSubmitAckSynced.Load())
+	addIfNonZero("cluster_submit.ack_raft_committed_total", c.clusterSubmitAckRaftCommitted.Load())
+	addIfNonZero("cluster_submit.nanos_total", c.clusterSubmitNanos.Load())
 	for code := iwire.ErrorCode(1); code <= iwire.ErrorCode(maxTrackedErrorCode); code++ {
 		value := c.errorCodes[code].Load()
 		if value != 0 {

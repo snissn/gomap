@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
 
 // ErrServerClosed reports that the server is closed or refusing connections.
@@ -64,6 +65,12 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrDurabilityUnavailable
 	case errors.Is(err, collections.ErrCommitAmbiguous):
 		return iwire.ErrCommitAmbiguous
+	case errors.Is(err, raftcluster.ErrCommitAmbiguous):
+		return iwire.ErrCommitAmbiguous
+	case errors.Is(err, raftcluster.ErrAdmissionUnavailable):
+		return iwire.ErrDurabilityUnavailable
+	case errors.Is(err, raftcluster.ErrNotLeader):
+		return iwire.ErrReadOnly
 	case errors.Is(err, collections.ErrRecoveryRequired):
 		return iwire.ErrDurabilityUnavailable
 	case errors.Is(err, backenddb.ErrCommandWALRejected):

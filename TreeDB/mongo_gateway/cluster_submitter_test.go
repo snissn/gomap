@@ -350,6 +350,21 @@ func assertErrmsgContains(tb testing.TB, doc wire.Document, want string) {
 	}
 }
 
+func assertStringField(tb testing.TB, doc wire.Document, key, want string) {
+	tb.Helper()
+	got, ok := bson.Raw(doc).Lookup(key).StringValueOK()
+	if !ok || got != want {
+		tb.Fatalf("%s=%q typeOK=%v want %q", key, got, ok, want)
+	}
+}
+
+func assertNoField(tb testing.TB, doc wire.Document, key string) {
+	tb.Helper()
+	if got := bson.Raw(doc).Lookup(key); got.Type != 0 {
+		tb.Fatalf("%s present with BSON type %v, want absent", key, got.Type)
+	}
+}
+
 func assertMongoUsers(tb testing.TB, server *Server, want map[string]string) {
 	tb.Helper()
 	found := serveCommand(tb, server, 326899, bson.D{
@@ -1228,6 +1243,9 @@ func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testin
 	})
 	assertCommandError(t, createResponse, "NotWritablePrimary")
 	assertErrmsgContains(t, createResponse, "node-a:27017")
+	assertBool(t, createResponse, "treedbClusterError", true)
+	assertStringField(t, createResponse, "treedbErrorClass", "not_leader")
+	assertStringField(t, createResponse, "treedbLeaderHint", "node-a:27017")
 	if _, err := server.Collections.OpenCollection("app.admins"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection app.admins err=%v want collection not found", err)
 	}
@@ -1866,6 +1884,9 @@ func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *t
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertErrmsgContains(t, response, "route group")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+	assertStringField(t, response, "treedbLeaderHint", "node-c")
 	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection app.users after route mismatch err=%v want collection not found", err)
 	}
@@ -1876,6 +1897,94 @@ func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *t
 	if got := routes[0]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != iwire.CommandCreateCollection {
 		t.Fatalf("route request=%+v want app/default/users create_collection", got)
 	}
+}
+
+func TestMongoClusterMutationCommandErrorPreservesCommitAmbiguousOverDuplicateKey(t *testing.T) {
+	clusterErr := errors.Join(
+		&iwire.ProtocolError{Code: iwire.ErrCommitAmbiguous, Reason: "commit reached consensus but response failed"},
+		collections.ErrDuplicateDocumentID,
+	)
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "ShutdownInProgress")
+	assertStringField(t, response, "treedbErrorClass", "commit_ambiguous")
+}
+
+func TestMongoClusterMutationCommandErrorPreservesCollectionCommitAmbiguousOverDuplicateKey(t *testing.T) {
+	clusterErr := &collections.CommitAmbiguousError{
+		Operation: "insert",
+		Err:       collections.ErrDuplicateDocumentID,
+	}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "ShutdownInProgress")
+	assertStringField(t, response, "treedbErrorClass", "commit_ambiguous")
+}
+
+func TestMongoClusterMutationCommandErrorClassifiesLeaderHintBeforeRouteText(t *testing.T) {
+	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "not leader; leader_hint=router-1:27017"}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertStringField(t, response, "treedbErrorClass", "not_leader")
+	assertStringField(t, response, "treedbLeaderHint", "router-1:27017")
+}
+
+func TestMongoClusterMutationCommandErrorClassifiesQueryRouteAsRouteRejected(t *testing.T) {
+	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "cluster query route shape is not supported before scatter planning"}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+}
+
+func TestMongoClusterMutationCommandErrorClassifiesHintlessFollowerAsNotLeader(t *testing.T) {
+	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "not cluster leader"}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertStringField(t, response, "treedbErrorClass", "not_leader")
+	assertNoField(t, response, "treedbLeaderHint")
+}
+
+func TestMongoClusterLeaderHintUsesStructuredCarrier(t *testing.T) {
+	err := mongoClusterLeaderHintTestError{leaderHint: "node-c"}
+	if got := mongoClusterLeaderHint(err); got != "node-c" {
+		t.Fatalf("mongoClusterLeaderHint=%q want node-c", got)
+	}
+}
+
+func TestMongoClusterMutationCommandErrorDoesNotLabelLocalConfigError(t *testing.T) {
+	response, err := mongoClusterMutationCommandError(errors.New("Mongo gateway cluster submitter is not configured"))
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "BadValue")
+	assertNoField(t, response, "treedbClusterError")
+	assertNoField(t, response, "treedbErrorClass")
+	assertNoField(t, response, "treedbLeaderHint")
+}
+
+type mongoClusterLeaderHintTestError struct {
+	leaderHint string
+}
+
+func (e mongoClusterLeaderHintTestError) Error() string {
+	return "route group rejected"
+}
+
+func (e mongoClusterLeaderHintTestError) ClusterLeaderHint() string {
+	return e.leaderHint
 }
 
 func TestClusterSubmitterRejectsUnsupportedWriteConcernBeforeSubmitOrLocalMutation(t *testing.T) {

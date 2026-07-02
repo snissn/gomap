@@ -559,9 +559,36 @@ func (s *SingleGroupSubmitter) checkRouteBinding(metadata raftentry.RequestMetad
 		return errors.Join(ErrRouteGroupMismatch, fmt.Errorf("route metadata missing group id for local group %q", localGroup))
 	}
 	if metadata.ClusterRouteGroupID != localGroup {
-		return errors.Join(ErrRouteGroupMismatch, fmt.Errorf("route group %q does not match local group %q", metadata.ClusterRouteGroupID, localGroup))
+		return errors.Join(ErrRouteGroupMismatch, routeErrorWithLeaderHint(metadata, "route group %q does not match local group %q", metadata.ClusterRouteGroupID, localGroup))
 	}
 	return nil
+}
+
+func routeErrorWithLeaderHint(metadata raftentry.RequestMetadataV1, format string, args ...any) error {
+	msg := fmt.Sprintf(format, args...)
+	if metadata.ClusterRouteLeaderHint == "" {
+		return errors.New(msg)
+	}
+	return &routeLeaderHintError{message: msg, leaderHint: metadata.ClusterRouteLeaderHint}
+}
+
+type routeLeaderHintError struct {
+	message    string
+	leaderHint string
+}
+
+func (e *routeLeaderHintError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message + "; leader_hint=" + e.leaderHint
+}
+
+func (e *routeLeaderHintError) ClusterLeaderHint() string {
+	if e == nil {
+		return ""
+	}
+	return e.leaderHint
 }
 
 func (s *SingleGroupSubmitter) validateCommitResult(request CommitCommandEntryV1Request, result CommitCommandEntryV1Result) (CommittedCommandEntryV1, error) {

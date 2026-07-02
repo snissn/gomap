@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -241,6 +242,9 @@ func TestSingleGroupSubmitterRejectsRouteGroupMismatchBeforePreflightCommitApply
 	_, err := submitter.SubmitCommandEntryV1(context.Background(), entry, routeMetadata("group-b", iwire.AckRaftCommitted))
 	if !errors.Is(err, ErrRouteGroupMismatch) {
 		t.Fatalf("SubmitCommandEntryV1 err=%v want route group mismatch", err)
+	}
+	if !strings.Contains(err.Error(), "leader_hint=node-a") {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want leader hint", err)
 	}
 	if preflightCalls != 0 {
 		t.Fatalf("preflight calls=%d want 0", preflightCalls)
