@@ -671,10 +671,24 @@ func (c *hashicorpRaftTestCluster) restartDBNode(t *testing.T, id NodeID) *hashi
 		_ = db.Close()
 		t.Fatalf("%s restart OpenHashicorpRaftProvider: %v", id, err)
 	}
+	submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
+		Cluster:                node.cfg,
+		AdmissionProvider:      provider,
+		CommitSource:           provider,
+		Preflight:              fsm,
+		Applier:                fsm,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+	if err != nil {
+		_ = provider.Close()
+		_ = fsm.Close()
+		_ = db.Close()
+		t.Fatalf("%s restart NewSingleGroupSubmitter: %v", id, err)
+	}
 	node.db = db
 	node.fsm = fsm
 	node.provider = provider
-	node.submitter = newHashicorpRaftDBSubmitter(t, node, staticCatalogVersion(7))
+	node.submitter = submitter
 	c.connectAllTransports()
 	return node
 }
@@ -795,7 +809,7 @@ func assertClusterCollectionExists(t *testing.T, node *hashicorpRaftTestNode, co
 func assertClusterCollectionMissing(t *testing.T, node *hashicorpRaftTestNode, collection string) {
 	t.Helper()
 	if node == nil || node.db == nil {
-		return
+		t.Fatalf("missing node/open DB while checking collection %s is absent", collection)
 	}
 	if _, err := collections.NewCollectionManager(node.db).OpenCollection(collection); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("%s OpenCollection %s err=%v, want ErrCollectionNotFound", node.id, collection, err)
