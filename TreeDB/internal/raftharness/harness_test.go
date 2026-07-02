@@ -206,6 +206,7 @@ func TestCommitClonesAndComparesClusterRouteMetadata(t *testing.T) {
 		ClusterRouteMembers:       []string{"node-a", "node-b"},
 		ClusterRouteLeaderHint:    "node-a",
 		ClusterRoutePlacementMode: "collection",
+		ClusterRouteKey:           "_id",
 		ClusterRouteTokenKnown:    true,
 		ClusterRouteToken:         42,
 		ClusterRoutePartitionID:   "token-000042",
@@ -226,6 +227,7 @@ func TestCommitClonesAndComparesClusterRouteMetadata(t *testing.T) {
 		ClusterRouteMembers:       []string{"node-a", "node-b"},
 		ClusterRouteLeaderHint:    "node-a",
 		ClusterRoutePlacementMode: "collection",
+		ClusterRouteKey:           "_id",
 		ClusterRouteTokenKnown:    true,
 		ClusterRouteToken:         42,
 		ClusterRoutePartitionID:   "token-000042",
@@ -240,6 +242,12 @@ func TestCommitClonesAndComparesClusterRouteMetadata(t *testing.T) {
 	divergent.RequestMetadata.ClusterRoutePartitionID = "token-000043"
 	if _, err := h.Commit(divergent); !errors.Is(err, ErrCommittedLogConflict) {
 		t.Fatalf("Commit divergent route metadata err=%v want ErrCommittedLogConflict", err)
+	}
+
+	divergent = want
+	divergent.RequestMetadata.ClusterRouteKey = "tenant_id"
+	if _, err := h.Commit(divergent); !errors.Is(err, ErrCommittedLogConflict) {
+		t.Fatalf("Commit divergent route key err=%v want ErrCommittedLogConflict", err)
 	}
 }
 
