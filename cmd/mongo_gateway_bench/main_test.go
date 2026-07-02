@@ -1060,6 +1060,23 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 	if cfg.RouteMode != routeModeRing || cfg.RouteGroupCount != 3 || cfg.RoutePartitionCount != 9 {
 		t.Fatalf("unexpected route config: %+v", cfg)
 	}
+	oneGroupCfg, err := parseConfig([]string{
+		"-route-mode", "ring",
+		"-route-groups", "1",
+		"-route-partitions", "1",
+		"-documents", "12",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-secondary-indexes", "0",
+		"-treedb-maintenance", treeDBMaintenanceNone,
+	})
+	if err != nil {
+		t.Fatalf("parse 1-group/1-partition route-mode ring config: %v", err)
+	}
+	if oneGroupCfg.RouteMode != routeModeRing || oneGroupCfg.RouteGroupCount != 1 || oneGroupCfg.RoutePartitionCount != 1 {
+		t.Fatalf("unexpected 1-group route config: %+v", oneGroupCfg)
+	}
 
 	tests := []struct {
 		name string
@@ -1083,8 +1100,8 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 		},
 		{
 			name: "too few groups",
-			args: []string{"-target", "treedb", "-route-mode", "ring", "-route-groups", "1"},
-			want: "route-groups must be >= 2",
+			args: []string{"-target", "treedb", "-route-mode", "ring", "-route-groups", "0"},
+			want: "route-groups must be >= 1",
 		},
 		{
 			name: "too few partitions",
@@ -1134,6 +1151,13 @@ func TestBenchmarkRingRouterPreflightDistributionAndFanout(t *testing.T) {
 		if got, want := target.GroupID, benchmarkRingGroupID(partition%2); got != want {
 			t.Fatalf("group id=%q want %q", got, want)
 		}
+		wantLeader := map[int]string{
+			0: "node-00-a",
+			1: "node-01-a",
+		}[partition%2]
+		if got := target.LeaderHint; got != wantLeader {
+			t.Fatalf("leader hint=%q want %q", got, wantLeader)
+		}
 		router.recordPreflightSuccess(target)
 	}
 
@@ -1164,6 +1188,13 @@ func TestBenchmarkRingRouterPreflightDistributionAndFanout(t *testing.T) {
 	if !reflect.DeepEqual(evidence.GroupHits, wantGroupHits) {
 		t.Fatalf("group hits=%v want %v", evidence.GroupHits, wantGroupHits)
 	}
+	wantLeaderHits := map[string]int{"node-00-a": 2, "node-01-a": 2}
+	if !reflect.DeepEqual(evidence.LeaderHits, wantLeaderHits) {
+		t.Fatalf("leader hits=%v want %v", evidence.LeaderHits, wantLeaderHits)
+	}
+	if got := sumStringIntValues(evidence.LeaderHits); got != evidence.PreflightSuccess {
+		t.Fatalf("leader hit total=%d want preflight_success=%d hits=%v", got, evidence.PreflightSuccess, evidence.LeaderHits)
+	}
 	wantPartitionHits := map[string]int{
 		"token-000000": 1,
 		"token-000001": 1,
@@ -1176,6 +1207,24 @@ func TestBenchmarkRingRouterPreflightDistributionAndFanout(t *testing.T) {
 	if !strings.Contains(evidence.UnsupportedFanoutErr, "requires fanout before submit") {
 		t.Fatalf("fanout rejection=%q want fanout rejection", evidence.UnsupportedFanoutErr)
 	}
+}
+
+func sumStringIntValues(values map[string]int) int {
+	var total int
+	for _, value := range values {
+		total += value
+	}
+	return total
+}
+
+func positiveStringIntCount(values map[string]int) int {
+	var total int
+	for _, value := range values {
+		if value > 0 {
+			total++
+		}
+	}
+	return total
 }
 
 func TestConcurrentUpdateOperationVariesByWriterSweepCell(t *testing.T) {
@@ -1934,73 +1983,129 @@ func TestTreeDBRoutedRingModeSmoke(t *testing.T) {
 	if testing.Short() {
 		t.Skip("routed ring mode smoke skipped in short mode")
 	}
-	cfg, err := parseConfig([]string{
-		"-target", "treedb",
-		"-route-mode", "ring",
-		"-route-groups", "2",
-		"-route-partitions", "4",
-		"-documents", "64",
-		"-batch-size", "16",
-		"-insert-producers", "2",
-		"-reads", "0",
-		"-range-reads", "0",
-		"-updates", "0",
-		"-deletes", "0",
-		"-secondary-indexes", "0",
-		"-treedb-maintenance", treeDBMaintenanceNone,
-		"-prebuild-documents",
-		"-timeout", "0",
-		"-format", "json",
-	})
-	if err != nil {
-		t.Fatalf("parse routed ring smoke config: %v", err)
+	tests := []struct {
+		name              string
+		groups            int
+		partitions        int
+		documents         int
+		wantSingleRoute   bool
+		wantFanoutReject  bool
+		wantMultipleRoute bool
+	}{
+		{
+			name:            "one_group_one_partition",
+			groups:          1,
+			partitions:      1,
+			documents:       32,
+			wantSingleRoute: true,
+		},
+		{
+			name:              "n_group",
+			groups:            4,
+			partitions:        16,
+			documents:         128,
+			wantFanoutReject:  true,
+			wantMultipleRoute: true,
+		},
 	}
-	target, err := openTarget(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("open target: %v", err)
-	}
-	defer func() {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := closeBenchTarget(cleanupCtx, target); err != nil {
-			t.Errorf("cleanup target: %v", err)
-		}
-	}()
-	result, err := runBenchmark(context.Background(), cfg, target, nil)
-	if err != nil {
-		t.Fatalf("run routed ring benchmark: %v", err)
-	}
-	if result.RouteMode != routeModeRing || result.RouteGroupCount != 2 || result.RoutePartitionCount != 4 {
-		t.Fatalf("unexpected route result config: %+v", result)
-	}
-	if result.RouteEvidence == nil {
-		t.Fatalf("route evidence missing: %+v", result)
-	}
-	evidence := result.RouteEvidence
-	if evidence.PreflightSuccess != cfg.Documents || evidence.Writes != cfg.Documents || evidence.FanoutRejected != 1 {
-		t.Fatalf("unexpected route evidence: %+v", evidence)
-	}
-	if evidence.WriteShape != "single_document_insert" || !evidence.LocalOnly {
-		t.Fatalf("unexpected route evidence shape/boundary: %+v", evidence)
-	}
-	if got := evidence.GroupHits["group-00"] + evidence.GroupHits["group-01"]; got != cfg.Documents {
-		t.Fatalf("group hit total=%d want %d hits=%v", got, cfg.Documents, evidence.GroupHits)
-	}
-	if evidence.GroupHits["group-00"] == 0 || evidence.GroupHits["group-01"] == 0 {
-		t.Fatalf("route smoke did not hit both groups: %+v", evidence)
-	}
-	if !strings.Contains(evidence.UnsupportedFanoutErr, "requires fanout before submit") {
-		t.Fatalf("fanout rejection=%q want fanout rejection", evidence.UnsupportedFanoutErr)
-	}
-	for _, phase := range result.Phases {
-		if phase.Name == "load_insert_one_routed_ring" {
-			if phase.OpsPerSecond <= 0 || phase.SampledNsPerOp <= 0 {
-				t.Fatalf("routed load phase metrics missing: %+v", phase)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := parseConfig([]string{
+				"-target", "treedb",
+				"-route-mode", "ring",
+				"-route-groups", strconv.Itoa(tt.groups),
+				"-route-partitions", strconv.Itoa(tt.partitions),
+				"-documents", strconv.Itoa(tt.documents),
+				"-batch-size", "16",
+				"-insert-producers", "2",
+				"-reads", "0",
+				"-range-reads", "0",
+				"-updates", "0",
+				"-deletes", "0",
+				"-secondary-indexes", "0",
+				"-treedb-maintenance", treeDBMaintenanceNone,
+				"-prebuild-documents",
+				"-timeout", "0",
+				"-format", "json",
+			})
+			if err != nil {
+				t.Fatalf("parse routed ring smoke config: %v", err)
 			}
-			return
-		}
+			target, err := openTarget(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("open target: %v", err)
+			}
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := closeBenchTarget(cleanupCtx, target); err != nil {
+					t.Errorf("cleanup target: %v", err)
+				}
+			}()
+			result, err := runBenchmark(context.Background(), cfg, target, nil)
+			if err != nil {
+				t.Fatalf("run routed ring benchmark: %v", err)
+			}
+			if result.RouteMode != routeModeRing || result.RouteGroupCount != tt.groups || result.RoutePartitionCount != tt.partitions {
+				t.Fatalf("unexpected route result config: %+v", result)
+			}
+			if result.RouteEvidence == nil {
+				t.Fatalf("route evidence missing: %+v", result)
+			}
+			evidence := result.RouteEvidence
+			if evidence.PreflightSuccess != cfg.Documents || evidence.Writes != cfg.Documents {
+				t.Fatalf("unexpected route evidence counters: %+v", evidence)
+			}
+			if evidence.WriteShape != "single_document_insert" || !evidence.LocalOnly {
+				t.Fatalf("unexpected route evidence shape/boundary: %+v", evidence)
+			}
+			if got := sumStringIntValues(evidence.GroupHits); got != evidence.PreflightSuccess {
+				t.Fatalf("group hit total=%d want preflight_success=%d hits=%v", got, evidence.PreflightSuccess, evidence.GroupHits)
+			}
+			if got := sumStringIntValues(evidence.LeaderHits); got != evidence.PreflightSuccess {
+				t.Fatalf("leader hit total=%d want preflight_success=%d hits=%v", got, evidence.PreflightSuccess, evidence.LeaderHits)
+			}
+			if got := sumStringIntValues(evidence.PartitionHits); got != evidence.PreflightSuccess {
+				t.Fatalf("partition hit total=%d want preflight_success=%d hits=%v", got, evidence.PreflightSuccess, evidence.PartitionHits)
+			}
+			if tt.wantSingleRoute {
+				if len(evidence.GroupHits) != 1 || evidence.GroupHits["group-00"] != cfg.Documents {
+					t.Fatalf("1-group run group hits=%v want only group-00=%d", evidence.GroupHits, cfg.Documents)
+				}
+				if len(evidence.LeaderHits) != 1 || evidence.LeaderHits["node-00-a"] != cfg.Documents {
+					t.Fatalf("1-group run leader hits=%v want only node-00-a=%d", evidence.LeaderHits, cfg.Documents)
+				}
+				if len(evidence.PartitionHits) != 1 || evidence.PartitionHits["token-000000"] != cfg.Documents {
+					t.Fatalf("1-group run partition hits=%v want only token-000000=%d", evidence.PartitionHits, cfg.Documents)
+				}
+				if evidence.FanoutRejected != 0 || evidence.UnsupportedFanoutErr != "" {
+					t.Fatalf("1-group run fanout rejected=%d err=%q, want no fanout probe", evidence.FanoutRejected, evidence.UnsupportedFanoutErr)
+				}
+			}
+			if tt.wantMultipleRoute {
+				if positiveStringIntCount(evidence.GroupHits) < 2 || positiveStringIntCount(evidence.LeaderHits) < 2 || positiveStringIntCount(evidence.PartitionHits) < 2 {
+					t.Fatalf("N-group route smoke did not hit multiple groups/leaders/partitions: %+v", evidence)
+				}
+			}
+			if tt.wantFanoutReject {
+				if evidence.FanoutRejected != 1 {
+					t.Fatalf("fanout rejected=%d want 1 evidence=%+v", evidence.FanoutRejected, evidence)
+				}
+				if !strings.Contains(evidence.UnsupportedFanoutErr, "requires fanout before submit") {
+					t.Fatalf("fanout rejection=%q want fanout rejection", evidence.UnsupportedFanoutErr)
+				}
+			}
+			for _, phase := range result.Phases {
+				if phase.Name == "load_insert_one_routed_ring" {
+					if phase.OpsPerSecond <= 0 || phase.SampledNsPerOp <= 0 {
+						t.Fatalf("routed load phase metrics missing: %+v", phase)
+					}
+					return
+				}
+			}
+			t.Fatalf("load_insert_one_routed_ring phase missing: %+v", result.Phases)
+		})
 	}
-	t.Fatalf("load_insert_one_routed_ring phase missing: %+v", result.Phases)
 }
 
 func TestTreeDBClientModeSmoke(t *testing.T) {
@@ -3020,6 +3125,20 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		TreeDBBufferedIndexedAsyncFlush:        true,
 		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 3,
 		TreeDBMaintenanceMode:                         "none",
+		RouteEvidence: &routeEvidence{
+			Mode:             routeModeRing,
+			PlacementMode:    "ring",
+			RouteKey:         "_id",
+			WriteShape:       "single_document_insert",
+			LocalOnly:        true,
+			GroupCount:       1,
+			PartitionCount:   1,
+			Writes:           1,
+			PreflightSuccess: 1,
+			GroupHits:        map[string]int{"group-00": 1},
+			LeaderHits:       map[string]int{"node-00-a": 1},
+			PartitionHits:    map[string]int{"token-000000": 1},
+		},
 	}
 	var out bytes.Buffer
 	if err := writeResult(&out, "text", result); err != nil {
@@ -3033,6 +3152,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		"buffered_indexed_max_root_runs=90",
 		"buffered_indexed_async_flush=true",
 		"buffered_indexed_async_max_queued_units=3",
+		"leader_hits=map[node-00-a:1]",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %s: %q", want, text)
@@ -3064,7 +3184,9 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 ||
 		!decoded.TreeDBCommandWAL ||
 		!decoded.TreeDBBufferedIndexedAsyncFlush ||
-		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
+		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 ||
+		decoded.RouteEvidence == nil ||
+		!reflect.DeepEqual(decoded.RouteEvidence.LeaderHits, map[string]int{"node-00-a": 1}) {
 		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d commandWAL=%t async=%t asyncMax=%d want 1234/5678/90/true/true/3",
 			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
 			decoded.TreeDBBufferedIndexedWriteMaxBytes,
@@ -3072,6 +3194,21 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 			decoded.TreeDBCommandWAL,
 			decoded.TreeDBBufferedIndexedAsyncFlush,
 			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+	var decodedWithRoute map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decodedWithRoute); err != nil {
+		t.Fatalf("unmarshal json result map: %v", err)
+	}
+	routeJSON, ok := decodedWithRoute["route_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("json route_evidence missing or wrong type: %#v", decodedWithRoute["route_evidence"])
+	}
+	leaderHitsJSON, ok := routeJSON["leader_hits"].(map[string]any)
+	if !ok {
+		t.Fatalf("json route_evidence leader_hits missing or wrong type: %#v", routeJSON["leader_hits"])
+	}
+	if got := leaderHitsJSON["node-00-a"]; got != float64(1) {
+		t.Fatalf("json route_evidence leader_hits node-00-a=%v want 1", got)
 	}
 
 	result.TreeDBCommandWAL = false
