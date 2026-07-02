@@ -26,12 +26,12 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 
 	largeDoc := []byte(`{"_id":"u-large","name":"Ada","payload":"` + stringsRepeatForSnapshotTest("x", 8192) + `"}`)
 	applySnapshotSourceEntries(t, sourceFSM, largeDoc)
-	assertSnapshotValueLogHasFile(t, raftcluster.ValueLogDir(sourceDir))
 
 	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	assertSnapshotValueLogHasFile(t, raftcluster.ValueLogDir(sourceDir))
 	sourceDigest, err := sourceFSM.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
 	if err != nil {
 		t.Fatalf("source LogicalDigestV1: %v", err)

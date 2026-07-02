@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -56,6 +57,8 @@ type Options struct {
 
 // FSM applies committed deterministic entries to one local DB.
 type FSM struct {
+	mu sync.RWMutex
+
 	db          *backenddb.DB
 	metadataDir string
 
@@ -145,7 +148,12 @@ func Open(opts Options) (*FSM, error) {
 }
 
 func (f *FSM) Close() error {
-	if f == nil || f.closed {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
 		return nil
 	}
 	f.closed = true
@@ -167,6 +175,11 @@ func (f *FSM) AllowsInitialIndexGapV1() bool {
 }
 
 func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
+	if f == nil {
+		return raftentry.ApplyEntryID{}, false
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f == nil || f.progress == nil {
 		return raftentry.ApplyEntryID{}, false
 	}
@@ -181,6 +194,8 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 	if f == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
 	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f.closed {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is closed"))
 	}
@@ -269,6 +284,15 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 }
 
 func (f *FSM) LogicalDigestV1(opts raftapply.LogicalDigestOptionsV1) (raftapply.LogicalDigestV1, error) {
+	if f == nil {
+		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.logicalDigestV1Locked(opts)
+}
+
+func (f *FSM) logicalDigestV1Locked(opts raftapply.LogicalDigestOptionsV1) (raftapply.LogicalDigestV1, error) {
 	if f == nil || f.db == nil {
 		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
 	}
@@ -293,6 +317,8 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 	if f == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.closed {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is closed"))
 	}

@@ -42,13 +42,18 @@ var raftSnapshotSideStoreEntriesV1 = []string{
 // value-log segments, plus durable Raft apply metadata. It intentionally
 // excludes HashiCorp Raft log/stable/snapshot directories.
 func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
+	if f == nil {
+		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := f.requireRaftSnapshotOpenV1(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if err := f.db.Checkpoint(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "checkpoint before snapshot export: %v", err)
 	}
-	manifest, err := f.ExportSnapshotManifestV1(SnapshotManifestExportOptionsV1{})
+	manifest, err := f.exportSnapshotManifestV1Locked(SnapshotManifestExportOptionsV1{})
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
@@ -135,6 +140,8 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if err != nil {
 		return err
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if err := header.Validate(f.snapshotScopeIdentityV1()); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot archive is not valid for FSM scope: %v", err)
 	}
@@ -157,7 +164,7 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if err := f.reopenAfterRaftSnapshotRestoreV1(); err != nil {
 		return err
 	}
-	return f.VerifyInstalledSnapshotManifestV1(header.Manifest)
+	return f.verifyInstalledSnapshotManifestV1Locked(header.Manifest)
 }
 
 func (f *FSM) requireRaftSnapshotOpenV1() error {
@@ -248,6 +255,9 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 		if rel == "." {
 			return writeRaftSnapshotDirHeaderV1(tw, prefix)
 		}
+		if shouldSkipRaftSnapshotTreeDBFileV1(rel) {
+			return nil
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
@@ -280,6 +290,10 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 		closeErr := file.Close()
 		return errors.Join(copyErr, closeErr)
 	})
+}
+
+func shouldSkipRaftSnapshotTreeDBFileV1(rel string) bool {
+	return filepath.Base(rel) == "command-wal-journal-owner.lock"
 }
 
 func appendRaftSnapshotTreeDBStorageV1(tw *tar.Writer, prefix, mainDir string) error {

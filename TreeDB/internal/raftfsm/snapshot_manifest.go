@@ -21,6 +21,15 @@ func (f *FSM) ExportSnapshotManifestV1(opts SnapshotManifestExportOptionsV1) (ra
 	if f == nil {
 		return raftcluster.SnapshotManifestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.exportSnapshotManifestV1Locked(opts)
+}
+
+func (f *FSM) exportSnapshotManifestV1Locked(opts SnapshotManifestExportOptionsV1) (raftcluster.SnapshotManifestV1, error) {
+	if f == nil {
+		return raftcluster.SnapshotManifestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
 	if f.closed {
 		return raftcluster.SnapshotManifestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
 	}
@@ -41,7 +50,7 @@ func (f *FSM) ExportSnapshotManifestV1(opts SnapshotManifestExportOptionsV1) (ra
 	if localLSN != record.AppliedCommandLSN {
 		return raftcluster.SnapshotManifestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "local AppliedCommandLSN coverage %d does not match snapshot progress metadata %d", localLSN, record.AppliedCommandLSN)
 	}
-	digest, err := f.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{
+	digest, err := f.logicalDigestV1Locked(raftapply.LogicalDigestOptionsV1{
 		ScopeRule:     f.scopeRule,
 		DatabaseScope: f.database,
 		CatalogScope:  f.catalog,
