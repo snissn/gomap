@@ -226,8 +226,11 @@ func routeDispatchTargetFromMetadata(metadata raftentry.RequestMetadataV1) (rout
 		if !metadata.ClusterRouteTokenKnown {
 			return routeDispatchTarget{}, errors.Join(ErrRouteTargetMissing, fmt.Errorf("token route missing document token"))
 		}
+		if metadata.ClusterRouteKey == "" {
+			return routeDispatchTarget{}, errors.Join(ErrRouteTargetUnsupported, fmt.Errorf("token route missing route key"))
+		}
 		if metadata.ClusterRouteKey != clusterRouteKeyDocumentIDV1 {
-			return routeDispatchTarget{}, errors.Join(ErrRouteTargetUnsupported, fmt.Errorf("token route uses route key %q", metadata.ClusterRouteKey))
+			return routeDispatchTarget{}, errors.Join(ErrRouteTargetUnsupported, fmt.Errorf("token route uses unsupported route key %q", metadata.ClusterRouteKey))
 		}
 		if metadata.ClusterRoutePartitionID == "" {
 			return routeDispatchTarget{}, errors.Join(ErrRouteTargetMissing, fmt.Errorf("token route missing partition id"))
