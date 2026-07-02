@@ -241,6 +241,17 @@ func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevi
 	return tx.recordRead(key, revision, found)
 }
 
+// RecordReadVersion records an opening-snapshot read precondition without
+// validating current state. It is for transaction-owned snapshot reads that
+// should keep returning the pinned view and defer conflicts until commit.
+func (tx *ConditionalTxn) RecordReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	if err := tx.ensureOpen(); err != nil {
+		return err
+	}
+	key = normalizeRawKVPointKey(key)
+	return tx.recordRead(key, revision, found)
+}
+
 func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
 	currentRevision, currentFound, err := tx.currentReadRevision(key)
 	if err != nil {
@@ -469,15 +480,11 @@ func (tx *ConditionalTxn) finish() error {
 	tx.id = 0
 	var err error
 	if tx.snap != nil {
-		if closeErr := tx.snap.Close(); err == nil {
-			err = closeErr
-		}
+		err = errors.Join(err, tx.snap.Close())
 		tx.snap = nil
 	}
 	if tx.batch != nil {
-		if closeErr := tx.batch.Close(); err == nil {
-			err = closeErr
-		}
+		err = errors.Join(err, tx.batch.Close())
 		tx.batch = nil
 	}
 	if db != nil && id != 0 {

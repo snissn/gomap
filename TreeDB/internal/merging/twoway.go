@@ -2,7 +2,6 @@ package merging
 
 import (
 	"bytes"
-	"errors"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -153,10 +152,11 @@ func (m *TwoWayMerger) ValueCopy(dst []byte) []byte {
 }
 
 func (m *TwoWayMerger) Error() error {
+	if m.err != nil {
+		return m.err
+	}
 	if m.cur != nil {
-		if srcErr := m.cur.Error(); srcErr != nil && srcErr != m.err {
-			return errors.Join(m.err, srcErr)
-		}
+		return m.cur.Error()
 	}
 	return m.err
 }

@@ -145,6 +145,9 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	if err := d.Set([]byte("snap/c"), []byte("3")); err != nil {
 		t.Fatalf("outside set c: %v", err)
 	}
+	if err := tx.Set([]byte("snap/b"), []byte("staged")); err != nil {
+		t.Fatalf("stage b: %v", err)
+	}
 
 	gotValue, _, err := snap.GetVersionedAppend([]byte("snap/a"), nil)
 	if err != nil {
@@ -159,6 +162,20 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	}
 	if !bytes.Equal(gotB, []byte("2")) {
 		t.Fatalf("tx snapshot Get b=%q, want 2", gotB)
+	}
+	gotMissing, err := snap.Get([]byte("snap/missing"))
+	if err != nil {
+		t.Fatalf("tx snapshot Get missing: %v", err)
+	}
+	if gotMissing != nil {
+		t.Fatalf("tx snapshot Get missing=%q, want nil", gotMissing)
+	}
+	gotVersionedMissing, _, err := snap.GetVersioned([]byte("snap/missing-versioned"))
+	if err != nil {
+		t.Fatalf("tx snapshot GetVersioned missing: %v", err)
+	}
+	if gotVersionedMissing != nil {
+		t.Fatalf("tx snapshot GetVersioned missing=%q, want nil", gotVersionedMissing)
 	}
 	type seenMany struct {
 		index int

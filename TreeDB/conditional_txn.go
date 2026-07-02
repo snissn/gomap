@@ -59,7 +59,10 @@ func (s conditionalTxnSnapshot) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (s conditionalTxnSnapshot) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
-	out, revision, err := s.tx.GetVersionedAppend(key, nil)
+	out, revision, err := s.GetVersionedAppend(key, nil)
+	if errors.Is(err, ErrKeyNotFound) {
+		return nil, revision, nil
+	}
 	if err != nil {
 		return nil, revision, err
 	}
@@ -75,7 +78,24 @@ func (s conditionalTxnSnapshot) GetVersioned(key []byte) ([]byte, EntryRevision,
 }
 
 func (s conditionalTxnSnapshot) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
-	return s.tx.GetVersionedAppend(key, dst)
+	if s.tx == nil || s.Snapshot == nil {
+		return dst, LegacyEntryRevision, ErrConditionalTxnClosed
+	}
+	key = normalizeRawKVPointKey(key)
+	out, revision, err := s.Snapshot.GetVersionedAppend(key, dst)
+	if errors.Is(err, ErrKeyNotFound) {
+		if recErr := s.tx.recordSnapshotReadVersion(key, revision, false); recErr != nil {
+			return dst, revision, recErr
+		}
+		return dst, revision, err
+	}
+	if err != nil {
+		return dst, revision, err
+	}
+	if recErr := s.tx.recordSnapshotReadVersion(key, revision, true); recErr != nil {
+		return dst, revision, recErr
+	}
+	return out, revision, nil
 }
 
 func (s conditionalTxnSnapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
@@ -84,7 +104,7 @@ func (s conditionalTxnSnapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) e
 	}
 	for i, key := range keys {
 		key = normalizeRawKVPointKey(key)
-		value, _, err := s.tx.GetVersionedAppend(key, nil)
+		value, _, err := s.GetVersionedAppend(key, nil)
 		if errors.Is(err, ErrKeyNotFound) {
 			if err := fn(i, key, nil, false); err != nil {
 				return err
@@ -109,13 +129,20 @@ func (s conditionalTxnSnapshot) GetUnsafe(key []byte) ([]byte, error) {
 }
 
 func (s conditionalTxnSnapshot) Has(key []byte) (bool, error) {
-	return s.tx.Has(key)
+	_, _, err := s.GetVersionedAppend(key, nil)
+	if errors.Is(err, ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s conditionalTxnSnapshot) HasMany(keys [][]byte) ([]bool, error) {
 	out := make([]bool, len(keys))
 	for i, key := range keys {
-		found, err := s.tx.Has(key)
+		found, err := s.Has(key)
 		if err != nil {
 			return nil, err
 		}
@@ -142,6 +169,19 @@ func (s conditionalTxnSnapshot) Iterate(start, end []byte, fn func(key, value []
 
 func (s conditionalTxnSnapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) error) error {
 	return ErrConditionalTxnUnsupported
+}
+
+func (tx *ConditionalTxn) recordSnapshotReadVersion(key []byte, revision EntryRevision, found bool) error {
+	if tx == nil {
+		return ErrConditionalTxnClosed
+	}
+	if tx.cachedActive {
+		return tx.cached.RecordReadVersion(key, page.EntryRevision(revision), found)
+	}
+	if tx.backend != nil {
+		return tx.backend.RecordReadVersion(key, page.EntryRevision(revision), found)
+	}
+	return ErrConditionalTxnClosed
 }
 
 // ReserveReadSet reserves read-precondition capacity for high-fanout

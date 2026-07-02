@@ -228,6 +228,29 @@ func TestTwoWayMergerSurfacesCurrentValueError(t *testing.T) {
 	}
 }
 
+func TestTwoWayMergerSurfacesCurrentUnsafeEntryWithRevisionError(t *testing.T) {
+	want := errors.New("entry load failed")
+	broken := &valueErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", v: "bad"}}},
+		err:            want,
+	}
+	other := &mockUnsafeIter{data: []entry{{k: "B", v: "ok"}}}
+
+	merged := NewTwoWayMerger(broken, other, nil, nil)
+	defer merged.Close()
+	if !merged.Valid() {
+		t.Fatal("merged iterator invalid, want first key A")
+	}
+	revIt, ok := interface{}(merged).(iterator.RevisionUnsafeIterator)
+	if !ok {
+		t.Fatalf("merged iterator %T does not expose revisions", merged)
+	}
+	_, _, _, _ = revIt.UnsafeEntryWithRevision()
+	if got := merged.Error(); got != want {
+		t.Fatalf("Error() = %v, want direct %v", got, want)
+	}
+}
+
 func TestHeapMergingIteratorSurfacesCurrentValueError(t *testing.T) {
 	want := errors.New("heap value load failed")
 	broken := &valueErrorUnsafeIter{
@@ -252,6 +275,34 @@ func TestHeapMergingIteratorSurfacesCurrentValueError(t *testing.T) {
 	_ = merged.Value()
 	if !errors.Is(merged.Error(), want) {
 		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestHeapMergingIteratorSurfacesCurrentUnsafeEntryWithRevisionError(t *testing.T) {
+	want := errors.New("heap entry load failed")
+	broken := &valueErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", v: "bad"}}},
+		err:            want,
+	}
+	middle := &mockUnsafeIter{data: []entry{{k: "B", v: "ok"}}}
+	oldest := &mockUnsafeIter{data: []entry{{k: "C", v: "ok"}}}
+
+	merged := NewMergingIterator([]IteratorSource{
+		{Iter: broken, Priority: 0},
+		{Iter: middle, Priority: 1},
+		{Iter: oldest, Priority: 2},
+	}, nil, nil)
+	defer merged.Close()
+	if !merged.Valid() {
+		t.Fatal("merged iterator invalid, want first key A")
+	}
+	revIt, ok := merged.(iterator.RevisionUnsafeIterator)
+	if !ok {
+		t.Fatalf("merged iterator %T does not expose revisions", merged)
+	}
+	_, _, _, _ = revIt.UnsafeEntryWithRevision()
+	if got := merged.Error(); got != want {
+		t.Fatalf("Error() = %v, want direct %v", got, want)
 	}
 }
 
