@@ -658,6 +658,7 @@ func openHashicorpRaftStores(layout StorageLayout, opts HashicorpRaftProviderOpt
 			return hashicorpRaftStores{}, errors.Join(ErrInvalidHashicorpRaftProvider, err)
 		}
 	}
+	stores.snapshots = wrapHashicorpRaftSnapshotStoreV1(stores.snapshots)
 	return stores, nil
 }
 
@@ -992,7 +993,7 @@ func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {
 	if err := snapshot.Validate(); err != nil {
 		return nil, err
 	}
-	return hashicorpRaftSnapshotV1{snapshot: snapshot.Clone()}, nil
+	return hashicorpRaftSnapshotV1{snapshot: snapshot}, nil
 }
 
 func (f hashicorpRaftFSM) Restore(src io.ReadCloser) error {
@@ -1019,6 +1020,12 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 		_ = sink.Cancel()
 		return err
 	}
+	if boundary, ok := hashicorpRaftSnapshotBoundaryFromSinkV1(sink); ok {
+		if err := validateHashicorpRaftSnapshotBoundaryV1(boundary, s.snapshot.Manifest); err != nil {
+			_ = sink.Cancel()
+			return err
+		}
+	}
 	if _, err := sink.Write(s.snapshot.Payload); err != nil {
 		_ = sink.Cancel()
 		return err
@@ -1032,15 +1039,87 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 
 func (s hashicorpRaftSnapshotV1) Release() {}
 
+type hashicorpRaftSnapshotBoundaryV1 struct {
+	Term  uint64
+	Index uint64
+}
+
+type hashicorpRaftSnapshotBoundarySinkV1 interface {
+	hashicorpRaftSnapshotBoundaryV1() (hashicorpRaftSnapshotBoundaryV1, bool)
+}
+
+type hashicorpRaftSnapshotStoreV1 struct {
+	inner hraft.SnapshotStore
+}
+
+func wrapHashicorpRaftSnapshotStoreV1(inner hraft.SnapshotStore) hraft.SnapshotStore {
+	if inner == nil {
+		return nil
+	}
+	if _, ok := inner.(hashicorpRaftSnapshotStoreV1); ok {
+		return inner
+	}
+	return hashicorpRaftSnapshotStoreV1{inner: inner}
+}
+
+func (s hashicorpRaftSnapshotStoreV1) Create(version hraft.SnapshotVersion, index, term uint64, configuration hraft.Configuration, configurationIndex uint64, trans hraft.Transport) (hraft.SnapshotSink, error) {
+	sink, err := s.inner.Create(version, index, term, configuration, configurationIndex, trans)
+	if err != nil || sink == nil {
+		return sink, err
+	}
+	return hashicorpRaftSnapshotSinkV1{
+		SnapshotSink: sink,
+		boundary: hashicorpRaftSnapshotBoundaryV1{
+			Term:  term,
+			Index: index,
+		},
+	}, nil
+}
+
+func (s hashicorpRaftSnapshotStoreV1) List() ([]*hraft.SnapshotMeta, error) {
+	return s.inner.List()
+}
+
+func (s hashicorpRaftSnapshotStoreV1) Open(id string) (*hraft.SnapshotMeta, io.ReadCloser, error) {
+	return s.inner.Open(id)
+}
+
+type hashicorpRaftSnapshotSinkV1 struct {
+	hraft.SnapshotSink
+	boundary hashicorpRaftSnapshotBoundaryV1
+}
+
+func (s hashicorpRaftSnapshotSinkV1) hashicorpRaftSnapshotBoundaryV1() (hashicorpRaftSnapshotBoundaryV1, bool) {
+	return s.boundary, true
+}
+
+func hashicorpRaftSnapshotBoundaryFromSinkV1(sink hraft.SnapshotSink) (hashicorpRaftSnapshotBoundaryV1, bool) {
+	if sink == nil {
+		return hashicorpRaftSnapshotBoundaryV1{}, false
+	}
+	boundarySink, ok := sink.(hashicorpRaftSnapshotBoundarySinkV1)
+	if !ok {
+		return hashicorpRaftSnapshotBoundaryV1{}, false
+	}
+	return boundarySink.hashicorpRaftSnapshotBoundaryV1()
+}
+
 func validateHashicorpRaftSnapshotManifestV1(meta *hraft.SnapshotMeta, manifest SnapshotManifestV1) error {
 	if meta == nil {
 		return fmt.Errorf("%w: missing hashicorp snapshot metadata", ErrInvalidSnapshotManifest)
 	}
-	if meta.Term != manifest.LastIncludedTerm {
-		return fmt.Errorf("%w: hashicorp snapshot term %d does not match manifest term %d", ErrInvalidSnapshotManifest, meta.Term, manifest.LastIncludedTerm)
+	return validateHashicorpRaftSnapshotBoundaryV1(hashicorpRaftSnapshotBoundaryV1{
+		Term:  meta.Term,
+		Index: meta.Index,
+	}, manifest)
+}
+
+func validateHashicorpRaftSnapshotBoundaryV1(boundary hashicorpRaftSnapshotBoundaryV1, manifest SnapshotManifestV1) error {
+	if boundary.Term != manifest.LastIncludedTerm {
+		return fmt.Errorf("%w: hashicorp snapshot term %d does not match manifest term %d", ErrInvalidSnapshotManifest, boundary.Term, manifest.LastIncludedTerm)
 	}
-	if meta.Index != manifest.LastIncludedIndex {
-		return fmt.Errorf("%w: hashicorp snapshot index %d does not match manifest index %d", ErrInvalidSnapshotManifest, meta.Index, manifest.LastIncludedIndex)
+	if boundary.Index != manifest.LastIncludedIndex {
+		return fmt.Errorf("%w: hashicorp snapshot index %d does not match manifest index %d", ErrInvalidSnapshotManifest, boundary.Index, manifest.LastIncludedIndex)
 	}
 	return nil
 }

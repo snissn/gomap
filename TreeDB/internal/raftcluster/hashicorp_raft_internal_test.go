@@ -1,6 +1,7 @@
 package raftcluster
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -72,6 +73,84 @@ func TestHashicorpRaftConfigFloorsTrailingLogsForReadIndex(t *testing.T) {
 	}
 	if err := hraft.ValidateConfig(conf); err != nil {
 		t.Fatalf("ValidateConfig: %v", err)
+	}
+}
+
+func TestHashicorpRaftSnapshotPersistRejectsMismatchedBoundary(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	payload := validRaftSnapshotArchivePayloadV1(t, manifest)
+	snapshot := hashicorpRaftSnapshotV1{
+		snapshot: RaftSnapshotV1{
+			Manifest: manifest,
+			Payload:  payload,
+		},
+	}
+	sink := &boundaryTestSnapshotSink{
+		boundary: hashicorpRaftSnapshotBoundaryV1{
+			Term:  manifest.LastIncludedTerm,
+			Index: manifest.LastIncludedIndex + 1,
+		},
+	}
+
+	err := snapshot.Persist(sink)
+	if !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("Persist err=%v want ErrInvalidSnapshotManifest", err)
+	}
+	if !sink.canceled {
+		t.Fatal("Persist did not cancel sink after boundary mismatch")
+	}
+	if sink.closed {
+		t.Fatal("Persist closed sink after boundary mismatch")
+	}
+	if sink.Len() != 0 {
+		t.Fatalf("Persist wrote %d bytes before rejecting boundary", sink.Len())
+	}
+}
+
+func TestHashicorpRaftSnapshotPersistAcceptsMatchingBoundary(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	payload := validRaftSnapshotArchivePayloadV1(t, manifest)
+	snapshot := hashicorpRaftSnapshotV1{
+		snapshot: RaftSnapshotV1{
+			Manifest: manifest,
+			Payload:  payload,
+		},
+	}
+	sink := &boundaryTestSnapshotSink{
+		boundary: hashicorpRaftSnapshotBoundaryV1{
+			Term:  manifest.LastIncludedTerm,
+			Index: manifest.LastIncludedIndex,
+		},
+	}
+
+	if err := snapshot.Persist(sink); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	if !sink.closed {
+		t.Fatal("Persist did not close sink")
+	}
+	if sink.canceled {
+		t.Fatal("Persist canceled sink after successful write")
+	}
+	if !bytes.Equal(sink.Bytes(), payload) {
+		t.Fatalf("Persist wrote %d bytes, want payload %d bytes", sink.Len(), len(payload))
+	}
+}
+
+func TestHashicorpRaftSnapshotStoreWrapsCreateBoundary(t *testing.T) {
+	store := wrapHashicorpRaftSnapshotStoreV1(hraft.NewInmemSnapshotStore())
+	sink, err := store.Create(hraft.SnapshotVersionMax, 11, 7, hraft.Configuration{}, 0, nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer func() { _ = sink.Cancel() }()
+
+	boundary, ok := hashicorpRaftSnapshotBoundaryFromSinkV1(sink)
+	if !ok {
+		t.Fatal("wrapped snapshot sink did not expose boundary")
+	}
+	if boundary.Term != 7 || boundary.Index != 11 {
+		t.Fatalf("boundary={Term:%d Index:%d} want {Term:7 Index:11}", boundary.Term, boundary.Index)
 	}
 }
 
@@ -286,4 +365,33 @@ type countingReadIndexLogStore struct {
 func (s *countingReadIndexLogStore) GetLog(index uint64, log *hraft.Log) error {
 	s.getLogCount++
 	return s.LogStore.GetLog(index, log)
+}
+
+type boundaryTestSnapshotSink struct {
+	bytes.Buffer
+	id       string
+	boundary hashicorpRaftSnapshotBoundaryV1
+	closed   bool
+	canceled bool
+}
+
+func (s *boundaryTestSnapshotSink) ID() string {
+	if s.id != "" {
+		return s.id
+	}
+	return "boundary-test"
+}
+
+func (s *boundaryTestSnapshotSink) Close() error {
+	s.closed = true
+	return nil
+}
+
+func (s *boundaryTestSnapshotSink) Cancel() error {
+	s.canceled = true
+	return nil
+}
+
+func (s *boundaryTestSnapshotSink) hashicorpRaftSnapshotBoundaryV1() (hashicorpRaftSnapshotBoundaryV1, bool) {
+	return s.boundary, true
 }

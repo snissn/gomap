@@ -85,7 +85,7 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 	}
 	snapshot := raftcluster.RaftSnapshotV1{
 		Manifest: manifest,
-		Payload:  bytes.Clone(buf.Bytes()),
+		Payload:  buf.Bytes(),
 	}
 	if err := snapshot.Validate(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
@@ -115,22 +115,13 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "missing snapshot install directories")
 	}
 
-	scratchParent := filepath.Dir(mainDir)
-	tmpMain, err := os.MkdirTemp(scratchParent, ".raft-snapshot-main-*")
+	scratch, err := createRaftSnapshotScratchDirsV1(mainDir, applyDir)
 	if err != nil {
 		return err
 	}
-	tmpApply, err := os.MkdirTemp(scratchParent, ".raft-snapshot-apply-*")
-	if err != nil {
-		_ = os.RemoveAll(tmpMain)
-		return err
-	}
-	tmpSide, err := os.MkdirTemp(scratchParent, ".raft-snapshot-side-*")
-	if err != nil {
-		_ = os.RemoveAll(tmpMain)
-		_ = os.RemoveAll(tmpApply)
-		return err
-	}
+	tmpMain := scratch.main
+	tmpApply := scratch.apply
+	tmpSide := scratch.side
 	cleanupMain := true
 	cleanupApply := true
 	cleanupSide := true
@@ -540,6 +531,49 @@ func sameOrUnderSnapshotDirV1(parent, child string) bool {
 	}
 	rel, err := filepath.Rel(parent, child)
 	return err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."
+}
+
+type raftSnapshotScratchDirsV1 struct {
+	main  string
+	side  string
+	apply string
+}
+
+func createRaftSnapshotScratchDirsV1(mainDir, applyDir string) (raftSnapshotScratchDirsV1, error) {
+	if mainDir == "" || applyDir == "" {
+		return raftSnapshotScratchDirsV1{}, fmt.Errorf("raftfsm: empty snapshot scratch path")
+	}
+	mainParent := filepath.Dir(mainDir)
+	applyParent := filepath.Dir(applyDir)
+	if sameOrUnderSnapshotDirV1(mainDir, applyDir) {
+		applyParent = mainParent
+	}
+	if err := os.MkdirAll(mainParent, 0o700); err != nil {
+		return raftSnapshotScratchDirsV1{}, err
+	}
+	if err := os.MkdirAll(applyParent, 0o700); err != nil {
+		return raftSnapshotScratchDirsV1{}, err
+	}
+	tmpMain, err := os.MkdirTemp(mainParent, ".raft-snapshot-main-*")
+	if err != nil {
+		return raftSnapshotScratchDirsV1{}, err
+	}
+	tmpApply, err := os.MkdirTemp(applyParent, ".raft-snapshot-apply-*")
+	if err != nil {
+		_ = os.RemoveAll(tmpMain)
+		return raftSnapshotScratchDirsV1{}, err
+	}
+	tmpSide, err := os.MkdirTemp(mainParent, ".raft-snapshot-side-*")
+	if err != nil {
+		_ = os.RemoveAll(tmpMain)
+		_ = os.RemoveAll(tmpApply)
+		return raftSnapshotScratchDirsV1{}, err
+	}
+	return raftSnapshotScratchDirsV1{
+		main:  tmpMain,
+		side:  tmpSide,
+		apply: tmpApply,
+	}, nil
 }
 
 func replaceSnapshotDirV1(dest, src string) error {

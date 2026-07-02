@@ -21,6 +21,52 @@ import (
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
+func TestRaftSnapshotV1ScratchDirsUseDestinationParents(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name        string
+		mainDir     string
+		applyDir    string
+		applyParent string
+	}{
+		{
+			name:        "external apply dir",
+			mainDir:     filepath.Join(root, "external", "data", "treedb"),
+			applyDir:    filepath.Join(root, "external", "raft", "apply"),
+			applyParent: filepath.Join(root, "external", "raft"),
+		},
+		{
+			name:        "apply dir under main dir",
+			mainDir:     filepath.Join(root, "internal", "treedb"),
+			applyDir:    filepath.Join(root, "internal", "treedb", "raftcluster", "nodes", "node-a", "groups", "default", "apply"),
+			applyParent: filepath.Join(root, "internal"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scratch, err := createRaftSnapshotScratchDirsV1(tt.mainDir, tt.applyDir)
+			if err != nil {
+				t.Fatalf("createRaftSnapshotScratchDirsV1: %v", err)
+			}
+			defer func() {
+				_ = os.RemoveAll(scratch.main)
+				_ = os.RemoveAll(scratch.side)
+				_ = os.RemoveAll(scratch.apply)
+			}()
+
+			if got, want := filepath.Dir(scratch.main), filepath.Dir(tt.mainDir); got != want {
+				t.Fatalf("main scratch parent=%q want %q", got, want)
+			}
+			if got, want := filepath.Dir(scratch.side), filepath.Dir(tt.mainDir); got != want {
+				t.Fatalf("side scratch parent=%q want %q", got, want)
+			}
+			if got := filepath.Dir(scratch.apply); got != tt.applyParent {
+				t.Fatalf("apply scratch parent=%q want %q", got, tt.applyParent)
+			}
+		})
+	}
+}
+
 func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
