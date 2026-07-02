@@ -6,6 +6,7 @@ import (
 	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -117,6 +118,15 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 	return tx, nil
 }
 
+// Snapshot returns the transaction's pinned opening snapshot. The transaction
+// owns the snapshot and closes it on Commit, CommitSync, or Close.
+func (tx *ConditionalTxn) Snapshot() *Snapshot {
+	if tx == nil || tx.closed {
+		return nil
+	}
+	return tx.snap
+}
+
 // ReserveReadSet reserves read-precondition capacity for high-fanout
 // transactions. It is optional and does not change transaction semantics.
 func (tx *ConditionalTxn) ReserveReadSet(n int) {
@@ -210,6 +220,65 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 		return dst, revision, recErr
 	}
 	return out, revision, nil
+}
+
+// RequireReadVersion records a caller-observed key revision as a commit
+// precondition. It is intended for values read through an external pinned
+// snapshot owned by the caller.
+func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	if err := tx.ensureOpen(); err != nil {
+		return err
+	}
+	key = normalizeRawKVPointKey(key)
+	if err := tx.validateCurrentReadVersion(key, revision, found); err != nil {
+		return err
+	}
+	return tx.recordRead(key, revision, found)
+}
+
+// RecordReadVersion records an opening-snapshot read precondition without
+// validating current state. It is for transaction-owned snapshot reads that
+// should keep returning the pinned view and defer conflicts until commit.
+func (tx *ConditionalTxn) RecordReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	if err := tx.ensureOpen(); err != nil {
+		return err
+	}
+	key = normalizeRawKVPointKey(key)
+	return tx.recordRead(key, revision, found)
+}
+
+func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	currentRevision, currentFound, err := tx.currentReadRevision(key)
+	if err != nil {
+		return err
+	}
+	return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, currentFound)
+}
+
+func (tx *ConditionalTxn) currentReadRevision(key []byte) (page.EntryRevision, bool, error) {
+	snap := tx.db.AcquireSnapshot()
+	if snap == nil {
+		return page.LegacyEntryRevision, false, ErrClosed
+	}
+	defer snap.Close()
+	entry, err := snap.GetEntry(key)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return page.LegacyEntryRevision, false, nil
+	}
+	if err != nil {
+		return page.LegacyEntryRevision, false, err
+	}
+	return entry.Revision, entry.Flags&node.FlagTombstone == 0, nil
+}
+
+func (tx *ConditionalTxn) validateCurrentReadVersionMatch(key []byte, wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
+	if wantFound == gotFound && wantRevision == gotRevision {
+		return nil
+	}
+	if tx.db.conditionalReadKeyChangedSince(tx.startCommitSeq, key) {
+		return nil
+	}
+	return ErrConcurrentModification
 }
 
 // Has reports whether key exists in the opening snapshot and records the key as
@@ -708,6 +777,27 @@ func (db *DB) conditionalReadSetChangedSince(start uint64, reads []conditionalRe
 			if r.seq > start && conditionalKeyInStringRange(reads[i].key, r.start, r.end) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func (db *DB) conditionalReadKeyChangedSince(start uint64, key []byte) bool {
+	if db == nil {
+		return false
+	}
+	db.conditionalOracle.mu.Lock()
+	defer db.conditionalOracle.mu.Unlock()
+	if db.conditionalOracle.rootSeq > start {
+		return true
+	}
+	if db.conditionalOracle.recent[conditionalBytesString(key)] > start {
+		return true
+	}
+	for i := range db.conditionalOracle.ranges {
+		r := db.conditionalOracle.ranges[i]
+		if r.seq > start && conditionalKeyInStringRange(key, r.start, r.end) {
+			return true
 		}
 	}
 	return false

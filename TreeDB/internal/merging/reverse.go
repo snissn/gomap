@@ -127,6 +127,10 @@ func (mi *ReverseMergingIterator) Next() {
 	if !mi.valid {
 		panic("merging iterator invalid")
 	}
+	if mi.err != nil {
+		mi.valid = false
+		return
+	}
 
 	if mi.hasCur {
 		mi.cur.iter.Next()
@@ -220,7 +224,11 @@ func (mi *ReverseMergingIterator) Value() []byte {
 	if !mi.hasCur {
 		return nil
 	}
-	return mi.cur.iter.UnsafeValue()
+	value := mi.cur.iter.UnsafeValue()
+	if err := mi.cur.iter.Error(); err != nil {
+		mi.err = err
+	}
+	return value
 }
 
 func (mi *ReverseMergingIterator) KeyCopy(dst []byte) []byte {
@@ -237,7 +245,15 @@ func (mi *ReverseMergingIterator) ValueCopy(dst []byte) []byte {
 	return append(dst[:0], mi.Value()...)
 }
 
-func (mi *ReverseMergingIterator) Error() error { return mi.err }
+func (mi *ReverseMergingIterator) Error() error {
+	if mi.err != nil {
+		return mi.err
+	}
+	if mi.hasCur {
+		return mi.cur.iter.Error()
+	}
+	return mi.err
+}
 
 func (mi *ReverseMergingIterator) Close() error {
 	var firstErr error
@@ -285,6 +301,10 @@ func NewReverseTwoWayMerger(src1, src2 iterator.UnsafeIterator, start, end []byt
 func (m *ReverseTwoWayMerger) Next() {
 	if !m.valid {
 		panic("merging iterator invalid")
+	}
+	if m.err != nil {
+		m.valid = false
+		return
 	}
 	if m.cur != nil {
 		m.cur.Next()
@@ -357,7 +377,11 @@ func (m *ReverseTwoWayMerger) Value() []byte {
 	if m.cur == nil {
 		return nil
 	}
-	return m.cur.UnsafeValue()
+	value := m.cur.UnsafeValue()
+	if err := m.cur.Error(); err != nil {
+		m.err = err
+	}
+	return value
 }
 
 func (m *ReverseTwoWayMerger) KeyCopy(dst []byte) []byte {
@@ -374,7 +398,15 @@ func (m *ReverseTwoWayMerger) ValueCopy(dst []byte) []byte {
 	return append(dst[:0], m.Value()...)
 }
 
-func (m *ReverseTwoWayMerger) Error() error { return m.err }
+func (m *ReverseTwoWayMerger) Error() error {
+	if m.err != nil {
+		return m.err
+	}
+	if m.cur != nil {
+		return m.cur.Error()
+	}
+	return m.err
+}
 
 func (m *ReverseTwoWayMerger) Close() error {
 	var firstErr error

@@ -1095,9 +1095,9 @@ func openHashicorpRaftTestDBAndFSM(tb testing.TB, cfg Config) (*backenddb.DB, *r
 
 func hashicorpRaftFastTestConfig() *hraft.Config {
 	conf := hraft.DefaultConfig()
-	conf.HeartbeatTimeout = 200 * time.Millisecond
-	conf.ElectionTimeout = 200 * time.Millisecond
-	conf.LeaderLeaseTimeout = 100 * time.Millisecond
+	conf.HeartbeatTimeout = 500 * time.Millisecond
+	conf.ElectionTimeout = 500 * time.Millisecond
+	conf.LeaderLeaseTimeout = 250 * time.Millisecond
 	conf.CommitTimeout = 10 * time.Millisecond
 	conf.SnapshotInterval = time.Hour
 	conf.SnapshotThreshold = ^uint64(0)

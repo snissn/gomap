@@ -24,6 +24,8 @@ type Snapshot interface {
 	Has(key []byte) (bool, error)
 	HasMany(keys [][]byte) ([]bool, error)
 	HasPrefixes(prefixes [][]byte) ([]bool, error)
+	Iterate(start, end []byte, fn func(key, value []byte) error) error
+	ReverseIterate(start, end []byte, fn func(key, value []byte) error) error
 
 	GetEntry(key []byte) (node.LeafEntry, error)
 	GetEntryExact(key []byte) (node.LeafEntry, error)

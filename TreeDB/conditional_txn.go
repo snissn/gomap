@@ -1,6 +1,185 @@
 package treedb
 
-import "github.com/snissn/gomap/TreeDB/page"
+import (
+	"errors"
+
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+)
+
+// Snapshot returns the transaction's pinned opening snapshot when available.
+// NewConditionalTxnWithSnapshot and InitConditionalTxnWithSnapshot always
+// return a transaction with a snapshot. The transaction owns the snapshot and
+// closes it on Commit, CommitSync, or Close.
+//
+// Point and versioned point reads are supported. Range iteration on this
+// transaction-owned snapshot fails closed because conditional range guards are
+// not part of the public transaction contract yet.
+func (tx *ConditionalTxn) Snapshot() Snapshot {
+	if tx == nil || !tx.snapshotExposed {
+		return nil
+	}
+	if tx.cachedActive {
+		snap := tx.cached.Snapshot()
+		if snap == nil {
+			return nil
+		}
+		return conditionalTxnSnapshot{Snapshot: snap, tx: tx}
+	}
+	if tx.backend != nil {
+		snap := tx.backend.Snapshot()
+		if snap == nil {
+			return nil
+		}
+		return conditionalTxnSnapshot{Snapshot: snap, tx: tx}
+	}
+	return nil
+}
+
+type conditionalTxnSnapshot struct {
+	Snapshot
+	tx *ConditionalTxn
+}
+
+// Close is a no-op. The transaction owns the underlying snapshot and closes it
+// on Commit, CommitSync, or Close; callers can safely defer this method without
+// releasing the transaction-owned snapshot prematurely.
+func (s conditionalTxnSnapshot) Close() error {
+	return nil
+}
+
+func (s conditionalTxnSnapshot) Get(key []byte) ([]byte, error) {
+	value, _, err := s.GetVersioned(key)
+	return value, err
+}
+
+func (s conditionalTxnSnapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	out, _, err := s.GetVersionedAppend(key, dst)
+	return out, err
+}
+
+func (s conditionalTxnSnapshot) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
+	out, revision, err := s.GetVersionedAppend(key, nil)
+	if err != nil {
+		return nil, revision, err
+	}
+	if len(out) == 0 {
+		return []byte{}, revision, nil
+	}
+	if cap(out) == len(out) {
+		return out, revision, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, revision, nil
+}
+
+func (s conditionalTxnSnapshot) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
+	if s.tx == nil || s.Snapshot == nil {
+		return dst, LegacyEntryRevision, ErrConditionalTxnClosed
+	}
+	key = normalizeRawKVPointKey(key)
+	out, revision, err := s.Snapshot.GetVersionedAppend(key, dst)
+	if errors.Is(err, ErrKeyNotFound) {
+		if recErr := s.tx.recordSnapshotReadVersion(key, revision, false); recErr != nil {
+			return dst, revision, recErr
+		}
+		return dst, revision, err
+	}
+	if err != nil {
+		return dst, revision, err
+	}
+	if recErr := s.tx.recordSnapshotReadVersion(key, revision, true); recErr != nil {
+		return dst, revision, recErr
+	}
+	return out, revision, nil
+}
+
+func (s conditionalTxnSnapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	if fn == nil {
+		return errors.New("treedb: GetManyView nil callback")
+	}
+	for i, key := range keys {
+		key = normalizeRawKVPointKey(key)
+		value, _, err := s.GetVersionedAppend(key, nil)
+		if errors.Is(err, ErrKeyNotFound) {
+			if err := fn(i, key, nil, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if len(value) == 0 {
+			value = []byte{}
+		}
+		if err := fn(i, key, value, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s conditionalTxnSnapshot) GetUnsafe(key []byte) ([]byte, error) {
+	return s.Get(key)
+}
+
+func (s conditionalTxnSnapshot) Has(key []byte) (bool, error) {
+	_, _, err := s.GetVersionedAppend(key, nil)
+	if errors.Is(err, ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s conditionalTxnSnapshot) HasMany(keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	for i, key := range keys {
+		found, err := s.Has(key)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = found
+	}
+	return out, nil
+}
+
+func (s conditionalTxnSnapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	return nil, ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) GetEntry(key []byte) (node.LeafEntry, error) {
+	return node.LeafEntry{}, ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
+	return node.LeafEntry{}, ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) Iterate(start, end []byte, fn func(key, value []byte) error) error {
+	return ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) error) error {
+	return ErrConditionalTxnUnsupported
+}
+
+func (tx *ConditionalTxn) recordSnapshotReadVersion(key []byte, revision EntryRevision, found bool) error {
+	if tx == nil {
+		return ErrConditionalTxnClosed
+	}
+	if tx.cachedActive {
+		return tx.cached.RecordReadVersion(key, page.EntryRevision(revision), found)
+	}
+	if tx.backend != nil {
+		return tx.backend.RecordReadVersion(key, page.EntryRevision(revision), found)
+	}
+	return ErrConditionalTxnClosed
+}
 
 // ReserveReadSet reserves read-precondition capacity for high-fanout
 // transactions. It is optional and does not change transaction semantics.
@@ -74,6 +253,22 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevi
 		return tx.backend.GetVersionedAppend(key, dst)
 	}
 	return dst, LegacyEntryRevision, ErrConditionalTxnClosed
+}
+
+// RequireReadVersion records a caller-observed key revision as a commit
+// precondition. It is intended for values read through an external pinned
+// snapshot owned by the caller.
+func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision EntryRevision, found bool) error {
+	if tx == nil {
+		return ErrConditionalTxnClosed
+	}
+	if tx.cachedActive {
+		return tx.cached.RequireReadVersion(key, page.EntryRevision(revision), found)
+	}
+	if tx.backend != nil {
+		return tx.backend.RequireReadVersion(key, page.EntryRevision(revision), found)
+	}
+	return ErrConditionalTxnClosed
 }
 
 // Has reports whether key exists in the transaction-visible state and records
@@ -217,6 +412,7 @@ func (tx *ConditionalTxn) Commit() error {
 			_ = tx.cached.Close()
 		}
 		tx.cachedActive = false
+		tx.snapshotExposed = false
 		return err
 	}
 	if tx.backend != nil {
@@ -225,6 +421,7 @@ func (tx *ConditionalTxn) Commit() error {
 			_ = tx.backend.Close()
 		}
 		tx.backend = nil
+		tx.snapshotExposed = false
 		return err
 	}
 	return ErrConditionalTxnClosed
@@ -242,6 +439,7 @@ func (tx *ConditionalTxn) CommitSync() error {
 			_ = tx.cached.Close()
 		}
 		tx.cachedActive = false
+		tx.snapshotExposed = false
 		return err
 	}
 	if tx.backend != nil {
@@ -250,6 +448,7 @@ func (tx *ConditionalTxn) CommitSync() error {
 			_ = tx.backend.Close()
 		}
 		tx.backend = nil
+		tx.snapshotExposed = false
 		return err
 	}
 	return ErrConditionalTxnClosed
@@ -263,11 +462,13 @@ func (tx *ConditionalTxn) Close() error {
 	if tx.cachedActive {
 		err := tx.cached.Close()
 		tx.cachedActive = false
+		tx.snapshotExposed = false
 		return err
 	}
 	if tx.backend != nil {
 		err := tx.backend.Close()
 		tx.backend = nil
+		tx.snapshotExposed = false
 		return err
 	}
 	return nil

@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -29,6 +30,7 @@ const (
 type ConditionalTxn struct {
 	db       *DB
 	batch    *Batch
+	snap     *Snapshot
 	id       uint64
 	startSeq uint64
 
@@ -74,6 +76,19 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 // InitConditionalTxn initializes tx as a cached conditional transaction.
 // Callers must pass zero-value or closed transaction storage.
 func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
+	return db.initConditionalTxn(tx, false)
+}
+
+// InitConditionalTxnWithSnapshot initializes tx and pins the opening snapshot.
+// Point reads use that snapshot. Public callers must not rely on range scans as
+// commit preconditions until native conditional range guards are supported. The
+// snapshot is owned by the transaction and closed by Commit, CommitSync, or
+// Close.
+func (db *DB) InitConditionalTxnWithSnapshot(tx *ConditionalTxn) error {
+	return db.initConditionalTxn(tx, true)
+}
+
+func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if tx == nil {
 		return backenddb.ErrConditionalTxnClosed
 	}
@@ -94,9 +109,19 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 	start := db.conditionalSeq.Load()
 	db.conditionalSetTxnStart(id, start)
 
+	var snap *Snapshot
+	if withSnapshot {
+		snap = db.AcquireSnapshot()
+		if snap == nil {
+			db.conditionalUnregisterTxn(id)
+			return backenddb.ErrClosed
+		}
+	}
+
 	*tx = ConditionalTxn{
 		db:       db,
 		batch:    db.NewBatch(),
+		snap:     snap,
 		id:       id,
 		startSeq: start,
 	}
@@ -104,6 +129,16 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 	tx.keyArena = tx.inlineKeys[:0]
 	db.conditionalTxnStarted.Add(1)
 	return nil
+}
+
+// Snapshot returns the transaction's pinned opening snapshot when this
+// transaction was initialized with InitConditionalTxnWithSnapshot. The
+// transaction owns the snapshot and closes it on Commit, CommitSync, or Close.
+func (tx *ConditionalTxn) Snapshot() *Snapshot {
+	if tx == nil || tx.closed {
+		return nil
+	}
+	return tx.snap
 }
 
 // ReserveReadSet reserves read-precondition capacity for high-fanout
@@ -170,12 +205,12 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 		}
 		return out, revision, nil
 	}
-	out, revision, err := tx.db.GetVersionedAppend(key, dst)
+	out, revision, err := tx.getCommittedVersionedAppend(key, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		if recErr := tx.recordRead(key, revision, false); recErr != nil {
 			return dst, revision, recErr
 		}
-		if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+		if tx.snap == nil && tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
 			return dst, revision, backenddb.ErrConcurrentModification
 		}
 		return dst, revision, err
@@ -186,10 +221,76 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 	if recErr := tx.recordRead(key, revision, true); recErr != nil {
 		return dst, revision, recErr
 	}
-	if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+	if tx.snap == nil && tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
 		return dst, revision, backenddb.ErrConcurrentModification
 	}
 	return out, revision, nil
+}
+
+// RequireReadVersion records a caller-observed key revision as a commit
+// precondition. It is intended for values read through an external pinned
+// snapshot owned by the caller.
+func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	if err := tx.ensureOpen(); err != nil {
+		return err
+	}
+	key = normalizeRawKVPointKey(key)
+	if err := tx.validateCurrentReadVersion(key, revision, found); err != nil {
+		return err
+	}
+	return tx.recordRead(key, revision, found)
+}
+
+// RecordReadVersion records an opening-snapshot read precondition without
+// validating current state. It is for transaction-owned snapshot reads that
+// should keep returning the pinned view and defer conflicts until commit.
+func (tx *ConditionalTxn) RecordReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	if err := tx.ensureOpen(); err != nil {
+		return err
+	}
+	key = normalizeRawKVPointKey(key)
+	return tx.recordRead(key, revision, found)
+}
+
+func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	currentRevision, currentFound, err := tx.currentReadRevision(key)
+	if err != nil {
+		return err
+	}
+	return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, currentFound)
+}
+
+func (tx *ConditionalTxn) currentReadRevision(key []byte) (page.EntryRevision, bool, error) {
+	snap := tx.db.AcquireSnapshot()
+	if snap == nil {
+		return page.LegacyEntryRevision, false, backenddb.ErrClosed
+	}
+	defer snap.Close()
+	entry, err := snap.GetEntry(key)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return page.LegacyEntryRevision, false, nil
+	}
+	if err != nil {
+		return page.LegacyEntryRevision, false, err
+	}
+	return entry.Revision, entry.Flags&node.FlagTombstone == 0, nil
+}
+
+func (tx *ConditionalTxn) validateCurrentReadVersionMatch(key []byte, wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
+	if wantFound == gotFound && wantRevision == gotRevision {
+		return nil
+	}
+	if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+		return nil
+	}
+	return backenddb.ErrConcurrentModification
+}
+
+func (tx *ConditionalTxn) getCommittedVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	if tx.snap != nil {
+		return tx.snap.GetVersionedAppend(key, dst)
+	}
+	return tx.db.GetVersionedAppend(key, dst)
 }
 
 func (tx *ConditionalTxn) stagedReadAppend(key, dst []byte) ([]byte, page.EntryRevision, bool, bool, error) {
@@ -378,10 +479,12 @@ func (tx *ConditionalTxn) finish() error {
 	id := tx.id
 	tx.id = 0
 	var err error
+	if tx.snap != nil {
+		err = errors.Join(err, tx.snap.Close())
+		tx.snap = nil
+	}
 	if tx.batch != nil {
-		if closeErr := tx.batch.Close(); err == nil {
-			err = closeErr
-		}
+		err = errors.Join(err, tx.batch.Close())
 		tx.batch = nil
 	}
 	if db != nil && id != 0 {
