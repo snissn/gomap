@@ -99,28 +99,49 @@ BSON-derived stored documents for direct collection inserts.
 
 ### Local Route Evidence Mode
 
-`-route-mode ring` is a TreeDB-only, official-driver smoke mode for deterministic
-local token-ring routing evidence. It does not enable network forwarding,
-fanout/splitting, cross-shard transactions, or production horizontal scaleout.
-The benchmark still performs local Mongo gateway `InsertOne` calls; before each
-single-document insert it runs route preflight against a bench-local token/ring
-catalog and records which logical group and token partition the explicit `_id`
-would route to. A single multi-token preflight probe is expected to fail with the
-existing fanout rejection so token/ring multi-ID writes remain rejected before
-submit.
+`-route-mode ring` is a TreeDB-only, official-driver evidence mode for
+deterministic local token-ring routing. It does not enable network forwarding,
+fanout/splitting, remote leader forwarding, scatter-gather reads,
+cross-shard transactions, global unique-index semantics, shard keys beyond
+explicit `_id`, or production horizontal scaleout. The benchmark still performs
+local Mongo gateway `InsertOne` calls; before each single-document insert it
+runs route preflight against a bench-local token/ring catalog and records which
+logical group, leader hint, and token partition the explicit `_id` would route
+to. N-group runs also issue a multi-token preflight probe that is expected to
+fail with the existing fanout rejection before submit.
+
+Use a 1-group/1-partition run as the local baseline:
 
 ```sh
 GOWORK=off go run ./cmd/mongo_gateway_bench \
   -target treedb \
   -route-mode ring \
-  -route-groups 2 \
-  -route-partitions 8 \
-  -documents 256 \
-  -reads 0 \
-  -range-reads 0 \
-  -updates 0 \
-  -deletes 0 \
+  -route-groups 1 \
+  -route-partitions 1 \
+  -documents 10000 \
+  -batch-size 100 \
+  -insert-producers 4 \
+  -reads 0 -range-reads 0 -updates 0 -deletes 0 \
   -secondary-indexes 0 \
+  -prebuild-documents \
+  -treedb-maintenance none \
+  -format json
+```
+
+Compare it with an N-group/N-partition local route run:
+
+```sh
+GOWORK=off go run ./cmd/mongo_gateway_bench \
+  -target treedb \
+  -route-mode ring \
+  -route-groups 4 \
+  -route-partitions 16 \
+  -documents 10000 \
+  -batch-size 100 \
+  -insert-producers 4 \
+  -reads 0 -range-reads 0 -updates 0 -deletes 0 \
+  -secondary-indexes 0 \
+  -prebuild-documents \
   -treedb-maintenance none \
   -format json
 ```
@@ -128,9 +149,10 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
 JSON output includes top-level `route_mode`, `route_group_count`, and
 `route_partition_count` fields. When ring mode is enabled, `route_evidence`
 contains `write_shape=single_document_insert`, `local_only=true`,
-`preflight_success`, `fanout_rejected`, `group_hits`, `partition_hits`, and the
-fanout rejection text. Treat those fields as local deterministic routing
-distribution evidence only, not as a cluster throughput or scaleout claim.
+`preflight_success`, `fanout_rejected`, `group_hits`, `leader_hits`,
+`partition_hits`, and any fanout rejection text. Treat those fields as local
+deterministic routing distribution evidence only, not as a cluster throughput or
+scaleout claim.
 
 Use `-insert-producers N` to split the insert load phase across producer
 goroutines. The effective producer count is capped at the number of insert

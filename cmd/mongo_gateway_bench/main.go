@@ -252,6 +252,7 @@ type routeEvidence struct {
 	PreflightSuccess     int            `json:"preflight_success"`
 	FanoutRejected       int            `json:"fanout_rejected"`
 	GroupHits            map[string]int `json:"group_hits,omitempty"`
+	LeaderHits           map[string]int `json:"leader_hits,omitempty"`
 	PartitionHits        map[string]int `json:"partition_hits,omitempty"`
 	UnsupportedFanoutErr string         `json:"unsupported_fanout_error,omitempty"`
 }
@@ -534,7 +535,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
 	fs.BoolVar(&cfg.MongoCompact, "mongo-compact", false, "compact the MongoDB collection before final stats collection")
 	fs.StringVar(&cfg.RouteMode, "route-mode", cfg.RouteMode, "local route evidence mode: off or ring")
-	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for -route-mode ring; must be >= 2")
+	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for -route-mode ring; must be >= 1")
 	fs.IntVar(&cfg.RoutePartitionCount, "route-partitions", cfg.RoutePartitionCount, "token partition count for -route-mode ring; must be >= route-groups")
 	fs.StringVar(&cfg.TreeDBDir, "treedb-dir", "", "TreeDB directory for -target treedb; empty uses a temp dir")
 	fs.BoolVar(&cfg.KeepTreeDBDir, "keep-treedb-dir", false, "keep an auto-created TreeDB temp dir after the run")
@@ -664,8 +665,8 @@ func parseConfig(args []string) (config, error) {
 		if cfg.ClientMode != clientModeDriver {
 			return config{}, errors.New("route-mode ring is only supported with -client-mode driver")
 		}
-		if cfg.RouteGroupCount < 2 {
-			return config{}, errors.New("route-groups must be >= 2 for route-mode ring")
+		if cfg.RouteGroupCount < 1 {
+			return config{}, errors.New("route-groups must be >= 1 for route-mode ring")
 		}
 		if cfg.RoutePartitionCount < cfg.RouteGroupCount {
 			return config{}, errors.New("route-partitions must be >= route-groups for route-mode ring")
@@ -3660,6 +3661,7 @@ type benchmarkRingRouter struct {
 	fanoutRejected       int
 	unsupportedFanoutErr string
 	groupHits            map[string]int
+	leaderHits           map[string]int
 	partitionHits        map[string]int
 }
 
@@ -3668,6 +3670,7 @@ func newBenchmarkRingRouter(groupCount, partitionCount int) *benchmarkRingRouter
 		groupCount:     groupCount,
 		partitionCount: partitionCount,
 		groupHits:      make(map[string]int, groupCount),
+		leaderHits:     make(map[string]int, groupCount),
 		partitionHits:  make(map[string]int, partitionCount),
 	}
 }
@@ -3788,6 +3791,7 @@ func (r *benchmarkRingRouter) recordPreflightSuccess(target nativewire.ClusterRo
 	defer r.mu.Unlock()
 	r.preflightSuccess++
 	r.groupHits[target.GroupID]++
+	r.leaderHits[target.LeaderHint]++
 	r.partitionHits[target.PartitionID]++
 }
 
@@ -3795,9 +3799,9 @@ func (r *benchmarkRingRouter) probeFanoutRejection(ctx context.Context, cfg conf
 	if r == nil {
 		return errors.New("missing benchmark ring router")
 	}
-	tokens := []uint64{
-		benchmarkRingPartitionMidpointToken(0, r.partitionCount),
-		benchmarkRingPartitionMidpointToken(1, r.partitionCount),
+	tokens, ok := r.fanoutProbeTokens()
+	if !ok {
+		return nil
 	}
 	_, _, err := nativewire.PreflightClusterRoute(ctx, r, nativewire.ClusterRouteRequest{
 		Database:    cfg.Database,
@@ -3815,6 +3819,24 @@ func (r *benchmarkRingRouter) probeFanoutRejection(ctx context.Context, cfg conf
 	r.unsupportedFanoutErr = err.Error()
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *benchmarkRingRouter) fanoutProbeTokens() ([]uint64, bool) {
+	if r == nil || r.groupCount < 2 || r.partitionCount < 2 {
+		return nil, false
+	}
+	firstPartition := 0
+	firstGroup := r.groupForPartition(firstPartition)
+	for partition := 1; partition < r.partitionCount; partition++ {
+		if r.groupForPartition(partition) == firstGroup {
+			continue
+		}
+		return []uint64{
+			benchmarkRingPartitionMidpointToken(firstPartition, r.partitionCount),
+			benchmarkRingPartitionMidpointToken(partition, r.partitionCount),
+		}, true
+	}
+	return nil, false
 }
 
 func (r *benchmarkRingRouter) evidence(writes int) *routeEvidence {
@@ -3835,6 +3857,7 @@ func (r *benchmarkRingRouter) evidence(writes int) *routeEvidence {
 		PreflightSuccess:     r.preflightSuccess,
 		FanoutRejected:       r.fanoutRejected,
 		GroupHits:            cloneStringIntMap(r.groupHits),
+		LeaderHits:           cloneStringIntMap(r.leaderHits),
 		PartitionHits:        cloneStringIntMap(r.partitionHits),
 		UnsupportedFanoutErr: r.unsupportedFanoutErr,
 	}
@@ -6971,11 +6994,11 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		fmt.Fprintln(out)
 		if result.RouteEvidence != nil {
-			fmt.Fprintf(out, "route_evidence mode=%s placement=%s route_key=%s write_shape=%s local_only=%t writes=%d preflight_success=%d fanout_rejected=%d group_hits=%v partition_hits=%v\n",
+			fmt.Fprintf(out, "route_evidence mode=%s placement=%s route_key=%s write_shape=%s local_only=%t writes=%d preflight_success=%d fanout_rejected=%d group_hits=%v leader_hits=%v partition_hits=%v\n",
 				result.RouteEvidence.Mode, result.RouteEvidence.PlacementMode, result.RouteEvidence.RouteKey,
 				result.RouteEvidence.WriteShape, result.RouteEvidence.LocalOnly, result.RouteEvidence.Writes,
 				result.RouteEvidence.PreflightSuccess, result.RouteEvidence.FanoutRejected,
-				result.RouteEvidence.GroupHits, result.RouteEvidence.PartitionHits)
+				result.RouteEvidence.GroupHits, result.RouteEvidence.LeaderHits, result.RouteEvidence.PartitionHits)
 			if result.RouteEvidence.UnsupportedFanoutErr != "" {
 				fmt.Fprintf(out, "route_fanout_rejection=%q\n", result.RouteEvidence.UnsupportedFanoutErr)
 			}
