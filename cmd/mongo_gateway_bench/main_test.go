@@ -23,6 +23,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
+	nativewire "github.com/snissn/gomap/TreeDB/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/event"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -1041,6 +1042,142 @@ func TestParseConfigValidation(t *testing.T) {
 	}
 }
 
+func TestParseConfigRouteModeRing(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-route-mode", "ring",
+		"-route-groups", "3",
+		"-route-partitions", "9",
+		"-documents", "12",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-secondary-indexes", "0",
+		"-treedb-maintenance", treeDBMaintenanceNone,
+	})
+	if err != nil {
+		t.Fatalf("parse route-mode ring config: %v", err)
+	}
+	if cfg.RouteMode != routeModeRing || cfg.RouteGroupCount != 3 || cfg.RoutePartitionCount != 9 {
+		t.Fatalf("unexpected route config: %+v", cfg)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "bad mode",
+			args: []string{"-route-mode", "bad"},
+			want: "unknown route-mode",
+		},
+		{
+			name: "mongo target",
+			args: []string{"-target", "mongo", "-route-mode", "ring"},
+			want: "route-mode is only supported with -target treedb",
+		},
+		{
+			name: "direct client",
+			args: []string{"-target", "treedb", "-client-mode", "direct", "-route-mode", "ring"},
+			want: "route-mode ring is only supported with -client-mode driver",
+		},
+		{
+			name: "too few groups",
+			args: []string{"-target", "treedb", "-route-mode", "ring", "-route-groups", "1"},
+			want: "route-groups must be >= 2",
+		},
+		{
+			name: "too few partitions",
+			args: []string{"-target", "treedb", "-route-mode", "ring", "-route-groups", "3", "-route-partitions", "2"},
+			want: "route-partitions must be >= route-groups",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parseConfig(tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("parseConfig(%v) err=%v want containing %q", tt.args, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBenchmarkRingRouterPreflightDistributionAndFanout(t *testing.T) {
+	ctx := context.Background()
+	router := newBenchmarkRingRouter(2, 4)
+	for partition := 0; partition < 4; partition++ {
+		token := benchmarkRingPartitionMidpointToken(partition, 4)
+		target, routed, err := nativewire.PreflightClusterRoute(ctx, router, nativewire.ClusterRouteRequest{
+			Database:    "bench",
+			Catalog:     "default",
+			Collection:  "docs",
+			CommandName: "insert_one",
+			Shape:       nativewire.ClusterRouteShapeToken,
+			TokenKnown:  true,
+			Token:       token,
+		})
+		if err != nil {
+			t.Fatalf("preflight partition %d: %v", partition, err)
+		}
+		if !routed {
+			t.Fatalf("preflight partition %d did not route", partition)
+		}
+		if target.PlacementMode != routeModeRing || target.RouteKey != "_id" || target.Shape != nativewire.ClusterRouteShapeToken {
+			t.Fatalf("partition %d route target=%+v", partition, target)
+		}
+		if target.Token != token || !target.TokenKnown {
+			t.Fatalf("partition %d token target=%+v want token %d", partition, target, token)
+		}
+		if got, want := target.PartitionID, benchmarkRingPartitionID(partition); got != want {
+			t.Fatalf("partition id=%q want %q", got, want)
+		}
+		if got, want := target.GroupID, benchmarkRingGroupID(partition%2); got != want {
+			t.Fatalf("group id=%q want %q", got, want)
+		}
+		router.recordPreflightSuccess(target)
+	}
+
+	sameGroupTokens := []uint64{
+		benchmarkRingPartitionMidpointToken(0, 4),
+		benchmarkRingPartitionMidpointToken(2, 4),
+	}
+	_, _, err := nativewire.PreflightClusterRoute(ctx, router, nativewire.ClusterRouteRequest{
+		Database:    "bench",
+		Catalog:     "default",
+		Collection:  "docs",
+		CommandName: "insert_batch",
+		Shape:       nativewire.ClusterRouteShapeTokenBatch,
+		Tokens:      sameGroupTokens,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires command split before submit") {
+		t.Fatalf("same-group multi-token preflight err=%v want command split rejection", err)
+	}
+
+	if err := router.probeFanoutRejection(ctx, config{Database: "bench", Collection: "docs"}); err != nil {
+		t.Fatalf("probe fanout rejection: %v", err)
+	}
+	evidence := router.evidence(4)
+	if evidence.PreflightSuccess != 4 || evidence.FanoutRejected != 1 {
+		t.Fatalf("unexpected evidence counters: %+v", evidence)
+	}
+	wantGroupHits := map[string]int{"group-00": 2, "group-01": 2}
+	if !reflect.DeepEqual(evidence.GroupHits, wantGroupHits) {
+		t.Fatalf("group hits=%v want %v", evidence.GroupHits, wantGroupHits)
+	}
+	wantPartitionHits := map[string]int{
+		"token-000000": 1,
+		"token-000001": 1,
+		"token-000002": 1,
+		"token-000003": 1,
+	}
+	if !reflect.DeepEqual(evidence.PartitionHits, wantPartitionHits) {
+		t.Fatalf("partition hits=%v want %v", evidence.PartitionHits, wantPartitionHits)
+	}
+	if !strings.Contains(evidence.UnsupportedFanoutErr, "requires fanout before submit") {
+		t.Fatalf("fanout rejection=%q want fanout rejection", evidence.UnsupportedFanoutErr)
+	}
+}
+
 func TestConcurrentUpdateOperationVariesByWriterSweepCell(t *testing.T) {
 	if got, want := concurrentUpdateOperation(7, 1, 100), 107; got != want {
 		t.Fatalf("w1 update operation = %d, want %d", got, want)
@@ -1791,6 +1928,79 @@ func TestTreeDBProfileSmokeBench(t *testing.T) {
 	}
 	ops := runTreeDBProfileSmoke(t, treedb.ProfileBench)
 	t.Logf("bench load_insert_many ops/sec=%.1f", ops)
+}
+
+func TestTreeDBRoutedRingModeSmoke(t *testing.T) {
+	if testing.Short() {
+		t.Skip("routed ring mode smoke skipped in short mode")
+	}
+	cfg, err := parseConfig([]string{
+		"-target", "treedb",
+		"-route-mode", "ring",
+		"-route-groups", "2",
+		"-route-partitions", "4",
+		"-documents", "64",
+		"-batch-size", "16",
+		"-insert-producers", "2",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-deletes", "0",
+		"-secondary-indexes", "0",
+		"-treedb-maintenance", treeDBMaintenanceNone,
+		"-prebuild-documents",
+		"-timeout", "0",
+		"-format", "json",
+	})
+	if err != nil {
+		t.Fatalf("parse routed ring smoke config: %v", err)
+	}
+	target, err := openTarget(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+			t.Errorf("cleanup target: %v", err)
+		}
+	}()
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
+	if err != nil {
+		t.Fatalf("run routed ring benchmark: %v", err)
+	}
+	if result.RouteMode != routeModeRing || result.RouteGroupCount != 2 || result.RoutePartitionCount != 4 {
+		t.Fatalf("unexpected route result config: %+v", result)
+	}
+	if result.RouteEvidence == nil {
+		t.Fatalf("route evidence missing: %+v", result)
+	}
+	evidence := result.RouteEvidence
+	if evidence.PreflightSuccess != cfg.Documents || evidence.Writes != cfg.Documents || evidence.FanoutRejected != 1 {
+		t.Fatalf("unexpected route evidence: %+v", evidence)
+	}
+	if evidence.WriteShape != "single_document_insert" || !evidence.LocalOnly {
+		t.Fatalf("unexpected route evidence shape/boundary: %+v", evidence)
+	}
+	if got := evidence.GroupHits["group-00"] + evidence.GroupHits["group-01"]; got != cfg.Documents {
+		t.Fatalf("group hit total=%d want %d hits=%v", got, cfg.Documents, evidence.GroupHits)
+	}
+	if evidence.GroupHits["group-00"] == 0 || evidence.GroupHits["group-01"] == 0 {
+		t.Fatalf("route smoke did not hit both groups: %+v", evidence)
+	}
+	if !strings.Contains(evidence.UnsupportedFanoutErr, "requires fanout before submit") {
+		t.Fatalf("fanout rejection=%q want fanout rejection", evidence.UnsupportedFanoutErr)
+	}
+	for _, phase := range result.Phases {
+		if phase.Name == "load_insert_one_routed_ring" {
+			if phase.OpsPerSecond <= 0 || phase.SampledNsPerOp <= 0 {
+				t.Fatalf("routed load phase metrics missing: %+v", phase)
+			}
+			return
+		}
+	}
+	t.Fatalf("load_insert_one_routed_ring phase missing: %+v", result.Phases)
 }
 
 func TestTreeDBClientModeSmoke(t *testing.T) {
