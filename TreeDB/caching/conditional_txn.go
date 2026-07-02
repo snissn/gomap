@@ -243,19 +243,22 @@ func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevi
 func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
 	_, currentRevision, err := tx.db.GetVersionedAppend(key, nil)
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return conditionalReadVersionMismatch(revision, found, currentRevision, false)
+		return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, false)
 	}
 	if err != nil {
 		return err
 	}
-	return conditionalReadVersionMismatch(revision, found, currentRevision, true)
+	return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, true)
 }
 
-func conditionalReadVersionMismatch(wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
-	if wantFound != gotFound || wantRevision != gotRevision {
-		return backenddb.ErrConcurrentModification
+func (tx *ConditionalTxn) validateCurrentReadVersionMatch(key []byte, wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
+	if wantFound == gotFound && wantRevision == gotRevision {
+		return nil
 	}
-	return nil
+	if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+		return nil
+	}
+	return backenddb.ErrConcurrentModification
 }
 
 func (tx *ConditionalTxn) getCommittedVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {

@@ -199,8 +199,14 @@ func TestConditionalTxnRequireReadVersionConflictsAfterSnapshotRead(t *testing.T
 	if !bytes.Equal(gotValue, []byte("1")) {
 		t.Fatalf("snapshot GetVersionedAppend=%q, want 1", gotValue)
 	}
-	if err := tx.RequireReadVersion([]byte("snap/a"), revision, true); !errors.Is(err, ErrConcurrentModification) {
-		t.Fatalf("tx.RequireReadVersion error=%v, want ErrConcurrentModification", err)
+	if err := tx.RequireReadVersion([]byte("snap/a"), revision, true); err != nil {
+		t.Fatalf("tx.RequireReadVersion: %v", err)
+	}
+	if err := tx.Set([]byte("snap/b"), []byte("inside")); err != nil {
+		t.Fatalf("tx.Set: %v", err)
+	}
+	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("tx.Commit error=%v, want ErrConcurrentModification", err)
 	}
 }
 

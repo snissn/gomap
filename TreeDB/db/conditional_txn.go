@@ -238,19 +238,22 @@ func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevi
 func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
 	_, currentRevision, err := tx.db.GetVersionedAppend(key, nil)
 	if errors.Is(err, tree.ErrKeyNotFound) {
-		return conditionalReadVersionMismatch(revision, found, currentRevision, false)
+		return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, false)
 	}
 	if err != nil {
 		return err
 	}
-	return conditionalReadVersionMismatch(revision, found, currentRevision, true)
+	return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, true)
 }
 
-func conditionalReadVersionMismatch(wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
-	if wantFound != gotFound || wantRevision != gotRevision {
-		return ErrConcurrentModification
+func (tx *ConditionalTxn) validateCurrentReadVersionMatch(key []byte, wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
+	if wantFound == gotFound && wantRevision == gotRevision {
+		return nil
 	}
-	return nil
+	if tx.db.conditionalReadKeyChangedSince(tx.startCommitSeq, key) {
+		return nil
+	}
+	return ErrConcurrentModification
 }
 
 // Has reports whether key exists in the opening snapshot and records the key as
@@ -749,6 +752,27 @@ func (db *DB) conditionalReadSetChangedSince(start uint64, reads []conditionalRe
 			if r.seq > start && conditionalKeyInStringRange(reads[i].key, r.start, r.end) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func (db *DB) conditionalReadKeyChangedSince(start uint64, key []byte) bool {
+	if db == nil {
+		return false
+	}
+	db.conditionalOracle.mu.Lock()
+	defer db.conditionalOracle.mu.Unlock()
+	if db.conditionalOracle.rootSeq > start {
+		return true
+	}
+	if db.conditionalOracle.recent[conditionalBytesString(key)] > start {
+		return true
+	}
+	for i := range db.conditionalOracle.ranges {
+		r := db.conditionalOracle.ranges[i]
+		if r.seq > start && conditionalKeyInStringRange(key, r.start, r.end) {
+			return true
 		}
 	}
 	return false
