@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -44,6 +45,11 @@ type Options struct {
 	DecodeLimits nativewire.Limits
 	StoreOptions raftapply.DurableApplyStoreOptions
 
+	// SnapshotRestoreDBOptions is used when InstallRaftSnapshotV1 has to
+	// discard the current local DB handle and reopen the restored snapshot.
+	// Dir is always replaced with Cluster.Dir's resolved main DB directory.
+	SnapshotRestoreDBOptions backenddb.Options
+
 	ScopeRule     raftentry.ScopeRuleV1
 	DatabaseScope string
 	CatalogScope  string
@@ -51,11 +57,14 @@ type Options struct {
 
 // FSM applies committed deterministic entries to one local DB.
 type FSM struct {
+	mu sync.RWMutex
+
 	db          *backenddb.DB
 	metadataDir string
 
 	decodeLimits nativewire.Limits
 	storeOptions raftapply.DurableApplyStoreOptions
+	restoreDB    backenddb.Options
 	scopeRule    raftentry.ScopeRuleV1
 	database     string
 	catalog      string
@@ -63,6 +72,8 @@ type FSM struct {
 
 	progress *raftapply.DurableApplyProgressStore
 	results  *raftapply.DurableApplyResultStore
+	sideDBs  func() error
+	ownsDB   bool
 	closed   bool
 }
 
@@ -127,6 +138,7 @@ func Open(opts Options) (*FSM, error) {
 		metadataDir:  metadataDir,
 		decodeLimits: opts.DecodeLimits,
 		storeOptions: opts.StoreOptions,
+		restoreDB:    opts.SnapshotRestoreDBOptions,
 		scopeRule:    opts.ScopeRule,
 		database:     opts.DatabaseScope,
 		catalog:      opts.CatalogScope,
@@ -137,7 +149,12 @@ func Open(opts Options) (*FSM, error) {
 }
 
 func (f *FSM) Close() error {
-	if f == nil || f.closed {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
 		return nil
 	}
 	f.closed = true
@@ -148,6 +165,13 @@ func (f *FSM) Close() error {
 	if f.results != nil {
 		errs = append(errs, f.results.Close())
 	}
+	if f.ownsDB && f.db != nil {
+		errs = append(errs, f.db.Close())
+	}
+	if f.sideDBs != nil {
+		errs = append(errs, f.sideDBs())
+		f.sideDBs = nil
+	}
 	return errors.Join(errs...)
 }
 
@@ -156,6 +180,11 @@ func (f *FSM) AllowsInitialIndexGapV1() bool {
 }
 
 func (f *FSM) LastApplied() (raftentry.ApplyEntryID, bool) {
+	if f == nil {
+		return raftentry.ApplyEntryID{}, false
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f == nil || f.progress == nil {
 		return raftentry.ApplyEntryID{}, false
 	}
@@ -170,6 +199,8 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 	if f == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
 	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f.closed {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is closed"))
 	}
@@ -258,6 +289,18 @@ func (f *FSM) ValidateAppliedPrefixV1(entries []CommittedEntryV1) (raftentry.App
 }
 
 func (f *FSM) LogicalDigestV1(opts raftapply.LogicalDigestOptionsV1) (raftapply.LogicalDigestV1, error) {
+	if f == nil {
+		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.logicalDigestV1Locked(opts)
+}
+
+func (f *FSM) logicalDigestV1Locked(opts raftapply.LogicalDigestOptionsV1) (raftapply.LogicalDigestV1, error) {
+	if f != nil && f.closed {
+		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
+	}
 	if f == nil || f.db == nil {
 		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
 	}
@@ -282,6 +325,8 @@ func (f *FSM) ApplyCommittedEntryV1(entry CommittedEntryV1) (raftentry.ApplyResu
 	if f == nil {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is not open"))
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.closed {
 		return reject(raftentry.CommandDigestV1{}, raftentry.ErrorUnsafeDurabilityModeV1, fmt.Errorf("FSM is closed"))
 	}

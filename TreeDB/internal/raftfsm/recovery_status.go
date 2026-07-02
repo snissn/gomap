@@ -32,13 +32,15 @@ func (f *FSM) RecoveryStatusV1(ctx context.Context, opts RecoveryStatusOptionsV1
 	if f == nil {
 		return status, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f.closed {
 		return status, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
 	}
 	if f.db == nil || f.progress == nil || f.results == nil {
 		return status, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
-	progress, err := f.AppliedProgress(ctx)
+	progress, err := f.appliedProgressLocked()
 	if err != nil {
 		return status, err
 	}
@@ -63,7 +65,7 @@ func (f *FSM) RecoveryStatusV1(ctx context.Context, opts RecoveryStatusOptionsV1
 	}
 	status.TailTargetIndex = opts.TailTargetIndex
 
-	if err := f.verifyRecoverySnapshotManifestV1(manifest); err != nil {
+	if err := f.verifyRecoverySnapshotManifestV1Locked(manifest); err != nil {
 		status.SnapshotState = raftcluster.RecoverySnapshotStateManifestRejectedV1
 		status.TailState = raftcluster.RecoveryTailStateUnknownV1
 		status.Errors = append(status.Errors, err.Error())
@@ -86,8 +88,8 @@ func (f *FSM) RecoveryStatusV1(ctx context.Context, opts RecoveryStatusOptionsV1
 	return finalizeRecoveryStatus(status), nil
 }
 
-func (f *FSM) verifyRecoverySnapshotManifestV1(manifest raftcluster.SnapshotManifestV1) error {
-	if err := f.VerifyInstalledSnapshotManifestV1(manifest); err == nil {
+func (f *FSM) verifyRecoverySnapshotManifestV1Locked(manifest raftcluster.SnapshotManifestV1) error {
+	if err := f.verifyInstalledSnapshotManifestV1Locked(manifest); err == nil {
 		return nil
 	}
 	if err := manifest.Validate(f.snapshotScopeIdentityV1()); err != nil {

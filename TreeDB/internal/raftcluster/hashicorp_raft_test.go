@@ -484,6 +484,73 @@ func TestHashicorpRaftProviderReadIndexRejectsTargetMismatch(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftProviderSnapshotRejoinsLaggingFollowerAndCompactsLogs(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+	lagging := cluster.firstFollower(t, leader.id)
+	healthy := cluster.firstFollowerExcept(t, leader.id, lagging.id)
+	cluster.disconnectNode(t, lagging.id)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	createResult, err := leader.submitter.SubmitCommandEntryV1(ctx, testClusterCreateCollectionEntry(t, 7), raftentry.RequestMetadataV1{
+		RequestID: 705,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("Submit create: %v", err)
+	}
+	cluster.waitAppliedOn(t, createResult.CommittedEntry.EntryID(), leader.id, healthy.id)
+	insertResult, err := leader.submitter.SubmitCommandEntryV1(ctx, testClusterCommandEntry(t, 7), raftentry.RequestMetadataV1{
+		RequestID: 706,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("Submit insert: %v", err)
+	}
+	cluster.waitAppliedOn(t, insertResult.CommittedEntry.EntryID(), leader.id, healthy.id)
+	if got, ok := lagging.fsm.LastApplied(); ok && got.Index >= insertResult.CommittedEntry.Index {
+		t.Fatalf("lagging follower applied %d/%d while disconnected", got.Term, got.Index)
+	}
+
+	snapshot, err := leader.provider.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snapshot.LastIncludedIndex < insertResult.CommittedEntry.Index ||
+		snapshot.Manifest.LastIncludedIndex != insertResult.CommittedEntry.Index ||
+		snapshot.Manifest.GroupID != "group-a" ||
+		snapshot.SizeBytes == 0 {
+		t.Fatalf("snapshot result=%+v insert=%+v", snapshot, insertResult.CommittedEntry)
+	}
+	if !snapshot.LogCompacted || (snapshot.FirstLogIndexAfter != 0 && snapshot.FirstLogIndexAfter <= snapshot.FirstLogIndexBefore) {
+		t.Fatalf("snapshot did not compact logs: %+v", snapshot)
+	}
+	proof, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err != nil {
+		t.Fatalf("ReadIndex after snapshot compaction: %v", err)
+	}
+	if proof.Index < insertResult.CommittedEntry.Index ||
+		proof.EvidenceKind != ReadIndexEvidenceProduction ||
+		!proof.HasQuorum {
+		t.Fatalf("post-snapshot read-index proof=%+v want production proof at or beyond %d", proof, insertResult.CommittedEntry.Index)
+	}
+
+	cluster.connectAllTransports(t)
+	cluster.waitApplied(t, insertResult.CommittedEntry.EntryID())
+	leaderDigest, err := leader.fsm.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("leader LogicalDigestV1: %v", err)
+	}
+	laggingDigest, err := lagging.fsm.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
+	if err != nil {
+		t.Fatalf("lagging LogicalDigestV1: %v", err)
+	}
+	if laggingDigest != leaderDigest {
+		t.Fatalf("lagging digest=%s leader=%s after snapshot rejoin", laggingDigest.Hex(), leaderDigest.Hex())
+	}
+}
+
 func BenchmarkHashicorpRaftProviderReadIndex(b *testing.B) {
 	cluster := newHashicorpRaftDBCluster(b)
 	leader := cluster.waitForLeader(b)
@@ -1034,6 +1101,7 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 	conf.CommitTimeout = 10 * time.Millisecond
 	conf.SnapshotInterval = time.Hour
 	conf.SnapshotThreshold = ^uint64(0)
+	conf.TrailingLogs = 0
 	conf.LogOutput = io.Discard
 	conf.LogLevel = "ERROR"
 	conf.NoLegacyTelemetry = true
@@ -1077,6 +1145,17 @@ func (c *hashicorpRaftTestCluster) firstFollower(tb testing.TB, leaderID NodeID)
 		}
 	}
 	tb.Fatalf("no follower found for leader %q", leaderID)
+	return nil
+}
+
+func (c *hashicorpRaftTestCluster) firstFollowerExcept(tb testing.TB, leaderID, excludedID NodeID) *hashicorpRaftTestNode {
+	tb.Helper()
+	for _, node := range c.nodes {
+		if node.id != leaderID && node.id != excludedID {
+			return node
+		}
+	}
+	tb.Fatalf("no follower found for leader %q excluding %q", leaderID, excludedID)
 	return nil
 }
 

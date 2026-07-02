@@ -86,6 +86,24 @@ func TestSingleGroupApplyLoopCloseReopenDurableProgressResult(t *testing.T) {
 	assertLastApplied(t, reopenedFSM, raftentry.ApplyEntryID{Term: 2, Index: 2})
 }
 
+func TestSingleGroupFSMLogicalDigestRejectsClosedFSM(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close FSM: %v", err)
+	}
+
+	if _, err := fsm.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{}); err == nil {
+		t.Fatal("LogicalDigestV1 on closed FSM succeeded, want unsafe durability error")
+	} else if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("ErrorCodeOf(LogicalDigestV1 closed)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, err)
+	}
+}
+
 func TestSingleGroupApplyLoopRejectsProgressAheadOfLocalCoverage(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")
@@ -899,7 +917,7 @@ func committedCommand(term, index uint64, raw []byte) CommittedEntryV1 {
 	}
 }
 
-func deterministicCreateCollectionEntry(t *testing.T, collection, idempotency string) []byte {
+func deterministicCreateCollectionEntry(t testing.TB, collection, idempotency string) []byte {
 	t.Helper()
 	return deterministicCreateCollectionEntryWithOptions(t, collection, idempotency, testCreateCollectionMetaOptions{})
 }
@@ -908,7 +926,7 @@ type testCreateCollectionMetaOptions struct {
 	documentFormat uint64
 }
 
-func deterministicCreateCollectionEntryWithOptions(t *testing.T, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
+func deterministicCreateCollectionEntryWithOptions(t testing.TB, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
 	t.Helper()
 	sections := []nativewire.Section{
 		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandCreateCollection, Version: 1})},
@@ -946,18 +964,18 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 	return dst
 }
 
-func deterministicInsertBatchEntry(t *testing.T, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte) []byte {
+func deterministicInsertBatchEntry(t testing.TB, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte) []byte {
 	t.Helper()
 	return deterministicMutationEntry(t, nativewire.CommandInsertBatch, collection, idempotency, format, ids, documents, nil)
 }
 
-func deterministicReplaceBatchEntry(t *testing.T, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte) []byte {
+func deterministicReplaceBatchEntry(t testing.TB, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte) []byte {
 	t.Helper()
 	extra := []nativewire.Section{{ID: nativewire.SectionReplacementMode, Bytes: binary.AppendUvarint(nil, 1)}}
 	return deterministicMutationEntry(t, nativewire.CommandReplaceBatch, collection, idempotency, format, ids, documents, extra)
 }
 
-func deterministicDeleteBatchEntry(t *testing.T, collection, idempotency string, ids [][]byte) []byte {
+func deterministicDeleteBatchEntry(t testing.TB, collection, idempotency string, ids [][]byte) []byte {
 	t.Helper()
 	sections := []nativewire.Section{
 		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: nativewire.CommandDeleteBatch, Version: 1})},
@@ -977,7 +995,7 @@ func deterministicDeleteBatchEntry(t *testing.T, collection, idempotency string,
 	return entry
 }
 
-func deterministicMutationEntry(t *testing.T, command nativewire.CommandID, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte, extra []nativewire.Section) []byte {
+func deterministicMutationEntry(t testing.TB, command nativewire.CommandID, collection, idempotency string, format nativewire.DocumentFormat, ids, documents [][]byte, extra []nativewire.Section) []byte {
 	t.Helper()
 	sections := []nativewire.Section{
 		{ID: nativewire.SectionCommandHeader, Bytes: nativewire.AppendCommandHeader(nil, nativewire.CommandHeader{ID: command, Version: 1})},

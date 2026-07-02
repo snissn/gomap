@@ -21,6 +21,7 @@ const (
 	hashicorpRaftDefaultApplyTimeout   = 5 * time.Second
 	hashicorpRaftDefaultSnapshotRetain = 2
 	hashicorpRaftSnapshotCheckInterval = 24 * time.Hour
+	hashicorpRaftMinTrailingLogs       = 1
 	hashicorpRaftReadIndexInitialPoll  = 2 * time.Millisecond
 	hashicorpRaftReadIndexMaxPoll      = 25 * time.Millisecond
 )
@@ -657,6 +658,7 @@ func openHashicorpRaftStores(layout StorageLayout, opts HashicorpRaftProviderOpt
 			return hashicorpRaftStores{}, errors.Join(ErrInvalidHashicorpRaftProvider, err)
 		}
 	}
+	stores.snapshots = wrapHashicorpRaftSnapshotStoreV1(stores.snapshots)
 	return stores, nil
 }
 
@@ -665,6 +667,83 @@ func (s *hashicorpRaftStores) closeOnError(errp *error) {
 		s.closeOwned()
 		s.owned = nil
 	}
+}
+
+// HashicorpRaftSnapshotResultV1 reports the persisted HashiCorp snapshot and
+// local log range observed around the snapshot operation. Log compaction is
+// performed by HashiCorp Raft only after the FSM snapshot is durably persisted.
+type HashicorpRaftSnapshotResultV1 struct {
+	ID                string
+	LastIncludedTerm  uint64
+	LastIncludedIndex uint64
+	SizeBytes         int64
+
+	FirstLogIndexBefore uint64
+	LastLogIndexBefore  uint64
+	FirstLogIndexAfter  uint64
+	LastLogIndexAfter   uint64
+	LogCompacted        bool
+
+	Manifest SnapshotManifestV1
+}
+
+// Snapshot asks HashiCorp Raft to persist an FSM snapshot and compact logs
+// according to the active Raft configuration.
+func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnapshotResultV1, error) {
+	if p == nil || p.raft == nil || p.logStore == nil {
+		return HashicorpRaftSnapshotResultV1{}, ErrInvalidHashicorpRaftProvider
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return HashicorpRaftSnapshotResultV1{}, err
+	}
+	firstBefore, firstBeforeErr := p.logStore.FirstIndex()
+	lastBefore, lastBeforeErr := p.logStore.LastIndex()
+	if firstBeforeErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, firstBeforeErr)
+	}
+	if lastBeforeErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, lastBeforeErr)
+	}
+	future := p.raft.Snapshot()
+	if err := waitHashicorpRaftFuture(ctx, future); err != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+	}
+	meta, snapshot, err := future.Open()
+	if err != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+	}
+	defer snapshot.Close()
+	manifest, err := DecodeSnapshotManifestV1FromArchiveReader(snapshot)
+	if err != nil {
+		return HashicorpRaftSnapshotResultV1{}, err
+	}
+	if err := validateHashicorpRaftSnapshotManifestV1(meta, manifest); err != nil {
+		return HashicorpRaftSnapshotResultV1{}, err
+	}
+	firstAfter, firstAfterErr := p.logStore.FirstIndex()
+	lastAfter, lastAfterErr := p.logStore.LastIndex()
+	if firstAfterErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, firstAfterErr)
+	}
+	if lastAfterErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, lastAfterErr)
+	}
+	result := HashicorpRaftSnapshotResultV1{
+		ID:                  meta.ID,
+		LastIncludedTerm:    meta.Term,
+		LastIncludedIndex:   meta.Index,
+		SizeBytes:           meta.Size,
+		FirstLogIndexBefore: firstBefore,
+		LastLogIndexBefore:  lastBefore,
+		FirstLogIndexAfter:  firstAfter,
+		LastLogIndexAfter:   lastAfter,
+		LogCompacted:        firstAfter > firstBefore || (firstAfter == 0 && lastAfter == 0 && lastBefore > 0),
+		Manifest:            manifest,
+	}
+	return result, nil
 }
 
 func (s *hashicorpRaftStores) closeOwned() {
@@ -684,6 +763,7 @@ func hashicorpRaftConfig(nodeID NodeID, src *hraft.Config) *hraft.Config {
 		conf.CommitTimeout = 10 * time.Millisecond
 		conf.LeaderLeaseTimeout = 50 * time.Millisecond
 		conf.SnapshotInterval = hashicorpRaftSnapshotCheckInterval
+		conf.SnapshotThreshold = ^uint64(0)
 	} else {
 		conf = *src
 	}
@@ -698,10 +778,9 @@ func hashicorpRaftConfig(nodeID NodeID, src *hraft.Config) *hraft.Config {
 	if conf.SnapshotInterval < 5*time.Millisecond {
 		conf.SnapshotInterval = hashicorpRaftSnapshotCheckInterval
 	}
-	// HashiCorp Raft v1.7.3 rejects SnapshotInterval=0, so this provider
-	// suppresses unsupported snapshot attempts by making shouldSnapshot false for
-	// any practical log index instead of letting Snapshot() be scheduled.
-	conf.SnapshotThreshold = ^uint64(0)
+	if conf.TrailingLogs < hashicorpRaftMinTrailingLogs {
+		conf.TrailingLogs = hashicorpRaftMinTrailingLogs
+	}
 	return &conf
 }
 
@@ -903,9 +982,144 @@ func hashicorpRaftLogEntryError(err error) error {
 }
 
 func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {
-	return nil, ErrRaftSnapshotUnsupported
+	exporter, ok := f.applier.(RaftSnapshotExporterV1)
+	if !ok {
+		return nil, ErrRaftSnapshotUnsupported
+	}
+	snapshot, err := exporter.ExportRaftSnapshotV1()
+	if err != nil {
+		return nil, err
+	}
+	if err := snapshot.Validate(); err != nil {
+		return nil, err
+	}
+	return hashicorpRaftSnapshotV1{snapshot: snapshot}, nil
 }
 
-func (f hashicorpRaftFSM) Restore(io.ReadCloser) error {
-	return ErrRaftSnapshotUnsupported
+func (f hashicorpRaftFSM) Restore(src io.ReadCloser) error {
+	if src == nil {
+		return ErrRaftSnapshotUnsupported
+	}
+	defer src.Close()
+	installer, ok := f.applier.(RaftSnapshotInstallerV1)
+	if !ok {
+		return ErrRaftSnapshotUnsupported
+	}
+	return installer.InstallRaftSnapshotV1(src)
+}
+
+type hashicorpRaftSnapshotV1 struct {
+	snapshot RaftSnapshotV1
+}
+
+func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
+	if sink == nil {
+		return ErrInvalidSnapshotManifest
+	}
+	if err := s.snapshot.Validate(); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	if boundary, ok := hashicorpRaftSnapshotBoundaryFromSinkV1(sink); ok {
+		if err := validateHashicorpRaftSnapshotBoundaryV1(boundary, s.snapshot.Manifest); err != nil {
+			_ = sink.Cancel()
+			return err
+		}
+	}
+	if _, err := sink.Write(s.snapshot.Payload); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	if err := sink.Close(); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	return nil
+}
+
+func (s hashicorpRaftSnapshotV1) Release() {}
+
+type hashicorpRaftSnapshotBoundaryV1 struct {
+	Term  uint64
+	Index uint64
+}
+
+type hashicorpRaftSnapshotBoundarySinkV1 interface {
+	hashicorpRaftSnapshotBoundaryV1() (hashicorpRaftSnapshotBoundaryV1, bool)
+}
+
+type hashicorpRaftSnapshotStoreV1 struct {
+	inner hraft.SnapshotStore
+}
+
+func wrapHashicorpRaftSnapshotStoreV1(inner hraft.SnapshotStore) hraft.SnapshotStore {
+	if inner == nil {
+		return nil
+	}
+	if _, ok := inner.(hashicorpRaftSnapshotStoreV1); ok {
+		return inner
+	}
+	return hashicorpRaftSnapshotStoreV1{inner: inner}
+}
+
+func (s hashicorpRaftSnapshotStoreV1) Create(version hraft.SnapshotVersion, index, term uint64, configuration hraft.Configuration, configurationIndex uint64, trans hraft.Transport) (hraft.SnapshotSink, error) {
+	sink, err := s.inner.Create(version, index, term, configuration, configurationIndex, trans)
+	if err != nil || sink == nil {
+		return sink, err
+	}
+	return hashicorpRaftSnapshotSinkV1{
+		SnapshotSink: sink,
+		boundary: hashicorpRaftSnapshotBoundaryV1{
+			Term:  term,
+			Index: index,
+		},
+	}, nil
+}
+
+func (s hashicorpRaftSnapshotStoreV1) List() ([]*hraft.SnapshotMeta, error) {
+	return s.inner.List()
+}
+
+func (s hashicorpRaftSnapshotStoreV1) Open(id string) (*hraft.SnapshotMeta, io.ReadCloser, error) {
+	return s.inner.Open(id)
+}
+
+type hashicorpRaftSnapshotSinkV1 struct {
+	hraft.SnapshotSink
+	boundary hashicorpRaftSnapshotBoundaryV1
+}
+
+func (s hashicorpRaftSnapshotSinkV1) hashicorpRaftSnapshotBoundaryV1() (hashicorpRaftSnapshotBoundaryV1, bool) {
+	return s.boundary, true
+}
+
+func hashicorpRaftSnapshotBoundaryFromSinkV1(sink hraft.SnapshotSink) (hashicorpRaftSnapshotBoundaryV1, bool) {
+	if sink == nil {
+		return hashicorpRaftSnapshotBoundaryV1{}, false
+	}
+	boundarySink, ok := sink.(hashicorpRaftSnapshotBoundarySinkV1)
+	if !ok {
+		return hashicorpRaftSnapshotBoundaryV1{}, false
+	}
+	return boundarySink.hashicorpRaftSnapshotBoundaryV1()
+}
+
+func validateHashicorpRaftSnapshotManifestV1(meta *hraft.SnapshotMeta, manifest SnapshotManifestV1) error {
+	if meta == nil {
+		return fmt.Errorf("%w: missing hashicorp snapshot metadata", ErrInvalidSnapshotManifest)
+	}
+	return validateHashicorpRaftSnapshotBoundaryV1(hashicorpRaftSnapshotBoundaryV1{
+		Term:  meta.Term,
+		Index: meta.Index,
+	}, manifest)
+}
+
+func validateHashicorpRaftSnapshotBoundaryV1(boundary hashicorpRaftSnapshotBoundaryV1, manifest SnapshotManifestV1) error {
+	if boundary.Term != manifest.LastIncludedTerm {
+		return fmt.Errorf("%w: hashicorp snapshot term %d does not match manifest term %d", ErrInvalidSnapshotManifest, boundary.Term, manifest.LastIncludedTerm)
+	}
+	if boundary.Index != manifest.LastIncludedIndex {
+		return fmt.Errorf("%w: hashicorp snapshot index %d does not match manifest index %d", ErrInvalidSnapshotManifest, boundary.Index, manifest.LastIncludedIndex)
+	}
+	return nil
 }

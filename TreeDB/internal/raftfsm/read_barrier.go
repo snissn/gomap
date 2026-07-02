@@ -14,6 +14,16 @@ func (f *FSM) AppliedProgress(ctx context.Context) (raftcluster.AppliedProgress,
 	if err := ctx.Err(); err != nil {
 		return progress, err
 	}
+	if f == nil {
+		return progress, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.appliedProgressLocked()
+}
+
+func (f *FSM) appliedProgressLocked() (raftcluster.AppliedProgress, error) {
+	progress := f.appliedProgressIdentity()
 	if f == nil || f.db == nil || f.progress == nil {
 		return progress, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}

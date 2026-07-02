@@ -23,6 +23,8 @@ func (f *FSM) PreflightCommandEntryV1(ctx context.Context, req raftcluster.Comma
 	if f == nil {
 		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f.closed {
 		return raftcluster.CommandEntryPreflightResultV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
 	}

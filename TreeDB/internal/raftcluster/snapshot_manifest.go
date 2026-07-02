@@ -1,6 +1,7 @@
 package raftcluster
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,11 @@ import (
 const (
 	SnapshotManifestFormatV1 = "treedb.raftcluster.snapshot-manifest"
 	SnapshotManifestVersion1 = uint16(1)
+
+	RaftSnapshotArchiveFormatV1       = "treedb.raftcluster.raft-snapshot-archive"
+	RaftSnapshotArchiveVersion1       = uint16(1)
+	RaftSnapshotArchiveManifestPathV1 = "manifest.json"
+	RaftSnapshotArchiveHeaderMaxBytes = 1 << 20
 )
 
 var ErrInvalidSnapshotManifest = errors.New("raftcluster: invalid snapshot manifest")
@@ -174,4 +180,159 @@ func validateLogicalDigestV1Hex(digest string) error {
 		return fmt.Errorf("%w: non-canonical logical digest", ErrInvalidSnapshotManifest)
 	}
 	return nil
+}
+
+// RaftSnapshotV1 is the production snapshot payload handed to the Raft
+// adapter. The manifest identifies the durable apply boundary and logical
+// digest; Payload is an implementation-owned archive that contains the local
+// TreeDB storage required to restore that boundary on another node.
+type RaftSnapshotV1 struct {
+	Manifest SnapshotManifestV1
+	Payload  []byte
+}
+
+func (s RaftSnapshotV1) Clone() RaftSnapshotV1 {
+	s.Payload = bytes.Clone(s.Payload)
+	return s
+}
+
+func (s RaftSnapshotV1) Validate() error {
+	if err := s.Manifest.Validate(s.Manifest.Scope); err != nil {
+		return err
+	}
+	if len(s.Payload) == 0 {
+		return fmt.Errorf("%w: empty snapshot payload", ErrInvalidSnapshotManifest)
+	}
+	payloadManifest, err := DecodeSnapshotManifestV1FromArchive(s.Payload)
+	if err != nil {
+		return err
+	}
+	if !snapshotManifestV1Equal(payloadManifest, s.Manifest) {
+		return fmt.Errorf("%w: snapshot payload manifest does not match outer manifest", ErrInvalidSnapshotManifest)
+	}
+	return nil
+}
+
+func snapshotManifestV1Equal(a, b SnapshotManifestV1) bool {
+	return a.Format == b.Format &&
+		a.Version == b.Version &&
+		a.GroupID == b.GroupID &&
+		a.NodeID == b.NodeID &&
+		a.LastIncludedTerm == b.LastIncludedTerm &&
+		a.LastIncludedIndex == b.LastIncludedIndex &&
+		a.AppliedCommandLSN == b.AppliedCommandLSN &&
+		a.LogicalDigestV1 == b.LogicalDigestV1 &&
+		a.Scope == b.Scope &&
+		a.CreatedAt.Equal(b.CreatedAt)
+}
+
+// RaftSnapshotExporterV1 is implemented by FSMs that can export a production
+// snapshot payload for the HashiCorp Raft adapter.
+type RaftSnapshotExporterV1 interface {
+	ExportRaftSnapshotV1() (RaftSnapshotV1, error)
+}
+
+// RaftSnapshotInstallerV1 is implemented by FSMs that can discard local state
+// and install a production snapshot payload from the HashiCorp Raft adapter.
+type RaftSnapshotInstallerV1 interface {
+	InstallRaftSnapshotV1(io.Reader) error
+}
+
+// RaftSnapshotArchiveHeaderV1 is stored as manifest.json at the root of the
+// production snapshot archive. The remaining archive layout is producer-owned.
+type RaftSnapshotArchiveHeaderV1 struct {
+	Format   string             `json:"format"`
+	Version  uint16             `json:"version"`
+	Manifest SnapshotManifestV1 `json:"manifest"`
+}
+
+func NewRaftSnapshotArchiveHeaderV1(manifest SnapshotManifestV1) RaftSnapshotArchiveHeaderV1 {
+	return RaftSnapshotArchiveHeaderV1{
+		Format:   RaftSnapshotArchiveFormatV1,
+		Version:  RaftSnapshotArchiveVersion1,
+		Manifest: manifest,
+	}
+}
+
+func (h RaftSnapshotArchiveHeaderV1) Validate(expectedScope SnapshotScopeIdentityV1) error {
+	if h.Format != RaftSnapshotArchiveFormatV1 {
+		return fmt.Errorf("%w: unsupported snapshot archive format %q", ErrInvalidSnapshotManifest, h.Format)
+	}
+	if h.Version != RaftSnapshotArchiveVersion1 {
+		return fmt.Errorf("%w: unsupported snapshot archive version %d", ErrInvalidSnapshotManifest, h.Version)
+	}
+	return h.Manifest.Validate(expectedScope)
+}
+
+func EncodeRaftSnapshotArchiveHeaderV1(header RaftSnapshotArchiveHeaderV1) ([]byte, error) {
+	if err := header.Validate(header.Manifest.Scope); err != nil {
+		return nil, err
+	}
+	return json.Marshal(header)
+}
+
+func DecodeRaftSnapshotArchiveHeaderV1(src []byte, expectedScope SnapshotScopeIdentityV1) (RaftSnapshotArchiveHeaderV1, error) {
+	dec := json.NewDecoder(bytes.NewReader(src))
+	dec.DisallowUnknownFields()
+	var header RaftSnapshotArchiveHeaderV1
+	if err := dec.Decode(&header); err != nil {
+		return RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("%w: decode snapshot archive header JSON: %v", ErrInvalidSnapshotManifest, err)
+	}
+	if dec.Decode(&struct{}{}) != io.EOF {
+		return RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("%w: trailing snapshot archive header JSON content", ErrInvalidSnapshotManifest)
+	}
+	if expectedScope == (SnapshotScopeIdentityV1{}) {
+		expectedScope = header.Manifest.Scope
+	}
+	if err := header.Validate(expectedScope); err != nil {
+		return RaftSnapshotArchiveHeaderV1{}, err
+	}
+	return header, nil
+}
+
+func DecodeSnapshotManifestV1FromArchive(payload []byte) (SnapshotManifestV1, error) {
+	return DecodeSnapshotManifestV1FromArchiveReader(bytes.NewReader(payload))
+}
+
+func DecodeSnapshotManifestV1FromArchiveReader(reader io.Reader) (SnapshotManifestV1, error) {
+	if reader == nil {
+		return SnapshotManifestV1{}, fmt.Errorf("%w: nil snapshot archive reader", ErrInvalidSnapshotManifest)
+	}
+	tr := tar.NewReader(reader)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return SnapshotManifestV1{}, fmt.Errorf("%w: read snapshot archive: %v", ErrInvalidSnapshotManifest, err)
+		}
+		if header == nil || header.Name != RaftSnapshotArchiveManifestPathV1 {
+			continue
+		}
+		raw, err := readRaftSnapshotArchiveHeaderBytesV1(tr, header.Size)
+		if err != nil {
+			return SnapshotManifestV1{}, err
+		}
+		decoded, err := DecodeRaftSnapshotArchiveHeaderV1(raw, SnapshotScopeIdentityV1{})
+		if err != nil {
+			return SnapshotManifestV1{}, err
+		}
+		return decoded.Manifest, nil
+	}
+	return SnapshotManifestV1{}, fmt.Errorf("%w: missing snapshot archive header", ErrInvalidSnapshotManifest)
+}
+
+func readRaftSnapshotArchiveHeaderBytesV1(reader io.Reader, size int64) ([]byte, error) {
+	if size > RaftSnapshotArchiveHeaderMaxBytes {
+		return nil, fmt.Errorf("%w: snapshot archive header is %d bytes, max %d", ErrInvalidSnapshotManifest, size, RaftSnapshotArchiveHeaderMaxBytes)
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, RaftSnapshotArchiveHeaderMaxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read snapshot archive header: %v", ErrInvalidSnapshotManifest, err)
+	}
+	if len(raw) > RaftSnapshotArchiveHeaderMaxBytes {
+		return nil, fmt.Errorf("%w: snapshot archive header exceeds %d bytes", ErrInvalidSnapshotManifest, RaftSnapshotArchiveHeaderMaxBytes)
+	}
+	return raw, nil
 }

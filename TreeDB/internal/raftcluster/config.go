@@ -96,13 +96,14 @@ type Config struct {
 }
 
 type ResolvedConfig struct {
-	Dir        string
-	ClusterDir string
-	NodeID     NodeID
-	GroupID    GroupID
-	Peers      []Peer
-	Features   FeatureSet
-	Layout     StorageLayout
+	Dir               string
+	ClusterDir        string
+	DisableSideStores bool
+	NodeID            NodeID
+	GroupID           GroupID
+	Peers             []Peer
+	Features          FeatureSet
+	Layout            StorageLayout
 }
 
 type PeerStorageDir struct {
@@ -178,13 +179,14 @@ func Validate(cfg Config) (ResolvedConfig, error) {
 	}
 	layout := storageLayout(clusterDir, cfg.NodeID, cfg.GroupID, peers)
 	return ResolvedConfig{
-		Dir:        dir,
-		ClusterDir: clusterDir,
-		NodeID:     cfg.NodeID,
-		GroupID:    cfg.GroupID,
-		Peers:      peers,
-		Features:   features,
-		Layout:     layout,
+		Dir:               dir,
+		ClusterDir:        clusterDir,
+		DisableSideStores: cfg.DisableSideStores,
+		NodeID:            cfg.NodeID,
+		GroupID:           cfg.GroupID,
+		Peers:             peers,
+		Features:          features,
+		Layout:            layout,
 	}, nil
 }
 

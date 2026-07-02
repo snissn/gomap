@@ -13,6 +13,15 @@ func (f *FSM) VerifyInstalledSnapshotManifestV1(manifest raftcluster.SnapshotMan
 	if f == nil {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.verifyInstalledSnapshotManifestV1Locked(manifest)
+}
+
+func (f *FSM) verifyInstalledSnapshotManifestV1Locked(manifest raftcluster.SnapshotManifestV1) error {
+	if f == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
+	}
 	if f.closed {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
 	}
@@ -45,7 +54,7 @@ func (f *FSM) VerifyInstalledSnapshotManifestV1(manifest raftcluster.SnapshotMan
 	if localLSN != manifest.AppliedCommandLSN {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot manifest AppliedCommandLSN %d does not match local coverage %d", manifest.AppliedCommandLSN, localLSN)
 	}
-	digest, err := f.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{
+	digest, err := f.logicalDigestV1Locked(raftapply.LogicalDigestOptionsV1{
 		ScopeRule:     f.scopeRule,
 		DatabaseScope: f.database,
 		CatalogScope:  f.catalog,
