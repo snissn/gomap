@@ -116,6 +116,36 @@ func TestHashicorpRaftProviderReadIndexReturnsProductionProofForLeader(t *testin
 	}
 }
 
+func TestHashicorpRaftProviderReadIndexUsesAppliedProgressIndex(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       3,
+			Index:      42,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	if leader.id != "node-a" {
+		applier.progress.NodeID = leader.id
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	proof, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if proof.Index != applier.progress.Index {
+		t.Fatalf("proof index=%d want applied progress index %d", proof.Index, applier.progress.Index)
+	}
+	if !proof.HasQuorum || proof.EvidenceKind != ReadIndexEvidenceProduction {
+		t.Fatalf("proof=%+v want production quorum proof", proof)
+	}
+}
+
 func TestHashicorpRaftProviderReadIndexRejectsFollowerStrongRead(t *testing.T) {
 	cluster := newHashicorpRaftDBCluster(t)
 	leader := cluster.waitForLeader(t)
@@ -187,7 +217,6 @@ func BenchmarkHashicorpRaftProviderReadIndex(b *testing.B) {
 			b.Fatalf("proof=%+v committed=%+v", proof, result.CommittedEntry)
 		}
 	}
-	b.ReportMetric(float64(b.N), "read_indexes_total")
 }
 
 func TestHashicorpRaftProviderLocalRecoverabilityFailureDoesNotReportCommittedRecoverable(t *testing.T) {
@@ -663,6 +692,21 @@ func (a *recordingClusterApplier) ApplyCommittedCommandEntryV1(_ context.Context
 
 func (a *recordingClusterApplier) snapshot() []CommittedCommandEntryV1 {
 	return append([]CommittedCommandEntryV1(nil), a.entries...)
+}
+
+type progressReportingApplier struct {
+	progress AppliedProgress
+}
+
+func (a *progressReportingApplier) ApplyCommittedCommandEntryV1(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+	return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied}, nil
+}
+
+func (a *progressReportingApplier) AppliedProgress(ctx context.Context) (AppliedProgress, error) {
+	if err := ctx.Err(); err != nil {
+		return a.progress, err
+	}
+	return a.progress, nil
 }
 
 type countingClusterApplier struct {

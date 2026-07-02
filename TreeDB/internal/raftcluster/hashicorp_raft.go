@@ -58,10 +58,11 @@ type HashicorpRaftProviderOptions struct {
 // ReadIndexProvider on top of github.com/hashicorp/raft for one TreeDB Raft
 // group.
 type HashicorpRaftProvider struct {
-	cluster      ResolvedConfig
-	raft         *hraft.Raft
-	applyTimeout time.Duration
-	owned        []io.Closer
+	cluster         ResolvedConfig
+	raft            *hraft.Raft
+	appliedProgress AppliedProgressReader
+	applyTimeout    time.Duration
+	owned           []io.Closer
 }
 
 func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaftProvider, error) {
@@ -123,11 +124,13 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 	if applyTimeout <= 0 {
 		applyTimeout = hashicorpRaftDefaultApplyTimeout
 	}
+	progressReader, _ := opts.Applier.(AppliedProgressReader)
 	return &HashicorpRaftProvider{
-		cluster:      cluster,
-		raft:         r,
-		applyTimeout: applyTimeout,
-		owned:        stores.owned,
+		cluster:         cluster,
+		raft:            r,
+		appliedProgress: progressReader,
+		applyTimeout:    applyTimeout,
+		owned:           stores.owned,
 	}, nil
 }
 
@@ -207,14 +210,29 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 	if state := p.raft.State(); state != hraft.Leader {
 		return ReadIndexProof{}, p.hashicorpReadIndexNotLeader(state)
 	}
+	if err := waitHashicorpRaftFuture(ctx, p.raft.Barrier(p.applyTimeout)); err != nil {
+		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
+	}
+	if p.appliedProgress == nil {
+		return ReadIndexProof{}, fmt.Errorf("%w: applied progress reader is not configured", ErrReadBarrierNotSatisfied)
+	}
+	progress, err := p.appliedProgress.AppliedProgress(ctx)
+	if err != nil {
+		return ReadIndexProof{}, err
+	}
+	if !progress.HasApplied {
+		return ReadIndexProof{}, fmt.Errorf("%w: no applied TreeDB command index", ErrReadBarrierNotSatisfied)
+	}
 	// HashiCorp Raft v1.7 has no native ReadIndex API. VerifyLeader sends an
-	// immediate heartbeat to voting peers; CommitIndex is the local barrier
-	// index the applied-index waiter must reach before the read is served.
+	// immediate heartbeat to voting peers and Barrier waits until preceding
+	// Raft logs have reached the local FSM. HashiCorp no-op/barrier indexes are
+	// not recorded by TreeDB's FSM, so the proof index is the latest TreeDB
+	// command index the applied-index waiter can actually prove.
 	proof := ReadIndexProof{
 		NodeID:       p.cluster.NodeID,
 		GroupID:      p.cluster.GroupID,
 		Term:         p.raft.CurrentTerm(),
-		Index:        p.raft.CommitIndex(),
+		Index:        progress.Index,
 		HasQuorum:    true,
 		EvidenceKind: ReadIndexEvidenceProduction,
 	}
@@ -291,9 +309,9 @@ func (p *HashicorpRaftProvider) hashicorpReadIndexNotLeader(state hraft.RaftStat
 		}
 	}
 	if state == hraft.Shutdown {
-		return errors.Join(ErrHashicorpRaftUnavailable, fmt.Errorf("%s", reason))
+		return errors.Join(ErrHashicorpRaftUnavailable, errors.New(reason))
 	}
-	return errors.Join(ErrNotLeader, fmt.Errorf("%s", reason))
+	return errors.Join(ErrNotLeader, errors.New(reason))
 }
 
 func validateHashicorpRaftApplier(applier CommittedCommandApplierV1) error {
