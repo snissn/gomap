@@ -260,6 +260,9 @@ func TestValidateAcceptsTokenRingCatalogPlacements(t *testing.T) {
 			if placement.Mode != mode {
 				t.Fatalf("placement mode=%q want %q", placement.Mode, mode)
 			}
+			if placement.RouteKey != RouteKeyDocumentIDV1 {
+				t.Fatalf("route key=%q want %q", placement.RouteKey, RouteKeyDocumentIDV1)
+			}
 			if got := len(placement.TokenPartitions); got != 2 {
 				t.Fatalf("token partitions=%d want 2", got)
 			}
@@ -343,6 +346,21 @@ func TestValidateRejectsInvalidTokenRingCatalogPlacements(t *testing.T) {
 				p.GroupID = "group-a"
 			},
 			want: ErrInvalidTokenRing,
+		},
+		{
+			name: "unsupported token route key",
+			mut:  func(p *CollectionPlacementV1) { p.RouteKey = "tenant_id" },
+			want: ErrUnsupportedRouteKey,
+		},
+		{
+			name: "collection route key",
+			mut: func(p *CollectionPlacementV1) {
+				p.Mode = PlacementModeCollectionV1
+				p.GroupID = "group-a"
+				p.RouteKey = RouteKeyDocumentIDV1
+				p.TokenPartitions = nil
+			},
+			want: ErrUnsupportedRouteKey,
 		},
 	}
 	for _, tc := range tests {

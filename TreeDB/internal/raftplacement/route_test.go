@@ -73,6 +73,9 @@ func TestRouteTokenDecisionIncludesPartitionAndGroupMetadata(t *testing.T) {
 			if decision.PlacementMode != mode {
 				t.Fatalf("placement mode=%q want %q", decision.PlacementMode, mode)
 			}
+			if decision.RouteKey != RouteKeyDocumentIDV1 {
+				t.Fatalf("route key=%q want %q", decision.RouteKey, RouteKeyDocumentIDV1)
+			}
 			if decision.GroupID() != "group-b" {
 				t.Fatalf("group=%q want group-b", decision.GroupID())
 			}
@@ -210,6 +213,9 @@ func TestRouteTokenBatchClassifiesDocumentTokens(t *testing.T) {
 				}
 				if decision.Collection.Collection != "events" || decision.PlacementMode != mode {
 					t.Fatalf("decision collection/mode=%s/%s want events/%s", decision.Collection.Collection, decision.PlacementMode, mode)
+				}
+				if decision.RouteKey != RouteKeyDocumentIDV1 {
+					t.Fatalf("route key=%q want %q", decision.RouteKey, RouteKeyDocumentIDV1)
 				}
 				if decision.Class != tc.wantClass {
 					t.Fatalf("class=%q want %q", decision.Class, tc.wantClass)

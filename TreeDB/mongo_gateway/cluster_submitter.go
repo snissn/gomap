@@ -512,6 +512,7 @@ func (s *Server) submitClusterMutation(ctx context.Context, command iwire.Comman
 		metadata.ClusterRouteMembers = append([]string(nil), route.Members...)
 		metadata.ClusterRouteLeaderHint = route.LeaderHint
 		metadata.ClusterRoutePlacementMode = route.PlacementMode
+		metadata.ClusterRouteKey = route.RouteKey
 		metadata.ClusterRouteTokenKnown = route.TokenKnown
 		metadata.ClusterRouteToken = route.Token
 		metadata.ClusterRoutePartitionID = route.PartitionID
