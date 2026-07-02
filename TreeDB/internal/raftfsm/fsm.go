@@ -47,7 +47,7 @@ type Options struct {
 
 	// SnapshotRestoreDBOptions is used when InstallRaftSnapshotV1 has to
 	// discard the current local DB handle and reopen the restored snapshot.
-	// Dir is always replaced with Cluster.Dir.
+	// Dir is always replaced with Cluster.Dir's resolved main DB directory.
 	SnapshotRestoreDBOptions backenddb.Options
 
 	ScopeRule     raftentry.ScopeRuleV1

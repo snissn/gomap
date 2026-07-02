@@ -206,7 +206,7 @@ func (f *FSM) closeForRaftSnapshotRestoreV1() error {
 
 func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 	opts := f.restoreDB
-	opts.Dir = f.cluster.Dir
+	opts.Dir = raftcluster.MainDBDir(f.cluster.Dir)
 	opts.CommandWAL = true
 	opts.CommandWALStatsScan = true
 	if opts.CommandWALSegmentTargetBytes <= 0 {
