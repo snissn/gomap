@@ -1729,6 +1729,30 @@ func TestMongoClusterMutationCommandErrorPreservesCommitAmbiguousOverDuplicateKe
 	assertStringField(t, response, "treedbErrorClass", "commit_ambiguous")
 }
 
+func TestMongoClusterMutationCommandErrorPreservesCollectionCommitAmbiguousOverDuplicateKey(t *testing.T) {
+	clusterErr := &collections.CommitAmbiguousError{
+		Operation: "insert",
+		Err:       collections.ErrDuplicateDocumentID,
+	}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "ShutdownInProgress")
+	assertStringField(t, response, "treedbErrorClass", "commit_ambiguous")
+}
+
+func TestMongoClusterMutationCommandErrorClassifiesLeaderHintBeforeRouteText(t *testing.T) {
+	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "not leader; leader_hint=router-1:27017"}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertStringField(t, response, "treedbErrorClass", "not_leader")
+	assertStringField(t, response, "treedbLeaderHint", "router-1:27017")
+}
+
 func TestMongoClusterLeaderHintUsesStructuredCarrier(t *testing.T) {
 	err := mongoClusterLeaderHintTestError{leaderHint: "node-c"}
 	if got := mongoClusterLeaderHint(err); got != "node-c" {

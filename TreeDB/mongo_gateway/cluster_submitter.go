@@ -914,6 +914,9 @@ func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 	var mongoErr mongoCommandError
 	if errors.As(err, &mongoErr) {
 		code, codeName = mongoErr.code, mongoErr.codeName
+	} else if errors.Is(err, collections.ErrCommitAmbiguous) {
+		nativeCode = iwire.ErrCommitAmbiguous
+		code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
 	} else if parsedNativeCode, ok := iwire.ErrorCodeOf(err); ok {
 		nativeCode = parsedNativeCode
 		switch nativeCode {
@@ -931,7 +934,7 @@ func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 		}
 	}
-	if collections.IsDuplicateKeyError(err) && nativeCode != iwire.ErrCommitAmbiguous && !errors.Is(err, collections.ErrCommitAmbiguous) {
+	if collections.IsDuplicateKeyError(err) && nativeCode != iwire.ErrCommitAmbiguous {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
 	return commandErrorWithFields(code, codeName, err.Error(), mongoClusterErrorFields(err, nativeCode, codeName))
@@ -957,7 +960,7 @@ func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName stri
 	message := strings.ToLower(err.Error())
 	switch nativeCode {
 	case iwire.ErrReadOnly:
-		if strings.Contains(message, "route group") || strings.Contains(message, "route") {
+		if mongoClusterRouteRejectedMessage(message) {
 			return "route_rejected"
 		}
 		if mongoClusterLeaderHint(err) != "" || strings.Contains(message, "not leader") {
@@ -985,6 +988,19 @@ func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName stri
 	default:
 		return "cluster_error"
 	}
+}
+
+func mongoClusterRouteRejectedMessage(message string) bool {
+	return strings.Contains(message, "route group") ||
+		strings.Contains(message, "cluster route rejected") ||
+		strings.Contains(message, "cluster route shape") ||
+		strings.Contains(message, "cluster token route") ||
+		strings.Contains(message, "cluster token batch route") ||
+		strings.Contains(message, "cluster route target") ||
+		strings.Contains(message, "route target") ||
+		strings.Contains(message, "route request") ||
+		strings.Contains(message, "requires fanout before submit") ||
+		strings.Contains(message, "requires command split before submit")
 }
 
 func mongoClusterLeaderHint(err error) string {
