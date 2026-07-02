@@ -197,6 +197,9 @@ func TestHashicorpRaftReadIndexCommitIndexMissingLogFailsClosed(t *testing.T) {
 	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
 		t.Fatalf("readIndexCommitIndexHasCurrentTerm err=%v want ErrReadBarrierNotSatisfied", err)
 	}
+	if !errors.Is(err, hraft.ErrLogNotFound) {
+		t.Fatalf("readIndexCommitIndexHasCurrentTerm err=%v want raft ErrLogNotFound", err)
+	}
 }
 
 func TestHashicorpRaftFSMApplyFailureDefaultPanics(t *testing.T) {
