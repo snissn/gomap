@@ -637,6 +637,63 @@ func mustMongoRouteTestCatalog(tb testing.TB, mode raftplacement.PlacementModeV1
 	return catalog
 }
 
+func mustMongoCollectionGroupRouteCatalog(tb testing.TB) raftplacement.ResolvedCatalogV1 {
+	tb.Helper()
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-c", "node-d"}, LeaderHint: "node-c"},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{
+			{
+				Collection: raftplacement.CollectionRefV1{
+					Database:   "app",
+					Catalog:    "default",
+					Collection: "users",
+				},
+				Mode:    raftplacement.PlacementModeCollectionV1,
+				GroupID: "group-b",
+			},
+		},
+	})
+	if err != nil {
+		tb.Fatalf("Validate Mongo collection group route catalog: %v", err)
+	}
+	return catalog
+}
+
+func mustMongoTokenGroupRouteCatalog(tb testing.TB, mode raftplacement.PlacementModeV1, groupBStart uint64) raftplacement.ResolvedCatalogV1 {
+	tb.Helper()
+	partitions := make([]raftplacement.TokenPartitionV1, 0, 2)
+	if groupBStart > 0 {
+		partitions = append(partitions, raftplacement.TokenPartitionV1{ID: "p0", GroupID: "group-a", Start: 0, End: groupBStart - 1})
+	}
+	partitions = append(partitions, raftplacement.TokenPartitionV1{ID: "p1", GroupID: "group-b", Start: groupBStart, End: ^uint64(0)})
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-c", "node-d"}, LeaderHint: "node-c"},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{
+			{
+				Collection: raftplacement.CollectionRefV1{
+					Database:   "app",
+					Catalog:    "default",
+					Collection: "users",
+				},
+				Mode:            mode,
+				TokenPartitions: partitions,
+			},
+		},
+	})
+	if err != nil {
+		tb.Fatalf("Validate Mongo token group route catalog: %v", err)
+	}
+	return catalog
+}
+
 func TestClusterAdmissionMongoLeaderRoutesThroughSubmitter(t *testing.T) {
 	submitter := &mongoClusterAdmissionSubmitter{
 		mongoClusterFakeSubmitter: &mongoClusterFakeSubmitter{},
@@ -915,6 +972,77 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 	}
 }
 
+func TestClusterRoutePreflightMongoRejectsUnsupportedFindRoute(t *testing.T) {
+	server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+	response := serveCommand(t, server, 336108, bson.D{
+		{Key: "find", Value: "users"},
+		{Key: "filter", Value: bson.D{{Key: "name", Value: "Ada"}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "query route shape is not supported")
+	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+	}
+	if calls := submitter.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("submit calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterRoutePreflightMongoRejectsNonShardKeyWrites(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(testing.TB, *Server) wire.Document
+	}{
+		{
+			name: "update",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336109, bson.D{
+					{Key: "update", Value: "users"},
+					{Key: "updates", Value: bson.A{
+						bson.D{
+							{Key: "q", Value: bson.D{{Key: "name", Value: "Ada"}}},
+							{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "hnl"}}}}},
+						},
+						bson.D{
+							{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}},
+							{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "city", Value: "hnl"}}}}},
+						},
+					}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+		{
+			name: "delete",
+			run: func(tb testing.TB, server *Server) wire.Document {
+				return serveCommand(tb, server, 336110, bson.D{
+					{Key: "delete", Value: "users"},
+					{Key: "deletes", Value: bson.A{
+						bson.D{{Key: "q", Value: bson.D{{Key: "name", Value: "Ada"}}}, {Key: "limit", Value: int32(1)}},
+						bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "limit", Value: int32(1)}},
+					}},
+					{Key: "$db", Value: "app"},
+				})
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server, submitter := newMongoPlacementRouteTestServer(t, raftplacement.PlacementModeRingV1)
+			response := tc.run(t, server)
+			assertCommandError(t, response, "NotWritablePrimary")
+			assertErrmsgContains(t, response, "query route shape is not supported")
+			if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+				t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+			}
+			if calls := submitter.snapshotCalls(); len(calls) != 0 {
+				t.Fatalf("submit calls=%d want 0", len(calls))
+			}
+		})
+	}
+}
+
 func TestMongoGroupRoutedDispatcherRoutesCollectionBatchWrite(t *testing.T) {
 	provider := &mongoStaticClusterRouteProvider{
 		target: treenativewire.ClusterRouteTarget{
@@ -991,6 +1119,54 @@ func TestMongoGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
 	meta := calls[0].metadata
 	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
 		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
+	}
+}
+
+func TestMongoGroupRoutedDispatcherCatalogRoutesCollectionOwner(t *testing.T) {
+	provider := treenativewire.NewCatalogClusterRouteProvider(mustMongoCollectionGroupRouteCatalog(t))
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	response := serveCommand(t, server, 336304, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeCollection) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || meta.ClusterRoutePlacementMode != string(raftplacement.PlacementModeCollectionV1) {
+		t.Fatalf("group-b catalog route metadata=%+v want collection owner group-b/node-c", meta)
+	}
+}
+
+func TestMongoGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(t *testing.T) {
+	token := mongoClusterRouteTokenForValue(t, "u1")
+	provider := treenativewire.NewCatalogClusterRouteProvider(mustMongoTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token))
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	response := serveCommand(t, server, 336305, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
+		t.Fatalf("group-b catalog token route metadata=%+v want group-b/node-c token=%d p1", meta, token)
 	}
 }
 

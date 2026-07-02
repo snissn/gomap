@@ -165,6 +165,18 @@ func TestValidateFeatureFloorFailsClosed(t *testing.T) {
 			},
 			want: ErrUnsupportedVersion,
 		},
+		{
+			name: "unsupported feature minor",
+			mut: func(c *CatalogV1) {
+				c.Features = raftcluster.FeatureSet{
+					ConfigVersion: SupportedCatalogVersion,
+					Required: []raftcluster.RequiredFeature{
+						{Name: FeatureCollectionGroups, Version: raftcluster.Version{Major: 1, Minor: 1}},
+					},
+				}
+			},
+			want: ErrUnsupportedVersion,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

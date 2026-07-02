@@ -674,6 +674,10 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
 		return findResponsePayload{document: doc}, err
 	}
+	if err := s.preflightClusterFindRoute(context.Background(), db, collection); err != nil {
+		doc, err := mongoClusterMutationCommandError(err)
+		return findResponsePayload{document: doc}, err
+	}
 	col, err := s.openCollectionCached(name)
 	if errors.Is(err, collections.ErrCollectionNotFound) {
 		doc, err := marshalCursorResponse(db, collection, bson.A{})

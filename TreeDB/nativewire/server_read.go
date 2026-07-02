@@ -12,6 +12,9 @@ func (s *Server) handleRead(ctx context.Context, header iwire.Header, state *con
 	var readMeta ReadMetadata
 	var err error
 	if cmd.Header.ID != iwire.CommandCursorNext {
+		if err := s.preflightClusterReadRoute(ctx, state, cmd); err != nil {
+			return nil, nil, false, err
+		}
 		readMeta, err = s.readMetadataForCommand(ctx, header, cmd)
 		if err != nil {
 			return nil, nil, false, err
@@ -127,6 +130,49 @@ func coordinatedReadCommand(commandID iwire.CommandID) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Server) preflightClusterReadRoute(ctx context.Context, state *connState, cmd iwire.ValidatedCommand) error {
+	if s == nil || s.clusterSubmitter == nil {
+		return nil
+	}
+	if _, ok := s.clusterSubmitter.(ClusterRouteProvider); !ok {
+		return nil
+	}
+	switch cmd.Header.ID {
+	case iwire.CommandIndexLookup, iwire.CommandIndexRange, iwire.CommandOpenScan:
+	default:
+		return nil
+	}
+	collection, err := clusterReadRouteCollection(state, cmd.Known)
+	if err != nil {
+		return err
+	}
+	name := ""
+	if cmd.Schema != nil {
+		name = cmd.Schema.Name
+	}
+	_, _, err = PreflightClusterRoute(ctx, s.clusterSubmitter, ClusterRouteRequest{
+		Database:    "default",
+		Catalog:     "default",
+		Collection:  collection,
+		CommandID:   cmd.Header.ID,
+		CommandName: name,
+		Shape:       ClusterRouteShapeQuery,
+	})
+	return err
+}
+
+func clusterReadRouteCollection(state *connState, sections []iwire.Section) (string, error) {
+	raw, err := metadataSection(sections, iwire.SectionCollectionRef)
+	if err != nil {
+		return "", err
+	}
+	collection, _, err := decodeCollectionRef(state, raw)
+	if err != nil {
+		return "", err
+	}
+	return collection, nil
 }
 
 func rejectUnsupportedReadConsistencyPolicy(cmd iwire.ValidatedCommand) error {
