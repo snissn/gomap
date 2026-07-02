@@ -700,10 +700,8 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	if iterErr == nil {
 		iterErr = it.Error()
 	}
-	if closeErr := it.Close(); iterErr == nil {
-		iterErr = closeErr
-	}
-	return iterErr
+	closeErr := it.Close()
+	return errors.Join(iterErr, closeErr)
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
