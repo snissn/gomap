@@ -74,6 +74,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - system model, components, directory layout, side stores, lock model.
 - `TreeDB/docs/spec/contracts.md`
   - API-level behavioral contracts (reads/writes, iteration, snapshots, concurrency, locking).
+- `TreeDB/docs/spec/conditional-kv-adapter-readiness.md`
+  - downstream adapter closeout for native `EntryRevision` cache tokens,
+    conditional transaction conflict mapping, command-WAL/fail-closed surfaces,
+    and unsupported Badger-style feature errors.
 - `TreeDB/docs/spec/concurrency-paradigms.md`
   - complete concurrency mechanism inventory, lock/worker topology, and option/flag matrix for perf/refactor audits.
 - `TreeDB/docs/spec/storage-format.md`
