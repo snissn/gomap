@@ -164,15 +164,15 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 		t.Fatalf("tx snapshot Get b=%q, want 2", gotB)
 	}
 	gotMissing, err := snap.Get([]byte("snap/missing"))
-	if err != nil {
-		t.Fatalf("tx snapshot Get missing: %v", err)
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("tx snapshot Get missing err=%v, want ErrKeyNotFound", err)
 	}
 	if gotMissing != nil {
 		t.Fatalf("tx snapshot Get missing=%q, want nil", gotMissing)
 	}
 	gotVersionedMissing, _, err := snap.GetVersioned([]byte("snap/missing-versioned"))
-	if err != nil {
-		t.Fatalf("tx snapshot GetVersioned missing: %v", err)
+	if !errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("tx snapshot GetVersioned missing err=%v, want ErrKeyNotFound", err)
 	}
 	if gotVersionedMissing != nil {
 		t.Fatalf("tx snapshot GetVersioned missing=%q, want nil", gotVersionedMissing)

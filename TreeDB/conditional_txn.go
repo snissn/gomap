@@ -60,9 +60,6 @@ func (s conditionalTxnSnapshot) GetAppend(key, dst []byte) ([]byte, error) {
 
 func (s conditionalTxnSnapshot) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
 	out, revision, err := s.GetVersionedAppend(key, nil)
-	if errors.Is(err, ErrKeyNotFound) {
-		return nil, revision, nil
-	}
 	if err != nil {
 		return nil, revision, err
 	}
