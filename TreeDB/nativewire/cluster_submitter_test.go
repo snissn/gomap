@@ -1569,6 +1569,7 @@ func TestClusterSubmitterStatsTrackRaftCommittedAndFollowerReject(t *testing.T) 
 	t.Run("raft_committed_success", func(t *testing.T) {
 		submitter := &fakeClusterSubmitter{
 			resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+				time.Sleep(2 * time.Millisecond)
 				result.ActualAck = AckRaftCommitted
 				result.CommittedRecoverable = true
 				return replaceResponseAckPolicy(result, AckRaftCommitted), nil
