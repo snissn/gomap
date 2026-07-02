@@ -283,6 +283,40 @@ func TestRaftSnapshotV1OpenCleansAbandonedStagedArchives(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1OpenClassifiesStagedCleanupFailure(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
+	defer func() { _ = sourceDB.Close() }()
+
+	resolved, err := raftcluster.Validate(validFSMClusterConfig(sourceDir))
+	if err != nil {
+		t.Fatalf("Validate cluster config: %v", err)
+	}
+	if err := os.MkdirAll(resolved.Layout.SnapshotDir, 0o700); err != nil {
+		t.Fatalf("Mkdir snapshot dir: %v", err)
+	}
+	stagingPath := raftSnapshotStagingDirV1(resolved.Layout.SnapshotDir)
+	if err := os.WriteFile(stagingPath, []byte("not a staging directory"), 0o600); err != nil {
+		t.Fatalf("Write staging path file: %v", err)
+	}
+
+	fsm, openErr := Open(Options{
+		DB:      sourceDB,
+		Cluster: validFSMClusterConfig(sourceDir),
+		StoreOptions: raftapply.DurableApplyStoreOptions{
+			DisableSync: true,
+		},
+	})
+	if openErr == nil {
+		_ = fsm.Close()
+		t.Fatal("Open with invalid staged snapshot path succeeded, want unsafe durability error")
+	}
+	if code, ok := ErrorCodeOf(openErr); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("ErrorCodeOf(Open staged cleanup failure)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, openErr)
+	}
+}
+
 func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
