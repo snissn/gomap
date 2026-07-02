@@ -122,7 +122,7 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 
 func createRaftSnapshotArchiveFileV1(snapshotDir string) (*os.File, string, error) {
 	if strings.TrimSpace(snapshotDir) == "" {
-		return nil, "", fmt.Errorf("raftfsm: missing snapshot staging directory")
+		return nil, "", fmt.Errorf("raftfsm: missing snapshot directory (SnapshotDir is empty)")
 	}
 	stagingDir := raftSnapshotStagingDirV1(snapshotDir)
 	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
@@ -149,6 +149,10 @@ func cleanupAbandonedRaftSnapshotArchivesV1(snapshotDir string) error {
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		matched, err := filepath.Match("treedb-snapshot-*.tar", entry.Name())
+		if err != nil || !matched {
 			continue
 		}
 		path := filepath.Join(stagingDir, entry.Name())
