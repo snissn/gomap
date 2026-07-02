@@ -360,7 +360,7 @@ func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
 			_ = file.Close()
 			return err
 		}
-		_, copyErr := io.Copy(tw, file)
+		copyErr := copyRaftSnapshotFileContentV1(tw, file, header.Size)
 		closeErr := file.Close()
 		return errors.Join(copyErr, closeErr)
 	})
@@ -427,9 +427,20 @@ func appendRaftSnapshotStoragePathV1(tw *tar.Writer, archiveName, src string) er
 		_ = file.Close()
 		return err
 	}
-	_, copyErr := io.Copy(tw, file)
+	copyErr := copyRaftSnapshotFileContentV1(tw, file, info.Size())
 	closeErr := file.Close()
 	return errors.Join(copyErr, closeErr)
+}
+
+func copyRaftSnapshotFileContentV1(dst io.Writer, src io.Reader, size int64) error {
+	if size < 0 {
+		return fmt.Errorf("raftfsm: negative snapshot file size %d", size)
+	}
+	copied, err := io.CopyN(dst, src, size)
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("raftfsm: snapshot file changed while exporting: copied %d of %d bytes", copied, size)
+	}
+	return err
 }
 
 func writeRaftSnapshotDirHeaderV1(tw *tar.Writer, name string) error {

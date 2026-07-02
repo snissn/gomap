@@ -93,6 +93,40 @@ func TestRaftSnapshotV1ExtractRejectsOversizedArchiveHeader(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1CopyFileContentDoesNotOverrunHeaderSize(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "db/index.db",
+		Mode: 0o600,
+		Size: 4,
+	}); err != nil {
+		t.Fatalf("WriteHeader: %v", err)
+	}
+	if err := copyRaftSnapshotFileContentV1(tw, strings.NewReader("abcdef"), 4); err != nil {
+		t.Fatalf("copyRaftSnapshotFileContentV1: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close archive: %v", err)
+	}
+
+	tr := tar.NewReader(bytes.NewReader(buf.Bytes()))
+	header, err := tr.Next()
+	if err != nil {
+		t.Fatalf("Next archive entry: %v", err)
+	}
+	if header.Size != 4 {
+		t.Fatalf("archive entry size=%d want 4", header.Size)
+	}
+	raw, err := io.ReadAll(tr)
+	if err != nil {
+		t.Fatalf("ReadAll archive entry: %v", err)
+	}
+	if got, want := string(raw), "abcd"; got != want {
+		t.Fatalf("archive content=%q want %q", got, want)
+	}
+}
+
 func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
