@@ -162,6 +162,43 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	}
 }
 
+func TestConditionalTxnSnapshotRequiresWithSnapshotInitializer(t *testing.T) {
+	cached, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer cached.Close()
+
+	tx, err := cached.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("cached NewConditionalTxn: %v", err)
+	}
+	if snap := tx.Snapshot(); snap != nil {
+		t.Fatalf("cached NewConditionalTxn Snapshot()=%T, want nil", snap)
+	}
+	if err := tx.Close(); err != nil {
+		t.Fatalf("cached tx Close: %v", err)
+	}
+
+	backend, cleanup, err := OpenBackend(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("OpenBackend: %v", err)
+	}
+	defer cleanup()
+
+	backendWrapper := &DB{backend: backend}
+	tx, err = backendWrapper.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("backend NewConditionalTxn: %v", err)
+	}
+	if snap := tx.Snapshot(); snap != nil {
+		t.Fatalf("backend NewConditionalTxn Snapshot()=%T, want nil", snap)
+	}
+	if err := tx.Close(); err != nil {
+		t.Fatalf("backend tx Close: %v", err)
+	}
+}
+
 func TestConditionalTxnRequireReadVersionConflictsAfterSnapshotRead(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
 	if err != nil {

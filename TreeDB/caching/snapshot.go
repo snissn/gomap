@@ -667,14 +667,11 @@ func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) 
 	return s.iterate(start, end, true, fn)
 }
 
-func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) error {
+func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) (err error) {
 	if fn == nil {
-		return errors.New("cachingdb: snapshot iterate nil callback")
+		return errors.New("treedb: snapshot iterate nil callback")
 	}
-	var (
-		it  merging.Iterator
-		err error
-	)
+	var it merging.Iterator
 	if reverse {
 		it, err = s.ReverseIterator(start, end)
 	} else {
@@ -683,6 +680,9 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	if err != nil {
 		return err
 	}
+	defer func() {
+		err = errors.Join(err, it.Close())
+	}()
 	var iterErr error
 	for it.Valid() {
 		key := it.Key()
@@ -700,8 +700,7 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	if iterErr == nil {
 		iterErr = it.Error()
 	}
-	closeErr := it.Close()
-	return errors.Join(iterErr, closeErr)
+	return iterErr
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {

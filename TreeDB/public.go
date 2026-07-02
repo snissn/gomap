@@ -37,9 +37,10 @@ const LegacyEntryRevision = page.LegacyEntryRevision
 
 // ConditionalTxn is TreeDB's native conditional transaction type.
 type ConditionalTxn struct {
-	backend      *db.ConditionalTxn
-	cached       caching.ConditionalTxn
-	cachedActive bool
+	backend         *db.ConditionalTxn
+	cached          caching.ConditionalTxn
+	cachedActive    bool
+	snapshotExposed bool
 }
 
 type MaintenancePhase = caching.MaintenancePhase
@@ -1755,6 +1756,7 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 		}
 		tx.backend = nil
 		tx.cachedActive = true
+		tx.snapshotExposed = withSnapshot
 		return nil
 	}
 	if db.backend == nil {
@@ -1764,7 +1766,7 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if err != nil {
 		return err
 	}
-	*tx = ConditionalTxn{backend: backendTx}
+	*tx = ConditionalTxn{backend: backendTx, snapshotExposed: withSnapshot}
 	return nil
 }
 

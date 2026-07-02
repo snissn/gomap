@@ -11,7 +11,7 @@ import "github.com/snissn/gomap/TreeDB/page"
 // transaction-owned snapshot fails closed because conditional range guards are
 // not part of the public transaction contract yet.
 func (tx *ConditionalTxn) Snapshot() Snapshot {
-	if tx == nil {
+	if tx == nil || !tx.snapshotExposed {
 		return nil
 	}
 	if tx.cachedActive {
@@ -274,6 +274,7 @@ func (tx *ConditionalTxn) Commit() error {
 			_ = tx.cached.Close()
 		}
 		tx.cachedActive = false
+		tx.snapshotExposed = false
 		return err
 	}
 	if tx.backend != nil {
@@ -282,6 +283,7 @@ func (tx *ConditionalTxn) Commit() error {
 			_ = tx.backend.Close()
 		}
 		tx.backend = nil
+		tx.snapshotExposed = false
 		return err
 	}
 	return ErrConditionalTxnClosed
@@ -299,6 +301,7 @@ func (tx *ConditionalTxn) CommitSync() error {
 			_ = tx.cached.Close()
 		}
 		tx.cachedActive = false
+		tx.snapshotExposed = false
 		return err
 	}
 	if tx.backend != nil {
@@ -307,6 +310,7 @@ func (tx *ConditionalTxn) CommitSync() error {
 			_ = tx.backend.Close()
 		}
 		tx.backend = nil
+		tx.snapshotExposed = false
 		return err
 	}
 	return ErrConditionalTxnClosed
@@ -320,11 +324,13 @@ func (tx *ConditionalTxn) Close() error {
 	if tx.cachedActive {
 		err := tx.cached.Close()
 		tx.cachedActive = false
+		tx.snapshotExposed = false
 		return err
 	}
 	if tx.backend != nil {
 		err := tx.backend.Close()
 		tx.backend = nil
+		tx.snapshotExposed = false
 		return err
 	}
 	return nil
