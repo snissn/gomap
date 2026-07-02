@@ -699,6 +699,13 @@ func (s *Snapshot) IteratorWithOptions(start, end []byte, opts IteratorOptions) 
 	return s.tree.IteratorWithOptions(start, end, opts), nil
 }
 
+// Iterate calls fn for each visible key/value pair in [start, end) using this
+// snapshot's pinned view. Key and value are read-only views valid only until fn
+// returns. Returning an error from fn stops iteration and returns that error.
+func (s *Snapshot) Iterate(start, end []byte, fn func(key, value []byte) error) error {
+	return s.iterate(start, end, false, fn)
+}
+
 // ReverseIterator returns a reverse iterator.
 func (db *DB) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	return db.ReverseIteratorWithOptions(start, end, IteratorOptions{})
@@ -727,6 +734,46 @@ func (s *Snapshot) ReverseIteratorWithOptions(start, end []byte, opts IteratorOp
 		return nil, ErrClosed
 	}
 	return s.tree.ReverseIteratorWithOptions(start, end, opts), nil
+}
+
+// ReverseIterate calls fn for each visible key/value pair in [start, end) in
+// reverse order using this snapshot's pinned view. Key and value are read-only
+// views valid only until fn returns. Returning an error from fn stops iteration
+// and returns that error.
+func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) error) error {
+	return s.iterate(start, end, true, fn)
+}
+
+func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) error {
+	if fn == nil {
+		return nil
+	}
+	var (
+		it  iterator.UnsafeIterator
+		err error
+	)
+	if reverse {
+		it, err = s.ReverseIterator(start, end)
+	} else {
+		it, err = s.Iterator(start, end)
+	}
+	if err != nil {
+		return err
+	}
+	var iterErr error
+	for ; it.Valid(); it.Next() {
+		if err := fn(it.Key(), it.Value()); err != nil {
+			iterErr = err
+			break
+		}
+	}
+	if iterErr == nil {
+		iterErr = it.Error()
+	}
+	if closeErr := it.Close(); iterErr == nil {
+		iterErr = closeErr
+	}
+	return iterErr
 }
 
 // Stats returns database statistics.

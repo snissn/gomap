@@ -635,6 +635,14 @@ func (s *Snapshot) Iterator(start, end []byte) (merging.Iterator, error) {
 	return merging.NewMergingIterator(sources, start, end), nil
 }
 
+// Iterate calls fn for each visible key/value pair in [start, end) using this
+// snapshot's pinned memtable and backend view. Key and value are read-only views
+// valid only until fn returns. Returning an error from fn stops iteration and
+// returns that error.
+func (s *Snapshot) Iterate(start, end []byte, fn func(key, value []byte) error) error {
+	return s.iterate(start, end, false, fn)
+}
+
 // ReverseIterator returns a stable reverse iterator over the snapshot's queued
 // memtables plus its backend snapshot.
 func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) {
@@ -649,6 +657,46 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) 
 		return newSingleSourceIterator(sources[0].Iter, start, end), nil
 	}
 	return merging.NewReverseMergingIterator(sources, start, end), nil
+}
+
+// ReverseIterate calls fn for each visible key/value pair in [start, end) in
+// reverse order using this snapshot's pinned memtable and backend view. Key and
+// value are read-only views valid only until fn returns. Returning an error from
+// fn stops iteration and returns that error.
+func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) error) error {
+	return s.iterate(start, end, true, fn)
+}
+
+func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) error {
+	if fn == nil {
+		return nil
+	}
+	var (
+		it  merging.Iterator
+		err error
+	)
+	if reverse {
+		it, err = s.ReverseIterator(start, end)
+	} else {
+		it, err = s.Iterator(start, end)
+	}
+	if err != nil {
+		return err
+	}
+	var iterErr error
+	for ; it.Valid(); it.Next() {
+		if err := fn(it.Key(), it.Value()); err != nil {
+			iterErr = err
+			break
+		}
+	}
+	if iterErr == nil {
+		iterErr = it.Error()
+	}
+	if closeErr := it.Close(); iterErr == nil {
+		iterErr = closeErr
+	}
+	return iterErr
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
