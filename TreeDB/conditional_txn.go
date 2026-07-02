@@ -6,17 +6,41 @@ import "github.com/snissn/gomap/TreeDB/page"
 // NewConditionalTxnWithSnapshot and InitConditionalTxnWithSnapshot always
 // return a transaction with a snapshot. The transaction owns the snapshot and
 // closes it on Commit, CommitSync, or Close.
+//
+// Point and versioned point reads are supported. Range iteration on this
+// transaction-owned snapshot fails closed because conditional range guards are
+// not part of the public transaction contract yet.
 func (tx *ConditionalTxn) Snapshot() Snapshot {
 	if tx == nil {
 		return nil
 	}
 	if tx.cachedActive {
-		return tx.cached.Snapshot()
+		snap := tx.cached.Snapshot()
+		if snap == nil {
+			return nil
+		}
+		return conditionalTxnSnapshot{Snapshot: snap}
 	}
 	if tx.backend != nil {
-		return tx.backend.Snapshot()
+		snap := tx.backend.Snapshot()
+		if snap == nil {
+			return nil
+		}
+		return conditionalTxnSnapshot{Snapshot: snap}
 	}
 	return nil
+}
+
+type conditionalTxnSnapshot struct {
+	Snapshot
+}
+
+func (s conditionalTxnSnapshot) Iterate(start, end []byte, fn func(key, value []byte) error) error {
+	return ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) error) error {
+	return ErrConditionalTxnUnsupported
 }
 
 // ReserveReadSet reserves read-precondition capacity for high-fanout

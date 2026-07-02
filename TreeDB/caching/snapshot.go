@@ -669,7 +669,7 @@ func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) 
 
 func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) error {
 	if fn == nil {
-		return nil
+		return errors.New("cachingdb: snapshot iterate nil callback")
 	}
 	var (
 		it  merging.Iterator
@@ -684,11 +684,18 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 		return err
 	}
 	var iterErr error
-	for ; it.Valid(); it.Next() {
-		if err := fn(it.Key(), it.Value()); err != nil {
+	for it.Valid() {
+		key := it.Key()
+		value := it.Value()
+		if err := it.Error(); err != nil {
 			iterErr = err
 			break
 		}
+		if err := fn(key, value); err != nil {
+			iterErr = err
+			break
+		}
+		it.Next()
 	}
 	if iterErr == nil {
 		iterErr = it.Error()

@@ -1725,6 +1725,8 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 
 // InitConditionalTxnWithSnapshot initializes tx as a native conditional
 // transaction and exposes its pinned opening snapshot through tx.Snapshot.
+// The transaction-owned snapshot supports point reads; range iteration fails
+// closed until native conditional range guards are part of the public contract.
 // Callers must pass zero-value or closed transaction storage.
 func (db *DB) InitConditionalTxnWithSnapshot(tx *ConditionalTxn) error {
 	return db.initConditionalTxn(tx, true)
@@ -1777,7 +1779,9 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 
 // NewConditionalTxnWithSnapshot opens a native conditional transaction and
 // exposes its pinned opening snapshot through tx.Snapshot. The transaction owns
-// that snapshot and closes it on Commit, CommitSync, or Close.
+// that snapshot and closes it on Commit, CommitSync, or Close. The snapshot
+// supports point reads; range iteration fails closed until native conditional
+// range guards are part of the public contract.
 func (db *DB) NewConditionalTxnWithSnapshot() (*ConditionalTxn, error) {
 	tx := &ConditionalTxn{}
 	if err := db.InitConditionalTxnWithSnapshot(tx); err != nil {

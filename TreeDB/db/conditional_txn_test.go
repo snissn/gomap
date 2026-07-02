@@ -143,6 +143,39 @@ func TestConditionalTxnRejectsAbsentReadInsertDeleteCycle(t *testing.T) {
 	}
 }
 
+func TestConditionalTxnRejectsExternalSnapshotRevisionBeforeTxn(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SetSync([]byte("guard"), []byte("before")); err != nil {
+		t.Fatalf("seed guard: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer snap.Close()
+	_, revision, err := snap.GetVersionedAppend([]byte("guard"), nil)
+	if err != nil {
+		t.Fatalf("snapshot GetVersionedAppend guard: %v", err)
+	}
+	if err := d.SetSync([]byte("guard"), []byte("after")); err != nil {
+		t.Fatalf("concurrent guard write: %v", err)
+	}
+
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+	if err := tx.RequireReadVersion([]byte("guard"), revision, true); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("txn RequireReadVersion error=%v, want ErrConcurrentModification", err)
+	}
+}
+
 func TestConditionalTxnAllowsDisjointConcurrentWrite(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

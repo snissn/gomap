@@ -88,7 +88,28 @@ func TestSnapshotIterateBackendFastPathUsesPinnedView(t *testing.T) {
 	}
 }
 
-func TestConditionalTxnSnapshotUsesPinnedPointAndRangeView(t *testing.T) {
+func TestSnapshotIterateNilCallbackFailsClosed(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer snap.Close()
+
+	if err := snap.Iterate([]byte("snap/"), []byte("snap0"), nil); err == nil {
+		t.Fatal("snapshot Iterate nil callback returned nil error")
+	}
+	if err := snap.ReverseIterate([]byte("snap/"), []byte("snap0"), nil); err == nil {
+		t.Fatal("snapshot ReverseIterate nil callback returned nil error")
+	}
+}
+
+func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -127,9 +148,10 @@ func TestConditionalTxnSnapshotUsesPinnedPointAndRangeView(t *testing.T) {
 		t.Fatalf("tx.GetVersionedAppend=%q, want 1", gotValue)
 	}
 
-	got := collectSnapshotIteratePairs(t, snap, false)
-	if want := []string{"snap/a=1", "snap/b=2"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("tx snapshot Iterate=%v want %v", got, want)
+	if err := snap.Iterate([]byte("snap/"), []byte("snap0"), func(key, value []byte) error {
+		return nil
+	}); !errors.Is(err, ErrConditionalTxnUnsupported) {
+		t.Fatalf("tx snapshot Iterate error=%v, want ErrConditionalTxnUnsupported", err)
 	}
 
 	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
@@ -177,14 +199,41 @@ func TestConditionalTxnRequireReadVersionConflictsAfterSnapshotRead(t *testing.T
 	if !bytes.Equal(gotValue, []byte("1")) {
 		t.Fatalf("snapshot GetVersionedAppend=%q, want 1", gotValue)
 	}
-	if err := tx.RequireReadVersion([]byte("snap/a"), revision, true); err != nil {
-		t.Fatalf("tx.RequireReadVersion: %v", err)
+	if err := tx.RequireReadVersion([]byte("snap/a"), revision, true); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("tx.RequireReadVersion error=%v, want ErrConcurrentModification", err)
 	}
-	if err := tx.Set([]byte("snap/b"), []byte("inside")); err != nil {
-		t.Fatalf("tx.Set: %v", err)
+}
+
+func TestConditionalTxnRequireReadVersionRejectsPreTxnSnapshotRevision(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open: %v", err)
 	}
-	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
-		t.Fatalf("tx.Commit error=%v, want ErrConcurrentModification", err)
+	defer d.Close()
+
+	if err := d.Set([]byte("snap/a"), []byte("1")); err != nil {
+		t.Fatalf("set a: %v", err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer snap.Close()
+	_, revision, err := snap.GetVersionedAppend([]byte("snap/a"), nil)
+	if err != nil {
+		t.Fatalf("snapshot GetVersionedAppend: %v", err)
+	}
+
+	if err := d.Set([]byte("snap/a"), []byte("2")); err != nil {
+		t.Fatalf("outside set a: %v", err)
+	}
+	tx, err := d.NewConditionalTxn()
+	if err != nil {
+		t.Fatalf("NewConditionalTxn: %v", err)
+	}
+	defer tx.Close()
+	if err := tx.RequireReadVersion([]byte("snap/a"), revision, true); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("tx.RequireReadVersion error=%v, want ErrConcurrentModification", err)
 	}
 }
 

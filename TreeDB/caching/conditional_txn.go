@@ -79,8 +79,10 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 }
 
 // InitConditionalTxnWithSnapshot initializes tx and pins the opening snapshot.
-// Point reads use that snapshot, and Snapshot returns it for caller-owned range
-// scans. The snapshot is owned by the transaction and closed by Commit or Close.
+// Point reads use that snapshot. Public callers must not rely on range scans as
+// commit preconditions until native conditional range guards are supported. The
+// snapshot is owned by the transaction and closed by Commit, CommitSync, or
+// Close.
 func (db *DB) InitConditionalTxnWithSnapshot(tx *ConditionalTxn) error {
 	return db.initConditionalTxn(tx, true)
 }
@@ -130,7 +132,7 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 
 // Snapshot returns the transaction's pinned opening snapshot when this
 // transaction was initialized with InitConditionalTxnWithSnapshot. The
-// transaction owns the snapshot and closes it on Commit or Close.
+// transaction owns the snapshot and closes it on Commit, CommitSync, or Close.
 func (tx *ConditionalTxn) Snapshot() *Snapshot {
 	if tx == nil || tx.closed {
 		return nil
@@ -232,7 +234,28 @@ func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevi
 		return err
 	}
 	key = normalizeRawKVPointKey(key)
+	if err := tx.validateCurrentReadVersion(key, revision, found); err != nil {
+		return err
+	}
 	return tx.recordRead(key, revision, found)
+}
+
+func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	_, currentRevision, err := tx.db.GetVersionedAppend(key, nil)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return conditionalReadVersionMismatch(revision, found, currentRevision, false)
+	}
+	if err != nil {
+		return err
+	}
+	return conditionalReadVersionMismatch(revision, found, currentRevision, true)
+}
+
+func conditionalReadVersionMismatch(wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
+	if wantFound != gotFound || wantRevision != gotRevision {
+		return backenddb.ErrConcurrentModification
+	}
+	return nil
 }
 
 func (tx *ConditionalTxn) getCommittedVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {

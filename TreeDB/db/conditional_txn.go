@@ -229,7 +229,28 @@ func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevi
 		return err
 	}
 	key = normalizeRawKVPointKey(key)
+	if err := tx.validateCurrentReadVersion(key, revision, found); err != nil {
+		return err
+	}
 	return tx.recordRead(key, revision, found)
+}
+
+func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	_, currentRevision, err := tx.db.GetVersionedAppend(key, nil)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return conditionalReadVersionMismatch(revision, found, currentRevision, false)
+	}
+	if err != nil {
+		return err
+	}
+	return conditionalReadVersionMismatch(revision, found, currentRevision, true)
+}
+
+func conditionalReadVersionMismatch(wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {
+	if wantFound != gotFound || wantRevision != gotRevision {
+		return ErrConcurrentModification
+	}
+	return nil
 }
 
 // Has reports whether key exists in the opening snapshot and records the key as
