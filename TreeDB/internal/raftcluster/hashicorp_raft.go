@@ -417,7 +417,10 @@ func (p *HashicorpRaftProvider) readIndexCommitIndexHasCurrentTerm(commitIndex, 
 	}
 	var entry hraft.Log
 	if err := p.logStore.GetLog(commitIndex, &entry); err != nil {
-		return false, fmt.Errorf("%w: unable to inspect committed raft log %d for read-index term gate: %v", ErrReadBarrierNotSatisfied, commitIndex, err)
+		return false, errors.Join(
+			ErrReadBarrierNotSatisfied,
+			fmt.Errorf("unable to inspect committed raft log %d for read-index term gate: %w", commitIndex, err),
+		)
 	}
 	if entry.Term > term {
 		return false, fmt.Errorf("%w: committed raft log %d has future term %d above current term %d", ErrReadBarrierNotSatisfied, commitIndex, entry.Term, term)
