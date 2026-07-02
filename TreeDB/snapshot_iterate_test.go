@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -140,12 +141,31 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 		t.Fatalf("outside set c: %v", err)
 	}
 
-	gotValue, _, err := tx.GetVersionedAppend([]byte("snap/a"), nil)
+	gotValue, _, err := snap.GetVersionedAppend([]byte("snap/a"), nil)
 	if err != nil {
-		t.Fatalf("tx.GetVersionedAppend after outside delete: %v", err)
+		t.Fatalf("tx snapshot GetVersionedAppend after outside delete: %v", err)
 	}
 	if !bytes.Equal(gotValue, []byte("1")) {
-		t.Fatalf("tx.GetVersionedAppend=%q, want 1", gotValue)
+		t.Fatalf("tx snapshot GetVersionedAppend=%q, want 1", gotValue)
+	}
+	gotB, err := snap.Get([]byte("snap/b"))
+	if err != nil {
+		t.Fatalf("tx snapshot Get b: %v", err)
+	}
+	if !bytes.Equal(gotB, []byte("2")) {
+		t.Fatalf("tx snapshot Get b=%q, want 2", gotB)
+	}
+	var seen []string
+	err = snap.GetManyView([][]byte{[]byte("snap/b"), []byte("snap/missing")}, func(index int, key, value []byte, found bool) error {
+		seen = append(seen, strconv.Itoa(index)+":"+string(key)+":"+string(value)+":"+strconv.FormatBool(found))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tx snapshot GetManyView: %v", err)
+	}
+	wantSeen := []string{"0:snap/b:2:true", "1:snap/missing::false"}
+	if !reflect.DeepEqual(seen, wantSeen) {
+		t.Fatalf("tx snapshot GetManyView=%v, want %v", seen, wantSeen)
 	}
 
 	if err := snap.Iterate([]byte("snap/"), []byte("snap0"), func(key, value []byte) error {

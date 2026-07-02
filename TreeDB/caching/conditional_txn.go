@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -241,14 +242,27 @@ func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevi
 }
 
 func (tx *ConditionalTxn) validateCurrentReadVersion(key []byte, revision page.EntryRevision, found bool) error {
-	_, currentRevision, err := tx.db.GetVersionedAppend(key, nil)
-	if errors.Is(err, tree.ErrKeyNotFound) {
-		return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, false)
-	}
+	currentRevision, currentFound, err := tx.currentReadRevision(key)
 	if err != nil {
 		return err
 	}
-	return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, true)
+	return tx.validateCurrentReadVersionMatch(key, revision, found, currentRevision, currentFound)
+}
+
+func (tx *ConditionalTxn) currentReadRevision(key []byte) (page.EntryRevision, bool, error) {
+	snap := tx.db.AcquireSnapshot()
+	if snap == nil {
+		return page.LegacyEntryRevision, false, backenddb.ErrClosed
+	}
+	defer snap.Close()
+	entry, err := snap.GetEntry(key)
+	if errors.Is(err, tree.ErrKeyNotFound) {
+		return page.LegacyEntryRevision, false, nil
+	}
+	if err != nil {
+		return page.LegacyEntryRevision, false, err
+	}
+	return entry.Revision, entry.Flags&node.FlagTombstone == 0, nil
 }
 
 func (tx *ConditionalTxn) validateCurrentReadVersionMatch(key []byte, wantRevision page.EntryRevision, wantFound bool, gotRevision page.EntryRevision, gotFound bool) error {

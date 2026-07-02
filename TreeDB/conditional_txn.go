@@ -1,6 +1,11 @@
 package treedb
 
-import "github.com/snissn/gomap/TreeDB/page"
+import (
+	"errors"
+
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+)
 
 // Snapshot returns the transaction's pinned opening snapshot when available.
 // NewConditionalTxnWithSnapshot and InitConditionalTxnWithSnapshot always
@@ -19,20 +24,105 @@ func (tx *ConditionalTxn) Snapshot() Snapshot {
 		if snap == nil {
 			return nil
 		}
-		return conditionalTxnSnapshot{Snapshot: snap}
+		return conditionalTxnSnapshot{Snapshot: snap, tx: tx}
 	}
 	if tx.backend != nil {
 		snap := tx.backend.Snapshot()
 		if snap == nil {
 			return nil
 		}
-		return conditionalTxnSnapshot{Snapshot: snap}
+		return conditionalTxnSnapshot{Snapshot: snap, tx: tx}
 	}
 	return nil
 }
 
 type conditionalTxnSnapshot struct {
 	Snapshot
+	tx *ConditionalTxn
+}
+
+func (s conditionalTxnSnapshot) Get(key []byte) ([]byte, error) {
+	value, _, err := s.GetVersioned(key)
+	return value, err
+}
+
+func (s conditionalTxnSnapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	out, _, err := s.GetVersionedAppend(key, dst)
+	return out, err
+}
+
+func (s conditionalTxnSnapshot) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
+	out, revision, err := s.tx.GetVersionedAppend(key, nil)
+	if err != nil {
+		return nil, revision, err
+	}
+	if len(out) == 0 {
+		return []byte{}, revision, nil
+	}
+	if cap(out) == len(out) {
+		return out, revision, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, revision, nil
+}
+
+func (s conditionalTxnSnapshot) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
+	return s.tx.GetVersionedAppend(key, dst)
+}
+
+func (s conditionalTxnSnapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
+	if fn == nil {
+		return ErrConditionalTxnUnsupported
+	}
+	for i, key := range keys {
+		value, _, err := s.tx.GetVersionedAppend(key, nil)
+		if errors.Is(err, ErrKeyNotFound) {
+			if err := fn(i, key, nil, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := fn(i, key, value, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s conditionalTxnSnapshot) GetUnsafe(key []byte) ([]byte, error) {
+	return s.Get(key)
+}
+
+func (s conditionalTxnSnapshot) Has(key []byte) (bool, error) {
+	return s.tx.Has(key)
+}
+
+func (s conditionalTxnSnapshot) HasMany(keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	for i, key := range keys {
+		found, err := s.tx.Has(key)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = found
+	}
+	return out, nil
+}
+
+func (s conditionalTxnSnapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	return nil, ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) GetEntry(key []byte) (node.LeafEntry, error) {
+	return node.LeafEntry{}, ErrConditionalTxnUnsupported
+}
+
+func (s conditionalTxnSnapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
+	return node.LeafEntry{}, ErrConditionalTxnUnsupported
 }
 
 func (s conditionalTxnSnapshot) Iterate(start, end []byte, fn func(key, value []byte) error) error {
