@@ -136,33 +136,35 @@ func TestHashicorpRaftProviderLeaderCrashAfterCommitRestartCatchUpConverges(t *t
 		assertClusterLastApplied(t, cluster.nodes[id], first.CommittedEntry.EntryID())
 	}
 
-	second, err := newLeader.provider.CommitCommandEntryV1(context.Background(), CommitCommandEntryV1Request{
-		GroupID:                  "group-a",
-		NodeID:                   newLeader.id,
-		EntryBytes:               testClusterCreateCollectionEntryNamed(t, "orders", "raftcluster/create/orders/failover", 7),
-		CurrentCatalogVersion:    7,
-		HasCurrentCatalogVersion: true,
-		SyncLocalCommandWAL:      true,
-		RequestMetadata: raftentry.RequestMetadataV1{
-			RequestID: 722,
-			AckPolicy: iwire.AckRaftCommitted,
-		},
+	newLeader.submitter = newHashicorpRaftDBSubmitter(t, newLeader, collectionCountCatalogVersion(newLeader, 7))
+	secondEntry := testClusterCreateCollectionEntryNamed(t, "orders", "raftcluster/create/orders/failover", 8)
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer secondCancel()
+	second, err := newLeader.submitter.SubmitCommandEntryV1(secondCtx, secondEntry, raftentry.RequestMetadataV1{
+		RequestID: 722,
+		AckPolicy: iwire.AckRaftCommitted,
 	})
 	if err != nil {
-		t.Fatalf("new leader CommitCommandEntryV1 while old leader down: %v", err)
+		t.Fatalf("new leader SubmitCommandEntryV1 while old leader down: %v", err)
+	}
+	if second.ActualAck != iwire.AckRaftCommitted || !second.CommittedRecoverable {
+		t.Fatalf("second ack/recoverable=%d/%v want raft_committed/true", second.ActualAck, second.CommittedRecoverable)
 	}
 	if !second.Evidence.ProvesProductionConsensus() || !second.Evidence.Committed {
 		t.Fatalf("second evidence=%+v want committed production consensus", second.Evidence)
 	}
-	cluster.waitAppliedOn(t, second.Entry.EntryID(), cluster.runningNodeIDs()...)
+	if second.CatalogVersion != 9 || !second.HasCatalogVersion {
+		t.Fatalf("second catalog version=%d has=%t want 9/true", second.CatalogVersion, second.HasCatalogVersion)
+	}
+	cluster.waitAppliedOn(t, second.CommittedEntry.EntryID(), cluster.runningNodeIDs()...)
 	for _, id := range cluster.runningNodeIDs() {
 		assertClusterCollectionExists(t, cluster.nodes[id], "orders")
 	}
 
 	restarted := cluster.restartDBNode(t, crashedID)
-	cluster.waitApplied(t, second.Entry.EntryID())
+	cluster.waitApplied(t, second.CommittedEntry.EntryID())
 	assertHashicorpRaftStoreFiles(t, restarted, "after leader restart")
-	assertClusterLastApplied(t, restarted, second.Entry.EntryID())
+	assertClusterLastApplied(t, restarted, second.CommittedEntry.EntryID())
 	assertClusterCollectionExists(t, restarted, "users")
 	assertClusterCollectionExists(t, restarted, "orders")
 
@@ -370,20 +372,25 @@ func newHashicorpRaftDBCluster(t *testing.T) *hashicorpRaftTestCluster {
 		return db, fsm, fsm
 	})
 	for _, node := range cluster.nodes {
-		submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
-			Cluster:                node.cfg,
-			AdmissionProvider:      node.provider,
-			CommitSource:           node.provider,
-			Preflight:              node.fsm,
-			Applier:                node.fsm,
-			CatalogVersionProvider: staticCatalogVersion(7),
-		})
-		if err != nil {
-			t.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
-		}
-		node.submitter = submitter
+		node.submitter = newHashicorpRaftDBSubmitter(t, node, staticCatalogVersion(7))
 	}
 	return cluster
+}
+
+func newHashicorpRaftDBSubmitter(t testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider) *SingleGroupSubmitter {
+	t.Helper()
+	submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
+		Cluster:                node.cfg,
+		AdmissionProvider:      node.provider,
+		CommitSource:           node.provider,
+		Preflight:              node.fsm,
+		Applier:                node.fsm,
+		CatalogVersionProvider: catalogProvider,
+	})
+	if err != nil {
+		t.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
+	}
+	return submitter
 }
 
 func newHashicorpRaftProviderOnlyCluster(t *testing.T, applier CommittedCommandApplierV1) *hashicorpRaftTestCluster {
@@ -667,18 +674,7 @@ func (c *hashicorpRaftTestCluster) restartDBNode(t *testing.T, id NodeID) *hashi
 	node.db = db
 	node.fsm = fsm
 	node.provider = provider
-	submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
-		Cluster:                node.cfg,
-		AdmissionProvider:      node.provider,
-		CommitSource:           node.provider,
-		Preflight:              node.fsm,
-		Applier:                node.fsm,
-		CatalogVersionProvider: staticCatalogVersion(7),
-	})
-	if err != nil {
-		t.Fatalf("%s restart NewSingleGroupSubmitter: %v", id, err)
-	}
-	node.submitter = submitter
+	node.submitter = newHashicorpRaftDBSubmitter(t, node, staticCatalogVersion(7))
 	c.connectAllTransports()
 	return node
 }
@@ -820,6 +816,19 @@ func assertClusterLastApplied(t *testing.T, node *hashicorpRaftTestNode, want ra
 func staticCatalogVersion(version uint64) CatalogVersionProvider {
 	return CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
 		return version, true, nil
+	})
+}
+
+func collectionCountCatalogVersion(node *hashicorpRaftTestNode, base uint64) CatalogVersionProvider {
+	return CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
+		if node == nil || node.db == nil {
+			return 0, false, fmt.Errorf("missing DB for catalog version provider")
+		}
+		metas, err := collections.NewCollectionManager(node.db).ListCollections()
+		if err != nil {
+			return 0, false, err
+		}
+		return base + uint64(len(metas)), true, nil
 	})
 }
 
