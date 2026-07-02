@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -425,7 +426,7 @@ func TestHashicorpRaftProviderSnapshotRejoinsLaggingFollowerAndCompactsLogs(t *t
 	if err != nil {
 		t.Fatalf("Submit create: %v", err)
 	}
-	cluster.waitAppliedOn(t, createResult.CommittedEntry.EntryID(), leader, healthy)
+	cluster.waitAppliedOn(t, createResult.CommittedEntry.EntryID(), leader.id, healthy.id)
 	insertResult, err := leader.submitter.SubmitCommandEntryV1(ctx, testClusterCommandEntry(t, 7), raftentry.RequestMetadataV1{
 		RequestID: 706,
 		AckPolicy: iwire.AckRaftCommitted,
@@ -433,7 +434,7 @@ func TestHashicorpRaftProviderSnapshotRejoinsLaggingFollowerAndCompactsLogs(t *t
 	if err != nil {
 		t.Fatalf("Submit insert: %v", err)
 	}
-	cluster.waitAppliedOn(t, insertResult.CommittedEntry.EntryID(), leader, healthy)
+	cluster.waitAppliedOn(t, insertResult.CommittedEntry.EntryID(), leader.id, healthy.id)
 	if got, ok := lagging.fsm.LastApplied(); ok && got.Index >= insertResult.CommittedEntry.Index {
 		t.Fatalf("lagging follower applied %d/%d while disconnected", got.Term, got.Index)
 	}
@@ -452,7 +453,7 @@ func TestHashicorpRaftProviderSnapshotRejoinsLaggingFollowerAndCompactsLogs(t *t
 		t.Fatalf("snapshot did not compact logs: %+v", snapshot)
 	}
 
-	cluster.reconnectAll()
+	cluster.connectAllTransports(t)
 	cluster.waitApplied(t, insertResult.CommittedEntry.EntryID())
 	leaderDigest, err := leader.fsm.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
 	if err != nil {
@@ -499,6 +500,179 @@ func BenchmarkHashicorpRaftProviderReadIndex(b *testing.B) {
 		if proof.Index < result.CommittedEntry.Index {
 			b.Fatalf("proof=%+v committed=%+v", proof, result.CommittedEntry)
 		}
+	}
+}
+
+func TestHashicorpRaftProviderFollowerRejectsWithoutDirectMutation(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+	follower := cluster.firstFollower(t, leader.id)
+	cluster.waitFollowerHint(t, follower, leader.id)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := follower.submitter.SubmitCommandEntryV1(ctx, testClusterCreateCollectionEntryNamed(t, "users", "raftcluster/create/users/follower", 7), raftentry.RequestMetadataV1{
+		RequestID: 711,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("follower SubmitCommandEntryV1 err=%v result=%+v want ErrNotLeader", err, result)
+	}
+	if result.CommittedRecoverable || result.Evidence.ProvesProductionConsensus() || result.CommittedEntry.Index != 0 {
+		t.Fatalf("follower rejected result=%+v, want no committed success", result)
+	}
+	for _, node := range cluster.nodes {
+		assertClusterCollectionMissing(t, node, "users")
+	}
+}
+
+func TestHashicorpRaftProviderLeaderCrashAfterCommitRestartCatchUpConverges(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+	acknowledged := testClusterCreateCollectionEntryNamed(t, "users", "raftcluster/create/users/failover", 7)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	first, err := leader.submitter.SubmitCommandEntryV1(ctx, acknowledged, raftentry.RequestMetadataV1{
+		RequestID: 721,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("leader SubmitCommandEntryV1 acknowledged write: %v", err)
+	}
+	if !first.CommittedRecoverable || !first.Evidence.ProvesProductionConsensus() {
+		t.Fatalf("first result=%+v want recoverable production consensus", first)
+	}
+	cluster.waitApplied(t, first.CommittedEntry.EntryID())
+	for _, node := range cluster.nodes {
+		assertClusterCollectionExists(t, node, "users")
+	}
+	firstDigest := cluster.assertLogicalDigestsEqual(t)
+
+	crashedID := leader.id
+	cluster.shutdownNode(t, crashedID)
+	assertHashicorpRaftStoreFiles(t, leader, "after committed leader shutdown")
+
+	newLeader := cluster.waitForLeader(t)
+	if newLeader.id == crashedID {
+		t.Fatalf("leader after crash=%s, want surviving node", newLeader.id)
+	}
+	for _, id := range cluster.runningNodeIDs() {
+		assertClusterCollectionExists(t, cluster.nodes[id], "users")
+		assertClusterLastApplied(t, cluster.nodes[id], first.CommittedEntry.EntryID())
+	}
+
+	newLeader.submitter = newHashicorpRaftDBSubmitter(t, newLeader, collectionCountCatalogVersion(newLeader, 7))
+	secondEntry := testClusterCreateCollectionEntryNamed(t, "orders", "raftcluster/create/orders/failover", 8)
+	secondCtx, secondCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer secondCancel()
+	second, err := newLeader.submitter.SubmitCommandEntryV1(secondCtx, secondEntry, raftentry.RequestMetadataV1{
+		RequestID: 722,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("new leader SubmitCommandEntryV1 while old leader down: %v", err)
+	}
+	if second.ActualAck != iwire.AckRaftCommitted || !second.CommittedRecoverable {
+		t.Fatalf("second ack/recoverable=%d/%v want raft_committed/true", second.ActualAck, second.CommittedRecoverable)
+	}
+	if !second.Evidence.ProvesProductionConsensus() || !second.Evidence.Committed {
+		t.Fatalf("second evidence=%+v want committed production consensus", second.Evidence)
+	}
+	if second.CatalogVersion != 9 || !second.HasCatalogVersion {
+		t.Fatalf("second catalog version=%d has=%t want 9/true", second.CatalogVersion, second.HasCatalogVersion)
+	}
+	cluster.waitAppliedOn(t, second.CommittedEntry.EntryID(), cluster.runningNodeIDs()...)
+	for _, id := range cluster.runningNodeIDs() {
+		assertClusterCollectionExists(t, cluster.nodes[id], "orders")
+	}
+
+	restarted := cluster.restartDBNode(t, crashedID)
+	cluster.waitApplied(t, second.CommittedEntry.EntryID())
+	assertHashicorpRaftStoreFiles(t, restarted, "after leader restart")
+	assertClusterLastApplied(t, restarted, second.CommittedEntry.EntryID())
+	assertClusterCollectionExists(t, restarted, "users")
+	assertClusterCollectionExists(t, restarted, "orders")
+
+	replayed, err := restarted.fsm.ApplyCommittedCommandEntryV1(context.Background(), first.CommittedEntry.Clone())
+	if err != nil {
+		t.Fatalf("restarted node replay acknowledged entry from durable result record: %v result=%+v", err, replayed)
+	}
+	if replayed.CommandDigest != first.ApplyResult.CommandDigest || replayed.ResultDigest != first.ApplyResult.ResultDigest {
+		t.Fatalf("replayed result=%+v want original command/result digests %+v", replayed, first.ApplyResult)
+	}
+	if got := cluster.assertLogicalDigestsEqual(t); got == firstDigest {
+		t.Fatalf("digest after catch-up=%s still equals first-only digest; want second committed command reflected", got.Hex())
+	}
+}
+
+func TestHashicorpRaftProviderLeaderCrashBeforeCommitDoesNotReportSuccessOrMutate(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+
+	preflightReady := make(chan struct{})
+	releasePreflight := make(chan struct{})
+	var releasePreflightOnce sync.Once
+	releaseBlockedPreflight := func() {
+		releasePreflightOnce.Do(func() {
+			close(releasePreflight)
+		})
+	}
+	defer releaseBlockedPreflight()
+
+	inflightSubmitter := newHashicorpRaftDBSubmitterWithPreflight(t, leader, staticCatalogVersion(7), &gatedCommandEntryPreflight{
+		delegate: leader.fsm,
+		ready:    preflightReady,
+		release:  releasePreflight,
+	})
+	entry := testClusterCreateCollectionEntryNamed(t, "users", "raftcluster/create/users/precommit-crash", 7)
+	submitCtx, submitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer submitCancel()
+	type submitAttempt struct {
+		result SubmitResultV1
+		err    error
+	}
+	submitDone := make(chan submitAttempt, 1)
+	go func() {
+		result, err := inflightSubmitter.SubmitCommandEntryV1(submitCtx, entry, raftentry.RequestMetadataV1{
+			RequestID: 731,
+			AckPolicy: iwire.AckRaftCommitted,
+		})
+		submitDone <- submitAttempt{result: result, err: err}
+	}()
+
+	select {
+	case <-preflightReady:
+	case attempt := <-submitDone:
+		t.Fatalf("SubmitCommandEntryV1 finished before pre-commit partition: err=%v result=%+v", attempt.err, attempt.result)
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for live leader preflight; states=%s", cluster.admissionSummary())
+	}
+	status, err := leader.provider.ClusterAdmissionStatus(context.Background())
+	if err != nil {
+		t.Fatalf("%s ClusterAdmissionStatus before partition: %v", leader.id, err)
+	}
+	if !status.Leader || status.Unavailable {
+		t.Fatalf("%s admission before partition=%+v, want live leader", leader.id, status)
+	}
+
+	cluster.disconnectNode(t, leader.id)
+	releaseBlockedPreflight()
+
+	var attempt submitAttempt
+	select {
+	case attempt = <-submitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for partitioned pre-commit submit to fail; states=%s", cluster.admissionSummary())
+	}
+	if attempt.err == nil {
+		t.Fatalf("SubmitCommandEntryV1 on partitioned leader succeeded: %+v", attempt.result)
+	}
+	if attempt.result.CommittedRecoverable || attempt.result.Evidence.ProvesProductionConsensus() || attempt.result.CommittedEntry.Index != 0 {
+		t.Fatalf("pre-commit crash result=%+v err=%v, want no committed success", attempt.result, attempt.err)
+	}
+	for _, node := range cluster.nodes {
+		assertClusterCollectionMissing(t, node, "users")
 	}
 }
 
@@ -674,20 +848,53 @@ func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
 		return db, fsm, fsm
 	})
 	for _, node := range cluster.nodes {
-		submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
-			Cluster:                node.cfg,
-			AdmissionProvider:      node.provider,
-			CommitSource:           node.provider,
-			Preflight:              node.fsm,
-			Applier:                node.fsm,
-			CatalogVersionProvider: staticCatalogVersion(7),
-		})
-		if err != nil {
-			tb.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
-		}
-		node.submitter = submitter
+		node.submitter = newHashicorpRaftDBSubmitter(tb, node, staticCatalogVersion(7))
 	}
 	return cluster
+}
+
+func newHashicorpRaftDBSubmitter(tb testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider) *SingleGroupSubmitter {
+	tb.Helper()
+	return newHashicorpRaftDBSubmitterWithPreflight(tb, node, catalogProvider, node.fsm)
+}
+
+func newHashicorpRaftDBSubmitterWithPreflight(tb testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider, preflight CommandEntryPreflightV1) *SingleGroupSubmitter {
+	tb.Helper()
+	submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
+		Cluster:                node.cfg,
+		AdmissionProvider:      node.provider,
+		CommitSource:           node.provider,
+		Preflight:              preflight,
+		Applier:                node.fsm,
+		CatalogVersionProvider: catalogProvider,
+	})
+	if err != nil {
+		tb.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
+	}
+	return submitter
+}
+
+type gatedCommandEntryPreflight struct {
+	delegate CommandEntryPreflightV1
+	ready    chan<- struct{}
+	release  <-chan struct{}
+	once     sync.Once
+}
+
+func (p *gatedCommandEntryPreflight) PreflightCommandEntryV1(ctx context.Context, req CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+	result, err := p.delegate.PreflightCommandEntryV1(ctx, req)
+	p.once.Do(func() {
+		close(p.ready)
+	})
+	if err != nil {
+		return result, err
+	}
+	select {
+	case <-p.release:
+		return result, nil
+	case <-ctx.Done():
+		return CommandEntryPreflightResultV1{}, ctx.Err()
+	}
 }
 
 func newHashicorpRaftProviderOnlyCluster(tb testing.TB, applier CommittedCommandApplierV1) *hashicorpRaftTestCluster {
@@ -767,17 +974,7 @@ func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) 
 	}
 	tb.Cleanup(func() {
 		for _, node := range cluster.nodes {
-			if node.provider != nil {
-				_ = node.provider.Close()
-			}
-		}
-		for _, node := range cluster.nodes {
-			if node.fsm != nil {
-				_ = node.fsm.Close()
-			}
-			if node.db != nil {
-				_ = node.db.Close()
-			}
+			_ = node.closeLocal()
 			if node.transport != nil {
 				_ = node.transport.Close()
 			}
@@ -834,6 +1031,9 @@ func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTe
 	for time.Now().Before(deadline) {
 		var leader *hashicorpRaftTestNode
 		for _, node := range c.nodes {
+			if node.provider == nil {
+				continue
+			}
 			status, err := node.provider.ClusterAdmissionStatus(context.Background())
 			if err != nil {
 				tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
@@ -857,7 +1057,7 @@ func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTe
 func (c *hashicorpRaftTestCluster) firstFollower(tb testing.TB, leaderID NodeID) *hashicorpRaftTestNode {
 	tb.Helper()
 	for _, node := range c.nodes {
-		if node.id != leaderID {
+		if node.id != leaderID && node.provider != nil {
 			return node
 		}
 	}
@@ -876,29 +1076,6 @@ func (c *hashicorpRaftTestCluster) firstFollowerExcept(tb testing.TB, leaderID, 
 	return nil
 }
 
-func (c *hashicorpRaftTestCluster) disconnectNode(tb testing.TB, id NodeID) {
-	tb.Helper()
-	target := c.nodes[id]
-	if target == nil {
-		tb.Fatalf("unknown node %q", id)
-	}
-	targetAddr := peerAddressForHashicorpRaftTest(tb, target, id)
-	for _, node := range c.nodes {
-		node.transport.Disconnect(hraft.ServerAddress(targetAddr))
-	}
-	target.transport.DisconnectAll()
-}
-
-func (c *hashicorpRaftTestCluster) reconnectAll() {
-	for _, from := range c.nodes {
-		for _, peer := range from.cfg.Peers {
-			if to := c.nodes[peer.ID]; to != nil {
-				from.transport.Connect(hraft.ServerAddress(peer.Address), to.transport)
-			}
-		}
-	}
-}
-
 func (c *hashicorpRaftTestCluster) waitFollowerHint(tb testing.TB, node *hashicorpRaftTestNode, leaderID NodeID) {
 	tb.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -915,37 +1092,22 @@ func (c *hashicorpRaftTestCluster) waitFollowerHint(tb testing.TB, node *hashico
 	tb.Fatalf("%s did not report leader hint %q; states=%s", node.id, leaderID, c.admissionSummary())
 }
 
-func (c *hashicorpRaftTestCluster) waitAppliedOn(tb testing.TB, id raftentry.ApplyEntryID, nodes ...*hashicorpRaftTestNode) {
-	tb.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		allApplied := true
-		for _, node := range nodes {
-			got, ok := node.fsm.LastApplied()
-			if !ok || got.Index < id.Index || got.Term != id.Term {
-				allApplied = false
-				break
-			}
-		}
-		if allApplied {
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	var states []string
-	for _, node := range nodes {
-		got, ok := node.fsm.LastApplied()
-		states = append(states, fmt.Sprintf("%s=%d/%d ok=%t", node.id, got.Term, got.Index, ok))
-	}
-	tb.Fatalf("timed out waiting for apply %d/%d; applied=%s", id.Term, id.Index, strings.Join(states, ", "))
-}
-
 func (c *hashicorpRaftTestCluster) waitApplied(tb testing.TB, id raftentry.ApplyEntryID) {
 	tb.Helper()
+	c.waitAppliedOn(tb, id, c.allNodeIDs()...)
+}
+
+func (c *hashicorpRaftTestCluster) waitAppliedOn(tb testing.TB, id raftentry.ApplyEntryID, nodeIDs ...NodeID) {
+	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		allApplied := true
-		for _, node := range c.nodes {
+		for _, nodeID := range nodeIDs {
+			node := c.nodes[nodeID]
+			if node == nil || node.fsm == nil {
+				allApplied = false
+				break
+			}
 			got, ok := node.fsm.LastApplied()
 			if !ok || got.Index < id.Index || got.Term != id.Term {
 				allApplied = false
@@ -958,7 +1120,12 @@ func (c *hashicorpRaftTestCluster) waitApplied(tb testing.TB, id raftentry.Apply
 		time.Sleep(20 * time.Millisecond)
 	}
 	var states []string
-	for _, node := range c.nodes {
+	for _, nodeID := range nodeIDs {
+		node := c.nodes[nodeID]
+		if node == nil || node.fsm == nil {
+			states = append(states, fmt.Sprintf("%s=stopped", nodeID))
+			continue
+		}
 		got, ok := node.fsm.LastApplied()
 		states = append(states, fmt.Sprintf("%s=%d/%d ok=%t", node.id, got.Term, got.Index, ok))
 	}
@@ -968,6 +1135,10 @@ func (c *hashicorpRaftTestCluster) waitApplied(tb testing.TB, id raftentry.Apply
 func (c *hashicorpRaftTestCluster) admissionSummary() string {
 	var states []string
 	for _, node := range c.nodes {
+		if node.provider == nil {
+			states = append(states, fmt.Sprintf("%s stopped", node.id))
+			continue
+		}
 		status, err := node.provider.ClusterAdmissionStatus(context.Background())
 		if err != nil {
 			states = append(states, fmt.Sprintf("%s err=%v", node.id, err))
@@ -978,20 +1149,232 @@ func (c *hashicorpRaftTestCluster) admissionSummary() string {
 	return strings.Join(states, "; ")
 }
 
-func peerAddressForHashicorpRaftTest(tb testing.TB, node *hashicorpRaftTestNode, id NodeID) string {
-	tb.Helper()
-	for _, peer := range node.cfg.Peers {
+func (c *hashicorpRaftTestCluster) allNodeIDs() []NodeID {
+	ids := make([]NodeID, 0, len(c.nodes))
+	for id := range c.nodes {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (c *hashicorpRaftTestCluster) runningNodeIDs() []NodeID {
+	ids := make([]NodeID, 0, len(c.nodes))
+	for id, node := range c.nodes {
+		if node.provider != nil && node.fsm != nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func (c *hashicorpRaftTestCluster) shutdownNode(t *testing.T, id NodeID) {
+	t.Helper()
+	node := c.nodes[id]
+	if node == nil {
+		t.Fatalf("node %s not found", id)
+	}
+	c.disconnectNode(t, id)
+	if err := node.closeLocal(); err != nil {
+		t.Fatalf("%s close local state: %v", id, err)
+	}
+}
+
+func (c *hashicorpRaftTestCluster) restartDBNode(t *testing.T, id NodeID) *hashicorpRaftTestNode {
+	t.Helper()
+	node := c.nodes[id]
+	if node == nil {
+		t.Fatalf("node %s not found", id)
+	}
+	db, fsm := openHashicorpRaftTestDBAndFSM(t, node.cfg)
+	provider, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{
+		Cluster:      node.cfg,
+		Applier:      fsm,
+		Transport:    node.transport,
+		RaftConfig:   hashicorpRaftFastTestConfig(),
+		Bootstrap:    true,
+		ApplyTimeout: 2 * time.Second,
+	})
+	if err != nil {
+		_ = fsm.Close()
+		_ = db.Close()
+		t.Fatalf("%s restart OpenHashicorpRaftProvider: %v", id, err)
+	}
+	submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
+		Cluster:                node.cfg,
+		AdmissionProvider:      provider,
+		CommitSource:           provider,
+		Preflight:              fsm,
+		Applier:                fsm,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+	if err != nil {
+		_ = provider.Close()
+		_ = fsm.Close()
+		_ = db.Close()
+		t.Fatalf("%s restart NewSingleGroupSubmitter: %v", id, err)
+	}
+	node.db = db
+	node.fsm = fsm
+	node.provider = provider
+	node.submitter = submitter
+	c.connectAllTransports(t)
+	return node
+}
+
+func (c *hashicorpRaftTestCluster) disconnectNode(t *testing.T, id NodeID) {
+	t.Helper()
+	target := c.nodes[id]
+	if target == nil || target.transport == nil {
+		return
+	}
+	target.transport.DisconnectAll()
+	targetAddr := hraft.ServerAddress(peerAddress(t, target.cfg, id))
+	for _, node := range c.nodes {
+		if node.id == id || node.transport == nil {
+			continue
+		}
+		node.transport.Disconnect(targetAddr)
+	}
+}
+
+func (c *hashicorpRaftTestCluster) connectAllTransports(t *testing.T) {
+	t.Helper()
+	for _, from := range c.nodes {
+		if from.transport == nil {
+			continue
+		}
+		for _, to := range c.nodes {
+			if from.id == to.id || to.transport == nil {
+				continue
+			}
+			from.transport.Connect(hraft.ServerAddress(peerAddress(t, to.cfg, to.id)), to.transport)
+		}
+	}
+}
+
+func (c *hashicorpRaftTestCluster) assertLogicalDigestsEqual(t *testing.T) raftapply.LogicalDigestV1 {
+	t.Helper()
+	var want raftapply.LogicalDigestV1
+	first := true
+	for _, node := range c.nodes {
+		if node.fsm == nil {
+			t.Fatalf("%s has no FSM for digest comparison", node.id)
+		}
+		digest, err := node.fsm.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
+		if err != nil {
+			t.Fatalf("%s LogicalDigestV1: %v", node.id, err)
+		}
+		if first {
+			want = digest
+			first = false
+			continue
+		}
+		if digest != want {
+			t.Fatalf("logical digest mismatch: %s=%s want %s", node.id, digest.Hex(), want.Hex())
+		}
+	}
+	return want
+}
+
+func (n *hashicorpRaftTestNode) closeLocal() error {
+	if n == nil {
+		return nil
+	}
+	var err error
+	if n.provider != nil {
+		err = errors.Join(err, n.provider.Close())
+		n.provider = nil
+	}
+	if n.fsm != nil {
+		err = errors.Join(err, n.fsm.Close())
+		n.fsm = nil
+	}
+	if n.db != nil {
+		err = errors.Join(err, n.db.Close())
+		n.db = nil
+	}
+	n.submitter = nil
+	return err
+}
+
+func peerAddress(t *testing.T, cfg Config, id NodeID) string {
+	t.Helper()
+	for _, peer := range cfg.Peers {
 		if peer.ID == id {
 			return peer.Address
 		}
 	}
-	tb.Fatalf("%s has no peer address for %q", node.id, id)
+	t.Fatalf("peer address for node %s not found in config", id)
 	return ""
+}
+
+func assertHashicorpRaftStoreFiles(t *testing.T, node *hashicorpRaftTestNode, label string) {
+	t.Helper()
+	resolved, err := Validate(node.cfg)
+	if err != nil {
+		t.Fatalf("%s resolve raftcluster layout: %v", label, err)
+	}
+	for _, path := range []string{
+		filepath.Join(resolved.Layout.LogDir, "raft-log.bolt"),
+		filepath.Join(resolved.Layout.StableDir, "raft-stable.bolt"),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("%s %s stat: %v", label, path, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("%s %s is empty", label, path)
+		}
+	}
+}
+
+func assertClusterCollectionExists(t *testing.T, node *hashicorpRaftTestNode, collection string) {
+	t.Helper()
+	if node == nil || node.db == nil {
+		t.Fatalf("%s has no open DB", collection)
+	}
+	if _, err := collections.NewCollectionManager(node.db).OpenCollection(collection); err != nil {
+		t.Fatalf("%s OpenCollection %s: %v", node.id, collection, err)
+	}
+}
+
+func assertClusterCollectionMissing(t *testing.T, node *hashicorpRaftTestNode, collection string) {
+	t.Helper()
+	if node == nil || node.db == nil {
+		t.Fatalf("missing node/open DB while checking collection %s is absent", collection)
+	}
+	if _, err := collections.NewCollectionManager(node.db).OpenCollection(collection); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("%s OpenCollection %s err=%v, want ErrCollectionNotFound", node.id, collection, err)
+	}
+}
+
+func assertClusterLastApplied(t *testing.T, node *hashicorpRaftTestNode, want raftentry.ApplyEntryID) {
+	t.Helper()
+	if node == nil || node.fsm == nil {
+		t.Fatalf("missing node/FSM while checking last applied %d/%d", want.Term, want.Index)
+	}
+	got, ok := node.fsm.LastApplied()
+	if !ok || got != want {
+		t.Fatalf("%s last applied=%d/%d ok=%t want %d/%d", node.id, got.Term, got.Index, ok, want.Term, want.Index)
+	}
 }
 
 func staticCatalogVersion(version uint64) CatalogVersionProvider {
 	return CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
 		return version, true, nil
+	})
+}
+
+func collectionCountCatalogVersion(node *hashicorpRaftTestNode, base uint64) CatalogVersionProvider {
+	return CatalogVersionProviderFunc(func(context.Context) (uint64, bool, error) {
+		if node == nil || node.db == nil {
+			return 0, false, fmt.Errorf("missing DB for catalog version provider")
+		}
+		metas, err := collections.NewCollectionManager(node.db).ListCollections()
+		if err != nil {
+			return 0, false, err
+		}
+		return base + uint64(len(metas)), true, nil
 	})
 }
 
@@ -1158,10 +1541,15 @@ func testClusterCommandEntry(tb testing.TB, catalogVersion uint64) []byte {
 
 func testClusterCreateCollectionEntry(tb testing.TB, catalogVersion uint64) []byte {
 	tb.Helper()
+	return testClusterCreateCollectionEntryNamed(tb, "users", "raftcluster/create/users", catalogVersion)
+}
+
+func testClusterCreateCollectionEntryNamed(tb testing.TB, collection, idempotency string, catalogVersion uint64) []byte {
+	tb.Helper()
 	sections := []iwire.Section{
 		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: iwire.CommandCreateCollection, Version: 1})},
-		{ID: iwire.SectionIdempotencyKey, Bytes: []byte("raftcluster/create/users")},
-		{ID: iwire.SectionCollectionMeta, Bytes: testClusterCollectionMetaPayload("users")},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(idempotency)},
+		{ID: iwire.SectionCollectionMeta, Bytes: testClusterCollectionMetaPayload(collection)},
 		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, catalogVersion)},
 	}
 	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
