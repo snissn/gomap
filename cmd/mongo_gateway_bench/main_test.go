@@ -2078,6 +2078,9 @@ func TestTreeDBRoutedRingModeSmoke(t *testing.T) {
 				if len(evidence.PartitionHits) != 1 || evidence.PartitionHits["token-000000"] != cfg.Documents {
 					t.Fatalf("1-group run partition hits=%v want only token-000000=%d", evidence.PartitionHits, cfg.Documents)
 				}
+				if evidence.FanoutRejected != 0 || evidence.UnsupportedFanoutErr != "" {
+					t.Fatalf("1-group run fanout rejected=%d err=%q, want no fanout probe", evidence.FanoutRejected, evidence.UnsupportedFanoutErr)
+				}
 			}
 			if tt.wantMultipleRoute {
 				if positiveStringIntCount(evidence.GroupHits) < 2 || positiveStringIntCount(evidence.LeaderHits) < 2 || positiveStringIntCount(evidence.PartitionHits) < 2 {
@@ -3122,6 +3125,20 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		TreeDBBufferedIndexedAsyncFlush:        true,
 		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 3,
 		TreeDBMaintenanceMode:                         "none",
+		RouteEvidence: &routeEvidence{
+			Mode:             routeModeRing,
+			PlacementMode:    "ring",
+			RouteKey:         "_id",
+			WriteShape:       "single_document_insert",
+			LocalOnly:        true,
+			GroupCount:       1,
+			PartitionCount:   1,
+			Writes:           1,
+			PreflightSuccess: 1,
+			GroupHits:        map[string]int{"group-00": 1},
+			LeaderHits:       map[string]int{"node-00-a": 1},
+			PartitionHits:    map[string]int{"token-000000": 1},
+		},
 	}
 	var out bytes.Buffer
 	if err := writeResult(&out, "text", result); err != nil {
@@ -3135,6 +3152,7 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		"buffered_indexed_max_root_runs=90",
 		"buffered_indexed_async_flush=true",
 		"buffered_indexed_async_max_queued_units=3",
+		"leader_hits=map[node-00-a:1]",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("text output missing %s: %q", want, text)
@@ -3166,7 +3184,9 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		decoded.TreeDBBufferedIndexedWriteMaxRootRuns != 90 ||
 		!decoded.TreeDBCommandWAL ||
 		!decoded.TreeDBBufferedIndexedAsyncFlush ||
-		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 {
+		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 ||
+		decoded.RouteEvidence == nil ||
+		!reflect.DeepEqual(decoded.RouteEvidence.LeaderHits, map[string]int{"node-00-a": 1}) {
 		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d commandWAL=%t async=%t asyncMax=%d want 1234/5678/90/true/true/3",
 			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
 			decoded.TreeDBBufferedIndexedWriteMaxBytes,
@@ -3174,6 +3194,21 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 			decoded.TreeDBCommandWAL,
 			decoded.TreeDBBufferedIndexedAsyncFlush,
 			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+	}
+	var decodedWithRoute map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decodedWithRoute); err != nil {
+		t.Fatalf("unmarshal json result map: %v", err)
+	}
+	routeJSON, ok := decodedWithRoute["route_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("json route_evidence missing or wrong type: %#v", decodedWithRoute["route_evidence"])
+	}
+	leaderHitsJSON, ok := routeJSON["leader_hits"].(map[string]any)
+	if !ok {
+		t.Fatalf("json route_evidence leader_hits missing or wrong type: %#v", routeJSON["leader_hits"])
+	}
+	if got := leaderHitsJSON["node-00-a"]; got != float64(1) {
+		t.Fatalf("json route_evidence leader_hits node-00-a=%v want 1", got)
 	}
 
 	result.TreeDBCommandWAL = false
