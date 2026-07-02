@@ -49,6 +49,12 @@ func (p CatalogClusterRouteProvider) ClusterRoute(_ context.Context, request Clu
 		return clusterRouteTargetFromCatalogDecision(decision), nil
 	case ClusterRouteShapeTokenBatch:
 		return p.clusterRouteTokenBatch(request)
+	case ClusterRouteShapeQuery:
+		return ClusterRouteTarget{}, errors.Join(
+			raftplacement.ErrInvalidRouteRequest,
+			raftplacement.ErrUnsupportedRouteShape,
+			fmt.Errorf("%s/%s/%s query route requires bounded scatter/read-index routing", request.Database, request.Catalog, request.Collection),
+		)
 	default:
 		return ClusterRouteTarget{}, errors.Join(
 			raftplacement.ErrInvalidRouteRequest,

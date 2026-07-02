@@ -790,6 +790,34 @@ func TestClusterRoutePreflightRejectsFanoutTokenBatch(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightRejectsUnsupportedQueryShape(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		target: ClusterRouteTarget{
+			GroupID:       "group-a",
+			PlacementMode: string(raftplacement.PlacementModeCollectionV1),
+			Shape:         ClusterRouteShapeCollection,
+		},
+	}
+	request := ClusterRouteRequest{
+		Database:    "default",
+		Catalog:     "default",
+		Collection:  "users",
+		CommandID:   iwire.CommandIndexLookup,
+		CommandName: "index_lookup",
+		Shape:       ClusterRouteShapeQuery,
+	}
+	if _, _, err := PreflightClusterRoute(context.Background(), submitter, request); codeOf(err) != iwire.ErrReadOnly || !strings.Contains(err.Error(), "query route shape is not supported") {
+		t.Fatalf("query preflight err=%v want unsupported query read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
 func TestCatalogClusterRouteProviderRoutesResolvedCatalog(t *testing.T) {
 	collectionProvider := NewCatalogClusterRouteProvider(mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeCollectionV1))
 	collectionTarget, err := collectionProvider.ClusterRoute(context.Background(), ClusterRouteRequest{
@@ -1161,6 +1189,56 @@ func TestClusterRoutePreflightTokenPlacementRejectsMultiID(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightRejectsNativeQueryRouteBeforeLocalRead(t *testing.T) {
+	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeRingV1)
+	submitter := &placementRouteClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		provider:             NewCatalogClusterRouteProvider(catalog),
+	}
+	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, _, err := client.IndexLookup(ctx, "users", "email", "ada@example.com", CursorLimits{})
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "query route shape is not supported") {
+		t.Fatalf("IndexLookup cluster route err=%v want unsupported query read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
+func TestClusterRoutePreflightRejectsNativeGetManyBeforeLocalRead(t *testing.T) {
+	catalog := mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeRingV1)
+	submitter := &placementRouteClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		provider:             NewCatalogClusterRouteProvider(catalog),
+	}
+	client, _, mgr, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, _, err := client.GetMany(ctx, "users", [][]byte{[]byte("u1")})
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "query route shape is not supported") {
+		t.Fatalf("GetMany cluster route err=%v want unsupported query read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
+		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
 func mustNativewireRouteTestCatalog(tb testing.TB, mode raftplacement.PlacementModeV1) raftplacement.ResolvedCatalogV1 {
 	tb.Helper()
 	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
@@ -1216,6 +1294,63 @@ func mustNativewireRouteBatchTestCatalog(tb testing.TB, mode raftplacement.Place
 	})
 	if err != nil {
 		tb.Fatalf("Validate batch route test catalog: %v", err)
+	}
+	return catalog
+}
+
+func mustNativewireCollectionGroupRouteCatalog(tb testing.TB) raftplacement.ResolvedCatalogV1 {
+	tb.Helper()
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-c", "node-d"}, LeaderHint: "node-c"},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{
+			{
+				Collection: raftplacement.CollectionRefV1{
+					Database:   "default",
+					Catalog:    "default",
+					Collection: "users",
+				},
+				Mode:    raftplacement.PlacementModeCollectionV1,
+				GroupID: "group-b",
+			},
+		},
+	})
+	if err != nil {
+		tb.Fatalf("Validate collection group route catalog: %v", err)
+	}
+	return catalog
+}
+
+func mustNativewireTokenGroupRouteCatalog(tb testing.TB, mode raftplacement.PlacementModeV1, groupBStart uint64) raftplacement.ResolvedCatalogV1 {
+	tb.Helper()
+	partitions := make([]raftplacement.TokenPartitionV1, 0, 2)
+	if groupBStart > 0 {
+		partitions = append(partitions, raftplacement.TokenPartitionV1{ID: "p0", GroupID: "group-a", Start: 0, End: groupBStart - 1})
+	}
+	partitions = append(partitions, raftplacement.TokenPartitionV1{ID: "p1", GroupID: "group-b", Start: groupBStart, End: ^uint64(0)})
+	catalog, err := raftplacement.Validate(raftplacement.CatalogV1{
+		Features: raftplacement.DefaultFeatureSet(),
+		Groups: []raftplacement.GroupV1{
+			{ID: "group-a", Members: []raftcluster.NodeID{"node-a", "node-b"}, LeaderHint: "node-a"},
+			{ID: "group-b", Members: []raftcluster.NodeID{"node-c", "node-d"}, LeaderHint: "node-c"},
+		},
+		Placements: []raftplacement.CollectionPlacementV1{
+			{
+				Collection: raftplacement.CollectionRefV1{
+					Database:   "default",
+					Catalog:    "default",
+					Collection: "users",
+				},
+				Mode:            mode,
+				TokenPartitions: partitions,
+			},
+		},
+	})
+	if err != nil {
+		tb.Fatalf("Validate token group route catalog: %v", err)
 	}
 	return catalog
 }
@@ -2105,6 +2240,60 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesSingleTokenWrite(t *test
 	}
 	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
 		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
+	}
+}
+
+func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRoutesCollectionOwner(t *testing.T) {
+	provider := NewCatalogClusterRouteProvider(mustNativewireCollectionGroupRouteCatalog(t))
+	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckVisible)...); err != nil {
+		t.Fatalf("CreateCollection catalog group-routed dispatcher: %v", err)
+	}
+	if _, err := mgr.OpenCollection("users"); err != nil {
+		t.Fatalf("OpenCollection users after catalog routed create: %v", err)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeCollection) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || meta.ClusterRoutePlacementMode != string(raftplacement.PlacementModeCollectionV1) {
+		t.Fatalf("group-b catalog route metadata=%+v want collection owner group-b/node-c", meta)
+	}
+}
+
+func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(t *testing.T) {
+	id := []byte("u1")
+	token := raftplacement.DocumentIDTokenV1(id)
+	provider := NewCatalogClusterRouteProvider(mustNativewireTokenGroupRouteCatalog(t, raftplacement.PlacementModeRingV1, token))
+	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{id}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible); err != nil {
+		t.Fatalf("InsertBatch catalog group-routed dispatcher: %v", err)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
+		t.Fatalf("group-b catalog token route metadata=%+v want group-b/node-c token=%d p1", meta, token)
 	}
 }
 

@@ -547,6 +547,13 @@ func (s *Server) preflightClusterRoute(ctx context.Context, routeReq *treenative
 	return err
 }
 
+func (s *Server) preflightClusterFindRoute(ctx context.Context, db, collection string) error {
+	if !s.clusterRouteProviderConfigured() {
+		return nil
+	}
+	return s.preflightClusterRoute(ctx, mongoClusterQueryRouteRequest(db, collection, 0, "find"))
+}
+
 func mongoClusterRouteRequest(db, collection string, command iwire.CommandID, commandName string) *treenativewire.ClusterRouteRequest {
 	return &treenativewire.ClusterRouteRequest{
 		Database:    db,
@@ -556,6 +563,12 @@ func mongoClusterRouteRequest(db, collection string, command iwire.CommandID, co
 		CommandName: commandName,
 		Shape:       treenativewire.ClusterRouteShapeCollection,
 	}
+}
+
+func mongoClusterQueryRouteRequest(db, collection string, command iwire.CommandID, commandName string) *treenativewire.ClusterRouteRequest {
+	req := mongoClusterRouteRequest(db, collection, command, commandName)
+	req.Shape = treenativewire.ClusterRouteShapeQuery
+	return req
 }
 
 func mongoClusterDocumentIDRouteRequest(db, collection string, command iwire.CommandID, commandName string, id []byte) *treenativewire.ClusterRouteRequest {
@@ -584,11 +597,23 @@ func mongoClusterDocumentIDsRouteRequest(db, collection string, command iwire.Co
 func mongoClusterUpdateBatchRouteRequest(db, collection string, updates []wire.Document) *treenativewire.ClusterRouteRequest {
 	ids := make([][]byte, 0, len(updates))
 	for i, update := range updates {
+		filter, err := requiredDocumentField(update, "q")
+		if err != nil {
+			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
+		}
+		id, err := idEqualityFilterValue(filter, "update")
+		if err != nil {
+			return mongoClusterQueryRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
+		}
+		key, err := encodePrimaryKey(id)
+		if err != nil {
+			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
+		}
 		item, err := parseMongoUpdateItem(i, update)
 		if err != nil || !item.bsonSetFieldsOK {
 			return mongoClusterRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set")
 		}
-		ids = append(ids, item.key)
+		ids = append(ids, key)
 	}
 	return mongoClusterDocumentIDsRouteRequest(db, collection, iwire.CommandUpdateBSONSet, "update_bson_set", ids)
 }
@@ -603,7 +628,7 @@ func mongoClusterDeleteBatchRouteRequest(db, collection string, deletes []wire.D
 		}
 		id, err := idEqualityFilterValue(filter, "delete")
 		if err != nil {
-			return mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
+			return mongoClusterQueryRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
 		}
 		if limit, err := optionalInt32Field(deleteItem, "limit"); err != nil || (limit != 0 && limit != 1) {
 			return mongoClusterRouteRequest(db, collection, iwire.CommandDeleteBatch, "delete_batch")
@@ -908,7 +933,7 @@ func parseClusterWriteConcernW(value bson.RawValue) (iwire.AckPolicy, error) {
 	return 0, errors.New("Mongo command field \"writeConcern.w\" must be integer 1 or string \"majority\"")
 }
 
-func mongoClusterMutationCommandError(err error) (wire.Document, error) {
+func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 	code, codeName := commandCodeBadValue, "BadValue"
 	var nativeCode iwire.ErrorCode
 	var mongoErr mongoCommandError
@@ -1032,6 +1057,10 @@ func mongoClusterLeaderHint(err error) string {
 		}
 	}
 	return strings.TrimSpace(message[start:end])
+}
+
+func mongoClusterMutationCommandError(err error) (wire.Document, error) {
+	return mongoClusterRouteCommandError(err)
 }
 
 type mongoCommandError struct {
