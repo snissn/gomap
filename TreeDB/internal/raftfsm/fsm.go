@@ -44,6 +44,11 @@ type Options struct {
 	DecodeLimits nativewire.Limits
 	StoreOptions raftapply.DurableApplyStoreOptions
 
+	// SnapshotRestoreDBOptions is used when InstallRaftSnapshotV1 has to
+	// discard the current local DB handle and reopen the restored snapshot.
+	// Dir is always replaced with Cluster.Dir.
+	SnapshotRestoreDBOptions backenddb.Options
+
 	ScopeRule     raftentry.ScopeRuleV1
 	DatabaseScope string
 	CatalogScope  string
@@ -56,6 +61,7 @@ type FSM struct {
 
 	decodeLimits nativewire.Limits
 	storeOptions raftapply.DurableApplyStoreOptions
+	restoreDB    backenddb.Options
 	scopeRule    raftentry.ScopeRuleV1
 	database     string
 	catalog      string
@@ -63,6 +69,7 @@ type FSM struct {
 
 	progress *raftapply.DurableApplyProgressStore
 	results  *raftapply.DurableApplyResultStore
+	ownsDB   bool
 	closed   bool
 }
 
@@ -127,6 +134,7 @@ func Open(opts Options) (*FSM, error) {
 		metadataDir:  metadataDir,
 		decodeLimits: opts.DecodeLimits,
 		storeOptions: opts.StoreOptions,
+		restoreDB:    opts.SnapshotRestoreDBOptions,
 		scopeRule:    opts.ScopeRule,
 		database:     opts.DatabaseScope,
 		catalog:      opts.CatalogScope,
@@ -147,6 +155,9 @@ func (f *FSM) Close() error {
 	}
 	if f.results != nil {
 		errs = append(errs, f.results.Close())
+	}
+	if f.ownsDB && f.db != nil {
+		errs = append(errs, f.db.Close())
 	}
 	return errors.Join(errs...)
 }
