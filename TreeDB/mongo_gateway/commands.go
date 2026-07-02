@@ -4229,14 +4229,24 @@ func validateSupportedValue(path string, value bson.RawValue) error {
 }
 
 func commandError(code int32, codeName, message string) (wire.Document, error) {
+	return commandErrorWithFields(code, codeName, message, nil)
+}
+
+func commandErrorWithFields(code int32, codeName, message string, fields bson.D) (wire.Document, error) {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		message = codeName
 	}
-	return marshalDocument(bson.D{
+	doc := bson.D{
 		{Key: "ok", Value: 0.0},
 		{Key: "errmsg", Value: message},
 		{Key: "code", Value: code},
 		{Key: "codeName", Value: codeName},
-	})
+	}
+	for _, field := range fields {
+		if field.Key != "" {
+			doc = append(doc, field)
+		}
+	}
+	return marshalDocument(doc)
 }

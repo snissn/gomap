@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"strconv"
+	"time"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
@@ -107,7 +108,15 @@ type ClusterSubmitResult struct {
 	HasCatalogVersion bool
 }
 
-func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header, cmd iwire.ValidatedCommand) ([]iwire.Section, error) {
+func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header, cmd iwire.ValidatedCommand) (sections []iwire.Section, err error) {
+	start := time.Now()
+	var actualAck AckPolicy
+	if s != nil {
+		s.counters.inc("cluster_submit.requests_total")
+		defer func() {
+			s.recordClusterSubmitOutcome(err, actualAck, time.Since(start))
+		}()
+	}
 	if s == nil || s.clusterSubmitter == nil {
 		return nil, protocolError(iwire.ErrInvalidCommand, "nativewire cluster submitter is not configured")
 	}
@@ -163,7 +172,40 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if err := s.updateCatalogVersionFromClusterSubmitResult(result); err != nil {
 		return nil, err
 	}
+	actualAck = result.ActualAck
 	return cloneSections(result.ResponseSections), nil
+}
+
+func (s *Server) recordClusterSubmitOutcome(err error, actualAck AckPolicy, elapsed time.Duration) {
+	if s == nil {
+		return
+	}
+	if elapsed > 0 {
+		s.counters.add("cluster_submit.nanos_total", uint64(elapsed.Nanoseconds()))
+	}
+	if err != nil {
+		s.counters.inc("cluster_submit.errors_total")
+		switch errorCodeFor(err) {
+		case iwire.ErrReadOnly:
+			s.counters.inc("cluster_submit.read_only_total")
+		case iwire.ErrDurabilityUnavailable:
+			s.counters.inc("cluster_submit.durability_unavailable_total")
+		case iwire.ErrCommitAmbiguous:
+			s.counters.inc("cluster_submit.commit_ambiguous_total")
+		}
+		return
+	}
+	s.counters.inc("cluster_submit.success_total")
+	switch actualAck {
+	case iwire.AckVisible:
+		s.counters.inc("cluster_submit.ack_visible_total")
+	case iwire.AckFlushed:
+		s.counters.inc("cluster_submit.ack_flushed_total")
+	case iwire.AckSynced:
+		s.counters.inc("cluster_submit.ack_synced_total")
+	case iwire.AckRaftCommitted:
+		s.counters.inc("cluster_submit.ack_raft_committed_total")
+	}
 }
 
 func (s *Server) updateCatalogVersionFromClusterSubmitResult(result ClusterSubmitResult) error {
