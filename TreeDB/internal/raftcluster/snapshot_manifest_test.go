@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -227,6 +228,80 @@ func TestRaftSnapshotV1ValidateAcceptsMatchingPayloadManifestWithMonotonicCreate
 	}
 	if err := snapshot.Validate(); err != nil {
 		t.Fatalf("Validate matching payload manifest with monotonic CreatedAt: %v", err)
+	}
+}
+
+func TestRaftSnapshotV1ValidateAcceptsMatchingArchivePathManifest(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	payload := validRaftSnapshotArchivePayloadV1(t, manifest)
+	file, err := os.CreateTemp(t.TempDir(), "snapshot-*.tar")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if _, err := file.Write(payload); err != nil {
+		_ = file.Close()
+		t.Fatalf("Write payload: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close payload: %v", err)
+	}
+	snapshot := RaftSnapshotV1{
+		Manifest:    manifest,
+		ArchivePath: file.Name(),
+	}
+	if err := snapshot.Validate(); err != nil {
+		t.Fatalf("Validate matching archive path manifest: %v", err)
+	}
+}
+
+func TestRaftSnapshotV1ValidateRejectsMissingArchivePath(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	archivePath := writeRaftSnapshotArchiveFileForTest(t, validRaftSnapshotArchivePayloadV1(t, manifest))
+	if err := os.Remove(archivePath); err != nil {
+		t.Fatalf("Remove archive path: %v", err)
+	}
+	snapshot := RaftSnapshotV1{
+		Manifest:    manifest,
+		ArchivePath: archivePath,
+	}
+	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("Validate missing archive path error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+	reader, err := snapshot.OpenArchive()
+	if reader != nil {
+		_ = reader.Close()
+	}
+	if !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("OpenArchive missing archive path error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
+func TestRaftSnapshotV1ValidateRejectsReplacedArchivePathManifest(t *testing.T) {
+	outer := validSnapshotManifestV1()
+	replacement := outer
+	replacement.LastIncludedIndex++
+	archivePath := writeRaftSnapshotArchiveFileForTest(t, validRaftSnapshotArchivePayloadV1(t, outer))
+	if err := os.WriteFile(archivePath, validRaftSnapshotArchivePayloadV1(t, replacement), 0o600); err != nil {
+		t.Fatalf("Replace archive path: %v", err)
+	}
+	snapshot := RaftSnapshotV1{
+		Manifest:    outer,
+		ArchivePath: archivePath,
+	}
+	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("Validate replaced archive path manifest error=%v, want ErrInvalidSnapshotManifest", err)
+	}
+}
+
+func TestRaftSnapshotV1ValidateRejectsAmbiguousArchiveSources(t *testing.T) {
+	manifest := validSnapshotManifestV1()
+	snapshot := RaftSnapshotV1{
+		Manifest:    manifest,
+		Payload:     validRaftSnapshotArchivePayloadV1(t, manifest),
+		ArchivePath: "snapshot.tar",
+	}
+	if err := snapshot.Validate(); !errors.Is(err, ErrInvalidSnapshotManifest) {
+		t.Fatalf("Validate ambiguous archive source error=%v, want ErrInvalidSnapshotManifest", err)
 	}
 }
 

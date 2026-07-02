@@ -2,7 +2,6 @@ package raftfsm
 
 import (
 	"archive/tar"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +23,8 @@ const (
 	raftSnapshotApplyPrefixV1 = "apply"
 
 	raftSnapshotFormatConfigFileV1 = "format.json"
+	raftSnapshotStagingDirNameV1   = "staged"
+	raftSnapshotArchiveGlobV1      = "treedb-snapshot-*.tar"
 )
 
 var raftSnapshotMainDBEntriesV1 = []string{
@@ -69,33 +70,112 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+	archiveFile, archivePath, err := createRaftSnapshotArchiveFileV1(f.cluster.Layout.SnapshotDir)
+	if err != nil {
+		return raftcluster.RaftSnapshotV1{}, err
+	}
+	keepArchive := false
+	defer func() {
+		if !keepArchive {
+			_ = os.Remove(archivePath)
+		}
+	}()
+	tw := tar.NewWriter(archiveFile)
 	if err := writeRaftSnapshotFileV1(tw, raftcluster.RaftSnapshotArchiveManifestPathV1, headerBytes, 0o600); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if err := appendRaftSnapshotTreeDBStorageV1(tw, raftSnapshotDBPrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if !f.cluster.DisableSideStores {
 		if err := appendRaftSnapshotTreeDBSideStoresV1(tw, raftSnapshotSidePrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
+			_ = archiveFile.Close()
 			return raftcluster.RaftSnapshotV1{}, err
 		}
 	}
 	if err := appendRaftSnapshotDirV1(tw, raftSnapshotApplyPrefixV1, f.cluster.Layout.ApplyDir); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if err := tw.Close(); err != nil {
+		_ = archiveFile.Close()
 		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: close snapshot archive: %w", err)
 	}
+	if err := archiveFile.Sync(); err != nil {
+		_ = archiveFile.Close()
+		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: sync snapshot archive: %w", err)
+	}
+	if err := archiveFile.Close(); err != nil {
+		return raftcluster.RaftSnapshotV1{}, fmt.Errorf("raftfsm: close snapshot archive file: %w", err)
+	}
 	snapshot := raftcluster.RaftSnapshotV1{
-		Manifest: manifest,
-		Payload:  buf.Bytes(),
+		Manifest:    manifest,
+		ArchivePath: archivePath,
 	}
 	if err := snapshot.Validate(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
+	keepArchive = true
 	return snapshot, nil
+}
+
+func createRaftSnapshotArchiveFileV1(snapshotDir string) (*os.File, string, error) {
+	if strings.TrimSpace(snapshotDir) == "" {
+		return nil, "", fmt.Errorf("raftfsm: missing snapshot directory (SnapshotDir is empty)")
+	}
+	stagingDir := raftSnapshotStagingDirV1(snapshotDir)
+	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
+		return nil, "", fmt.Errorf("raftfsm: create snapshot staging directory: %w", err)
+	}
+	file, err := os.CreateTemp(stagingDir, raftSnapshotArchiveGlobV1)
+	if err != nil {
+		return nil, "", fmt.Errorf("raftfsm: create snapshot archive: %w", err)
+	}
+	return file, file.Name(), nil
+}
+
+func cleanupAbandonedRaftSnapshotArchivesV1(snapshotDir string) error {
+	if strings.TrimSpace(snapshotDir) == "" {
+		return nil
+	}
+	stagingDir := raftSnapshotStagingDirV1(snapshotDir)
+	info, err := os.Stat(stagingDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("raftfsm: stat snapshot staging directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("raftfsm: snapshot staging path %q is not a directory", stagingDir)
+	}
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		return fmt.Errorf("raftfsm: read snapshot staging directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		matches, err := filepath.Match(raftSnapshotArchiveGlobV1, entry.Name())
+		if err != nil {
+			return fmt.Errorf("raftfsm: match snapshot archive pattern: %w", err)
+		}
+		if !matches {
+			continue
+		}
+		path := filepath.Join(stagingDir, entry.Name())
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("raftfsm: remove abandoned staged snapshot archive %q: %w", path, err)
+		}
+	}
+	return nil
+}
+
+func raftSnapshotStagingDirV1(snapshotDir string) string {
+	return filepath.Join(snapshotDir, raftSnapshotStagingDirNameV1)
 }
 
 // InstallRaftSnapshotV1 discards the local TreeDB state and installs a

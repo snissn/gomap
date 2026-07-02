@@ -24,6 +24,7 @@ const (
 	hashicorpRaftMinTrailingLogs       = 1
 	hashicorpRaftReadIndexInitialPoll  = 2 * time.Millisecond
 	hashicorpRaftReadIndexMaxPoll      = 25 * time.Millisecond
+	hashicorpRaftSnapshotCopyBuffer    = 64 << 10
 )
 
 var (
@@ -1026,9 +1027,20 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 			return err
 		}
 	}
-	if _, err := sink.Write(s.snapshot.Payload); err != nil {
+	src, err := s.snapshot.OpenArchive()
+	if err != nil {
 		_ = sink.Cancel()
 		return err
+	}
+	copyErr := copyHashicorpRaftSnapshotArchiveV1(sink, src)
+	closeSrcErr := src.Close()
+	if copyErr != nil {
+		_ = sink.Cancel()
+		return copyErr
+	}
+	if closeSrcErr != nil {
+		_ = sink.Cancel()
+		return fmt.Errorf("raftcluster: close raft snapshot archive source: %w", closeSrcErr)
 	}
 	if err := sink.Close(); err != nil {
 		_ = sink.Cancel()
@@ -1037,7 +1049,15 @@ func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
 	return nil
 }
 
-func (s hashicorpRaftSnapshotV1) Release() {}
+func copyHashicorpRaftSnapshotArchiveV1(dst io.Writer, src io.Reader) error {
+	buf := make([]byte, hashicorpRaftSnapshotCopyBuffer)
+	_, err := io.CopyBuffer(dst, src, buf)
+	return err
+}
+
+func (s hashicorpRaftSnapshotV1) Release() {
+	_ = s.snapshot.Release()
+}
 
 type hashicorpRaftSnapshotBoundaryV1 struct {
 	Term  uint64
