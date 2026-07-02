@@ -83,6 +83,7 @@ func (s conditionalTxnSnapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) e
 		return errors.New("treedb: GetManyView nil callback")
 	}
 	for i, key := range keys {
+		key = normalizeRawKVPointKey(key)
 		value, _, err := s.tx.GetVersionedAppend(key, nil)
 		if errors.Is(err, ErrKeyNotFound) {
 			if err := fn(i, key, nil, false); err != nil {

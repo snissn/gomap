@@ -125,6 +125,9 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	if err := d.Set([]byte("snap/empty"), []byte{}); err != nil {
 		t.Fatalf("set empty: %v", err)
 	}
+	if err := d.Set(nil, []byte("nil-key")); err != nil {
+		t.Fatalf("set nil key: %v", err)
+	}
 
 	tx, err := d.NewConditionalTxnWithSnapshot()
 	if err != nil {
@@ -165,7 +168,7 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 		nil   bool
 	}
 	var seen []seenMany
-	err = snap.GetManyView([][]byte{[]byte("snap/b"), []byte("snap/empty"), []byte("snap/missing")}, func(index int, key, value []byte, found bool) error {
+	err = snap.GetManyView([][]byte{[]byte("snap/b"), []byte("snap/empty"), []byte("snap/missing"), nil}, func(index int, key, value []byte, found bool) error {
 		seen = append(seen, seenMany{
 			index: index,
 			key:   string(key),
@@ -182,6 +185,7 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 		{index: 0, key: "snap/b", value: "2", found: true},
 		{index: 1, key: "snap/empty", value: "", found: true},
 		{index: 2, key: "snap/missing", value: "", found: false, nil: true},
+		{index: 3, key: "", value: "nil-key", found: true},
 	}
 	if !reflect.DeepEqual(seen, wantSeen) {
 		t.Fatalf("tx snapshot GetManyView=%v, want %v", seen, wantSeen)
@@ -198,6 +202,46 @@ func TestConditionalTxnSnapshotUsesPinnedPointViewAndRangeFailsClosed(t *testing
 	}
 	if tx.Snapshot() != nil {
 		t.Fatal("tx.Snapshot after Commit returned non-nil")
+	}
+}
+
+func TestConditionalTxnSnapshotGetManyViewNormalizesMissingNilKey(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	tx, err := d.NewConditionalTxnWithSnapshot()
+	if err != nil {
+		t.Fatalf("NewConditionalTxnWithSnapshot: %v", err)
+	}
+	defer tx.Close()
+	snap := tx.Snapshot()
+	if snap == nil {
+		t.Fatal("tx.Snapshot returned nil")
+	}
+
+	var callbackKey []byte
+	var callbackValue []byte
+	var callbackFound bool
+	err = snap.GetManyView([][]byte{nil}, func(index int, key, value []byte, found bool) error {
+		if index != 0 {
+			t.Fatalf("callback index=%d want 0", index)
+		}
+		callbackKey = key
+		callbackValue = value
+		callbackFound = found
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("tx snapshot GetManyView nil key: %v", err)
+	}
+	if callbackKey == nil || len(callbackKey) != 0 {
+		t.Fatalf("callback key=%v want normalized empty non-nil slice", callbackKey)
+	}
+	if callbackValue != nil || callbackFound {
+		t.Fatalf("callback value=%v found=%v want missing nil value", callbackValue, callbackFound)
 	}
 }
 
