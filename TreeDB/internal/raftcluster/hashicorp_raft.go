@@ -60,6 +60,7 @@ type HashicorpRaftProviderOptions struct {
 type HashicorpRaftProvider struct {
 	cluster         ResolvedConfig
 	raft            *hraft.Raft
+	logStore        hraft.LogStore
 	appliedProgress AppliedProgressReader
 	applyTimeout    time.Duration
 	owned           []io.Closer
@@ -128,6 +129,7 @@ func OpenHashicorpRaftProvider(opts HashicorpRaftProviderOptions) (*HashicorpRaf
 	return &HashicorpRaftProvider{
 		cluster:         cluster,
 		raft:            r,
+		logStore:        stores.log,
 		appliedProgress: progressReader,
 		applyTimeout:    applyTimeout,
 		owned:           stores.owned,
@@ -474,6 +476,84 @@ func (s *hashicorpRaftStores) closeOnError(errp *error) {
 	}
 }
 
+// HashicorpRaftSnapshotResultV1 reports the persisted HashiCorp snapshot and
+// local log range observed around the snapshot operation. Log compaction is
+// performed by HashiCorp Raft only after the FSM snapshot is durably persisted.
+type HashicorpRaftSnapshotResultV1 struct {
+	ID                string
+	LastIncludedTerm  uint64
+	LastIncludedIndex uint64
+	SizeBytes         int64
+
+	FirstLogIndexBefore uint64
+	LastLogIndexBefore  uint64
+	FirstLogIndexAfter  uint64
+	LastLogIndexAfter   uint64
+	LogCompacted        bool
+
+	Manifest SnapshotManifestV1
+}
+
+// Snapshot asks HashiCorp Raft to persist an FSM snapshot and compact logs
+// according to the active Raft configuration.
+func (p *HashicorpRaftProvider) Snapshot(ctx context.Context) (HashicorpRaftSnapshotResultV1, error) {
+	if p == nil || p.raft == nil || p.logStore == nil {
+		return HashicorpRaftSnapshotResultV1{}, ErrInvalidHashicorpRaftProvider
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return HashicorpRaftSnapshotResultV1{}, err
+	}
+	firstBefore, firstBeforeErr := p.logStore.FirstIndex()
+	lastBefore, lastBeforeErr := p.logStore.LastIndex()
+	if firstBeforeErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, firstBeforeErr)
+	}
+	if lastBeforeErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, lastBeforeErr)
+	}
+	future := p.raft.Snapshot()
+	if err := waitHashicorpRaftFuture(ctx, future); err != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+	}
+	meta, snapshot, err := future.Open()
+	if err != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+	}
+	defer snapshot.Close()
+	payload, err := io.ReadAll(snapshot)
+	if err != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, err)
+	}
+	raftSnapshot, err := decodeHashicorpRaftSnapshotPayloadV1(payload)
+	if err != nil {
+		return HashicorpRaftSnapshotResultV1{}, err
+	}
+	firstAfter, firstAfterErr := p.logStore.FirstIndex()
+	lastAfter, lastAfterErr := p.logStore.LastIndex()
+	if firstAfterErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, firstAfterErr)
+	}
+	if lastAfterErr != nil {
+		return HashicorpRaftSnapshotResultV1{}, errors.Join(ErrHashicorpRaftUnavailable, lastAfterErr)
+	}
+	result := HashicorpRaftSnapshotResultV1{
+		ID:                  meta.ID,
+		LastIncludedTerm:    meta.Term,
+		LastIncludedIndex:   meta.Index,
+		SizeBytes:           meta.Size,
+		FirstLogIndexBefore: firstBefore,
+		LastLogIndexBefore:  lastBefore,
+		FirstLogIndexAfter:  firstAfter,
+		LastLogIndexAfter:   lastAfter,
+		LogCompacted:        firstAfter > firstBefore || (firstAfter == 0 && lastAfter == 0 && lastBefore > 0),
+		Manifest:            raftSnapshot.Manifest,
+	}
+	return result, nil
+}
+
 func (s *hashicorpRaftStores) closeOwned() {
 	for _, closer := range s.owned {
 		if closer != nil {
@@ -491,6 +571,7 @@ func hashicorpRaftConfig(nodeID NodeID, src *hraft.Config) *hraft.Config {
 		conf.CommitTimeout = 10 * time.Millisecond
 		conf.LeaderLeaseTimeout = 50 * time.Millisecond
 		conf.SnapshotInterval = hashicorpRaftSnapshotCheckInterval
+		conf.SnapshotThreshold = ^uint64(0)
 	} else {
 		conf = *src
 	}
@@ -505,10 +586,6 @@ func hashicorpRaftConfig(nodeID NodeID, src *hraft.Config) *hraft.Config {
 	if conf.SnapshotInterval < 5*time.Millisecond {
 		conf.SnapshotInterval = hashicorpRaftSnapshotCheckInterval
 	}
-	// HashiCorp Raft v1.7.3 rejects SnapshotInterval=0, so this provider
-	// suppresses unsupported snapshot attempts by making shouldSnapshot false for
-	// any practical log index instead of letting Snapshot() be scheduled.
-	conf.SnapshotThreshold = ^uint64(0)
 	return &conf
 }
 
@@ -710,9 +787,68 @@ func hashicorpRaftLogEntryError(err error) error {
 }
 
 func (f hashicorpRaftFSM) Snapshot() (hraft.FSMSnapshot, error) {
-	return nil, ErrRaftSnapshotUnsupported
+	exporter, ok := f.applier.(RaftSnapshotExporterV1)
+	if !ok {
+		return nil, ErrRaftSnapshotUnsupported
+	}
+	snapshot, err := exporter.ExportRaftSnapshotV1()
+	if err != nil {
+		return nil, err
+	}
+	if err := snapshot.Validate(); err != nil {
+		return nil, err
+	}
+	return hashicorpRaftSnapshotV1{snapshot: snapshot.Clone()}, nil
 }
 
-func (f hashicorpRaftFSM) Restore(io.ReadCloser) error {
-	return ErrRaftSnapshotUnsupported
+func (f hashicorpRaftFSM) Restore(src io.ReadCloser) error {
+	if src == nil {
+		return ErrRaftSnapshotUnsupported
+	}
+	defer src.Close()
+	installer, ok := f.applier.(RaftSnapshotInstallerV1)
+	if !ok {
+		return ErrRaftSnapshotUnsupported
+	}
+	return installer.InstallRaftSnapshotV1(src)
+}
+
+type hashicorpRaftSnapshotV1 struct {
+	snapshot RaftSnapshotV1
+}
+
+func (s hashicorpRaftSnapshotV1) Persist(sink hraft.SnapshotSink) error {
+	if sink == nil {
+		return ErrInvalidSnapshotManifest
+	}
+	if err := s.snapshot.Validate(); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	if _, err := sink.Write(s.snapshot.Payload); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	if err := sink.Close(); err != nil {
+		_ = sink.Cancel()
+		return err
+	}
+	return nil
+}
+
+func (s hashicorpRaftSnapshotV1) Release() {}
+
+func decodeHashicorpRaftSnapshotPayloadV1(payload []byte) (RaftSnapshotV1, error) {
+	if len(payload) == 0 {
+		return RaftSnapshotV1{}, fmt.Errorf("%w: empty persisted snapshot payload", ErrInvalidSnapshotManifest)
+	}
+	manifest, err := DecodeSnapshotManifestV1FromArchive(payload)
+	if err != nil {
+		return RaftSnapshotV1{}, err
+	}
+	snapshot := RaftSnapshotV1{Manifest: manifest, Payload: bytes.Clone(payload)}
+	if err := snapshot.Validate(); err != nil {
+		return RaftSnapshotV1{}, err
+	}
+	return snapshot, nil
 }

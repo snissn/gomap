@@ -30,17 +30,31 @@ func TestHashicorpRaftLeadershipLostIsCommitAmbiguous(t *testing.T) {
 	}
 }
 
-func TestHashicorpRaftConfigSuppressesSnapshots(t *testing.T) {
+func TestHashicorpRaftConfigPreservesConfiguredSnapshots(t *testing.T) {
 	src := hraft.DefaultConfig()
 	src.SnapshotInterval = time.Millisecond
 	src.SnapshotThreshold = 1
+	src.TrailingLogs = 3
 
 	conf := hashicorpRaftConfig("node-a", src)
 	if conf.SnapshotInterval < 5*time.Millisecond {
 		t.Fatalf("SnapshotInterval=%s is invalid for hashicorp raft", conf.SnapshotInterval)
 	}
+	if conf.SnapshotThreshold != src.SnapshotThreshold {
+		t.Fatalf("SnapshotThreshold=%d want configured %d", conf.SnapshotThreshold, src.SnapshotThreshold)
+	}
+	if conf.TrailingLogs != src.TrailingLogs {
+		t.Fatalf("TrailingLogs=%d want configured %d", conf.TrailingLogs, src.TrailingLogs)
+	}
+	if err := hraft.ValidateConfig(conf); err != nil {
+		t.Fatalf("ValidateConfig: %v", err)
+	}
+}
+
+func TestHashicorpRaftConfigDefaultsAvoidAutomaticSnapshots(t *testing.T) {
+	conf := hashicorpRaftConfig("node-a", nil)
 	if conf.SnapshotThreshold != ^uint64(0) {
-		t.Fatalf("SnapshotThreshold=%d want max uint64", conf.SnapshotThreshold)
+		t.Fatalf("default SnapshotThreshold=%d want max uint64", conf.SnapshotThreshold)
 	}
 	if err := hraft.ValidateConfig(conf); err != nil {
 		t.Fatalf("ValidateConfig: %v", err)
