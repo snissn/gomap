@@ -931,7 +931,7 @@ func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 		}
 	}
-	if collections.IsDuplicateKeyError(err) {
+	if collections.IsDuplicateKeyError(err) && nativeCode != iwire.ErrCommitAmbiguous && !errors.Is(err, collections.ErrCommitAmbiguous) {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
 	return commandErrorWithFields(code, codeName, err.Error(), mongoClusterErrorFields(err, nativeCode, codeName))
@@ -957,11 +957,11 @@ func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName stri
 	message := strings.ToLower(err.Error())
 	switch nativeCode {
 	case iwire.ErrReadOnly:
-		if mongoClusterLeaderHint(err) != "" || strings.Contains(message, "not leader") {
-			return "not_leader"
-		}
 		if strings.Contains(message, "route group") || strings.Contains(message, "route") {
 			return "route_rejected"
+		}
+		if mongoClusterLeaderHint(err) != "" || strings.Contains(message, "not leader") {
+			return "not_leader"
 		}
 		return "read_only"
 	case iwire.ErrDurabilityUnavailable:
@@ -990,6 +990,14 @@ func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName stri
 func mongoClusterLeaderHint(err error) string {
 	if err == nil {
 		return ""
+	}
+	var hinted interface {
+		ClusterLeaderHint() string
+	}
+	if errors.As(err, &hinted) {
+		if leaderHint := strings.TrimSpace(hinted.ClusterLeaderHint()); leaderHint != "" {
+			return leaderHint
+		}
 	}
 	const marker = "leader_hint="
 	message := err.Error()

@@ -1703,6 +1703,7 @@ func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *t
 	assertErrmsgContains(t, response, "route group")
 	assertBool(t, response, "treedbClusterError", true)
 	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+	assertStringField(t, response, "treedbLeaderHint", "node-c")
 	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection app.users after route mismatch err=%v want collection not found", err)
 	}
@@ -1713,6 +1714,38 @@ func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *t
 	if got := routes[0]; got.Database != "app" || got.Catalog != "default" || got.Collection != "users" || got.CommandID != iwire.CommandCreateCollection {
 		t.Fatalf("route request=%+v want app/default/users create_collection", got)
 	}
+}
+
+func TestMongoClusterMutationCommandErrorPreservesCommitAmbiguousOverDuplicateKey(t *testing.T) {
+	clusterErr := errors.Join(
+		&iwire.ProtocolError{Code: iwire.ErrCommitAmbiguous, Reason: "commit reached consensus but response failed"},
+		collections.ErrDuplicateDocumentID,
+	)
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "ShutdownInProgress")
+	assertStringField(t, response, "treedbErrorClass", "commit_ambiguous")
+}
+
+func TestMongoClusterLeaderHintUsesStructuredCarrier(t *testing.T) {
+	err := mongoClusterLeaderHintTestError{leaderHint: "node-c"}
+	if got := mongoClusterLeaderHint(err); got != "node-c" {
+		t.Fatalf("mongoClusterLeaderHint=%q want node-c", got)
+	}
+}
+
+type mongoClusterLeaderHintTestError struct {
+	leaderHint string
+}
+
+func (e mongoClusterLeaderHintTestError) Error() string {
+	return "route group rejected"
+}
+
+func (e mongoClusterLeaderHintTestError) ClusterLeaderHint() string {
+	return e.leaderHint
 }
 
 func TestClusterSubmitterRejectsUnsupportedWriteConcernBeforeSubmitOrLocalMutation(t *testing.T) {
