@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -93,6 +94,32 @@ func TestRaftSnapshotV1ExtractRejectsOversizedArchiveHeader(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1ExtractRejectsDuplicateArchiveHeader(t *testing.T) {
+	headerBytes := validRaftSnapshotArchiveHeaderBytesForTest(t)
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for i := 0; i < 2; i++ {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: raftcluster.RaftSnapshotArchiveManifestPathV1,
+			Mode: 0o600,
+			Size: int64(len(headerBytes)),
+		}); err != nil {
+			t.Fatalf("WriteHeader manifest %d: %v", i, err)
+		}
+		if _, err := tw.Write(headerBytes); err != nil {
+			t.Fatalf("Write manifest %d: %v", i, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close archive: %v", err)
+	}
+
+	_, err := extractRaftSnapshotArchiveV1(bytes.NewReader(buf.Bytes()), t.TempDir(), t.TempDir(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "duplicate snapshot archive header") {
+		t.Fatalf("extractRaftSnapshotArchiveV1 err=%v, want duplicate header rejection", err)
+	}
+}
+
 func TestRaftSnapshotV1CopyFileContentDoesNotOverrunHeaderSize(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -142,6 +169,7 @@ func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *t
 	if err != nil {
 		t.Fatalf("ExportRaftSnapshotV1: %v", err)
 	}
+	assertSnapshotArchiveHasNonEmptyApplyMetadata(t, snapshot.Payload)
 	assertSnapshotValueLogHasFile(t, raftcluster.ValueLogDir(sourceDir))
 	sourceDigest, err := sourceFSM.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{})
 	if err != nil {
@@ -768,6 +796,61 @@ func rewriteRaftSnapshotArchiveHeaderForTest(t testing.TB, payload []byte, mut f
 		t.Fatalf("archive missing %s", raftcluster.RaftSnapshotArchiveManifestPathV1)
 	}
 	return out.Bytes()
+}
+
+func validRaftSnapshotArchiveHeaderBytesForTest(t testing.TB) []byte {
+	t.Helper()
+	manifest := raftcluster.SnapshotManifestV1{
+		Format:            raftcluster.SnapshotManifestFormatV1,
+		Version:           raftcluster.SnapshotManifestVersion1,
+		GroupID:           "group-a",
+		NodeID:            "node-a",
+		LastIncludedTerm:  1,
+		LastIncludedIndex: 1,
+		AppliedCommandLSN: 1,
+		LogicalDigestV1:   "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+		Scope: raftcluster.SnapshotScopeIdentityV1{
+			ScopeRule:     string(raftentry.ScopeRuleSingleGroupV1),
+			DatabaseScope: raftentry.DatabaseScopeDefaultV1,
+			CatalogScope:  raftentry.CatalogScopeDefaultV1,
+		},
+		CreatedAt: time.Unix(1700000000, 0).UTC(),
+	}
+	headerBytes, err := raftcluster.EncodeRaftSnapshotArchiveHeaderV1(raftcluster.NewRaftSnapshotArchiveHeaderV1(manifest))
+	if err != nil {
+		t.Fatalf("EncodeRaftSnapshotArchiveHeaderV1: %v", err)
+	}
+	return headerBytes
+}
+
+func assertSnapshotArchiveHasNonEmptyApplyMetadata(t testing.TB, payload []byte) {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(payload))
+	want := map[string]bool{
+		raftSnapshotApplyPrefixV1 + "/apply-progress-v1.log": false,
+		raftSnapshotApplyPrefixV1 + "/apply-results-v1.log":  false,
+	}
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next archive entry: %v", err)
+		}
+		if _, ok := want[header.Name]; !ok {
+			continue
+		}
+		if header.Size == 0 {
+			t.Fatalf("snapshot archive apply metadata %q is zero-length", header.Name)
+		}
+		want[header.Name] = true
+	}
+	for name, found := range want {
+		if !found {
+			t.Fatalf("snapshot archive missing apply metadata %q", name)
+		}
+	}
 }
 
 func assertSnapshotApplyResult(tb testing.TB, result raftentry.ApplyResultV1, wantStatus raftentry.ApplyStatusV1, wantAffected int64) {

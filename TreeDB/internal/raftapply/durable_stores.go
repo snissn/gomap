@@ -200,6 +200,23 @@ func (s *DurableApplyResultStore) Close() error {
 	return err
 }
 
+// Sync flushes the durable result metadata file even when the store was opened
+// with DisableSync for per-append writes.
+func (s *DurableApplyResultStore) Sync() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkOpenLocked("sync apply result"); err != nil {
+		return err
+	}
+	if err := s.file.Sync(); err != nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: sync result metadata %s: %v", s.path, err)
+	}
+	return nil
+}
+
 func (s *DurableApplyResultStore) Len() int {
 	if s == nil {
 		return 0
@@ -438,6 +455,23 @@ func (s *DurableApplyProgressStore) Close() error {
 	err := s.file.Close()
 	s.file = nil
 	return err
+}
+
+// Sync flushes the durable progress metadata file even when the store was opened
+// with DisableSync for per-append writes.
+func (s *DurableApplyProgressStore) Sync() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkOpenLocked("sync applied progress"); err != nil {
+		return err
+	}
+	if err := s.file.Sync(); err != nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: sync progress metadata %s: %v", s.path, err)
+	}
+	return nil
 }
 
 func (s *DurableApplyProgressStore) Len() int {

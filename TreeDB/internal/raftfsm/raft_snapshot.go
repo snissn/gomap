@@ -56,6 +56,9 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 	if err := f.db.Checkpoint(); err != nil {
 		return raftcluster.RaftSnapshotV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "checkpoint before snapshot export: %v", err)
 	}
+	if err := f.syncDurableApplyMetadataForRaftSnapshotV1(); err != nil {
+		return raftcluster.RaftSnapshotV1{}, err
+	}
 	manifest, err := f.exportSnapshotManifestV1Locked(SnapshotManifestExportOptionsV1{})
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
@@ -193,6 +196,13 @@ func (f *FSM) requireRaftSnapshotOpenV1() error {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is not open")
 	}
 	return nil
+}
+
+func (f *FSM) syncDurableApplyMetadataForRaftSnapshotV1() error {
+	if f == nil || f.progress == nil || f.results == nil {
+		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM has no durable apply metadata")
+	}
+	return errors.Join(f.progress.Sync(), f.results.Sync())
 }
 
 func (f *FSM) closeForRaftSnapshotRestoreV1() error {
@@ -484,6 +494,9 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir s
 		}
 		name := cleanSnapshotArchiveNameV1(tarHeader.Name)
 		if name == raftcluster.RaftSnapshotArchiveManifestPathV1 {
+			if sawHeader {
+				return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: duplicate snapshot archive header")
+			}
 			if tarHeader.Typeflag != tar.TypeReg && tarHeader.Typeflag != tar.TypeRegA {
 				return raftcluster.RaftSnapshotArchiveHeaderV1{}, fmt.Errorf("raftfsm: snapshot archive header is not a regular file")
 			}
