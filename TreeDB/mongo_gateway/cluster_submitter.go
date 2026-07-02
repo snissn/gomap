@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -909,16 +910,20 @@ func parseClusterWriteConcernW(value bson.RawValue) (iwire.AckPolicy, error) {
 
 func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 	code, codeName := commandCodeBadValue, "BadValue"
+	var nativeCode iwire.ErrorCode
 	var mongoErr mongoCommandError
 	if errors.As(err, &mongoErr) {
 		code, codeName = mongoErr.code, mongoErr.codeName
-	} else if nativeCode, ok := iwire.ErrorCodeOf(err); ok {
+	} else if parsedNativeCode, ok := iwire.ErrorCodeOf(err); ok {
+		nativeCode = parsedNativeCode
 		switch nativeCode {
 		case iwire.ErrUnsupportedFeature:
 			code, codeName = commandCodeBadValue, "BadValue"
 		case iwire.ErrReadOnly:
 			code, codeName = commandCodeNotWritablePrimary, "NotWritablePrimary"
 		case iwire.ErrDurabilityUnavailable:
+			code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
+		case iwire.ErrCommitAmbiguous:
 			code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
 		case iwire.ErrCatalogVersionMismatch:
 			code, codeName = commandCodeBadValue, "BadValue"
@@ -929,7 +934,80 @@ func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 	if collections.IsDuplicateKeyError(err) {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
-	return commandError(code, codeName, err.Error())
+	return commandErrorWithFields(code, codeName, err.Error(), mongoClusterErrorFields(err, nativeCode, codeName))
+}
+
+func mongoClusterErrorFields(err error, nativeCode iwire.ErrorCode, codeName string) bson.D {
+	if err == nil {
+		return nil
+	}
+	fields := bson.D{
+		{Key: "treedbClusterError", Value: true},
+	}
+	if class := mongoClusterErrorClass(err, nativeCode, codeName); class != "" {
+		fields = append(fields, bson.E{Key: "treedbErrorClass", Value: class})
+	}
+	if leaderHint := mongoClusterLeaderHint(err); leaderHint != "" {
+		fields = append(fields, bson.E{Key: "treedbLeaderHint", Value: leaderHint})
+	}
+	return fields
+}
+
+func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName string) string {
+	message := strings.ToLower(err.Error())
+	switch nativeCode {
+	case iwire.ErrReadOnly:
+		if mongoClusterLeaderHint(err) != "" || strings.Contains(message, "not leader") {
+			return "not_leader"
+		}
+		if strings.Contains(message, "route group") || strings.Contains(message, "route") {
+			return "route_rejected"
+		}
+		return "read_only"
+	case iwire.ErrDurabilityUnavailable:
+		return "durability_unavailable"
+	case iwire.ErrCommitAmbiguous:
+		return "commit_ambiguous"
+	case iwire.ErrCatalogVersionMismatch:
+		return "catalog_version_mismatch"
+	case iwire.ErrDuplicateDocumentID, iwire.ErrDocumentExists, iwire.ErrUniqueIndexConflict:
+		return "write_conflict"
+	}
+	switch codeName {
+	case "WriteConcernFailed":
+		return "write_concern_failed"
+	case "NotWritablePrimary":
+		return "not_leader"
+	case "ShutdownInProgress":
+		return "durability_unavailable"
+	case "DuplicateKey":
+		return "write_conflict"
+	default:
+		return "cluster_error"
+	}
+}
+
+func mongoClusterLeaderHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	const marker = "leader_hint="
+	message := err.Error()
+	start := strings.Index(message, marker)
+	if start < 0 {
+		return ""
+	}
+	start += len(marker)
+	end := start
+	for end < len(message) {
+		switch message[end] {
+		case ';', ',', ' ', '\t', '\n', '\r':
+			return strings.TrimSpace(message[start:end])
+		default:
+			end++
+		}
+	}
+	return strings.TrimSpace(message[start:end])
 }
 
 type mongoCommandError struct {

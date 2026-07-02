@@ -350,6 +350,14 @@ func assertErrmsgContains(tb testing.TB, doc wire.Document, want string) {
 	}
 }
 
+func assertStringField(tb testing.TB, doc wire.Document, key, want string) {
+	tb.Helper()
+	got, ok := bson.Raw(doc).Lookup(key).StringValueOK()
+	if !ok || got != want {
+		tb.Fatalf("%s=%q typeOK=%v want %q", key, got, ok, want)
+	}
+}
+
 func assertMongoUsers(tb testing.TB, server *Server, want map[string]string) {
 	tb.Helper()
 	found := serveCommand(tb, server, 326899, bson.D{
@@ -1052,6 +1060,9 @@ func TestClusterAdmissionMongoFollowerRejectsWritesBeforeLocalMutation(t *testin
 	})
 	assertCommandError(t, createResponse, "NotWritablePrimary")
 	assertErrmsgContains(t, createResponse, "node-a:27017")
+	assertBool(t, createResponse, "treedbClusterError", true)
+	assertStringField(t, createResponse, "treedbErrorClass", "not_leader")
+	assertStringField(t, createResponse, "treedbLeaderHint", "node-a:27017")
 	if _, err := server.Collections.OpenCollection("app.admins"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection app.admins err=%v want collection not found", err)
 	}
@@ -1690,6 +1701,8 @@ func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *t
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertErrmsgContains(t, response, "route group")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "route_rejected")
 	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection app.users after route mismatch err=%v want collection not found", err)
 	}

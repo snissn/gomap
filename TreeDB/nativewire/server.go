@@ -964,6 +964,17 @@ func (s *Server) Stats() map[string]string {
 		"insert_batch_combiner.requests_total",
 		"insert_batch_combiner.single_requests_total",
 		"insert_batch_combiner.fallback_requests_total",
+		"cluster_submit.requests_total",
+		"cluster_submit.success_total",
+		"cluster_submit.errors_total",
+		"cluster_submit.read_only_total",
+		"cluster_submit.durability_unavailable_total",
+		"cluster_submit.commit_ambiguous_total",
+		"cluster_submit.ack_visible_total",
+		"cluster_submit.ack_flushed_total",
+		"cluster_submit.ack_synced_total",
+		"cluster_submit.ack_raft_committed_total",
+		"cluster_submit.nanos_total",
 	} {
 		out[nativeStatsPrefix+key] = "0"
 	}

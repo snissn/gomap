@@ -1565,6 +1565,71 @@ func TestClusterSubmitterRaftCommittedAdmissionFailsBeforeSubmit(t *testing.T) {
 	}
 }
 
+func TestClusterSubmitterStatsTrackRaftCommittedAndFollowerReject(t *testing.T) {
+	t.Run("raft_committed_success", func(t *testing.T) {
+		submitter := &fakeClusterSubmitter{
+			resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+				result.ActualAck = AckRaftCommitted
+				result.CommittedRecoverable = true
+				return replaceResponseAckPolicy(result, AckRaftCommitted), nil
+			},
+		}
+		client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := client.Hello(ctx); err != nil {
+			t.Fatalf("Hello: %v", err)
+		}
+		if _, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...); err != nil {
+			t.Fatalf("InsertBatch raft_committed cluster: %v", err)
+		}
+		for key, want := range map[string]uint64{
+			"cluster_submit.requests_total":           1,
+			"cluster_submit.success_total":            1,
+			"cluster_submit.errors_total":             0,
+			"cluster_submit.ack_raft_committed_total": 1,
+			"cluster_submit.read_only_total":          0,
+		} {
+			if got := nativewireTestStatUint64(t, server, key); got != want {
+				t.Fatalf("stat %s=%d want %d", key, got, want)
+			}
+		}
+		if got := nativewireTestStatUint64(t, server, "cluster_submit.nanos_total"); got == 0 {
+			t.Fatalf("cluster_submit.nanos_total=0 want >0")
+		}
+	})
+
+	t.Run("follower_reject", func(t *testing.T) {
+		submitter := &fakeClusterSubmitter{
+			status: ClusterFollowerAdmission("node-a:7000", "not leader"),
+		}
+		client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := client.Hello(ctx); err != nil {
+			t.Fatalf("Hello: %v", err)
+		}
+		_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+		if !isRemoteError(err, iwire.ErrReadOnly) {
+			t.Fatalf("InsertBatch follower raft_committed err=%v want read-only", err)
+		}
+		for key, want := range map[string]uint64{
+			"cluster_submit.requests_total":           1,
+			"cluster_submit.success_total":            0,
+			"cluster_submit.errors_total":             1,
+			"cluster_submit.read_only_total":          1,
+			"cluster_submit.ack_raft_committed_total": 0,
+		} {
+			if got := nativewireTestStatUint64(t, server, key); got != want {
+				t.Fatalf("stat %s=%d want %d", key, got, want)
+			}
+		}
+		if got := len(submitter.snapshot()); got != 0 {
+			t.Fatalf("submitter calls=%d want 0", got)
+		}
+	})
+}
+
 func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.T) {
 	client, server, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.LeaderAdmission())
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
