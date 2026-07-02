@@ -1,0 +1,252 @@
+package raftcluster
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+)
+
+type recordingGroupSubmitter struct {
+	groupID GroupID
+	status  AdmissionStatus
+	err     error
+	calls   []recordingGroupSubmitCall
+}
+
+type recordingGroupSubmitCall struct {
+	entry    []byte
+	metadata raftentry.RequestMetadataV1
+}
+
+type submitOnlyGroupSubmitter struct {
+	groupID GroupID
+}
+
+func (s *submitOnlyGroupSubmitter) Config() ResolvedConfig {
+	return ResolvedConfig{GroupID: s.groupID}
+}
+
+func (s *submitOnlyGroupSubmitter) SubmitCommandEntryV1(context.Context, []byte, raftentry.RequestMetadataV1) (SubmitResultV1, error) {
+	panic("unexpected submit")
+}
+
+func (s *recordingGroupSubmitter) Config() ResolvedConfig {
+	return ResolvedConfig{GroupID: s.groupID}
+}
+
+func (s *recordingGroupSubmitter) ClusterAdmissionStatus(context.Context) (AdmissionStatus, error) {
+	if s.status == (AdmissionStatus{}) {
+		return LeaderAdmission(), nil
+	}
+	return s.status, nil
+}
+
+func (s *recordingGroupSubmitter) SubmitCommandEntryV1(_ context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (SubmitResultV1, error) {
+	s.calls = append(s.calls, recordingGroupSubmitCall{
+		entry:    bytes.Clone(entry),
+		metadata: cloneRequestMetadataV1(metadata),
+	})
+	if s.err != nil {
+		return SubmitResultV1{}, s.err
+	}
+	return SubmitResultV1{
+		ActualAck: metadata.AckPolicy,
+		CommittedEntry: CommittedCommandEntryV1{
+			Term:            1,
+			Index:           uint64(len(s.calls)),
+			Bytes:           bytes.Clone(entry),
+			RequestMetadata: cloneRequestMetadataV1(metadata),
+		},
+		Evidence: CommitEvidenceV1{
+			Kind:                CommitEvidenceProductionConsensusV1,
+			GroupID:             s.groupID,
+			Term:                1,
+			Index:               uint64(len(s.calls)),
+			Committed:           true,
+			ProductionConsensus: true,
+		},
+	}, nil
+}
+
+func (s *recordingGroupSubmitter) snapshot() []recordingGroupSubmitCall {
+	out := make([]recordingGroupSubmitCall, len(s.calls))
+	for i := range s.calls {
+		out[i] = recordingGroupSubmitCall{
+			entry:    bytes.Clone(s.calls[i].entry),
+			metadata: cloneRequestMetadataV1(s.calls[i].metadata),
+		}
+	}
+	return out
+}
+
+func TestGroupRoutedSubmitterRoutesCollectionAndTokenTargets(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	groupB := &recordingGroupSubmitter{groupID: "group-b"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA, groupB)
+	entry := testClusterCommandEntry(t, 7)
+
+	collectionMeta := routeMetadata("group-b", iwire.AckVisible)
+	collectionMeta.RequestID = 101
+	collectionMeta.TraceContext = []byte("trace-b")
+	collectionResult, err := dispatcher.SubmitCommandEntryV1(context.Background(), entry, collectionMeta)
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1 collection route: %v", err)
+	}
+	if calls := groupA.snapshot(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0 before token route", len(calls))
+	}
+	groupBCalls := groupB.snapshot()
+	if len(groupBCalls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(groupBCalls))
+	}
+	if groupBCalls[0].metadata.ClusterRouteGroupID != "group-b" || groupBCalls[0].metadata.RequestID != 101 || string(groupBCalls[0].metadata.TraceContext) != "trace-b" {
+		t.Fatalf("group-b metadata=%+v want group-b request metadata preserved", groupBCalls[0].metadata)
+	}
+	if collectionResult.CommittedEntry.RequestMetadata.ClusterRouteGroupID != "group-b" {
+		t.Fatalf("committed collection route group=%q want group-b", collectionResult.CommittedEntry.RequestMetadata.ClusterRouteGroupID)
+	}
+
+	tokenMeta := routeMetadata("group-a", iwire.AckRaftCommitted)
+	tokenMeta.ClusterRouteShape = clusterRouteShapeTokenV1
+	tokenMeta.ClusterRoutePlacementMode = clusterRoutePlacementTokenV1
+	tokenMeta.ClusterRouteTokenKnown = true
+	tokenMeta.ClusterRouteToken = 42
+	tokenMeta.ClusterRoutePartitionID = "p0"
+	tokenMeta.ClusterRouteLeaderHint = "node-a"
+	tokenMeta.TraceContext = []byte("trace-a")
+	tokenResult, err := dispatcher.SubmitCommandEntryV1(context.Background(), entry, tokenMeta)
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1 token route: %v", err)
+	}
+	groupACalls := groupA.snapshot()
+	if len(groupACalls) != 1 {
+		t.Fatalf("group-a calls=%d want 1", len(groupACalls))
+	}
+	if got := groupACalls[0].metadata; got.ClusterRouteShape != clusterRouteShapeTokenV1 || !got.ClusterRouteTokenKnown || got.ClusterRouteToken != 42 || got.ClusterRoutePartitionID != "p0" {
+		t.Fatalf("group-a token metadata=%+v want token route p0 token=42", got)
+	}
+	if tokenResult.ActualAck != iwire.AckRaftCommitted || tokenResult.CommittedEntry.RequestMetadata.ClusterRouteToken != 42 {
+		t.Fatalf("token result ack/token=%d/%d want raft_committed/42", tokenResult.ActualAck, tokenResult.CommittedEntry.RequestMetadata.ClusterRouteToken)
+	}
+}
+
+func TestGroupRoutedSubmitterRejectsUnsupportedRoutesBeforeSubmit(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA)
+	entry := testClusterCommandEntry(t, 7)
+
+	valid := routeMetadata("group-a", iwire.AckVisible)
+	token := valid
+	token.ClusterRouteShape = clusterRouteShapeTokenV1
+	token.ClusterRoutePlacementMode = clusterRoutePlacementTokenV1
+	token.ClusterRouteTokenKnown = true
+	token.ClusterRouteToken = 11
+	token.ClusterRoutePartitionID = "p0"
+
+	tests := []struct {
+		name string
+		meta raftentry.RequestMetadataV1
+		want error
+	}{
+		{name: "missing_route", meta: raftentry.RequestMetadataV1{AckPolicy: iwire.AckVisible}, want: ErrRouteTargetMissing},
+		{name: "missing_identity", meta: func() raftentry.RequestMetadataV1 {
+			meta := valid
+			meta.ClusterRouteCollection = ""
+			return meta
+		}(), want: ErrRouteTargetMissing},
+		{name: "missing_group", meta: routeMetadata("", iwire.AckVisible), want: ErrRouteTargetMissing},
+		{name: "unknown_group", meta: routeMetadata("group-z", iwire.AckVisible), want: ErrRouteTargetUnknown},
+		{name: "fanout_required", meta: func() raftentry.RequestMetadataV1 {
+			meta := valid
+			meta.ClusterRouteShape = clusterRouteShapeTokenBatchV1
+			meta.ClusterRoutePlacementMode = clusterRoutePlacementTokenV1
+			return meta
+		}(), want: ErrRouteFanoutRequired},
+		{name: "collection_mode_mismatch", meta: func() raftentry.RequestMetadataV1 {
+			meta := valid
+			meta.ClusterRoutePlacementMode = clusterRoutePlacementTokenV1
+			return meta
+		}(), want: ErrRouteGroupMismatch},
+		{name: "token_missing_token", meta: func() raftentry.RequestMetadataV1 {
+			meta := token
+			meta.ClusterRouteTokenKnown = false
+			return meta
+		}(), want: ErrRouteTargetMissing},
+		{name: "token_missing_partition", meta: func() raftentry.RequestMetadataV1 {
+			meta := token
+			meta.ClusterRoutePartitionID = ""
+			return meta
+		}(), want: ErrRouteTargetMissing},
+		{name: "unsupported_shape", meta: func() raftentry.RequestMetadataV1 {
+			meta := valid
+			meta.ClusterRouteShape = "scatter"
+			return meta
+		}(), want: ErrRouteTargetUnsupported},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := len(groupA.snapshot())
+			_, err := dispatcher.SubmitCommandEntryV1(context.Background(), entry, tt.meta)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("SubmitCommandEntryV1 err=%v want %v", err, tt.want)
+			}
+			if after := len(groupA.snapshot()); after != before {
+				t.Fatalf("group-a calls after rejection=%d want %d", after, before)
+			}
+		})
+	}
+}
+
+func TestGroupSubmitterRegistryRejectsMismatchedConfiguredGroup(t *testing.T) {
+	_, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{
+		{GroupID: "group-a", Submitter: &recordingGroupSubmitter{groupID: "group-b"}},
+	})
+	if !errors.Is(err, ErrInvalidSubmitter) {
+		t.Fatalf("NewGroupSubmitterRegistryV1 err=%v want invalid submitter", err)
+	}
+}
+
+func TestGroupRoutedSubmitterAdmissionMissingProviderFailsClosed(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a", status: LeaderAdmission()}
+	registry, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{
+		{GroupID: "group-a", Submitter: groupA},
+		{GroupID: "group-b", Submitter: &submitOnlyGroupSubmitter{groupID: "group-b"}},
+	})
+	if err != nil {
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	dispatcher, err := NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{Registry: registry})
+	if err != nil {
+		t.Fatalf("NewGroupRoutedSubmitter: %v", err)
+	}
+	status, err := dispatcher.ClusterAdmissionStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ClusterAdmissionStatus: %v", err)
+	}
+	if !status.Unavailable || !strings.Contains(status.Reason, "group \"group-b\" admission provider is unavailable") {
+		t.Fatalf("ClusterAdmissionStatus=%+v want unavailable missing group-b admission provider", status)
+	}
+}
+
+func newTestGroupRoutedSubmitter(tb testing.TB, submitters ...*recordingGroupSubmitter) *GroupRoutedSubmitter {
+	tb.Helper()
+	entries := make([]GroupSubmitterV1, len(submitters))
+	for i, submitter := range submitters {
+		entries[i] = GroupSubmitterV1{GroupID: submitter.groupID, Submitter: submitter}
+	}
+	registry, err := NewGroupSubmitterRegistryV1(entries)
+	if err != nil {
+		tb.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	dispatcher, err := NewGroupRoutedSubmitter(GroupRoutedSubmitterOptions{Registry: registry})
+	if err != nil {
+		tb.Fatalf("NewGroupRoutedSubmitter: %v", err)
+	}
+	return dispatcher
+}

@@ -27,6 +27,10 @@ var (
 	ErrCatalogVersionMismatch    = errors.New("raftcluster: catalog version mismatch")
 	ErrUnexpectedCommittedTarget = errors.New("raftcluster: committed target mismatch")
 	ErrRouteGroupMismatch        = errors.New("raftcluster: route group mismatch")
+	ErrRouteTargetMissing        = errors.New("raftcluster: route target missing")
+	ErrRouteTargetUnknown        = errors.New("raftcluster: route target unknown")
+	ErrRouteTargetUnsupported    = errors.New("raftcluster: route target unsupported")
+	ErrRouteFanoutRequired       = errors.New("raftcluster: route fanout required")
 )
 
 // AdmissionProvider exposes the single-group write-admission state. Returning
@@ -301,6 +305,13 @@ type SubmitResultV1 struct {
 	Evidence             CommitEvidenceV1
 	CatalogVersion       uint64
 	HasCatalogVersion    bool
+}
+
+// CommandSubmitterV1 is the in-process boundary for submitting deterministic
+// command entries. Single-group submitters and group-routed dispatchers both
+// implement this interface.
+type CommandSubmitterV1 interface {
+	SubmitCommandEntryV1(context.Context, []byte, raftentry.RequestMetadataV1) (SubmitResultV1, error)
 }
 
 func NewSingleGroupSubmitter(opts SingleGroupSubmitterOptions) (*SingleGroupSubmitter, error) {

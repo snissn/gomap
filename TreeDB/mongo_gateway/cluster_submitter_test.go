@@ -45,6 +45,125 @@ type mongoClusterAdmissionSubmitter struct {
 	err    error
 }
 
+type mongoRecordingRaftCommandSubmitter struct {
+	groupID raftcluster.GroupID
+	status  raftcluster.AdmissionStatus
+	err     error
+	mu      sync.Mutex
+	calls   []mongoRecordingRaftCommandSubmitCall
+}
+
+type mongoRecordingRaftCommandSubmitCall struct {
+	entry    raftentry.CommandEntryV1
+	metadata raftentry.RequestMetadataV1
+}
+
+func (s *mongoRecordingRaftCommandSubmitter) Config() raftcluster.ResolvedConfig {
+	return raftcluster.ResolvedConfig{GroupID: s.groupID}
+}
+
+func (s *mongoRecordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) (raftcluster.AdmissionStatus, error) {
+	if s.status == (raftcluster.AdmissionStatus{}) {
+		return raftcluster.LeaderAdmission(), nil
+	}
+	return s.status, nil
+}
+
+func (s *mongoRecordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (raftcluster.SubmitResultV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return raftcluster.SubmitResultV1{}, ctx.Err()
+	default:
+	}
+	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata})
+	if err != nil {
+		return raftcluster.SubmitResultV1{}, err
+	}
+	s.mu.Lock()
+	index := uint64(len(s.calls) + 1)
+	s.calls = append(s.calls, mongoRecordingRaftCommandSubmitCall{entry: decoded, metadata: cloneMongoClusterRequestMetadata(metadata)})
+	s.mu.Unlock()
+	if s.err != nil {
+		return raftcluster.SubmitResultV1{}, s.err
+	}
+	actualAck := metadata.AckPolicy
+	if actualAck == 0 {
+		actualAck = iwire.AckVisible
+	}
+	ids := mongoClusterTestIDs(decoded.Decoded.Sections)
+	affected := int64(len(ids))
+	if affected == 0 {
+		affected = 1
+	}
+	expectedTarget := decoded.Target.Clone()
+	return raftcluster.SubmitResultV1{
+		ActualAck:            actualAck,
+		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
+		DecodedEntry:         decoded,
+		ApplyResult: raftentry.ApplyResultV1{
+			Status:        raftentry.ApplyStatusApplied,
+			AffectedCount: affected,
+			MatchedCount:  affected,
+		},
+		CommittedEntry: raftcluster.CommittedCommandEntryV1{
+			Term:                     1,
+			Index:                    index,
+			Bytes:                    append([]byte(nil), entry...),
+			CurrentCatalogVersion:    60,
+			HasCurrentCatalogVersion: true,
+			SyncLocalCommandWAL:      true,
+			RequestMetadata:          cloneMongoClusterRequestMetadata(metadata),
+			ExpectedTarget:           &expectedTarget,
+		},
+		Evidence: raftcluster.CommitEvidenceV1{
+			Kind:                raftcluster.CommitEvidenceProductionConsensusV1,
+			GroupID:             s.groupID,
+			Term:                1,
+			Index:               index,
+			Committed:           true,
+			ProductionConsensus: true,
+		},
+		CatalogVersion:    60,
+		HasCatalogVersion: true,
+	}, nil
+}
+
+func (s *mongoRecordingRaftCommandSubmitter) snapshotCalls() []mongoRecordingRaftCommandSubmitCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]mongoRecordingRaftCommandSubmitCall, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+type mongoStaticClusterRouteProvider struct {
+	mu     sync.Mutex
+	target treenativewire.ClusterRouteTarget
+	err    error
+	routes []treenativewire.ClusterRouteRequest
+}
+
+func (p *mongoStaticClusterRouteProvider) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
+	p.mu.Lock()
+	p.routes = append(p.routes, req)
+	p.mu.Unlock()
+	if p.err != nil {
+		return treenativewire.ClusterRouteTarget{}, p.err
+	}
+	target := p.target
+	target.Members = append([]string(nil), target.Members...)
+	return target, nil
+}
+
+func (p *mongoStaticClusterRouteProvider) snapshotRoutes() []treenativewire.ClusterRouteRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]treenativewire.ClusterRouteRequest(nil), p.routes...)
+}
+
 type mongoRoutingClusterSubmitter struct {
 	*mongoClusterFakeSubmitter
 
@@ -201,6 +320,12 @@ func mongoClusterTestIDs(sections []iwire.Section) [][]byte {
 	return nil
 }
 
+func cloneMongoClusterRequestMetadata(metadata treenativewire.ClusterRequestMetadata) treenativewire.ClusterRequestMetadata {
+	metadata.TraceContext = append([]byte(nil), metadata.TraceContext...)
+	metadata.ClusterRouteMembers = append([]string(nil), metadata.ClusterRouteMembers...)
+	return metadata
+}
+
 func mongoClusterStaticCatalogVersion(version uint64) ClusterCatalogVersionProvider {
 	return func(context.Context) (uint64, error) {
 		return version, nil
@@ -347,6 +472,37 @@ func newMongoPlacementRouteTestServer(tb testing.TB, mode raftplacement.Placemen
 	server.ClusterSubmitter = submitter
 	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
 	return server, submitter
+}
+
+func newMongoGroupRoutedDispatcherTestServer(tb testing.TB, provider treenativewire.ClusterRouteProvider) (*Server, *mongoRecordingRaftCommandSubmitter, *mongoRecordingRaftCommandSubmitter) {
+	tb.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: tb.TempDir()})
+	if err != nil {
+		tb.Fatalf("open db: %v", err)
+	}
+	tb.Cleanup(func() { _ = db.Close() })
+	server := NewServer()
+	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	if _, err := server.Collections.CreateCollection(server.defaultCollectionMeta("app.users")); err != nil {
+		tb.Fatalf("create app.users: %v", err)
+	}
+	groupA := &mongoRecordingRaftCommandSubmitter{groupID: "group-a"}
+	groupB := &mongoRecordingRaftCommandSubmitter{groupID: "group-b"}
+	registry, err := raftcluster.NewGroupSubmitterRegistryV1([]raftcluster.GroupSubmitterV1{
+		{GroupID: "group-a", Submitter: groupA},
+		{GroupID: "group-b", Submitter: groupB},
+	})
+	if err != nil {
+		tb.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	dispatcher, err := raftcluster.NewGroupRoutedSubmitter(raftcluster.GroupRoutedSubmitterOptions{Registry: registry})
+	if err != nil {
+		tb.Fatalf("NewGroupRoutedSubmitter: %v", err)
+	}
+	server.ClusterSubmitter = treenativewire.NewRoutedRaftClusterSubmitter(dispatcher, provider, server.Collections)
+	server.ClusterCatalogVersion = mongoClusterStaticCatalogVersion(60)
+	return server, groupA, groupB
 }
 
 func newMongoRaftBridgeTestServer(tb testing.TB, admission raftcluster.AdmissionStatus) *Server {
@@ -756,6 +912,115 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 				t.Fatalf("submit calls=%d want 0", len(calls))
 			}
 		})
+	}
+}
+
+func TestMongoGroupRoutedDispatcherRoutesCollectionBatchWrite(t *testing.T) {
+	provider := &mongoStaticClusterRouteProvider{
+		target: treenativewire.ClusterRouteTarget{
+			GroupID:       "group-b",
+			Members:       []string{"node-b", "node-c"},
+			LeaderHint:    "node-b",
+			PlacementMode: "collection",
+			Shape:         treenativewire.ClusterRouteShapeCollection,
+		},
+	}
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	response := serveCommand(t, server, 336301, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{
+			bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}},
+			bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}},
+		}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 2)
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
+		t.Fatalf("group-b command=%d want insert_batch", got)
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeCollection) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-b" || meta.ClusterRoutePlacementMode != "collection" {
+		t.Fatalf("group-b collection route metadata=%+v want collection route to group-b/node-b", meta)
+	}
+	routes := provider.snapshotRoutes()
+	if len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if got := routes[0]; got.Shape != treenativewire.ClusterRouteShapeTokenBatch || len(got.Tokens) != 2 {
+		t.Fatalf("route request=%+v want token_batch classification for two IDs", got)
+	}
+}
+
+func TestMongoGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
+	token := mongoClusterRouteTokenForValue(t, "u1")
+	provider := &mongoStaticClusterRouteProvider{
+		target: treenativewire.ClusterRouteTarget{
+			GroupID:       "group-b",
+			Members:       []string{"node-b", "node-c"},
+			LeaderHint:    "node-b",
+			PlacementMode: "token",
+			Shape:         treenativewire.ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	response := serveCommand(t, server, 336302, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertOK(t, response)
+	assertInt32(t, response, "n", 1)
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
+		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
+	}
+}
+
+func TestMongoGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmit(t *testing.T) {
+	token := mongoClusterRouteTokenForValue(t, "u1")
+	provider := &mongoStaticClusterRouteProvider{
+		target: treenativewire.ClusterRouteTarget{
+			GroupID:       "group-z",
+			Members:       []string{"node-z"},
+			LeaderHint:    "node-z",
+			PlacementMode: "token",
+			Shape:         treenativewire.ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	response := serveCommand(t, server, 336303, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "route target unknown")
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
 	}
 }
 

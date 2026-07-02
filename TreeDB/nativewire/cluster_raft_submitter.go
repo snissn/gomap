@@ -16,7 +16,7 @@ import (
 // RaftClusterSubmitter adapts the internal single-group raftcluster bridge to
 // the public nativewire ClusterSubmitter contract.
 type RaftClusterSubmitter struct {
-	Bridge      *raftcluster.SingleGroupSubmitter
+	Bridge      raftcluster.CommandSubmitterV1
 	Collections *collections.CollectionManager
 }
 
@@ -29,7 +29,7 @@ type RoutedRaftClusterSubmitter struct {
 	RouteProvider ClusterRouteProvider
 }
 
-func NewRaftClusterSubmitter(bridge *raftcluster.SingleGroupSubmitter, managers ...*collections.CollectionManager) *RaftClusterSubmitter {
+func NewRaftClusterSubmitter(bridge raftcluster.CommandSubmitterV1, managers ...*collections.CollectionManager) *RaftClusterSubmitter {
 	submitter := &RaftClusterSubmitter{Bridge: bridge}
 	if len(managers) > 0 {
 		submitter.Collections = managers[0]
@@ -37,7 +37,7 @@ func NewRaftClusterSubmitter(bridge *raftcluster.SingleGroupSubmitter, managers 
 	return submitter
 }
 
-func NewRoutedRaftClusterSubmitter(bridge *raftcluster.SingleGroupSubmitter, provider ClusterRouteProvider, managers ...*collections.CollectionManager) *RoutedRaftClusterSubmitter {
+func NewRoutedRaftClusterSubmitter(bridge raftcluster.CommandSubmitterV1, provider ClusterRouteProvider, managers ...*collections.CollectionManager) *RoutedRaftClusterSubmitter {
 	return &RoutedRaftClusterSubmitter{
 		RaftClusterSubmitter: NewRaftClusterSubmitter(bridge, managers...),
 		RouteProvider:        provider,
@@ -55,7 +55,11 @@ func (s *RaftClusterSubmitter) ClusterAdmissionStatus(ctx context.Context) (Clus
 	if s == nil || s.Bridge == nil {
 		return ClusterAdmissionStatus{}, raftcluster.ErrInvalidSubmitter
 	}
-	status, err := s.Bridge.ClusterAdmissionStatus(ctx)
+	provider, ok := s.Bridge.(raftcluster.AdmissionProvider)
+	if !ok {
+		return ClusterAdmissionStatus{}, raftcluster.ErrAdmissionUnavailable
+	}
+	status, err := provider.ClusterAdmissionStatus(ctx)
 	if err != nil {
 		return ClusterAdmissionStatus{}, err
 	}
@@ -180,7 +184,11 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 		return nil
 	case errors.Is(err, raftcluster.ErrNotLeader):
 		return protocolError(iwire.ErrReadOnly, "%v", err)
-	case errors.Is(err, raftcluster.ErrRouteGroupMismatch):
+	case errors.Is(err, raftcluster.ErrRouteGroupMismatch),
+		errors.Is(err, raftcluster.ErrRouteTargetMissing),
+		errors.Is(err, raftcluster.ErrRouteTargetUnknown),
+		errors.Is(err, raftcluster.ErrRouteTargetUnsupported),
+		errors.Is(err, raftcluster.ErrRouteFanoutRequired):
 		return protocolError(iwire.ErrReadOnly, "%v", err)
 	case errors.Is(err, raftcluster.ErrCatalogVersionMismatch):
 		return protocolError(iwire.ErrCatalogVersionMismatch, "%v", err)
