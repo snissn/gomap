@@ -140,7 +140,7 @@ func (s *Server) preflightClusterReadRoute(ctx context.Context, state *connState
 		return nil
 	}
 	switch cmd.Header.ID {
-	case iwire.CommandIndexLookup, iwire.CommandIndexRange, iwire.CommandOpenScan:
+	case iwire.CommandGetMany, iwire.CommandIndexLookup, iwire.CommandIndexRange, iwire.CommandOpenScan:
 	default:
 		return nil
 	}
