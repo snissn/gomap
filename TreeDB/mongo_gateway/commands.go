@@ -605,8 +605,8 @@ func zeroIndexRangeOptions(opts collections.IndexRangeOptions) bool {
 		opts.Upper.Value == nil && !opts.Upper.Inclusive && !opts.Upper.Unbounded
 }
 
-func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Document, error) {
-	payload, err := s.findResponsePayload(command, cursorOwner)
+func (s *Server) findResponse(ctx context.Context, command wire.Document, cursorOwner int64) (wire.Document, error) {
+	payload, err := s.findResponsePayload(ctx, command, cursorOwner)
 	if err != nil {
 		return nil, err
 	}
@@ -617,12 +617,12 @@ func (s *Server) findResponse(command wire.Document, cursorOwner int64) (wire.Do
 	return doc, err
 }
 
-func (s *Server) findMsgResponse(command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
-	return s.findMsgResponseInto(nil, command, requestID, responseTo, cursorOwner)
+func (s *Server) findMsgResponse(ctx context.Context, command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
+	return s.findMsgResponseInto(ctx, nil, command, requestID, responseTo, cursorOwner)
 }
 
-func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
-	payload, err := s.findResponsePayload(command, cursorOwner)
+func (s *Server) findMsgResponseInto(ctx context.Context, dst []byte, command wire.Document, requestID, responseTo int32, cursorOwner int64) ([]byte, error) {
+	payload, err := s.findResponsePayload(ctx, command, cursorOwner)
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +638,7 @@ func (s *Server) findMsgResponseInto(dst []byte, command wire.Document, requestI
 	return msg, err
 }
 
-func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (findResponsePayload, error) {
+func (s *Server) findResponsePayload(ctx context.Context, command wire.Document, cursorOwner int64) (findResponsePayload, error) {
 	if doc, rejected, err := rejectUnsupportedReadConcern(command); rejected {
 		return findResponsePayload{document: doc}, err
 	}
@@ -672,6 +672,10 @@ func (s *Server) findResponsePayload(command wire.Document, cursorOwner int64) (
 	plan, err := parseFindPlan(command, filter)
 	if err != nil {
 		doc, err := commandError(commandCodeBadValue, "BadValue", err.Error())
+		return findResponsePayload{document: doc}, err
+	}
+	if err := s.preflightClusterFindRoute(ctx, db, collection); err != nil {
+		doc, err := mongoClusterRouteCommandError(err)
 		return findResponsePayload{document: doc}, err
 	}
 	col, err := s.openCollectionCached(name)
