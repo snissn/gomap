@@ -708,7 +708,7 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 			return nil, retainRequestBody, fmt.Errorf("%w: find with document sequences", wire.ErrUnsupported)
 		}
 		responseID := s.nextID()
-		response, err := s.findMsgResponseInto(dst, msg.Body, responseID, h.RequestID, cursorOwner)
+		response, err := s.findMsgResponseInto(ctx, dst, msg.Body, responseID, h.RequestID, cursorOwner)
 		if err != nil {
 			return nil, retainRequestBody, err
 		}
@@ -750,7 +750,7 @@ func (s *Server) commandResponse(ctx context.Context, name string, command wire.
 	case "insert":
 		return s.insertResponse(ctx, command, sequences)
 	case "find":
-		return s.findResponse(command, cursorOwner)
+		return s.findResponse(ctx, command, cursorOwner)
 	case "getMore":
 		return s.getMoreResponse(command, cursorOwner)
 	case "killCursors":
