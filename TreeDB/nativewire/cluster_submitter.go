@@ -361,10 +361,17 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 			}
 			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
 		}
+		if target.RouteKey == "" {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster token/ring route target missing route key"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
 		if target.RouteKey != string(raftplacement.RouteKeyDocumentIDV1) {
 			reason := target.Reason
 			if reason == "" {
-				reason = "cluster token/ring route target requires _id route key"
+				reason = fmt.Sprintf("cluster token/ring route target uses unsupported route key %q; requires _id", target.RouteKey)
 			}
 			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
 		}

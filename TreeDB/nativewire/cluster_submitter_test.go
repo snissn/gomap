@@ -822,20 +822,6 @@ func TestClusterRoutePreflightRejectsUnsupportedQueryShape(t *testing.T) {
 }
 
 func TestClusterRoutePreflightRejectsUnsupportedTokenRouteKey(t *testing.T) {
-	submitter := &routingClusterSubmitter{
-		fakeClusterSubmitter: &fakeClusterSubmitter{},
-		target: ClusterRouteTarget{
-			GroupID:       "group-a",
-			Members:       []string{"node-a", "node-b"},
-			LeaderHint:    "node-a",
-			PlacementMode: string(raftplacement.PlacementModeRingV1),
-			RouteKey:      "tenant_id",
-			Shape:         ClusterRouteShapeToken,
-			TokenKnown:    true,
-			Token:         11,
-			PartitionID:   "p0",
-		},
-	}
 	request := ClusterRouteRequest{
 		Database:    "default",
 		Catalog:     "default",
@@ -846,14 +832,41 @@ func TestClusterRoutePreflightRejectsUnsupportedTokenRouteKey(t *testing.T) {
 		TokenKnown:  true,
 		Token:       11,
 	}
-	if _, _, err := PreflightClusterRoute(context.Background(), submitter, request); codeOf(err) != iwire.ErrReadOnly || !strings.Contains(err.Error(), "requires _id route key") {
-		t.Fatalf("unsupported route key preflight err=%v want _id read-only", err)
+
+	tests := []struct {
+		name     string
+		routeKey string
+		wantMsg  string
+	}{
+		{name: "missing", routeKey: "", wantMsg: "missing route key"},
+		{name: "unsupported", routeKey: "tenant_id", wantMsg: "unsupported route key \"tenant_id\""},
 	}
-	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
-		t.Fatalf("route calls=%d want 1", len(routes))
-	}
-	if calls := submitter.snapshot(); len(calls) != 0 {
-		t.Fatalf("submitter calls=%d want 0", len(calls))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			submitter := &routingClusterSubmitter{
+				fakeClusterSubmitter: &fakeClusterSubmitter{},
+				target: ClusterRouteTarget{
+					GroupID:       "group-a",
+					Members:       []string{"node-a", "node-b"},
+					LeaderHint:    "node-a",
+					PlacementMode: string(raftplacement.PlacementModeRingV1),
+					RouteKey:      tt.routeKey,
+					Shape:         ClusterRouteShapeToken,
+					TokenKnown:    true,
+					Token:         11,
+					PartitionID:   "p0",
+				},
+			}
+			if _, _, err := PreflightClusterRoute(context.Background(), submitter, request); codeOf(err) != iwire.ErrReadOnly || !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Fatalf("route key preflight err=%v want read-only containing %q", err, tt.wantMsg)
+			}
+			if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+				t.Fatalf("route calls=%d want 1", len(routes))
+			}
+			if calls := submitter.snapshot(); len(calls) != 0 {
+				t.Fatalf("submitter calls=%d want 0", len(calls))
+			}
+		})
 	}
 }
 
