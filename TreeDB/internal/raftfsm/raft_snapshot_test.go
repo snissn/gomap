@@ -837,6 +837,9 @@ func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {
 		}
 		installRaftSnapshotForTest(b, targetFSM, snapshot)
 		b.StopTimer()
+		if err := snapshot.Release(); err != nil {
+			b.Fatalf("Release snapshot: %v", err)
+		}
 		_ = targetFSM.Close()
 	}
 }
