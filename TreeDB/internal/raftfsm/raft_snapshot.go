@@ -20,6 +20,7 @@ import (
 
 const (
 	raftSnapshotDBPrefixV1    = "db"
+	raftSnapshotSidePrefixV1  = "side"
 	raftSnapshotApplyPrefixV1 = "apply"
 )
 
@@ -29,6 +30,11 @@ var raftSnapshotMainDBEntriesV1 = []string{
 	"value_vlog",
 	"leaf_vlog",
 	"column_assets",
+}
+
+var raftSnapshotSideStoreEntriesV1 = []string{
+	"dictdb",
+	"templatedb",
 }
 
 // ExportRaftSnapshotV1 exports a production snapshot archive for HashiCorp
@@ -58,6 +64,9 @@ func (f *FSM) ExportRaftSnapshotV1() (raftcluster.RaftSnapshotV1, error) {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if err := appendRaftSnapshotTreeDBStorageV1(tw, raftSnapshotDBPrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
+		return raftcluster.RaftSnapshotV1{}, err
+	}
+	if err := appendRaftSnapshotTreeDBSideStoresV1(tw, raftSnapshotSidePrefixV1, raftcluster.MainDBDir(f.cluster.Dir)); err != nil {
 		return raftcluster.RaftSnapshotV1{}, err
 	}
 	if err := appendRaftSnapshotDirV1(tw, raftSnapshotApplyPrefixV1, f.cluster.Layout.ApplyDir); err != nil {
@@ -101,18 +110,28 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		_ = os.RemoveAll(tmpMain)
 		return err
 	}
+	tmpSide, err := os.MkdirTemp(filepath.Dir(mainDir), ".raft-snapshot-side-*")
+	if err != nil {
+		_ = os.RemoveAll(tmpMain)
+		_ = os.RemoveAll(tmpApply)
+		return err
+	}
 	cleanupMain := true
 	cleanupApply := true
+	cleanupSide := true
 	defer func() {
 		if cleanupMain {
 			_ = os.RemoveAll(tmpMain)
+		}
+		if cleanupSide {
+			_ = os.RemoveAll(tmpSide)
 		}
 		if cleanupApply {
 			_ = os.RemoveAll(tmpApply)
 		}
 	}()
 
-	header, err := extractRaftSnapshotArchiveV1(reader, tmpMain, tmpApply)
+	header, err := extractRaftSnapshotArchiveV1(reader, tmpMain, tmpSide, tmpApply)
 	if err != nil {
 		return err
 	}
@@ -126,6 +145,9 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 		return err
 	}
 	if err := replaceSnapshotMainDBV1(mainDir, tmpMain); err != nil {
+		return err
+	}
+	if err := replaceSnapshotSideStoresV1(mainDir, tmpSide); err != nil {
 		return err
 	}
 	if err := replaceSnapshotDirV1(applyDir, tmpApply); err != nil {
@@ -273,6 +295,20 @@ func appendRaftSnapshotTreeDBStorageV1(tw *tar.Writer, prefix, mainDir string) e
 	return nil
 }
 
+func appendRaftSnapshotTreeDBSideStoresV1(tw *tar.Writer, prefix, mainDir string) error {
+	if err := writeRaftSnapshotDirHeaderV1(tw, prefix); err != nil {
+		return err
+	}
+	root := snapshotSideStoreRootV1(mainDir)
+	for _, name := range raftSnapshotSideStoreEntriesV1 {
+		src := filepath.Join(root, name)
+		if err := appendRaftSnapshotStoragePathV1(tw, pathpkg.Join(prefix, name), src); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func appendRaftSnapshotStoragePathV1(tw *tar.Writer, archiveName, src string) error {
 	info, err := os.Stat(src)
 	if err != nil {
@@ -325,7 +361,7 @@ func writeRaftSnapshotFileV1(tw *tar.Writer, name string, payload []byte, mode i
 	return err
 }
 
-func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, applyDir string) (raftcluster.RaftSnapshotArchiveHeaderV1, error) {
+func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, sideDir, applyDir string) (raftcluster.RaftSnapshotArchiveHeaderV1, error) {
 	tr := tar.NewReader(reader)
 	var (
 		header       raftcluster.RaftSnapshotArchiveHeaderV1
@@ -369,6 +405,14 @@ func extractRaftSnapshotArchiveV1(reader io.Reader, mainDir, applyDir string) (r
 				return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
 			}
 			sawDBFile = sawDBFile || file
+			continue
+		}
+		if rel, ok, err := snapshotArchiveRelV1(name, raftSnapshotSidePrefixV1); err != nil {
+			return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
+		} else if ok {
+			if _, err := extractRaftSnapshotEntryV1(tr, tarHeader, sideDir, rel); err != nil {
+				return raftcluster.RaftSnapshotArchiveHeaderV1{}, err
+			}
 			continue
 		}
 		if rel, ok, err := snapshotArchiveRelV1(name, raftSnapshotApplyPrefixV1); err != nil {
@@ -493,4 +537,39 @@ func replaceSnapshotMainDBV1(destMain, srcMain string) error {
 		}
 	}
 	return nil
+}
+
+func replaceSnapshotSideStoresV1(mainDir, srcSide string) error {
+	root := snapshotSideStoreRootV1(mainDir)
+	if root == "" || srcSide == "" {
+		return fmt.Errorf("raftfsm: empty snapshot restore side-store path")
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return err
+	}
+	for _, name := range raftSnapshotSideStoreEntriesV1 {
+		src := filepath.Join(srcSide, name)
+		dest := filepath.Join(root, name)
+		if err := os.RemoveAll(dest); err != nil {
+			return err
+		}
+		if _, err := os.Stat(src); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := os.Rename(src, dest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func snapshotSideStoreRootV1(mainDir string) string {
+	mainDir = filepath.Clean(mainDir)
+	if filepath.Base(mainDir) == "maindb" {
+		return filepath.Dir(mainDir)
+	}
+	return mainDir
 }

@@ -145,6 +145,55 @@ func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 	assertSnapshotDocument(t, targetFSM, "u1", tailDoc)
 }
 
+func TestRaftSnapshotV1InstallReplacesSideStores(t *testing.T) {
+	root := t.TempDir()
+	sourceRoot := filepath.Join(root, "source")
+	sourceDir := filepath.Join(sourceRoot, "maindb")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+	applySnapshotSourceEntries(t, sourceFSM, []byte(`{"_id":"u-large","name":"source"}`))
+	sourceDict := filepath.Join(sourceRoot, "dictdb")
+	if err := os.MkdirAll(sourceDict, 0o700); err != nil {
+		t.Fatalf("MkdirAll source dictdb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDict, "sentinel"), []byte("source-side-store"), 0o600); err != nil {
+		t.Fatalf("WriteFile source sentinel: %v", err)
+	}
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatalf("ExportRaftSnapshotV1: %v", err)
+	}
+
+	targetRoot := filepath.Join(root, "target")
+	targetDir := filepath.Join(targetRoot, "maindb")
+	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+	defer func() { _ = targetFSM.Close() }()
+	staleTemplate := filepath.Join(targetRoot, "templatedb")
+	if err := os.MkdirAll(staleTemplate, 0o700); err != nil {
+		t.Fatalf("MkdirAll target templatedb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staleTemplate, "stale"), []byte("stale-side-store"), 0o600); err != nil {
+		t.Fatalf("WriteFile target stale side store: %v", err)
+	}
+
+	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
+		t.Fatalf("InstallRaftSnapshotV1: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(targetRoot, "dictdb", "sentinel"))
+	if err != nil {
+		t.Fatalf("ReadFile restored side-store sentinel: %v", err)
+	}
+	if string(got) != "source-side-store" {
+		t.Fatalf("restored side-store sentinel=%q", got)
+	}
+	if _, err := os.Stat(staleTemplate); !os.IsNotExist(err) {
+		t.Fatalf("stale target side store exists after restore: err=%v", err)
+	}
+}
+
 func BenchmarkRaftSnapshotV1ExportInstall(b *testing.B) {
 	root := b.TempDir()
 	sourceDir := filepath.Join(root, "source")
