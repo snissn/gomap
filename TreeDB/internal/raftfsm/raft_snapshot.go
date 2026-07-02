@@ -152,10 +152,13 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	if header.Manifest.GroupID != f.cluster.GroupID {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot archive group %q does not match FSM group %q", header.Manifest.GroupID, f.cluster.GroupID)
 	}
+	if err := f.verifyExtractedRaftSnapshotV1(header.Manifest, tmpMain, tmpSide, tmpApply); err != nil {
+		return err
+	}
 	if err := f.closeForRaftSnapshotRestoreV1(); err != nil {
 		return err
 	}
-	if err := replaceSnapshotMainDBV1(mainDir, tmpMain); err != nil {
+	if err := replaceSnapshotMainDBV1(mainDir, tmpMain, f.cluster.Layout.RootDir); err != nil {
 		return err
 	}
 	cleanupMain = false
@@ -246,6 +249,53 @@ func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 	f.sideDBs = sideDBs
 	f.ownsDB = true
 	return nil
+}
+
+func (f *FSM) verifyExtractedRaftSnapshotV1(manifest raftcluster.SnapshotManifestV1, mainDir, sideDir, applyDir string) error {
+	opts := f.restoreDB
+	opts.Dir = mainDir
+	opts.CommandWAL = true
+	opts.CommandWALStatsScan = true
+	if opts.CommandWALSegmentTargetBytes <= 0 {
+		opts.CommandWALSegmentTargetBytes = 1 << 20
+	}
+	opts.DisableBackgroundPrune = true
+	sideDBs, err := wireRaftSnapshotSideStoreLookupsV1(sideDir, &opts)
+	if err != nil {
+		return err
+	}
+	db, err := backenddb.Open(opts)
+	if err != nil {
+		_ = sideDBs()
+		return err
+	}
+	progress, err := raftapply.OpenDurableApplyProgressStore(applyDir, f.storeOptions)
+	if err != nil {
+		_ = errors.Join(db.Close(), sideDBs())
+		return err
+	}
+	results, err := raftapply.OpenDurableApplyResultStore(applyDir, f.storeOptions)
+	if err != nil {
+		_ = errors.Join(progress.Close(), db.Close(), sideDBs())
+		return err
+	}
+	verifyFSM := &FSM{
+		db:           db,
+		progress:     progress,
+		results:      results,
+		cluster:      f.cluster,
+		scopeRule:    f.scopeRule,
+		database:     f.database,
+		catalog:      f.catalog,
+		storeOptions: f.storeOptions,
+		restoreDB:    f.restoreDB,
+	}
+	verifyErr := verifyFSM.verifyInstalledSnapshotManifestV1Locked(manifest)
+	closeErr := errors.Join(progress.Close(), results.Close(), db.Close(), sideDBs())
+	if verifyErr != nil {
+		return verifyErr
+	}
+	return closeErr
 }
 
 func appendRaftSnapshotDirV1(tw *tar.Writer, prefix, root string) error {
@@ -589,17 +639,74 @@ func replaceSnapshotDirV1(dest, src string) error {
 	return os.Rename(src, dest)
 }
 
-func replaceSnapshotMainDBV1(destMain, srcMain string) error {
+func replaceSnapshotMainDBV1(destMain, srcMain, preserveRoot string) error {
 	if destMain == "" || srcMain == "" {
 		return fmt.Errorf("raftfsm: empty snapshot restore DB path")
 	}
 	if err := os.MkdirAll(filepath.Dir(destMain), 0o700); err != nil {
 		return err
 	}
+	if preserveRoot != "" && sameOrUnderSnapshotDirV1(destMain, preserveRoot) {
+		return replaceSnapshotMainDBEntriesV1(destMain, srcMain, preserveRoot)
+	}
 	if err := os.RemoveAll(destMain); err != nil {
 		return err
 	}
 	return os.Rename(srcMain, destMain)
+}
+
+func replaceSnapshotMainDBEntriesV1(destMain, srcMain, preserveRoot string) error {
+	if err := os.MkdirAll(destMain, 0o700); err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(srcMain) }()
+	preserveName, hasPreserveName := snapshotTopLevelPreserveNameV1(destMain, preserveRoot)
+	entries, err := os.ReadDir(destMain)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		for _, entry := range entries {
+			if hasPreserveName && entry.Name() == preserveName {
+				continue
+			}
+			if err := os.RemoveAll(filepath.Join(destMain, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	for _, name := range raftSnapshotMainDBEntriesV1 {
+		src := filepath.Join(srcMain, name)
+		dest := filepath.Join(destMain, name)
+		if err := os.RemoveAll(dest); err != nil {
+			return err
+		}
+		if _, err := os.Stat(src); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+		if err := os.Rename(src, dest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func snapshotTopLevelPreserveNameV1(parent, preserveRoot string) (string, bool) {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(preserveRoot))
+	if err != nil || rel == "." || rel == "" || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", false
+	}
+	if i := strings.IndexRune(rel, os.PathSeparator); i >= 0 {
+		rel = rel[:i]
+	}
+	if rel == "" || rel == "." || rel == ".." {
+		return "", false
+	}
+	return rel, true
 }
 
 func replaceSnapshotSideStoresV1(mainDir, srcSide string) error {

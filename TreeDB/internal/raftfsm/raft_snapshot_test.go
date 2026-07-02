@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -197,6 +199,41 @@ func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
 	assertSnapshotDocument(t, targetFSM, "u-large", sourceDoc)
 }
 
+func TestRaftSnapshotV1InstallRejectsCorruptArchiveBeforeReplacingLiveState(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+
+	sourceDoc := []byte(`{"_id":"u-large","name":"source-corrupt"}`)
+	applySnapshotSourceEntries(t, sourceFSM, sourceDoc)
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatalf("ExportRaftSnapshotV1: %v", err)
+	}
+	corruptPayload := rewriteRaftSnapshotArchiveHeaderForTest(t, snapshot.Payload, func(header *raftcluster.RaftSnapshotArchiveHeaderV1) {
+		header.Manifest.LogicalDigestV1 = strings.Repeat("f", 64)
+	})
+
+	targetDir := filepath.Join(root, "target")
+	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+	defer func() { _ = targetFSM.Close() }()
+	targetDoc := []byte(`{"_id":"u-large","name":"target-before-corrupt"}`)
+	applySnapshotSourceEntries(t, targetFSM, targetDoc)
+
+	err = targetFSM.InstallRaftSnapshotV1(bytes.NewReader(corruptPayload))
+	if err == nil {
+		t.Fatal("InstallRaftSnapshotV1 accepted corrupt archive")
+	}
+	if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorRejectedConflictV1 {
+		t.Fatalf("InstallRaftSnapshotV1 err=%v code=%s, want rejected conflict", err, code)
+	}
+	assertSnapshotDocument(t, targetFSM, "u-large", targetDoc)
+}
+
 func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")
@@ -328,6 +365,49 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(targetDir, "index.db")); err != nil {
 		t.Fatalf("restored main DB index missing: %v", err)
+	}
+}
+
+func TestRaftSnapshotV1InstallPreservesFlatLayoutRaftMetadata(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, true)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+
+	sourceDoc := []byte(`{"_id":"u-large","name":"flat-layout","payload":"` + stringsRepeatForSnapshotTest("x", 8192) + `"}`)
+	applySnapshotSourceEntries(t, sourceFSM, sourceDoc)
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatalf("ExportRaftSnapshotV1: %v", err)
+	}
+
+	targetDir := filepath.Join(root, "target")
+	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+	defer func() { _ = targetFSM.Close() }()
+	raftSentinel := filepath.Join(targetDir, "raftcluster", "nodes", "node-a", "groups", "default", "log", "sentinel")
+	if err := os.MkdirAll(filepath.Dir(raftSentinel), 0o700); err != nil {
+		t.Fatalf("MkdirAll raft sentinel: %v", err)
+	}
+	if err := os.WriteFile(raftSentinel, []byte("local-raft-log"), 0o600); err != nil {
+		t.Fatalf("WriteFile raft sentinel: %v", err)
+	}
+
+	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
+		t.Fatalf("InstallRaftSnapshotV1: %v", err)
+	}
+	if err := targetFSM.VerifyInstalledSnapshotManifestV1(snapshot.Manifest); err != nil {
+		t.Fatalf("VerifyInstalledSnapshotManifestV1: %v", err)
+	}
+	assertSnapshotDocument(t, targetFSM, "u-large", sourceDoc)
+	got, err := os.ReadFile(raftSentinel)
+	if err != nil {
+		t.Fatalf("ReadFile raft sentinel after restore: %v", err)
+	}
+	if string(got) != "local-raft-log" {
+		t.Fatalf("raft sentinel=%q want local-raft-log", got)
 	}
 }
 
@@ -527,6 +607,54 @@ func applySnapshotSourceEntries(tb testing.TB, fsm *FSM, doc []byte) {
 	}
 	assertSnapshotApplyResult(tb, results[0], raftentry.ApplyStatusApplied, 1)
 	assertSnapshotApplyResult(tb, results[1], raftentry.ApplyStatusApplied, 2)
+}
+
+func rewriteRaftSnapshotArchiveHeaderForTest(t testing.TB, payload []byte, mut func(*raftcluster.RaftSnapshotArchiveHeaderV1)) []byte {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(payload))
+	var out bytes.Buffer
+	tw := tar.NewWriter(&out)
+	found := false
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next archive entry: %v", err)
+		}
+		raw, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("ReadAll archive entry %q: %v", header.Name, err)
+		}
+		next := *header
+		if header.Name == raftcluster.RaftSnapshotArchiveManifestPathV1 {
+			decoded, err := raftcluster.DecodeRaftSnapshotArchiveHeaderV1(raw, raftcluster.SnapshotScopeIdentityV1{})
+			if err != nil {
+				t.Fatalf("DecodeRaftSnapshotArchiveHeaderV1: %v", err)
+			}
+			mut(&decoded)
+			raw, err = raftcluster.EncodeRaftSnapshotArchiveHeaderV1(decoded)
+			if err != nil {
+				t.Fatalf("EncodeRaftSnapshotArchiveHeaderV1: %v", err)
+			}
+			next.Size = int64(len(raw))
+			found = true
+		}
+		if err := tw.WriteHeader(&next); err != nil {
+			t.Fatalf("WriteHeader archive entry %q: %v", next.Name, err)
+		}
+		if _, err := tw.Write(raw); err != nil {
+			t.Fatalf("Write archive entry %q: %v", next.Name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("Close rewritten archive: %v", err)
+	}
+	if !found {
+		t.Fatalf("archive missing %s", raftcluster.RaftSnapshotArchiveManifestPathV1)
+	}
+	return out.Bytes()
 }
 
 func assertSnapshotApplyResult(tb testing.TB, result raftentry.ApplyResultV1, wantStatus raftentry.ApplyStatusV1, wantAffected int64) {
