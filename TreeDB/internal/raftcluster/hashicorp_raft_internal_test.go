@@ -3,6 +3,7 @@ package raftcluster
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestHashicorpRaftReadIndexGapMissingLogFailsClosed(t *testing.T) {
 
 func TestHashicorpRaftReadIndexGapMaxIndexNoOverflow(t *testing.T) {
 	store := hraft.NewInmemStore()
-	lastIndex := ^uint64(0)
+	lastIndex := uint64(math.MaxUint64)
 	if err := store.StoreLog(&hraft.Log{Index: lastIndex, Term: 1, Type: hraft.LogNoop}); err != nil {
 		t.Fatalf("StoreLog: %v", err)
 	}
