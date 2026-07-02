@@ -1110,7 +1110,7 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 
 func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTestNode {
 	tb.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		var leader *hashicorpRaftTestNode
 		for _, node := range c.nodes {

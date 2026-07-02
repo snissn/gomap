@@ -141,11 +141,18 @@ func cleanupAbandonedRaftSnapshotArchivesV1(snapshotDir string) error {
 		return nil
 	}
 	stagingDir := raftSnapshotStagingDirV1(snapshotDir)
-	entries, err := os.ReadDir(stagingDir)
+	info, err := os.Stat(stagingDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
+		return fmt.Errorf("raftfsm: stat snapshot staging directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("raftfsm: snapshot staging path %q is not a directory", stagingDir)
+	}
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
 		return fmt.Errorf("raftfsm: read snapshot staging directory: %w", err)
 	}
 	for _, entry := range entries {
