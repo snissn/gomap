@@ -223,6 +223,10 @@ Required coverage:
 - `TestConditionalTxnAllowsDisjointConcurrentCommit`
 - `TestConditionalTxnRejectsUnsupportedRangeGuard`
 - `TestConditionalTxnCommandWALReplayMatchesLiveRevisionContract`
+- `TestAdapterReadinessUsesNativeRevisionsAndConditionalConflicts`
+- `TestAdapterReadinessCommandWALReopenPreservesRevisionAndFailsClosedConditional`
+- `TestResolveOptionsRejectsUnsupportedAdapterFeatures`
+- `TestOpenRejectsUnsupportedAdapterFeaturesBeforeCreatingDB`
 
 Required performance evidence:
 - `BenchmarkGetVersioned`

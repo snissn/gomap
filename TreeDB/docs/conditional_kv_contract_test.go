@@ -107,4 +107,28 @@ func TestConditionalKVContractDocsPinNativeRevisionAndTxnGates(t *testing.T) {
 		"does not add a second ordered-root write or lookup per operation",
 		"`TreeDB/db/conditional_kv_contract_bench_test.go`; #3424/#3425 must replace them with non-skipped benchmarks",
 	)
+
+	adapterReadiness := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/conditional-kv-adapter-readiness.md"))
+	assertContainsAll(t, adapterReadiness, "conditional raw KV adapter readiness",
+		"Use `DB.GetVersioned` or `DB.GetVersionedAppend` as the cache-token read path",
+		"Map `ErrConcurrentModification` to the downstream conflict error",
+		"Do not add a second metadata tree, system-root sidecar, or adapter-private revision map for this feature",
+		"TreeDB native supported",
+		"public cached conditional transactions when public command WAL is not enabled",
+		"backend command-WAL accepted conditional commits with deterministic raw-KV payloads and explicit entry revisions",
+		"TreeDB native fail-closed",
+		"Public cached command-WAL conditional transactions return `ErrConditionalTxnUnsupported`",
+		"Adapter-level hard error",
+		"Badger-style encryption and in-memory-only mode are rejected",
+		"`ErrUnsupportedAdapterFeature`",
+		"Future raft-facing apply consumes accepted deterministic native write payloads",
+		"TestAdapterReadinessUsesNativeRevisionsAndConditionalConflicts",
+		"TestAdapterReadinessCommandWALReopenPreservesRevisionAndFailsClosedConditional",
+	)
+
+	specReadme := collapseWhitespace(readRepoText(t, "TreeDB/docs/spec/README.md"))
+	assertContainsAll(t, specReadme, "conditional raw KV adapter readiness index",
+		"`TreeDB/docs/spec/conditional-kv-adapter-readiness.md`",
+		"downstream adapter closeout for native `EntryRevision` cache tokens",
+	)
 }

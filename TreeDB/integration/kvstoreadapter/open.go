@@ -1,6 +1,7 @@
 package kvstoreadapter
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,10 @@ const (
 	// EnvMemtableMode overrides the wrapper's memtable mode.
 	EnvMemtableMode = "TREEDB_MEMTABLE_MODE"
 )
+
+// ErrUnsupportedAdapterFeature is returned when a downstream wrapper requests
+// a Badger-style feature that TreeDB does not implement natively.
+var ErrUnsupportedAdapterFeature = errors.New("treedb adapter: unsupported feature")
 
 // OpenConfig standardizes the common "TreeDB behind a kvstore-style wrapper"
 // open path used by downstream integrations such as cosmos-db/cometbft-db.
@@ -54,6 +59,13 @@ type OpenConfig struct {
 
 	// ReadWorkers overrides adapter read worker count when > 0.
 	ReadWorkers int
+
+	// RequireEncryption fails closed when a downstream Badger-compatible wrapper
+	// requires per-DB encryption. TreeDB does not expose native encryption here.
+	RequireEncryption bool
+	// RequireInMemory fails closed when a downstream wrapper requests an
+	// in-memory-only TreeDB backend. This adapter opens persistent TreeDB dirs.
+	RequireInMemory bool
 }
 
 // Opened is the standardized result returned to downstream wrappers.
@@ -102,6 +114,13 @@ func ParsePublicProfile(raw string, fallback treedb.Profile) (treedb.Profile, er
 // ResolveOptions converts downstream wrapper defaults and standard TREEDB_*
 // environment overrides into TreeDB Options.
 func ResolveOptions(cfg OpenConfig) (treedb.Options, string, error) {
+	if cfg.RequireEncryption {
+		return treedb.Options{}, "", unsupportedAdapterFeature("encryption")
+	}
+	if cfg.RequireInMemory {
+		return treedb.Options{}, "", unsupportedAdapterFeature("in-memory mode")
+	}
+
 	parentDir := strings.TrimSpace(cfg.ParentDir)
 	if parentDir == "" {
 		return treedb.Options{}, "", fmt.Errorf("parent directory must be non-empty")
@@ -167,6 +186,10 @@ func ResolveOptions(cfg OpenConfig) (treedb.Options, string, error) {
 	}
 
 	return opts, dbPath, nil
+}
+
+func unsupportedAdapterFeature(feature string) error {
+	return fmt.Errorf("%w: %s", ErrUnsupportedAdapterFeature, feature)
 }
 
 // Open resolves standardized wrapper options, opens TreeDB, and returns the

@@ -1,6 +1,7 @@
 package kvstoreadapter
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -225,6 +226,46 @@ func TestResolveOptionsRejectsInvalidPathInputs(t *testing.T) {
 	}
 }
 
+func TestResolveOptionsRejectsUnsupportedAdapterFeatures(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		cfg     OpenConfig
+		wantMsg string
+	}{
+		{
+			name: "encryption",
+			cfg: OpenConfig{
+				ParentDir:         t.TempDir(),
+				Name:              "application",
+				DefaultProfile:    treedb.ProfileCommandWALRelaxed,
+				RequireEncryption: true,
+			},
+			wantMsg: "encryption",
+		},
+		{
+			name: "in memory",
+			cfg: OpenConfig{
+				ParentDir:       t.TempDir(),
+				Name:            "application",
+				DefaultProfile:  treedb.ProfileCommandWALRelaxed,
+				RequireInMemory: true,
+			},
+			wantMsg: "in-memory",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := ResolveOptions(tc.cfg); !errors.Is(err, ErrUnsupportedAdapterFeature) {
+				t.Fatalf("ResolveOptions error=%v, want ErrUnsupportedAdapterFeature", err)
+			} else if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Fatalf("ResolveOptions error=%v, want %q context", err, tc.wantMsg)
+			}
+		})
+	}
+}
+
 func TestResolveOptionsIsSideEffectFreeOnError(t *testing.T) {
 	t.Setenv(EnvKeepRecent, "not-a-number")
 
@@ -239,6 +280,25 @@ func TestResolveOptionsIsSideEffectFreeOnError(t *testing.T) {
 	}
 	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
 		t.Fatalf("ResolveOptions created %q on error, stat err=%v", dbPath, err)
+	}
+}
+
+func TestOpenRejectsUnsupportedAdapterFeaturesBeforeCreatingDB(t *testing.T) {
+	t.Parallel()
+
+	parentDir := t.TempDir()
+	dbPath := filepath.Join(parentDir, "application.db")
+	_, err := Open(OpenConfig{
+		ParentDir:         parentDir,
+		Name:              "application",
+		DefaultProfile:    treedb.ProfileCommandWALRelaxed,
+		RequireEncryption: true,
+	})
+	if !errors.Is(err, ErrUnsupportedAdapterFeature) {
+		t.Fatalf("Open error=%v, want ErrUnsupportedAdapterFeature", err)
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("Open created %q on unsupported feature error, stat err=%v", dbPath, statErr)
 	}
 }
 
