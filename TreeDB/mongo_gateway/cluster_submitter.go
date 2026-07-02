@@ -1000,7 +1000,9 @@ func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName stri
 		if mongoClusterRouteRejectedMessage(message) {
 			return "route_rejected"
 		}
-		if mongoClusterLeaderHint(err) != "" || strings.Contains(message, "not leader") {
+		if mongoClusterLeaderHint(err) != "" ||
+			strings.Contains(message, "not leader") ||
+			strings.Contains(message, "not cluster leader") {
 			return "not_leader"
 		}
 		return "read_only"
