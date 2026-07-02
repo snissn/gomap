@@ -418,13 +418,19 @@ func (p *HashicorpRaftProvider) readIndexGapHasNoCommands(firstIndex, lastIndex 
 		return false, 0, fmt.Errorf("%w: hashicorp raft log store is not configured", ErrReadBarrierNotSatisfied)
 	}
 	var entry hraft.Log
-	for index := firstIndex; index <= lastIndex; index++ {
+	for index := firstIndex; ; index++ {
 		entry = hraft.Log{}
 		if err := p.logStore.GetLog(index, &entry); err != nil {
-			return false, 0, fmt.Errorf("%w: unable to inspect committed raft log %d for read-index gap: %v", ErrReadBarrierNotSatisfied, index, err)
+			return false, 0, errors.Join(
+				ErrReadBarrierNotSatisfied,
+				fmt.Errorf("unable to inspect committed raft log %d for read-index gap: %w", index, err),
+			)
 		}
 		if entry.Type == hraft.LogCommand {
 			return false, index, nil
+		}
+		if index == lastIndex {
+			break
 		}
 	}
 	return true, 0, nil
