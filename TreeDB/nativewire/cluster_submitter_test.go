@@ -48,6 +48,133 @@ func (noAdmissionClusterSubmitter) SubmitCommandEntryV1(context.Context, []byte,
 	panic("unexpected submit")
 }
 
+type recordingRaftCommandSubmitter struct {
+	groupID raftcluster.GroupID
+	manager *collections.CollectionManager
+	status  raftcluster.AdmissionStatus
+	err     error
+	mu      sync.Mutex
+	calls   []recordingRaftCommandSubmitCall
+}
+
+type recordingRaftCommandSubmitCall struct {
+	entry    raftentry.CommandEntryV1
+	metadata raftentry.RequestMetadataV1
+}
+
+func (s *recordingRaftCommandSubmitter) Config() raftcluster.ResolvedConfig {
+	return raftcluster.ResolvedConfig{GroupID: s.groupID}
+}
+
+func (s *recordingRaftCommandSubmitter) ClusterAdmissionStatus(context.Context) (raftcluster.AdmissionStatus, error) {
+	if s.status == (raftcluster.AdmissionStatus{}) {
+		return raftcluster.LeaderAdmission(), nil
+	}
+	return s.status, nil
+}
+
+func (s *recordingRaftCommandSubmitter) SubmitCommandEntryV1(ctx context.Context, entry []byte, metadata raftentry.RequestMetadataV1) (raftcluster.SubmitResultV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return raftcluster.SubmitResultV1{}, ctx.Err()
+	default:
+	}
+	decoded, err := raftentry.DecodeCommandEntryV1(entry, raftentry.DecodeOptions{RequestMetadata: metadata})
+	if err != nil {
+		return raftcluster.SubmitResultV1{}, err
+	}
+	s.mu.Lock()
+	index := uint64(len(s.calls) + 1)
+	s.calls = append(s.calls, recordingRaftCommandSubmitCall{entry: decoded, metadata: cloneClusterRequestMetadata(metadata)})
+	s.mu.Unlock()
+	if s.err != nil {
+		return raftcluster.SubmitResultV1{}, s.err
+	}
+	applyResult, err := s.applyForTest(decoded)
+	if err != nil {
+		return raftcluster.SubmitResultV1{}, err
+	}
+	actualAck := metadata.AckPolicy
+	if actualAck == 0 {
+		actualAck = iwire.AckVisible
+	}
+	expectedTarget := decoded.Target.Clone()
+	committed := raftcluster.CommittedCommandEntryV1{
+		Term:                     1,
+		Index:                    index,
+		Bytes:                    bytes.Clone(entry),
+		CurrentCatalogVersion:    7,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      true,
+		RequestMetadata:          cloneClusterRequestMetadata(metadata),
+		ExpectedTarget:           &expectedTarget,
+	}
+	return raftcluster.SubmitResultV1{
+		ActualAck:            actualAck,
+		CommittedRecoverable: actualAck == iwire.AckRaftCommitted,
+		DecodedEntry:         decoded,
+		ApplyResult:          applyResult,
+		CommittedEntry:       committed,
+		Evidence: raftcluster.CommitEvidenceV1{
+			Kind:                raftcluster.CommitEvidenceProductionConsensusV1,
+			GroupID:             s.groupID,
+			Term:                1,
+			Index:               index,
+			Committed:           true,
+			ProductionConsensus: true,
+		},
+		CatalogVersion:    7,
+		HasCatalogVersion: true,
+	}, nil
+}
+
+func (s *recordingRaftCommandSubmitter) applyForTest(entry raftentry.CommandEntryV1) (raftentry.ApplyResultV1, error) {
+	switch entry.Decoded.CommandID {
+	case iwire.CommandCreateCollection:
+		if s.manager != nil {
+			rawMeta, err := metadataSection(entry.Decoded.Sections, iwire.SectionCollectionMeta)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, err
+			}
+			meta, err := decodeCollectionMeta(rawMeta)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, err
+			}
+			meta, err = normalizeClientCollectionMeta(meta)
+			if err != nil {
+				return raftentry.ApplyResultV1{}, err
+			}
+			if _, err := s.manager.CreateCollection(&meta); err != nil {
+				return raftentry.ApplyResultV1{}, err
+			}
+		}
+		return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1, MatchedCount: 1}, nil
+	case iwire.CommandInsertBatch:
+		rawIDs, err := metadataSection(entry.Decoded.Sections, iwire.SectionDocumentIDs)
+		if err != nil {
+			return raftentry.ApplyResultV1{}, err
+		}
+		ids, err := iwire.DecodeByteVectorItems(rawIDs, iwire.Limits{})
+		if err != nil {
+			return raftentry.ApplyResultV1{}, err
+		}
+		return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: int64(len(ids)), MatchedCount: int64(len(ids))}, nil
+	default:
+		return raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1, MatchedCount: 1}, nil
+	}
+}
+
+func (s *recordingRaftCommandSubmitter) snapshotCalls() []recordingRaftCommandSubmitCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]recordingRaftCommandSubmitCall, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
 type routingClusterSubmitter struct {
 	*fakeClusterSubmitter
 
@@ -1837,6 +1964,116 @@ func TestRaftClusterSubmitterRouteGroupMismatchRejectsBeforeLocalMutation(t *tes
 	}
 }
 
+func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesCollectionWrite(t *testing.T) {
+	provider := &staticClusterRouteProvider{
+		target: ClusterRouteTarget{
+			GroupID:       "group-b",
+			Members:       []string{"node-b", "node-c"},
+			LeaderHint:    "node-b",
+			PlacementMode: "collection",
+			Shape:         ClusterRouteShapeCollection,
+		},
+	}
+	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	version := clientCatalogVersion(t, client, ctx)
+	if _, err := client.commandSections(ctx, iwire.CommandCreateCollection, raftClusterCreateCollectionSections("users", version, AckVisible)...); err != nil {
+		t.Fatalf("CreateCollection group-routed dispatcher: %v", err)
+	}
+	if _, err := mgr.OpenCollection("users"); err != nil {
+		t.Fatalf("OpenCollection users after routed create: %v", err)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandCreateCollection {
+		t.Fatalf("group-b command=%d want create_collection", got)
+	}
+	meta := calls[0].metadata
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeCollection) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-b" || meta.ClusterRoutePlacementMode != "collection" {
+		t.Fatalf("group-b route metadata=%+v want collection route to group-b/node-b", meta)
+	}
+}
+
+func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
+	token := raftplacement.DocumentIDTokenV1([]byte("u1"))
+	provider := &staticClusterRouteProvider{
+		target: ClusterRouteTarget{
+			GroupID:       "group-b",
+			Members:       []string{"node-b", "node-c"},
+			LeaderHint:    "node-b",
+			PlacementMode: "token",
+			Shape:         ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if _, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible); err != nil {
+		t.Fatalf("InsertBatch group-routed dispatcher: %v", err)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	calls := groupB.snapshotCalls()
+	if len(calls) != 1 {
+		t.Fatalf("group-b calls=%d want 1", len(calls))
+	}
+	meta := calls[0].metadata
+	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
+		t.Fatalf("group-b command=%d want insert_batch", got)
+	}
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
+		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
+	}
+}
+
+func TestRaftClusterSubmitterGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmit(t *testing.T) {
+	token := raftplacement.DocumentIDTokenV1([]byte("u1"))
+	provider := &staticClusterRouteProvider{
+		target: ClusterRouteTarget{
+			GroupID:       "group-z",
+			Members:       []string{"node-z"},
+			LeaderHint:    "node-z",
+			PlacementMode: "token",
+			Shape:         ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible)
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route target unknown") {
+		t.Fatalf("InsertBatch unknown group err=%v want read-only route target unknown", err)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
 func TestRaftClusterSubmitterConcreteBridgeFollowerRejectsBeforeApply(t *testing.T) {
 	client, _, mgr, _ := serveRaftClusterBridgePipe(t, raftcluster.FollowerAdmission("node-b", "not leader"))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -1963,6 +2200,38 @@ func serveRaftClusterBridgePipeWithRoute(t testing.TB, admission raftcluster.Adm
 		_ = db.Close()
 	})
 	return client, server, mgr, db
+}
+
+func serveGroupRoutedRaftClusterBridgePipe(t testing.TB, routeProvider ClusterRouteProvider) (*Client, *recordingRaftCommandSubmitter, *recordingRaftCommandSubmitter, *collections.CollectionManager, *backenddb.DB) {
+	t.Helper()
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	mgr := collections.NewCollectionManager(db)
+	groupA := &recordingRaftCommandSubmitter{groupID: "group-a", manager: mgr}
+	groupB := &recordingRaftCommandSubmitter{groupID: "group-b", manager: mgr}
+	registry, err := raftcluster.NewGroupSubmitterRegistryV1([]raftcluster.GroupSubmitterV1{
+		{GroupID: "group-a", Submitter: groupA},
+		{GroupID: "group-b", Submitter: groupB},
+	})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewGroupSubmitterRegistryV1: %v", err)
+	}
+	dispatcher, err := raftcluster.NewGroupRoutedSubmitter(raftcluster.GroupRoutedSubmitterOptions{Registry: registry})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewGroupRoutedSubmitter: %v", err)
+	}
+	server := NewServer(ServerOptions{
+		Collections:      mgr,
+		Backend:          db,
+		ClusterSubmitter: NewRoutedRaftClusterSubmitter(dispatcher, routeProvider, mgr),
+	})
+	client, _ := servePipe(t, server)
+	t.Cleanup(func() { _ = db.Close() })
+	return client, groupA, groupB, mgr, db
 }
 
 type recordingRaftClusterApplier struct {
