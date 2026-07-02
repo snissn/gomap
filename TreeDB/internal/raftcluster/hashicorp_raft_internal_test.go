@@ -169,6 +169,21 @@ func TestHashicorpRaftReadIndexGapMaxIndexNoOverflow(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftReadIndexGapFirstIndexAfterAppliedMaxFailsClosed(t *testing.T) {
+	_, err := readIndexGapFirstIndexAfterApplied(uint64(math.MaxUint64))
+	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("readIndexGapFirstIndexAfterApplied err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+
+	firstIndex, err := readIndexGapFirstIndexAfterApplied(41)
+	if err != nil {
+		t.Fatalf("readIndexGapFirstIndexAfterApplied: %v", err)
+	}
+	if firstIndex != 42 {
+		t.Fatalf("firstIndex=%d want 42", firstIndex)
+	}
+}
+
 func TestHashicorpRaftReadIndexCommitIndexHasCurrentTerm(t *testing.T) {
 	store := hraft.NewInmemStore()
 	if err := store.StoreLogs([]*hraft.Log{
