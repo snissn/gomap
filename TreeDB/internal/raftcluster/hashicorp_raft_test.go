@@ -183,21 +183,70 @@ func TestHashicorpRaftProviderLeaderCrashAfterCommitRestartCatchUpConverges(t *t
 func TestHashicorpRaftProviderLeaderCrashBeforeCommitDoesNotReportSuccessOrMutate(t *testing.T) {
 	cluster := newHashicorpRaftDBCluster(t)
 	leader := cluster.waitForLeader(t)
-	staleSubmitter := leader.submitter
 
-	cluster.shutdownNode(t, leader.id)
-	result, err := staleSubmitter.SubmitCommandEntryV1(context.Background(), testClusterCreateCollectionEntryNamed(t, "users", "raftcluster/create/users/precommit-crash", 7), raftentry.RequestMetadataV1{
-		RequestID: 731,
-		AckPolicy: iwire.AckRaftCommitted,
+	preflightReady := make(chan struct{})
+	releasePreflight := make(chan struct{})
+	var releasePreflightOnce sync.Once
+	releaseBlockedPreflight := func() {
+		releasePreflightOnce.Do(func() {
+			close(releasePreflight)
+		})
+	}
+	defer releaseBlockedPreflight()
+
+	inflightSubmitter := newHashicorpRaftDBSubmitterWithPreflight(t, leader, staticCatalogVersion(7), &gatedCommandEntryPreflight{
+		delegate: leader.fsm,
+		ready:    preflightReady,
+		release:  releasePreflight,
 	})
-	if err == nil {
-		t.Fatalf("SubmitCommandEntryV1 on crashed leader succeeded: %+v", result)
+	entry := testClusterCreateCollectionEntryNamed(t, "users", "raftcluster/create/users/precommit-crash", 7)
+	submitCtx, submitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer submitCancel()
+	type submitAttempt struct {
+		result SubmitResultV1
+		err    error
 	}
-	if result.CommittedRecoverable || result.Evidence.ProvesProductionConsensus() || result.CommittedEntry.Index != 0 {
-		t.Fatalf("pre-commit crash result=%+v, want no committed success", result)
+	submitDone := make(chan submitAttempt, 1)
+	go func() {
+		result, err := inflightSubmitter.SubmitCommandEntryV1(submitCtx, entry, raftentry.RequestMetadataV1{
+			RequestID: 731,
+			AckPolicy: iwire.AckRaftCommitted,
+		})
+		submitDone <- submitAttempt{result: result, err: err}
+	}()
+
+	select {
+	case <-preflightReady:
+	case attempt := <-submitDone:
+		t.Fatalf("SubmitCommandEntryV1 finished before pre-commit partition: err=%v result=%+v", attempt.err, attempt.result)
+	case <-time.After(3 * time.Second):
+		t.Fatalf("timed out waiting for live leader preflight; states=%s", cluster.admissionSummary())
 	}
-	for _, id := range cluster.runningNodeIDs() {
-		assertClusterCollectionMissing(t, cluster.nodes[id], "users")
+	status, err := leader.provider.ClusterAdmissionStatus(context.Background())
+	if err != nil {
+		t.Fatalf("%s ClusterAdmissionStatus before partition: %v", leader.id, err)
+	}
+	if !status.Leader || status.Unavailable {
+		t.Fatalf("%s admission before partition=%+v, want live leader", leader.id, status)
+	}
+
+	cluster.disconnectNode(t, leader.id)
+	releaseBlockedPreflight()
+
+	var attempt submitAttempt
+	select {
+	case attempt = <-submitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for partitioned pre-commit submit to fail; states=%s", cluster.admissionSummary())
+	}
+	if attempt.err == nil {
+		t.Fatalf("SubmitCommandEntryV1 on partitioned leader succeeded: %+v", attempt.result)
+	}
+	if attempt.result.CommittedRecoverable || attempt.result.Evidence.ProvesProductionConsensus() || attempt.result.CommittedEntry.Index != 0 {
+		t.Fatalf("pre-commit crash result=%+v err=%v, want no committed success", attempt.result, attempt.err)
+	}
+	for _, node := range cluster.nodes {
+		assertClusterCollectionMissing(t, node, "users")
 	}
 }
 
@@ -379,11 +428,16 @@ func newHashicorpRaftDBCluster(t *testing.T) *hashicorpRaftTestCluster {
 
 func newHashicorpRaftDBSubmitter(t testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider) *SingleGroupSubmitter {
 	t.Helper()
+	return newHashicorpRaftDBSubmitterWithPreflight(t, node, catalogProvider, node.fsm)
+}
+
+func newHashicorpRaftDBSubmitterWithPreflight(t testing.TB, node *hashicorpRaftTestNode, catalogProvider CatalogVersionProvider, preflight CommandEntryPreflightV1) *SingleGroupSubmitter {
+	t.Helper()
 	submitter, err := NewSingleGroupSubmitter(SingleGroupSubmitterOptions{
 		Cluster:                node.cfg,
 		AdmissionProvider:      node.provider,
 		CommitSource:           node.provider,
-		Preflight:              node.fsm,
+		Preflight:              preflight,
 		Applier:                node.fsm,
 		CatalogVersionProvider: catalogProvider,
 	})
@@ -391,6 +445,29 @@ func newHashicorpRaftDBSubmitter(t testing.TB, node *hashicorpRaftTestNode, cata
 		t.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
 	}
 	return submitter
+}
+
+type gatedCommandEntryPreflight struct {
+	delegate CommandEntryPreflightV1
+	ready    chan<- struct{}
+	release  <-chan struct{}
+	once     sync.Once
+}
+
+func (p *gatedCommandEntryPreflight) PreflightCommandEntryV1(ctx context.Context, req CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+	result, err := p.delegate.PreflightCommandEntryV1(ctx, req)
+	p.once.Do(func() {
+		close(p.ready)
+	})
+	if err != nil {
+		return result, err
+	}
+	select {
+	case <-p.release:
+		return result, nil
+	case <-ctx.Done():
+		return CommandEntryPreflightResultV1{}, ctx.Err()
+	}
 }
 
 func newHashicorpRaftProviderOnlyCluster(t *testing.T, applier CommittedCommandApplierV1) *hashicorpRaftTestCluster {
