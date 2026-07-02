@@ -97,6 +97,48 @@ func TestRaftSnapshotV1InstallReplacesStaleReplica(t *testing.T) {
 	}
 }
 
+func TestRaftSnapshotV1InstallReplacesStaleFormatConfig(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := filepath.Join(root, "source")
+	sourceDB := openRaftSnapshotFSMTestDB(t, sourceDir, false)
+	defer func() { _ = sourceDB.Close() }()
+	sourceFSM := openRaftSnapshotFSMForTest(t, sourceDB, sourceDir, true)
+	defer func() { _ = sourceFSM.Close() }()
+
+	sourceDoc := []byte(`{"_id":"u-large","name":"source-format"}`)
+	applySnapshotSourceEntries(t, sourceFSM, sourceDoc)
+	snapshot, err := sourceFSM.ExportRaftSnapshotV1()
+	if err != nil {
+		t.Fatalf("ExportRaftSnapshotV1: %v", err)
+	}
+	sourceFormatPath := filepath.Join(raftcluster.MainDBDir(sourceDir), raftSnapshotFormatConfigFileV1)
+	sourceFormat, err := os.ReadFile(sourceFormatPath)
+	if err != nil {
+		t.Fatalf("ReadFile source format config: %v", err)
+	}
+
+	targetDir := filepath.Join(root, "target")
+	targetDB := openRaftSnapshotFSMTestDB(t, targetDir, false)
+	targetFSM := openRaftSnapshotFSMForTest(t, targetDB, targetDir, true)
+	defer func() { _ = targetFSM.Close() }()
+	targetFormatPath := filepath.Join(raftcluster.MainDBDir(targetDir), raftSnapshotFormatConfigFileV1)
+	if err := os.WriteFile(targetFormatPath, []byte(`{"version":999}`), 0o600); err != nil {
+		t.Fatalf("WriteFile stale target format config: %v", err)
+	}
+
+	if err := targetFSM.InstallRaftSnapshotV1(bytes.NewReader(snapshot.Payload)); err != nil {
+		t.Fatalf("InstallRaftSnapshotV1 with stale target format config: %v", err)
+	}
+	targetFormat, err := os.ReadFile(targetFormatPath)
+	if err != nil {
+		t.Fatalf("ReadFile target format config: %v", err)
+	}
+	if !bytes.Equal(targetFormat, sourceFormat) {
+		t.Fatalf("target format config=%s want source %s", targetFormat, sourceFormat)
+	}
+	assertSnapshotDocument(t, targetFSM, "u-large", sourceDoc)
+}
+
 func TestRaftSnapshotV1TailReplayMatchesSourceDigest(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "source")

@@ -62,6 +62,19 @@ func TestHashicorpRaftConfigDefaultsAvoidAutomaticSnapshots(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftConfigFloorsTrailingLogsForReadIndex(t *testing.T) {
+	src := hraft.DefaultConfig()
+	src.TrailingLogs = 0
+
+	conf := hashicorpRaftConfig("node-a", src)
+	if conf.TrailingLogs != hashicorpRaftMinTrailingLogs {
+		t.Fatalf("TrailingLogs=%d want %d", conf.TrailingLogs, hashicorpRaftMinTrailingLogs)
+	}
+	if err := hraft.ValidateConfig(conf); err != nil {
+		t.Fatalf("ValidateConfig: %v", err)
+	}
+}
+
 func TestHashicorpRaftReadIndexGapHasNoCommands(t *testing.T) {
 	store := hraft.NewInmemStore()
 	if err := store.StoreLogs([]*hraft.Log{

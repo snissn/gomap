@@ -22,10 +22,13 @@ const (
 	raftSnapshotDBPrefixV1    = "db"
 	raftSnapshotSidePrefixV1  = "side"
 	raftSnapshotApplyPrefixV1 = "apply"
+
+	raftSnapshotFormatConfigFileV1 = "format.json"
 )
 
 var raftSnapshotMainDBEntriesV1 = []string{
 	"index.db",
+	raftSnapshotFormatConfigFileV1,
 	"wal",
 	"value_vlog",
 	"leaf_vlog",
@@ -142,6 +145,9 @@ func (f *FSM) InstallRaftSnapshotV1(reader io.Reader) error {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.requireRaftSnapshotOpenV1(); err != nil {
+		return err
+	}
 	if err := header.Validate(f.snapshotScopeIdentityV1()); err != nil {
 		return codedError(raftentry.ErrorRejectedConflictV1, "snapshot archive is not valid for FSM scope: %v", err)
 	}

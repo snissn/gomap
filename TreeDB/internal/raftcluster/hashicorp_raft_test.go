@@ -526,6 +526,15 @@ func TestHashicorpRaftProviderSnapshotRejoinsLaggingFollowerAndCompactsLogs(t *t
 	if !snapshot.LogCompacted || (snapshot.FirstLogIndexAfter != 0 && snapshot.FirstLogIndexAfter <= snapshot.FirstLogIndexBefore) {
 		t.Fatalf("snapshot did not compact logs: %+v", snapshot)
 	}
+	proof, err := leader.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err != nil {
+		t.Fatalf("ReadIndex after snapshot compaction: %v", err)
+	}
+	if proof.Index < insertResult.CommittedEntry.Index ||
+		proof.EvidenceKind != ReadIndexEvidenceProduction ||
+		!proof.HasQuorum {
+		t.Fatalf("post-snapshot read-index proof=%+v want production proof at or beyond %d", proof, insertResult.CommittedEntry.Index)
+	}
 
 	cluster.connectAllTransports(t)
 	cluster.waitApplied(t, insertResult.CommittedEntry.EntryID())

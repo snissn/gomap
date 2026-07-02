@@ -21,6 +21,7 @@ const (
 	hashicorpRaftDefaultApplyTimeout   = 5 * time.Second
 	hashicorpRaftDefaultSnapshotRetain = 2
 	hashicorpRaftSnapshotCheckInterval = 24 * time.Hour
+	hashicorpRaftMinTrailingLogs       = 1
 	hashicorpRaftReadIndexInitialPoll  = 2 * time.Millisecond
 	hashicorpRaftReadIndexMaxPoll      = 25 * time.Millisecond
 )
@@ -776,6 +777,9 @@ func hashicorpRaftConfig(nodeID NodeID, src *hraft.Config) *hraft.Config {
 	conf.NoLegacyTelemetry = true
 	if conf.SnapshotInterval < 5*time.Millisecond {
 		conf.SnapshotInterval = hashicorpRaftSnapshotCheckInterval
+	}
+	if conf.TrailingLogs < hashicorpRaftMinTrailingLogs {
+		conf.TrailingLogs = hashicorpRaftMinTrailingLogs
 	}
 	return &conf
 }
