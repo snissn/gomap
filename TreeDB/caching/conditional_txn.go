@@ -224,6 +224,17 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 	return out, revision, nil
 }
 
+// RequireReadVersion records a caller-observed key revision as a commit
+// precondition. It is intended for values read through an external pinned
+// snapshot owned by the caller.
+func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision page.EntryRevision, found bool) error {
+	if err := tx.ensureOpen(); err != nil {
+		return err
+	}
+	key = normalizeRawKVPointKey(key)
+	return tx.recordRead(key, revision, found)
+}
+
 func (tx *ConditionalTxn) getCommittedVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
 	if tx.snap != nil {
 		return tx.snap.GetVersionedAppend(key, dst)

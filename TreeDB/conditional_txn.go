@@ -93,6 +93,22 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevi
 	return dst, LegacyEntryRevision, ErrConditionalTxnClosed
 }
 
+// RequireReadVersion records a caller-observed key revision as a commit
+// precondition. It is intended for values read through an external pinned
+// snapshot owned by the caller.
+func (tx *ConditionalTxn) RequireReadVersion(key []byte, revision EntryRevision, found bool) error {
+	if tx == nil {
+		return ErrConditionalTxnClosed
+	}
+	if tx.cachedActive {
+		return tx.cached.RequireReadVersion(key, page.EntryRevision(revision), found)
+	}
+	if tx.backend != nil {
+		return tx.backend.RequireReadVersion(key, page.EntryRevision(revision), found)
+	}
+	return ErrConditionalTxnClosed
+}
+
 // Has reports whether key exists in the transaction-visible state and records
 // the key as a commit precondition.
 func (tx *ConditionalTxn) Has(key []byte) (bool, error) {
