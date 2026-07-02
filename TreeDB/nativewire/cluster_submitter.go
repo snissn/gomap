@@ -34,6 +34,7 @@ const (
 	ClusterRouteShapeCollection ClusterRouteShape = "collection"
 	ClusterRouteShapeToken      ClusterRouteShape = "token"
 	ClusterRouteShapeTokenBatch ClusterRouteShape = "token_batch"
+	ClusterRouteShapeQuery      ClusterRouteShape = "query"
 )
 
 type ClusterRouteRequest struct {
@@ -237,7 +238,8 @@ func AdmitClusterMutation(ctx context.Context, submitter ClusterSubmitter) error
 // provider preserves existing submitter behavior; a configured provider must
 // return a supported route target with a group ID. Token/ring targets require
 // an exactly-one-ID token route request; multi-ID token batches are classified
-// only so adapters can fail closed until split/fanout execution exists.
+// only so adapters can fail closed until split/fanout execution exists. Query
+// routes fail closed until bounded scatter/read-index execution is implemented.
 func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, request ClusterRouteRequest) (ClusterRouteTarget, bool, error) {
 	provider, ok := submitter.(ClusterRouteProvider)
 	if !ok {
@@ -255,6 +257,8 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster token batch route request requires multiple document tokens")
 		}
 		request.Tokens = append([]uint64(nil), request.Tokens...)
+	case ClusterRouteShapeQuery:
+		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster query route shape is not supported without bounded scatter/read-index routing")
 	default:
 		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "cluster route shape %q is not supported", request.Shape)
 	}
