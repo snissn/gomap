@@ -204,6 +204,12 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 	if err := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader()); err != nil {
 		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
 	}
+	if state := p.raft.State(); state != hraft.Leader {
+		return ReadIndexProof{}, p.hashicorpReadIndexNotLeader(state)
+	}
+	// HashiCorp Raft v1.7 has no native ReadIndex API. VerifyLeader sends an
+	// immediate heartbeat to voting peers; CommitIndex is the local barrier
+	// index the applied-index waiter must reach before the read is served.
 	proof := ReadIndexProof{
 		NodeID:       p.cluster.NodeID,
 		GroupID:      p.cluster.GroupID,
