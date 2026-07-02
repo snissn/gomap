@@ -60,6 +60,7 @@ type RequestMetadataV1 struct {
 	ClusterRouteMembers       []string
 	ClusterRouteLeaderHint    string
 	ClusterRoutePlacementMode string
+	ClusterRouteKey           string
 	ClusterRouteTokenKnown    bool
 	ClusterRouteToken         uint64
 	ClusterRoutePartitionID   string

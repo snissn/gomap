@@ -814,6 +814,7 @@ func requestMetadataEqual(a, b raftentry.RequestMetadataV1) bool {
 		slices.Equal(a.ClusterRouteMembers, b.ClusterRouteMembers) &&
 		a.ClusterRouteLeaderHint == b.ClusterRouteLeaderHint &&
 		a.ClusterRoutePlacementMode == b.ClusterRoutePlacementMode &&
+		a.ClusterRouteKey == b.ClusterRouteKey &&
 		a.ClusterRouteTokenKnown == b.ClusterRouteTokenKnown &&
 		a.ClusterRouteToken == b.ClusterRouteToken &&
 		a.ClusterRoutePartitionID == b.ClusterRoutePartitionID

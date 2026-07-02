@@ -56,6 +56,7 @@ type ClusterRouteTarget struct {
 	Members         []string
 	LeaderHint      string
 	PlacementMode   string
+	RouteKey        string
 	Reason          string
 	Shape           ClusterRouteShape
 	TokenKnown      bool
@@ -360,6 +361,13 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 			}
 			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
 		}
+		if target.RouteKey != string(raftplacement.RouteKeyDocumentIDV1) {
+			reason := target.Reason
+			if reason == "" {
+				reason = "cluster token/ring route target requires _id route key"
+			}
+			return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		}
 		if !target.TokenKnown {
 			reason := target.Reason
 			if reason == "" {
@@ -571,6 +579,7 @@ func applyClusterRouteMetadata(metadata *ClusterRequestMetadata, request Cluster
 	metadata.ClusterRouteMembers = append([]string(nil), target.Members...)
 	metadata.ClusterRouteLeaderHint = target.LeaderHint
 	metadata.ClusterRoutePlacementMode = target.PlacementMode
+	metadata.ClusterRouteKey = target.RouteKey
 	metadata.ClusterRouteTokenKnown = target.TokenKnown
 	metadata.ClusterRouteToken = target.Token
 	metadata.ClusterRoutePartitionID = target.PartitionID

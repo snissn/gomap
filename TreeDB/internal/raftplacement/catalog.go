@@ -36,6 +36,7 @@ var (
 	ErrUnsupportedFeature       = errors.New("raftplacement: unsupported feature")
 	ErrUnsupportedVersion       = errors.New("raftplacement: unsupported version")
 	ErrUnsupportedPlacementMode = errors.New("raftplacement: unsupported placement mode")
+	ErrUnsupportedRouteKey      = errors.New("raftplacement: unsupported route key")
 )
 
 type PlacementModeV1 string
@@ -44,6 +45,12 @@ const (
 	PlacementModeCollectionV1 PlacementModeV1 = "collection"
 	PlacementModeTokenV1      PlacementModeV1 = "token"
 	PlacementModeRingV1       PlacementModeV1 = "ring"
+)
+
+type RouteKeyV1 string
+
+const (
+	RouteKeyDocumentIDV1 RouteKeyV1 = "_id"
 )
 
 type CollectionRefV1 struct {
@@ -62,6 +69,7 @@ type CollectionPlacementV1 struct {
 	Collection      CollectionRefV1
 	GroupID         raftcluster.GroupID
 	Mode            PlacementModeV1
+	RouteKey        RouteKeyV1
 	TokenPartitions []TokenPartitionV1
 }
 
@@ -81,6 +89,7 @@ type ResolvedCollectionPlacementV1 struct {
 	Collection      CollectionRefV1
 	GroupID         raftcluster.GroupID
 	Mode            PlacementModeV1
+	RouteKey        RouteKeyV1
 	TokenPartitions []ResolvedTokenPartitionV1
 }
 
@@ -371,6 +380,9 @@ func validatePlacements(placements []CollectionPlacementV1, groups map[raftclust
 		}
 		switch mode {
 		case PlacementModeCollectionV1:
+			if placement.RouteKey != "" {
+				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrUnsupportedRouteKey, fmt.Errorf("placement[%d] %s/%s/%s collection mode must not set route key %q", i, ref.Database, ref.Catalog, ref.Collection, placement.RouteKey))
+			}
 			if len(placement.TokenPartitions) != 0 {
 				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrInvalidTokenRing, fmt.Errorf("placement[%d] %s/%s/%s collection mode includes token partitions", i, ref.Database, ref.Catalog, ref.Collection))
 			}
@@ -382,6 +394,13 @@ func validatePlacements(placements []CollectionPlacementV1, groups map[raftclust
 			}
 			resolved.GroupID = placement.GroupID
 		case PlacementModeTokenV1, PlacementModeRingV1:
+			routeKey := placement.RouteKey
+			if routeKey == "" {
+				routeKey = RouteKeyDocumentIDV1
+			}
+			if routeKey != RouteKeyDocumentIDV1 {
+				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrUnsupportedRouteKey, fmt.Errorf("placement[%d] %s/%s/%s mode %q route key %q is not supported", i, ref.Database, ref.Catalog, ref.Collection, mode, routeKey))
+			}
 			if placement.GroupID != "" {
 				return nil, nil, nil, errors.Join(ErrInvalidCatalog, ErrUnsupportedPlacementMode, fmt.Errorf("placement[%d] %s/%s/%s mode %q must not set collection group %q", i, ref.Database, ref.Catalog, ref.Collection, mode, placement.GroupID))
 			}
@@ -392,6 +411,7 @@ func validatePlacements(placements []CollectionPlacementV1, groups map[raftclust
 			if err != nil {
 				return nil, nil, nil, errors.Join(ErrInvalidCatalog, err, fmt.Errorf("placement[%d] %s/%s/%s", i, ref.Database, ref.Catalog, ref.Collection))
 			}
+			resolved.RouteKey = routeKey
 			resolved.TokenPartitions = cloneResolvedTokenPartitions(plan.Partitions)
 			tokens[ref] = cloneResolvedTokenRingPlan(plan)
 		default:

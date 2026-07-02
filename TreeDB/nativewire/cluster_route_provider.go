@@ -90,6 +90,7 @@ func clusterRouteTargetFromCatalogDecision(decision raftplacement.RouteDecisionV
 		Members:       clusterRouteGroupMembers(decision.Group.Members),
 		LeaderHint:    string(decision.LeaderHint()),
 		PlacementMode: string(decision.PlacementMode),
+		RouteKey:      string(decision.RouteKey),
 		Shape:         ClusterRouteShape(decision.Shape),
 	}
 	if decision.Token.Present {
@@ -103,6 +104,7 @@ func clusterRouteTargetFromCatalogDecision(decision raftplacement.RouteDecisionV
 func clusterRouteTargetFromCatalogTokenBatch(decision raftplacement.RouteTokenBatchDecisionV1) ClusterRouteTarget {
 	target := ClusterRouteTarget{
 		PlacementMode:   string(decision.PlacementMode),
+		RouteKey:        string(decision.RouteKey),
 		Shape:           ClusterRouteShapeTokenBatch,
 		TokenBatchClass: string(decision.Class),
 	}

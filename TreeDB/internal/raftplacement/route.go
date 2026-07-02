@@ -51,6 +51,7 @@ type RouteDecisionV1 struct {
 	Collection    CollectionRefV1
 	Shape         RouteShapeV1
 	PlacementMode PlacementModeV1
+	RouteKey      RouteKeyV1
 	Group         ResolvedGroupV1
 	Token         RouteTokenDecisionV1
 }
@@ -58,6 +59,7 @@ type RouteDecisionV1 struct {
 type RouteTokenBatchDecisionV1 struct {
 	Collection    CollectionRefV1
 	PlacementMode PlacementModeV1
+	RouteKey      RouteKeyV1
 	Class         TokenBatchRouteClassV1
 	Tokens        []uint64
 	Partitions    []ResolvedTokenPartitionV1
@@ -132,6 +134,7 @@ func (c ResolvedCatalogV1) Route(req RouteRequestV1) (RouteDecisionV1, error) {
 			Collection:    req.Collection,
 			Shape:         req.Shape,
 			PlacementMode: placement.Mode,
+			RouteKey:      placement.RouteKey,
 			Group:         group,
 			Token: RouteTokenDecisionV1{
 				Present:   true,
@@ -258,6 +261,7 @@ func (c ResolvedCatalogV1) ClassifyDocumentTokenBatch(database, catalog, collect
 	decision := RouteTokenBatchDecisionV1{
 		Collection:    ref,
 		PlacementMode: placement.Mode,
+		RouteKey:      placement.RouteKey,
 		Class:         class,
 		Tokens:        append([]uint64(nil), tokens...),
 		Partitions:    append([]ResolvedTokenPartitionV1(nil), partitions...),

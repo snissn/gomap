@@ -18,6 +18,8 @@ const (
 	clusterRoutePlacementCollectionV1 = "collection"
 	clusterRoutePlacementTokenV1      = "token"
 	clusterRoutePlacementRingV1       = "ring"
+
+	clusterRouteKeyDocumentIDV1 = "_id"
 )
 
 // GroupSubmitterV1 binds a local Raft group ID to the in-process submitter for
@@ -223,6 +225,9 @@ func routeDispatchTargetFromMetadata(metadata raftentry.RequestMetadataV1) (rout
 		}
 		if !metadata.ClusterRouteTokenKnown {
 			return routeDispatchTarget{}, errors.Join(ErrRouteTargetMissing, fmt.Errorf("token route missing document token"))
+		}
+		if metadata.ClusterRouteKey != clusterRouteKeyDocumentIDV1 {
+			return routeDispatchTarget{}, errors.Join(ErrRouteTargetUnsupported, fmt.Errorf("token route uses route key %q", metadata.ClusterRouteKey))
 		}
 		if metadata.ClusterRoutePartitionID == "" {
 			return routeDispatchTarget{}, errors.Join(ErrRouteTargetMissing, fmt.Errorf("token route missing partition id"))

@@ -114,6 +114,7 @@ func TestGroupRoutedSubmitterRoutesCollectionAndTokenTargets(t *testing.T) {
 	tokenMeta := routeMetadata("group-a", iwire.AckRaftCommitted)
 	tokenMeta.ClusterRouteShape = clusterRouteShapeTokenV1
 	tokenMeta.ClusterRoutePlacementMode = clusterRoutePlacementTokenV1
+	tokenMeta.ClusterRouteKey = clusterRouteKeyDocumentIDV1
 	tokenMeta.ClusterRouteTokenKnown = true
 	tokenMeta.ClusterRouteToken = 42
 	tokenMeta.ClusterRoutePartitionID = "p0"
@@ -144,6 +145,7 @@ func TestGroupRoutedSubmitterRejectsUnsupportedRoutesBeforeSubmit(t *testing.T) 
 	token := valid
 	token.ClusterRouteShape = clusterRouteShapeTokenV1
 	token.ClusterRoutePlacementMode = clusterRoutePlacementTokenV1
+	token.ClusterRouteKey = clusterRouteKeyDocumentIDV1
 	token.ClusterRouteTokenKnown = true
 	token.ClusterRouteToken = 11
 	token.ClusterRoutePartitionID = "p0"
@@ -182,6 +184,16 @@ func TestGroupRoutedSubmitterRejectsUnsupportedRoutesBeforeSubmit(t *testing.T) 
 			meta.ClusterRoutePartitionID = ""
 			return meta
 		}(), want: ErrRouteTargetMissing},
+		{name: "token_missing_route_key", meta: func() raftentry.RequestMetadataV1 {
+			meta := token
+			meta.ClusterRouteKey = ""
+			return meta
+		}(), want: ErrRouteTargetUnsupported},
+		{name: "token_unsupported_route_key", meta: func() raftentry.RequestMetadataV1 {
+			meta := token
+			meta.ClusterRouteKey = "tenant_id"
+			return meta
+		}(), want: ErrRouteTargetUnsupported},
 		{name: "unsupported_shape", meta: func() raftentry.RequestMetadataV1 {
 			meta := valid
 			meta.ClusterRouteShape = "scatter"

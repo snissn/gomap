@@ -382,6 +382,9 @@ func assertNativeClusterTokenRouteMetadata(tb testing.TB, call fakeClusterSubmit
 	if meta.ClusterRouteGroupID != "group-a" || meta.ClusterRouteLeaderHint != "node-a" || meta.ClusterRoutePlacementMode != string(mode) {
 		tb.Fatalf("metadata route target group=%q leader=%q mode=%q", meta.ClusterRouteGroupID, meta.ClusterRouteLeaderHint, meta.ClusterRoutePlacementMode)
 	}
+	if meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) {
+		tb.Fatalf("metadata route key=%q want %q", meta.ClusterRouteKey, raftplacement.RouteKeyDocumentIDV1)
+	}
 	if !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != partition {
 		tb.Fatalf("metadata token known/token/partition=%v/%d/%q want true/%d/%q", meta.ClusterRouteTokenKnown, meta.ClusterRouteToken, meta.ClusterRoutePartitionID, token, partition)
 	}
@@ -818,6 +821,42 @@ func TestClusterRoutePreflightRejectsUnsupportedQueryShape(t *testing.T) {
 	}
 }
 
+func TestClusterRoutePreflightRejectsUnsupportedTokenRouteKey(t *testing.T) {
+	submitter := &routingClusterSubmitter{
+		fakeClusterSubmitter: &fakeClusterSubmitter{},
+		target: ClusterRouteTarget{
+			GroupID:       "group-a",
+			Members:       []string{"node-a", "node-b"},
+			LeaderHint:    "node-a",
+			PlacementMode: string(raftplacement.PlacementModeRingV1),
+			RouteKey:      "tenant_id",
+			Shape:         ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         11,
+			PartitionID:   "p0",
+		},
+	}
+	request := ClusterRouteRequest{
+		Database:    "default",
+		Catalog:     "default",
+		Collection:  "users",
+		CommandID:   iwire.CommandInsertBatch,
+		CommandName: "insert_batch",
+		Shape:       ClusterRouteShapeToken,
+		TokenKnown:  true,
+		Token:       11,
+	}
+	if _, _, err := PreflightClusterRoute(context.Background(), submitter, request); codeOf(err) != iwire.ErrReadOnly || !strings.Contains(err.Error(), "requires _id route key") {
+		t.Fatalf("unsupported route key preflight err=%v want _id read-only", err)
+	}
+	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+		t.Fatalf("route calls=%d want 1", len(routes))
+	}
+	if calls := submitter.snapshot(); len(calls) != 0 {
+		t.Fatalf("submitter calls=%d want 0", len(calls))
+	}
+}
+
 func TestCatalogClusterRouteProviderRoutesResolvedCatalog(t *testing.T) {
 	collectionProvider := NewCatalogClusterRouteProvider(mustNativewireRouteTestCatalog(t, raftplacement.PlacementModeCollectionV1))
 	collectionTarget, err := collectionProvider.ClusterRoute(context.Background(), ClusterRouteRequest{
@@ -852,6 +891,9 @@ func TestCatalogClusterRouteProviderRoutesResolvedCatalog(t *testing.T) {
 			}
 			if tokenTarget.GroupID != "group-a" || tokenTarget.LeaderHint != "node-a" || tokenTarget.PlacementMode != string(mode) || tokenTarget.Shape != ClusterRouteShapeToken {
 				t.Fatalf("token target=%+v want group-a/node-a %s token", tokenTarget, mode)
+			}
+			if tokenTarget.RouteKey != string(raftplacement.RouteKeyDocumentIDV1) {
+				t.Fatalf("token route key=%q want %q", tokenTarget.RouteKey, raftplacement.RouteKeyDocumentIDV1)
 			}
 			if !tokenTarget.TokenKnown || tokenTarget.Token != 12 || tokenTarget.PartitionID != "p1" {
 				t.Fatalf("token target token known/token/partition=%v/%d/%q want true/12/p1", tokenTarget.TokenKnown, tokenTarget.Token, tokenTarget.PartitionID)
@@ -895,6 +937,9 @@ func TestCatalogClusterRouteProviderRoutesResolvedCatalog(t *testing.T) {
 					}
 					if target.PlacementMode != string(mode) || target.Shape != ClusterRouteShapeTokenBatch || target.TokenBatchClass != string(tc.wantClass) {
 						t.Fatalf("token batch target=%+v want mode=%s class=%s", target, mode, tc.wantClass)
+					}
+					if target.RouteKey != string(raftplacement.RouteKeyDocumentIDV1) {
+						t.Fatalf("token batch route key=%q want %q", target.RouteKey, raftplacement.RouteKeyDocumentIDV1)
 					}
 					if target.GroupID != tc.wantGroup {
 						t.Fatalf("token batch group=%q want %q", target.GroupID, tc.wantGroup)
@@ -2324,6 +2369,7 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesSingleTokenWrite(t *test
 			Members:       []string{"node-b", "node-c"},
 			LeaderHint:    "node-b",
 			PlacementMode: "token",
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
 			Shape:         ClusterRouteShapeToken,
 			TokenKnown:    true,
 			Token:         token,
@@ -2350,7 +2396,7 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRoutesSingleTokenWrite(t *test
 	if got := calls[0].entry.Decoded.CommandID; got != iwire.CommandInsertBatch {
 		t.Fatalf("group-b command=%d want insert_batch", got)
 	}
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
 		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
 	}
 }
@@ -2404,7 +2450,7 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(
 		t.Fatalf("group-b calls=%d want 1", len(calls))
 	}
 	meta := calls[0].metadata
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
 		t.Fatalf("group-b catalog token route metadata=%+v want group-b/node-c token=%d p1", meta, token)
 	}
 }
@@ -2417,6 +2463,7 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmi
 			Members:       []string{"node-z"},
 			LeaderHint:    "node-z",
 			PlacementMode: "token",
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
 			Shape:         ClusterRouteShapeToken,
 			TokenKnown:    true,
 			Token:         token,

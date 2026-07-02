@@ -453,6 +453,9 @@ func assertMongoClusterTokenRouteMetadata(tb testing.TB, call mongoClusterSubmit
 	if meta.ClusterRouteGroupID != "group-a" || meta.ClusterRouteLeaderHint != "node-a" || meta.ClusterRoutePlacementMode != string(mode) {
 		tb.Fatalf("metadata route target group=%q leader=%q mode=%q", meta.ClusterRouteGroupID, meta.ClusterRouteLeaderHint, meta.ClusterRoutePlacementMode)
 	}
+	if meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) {
+		tb.Fatalf("metadata route key=%q want %q", meta.ClusterRouteKey, raftplacement.RouteKeyDocumentIDV1)
+	}
 	if !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != partition {
 		tb.Fatalf("metadata token known/token/partition=%v/%d/%q want true/%d/%q", meta.ClusterRouteTokenKnown, meta.ClusterRouteToken, meta.ClusterRoutePartitionID, token, partition)
 	}
@@ -1110,6 +1113,7 @@ func TestMongoGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
 			Members:       []string{"node-b", "node-c"},
 			LeaderHint:    "node-b",
 			PlacementMode: "token",
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
 			Shape:         treenativewire.ClusterRouteShapeToken,
 			TokenKnown:    true,
 			Token:         token,
@@ -1132,7 +1136,7 @@ func TestMongoGroupRoutedDispatcherRoutesSingleTokenWrite(t *testing.T) {
 		t.Fatalf("group-b calls=%d want 1", len(calls))
 	}
 	meta := calls[0].metadata
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p0" {
 		t.Fatalf("group-b token route metadata=%+v want group-b token=%d p0", meta, token)
 	}
 }
@@ -1180,7 +1184,7 @@ func TestMongoGroupRoutedDispatcherCatalogRoutesSingleTokenOwner(t *testing.T) {
 		t.Fatalf("group-b calls=%d want 1", len(calls))
 	}
 	meta := calls[0].metadata
-	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
+	if !meta.ClusterRouteKnown || meta.ClusterRouteShape != string(treenativewire.ClusterRouteShapeToken) || meta.ClusterRouteGroupID != "group-b" || meta.ClusterRouteLeaderHint != "node-c" || meta.ClusterRouteKey != string(raftplacement.RouteKeyDocumentIDV1) || !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != "p1" {
 		t.Fatalf("group-b catalog token route metadata=%+v want group-b/node-c token=%d p1", meta, token)
 	}
 }
@@ -1193,6 +1197,7 @@ func TestMongoGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmit(t *testing.T)
 			Members:       []string{"node-z"},
 			LeaderHint:    "node-z",
 			PlacementMode: "token",
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
 			Shape:         treenativewire.ClusterRouteShapeToken,
 			TokenKnown:    true,
 			Token:         token,
