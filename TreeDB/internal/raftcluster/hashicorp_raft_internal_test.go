@@ -47,6 +47,55 @@ func TestHashicorpRaftConfigSuppressesSnapshots(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftReadIndexGapHasNoCommands(t *testing.T) {
+	store := hraft.NewInmemStore()
+	if err := store.StoreLogs([]*hraft.Log{
+		{Index: 1, Term: 1, Type: hraft.LogNoop},
+		{Index: 2, Term: 1, Type: hraft.LogConfiguration},
+		{Index: 3, Term: 1, Type: hraft.LogBarrier},
+	}); err != nil {
+		t.Fatalf("StoreLogs: %v", err)
+	}
+	provider := &HashicorpRaftProvider{logStore: store}
+
+	noCommands, err := provider.readIndexGapHasNoCommands(1, 3)
+	if err != nil {
+		t.Fatalf("readIndexGapHasNoCommands: %v", err)
+	}
+	if !noCommands {
+		t.Fatalf("readIndexGapHasNoCommands=false, want true for non-command gap")
+	}
+}
+
+func TestHashicorpRaftReadIndexGapDetectsCommand(t *testing.T) {
+	store := hraft.NewInmemStore()
+	if err := store.StoreLogs([]*hraft.Log{
+		{Index: 1, Term: 1, Type: hraft.LogNoop},
+		{Index: 2, Term: 1, Type: hraft.LogCommand, Data: []byte("entry")},
+		{Index: 3, Term: 1, Type: hraft.LogBarrier},
+	}); err != nil {
+		t.Fatalf("StoreLogs: %v", err)
+	}
+	provider := &HashicorpRaftProvider{logStore: store}
+
+	noCommands, err := provider.readIndexGapHasNoCommands(1, 3)
+	if err != nil {
+		t.Fatalf("readIndexGapHasNoCommands: %v", err)
+	}
+	if noCommands {
+		t.Fatalf("readIndexGapHasNoCommands=true, want false for command gap")
+	}
+}
+
+func TestHashicorpRaftReadIndexGapMissingLogFailsClosed(t *testing.T) {
+	provider := &HashicorpRaftProvider{logStore: hraft.NewInmemStore()}
+
+	_, err := provider.readIndexGapHasNoCommands(1, 1)
+	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("readIndexGapHasNoCommands err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+}
+
 func TestHashicorpRaftFSMApplyFailureDefaultPanics(t *testing.T) {
 	applyErr := errors.New("command WAL fsync failed")
 	fsm := hashicorpRaftFSM{

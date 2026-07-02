@@ -293,6 +293,55 @@ func TestHashicorpRaftProviderReadIndexDoesNotAppendBarrierLog(t *testing.T) {
 	}
 }
 
+func TestHashicorpRaftProviderReadIndexWaitsForTreeDBCommandProgressInGap(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:     "node-a",
+			GroupID:    "group-a",
+			Term:       1,
+			Index:      1,
+			HasApplied: true,
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.progress.NodeID = leader.id
+
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer commitCancel()
+	result, err := leader.provider.CommitCommandEntryV1(commitCtx, CommitCommandEntryV1Request{
+		GroupID:                  "group-a",
+		NodeID:                   leader.id,
+		EntryBytes:               testClusterCreateCollectionEntry(t, 7),
+		CurrentCatalogVersion:    7,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      true,
+	})
+	if err != nil {
+		t.Fatalf("CommitCommandEntryV1: %v", err)
+	}
+	if result.Entry.Index < 2 {
+		t.Fatalf("committed command index=%d, want room for stale progress", result.Entry.Index)
+	}
+	applier.progress = AppliedProgress{
+		NodeID:     leader.id,
+		GroupID:    "group-a",
+		Term:       result.Entry.Term,
+		Index:      result.Entry.Index - 1,
+		HasApplied: true,
+	}
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer readCancel()
+	_, err = leader.provider.ReadIndex(readCtx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err == nil {
+		t.Fatalf("ReadIndex succeeded with committed command index %d ahead of TreeDB progress %d", result.Entry.Index, applier.progress.Index)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, ErrReadBarrierNotSatisfied) {
+		t.Fatalf("ReadIndex err=%v want fail-closed deadline or ErrReadBarrierNotSatisfied", err)
+	}
+}
+
 func TestHashicorpRaftProviderReadIndexRejectsLeadershipLostBeforeProof(t *testing.T) {
 	applier := &progressReportingApplier{
 		progress: AppliedProgress{
