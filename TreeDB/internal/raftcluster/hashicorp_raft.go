@@ -285,7 +285,7 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 	if minIndex == 0 || progress.Index >= minIndex {
 		return progress, nil
 	}
-	noCommands, err := p.readIndexGapHasNoCommands(progress.Index+1, minIndex)
+	noCommands, firstCmd, err := p.readIndexGapHasNoCommands(progress.Index+1, minIndex)
 	if err != nil {
 		return AppliedProgress{}, err
 	}
@@ -299,13 +299,15 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	delay := hashicorpRaftReadIndexInitialPoll
+	pollTimer := time.NewTimer(delay)
+	defer pollTimer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return AppliedProgress{}, ctx.Err()
 		case <-timer.C:
 			return AppliedProgress{}, fmt.Errorf("%w: TreeDB applied index %d below read-index commit prefix %d", ErrReadBarrierNotSatisfied, progress.Index, minIndex)
-		case <-time.After(delay):
+		case <-pollTimer.C:
 		}
 		if delay < hashicorpRaftReadIndexMaxPoll {
 			delay *= 2
@@ -313,6 +315,7 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 				delay = hashicorpRaftReadIndexMaxPoll
 			}
 		}
+		pollTimer.Reset(delay)
 		if err := p.requireHashicorpReadIndexLeader(); err != nil {
 			return AppliedProgress{}, err
 		}
@@ -323,7 +326,12 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 		if progress.Index >= minIndex {
 			return progress, nil
 		}
-		noCommands, err = p.readIndexGapHasNoCommands(progress.Index+1, minIndex)
+		// Skip the gap rescan if the previously found command is still ahead of
+		// applied progress: the gap still has commands and no log I/O is needed.
+		if firstCmd != 0 && progress.Index < firstCmd {
+			continue
+		}
+		noCommands, firstCmd, err = p.readIndexGapHasNoCommands(progress.Index+1, minIndex)
 		if err != nil {
 			return AppliedProgress{}, err
 		}
@@ -344,6 +352,8 @@ func (p *HashicorpRaftProvider) waitHashicorpReadIndexCurrentTermCommit(ctx cont
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	delay := hashicorpRaftReadIndexInitialPoll
+	pollTimer := time.NewTimer(delay)
+	defer pollTimer.Stop()
 	for {
 		if err := p.requireHashicorpReadIndexLeader(); err != nil {
 			return 0, 0, err
@@ -362,7 +372,7 @@ func (p *HashicorpRaftProvider) waitHashicorpReadIndexCurrentTermCommit(ctx cont
 			return 0, 0, ctx.Err()
 		case <-timer.C:
 			return 0, 0, fmt.Errorf("%w: leader term %d has no committed read-index prefix at commit index %d", ErrReadBarrierNotSatisfied, term, commitIndex)
-		case <-time.After(delay):
+		case <-pollTimer.C:
 		}
 		if delay < hashicorpRaftReadIndexMaxPoll {
 			delay *= 2
@@ -370,6 +380,7 @@ func (p *HashicorpRaftProvider) waitHashicorpReadIndexCurrentTermCommit(ctx cont
 				delay = hashicorpRaftReadIndexMaxPoll
 			}
 		}
+		pollTimer.Reset(delay)
 	}
 }
 
@@ -393,30 +404,30 @@ func (p *HashicorpRaftProvider) readIndexCommitIndexHasCurrentTerm(commitIndex, 
 	return entry.Term == term, nil
 }
 
-func (p *HashicorpRaftProvider) readIndexGapHasNoCommands(firstIndex, lastIndex uint64) (bool, error) {
+func (p *HashicorpRaftProvider) readIndexGapHasNoCommands(firstIndex, lastIndex uint64) (bool, uint64, error) {
 	if p == nil {
-		return false, ErrInvalidHashicorpRaftProvider
+		return false, 0, ErrInvalidHashicorpRaftProvider
 	}
 	if firstIndex == 0 {
 		firstIndex = 1
 	}
 	if lastIndex < firstIndex {
-		return true, nil
+		return true, 0, nil
 	}
 	if p.logStore == nil {
-		return false, fmt.Errorf("%w: hashicorp raft log store is not configured", ErrReadBarrierNotSatisfied)
+		return false, 0, fmt.Errorf("%w: hashicorp raft log store is not configured", ErrReadBarrierNotSatisfied)
 	}
 	var entry hraft.Log
 	for index := firstIndex; index <= lastIndex; index++ {
 		entry = hraft.Log{}
 		if err := p.logStore.GetLog(index, &entry); err != nil {
-			return false, fmt.Errorf("%w: unable to inspect committed raft log %d for read-index gap: %v", ErrReadBarrierNotSatisfied, index, err)
+			return false, 0, fmt.Errorf("%w: unable to inspect committed raft log %d for read-index gap: %v", ErrReadBarrierNotSatisfied, index, err)
 		}
 		if entry.Type == hraft.LogCommand {
-			return false, nil
+			return false, index, nil
 		}
 	}
-	return true, nil
+	return true, 0, nil
 }
 
 func (p *HashicorpRaftProvider) requireHashicorpReadIndexLeader() error {
