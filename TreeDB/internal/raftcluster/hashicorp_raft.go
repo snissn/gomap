@@ -54,8 +54,9 @@ type HashicorpRaftProviderOptions struct {
 	ApplyFailureHandler func(error)
 }
 
-// HashicorpRaftProvider implements AdmissionProvider and CommitSource on top
-// of github.com/hashicorp/raft for one TreeDB Raft group.
+// HashicorpRaftProvider implements AdmissionProvider, CommitSource, and
+// ReadIndexProvider on top of github.com/hashicorp/raft for one TreeDB Raft
+// group.
 type HashicorpRaftProvider struct {
 	cluster      ResolvedConfig
 	raft         *hraft.Raft
@@ -181,6 +182,42 @@ func (p *HashicorpRaftProvider) ClusterAdmissionStatus(ctx context.Context) (Adm
 	return UnavailableAdmission(reason + " without known leader"), nil
 }
 
+func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexBarrier) (ReadIndexProof, error) {
+	if p == nil || p.raft == nil {
+		return ReadIndexProof{}, ErrInvalidHashicorpRaftProvider
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if target.NodeID != "" && target.NodeID != p.cluster.NodeID {
+		return ReadIndexProof{}, fmt.Errorf("%w: read-index target node %q does not match local node %q", ErrReadBarrierTargetMismatch, target.NodeID, p.cluster.NodeID)
+	}
+	if target.GroupID != "" && target.GroupID != p.cluster.GroupID {
+		return ReadIndexProof{}, fmt.Errorf("%w: read-index target group %q does not match local group %q", ErrReadBarrierTargetMismatch, target.GroupID, p.cluster.GroupID)
+	}
+	if err := ctx.Err(); err != nil {
+		return ReadIndexProof{}, err
+	}
+	if state := p.raft.State(); state != hraft.Leader {
+		return ReadIndexProof{}, p.hashicorpReadIndexNotLeader(state)
+	}
+	if err := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader()); err != nil {
+		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
+	}
+	proof := ReadIndexProof{
+		NodeID:       p.cluster.NodeID,
+		GroupID:      p.cluster.GroupID,
+		Term:         p.raft.CurrentTerm(),
+		Index:        p.raft.CommitIndex(),
+		HasQuorum:    true,
+		EvidenceKind: ReadIndexEvidenceProduction,
+	}
+	if err := target.Check(proof); err != nil {
+		return ReadIndexProof{}, err
+	}
+	return proof, nil
+}
+
 func (p *HashicorpRaftProvider) CommitCommandEntryV1(ctx context.Context, req CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
 	if p == nil || p.raft == nil {
 		return CommitCommandEntryV1Result{}, ErrInvalidHashicorpRaftProvider
@@ -238,6 +275,19 @@ func (p *HashicorpRaftProvider) CommitCommandEntryV1(ctx context.Context, req Co
 			ProductionConsensus: true,
 		},
 	}, nil
+}
+
+func (p *HashicorpRaftProvider) hashicorpReadIndexNotLeader(state hraft.RaftState) error {
+	reason := "read-index requires leader; hashicorp raft state " + state.String()
+	if p != nil && p.raft != nil {
+		if _, leaderID := p.raft.LeaderWithID(); leaderID != "" {
+			reason += "; leader_hint=" + string(leaderID)
+		}
+	}
+	if state == hraft.Shutdown {
+		return errors.Join(ErrHashicorpRaftUnavailable, fmt.Errorf("%s", reason))
+	}
+	return errors.Join(ErrNotLeader, fmt.Errorf("%s", reason))
 }
 
 func validateHashicorpRaftApplier(applier CommittedCommandApplierV1) error {
@@ -377,6 +427,29 @@ func waitHashicorpRaftFuture(ctx context.Context, future hraft.Future) error {
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (p *HashicorpRaftProvider) mapHashicorpRaftReadIndexError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return err
+	case errors.Is(err, hraft.ErrNotLeader),
+		errors.Is(err, hraft.ErrLeadershipLost),
+		errors.Is(err, hraft.ErrLeadershipTransferInProgress):
+		state := hraft.Shutdown
+		if p != nil && p.raft != nil {
+			state = p.raft.State()
+		}
+		return errors.Join(p.hashicorpReadIndexNotLeader(state), err)
+	case errors.Is(err, hraft.ErrAbortedByRestore),
+		errors.Is(err, hraft.ErrRaftShutdown),
+		errors.Is(err, hraft.ErrEnqueueTimeout):
+		return errors.Join(ErrHashicorpRaftUnavailable, err)
+	default:
+		return errors.Join(ErrHashicorpRaftUnavailable, err)
 	}
 }
 

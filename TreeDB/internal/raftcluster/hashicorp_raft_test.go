@@ -76,6 +76,120 @@ func TestHashicorpRaftProviderThreeNodeLeaderSubmitAppliesFollowers(t *testing.T
 	}
 }
 
+func TestHashicorpRaftProviderReadIndexReturnsProductionProofForLeader(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := leader.submitter.SubmitCommandEntryV1(ctx, testClusterCreateCollectionEntry(t, 7), raftentry.RequestMetadataV1{
+		RequestID: 703,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		t.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	cluster.waitApplied(t, result.CommittedEntry.EntryID())
+
+	target := ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"}
+	proof, err := leader.provider.ReadIndex(ctx, target)
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if proof.NodeID != leader.id ||
+		proof.GroupID != "group-a" ||
+		proof.EvidenceKind != ReadIndexEvidenceProduction ||
+		!proof.HasQuorum ||
+		proof.Term == 0 ||
+		proof.Index < result.CommittedEntry.Index {
+		t.Fatalf("proof=%+v committed=%+v", proof, result.CommittedEntry)
+	}
+	if err := target.Check(proof); err != nil {
+		t.Fatalf("target.Check: %v", err)
+	}
+	progress, err := leader.fsm.WaitAppliedIndex(ctx, proof.AppliedIndexBarrier())
+	if err != nil {
+		t.Fatalf("WaitAppliedIndex(%+v): %v progress=%+v", proof.AppliedIndexBarrier(), err, progress)
+	}
+	if progress.NodeID != leader.id || progress.GroupID != "group-a" || progress.Index < proof.Index || !progress.HasApplied {
+		t.Fatalf("progress=%+v proof=%+v", progress, proof)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsFollowerStrongRead(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+	follower := cluster.firstFollower(t, leader.id)
+	cluster.waitFollowerHint(t, follower, leader.id)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := follower.provider.ReadIndex(ctx, ReadIndexBarrier{NodeID: follower.id, GroupID: "group-a"})
+	if !errors.Is(err, ErrNotLeader) {
+		t.Fatalf("follower ReadIndex err=%v want ErrNotLeader", err)
+	}
+	if !strings.Contains(err.Error(), "leader_hint="+string(leader.id)) {
+		t.Fatalf("follower ReadIndex err=%v missing leader hint %q", err, leader.id)
+	}
+}
+
+func TestHashicorpRaftProviderReadIndexRejectsTargetMismatch(t *testing.T) {
+	cluster := newHashicorpRaftDBCluster(t)
+	leader := cluster.waitForLeader(t)
+
+	tests := []struct {
+		name   string
+		target ReadIndexBarrier
+	}{
+		{name: "node", target: ReadIndexBarrier{NodeID: "node-z", GroupID: "group-a"}},
+		{name: "group", target: ReadIndexBarrier{NodeID: leader.id, GroupID: "group-b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := leader.provider.ReadIndex(context.Background(), tt.target)
+			if !errors.Is(err, ErrReadBarrierTargetMismatch) {
+				t.Fatalf("ReadIndex err=%v want ErrReadBarrierTargetMismatch", err)
+			}
+		})
+	}
+}
+
+func BenchmarkHashicorpRaftProviderReadIndex(b *testing.B) {
+	cluster := newHashicorpRaftDBCluster(b)
+	leader := cluster.waitForLeader(b)
+	ctx := context.Background()
+	result, err := leader.submitter.SubmitCommandEntryV1(ctx, testClusterCreateCollectionEntry(b, 7), raftentry.RequestMetadataV1{
+		RequestID: 704,
+		AckPolicy: iwire.AckRaftCommitted,
+	})
+	if err != nil {
+		b.Fatalf("SubmitCommandEntryV1: %v", err)
+	}
+	cluster.waitApplied(b, result.CommittedEntry.EntryID())
+
+	target := ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"}
+	proof, err := leader.provider.ReadIndex(ctx, target)
+	if err != nil {
+		b.Fatalf("warm ReadIndex: %v", err)
+	}
+	if proof.Index < result.CommittedEntry.Index {
+		b.Fatalf("warm proof=%+v committed=%+v", proof, result.CommittedEntry)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		proof, err := leader.provider.ReadIndex(ctx, target)
+		if err != nil {
+			b.Fatalf("ReadIndex: %v", err)
+		}
+		if proof.Index < result.CommittedEntry.Index {
+			b.Fatalf("proof=%+v committed=%+v", proof, result.CommittedEntry)
+		}
+	}
+	b.ReportMetric(float64(b.N), "read_indexes_total")
+}
+
 func TestHashicorpRaftProviderLocalRecoverabilityFailureDoesNotReportCommittedRecoverable(t *testing.T) {
 	applyErr := errors.New("local command WAL sync failed")
 	failingApplier := CommittedCommandApplierFunc(func(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
@@ -239,11 +353,11 @@ type hashicorpRaftTestNode struct {
 	transport *hraft.InmemTransport
 }
 
-func newHashicorpRaftDBCluster(t *testing.T) *hashicorpRaftTestCluster {
-	t.Helper()
-	cluster := newHashicorpRaftCluster(t, func(t *testing.T, cfg Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
-		t.Helper()
-		db, fsm := openHashicorpRaftTestDBAndFSM(t, cfg)
+func newHashicorpRaftDBCluster(tb testing.TB) *hashicorpRaftTestCluster {
+	tb.Helper()
+	cluster := newHashicorpRaftCluster(tb, func(tb testing.TB, cfg Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
+		tb.Helper()
+		db, fsm := openHashicorpRaftTestDBAndFSM(tb, cfg)
 		return db, fsm, fsm
 	})
 	for _, node := range cluster.nodes {
@@ -256,24 +370,24 @@ func newHashicorpRaftDBCluster(t *testing.T) *hashicorpRaftTestCluster {
 			CatalogVersionProvider: staticCatalogVersion(7),
 		})
 		if err != nil {
-			t.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
+			tb.Fatalf("%s NewSingleGroupSubmitter: %v", node.id, err)
 		}
 		node.submitter = submitter
 	}
 	return cluster
 }
 
-func newHashicorpRaftProviderOnlyCluster(t *testing.T, applier CommittedCommandApplierV1) *hashicorpRaftTestCluster {
-	t.Helper()
-	return newHashicorpRaftCluster(t, func(t *testing.T, _ Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
-		t.Helper()
+func newHashicorpRaftProviderOnlyCluster(tb testing.TB, applier CommittedCommandApplierV1) *hashicorpRaftTestCluster {
+	tb.Helper()
+	return newHashicorpRaftCluster(tb, func(tb testing.TB, _ Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1) {
+		tb.Helper()
 		return nil, applier, nil
 	})
 }
 
-func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1)) *hashicorpRaftTestCluster {
-	t.Helper()
-	root := t.TempDir()
+func newHashicorpRaftCluster(tb testing.TB, nodeStores func(testing.TB, Config) (*backenddb.DB, CommittedCommandApplierV1, CommandEntryPreflightV1)) *hashicorpRaftTestCluster {
+	tb.Helper()
+	root := tb.TempDir()
 	peers := []Peer{
 		{ID: "node-a", Address: "node-a"},
 		{ID: "node-b", Address: "node-b"},
@@ -297,7 +411,7 @@ func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (
 			GroupID: "group-a",
 			Peers:   peers,
 		}
-		db, applier, _ := nodeStores(t, cfg)
+		db, applier, _ := nodeStores(tb, cfg)
 		var applyFailureHandler func(error)
 		if db == nil {
 			applyFailureHandler = func(error) {}
@@ -312,7 +426,7 @@ func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (
 			ApplyFailureHandler: applyFailureHandler,
 		})
 		if err != nil {
-			t.Fatalf("%s OpenHashicorpRaftProvider: %v", peer.ID, err)
+			tb.Fatalf("%s OpenHashicorpRaftProvider: %v", peer.ID, err)
 		}
 		node := &hashicorpRaftTestNode{
 			id:        peer.ID,
@@ -326,7 +440,7 @@ func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (
 		}
 		cluster.nodes[peer.ID] = node
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		for _, node := range cluster.nodes {
 			if node.provider != nil {
 				_ = node.provider.Close()
@@ -347,8 +461,8 @@ func newHashicorpRaftCluster(t *testing.T, nodeStores func(*testing.T, Config) (
 	return cluster
 }
 
-func openHashicorpRaftTestDBAndFSM(t *testing.T, cfg Config) (*backenddb.DB, *raftfsm.FSM) {
-	t.Helper()
+func openHashicorpRaftTestDBAndFSM(tb testing.TB, cfg Config) (*backenddb.DB, *raftfsm.FSM) {
+	tb.Helper()
 	db, err := backenddb.Open(backenddb.Options{
 		Dir:                          cfg.Dir,
 		CommandWAL:                   true,
@@ -357,7 +471,7 @@ func openHashicorpRaftTestDBAndFSM(t *testing.T, cfg Config) (*backenddb.DB, *ra
 		DisableBackgroundPrune:       true,
 	})
 	if err != nil {
-		t.Fatalf("%s Open DB: %v", cfg.NodeID, err)
+		tb.Fatalf("%s Open DB: %v", cfg.NodeID, err)
 	}
 	fsm, err := raftfsm.Open(raftfsm.Options{
 		DB:      db,
@@ -369,7 +483,7 @@ func openHashicorpRaftTestDBAndFSM(t *testing.T, cfg Config) (*backenddb.DB, *ra
 	})
 	if err != nil {
 		_ = db.Close()
-		t.Fatalf("%s Open FSM: %v", cfg.NodeID, err)
+		tb.Fatalf("%s Open FSM: %v", cfg.NodeID, err)
 	}
 	return db, fsm
 }
@@ -388,19 +502,19 @@ func hashicorpRaftFastTestConfig() *hraft.Config {
 	return conf
 }
 
-func (c *hashicorpRaftTestCluster) waitForLeader(t *testing.T) *hashicorpRaftTestNode {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTestNode {
+	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var leader *hashicorpRaftTestNode
 		for _, node := range c.nodes {
 			status, err := node.provider.ClusterAdmissionStatus(context.Background())
 			if err != nil {
-				t.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
+				tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
 			}
 			if status.Leader {
 				if leader != nil {
-					t.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
+					tb.Fatalf("multiple leaders: %s and %s", leader.id, node.id)
 				}
 				leader = node
 			}
@@ -410,39 +524,39 @@ func (c *hashicorpRaftTestCluster) waitForLeader(t *testing.T) *hashicorpRaftTes
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for leader; states=%s", c.admissionSummary())
+	tb.Fatalf("timed out waiting for leader; states=%s", c.admissionSummary())
 	return nil
 }
 
-func (c *hashicorpRaftTestCluster) firstFollower(t *testing.T, leaderID NodeID) *hashicorpRaftTestNode {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) firstFollower(tb testing.TB, leaderID NodeID) *hashicorpRaftTestNode {
+	tb.Helper()
 	for _, node := range c.nodes {
 		if node.id != leaderID {
 			return node
 		}
 	}
-	t.Fatalf("no follower found for leader %q", leaderID)
+	tb.Fatalf("no follower found for leader %q", leaderID)
 	return nil
 }
 
-func (c *hashicorpRaftTestCluster) waitFollowerHint(t *testing.T, node *hashicorpRaftTestNode, leaderID NodeID) {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) waitFollowerHint(tb testing.TB, node *hashicorpRaftTestNode, leaderID NodeID) {
+	tb.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		status, err := node.provider.ClusterAdmissionStatus(context.Background())
 		if err != nil {
-			t.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
+			tb.Fatalf("%s ClusterAdmissionStatus: %v", node.id, err)
 		}
 		if !status.Leader && status.LeaderHint == leaderID {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("%s did not report leader hint %q; states=%s", node.id, leaderID, c.admissionSummary())
+	tb.Fatalf("%s did not report leader hint %q; states=%s", node.id, leaderID, c.admissionSummary())
 }
 
-func (c *hashicorpRaftTestCluster) waitApplied(t *testing.T, id raftentry.ApplyEntryID) {
-	t.Helper()
+func (c *hashicorpRaftTestCluster) waitApplied(tb testing.TB, id raftentry.ApplyEntryID) {
+	tb.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		allApplied := true
@@ -463,7 +577,7 @@ func (c *hashicorpRaftTestCluster) waitApplied(t *testing.T, id raftentry.ApplyE
 		got, ok := node.fsm.LastApplied()
 		states = append(states, fmt.Sprintf("%s=%d/%d ok=%t", node.id, got.Term, got.Index, ok))
 	}
-	t.Fatalf("timed out waiting for apply %d/%d; applied=%s", id.Term, id.Index, strings.Join(states, ", "))
+	tb.Fatalf("timed out waiting for apply %d/%d; applied=%s", id.Term, id.Index, strings.Join(states, ", "))
 }
 
 func (c *hashicorpRaftTestCluster) admissionSummary() string {

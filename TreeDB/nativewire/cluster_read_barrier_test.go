@@ -315,6 +315,74 @@ func TestAppliedIndexReadCoordinatorLinearizableRejectsHarnessReadIndexEvidence(
 	}
 }
 
+func TestAppliedIndexReadCoordinatorLinearizableRejectsFollowerReadIndexWithoutWaiting(t *testing.T) {
+	readIndex := &fakeReadIndexProvider{err: raftcluster.ErrNotLeader}
+	waiter := &fakeAppliedIndexWaiter{
+		progress: raftcluster.AppliedProgress{
+			NodeID:     "node-b",
+			GroupID:    "group-a",
+			Term:       7,
+			Index:      44,
+			HasApplied: true,
+		},
+	}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		ClusterReadCoordinator: AppliedIndexReadCoordinator{
+			Waiter:            waiter,
+			ReadIndexTarget:   raftcluster.ReadIndexBarrier{NodeID: "node-b", GroupID: "group-a"},
+			ReadIndexProvider: readIndex,
+		},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	_, err := client.GetManyWithOptions(ctx, "users", [][]byte{[]byte("u1")}, ReadOptions{ConsistencyPolicy: ConsistencyLinearizable})
+	if !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
+		t.Fatalf("GetManyWithOptions err=%v want consistency_unavailable", err)
+	}
+	if len(readIndex.calls) != 1 {
+		t.Fatalf("read index calls=%d want 1", len(readIndex.calls))
+	}
+	if len(waiter.calls) != 0 {
+		t.Fatalf("waiter calls=%d want none after follower read-index rejection", len(waiter.calls))
+	}
+}
+
+func TestAppliedIndexReadCoordinatorLocalStaleReadIsLabeledWithoutReadIndex(t *testing.T) {
+	readIndex := &fakeReadIndexProvider{err: raftcluster.ErrNotLeader}
+	waiter := &fakeAppliedIndexWaiter{}
+	client, mgr, _ := serveCollectionPipeWithOptions(t, ServerOptions{
+		ClusterReadCoordinator: AppliedIndexReadCoordinator{
+			Waiter:            waiter,
+			ReadIndexProvider: readIndex,
+		},
+	})
+	seedReadCollection(t, mgr)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+
+	result, err := client.GetManyWithOptions(ctx, "users", [][]byte{[]byte("u1")}, ReadOptions{ConsistencyPolicy: ConsistencyLocalStale})
+	if err != nil {
+		t.Fatalf("GetManyWithOptions local stale: %v", err)
+	}
+	if !result.ReadMeta.Valid || result.ReadMeta.ActualConsistency != ConsistencyLocalStale {
+		t.Fatalf("read meta=%+v want local-stale", result.ReadMeta)
+	}
+	if result.ReadMeta.ServingNode != "" || result.ReadMeta.LeaderNode != "" || result.ReadMeta.HasAppliedIndex {
+		t.Fatalf("local stale read meta unexpectedly reported strong-read fields: %+v", result.ReadMeta)
+	}
+	if len(readIndex.calls) != 0 || len(waiter.calls) != 0 {
+		t.Fatalf("read index calls=%d waiter calls=%d want none for local-stale", len(readIndex.calls), len(waiter.calls))
+	}
+}
+
 func TestAppliedIndexReadCoordinatorLinearizableFailsClosedWithoutReadIndexProvider(t *testing.T) {
 	waiter := &fakeAppliedIndexWaiter{
 		progress: raftcluster.AppliedProgress{
