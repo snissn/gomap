@@ -208,40 +208,51 @@ func (f *FSM) closeForRaftSnapshotRestoreV1() error {
 		errs = append(errs, f.db.Close())
 		f.db = nil
 	}
+	if f.sideDBs != nil {
+		errs = append(errs, f.sideDBs())
+		f.sideDBs = nil
+	}
 	f.ownsDB = false
 	return errors.Join(errs...)
 }
 
 func (f *FSM) reopenAfterRaftSnapshotRestoreV1() error {
 	opts := f.restoreDB
-	opts.Dir = raftcluster.MainDBDir(f.cluster.Dir)
+	mainDir := raftcluster.MainDBDir(f.cluster.Dir)
+	opts.Dir = mainDir
 	opts.CommandWAL = true
 	opts.CommandWALStatsScan = true
 	if opts.CommandWALSegmentTargetBytes <= 0 {
 		opts.CommandWALSegmentTargetBytes = 1 << 20
 	}
 	opts.DisableBackgroundPrune = true
+	sideDBs, err := wireRaftSnapshotSideStoreLookupsV1(snapshotSideStoreRootV1(mainDir), &opts)
+	if err != nil {
+		return err
+	}
 	db, err := backenddb.Open(opts)
 	if err != nil {
+		_ = sideDBs()
 		return err
 	}
 	progress, err := raftapply.OpenDurableApplyProgressStore(f.metadataDir, f.storeOptions)
 	if err != nil {
-		_ = db.Close()
+		_ = errors.Join(db.Close(), sideDBs())
 		return err
 	}
 	results, err := raftapply.OpenDurableApplyResultStore(f.metadataDir, f.storeOptions)
 	if err != nil {
-		_ = errors.Join(progress.Close(), db.Close())
+		_ = errors.Join(progress.Close(), db.Close(), sideDBs())
 		return err
 	}
 	if err := validateProgressCoverage(db, progress, results); err != nil {
-		_ = errors.Join(progress.Close(), results.Close(), db.Close())
+		_ = errors.Join(progress.Close(), results.Close(), db.Close(), sideDBs())
 		return err
 	}
 	f.db = db
 	f.progress = progress
 	f.results = results
+	f.sideDBs = sideDBs
 	f.ownsDB = true
 	return nil
 }

@@ -3,6 +3,7 @@ package raftfsm
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,10 +12,13 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/raftapply"
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
+	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	"github.com/snissn/gomap/TreeDB/template"
 )
 
 func TestRaftSnapshotV1InstallEmptyTargetPreservesDigestAndValueLogPointers(t *testing.T) {
@@ -278,6 +282,80 @@ func TestRaftSnapshotV1InstallReopensRestoredMainDBForRootLayout(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(targetDir, "index.db")); err != nil {
 		t.Fatalf("restored main DB index missing: %v", err)
+	}
+}
+
+func TestRaftSnapshotV1RestoreWiresRestoredSideStoreLookups(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	sideRoot := snapshotSideStoreRootV1(mainDir)
+	ctx := context.Background()
+
+	dictBackend, err := backenddb.Open(backenddb.Options{
+		Dir:                    filepath.Join(sideRoot, "dictdb"),
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open dictdb: %v", err)
+	}
+	dictStore := dictdb.New(dictBackend)
+	dictBytes := []byte("restored-dict")
+	dictID, err := dictStore.PutDictBytes(ctx, dictBytes)
+	if err != nil {
+		t.Fatalf("PutDictBytes: %v", err)
+	}
+	if err := dictBackend.Close(); err != nil {
+		t.Fatalf("Close dictdb: %v", err)
+	}
+
+	templateBackend, err := backenddb.Open(backenddb.Options{
+		Dir:                    filepath.Join(sideRoot, "templatedb"),
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open templatedb: %v", err)
+	}
+	templateStore := templatedb.New(raftSnapshotTemplateBackendKVV1{db: templateBackend}, templatedb.Config{})
+	templateBytes := []byte("restored-template")
+	templateID, err := templateStore.PutTemplateDef(ctx, templateBytes, nil)
+	if err != nil {
+		t.Fatalf("PutTemplateDef: %v", err)
+	}
+	if err := templateBackend.Close(); err != nil {
+		t.Fatalf("Close templatedb: %v", err)
+	}
+
+	opts := backenddb.Options{
+		ReadOnly: true,
+		ValueLog: backenddb.ValueLogOptions{
+			TemplateMode: template.TemplateOff,
+		},
+	}
+	cleanup, err := wireRaftSnapshotSideStoreLookupsV1(sideRoot, &opts)
+	if err != nil {
+		t.Fatalf("wireRaftSnapshotSideStoreLookupsV1: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	if opts.ValueLog.DictLookup == nil {
+		t.Fatal("DictLookup was not wired from restored side store")
+	}
+	gotDict, err := opts.ValueLog.DictLookup(dictID)
+	if err != nil {
+		t.Fatalf("DictLookup(%d): %v", dictID, err)
+	}
+	if !bytes.Equal(gotDict, dictBytes) {
+		t.Fatalf("DictLookup(%d)=%q want %q", dictID, gotDict, dictBytes)
+	}
+	if opts.ValueLog.TemplateLookup == nil {
+		t.Fatal("TemplateLookup was not wired from restored side store")
+	}
+	gotTemplate, err := opts.ValueLog.TemplateLookup(templateID)
+	if err != nil {
+		t.Fatalf("TemplateLookup(%d): %v", templateID, err)
+	}
+	if !bytes.Equal(gotTemplate, templateBytes) {
+		t.Fatalf("TemplateLookup(%d)=%q want %q", templateID, gotTemplate, templateBytes)
 	}
 }
 

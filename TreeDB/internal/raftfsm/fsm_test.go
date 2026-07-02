@@ -86,6 +86,24 @@ func TestSingleGroupApplyLoopCloseReopenDurableProgressResult(t *testing.T) {
 	assertLastApplied(t, reopenedFSM, raftentry.ApplyEntryID{Term: 2, Index: 2})
 }
 
+func TestSingleGroupFSMLogicalDigestRejectsClosedFSM(t *testing.T) {
+	root := t.TempDir()
+	dbDir := filepath.Join(root, "db")
+
+	db := openFSMTestDB(t, dbDir)
+	defer func() { _ = db.Close() }()
+	fsm := openFSMForTest(t, db, dbDir)
+	if err := fsm.Close(); err != nil {
+		t.Fatalf("Close FSM: %v", err)
+	}
+
+	if _, err := fsm.LogicalDigestV1(raftapply.LogicalDigestOptionsV1{}); err == nil {
+		t.Fatal("LogicalDigestV1 on closed FSM succeeded, want unsafe durability error")
+	} else if code, ok := ErrorCodeOf(err); !ok || code != raftentry.ErrorUnsafeDurabilityModeV1 {
+		t.Fatalf("ErrorCodeOf(LogicalDigestV1 closed)=(%s,%t), want %s err=%v", code, ok, raftentry.ErrorUnsafeDurabilityModeV1, err)
+	}
+}
+
 func TestSingleGroupApplyLoopRejectsProgressAheadOfLocalCoverage(t *testing.T) {
 	root := t.TempDir()
 	dbDir := filepath.Join(root, "db")

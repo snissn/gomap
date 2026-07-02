@@ -72,6 +72,7 @@ type FSM struct {
 
 	progress *raftapply.DurableApplyProgressStore
 	results  *raftapply.DurableApplyResultStore
+	sideDBs  func() error
 	ownsDB   bool
 	closed   bool
 }
@@ -166,6 +167,10 @@ func (f *FSM) Close() error {
 	}
 	if f.ownsDB && f.db != nil {
 		errs = append(errs, f.db.Close())
+	}
+	if f.sideDBs != nil {
+		errs = append(errs, f.sideDBs())
+		f.sideDBs = nil
 	}
 	return errors.Join(errs...)
 }
@@ -293,6 +298,9 @@ func (f *FSM) LogicalDigestV1(opts raftapply.LogicalDigestOptionsV1) (raftapply.
 }
 
 func (f *FSM) logicalDigestV1Locked(opts raftapply.LogicalDigestOptionsV1) (raftapply.LogicalDigestV1, error) {
+	if f != nil && f.closed {
+		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM is closed")
+	}
 	if f == nil || f.db == nil {
 		return raftapply.LogicalDigestV1{}, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
 	}
