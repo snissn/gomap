@@ -3,6 +3,7 @@ package raftcluster
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -141,6 +142,30 @@ func TestHashicorpRaftReadIndexGapMissingLogFailsClosed(t *testing.T) {
 	_, _, err := provider.readIndexGapHasNoCommands(1, 1)
 	if !errors.Is(err, ErrReadBarrierNotSatisfied) {
 		t.Fatalf("readIndexGapHasNoCommands err=%v want ErrReadBarrierNotSatisfied", err)
+	}
+}
+
+func TestHashicorpRaftReadIndexGapMaxIndexNoOverflow(t *testing.T) {
+	store := hraft.NewInmemStore()
+	lastIndex := uint64(math.MaxUint64)
+	if err := store.StoreLog(&hraft.Log{Index: lastIndex, Term: 1, Type: hraft.LogNoop}); err != nil {
+		t.Fatalf("StoreLog: %v", err)
+	}
+	counting := &countingReadIndexLogStore{LogStore: store}
+	provider := &HashicorpRaftProvider{logStore: counting}
+
+	noCommands, firstCmd, err := provider.readIndexGapHasNoCommands(lastIndex, lastIndex)
+	if err != nil {
+		t.Fatalf("readIndexGapHasNoCommands: %v", err)
+	}
+	if !noCommands {
+		t.Fatalf("readIndexGapHasNoCommands=false, want true")
+	}
+	if firstCmd != 0 {
+		t.Fatalf("readIndexGapHasNoCommands firstCmd=%d, want 0", firstCmd)
+	}
+	if counting.getLogCount != 1 {
+		t.Fatalf("GetLog count=%d, want 1", counting.getLogCount)
 	}
 }
 

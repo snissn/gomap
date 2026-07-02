@@ -346,6 +346,77 @@ func TestHashicorpRaftProviderReadIndexWaitsForTreeDBCommandProgressInGap(t *tes
 	}
 }
 
+func TestHashicorpRaftProviderReadIndexWaitsForInitialAppliedProgress(t *testing.T) {
+	applier := &progressReportingApplier{
+		progress: AppliedProgress{
+			NodeID:  "node-a",
+			GroupID: "group-a",
+		},
+	}
+	cluster := newHashicorpRaftProviderOnlyCluster(t, applier)
+	leader := cluster.waitForLeader(t)
+	applier.setProgress(AppliedProgress{
+		NodeID:  leader.id,
+		GroupID: "group-a",
+	})
+
+	commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer commitCancel()
+	result, err := leader.provider.CommitCommandEntryV1(commitCtx, CommitCommandEntryV1Request{
+		GroupID:                  "group-a",
+		NodeID:                   leader.id,
+		EntryBytes:               testClusterCreateCollectionEntry(t, 7),
+		CurrentCatalogVersion:    7,
+		HasCurrentCatalogVersion: true,
+		SyncLocalCommandWAL:      true,
+	})
+	if err != nil {
+		t.Fatalf("CommitCommandEntryV1: %v", err)
+	}
+	if leader.barrierLogStore == nil {
+		t.Fatalf("%s has no barrier-counting log store", leader.id)
+	}
+	before := leader.barrierLogStore.barrierLogCount()
+
+	var mu sync.Mutex
+	progressReports := 0
+	applier.setBeforeReport(func() {
+		mu.Lock()
+		progressReports++
+		current := progressReports
+		mu.Unlock()
+		if current < 2 {
+			return
+		}
+		applier.setProgress(AppliedProgress{
+			NodeID:     leader.id,
+			GroupID:    "group-a",
+			Term:       result.Entry.Term,
+			Index:      result.Entry.Index,
+			HasApplied: true,
+		})
+	})
+
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	proof, err := leader.provider.ReadIndex(readCtx, ReadIndexBarrier{NodeID: leader.id, GroupID: "group-a"})
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	if proof.Index != result.Entry.Index {
+		t.Fatalf("proof index=%d want first applied command index %d", proof.Index, result.Entry.Index)
+	}
+	mu.Lock()
+	gotReports := progressReports
+	mu.Unlock()
+	if gotReports < 2 {
+		t.Fatalf("AppliedProgress reports=%d want at least 2", gotReports)
+	}
+	if after := leader.barrierLogStore.barrierLogCount(); after != before {
+		t.Fatalf("ReadIndex appended %d barrier logs while waiting for initial progress", after-before)
+	}
+}
+
 func TestHashicorpRaftProviderReadIndexRejectsLeadershipLostBeforeProof(t *testing.T) {
 	applier := &progressReportingApplier{
 		progress: AppliedProgress{
