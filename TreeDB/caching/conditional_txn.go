@@ -29,6 +29,7 @@ const (
 type ConditionalTxn struct {
 	db       *DB
 	batch    *Batch
+	snap     *Snapshot
 	id       uint64
 	startSeq uint64
 
@@ -74,6 +75,17 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 // InitConditionalTxn initializes tx as a cached conditional transaction.
 // Callers must pass zero-value or closed transaction storage.
 func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
+	return db.initConditionalTxn(tx, false)
+}
+
+// InitConditionalTxnWithSnapshot initializes tx and pins the opening snapshot.
+// Point reads use that snapshot, and Snapshot returns it for caller-owned range
+// scans. The snapshot is owned by the transaction and closed by Commit or Close.
+func (db *DB) InitConditionalTxnWithSnapshot(tx *ConditionalTxn) error {
+	return db.initConditionalTxn(tx, true)
+}
+
+func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if tx == nil {
 		return backenddb.ErrConditionalTxnClosed
 	}
@@ -94,9 +106,19 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 	start := db.conditionalSeq.Load()
 	db.conditionalSetTxnStart(id, start)
 
+	var snap *Snapshot
+	if withSnapshot {
+		snap = db.AcquireSnapshot()
+		if snap == nil {
+			db.conditionalUnregisterTxn(id)
+			return backenddb.ErrClosed
+		}
+	}
+
 	*tx = ConditionalTxn{
 		db:       db,
 		batch:    db.NewBatch(),
+		snap:     snap,
 		id:       id,
 		startSeq: start,
 	}
@@ -104,6 +126,16 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 	tx.keyArena = tx.inlineKeys[:0]
 	db.conditionalTxnStarted.Add(1)
 	return nil
+}
+
+// Snapshot returns the transaction's pinned opening snapshot when this
+// transaction was initialized with InitConditionalTxnWithSnapshot. The
+// transaction owns the snapshot and closes it on Commit or Close.
+func (tx *ConditionalTxn) Snapshot() *Snapshot {
+	if tx == nil || tx.closed {
+		return nil
+	}
+	return tx.snap
 }
 
 // ReserveReadSet reserves read-precondition capacity for high-fanout
@@ -170,12 +202,12 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 		}
 		return out, revision, nil
 	}
-	out, revision, err := tx.db.GetVersionedAppend(key, dst)
+	out, revision, err := tx.getCommittedVersionedAppend(key, dst)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		if recErr := tx.recordRead(key, revision, false); recErr != nil {
 			return dst, revision, recErr
 		}
-		if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+		if tx.snap == nil && tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
 			return dst, revision, backenddb.ErrConcurrentModification
 		}
 		return dst, revision, err
@@ -186,10 +218,17 @@ func (tx *ConditionalTxn) GetVersionedAppend(key, dst []byte) ([]byte, page.Entr
 	if recErr := tx.recordRead(key, revision, true); recErr != nil {
 		return dst, revision, recErr
 	}
-	if tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
+	if tx.snap == nil && tx.db.conditionalReadKeyChangedSince(tx.startSeq, key) {
 		return dst, revision, backenddb.ErrConcurrentModification
 	}
 	return out, revision, nil
+}
+
+func (tx *ConditionalTxn) getCommittedVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
+	if tx.snap != nil {
+		return tx.snap.GetVersionedAppend(key, dst)
+	}
+	return tx.db.GetVersionedAppend(key, dst)
 }
 
 func (tx *ConditionalTxn) stagedReadAppend(key, dst []byte) ([]byte, page.EntryRevision, bool, bool, error) {
@@ -378,6 +417,12 @@ func (tx *ConditionalTxn) finish() error {
 	id := tx.id
 	tx.id = 0
 	var err error
+	if tx.snap != nil {
+		if closeErr := tx.snap.Close(); err == nil {
+			err = closeErr
+		}
+		tx.snap = nil
+	}
 	if tx.batch != nil {
 		if closeErr := tx.batch.Close(); err == nil {
 			err = closeErr

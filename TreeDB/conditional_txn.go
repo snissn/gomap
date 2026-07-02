@@ -2,6 +2,23 @@ package treedb
 
 import "github.com/snissn/gomap/TreeDB/page"
 
+// Snapshot returns the transaction's pinned opening snapshot when available.
+// NewConditionalTxnWithSnapshot and InitConditionalTxnWithSnapshot always
+// return a transaction with a snapshot. The transaction owns the snapshot and
+// closes it on Commit, CommitSync, or Close.
+func (tx *ConditionalTxn) Snapshot() Snapshot {
+	if tx == nil {
+		return nil
+	}
+	if tx.cachedActive {
+		return tx.cached.Snapshot()
+	}
+	if tx.backend != nil {
+		return tx.backend.Snapshot()
+	}
+	return nil
+}
+
 // ReserveReadSet reserves read-precondition capacity for high-fanout
 // transactions. It is optional and does not change transaction semantics.
 func (tx *ConditionalTxn) ReserveReadSet(n int) {

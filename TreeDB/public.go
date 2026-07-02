@@ -1720,6 +1720,17 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 // InitConditionalTxn initializes tx as a native conditional transaction.
 // Callers must pass zero-value or closed transaction storage.
 func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
+	return db.initConditionalTxn(tx, false)
+}
+
+// InitConditionalTxnWithSnapshot initializes tx as a native conditional
+// transaction and exposes its pinned opening snapshot through tx.Snapshot.
+// Callers must pass zero-value or closed transaction storage.
+func (db *DB) InitConditionalTxnWithSnapshot(tx *ConditionalTxn) error {
+	return db.initConditionalTxn(tx, true)
+}
+
+func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if tx == nil || tx.cachedActive || tx.backend != nil {
 		return ErrConditionalTxnClosed
 	}
@@ -1732,7 +1743,12 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 		if db.commandWALCached {
 			return ErrConditionalTxnUnsupported
 		}
-		if err := db.cached.InitConditionalTxn(&tx.cached); err != nil {
+		if withSnapshot {
+			err = db.cached.InitConditionalTxnWithSnapshot(&tx.cached)
+		} else {
+			err = db.cached.InitConditionalTxn(&tx.cached)
+		}
+		if err != nil {
 			return err
 		}
 		tx.backend = nil
@@ -1754,6 +1770,17 @@ func (db *DB) InitConditionalTxn(tx *ConditionalTxn) error {
 func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 	tx := &ConditionalTxn{}
 	if err := db.InitConditionalTxn(tx); err != nil {
+		return nil, err
+	}
+	return tx, nil
+}
+
+// NewConditionalTxnWithSnapshot opens a native conditional transaction and
+// exposes its pinned opening snapshot through tx.Snapshot. The transaction owns
+// that snapshot and closes it on Commit, CommitSync, or Close.
+func (db *DB) NewConditionalTxnWithSnapshot() (*ConditionalTxn, error) {
+	tx := &ConditionalTxn{}
+	if err := db.InitConditionalTxnWithSnapshot(tx); err != nil {
 		return nil, err
 	}
 	return tx, nil

@@ -1,6 +1,8 @@
 package treedb
 
 import (
+	"bytes"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -83,6 +85,58 @@ func TestSnapshotIterateBackendFastPathUsesPinnedView(t *testing.T) {
 	got := collectSnapshotIteratePairs(t, snap, false)
 	if want := []string{"snap/a=1", "snap/b=2"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("snapshot Iterate=%v want %v", got, want)
+	}
+}
+
+func TestConditionalTxnSnapshotUsesPinnedPointAndRangeView(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.Set([]byte("snap/a"), []byte("1")); err != nil {
+		t.Fatalf("set a: %v", err)
+	}
+	if err := d.Set([]byte("snap/b"), []byte("2")); err != nil {
+		t.Fatalf("set b: %v", err)
+	}
+
+	tx, err := d.NewConditionalTxnWithSnapshot()
+	if err != nil {
+		t.Fatalf("NewConditionalTxnWithSnapshot: %v", err)
+	}
+	defer tx.Close()
+	snap := tx.Snapshot()
+	if snap == nil {
+		t.Fatal("tx.Snapshot returned nil")
+	}
+
+	if err := d.Delete([]byte("snap/a")); err != nil {
+		t.Fatalf("outside delete a: %v", err)
+	}
+	if err := d.Set([]byte("snap/c"), []byte("3")); err != nil {
+		t.Fatalf("outside set c: %v", err)
+	}
+
+	gotValue, _, err := tx.GetVersionedAppend([]byte("snap/a"), nil)
+	if err != nil {
+		t.Fatalf("tx.GetVersionedAppend after outside delete: %v", err)
+	}
+	if !bytes.Equal(gotValue, []byte("1")) {
+		t.Fatalf("tx.GetVersionedAppend=%q, want 1", gotValue)
+	}
+
+	got := collectSnapshotIteratePairs(t, snap, false)
+	if want := []string{"snap/a=1", "snap/b=2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tx snapshot Iterate=%v want %v", got, want)
+	}
+
+	if err := tx.Commit(); !errors.Is(err, ErrConcurrentModification) {
+		t.Fatalf("tx.Commit error=%v, want ErrConcurrentModification", err)
+	}
+	if tx.Snapshot() != nil {
+		t.Fatal("tx.Snapshot after Commit returned non-nil")
 	}
 }
 

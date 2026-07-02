@@ -117,6 +117,15 @@ func (db *DB) NewConditionalTxn() (*ConditionalTxn, error) {
 	return tx, nil
 }
 
+// Snapshot returns the transaction's pinned opening snapshot. The transaction
+// owns the snapshot and closes it on Commit, CommitSync, or Close.
+func (tx *ConditionalTxn) Snapshot() *Snapshot {
+	if tx == nil || tx.closed {
+		return nil
+	}
+	return tx.snap
+}
+
 // ReserveReadSet reserves read-precondition capacity for high-fanout
 // transactions. It is optional and does not change transaction semantics.
 func (tx *ConditionalTxn) ReserveReadSet(n int) {
