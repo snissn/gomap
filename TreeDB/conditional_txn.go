@@ -41,6 +41,13 @@ type conditionalTxnSnapshot struct {
 	tx *ConditionalTxn
 }
 
+// Close is a no-op. The transaction owns the underlying snapshot and closes it
+// on Commit, CommitSync, or Close; callers can safely defer this method without
+// releasing the transaction-owned snapshot prematurely.
+func (s conditionalTxnSnapshot) Close() error {
+	return nil
+}
+
 func (s conditionalTxnSnapshot) Get(key []byte) ([]byte, error) {
 	value, _, err := s.GetVersioned(key)
 	return value, err
@@ -73,7 +80,7 @@ func (s conditionalTxnSnapshot) GetVersionedAppend(key, dst []byte) ([]byte, Ent
 
 func (s conditionalTxnSnapshot) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
 	if fn == nil {
-		return ErrConditionalTxnUnsupported
+		return errors.New("treedb: GetManyView nil callback")
 	}
 	for i, key := range keys {
 		value, _, err := s.tx.GetVersionedAppend(key, nil)
