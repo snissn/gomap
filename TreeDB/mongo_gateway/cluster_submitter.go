@@ -932,7 +932,7 @@ func parseClusterWriteConcernW(value bson.RawValue) (iwire.AckPolicy, error) {
 	return 0, errors.New("Mongo command field \"writeConcern.w\" must be integer 1 or string \"majority\"")
 }
 
-func mongoClusterMutationCommandError(err error) (wire.Document, error) {
+func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 	code, codeName := commandCodeBadValue, "BadValue"
 	var mongoErr mongoCommandError
 	if errors.As(err, &mongoErr) {
@@ -955,6 +955,10 @@ func mongoClusterMutationCommandError(err error) (wire.Document, error) {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
 	return commandError(code, codeName, err.Error())
+}
+
+func mongoClusterMutationCommandError(err error) (wire.Document, error) {
+	return mongoClusterRouteCommandError(err)
 }
 
 type mongoCommandError struct {

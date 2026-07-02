@@ -675,7 +675,7 @@ func (s *Server) findResponsePayload(ctx context.Context, command wire.Document,
 		return findResponsePayload{document: doc}, err
 	}
 	if err := s.preflightClusterFindRoute(ctx, db, collection); err != nil {
-		doc, err := mongoClusterMutationCommandError(err)
+		doc, err := mongoClusterRouteCommandError(err)
 		return findResponsePayload{document: doc}, err
 	}
 	col, err := s.openCollectionCached(name)
