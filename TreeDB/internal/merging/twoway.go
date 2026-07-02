@@ -154,7 +154,7 @@ func (m *TwoWayMerger) ValueCopy(dst []byte) []byte {
 
 func (m *TwoWayMerger) Error() error {
 	if m.cur != nil {
-		if srcErr := m.cur.Error(); srcErr != nil {
+		if srcErr := m.cur.Error(); srcErr != nil && srcErr != m.err {
 			return errors.Join(m.err, srcErr)
 		}
 	}

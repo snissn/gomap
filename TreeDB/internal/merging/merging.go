@@ -277,7 +277,7 @@ func (mi *MergingIterator) ValueCopy(dst []byte) []byte {
 
 func (mi *MergingIterator) Error() error {
 	if mi.hasCur {
-		if srcErr := mi.cur.iter.Error(); srcErr != nil {
+		if srcErr := mi.cur.iter.Error(); srcErr != nil && srcErr != mi.err {
 			return errors.Join(mi.err, srcErr)
 		}
 	}
