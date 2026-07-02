@@ -274,6 +274,9 @@ func (b *Batch) write(sync bool) error {
 	}
 	if sync && b.batch != nil && b.batch.Len() == 0 && b.commandWALPublishIntent == nil {
 		b.db.observeRawSpanNativeApplyResult(b.rawSpanNativeBatchPlan(), zipper.ApplyResult{}, nil, false, false)
+		if b.db.commandWAL {
+			return b.db.FlushCommandWAL(true)
+		}
 		return b.db.Checkpoint()
 	}
 	maxEntryRevision := b.db.assignBatchEntryRevisions(b.batch)

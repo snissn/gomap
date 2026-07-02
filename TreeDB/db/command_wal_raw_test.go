@@ -162,6 +162,50 @@ func TestAppendRawKVSingleCommandWALSupportsDeleteRange(t *testing.T) {
 	}
 }
 
+func TestEmptyCommandWALBatchWriteSyncDoesNotCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("pending"),
+		Value: []byte("v"),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	intent, err := d.NewTrustedCommandWALIntent(commitlog.CommandKindRawKVBatch, commitlog.CommandScopeRawKV, commitlog.PayloadFormatRawKVBatchV1, payload)
+	if err != nil {
+		t.Fatalf("NewTrustedCommandWALIntent: %v", err)
+	}
+	lsn, err := d.AppendCommandWALIntent(intent, false)
+	if err != nil {
+		t.Fatalf("AppendCommandWALIntent: %v", err)
+	}
+	if lsn == 0 {
+		t.Fatal("AppendCommandWALIntent lsn=0")
+	}
+	activeBefore := d.CommandWALActiveBytes()
+	if activeBefore == 0 {
+		t.Fatal("active command WAL bytes before empty WriteSync=0, want pending frame")
+	}
+
+	batch := d.NewBatch()
+	if err := batch.WriteSync(); err != nil {
+		t.Fatalf("empty WriteSync: %v", err)
+	}
+	if got := d.CommandWALActiveBytes(); got != activeBefore {
+		t.Fatalf("active command WAL bytes after empty WriteSync=%d, want unchanged %d", got, activeBefore)
+	}
+	if got := d.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after empty WriteSync=%d, want 0 before checkpoint", got)
+	}
+}
+
 func TestRawKVCommandWALIntentUsesDirectEntries(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})

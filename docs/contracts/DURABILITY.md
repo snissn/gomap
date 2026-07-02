@@ -28,6 +28,10 @@ eventually flushes to the backend.
 Crash recovery:
 - On open, any journal segments in `Dir/maindb/wal/` are replayed into the backend with synced commits, then removed.
 
+Command-WAL profiles expose two different durability boundaries:
+- `SyncCommandWAL()` fsyncs the command journal in durable mode so accepted command frames are recoverable, without forcing a backend checkpoint.
+- `Checkpoint()` publishes a backend root boundary, advances durable `AppliedCommandLSN` for covered command frames, and enables WAL cleanup.
+
 ### WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
 
 WAL stays enabled, but `*Sync` operations do not `fsync`. This is

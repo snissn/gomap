@@ -322,6 +322,8 @@ func (d *DB) Print() error { return d.DB.Print() }
 
 func (d *DB) Checkpoint() error { return d.DB.Checkpoint() }
 
+func (d *DB) SyncCommandWAL() error { return d.DB.SyncCommandWAL() }
+
 func (d *DB) VacuumIndexOnline(ctx context.Context) error { return d.DB.VacuumIndexOnline(ctx) }
 
 func (d *DB) Iterator(start, end []byte) (kvstore.Iterator, error) {

@@ -115,6 +115,36 @@ func TestCommandWALReopenPersistsAdapterOperations(t *testing.T) {
 	assertValue(t, reopened, []byte("batchdr/3"), []byte("range-value"))
 }
 
+func TestSyncKeyValueUsesCommandWALSyncWithoutCheckpoint(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "treedb")
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.BackgroundCheckpointInterval = -1
+	opts.MaxWALBytes = -1
+	opts.CommandWALStatsScan = true
+	db, err := OpenWithOptions(opts)
+	if err != nil {
+		t.Fatalf("OpenWithOptions(%s): %v", dir, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Put([]byte("sync-key-value"), []byte("v")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := db.SyncKeyValue(); err != nil {
+		t.Fatalf("SyncKeyValue: %v", err)
+	}
+	if got := db.TreeDB().Stats()["treedb.applied_command_lsn"]; got != "0" {
+		t.Fatalf("applied_command_lsn after SyncKeyValue=%q, want 0 before checkpoint", got)
+	}
+
+	if err := db.TreeDB().Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := db.TreeDB().Stats()["treedb.applied_command_lsn"]; got != "1" {
+		t.Fatalf("applied_command_lsn after Checkpoint=%q, want 1", got)
+	}
+}
+
 func assertValue(t testing.TB, db *Database, key, want []byte) {
 	t.Helper()
 	got, err := db.Get(key)

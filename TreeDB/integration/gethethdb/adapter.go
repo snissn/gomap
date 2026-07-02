@@ -374,14 +374,21 @@ func (d *Database) Stat() (string, error) {
 	return b.String(), nil
 }
 
-// SyncKeyValue forces a TreeDB checkpoint/durability boundary for pending raw-KV
-// command-WAL writes.
+// SyncKeyValue forces a TreeDB durability boundary for pending raw-KV writes.
+// In command-WAL mode this syncs the command journal without forcing a full
+// backend checkpoint; legacy non-command-WAL handles fall back to Checkpoint.
 func (d *Database) SyncKeyValue() error {
 	tdb, err := d.tree()
 	if err != nil {
 		return err
 	}
-	return tdb.Checkpoint()
+	if err := tdb.SyncCommandWAL(); err != nil {
+		if errors.Is(err, treedb.ErrCommandWALUnsupported) {
+			return tdb.Checkpoint()
+		}
+		return err
+	}
+	return nil
 }
 
 // NewBatch creates a write-only batch. After Database.Close it still returns a

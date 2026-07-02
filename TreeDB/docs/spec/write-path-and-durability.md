@@ -221,6 +221,14 @@ typed command frames. `Checkpoint` is the database-wide durability/cleanup
 boundary. `Close` is a final admission-cut and safe-reopen boundary, not a
 promise that every safe-to-delete WAL file was physically removed.
 
+`SyncCommandWAL()` is a narrower command-WAL durability boundary. In durable
+command-WAL mode it syncs the command journal so accepted command frames are
+recoverable, but it does not publish a backend checkpoint, advance durable
+`AppliedLSN`, or make command-WAL segments eligible for cleanup. Adapters that
+only need the consensus/write acknowledgement to be recoverable should use this
+boundary; callers that need a checkpointed backend root or WAL cleanup should
+use `Checkpoint()`.
+
 ## 6. Checkpoint Semantics
 
 `DB.Checkpoint()` in cached mode is a forced durability/cleanup boundary.

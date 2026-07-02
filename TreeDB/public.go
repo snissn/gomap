@@ -2040,6 +2040,26 @@ func (db *DB) Checkpoint() error {
 	return db.backend.Checkpoint()
 }
 
+// SyncCommandWAL forces a durability boundary for the command WAL without
+// forcing a backend checkpoint.
+//
+// In command-WAL durable mode this is the lightweight "previous logical
+// commands are recoverable" boundary: it fsyncs the command journal according
+// to the configured durability mode, but does not flush cached memtables,
+// publish backend AppliedCommandLSN coverage, or clean command-WAL segments.
+// Use Checkpoint when callers need a backend checkpoint/cleanup boundary.
+func (db *DB) SyncCommandWAL() error {
+	unlock, err := db.beginPublicOperation()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if db.backend == nil || !db.backend.CommandWALEnabled() {
+		return ErrCommandWALUnsupported
+	}
+	return db.backend.FlushCommandWAL(true)
+}
+
 func (db *DB) checkpointCachedForPublicCommandWAL() error {
 	if db == nil || db.cached == nil {
 		return ErrClosed

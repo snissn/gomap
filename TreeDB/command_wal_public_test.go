@@ -1008,6 +1008,69 @@ func TestPublicCommandWALCheckpointPublishesOnlyCoveredLSNs(t *testing.T) {
 	}
 }
 
+func TestPublicSyncCommandWALDoesNotCheckpoint(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                          t.TempDir(),
+		Durability:                   DurabilityDurable,
+		CommandWAL:                   true,
+		CommandWALStatsScan:          true,
+		DisableSideStores:            true,
+		BackgroundCheckpointInterval: -1,
+		MaxWALBytes:                  -1,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("wal-sync-only"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	activeBefore := db.backend.CommandWALActiveBytes()
+	if activeBefore == 0 {
+		t.Fatal("active command WAL bytes before SyncCommandWAL=0, want pending frame")
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN before SyncCommandWAL=%d, want 0", got)
+	}
+
+	if err := db.SyncCommandWAL(); err != nil {
+		t.Fatalf("SyncCommandWAL: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("AppliedCommandLSN after SyncCommandWAL=%d, want 0", got)
+	}
+	if got := db.backend.CommandWALActiveBytes(); got != activeBefore {
+		t.Fatalf("active command WAL bytes after SyncCommandWAL=%d, want unchanged %d", got, activeBefore)
+	}
+	first, last := db.publicCommandWALPendingRange()
+	if first != 1 || last != 1 {
+		t.Fatalf("pending command WAL range=(%d,%d), want (1,1)", first, last)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := db.backend.State().AppliedCommandLSN; got != 1 {
+		t.Fatalf("AppliedCommandLSN after Checkpoint=%d, want 1", got)
+	}
+}
+
+func TestPublicSyncCommandWALRequiresCommandWAL(t *testing.T) {
+	db, err := Open(Options{
+		Dir:               t.TempDir(),
+		DisableSideStores: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.SyncCommandWAL(); !errors.Is(err, ErrCommandWALUnsupported) {
+		t.Fatalf("SyncCommandWAL error=%v, want ErrCommandWALUnsupported", err)
+	}
+}
+
 func TestPublicCommandWALCheckpointPublishCapsAtCutoverLSN(t *testing.T) {
 	db, err := Open(Options{
 		Dir:               t.TempDir(),
