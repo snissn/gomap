@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -934,10 +935,15 @@ func parseClusterWriteConcernW(value bson.RawValue) (iwire.AckPolicy, error) {
 
 func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 	code, codeName := commandCodeBadValue, "BadValue"
+	var nativeCode iwire.ErrorCode
 	var mongoErr mongoCommandError
 	if errors.As(err, &mongoErr) {
 		code, codeName = mongoErr.code, mongoErr.codeName
-	} else if nativeCode, ok := iwire.ErrorCodeOf(err); ok {
+	} else if errors.Is(err, collections.ErrCommitAmbiguous) {
+		nativeCode = iwire.ErrCommitAmbiguous
+		code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
+	} else if parsedNativeCode, ok := iwire.ErrorCodeOf(err); ok {
+		nativeCode = parsedNativeCode
 		switch nativeCode {
 		case iwire.ErrUnsupportedFeature:
 			code, codeName = commandCodeBadValue, "BadValue"
@@ -945,16 +951,127 @@ func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 			code, codeName = commandCodeNotWritablePrimary, "NotWritablePrimary"
 		case iwire.ErrDurabilityUnavailable:
 			code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
+		case iwire.ErrCommitAmbiguous:
+			code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
 		case iwire.ErrCatalogVersionMismatch:
 			code, codeName = commandCodeBadValue, "BadValue"
 		case iwire.ErrDuplicateDocumentID, iwire.ErrDocumentExists, iwire.ErrUniqueIndexConflict:
 			code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 		}
 	}
-	if collections.IsDuplicateKeyError(err) {
+	if collections.IsDuplicateKeyError(err) && nativeCode != iwire.ErrCommitAmbiguous {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
-	return commandError(code, codeName, err.Error())
+	return commandErrorWithFields(code, codeName, err.Error(), mongoClusterErrorFields(err, nativeCode, codeName))
+}
+
+func mongoClusterErrorFields(err error, nativeCode iwire.ErrorCode, codeName string) bson.D {
+	if err == nil || !mongoClusterErrorMetadataApplies(err, nativeCode, codeName) {
+		return nil
+	}
+	fields := bson.D{
+		{Key: "treedbClusterError", Value: true},
+	}
+	if class := mongoClusterErrorClass(err, nativeCode, codeName); class != "" {
+		fields = append(fields, bson.E{Key: "treedbErrorClass", Value: class})
+	}
+	if leaderHint := mongoClusterLeaderHint(err); leaderHint != "" {
+		fields = append(fields, bson.E{Key: "treedbLeaderHint", Value: leaderHint})
+	}
+	return fields
+}
+
+func mongoClusterErrorMetadataApplies(err error, nativeCode iwire.ErrorCode, codeName string) bool {
+	if err == nil {
+		return false
+	}
+	if nativeCode != 0 ||
+		errors.Is(err, collections.ErrCommitAmbiguous) ||
+		collections.IsDuplicateKeyError(err) {
+		return true
+	}
+	return codeName == "WriteConcernFailed"
+}
+
+func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName string) string {
+	message := strings.ToLower(err.Error())
+	switch nativeCode {
+	case iwire.ErrReadOnly:
+		if mongoClusterRouteRejectedMessage(message) {
+			return "route_rejected"
+		}
+		if mongoClusterLeaderHint(err) != "" ||
+			strings.Contains(message, "not leader") ||
+			strings.Contains(message, "not cluster leader") {
+			return "not_leader"
+		}
+		return "read_only"
+	case iwire.ErrDurabilityUnavailable:
+		return "durability_unavailable"
+	case iwire.ErrCommitAmbiguous:
+		return "commit_ambiguous"
+	case iwire.ErrCatalogVersionMismatch:
+		return "catalog_version_mismatch"
+	case iwire.ErrDuplicateDocumentID, iwire.ErrDocumentExists, iwire.ErrUniqueIndexConflict:
+		return "write_conflict"
+	}
+	switch codeName {
+	case "WriteConcernFailed":
+		return "write_concern_failed"
+	case "NotWritablePrimary":
+		return "not_leader"
+	case "ShutdownInProgress":
+		return "durability_unavailable"
+	case "DuplicateKey":
+		return "write_conflict"
+	default:
+		return "cluster_error"
+	}
+}
+
+func mongoClusterRouteRejectedMessage(message string) bool {
+	return strings.Contains(message, "route group") ||
+		strings.Contains(message, "cluster route rejected") ||
+		strings.Contains(message, "cluster query route shape") ||
+		strings.Contains(message, "cluster route shape") ||
+		strings.Contains(message, "cluster token route") ||
+		strings.Contains(message, "cluster token batch route") ||
+		strings.Contains(message, "cluster route target") ||
+		strings.Contains(message, "route target") ||
+		strings.Contains(message, "route request") ||
+		strings.Contains(message, "requires fanout before submit") ||
+		strings.Contains(message, "requires command split before submit")
+}
+
+func mongoClusterLeaderHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	var hinted interface {
+		ClusterLeaderHint() string
+	}
+	if errors.As(err, &hinted) {
+		if leaderHint := strings.TrimSpace(hinted.ClusterLeaderHint()); leaderHint != "" {
+			return leaderHint
+		}
+	}
+	const marker = "leader_hint="
+	message := err.Error()
+	start := strings.Index(message, marker)
+	if start < 0 {
+		return ""
+	}
+	start += len(marker)
+	end := start
+	for end < len(message) {
+		switch message[end] {
+		case ';', ',', ' ', '\t', '\n', '\r':
+			return strings.TrimSpace(message[start:end])
+		default:
+			end++
+		}
+	}
+	return strings.TrimSpace(message[start:end])
 }
 
 func mongoClusterMutationCommandError(err error) (wire.Document, error) {
