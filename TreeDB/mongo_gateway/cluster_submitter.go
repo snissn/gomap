@@ -1032,6 +1032,7 @@ func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName stri
 func mongoClusterRouteRejectedMessage(message string) bool {
 	return strings.Contains(message, "route group") ||
 		strings.Contains(message, "cluster route rejected") ||
+		strings.Contains(message, "cluster query route shape") ||
 		strings.Contains(message, "cluster route shape") ||
 		strings.Contains(message, "cluster token route") ||
 		strings.Contains(message, "cluster token batch route") ||

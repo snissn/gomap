@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -115,6 +116,10 @@ func (s *Server) handleClusterMutation(ctx context.Context, header iwire.Header,
 	if s != nil {
 		s.counters.inc("cluster_submit.requests_total")
 		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.recordClusterSubmitOutcome(fmt.Errorf("cluster submit panic: %v", recovered), actualAck, time.Since(start))
+				panic(recovered)
+			}
 			s.recordClusterSubmitOutcome(err, actualAck, time.Since(start))
 		}()
 	}

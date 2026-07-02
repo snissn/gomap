@@ -1764,6 +1764,118 @@ func TestClusterSubmitterStatsTrackRaftCommittedAndFollowerReject(t *testing.T) 
 			t.Fatalf("submitter calls=%d want 0", got)
 		}
 	})
+
+	t.Run("durability_unavailable", func(t *testing.T) {
+		submitter := &fakeClusterSubmitter{
+			status: ClusterUnavailableAdmission("cluster admission unavailable"),
+		}
+		client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := client.Hello(ctx); err != nil {
+			t.Fatalf("Hello: %v", err)
+		}
+		_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+		if !isRemoteError(err, iwire.ErrDurabilityUnavailable) {
+			t.Fatalf("InsertBatch unavailable raft_committed err=%v want durability unavailable", err)
+		}
+		for key, want := range map[string]uint64{
+			"cluster_submit.requests_total":               1,
+			"cluster_submit.success_total":                0,
+			"cluster_submit.errors_total":                 1,
+			"cluster_submit.durability_unavailable_total": 1,
+			"cluster_submit.commit_ambiguous_total":       0,
+			"cluster_submit.read_only_total":              0,
+			"cluster_submit.ack_raft_committed_total":     0,
+		} {
+			if got := nativewireTestStatUint64(t, server, key); got != want {
+				t.Fatalf("stat %s=%d want %d", key, got, want)
+			}
+		}
+		if got := len(submitter.snapshot()); got != 0 {
+			t.Fatalf("submitter calls=%d want 0", got)
+		}
+	})
+
+	t.Run("commit_ambiguous", func(t *testing.T) {
+		submitter := &fakeClusterSubmitter{
+			resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+				return ClusterSubmitResult{}, raftcluster.ErrCommitAmbiguous
+			},
+		}
+		client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := client.Hello(ctx); err != nil {
+			t.Fatalf("Hello: %v", err)
+		}
+		_, err := client.commandSections(ctx, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+		if !isRemoteError(err, iwire.ErrCommitAmbiguous) {
+			t.Fatalf("InsertBatch ambiguous raft_committed err=%v want commit ambiguous", err)
+		}
+		for key, want := range map[string]uint64{
+			"cluster_submit.requests_total":               1,
+			"cluster_submit.success_total":                0,
+			"cluster_submit.errors_total":                 1,
+			"cluster_submit.commit_ambiguous_total":       1,
+			"cluster_submit.durability_unavailable_total": 0,
+			"cluster_submit.read_only_total":              0,
+			"cluster_submit.ack_raft_committed_total":     0,
+		} {
+			if got := nativewireTestStatUint64(t, server, key); got != want {
+				t.Fatalf("stat %s=%d want %d", key, got, want)
+			}
+		}
+		if got := len(submitter.snapshot()); got != 1 {
+			t.Fatalf("submitter calls=%d want 1", got)
+		}
+	})
+}
+
+func TestClusterSubmitterStatsRecordPanicAsError(t *testing.T) {
+	submitter := &fakeClusterSubmitter{
+		resultHook: func(entry raftentry.CommandEntryV1, metadata ClusterRequestMetadata, result ClusterSubmitResult) (ClusterSubmitResult, error) {
+			panic("submit panic")
+		},
+	}
+	client, server, _, _ := serveCollectionPipeWithServerAndOptions(t, ServerOptions{ClusterSubmitter: submitter})
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	body, err := appendCommandRequestBody(nil, iwire.CommandInsertBatch, clusterInsertBatchSections(t, client, ctx, AckRaftCommitted, "u1")...)
+	if err != nil {
+		t.Fatalf("append request body: %v", err)
+	}
+	sections, err := iwire.DecodeSections(body, server.limits)
+	if err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	cmd, err := server.registry.ValidateRequestSections(sections)
+	if err != nil {
+		t.Fatalf("validate request sections: %v", err)
+	}
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Fatal("handleClusterMutation did not re-panic")
+			}
+		}()
+		_, _ = server.handleClusterMutation(ctx, iwire.Header{Type: iwire.FrameRequest, RequestID: 1}, cmd)
+	}()
+
+	for key, want := range map[string]uint64{
+		"cluster_submit.requests_total":           1,
+		"cluster_submit.success_total":            0,
+		"cluster_submit.errors_total":             1,
+		"cluster_submit.ack_raft_committed_total": 0,
+	} {
+		if got := nativewireTestStatUint64(t, server, key); got != want {
+			t.Fatalf("stat %s=%d want %d", key, got, want)
+		}
+	}
 }
 
 func TestRaftClusterSubmitterConcreteBridgeCreateInsertRaftCommitted(t *testing.T) {
