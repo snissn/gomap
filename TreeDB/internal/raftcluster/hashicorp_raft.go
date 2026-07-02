@@ -208,12 +208,6 @@ func (p *HashicorpRaftProvider) ReadIndex(ctx context.Context, target ReadIndexB
 	if err := p.requireHashicorpReadIndexLeader(); err != nil {
 		return ReadIndexProof{}, err
 	}
-	if _, err := p.readIndexAppliedProgress(ctx); err != nil {
-		return ReadIndexProof{}, err
-	}
-	if err := p.requireHashicorpReadIndexLeader(); err != nil {
-		return ReadIndexProof{}, err
-	}
 	if err := waitHashicorpRaftFuture(ctx, p.raft.VerifyLeader()); err != nil {
 		return ReadIndexProof{}, p.mapHashicorpRaftReadIndexError(err)
 	}
@@ -271,6 +265,27 @@ func (p *HashicorpRaftProvider) readIndexAppliedProgress(ctx context.Context) (A
 	return progress, nil
 }
 
+func (p *HashicorpRaftProvider) readIndexAppliedProgressSnapshot(ctx context.Context) (AppliedProgress, error) {
+	if p == nil {
+		return AppliedProgress{}, ErrInvalidHashicorpRaftProvider
+	}
+	if p.appliedProgress == nil {
+		return AppliedProgress{}, fmt.Errorf("%w: applied progress reader is not configured", ErrReadBarrierNotSatisfied)
+	}
+	progress, err := p.appliedProgress.AppliedProgress(ctx)
+	if err != nil {
+		return AppliedProgress{}, err
+	}
+	if err := p.validateReadIndexAppliedProgressIdentity(progress); err != nil {
+		return AppliedProgress{}, err
+	}
+	if !progress.HasApplied {
+		progress.Index = 0
+		progress.Term = 0
+	}
+	return progress, nil
+}
+
 func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context, minIndex uint64) (AppliedProgress, error) {
 	if p == nil || p.raft == nil {
 		return AppliedProgress{}, ErrInvalidHashicorpRaftProvider
@@ -278,11 +293,11 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 	if err := p.requireHashicorpReadIndexLeader(); err != nil {
 		return AppliedProgress{}, err
 	}
-	progress, err := p.readIndexAppliedProgress(ctx)
+	progress, err := p.readIndexAppliedProgressSnapshot(ctx)
 	if err != nil {
 		return AppliedProgress{}, err
 	}
-	if minIndex == 0 || progress.Index >= minIndex {
+	if progress.HasApplied && progress.Index != 0 && (minIndex == 0 || progress.Index >= minIndex) {
 		return progress, nil
 	}
 	noCommands, firstCmd, err := p.readIndexGapHasNoCommands(progress.Index+1, minIndex)
@@ -290,7 +305,10 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 		return AppliedProgress{}, err
 	}
 	if noCommands {
-		return progress, nil
+		if progress.HasApplied && progress.Index != 0 {
+			return progress, nil
+		}
+		return AppliedProgress{}, fmt.Errorf("%w: no applied TreeDB command index", ErrReadBarrierNotSatisfied)
 	}
 	timeout := p.applyTimeout
 	if timeout <= 0 {
@@ -319,11 +337,11 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 		if err := p.requireHashicorpReadIndexLeader(); err != nil {
 			return AppliedProgress{}, err
 		}
-		progress, err = p.readIndexAppliedProgress(ctx)
+		progress, err = p.readIndexAppliedProgressSnapshot(ctx)
 		if err != nil {
 			return AppliedProgress{}, err
 		}
-		if progress.Index >= minIndex {
+		if progress.HasApplied && progress.Index != 0 && progress.Index >= minIndex {
 			return progress, nil
 		}
 		// Skip the gap rescan if the previously found command is still ahead of
@@ -336,7 +354,10 @@ func (p *HashicorpRaftProvider) waitTreeDBAppliedReadPrefix(ctx context.Context,
 			return AppliedProgress{}, err
 		}
 		if noCommands {
-			return progress, nil
+			if progress.HasApplied && progress.Index != 0 {
+				return progress, nil
+			}
+			return AppliedProgress{}, fmt.Errorf("%w: no applied TreeDB command index", ErrReadBarrierNotSatisfied)
 		}
 	}
 }
@@ -460,14 +481,24 @@ func (p *HashicorpRaftProvider) validateReadIndexAppliedProgress(progress Applie
 	if p == nil {
 		return ErrInvalidHashicorpRaftProvider
 	}
+	if err := p.validateReadIndexAppliedProgressIdentity(progress); err != nil {
+		return err
+	}
+	if !progress.HasApplied || progress.Index == 0 {
+		return fmt.Errorf("%w: no applied TreeDB command index", ErrReadBarrierNotSatisfied)
+	}
+	return nil
+}
+
+func (p *HashicorpRaftProvider) validateReadIndexAppliedProgressIdentity(progress AppliedProgress) error {
+	if p == nil {
+		return ErrInvalidHashicorpRaftProvider
+	}
 	if progress.NodeID != p.cluster.NodeID {
 		return fmt.Errorf("%w: applied progress node %q does not match local node %q", ErrReadBarrierTargetMismatch, progress.NodeID, p.cluster.NodeID)
 	}
 	if progress.GroupID != p.cluster.GroupID {
 		return fmt.Errorf("%w: applied progress group %q does not match local group %q", ErrReadBarrierTargetMismatch, progress.GroupID, p.cluster.GroupID)
-	}
-	if !progress.HasApplied || progress.Index == 0 {
-		return fmt.Errorf("%w: no applied TreeDB command index", ErrReadBarrierNotSatisfied)
 	}
 	return nil
 }
