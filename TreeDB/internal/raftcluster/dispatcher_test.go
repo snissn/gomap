@@ -151,9 +151,10 @@ func TestGroupRoutedSubmitterRejectsUnsupportedRoutesBeforeSubmit(t *testing.T) 
 	token.ClusterRoutePartitionID = "p0"
 
 	tests := []struct {
-		name string
-		meta raftentry.RequestMetadataV1
-		want error
+		name    string
+		meta    raftentry.RequestMetadataV1
+		want    error
+		wantMsg string
 	}{
 		{name: "missing_route", meta: raftentry.RequestMetadataV1{AckPolicy: iwire.AckVisible}, want: ErrRouteTargetMissing},
 		{name: "missing_identity", meta: func() raftentry.RequestMetadataV1 {
@@ -188,12 +189,12 @@ func TestGroupRoutedSubmitterRejectsUnsupportedRoutesBeforeSubmit(t *testing.T) 
 			meta := token
 			meta.ClusterRouteKey = ""
 			return meta
-		}(), want: ErrRouteTargetUnsupported},
+		}(), want: ErrRouteTargetUnsupported, wantMsg: "missing route key"},
 		{name: "token_unsupported_route_key", meta: func() raftentry.RequestMetadataV1 {
 			meta := token
 			meta.ClusterRouteKey = "tenant_id"
 			return meta
-		}(), want: ErrRouteTargetUnsupported},
+		}(), want: ErrRouteTargetUnsupported, wantMsg: "unsupported route key \"tenant_id\""},
 		{name: "unsupported_shape", meta: func() raftentry.RequestMetadataV1 {
 			meta := valid
 			meta.ClusterRouteShape = "scatter"
@@ -207,6 +208,9 @@ func TestGroupRoutedSubmitterRejectsUnsupportedRoutesBeforeSubmit(t *testing.T) 
 			_, err := dispatcher.SubmitCommandEntryV1(context.Background(), entry, tt.meta)
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("SubmitCommandEntryV1 err=%v want %v", err, tt.want)
+			}
+			if tt.wantMsg != "" && !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Fatalf("SubmitCommandEntryV1 err=%q want message containing %q", err, tt.wantMsg)
 			}
 			if after := len(groupA.snapshot()); after != before {
 				t.Fatalf("group-a calls after rejection=%d want %d", after, before)
