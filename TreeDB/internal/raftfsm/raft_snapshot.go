@@ -24,6 +24,7 @@ const (
 
 	raftSnapshotFormatConfigFileV1 = "format.json"
 	raftSnapshotStagingDirNameV1   = "staged"
+	raftSnapshotArchiveGlobV1      = "treedb-snapshot-*.tar"
 )
 
 var raftSnapshotMainDBEntriesV1 = []string{
@@ -128,7 +129,7 @@ func createRaftSnapshotArchiveFileV1(snapshotDir string) (*os.File, string, erro
 	if err := os.MkdirAll(stagingDir, 0o700); err != nil {
 		return nil, "", fmt.Errorf("raftfsm: create snapshot staging directory: %w", err)
 	}
-	file, err := os.CreateTemp(stagingDir, "treedb-snapshot-*.tar")
+	file, err := os.CreateTemp(stagingDir, raftSnapshotArchiveGlobV1)
 	if err != nil {
 		return nil, "", fmt.Errorf("raftfsm: create snapshot archive: %w", err)
 	}
@@ -151,8 +152,11 @@ func cleanupAbandonedRaftSnapshotArchivesV1(snapshotDir string) error {
 		if entry.IsDir() {
 			continue
 		}
-		matched, err := filepath.Match("treedb-snapshot-*.tar", entry.Name())
-		if err != nil || !matched {
+		matches, err := filepath.Match(raftSnapshotArchiveGlobV1, entry.Name())
+		if err != nil {
+			return fmt.Errorf("raftfsm: match snapshot archive pattern: %w", err)
+		}
+		if !matches {
 			continue
 		}
 		path := filepath.Join(stagingDir, entry.Name())

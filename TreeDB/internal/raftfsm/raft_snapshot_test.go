@@ -253,6 +253,14 @@ func TestRaftSnapshotV1OpenCleansAbandonedStagedArchives(t *testing.T) {
 	if err := os.WriteFile(orphanPath, []byte("abandoned snapshot archive"), 0o600); err != nil {
 		t.Fatalf("Write orphan staged archive: %v", err)
 	}
+	unrelatedPath := filepath.Join(stagingDir, "operator-note.txt")
+	if err := os.WriteFile(unrelatedPath, []byte("not a TreeDB snapshot archive"), 0o600); err != nil {
+		t.Fatalf("Write unrelated staged file: %v", err)
+	}
+	wrongSuffixPath := filepath.Join(stagingDir, "treedb-snapshot-manual.tmp")
+	if err := os.WriteFile(wrongSuffixPath, []byte("not a temp snapshot archive"), 0o600); err != nil {
+		t.Fatalf("Write non-archive staged file: %v", err)
+	}
 	nestedDir := filepath.Join(stagingDir, "nested")
 	if err := os.MkdirAll(nestedDir, 0o700); err != nil {
 		t.Fatalf("Mkdir nested staging dir: %v", err)
@@ -263,6 +271,12 @@ func TestRaftSnapshotV1OpenCleansAbandonedStagedArchives(t *testing.T) {
 
 	if _, err := os.Stat(orphanPath); !os.IsNotExist(err) {
 		t.Fatalf("Open did not remove abandoned staged archive: stat err=%v", err)
+	}
+	if _, err := os.Stat(unrelatedPath); err != nil {
+		t.Fatalf("Open should leave unrelated staged files alone: %v", err)
+	}
+	if _, err := os.Stat(wrongSuffixPath); err != nil {
+		t.Fatalf("Open should leave non-archive staged files alone: %v", err)
 	}
 	if _, err := os.Stat(nestedDir); err != nil {
 		t.Fatalf("Open should leave staged subdirectories alone: %v", err)
