@@ -645,7 +645,7 @@ func (c *hashicorpRaftTestCluster) shutdownNode(t *testing.T, id NodeID) {
 	if node == nil {
 		t.Fatalf("node %s not found", id)
 	}
-	c.disconnectNode(id)
+	c.disconnectNode(t, id)
 	if err := node.closeLocal(); err != nil {
 		t.Fatalf("%s close local state: %v", id, err)
 	}
@@ -689,17 +689,18 @@ func (c *hashicorpRaftTestCluster) restartDBNode(t *testing.T, id NodeID) *hashi
 	node.fsm = fsm
 	node.provider = provider
 	node.submitter = submitter
-	c.connectAllTransports()
+	c.connectAllTransports(t)
 	return node
 }
 
-func (c *hashicorpRaftTestCluster) disconnectNode(id NodeID) {
+func (c *hashicorpRaftTestCluster) disconnectNode(t *testing.T, id NodeID) {
+	t.Helper()
 	target := c.nodes[id]
 	if target == nil || target.transport == nil {
 		return
 	}
 	target.transport.DisconnectAll()
-	targetAddr := hraft.ServerAddress(peerAddress(target.cfg, id))
+	targetAddr := hraft.ServerAddress(peerAddress(t, target.cfg, id))
 	for _, node := range c.nodes {
 		if node.id == id || node.transport == nil {
 			continue
@@ -708,7 +709,8 @@ func (c *hashicorpRaftTestCluster) disconnectNode(id NodeID) {
 	}
 }
 
-func (c *hashicorpRaftTestCluster) connectAllTransports() {
+func (c *hashicorpRaftTestCluster) connectAllTransports(t *testing.T) {
+	t.Helper()
 	for _, from := range c.nodes {
 		if from.transport == nil {
 			continue
@@ -717,7 +719,7 @@ func (c *hashicorpRaftTestCluster) connectAllTransports() {
 			if from.id == to.id || to.transport == nil {
 				continue
 			}
-			from.transport.Connect(hraft.ServerAddress(peerAddress(to.cfg, to.id)), to.transport)
+			from.transport.Connect(hraft.ServerAddress(peerAddress(t, to.cfg, to.id)), to.transport)
 		}
 	}
 }
@@ -767,13 +769,15 @@ func (n *hashicorpRaftTestNode) closeLocal() error {
 	return err
 }
 
-func peerAddress(cfg Config, id NodeID) string {
+func peerAddress(t *testing.T, cfg Config, id NodeID) string {
+	t.Helper()
 	for _, peer := range cfg.Peers {
 		if peer.ID == id {
 			return peer.Address
 		}
 	}
-	return string(id)
+	t.Fatalf("peer address for node %s not found in config", id)
+	return ""
 }
 
 func assertHashicorpRaftStoreFiles(t *testing.T, node *hashicorpRaftTestNode, label string) {
