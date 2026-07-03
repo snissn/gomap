@@ -1117,6 +1117,11 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 			want: "route-mode production currently supports only local-owner proof with route-groups=1",
 		},
 		{
+			name: "production explicit command WAL disable remains fail-closed",
+			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1", "-treedb-command-wal=false"},
+			want: "route-mode production requires command WAL",
+		},
+		{
 			name: "production non-BSON format remains fail-closed",
 			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1", "-treedb-document-format", "template-v1"},
 			want: "route-mode production currently supports only -treedb-document-format bson",
@@ -1238,6 +1243,32 @@ func TestTreeDBProductionRouteModeLocalOwnerRoutedCommitSmoke(t *testing.T) {
 	}
 	if evidence.CPUContext == "" || evidence.BytesPerOp <= 0 || evidence.AllocsPerOp <= 0 {
 		t.Fatalf("production measurement context/allocation fields missing: %+v", evidence)
+	}
+}
+
+func TestEnsureProductionRouteCollectionRejectsReusedNonBSONCollection(t *testing.T) {
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	manager := collections.NewCollectionManager(db)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "bench.docs",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatTemplateV1,
+		},
+	}); err != nil {
+		t.Fatalf("create non-BSON collection: %v", err)
+	}
+	cfg := config{
+		Database:             "bench",
+		Collection:           "docs",
+		TreeDBDocumentFormat: collections.DocumentFormatBSON,
+	}
+	err = ensureProductionRouteCollection(context.Background(), cfg, &benchTarget{collections: manager}, nil)
+	if err == nil || !strings.Contains(err.Error(), "existing collection document format") {
+		t.Fatalf("ensureProductionRouteCollection err=%v want existing format rejection", err)
 	}
 }
 

@@ -268,9 +268,7 @@ func (p *productionRouteProofCatalogVersion) CurrentCatalogVersion(context.Conte
 	if p == nil {
 		return 0, false, nil
 	}
-	if !p.known.Load() {
-		p.Refresh()
-	}
+	p.Refresh()
 	return p.value.Load(), p.known.Load(), nil
 }
 
@@ -283,11 +281,18 @@ func (p *productionRouteProofCatalogVersion) ServerCatalogVersion(context.Contex
 }
 
 func (p *productionRouteProofCatalogVersion) Refresh() uint64 {
-	if p == nil || p.db == nil {
+	if p == nil {
+		return 0
+	}
+	if p.db == nil {
+		p.value.Store(0)
+		p.known.Store(false)
 		return 0
 	}
 	state := p.db.State()
 	if state == nil {
+		p.value.Store(0)
+		p.known.Store(false)
 		return 0
 	}
 	p.value.Store(state.CommitSeq)
