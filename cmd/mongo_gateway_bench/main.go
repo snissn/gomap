@@ -670,6 +670,9 @@ func parseConfig(args []string) (config, error) {
 	}
 	cfg.RouteMode = routeMode
 	if cfg.Target == "treedb" && cfg.RouteMode == routeModeProduction {
+		if seenFlags["treedb-command-wal"] && !cfg.TreeDBCommandWAL {
+			return config{}, errors.New("route-mode production requires command-WAL; pass -treedb-command-wal=true or omit the flag")
+		}
 		cfg.TreeDBCommandWAL = true
 		if !seenFlags["treedb-profile"] {
 			treeDBProfile = string(treedb.ProfileCommandWALRelaxed)
@@ -3823,8 +3826,16 @@ func runProductionRoutedLoadPhase(ctx context.Context, cfg config, target *bench
 
 func ensureProductionRouteCollection(ctx context.Context, cfg config, target *benchTarget, db *mongo.Database) error {
 	if target != nil && target.collections != nil {
-		if _, err := target.collections.OpenCollection(cfg.Database + "." + cfg.Collection); err == nil {
+		col, err := target.collections.OpenCollection(cfg.Database + "." + cfg.Collection)
+		if err == nil {
+			existing := col.Meta().Options.DocumentFormat
+			if existing != collections.DocumentFormatBSON {
+				return fmt.Errorf("route-mode production requires bson document format; existing collection has format %q", existing)
+			}
 			return nil
+		}
+		if !errors.Is(err, collections.ErrCollectionNotFound) {
+			return fmt.Errorf("ensureProductionRouteCollection: %w", err)
 		}
 	}
 	if db == nil {

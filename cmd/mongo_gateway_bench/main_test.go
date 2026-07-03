@@ -1122,6 +1122,11 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 			want: "route-mode production currently supports only -treedb-document-format bson",
 		},
 		{
+			name: "production explicit command-wal false remains fail-closed",
+			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1", "-treedb-command-wal=false"},
+			want: "route-mode production requires command-WAL",
+		},
+		{
 			name: "mongo target",
 			args: []string{"-target", "mongo", "-route-mode", "ring"},
 			want: "route-mode is only supported with -target treedb",

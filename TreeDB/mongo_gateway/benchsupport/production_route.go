@@ -288,6 +288,7 @@ func (p *productionRouteProofCatalogVersion) Refresh() uint64 {
 	}
 	state := p.db.State()
 	if state == nil {
+		p.known.Store(false)
 		return 0
 	}
 	p.value.Store(state.CommitSeq)
