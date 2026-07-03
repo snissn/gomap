@@ -1089,6 +1089,11 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 			want: "unknown route-mode",
 		},
 		{
+			name: "production mode reserved",
+			args: []string{"-target", "treedb", "-route-mode", "production"},
+			want: "route-mode production is reserved until real production routed commits exist",
+		},
+		{
 			name: "mongo target",
 			args: []string{"-target", "mongo", "-route-mode", "ring"},
 			want: "route-mode is only supported with -target treedb",
@@ -1184,6 +1189,9 @@ func TestBenchmarkRingRouterPreflightDistributionAndFanout(t *testing.T) {
 	if evidence.PreflightSuccess != 4 || evidence.FanoutRejected != 1 {
 		t.Fatalf("unexpected evidence counters: %+v", evidence)
 	}
+	if evidence.EvidenceScope != routeEvidenceScopeLocalPreflight || !evidence.LocalOnly || evidence.ProductionScaleEligible {
+		t.Fatalf("unexpected local evidence boundary: %+v", evidence)
+	}
 	wantGroupHits := map[string]int{"group-00": 2, "group-01": 2}
 	if !reflect.DeepEqual(evidence.GroupHits, wantGroupHits) {
 		t.Fatalf("group hits=%v want %v", evidence.GroupHits, wantGroupHits)
@@ -1206,6 +1214,51 @@ func TestBenchmarkRingRouterPreflightDistributionAndFanout(t *testing.T) {
 	}
 	if !strings.Contains(evidence.UnsupportedFanoutErr, "requires fanout before submit") {
 		t.Fatalf("fanout rejection=%q want fanout rejection", evidence.UnsupportedFanoutErr)
+	}
+}
+
+func TestRouteEvidenceLocalOnlyCannotSatisfyProductionScaleSchema(t *testing.T) {
+	router := newBenchmarkRingRouter(2, 4)
+	target := router.routeToken(benchmarkRingPartitionMidpointToken(0, 4))
+	router.recordPreflightSuccess(target)
+	evidence := router.evidence(1)
+	if evidence == nil {
+		t.Fatal("route evidence missing")
+	}
+	if evidence.EvidenceScope != routeEvidenceScopeLocalPreflight || !evidence.LocalOnly || evidence.ProductionScaleEligible {
+		t.Fatalf("local route evidence boundary=%+v, want local preflight and production_scale_eligible=false", evidence)
+	}
+	raw, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("marshal route evidence: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal route evidence: %v", err)
+	}
+	if got := decoded["evidence_scope"]; got != routeEvidenceScopeLocalPreflight {
+		t.Fatalf("evidence_scope=%v want %q", got, routeEvidenceScopeLocalPreflight)
+	}
+	if got := decoded["production_scale_eligible"]; got != false {
+		t.Fatalf("production_scale_eligible=%v want false", got)
+	}
+	for _, key := range []string{
+		"real_routed_commits",
+		"route_attempts_total",
+		"route_remote_redirects",
+		"route_remote_forwards",
+		"commit_group_hits",
+		"applied_group_hits",
+		"fanout_split_attempts",
+		"direct_local_bypass_rejects",
+		"write_latency_micros",
+		"writes_per_sec",
+		"b_per_op",
+		"allocs_per_op",
+	} {
+		if _, ok := decoded[key]; ok {
+			t.Fatalf("local route evidence unexpectedly included production field %q: %v", key, decoded)
+		}
 	}
 }
 
@@ -2052,9 +2105,18 @@ func TestTreeDBRoutedRingModeSmoke(t *testing.T) {
 			if result.RouteEvidence == nil {
 				t.Fatalf("route evidence missing: %+v", result)
 			}
+			if result.ProductionRouteEvidence != nil {
+				t.Fatalf("production route evidence unexpectedly present for local ring mode: %+v", result.ProductionRouteEvidence)
+			}
+			if result.ProductionRouteEvidenceStatus != productionRouteEvidenceStatusLocalPreflightOnly {
+				t.Fatalf("production route evidence status=%q want %q", result.ProductionRouteEvidenceStatus, productionRouteEvidenceStatusLocalPreflightOnly)
+			}
 			evidence := result.RouteEvidence
 			if evidence.PreflightSuccess != cfg.Documents || evidence.Writes != cfg.Documents {
 				t.Fatalf("unexpected route evidence counters: %+v", evidence)
+			}
+			if evidence.EvidenceScope != routeEvidenceScopeLocalPreflight || evidence.ProductionScaleEligible {
+				t.Fatalf("unexpected route evidence production boundary: %+v", evidence)
 			}
 			if evidence.WriteShape != "single_document_insert" || !evidence.LocalOnly {
 				t.Fatalf("unexpected route evidence shape/boundary: %+v", evidence)
@@ -3110,6 +3172,10 @@ func TestDirectBenchmarkDocumentKeyUsesGatewayEncoding(t *testing.T) {
 func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	result := &benchmarkResult{
 		Target:                                 "treedb",
+		RouteMode:                              routeModeRing,
+		RouteGroupCount:                        1,
+		RoutePartitionCount:                    1,
+		ProductionRouteEvidenceStatus:          productionRouteEvidenceStatusLocalPreflightOnly,
 		Database:                               "bench",
 		Collection:                             "docs",
 		Documents:                              1,
@@ -3126,18 +3192,20 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits: 3,
 		TreeDBMaintenanceMode:                         "none",
 		RouteEvidence: &routeEvidence{
-			Mode:             routeModeRing,
-			PlacementMode:    "ring",
-			RouteKey:         "_id",
-			WriteShape:       "single_document_insert",
-			LocalOnly:        true,
-			GroupCount:       1,
-			PartitionCount:   1,
-			Writes:           1,
-			PreflightSuccess: 1,
-			GroupHits:        map[string]int{"group-00": 1},
-			LeaderHits:       map[string]int{"node-00-a": 1},
-			PartitionHits:    map[string]int{"token-000000": 1},
+			Mode:                    routeModeRing,
+			EvidenceScope:           routeEvidenceScopeLocalPreflight,
+			PlacementMode:           "ring",
+			RouteKey:                "_id",
+			WriteShape:              "single_document_insert",
+			LocalOnly:               true,
+			ProductionScaleEligible: false,
+			GroupCount:              1,
+			PartitionCount:          1,
+			Writes:                  1,
+			PreflightSuccess:        1,
+			GroupHits:               map[string]int{"group-00": 1},
+			LeaderHits:              map[string]int{"node-00-a": 1},
+			PartitionHits:           map[string]int{"token-000000": 1},
 		},
 	}
 	var out bytes.Buffer
@@ -3152,6 +3220,9 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		"buffered_indexed_max_root_runs=90",
 		"buffered_indexed_async_flush=true",
 		"buffered_indexed_async_max_queued_units=3",
+		"evidence_scope=local_preflight",
+		"production_scale_eligible=false",
+		"production_route_evidence_status=unavailable_local_preflight_only",
 		"leader_hits=map[node-00-a:1]",
 	} {
 		if !strings.Contains(text, want) {
@@ -3185,15 +3256,21 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 		!decoded.TreeDBCommandWAL ||
 		!decoded.TreeDBBufferedIndexedAsyncFlush ||
 		decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits != 3 ||
+		decoded.ProductionRouteEvidenceStatus != productionRouteEvidenceStatusLocalPreflightOnly ||
+		decoded.ProductionRouteEvidence != nil ||
 		decoded.RouteEvidence == nil ||
+		decoded.RouteEvidence.EvidenceScope != routeEvidenceScopeLocalPreflight ||
+		decoded.RouteEvidence.ProductionScaleEligible ||
 		!reflect.DeepEqual(decoded.RouteEvidence.LeaderHits, map[string]int{"node-00-a": 1}) {
-		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d commandWAL=%t async=%t asyncMax=%d want 1234/5678/90/true/true/3",
+		t.Fatalf("json thresholds docs=%d bytes=%d rootRuns=%d commandWAL=%t async=%t asyncMax=%d routeStatus=%q routeEvidence=%+v want 1234/5678/90/true/true/3 with local-only route evidence",
 			decoded.TreeDBBufferedIndexedWriteMaxDocuments,
 			decoded.TreeDBBufferedIndexedWriteMaxBytes,
 			decoded.TreeDBBufferedIndexedWriteMaxRootRuns,
 			decoded.TreeDBCommandWAL,
 			decoded.TreeDBBufferedIndexedAsyncFlush,
-			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits)
+			decoded.TreeDBBufferedIndexedAsyncFlushMaxQueuedUnits,
+			decoded.ProductionRouteEvidenceStatus,
+			decoded.RouteEvidence)
 	}
 	var decodedWithRoute map[string]any
 	if err := json.Unmarshal(out.Bytes(), &decodedWithRoute); err != nil {
@@ -3210,6 +3287,18 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	if got := leaderHitsJSON["node-00-a"]; got != float64(1) {
 		t.Fatalf("json route_evidence leader_hits node-00-a=%v want 1", got)
 	}
+	if got := routeJSON["evidence_scope"]; got != routeEvidenceScopeLocalPreflight {
+		t.Fatalf("json route_evidence evidence_scope=%v want %q", got, routeEvidenceScopeLocalPreflight)
+	}
+	if got := routeJSON["production_scale_eligible"]; got != false {
+		t.Fatalf("json route_evidence production_scale_eligible=%v want false", got)
+	}
+	if got := decodedWithRoute["production_route_evidence_status"]; got != productionRouteEvidenceStatusLocalPreflightOnly {
+		t.Fatalf("json production_route_evidence_status=%v want %q", got, productionRouteEvidenceStatusLocalPreflightOnly)
+	}
+	if _, ok := decodedWithRoute["production_route_evidence"]; ok {
+		t.Fatalf("json unexpectedly included production_route_evidence for local route evidence: %v", decodedWithRoute["production_route_evidence"])
+	}
 
 	result.TreeDBCommandWAL = false
 	out.Reset()
@@ -3223,6 +3312,94 @@ func TestWriteResultIncludesTreeDBBufferedIndexedThresholds(t *testing.T) {
 	got, ok := decodedMap["treedb_command_wal"]
 	if !ok || got != false {
 		t.Fatalf("json treedb_command_wal=%v present=%t, want false and present", got, ok)
+	}
+}
+
+func TestProductionRouteEvidenceJSONSchemaPlaceholder(t *testing.T) {
+	result := &benchmarkResult{
+		Target:                        "treedb",
+		RouteMode:                     routeModeProduction,
+		Database:                      "bench",
+		Collection:                    "docs",
+		Documents:                     1,
+		BatchSize:                     1,
+		ProductionRouteEvidenceStatus: "available",
+		ProductionRouteEvidence: &productionRouteEvidence{
+			EvidenceScope:                routeEvidenceScopeProductionRoutedCommit,
+			RealRoutedCommits:            true,
+			RouteAttemptsTotal:           11,
+			RouteLocalOwnerHits:          7,
+			RouteRemoteRedirects:         2,
+			RouteRemoteForwards:          1,
+			RouteUnknownOwnerRejects:     1,
+			RouteGroupHits:               map[string]int{"group-00": 7, "group-01": 4},
+			RouteLeaderHits:              map[string]int{"node-00-a": 7, "node-01-a": 4},
+			RouteTokenPartitionHits:      map[string]int{"token-000000": 7, "token-000001": 4},
+			CommitGroupHits:              map[string]int{"group-00": 6, "group-01": 3},
+			AppliedGroupHits:             map[string]int{"group-00": 6, "group-01": 3},
+			FanoutSplitAttempts:          5,
+			FanoutSplitFailures:          1,
+			DirectLocalBypassRejects:     3,
+			WriteLatencyMicros:           latencySummary{P50: 10, P95: 20, P99: 30},
+			WritesPerSecond:              1234.5,
+			BytesPerOp:                   456,
+			AllocsPerOp:                  7,
+			CPUContext:                   "unit-test",
+			StorageSnapshotOverheadBytes: 89,
+			ArtifactPointers:             map[string]string{"cpu": "profiles/cpu.pprof"},
+		},
+	}
+	var out bytes.Buffer
+	if err := writeResult(&out, "json", result); err != nil {
+		t.Fatalf("writeResult json: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("unmarshal json result: %v", err)
+	}
+	productionJSON, ok := decoded["production_route_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("production_route_evidence missing or wrong type: %#v", decoded["production_route_evidence"])
+	}
+	if _, ok := decoded["route_evidence"]; ok {
+		t.Fatalf("production schema placeholder should not populate local route_evidence: %v", decoded["route_evidence"])
+	}
+	for _, key := range []string{
+		"evidence_scope",
+		"real_routed_commits",
+		"route_attempts_total",
+		"route_local_owner_hits",
+		"route_remote_redirects",
+		"route_remote_forwards",
+		"route_unknown_owner_rejects",
+		"route_group_hits",
+		"route_leader_hits",
+		"route_token_partition_hits",
+		"commit_group_hits",
+		"applied_group_hits",
+		"fanout_split_attempts",
+		"fanout_split_failures",
+		"direct_local_bypass_rejects",
+		"write_latency_micros",
+		"writes_per_sec",
+		"b_per_op",
+		"allocs_per_op",
+		"cpu_context",
+		"storage_snapshot_overhead_bytes",
+		"artifact_pointers",
+	} {
+		if _, ok := productionJSON[key]; !ok {
+			t.Fatalf("production_route_evidence missing key %q: %v", key, productionJSON)
+		}
+	}
+	if got := productionJSON["evidence_scope"]; got != routeEvidenceScopeProductionRoutedCommit {
+		t.Fatalf("production evidence_scope=%v want %q", got, routeEvidenceScopeProductionRoutedCommit)
+	}
+	if got := productionJSON["real_routed_commits"]; got != true {
+		t.Fatalf("real_routed_commits=%v want true", got)
+	}
+	if got := decoded["production_route_evidence_status"]; got != "available" {
+		t.Fatalf("production_route_evidence_status=%v want available", got)
 	}
 }
 
