@@ -295,6 +295,27 @@ func TestGroupRoutedSubmitterUnknownOwnerHasStableRouteClassBeforeSubmit(t *test
 	}
 }
 
+func TestGroupRoutedSubmitterMissingOwnerHasStableRouteClassBeforeSubmit(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA)
+
+	meta := routeMetadata("", iwire.AckVisible)
+	_, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), meta)
+	if !errors.Is(err, ErrRouteTargetMissing) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want route target missing", err)
+	}
+	route, ok := RouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("RouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != RouteErrorClassMissingOwner || route.GroupID != "" || route.Collection != "users" {
+		t.Fatalf("route metadata=%+v want missing owner for users route", route)
+	}
+	if calls := groupA.snapshot(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+}
+
 func TestGroupSubmitterRegistryRejectsMismatchedConfiguredGroup(t *testing.T) {
 	_, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{
 		{GroupID: "group-a", Submitter: &recordingGroupSubmitter{groupID: "group-b"}},
