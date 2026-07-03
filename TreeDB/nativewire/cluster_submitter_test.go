@@ -764,32 +764,77 @@ func TestClusterRoutePreflightRejectsMissingPlacementMode(t *testing.T) {
 	}
 }
 
-func TestClusterRoutePreflightRejectsFanoutTokenBatch(t *testing.T) {
-	submitter := &routingClusterSubmitter{
-		fakeClusterSubmitter: &fakeClusterSubmitter{},
-		target: ClusterRouteTarget{
-			PlacementMode:   string(raftplacement.PlacementModeRingV1),
-			Shape:           ClusterRouteShapeTokenBatch,
-			TokenBatchClass: string(raftplacement.TokenBatchRouteFanoutRequiredV1),
+func TestClusterRoutePreflightRejectsTokenBatchClassesBeforeSubmit(t *testing.T) {
+	tests := []struct {
+		name      string
+		class     raftplacement.TokenBatchRouteClassV1
+		target    ClusterRouteTarget
+		wantText  string
+		wantClass string
+	}{
+		{
+			name:  "same_partition_requires_command_split",
+			class: raftplacement.TokenBatchRouteSamePartitionV1,
+			target: ClusterRouteTarget{
+				GroupID:         "group-a",
+				LeaderHint:      "node-a",
+				PlacementMode:   string(raftplacement.PlacementModeRingV1),
+				Shape:           ClusterRouteShapeTokenBatch,
+				TokenBatchClass: string(raftplacement.TokenBatchRouteSamePartitionV1),
+			},
+			wantText:  "requires command split before submit",
+			wantClass: "route_class=same_partition",
+		},
+		{
+			name:  "same_group_multi_partition_requires_command_split",
+			class: raftplacement.TokenBatchRouteSameGroupV1,
+			target: ClusterRouteTarget{
+				GroupID:         "group-a",
+				LeaderHint:      "node-a",
+				PlacementMode:   string(raftplacement.PlacementModeRingV1),
+				Shape:           ClusterRouteShapeTokenBatch,
+				TokenBatchClass: string(raftplacement.TokenBatchRouteSameGroupV1),
+			},
+			wantText:  "requires command split before submit",
+			wantClass: "route_class=same_group_multi_partition",
+		},
+		{
+			name:  "cross_group_requires_fanout",
+			class: raftplacement.TokenBatchRouteFanoutRequiredV1,
+			target: ClusterRouteTarget{
+				PlacementMode:   string(raftplacement.PlacementModeRingV1),
+				Shape:           ClusterRouteShapeTokenBatch,
+				TokenBatchClass: string(raftplacement.TokenBatchRouteFanoutRequiredV1),
+			},
+			wantText:  "requires fanout before submit",
+			wantClass: "route_class=fanout_required",
 		},
 	}
-	request := ClusterRouteRequest{
-		Database:    "default",
-		Catalog:     "default",
-		Collection:  "users",
-		CommandID:   iwire.CommandInsertBatch,
-		CommandName: "insert_batch",
-		Shape:       ClusterRouteShapeTokenBatch,
-		Tokens:      []uint64{1, 2},
-	}
-	if _, _, err := PreflightClusterRoute(context.Background(), submitter, request); codeOf(err) != iwire.ErrReadOnly || !strings.Contains(err.Error(), "requires fanout before submit") {
-		t.Fatalf("token batch fanout preflight err=%v want fanout read-only", err)
-	}
-	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
-		t.Fatalf("route calls=%d want 1", len(routes))
-	}
-	if calls := submitter.snapshot(); len(calls) != 0 {
-		t.Fatalf("submitter calls=%d want 0", len(calls))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			submitter := &routingClusterSubmitter{
+				fakeClusterSubmitter: &fakeClusterSubmitter{},
+				target:               tc.target,
+			}
+			request := ClusterRouteRequest{
+				Database:    "default",
+				Catalog:     "default",
+				Collection:  "users",
+				CommandID:   iwire.CommandInsertBatch,
+				CommandName: "insert_batch",
+				Shape:       ClusterRouteShapeTokenBatch,
+				Tokens:      []uint64{1, 2},
+			}
+			if _, _, err := PreflightClusterRoute(context.Background(), submitter, request); codeOf(err) != iwire.ErrReadOnly || !strings.Contains(err.Error(), tc.wantText) || !strings.Contains(err.Error(), tc.wantClass) {
+				t.Fatalf("token batch class %s preflight err=%v want read-only containing %q and %q", tc.class, err, tc.wantText, tc.wantClass)
+			}
+			if routes := submitter.snapshotRoutes(); len(routes) != 1 {
+				t.Fatalf("route calls=%d want 1", len(routes))
+			}
+			if calls := submitter.snapshot(); len(calls) != 0 {
+				t.Fatalf("submitter calls=%d want 0", len(calls))
+			}
+		})
 	}
 }
 
@@ -918,6 +963,12 @@ func TestCatalogClusterRouteProviderRoutesResolvedCatalog(t *testing.T) {
 				wantClass raftplacement.TokenBatchRouteClassV1
 				wantGroup string
 			}{
+				{
+					name:      "single_token",
+					tokens:    []uint64{1},
+					wantClass: raftplacement.TokenBatchRouteSingleTokenV1,
+					wantGroup: "group-a",
+				},
 				{
 					name:      "same_partition",
 					tokens:    []uint64{1, 2},

@@ -219,6 +219,31 @@ func TestGroupRoutedSubmitterRejectsUnsupportedRoutesBeforeSubmit(t *testing.T) 
 	}
 }
 
+func TestGroupRoutedSubmitterRejectsUnknownRemoteOwnerWithStableHintBeforeSubmit(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	groupB := &recordingGroupSubmitter{groupID: "group-b"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA, groupB)
+
+	meta := routeMetadata("group-z", iwire.AckRaftCommitted)
+	meta.ClusterRouteLeaderHint = "node-z"
+	_, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), meta)
+	if !errors.Is(err, ErrRouteTargetUnknown) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want route target unknown", err)
+	}
+	if !strings.Contains(err.Error(), `route group "group-z" is not configured locally`) {
+		t.Fatalf("SubmitCommandEntryV1 err=%q want stable unknown-owner text", err)
+	}
+	if !strings.Contains(err.Error(), "leader_hint=node-z") {
+		t.Fatalf("SubmitCommandEntryV1 err=%q want leader hint", err)
+	}
+	if calls := groupA.snapshot(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshot(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
 func TestGroupSubmitterRegistryRejectsMismatchedConfiguredGroup(t *testing.T) {
 	_, err := NewGroupSubmitterRegistryV1([]GroupSubmitterV1{
 		{GroupID: "group-a", Submitter: &recordingGroupSubmitter{groupID: "group-b"}},
