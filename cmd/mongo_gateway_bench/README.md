@@ -148,11 +148,25 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
 
 JSON output includes top-level `route_mode`, `route_group_count`, and
 `route_partition_count` fields. When ring mode is enabled, `route_evidence`
-contains `write_shape=single_document_insert`, `local_only=true`,
-`preflight_success`, `fanout_rejected`, `group_hits`, `leader_hits`,
-`partition_hits`, and any fanout rejection text. Treat those fields as local
-deterministic routing distribution evidence only, not as a cluster throughput or
-scaleout claim.
+contains `evidence_scope=local_preflight`,
+`write_shape=single_document_insert`, `local_only=true`,
+`production_scale_eligible=false`, `preflight_success`, `fanout_rejected`,
+`group_hits`, `leader_hits`, `partition_hits`, and any fanout rejection text.
+The result also emits
+`production_route_evidence_status=unavailable_local_preflight_only` and omits
+`production_route_evidence`. Treat those fields as local deterministic routing
+distribution evidence only, not as a cluster throughput or scaleout claim.
+
+`-route-mode production` is reserved and intentionally fails closed until the
+benchmark exercises real production routed commits. Future production route
+results must use the separate `production_route_evidence` object instead of
+reusing local `route_evidence`. That production schema is reserved for
+`evidence_scope=production_routed_commit`, `real_routed_commits`,
+route-attempt/local-owner/remote-redirect/remote-forward/unknown-owner counters,
+route group/leader/token-partition hits, commit and applied group hits,
+fanout/split attempts and failures, direct-local-bypass rejects, write
+p50/p95/p99 latency, writes/sec, `B/op`, `allocs/op`, CPU context,
+storage/snapshot overhead, and artifact pointers.
 
 Use `-insert-producers N` to split the insert load phase across producer
 goroutines. The effective producer count is capped at the number of insert

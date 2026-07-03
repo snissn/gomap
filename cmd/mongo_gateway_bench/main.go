@@ -119,38 +119,40 @@ type config struct {
 }
 
 type benchmarkResult struct {
-	Target                     string         `json:"target"`
-	MongoURI                   string         `json:"mongo_uri,omitempty"`
-	MongoCompact               bool           `json:"mongo_compact,omitempty"`
-	RouteMode                  string         `json:"route_mode"`
-	RouteGroupCount            int            `json:"route_group_count,omitempty"`
-	RoutePartitionCount        int            `json:"route_partition_count,omitempty"`
-	RouteEvidence              *routeEvidence `json:"route_evidence,omitempty"`
-	TreeDBDir                  string         `json:"treedb_dir,omitempty"`
-	Database                   string         `json:"database"`
-	Collection                 string         `json:"collection"`
-	Documents                  int            `json:"documents"`
-	BatchSize                  int            `json:"batch_size"`
-	InsertProducers            int            `json:"insert_producers"`
-	MongoMaxPoolSize           int            `json:"mongo_max_pool_size,omitempty"`
-	MongoMinPoolSize           int            `json:"mongo_min_pool_size,omitempty"`
-	MongoMaxConnecting         int            `json:"mongo_max_connecting,omitempty"`
-	SecondaryIndexes           int            `json:"secondary_indexes"`
-	ClientMode                 string         `json:"client_mode"`
-	ConcurrentReadKinds        []string       `json:"concurrent_read_kinds,omitempty"`
-	SkippedConcurrentReadKinds []string       `json:"skipped_concurrent_read_kinds,omitempty"`
-	ConcurrentReaders          int            `json:"concurrent_readers,omitempty"`
-	ConcurrentReaderSweep      []int          `json:"concurrent_reader_sweep,omitempty"`
-	ConcurrentReads            int            `json:"concurrent_reads,omitempty"`
-	ConcurrentRangeReaders     int            `json:"concurrent_range_readers,omitempty"`
-	ConcurrentRangeReaderSweep []int          `json:"concurrent_range_reader_sweep,omitempty"`
-	ConcurrentRangeReads       int            `json:"concurrent_range_reads,omitempty"`
-	RawWireTCPPipelineDepth    int            `json:"raw_wire_tcp_pipeline_depth,omitempty"`
-	ConcurrentWriters          int            `json:"concurrent_writers,omitempty"`
-	ConcurrentWriterSweep      []int          `json:"concurrent_writer_sweep,omitempty"`
-	ConcurrentWrites           int            `json:"concurrent_writes,omitempty"`
-	DocumentShape              string         `json:"document_shape,omitempty"`
-	PointReadProjection        string         `json:"point_read_projection,omitempty"`
+	Target                        string                   `json:"target"`
+	MongoURI                      string                   `json:"mongo_uri,omitempty"`
+	MongoCompact                  bool                     `json:"mongo_compact,omitempty"`
+	RouteMode                     string                   `json:"route_mode"`
+	RouteGroupCount               int                      `json:"route_group_count,omitempty"`
+	RoutePartitionCount           int                      `json:"route_partition_count,omitempty"`
+	RouteEvidence                 *routeEvidence           `json:"route_evidence,omitempty"`
+	ProductionRouteEvidenceStatus string                   `json:"production_route_evidence_status,omitempty"`
+	ProductionRouteEvidence       *productionRouteEvidence `json:"production_route_evidence,omitempty"`
+	TreeDBDir                     string                   `json:"treedb_dir,omitempty"`
+	Database                      string                   `json:"database"`
+	Collection                    string                   `json:"collection"`
+	Documents                     int                      `json:"documents"`
+	BatchSize                     int                      `json:"batch_size"`
+	InsertProducers               int                      `json:"insert_producers"`
+	MongoMaxPoolSize              int                      `json:"mongo_max_pool_size,omitempty"`
+	MongoMinPoolSize              int                      `json:"mongo_min_pool_size,omitempty"`
+	MongoMaxConnecting            int                      `json:"mongo_max_connecting,omitempty"`
+	SecondaryIndexes              int                      `json:"secondary_indexes"`
+	ClientMode                    string                   `json:"client_mode"`
+	ConcurrentReadKinds           []string                 `json:"concurrent_read_kinds,omitempty"`
+	SkippedConcurrentReadKinds    []string                 `json:"skipped_concurrent_read_kinds,omitempty"`
+	ConcurrentReaders             int                      `json:"concurrent_readers,omitempty"`
+	ConcurrentReaderSweep         []int                    `json:"concurrent_reader_sweep,omitempty"`
+	ConcurrentReads               int                      `json:"concurrent_reads,omitempty"`
+	ConcurrentRangeReaders        int                      `json:"concurrent_range_readers,omitempty"`
+	ConcurrentRangeReaderSweep    []int                    `json:"concurrent_range_reader_sweep,omitempty"`
+	ConcurrentRangeReads          int                      `json:"concurrent_range_reads,omitempty"`
+	RawWireTCPPipelineDepth       int                      `json:"raw_wire_tcp_pipeline_depth,omitempty"`
+	ConcurrentWriters             int                      `json:"concurrent_writers,omitempty"`
+	ConcurrentWriterSweep         []int                    `json:"concurrent_writer_sweep,omitempty"`
+	ConcurrentWrites              int                      `json:"concurrent_writes,omitempty"`
+	DocumentShape                 string                   `json:"document_shape,omitempty"`
+	PointReadProjection           string                   `json:"point_read_projection,omitempty"`
 
 	// Always emit this knob in JSON so benchmark artifacts distinguish default
 	// false runs from older runs that predate indexed-field update coverage.
@@ -241,20 +243,47 @@ type maintenanceResult struct {
 }
 
 type routeEvidence struct {
-	Mode                 string         `json:"mode"`
-	PlacementMode        string         `json:"placement_mode"`
-	RouteKey             string         `json:"route_key"`
-	WriteShape           string         `json:"write_shape"`
-	LocalOnly            bool           `json:"local_only"`
-	GroupCount           int            `json:"group_count"`
-	PartitionCount       int            `json:"partition_count"`
-	Writes               int            `json:"writes"`
-	PreflightSuccess     int            `json:"preflight_success"`
-	FanoutRejected       int            `json:"fanout_rejected"`
-	GroupHits            map[string]int `json:"group_hits,omitempty"`
-	LeaderHits           map[string]int `json:"leader_hits,omitempty"`
-	PartitionHits        map[string]int `json:"partition_hits,omitempty"`
-	UnsupportedFanoutErr string         `json:"unsupported_fanout_error,omitempty"`
+	Mode                    string         `json:"mode"`
+	EvidenceScope           string         `json:"evidence_scope"`
+	PlacementMode           string         `json:"placement_mode"`
+	RouteKey                string         `json:"route_key"`
+	WriteShape              string         `json:"write_shape"`
+	LocalOnly               bool           `json:"local_only"`
+	ProductionScaleEligible bool           `json:"production_scale_eligible"`
+	GroupCount              int            `json:"group_count"`
+	PartitionCount          int            `json:"partition_count"`
+	Writes                  int            `json:"writes"`
+	PreflightSuccess        int            `json:"preflight_success"`
+	FanoutRejected          int            `json:"fanout_rejected"`
+	GroupHits               map[string]int `json:"group_hits,omitempty"`
+	LeaderHits              map[string]int `json:"leader_hits,omitempty"`
+	PartitionHits           map[string]int `json:"partition_hits,omitempty"`
+	UnsupportedFanoutErr    string         `json:"unsupported_fanout_error,omitempty"`
+}
+
+type productionRouteEvidence struct {
+	EvidenceScope                string            `json:"evidence_scope"`
+	RealRoutedCommits            bool              `json:"real_routed_commits"`
+	RouteAttemptsTotal           int64             `json:"route_attempts_total"`
+	RouteLocalOwnerHits          int64             `json:"route_local_owner_hits"`
+	RouteRemoteRedirects         int64             `json:"route_remote_redirects"`
+	RouteRemoteForwards          int64             `json:"route_remote_forwards"`
+	RouteUnknownOwnerRejects     int64             `json:"route_unknown_owner_rejects"`
+	RouteGroupHits               map[string]int    `json:"route_group_hits"`
+	RouteLeaderHits              map[string]int    `json:"route_leader_hits"`
+	RouteTokenPartitionHits      map[string]int    `json:"route_token_partition_hits"`
+	CommitGroupHits              map[string]int    `json:"commit_group_hits"`
+	AppliedGroupHits             map[string]int    `json:"applied_group_hits"`
+	FanoutSplitAttempts          int64             `json:"fanout_split_attempts"`
+	FanoutSplitFailures          int64             `json:"fanout_split_failures"`
+	DirectLocalBypassRejects     int64             `json:"direct_local_bypass_rejects"`
+	WriteLatencyMicros           latencySummary    `json:"write_latency_micros"`
+	WritesPerSecond              float64           `json:"writes_per_sec"`
+	BytesPerOp                   float64           `json:"b_per_op"`
+	AllocsPerOp                  float64           `json:"allocs_per_op"`
+	CPUContext                   string            `json:"cpu_context"`
+	StorageSnapshotOverheadBytes int64             `json:"storage_snapshot_overhead_bytes"`
+	ArtifactPointers             map[string]string `json:"artifact_pointers,omitempty"`
 }
 
 type latencySummary struct {
@@ -415,8 +444,13 @@ const (
 	treeDBReadStateSettled   = "settled"
 	treeDBReadStateUnsettled = "unsettled"
 
-	routeModeOff  = "off"
-	routeModeRing = "ring"
+	routeModeOff        = "off"
+	routeModeRing       = "ring"
+	routeModeProduction = "production"
+
+	routeEvidenceScopeLocalPreflight                = "local_preflight"
+	routeEvidenceScopeProductionRoutedCommit        = "production_routed_commit"
+	productionRouteEvidenceStatusLocalPreflightOnly = "unavailable_local_preflight_only"
 
 	clientModeDriver             = "driver"
 	clientModeDriverFindRaw      = "driver-find-raw"
@@ -534,7 +568,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.Target, "target", "treedb", "benchmark target: treedb or mongo")
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
 	fs.BoolVar(&cfg.MongoCompact, "mongo-compact", false, "compact the MongoDB collection before final stats collection")
-	fs.StringVar(&cfg.RouteMode, "route-mode", cfg.RouteMode, "local route evidence mode: off or ring")
+	fs.StringVar(&cfg.RouteMode, "route-mode", cfg.RouteMode, "route evidence mode: off, ring, or reserved production")
 	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for -route-mode ring; must be >= 1")
 	fs.IntVar(&cfg.RoutePartitionCount, "route-partitions", cfg.RoutePartitionCount, "token partition count for -route-mode ring; must be >= route-groups")
 	fs.StringVar(&cfg.TreeDBDir, "treedb-dir", "", "TreeDB directory for -target treedb; empty uses a temp dir")
@@ -661,6 +695,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.RouteMode != routeModeOff {
 		if cfg.Target != "treedb" {
 			return config{}, errors.New("route-mode is only supported with -target treedb")
+		}
+		if cfg.RouteMode == routeModeProduction {
+			return config{}, errors.New("route-mode production is reserved until real production routed commits exist")
 		}
 		if cfg.ClientMode != clientModeDriver {
 			return config{}, errors.New("route-mode ring is only supported with -client-mode driver")
@@ -956,6 +993,8 @@ func parseRouteMode(raw string) (string, error) {
 		return routeModeOff, nil
 	case routeModeRing:
 		return routeModeRing, nil
+	case routeModeProduction:
+		return routeModeProduction, nil
 	default:
 		return "", fmt.Errorf("unknown route-mode %q", raw)
 	}
@@ -1645,6 +1684,7 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	if cfg.RouteMode == routeModeRing {
 		result.RouteGroupCount = cfg.RouteGroupCount
 		result.RoutePartitionCount = cfg.RoutePartitionCount
+		result.ProductionRouteEvidenceStatus = productionRouteEvidenceStatusLocalPreflightOnly
 	}
 	if cfg.ClientMode == clientModeRawWireTCPPipeline {
 		result.RawWireTCPPipelineDepth = cfg.RawWireTCPPipelineDepth
@@ -1940,6 +1980,7 @@ func runDirectTreeDBBenchmark(ctx context.Context, cfg config, target *benchTarg
 	if cfg.RouteMode == routeModeRing {
 		result.RouteGroupCount = cfg.RouteGroupCount
 		result.RoutePartitionCount = cfg.RoutePartitionCount
+		result.ProductionRouteEvidenceStatus = productionRouteEvidenceStatusLocalPreflightOnly
 	}
 	if cfg.TreeDBDir != "" || cfg.KeepTreeDBDir {
 		result.TreeDBDir = target.treedbDir
@@ -3846,20 +3887,22 @@ func (r *benchmarkRingRouter) evidence(writes int) *routeEvidence {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return &routeEvidence{
-		Mode:                 routeModeRing,
-		PlacementMode:        routeModeRing,
-		RouteKey:             "_id",
-		WriteShape:           "single_document_insert",
-		LocalOnly:            true,
-		GroupCount:           r.groupCount,
-		PartitionCount:       r.partitionCount,
-		Writes:               writes,
-		PreflightSuccess:     r.preflightSuccess,
-		FanoutRejected:       r.fanoutRejected,
-		GroupHits:            cloneStringIntMap(r.groupHits),
-		LeaderHits:           cloneStringIntMap(r.leaderHits),
-		PartitionHits:        cloneStringIntMap(r.partitionHits),
-		UnsupportedFanoutErr: r.unsupportedFanoutErr,
+		Mode:                    routeModeRing,
+		EvidenceScope:           routeEvidenceScopeLocalPreflight,
+		PlacementMode:           routeModeRing,
+		RouteKey:                "_id",
+		WriteShape:              "single_document_insert",
+		LocalOnly:               true,
+		ProductionScaleEligible: false,
+		GroupCount:              r.groupCount,
+		PartitionCount:          r.partitionCount,
+		Writes:                  writes,
+		PreflightSuccess:        r.preflightSuccess,
+		FanoutRejected:          r.fanoutRejected,
+		GroupHits:               cloneStringIntMap(r.groupHits),
+		LeaderHits:              cloneStringIntMap(r.leaderHits),
+		PartitionHits:           cloneStringIntMap(r.partitionHits),
+		UnsupportedFanoutErr:    r.unsupportedFanoutErr,
 	}
 }
 
@@ -6994,14 +7037,17 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		fmt.Fprintln(out)
 		if result.RouteEvidence != nil {
-			fmt.Fprintf(out, "route_evidence mode=%s placement=%s route_key=%s write_shape=%s local_only=%t writes=%d preflight_success=%d fanout_rejected=%d group_hits=%v leader_hits=%v partition_hits=%v\n",
-				result.RouteEvidence.Mode, result.RouteEvidence.PlacementMode, result.RouteEvidence.RouteKey,
-				result.RouteEvidence.WriteShape, result.RouteEvidence.LocalOnly, result.RouteEvidence.Writes,
+			fmt.Fprintf(out, "route_evidence mode=%s evidence_scope=%s placement=%s route_key=%s write_shape=%s local_only=%t production_scale_eligible=%t writes=%d preflight_success=%d fanout_rejected=%d group_hits=%v leader_hits=%v partition_hits=%v\n",
+				result.RouteEvidence.Mode, result.RouteEvidence.EvidenceScope, result.RouteEvidence.PlacementMode, result.RouteEvidence.RouteKey,
+				result.RouteEvidence.WriteShape, result.RouteEvidence.LocalOnly, result.RouteEvidence.ProductionScaleEligible, result.RouteEvidence.Writes,
 				result.RouteEvidence.PreflightSuccess, result.RouteEvidence.FanoutRejected,
 				result.RouteEvidence.GroupHits, result.RouteEvidence.LeaderHits, result.RouteEvidence.PartitionHits)
 			if result.RouteEvidence.UnsupportedFanoutErr != "" {
 				fmt.Fprintf(out, "route_fanout_rejection=%q\n", result.RouteEvidence.UnsupportedFanoutErr)
 			}
+		}
+		if result.ProductionRouteEvidenceStatus != "" {
+			fmt.Fprintf(out, "production_route_evidence_status=%s\n", result.ProductionRouteEvidenceStatus)
 		}
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)
