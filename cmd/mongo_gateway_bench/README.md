@@ -146,9 +146,9 @@ GOWORK=off go run ./cmd/mongo_gateway_bench \
   -format json
 ```
 
-JSON output includes top-level `route_mode`, `route_group_count`, and
-`route_partition_count` fields. When ring mode is enabled, `route_evidence`
-contains `evidence_scope=local_preflight`,
+JSON output always includes a top-level `route_mode` field. When ring mode is
+enabled, `route_group_count` and `route_partition_count` are also emitted and
+`route_evidence` contains `evidence_scope=local_preflight`,
 `write_shape=single_document_insert`, `local_only=true`,
 `production_scale_eligible=false`, `preflight_success`, `fanout_rejected`,
 `group_hits`, `leader_hits`, `partition_hits`, and any fanout rejection text.
