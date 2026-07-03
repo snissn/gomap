@@ -1117,9 +1117,9 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 			want: "route-mode production currently supports only local-owner proof with route-groups=1",
 		},
 		{
-			name: "production explicit command WAL disable remains fail-closed",
+			name: "production explicit command-wal false remains fail-closed",
 			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1", "-treedb-command-wal=false"},
-			want: "route-mode production requires command WAL",
+			want: "route-mode production requires command-WAL",
 		},
 		{
 			name: "production non-BSON format remains fail-closed",

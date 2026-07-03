@@ -671,7 +671,7 @@ func parseConfig(args []string) (config, error) {
 	cfg.RouteMode = routeMode
 	if cfg.Target == "treedb" && cfg.RouteMode == routeModeProduction {
 		if seenFlags["treedb-command-wal"] && !cfg.TreeDBCommandWAL {
-			return config{}, errors.New("route-mode production requires command WAL; do not set -treedb-command-wal=false")
+			return config{}, errors.New("route-mode production requires command-WAL; pass -treedb-command-wal=true or omit the flag")
 		}
 		cfg.TreeDBCommandWAL = true
 		if !seenFlags["treedb-profile"] {
@@ -3835,7 +3835,7 @@ func ensureProductionRouteCollection(ctx context.Context, cfg config, target *be
 			return nil
 		}
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
-			return err
+			return fmt.Errorf("ensureProductionRouteCollection: %w", err)
 		}
 	}
 	if db == nil {
