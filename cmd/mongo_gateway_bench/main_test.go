@@ -1077,6 +1077,29 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 	if oneGroupCfg.RouteMode != routeModeRing || oneGroupCfg.RouteGroupCount != 1 || oneGroupCfg.RoutePartitionCount != 1 {
 		t.Fatalf("unexpected 1-group route config: %+v", oneGroupCfg)
 	}
+	productionCfg, err := parseConfig([]string{
+		"-route-mode", "production",
+		"-route-groups", "1",
+		"-route-partitions", "4",
+		"-documents", "12",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-secondary-indexes", "0",
+		"-treedb-maintenance", treeDBMaintenanceNone,
+	})
+	if err != nil {
+		t.Fatalf("parse production local-owner route config: %v", err)
+	}
+	if productionCfg.RouteMode != routeModeProduction || productionCfg.RouteGroupCount != 1 || productionCfg.RoutePartitionCount != 4 {
+		t.Fatalf("unexpected production route config: %+v", productionCfg)
+	}
+	if !productionCfg.TreeDBCommandWAL || productionCfg.TreeDBProfile != treedb.ProfileCommandWALRelaxed {
+		t.Fatalf("production route command WAL/profile=%v/%q want true/%q", productionCfg.TreeDBCommandWAL, productionCfg.TreeDBProfile, treedb.ProfileCommandWALRelaxed)
+	}
+	if productionCfg.TreeDBDocumentFormat != collections.DocumentFormatBSON {
+		t.Fatalf("production route document format=%q want %q", productionCfg.TreeDBDocumentFormat, collections.DocumentFormatBSON)
+	}
 
 	tests := []struct {
 		name string
@@ -1089,9 +1112,14 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 			want: "unknown route-mode",
 		},
 		{
-			name: "production mode reserved",
-			args: []string{"-target", "treedb", "-route-mode", "production"},
-			want: "route-mode production is reserved until real production routed commits exist",
+			name: "production n-group remains fail-closed",
+			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "2"},
+			want: "route-mode production currently supports only local-owner proof with route-groups=1",
+		},
+		{
+			name: "production non-BSON format remains fail-closed",
+			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1", "-treedb-document-format", "template-v1"},
+			want: "route-mode production currently supports only -treedb-document-format bson",
 		},
 		{
 			name: "mongo target",
@@ -1099,9 +1127,14 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 			want: "route-mode is only supported with -target treedb",
 		},
 		{
-			name: "direct client",
+			name: "ring direct client",
 			args: []string{"-target", "treedb", "-client-mode", "direct", "-route-mode", "ring"},
 			want: "route-mode ring is only supported with -client-mode driver",
+		},
+		{
+			name: "production direct client",
+			args: []string{"-target", "treedb", "-client-mode", "direct", "-route-mode", "production"},
+			want: "route-mode production is only supported with -client-mode driver",
 		},
 		{
 			name: "too few groups",
@@ -1121,6 +1154,90 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 				t.Fatalf("parseConfig(%v) err=%v want containing %q", tt.args, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestTreeDBProductionRouteModeLocalOwnerRoutedCommitSmoke(t *testing.T) {
+	cfg, err := parseConfig([]string{
+		"-target", "treedb",
+		"-route-mode", "production",
+		"-route-groups", "1",
+		"-route-partitions", "4",
+		"-documents", "8",
+		"-batch-size", "1",
+		"-insert-producers", "2",
+		"-reads", "0",
+		"-range-reads", "0",
+		"-updates", "0",
+		"-deletes", "0",
+		"-secondary-indexes", "0",
+		"-treedb-maintenance", treeDBMaintenanceNone,
+		"-prebuild-documents",
+		"-timeout", "0",
+		"-format", "json",
+	})
+	if err != nil {
+		t.Fatalf("parse production route smoke config: %v", err)
+	}
+	target, err := openTarget(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("open target: %v", err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := closeBenchTarget(cleanupCtx, target); err != nil {
+			t.Errorf("cleanup target: %v", err)
+		}
+	}()
+
+	result, err := runBenchmark(context.Background(), cfg, target, nil)
+	if err != nil {
+		t.Fatalf("run production route benchmark: %v", err)
+	}
+	if result.RouteMode != routeModeProduction || result.RouteGroupCount != 1 || result.RoutePartitionCount != 4 {
+		t.Fatalf("unexpected production route result config: %+v", result)
+	}
+	if result.RouteEvidence != nil {
+		t.Fatalf("local route evidence unexpectedly present for production route mode: %+v", result.RouteEvidence)
+	}
+	if result.ProductionRouteEvidenceStatus != "available" {
+		t.Fatalf("production route evidence status=%q want available", result.ProductionRouteEvidenceStatus)
+	}
+	evidence := result.ProductionRouteEvidence
+	if evidence == nil {
+		t.Fatalf("production route evidence missing: %+v", result)
+	}
+	if evidence.EvidenceScope != routeEvidenceScopeProductionRoutedCommit || !evidence.RealRoutedCommits {
+		t.Fatalf("production evidence scope/real commits=%+v want production routed commits", evidence)
+	}
+	wantRoutedCommits := int64(cfg.Documents + 1) // auto-create plus one routed insert per document.
+	if evidence.RouteAttemptsTotal != wantRoutedCommits || evidence.RouteLocalOwnerHits != wantRoutedCommits {
+		t.Fatalf("route attempts/local hits=%d/%d want %d evidence=%+v", evidence.RouteAttemptsTotal, evidence.RouteLocalOwnerHits, wantRoutedCommits, evidence)
+	}
+	if evidence.RouteUnknownOwnerRejects != 1 || evidence.DirectLocalBypassRejects != 1 {
+		t.Fatalf("guardrail rejects unknown/direct=%d/%d want 1/1 evidence=%+v", evidence.RouteUnknownOwnerRejects, evidence.DirectLocalBypassRejects, evidence)
+	}
+	if evidence.RouteRemoteRedirects != 0 || evidence.RouteRemoteForwards != 0 {
+		t.Fatalf("remote redirect/forward counters=%d/%d want 0/0 for local-owner proof", evidence.RouteRemoteRedirects, evidence.RouteRemoteForwards)
+	}
+	if evidence.RouteGroupHits["group-00"] != int(wantRoutedCommits) ||
+		evidence.RouteLeaderHits["node-00-a"] != int(wantRoutedCommits) ||
+		evidence.CommitGroupHits["group-00"] != int(wantRoutedCommits) ||
+		evidence.AppliedGroupHits["group-00"] != int(wantRoutedCommits) {
+		t.Fatalf("group/leader/commit/apply hits do not prove local-owner routed submit/apply: %+v", evidence)
+	}
+	if got := sumStringIntValues(evidence.RouteTokenPartitionHits); got != cfg.Documents {
+		t.Fatalf("token partition hit total=%d want documents=%d hits=%v", got, cfg.Documents, evidence.RouteTokenPartitionHits)
+	}
+	if result.Phases[0].Name != "load_insert_one_production_routed_commit" {
+		t.Fatalf("load phase name=%q want production routed commit boundary", result.Phases[0].Name)
+	}
+	if evidence.WriteLatencyMicros != result.Phases[0].LatencyMicros || evidence.WritesPerSecond != result.Phases[0].OpsPerSecond {
+		t.Fatalf("production write latency/throughput not tied to load phase evidence=%+v phase=%+v", evidence, result.Phases[0])
+	}
+	if evidence.CPUContext == "" || evidence.BytesPerOp <= 0 || evidence.AllocsPerOp <= 0 {
+		t.Fatalf("production measurement context/allocation fields missing: %+v", evidence)
 	}
 }
 
@@ -3319,6 +3436,8 @@ func TestProductionRouteEvidenceJSONSchemaPlaceholder(t *testing.T) {
 	result := &benchmarkResult{
 		Target:                        "treedb",
 		RouteMode:                     routeModeProduction,
+		RouteGroupCount:               1,
+		RoutePartitionCount:           4,
 		Database:                      "bench",
 		Collection:                    "docs",
 		Documents:                     1,
@@ -3400,6 +3519,28 @@ func TestProductionRouteEvidenceJSONSchemaPlaceholder(t *testing.T) {
 	}
 	if got := decoded["production_route_evidence_status"]; got != "available" {
 		t.Fatalf("production_route_evidence_status=%v want available", got)
+	}
+
+	out.Reset()
+	if err := writeResult(&out, "text", result); err != nil {
+		t.Fatalf("writeResult text: %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"route_mode=production route_groups=1 route_partitions=4",
+		"production_route_evidence_status=available",
+		"production_route_evidence evidence_scope=production_routed_commit",
+		"real_routed_commits=true",
+		"local_owner_hits=7",
+		"direct_local_bypass_rejects=3",
+		"commit_group_hits=map[group-00:6 group-01:3]",
+		"writes_sec=1234.500000",
+		"b_per_op=456.00",
+		"allocs_per_op=7.00",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("text production evidence missing %q: %s", want, text)
+		}
 	}
 }
 
