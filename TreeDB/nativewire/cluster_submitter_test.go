@@ -486,6 +486,34 @@ func TestClusterRouteErrorMetadataFieldsPreserveWhitespaceAcrossWireText(t *test
 	}
 }
 
+func TestClusterRouteErrorMetadataOfIgnoresLeaderOnlyProtocolWrapper(t *testing.T) {
+	err := &clusterRouteProtocolError{
+		err:        errors.New("nativewire: remote error code 8: leader unavailable"),
+		leaderHint: "node-z",
+		hasRoute:   false,
+	}
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for leader-only wrapper", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfFallsThroughLeaderOnlyProtocolWrapper(t *testing.T) {
+	err := &clusterRouteProtocolError{
+		err: &WireError{
+			Message: "cluster route rejected; route_error_class=remote_owner_redirect route_group=group+z leader_hint=node+z",
+		},
+		leaderHint: "node-z",
+		hasRoute:   false,
+	}
+	metadata, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatal("ClusterRouteErrorMetadataOf ok=false want parsed route metadata from wrapped wire error")
+	}
+	if metadata.Class != "remote_owner_redirect" || metadata.GroupID != "group z" || metadata.LeaderHint != "node z" {
+		t.Fatalf("ClusterRouteErrorMetadataOf metadata=%+v want parsed wrapped wire route metadata", metadata)
+	}
+}
+
 func TestClusterAdmissionMissingProviderFailsClosed(t *testing.T) {
 	err := AdmitClusterMutation(context.Background(), noAdmissionClusterSubmitter{})
 	if nativeCodeOf(err) != iwire.ErrDurabilityUnavailable {

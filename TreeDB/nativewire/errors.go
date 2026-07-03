@@ -76,7 +76,10 @@ func ClusterRouteErrorMetadataOf(err error) (ClusterRouteErrorMetadata, bool) {
 		ClusterRouteErrorMetadata() ClusterRouteErrorMetadata
 	}
 	if errors.As(err, &routed) {
-		return routed.ClusterRouteErrorMetadata().Clone(), true
+		metadata := routed.ClusterRouteErrorMetadata()
+		if clusterRouteErrorMetadataPresent(metadata) {
+			return metadata.Clone(), true
+		}
 	}
 	if route, ok := raftcluster.RouteErrorMetadataOf(err); ok {
 		return clusterRouteErrorMetadataFromRaft(route), true
@@ -86,6 +89,10 @@ func ClusterRouteErrorMetadataOf(err error) (ClusterRouteErrorMetadata, bool) {
 		return parseClusterRouteErrorMetadata(wireErr.Message)
 	}
 	return parseClusterRouteErrorMetadata(err.Error())
+}
+
+func clusterRouteErrorMetadataPresent(metadata ClusterRouteErrorMetadata) bool {
+	return metadata.Class != ""
 }
 
 func clusterRouteErrorMetadataFromRaft(route raftcluster.RouteErrorMetadata) ClusterRouteErrorMetadata {

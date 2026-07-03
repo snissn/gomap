@@ -391,7 +391,28 @@ func assertStringField(tb testing.TB, doc wire.Document, key, want string) {
 	}
 }
 
-func assertMongoRemoteOwnerRouteFields(tb testing.TB, doc wire.Document) {
+func assertStringArrayField(tb testing.TB, doc wire.Document, key string, want []string) {
+	tb.Helper()
+	raw, ok := bson.Raw(doc).Lookup(key).ArrayOK()
+	if !ok {
+		tb.Fatalf("%s missing or non-array", key)
+	}
+	values, err := raw.Values()
+	if err != nil {
+		tb.Fatalf("%s values: %v", key, err)
+	}
+	if len(values) != len(want) {
+		tb.Fatalf("%s len=%d want %d", key, len(values), len(want))
+	}
+	for i, value := range values {
+		got, ok := value.StringValueOK()
+		if !ok || got != want[i] {
+			tb.Fatalf("%s[%d]=%q typeOK=%v want %q", key, i, got, ok, want[i])
+		}
+	}
+}
+
+func assertMongoRemoteOwnerRouteFields(tb testing.TB, doc wire.Document, wantToken uint64) {
 	tb.Helper()
 	assertBool(tb, doc, "treedbClusterError", true)
 	assertStringField(tb, doc, "treedbErrorClass", "remote_owner_redirect")
@@ -405,6 +426,9 @@ func assertMongoRemoteOwnerRouteFields(tb testing.TB, doc wire.Document) {
 	assertStringField(tb, doc, "treedbRoutePlacementMode", string(raftplacement.PlacementModeRingV1))
 	assertStringField(tb, doc, "treedbRouteKey", string(raftplacement.RouteKeyDocumentIDV1))
 	assertStringField(tb, doc, "treedbRoutePartitionId", "p9")
+	assertStringArrayField(tb, doc, "treedbRouteMembers", []string{"node-z", "node-y"})
+	assertBool(tb, doc, "treedbRouteTokenKnown", true)
+	assertStringField(tb, doc, "treedbRouteToken", fmt.Sprintf("%d", wantToken))
 }
 
 func assertNoField(tb testing.TB, doc wire.Document, key string) {
@@ -1405,7 +1429,7 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 	})
 	assertCommandError(t, insertResponse, "NotWritablePrimary")
 	assertErrmsgContains(t, insertResponse, "route target unknown")
-	assertMongoRemoteOwnerRouteFields(t, insertResponse)
+	assertMongoRemoteOwnerRouteFields(t, insertResponse, mongoClusterRouteTokenForValue(t, "u2"))
 	key2, err := encodePrimaryKey(mustRawValue(t, "u2"))
 	if err != nil {
 		t.Fatalf("encode u2 primary key: %v", err)
@@ -1423,7 +1447,7 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, updateResponse, "NotWritablePrimary")
-	assertMongoRemoteOwnerRouteFields(t, updateResponse)
+	assertMongoRemoteOwnerRouteFields(t, updateResponse, mongoClusterRouteTokenForValue(t, "u1"))
 
 	deleteResponse := serveCommand(t, server, 336306, bson.D{
 		{Key: "delete", Value: "users"},
@@ -1431,7 +1455,7 @@ func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 		{Key: "$db", Value: "app"},
 	})
 	assertCommandError(t, deleteResponse, "NotWritablePrimary")
-	assertMongoRemoteOwnerRouteFields(t, deleteResponse)
+	assertMongoRemoteOwnerRouteFields(t, deleteResponse, mongoClusterRouteTokenForValue(t, "u1"))
 
 	got, err := users.Get(key1)
 	if err != nil {
