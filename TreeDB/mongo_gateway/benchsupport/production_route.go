@@ -364,6 +364,9 @@ func (r *productionRouteProofRecorder) ClusterRoute(_ context.Context, request n
 		}
 		target = r.routeToken(request.Token)
 	case nativewire.ClusterRouteShapeTokenBatch:
+		if len(request.Tokens) == 0 {
+			return nativewire.ClusterRouteTarget{}, errors.New("missing token(s)")
+		}
 		target = r.routeTokenBatch(request.Tokens)
 	case nativewire.ClusterRouteShapeCollection:
 		target = r.groupTarget(0)

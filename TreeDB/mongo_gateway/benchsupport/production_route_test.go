@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
 func TestProductionRouteProofCatalogVersionClearsStaleKnownState(t *testing.T) {
@@ -30,5 +32,16 @@ func TestProductionRouteProofCatalogVersionServerCatalogVersionUsesContext(t *te
 	version, err := provider.ServerCatalogVersion(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("ServerCatalogVersion version=%d err=%v want context canceled", version, err)
+	}
+}
+
+func TestProductionRouteProofRecorderClusterRouteTokenBatchRequiresTokens(t *testing.T) {
+	recorder := newProductionRouteProofRecorder(1, 1)
+	_, err := recorder.ClusterRoute(context.Background(), nativewire.ClusterRouteRequest{
+		Shape:  nativewire.ClusterRouteShapeTokenBatch,
+		Tokens: nil,
+	})
+	if err == nil || err.Error() != "missing token(s)" {
+		t.Fatalf("ClusterRoute empty token batch err=%v want missing token(s)", err)
 	}
 }
