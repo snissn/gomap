@@ -2197,6 +2197,17 @@ func TestMongoClusterMutationCommandErrorClassifiesLeaderHintBeforeRouteText(t *
 	assertStringField(t, response, "treedbLeaderHint", "router-1:27017")
 }
 
+func TestMongoClusterMutationCommandErrorDecodesEscapedLeaderHint(t *testing.T) {
+	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "not leader; leader_hint=node+z"}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertStringField(t, response, "treedbErrorClass", "not_leader")
+	assertStringField(t, response, "treedbLeaderHint", "node z")
+}
+
 func TestMongoClusterMutationCommandErrorClassifiesQueryRouteAsRouteRejected(t *testing.T) {
 	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "cluster query route shape is not supported before scatter planning"}
 	response, err := mongoClusterMutationCommandError(clusterErr)
