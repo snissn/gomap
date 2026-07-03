@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -117,7 +118,11 @@ func parseClusterRouteErrorMetadata(message string) (ClusterRouteErrorMetadata, 
 		if !ok {
 			continue
 		}
-		fields[key] = strings.Trim(value, " ;,\t\r\n")
+		value = strings.Trim(value, " ;,\t\r\n")
+		if key != "route_members" {
+			value = decodeClusterRouteErrorField(value)
+		}
+		fields[key] = value
 	}
 	class := fields["route_error_class"]
 	if class == "" {
@@ -137,7 +142,13 @@ func parseClusterRouteErrorMetadata(message string) (ClusterRouteErrorMetadata, 
 		LocalGroupID:  fields["local_group"],
 	}
 	if rawMembers := fields["route_members"]; rawMembers != "" {
-		metadata.Members = strings.Split(rawMembers, ",")
+		rawMembers := strings.Split(rawMembers, ",")
+		metadata.Members = make([]string, 0, len(rawMembers))
+		for _, member := range rawMembers {
+			if member != "" {
+				metadata.Members = append(metadata.Members, decodeClusterRouteErrorField(member))
+			}
+		}
 	}
 	if fields["route_token_known"] == "true" {
 		metadata.TokenKnown = true
@@ -150,18 +161,34 @@ func parseClusterRouteErrorMetadata(message string) (ClusterRouteErrorMetadata, 
 	return metadata, true
 }
 
+func decodeClusterRouteErrorField(value string) string {
+	decoded, err := url.QueryUnescape(value)
+	if err != nil {
+		return value
+	}
+	return decoded
+}
+
 func clusterRouteErrorMetadataFields(metadata ClusterRouteErrorMetadata) string {
 	var fields []string
 	appendField := func(key, value string) {
 		if value != "" {
-			fields = append(fields, key+"="+value)
+			fields = append(fields, key+"="+url.QueryEscape(value))
 		}
 	}
 	appendField("route_error_class", metadata.Class)
 	appendField("route_group", metadata.GroupID)
 	appendField("leader_hint", metadata.LeaderHint)
 	if len(metadata.Members) != 0 {
-		appendField("route_members", strings.Join(metadata.Members, ","))
+		escaped := make([]string, 0, len(metadata.Members))
+		for _, member := range metadata.Members {
+			if member != "" {
+				escaped = append(escaped, url.QueryEscape(member))
+			}
+		}
+		if len(escaped) != 0 {
+			fields = append(fields, "route_members="+strings.Join(escaped, ","))
+		}
 	}
 	appendField("route_database", metadata.Database)
 	appendField("route_catalog", metadata.Catalog)

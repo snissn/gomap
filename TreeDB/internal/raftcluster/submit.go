@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -693,14 +694,22 @@ func routeErrorFields(metadata RouteErrorMetadata) string {
 	var fields []string
 	appendField := func(key, value string) {
 		if value != "" {
-			fields = append(fields, key+"="+value)
+			fields = append(fields, key+"="+url.QueryEscape(value))
 		}
 	}
 	appendField("route_error_class", string(metadata.Class))
 	appendField("route_group", metadata.GroupID)
 	appendField("leader_hint", metadata.LeaderHint)
 	if len(metadata.Members) != 0 {
-		appendField("route_members", strings.Join(metadata.Members, ","))
+		escaped := make([]string, 0, len(metadata.Members))
+		for _, member := range metadata.Members {
+			if member != "" {
+				escaped = append(escaped, url.QueryEscape(member))
+			}
+		}
+		if len(escaped) != 0 {
+			fields = append(fields, "route_members="+strings.Join(escaped, ","))
+		}
 	}
 	appendField("route_database", metadata.Database)
 	appendField("route_catalog", metadata.Catalog)

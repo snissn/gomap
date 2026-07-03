@@ -449,6 +449,43 @@ func assertNativeRemoteOwnerRouteError(tb testing.TB, err error, collection stri
 	}
 }
 
+func TestClusterRouteErrorMetadataFieldsPreserveWhitespaceAcrossWireText(t *testing.T) {
+	want := ClusterRouteErrorMetadata{
+		Class:         "remote_owner_redirect",
+		Database:      "sales db",
+		Catalog:       "default catalog",
+		Collection:    "sales archive",
+		Shape:         string(ClusterRouteShapeToken),
+		GroupID:       "group z",
+		Members:       []string{"node z", "node y"},
+		LeaderHint:    "node z",
+		PlacementMode: string(raftplacement.PlacementModeRingV1),
+		RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+		TokenKnown:    true,
+		Token:         42,
+		PartitionID:   "partition 9",
+		LocalGroupID:  "group local",
+	}
+	fields := clusterRouteErrorMetadataFields(want)
+	got, ok := parseClusterRouteErrorMetadata("cluster route rejected; " + fields)
+	if !ok {
+		t.Fatalf("parseClusterRouteErrorMetadata ok=false fields=%q", fields)
+	}
+	if got.Class != want.Class ||
+		got.Database != want.Database ||
+		got.Catalog != want.Catalog ||
+		got.Collection != want.Collection ||
+		got.GroupID != want.GroupID ||
+		got.LeaderHint != want.LeaderHint ||
+		got.PartitionID != want.PartitionID ||
+		got.LocalGroupID != want.LocalGroupID ||
+		len(got.Members) != len(want.Members) ||
+		got.Members[0] != want.Members[0] ||
+		got.Members[1] != want.Members[1] {
+		t.Fatalf("route metadata roundtrip=%+v want %+v fields=%q", got, want, fields)
+	}
+}
+
 func TestClusterAdmissionMissingProviderFailsClosed(t *testing.T) {
 	err := AdmitClusterMutation(context.Background(), noAdmissionClusterSubmitter{})
 	if nativeCodeOf(err) != iwire.ErrDurabilityUnavailable {
