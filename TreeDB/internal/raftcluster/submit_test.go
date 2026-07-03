@@ -257,7 +257,7 @@ func TestSingleGroupSubmitterRejectsRouteGroupMismatchBeforePreflightCommitApply
 	}
 }
 
-func TestSingleGroupSubmitterMissingRouteOwnerCarriesStableMetadata(t *testing.T) {
+func TestSingleGroupSubmitterMissingRouteGroupIDHasStableRouteClassBeforeSubmit(t *testing.T) {
 	entry := testClusterCommandEntry(t, 7)
 	preflightCalls := 0
 	commitCalls := 0
@@ -284,8 +284,8 @@ func TestSingleGroupSubmitterMissingRouteOwnerCarriesStableMetadata(t *testing.T
 	if !ok {
 		t.Fatalf("RouteErrorMetadataOf ok=false err=%v", err)
 	}
-	if route.Class != RouteErrorClassMissingOwner || route.LocalGroupID != "group-a" || route.GroupID != "" {
-		t.Fatalf("route metadata=%+v want missing owner for local group-a", route)
+	if route.Class != RouteErrorClassMissingOwner || route.LocalGroupID != "group-a" || route.GroupID != "" || route.Collection != "users" {
+		t.Fatalf("route metadata=%+v want missing owner for local group-a/users", route)
 	}
 	if preflightCalls != 0 {
 		t.Fatalf("preflight calls=%d want 0", preflightCalls)
