@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -37,6 +39,115 @@ func (e *WireError) Error() string {
 // guard failure.
 func IsCatalogVersionMismatch(err error) bool {
 	return isRemoteError(err, iwire.ErrCatalogVersionMismatch)
+}
+
+// ClusterRouteErrorMetadata is the nativewire projection of stable route-error
+// metadata returned for redirect-first cluster write failures.
+type ClusterRouteErrorMetadata struct {
+	Class         string
+	Database      string
+	Catalog       string
+	Collection    string
+	Shape         string
+	GroupID       string
+	Members       []string
+	LeaderHint    string
+	PlacementMode string
+	RouteKey      string
+	TokenKnown    bool
+	Token         uint64
+	PartitionID   string
+	LocalGroupID  string
+}
+
+// Clone returns an independent copy of the metadata.
+func (m ClusterRouteErrorMetadata) Clone() ClusterRouteErrorMetadata {
+	m.Members = append([]string(nil), m.Members...)
+	return m
+}
+
+// ClusterRouteErrorMetadataOf returns stable route metadata carried by err.
+func ClusterRouteErrorMetadataOf(err error) (ClusterRouteErrorMetadata, bool) {
+	if err == nil {
+		return ClusterRouteErrorMetadata{}, false
+	}
+	var routed interface {
+		ClusterRouteErrorMetadata() ClusterRouteErrorMetadata
+	}
+	if errors.As(err, &routed) {
+		return routed.ClusterRouteErrorMetadata().Clone(), true
+	}
+	if route, ok := raftcluster.RouteErrorMetadataOf(err); ok {
+		return clusterRouteErrorMetadataFromRaft(route), true
+	}
+	var wireErr *WireError
+	if errors.As(err, &wireErr) {
+		return parseClusterRouteErrorMetadata(wireErr.Message)
+	}
+	return parseClusterRouteErrorMetadata(err.Error())
+}
+
+func clusterRouteErrorMetadataFromRaft(route raftcluster.RouteErrorMetadata) ClusterRouteErrorMetadata {
+	return ClusterRouteErrorMetadata{
+		Class:         string(route.Class),
+		Database:      route.Database,
+		Catalog:       route.Catalog,
+		Collection:    route.Collection,
+		Shape:         route.Shape,
+		GroupID:       route.GroupID,
+		Members:       append([]string(nil), route.Members...),
+		LeaderHint:    route.LeaderHint,
+		PlacementMode: route.PlacementMode,
+		RouteKey:      route.RouteKey,
+		TokenKnown:    route.TokenKnown,
+		Token:         route.Token,
+		PartitionID:   route.PartitionID,
+		LocalGroupID:  route.LocalGroupID,
+	}
+}
+
+func parseClusterRouteErrorMetadata(message string) (ClusterRouteErrorMetadata, bool) {
+	if message == "" || !strings.Contains(message, "route_error_class=") {
+		return ClusterRouteErrorMetadata{}, false
+	}
+	fields := make(map[string]string)
+	for _, field := range strings.Fields(message) {
+		field = strings.Trim(field, " ;,\t\r\n")
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		fields[key] = strings.Trim(value, " ;,\t\r\n")
+	}
+	class := fields["route_error_class"]
+	if class == "" {
+		return ClusterRouteErrorMetadata{}, false
+	}
+	metadata := ClusterRouteErrorMetadata{
+		Class:         class,
+		Database:      fields["route_database"],
+		Catalog:       fields["route_catalog"],
+		Collection:    fields["route_collection"],
+		Shape:         fields["route_shape"],
+		GroupID:       fields["route_group"],
+		LeaderHint:    fields["leader_hint"],
+		PlacementMode: fields["route_placement"],
+		RouteKey:      fields["route_key"],
+		PartitionID:   fields["route_partition"],
+		LocalGroupID:  fields["local_group"],
+	}
+	if rawMembers := fields["route_members"]; rawMembers != "" {
+		metadata.Members = strings.Split(rawMembers, ",")
+	}
+	if fields["route_token_known"] == "true" {
+		metadata.TokenKnown = true
+	}
+	if rawToken := fields["route_token"]; rawToken != "" {
+		if token, err := strconv.ParseUint(rawToken, 10, 64); err == nil {
+			metadata.Token = token
+		}
+	}
+	return metadata, true
 }
 
 func errorCodeFor(err error) iwire.ErrorCode {

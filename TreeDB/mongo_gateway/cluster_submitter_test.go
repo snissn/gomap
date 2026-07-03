@@ -1,6 +1,7 @@
 package mongogateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -159,6 +160,38 @@ func (p *mongoStaticClusterRouteProvider) ClusterRoute(ctx context.Context, req 
 }
 
 func (p *mongoStaticClusterRouteProvider) snapshotRoutes() []treenativewire.ClusterRouteRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]treenativewire.ClusterRouteRequest(nil), p.routes...)
+}
+
+type mongoRemoteOwnerRouteProvider struct {
+	mu     sync.Mutex
+	err    error
+	routes []treenativewire.ClusterRouteRequest
+}
+
+func (p *mongoRemoteOwnerRouteProvider) ClusterRoute(ctx context.Context, req treenativewire.ClusterRouteRequest) (treenativewire.ClusterRouteTarget, error) {
+	p.mu.Lock()
+	p.routes = append(p.routes, req)
+	p.mu.Unlock()
+	if p.err != nil {
+		return treenativewire.ClusterRouteTarget{}, p.err
+	}
+	return treenativewire.ClusterRouteTarget{
+		GroupID:       "group-z",
+		Members:       []string{"node-z", "node-y"},
+		LeaderHint:    "node-z",
+		PlacementMode: string(raftplacement.PlacementModeRingV1),
+		RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+		Shape:         treenativewire.ClusterRouteShapeToken,
+		TokenKnown:    req.TokenKnown,
+		Token:         req.Token,
+		PartitionID:   "p9",
+	}, nil
+}
+
+func (p *mongoRemoteOwnerRouteProvider) snapshotRoutes() []treenativewire.ClusterRouteRequest {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]treenativewire.ClusterRouteRequest(nil), p.routes...)
@@ -356,6 +389,22 @@ func assertStringField(tb testing.TB, doc wire.Document, key, want string) {
 	if !ok || got != want {
 		tb.Fatalf("%s=%q typeOK=%v want %q", key, got, ok, want)
 	}
+}
+
+func assertMongoRemoteOwnerRouteFields(tb testing.TB, doc wire.Document) {
+	tb.Helper()
+	assertBool(tb, doc, "treedbClusterError", true)
+	assertStringField(tb, doc, "treedbErrorClass", "remote_owner_redirect")
+	assertStringField(tb, doc, "treedbLeaderHint", "node-z")
+	assertStringField(tb, doc, "treedbRouteGroup", "group-z")
+	assertStringField(tb, doc, "treedbRouteLeaderHint", "node-z")
+	assertStringField(tb, doc, "treedbRouteDatabase", "app")
+	assertStringField(tb, doc, "treedbRouteCatalog", "default")
+	assertStringField(tb, doc, "treedbRouteCollection", "users")
+	assertStringField(tb, doc, "treedbRouteShape", string(treenativewire.ClusterRouteShapeToken))
+	assertStringField(tb, doc, "treedbRoutePlacementMode", string(raftplacement.PlacementModeRingV1))
+	assertStringField(tb, doc, "treedbRouteKey", string(raftplacement.RouteKeyDocumentIDV1))
+	assertStringField(tb, doc, "treedbRoutePartitionId", "p9")
 }
 
 func assertNoField(tb testing.TB, doc wire.Document, key string) {
@@ -1222,8 +1271,9 @@ func TestMongoGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmit(t *testing.T)
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertErrmsgContains(t, response, "route target unknown")
 	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+	assertStringField(t, response, "treedbErrorClass", "remote_owner_redirect")
 	assertStringField(t, response, "treedbLeaderHint", "node-z")
+	assertStringField(t, response, "treedbRouteGroup", "group-z")
 	users, err := server.Collections.OpenCollection("app.users")
 	if err != nil {
 		t.Fatalf("OpenCollection app.users: %v", err)
@@ -1240,6 +1290,120 @@ func TestMongoGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmit(t *testing.T)
 	}
 	if calls := groupB.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
+func TestMongoGroupRoutedDispatcherUnknownOwnerErrorsBeforeSubmit(t *testing.T) {
+	token := mongoClusterRouteTokenForValue(t, "u1")
+	provider := &mongoStaticClusterRouteProvider{
+		target: treenativewire.ClusterRouteTarget{
+			GroupID:       "group-z",
+			PlacementMode: string(raftplacement.PlacementModeRingV1),
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+			Shape:         treenativewire.ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	response := serveCommand(t, server, 336313, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "route target unknown")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "unknown_owner")
+	assertStringField(t, response, "treedbRouteGroup", "group-z")
+	assertNoField(t, response, "treedbLeaderHint")
+	assertNoField(t, response, "treedbRouteLeaderHint")
+	users, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("OpenCollection app.users: %v", err)
+	}
+	key, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode primary key: %v", err)
+	}
+	if got, err := users.Get(key); err != nil || got != nil {
+		t.Fatalf("local app.users Get(u1)=%v err=%v want missing document", bson.Raw(got), err)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
+func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
+	provider := &mongoRemoteOwnerRouteProvider{}
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	users, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("OpenCollection app.users: %v", err)
+	}
+	key1, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode u1 primary key: %v", err)
+	}
+	original := mustDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}})
+	if _, err := users.InsertBatchValidatedBSON([][]byte{key1}, [][]byte{original}); err != nil {
+		t.Fatalf("seed InsertBatchValidatedBSON: %v", err)
+	}
+
+	insertResponse := serveCommand(t, server, 336304, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, insertResponse, "NotWritablePrimary")
+	assertErrmsgContains(t, insertResponse, "route target unknown")
+	assertMongoRemoteOwnerRouteFields(t, insertResponse)
+	key2, err := encodePrimaryKey(mustRawValue(t, "u2"))
+	if err != nil {
+		t.Fatalf("encode u2 primary key: %v", err)
+	}
+	if got, err := users.Get(key2); err != nil || got != nil {
+		t.Fatalf("local app.users Get(u2)=%v err=%v want missing document", bson.Raw(got), err)
+	}
+
+	updateResponse := serveCommand(t, server, 336305, bson.D{
+		{Key: "update", Value: "users"},
+		{Key: "updates", Value: bson.A{bson.D{
+			{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}},
+			{Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "name", Value: "Grace"}}}}},
+		}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, updateResponse, "NotWritablePrimary")
+	assertMongoRemoteOwnerRouteFields(t, updateResponse)
+
+	deleteResponse := serveCommand(t, server, 336306, bson.D{
+		{Key: "delete", Value: "users"},
+		{Key: "deletes", Value: bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "limit", Value: int32(1)}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, deleteResponse, "NotWritablePrimary")
+	assertMongoRemoteOwnerRouteFields(t, deleteResponse)
+
+	got, err := users.Get(key1)
+	if err != nil {
+		t.Fatalf("local app.users Get(u1): %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("local app.users u1 changed after remote-owner mutations: got %v want %v", bson.Raw(got), bson.Raw(original))
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+	if routes := provider.snapshotRoutes(); len(routes) != 3 {
+		t.Fatalf("route calls=%d want insert+update+delete", len(routes))
 	}
 }
 
@@ -1913,8 +2077,9 @@ func TestClusterSubmitterConcreteBridgeRouteGroupMismatchNotWritablePrimary(t *t
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertErrmsgContains(t, response, "route group")
 	assertBool(t, response, "treedbClusterError", true)
-	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+	assertStringField(t, response, "treedbErrorClass", "remote_owner_redirect")
 	assertStringField(t, response, "treedbLeaderHint", "node-c")
+	assertStringField(t, response, "treedbRouteGroup", "group-b")
 	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
 		t.Fatalf("OpenCollection app.users after route mismatch err=%v want collection not found", err)
 	}

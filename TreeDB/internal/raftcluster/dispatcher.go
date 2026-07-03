@@ -115,7 +115,7 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	}
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {
-		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithLeaderHint(metadata, "route group %q is not configured locally", target.GroupID))
+		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithMetadata(metadata, "route group %q is not configured locally", target.GroupID))
 	}
 	if ctx == nil {
 		ctx = context.Background()
