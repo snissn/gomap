@@ -164,7 +164,10 @@ contracts are wired. Production mode uses command WAL and BSON collection
 storage, routes collection creation and each measured `InsertOne` through the
 production cluster submitter boundary, and emits `production_route_evidence`
 only after routed submit, commit, and apply counters prove the local-owner path.
-It does not emit local `route_evidence`.
+It does not emit local `route_evidence`. The current production proof accepts
+only the serial insert-only shape: `-batch-size 1`, `-insert-producers 1`,
+`-secondary-indexes 0`, `-reads 0`, `-range-reads 0`, `-updates 0`,
+`-deletes 0`, no range/indexed-update options, and no concurrent phases.
 
 Use a small production proof run when validating the route boundary:
 

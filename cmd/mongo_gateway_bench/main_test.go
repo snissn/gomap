@@ -1082,6 +1082,7 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 		"-route-groups", "1",
 		"-route-partitions", "4",
 		"-documents", "12",
+		"-batch-size", "1",
 		"-reads", "0",
 		"-range-reads", "0",
 		"-updates", "0",
@@ -1127,6 +1128,11 @@ func TestParseConfigRouteModeRing(t *testing.T) {
 			want: "route-mode production currently supports only -treedb-document-format bson",
 		},
 		{
+			name: "production default workload remains fail-closed",
+			args: []string{"-target", "treedb", "-route-mode", "production", "-route-groups", "1"},
+			want: "serial insert-only local-owner proof",
+		},
+		{
 			name: "mongo target",
 			args: []string{"-target", "mongo", "-route-mode", "ring"},
 			want: "route-mode is only supported with -target treedb",
@@ -1170,7 +1176,7 @@ func TestTreeDBProductionRouteModeLocalOwnerRoutedCommitSmoke(t *testing.T) {
 		"-route-partitions", "4",
 		"-documents", "8",
 		"-batch-size", "1",
-		"-insert-producers", "2",
+		"-insert-producers", "1",
 		"-reads", "0",
 		"-range-reads", "0",
 		"-updates", "0",

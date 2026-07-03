@@ -883,6 +883,9 @@ func parseConfig(args []string) (config, error) {
 	if cfg.RouteMode == routeModeProduction && cfg.TreeDBDocumentFormat != collections.DocumentFormatBSON {
 		return config{}, errors.New("route-mode production currently supports only -treedb-document-format bson")
 	}
+	if err := validateProductionRouteProofShape(cfg); err != nil {
+		return config{}, err
+	}
 	dataRootStorage, err := parseTreeDBRootStoragePolicy(treeDBDataRootStorage)
 	if err != nil {
 		return config{}, fmt.Errorf("treedb-data-root-storage: %w", err)
@@ -913,6 +916,40 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("deletes cannot exceed documents")
 	}
 	return cfg, nil
+}
+
+func validateProductionRouteProofShape(cfg config) error {
+	if cfg.RouteMode != routeModeProduction {
+		return nil
+	}
+	var unsupported []string
+	require := func(unsupportedShape bool, flagShape string) {
+		if unsupportedShape {
+			unsupported = append(unsupported, flagShape)
+		}
+	}
+	require(cfg.BatchSize != 1, "-batch-size 1")
+	require(cfg.InsertProducers != 1, "-insert-producers 1")
+	require(cfg.SecondaryIndexes != 0, "-secondary-indexes 0")
+	require(cfg.RangeIndex, "-range-index=false")
+	require(cfg.UpdateIndexedField, "-update-indexed-field=false")
+	require(cfg.Reads != 0, "-reads 0")
+	require(cfg.RangeReads != 0, "-range-reads 0")
+	require(cfg.Updates != 0, "-updates 0")
+	require(cfg.Deletes != 0, "-deletes 0")
+	require(cfg.ConcurrentReads != 0, "-concurrent-reads 0")
+	require(cfg.ConcurrentReaders != 0, "-concurrent-readers 0")
+	require(len(cfg.ConcurrentReaderSweep) != 0, "omit -concurrent-reader-sweep")
+	require(cfg.ConcurrentRangeReads != 0, "-concurrent-range-reads 0")
+	require(cfg.ConcurrentRangeReaders != 0, "-concurrent-range-readers 0")
+	require(len(cfg.ConcurrentRangeReaderSweep) != 0, "omit -concurrent-range-reader-sweep")
+	require(cfg.ConcurrentWrites != 0, "-concurrent-writes 0")
+	require(cfg.ConcurrentWriters != 0, "-concurrent-writers 0")
+	require(len(cfg.ConcurrentWriterSweep) != 0, "omit -concurrent-writer-sweep")
+	if len(unsupported) == 0 {
+		return nil
+	}
+	return fmt.Errorf("route-mode production currently supports only serial insert-only local-owner proof; set %s", strings.Join(unsupported, ", "))
 }
 
 func parseTreeDBProfile(raw string) (treedb.Profile, error) {
