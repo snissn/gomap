@@ -2649,6 +2649,43 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherUnknownOwnerErrorsBeforeSubmit
 	}
 }
 
+func TestRaftClusterSubmitterGroupRoutedDispatcherMissingOwnerErrorsBeforeSubmit(t *testing.T) {
+	token := raftplacement.DocumentIDTokenV1([]byte("u1"))
+	provider := &staticClusterRouteProvider{
+		target: ClusterRouteTarget{
+			PlacementMode: string(raftplacement.PlacementModeRingV1),
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+			Shape:         ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible)
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route target missing") {
+		t.Fatalf("InsertBatch missing owner err=%v want read-only route target missing", err)
+	}
+	route, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != "missing_owner" || route.GroupID != "" || route.LeaderHint != "" {
+		t.Fatalf("route metadata=%+v want missing owner without group/leader", route)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
 func TestRaftClusterSubmitterGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 	provider := &remoteOwnerRouteProvider{}
 	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)

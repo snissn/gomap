@@ -150,6 +150,34 @@ func parseClusterRouteErrorMetadata(message string) (ClusterRouteErrorMetadata, 
 	return metadata, true
 }
 
+func clusterRouteErrorMetadataFields(metadata ClusterRouteErrorMetadata) string {
+	var fields []string
+	appendField := func(key, value string) {
+		if value != "" {
+			fields = append(fields, key+"="+value)
+		}
+	}
+	appendField("route_error_class", metadata.Class)
+	appendField("route_group", metadata.GroupID)
+	appendField("leader_hint", metadata.LeaderHint)
+	if len(metadata.Members) != 0 {
+		appendField("route_members", strings.Join(metadata.Members, ","))
+	}
+	appendField("route_database", metadata.Database)
+	appendField("route_catalog", metadata.Catalog)
+	appendField("route_collection", metadata.Collection)
+	appendField("route_shape", metadata.Shape)
+	appendField("route_placement", metadata.PlacementMode)
+	appendField("route_key", metadata.RouteKey)
+	if metadata.TokenKnown {
+		appendField("route_token_known", "true")
+		appendField("route_token", strconv.FormatUint(metadata.Token, 10))
+	}
+	appendField("route_partition", metadata.PartitionID)
+	appendField("local_group", metadata.LocalGroupID)
+	return strings.Join(fields, " ")
+}
+
 func errorCodeFor(err error) iwire.ErrorCode {
 	if err == nil {
 		return 0

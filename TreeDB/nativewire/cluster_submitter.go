@@ -335,7 +335,7 @@ func PreflightClusterRoute(ctx context.Context, submitter ClusterSubmitter, requ
 		if reason == "" {
 			reason = "cluster route target missing group id"
 		}
-		return ClusterRouteTarget{}, true, protocolError(iwire.ErrReadOnly, "%s", reason)
+		return ClusterRouteTarget{}, true, clusterRouteTargetProtocolError(iwire.ErrReadOnly, request, target, "missing_owner", reason)
 	}
 	switch target.PlacementMode {
 	case "collection":
@@ -417,6 +417,47 @@ func clusterTokenBatchRouteRejection(request ClusterRouteRequest, target Cluster
 		action = "fanout"
 	}
 	return "cluster token/ring multi-id write requires " + action + " before submit: route_class=" + class + " token_count=" + strconv.Itoa(len(request.Tokens))
+}
+
+func clusterRouteTargetProtocolError(code iwire.ErrorCode, request ClusterRouteRequest, target ClusterRouteTarget, class, reason string) error {
+	route := clusterRouteErrorMetadataFromTarget(request, target, class)
+	if fields := clusterRouteErrorMetadataFields(route); fields != "" {
+		reason += "; " + fields
+	}
+	return &clusterRouteProtocolError{
+		err:        protocolError(code, "%s", reason),
+		leaderHint: route.LeaderHint,
+		route:      route,
+		hasRoute:   true,
+	}
+}
+
+func clusterRouteErrorMetadataFromTarget(request ClusterRouteRequest, target ClusterRouteTarget, class string) ClusterRouteErrorMetadata {
+	shape := string(target.Shape)
+	if shape == "" {
+		shape = string(request.Shape)
+	}
+	tokenKnown := target.TokenKnown
+	token := target.Token
+	if !tokenKnown && request.TokenKnown {
+		tokenKnown = true
+		token = request.Token
+	}
+	return ClusterRouteErrorMetadata{
+		Class:         class,
+		Database:      request.Database,
+		Catalog:       request.Catalog,
+		Collection:    request.Collection,
+		Shape:         shape,
+		GroupID:       target.GroupID,
+		Members:       append([]string(nil), target.Members...),
+		LeaderHint:    target.LeaderHint,
+		PlacementMode: target.PlacementMode,
+		RouteKey:      target.RouteKey,
+		TokenKnown:    tokenKnown,
+		Token:         token,
+		PartitionID:   target.PartitionID,
+	}
 }
 
 func normalizeClusterRouteShape(shape ClusterRouteShape) ClusterRouteShape {

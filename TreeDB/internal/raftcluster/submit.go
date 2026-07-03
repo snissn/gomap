@@ -612,7 +612,10 @@ func (s *SingleGroupSubmitter) checkRouteBinding(metadata raftentry.RequestMetad
 	}
 	localGroup := string(s.cluster.GroupID)
 	if metadata.ClusterRouteGroupID == "" {
-		return errors.Join(ErrRouteGroupMismatch, fmt.Errorf("route metadata missing group id for local group %q", localGroup))
+		return errors.Join(ErrRouteGroupMismatch, &routeError{
+			message:  fmt.Sprintf("route metadata missing group id for local group %q", localGroup),
+			metadata: routeErrorMetadataFromRequest(metadata, localGroup),
+		})
 	}
 	if metadata.ClusterRouteGroupID != localGroup {
 		return errors.Join(ErrRouteGroupMismatch, &routeError{

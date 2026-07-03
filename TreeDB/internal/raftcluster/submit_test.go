@@ -257,6 +257,47 @@ func TestSingleGroupSubmitterRejectsRouteGroupMismatchBeforePreflightCommitApply
 	}
 }
 
+func TestSingleGroupSubmitterMissingRouteOwnerCarriesStableMetadata(t *testing.T) {
+	entry := testClusterCommandEntry(t, 7)
+	preflightCalls := 0
+	commitCalls := 0
+	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}
+	submitter := newTestSingleGroupSubmitter(t, SingleGroupSubmitterOptions{
+		AdmissionProvider: StaticAdmissionProvider{Status: LeaderAdmission()},
+		CommitSource: CommitSourceFunc(func(context.Context, CommitCommandEntryV1Request) (CommitCommandEntryV1Result, error) {
+			commitCalls++
+			return CommitCommandEntryV1Result{}, nil
+		}),
+		Preflight: CommandEntryPreflightFunc(func(context.Context, CommandEntryPreflightRequestV1) (CommandEntryPreflightResultV1, error) {
+			preflightCalls++
+			return CommandEntryPreflightResultV1{}, nil
+		}),
+		Applier:                applier,
+		CatalogVersionProvider: staticCatalogVersion(7),
+	})
+
+	_, err := submitter.SubmitCommandEntryV1(context.Background(), entry, routeMetadata("", iwire.AckRaftCommitted))
+	if !errors.Is(err, ErrRouteGroupMismatch) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want route group mismatch", err)
+	}
+	route, ok := RouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("RouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != RouteErrorClassMissingOwner || route.LocalGroupID != "group-a" || route.GroupID != "" {
+		t.Fatalf("route metadata=%+v want missing owner for local group-a", route)
+	}
+	if preflightCalls != 0 {
+		t.Fatalf("preflight calls=%d want 0", preflightCalls)
+	}
+	if commitCalls != 0 {
+		t.Fatalf("commit calls=%d want 0", commitCalls)
+	}
+	if got := len(applier.snapshot()); got != 0 {
+		t.Fatalf("apply calls=%d want 0", got)
+	}
+}
+
 func TestSingleGroupSubmitterAllowsMatchingRouteGroup(t *testing.T) {
 	entry := testClusterCommandEntry(t, 7)
 	applier := &recordingClusterApplier{result: raftentry.ApplyResultV1{Status: raftentry.ApplyStatusApplied, AffectedCount: 1}}

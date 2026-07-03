@@ -1338,6 +1338,50 @@ func TestMongoGroupRoutedDispatcherUnknownOwnerErrorsBeforeSubmit(t *testing.T) 
 	}
 }
 
+func TestMongoGroupRoutedDispatcherMissingOwnerErrorsBeforeSubmit(t *testing.T) {
+	token := mongoClusterRouteTokenForValue(t, "u1")
+	provider := &mongoStaticClusterRouteProvider{
+		target: treenativewire.ClusterRouteTarget{
+			PlacementMode: string(raftplacement.PlacementModeRingV1),
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+			Shape:         treenativewire.ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
+	response := serveCommand(t, server, 336314, bson.D{
+		{Key: "insert", Value: "users"},
+		{Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}}}},
+		{Key: "$db", Value: "app"},
+	})
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertErrmsgContains(t, response, "route target missing")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "missing_owner")
+	assertNoField(t, response, "treedbRouteGroup")
+	assertNoField(t, response, "treedbLeaderHint")
+	assertNoField(t, response, "treedbRouteLeaderHint")
+	users, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("OpenCollection app.users: %v", err)
+	}
+	key, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode primary key: %v", err)
+	}
+	if got, err := users.Get(key); err != nil || got != nil {
+		t.Fatalf("local app.users Get(u1)=%v err=%v want missing document", bson.Raw(got), err)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
 func TestMongoGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
 	provider := &mongoRemoteOwnerRouteProvider{}
 	server, groupA, groupB := newMongoGroupRoutedDispatcherTestServer(t, provider)
