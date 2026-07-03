@@ -264,16 +264,26 @@ func newProductionRouteProofCatalogVersion(db *backenddb.DB) *productionRoutePro
 	return p
 }
 
-func (p *productionRouteProofCatalogVersion) CurrentCatalogVersion(context.Context) (uint64, bool, error) {
+func (p *productionRouteProofCatalogVersion) CurrentCatalogVersion(ctx context.Context) (uint64, bool, error) {
 	if p == nil {
 		return 0, false, nil
+	}
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			return 0, false, ctx.Err()
+		default:
+		}
 	}
 	p.Refresh()
 	return p.value.Load(), p.known.Load(), nil
 }
 
-func (p *productionRouteProofCatalogVersion) ServerCatalogVersion(context.Context) (uint64, error) {
-	version, ok, _ := p.CurrentCatalogVersion(context.Background())
+func (p *productionRouteProofCatalogVersion) ServerCatalogVersion(ctx context.Context) (uint64, error) {
+	version, ok, err := p.CurrentCatalogVersion(ctx)
+	if err != nil {
+		return 0, err
+	}
 	if !ok {
 		return 0, errors.New("missing DB state")
 	}
