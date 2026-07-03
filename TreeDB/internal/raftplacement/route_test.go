@@ -310,6 +310,14 @@ func TestRouteFailsClosed(t *testing.T) {
 			want: ErrUnsupportedRouteShape,
 		},
 		{
+			name: "query shape unsupported for token placement",
+			req: RouteRequestV1{
+				Collection: ref,
+				Shape:      RouteShapeQueryV1,
+			},
+			want: ErrUnsupportedRouteShape,
+		},
+		{
 			name: "scatter gather unsupported",
 			req: RouteRequestV1{
 				Collection: CollectionRefV1{Database: DefaultDatabase, Catalog: DefaultCatalog, Collection: "users"},

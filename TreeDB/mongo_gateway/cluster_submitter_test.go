@@ -807,6 +807,8 @@ func TestClusterRoutePreflightMongoRejectsBeforeSubmitter(t *testing.T) {
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertErrmsgContains(t, response, "token placement requires explicit token")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "route_rejected")
 	if routes := submitter.snapshotRoutes(); len(routes) != 1 {
 		t.Fatalf("route calls=%d want 1", len(routes))
 	}
@@ -976,6 +978,9 @@ func TestClusterRoutePreflightMongoTokenPlacementRejectsMultiIDWrites(t *testing
 			response := tc.run(t, server)
 			assertCommandError(t, response, "NotWritablePrimary")
 			assertErrmsgContains(t, response, "requires command split before submit")
+			assertErrmsgContains(t, response, "route_class=same_partition")
+			assertBool(t, response, "treedbClusterError", true)
+			assertStringField(t, response, "treedbErrorClass", "route_rejected")
 			routes := submitter.snapshotRoutes()
 			if len(routes) != 1 {
 				t.Fatalf("route calls=%d want 1", len(routes))
@@ -999,6 +1004,8 @@ func TestClusterRoutePreflightMongoRejectsUnsupportedFindRoute(t *testing.T) {
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertErrmsgContains(t, response, "query route shape is not supported")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "route_rejected")
 	if routes := submitter.snapshotRoutes(); len(routes) != 0 {
 		t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
 	}
@@ -1051,6 +1058,8 @@ func TestClusterRoutePreflightMongoRejectsNonShardKeyWrites(t *testing.T) {
 			response := tc.run(t, server)
 			assertCommandError(t, response, "NotWritablePrimary")
 			assertErrmsgContains(t, response, "query route shape is not supported")
+			assertBool(t, response, "treedbClusterError", true)
+			assertStringField(t, response, "treedbErrorClass", "route_rejected")
 			if routes := submitter.snapshotRoutes(); len(routes) != 0 {
 				t.Fatalf("route calls=%d want 0 before unsupported query provider call", len(routes))
 			}
@@ -1212,6 +1221,20 @@ func TestMongoGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmit(t *testing.T)
 	})
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertErrmsgContains(t, response, "route target unknown")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "route_rejected")
+	assertStringField(t, response, "treedbLeaderHint", "node-z")
+	users, err := server.Collections.OpenCollection("app.users")
+	if err != nil {
+		t.Fatalf("OpenCollection app.users: %v", err)
+	}
+	key, err := encodePrimaryKey(mustRawValue(t, "u1"))
+	if err != nil {
+		t.Fatalf("encode primary key: %v", err)
+	}
+	if got, err := users.Get(key); err != nil || got != nil {
+		t.Fatalf("local app.users Get(u1)=%v err=%v want missing document", bson.Raw(got), err)
+	}
 	if calls := groupA.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
