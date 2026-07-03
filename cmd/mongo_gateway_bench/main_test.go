@@ -1202,7 +1202,9 @@ func TestTreeDBProductionRouteModeLocalOwnerRoutedCommitSmoke(t *testing.T) {
 		}
 	}()
 
-	result, err := runBenchmark(context.Background(), cfg, target, nil)
+	runCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := runBenchmark(runCtx, cfg, target, nil)
 	if err != nil {
 		t.Fatalf("run production route benchmark: %v", err)
 	}
