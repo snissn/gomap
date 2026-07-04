@@ -3141,3 +3141,132 @@ func TestPublicCommandWALBatchWriteAfterCloseReturnsErrClosed(t *testing.T) {
 		t.Fatalf("batch Close: %v", err)
 	}
 }
+
+func TestPublicCommandWALBatchPayloadPoolAcquisitionKeepsClosedHandlesIsolated(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var seededPayload commitlog.RawKVBatchPayloadBuilder
+	if err := seededPayload.ResetWithHint(0, 0); err != nil {
+		t.Fatalf("seeded ResetWithHint: %v", err)
+	}
+	if _, _, err := seededPayload.AppendSet([]byte("seed"), bytes.Repeat([]byte{7}, 128)); err != nil {
+		t.Fatalf("seeded AppendSet: %v", err)
+	}
+	seededRetained := seededPayload.RetainedCap()
+	db.commandWALPublicPayloadPool.New = func() any {
+		return seededPayload
+	}
+
+	const entries = 128
+	value := bytes.Repeat([]byte{7}, 128)
+	first, ok := db.NewBatchWithSize(entries).(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("NewBatchWithSize type=%T, want *commandWALPublicBatch", first)
+	}
+	if got := first.payload.RetainedCap(); got != seededRetained {
+		_ = first.Close()
+		t.Fatalf("first payload retained cap=%d, want seeded cap %d", got, seededRetained)
+	}
+	for i := 0; i < entries; i++ {
+		key := []byte(fmt.Sprintf("first-%03d", i))
+		if err := first.Set(key, value); err != nil {
+			_ = first.Close()
+			t.Fatalf("first Set %d: %v", i, err)
+		}
+	}
+	retained := first.payload.RetainedCap()
+	if retained <= commandWALRawKVBatchHeaderSize {
+		_ = first.Close()
+		t.Fatalf("first payload retained cap=%d, want payload allocation", retained)
+	}
+	if err := first.WriteSync(); err != nil {
+		_ = first.Close()
+		t.Fatalf("first WriteSync: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close: %v", err)
+	}
+	if err := first.Set([]byte("stale"), value); !errors.Is(err, ErrClosed) {
+		t.Fatalf("first Set after Close error=%v, want ErrClosed", err)
+	}
+
+	second, ok := db.NewBatchWithSize(entries).(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("second NewBatchWithSize type=%T, want *commandWALPublicBatch", second)
+	}
+	if err := second.Set([]byte("second"), []byte("value")); err != nil {
+		_ = second.Close()
+		t.Fatalf("second Set: %v", err)
+	}
+	if err := second.WriteSync(); err != nil {
+		_ = second.Close()
+		t.Fatalf("second WriteSync: %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	got, err := db.Get([]byte("second"))
+	if err != nil {
+		t.Fatalf("Get(second): %v", err)
+	}
+	if string(got) != "value" {
+		t.Fatalf("Get(second)=%q, want value", got)
+	}
+	if err := first.WriteSync(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("first WriteSync after second batch error=%v, want ErrClosed", err)
+	}
+}
+
+func TestPublicCommandWALBatchPayloadPoolDropsOversizeBuffer(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oversizeHint := commandWALPublicBatchPayloadPoolRetainMaxBytes/commandWALPublicBatchEstimatedKeyValueBytes + 128
+	large, ok := db.NewBatchWithSize(oversizeHint).(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("NewBatchWithSize type=%T, want *commandWALPublicBatch", large)
+	}
+	if err := large.Set([]byte("large"), bytes.Repeat([]byte{9}, 128)); err != nil {
+		_ = large.Close()
+		t.Fatalf("large Set: %v", err)
+	}
+	if got := large.payload.RetainedCap(); got <= commandWALPublicBatchPayloadPoolRetainMaxBytes {
+		_ = large.Close()
+		t.Fatalf("large payload retained cap=%d, want > pool retain max %d", got, commandWALPublicBatchPayloadPoolRetainMaxBytes)
+	}
+	if err := large.WriteSync(); err != nil {
+		_ = large.Close()
+		t.Fatalf("large WriteSync: %v", err)
+	}
+	if err := large.Close(); err != nil {
+		t.Fatalf("large Close: %v", err)
+	}
+
+	small, ok := db.NewBatchWithSize(1).(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("small NewBatchWithSize type=%T, want *commandWALPublicBatch", small)
+	}
+	defer func() { _ = small.Close() }()
+	if got := small.payload.RetainedCap(); got > commandWALPublicBatchPayloadPoolRetainMaxBytes {
+		t.Fatalf("small payload retained cap=%d, oversized buffer leaked through pool", got)
+	}
+}

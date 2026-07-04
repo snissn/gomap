@@ -311,6 +311,10 @@ const commandWALPublicBatchEstimatedKeyValueBytes = 192
 // large-batch peak while preserving the compact fast path for ordinary batches.
 const commandWALPublicBatchPayloadSoftCapBytes = 128 << 20
 
+// Pool only ordinary payload buffers. Reusing the public batch wrapper itself is
+// unsafe because callers may still hold a closed batch value.
+const commandWALPublicBatchPayloadPoolRetainMaxBytes = 1 << 20
+
 const commandWALRawKVBatchHeaderSize = 2 + 4
 
 type commandWALPublicRevisionEntries interface {
@@ -335,7 +339,15 @@ type commandWALPublicInnerDeleteViewer interface {
 }
 
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
-	b := &commandWALPublicBatch{db: tdb, inner: inner}
+	var payload commitlog.RawKVBatchPayloadBuilder
+	if tdb != nil {
+		if pooled := tdb.commandWALPublicPayloadPool.Get(); pooled != nil {
+			if p, ok := pooled.(commitlog.RawKVBatchPayloadBuilder); ok {
+				payload = p
+			}
+		}
+	}
+	b := &commandWALPublicBatch{db: tdb, inner: inner, payload: payload}
 	b.disableInnerStreamingBypass()
 	b.rebindInnerViewers()
 	opHint = db.NormalizePublicBatchReserveHint(opHint)
@@ -774,22 +786,33 @@ func (b *commandWALPublicBatch) Close() error {
 	if b == nil || b.inner == nil {
 		return nil
 	}
+	owner := b.db
 	// Closing an uncommitted batch intentionally discards staged command-WAL
 	// payload bytes, matching ordinary batch semantics: only Write/WriteSync
 	// appends and publishes a RawKVBatch command frame.
 	err := b.inner.Close()
+	b.resetPayloadWithHint()
+	payload := b.payload
+	keepPayload := payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
 	b.inner = nil
 	b.innerSetViewValidated = nil
 	b.innerSetViewer = nil
 	b.innerDeleteViewValidated = nil
 	b.innerDeleteViewer = nil
-	b.resetPayloadWithHint()
+	b.payload = commitlog.RawKVBatchPayloadBuilder{}
+	b.payloadBypass = false
+	b.payloadOpHint = 0
+	b.payloadByteHint = 0
+	b.payloadSoftCapBytes = 0
 	b.opCount = 0
 	b.hasDeleteRange = false
 	b.resetPointIngressStats()
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
 	b.closed = true
+	if owner != nil && keepPayload {
+		owner.commandWALPublicPayloadPool.Put(payload)
+	}
 	return err
 }
 

@@ -435,6 +435,65 @@ func (b *RawKVBatchPayloadBuilder) RetainedCap() int {
 	return cap(b.payload)
 }
 
+// RetainedBytes returns the total builder-owned backing capacity retained across
+// canonical, compact-zero, zero-value-view, and heap revision-offset buffers.
+func (b *RawKVBatchPayloadBuilder) RetainedBytes() int {
+	if b == nil {
+		return 0
+	}
+	total := 0
+	maxInt := int(^uint(0) >> 1)
+	add := func(n int) {
+		if n < 0 || n > maxInt-total {
+			total = maxInt
+			return
+		}
+		total += n
+	}
+	add(cap(b.payload))
+	add(cap(b.zeroPayload))
+	add(cap(b.zeroSetValueView))
+	if cap(b.revisionOffsets) > rawKVRevisionOffsetInlineCap {
+		if cap(b.revisionOffsets) > maxInt/4 {
+			return maxInt
+		}
+		add(cap(b.revisionOffsets) * 4)
+	}
+	return total
+}
+
+// PrepareForReuse clears logical state while retaining bounded backing buffers.
+// It also drops inline-sized revision-offset slices because a copied builder may
+// have that slice pointing at another builder's embedded inline array.
+func (b *RawKVBatchPayloadBuilder) PrepareForReuse(maxRetainedBytes int) bool {
+	if b == nil {
+		return false
+	}
+	if maxRetainedBytes >= 0 && b.RetainedBytes() > maxRetainedBytes {
+		*b = RawKVBatchPayloadBuilder{}
+		return false
+	}
+	payload := b.payload
+	zeroPayload := b.zeroPayload
+	zeroSetValueView := b.zeroSetValueView
+	revisionOffsets := b.revisionOffsets
+	keepRevisionOffsets := cap(revisionOffsets) > rawKVRevisionOffsetInlineCap
+	*b = RawKVBatchPayloadBuilder{}
+	if cap(payload) > 0 {
+		b.payload = payload[:0]
+	}
+	if cap(zeroPayload) > 0 {
+		b.zeroPayload = zeroPayload[:0]
+	}
+	if cap(zeroSetValueView) > 0 {
+		b.zeroSetValueView = zeroSetValueView[:0]
+	}
+	if keepRevisionOffsets {
+		b.revisionOffsets = revisionOffsets[:0]
+	}
+	return b.RetainedBytes() > 0
+}
+
 // RetainedCapAfterAppend returns the backing capacity that would be retained
 // after appending needed bytes with the same growth rule used by Append.
 func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppend(needed int) (int, error) {
