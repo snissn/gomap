@@ -514,6 +514,27 @@ func TestClusterRouteErrorMetadataOfFallsThroughLeaderOnlyProtocolWrapper(t *tes
 	}
 }
 
+func TestClusterRouteErrorMetadataOfParsesProtocolRouteMetadata(t *testing.T) {
+	err := &iwire.ProtocolError{
+		Code:   iwire.ErrReadOnly,
+		Reason: "cluster route rejected; route_error_class=remote_owner_redirect route_group=group+z leader_hint=node+z",
+	}
+	metadata, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatal("ClusterRouteErrorMetadataOf ok=false want parsed protocol route metadata")
+	}
+	if metadata.Class != "remote_owner_redirect" || metadata.GroupID != "group z" || metadata.LeaderHint != "node z" {
+		t.Fatalf("ClusterRouteErrorMetadataOf metadata=%+v want parsed protocol route metadata", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfIgnoresGenericTextTokens(t *testing.T) {
+	err := errors.New("duplicate key route_error_class=remote_owner_redirect route_group=group-z leader_hint=node-z")
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for generic error text", metadata)
+	}
+}
+
 func TestClusterAdmissionMissingProviderFailsClosed(t *testing.T) {
 	err := AdmitClusterMutation(context.Background(), noAdmissionClusterSubmitter{})
 	if nativeCodeOf(err) != iwire.ErrDurabilityUnavailable {
