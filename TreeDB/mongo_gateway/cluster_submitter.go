@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -1087,6 +1086,11 @@ func mongoClusterLeaderHint(err error) string {
 	if err == nil {
 		return ""
 	}
+	if route, ok := treenativewire.ClusterRouteErrorMetadataOf(err); ok {
+		if leaderHint := strings.TrimSpace(route.LeaderHint); leaderHint != "" {
+			return leaderHint
+		}
+	}
 	var hinted interface {
 		ClusterLeaderHint() string
 	}
@@ -1106,21 +1110,12 @@ func mongoClusterLeaderHint(err error) string {
 	for end < len(message) {
 		switch message[end] {
 		case ';', ',', ' ', '\t', '\n', '\r':
-			return decodeMongoClusterLeaderHint(message[start:end])
+			return strings.TrimSpace(message[start:end])
 		default:
 			end++
 		}
 	}
-	return decodeMongoClusterLeaderHint(message[start:end])
-}
-
-func decodeMongoClusterLeaderHint(value string) string {
-	value = strings.TrimSpace(value)
-	decoded, err := url.QueryUnescape(value)
-	if err != nil {
-		return value
-	}
-	return decoded
+	return strings.TrimSpace(message[start:end])
 }
 
 func mongoClusterMutationCommandError(err error) (wire.Document, error) {

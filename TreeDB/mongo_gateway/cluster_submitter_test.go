@@ -2197,7 +2197,7 @@ func TestMongoClusterMutationCommandErrorClassifiesLeaderHintBeforeRouteText(t *
 	assertStringField(t, response, "treedbLeaderHint", "router-1:27017")
 }
 
-func TestMongoClusterMutationCommandErrorDecodesEscapedLeaderHint(t *testing.T) {
+func TestMongoClusterMutationCommandErrorPreservesRawLeaderHint(t *testing.T) {
 	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "not leader; leader_hint=node+z"}
 	response, err := mongoClusterMutationCommandError(clusterErr)
 	if err != nil {
@@ -2205,7 +2205,20 @@ func TestMongoClusterMutationCommandErrorDecodesEscapedLeaderHint(t *testing.T) 
 	}
 	assertCommandError(t, response, "NotWritablePrimary")
 	assertStringField(t, response, "treedbErrorClass", "not_leader")
+	assertStringField(t, response, "treedbLeaderHint", "node+z")
+}
+
+func TestMongoClusterMutationCommandErrorDecodesRouteMetadataLeaderHint(t *testing.T) {
+	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "cluster route rejected; route_error_class=remote_owner_redirect route_group=group+z leader_hint=node+z"}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertStringField(t, response, "treedbErrorClass", "remote_owner_redirect")
 	assertStringField(t, response, "treedbLeaderHint", "node z")
+	assertStringField(t, response, "treedbRouteGroup", "group z")
+	assertStringField(t, response, "treedbRouteLeaderHint", "node z")
 }
 
 func TestMongoClusterMutationCommandErrorClassifiesQueryRouteAsRouteRejected(t *testing.T) {
