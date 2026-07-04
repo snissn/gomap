@@ -461,15 +461,18 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		b.dirty = true
 		return nil, nil, nil
 	}
-	if !useInnerView && commandWALPublicAllZeroBytes(value) {
-		// AppendSet compact-zero tracking keys off the first zero value backing
-		// array. Plain Set callers may reuse and mutate their input buffer, so pin
-		// compact-zero identity to an immutable batch-owned copy.
-		value = append([]byte(nil), value...)
-	} else if retainReplayViews && commandWALPublicAllZeroBytes(value) {
-		// Adapter replay-byte callers may also reuse and mutate their value buffer
-		// between Put calls, so keep that compact-zero identity immutable.
-		value = append([]byte(nil), value...)
+	if !b.payload.EntryRevisionsEnabled() && commandWALPublicAllZeroBytes(value) {
+		if !useInnerView {
+			// AppendSet compact-zero tracking keys off the first zero value
+			// backing array. Plain Set callers may reuse and mutate their input
+			// buffer, so pin compact-zero identity to an immutable batch-owned copy.
+			value = append([]byte(nil), value...)
+		} else if retainReplayViews {
+			// Adapter replay-byte callers may also reuse and mutate their value
+			// buffer between Put calls, so keep that compact-zero identity
+			// immutable.
+			value = append([]byte(nil), value...)
+		}
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
 	keyView, valueView, err = b.payload.AppendSet(key, value)

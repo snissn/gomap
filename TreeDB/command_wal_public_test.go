@@ -1501,6 +1501,129 @@ func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T
 	}
 }
 
+func TestPublicCommandWALBatchRevisionPayloadSetKeepsMutableAllZeroValue(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+
+	b, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	zeroValue := make([]byte, 128)
+	if err := b.Set([]byte("k"), zeroValue); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("Set zero value: %v", err)
+	}
+	for i := range zeroValue {
+		zeroValue[i] = byte(i + 1)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	val, revision, err := db.GetVersioned([]byte("k"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("GetVersioned: %v", err)
+	}
+	if len(val) != 128 || !commandWALPublicAllZeroBytes(val) || revision == LegacyEntryRevision {
+		_ = db.Close()
+		t.Fatalf("GetVersioned len=%d zero=%t revision=%d, want zero/non-legacy", len(val), commandWALPublicAllZeroBytes(val), revision)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(backenddb.WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("NewReader: %v", err)
+	}
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	var gotRevision uint64
+	visits := 0
+	if err := commitlog.ScanRawKVBatchPayloadWithRevision(env.Payload, func(op commitlog.RawKVOp, gotKey, gotValue []byte, got uint64) error {
+		visits++
+		if op != commitlog.RawKVOpSet || string(gotKey) != "k" || len(gotValue) != 128 || !commandWALPublicAllZeroBytes(gotValue) {
+			t.Fatalf("decoded op=%v key=%q value_len=%d zero=%t", op, gotKey, len(gotValue), commandWALPublicAllZeroBytes(gotValue))
+		}
+		gotRevision = got
+		return nil
+	}); err != nil {
+		_ = r.Close()
+		_ = db.Close()
+		t.Fatalf("ScanRawKVBatchPayloadWithRevision: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("reader Close: %v", err)
+	}
+	if visits != 1 || gotRevision != uint64(revision) {
+		_ = db.Close()
+		t.Fatalf("command WAL visits=%d revision=%d, want 1/%d", visits, gotRevision, revision)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestPublicCommandWALBatchLegacyCompactZeroPinsMutableValueIdentity(t *testing.T) {
+	wrapped := newCommandWALPublicBatch(nil, &commandWALResetBatch{}, 2)
+	zeroValue := make([]byte, 4)
+
+	if err := wrapped.Set([]byte("zero"), zeroValue); err != nil {
+		t.Fatalf("Set zero: %v", err)
+	}
+	for i := range zeroValue {
+		zeroValue[i] = byte(i + 1)
+	}
+	if err := wrapped.Set([]byte("mutated"), zeroValue); err != nil {
+		t.Fatalf("Set mutated: %v", err)
+	}
+	payload, err := wrapped.commandWALPayload()
+	if err != nil {
+		t.Fatalf("commandWALPayload: %v", err)
+	}
+	var got []batch.Entry
+	if err := commitlog.ScanRawKVBatchPayload(payload, func(op commitlog.RawKVOp, key, value []byte) error {
+		if op != commitlog.RawKVOpSet {
+			t.Fatalf("decoded op=%v, want set", op)
+		}
+		got = append(got, batch.Entry{Type: batch.OpPut, Key: append([]byte(nil), key...), Value: append([]byte(nil), value...)})
+		return nil
+	}); err != nil {
+		t.Fatalf("ScanRawKVBatchPayload: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("decoded entries=%d, want 2", len(got))
+	}
+	if string(got[0].Key) != "zero" || len(got[0].Value) != 4 || !commandWALPublicAllZeroBytes(got[0].Value) {
+		t.Fatalf("first decoded entry key=%q value=%v, want zero value", got[0].Key, got[0].Value)
+	}
+	if string(got[1].Key) != "mutated" || !bytes.Equal(got[1].Value, []byte{1, 2, 3, 4}) {
+		t.Fatalf("second decoded entry key=%q value=%v, want mutated value", got[1].Key, got[1].Value)
+	}
+}
+
 func TestPublicCommandWALBatchOrdinarySetUsesPayloadBuilder(t *testing.T) {
 	inner := &commandWALPayloadSoftCapBatch{}
 	wrapped := newCommandWALPublicBatch(nil, inner, 0)
