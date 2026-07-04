@@ -14,13 +14,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 	"github.com/snissn/gomap/TreeDB/internal/raftentry"
 	"github.com/snissn/gomap/TreeDB/internal/raftfsm"
+	"github.com/snissn/gomap/TreeDB/internal/raftplacement"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
-// ProductionRouteProofOptions scopes the bench-only local-owner routed commit
-// proof. It intentionally models only locally configured groups; it does not
-// perform remote forwarding or fanout execution.
+// ProductionRouteProofOptions scopes the bench-only production route proof. It
+// intentionally models only locally configured submitters; nonlocal groups are
+// redirect evidence, not remote execution.
 type ProductionRouteProofOptions struct {
 	GroupCount     int
 	PartitionCount int
@@ -62,7 +63,7 @@ func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *
 		return nil, errors.New("production route proof harness requires Mongo gateway server")
 	}
 	cluster := productionRouteProofClusterConfig(db)
-	recorder := newProductionRouteProofRecorder(opts.GroupCount, opts.PartitionCount)
+	recorder := newProductionRouteProofRecorder(opts.GroupCount, opts.PartitionCount, string(cluster.GroupID))
 	fsm, err := raftfsm.Open(raftfsm.Options{
 		DB:      db,
 		Cluster: cluster,
@@ -134,6 +135,24 @@ func (h *ProductionRouteProofHarness) Snapshot() ProductionRouteProofSnapshot {
 		return ProductionRouteProofSnapshot{}
 	}
 	return h.recorder.snapshot()
+}
+
+func (h *ProductionRouteProofHarness) ResetCounters() {
+	if h == nil || h.recorder == nil {
+		return
+	}
+	h.recorder.resetCounters()
+}
+
+func LocalProductionRouteProofGroupID() string {
+	return productionRouteProofGroupID(0)
+}
+
+func ProductionRouteProofGroupIDForDocumentID(groupCount, partitionCount int, documentID []byte) string {
+	recorder := newProductionRouteProofRecorder(groupCount, partitionCount)
+	token := raftplacement.DocumentIDTokenV1(documentID)
+	partition := recorder.partitionForToken(token)
+	return productionRouteProofGroupID(recorder.groupForPartition(partition))
 }
 
 func (h *ProductionRouteProofHarness) ProbeUnknownOwnerReject(ctx context.Context, database, collection string) error {
@@ -318,6 +337,7 @@ type productionRouteProofRecorder struct {
 	mu                       sync.Mutex
 	routeAttemptsTotal       int64
 	routeLocalOwnerHits      int64
+	routeRemoteRedirects     int64
 	routeUnknownOwnerRejects int64
 	directLocalBypassRejects int64
 	fanoutSplitAttempts      int64
@@ -329,16 +349,21 @@ type productionRouteProofRecorder struct {
 	appliedGroupHits         map[string]int
 }
 
-func newProductionRouteProofRecorder(groupCount, partitionCount int) *productionRouteProofRecorder {
+func newProductionRouteProofRecorder(groupCount, partitionCount int, localGroupIDs ...string) *productionRouteProofRecorder {
 	if groupCount < 1 {
 		groupCount = 1
 	}
 	if partitionCount < groupCount {
 		partitionCount = groupCount
 	}
-	localGroups := make(map[string]struct{}, groupCount)
-	for group := 0; group < groupCount; group++ {
-		localGroups[productionRouteProofGroupID(group)] = struct{}{}
+	if len(localGroupIDs) == 0 {
+		localGroupIDs = []string{productionRouteProofGroupID(0)}
+	}
+	localGroups := make(map[string]struct{}, len(localGroupIDs))
+	for _, groupID := range localGroupIDs {
+		if groupID != "" {
+			localGroups[groupID] = struct{}{}
+		}
 	}
 	return &productionRouteProofRecorder{
 		groupCount:              groupCount,
@@ -470,6 +495,8 @@ func (r *productionRouteProofRecorder) recordRouteSuccess(target nativewire.Clus
 	r.routeAttemptsTotal++
 	if _, ok := r.localGroups[target.GroupID]; ok {
 		r.routeLocalOwnerHits++
+	} else if target.GroupID != "" {
+		r.routeRemoteRedirects++
 	}
 	if target.GroupID != "" {
 		r.routeGroupHits[target.GroupID]++
@@ -528,6 +555,26 @@ func (r *productionRouteProofRecorder) recordFanoutSplitAttempt() {
 	r.mu.Unlock()
 }
 
+func (r *productionRouteProofRecorder) resetCounters() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.routeAttemptsTotal = 0
+	r.routeLocalOwnerHits = 0
+	r.routeRemoteRedirects = 0
+	r.routeUnknownOwnerRejects = 0
+	r.directLocalBypassRejects = 0
+	r.fanoutSplitAttempts = 0
+	r.fanoutSplitFailures = 0
+	r.routeGroupHits = make(map[string]int, r.groupCount)
+	r.routeLeaderHits = make(map[string]int, r.groupCount)
+	r.routeTokenPartitionHits = make(map[string]int, r.partitionCount)
+	r.commitGroupHits = make(map[string]int, r.groupCount)
+	r.appliedGroupHits = make(map[string]int, r.groupCount)
+}
+
 func (r *productionRouteProofRecorder) snapshot() ProductionRouteProofSnapshot {
 	if r == nil {
 		return ProductionRouteProofSnapshot{}
@@ -542,7 +589,7 @@ func (r *productionRouteProofRecorder) snapshot() ProductionRouteProofSnapshot {
 		RealRoutedCommits:        r.routeAttemptsTotal > 0 && r.routeLocalOwnerHits == r.routeAttemptsTotal && commitTotal == r.routeAttemptsTotal && applyTotal == r.routeAttemptsTotal,
 		RouteAttemptsTotal:       r.routeAttemptsTotal,
 		RouteLocalOwnerHits:      r.routeLocalOwnerHits,
-		RouteRemoteRedirects:     0,
+		RouteRemoteRedirects:     r.routeRemoteRedirects,
 		RouteRemoteForwards:      0,
 		RouteUnknownOwnerRejects: r.routeUnknownOwnerRejects,
 		RouteGroupHits:           cloneStringIntMap(r.routeGroupHits),
