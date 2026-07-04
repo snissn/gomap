@@ -1,6 +1,7 @@
 package benchsupport
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -20,11 +21,12 @@ import (
 )
 
 // ProductionRouteProofOptions scopes the bench-only production route proof. It
-// intentionally models only locally configured submitters; nonlocal groups are
-// redirect evidence, not remote execution.
+// defaults to one locally executable group. RemoteOwnerExecution opts the proof
+// harness into static, in-process forwarding to additional registered groups.
 type ProductionRouteProofOptions struct {
-	GroupCount     int
-	PartitionCount int
+	GroupCount           int
+	PartitionCount       int
+	RemoteOwnerExecution bool
 }
 
 // ProductionRouteProofSnapshot is the bench-facing counter snapshot proving
@@ -46,24 +48,35 @@ type ProductionRouteProofSnapshot struct {
 	DirectLocalBypassRejects int64
 }
 
-// ProductionRouteProofHarness owns the local raft FSM and route counters used
-// by mongo_gateway_bench production-route correctness evidence.
+// ProductionRouteProofHarness owns the production-route proof submitters and
+// route counters used by mongo_gateway_bench correctness evidence.
 type ProductionRouteProofHarness struct {
 	fsm        *raftfsm.FSM
+	fsms       []*raftfsm.FSM
 	recorder   *productionRouteProofRecorder
 	dispatcher *raftcluster.GroupRoutedSubmitter
 }
 
 // ConfigureProductionRouteProofHarness wires server.ClusterSubmitter to a
-// single local group routed dispatcher. The commit source is deterministic and
+// routed dispatcher with a local group and, when opted in, registered
+// in-process remote groups. The commit sources are deterministic and
 // in-process, so this is correctness/instrumentation proof for the gateway
 // route boundary, not a multi-node scaleout benchmark.
 func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *backenddb.DB, manager *collections.CollectionManager, server *mongogateway.Server) (*ProductionRouteProofHarness, error) {
 	if server == nil {
 		return nil, errors.New("production route proof harness requires Mongo gateway server")
 	}
-	cluster := productionRouteProofClusterConfig(db)
-	recorder := newProductionRouteProofRecorder(opts.GroupCount, opts.PartitionCount, string(cluster.GroupID))
+	if opts.GroupCount < 1 {
+		opts.GroupCount = 1
+	}
+	cluster := productionRouteProofClusterConfig(db, 0)
+	forwardGroups := make([]string, 0, max(0, opts.GroupCount-1))
+	if opts.RemoteOwnerExecution {
+		for group := 1; group < opts.GroupCount; group++ {
+			forwardGroups = append(forwardGroups, productionRouteProofGroupID(group))
+		}
+	}
+	recorder := newProductionRouteProofRecorderWithForwardGroups(opts.GroupCount, opts.PartitionCount, string(cluster.GroupID), forwardGroups...)
 	fsm, err := raftfsm.Open(raftfsm.Options{
 		DB:      db,
 		Cluster: cluster,
@@ -75,16 +88,8 @@ func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *
 		return nil, err
 	}
 	catalogVersion := newProductionRouteProofCatalogVersion(db)
-	commit := &productionRouteProofCommitSource{
-		inner: raftcluster.NewSequencedCommitSource(raftcluster.SequencedCommitSourceOptions{
-			GroupID:             cluster.GroupID,
-			NodeID:              cluster.NodeID,
-			LeaderID:            cluster.NodeID,
-			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
-			ProductionConsensus: true,
-		}),
-		recorder: recorder,
-	}
+	entries := make([]raftcluster.GroupSubmitterV1, 0, max(1, opts.GroupCount))
+	var openedFSMs []*raftfsm.FSM
 	applier := &productionRouteProofApplier{
 		inner:          fsm,
 		recorder:       recorder,
@@ -93,7 +98,7 @@ func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *
 	bridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
 		Cluster:                cluster,
 		AdmissionProvider:      raftcluster.StaticAdmissionProvider{Status: raftcluster.LeaderAdmission()},
-		CommitSource:           commit,
+		CommitSource:           newProductionRouteProofCommitSource(cluster, recorder),
 		Preflight:              fsm,
 		Applier:                applier,
 		CatalogVersionProvider: catalogVersion,
@@ -102,29 +107,55 @@ func ConfigureProductionRouteProofHarness(opts ProductionRouteProofOptions, db *
 		_ = fsm.Close()
 		return nil, err
 	}
-	registry, err := raftcluster.NewGroupSubmitterRegistryV1([]raftcluster.GroupSubmitterV1{
-		{GroupID: cluster.GroupID, Submitter: bridge},
-	})
+	openedFSMs = append(openedFSMs, fsm)
+	entries = append(entries, raftcluster.GroupSubmitterV1{GroupID: cluster.GroupID, Submitter: bridge})
+	if opts.RemoteOwnerExecution {
+		for group := 1; group < opts.GroupCount; group++ {
+			remoteCluster := productionRouteProofClusterConfig(db, group)
+			boundary := newProductionRouteProofMemoryApplyBoundary(db, remoteCluster, recorder, catalogVersion)
+			remoteBridge, err := raftcluster.NewSingleGroupSubmitter(raftcluster.SingleGroupSubmitterOptions{
+				Cluster:                remoteCluster,
+				AdmissionProvider:      raftcluster.StaticAdmissionProvider{Status: raftcluster.LeaderAdmission()},
+				CommitSource:           newProductionRouteProofCommitSource(remoteCluster, recorder),
+				Preflight:              boundary,
+				Applier:                boundary,
+				CatalogVersionProvider: catalogVersion,
+			})
+			if err != nil {
+				_ = closeProductionRouteProofFSMs(openedFSMs)
+				return nil, err
+			}
+			entries = append(entries, raftcluster.GroupSubmitterV1{GroupID: remoteCluster.GroupID, Submitter: remoteBridge})
+		}
+	}
+	registry, err := raftcluster.NewGroupSubmitterRegistryV1(entries)
 	if err != nil {
-		_ = fsm.Close()
+		_ = closeProductionRouteProofFSMs(openedFSMs)
 		return nil, err
 	}
 	dispatcher, err := raftcluster.NewGroupRoutedSubmitter(raftcluster.GroupRoutedSubmitterOptions{Registry: registry})
 	if err != nil {
-		_ = fsm.Close()
+		_ = closeProductionRouteProofFSMs(openedFSMs)
 		return nil, err
 	}
 	server.ClusterSubmitter = nativewire.NewRoutedRaftClusterSubmitter(dispatcher, recorder, manager)
 	server.ClusterCatalogVersion = catalogVersion.ServerCatalogVersion
 	return &ProductionRouteProofHarness{
 		fsm:        fsm,
+		fsms:       openedFSMs,
 		recorder:   recorder,
 		dispatcher: dispatcher,
 	}, nil
 }
 
 func (h *ProductionRouteProofHarness) Close() error {
-	if h == nil || h.fsm == nil {
+	if h == nil {
+		return nil
+	}
+	if len(h.fsms) != 0 {
+		return closeProductionRouteProofFSMs(h.fsms)
+	}
+	if h.fsm == nil {
 		return nil
 	}
 	return h.fsm.Close()
@@ -194,20 +225,45 @@ func (h *ProductionRouteProofHarness) ProbeDirectLocalBypassReject(ctx context.C
 	return nil
 }
 
-func productionRouteProofClusterConfig(db *backenddb.DB) raftcluster.Config {
+func productionRouteProofClusterConfig(db *backenddb.DB, group int) raftcluster.Config {
 	dir := ""
 	if db != nil {
 		dir = db.Dir()
 	}
+	groupID := productionRouteProofGroupID(group)
+	basePort := 9701 + group*10
 	return raftcluster.Config{
 		Dir:     dir,
-		NodeID:  "node-00-a",
-		GroupID: raftcluster.GroupID(productionRouteProofGroupID(0)),
+		NodeID:  raftcluster.NodeID(fmt.Sprintf("node-%02d-a", group)),
+		GroupID: raftcluster.GroupID(groupID),
 		Peers: []raftcluster.Peer{
-			{ID: "node-00-a", Address: "127.0.0.1:9701"},
-			{ID: "node-00-b", Address: "127.0.0.1:9702"},
-			{ID: "node-00-c", Address: "127.0.0.1:9703"},
+			{ID: raftcluster.NodeID(fmt.Sprintf("node-%02d-a", group)), Address: fmt.Sprintf("127.0.0.1:%d", basePort)},
+			{ID: raftcluster.NodeID(fmt.Sprintf("node-%02d-b", group)), Address: fmt.Sprintf("127.0.0.1:%d", basePort+1)},
+			{ID: raftcluster.NodeID(fmt.Sprintf("node-%02d-c", group)), Address: fmt.Sprintf("127.0.0.1:%d", basePort+2)},
 		},
+	}
+}
+
+func closeProductionRouteProofFSMs(fsms []*raftfsm.FSM) error {
+	var errs []error
+	for _, fsm := range fsms {
+		if fsm != nil {
+			errs = append(errs, fsm.Close())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func newProductionRouteProofCommitSource(cluster raftcluster.Config, recorder *productionRouteProofRecorder) *productionRouteProofCommitSource {
+	return &productionRouteProofCommitSource{
+		inner: raftcluster.NewSequencedCommitSource(raftcluster.SequencedCommitSourceOptions{
+			GroupID:             cluster.GroupID,
+			NodeID:              cluster.NodeID,
+			LeaderID:            cluster.NodeID,
+			EvidenceKind:        raftcluster.CommitEvidenceProductionConsensusV1,
+			ProductionConsensus: true,
+		}),
+		recorder: recorder,
 	}
 }
 
@@ -269,6 +325,115 @@ func (a *productionRouteProofApplier) AllowsInitialIndexGapV1() bool {
 	}
 	support, ok := a.inner.(raftcluster.InitialIndexGapSupportV1)
 	return ok && support.AllowsInitialIndexGapV1()
+}
+
+type productionRouteProofMemoryApplyBoundary struct {
+	db             *backenddb.DB
+	cluster        raftcluster.Config
+	recorder       *productionRouteProofRecorder
+	catalogVersion *productionRouteProofCatalogVersion
+	progress       *raftapply.MemoryApplyProgressStore
+	results        *raftapply.MemoryApplyResultStore
+}
+
+func newProductionRouteProofMemoryApplyBoundary(db *backenddb.DB, cluster raftcluster.Config, recorder *productionRouteProofRecorder, catalogVersion *productionRouteProofCatalogVersion) *productionRouteProofMemoryApplyBoundary {
+	return &productionRouteProofMemoryApplyBoundary{
+		db:             db,
+		cluster:        cluster,
+		recorder:       recorder,
+		catalogVersion: catalogVersion,
+		progress:       raftapply.NewMemoryApplyProgressStore(raftentry.MaxProgressRecordsV1, 0),
+		results:        raftapply.NewMemoryApplyResultStore(raftentry.MaxProgressRecordsV1),
+	}
+}
+
+func (b *productionRouteProofMemoryApplyBoundary) PreflightCommandEntryV1(ctx context.Context, req raftcluster.CommandEntryPreflightRequestV1) (raftcluster.CommandEntryPreflightResultV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return raftcluster.CommandEntryPreflightResultV1{}, ctx.Err()
+	default:
+	}
+	if b == nil || b.db == nil {
+		return raftcluster.CommandEntryPreflightResultV1{}, raftcluster.ErrInvalidSubmitter
+	}
+	if req.GroupID != "" && req.GroupID != b.cluster.GroupID {
+		return raftcluster.CommandEntryPreflightResultV1{}, fmt.Errorf("production route proof preflight group %q does not match local group %q", req.GroupID, b.cluster.GroupID)
+	}
+	if req.NodeID != "" && req.NodeID != b.cluster.NodeID {
+		return raftcluster.CommandEntryPreflightResultV1{}, fmt.Errorf("production route proof preflight node %q does not match local node %q", req.NodeID, b.cluster.NodeID)
+	}
+	if len(req.EntryBytes) == 0 {
+		return raftcluster.CommandEntryPreflightResultV1{}, errors.New("production route proof preflight empty command entry")
+	}
+	meta := productionRouteProofApplyMetadata(req.CurrentCatalogVersion, req.HasCurrentCatalogVersion, req.SyncLocalCommandWAL, req.RequestMetadata, req.ExpectedTarget)
+	opts := raftapply.Options{ResultStore: b.results}
+	var result raftapply.PreflightResultV1
+	var err error
+	if len(req.DecodedEntry.Bytes) != 0 {
+		if !bytes.Equal(req.DecodedEntry.Bytes, req.EntryBytes) {
+			return raftcluster.CommandEntryPreflightResultV1{}, errors.New("production route proof preflight decoded command entry does not match raw entry bytes")
+		}
+		result, err = raftapply.PreflightDecodedCommandEntryV1(b.db, req.DecodedEntry, meta, opts)
+	} else {
+		result, err = raftapply.PreflightCommandEntryV1(b.db, req.EntryBytes, meta, opts)
+	}
+	if err != nil {
+		return raftcluster.CommandEntryPreflightResultV1{}, err
+	}
+	return raftcluster.CommandEntryPreflightResultV1{KnownIdempotencyReplay: result.KnownIdempotencyReplay}, nil
+}
+
+func (b *productionRouteProofMemoryApplyBoundary) ApplyCommittedCommandEntryV1(ctx context.Context, entry raftcluster.CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return raftentry.ApplyResultV1{}, ctx.Err()
+	default:
+	}
+	if b == nil || b.db == nil {
+		return raftentry.ApplyResultV1{}, raftcluster.ErrInvalidSubmitter
+	}
+	if entry.RequestMetadata.ClusterRouteGroupID != "" && entry.RequestMetadata.ClusterRouteGroupID != string(b.cluster.GroupID) {
+		return raftentry.ApplyResultV1{}, fmt.Errorf("production route proof apply route group %q does not match local group %q", entry.RequestMetadata.ClusterRouteGroupID, b.cluster.GroupID)
+	}
+	meta := productionRouteProofApplyMetadata(entry.CurrentCatalogVersion, entry.HasCurrentCatalogVersion, entry.SyncLocalCommandWAL, entry.RequestMetadata, entry.ExpectedTarget)
+	meta.EntryID = raftentry.ApplyEntryID{Term: entry.Term, Index: entry.Index}
+	result, err := raftapply.ApplyCommittedEntryV1(b.db, entry.Bytes, meta, raftapply.Options{
+		ProgressStore: b.progress,
+		ResultStore:   b.results,
+	})
+	if err != nil {
+		return result, err
+	}
+	if result.Status == raftentry.ApplyStatusApplied || result.Status == raftentry.ApplyStatusAlreadyApplied {
+		groupID := entry.RequestMetadata.ClusterRouteGroupID
+		if groupID == "" {
+			groupID = string(b.cluster.GroupID)
+		}
+		if b.recorder != nil {
+			b.recorder.recordAppliedGroup(groupID)
+		}
+		if b.catalogVersion != nil {
+			b.catalogVersion.Refresh()
+		}
+	}
+	return result, nil
+}
+
+func productionRouteProofApplyMetadata(catalogVersion uint64, hasCatalogVersion, syncLocalWAL bool, metadata raftentry.RequestMetadataV1, expectedTarget *raftentry.TargetIdentityV1) raftapply.ApplyMetadataV1 {
+	return raftapply.ApplyMetadataV1{
+		LocalDurabilityBoundary:  raftapply.LocalDurabilityCommandWALV1,
+		SyncLocalCommandWAL:      syncLocalWAL,
+		CurrentCatalogVersion:    catalogVersion,
+		HasCurrentCatalogVersion: hasCatalogVersion,
+		RequestMetadata:          metadata,
+		ExpectedTarget:           expectedTarget,
+	}
 }
 
 type productionRouteProofCatalogVersion struct {
@@ -333,11 +498,13 @@ type productionRouteProofRecorder struct {
 	groupCount     int
 	partitionCount int
 	localGroups    map[string]struct{}
+	forwardGroups  map[string]struct{}
 
 	mu                       sync.Mutex
 	routeAttemptsTotal       int64
 	routeLocalOwnerHits      int64
 	routeRemoteRedirects     int64
+	routeRemoteForwards      int64
 	routeUnknownOwnerRejects int64
 	directLocalBypassRejects int64
 	fanoutSplitAttempts      int64
@@ -350,25 +517,35 @@ type productionRouteProofRecorder struct {
 }
 
 func newProductionRouteProofRecorder(groupCount, partitionCount int, localGroupIDs ...string) *productionRouteProofRecorder {
+	localGroupID := productionRouteProofGroupID(0)
+	if len(localGroupIDs) != 0 {
+		localGroupID = localGroupIDs[0]
+	}
+	return newProductionRouteProofRecorderWithForwardGroups(groupCount, partitionCount, localGroupID)
+}
+
+func newProductionRouteProofRecorderWithForwardGroups(groupCount, partitionCount int, localGroupID string, forwardGroupIDs ...string) *productionRouteProofRecorder {
 	if groupCount < 1 {
 		groupCount = 1
 	}
 	if partitionCount < groupCount {
 		partitionCount = groupCount
 	}
-	if len(localGroupIDs) == 0 {
-		localGroupIDs = []string{productionRouteProofGroupID(0)}
+	if localGroupID == "" {
+		localGroupID = productionRouteProofGroupID(0)
 	}
-	localGroups := make(map[string]struct{}, len(localGroupIDs))
-	for _, groupID := range localGroupIDs {
-		if groupID != "" {
-			localGroups[groupID] = struct{}{}
+	localGroups := map[string]struct{}{localGroupID: {}}
+	forwardGroups := make(map[string]struct{}, len(forwardGroupIDs))
+	for _, groupID := range forwardGroupIDs {
+		if groupID != "" && groupID != localGroupID {
+			forwardGroups[groupID] = struct{}{}
 		}
 	}
 	return &productionRouteProofRecorder{
 		groupCount:              groupCount,
 		partitionCount:          partitionCount,
 		localGroups:             localGroups,
+		forwardGroups:           forwardGroups,
 		routeGroupHits:          make(map[string]int, groupCount),
 		routeLeaderHits:         make(map[string]int, groupCount),
 		routeTokenPartitionHits: make(map[string]int, partitionCount),
@@ -495,6 +672,8 @@ func (r *productionRouteProofRecorder) recordRouteSuccess(target nativewire.Clus
 	r.routeAttemptsTotal++
 	if _, ok := r.localGroups[target.GroupID]; ok {
 		r.routeLocalOwnerHits++
+	} else if _, ok := r.forwardGroups[target.GroupID]; ok {
+		r.routeRemoteForwards++
 	} else if target.GroupID != "" {
 		r.routeRemoteRedirects++
 	}
@@ -564,6 +743,7 @@ func (r *productionRouteProofRecorder) resetCounters() {
 	r.routeAttemptsTotal = 0
 	r.routeLocalOwnerHits = 0
 	r.routeRemoteRedirects = 0
+	r.routeRemoteForwards = 0
 	r.routeUnknownOwnerRejects = 0
 	r.directLocalBypassRejects = 0
 	r.fanoutSplitAttempts = 0
@@ -585,12 +765,13 @@ func (r *productionRouteProofRecorder) snapshot() ProductionRouteProofSnapshot {
 	applyHits := cloneStringIntMap(r.appliedGroupHits)
 	commitTotal := int64(sumIntMap(commitHits))
 	applyTotal := int64(sumIntMap(applyHits))
+	routedOwnerHits := r.routeLocalOwnerHits + r.routeRemoteForwards
 	return ProductionRouteProofSnapshot{
-		RealRoutedCommits:        r.routeAttemptsTotal > 0 && r.routeLocalOwnerHits == r.routeAttemptsTotal && commitTotal == r.routeAttemptsTotal && applyTotal == r.routeAttemptsTotal,
+		RealRoutedCommits:        r.routeAttemptsTotal > 0 && routedOwnerHits == r.routeAttemptsTotal && r.routeRemoteRedirects == 0 && commitTotal == r.routeAttemptsTotal && applyTotal == r.routeAttemptsTotal,
 		RouteAttemptsTotal:       r.routeAttemptsTotal,
 		RouteLocalOwnerHits:      r.routeLocalOwnerHits,
 		RouteRemoteRedirects:     r.routeRemoteRedirects,
-		RouteRemoteForwards:      0,
+		RouteRemoteForwards:      r.routeRemoteForwards,
 		RouteUnknownOwnerRejects: r.routeUnknownOwnerRejects,
 		RouteGroupHits:           cloneStringIntMap(r.routeGroupHits),
 		RouteLeaderHits:          cloneStringIntMap(r.routeLeaderHits),
