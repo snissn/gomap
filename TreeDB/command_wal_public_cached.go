@@ -284,6 +284,7 @@ type commandWALPublicBatch struct {
 	payloadByteHint          int
 	payloadSoftCapBytes      int
 	payloadBypass            bool
+	payloadLeasedToMemtable  bool
 	opCount                  int
 	hasDeleteRange           bool
 	dirty                    bool
@@ -338,6 +339,11 @@ type commandWALPublicInnerDeleteViewer interface {
 	DeleteView(key []byte) error
 }
 
+type commandWALPublicInnerStableViewValueLease interface {
+	AttachStableViewValueLease(chunks [][]byte)
+	StableViewValueLeaseConsumed() bool
+}
+
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	var payload commitlog.RawKVBatchPayloadBuilder
 	if tdb != nil {
@@ -374,6 +380,17 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 	b.hasDeleteRange = false
 }
 
+func (b *commandWALPublicBatch) resetPayloadForReuse() {
+	if b == nil {
+		return
+	}
+	if b.payloadLeasedToMemtable {
+		b.payload.DetachRetainedByteBuffers()
+		b.payloadLeasedToMemtable = false
+	}
+	b.resetPayloadWithHint()
+}
+
 func (b *commandWALPublicBatch) payloadShouldCarryEntryRevisions() bool {
 	if b == nil || b.db == nil || b.inner == nil {
 		return false
@@ -391,10 +408,36 @@ func (b *commandWALPublicBatch) preparePayloadForAppend() {
 	// explicit Reset, drop those retained bytes before appending a fresh command
 	// payload. The geth adapter detaches borrowed replay views before taking this
 	// path after Write.
-	b.resetPayloadWithHint()
+	b.resetPayloadForReuse()
 	b.opCount = 0
 	b.hasDeleteRange = false
 	b.retainPayloadAfterWrite = false
+}
+
+func (b *commandWALPublicBatch) attachStableViewValueLease() bool {
+	if b == nil || b.inner == nil || b.payloadBypass || b.payload.Count() == 0 || b.payload.Count() != b.opCount {
+		return false
+	}
+	leaser, ok := b.inner.(commandWALPublicInnerStableViewValueLease)
+	if !ok {
+		return false
+	}
+	chunks := b.payload.RetainedByteBuffers()
+	if len(chunks) == 0 {
+		return false
+	}
+	leaser.AttachStableViewValueLease(chunks)
+	return true
+}
+
+func (b *commandWALPublicBatch) noteStableViewValueLeaseConsumed() {
+	if b == nil || b.inner == nil {
+		return
+	}
+	leaser, ok := b.inner.(commandWALPublicInnerStableViewValueLease)
+	if ok && leaser.StableViewValueLeaseConsumed() {
+		b.payloadLeasedToMemtable = true
+	}
 }
 
 func (b *commandWALPublicBatch) rebindInnerViewers() {
@@ -747,15 +790,22 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		if !ok {
 			return fmt.Errorf("treedb: command wal batch requires cached command append hook")
 		}
+		leaseAttached := b.attachStableViewValueLease()
 		if err := writer.WriteAfterCommandWALAppend(sync, func() error {
 			return b.appendCommandWAL(sync)
 		}); err != nil {
+			if leaseAttached {
+				b.noteStableViewValueLeaseConsumed()
+			}
 			return err
+		}
+		if leaseAttached {
+			b.noteStableViewValueLeaseConsumed()
 		}
 		b.publishPointIngressStats()
 		b.disableInnerStreamingBypass()
 		if !b.retainPayloadAfterWrite {
-			b.resetPayloadWithHint()
+			b.resetPayloadForReuse()
 		}
 		b.opCount = 0
 		b.hasDeleteRange = false
@@ -774,7 +824,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 	}
 	b.disableInnerStreamingBypass()
 	if !b.retainPayloadAfterWrite {
-		b.resetPayloadWithHint()
+		b.resetPayloadForReuse()
 	}
 	b.opCount = 0
 	b.hasDeleteRange = false
@@ -791,9 +841,13 @@ func (b *commandWALPublicBatch) Close() error {
 	// payload bytes, matching ordinary batch semantics: only Write/WriteSync
 	// appends and publishes a RawKVBatch command frame.
 	err := b.inner.Close()
-	b.resetPayloadWithHint()
 	payload := b.payload
-	keepPayload := payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
+	keepPayload := false
+	if b.payloadLeasedToMemtable {
+		payload.DetachRetainedByteBuffers()
+	} else {
+		keepPayload = payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
+	}
 	b.inner = nil
 	b.innerSetViewValidated = nil
 	b.innerSetViewer = nil
@@ -806,6 +860,7 @@ func (b *commandWALPublicBatch) Close() error {
 	b.payloadSoftCapBytes = 0
 	b.opCount = 0
 	b.hasDeleteRange = false
+	b.payloadLeasedToMemtable = false
 	b.resetPointIngressStats()
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
@@ -823,7 +878,7 @@ func (b *commandWALPublicBatch) Reset() {
 	resetter, ok := b.inner.(interface{ Reset() })
 	if !ok {
 		b.disableInnerStreamingBypass()
-		b.resetPayloadWithHint()
+		b.resetPayloadForReuse()
 		b.opCount = 0
 		b.hasDeleteRange = false
 		b.resetPointIngressStats()
@@ -835,7 +890,7 @@ func (b *commandWALPublicBatch) Reset() {
 	resetter.Reset()
 	b.rebindInnerViewers()
 	b.disableInnerStreamingBypass()
-	b.resetPayloadWithHint()
+	b.resetPayloadForReuse()
 	b.opCount = 0
 	b.hasDeleteRange = false
 	b.resetPointIngressStats()

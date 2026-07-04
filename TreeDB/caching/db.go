@@ -8192,6 +8192,7 @@ type batchArenaLease struct {
 	refs   int
 	chunks [][]byte
 	bytes  int64
+	noPool bool
 }
 
 type appendOnlyDirectArenaLease struct {
@@ -10270,12 +10271,17 @@ func batchEntryWALRevision(entry *batch.Entry, seq uint64) uint64 {
 }
 
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
+	return getBatchArenaLeaseWithPolicy(refs, chunks, false)
+}
+
+func getBatchArenaLeaseWithPolicy(refs int, chunks [][]byte, noPool bool) *batchArenaLease {
 	lease, _ := batchArenaLeasePool.Get().(*batchArenaLease)
 	if lease == nil {
 		lease = &batchArenaLease{}
 	}
 	lease.refs = refs
 	lease.chunks = chunks
+	lease.noPool = noPool
 	var bytes int64
 	for i := range chunks {
 		if chunks[i] != nil {
@@ -10293,18 +10299,29 @@ func putBatchArenaLease(lease *batchArenaLease) {
 	lease.refs = 0
 	lease.chunks = nil
 	lease.bytes = 0
+	lease.noPool = false
 	batchArenaLeasePool.Put(lease)
 }
 
 func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtable.Table) {
+	db.retainBatchArenaChunksForMemtablesWithPolicy(chunks, mems, false)
+}
+
+func (db *DB) retainExternalViewValueChunksForMemtables(chunks [][]byte, mems []memtable.Table) {
+	db.retainBatchArenaChunksForMemtablesWithPolicy(chunks, mems, true)
+}
+
+func (db *DB) retainBatchArenaChunksForMemtablesWithPolicy(chunks [][]byte, mems []memtable.Table, noPool bool) {
 	if len(chunks) == 0 {
 		return
 	}
 	if db == nil || len(mems) == 0 {
-		putBatchArenas(chunks)
+		if !noPool {
+			putBatchArenas(chunks)
+		}
 		return
 	}
-	lease := getBatchArenaLease(len(mems), chunks)
+	lease := getBatchArenaLeaseWithPolicy(len(mems), chunks, noPool)
 	if lease.bytes > 0 {
 		cur := db.batchArenaLeaseBytes.Add(lease.bytes)
 		updateInt64Max(&db.batchArenaLeaseBytesMax, cur)
@@ -10337,6 +10354,7 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 			}
 			lease.refs--
 			if lease.refs == 0 && len(lease.chunks) > 0 {
+				noPool := lease.noPool
 				if lease.bytes > 0 {
 					db.batchArenaLeaseBytes.Add(-lease.bytes)
 					if next := batchArenaLeasedBytesGlobal.Add(-lease.bytes); next < 0 {
@@ -10344,7 +10362,9 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 					}
 					lease.bytes = 0
 				}
-				release = append(release, lease.chunks...)
+				if !noPool {
+					release = append(release, lease.chunks...)
+				}
 				lease.chunks = nil
 				putBatchArenaLease(lease)
 			}
@@ -32150,16 +32170,18 @@ type Batch struct {
 	closed bool
 	// SetView/DeleteView keep caller-owned bytes until Write/Close, so memtables
 	// must not borrow the batch arena when any view op is present.
-	hasViewOps       bool
-	streamEligible   bool
-	streamTried      bool
-	streamBypassOff  bool
-	firstKey         []byte
-	lastKey          []byte
-	batchRange       keyRange
-	hasDeleteRanges  bool
-	entryRevision    page.EntryRevision
-	commandWALAppend func() error
+	hasViewOps                   bool
+	stableViewValueLeaseChunks   [][]byte
+	stableViewValueLeaseConsumed bool
+	streamEligible               bool
+	streamTried                  bool
+	streamBypassOff              bool
+	firstKey                     []byte
+	lastKey                      []byte
+	batchRange                   keyRange
+	hasDeleteRanges              bool
+	entryRevision                page.EntryRevision
+	commandWALAppend             func() error
 
 	commandWALCompactReplay     bool
 	commandWALCompactRanges     []batch.DeleteRange
@@ -32208,6 +32230,25 @@ func (b *Batch) DisableStreamingBypass() {
 		return
 	}
 	b.streamBypassOff = true
+}
+
+// AttachStableViewValueLease declares that current SetView value slices are
+// backed by owner-managed buffers that may be retained by append-only memtables.
+// The buffers are never returned to TreeDB's batch arena pool; the caller must
+// also stop reusing them if StableViewValueLeaseConsumed reports true after a
+// write attempt.
+func (b *Batch) AttachStableViewValueLease(chunks [][]byte) {
+	if b == nil {
+		return
+	}
+	b.stableViewValueLeaseChunks = chunks
+	b.stableViewValueLeaseConsumed = false
+}
+
+// StableViewValueLeaseConsumed reports whether the most recent write retained
+// attached stable view buffers for mutable memtable ownership.
+func (b *Batch) StableViewValueLeaseConsumed() bool {
+	return b != nil && b.stableViewValueLeaseConsumed
 }
 
 func clampAppendOnlyEntryHint(entries int) int {
@@ -32742,6 +32783,7 @@ func (b *Batch) Reset() {
 	b.streamTried = false
 	b.streamBypassOff = false
 	b.hasViewOps = false
+	b.stableViewValueLeaseChunks = nil
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
@@ -34287,6 +34329,11 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if shardCount > len(retainMainMemStack) {
 		retainMainMems = make([]memtable.Table, 0, shardCount)
 	}
+	var retainStableViewValueMemStack [batchMemtableRetainStackCap]memtable.Table
+	retainStableViewValueMems := retainStableViewValueMemStack[:0]
+	if shardCount > len(retainStableViewValueMemStack) {
+		retainStableViewValueMems = make([]memtable.Table, 0, shardCount)
+	}
 	for i, add := range shardAdds {
 		if add == 0 {
 			continue
@@ -34300,15 +34347,19 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			return ErrMemtableFull
 		}
 	}
-	prospectiveRetainBytes := batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks)
+	stableViewValueLeaseBytes := batchArenaChunksCapBytes(b.stableViewValueLeaseChunks)
+	prospectiveRetainBytes := batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks) + stableViewValueLeaseBytes
 	allowBatchArenaBorrow, preflightBlocked := shouldBorrowBatchArenaBytesForWriteWithHardCap(
 		prospectiveRetainBytes,
 		b.db.currentBatchArenaRetainedHardCapEffectiveBytes(),
 	)
+	allowStableViewValueBorrow := false
 	// SetView/DeleteView callers provide externally-owned slices that are only
 	// guaranteed immutable until Write/Close returns. Do not retain or steal
-	// those slices into memtables.
+	// those slices into memtables unless the owner attaches an explicit stable
+	// value lease that can outlive this batch.
 	if b.hasViewOps {
+		allowStableViewValueBorrow = stableViewValueLeaseBytes > 0 && allowBatchArenaBorrow
 		allowBatchArenaBorrow = false
 		batchArenaBorrowViewOpsBlockedTotal.Add(1)
 	}
@@ -34837,7 +34888,15 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					}
 					appliedSortedRun = true
 				} else {
-					if !allowBatchArenaBorrow {
+					if allowStableViewValueBorrow {
+						if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
+							if borrowed := applier.ApplyCopySortedBatchTrusted(entries, true, storeInlinePtrValues, nil); borrowed {
+								retainStableViewValueMems = appendUniqueMemtable(retainStableViewValueMems, shard.mem)
+							}
+							appliedSortedRun = true
+						}
+					}
+					if !appliedSortedRun && !allowBatchArenaBorrow {
 						if applier, ok := shard.mem.(memtable.CopySortedBatchValueCopier); ok {
 							applier.ApplyCopySortedBatchWithValueCopierTrusted(entries, func(value []byte) []byte {
 								if len(value) == 0 {
@@ -34867,19 +34926,34 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 							return failMemtableApply(shard, err)
 						}
 					} else {
-						borrowed := false
-						if allowBatchArenaBorrow && !useSteal {
+						borrowedMainArena := false
+						borrowedStableViewValue := false
+						allowValueBorrow := allowBatchArenaBorrow
+						if !allowValueBorrow && allowStableViewValueBorrow && !useSteal {
+							allowValueBorrow = true
 							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
 								if op.IsPtr {
-									borrowed = storeInlinePtrValues && len(op.Value) > 0
+									borrowedStableViewValue = storeInlinePtrValues && len(op.Value) > 0
 								} else {
-									borrowed = len(op.Value) > 0
+									borrowedStableViewValue = len(op.Value) > 0
 								}
 							}
 						}
-						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
-						if borrowed {
+						if allowBatchArenaBorrow && !useSteal {
+							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
+								if op.IsPtr {
+									borrowedMainArena = storeInlinePtrValues && len(op.Value) > 0
+								} else {
+									borrowedMainArena = len(op.Value) > 0
+								}
+							}
+						}
+						memtableBatchSet(shard.mem, useSteal, allowValueBorrow, storeInlinePtrValues, op)
+						if borrowedMainArena {
 							retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
+						}
+						if borrowedStableViewValue {
+							retainStableViewValueMems = appendUniqueMemtable(retainStableViewValueMems, shard.mem)
 						}
 					}
 					if useStream {
@@ -34950,6 +35024,11 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
+	if len(retainStableViewValueMems) > 0 {
+		b.db.retainExternalViewValueChunksForMemtables(b.stableViewValueLeaseChunks, retainStableViewValueMems)
+		b.stableViewValueLeaseConsumed = true
+	}
+	b.stableViewValueLeaseChunks = nil
 	if retainPtrArena {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
@@ -35501,6 +35580,7 @@ func (b *Batch) Close() error {
 	b.lastKey = nil
 	b.entryRevision = page.LegacyEntryRevision
 	b.ptrValueIdxs = nil
+	b.stableViewValueLeaseChunks = nil
 	b.conditionalTxnID = 0
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil

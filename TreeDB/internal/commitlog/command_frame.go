@@ -494,6 +494,41 @@ func (b *RawKVBatchPayloadBuilder) PrepareForReuse(maxRetainedBytes int) bool {
 	return b.RetainedBytes() > 0
 }
 
+// RetainedByteBuffers returns the builder-owned byte buffers that may back
+// key/value views returned by AppendSet/AppendDelete. Callers must not mutate,
+// pool, or reuse these buffers while any returned view can still be observed.
+func (b *RawKVBatchPayloadBuilder) RetainedByteBuffers() [][]byte {
+	if b == nil {
+		return nil
+	}
+	var out [][]byte
+	if cap(b.payload) > 0 {
+		out = append(out, b.payload[:0])
+	}
+	if cap(b.zeroPayload) > 0 {
+		out = append(out, b.zeroPayload[:0])
+	}
+	if cap(b.zeroSetValueView) > 0 {
+		out = append(out, b.zeroSetValueView[:0])
+	}
+	return out
+}
+
+// DetachRetainedByteBuffers drops builder references to payload buffers without
+// returning them to the builder's reuse path. Use this when those buffers were
+// handed to another owner with a longer lifetime, such as a mutable memtable.
+func (b *RawKVBatchPayloadBuilder) DetachRetainedByteBuffers() {
+	if b == nil {
+		return
+	}
+	revisionOffsets := b.revisionOffsets
+	keepRevisionOffsets := cap(revisionOffsets) > rawKVRevisionOffsetInlineCap
+	*b = RawKVBatchPayloadBuilder{}
+	if keepRevisionOffsets {
+		b.revisionOffsets = revisionOffsets[:0]
+	}
+}
+
 // RetainedCapAfterAppend returns the backing capacity that would be retained
 // after appending needed bytes with the same growth rule used by Append.
 func (b *RawKVBatchPayloadBuilder) RetainedCapAfterAppend(needed int) (int, error) {

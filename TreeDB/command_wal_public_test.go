@@ -1446,6 +1446,63 @@ func TestPublicCommandWALBatchReplayBytesSurviveWriteUntilReset(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchReplayBytesAppendOnlyLeaseAvoidsDirectArena(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+		MemtableMode:        "append_only",
+		MemtableShards:      1,
+		FlushThreshold:      1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b, ok := db.NewBatchWithSize(1).(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("NewBatchWithSize type=%T, want *commandWALPublicBatch", db.NewBatchWithSize(1))
+	}
+	keyView, valueView, err := b.SetViewWithReplayBytes([]byte("alpha"), bytes.Repeat([]byte{0x33}, 128))
+	if err != nil {
+		t.Fatalf("SetViewWithReplayBytes: %v", err)
+	}
+	wantKey := bytes.Clone(keyView)
+	wantValue := bytes.Clone(valueView)
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !b.payloadLeasedToMemtable {
+		t.Fatal("command-WAL payload was not marked leased to the append-only memtable")
+	}
+	if !b.retainPayloadAfterWrite {
+		t.Fatal("replay payload was not retained after write")
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.append_only_direct_arena.active_used_bytes"]; got != "0" {
+		t.Fatalf("direct arena active used bytes=%q want 0", got)
+	}
+	if got := stats["treedb.cache.batch_arena.leased_bytes"]; got == "0" || got == "" {
+		t.Fatalf("batch arena leased bytes=%q want >0 for external payload lease", got)
+	}
+	got, err := db.Get(wantKey)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, wantValue) {
+		t.Fatalf("stored value=%x want %x", got, wantValue)
+	}
+
+	b.Reset()
+	if b.payloadLeasedToMemtable {
+		t.Fatal("Reset left payload marked leased to memtable")
+	}
+}
+
 func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T) {
 	wrapped := newCommandWALPublicBatch(nil, &commandWALResetBatch{}, 8000)
 	zeroValue := make([]byte, 128)
