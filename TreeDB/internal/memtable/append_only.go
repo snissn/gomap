@@ -51,7 +51,10 @@ const (
 	appendOnlyReuseOversizeFactor       = 4
 	appendOnlyResetDropThresholdEntries = 1 << 15
 	appendOnlyAggressiveGrowCutoff      = appendOnlyResetDropThresholdEntries * 2
-	appendOnlyReserveHeadroomDivisor    = 4
+	// Reserve calls usually know the near-term write batch size. Keep amortized
+	// headroom so append-heavy commit paths do not repeatedly grow and copy the
+	// entry slice while filling a large mutable memtable.
+	appendOnlyReserveHeadroomDivisor = 1
 )
 
 var appendOnlyEntryPoolRetainBudgetBytes = uint64(256 << 20)
