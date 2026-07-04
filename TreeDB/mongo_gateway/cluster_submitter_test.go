@@ -2221,6 +2221,23 @@ func TestMongoClusterMutationCommandErrorDecodesRouteMetadataLeaderHint(t *testi
 	assertStringField(t, response, "treedbRouteLeaderHint", "node z")
 }
 
+func TestMongoClusterMutationCommandErrorSurfacesRemoteWireRouteMetadata(t *testing.T) {
+	clusterErr := &treenativewire.WireError{
+		Code:    iwire.ErrReadOnly,
+		Message: "cluster route rejected; route_error_class=remote_owner_redirect route_group=group+z leader_hint=node+z",
+	}
+	response, err := mongoClusterMutationCommandError(clusterErr)
+	if err != nil {
+		t.Fatalf("mongoClusterMutationCommandError: %v", err)
+	}
+	assertCommandError(t, response, "NotWritablePrimary")
+	assertBool(t, response, "treedbClusterError", true)
+	assertStringField(t, response, "treedbErrorClass", "remote_owner_redirect")
+	assertStringField(t, response, "treedbLeaderHint", "node z")
+	assertStringField(t, response, "treedbRouteGroup", "group z")
+	assertStringField(t, response, "treedbRouteLeaderHint", "node z")
+}
+
 func TestMongoClusterMutationCommandErrorClassifiesQueryRouteAsRouteRejected(t *testing.T) {
 	clusterErr := &iwire.ProtocolError{Code: iwire.ErrReadOnly, Reason: "cluster query route shape is not supported before scatter planning"}
 	response, err := mongoClusterMutationCommandError(clusterErr)

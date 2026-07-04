@@ -943,7 +943,7 @@ func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 	} else if errors.Is(err, collections.ErrCommitAmbiguous) {
 		nativeCode = iwire.ErrCommitAmbiguous
 		code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
-	} else if parsedNativeCode, ok := iwire.ErrorCodeOf(err); ok {
+	} else if parsedNativeCode, ok := mongoClusterNativeErrorCodeOf(err); ok {
 		nativeCode = parsedNativeCode
 		switch nativeCode {
 		case iwire.ErrUnsupportedFeature:
@@ -964,6 +964,17 @@ func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 		code, codeName = commandCodeDuplicateKey, "DuplicateKey"
 	}
 	return commandErrorWithFields(code, codeName, err.Error(), mongoClusterErrorFields(err, nativeCode, codeName))
+}
+
+func mongoClusterNativeErrorCodeOf(err error) (iwire.ErrorCode, bool) {
+	if code, ok := iwire.ErrorCodeOf(err); ok {
+		return code, true
+	}
+	var wireErr *treenativewire.WireError
+	if errors.As(err, &wireErr) {
+		return wireErr.Code, true
+	}
+	return 0, false
 }
 
 func mongoClusterErrorFields(err error, nativeCode iwire.ErrorCode, codeName string) bson.D {
@@ -992,6 +1003,9 @@ func mongoClusterErrorMetadataApplies(err error, nativeCode iwire.ErrorCode, cod
 	if nativeCode != 0 ||
 		errors.Is(err, collections.ErrCommitAmbiguous) ||
 		collections.IsDuplicateKeyError(err) {
+		return true
+	}
+	if route, ok := treenativewire.ClusterRouteErrorMetadataOf(err); ok && route.Class != "" {
 		return true
 	}
 	return codeName == "WriteConcernFailed"
