@@ -10089,12 +10089,34 @@ func memtableSetDirectBorrowValue(mt memtable.Table, key, value []byte, ptr page
 	mt.SetEntry(key, value, ptr, flags)
 }
 
-func reserveMemtableEntries(mt memtable.Table, additional int) {
+func reserveMemtableEntries(db *DB, mt memtable.Table, additional int) {
 	if additional <= 0 {
+		return
+	}
+	if appendOnly, ok := mt.(*memtable.AppendOnly); ok {
+		reserveAppendOnlyMemtableEntries(db, appendOnly, additional)
 		return
 	}
 	if reserver, ok := mt.(memtable.EntryCapacityReserver); ok {
 		reserver.ReserveAdditionalEntries(additional)
+	}
+}
+
+func reserveAppendOnlyMemtableEntries(db *DB, mt *memtable.AppendOnly, additional int) {
+	if mt == nil || additional <= 0 {
+		return
+	}
+	current := mt.Len()
+	demand := current + additional
+	if demand < current {
+		demand = int(^uint(0) >> 1)
+	}
+	if db != nil {
+		db.observeAppendOnlyReserveDemandEntries(demand)
+	}
+	mt.ReserveAdditionalEntries(additional)
+	if db != nil {
+		db.observeAppendOnlyReserveDemandEntries(mt.EntryCapacity())
 	}
 }
 
@@ -10835,6 +10857,7 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
+		capacity = db.appendOnlyMemtableCapacityHint(capacity, estimate)
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			db.appendOnlyMemLeaseHitTotal.Add(1)
 			mt.ResetWithCapacity(capacity, estimate)
@@ -32225,6 +32248,41 @@ func (db *DB) observeAppendOnlyMutableEntries(entries int) {
 	}
 }
 
+func (db *DB) appendOnlyEntryHintCapacityLimit(capacity, estimatedBytesPerEntry int) int {
+	if db == nil {
+		return appendOnlyEntryHintMaxEntries
+	}
+	if threshold := db.mutableFlushThreshold(); threshold > 0 {
+		if effectiveCap := memtableCapacity(threshold); effectiveCap > 0 && (capacity <= 0 || effectiveCap < capacity) {
+			capacity = effectiveCap
+		}
+	}
+	if capacity <= 0 {
+		return appendOnlyEntryHintMaxEntries
+	}
+	entries := appendOnlyEntryCapacityForBytes(capacity, estimatedBytesPerEntry)
+	return clampAppendOnlyEntryHint(entries)
+}
+
+func (db *DB) observeAppendOnlyReserveDemandEntries(entries int) {
+	if db == nil || entries <= 0 {
+		return
+	}
+	n := clampAppendOnlyEntryHint(entries)
+	if limit := db.appendOnlyEntryHintCapacityLimit(db.memtableCap, appendOnlyEstimatedBytesPerEntryDefault); n > limit {
+		n = limit
+	}
+	for {
+		old := int(db.appendOnlyEntryHint.Load())
+		if n <= old {
+			return
+		}
+		if db.appendOnlyEntryHint.CompareAndSwap(int32(old), int32(n)) {
+			return
+		}
+	}
+}
+
 func appendOnlyEntriesToCapacity(entries, estimatedBytesPerEntry int) int {
 	if entries <= 0 {
 		return 0
@@ -34660,7 +34718,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
-			reserveMemtableEntries(shard.mem, len(idxs))
+			reserveMemtableEntries(b.db, shard.mem, len(idxs))
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
 			if stealSuppressedDeferred && allowBatchArenaBorrow {
@@ -34739,7 +34797,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
-			reserveMemtableEntries(shard.mem, len(entries))
+			reserveMemtableEntries(b.db, shard.mem, len(entries))
 			useStream := b.streamEligible
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
