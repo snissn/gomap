@@ -292,6 +292,111 @@ func TestRawKVBatchPayloadBuilderRetainedCapPredictsCompactZeroBuffers(t *testin
 	}
 }
 
+func TestRawKVBatchPayloadBuilderRetainedBytesIncludesCompactZeroBuffers(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(0, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	if _, _, err := builder.AppendSet([]byte("zero"), make([]byte, 128)); err != nil {
+		t.Fatalf("AppendSet compact zero: %v", err)
+	}
+	if cap(builder.zeroPayload) == 0 || cap(builder.zeroSetValueView) == 0 {
+		t.Fatalf("compact-zero append did not retain side buffers: zeroPayload cap=%d zeroSetValueView cap=%d", cap(builder.zeroPayload), cap(builder.zeroSetValueView))
+	}
+	want := cap(builder.payload) + cap(builder.zeroPayload) + cap(builder.zeroSetValueView)
+	if got := builder.RetainedBytes(); got != want {
+		t.Fatalf("RetainedBytes=%d, want payload+zero buffers=%d", got, want)
+	}
+	if got := builder.RetainedCap(); got >= builder.RetainedBytes() {
+		t.Fatalf("RetainedCap=%d should not account for compact-zero side buffers retainedBytes=%d", got, builder.RetainedBytes())
+	}
+}
+
+func TestRawKVBatchPayloadBuilderPrepareForReuseDropsOversizeRetainedBuffers(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(0, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	if _, _, err := builder.AppendSet([]byte("large"), bytes.Repeat([]byte{1}, 64<<10)); err != nil {
+		t.Fatalf("AppendSet large: %v", err)
+	}
+	retained := builder.RetainedBytes()
+	if retained < 64<<10 {
+		t.Fatalf("retained bytes=%d, want large payload retained", retained)
+	}
+	if builder.PrepareForReuse(retained - 1) {
+		t.Fatalf("PrepareForReuse returned true for retained=%d with max=%d", retained, retained-1)
+	}
+	if got := builder.RetainedBytes(); got != 0 {
+		t.Fatalf("RetainedBytes after oversize drop=%d, want 0", got)
+	}
+	if got := builder.RetainedCap(); got != 0 {
+		t.Fatalf("RetainedCap after oversize drop=%d, want 0", got)
+	}
+}
+
+func TestRawKVBatchPayloadBuilderPrepareForReuseDropsInlineRevisionOffsets(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(2, 64); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	if err := builder.EnableEntryRevisions(); err != nil {
+		t.Fatalf("EnableEntryRevisions: %v", err)
+	}
+	if cap(builder.revisionOffsets) != rawKVRevisionOffsetInlineCap {
+		t.Fatalf("revision offset cap=%d, want inline cap %d", cap(builder.revisionOffsets), rawKVRevisionOffsetInlineCap)
+	}
+
+	pooled := builder
+	if !pooled.PrepareForReuse(1 << 20) {
+		t.Fatal("PrepareForReuse returned false for bounded inline-revision builder")
+	}
+	if pooled.revisionOffsets != nil {
+		t.Fatalf("pooled inline revision offsets retained with cap=%d; copied builders must drop inline aliases", cap(pooled.revisionOffsets))
+	}
+	if err := pooled.ResetWithHint(2, 64); err != nil {
+		t.Fatalf("pooled ResetWithHint: %v", err)
+	}
+	if err := pooled.EnableEntryRevisions(); err != nil {
+		t.Fatalf("pooled EnableEntryRevisions: %v", err)
+	}
+	if cap(pooled.revisionOffsets) != rawKVRevisionOffsetInlineCap {
+		t.Fatalf("pooled revision offset cap=%d, want inline cap %d", cap(pooled.revisionOffsets), rawKVRevisionOffsetInlineCap)
+	}
+	gotBacking := &pooled.revisionOffsets[:cap(pooled.revisionOffsets)][0]
+	wantBacking := &pooled.revisionOffsetInline[0]
+	if gotBacking != wantBacking {
+		t.Fatalf("pooled revision offsets do not point at pooled builder inline array")
+	}
+	if _, _, err := pooled.AppendSet([]byte("key"), []byte("value")); err != nil {
+		t.Fatalf("pooled AppendSet: %v", err)
+	}
+	if len(pooled.revisionOffsets) != 1 {
+		t.Fatalf("pooled revision offsets len=%d, want 1 after append", len(pooled.revisionOffsets))
+	}
+}
+
+func TestRawKVBatchPayloadBuilderPrepareForReuseKeepsHeapRevisionOffsets(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	opHint := rawKVRevisionOffsetInlineCap + 1
+	if err := builder.ResetWithHint(opHint, 64); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	if err := builder.EnableEntryRevisions(); err != nil {
+		t.Fatalf("EnableEntryRevisions: %v", err)
+	}
+	if cap(builder.revisionOffsets) <= rawKVRevisionOffsetInlineCap {
+		t.Fatalf("revision offset cap=%d, want heap allocation larger than inline cap %d", cap(builder.revisionOffsets), rawKVRevisionOffsetInlineCap)
+	}
+	heapCap := cap(builder.revisionOffsets)
+	if !builder.PrepareForReuse(1 << 20) {
+		t.Fatal("PrepareForReuse returned false for bounded heap-revision builder")
+	}
+	if cap(builder.revisionOffsets) != heapCap || len(builder.revisionOffsets) != 0 {
+		t.Fatalf("heap revision offsets len/cap=%d/%d, want 0/%d", len(builder.revisionOffsets), cap(builder.revisionOffsets), heapCap)
+	}
+}
+
 func TestCommandWALCollectionPayloadDecodeBoundsCountBeforeAllocation(t *testing.T) {
 	payload := make([]byte, 10+len("users"))
 	encodeCollectionBatchHeader(payload, "users", int(^uint32(0)))

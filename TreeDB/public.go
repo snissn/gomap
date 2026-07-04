@@ -169,6 +169,7 @@ type DB struct {
 	lifecycleMu                          sync.RWMutex
 	commandWALCached                     bool
 	commandWALPendingMu                  sync.Mutex
+	commandWALPublicPayloadPool          sync.Pool
 	commandWALFirst                      atomic.Uint64
 	commandWALLast                       atomic.Uint64
 	commandWALCheckpointCutoverLast      atomic.Uint64
