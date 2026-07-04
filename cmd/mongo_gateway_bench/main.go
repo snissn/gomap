@@ -1842,6 +1842,11 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	case routeModeProduction:
 		loadProfileName = "load_insert_one_production_routed_commit"
 	}
+	if cfg.RouteMode == routeModeProduction {
+		// Keep the production route allocation reset outside the profiled load
+		// phase so CPU profiles and phase timing share the same boundary.
+		runtime.GC()
+	}
 	loadPhase, err := runTreeDBProfiledPhaseWithDrain(target, profiler, loadProfileName, cfg.TreeDBReadState == treeDBReadStateSettled, func() (phaseResult, error) {
 		switch cfg.RouteMode {
 		case routeModeRing:
@@ -3816,7 +3821,6 @@ func runProductionRoutedLoadPhase(ctx context.Context, cfg config, target *bench
 		}
 	}
 
-	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	// Keep this proof serial: concurrent driver calls can race the current
