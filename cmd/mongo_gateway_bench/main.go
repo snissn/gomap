@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
+	"github.com/snissn/gomap/TreeDB/mongo_gateway/benchsupport"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/fastclient"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	nativewire "github.com/snissn/gomap/TreeDB/nativewire"
@@ -308,6 +310,7 @@ type benchTarget struct {
 	treedbDir            string
 	removeTreeDBDir      bool
 	skipDrainAfterPhases bool
+	productionRoute      *benchsupport.ProductionRouteProofHarness
 	poolStats            *mongoPoolStats
 	cleanup              func(context.Context) error
 }
@@ -450,6 +453,7 @@ const (
 
 	routeEvidenceScopeLocalPreflight                = "local_preflight"
 	routeEvidenceScopeProductionRoutedCommit        = "production_routed_commit"
+	productionRouteEvidenceStatusAvailable          = "available"
 	productionRouteEvidenceStatusLocalPreflightOnly = "unavailable_local_preflight_only"
 
 	clientModeDriver             = "driver"
@@ -568,9 +572,9 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.Target, "target", "treedb", "benchmark target: treedb or mongo")
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
 	fs.BoolVar(&cfg.MongoCompact, "mongo-compact", false, "compact the MongoDB collection before final stats collection")
-	fs.StringVar(&cfg.RouteMode, "route-mode", cfg.RouteMode, "route evidence mode: off, ring, or reserved production")
-	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for -route-mode ring; must be >= 1")
-	fs.IntVar(&cfg.RoutePartitionCount, "route-partitions", cfg.RoutePartitionCount, "token partition count for -route-mode ring; must be >= route-groups")
+	fs.StringVar(&cfg.RouteMode, "route-mode", cfg.RouteMode, "route evidence mode: off, ring, or production")
+	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for route evidence; production currently supports 1")
+	fs.IntVar(&cfg.RoutePartitionCount, "route-partitions", cfg.RoutePartitionCount, "token partition count for route evidence; must be >= route-groups")
 	fs.StringVar(&cfg.TreeDBDir, "treedb-dir", "", "TreeDB directory for -target treedb; empty uses a temp dir")
 	fs.BoolVar(&cfg.KeepTreeDBDir, "keep-treedb-dir", false, "keep an auto-created TreeDB temp dir after the run")
 	fs.BoolVar(&cfg.DropBeforeRun, "drop-before-run", true, "drop the MongoDB database before running -target mongo")
@@ -665,6 +669,18 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.RouteMode = routeMode
+	if cfg.Target == "treedb" && cfg.RouteMode == routeModeProduction {
+		if seenFlags["treedb-command-wal"] && !cfg.TreeDBCommandWAL {
+			return config{}, errors.New("route-mode production requires command-WAL; pass -treedb-command-wal=true or omit the flag")
+		}
+		cfg.TreeDBCommandWAL = true
+		if !seenFlags["treedb-profile"] {
+			treeDBProfile = string(treedb.ProfileCommandWALRelaxed)
+		}
+		if !seenFlags["treedb-document-format"] {
+			treeDBDocumentFormat = string(collections.DocumentFormatBSON)
+		}
+	}
 	if cfg.Target != "treedb" && cfg.TreeDBCommandWAL {
 		return config{}, errors.New("treedb-command-wal is only supported with -target treedb")
 	}
@@ -696,17 +712,17 @@ func parseConfig(args []string) (config, error) {
 		if cfg.Target != "treedb" {
 			return config{}, errors.New("route-mode is only supported with -target treedb")
 		}
-		if cfg.RouteMode == routeModeProduction {
-			return config{}, errors.New("route-mode production is reserved until real production routed commits exist")
-		}
 		if cfg.ClientMode != clientModeDriver {
-			return config{}, errors.New("route-mode ring is only supported with -client-mode driver")
+			return config{}, fmt.Errorf("route-mode %s is only supported with -client-mode driver", cfg.RouteMode)
 		}
 		if cfg.RouteGroupCount < 1 {
-			return config{}, errors.New("route-groups must be >= 1 for route-mode ring")
+			return config{}, fmt.Errorf("route-groups must be >= 1 for route-mode %s", cfg.RouteMode)
 		}
 		if cfg.RoutePartitionCount < cfg.RouteGroupCount {
-			return config{}, errors.New("route-partitions must be >= route-groups for route-mode ring")
+			return config{}, fmt.Errorf("route-partitions must be >= route-groups for route-mode %s", cfg.RouteMode)
+		}
+		if cfg.RouteMode == routeModeProduction && cfg.RouteGroupCount != 1 {
+			return config{}, errors.New("route-mode production currently supports only local-owner proof with route-groups=1")
 		}
 	}
 	if cfg.Documents <= 0 {
@@ -864,6 +880,12 @@ func parseConfig(args []string) (config, error) {
 		return config{}, err
 	}
 	cfg.TreeDBDocumentFormat = documentFormat
+	if cfg.RouteMode == routeModeProduction && cfg.TreeDBDocumentFormat != collections.DocumentFormatBSON {
+		return config{}, errors.New("route-mode production currently supports only -treedb-document-format bson")
+	}
+	if err := validateProductionRouteProofShape(cfg); err != nil {
+		return config{}, err
+	}
 	dataRootStorage, err := parseTreeDBRootStoragePolicy(treeDBDataRootStorage)
 	if err != nil {
 		return config{}, fmt.Errorf("treedb-data-root-storage: %w", err)
@@ -894,6 +916,40 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("deletes cannot exceed documents")
 	}
 	return cfg, nil
+}
+
+func validateProductionRouteProofShape(cfg config) error {
+	if cfg.RouteMode != routeModeProduction {
+		return nil
+	}
+	var unsupported []string
+	require := func(unsupportedShape bool, flagShape string) {
+		if unsupportedShape {
+			unsupported = append(unsupported, flagShape)
+		}
+	}
+	require(cfg.BatchSize != 1, "-batch-size 1")
+	require(cfg.InsertProducers != 1, "-insert-producers 1")
+	require(cfg.SecondaryIndexes != 0, "-secondary-indexes 0")
+	require(cfg.RangeIndex, "-range-index=false")
+	require(cfg.UpdateIndexedField, "-update-indexed-field=false")
+	require(cfg.Reads != 0, "-reads 0")
+	require(cfg.RangeReads != 0, "-range-reads 0")
+	require(cfg.Updates != 0, "-updates 0")
+	require(cfg.Deletes != 0, "-deletes 0")
+	require(cfg.ConcurrentReads != 0, "-concurrent-reads 0")
+	require(cfg.ConcurrentReaders != 0, "-concurrent-readers 0")
+	require(len(cfg.ConcurrentReaderSweep) != 0, "omit -concurrent-reader-sweep")
+	require(cfg.ConcurrentRangeReads != 0, "-concurrent-range-reads 0")
+	require(cfg.ConcurrentRangeReaders != 0, "-concurrent-range-readers 0")
+	require(len(cfg.ConcurrentRangeReaderSweep) != 0, "omit -concurrent-range-reader-sweep")
+	require(cfg.ConcurrentWrites != 0, "-concurrent-writes 0")
+	require(cfg.ConcurrentWriters != 0, "-concurrent-writers 0")
+	require(len(cfg.ConcurrentWriterSweep) != 0, "omit -concurrent-writer-sweep")
+	if len(unsupported) == 0 {
+		return nil
+	}
+	return fmt.Errorf("route-mode production currently supports only serial insert-only local-owner proof; set %s", strings.Join(unsupported, ", "))
 }
 
 func parseTreeDBProfile(raw string) (treedb.Profile, error) {
@@ -1271,6 +1327,21 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	server.MaxFindScanDocuments = cfg.Documents
 	server.DefaultCollectionOptions = treeDBBenchmarkCollectionOptions(cfg)
 	server.DefaultIndexStoragePolicy = cfg.TreeDBIndexRootStorage
+	var productionRoute *benchsupport.ProductionRouteProofHarness
+	if cfg.RouteMode == routeModeProduction {
+		harness, err := benchsupport.ConfigureProductionRouteProofHarness(benchsupport.ProductionRouteProofOptions{
+			GroupCount:     cfg.RouteGroupCount,
+			PartitionCount: cfg.RoutePartitionCount,
+		}, db, manager, server)
+		if err != nil {
+			_ = backendCleanup()
+			if removeDir {
+				_ = os.RemoveAll(dir)
+			}
+			return nil, err
+		}
+		productionRoute = harness
+	}
 	var nativeServer *nativewire.Server
 	if isNativeWireClientMode(cfg.ClientMode) {
 		nativeServer = nativewire.NewServer(nativewire.ServerOptions{
@@ -1284,6 +1355,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		cancelServe()
+		if productionRoute != nil {
+			_ = productionRoute.Close()
+		}
 		_ = backendCleanup()
 		if removeDir {
 			_ = os.RemoveAll(dir)
@@ -1305,6 +1379,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 			_ = ln.Close()
 			if nativeServer != nil {
 				_ = nativeServer.Close()
+			}
+			if productionRoute != nil {
+				_ = productionRoute.Close()
 			}
 			_ = backendCleanup()
 			if removeDir {
@@ -1331,6 +1408,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		if nativeServer != nil {
 			_ = nativeServer.Close()
 		}
+		if productionRoute != nil {
+			_ = productionRoute.Close()
+		}
 		cancelServe()
 		_ = ln.Close()
 		_ = backendCleanup()
@@ -1349,6 +1429,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 		if nativeServer != nil {
 			_ = nativeServer.Close()
+		}
+		if productionRoute != nil {
+			_ = productionRoute.Close()
 		}
 		cancelServe()
 		_ = ln.Close()
@@ -1370,6 +1453,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		}
 		if nativeServer != nil {
 			errs = appendCleanupErr(errs, ignoreExpectedCloseError(nativeServer.Close()))
+		}
+		if productionRoute != nil {
+			errs = appendCleanupErr(errs, productionRoute.Close())
 		}
 		if nativeServeErr != nil {
 			select {
@@ -1402,6 +1488,7 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 		treedbDir:            dir,
 		removeTreeDBDir:      removeDir,
 		skipDrainAfterPhases: cfg.TreeDBReadState == treeDBReadStateUnsettled,
+		productionRoute:      productionRoute,
 		poolStats:            poolStats,
 		cleanup:              cleanup,
 	}, nil
@@ -1681,9 +1768,11 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		RangeIndex:                 cfg.RangeIndex,
 		PrebuildDocuments:          cfg.PrebuildDocuments,
 	}
-	if cfg.RouteMode == routeModeRing {
+	if cfg.RouteMode == routeModeRing || cfg.RouteMode == routeModeProduction {
 		result.RouteGroupCount = cfg.RouteGroupCount
 		result.RoutePartitionCount = cfg.RoutePartitionCount
+	}
+	if cfg.RouteMode == routeModeRing {
 		result.ProductionRouteEvidenceStatus = productionRouteEvidenceStatusLocalPreflightOnly
 	}
 	if cfg.ClientMode == clientModeRawWireTCPPipeline {
@@ -1745,15 +1834,31 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		target.poolStats.Reset()
 	}
 	var routeResult *routeEvidence
+	var productionRouteResult *productionRouteEvidence
 	loadProfileName := "load_insert_many"
-	if cfg.RouteMode == routeModeRing {
+	switch cfg.RouteMode {
+	case routeModeRing:
 		loadProfileName = "load_insert_one_routed_ring"
+	case routeModeProduction:
+		loadProfileName = "load_insert_one_production_routed_commit"
+	}
+	if cfg.RouteMode == routeModeProduction {
+		// Keep the production route allocation reset outside the profiled load
+		// phase so CPU profiles and phase timing share the same boundary.
+		runtime.GC()
 	}
 	loadPhase, err := runTreeDBProfiledPhaseWithDrain(target, profiler, loadProfileName, cfg.TreeDBReadState == treeDBReadStateSettled, func() (phaseResult, error) {
-		if cfg.RouteMode == routeModeRing {
+		switch cfg.RouteMode {
+		case routeModeRing:
 			phase, evidence, err := runRoutedRingLoadPhase(ctx, cfg, coll, prebuilt)
 			if err == nil {
 				routeResult = evidence
+			}
+			return phase, err
+		case routeModeProduction:
+			phase, evidence, err := runProductionRoutedLoadPhase(ctx, cfg, target, db, coll, prebuilt)
+			if err == nil {
+				productionRouteResult = evidence
 			}
 			return phase, err
 		}
@@ -1765,6 +1870,12 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 	result.Phases = append(result.Phases, loadPhase)
 	if routeResult != nil {
 		result.RouteEvidence = routeResult
+	}
+	if productionRouteResult != nil {
+		productionRouteResult.WriteLatencyMicros = loadPhase.LatencyMicros
+		productionRouteResult.WritesPerSecond = loadPhase.OpsPerSecond
+		result.ProductionRouteEvidenceStatus = productionRouteEvidenceStatusAvailable
+		result.ProductionRouteEvidence = productionRouteResult
 	}
 	if target.poolStats != nil {
 		result.MongoPoolStatsAfterLoad = target.poolStats.Snapshot()
@@ -3691,6 +3802,119 @@ func runRoutedRingLoadPhase(ctx context.Context, cfg config, coll *mongo.Collect
 		return phase, router.evidence(cfg.Documents), fanoutErr
 	}
 	return phase, router.evidence(cfg.Documents), nil
+}
+
+func runProductionRoutedLoadPhase(ctx context.Context, cfg config, target *benchTarget, db *mongo.Database, coll *mongo.Collection, prebuilt []bson.D) (phaseResult, *productionRouteEvidence, error) {
+	if target == nil || target.productionRoute == nil {
+		return phaseResult{}, nil, errors.New("route-mode production requires production route harness")
+	}
+	if err := ensureProductionRouteCollection(ctx, cfg, target, db); err != nil {
+		return phaseResult{}, nil, err
+	}
+
+	var beforeDisk diskSnapshot
+	haveBeforeDisk := false
+	if target.treedbDir != "" {
+		if snapshot, err := collectDiskSnapshot(target.treedbDir); err == nil {
+			beforeDisk = snapshot
+			haveBeforeDisk = true
+		}
+	}
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	// Keep this proof serial: concurrent driver calls can race the current
+	// per-command catalog guard before retry/redirect semantics exist.
+	workers := 1
+	phase, err := measurePhase("load_insert_one_production_routed_commit", cfg.Documents, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, workers, cfg.Documents, func(op int) error {
+			doc := benchmarkDocumentForShape(cfg.DocumentShape, op)
+			if prebuilt != nil {
+				doc = prebuilt[op]
+			}
+			begin := time.Now()
+			_, err := coll.InsertOne(ctx, doc)
+			sample(time.Since(begin))
+			return err
+		})
+	})
+	runtime.ReadMemStats(&after)
+	if cfg.InsertProducers != workers {
+		phase.EffectiveProducers = workers
+	}
+	if err != nil {
+		return phase, nil, err
+	}
+	if err := target.productionRoute.ProbeUnknownOwnerReject(ctx, cfg.Database, cfg.Collection); err != nil {
+		return phase, nil, err
+	}
+	if err := target.productionRoute.ProbeDirectLocalBypassReject(ctx); err != nil {
+		return phase, nil, err
+	}
+
+	var storageOverhead int64
+	if haveBeforeDisk {
+		if afterDisk, err := collectDiskSnapshot(target.treedbDir); err == nil {
+			storageOverhead = afterDisk.TotalBytes - beforeDisk.TotalBytes
+		}
+	}
+	evidence := productionRouteEvidenceFromSnapshot(target.productionRoute.Snapshot(), phase, cfg.Documents, before, after, storageOverhead)
+	if evidence == nil || !evidence.RealRoutedCommits {
+		return phase, evidence, errors.New("production route evidence did not prove routed local-owner commit/apply")
+	}
+	return phase, evidence, nil
+}
+
+func ensureProductionRouteCollection(ctx context.Context, cfg config, target *benchTarget, db *mongo.Database) error {
+	if target != nil && target.collections != nil {
+		collection, err := target.collections.OpenCollection(cfg.Database + "." + cfg.Collection)
+		if err == nil {
+			meta := collection.Meta()
+			if meta.Options.DocumentFormat != cfg.TreeDBDocumentFormat {
+				return fmt.Errorf("route-mode production existing collection document format %q does not match required %q", meta.Options.DocumentFormat, cfg.TreeDBDocumentFormat)
+			}
+			return nil
+		}
+		if !errors.Is(err, collections.ErrCollectionNotFound) {
+			return fmt.Errorf("ensureProductionRouteCollection: %w", err)
+		}
+	}
+	if db == nil {
+		return errors.New("route-mode production requires Mongo database handle")
+	}
+	return db.RunCommand(ctx, bson.D{{Key: "create", Value: cfg.Collection}}).Err()
+}
+
+func productionRouteEvidenceFromSnapshot(snapshot benchsupport.ProductionRouteProofSnapshot, phase phaseResult, operations int, before, after runtime.MemStats, storageOverhead int64) *productionRouteEvidence {
+	var bytesPerOp float64
+	var allocsPerOp float64
+	if operations > 0 {
+		bytesPerOp = float64(after.TotalAlloc-before.TotalAlloc) / float64(operations)
+		allocsPerOp = float64(after.Mallocs-before.Mallocs) / float64(operations)
+	}
+	return &productionRouteEvidence{
+		EvidenceScope:                routeEvidenceScopeProductionRoutedCommit,
+		RealRoutedCommits:            snapshot.RealRoutedCommits,
+		RouteAttemptsTotal:           snapshot.RouteAttemptsTotal,
+		RouteLocalOwnerHits:          snapshot.RouteLocalOwnerHits,
+		RouteRemoteRedirects:         snapshot.RouteRemoteRedirects,
+		RouteRemoteForwards:          snapshot.RouteRemoteForwards,
+		RouteUnknownOwnerRejects:     snapshot.RouteUnknownOwnerRejects,
+		RouteGroupHits:               cloneStringIntMap(snapshot.RouteGroupHits),
+		RouteLeaderHits:              cloneStringIntMap(snapshot.RouteLeaderHits),
+		RouteTokenPartitionHits:      cloneStringIntMap(snapshot.RouteTokenPartitionHits),
+		CommitGroupHits:              cloneStringIntMap(snapshot.CommitGroupHits),
+		AppliedGroupHits:             cloneStringIntMap(snapshot.AppliedGroupHits),
+		FanoutSplitAttempts:          snapshot.FanoutSplitAttempts,
+		FanoutSplitFailures:          snapshot.FanoutSplitFailures,
+		DirectLocalBypassRejects:     snapshot.DirectLocalBypassRejects,
+		WriteLatencyMicros:           phase.LatencyMicros,
+		WritesPerSecond:              phase.OpsPerSecond,
+		BytesPerOp:                   bytesPerOp,
+		AllocsPerOp:                  allocsPerOp,
+		CPUContext:                   fmt.Sprintf("goos=%s goarch=%s gomaxprocs=%d num_cpu=%d allocation_boundary=load_phase_runtime_memstats", runtime.GOOS, runtime.GOARCH, runtime.GOMAXPROCS(0), runtime.NumCPU()),
+		StorageSnapshotOverheadBytes: storageOverhead,
+	}
 }
 
 type benchmarkRingRouter struct {
@@ -7032,7 +7256,7 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		fmt.Fprintf(out, "update_indexed_field=%t\n", result.UpdateIndexedField)
 		fmt.Fprintf(out, "range_index=%t\n", result.RangeIndex)
 		fmt.Fprintf(out, "route_mode=%s", result.RouteMode)
-		if result.RouteMode == routeModeRing {
+		if result.RouteMode == routeModeRing || result.RouteMode == routeModeProduction {
 			fmt.Fprintf(out, " route_groups=%d route_partitions=%d", result.RouteGroupCount, result.RoutePartitionCount)
 		}
 		fmt.Fprintln(out)
@@ -7048,6 +7272,19 @@ func writeResult(out io.Writer, format string, result *benchmarkResult) error {
 		}
 		if result.ProductionRouteEvidenceStatus != "" {
 			fmt.Fprintf(out, "production_route_evidence_status=%s\n", result.ProductionRouteEvidenceStatus)
+		}
+		if result.ProductionRouteEvidence != nil {
+			evidence := result.ProductionRouteEvidence
+			fmt.Fprintf(out, "production_route_evidence evidence_scope=%s real_routed_commits=%t route_attempts=%d local_owner_hits=%d remote_redirects=%d remote_forwards=%d unknown_owner_rejects=%d direct_local_bypass_rejects=%d group_hits=%v leader_hits=%v token_partition_hits=%v commit_group_hits=%v applied_group_hits=%v fanout_split_attempts=%d fanout_split_failures=%d write_latency_us_p50=%.3f write_latency_us_p95=%.3f write_latency_us_p99=%.3f writes_sec=%.6f b_per_op=%.2f allocs_per_op=%.2f cpu_context=%q storage_snapshot_overhead_bytes=%d\n",
+				evidence.EvidenceScope, evidence.RealRoutedCommits,
+				evidence.RouteAttemptsTotal, evidence.RouteLocalOwnerHits, evidence.RouteRemoteRedirects, evidence.RouteRemoteForwards,
+				evidence.RouteUnknownOwnerRejects, evidence.DirectLocalBypassRejects,
+				evidence.RouteGroupHits, evidence.RouteLeaderHits, evidence.RouteTokenPartitionHits,
+				evidence.CommitGroupHits, evidence.AppliedGroupHits,
+				evidence.FanoutSplitAttempts, evidence.FanoutSplitFailures,
+				evidence.WriteLatencyMicros.P50, evidence.WriteLatencyMicros.P95, evidence.WriteLatencyMicros.P99,
+				evidence.WritesPerSecond, evidence.BytesPerOp, evidence.AllocsPerOp,
+				evidence.CPUContext, evidence.StorageSnapshotOverheadBytes)
 		}
 		if result.TreeDBDir != "" {
 			fmt.Fprintf(out, "treedb_dir=%s\n", result.TreeDBDir)

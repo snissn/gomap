@@ -157,16 +157,46 @@ The result also emits
 `production_route_evidence`. Treat those fields as local deterministic routing
 distribution evidence only, not as a cluster throughput or scaleout claim.
 
-`-route-mode production` is reserved and intentionally fails closed until the
-benchmark exercises real production routed commits. Future production route
-results must use the separate `production_route_evidence` object instead of
-reusing local `route_evidence`. That production schema is reserved for
+`-route-mode production` is a fail-closed local-owner routed-commit proof. It
+currently supports only `-route-groups 1`; multi-group production routing stays
+disabled until remote-owner forwarding, fanout/split, and stable redirect/error
+contracts are wired. Production mode uses command WAL and BSON collection
+storage, routes collection creation and each measured `InsertOne` through the
+production cluster submitter boundary, and emits `production_route_evidence`
+only after routed submit, commit, and apply counters prove the local-owner path.
+It does not emit local `route_evidence`. The current production proof accepts
+only the serial insert-only shape: `-batch-size 1`, `-insert-producers 1`,
+`-secondary-indexes 0`, `-reads 0`, `-range-reads 0`, `-updates 0`,
+`-deletes 0`, no range/indexed-update options, and no concurrent phases.
+
+Use a small production proof run when validating the route boundary:
+
+```sh
+GOWORK=off go run ./cmd/mongo_gateway_bench \
+  -target treedb \
+  -route-mode production \
+  -route-groups 1 \
+  -route-partitions 4 \
+  -documents 1000 \
+  -batch-size 1 \
+  -insert-producers 1 \
+  -reads 0 -range-reads 0 -updates 0 -deletes 0 \
+  -secondary-indexes 0 \
+  -prebuild-documents \
+  -treedb-maintenance none \
+  -format json
+```
+
+Production proof JSON reports `production_route_evidence_status=available` and
+`production_route_evidence` with
 `evidence_scope=production_routed_commit`, `real_routed_commits`,
 route-attempt/local-owner/remote-redirect/remote-forward/unknown-owner counters,
 route group/leader/token-partition hits, commit and applied group hits,
 fanout/split attempts and failures, direct-local-bypass rejects, write
 p50/p95/p99 latency, writes/sec, `B/op`, `allocs/op`, CPU context,
-storage/snapshot overhead, and artifact pointers.
+storage/snapshot overhead, and artifact pointers. Treat this as
+correctness/instrumentation evidence for the local-owner production route
+boundary, not as cluster throughput or horizontal-scale evidence.
 
 Use `-insert-producers N` to split the insert load phase across producer
 goroutines. The effective producer count is capped at the number of insert
