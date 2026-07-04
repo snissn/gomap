@@ -284,6 +284,12 @@ type commandWALPublicBatch struct {
 	payloadByteHint          int
 	payloadSoftCapBytes      int
 	payloadBypass            bool
+	payloadLeasedToMemtable  bool
+	payloadLeasedBufferMask  commitlog.RawKVBatchPayloadBufferMask
+	payloadLeaseAttachedMask commitlog.RawKVBatchPayloadBufferMask
+	knownZeroValueRef        []byte
+	knownZeroValueLen        int
+	knownZeroValueValid      bool
 	opCount                  int
 	hasDeleteRange           bool
 	dirty                    bool
@@ -338,6 +344,11 @@ type commandWALPublicInnerDeleteViewer interface {
 	DeleteView(key []byte) error
 }
 
+type commandWALPublicInnerStableViewValueLease interface {
+	AttachStableViewValueLease(chunks [][]byte)
+	StableViewValueLeaseConsumed() bool
+}
+
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
 	var payload commitlog.RawKVBatchPayloadBuilder
 	if tdb != nil {
@@ -372,6 +383,22 @@ func (b *commandWALPublicBatch) resetPayloadWithHint() {
 	}
 	b.payloadBypass = false
 	b.hasDeleteRange = false
+	b.knownZeroValueRef = nil
+	b.knownZeroValueLen = 0
+	b.knownZeroValueValid = false
+}
+
+func (b *commandWALPublicBatch) resetPayloadForReuse() {
+	if b == nil {
+		return
+	}
+	if b.payloadLeasedToMemtable {
+		b.payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
+		b.payloadLeasedToMemtable = false
+		b.payloadLeasedBufferMask = 0
+	}
+	b.payloadLeaseAttachedMask = 0
+	b.resetPayloadWithHint()
 }
 
 func (b *commandWALPublicBatch) payloadShouldCarryEntryRevisions() bool {
@@ -391,10 +418,41 @@ func (b *commandWALPublicBatch) preparePayloadForAppend() {
 	// explicit Reset, drop those retained bytes before appending a fresh command
 	// payload. The geth adapter detaches borrowed replay views before taking this
 	// path after Write.
-	b.resetPayloadWithHint()
+	b.resetPayloadForReuse()
 	b.opCount = 0
 	b.hasDeleteRange = false
 	b.retainPayloadAfterWrite = false
+}
+
+func (b *commandWALPublicBatch) attachStableViewValueLease() bool {
+	if b == nil || b.inner == nil || b.payloadBypass || b.payload.Count() == 0 || b.payload.Count() != b.opCount {
+		return false
+	}
+	leaser, ok := b.inner.(commandWALPublicInnerStableViewValueLease)
+	if !ok {
+		return false
+	}
+	if b.setCalls+b.setViewCalls == 0 {
+		return false
+	}
+	chunks, mask := b.payload.RetainedValueByteBuffers()
+	if len(chunks) == 0 {
+		return false
+	}
+	leaser.AttachStableViewValueLease(chunks)
+	b.payloadLeaseAttachedMask = mask
+	return true
+}
+
+func (b *commandWALPublicBatch) noteStableViewValueLeaseConsumed() {
+	if b == nil || b.inner == nil {
+		return
+	}
+	leaser, ok := b.inner.(commandWALPublicInnerStableViewValueLease)
+	if ok && leaser.StableViewValueLeaseConsumed() && b.payloadLeaseAttachedMask != 0 {
+		b.payloadLeasedToMemtable = true
+		b.payloadLeasedBufferMask |= b.payloadLeaseAttachedMask
+	}
 }
 
 func (b *commandWALPublicBatch) rebindInnerViewers() {
@@ -499,7 +557,11 @@ func (b *commandWALPublicBatch) setView(key, value []byte, retainReplayViews, us
 		}
 	}
 	oldLen, oldCount := b.payload.Len(), b.payload.Count()
-	keyView, valueView, err = b.payload.AppendSet(key, value)
+	if b.payload.EntryRevisionsEnabled() && b.knownZeroValue(value) {
+		keyView, valueView, err = b.payload.AppendSetKnownZeroValue(key, value)
+	} else {
+		keyView, valueView, err = b.payload.AppendSet(key, value)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -747,15 +809,22 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		if !ok {
 			return fmt.Errorf("treedb: command wal batch requires cached command append hook")
 		}
+		leaseAttached := b.attachStableViewValueLease()
 		if err := writer.WriteAfterCommandWALAppend(sync, func() error {
 			return b.appendCommandWAL(sync)
 		}); err != nil {
+			if leaseAttached {
+				b.noteStableViewValueLeaseConsumed()
+			}
 			return err
+		}
+		if leaseAttached {
+			b.noteStableViewValueLeaseConsumed()
 		}
 		b.publishPointIngressStats()
 		b.disableInnerStreamingBypass()
 		if !b.retainPayloadAfterWrite {
-			b.resetPayloadWithHint()
+			b.resetPayloadForReuse()
 		}
 		b.opCount = 0
 		b.hasDeleteRange = false
@@ -774,7 +843,7 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 	}
 	b.disableInnerStreamingBypass()
 	if !b.retainPayloadAfterWrite {
-		b.resetPayloadWithHint()
+		b.resetPayloadForReuse()
 	}
 	b.opCount = 0
 	b.hasDeleteRange = false
@@ -791,9 +860,13 @@ func (b *commandWALPublicBatch) Close() error {
 	// payload bytes, matching ordinary batch semantics: only Write/WriteSync
 	// appends and publishes a RawKVBatch command frame.
 	err := b.inner.Close()
-	b.resetPayloadWithHint()
 	payload := b.payload
-	keepPayload := payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
+	keepPayload := false
+	if b.payloadLeasedToMemtable {
+		payload.DetachRetainedValueByteBuffers(b.payloadLeasedBufferMask)
+	} else {
+		keepPayload = payload.PrepareForReuse(commandWALPublicBatchPayloadPoolRetainMaxBytes)
+	}
 	b.inner = nil
 	b.innerSetViewValidated = nil
 	b.innerSetViewer = nil
@@ -806,6 +879,9 @@ func (b *commandWALPublicBatch) Close() error {
 	b.payloadSoftCapBytes = 0
 	b.opCount = 0
 	b.hasDeleteRange = false
+	b.payloadLeasedToMemtable = false
+	b.payloadLeasedBufferMask = 0
+	b.payloadLeaseAttachedMask = 0
 	b.resetPointIngressStats()
 	b.dirty = false
 	b.retainPayloadAfterWrite = false
@@ -823,7 +899,7 @@ func (b *commandWALPublicBatch) Reset() {
 	resetter, ok := b.inner.(interface{ Reset() })
 	if !ok {
 		b.disableInnerStreamingBypass()
-		b.resetPayloadWithHint()
+		b.resetPayloadForReuse()
 		b.opCount = 0
 		b.hasDeleteRange = false
 		b.resetPointIngressStats()
@@ -835,7 +911,7 @@ func (b *commandWALPublicBatch) Reset() {
 	resetter.Reset()
 	b.rebindInnerViewers()
 	b.disableInnerStreamingBypass()
-	b.resetPayloadWithHint()
+	b.resetPayloadForReuse()
 	b.opCount = 0
 	b.hasDeleteRange = false
 	b.resetPointIngressStats()
@@ -851,6 +927,28 @@ func commandWALPublicAllZeroBytes(p []byte) bool {
 		}
 	}
 	return len(p) > 0
+}
+
+func commandWALPublicSameNonEmptyBytesData(a, b []byte) bool {
+	return len(a) > 0 && len(b) > 0 && &a[0] == &b[0]
+}
+
+func (b *commandWALPublicBatch) knownZeroValue(value []byte) bool {
+	if b == nil || len(value) == 0 {
+		return false
+	}
+	if b.knownZeroValueValid &&
+		b.knownZeroValueLen == len(value) &&
+		commandWALPublicSameNonEmptyBytesData(value, b.knownZeroValueRef) {
+		return true
+	}
+	if !commandWALPublicAllZeroBytes(value) {
+		return false
+	}
+	b.knownZeroValueRef = value
+	b.knownZeroValueLen = len(value)
+	b.knownZeroValueValid = true
+	return true
 }
 
 func (b *commandWALPublicBatch) commandWALPayload() ([]byte, error) {
