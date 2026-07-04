@@ -500,6 +500,7 @@ func TestClusterRouteErrorMetadataOfIgnoresLeaderOnlyProtocolWrapper(t *testing.
 func TestClusterRouteErrorMetadataOfFallsThroughLeaderOnlyProtocolWrapper(t *testing.T) {
 	err := &clusterRouteProtocolError{
 		err: &WireError{
+			Code:    iwire.ErrReadOnly,
 			Message: "cluster route rejected; route_error_class=remote_owner_redirect route_group=group+z leader_hint=node+z",
 		},
 		leaderHint: "node-z",
@@ -514,6 +515,16 @@ func TestClusterRouteErrorMetadataOfFallsThroughLeaderOnlyProtocolWrapper(t *tes
 	}
 }
 
+func TestClusterRouteErrorMetadataOfIgnoresNonReadOnlyWireRouteMetadata(t *testing.T) {
+	err := &WireError{
+		Code:    iwire.ErrDuplicateDocumentID,
+		Message: "duplicate key route_error_class=remote_owner_redirect route_group=group-z leader_hint=node-z",
+	}
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for non-read-only wire error", metadata)
+	}
+}
+
 func TestClusterRouteErrorMetadataOfParsesProtocolRouteMetadata(t *testing.T) {
 	err := &iwire.ProtocolError{
 		Code:   iwire.ErrReadOnly,
@@ -525,6 +536,16 @@ func TestClusterRouteErrorMetadataOfParsesProtocolRouteMetadata(t *testing.T) {
 	}
 	if metadata.Class != "remote_owner_redirect" || metadata.GroupID != "group z" || metadata.LeaderHint != "node z" {
 		t.Fatalf("ClusterRouteErrorMetadataOf metadata=%+v want parsed protocol route metadata", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfIgnoresNonReadOnlyProtocolRouteMetadata(t *testing.T) {
+	err := &iwire.ProtocolError{
+		Code:   iwire.ErrDuplicateDocumentID,
+		Reason: "duplicate key route_error_class=remote_owner_redirect route_group=group-z leader_hint=node-z",
+	}
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for non-read-only protocol error", metadata)
 	}
 }
 

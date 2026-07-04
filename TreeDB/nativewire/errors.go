@@ -86,10 +86,16 @@ func ClusterRouteErrorMetadataOf(err error) (ClusterRouteErrorMetadata, bool) {
 	}
 	var wireErr *WireError
 	if errors.As(err, &wireErr) {
+		if wireErr.Code != iwire.ErrReadOnly {
+			return ClusterRouteErrorMetadata{}, false
+		}
 		return parseClusterRouteErrorMetadata(wireErr.Message)
 	}
 	var protocolErr *iwire.ProtocolError
 	if errors.As(err, &protocolErr) {
+		if protocolErr.Code != iwire.ErrReadOnly {
+			return ClusterRouteErrorMetadata{}, false
+		}
 		return parseClusterRouteErrorMetadata(protocolErr.Reason)
 	}
 	return ClusterRouteErrorMetadata{}, false
