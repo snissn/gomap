@@ -1446,6 +1446,134 @@ func TestPublicCommandWALBatchReplayBytesSurviveWriteUntilReset(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALBatchReplayBytesAppendOnlyLeaseAvoidsDirectArena(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+		MemtableMode:        "append_only",
+		MemtableShards:      1,
+		FlushThreshold:      1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b, ok := db.NewBatchWithSize(1).(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("NewBatchWithSize type=%T, want *commandWALPublicBatch", db.NewBatchWithSize(1))
+	}
+	keyView, valueView, err := b.SetViewWithReplayBytes([]byte("alpha"), bytes.Repeat([]byte{0x33}, 128))
+	if err != nil {
+		t.Fatalf("SetViewWithReplayBytes: %v", err)
+	}
+	wantKey := bytes.Clone(keyView)
+	wantValue := bytes.Clone(valueView)
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !b.payloadLeasedToMemtable {
+		t.Fatal("command-WAL payload was not marked leased to the append-only memtable")
+	}
+	if !b.retainPayloadAfterWrite {
+		t.Fatal("replay payload was not retained after write")
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.append_only_direct_arena.active_used_bytes"]; got != "0" {
+		t.Fatalf("direct arena active used bytes=%q want 0", got)
+	}
+	if got := stats["treedb.cache.batch_arena.leased_bytes"]; got == "0" || got == "" {
+		t.Fatalf("batch arena leased bytes=%q want >0 for external payload lease", got)
+	}
+	got, err := db.Get(wantKey)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, wantValue) {
+		t.Fatalf("stored value=%x want %x", got, wantValue)
+	}
+
+	b.Reset()
+	if b.payloadLeasedToMemtable {
+		t.Fatal("Reset left payload marked leased to memtable")
+	}
+
+	secondKeyView, secondValueView, err := b.SetViewWithReplayBytes([]byte("bravo"), bytes.Repeat([]byte{0x44}, 128))
+	if err != nil {
+		t.Fatalf("second SetViewWithReplayBytes: %v", err)
+	}
+	secondWantKey := bytes.Clone(secondKeyView)
+	secondWantValue := bytes.Clone(secondValueView)
+	if err := b.Write(); err != nil {
+		t.Fatalf("second Write: %v", err)
+	}
+	got, err = db.Get(wantKey)
+	if err != nil {
+		t.Fatalf("Get original after batch reuse: %v", err)
+	}
+	if !bytes.Equal(got, wantValue) {
+		t.Fatalf("original stored value after batch reuse=%x want %x", got, wantValue)
+	}
+	got, err = db.Get(secondWantKey)
+	if err != nil {
+		t.Fatalf("Get second: %v", err)
+	}
+	if !bytes.Equal(got, secondWantValue) {
+		t.Fatalf("second stored value=%x want %x", got, secondWantValue)
+	}
+}
+
+func TestPublicCommandWALBatchZeroValueAppendOnlyLeaseAvoidsDirectArena(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+		MemtableMode:        "append_only",
+		MemtableShards:      1,
+		FlushThreshold:      1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(1)
+	value := make([]byte, 128)
+	if err := b.Set([]byte("zero-value-key"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.append_only_direct_arena.active_used_bytes"]; got != "0" {
+		t.Fatalf("direct arena active used bytes=%q want 0", got)
+	}
+	if got := stats["treedb.cache.batch_arena.leased_bytes"]; got != "0" {
+		t.Fatalf("batch arena leased bytes=%q want 0 for shared zero view", got)
+	}
+	got, err := db.Get([]byte("zero-value-key"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("stored value=%x want %x", got, value)
+	}
+}
+
 func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T) {
 	wrapped := newCommandWALPublicBatch(nil, &commandWALResetBatch{}, 8000)
 	zeroValue := make([]byte, 128)

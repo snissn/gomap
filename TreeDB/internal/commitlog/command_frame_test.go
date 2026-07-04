@@ -297,7 +297,8 @@ func TestRawKVBatchPayloadBuilderRetainedBytesIncludesCompactZeroBuffers(t *test
 	if err := builder.ResetWithHint(0, 0); err != nil {
 		t.Fatalf("ResetWithHint: %v", err)
 	}
-	if _, _, err := builder.AppendSet([]byte("zero"), make([]byte, 128)); err != nil {
+	largeZero := make([]byte, len(rawKVSharedZeroValueView)+1)
+	if _, _, err := builder.AppendSet([]byte("zero"), largeZero); err != nil {
 		t.Fatalf("AppendSet compact zero: %v", err)
 	}
 	if cap(builder.zeroPayload) == 0 || cap(builder.zeroSetValueView) == 0 {
@@ -309,6 +310,74 @@ func TestRawKVBatchPayloadBuilderRetainedBytesIncludesCompactZeroBuffers(t *test
 	}
 	if got := builder.RetainedCap(); got >= builder.RetainedBytes() {
 		t.Fatalf("RetainedCap=%d should not account for compact-zero side buffers retainedBytes=%d", got, builder.RetainedBytes())
+	}
+}
+
+func TestRawKVBatchPayloadBuilderCompactZeroValueLeaseDetachesOnlyValueView(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(4, 0); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	largeZero := make([]byte, len(rawKVSharedZeroValueView)+1)
+	if _, _, err := builder.AppendSet([]byte("zero-1"), largeZero); err != nil {
+		t.Fatalf("AppendSet zero-1: %v", err)
+	}
+	if _, _, err := builder.AppendSet([]byte("zero-2"), largeZero); err != nil {
+		t.Fatalf("AppendSet zero-2: %v", err)
+	}
+	payloadCap := cap(builder.payload)
+	zeroPayloadCap := cap(builder.zeroPayload)
+	if payloadCap == 0 || zeroPayloadCap == 0 || cap(builder.zeroSetValueView) == 0 {
+		t.Fatalf("unexpected compact-zero caps: payload=%d zeroPayload=%d zeroSetValueView=%d", payloadCap, zeroPayloadCap, cap(builder.zeroSetValueView))
+	}
+
+	chunks, mask := builder.RetainedValueByteBuffers()
+	if mask != RawKVBatchPayloadBufferZeroValue {
+		t.Fatalf("value lease mask=%b, want zero-value only", mask)
+	}
+	if len(chunks) != 1 || cap(chunks[0]) != cap(builder.zeroSetValueView) {
+		t.Fatalf("value lease chunks=%d cap=%d, want one zero-value chunk cap=%d", len(chunks), cap(chunks[0]), cap(builder.zeroSetValueView))
+	}
+	builder.DetachRetainedValueByteBuffers(mask)
+	if cap(builder.zeroSetValueView) != 0 {
+		t.Fatalf("zeroSetValueView cap after detach=%d, want 0", cap(builder.zeroSetValueView))
+	}
+	if cap(builder.payload) != payloadCap {
+		t.Fatalf("payload cap after value detach=%d, want retained %d", cap(builder.payload), payloadCap)
+	}
+	if cap(builder.zeroPayload) != zeroPayloadCap {
+		t.Fatalf("zeroPayload cap after value detach=%d, want retained %d", cap(builder.zeroPayload), zeroPayloadCap)
+	}
+}
+
+func TestRawKVBatchPayloadBuilderRevisionZeroValueLeaseUsesSharedZeroView(t *testing.T) {
+	var builder RawKVBatchPayloadBuilder
+	if err := builder.ResetWithHint(4, 1024); err != nil {
+		t.Fatalf("ResetWithHint: %v", err)
+	}
+	if err := builder.EnableEntryRevisions(); err != nil {
+		t.Fatalf("EnableEntryRevisions: %v", err)
+	}
+	if _, valueView, err := builder.AppendSet([]byte("zero-1"), make([]byte, 128)); err != nil {
+		t.Fatalf("AppendSet zero-1: %v", err)
+	} else if len(valueView) != 128 || !allZeroBytes(valueView) {
+		t.Fatalf("zero value view len=%d allZero=%v", len(valueView), allZeroBytes(valueView))
+	}
+	payloadCap := cap(builder.payload)
+	if payloadCap == 0 || cap(builder.zeroSetValueView) != 0 {
+		t.Fatalf("unexpected revision-zero caps: payload=%d zeroSetValueView=%d", payloadCap, cap(builder.zeroSetValueView))
+	}
+
+	chunks, mask := builder.RetainedValueByteBuffers()
+	if mask != 0 {
+		t.Fatalf("value lease mask=%b, want no owned value buffers", mask)
+	}
+	if len(chunks) != 1 || cap(chunks[0]) != 0 {
+		t.Fatalf("value lease chunks=%d cap=%d, want one zero-cap stable signal", len(chunks), cap(chunks[0]))
+	}
+	builder.DetachRetainedValueByteBuffers(mask)
+	if cap(builder.payload) != payloadCap {
+		t.Fatalf("revision payload cap after value detach=%d, want retained %d", cap(builder.payload), payloadCap)
 	}
 }
 
