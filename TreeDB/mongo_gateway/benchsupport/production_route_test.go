@@ -93,6 +93,27 @@ func TestProductionRouteProofRecorderCountsConfiguredForwardGroups(t *testing.T)
 	}
 }
 
+func TestProductionRouteProofRecorderUnknownOwnerProbeAvoidsConfiguredGroups(t *testing.T) {
+	forwardGroups := make([]string, 0, 99)
+	for group := 1; group < 100; group++ {
+		forwardGroups = append(forwardGroups, productionRouteProofGroupID(group))
+	}
+	recorder := newProductionRouteProofRecorderWithForwardGroups(100, 100, productionRouteProofGroupID(0), forwardGroups...)
+
+	target := recorder.unknownOwnerProbeTarget()
+	if target.GroupID != productionRouteProofGroupID(100) ||
+		target.LeaderHint != "node-100-a" ||
+		len(target.Members) != 3 {
+		t.Fatalf("unknown owner target=%+v want first group beyond configured registry", target)
+	}
+	if _, ok := recorder.localGroups[target.GroupID]; ok {
+		t.Fatalf("unknown owner probe target %q collides with local groups", target.GroupID)
+	}
+	if _, ok := recorder.forwardGroups[target.GroupID]; ok {
+		t.Fatalf("unknown owner probe target %q collides with forward groups", target.GroupID)
+	}
+}
+
 func TestProductionRouteProofRecorderUnconfiguredGroupStillRedirects(t *testing.T) {
 	recorder := newProductionRouteProofRecorderWithForwardGroups(3, 3, productionRouteProofGroupID(0), productionRouteProofGroupID(1))
 

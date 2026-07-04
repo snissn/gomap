@@ -187,9 +187,10 @@ func ProductionRouteProofGroupIDForDocumentID(groupCount, partitionCount int, do
 }
 
 func (h *ProductionRouteProofHarness) ProbeUnknownOwnerReject(ctx context.Context, database, collection string) error {
-	if h == nil || h.dispatcher == nil {
+	if h == nil || h.dispatcher == nil || h.recorder == nil {
 		return errors.New("production route proof dispatcher is not configured")
 	}
+	target := h.recorder.unknownOwnerProbeTarget()
 	unknown := nativewire.ClusterRequestMetadata{
 		AckPolicy:                 nativewire.AckVisible,
 		ClusterRouteKnown:         true,
@@ -197,9 +198,9 @@ func (h *ProductionRouteProofHarness) ProbeUnknownOwnerReject(ctx context.Contex
 		ClusterRouteCatalog:       "default",
 		ClusterRouteCollection:    collection,
 		ClusterRouteShape:         string(nativewire.ClusterRouteShapeToken),
-		ClusterRouteGroupID:       "group-99",
-		ClusterRouteMembers:       []string{"node-99-a"},
-		ClusterRouteLeaderHint:    "node-99-a",
+		ClusterRouteGroupID:       target.GroupID,
+		ClusterRouteMembers:       target.Members,
+		ClusterRouteLeaderHint:    target.LeaderHint,
 		ClusterRoutePlacementMode: "ring",
 		ClusterRouteKey:           "_id",
 		ClusterRouteTokenKnown:    true,
@@ -661,6 +662,14 @@ func (r *productionRouteProofRecorder) groupTarget(group int) nativewire.Cluster
 		Members:    []string{leader, fmt.Sprintf("node-%02d-b", group), fmt.Sprintf("node-%02d-c", group)},
 		LeaderHint: leader,
 	}
+}
+
+func (r *productionRouteProofRecorder) unknownOwnerProbeTarget() nativewire.ClusterRouteTarget {
+	group := 99
+	if r != nil {
+		group = max(group, r.groupCount)
+	}
+	return r.groupTarget(group)
 }
 
 func (r *productionRouteProofRecorder) recordRouteSuccess(target nativewire.ClusterRouteTarget) {
