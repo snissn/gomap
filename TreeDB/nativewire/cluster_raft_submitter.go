@@ -217,36 +217,55 @@ func nativeErrorForRaftClusterSubmit(err error) error {
 
 func clusterProtocolError(code iwire.ErrorCode, err error) error {
 	protocolErr := protocolError(code, "%v", err)
-	if leaderHint := clusterLeaderHint(err); leaderHint != "" {
-		return &clusterLeaderHintProtocolError{err: protocolErr, leaderHint: leaderHint}
+	route, hasRoute := ClusterRouteErrorMetadataOf(err)
+	leaderHint := clusterLeaderHint(err)
+	if leaderHint == "" {
+		leaderHint = route.LeaderHint
+	}
+	if hasRoute || leaderHint != "" {
+		return &clusterRouteProtocolError{
+			err:        protocolErr,
+			leaderHint: leaderHint,
+			route:      route,
+			hasRoute:   hasRoute,
+		}
 	}
 	return protocolErr
 }
 
-type clusterLeaderHintProtocolError struct {
+type clusterRouteProtocolError struct {
 	err        error
 	leaderHint string
+	route      ClusterRouteErrorMetadata
+	hasRoute   bool
 }
 
-func (e *clusterLeaderHintProtocolError) Error() string {
+func (e *clusterRouteProtocolError) Error() string {
 	if e == nil || e.err == nil {
 		return ""
 	}
 	return e.err.Error()
 }
 
-func (e *clusterLeaderHintProtocolError) Unwrap() error {
+func (e *clusterRouteProtocolError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
 	return e.err
 }
 
-func (e *clusterLeaderHintProtocolError) ClusterLeaderHint() string {
+func (e *clusterRouteProtocolError) ClusterLeaderHint() string {
 	if e == nil {
 		return ""
 	}
 	return e.leaderHint
+}
+
+func (e *clusterRouteProtocolError) ClusterRouteErrorMetadata() ClusterRouteErrorMetadata {
+	if e == nil || !e.hasRoute {
+		return ClusterRouteErrorMetadata{}
+	}
+	return e.route.Clone()
 }
 
 func clusterLeaderHint(err error) string {

@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
+	"strings"
 	"sync"
 
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
@@ -45,6 +47,61 @@ type AdmissionStatus struct {
 	Unavailable bool
 	LeaderHint  NodeID
 	Reason      string
+}
+
+// RouteErrorClass identifies the stable routing failure class clients can use
+// to decide whether to redirect or retry discovery.
+type RouteErrorClass string
+
+const (
+	// RouteErrorClassRemoteOwnerRedirect means the owner is known but not local.
+	RouteErrorClassRemoteOwnerRedirect RouteErrorClass = "remote_owner_redirect"
+	// RouteErrorClassUnknownOwner means the route target names a group without
+	// enough owner metadata for a redirect.
+	RouteErrorClassUnknownOwner RouteErrorClass = "unknown_owner"
+	// RouteErrorClassMissingOwner means the route target did not include an
+	// owning group id.
+	RouteErrorClassMissingOwner RouteErrorClass = "missing_owner"
+)
+
+// RouteErrorMetadata is stable client-facing metadata for route failures that
+// must reject before local mutation. It intentionally mirrors request metadata
+// instead of introducing a forwarding protocol.
+type RouteErrorMetadata struct {
+	Class         RouteErrorClass
+	Database      string
+	Catalog       string
+	Collection    string
+	Shape         string
+	GroupID       string
+	Members       []string
+	LeaderHint    string
+	PlacementMode string
+	RouteKey      string
+	TokenKnown    bool
+	Token         uint64
+	PartitionID   string
+	LocalGroupID  string
+}
+
+// Clone returns an independent copy of the metadata.
+func (m RouteErrorMetadata) Clone() RouteErrorMetadata {
+	m.Members = slices.Clone(m.Members)
+	return m
+}
+
+// RouteErrorMetadataOf returns stable route metadata carried by err.
+func RouteErrorMetadataOf(err error) (RouteErrorMetadata, bool) {
+	if err == nil {
+		return RouteErrorMetadata{}, false
+	}
+	var routed interface {
+		RouteErrorMetadata() RouteErrorMetadata
+	}
+	if errors.As(err, &routed) {
+		return routed.RouteErrorMetadata().Clone(), true
+	}
+	return RouteErrorMetadata{}, false
 }
 
 func LeaderAdmission() AdmissionStatus {
@@ -556,39 +613,117 @@ func (s *SingleGroupSubmitter) checkRouteBinding(metadata raftentry.RequestMetad
 	}
 	localGroup := string(s.cluster.GroupID)
 	if metadata.ClusterRouteGroupID == "" {
-		return errors.Join(ErrRouteGroupMismatch, fmt.Errorf("route metadata missing group id for local group %q", localGroup))
+		return errors.Join(ErrRouteGroupMismatch, &routeError{
+			message:  fmt.Sprintf("route metadata missing group id for local group %q", localGroup),
+			metadata: routeErrorMetadataFromRequest(metadata, localGroup),
+		})
 	}
 	if metadata.ClusterRouteGroupID != localGroup {
-		return errors.Join(ErrRouteGroupMismatch, routeErrorWithLeaderHint(metadata, "route group %q does not match local group %q", metadata.ClusterRouteGroupID, localGroup))
+		return errors.Join(ErrRouteGroupMismatch, &routeError{
+			message:  fmt.Sprintf("route group %q does not match local group %q", metadata.ClusterRouteGroupID, localGroup),
+			metadata: routeErrorMetadataFromRequest(metadata, localGroup),
+		})
 	}
 	return nil
 }
 
-func routeErrorWithLeaderHint(metadata raftentry.RequestMetadataV1, format string, args ...any) error {
+func routeErrorWithMetadata(metadata raftentry.RequestMetadataV1, format string, args ...any) error {
 	msg := fmt.Sprintf(format, args...)
-	if metadata.ClusterRouteLeaderHint == "" {
-		return errors.New(msg)
+	return &routeError{message: msg, metadata: routeErrorMetadataFromRequest(metadata, "")}
+}
+
+func routeErrorMetadataFromRequest(metadata raftentry.RequestMetadataV1, localGroupID string) RouteErrorMetadata {
+	class := RouteErrorClassUnknownOwner
+	if metadata.ClusterRouteGroupID == "" {
+		class = RouteErrorClassMissingOwner
+	} else if metadata.ClusterRouteLeaderHint != "" || len(metadata.ClusterRouteMembers) != 0 {
+		class = RouteErrorClassRemoteOwnerRedirect
 	}
-	return &routeLeaderHintError{message: msg, leaderHint: metadata.ClusterRouteLeaderHint}
+	return RouteErrorMetadata{
+		Class:         class,
+		Database:      metadata.ClusterRouteDatabase,
+		Catalog:       metadata.ClusterRouteCatalog,
+		Collection:    metadata.ClusterRouteCollection,
+		Shape:         metadata.ClusterRouteShape,
+		GroupID:       metadata.ClusterRouteGroupID,
+		Members:       slices.Clone(metadata.ClusterRouteMembers),
+		LeaderHint:    metadata.ClusterRouteLeaderHint,
+		PlacementMode: metadata.ClusterRoutePlacementMode,
+		RouteKey:      metadata.ClusterRouteKey,
+		TokenKnown:    metadata.ClusterRouteTokenKnown,
+		Token:         metadata.ClusterRouteToken,
+		PartitionID:   metadata.ClusterRoutePartitionID,
+		LocalGroupID:  localGroupID,
+	}
 }
 
-type routeLeaderHintError struct {
-	message    string
-	leaderHint string
+type routeError struct {
+	message  string
+	metadata RouteErrorMetadata
 }
 
-func (e *routeLeaderHintError) Error() string {
+func (e *routeError) Error() string {
 	if e == nil {
 		return ""
 	}
-	return e.message + "; leader_hint=" + e.leaderHint
+	fields := routeErrorFields(e.metadata)
+	if fields == "" {
+		return e.message
+	}
+	if e.message == "" {
+		return fields
+	}
+	return e.message + "; " + fields
 }
 
-func (e *routeLeaderHintError) ClusterLeaderHint() string {
+func (e *routeError) ClusterLeaderHint() string {
 	if e == nil {
 		return ""
 	}
-	return e.leaderHint
+	return e.metadata.LeaderHint
+}
+
+func (e *routeError) RouteErrorMetadata() RouteErrorMetadata {
+	if e == nil {
+		return RouteErrorMetadata{}
+	}
+	return e.metadata.Clone()
+}
+
+func routeErrorFields(metadata RouteErrorMetadata) string {
+	var fields []string
+	appendField := func(key, value string) {
+		if value != "" {
+			fields = append(fields, key+"="+url.QueryEscape(value))
+		}
+	}
+	appendField("route_error_class", string(metadata.Class))
+	appendField("route_group", metadata.GroupID)
+	appendField("leader_hint", metadata.LeaderHint)
+	if len(metadata.Members) != 0 {
+		escaped := make([]string, 0, len(metadata.Members))
+		for _, member := range metadata.Members {
+			if member != "" {
+				escaped = append(escaped, url.QueryEscape(member))
+			}
+		}
+		if len(escaped) != 0 {
+			fields = append(fields, "route_members="+strings.Join(escaped, ","))
+		}
+	}
+	appendField("route_database", metadata.Database)
+	appendField("route_catalog", metadata.Catalog)
+	appendField("route_collection", metadata.Collection)
+	appendField("route_shape", metadata.Shape)
+	appendField("route_placement", metadata.PlacementMode)
+	appendField("route_key", metadata.RouteKey)
+	if metadata.TokenKnown {
+		appendField("route_token_known", "true")
+		appendField("route_token", fmt.Sprint(metadata.Token))
+	}
+	appendField("route_partition", metadata.PartitionID)
+	appendField("local_group", metadata.LocalGroupID)
+	return strings.Join(fields, " ")
 }
 
 func (s *SingleGroupSubmitter) validateCommitResult(request CommitCommandEntryV1Request, result CommitCommandEntryV1Result) (CommittedCommandEntryV1, error) {

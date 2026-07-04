@@ -225,6 +225,13 @@ func TestGroupRoutedSubmitterRejectsUnknownRemoteOwnerWithStableHintBeforeSubmit
 	dispatcher := newTestGroupRoutedSubmitter(t, groupA, groupB)
 
 	meta := routeMetadata("group-z", iwire.AckRaftCommitted)
+	meta.ClusterRouteShape = clusterRouteShapeTokenV1
+	meta.ClusterRoutePlacementMode = clusterRoutePlacementRingV1
+	meta.ClusterRouteKey = clusterRouteKeyDocumentIDV1
+	meta.ClusterRouteTokenKnown = true
+	meta.ClusterRouteToken = 99
+	meta.ClusterRoutePartitionID = "p9"
+	meta.ClusterRouteMembers = []string{"node-z", "node-y"}
 	meta.ClusterRouteLeaderHint = "node-z"
 	_, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), meta)
 	if !errors.Is(err, ErrRouteTargetUnknown) {
@@ -236,11 +243,76 @@ func TestGroupRoutedSubmitterRejectsUnknownRemoteOwnerWithStableHintBeforeSubmit
 	if !strings.Contains(err.Error(), "leader_hint=node-z") {
 		t.Fatalf("SubmitCommandEntryV1 err=%q want leader hint", err)
 	}
+	route, ok := RouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("RouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != RouteErrorClassRemoteOwnerRedirect ||
+		route.GroupID != "group-z" ||
+		route.LeaderHint != "node-z" ||
+		route.Database != "default" ||
+		route.Catalog != "default" ||
+		route.Collection != "users" ||
+		route.Shape != clusterRouteShapeTokenV1 ||
+		route.PlacementMode != clusterRoutePlacementRingV1 ||
+		route.RouteKey != clusterRouteKeyDocumentIDV1 ||
+		!route.TokenKnown ||
+		route.Token != 99 ||
+		route.PartitionID != "p9" {
+		t.Fatalf("route metadata=%+v want remote owner redirect for group-z/node-z token p9", route)
+	}
+	if len(route.Members) != 2 || route.Members[0] != "node-z" || route.Members[1] != "node-y" {
+		t.Fatalf("route members=%v want [node-z node-y]", route.Members)
+	}
 	if calls := groupA.snapshot(); len(calls) != 0 {
 		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
 	if calls := groupB.snapshot(); len(calls) != 0 {
 		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
+func TestGroupRoutedSubmitterUnknownOwnerHasStableRouteClassBeforeSubmit(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA)
+
+	meta := routeMetadata("group-z", iwire.AckVisible)
+	meta.ClusterRouteLeaderHint = ""
+	meta.ClusterRouteMembers = nil
+	_, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), meta)
+	if !errors.Is(err, ErrRouteTargetUnknown) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want route target unknown", err)
+	}
+	route, ok := RouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("RouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != RouteErrorClassUnknownOwner || route.GroupID != "group-z" || route.LeaderHint != "" {
+		t.Fatalf("route metadata=%+v want unknown owner group-z without leader hint", route)
+	}
+	if calls := groupA.snapshot(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+}
+
+func TestGroupRoutedSubmitterMissingOwnerHasStableRouteClassBeforeSubmit(t *testing.T) {
+	groupA := &recordingGroupSubmitter{groupID: "group-a"}
+	dispatcher := newTestGroupRoutedSubmitter(t, groupA)
+
+	meta := routeMetadata("", iwire.AckVisible)
+	_, err := dispatcher.SubmitCommandEntryV1(context.Background(), testClusterCommandEntry(t, 7), meta)
+	if !errors.Is(err, ErrRouteTargetMissing) {
+		t.Fatalf("SubmitCommandEntryV1 err=%v want route target missing", err)
+	}
+	route, ok := RouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("RouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != RouteErrorClassMissingOwner || route.GroupID != "" || route.Collection != "users" {
+		t.Fatalf("route metadata=%+v want missing owner for users route", route)
+	}
+	if calls := groupA.snapshot(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
 	}
 }
 

@@ -227,6 +227,38 @@ func (p *staticClusterRouteProvider) snapshotRoutes() []ClusterRouteRequest {
 	return append([]ClusterRouteRequest(nil), p.routes...)
 }
 
+type remoteOwnerRouteProvider struct {
+	mu     sync.Mutex
+	err    error
+	routes []ClusterRouteRequest
+}
+
+func (p *remoteOwnerRouteProvider) ClusterRoute(ctx context.Context, req ClusterRouteRequest) (ClusterRouteTarget, error) {
+	p.mu.Lock()
+	p.routes = append(p.routes, req)
+	p.mu.Unlock()
+	if p.err != nil {
+		return ClusterRouteTarget{}, p.err
+	}
+	return ClusterRouteTarget{
+		GroupID:       "group-z",
+		Members:       []string{"node-z", "node-y"},
+		LeaderHint:    "node-z",
+		PlacementMode: string(raftplacement.PlacementModeRingV1),
+		RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+		Shape:         ClusterRouteShapeToken,
+		TokenKnown:    req.TokenKnown,
+		Token:         req.Token,
+		PartitionID:   "p9",
+	}, nil
+}
+
+func (p *remoteOwnerRouteProvider) snapshotRoutes() []ClusterRouteRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]ClusterRouteRequest(nil), p.routes...)
+}
+
 type placementRouteClusterSubmitter struct {
 	*fakeClusterSubmitter
 
@@ -387,6 +419,140 @@ func assertNativeClusterTokenRouteMetadata(tb testing.TB, call fakeClusterSubmit
 	}
 	if !meta.ClusterRouteTokenKnown || meta.ClusterRouteToken != token || meta.ClusterRoutePartitionID != partition {
 		tb.Fatalf("metadata token known/token/partition=%v/%d/%q want true/%d/%q", meta.ClusterRouteTokenKnown, meta.ClusterRouteToken, meta.ClusterRoutePartitionID, token, partition)
+	}
+}
+
+func assertNativeRemoteOwnerRouteError(tb testing.TB, err error, collection string) {
+	tb.Helper()
+	if !isRemoteError(err, iwire.ErrReadOnly) {
+		tb.Fatalf("err=%v want read-only remote route error", err)
+	}
+	route, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		tb.Fatalf("ClusterRouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != "remote_owner_redirect" ||
+		route.GroupID != "group-z" ||
+		route.LeaderHint != "node-z" ||
+		route.Database != "default" ||
+		route.Catalog != "default" ||
+		route.Collection != collection ||
+		route.Shape != string(ClusterRouteShapeToken) ||
+		route.PlacementMode != string(raftplacement.PlacementModeRingV1) ||
+		route.RouteKey != string(raftplacement.RouteKeyDocumentIDV1) ||
+		!route.TokenKnown ||
+		route.PartitionID != "p9" {
+		tb.Fatalf("route metadata=%+v want remote owner redirect for group-z/node-z %s token p9", route, collection)
+	}
+	if len(route.Members) != 2 || route.Members[0] != "node-z" || route.Members[1] != "node-y" {
+		tb.Fatalf("route members=%v want [node-z node-y]", route.Members)
+	}
+}
+
+func TestClusterRouteErrorMetadataFieldsPreserveWhitespaceAcrossWireText(t *testing.T) {
+	want := ClusterRouteErrorMetadata{
+		Class:         "remote_owner_redirect",
+		Database:      "sales db",
+		Catalog:       "default catalog",
+		Collection:    "sales archive",
+		Shape:         string(ClusterRouteShapeToken),
+		GroupID:       "group z",
+		Members:       []string{"node z", "node y"},
+		LeaderHint:    "node z",
+		PlacementMode: string(raftplacement.PlacementModeRingV1),
+		RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+		TokenKnown:    true,
+		Token:         42,
+		PartitionID:   "partition 9",
+		LocalGroupID:  "group local",
+	}
+	fields := clusterRouteErrorMetadataFields(want)
+	got, ok := parseClusterRouteErrorMetadata("cluster route rejected; " + fields)
+	if !ok {
+		t.Fatalf("parseClusterRouteErrorMetadata ok=false fields=%q", fields)
+	}
+	if got.Class != want.Class ||
+		got.Database != want.Database ||
+		got.Catalog != want.Catalog ||
+		got.Collection != want.Collection ||
+		got.GroupID != want.GroupID ||
+		got.LeaderHint != want.LeaderHint ||
+		got.PartitionID != want.PartitionID ||
+		got.LocalGroupID != want.LocalGroupID ||
+		len(got.Members) != len(want.Members) ||
+		got.Members[0] != want.Members[0] ||
+		got.Members[1] != want.Members[1] {
+		t.Fatalf("route metadata roundtrip=%+v want %+v fields=%q", got, want, fields)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfIgnoresLeaderOnlyProtocolWrapper(t *testing.T) {
+	err := &clusterRouteProtocolError{
+		err:        errors.New("nativewire: remote error code 8: leader unavailable"),
+		leaderHint: "node-z",
+		hasRoute:   false,
+	}
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for leader-only wrapper", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfFallsThroughLeaderOnlyProtocolWrapper(t *testing.T) {
+	err := &clusterRouteProtocolError{
+		err: &WireError{
+			Code:    iwire.ErrReadOnly,
+			Message: "cluster route rejected; route_error_class=remote_owner_redirect route_group=group+z leader_hint=node+z",
+		},
+		leaderHint: "node-z",
+		hasRoute:   false,
+	}
+	metadata, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatal("ClusterRouteErrorMetadataOf ok=false want parsed route metadata from wrapped wire error")
+	}
+	if metadata.Class != "remote_owner_redirect" || metadata.GroupID != "group z" || metadata.LeaderHint != "node z" {
+		t.Fatalf("ClusterRouteErrorMetadataOf metadata=%+v want parsed wrapped wire route metadata", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfIgnoresNonReadOnlyWireRouteMetadata(t *testing.T) {
+	err := &WireError{
+		Code:    iwire.ErrDuplicateDocumentID,
+		Message: "duplicate key route_error_class=remote_owner_redirect route_group=group-z leader_hint=node-z",
+	}
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for non-read-only wire error", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfParsesProtocolRouteMetadata(t *testing.T) {
+	err := &iwire.ProtocolError{
+		Code:   iwire.ErrReadOnly,
+		Reason: "cluster route rejected; route_error_class=remote_owner_redirect route_group=group+z leader_hint=node+z",
+	}
+	metadata, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatal("ClusterRouteErrorMetadataOf ok=false want parsed protocol route metadata")
+	}
+	if metadata.Class != "remote_owner_redirect" || metadata.GroupID != "group z" || metadata.LeaderHint != "node z" {
+		t.Fatalf("ClusterRouteErrorMetadataOf metadata=%+v want parsed protocol route metadata", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfIgnoresNonReadOnlyProtocolRouteMetadata(t *testing.T) {
+	err := &iwire.ProtocolError{
+		Code:   iwire.ErrDuplicateDocumentID,
+		Reason: "duplicate key route_error_class=remote_owner_redirect route_group=group-z leader_hint=node-z",
+	}
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for non-read-only protocol error", metadata)
+	}
+}
+
+func TestClusterRouteErrorMetadataOfIgnoresGenericTextTokens(t *testing.T) {
+	err := errors.New("duplicate key route_error_class=remote_owner_redirect route_group=group-z leader_hint=node-z")
+	if metadata, ok := ClusterRouteErrorMetadataOf(err); ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=true metadata=%+v want false for generic error text", metadata)
 	}
 }
 
@@ -2549,6 +2715,140 @@ func TestRaftClusterSubmitterGroupRoutedDispatcherRejectsUnknownGroupBeforeSubmi
 	}
 	if calls := groupB.snapshotCalls(); len(calls) != 0 {
 		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
+func TestRaftClusterSubmitterGroupRoutedDispatcherUnknownOwnerErrorsBeforeSubmit(t *testing.T) {
+	token := raftplacement.DocumentIDTokenV1([]byte("u1"))
+	provider := &staticClusterRouteProvider{
+		target: ClusterRouteTarget{
+			GroupID:       "group-z",
+			PlacementMode: string(raftplacement.PlacementModeRingV1),
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+			Shape:         ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible)
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route target unknown") {
+		t.Fatalf("InsertBatch unknown owner err=%v want read-only route target unknown", err)
+	}
+	route, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != "unknown_owner" || route.GroupID != "group-z" || route.LeaderHint != "" {
+		t.Fatalf("route metadata=%+v want unknown owner group-z without leader hint", route)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
+func TestRaftClusterSubmitterGroupRoutedDispatcherMissingOwnerErrorsBeforeSubmit(t *testing.T) {
+	token := raftplacement.DocumentIDTokenV1([]byte("u1"))
+	provider := &staticClusterRouteProvider{
+		target: ClusterRouteTarget{
+			PlacementMode: string(raftplacement.PlacementModeRingV1),
+			RouteKey:      string(raftplacement.RouteKeyDocumentIDV1),
+			Shape:         ClusterRouteShapeToken,
+			TokenKnown:    true,
+			Token:         token,
+			PartitionID:   "p0",
+		},
+	}
+	client, groupA, groupB, _, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	_, err := client.InsertBatch(ctx, "users", collections.DocumentFormatJSON, [][]byte{[]byte("u1")}, [][]byte{[]byte(`{"name":"Ada"}`)}, AckVisible)
+	if !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "route target missing") {
+		t.Fatalf("InsertBatch missing owner err=%v want read-only route target missing", err)
+	}
+	route, ok := ClusterRouteErrorMetadataOf(err)
+	if !ok {
+		t.Fatalf("ClusterRouteErrorMetadataOf ok=false err=%v", err)
+	}
+	if route.Class != "missing_owner" || route.GroupID != "" || route.LeaderHint != "" {
+		t.Fatalf("route metadata=%+v want missing owner without group/leader", route)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+}
+
+func TestRaftClusterSubmitterGroupRoutedDispatcherRemoteOwnerErrorsForMutations(t *testing.T) {
+	provider := &remoteOwnerRouteProvider{}
+	client, groupA, groupB, mgr, _ := serveGroupRoutedRaftClusterBridgePipe(t, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Hello(ctx); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	meta := collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			DocumentFormat: collections.DocumentFormatBSON,
+		},
+	}
+	if _, err := mgr.CreateCollection(&meta); err != nil {
+		t.Fatalf("direct CreateCollection: %v", err)
+	}
+	col, err := mgr.OpenCollection("users")
+	if err != nil {
+		t.Fatalf("OpenCollection users: %v", err)
+	}
+	original := mustBSONDocument(t, bson.D{{Key: "_id", Value: "u1"}, {Key: "name", Value: "Ada"}})
+	if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("u1")}, [][]byte{original}); err != nil {
+		t.Fatalf("seed InsertBatchValidatedBSON: %v", err)
+	}
+
+	insertDoc := mustBSONDocument(t, bson.D{{Key: "_id", Value: "u2"}, {Key: "name", Value: "Grace"}})
+	_, err = client.InsertBatch(ctx, "users", collections.DocumentFormatBSON, [][]byte{[]byte("u2")}, [][]byte{insertDoc}, AckVisible)
+	assertNativeRemoteOwnerRouteError(t, err, "users")
+	if got, err := col.Get([]byte("u2")); err != nil || got != nil {
+		t.Fatalf("u2 after remote-owner insert got=%v err=%v want missing", got, err)
+	}
+
+	_, _, err = client.UpdateBSONSet(ctx, "users", []byte("u1"), []collections.BSONSetField{
+		{Key: "name", Value: mustNativewireBSONRawValue(t, "Grace")},
+	}, AckVisible)
+	assertNativeRemoteOwnerRouteError(t, err, "users")
+
+	_, err = client.DeleteBatch(ctx, "users", [][]byte{[]byte("u1")}, AckVisible)
+	assertNativeRemoteOwnerRouteError(t, err, "users")
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("Get u1 after remote-owner mutations: %v", err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("u1 changed after remote-owner mutations: got %v want %v", got, original)
+	}
+	if calls := groupA.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-a calls=%d want 0", len(calls))
+	}
+	if calls := groupB.snapshotCalls(); len(calls) != 0 {
+		t.Fatalf("group-b calls=%d want 0", len(calls))
+	}
+	if routes := provider.snapshotRoutes(); len(routes) != 3 {
+		t.Fatalf("route calls=%d want insert+update+delete", len(routes))
 	}
 }
 

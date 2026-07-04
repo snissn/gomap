@@ -115,7 +115,7 @@ func (s *GroupRoutedSubmitter) SubmitCommandEntryV1(ctx context.Context, entry [
 	}
 	submitter, ok := s.registry.Lookup(target.GroupID)
 	if !ok {
-		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithLeaderHint(metadata, "route group %q is not configured locally", target.GroupID))
+		return SubmitResultV1{}, errors.Join(ErrRouteTargetUnknown, routeErrorWithMetadata(metadata, "route group %q is not configured locally", target.GroupID))
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -210,7 +210,7 @@ func routeDispatchTargetFromMetadata(metadata raftentry.RequestMetadataV1) (rout
 		return routeDispatchTarget{}, errors.Join(ErrRouteFanoutRequired, fmt.Errorf("cluster route shape %q requires split/fanout before group dispatch", metadata.ClusterRouteShape))
 	}
 	if metadata.ClusterRouteGroupID == "" {
-		return routeDispatchTarget{}, errors.Join(ErrRouteTargetMissing, fmt.Errorf("cluster route group id is required"))
+		return routeDispatchTarget{}, errors.Join(ErrRouteTargetMissing, routeErrorWithMetadata(metadata, "cluster route group id is required"))
 	}
 	switch metadata.ClusterRouteShape {
 	case clusterRouteShapeCollectionV1:

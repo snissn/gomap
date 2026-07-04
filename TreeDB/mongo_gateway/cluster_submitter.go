@@ -943,7 +943,7 @@ func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 	} else if errors.Is(err, collections.ErrCommitAmbiguous) {
 		nativeCode = iwire.ErrCommitAmbiguous
 		code, codeName = commandCodeShutdownInProgress, "ShutdownInProgress"
-	} else if parsedNativeCode, ok := iwire.ErrorCodeOf(err); ok {
+	} else if parsedNativeCode, ok := mongoClusterNativeErrorCodeOf(err); ok {
 		nativeCode = parsedNativeCode
 		switch nativeCode {
 		case iwire.ErrUnsupportedFeature:
@@ -966,6 +966,17 @@ func mongoClusterRouteCommandError(err error) (wire.Document, error) {
 	return commandErrorWithFields(code, codeName, err.Error(), mongoClusterErrorFields(err, nativeCode, codeName))
 }
 
+func mongoClusterNativeErrorCodeOf(err error) (iwire.ErrorCode, bool) {
+	if code, ok := iwire.ErrorCodeOf(err); ok {
+		return code, true
+	}
+	var wireErr *treenativewire.WireError
+	if errors.As(err, &wireErr) {
+		return wireErr.Code, true
+	}
+	return 0, false
+}
+
 func mongoClusterErrorFields(err error, nativeCode iwire.ErrorCode, codeName string) bson.D {
 	if err == nil || !mongoClusterErrorMetadataApplies(err, nativeCode, codeName) {
 		return nil
@@ -979,6 +990,9 @@ func mongoClusterErrorFields(err error, nativeCode iwire.ErrorCode, codeName str
 	if leaderHint := mongoClusterLeaderHint(err); leaderHint != "" {
 		fields = append(fields, bson.E{Key: "treedbLeaderHint", Value: leaderHint})
 	}
+	if route, ok := treenativewire.ClusterRouteErrorMetadataOf(err); ok {
+		fields = appendMongoClusterRouteErrorFields(fields, route)
+	}
 	return fields
 }
 
@@ -991,10 +1005,16 @@ func mongoClusterErrorMetadataApplies(err error, nativeCode iwire.ErrorCode, cod
 		collections.IsDuplicateKeyError(err) {
 		return true
 	}
+	if route, ok := treenativewire.ClusterRouteErrorMetadataOf(err); ok && route.Class != "" {
+		return true
+	}
 	return codeName == "WriteConcernFailed"
 }
 
 func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName string) string {
+	if route, ok := treenativewire.ClusterRouteErrorMetadataOf(err); ok && route.Class != "" {
+		return route.Class
+	}
 	message := strings.ToLower(err.Error())
 	switch nativeCode {
 	case iwire.ErrReadOnly:
@@ -1030,8 +1050,40 @@ func mongoClusterErrorClass(err error, nativeCode iwire.ErrorCode, codeName stri
 	}
 }
 
+func appendMongoClusterRouteErrorFields(fields bson.D, route treenativewire.ClusterRouteErrorMetadata) bson.D {
+	appendString := func(key, value string) {
+		if value != "" {
+			fields = append(fields, bson.E{Key: key, Value: value})
+		}
+	}
+	appendString("treedbRouteGroup", route.GroupID)
+	appendString("treedbRouteLeaderHint", route.LeaderHint)
+	appendString("treedbRouteDatabase", route.Database)
+	appendString("treedbRouteCatalog", route.Catalog)
+	appendString("treedbRouteCollection", route.Collection)
+	appendString("treedbRouteShape", route.Shape)
+	appendString("treedbRoutePlacementMode", route.PlacementMode)
+	appendString("treedbRouteKey", route.RouteKey)
+	appendString("treedbRoutePartitionId", route.PartitionID)
+	appendString("treedbRouteLocalGroup", route.LocalGroupID)
+	if len(route.Members) != 0 {
+		members := make(bson.A, len(route.Members))
+		for i, member := range route.Members {
+			members[i] = member
+		}
+		fields = append(fields, bson.E{Key: "treedbRouteMembers", Value: members})
+	}
+	if route.TokenKnown {
+		fields = append(fields, bson.E{Key: "treedbRouteTokenKnown", Value: true})
+		fields = append(fields, bson.E{Key: "treedbRouteToken", Value: strconv.FormatUint(route.Token, 10)})
+	}
+	return fields
+}
+
 func mongoClusterRouteRejectedMessage(message string) bool {
 	return strings.Contains(message, "route group") ||
+		strings.Contains(message, "route_error_class=") ||
+		strings.Contains(message, "route_class=") ||
 		strings.Contains(message, "cluster route rejected") ||
 		strings.Contains(message, "cluster query route shape") ||
 		strings.Contains(message, "cluster route shape") ||
@@ -1047,6 +1099,11 @@ func mongoClusterRouteRejectedMessage(message string) bool {
 func mongoClusterLeaderHint(err error) string {
 	if err == nil {
 		return ""
+	}
+	if route, ok := treenativewire.ClusterRouteErrorMetadataOf(err); ok {
+		if leaderHint := strings.TrimSpace(route.LeaderHint); leaderHint != "" {
+			return leaderHint
+		}
 	}
 	var hinted interface {
 		ClusterLeaderHint() string
