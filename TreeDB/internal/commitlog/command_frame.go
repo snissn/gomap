@@ -44,6 +44,8 @@ const (
 )
 
 var commandFrameMagic = [4]byte{'T', 'C', 'W', '1'}
+var rawKVEmptyByteView = make([]byte, 0)
+var rawKVSharedZeroValueView = make([]byte, 64<<10)
 var rawKVCommandFrameHeaderTemplate = func() [commandFrameHeaderSize]byte {
 	var h [commandFrameHeaderSize]byte
 	copy(h[0:4], commandFrameMagic[:])
@@ -148,24 +150,35 @@ type RawKVBatchPayloadPlan struct {
 // RawKVBatchPayloadBuilder incrementally constructs a canonical RawKVBatch
 // payload while returning stable key/value views into the owned payload bytes.
 type RawKVBatchPayloadBuilder struct {
-	payload               []byte
-	zeroPayload           []byte
-	zeroSetValueView      []byte
-	payloadCapHint        int
-	opHint                int
-	count                 int
-	zeroSetCandidate      bool
-	zeroSetCompactOnly    bool
-	zeroSetValuesOmitted  bool
-	zeroSetValueLen       int
-	zeroSetKeyBytes       int
-	zeroSetMaxKeyLen      int
-	zeroSetCompactVersion uint16
-	zeroSetValueRef       []byte
-	entryRevisions        bool
-	revisionOffsets       []uint32
-	revisionOffsetInline  [rawKVRevisionOffsetInlineCap]uint32
+	payload                []byte
+	zeroPayload            []byte
+	zeroSetValueView       []byte
+	payloadCapHint         int
+	opHint                 int
+	count                  int
+	zeroSetCandidate       bool
+	zeroSetCompactOnly     bool
+	zeroSetValuesOmitted   bool
+	zeroSetValueLen        int
+	zeroSetKeyBytes        int
+	zeroSetMaxKeyLen       int
+	zeroSetCompactVersion  uint16
+	zeroSetValueRef        []byte
+	payloadValueViews      bool
+	zeroSetValueViewGlobal bool
+	entryRevisions         bool
+	revisionOffsets        []uint32
+	revisionOffsetInline   [rawKVRevisionOffsetInlineCap]uint32
 }
+
+// RawKVBatchPayloadBufferMask identifies builder-owned buffers whose byte
+// slices were handed to another owner.
+type RawKVBatchPayloadBufferMask uint8
+
+const (
+	RawKVBatchPayloadBufferPayload RawKVBatchPayloadBufferMask = 1 << iota
+	RawKVBatchPayloadBufferZeroValue
+)
 
 // NewRawKVBatchPayloadBuilder returns a builder initialized with best-effort
 // capacity hints. Invalid or overflowing hints intentionally fall back to the
@@ -212,6 +225,8 @@ func (b *RawKVBatchPayloadBuilder) ResetWithHint(opHint, byteHint int) error {
 	b.zeroSetMaxKeyLen = 0
 	b.zeroSetCompactVersion = 0
 	b.zeroSetValueRef = nil
+	b.payloadValueViews = false
+	b.zeroSetValueViewGlobal = false
 	b.entryRevisions = false
 	if b.revisionOffsets != nil {
 		b.revisionOffsets = b.revisionOffsets[:0]
@@ -514,6 +529,31 @@ func (b *RawKVBatchPayloadBuilder) RetainedByteBuffers() [][]byte {
 	return out
 }
 
+// RetainedValueByteBuffers returns builder-owned buffers that may back value
+// views returned by AppendSet. It intentionally excludes compact-zero key
+// payload buffers, since append-only memtables copy keys and only retain values.
+// When value views point at the process-global zero view, it returns one
+// zero-cap sentinel chunk as a stable-borrow permission signal and no mask.
+func (b *RawKVBatchPayloadBuilder) RetainedValueByteBuffers() ([][]byte, RawKVBatchPayloadBufferMask) {
+	if b == nil {
+		return nil, 0
+	}
+	var out [][]byte
+	var mask RawKVBatchPayloadBufferMask
+	if b.zeroSetValueViewGlobal {
+		out = append(out, rawKVEmptyByteView[:0:0])
+	}
+	if cap(b.zeroSetValueView) > 0 {
+		out = append(out, b.zeroSetValueView[:0])
+		mask |= RawKVBatchPayloadBufferZeroValue
+	}
+	if b.payloadValueViews && cap(b.payload) > 0 {
+		out = append(out, b.payload[:0])
+		mask |= RawKVBatchPayloadBufferPayload
+	}
+	return out, mask
+}
+
 // DetachRetainedByteBuffers drops builder references to payload buffers without
 // returning them to the builder's reuse path. Use this when those buffers were
 // handed to another owner with a longer lifetime, such as a mutable memtable.
@@ -526,6 +566,21 @@ func (b *RawKVBatchPayloadBuilder) DetachRetainedByteBuffers() {
 	*b = RawKVBatchPayloadBuilder{}
 	if keepRevisionOffsets {
 		b.revisionOffsets = revisionOffsets[:0]
+	}
+}
+
+// DetachRetainedValueByteBuffers drops only the value buffers selected by mask.
+// This lets compact-zero command payload/key buffers remain reusable when the
+// only memtable-retained data is the separate zero-value view buffer.
+func (b *RawKVBatchPayloadBuilder) DetachRetainedValueByteBuffers(mask RawKVBatchPayloadBufferMask) {
+	if b == nil || mask == 0 {
+		return
+	}
+	if mask&RawKVBatchPayloadBufferPayload != 0 {
+		b.payload = nil
+	}
+	if mask&RawKVBatchPayloadBufferZeroValue != 0 {
+		b.zeroSetValueView = nil
 	}
 }
 
@@ -691,6 +746,18 @@ func (b *RawKVBatchPayloadBuilder) Append(op RawKVOperation) (keyView, valueView
 // AppendSet appends a validated RawKV Set operation without materializing a
 // RawKVOperation wrapper. The key and value must be non-nil.
 func (b *RawKVBatchPayloadBuilder) AppendSet(key, value []byte) (keyView, valueView []byte, err error) {
+	return b.appendSet(key, value, false)
+}
+
+// AppendSetKnownZeroValue is like AppendSet but the caller has already verified
+// that value is non-empty and all zero bytes. The canonical command-WAL payload
+// still receives the supplied value bytes; the returned value view can use the
+// shared zero buffer without rescanning.
+func (b *RawKVBatchPayloadBuilder) AppendSetKnownZeroValue(key, value []byte) (keyView, valueView []byte, err error) {
+	return b.appendSet(key, value, true)
+}
+
+func (b *RawKVBatchPayloadBuilder) appendSet(key, value []byte, knownZeroValue bool) (keyView, valueView []byte, err error) {
 	if b == nil {
 		return nil, nil, ErrCorrupt
 	}
@@ -744,7 +811,12 @@ func (b *RawKVBatchPayloadBuilder) AppendSet(key, value []byte) (keyView, valueV
 		valueView = b.zeroSetValueViewForLen(len(value))
 	} else {
 		copy(b.payload[off:], value)
-		valueView = b.payload[valueStart : valueStart+len(value) : valueStart+len(value)]
+		if knownZeroValue || allZeroBytes(value) {
+			valueView = b.zeroSetValueViewForLen(len(value))
+		} else {
+			valueView = b.payload[valueStart : valueStart+len(value) : valueStart+len(value)]
+			b.payloadValueViews = true
+		}
 	}
 	off += len(value)
 	b.count++
@@ -1120,7 +1192,12 @@ func (b *RawKVBatchPayloadBuilder) appendValidatedWithRevision(op RawKVOp, key, 
 	} else {
 		copy(b.payload[off:], value)
 		if op == RawKVOpSet {
-			valueView = b.payload[valueStart : valueStart+len(value) : valueStart+len(value)]
+			if allZeroBytes(value) {
+				valueView = b.zeroSetValueViewForLen(len(value))
+			} else {
+				valueView = b.payload[valueStart : valueStart+len(value) : valueStart+len(value)]
+				b.payloadValueViews = true
+			}
 		}
 	}
 	off += len(value)
@@ -1381,6 +1458,7 @@ func (b *RawKVBatchPayloadBuilder) truncateCompactZeroSetPayload(count int) {
 		b.zeroSetMaxKeyLen = 0
 		b.zeroSetCompactVersion = 0
 		b.zeroSetValueRef = nil
+		b.payloadValueViews = false
 		if b.zeroPayload != nil {
 			b.zeroPayload = b.zeroPayload[:0]
 		}
@@ -1460,8 +1538,15 @@ func (b *RawKVBatchPayloadBuilder) disableZeroSetCandidate() {
 }
 
 func (b *RawKVBatchPayloadBuilder) zeroSetValueViewForLen(n int) []byte {
-	if b == nil || n <= 0 {
+	if n == 0 {
+		return rawKVEmptyByteView
+	}
+	if b == nil || n < 0 {
 		return nil
+	}
+	if n <= len(rawKVSharedZeroValueView) {
+		b.zeroSetValueViewGlobal = true
+		return rawKVSharedZeroValueView[:n:n]
 	}
 	if cap(b.zeroSetValueView) < n {
 		b.zeroSetValueView = make([]byte, n)

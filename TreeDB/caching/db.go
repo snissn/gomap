@@ -32236,7 +32236,8 @@ func (b *Batch) DisableStreamingBypass() {
 // backed by owner-managed buffers that may be retained by append-only memtables.
 // The buffers are never returned to TreeDB's batch arena pool; the caller must
 // also stop reusing them if StableViewValueLeaseConsumed reports true after a
-// write attempt.
+// write attempt. A zero-cap chunk is a borrow-permission signal for values with
+// process-lifetime storage; it is not retained as a batch-arena lease.
 func (b *Batch) AttachStableViewValueLease(chunks [][]byte) {
 	if b == nil {
 		return
@@ -34359,7 +34360,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	// those slices into memtables unless the owner attaches an explicit stable
 	// value lease that can outlive this batch.
 	if b.hasViewOps {
-		allowStableViewValueBorrow = stableViewValueLeaseBytes > 0 && allowBatchArenaBorrow
+		allowStableViewValueBorrow = len(b.stableViewValueLeaseChunks) > 0 && allowBatchArenaBorrow
 		allowBatchArenaBorrow = false
 		batchArenaBorrowViewOpsBlockedTotal.Add(1)
 	}
@@ -35025,7 +35026,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
 	if len(retainStableViewValueMems) > 0 {
-		b.db.retainExternalViewValueChunksForMemtables(b.stableViewValueLeaseChunks, retainStableViewValueMems)
+		if stableViewValueLeaseBytes > 0 {
+			b.db.retainExternalViewValueChunksForMemtables(b.stableViewValueLeaseChunks, retainStableViewValueMems)
+		}
 		b.stableViewValueLeaseConsumed = true
 	}
 	b.stableViewValueLeaseChunks = nil

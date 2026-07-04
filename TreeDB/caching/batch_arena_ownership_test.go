@@ -560,6 +560,54 @@ func TestBatchStableViewValueLease_AppendOnlyBorrowsWithoutDirectArena(t *testin
 	}
 }
 
+func TestBatchStableViewValueLease_ZeroByteSignalBorrowsWithoutDirectArena(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("stable-zero-signal-key")
+	value := bytes.Repeat([]byte{0x24}, 128)
+	want := bytes.Clone(value)
+	stableSignal := make([]byte, 0)
+
+	b := db.NewBatchWithSize(1)
+	defer func() { _ = b.Close() }()
+	if err := b.SetView(key, value); err != nil {
+		t.Fatalf("set view: %v", err)
+	}
+	b.AttachStableViewValueLease([][]byte{stableSignal[:0:0]})
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !b.StableViewValueLeaseConsumed() {
+		t.Fatal("stable view value lease was not consumed")
+	}
+
+	stats := db.Stats()
+	if got := mustStatInt64(t, stats, "treedb.cache.append_only_direct_arena.active_used_bytes"); got != 0 {
+		t.Fatalf("direct arena active used bytes=%d want 0", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.cache.batch_arena.leased_bytes"); got != 0 {
+		t.Fatalf("stable zero-signal lease bytes=%d want 0", got)
+	}
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch: got=%x want=%x", got, want)
+	}
+}
+
 func TestBatchDeleteViewStats(t *testing.T) {
 	oldHotPathStatsEnabled := hotPathStatsEnabled
 	hotPathStatsEnabled = true

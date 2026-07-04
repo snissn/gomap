@@ -1503,6 +1503,53 @@ func TestPublicCommandWALBatchReplayBytesAppendOnlyLeaseAvoidsDirectArena(t *tes
 	}
 }
 
+func TestPublicCommandWALBatchZeroValueAppendOnlyLeaseAvoidsDirectArena(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                 dir,
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+		MemtableMode:        "append_only",
+		MemtableShards:      1,
+		FlushThreshold:      1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(1)
+	value := make([]byte, 128)
+	if err := b.Set([]byte("zero-value-key"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.append_only_direct_arena.active_used_bytes"]; got != "0" {
+		t.Fatalf("direct arena active used bytes=%q want 0", got)
+	}
+	if got := stats["treedb.cache.batch_arena.leased_bytes"]; got != "0" {
+		t.Fatalf("batch arena leased bytes=%q want 0 for shared zero view", got)
+	}
+	got, err := db.Get([]byte("zero-value-key"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("stored value=%x want %x", got, value)
+	}
+}
+
 func TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback(t *testing.T) {
 	wrapped := newCommandWALPublicBatch(nil, &commandWALResetBatch{}, 8000)
 	zeroValue := make([]byte, 128)
