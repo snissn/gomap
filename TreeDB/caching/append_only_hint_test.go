@@ -4,6 +4,8 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestAppendOnlyEntryHint_AdaptiveDecayAndCapacityClamp(t *testing.T) {
@@ -123,5 +125,76 @@ func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *tes
 
 	if !(critical < high && high < normal) {
 		t.Fatalf("expected stricter caps under pressure: normal=%d high=%d critical=%d", normal, high, critical)
+	}
+}
+
+func TestAppendOnlyReserveDemandTeachesFutureCapacityHint(t *testing.T) {
+	var cache DB
+	cache.memtableCap = 8 << 20
+	cache.mutableThreshold.Store(int64(cache.memtableCap))
+
+	first := memtable.NewAppendOnlyWithEntryCapacity(appendOnlyEntryHintMinEntries)
+	const demand = 4096
+	reserveMemtableEntries(&cache, first, demand)
+	hint := int(cache.appendOnlyEntryHint.Load())
+	if hint < demand {
+		t.Fatalf("reserve demand hint=%d want >=%d", hint, demand)
+	}
+
+	next, err := cache.newMutableMemtableWithCapacityMode(cache.memtableCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("new mutable: %v", err)
+	}
+	appendOnly, ok := next.(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("new mutable type=%T, want append-only", next)
+	}
+	if got := appendOnly.EntryCapacity(); got < hint {
+		t.Fatalf("future mutable capacity=%d want >= learned hint %d", got, hint)
+	}
+}
+
+func TestAppendOnlyReserveDemandHintClampsToPressureCapacity(t *testing.T) {
+	var cache DB
+	cache.memtableCap = 256 << 20
+	const threshold = 512 << 10
+	cache.mutableThreshold.Store(threshold)
+
+	cache.observeAppendOnlyReserveDemandEntries(appendOnlyEntryHintMaxEntries)
+	hint := int(cache.appendOnlyEntryHint.Load())
+	wantMax := appendOnlyEntryCapacityForBytes(memtableCapacity(threshold), appendOnlyEstimatedBytesPerEntryDefault)
+	if hint > wantMax {
+		t.Fatalf("reserve demand hint=%d want <= pressure capacity entries %d", hint, wantMax)
+	}
+	if hint < appendOnlyEntryHintMinEntries {
+		t.Fatalf("reserve demand hint=%d want >=%d", hint, appendOnlyEntryHintMinEntries)
+	}
+}
+
+func TestAppendOnlyReserveDemandHintClampsToShardScaledPressureCapacity(t *testing.T) {
+	var cache DB
+	const shards = 16
+	const baseThreshold = int64(256 << 20)
+	const pressureThreshold = int64(64 << 20)
+	cache.mutableShards = make([]memShard, shards)
+	cache.memtableCap = shardCapacity(memtableCapacity(baseThreshold), shards)
+	cache.mutableThreshold.Store(pressureThreshold)
+	cache.appendOnlyEntryHint.Store(appendOnlyEntryHintMaxEntries)
+
+	gotCapacity := cache.appendOnlyMemtableCapacityHint(cache.memtableCap, appendOnlyEstimatedBytesPerEntryDefault)
+	wantCapacity := shardCapacity(memtableCapacity(pressureThreshold), shards)
+	if wantCapacity >= cache.memtableCap {
+		t.Fatalf("test setup invalid: pressure capacity=%d base shard capacity=%d", wantCapacity, cache.memtableCap)
+	}
+	if gotCapacity != wantCapacity {
+		t.Fatalf("pressure-limited capacity=%d want shard-scaled %d", gotCapacity, wantCapacity)
+	}
+
+	cache.appendOnlyEntryHint.Store(0)
+	cache.observeAppendOnlyReserveDemandEntries(appendOnlyEntryHintMaxEntries)
+	hint := int(cache.appendOnlyEntryHint.Load())
+	wantMax := appendOnlyEntryCapacityForBytes(wantCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+	if hint > wantMax {
+		t.Fatalf("reserve demand hint=%d want <= shard-scaled pressure entries %d", hint, wantMax)
 	}
 }
