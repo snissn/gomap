@@ -27,7 +27,7 @@ const (
 	rawKVOpRevisionHeaderSize             = rawKVOpHeaderSize + 8
 	rawKVZeroOpHeaderSize                 = 4
 	rawKVZeroOpHeaderSizeV3               = 2
-	rawKVRevisionOffsetInlineCap          = 8
+	rawKVRevisionOffsetInlineCap          = 32
 	rawKVNilRangeBoundLenUint32           = uint32(^uint32(0))
 
 	collectionRebuildVectorIndexPayloadVersion      = uint16(1)

@@ -273,26 +273,28 @@ func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
 }
 
 type commandWALPublicBatch struct {
-	db                  *DB
-	inner               Batch
-	innerSetViewFn      func(key, value []byte) error
-	innerDeleteViewFn   func(key []byte) error
-	payload             commitlog.RawKVBatchPayloadBuilder
-	payloadOpHint       int
-	payloadByteHint     int
-	payloadSoftCapBytes int
-	payloadBypass       bool
-	opCount             int
-	hasDeleteRange      bool
-	dirty               bool
-	setCalls            int
-	setBytes            int
-	setViewCalls        int
-	setViewBytes        int
-	deleteCalls         int
-	deleteBytes         int
-	deleteViewCalls     int
-	deleteViewBytes     int
+	db                       *DB
+	inner                    Batch
+	innerSetViewValidated    commandWALPublicInnerSetViewValidated
+	innerSetViewer           commandWALPublicInnerSetViewer
+	innerDeleteViewValidated commandWALPublicInnerDeleteViewValidated
+	innerDeleteViewer        commandWALPublicInnerDeleteViewer
+	payload                  commitlog.RawKVBatchPayloadBuilder
+	payloadOpHint            int
+	payloadByteHint          int
+	payloadSoftCapBytes      int
+	payloadBypass            bool
+	opCount                  int
+	hasDeleteRange           bool
+	dirty                    bool
+	setCalls                 int
+	setBytes                 int
+	setViewCalls             int
+	setViewBytes             int
+	deleteCalls              int
+	deleteBytes              int
+	deleteViewCalls          int
+	deleteViewBytes          int
 	// retainPayloadAfterWrite is set by adapter-only replay-view helpers. It
 	// keeps payload-owned key/value views valid after a successful Write until
 	// Reset/Close or the next mutation. Ordinary public Batch callers do not use
@@ -314,6 +316,22 @@ const commandWALRawKVBatchHeaderSize = 2 + 4
 type commandWALPublicRevisionEntries interface {
 	PointRevisionStats() (page.EntryRevision, bool)
 	OrderedEntries() []batch.Entry
+}
+
+type commandWALPublicInnerSetViewValidated interface {
+	SetViewValidated(key, value []byte) error
+}
+
+type commandWALPublicInnerSetViewer interface {
+	SetView(key, value []byte) error
+}
+
+type commandWALPublicInnerDeleteViewValidated interface {
+	DeleteViewValidated(key []byte) error
+}
+
+type commandWALPublicInnerDeleteViewer interface {
+	DeleteView(key []byte) error
 }
 
 func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPublicBatch {
@@ -371,28 +389,22 @@ func (b *commandWALPublicBatch) rebindInnerViewers() {
 	if b == nil {
 		return
 	}
-	b.innerSetViewFn = nil
-	b.innerDeleteViewFn = nil
+	b.innerSetViewValidated = nil
+	b.innerSetViewer = nil
+	b.innerDeleteViewValidated = nil
+	b.innerDeleteViewer = nil
 	if b.inner == nil {
 		return
 	}
-	if setter, ok := b.inner.(interface {
-		SetViewValidated(key, value []byte) error
-	}); ok {
-		b.innerSetViewFn = setter.SetViewValidated
-	} else if setter, ok := b.inner.(interface {
-		SetView(key, value []byte) error
-	}); ok {
-		b.innerSetViewFn = setter.SetView
+	if setter, ok := b.inner.(commandWALPublicInnerSetViewValidated); ok {
+		b.innerSetViewValidated = setter
+	} else if setter, ok := b.inner.(commandWALPublicInnerSetViewer); ok {
+		b.innerSetViewer = setter
 	}
-	if deleter, ok := b.inner.(interface {
-		DeleteViewValidated(key []byte) error
-	}); ok {
-		b.innerDeleteViewFn = deleter.DeleteViewValidated
-	} else if deleter, ok := b.inner.(interface {
-		DeleteView(key []byte) error
-	}); ok {
-		b.innerDeleteViewFn = deleter.DeleteView
+	if deleter, ok := b.inner.(commandWALPublicInnerDeleteViewValidated); ok {
+		b.innerDeleteViewValidated = deleter
+	} else if deleter, ok := b.inner.(commandWALPublicInnerDeleteViewer); ok {
+		b.innerDeleteViewer = deleter
 	}
 }
 
@@ -647,15 +659,21 @@ func (b *commandWALPublicBatch) resetPointIngressStats() {
 }
 
 func (b *commandWALPublicBatch) innerSetView(key, value []byte) error {
-	if b.innerSetViewFn != nil {
-		return b.innerSetViewFn(key, value)
+	if b.innerSetViewValidated != nil {
+		return b.innerSetViewValidated.SetViewValidated(key, value)
+	}
+	if b.innerSetViewer != nil {
+		return b.innerSetViewer.SetView(key, value)
 	}
 	return b.inner.Set(key, value)
 }
 
 func (b *commandWALPublicBatch) innerDeleteView(key []byte) error {
-	if b.innerDeleteViewFn != nil {
-		return b.innerDeleteViewFn(key)
+	if b.innerDeleteViewValidated != nil {
+		return b.innerDeleteViewValidated.DeleteViewValidated(key)
+	}
+	if b.innerDeleteViewer != nil {
+		return b.innerDeleteViewer.DeleteView(key)
 	}
 	return b.inner.Delete(key)
 }
@@ -761,8 +779,10 @@ func (b *commandWALPublicBatch) Close() error {
 	// appends and publishes a RawKVBatch command frame.
 	err := b.inner.Close()
 	b.inner = nil
-	b.innerSetViewFn = nil
-	b.innerDeleteViewFn = nil
+	b.innerSetViewValidated = nil
+	b.innerSetViewer = nil
+	b.innerDeleteViewValidated = nil
+	b.innerDeleteViewer = nil
 	b.resetPayloadWithHint()
 	b.opCount = 0
 	b.hasDeleteRange = false
