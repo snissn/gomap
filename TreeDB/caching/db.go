@@ -34229,7 +34229,22 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	needRotate := false
 	needSyncBarrier := false
 	commandWALAppended := false
+	var retainStableViewValueMems []memtable.Table
+	var stableViewValueLeaseBytes int64
+	stableViewValueLeaseFinalized := false
+	finalizeStableViewValueLease := func() {
+		if stableViewValueLeaseFinalized || len(retainStableViewValueMems) == 0 {
+			return
+		}
+		if stableViewValueLeaseBytes > 0 {
+			b.db.retainExternalViewValueChunksForMemtables(b.stableViewValueLeaseChunks, retainStableViewValueMems)
+		}
+		b.stableViewValueLeaseConsumed = true
+		b.stableViewValueLeaseChunks = nil
+		stableViewValueLeaseFinalized = true
+	}
 	failMemtableApply := func(shard *memShard, err error) error {
+		finalizeStableViewValueLease()
 		shard.mu.Unlock()
 		unlockWriteMu()
 		if err == nil {
@@ -34331,7 +34346,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		retainMainMems = make([]memtable.Table, 0, shardCount)
 	}
 	var retainStableViewValueMemStack [batchMemtableRetainStackCap]memtable.Table
-	retainStableViewValueMems := retainStableViewValueMemStack[:0]
+	retainStableViewValueMems = retainStableViewValueMemStack[:0]
 	if shardCount > len(retainStableViewValueMemStack) {
 		retainStableViewValueMems = make([]memtable.Table, 0, shardCount)
 	}
@@ -34348,7 +34363,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			return ErrMemtableFull
 		}
 	}
-	stableViewValueLeaseBytes := batchArenaChunksCapBytes(b.stableViewValueLeaseChunks)
+	stableViewValueLeaseBytes = batchArenaChunksCapBytes(b.stableViewValueLeaseChunks)
 	prospectiveRetainBytes := batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks) + stableViewValueLeaseBytes
 	allowBatchArenaBorrow, preflightBlocked := shouldBorrowBatchArenaBytesForWriteWithHardCap(
 		prospectiveRetainBytes,
@@ -35025,13 +35040,10 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
-	if len(retainStableViewValueMems) > 0 {
-		if stableViewValueLeaseBytes > 0 {
-			b.db.retainExternalViewValueChunksForMemtables(b.stableViewValueLeaseChunks, retainStableViewValueMems)
-		}
-		b.stableViewValueLeaseConsumed = true
+	finalizeStableViewValueLease()
+	if !stableViewValueLeaseFinalized {
+		b.stableViewValueLeaseChunks = nil
 	}
-	b.stableViewValueLeaseChunks = nil
 	if retainPtrArena {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {

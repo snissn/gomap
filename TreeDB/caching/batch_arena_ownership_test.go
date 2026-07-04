@@ -558,6 +558,13 @@ func TestBatchStableViewValueLease_AppendOnlyBorrowsWithoutDirectArena(t *testin
 	if got := mustStatInt64(t, db.Stats(), "treedb.cache.batch_arena.leased_bytes"); got != 0 {
 		t.Fatalf("stable external lease bytes after checkpoint=%d want 0", got)
 	}
+	got, err = db.Get(key)
+	if err != nil {
+		t.Fatalf("get after checkpoint: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after checkpoint: got=%x want=%x", got, want)
+	}
 }
 
 func TestBatchStableViewValueLease_ZeroByteSignalBorrowsWithoutDirectArena(t *testing.T) {

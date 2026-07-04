@@ -1501,6 +1501,30 @@ func TestPublicCommandWALBatchReplayBytesAppendOnlyLeaseAvoidsDirectArena(t *tes
 	if b.payloadLeasedToMemtable {
 		t.Fatal("Reset left payload marked leased to memtable")
 	}
+
+	secondKeyView, secondValueView, err := b.SetViewWithReplayBytes([]byte("bravo"), bytes.Repeat([]byte{0x44}, 128))
+	if err != nil {
+		t.Fatalf("second SetViewWithReplayBytes: %v", err)
+	}
+	secondWantKey := bytes.Clone(secondKeyView)
+	secondWantValue := bytes.Clone(secondValueView)
+	if err := b.Write(); err != nil {
+		t.Fatalf("second Write: %v", err)
+	}
+	got, err = db.Get(wantKey)
+	if err != nil {
+		t.Fatalf("Get original after batch reuse: %v", err)
+	}
+	if !bytes.Equal(got, wantValue) {
+		t.Fatalf("original stored value after batch reuse=%x want %x", got, wantValue)
+	}
+	got, err = db.Get(secondWantKey)
+	if err != nil {
+		t.Fatalf("Get second: %v", err)
+	}
+	if !bytes.Equal(got, secondWantValue) {
+		t.Fatalf("second stored value=%x want %x", got, secondWantValue)
+	}
 }
 
 func TestPublicCommandWALBatchZeroValueAppendOnlyLeaseAvoidsDirectArena(t *testing.T) {
