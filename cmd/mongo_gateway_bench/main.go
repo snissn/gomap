@@ -64,6 +64,7 @@ type config struct {
 	RouteMode                                     string
 	RouteGroupCount                               int
 	RoutePartitionCount                           int
+	ProductionRouteRemoteExecution                bool
 	TreeDBDir                                     string
 	KeepTreeDBDir                                 bool
 	DropBeforeRun                                 bool
@@ -454,8 +455,10 @@ const (
 	routeEvidenceScopeLocalPreflight                 = "local_preflight"
 	routeEvidenceScopeProductionRoutedCommit         = "production_routed_commit"
 	routeEvidenceScopeProductionRemoteOwnerRedirect  = "production_remote_owner_redirect"
+	routeEvidenceScopeProductionRemoteOwnerRouted    = "production_remote_owner_routed_commit"
 	productionRouteEvidenceStatusAvailable           = "available"
 	productionRouteEvidenceStatusRemoteOwnerRedirect = "available_remote_owner_redirect_only"
+	productionRouteEvidenceStatusRemoteOwnerRouted   = "available_remote_owner_routed_commit"
 	productionRouteEvidenceStatusLocalPreflightOnly  = "unavailable_local_preflight_only"
 
 	clientModeDriver             = "driver"
@@ -575,8 +578,9 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.MongoURI, "mongo-uri", "mongodb://127.0.0.1:27017", "MongoDB URI for -target mongo")
 	fs.BoolVar(&cfg.MongoCompact, "mongo-compact", false, "compact the MongoDB collection before final stats collection")
 	fs.StringVar(&cfg.RouteMode, "route-mode", cfg.RouteMode, "route evidence mode: off, ring, or production")
-	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for route evidence; production supports local-owner proof with 1 and remote-owner redirect proof with more")
+	fs.IntVar(&cfg.RouteGroupCount, "route-groups", cfg.RouteGroupCount, "logical route group count for route evidence; production supports local-owner proof with 1 and remote-owner redirect proof with more unless remote execution is explicitly enabled")
 	fs.IntVar(&cfg.RoutePartitionCount, "route-partitions", cfg.RoutePartitionCount, "token partition count for route evidence; must be >= route-groups")
+	fs.BoolVar(&cfg.ProductionRouteRemoteExecution, "production-route-remote-execution", cfg.ProductionRouteRemoteExecution, "enable opt-in static in-process remote-owner routed write proof for route-mode production with route-groups > 1")
 	fs.StringVar(&cfg.TreeDBDir, "treedb-dir", "", "TreeDB directory for -target treedb; empty uses a temp dir")
 	fs.BoolVar(&cfg.KeepTreeDBDir, "keep-treedb-dir", false, "keep an auto-created TreeDB temp dir after the run")
 	fs.BoolVar(&cfg.DropBeforeRun, "drop-before-run", true, "drop the MongoDB database before running -target mongo")
@@ -722,6 +726,14 @@ func parseConfig(args []string) (config, error) {
 		}
 		if cfg.RoutePartitionCount < cfg.RouteGroupCount {
 			return config{}, fmt.Errorf("route-partitions must be >= route-groups for route-mode %s", cfg.RouteMode)
+		}
+	}
+	if cfg.ProductionRouteRemoteExecution {
+		if cfg.RouteMode != routeModeProduction {
+			return config{}, errors.New("production-route-remote-execution requires -route-mode production")
+		}
+		if cfg.RouteGroupCount <= 1 {
+			return config{}, errors.New("production-route-remote-execution requires -route-groups > 1")
 		}
 	}
 	if cfg.Documents <= 0 {
@@ -1329,8 +1341,9 @@ func openTreeDBTarget(ctx context.Context, cfg config) (*benchTarget, error) {
 	var productionRoute *benchsupport.ProductionRouteProofHarness
 	if cfg.RouteMode == routeModeProduction {
 		harness, err := benchsupport.ConfigureProductionRouteProofHarness(benchsupport.ProductionRouteProofOptions{
-			GroupCount:     cfg.RouteGroupCount,
-			PartitionCount: cfg.RoutePartitionCount,
+			GroupCount:           cfg.RouteGroupCount,
+			PartitionCount:       cfg.RoutePartitionCount,
+			RemoteOwnerExecution: cfg.ProductionRouteRemoteExecution,
 		}, db, manager, server)
 		if err != nil {
 			_ = backendCleanup()
@@ -1840,7 +1853,9 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		loadProfileName = "load_insert_one_routed_ring"
 	case routeModeProduction:
 		loadProfileName = "load_insert_one_production_routed_commit"
-		if productionRouteRemoteOwnerRedirectProof(cfg) {
+		if productionRouteRemoteOwnerRoutedCommitProof(cfg) {
+			loadProfileName = "load_insert_one_production_remote_owner_routed_commit"
+		} else if productionRouteRemoteOwnerRedirectProof(cfg) {
 			loadProfileName = "load_insert_one_production_remote_owner_redirect"
 		}
 	}
@@ -1879,6 +1894,8 @@ func runBenchmark(ctx context.Context, cfg config, target *benchTarget, profiler
 		result.ProductionRouteEvidenceStatus = productionRouteEvidenceStatusAvailable
 		if productionRouteResult.EvidenceScope == routeEvidenceScopeProductionRemoteOwnerRedirect {
 			result.ProductionRouteEvidenceStatus = productionRouteEvidenceStatusRemoteOwnerRedirect
+		} else if productionRouteResult.EvidenceScope == routeEvidenceScopeProductionRemoteOwnerRouted {
+			result.ProductionRouteEvidenceStatus = productionRouteEvidenceStatusRemoteOwnerRouted
 		}
 		result.ProductionRouteEvidence = productionRouteResult
 	}
@@ -3810,6 +3827,9 @@ func runRoutedRingLoadPhase(ctx context.Context, cfg config, coll *mongo.Collect
 }
 
 func runProductionRoutedLoadPhase(ctx context.Context, cfg config, target *benchTarget, db *mongo.Database, coll *mongo.Collection, prebuilt []bson.D) (phaseResult, *productionRouteEvidence, error) {
+	if productionRouteRemoteOwnerRoutedCommitProof(cfg) {
+		return runProductionRemoteOwnerRoutedCommitLoadPhase(ctx, cfg, target, db, coll)
+	}
 	if productionRouteRemoteOwnerRedirectProof(cfg) {
 		return runProductionRemoteOwnerRedirectLoadPhase(ctx, cfg, target, db, coll)
 	}
@@ -3873,6 +3893,85 @@ func runProductionRoutedLoadPhase(ctx context.Context, cfg config, target *bench
 	return phase, evidence, nil
 }
 
+func runProductionRemoteOwnerRoutedCommitLoadPhase(ctx context.Context, cfg config, target *benchTarget, db *mongo.Database, coll *mongo.Collection) (phaseResult, *productionRouteEvidence, error) {
+	if target == nil || target.productionRoute == nil {
+		return phaseResult{}, nil, errors.New("route-mode production requires production route harness")
+	}
+	if err := ensureProductionRouteCollection(ctx, cfg, target, db); err != nil {
+		return phaseResult{}, nil, err
+	}
+	remoteDocs, remoteKeys, err := productionRemoteOwnerDocuments(cfg)
+	if err != nil {
+		return phaseResult{}, nil, err
+	}
+	target.productionRoute.ResetCounters()
+
+	var beforeDisk diskSnapshot
+	haveBeforeDisk := false
+	if target.treedbDir != "" {
+		if snapshot, err := collectDiskSnapshot(target.treedbDir); err == nil {
+			beforeDisk = snapshot
+			haveBeforeDisk = true
+		}
+	}
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	phase, err := measurePhase("load_insert_one_production_remote_owner_routed_commit", cfg.Documents, func(sample func(time.Duration)) error {
+		return runConcurrentOperations(ctx, 1, len(remoteDocs), func(op int) error {
+			begin := time.Now()
+			_, err := coll.InsertOne(ctx, remoteDocs[op])
+			sample(time.Since(begin))
+			if err != nil {
+				return fmt.Errorf("production remote-owner routed proof insert %d: %w", op, err)
+			}
+			return nil
+		})
+	})
+	runtime.ReadMemStats(&after)
+	if cfg.InsertProducers != 1 {
+		phase.EffectiveProducers = 1
+	}
+	if err != nil {
+		return phase, nil, err
+	}
+	if err := assertProductionRemoteOwnerRoutedDocumentsPresent(target, cfg, remoteKeys); err != nil {
+		return phase, nil, err
+	}
+	if err := target.productionRoute.ProbeUnknownOwnerReject(ctx, cfg.Database, cfg.Collection); err != nil {
+		return phase, nil, err
+	}
+	if err := target.productionRoute.ProbeDirectLocalBypassReject(ctx); err != nil {
+		return phase, nil, err
+	}
+	var storageOverhead int64
+	if haveBeforeDisk {
+		if afterDisk, err := collectDiskSnapshot(target.treedbDir); err == nil {
+			storageOverhead = afterDisk.TotalBytes - beforeDisk.TotalBytes
+		}
+	}
+	evidence := productionRouteEvidenceFromSnapshot(target.productionRoute.Snapshot(), phase, cfg.Documents, before, after, storageOverhead)
+	evidence.EvidenceScope = routeEvidenceScopeProductionRemoteOwnerRouted
+	if !evidence.RealRoutedCommits {
+		return phase, evidence, errors.New("production remote-owner routed proof did not prove routed commit/apply")
+	}
+	if evidence.RouteAttemptsTotal != int64(cfg.Documents) ||
+		evidence.RouteRemoteForwards != int64(cfg.Documents) ||
+		evidence.RouteRemoteRedirects != 0 ||
+		evidence.RouteLocalOwnerHits != 0 {
+		return phase, evidence, fmt.Errorf("production remote-owner routed counters attempts/forwards/redirects/local=%d/%d/%d/%d want %d/%d/0/0",
+			evidence.RouteAttemptsTotal, evidence.RouteRemoteForwards, evidence.RouteRemoteRedirects, evidence.RouteLocalOwnerHits, cfg.Documents, cfg.Documents)
+	}
+	if evidence.CommitGroupHits[benchsupport.LocalProductionRouteProofGroupID()] != 0 ||
+		evidence.AppliedGroupHits[benchsupport.LocalProductionRouteProofGroupID()] != 0 {
+		return phase, evidence, fmt.Errorf("production remote-owner routed proof mutated local owner group commit=%v apply=%v", evidence.CommitGroupHits, evidence.AppliedGroupHits)
+	}
+	if sumStringIntValues(evidence.CommitGroupHits) != cfg.Documents || sumStringIntValues(evidence.AppliedGroupHits) != cfg.Documents {
+		return phase, evidence, fmt.Errorf("production remote-owner routed commit/apply totals commit=%v apply=%v want %d", evidence.CommitGroupHits, evidence.AppliedGroupHits, cfg.Documents)
+	}
+	return phase, evidence, nil
+}
+
 func runProductionRemoteOwnerRedirectLoadPhase(ctx context.Context, cfg config, target *benchTarget, db *mongo.Database, coll *mongo.Collection) (phaseResult, *productionRouteEvidence, error) {
 	if target == nil || target.productionRoute == nil {
 		return phaseResult{}, nil, errors.New("route-mode production requires production route harness")
@@ -3880,7 +3979,7 @@ func runProductionRemoteOwnerRedirectLoadPhase(ctx context.Context, cfg config, 
 	if err := ensureProductionRouteCollection(ctx, cfg, target, db); err != nil {
 		return phaseResult{}, nil, err
 	}
-	remoteDocs, remoteKeys, err := productionRemoteOwnerRedirectDocuments(cfg)
+	remoteDocs, remoteKeys, err := productionRemoteOwnerDocuments(cfg)
 	if err != nil {
 		return phaseResult{}, nil, err
 	}
@@ -3943,10 +4042,14 @@ func runProductionRemoteOwnerRedirectLoadPhase(ctx context.Context, cfg config, 
 }
 
 func productionRouteRemoteOwnerRedirectProof(cfg config) bool {
-	return cfg.RouteMode == routeModeProduction && cfg.RouteGroupCount > 1
+	return cfg.RouteMode == routeModeProduction && cfg.RouteGroupCount > 1 && !cfg.ProductionRouteRemoteExecution
 }
 
-func productionRemoteOwnerRedirectDocuments(cfg config) ([]bson.D, [][]byte, error) {
+func productionRouteRemoteOwnerRoutedCommitProof(cfg config) bool {
+	return cfg.RouteMode == routeModeProduction && cfg.RouteGroupCount > 1 && cfg.ProductionRouteRemoteExecution
+}
+
+func productionRemoteOwnerDocuments(cfg config) ([]bson.D, [][]byte, error) {
 	docs := make([]bson.D, 0, cfg.Documents)
 	keys := make([][]byte, 0, cfg.Documents)
 	localGroup := benchsupport.LocalProductionRouteProofGroupID()
@@ -3964,7 +4067,7 @@ func productionRemoteOwnerRedirectDocuments(cfg config) ([]bson.D, [][]byte, err
 		keys = append(keys, key)
 	}
 	if len(docs) != cfg.Documents {
-		return nil, nil, fmt.Errorf("found %d remote-owner documents for production redirect proof, want %d", len(docs), cfg.Documents)
+		return nil, nil, fmt.Errorf("found %d remote-owner documents for production route proof, want %d", len(docs), cfg.Documents)
 	}
 	return docs, keys, nil
 }
@@ -3988,6 +4091,26 @@ func assertProductionRemoteOwnerRedirectNoLocalDocuments(target *benchTarget, cf
 		}
 		if got != nil {
 			return fmt.Errorf("production remote-owner redirect proof state lookup %d found redirected document key %x", i, key)
+		}
+	}
+	return nil
+}
+
+func assertProductionRemoteOwnerRoutedDocumentsPresent(target *benchTarget, cfg config, keys [][]byte) error {
+	if target == nil || target.collections == nil {
+		return errors.New("production remote-owner routed proof requires collection manager for state assertion")
+	}
+	collection, err := target.collections.OpenCollection(cfg.Database + "." + cfg.Collection)
+	if err != nil {
+		return fmt.Errorf("production remote-owner routed proof open collection for state assertion: %w", err)
+	}
+	for i, key := range keys {
+		got, err := collection.Get(key)
+		if err != nil {
+			return fmt.Errorf("production remote-owner routed proof state lookup %d: %w", i, err)
+		}
+		if got == nil {
+			return fmt.Errorf("production remote-owner routed proof state lookup %d missing routed document key %x", i, key)
 		}
 	}
 	return nil
@@ -4296,6 +4419,14 @@ func cloneStringIntMap(src map[string]int) map[string]int {
 		out[key] = value
 	}
 	return out
+}
+
+func sumStringIntValues(values map[string]int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total
 }
 
 func runDriverLoadPhase(ctx context.Context, cfg config, coll *mongo.Collection, prebuilt []bson.D) (phaseResult, error) {

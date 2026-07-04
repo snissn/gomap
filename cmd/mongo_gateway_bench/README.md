@@ -159,16 +159,20 @@ distribution evidence only, not as a cluster throughput or scaleout claim.
 
 `-route-mode production` is a fail-closed production route proof. With
 `-route-groups 1`, it proves local-owner routed commits. With
-`-route-groups >1`, it proves remote-owner redirect/no-local-mutation behavior
-only; it does not forward, execute on a remote group, fan out, or claim
-horizontal scale. Production mode uses command WAL and BSON collection storage,
-routes collection creation and each measured `InsertOne` through the production
-cluster submitter boundary, and emits `production_route_evidence` only for the
-supported proof scopes. It does not emit local `route_evidence`. The current
-production proof accepts only the serial insert-only shape: `-batch-size 1`,
-`-insert-producers 1`, `-secondary-indexes 0`, `-reads 0`, `-range-reads 0`,
-`-updates 0`, `-deletes 0`, no range/indexed-update options, and no concurrent
-phases.
+`-route-groups >1`, it defaults to remote-owner redirect/no-local-mutation
+behavior only; it does not forward, execute on a remote group, fan out, or claim
+horizontal scale. Passing `-production-route-remote-execution` with
+`-route-groups >1` opts into a static, in-process remote-owner routed write
+proof: the Mongo/nativewire write enters through the local submit boundary,
+routes to the owning registered group, and records route/commit/apply evidence
+for that owner group. Production mode uses command WAL and BSON collection
+storage, routes collection creation and each measured `InsertOne` through the
+production cluster submitter boundary, and emits `production_route_evidence`
+only for the supported proof scopes. It does not emit local `route_evidence`.
+The current production proof accepts only the serial insert-only shape:
+`-batch-size 1`, `-insert-producers 1`, `-secondary-indexes 0`, `-reads 0`,
+`-range-reads 0`, `-updates 0`, `-deletes 0`, no range/indexed-update options,
+and no concurrent phases.
 
 Use a small production proof run when validating the route boundary:
 
@@ -205,6 +209,14 @@ Production remote-owner redirect proof JSON reports
 `real_routed_commits=false`, remote redirect counters, route group/leader/token
 partition hits, and empty commit/apply group hits. Treat this as redirect and
 zero-local-mutation evidence only, not as remote execution or scale evidence.
+
+Production remote-owner routed proof JSON reports
+`production_route_evidence_status=available_remote_owner_routed_commit` and
+`evidence_scope=production_remote_owner_routed_commit`, with
+`real_routed_commits=true`, remote forward counters, route group/leader/token
+partition hits, and commit/apply group hits on the owner group. Treat this as
+static in-process production-route correctness evidence, not as network leader
+forwarding, HA, rebalance, fanout, routed reads, or horizontal-scale evidence.
 
 Use `-insert-producers N` to split the insert load phase across producer
 goroutines. The effective producer count is capped at the number of insert
