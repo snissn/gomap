@@ -32248,15 +32248,27 @@ func (db *DB) observeAppendOnlyMutableEntries(entries int) {
 	}
 }
 
+func (db *DB) appendOnlyPressureLimitedCapacity(capacity int) int {
+	if db == nil {
+		return capacity
+	}
+	if threshold := db.mutableFlushThreshold(); threshold > 0 {
+		effectiveCap := memtableCapacity(threshold)
+		if shards := len(db.mutableShards); shards > 1 {
+			effectiveCap = shardCapacity(effectiveCap, shards)
+		}
+		if effectiveCap > 0 && (capacity <= 0 || effectiveCap < capacity) {
+			capacity = effectiveCap
+		}
+	}
+	return capacity
+}
+
 func (db *DB) appendOnlyEntryHintCapacityLimit(capacity, estimatedBytesPerEntry int) int {
 	if db == nil {
 		return appendOnlyEntryHintMaxEntries
 	}
-	if threshold := db.mutableFlushThreshold(); threshold > 0 {
-		if effectiveCap := memtableCapacity(threshold); effectiveCap > 0 && (capacity <= 0 || effectiveCap < capacity) {
-			capacity = effectiveCap
-		}
-	}
+	capacity = db.appendOnlyPressureLimitedCapacity(capacity)
 	if capacity <= 0 {
 		return appendOnlyEntryHintMaxEntries
 	}
@@ -32305,11 +32317,7 @@ func (db *DB) appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry in
 	// threshold under process pressure. Without this, we can still preallocate
 	// near static memtableCap even after pressure logic has lowered rotation
 	// thresholds, inflating peak RSS during restore workloads.
-	if threshold := db.mutableFlushThreshold(); threshold > 0 {
-		if effectiveCap := memtableCapacity(threshold); effectiveCap > 0 && effectiveCap < capacity {
-			capacity = effectiveCap
-		}
-	}
+	capacity = db.appendOnlyPressureLimitedCapacity(capacity)
 	hintEntries := int(db.appendOnlyEntryHint.Load())
 	if hintEntries <= 0 {
 		return capacity

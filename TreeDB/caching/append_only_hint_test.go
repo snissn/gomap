@@ -170,3 +170,31 @@ func TestAppendOnlyReserveDemandHintClampsToPressureCapacity(t *testing.T) {
 		t.Fatalf("reserve demand hint=%d want >=%d", hint, appendOnlyEntryHintMinEntries)
 	}
 }
+
+func TestAppendOnlyReserveDemandHintClampsToShardScaledPressureCapacity(t *testing.T) {
+	var cache DB
+	const shards = 16
+	const baseThreshold = int64(256 << 20)
+	const pressureThreshold = int64(64 << 20)
+	cache.mutableShards = make([]memShard, shards)
+	cache.memtableCap = shardCapacity(memtableCapacity(baseThreshold), shards)
+	cache.mutableThreshold.Store(pressureThreshold)
+	cache.appendOnlyEntryHint.Store(appendOnlyEntryHintMaxEntries)
+
+	gotCapacity := cache.appendOnlyMemtableCapacityHint(cache.memtableCap, appendOnlyEstimatedBytesPerEntryDefault)
+	wantCapacity := shardCapacity(memtableCapacity(pressureThreshold), shards)
+	if wantCapacity >= cache.memtableCap {
+		t.Fatalf("test setup invalid: pressure capacity=%d base shard capacity=%d", wantCapacity, cache.memtableCap)
+	}
+	if gotCapacity != wantCapacity {
+		t.Fatalf("pressure-limited capacity=%d want shard-scaled %d", gotCapacity, wantCapacity)
+	}
+
+	cache.appendOnlyEntryHint.Store(0)
+	cache.observeAppendOnlyReserveDemandEntries(appendOnlyEntryHintMaxEntries)
+	hint := int(cache.appendOnlyEntryHint.Load())
+	wantMax := appendOnlyEntryCapacityForBytes(wantCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+	if hint > wantMax {
+		t.Fatalf("reserve demand hint=%d want <= shard-scaled pressure entries %d", hint, wantMax)
+	}
+}
