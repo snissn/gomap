@@ -90,6 +90,54 @@ func TestCommandWALIntentRawKVPayloadSetsMaxEntryRevision(t *testing.T) {
 	}
 }
 
+func TestRawKVCommandWALRIDCacheUsesInlinePrefixAndOverflow(t *testing.T) {
+	cache := makeRawKVCommandWALRIDCache(1024)
+	for i := 0; i < rawKVCommandWALRIDInlineCacheEntries+1; i++ {
+		ptr := page.ValuePtr{FileID: page.ValueLogFileID(uint32(i + 1)), Offset: uint64(i + 1), Length: 8}
+		cache.store(ptr, uint64(i+10))
+	}
+
+	first := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 1, Length: 8}
+	if got, ok := cache.lookup(first); !ok || got != 10 {
+		t.Fatalf("lookup first=(%d,%t), want (10,true)", got, ok)
+	}
+
+	lastInline := page.ValuePtr{
+		FileID: page.ValueLogFileID(rawKVCommandWALRIDInlineCacheEntries),
+		Offset: uint64(rawKVCommandWALRIDInlineCacheEntries),
+		Length: 8,
+	}
+	if got, ok := cache.lookup(lastInline); !ok || got != uint64(rawKVCommandWALRIDInlineCacheEntries+9) {
+		t.Fatalf("lookup last inline=(%d,%t), want (%d,true)", got, ok, rawKVCommandWALRIDInlineCacheEntries+9)
+	}
+
+	overflow := page.ValuePtr{
+		FileID: page.ValueLogFileID(rawKVCommandWALRIDInlineCacheEntries + 1),
+		Offset: uint64(rawKVCommandWALRIDInlineCacheEntries + 1),
+		Length: 8,
+	}
+	if got, ok := cache.lookup(overflow); !ok || got != uint64(rawKVCommandWALRIDInlineCacheEntries+10) {
+		t.Fatalf("lookup overflow=(%d,%t), want (%d,true)", got, ok, rawKVCommandWALRIDInlineCacheEntries+10)
+	}
+	if cache.overflow == nil {
+		t.Fatal("overflow map is nil after overflow store")
+	}
+	if got := cache.overflowCount; got != 1 {
+		t.Fatalf("overflow count=%d, want 1", got)
+	}
+
+	cache.release()
+	if got, ok := cache.lookup(first); ok || got != 0 {
+		t.Fatalf("lookup after release=(%d,%t), want (0,false)", got, ok)
+	}
+	if cache.overflow != nil {
+		t.Fatal("overflow map retained after release")
+	}
+	if got := cache.overflowCount; got != 0 {
+		t.Fatalf("overflow count after release=%d, want 0", got)
+	}
+}
+
 func TestTrustedCommandWALIntentAppendsCanonicalCollectionPayload(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
