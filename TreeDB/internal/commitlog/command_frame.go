@@ -2260,10 +2260,17 @@ func encodeRawKVBatchPayloadPlannedTo(dst []byte, plan RawKVBatchPayloadPlan, sc
 		dst = make([]byte, plan.PayloadLen)
 	} else {
 		dst = dst[:plan.PayloadLen]
+		clear(dst)
 	}
-	if n, err := writeRawKVBatchPayloadTo(dst, plan, scan); err != nil {
+	off := 0
+	if err := writeRawKVBatchPayloadPieces(plan, scan, func(part []byte) error {
+		copy(dst[off:], part)
+		off += len(part)
+		return nil
+	}); err != nil {
 		return nil, err
-	} else if n != plan.PayloadLen {
+	}
+	if off != plan.PayloadLen {
 		return nil, ErrCorrupt
 	}
 	return dst, nil
@@ -2318,103 +2325,8 @@ func writeRawKVBatchPayloadPieces(plan RawKVBatchPayloadPlan, scan RawKVBatchOpe
 	return nil
 }
 
-func writeRawKVBatchPayloadTo(dst []byte, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) (int, error) {
-	if err := plan.validate(); err != nil {
-		return 0, err
-	}
-	if len(dst) < plan.PayloadLen {
-		return 0, ErrCorrupt
-	}
-	payloadVersion := rawKVBatchPayloadVersion
-	if plan.EntryRevisions {
-		payloadVersion = rawKVBatchPayloadVersionWithRevisions
-	}
-	binary.LittleEndian.PutUint16(dst[0:2], payloadVersion)
-	binary.LittleEndian.PutUint32(dst[2:6], uint32(plan.Count))
-	if scan == nil {
-		if plan.Count != 0 {
-			return 0, ErrCorrupt
-		}
-		return rawKVBatchHeaderSize, nil
-	}
-	count := 0
-	written := rawKVBatchHeaderSize
-	if err := scan(func(op RawKVOperation) error {
-		n, err := writeRawKVOperationPayloadTo(dst[written:], op, plan.EntryRevisions)
-		if err != nil {
-			return err
-		}
-		count++
-		written += n
-		return nil
-	}); err != nil {
-		return 0, err
-	}
-	if count != plan.Count || written != plan.PayloadLen {
-		return 0, ErrCorrupt
-	}
-	return written, nil
-}
-
 func writeRawKVOperationPayloadPieces(op RawKVOperation, write func([]byte) error) (int, error) {
 	return writeRawKVOperationPayloadPiecesWithRevisionFlag(op, false, write)
-}
-
-func writeRawKVOperationPayloadTo(dst []byte, op RawKVOperation, entryRevisions bool) (int, error) {
-	keyBytes, valueBytes, err := rawKVOperationPayloadLens(&op)
-	if err != nil {
-		return 0, err
-	}
-	if op.Revision != 0 && !entryRevisions {
-		return 0, ErrCorrupt
-	}
-	keyLen := uint32(len(op.Key))
-	valueLen := uint32(len(op.Value))
-	if op.Op == RawKVOpSetRID {
-		valueLen = 8
-	} else if op.Op == RawKVOpDeleteRange {
-		keyLen, _, err = rawKVRangeBoundEncodedLen(op.Key)
-		if err != nil {
-			return 0, err
-		}
-		valueLen, _, err = rawKVRangeBoundEncodedLen(op.Value)
-		if err != nil {
-			return 0, err
-		}
-	}
-	headerSize := rawKVOperationHeaderSize(entryRevisions)
-	needed := headerSize + keyBytes + valueBytes
-	if needed < headerSize || needed > len(dst) {
-		return 0, ErrCorrupt
-	}
-	dst[0] = byte(op.Op)
-	binary.LittleEndian.PutUint32(dst[1:5], keyLen)
-	binary.LittleEndian.PutUint32(dst[5:9], valueLen)
-	if entryRevisions {
-		binary.LittleEndian.PutUint64(dst[9:17], op.Revision)
-	}
-	off := headerSize
-	if len(op.Key) > 0 {
-		copy(dst[off:], op.Key)
-		off += len(op.Key)
-	}
-	switch op.Op {
-	case RawKVOpSetRID:
-		if off > len(dst) || len(dst)-off < 8 {
-			return 0, ErrCorrupt
-		}
-		binary.LittleEndian.PutUint64(dst[off:off+8], op.RID)
-		off += 8
-	default:
-		if len(op.Value) > 0 {
-			copy(dst[off:], op.Value)
-			off += len(op.Value)
-		}
-	}
-	if off != needed {
-		return 0, ErrCorrupt
-	}
-	return needed, nil
 }
 
 func writeRawKVOperationPayloadPiecesWithRevisionFlag(op RawKVOperation, entryRevisions bool, write func([]byte) error) (int, error) {
