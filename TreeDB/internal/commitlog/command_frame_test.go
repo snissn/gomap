@@ -1023,6 +1023,110 @@ func TestWriteRawKVBatchPayloadToOverwritesReusedBufferPrefix(t *testing.T) {
 	}
 }
 
+func TestWriteRawKVOperationPayloadToDeleteRangeBoundHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		start        []byte
+		end          []byte
+		wantStartLen uint32
+		wantEndLen   uint32
+		wantStartNil bool
+		wantEndNil   bool
+	}{
+		{
+			name:         "both_unbounded",
+			start:        nil,
+			end:          nil,
+			wantStartLen: rawKVNilRangeBoundLenUint32,
+			wantEndLen:   rawKVNilRangeBoundLenUint32,
+			wantStartNil: true,
+			wantEndNil:   true,
+		},
+		{
+			name:         "nil_start",
+			start:        nil,
+			end:          []byte("omega"),
+			wantStartLen: rawKVNilRangeBoundLenUint32,
+			wantEndLen:   uint32(len("omega")),
+			wantStartNil: true,
+		},
+		{
+			name:         "empty_start",
+			start:        []byte{},
+			end:          []byte("omega"),
+			wantStartLen: 0,
+			wantEndLen:   uint32(len("omega")),
+		},
+		{
+			name:         "nil_end",
+			start:        []byte("prefix"),
+			end:          nil,
+			wantStartLen: uint32(len("prefix")),
+			wantEndLen:   rawKVNilRangeBoundLenUint32,
+			wantEndNil:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := RawKVOperation{Op: RawKVOpDeleteRange, Key: tc.start, Value: tc.end}
+			keyBytes, valueBytes, err := rawKVOperationPayloadLens(&op)
+			if err != nil {
+				t.Fatalf("rawKVOperationPayloadLens: %v", err)
+			}
+			opLen := rawKVOperationHeaderSize(false) + keyBytes + valueBytes
+			dst := bytes.Repeat([]byte{0xcc}, opLen+8)
+			n, err := writeRawKVOperationPayloadTo(dst[:opLen], op, false)
+			if err != nil {
+				t.Fatalf("writeRawKVOperationPayloadTo: %v", err)
+			}
+			if n != opLen {
+				t.Fatalf("written bytes=%d want %d", n, opLen)
+			}
+			if got := dst[0]; got != byte(RawKVOpDeleteRange) {
+				t.Fatalf("op byte=%d want %d", got, RawKVOpDeleteRange)
+			}
+			if got := binary.LittleEndian.Uint32(dst[1:5]); got != tc.wantStartLen {
+				t.Fatalf("start encoded len=%d want %d", got, tc.wantStartLen)
+			}
+			if got := binary.LittleEndian.Uint32(dst[5:9]); got != tc.wantEndLen {
+				t.Fatalf("end encoded len=%d want %d", got, tc.wantEndLen)
+			}
+			if !bytes.Equal(dst[opLen:], bytes.Repeat([]byte{0xcc}, 8)) {
+				t.Fatalf("writeRawKVOperationPayloadTo wrote beyond operation payload")
+			}
+
+			payload := make([]byte, rawKVBatchHeaderSize+n)
+			binary.LittleEndian.PutUint16(payload[0:2], rawKVBatchPayloadVersion)
+			binary.LittleEndian.PutUint32(payload[2:6], 1)
+			copy(payload[rawKVBatchHeaderSize:], dst[:n])
+			var gotStart, gotEnd []byte
+			if err := ScanRawKVBatchPayload(payload, func(op RawKVOp, key, value []byte) error {
+				if op != RawKVOpDeleteRange {
+					t.Fatalf("scanned op=%v want DeleteRange", op)
+				}
+				gotStart = key
+				gotEnd = value
+				return nil
+			}); err != nil {
+				t.Fatalf("ScanRawKVBatchPayload: %v", err)
+			}
+			if tc.wantStartNil {
+				if gotStart != nil {
+					t.Fatalf("start bound=%q want nil", gotStart)
+				}
+			} else if gotStart == nil || !bytes.Equal(gotStart, tc.start) {
+				t.Fatalf("start bound=%q want %q", gotStart, tc.start)
+			}
+			if tc.wantEndNil {
+				if gotEnd != nil {
+					t.Fatalf("end bound=%q want nil", gotEnd)
+				}
+			} else if gotEnd == nil || !bytes.Equal(gotEnd, tc.end) {
+				t.Fatalf("end bound=%q want %q", gotEnd, tc.end)
+			}
+		})
+	}
+}
+
 func TestRawKVBatchPayloadBuilderMatchesSliceEncoder(t *testing.T) {
 	ops := []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
@@ -1199,6 +1303,49 @@ func TestWriterAppendRawKVBatchPayloadScanCommandDirectBuffered(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 	assertRawKVCommandFramePayload(t, path, 7, 3, payload)
+}
+
+func TestWriterAppendRawKVBatchPayloadScanCommandDirectBufferedRollsBackOnScanMismatch(t *testing.T) {
+	plannedOps := []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+	}
+	plannedScan := rawKVOperationSliceScanner(plannedOps)
+	plan, err := PlanRawKVBatchPayloadScan(plannedScan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan: %v", err)
+	}
+	mismatchedScan := rawKVOperationSliceScanner([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpDelete, Key: []byte("bravo")},
+	})
+
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{DeferredCommandBufferSize: 4096})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(7, 3, plan, mismatchedScan); !errors.Is(err, ErrCorrupt) {
+		_ = w.Close()
+		t.Fatalf("mismatched scan append error=%v, want ErrCorrupt", err)
+	}
+	if got := len(w.commandBuf); got != 0 {
+		_ = w.Close()
+		t.Fatalf("command buffer len after failed append=%d want 0", got)
+	}
+
+	payload, err := EncodeRawKVBatchPayload(plannedOps)
+	if err != nil {
+		_ = w.Close()
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(8, 4, plan, plannedScan); err != nil {
+		_ = w.Close()
+		t.Fatalf("valid append after rollback: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	assertRawKVCommandFramePayload(t, path, 8, 4, payload)
 }
 
 func TestWriterAppendRawKVBatchPayloadScanCommandDirectLarge(t *testing.T) {
