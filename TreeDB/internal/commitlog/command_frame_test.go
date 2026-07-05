@@ -955,6 +955,74 @@ func TestEncodeRawKVBatchPayloadScanMatchesSliceEncoder(t *testing.T) {
 	}
 }
 
+func TestWriteRawKVBatchPayloadToMatchesSliceEncoderAndBoundsDestination(t *testing.T) {
+	ops := []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one"), Revision: 11},
+		{Op: RawKVOpDelete, Key: []byte("bravo"), Revision: 12},
+		{Op: RawKVOpSetRID, Key: []byte("external"), RID: 42, Revision: 13},
+		{Op: RawKVOpDeleteRange, Key: nil, Value: []byte("omega")},
+		{Op: RawKVOpDeleteRange, Key: []byte("prefix"), Value: nil},
+	}
+	scan := rawKVOperationSliceScanner(ops)
+	plan, err := PlanRawKVBatchPayloadScan(scan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan: %v", err)
+	}
+	want := encodeRawKVBatchPayloadWithPiecesForTest(t, plan, scan)
+	dst := bytes.Repeat([]byte{0xff}, plan.PayloadLen+16)
+	n, err := writeRawKVBatchPayloadTo(dst[:plan.PayloadLen], plan, scan)
+	if err != nil {
+		t.Fatalf("writeRawKVBatchPayloadTo: %v", err)
+	}
+	if n != len(want) {
+		t.Fatalf("written bytes=%d want %d", n, len(want))
+	}
+	if !bytes.Equal(dst[:n], want) {
+		t.Fatalf("payload mismatch\ngot  %x\nwant %x", dst[:n], want)
+	}
+	if !bytes.Equal(dst[plan.PayloadLen:], bytes.Repeat([]byte{0xff}, 16)) {
+		t.Fatalf("writeRawKVBatchPayloadTo wrote beyond planned payload")
+	}
+	if _, err := writeRawKVBatchPayloadTo(make([]byte, plan.PayloadLen-1), plan, scan); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("short destination error=%v, want ErrCorrupt", err)
+	}
+}
+
+func TestWriteRawKVBatchPayloadToOverwritesReusedBufferPrefix(t *testing.T) {
+	largeOps := []RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpSetRID, Key: []byte("external"), RID: 42, Revision: 9},
+	}
+	largeScan := rawKVOperationSliceScanner(largeOps)
+	largePlan, err := PlanRawKVBatchPayloadScan(largeScan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan large: %v", err)
+	}
+	largePayload := encodeRawKVBatchPayloadWithPiecesForTest(t, largePlan, largeScan)
+	buf := bytes.Repeat([]byte{0xee}, len(largePayload))
+	if _, err := writeRawKVBatchPayloadTo(buf, largePlan, largeScan); err != nil {
+		t.Fatalf("writeRawKVBatchPayloadTo large: %v", err)
+	}
+
+	smallOps := []RawKVOperation{{Op: RawKVOpDelete, Key: []byte("alpha")}}
+	smallScan := rawKVOperationSliceScanner(smallOps)
+	smallPlan, err := PlanRawKVBatchPayloadScan(smallScan)
+	if err != nil {
+		t.Fatalf("PlanRawKVBatchPayloadScan small: %v", err)
+	}
+	smallPayload := encodeRawKVBatchPayloadWithPiecesForTest(t, smallPlan, smallScan)
+	n, err := writeRawKVBatchPayloadTo(buf[:smallPlan.PayloadLen], smallPlan, smallScan)
+	if err != nil {
+		t.Fatalf("writeRawKVBatchPayloadTo small: %v", err)
+	}
+	if n != len(smallPayload) || !bytes.Equal(buf[:n], smallPayload) {
+		t.Fatalf("reused buffer payload mismatch\ngot  %x\nwant %x", buf[:n], smallPayload)
+	}
+	if !bytes.Equal(buf[n:], largePayload[n:]) {
+		t.Fatalf("writeRawKVBatchPayloadTo touched bytes outside reused prefix")
+	}
+}
+
 func TestRawKVBatchPayloadBuilderMatchesSliceEncoder(t *testing.T) {
 	ops := []RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
@@ -1179,6 +1247,23 @@ func rawKVOperationSliceScanner(ops []RawKVOperation) RawKVBatchOperationScanner
 		}
 		return nil
 	}
+}
+
+func encodeRawKVBatchPayloadWithPiecesForTest(t *testing.T, plan RawKVBatchPayloadPlan, scan RawKVBatchOperationScanner) []byte {
+	t.Helper()
+	payload := make([]byte, plan.PayloadLen)
+	off := 0
+	if err := writeRawKVBatchPayloadPieces(plan, scan, func(part []byte) error {
+		copy(payload[off:], part)
+		off += len(part)
+		return nil
+	}); err != nil {
+		t.Fatalf("writeRawKVBatchPayloadPieces: %v", err)
+	}
+	if off != plan.PayloadLen {
+		t.Fatalf("piece payload bytes=%d want %d", off, plan.PayloadLen)
+	}
+	return payload
 }
 
 func assertRawKVCommandFramePayload(t *testing.T, path string, lsn, baseAppliedLSN uint64, payload []byte) {
