@@ -770,7 +770,19 @@ func BenchmarkZipperPrepareReadOnlyManyLeafRandom(b *testing.B) {
 	benchmarkZipperPrepareReadOnlyRandom(b, 8192, 1024)
 }
 
+func BenchmarkZipperPrepareReadOnlyManyLeafRandomFresh(b *testing.B) {
+	benchmarkZipperPrepareReadOnlyRandomFresh(b, 8192, 1024)
+}
+
 func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int) {
+	benchmarkZipperPrepareReadOnlyRandomImpl(b, keyCount, batchSize, true)
+}
+
+func benchmarkZipperPrepareReadOnlyRandomFresh(b *testing.B, keyCount, batchSize int) {
+	benchmarkZipperPrepareReadOnlyRandomImpl(b, keyCount, batchSize, false)
+}
+
+func benchmarkZipperPrepareReadOnlyRandomImpl(b *testing.B, keyCount, batchSize int, reusePrepareBuffers bool) {
 	_, z := newReadOnlyPrepareZipper(b)
 	rootID := buildReadOnlyPrepareRootWithKeys(b, z, keyCount)
 	delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
@@ -792,7 +804,10 @@ func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int)
 	if summary.Spans == 0 || summary.SpanOps == 0 {
 		b.Fatalf("initial prepare spans/ops=%d/%d want non-zero", summary.Spans, summary.SpanOps)
 	}
-	opts := first.ReuseOptions()
+	opts := ReadOnlyPrepareOptions{}
+	if reusePrepareBuffers {
+		opts = first.ReuseOptions()
+	}
 	last := first
 	b.ReportAllocs()
 	b.SetBytes(int64(summary.SpanBytes))
@@ -803,7 +818,9 @@ func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int)
 			b.Fatalf("PrepareReadOnly: %v", err)
 		}
 		last = prepared
-		opts = prepared.ReuseOptions()
+		if reusePrepareBuffers {
+			opts = prepared.ReuseOptions()
+		}
 	}
 	b.StopTimer()
 	lastSummary := last.LeafSpanSummary()
