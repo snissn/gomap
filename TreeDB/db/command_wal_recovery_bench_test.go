@@ -1,10 +1,14 @@
 package db
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func BenchmarkCommandWALRawKVDirectWrite(b *testing.B) {
@@ -104,6 +108,54 @@ func BenchmarkCommandWALRawKVPointerDirectWrite(b *testing.B) {
 				batch := db.NewBatch().(*Batch)
 				if err := batch.SetPointer(key, ptr); err != nil {
 					b.Fatalf("SetPointer: %v", err)
+				}
+				if err := batch.Write(); err != nil {
+					b.Fatalf("Write: %v", err)
+				}
+				if err := batch.Close(); err != nil {
+					b.Fatalf("Close batch: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkCommandWALRawKVPointerBatchDirectWrite(b *testing.B) {
+	value := []byte("bench-value-backed-by-value-log")
+	for _, tc := range []struct {
+		name   string
+		unique bool
+	}{
+		{name: "repeated_pointer_256", unique: false},
+		{name: "unique_pointers_256", unique: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			dir := b.TempDir()
+			ptrs := writeValueLogRIDBatch(b, dir, 256, value)
+			if !tc.unique {
+				ptr := ptrs[0]
+				for i := range ptrs {
+					ptrs[i] = ptr
+				}
+			}
+			db, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				b.Fatalf("Open: %v", err)
+			}
+			defer db.Close()
+			keys := make([][]byte, len(ptrs))
+			for i := range keys {
+				keys[i] = []byte(fmt.Sprintf("bench-pointer-key-%06d", i))
+			}
+			b.ReportAllocs()
+			b.SetBytes(int64(len(ptrs) * (len(keys[0]) + len(value))))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				batch := db.NewBatch().(*Batch)
+				for j := range ptrs {
+					if err := batch.SetPointer(keys[j], ptrs[j]); err != nil {
+						b.Fatalf("SetPointer: %v", err)
+					}
 				}
 				if err := batch.Write(); err != nil {
 					b.Fatalf("Write: %v", err)
@@ -234,4 +286,34 @@ func commandWALBenchRawKVPayload(b testing.TB, ops int, valueSize int) []byte {
 		b.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
 	return payload
+}
+
+func writeValueLogRIDBatch(t testing.TB, dir string, count int, value []byte) []page.ValuePtr {
+	t.Helper()
+	valueLogDir := resolveStorageLayout(dir).valueVLogDir
+	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll value_vlog: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(valueLogDir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("New value writer: %v", err)
+	}
+	ptrs := make([]page.ValuePtr, count)
+	for i := range ptrs {
+		ptr, err := w.Append(0, nil, uint64(i+1), value)
+		if err != nil {
+			_ = w.Close()
+			t.Fatalf("Append value log: %v", err)
+		}
+		ptrs[i] = ptr
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close value writer: %v", err)
+	}
+	return ptrs
 }
