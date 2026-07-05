@@ -48,12 +48,14 @@ func TestSyncDurabilityBoundaryDoesNotCheckpoint(t *testing.T) {
 
 func BenchmarkSyncLatencyCached(b *testing.B) {
 	tests := []struct {
-		name         string
-		durability   DurabilityMode
-		commandWAL   bool
-		batchSize    int
-		byteHint     bool
-		nonZeroValue bool
+		name                     string
+		durability               DurabilityMode
+		commandWAL               bool
+		batchSize                int
+		byteHint                 bool
+		nonZeroValue             bool
+		valueSize                int
+		valueLogPointerThreshold int
 	}{
 		{name: "SetSync/wal_on_sync", durability: DurabilityDurable},
 		{name: "SetSync/wal_on_sync_command_wal", durability: DurabilityDurable, commandWAL: true},
@@ -64,6 +66,10 @@ func BenchmarkSyncLatencyCached(b *testing.B) {
 		{name: "BatchWriteSync/wal_on_relaxed_sync/32/entry_hint", durability: DurabilityWALOnRelaxed, batchSize: 32},
 		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/entry_hint", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32},
 		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/entry_hint_nonzero_value", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, nonZeroValue: true},
+		// Force 128B values onto the value-log path so allocation profiles expose
+		// append-buffer behavior without changing the rest of the low-fanout batch
+		// shape.
+		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/entry_hint_pointer_threshold_1", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, valueLogPointerThreshold: 1},
 		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/byte_hint", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, byteHint: true},
 		{name: "BatchWriteSync/wal_on_relaxed_sync_command_wal/32/byte_hint_nonzero_value", durability: DurabilityWALOnRelaxed, commandWAL: true, batchSize: 32, byteHint: true, nonZeroValue: true},
 		{name: "BatchWriteSync/wal_on_sync_command_wal/128/entry_hint", durability: DurabilityDurable, commandWAL: true, batchSize: 128},
@@ -76,13 +82,20 @@ func BenchmarkSyncLatencyCached(b *testing.B) {
 				Dir:        b.TempDir(),
 				Durability: tt.durability,
 				CommandWAL: tt.commandWAL,
+				ValueLog: ValueLogOptions{
+					PointerThreshold: tt.valueLogPointerThreshold,
+				},
 			})
 			if err != nil {
 				b.Fatalf("open: %v", err)
 			}
 			defer func() { _ = d.Close() }()
 
-			val := make([]byte, 128)
+			valueSize := tt.valueSize
+			if valueSize <= 0 {
+				valueSize = 128
+			}
+			val := make([]byte, valueSize)
 			if tt.nonZeroValue {
 				for i := range val {
 					val[i] = byte(i + 1)

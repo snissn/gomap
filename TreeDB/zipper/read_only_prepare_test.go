@@ -770,6 +770,10 @@ func BenchmarkZipperPrepareReadOnlyManyLeafRandom(b *testing.B) {
 	benchmarkZipperPrepareReadOnlyRandom(b, 8192, 1024)
 }
 
+func BenchmarkZipperPrepareReadOnlyManyLeafRandomFresh(b *testing.B) {
+	benchmarkZipperPrepareReadOnlyRandomFresh(b, 8192, 1024)
+}
+
 func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int) {
 	_, z := newReadOnlyPrepareZipper(b)
 	rootID := buildReadOnlyPrepareRootWithKeys(b, z, keyCount)
@@ -804,6 +808,49 @@ func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int)
 		}
 		last = prepared
 		opts = prepared.ReuseOptions()
+	}
+	b.StopTimer()
+	lastSummary := last.LeafSpanSummary()
+	lastWorkerSummary := last.LeafSpanWorkerRangeSummary(4)
+	b.ReportMetric(float64(lastSummary.Spans), "leaf_spans/op")
+	b.ReportMetric(float64(lastSummary.SpanOps), "span_ops/op")
+	b.ReportMetric(float64(lastSummary.SpanBytes), "span_bytes/op")
+	b.ReportMetric(float64(lastWorkerSummary.Ranges), "worker_ranges/op")
+	b.ReportMetric(float64(lastWorkerSummary.MaxRangeOps), "max_worker_ops/op")
+}
+
+func benchmarkZipperPrepareReadOnlyRandomFresh(b *testing.B, keyCount, batchSize int) {
+	_, z := newReadOnlyPrepareZipper(b)
+	rootID := buildReadOnlyPrepareRootWithKeys(b, z, keyCount)
+	delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < batchSize; i++ {
+		idx := (i*7919 + 17) % keyCount
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", idx)), []byte("new-value")); err != nil {
+			b.Fatalf("Set delta: %v", err)
+		}
+	}
+	delta.SortedEntries()
+
+	first, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		b.Fatalf("initial PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(b, first)
+	summary := first.LeafSpanSummary()
+	if summary.Spans == 0 || summary.SpanOps == 0 {
+		b.Fatalf("initial prepare spans/ops=%d/%d want non-zero", summary.Spans, summary.SpanOps)
+	}
+	last := first
+	b.ReportAllocs()
+	b.SetBytes(int64(summary.SpanBytes))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+		if err != nil {
+			b.Fatalf("PrepareReadOnly: %v", err)
+		}
+		last = prepared
 	}
 	b.StopTimer()
 	lastSummary := last.LeafSpanSummary()
