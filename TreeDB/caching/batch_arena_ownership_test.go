@@ -66,7 +66,7 @@ func TestBatchArenaLeases_CopiedMemtablesMatchOwnershipMode(t *testing.T) {
 		wantLeases bool
 	}{
 		{mode: "append_only", wantLeases: true},
-		{mode: "hash_sorted", wantLeases: true},
+		{mode: "hash_sorted", wantLeases: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -119,7 +119,7 @@ func TestBatchArenaLeases_CopiedMemtablesMatchOwnershipMode(t *testing.T) {
 }
 
 func TestBatchArenaLeases_ReleasedAfterCheckpoint(t *testing.T) {
-	for _, mode := range []string{"btree", "append_only", "hash_sorted"} {
+	for _, mode := range []string{"btree", "append_only"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			db, err := Open(dir, NewMockBackend(), Options{
