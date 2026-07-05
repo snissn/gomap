@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,30 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+type commandWALCountingValueLogAppender struct {
+	inner   ValueLogAppender
+	flushes int
+	syncs   int
+}
+
+func (a *commandWALCountingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	return a.inner.AppendValues(values)
+}
+
+func (a *commandWALCountingValueLogAppender) Flush() error {
+	a.flushes++
+	return a.inner.Flush()
+}
+
+func (a *commandWALCountingValueLogAppender) Sync() error {
+	a.syncs++
+	return a.inner.Sync()
+}
+
+func (a *commandWALCountingValueLogAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return a.inner.CurrentValueLogSegment()
+}
 
 func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
 	var nilIntent *CommandWALIntent
@@ -298,6 +323,96 @@ func TestAppendRawKVCommandWALOrderedEntryScanStreamsReplay(t *testing.T) {
 	}
 	if len(got) != 3 || got[0].Type != batchpkg.OpPut || string(got[0].Key) != "alpha" || string(got[0].Value) != "one" || got[1].Type != batchpkg.OpDelete || string(got[1].Key) != "bravo" || got[2].Type != batchpkg.OpPut || string(got[2].Key) != "charlie" || string(got[2].Value) != strings.Repeat("x", 128) {
 		t.Fatalf("decoded scan ops=%+v", got)
+	}
+}
+
+func TestAppendRawKVCommandWALOrderedEntryScanFlushesFreshValueLogPointer(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	inner := d.currentValueLogAppender()
+	if inner == nil {
+		_ = d.Close()
+		t.Fatalf("command WAL value-log appender unavailable")
+	}
+	counting := &commandWALCountingValueLogAppender{inner: inner}
+	d.SetValueLogAppender(counting)
+
+	ptrs, err := d.AppendValueLogValues([][]byte{bytes.Repeat([]byte("fresh-pointer-value|"), 16)})
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("AppendValueLogValues: %v", err)
+	}
+	if len(ptrs) != 1 {
+		_ = d.Close()
+		t.Fatalf("AppendValueLogValues returned %d ptrs, want 1", len(ptrs))
+	}
+	ptr := ptrs[0]
+	path, fileID, ok := counting.CurrentValueLogSegment()
+	if !ok || path == "" || fileID != ptr.FileID {
+		_ = d.Close()
+		t.Fatalf("CurrentValueLogSegment=(%q,%d,%t), ptr file_id=%d", path, fileID, ok, ptr.FileID)
+	}
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		_ = d.Close()
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+	if _, err := d.valueLogManager.ReadRIDUnverified(ptr); !isCommandWALRIDLookupVisibilityError(err) {
+		_ = d.Close()
+		t.Fatalf("ReadRIDUnverified before flush error=%v, want short-read visibility error", err)
+	}
+
+	entries := []batchpkg.Entry{{
+		Type:     batchpkg.OpPut,
+		Key:      []byte("fresh-pointer"),
+		IsPtr:    true,
+		ValuePtr: ptr,
+	}}
+	lsn, err := d.AppendRawKVCommandWALOrderedEntryScan(func(emit func(batchpkg.Entry) error) error {
+		for i := range entries {
+			if err := emit(entries[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, false)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("AppendRawKVCommandWALOrderedEntryScan: %v", err)
+	}
+	if lsn == 0 {
+		_ = d.Close()
+		t.Fatalf("AppendRawKVCommandWALOrderedEntryScan lsn=0")
+	}
+	if counting.flushes == 0 {
+		_ = d.Close()
+		t.Fatalf("value-log appender flushes=0, want retry path to flush fresh pointer segment")
+	}
+	if counting.syncs != 0 {
+		_ = d.Close()
+		t.Fatalf("value-log appender syncs=%d, want 0 for sync=false", counting.syncs)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	r, err := commitlog.NewReader(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer r.Close()
+	env, err := r.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	ops, err := commitlog.DecodeRawKVBatchPayload(env.Payload)
+	if err != nil {
+		t.Fatalf("DecodeRawKVBatchPayload: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Op != commitlog.RawKVOpSetRID || string(ops[0].Key) != "fresh-pointer" || ops[0].RID == 0 {
+		t.Fatalf("decoded ops=%+v, want single SetRID for fresh-pointer", ops)
 	}
 }
 

@@ -157,14 +157,34 @@ func (db *DB) releasePendingValueLogAppendFileIDsFromEntries(entries []batchpkg.
 	if db == nil || len(entries) == 0 {
 		return
 	}
-	release := make(map[page.ValuePtr]int64)
+	db.pendingValueLogAppendMu.Lock()
+	defer db.pendingValueLogAppendMu.Unlock()
 	for _, entry := range entries {
 		if entry.Type != batchpkg.OpPut || !entry.IsPtr || entry.ValuePtr.FileID == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
 			continue
 		}
-		release[entry.ValuePtr]++
+		refs := db.pendingValueLogAppendPtrRefs[entry.ValuePtr]
+		if refs <= 0 {
+			continue
+		}
+		if refs == 1 {
+			delete(db.pendingValueLogAppendPtrRefs, entry.ValuePtr)
+		} else {
+			db.pendingValueLogAppendPtrRefs[entry.ValuePtr] = refs - 1
+		}
+		fileRefs := db.pendingValueLogAppendFileIDRefs[entry.ValuePtr.FileID]
+		if fileRefs <= 1 {
+			delete(db.pendingValueLogAppendFileIDRefs, entry.ValuePtr.FileID)
+		} else {
+			db.pendingValueLogAppendFileIDRefs[entry.ValuePtr.FileID] = fileRefs - 1
+		}
 	}
-	db.releasePendingValueLogAppendPtrCounts(release)
+	if len(db.pendingValueLogAppendPtrRefs) == 0 {
+		db.pendingValueLogAppendPtrRefs = nil
+	}
+	if len(db.pendingValueLogAppendFileIDRefs) == 0 {
+		db.pendingValueLogAppendFileIDRefs = nil
+	}
 }
 
 func (db *DB) releasePendingValueLogAppendFileIDsFromBatch(delta *batchpkg.Batch) {

@@ -1107,6 +1107,18 @@ func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) (
 	return f.ReadAppend(ptr, verifyCRC, dst)
 }
 
+// ReadRIDUnverified reads only the record id metadata for a same-process
+// command-WAL reference. It intentionally skips payload verification.
+func (f *File) ReadRIDUnverified(ptr page.ValuePtr) (uint64, error) {
+	if f == nil || f.File == nil {
+		return 0, errors.New("valuelog: nil file")
+	}
+	if err := f.ensureCurrentWritableReadableFor(ptr); err != nil {
+		return 0, err
+	}
+	return ReadRIDAtUnverified(f.File, f.ID, ptr)
+}
+
 func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
 	oldLen := len(dst)
 	noteGrowReadAppendPayload(payloadLen)
@@ -1878,6 +1890,16 @@ func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][
 		i++
 	}
 	return dst, nil
+}
+
+// ReadRIDUnverified reads only record id metadata through the manager's
+// registered segment handle, avoiding per-lookup file opens on hot paths.
+func (m *Manager) ReadRIDUnverified(ptr page.ValuePtr) (uint64, error) {
+	f, err := m.fileFor(ptr.FileID)
+	if err != nil {
+		return 0, err
+	}
+	return f.ReadRIDUnverified(ptr)
 }
 
 func (m *Manager) fileFor(id uint32) (*File, error) {
