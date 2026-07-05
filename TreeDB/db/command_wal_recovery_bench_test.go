@@ -290,6 +290,11 @@ func commandWALBenchRawKVPayload(b testing.TB, ops int, valueSize int) []byte {
 
 func writeValueLogRIDBatch(t testing.TB, dir string, count int, value []byte) []page.ValuePtr {
 	t.Helper()
+	return writeValueLogRIDBatchFrom(t, dir, 1, count, value)
+}
+
+func writeValueLogRIDBatchFrom(t testing.TB, dir string, firstRID uint64, count int, value []byte) []page.ValuePtr {
+	t.Helper()
 	valueLogDir := resolveStorageLayout(dir).valueVLogDir
 	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll value_vlog: %v", err)
@@ -305,7 +310,7 @@ func writeValueLogRIDBatch(t testing.TB, dir string, count int, value []byte) []
 	}
 	ptrs := make([]page.ValuePtr, count)
 	for i := range ptrs {
-		ptr, err := w.Append(0, nil, uint64(i+1), value)
+		ptr, err := w.Append(0, nil, firstRID+uint64(i), value)
 		if err != nil {
 			_ = w.Close()
 			t.Fatalf("Append value log: %v", err)
