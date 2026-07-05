@@ -183,6 +183,99 @@ func TestHashSortedApplyCopySortedBatchTrusted_ConsecutiveSortedPendingChunkMark
 	}
 }
 
+func TestHashSortedPendingKeysSmallSingleStartsSmall(t *testing.T) {
+	m := NewHashSorted()
+	m.Set([]byte("key"), []byte("value"))
+
+	m.mu.RLock()
+	gotLen := len(m.pendingKeys)
+	gotCap := cap(m.pendingKeys)
+	m.mu.RUnlock()
+
+	if gotLen != 1 {
+		t.Fatalf("pending len=%d want 1", gotLen)
+	}
+	if gotCap != hashSortedPendingKeysInitCap {
+		t.Fatalf("pending cap=%d want %d", gotCap, hashSortedPendingKeysInitCap)
+	}
+}
+
+func TestHashSortedPendingKeysSmallBatchStartsSmall(t *testing.T) {
+	const batchSize = 32
+	m := NewHashSorted()
+	m.ApplyCopySortedBatchTrusted(hashSortedTestEntries(batchSize), false, true, nil)
+
+	m.mu.RLock()
+	gotLen := len(m.pendingKeys)
+	gotCap := cap(m.pendingKeys)
+	m.mu.RUnlock()
+
+	if gotLen != batchSize {
+		t.Fatalf("pending len=%d want %d", gotLen, batchSize)
+	}
+	if gotCap != hashSortedPendingKeysInitCap {
+		t.Fatalf("pending cap=%d want %d", gotCap, hashSortedPendingKeysInitCap)
+	}
+}
+
+func TestHashSortedPendingKeysUpgradeThresholdPreallocatesSealCap(t *testing.T) {
+	const batchSize = hashSortedPendingKeysUpgradeThreshold
+	m := NewHashSorted()
+	m.ApplyCopySortedBatchTrusted(hashSortedTestEntries(batchSize), false, true, nil)
+
+	m.mu.RLock()
+	gotLen := len(m.pendingKeys)
+	gotCap := cap(m.pendingKeys)
+	m.mu.RUnlock()
+
+	if gotLen != batchSize {
+		t.Fatalf("pending len=%d want %d", gotLen, batchSize)
+	}
+	if gotCap != hashSortedSealKeysThreshold {
+		t.Fatalf("pending cap=%d want %d", gotCap, hashSortedSealKeysThreshold)
+	}
+}
+
+func TestHashSortedPendingKeysSealHandoffUsesFreshBackingArray(t *testing.T) {
+	indexer := &HashSortedIndexer{ch: make(chan hashSortedIndexWork, 1)}
+	m := NewHashSortedWithCapacityAndIndexer(0, indexer)
+
+	m.ApplyCopySortedBatchTrusted(hashSortedTestEntries(hashSortedSealKeysThreshold), false, true, nil)
+
+	var work hashSortedIndexWork
+	select {
+	case work = <-indexer.ch:
+	default:
+		t.Fatalf("expected sealed pending-key chunk")
+	}
+	if len(work.keys) != hashSortedSealKeysThreshold {
+		t.Fatalf("sealed chunk len=%d want %d", len(work.keys), hashSortedSealKeysThreshold)
+	}
+	sealedFirst := work.keys[0]
+	sealedLast := work.keys[len(work.keys)-1]
+	sealedBacking := &work.keys[0]
+
+	m.Set([]byte("z-next"), []byte("value"))
+
+	m.mu.RLock()
+	pendingLen := len(m.pendingKeys)
+	var pendingBacking *string
+	if pendingLen > 0 {
+		pendingBacking = &m.pendingKeys[0]
+	}
+	m.mu.RUnlock()
+
+	if pendingLen != 1 {
+		t.Fatalf("pending len after post-seal append=%d want 1", pendingLen)
+	}
+	if pendingBacking == sealedBacking {
+		t.Fatalf("post-seal append reused sealed chunk backing array")
+	}
+	if work.keys[0] != sealedFirst || work.keys[len(work.keys)-1] != sealedLast {
+		t.Fatalf("sealed chunk mutated after post-seal append: first=%q/%q last=%q/%q", work.keys[0], sealedFirst, work.keys[len(work.keys)-1], sealedLast)
+	}
+}
+
 func BenchmarkHashSortedApplyCopySortedBatchTrusted(b *testing.B) {
 	const batchSize = 32
 	const valueSize = 128
@@ -215,4 +308,52 @@ func BenchmarkHashSortedApplyCopySortedBatchTrusted(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkHashSortedPendingKeys(b *testing.B) {
+	value := []byte("value")
+
+	b.Run("single_key", func(b *testing.B) {
+		key := []byte("key")
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			m := NewHashSorted()
+			m.Set(key, value)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		n    int
+	}{
+		{name: "small_batch_32", n: 32},
+		{name: "upgrade_threshold_4096", n: hashSortedPendingKeysUpgradeThreshold},
+		{name: "seal_threshold_32768", n: hashSortedSealKeysThreshold},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			entries := hashSortedTestEntries(tc.n)
+			indexer := &HashSortedIndexer{ch: make(chan hashSortedIndexWork, 1)}
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				m := NewHashSortedWithCapacityAndIndexer(0, indexer)
+				m.ApplyCopySortedBatchTrusted(entries, false, true, nil)
+				if tc.n >= hashSortedSealKeysThreshold {
+					<-indexer.ch
+				}
+			}
+		})
+	}
+}
+
+func hashSortedTestEntries(n int) []batchpkg.Entry {
+	entries := make([]batchpkg.Entry, n)
+	for i := range entries {
+		entries[i] = batchpkg.Entry{
+			Type:  batchpkg.OpPut,
+			Key:   []byte(fmt.Sprintf("k%08d", i)),
+			Value: []byte("value"),
+		}
+	}
+	return entries
 }
