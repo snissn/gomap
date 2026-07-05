@@ -2400,6 +2400,9 @@ func writeRawKVOperationPayloadTo(dst []byte, op RawKVOperation, entryRevisions 
 	}
 	switch op.Op {
 	case RawKVOpSetRID:
+		if off > len(dst) || len(dst)-off < 8 {
+			return 0, ErrCorrupt
+		}
 		binary.LittleEndian.PutUint64(dst[off:off+8], op.RID)
 		off += 8
 	default:
