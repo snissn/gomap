@@ -953,8 +953,9 @@ func (m *HashSorted) notePendingKeyOrderLocked(key string) {
 func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	m.sortedValid = false
 	if m.pendingKeys == nil {
-		m.pendingKeys = make([]string, 0, hashSortedSealKeysThreshold)
+		m.pendingKeys = make([]string, 0, hashSortedPendingKeysInitialCap(1))
 	}
+	m.maybeUpgradePendingKeysLocked(1)
 	m.notePendingKeyOrderLocked(key)
 	m.pendingKeys = append(m.pendingKeys, key)
 	m.pendingBytes += len(key)
@@ -976,11 +977,9 @@ func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int, keysSor
 	}
 	m.sortedValid = false
 	if m.pendingKeys == nil {
-		c := hashSortedSealKeysThreshold
-		if len(keys) > c {
-			c = len(keys)
-		}
-		m.pendingKeys = make([]string, 0, c)
+		m.pendingKeys = make([]string, 0, hashSortedPendingKeysInitialCap(len(keys)))
+	} else {
+		m.maybeUpgradePendingKeysLocked(len(keys))
 	}
 	if len(m.pendingKeys) == 0 {
 		m.pendingSorted = keysSorted
@@ -1000,6 +999,46 @@ func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int, keysSor
 	m.pendingSorted = false
 	m.nextSeq++
 	return chunk, m.nextSeq, sorted
+}
+
+func hashSortedPendingKeysInitialCap(keys int) int {
+	if keys >= hashSortedPendingKeysUpgradeThreshold {
+		if keys > hashSortedSealKeysThreshold {
+			return keys
+		}
+		return hashSortedSealKeysThreshold
+	}
+	if keys > hashSortedPendingKeysInitCap {
+		return keys
+	}
+	return hashSortedPendingKeysInitCap
+}
+
+func (m *HashSorted) maybeUpgradePendingKeysLocked(additional int) {
+	if additional <= 0 {
+		return
+	}
+	required := len(m.pendingKeys) + additional
+	if required >= hashSortedPendingKeysUpgradeThreshold {
+		if cap(m.pendingKeys) >= hashSortedSealKeysThreshold {
+			return
+		}
+		nextCap := hashSortedSealKeysThreshold
+		if required > nextCap {
+			nextCap = required
+		}
+		next := make([]string, len(m.pendingKeys), nextCap)
+		copy(next, m.pendingKeys)
+		m.pendingKeys = next
+		return
+	}
+	if required <= cap(m.pendingKeys) {
+		return
+	}
+	nextCap := hashSortedPendingKeysUpgradeThreshold
+	next := make([]string, len(m.pendingKeys), nextCap)
+	copy(next, m.pendingKeys)
+	m.pendingKeys = next
 }
 
 func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, revision page.EntryRevision, steal bool) ([]string, uint64) {
