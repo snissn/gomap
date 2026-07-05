@@ -9997,12 +9997,12 @@ func (db *DB) releaseClosingEmptyMemtable(mt memtable.Table) {
 
 func cachedBatchWriteNeedsBatchArenaRetention(mt memtable.Table) bool {
 	// This helper is only used for the cached batch write path, where
-	// cachedBatchWriteUsesSteal governs whether a memtable receives stolen batch
-	// slices. append_only and hash_sorted are forced onto copy writes for this
-	// Steal-path decision; CopySortedBatchApplier value borrowing records its
-	// own leases separately. Skiplist is the other non-retained case: it accepts
-	// Steal calls, but still copies key/value bytes into its own arena, so
-	// batch-owned buffers can be released immediately after the write.
+	// cachedBatchWriteUsesSteal governs whether a memtable receives borrowed
+	// batch slices or copied writes. append_only and hash_sorted are forced onto
+	// copy writes there, so they do not need batch-arena leases. Skiplist is the
+	// other non-retained case: it accepts Steal calls, but still copies key/value
+	// bytes into its own arena, so batch-owned buffers can be released
+	// immediately after the write.
 	if !cachedBatchWriteUsesSteal(mt) {
 		return false
 	}
@@ -32233,7 +32233,7 @@ func (b *Batch) DisableStreamingBypass() {
 }
 
 // AttachStableViewValueLease declares that current SetView value slices are
-// backed by owner-managed buffers that may be retained by borrowing memtables.
+// backed by owner-managed buffers that may be retained by append-only memtables.
 // The buffers are never returned to TreeDB's batch arena pool; the caller must
 // also stop reusing them if StableViewValueLeaseConsumed reports true after a
 // write attempt. A zero-cap chunk is a borrow-permission signal for values with
