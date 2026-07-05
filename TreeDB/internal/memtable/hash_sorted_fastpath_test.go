@@ -1,6 +1,8 @@
 package memtable
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"testing"
@@ -45,16 +47,18 @@ func TestHashSortedApplyCopySortedBatchTrusted_AppendAndFallback(t *testing.T) {
 	m.Set([]byte("b"), []byte("v1"))
 
 	keyC := []byte("c")
+	valueC := []byte("v2")
 	entries := []batchpkg.Entry{
-		{Type: batchpkg.OpPut, Key: keyC, Value: []byte("v2")},
+		{Type: batchpkg.OpPut, Key: keyC, Value: valueC},
 		{Type: batchpkg.OpDelete, Key: []byte("d")},
 	}
-	if borrowed := m.ApplyCopySortedBatchTrusted(entries, true, true, nil); borrowed {
-		t.Fatalf("HashSorted reported borrowed values")
+	if borrowed := m.ApplyCopySortedBatchTrusted(entries, true, true, nil); !borrowed {
+		t.Fatalf("HashSorted did not report borrowed values")
 	}
 	keyC[0] = 'z'
+	valueC[0] = 'V'
 
-	if got, del, ok := m.Get([]byte("c")); !ok || del || string(got) != "v2" {
+	if got, del, ok := m.Get([]byte("c")); !ok || del || string(got) != "V2" {
 		t.Fatalf("key c mismatch: ok=%v del=%v val=%q", ok, del, string(got))
 	}
 	if got, del, ok := m.Get([]byte("d")); !ok || !del || got != nil {
@@ -65,13 +69,37 @@ func TestHashSortedApplyCopySortedBatchTrusted_AppendAndFallback(t *testing.T) {
 		{Type: batchpkg.OpPut, Key: []byte("a"), Value: []byte("va")},
 		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("vb")},
 	}
-	m.ApplyCopySortedBatchTrusted(fallbackEntries, true, true, nil)
+	if borrowed := m.ApplyCopySortedBatchTrusted(fallbackEntries, true, true, nil); !borrowed {
+		t.Fatalf("fallback path did not report borrowed values")
+	}
 
 	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "va" {
 		t.Fatalf("key a mismatch: ok=%v del=%v val=%q", ok, del, string(got))
 	}
 	if got, del, ok := m.Get([]byte("b")); !ok || del || string(got) != "vb" {
 		t.Fatalf("key b mismatch after update: ok=%v del=%v val=%q", ok, del, string(got))
+	}
+}
+
+func TestHashSortedApplyCopySortedBatchTrusted_CopyModeProtectsCallerMutation(t *testing.T) {
+	m := NewHashSorted()
+	key := []byte("a")
+	value := []byte("value")
+	want := bytes.Clone(value)
+
+	if borrowed := m.ApplyCopySortedBatchTrusted([]batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   key,
+		Value: value,
+	}}, false, true, nil); borrowed {
+		t.Fatalf("HashSorted reported borrowed values with borrowValues=false")
+	}
+	key[0] = 'z'
+	value[0] = 'X'
+
+	got, del, ok := m.Get([]byte("a"))
+	if !ok || del || !bytes.Equal(got, want) {
+		t.Fatalf("stored value mismatch after caller mutation: ok=%v del=%v got=%q want=%q", ok, del, got, want)
 	}
 }
 
@@ -152,5 +180,39 @@ func TestHashSortedApplyCopySortedBatchTrusted_ConsecutiveSortedPendingChunkMark
 		}
 	default:
 		t.Fatalf("expected sealed sorted pending chunk")
+	}
+}
+
+func BenchmarkHashSortedApplyCopySortedBatchTrusted(b *testing.B) {
+	const batchSize = 32
+	const valueSize = 128
+	var keyBufs [batchSize][8]byte
+	entries := make([]batchpkg.Entry, batchSize)
+	value := bytes.Repeat([]byte{0x7a}, valueSize)
+
+	for _, tc := range []struct {
+		name         string
+		borrowValues bool
+	}{
+		{name: "copy_values", borrowValues: false},
+		{name: "borrow_values", borrowValues: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			m := NewHashSorted()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				base := uint64(i * batchSize)
+				for j := 0; j < batchSize; j++ {
+					binary.BigEndian.PutUint64(keyBufs[j][:], base+uint64(j))
+					entries[j] = batchpkg.Entry{
+						Type:  batchpkg.OpPut,
+						Key:   keyBufs[j][:],
+						Value: value,
+					}
+				}
+				m.ApplyCopySortedBatchTrusted(entries, tc.borrowValues, true, nil)
+			}
+		})
 	}
 }
