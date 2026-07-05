@@ -987,12 +987,16 @@ func (w *Writer) AppendRawKVBatchPayloadScanCommandDirectTrusted(lsn, baseApplie
 		buf := w.commandBuf[off:newLen]
 		frame := buf[segmentHeaderSize : segmentHeaderSize+size]
 		fillRawKVCommandFrameHeader(frame[:commandFrameHeaderSize], lsn, baseAppliedLSN, plan.PayloadLen)
-		n, err := writeRawKVBatchPayloadTo(frame[commandFrameHeaderSize:], plan, scan)
-		if err != nil {
+		payloadOff := commandFrameHeaderSize
+		if err := writeRawKVBatchPayloadPieces(plan, scan, func(part []byte) error {
+			copy(frame[payloadOff:], part)
+			payloadOff += len(part)
+			return nil
+		}); err != nil {
 			w.commandBuf = w.commandBuf[:off]
 			return err
 		}
-		if n != plan.PayloadLen {
+		if payloadOff != size {
 			w.commandBuf = w.commandBuf[:off]
 			return ErrCorrupt
 		}

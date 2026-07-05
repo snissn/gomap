@@ -147,34 +147,6 @@ func BenchmarkWriterAppendCommandRawKVBatch(b *testing.B) {
 	}
 }
 
-func BenchmarkWriterAppendRawKVBatchPayloadScanCommandDirectTrusted(b *testing.B) {
-	for _, opsCount := range []int{1, 16, 32, 128} {
-		b.Run(fmt.Sprintf("setrid_revisions_ops_%d", opsCount), func(b *testing.B) {
-			ops := makeCommandWALBenchRIDOps(opsCount)
-			scan := rawKVOperationSliceScanner(ops)
-			plan, err := PlanRawKVBatchPayloadScan(scan)
-			if err != nil {
-				b.Fatalf("PlanRawKVBatchPayloadScan: %v", err)
-			}
-			path := filepath.Join(b.TempDir(), "commit.log")
-			w, err := NewWriterWithOptions(path, Options{Compress: false, DeferredCommandBufferSize: 1 << 20})
-			if err != nil {
-				b.Fatalf("NewWriterWithOptions: %v", err)
-			}
-			b.Cleanup(func() { _ = w.Close() })
-
-			b.SetBytes(int64(commandFrameHeaderSize + plan.PayloadLen))
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if err := w.AppendRawKVBatchPayloadScanCommandDirectTrusted(uint64(i+1), 0, plan, scan); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
 func BenchmarkWriterAppendBatchLegacyRawKV(b *testing.B) {
 	for _, tc := range commandWALBenchCases() {
 		b.Run(tc.name, func(b *testing.B) {
@@ -236,19 +208,6 @@ func makeCommandWALBenchOps(n, valueSize int) []RawKVOperation {
 			Op:    RawKVOpSet,
 			Key:   []byte(fmt.Sprintf("key-%06d", i)),
 			Value: value,
-		}
-	}
-	return ops
-}
-
-func makeCommandWALBenchRIDOps(n int) []RawKVOperation {
-	ops := make([]RawKVOperation, n)
-	for i := range ops {
-		ops[i] = RawKVOperation{
-			Op:       RawKVOpSetRID,
-			Key:      []byte(fmt.Sprintf("key-%06d", i)),
-			RID:      uint64(i + 1),
-			Revision: uint64(i + 1),
 		}
 	}
 	return ops
