@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -21,7 +22,7 @@ type commandWALBatchIntent struct {
 	rawKVEntries       []batchpkg.Entry
 	rawKVScan          commitlog.RawKVBatchOperationScanner
 	rawKVPlan          commitlog.RawKVBatchPayloadPlan
-	rawKVRIDCache      map[page.ValuePtr]uint64
+	rawKVRIDCache      *rawKVCommandWALRIDCache
 	rawKVDirect        bool
 	trustedPayload     bool
 	externalRefs       bool
@@ -33,6 +34,91 @@ type commandWALBatchIntent struct {
 	coveredRange       [1]CommandWALLSNRange
 	syncOnPublish      bool
 	staged             bool
+}
+
+const rawKVCommandWALRIDInlineCacheEntries = 4
+const rawKVCommandWALRIDMaxPooledOverflowEntries = 4 * 1024
+
+type rawKVCommandWALRIDCacheEntry struct {
+	ptr page.ValuePtr
+	rid uint64
+}
+
+type rawKVCommandWALRIDCache struct {
+	entries       [rawKVCommandWALRIDInlineCacheEntries]rawKVCommandWALRIDCacheEntry
+	overflow      map[page.ValuePtr]uint64
+	mapHint       int
+	count         int
+	overflowCount int
+}
+
+var rawKVCommandWALRIDCacheMapPool sync.Pool
+
+func (c *rawKVCommandWALRIDCache) lookup(ptr page.ValuePtr) (uint64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	for i := 0; i < c.count; i++ {
+		entry := c.entries[i]
+		if entry.ptr == ptr {
+			return entry.rid, true
+		}
+	}
+	if c.overflow != nil {
+		rid, ok := c.overflow[ptr]
+		return rid, ok
+	}
+	return 0, false
+}
+
+func (c *rawKVCommandWALRIDCache) store(ptr page.ValuePtr, rid uint64) {
+	if c == nil || rid == 0 {
+		return
+	}
+	for i := 0; i < c.count; i++ {
+		if c.entries[i].ptr == ptr {
+			c.entries[i].rid = rid
+			return
+		}
+	}
+	if c.count >= len(c.entries) {
+		if c.overflow == nil {
+			c.overflow = acquireRawKVCommandWALRIDCacheMap(c.mapHint)
+		}
+		c.overflowCount++
+		c.overflow[ptr] = rid
+		return
+	}
+	c.entries[c.count] = rawKVCommandWALRIDCacheEntry{ptr: ptr, rid: rid}
+	c.count++
+}
+
+func (c *rawKVCommandWALRIDCache) release() {
+	if c == nil {
+		return
+	}
+	for i := 0; i < c.count; i++ {
+		c.entries[i] = rawKVCommandWALRIDCacheEntry{}
+	}
+	c.count = 0
+	if c.overflow != nil {
+		if c.mapHint <= rawKVCommandWALRIDMaxPooledOverflowEntries && c.overflowCount <= rawKVCommandWALRIDMaxPooledOverflowEntries {
+			clear(c.overflow)
+			rawKVCommandWALRIDCacheMapPool.Put(c.overflow)
+		}
+		c.overflow = nil
+	}
+	c.overflowCount = 0
+}
+
+func acquireRawKVCommandWALRIDCacheMap(capHint int) map[page.ValuePtr]uint64 {
+	if v := rawKVCommandWALRIDCacheMapPool.Get(); v != nil {
+		return v.(map[page.ValuePtr]uint64)
+	}
+	if capHint <= 0 {
+		return make(map[page.ValuePtr]uint64)
+	}
+	return make(map[page.ValuePtr]uint64, capHint)
 }
 
 func (db *DB) commandWALJournalUnavailableError() error {
@@ -502,7 +588,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchp
 
 func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(func(batchpkg.Entry) error) error, opHint int) (*commandWALBatchIntent, error) {
 	externalRefs := false
-	var ridCache map[page.ValuePtr]uint64
+	var ridCache *rawKVCommandWALRIDCache
 	var externalRefFileIDs []uint32
 	maxEntryRevision := page.LegacyEntryRevision
 	planScan := db.rawKVCommandWALOperationScannerFromEntryScan(func(emit func(batchpkg.Entry) error) error {
@@ -540,7 +626,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(fun
 
 func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
 	externalRefs := false
-	var ridCache map[page.ValuePtr]uint64
+	var ridCache *rawKVCommandWALRIDCache
 	scan := db.rawKVCommandWALOperationScannerWithHint(entries, &ridCache, &externalRefs, len(entries))
 	plan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
 	if err != nil {
@@ -608,11 +694,11 @@ func maxEntryRevisionFromCommandWALPayload(kind commitlog.CommandKind, scope com
 	return maxRevision, nil
 }
 
-func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool) commitlog.RawKVBatchOperationScanner {
+func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache **rawKVCommandWALRIDCache, externalRefs *bool) commitlog.RawKVBatchOperationScanner {
 	return db.rawKVCommandWALOperationScannerWithHint(entries, ridCache, externalRefs, len(entries))
 }
 
-func (db *DB) rawKVCommandWALOperationScannerWithHint(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, opHint int) commitlog.RawKVBatchOperationScanner {
+func (db *DB) rawKVCommandWALOperationScannerWithHint(entries []batchpkg.Entry, ridCache **rawKVCommandWALRIDCache, externalRefs *bool, opHint int) commitlog.RawKVBatchOperationScanner {
 	return db.rawKVCommandWALOperationScannerFromEntryScan(func(emit func(batchpkg.Entry) error) error {
 		for i := range entries {
 			if err := emit(entries[i]); err != nil {
@@ -623,7 +709,7 @@ func (db *DB) rawKVCommandWALOperationScannerWithHint(entries []batchpkg.Entry, 
 	}, ridCache, externalRefs, nil, opHint)
 }
 
-func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int) commitlog.RawKVBatchOperationScanner {
+func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache **rawKVCommandWALRIDCache, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int) commitlog.RawKVBatchOperationScanner {
 	return func(emit func(commitlog.RawKVOperation) error) error {
 		if scanEntries == nil {
 			return nil
@@ -641,7 +727,7 @@ func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func
 	}
 }
 
-func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int) (commitlog.RawKVOperation, bool, error) {
+func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache **rawKVCommandWALRIDCache, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int) (commitlog.RawKVOperation, bool, error) {
 	switch entry.Type {
 	case batchpkg.OpDeleteRange:
 		if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
@@ -676,11 +762,11 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 	}
 }
 
-func makeRawKVCommandWALRIDCache(opHint int) map[page.ValuePtr]uint64 {
+func makeRawKVCommandWALRIDCache(opHint int) *rawKVCommandWALRIDCache {
 	if opHint <= 0 {
-		return make(map[page.ValuePtr]uint64)
+		return &rawKVCommandWALRIDCache{}
 	}
-	return make(map[page.ValuePtr]uint64, NormalizePublicBatchReserveHint(opHint))
+	return &rawKVCommandWALRIDCache{mapHint: NormalizePublicBatchReserveHint(opHint)}
 }
 
 func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
@@ -707,7 +793,7 @@ func appendRawKVCommandWALExternalRefFileID(ids *[]uint32, fileID uint32) {
 	*ids = append(*ids, fileID)
 }
 
-func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.ValuePtr]uint64) (uint64, error) {
+func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache *rawKVCommandWALRIDCache) (uint64, error) {
 	if db == nil || db.valueLogManager == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv pointer rid reader unavailable (file=%d offset=%d len=%d)", ptr.FileID, ptr.Offset, ptr.Length)
 	}
@@ -717,7 +803,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.V
 	if ridCache == nil {
 		return 0, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
 	}
-	if rid, ok := ridCache[ptr]; ok {
+	if rid, ok := ridCache.lookup(ptr); ok {
 		return rid, nil
 	}
 	rid, err := db.valueLogManager.ReadRIDUnverified(ptr)
@@ -730,7 +816,7 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.V
 	if err != nil {
 		return 0, err
 	}
-	ridCache[ptr] = rid
+	ridCache.store(ptr, rid)
 	return rid, nil
 }
 
@@ -1168,6 +1254,9 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	}
 	if db.commandWALFlushPoisoned.Load() {
 		return 0, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
+	}
+	if intent.rawKVDirect && intent.rawKVRIDCache != nil {
+		defer intent.rawKVRIDCache.release()
 	}
 	if intent.externalRefs {
 		// SetRID frames reference value-log positions by offset. The

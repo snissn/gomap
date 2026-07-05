@@ -13,7 +13,6 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
-	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -1703,26 +1702,5 @@ func writeCommandWALRawKVFrameForLane(t testing.TB, dir string, lane int, segmen
 
 func writeValueLogRID(t testing.TB, dir string, rid uint64, value []byte) page.ValuePtr {
 	t.Helper()
-	valueLogDir := resolveStorageLayout(dir).valueVLogDir
-	if err := os.MkdirAll(valueLogDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll value_vlog: %v", err)
-	}
-	fileID, err := valuelog.EncodeFileID(0, 1)
-	if err != nil {
-		t.Fatalf("EncodeFileID: %v", err)
-	}
-	path := filepath.Join(valueLogDir, "value-l0-000001.log")
-	w, err := valuelog.NewWriter(path, fileID)
-	if err != nil {
-		t.Fatalf("New value writer: %v", err)
-	}
-	ptr, err := w.Append(0, nil, rid, value)
-	if err != nil {
-		_ = w.Close()
-		t.Fatalf("Append value log: %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close value writer: %v", err)
-	}
-	return ptr
+	return writeValueLogRIDBatchFrom(t, dir, rid, 1, value)[0]
 }
