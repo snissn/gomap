@@ -5,8 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestAppendValueLogValuesUnavailableReturnsSentinel(t *testing.T) {
@@ -69,5 +71,33 @@ func TestAppendValueLogValuesPublishSystemRootReleasesPendingPin(t *testing.T) {
 	db.pendingValueLogAppendMu.Unlock()
 	if pendingPtrs != 0 || pendingFiles != 0 {
 		t.Fatalf("pending refs after publish ptrs=%d files=%d, want zero", pendingPtrs, pendingFiles)
+	}
+}
+
+func TestReleasePendingValueLogAppendFileIDsFromEntriesDecrementsDuplicateRefs(t *testing.T) {
+	fileID := page.ValueLogFileID(1)
+	ptrA := page.ValuePtr{FileID: fileID, Offset: 11, Length: 3}
+	ptrB := page.ValuePtr{FileID: fileID, Offset: 22, Length: 4}
+	db := &DB{
+		pendingValueLogAppendFileIDRefs: map[uint32]int{fileID: 3},
+		pendingValueLogAppendPtrRefs: map[page.ValuePtr]int{
+			ptrA: 2,
+			ptrB: 1,
+		},
+	}
+
+	db.releasePendingValueLogAppendFileIDsFromEntries([]batch.Entry{
+		{Type: batch.OpPut, IsPtr: true, ValuePtr: ptrA},
+		{Type: batch.OpPut, IsPtr: true, ValuePtr: ptrA},
+		{Type: batch.OpPut, IsPtr: true, ValuePtr: ptrB},
+		{Type: batch.OpPut, Value: []byte("inline")},
+		{Type: batch.OpDelete, Key: []byte("deleted")},
+	})
+
+	if db.pendingValueLogAppendPtrRefs != nil {
+		t.Fatalf("pending ptr refs after release = %v, want nil", db.pendingValueLogAppendPtrRefs)
+	}
+	if db.pendingValueLogAppendFileIDRefs != nil {
+		t.Fatalf("pending file refs after release = %v, want nil", db.pendingValueLogAppendFileIDRefs)
 	}
 }

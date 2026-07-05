@@ -1336,6 +1336,78 @@ func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
 	}
 }
 
+func TestManagerReadRIDUnverifiedReusesRegisteredSegment(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := SegmentPath(dir, fileID)
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ptrs, err := writer.AppendFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendFrame: %v", err)
+	}
+	ptr3, err := writer.Append(0, nil, 3, []byte("gamma"))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	origOpen := currentOpenSegmentFile()
+	opens := 0
+	swapOpenSegmentFileForTest(func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
+		if id == fileID {
+			opens++
+		}
+		return origOpen(path, id, dictLookup, templateLookup, templateOpts, templateCache)
+	})
+	t.Cleanup(func() { swapOpenSegmentFileForTest(origOpen) })
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+	if opens != 1 {
+		t.Fatalf("NewManager opened segment %d times, want 1", opens)
+	}
+
+	cases := []struct {
+		ptr page.ValuePtr
+		rid uint64
+	}{
+		{ptr: ptrs[0], rid: 1},
+		{ptr: ptrs[1], rid: 2},
+		{ptr: ptr3, rid: 3},
+	}
+	for repeat := 0; repeat < 3; repeat++ {
+		for _, tc := range cases {
+			got, err := mgr.ReadRIDUnverified(tc.ptr)
+			if err != nil {
+				t.Fatalf("ReadRIDUnverified(%+v): %v", tc.ptr, err)
+			}
+			if got != tc.rid {
+				t.Fatalf("ReadRIDUnverified(%+v)=%d, want %d", tc.ptr, got, tc.rid)
+			}
+		}
+	}
+	if opens != 1 {
+		t.Fatalf("ReadRIDUnverified reopened segment: opens=%d, want 1", opens)
+	}
+}
+
 func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)

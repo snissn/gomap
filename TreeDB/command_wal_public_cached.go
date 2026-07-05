@@ -58,14 +58,14 @@ func (tdb *DB) appendPublicRawKVCommandEntries(entries []batch.Entry, sync bool)
 	return err
 }
 
-func (tdb *DB) appendPublicRawKVCommandEntryScan(scanEntries func(func(batch.Entry) error) error, sync bool) error {
+func (tdb *DB) appendPublicRawKVCommandEntryScan(scanEntries func(func(batch.Entry) error) error, opHint int, sync bool) error {
 	if tdb == nil || !tdb.commandWALCached || scanEntries == nil {
 		return nil
 	}
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	lsn, err := tdb.backend.AppendRawKVCommandWALOrderedEntryScan(scanEntries, sync)
+	lsn, err := tdb.backend.AppendRawKVCommandWALOrderedEntryScanWithHint(scanEntries, opHint, sync)
 	if lsn != 0 {
 		tdb.recordPublicCommandWALPendingLSN(lsn)
 	}
@@ -1096,7 +1096,7 @@ func (b *commandWALPublicBatch) appendCommandWAL(sync bool) error {
 		}
 		return b.db.appendPublicRawKVCommandPayload(payload, sync)
 	}
-	return b.db.appendPublicRawKVCommandEntryScan(b.inner.Replay, sync)
+	return b.db.appendPublicRawKVCommandEntryScan(b.inner.Replay, b.opCount, sync)
 }
 
 func (b *commandWALPublicBatch) Replay(fn func(batch.Entry) error) error {

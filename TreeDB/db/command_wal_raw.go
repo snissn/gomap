@@ -10,7 +10,6 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
-	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -460,6 +459,13 @@ func (db *DB) AppendRawKVCommandWALOrderedEntries(entries []batchpkg.Entry, sync
 // writing scan it separately. Callers must keep replayed entry buffers immutable
 // until this method returns.
 func (db *DB) AppendRawKVCommandWALOrderedEntryScan(scanEntries func(func(batchpkg.Entry) error) error, sync bool) (uint64, error) {
+	return db.AppendRawKVCommandWALOrderedEntryScanWithHint(scanEntries, 0, sync)
+}
+
+// AppendRawKVCommandWALOrderedEntryScanWithHint appends a raw-KV command frame
+// like AppendRawKVCommandWALOrderedEntryScan, using opHint only to pre-size
+// transient planning caches.
+func (db *DB) AppendRawKVCommandWALOrderedEntryScanWithHint(scanEntries func(func(batchpkg.Entry) error) error, opHint int, sync bool) (uint64, error) {
 	if db == nil || !db.commandWAL {
 		return 0, nil
 	}
@@ -469,7 +475,7 @@ func (db *DB) AppendRawKVCommandWALOrderedEntryScan(scanEntries func(func(batchp
 	if scanEntries == nil {
 		return 0, nil
 	}
-	intent, err := db.newRawKVCommandWALIntentFromEntryScan(scanEntries)
+	intent, err := db.newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries, opHint)
 	if intent == nil || err != nil {
 		return 0, err
 	}
@@ -480,17 +486,21 @@ func (db *DB) newRawKVCommandWALIntentFromEntries(entries []batchpkg.Entry) (*co
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	return db.newRawKVCommandWALIntentFromEntryScan(func(emit func(batchpkg.Entry) error) error {
+	return db.newRawKVCommandWALIntentFromEntryScanWithHint(func(emit func(batchpkg.Entry) error) error {
 		for i := range entries {
 			if err := emit(entries[i]); err != nil {
 				return err
 			}
 		}
 		return nil
-	})
+	}, len(entries))
 }
 
 func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error) (*commandWALBatchIntent, error) {
+	return db.newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries, 0)
+}
+
+func (db *DB) newRawKVCommandWALIntentFromEntryScanWithHint(scanEntries func(func(batchpkg.Entry) error) error, opHint int) (*commandWALBatchIntent, error) {
 	externalRefs := false
 	var ridCache map[page.ValuePtr]uint64
 	var externalRefFileIDs []uint32
@@ -505,7 +515,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchp
 			}
 			return emit(entry)
 		})
-	}, &ridCache, &externalRefs, &externalRefFileIDs)
+	}, &ridCache, &externalRefs, &externalRefFileIDs, opHint)
 	plan, err := commitlog.PlanRawKVBatchPayloadScan(planScan)
 	if err != nil {
 		return nil, err
@@ -513,7 +523,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchp
 	if plan.Count == 0 {
 		return nil, nil
 	}
-	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil)
+	writeScan := db.rawKVCommandWALOperationScannerFromEntryScan(scanEntries, &ridCache, nil, nil, opHint)
 	return &commandWALBatchIntent{
 		kind:               commitlog.CommandKindRawKVBatch,
 		scope:              commitlog.CommandScopeRawKV,
@@ -531,7 +541,7 @@ func (db *DB) newRawKVCommandWALIntentFromEntryScan(scanEntries func(func(batchp
 func (db *DB) newRawKVCommandWALPayloadIntentFromEntries(entries []batchpkg.Entry) (*commandWALBatchIntent, error) {
 	externalRefs := false
 	var ridCache map[page.ValuePtr]uint64
-	scan := db.rawKVCommandWALOperationScanner(entries, &ridCache, &externalRefs)
+	scan := db.rawKVCommandWALOperationScannerWithHint(entries, &ridCache, &externalRefs, len(entries))
 	plan, err := commitlog.PlanRawKVBatchPayloadScan(scan)
 	if err != nil {
 		return nil, err
@@ -599,6 +609,10 @@ func maxEntryRevisionFromCommandWALPayload(kind commitlog.CommandKind, scope com
 }
 
 func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool) commitlog.RawKVBatchOperationScanner {
+	return db.rawKVCommandWALOperationScannerWithHint(entries, ridCache, externalRefs, len(entries))
+}
+
+func (db *DB) rawKVCommandWALOperationScannerWithHint(entries []batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, opHint int) commitlog.RawKVBatchOperationScanner {
 	return db.rawKVCommandWALOperationScannerFromEntryScan(func(emit func(batchpkg.Entry) error) error {
 		for i := range entries {
 			if err := emit(entries[i]); err != nil {
@@ -606,16 +620,16 @@ func (db *DB) rawKVCommandWALOperationScanner(entries []batchpkg.Entry, ridCache
 			}
 		}
 		return nil
-	}, ridCache, externalRefs, nil)
+	}, ridCache, externalRefs, nil, opHint)
 }
 
-func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32) commitlog.RawKVBatchOperationScanner {
+func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func(batchpkg.Entry) error) error, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int) commitlog.RawKVBatchOperationScanner {
 	return func(emit func(commitlog.RawKVOperation) error) error {
 		if scanEntries == nil {
 			return nil
 		}
 		return scanEntries(func(entry batchpkg.Entry) error {
-			op, ok, err := db.rawKVCommandWALOperationFromEntry(entry, ridCache, externalRefs, externalRefFileIDs)
+			op, ok, err := db.rawKVCommandWALOperationFromEntry(entry, ridCache, externalRefs, externalRefFileIDs, opHint)
 			if err != nil {
 				return err
 			}
@@ -627,7 +641,7 @@ func (db *DB) rawKVCommandWALOperationScannerFromEntryScan(scanEntries func(func
 	}
 }
 
-func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32) (commitlog.RawKVOperation, bool, error) {
+func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *map[page.ValuePtr]uint64, externalRefs *bool, externalRefFileIDs *[]uint32, opHint int) (commitlog.RawKVOperation, bool, error) {
 	switch entry.Type {
 	case batchpkg.OpDeleteRange:
 		if batchpkg.IsDeleteRangeNoop(entry.Key, entry.Value) {
@@ -648,7 +662,7 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 				return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal raw kv rid cache unavailable")
 			}
 			if *ridCache == nil {
-				*ridCache = make(map[page.ValuePtr]uint64)
+				*ridCache = makeRawKVCommandWALRIDCache(opHint)
 			}
 			rid, err := db.lookupCommandWALValueLogRID(entry.ValuePtr, *ridCache)
 			if err != nil {
@@ -660,6 +674,13 @@ func (db *DB) rawKVCommandWALOperationFromEntry(entry batchpkg.Entry, ridCache *
 	default:
 		return commitlog.RawKVOperation{}, false, fmt.Errorf("treedb: command wal unknown raw kv batch op %d", entry.Type)
 	}
+}
+
+func makeRawKVCommandWALRIDCache(opHint int) map[page.ValuePtr]uint64 {
+	if opHint <= 0 {
+		return make(map[page.ValuePtr]uint64)
+	}
+	return make(map[page.ValuePtr]uint64, NormalizePublicBatchReserveHint(opHint))
 }
 
 func rawKVCommandWALExternalRefFileIDs(entries []batchpkg.Entry) []uint32 {
@@ -699,28 +720,18 @@ func (db *DB) lookupCommandWALValueLogRID(ptr page.ValuePtr, ridCache map[page.V
 	if rid, ok := ridCache[ptr]; ok {
 		return rid, nil
 	}
-	path := db.valueLogManager.SegmentPath(ptr.FileID)
-	rid, err := readCommandWALValueLogRIDAt(path, ptr)
+	rid, err := db.valueLogManager.ReadRIDUnverified(ptr)
 	if isCommandWALRIDLookupVisibilityError(err) {
 		if flushErr := db.flushCommandWALExternalRefs(false, []uint32{ptr.FileID}); flushErr != nil {
 			return 0, flushErr
 		}
-		rid, err = readCommandWALValueLogRIDAt(path, ptr)
+		rid, err = db.valueLogManager.ReadRIDUnverified(ptr)
 	}
 	if err != nil {
 		return 0, err
 	}
 	ridCache[ptr] = rid
 	return rid, nil
-}
-
-func readCommandWALValueLogRIDAt(path string, ptr page.ValuePtr) (uint64, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = f.Close() }()
-	return valuelog.ReadRIDAtUnverified(f, ptr.FileID, ptr)
 }
 
 func isCommandWALRIDLookupVisibilityError(err error) bool {
