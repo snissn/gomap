@@ -71,15 +71,11 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.entry_scan.count_total"); got != 1 {
 		t.Fatalf("append.entry_scan.count_total=%d, want 1", got)
 	}
-	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.ns_total"); got == 0 {
-		t.Fatalf("append.ns_total=0, want >0")
-	}
+	_ = commandWALTestStatUint64(t, stats, "treedb.command_wal.append.ns_total")
 	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.count_total"); got != 1 {
 		t.Fatalf("sync.count_total=%d, want 1 (stats=%#v)", got, stats)
 	}
-	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.ns_total"); got == 0 {
-		t.Fatalf("sync.ns_total=0, want >0 (stats=%#v)", stats)
-	}
+	_ = commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.ns_total")
 	if got := stats["treedb.command_wal.typed_segments"]; got != "1" {
 		t.Fatalf("command WAL typed segment stat=%q, want 1 (stats=%#v)", got, stats)
 	}
@@ -163,9 +159,10 @@ func TestCommandWALRuntimeStatsExposeAppendPaths(t *testing.T) {
 		"treedb.command_wal.flush.ns_total",
 		"treedb.command_wal.sync.ns_total",
 	} {
-		if got := commandWALTestStatUint64(t, stats, key); got == 0 {
-			t.Fatalf("%s=0, want >0 (stats=%#v)", key, stats)
-		}
+		// Path-level count stats above prove the append/flush/sync paths ran.
+		// Short operations can report zero elapsed nanoseconds on platforms
+		// with coarser visible clock granularity, especially Windows runners.
+		_ = commandWALTestStatUint64(t, stats, key)
 	}
 	for _, key := range []string{
 		"treedb.command_wal.append.point.ns_total",
