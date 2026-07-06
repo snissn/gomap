@@ -665,6 +665,78 @@ func TestCurrentLeafGenerationView_DoesNotPruneTrackedRefs(t *testing.T) {
 	}
 }
 
+func TestCurrentLeafGenerationView_ReusesPublishedManifestView(t *testing.T) {
+	manifest := &leafGenerationManifest{
+		CurrentGenerationID: 2,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateSealed, FileIDs: []uint32{111}},
+			{GenerationID: 2, State: leafGenerationStateWritable, FileIDs: []uint32{222}},
+		},
+	}
+	db := &DB{leafGenerationManifest: manifest}
+
+	view := db.currentLeafGenerationView()
+	if view == nil {
+		t.Fatal("expected leaf generation view")
+	}
+	db.state.Store(&DBState{LeafGenerations: view})
+
+	if reused := db.currentLeafGenerationView(); reused != view {
+		t.Fatalf("expected published leaf generation view reuse, got %p want %p", reused, view)
+	}
+}
+
+func TestPublishedLeafGenerationView_DoesNotObserveManifestMutation(t *testing.T) {
+	manifest := &leafGenerationManifest{
+		CurrentGenerationID: 2,
+		Generations: []leafGenerationRecord{
+			{GenerationID: 1, State: leafGenerationStateSealed, FileIDs: []uint32{111, 112}},
+			{GenerationID: 2, State: leafGenerationStateWritable, FileIDs: []uint32{222}},
+		},
+	}
+	db := &DB{leafGenerationManifest: manifest}
+	view := db.currentLeafGenerationView()
+	if view == nil {
+		t.Fatal("expected leaf generation view")
+	}
+	db.state.Store(&DBState{LeafGenerations: view})
+
+	manifest.Generations[0].FileIDs[0] = 999
+	manifest.Generations[0].FileIDs = append(manifest.Generations[0].FileIDs, 113)
+	manifest.Generations[1].State = leafGenerationStateDeleted
+	manifest.Generations = append(manifest.Generations, leafGenerationRecord{
+		GenerationID: 3,
+		State:        leafGenerationStateWritable,
+		FileIDs:      []uint32{333},
+	})
+
+	if got, want := view.GenerationOrder, []uint64{1, 2}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("GenerationOrder=%v, want %v", got, want)
+	}
+	if got, want := view.FileToGeneration[111], uint64(1); got != want {
+		t.Fatalf("FileToGeneration[111]=%d, want %d", got, want)
+	}
+	if _, ok := view.FileToGeneration[999]; ok {
+		t.Fatalf("published view observed later replacement file ID")
+	}
+	if _, ok := view.FileToGeneration[113]; ok {
+		t.Fatalf("published view observed later appended file ID")
+	}
+	if _, ok := view.FileToGeneration[333]; ok {
+		t.Fatalf("published view observed later generation")
+	}
+	gen := view.Generations[1]
+	if got, want := gen.FileIDs, []uint32{111, 112}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("generation 1 FileIDs=%v, want %v", got, want)
+	}
+	if gen := view.Generations[2]; gen.State != leafGenerationStateWritable {
+		t.Fatalf("generation 2 state=%q, want %q", gen.State, leafGenerationStateWritable)
+	}
+	if reused := db.currentLeafGenerationView(); reused != view {
+		t.Fatalf("expected currentLeafGenerationView to keep published immutable view, got %p want %p", reused, view)
+	}
+}
+
 func TestPublishSnapshotView_SkipsPruneDuringInFlightSnapshotAcquire(t *testing.T) {
 	db := &DB{}
 	idx := &indexGen{}

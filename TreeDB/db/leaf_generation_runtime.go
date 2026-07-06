@@ -7,6 +7,7 @@ import (
 
 type leafGenerationView struct {
 	CurrentGenerationID uint64
+	sourceManifest      *leafGenerationManifest
 	GenerationOrder     []uint64
 	PinRefs             []*leafGenerationPinRef
 	PinSet              *leafGenerationPinSet
@@ -23,19 +24,37 @@ func newLeafGenerationView(manifest *leafGenerationManifest) *leafGenerationView
 	if manifest == nil {
 		return nil
 	}
+	activeGenerations := 0
+	fileIDs := 0
+	for i := range manifest.Generations {
+		gen := manifest.Generations[i]
+		if gen.State == leafGenerationStateDeleted || gen.State == leafGenerationStateRetiring {
+			continue
+		}
+		activeGenerations++
+		fileIDs += len(gen.FileIDs)
+	}
 	view := &leafGenerationView{
 		CurrentGenerationID: manifest.CurrentGenerationID,
-		GenerationOrder:     make([]uint64, 0, len(manifest.Generations)),
-		Generations:         make(map[uint64]leafGenerationViewGeneration, len(manifest.Generations)),
-		FileToGeneration:    make(map[uint32]uint64),
+		sourceManifest:      manifest,
+		GenerationOrder:     make([]uint64, 0, activeGenerations),
+		Generations:         make(map[uint64]leafGenerationViewGeneration, activeGenerations),
+		FileToGeneration:    make(map[uint32]uint64, fileIDs),
 	}
+	var fileBacking []uint32
+	if fileIDs > 0 {
+		fileBacking = make([]uint32, fileIDs)
+	}
+	fileCursor := 0
 	for i := range manifest.Generations {
 		gen := manifest.Generations[i]
 		if gen.State == leafGenerationStateDeleted || gen.State == leafGenerationStateRetiring {
 			continue
 		}
 		view.GenerationOrder = append(view.GenerationOrder, gen.GenerationID)
-		files := append([]uint32(nil), gen.FileIDs...)
+		files := fileBacking[fileCursor : fileCursor+len(gen.FileIDs)]
+		copy(files, gen.FileIDs)
+		fileCursor += len(gen.FileIDs)
 		view.Generations[gen.GenerationID] = leafGenerationViewGeneration{
 			State:   gen.State,
 			FileIDs: files,
@@ -51,7 +70,17 @@ func (db *DB) currentLeafGenerationView() *leafGenerationView {
 	if db == nil || db.leafGenerationManifest == nil {
 		return nil
 	}
-	view := newLeafGenerationView(db.leafGenerationManifest)
+	return db.leafGenerationViewForManifest(db.leafGenerationManifest)
+}
+
+func (db *DB) leafGenerationViewForManifest(manifest *leafGenerationManifest) *leafGenerationView {
+	if db == nil || manifest == nil {
+		return nil
+	}
+	if state := db.state.Load(); state != nil && state.LeafGenerations != nil && state.LeafGenerations.sourceManifest == manifest {
+		return state.LeafGenerations
+	}
+	view := newLeafGenerationView(manifest)
 	if view != nil && len(view.GenerationOrder) > 0 {
 		view.PinRefs = db.leafGenerationPins.refsForGenerationIDs(view.GenerationOrder)
 		view.PinSet = newLeafGenerationPinSet(view.PinRefs)

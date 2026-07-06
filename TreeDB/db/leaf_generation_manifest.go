@@ -315,7 +315,6 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 		return fmt.Errorf("treedb: %s must contain at least one generation", leafGenerationManifestFileName)
 	}
 
-	seen := make(map[uint64]struct{}, len(m.Generations))
 	currentFound := false
 	writableCount := 0
 	maxID := uint64(0)
@@ -324,10 +323,11 @@ func validateLeafGenerationManifest(m *leafGenerationManifest) error {
 		if gen.GenerationID == 0 {
 			return fmt.Errorf("treedb: %s generation[%d] has zero generation_id", leafGenerationManifestFileName, i)
 		}
-		if _, dup := seen[gen.GenerationID]; dup {
-			return fmt.Errorf("treedb: %s generation_id %d appears more than once", leafGenerationManifestFileName, gen.GenerationID)
+		for j := 0; j < i; j++ {
+			if m.Generations[j].GenerationID == gen.GenerationID {
+				return fmt.Errorf("treedb: %s generation_id %d appears more than once", leafGenerationManifestFileName, gen.GenerationID)
+			}
 		}
-		seen[gen.GenerationID] = struct{}{}
 		if gen.GenerationID > maxID {
 			maxID = gen.GenerationID
 		}
@@ -553,15 +553,31 @@ func noteLeafGenerationWritableFileIDsInManifest(manifest *leafGenerationManifes
 	return out, true, nil
 }
 
+type stagedLeafGenerationManifestResult struct {
+	manifest       *leafGenerationManifest
+	changed        bool
+	rawFileIDs     []uint32
+	pendingFileIDs []uint32
+}
+
 func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64) (*leafGenerationManifest, bool, error) {
+	result, err := db.stagedLeafGenerationManifestWithPendingResult(base, currentFileID, commitSeq)
+	if err != nil {
+		return base, false, err
+	}
+	return result.manifest, result.changed, nil
+}
+
+func (db *DB) stagedLeafGenerationManifestWithPendingResult(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64) (stagedLeafGenerationManifestResult, error) {
+	result := stagedLeafGenerationManifestResult{manifest: base}
 	if db == nil || base == nil {
-		return base, false, nil
+		return result, nil
 	}
 	pending := db.snapshotLeafGenerationPendingFileIDs(currentFileID)
 	if len(pending) == 0 {
-		return base, false, nil
+		return result, nil
 	}
-	working := base.clone()
+	working := base
 	changedAny := false
 	batch := make([]uint32, 0, len(pending))
 	batchCommitSeq := uint64(0)
@@ -569,6 +585,7 @@ func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManife
 		if len(batch) == 0 {
 			return nil
 		}
+		result.pendingFileIDs = append(result.pendingFileIDs, batch...)
 		registrable, err := db.filterLeafGenerationRegistrableRawFileIDs(working, batch)
 		if err != nil {
 			return err
@@ -578,12 +595,16 @@ func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManife
 			batchCommitSeq = 0
 			return nil
 		}
-		_, changed, err := noteLeafGenerationWritableFileIDsInManifest(working, registrable, batchCommitSeq)
+		if working == base {
+			working = base.clone()
+		}
+		rawFileIDs, changed, err := noteLeafGenerationWritableFileIDsInManifest(working, registrable, batchCommitSeq)
 		if err != nil {
 			return err
 		}
 		if changed {
 			changedAny = true
+			result.rawFileIDs = append(result.rawFileIDs, rawFileIDs...)
 		}
 		batch = batch[:0]
 		batchCommitSeq = 0
@@ -599,7 +620,7 @@ func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManife
 		}
 		if batchCommitSeq != 0 && itemCommitSeq != batchCommitSeq {
 			if err := flushBatch(); err != nil {
-				return base, false, err
+				return result, err
 			}
 		}
 		if batchCommitSeq == 0 {
@@ -608,32 +629,36 @@ func (db *DB) stagedLeafGenerationManifestWithPending(base *leafGenerationManife
 		batch = append(batch, item.rawFileID)
 	}
 	if err := flushBatch(); err != nil {
-		return base, false, err
+		return result, err
 	}
 	if !changedAny {
-		return base, false, nil
+		return result, nil
 	}
-	return working, true, nil
+	result.manifest = working
+	result.changed = true
+	result.rawFileIDs = dedupeLeafGenerationRawFileIDs(result.rawFileIDs)
+	result.pendingFileIDs = dedupeLeafGenerationRawFileIDs(result.pendingFileIDs)
+	return result, nil
 }
 
 func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint64) error {
 	if db == nil || db.leafGenerationManifest == nil || commitSeq == 0 || len(fileIDs) == 0 {
 		return nil
 	}
-	db.mu.Lock()
-	if db.leafGenerationManifest == nil {
-		db.mu.Unlock()
+	db.mu.RLock()
+	baseManifest := db.leafGenerationManifest
+	db.mu.RUnlock()
+	if baseManifest == nil {
 		return nil
 	}
-	nextManifest := db.leafGenerationManifest.clone()
-	db.mu.Unlock()
-	registrable, err := db.filterLeafGenerationRegistrableRawFileIDs(nextManifest, fileIDs)
+	registrable, err := db.filterLeafGenerationRegistrableRawFileIDs(baseManifest, fileIDs)
 	if err != nil {
 		return err
 	}
 	if len(registrable) == 0 {
 		return nil
 	}
+	nextManifest := baseManifest.clone()
 	sealedFileIDs, changedAny, err := noteLeafGenerationWritableFileIDsInManifest(nextManifest, registrable, commitSeq)
 	if err != nil {
 		return err
