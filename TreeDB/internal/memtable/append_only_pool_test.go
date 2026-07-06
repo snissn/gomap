@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"sync"
@@ -175,6 +176,36 @@ func TestPutAppendOnlyEntriesDropsOversizedRetainedSlice(t *testing.T) {
 	if got := after.AdmissionDropBytesTotal - before.AdmissionDropBytesTotal; got != wantBytes {
 		t.Fatalf("admission drop bytes delta=%d want %d", got, wantBytes)
 	}
+}
+
+func TestAppendOnlyEntryPoolRetainsLargeBatchHintClass(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	const entries = 1 << 17
+	_, classCap, ok := appendOnlyEntryPoolClassForLength(entries)
+	if !ok {
+		t.Fatalf("entry count %d should map to a retained pool class", entries)
+	}
+	if classCap != entries {
+		t.Fatalf("class cap=%d want %d", classCap, entries)
+	}
+
+	before := AppendOnlyEntryPoolStatsSnapshot()
+	putAppendOnlyEntries(make([]appendOnlyEntry, 0, entries))
+	afterPut := AppendOnlyEntryPoolStatsSnapshot()
+	if got := afterPut.AdmissionDropsTotal - before.AdmissionDropsTotal; got != 0 {
+		t.Fatalf("admission drops delta=%d want 0", got)
+	}
+	if got := afterPut.PutsTotal - before.PutsTotal; got != 1 {
+		t.Fatalf("puts delta=%d want 1", got)
+	}
+
+	reused := getAppendOnlyEntries(entries)
+	if cap(reused) != entries {
+		t.Fatalf("reused cap=%d want %d", cap(reused), entries)
+	}
+	putAppendOnlyEntries(reused[:0])
 }
 
 func TestPutAppendOnlyEntriesRecyclesPoolsOnRetainBudgetPressure(t *testing.T) {
@@ -482,7 +513,7 @@ func TestAppendOnlyFrozenUnorderedIteratorBlocksResetUntilClose(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
+func TestAppendOnlyResetReusesValueBuffersAndDropsArenaKeys(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key1 := []byte("long-key-01")
 	val1 := []byte("value-aaaaaa")
@@ -490,8 +521,10 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 	if m.count != 1 {
 		t.Fatalf("count=%d want=1", m.count)
 	}
-	keyBufPtr := &m.entries[0].key[0]
 	valBufPtr := &m.entries[0].value[0]
+	if !m.entries[0].keyArena {
+		t.Fatalf("expected small non-inline key to use key arena")
+	}
 
 	m.Reset()
 	key2 := []byte("long-key-02")
@@ -500,8 +533,8 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 	if m.count != 1 {
 		t.Fatalf("count after reset=%d want=1", m.count)
 	}
-	if &m.entries[0].key[0] != keyBufPtr {
-		t.Fatalf("expected key buffer reuse across reset")
+	if !m.entries[0].keyArena {
+		t.Fatalf("expected small non-inline key to use key arena after reset")
 	}
 	if m.entries[0].value == nil || cap(m.entries[0].value) < len(val2) {
 		t.Fatalf("expected value buffer capacity reuse across reset")
@@ -519,23 +552,45 @@ func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
 		t.Fatalf("count=%d want=1", m.count)
 	}
 	ent := &m.entries[0]
+	if !ent.keyArena {
+		t.Fatalf("expected non-inline key to be copied into key arena")
+	}
 	if !ent.valueOwned {
 		t.Fatalf("expected non-steal set to mark valueOwned")
 	}
 	if len(ent.value) != len(src) {
 		t.Fatalf("entry value len=%d want=%d", len(ent.value), len(src))
 	}
+	key[0] = 'X'
 	if &ent.value[0] == &src[0] {
 		t.Fatalf("entry value unexpectedly aliases caller buffer")
 	}
 	src[0] = 'X'
 
-	got, tombstone, ok := m.Get(key)
+	got, tombstone, ok := m.Get([]byte("long-key-arena"))
 	if !ok || tombstone {
-		t.Fatalf("Get(%q) = ok=%v tombstone=%v; want ok=true tombstone=false", key, ok, tombstone)
+		t.Fatalf("Get(long-key-arena) = ok=%v tombstone=%v; want ok=true tombstone=false", ok, tombstone)
 	}
 	if string(got) != "value-arena-copy" {
 		t.Fatalf("stored value changed via source mutation: got=%q", got)
+	}
+}
+
+func TestAppendOnlyLargeNonInlineKeyUsesReusableSlice(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := bytes.Repeat([]byte("k"), appendOnlyReusableKeyMaxCap+1)
+
+	m.Set(key, []byte("value"))
+
+	if m.count != 1 {
+		t.Fatalf("count=%d want=1", m.count)
+	}
+	ent := &m.entries[0]
+	if ent.keyArena {
+		t.Fatalf("large key unexpectedly used key arena")
+	}
+	if !ent.keyReusable {
+		t.Fatalf("large key should keep reusable slice metadata")
 	}
 }
 
