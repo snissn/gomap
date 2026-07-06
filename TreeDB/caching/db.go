@@ -22708,69 +22708,98 @@ func (db *DB) waitForCheckpoint() {
 }
 
 func (db *DB) waitForCheckpointForWrite() {
+	db.waitForCheckpointForWriteSince(time.Now())
+}
+
+func (db *DB) waitForCheckpointForWriteSince(start time.Time) {
 	if db == nil {
 		return
 	}
 	if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
 		return
 	}
-	start := time.Now()
 	db.waitForCheckpoint()
 	db.observeWriteWaitForCheckpoint(time.Since(start))
 }
 
 func (db *DB) beginDirectWrite() error {
 	for {
+		start := time.Now()
+		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
 		db.writeMu.RLock()
 		if db.closing.Load() {
 			db.writeMu.RUnlock()
+			if preWaitActive {
+				db.observeWriteWaitForCheckpoint(time.Since(start))
+			}
 			return backenddb.ErrClosed
 		}
 		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			if preWaitActive {
+				db.observeWriteWaitForCheckpoint(time.Since(start))
+			}
 			return nil
 		}
 		db.writeMu.RUnlock()
-		db.waitForCheckpointForWrite()
+		db.waitForCheckpointForWriteSince(start)
 	}
 }
 
 func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 	for {
+		start := time.Now()
+		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
 		db.writeMu.RLock()
 		if db.closing.Load() {
 			db.writeMu.RUnlock()
+			if preWaitActive {
+				db.observeWriteWaitForCheckpoint(time.Since(start))
+			}
 			return backenddb.ErrClosed
 		}
 		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			if preWaitActive {
+				db.observeWriteWaitForCheckpoint(time.Since(start))
+			}
 			return nil
 		}
 		db.writeMu.RUnlock()
 		db.flushMu.Unlock()
-		db.waitForCheckpointForWrite()
+		db.waitForCheckpointForWriteSince(start)
 		db.flushMu.Lock()
 	}
 }
 
 func (db *DB) beginExclusiveWrite() {
 	for {
+		start := time.Now()
+		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
 		db.writeMu.Lock()
 		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			if preWaitActive {
+				db.observeWriteWaitForCheckpoint(time.Since(start))
+			}
 			return
 		}
 		db.writeMu.Unlock()
-		db.waitForCheckpointForWrite()
+		db.waitForCheckpointForWriteSince(start)
 	}
 }
 
 func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
 	for {
+		start := time.Now()
+		preWaitActive := db.checkpointing.Load() || db.maintenanceActive.Load()
 		db.writeMu.Lock()
 		if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+			if preWaitActive {
+				db.observeWriteWaitForCheckpoint(time.Since(start))
+			}
 			return
 		}
 		db.writeMu.Unlock()
 		db.flushMu.Unlock()
-		db.waitForCheckpointForWrite()
+		db.waitForCheckpointForWriteSince(start)
 		db.flushMu.Lock()
 	}
 }

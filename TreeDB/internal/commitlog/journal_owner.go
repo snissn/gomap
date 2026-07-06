@@ -643,6 +643,15 @@ func (j *CommandJournal) AppendRawKVSingleCommand(baseAppliedLSN uint64, op RawK
 	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, false)
 }
 
+func (j *CommandJournal) AppendRawKVSingleCommandWithRotateSync(baseAppliedLSN uint64, op RawKVOperation, syncCurrent bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.appendRawKVSingleCommandLocked(baseAppliedLSN, op, syncCurrent)
+}
+
 // AppendRawKVSingleCommandAndFlush appends a one-operation RawKVBatch command
 // and flushes/syncs the writer while holding the journal lock. When sync is
 // true, any segment rotated before the append is also synced before the new
@@ -718,6 +727,15 @@ func (j *CommandJournal) AppendRawKVPointCommandTrusted(baseAppliedLSN uint64, o
 	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, false)
 }
 
+func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRotateSync(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.appendRawKVPointCommandTrustedLocked(baseAppliedLSN, op, key, value, syncCurrent)
+}
+
 // AppendRawKVPointCommandTrustedAndFlush appends a caller-validated public raw
 // KV point command and flushes/syncs the writer while holding the journal lock.
 // When sync is true, any segment rotated before the append is also synced before
@@ -759,6 +777,18 @@ func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRevisionAndFlush(base
 		return lsn, err
 	}
 	return lsn, nil
+}
+
+func (j *CommandJournal) AppendRawKVPointCommandTrustedWithRevisionAndRotateSync(baseAppliedLSN uint64, op RawKVOp, key, value []byte, revision uint64, syncCurrent bool) (uint64, error) {
+	if j == nil {
+		return 0, errors.New("commitlog: command journal is closed")
+	}
+	if revision == 0 {
+		return j.AppendRawKVPointCommandTrustedWithRotateSync(baseAppliedLSN, op, key, value, syncCurrent)
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.appendRawKVPointCommandTrustedWithRevisionLocked(baseAppliedLSN, op, key, value, revision, syncCurrent)
 }
 
 func (j *CommandJournal) appendRawKVPointCommandTrustedLocked(baseAppliedLSN uint64, op RawKVOp, key, value []byte, syncCurrent bool) (uint64, error) {
@@ -808,6 +838,10 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommand(baseAppliedLSN uint64, p
 // AppendRawKVBatchPayloadCommandTrusted appends a caller-validated canonical
 // RawKVBatch payload.
 func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN uint64, payload []byte) (uint64, error) {
+	return j.AppendRawKVBatchPayloadCommandTrustedWithRotateSync(baseAppliedLSN, payload, false)
+}
+
+func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrustedWithRotateSync(baseAppliedLSN uint64, payload []byte, syncCurrent bool) (uint64, error) {
 	if j == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -826,7 +860,7 @@ func (j *CommandJournal) AppendRawKVBatchPayloadCommandTrusted(baseAppliedLSN ui
 	if size > int(segmentLenMask) {
 		return 0, ErrRecordTooLarge
 	}
-	if err := j.maybeRotateForFrameLocked(size, false); err != nil {
+	if err := j.maybeRotateForFrameLocked(size, syncCurrent); err != nil {
 		return 0, err
 	}
 	lsn, err := j.reserveLSNLocked()
