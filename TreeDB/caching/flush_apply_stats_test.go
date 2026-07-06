@@ -210,6 +210,73 @@ func TestWriteWaitForCheckpointStatsIncrement(t *testing.T) {
 	}
 }
 
+func TestBeginDirectWriteRecordsCheckpointWait(t *testing.T) {
+	db := &DB{}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.checkpointing.Store(true)
+
+	done := make(chan error, 1)
+	go func() {
+		err := db.beginDirectWrite()
+		if err == nil {
+			db.writeMu.RUnlock()
+		}
+		done <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("beginDirectWrite: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("beginDirectWrite did not unblock")
+	}
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+}
+
+func TestBeginExclusiveWriteRecordsCheckpointWait(t *testing.T) {
+	db := &DB{}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.checkpointing.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		db.beginExclusiveWrite()
+		db.writeMu.Unlock()
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("beginExclusiveWrite did not unblock")
+	}
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+}
+
 func TestFlushAdmissionPropagationThroughCachedOpen(t *testing.T) {
 	prev := runtime.GOMAXPROCS(8)
 	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })

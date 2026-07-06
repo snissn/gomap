@@ -428,14 +428,20 @@ func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
 	}
 	for _, key := range []string{
 		"treedb.command_wal.append.ns_total",
-		"treedb.command_wal.append.point.ns_total",
-		"treedb.command_wal.append.payload.ns_total",
 		"treedb.command_wal.flush.ns_total",
 		"treedb.command_wal.sync.ns_total",
 	} {
 		if got := statMapUint64(t, stats, key); got == 0 {
 			t.Fatalf("%s=0, want >0 (stats=%#v)", key, stats)
 		}
+	}
+	for _, key := range []string{
+		"treedb.command_wal.append.point.ns_total",
+		"treedb.command_wal.append.payload.ns_total",
+	} {
+		// Very short sub-path timers can round to zero on some CI clocks; the
+		// matching count stats above prove the intended paths were observed.
+		_ = statMapUint64(t, stats, key)
 	}
 }
 
@@ -1152,8 +1158,10 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 	if got := statMapUint64(t, stats, "treedb.command_wal.cleanup.scan.count_total"); got == 0 {
 		t.Fatalf("cleanup.scan.count_total=0, want >0")
 	}
+	// Very short cleanup scans can complete below the clock's observable
+	// granularity on Windows; count/byte/frame stats below prove the scan ran.
+	_ = statMapUint64(t, stats, "treedb.command_wal.cleanup.scan.ns_total")
 	for _, key := range []string{
-		"treedb.command_wal.cleanup.scan.ns_total",
 		"treedb.command_wal.cleanup.scanned_bytes_total",
 		"treedb.command_wal.cleanup.scanned_frames_total",
 	} {
