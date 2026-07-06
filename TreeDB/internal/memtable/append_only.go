@@ -531,18 +531,35 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 	}
 	appendOnlyEntryPoolMu.Lock()
 	bin := appendOnlyEntryPoolBins[class]
-	for len(bin) > 0 {
+	best := -1
+	bestCap := 0
+	maxReuse := appendOnlyMaxReuseEntries(length)
+	// Preserve smaller same-class buffers for future smaller requests instead
+	// of popping and discarding them while looking for a larger backing.
+	for i := len(bin) - 1; i >= 0; i-- {
+		capacity := cap(bin[i])
+		if capacity < length || capacity > maxReuse {
+			continue
+		}
+		if best < 0 || capacity < bestCap {
+			best = i
+			bestCap = capacity
+			if capacity == length {
+				break
+			}
+		}
+	}
+	if best >= 0 {
 		last := len(bin) - 1
-		entries := bin[last]
+		entries := bin[best]
+		bin[best] = bin[last]
 		bin[last] = nil
 		bin = bin[:last]
 		appendOnlyEntryPoolBins[class] = bin
 		appendOnlyEntryPoolGetTotal.Add(1)
 		subtractAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(entries)))
-		if cap(entries) >= length && cap(entries) <= appendOnlyMaxReuseEntries(length) {
-			appendOnlyEntryPoolMu.Unlock()
-			return entries[:length]
-		}
+		appendOnlyEntryPoolMu.Unlock()
+		return entries[:length]
 	}
 	appendOnlyEntryPoolMu.Unlock()
 	return make([]appendOnlyEntry, length)

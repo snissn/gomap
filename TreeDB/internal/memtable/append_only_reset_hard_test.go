@@ -64,6 +64,36 @@ func TestAppendOnlyResetWithCapacityHard_ClampsWarmReuseCapacity(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyResetWithCapacityHard_BoundsNonClassCapacity(t *testing.T) {
+	const (
+		capacityBytes          = 512 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	retainedEntries := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	_, classCap, ok := appendOnlyEntryPoolClassForLength(retainedEntries)
+	if !ok {
+		t.Fatalf("retained entry count %d should map to a pool class", retainedEntries)
+	}
+	if classCap <= retainedEntries {
+		t.Fatalf("test setup needs rounded class cap: retained=%d class=%d", retainedEntries, classCap)
+	}
+
+	mt := NewAppendOnlyWithEntryCapacity(classCap)
+	if got := cap(mt.entries); got <= retainedEntries {
+		t.Fatalf("test setup cap(entries)=%d want > %d", got, retainedEntries)
+	}
+
+	mt.ResetWithCapacityHard(capacityBytes, estimatedBytesPerEntry)
+
+	if got := cap(mt.entries); got != retainedEntries {
+		t.Fatalf("hard reset cap(entries)=%d want=%d", got, retainedEntries)
+	}
+	if got := mt.EntryBackingBytes(); got > int64(capacityBytes) {
+		t.Fatalf("hard reset backing bytes=%d want <= capacity %d", got, capacityBytes)
+	}
+}
+
 func TestAppendOnlyResetWithCapacityHardPoolsDisplacedBacking(t *testing.T) {
 	DropAppendOnlyEntryPools()
 	t.Cleanup(DropAppendOnlyEntryPools)

@@ -154,6 +154,48 @@ func TestAppendOnlyEntryPoolStatsTrackRetainedBacking(t *testing.T) {
 	}
 }
 
+func TestGetAppendOnlyEntriesKeepsSmallerSameClassBacking(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	smallLen := appendOnlyMinInitialEntries + 1
+	largeLen := appendOnlyMinInitialEntries * 2
+	smallClass, _, ok := appendOnlyEntryPoolClassForLength(smallLen)
+	if !ok {
+		t.Fatalf("small length %d should map to a retained pool class", smallLen)
+	}
+	largeClass, _, ok := appendOnlyEntryPoolClassForLength(largeLen)
+	if !ok {
+		t.Fatalf("large length %d should map to a retained pool class", largeLen)
+	}
+	if smallClass != largeClass {
+		t.Fatalf("test setup needs one pool class: small=%d large=%d", smallClass, largeClass)
+	}
+
+	large := make([]appendOnlyEntry, 0, largeLen)
+	small := make([]appendOnlyEntry, 0, smallLen)
+	putAppendOnlyEntries(large)
+	putAppendOnlyEntries(small)
+
+	gotLarge := getAppendOnlyEntries(largeLen)
+	if cap(gotLarge) != largeLen {
+		t.Fatalf("large cap=%d want %d", cap(gotLarge), largeLen)
+	}
+	if gotRetained, want := AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate, appendOnlyEntryPoolBytes(smallLen); gotRetained != want {
+		t.Fatalf("retained bytes after large get=%d want smaller backing retained %d", gotRetained, want)
+	}
+
+	gotSmall := getAppendOnlyEntries(smallLen)
+	if cap(gotSmall) != smallLen {
+		t.Fatalf("small cap=%d want %d", cap(gotSmall), smallLen)
+	}
+	if gotRetained := AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; gotRetained != 0 {
+		t.Fatalf("retained bytes after small get=%d want 0", gotRetained)
+	}
+	putAppendOnlyEntries(gotLarge[:0])
+	putAppendOnlyEntries(gotSmall[:0])
+}
+
 func TestAppendOnlyEntryPoolRetainsBackingAcrossGC(t *testing.T) {
 	DropAppendOnlyEntryPools()
 	t.Cleanup(DropAppendOnlyEntryPools)
