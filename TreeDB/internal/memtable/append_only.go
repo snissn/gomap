@@ -28,7 +28,7 @@ const (
 	appendOnlyEntryPoolMaxShift      = 20
 	appendOnlyEntryPoolClassCount    = appendOnlyEntryPoolMaxShift - appendOnlyEntryPoolMinShift + 1
 	appendOnlyEntryPoolMaxCap        = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
-	appendOnlyEntryPoolRetainMaxCap  = 1 << 16
+	appendOnlyEntryPoolRetainMaxCap  = 1 << 17
 	appendOnlyMinInitialEntries      = 1 << appendOnlyEntryPoolMinShift // 128
 	appendOnlyMaxInitialEntries      = 1 << appendOnlyEntryPoolMaxShift // 1 << 20
 	appendOnlyIteratorPoolMaxCap     = 1 << 20
@@ -1441,8 +1441,14 @@ func (m *AppendOnly) appendEntryCoreLocked(key, value []byte, ptr page.ValuePtr,
 			ent.keyInline = true
 			ent.key = nil
 		} else {
-			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
-			ent.keyReusable = true
+			if len(key) > 0 && len(key) <= appendOnlyReusableKeyMaxCap {
+				ent.key = m.keyArena.alloc(len(key))
+				copy(ent.key, key)
+				ent.keyArena = true
+			} else {
+				ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
+				ent.keyReusable = true
+			}
 		}
 		if len(value) > 0 {
 			if borrowValue {

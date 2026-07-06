@@ -97,6 +97,38 @@ func BenchmarkAppendOnlyBatchReserveGrowth(b *testing.B) {
 	}
 }
 
+func BenchmarkAppendOnlyEntryPoolLargeHintReuse(b *testing.B) {
+	const entries = 1 << 17
+
+	DropAppendOnlyEntryPools()
+	b.Cleanup(DropAppendOnlyEntryPools)
+	putAppendOnlyEntries(make([]appendOnlyEntry, 0, entries))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		reused := getAppendOnlyEntries(entries)
+		putAppendOnlyEntries(reused[:0])
+	}
+}
+
+func BenchmarkAppendOnlySetBorrowValueSmallKeyAllocs(b *testing.B) {
+	DropAppendOnlyEntryPools()
+	b.Cleanup(DropAppendOnlyEntryPools)
+
+	mt := NewAppendOnlyWithEntryCapacity(b.N)
+	mt.ReserveAdditionalEntries(b.N)
+	value := []byte("borrowed-value")
+	var key [16]byte
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		binary.BigEndian.PutUint64(key[8:], uint64(i))
+		mt.SetEntryBorrowValue(key[:], value, page.ValuePtr{}, node.FlagInline)
+	}
+}
+
 func TestAppendOnlyInitialEntriesForCapacity(t *testing.T) {
 	t.Run("pointer-estimate", func(t *testing.T) {
 		capacity := defaultMemtableCapacity
