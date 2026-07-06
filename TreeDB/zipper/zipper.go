@@ -197,7 +197,7 @@ const (
 	mergeLeafPageBatchKeep            = 64
 	mergeLeafPageBatchMaxCap          = 512
 	mergeLeafRefCachePageInit         = 16
-	mergeLeafRefCachePageKeep         = 4096
+	mergeLeafRefCachePageKeep         = 8192
 	mergeChildRefBatchInit            = 8
 	mergeChildRefBatchKeep            = 64
 	mergeChildRefBatchMaxCap          = 512
