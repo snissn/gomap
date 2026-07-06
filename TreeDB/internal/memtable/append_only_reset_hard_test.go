@@ -64,6 +64,41 @@ func TestAppendOnlyResetWithCapacityHard_ClampsWarmReuseCapacity(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyResetWithCapacityHardPoolsDisplacedBacking(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+
+	for i := 0; i < base*2; i++ {
+		key := []byte(fmt.Sprintf("k-%06d", i))
+		mt.Set(key, []byte("value"))
+	}
+	oldCap := cap(mt.entries)
+	if oldCap <= base {
+		t.Fatalf("test setup did not grow enough: cap(entries)=%d want>%d", oldCap, base)
+	}
+	if oldCap > appendOnlyEntryPoolRetainMaxCap {
+		t.Fatalf("test setup cap(entries)=%d exceeds retention max=%d", oldCap, appendOnlyEntryPoolRetainMaxCap)
+	}
+
+	mt.ResetWithCapacityHard(capacityBytes, estimatedBytesPerEntry)
+
+	if got := cap(mt.entries); got != base {
+		t.Fatalf("hard reset cap(entries)=%d want=%d", got, base)
+	}
+	wantRetained := appendOnlyEntryPoolBytes(oldCap)
+	if got := AppendOnlyEntryPoolStatsSnapshot().RetainedBytesEstimate; got != wantRetained {
+		t.Fatalf("retained entry pool bytes=%d want=%d", got, wantRetained)
+	}
+}
+
 func TestAppendOnlyReleaseDropEntries_DropsEntryBacking(t *testing.T) {
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(4<<20, 96)
 	if got := mt.EntryCapacity(); got == 0 {
