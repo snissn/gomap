@@ -68,6 +68,78 @@ func TestCommandWALFormatGoldenV1RawKVBatch(t *testing.T) {
 	}
 }
 
+func TestReadCommandFrameHeaderMatchesFullFrame(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+		{Op: RawKVOpDelete, Key: []byte("beta")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	if err := w.AppendRawKVBatchPayloadCommandDirectTrusted(42, 7, payload); err != nil {
+		t.Fatalf("AppendRawKVBatchPayloadCommandDirectTrusted: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	fullReader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("NewReader full: %v", err)
+	}
+	full, err := fullReader.ReadCommandFrame()
+	if err != nil {
+		t.Fatalf("ReadCommandFrame: %v", err)
+	}
+	if err := fullReader.Close(); err != nil {
+		t.Fatalf("Close full reader: %v", err)
+	}
+
+	headerReader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("NewReader header: %v", err)
+	}
+	header, err := headerReader.ReadCommandFrameHeader()
+	if err != nil {
+		t.Fatalf("ReadCommandFrameHeader: %v", err)
+	}
+	if err := headerReader.Close(); err != nil {
+		t.Fatalf("Close header reader: %v", err)
+	}
+	if header.LSN != full.LSN || header.Kind != full.Kind || header.Scope != full.Scope || header.PayloadFormat != full.PayloadFormat ||
+		header.BaseAppliedLSN != full.BaseAppliedLSN || header.PayloadLen != uint32(len(full.Payload)) {
+		t.Fatalf("header=%+v full=%+v", header, full)
+	}
+}
+
+func TestReadCommandFrameHeaderDetectsLegacyPayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commit-l0-000001.log")
+	w, err := NewWriterWithOptions(path, Options{Compress: false})
+	if err != nil {
+		t.Fatalf("NewWriterWithOptions: %v", err)
+	}
+	if err := w.AppendBatch([]Record{{Op: OpSetInline, Key: []byte("legacy"), Value: []byte("value"), Seq: 1}}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	defer reader.Close()
+	if _, err := reader.ReadCommandFrameHeader(); !errors.Is(err, ErrCommandWALLegacyPayload) {
+		t.Fatalf("ReadCommandFrameHeader error=%v, want ErrCommandWALLegacyPayload", err)
+	}
+}
+
 func TestCommandWALRawKVBatchPreservesEmptySetValue(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("empty"), Value: []byte{}},

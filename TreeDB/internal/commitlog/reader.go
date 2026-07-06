@@ -13,6 +13,14 @@ type Reader struct {
 	f              *os.File
 	maxSegmentSize int64
 	dec            *zstd.Decoder
+	commandHeader  [commandFrameHeaderSize]byte
+	scanScratch    []byte
+}
+
+type segmentPayloadHeader struct {
+	length     uint32
+	wantCRC    uint32
+	compressed bool
 }
 
 func NewReader(path string) (*Reader, error) {
@@ -39,13 +47,13 @@ func (r *Reader) ReadBatch() ([]Record, error) {
 	return decodeBatch(payload)
 }
 
-func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
+func (r *Reader) readSegmentHeader(commandMode bool) (segmentPayloadHeader, error) {
 	var header [segmentHeaderSize]byte
 	if n, err := io.ReadFull(r.f, header[:]); err != nil {
 		if commandMode && n > 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
-			return nil, ErrCommandWALTerminalTail
+			return segmentPayloadHeader{}, ErrCommandWALTerminalTail
 		}
-		return nil, err
+		return segmentPayloadHeader{}, err
 	}
 
 	lengthField := binary.LittleEndian.Uint32(header[0:4])
@@ -53,21 +61,36 @@ func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
 	compressed := lengthField&segmentFlagCompressed != 0
 	length := lengthField & segmentLenMask
 	if r.maxSegmentSize > 0 && int64(length) > r.maxSegmentSize {
-		return nil, ErrCorrupt
+		return segmentPayloadHeader{}, ErrCorrupt
 	}
+	return segmentPayloadHeader{length: length, wantCRC: wantCRC, compressed: compressed}, nil
+}
 
-	payload := make([]byte, length)
-	if _, err := io.ReadFull(r.f, payload); err != nil {
-		if commandMode && (err == io.EOF || err == io.ErrUnexpectedEOF) {
-			return nil, ErrCommandWALTerminalTail
-		}
+func commandPayloadReadError(commandMode bool, err error) error {
+	if commandMode && (err == io.EOF || err == io.ErrUnexpectedEOF) {
+		return ErrCommandWALTerminalTail
+	}
+	return err
+}
+
+func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
+	hdr, err := r.readSegmentHeader(commandMode)
+	if err != nil {
 		return nil, err
 	}
-	if crc.Checksum(payload) != wantCRC {
+	return r.readSegmentPayloadAfterHeader(hdr, commandMode)
+}
+
+func (r *Reader) readSegmentPayloadAfterHeader(hdr segmentPayloadHeader, commandMode bool) ([]byte, error) {
+	payload := make([]byte, hdr.length)
+	if _, err := io.ReadFull(r.f, payload); err != nil {
+		return nil, commandPayloadReadError(commandMode, err)
+	}
+	if crc.Checksum(payload) != hdr.wantCRC {
 		return nil, ErrCorrupt
 	}
 
-	if compressed {
+	if hdr.compressed {
 		if len(payload) < 4 {
 			return nil, ErrCorrupt
 		}
@@ -95,6 +118,60 @@ func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
 	}
 
 	return payload, nil
+}
+
+// ReadCommandFrameHeader reads and validates the next command frame envelope
+// header without materializing uncompressed command payload bytes. The segment
+// CRC is still verified over the full stored payload before the header is
+// returned.
+func (r *Reader) ReadCommandFrameHeader() (CommandFrameHeader, error) {
+	hdr, err := r.readSegmentHeader(true)
+	if err != nil {
+		return CommandFrameHeader{}, err
+	}
+	if hdr.compressed {
+		payload, err := r.readSegmentPayloadAfterHeader(hdr, true)
+		if err != nil {
+			return CommandFrameHeader{}, err
+		}
+		return DecodeCommandFrameHeader(payload, len(payload))
+	}
+	return r.readUncompressedCommandFrameHeader(hdr)
+}
+
+func (r *Reader) readUncompressedCommandFrameHeader(hdr segmentPayloadHeader) (CommandFrameHeader, error) {
+	length := int(hdr.length)
+	prefixLen := length
+	if prefixLen > commandFrameHeaderSize {
+		prefixLen = commandFrameHeaderSize
+	}
+	prefix := r.commandHeader[:]
+	if prefixLen > 0 {
+		if _, err := io.ReadFull(r.f, prefix[:prefixLen]); err != nil {
+			return CommandFrameHeader{}, commandPayloadReadError(true, err)
+		}
+	}
+	sum := crc.Checksum(prefix[:prefixLen])
+	remaining := length - prefixLen
+	if cap(r.scanScratch) < 32<<10 {
+		r.scanScratch = make([]byte, 32<<10)
+	}
+	scratch := r.scanScratch[:32<<10]
+	for remaining > 0 {
+		n := len(scratch)
+		if n > remaining {
+			n = remaining
+		}
+		if _, err := io.ReadFull(r.f, scratch[:n]); err != nil {
+			return CommandFrameHeader{}, commandPayloadReadError(true, err)
+		}
+		sum = crc.Update(sum, scratch[:n])
+		remaining -= n
+	}
+	if sum != hdr.wantCRC {
+		return CommandFrameHeader{}, ErrCorrupt
+	}
+	return DecodeCommandFrameHeader(prefix[:prefixLen], length)
 }
 
 func decodeBatch(payload []byte) ([]Record, error) {

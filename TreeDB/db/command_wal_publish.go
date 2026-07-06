@@ -185,6 +185,10 @@ type commandWALSegmentScanOptions struct {
 	seenLSNAppliedLSN                uint64
 	stopAfterFirstLSNGreaterThan     uint64
 	stopAfterFirstLSNGreaterThanSeen bool
+	// Cleanup only needs segment framing, CRC coverage, and LSN ordering for
+	// frames that are already covered by the applied command LSN. Recovery and
+	// open-time scans still fully decode command payloads.
+	headerOnly bool
 }
 
 func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
@@ -260,7 +264,17 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 	var lastLSN uint64
 	var scan commandWALSegmentScanResult
 	for {
-		frame, err := r.ReadCommandFrame()
+		var lsn uint64
+		var err error
+		if opts.headerOnly {
+			header, readErr := r.ReadCommandFrameHeader()
+			err = readErr
+			lsn = header.LSN
+		} else {
+			frame, readErr := r.ReadCommandFrame()
+			err = readErr
+			lsn = frame.LSN
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return scan, nil
@@ -277,24 +291,24 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 			}
 			return scan, err
 		}
-		if lastLSN != 0 && frame.LSN <= lastLSN {
+		if lastLSN != 0 && lsn <= lastLSN {
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
 		}
-		if opts.seenLSNs != nil && (opts.seenLSNAppliedLSN == 0 || frame.LSN > opts.seenLSNAppliedLSN) {
-			if _, ok := opts.seenLSNs[frame.LSN]; ok {
+		if opts.seenLSNs != nil && (opts.seenLSNAppliedLSN == 0 || lsn > opts.seenLSNAppliedLSN) {
+			if _, ok := opts.seenLSNs[lsn]; ok {
 				scan.typed = true
 				return scan, commitlog.ErrCommandWALDuplicateLSN
 			}
-			opts.seenLSNs[frame.LSN] = struct{}{}
+			opts.seenLSNs[lsn] = struct{}{}
 		}
-		lastLSN = frame.LSN
+		lastLSN = lsn
 		scan.typed = true
-		if scan.minLSN == 0 || frame.LSN < scan.minLSN {
-			scan.minLSN = frame.LSN
+		if scan.minLSN == 0 || lsn < scan.minLSN {
+			scan.minLSN = lsn
 		}
-		if frame.LSN > scan.maxLSN {
-			scan.maxLSN = frame.LSN
+		if lsn > scan.maxLSN {
+			scan.maxLSN = lsn
 		}
 		if opts.stopAfterFirstLSNGreaterThanSeen && scan.minLSN > opts.stopAfterFirstLSNGreaterThan {
 			return scan, nil
@@ -382,6 +396,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			seenLSNAppliedLSN:                appliedLSN,
 			stopAfterFirstLSNGreaterThan:     appliedLSN,
 			stopAfterFirstLSNGreaterThanSeen: true,
+			headerOnly:                       true,
 		})
 		if err != nil {
 			decisions = append(decisions, commandWALSegmentCleanupDecision{

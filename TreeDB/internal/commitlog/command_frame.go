@@ -133,6 +133,22 @@ type RawKVOperation struct {
 	Revision uint64
 }
 
+type CommandFrameHeader struct {
+	Version          uint16
+	Kind             CommandKind
+	Scope            CommandScope
+	FeatureFlags     uint64
+	LSN              uint64
+	CatalogEpoch     uint64
+	SchemaEpoch      uint64
+	BaseAppliedLSN   uint64
+	PayloadFormat    PayloadFormat
+	PayloadLen       uint32
+	ExternalRefsLen  uint32
+	PreconditionsLen uint32
+	AssertionsLen    uint32
+}
+
 // RawKVBatchOperationScanner replays RawKV operations in deterministic command
 // order. Implementations must be replayable: planning and writing scan the
 // same operations separately so large command frames do not need to materialize
@@ -2071,6 +2087,63 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 		return env, err
 	}
 	return env, nil
+}
+
+func DecodeCommandFrameHeader(frame []byte, frameLen int) (CommandFrameHeader, error) {
+	var hdr CommandFrameHeader
+	if len(frame) >= batchHeaderSize && frameLen < commandFrameHeaderSize && isBatchPayloadVersion(frame[0]) {
+		return hdr, ErrCommandWALLegacyPayload
+	}
+	if frameLen < commandFrameHeaderSize || len(frame) < commandFrameHeaderSize {
+		return hdr, ErrCorrupt
+	}
+	if !bytes.Equal(frame[0:4], commandFrameMagic[:]) {
+		if isBatchPayloadVersion(frame[0]) {
+			return hdr, ErrCommandWALLegacyPayload
+		}
+		return hdr, ErrCorrupt
+	}
+	version := binary.LittleEndian.Uint16(frame[4:6])
+	minReader := binary.LittleEndian.Uint16(frame[6:8])
+	if version != CommandFrameVersion || minReader > CommandFrameVersion {
+		return hdr, ErrCommandWALUnsupportedVersion
+	}
+	hdr.Version = version
+	hdr.Kind = CommandKind(binary.LittleEndian.Uint16(frame[8:10]))
+	hdr.Scope = CommandScope(binary.LittleEndian.Uint16(frame[10:12]))
+	hdr.FeatureFlags = binary.LittleEndian.Uint64(frame[12:20])
+	if hdr.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+		return hdr, ErrCommandWALUnsupportedCriticalFlag
+	}
+	hdr.LSN = binary.LittleEndian.Uint64(frame[20:28])
+	hdr.CatalogEpoch = binary.LittleEndian.Uint64(frame[28:36])
+	hdr.SchemaEpoch = binary.LittleEndian.Uint64(frame[36:44])
+	hdr.BaseAppliedLSN = binary.LittleEndian.Uint64(frame[44:52])
+	hdr.PayloadFormat = PayloadFormat(binary.LittleEndian.Uint16(frame[52:54]))
+	if binary.LittleEndian.Uint16(frame[54:56]) != 0 {
+		return hdr, ErrCorrupt
+	}
+	hdr.PayloadLen = binary.LittleEndian.Uint32(frame[56:60])
+	hdr.ExternalRefsLen = binary.LittleEndian.Uint32(frame[60:64])
+	hdr.PreconditionsLen = binary.LittleEndian.Uint32(frame[64:68])
+	hdr.AssertionsLen = binary.LittleEndian.Uint32(frame[68:72])
+	if err := validateCommandEnvelopeIdentity(CommandEnvelope{
+		Kind:           hdr.Kind,
+		Scope:          hdr.Scope,
+		FeatureFlags:   hdr.FeatureFlags,
+		LSN:            hdr.LSN,
+		CatalogEpoch:   hdr.CatalogEpoch,
+		SchemaEpoch:    hdr.SchemaEpoch,
+		BaseAppliedLSN: hdr.BaseAppliedLSN,
+		PayloadFormat:  hdr.PayloadFormat,
+	}); err != nil {
+		return hdr, err
+	}
+	total := uint64(commandFrameHeaderSize) + uint64(hdr.PayloadLen) + uint64(hdr.ExternalRefsLen) + uint64(hdr.PreconditionsLen) + uint64(hdr.AssertionsLen)
+	if frameLen < 0 || total > uint64(^uint(0)>>1) || total != uint64(frameLen) {
+		return hdr, ErrCorrupt
+	}
+	return hdr, nil
 }
 
 func validateCommandEnvelopeForEncode(env CommandEnvelope) error {
