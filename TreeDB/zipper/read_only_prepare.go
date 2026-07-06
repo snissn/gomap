@@ -1089,11 +1089,11 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 				break
 			}
 
-			childOps := ops[startOpIdx:opIdx]
 			childHigh := high
 			if endKey != nil {
 				childHigh = result.cloneKey(endKey)
 			}
+			childOps := ops[startOpIdx:opIdx]
 			if len(childOps) > 0 && childLow != nil && bytes.Compare(childOps[0].Key, childLow) < 0 {
 				childLow = result.cloneKey(childOps[0].Key)
 			}
