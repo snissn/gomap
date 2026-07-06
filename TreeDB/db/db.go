@@ -2473,7 +2473,9 @@ type finalizeCommitPost struct {
 	durSync2                          time.Duration
 	persistLeafGenerationManifest     bool
 	persistLeafGenerationManifestView *leafGenerationManifest
+	persistLeafGenerationStateView    *leafGenerationView
 	persistLeafGenerationRawFileIDs   []uint32
+	clearLeafGenerationPendingFileIDs []uint32
 	drainLeafGenerationPending        bool
 }
 
@@ -2644,23 +2646,31 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		}
 	}
-	leafGenerationView := db.currentLeafGenerationView()
+	var leafGenerationView *leafGenerationView
 	if leafManifest != nil {
 		db.leafGenerationManifest = leafManifest
 		post.persistLeafGenerationManifest = true
 		post.persistLeafGenerationManifestView = leafManifest
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
-		leafGenerationView = newLeafGenerationView(leafManifest)
+		leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
 	if db.leafPageLog != nil {
-		stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
+		stagedLeafManifest, err := db.stagedLeafGenerationManifestWithPendingResult(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
 			return post, err
 		}
-		if changed {
-			leafGenerationView = newLeafGenerationView(stagedLeafManifest)
+		if stagedLeafManifest.changed {
+			leafGenerationView = db.leafGenerationViewForManifest(stagedLeafManifest.manifest)
+			post.persistLeafGenerationManifest = true
+			post.persistLeafGenerationManifestView = stagedLeafManifest.manifest
+			post.persistLeafGenerationStateView = leafGenerationView
+			post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs, stagedLeafManifest.rawFileIDs...)
+			post.clearLeafGenerationPendingFileIDs = append(post.clearLeafGenerationPendingFileIDs[:0], stagedLeafManifest.pendingFileIDs...)
 		}
+	}
+	if leafGenerationView == nil {
+		leafGenerationView = db.currentLeafGenerationView()
 	}
 	newState := &DBState{
 		CommitSeq:         nextMeta.CommitSeq,
@@ -2686,7 +2696,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
-	if db.leafPageLog != nil {
+	if db.leafPageLog != nil && len(post.clearLeafGenerationPendingFileIDs) == 0 {
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()
@@ -2741,16 +2751,44 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	if post.oldState != nil {
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
-	if post.persistLeafGenerationManifest || post.drainLeafGenerationPending {
+	if post.persistLeafGenerationManifest || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
 		var (
-			persistErr error
-			pendingErr error
+			persistErr        error
+			pendingErr        error
+			clearPending      bool
+			assignPersisted   bool
+			manifestPersisted bool
 		)
 		db.commitMu.Lock()
 		currentCommitSeq := db.meta.CommitSeq
 		currentManifest := db.leafGenerationManifest
-		if post.persistLeafGenerationManifest && currentManifest == post.persistLeafGenerationManifestView {
-			persistErr = db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs)
+		currentState := db.state.Load()
+		if post.persistLeafGenerationManifest {
+			switch {
+			case currentManifest == post.persistLeafGenerationManifestView:
+				manifestPersisted = true
+			case post.persistLeafGenerationStateView != nil && currentState != nil && currentState.LeafGenerations == post.persistLeafGenerationStateView:
+				manifestPersisted = true
+				assignPersisted = true
+			}
+			if manifestPersisted {
+				persistErr = db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs)
+				if persistErr == nil {
+					clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
+					if assignPersisted {
+						db.mu.Lock()
+						if state := db.state.Load(); state != nil && state.LeafGenerations == post.persistLeafGenerationStateView {
+							db.leafGenerationManifest = post.persistLeafGenerationManifestView
+						}
+						db.mu.Unlock()
+					}
+				}
+			}
+		} else if len(post.clearLeafGenerationPendingFileIDs) > 0 {
+			clearPending = true
+		}
+		if clearPending {
+			db.clearLeafGenerationPendingFileIDs(post.clearLeafGenerationPendingFileIDs)
 		}
 		if post.drainLeafGenerationPending {
 			pendingErr = db.noteLeafGenerationPendingFileIDs(0, currentCommitSeq)

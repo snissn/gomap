@@ -428,14 +428,27 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 	if db == nil || db.leafGenerationManifest == nil || commitSeq == 0 || len(fileIDs) == 0 {
 		return nil
 	}
-	rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(db.leafGenerationManifest, commitSeq, fileIDs)
+	db.mu.RLock()
+	baseManifest := db.leafGenerationManifest
+	db.mu.RUnlock()
+	if baseManifest == nil {
+		return nil
+	}
+	nextManifest := baseManifest.clone()
+	rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(nextManifest, commitSeq, fileIDs)
 	if err != nil {
 		return err
 	}
 	if !changed {
 		return nil
 	}
-	return db.persistLeafGenerationManifestAndRecordLengthIndexes(db.leafGenerationManifest, rawFileIDs)
+	if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(nextManifest, rawFileIDs); err != nil {
+		return err
+	}
+	db.mu.Lock()
+	db.leafGenerationManifest = nextManifest
+	db.mu.Unlock()
+	return db.publishLeafGenerationState(false)
 }
 
 func dedupeLeafGenerationRawFileIDs(rawFileIDs []uint32) []uint32 {
