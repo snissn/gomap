@@ -394,6 +394,26 @@ func (b *Builder) SetInternalFenceBounds(low, high []byte) {
 	}
 }
 
+// SetInternalFenceBoundsBorrowed configures exact subtree bounds without
+// copying the key slices. Callers must keep low and high immutable until
+// Finish or FinishNoNode copies the bounds into the encoded page.
+func (b *Builder) SetInternalFenceBoundsBorrowed(low, high []byte) {
+	if b.pType != page.PageTypeInternal {
+		return
+	}
+	b.internalFenceBounds = true
+	if len(low) == 0 {
+		b.internalFenceLow = nil
+	} else {
+		b.internalFenceLow = low
+	}
+	if len(high) == 0 {
+		b.internalFenceHigh = nil
+	} else {
+		b.internalFenceHigh = high
+	}
+}
+
 func (b *Builder) FreeSpace() int {
 	return b.heapStart - b.dirEnd
 }

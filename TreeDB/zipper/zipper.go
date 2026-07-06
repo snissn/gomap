@@ -176,6 +176,8 @@ type pendingLeafPagePersist struct {
 const (
 	mergeSplitKeyArenaInitCap         = page.PageSize
 	mergeSplitKeyArenaKeepCap         = 1 << 20
+	mergeSplitArenaInitCap            = 64
+	mergeSplitArenaKeepCap            = 1 << 15
 	mergeOuterLeafPageInitCap         = 16
 	mergeOuterLeafPageKeepCap         = 128
 	mergeLeafPageScratchInit          = 16
@@ -210,6 +212,7 @@ const (
 type mergeScratch struct {
 	mu                        sync.Mutex
 	splitKeyArena             []byte
+	splitArena                []Split
 	outerLeafBuildPages       []*outerLeafBuildPage
 	leafPageScratch           [][]byte
 	nodeKeyScratch            [][]byte
@@ -227,6 +230,7 @@ type mergeScratch struct {
 func newMergeScratch() *mergeScratch {
 	return &mergeScratch{
 		splitKeyArena:             make([]byte, 0, mergeSplitKeyArenaInitCap),
+		splitArena:                make([]Split, 0, mergeSplitArenaInitCap),
 		outerLeafBuildPages:       make([]*outerLeafBuildPage, 0, mergeOuterLeafPageInitCap),
 		leafPageScratch:           make([][]byte, 0, mergeLeafPageScratchInit),
 		nodeKeyScratch:            make([][]byte, 0, mergeNodeKeyScratchInit),
@@ -261,6 +265,12 @@ func (s *mergeScratch) reset() {
 		s.splitKeyArena = make([]byte, 0, mergeSplitKeyArenaInitCap)
 	} else {
 		s.splitKeyArena = s.splitKeyArena[:0]
+	}
+	if cap(s.splitArena) > mergeSplitArenaKeepCap {
+		s.splitArena = make([]Split, 0, mergeSplitArenaInitCap)
+	} else {
+		clear(s.splitArena)
+		s.splitArena = s.splitArena[:0]
 	}
 	if cap(s.outerLeafBuildPages) > mergeOuterLeafPageKeepCap {
 		s.outerLeafBuildPages = make([]*outerLeafBuildPage, 0, mergeOuterLeafPageInitCap)
@@ -336,6 +346,48 @@ func (s *mergeScratch) reset() {
 		clear(s.spanRootRefsScratch)
 		s.spanRootRefsScratch = s.spanRootRefsScratch[:0]
 	}
+}
+
+type mergeSplitSegment struct {
+	scratch *mergeScratch
+	start   int
+	data    []Split
+}
+
+func newMergeSplitSegment(s *mergeScratch) mergeSplitSegment {
+	if s == nil {
+		return mergeSplitSegment{}
+	}
+	s.mu.Lock()
+	start := len(s.splitArena)
+	data := s.splitArena[start:start:start]
+	s.mu.Unlock()
+	return mergeSplitSegment{scratch: s, start: start, data: data}
+}
+
+func (seg *mergeSplitSegment) append(split Split) []Split {
+	if seg.scratch == nil {
+		seg.data = append(seg.data, split)
+		return seg.data
+	}
+	s := seg.scratch
+	s.mu.Lock()
+	if len(s.splitArena) == seg.start+len(seg.data) {
+		s.splitArena = append(s.splitArena, split)
+		seg.data = s.splitArena[seg.start:len(s.splitArena):len(s.splitArena)]
+		s.mu.Unlock()
+		return seg.data
+	}
+	s.mu.Unlock()
+
+	// This should only happen if a caller appends to an older returned segment.
+	// Fall back to an owned slice so previously returned split ranges stay stable.
+	owned := make([]Split, len(seg.data), len(seg.data)+1)
+	copy(owned, seg.data)
+	owned = append(owned, split)
+	seg.scratch = nil
+	seg.data = owned
+	return seg.data
 }
 
 func (s *mergeScratch) acquireOuterLeafBuildPage() *outerLeafBuildPage {
@@ -1619,7 +1671,7 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 					currentBuilder.SetPageID(pid)
 
 					currentStartKey = child.Key
-					currentBuilder.SetInternalFenceBounds(currentStartKey, nil)
+					currentBuilder.SetInternalFenceBoundsBorrowed(currentStartKey, nil)
 				}
 
 				// Add child
@@ -1661,7 +1713,7 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 					currentBuilder = z.newBuilderForType(data, page.PageTypeInternal, nil)
 					currentBuilder.SetPageID(pid)
 					currentStartKey = child.Key
-					currentBuilder.SetInternalFenceBounds(currentStartKey, nil)
+					currentBuilder.SetInternalFenceBoundsBorrowed(currentStartKey, nil)
 
 					if err := currentBuilder.AddInternalChildRef(childKey, child.Ref); err != nil {
 						return 0, nil, metrics, err // Should fit in empty node
@@ -2084,7 +2136,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 	if key == nil {
 		key = []byte{}
 	}
-	b.SetInternalFenceBounds(key, nil)
+	b.SetInternalFenceBoundsBorrowed(key, nil)
 	if err := b.AddInternalChildRef(key, ref); err != nil {
 		return 0, err
 	}
@@ -2164,7 +2216,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		builder := z.newPooledBuilderForType(newData, page.PageTypeInternal, ops)
 		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
-		builder.SetInternalFenceBounds(low, high)
+		builder.SetInternalFenceBoundsBorrowed(low, high)
 		nr, splits, err := z.mergeInternal(&oldNode, builder, ops, ranges, maintenance, budget, metrics, retired, low, high, scratch, cfg)
 		if err != nil {
 			return page.ChildRef{}, nil, err
@@ -2210,6 +2262,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		rootPersisted           bool
 		pendingSplitIdx         int
 		pendingLeafPagePersists []pendingLeafPagePersist
+		splitSegment            mergeSplitSegment
 	)
 	pendingSplitIdx = -1
 	batchLeafPagePersists := z.outerLeavesInValueLog && reuseOuterLeafPages
@@ -2496,15 +2549,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// from source buffers into apply-lifetime scratch.
 			splitE.Key = scratch.cloneSplitKey(key)
 			if splits == nil {
-				hint := len(ops) / 16
-				if hint < 1 {
-					hint = 1
-				} else if hint > 512 {
-					hint = 512
-				}
-				splits = make([]Split, 0, hint)
+				splitSegment = newMergeSplitSegment(scratch)
+				splits = splitSegment.data
 			}
-			splits = append(splits, splitE)
+			splits = splitSegment.append(splitE)
 			pendingSplitIdx = len(splits) - 1
 
 			target = splitBuilder
@@ -4110,7 +4158,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 
 	sb := z.newBuilderForType(sdata, page.PageTypeInternal, nil)
 	sb.SetPageID(sid)
-	sb.SetInternalFenceBounds(key, nil)
+	sb.SetInternalFenceBoundsBorrowed(key, nil)
 
 	*splits = append(*splits, Split{Key: scratch.cloneSplitKey(key), Ref: page.PageChildRef(sid)})
 

@@ -217,6 +217,44 @@ func TestInternalBaseDelta_CompactPreservesFooter(t *testing.T) {
 	}
 }
 
+func TestInternalBaseDelta_BorrowedFenceBoundsCopiedOnFinish(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	low := []byte("user:00000000")
+	high := []byte("user:00000099")
+	wantLow := append([]byte(nil), low...)
+	wantHigh := append([]byte(nil), high...)
+
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+	b.SetInternalFenceBoundsBorrowed(low, high)
+	for i := 0; i < 16; i++ {
+		key := []byte(fmt.Sprintf("user:%08d", i))
+		if err := b.AddInternalChild(key, uint64(1_000+i)); err != nil {
+			t.Fatalf("AddInternalChild: %v", err)
+		}
+	}
+	b.FinishNoNode()
+
+	for i := range low {
+		low[i] = 'x'
+	}
+	for i := range high {
+		high[i] = 'y'
+	}
+
+	n := NewNode(buf)
+	gotLow, gotHigh, ok, err := n.InternalFenceBounds()
+	if err != nil {
+		t.Fatalf("InternalFenceBounds: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected persisted fence bounds")
+	}
+	if !bytes.Equal(gotLow, wantLow) || !bytes.Equal(gotHigh, wantHigh) {
+		t.Fatalf("unexpected fence bounds low=%q high=%q want low=%q high=%q", gotLow, gotHigh, wantLow, wantHigh)
+	}
+}
+
 func TestInternalBaseDelta_SplitRoundTrip(t *testing.T) {
 	const nKeys = 32
 
