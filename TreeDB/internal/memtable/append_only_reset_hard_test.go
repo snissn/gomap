@@ -64,7 +64,7 @@ func TestAppendOnlyResetWithCapacityHard_ClampsWarmReuseCapacity(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyResetWithCapacityHard_BoundsRoundedClassBacking(t *testing.T) {
+func TestAppendOnlyResetWithCapacityHard_BoundsNonClassCapacity(t *testing.T) {
 	const (
 		capacityBytes          = 512 << 10
 		estimatedBytesPerEntry = 96
