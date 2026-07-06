@@ -1346,8 +1346,8 @@ func TestZipperMergeScratch_ReusesSplitArenaSegments(t *testing.T) {
 	if !bytes.Equal(extendedFirst[0].Key, []byte("a")) || !bytes.Equal(extendedFirst[1].Key, []byte("c")) {
 		t.Fatalf("extended first segment mismatch: %+v", extendedFirst)
 	}
-	if len(s.splitArena) != 4 {
-		t.Fatalf("fallback append should copy extended segment into arena, len=%d", len(s.splitArena))
+	if len(s.splitArena) != 2 {
+		t.Fatalf("fallback append should not grow arena, len=%d", len(s.splitArena))
 	}
 
 	arena := s.splitArena
@@ -1355,7 +1355,7 @@ func TestZipperMergeScratch_ReusesSplitArenaSegments(t *testing.T) {
 	if len(s.splitArena) != 0 {
 		t.Fatalf("split arena len=%d want 0 after reset", len(s.splitArena))
 	}
-	for i, split := range arena[:4] {
+	for i, split := range arena[:2] {
 		if split.Key != nil || split.Ref != (page.ChildRef{}) {
 			t.Fatalf("split arena retained slot %d: %+v", i, split)
 		}

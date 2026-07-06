@@ -401,16 +401,12 @@ func (seg *mergeSplitSegment) append(split Split) []Split {
 	s.mu.Unlock()
 
 	// This should only happen if a caller appends to an older returned segment.
-	// Move the extended segment to the current scratch tail so previously
-	// returned split ranges stay stable while this segment can continue reusing
-	// the apply-lifetime arena.
-	s.mu.Lock()
-	start := len(s.splitArena)
-	s.splitArena = append(s.splitArena, seg.data...)
-	s.splitArena = append(s.splitArena, split)
-	seg.start = start
-	seg.data = s.splitArena[start:len(s.splitArena):len(s.splitArena)]
-	s.mu.Unlock()
+	// Fall back to an owned slice so previously returned split ranges stay stable.
+	owned := make([]Split, len(seg.data), len(seg.data)+1)
+	copy(owned, seg.data)
+	owned = append(owned, split)
+	seg.scratch = nil
+	seg.data = owned
 	return seg.data
 }
 
