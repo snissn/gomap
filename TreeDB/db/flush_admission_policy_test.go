@@ -55,7 +55,7 @@ func TestNormalizeFlushAdmission_DefaultAutoHardwareAware(t *testing.T) {
 			if !opts.FlushApplySpanNative || !opts.FlushBacklogCoalescing {
 				t.Fatalf("default auto did not enable span/backlog: span=%t backlog=%t", opts.FlushApplySpanNative, opts.FlushBacklogCoalescing)
 			}
-			if opts.FlushApplyMinEntries != 1 || opts.FlushApplyMinSpans != 1 || opts.FlushApplyMinBytes != 1 {
+			if opts.FlushApplyMinEntries != defaultFlushAdmissionAutoMinEntries || opts.FlushApplyMinSpans != defaultFlushAdmissionAutoMinSpans || opts.FlushApplyMinBytes != defaultFlushAdmissionAutoMinBytes {
 				t.Fatalf("default auto did not select measured min gates: entries=%d spans=%d bytes=%d", opts.FlushApplyMinEntries, opts.FlushApplyMinSpans, opts.FlushApplyMinBytes)
 			}
 			if opts.LeafPageReadCacheWriteAdmission != LeafPageReadCacheWriteAdmissionAdaptive {

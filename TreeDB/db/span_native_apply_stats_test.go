@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
@@ -209,6 +211,66 @@ func TestFlushApplyOptionsEnableSpanNativePrepareWithoutParallelWorkers(t *testi
 	}
 	if opts.ParallelApplyConcurrency != 0 {
 		t.Fatalf("ParallelApplyConcurrency=%d want 0", opts.ParallelApplyConcurrency)
+	}
+}
+
+func TestBatchFlushApplyOptionsSkipTinyPointBatchBeforeReadOnlyPrepare(t *testing.T) {
+	internal := batch.New(nil, page.DefaultInlineThreshold)
+	defer func() { _ = internal.Close() }()
+	if err := internal.Set([]byte("a"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := internal.Set([]byte("b"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	db := &DB{
+		flushApplyConcurrency: defaultFlushAdmissionAutoConcurrencyCap,
+		flushApplyMinEntries:  defaultFlushAdmissionAutoMinEntries,
+		flushApplyMinSpans:    defaultFlushAdmissionAutoMinSpans,
+		flushApplyMinBytes:    defaultFlushAdmissionAutoMinBytes,
+		flushApplySpanNative:  true,
+		flushAdmission:        FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto, Admitted: true, Reason: FlushAdmissionReasonAutoAdmittedHardwareAware},
+	}
+	tiny := &Batch{db: db, batch: internal}
+	opts := tiny.flushApplyOptions()
+	if opts.PrepareReadOnly || opts.SpanNativeApply || opts.ParallelApplyConcurrency != 0 {
+		t.Fatalf("tiny auto point batch options=%+v, want simple apply without read-only prepare", opts)
+	}
+
+	db.flushApplyMinEntries = 1
+	db.flushApplyMinSpans = 1
+	db.flushApplyMinBytes = 1
+	forced := tiny.flushApplyOptions()
+	if !forced.PrepareReadOnly || !forced.SpanNativeApply || forced.ParallelApplyConcurrency == 0 {
+		t.Fatalf("explicit low-gate point batch options=%+v, want span-native prepare retained", forced)
+	}
+}
+
+func TestBatchFlushApplyOptionsPreserveExplicitFallbackOnTinyPointBatch(t *testing.T) {
+	internal := batch.New(nil, page.DefaultInlineThreshold)
+	defer func() { _ = internal.Close() }()
+	if err := internal.Set([]byte("a"), []byte("value")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	db := &DB{
+		flushApplyConcurrency: defaultFlushAdmissionAutoConcurrencyCap,
+		flushApplyMinEntries:  defaultFlushAdmissionAutoMinEntries,
+		flushApplyMinSpans:    defaultFlushAdmissionAutoMinSpans,
+		flushApplyMinBytes:    defaultFlushAdmissionAutoMinBytes,
+		flushApplySpanNative:  true,
+		flushAdmission:        FlushAdmissionDecision{Policy: FlushAdmissionPolicyAuto, Admitted: true, Reason: FlushAdmissionReasonAutoAdmittedHardwareAware},
+	}
+	tiny := &Batch{db: db, batch: internal}
+	tiny.SetFlushApplySpanNativeFallback(FlushSpanRunFallbackCloseOrCheckpoint)
+
+	opts := tiny.flushApplyOptions()
+	if opts.PrepareReadOnly || opts.SpanNativeApply || opts.ParallelApplyConcurrency != 0 {
+		t.Fatalf("tiny explicit-fallback options=%+v, want simple apply without read-only prepare", opts)
+	}
+	if got, want := opts.SpanNativeForceFallbackReason, FlushSpanRunFallbackCloseOrCheckpoint.String(); got != want {
+		t.Fatalf("SpanNativeForceFallbackReason=%q want %q", got, want)
 	}
 }
 

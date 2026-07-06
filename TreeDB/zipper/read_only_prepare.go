@@ -743,19 +743,36 @@ func resolveParallelApplyWorkers(opts ApplyOptions, summary ReadOnlyLeafSpanSumm
 	if workers > summary.Spans {
 		workers = summary.Spans
 	}
-	if opts.ParallelApplyMinSpans > 0 && summary.Spans < opts.ParallelApplyMinSpans {
-		return 0
-	}
-	if opts.ParallelApplyMinSpanOps > 0 && summary.SpanOps < opts.ParallelApplyMinSpanOps {
-		return 0
-	}
-	if opts.ParallelApplyMinSpanBytes > 0 && summary.SpanBytes < opts.ParallelApplyMinSpanBytes {
+	if parallelApplyMinThresholdsBelow(opts, summary) {
 		return 0
 	}
 	if workers <= 1 {
 		return 0
 	}
 	return workers
+}
+
+func parallelApplyMinThresholdsBelow(opts ApplyOptions, summary ReadOnlyLeafSpanSummary) bool {
+	if opts.ParallelApplyMinSpans > 0 && summary.Spans < opts.ParallelApplyMinSpans {
+		return true
+	}
+	if opts.ParallelApplyMinSpanOps > 0 && summary.SpanOps < opts.ParallelApplyMinSpanOps {
+		return true
+	}
+	if opts.ParallelApplyMinSpanBytes > 0 && summary.SpanBytes < opts.ParallelApplyMinSpanBytes {
+		return true
+	}
+	return false
+}
+
+func spanNativeApplyMinThresholdsBelow(opts ApplyOptions, summary ReadOnlyLeafSpanSummary) bool {
+	if opts.ParallelApplyMinSpanOps > 0 && summary.SpanOps < opts.ParallelApplyMinSpanOps {
+		return true
+	}
+	if opts.ParallelApplyMinSpanBytes > 0 && summary.SpanBytes < opts.ParallelApplyMinSpanBytes {
+		return true
+	}
+	return false
 }
 
 func resolveSpanNativeApplyWorkers(opts ApplyOptions, summary ReadOnlyLeafSpanSummary) int {
@@ -805,6 +822,9 @@ func spanNativeApplyFallbackReason(opts ApplyOptions, summary ReadOnlyLeafSpanSu
 		return 0, "inexact_leaf_spans"
 	}
 	if summary.PointOps <= 0 || summary.Spans <= 0 {
+		return 0, "below_threshold"
+	}
+	if spanNativeApplyMinThresholdsBelow(opts, summary) {
 		return 0, "below_threshold"
 	}
 	workers := resolveSpanNativeApplyWorkers(opts, summary)

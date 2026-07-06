@@ -10,7 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
-func TestRawSpanNativeRouteStatsPointWritesUseDefaultAuto(t *testing.T) {
+func TestRawSpanNativeRouteStatsPointWritesDefaultAutoSkipsTinyCandidates(t *testing.T) {
 	prev := runtime.GOMAXPROCS(8)
 	t.Cleanup(func() { runtime.GOMAXPROCS(prev) })
 
@@ -37,8 +37,17 @@ func TestRawSpanNativeRouteStatsPointWritesUseDefaultAuto(t *testing.T) {
 	if got := stats["treedb.flush_admission.admitted"]; got != "true" {
 		t.Fatalf("admission admitted=%q want true", got)
 	}
-	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.used_ops_total"); got == 0 {
-		t.Fatalf("point_put used_ops_total=0, want default auto point puts to use span-native apply")
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.candidate_ops_total"); got != 0 {
+		t.Fatalf("point_put candidate_ops_total=%d, want default auto tiny point puts to skip span-native prepare", got)
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.used_ops_total"); got != 0 {
+		t.Fatalf("point_put used_ops_total=%d, want default auto tiny point puts to use simple apply", got)
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.below_threshold.count_total"); got == 0 {
+		t.Fatalf("point_put below_threshold fallback count=0, want default auto tiny point puts to skip span-native candidate")
+	}
+	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.disabled.count_total"); got != 0 {
+		t.Fatalf("point_put disabled fallback count=%d, want below_threshold for default auto tiny point puts", got)
 	}
 	if got := rawSpanNativeRouteStatUint(t, stats, "treedb.raw.span_native.route.point_put.fallback.reason.unknown.count_total"); got != 0 {
 		t.Fatalf("point_put unknown fallbacks=%d want 0", got)

@@ -978,6 +978,7 @@ func (db *DB) publishOrderedRootDeltaIterator(baseRoot uint64, iter iterator.Uns
 		return 0, nil, metrics, nil, err
 	}
 	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
+	applyOpts = skipTinyFlushApplyBatchOptions(delta, applyOpts)
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
@@ -1122,6 +1123,7 @@ func (db *DB) publishOrderedRootDeltaBatchWithAllocator(idx *indexGen, baseRoot 
 		return 0, nil, metrics, err
 	}
 	applyOpts := db.orderedRootDeltaBatchApplyOptions(opts)
+	applyOpts = skipTinyFlushApplyBatchOptions(delta, applyOpts)
 	prepareBuf := db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts

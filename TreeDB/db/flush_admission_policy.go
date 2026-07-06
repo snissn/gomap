@@ -8,9 +8,9 @@ import (
 const (
 	defaultFlushAdmissionAutoConcurrencyCap = 8
 	defaultFlushAdmissionAutoMinConcurrency = 2
-	defaultFlushAdmissionAutoMinEntries     = 1
-	defaultFlushAdmissionAutoMinSpans       = 1
-	defaultFlushAdmissionAutoMinBytes       = 1
+	defaultFlushAdmissionAutoMinEntries     = defaultFlushApplyMinEntries
+	defaultFlushAdmissionAutoMinSpans       = defaultFlushApplyMinSpans
+	defaultFlushAdmissionAutoMinBytes       = defaultFlushApplyMinBytes
 )
 
 // FlushAdmissionPolicy controls how TreeDB admits the span-native/backlog

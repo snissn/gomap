@@ -42,6 +42,9 @@ func TestSpanNativeApplyEligibilityFallbackReasons(t *testing.T) {
 		{name: "range", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.DeleteRanges = 1 }), want: "range_delete_barrier"},
 		{name: "inexact", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.ExactLeafSpans = false }), want: "inexact_leaf_spans"},
 		{name: "empty", opts: ApplyOptions{SpanNativeApply: true}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.PointOps = 0 }), want: "below_threshold"},
+		{name: "min-spans-does-not-block-span-native", opts: ApplyOptions{SpanNativeApply: true, ParallelApplyMinSpans: 2}, summary: base, want: ""},
+		{name: "min-span-ops", opts: ApplyOptions{SpanNativeApply: true, ParallelApplyMinSpanOps: 2}, summary: base, want: "below_threshold"},
+		{name: "min-span-bytes", opts: ApplyOptions{SpanNativeApply: true, ParallelApplyMinSpanBytes: 2}, summary: withSpanNativeSummary(base, func(s *ReadOnlyLeafSpanSummary) { s.SpanBytes = 1 }), want: "below_threshold"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

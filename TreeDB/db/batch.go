@@ -90,7 +90,47 @@ func (b *Batch) flushApplyOptions() zipper.ApplyOptions {
 	if opts.SpanNativeApply && reason.Valid() && reason != FlushSpanRunFallbackUnknown {
 		opts.SpanNativeForceFallbackReason = reason.String()
 	}
+	return b.skipTinyFlushApplyOptions(opts)
+}
+
+func (b *Batch) skipTinyFlushApplyOptions(opts zipper.ApplyOptions) zipper.ApplyOptions {
+	if b == nil {
+		return opts
+	}
+	return skipTinyFlushApplyBatchOptions(b.batch, opts)
+}
+
+func skipTinyFlushApplyBatchOptions(delta *batch.Batch, opts zipper.ApplyOptions) zipper.ApplyOptions {
+	if delta == nil || !flushApplyUseOptions(opts) || delta.HasDeleteRanges() {
+		return opts
+	}
+	if !flushApplyBatchBelowMinGate(delta, opts) {
+		return opts
+	}
+	opts.PrepareReadOnly = false
+	opts.ReadOnlyPrepare = zipper.ReadOnlyPrepareOptions{}
+	opts.ReadOnlyPrepareWorkers = 0
+	opts.ParallelApplyConcurrency = 0
+	opts.ParallelApplyWorkerPool = nil
+	opts.SpanNativeApply = false
+	if opts.SpanNativeForceFallbackReason == "" {
+		opts.SpanNativeForceFallbackReason = FlushSpanRunFallbackBelowThreshold.String()
+	}
 	return opts
+}
+
+func flushApplyBatchBelowMinGate(delta *batch.Batch, opts zipper.ApplyOptions) bool {
+	if delta == nil {
+		return false
+	}
+	ops := delta.Len()
+	if opts.ParallelApplyMinSpanOps > 0 && ops < opts.ParallelApplyMinSpanOps {
+		return true
+	}
+	if opts.ParallelApplyMinSpanBytes > 0 && delta.ByteSize() < opts.ParallelApplyMinSpanBytes {
+		return true
+	}
+	return false
 }
 
 // SetCommandWALPublish records an already-appended command-WAL LSN range to
@@ -367,6 +407,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		err = applyErr
 	} else {
 		newRoot, retired, metrics, err = z.Apply(rootID, b.batch)
+		applyResult.SpanNativeFallbackReason = applyOpts.SpanNativeForceFallbackReason
 		b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions, applyOpts.SpanNativeApply)
 	}
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)
@@ -592,6 +633,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		err = applyErr
 	} else {
 		newRoot, retired, metrics, err = idx.zipper.Apply(rootID, b.batch)
+		applyResult.SpanNativeFallbackReason = applyOpts.SpanNativeForceFallbackReason
 		b.db.observeRawSpanNativeApplyResult(rawSpanPlan, applyResult, err, applyWithOptions, applyOpts.SpanNativeApply)
 	}
 	b.db.observeFlushApplyMetrics(metrics, time.Duration(metrics.ZipperApplyWallNs), err)

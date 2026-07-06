@@ -1084,14 +1084,14 @@ type Options struct {
 	// explicit policy; the default auto admission policy chooses a hardware-aware
 	// candidate capped by GOMAXPROCS when the low-concurrency guardrail passes.
 	FlushApplyConcurrency int
-	// FlushApplyMinEntries gates opt-in parallel apply by planned span-local ops.
-	// Values <=0 use the internal default.
+	// FlushApplyMinEntries gates opt-in parallel apply and span-native apply by
+	// planned span-local ops. Values <=0 use the internal default.
 	FlushApplyMinEntries int
 	// FlushApplyMinSpans gates opt-in parallel apply by planned leaf span count.
 	// Values <=0 use the internal default.
 	FlushApplyMinSpans int
-	// FlushApplyMinBytes gates opt-in parallel apply by planned span bytes.
-	// Values <=0 use the internal default.
+	// FlushApplyMinBytes gates opt-in parallel apply and span-native apply by
+	// planned span bytes. Values <=0 use the internal default.
 	FlushApplyMinBytes int
 	// FlushApplySpanNative enables the M10 span-native apply candidate path. The
 	// default auto admission policy enables it only for the measured capped
