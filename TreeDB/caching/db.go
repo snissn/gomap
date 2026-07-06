@@ -33354,6 +33354,115 @@ func appendUniqueMemtable(dst []memtable.Table, mt memtable.Table) []memtable.Ta
 	return append(dst, mt)
 }
 
+func batchShardFirstLast(entries []batch.Entry, shardIdxs []int, shardIndex int) (first, last []byte) {
+	for i := range entries {
+		if i >= len(shardIdxs) || shardIdxs[i] != shardIndex {
+			continue
+		}
+		key := entries[i].Key
+		if first == nil {
+			first = key
+		}
+		last = key
+	}
+	return first, last
+}
+
+func (b *Batch) canApplySmallSelectedSortedShard(shardCounts []int, allowBatchArenaBorrow, allowStableViewValueBorrow bool) bool {
+	if b == nil || b.db == nil || !b.streamEligible || len(b.entries) == 0 || len(b.entries) > batchSelectedSortedShardMaxEntries {
+		return false
+	}
+	for i, count := range shardCounts {
+		if count <= 0 {
+			continue
+		}
+		shard := &b.db.mutableShards[i]
+		useSteal, _ := cachedBatchWriteUseSteal(b.db, shard.mem)
+		useSteal = allowBatchArenaBorrow && useSteal
+		if useSteal {
+			return false
+		}
+		if allowStableViewValueBorrow {
+			if _, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier); !ok {
+				return false
+			}
+			continue
+		}
+		if !allowBatchArenaBorrow {
+			if _, ok := shard.mem.(memtable.CopySelectedSortedBatchValueCopier); !ok {
+				return false
+			}
+			continue
+		}
+		if _, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *Batch) tryApplySmallSelectedSortedShard(
+	shardCounts []int,
+	shardIdxs []int,
+	allowBatchArenaBorrow bool,
+	allowStableViewValueBorrow bool,
+	retainMainMems *[]memtable.Table,
+	retainStableViewValueMems *[]memtable.Table,
+	failMemtableApply func(*memShard, error) error,
+) (bool, error) {
+	if !b.canApplySmallSelectedSortedShard(shardCounts, allowBatchArenaBorrow, allowStableViewValueBorrow) {
+		return false, nil
+	}
+	storeInlinePtrValues := !b.db.memtableValueLogPointers
+	for i, count := range shardCounts {
+		if count <= 0 {
+			continue
+		}
+		first, last := batchShardFirstLast(b.entries, shardIdxs, i)
+		if first == nil {
+			continue
+		}
+		shard := &b.db.mutableShards[i]
+		shard.mu.Lock()
+		reserveMemtableEntries(b.db, shard.mem, count)
+		if allowStableViewValueBorrow {
+			applier, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier)
+			if !ok {
+				return true, failMemtableApply(shard, fmt.Errorf("cachingdb: memtable %T lost selected sorted batch support", shard.mem))
+			}
+			if borrowed := applier.ApplyCopySelectedSortedBatchTrusted(b.entries, shardIdxs, i, count, first, true, storeInlinePtrValues, nil); borrowed {
+				*retainStableViewValueMems = appendUniqueMemtable(*retainStableViewValueMems, shard.mem)
+			}
+		} else if !allowBatchArenaBorrow {
+			applier, ok := shard.mem.(memtable.CopySelectedSortedBatchValueCopier)
+			if !ok {
+				return true, failMemtableApply(shard, fmt.Errorf("cachingdb: memtable %T lost selected sorted batch value-copier support", shard.mem))
+			}
+			applier.ApplyCopySelectedSortedBatchWithValueCopierTrusted(b.entries, shardIdxs, i, count, first, b.appendOnlyDirectValueCopierForShard(shard), storeInlinePtrValues, nil)
+			b.valueCopyShard = nil
+		} else {
+			applier, ok := shard.mem.(memtable.CopySelectedSortedBatchApplier)
+			if !ok {
+				return true, failMemtableApply(shard, fmt.Errorf("cachingdb: memtable %T lost selected sorted batch support", shard.mem))
+			}
+			if borrowed := applier.ApplyCopySelectedSortedBatchTrusted(b.entries, shardIdxs, i, count, first, allowBatchArenaBorrow, storeInlinePtrValues, nil); borrowed {
+				*retainMainMems = appendUniqueMemtable(*retainMainMems, shard.mem)
+			}
+		}
+		shard.rng.add(first)
+		if count > 1 {
+			shard.rng.add(last)
+		}
+		b.db.noteWriteSortedRun(first, last, count)
+		newBytes := shard.mem.Size()
+		delta := newBytes - shard.bytes
+		shard.bytes = newBytes
+		b.db.mutableBytes.Add(delta)
+		shard.mu.Unlock()
+	}
+	return true, nil
+}
+
 func (b *Batch) appendOnlyDirectValueCopierForShard(shard *memShard) func([]byte) []byte {
 	if b == nil || shard == nil {
 		return nil
@@ -34433,6 +34542,7 @@ const (
 	batchAuxChunkLeaseMaxBytes                    = 1 << 20
 	batchAuxEntryGroupLeaseMaxCount               = 256
 	batchAuxEntryGroupLeaseMaxBytes               = 1 << 20
+	batchSelectedSortedShardMaxEntries            = 128
 	batchArenaChunkListInitialCap                 = 4
 	batchArenaChunkListMaxRetain                  = 256
 	batchShardEntryGroupsMaxRetain                = 1024
@@ -35553,163 +35663,177 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			shard.mu.Unlock()
 		}
 	} else {
-		shardEntries := b.shardEntries
-		if cap(shardEntries) < shardCount {
-			if cap(shardEntries) > 0 {
-				b.releaseShardEntryGroups(shardEntries)
-			}
-			shardEntries = b.db.getBatchShardEntryGroups(shardCount)
-			shardEntries = shardEntries[:shardCount]
-		} else {
-			shardEntries = shardEntries[:shardCount]
-			for i := range shardEntries {
-				shardEntries[i] = shardEntries[i][:0]
-			}
+		appliedSmallSorted, err := b.tryApplySmallSelectedSortedShard(
+			shardCounts,
+			shardIdxs,
+			allowBatchArenaBorrow,
+			allowStableViewValueBorrow,
+			&retainMainMems,
+			&retainStableViewValueMems,
+			failMemtableApply,
+		)
+		if err != nil {
+			return err
 		}
-		b.shardEntries = shardEntries
-		for i, count := range shardCounts {
-			if count > 0 {
-				entries := shardEntries[i]
-				if cap(entries) < count {
-					if cap(entries) > 0 {
-						b.db.putBatchShardEntries(entries)
-					}
-					entries = b.db.getBatchShardEntries(count)
-				} else {
-					entries = entries[:0]
+		if !appliedSmallSorted {
+			shardEntries := b.shardEntries
+			if cap(shardEntries) < shardCount {
+				if cap(shardEntries) > 0 {
+					b.releaseShardEntryGroups(shardEntries)
 				}
-				shardEntries[i] = entries
+				shardEntries = b.db.getBatchShardEntryGroups(shardCount)
+				shardEntries = shardEntries[:shardCount]
+			} else {
+				shardEntries = shardEntries[:shardCount]
+				for i := range shardEntries {
+					shardEntries[i] = shardEntries[i][:0]
+				}
 			}
-		}
-		for i, op := range b.entries {
-			idx := shardIdxs[i]
-			shardEntries[idx] = append(shardEntries[idx], op)
-		}
-
-		// 3. Memtable Update
-		for i := range shardEntries {
-			entries := shardEntries[i]
-			if len(entries) == 0 {
-				continue
-			}
-			shard := &b.db.mutableShards[i]
-			shard.mu.Lock()
-			reserveMemtableEntries(b.db, shard.mem, len(entries))
-			useStream := b.streamEligible
-			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
-			useSteal = allowBatchArenaBorrow && useSteal
-			if stealSuppressedDeferred && allowBatchArenaBorrow {
-				batchArenaStealSuppressedDeferredTotal.Add(1)
-				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
-			}
-			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
-				retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
-			}
-			storeInlinePtrValues := !b.db.memtableValueLogPointers
-			appliedSortedRun := false
-			if useStream {
-				if useSteal {
-					if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
-						applier.ApplyStealSortedBatchTrusted(entries, nil)
-					} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
-						applier.ApplyStealSortedBatch(entries, nil)
+			b.shardEntries = shardEntries
+			for i, count := range shardCounts {
+				if count > 0 {
+					entries := shardEntries[i]
+					if cap(entries) < count {
+						if cap(entries) > 0 {
+							b.db.putBatchShardEntries(entries)
+						}
+						entries = b.db.getBatchShardEntries(count)
 					} else {
-						for _, op := range entries {
-							if op.Type == batch.OpDelete {
-								if err := memtableBatchDelete(shard.mem, true, op.Key, op.Revision); err != nil {
-									return failMemtableApply(shard, err)
+						entries = entries[:0]
+					}
+					shardEntries[i] = entries
+				}
+			}
+			for i, op := range b.entries {
+				idx := shardIdxs[i]
+				shardEntries[idx] = append(shardEntries[idx], op)
+			}
+
+			// 3. Memtable Update
+			for i := range shardEntries {
+				entries := shardEntries[i]
+				if len(entries) == 0 {
+					continue
+				}
+				shard := &b.db.mutableShards[i]
+				shard.mu.Lock()
+				reserveMemtableEntries(b.db, shard.mem, len(entries))
+				useStream := b.streamEligible
+				useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
+				useSteal = allowBatchArenaBorrow && useSteal
+				if stealSuppressedDeferred && allowBatchArenaBorrow {
+					batchArenaStealSuppressedDeferredTotal.Add(1)
+					batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
+				}
+				if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
+					retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
+				}
+				storeInlinePtrValues := !b.db.memtableValueLogPointers
+				appliedSortedRun := false
+				if useStream {
+					if useSteal {
+						if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
+							applier.ApplyStealSortedBatchTrusted(entries, nil)
+						} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
+							applier.ApplyStealSortedBatch(entries, nil)
+						} else {
+							for _, op := range entries {
+								if op.Type == batch.OpDelete {
+									if err := memtableBatchDelete(shard.mem, true, op.Key, op.Revision); err != nil {
+										return failMemtableApply(shard, err)
+									}
+								} else {
+									memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
 								}
-							} else {
-								memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
+							}
+						}
+						appliedSortedRun = true
+					} else {
+						if allowStableViewValueBorrow {
+							if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
+								if borrowed := applier.ApplyCopySortedBatchTrusted(entries, true, storeInlinePtrValues, nil); borrowed {
+									retainStableViewValueMems = appendUniqueMemtable(retainStableViewValueMems, shard.mem)
+								}
+								appliedSortedRun = true
+							}
+						}
+						if !appliedSortedRun && !allowBatchArenaBorrow {
+							if applier, ok := shard.mem.(memtable.CopySortedBatchValueCopier); ok {
+								applier.ApplyCopySortedBatchWithValueCopierTrusted(entries, b.appendOnlyDirectValueCopierForShard(shard), storeInlinePtrValues, nil)
+								b.valueCopyShard = nil
+								appliedSortedRun = true
+							}
+						}
+						if !appliedSortedRun {
+							if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
+								if borrowed := applier.ApplyCopySortedBatchTrusted(entries, allowBatchArenaBorrow, storeInlinePtrValues, nil); borrowed {
+									retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
+								}
+								appliedSortedRun = true
 							}
 						}
 					}
-					appliedSortedRun = true
-				} else {
-					if allowStableViewValueBorrow {
-						if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
-							if borrowed := applier.ApplyCopySortedBatchTrusted(entries, true, storeInlinePtrValues, nil); borrowed {
-								retainStableViewValueMems = appendUniqueMemtable(retainStableViewValueMems, shard.mem)
+				}
+				if !appliedSortedRun {
+					for _, op := range entries {
+						if op.Type == batch.OpDelete {
+							if err := memtableBatchDelete(shard.mem, useSteal, op.Key, op.Revision); err != nil {
+								return failMemtableApply(shard, err)
 							}
-							appliedSortedRun = true
-						}
-					}
-					if !appliedSortedRun && !allowBatchArenaBorrow {
-						if applier, ok := shard.mem.(memtable.CopySortedBatchValueCopier); ok {
-							applier.ApplyCopySortedBatchWithValueCopierTrusted(entries, b.appendOnlyDirectValueCopierForShard(shard), storeInlinePtrValues, nil)
-							b.valueCopyShard = nil
-							appliedSortedRun = true
-						}
-					}
-					if !appliedSortedRun {
-						if applier, ok := shard.mem.(memtable.CopySortedBatchApplier); ok {
-							if borrowed := applier.ApplyCopySortedBatchTrusted(entries, allowBatchArenaBorrow, storeInlinePtrValues, nil); borrowed {
+						} else {
+							borrowedMainArena := false
+							borrowedStableViewValue := false
+							allowValueBorrow := allowBatchArenaBorrow
+							if !allowValueBorrow && allowStableViewValueBorrow && !useSteal {
+								allowValueBorrow = true
+								if _, ok := shard.mem.(memtable.ValueBorrower); ok {
+									if op.IsPtr {
+										borrowedStableViewValue = storeInlinePtrValues && len(op.Value) > 0
+									} else {
+										borrowedStableViewValue = len(op.Value) > 0
+									}
+								}
+							}
+							if allowBatchArenaBorrow && !useSteal {
+								if _, ok := shard.mem.(memtable.ValueBorrower); ok {
+									if op.IsPtr {
+										borrowedMainArena = storeInlinePtrValues && len(op.Value) > 0
+									} else {
+										borrowedMainArena = len(op.Value) > 0
+									}
+								}
+							}
+							memtableBatchSet(shard.mem, useSteal, allowValueBorrow, storeInlinePtrValues, op)
+							if borrowedMainArena {
 								retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
 							}
-							appliedSortedRun = true
-						}
-					}
-				}
-			}
-			if !appliedSortedRun {
-				for _, op := range entries {
-					if op.Type == batch.OpDelete {
-						if err := memtableBatchDelete(shard.mem, useSteal, op.Key, op.Revision); err != nil {
-							return failMemtableApply(shard, err)
-						}
-					} else {
-						borrowedMainArena := false
-						borrowedStableViewValue := false
-						allowValueBorrow := allowBatchArenaBorrow
-						if !allowValueBorrow && allowStableViewValueBorrow && !useSteal {
-							allowValueBorrow = true
-							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
-								if op.IsPtr {
-									borrowedStableViewValue = storeInlinePtrValues && len(op.Value) > 0
-								} else {
-									borrowedStableViewValue = len(op.Value) > 0
-								}
+							if borrowedStableViewValue {
+								retainStableViewValueMems = appendUniqueMemtable(retainStableViewValueMems, shard.mem)
 							}
 						}
-						if allowBatchArenaBorrow && !useSteal {
-							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
-								if op.IsPtr {
-									borrowedMainArena = storeInlinePtrValues && len(op.Value) > 0
-								} else {
-									borrowedMainArena = len(op.Value) > 0
-								}
-							}
+						if useStream {
+							// Preserve sorted-run accounting even when no sorted batch applier is available.
+							continue
 						}
-						memtableBatchSet(shard.mem, useSteal, allowValueBorrow, storeInlinePtrValues, op)
-						if borrowedMainArena {
-							retainMainMems = appendUniqueMemtable(retainMainMems, shard.mem)
-						}
-						if borrowedStableViewValue {
-							retainStableViewValueMems = appendUniqueMemtable(retainStableViewValueMems, shard.mem)
-						}
+						shard.rng.add(op.Key)
+						b.db.noteWriteKey(op.Key)
 					}
-					if useStream {
-						// Preserve sorted-run accounting even when no sorted batch applier is available.
-						continue
+				}
+				if useStream {
+					first := entries[0].Key
+					last := entries[len(entries)-1].Key
+					shard.rng.add(first)
+					if len(entries) > 1 {
+						shard.rng.add(last)
 					}
-					shard.rng.add(op.Key)
-					b.db.noteWriteKey(op.Key)
+					b.db.noteWriteSortedRun(first, last, len(entries))
 				}
+				newBytes := shard.mem.Size()
+				delta := newBytes - shard.bytes
+				shard.bytes = newBytes
+				b.db.mutableBytes.Add(delta)
+				shard.mu.Unlock()
 			}
-			if useStream {
-				first := entries[0].Key
-				last := entries[len(entries)-1].Key
-				shard.rng.add(first)
-				if len(entries) > 1 {
-					shard.rng.add(last)
-				}
-				b.db.noteWriteSortedRun(first, last, len(entries))
-			}
-			newBytes := shard.mem.Size()
-			delta := newBytes - shard.bytes
-			shard.bytes = newBytes
-			b.db.mutableBytes.Add(delta)
-			shard.mu.Unlock()
 		}
 	}
 
