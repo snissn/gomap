@@ -10686,7 +10686,6 @@ func (db *DB) queueRetiredMemtableLocked(mem memtable.Table) {
 	if db == nil || mem == nil {
 		return
 	}
-	db.releaseBatchArenaLeasesForMemtable(mem)
 	db.pendingRetiredMems = append(db.pendingRetiredMems, mem)
 }
 
@@ -10780,13 +10779,17 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 			if !retainAppendOnly {
 				db.releaseAppendOnlyDirectArenaLeaseForMemtableWithPolicy(typed, false)
 				typed.ReleaseDropEntries()
+				db.releaseBatchArenaLeasesForMemtable(typed)
 				continue
 			}
 			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
+			db.releaseBatchArenaLeasesForMemtable(typed)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtableWithPolicy(typed, true)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.putAppendOnlyMemPoolDropEntries(typed)
 			}
+		default:
+			db.releaseBatchArenaLeasesForMemtable(mt)
 		}
 	}
 }
@@ -11466,6 +11469,8 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		if reuse {
 			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
 				r.Reset()
+				db.releaseBatchArenaLeasesForMemtable(shard.mem)
+				db.releaseAppendOnlyDirectArenaLeaseForMemtable(shard.mem)
 				shard.appendOnlyDirectValueArena.recycleActive()
 				reused = true
 			}
