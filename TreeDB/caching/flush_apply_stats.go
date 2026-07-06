@@ -268,6 +268,31 @@ func (db *DB) observeCheckpointActiveBackgroundFlushWait(wait time.Duration) {
 	updateAtomicMaxUint64(&db.checkpointActiveBackgroundFlushWaitMaxNs, ns)
 }
 
+func (db *DB) observeWriteWaitForCheckpoint(wait time.Duration) {
+	if db == nil {
+		return
+	}
+	if wait <= 0 {
+		db.writeWaitForCheckpointLastNs.Store(0)
+		return
+	}
+	ns := uint64(wait.Nanoseconds())
+	db.writeWaitForCheckpointNs.Add(ns)
+	db.writeWaitForCheckpointLastNs.Store(ns)
+	db.writeWaitForCheckpointSamples.Add(1)
+	updateAtomicMaxUint64(&db.writeWaitForCheckpointMaxNs, ns)
+}
+
+func (db *DB) appendWriteWaitForCheckpointStats(stats map[string]string) {
+	if db == nil || stats == nil {
+		return
+	}
+	stats["treedb.cache.write.wait_for_checkpoint.ns_total"] = fmt.Sprintf("%d", db.writeWaitForCheckpointNs.Load())
+	stats["treedb.cache.write.wait_for_checkpoint.ns_max"] = fmt.Sprintf("%d", db.writeWaitForCheckpointMaxNs.Load())
+	stats["treedb.cache.write.wait_for_checkpoint.ns_last"] = fmt.Sprintf("%d", db.writeWaitForCheckpointLastNs.Load())
+	stats["treedb.cache.write.wait_for_checkpoint.count_total"] = fmt.Sprintf("%d", db.writeWaitForCheckpointSamples.Load())
+}
+
 const flushCoordinatorProgressWait = 10 * time.Millisecond
 
 func (db *DB) beginFlushCoordinatorPass() {

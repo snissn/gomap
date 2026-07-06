@@ -166,6 +166,7 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 type commandWALSegmentCleanupDecision struct {
 	Path    string
 	Size    int64
+	Frames  uint64
 	MaxLSN  uint64
 	Active  bool
 	Covered bool
@@ -176,6 +177,7 @@ type commandWALSegmentCleanupDecision struct {
 type commandWALSegmentScanResult struct {
 	maxLSN       uint64
 	minLSN       uint64
+	frames       uint64
 	typed        bool
 	terminalTail bool
 }
@@ -290,6 +292,7 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 		}
 		lastLSN = frame.LSN
 		scan.typed = true
+		scan.frames++
 		if scan.minLSN == 0 || frame.LSN < scan.minLSN {
 			scan.minLSN = frame.LSN
 		}
@@ -398,6 +401,7 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		decision := commandWALSegmentCleanupDecision{
 			Path:    seg.path,
 			Size:    seg.size,
+			Frames:  scan.frames,
 			MaxLSN:  scan.maxLSN,
 			Active:  active,
 			Covered: scan.maxLSN <= appliedLSN,
