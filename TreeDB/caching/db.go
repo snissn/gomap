@@ -22730,7 +22730,7 @@ func (db *DB) beginDirectWrite() error {
 			return nil
 		}
 		db.writeMu.RUnlock()
-		db.waitForCheckpoint()
+		db.waitForCheckpointForWrite()
 	}
 }
 
@@ -22746,7 +22746,7 @@ func (db *DB) beginDirectWriteWithFlushMuHeld() error {
 		}
 		db.writeMu.RUnlock()
 		db.flushMu.Unlock()
-		db.waitForCheckpoint()
+		db.waitForCheckpointForWrite()
 		db.flushMu.Lock()
 	}
 }
@@ -22758,7 +22758,7 @@ func (db *DB) beginExclusiveWrite() {
 			return
 		}
 		db.writeMu.Unlock()
-		db.waitForCheckpoint()
+		db.waitForCheckpointForWrite()
 	}
 }
 
@@ -22770,7 +22770,7 @@ func (db *DB) beginExclusiveWriteWithFlushMuHeld() {
 		}
 		db.writeMu.Unlock()
 		db.flushMu.Unlock()
-		db.waitForCheckpoint()
+		db.waitForCheckpointForWrite()
 		db.flushMu.Lock()
 	}
 }
@@ -24513,7 +24513,7 @@ func (db *DB) Close() error {
 func (db *DB) Set(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.set(key, value, false)
@@ -24522,7 +24522,7 @@ func (db *DB) Set(key, value []byte) error {
 func (db *DB) SetSync(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.set(key, value, true)
@@ -24554,7 +24554,7 @@ func (db *DB) SetAfterCommandWALAppendWithRevision(key, value []byte, appendComm
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.setDirectAfterCommandWALAppendWithRevision(key, value, appendCommand)
@@ -24577,7 +24577,7 @@ func (db *DB) update(key []byte, fn backenddb.UpdateFunc, syncWrite bool) error 
 	if fn == nil {
 		return backenddb.ErrNilUpdateFunc
 	}
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 
 	for {
 		guard := db.lockUpdateKey(key)
@@ -25039,7 +25039,7 @@ func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appe
 
 func (db *DB) Delete(key []byte) error {
 	key = normalizeRawKVPointKey(key)
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.delete(key, false)
@@ -25194,7 +25194,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 	if appendCommand != nil && !db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal range deletes require disabled cached redo log")
 	}
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 	commandWALAppended := false
 	appendCommandBeforeVisibility := func() error {
 		if appendCommand == nil || commandWALAppended {
@@ -25883,7 +25883,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 
 func (db *DB) DeleteSync(key []byte) error {
 	key = normalizeRawKVPointKey(key)
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.delete(key, true)
@@ -25909,7 +25909,7 @@ func (db *DB) DeleteAfterCommandWALAppendWithRevision(key []byte, appendCommand 
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
-	db.waitForCheckpoint()
+	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
 	return db.deleteDirectAfterCommandWALAppendWithRevision(key, appendCommand)
