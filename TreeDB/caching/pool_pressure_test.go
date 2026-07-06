@@ -157,9 +157,11 @@ func TestPoolPressureDropsAppendOnlyEntryPools(t *testing.T) {
 
 	resetPoolPressureStateForTest()
 	memtable.DropAppendOnlyEntryPools()
+	memtable.DropAppendOnlyKeyArenaPools()
 	memtable.DropAppendOnlyValueArenaPools()
 	t.Cleanup(func() {
 		memtable.DropAppendOnlyEntryPools()
+		memtable.DropAppendOnlyKeyArenaPools()
 		memtable.DropAppendOnlyValueArenaPools()
 		resetPoolPressureStateForTest()
 	})
@@ -175,8 +177,15 @@ func TestPoolPressureDropsAppendOnlyEntryPools(t *testing.T) {
 	if before.RetainedBytesEstimate == 0 {
 		t.Fatal("test setup did not retain append-only entry pool bytes")
 	}
+	keyArena := memtable.NewAppendOnlyWithCapacity(0)
+	keyArena.Set([]byte("key-arena-retained-chunk"), nil)
+	keyArena.Reset()
+	beforeKeyArena := memtable.AppendOnlyKeyArenaPoolStatsSnapshot()
+	if beforeKeyArena.RetainedBytesEstimate == 0 {
+		t.Fatal("test setup did not retain append-only key arena pool bytes")
+	}
 	valueArena := memtable.NewAppendOnlyWithCapacity(0)
-	valueArena.Set([]byte("value-arena-key"), make([]byte, 4096))
+	valueArena.Set([]byte("valuekey"), make([]byte, 4096))
 	valueArena.ResetDropEntries()
 	beforeValueArena := memtable.AppendOnlyValueArenaPoolStatsSnapshot()
 	if beforeValueArena.RetainedBytesEstimate == 0 {
@@ -194,6 +203,16 @@ func TestPoolPressureDropsAppendOnlyEntryPools(t *testing.T) {
 	}
 	if got := after.DropBytesTotal; got < before.DropBytesTotal+before.RetainedBytesEstimate {
 		t.Fatalf("append-only entry pool drop bytes=%d want at least %d", got, before.DropBytesTotal+before.RetainedBytesEstimate)
+	}
+	afterKeyArena := memtable.AppendOnlyKeyArenaPoolStatsSnapshot()
+	if got := afterKeyArena.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("append-only key arena pool retained bytes=%d want 0", got)
+	}
+	if got := afterKeyArena.DropsTotal; got != beforeKeyArena.DropsTotal+1 {
+		t.Fatalf("append-only key arena pool drops=%d want %d", got, beforeKeyArena.DropsTotal+1)
+	}
+	if got := afterKeyArena.DropBytesTotal; got < beforeKeyArena.DropBytesTotal+beforeKeyArena.RetainedBytesEstimate {
+		t.Fatalf("append-only key arena pool drop bytes=%d want at least %d", got, beforeKeyArena.DropBytesTotal+beforeKeyArena.RetainedBytesEstimate)
 	}
 	afterValueArena := memtable.AppendOnlyValueArenaPoolStatsSnapshot()
 	if got := afterValueArena.RetainedBytesEstimate; got != 0 {
