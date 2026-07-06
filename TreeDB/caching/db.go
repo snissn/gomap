@@ -13637,7 +13637,7 @@ const (
 	entrySliceLeaseMinShift      = 4
 	entrySliceLeaseMaxShift      = 20
 	entrySliceLeaseClassCount    = entrySliceLeaseMaxShift - entrySliceLeaseMinShift + 1
-	maxEntrySliceLeasesPerBucket = 128
+	maxEntrySliceLeasesPerBucket = 512
 )
 
 var entrySlicePools [entrySliceLeaseClassCount]sync.Pool
