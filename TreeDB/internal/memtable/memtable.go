@@ -179,6 +179,20 @@ type CopySortedBatchValueCopier interface {
 	ApplyCopySortedBatchWithValueCopierTrusted(entries []batchpkg.Entry, copyValue func(value []byte) []byte, storeInlinePtrValues bool, onKey func(key []byte)) (copiedValues bool)
 }
 
+// CopySelectedSortedBatchApplier is the selected-entry form of
+// CopySortedBatchApplier. It lets callers feed a small sorted shard stream from
+// an existing batch plus selector slice without materializing an intermediate
+// []batch.Entry per shard.
+type CopySelectedSortedBatchApplier interface {
+	ApplyCopySelectedSortedBatchTrusted(entries []batchpkg.Entry, selectors []int, selector int, count int, firstKey []byte, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) (borrowedValues bool)
+}
+
+// CopySelectedSortedBatchValueCopier is the selected-entry form of
+// CopySortedBatchValueCopier.
+type CopySelectedSortedBatchValueCopier interface {
+	ApplyCopySelectedSortedBatchWithValueCopierTrusted(entries []batchpkg.Entry, selectors []int, selector int, count int, firstKey []byte, copyValue func(value []byte) []byte, storeInlinePtrValues bool, onKey func(key []byte)) (copiedValues bool)
+}
+
 type Memtable struct {
 	sl *skiplist.SkipList
 	mu sync.RWMutex

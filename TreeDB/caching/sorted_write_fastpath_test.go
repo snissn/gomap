@@ -13,6 +13,7 @@ import (
 type recordingCopySortedMem struct {
 	memtable.Table
 	calls             int
+	selectedCalls     int
 	reserveCalls      int
 	reserveAdditional int
 	hasMax            bool
@@ -108,6 +109,61 @@ func (m *recordingCopySortedMem) ApplyCopySortedBatchTrusted(entries []batch.Ent
 	return borrowed
 }
 
+func batchSelectedEntries(entries []batch.Entry, selectors []int, selector int) []batch.Entry {
+	selected := make([]batch.Entry, 0, len(entries))
+	for i := range entries {
+		if i < len(selectors) && selectors[i] == selector {
+			selected = append(selected, entries[i])
+		}
+	}
+	return selected
+}
+
+func (m *recordingCopySortedMem) ApplyCopySelectedSortedBatchTrusted(entries []batch.Entry, selectors []int, selector int, count int, firstKey []byte, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	selected := batchSelectedEntries(entries, selectors, selector)
+	if len(selected) != count {
+		panic("selected entry count mismatch")
+	}
+	entries = selected
+	orderedAppend := m.canRecordOrderedAppend(entries)
+	applier, ok := m.Table.(memtable.CopySelectedSortedBatchApplier)
+	if !ok {
+		return m.ApplyCopySortedBatchTrusted(entries, borrowValues, storeInlinePtrValues, onKey)
+	}
+	selectors = make([]int, len(entries))
+	borrowed := applier.ApplyCopySelectedSortedBatchTrusted(entries, selectors, 0, count, firstKey, borrowValues, storeInlinePtrValues, onKey)
+	if orderedAppend {
+		m.calls++
+		m.selectedCalls++
+	}
+	m.noteEntries(entries)
+	return borrowed
+}
+
+func (m *recordingCopySortedMem) ApplyCopySelectedSortedBatchWithValueCopierTrusted(entries []batch.Entry, selectors []int, selector int, count int, firstKey []byte, copyValue func(value []byte) []byte, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	selected := batchSelectedEntries(entries, selectors, selector)
+	if len(selected) != count {
+		panic("selected entry count mismatch")
+	}
+	entries = selected
+	orderedAppend := m.canRecordOrderedAppend(entries)
+	copied := false
+	selectors = make([]int, len(entries))
+	if applier, ok := m.Table.(memtable.CopySelectedSortedBatchValueCopier); ok {
+		copied = applier.ApplyCopySelectedSortedBatchWithValueCopierTrusted(entries, selectors, 0, count, firstKey, copyValue, storeInlinePtrValues, onKey)
+	} else if applier, ok := m.Table.(memtable.CopySortedBatchValueCopier); ok {
+		copied = applier.ApplyCopySortedBatchWithValueCopierTrusted(entries, copyValue, storeInlinePtrValues, onKey)
+	} else {
+		return m.ApplyCopySortedBatchTrusted(entries, false, storeInlinePtrValues, onKey)
+	}
+	if orderedAppend {
+		m.calls++
+		m.selectedCalls++
+	}
+	m.noteEntries(entries)
+	return copied
+}
+
 func newSortedWriteFastPathDB(t *testing.T) (*DB, *recordingCopySortedMem) {
 	t.Helper()
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
@@ -160,6 +216,32 @@ func TestBatchWriteSortedUniqueUsesCopySortedFastPath(t *testing.T) {
 
 	if rec.calls != 1 {
 		t.Fatalf("copy sorted fast path calls=%d want 1", rec.calls)
+	}
+	requireCachedValue(t, db, []byte("a"), []byte("va"))
+	requireCachedValue(t, db, []byte("b"), []byte("vb"))
+	requireCachedValue(t, db, []byte("c"), []byte("vc"))
+}
+
+func TestBatchWriteSmallSortedUniqueUsesSelectedFastPath(t *testing.T) {
+	db, rec := newSortedWriteFastPathDB(t)
+	defer db.Close()
+
+	b := db.NewBatchWithSize(3)
+	if err := b.Set([]byte("a"), []byte("va")); err != nil {
+		t.Fatalf("Set(a): %v", err)
+	}
+	if err := b.Set([]byte("b"), []byte("vb")); err != nil {
+		t.Fatalf("Set(b): %v", err)
+	}
+	if err := b.Set([]byte("c"), []byte("vc")); err != nil {
+		t.Fatalf("Set(c): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if rec.selectedCalls != 1 {
+		t.Fatalf("copy selected sorted fast path calls=%d want 1", rec.selectedCalls)
 	}
 	requireCachedValue(t, db, []byte("a"), []byte("va"))
 	requireCachedValue(t, db, []byte("b"), []byte("vb"))

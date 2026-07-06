@@ -1652,10 +1652,17 @@ func (m *AppendOnly) canAppendTrustedSortedBatchLocked(entries []batchpkg.Entry)
 	if len(entries) == 0 || len(entries[0].Key) == 0 || !m.ordered {
 		return false
 	}
+	return m.canAppendTrustedSortedFirstKeyLocked(entries[0].Key)
+}
+
+func (m *AppendOnly) canAppendTrustedSortedFirstKeyLocked(firstKey []byte) bool {
+	if len(firstKey) == 0 || !m.ordered {
+		return false
+	}
 	if m.count == 0 || !m.hasLast {
 		return true
 	}
-	return bytes.Compare(entries[0].Key, appendOnlyEntryKey(&m.entries[m.lastIdx])) > 0
+	return bytes.Compare(firstKey, appendOnlyEntryKey(&m.entries[m.lastIdx])) > 0
 }
 
 func (m *AppendOnly) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
@@ -1686,6 +1693,37 @@ func (m *AppendOnly) ApplyCopySortedBatchTrusted(entries []batchpkg.Entry, borro
 	return borrowedValues
 }
 
+func (m *AppendOnly) ApplyCopySelectedSortedBatchTrusted(entries []batchpkg.Entry, selectors []int, selector int, count int, firstKey []byte, borrowValues bool, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	if count <= 0 {
+		return false
+	}
+	borrowedValues := false
+	m.mu.Lock()
+	m.reserveAdditionalEntriesLocked(count)
+	trustedOrdered := m.canAppendTrustedSortedFirstKeyLocked(firstKey)
+	for i := range entries {
+		if i >= len(selectors) || selectors[i] != selector {
+			continue
+		}
+		op := entries[i]
+		value, ptr, flags := appendOnlyBatchEntryPayload(op, storeInlinePtrValues)
+		borrowValue := borrowValues && len(value) > 0
+		if borrowValue {
+			borrowedValues = true
+		}
+		if trustedOrdered {
+			m.appendEntryTrustedOrderedLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
+		} else {
+			m.appendEntryLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+	return borrowedValues
+}
+
 func (m *AppendOnly) ApplyCopySortedBatchWithValueCopierTrusted(entries []batchpkg.Entry, copyValue func(value []byte) []byte, storeInlinePtrValues bool, onKey func(key []byte)) bool {
 	if len(entries) == 0 {
 		return false
@@ -1695,6 +1733,41 @@ func (m *AppendOnly) ApplyCopySortedBatchWithValueCopierTrusted(entries []batchp
 	m.reserveAdditionalEntriesLocked(len(entries))
 	trustedOrdered := m.canAppendTrustedSortedBatchLocked(entries)
 	for i := range entries {
+		op := entries[i]
+		value, ptr, flags := appendOnlyBatchEntryPayload(op, storeInlinePtrValues)
+		borrowValue := false
+		if len(value) > 0 && copyValue != nil {
+			if copied := copyValue(value); len(copied) == len(value) {
+				value = copied
+				borrowValue = true
+				copiedValues = true
+			}
+		}
+		if trustedOrdered {
+			m.appendEntryTrustedOrderedLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
+		} else {
+			m.appendEntryLocked(op.Key, value, ptr, flags, op.Revision, false, borrowValue)
+		}
+		if onKey != nil {
+			onKey(op.Key)
+		}
+	}
+	m.mu.Unlock()
+	return copiedValues
+}
+
+func (m *AppendOnly) ApplyCopySelectedSortedBatchWithValueCopierTrusted(entries []batchpkg.Entry, selectors []int, selector int, count int, firstKey []byte, copyValue func(value []byte) []byte, storeInlinePtrValues bool, onKey func(key []byte)) bool {
+	if count <= 0 {
+		return false
+	}
+	copiedValues := false
+	m.mu.Lock()
+	m.reserveAdditionalEntriesLocked(count)
+	trustedOrdered := m.canAppendTrustedSortedFirstKeyLocked(firstKey)
+	for i := range entries {
+		if i >= len(selectors) || selectors[i] != selector {
+			continue
+		}
 		op := entries[i]
 		value, ptr, flags := appendOnlyBatchEntryPayload(op, storeInlinePtrValues)
 		borrowValue := false

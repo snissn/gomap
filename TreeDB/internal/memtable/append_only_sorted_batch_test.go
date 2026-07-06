@@ -48,6 +48,92 @@ func TestAppendOnlyApplyCopySortedBatchTrusted_AppendKeepsOrderedAndCopiesKeys(t
 	}
 }
 
+func TestAppendOnlyApplyCopySelectedSortedBatchTrusted_AppendKeepsOrderedAndCopiesKeys(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	keyA := []byte("a")
+	keyB := []byte("b")
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: keyA, Value: []byte("va")},
+		{Type: batchpkg.OpPut, Key: keyB, Value: []byte("vb")},
+	}
+	selectors := []int{0, 0}
+	borrowed := m.ApplyCopySelectedSortedBatchTrusted(entries, selectors, 0, len(entries), entries[0].Key, true, true, nil)
+	if !borrowed {
+		t.Fatalf("ApplyCopySelectedSortedBatchTrusted borrowed=false, want true for inline values")
+	}
+
+	keyA[0] = 'z'
+	if got, deleted, ok := m.Get([]byte("a")); !ok || deleted || string(got) != "va" {
+		t.Fatalf("Get(a)=(%q,%v,%v), want (va,false,true)", string(got), deleted, ok)
+	}
+	if got, deleted, ok := m.Get([]byte("b")); !ok || deleted || string(got) != "vb" {
+		t.Fatalf("Get(b)=(%q,%v,%v), want (vb,false,true)", string(got), deleted, ok)
+	}
+
+	m.mu.RLock()
+	ordered := m.ordered
+	latestDirty := m.latestDirty
+	latestLen := len(m.latest) + len(m.latest64)
+	count := m.count
+	m.mu.RUnlock()
+	if !ordered {
+		t.Fatalf("ordered=false after trusted selected sorted append")
+	}
+	if latestDirty || latestLen != 0 {
+		t.Fatalf("latest index built for ordered selected append: dirty=%v len=%d", latestDirty, latestLen)
+	}
+	if count != 2 {
+		t.Fatalf("count=%d want 2", count)
+	}
+}
+
+func TestAppendOnlyApplyCopySelectedSortedBatchTrusted_FallbackKeepsEntries(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("m"), []byte("old"))
+
+	keyA := []byte("a")
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: keyA, Value: []byte("va")},
+		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("vb")},
+	}
+	selectors := []int{0, 0}
+	borrowed := m.ApplyCopySelectedSortedBatchTrusted(entries, selectors, 0, len(entries), entries[0].Key, true, true, nil)
+	if !borrowed {
+		t.Fatalf("ApplyCopySelectedSortedBatchTrusted borrowed=false, want true for inline values")
+	}
+
+	keyA[0] = 'z'
+	if got, deleted, ok := m.Get([]byte("a")); !ok || deleted || string(got) != "va" {
+		t.Fatalf("Get(a)=(%q,%v,%v), want (va,false,true)", string(got), deleted, ok)
+	}
+	if got, deleted, ok := m.Get([]byte("b")); !ok || deleted || string(got) != "vb" {
+		t.Fatalf("Get(b)=(%q,%v,%v), want (vb,false,true)", string(got), deleted, ok)
+	}
+	if got, deleted, ok := m.Get([]byte("m")); !ok || deleted || string(got) != "old" {
+		t.Fatalf("Get(m)=(%q,%v,%v), want (old,false,true)", string(got), deleted, ok)
+	}
+
+	m.mu.RLock()
+	ordered := m.ordered
+	latestDirty := m.latestDirty
+	runCount := len(m.sortedRuns)
+	count := m.count
+	m.mu.RUnlock()
+	if ordered {
+		t.Fatalf("ordered=true after selected sorted fallback appended below existing max key")
+	}
+	if latestDirty {
+		t.Fatalf("latestDirty=true after selected sorted fallback; latest lookup should be immediately usable")
+	}
+	if runCount != 2 {
+		t.Fatalf("sorted run count=%d want 2", runCount)
+	}
+	if count != 3 {
+		t.Fatalf("count=%d want 3", count)
+	}
+}
+
 func TestAppendOnlyApplyCopySortedBatchWithValueCopierOwnsValues(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("a")
@@ -72,6 +158,91 @@ func TestAppendOnlyApplyCopySortedBatchWithValueCopierOwnsValues(t *testing.T) {
 	}
 	if got, deleted, ok := m.Get([]byte("a")); !ok || deleted || string(got) != "mutable-value" {
 		t.Fatalf("Get(a)=(%q,%v,%v), want copied immutable value", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyApplyCopySelectedSortedBatchWithValueCopierOwnsValues(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("a")
+	value := []byte("mutable-value")
+	entries := []batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   key,
+		Value: value,
+	}}
+	selectors := []int{0}
+	var copiedBacking [][]byte
+	copied := m.ApplyCopySelectedSortedBatchWithValueCopierTrusted(entries, selectors, 0, len(entries), key, func(src []byte) []byte {
+		dst := append([]byte(nil), src...)
+		copiedBacking = append(copiedBacking, dst)
+		return dst
+	}, true, nil)
+	if !copied {
+		t.Fatalf("copied=false, want true")
+	}
+	key[0] = 'z'
+	value[0] = 'X'
+	if len(copiedBacking) != 1 || string(copiedBacking[0]) != "mutable-value" {
+		t.Fatalf("copied backing mutated or missing: %q", copiedBacking)
+	}
+	if got, deleted, ok := m.Get([]byte("a")); !ok || deleted || string(got) != "mutable-value" {
+		t.Fatalf("Get(a)=(%q,%v,%v), want copied immutable value", string(got), deleted, ok)
+	}
+}
+
+func TestAppendOnlyApplyCopySelectedSortedBatchWithValueCopierTrusted_FallbackKeepsEntries(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("m"), []byte("old"))
+
+	key := []byte("a")
+	value := []byte("mutable-value")
+	entries := []batchpkg.Entry{
+		{Type: batchpkg.OpPut, Key: key, Value: value},
+		{Type: batchpkg.OpPut, Key: []byte("b"), Value: []byte("vb")},
+	}
+	selectors := []int{0, 0}
+	var copiedBacking [][]byte
+	copied := m.ApplyCopySelectedSortedBatchWithValueCopierTrusted(entries, selectors, 0, len(entries), key, func(src []byte) []byte {
+		dst := append([]byte(nil), src...)
+		copiedBacking = append(copiedBacking, dst)
+		return dst
+	}, true, nil)
+	if !copied {
+		t.Fatalf("copied=false, want true")
+	}
+
+	key[0] = 'z'
+	value[0] = 'X'
+	if len(copiedBacking) != 2 || string(copiedBacking[0]) != "mutable-value" || string(copiedBacking[1]) != "vb" {
+		t.Fatalf("copied backing mutated or missing: %q", copiedBacking)
+	}
+	if got, deleted, ok := m.Get([]byte("a")); !ok || deleted || string(got) != "mutable-value" {
+		t.Fatalf("Get(a)=(%q,%v,%v), want copied immutable value", string(got), deleted, ok)
+	}
+	if got, deleted, ok := m.Get([]byte("b")); !ok || deleted || string(got) != "vb" {
+		t.Fatalf("Get(b)=(%q,%v,%v), want (vb,false,true)", string(got), deleted, ok)
+	}
+	if got, deleted, ok := m.Get([]byte("m")); !ok || deleted || string(got) != "old" {
+		t.Fatalf("Get(m)=(%q,%v,%v), want (old,false,true)", string(got), deleted, ok)
+	}
+
+	m.mu.RLock()
+	ordered := m.ordered
+	latestDirty := m.latestDirty
+	runCount := len(m.sortedRuns)
+	count := m.count
+	m.mu.RUnlock()
+	if ordered {
+		t.Fatalf("ordered=true after selected value-copier fallback appended below existing max key")
+	}
+	if latestDirty {
+		t.Fatalf("latestDirty=true after selected value-copier fallback; latest lookup should be immediately usable")
+	}
+	if runCount != 2 {
+		t.Fatalf("sorted run count=%d want 2", runCount)
+	}
+	if count != 3 {
+		t.Fatalf("count=%d want 3", count)
 	}
 }
 
