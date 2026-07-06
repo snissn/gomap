@@ -1740,6 +1740,51 @@ func TestFramePreparer_TrimScratchForReuseKeepsPolicyAndBoundsBuffers(t *testing
 	}
 }
 
+func TestFramePreparer_DictEncoderRetainedAcrossTrimAndSameOptions(t *testing.T) {
+	const dictID = uint64(3553)
+	dict, records := buildLargeDictCompressionFixture(t, dictID)
+
+	prep := NewFramePreparer()
+	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	body, stats, err := prep.PrepareFrame(dictID, dict, records)
+	if err != nil {
+		t.Fatalf("PrepareFrame: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		t.Fatalf("expected kept dict-compressed frame: attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+	if prep.dictEncoder == nil || prep.dictEncoderCodecs == nil {
+		t.Fatalf("expected retained dict encoder")
+	}
+	retained := prep.dictEncoder
+	retainedKey := prep.dictEncoderKey
+
+	prep.TrimScratchForReuse()
+	if prep.dictEncoder != retained || prep.dictEncoderKey != retainedKey {
+		t.Fatalf("trim released retained dict encoder")
+	}
+
+	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	if prep.dictEncoder != retained || prep.dictEncoderKey != retainedKey {
+		t.Fatalf("same encoder options released retained dict encoder")
+	}
+	body, stats, err = prep.PrepareFrameInto(body[:0], dictID, dict, records)
+	if err != nil {
+		t.Fatalf("second PrepareFrameInto: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		t.Fatalf("expected second kept dict-compressed frame: attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+	if prep.dictEncoder != retained || prep.dictEncoderKey != retainedKey {
+		t.Fatalf("second frame did not reuse retained dict encoder")
+	}
+
+	prep.ResetForReuse()
+	if prep.dictEncoder != nil || prep.dictEncoderCodecs != nil || prep.dictEncoderKey != (dictCodecKey{}) {
+		t.Fatalf("reset retained dict encoder state: encoder=%p codecs=%p key=%+v", prep.dictEncoder, prep.dictEncoderCodecs, prep.dictEncoderKey)
+	}
+}
+
 func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 	records := []Record{
 		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 32)},
