@@ -373,6 +373,76 @@ func publicStatUint64(t *testing.T, db *DB, key string) uint64 {
 	return statMapUint64(t, db.Stats(), key)
 }
 
+func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                 t.TempDir(),
+		Durability:          DurabilityDurable,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+	})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	for _, key := range []string{
+		"treedb.command_wal.append.count_total",
+		"treedb.command_wal.append.point.count_total",
+		"treedb.command_wal.append.payload.count_total",
+		"treedb.command_wal.flush.count_total",
+		"treedb.command_wal.sync.count_total",
+	} {
+		if got := statMapUint64(t, before, key); got != 0 {
+			t.Fatalf("%s before writes=%d, want 0 (stats=%#v)", key, got, before)
+		}
+	}
+
+	if err := db.Set([]byte("point"), []byte("one")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	b := db.NewBatch()
+	if err := b.Set([]byte("payload"), []byte("two")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	stats := db.Stats()
+	for key, want := range map[string]uint64{
+		"treedb.command_wal.append.count_total":         2,
+		"treedb.command_wal.append.point.count_total":   1,
+		"treedb.command_wal.append.payload.count_total": 1,
+		"treedb.command_wal.flush.count_total":          1,
+		"treedb.command_wal.sync.count_total":           1,
+	} {
+		if got := statMapUint64(t, stats, key); got != want {
+			t.Fatalf("%s=%d, want %d (stats=%#v)", key, got, want, stats)
+		}
+	}
+	for _, key := range []string{
+		"treedb.command_wal.append.ns_total",
+		"treedb.command_wal.flush.ns_total",
+		"treedb.command_wal.sync.ns_total",
+	} {
+		// Very short timers can round to zero on some CI clocks; the matching
+		// count stats above prove the intended paths were observed.
+		_ = statMapUint64(t, stats, key)
+	}
+	for _, key := range []string{
+		"treedb.command_wal.append.point.ns_total",
+		"treedb.command_wal.append.payload.ns_total",
+	} {
+		_ = statMapUint64(t, stats, key)
+	}
+}
+
 func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),
@@ -1082,6 +1152,20 @@ func TestPublicCommandWALCheckpointCleansCoveredCommandJournalSegment(t *testing
 	stats := db.Stats()
 	if got := stats["treedb.command_wal.cleanup.removed_segments"]; got != "1" {
 		t.Fatalf("cleanup.removed_segments=%q, want 1 (stats=%#v)", got, stats)
+	}
+	if got := statMapUint64(t, stats, "treedb.command_wal.cleanup.scan.count_total"); got == 0 {
+		t.Fatalf("cleanup.scan.count_total=0, want >0")
+	}
+	// Very short cleanup scans can complete below the clock's observable
+	// granularity on Windows; count/byte/frame stats below prove the scan ran.
+	_ = statMapUint64(t, stats, "treedb.command_wal.cleanup.scan.ns_total")
+	for _, key := range []string{
+		"treedb.command_wal.cleanup.scanned_bytes_total",
+		"treedb.command_wal.cleanup.scanned_frames_total",
+	} {
+		if got := statMapUint64(t, stats, key); got == 0 {
+			t.Fatalf("%s=0, want >0", key)
+		}
 	}
 	if got := stats["treedb.command_wal.segments.active"]; got != "1" {
 		t.Fatalf("segments.active=%q, want 1 (stats=%#v)", got, stats)

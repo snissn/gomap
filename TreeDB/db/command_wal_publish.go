@@ -164,18 +164,22 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 }
 
 type commandWALSegmentCleanupDecision struct {
-	Path    string
-	Size    int64
-	MaxLSN  uint64
-	Active  bool
-	Covered bool
-	Removed bool
-	Error   string
+	Path         string
+	Size         int64
+	ScannedBytes int64
+	Frames       uint64
+	MaxLSN       uint64
+	Active       bool
+	Covered      bool
+	Removed      bool
+	Error        string
 }
 
 type commandWALSegmentScanResult struct {
 	maxLSN       uint64
 	minLSN       uint64
+	scannedBytes int64
+	frames       uint64
 	typed        bool
 	terminalTail bool
 }
@@ -277,6 +281,11 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 			}
 			return scan, err
 		}
+		scannedBytes, err := r.Offset()
+		if err != nil {
+			return scan, err
+		}
+		scan.scannedBytes = scannedBytes
 		if lastLSN != 0 && frame.LSN <= lastLSN {
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
@@ -290,6 +299,7 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 		}
 		lastLSN = frame.LSN
 		scan.typed = true
+		scan.frames++
 		if scan.minLSN == 0 || frame.LSN < scan.minLSN {
 			scan.minLSN = frame.LSN
 		}
@@ -358,6 +368,14 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 }
 
 func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, appliedLSN, maxSegmentBytes)
+	if err != nil {
+		return decisions, err
+	}
+	return removeCoveredCommandWALSegments(decisions)
+}
+
+func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
 	// PR2 cleanup deliberately streams segments on demand. It is intended for
 	// checkpoint/maintenance boundaries; a later manifest/catalog can cache
 	// results if this moves onto a hotter path.
@@ -385,9 +403,13 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		})
 		if err != nil {
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
-				Path:   seg.path,
-				Active: active,
-				Error:  err.Error(),
+				Path:         seg.path,
+				Size:         seg.size,
+				ScannedBytes: scan.scannedBytes,
+				Frames:       scan.frames,
+				MaxLSN:       scan.maxLSN,
+				Active:       active,
+				Error:        err.Error(),
 			})
 			scanErr = errors.Join(scanErr, fmt.Errorf("scan command WAL segment %s: %w", filepath.Base(seg.path), err))
 			continue
@@ -396,17 +418,23 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			continue
 		}
 		decision := commandWALSegmentCleanupDecision{
-			Path:    seg.path,
-			Size:    seg.size,
-			MaxLSN:  scan.maxLSN,
-			Active:  active,
-			Covered: scan.maxLSN <= appliedLSN,
+			Path:         seg.path,
+			Size:         seg.size,
+			ScannedBytes: scan.scannedBytes,
+			Frames:       scan.frames,
+			MaxLSN:       scan.maxLSN,
+			Active:       active,
+			Covered:      scan.maxLSN <= appliedLSN,
 		}
 		decisions = append(decisions, decision)
 	}
 	if scanErr != nil {
 		return decisions, scanErr
 	}
+	return decisions, nil
+}
+
+func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision) ([]commandWALSegmentCleanupDecision, error) {
 	for i := range decisions {
 		decision := &decisions[i]
 		if decision.Covered && !decision.Active {

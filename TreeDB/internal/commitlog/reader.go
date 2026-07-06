@@ -39,6 +39,13 @@ func (r *Reader) ReadBatch() ([]Record, error) {
 	return decodeBatch(payload)
 }
 
+func (r *Reader) Offset() (int64, error) {
+	if r == nil || r.f == nil {
+		return 0, os.ErrInvalid
+	}
+	return r.f.Seek(0, io.SeekCurrent)
+}
+
 func (r *Reader) readSegmentPayload(commandMode bool) ([]byte, error) {
 	var header [segmentHeaderSize]byte
 	if n, err := io.ReadFull(r.f, header[:]); err != nil {

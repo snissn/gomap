@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +95,8 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 		"treedb.cache.flush_apply.leaf_log_encode_compress_ns_total",
 		"treedb.flush_apply.apply_ns_total",
 		"treedb.cache.checkpoint.active_background_flush_wait_ns_total",
+		"treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait_for_checkpoint.count_total",
 		"treedb.cache.checkpoint.flush_preempt_requests_total",
 		"treedb.cache.flush_apply.coordinator.checkpoint_preemptions_total",
 		"treedb.cache.checkpoint.debt_memtables_last",
@@ -152,6 +155,194 @@ func TestFlushApplyStatsExposeStageCounters(t *testing.T) {
 	}
 	if got := requireStatUint64(t, stats, "treedb.cache.flush_apply.leaf_log_append_frames_total"); got == 0 {
 		t.Fatalf("leaf log append frames = 0, want >0")
+	}
+}
+
+func TestWriteWaitForCheckpointStatsIncrement(t *testing.T) {
+	db := &DB{}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	for _, key := range []string{
+		"treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait_for_checkpoint.ns_max",
+		"treedb.cache.write.wait_for_checkpoint.ns_last",
+		"treedb.cache.write.wait_for_checkpoint.count_total",
+	} {
+		if got := requireStatUint64(t, stats, key); got != 0 {
+			t.Fatalf("%s before wait=%d, want 0 (stats=%#v)", key, got, stats)
+		}
+	}
+
+	db.checkpointing.Store(true)
+	done := make(chan struct{})
+	go func() {
+		db.waitForCheckpointForWrite()
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitForCheckpointForWrite did not unblock")
+	}
+
+	stats = map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+	for _, key := range []string{
+		"treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait_for_checkpoint.ns_max",
+		"treedb.cache.write.wait_for_checkpoint.ns_last",
+	} {
+		if got := requireStatUint64(t, stats, key); got == 0 {
+			t.Fatalf("%s=0, want >0 (stats=%#v)", key, stats)
+		}
+	}
+}
+
+func TestBeginDirectWriteRecordsCheckpointWait(t *testing.T) {
+	db := &DB{}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.checkpointing.Store(true)
+
+	done := make(chan error, 1)
+	go func() {
+		err := db.beginDirectWrite()
+		if err == nil {
+			db.writeMu.RUnlock()
+		}
+		done <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("beginDirectWrite: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("beginDirectWrite did not unblock")
+	}
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+}
+
+func TestBeginDirectWriteRecordsCheckpointWaitQueuedOnWriteMu(t *testing.T) {
+	db := &DB{}
+	db.checkpointing.Store(true)
+	db.writeMu.Lock()
+
+	done := make(chan error, 1)
+	go func() {
+		err := db.beginDirectWrite()
+		if err == nil {
+			db.writeMu.RUnlock()
+		}
+		done <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	db.checkpointing.Store(false)
+	db.writeMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("beginDirectWrite: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("beginDirectWrite did not unblock")
+	}
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.ns_total"); got == 0 {
+		t.Fatalf("wait_for_checkpoint.ns_total=0, want >0 (stats=%#v)", stats)
+	}
+}
+
+func TestBeginExclusiveWriteRecordsCheckpointWait(t *testing.T) {
+	db := &DB{}
+	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.checkpointing.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		db.beginExclusiveWrite()
+		db.writeMu.Unlock()
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(false)
+	db.checkpointCond.Broadcast()
+	db.checkpointMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("beginExclusiveWrite did not unblock")
+	}
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+}
+
+func TestBeginExclusiveWriteRecordsCheckpointWaitQueuedOnWriteMu(t *testing.T) {
+	db := &DB{}
+	db.checkpointing.Store(true)
+	db.writeMu.Lock()
+
+	done := make(chan struct{})
+	go func() {
+		db.beginExclusiveWrite()
+		db.writeMu.Unlock()
+		close(done)
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	db.checkpointing.Store(false)
+	db.writeMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("beginExclusiveWrite did not unblock")
+	}
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.ns_total"); got == 0 {
+		t.Fatalf("wait_for_checkpoint.ns_total=0, want >0 (stats=%#v)", stats)
 	}
 }
 

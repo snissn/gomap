@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -175,6 +176,10 @@ func (db *DB) CommandWALEnabled() bool {
 // modes fsync the command WAL; DurabilityWALOnRelaxed intentionally downgrades
 // this to a flush-to-kernel boundary to preserve relaxed-sync semantics.
 func (db *DB) FlushCommandWAL(sync bool) error {
+	return db.flushCommandWAL(sync, true)
+}
+
+func (db *DB) flushCommandWAL(sync bool, observe bool) error {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return nil
 	}
@@ -182,7 +187,12 @@ func (db *DB) FlushCommandWAL(sync bool) error {
 		return err
 	}
 	var err error
-	if sync && db.durability != DurabilityWALOnRelaxed {
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	start := time.Time{}
+	if observe {
+		start = time.Now()
+	}
+	if actualSync {
 		err = db.commandJournal.Sync()
 	} else {
 		err = db.commandJournal.Flush()
@@ -190,10 +200,33 @@ func (db *DB) FlushCommandWAL(sync bool) error {
 	if err == nil && db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint
 	}
+	if observe {
+		db.observeCommandWALFlush(actualSync, time.Since(start))
+	}
 	if err != nil {
 		db.commandWALFlushPoisoned.Store(true)
 	}
 	return err
+}
+
+func (db *DB) finishCommandWALAppendFlush(path commandWALAppendStatsPath, actualSync bool, lsn uint64, timing commitlog.CommandJournalAppendFlushTiming, err error) error {
+	if lsn != 0 || err == nil {
+		db.observeCommandWALAppend(path, timing.Append)
+	}
+	if lsn != 0 {
+		if err == nil && db.testFailCommandWALFlush.Load() {
+			err = errTestCommandWALFlushFailpoint
+		}
+		db.observeCommandWALFlush(actualSync, timing.Flush)
+	}
+	if err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
+		return err
+	}
+	db.observeCommandWALAccepted(lsn)
+	return nil
 }
 
 func (db *DB) commandWALPoisonedError() error {
@@ -320,11 +353,24 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	if state == nil || state.AppliedCommandLSN == 0 {
 		return nil
 	}
-	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
+	scanStart := time.Now()
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
 	db.commandWALCleanupScans.Add(1)
+	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
+		db.commandWALCleanupScanNs.Add(scanNs)
+	}
+	if err == nil {
+		decisions, err = removeCoveredCommandWALSegments(decisions)
+	}
 	removed := uint64(0)
 	removedBytes := uint64(0)
+	scannedBytes := uint64(0)
+	scannedFrames := uint64(0)
 	for _, decision := range decisions {
+		if decision.ScannedBytes > 0 {
+			scannedBytes += uint64(decision.ScannedBytes)
+		}
+		scannedFrames += decision.Frames
 		if !decision.Removed {
 			continue
 		}
@@ -332,6 +378,12 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		if decision.Size > 0 {
 			removedBytes += uint64(decision.Size)
 		}
+	}
+	if scannedBytes > 0 {
+		db.commandWALCleanupScanBytes.Add(scannedBytes)
+	}
+	if scannedFrames > 0 {
+		db.commandWALCleanupScanFrames.Add(scannedFrames)
 	}
 	if removed > 0 {
 		db.commandWALCleanupRemoved.Add(removed)
@@ -1007,18 +1059,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	flushSync := sync && db.durability != DurabilityWALOnRelaxed
-	lsn, err := db.commandJournal.AppendRawKVSingleCommandAndFlush(baseAppliedLSN, op, flushSync)
-	if err == nil && db.testFailCommandWALFlush.Load() {
-		err = errTestCommandWALFlushFailpoint
-	}
-	if err != nil {
-		if lsn != 0 {
-			db.commandWALFlushPoisoned.Store(true)
-		}
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, timing, err := db.commandJournal.AppendRawKVSingleCommandAndFlushMeasured(baseAppliedLSN, op, actualSync)
+	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPoint, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
 	}
-	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -1065,24 +1110,11 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	flushSync := sync && db.durability != DurabilityWALOnRelaxed
-	var lsn uint64
-	var err error
-	if revision == 0 {
-		lsn, err = db.commandJournal.AppendRawKVPointCommandTrustedAndFlush(baseAppliedLSN, op, key, value, flushSync)
-	} else {
-		lsn, err = db.commandJournal.AppendRawKVPointCommandTrustedWithRevisionAndFlush(baseAppliedLSN, op, key, value, revision, flushSync)
-	}
-	if err == nil && db.testFailCommandWALFlush.Load() {
-		err = errTestCommandWALFlushFailpoint
-	}
-	if err != nil {
-		if lsn != 0 {
-			db.commandWALFlushPoisoned.Store(true)
-		}
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, timing, err := db.commandJournal.AppendRawKVPointCommandTrustedWithRevisionAndFlushMeasured(baseAppliedLSN, op, key, value, revision, actualSync)
+	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPoint, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
 	}
-	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -1131,29 +1163,16 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	}
 	var lsn uint64
 	var err error
-	flushSync := sync && db.durability != DurabilityWALOnRelaxed
+	var timing commitlog.CommandJournalAppendFlushTiming
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
 	if trusted {
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrustedAndFlush(baseAppliedLSN, payload, flushSync)
+		lsn, timing, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrustedAndFlushMeasured(baseAppliedLSN, payload, actualSync)
 	} else {
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommand(baseAppliedLSN, payload)
-		if err == nil {
-			if flushSync {
-				err = db.commandJournal.Sync()
-			} else {
-				err = db.commandJournal.Flush()
-			}
-		}
+		lsn, timing, err = db.commandJournal.AppendRawKVBatchPayloadCommandAndFlushMeasured(baseAppliedLSN, payload, actualSync)
 	}
-	if err == nil && db.testFailCommandWALFlush.Load() {
-		err = errTestCommandWALFlushFailpoint
-	}
-	if err != nil {
-		if lsn != 0 {
-			db.commandWALFlushPoisoned.Store(true)
-		}
+	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPayload, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
 	}
-	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -1273,13 +1292,17 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 	db.mu.RUnlock()
 	var lsn uint64
 	var err error
+	appendPath := commandWALAppendStatsIntent
+	appendStart := time.Now()
 	if intent.rawKVDirect {
+		appendPath = commandWALAppendStatsEntryScan
 		scan := intent.rawKVScan
 		if scan == nil {
 			scan = db.rawKVCommandWALOperationScanner(intent.rawKVEntries, &intent.rawKVRIDCache, nil)
 		}
 		lsn, err = db.commandJournal.AppendRawKVBatchPayloadScanCommandTrusted(baseAppliedLSN, intent.rawKVPlan, scan)
 	} else if intent.trustedPayload && !intent.externalRefs {
+		appendPath = commandWALAppendStatsPayload
 		lsn, err = db.commandJournal.AppendCommandPayloadTrusted(intent.kind, intent.scope, intent.payloadFormat, baseAppliedLSN, intent.payload)
 	} else {
 		lsn, err = db.commandJournal.AppendCommand(commitlog.CommandEnvelope{
@@ -1289,6 +1312,9 @@ func (db *DB) appendCommandWALIntent(intent *commandWALBatchIntent, sync bool) (
 			PayloadFormat:  intent.payloadFormat,
 			Payload:        intent.payload,
 		})
+	}
+	if lsn != 0 || err == nil {
+		db.observeCommandWALAppend(appendPath, time.Since(appendStart))
 	}
 	if err != nil {
 		return 0, err

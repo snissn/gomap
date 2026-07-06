@@ -98,7 +98,6 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if db == nil || db.backend == nil {
 		return backenddb.ErrClosed
 	}
-	db.waitForCheckpoint()
 	db.beginExclusiveWrite()
 	defer db.writeMu.Unlock()
 	if db.closing.Load() {
