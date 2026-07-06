@@ -9,6 +9,8 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 type backendFlushSpanRunPlanner interface {
@@ -272,6 +274,192 @@ func mergeCanonicalUnitRuns(unitRuns [][][]batch.Entry, out *canonicalFlushRun, 
 	}
 	out.plannedPointOps = plannedPointOps
 	out.deletePointOps = plannedDeletes
+	return nil
+}
+
+type pointMemtableMergeItem struct {
+	iter     iterator.UnsafeIterator
+	priority int
+	key      []byte
+}
+
+type pointMemtableMergeHeap []pointMemtableMergeItem
+
+func (h pointMemtableMergeHeap) Len() int { return len(h) }
+
+func (h pointMemtableMergeHeap) Less(i, j int) bool {
+	cmp := bytes.Compare(h[i].key, h[j].key)
+	if cmp != 0 {
+		return cmp < 0
+	}
+	return h[i].priority < h[j].priority
+}
+
+func (h pointMemtableMergeHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *pointMemtableMergeHeap) push(x pointMemtableMergeItem) {
+	*h = append(*h, x)
+	h.up(len(*h) - 1)
+}
+
+func (h *pointMemtableMergeHeap) pop() pointMemtableMergeItem {
+	old := *h
+	n := len(old)
+	if n == 0 {
+		return pointMemtableMergeItem{}
+	}
+	old.Swap(0, n-1)
+	h.down(0, n-1)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+func (h pointMemtableMergeHeap) peek() *pointMemtableMergeItem {
+	if len(h) == 0 {
+		return nil
+	}
+	return &h[0]
+}
+
+func (h *pointMemtableMergeHeap) up(j int) {
+	for {
+		i := (j - 1) / 2
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
+	}
+}
+
+func (h *pointMemtableMergeHeap) down(i0, n int) bool {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return i > i0
+}
+
+func (item *pointMemtableMergeItem) advance() bool {
+	if item == nil || item.iter == nil {
+		return false
+	}
+	item.iter.Next()
+	if !item.iter.Valid() {
+		item.key = nil
+		return false
+	}
+	item.key = item.iter.UnsafeKey()
+	return true
+}
+
+func pointMemtableMergeEntry(item pointMemtableMergeItem) batch.Entry {
+	val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(item.iter)
+	if flags&node.FlagTombstone != 0 {
+		return batch.Entry{Type: batch.OpDelete, Key: item.key, Revision: revision}
+	}
+	if flags&node.FlagPointer != 0 {
+		return batch.Entry{Type: batch.OpPut, Key: item.key, ValuePtr: ptr, IsPtr: true, Revision: revision}
+	}
+	return batch.Entry{Type: batch.OpPut, Key: item.key, Value: val, Revision: revision}
+}
+
+func closePointMemtableMergeIterators(items []pointMemtableMergeItem) error {
+	var firstErr error
+	for i := range items {
+		if items[i].iter == nil {
+			continue
+		}
+		if err := items[i].iter.Error(); firstErr == nil && err != nil {
+			firstErr = err
+		}
+		if err := items[i].iter.Close(); firstErr == nil && err != nil {
+			firstErr = err
+		}
+		items[i].iter = nil
+	}
+	return firstErr
+}
+
+func mergeStablePointMemtableUnits(units []flushUnit, out *canonicalFlushRun, emit func(batch.Entry) error) error {
+	if out == nil {
+		return errors.New("cachingdb: missing canonical flush run")
+	}
+	items := make([]pointMemtableMergeItem, 0, len(units))
+	heap := make(pointMemtableMergeHeap, 0, len(units))
+	for i := range units {
+		iter := units[i].mem.NewIterator(nil, nil)
+		item := pointMemtableMergeItem{
+			iter:     iter,
+			priority: len(units) - 1 - i,
+		}
+		items = append(items, item)
+		if iter.Valid() {
+			item.key = iter.UnsafeKey()
+			heap = append(heap, item)
+		}
+	}
+	for i := len(heap)/2 - 1; i >= 0; i-- {
+		(&heap).down(i, len(heap))
+	}
+
+	var mergeErr error
+	for len(heap) > 0 {
+		top := heap.pop()
+		currentKey := top.key
+
+		for len(heap) > 0 {
+			next := heap.peek()
+			if next == nil || !bytes.Equal(next.key, currentKey) {
+				break
+			}
+			shadowed := heap.pop()
+			out.sourcePointOps++
+			out.shadowedPointOps++
+			if shadowed.advance() {
+				heap.push(shadowed)
+			}
+		}
+
+		entry := pointMemtableMergeEntry(top)
+		if emit != nil {
+			if err := emit(entry); err != nil {
+				mergeErr = err
+				break
+			}
+		}
+		out.sourcePointOps++
+		out.plannedPointOps++
+		if entry.Type == batch.OpDelete {
+			out.deletePointOps++
+		}
+		if top.advance() {
+			heap.push(top)
+		}
+	}
+
+	closeErr := closePointMemtableMergeIterators(items)
+	if mergeErr != nil {
+		return mergeErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
 	return nil
 }
 
@@ -767,6 +955,10 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 }
 
 func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int, mode flushCollectionMode) bool {
+	if stablePointOnlyFlushUnits(units, totalSpans) {
+		return db.flushStablePointUnitsIteratorMerged(syncFlush, laneID, commandPublish, units, ids, totalBytes, totalLen, mode)
+	}
+
 	flushStart := time.Now()
 	buildStart := flushStart
 	build, err := db.buildCanonicalUnitRuns(units, totalLen, totalSpans)
@@ -886,6 +1078,160 @@ func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, comma
 		return false
 	}
 	db.observeFlushSpanRunPlannedOps(runStats.plannedPointOps, totalSpans)
+
+	if err := emitChunk(true); err != nil {
+		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+		return false
+	}
+	db.observeFlushApplyBackendWrite(time.Since(writeStart))
+
+	db.finishFlushedCanonicalUnits(syncFlush, units, ids, totalBytes)
+	flushDur := time.Since(flushStart)
+	if flushDur > 0 && totalBytes > 0 {
+		sample := float64(totalBytes) / flushDur.Seconds()
+		db.bpMu.Lock()
+		if db.flushBpsEWMA <= 0 {
+			db.flushBpsEWMA = sample
+		} else {
+			db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
+		}
+		db.bpCond.Broadcast()
+		db.bpMu.Unlock()
+	}
+	return true
+}
+
+func stablePointOnlyFlushUnits(units []flushUnit, totalSpans int) bool {
+	if len(units) == 0 || totalSpans != 0 {
+		return false
+	}
+	for i := range units {
+		unit := units[i]
+		if unit.mem == nil || unit.memLen <= 0 || len(unit.spans) != 0 || !stableUnsafeIteratorSlices(unit.mem) {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) flushStablePointUnitsIteratorMerged(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, mode flushCollectionMode) bool {
+	flushStart := time.Now()
+	buildStart := flushStart
+	if !stablePointOnlyFlushUnits(units, 0) {
+		db.reportError(errors.New("cachingdb: stable iterator-merged flush got non-point units"))
+		return false
+	}
+	db.observeFlushApplyBuild(time.Since(buildStart))
+
+	backendEntriesCap := db.flushBackendEntriesCapForOps(totalLen, 0, syncFlush)
+	if backendEntriesCap <= 0 {
+		backendEntriesCap = totalLen
+		if backendEntriesCap <= 0 {
+			backendEntriesCap = 1
+		}
+	}
+	chunkEntriesCap := backendEntriesCap
+	if totalLen > 0 && chunkEntriesCap > totalLen {
+		chunkEntriesCap = totalLen
+	}
+	if chunkEntriesCap <= 0 {
+		chunkEntriesCap = 1
+	}
+
+	var emptySplitSummary backenddb.FlushSpanRunChunkSplitSummary
+	db.observeFlushSpanRunTargetLeafSpanSummary(0, 0, 0, 0, emptySplitSummary)
+
+	writeStart := time.Now()
+	ops := getEntrySlice(chunkEntriesCap)
+	defer func() {
+		if ops != nil {
+			putEntrySlice(ops)
+		}
+	}()
+
+	valueLogNeedsFlush := db.valueLogEnabled()
+	flushValueLogIfNeeded := func() error {
+		if !valueLogNeedsFlush {
+			return nil
+		}
+		flushStart := time.Now()
+		err := db.flushValueLog(laneID)
+		db.observeFlushApplyVLogFlush(time.Since(flushStart))
+		if err != nil {
+			return err
+		}
+		if syncFlush && !db.relaxedSync {
+			syncStart := time.Now()
+			err := db.syncValueLog(laneID)
+			db.observeFlushApplyVLogSync(time.Since(syncStart))
+			if err != nil {
+				return err
+			}
+		}
+		valueLogNeedsFlush = false
+		return nil
+	}
+	emitChunk := func(last bool) error {
+		if len(ops) == 0 {
+			return nil
+		}
+		materializeStart := time.Now()
+		wrotePointers, err := db.materializeCanonicalOpsDeferredValueLogPointers(ops, syncFlush, laneID)
+		db.observeFlushApplyDeferredVLogPointerMaterialize(time.Since(materializeStart))
+		if err != nil {
+			return fmt.Errorf("defer vlog: %w", err)
+		}
+		if wrotePointers {
+			valueLogNeedsFlush = true
+		}
+		if err := flushValueLogIfNeeded(); err != nil {
+			return fmt.Errorf("vlog: %w", err)
+		}
+		if err := db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode); err != nil {
+			return err
+		}
+		putEntrySlice(ops)
+		ops = nil
+		if !last {
+			ops = getEntrySlice(chunkEntriesCap)
+		}
+		return nil
+	}
+
+	runStats := &canonicalFlushRun{
+		sourceMemtables: len(units),
+	}
+	err := mergeStablePointMemtableUnits(units, runStats, func(entry batch.Entry) error {
+		if len(ops) >= chunkEntriesCap {
+			if err := emitChunk(false); err != nil {
+				return err
+			}
+		}
+		if ops == nil {
+			ops = getEntrySlice(chunkEntriesCap)
+		}
+		ops = append(ops, entry)
+		return nil
+	})
+	if err != nil {
+		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+		return false
+	}
+
+	if runStats.shadowedPointOps > 0 {
+		flushMergeShadowedOpsTotal.Add(uint64(runStats.shadowedPointOps))
+		flushMergeParallelShadowedOpsTotal.Add(uint64(runStats.shadowedPointOps))
+		db.observeFlushSpanRunShadowedOps(runStats.shadowedPointOps)
+	}
+	if runStats.plannedPointOps > 0 {
+		flushMergeAppliedOpsTotal.Add(uint64(runStats.plannedPointOps))
+		flushMergeParallelAppliedOpsTotal.Add(uint64(runStats.plannedPointOps))
+	}
+	if runStats.sourcePointOps != runStats.plannedPointOps+runStats.shadowedPointOps {
+		db.reportError(fmt.Errorf("cachingdb: stable iterator-merged flush source=%d planned=%d shadowed=%d", runStats.sourcePointOps, runStats.plannedPointOps, runStats.shadowedPointOps))
+		return false
+	}
+	db.observeFlushSpanRunPlannedOps(runStats.plannedPointOps, 0)
 
 	if err := emitChunk(true); err != nil {
 		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))

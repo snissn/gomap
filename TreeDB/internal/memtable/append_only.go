@@ -2156,7 +2156,7 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(0, 0, true)
+	m.resetLockedWithPolicy(0, 0, true, false)
 }
 
 // Release returns large internal buffers to package pools when the table is no
@@ -2216,11 +2216,11 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true, false)
 }
 
 func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true, false)
 }
 
 // ResetWithCapacityHard resets and clamps retained internal buffers to the
@@ -2229,7 +2229,18 @@ func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false, false)
+}
+
+// ResetWithCapacityHardForReuse resets without carrying over recent spike
+// cardinality, but keeps an existing entry backing when it is already inside the
+// capacity-derived reuse window. Use this before putting a table into a warm
+// reuse lease/pool; use ResetWithCapacityHard for explicit trim boundaries.
+func (m *AppendOnly) ResetWithCapacityHardForReuse(capacity, estimatedBytesPerEntry int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false, true)
 }
 
 // ResetDropEntries resets the table for reuse without retaining entry backing.
@@ -2238,7 +2249,7 @@ func (m *AppendOnly) ResetDropEntries() {
 	m.release(false)
 }
 
-func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
+func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool, retainBoundedReuse bool) {
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
 		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
@@ -2318,6 +2329,20 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	m.lastIdx = -1
 
 	if !retainObserved {
+		if retainBoundedReuse {
+			if cap(m.entries) < retainedEntries || cap(m.entries) > maxRetainedEntries {
+				m.replaceEntriesSliceWithPolicy(retainedEntries, false)
+				return
+			}
+			reuseEntries := retainedEntries
+			if cap(m.entries) > reuseEntries {
+				reuseEntries = cap(m.entries)
+			}
+			if len(m.entries) != reuseEntries {
+				m.entries = m.entries[:reuseEntries]
+			}
+			return
+		}
 		if cap(m.entries) != retainedEntries {
 			m.replaceEntriesSliceWithPolicy(retainedEntries, false)
 			return

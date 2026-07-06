@@ -3,6 +3,8 @@ package memtable
 import (
 	"fmt"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestAppendOnlyResetWithCapacityHard_DropsObservedSpike(t *testing.T) {
@@ -61,6 +63,60 @@ func TestAppendOnlyResetWithCapacityHard_ClampsWarmReuseCapacity(t *testing.T) {
 
 	if got := cap(mt.entries); got != base {
 		t.Fatalf("hard reset cap(entries)=%d want=%d", got, base)
+	}
+}
+
+func TestAppendOnlyResetWithCapacityHardForReuse_KeepsBoundedWarmReuseCapacity(t *testing.T) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+
+	for i := 0; i < base*2; i++ {
+		key := []byte(fmt.Sprintf("k-%06d", i))
+		mt.Set(key, []byte("value"))
+	}
+	mt.ResetWithCapacity(capacityBytes, estimatedBytesPerEntry)
+	warmCap := cap(mt.entries)
+	if warmCap <= base {
+		t.Fatalf("test setup did not retain warm capacity: cap(entries)=%d want>%d", warmCap, base)
+	}
+	if warmCap > base*appendOnlyReuseOversizeFactor {
+		t.Fatalf("test setup grew beyond reuse ceiling: cap(entries)=%d want<=%d", warmCap, base*appendOnlyReuseOversizeFactor)
+	}
+
+	mt.ResetWithCapacityHardForReuse(capacityBytes, estimatedBytesPerEntry)
+
+	if got := cap(mt.entries); got != warmCap {
+		t.Fatalf("reuse hard reset cap(entries)=%d want retained warm cap %d", got, warmCap)
+	}
+	if got, max := cap(mt.entries), base*appendOnlyReuseOversizeFactor; got > max {
+		t.Fatalf("reuse hard reset retained cap(entries)=%d want<=%d", got, max)
+	}
+}
+
+func BenchmarkAppendOnlyResetWithCapacityHard_WarmReuseCapacity(b *testing.B) {
+	const (
+		capacityBytes          = 4 << 10
+		estimatedBytesPerEntry = 96
+	)
+
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
+		for j := 0; j < base*2; j++ {
+			mt.SetEntrySteal([]byte(fmt.Sprintf("k-%06d", j)), nil, page.ValuePtr{}, 0)
+		}
+		mt.ResetWithCapacity(capacityBytes, estimatedBytesPerEntry)
+		DropAppendOnlyEntryPools()
+		b.StartTimer()
+		mt.ResetWithCapacityHardForReuse(capacityBytes, estimatedBytesPerEntry)
 	}
 }
 

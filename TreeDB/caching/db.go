@@ -10544,7 +10544,7 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 				typed.ReleaseDropEntries()
 				continue
 			}
-			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
+			typed.ResetWithCapacityHardForReuse(appendOnlyResetCapacity, estimate)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtableWithPolicy(typed, true)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.putAppendOnlyMemPoolDropEntries(typed)
