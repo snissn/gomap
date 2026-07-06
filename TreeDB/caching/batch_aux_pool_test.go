@@ -211,6 +211,119 @@ func TestBatchReleaseShardEntryGroupsReturnsOuterAndInnerLeases(t *testing.T) {
 	}
 }
 
+func TestBatchScratchShardEntryGroupsUseSingleBacking(t *testing.T) {
+	db := &DB{}
+	b := &Batch{
+		db:      db,
+		entries: db.getBatchEntries(6),
+	}
+	b.entries = append(b.entries,
+		batch.Entry{Key: []byte("a")},
+		batch.Entry{Key: []byte("b")},
+		batch.Entry{Key: []byte("c")},
+		batch.Entry{Key: []byte("d")},
+		batch.Entry{Key: []byte("e")},
+		batch.Entry{Key: []byte("f")},
+	)
+	shardCounts := []int{2, 0, 3, 1}
+	shardIdxs := []int{0, 2, 0, 3, 2, 2}
+
+	groups := b.prepareScratchShardEntryGroups(shardCounts)
+	for i, op := range b.entries {
+		idx := shardIdxs[i]
+		groups[idx] = append(groups[idx], op)
+	}
+
+	if !b.shardEntriesBackedByScratch {
+		t.Fatalf("scratch shard entry groups not marked as scratch-backed")
+	}
+	if len(groups) != len(shardCounts) {
+		t.Fatalf("groups len=%d want %d", len(groups), len(shardCounts))
+	}
+	scratch := b.shardEntryScratch[:cap(b.shardEntryScratch)]
+	offset := 0
+	for shard, count := range shardCounts {
+		got := groups[shard]
+		if len(got) != count || cap(got) != count {
+			t.Fatalf("group %d len/cap=%d/%d want %d/%d", shard, len(got), cap(got), count, count)
+		}
+		if count == 0 {
+			if got != nil {
+				t.Fatalf("empty group %d = %#v, want nil", shard, got)
+			}
+			continue
+		}
+		if gotPtr, wantPtr := unsafe.SliceData(got), &scratch[offset]; gotPtr != wantPtr {
+			t.Fatalf("group %d backing ptr=%p want scratch offset %d ptr=%p", shard, gotPtr, offset, wantPtr)
+		}
+		offset += count
+	}
+	if offset != len(b.entries) {
+		t.Fatalf("partitioned entries=%d want %d", offset, len(b.entries))
+	}
+}
+
+func TestBatchResetReturnsScratchShardEntriesWithoutInnerAliases(t *testing.T) {
+	forceNormalPoolPressureForTest(t)
+	db := &DB{}
+	b := &Batch{
+		db:      db,
+		entries: db.getBatchEntries(4),
+	}
+	b.entries = append(b.entries,
+		batch.Entry{Key: []byte("a")},
+		batch.Entry{Key: []byte("b")},
+		batch.Entry{Key: []byte("c")},
+		batch.Entry{Key: []byte("d")},
+	)
+	groups := b.prepareScratchShardEntryGroups([]int{2, 2})
+	for i, op := range b.entries {
+		groups[i%2] = append(groups[i%2], op)
+	}
+	scratchPtr := unsafe.SliceData(b.shardEntryScratch[:cap(b.shardEntryScratch)])
+	groupsPtr := unsafe.SliceData(b.shardEntries[:cap(b.shardEntries)])
+
+	b.Reset()
+	if b.shardEntries != nil {
+		t.Fatalf("Reset retained shardEntries")
+	}
+	if b.shardEntryScratch != nil {
+		t.Fatalf("Reset retained shardEntryScratch")
+	}
+	if b.shardEntriesBackedByScratch {
+		t.Fatalf("Reset left scratch-backed marker set")
+	}
+
+	db.batchAuxMu.Lock()
+	shardEntryLeases := len(db.batchShardEntriesLeases.slices)
+	shardEntryGroupLeases := len(db.batchShardEntryGroupsLeases.slices)
+	db.batchAuxMu.Unlock()
+	if shardEntryLeases != 1 {
+		t.Fatalf("shard entry leases=%d want 1 scratch backing only", shardEntryLeases)
+	}
+	if shardEntryGroupLeases != 1 {
+		t.Fatalf("shard entry group leases=%d want 1 outer group backing", shardEntryGroupLeases)
+	}
+
+	gotScratch := db.getBatchShardEntries(4)
+	gotScratch = append(gotScratch, batch.Entry{})
+	if gotPtr := unsafe.SliceData(gotScratch); gotPtr != scratchPtr {
+		t.Fatalf("scratch backing was not returned: got=%p want=%p", gotPtr, scratchPtr)
+	}
+	db.putBatchShardEntries(gotScratch)
+
+	gotGroups := db.getBatchShardEntryGroups(2)
+	gotGroups = append(gotGroups, nil)
+	if gotPtr := unsafe.SliceData(gotGroups); gotPtr != groupsPtr {
+		t.Fatalf("outer group backing was not returned: got=%p want=%p", gotPtr, groupsPtr)
+	}
+	for i, entries := range gotGroups[:cap(gotGroups)] {
+		if entries != nil {
+			t.Fatalf("outer group retained inner entries at %d: cap=%d", i, cap(entries))
+		}
+	}
+}
+
 func TestBatchArenaChunkListLeaseReuseAndClear(t *testing.T) {
 	db := &DB{}
 
