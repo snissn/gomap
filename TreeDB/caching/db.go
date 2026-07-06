@@ -33719,25 +33719,17 @@ func shouldCompactBatchArenaTailWithAliases(used, classCap, aliasedBytes, aliase
 	if !shouldCompactBatchArenaTail(used, classCap) || aliasedBytes <= 0 || aliasedSlices <= 0 {
 		return false
 	}
-	return shouldCompactBatchArenaTailAliasCostWins(classCap, aliasedBytes, aliasedSlices)
+	return aliasedBytes < classCap
 }
 
 func (b *Batch) shouldCompactArenaTailWithAliases(used, classCap, aliasedBytes, aliasedSlices int) bool {
-	if b == nil || !b.shouldCompactArenaTail(used, classCap) || aliasedBytes <= 0 || aliasedSlices <= 0 {
+	if b == nil || b.db == nil || aliasedBytes <= 0 || aliasedSlices <= 0 {
 		return false
 	}
-	return shouldCompactBatchArenaTailAliasCostWins(classCap, aliasedBytes, aliasedSlices)
-}
-
-func shouldCompactBatchArenaTailAliasCostWins(classCap, aliasedBytes, aliasedSlices int) bool {
-	if classCap <= 0 || aliasedBytes <= 0 || aliasedSlices <= 0 || aliasedBytes >= classCap {
+	if !b.shouldCompactArenaTail(used, classCap) {
 		return false
 	}
-	if aliasedSlices > (int(^uint(0)>>1)-aliasedBytes)/batchArenaTailCompactCloneObjectPenaltyBytes {
-		return false
-	}
-	cloneCost := aliasedBytes + aliasedSlices*batchArenaTailCompactCloneObjectPenaltyBytes
-	return cloneCost < classCap-aliasedBytes
+	return aliasedBytes < classCap
 }
 
 func sliceAliasesArenaTail(s, tail []byte) bool {
@@ -33774,6 +33766,27 @@ func batchMainArenaTailAliasStats(entries []batch.Entry, tail []byte) (aliasedBy
 	return aliasedBytes, aliasedSlices
 }
 
+func compactBatchMainArenaTailAliases(entries []batch.Entry, tail []byte, aliasedBytes int) int {
+	if len(entries) == 0 || len(tail) == 0 || aliasedBytes <= 0 {
+		return 0
+	}
+	packed := make([]byte, 0, aliasedBytes)
+	for i := range entries {
+		op := &entries[i]
+		if len(op.Key) > 0 && sliceAliasesArenaTail(op.Key, tail) {
+			start := len(packed)
+			packed = append(packed, op.Key...)
+			op.Key = packed[start:len(packed):len(packed)]
+		}
+		if len(op.Value) > 0 && sliceAliasesArenaTail(op.Value, tail) {
+			start := len(packed)
+			packed = append(packed, op.Value...)
+			op.Value = packed[start:len(packed):len(packed)]
+		}
+	}
+	return len(packed)
+}
+
 func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]byte, arena *[]byte, copiedBytes int) {
 	if b == nil || chunks == nil || arena == nil || len(*chunks) == 0 || cap(*arena) == 0 {
 		return
@@ -33804,18 +33817,7 @@ func (b *Batch) compactUnderfilledMainArenaTail() {
 	if !b.shouldCompactArenaTailWithAliases(len(tail), cap(tail), aliasedBytes, aliasedSlices) {
 		return
 	}
-	copiedBytes := 0
-	for i := range b.entries {
-		op := &b.entries[i]
-		if len(op.Key) > 0 && sliceAliasesArenaTail(op.Key, tail) {
-			op.Key = bytes.Clone(op.Key)
-			copiedBytes += len(op.Key)
-		}
-		if len(op.Value) > 0 && sliceAliasesArenaTail(op.Value, tail) {
-			op.Value = bytes.Clone(op.Value)
-			copiedBytes += len(op.Value)
-		}
-	}
+	copiedBytes := compactBatchMainArenaTailAliases(b.entries, tail, aliasedBytes)
 	if copiedBytes == 0 {
 		return
 	}
@@ -34421,24 +34423,20 @@ const (
 	// Under deferred-view pressure, compact tails once fill is at most 75%.
 	batchArenaTailCompactPinnedMaxFillNumerator   = 3
 	batchArenaTailCompactPinnedMaxFillDenominator = 4
-	// bytes.Clone is one heap object per live key/value slice. Treat each
-	// clone as additional cost so tail compaction does not trade a modest
-	// retained-arena win for thousands of allocation objects.
-	batchArenaTailCompactCloneObjectPenaltyBytes = 256
-	batchEntriesPoolMaxRetain                    = 16 << 10
-	batchIntSlicePoolMaxRetain                   = 16 << 10
-	batchAuxEntryLeaseMaxCount                   = 256
-	batchAuxEntryLeaseMaxBytes                   = 8 << 20
-	batchAuxIntLeaseMaxCount                     = 256
-	batchAuxIntLeaseMaxBytes                     = 1 << 20
-	batchAuxChunkLeaseMaxCount                   = 256
-	batchAuxChunkLeaseMaxBytes                   = 1 << 20
-	batchAuxEntryGroupLeaseMaxCount              = 256
-	batchAuxEntryGroupLeaseMaxBytes              = 1 << 20
-	batchArenaChunkListInitialCap                = 4
-	batchArenaChunkListMaxRetain                 = 256
-	batchShardEntryGroupsMaxRetain               = 1024
-	batchMemtableRetainStackCap                  = 64
+	batchEntriesPoolMaxRetain                     = 16 << 10
+	batchIntSlicePoolMaxRetain                    = 16 << 10
+	batchAuxEntryLeaseMaxCount                    = 256
+	batchAuxEntryLeaseMaxBytes                    = 8 << 20
+	batchAuxIntLeaseMaxCount                      = 256
+	batchAuxIntLeaseMaxBytes                      = 1 << 20
+	batchAuxChunkLeaseMaxCount                    = 256
+	batchAuxChunkLeaseMaxBytes                    = 1 << 20
+	batchAuxEntryGroupLeaseMaxCount               = 256
+	batchAuxEntryGroupLeaseMaxBytes               = 1 << 20
+	batchArenaChunkListInitialCap                 = 4
+	batchArenaChunkListMaxRetain                  = 256
+	batchShardEntryGroupsMaxRetain                = 1024
+	batchMemtableRetainStackCap                   = 64
 	// When deferred iterator views pin retired memtables, reduce retained
 	// batch-arena headroom to limit extra lease growth under that pressure.
 	batchArenaDeferredPressureThresholdBytes = int64(512 << 20)
