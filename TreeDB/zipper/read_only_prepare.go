@@ -1049,6 +1049,85 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 		return nil
 	case page.PageTypeInternal:
 		count := oldNode.Count()
+		if len(ranges) == 0 {
+			opIdx := 0
+			copyKeys := oldNode.InternalBaseDeltaEnabled()
+			for i := uint16(0); i < count; i++ {
+				key, childRef, err := oldNode.GetInternalEntryRefView(i)
+				if err != nil {
+					return err
+				}
+				if key == nil {
+					key = []byte{}
+				}
+				keyNonEmpty := len(key) != 0
+				keyView := key
+				firstOpBeforeKey := false
+				if keyNonEmpty && opIdx < len(ops) && bytes.Compare(ops[opIdx].Key, key) < 0 {
+					firstOpBeforeKey = true
+				}
+
+				var endKey []byte
+				if i+1 < count {
+					nextKey, _, err := oldNode.GetInternalEntryRefView(i + 1)
+					if err != nil {
+						return err
+					}
+					if nextKey == nil {
+						nextKey = []byte{}
+					}
+					endKey = nextKey
+				}
+
+				startOpIdx := opIdx
+				for opIdx < len(ops) {
+					if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+						opIdx++
+						continue
+					}
+					break
+				}
+				childOps := ops[startOpIdx:opIdx]
+				if len(childOps) == 0 {
+					continue
+				}
+
+				childHigh := high
+				if endKey != nil {
+					childHigh = endKey
+				}
+				childLow := low
+				if keyNonEmpty {
+					if firstOpBeforeKey {
+						childLow = childOps[0].Key
+					} else if copyKeys {
+						if endKey != nil {
+							// Internal base-delta keys share one node scratch buffer. If
+							// this touched middle child needs both separator bounds, keep
+							// the already-decoded high bound stable while refetching the
+							// low bound below.
+							childHigh = result.cloneKey(endKey)
+						}
+						key, _, err = oldNode.GetInternalEntryRefView(i)
+						if err != nil {
+							return err
+						}
+						if key == nil {
+							key = []byte{}
+						}
+						if len(key) != 0 {
+							childLow = key
+						}
+					} else {
+						childLow = keyView
+					}
+				}
+				if err := z.prepareReadOnlyRecursive(childRef, childOps, opBase+startOpIdx, nil, rangeBase, childLow, childHigh, result, scratch); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		opIdx := 0
 		for i := uint16(0); i < count; i++ {
 			key, childRef, err := oldNode.GetInternalEntryRefView(i)
