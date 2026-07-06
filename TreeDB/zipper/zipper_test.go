@@ -617,6 +617,54 @@ func TestZipperLeafRefCacheAdoptsBuildPagesUntilCacheClose(t *testing.T) {
 	}
 }
 
+func TestMergeScratchLeafRefCacheSpillsOverflowToGlobalPool(t *testing.T) {
+	globalLeafRefCachePages.mu.Lock()
+	savedGlobal := append([]*leafRefCachePage(nil), globalLeafRefCachePages.pages...)
+	clear(globalLeafRefCachePages.pages)
+	globalLeafRefCachePages.pages = globalLeafRefCachePages.pages[:0]
+	globalLeafRefCachePages.mu.Unlock()
+	t.Cleanup(func() {
+		globalLeafRefCachePages.mu.Lock()
+		clear(globalLeafRefCachePages.pages)
+		globalLeafRefCachePages.pages = append(globalLeafRefCachePages.pages[:0], savedGlobal...)
+		globalLeafRefCachePages.mu.Unlock()
+	})
+
+	source := bytes.Repeat([]byte{0x7b}, page.PageSize)
+	firstScratch := newMergeScratch()
+	pageCount := mergeLeafRefCachePageKeep + mergeLeafRefCachePagesPerChunk
+	seen := make(map[*byte]struct{}, pageCount)
+	overflow := make(map[*byte]struct{}, mergeLeafRefCachePagesPerChunk)
+	for i := 0; i < pageCount; i++ {
+		buf := firstScratch.cloneLeafRefCachePage(source)
+		ptr := &buf[0]
+		if _, ok := seen[ptr]; ok {
+			t.Fatalf("active leaf-ref cache page reused before release at index %d", i)
+		}
+		seen[ptr] = struct{}{}
+		if i >= mergeLeafRefCachePageKeep {
+			overflow[ptr] = struct{}{}
+		}
+	}
+	firstScratch.releaseLeafRefCachePages()
+
+	globalLeafRefCachePages.mu.Lock()
+	globalCount := len(globalLeafRefCachePages.pages)
+	globalLeafRefCachePages.mu.Unlock()
+	if globalCount != mergeLeafRefCachePagesPerChunk {
+		t.Fatalf("global leaf-ref page pool len=%d want %d", globalCount, mergeLeafRefCachePagesPerChunk)
+	}
+
+	secondScratch := newMergeScratch()
+	for i := 0; i < mergeLeafRefCachePagesPerChunk; i++ {
+		buf := secondScratch.acquireLeafRefCacheBuildPage()
+		if _, ok := overflow[&buf[0]]; !ok {
+			t.Fatalf("second scratch page %d did not reuse overflow page", i)
+		}
+	}
+	secondScratch.releaseLeafRefCachePages()
+}
+
 func TestZipperCachePersistedLeafPageNoopAvoidsLockWhenCacheInactive(t *testing.T) {
 	z := &Zipper{}
 	z.leafRefCacheMu.Lock()
