@@ -64,6 +64,44 @@ func buildReadOnlyPrepareRootWithKeys(tb testing.TB, z *Zipper, count int) uint6
 	return newRootID
 }
 
+func buildReadOnlyPrepareWideBaseDeltaRoot(tb testing.TB, z *Zipper, children int) uint64 {
+	tb.Helper()
+	leafID, err := z.pager.Alloc(1)
+	if err != nil {
+		tb.Fatalf("alloc leaf: %v", err)
+	}
+	leafData, err := z.pager.Get(leafID)
+	if err != nil {
+		tb.Fatalf("get leaf: %v", err)
+	}
+	leaf := node.NewNode(leafData)
+	leaf.SetPageID(leafID)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.UpdateChecksum()
+
+	rootID, err := z.pager.Alloc(1)
+	if err != nil {
+		tb.Fatalf("alloc root: %v", err)
+	}
+	rootData, err := z.pager.Get(rootID)
+	if err != nil {
+		tb.Fatalf("get root: %v", err)
+	}
+	builder := node.NewBuilderWithOptions(rootData, page.PageTypeInternal, node.BuilderOptions{InternalBaseDelta: true})
+	builder.SetPageID(rootID)
+	for i := 0; i < children; i++ {
+		key := []byte(fmt.Sprintf("child-%06d", i))
+		if err := builder.AddInternalChild(key, leafID); err != nil {
+			tb.Fatalf("AddInternalChild(%d): %v", i, err)
+		}
+	}
+	root := builder.Finish()
+	if root.Type() != page.PageTypeInternal || !root.InternalBaseDeltaEnabled() {
+		tb.Fatalf("synthetic root type/base-delta=%v/%v want internal/base-delta", root.Type(), root.InternalBaseDeltaEnabled())
+	}
+	return rootID
+}
+
 func readOnlySpanSignature(prepared ReadOnlyPrepareResult) []string {
 	out := make([]string, len(prepared.LeafSpans))
 	for i, span := range prepared.LeafSpans {
@@ -396,6 +434,34 @@ func TestZipperPrepareReadOnlyOmitKeysSkipsSpanKeyCopies(t *testing.T) {
 	requireValidReadOnlyPrepare(t, reused)
 	if !reused.OmitKeys || len(reused.keyArena) != 0 || cap(reused.keyArena) != 0 {
 		t.Fatalf("reused omit-keys result OmitKeys=%v keyArena len/cap=%d/%d", reused.OmitKeys, len(reused.keyArena), cap(reused.keyArena))
+	}
+}
+
+func TestZipperPrepareReadOnlyPointOnlyDefersUntouchedBaseDeltaSeparatorClones(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	rootID := buildReadOnlyPrepareWideBaseDeltaRoot(t, z, 384)
+
+	const touched = 250
+	key := []byte(fmt.Sprintf("child-%06d", touched))
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	if err := delta.Set(key, []byte("new")); err != nil {
+		t.Fatalf("Set delta: %v", err)
+	}
+
+	prepared, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	if len(prepared.LeafSpans) != 1 {
+		t.Fatalf("leaf spans=%d want 1", len(prepared.LeafSpans))
+	}
+
+	retainedKeyBytes := readOnlyPrepareSpanBoundaryBytes(prepared.LeafSpans) + readOnlyPrepareSpanOpKeyBytes(prepared.LeafSpans)
+	separatorKeyBytes := len([]byte(fmt.Sprintf("child-%06d", touched))) + len([]byte(fmt.Sprintf("child-%06d", touched+1)))
+	if got, max := len(prepared.keyArena), retainedKeyBytes+separatorKeyBytes; got > max {
+		t.Fatalf("key arena bytes=%d, retained=%d separator temp=%d; likely cloned untouched separators", got, retainedKeyBytes, separatorKeyBytes)
 	}
 }
 
@@ -920,6 +986,45 @@ func BenchmarkZipperPrepareReadOnlyManyLeafRandomKeyModes(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkZipperPrepareReadOnlyWideBaseDeltaSparsePoint(b *testing.B) {
+	_, z := newReadOnlyPrepareZipper(b)
+	rootID := buildReadOnlyPrepareWideBaseDeltaRoot(b, z, 384)
+	delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	if err := delta.Set([]byte("child-000250"), []byte("new-value")); err != nil {
+		b.Fatalf("Set delta: %v", err)
+	}
+	delta.SortedEntries()
+
+	first, err := z.PrepareReadOnly(rootID, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		b.Fatalf("initial PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(b, first)
+	opts := first.ReuseOptions()
+	lastSummary := first.LeafSpanSummary()
+	lastKeyArenaBytes := len(first.keyArena)
+	lastRetainedKeyBytes := readOnlyPrepareSpanBoundaryBytes(first.LeafSpans) + readOnlyPrepareSpanOpKeyBytes(first.LeafSpans)
+	b.ReportAllocs()
+	b.SetBytes(int64(lastSummary.SpanBytes))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		prepared, err := z.PrepareReadOnly(rootID, delta, opts)
+		if err != nil {
+			b.Fatalf("PrepareReadOnly: %v", err)
+		}
+		lastSummary = prepared.LeafSpanSummary()
+		lastKeyArenaBytes = len(prepared.keyArena)
+		lastRetainedKeyBytes = readOnlyPrepareSpanBoundaryBytes(prepared.LeafSpans) + readOnlyPrepareSpanOpKeyBytes(prepared.LeafSpans)
+		opts = prepared.ReuseOptions()
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(lastSummary.Spans), "leaf_spans/op")
+	b.ReportMetric(float64(lastSummary.SpanOps), "span_ops/op")
+	b.ReportMetric(float64(lastKeyArenaBytes), "key_arena_bytes/op")
+	b.ReportMetric(float64(lastRetainedKeyBytes), "retained_key_bytes/op")
 }
 
 func benchmarkZipperPrepareReadOnlyRandom(b *testing.B, keyCount, batchSize int) {
