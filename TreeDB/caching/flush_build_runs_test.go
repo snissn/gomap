@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -218,6 +219,89 @@ func (it *unstableRunIterator) Error() error             { return nil }
 func (it *unstableRunIterator) Close() error             { return nil }
 func (it *unstableRunIterator) Domain() ([]byte, []byte) { return nil, nil }
 
+type stableRunTable struct {
+	unstableRunTable
+	iterErr    error
+	closeErr   error
+	closeCount *int
+}
+
+func (t *stableRunTable) StableUnsafeIteratorSlices() bool { return true }
+
+func (t *stableRunTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
+	return &stableRunIterator{
+		entries:    t.entries,
+		iterErr:    t.iterErr,
+		closeErr:   t.closeErr,
+		closeCount: t.closeCount,
+	}
+}
+
+func (t *stableRunTable) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	return t.NewIterator(start, end)
+}
+
+type stableRunIterator struct {
+	entries    []batch.Entry
+	idx        int
+	iterErr    error
+	closeErr   error
+	closeCount *int
+}
+
+func (it *stableRunIterator) Valid() bool     { return it.idx < len(it.entries) }
+func (it *stableRunIterator) Next()           { it.idx++ }
+func (it *stableRunIterator) Seek(key []byte) {}
+func (it *stableRunIterator) Key() []byte     { return it.UnsafeKey() }
+func (it *stableRunIterator) Value() []byte   { return it.UnsafeValue() }
+func (it *stableRunIterator) KeyCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeKey()...)
+}
+func (it *stableRunIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
+func (it *stableRunIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.idx].Key
+}
+func (it *stableRunIterator) UnsafeValue() []byte {
+	if !it.Valid() || it.entries[it.idx].Type == batch.OpDelete || it.entries[it.idx].IsPtr {
+		return nil
+	}
+	return it.entries[it.idx].Value
+}
+func (it *stableRunIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	val, ptr, flags, _ := it.UnsafeEntryWithRevision()
+	return val, ptr, flags
+}
+func (it *stableRunIterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, 0, page.LegacyEntryRevision
+	}
+	entry := it.entries[it.idx]
+	switch {
+	case entry.Type == batch.OpDelete:
+		return nil, page.ValuePtr{}, node.FlagTombstone, entry.Revision
+	case entry.IsPtr:
+		return nil, entry.ValuePtr, node.FlagPointer, entry.Revision
+	default:
+		return entry.Value, page.ValuePtr{}, node.FlagInline, entry.Revision
+	}
+}
+func (it *stableRunIterator) IsDeleted() bool {
+	return it.Valid() && it.entries[it.idx].Type == batch.OpDelete
+}
+func (it *stableRunIterator) Error() error { return it.iterErr }
+func (it *stableRunIterator) Close() error {
+	if it.closeCount != nil {
+		(*it.closeCount)++
+	}
+	return it.closeErr
+}
+func (it *stableRunIterator) Domain() ([]byte, []byte) { return nil, nil }
+
 func TestBuildOpRunsCopiesUnstableIteratorScratch(t *testing.T) {
 	tbl := &unstableRunTable{entries: []batch.Entry{
 		{Type: batch.OpPut, Key: []byte("k1"), Value: []byte("v1")},
@@ -245,6 +329,143 @@ func TestBuildOpRunsCopiesUnstableIteratorScratch(t *testing.T) {
 	copy(it.(*unstableRunIterator).valBuf, []byte("YY"))
 	if string(runs[0][0].Key) != "k1" || string(runs[0][0].Value) != "v1" {
 		t.Fatalf("run retained unstable iterator scratch: key=%q value=%q", runs[0][0].Key, runs[0][0].Value)
+	}
+}
+
+func TestMergeCanonicalStableIteratorUnitsDuplicateTombstonePointer(t *testing.T) {
+	older := memtable.NewAppendOnlyWithEntryCapacity(4)
+	older.Set([]byte("dup"), []byte("old"))
+	older.Set([]byte("old-only"), []byte("kept-old"))
+	older.Freeze()
+
+	ptr := page.ValuePtr{FileID: 7, Offset: 88, Length: 9}
+	newer := memtable.NewAppendOnlyWithEntryCapacity(4)
+	newer.Set([]byte("dup"), []byte("new"))
+	newer.Delete([]byte("gone"))
+	newer.SetEntry([]byte("ptr"), nil, ptr, node.FlagPointer)
+	newer.Freeze()
+
+	units := []flushUnit{{mem: older}, {mem: newer}}
+	db := &DB{}
+	if !db.canStreamCanonicalPointUnitsFromStableIterators(units, 0) {
+		t.Fatalf("stable append-only units were not eligible for iterator streaming")
+	}
+
+	sourcePointOps, sourceDeleteOps, err := countCanonicalStableIteratorUnits(units)
+	if err != nil {
+		t.Fatalf("countCanonicalStableIteratorUnits: %v", err)
+	}
+	if sourcePointOps != 5 || sourceDeleteOps != 1 {
+		t.Fatalf("source counts=(%d,%d) want (5,1)", sourcePointOps, sourceDeleteOps)
+	}
+
+	run := &canonicalFlushRun{
+		sourceMemtables: len(units),
+		sourcePointOps:  sourcePointOps,
+		deletePointOps:  sourceDeleteOps,
+	}
+	var out []batch.Entry
+	if err := mergeCanonicalStableIteratorUnits(units, run, func(entry batch.Entry) error {
+		out = append(out, entry)
+		return nil
+	}); err != nil {
+		t.Fatalf("mergeCanonicalStableIteratorUnits: %v", err)
+	}
+
+	if run.shadowedPointOps != 1 || run.plannedPointOps != 4 || run.deletePointOps != 1 {
+		t.Fatalf("run stats shadowed/planned/deletes=(%d,%d,%d), want (1,4,1)", run.shadowedPointOps, run.plannedPointOps, run.deletePointOps)
+	}
+	if len(out) != 4 {
+		t.Fatalf("merged entries=%d want 4: %+v", len(out), out)
+	}
+	want := []struct {
+		key   string
+		op    batch.OpType
+		value string
+		ptr   page.ValuePtr
+		isPtr bool
+	}{
+		{key: "dup", op: batch.OpPut, value: "new"},
+		{key: "gone", op: batch.OpDelete},
+		{key: "old-only", op: batch.OpPut, value: "kept-old"},
+		{key: "ptr", op: batch.OpPut, ptr: ptr, isPtr: true},
+	}
+	for i := range want {
+		if string(out[i].Key) != want[i].key || out[i].Type != want[i].op {
+			t.Fatalf("entry[%d] key/op=(%q,%d) want (%q,%d)", i, out[i].Key, out[i].Type, want[i].key, want[i].op)
+		}
+		if want[i].isPtr {
+			if !out[i].IsPtr || out[i].ValuePtr != want[i].ptr || out[i].Value != nil {
+				t.Fatalf("entry[%d] ptr=(%v,%+v,%q) want ptr %+v", i, out[i].IsPtr, out[i].ValuePtr, out[i].Value, want[i].ptr)
+			}
+			continue
+		}
+		if out[i].Type == batch.OpPut && string(out[i].Value) != want[i].value {
+			t.Fatalf("entry[%d] value=%q want %q", i, out[i].Value, want[i].value)
+		}
+	}
+}
+
+func TestCanStreamCanonicalPointUnitsFromStableIteratorsRejectsFallbackCases(t *testing.T) {
+	stable := memtable.NewAppendOnlyWithEntryCapacity(1)
+	stable.Set([]byte("k"), []byte("v"))
+	stable.Freeze()
+	unstable := &unstableRunTable{entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}}}
+
+	db := &DB{}
+	if !db.canStreamCanonicalPointUnitsFromStableIterators([]flushUnit{{mem: stable}}, 0) {
+		t.Fatalf("stable span-free units should be eligible")
+	}
+	if db.canStreamCanonicalPointUnitsFromStableIterators([]flushUnit{{mem: stable}}, 1) {
+		t.Fatalf("range-span units must use the materializing fallback")
+	}
+	if db.canStreamCanonicalPointUnitsFromStableIterators([]flushUnit{{mem: unstable}}, 0) {
+		t.Fatalf("unstable iterator units must use the materializing fallback")
+	}
+	db.flushSpanRunTargetPlanning = true
+	if db.canStreamCanonicalPointUnitsFromStableIterators([]flushUnit{{mem: stable}}, 0) {
+		t.Fatalf("span-target planning must use the materializing fallback")
+	}
+}
+
+func TestMergeCanonicalStableIteratorUnitsClosesIteratorsOnEmitError(t *testing.T) {
+	closeCount := 0
+	units := []flushUnit{
+		{mem: &stableRunTable{
+			unstableRunTable: unstableRunTable{entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("a"), Value: []byte("1")}}},
+			closeCount:       &closeCount,
+		}},
+		{mem: &stableRunTable{
+			unstableRunTable: unstableRunTable{entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("b"), Value: []byte("2")}}},
+			closeCount:       &closeCount,
+		}},
+	}
+	emitErr := errors.New("emit stopped")
+	err := mergeCanonicalStableIteratorUnits(units, &canonicalFlushRun{}, func(batch.Entry) error {
+		return emitErr
+	})
+	if !errors.Is(err, emitErr) {
+		t.Fatalf("merge error=%v want %v", err, emitErr)
+	}
+	if closeCount != len(units) {
+		t.Fatalf("closed iterators=%d want %d", closeCount, len(units))
+	}
+}
+
+func TestMergeCanonicalStableIteratorUnitsReturnsIteratorErrorAndCloses(t *testing.T) {
+	closeCount := 0
+	iterErr := errors.New("iterator failed")
+	units := []flushUnit{{mem: &stableRunTable{
+		unstableRunTable: unstableRunTable{entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("a"), Value: []byte("1")}}},
+		iterErr:          iterErr,
+		closeCount:       &closeCount,
+	}}}
+	err := mergeCanonicalStableIteratorUnits(units, &canonicalFlushRun{}, nil)
+	if !errors.Is(err, iterErr) {
+		t.Fatalf("merge error=%v want %v", err, iterErr)
+	}
+	if closeCount != 1 {
+		t.Fatalf("closed iterators=%d want 1", closeCount)
 	}
 }
 
@@ -302,6 +523,126 @@ func BenchmarkBuildOpRunsAppendOnlyShapes(b *testing.B) {
 			}
 		})
 	}
+}
+
+func benchmarkCanonicalFlushUnits(b *testing.B, unitCount, entriesPerUnit int) ([]flushUnit, int) {
+	b.Helper()
+	units := make([]flushUnit, 0, unitCount)
+	totalLen := 0
+	value := []byte("value-payload")
+	for unit := 0; unit < unitCount; unit++ {
+		m := memtable.NewAppendOnlyWithEntryCapacity(entriesPerUnit)
+		base := unit * entriesPerUnit / 2
+		for i := 0; i < entriesPerUnit; i++ {
+			key := buildRunKey(uint64(base + i))
+			if i%17 == 0 {
+				m.Delete(key)
+				continue
+			}
+			m.Set(key, value)
+		}
+		m.Freeze()
+		units = append(units, flushUnit{mem: m, memLen: m.Len(), memBytes: m.Size()})
+		totalLen += m.Len()
+	}
+	return units, totalLen
+}
+
+func benchmarkEmitCanonicalEntryChunk(b *testing.B, ops *[]batch.Entry, chunkCap int, entry batch.Entry) {
+	b.Helper()
+	if len(*ops) >= chunkCap {
+		putEntrySlice(*ops)
+		*ops = getEntrySlice(chunkCap)
+	}
+	*ops = append(*ops, entry)
+}
+
+func benchmarkMaterializedCanonicalFlushMerge(b *testing.B, db *DB, units []flushUnit, totalLen int, chunkCap int) {
+	b.Helper()
+	build, err := db.buildCanonicalUnitRuns(units, totalLen, 0)
+	if err != nil {
+		b.Fatalf("buildCanonicalUnitRuns: %v", err)
+	}
+	defer build.release()
+
+	run := &canonicalFlushRun{
+		sourceMemtables: len(units),
+		sourcePointOps:  build.sourcePointOps,
+		deletePointOps:  build.sourceDeleteOps,
+	}
+	ops := getEntrySlice(chunkCap)
+	defer func() { putEntrySlice(ops) }()
+	if err := mergeCanonicalUnitRuns(build.unitRuns, run, func(entry batch.Entry) error {
+		benchmarkEmitCanonicalEntryChunk(b, &ops, chunkCap, entry)
+		return nil
+	}); err != nil {
+		b.Fatalf("mergeCanonicalUnitRuns: %v", err)
+	}
+	if run.sourcePointOps != run.plannedPointOps+run.shadowedPointOps {
+		b.Fatalf("materialized source=%d planned=%d shadowed=%d", run.sourcePointOps, run.plannedPointOps, run.shadowedPointOps)
+	}
+}
+
+func benchmarkStableIteratorCanonicalFlushMerge(b *testing.B, units []flushUnit, chunkCap int) {
+	b.Helper()
+	sourcePointOps, sourceDeleteOps, err := countCanonicalStableIteratorUnits(units)
+	if err != nil {
+		b.Fatalf("countCanonicalStableIteratorUnits: %v", err)
+	}
+	run := &canonicalFlushRun{
+		sourceMemtables: len(units),
+		sourcePointOps:  sourcePointOps,
+		deletePointOps:  sourceDeleteOps,
+	}
+	ops := getEntrySlice(chunkCap)
+	defer func() { putEntrySlice(ops) }()
+	if err := mergeCanonicalStableIteratorUnits(units, run, func(entry batch.Entry) error {
+		benchmarkEmitCanonicalEntryChunk(b, &ops, chunkCap, entry)
+		return nil
+	}); err != nil {
+		b.Fatalf("mergeCanonicalStableIteratorUnits: %v", err)
+	}
+	if run.sourcePointOps != run.plannedPointOps+run.shadowedPointOps {
+		b.Fatalf("stable iterator source=%d planned=%d shadowed=%d", run.sourcePointOps, run.plannedPointOps, run.shadowedPointOps)
+	}
+}
+
+func benchmarkDisableEntrySlicePooling(b *testing.B) {
+	b.Helper()
+	lockEntrySlicePoolStateForTest(b)
+	resetEntrySlicePoolStateForTest(b)
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 0
+	b.Cleanup(func() {
+		entrySlicePoolBudgetBytes = savedBudget
+	})
+}
+
+func BenchmarkCanonicalFlushStableIteratorVsMaterialized(b *testing.B) {
+	const (
+		unitCount      = 4
+		entriesPerUnit = 4096
+		chunkCap       = 1024
+	)
+	units, totalLen := benchmarkCanonicalFlushUnits(b, unitCount, entriesPerUnit)
+	db := &DB{flushBuildChunkCap: chunkCap}
+
+	b.Run("materialized_unit_runs_cold_descriptor_pool", func(b *testing.B) {
+		benchmarkDisableEntrySlicePooling(b)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			benchmarkMaterializedCanonicalFlushMerge(b, db, units, totalLen, chunkCap)
+		}
+	})
+	b.Run("stable_iterators_cold_descriptor_pool", func(b *testing.B) {
+		benchmarkDisableEntrySlicePooling(b)
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			benchmarkStableIteratorCanonicalFlushMerge(b, units, chunkCap)
+		}
+	})
 }
 
 func TestOpMergeHeapEightByteDuplicatePriorityAndTombstone(t *testing.T) {

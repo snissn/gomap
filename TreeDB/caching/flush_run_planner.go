@@ -9,6 +9,8 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 type backendFlushSpanRunPlanner interface {
@@ -212,6 +214,94 @@ func (db *DB) buildCanonicalUnitRuns(units []flushUnit, totalLen int, totalSpans
 	return build, nil
 }
 
+func (db *DB) canStreamCanonicalPointUnitsFromStableIterators(units []flushUnit, totalSpans int) bool {
+	if db == nil || db.flushSpanRunTargetPlanning || totalSpans != 0 || len(units) == 0 {
+		return false
+	}
+	for i := range units {
+		if !stableUnsafeIteratorSlices(units[i].mem) {
+			return false
+		}
+	}
+	return true
+}
+
+func closeCanonicalStableIterator(iter iterator.UnsafeIterator) error {
+	if iter == nil {
+		return nil
+	}
+	err := iter.Error()
+	cerr := iter.Close()
+	if err == nil {
+		err = cerr
+	}
+	return err
+}
+
+func closeCanonicalStableIterators(iters []iterator.UnsafeIterator) error {
+	var err error
+	for _, iter := range iters {
+		if cerr := closeCanonicalStableIterator(iter); err == nil {
+			err = cerr
+		}
+	}
+	return err
+}
+
+func countCanonicalStableIteratorUnits(units []flushUnit) (sourcePointOps int, sourceDeleteOps int, err error) {
+	for i := range units {
+		iter := units[i].mem.NewIterator(nil, nil)
+		if iter == nil {
+			return 0, 0, errors.New("cachingdb: nil canonical stable iterator")
+		}
+		for iter.Valid() {
+			_, _, flags, _ := iterator.UnsafeEntryWithRevision(iter)
+			sourcePointOps++
+			if flags&node.FlagTombstone != 0 {
+				sourceDeleteOps++
+			}
+			iter.Next()
+		}
+		if err := closeCanonicalStableIterator(iter); err != nil {
+			return 0, 0, err
+		}
+	}
+	return sourcePointOps, sourceDeleteOps, nil
+}
+
+type canonicalOpIter interface {
+	Valid() bool
+	Next()
+	Entry() batch.Entry
+	Key() []byte
+}
+
+type stableUnsafeOpIter struct {
+	iterator.UnsafeIterator
+}
+
+func (it *stableUnsafeOpIter) Entry() batch.Entry {
+	if it == nil || it.UnsafeIterator == nil || !it.Valid() {
+		return batch.Entry{}
+	}
+	val, ptr, flags, revision := iterator.UnsafeEntryWithRevision(it.UnsafeIterator)
+	key := it.UnsafeKey()
+	if flags&node.FlagTombstone != 0 {
+		return batch.Entry{Type: batch.OpDelete, Key: key, Revision: revision}
+	}
+	if flags&node.FlagPointer != 0 {
+		return batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true, Revision: revision}
+	}
+	return batch.Entry{Type: batch.OpPut, Key: key, Value: val, Revision: revision}
+}
+
+func (it *stableUnsafeOpIter) Key() []byte {
+	if it == nil || it.UnsafeIterator == nil || !it.Valid() {
+		return nil
+	}
+	return it.UnsafeKey()
+}
+
 func mergeCanonicalUnitRuns(unitRuns [][][]batch.Entry, out *canonicalFlushRun, emit func(batch.Entry) error) error {
 	if out == nil {
 		return errors.New("cachingdb: missing canonical flush run")
@@ -226,6 +316,80 @@ func mergeCanonicalUnitRuns(unitRuns [][][]batch.Entry, out *canonicalFlushRun, 
 		if it.Valid() {
 			priority := len(unitRuns) - 1 - i
 			heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+		}
+	}
+	for i := len(heap)/2 - 1; i >= 0; i-- {
+		(&heap).down(i, len(heap))
+	}
+
+	plannedDeletes := 0
+	plannedPointOps := 0
+	for len(heap) > 0 {
+		top := heap.pop()
+		currentKey := top.key
+
+		for len(heap) > 0 {
+			next := heap.peek()
+			if next != nil && bytes.Equal(next.key, currentKey) {
+				shadowed := heap.pop()
+				out.shadowedPointOps++
+				shadowed.iter.Next()
+				if shadowed.iter.Valid() {
+					shadowed.key = shadowed.iter.Key()
+					heap.push(shadowed)
+				}
+				continue
+			}
+			break
+		}
+
+		entry := top.iter.Entry()
+		if emit != nil {
+			if err := emit(entry); err != nil {
+				return err
+			}
+		}
+		plannedPointOps++
+		if entry.Type == batch.OpDelete {
+			plannedDeletes++
+		}
+
+		top.iter.Next()
+		if top.iter.Valid() {
+			top.key = top.iter.Key()
+			heap.push(top)
+		}
+	}
+	out.plannedPointOps = plannedPointOps
+	out.deletePointOps = plannedDeletes
+	return nil
+}
+
+func mergeCanonicalStableIteratorUnits(units []flushUnit, out *canonicalFlushRun, emit func(batch.Entry) error) (err error) {
+	if out == nil {
+		return errors.New("cachingdb: missing canonical flush run")
+	}
+	heap := getOpMergeHeap(len(units))
+	defer func() { putOpMergeHeap(heap) }()
+
+	iters := make([]iterator.UnsafeIterator, len(units))
+	wrappers := make([]stableUnsafeOpIter, len(units))
+	defer func() {
+		if cerr := closeCanonicalStableIterators(iters); err == nil {
+			err = cerr
+		}
+	}()
+
+	for i := range units {
+		iter := units[i].mem.NewIterator(nil, nil)
+		if iter == nil {
+			return errors.New("cachingdb: nil canonical stable iterator")
+		}
+		iters[i] = iter
+		wrappers[i] = stableUnsafeOpIter{UnsafeIterator: iter}
+		if iter.Valid() {
+			priority := len(units) - 1 - i
+			heap = append(heap, opMergeItem{iter: &wrappers[i], priority: priority, key: wrappers[i].Key()})
 		}
 	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
@@ -766,7 +930,151 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 	return emitted, nil
 }
 
+func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, _ int, totalSpans int, mode flushCollectionMode) bool {
+	flushStart := time.Now()
+	buildStart := flushStart
+	sourcePointOps, sourceDeleteOps, err := countCanonicalStableIteratorUnits(units)
+	if err != nil {
+		db.reportError(err)
+		return false
+	}
+	db.observeFlushApplyBuild(time.Since(buildStart))
+
+	runStats := &canonicalFlushRun{
+		sourceMemtables: len(units),
+		sourcePointOps:  sourcePointOps,
+		rangeDeleteOps:  totalSpans,
+		rangeBarriers:   flushUnitRangeBarrierCount(units),
+		deletePointOps:  sourceDeleteOps,
+	}
+	backendEntriesCap := db.flushBackendEntriesCapForOps(sourcePointOps, sourceDeleteOps, syncFlush)
+	if backendEntriesCap <= 0 {
+		backendEntriesCap = sourcePointOps
+		if backendEntriesCap <= 0 {
+			backendEntriesCap = 1
+		}
+	}
+	chunkEntriesCap := backendEntriesCap
+	if sourcePointOps > 0 && chunkEntriesCap > sourcePointOps {
+		chunkEntriesCap = sourcePointOps
+	}
+	if chunkEntriesCap <= 0 {
+		chunkEntriesCap = 1
+	}
+	var emptySplitSummary backenddb.FlushSpanRunChunkSplitSummary
+	db.observeFlushSpanRunTargetLeafSpanSummary(0, 0, 0, 0, emptySplitSummary)
+
+	writeStart := time.Now()
+	ops := getEntrySlice(chunkEntriesCap)
+	defer func() { putEntrySlice(ops) }()
+	valueLogNeedsFlush := db.valueLogEnabled()
+	flushValueLogIfNeeded := func() error {
+		if !valueLogNeedsFlush {
+			return nil
+		}
+		flushStart := time.Now()
+		err := db.flushValueLog(laneID)
+		db.observeFlushApplyVLogFlush(time.Since(flushStart))
+		if err != nil {
+			return err
+		}
+		if syncFlush && !db.relaxedSync {
+			syncStart := time.Now()
+			err := db.syncValueLog(laneID)
+			db.observeFlushApplyVLogSync(time.Since(syncStart))
+			if err != nil {
+				return err
+			}
+		}
+		valueLogNeedsFlush = false
+		return nil
+	}
+	emitChunk := func(last bool) error {
+		if len(ops) == 0 {
+			return nil
+		}
+		materializeStart := time.Now()
+		wrotePointers, err := db.materializeCanonicalOpsDeferredValueLogPointers(ops, syncFlush, laneID)
+		db.observeFlushApplyDeferredVLogPointerMaterialize(time.Since(materializeStart))
+		if err != nil {
+			return fmt.Errorf("defer vlog: %w", err)
+		}
+		if wrotePointers {
+			valueLogNeedsFlush = true
+		}
+		if err := flushValueLogIfNeeded(); err != nil {
+			return fmt.Errorf("vlog: %w", err)
+		}
+		err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, commandPublish, last, mode)
+		if err != nil {
+			return err
+		}
+		putEntrySlice(ops)
+		ops = nil
+		if !last {
+			ops = getEntrySlice(chunkEntriesCap)
+		}
+		return nil
+	}
+
+	err = mergeCanonicalStableIteratorUnits(units, runStats, func(entry batch.Entry) error {
+		if len(ops) >= chunkEntriesCap {
+			if err := emitChunk(false); err != nil {
+				return err
+			}
+		}
+		if ops == nil {
+			ops = getEntrySlice(chunkEntriesCap)
+		}
+		ops = append(ops, entry)
+		return nil
+	})
+	if err != nil {
+		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+		return false
+	}
+
+	if runStats.shadowedPointOps > 0 {
+		flushMergeShadowedOpsTotal.Add(uint64(runStats.shadowedPointOps))
+		flushMergeParallelShadowedOpsTotal.Add(uint64(runStats.shadowedPointOps))
+		db.observeFlushSpanRunShadowedOps(runStats.shadowedPointOps)
+	}
+	if runStats.plannedPointOps > 0 {
+		flushMergeAppliedOpsTotal.Add(uint64(runStats.plannedPointOps))
+		flushMergeParallelAppliedOpsTotal.Add(uint64(runStats.plannedPointOps))
+	}
+	if runStats.sourcePointOps != runStats.plannedPointOps+runStats.shadowedPointOps {
+		db.reportError(fmt.Errorf("cachingdb: canonical flush run source=%d planned=%d shadowed=%d", runStats.sourcePointOps, runStats.plannedPointOps, runStats.shadowedPointOps))
+		return false
+	}
+	db.observeFlushSpanRunPlannedOps(runStats.plannedPointOps, totalSpans)
+
+	if err := emitChunk(true); err != nil {
+		db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+		return false
+	}
+	db.observeFlushApplyBackendWrite(time.Since(writeStart))
+
+	db.finishFlushedCanonicalUnits(syncFlush, units, ids, totalBytes)
+	flushDur := time.Since(flushStart)
+	if flushDur > 0 && totalBytes > 0 {
+		sample := float64(totalBytes) / flushDur.Seconds()
+		db.bpMu.Lock()
+		if db.flushBpsEWMA <= 0 {
+			db.flushBpsEWMA = sample
+		} else {
+			db.flushBpsEWMA = 0.9*db.flushBpsEWMA + 0.1*sample
+		}
+		db.bpCond.Broadcast()
+		db.bpMu.Unlock()
+	}
+	return true
+}
+
 func (db *DB) flushCanonicalPointUnitsStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, totalLen int, totalSpans int, mode flushCollectionMode) bool {
+	if db.canStreamCanonicalPointUnitsFromStableIterators(units, totalSpans) {
+		return db.flushCanonicalPointUnitsStableIteratorStreamed(syncFlush, laneID, commandPublish, units, ids, totalBytes, totalLen, totalSpans, mode)
+	}
 	flushStart := time.Now()
 	buildStart := flushStart
 	build, err := db.buildCanonicalUnitRuns(units, totalLen, totalSpans)

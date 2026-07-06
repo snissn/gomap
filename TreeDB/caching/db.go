@@ -14373,7 +14373,7 @@ func (it *opRunIter) Key() []byte {
 }
 
 type opMergeItem struct {
-	iter     *opRunIter
+	iter     canonicalOpIter
 	priority int
 	key      []byte
 }
