@@ -538,6 +538,85 @@ func TestZipperLeafRefCacheReusesOwnedPagesWithoutServingScratchMutations(t *tes
 	}
 }
 
+func TestZipperLeafRefCacheAdoptsBuildPagesUntilCacheClose(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageLog(&stubLeafPageLog{})
+	reader := &countingLeafPageReader{}
+	z.SetLeafPageReader(reader)
+
+	writeLeaf := func(dst []byte, key, val string) {
+		t.Helper()
+		clear(dst)
+		b := node.NewBuilder(dst, page.PageTypeLeaf)
+		b.SetPageID(0)
+		if err := b.AddLeafEntry([]byte(key), []byte(val), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%q): %v", key, err)
+		}
+		b.FinishNoNode()
+	}
+
+	scratch := z.acquireApplyScratch()
+	z.beginLeafRefCache(scratch)
+
+	pageBuf := scratch.acquireLeafRefCacheBuildPage()
+	writeLeaf(pageBuf, "first", "one")
+	ref, err := z.persistLeafPageDataWithCacheOwnership(pageBuf, nil, leafPageCacheAdoptOwned)
+	if err != nil {
+		t.Fatalf("persist leaf: %v", err)
+	}
+
+	reusedWhileActive := scratch.acquireLeafRefCacheBuildPage()
+	if &reusedWhileActive[0] == &pageBuf[0] {
+		t.Fatalf("active cache build page was reused before cache close")
+	}
+
+	loaded, fromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
+	if err != nil {
+		t.Fatalf("loadNodeRef: %v", err)
+	}
+	if leafScratchRef {
+		releaseLeafPageScratch(scratch, leafScratch)
+	}
+	if fromPager {
+		t.Fatalf("fromPager=%t want false", fromPager)
+	}
+	if loadSource != zipperNodeLoadLeafLogCache {
+		t.Fatalf("loadSource=%d want leaf-log cache", loadSource)
+	}
+	gotKey, gotVal, _, flags, err := loaded.GetLeafEntryView(0)
+	if err != nil {
+		t.Fatalf("GetLeafEntryView: %v", err)
+	}
+	if flags != node.FlagInline || string(gotKey) != "first" || string(gotVal) != "one" {
+		t.Fatalf("cached leaf entry=(%q,%q flags=0x%x), want (first,one inline)", gotKey, gotVal, flags)
+	}
+
+	z.endLeafRefCache()
+	z.releaseApplyScratch(scratch)
+
+	reusedScratch := z.acquireApplyScratch()
+	z.beginLeafRefCache(reusedScratch)
+	reusedAfterClose := reusedScratch.acquireLeafRefCacheBuildPage()
+	if &reusedAfterClose[0] != &pageBuf[0] && &reusedAfterClose[0] != &reusedWhileActive[0] {
+		t.Fatalf("expected cache-owned build page reuse after cache close")
+	}
+	z.endLeafRefCache()
+	z.releaseApplyScratch(reusedScratch)
+
+	if got := reader.calls.Load(); got != 0 {
+		t.Fatalf("leafPageReader calls=%d want 0", got)
+	}
+}
+
 func TestZipperCachePersistedLeafPageNoopAvoidsLockWhenCacheInactive(t *testing.T) {
 	z := &Zipper{}
 	z.leafRefCacheMu.Lock()
@@ -1100,7 +1179,7 @@ func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
 	scratch := newMergeScratch()
 
 	var metrics adaptive.Metrics
-	_, splits, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, false, applyRunConfig{})
+	_, splits, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, false, false, applyRunConfig{})
 	if err != nil {
 		t.Fatalf("mergeLeaf failed: %v", err)
 	}
@@ -1581,7 +1660,7 @@ func BenchmarkMergeLeafOuterLeafBatchScratch(b *testing.B) {
 		builder.SetPageID(0)
 		scratch := z.acquireApplyScratch()
 		var metrics adaptive.Metrics
-		_, _, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, true, applyRunConfig{})
+		_, _, err := z.mergeLeaf(oldNode, builder, ops, nil, &metrics, scratch, true, false, applyRunConfig{})
 		z.releaseApplyScratch(scratch)
 		if err != nil {
 			b.Fatalf("mergeLeaf: %v", err)
