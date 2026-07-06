@@ -903,7 +903,7 @@ func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements spa
 			if len(out.splits) == 0 {
 				var one [1]Split
 				one[0] = spanNativeReplacementHeadSplit(replacements.spans[0], out)
-				return z.reduceSpanNativeRoot(one[:], metrics)
+				return z.reduceSpanNativeRootWithScratch(one[:], metrics, scratch)
 			}
 		}
 		refCap := replacements.len()
@@ -917,7 +917,7 @@ func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements spa
 			refs = append(refs, spanNativeReplacementHeadSplit(replacements.spans[i], out))
 			refs = append(refs, out.splits...)
 		}
-		return z.reduceSpanNativeRoot(refs, metrics)
+		return z.reduceSpanNativeRootWithScratch(refs, metrics, scratch)
 	}
 	ref, splits, changed, err := z.stitchSpanNativeRecursive(page.PageChildRef(rootID), nil, nil, replacements, metrics, retired, scratch)
 	if err != nil {
@@ -929,13 +929,13 @@ func (z *Zipper) reduceSpanNativeRootWithContext(rootID uint64, replacements spa
 	if len(splits) == 0 {
 		var one [1]Split
 		one[0] = Split{Key: []byte{}, Ref: ref}
-		return z.reduceSpanNativeRoot(one[:], metrics)
+		return z.reduceSpanNativeRootWithScratch(one[:], metrics, scratch)
 	}
 	refs := scratch.acquireSpanRootRefs(len(splits) + 1)
 	defer scratch.releaseSpanRootRefs(refs)
 	refs = append(refs, Split{Key: []byte{}, Ref: ref})
 	refs = append(refs, splits...)
-	return z.reduceSpanNativeRoot(refs, metrics)
+	return z.reduceSpanNativeRootWithScratch(refs, metrics, scratch)
 }
 
 func spanNativeReplacementHeadSplit(span ReadOnlyLeafSpan, output spanNativeLeafOutput) Split {
@@ -1047,7 +1047,7 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 	case page.PageTypeInternal:
 		count := oldNode.Count()
 		copyKeys := oldNode.InternalBaseDeltaEnabled()
-		writer := spanNativeSplitLevelWriter{z: z, metrics: metrics}
+		writer := spanNativeSplitLevelWriter{z: z, metrics: metrics, scratch: scratch}
 		defer writer.abort()
 		changed := false
 		replacementIdx := 0
@@ -1146,11 +1146,13 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 }
 
 type spanNativeSplitLevelWriter struct {
-	z               *Zipper
-	metrics         *adaptive.Metrics
-	nextLevelNodes  []Split
-	currentBuilder  *node.Builder
-	currentStartKey []byte
+	z                *Zipper
+	metrics          *adaptive.Metrics
+	scratch          *mergeScratch
+	nextLevelSegment mergeSplitSegment
+	nextLevelNodes   []Split
+	currentBuilder   *node.Builder
+	currentStartKey  []byte
 }
 
 func (w *spanNativeSplitLevelWriter) append(child Split) error {
@@ -1170,7 +1172,7 @@ func (w *spanNativeSplitLevelWriter) append(child Split) error {
 		w.currentBuilder = w.z.newPooledBuilderForType(data, page.PageTypeInternal, nil)
 		w.currentBuilder.SetPageID(pid)
 		w.currentStartKey = child.Key
-		w.currentBuilder.SetInternalFenceBounds(w.currentStartKey, nil)
+		w.currentBuilder.SetInternalFenceBoundsBorrowed(w.currentStartKey, nil)
 	}
 
 	childKey := child.Key
@@ -1206,7 +1208,7 @@ func (w *spanNativeSplitLevelWriter) append(child Split) error {
 		w.currentBuilder = w.z.newPooledBuilderForType(data, page.PageTypeInternal, nil)
 		w.currentBuilder.SetPageID(pid)
 		w.currentStartKey = child.Key
-		w.currentBuilder.SetInternalFenceBounds(w.currentStartKey, nil)
+		w.currentBuilder.SetInternalFenceBoundsBorrowed(w.currentStartKey, nil)
 
 		if addErr := w.currentBuilder.AddInternalChildRef(childKey, child.Ref); addErr != nil {
 			return addErr
@@ -1222,7 +1224,11 @@ func (w *spanNativeSplitLevelWriter) finishCurrent() uint64 {
 	pageID := w.currentBuilder.PageID()
 	w.currentBuilder.FinishNoNode()
 	recordZipperInternalPageWrite(w.metrics)
-	w.nextLevelNodes = append(w.nextLevelNodes, Split{Key: w.currentStartKey, Ref: page.PageChildRef(pageID)})
+	if w.nextLevelNodes == nil {
+		w.nextLevelSegment = newMergeSplitSegment(w.scratch)
+		w.nextLevelNodes = w.nextLevelSegment.data
+	}
+	w.nextLevelNodes = w.nextLevelSegment.append(Split{Key: w.currentStartKey, Ref: page.PageChildRef(pageID)})
 	releasePooledBuilder(w.currentBuilder)
 	w.currentBuilder = nil
 	return pageID
@@ -1257,6 +1263,10 @@ func spanNativeReplacementOverlapsRange(span ReadOnlyLeafSpan, low, high []byte)
 }
 
 func (z *Zipper) reduceSpanNativeRoot(currentLevelNodes []Split, metrics *adaptive.Metrics) (uint64, error) {
+	return z.reduceSpanNativeRootWithScratch(currentLevelNodes, metrics, nil)
+}
+
+func (z *Zipper) reduceSpanNativeRootWithScratch(currentLevelNodes []Split, metrics *adaptive.Metrics, scratch *mergeScratch) (uint64, error) {
 	if err := validateSpanNativeReducerRefs(currentLevelNodes); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrSpanNativeReducerValidation, err)
 	}
@@ -1265,7 +1275,7 @@ func (z *Zipper) reduceSpanNativeRoot(currentLevelNodes []Split, metrics *adapti
 			return z.ensureRootPage(currentLevelNodes[0].Key, currentLevelNodes[0].Ref, metrics)
 		}
 		metrics.ZipperRootSplitLevels++
-		nextLevelNodes, err := z.reduceSpanNativeSplitLevel(currentLevelNodes, metrics)
+		nextLevelNodes, err := z.reduceSpanNativeSplitLevel(currentLevelNodes, metrics, scratch)
 		if err != nil {
 			return 0, err
 		}
@@ -1290,8 +1300,9 @@ func validateSpanNativeReducerRefs(refs []Split) error {
 	return nil
 }
 
-func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *adaptive.Metrics) ([]Split, error) {
-	var nextLevelNodes []Split
+func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *adaptive.Metrics, scratch *mergeScratch) ([]Split, error) {
+	nextLevelSegment := newMergeSplitSegment(scratch)
+	nextLevelNodes := nextLevelSegment.data
 	var currentBuilder *node.Builder
 	var currentStartKey []byte
 
@@ -1312,7 +1323,7 @@ func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *
 			currentBuilder = z.newBuilderForType(data, page.PageTypeInternal, nil)
 			currentBuilder.SetPageID(pid)
 			currentStartKey = child.Key
-			currentBuilder.SetInternalFenceBounds(currentStartKey, nil)
+			currentBuilder.SetInternalFenceBoundsBorrowed(currentStartKey, nil)
 		}
 
 		childKey := child.Key
@@ -1337,7 +1348,7 @@ func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *
 		if err == node.ErrNodeFull {
 			currentBuilder.FinishNoNode()
 			recordZipperInternalPageWrite(metrics)
-			nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, Ref: page.PageChildRef(currentBuilder.PageID())})
+			nextLevelNodes = nextLevelSegment.append(Split{Key: currentStartKey, Ref: page.PageChildRef(currentBuilder.PageID())})
 
 			pid, allocErr := z.allocator.Alloc(currentBuilder.PageID())
 			if allocErr != nil {
@@ -1350,7 +1361,7 @@ func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *
 			currentBuilder = z.newBuilderForType(data, page.PageTypeInternal, nil)
 			currentBuilder.SetPageID(pid)
 			currentStartKey = child.Key
-			currentBuilder.SetInternalFenceBounds(currentStartKey, nil)
+			currentBuilder.SetInternalFenceBoundsBorrowed(currentStartKey, nil)
 
 			if addErr := currentBuilder.AddInternalChildRef(childKey, child.Ref); addErr != nil {
 				return nil, addErr
@@ -1363,7 +1374,7 @@ func (z *Zipper) reduceSpanNativeSplitLevel(currentLevelNodes []Split, metrics *
 		if i == len(currentLevelNodes)-1 {
 			currentBuilder.FinishNoNode()
 			recordZipperInternalPageWrite(metrics)
-			nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, Ref: page.PageChildRef(currentBuilder.PageID())})
+			nextLevelNodes = nextLevelSegment.append(Split{Key: currentStartKey, Ref: page.PageChildRef(currentBuilder.PageID())})
 			currentBuilder = nil
 		}
 	}

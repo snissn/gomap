@@ -30,6 +30,24 @@ func (m *MockAllocator) Alloc(hint uint64) (uint64, error) {
 	return m.p.Alloc(1)
 }
 
+type benchmarkCyclingAllocator struct {
+	ids  []uint64
+	next int
+}
+
+func (a *benchmarkCyclingAllocator) reset() {
+	a.next = 0
+}
+
+func (a *benchmarkCyclingAllocator) Alloc(hint uint64) (uint64, error) {
+	if len(a.ids) == 0 {
+		return 0, fmt.Errorf("zipper benchmark allocator has no page IDs")
+	}
+	id := a.ids[a.next%len(a.ids)]
+	a.next++
+	return id, nil
+}
+
 type panicValueReader struct{}
 
 func (panicValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
@@ -1101,6 +1119,52 @@ func TestZipperMergeScratch_ReusesAndClearsLeafPageBatchScratch(t *testing.T) {
 	s.releaseLeafPageBatch(reused)
 }
 
+func TestZipperMergeScratch_ReusesSplitArenaSegments(t *testing.T) {
+	s := newMergeScratch()
+	firstSegment := newMergeSplitSegment(s)
+	first := firstSegment.append(Split{Key: []byte("a"), Ref: page.PageChildRef(1)})
+	if len(first) != 1 || !bytes.Equal(first[0].Key, []byte("a")) {
+		t.Fatalf("unexpected first split segment: %+v", first)
+	}
+
+	secondSegment := newMergeSplitSegment(s)
+	second := secondSegment.append(Split{Key: []byte("b"), Ref: page.PageChildRef(2)})
+	if len(second) != 1 || !bytes.Equal(second[0].Key, []byte("b")) {
+		t.Fatalf("unexpected second split segment: %+v", second)
+	}
+	if len(first) != 1 || !bytes.Equal(first[0].Key, []byte("a")) {
+		t.Fatalf("first segment changed after second segment append: %+v", first)
+	}
+
+	extendedFirst := firstSegment.append(Split{Key: []byte("c"), Ref: page.PageChildRef(3)})
+	if len(extendedFirst) != 2 {
+		t.Fatalf("extended first segment len=%d want 2", len(extendedFirst))
+	}
+	if !bytes.Equal(extendedFirst[0].Key, []byte("a")) || !bytes.Equal(extendedFirst[1].Key, []byte("c")) {
+		t.Fatalf("extended first segment mismatch: %+v", extendedFirst)
+	}
+	if len(s.splitArena) != 2 {
+		t.Fatalf("fallback append should not grow arena, len=%d", len(s.splitArena))
+	}
+
+	arena := s.splitArena
+	s.reset()
+	if len(s.splitArena) != 0 {
+		t.Fatalf("split arena len=%d want 0 after reset", len(s.splitArena))
+	}
+	for i, split := range arena[:2] {
+		if split.Key != nil || split.Ref != (page.ChildRef{}) {
+			t.Fatalf("split arena retained slot %d: %+v", i, split)
+		}
+	}
+
+	s.splitArena = make([]Split, 0, mergeSplitArenaKeepCap+1)
+	s.reset()
+	if cap(s.splitArena) > mergeSplitArenaKeepCap {
+		t.Fatalf("oversized split arena cap=%d exceeds keep %d", cap(s.splitArena), mergeSplitArenaKeepCap)
+	}
+}
+
 func TestZipperMergeScratch_ReusesChildRefBatchScratchWithoutClearing(t *testing.T) {
 	s := newMergeScratch()
 	buf := s.acquireChildRefBatch(2)
@@ -1399,6 +1463,71 @@ func BenchmarkMergeLeafOuterLeafBatchScratch(b *testing.B) {
 			b.Fatalf("mergeLeaf: %v", err)
 		}
 	}
+}
+
+func BenchmarkReduceSpanNativeSplitLevelScratch(b *testing.B) {
+	const (
+		refCount      = 4096
+		scratchPages  = 128
+		benchmarkSeed = 0x3524
+	)
+
+	dir := b.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer p.Close()
+
+	ids := make([]uint64, scratchPages)
+	for i := range ids {
+		id, err := p.Alloc(1)
+		if err != nil {
+			b.Fatalf("alloc scratch page: %v", err)
+		}
+		ids[i] = id
+	}
+	alloc := &benchmarkCyclingAllocator{ids: ids}
+	z := New(p, alloc)
+
+	refs := make([]Split, refCount)
+	for i := range refs {
+		key := make([]byte, 16)
+		binary.BigEndian.PutUint64(key[:8], benchmarkSeed)
+		binary.BigEndian.PutUint64(key[8:], uint64(i))
+		refs[i] = Split{Key: key, Ref: page.PageChildRef(uint64(i + 1))}
+	}
+
+	b.Run("heap", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			alloc.reset()
+			var metrics adaptive.Metrics
+			out, err := z.reduceSpanNativeSplitLevel(refs, &metrics, nil)
+			if err != nil {
+				b.Fatalf("reduceSpanNativeSplitLevel: %v", err)
+			}
+			if len(out) == 0 {
+				b.Fatalf("empty reducer output")
+			}
+		}
+	})
+	b.Run("scratch", func(b *testing.B) {
+		scratch := newMergeScratch()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			alloc.reset()
+			var metrics adaptive.Metrics
+			out, err := z.reduceSpanNativeSplitLevel(refs, &metrics, scratch)
+			if err != nil {
+				b.Fatalf("reduceSpanNativeSplitLevel: %v", err)
+			}
+			if len(out) == 0 {
+				b.Fatalf("empty reducer output")
+			}
+			scratch.reset()
+		}
+	})
 }
 
 func BenchmarkZipperApplyOuterLeafRandomOverwrite(b *testing.B) {
