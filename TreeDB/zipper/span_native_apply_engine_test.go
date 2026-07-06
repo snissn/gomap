@@ -114,6 +114,19 @@ func TestSpanNativeApplyOmitKeysOptionKeepsBoundariesForPartialSpan(t *testing.T
 	if result.ReadOnlyPrepare.OmitKeys {
 		t.Fatalf("span-native prepare kept OmitKeys=true; execution needs exact boundaries")
 	}
+	if !result.ReadOnlyPrepare.OmitOpKeys {
+		t.Fatalf("span-native prepare OmitOpKeys=%v want true", result.ReadOnlyPrepare.OmitOpKeys)
+	}
+	var boundaryBytes int
+	for i, span := range result.ReadOnlyPrepare.LeafSpans {
+		boundaryBytes += len(span.LowKey) + len(span.HighKey)
+		if span.FirstOpKey != nil || span.LastOpKey != nil {
+			t.Fatalf("span-native span %d retained op keys under OmitOpKeys", i)
+		}
+	}
+	if boundaryBytes == 0 {
+		t.Fatalf("span-native prepare retained no boundary bytes")
+	}
 	if !result.SpanNativeEligible || !result.SpanNativeUsed {
 		t.Fatalf("span-native flags eligible/used=%v/%v", result.SpanNativeEligible, result.SpanNativeUsed)
 	}
