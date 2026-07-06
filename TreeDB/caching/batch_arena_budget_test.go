@@ -20,10 +20,14 @@ func resetBatchArenaPoolsForTest() {
 	batchArenaLeasedBytesGlobal.Store(0)
 	batchArenaRetainedHardCapOverride.Store(0)
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+	batchArenaPoolDropBytesTotal.Store(0)
 	batchArenaPoolDropHardCapBytesTotal.Store(0)
 	batchArenaBorrowBlockedTotal.Store(0)
 	batchArenaBorrowPreflightBlockedTotal.Store(0)
 	batchArenaBorrowPreflightBlockedBytesTotal.Store(0)
+	batchArenaFreeLeaseMu.Lock()
+	batchArenaFreeLeases = [batchArenaClassCount][][]byte{}
+	batchArenaFreeLeaseMu.Unlock()
 	for i := range batchArenaPools {
 		batchArenaPools[i] = sync.Pool{}
 	}
@@ -54,6 +58,82 @@ func TestBatchArenaPoolAccountingRecoversOnUnexpectedCap(t *testing.T) {
 	if got := batchArenaPoolBytes.Load(); got != 0 {
 		t.Fatalf("batchArenaPoolBytes after wrong-cap recovery=%d want 0", got)
 	}
+}
+
+func TestBatchArenaFreeLeaseRoundTripAccounting(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
+	if !ok {
+		t.Fatal("batchArenaClassForLen failed")
+	}
+	buf := make([]byte, 1, classCap)
+	wantPtr := unsafe.SliceData(buf)
+
+	putBatchArena(buf)
+	if got := batchArenaPoolBytes.Load(); got != int64(classCap) {
+		t.Fatalf("batchArenaPoolBytes after put=%d want %d", got, classCap)
+	}
+
+	got := getBatchArena(classCap)
+	if cap(got) != classCap {
+		t.Fatalf("getBatchArena cap=%d want %d", cap(got), classCap)
+	}
+	got = append(got, 0)
+	if gotPtr := unsafe.SliceData(got); gotPtr != wantPtr {
+		t.Fatalf("getBatchArena did not reuse free lease backing")
+	}
+	if gotBytes := batchArenaPoolBytes.Load(); gotBytes != 0 {
+		t.Fatalf("batchArenaPoolBytes after get=%d want 0", gotBytes)
+	}
+}
+
+func TestBatchArenaFreeLeaseDropsAfterBucketCap(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
+	if !ok {
+		t.Fatal("batchArenaClassForLen failed")
+	}
+
+	for i := 0; i < maxBatchArenaFreeLeasesPerBucket+1; i++ {
+		putBatchArena(make([]byte, 0, classCap))
+	}
+	if got, want := batchArenaPoolBytes.Load(), int64(maxBatchArenaFreeLeasesPerBucket*classCap); got != want {
+		t.Fatalf("batchArenaPoolBytes after capped puts=%d want %d", got, want)
+	}
+	if got := batchArenaPoolDropBytesTotal.Load(); got < uint64(classCap) {
+		t.Fatalf("batchArenaPoolDropBytesTotal=%d want >= %d", got, classCap)
+	}
+}
+
+func TestBatchArenaLeaseStaticHeaderRoundTrip(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+
+	chunk := make([]byte, 0, 1<<batchArenaMinShift)
+	chunks := [][]byte{chunk}
+	lease := getBatchArenaLease(1, chunks)
+	if lease == nil {
+		t.Fatal("getBatchArenaLease returned nil")
+	}
+	if !lease.staticPool {
+		t.Fatal("getBatchArenaLease did not use static lease header")
+	}
+	if got, want := lease.bytes, int64(cap(chunk)); got != want {
+		t.Fatalf("lease bytes=%d want %d", got, want)
+	}
+	putBatchArenaLease(lease)
+
+	got := getBatchArenaLease(1, chunks)
+	if got != lease {
+		t.Fatal("getBatchArenaLease did not reuse static lease header")
+	}
+	putBatchArenaLease(got)
 }
 
 func TestBatchArenaPoolAccountingMissWithoutGCDoesNotReset(t *testing.T) {
@@ -201,6 +281,46 @@ func TestDrainBatchArenaPoolToTargetBytes(t *testing.T) {
 	maxAllowedAfter := before - int64(classCap)
 	if after > maxAllowedAfter {
 		t.Fatalf("batchArenaPoolBytes after drain=%d want <= %d (before=%d target=%d classCap=%d)", after, maxAllowedAfter, before, target, classCap)
+	}
+}
+
+func BenchmarkBatchArenaFreeLeaseRoundTrip(b *testing.B) {
+	batchArenaPoolTestMu.Lock()
+	resetBatchArenaPoolsForTest()
+	b.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
+	if !ok {
+		b.Fatal("batchArenaClassForLen failed")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buf := getBatchArena(classCap)
+		if cap(buf) != classCap {
+			b.Fatalf("getBatchArena cap=%d want %d", cap(buf), classCap)
+		}
+		putBatchArena(buf)
+	}
+}
+
+func BenchmarkBatchArenaLeaseHeaderRoundTrip(b *testing.B) {
+	batchArenaPoolTestMu.Lock()
+	b.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	chunk := make([]byte, 0, 1<<batchArenaMinShift)
+	chunks := [][]byte{chunk}
+	lease := getBatchArenaLease(1, chunks)
+	putBatchArenaLease(lease)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		lease := getBatchArenaLease(1, chunks)
+		if lease == nil {
+			b.Fatal("getBatchArenaLease returned nil")
+		}
+		putBatchArenaLease(lease)
 	}
 }
 
@@ -372,6 +492,45 @@ func TestBatchArenaLeaseBytesTracksRetainReleaseLifecycle(t *testing.T) {
 	}
 	if got := db.batchArenaLeaseBytesMax.Load(); got != want {
 		t.Fatalf("leased bytes max after final release=%d want=%d", got, want)
+	}
+}
+
+func TestBatchArenaSingleMemtableRetainCoalescesLeaseHeaders(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	db := &DB{}
+	mt := memtable.NewBTree()
+	chunkA := make([]byte, 0, 1<<batchArenaMinShift)
+	chunkB := make([]byte, 0, 1<<batchArenaMinShift)
+
+	db.retainBatchArenaChunksForMemtables([][]byte{chunkA}, []memtable.Table{mt})
+	db.retainBatchArenaChunksForMemtables([][]byte{chunkB}, []memtable.Table{mt})
+
+	wantBytes := int64(cap(chunkA) + cap(chunkB))
+	if got := db.batchArenaLeaseBytes.Load(); got != wantBytes {
+		t.Fatalf("leased bytes after coalesced retain=%d want=%d", got, wantBytes)
+	}
+	db.batchArenaLeaseMu.Lock()
+	leases := append([]*batchArenaLease(nil), db.batchArenaLeasesByMem[mt]...)
+	db.batchArenaLeaseMu.Unlock()
+	if got := len(leases); got != 1 {
+		t.Fatalf("lease headers for one memtable=%d want 1", got)
+	}
+	if got := len(leases[0].chunks); got != 2 {
+		t.Fatalf("coalesced lease chunks=%d want 2", got)
+	}
+	if got := leases[0].bytes; got != wantBytes {
+		t.Fatalf("coalesced lease bytes=%d want=%d", got, wantBytes)
+	}
+
+	db.releaseBatchArenaLeasesForMemtable(mt)
+	if got := db.batchArenaLeaseBytes.Load(); got != 0 {
+		t.Fatalf("leased bytes after release=%d want=0", got)
+	}
+	if got := batchArenaLeasedBytesGlobal.Load(); got != 0 {
+		t.Fatalf("global leased bytes after release=%d want=0", got)
 	}
 }
 

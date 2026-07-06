@@ -168,6 +168,39 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint(t *testing.T) {
 	}
 }
 
+func TestBatchArenaLeases_RetiredMemtableReleaseWaitsForRecycle(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+	forceNormalPoolPressureForTest(t)
+
+	db := &DB{}
+	mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(1024, 64)
+	chunk := make([]byte, 0, batchCopyArenaMinChunk)
+	chunkBytes := int64(cap(chunk))
+
+	db.retainBatchArenaChunksForMemtables([][]byte{chunk}, []memtable.Table{mt})
+	if got := db.batchArenaLeaseBytes.Load(); got != chunkBytes {
+		t.Fatalf("leased bytes after retain=%d want %d", got, chunkBytes)
+	}
+
+	db.queueRetiredMemtableLocked(mt)
+	if got := batchArenaPoolBytes.Load(); got != 0 {
+		t.Fatalf("retired queue returned live arena bytes=%d want 0", got)
+	}
+	if got := db.batchArenaLeaseBytes.Load(); got != chunkBytes {
+		t.Fatalf("leased bytes after retired queue=%d want %d", got, chunkBytes)
+	}
+
+	db.recycleMemtables([]memtable.Table{mt})
+	if got := db.batchArenaLeaseBytes.Load(); got != 0 {
+		t.Fatalf("leased bytes after recycle=%d want 0", got)
+	}
+	if got := batchArenaPoolBytes.Load(); got == 0 {
+		t.Fatalf("expected recycled arena chunk to return to pool")
+	}
+}
+
 func TestBatchArenaRetainedHardCap_BoundsLeaseGrowthAcrossSustainedWrites(t *testing.T) {
 	batchArenaPoolTestMu.Lock()
 	defer batchArenaPoolTestMu.Unlock()
