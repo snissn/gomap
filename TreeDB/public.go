@@ -323,16 +323,16 @@ func (db *DB) ensureOpen() error {
 	return nil
 }
 
-func (db *DB) beginPublicOperation() (func(), error) {
+func (db *DB) beginPublicOperation() error {
 	if db == nil {
-		return nil, ErrClosed
+		return ErrClosed
 	}
 	db.lifecycleMu.RLock()
 	if db.cached == nil && db.backend == nil {
 		db.lifecycleMu.RUnlock()
-		return nil, ErrClosed
+		return ErrClosed
 	}
-	return db.lifecycleMu.RUnlock, nil
+	return nil
 }
 
 func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success bool)) {
@@ -1631,11 +1631,10 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 func (db *DB) Set(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
 			return db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
@@ -1653,11 +1652,10 @@ func (db *DB) Set(key, value []byte) error {
 func (db *DB) SetSync(key, value []byte) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
 			return db.cached.SetAfterCommandWALAppendWithRevision(key, value, func(revision page.EntryRevision) error {
@@ -1679,11 +1677,10 @@ func (db *DB) SetSync(key, value []byte) error {
 // Because fn may be retried, it should avoid externally visible side effects.
 func (db *DB) Update(key []byte, fn UpdateFunc) error {
 	key = normalizeRawKVPointKey(key)
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.commandWALCached {
 		db.rawSpanNativePublicUpdateReject.Add(1)
 		return ErrCommandWALRejected
@@ -1704,11 +1701,10 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 // externally visible side effects.
 func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 	key = normalizeRawKVPointKey(key)
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.commandWALCached {
 		db.rawSpanNativePublicUpdateSyncReject.Add(1)
 		return ErrCommandWALRejected
@@ -1738,15 +1734,15 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if tx == nil || tx.cachedActive || tx.backend != nil {
 		return ErrConditionalTxnClosed
 	}
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
 			return ErrConditionalTxnUnsupported
 		}
+		var err error
 		if withSnapshot {
 			err = db.cached.InitConditionalTxnWithSnapshot(&tx.cached)
 		} else {
@@ -1796,11 +1792,10 @@ func (db *DB) NewConditionalTxnWithSnapshot() (*ConditionalTxn, error) {
 // Delete removes a key without forcing an fsync boundary.
 func (db *DB) Delete(key []byte) error {
 	key = normalizeRawKVPointKey(key)
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
 			return db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
@@ -1817,11 +1812,10 @@ func (db *DB) Delete(key []byte) error {
 // This is primarily used by benchmark suites and maintenance tooling. In cached
 // mode, it may use fast paths that avoid per-key tombstones when safe.
 func (db *DB) DeleteRange(start, end []byte) error {
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.commandWALCached {
 		if batch.IsDeleteRangeNoop(start, end) {
 			return nil
@@ -1868,11 +1862,10 @@ func (db *DB) DeleteRange(start, end []byte) error {
 // DeleteSync removes a key and forces a durability boundary.
 func (db *DB) DeleteSync(key []byte) error {
 	key = normalizeRawKVPointKey(key)
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
 			return db.cached.DeleteAfterCommandWALAppendWithRevision(key, func(revision page.EntryRevision) error {
@@ -1908,11 +1901,10 @@ func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
 
 // NewBatch creates a new batch for buffered writes.
 func (db *DB) NewBatch() Batch {
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return nil
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		inner := db.cached.NewBatch()
 		if db.commandWALCached {
@@ -1933,11 +1925,10 @@ func (db *DB) NewBatch() Batch {
 // Callers must not rely on an exact 1:1 mapping between size and the number of
 // entries or bytes that can be written to the batch.
 func (db *DB) NewBatchWithSize(size int) Batch {
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return nil
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		inner := db.cached.NewBatchWithSize(size)
 		if db.commandWALCached {
@@ -2063,11 +2054,10 @@ func (db *DB) Print() error {
 // Checkpoint returning nil must also cover pre-cut collection WAL transactions
 // or return/report explicit collection WAL debt.
 func (db *DB) Checkpoint() error {
-	unlock, err := db.beginPublicOperation()
-	if err != nil {
+	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
-	defer unlock()
+	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		return db.checkpointCachedForPublicCommandWAL()
 	}

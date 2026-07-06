@@ -796,11 +796,10 @@ func (b *commandWALPublicBatch) write(sync bool) error {
 		return ErrClosed
 	}
 	if b.db != nil {
-		unlock, err := b.db.beginPublicOperation()
-		if err != nil {
+		if err := b.db.beginPublicOperation(); err != nil {
 			return err
 		}
-		defer unlock()
+		defer b.db.lifecycleMu.RUnlock()
 	}
 	if b.dirty {
 		writer, ok := b.inner.(interface {
