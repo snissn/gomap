@@ -85,6 +85,10 @@ type outerLeafBuildPage struct {
 	buf [page.PageSize]byte
 }
 
+type leafRefCachePage struct {
+	buf [page.PageSize]byte
+}
+
 // outerLeafBuildPagePool recycles page-sized buffers used to build rewritten
 // outer-leaf pages on non-maintenance apply paths.
 var outerLeafBuildPagePool = sync.Pool{
@@ -134,6 +138,7 @@ type Zipper struct {
 	leafRefCacheMu        sync.RWMutex
 	leafRefCacheActive    atomic.Bool
 	leafRefCache          map[page.LeafLogPtr][]byte
+	leafRefCacheScratch   *mergeScratch
 
 	leafReserveBytes          int
 	internalReserveBytes      int
@@ -191,6 +196,8 @@ const (
 	mergeLeafPageBatchInit            = 8
 	mergeLeafPageBatchKeep            = 64
 	mergeLeafPageBatchMaxCap          = 512
+	mergeLeafRefCachePageInit         = 16
+	mergeLeafRefCachePageKeep         = 4096
 	mergeChildRefBatchInit            = 8
 	mergeChildRefBatchKeep            = 64
 	mergeChildRefBatchMaxCap          = 512
@@ -218,6 +225,8 @@ type mergeScratch struct {
 	nodeKeyScratch            [][]byte
 	pendingLeafPersistScratch [][]pendingLeafPagePersist
 	leafPageBatchScratch      [][][]byte
+	leafRefCachePages         []*leafRefCachePage
+	leafRefCacheActivePages   []*leafRefCachePage
 	childRefBatchScratch      [][]page.ChildRef
 	spanWorkerRangeScratch    []ReadOnlyLeafSpanWorkerRange
 	spanWorkerScratchScratch  []*mergeScratch
@@ -236,6 +245,8 @@ func newMergeScratch() *mergeScratch {
 		nodeKeyScratch:            make([][]byte, 0, mergeNodeKeyScratchInit),
 		pendingLeafPersistScratch: make([][]pendingLeafPagePersist, 0, mergePendingLeafPersistInit),
 		leafPageBatchScratch:      make([][][]byte, 0, mergeLeafPageBatchInit),
+		leafRefCachePages:         make([]*leafRefCachePage, 0, mergeLeafRefCachePageInit),
+		leafRefCacheActivePages:   make([]*leafRefCachePage, 0, mergeLeafRefCachePageInit),
 		childRefBatchScratch:      make([][]page.ChildRef, 0, mergeChildRefBatchInit),
 	}
 }
@@ -304,6 +315,15 @@ func (s *mergeScratch) reset() {
 		}
 		s.leafPageBatchScratch = s.leafPageBatchScratch[:mergeLeafPageBatchKeep]
 	}
+	if n := len(s.leafRefCachePages); n > mergeLeafRefCachePageKeep {
+		extra := s.leafRefCachePages[mergeLeafRefCachePageKeep:]
+		for i := range extra {
+			extra[i] = nil
+		}
+		s.leafRefCachePages = s.leafRefCachePages[:mergeLeafRefCachePageKeep]
+	}
+	clear(s.leafRefCacheActivePages)
+	s.leafRefCacheActivePages = s.leafRefCacheActivePages[:0]
 	if n := len(s.childRefBatchScratch); n > mergeChildRefBatchKeep {
 		extra := s.childRefBatchScratch[mergeChildRefBatchKeep:]
 		for i := range extra {
@@ -576,6 +596,46 @@ func (s *mergeScratch) releaseLeafPageBatch(buf [][]byte) {
 		s.mu.Unlock()
 		return
 	}
+	s.mu.Unlock()
+}
+
+func (s *mergeScratch) cloneLeafRefCachePage(src []byte) []byte {
+	if s == nil || len(src) != page.PageSize {
+		owned := make([]byte, len(src))
+		copy(owned, src)
+		return owned
+	}
+	s.mu.Lock()
+	n := len(s.leafRefCachePages)
+	var p *leafRefCachePage
+	if n > 0 {
+		p = s.leafRefCachePages[n-1]
+		s.leafRefCachePages[n-1] = nil
+		s.leafRefCachePages = s.leafRefCachePages[:n-1]
+	} else {
+		p = &leafRefCachePage{}
+	}
+	s.leafRefCacheActivePages = append(s.leafRefCacheActivePages, p)
+	s.mu.Unlock()
+	copy(p.buf[:], src)
+	return p.buf[:]
+}
+
+func (s *mergeScratch) releaseLeafRefCachePages() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	active := s.leafRefCacheActivePages
+	keep := mergeLeafRefCachePageKeep - len(s.leafRefCachePages)
+	if keep > len(active) {
+		keep = len(active)
+	}
+	if keep > 0 {
+		s.leafRefCachePages = append(s.leafRefCachePages, active[:keep]...)
+	}
+	clear(active)
+	s.leafRefCacheActivePages = active[:0]
 	s.mu.Unlock()
 }
 
@@ -1560,6 +1620,13 @@ type leafPagePersistSink interface {
 	persistLeafPageBatchDataTo(z *Zipper, leafPages [][]byte, refs []page.ChildRef, metrics *adaptive.Metrics) ([]page.ChildRef, error)
 }
 
+type leafPageCacheOwnership uint8
+
+const (
+	leafPageCacheClone leafPageCacheOwnership = iota
+	leafPageCacheAdoptOwned
+)
+
 type applyRunConfig struct {
 	maxParallelWorkers int
 	workerPool         *ApplyWorkerPool
@@ -1610,7 +1677,7 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 		// maintenance may reload newly written leaf refs before the value log is
 		// flushed. Pure put/restore applies do not revisit those fresh leaves, so
 		// avoid retaining their page buffers for the whole commit.
-		z.beginLeafRefCache()
+		z.beginLeafRefCache(scratch)
 		defer z.endLeafRefCache()
 	}
 
@@ -1851,27 +1918,43 @@ func (z *Zipper) persistLeafPage(b *node.Builder, metrics *adaptive.Metrics) (pa
 }
 
 func (z *Zipper) persistLeafPageWithConfig(b *node.Builder, metrics *adaptive.Metrics, cfg applyRunConfig) (page.ChildRef, error) {
+	return z.persistLeafPageWithConfigAndCacheOwnership(b, metrics, cfg, leafPageCacheClone)
+}
+
+func (z *Zipper) persistLeafPageWithConfigAndCacheOwnership(b *node.Builder, metrics *adaptive.Metrics, cfg applyRunConfig, ownership leafPageCacheOwnership) (page.ChildRef, error) {
 	if b == nil {
 		return page.ChildRef{}, errors.New("zipper: nil leaf builder")
 	}
 	if !z.outerLeavesInValueLog {
 		return page.PageChildRef(b.PageID()), nil
 	}
-	return z.persistLeafPageDataWithConfig(b.Data(), metrics, cfg)
+	return z.persistLeafPageDataWithConfigAndCacheOwnership(b.Data(), metrics, cfg, ownership)
 }
 
 func (z *Zipper) persistLeafPageDataWithConfig(leafPage []byte, metrics *adaptive.Metrics, cfg applyRunConfig) (page.ChildRef, error) {
+	return z.persistLeafPageDataWithConfigAndCacheOwnership(leafPage, metrics, cfg, leafPageCacheClone)
+}
+
+func (z *Zipper) persistLeafPageDataWithConfigAndCacheOwnership(leafPage []byte, metrics *adaptive.Metrics, cfg applyRunConfig, ownership leafPageCacheOwnership) (page.ChildRef, error) {
 	if cfg.leafPagePersister != nil {
 		return cfg.leafPagePersister.persistLeafPageData(z, leafPage, metrics)
 	}
-	return z.persistLeafPageData(leafPage, metrics)
+	return z.persistLeafPageDataWithCacheOwnership(leafPage, metrics, ownership)
 }
 
 func (z *Zipper) persistLeafPageData(leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
-	return z.persistLeafPageDataToLog(z.leafPageLog, leafPage, metrics)
+	return z.persistLeafPageDataWithCacheOwnership(leafPage, metrics, leafPageCacheClone)
+}
+
+func (z *Zipper) persistLeafPageDataWithCacheOwnership(leafPage []byte, metrics *adaptive.Metrics, ownership leafPageCacheOwnership) (page.ChildRef, error) {
+	return z.persistLeafPageDataToLogWithCacheOwnership(z.leafPageLog, leafPage, metrics, ownership)
 }
 
 func (z *Zipper) persistLeafPageDataToLog(log LeafPageLog, leafPage []byte, metrics *adaptive.Metrics) (page.ChildRef, error) {
+	return z.persistLeafPageDataToLogWithCacheOwnership(log, leafPage, metrics, leafPageCacheClone)
+}
+
+func (z *Zipper) persistLeafPageDataToLogWithCacheOwnership(log LeafPageLog, leafPage []byte, metrics *adaptive.Metrics, ownership leafPageCacheOwnership) (page.ChildRef, error) {
 	if log == nil {
 		return page.ChildRef{}, errors.New("zipper: missing leaf page log")
 	}
@@ -1881,7 +1964,7 @@ func (z *Zipper) persistLeafPageDataToLog(log LeafPageLog, leafPage []byte, metr
 	if err != nil {
 		return page.ChildRef{}, err
 	}
-	z.cachePersistedLeafPage(ptr, leafPage)
+	z.cachePersistedLeafPage(ptr, leafPage, ownership)
 	return page.LeafLogChildRef(ptr), nil
 }
 
@@ -1907,7 +1990,7 @@ func (z *Zipper) persistPreparedLeafPageDataToLog(log LeafPageLog, leafPage []by
 			return page.ChildRef{}, err
 		}
 		recordZipperLeafLogOutputAppend(metrics, appendWait, 1, true)
-		z.cachePersistedLeafPage(ptr, leafPage)
+		z.cachePersistedLeafPage(ptr, leafPage, leafPageCacheClone)
 		return page.LeafLogChildRef(ptr), nil
 	}
 	var onePage [1][]byte
@@ -1956,7 +2039,7 @@ func (z *Zipper) persistPreparedLeafPageBatchDataToLog(log LeafPageLog, leafPage
 		}
 		recordZipperLeafLogOutputAppend(metrics, appendWait, len(leafPages), true)
 		for i, ref := range out {
-			z.cachePersistedLeafPage(ref.Log, leafPages[i])
+			z.cachePersistedLeafPage(ref.Log, leafPages[i], leafPageCacheClone)
 		}
 		return out, nil
 	}
@@ -1982,7 +2065,7 @@ func (z *Zipper) persistPreparedLeafPageBatchDataToLog(log LeafPageLog, leafPage
 		refs = refs[:len(ptrs)]
 	}
 	for i, ptr := range ptrs {
-		z.cachePersistedLeafPage(ptr, leafPages[i])
+		z.cachePersistedLeafPage(ptr, leafPages[i], leafPageCacheClone)
 		refs[i] = page.LeafLogChildRef(ptr)
 	}
 	return refs, nil
@@ -2072,18 +2155,19 @@ func (z *Zipper) persistLeafPageBatchDataToLog(log LeafPageLog, leafPages [][]by
 		refs = refs[:len(ptrs)]
 	}
 	for i, ptr := range ptrs {
-		z.cachePersistedLeafPage(ptr, leafPages[i])
+		z.cachePersistedLeafPage(ptr, leafPages[i], leafPageCacheClone)
 		refs[i] = page.LeafLogChildRef(ptr)
 	}
 	return refs, nil
 }
 
-func (z *Zipper) beginLeafRefCache() {
+func (z *Zipper) beginLeafRefCache(scratch *mergeScratch) {
 	if z == nil {
 		return
 	}
 	z.leafRefCacheMu.Lock()
 	z.leafRefCache = make(map[page.LeafLogPtr][]byte)
+	z.leafRefCacheScratch = scratch
 	z.leafRefCacheActive.Store(true)
 	z.leafRefCacheMu.Unlock()
 }
@@ -2093,12 +2177,15 @@ func (z *Zipper) endLeafRefCache() {
 		return
 	}
 	z.leafRefCacheMu.Lock()
+	scratch := z.leafRefCacheScratch
 	z.leafRefCache = nil
+	z.leafRefCacheScratch = nil
 	z.leafRefCacheActive.Store(false)
 	z.leafRefCacheMu.Unlock()
+	scratch.releaseLeafRefCachePages()
 }
 
-func (z *Zipper) cachePersistedLeafPage(ptr page.LeafLogPtr, leafPage []byte) {
+func (z *Zipper) cachePersistedLeafPage(ptr page.LeafLogPtr, leafPage []byte, ownership leafPageCacheOwnership) {
 	if z == nil || !z.leafRefCacheActive.Load() {
 		return
 	}
@@ -2109,8 +2196,10 @@ func (z *Zipper) cachePersistedLeafPage(ptr page.LeafLogPtr, leafPage []byte) {
 		// parent internals are built). The in-flight leaf-ref cache must own the
 		// bytes it serves; otherwise a later scratch reuse can turn a cached leaf
 		// into an internal page and make maintenance rewrites fail validation.
-		owned := make([]byte, len(leafPage))
-		copy(owned, leafPage)
+		owned := leafPage
+		if ownership != leafPageCacheAdoptOwned {
+			owned = z.leafRefCacheScratch.cloneLeafRefCachePage(leafPage)
+		}
 		z.leafRefCache[ptr] = owned
 	}
 	z.leafRefCacheMu.Unlock()
@@ -2331,7 +2420,14 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			return page.ChildRef{}, nil
 		}
 
-		nodeRef, err := z.persistLeafPageWithConfig(target, metrics, cfg)
+		ownership := leafPageCacheClone
+		if z.outerLeavesInValueLog && !reuseOuterLeafPages {
+			// Delete-maintenance leaf pages are built into fresh, non-pooled page
+			// buffers. The in-flight leaf-ref cache can adopt those bytes instead
+			// of cloning them while still avoiding scratch-mutated cache contents.
+			ownership = leafPageCacheAdoptOwned
+		}
+		nodeRef, err := z.persistLeafPageWithConfigAndCacheOwnership(target, metrics, cfg, ownership)
 		if err != nil {
 			return page.ChildRef{}, err
 		}

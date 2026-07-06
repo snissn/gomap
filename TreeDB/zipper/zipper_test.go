@@ -323,7 +323,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 
 	// Simulate Apply() scope: enable the in-flight leaf-ref cache so loadNode can
 	// resolve freshly appended leaf pages before the leafPageLog is flushed.
-	z.beginLeafRefCache()
+	z.beginLeafRefCache(nil)
 	defer z.endLeafRefCache()
 
 	data := make([]byte, page.PageSize)
@@ -373,7 +373,7 @@ func TestZipperLeafRefCacheOwnsPersistedLeafBytes(t *testing.T) {
 	z.SetOuterLeavesInValueLog(true)
 	z.SetLeafPageLog(&stubLeafPageLog{})
 	z.SetLeafPageReader(&countingLeafPageReader{})
-	z.beginLeafRefCache()
+	z.beginLeafRefCache(nil)
 	defer z.endLeafRefCache()
 
 	data := make([]byte, page.PageSize)
@@ -414,6 +414,130 @@ func TestZipperLeafRefCacheOwnsPersistedLeafBytes(t *testing.T) {
 	}
 }
 
+func TestZipperLeafRefCacheReusesOwnedPagesWithoutServingScratchMutations(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageLog(&stubLeafPageLog{})
+	reader := &countingLeafPageReader{}
+	z.SetLeafPageReader(reader)
+
+	writeLeaf := func(dst []byte, key, val string) {
+		t.Helper()
+		clear(dst)
+		b := node.NewBuilder(dst, page.PageTypeLeaf)
+		b.SetPageID(0)
+		if err := b.AddLeafEntry([]byte(key), []byte(val), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%q): %v", key, err)
+		}
+		b.FinishNoNode()
+	}
+	assertCachedLeaf := func(ref page.ChildRef, wantKey, wantVal string) {
+		t.Helper()
+		loaded, fromPager, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, nil)
+		if err != nil {
+			t.Fatalf("loadNodeRef(%q): %v", wantKey, err)
+		}
+		if leafScratchRef {
+			putLeafPageScratch(leafScratch)
+		}
+		if fromPager {
+			t.Fatalf("fromPager=%t want false", fromPager)
+		}
+		if loadSource != zipperNodeLoadLeafLogCache {
+			t.Fatalf("loadSource=%d want leaf-log cache", loadSource)
+		}
+		gotKey, gotVal, _, flags, err := loaded.GetLeafEntryView(0)
+		if err != nil {
+			t.Fatalf("GetLeafEntryView: %v", err)
+		}
+		if flags != node.FlagInline {
+			t.Fatalf("flags=0x%x want inline value", flags)
+		}
+		if string(gotKey) != wantKey || string(gotVal) != wantVal {
+			t.Fatalf("cached leaf entry=(%q,%q), want (%q,%q)", gotKey, gotVal, wantKey, wantVal)
+		}
+	}
+	cachedBytePtrs := func() map[*byte]struct{} {
+		t.Helper()
+		z.leafRefCacheMu.RLock()
+		defer z.leafRefCacheMu.RUnlock()
+		ptrs := make(map[*byte]struct{}, len(z.leafRefCache))
+		for _, cached := range z.leafRefCache {
+			if len(cached) != page.PageSize {
+				t.Fatalf("cached len=%d want %d", len(cached), page.PageSize)
+			}
+			ptrs[&cached[0]] = struct{}{}
+		}
+		return ptrs
+	}
+
+	source := make([]byte, page.PageSize)
+	scratch := z.acquireApplyScratch()
+	z.beginLeafRefCache(scratch)
+
+	writeLeaf(source, "first", "one")
+	firstRef, err := z.persistLeafPageData(source, nil)
+	if err != nil {
+		t.Fatalf("persist first leaf: %v", err)
+	}
+	writeLeaf(source, "second", "two")
+	secondRef, err := z.persistLeafPageData(source, nil)
+	if err != nil {
+		t.Fatalf("persist second leaf: %v", err)
+	}
+
+	// Reuse the caller scratch for an incompatible page after both persists. The
+	// cache must keep serving the two leaf snapshots it owns.
+	clear(source)
+	mutated := node.NewNode(source)
+	mutated.SetType(page.PageTypeInternal)
+	mutated.UpdateChecksum()
+
+	assertCachedLeaf(firstRef, "first", "one")
+	assertCachedLeaf(secondRef, "second", "two")
+	firstApplyCachePtrs := cachedBytePtrs()
+	z.endLeafRefCache()
+	z.releaseApplyScratch(scratch)
+
+	reusedScratch := z.acquireApplyScratch()
+	if reusedScratch != scratch {
+		t.Fatalf("expected apply scratch reuse")
+	}
+	z.beginLeafRefCache(reusedScratch)
+	writeLeaf(source, "third", "three")
+	thirdRef, err := z.persistLeafPageData(source, nil)
+	if err != nil {
+		t.Fatalf("persist third leaf: %v", err)
+	}
+
+	z.leafRefCacheMu.RLock()
+	thirdCached := z.leafRefCache[thirdRef.Log]
+	z.leafRefCacheMu.RUnlock()
+	if _, ok := firstApplyCachePtrs[&thirdCached[0]]; !ok {
+		t.Fatalf("expected second apply to reuse a prior cache-owned page buffer")
+	}
+
+	clear(source)
+	mutated = node.NewNode(source)
+	mutated.SetType(page.PageTypeInternal)
+	mutated.UpdateChecksum()
+	assertCachedLeaf(thirdRef, "third", "three")
+	z.endLeafRefCache()
+	z.releaseApplyScratch(reusedScratch)
+
+	if got := reader.calls.Load(); got != 0 {
+		t.Fatalf("leafPageReader calls=%d want 0", got)
+	}
+}
+
 func TestZipperCachePersistedLeafPageNoopAvoidsLockWhenCacheInactive(t *testing.T) {
 	z := &Zipper{}
 	z.leafRefCacheMu.Lock()
@@ -421,7 +545,7 @@ func TestZipperCachePersistedLeafPageNoopAvoidsLockWhenCacheInactive(t *testing.
 
 	done := make(chan struct{})
 	go func() {
-		z.cachePersistedLeafPage(page.LeafLogPtr{FileID: 1, Offset: 128}, []byte("leaf"))
+		z.cachePersistedLeafPage(page.LeafLogPtr{FileID: 1, Offset: 128}, []byte("leaf"), leafPageCacheClone)
 		close(done)
 	}()
 
