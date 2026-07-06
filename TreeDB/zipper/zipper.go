@@ -621,6 +621,29 @@ func (s *mergeScratch) cloneLeafRefCachePage(src []byte) []byte {
 	return p.buf[:]
 }
 
+// acquireLeafRefCacheBuildPage returns a page buffer whose lifetime is tied to
+// the active in-flight leaf-ref cache. Callers may let the cache adopt it, but
+// must not mutate it after persistence.
+func (s *mergeScratch) acquireLeafRefCacheBuildPage() []byte {
+	if s == nil {
+		return make([]byte, page.PageSize)
+	}
+	s.mu.Lock()
+	n := len(s.leafRefCachePages)
+	var p *leafRefCachePage
+	if n > 0 {
+		p = s.leafRefCachePages[n-1]
+		s.leafRefCachePages[n-1] = nil
+		s.leafRefCachePages = s.leafRefCachePages[:n-1]
+	} else {
+		p = &leafRefCachePage{}
+	}
+	s.leafRefCacheActivePages = append(s.leafRefCacheActivePages, p)
+	s.mu.Unlock()
+	clear(p.buf[:])
+	return p.buf[:]
+}
+
 func (s *mergeScratch) releaseLeafRefCachePages() {
 	if s == nil {
 		return
@@ -2257,6 +2280,10 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 				return page.ChildRef{}, nil, errors.New("zipper: outer leaves in value log enabled without leaf page log")
 			}
 			reuseOuterLeafPages := !maintenance
+			// Delete maintenance may reload freshly written leaf-log refs before
+			// Apply ends. Build those leaves into cache-owned pages so the cache
+			// can adopt stable bytes without per-leaf heap allocation here.
+			cacheOwnedOuterLeafPages := maintenance && scratch != nil && z.leafRefCacheActive.Load()
 			var (
 				newData       []byte
 				newDataPooled *outerLeafBuildPage
@@ -2264,6 +2291,8 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 			if reuseOuterLeafPages {
 				newDataPooled = scratch.acquireOuterLeafBuildPage()
 				newData = newDataPooled.buf[:]
+			} else if cacheOwnedOuterLeafPages {
+				newData = scratch.acquireLeafRefCacheBuildPage()
 			} else {
 				newData = make([]byte, page.PageSize)
 			}
@@ -2275,7 +2304,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 				}
 			}()
 			builder.SetPageID(0)
-			return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages, cfg)
+			return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, reuseOuterLeafPages, cacheOwnedOuterLeafPages, cfg)
 		}
 
 		// Pager-backed leaf.
@@ -2290,7 +2319,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		builder := z.newPooledLeafBuilder(newData, ops)
 		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
-		return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, false, cfg)
+		return z.mergeLeaf(&oldNode, builder, ops, ranges, metrics, scratch, false, false, cfg)
 
 	case page.PageTypeInternal:
 		// Internal merge is always pager-backed.
@@ -2334,7 +2363,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 	return page.ChildRef{}, nil, page.ErrInvalidPageType
 }
 
-func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool, cfg applyRunConfig) (page.ChildRef, []Split, error) {
+func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, ranges []batch.DeleteRange, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool, cacheOwnedOuterLeafPages bool, cfg applyRunConfig) (page.ChildRef, []Split, error) {
 	if metrics != nil {
 		metrics.ZipperLeafMerges++
 	}
@@ -2610,6 +2639,8 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				if reuseOuterLeafPages {
 					sdataPooled = scratch.acquireOuterLeafBuildPage()
 					sdata = sdataPooled.buf[:]
+				} else if cacheOwnedOuterLeafPages {
+					sdata = scratch.acquireLeafRefCacheBuildPage()
 				} else {
 					sdata = make([]byte, page.PageSize)
 				}
