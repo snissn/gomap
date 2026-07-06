@@ -77,6 +77,9 @@ type Writer struct {
 	blockCodecScratch      blockCodecScratch
 	skipDictID             uint64
 	codecs                 *dictCodecEntry
+	dictEncoder            *zstd.Encoder
+	dictEncoderCodecs      *dictCodecEntry
+	dictEncoderKey         dictCodecKey
 	dictFrameEncodeLevel   zstd.EncoderLevel
 	dictFrameEnableEntropy bool
 	blockCodec             BlockCodec
@@ -560,12 +563,46 @@ func (w *Writer) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntro
 	if w == nil {
 		return
 	}
-	w.dictFrameEncodeLevel = normalizeDictFrameEncodeLevel(level)
+	level = normalizeDictFrameEncodeLevel(level)
+	if w.dictFrameEncodeLevel != level || w.dictFrameEnableEntropy != enableEntropy {
+		w.releaseDictEncoder()
+	}
+	w.dictFrameEncodeLevel = level
 	w.dictFrameEnableEntropy = enableEntropy
 	w.codecs = nil
 	w.skipDictID = 0
 	w.noBenefit = 0
 	w.skipRemain = 0
+}
+
+func (w *Writer) releaseDictEncoder() {
+	if w == nil || w.dictEncoder == nil {
+		return
+	}
+	if w.dictEncoderCodecs != nil && w.dictEncoderCodecs.encPool != nil {
+		w.dictEncoderCodecs.encPool.Put(w.dictEncoder)
+	}
+	w.dictEncoder = nil
+	w.dictEncoderCodecs = nil
+	w.dictEncoderKey = dictCodecKey{}
+}
+
+func (w *Writer) dictEncoderFor(codecs *dictCodecEntry) (*zstd.Encoder, error) {
+	if w == nil || codecs == nil || codecs.encPool == nil {
+		return nil, ErrMissingDict
+	}
+	if w.dictEncoder != nil && w.dictEncoderCodecs == codecs && w.dictEncoderKey == codecs.key {
+		return w.dictEncoder, nil
+	}
+	w.releaseDictEncoder()
+	enc, ok := codecs.encPool.Get().(*zstd.Encoder)
+	if !ok || enc == nil {
+		return nil, ErrMissingDict
+	}
+	w.dictEncoder = enc
+	w.dictEncoderCodecs = codecs
+	w.dictEncoderKey = codecs.key
+	return enc, nil
 }
 
 // SetBlockCompression configures grouped frame block compression for dictID=0
@@ -1552,7 +1589,10 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			max = defaultBufferSize
 		}
 
-		enc := codecs.encPool.Get().(*zstd.Encoder)
+		enc, err := w.dictEncoderFor(codecs)
+		if err != nil {
+			return nil, FrameStats{}, err
+		}
 
 		canDirectEncodeAll := w.f != nil && (k == 1 || rawPayloadBytes <= (1<<20))
 		if canDirectEncodeAll {
@@ -1575,7 +1615,6 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 			if len(w.appendBuf)+recordMaxLen > max {
 				if err := w.flushAppendBuf(); err != nil {
-					codecs.encPool.Put(enc)
 					return nil, FrameStats{}, err
 				}
 			}
@@ -1603,7 +1642,6 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				rid := records[i].RID
 				if rid == 0 {
 					w.appendBuf = w.appendBuf[:recordStart]
-					codecs.encPool.Put(enc)
 					return nil, FrameStats{}, errors.New("valuelog: missing rid")
 				}
 				binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
@@ -1642,7 +1680,6 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
 			}
 			encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
-			codecs.encPool.Put(enc)
 
 			encodedLen := len(w.appendBuf) - encodedStart
 			keepCompressed := w.shouldKeepCompressed(rawPayloadBytes, encodedLen, encodeNs)
@@ -1765,7 +1802,6 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			encoded = w.encLimiter.buf
 		}
 		encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
-		codecs.encPool.Put(enc)
 		w.encScratch = w.encScratch[:0]
 
 		keepCompressed := false
@@ -2303,6 +2339,7 @@ func (w *Writer) Close() error {
 	if w == nil {
 		return nil
 	}
+	defer w.releaseDictEncoder()
 	defer w.releaseAppendBuf()
 	defer w.releaseTransientScratchBuffers()
 	if err := w.flushNoTrim(); err != nil {
