@@ -334,10 +334,13 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 		return nil
 	}
 	scanStart := time.Now()
-	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(db.dir, state.AppliedCommandLSN, db.walMaxSegmentBytes)
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
+	}
+	if err == nil {
+		decisions, err = removeCoveredCommandWALSegments(decisions)
 	}
 	removed := uint64(0)
 	removedBytes := uint64(0)

@@ -930,6 +930,44 @@ func TestCommandWALCheckpointCleanupDeletesOnlyCoveredSegments(t *testing.T) {
 	}
 }
 
+func TestCommandWALCheckpointScanDoesNotRemoveCoveredSegment(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("scanCommandWALSegmentsCoveredByAppliedLSN: %v", err)
+	}
+	decisionByName := map[string]commandWALSegmentCleanupDecision{}
+	for _, decision := range decisions {
+		decisionByName[filepath.Base(decision.Path)] = decision
+	}
+	if got := decisionByName["commit-l0-000001.log"]; !got.Covered || got.Active || got.Removed {
+		t.Fatalf("covered segment scan decision=%+v, want covered non-active not removed", got)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); err != nil {
+		t.Fatalf("covered segment stat after scan=%v, want present", err)
+	}
+
+	decisions, err = removeCoveredCommandWALSegments(decisions)
+	if err != nil {
+		t.Fatalf("removeCoveredCommandWALSegments: %v", err)
+	}
+	removed := false
+	for _, decision := range decisions {
+		if filepath.Base(decision.Path) == "commit-l0-000001.log" {
+			removed = decision.Removed
+		}
+	}
+	if !removed {
+		t.Fatalf("covered segment was not marked removed: %+v", decisions)
+	}
+	if _, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log")); !os.IsNotExist(err) {
+		t.Fatalf("covered segment stat after removal=%v, want removed", err)
+	}
+}
+
 func TestCommandWALCheckpointCleanupRetainsActiveCoveredSegment(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)

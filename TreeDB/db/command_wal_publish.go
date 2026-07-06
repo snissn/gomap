@@ -368,6 +368,14 @@ func filterCommandWALSegmentsForLegacyReplay(segments []logSegment, appliedLSN u
 }
 
 func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
+	decisions, err := scanCommandWALSegmentsCoveredByAppliedLSN(dir, appliedLSN, maxSegmentBytes)
+	if err != nil {
+		return decisions, err
+	}
+	return removeCoveredCommandWALSegments(decisions)
+}
+
+func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
 	// PR2 cleanup deliberately streams segments on demand. It is intended for
 	// checkpoint/maintenance boundaries; a later manifest/catalog can cache
 	// results if this moves onto a hotter path.
@@ -423,6 +431,10 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 	if scanErr != nil {
 		return decisions, scanErr
 	}
+	return decisions, nil
+}
+
+func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision) ([]commandWALSegmentCleanupDecision, error) {
 	for i := range decisions {
 		decision := &decisions[i]
 		if decision.Covered && !decision.Active {
