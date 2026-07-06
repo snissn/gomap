@@ -366,6 +366,144 @@ func TestBatchResetRetainsScratchShardEntriesForReuse(t *testing.T) {
 	}
 }
 
+func TestBatchUseSharedShardEntryScratchOnlyForShortSortedBatches(t *testing.T) {
+	b := &Batch{
+		entries:        make([]batch.Entry, batchSharedShardEntryScratchMaxEntries),
+		streamEligible: true,
+	}
+	if !b.useSharedShardEntryScratch() {
+		t.Fatalf("useSharedShardEntryScratch=false for short sorted batch")
+	}
+
+	b.entries = make([]batch.Entry, batchSharedShardEntryScratchMaxEntries+1)
+	if b.useSharedShardEntryScratch() {
+		t.Fatalf("useSharedShardEntryScratch=true for oversized sorted batch")
+	}
+
+	b.entries = b.entries[:100]
+	b.streamEligible = false
+	if b.useSharedShardEntryScratch() {
+		t.Fatalf("useSharedShardEntryScratch=true for random batch")
+	}
+}
+
+func TestBatchPooledShardEntryGroupsReleaseScratchBacking(t *testing.T) {
+	forceNormalPoolPressureForTest(t)
+	db := &DB{}
+	b := &Batch{
+		db:      db,
+		entries: db.getBatchEntries(4),
+	}
+	b.entries = append(b.entries,
+		batch.Entry{Key: []byte("a")},
+		batch.Entry{Key: []byte("b")},
+		batch.Entry{Key: []byte("c")},
+		batch.Entry{Key: []byte("d")},
+	)
+	groups := b.prepareScratchShardEntryGroups([]int{2, 2})
+	for i, op := range b.entries {
+		groups[i%2] = append(groups[i%2], op)
+	}
+	scratchPtr := unsafe.SliceData(b.shardEntryScratch[:cap(b.shardEntryScratch)])
+
+	b.Reset()
+	b.entries = append(b.entries,
+		batch.Entry{Key: []byte("e")},
+		batch.Entry{Key: []byte("f")},
+		batch.Entry{Key: []byte("g")},
+		batch.Entry{Key: []byte("h")},
+	)
+	groups = b.preparePooledShardEntryGroups([]int{2, 2})
+	if b.shardEntriesBackedByScratch {
+		t.Fatalf("preparePooledShardEntryGroups kept scratch-backed marker")
+	}
+	if b.shardEntryScratch != nil {
+		t.Fatalf("preparePooledShardEntryGroups retained scratch len/cap=%d/%d", len(b.shardEntryScratch), cap(b.shardEntryScratch))
+	}
+	for i, op := range b.entries {
+		groups[i%2] = append(groups[i%2], op)
+	}
+	if gotPtr0, gotPtr1 := unsafe.SliceData(groups[0]), unsafe.SliceData(groups[1]); gotPtr0 == gotPtr1 {
+		t.Fatalf("pooled shard groups alias after scratch release: %p", gotPtr0)
+	}
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	gotScratch := db.getBatchShardEntries(4)
+	gotScratch = append(gotScratch, batch.Entry{})
+	if gotPtr := unsafe.SliceData(gotScratch); gotPtr != scratchPtr {
+		t.Fatalf("scratch backing was not returned through pooled path: got=%p want=%p", gotPtr, scratchPtr)
+	}
+	db.putBatchShardEntries(gotScratch)
+}
+
+func TestBatchScratchShardEntryGroupsReleasePooledBacking(t *testing.T) {
+	forceNormalPoolPressureForTest(t)
+	db := &DB{}
+	b := &Batch{
+		db:      db,
+		entries: db.getBatchEntries(4),
+	}
+	b.entries = append(b.entries,
+		batch.Entry{Key: []byte("a")},
+		batch.Entry{Key: []byte("b")},
+		batch.Entry{Key: []byte("c")},
+		batch.Entry{Key: []byte("d")},
+	)
+	groups := b.preparePooledShardEntryGroups([]int{2, 2})
+	for i, op := range b.entries {
+		groups[i%2] = append(groups[i%2], op)
+	}
+	pooled0Ptr := unsafe.SliceData(groups[0])
+	pooled1Ptr := unsafe.SliceData(groups[1])
+
+	b.Reset()
+	b.entries = append(b.entries,
+		batch.Entry{Key: []byte("e")},
+		batch.Entry{Key: []byte("f")},
+		batch.Entry{Key: []byte("g")},
+		batch.Entry{Key: []byte("h")},
+	)
+	groups = b.prepareScratchShardEntryGroups([]int{1, 3})
+	if !b.shardEntriesBackedByScratch {
+		t.Fatalf("prepareScratchShardEntryGroups did not mark scratch-backed groups")
+	}
+	for i, op := range b.entries {
+		idx := 1
+		if i == 0 {
+			idx = 0
+		}
+		groups[idx] = append(groups[idx], op)
+	}
+
+	db.batchAuxMu.Lock()
+	shardEntryLeases := len(db.batchShardEntriesLeases.slices)
+	db.batchAuxMu.Unlock()
+	if shardEntryLeases != 2 {
+		t.Fatalf("prepareScratchShardEntryGroups returned pooled leases=%d want 2", shardEntryLeases)
+	}
+
+	got0 := db.getBatchShardEntries(2)
+	got0 = append(got0, batch.Entry{})
+	got1 := db.getBatchShardEntries(2)
+	got1 = append(got1, batch.Entry{})
+	gotPtrs := map[uintptr]bool{
+		uintptr(unsafe.Pointer(unsafe.SliceData(got0))): true,
+		uintptr(unsafe.Pointer(unsafe.SliceData(got1))): true,
+	}
+	if !gotPtrs[uintptr(unsafe.Pointer(pooled0Ptr))] || !gotPtrs[uintptr(unsafe.Pointer(pooled1Ptr))] {
+		t.Fatalf("pooled shard backings were not returned before scratch reuse: got=%p/%p want=%p/%p",
+			unsafe.SliceData(got0), unsafe.SliceData(got1), pooled0Ptr, pooled1Ptr)
+	}
+	db.putBatchShardEntries(got0)
+	db.putBatchShardEntries(got1)
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
 func TestBatchArenaChunkListLeaseReuseAndClear(t *testing.T) {
 	db := &DB{}
 

@@ -33584,6 +33584,10 @@ func (b *Batch) releaseShardEntryScratch() {
 	b.shardEntryScratch = nil
 }
 
+func (b *Batch) useSharedShardEntryScratch() bool {
+	return b != nil && b.streamEligible && len(b.entries) <= batchSharedShardEntryScratchMaxEntries
+}
+
 func (b *Batch) prepareScratchShardEntryGroups(shardCounts []int) [][]batch.Entry {
 	if b == nil || b.db == nil {
 		return nil
@@ -33596,7 +33600,17 @@ func (b *Batch) prepareScratchShardEntryGroups(shardCounts []int) [][]batch.Entr
 		}
 		shardEntries = b.db.getBatchShardEntryGroups(shardCount)
 	} else {
-		b.clearScratchShardEntryGroups()
+		if b.shardEntriesBackedByScratch {
+			b.clearScratchShardEntryGroups()
+		} else {
+			full := shardEntries[:cap(shardEntries)]
+			for i := range full {
+				if full[i] != nil {
+					b.db.putBatchShardEntries(full[i])
+					full[i] = nil
+				}
+			}
+		}
 	}
 	shardEntries = shardEntries[:shardCount]
 
@@ -33619,6 +33633,51 @@ func (b *Batch) prepareScratchShardEntryGroups(shardCounts []int) [][]batch.Entr
 	b.shardEntryScratch = scratch[:0]
 	b.shardEntries = shardEntries
 	b.shardEntriesBackedByScratch = true
+	return shardEntries
+}
+
+func (b *Batch) preparePooledShardEntryGroups(shardCounts []int) [][]batch.Entry {
+	if b == nil || b.db == nil {
+		return nil
+	}
+	if b.shardEntriesBackedByScratch {
+		b.releaseCurrentShardEntryGroups()
+		b.shardEntries = nil
+	}
+	if b.shardEntryScratch != nil {
+		b.releaseShardEntryScratch()
+	}
+
+	shardCount := len(shardCounts)
+	shardEntries := b.shardEntries
+	if cap(shardEntries) < shardCount {
+		if cap(shardEntries) > 0 {
+			b.releaseShardEntryGroups(shardEntries)
+		}
+		shardEntries = b.db.getBatchShardEntryGroups(shardCount)
+		shardEntries = shardEntries[:shardCount]
+	} else {
+		shardEntries = shardEntries[:shardCount]
+		for i := range shardEntries {
+			shardEntries[i] = shardEntries[i][:0]
+		}
+	}
+	b.shardEntries = shardEntries
+	b.shardEntriesBackedByScratch = false
+	for i, count := range shardCounts {
+		if count > 0 {
+			entries := shardEntries[i]
+			if cap(entries) < count {
+				if cap(entries) > 0 {
+					b.db.putBatchShardEntries(entries)
+				}
+				entries = b.db.getBatchShardEntries(count)
+			} else {
+				entries = entries[:0]
+			}
+			shardEntries[i] = entries
+		}
+	}
 	return shardEntries
 }
 
@@ -34434,6 +34493,9 @@ const (
 	batchHintEntriesMax    = 8192
 	streamSwitchMinEntries = 4096
 	streamSwitchMinBytes   = 1 << 20 // 1MiB
+	// Keep shared shard-entry scratch on short sorted batches; larger and random
+	// batches retain per-shard backing to avoid a single hot scratch slice.
+	batchSharedShardEntryScratchMaxEntries = 256
 	// Only fan out value-log appends across multiple lanes when a batch is large
 	// enough to amortize per-lane setup and goroutine overhead.
 	multiLaneValueLogMinRecords = 1024
@@ -35591,7 +35653,12 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			shard.mu.Unlock()
 		}
 	} else {
-		shardEntries := b.prepareScratchShardEntryGroups(shardCounts)
+		var shardEntries [][]batch.Entry
+		if b.useSharedShardEntryScratch() {
+			shardEntries = b.prepareScratchShardEntryGroups(shardCounts)
+		} else {
+			shardEntries = b.preparePooledShardEntryGroups(shardCounts)
+		}
 		for i, op := range b.entries {
 			idx := shardIdxs[i]
 			shardEntries[idx] = append(shardEntries[idx], op)
