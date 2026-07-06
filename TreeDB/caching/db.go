@@ -33265,6 +33265,35 @@ func (b *Batch) shouldCopyValueToPtrArena(key, value []byte) bool {
 	return b.db.shouldWriteViaValueLogForKeyValue(key, value)
 }
 
+func (b *Batch) appendPtrValueIdx(idx int) {
+	if len(b.ptrValueIdxs) == cap(b.ptrValueIdxs) {
+		minCap := len(b.ptrValueIdxs) + 1
+		nextCap := cap(b.entries)
+		if nextCap < minCap {
+			nextCap = cap(b.ptrValueIdxs) * 2
+			if nextCap < minCap {
+				nextCap = minCap
+			}
+		}
+		if nextCap > batchIntSlicePoolMaxRetain && minCap <= batchIntSlicePoolMaxRetain {
+			nextCap = batchIntSlicePoolMaxRetain
+		}
+
+		var next []int
+		if b.db != nil {
+			next = b.db.getBatchIntSlice(nextCap)
+		} else {
+			next = make([]int, 0, nextCap)
+		}
+		next = append(next, b.ptrValueIdxs...)
+		if b.db != nil && b.ptrValueIdxs != nil {
+			b.db.putBatchIntSlice(b.ptrValueIdxs)
+		}
+		b.ptrValueIdxs = next
+	}
+	b.ptrValueIdxs = append(b.ptrValueIdxs, idx)
+}
+
 func (b *Batch) assignLegacyPointRevisions(entries []batch.Entry) {
 	if b == nil || b.db == nil || len(entries) == 0 {
 		return
@@ -33316,7 +33345,7 @@ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) 
 	if b.shouldCopyValueToPtrArena(key, value) {
 		keyCopy = b.cloneKey(key)
 		valCopy = b.clonePtrValue(value)
-		b.ptrValueIdxs = append(b.ptrValueIdxs, idx)
+		b.appendPtrValueIdx(idx)
 	} else {
 		keyCopy, valCopy = b.cloneKeyValue(key, value)
 	}
@@ -35606,6 +35635,9 @@ func (b *Batch) Close() error {
 	}
 	if b.db != nil && b.shardCnts != nil {
 		b.db.putBatchIntSlice(b.shardCnts)
+	}
+	if b.db != nil && b.ptrValueIdxs != nil {
+		b.db.putBatchIntSlice(b.ptrValueIdxs)
 	}
 	if b.db != nil && b.shardIdxSets != nil && cap(b.shardIdxSets) > 0 {
 		full := b.shardIdxSets[:cap(b.shardIdxSets)]

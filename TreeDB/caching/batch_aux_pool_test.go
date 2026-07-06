@@ -35,6 +35,7 @@ func TestBatchCloseReleasesAuxiliaryIndexSlices(t *testing.T) {
 		eligibleIdxs: make([]int, 1, 4),
 		shardAdds:    make([]int64, 2, 4),
 		shardCnts:    make([]int, 2, 4),
+		ptrValueIdxs: make([]int, 2, 4),
 		shardEntries: [][]batch.Entry{make([]batch.Entry, 0, 2)},
 		shardIdxSets: [][]int{make([]int, 0, 2)},
 	}
@@ -42,9 +43,9 @@ func TestBatchCloseReleasesAuxiliaryIndexSlices(t *testing.T) {
 	if err := b.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if b.entries != nil || b.shardIdxs != nil || b.eligibleIdxs != nil || b.shardAdds != nil || b.shardCnts != nil || b.shardEntries != nil || b.shardIdxSets != nil {
-		t.Fatalf("Close retained auxiliary slices: entries=%v shardIdxs=%v eligible=%v shardAdds=%v shardCnts=%v shardEntries=%v shardIdxSets=%v",
-			b.entries, b.shardIdxs, b.eligibleIdxs, b.shardAdds, b.shardCnts, b.shardEntries, b.shardIdxSets)
+	if b.entries != nil || b.shardIdxs != nil || b.eligibleIdxs != nil || b.shardAdds != nil || b.shardCnts != nil || b.ptrValueIdxs != nil || b.shardEntries != nil || b.shardIdxSets != nil {
+		t.Fatalf("Close retained auxiliary slices: entries=%v shardIdxs=%v eligible=%v shardAdds=%v shardCnts=%v ptrValueIdxs=%v shardEntries=%v shardIdxSets=%v",
+			b.entries, b.shardIdxs, b.eligibleIdxs, b.shardAdds, b.shardCnts, b.ptrValueIdxs, b.shardEntries, b.shardIdxSets)
 	}
 
 	// The returned pools must still hand out correctly sized, owned scratch slices.
@@ -58,4 +59,28 @@ func TestBatchCloseReleasesAuxiliaryIndexSlices(t *testing.T) {
 		t.Fatalf("getBatchInt64Slice cap=%d want >= 4", cap(adds))
 	}
 	db.putBatchInt64Slice(adds)
+}
+
+func TestBatchAppendPtrValueIdxReservesEntryCapacity(t *testing.T) {
+	db := &DB{}
+	b := &Batch{
+		db:      db,
+		entries: db.getBatchEntries(16),
+	}
+	defer b.Close()
+
+	for i := 0; i < 8; i++ {
+		b.appendPtrValueIdx(i)
+	}
+	if got, want := len(b.ptrValueIdxs), 8; got != want {
+		t.Fatalf("len(ptrValueIdxs)=%d want %d", got, want)
+	}
+	if got := cap(b.ptrValueIdxs); got < cap(b.entries) {
+		t.Fatalf("cap(ptrValueIdxs)=%d want >= entries cap %d", got, cap(b.entries))
+	}
+	for i, got := range b.ptrValueIdxs {
+		if got != i {
+			t.Fatalf("ptrValueIdxs[%d]=%d want %d", i, got, i)
+		}
+	}
 }
