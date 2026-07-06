@@ -35,7 +35,7 @@ const (
 	// Keep a hard cap on retained multi-MiB append buffers. Unlike sync.Pool,
 	// this prevents a burst of short-lived writers from retaining unbounded
 	// defaultBufferSize slices between GC cycles.
-	writerAppendBufPoolEntries = 8
+	writerAppendBufPoolEntries = 16
 )
 
 var syncDirFn = syncDir
