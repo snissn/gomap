@@ -25,6 +25,10 @@ type FramePreparer struct {
 	noBenefit  uint8
 	skipRemain uint16
 
+	dictEncoder       *zstd.Encoder
+	dictEncoderCodecs *dictCodecEntry
+	dictEncoderKey    dictCodecKey
+
 	dictFrameEncodeLevel   zstd.EncoderLevel
 	dictFrameEnableEntropy bool
 	blockCodec             BlockCodec
@@ -56,6 +60,7 @@ func (p *FramePreparer) ResetForReuse() {
 	if p == nil {
 		return
 	}
+	p.releaseDictEncoder()
 	p.TrimScratchForReuse()
 	p.skipDictID = 0
 	p.codecs = nil
@@ -74,9 +79,10 @@ func (p *FramePreparer) ResetForReuse() {
 	p.keepSafetyMargin = DefaultKeepSafetyMargin
 }
 
-// TrimScratchForReuse drops oversized temporary buffers while preserving codec
-// and compression-hint state. Long-lived prepare workers call this between
-// tasks so an occasional large frame does not pin unbounded scratch memory.
+// TrimScratchForReuse drops oversized temporary buffers while preserving codec,
+// active dictionary encoder, and compression-hint state. Long-lived prepare
+// workers call this between tasks so an occasional large frame does not pin
+// unbounded scratch memory.
 func (p *FramePreparer) TrimScratchForReuse() {
 	if p == nil {
 		return
@@ -99,11 +105,45 @@ func (p *FramePreparer) TrimScratchForReuse() {
 	p.encLimiter = limitedSliceWriter{}
 }
 
+func (p *FramePreparer) releaseDictEncoder() {
+	if p == nil || p.dictEncoder == nil {
+		return
+	}
+	if p.dictEncoderCodecs != nil && p.dictEncoderCodecs.encPool != nil {
+		p.dictEncoderCodecs.encPool.Put(p.dictEncoder)
+	}
+	p.dictEncoder = nil
+	p.dictEncoderCodecs = nil
+	p.dictEncoderKey = dictCodecKey{}
+}
+
+func (p *FramePreparer) dictEncoderFor(codecs *dictCodecEntry) (*zstd.Encoder, error) {
+	if p == nil || codecs == nil || codecs.encPool == nil {
+		return nil, ErrMissingDict
+	}
+	if p.dictEncoder != nil && p.dictEncoderCodecs == codecs && p.dictEncoderKey == codecs.key {
+		return p.dictEncoder, nil
+	}
+	p.releaseDictEncoder()
+	enc, ok := codecs.encPool.Get().(*zstd.Encoder)
+	if !ok || enc == nil {
+		return nil, ErrMissingDict
+	}
+	p.dictEncoder = enc
+	p.dictEncoderCodecs = codecs
+	p.dictEncoderKey = codecs.key
+	return enc, nil
+}
+
 func (p *FramePreparer) SetDictFrameEncoderOptions(level zstd.EncoderLevel, enableEntropy bool) {
 	if p == nil {
 		return
 	}
-	p.dictFrameEncodeLevel = normalizeDictFrameEncodeLevel(level)
+	level = normalizeDictFrameEncodeLevel(level)
+	if p.dictFrameEncodeLevel != level || p.dictFrameEnableEntropy != enableEntropy {
+		p.releaseDictEncoder()
+	}
+	p.dictFrameEncodeLevel = level
 	p.dictFrameEnableEntropy = enableEntropy
 	p.codecs = nil
 	p.skipDictID = 0
@@ -315,11 +355,13 @@ func (p *FramePreparer) PrepareFrameInto(dst []byte, dictID uint64, dict []byte,
 			return nil, FrameStats{}, ErrMissingDict
 		}
 
-		enc := codecs.encPool.Get().(*zstd.Encoder)
+		enc, err := p.dictEncoderFor(codecs)
+		if err != nil {
+			return nil, FrameStats{}, err
+		}
 		encodeStart := p.sampleEncodeStart()
 		encoded, encodeErr := p.encodePayload(enc, records, rawPayloadBytes)
 		encodeNs := p.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
-		codecs.encPool.Put(enc)
 		p.encScratch = p.encScratch[:0]
 
 		keepCompressed := false
