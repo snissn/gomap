@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -151,6 +152,32 @@ func TestAppendOnlyEntryPoolStatsTrackRetainedBacking(t *testing.T) {
 	if gotDropBytes := afterDrop.DropBytesTotal; gotDropBytes < beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate {
 		t.Fatalf("drop bytes total=%d want at least %d", gotDropBytes, beforeDrop.DropBytesTotal+beforeDrop.RetainedBytesEstimate)
 	}
+}
+
+func TestAppendOnlyEntryPoolRetainsBackingAcrossGC(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	entries := make([]appendOnlyEntry, 0, appendOnlyMinInitialEntries)
+	wantBytes := appendOnlyEntryPoolBytes(cap(entries))
+	putAppendOnlyEntries(entries)
+
+	runtime.GC()
+
+	afterGC := AppendOnlyEntryPoolStatsSnapshot()
+	if got := afterGC.RetainedBytesEstimate; got != wantBytes {
+		t.Fatalf("retained bytes after GC=%d want %d", got, wantBytes)
+	}
+
+	reused := getAppendOnlyEntries(appendOnlyMinInitialEntries)
+	if cap(reused) != cap(entries) {
+		t.Fatalf("reused cap after GC=%d want %d", cap(reused), cap(entries))
+	}
+	afterGet := AppendOnlyEntryPoolStatsSnapshot()
+	if got := afterGet.RetainedBytesEstimate; got != 0 {
+		t.Fatalf("retained bytes after get=%d want 0", got)
+	}
+	putAppendOnlyEntries(reused[:0])
 }
 
 func TestPutAppendOnlyEntriesDropsOversizedRetainedSlice(t *testing.T) {

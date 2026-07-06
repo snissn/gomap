@@ -60,10 +60,13 @@ const (
 var appendOnlyEntryPoolRetainBudgetBytes = uint64(256 << 20)
 var appendOnlyValueArenaPoolRetainBudgetBytes = uint64(64 << 20)
 
-// Serializes package-pool replacement with retained-byte accounting. sync.Pool
-// is concurrent, but the estimate is for the currently reachable pool set.
+// Serializes package-pool replacement and retained entry backing accounting.
+// Entry slices are held in bounded strong bins because sync.Pool can discard
+// warm buffers at GC boundaries, which makes durable write-profile reuse
+// unreliable.
 var appendOnlyEntryPoolMu sync.Mutex
 var appendOnlyEntryPoolPtrs [appendOnlyEntryPoolClassCount]atomic.Pointer[sync.Pool]
+var appendOnlyEntryPoolBins [appendOnlyEntryPoolClassCount][][]appendOnlyEntry
 var appendOnlyEntryPoolRetainedBytes atomic.Uint64
 var appendOnlyEntryPoolRetainedBytesMax atomic.Uint64
 var appendOnlyEntryPoolGetTotal atomic.Uint64
@@ -343,6 +346,7 @@ func subtractAppendOnlyEntryPoolRetainedBytes(bytes uint64) {
 func dropAppendOnlyEntryPoolsLocked() {
 	for i := range appendOnlyEntryPoolPtrs {
 		appendOnlyEntryPoolPtrs[i].Store(&sync.Pool{})
+		appendOnlyEntryPoolBins[i] = nil
 	}
 	if dropped := appendOnlyEntryPoolRetainedBytes.Swap(0); dropped > 0 {
 		appendOnlyEntryPoolDropBytesTotal.Add(dropped)
@@ -526,16 +530,18 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 		return make([]appendOnlyEntry, length)
 	}
 	appendOnlyEntryPoolMu.Lock()
-	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
-		if v := pool.Get(); v != nil {
-			if entries, ok := v.([]appendOnlyEntry); ok {
-				appendOnlyEntryPoolGetTotal.Add(1)
-				subtractAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(entries)))
-				if cap(entries) >= length && cap(entries) <= appendOnlyMaxReuseEntries(length) {
-					appendOnlyEntryPoolMu.Unlock()
-					return entries[:length]
-				}
-			}
+	bin := appendOnlyEntryPoolBins[class]
+	for len(bin) > 0 {
+		last := len(bin) - 1
+		entries := bin[last]
+		bin[last] = nil
+		bin = bin[:last]
+		appendOnlyEntryPoolBins[class] = bin
+		appendOnlyEntryPoolGetTotal.Add(1)
+		subtractAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(entries)))
+		if cap(entries) >= length && cap(entries) <= appendOnlyMaxReuseEntries(length) {
+			appendOnlyEntryPoolMu.Unlock()
+			return entries[:length]
 		}
 	}
 	appendOnlyEntryPoolMu.Unlock()
@@ -559,7 +565,7 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 	}
 	appendOnlyEntryPoolMu.Lock()
 	defer appendOnlyEntryPoolMu.Unlock()
-	if pool := appendOnlyEntryPoolForClass(class); pool != nil {
+	if appendOnlyEntryPoolForClass(class) != nil {
 		bytes := appendOnlyEntryPoolBytes(cap(full))
 		if !tryAddAppendOnlyEntryPoolRetainedBytes(bytes) {
 			dropAppendOnlyEntryPoolsLocked()
@@ -567,10 +573,9 @@ func putAppendOnlyEntries(entries []appendOnlyEntry) {
 				recordAppendOnlyEntryPoolAdmissionDrop(bytes)
 				return
 			}
-			pool = appendOnlyEntryPoolForClass(class)
 		}
 		appendOnlyEntryPoolPutTotal.Add(1)
-		pool.Put(full[:0])
+		appendOnlyEntryPoolBins[class] = append(appendOnlyEntryPoolBins[class], full[:0])
 	}
 }
 
@@ -2325,7 +2330,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 
 	if !retainObserved {
 		if cap(m.entries) != retainedEntries {
-			m.replaceEntriesSliceWithPolicy(retainedEntries, false)
+			m.replaceEntriesSliceWithPolicy(retainedEntries, true)
 			return
 		}
 		if len(m.entries) != retainedEntries {
