@@ -65,6 +65,38 @@ func TestAppendOnlyInlineGrowthSkipsIntermediateDoublingBelowCutoff(t *testing.T
 	}
 }
 
+func BenchmarkAppendOnlyBatchReserveGrowth(b *testing.B) {
+	const (
+		batchEntries = 500
+		batches      = 400
+	)
+
+	b.ReportAllocs()
+	before := AppendOnlyEntryReserveStatsSnapshot()
+	for i := 0; i < b.N; i++ {
+		DropAppendOnlyEntryPools()
+		mt := NewAppendOnlyWithEntryCapacity(appendOnlyMinInitialEntries)
+		var key [appendOnlyInlineKeyLen]byte
+		seq := uint64(0)
+		for batch := 0; batch < batches; batch++ {
+			mt.mu.Lock()
+			mt.reserveAdditionalEntriesLocked(batchEntries)
+			for j := 0; j < batchEntries; j++ {
+				binary.BigEndian.PutUint64(key[:], seq)
+				mt.appendEntryLocked(key[:], nil, page.ValuePtr{}, node.FlagInline, page.EntryRevision(seq+1), false, true)
+				seq++
+			}
+			mt.mu.Unlock()
+		}
+		mt.ReleaseDropEntries()
+	}
+	after := AppendOnlyEntryReserveStatsSnapshot()
+	if b.N > 0 {
+		b.ReportMetric(float64(after.GrowCallsTotal-before.GrowCallsTotal)/float64(b.N), "reserve_grows/op")
+		b.ReportMetric(float64(after.GrowBytesTotal-before.GrowBytesTotal)/float64(b.N)/(1<<20), "reserve_grow_MiB/op")
+	}
+}
+
 func TestAppendOnlyInitialEntriesForCapacity(t *testing.T) {
 	t.Run("pointer-estimate", func(t *testing.T) {
 		capacity := defaultMemtableCapacity
