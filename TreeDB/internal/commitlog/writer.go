@@ -1524,7 +1524,10 @@ func (w *Writer) Sync() error {
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
-	return w.f.Sync()
+	if w.syncFn != nil {
+		return w.syncFn(w.f)
+	}
+	return nil
 }
 
 func (w *Writer) Close() error {

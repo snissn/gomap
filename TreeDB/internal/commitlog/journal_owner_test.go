@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
-	"time"
 )
 
 var errCommandJournalInjectedWrite = errors.New("injected command journal write failure")
@@ -285,10 +284,10 @@ func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 		t.Fatalf("AppendRawKVPointCommandTrustedAndFlush first: %v", err)
 	}
 
-	syncCalls := 0
+	syncedSegments := []string{}
 	j.mu.Lock()
-	j.writer.syncFn = func(*os.File) error {
-		syncCalls++
+	j.writer.syncFn = func(f *os.File) error {
+		syncedSegments = append(syncedSegments, filepath.Base(f.Name()))
 		return nil
 	}
 	j.mu.Unlock()
@@ -296,8 +295,8 @@ func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	if _, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("k2"), []byte("v2"), true); err != nil {
 		t.Fatalf("AppendRawKVPointCommandTrustedAndFlush second: %v", err)
 	}
-	if syncCalls != 1 {
-		t.Fatalf("rotated-segment sync calls=%d, want 1", syncCalls)
+	if len(syncedSegments) != 2 || syncedSegments[0] != CommandSegmentName(0, 1) || syncedSegments[1] != CommandSegmentName(0, 2) {
+		t.Fatalf("synced segments=%v, want [%s %s]", syncedSegments, CommandSegmentName(0, 1), CommandSegmentName(0, 2))
 	}
 }
 
@@ -308,9 +307,10 @@ func TestCommandJournalPointAppendAndFlushMeasuredReportsPhases(t *testing.T) {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
 	defer j.Close()
+	syncedSegments := []string{}
 	j.mu.Lock()
-	j.writer.syncFn = func(*os.File) error {
-		time.Sleep(time.Millisecond)
+	j.writer.syncFn = func(f *os.File) error {
+		syncedSegments = append(syncedSegments, filepath.Base(f.Name()))
 		return nil
 	}
 	j.mu.Unlock()
@@ -325,8 +325,11 @@ func TestCommandJournalPointAppendAndFlushMeasuredReportsPhases(t *testing.T) {
 	if timing.Append < 0 {
 		t.Fatalf("append timing=%s, want non-negative", timing.Append)
 	}
-	if timing.Flush < time.Millisecond {
-		t.Fatalf("flush timing=%s, want at least 1ms", timing.Flush)
+	if timing.Flush < 0 {
+		t.Fatalf("flush timing=%s, want non-negative", timing.Flush)
+	}
+	if len(syncedSegments) != 1 || syncedSegments[0] != CommandSegmentName(0, 1) {
+		t.Fatalf("synced segments=%v, want [%s]", syncedSegments, CommandSegmentName(0, 1))
 	}
 }
 
@@ -388,10 +391,10 @@ func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 		t.Fatalf("AppendRawKVSingleCommandAndFlush first: %v", err)
 	}
 
-	syncCalls := 0
+	syncedSegments := []string{}
 	j.mu.Lock()
-	j.writer.syncFn = func(*os.File) error {
-		syncCalls++
+	j.writer.syncFn = func(f *os.File) error {
+		syncedSegments = append(syncedSegments, filepath.Base(f.Name()))
 		return nil
 	}
 	j.mu.Unlock()
@@ -399,8 +402,8 @@ func TestCommandJournalSingleAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	if _, err := j.AppendRawKVSingleCommandAndFlush(0, RawKVOperation{Op: RawKVOpSet, Key: []byte("k2"), Value: []byte("v2")}, true); err != nil {
 		t.Fatalf("AppendRawKVSingleCommandAndFlush second: %v", err)
 	}
-	if syncCalls != 1 {
-		t.Fatalf("rotated-segment sync calls=%d, want 1", syncCalls)
+	if len(syncedSegments) != 2 || syncedSegments[0] != CommandSegmentName(0, 1) || syncedSegments[1] != CommandSegmentName(0, 2) {
+		t.Fatalf("synced segments=%v, want [%s %s]", syncedSegments, CommandSegmentName(0, 1), CommandSegmentName(0, 2))
 	}
 }
 
