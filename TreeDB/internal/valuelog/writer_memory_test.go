@@ -258,7 +258,7 @@ func TestWriterAppendBufStats_PoolAndDropCounters(t *testing.T) {
 	}
 }
 
-func BenchmarkWriterAppendBufPoolConcurrentSyncCycles(b *testing.B) {
+func BenchmarkWriterAppendBufPoolMultiWriterSyncCycles(b *testing.B) {
 	const writers = 16
 
 	drainWriterAppendBufPoolForTest()
