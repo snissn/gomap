@@ -89,6 +89,12 @@ type leafRefCachePage struct {
 	buf [page.PageSize]byte
 }
 
+// leafRefCachePageChunk amortizes allocation object count for page-sized cache
+// buffers used during one in-flight leaf-ref cache.
+type leafRefCachePageChunk struct {
+	pages [mergeLeafRefCachePagesPerChunk]leafRefCachePage
+}
+
 // outerLeafBuildPagePool recycles page-sized buffers used to build rewritten
 // outer-leaf pages on non-maintenance apply paths.
 var outerLeafBuildPagePool = sync.Pool{
@@ -198,6 +204,8 @@ const (
 	mergeLeafPageBatchMaxCap          = 512
 	mergeLeafRefCachePageInit         = 16
 	mergeLeafRefCachePageKeep         = 4096
+	mergeLeafRefCachePagesPerChunk    = 64
+	mergeLeafRefCacheGlobalPageKeep   = 16 * 1024
 	mergeChildRefBatchInit            = 8
 	mergeChildRefBatchKeep            = 64
 	mergeChildRefBatchMaxCap          = 512
@@ -215,6 +223,15 @@ const (
 	mergeInternalCriticalPressureMinChildren = 32
 	mergeInternalCriticalPressureMinOps      = 32 * 1024
 )
+
+// globalLeafRefCachePages lets apply scratches hand off overflow pages after
+// cache close instead of allocating fresh page objects on the next apply.
+var globalLeafRefCachePages = struct {
+	mu    sync.Mutex
+	pages []*leafRefCachePage
+}{
+	pages: make([]*leafRefCachePage, 0, mergeLeafRefCachePagesPerChunk),
+}
 
 type mergeScratch struct {
 	mu                        sync.Mutex
@@ -317,9 +334,8 @@ func (s *mergeScratch) reset() {
 	}
 	if n := len(s.leafRefCachePages); n > mergeLeafRefCachePageKeep {
 		extra := s.leafRefCachePages[mergeLeafRefCachePageKeep:]
-		for i := range extra {
-			extra[i] = nil
-		}
+		putGlobalLeafRefCachePages(extra)
+		clear(extra)
 		s.leafRefCachePages = s.leafRefCachePages[:mergeLeafRefCachePageKeep]
 	}
 	clear(s.leafRefCacheActivePages)
@@ -606,15 +622,7 @@ func (s *mergeScratch) cloneLeafRefCachePage(src []byte) []byte {
 		return owned
 	}
 	s.mu.Lock()
-	n := len(s.leafRefCachePages)
-	var p *leafRefCachePage
-	if n > 0 {
-		p = s.leafRefCachePages[n-1]
-		s.leafRefCachePages[n-1] = nil
-		s.leafRefCachePages = s.leafRefCachePages[:n-1]
-	} else {
-		p = &leafRefCachePage{}
-	}
+	p := s.acquireLeafRefCachePageLocked()
 	s.leafRefCacheActivePages = append(s.leafRefCacheActivePages, p)
 	s.mu.Unlock()
 	copy(p.buf[:], src)
@@ -629,19 +637,65 @@ func (s *mergeScratch) acquireLeafRefCacheBuildPage() []byte {
 		return make([]byte, page.PageSize)
 	}
 	s.mu.Lock()
-	n := len(s.leafRefCachePages)
-	var p *leafRefCachePage
-	if n > 0 {
-		p = s.leafRefCachePages[n-1]
-		s.leafRefCachePages[n-1] = nil
-		s.leafRefCachePages = s.leafRefCachePages[:n-1]
-	} else {
-		p = &leafRefCachePage{}
-	}
+	p := s.acquireLeafRefCachePageLocked()
 	s.leafRefCacheActivePages = append(s.leafRefCacheActivePages, p)
 	s.mu.Unlock()
 	clear(p.buf[:])
 	return p.buf[:]
+}
+
+func (s *mergeScratch) acquireLeafRefCachePageLocked() *leafRefCachePage {
+	n := len(s.leafRefCachePages)
+	if n == 0 {
+		s.refillLeafRefCachePagesLocked()
+		n = len(s.leafRefCachePages)
+	}
+	p := s.leafRefCachePages[n-1]
+	s.leafRefCachePages[n-1] = nil
+	s.leafRefCachePages = s.leafRefCachePages[:n-1]
+	return p
+}
+
+func (s *mergeScratch) refillLeafRefCachePagesLocked() {
+	s.leafRefCachePages = takeGlobalLeafRefCachePages(s.leafRefCachePages)
+	if len(s.leafRefCachePages) > 0 {
+		return
+	}
+	chunk := new(leafRefCachePageChunk)
+	for i := range chunk.pages {
+		s.leafRefCachePages = append(s.leafRefCachePages, &chunk.pages[i])
+	}
+}
+
+func takeGlobalLeafRefCachePages(dst []*leafRefCachePage) []*leafRefCachePage {
+	globalLeafRefCachePages.mu.Lock()
+	pages := globalLeafRefCachePages.pages
+	if n := len(pages); n > 0 {
+		take := mergeLeafRefCachePagesPerChunk
+		if take > n {
+			take = n
+		}
+		start := n - take
+		dst = append(dst, pages[start:n]...)
+		clear(pages[start:n])
+		globalLeafRefCachePages.pages = pages[:start]
+	}
+	globalLeafRefCachePages.mu.Unlock()
+	return dst
+}
+
+func putGlobalLeafRefCachePages(pages []*leafRefCachePage) {
+	if len(pages) == 0 {
+		return
+	}
+	globalLeafRefCachePages.mu.Lock()
+	if remaining := mergeLeafRefCacheGlobalPageKeep - len(globalLeafRefCachePages.pages); remaining > 0 {
+		if remaining > len(pages) {
+			remaining = len(pages)
+		}
+		globalLeafRefCachePages.pages = append(globalLeafRefCachePages.pages, pages[:remaining]...)
+	}
+	globalLeafRefCachePages.mu.Unlock()
 }
 
 func (s *mergeScratch) releaseLeafRefCachePages() {
@@ -651,11 +705,17 @@ func (s *mergeScratch) releaseLeafRefCachePages() {
 	s.mu.Lock()
 	active := s.leafRefCacheActivePages
 	keep := mergeLeafRefCachePageKeep - len(s.leafRefCachePages)
+	if keep < 0 {
+		keep = 0
+	}
 	if keep > len(active) {
 		keep = len(active)
 	}
 	if keep > 0 {
 		s.leafRefCachePages = append(s.leafRefCachePages, active[:keep]...)
+	}
+	if keep < len(active) {
+		putGlobalLeafRefCachePages(active[keep:])
 	}
 	clear(active)
 	s.leafRefCacheActivePages = active[:0]
