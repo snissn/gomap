@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 )
 
 var errCommandJournalInjectedWrite = errors.New("injected command journal write failure")
@@ -297,6 +298,35 @@ func TestCommandJournalPointAppendAndFlushSyncsRotatedSegment(t *testing.T) {
 	}
 	if syncCalls != 1 {
 		t.Fatalf("rotated-segment sync calls=%d, want 1", syncCalls)
+	}
+}
+
+func TestCommandJournalPointAppendAndFlushMeasuredReportsPhases(t *testing.T) {
+	dir := t.TempDir()
+	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
+	if err != nil {
+		t.Fatalf("OpenCommandJournal: %v", err)
+	}
+	defer j.Close()
+	j.mu.Lock()
+	j.writer.syncFn = func(*os.File) error {
+		time.Sleep(time.Millisecond)
+		return nil
+	}
+	j.mu.Unlock()
+
+	lsn, timing, err := j.AppendRawKVPointCommandTrustedAndFlushMeasured(0, RawKVOpSet, []byte("k"), []byte("v"), true)
+	if err != nil {
+		t.Fatalf("AppendRawKVPointCommandTrustedAndFlushMeasured: %v", err)
+	}
+	if lsn != 1 {
+		t.Fatalf("lsn=%d, want 1", lsn)
+	}
+	if timing.Append < 0 {
+		t.Fatalf("append timing=%s, want non-negative", timing.Append)
+	}
+	if timing.Flush < time.Millisecond {
+		t.Fatalf("flush timing=%s, want at least 1ms", timing.Flush)
 	}
 }
 

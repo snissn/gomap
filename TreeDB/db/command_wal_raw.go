@@ -209,6 +209,26 @@ func (db *DB) flushCommandWAL(sync bool, observe bool) error {
 	return err
 }
 
+func (db *DB) finishCommandWALAppendFlush(path commandWALAppendStatsPath, actualSync bool, lsn uint64, timing commitlog.CommandJournalAppendFlushTiming, err error) error {
+	if lsn != 0 || err == nil {
+		db.observeCommandWALAppend(path, timing.Append)
+	}
+	if lsn != 0 {
+		if err == nil && db.testFailCommandWALFlush.Load() {
+			err = errTestCommandWALFlushFailpoint
+		}
+		db.observeCommandWALFlush(actualSync, timing.Flush)
+	}
+	if err != nil {
+		if lsn != 0 {
+			db.commandWALFlushPoisoned.Store(true)
+		}
+		return err
+	}
+	db.observeCommandWALAccepted(lsn)
+	return nil
+}
+
 func (db *DB) commandWALPoisonedError() error {
 	if db != nil && db.commandWAL && db.commandWALFlushPoisoned.Load() {
 		return fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
@@ -1039,22 +1059,11 @@ func (db *DB) AppendRawKVSingleCommandWAL(op commitlog.RawKVOperation, sync bool
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	flushSync := sync && db.durability != DurabilityWALOnRelaxed
-	appendStart := time.Now()
-	lsn, err := db.commandJournal.AppendRawKVSingleCommandWithRotateSync(baseAppliedLSN, op, flushSync)
-	if lsn != 0 || err == nil {
-		db.observeCommandWALAppend(commandWALAppendStatsPoint, time.Since(appendStart))
-	}
-	if err == nil {
-		err = db.flushCommandWAL(sync, true)
-	}
-	if err != nil {
-		if lsn != 0 {
-			db.commandWALFlushPoisoned.Store(true)
-		}
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, timing, err := db.commandJournal.AppendRawKVSingleCommandAndFlushMeasured(baseAppliedLSN, op, actualSync)
+	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPoint, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
 	}
-	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -1101,28 +1110,11 @@ func (db *DB) appendRawKVPointCommandWALTrustedWithRevision(op commitlog.RawKVOp
 	if state := db.state.Load(); state != nil {
 		baseAppliedLSN = state.AppliedCommandLSN
 	}
-	flushSync := sync && db.durability != DurabilityWALOnRelaxed
-	var lsn uint64
-	var err error
-	appendStart := time.Now()
-	if revision == 0 {
-		lsn, err = db.commandJournal.AppendRawKVPointCommandTrustedWithRotateSync(baseAppliedLSN, op, key, value, flushSync)
-	} else {
-		lsn, err = db.commandJournal.AppendRawKVPointCommandTrustedWithRevisionAndRotateSync(baseAppliedLSN, op, key, value, revision, flushSync)
-	}
-	if lsn != 0 || err == nil {
-		db.observeCommandWALAppend(commandWALAppendStatsPoint, time.Since(appendStart))
-	}
-	if err == nil {
-		err = db.flushCommandWAL(sync, true)
-	}
-	if err != nil {
-		if lsn != 0 {
-			db.commandWALFlushPoisoned.Store(true)
-		}
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
+	lsn, timing, err := db.commandJournal.AppendRawKVPointCommandTrustedWithRevisionAndFlushMeasured(baseAppliedLSN, op, key, value, revision, actualSync)
+	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPoint, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
 	}
-	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
@@ -1171,33 +1163,16 @@ func (db *DB) appendRawKVBatchPayloadCommandWAL(payload []byte, sync bool, trust
 	}
 	var lsn uint64
 	var err error
-	flushSync := sync && db.durability != DurabilityWALOnRelaxed
+	var timing commitlog.CommandJournalAppendFlushTiming
+	actualSync := sync && db.durability != DurabilityWALOnRelaxed
 	if trusted {
-		appendStart := time.Now()
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrustedWithRotateSync(baseAppliedLSN, payload, flushSync)
-		if lsn != 0 || err == nil {
-			db.observeCommandWALAppend(commandWALAppendStatsPayload, time.Since(appendStart))
-		}
-		if err == nil {
-			err = db.flushCommandWAL(sync, true)
-		}
+		lsn, timing, err = db.commandJournal.AppendRawKVBatchPayloadCommandTrustedAndFlushMeasured(baseAppliedLSN, payload, actualSync)
 	} else {
-		appendStart := time.Now()
-		lsn, err = db.commandJournal.AppendRawKVBatchPayloadCommand(baseAppliedLSN, payload)
-		if lsn != 0 || err == nil {
-			db.observeCommandWALAppend(commandWALAppendStatsPayload, time.Since(appendStart))
-		}
-		if err == nil {
-			err = db.flushCommandWAL(sync, true)
-		}
+		lsn, timing, err = db.commandJournal.AppendRawKVBatchPayloadCommandAndFlushMeasured(baseAppliedLSN, payload, actualSync)
 	}
-	if err != nil {
-		if lsn != 0 {
-			db.commandWALFlushPoisoned.Store(true)
-		}
+	if err := db.finishCommandWALAppendFlush(commandWALAppendStatsPayload, actualSync, lsn, timing, err); err != nil {
 		return lsn, err
 	}
-	db.observeCommandWALAccepted(lsn)
 	return lsn, nil
 }
 
