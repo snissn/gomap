@@ -116,6 +116,24 @@ func BenchmarkCommandWALFrameDecode(b *testing.B) {
 	}
 }
 
+func BenchmarkCommandWALFrameDecodeBorrowed(b *testing.B) {
+	for _, tc := range commandWALBenchCases() {
+		b.Run(tc.name, func(b *testing.B) {
+			frame := mustCommandWALBenchFrame(b, tc.ops, tc.valueSize)
+			b.SetBytes(int64(len(frame)))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				env, err := decodeCommandFrame(frame, false)
+				if err != nil {
+					b.Fatal(err)
+				}
+				commandWALBenchSink.frame = env.Payload
+			}
+		})
+	}
+}
+
 func BenchmarkWriterAppendCommandRawKVBatch(b *testing.B) {
 	for _, tc := range commandWALBenchCases() {
 		b.Run(tc.name, func(b *testing.B) {

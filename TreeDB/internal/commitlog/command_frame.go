@@ -2003,6 +2003,10 @@ func encodeCommandFrameTo(dst []byte, env CommandEnvelope) ([]byte, error) {
 }
 
 func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
+	return decodeCommandFrame(frame, true)
+}
+
+func decodeCommandFrame(frame []byte, copyPayload bool) (CommandEnvelope, error) {
 	var env CommandEnvelope
 	if len(frame) >= batchHeaderSize && len(frame) < commandFrameHeaderSize && isBatchPayloadVersion(frame[0]) {
 		return env, ErrCommandWALLegacyPayload
@@ -2048,7 +2052,13 @@ func DecodeCommandFrame(frame []byte) (CommandEnvelope, error) {
 		return env, ErrCorrupt
 	}
 	off := commandFrameHeaderSize
-	env.Payload = append([]byte(nil), frame[off:off+int(payloadLen)]...)
+	if payloadLen != 0 {
+		payload := frame[off : off+int(payloadLen) : off+int(payloadLen)]
+		if copyPayload {
+			payload = append([]byte(nil), payload...)
+		}
+		env.Payload = payload
+	}
 	off += int(payloadLen)
 	extRefs, err := decodeExternalRefs(frame[off : off+int(extRefsLen)])
 	if err != nil {
@@ -3407,7 +3417,7 @@ func (r *Reader) ReadCommandFrame() (CommandEnvelope, error) {
 	if err != nil {
 		return CommandEnvelope{}, err
 	}
-	return DecodeCommandFrame(payload)
+	return decodeCommandFrame(payload, false)
 }
 
 func ScanCommandFrames(path string, opts Options) ([]CommandEnvelope, error) {

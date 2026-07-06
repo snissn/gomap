@@ -68,6 +68,46 @@ func TestCommandWALFormatGoldenV1RawKVBatch(t *testing.T) {
 	}
 }
 
+func TestCommandWALDecodeCommandFramePayloadOwnershipModes(t *testing.T) {
+	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
+		{Op: RawKVOpSet, Key: []byte("alpha"), Value: []byte("one")},
+	})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	frame, err := EncodeCommandFrame(CommandEnvelope{
+		LSN:           7,
+		Kind:          CommandKindRawKVBatch,
+		Scope:         CommandScopeRawKV,
+		PayloadFormat: PayloadFormatRawKVBatchV1,
+		Payload:       payload,
+	})
+	if err != nil {
+		t.Fatalf("EncodeCommandFrame: %v", err)
+	}
+
+	owned, err := DecodeCommandFrame(frame)
+	if err != nil {
+		t.Fatalf("DecodeCommandFrame: %v", err)
+	}
+	borrowed, err := decodeCommandFrame(frame, false)
+	if err != nil {
+		t.Fatalf("decodeCommandFrame borrowed: %v", err)
+	}
+	if cap(borrowed.Payload) != len(borrowed.Payload) {
+		t.Fatalf("borrowed payload cap=%d want len=%d", cap(borrowed.Payload), len(borrowed.Payload))
+	}
+
+	valueOffset := rawKVBatchHeaderSize + rawKVOpHeaderSize + len("alpha")
+	frame[commandFrameHeaderSize+valueOffset] = 'z'
+	if owned.Payload[valueOffset] != 'o' {
+		t.Fatalf("owned payload observed frame mutation: got %q want %q", owned.Payload[valueOffset], byte('o'))
+	}
+	if borrowed.Payload[valueOffset] != 'z' {
+		t.Fatalf("borrowed payload did not alias frame: got %q want %q", borrowed.Payload[valueOffset], byte('z'))
+	}
+}
+
 func TestCommandWALRawKVBatchPreservesEmptySetValue(t *testing.T) {
 	payload, err := EncodeRawKVBatchPayload([]RawKVOperation{
 		{Op: RawKVOpSet, Key: []byte("empty"), Value: []byte{}},
