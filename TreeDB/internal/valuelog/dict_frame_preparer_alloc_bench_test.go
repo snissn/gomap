@@ -1,10 +1,12 @@
 package valuelog
 
 import (
+	"io"
 	"runtime"
 	"testing"
 
 	"github.com/snissn/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func BenchmarkFramePreparerDictIronbirdLikeHistoryReuse(b *testing.B) {
@@ -66,4 +68,70 @@ func BenchmarkFramePreparerDictIronbirdLikeHistoryReuse(b *testing.B) {
 	b.StopTimer()
 	runtime.KeepAlive(prep)
 	runtime.KeepAlive(body)
+}
+
+func BenchmarkWriterDictIronbirdLikeHistoryReuse(b *testing.B) {
+	const (
+		dictID      = uint64(3554)
+		valueSize   = 4096
+		recordCount = 8
+		valueCount  = 128
+	)
+
+	values := make([][]byte, valueCount)
+	for i := range values {
+		values[i] = makeSyntheticDictSampleForBench(i, valueSize)
+	}
+	dict, err := buildBenchDictWithHistory(uint32(dictID), values, 32<<10)
+	if err != nil {
+		b.Fatalf("build dict: %v", err)
+	}
+
+	records := make([]Record, recordCount)
+	fillRecords := func(base int) {
+		for i := range records {
+			records[i] = Record{
+				RID:   uint64(base + i + 1),
+				Value: values[(base+i)%len(values)],
+			}
+		}
+	}
+
+	writer := NewWriterWithSink(io.Discard, 1)
+	writer.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	defer func() {
+		if err := writer.Close(); err != nil {
+			b.Fatalf("close writer: %v", err)
+		}
+	}()
+
+	ptrs := make([]page.ValuePtr, recordCount)
+	fillRecords(0)
+	_, stats, err := writer.AppendFrameWithStatsInto(dictID, dict, records, ptrs)
+	if err != nil {
+		b.Fatalf("warm AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		b.Fatalf("warm frame stats attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(valueSize * recordCount))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		runtime.GC()
+		runtime.GC()
+		fillRecords(i * recordCount)
+		var appendErr error
+		_, stats, appendErr = writer.AppendFrameWithStatsInto(dictID, dict, records, ptrs)
+		if appendErr != nil {
+			b.Fatalf("AppendFrameWithStatsInto: %v", appendErr)
+		}
+		if !stats.Attempted || !stats.Kept {
+			b.Fatalf("frame stats attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+		}
+	}
+	b.StopTimer()
+	runtime.KeepAlive(writer)
+	runtime.KeepAlive(ptrs)
 }

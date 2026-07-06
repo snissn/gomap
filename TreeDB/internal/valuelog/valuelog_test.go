@@ -1785,6 +1785,64 @@ func TestFramePreparer_DictEncoderRetainedAcrossTrimAndSameOptions(t *testing.T)
 	}
 }
 
+func TestWriter_DictEncoderRetainedAcrossFramesAndReleasedOnClose(t *testing.T) {
+	const dictID = uint64(3554)
+	dict, records := buildLargeDictCompressionFixture(t, dictID)
+
+	w := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	w.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	dst := make([]page.ValuePtr, len(records))
+	_, stats, err := w.AppendFrameWithStatsInto(dictID, dict, records, dst)
+	if err != nil {
+		t.Fatalf("AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		t.Fatalf("expected kept dict-compressed frame: attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+	if w.dictEncoder == nil || w.dictEncoderCodecs == nil {
+		t.Fatalf("expected retained dict encoder")
+	}
+	retained := w.dictEncoder
+	retainedKey := w.dictEncoderKey
+
+	_, stats, err = w.AppendFrameWithStatsInto(dictID, dict, records, dst)
+	if err != nil {
+		t.Fatalf("second AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		t.Fatalf("expected second kept dict-compressed frame: attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+	if w.dictEncoder != retained || w.dictEncoderKey != retainedKey {
+		t.Fatalf("second frame did not reuse retained dict encoder")
+	}
+
+	w.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	if w.dictEncoder != retained || w.dictEncoderKey != retainedKey {
+		t.Fatalf("same encoder options released retained dict encoder")
+	}
+	w.SetDictFrameEncoderOptions(zstd.SpeedDefault, false)
+	if w.dictEncoder != nil || w.dictEncoderCodecs != nil || w.dictEncoderKey != (dictCodecKey{}) {
+		t.Fatalf("option change retained dict encoder state: encoder=%p codecs=%p key=%+v", w.dictEncoder, w.dictEncoderCodecs, w.dictEncoderKey)
+	}
+
+	_, stats, err = w.AppendFrameWithStatsInto(dictID, dict, records, dst)
+	if err != nil {
+		t.Fatalf("third AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		t.Fatalf("expected third kept dict-compressed frame: attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+	if w.dictEncoder == nil || w.dictEncoderCodecs == nil {
+		t.Fatalf("expected retained dict encoder after option change")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if w.dictEncoder != nil || w.dictEncoderCodecs != nil || w.dictEncoderKey != (dictCodecKey{}) {
+		t.Fatalf("close retained dict encoder state: encoder=%p codecs=%p key=%+v", w.dictEncoder, w.dictEncoderCodecs, w.dictEncoderKey)
+	}
+}
+
 func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 	records := []Record{
 		{RID: 1, Value: bytes.Repeat([]byte("alpha-001|"), 32)},
