@@ -60,10 +60,10 @@ func (b *viewCountingBackend) pointerTotals() (setPointerCalls, setPointerViewCa
 
 var entrySlicePoolTestMu sync.Mutex
 
-func lockEntrySlicePoolStateForTest(t *testing.T) {
-	t.Helper()
+func lockEntrySlicePoolStateForTest(tb testing.TB) {
+	tb.Helper()
 	entrySlicePoolTestMu.Lock()
-	t.Cleanup(entrySlicePoolTestMu.Unlock)
+	tb.Cleanup(entrySlicePoolTestMu.Unlock)
 }
 
 func (b *pointerBatch) Set(key, value []byte) error {
@@ -535,8 +535,8 @@ func TestOuterLeafArenaReuseBoundCapsOversizedArena(t *testing.T) {
 	}
 }
 
-func resetEntrySlicePoolStateForTest(t *testing.T) {
-	t.Helper()
+func resetEntrySlicePoolStateForTest(tb testing.TB) {
+	tb.Helper()
 	entrySliceLeaseMu.Lock()
 	saved := entrySliceLeases
 	entrySliceLeases = [entrySliceLeaseClassCount][][]batch.Entry{}
@@ -548,7 +548,7 @@ func resetEntrySlicePoolStateForTest(t *testing.T) {
 	for i := range entrySlicePools {
 		entrySlicePools[i] = sync.Pool{}
 	}
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		entrySliceLeaseMu.Lock()
 		entrySliceLeases = saved
 		entrySliceLeaseMu.Unlock()
@@ -568,6 +568,19 @@ func resetEntrySlicePoolsForTest(t *testing.T) {
 	t.Cleanup(func() {
 		entrySlicePoolBudgetBytes = savedBudget
 	})
+}
+
+func BenchmarkEntrySliceLeaseRoundTrip(b *testing.B) {
+	lockEntrySlicePoolStateForTest(b)
+	resetEntrySlicePoolStateForTest(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		entries := getEntrySlice(256)
+		entries = entries[:256]
+		putEntrySlice(entries)
+	}
 }
 
 func TestEntrySliceLeaseRoundTrip(t *testing.T) {

@@ -80,7 +80,14 @@ var iteratorDebugEnabled atomic.Bool
 var valueLogEligiblePool sync.Pool                  // stores []int
 var valueLogKeyPool sync.Pool                       // stores [][]byte
 var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
-var batchArenaLeasePool sync.Pool                   // stores *batchArenaLease
+var batchArenaFreeLeaseMu sync.Mutex
+var batchArenaFreeLeases [batchArenaClassCount][][]byte
+var batchArenaLeasePool sync.Pool // stores *batchArenaLease
+var batchArenaLeaseStaticOnce sync.Once
+var batchArenaLeaseStaticMu sync.Mutex
+var batchArenaLeaseStaticHeaders [maxBatchArenaStaticLeaseHeaders]batchArenaLease
+var batchArenaLeaseStaticFree [maxBatchArenaStaticLeaseHeaders]*batchArenaLease
+var batchArenaLeaseStaticFreeCount int
 var appendOnlyDirectValueArenaPools [appendOnlyDirectValueArenaClassCount]sync.Pool
 var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
 var batchIntSliceRefPool sync.Pool                          // stores *batchIntSliceRef
@@ -222,11 +229,15 @@ var batchSetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_BATCH_SET_CALLER_
 var dbGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_DB_GET_CALLER_SAMPLE_MOD", 0)
 var snapshotGetCallerSampleMod = loadUintEnvDefault("TREEDB_DEBUG_SNAPSHOT_GET_CALLER_SAMPLE_MOD", 0)
 
+var runtimeNumGCMu sync.Mutex
+var runtimeNumGCSamples = [1]metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
 var runtimeNumGC = func() uint64 {
-	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
-	metrics.Read(samples)
-	if samples[0].Value.Kind() == metrics.KindUint64 {
-		return samples[0].Value.Uint64()
+	runtimeNumGCMu.Lock()
+	metrics.Read(runtimeNumGCSamples[:])
+	value := runtimeNumGCSamples[0].Value
+	runtimeNumGCMu.Unlock()
+	if value.Kind() == metrics.KindUint64 {
+		return value.Uint64()
 	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
@@ -1144,6 +1155,18 @@ func currentBatchArenaPoolBudgetBytes() int64 {
 	return budget
 }
 
+func batchArenaFreeLeaseBytes() int64 {
+	var bytes int64
+	batchArenaFreeLeaseMu.Lock()
+	for i := range batchArenaFreeLeases {
+		for _, buf := range batchArenaFreeLeases[i] {
+			bytes += int64(cap(buf))
+		}
+	}
+	batchArenaFreeLeaseMu.Unlock()
+	return bytes
+}
+
 func maybeResetBatchArenaPoolBytesAfterGC() {
 	if batchArenaPoolBytes.Load() <= 0 {
 		return
@@ -1153,14 +1176,15 @@ func maybeResetBatchArenaPoolBytesAfterGC() {
 	if last == numGC {
 		return
 	}
+	leaseBytes := batchArenaFreeLeaseBytes()
 	if last == 0 {
 		if batchArenaPoolLastGC.CompareAndSwap(0, numGC) {
-			batchArenaPoolBytes.Store(0)
+			batchArenaPoolBytes.Store(leaseBytes)
 		}
 		return
 	}
 	if batchArenaPoolLastGC.CompareAndSwap(last, numGC) {
-		batchArenaPoolBytes.Store(0)
+		batchArenaPoolBytes.Store(leaseBytes)
 	}
 }
 
@@ -1206,6 +1230,8 @@ const (
 	// mostly-empty tail chunks during big restore batches.
 	batchArenaMaxShift                       = 21
 	batchArenaClassCount                     = batchArenaMaxShift - batchArenaMinShift + 1
+	maxBatchArenaFreeLeasesPerBucket         = 64
+	maxBatchArenaStaticLeaseHeaders          = 4096
 	appendOnlyDirectValueArenaMinShift       = 15
 	appendOnlyDirectValueArenaMaxShift       = 20
 	appendOnlyDirectValueArenaClassCount     = appendOnlyDirectValueArenaMaxShift - appendOnlyDirectValueArenaMinShift + 1
@@ -1580,6 +1606,75 @@ func batchArenaClassForCap(capacity int) (idx int, ok bool) {
 	return idx, true
 }
 
+func releaseBatchArenaPoolBytes(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	if next := batchArenaPoolBytes.Add(-bytes); next < 0 {
+		batchArenaPoolBytes.Store(0)
+	}
+}
+
+func takeBatchArenaFreeLease(idx, classCap int) []byte {
+	for {
+		batchArenaFreeLeaseMu.Lock()
+		leases := batchArenaFreeLeases[idx]
+		n := len(leases)
+		if n == 0 {
+			batchArenaFreeLeaseMu.Unlock()
+			return nil
+		}
+		buf := leases[n-1]
+		batchArenaFreeLeases[idx][n-1] = nil
+		batchArenaFreeLeases[idx] = leases[:n-1]
+		batchArenaFreeLeaseMu.Unlock()
+
+		size := int64(cap(buf))
+		releaseBatchArenaPoolBytes(size)
+		if cap(buf) == classCap {
+			return buf[:0]
+		}
+	}
+}
+
+func putBatchArenaFreeLease(idx int, buf []byte) bool {
+	batchArenaFreeLeaseMu.Lock()
+	if len(batchArenaFreeLeases[idx]) >= maxBatchArenaFreeLeasesPerBucket {
+		batchArenaFreeLeaseMu.Unlock()
+		return false
+	}
+	batchArenaFreeLeases[idx] = append(batchArenaFreeLeases[idx], buf[:0])
+	batchArenaFreeLeaseMu.Unlock()
+	return true
+}
+
+func drainBatchArenaFreeLeasesToTargetBytes(target int64) int64 {
+	var dropped int64
+	for classIdx := len(batchArenaFreeLeases) - 1; classIdx >= 0 && batchArenaPoolBytes.Load() > target; classIdx-- {
+		for batchArenaPoolBytes.Load() > target {
+			batchArenaFreeLeaseMu.Lock()
+			leases := batchArenaFreeLeases[classIdx]
+			n := len(leases)
+			if n == 0 {
+				batchArenaFreeLeaseMu.Unlock()
+				break
+			}
+			buf := leases[n-1]
+			batchArenaFreeLeases[classIdx][n-1] = nil
+			batchArenaFreeLeases[classIdx] = leases[:n-1]
+			batchArenaFreeLeaseMu.Unlock()
+
+			size := int64(cap(buf))
+			if size <= 0 {
+				continue
+			}
+			dropped += size
+			releaseBatchArenaPoolBytes(size)
+		}
+	}
+	return dropped
+}
+
 func getBatchArena(capacity int) []byte {
 	if capacity < 0 {
 		capacity = 0
@@ -1588,15 +1683,15 @@ func getBatchArena(capacity int) []byte {
 	if !ok {
 		return make([]byte, 0, capacity)
 	}
+	if buf := takeBatchArenaFreeLease(idx, classCap); buf != nil {
+		return buf
+	}
 	if v := batchArenaPools[idx].Get(); v != nil {
 		if buf, ok := v.([]byte); ok {
 			size := int64(cap(buf))
-			next := batchArenaPoolBytes.Add(-size)
-			if next < 0 {
-				// Counter can drift if sync.Pool drops objects at GC or a caller
-				// inserts an unexpected buffer.
-				batchArenaPoolBytes.Store(0)
-			}
+			// Counter can drift if sync.Pool drops objects at GC or a caller
+			// inserts an unexpected buffer.
+			releaseBatchArenaPoolBytes(size)
 			if cap(buf) == classCap {
 				return buf[:0]
 			}
@@ -1658,7 +1753,11 @@ func putBatchArena(buf []byte) {
 	if noteEpoch {
 		noteBatchArenaPoolGC(batchArenaPoolNumGC())
 	}
-	batchArenaPools[idx].Put(buf[:0])
+	if putBatchArenaFreeLease(idx, buf) {
+		return
+	}
+	releaseBatchArenaPoolBytes(size)
+	batchArenaPoolDropBytesTotal.Add(uint64(size))
 }
 
 func putBatchArenas(chunks [][]byte) {
@@ -1677,7 +1776,7 @@ func drainBatchArenaPoolToTargetBytes(target int64) int64 {
 	if batchArenaPoolBytes.Load() <= target {
 		return 0
 	}
-	var dropped int64
+	dropped := drainBatchArenaFreeLeasesToTargetBytes(target)
 	for classIdx := len(batchArenaPools) - 1; classIdx >= 0 && batchArenaPoolBytes.Load() > target; classIdx-- {
 		for batchArenaPoolBytes.Load() > target {
 			v := batchArenaPools[classIdx].Get()
@@ -1693,10 +1792,7 @@ func drainBatchArenaPoolToTargetBytes(target int64) int64 {
 				continue
 			}
 			dropped += size
-			next := batchArenaPoolBytes.Add(-size)
-			if next < 0 {
-				batchArenaPoolBytes.Store(0)
-			}
+			releaseBatchArenaPoolBytes(size)
 		}
 	}
 	if dropped > 0 {
@@ -8232,10 +8328,36 @@ type dictStoreWriterByClass interface {
 }
 
 type batchArenaLease struct {
-	refs   int
-	chunks [][]byte
+	refs       int
+	chunks     [][]byte
+	bytes      int64
+	noPool     bool
+	staticPool bool
+}
+
+type batchEntrySliceLeasePool struct {
+	slices [][]batch.Entry
 	bytes  int64
-	noPool bool
+}
+
+type batchIntSliceLeasePool struct {
+	slices [][]int
+	bytes  int64
+}
+
+type batchInt64SliceLeasePool struct {
+	slices [][]int64
+	bytes  int64
+}
+
+type batchByteChunksLeasePool struct {
+	slices [][][]byte
+	bytes  int64
+}
+
+type batchEntryGroupsLeasePool struct {
+	slices [][][]batch.Entry
+	bytes  int64
 }
 
 type appendOnlyDirectArenaLease struct {
@@ -8334,6 +8456,13 @@ type DB struct {
 	batchArenaTailCompactRuns     atomic.Uint64
 	batchArenaTailCompactCopied   atomic.Uint64
 	batchArenaTailCompactSaved    atomic.Uint64
+	batchAuxMu                    sync.Mutex
+	batchEntriesLeases            batchEntrySliceLeasePool
+	batchShardEntriesLeases       batchEntrySliceLeasePool
+	batchIntLeases                batchIntSliceLeasePool
+	batchInt64Leases              batchInt64SliceLeasePool
+	batchArenaChunkLeases         batchByteChunksLeasePool
+	batchShardEntryGroupsLeases   batchEntryGroupsLeasePool
 	batchEntriesPool              sync.Pool
 	batchShardEntriesPool         sync.Pool
 	batchIntPool                  sync.Pool
@@ -10314,24 +10443,48 @@ func batchEntryWALRevision(entry *batch.Entry, seq uint64) uint64 {
 	return uint64(entry.Revision)
 }
 
+func initBatchArenaStaticLeaseHeaders() {
+	for i := range batchArenaLeaseStaticHeaders {
+		lease := &batchArenaLeaseStaticHeaders[i]
+		lease.staticPool = true
+		batchArenaLeaseStaticFree[i] = lease
+	}
+	batchArenaLeaseStaticFreeCount = len(batchArenaLeaseStaticFree)
+}
+
+func takeBatchArenaLeaseHeader() *batchArenaLease {
+	batchArenaLeaseStaticOnce.Do(initBatchArenaStaticLeaseHeaders)
+
+	batchArenaLeaseStaticMu.Lock()
+	if batchArenaLeaseStaticFreeCount > 0 {
+		batchArenaLeaseStaticFreeCount--
+		lease := batchArenaLeaseStaticFree[batchArenaLeaseStaticFreeCount]
+		batchArenaLeaseStaticFree[batchArenaLeaseStaticFreeCount] = nil
+		batchArenaLeaseStaticMu.Unlock()
+		return lease
+	}
+	batchArenaLeaseStaticMu.Unlock()
+
+	lease, _ := batchArenaLeasePool.Get().(*batchArenaLease)
+	if lease != nil {
+		return lease
+	}
+	return &batchArenaLease{}
+}
+
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
 	return getBatchArenaLeaseWithPolicy(refs, chunks, false)
 }
 
 func getBatchArenaLeaseWithPolicy(refs int, chunks [][]byte, noPool bool) *batchArenaLease {
-	lease, _ := batchArenaLeasePool.Get().(*batchArenaLease)
-	if lease == nil {
-		lease = &batchArenaLease{}
-	}
+	return getBatchArenaLeaseWithPolicyAndBytes(refs, chunks, noPool, batchArenaChunksCapBytes(chunks))
+}
+
+func getBatchArenaLeaseWithPolicyAndBytes(refs int, chunks [][]byte, noPool bool, bytes int64) *batchArenaLease {
+	lease := takeBatchArenaLeaseHeader()
 	lease.refs = refs
 	lease.chunks = chunks
 	lease.noPool = noPool
-	var bytes int64
-	for i := range chunks {
-		if chunks[i] != nil {
-			bytes += int64(cap(chunks[i]))
-		}
-	}
 	lease.bytes = bytes
 	return lease
 }
@@ -10344,6 +10497,16 @@ func putBatchArenaLease(lease *batchArenaLease) {
 	lease.chunks = nil
 	lease.bytes = 0
 	lease.noPool = false
+	if lease.staticPool {
+		batchArenaLeaseStaticOnce.Do(initBatchArenaStaticLeaseHeaders)
+		batchArenaLeaseStaticMu.Lock()
+		if batchArenaLeaseStaticFreeCount < len(batchArenaLeaseStaticFree) {
+			batchArenaLeaseStaticFree[batchArenaLeaseStaticFreeCount] = lease
+			batchArenaLeaseStaticFreeCount++
+		}
+		batchArenaLeaseStaticMu.Unlock()
+		return
+	}
 	batchArenaLeasePool.Put(lease)
 }
 
@@ -10362,14 +10525,17 @@ func (db *DB) retainBatchArenaChunksForMemtablesWithPolicy(chunks [][]byte, mems
 	if db == nil || len(mems) == 0 {
 		if !noPool {
 			putBatchArenas(chunks)
+			if db != nil {
+				db.putBatchArenaChunkListLease(chunks)
+			}
 		}
 		return
 	}
-	lease := getBatchArenaLeaseWithPolicy(len(mems), chunks, noPool)
-	if lease.bytes > 0 {
-		cur := db.batchArenaLeaseBytes.Add(lease.bytes)
+	bytes := batchArenaChunksCapBytes(chunks)
+	if bytes > 0 {
+		cur := db.batchArenaLeaseBytes.Add(bytes)
 		updateInt64Max(&db.batchArenaLeaseBytesMax, cur)
-		globalLeased := batchArenaLeasedBytesGlobal.Add(lease.bytes)
+		globalLeased := batchArenaLeasedBytesGlobal.Add(bytes)
 		noteBatchArenaLeasedBytesGlobalMax(globalLeased)
 		noteBatchArenaRetainedBytesMax()
 	}
@@ -10377,6 +10543,33 @@ func (db *DB) retainBatchArenaChunksForMemtablesWithPolicy(chunks [][]byte, mems
 	if db.batchArenaLeasesByMem == nil {
 		db.batchArenaLeasesByMem = make(map[memtable.Table][]*batchArenaLease, len(mems))
 	}
+	if len(mems) == 1 {
+		mt := mems[0]
+		leases := db.batchArenaLeasesByMem[mt]
+		if n := len(leases); n > 0 {
+			lease := leases[n-1]
+			if lease != nil && lease.refs == 1 && lease.noPool == noPool {
+				lease.chunks = append(lease.chunks, chunks...)
+				if bytes > 0 {
+					if lease.bytes > math.MaxInt64-bytes {
+						lease.bytes = math.MaxInt64
+					} else {
+						lease.bytes += bytes
+					}
+				}
+				db.batchArenaLeaseMu.Unlock()
+				if !noPool {
+					db.putBatchArenaChunkListLease(chunks)
+				}
+				return
+			}
+		}
+		lease := getBatchArenaLeaseWithPolicyAndBytes(1, chunks, noPool, bytes)
+		db.batchArenaLeasesByMem[mt] = append(leases, lease)
+		db.batchArenaLeaseMu.Unlock()
+		return
+	}
+	lease := getBatchArenaLeaseWithPolicyAndBytes(len(mems), chunks, noPool, bytes)
 	for _, mt := range mems {
 		db.batchArenaLeasesByMem[mt] = append(db.batchArenaLeasesByMem[mt], lease)
 	}
@@ -10387,7 +10580,7 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 	if db == nil || mt == nil {
 		return
 	}
-	var release [][]byte
+	var releaseLists [][][]byte
 	db.batchArenaLeaseMu.Lock()
 	leases := db.batchArenaLeasesByMem[mt]
 	if len(leases) > 0 {
@@ -10407,7 +10600,7 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 					lease.bytes = 0
 				}
 				if !noPool {
-					release = append(release, lease.chunks...)
+					releaseLists = append(releaseLists, lease.chunks)
 				}
 				lease.chunks = nil
 				putBatchArenaLease(lease)
@@ -10415,8 +10608,9 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 		}
 	}
 	db.batchArenaLeaseMu.Unlock()
-	if len(release) > 0 {
-		putBatchArenas(release)
+	for _, chunks := range releaseLists {
+		putBatchArenas(chunks)
+		db.putBatchArenaChunkListLease(chunks)
 	}
 }
 
@@ -12123,6 +12317,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[i].walSeq = maxWALSeq[i]
 		lanes[i].vlogSeq = maxVlogSeq[i]
 		lanes[i].vlogGenerationClass = vlogGenerationClassHot
+		lanes[i].walZeroInlineKeyProvider.keyAt = lanes[i].walZeroInlineKeyProvider.keyAtEntry
 		lanes[i].vlogCompressionSelector = newVlogCompressionSelectorWithSeed(
 			valueLogAutoPolicy,
 			uint64(valueLogIncompressibleHold),
@@ -15933,11 +16128,29 @@ type zeroInlineBatchCommitWriter interface {
 	AppendZeroInlineBatchFunc(count int, seq uint64, valueLen int, keyAt func(int) []byte) error
 }
 
+type zeroInlineBatchKeyProvider struct {
+	entries []batch.Entry
+	keyAt   func(int) []byte
+}
+
+func (p *zeroInlineBatchKeyProvider) keyAtEntry(i int) []byte {
+	return p.entries[i].Key
+}
+
+func (p *zeroInlineBatchKeyProvider) keyAtEntries(entries []batch.Entry) func(int) []byte {
+	if p.keyAt == nil {
+		p.keyAt = p.keyAtEntry
+	}
+	p.entries = entries
+	return p.keyAt
+}
+
 func (db *DB) appendWALZeroInlineEntries(l *lane, entries []batch.Entry, seq uint64, valueLen int, durability journalDurability) (bool, error) {
 	if db.disableJournal {
 		return true, nil
 	}
-	if len(entries) == 0 {
+	entryCount := len(entries)
+	if entryCount == 0 {
 		return true, nil
 	}
 	if l == nil {
@@ -15973,9 +16186,9 @@ func (db *DB) appendWALZeroInlineEntries(l *lane, entries []batch.Entry, seq uin
 		l.walMu.Unlock()
 		return false, nil
 	}
-	err = zw.AppendZeroInlineBatchFunc(len(entries), seq, valueLen, func(i int) []byte {
-		return entries[i].Key
-	})
+	keyAt := l.walZeroInlineKeyProvider.keyAtEntries(entries)
+	err = zw.AppendZeroInlineBatchFunc(entryCount, seq, valueLen, keyAt)
+	l.walZeroInlineKeyProvider.entries = nil
 	if err == nil {
 		switch durability {
 		case journalDurabilitySync:
@@ -32226,6 +32439,8 @@ type Batch struct {
 	hasDeleteRanges              bool
 	entryRevision                page.EntryRevision
 	commandWALAppend             func() error
+	valueCopyShard               *memShard
+	appendOnlyDirectValueCopier  func([]byte) []byte
 
 	commandWALCompactReplay     bool
 	commandWALCompactRanges     []batch.DeleteRange
@@ -32235,23 +32450,31 @@ type Batch struct {
 
 func (db *DB) NewBatch() *Batch {
 	capHint := batchDefaultEntriesCap
+	shardGroupCap := 0
 	if db != nil {
 		capHint = db.batchEntriesCapHint(capHint)
+		shardGroupCap = len(db.mutableShards)
 	}
 	return &Batch{
 		db:             db,
 		entries:        db.getBatchEntries(capHint),
 		copyArenaCap:   db.batchCopyArenaInitCap(0),
+		shardEntries:   db.getBatchShardEntryGroups(shardGroupCap),
 		streamEligible: true,
 	}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
 	reserveHint := backenddb.NormalizePublicBatchReserveHint(size)
+	shardGroupCap := 0
+	if db != nil {
+		shardGroupCap = len(db.mutableShards)
+	}
 	return &Batch{
 		db:             db,
 		entries:        db.getBatchEntries(reserveHint),
 		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
+		shardEntries:   db.getBatchShardEntryGroups(shardGroupCap),
 		streamEligible: true,
 	}
 }
@@ -32595,11 +32818,341 @@ func (db *DB) noteBatchArenaTailCompact(copiedBytes, classCap int) {
 	}
 }
 
+func batchEntrySliceBytes(entries []batch.Entry) int64 {
+	return int64(cap(entries)) * entrySliceEntrySizeBytes
+}
+
+func batchIntSliceBytes(idxs []int) int64 {
+	return int64(cap(idxs)) * int64(unsafe.Sizeof(int(0)))
+}
+
+func batchInt64SliceBytes(idxs []int64) int64 {
+	return int64(cap(idxs)) * int64(unsafe.Sizeof(int64(0)))
+}
+
+func batchByteChunksSliceBytes(chunks [][]byte) int64 {
+	return int64(cap(chunks)) * int64(unsafe.Sizeof([]byte(nil)))
+}
+
+func batchEntryGroupsSliceBytes(groups [][]batch.Entry) int64 {
+	return int64(cap(groups)) * int64(unsafe.Sizeof([]batch.Entry(nil)))
+}
+
+func (p *batchEntrySliceLeasePool) take(minCap int) []batch.Entry {
+	for i := len(p.slices) - 1; i >= 0; i-- {
+		entries := p.slices[i]
+		if cap(entries) < minCap {
+			continue
+		}
+		last := len(p.slices) - 1
+		p.slices[i] = p.slices[last]
+		p.slices[last] = nil
+		p.slices = p.slices[:last]
+		p.bytes -= batchEntrySliceBytes(entries)
+		if p.bytes < 0 {
+			p.bytes = 0
+		}
+		return entries[:0]
+	}
+	return nil
+}
+
+func (p *batchEntrySliceLeasePool) put(entries []batch.Entry, maxCount int, maxBytes int64) bool {
+	size := batchEntrySliceBytes(entries)
+	if size <= 0 || len(p.slices) >= maxCount || p.bytes+size > maxBytes {
+		return false
+	}
+	p.slices = append(p.slices, entries[:0])
+	p.bytes += size
+	return true
+}
+
+func (p *batchIntSliceLeasePool) take(minCap int) []int {
+	for i := len(p.slices) - 1; i >= 0; i-- {
+		idxs := p.slices[i]
+		if cap(idxs) < minCap {
+			continue
+		}
+		last := len(p.slices) - 1
+		p.slices[i] = p.slices[last]
+		p.slices[last] = nil
+		p.slices = p.slices[:last]
+		p.bytes -= batchIntSliceBytes(idxs)
+		if p.bytes < 0 {
+			p.bytes = 0
+		}
+		return idxs[:0]
+	}
+	return nil
+}
+
+func (p *batchIntSliceLeasePool) put(idxs []int, maxCount int, maxBytes int64) bool {
+	size := batchIntSliceBytes(idxs)
+	if size <= 0 || len(p.slices) >= maxCount || p.bytes+size > maxBytes {
+		return false
+	}
+	p.slices = append(p.slices, idxs[:0])
+	p.bytes += size
+	return true
+}
+
+func (p *batchInt64SliceLeasePool) take(minCap int) []int64 {
+	for i := len(p.slices) - 1; i >= 0; i-- {
+		idxs := p.slices[i]
+		if cap(idxs) < minCap {
+			continue
+		}
+		last := len(p.slices) - 1
+		p.slices[i] = p.slices[last]
+		p.slices[last] = nil
+		p.slices = p.slices[:last]
+		p.bytes -= batchInt64SliceBytes(idxs)
+		if p.bytes < 0 {
+			p.bytes = 0
+		}
+		return idxs[:0]
+	}
+	return nil
+}
+
+func (p *batchInt64SliceLeasePool) put(idxs []int64, maxCount int, maxBytes int64) bool {
+	size := batchInt64SliceBytes(idxs)
+	if size <= 0 || len(p.slices) >= maxCount || p.bytes+size > maxBytes {
+		return false
+	}
+	p.slices = append(p.slices, idxs[:0])
+	p.bytes += size
+	return true
+}
+
+func (p *batchByteChunksLeasePool) take(minCap int) [][]byte {
+	for i := len(p.slices) - 1; i >= 0; i-- {
+		chunks := p.slices[i]
+		if cap(chunks) < minCap {
+			continue
+		}
+		last := len(p.slices) - 1
+		p.slices[i] = p.slices[last]
+		p.slices[last] = nil
+		p.slices = p.slices[:last]
+		p.bytes -= batchByteChunksSliceBytes(chunks)
+		if p.bytes < 0 {
+			p.bytes = 0
+		}
+		return chunks[:0]
+	}
+	return nil
+}
+
+func (p *batchByteChunksLeasePool) put(chunks [][]byte, maxCount int, maxBytes int64) bool {
+	size := batchByteChunksSliceBytes(chunks)
+	if size <= 0 || cap(chunks) > batchArenaChunkListMaxRetain || len(p.slices) >= maxCount || p.bytes+size > maxBytes {
+		return false
+	}
+	clear(chunks[:cap(chunks)])
+	p.slices = append(p.slices, chunks[:0])
+	p.bytes += size
+	return true
+}
+
+func (p *batchEntryGroupsLeasePool) take(minCap int) [][]batch.Entry {
+	for i := len(p.slices) - 1; i >= 0; i-- {
+		groups := p.slices[i]
+		if cap(groups) < minCap {
+			continue
+		}
+		last := len(p.slices) - 1
+		p.slices[i] = p.slices[last]
+		p.slices[last] = nil
+		p.slices = p.slices[:last]
+		p.bytes -= batchEntryGroupsSliceBytes(groups)
+		if p.bytes < 0 {
+			p.bytes = 0
+		}
+		return groups[:0]
+	}
+	return nil
+}
+
+func (p *batchEntryGroupsLeasePool) put(groups [][]batch.Entry, maxCount int, maxBytes int64) bool {
+	size := batchEntryGroupsSliceBytes(groups)
+	if size <= 0 || cap(groups) > batchShardEntryGroupsMaxRetain || len(p.slices) >= maxCount || p.bytes+size > maxBytes {
+		return false
+	}
+	clear(groups[:cap(groups)])
+	p.slices = append(p.slices, groups[:0])
+	p.bytes += size
+	return true
+}
+
+func (db *DB) takeBatchEntriesLease(minCap int) []batch.Entry {
+	if db == nil {
+		return nil
+	}
+	db.batchAuxMu.Lock()
+	entries := db.batchEntriesLeases.take(minCap)
+	db.batchAuxMu.Unlock()
+	return entries
+}
+
+func (db *DB) putBatchEntriesLease(entries []batch.Entry) bool {
+	if db == nil {
+		return false
+	}
+	db.batchAuxMu.Lock()
+	ok := db.batchEntriesLeases.put(entries, batchAuxEntryLeaseMaxCount, batchAuxEntryLeaseMaxBytes)
+	db.batchAuxMu.Unlock()
+	return ok
+}
+
+func (db *DB) takeBatchShardEntriesLease(minCap int) []batch.Entry {
+	if db == nil {
+		return nil
+	}
+	db.batchAuxMu.Lock()
+	entries := db.batchShardEntriesLeases.take(minCap)
+	db.batchAuxMu.Unlock()
+	return entries
+}
+
+func (db *DB) putBatchShardEntriesLease(entries []batch.Entry) bool {
+	if db == nil {
+		return false
+	}
+	db.batchAuxMu.Lock()
+	ok := db.batchShardEntriesLeases.put(entries, batchAuxEntryLeaseMaxCount, batchAuxEntryLeaseMaxBytes)
+	db.batchAuxMu.Unlock()
+	return ok
+}
+
+func (db *DB) takeBatchIntLease(minCap int) []int {
+	if db == nil {
+		return nil
+	}
+	db.batchAuxMu.Lock()
+	idxs := db.batchIntLeases.take(minCap)
+	db.batchAuxMu.Unlock()
+	return idxs
+}
+
+func (db *DB) putBatchIntLease(idxs []int) bool {
+	if db == nil {
+		return false
+	}
+	db.batchAuxMu.Lock()
+	ok := db.batchIntLeases.put(idxs, batchAuxIntLeaseMaxCount, batchAuxIntLeaseMaxBytes)
+	db.batchAuxMu.Unlock()
+	return ok
+}
+
+func (db *DB) takeBatchInt64Lease(minCap int) []int64 {
+	if db == nil {
+		return nil
+	}
+	db.batchAuxMu.Lock()
+	idxs := db.batchInt64Leases.take(minCap)
+	db.batchAuxMu.Unlock()
+	return idxs
+}
+
+func (db *DB) putBatchInt64Lease(idxs []int64) bool {
+	if db == nil {
+		return false
+	}
+	db.batchAuxMu.Lock()
+	ok := db.batchInt64Leases.put(idxs, batchAuxIntLeaseMaxCount, batchAuxIntLeaseMaxBytes)
+	db.batchAuxMu.Unlock()
+	return ok
+}
+
+func (db *DB) takeBatchArenaChunkListLease(minCap int) [][]byte {
+	if db == nil {
+		return nil
+	}
+	db.batchAuxMu.Lock()
+	chunks := db.batchArenaChunkLeases.take(minCap)
+	db.batchAuxMu.Unlock()
+	return chunks
+}
+
+func (db *DB) putBatchArenaChunkListLease(chunks [][]byte) bool {
+	if db == nil {
+		return false
+	}
+	db.batchAuxMu.Lock()
+	ok := db.batchArenaChunkLeases.put(chunks, batchAuxChunkLeaseMaxCount, batchAuxChunkLeaseMaxBytes)
+	db.batchAuxMu.Unlock()
+	return ok
+}
+
+func (db *DB) ensureBatchArenaChunkListAppendCap(chunks [][]byte) [][]byte {
+	if db == nil || len(chunks) < cap(chunks) {
+		return chunks
+	}
+	minCap := len(chunks) + 1
+	targetCap := cap(chunks) * 2
+	if targetCap < batchArenaChunkListInitialCap {
+		targetCap = batchArenaChunkListInitialCap
+	}
+	if targetCap < minCap {
+		targetCap = minCap
+	}
+	grown := db.takeBatchArenaChunkListLease(targetCap)
+	if cap(grown) < targetCap {
+		grown = make([][]byte, 0, targetCap)
+	}
+	grown = append(grown, chunks...)
+	if cap(chunks) > 0 {
+		db.putBatchArenaChunkListLease(chunks)
+	}
+	return grown
+}
+
+func (db *DB) takeBatchShardEntryGroupsLease(minCap int) [][]batch.Entry {
+	if db == nil {
+		return nil
+	}
+	db.batchAuxMu.Lock()
+	groups := db.batchShardEntryGroupsLeases.take(minCap)
+	db.batchAuxMu.Unlock()
+	return groups
+}
+
+func (db *DB) putBatchShardEntryGroupsLease(groups [][]batch.Entry) bool {
+	if db == nil {
+		return false
+	}
+	db.batchAuxMu.Lock()
+	ok := db.batchShardEntryGroupsLeases.put(groups, batchAuxEntryGroupLeaseMaxCount, batchAuxEntryGroupLeaseMaxBytes)
+	db.batchAuxMu.Unlock()
+	return ok
+}
+
+func (db *DB) getBatchShardEntryGroups(minCap int) [][]batch.Entry {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if groups := db.takeBatchShardEntryGroupsLease(minCap); groups != nil {
+		return groups
+	}
+	return make([][]batch.Entry, minCap)
+}
+
+func (db *DB) putBatchShardEntryGroups(groups [][]batch.Entry) {
+	if db == nil || cap(groups) == 0 || cap(groups) > batchShardEntryGroupsMaxRetain {
+		return
+	}
+	db.putBatchShardEntryGroupsLease(groups)
+}
+
 func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 	if minCap < 0 {
 		minCap = 0
 	}
 	if db != nil {
+		if entries := db.takeBatchEntriesLease(minCap); entries != nil {
+			return entries
+		}
 		if pooled := db.batchEntriesPool.Get(); pooled != nil {
 			switch v := pooled.(type) {
 			case *batchEntrySliceRef:
@@ -32609,7 +33162,7 @@ func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 					return entries[:0]
 				}
 				if c := cap(entries); c > 0 && c <= batchEntriesPoolMaxRetain {
-					db.batchEntriesPool.Put(getBatchEntrySliceRef(entries[:0]))
+					db.putBatchEntries(entries)
 				}
 			case []batch.Entry:
 				// Backward-compatible fallback for any legacy pooled shape.
@@ -32617,7 +33170,7 @@ func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 					return v[:0]
 				}
 				if c := cap(v); c > 0 && c <= batchEntriesPoolMaxRetain {
-					db.batchEntriesPool.Put(getBatchEntrySliceRef(v[:0]))
+					db.putBatchEntries(v)
 				}
 			}
 		}
@@ -32638,7 +33191,7 @@ func (db *DB) putBatchEntries(entries []batch.Entry) {
 	}
 	full := entries[:cap(entries)]
 	clear(full)
-	db.batchEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
+	db.putBatchEntriesLease(full[:0])
 }
 
 func (db *DB) getBatchShardEntries(minCap int) []batch.Entry {
@@ -32646,6 +33199,9 @@ func (db *DB) getBatchShardEntries(minCap int) []batch.Entry {
 		minCap = 0
 	}
 	if db != nil {
+		if entries := db.takeBatchShardEntriesLease(minCap); entries != nil {
+			return entries
+		}
 		if pooled := db.batchShardEntriesPool.Get(); pooled != nil {
 			switch v := pooled.(type) {
 			case *batchEntrySliceRef:
@@ -32654,10 +33210,16 @@ func (db *DB) getBatchShardEntries(minCap int) []batch.Entry {
 				if cap(entries) >= minCap {
 					return entries[:0]
 				}
+				if c := cap(entries); c > 0 && c <= batchEntriesPoolMaxRetain {
+					db.putBatchShardEntries(entries)
+				}
 			case []batch.Entry:
 				// Backward-compatible fallback for any legacy pooled shape.
 				if cap(v) >= minCap {
 					return v[:0]
+				}
+				if c := cap(v); c > 0 && c <= batchEntriesPoolMaxRetain {
+					db.putBatchShardEntries(v)
 				}
 			}
 		}
@@ -32678,7 +33240,7 @@ func (db *DB) putBatchShardEntries(entries []batch.Entry) {
 	}
 	full := entries[:cap(entries)]
 	clear(full)
-	db.batchShardEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
+	db.putBatchShardEntriesLease(full[:0])
 }
 
 func (db *DB) getBatchIntSlice(minCap int) []int {
@@ -32686,6 +33248,9 @@ func (db *DB) getBatchIntSlice(minCap int) []int {
 		minCap = 0
 	}
 	if db != nil {
+		if idxs := db.takeBatchIntLease(minCap); idxs != nil {
+			return idxs
+		}
 		if pooled := db.batchIntPool.Get(); pooled != nil {
 			switch v := pooled.(type) {
 			case *batchIntSliceRef:
@@ -32695,7 +33260,7 @@ func (db *DB) getBatchIntSlice(minCap int) []int {
 					return idxs[:0]
 				}
 				if c := cap(idxs); c > 0 && c <= batchIntSlicePoolMaxRetain {
-					db.batchIntPool.Put(getBatchIntSliceRef(idxs[:0]))
+					db.putBatchIntSlice(idxs)
 				}
 			case []int:
 				// Backward-compatible fallback for any legacy pooled shape.
@@ -32703,7 +33268,7 @@ func (db *DB) getBatchIntSlice(minCap int) []int {
 					return v[:0]
 				}
 				if c := cap(v); c > 0 && c <= batchIntSlicePoolMaxRetain {
-					db.batchIntPool.Put(getBatchIntSliceRef(v[:0]))
+					db.putBatchIntSlice(v)
 				}
 			}
 		}
@@ -32722,7 +33287,7 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 		batchIntPoolDropUnderPressureTotal.Add(1)
 		return
 	}
-	db.batchIntPool.Put(getBatchIntSliceRef(idxs[:0]))
+	db.putBatchIntLease(idxs[:0])
 }
 
 func (db *DB) getBatchInt64Slice(minCap int) []int64 {
@@ -32730,6 +33295,9 @@ func (db *DB) getBatchInt64Slice(minCap int) []int64 {
 		minCap = 0
 	}
 	if db != nil {
+		if idxs := db.takeBatchInt64Lease(minCap); idxs != nil {
+			return idxs
+		}
 		if pooled := db.batchInt64Pool.Get(); pooled != nil {
 			switch v := pooled.(type) {
 			case *batchInt64SliceRef:
@@ -32739,7 +33307,7 @@ func (db *DB) getBatchInt64Slice(minCap int) []int64 {
 					return idxs[:0]
 				}
 				if c := cap(idxs); c > 0 && c <= batchIntSlicePoolMaxRetain {
-					db.batchInt64Pool.Put(getBatchInt64SliceRef(idxs[:0]))
+					db.putBatchInt64Slice(idxs)
 				}
 			case []int64:
 				// Backward-compatible fallback for any legacy pooled shape.
@@ -32747,7 +33315,7 @@ func (db *DB) getBatchInt64Slice(minCap int) []int64 {
 					return v[:0]
 				}
 				if c := cap(v); c > 0 && c <= batchIntSlicePoolMaxRetain {
-					db.batchInt64Pool.Put(getBatchInt64SliceRef(v[:0]))
+					db.putBatchInt64Slice(v)
 				}
 			}
 		}
@@ -32766,7 +33334,7 @@ func (db *DB) putBatchInt64Slice(idxs []int64) {
 		batchInt64PoolDropUnderPressureTotal.Add(1)
 		return
 	}
-	db.batchInt64Pool.Put(getBatchInt64SliceRef(idxs[:0]))
+	db.putBatchInt64Lease(idxs[:0])
 }
 
 func appendUniqueMemtable(dst []memtable.Table, mt memtable.Table) []memtable.Table {
@@ -32779,6 +33347,26 @@ func appendUniqueMemtable(dst []memtable.Table, mt memtable.Table) []memtable.Ta
 		}
 	}
 	return append(dst, mt)
+}
+
+func (b *Batch) appendOnlyDirectValueCopierForShard(shard *memShard) func([]byte) []byte {
+	if b == nil || shard == nil {
+		return nil
+	}
+	b.valueCopyShard = shard
+	if b.appendOnlyDirectValueCopier == nil {
+		b.appendOnlyDirectValueCopier = b.copyValueToAppendOnlyDirectArena
+	}
+	return b.appendOnlyDirectValueCopier
+}
+
+func (b *Batch) copyValueToAppendOnlyDirectArena(value []byte) []byte {
+	if b == nil || b.valueCopyShard == nil || len(value) == 0 {
+		return nil
+	}
+	owned := b.valueCopyShard.appendOnlyDirectValueArena.alloc(len(value))
+	copy(owned, value)
+	return owned
 }
 
 // Reset clears the batch for reuse without closing it.
@@ -32837,6 +33425,7 @@ func (b *Batch) Reset() {
 	b.entryRevision = page.LegacyEntryRevision
 	b.maxEntries = 0
 	b.commandWALAppend = nil
+	b.valueCopyShard = nil
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0
@@ -32894,6 +33483,9 @@ func (b *Batch) recycleCopyArenaChunks() {
 		return
 	}
 	putBatchArenas(chunks)
+	if b.db != nil {
+		b.db.putBatchArenaChunkListLease(chunks)
+	}
 }
 
 func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
@@ -32922,6 +33514,23 @@ func (b *Batch) recyclePtrCopyArenaChunks() {
 		return
 	}
 	putBatchArenas(chunks)
+	if b.db != nil {
+		b.db.putBatchArenaChunkListLease(chunks)
+	}
+}
+
+func (b *Batch) releaseShardEntryGroups(groups [][]batch.Entry) {
+	if b == nil || b.db == nil || cap(groups) == 0 {
+		return
+	}
+	full := groups[:cap(groups)]
+	for i := range full {
+		if full[i] != nil {
+			b.db.putBatchShardEntries(full[i])
+			full[i] = nil
+		}
+	}
+	b.db.putBatchShardEntryGroups(full[:0])
 }
 
 func (b *Batch) updateBatchCopyHint() {
@@ -33008,6 +33617,9 @@ func (b *Batch) arenaCopyInto(kind batchArenaKind, arena *[]byte, chunks *[][]by
 			b.db.noteBatchArenaChunkAlloc(kind, chunkCap, cap(chunk))
 		}
 		*arena = chunk[:0]
+		if b != nil && b.db != nil {
+			*chunks = b.db.ensureBatchArenaChunkListAppendCap(*chunks)
+		}
 		*chunks = append(*chunks, *arena)
 	}
 	start := len(*arena)
@@ -33762,6 +34374,17 @@ const (
 	batchArenaTailCompactPinnedMaxFillDenominator = 4
 	batchEntriesPoolMaxRetain                     = 16 << 10
 	batchIntSlicePoolMaxRetain                    = 16 << 10
+	batchAuxEntryLeaseMaxCount                    = 256
+	batchAuxEntryLeaseMaxBytes                    = 8 << 20
+	batchAuxIntLeaseMaxCount                      = 256
+	batchAuxIntLeaseMaxBytes                      = 1 << 20
+	batchAuxChunkLeaseMaxCount                    = 256
+	batchAuxChunkLeaseMaxBytes                    = 1 << 20
+	batchAuxEntryGroupLeaseMaxCount               = 256
+	batchAuxEntryGroupLeaseMaxBytes               = 1 << 20
+	batchArenaChunkListInitialCap                 = 4
+	batchArenaChunkListMaxRetain                  = 256
+	batchShardEntryGroupsMaxRetain                = 1024
 	batchMemtableRetainStackCap                   = 64
 	// When deferred iterator views pin retired memtables, reduce retained
 	// batch-arena headroom to limit extra lease growth under that pressure.
@@ -34881,7 +35504,11 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	} else {
 		shardEntries := b.shardEntries
 		if cap(shardEntries) < shardCount {
-			shardEntries = make([][]batch.Entry, shardCount)
+			if cap(shardEntries) > 0 {
+				b.releaseShardEntryGroups(shardEntries)
+			}
+			shardEntries = b.db.getBatchShardEntryGroups(shardCount)
+			shardEntries = shardEntries[:shardCount]
 		} else {
 			shardEntries = shardEntries[:shardCount]
 			for i := range shardEntries {
@@ -34958,14 +35585,8 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 					}
 					if !appliedSortedRun && !allowBatchArenaBorrow {
 						if applier, ok := shard.mem.(memtable.CopySortedBatchValueCopier); ok {
-							applier.ApplyCopySortedBatchWithValueCopierTrusted(entries, func(value []byte) []byte {
-								if len(value) == 0 {
-									return nil
-								}
-								owned := shard.appendOnlyDirectValueArena.alloc(len(value))
-								copy(owned, value)
-								return owned
-							}, storeInlinePtrValues, nil)
+							applier.ApplyCopySortedBatchWithValueCopierTrusted(entries, b.appendOnlyDirectValueCopierForShard(shard), storeInlinePtrValues, nil)
+							b.valueCopyShard = nil
 							appliedSortedRun = true
 						}
 					}
@@ -35092,6 +35713,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
 		putBatchArenas(ptrChunks)
+		b.db.putBatchArenaChunkListLease(ptrChunks)
 	}
 	unlockWriteMu()
 
@@ -35616,14 +36238,8 @@ func (b *Batch) Close() error {
 			}
 		}
 	}
-	if b.db != nil && b.shardEntries != nil && cap(b.shardEntries) > 0 {
-		full := b.shardEntries[:cap(b.shardEntries)]
-		for i := range full {
-			if full[i] != nil {
-				b.db.putBatchShardEntries(full[i])
-				full[i] = nil
-			}
-		}
+	if b.db != nil && b.shardEntries != nil {
+		b.releaseShardEntryGroups(b.shardEntries)
 	}
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
@@ -35641,6 +36257,8 @@ func (b *Batch) Close() error {
 	b.ptrValueIdxs = nil
 	b.stableViewValueLeaseChunks = nil
 	b.conditionalTxnID = 0
+	b.valueCopyShard = nil
+	b.appendOnlyDirectValueCopier = nil
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0

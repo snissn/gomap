@@ -29,7 +29,8 @@ type lane struct {
 	walClosedSizes map[string]int64
 	// walCoalesceSeq is protected by walMu and groups adjacent unsynced
 	// inline point records into one recovery commit-fence sequence.
-	walCoalesceSeq uint64
+	walCoalesceSeq           uint64
+	walZeroInlineKeyProvider zeroInlineBatchKeyProvider
 
 	vlog                           valueWriter
 	vlogPath                       string

@@ -322,7 +322,6 @@ func TestDB_IteratorAllocsIndependentOfQueueLen(t *testing.T) {
 	if view == nil || len(view.queue) != 2 {
 		t.Fatalf("expected snapshot queue len 2; got %v", view)
 	}
-
 	runtime.GC()
 	allocsQueued := testing.AllocsPerRun(1000, func() {
 		it, err := db.Iterator(start, end)
@@ -462,19 +461,25 @@ func TestDB_BatchWriteBypassAllocsIndependentOfQueueLen(t *testing.T) {
 	val := []byte("vz")
 
 	b := db.NewBatchWithSize(1)
-
-	if err := b.Set(key, val); err != nil {
-		t.Fatalf("batch set: %v", err)
+	entry := batch.Entry{Type: batch.OpPut, Key: key, Value: val}
+	prepareBatch := func() {
+		if cap(b.entries) == 0 {
+			b.entries = make([]batch.Entry, 1)
+		} else {
+			b.entries = b.entries[:1]
+		}
+		b.entries[0] = entry
+		b.size = len(key) + len(val)
 	}
+
+	prepareBatch()
 	if err := b.writeBypass(false); err != nil {
 		t.Fatalf("writeBypass warmup: %v", err)
 	}
 
 	runtime.GC()
 	allocsEmpty := testing.AllocsPerRun(1000, func() {
-		if err := b.Set(key, val); err != nil {
-			panic(err)
-		}
+		prepareBatch()
 		if err := b.writeBypass(false); err != nil {
 			panic(err)
 		}
@@ -506,9 +511,7 @@ func TestDB_BatchWriteBypassAllocsIndependentOfQueueLen(t *testing.T) {
 
 	runtime.GC()
 	allocsQueued := testing.AllocsPerRun(1000, func() {
-		if err := b.Set(key, val); err != nil {
-			panic(err)
-		}
+		prepareBatch()
 		if err := b.writeBypass(false); err != nil {
 			panic(err)
 		}
