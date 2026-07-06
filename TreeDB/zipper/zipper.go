@@ -2938,13 +2938,29 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			childCfg.workerPool = nil
 			childCfg.maxParallelWorkers = 1
 		}
+		var childScratches []*mergeScratch
+		if scratch != nil {
+			childScratches = scratch.acquireSpanWorkerScratchSlots(len(children))
+			defer func() {
+				for i := range childScratches {
+					z.releaseApplyScratch(childScratches[i])
+					childScratches[i] = nil
+				}
+				scratch.releaseSpanWorkerScratchSlots(childScratches)
+			}()
+		}
 		runChild := func(i int) {
 			if len(children[i].ops) == 0 {
 				return
 			}
+			childScratch := scratch
+			if childScratches != nil {
+				childScratch = z.acquireApplyScratch()
+				childScratches[i] = childScratch
+			}
 			var childMetrics adaptive.Metrics
 			childRet := children[i].retired[:0]
-			ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, scratch, false, childCfg)
+			ncID, cs, err := z.writeRecursive(children[i].child, children[i].ops, nil, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet, childScratch, false, childCfg)
 			if err != nil {
 				errOnce.Do(func() { firstErr = err })
 				return
