@@ -1743,6 +1743,7 @@ func TestFramePreparer_TrimScratchForReuseKeepsPolicyAndBoundsBuffers(t *testing
 func TestFramePreparer_DictEncoderRetainedAcrossTrimAndSameOptions(t *testing.T) {
 	const dictID = uint64(3553)
 	dict, records := buildLargeDictCompressionFixture(t, dictID)
+	dict2, records2 := buildLargeDictCompressionFixture(t, dictID+1)
 
 	prep := NewFramePreparer()
 	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
@@ -1777,6 +1778,40 @@ func TestFramePreparer_DictEncoderRetainedAcrossTrimAndSameOptions(t *testing.T)
 	}
 	if prep.dictEncoder != retained || prep.dictEncoderKey != retainedKey {
 		t.Fatalf("second frame did not reuse retained dict encoder")
+	}
+
+	prep.SetDictFrameEncoderOptions(zstd.SpeedDefault, false)
+	if prep.dictEncoder != nil || prep.dictEncoderCodecs != nil || prep.dictEncoderKey != (dictCodecKey{}) {
+		t.Fatalf("option change retained dict encoder state: encoder=%p codecs=%p key=%+v", prep.dictEncoder, prep.dictEncoderCodecs, prep.dictEncoderKey)
+	}
+	body, stats, err = prep.PrepareFrameInto(body[:0], dictID, dict, records)
+	if err != nil {
+		t.Fatalf("third PrepareFrameInto after option change: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		t.Fatalf("expected third kept dict-compressed frame: attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+	if prep.dictEncoder == nil || prep.dictEncoderCodecs == nil {
+		t.Fatalf("expected retained dict encoder after option change")
+	}
+	reacquired := prep.dictEncoder
+	reacquiredKey := prep.dictEncoderKey
+	if reacquiredKey == retainedKey {
+		t.Fatalf("option change reused old encoder key: encoder=%p key=%+v", reacquired, reacquiredKey)
+	}
+
+	body, stats, err = prep.PrepareFrameInto(body[:0], dictID+1, dict2, records2)
+	if err != nil {
+		t.Fatalf("fourth PrepareFrameInto after dict change: %v", err)
+	}
+	if !stats.Attempted || !stats.Kept {
+		t.Fatalf("expected fourth kept dict-compressed frame: attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
+	}
+	if prep.dictEncoder == nil || prep.dictEncoderCodecs == nil {
+		t.Fatalf("expected retained dict encoder after dict change")
+	}
+	if prep.dictEncoderKey == reacquiredKey {
+		t.Fatalf("dict change reused old encoder key: encoder=%p key=%+v", prep.dictEncoder, prep.dictEncoderKey)
 	}
 
 	prep.ResetForReuse()

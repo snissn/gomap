@@ -64,6 +64,8 @@ func BenchmarkFramePreparerDictIronbirdLikeHistoryReuse(b *testing.B) {
 		if !stats.Attempted || !stats.Kept {
 			b.Fatalf("frame stats attempted=%v kept=%v raw=%d stored=%d", stats.Attempted, stats.Kept, stats.RawPayloadBytes, stats.StoredPayloadBytes)
 		}
+		prep.TrimScratchForReuse()
+		prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
 	}
 	b.StopTimer()
 	runtime.KeepAlive(prep)
