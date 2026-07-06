@@ -525,7 +525,7 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 	if length < 0 {
 		length = 0
 	}
-	class, _, ok := appendOnlyEntryPoolClassForLength(length)
+	class, classCap, ok := appendOnlyEntryPoolClassForLength(length)
 	if !ok {
 		return make([]appendOnlyEntry, length)
 	}
@@ -543,6 +543,40 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 			appendOnlyEntryPoolMu.Unlock()
 			return entries[:length]
 		}
+	}
+	appendOnlyEntryPoolMu.Unlock()
+	return make([]appendOnlyEntry, length, classCap)
+}
+
+// getAppendOnlyEntriesWithMaxCapacity is for trim/reset paths where maxCapacity
+// is a hard retained-backing ceiling rather than pool class headroom.
+func getAppendOnlyEntriesWithMaxCapacity(length, maxCapacity int) []appendOnlyEntry {
+	if length < 0 {
+		length = 0
+	}
+	if maxCapacity < length {
+		maxCapacity = length
+	}
+	class, _, ok := appendOnlyEntryPoolClassForLength(length)
+	if !ok {
+		return make([]appendOnlyEntry, length)
+	}
+	appendOnlyEntryPoolMu.Lock()
+	bin := appendOnlyEntryPoolBins[class]
+	for i := len(bin) - 1; i >= 0; i-- {
+		entries := bin[i]
+		if cap(entries) < length || cap(entries) > maxCapacity || cap(entries) > appendOnlyMaxReuseEntries(length) {
+			continue
+		}
+		last := len(bin) - 1
+		bin[i] = bin[last]
+		bin[last] = nil
+		bin = bin[:last]
+		appendOnlyEntryPoolBins[class] = bin
+		appendOnlyEntryPoolGetTotal.Add(1)
+		subtractAppendOnlyEntryPoolRetainedBytes(appendOnlyEntryPoolBytes(cap(entries)))
+		appendOnlyEntryPoolMu.Unlock()
+		return entries[:length]
 	}
 	appendOnlyEntryPoolMu.Unlock()
 	return make([]appendOnlyEntry, length)
@@ -2085,7 +2119,7 @@ func (m *AppendOnly) TrimEntryCapacity(maxEntries int) (before, after int64) {
 	}
 
 	prev := m.entries
-	next := getAppendOnlyEntries(maxEntries)
+	next := getAppendOnlyEntriesWithMaxCapacity(maxEntries, maxEntries)
 	copy(next, m.entries[:m.count])
 	m.entries = next
 	if m.baseEntriesLen > maxEntries {
@@ -2330,7 +2364,7 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 
 	if !retainObserved {
 		if cap(m.entries) != retainedEntries {
-			m.replaceEntriesSliceWithPolicy(retainedEntries, true)
+			m.replaceEntriesSliceWithMaxCapacity(retainedEntries, retainedEntries, true)
 			return
 		}
 		if len(m.entries) != retainedEntries {
@@ -2371,6 +2405,17 @@ func (m *AppendOnly) replaceEntriesSliceWithPolicy(length int, poolPrev bool) {
 	}
 	prev := m.entries
 	m.entries = getAppendOnlyEntries(length)
+	if poolPrev {
+		putAppendOnlyEntries(prev)
+	}
+}
+
+func (m *AppendOnly) replaceEntriesSliceWithMaxCapacity(length, maxCapacity int, poolPrev bool) {
+	if length < 0 {
+		length = 0
+	}
+	prev := m.entries
+	m.entries = getAppendOnlyEntriesWithMaxCapacity(length, maxCapacity)
 	if poolPrev {
 		putAppendOnlyEntries(prev)
 	}

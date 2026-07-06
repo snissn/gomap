@@ -154,6 +154,67 @@ func TestAppendOnlyEntryPoolStatsTrackRetainedBacking(t *testing.T) {
 	}
 }
 
+func TestGetAppendOnlyEntriesAllocatesReusableClassBacking(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	length := appendOnlyMinInitialEntries + 1
+	_, classCap, ok := appendOnlyEntryPoolClassForLength(length)
+	if !ok {
+		t.Fatalf("test length %d should map to a retained pool class", length)
+	}
+	if classCap <= length {
+		t.Fatalf("test setup needs a rounded class: length=%d classCap=%d", length, classCap)
+	}
+
+	entries := getAppendOnlyEntries(length)
+	if len(entries) != length {
+		t.Fatalf("len(entries)=%d want %d", len(entries), length)
+	}
+	if cap(entries) != classCap {
+		t.Fatalf("cap(entries)=%d want class cap %d", cap(entries), classCap)
+	}
+
+	putAppendOnlyEntries(entries[:0])
+	reused := getAppendOnlyEntries(classCap)
+	if len(reused) != classCap {
+		t.Fatalf("len(reused)=%d want %d", len(reused), classCap)
+	}
+	if cap(reused) != classCap {
+		t.Fatalf("cap(reused)=%d want %d", cap(reused), classCap)
+	}
+	putAppendOnlyEntries(reused[:0])
+}
+
+func TestGetAppendOnlyEntriesWithMaxCapacityAllocatesExactOnMiss(t *testing.T) {
+	DropAppendOnlyEntryPools()
+	t.Cleanup(DropAppendOnlyEntryPools)
+
+	length := appendOnlyMinInitialEntries + 1
+	_, classCap, ok := appendOnlyEntryPoolClassForLength(length)
+	if !ok {
+		t.Fatalf("test length %d should map to a retained pool class", length)
+	}
+	if classCap <= length {
+		t.Fatalf("test setup needs a rounded class: length=%d classCap=%d", length, classCap)
+	}
+
+	entries := getAppendOnlyEntriesWithMaxCapacity(length, length)
+	if len(entries) != length {
+		t.Fatalf("len(entries)=%d want %d", len(entries), length)
+	}
+	if cap(entries) != length {
+		t.Fatalf("cap(entries)=%d want exact cap %d", cap(entries), length)
+	}
+	putAppendOnlyEntries(entries[:0])
+
+	reused := getAppendOnlyEntriesWithMaxCapacity(length, length)
+	if cap(reused) != length {
+		t.Fatalf("reused cap=%d want exact cap %d", cap(reused), length)
+	}
+	putAppendOnlyEntries(reused[:0])
+}
+
 func TestAppendOnlyEntryPoolRetainsBackingAcrossGC(t *testing.T) {
 	DropAppendOnlyEntryPools()
 	t.Cleanup(DropAppendOnlyEntryPools)
