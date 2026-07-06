@@ -3041,18 +3041,51 @@ func (db *DB) valueLogLaneForFileID(fileID uint32) *lane {
 	if laneID != leafLogLaneID || !db.indexOuterLeavesInValueLog {
 		return db.valueLogLaneByID(int(laneID))
 	}
-	for _, l := range db.leafLogAppendLanesSnapshot() {
-		if l == nil {
-			continue
+	if view := db.leafLogAppendLanesView.Load(); view != nil {
+		for _, l := range *view {
+			if db.leafLogAppendLaneMatchesSeq(l, seq) {
+				return l
+			}
 		}
-		l.vlogMu.Lock()
-		matches := l.vlogSeq == int(seq) && (l.vlogPath != "" || l.vlog != nil)
-		l.vlogMu.Unlock()
-		if matches {
+		return nil
+	}
+	for idx := 0; ; idx++ {
+		l, ok := db.leafLogAppendLaneAtIndex(idx)
+		if !ok {
+			return nil
+		}
+		if db.leafLogAppendLaneMatchesSeq(l, seq) {
 			return l
 		}
 	}
-	return nil
+}
+
+func (db *DB) leafLogAppendLaneMatchesSeq(l *lane, seq uint32) bool {
+	if l == nil {
+		return false
+	}
+	l.vlogMu.Lock()
+	matches := l.vlogSeq == int(seq) && (l.vlogPath != "" || l.vlog != nil)
+	l.vlogMu.Unlock()
+	return matches
+}
+
+func (db *DB) leafLogAppendLaneAtIndex(idx int) (*lane, bool) {
+	if db == nil || !db.indexOuterLeavesInValueLog || idx < 0 {
+		return nil, false
+	}
+	db.leafLogAppendMu.RLock()
+	defer db.leafLogAppendMu.RUnlock()
+	if len(db.leafLogAppendLanes) == 0 {
+		if idx == 0 {
+			return &db.leafLog, true
+		}
+		return nil, false
+	}
+	if idx >= len(db.leafLogAppendLanes) {
+		return nil, false
+	}
+	return db.leafLogAppendLanes[idx], true
 }
 
 func (db *DB) isLeafLogAppendLane(l *lane) bool {
@@ -3096,6 +3129,15 @@ func (db *DB) initLeafLogAppendState(maxLeafVlogSeq int) {
 	defer db.leafLogAppendMu.Unlock()
 	db.leafLogAppendSeq.Store(uint32(maxLeafVlogSeq))
 	db.leafLogAppendLanes = []*lane{&db.leafLog}
+	db.publishLeafLogAppendLanesLocked()
+}
+
+func (db *DB) publishLeafLogAppendLanesLocked() {
+	if db == nil || !db.indexOuterLeavesInValueLog || len(db.leafLogAppendLanes) == 0 {
+		return
+	}
+	view := append([]*lane(nil), db.leafLogAppendLanes...)
+	db.leafLogAppendLanesView.Store(&view)
 }
 
 func (db *DB) leafLogAppendLanesSnapshot() []*lane {
@@ -3134,6 +3176,7 @@ func (db *DB) leafLogAppendLaneForWorkerIndex(workerIndex int) *lane {
 		}
 		db.startVlogWriter(l)
 		db.leafLogAppendLanes[workerIndex] = l
+		db.publishLeafLogAppendLanesLocked()
 	}
 	db.leafLogAppendMu.Unlock()
 	return l
@@ -8381,6 +8424,7 @@ type DB struct {
 	leafLogAppendMu           sync.RWMutex
 	leafLogAppendLanes        []*lane
 	leafLogAppendSeq          atomic.Uint32
+	leafLogAppendLanesView    atomic.Pointer[[]*lane]
 	laneMu                    sync.Mutex
 	laneCond                  *sync.Cond
 	nextLane                  int
