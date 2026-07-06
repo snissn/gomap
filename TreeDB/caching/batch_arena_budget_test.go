@@ -33,6 +33,18 @@ func resetBatchArenaPoolsForTest() {
 	}
 }
 
+func assertBatchEntriesDoNotAliasArenaTail(t *testing.T, entries []batch.Entry, tail []byte) {
+	t.Helper()
+	for i := range entries {
+		if sliceAliasesArenaTail(entries[i].Key, tail) {
+			t.Fatalf("entry %d key still aliases released arena tail", i)
+		}
+		if sliceAliasesArenaTail(entries[i].Value, tail) {
+			t.Fatalf("entry %d value still aliases released arena tail", i)
+		}
+	}
+}
+
 func TestBatchArenaPoolAccountingRecoversOnUnexpectedCap(t *testing.T) {
 	batchArenaPoolTestMu.Lock()
 	defer batchArenaPoolTestMu.Unlock()
@@ -588,8 +600,76 @@ func TestBatchArenaTailCompaction_ClonesAliasedSlicesAndDropsTailChunk(t *testin
 	if newValPtr == oldValPtr {
 		t.Fatalf("value pointer did not change")
 	}
+	assertBatchEntriesDoNotAliasArenaTail(t, b.entries, tail)
 	if b.entries[0].ValuePtr != oldPtr {
 		t.Fatalf("value pointer metadata changed: got=%+v want=%+v", b.entries[0].ValuePtr, oldPtr)
+	}
+}
+
+func TestBatchArenaTailCompaction_SkipsCloneHeavyAliases(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	const (
+		entryCount = 2048
+		keyLen     = 16
+		valueLen   = 16
+		used       = 128 << 10
+		classCap   = 512 << 10
+	)
+	tail := make([]byte, used, classCap)
+	entries := make([]batch.Entry, entryCount)
+	offset := 0
+	for i := range entries {
+		key := tail[offset : offset+keyLen : offset+keyLen]
+		offset += keyLen
+		value := tail[offset : offset+valueLen : offset+valueLen]
+		offset += valueLen
+		entries[i] = batch.Entry{Type: batch.OpPut, Key: key, Value: value}
+	}
+	aliasedBytes, aliasedSlices := batchMainArenaTailAliasStats(entries, tail)
+	if aliasedBytes == 0 || aliasedSlices != entryCount*2 {
+		t.Fatalf("alias stats bytes=%d slices=%d want slices=%d", aliasedBytes, aliasedSlices, entryCount*2)
+	}
+	if shouldCompactBatchArenaTailWithAliases(len(tail), cap(tail), aliasedBytes, aliasedSlices) {
+		t.Fatalf("clone-heavy tail unexpectedly passed compaction policy")
+	}
+
+	db := &DB{}
+	b := &Batch{
+		db:              db,
+		entries:         entries,
+		copyArena:       tail,
+		copyArenaChunks: [][]byte{tail[:0]},
+	}
+	oldKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
+	oldValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
+
+	b.compactUnderfilledMainArenaTail()
+
+	if b.copyArena == nil {
+		t.Fatalf("copyArena unexpectedly released")
+	}
+	if len(b.copyArenaChunks) != 1 {
+		t.Fatalf("copyArenaChunks len=%d want 1", len(b.copyArenaChunks))
+	}
+	newKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
+	newValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
+	if newKeyPtr != oldKeyPtr {
+		t.Fatalf("key pointer changed unexpectedly")
+	}
+	if newValPtr != oldValPtr {
+		t.Fatalf("value pointer changed unexpectedly")
+	}
+	if got := db.batchArenaTailCompactRuns.Load(); got != 0 {
+		t.Fatalf("tail_compact_runs_total=%d want 0", got)
+	}
+	if got := db.batchArenaTailCompactCopied.Load(); got != 0 {
+		t.Fatalf("tail_compact_copied_bytes_total=%d want 0", got)
+	}
+	if got := db.batchArenaTailCompactSaved.Load(); got != 0 {
+		t.Fatalf("tail_compact_saved_bytes_total=%d want 0", got)
 	}
 }
 
@@ -679,6 +759,7 @@ func TestBatchArenaTailCompaction_CompactsNearFullTailWhenDeferredViewsPinned(t 
 	if newValPtr == oldValPtr {
 		t.Fatalf("value pointer did not change")
 	}
+	assertBatchEntriesDoNotAliasArenaTail(t, b.entries, tail)
 	if got := db.batchArenaTailCompactRuns.Load(); got != 1 {
 		t.Fatalf("tail_compact_runs_total=%d want 1", got)
 	}

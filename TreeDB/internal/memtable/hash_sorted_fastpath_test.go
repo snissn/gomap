@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestHashSortedApplyStealSortedBatch_AppendAndFallback(t *testing.T) {
@@ -276,6 +278,51 @@ func TestHashSortedPendingKeysSealHandoffUsesFreshBackingArray(t *testing.T) {
 	}
 }
 
+func TestHashSortedReserveAdditionalEntriesPreservesTombstones(t *testing.T) {
+	m := NewHashSorted()
+	m.SetEntryWithRevision([]byte("existing"), []byte("value"), page.ValuePtr{}, node.FlagInline, 7)
+
+	m.ReserveAdditionalEntries(8)
+
+	m.mu.RLock()
+	reservedEntryCap := cap(m.entries)
+	reservedItemsHint := m.itemsHint
+	m.mu.RUnlock()
+	if reservedEntryCap < 9 {
+		t.Fatalf("reserved entry cap=%d want at least 9", reservedEntryCap)
+	}
+	if reservedItemsHint < 9 {
+		t.Fatalf("reserved items hint=%d want at least 9", reservedItemsHint)
+	}
+
+	for i := 0; i < 8; i++ {
+		key := []byte(fmt.Sprintf("delete-%02d", i))
+		m.SetEntryWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, page.EntryRevision(100+i))
+	}
+
+	m.mu.RLock()
+	entryCapAfter := cap(m.entries)
+	itemsHintAfter := m.itemsHint
+	m.mu.RUnlock()
+	if entryCapAfter != reservedEntryCap {
+		t.Fatalf("entry cap changed after reserved tombstones: got %d want %d", entryCapAfter, reservedEntryCap)
+	}
+	if itemsHintAfter != reservedItemsHint {
+		t.Fatalf("items hint changed after reserved tombstones: got %d want %d", itemsHintAfter, reservedItemsHint)
+	}
+
+	if got, ptr, flags, rev, ok := m.GetEntryWithRevision([]byte("existing")); !ok || string(got) != "value" || ptr != (page.ValuePtr{}) || flags != node.FlagInline || rev != 7 {
+		t.Fatalf("existing entry changed: ok=%v val=%q ptr=%+v flags=%d rev=%d", ok, got, ptr, flags, rev)
+	}
+	for i := 0; i < 8; i++ {
+		key := []byte(fmt.Sprintf("delete-%02d", i))
+		got, ptr, flags, rev, ok := m.GetEntryWithRevision(key)
+		if !ok || got != nil || ptr != (page.ValuePtr{}) || flags != node.FlagTombstone || rev != page.EntryRevision(100+i) {
+			t.Fatalf("tombstone %q = ok=%v val=%v ptr=%+v flags=%d rev=%d", key, ok, got, ptr, flags, rev)
+		}
+	}
+}
+
 func BenchmarkHashSortedApplyCopySortedBatchTrusted(b *testing.B) {
 	const batchSize = 32
 	const valueSize = 128
@@ -305,6 +352,37 @@ func BenchmarkHashSortedApplyCopySortedBatchTrusted(b *testing.B) {
 					}
 				}
 				m.ApplyCopySortedBatchTrusted(entries, tc.borrowValues, true, nil)
+			}
+		})
+	}
+}
+
+func BenchmarkHashSortedTombstoneBatchReserve(b *testing.B) {
+	const batchSize = 2048
+	keys := make([][]byte, batchSize)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("delete-key-%08d", i))
+	}
+
+	for _, tc := range []struct {
+		name    string
+		reserve bool
+	}{
+		{name: "unreserved", reserve: false},
+		{name: "reserved", reserve: true},
+	} {
+		tc := tc
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				m := NewHashSorted()
+				if tc.reserve {
+					m.ReserveAdditionalEntries(batchSize)
+				}
+				for _, key := range keys {
+					m.SetEntryWithRevision(key, nil, page.ValuePtr{}, node.FlagTombstone, page.EntryRevision(i+1))
+				}
 			}
 		})
 	}

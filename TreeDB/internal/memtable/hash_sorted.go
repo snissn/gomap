@@ -79,6 +79,7 @@ func (a *hashArena) copyBytes(src []byte) []byte {
 type HashSorted struct {
 	mu          sync.RWMutex
 	items       map[string]uint32
+	itemsHint   int
 	entries     []hashEntry
 	sizeBytes   int64
 	maxKey      string
@@ -133,6 +134,7 @@ func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexe
 	initialEntries := hashSortedInitialEntries(capacity)
 	m := &HashSorted{
 		items:       make(map[string]uint32, initialEntries),
+		itemsHint:   initialEntries,
 		entries:     make([]hashEntry, 0, initialEntries),
 		sortedValid: true,
 		indexer:     indexer,
@@ -153,6 +155,66 @@ func hashSortedInitialEntries(capacity int) int {
 		entries = hashSortedMaxInitialEntries
 	}
 	return entries
+}
+
+func hashSortedReserveTargetCapacity(current, needed int) int {
+	if needed <= current {
+		return current
+	}
+	target := current
+	if target < hashSortedMinInitialEntries {
+		target = hashSortedMinInitialEntries
+	}
+	for target < needed {
+		if target >= hashSortedMaxInitialEntries {
+			target = needed
+			break
+		}
+		next := target * 2
+		if next <= target {
+			target = needed
+			break
+		}
+		target = next
+	}
+	if target > hashSortedMaxInitialEntries && needed <= hashSortedMaxInitialEntries {
+		target = hashSortedMaxInitialEntries
+	}
+	return target
+}
+
+// ReserveAdditionalEntries pre-sizes HashSorted metadata for a caller-owned
+// batch. It keeps Set/Delete semantics unchanged; this is only an allocation
+// hint used to avoid repeated growth inside hot mutation loops.
+func (m *HashSorted) ReserveAdditionalEntries(additional int) {
+	if additional <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.reserveAdditionalEntriesLocked(additional)
+	m.mu.Unlock()
+}
+
+func (m *HashSorted) reserveAdditionalEntriesLocked(additional int) {
+	needed := len(m.entries) + additional
+	if needed <= 0 {
+		return
+	}
+	if cap(m.entries) < needed {
+		target := hashSortedReserveTargetCapacity(cap(m.entries), needed)
+		next := make([]hashEntry, len(m.entries), target)
+		copy(next, m.entries)
+		m.entries = next
+	}
+	if m.itemsHint < needed {
+		target := hashSortedReserveTargetCapacity(m.itemsHint, needed)
+		next := make(map[string]uint32, target)
+		for k, v := range m.items {
+			next[k] = v
+		}
+		m.items = next
+		m.itemsHint = target
+	}
 }
 
 func (a *hashArena) resetKeepFirstChunk() {
