@@ -460,7 +460,24 @@ type DB struct {
 	commandWALLiveAcceptedMax        atomic.Uint64
 	commandWALLiveCovered            atomic.Uint64
 	commandWALLiveCoveredMax         atomic.Uint64
+	commandWALAppendCount            atomic.Uint64
+	commandWALAppendNs               atomic.Uint64
+	commandWALAppendPointCount       atomic.Uint64
+	commandWALAppendPointNs          atomic.Uint64
+	commandWALAppendPayloadCount     atomic.Uint64
+	commandWALAppendPayloadNs        atomic.Uint64
+	commandWALAppendEntryScanCount   atomic.Uint64
+	commandWALAppendEntryScanNs      atomic.Uint64
+	commandWALAppendIntentCount      atomic.Uint64
+	commandWALAppendIntentNs         atomic.Uint64
+	commandWALFlushCount             atomic.Uint64
+	commandWALFlushNs                atomic.Uint64
+	commandWALSyncCount              atomic.Uint64
+	commandWALSyncNs                 atomic.Uint64
 	commandWALCleanupScans           atomic.Uint64
+	commandWALCleanupScanNs          atomic.Uint64
+	commandWALCleanupScanBytes       atomic.Uint64
+	commandWALCleanupScanFrames      atomic.Uint64
 	commandWALCleanupRemoved         atomic.Uint64
 	commandWALCleanupBytes           atomic.Uint64
 	commandWALClosedBytes            atomic.Int64

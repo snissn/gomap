@@ -6,6 +6,7 @@ import (
 	"io"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
@@ -20,6 +21,15 @@ type commandWALStatsSummary struct {
 	ActiveBytes    int64
 	ActiveName     string
 }
+
+type commandWALAppendStatsPath uint8
+
+const (
+	commandWALAppendStatsPoint commandWALAppendStatsPath = iota
+	commandWALAppendStatsPayload
+	commandWALAppendStatsEntryScan
+	commandWALAppendStatsIntent
+)
 
 func writeCommandWALStats(stats map[string]string, db *DB) {
 	if stats == nil || db == nil {
@@ -87,7 +97,25 @@ func writeCommandWALStatsZeroCounters(stats map[string]string) {
 	stats["treedb.command_wal.live_accepted_max_lsn"] = "0"
 	stats["treedb.command_wal.live_covered_frames"] = "0"
 	stats["treedb.command_wal.live_covered_max_lsn"] = "0"
+	stats["treedb.command_wal.append.count_total"] = "0"
+	stats["treedb.command_wal.append.ns_total"] = "0"
+	stats["treedb.command_wal.append.point.count_total"] = "0"
+	stats["treedb.command_wal.append.point.ns_total"] = "0"
+	stats["treedb.command_wal.append.payload.count_total"] = "0"
+	stats["treedb.command_wal.append.payload.ns_total"] = "0"
+	stats["treedb.command_wal.append.entry_scan.count_total"] = "0"
+	stats["treedb.command_wal.append.entry_scan.ns_total"] = "0"
+	stats["treedb.command_wal.append.intent.count_total"] = "0"
+	stats["treedb.command_wal.append.intent.ns_total"] = "0"
+	stats["treedb.command_wal.flush.count_total"] = "0"
+	stats["treedb.command_wal.flush.ns_total"] = "0"
+	stats["treedb.command_wal.sync.count_total"] = "0"
+	stats["treedb.command_wal.sync.ns_total"] = "0"
 	stats["treedb.command_wal.cleanup.scans"] = "0"
+	stats["treedb.command_wal.cleanup.scan.count_total"] = "0"
+	stats["treedb.command_wal.cleanup.scan.ns_total"] = "0"
+	stats["treedb.command_wal.cleanup.scanned_bytes_total"] = "0"
+	stats["treedb.command_wal.cleanup.scanned_frames_total"] = "0"
 	stats["treedb.command_wal.cleanup.removed_segments"] = "0"
 	stats["treedb.command_wal.cleanup.removed_bytes"] = "0"
 	stats["treedb.command_wal.writer.buffer_size_bytes"] = "0"
@@ -118,7 +146,25 @@ func writeCommandWALLifecycleStats(stats map[string]string, db *DB) {
 	stats["treedb.command_wal.applied_lsn"] = fmt.Sprintf("%d", appliedLSN)
 	stats["treedb.command_wal.next_lsn"] = fmt.Sprintf("%d", db.CommandWALNextLSN())
 	stats["treedb.command_wal.bytes.active"] = fmt.Sprintf("%d", db.CommandWALActiveBytes())
+	stats["treedb.command_wal.append.count_total"] = fmt.Sprintf("%d", db.commandWALAppendCount.Load())
+	stats["treedb.command_wal.append.ns_total"] = fmt.Sprintf("%d", db.commandWALAppendNs.Load())
+	stats["treedb.command_wal.append.point.count_total"] = fmt.Sprintf("%d", db.commandWALAppendPointCount.Load())
+	stats["treedb.command_wal.append.point.ns_total"] = fmt.Sprintf("%d", db.commandWALAppendPointNs.Load())
+	stats["treedb.command_wal.append.payload.count_total"] = fmt.Sprintf("%d", db.commandWALAppendPayloadCount.Load())
+	stats["treedb.command_wal.append.payload.ns_total"] = fmt.Sprintf("%d", db.commandWALAppendPayloadNs.Load())
+	stats["treedb.command_wal.append.entry_scan.count_total"] = fmt.Sprintf("%d", db.commandWALAppendEntryScanCount.Load())
+	stats["treedb.command_wal.append.entry_scan.ns_total"] = fmt.Sprintf("%d", db.commandWALAppendEntryScanNs.Load())
+	stats["treedb.command_wal.append.intent.count_total"] = fmt.Sprintf("%d", db.commandWALAppendIntentCount.Load())
+	stats["treedb.command_wal.append.intent.ns_total"] = fmt.Sprintf("%d", db.commandWALAppendIntentNs.Load())
+	stats["treedb.command_wal.flush.count_total"] = fmt.Sprintf("%d", db.commandWALFlushCount.Load())
+	stats["treedb.command_wal.flush.ns_total"] = fmt.Sprintf("%d", db.commandWALFlushNs.Load())
+	stats["treedb.command_wal.sync.count_total"] = fmt.Sprintf("%d", db.commandWALSyncCount.Load())
+	stats["treedb.command_wal.sync.ns_total"] = fmt.Sprintf("%d", db.commandWALSyncNs.Load())
 	stats["treedb.command_wal.cleanup.scans"] = fmt.Sprintf("%d", db.commandWALCleanupScans.Load())
+	stats["treedb.command_wal.cleanup.scan.count_total"] = fmt.Sprintf("%d", db.commandWALCleanupScans.Load())
+	stats["treedb.command_wal.cleanup.scan.ns_total"] = fmt.Sprintf("%d", db.commandWALCleanupScanNs.Load())
+	stats["treedb.command_wal.cleanup.scanned_bytes_total"] = fmt.Sprintf("%d", db.commandWALCleanupScanBytes.Load())
+	stats["treedb.command_wal.cleanup.scanned_frames_total"] = fmt.Sprintf("%d", db.commandWALCleanupScanFrames.Load())
 	stats["treedb.command_wal.cleanup.removed_segments"] = fmt.Sprintf("%d", db.commandWALCleanupRemoved.Load())
 	stats["treedb.command_wal.cleanup.removed_bytes"] = fmt.Sprintf("%d", db.commandWALCleanupBytes.Load())
 	writeCommandWALWriterBufferStats(stats, db)
@@ -158,6 +204,64 @@ func (db *DB) observeCommandWALCovered(previous, next uint64) {
 	commandWALStoreMax(&db.commandWALLiveCoveredMax, next)
 }
 
+func (db *DB) observeCommandWALAppend(path commandWALAppendStatsPath, elapsed time.Duration) {
+	if db == nil {
+		return
+	}
+	ns := commandWALDurationNs(elapsed)
+	db.commandWALAppendCount.Add(1)
+	if ns > 0 {
+		db.commandWALAppendNs.Add(ns)
+	}
+	switch path {
+	case commandWALAppendStatsPoint:
+		db.commandWALAppendPointCount.Add(1)
+		if ns > 0 {
+			db.commandWALAppendPointNs.Add(ns)
+		}
+	case commandWALAppendStatsPayload:
+		db.commandWALAppendPayloadCount.Add(1)
+		if ns > 0 {
+			db.commandWALAppendPayloadNs.Add(ns)
+		}
+	case commandWALAppendStatsEntryScan:
+		db.commandWALAppendEntryScanCount.Add(1)
+		if ns > 0 {
+			db.commandWALAppendEntryScanNs.Add(ns)
+		}
+	case commandWALAppendStatsIntent:
+		db.commandWALAppendIntentCount.Add(1)
+		if ns > 0 {
+			db.commandWALAppendIntentNs.Add(ns)
+		}
+	}
+}
+
+func (db *DB) observeCommandWALFlush(sync bool, elapsed time.Duration) {
+	if db == nil {
+		return
+	}
+	ns := commandWALDurationNs(elapsed)
+	if sync {
+		db.commandWALSyncCount.Add(1)
+		if ns > 0 {
+			db.commandWALSyncNs.Add(ns)
+		}
+		return
+	}
+	db.commandWALFlushCount.Add(1)
+	if ns > 0 {
+		db.commandWALFlushNs.Add(ns)
+	}
+}
+
+func commandWALDurationNs(d time.Duration) uint64 {
+	if d <= 0 {
+		return 0
+	}
+	return uint64(d.Nanoseconds())
+}
+
 func commandWALStoreMax(dst *atomic.Uint64, value uint64) {
 	for {
 		current := dst.Load()
@@ -171,7 +275,7 @@ func commandWALStoreMax(dst *atomic.Uint64, value uint64) {
 }
 
 func (db *DB) cachedCommandWALStatsSummary() (commandWALStatsSummary, error) {
-	if err := db.FlushCommandWAL(false); err != nil {
+	if err := db.flushCommandWAL(false, false); err != nil {
 		return commandWALStatsSummary{}, err
 	}
 	state := db.state.Load()

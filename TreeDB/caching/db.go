@@ -8816,6 +8816,10 @@ type DB struct {
 	checkpointActiveBackgroundFlushWaitMaxNs                     atomic.Uint64
 	checkpointActiveBackgroundFlushWaitLastNs                    atomic.Uint64
 	checkpointActiveBackgroundFlushWaitSamples                   atomic.Uint64
+	writeWaitForCheckpointNs                                     atomic.Uint64
+	writeWaitForCheckpointMaxNs                                  atomic.Uint64
+	writeWaitForCheckpointLastNs                                 atomic.Uint64
+	writeWaitForCheckpointSamples                                atomic.Uint64
 	checkpointDebtMemtablesLast                                  atomic.Uint64
 	checkpointDebtMemtablesMax                                   atomic.Uint64
 	checkpointDebtBytesLast                                      atomic.Uint64
@@ -22703,6 +22707,18 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
+func (db *DB) waitForCheckpointForWrite() {
+	if db == nil {
+		return
+	}
+	if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
+		return
+	}
+	start := time.Now()
+	db.waitForCheckpoint()
+	db.observeWriteWaitForCheckpoint(time.Since(start))
+}
+
 func (db *DB) beginDirectWrite() error {
 	for {
 		db.writeMu.RLock()
@@ -29553,6 +29569,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_max"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitMaxNs.Load())
 	stats["treedb.cache.checkpoint.active_background_flush_wait_ns_last"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitLastNs.Load())
 	stats["treedb.cache.checkpoint.active_background_flush_wait_samples"] = fmt.Sprintf("%d", db.checkpointActiveBackgroundFlushWaitSamples.Load())
+	db.appendWriteWaitForCheckpointStats(stats)
 	stats["treedb.cache.checkpoint.debt_memtables_last"] = fmt.Sprintf("%d", db.checkpointDebtMemtablesLast.Load())
 	stats["treedb.cache.checkpoint.debt_memtables_max"] = fmt.Sprintf("%d", db.checkpointDebtMemtablesMax.Load())
 	stats["treedb.cache.checkpoint.debt_bytes_last"] = fmt.Sprintf("%d", db.checkpointDebtBytesLast.Load())
@@ -34679,7 +34696,7 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 	if !b.db.disableJournal {
 		return fmt.Errorf("cachingdb: command wal batch writes require disabled cached redo log")
 	}
-	b.db.waitForCheckpoint()
+	b.db.waitForCheckpointForWrite()
 	if b.backend != nil {
 		return fmt.Errorf("cachingdb: command wal batch writes require cached memtable path")
 	}
@@ -34699,7 +34716,7 @@ func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	b.db.waitForCheckpoint()
+	b.db.waitForCheckpointForWrite()
 
 	if b.hasDeleteRanges {
 		return b.writeRangeBatch(sync)

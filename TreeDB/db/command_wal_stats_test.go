@@ -7,8 +7,22 @@ import (
 	"strconv"
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
+
+func commandWALTestStatUint64(t *testing.T, stats map[string]string, key string) uint64 {
+	t.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		t.Fatalf("missing stat %s", key)
+	}
+	got, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("parse %s=%q: %v", key, raw, err)
+	}
+	return got
+}
 
 func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true, WALMaxSegmentBytes: 1024})
@@ -51,6 +65,21 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 	if got := stats["treedb.command_wal.live_covered_frames"]; got != "1" {
 		t.Fatalf("live covered frame stat=%q, want 1 (stats=%#v)", got, stats)
 	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.count_total"); got != 1 {
+		t.Fatalf("append.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.entry_scan.count_total"); got != 1 {
+		t.Fatalf("append.entry_scan.count_total=%d, want 1", got)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.append.ns_total"); got == 0 {
+		t.Fatalf("append.ns_total=0, want >0")
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.count_total"); got != 1 {
+		t.Fatalf("sync.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+	if got := commandWALTestStatUint64(t, stats, "treedb.command_wal.sync.ns_total"); got == 0 {
+		t.Fatalf("sync.ns_total=0, want >0 (stats=%#v)", stats)
+	}
 	if got := stats["treedb.command_wal.typed_segments"]; got != "1" {
 		t.Fatalf("command WAL typed segment stat=%q, want 1 (stats=%#v)", got, stats)
 	}
@@ -70,6 +99,77 @@ func TestCommandWALStatsProveModeAndFrames(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	dbClosed = true
+}
+
+func TestCommandWALRuntimeStatsExposeAppendPaths(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, CommandWALStatsScan: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	for _, key := range []string{
+		"treedb.command_wal.append.count_total",
+		"treedb.command_wal.append.point.count_total",
+		"treedb.command_wal.append.payload.count_total",
+		"treedb.command_wal.append.entry_scan.count_total",
+		"treedb.command_wal.flush.count_total",
+		"treedb.command_wal.sync.count_total",
+	} {
+		if got := commandWALTestStatUint64(t, before, key); got != 0 {
+			t.Fatalf("%s before writes=%d, want 0 (stats=%#v)", key, got, before)
+		}
+	}
+
+	if _, err := db.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("point"), []byte("one"), false); err != nil {
+		t.Fatalf("AppendRawKVPointCommandWALTrusted: %v", err)
+	}
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+		Op:    commitlog.RawKVOpSet,
+		Key:   []byte("payload"),
+		Value: []byte("two"),
+	}})
+	if err != nil {
+		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
+	}
+	if _, err := db.AppendRawKVBatchPayloadCommandWALTrusted(payload, false); err != nil {
+		t.Fatalf("AppendRawKVBatchPayloadCommandWALTrusted: %v", err)
+	}
+	if _, err := db.AppendRawKVCommandWALOrderedEntries([]batchpkg.Entry{{
+		Type:  batchpkg.OpPut,
+		Key:   []byte("entry-scan"),
+		Value: []byte("three"),
+	}}, true); err != nil {
+		t.Fatalf("AppendRawKVCommandWALOrderedEntries: %v", err)
+	}
+
+	stats := db.Stats()
+	for key, want := range map[string]uint64{
+		"treedb.command_wal.append.count_total":            3,
+		"treedb.command_wal.append.point.count_total":      1,
+		"treedb.command_wal.append.payload.count_total":    1,
+		"treedb.command_wal.append.entry_scan.count_total": 1,
+		"treedb.command_wal.append.intent.count_total":     0,
+		"treedb.command_wal.flush.count_total":             2,
+		"treedb.command_wal.sync.count_total":              1,
+	} {
+		if got := commandWALTestStatUint64(t, stats, key); got != want {
+			t.Fatalf("%s=%d, want %d (stats=%#v)", key, got, want, stats)
+		}
+	}
+	for _, key := range []string{
+		"treedb.command_wal.append.ns_total",
+		"treedb.command_wal.append.point.ns_total",
+		"treedb.command_wal.append.payload.ns_total",
+		"treedb.command_wal.append.entry_scan.ns_total",
+		"treedb.command_wal.flush.ns_total",
+		"treedb.command_wal.sync.ns_total",
+	} {
+		if got := commandWALTestStatUint64(t, stats, key); got == 0 {
+			t.Fatalf("%s=0, want >0 (stats=%#v)", key, stats)
+		}
+	}
 }
 
 func TestCommandWALStatsDefaultDoesNotScanWAL(t *testing.T) {
@@ -277,5 +377,18 @@ func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
 	}
 	if got := stats["treedb.command_wal.stats_scan"]; got != "false" {
 		t.Fatalf("stats_scan=%q, want false for disabled command WAL", got)
+	}
+	for _, key := range []string{
+		"treedb.command_wal.append.count_total",
+		"treedb.command_wal.flush.count_total",
+		"treedb.command_wal.sync.count_total",
+		"treedb.command_wal.cleanup.scan.count_total",
+		"treedb.command_wal.cleanup.scan.ns_total",
+		"treedb.command_wal.cleanup.scanned_bytes_total",
+		"treedb.command_wal.cleanup.scanned_frames_total",
+	} {
+		if got := commandWALTestStatUint64(t, stats, key); got != 0 {
+			t.Fatalf("%s=%d, want 0 for disabled command WAL (stats=%#v)", key, got, stats)
+		}
 	}
 }

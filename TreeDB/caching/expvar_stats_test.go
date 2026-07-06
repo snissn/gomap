@@ -81,6 +81,7 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.flush_backlog_coalescing.skip.reason.not_enough_backlog_total":                  "6",
 		"treedb.cache.command_wal.checkpoint_publish.piggybacked":                                     "2",
 		"treedb.cache.command_wal.checkpoint_publish.separate":                                        "1",
+		"treedb.cache.write.wait_for_checkpoint.count_total":                                          "4",
 		"treedb.cache.backpressure_mode":                                                              "adaptive",
 		"treedb.cache.entry_slice.trim_runs_total":                                                    "77",
 		"treedb.process.memory.pool_pressure_high_pct":                                                "85.5",
@@ -285,6 +286,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.command_wal.checkpoint_publish.separate"].(int64); !ok || v != 1 {
 		t.Fatalf("command WAL checkpoint separate=%T(%v) want int64(1)", got["treedb.cache.command_wal.checkpoint_publish.separate"], got["treedb.cache.command_wal.checkpoint_publish.separate"])
+	}
+	if v, ok := got["treedb.cache.write.wait_for_checkpoint.count_total"].(int64); !ok || v != 4 {
+		t.Fatalf("write wait-for-checkpoint count=%T(%v) want int64(4)", got["treedb.cache.write.wait_for_checkpoint.count_total"], got["treedb.cache.write.wait_for_checkpoint.count_total"])
 	}
 	if _, ok := got["treedb.cache.backpressure_mode"]; ok {
 		t.Fatalf("unexpected backpressure_mode key in expvar selection")
