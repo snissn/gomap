@@ -344,8 +344,8 @@ func (db *DB) CleanupCommandWALCoveredSegments(sync bool) error {
 	scannedBytes := uint64(0)
 	scannedFrames := uint64(0)
 	for _, decision := range decisions {
-		if decision.Size > 0 {
-			scannedBytes += uint64(decision.Size)
+		if decision.ScannedBytes > 0 {
+			scannedBytes += uint64(decision.ScannedBytes)
 		}
 		scannedFrames += decision.Frames
 		if !decision.Removed {

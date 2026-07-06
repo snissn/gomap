@@ -164,19 +164,21 @@ func validateContiguousAppliedCommandLSN(current, next uint64, covered []Command
 }
 
 type commandWALSegmentCleanupDecision struct {
-	Path    string
-	Size    int64
-	Frames  uint64
-	MaxLSN  uint64
-	Active  bool
-	Covered bool
-	Removed bool
-	Error   string
+	Path         string
+	Size         int64
+	ScannedBytes int64
+	Frames       uint64
+	MaxLSN       uint64
+	Active       bool
+	Covered      bool
+	Removed      bool
+	Error        string
 }
 
 type commandWALSegmentScanResult struct {
 	maxLSN       uint64
 	minLSN       uint64
+	scannedBytes int64
 	frames       uint64
 	typed        bool
 	terminalTail bool
@@ -279,6 +281,11 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 			}
 			return scan, err
 		}
+		scannedBytes, err := r.Offset()
+		if err != nil {
+			return scan, err
+		}
+		scan.scannedBytes = scannedBytes
 		if lastLSN != 0 && frame.LSN <= lastLSN {
 			scan.typed = true
 			return scan, commitlog.ErrCommandWALDuplicateLSN
@@ -388,9 +395,13 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 		})
 		if err != nil {
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
-				Path:   seg.path,
-				Active: active,
-				Error:  err.Error(),
+				Path:         seg.path,
+				Size:         seg.size,
+				ScannedBytes: scan.scannedBytes,
+				Frames:       scan.frames,
+				MaxLSN:       scan.maxLSN,
+				Active:       active,
+				Error:        err.Error(),
 			})
 			scanErr = errors.Join(scanErr, fmt.Errorf("scan command WAL segment %s: %w", filepath.Base(seg.path), err))
 			continue
@@ -399,12 +410,13 @@ func cleanupCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64,
 			continue
 		}
 		decision := commandWALSegmentCleanupDecision{
-			Path:    seg.path,
-			Size:    seg.size,
-			Frames:  scan.frames,
-			MaxLSN:  scan.maxLSN,
-			Active:  active,
-			Covered: scan.maxLSN <= appliedLSN,
+			Path:         seg.path,
+			Size:         seg.size,
+			ScannedBytes: scan.scannedBytes,
+			Frames:       scan.frames,
+			MaxLSN:       scan.maxLSN,
+			Active:       active,
+			Covered:      scan.maxLSN <= appliedLSN,
 		}
 		decisions = append(decisions, decision)
 	}

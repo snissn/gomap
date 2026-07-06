@@ -996,6 +996,13 @@ func TestCommandWALCheckpointCleanupShortCircuitsFullyUnappliedSegment(t *testin
 	if got := decisionByName["commit-l0-000002.log"]; got.Covered || !got.Active || got.Removed || got.MaxLSN != 3 {
 		t.Fatalf("unapplied segment decision=%+v, want active uncovered retained after first-frame scan", got)
 	}
+	got := decisionByName["commit-l0-000002.log"]
+	if got.Frames != 1 {
+		t.Fatalf("unapplied segment scanned frames=%d, want first frame only", got.Frames)
+	}
+	if got.ScannedBytes <= 0 || got.ScannedBytes >= got.Size {
+		t.Fatalf("unapplied segment scanned bytes=%d size=%d, want partial scan", got.ScannedBytes, got.Size)
+	}
 }
 
 func TestCommandWALCheckpointCleanupReturnsScanErrors(t *testing.T) {

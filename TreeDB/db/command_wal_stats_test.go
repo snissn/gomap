@@ -365,6 +365,52 @@ func TestCommandWALStatsScanRefreshesWithoutAppliedLSNChange(t *testing.T) {
 	}
 }
 
+func TestCommandWALCleanupStatsCountConsumedBytes(t *testing.T) {
+	dir := t.TempDir()
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALSegmentFrames(t, dir, 2, 3, 2)
+	coveredInfo, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000001.log"))
+	if err != nil {
+		t.Fatalf("stat covered segment: %v", err)
+	}
+	activeInfo, err := os.Stat(filepath.Join(WALDirPath(dir), "commit-l0-000002.log"))
+	if err != nil {
+		t.Fatalf("stat active segment: %v", err)
+	}
+
+	db := &DB{dir: dir, commandWAL: true}
+	db.state.Store(&DBState{AppliedCommandLSN: 1})
+
+	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
+		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
+	}
+	stats := make(map[string]string)
+	writeCommandWALStats(stats, db)
+
+	decisions, err := cleanupCommandWALSegmentsCoveredByAppliedLSN(dir, 1, 0)
+	if err != nil {
+		t.Fatalf("cleanupCommandWALSegmentsCoveredByAppliedLSN after cleanup: %v", err)
+	}
+	var active commandWALSegmentCleanupDecision
+	for _, decision := range decisions {
+		if filepath.Base(decision.Path) == "commit-l0-000002.log" {
+			active = decision
+			break
+		}
+	}
+	if active.ScannedBytes <= 0 || active.ScannedBytes >= active.Size {
+		t.Fatalf("active scanned bytes=%d size=%d, want partial scan decision", active.ScannedBytes, active.Size)
+	}
+	got := commandWALTestStatUint64(t, stats, "treedb.command_wal.cleanup.scanned_bytes_total")
+	if got <= uint64(active.ScannedBytes) {
+		t.Fatalf("scanned_bytes_total=%d, want covered segment plus active partial scan > %d", got, active.ScannedBytes)
+	}
+	fullSegmentBytes := uint64(coveredInfo.Size() + activeInfo.Size())
+	if got >= fullSegmentBytes {
+		t.Fatalf("scanned_bytes_total=%d full_segment_bytes=%d, want consumed bytes below full segment bytes", got, fullSegmentBytes)
+	}
+}
+
 func TestCommandWALStatsDisabledDoesNotScanWAL(t *testing.T) {
 	dir := t.TempDir()
 	walDir := WALDirPath(dir)
