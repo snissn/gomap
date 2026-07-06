@@ -618,6 +618,44 @@ func TestZipperPrepareReadOnlyInternalBaseDeltaRangeSpans(t *testing.T) {
 	}
 }
 
+func TestZipperPrepareReadOnlyInternalBaseDeltaSparsePointSpans(t *testing.T) {
+	_, plain := newReadOnlyPrepareZipper(t)
+	plainRoot := buildReadOnlyPrepareRootWithKeys(t, plain, 4096)
+	_, baseDelta := newReadOnlyPrepareZipper(t)
+	baseDelta.SetIndexInternalBaseDelta(true)
+	baseDeltaRoot := buildReadOnlyPrepareRootWithKeys(t, baseDelta, 4096)
+	rootData, err := baseDelta.pager.Get(baseDeltaRoot)
+	if err != nil {
+		t.Fatalf("get base-delta root: %v", err)
+	}
+	rootNode := node.NewNode(rootData)
+	if rootNode.Type() != page.PageTypeInternal || !rootNode.InternalBaseDeltaEnabled() {
+		t.Fatalf("root type/base-delta=%v/%v want internal base-delta", rootNode.Type(), rootNode.InternalBaseDeltaEnabled())
+	}
+
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for _, idx := range []int{17, 511, 1029, 2053, 3079, 4095} {
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", idx)), []byte("new")); err != nil {
+			t.Fatalf("Set delta %d: %v", idx, err)
+		}
+	}
+
+	plainPrepared, err := plain.PrepareReadOnly(plainRoot, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("plain PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, plainPrepared)
+	baseDeltaPrepared, err := baseDelta.PrepareReadOnly(baseDeltaRoot, delta, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("base-delta PrepareReadOnly: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, baseDeltaPrepared)
+	if got, want := readOnlySpanSignature(baseDeltaPrepared), readOnlySpanSignature(plainPrepared); !reflect.DeepEqual(got, want) {
+		t.Fatalf("base-delta sparse point signature mismatch\n got=%v\nwant=%v", got, want)
+	}
+}
+
 func TestZipperPrepareReadOnlyDoesNotAppendOuterLeafOutput(t *testing.T) {
 	p, z := newReadOnlyPrepareZipper(t)
 	z.SetOuterLeavesInValueLog(true)
@@ -918,6 +956,65 @@ func BenchmarkZipperPrepareReadOnlyManyLeafRandomKeyModes(b *testing.B) {
 					b.ReportMetric(float64(lastOpKeyBytes), "op_key_bytes/op")
 				})
 			}
+		})
+	}
+}
+
+func BenchmarkZipperPrepareReadOnlySparsePointKeyModes(b *testing.B) {
+	_, z := newReadOnlyPrepareZipper(b)
+	z.SetIndexInternalBaseDelta(true)
+	rootID := buildReadOnlyPrepareRootWithKeys(b, z, 32768)
+	delta := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = delta.Close() }()
+	for i := 0; i < 64; i++ {
+		idx := (i*4051 + 17) % 32768
+		if err := delta.Set([]byte(fmt.Sprintf("key-%06d", idx)), []byte("new-value")); err != nil {
+			b.Fatalf("Set delta: %v", err)
+		}
+	}
+	delta.SortedEntries()
+
+	cases := []struct {
+		name string
+		opts ReadOnlyPrepareOptions
+	}{
+		{name: "full_keys"},
+		{name: "omit_op_keys", opts: ReadOnlyPrepareOptions{OmitOpKeys: true}},
+		{name: "omit_all_keys", opts: ReadOnlyPrepareOptions{OmitKeys: true}},
+	}
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			first, err := z.PrepareReadOnly(rootID, delta, tc.opts)
+			if err != nil {
+				b.Fatalf("initial PrepareReadOnly: %v", err)
+			}
+			requireValidReadOnlyPrepare(b, first)
+			opts := first.ReuseOptions()
+			lastSummary := first.LeafSpanSummary()
+			lastKeyArenaBytes := len(first.keyArena)
+			lastBoundaryKeyBytes := readOnlyPrepareSpanBoundaryBytes(first.LeafSpans)
+			lastOpKeyBytes := readOnlyPrepareSpanOpKeyBytes(first.LeafSpans)
+			b.ReportAllocs()
+			b.SetBytes(int64(lastSummary.SpanBytes))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				prepared, err := z.PrepareReadOnly(rootID, delta, opts)
+				if err != nil {
+					b.Fatalf("PrepareReadOnly: %v", err)
+				}
+				lastSummary = prepared.LeafSpanSummary()
+				lastKeyArenaBytes = len(prepared.keyArena)
+				lastBoundaryKeyBytes = readOnlyPrepareSpanBoundaryBytes(prepared.LeafSpans)
+				lastOpKeyBytes = readOnlyPrepareSpanOpKeyBytes(prepared.LeafSpans)
+				opts = prepared.ReuseOptions()
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(lastSummary.Spans), "leaf_spans/op")
+			b.ReportMetric(float64(lastSummary.SpanOps), "span_ops/op")
+			b.ReportMetric(float64(lastSummary.SpanBytes), "span_bytes/op")
+			b.ReportMetric(float64(lastKeyArenaBytes), "key_arena_bytes/op")
+			b.ReportMetric(float64(lastBoundaryKeyBytes), "boundary_key_bytes/op")
+			b.ReportMetric(float64(lastOpKeyBytes), "op_key_bytes/op")
 		})
 	}
 }
