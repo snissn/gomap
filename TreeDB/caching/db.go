@@ -33715,6 +33715,23 @@ func (b *Batch) shouldCompactArenaTail(used, classCap int) bool {
 	return shouldCompactBatchArenaTailWithPolicy(used, classCap, minWaste, maxFillNumerator, maxFillDenominator)
 }
 
+func shouldCompactBatchArenaTailWithAliases(used, classCap, aliasedBytes, aliasedSlices int) bool {
+	if !shouldCompactBatchArenaTail(used, classCap) || aliasedBytes <= 0 || aliasedSlices <= 0 {
+		return false
+	}
+	return aliasedBytes < classCap
+}
+
+func (b *Batch) shouldCompactArenaTailWithAliases(used, classCap, aliasedBytes, aliasedSlices int) bool {
+	if b == nil || b.db == nil || aliasedBytes <= 0 || aliasedSlices <= 0 {
+		return false
+	}
+	if !b.shouldCompactArenaTail(used, classCap) {
+		return false
+	}
+	return aliasedBytes < classCap
+}
+
 func sliceAliasesArenaTail(s, tail []byte) bool {
 	if len(s) == 0 || len(tail) == 0 {
 		return false
@@ -33729,6 +33746,45 @@ func sliceAliasesArenaTail(s, tail []byte) bool {
 		return false
 	}
 	return uintptr(len(s)) <= uintptr(len(tail))-offset
+}
+
+func batchMainArenaTailAliasStats(entries []batch.Entry, tail []byte) (aliasedBytes, aliasedSlices int) {
+	if len(entries) == 0 || len(tail) == 0 {
+		return 0, 0
+	}
+	for i := range entries {
+		op := &entries[i]
+		if len(op.Key) > 0 && sliceAliasesArenaTail(op.Key, tail) {
+			aliasedBytes += len(op.Key)
+			aliasedSlices++
+		}
+		if len(op.Value) > 0 && sliceAliasesArenaTail(op.Value, tail) {
+			aliasedBytes += len(op.Value)
+			aliasedSlices++
+		}
+	}
+	return aliasedBytes, aliasedSlices
+}
+
+func compactBatchMainArenaTailAliases(entries []batch.Entry, tail []byte, aliasedBytes int) int {
+	if len(entries) == 0 || len(tail) == 0 || aliasedBytes <= 0 {
+		return 0
+	}
+	packed := make([]byte, 0, aliasedBytes)
+	for i := range entries {
+		op := &entries[i]
+		if len(op.Key) > 0 && sliceAliasesArenaTail(op.Key, tail) {
+			start := len(packed)
+			packed = append(packed, op.Key...)
+			op.Key = packed[start:len(packed):len(packed)]
+		}
+		if len(op.Value) > 0 && sliceAliasesArenaTail(op.Value, tail) {
+			start := len(packed)
+			packed = append(packed, op.Value...)
+			op.Value = packed[start:len(packed):len(packed)]
+		}
+	}
+	return len(packed)
 }
 
 func (b *Batch) releaseCompactedBatchArenaTail(kind batchArenaKind, chunks *[][]byte, arena *[]byte, copiedBytes int) {
@@ -33757,21 +33813,11 @@ func (b *Batch) compactUnderfilledMainArenaTail() {
 		return
 	}
 	tail := b.copyArena
-	if !b.shouldCompactArenaTail(len(tail), cap(tail)) {
+	aliasedBytes, aliasedSlices := batchMainArenaTailAliasStats(b.entries, tail)
+	if !b.shouldCompactArenaTailWithAliases(len(tail), cap(tail), aliasedBytes, aliasedSlices) {
 		return
 	}
-	copiedBytes := 0
-	for i := range b.entries {
-		op := &b.entries[i]
-		if len(op.Key) > 0 && sliceAliasesArenaTail(op.Key, tail) {
-			op.Key = bytes.Clone(op.Key)
-			copiedBytes += len(op.Key)
-		}
-		if len(op.Value) > 0 && sliceAliasesArenaTail(op.Value, tail) {
-			op.Value = bytes.Clone(op.Value)
-			copiedBytes += len(op.Value)
-		}
-	}
+	copiedBytes := compactBatchMainArenaTailAliases(b.entries, tail, aliasedBytes)
 	if copiedBytes == 0 {
 		return
 	}
