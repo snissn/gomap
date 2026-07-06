@@ -10572,13 +10572,29 @@ func (db *DB) putAppendOnlyMemPoolDropEntries(mt *memtable.AppendOnly) {
 	}
 }
 
+func (db *DB) appendOnlyRecycleResetCapacity(estimatedBytesPerEntry int) int {
+	if estimatedBytesPerEntry <= 0 {
+		estimatedBytesPerEntry = appendOnlyEstimatedBytesPerEntryDefault
+	}
+	capacity := 0
+	if db != nil {
+		capacity = db.memtableCap
+		if capacity <= 0 {
+			capacity = db.checkpointRotateCapacity()
+		}
+	}
+	if capacity <= 0 {
+		capacity = minMemtablePrealloc
+	}
+	return db.appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry)
+}
+
 func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
 	}
-	resetCapacity := db.checkpointRotateCapacity()
 	estimate := appendOnlyEstimatedBytesPerEntryDefault
-	appendOnlyResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, estimate)
+	appendOnlyResetCapacity := db.appendOnlyRecycleResetCapacity(estimate)
 	retainAppendOnly := db.currentMemtableMode() == memtable.ModeAppendOnly
 	for _, mt := range mems {
 		switch typed := mt.(type) {
@@ -25899,6 +25915,9 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		oldLen := oldMem.Len()
 		if debugRotate {
 			oldMode = debugMemtableModeLabel(oldMem)
+		}
+		if _, ok := oldMem.(*memtable.AppendOnly); ok {
+			db.observeAppendOnlyMutableEntries(oldLen)
 		}
 		oldShardBytes := shard.bytes
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
