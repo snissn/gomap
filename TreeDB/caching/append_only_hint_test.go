@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"fmt"
 	"runtime"
 	"testing"
 	"time"
@@ -151,6 +152,108 @@ func TestAppendOnlyReserveDemandTeachesFutureCapacityHint(t *testing.T) {
 	}
 	if got := appendOnly.EntryCapacity(); got < hint {
 		t.Fatalf("future mutable capacity=%d want >= learned hint %d", got, hint)
+	}
+}
+
+func TestAppendOnlyRotateWithCapacityObservesMutableEntryHint(t *testing.T) {
+	cache, err := Open(t.TempDir(), NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = cache.Close() }()
+
+	cache.appendOnlyEntryHint.Store(0)
+	const entries = 4096
+	for i := 0; i < entries; i++ {
+		key := []byte(fmt.Sprintf("k-%06d", i))
+		if err := cache.Set(key, []byte("value")); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+
+	cache.mu.Lock()
+	err = cache.rotateMemtableLockedWithCapacity(false, minMemtablePrealloc)
+	cache.mu.Unlock()
+	if err != nil {
+		t.Fatalf("rotate with capacity: %v", err)
+	}
+
+	if got := int(cache.appendOnlyEntryHint.Load()); got < entries {
+		t.Fatalf("entry hint after rotate=%d want >=%d", got, entries)
+	}
+}
+
+func TestRecycleAppendOnlyMemtableRetainsSteadyForegroundCapacity(t *testing.T) {
+	var cache DB
+	cache.storeMemtableMode(memtable.ModeAppendOnly)
+	cache.memtableCap = 64 << 20
+	cache.mutableThreshold.Store(int64(cache.memtableCap))
+
+	mt := memtable.NewAppendOnlyWithEntryCapacity(appendOnlyEntryHintMinEntries)
+	const entries = 200_000
+	reserveAppendOnlyMemtableEntries(&cache, mt, entries)
+	warmCap := mt.EntryCapacity()
+	if warmCap < entries {
+		t.Fatalf("test setup capacity=%d want >=%d", warmCap, entries)
+	}
+
+	cache.recycleMemtables([]memtable.Table{mt})
+	if got := len(cache.appendOnlyMemLeases); got != 1 {
+		t.Fatalf("append-only mem leases=%d want 1", got)
+	}
+	if got := mt.EntryCapacity(); got < entries {
+		t.Fatalf("recycled capacity=%d want >=%d", got, entries)
+	}
+
+	next, err := cache.newMutableMemtableWithCapacityMode(cache.memtableCap, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("new mutable: %v", err)
+	}
+	appendOnly, ok := next.(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("new mutable type=%T, want append-only", next)
+	}
+	if appendOnly != mt {
+		t.Fatalf("new mutable did not reuse recycled append-only table")
+	}
+	if got := appendOnly.EntryCapacity(); got < entries {
+		t.Fatalf("reused capacity=%d want >=%d", got, entries)
+	}
+
+	before := memtable.AppendOnlyEntryReserveStatsSnapshot()
+	reserveAppendOnlyMemtableEntries(&cache, appendOnly, entries)
+	after := memtable.AppendOnlyEntryReserveStatsSnapshot()
+	if got := after.GrowCallsTotal - before.GrowCallsTotal; got != 0 {
+		t.Fatalf("reserve grow calls after reuse=%d want 0", got)
+	}
+}
+
+func BenchmarkRecycleAppendOnlyMemtableSteadyForegroundCapacity(b *testing.B) {
+	const entries = 200_000
+	b.ReportAllocs()
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		var cache DB
+		cache.storeMemtableMode(memtable.ModeAppendOnly)
+		cache.memtableCap = 64 << 20
+		cache.mutableThreshold.Store(int64(cache.memtableCap))
+		mt := memtable.NewAppendOnlyWithEntryCapacity(appendOnlyEntryHintMinEntries)
+		reserveAppendOnlyMemtableEntries(&cache, mt, entries)
+		b.StartTimer()
+		cache.recycleMemtables([]memtable.Table{mt})
+		next, err := cache.newMutableMemtableWithCapacityMode(cache.memtableCap, memtable.ModeAppendOnly)
+		if err != nil {
+			b.Fatalf("new mutable: %v", err)
+		}
+		appendOnly := next.(*memtable.AppendOnly)
+		reserveAppendOnlyMemtableEntries(&cache, appendOnly, entries)
+		b.StopTimer()
 	}
 }
 
