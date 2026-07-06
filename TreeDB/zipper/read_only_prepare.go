@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -1106,27 +1107,9 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 
 			rangeStart, rangeEnd := 0, 0
 			if len(ranges) > 0 {
-				if childLowFromSeparator {
-					if baseDeltaInternalKeys {
-						if childHighFromSeparator {
-							childHigh = result.cloneKey(childHigh)
-							childHighFromSeparator = false
-						}
-						key, _, err = oldNode.GetInternalEntryRefView(i)
-						if err != nil {
-							return err
-						}
-						if key == nil {
-							key = []byte{}
-						}
-						childLow = key
-					}
-					childLow = result.cloneKey(childLow)
-					childLowFromSeparator = false
-				}
-				if childHighFromSeparator {
-					childHigh = result.cloneKey(childHigh)
-					childHighFromSeparator = false
+				childLow, childHigh, childLowFromSeparator, childHighFromSeparator, err = stabilizeReadOnlyChildSeparatorBounds(oldNode, i, childLow, childHigh, childLowFromSeparator, childHighFromSeparator, baseDeltaInternalKeys, result)
+				if err != nil {
+					return err
 				}
 				rangeStart, rangeEnd = deleteRangeIndexSpan(ranges, childLow, childHigh)
 			}
@@ -1134,27 +1117,9 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 				continue
 			}
 
-			if childLowFromSeparator {
-				if baseDeltaInternalKeys {
-					if childHighFromSeparator {
-						// Base-delta internal keys can share node scratch; keep the
-						// already-decoded high separator stable before refetching low.
-						childHigh = result.cloneKey(childHigh)
-						childHighFromSeparator = false
-					}
-					key, _, err = oldNode.GetInternalEntryRefView(i)
-					if err != nil {
-						return err
-					}
-					if key == nil {
-						key = []byte{}
-					}
-					childLow = key
-				}
-				childLow = result.cloneKey(childLow)
-			}
-			if childHighFromSeparator {
-				childHigh = result.cloneKey(childHigh)
+			childLow, childHigh, _, _, err = stabilizeReadOnlyChildSeparatorBounds(oldNode, i, childLow, childHigh, childLowFromSeparator, childHighFromSeparator, baseDeltaInternalKeys, result)
+			if err != nil {
+				return err
 			}
 			if err := z.prepareReadOnlyRecursive(childRef, childOps, opBase+startOpIdx, ranges[rangeStart:rangeEnd], rangeBase+rangeStart, childLow, childHigh, result, scratch); err != nil {
 				return err
@@ -1164,6 +1129,34 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 	default:
 		return page.ErrInvalidPageType
 	}
+}
+
+func stabilizeReadOnlyChildSeparatorBounds(oldNode node.Node, childIndex uint16, childLow, childHigh []byte, childLowFromSeparator, childHighFromSeparator, baseDeltaInternalKeys bool, result *ReadOnlyPrepareResult) ([]byte, []byte, bool, bool, error) {
+	if childLowFromSeparator {
+		if baseDeltaInternalKeys {
+			if childHighFromSeparator {
+				// Base-delta internal keys can share node scratch; keep the
+				// already-decoded high separator stable before refetching low.
+				childHigh = result.cloneKey(childHigh)
+				childHighFromSeparator = false
+			}
+			key, _, err := oldNode.GetInternalEntryRefView(childIndex)
+			if err != nil {
+				return nil, nil, false, false, err
+			}
+			if key == nil {
+				key = []byte{}
+			}
+			childLow = key
+		}
+		childLow = result.cloneKey(childLow)
+		childLowFromSeparator = false
+	}
+	if childHighFromSeparator {
+		childHigh = result.cloneKey(childHigh)
+		childHighFromSeparator = false
+	}
+	return childLow, childHigh, childLowFromSeparator, childHighFromSeparator, nil
 }
 
 func deleteRangeIndexSpan(ranges []batch.DeleteRange, low, high []byte) (int, int) {
