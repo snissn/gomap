@@ -32426,6 +32426,7 @@ type Batch struct {
 	shardAdds                 []int64
 	shardCnts                 []int
 	shardEntries              [][]batch.Entry
+	shardEntryScratch         []batch.Entry
 	shardIdxSets              [][]int
 	maxEntries                int
 
@@ -32446,6 +32447,7 @@ type Batch struct {
 	commandWALAppend             func() error
 	valueCopyShard               *memShard
 	appendOnlyDirectValueCopier  func([]byte) []byte
+	shardEntriesBackedByScratch  bool
 
 	commandWALCompactReplay     bool
 	commandWALCompactRanges     []batch.DeleteRange
@@ -33404,6 +33406,9 @@ func (b *Batch) Reset() {
 	if b.shardEntries != nil {
 		b.shardEntries = b.shardEntries[:0]
 	}
+	if b.shardEntryScratch != nil {
+		b.shardEntryScratch = b.shardEntryScratch[:0]
+	}
 	if b.shardIdxSets != nil {
 		b.shardIdxSets = b.shardIdxSets[:0]
 	}
@@ -33536,6 +33541,85 @@ func (b *Batch) releaseShardEntryGroups(groups [][]batch.Entry) {
 		}
 	}
 	b.db.putBatchShardEntryGroups(full[:0])
+}
+
+func (b *Batch) clearScratchShardEntryGroups() {
+	if b == nil || !b.shardEntriesBackedByScratch {
+		return
+	}
+	if cap(b.shardEntries) > 0 {
+		full := b.shardEntries[:cap(b.shardEntries)]
+		clear(full)
+	}
+	b.shardEntriesBackedByScratch = false
+}
+
+func (b *Batch) releaseCurrentShardEntryGroups() {
+	if b == nil || b.db == nil {
+		return
+	}
+	if cap(b.shardEntries) == 0 {
+		b.shardEntriesBackedByScratch = false
+		return
+	}
+	if b.shardEntriesBackedByScratch {
+		full := b.shardEntries[:cap(b.shardEntries)]
+		clear(full)
+		b.db.putBatchShardEntryGroups(full[:0])
+		b.shardEntriesBackedByScratch = false
+		return
+	}
+	b.releaseShardEntryGroups(b.shardEntries)
+}
+
+func (b *Batch) releaseShardEntryScratch() {
+	if b == nil {
+		return
+	}
+	if b.db == nil || cap(b.shardEntryScratch) == 0 {
+		b.shardEntryScratch = nil
+		return
+	}
+	b.db.putBatchShardEntries(b.shardEntryScratch)
+	b.shardEntryScratch = nil
+}
+
+func (b *Batch) prepareScratchShardEntryGroups(shardCounts []int) [][]batch.Entry {
+	if b == nil || b.db == nil {
+		return nil
+	}
+	shardCount := len(shardCounts)
+	shardEntries := b.shardEntries
+	if cap(shardEntries) < shardCount {
+		if cap(shardEntries) > 0 {
+			b.releaseCurrentShardEntryGroups()
+		}
+		shardEntries = b.db.getBatchShardEntryGroups(shardCount)
+	} else {
+		b.clearScratchShardEntryGroups()
+	}
+	shardEntries = shardEntries[:shardCount]
+
+	entryCount := len(b.entries)
+	if cap(b.shardEntryScratch) < entryCount {
+		b.releaseShardEntryScratch()
+		b.shardEntryScratch = b.db.getBatchShardEntries(entryCount)
+	}
+	scratch := b.shardEntryScratch[:entryCount]
+	offset := 0
+	for i, count := range shardCounts {
+		if count <= 0 {
+			shardEntries[i] = nil
+			continue
+		}
+		next := offset + count
+		shardEntries[i] = scratch[offset:offset:next]
+		offset = next
+	}
+	b.shardEntryScratch = scratch[:0]
+	b.shardEntries = shardEntries
+	b.shardEntriesBackedByScratch = true
+	return shardEntries
 }
 
 func (b *Batch) updateBatchCopyHint() {
@@ -35507,34 +35591,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			shard.mu.Unlock()
 		}
 	} else {
-		shardEntries := b.shardEntries
-		if cap(shardEntries) < shardCount {
-			if cap(shardEntries) > 0 {
-				b.releaseShardEntryGroups(shardEntries)
-			}
-			shardEntries = b.db.getBatchShardEntryGroups(shardCount)
-			shardEntries = shardEntries[:shardCount]
-		} else {
-			shardEntries = shardEntries[:shardCount]
-			for i := range shardEntries {
-				shardEntries[i] = shardEntries[i][:0]
-			}
-		}
-		b.shardEntries = shardEntries
-		for i, count := range shardCounts {
-			if count > 0 {
-				entries := shardEntries[i]
-				if cap(entries) < count {
-					if cap(entries) > 0 {
-						b.db.putBatchShardEntries(entries)
-					}
-					entries = b.db.getBatchShardEntries(count)
-				} else {
-					entries = entries[:0]
-				}
-				shardEntries[i] = entries
-			}
-		}
+		shardEntries := b.prepareScratchShardEntryGroups(shardCounts)
 		for i, op := range b.entries {
 			idx := shardIdxs[i]
 			shardEntries[idx] = append(shardEntries[idx], op)
@@ -36244,7 +36301,10 @@ func (b *Batch) Close() error {
 		}
 	}
 	if b.db != nil && b.shardEntries != nil {
-		b.releaseShardEntryGroups(b.shardEntries)
+		b.releaseCurrentShardEntryGroups()
+	}
+	if b.db != nil && b.shardEntryScratch != nil {
+		b.releaseShardEntryScratch()
 	}
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
@@ -36255,6 +36315,7 @@ func (b *Batch) Close() error {
 	b.shardAdds = nil
 	b.shardCnts = nil
 	b.shardEntries = nil
+	b.shardEntryScratch = nil
 	b.shardIdxSets = nil
 	b.firstKey = nil
 	b.lastKey = nil
@@ -36264,6 +36325,7 @@ func (b *Batch) Close() error {
 	b.conditionalTxnID = 0
 	b.valueCopyShard = nil
 	b.appendOnlyDirectValueCopier = nil
+	b.shardEntriesBackedByScratch = false
 	b.commandWALCompactReplay = false
 	b.commandWALCompactRanges = nil
 	b.commandWALCompactPointStart = 0
