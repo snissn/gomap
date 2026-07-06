@@ -3,6 +3,7 @@ package valuelog
 import (
 	"bytes"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -254,6 +255,54 @@ func TestWriterAppendBufStats_PoolAndDropCounters(t *testing.T) {
 	}
 	if got, want := afterDrop.DroppedBytesTotal-afterGet.DroppedBytesTotal, uint64(defaultBufferSize+1); got != want {
 		t.Fatalf("dropped bytes delta=%d want=%d", got, want)
+	}
+}
+
+func BenchmarkWriterAppendBufPoolConcurrentSyncCycles(b *testing.B) {
+	const writers = 16
+
+	drainWriterAppendBufPoolForTest()
+	b.Cleanup(drainWriterAppendBufPoolForTest)
+
+	dir := b.TempDir()
+	ws := make([]*Writer, 0, writers)
+	for i := 0; i < writers; i++ {
+		path := filepath.Join(dir, "value-"+string(rune('a'+i))+".log")
+		w, err := NewWriter(path, page.ValueLogFileID(uint32(i+1)))
+		if err != nil {
+			b.Fatalf("NewWriter(%d): %v", i, err)
+		}
+		w.syncFn = func(*os.File) error { return nil }
+		ws = append(ws, w)
+	}
+	defer func() {
+		for _, w := range ws {
+			_ = w.Close()
+		}
+	}()
+
+	payload := []byte("x")
+	before := WriterAppendBufferStatsSnapshot()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, w := range ws {
+			if err := w.writeBytes(payload); err != nil {
+				b.Fatal(err)
+			}
+		}
+		for _, w := range ws {
+			if err := w.Sync(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	b.StopTimer()
+	after := WriterAppendBufferStatsSnapshot()
+	if b.N > 0 {
+		b.ReportMetric(float64(after.AllocCallsTotal-before.AllocCallsTotal)/float64(b.N), "appendbuf_allocs/op")
+		b.ReportMetric(float64(after.AllocatedBytesTotal-before.AllocatedBytesTotal)/float64(b.N)/(1<<20), "appendbuf_alloc_MiB/op")
+		b.ReportMetric(float64(after.DropsTotal-before.DropsTotal)/float64(b.N), "appendbuf_drops/op")
 	}
 }
 
