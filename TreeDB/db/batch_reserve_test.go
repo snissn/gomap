@@ -65,6 +65,44 @@ func TestNormalizePublicBatchReserveHint_HandlesEdgeCases(t *testing.T) {
 	}
 }
 
+func TestNormalizePublicBatchReserveAndByteHints_PreservesSmallEntryHints(t *testing.T) {
+	const (
+		sizeHint              = 512
+		estimatedBytesPerHint = 192
+	)
+	entryHint, byteHint := NormalizePublicBatchReserveAndByteHints(sizeHint, estimatedBytesPerHint)
+	if entryHint != sizeHint {
+		t.Fatalf("entryHint=%d want %d", entryHint, sizeHint)
+	}
+	if want := sizeHint * estimatedBytesPerHint; byteHint != want {
+		t.Fatalf("byteHint=%d want %d", byteHint, want)
+	}
+}
+
+func TestNormalizePublicBatchReserveAndByteHints_PreservesLargeByteBudget(t *testing.T) {
+	const (
+		sizeHint              = 100_000
+		estimatedBytesPerHint = 192
+	)
+	entryHint, byteHint := NormalizePublicBatchReserveAndByteHints(sizeHint, estimatedBytesPerHint)
+	if want := NormalizePublicBatchReserveHint(sizeHint); entryHint != want {
+		t.Fatalf("entryHint=%d want %d", entryHint, want)
+	}
+	if byteHint != sizeHint {
+		t.Fatalf("byteHint=%d want preserved byte budget %d", byteHint, sizeHint)
+	}
+}
+
+func TestNormalizePublicBatchReserveAndByteHints_CapsHugeByteBudget(t *testing.T) {
+	entryHint, byteHint := NormalizePublicBatchReserveAndByteHints(math.MaxInt, 192)
+	if entryHint != publicBatchHintNormalizedEntryCap {
+		t.Fatalf("entryHint=%d want %d", entryHint, publicBatchHintNormalizedEntryCap)
+	}
+	if want := publicBatchHintNormalizedEntryCap * publicBatchHintApproxBytesPerEntry; byteHint != want {
+		t.Fatalf("byteHint=%d want capped byte budget %d", byteHint, want)
+	}
+}
+
 func TestNewBatchWithSize_NormalizesLargePublicHint(t *testing.T) {
 	db := &DB{}
 	want := NormalizePublicBatchReserveHint(100_000)

@@ -2639,6 +2639,57 @@ func BenchmarkPublicCommandWALRawKVBatchWrite(b *testing.B) {
 	}
 }
 
+func BenchmarkPublicCommandWALRawKVBatchWriteFlushThresholdHint(b *testing.B) {
+	const (
+		batchHint = 100_000
+		batchOps  = 512
+		valueSize = 128
+	)
+	db, err := Open(Options{
+		Dir:                 b.TempDir(),
+		Durability:          DurabilityWALOnRelaxed,
+		CommandWAL:          true,
+		CommandWALStatsScan: true,
+		DisableSideStores:   true,
+	})
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	keys := make([][]byte, batchOps)
+	for i := range keys {
+		keys[i] = []byte(fmt.Sprintf("rawkv-flush-threshold-key-%08d", i))
+	}
+	value := bytes.Repeat([]byte{1}, valueSize)
+
+	b.SetBytes(int64(batchOps * (len(keys[0]) + len(value))))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch := db.NewBatchWithSize(batchHint)
+		for j := 0; j < batchOps; j++ {
+			if err := batch.Set(keys[j], value); err != nil {
+				_ = batch.Close()
+				b.Fatalf("batch Set: %v", err)
+			}
+		}
+		if err := batch.Write(); err != nil {
+			_ = batch.Close()
+			b.Fatalf("batch Write: %v", err)
+		}
+		if err := batch.Close(); err != nil {
+			b.Fatalf("batch Close: %v", err)
+		}
+	}
+	b.StopTimer()
+	totalSets := float64(b.N * batchOps)
+	b.ReportMetric(totalSets/b.Elapsed().Seconds(), "sets/s")
+	b.ReportMetric(float64(batchHint), "batch_hint")
+	b.ReportMetric(float64(batchOps), "sets/batch")
+	assertPublicCommandWALFramesB(b, db, uint64(b.N))
+}
+
 func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 	opts := OptionsFor(ProfileCommandWALDurable, b.TempDir())
 	opts.DisableSideStores = true

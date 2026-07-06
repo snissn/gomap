@@ -148,6 +148,32 @@ func NormalizePublicBatchReserveHint(size int) int {
 	return entries
 }
 
+// NormalizePublicBatchReserveAndByteHints returns the normalized entry reserve
+// together with a bounded byte-capacity hint for callers that also maintain a
+// byte-oriented append buffer. For large public size hints, preserve the
+// original byte budget up to the same conservative cap used by reserve
+// normalization so IAVL-style flush thresholds can avoid append-buffer growth
+// without preallocating one entry per byte.
+func NormalizePublicBatchReserveAndByteHints(size, estimatedBytesPerEntry int) (entryHint, byteHint int) {
+	entryHint = NormalizePublicBatchReserveHint(size)
+	if entryHint <= 0 || estimatedBytesPerEntry <= 0 {
+		return entryHint, 0
+	}
+	if entryHint <= int(^uint(0)>>1)/estimatedBytesPerEntry {
+		byteHint = entryHint * estimatedBytesPerEntry
+	}
+	if size <= publicBatchHintExactEntryReserveMax || size <= byteHint {
+		return entryHint, byteHint
+	}
+	maxByteHint := publicBatchHintNormalizedEntryCap * publicBatchHintApproxBytesPerEntry
+	if size < maxByteHint {
+		byteHint = size
+	} else {
+		byteHint = maxByteHint
+	}
+	return entryHint, byteHint
+}
+
 func (db *DB) newBatchWithEntryReserve(entries int) batch.Interface {
 	return db.newBatchWithReserveHint(entries)
 }

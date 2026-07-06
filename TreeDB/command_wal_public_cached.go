@@ -361,11 +361,7 @@ func newCommandWALPublicBatch(tdb *DB, inner Batch, opHint int) *commandWALPubli
 	b := &commandWALPublicBatch{db: tdb, inner: inner, payload: payload}
 	b.disableInnerStreamingBypass()
 	b.rebindInnerViewers()
-	opHint = db.NormalizePublicBatchReserveHint(opHint)
-	byteHint := 0
-	if opHint > 0 && opHint <= int(^uint(0)>>1)/commandWALPublicBatchEstimatedKeyValueBytes {
-		byteHint = opHint * commandWALPublicBatchEstimatedKeyValueBytes
-	}
+	opHint, byteHint := db.NormalizePublicBatchReserveAndByteHints(opHint, commandWALPublicBatchEstimatedKeyValueBytes)
 	b.payloadOpHint = opHint
 	b.payloadByteHint = byteHint
 	b.payloadSoftCapBytes = commandWALPublicBatchPayloadSoftCapBytes
