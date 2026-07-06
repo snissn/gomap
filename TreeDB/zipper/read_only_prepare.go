@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -717,10 +718,12 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 	if len(ops) == 0 && len(ranges) == 0 {
 		return
 	}
+	// Recursive prepare passes low/high as result-owned keyArena slices.
+	// Reusing them here avoids a second clone while preserving span ownership.
 	span := ReadOnlyLeafSpan{
 		Ref:              ref,
-		LowKey:           r.cloneKey(low),
-		HighKey:          r.cloneKey(high),
+		LowKey:           low,
+		HighKey:          high,
 		PointOpCount:     len(ops),
 		DeleteRangeCount: len(ranges),
 		OpCount:          len(ops) + len(ranges),
@@ -731,7 +734,11 @@ func (r *ReadOnlyPrepareResult) addLeafSpan(ref page.ChildRef, low, high []byte,
 	}
 	if len(ops) > 0 {
 		span.FirstOpKey = r.cloneOpKey(ops[0].Key)
-		span.LastOpKey = r.cloneOpKey(ops[len(ops)-1].Key)
+		if len(ops) == 1 {
+			span.LastOpKey = span.FirstOpKey
+		} else {
+			span.LastOpKey = r.cloneOpKey(ops[len(ops)-1].Key)
+		}
 		for i := range ops {
 			span.ByteCount += readOnlyPrepareEntryBytes(ops[i])
 		}
@@ -1058,13 +1065,6 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			if key == nil {
 				key = []byte{}
 			}
-			childLow := low
-			if len(key) != 0 {
-				// Base-delta internal pages may return key views backed by shared
-				// node scratch. Clone the current separator before fetching the
-				// next entry, which can overwrite the view.
-				childLow = result.cloneKey(key)
-			}
 
 			var endKey []byte
 			if i+1 < count {
@@ -1087,11 +1087,50 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 				break
 			}
 
+			childOps := ops[startOpIdx:opIdx]
+			if len(ranges) == 0 {
+				if len(childOps) == 0 {
+					continue
+				}
+				childLow, childHigh, err := prepareReadOnlyPointChildBounds(oldNode, i, count, low, high, key, endKey, childOps, result)
+				if err != nil {
+					return err
+				}
+				if err := z.prepareReadOnlyRecursive(childRef, childOps, opBase+startOpIdx, nil, rangeBase, childLow, childHigh, result, scratch); err != nil {
+					return err
+				}
+				continue
+			}
+
+			childLow := low
+			if len(key) != 0 {
+				// Base-delta internal pages may return key views backed by shared
+				// node scratch. Refetch the separator after looking at the next entry
+				// so range planning clones from a stable view.
+				if oldNode.InternalBaseDeltaEnabled() {
+					key, _, err = oldNode.GetInternalEntryRefView(i)
+					if err != nil {
+						return err
+					}
+					if key == nil {
+						key = []byte{}
+					}
+				}
+				childLow = result.cloneKey(key)
+			}
 			childHigh := high
 			if endKey != nil {
+				if oldNode.InternalBaseDeltaEnabled() {
+					endKey, _, err = oldNode.GetInternalEntryRefView(i + 1)
+					if err != nil {
+						return err
+					}
+					if endKey == nil {
+						endKey = []byte{}
+					}
+				}
 				childHigh = result.cloneKey(endKey)
 			}
-			childOps := ops[startOpIdx:opIdx]
 			if len(childOps) > 0 && childLow != nil && bytes.Compare(childOps[0].Key, childLow) < 0 {
 				childLow = result.cloneKey(childOps[0].Key)
 			}
@@ -1107,6 +1146,41 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 	default:
 		return page.ErrInvalidPageType
 	}
+}
+
+func prepareReadOnlyPointChildBounds(oldNode node.Node, i, count uint16, low, high, key, endKey []byte, childOps []batch.Entry, result *ReadOnlyPrepareResult) ([]byte, []byte, error) {
+	childLow := low
+	var err error
+	if len(key) != 0 {
+		if oldNode.InternalBaseDeltaEnabled() {
+			key, _, err = oldNode.GetInternalEntryRefView(i)
+			if err != nil {
+				return nil, nil, err
+			}
+			if key == nil {
+				key = []byte{}
+			}
+		}
+		childLow = result.cloneKey(key)
+	}
+
+	childHigh := high
+	if endKey != nil {
+		if oldNode.InternalBaseDeltaEnabled() && i+1 < count {
+			endKey, _, err = oldNode.GetInternalEntryRefView(i + 1)
+			if err != nil {
+				return nil, nil, err
+			}
+			if endKey == nil {
+				endKey = []byte{}
+			}
+		}
+		childHigh = result.cloneKey(endKey)
+	}
+	if childLow != nil && bytes.Compare(childOps[0].Key, childLow) < 0 {
+		childLow = result.cloneKey(childOps[0].Key)
+	}
+	return childLow, childHigh, nil
 }
 
 func deleteRangeIndexSpan(ranges []batch.DeleteRange, low, high []byte) (int, int) {

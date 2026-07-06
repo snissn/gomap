@@ -346,6 +346,35 @@ func TestZipperPrepareReadOnlyManyLeafSplitBoundaryDeterministic(t *testing.T) {
 	}
 }
 
+func TestZipperPrepareReadOnlyPointSpanKeysDoNotAliasInputs(t *testing.T) {
+	_, z := newReadOnlyPrepareZipper(t)
+	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 768)
+
+	ops := make([]batch.Entry, 0, 7)
+	for _, idx := range []int{0, 127, 128, 255, 256, 511, 767} {
+		key := []byte(fmt.Sprintf("key-%06d", idx))
+		ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: []byte("new")})
+	}
+
+	prepared, err := z.PrepareReadOnlyPlan(rootID, ops, nil, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatalf("PrepareReadOnlyPlan: %v", err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	before := readOnlySpanSignature(prepared)
+
+	for i := range ops {
+		for j := range ops[i].Key {
+			ops[i].Key[j] ^= 0xff
+		}
+	}
+
+	after := readOnlySpanSignature(prepared)
+	if !reflect.DeepEqual(after, before) {
+		t.Fatalf("prepared span keys changed after mutating input ops\n got=%v\nwant=%v", after, before)
+	}
+}
+
 func TestZipperPrepareReadOnlyOmitKeysSkipsSpanKeyCopies(t *testing.T) {
 	_, z := newReadOnlyPrepareZipper(t)
 	rootID := buildReadOnlyPrepareRootWithKeys(t, z, 768)
