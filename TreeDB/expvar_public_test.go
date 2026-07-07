@@ -31,6 +31,9 @@ func TestPublicExpvarIncludesPublicStatsHookCounters(t *testing.T) {
 					t.Fatalf("Close: %v", err)
 				}
 			})
+			if err := db.Checkpoint(); err != nil {
+				t.Fatalf("Checkpoint: %v", err)
+			}
 
 			assertPublicExpvarStatsHookCounters(t, db, tc.wantCommandWAL)
 		})
@@ -68,6 +71,12 @@ func assertPublicExpvarStatsHookCounters(t *testing.T, db *DB, wantCommandWAL bo
 		}
 		if _, ok := instance["treedb.bg_vacuum.vacuums"]; !ok {
 			t.Fatalf("background-vacuum counter missing from public expvar instance: %+v", instance)
+		}
+		if got, ok := instance["treedb.public.checkpoint.calls_total"].(float64); !ok || got != 1 {
+			t.Fatalf("public checkpoint calls=%T(%v) want float64(1)", instance["treedb.public.checkpoint.calls_total"], instance["treedb.public.checkpoint.calls_total"])
+		}
+		if _, ok := instance["treedb.public.checkpoint.ns_total"]; !ok {
+			t.Fatalf("public checkpoint ns_total missing from public expvar instance: %+v", instance)
 		}
 		_, hasCommandWALBatch := instance["treedb.command_wal.public_batch.set_view.calls_total"]
 		if wantCommandWAL && !hasCommandWALBatch {

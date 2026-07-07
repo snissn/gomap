@@ -134,6 +134,7 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 		if isProcessWideExpvarKey(k) ||
 			strings.HasPrefix(k, "treedb.process.identity.") ||
 			strings.HasPrefix(k, "treedb.command_wal.") ||
+			strings.HasPrefix(k, "treedb.public.") ||
 			strings.HasPrefix(k, "treedb.maintenance.") ||
 			strings.HasPrefix(k, "treedb.bg_vacuum.") ||
 			strings.HasPrefix(k, "treedb.flush_admission.") ||

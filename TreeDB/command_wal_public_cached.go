@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
@@ -791,9 +792,15 @@ func (b *commandWALPublicBatch) WriteSync() error {
 	return b.write(true)
 }
 
-func (b *commandWALPublicBatch) write(sync bool) error {
+func (b *commandWALPublicBatch) write(sync bool) (err error) {
 	if b == nil || b.inner == nil {
 		return ErrClosed
+	}
+	start := time.Now()
+	if b.db != nil {
+		defer func() {
+			b.db.observePublicBatchWrite(sync, start, err)
+		}()
 	}
 	if b.db != nil {
 		if err := b.db.beginPublicOperation(); err != nil {

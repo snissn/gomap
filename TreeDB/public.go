@@ -185,6 +185,9 @@ type DB struct {
 	commandWALPublicBatchDeleteViewBytes atomic.Uint64
 	rawSpanNativePublicUpdateReject      atomic.Uint64
 	rawSpanNativePublicUpdateSyncReject  atomic.Uint64
+	publicBatchWrite                     publicOperationStats
+	publicBatchWriteSync                 publicOperationStats
+	publicCheckpoint                     publicOperationStats
 	bgVac                                bgIndexVacuumWorker
 	notifyError                          func(error)
 	bgErrMu                              sync.Mutex
@@ -193,6 +196,14 @@ type DB struct {
 	valueLogReadIntegrity                string
 	dir                                  string
 	maintenance                          maintenanceCoordinator
+}
+
+type publicOperationStats struct {
+	calls   atomic.Uint64
+	errors  atomic.Uint64
+	nsTotal atomic.Uint64
+	lastNs  atomic.Int64
+	maxNs   atomic.Int64
 }
 
 var (
@@ -274,6 +285,34 @@ func atomicStoreMaxInt64(dst *atomic.Int64, value int64) {
 			return
 		}
 	}
+}
+
+func (s *publicOperationStats) observe(start time.Time, err error) {
+	if s == nil {
+		return
+	}
+	elapsed := time.Since(start).Nanoseconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	s.calls.Add(1)
+	if err != nil {
+		s.errors.Add(1)
+	}
+	s.nsTotal.Add(uint64(elapsed))
+	s.lastNs.Store(elapsed)
+	atomicStoreMaxInt64(&s.maxNs, elapsed)
+}
+
+func publicOperationStatsInto(stats map[string]string, prefix string, s *publicOperationStats) {
+	if stats == nil || s == nil || prefix == "" {
+		return
+	}
+	stats[prefix+".calls_total"] = fmt.Sprintf("%d", s.calls.Load())
+	stats[prefix+".errors_total"] = fmt.Sprintf("%d", s.errors.Load())
+	stats[prefix+".ns_total"] = fmt.Sprintf("%d", s.nsTotal.Load())
+	stats[prefix+".last_ns"] = fmt.Sprintf("%d", s.lastNs.Load())
+	stats[prefix+".max_ns"] = fmt.Sprintf("%d", s.maxNs.Load())
 }
 
 func writePathFromOptions(opts Options) writePathInfo {
@@ -887,6 +926,7 @@ func (db *DB) publicCachedExpvarStatsInto(stats map[string]string) {
 		return
 	}
 	db.publicCommandWALBatchStatsInto(stats)
+	db.publicOperationStatsInto(stats)
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	maintenanceStatsInto(stats, &db.maintenance)
 }
@@ -1984,6 +2024,7 @@ func (db *DB) Stats() map[string]string {
 		db.publicCommandWALLiveStatsInto(stats)
 		db.publicCommandWALBatchStatsInto(stats)
 		db.publicRawSpanNativeStatsInto(stats)
+		db.publicOperationStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
@@ -1996,6 +2037,7 @@ func (db *DB) Stats() map[string]string {
 	}
 	writePathStatsInto(stats, db.writePath)
 	db.publicRawSpanNativeStatsInto(stats)
+	db.publicOperationStatsInto(stats)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
@@ -2015,6 +2057,33 @@ func (db *DB) publicRawSpanNativeStatsInto(stats map[string]string) {
 	stats[prefix+"route.update.fallback.reason.command_wal_barrier.ops_total"] = fmt.Sprintf("%d", update)
 	stats[prefix+"route.update_sync.fallback.reason.command_wal_barrier.count_total"] = fmt.Sprintf("%d", updateSync)
 	stats[prefix+"route.update_sync.fallback.reason.command_wal_barrier.ops_total"] = fmt.Sprintf("%d", updateSync)
+}
+
+func (db *DB) publicOperationStatsInto(stats map[string]string) {
+	if db == nil || stats == nil {
+		return
+	}
+	publicOperationStatsInto(stats, "treedb.public.batch.write", &db.publicBatchWrite)
+	publicOperationStatsInto(stats, "treedb.public.batch.write_sync", &db.publicBatchWriteSync)
+	publicOperationStatsInto(stats, "treedb.public.checkpoint", &db.publicCheckpoint)
+}
+
+func (db *DB) observePublicBatchWrite(sync bool, start time.Time, err error) {
+	if db == nil {
+		return
+	}
+	if sync {
+		db.publicBatchWriteSync.observe(start, err)
+		return
+	}
+	db.publicBatchWrite.observe(start, err)
+}
+
+func (db *DB) observePublicCheckpoint(start time.Time, err error) {
+	if db == nil {
+		return
+	}
+	db.publicCheckpoint.observe(start, err)
 }
 
 // DurabilityMode reports the effective durability/integrity policy string.
@@ -2062,7 +2131,11 @@ func (db *DB) Print() error {
 // the PR1 collection WAL target contract. After collection WAL lands,
 // Checkpoint returning nil must also cover pre-cut collection WAL transactions
 // or return/report explicit collection WAL debt.
-func (db *DB) Checkpoint() error {
+func (db *DB) Checkpoint() (err error) {
+	start := time.Now()
+	defer func() {
+		db.observePublicCheckpoint(start, err)
+	}()
 	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
