@@ -580,12 +580,14 @@ func assertColumnPhysicalQ1DenseOneShotSetupDiagnostics1950(tb testing.TB, label
 	if targetedRanges && diag.TypedColumnPrepareRangeReadBytes == 0 {
 		tb.Fatalf("%s setup missing targeted range-read bytes diagnostics=%+v", label, diag)
 	}
-	if diag.TypedColumnPreparePartDecodeNanos != 0 &&
+	unexplainedSetupNanos := diag.TypedColumnOneShotBuildNanos - diag.TypedColumnPreparePartDecodeNanos
+	if unexplainedSetupNanos > 0 &&
 		rawSetupNanos == 0 &&
 		diag.TypedColumnPrepareDenseGroupNanos == 0 &&
 		!targetedRanges {
-		tb.Fatalf("%s setup missing split diagnostics read_image=%d state_build=%d dictionary=%d adapter=%d dense_group=%d diagnostics=%+v",
+		tb.Fatalf("%s setup missing split diagnostics unexplained_setup=%d read_image=%d state_build=%d dictionary=%d adapter=%d dense_group=%d diagnostics=%+v",
 			label,
+			unexplainedSetupNanos,
 			diag.TypedColumnPrepareReadImageNanos,
 			diag.TypedColumnPrepareStateBuildNanos,
 			diag.TypedColumnPrepareDictionaryNanos,
