@@ -24,6 +24,8 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.command_wal.writer.command_buffer.dropped_bytes_total":                                "67108864",
 		"treedb.command_wal.writer.pending_batch.capacity_bytes":                                      "32768",
 		"treedb.command_wal.public_batch.set_view.calls_total":                                        "11",
+		"treedb.maintenance.full_scan.gc_runs":                                                        "2",
+		"treedb.bg_vacuum.vacuums":                                                                    "5",
 		"treedb.vlog.mmap_active_bytes":                                                               "22222",
 		"treedb.vlog.mmap_max_mapped_leaf_sealed_bytes":                                               "1610612736",
 		"treedb.vlog.decode_buffer_grow.read_append_decoded_payload.calls_total":                      "17",
@@ -79,8 +81,16 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.flush_apply.foreground_assist_wait_ns_total":                                    "12345",
 		"treedb.cache.flush_span_run.ops_per_span":                                                    "8.5",
 		"treedb.cache.flush_backlog_coalescing.skip.reason.not_enough_backlog_total":                  "6",
+		"treedb.cache.checkpoint.runs":                                                                "3",
+		"treedb.cache.checkpoint.total_ms":                                                            "123.5",
+		"treedb.cache.checkpoint.stage.backend_boundary.total_ns":                                     "987654321",
+		"treedb.cache.auto_checkpoint.count":                                                          "8",
+		"treedb.cache.auto_checkpoint.last_reason":                                                    "size",
 		"treedb.cache.command_wal.checkpoint_publish.piggybacked":                                     "2",
 		"treedb.cache.command_wal.checkpoint_publish.separate":                                        "1",
+		"treedb.cache.leaf_log_lanes.append_bytes_total":                                              "4096",
+		"treedb.cache.vlog_queue.depth_max":                                                           "12",
+		"treedb.cache.vlog_shape.bytes_total":                                                         "777",
 		"treedb.cache.write.wait_for_checkpoint.count_total":                                          "4",
 		"treedb.cache.backpressure_mode":                                                              "adaptive",
 		"treedb.cache.entry_slice.trim_runs_total":                                                    "77",
@@ -90,6 +100,23 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	got := selectTreeDBExpvarStats(stats)
 	if len(got) < 10 {
 		t.Fatalf("selectTreeDBExpvarStats len=%d want at least 10", len(got))
+	}
+
+	for key, want := range map[string]any{
+		"treedb.maintenance.full_scan.gc_runs":                    int64(2),
+		"treedb.bg_vacuum.vacuums":                                int64(5),
+		"treedb.cache.checkpoint.runs":                            int64(3),
+		"treedb.cache.checkpoint.total_ms":                        123.5,
+		"treedb.cache.checkpoint.stage.backend_boundary.total_ns": int64(987654321),
+		"treedb.cache.auto_checkpoint.count":                      int64(8),
+		"treedb.cache.auto_checkpoint.last_reason":                "size",
+		"treedb.cache.leaf_log_lanes.append_bytes_total":          int64(4096),
+		"treedb.cache.vlog_queue.depth_max":                       int64(12),
+		"treedb.cache.vlog_shape.bytes_total":                     int64(777),
+	} {
+		if got[key] != want {
+			t.Fatalf("%s=%T(%v) want %T(%v)", key, got[key], got[key], want, want)
+		}
 	}
 
 	if v, ok := got["treedb.vlog.mmap_active_bytes"].(int64); !ok || v != 22222 {
