@@ -503,11 +503,23 @@ func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
 			t.Fatalf("%s=%d want %d", tt.key, got, tt.want)
 		}
 	}
+	if got := publicStatUint64(t, db, "treedb.public.batch.write.calls_total"); got != 1 {
+		t.Fatalf("public batch write calls=%d want 1", got)
+	}
+	if got := publicStatUint64(t, db, "treedb.public.batch.write.ns_total"); got == 0 {
+		t.Fatalf("public batch write ns_total=0 want >0")
+	}
+	if got := publicStatUint64(t, db, "treedb.public.batch.write_sync.calls_total"); got != 0 {
+		t.Fatalf("public batch write_sync calls=%d want 0", got)
+	}
 	cachedStats := db.cached.Stats()
 	for _, tt := range tests {
 		if got := statMapUint64(t, cachedStats, tt.key); got != tt.want {
 			t.Fatalf("cached stats %s=%d want %d", tt.key, got, tt.want)
 		}
+	}
+	if got := statMapUint64(t, cachedStats, "treedb.public.batch.write.calls_total"); got != 1 {
+		t.Fatalf("cached stats public batch write calls=%d want 1", got)
 	}
 }
 
