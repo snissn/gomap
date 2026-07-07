@@ -831,7 +831,7 @@ func Open(opts Options) (*DB, error) {
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
 		cached.SetCommandWALCheckpointCleanupHook(out.cleanupPublicCommandWALCheckpoint)
 		cached.SetAutoCheckpointWALBytesHook(out.publicCommandWALAutoCheckpointBytes)
-		cached.SetStatsHook(out.publicCommandWALBatchStatsInto)
+		cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 	}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
@@ -880,6 +880,15 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	return out, nil
+}
+
+func (db *DB) publicCachedExpvarStatsInto(stats map[string]string) {
+	if db == nil {
+		return
+	}
+	db.publicCommandWALBatchStatsInto(stats)
+	bgIndexVacuumStatsInto(stats, &db.bgVac)
+	maintenanceStatsInto(stats, &db.maintenance)
 }
 
 const (
