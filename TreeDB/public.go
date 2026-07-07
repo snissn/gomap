@@ -826,7 +826,6 @@ func Open(opts Options) (*DB, error) {
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
 	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
-	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 	if out.commandWALCached {
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
@@ -878,6 +877,7 @@ func Open(opts Options) (*DB, error) {
 		}
 		out.bgVac.Start(out, vacuumInterval, spanRatioPPM)
 	}
+	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 
 	return out, nil
 }
