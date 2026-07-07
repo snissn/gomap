@@ -134,6 +134,8 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 		if isProcessWideExpvarKey(k) ||
 			strings.HasPrefix(k, "treedb.process.identity.") ||
 			strings.HasPrefix(k, "treedb.command_wal.") ||
+			strings.HasPrefix(k, "treedb.maintenance.") ||
+			strings.HasPrefix(k, "treedb.bg_vacuum.") ||
 			strings.HasPrefix(k, "treedb.flush_admission.") ||
 			strings.HasPrefix(k, "treedb.flush_apply.") ||
 			strings.HasPrefix(k, "treedb.raw.span_native.") ||
@@ -146,9 +148,14 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 			strings.HasPrefix(k, "treedb.cache.flush_apply.") ||
 			strings.HasPrefix(k, "treedb.cache.flush_span_run.") ||
 			strings.HasPrefix(k, "treedb.cache.flush_backlog_coalescing.") ||
+			strings.HasPrefix(k, "treedb.cache.checkpoint.") ||
+			strings.HasPrefix(k, "treedb.cache.auto_checkpoint.") ||
 			strings.HasPrefix(k, "treedb.cache.command_wal.") ||
+			strings.HasPrefix(k, "treedb.cache.leaf_log_lanes.") ||
 			strings.HasPrefix(k, "treedb.cache.write.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_queue.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_shape.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_grouped_frame_cache.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_decode_buffer_grow.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_decode_scratch.") ||
