@@ -826,12 +826,12 @@ func Open(opts Options) (*DB, error) {
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
 	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 	if out.commandWALCached {
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
 		cached.SetCommandWALCheckpointCleanupHook(out.cleanupPublicCommandWALCheckpoint)
 		cached.SetAutoCheckpointWALBytesHook(out.publicCommandWALAutoCheckpointBytes)
-		cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 	}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth
