@@ -249,9 +249,12 @@ Durability mode controls guarantees for sync calls:
 - `DurabilityDurable`:
   - `*Sync` methods use fsync durability boundaries.
 - `DurabilityWALOnRelaxed`:
-  - WAL remains on, but `*Sync` is relaxed (no fsync boundary).
+  - In legacy/raw compatibility mode, WAL remains on, but `*Sync` is relaxed
+    (no fsync boundary). In the current command-WAL relaxed profile, command
+    frames remain the recovery source while sync is relaxed.
 - `DurabilityWALOffRelaxed`:
-  - WAL off, relaxed sync; durability boundary is typically checkpoint-based.
+  - In benchmark/compatibility mode, WAL off means relaxed sync; the durability
+    boundary is typically checkpoint-based.
 
 Detailed semantics are in `TreeDB/docs/spec/write-path-and-durability.md`.
 
@@ -290,13 +293,13 @@ Current collection data mutators:
 
 Target user-command WAL mutators:
 
-| Method family | Target WAL-on durable-at-ack contract | WAL-off relaxed contract |
+| Method family | Target command-WAL durable-at-ack contract | Benchmark/compatibility WAL-off relaxed contract |
 |---|---|---|
 | Insert by explicit ID | `CollectionInsertBatchByID` is one command frame with one LSN and all-or-nothing replay. Success/visibility waits for recoverable WAL plus normal-executor apply; checkpoint/cleanup later publishes roots plus `AppliedLSN`. | Process-local visibility until an explicit persistence boundary covers the batch. |
 | Delete by explicit ID | `CollectionDeleteBatchByID` is one command frame with one LSN and all-or-nothing replay. Secondary-index deletes and tombstones are derived by the normal executor; checkpoint/cleanup later publishes roots plus `AppliedLSN`. | Process-local visibility until an explicit persistence boundary. |
 | Declarative update by explicit ID | `CollectionUpdateByIDOps` logs canonical operators over resolved literal values. Resolver helpers run before WAL append and are never invoked during recovery. | Process-local visibility until an explicit persistence boundary. |
 | Callback update by explicit ID | Callback identity is discarded before WAL append; the WAL logs final accepted replacements/no-ops or another stable replayable result. No Go callback is replayed. | Process-local visibility until an explicit persistence boundary. |
-| Query-wide update/delete | WAL-on durable-at-ack modes reject until a future command kind defines deterministic target ordering, preconditions, and result assertions. | May remain allowed only under durability profiles that make no durable-at-ack claim. |
+| Query-wide update/delete | Command-WAL durable-at-ack modes reject until a future command kind defines deterministic target ordering, preconditions, and result assertions. | May remain allowed only under benchmark/compatibility durability profiles that make no durable-at-ack claim. |
 
 A target WAL-supported command may not return success or become owner-visible
 from the WAL frame alone. V1 has no durable pending overlay: success/visibility
@@ -427,7 +430,7 @@ Operations that need persisted roots as planning input, including schema/index
 changes, must drain pending indexed write-domain state and wait for in-flight
 async publish units before taking their planning snapshot.
 
-Under the planned user-command WAL contract, WAL-on collection visibility
+Under the planned user-command WAL contract, command-WAL collection visibility
 implies recoverability. No read, uniqueness check, update/delete planner, or
 pending merge may observe a mutation before its typed command WAL frame is
 committed/recoverable.

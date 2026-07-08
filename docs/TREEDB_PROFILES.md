@@ -128,8 +128,8 @@ Behavior:
 - Enables command WAL:
   - `CommandWAL = true`
 - Keeps command frames recoverable from the local command-WAL path while relaxing
-  sync/checksum policy:
-  - `Durability = DurabilityWALOnRelaxed`
+  sync/checksum policy through `DurabilityWALOnRelaxed`:
+  - `Durability = DurabilityWALOnRelaxed` (current command-WAL relaxed durability mode)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses the same production-fast collection/index layout and compression defaults
   as `ProfileCommandWALDurable`.
@@ -148,7 +148,7 @@ Goal: no-WAL benchmark-friendly determinism.
 Behavior:
 
 - Uses the fast collection/index layout bundle.
-- Disables WAL through the no-WAL cached path.
+- Disables WAL through the benchmark-only no-WAL cached compatibility path.
 - Disables background workers that can inject large work mid-run:
   - cached-mode auto-checkpoint triggers disabled
     (`BackgroundCheckpointInterval < 0`, `BackgroundCheckpointIdleDuration < 0`,

@@ -127,15 +127,31 @@ func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
 	paths := []string{
 		filepath.Join(treeRoot, "README.md"),
 		filepath.Join(treeRoot, "docs", "spec", "README.md"),
+		filepath.Join(treeRoot, "docs", "spec", "storage-format.md"),
+		filepath.Join(treeRoot, "docs", "spec", "write-path-and-durability.md"),
+		filepath.Join(treeRoot, "docs", "spec", "recovery.md"),
+		filepath.Join(treeRoot, "docs", "spec", "value-log-lifecycle.md"),
+		filepath.Join(treeRoot, "docs", "spec", "contracts.md"),
+		filepath.Join(treeRoot, "docs", "spec", "verification.md"),
 		filepath.Join(treeRoot, "docs", "spec", "command-wal-legacy-surface-inventory.md"),
+		filepath.Join(repoRoot, "docs", "README.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_CACHED_VS_BACKEND.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_CONCEPTS.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_PROFILES.md"),
+		filepath.Join(repoRoot, "docs", "contracts", "DURABILITY.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_RECOVERY.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_TUNING.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_VALUELOG_AUTOTUNE.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_VLOG_GENERATIONAL_RUNBOOK.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_WRITE_PATHS.md"),
+		filepath.Join(repoRoot, "docs", "BENCHMARK_SPEC.md"),
 		filepath.Join(repoRoot, "cmd", "unified_bench", "README.md"),
 	}
+	guidePaths, err := filepath.Glob(filepath.Join(treeRoot, "docs", "guides", "*.md"))
+	if err != nil {
+		t.Fatalf("glob TreeDB guide docs: %v", err)
+	}
+	paths = append(paths, guidePaths...)
 	for _, p := range paths {
 		content, err := os.ReadFile(p)
 		if err != nil {
@@ -143,15 +159,23 @@ func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
 		}
 		lines := strings.Split(string(content), "\n")
 		for i, line := range lines {
-			if !mentionsLegacyWALTerm(line) {
+			lowerLine := strings.ToLower(line)
+			legacyProfileAlias := mentionsLegacyProfileAlias(lowerLine)
+			if !legacyProfileAlias && !mentionsLegacyWALTerm(line) {
 				continue
 			}
-			context := strings.ToLower(line)
+			context := lowerLine
 			if i > 0 {
 				context = strings.ToLower(lines[i-1]) + " " + context
 			}
 			if i+1 < len(lines) {
 				context += " " + strings.ToLower(lines[i+1])
+			}
+			if legacyProfileAlias {
+				if hasLegacyProfileAliasContext(context) {
+					continue
+				}
+				t.Fatalf("%s:%d mentions legacy profile alias without legacy/compatibility/benchmark context: %s", p, i+1, line)
 			}
 			if hasLegacyWALContext(context) {
 				continue
@@ -167,14 +191,237 @@ func mentionsLegacyWALTerm(line string) bool {
 		"legacy_wal",
 		"wal_on_fast",
 		"no_wal_fast",
+		"profilefast",
+		"profilewalonfast",
+		"profilelegacy",
+		"profiledurable",
+		"profilenowalfast",
+		"durabilitywaloffrelaxed",
+		"durabilitywalonrelaxed",
+		"disablejournal",
 		"disablewal",
 		"disable wal",
-		"wal-on",
-		"wal on/off",
-		"wal-off",
-		"wal off",
+		"no-wal",
+		"no wal",
 	} {
 		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	if mentionsLegacyWALModePhrase(lower) {
+		return true
+	}
+	return mentionsLegacyProfileAlias(lower)
+}
+
+func TestCommandWALLegacyTermMatcherCatchesDelimitedProfileAliases(t *testing.T) {
+	for _, line := range []string{
+		"`durable`",
+		"`fast`",
+		"`walonfast`",
+		"`wal_on_fast`",
+		"-profile durable",
+		"-profile=durable",
+		"--profile fast",
+		"--profile=fast",
+		"-treedb-profile walonfast",
+		"--treedb-profile=wal_on_fast",
+		"TREEDB_OPEN_PROFILE=fast",
+		"TREEDB_PROFILE=wal_on_fast",
+		"BENCH_PROFILE=fast",
+		"BENCH_PROFILE=durable",
+		"profile=durable",
+		"no-WAL benchmark ceiling",
+		"no WAL benchmark ceiling",
+	} {
+		if !mentionsLegacyWALTerm(line) {
+			t.Fatalf("mentionsLegacyWALTerm(%q) = false, want true", line)
+		}
+	}
+	for _, line := range []string{
+		"the fast path remains current",
+		"durable command-WAL writes",
+		"fast checkpoint cleanup",
+		"Command-WAL-only protection remains current",
+	} {
+		if mentionsLegacyWALTerm(line) {
+			t.Fatalf("mentionsLegacyWALTerm(%q) = true, want false", line)
+		}
+	}
+}
+
+func TestCommandWALLegacyProfileAliasesRequireLegacyOrBenchmarkContext(t *testing.T) {
+	for _, context := range []string{
+		"`fast` is a legacy benchmark-runner ceiling preset",
+		"`durable` is a cross-DB benchmark preset, not a TreeDB server profile",
+		"`wal_on_fast` remains a compatibility alias for historical artifacts",
+	} {
+		if !hasLegacyProfileAliasContext(context) {
+			t.Fatalf("hasLegacyProfileAliasContext(%q) = false, want true", context)
+		}
+	}
+	for _, context := range []string{
+		"`fast` is the current command-WAL profile",
+		"`wal_on_fast` is a command-WAL profile",
+		"`durable` is current command-WAL guidance",
+	} {
+		if hasLegacyProfileAliasContext(context) {
+			t.Fatalf("hasLegacyProfileAliasContext(%q) = true, want false", context)
+		}
+	}
+}
+
+func mentionsLegacyProfileAlias(lower string) bool {
+	for _, alias := range []string{
+		"legacy_wal_relaxed_fast",
+		"legacy_wal_durable",
+		"no_wal_fast",
+		"wal_on_fast",
+		"walonfast",
+		"durable",
+		"fast",
+	} {
+		if containsDelimitedLegacyProfileAlias(lower, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func mentionsLegacyWALModePhrase(lower string) bool {
+	for _, phrase := range []string{
+		"wal on/off",
+		"wal on",
+		"wal off",
+		"wal-on",
+		"wal-off",
+	} {
+		if containsLegacyWALModePhrase(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsLegacyWALModePhrase(lower, phrase string) bool {
+	for {
+		idx := strings.Index(lower, phrase)
+		if idx < 0 {
+			return false
+		}
+		if !hasCommandWALPrefix(lower, idx) && hasLegacyWALPhraseBoundary(lower, idx, len(phrase)) {
+			return true
+		}
+		lower = lower[idx+len(phrase):]
+	}
+}
+
+func hasCommandWALPrefix(lower string, idx int) bool {
+	const prefix = "command-"
+	return idx >= len(prefix) && lower[idx-len(prefix):idx] == prefix
+}
+
+func hasLegacyWALPhraseBoundary(lower string, idx, phraseLen int) bool {
+	beforeOK := idx == 0 || isLegacyWALPhraseBoundaryByte(lower[idx-1])
+	afterIdx := idx + phraseLen
+	afterOK := afterIdx == len(lower) || isLegacyWALPhraseBoundaryByte(lower[afterIdx])
+	return beforeOK && afterOK
+}
+
+func isLegacyWALPhraseBoundaryByte(b byte) bool {
+	switch b {
+	case ' ', '\t', '`', '"', '\'', ',', '.', ';', ':', '(', '[', '{', ')', ']', '}', '/', '\\':
+		return true
+	default:
+		return false
+	}
+}
+
+func containsDelimitedLegacyProfileAlias(lower, alias string) bool {
+	for _, quoted := range []string{
+		"`" + alias + "`",
+		`"` + alias + `"`,
+		"'" + alias + "'",
+	} {
+		if strings.Contains(lower, quoted) {
+			return true
+		}
+	}
+	for _, prefix := range []string{
+		"-profile ",
+		"-profile=",
+		"--profile ",
+		"--profile=",
+		"-treedb-profile ",
+		"-treedb-profile=",
+		"--treedb-profile ",
+		"--treedb-profile=",
+		"profile=",
+		"profile: ",
+		"bench_profile=",
+		"bench_profile: ",
+		"treedb_open_profile=",
+		"treedb_profile=",
+		"treedb_profile: ",
+	} {
+		if containsLegacyProfileValue(lower, prefix, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsLegacyProfileValue(lower, prefix, alias string) bool {
+	for {
+		idx := strings.Index(lower, prefix)
+		if idx < 0 {
+			return false
+		}
+		value := strings.TrimLeft(lower[idx+len(prefix):], " \t`\"'")
+		if strings.HasPrefix(value, alias) && isLegacyProfileAliasBoundary(value, len(alias)) {
+			return true
+		}
+		lower = lower[idx+len(prefix):]
+	}
+}
+
+func isLegacyProfileAliasBoundary(value string, aliasLen int) bool {
+	if len(value) == aliasLen {
+		return true
+	}
+	switch value[aliasLen] {
+	case ' ', '\t', '`', '"', '\'', ',', '.', ';', ':', ')', ']', '}':
+		return true
+	default:
+		return false
+	}
+}
+
+func hasLegacyProfileAliasContext(context string) bool {
+	for _, term := range []string{
+		"legacy",
+		"compatib",
+		"historical",
+		"deprecated",
+		"unsafe",
+		"benchmark",
+		"internal",
+		"forensic",
+		"reject",
+		"not a treedb server profile",
+		"not public",
+		"not the current",
+		"not normal",
+		"should not present",
+		"must be removed",
+		"quarantin",
+		"archive",
+		"cross-db",
+		"old wal",
+		"old/raw",
+		"legacy/raw",
+	} {
+		if strings.Contains(context, term) {
 			return true
 		}
 	}
@@ -201,24 +448,19 @@ func hasLegacyWALContext(context string) bool {
 		"quarantin",
 		"archive",
 		"cross-db",
-		"old",
-		"low-level",
-		"process-crash",
-		"power-loss",
-		"fsync",
-		"checkpoint",
-		"recoverable",
-		"recoverability",
-		"recovery",
-		"durable-at-ack",
-		"performance",
-		"throughput",
-		"backend-only",
+		"old wal",
+		"old/raw",
+		"legacy/raw",
 		"commit sequence",
 		"mutation sequence",
 		"mutation revision",
 		"writesync",
 		"sync boundaries",
+		"current command-wal",
+		"command-wal profile",
+		"command-wal durable",
+		"command-wal relaxed",
+		"durable command-wal",
 	} {
 		if strings.Contains(context, term) {
 			return true

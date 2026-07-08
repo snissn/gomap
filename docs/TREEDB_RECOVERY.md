@@ -56,7 +56,8 @@ Additionally, cached mode’s background flusher removes journal segments after 
 ## Safety Notes
 
 - Two processes must not open the same directory concurrently. The lock enforces this.
-- WAL off (journal disabled) still uses the value log; there is no backend-only mode.
+- Benchmark/compatibility WAL-off mode (journal disabled) still uses the value
+  log; there is no backend-only mode.
 
 ## Where To Look in Code
 

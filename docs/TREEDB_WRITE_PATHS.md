@@ -59,7 +59,7 @@ TreeDB’s public `Options` API was simplified to make “intent” explicit:
 durability/integrity are selected via `Options.Durability` and
 `Options.ValueLog.*` rather than a loose set of booleans.
 
-Old compatibility mappings:
+Common legacy compatibility mappings:
 
 - `Options.DisableWAL=true` -> `Options.Durability = DurabilityWALOffRelaxed`
   (legacy compatibility / benchmark-only unsafe)

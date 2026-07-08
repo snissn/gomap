@@ -856,6 +856,42 @@ func TestCachingDB_FlushSyncsWhenWALDisabled(t *testing.T) {
 	}
 }
 
+func TestCachingDB_ExternalCommandWALIsDistinctFromUnsafeDisableWAL(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{ExternalCommandWAL: true, FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("Open external command WAL without AllowUnsafe: %v", err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.redo_log.mode"]; got != "external_command_wal" {
+		t.Fatalf("redo_log.mode=%q, want external_command_wal", got)
+	}
+	if got := stats["treedb.cache.redo_log.enabled"]; got != "false" {
+		t.Fatalf("redo_log.enabled=%q, want false", got)
+	}
+	if got := stats["treedb.cache.command_wal.external_durability"]; got != "true" {
+		t.Fatalf("command_wal.external_durability=%q, want true", got)
+	}
+}
+
+func TestCachingDB_ExternalCommandWALRejectsUnsafeDisableWALMix(t *testing.T) {
+	_, err := Open(t.TempDir(), NewMockBackend(), Options{
+		DisableWAL:         true,
+		ExternalCommandWAL: true,
+		AllowUnsafe:        true,
+	})
+	if err == nil {
+		t.Fatal("Open with DisableWAL and ExternalCommandWAL unexpectedly succeeded")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("Open error=%v, want mutually exclusive", err)
+	}
+}
+
 func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

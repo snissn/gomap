@@ -110,11 +110,13 @@ For sync+rewrite tradeoff validation, use the interleaved harness:
 ```bash
 cat >/tmp/cel_control.env <<'EOF'
 LOCAL_GOMAP_DIR=/path/to/control/gomap
+# Legacy compatibility benchmark ceiling, not a public TreeDB server profile.
 TREEDB_OPEN_PROFILE=fast
 EOF
 
 cat >/tmp/cel_candidate.env <<'EOF'
 LOCAL_GOMAP_DIR=/path/to/candidate/gomap
+# Legacy compatibility benchmark ceiling, not a public TreeDB server profile.
 TREEDB_OPEN_PROFILE=fast
 EOF
 
@@ -205,12 +207,12 @@ Additional reporting:
 
 ## Experimental Knob
 - `TREEDB_ENABLE_VLOG_GENERATION_PRECHECKPOINT_REWRITE=1`
-  - WAL-off only.
+  - Legacy WAL-off compatibility profile only.
   - Allows rewrite planning/execution before the first explicit checkpoint.
   - Default is disabled to avoid adding early restore contention.
   - Use for controlled `run_celestia` experiments when `maintenance.skip.before_first_checkpoint` dominates and live rewrite never starts.
 - `TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK_HOT_DEBT_ONLY=1`
-  - WAL-off only.
+  - Legacy WAL-off compatibility profile only.
   - By default, checkpoint-kick maintenance skips starting a fresh rewrite plan while foreground activity is hot and rewrite queue debt is empty.
   - Queued rewrite debt and deferred-due passes still run.
   - Set this disable knob only for controlled rollback experiments that need the legacy checkpoint-kick fresh-plan behavior.
@@ -233,9 +235,10 @@ Additional reporting:
 ### Churn sanity (TreeDB)
 ```bash
 GOWORK=off make unified-bench
+LEGACY_BENCH_PROFILE=fast # legacy benchmark-runner ceiling preset, not a public TreeDB server profile
 ./bin/unified-bench \
   -dbs treedb \
-  -profile fast \
+  -profile "$LEGACY_BENCH_PROFILE" \
   -keys 500000 \
   -progress=false \
   -format markdown \
@@ -248,9 +251,10 @@ GOWORK=off make unified-bench
 
 ### Size-oriented variant (larger outer-leaf blocks)
 ```bash
+LEGACY_BENCH_PROFILE=fast # legacy benchmark-runner ceiling preset, not a public TreeDB server profile
 ./bin/unified-bench \
   -dbs treedb \
-  -profile fast \
+  -profile "$LEGACY_BENCH_PROFILE" \
   -keys 500000 \
   -progress=false \
   -format markdown \

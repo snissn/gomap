@@ -137,7 +137,9 @@ TreeDB exposes explicit durability choices:
 - `Set` / `Batch.Write`: higher throughput, not guaranteed durable on power loss.
 - `SetSync` / `Batch.WriteSync`: forces durability at commit boundaries.
 
-Importantly, crash recovery is coherent across WAL on/off: reopening yields the same recovered state for the last checkpoint.
+Importantly, command-WAL recovery and legacy/no-WAL compatibility paths are
+coherent at checkpoint boundaries: reopening yields the same recovered state for
+the last checkpoint.
 
 See: `docs/contracts/DURABILITY.md` and `docs/TREEDB_RECOVERY.md`.
 

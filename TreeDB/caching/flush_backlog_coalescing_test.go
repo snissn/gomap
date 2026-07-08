@@ -270,8 +270,7 @@ func TestFlushBacklogCoalescingPreservesLaneAndRangeBarriers(t *testing.T) {
 
 	t.Run("range barrier", func(t *testing.T) {
 		db, _ := newCoalescingTestDB(t, Options{
-			DisableWAL:                              true,
-			AllowUnsafe:                             true,
+			ExternalCommandWAL:                      true,
 			FlushBacklogCoalescing:                  true,
 			FlushBacklogCoalescingMaxMemtables:      8,
 			FlushBacklogCoalescingMaxOps:            16,
