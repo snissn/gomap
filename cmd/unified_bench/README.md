@@ -224,11 +224,12 @@ no-WAL profiling ceiling; it is not a TreeDB server profile recommendation:
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
   -dbs treedb \
   -keys 800000 \
-  -profile fast \
+  -profile "$BENCH_PROFILE" \
   -checkpoint-between-tests \
   -test random_write,random_delete,random_read,full_scan,prefix_scan \
   -profile-dir "$OUT" \
@@ -350,9 +351,8 @@ point. It measures the production column-enabled collection manifest/control
 path, durable command-WAL publication, isolated physical column assets, planner
 diagnostics, parity, byte accounting, and executable row-store / B-tree /
 physical-column labels with a deterministic JSONBench-shaped fixture.
-`-profile balanced` is accepted as a durable-profile compatibility alias for
-the column store benchmark suite so the unified-bench default still exercises
-the durable gate. The runnable
+`-profile balanced` is accepted as a standard benchmark preset for the column
+store suite, so the unified-bench default still exercises the durable gate. The runnable
 execution labels are `row_store_baseline`, `b_tree_index_baseline`,
 `serial_column_scan`, `aggregate_metadata`, and `parallel_column_scan`.
 The `aggregate_metadata` path uses typed aggregate metadata for q1, q4b, and

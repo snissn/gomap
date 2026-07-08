@@ -239,7 +239,7 @@ Compatibility string name: `legacy_wal_relaxed_fast`
 
 Compatibility alias: `ProfileWALOnFast` / `wal_on_fast`
 
-Goal: maximize write throughput while keeping WAL on.
+Goal: maximize write throughput while keeping the legacy/raw compatibility WAL on.
 
 Behavior:
 

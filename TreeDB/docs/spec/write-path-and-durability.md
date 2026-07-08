@@ -210,14 +210,14 @@ user-command WAL overlay for command kinds that have passed the support matrix:
   guarantee. `Flush`, `FlushAll`, `Checkpoint`, `Close`, or native-wire
   `ack_policy=synced` can add the configured fsync boundary when the server can
   actually satisfy that boundary.
-- `DurabilityWALOnRelaxed`: collection mutator success is process-crash
-  recoverable through command WAL once the typed frame and required external
+- `DurabilityWALOnRelaxed`: in the current command-WAL relaxed overlay,
+  collection mutator success is process-crash recoverable once the typed frame and required external
   refs are fresh-process-readable. It is not a power-loss guarantee. Native-wire
   `synced` must be rejected unless the server advertises a separately named
   mode-relative relaxed sync policy.
-- `DurabilityWALOffRelaxed`: collection mutator success is not durable-at-ack.
-  `Flush`, `FlushAll`, `Checkpoint`, and `Close` are the public persistence
-  boundaries for pending collection state.
+- `DurabilityWALOffRelaxed`: in benchmark/compatibility mode, collection mutator
+  success is not durable-at-ack. `Flush`, `FlushAll`, `Checkpoint`, and `Close`
+  are the public persistence boundaries for pending collection state.
 
 `Flush` and `FlushAll` publish roots and advance `AppliedLSN` when they cover
 typed command frames. `Checkpoint` is the database-wide durability/cleanup
@@ -292,7 +292,8 @@ them as the primary supported profile surface.
 
 Implementations and refactors must preserve:
 
-1. WAL off does not disable value-log pointer storage.
+1. Legacy/benchmark WAL-off compatibility mode does not disable value-log
+   pointer storage.
 2. Pointer records remain readable across reopen and checkpoint.
 3. Sync API semantics depend on durability mode exactly as above.
 4. Checkpoint establishes a backend boundary and clears obsolete commit logs.

@@ -38,9 +38,9 @@ crash-consistent (process crash) but not guaranteed durable on power loss.
 
 ### Legacy compatibility WAL off (`Durability = DurabilityWALOffRelaxed`)
 
-WAL-off disables the journal/redo log while keeping the value log enabled. This
-improves write throughput but sacrifices durability for the most recent writes
-since the last checkpoint.
+Benchmark/compatibility WAL-off mode disables the journal/redo log while keeping
+the value log enabled. This improves write throughput but sacrifices durability
+for the most recent writes since the last checkpoint.
 
 - `Set` / `Batch.Write`: not guaranteed durable (no redo log).
 - `SetSync` / `Batch.WriteSync`: crash-consistent only (no redo log + no `fsync`).

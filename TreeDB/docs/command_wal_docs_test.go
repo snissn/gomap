@@ -142,8 +142,14 @@ func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
 		filepath.Join(repoRoot, "docs", "TREEDB_TUNING.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_VALUELOG_AUTOTUNE.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_WRITE_PATHS.md"),
+		filepath.Join(repoRoot, "docs", "BENCHMARK_SPEC.md"),
 		filepath.Join(repoRoot, "cmd", "unified_bench", "README.md"),
 	}
+	guidePaths, err := filepath.Glob(filepath.Join(treeRoot, "docs", "guides", "*.md"))
+	if err != nil {
+		t.Fatalf("glob TreeDB guide docs: %v", err)
+	}
+	paths = append(paths, guidePaths...)
 	for _, p := range paths {
 		content, err := os.ReadFile(p)
 		if err != nil {
@@ -185,14 +191,13 @@ func mentionsLegacyWALTerm(line string) bool {
 		"disablejournal",
 		"disablewal",
 		"disable wal",
-		"wal-on",
-		"wal on/off",
-		"wal-off",
-		"wal off",
 	} {
 		if strings.Contains(lower, term) {
 			return true
 		}
+	}
+	if mentionsLegacyWALModePhrase(lower) {
+		return true
 	}
 	return mentionsLegacyProfileAlias(lower)
 }
@@ -218,6 +223,7 @@ func TestCommandWALLegacyTermMatcherCatchesDelimitedProfileAliases(t *testing.T)
 		"the fast path remains current",
 		"durable command-WAL writes",
 		"fast checkpoint cleanup",
+		"Command-WAL-only protection remains current",
 	} {
 		if mentionsLegacyWALTerm(line) {
 			t.Fatalf("mentionsLegacyWALTerm(%q) = true, want false", line)
@@ -240,6 +246,55 @@ func mentionsLegacyProfileAlias(lower string) bool {
 		}
 	}
 	return false
+}
+
+func mentionsLegacyWALModePhrase(lower string) bool {
+	for _, phrase := range []string{
+		"wal on/off",
+		"wal on",
+		"wal off",
+		"wal-on",
+		"wal-off",
+	} {
+		if containsLegacyWALModePhrase(lower, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsLegacyWALModePhrase(lower, phrase string) bool {
+	for {
+		idx := strings.Index(lower, phrase)
+		if idx < 0 {
+			return false
+		}
+		if !hasCommandWALPrefix(lower, idx) && hasLegacyWALPhraseBoundary(lower, idx, len(phrase)) {
+			return true
+		}
+		lower = lower[idx+len(phrase):]
+	}
+}
+
+func hasCommandWALPrefix(lower string, idx int) bool {
+	const prefix = "command-"
+	return idx >= len(prefix) && lower[idx-len(prefix):idx] == prefix
+}
+
+func hasLegacyWALPhraseBoundary(lower string, idx, phraseLen int) bool {
+	beforeOK := idx == 0 || isLegacyWALPhraseBoundaryByte(lower[idx-1])
+	afterIdx := idx + phraseLen
+	afterOK := afterIdx == len(lower) || isLegacyWALPhraseBoundaryByte(lower[afterIdx])
+	return beforeOK && afterOK
+}
+
+func isLegacyWALPhraseBoundaryByte(b byte) bool {
+	switch b {
+	case ' ', '\t', '`', '"', '\'', ',', '.', ';', ':', '(', '[', '{', ')', ']', '}', '/', '\\':
+		return true
+	default:
+		return false
+	}
 }
 
 func containsDelimitedLegacyProfileAlias(lower, alias string) bool {
@@ -316,24 +371,19 @@ func hasLegacyWALContext(context string) bool {
 		"quarantin",
 		"archive",
 		"cross-db",
-		"old",
-		"low-level",
-		"process-crash",
-		"power-loss",
-		"fsync",
-		"checkpoint",
-		"recoverable",
-		"recoverability",
-		"durable-at-ack",
-		"performance",
-		"throughput",
-		"backend-only",
+		"old wal",
+		"old/raw",
+		"legacy/raw",
 		"commit sequence",
 		"mutation sequence",
 		"mutation revision",
 		"writesync",
 		"sync boundaries",
-		"command-wal",
+		"current command-wal",
+		"command-wal profile",
+		"command-wal durable",
+		"command-wal relaxed",
+		"durable command-wal",
 	} {
 		if strings.Contains(context, term) {
 			return true
