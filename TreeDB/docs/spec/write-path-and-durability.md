@@ -283,10 +283,10 @@ durability/integrity bundles:
 - `ProfileCommandWALRelaxed`: command-WAL raw and collection writes with relaxed sync/read-integrity settings for high-throughput ingest and benchmark comparisons.
 - `ProfileBench`: no-WAL benchmark-only ceiling with deterministic background maintenance behavior. It is not a production durability profile.
 
-Legacy/raw bundles such as `ProfileDurable`, `ProfileFast`, and
-`ProfileWALOnFast` remain compatibility profiles during the command-WAL
-transition. Public servers, wrappers, and new documentation should not present
-them as the primary supported profile surface.
+Deprecated raw cached-journal bundles remain available only for low-level
+compatibility tests and forensic reproduction. Public servers, wrappers, and new
+documentation should present the command-WAL profiles plus the explicit
+benchmark-only ceiling as the supported profile surface.
 
 ## 9. Required Invariants
 

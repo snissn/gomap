@@ -452,6 +452,22 @@ func TestFLUSHDB(t *testing.T) {
 	}
 }
 
+func TestTreeDBCommandWALAdminCompactionUnsupported(t *testing.T) {
+	addr, cleanup := startTestServer(t, "treedb", false)
+	defer cleanup()
+	c := newRespClient(t, addr)
+	defer c.Close()
+
+	for _, command := range []string{"COMPACT", "BGREWRITEAOF"} {
+		t.Run(command, func(t *testing.T) {
+			v := c.Do([]byte(command))
+			if v.kind != '-' || v.str != "ERR unsupported" {
+				t.Fatalf("%s response=%#v, want ERR unsupported", command, v)
+			}
+		})
+	}
+}
+
 func TestScanAndKeys(t *testing.T) {
 	for _, engine := range []string{"hashdb", "treedb"} {
 		t.Run(engine, func(t *testing.T) {

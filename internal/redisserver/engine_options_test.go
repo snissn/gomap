@@ -1,50 +1,57 @@
 package redisserver
 
 import (
-	"os"
-	"path/filepath"
-	"regexp"
-	"strconv"
+	"strings"
 	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
-func TestOpenEngine_TreeDB_JournalLanesCreatesSegments(t *testing.T) {
-	dir := t.TempDir()
-	cfg := Config{
-		Dir:                dir,
-		Engine:             "treedb",
-		TreeDBJournalLanes: 4,
-	}
-	db, err := OpenEngine(cfg)
+func TestOpenEngine_TreeDB_DefaultsToPublicCommandWALProfile(t *testing.T) {
+	db, err := OpenEngine(Config{
+		Dir:              t.TempDir(),
+		Engine:           "treedb",
+		TreeDBWriteLanes: 4,
+	})
 	if err != nil {
 		t.Fatalf("OpenEngine: %v", err)
 	}
-	// NOTE: TreeDB stores its main DB in Dir/maindb/, so the caching WAL dir is
-	// Dir/maindb/wal/.
-	walDir := filepath.Join(dir, "maindb", "wal")
-	entries, err := os.ReadDir(walDir)
-	if err != nil {
-		_ = db.Close()
-		t.Fatalf("ReadDir(%s): %v", walDir, err)
+	defer db.Close()
+
+	statser, ok := db.(interface{ Stats() map[string]string })
+	if !ok {
+		t.Fatalf("TreeDB adapter does not expose Stats")
 	}
-	re := regexp.MustCompile(`^commit-l([0-9]+)-`)
-	lanes := make(map[int]struct{})
-	for _, e := range entries {
-		m := re.FindStringSubmatch(e.Name())
-		if m == nil {
-			continue
-		}
-		lane, err := strconv.Atoi(m[1])
-		if err != nil {
-			t.Fatalf("parse lane %q: %v", m[1], err)
-		}
-		lanes[lane] = struct{}{}
+	stats := statser.Stats()
+	if got := stats["treedb.command_wal.enabled"]; got != "true" {
+		t.Fatalf("command_wal.enabled=%q, want true", got)
 	}
-	for i := 0; i < 4; i++ {
-		if _, ok := lanes[i]; !ok {
-			_ = db.Close()
-			t.Fatalf("expected commit log segment for lane %d; got lanes=%v", i, lanes)
-		}
+	if got := stats["treedb.cache.journal_lanes.configured"]; got != "4" {
+		t.Fatalf("journal_lanes.configured=%q, want 4", got)
 	}
-	_ = db.Close()
+}
+
+func TestOpenEngine_TreeDB_RejectsDeprecatedProfiles(t *testing.T) {
+	for _, raw := range []string{
+		"fast",
+		"wal_on_fast",
+		"durable",
+		"legacy_wal_durable",
+		"legacy_wal_relaxed_fast",
+		"no_wal_fast",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := OpenEngine(Config{
+				Dir:           t.TempDir(),
+				Engine:        "treedb",
+				TreeDBProfile: raw,
+			})
+			if err == nil {
+				t.Fatal("OpenEngine succeeded, want profile error")
+			}
+			if !strings.Contains(err.Error(), treedb.ProfileFlagHelp) {
+				t.Fatalf("error=%v, want allowed profile guidance", err)
+			}
+		})
+	}
 }

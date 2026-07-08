@@ -48,7 +48,7 @@ func main() {
 	outDir := flag.String("dir", "", "DB directory (default: temp)")
 	seed := flag.Int64("seed", 1, "RNG seed")
 	scale := flag.Float64("scale", 1.0, "Scale factor for counts in summary")
-	disableWAL := flag.Bool("disable-wal", false, "Disable WAL/journal (unsafe)")
+	profileRaw := flag.String("profile", string(treedb.ProfileCommandWALRelaxed), "TreeDB profile: "+treedb.ProfileFlagHelp)
 	flushThreshold := flag.Int("flush-threshold", 32*1024*1024, "Flush threshold bytes")
 	memtableShards := flag.Int("memtable-shards", 0, "Memtable shards (0 = default)")
 	flag.Parse()
@@ -85,20 +85,14 @@ func main() {
 	}
 	fmt.Printf("trace_replay: dir=%s\n", dir)
 
-	opts := treedb.Options{
-		Dir:            dir,
-		FlushThreshold: int64(*flushThreshold),
-		MemtableShards: *memtableShards,
-		Durability: func() treedb.DurabilityMode {
-			if *disableWAL {
-				return treedb.DurabilityWALOffRelaxed
-			}
-			return treedb.DurabilityWALOnRelaxed
-		}(),
-		ValueLog: treedb.ValueLogOptions{
-			ReadIntegrity: treedb.IntegritySkipChecksums,
-		},
+	profile, err := parseTraceReplayProfile(*profileRaw)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
+	opts := treedb.OptionsFor(profile, dir)
+	opts.FlushThreshold = int64(*flushThreshold)
+	opts.MemtableShards = *memtableShards
 	db, err := treedb.Open(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open treedb: %v\n", err)
@@ -127,6 +121,14 @@ func main() {
 
 	fmt.Printf("trace_replay: done\n")
 	fmt.Printf("trace_replay: db=%s\n", filepath.Base(dir))
+}
+
+func parseTraceReplayProfile(raw string) (treedb.Profile, error) {
+	profile, ok := treedb.ParsePublicProfile(raw, treedb.ProfileCommandWALRelaxed)
+	if !ok {
+		return "", fmt.Errorf("unsupported -profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
+	}
+	return profile, nil
 }
 
 func runPhase(db *treedb.DB, rng *rand.Rand, p phaseSummary, scale float64, keyspace *[][]byte, keyIndex map[string]struct{}) error {

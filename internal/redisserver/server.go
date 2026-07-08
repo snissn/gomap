@@ -82,6 +82,10 @@ func New(cfg Config) (*Server, error) {
 }
 
 func (s *Server) attachExtras(db kvstore.DB) {
+	s.checkpointer = nil
+	s.compactor = nil
+	s.clearer = nil
+
 	if cp, ok := db.(checkpointer); ok {
 		s.checkpointer = cp
 	}
@@ -93,7 +97,9 @@ func (s *Server) attachExtras(db kvstore.DB) {
 		return
 	}
 	if td, ok := db.(*treedbadapter.DB); ok {
-		s.compactor = &treeDBCompactor{db: td.DB}
+		if !treeDBCommandWALEnabled(td.DB) {
+			s.compactor = &treeDBCompactor{db: td.DB}
+		}
 		return
 	}
 	if hd, ok := db.(*hashdbadapter.DB); ok {

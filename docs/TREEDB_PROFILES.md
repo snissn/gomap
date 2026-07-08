@@ -14,24 +14,22 @@ TreeDB profiles provide those as a convenience API. For cached-mode write-path
 semantics, including command-WAL, checkpoint-only benchmark, and legacy cached
 redo-journal compatibility terminology, see `docs/TREEDB_WRITE_PATHS.md`.
 
-The intended public profile surface is:
+The public profile surface is:
 
 - `command_wal_durable`
 - `command_wal_relaxed`
 - `bench` as an explicit no-WAL benchmark ceiling
 
-Older names such as `durable`, `wal_on_fast`, `fast`, `legacy_wal_durable`,
-`legacy_wal_relaxed_fast`, and `no_wal_fast` may still exist in compatibility
-code while the deprecation work lands. Do not use those names for new server,
-collection, Mongo gateway, or benchmark guidance.
+Older pre-command-WAL aliases are compatibility-only. Do not use them for new
+server, collection, Mongo gateway, or benchmark guidance.
 
 ## Reachability Policy
 
 | Surface | Accepted profile names | Legacy-name behavior |
 | --- | --- | --- |
 | Public CLI/env parsers using `ParsePublicProfile` | `command_wal_durable`, `command_wal_relaxed`, `bench` | Reject with an error that names the allowed public profiles. |
-| Programmatic `OptionsFor` / `ApplyProfile` | Public profiles plus normalized legacy/internal profile tokens used by low-level tests and forensic compatibility work | Unknown profile tokens panic instead of silently selecting bare default options; legacy/internal aliases are not public CLI/env names. |
-| Unified-bench `-profile` | Cross-DB presets: `balanced`, `durable`, `fast`, `wal_on_fast` | These are benchmark-runner presets, not TreeDB server profile names. TreeDB-specific command-WAL coverage uses explicit TreeDB DB variants and knobs. |
+| Programmatic `OptionsFor` / `ApplyProfile` | Public profiles plus deprecated internal compatibility constants used by low-level tests and forensic reproduction | Unknown profile tokens panic instead of silently selecting bare default options; compatibility aliases are not public CLI/env names. |
+| Unified-bench `-profile` | Cross-DB benchmark-runner presets | These are benchmark-runner presets, not TreeDB server profile names. TreeDB-specific command-WAL coverage uses explicit TreeDB DB variants and knobs. |
 | Historical docs and benchmark reports | Recorded historical labels | Allowed only as historical evidence, not current setup guidance. |
 
 ## Quick Start
@@ -69,8 +67,7 @@ A `Profile` is a named preset for a small set of **policy** knobs:
 
 - Durability / integrity checks (journal, sync policy, read checksums)
 - WAL path. Public profiles use command WAL, except `bench`, which is the
-  explicit no-WAL benchmark ceiling. Compatibility profiles can still construct
-  legacy/raw WAL bundles while the deprecation work lands.
+  explicit no-WAL benchmark ceiling.
 - Background work (checkpoint / pruning) that can affect latency and
   benchmark stability
 - For fast-layout profiles, the common value-log compression policy used by
@@ -166,95 +163,14 @@ Use when you want:
 
 Do not use `bench` as a production/server durability profile.
 
-## Transitional/Internal Compatibility Profiles
+## Transitional/Internal Compatibility
 
-These names describe legacy/raw or no-WAL option bundles that are still present
-for compatibility, low-level tests, and historical benchmark reproduction. They
-are not part of the intended public server/profile surface and should not be
-advertised as normal collection or Mongo gateway choices.
-
-### Legacy compatibility: `ProfileLegacyWALDurable`
-
-Compatibility string name: `legacy_wal_durable`
-
-Compatibility alias: `ProfileDurable` / `durable`
-
-Goal: safest profile for the pre-command-WAL raw/cached WAL path.
-
-Behavior:
-
-- Does not enable command WAL.
-- Keeps legacy/raw WAL durability/integrity features enabled:
-  - `Durability = DurabilityDurable`
-  - `ValueLog.ReadIntegrity = IntegrityVerify`
-- Leaves background workers at their default settings.
-- Leaves most index optimization booleans disabled by default.
-
-Use only when you intentionally need the legacy/raw durable WAL path during the
-command-WAL transition.
-
-### Legacy compatibility: `ProfileNoWALFast`
-
-Compatibility string name: `no_wal_fast`
-
-Compatibility alias: `ProfileFast` / `fast`
-
-Goal: maximize throughput by relaxing safety knobs.
-
-Behavior:
-
-- Disables or relaxes legacy compatibility safety knobs:
-  - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync,
-    compatibility-only)
-  - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
-- Uses normal page reuse (`PreferAppendAlloc=false` by default)
-- Enables leaf pages in the value log (`IndexOuterLeavesInValueLog = true`)
-- Enables index optimization bundle:
-  - `LeafPrefixCompression = true`
-  - `IndexColumnarLeaves = true`
-  - `IndexPackedValuePtr = true`
-  - `IndexInternalBaseDelta = false` (incompatible with leaf refs)
-- Pins the current Celestia-style value-log compression defaults:
-  - `ValueLog.Compression = auto`
-  - `ValueLog.AutoPolicy = balanced`
-  - block codec stays on the default `snappy`
-  - compression autotune defaults to `medium`
-  - dict incompressible hold/probe defaults become `64MiB` / `32MiB`
-- Leaves background maintenance enabled by default.
-
-Notes:
-
-- Compatibility profiles do not change value-log persistence; the value log
-  remains enabled in cached mode even when the legacy redo journal is disabled.
-
-Use only when you want:
-
-- “how fast can it go” exploration
-- you have an external durability boundary (e.g., higher-layer snapshots), or
-  you are willing to trade durability/integrity for throughput
-
-### Legacy compatibility: `ProfileLegacyWALRelaxedFast`
-
-Compatibility string name: `legacy_wal_relaxed_fast`
-
-Compatibility alias: `ProfileWALOnFast` / `wal_on_fast`
-
-Goal: maximize write throughput while keeping the legacy/raw compatibility WAL on.
-
-Behavior:
-
-- Keeps legacy/raw WAL on while relaxing durability checks:
-  - `Durability = DurabilityWALOnRelaxed` (legacy compatibility)
-  - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
-- Uses normal page reuse (`PreferAppendAlloc=false` by default)
-- Enables the same index optimization bundle as legacy compatibility `ProfileNoWALFast`.
-- Enables the same Celestia-style value-log compression defaults as
-  legacy compatibility `ProfileNoWALFast`.
-
-Use only when you want:
-
-- a stable legacy/raw “fast ingest” default that keeps WAL on
-- benchmarks aligned with the intended cached value-log write path
+Some deprecated constants and aliases still exist in code so low-level tests and
+forensic benchmark reproduction can open old raw/cached write-path bundles. They
+are intentionally absent from `ProfileFlagHelp`, rejected by
+`ParsePublicProfile`, and should not appear in new server, collection, Mongo
+gateway, or benchmark instructions. New benchmark ceilings should use `bench`;
+new durable or relaxed write-path coverage should use the command-WAL profiles.
 
 ## Measuring Final Storage
 

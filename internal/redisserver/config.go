@@ -25,9 +25,8 @@ type Config struct {
 	// TreeDB options.
 	TreeDBFlushThreshold    int64
 	TreeDBValueLogThreshold int
-	TreeDBDisableWAL        bool
-	TreeDBRelaxedSync       bool
-	TreeDBJournalLanes      int
+	TreeDBProfile           string
+	TreeDBWriteLanes        int
 	TreeDBMemtableShards    int
 
 	// TreeDB compaction defaults (used by COMPACT/BGREWRITEAOF).
