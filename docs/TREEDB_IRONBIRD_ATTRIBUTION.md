@@ -51,6 +51,17 @@ Counter suffixes should follow these rules:
 | `_seconds` / `_ms` | gauge unless the key name also ends in `_total` |
 | `_active`, `_pending`, `_queued`, `_resident` | gauge |
 
+Compatibility exception: existing selected value-log raw I/O keys
+`treedb.cache.vlog_writev.bytes`, `treedb.cache.vlog_writev.syscalls`,
+`treedb.cache.vlog_writev.iovecs`, `treedb.cache.vlog_writev.flushes`,
+`treedb.cache.vlog_write.bytes`, `treedb.cache.vlog_write.syscalls`,
+`treedb.cache.vlog_write.calls`, `treedb.cache.vlog_io.bytes`, and
+`treedb.cache.vlog_io.syscalls` are monotonic counters even though they predate
+the `_total` naming convention. Ironbird must report them as load-window deltas
+until TreeDB exposes replacement `_bytes_total`, `_syscalls_total`,
+`_iovecs_total`, `_flushes_total`, or `_calls_total` aliases. New selected
+counters should use the `_total` suffix instead of extending this exception.
+
 String-valued policy or reason keys are allowed only when they are bounded
 tokens. Free-form diagnostic text must not be selected into benchmark result
 JSON.
