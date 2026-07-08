@@ -2,12 +2,14 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -378,6 +380,74 @@ func TestReplayWALIntoBackend_IgnoresEmptyCommitSegments(t *testing.T) {
 	if err := replayWALIntoBackend(nil, segments, 0, nil); err != nil {
 		t.Fatalf("replayWALIntoBackend: %v", err)
 	}
+}
+
+func TestOpenLegacyCachedRedoJournalRequiresExplicitReplay(t *testing.T) {
+	dir := t.TempDir()
+	commitPath := writeLegacyCachedRedoJournalSegment(t, dir, []commitlog.Record{
+		{Op: commitlog.OpSetInline, Key: []byte("k"), Value: []byte("v"), Seq: 1},
+	})
+
+	_, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, ErrLegacyCachedRedoJournalReplayDisabled) {
+		t.Fatalf("Open legacy redo journal error=%v, want ErrRecoveryRequired and ErrLegacyCachedRedoJournalReplayDisabled", err)
+	}
+	if _, statErr := os.Stat(commitPath); statErr != nil {
+		t.Fatalf("legacy redo journal removed after failed open: %v", statErr)
+	}
+
+	_, err = Open(Options{Dir: dir, ReadOnly: true, DisableBackgroundPrune: true})
+	if !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, ErrLegacyCachedRedoJournalReplayDisabled) {
+		t.Fatalf("Open read-only legacy redo journal error=%v, want ErrRecoveryRequired and ErrLegacyCachedRedoJournalReplayDisabled", err)
+	}
+
+	db, err := Open(Options{
+		Dir:                                dir,
+		DisableBackgroundPrune:             true,
+		AllowLegacyCachedRedoJournalReplay: true,
+	})
+	if err != nil {
+		t.Fatalf("Open explicit legacy redo journal replay: %v", err)
+	}
+	defer db.Close()
+
+	got, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "v" {
+		t.Fatalf("Get=%q want v", got)
+	}
+	if info, err := os.Stat(commitPath); err == nil && info.Size() != 0 {
+		t.Fatalf("legacy redo journal size after replay=%d want removed or empty", info.Size())
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("stat legacy redo journal after replay: %v", err)
+	}
+}
+
+func writeLegacyCachedRedoJournalSegment(t *testing.T, dir string, records []commitlog.Record) string {
+	t.Helper()
+	walDir := WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll WAL dir: %v", err)
+	}
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	w, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := w.AppendBatch(records); err != nil {
+		_ = w.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := w.Sync(); err != nil {
+		_ = w.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+	return commitPath
 }
 
 func TestScanValueLogSegments_IgnoresSegmentRemovedAfterScan(t *testing.T) {

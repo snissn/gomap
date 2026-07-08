@@ -231,6 +231,75 @@ func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, 
 	return replayCommitLogSegments(db, segments, ridMap, maxSegmentBytes)
 }
 
+func legacyCachedRedoJournalReplaySegments(db *DB, segments []logSegment, maxSegmentBytes int64) ([]logSegment, bool, error) {
+	if db != nil {
+		filtered, err := filterCommandWALSegmentsForLegacyReplay(segments, db.meta.AppliedCommandLSN, maxSegmentBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		segments = filtered
+	}
+	for _, seg := range segments {
+		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		hasLegacyBatch, err := segmentHasReplayableLegacyBatch(seg, maxSegmentBytes)
+		if err != nil {
+			return nil, false, err
+		}
+		if hasLegacyBatch {
+			return segments, true, nil
+		}
+	}
+	return segments, false, nil
+}
+
+func segmentHasReplayableLegacyBatch(seg logSegment, maxSegmentBytes int64) (bool, error) {
+	r, err := commitlog.NewReaderWithOptions(seg.path, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+	if err != nil {
+		return false, err
+	}
+	defer r.Close()
+	_, err = r.ReadBatch()
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, commitlog.ErrCommandWALTerminalTail) {
+		return false, nil
+	}
+	return false, fmt.Errorf("scan legacy cached redo journal segment %s: %w", filepath.Base(seg.path), err)
+}
+
+func legacyCachedRedoJournalReplayDisabledError(segments []logSegment, maxSegmentBytes int64) error {
+	for _, seg := range segments {
+		if seg.valueLog || seg.size == 0 {
+			continue
+		}
+		hasLegacyBatch, err := segmentHasReplayableLegacyBatch(seg, maxSegmentBytes)
+		if err != nil || !hasLegacyBatch {
+			continue
+		}
+		return fmt.Errorf("%w: %w: legacy cached redo journal segment %s requires explicit compatibility replay",
+			ErrRecoveryRequired, ErrLegacyCachedRedoJournalReplayDisabled, filepath.Base(seg.path))
+	}
+	return fmt.Errorf("%w: %w", ErrRecoveryRequired, ErrLegacyCachedRedoJournalReplayDisabled)
+}
+
+func requireNoLegacyCachedRedoJournalReplay(dir string, db *DB, maxSegmentBytes int64) error {
+	segments, err := listRecoverySegments(dir)
+	if err != nil {
+		return err
+	}
+	segments, hasLegacyRedoJournal, err := legacyCachedRedoJournalReplaySegments(db, segments, maxSegmentBytes)
+	if err != nil {
+		return err
+	}
+	if !hasLegacyRedoJournal {
+		return nil
+	}
+	return legacyCachedRedoJournalReplayDisabledError(segments, maxSegmentBytes)
+}
+
 type commandWALReplayFrame struct {
 	env commitlog.CommandEnvelope
 }

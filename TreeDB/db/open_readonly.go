@@ -143,6 +143,10 @@ func openReadOnly(opts Options) (*DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if err := requireNoLegacyCachedRedoJournalReplay(opts.Dir, db, opts.WALMaxSegmentBytes); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if db.commandWAL {
 		db.cacheCommandWALRequiredFeatureStats()
 	}
@@ -284,6 +288,10 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	}
 	db.seedEntryRevisionFloor()
 	if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := requireNoLegacyCachedRedoJournalReplay(opts.Dir, db, opts.WALMaxSegmentBytes); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
