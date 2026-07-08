@@ -11,7 +11,8 @@ different trade-offs:
 
 Most callers, however, want a small number of *intention-level* configurations.
 TreeDB profiles provide those as a convenience API. For cached-mode write-path
-semantics (WAL on/off), see `docs/TREEDB_WRITE_PATHS.md`.
+semantics, including command-WAL, checkpoint-only benchmark, and legacy cached
+redo-journal compatibility terminology, see `docs/TREEDB_WRITE_PATHS.md`.
 
 The intended public profile surface is:
 
@@ -130,8 +131,8 @@ Behavior:
 - Enables command WAL:
   - `CommandWAL = true`
 - Keeps command frames recoverable from the local command-WAL path while relaxing
-  sync/checksum policy:
-  - `Durability = DurabilityWALOnRelaxed`
+  sync/checksum policy through `DurabilityWALOnRelaxed`:
+  - `Durability = DurabilityWALOnRelaxed` (current command-WAL relaxed durability mode)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses the same production-fast collection/index layout and compression defaults
   as `ProfileCommandWALDurable`.
@@ -150,7 +151,7 @@ Goal: no-WAL benchmark-friendly determinism.
 Behavior:
 
 - Uses the fast collection/index layout bundle.
-- Disables WAL through the no-WAL cached path.
+- Disables WAL through the benchmark-only no-WAL cached compatibility path.
 - Disables background workers that can inject large work mid-run:
   - cached-mode auto-checkpoint triggers disabled
     (`BackgroundCheckpointInterval < 0`, `BackgroundCheckpointIdleDuration < 0`,
@@ -172,9 +173,9 @@ for compatibility, low-level tests, and historical benchmark reproduction. They
 are not part of the intended public server/profile surface and should not be
 advertised as normal collection or Mongo gateway choices.
 
-### `ProfileLegacyWALDurable`
+### Legacy compatibility: `ProfileLegacyWALDurable`
 
-String name: `legacy_wal_durable`
+Compatibility string name: `legacy_wal_durable`
 
 Compatibility alias: `ProfileDurable` / `durable`
 
@@ -192,9 +193,9 @@ Behavior:
 Use only when you intentionally need the legacy/raw durable WAL path during the
 command-WAL transition.
 
-### `ProfileNoWALFast`
+### Legacy compatibility: `ProfileNoWALFast`
 
-String name: `no_wal_fast`
+Compatibility string name: `no_wal_fast`
 
 Compatibility alias: `ProfileFast` / `fast`
 
@@ -202,8 +203,9 @@ Goal: maximize throughput by relaxing safety knobs.
 
 Behavior:
 
-- Disables or relaxes safety knobs:
-  - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync)
+- Disables or relaxes legacy compatibility safety knobs:
+  - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync,
+    compatibility-only)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses normal page reuse (`PreferAppendAlloc=false` by default)
 - Enables leaf pages in the value log (`IndexOuterLeavesInValueLog = true`)
@@ -222,8 +224,8 @@ Behavior:
 
 Notes:
 
-- Profiles do not change the write path beyond WAL on/off; the value log remains
-  enabled in cached mode.
+- Compatibility profiles do not change value-log persistence; the value log
+  remains enabled in cached mode even when the legacy redo journal is disabled.
 
 Use only when you want:
 
@@ -231,23 +233,23 @@ Use only when you want:
 - you have an external durability boundary (e.g., higher-layer snapshots), or
   you are willing to trade durability/integrity for throughput
 
-### `ProfileLegacyWALRelaxedFast`
+### Legacy compatibility: `ProfileLegacyWALRelaxedFast`
 
-String name: `legacy_wal_relaxed_fast`
+Compatibility string name: `legacy_wal_relaxed_fast`
 
 Compatibility alias: `ProfileWALOnFast` / `wal_on_fast`
 
-Goal: maximize write throughput while keeping WAL on.
+Goal: maximize write throughput while keeping the legacy/raw compatibility WAL on.
 
 Behavior:
 
-- Keeps WAL on while relaxing durability checks:
-  - `Durability = DurabilityWALOnRelaxed`
+- Keeps legacy/raw WAL on while relaxing durability checks:
+  - `Durability = DurabilityWALOnRelaxed` (legacy compatibility)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses normal page reuse (`PreferAppendAlloc=false` by default)
-- Enables the same index optimization bundle as `ProfileNoWALFast`.
+- Enables the same index optimization bundle as legacy compatibility `ProfileNoWALFast`.
 - Enables the same Celestia-style value-log compression defaults as
-  `ProfileNoWALFast`.
+  legacy compatibility `ProfileNoWALFast`.
 
 Use only when you want:
 

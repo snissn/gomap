@@ -534,9 +534,9 @@ PR3 implementation evidence:
   published.
 - Empty `RawKVBatch` frames are explicit no-op command frames: they publish the
   current roots with the frame LSN so command-stream contiguity remains exact.
-- Command WAL with WAL-off durability fails closed, including after
-  `command_wal_v1` is persisted, because PR3 requires a recoverable command
-  frame before root visibility.
+- Command WAL with benchmark/compatibility WAL-off durability fails closed,
+  including after `command_wal_v1` is persisted, because PR3 requires a
+  recoverable command frame before root visibility.
 - Command journal flush/sync failures and post-append root publication failures
   poison the open handle so no later write can create a durable LSN gap before
   reopen recovery.
@@ -607,7 +607,7 @@ PR 6.5: collection/catalog command-WAL performance polish:
   `https://github.com/snissn/gomap/issues/1584`;
 - PR9 raw KV default cutover evidence must not be used to claim collection
   command-WAL default readiness until every supported collection lane clears
-  strict `>1.01x` command-WAL/WAL-off throughput.
+  strict `>1.01x` command-WAL versus benchmark WAL-off throughput.
 
 PR 7: matrix enforcement and drift tests:
 

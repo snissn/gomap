@@ -389,11 +389,12 @@ collection benchmark by itself, but it is the standard profile artifact flow.
 ```sh
 make unified-bench benchprof
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
   -dbs treedb \
   -keys 80000 \
-  -profile fast \
+  -profile "$BENCH_PROFILE" \
   -checkpoint-between-tests \
   -test random_read,full_scan,prefix_scan \
   -profile-dir "$OUT" \

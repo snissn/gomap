@@ -77,11 +77,12 @@ Use `-profile-dir` so one directory contains all artifacts needed by
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
   -dbs treedb \
   -keys 800000 \
-  -profile fast \
+  -profile "$BENCH_PROFILE" \
   -test random_write,random_delete,random_read,full_scan,prefix_scan \
   -checkpoint-between-tests \
   -profile-dir "$OUT" \
