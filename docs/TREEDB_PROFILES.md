@@ -131,8 +131,8 @@ Behavior:
 - Enables command WAL:
   - `CommandWAL = true`
 - Keeps command frames recoverable from the local command-WAL path while relaxing
-  sync/checksum policy:
-  - `Durability = DurabilityWALOnRelaxed`
+  sync/checksum policy through `DurabilityWALOnRelaxed`:
+  - `Durability = DurabilityWALOnRelaxed` (current command-WAL relaxed durability mode)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses the same production-fast collection/index layout and compression defaults
   as `ProfileCommandWALDurable`.
@@ -151,7 +151,7 @@ Goal: no-WAL benchmark-friendly determinism.
 Behavior:
 
 - Uses the fast collection/index layout bundle.
-- Disables WAL through the no-WAL cached path.
+- Disables WAL through the benchmark-only no-WAL cached compatibility path.
 - Disables background workers that can inject large work mid-run:
   - cached-mode auto-checkpoint triggers disabled
     (`BackgroundCheckpointInterval < 0`, `BackgroundCheckpointIdleDuration < 0`,
@@ -173,7 +173,7 @@ for compatibility, low-level tests, and historical benchmark reproduction. They
 are not part of the intended public server/profile surface and should not be
 advertised as normal collection or Mongo gateway choices.
 
-### `ProfileLegacyWALDurable`
+### Legacy compatibility: `ProfileLegacyWALDurable`
 
 Compatibility string name: `legacy_wal_durable`
 
@@ -193,7 +193,7 @@ Behavior:
 Use only when you intentionally need the legacy/raw durable WAL path during the
 command-WAL transition.
 
-### `ProfileNoWALFast`
+### Legacy compatibility: `ProfileNoWALFast`
 
 Compatibility string name: `no_wal_fast`
 
@@ -233,13 +233,13 @@ Use only when you want:
 - you have an external durability boundary (e.g., higher-layer snapshots), or
   you are willing to trade durability/integrity for throughput
 
-### `ProfileLegacyWALRelaxedFast`
+### Legacy compatibility: `ProfileLegacyWALRelaxedFast`
 
 Compatibility string name: `legacy_wal_relaxed_fast`
 
 Compatibility alias: `ProfileWALOnFast` / `wal_on_fast`
 
-Goal: maximize write throughput while keeping WAL on.
+Goal: maximize write throughput while keeping the legacy/raw compatibility WAL on.
 
 Behavior:
 
@@ -247,9 +247,9 @@ Behavior:
   - `Durability = DurabilityWALOnRelaxed` (legacy compatibility)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses normal page reuse (`PreferAppendAlloc=false` by default)
-- Enables the same index optimization bundle as `ProfileNoWALFast`.
+- Enables the same index optimization bundle as legacy compatibility `ProfileNoWALFast`.
 - Enables the same Celestia-style value-log compression defaults as
-  `ProfileNoWALFast`.
+  legacy compatibility `ProfileNoWALFast`.
 
 Use only when you want:
 

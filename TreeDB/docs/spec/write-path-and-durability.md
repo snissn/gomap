@@ -12,15 +12,18 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 - Sync operations (`SetSync`, `WriteSync`, `DeleteSync`) use fsync durability boundaries.
 - Non-sync operations may be lost on power loss.
 
-### 1.2 `DurabilityWALOnRelaxed`
+### 1.2 `DurabilityWALOnRelaxed` command-WAL relaxed / legacy compatibility
 
-- Commit log enabled.
-- Sync operations are relaxed (no fsync boundary).
-- Crash-consistent for process failure patterns, but not guaranteed durable across power loss.
+- With `CommandWAL=true`, command-WAL frames remain the recovery source, but
+  sync operations are relaxed and do not establish an fsync boundary.
+- Without command WAL, this is the legacy compatibility cached redo-journal
+  mode with relaxed sync operations.
+- Crash-consistent for process failure patterns, but not guaranteed durable
+  across power loss.
 
-### 1.3 `DurabilityWALOffRelaxed`
+### 1.3 Legacy compatibility `DurabilityWALOffRelaxed`
 
-- Commit log disabled.
+- Command WAL and the legacy compatibility cached redo journal are disabled.
 - Value log remains enabled.
 - Sync operations are relaxed.
 - Durable boundary for recent writes is checkpoint/flush based, not per-write journal replay.
@@ -131,7 +134,7 @@ replay for old raw record batches after `command_wal_v1` activation. Complete
 command frames whose dependencies or external refs are missing fail recovery
 closed unless the command kind defines a formal idempotent skip rule.
 
-WAL-on collection writes add a stronger visibility boundary for command kinds
+Command-WAL collection writes add a stronger visibility boundary for command kinds
 that are `WAL-supported`: no collection read, scan, uniqueness check,
 update/delete planner, or pending-state merge may observe a mutation before its
 command WAL frame is committed/recoverable. Unsupported mutation kinds must be
@@ -207,14 +210,14 @@ user-command WAL overlay for command kinds that have passed the support matrix:
   guarantee. `Flush`, `FlushAll`, `Checkpoint`, `Close`, or native-wire
   `ack_policy=synced` can add the configured fsync boundary when the server can
   actually satisfy that boundary.
-- `DurabilityWALOnRelaxed`: collection mutator success is process-crash
-  recoverable through command WAL once the typed frame and required external
+- `DurabilityWALOnRelaxed`: in the current command-WAL relaxed overlay,
+  collection mutator success is process-crash recoverable once the typed frame and required external
   refs are fresh-process-readable. It is not a power-loss guarantee. Native-wire
   `synced` must be rejected unless the server advertises a separately named
   mode-relative relaxed sync policy.
-- `DurabilityWALOffRelaxed`: collection mutator success is not durable-at-ack.
-  `Flush`, `FlushAll`, `Checkpoint`, and `Close` are the public persistence
-  boundaries for pending collection state.
+- `DurabilityWALOffRelaxed`: in benchmark/compatibility mode, collection mutator
+  success is not durable-at-ack. `Flush`, `FlushAll`, `Checkpoint`, and `Close`
+  are the public persistence boundaries for pending collection state.
 
 `Flush` and `FlushAll` publish roots and advance `AppliedLSN` when they cover
 typed command frames. `Checkpoint` is the database-wide durability/cleanup
@@ -289,7 +292,8 @@ them as the primary supported profile surface.
 
 Implementations and refactors must preserve:
 
-1. WAL off does not disable value-log pointer storage.
+1. Legacy/benchmark WAL-off compatibility mode does not disable value-log
+   pointer storage.
 2. Pointer records remain readable across reopen and checkpoint.
 3. Sync API semantics depend on durability mode exactly as above.
 4. Checkpoint establishes a backend boundary and clears obsolete commit logs.

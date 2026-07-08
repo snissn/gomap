@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-- TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) and coherent crash recovery with WAL on/off semantics.
+- TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) for current command-WAL profiles and legacy compatibility WAL-on/off modes.
 - HashDB provides explicit durability calls (`PutSync`, `DeleteSync`) backed by the slab value log and crash recovery; non-sync writes may be lost on power loss.
 
 ## Who Is This For?
@@ -28,7 +28,7 @@ eventually flushes to the backend.
 Crash recovery:
 - On open, any journal segments in `Dir/maindb/wal/` are replayed into the backend with synced commits, then removed.
 
-### WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
+### Legacy compatibility WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
 
 WAL stays enabled, but `*Sync` operations do not `fsync`. This is
 crash-consistent (process crash) but not guaranteed durable on power loss.
@@ -36,11 +36,11 @@ crash-consistent (process crash) but not guaranteed durable on power loss.
 - `Set` / `Batch.Write`: not guaranteed durable on power loss.
 - `SetSync` / `Batch.WriteSync`: crash-consistent only (no `fsync`).
 
-### WAL off (`Durability = DurabilityWALOffRelaxed`)
+### Legacy compatibility WAL off (`Durability = DurabilityWALOffRelaxed`)
 
-WAL-off disables the journal/redo log while keeping the value log enabled. This
-improves write throughput but sacrifices durability for the most recent writes
-since the last checkpoint.
+Benchmark/compatibility WAL-off mode disables the journal/redo log while keeping
+the value log enabled. This improves write throughput but sacrifices durability
+for the most recent writes since the last checkpoint.
 
 - `Set` / `Batch.Write`: not guaranteed durable (no redo log).
 - `SetSync` / `Batch.WriteSync`: crash-consistent only (no redo log + no `fsync`).
