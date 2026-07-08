@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,6 +110,25 @@ func runCrashRecoveryDurabilityWriter(t *testing.T, dir string, extraEnv ...stri
 	}
 }
 
+func runCommandWALDurableUncheckpointedWriter(t *testing.T, dir string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperTreeDBCommandWALDurableUncheckpointedWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CRASH_HELPER=1",
+		"TREEDB_CRASH_DIR="+dir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
 func TestHelperTreeDBCrashRecoveryWriter(t *testing.T) {
 	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
 		t.Skip("helper")
@@ -173,6 +193,78 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	if err := db.SetSync([]byte("k"), val); err != nil {
 		t.Fatalf("SetSync: %v", err)
 	}
+	os.Exit(0)
+}
+
+func TestHelperTreeDBCommandWALDurableUncheckpointedWriter(t *testing.T) {
+	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("TREEDB_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEDB_CRASH_DIR")
+	}
+
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.CommandWALStatsScan = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	opts.FlushThreshold = 1 << 30
+	opts.MaxQueuedMemtables = -1
+	opts.WriterFlushMaxMemtables = 0
+	opts.WriterFlushMaxDuration = 0
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	if err := db.SetSync([]byte("point-sync"), []byte("keep-point")); err != nil {
+		t.Fatalf("SetSync point-sync: %v", err)
+	}
+	if err := db.SetSync([]byte("deleted-sync"), []byte("remove-me")); err != nil {
+		t.Fatalf("SetSync deleted-sync: %v", err)
+	}
+	if err := db.DeleteSync([]byte("deleted-sync")); err != nil {
+		t.Fatalf("DeleteSync deleted-sync: %v", err)
+	}
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("batch-sync"), []byte("keep-batch")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set batch-sync: %v", err)
+	}
+	if err := b.Set([]byte("range-delete"), []byte("remove-me")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set range-delete: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+	if err := db.DeleteRange([]byte("range-"), []byte("range-\xff")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+
+	stats := db.Stats()
+	if stats["treedb.cache.redo_log.mode"] != "external_command_wal" ||
+		stats["treedb.cache.redo_log.enabled"] != "false" ||
+		stats["treedb.cache.command_wal.external_durability"] != "true" {
+		t.Fatalf("unexpected command-WAL cached durability stats: %#v", stats)
+	}
+	if stats["treedb.commit_seq"] != "0" {
+		t.Fatalf("commit_seq=%q, want 0 before crash without checkpoint", stats["treedb.commit_seq"])
+	}
+
+	// Simulate a crash by exiting without Close(), so no close-time checkpoint can
+	// publish the pending command-WAL LSNs.
 	os.Exit(0)
 }
 
@@ -401,6 +493,58 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 			}
 
 		})
+	}
+}
+
+func TestCrashRecovery_CommandWALDurableSyncedUncheckpointedFramesReplay(t *testing.T) {
+	dir := t.TempDir()
+	runCommandWALDurableUncheckpointedWriter(t, dir)
+
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)
+	opts.CommandWALStatsScan = true
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	tests := []struct {
+		key     string
+		want    string
+		wantNil bool
+	}{
+		{key: "point-sync", want: "keep-point"},
+		{key: "batch-sync", want: "keep-batch"},
+		{key: "deleted-sync", wantNil: true},
+		{key: "range-delete", wantNil: true},
+	}
+	for _, tt := range tests {
+		got, err := db.Get([]byte(tt.key))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", tt.key, err)
+		}
+		if tt.wantNil {
+			if got != nil {
+				t.Fatalf("Get(%s)=%q, want nil", tt.key, string(got))
+			}
+			continue
+		}
+		if string(got) != tt.want {
+			t.Fatalf("Get(%s)=%q, want %q", tt.key, string(got), tt.want)
+		}
+	}
+
+	stats := db.Stats()
+	applied, err := strconv.ParseUint(stats["treedb.applied_command_lsn"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse applied_command_lsn=%q: %v", stats["treedb.applied_command_lsn"], err)
+	}
+	if applied < 5 {
+		t.Fatalf("applied_command_lsn=%d, want at least 5 after command-WAL replay (stats=%#v)", applied, stats)
+	}
+	if stats["treedb.cache.redo_log.mode"] != "external_command_wal" ||
+		stats["treedb.cache.redo_log.enabled"] != "false" {
+		t.Fatalf("unexpected command-WAL cached durability stats after reopen: %#v", stats)
 	}
 }
 
