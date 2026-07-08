@@ -78,3 +78,11 @@ func (c *treeDBCompactor) Compact() error {
 	}
 	return c.db.CompactIndex()
 }
+
+func treeDBCommandWALEnabled(db *treedb.DB) bool {
+	if db == nil {
+		return false
+	}
+	stats := db.Stats()
+	return stats["treedb.command_wal.enabled"] == "true"
+}
