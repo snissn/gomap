@@ -108,7 +108,8 @@ command frames is recovery corruption.
 
 ## 4. Replay Algorithm
 
-Replay is skipped only when durability mode is `DurabilityWALOffRelaxed`.
+Legacy raw redo-journal replay is skipped only when durability mode is
+`DurabilityWALOffRelaxed`.
 
 Otherwise:
 

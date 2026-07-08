@@ -110,8 +110,9 @@ Legacy/raw bundles such as `ProfileDurable`, `ProfileFast`, and
 `ProfileWALOnFast` remain temporarily available for compatibility and focused
 low-level tests, but they are not the current public guidance.
 
-Note: WAL-off is selected by `ProfileBench` or by explicitly setting
-`opts.Durability = treedb.DurabilityWALOffRelaxed` in low-level experiments.
+Note: WAL-off is a benchmark/compatibility mode selected by `ProfileBench` or by
+explicitly setting `opts.Durability = treedb.DurabilityWALOffRelaxed` in
+low-level experiments.
 The value log remains enabled in cached mode, so large values can still go
 through `value_vlog/` even when the redo journal is off.
 
@@ -333,10 +334,11 @@ The canonical durability-mode matrix is
 `TreeDB/docs/spec/write-path-and-durability.md#1-durability-modes`.
 
 In short: durable mode gives fsync durability at sync/checkpoint boundaries;
-WAL-on relaxed mode is process-crash-oriented and is not a power-loss fsync
-guarantee; WAL-off relaxed mode has no per-write journal replay and relies on
-flush/checkpoint/close boundaries. Collection writes currently remain governed
-by `TreeDB/docs/spec/collections-write-domain.md`; the target durable-at-ack
+legacy/raw WAL-on relaxed compatibility mode is process-crash-oriented and is
+not a power-loss fsync guarantee; WAL-off relaxed benchmark/compatibility mode
+has no per-write journal replay and relies on flush/checkpoint/close boundaries.
+Collection writes currently remain governed by
+`TreeDB/docs/spec/collections-write-domain.md`; the target durable-at-ack
 collection overlay is gated by
 `TreeDB/docs/spec/collection-wal-durability-plan.md`; it is target behavior
 after the collection WAL gate, not current behavior.
