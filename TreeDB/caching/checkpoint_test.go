@@ -140,9 +140,8 @@ func TestCachingDB_DirectWriteGateRechecksCheckpointAfterPublicWait(t *testing.T
 
 func TestCachingDBCommandWALAppendCallbacksRejectAfterCloseStarts(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

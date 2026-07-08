@@ -92,6 +92,60 @@ func TestPublicCommandWALRawKVWritesUseTypedFrames(t *testing.T) {
 	}
 }
 
+func TestPublicCommandWALDurablePointWriteSyncUsesExternalCachedMode(t *testing.T) {
+	dir := t.TempDir()
+	opts := OptionsFor(ProfileCommandWALDurable, dir)
+	opts.CommandWALStatsScan = true
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	opts.FlushThreshold = 1 << 30
+	opts.MaxQueuedMemtables = -1
+	opts.WriterFlushMaxMemtables = 0
+	opts.WriterFlushMaxDuration = 0
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL durable: %v", err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.redo_log.mode"]; got != "external_command_wal" {
+		t.Fatalf("redo_log.mode=%q, want external_command_wal", got)
+	}
+	if got := stats["treedb.cache.redo_log.enabled"]; got != "false" {
+		t.Fatalf("redo_log.enabled=%q, want false", got)
+	}
+	if got := stats["treedb.cache.command_wal.external_durability"]; got != "true" {
+		t.Fatalf("command_wal.external_durability=%q, want true", got)
+	}
+
+	commitSeqBefore, err := strconv.ParseUint(stats["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse commit_seq before: %v", err)
+	}
+
+	if err := db.SetSync([]byte("durable-point-sync"), []byte("value")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	if err := db.DeleteSync([]byte("durable-point-sync")); err != nil {
+		t.Fatalf("DeleteSync: %v", err)
+	}
+
+	commitSeqAfterSync, err := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse commit_seq after sync: %v", err)
+	}
+	if commitSeqAfterSync != commitSeqBefore {
+		t.Fatalf("commit_seq after point sync writes=%d want %d before explicit checkpoint", commitSeqAfterSync, commitSeqBefore)
+	}
+	assertPublicCommandWALFrames(t, db, 2)
+}
+
 func TestPublicCommandWALRawKVMethodMatrix(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{

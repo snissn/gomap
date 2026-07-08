@@ -8147,8 +8147,15 @@ type Options struct {
 	// old-leaf decode bytes/op before coalescing (0=disabled).
 	FlushBacklogCoalescingMinOldLeafBytesPerOp float64
 
-	// DisableWAL disables the redo/journal log while keeping the value log enabled.
+	// DisableWAL disables the cached redo/journal log without installing an
+	// external durability source. This is unsafe and intended only for explicit
+	// benchmark/checkpoint-only use.
 	DisableWAL bool
+	// ExternalCommandWAL disables the cached redo/journal log because the public
+	// command-WAL layer appends and syncs command frames before exposing cached
+	// mutations. Unlike DisableWAL, this is an explicit external durability mode
+	// and does not require AllowUnsafe by itself.
+	ExternalCommandWAL bool
 	// JournalLanes controls the number of active commit/value log lanes
 	// (0=GOMAXPROCS-aware default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
@@ -8789,6 +8796,7 @@ type DB struct {
 	journalCompression                                bool
 
 	disableJournal                                               bool
+	externalCommandWAL                                           bool
 	relaxedSync                                                  bool
 	notifyError                                                  func(error)
 	debugFlushPointers                                           bool
@@ -11775,6 +11783,9 @@ func validateValueLogDomainThresholds(domains []backenddb.ValueLogDomainThreshol
 }
 
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
+	if opts.DisableWAL && opts.ExternalCommandWAL {
+		return nil, fmt.Errorf("cachingdb: DisableWAL and ExternalCommandWAL are mutually exclusive")
+	}
 	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
 		return nil, ErrUnsafeOptions
 	}
@@ -11859,7 +11870,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// can reduce index.db high-watermark growth under small KeepRecent windows
 		// by making retired pages eligible for reuse sooner. Default to a smaller
 		// chunk size in that case.
-		if opts.DisableWAL || opts.RelaxedSync {
+		if opts.DisableWAL || opts.ExternalCommandWAL || opts.RelaxedSync {
 			opts.FlushBackendMaxEntries = 2 * flushBackendBatchInitEntries
 		} else {
 			opts.FlushBackendMaxEntries = flushBackendBatchMaxEntries
@@ -11880,7 +11891,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// cheaper and can substantially reduce index.db high-watermark growth
 		// under small KeepRecent windows by making retired pages eligible for
 		// reuse sooner. Use a slightly higher default budget in that case.
-		if opts.DisableWAL || opts.RelaxedSync {
+		if opts.DisableWAL || opts.ExternalCommandWAL || opts.RelaxedSync {
 			opts.FlushBackendMaxBatches = 32
 		} else {
 			opts.FlushBackendMaxBatches = 16
@@ -11913,7 +11924,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if err := ensureNoLegacyMixedWALValueSegments(walDir); err != nil {
 		return nil, err
 	}
-	disableJournal := opts.DisableWAL
+	disableJournal := opts.DisableWAL || opts.ExternalCommandWAL
 	var journalOwner *commitlog.JournalOwner
 	journalOwnerTransferred := false
 	if !disableJournal {
@@ -12230,7 +12241,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// deliver clear payload reduction. This keeps dict-enabled mode close to
 		// raw mode on incompressible streams.
 		minPayloadSavings = 0.02
-		if opts.ForceValueLogPointers || opts.DisableWAL {
+		if opts.ForceValueLogPointers || opts.DisableWAL || opts.ExternalCommandWAL {
 			minPayloadSavings = 0.05
 		}
 	}
@@ -12389,6 +12400,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogMaxSegmentBytes:                    valueLogMaxSegmentBytes,
 		journalCompression:                         opts.JournalCompression,
 		disableJournal:                             disableJournal,
+		externalCommandWAL:                         opts.ExternalCommandWAL,
 		disableValueLog:                            false,
 		splitValueLog:                              true,
 		relaxedSync:                                opts.RelaxedSync,
@@ -12595,7 +12607,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}); ok && len(db.lanes) > 0 {
 		setter.SetValueLogAppender(newCachingValueLogAppender(db, &db.lanes[0]))
 	}
-	if opts.DisableWAL {
+	if opts.DisableWAL || opts.ExternalCommandWAL {
 		// Stage the adaptive gate on the fastest cached profile first. WAL-on
 		// modes keep the legacy zipper fan-out policy until benchmark data shows
 		// this pressure signal is neutral there as well.
@@ -24953,8 +24965,8 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 }
 
 func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appendCommand func(page.EntryRevision) error) error {
-	if !db.disableJournal {
-		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
+	if !db.externalCommandWAL {
+		return fmt.Errorf("cachingdb: command wal point writes require external command wal cached mode")
 	}
 	if err := db.beginDirectWrite(); err != nil {
 		return err
@@ -25126,8 +25138,8 @@ func (db *DB) DeleteRangeAfterCommandWALAppend(start, end []byte, appendCommand 
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
-	if db != nil && !db.disableJournal {
-		return fmt.Errorf("cachingdb: command wal range deletes require disabled cached redo log")
+	if db != nil && !db.externalCommandWAL {
+		return fmt.Errorf("cachingdb: command wal range deletes require external command wal cached mode")
 	}
 	return db.deleteRange(start, end, appendCommand)
 }
@@ -25250,8 +25262,8 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 	}
 	db.deleteRangeCalls.Add(1)
 	db.recordDeleteRangePlan(1, 1)
-	if appendCommand != nil && !db.disableJournal {
-		return fmt.Errorf("cachingdb: command wal range deletes require disabled cached redo log")
+	if appendCommand != nil && !db.externalCommandWAL {
+		return fmt.Errorf("cachingdb: command wal range deletes require external command wal cached mode")
 	}
 	db.waitForCheckpointForWrite()
 	commandWALAppended := false
@@ -25271,7 +25283,7 @@ func (db *DB) deleteRange(start, end []byte, appendCommand func() error) (err er
 		}
 	}()
 
-	if appendCommand != nil && db.disableJournal {
+	if appendCommand != nil && db.externalCommandWAL {
 		return db.publishCommandWALRangeSpanLayer(start, end, appendCommandBeforeVisibility)
 	}
 
@@ -26077,8 +26089,8 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 }
 
 func (db *DB) deleteDirectAfterCommandWALAppendWithRevision(key []byte, appendCommand func(page.EntryRevision) error) error {
-	if !db.disableJournal {
-		return fmt.Errorf("cachingdb: command wal point writes require disabled cached redo log")
+	if !db.externalCommandWAL {
+		return fmt.Errorf("cachingdb: command wal point writes require external command wal cached mode")
 	}
 	if err := db.beginDirectWrite(); err != nil {
 		return err
@@ -29360,6 +29372,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.journal_lanes.cold"] = fmt.Sprintf("%d", len(db.valueLogColdLanes))
 	stats["treedb.cache.journal_lanes.gomaxprocs"] = fmt.Sprintf("%d", db.journalLanesGOMAXPROCS)
 	stats["treedb.cache.journal_lanes.physical_cores"] = fmt.Sprintf("%d", db.journalLanesPhysicalCores)
+	redoLogMode := "enabled"
+	if db.externalCommandWAL {
+		redoLogMode = "external_command_wal"
+	} else if db.disableJournal {
+		redoLogMode = "disabled_unsafe"
+	}
+	stats["treedb.cache.redo_log.mode"] = redoLogMode
+	stats["treedb.cache.redo_log.enabled"] = fmt.Sprintf("%t", !db.disableJournal)
+	stats["treedb.cache.command_wal.external_durability"] = fmt.Sprintf("%t", db.externalCommandWAL)
 	db.sampleProcessMemoryPeaks(backendVlogMmap)
 	db.mu.RLock()
 	queueLen := len(db.queue)
@@ -34752,8 +34773,8 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 	if appendCommand == nil {
 		return fmt.Errorf("cachingdb: missing command wal append callback")
 	}
-	if !b.db.disableJournal {
-		return fmt.Errorf("cachingdb: command wal batch writes require disabled cached redo log")
+	if !b.db.externalCommandWAL {
+		return fmt.Errorf("cachingdb: command wal batch writes require external command wal cached mode")
 	}
 	b.db.waitForCheckpointForWrite()
 	if b.backend != nil {
@@ -34877,7 +34898,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 		b.Reset()
 		return nil
 	}
-	if b.commandWALAppend != nil && b.db.disableJournal && len(points) == 0 && len(ranges) > 0 {
+	if b.commandWALAppend != nil && b.db.externalCommandWAL && len(points) == 0 && len(ranges) > 0 {
 		return b.writeRangeSpanBatch(sync, ranges)
 	}
 

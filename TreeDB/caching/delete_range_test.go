@@ -84,9 +84,8 @@ func TestCachingDB_CommandWALRangeSpanVisibilitySnapshotsAndCheckpoint(t *testin
 	}
 	defer func() { _ = backend.Close() }()
 	db, err := Open(t.TempDir(), backend, Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -214,9 +213,8 @@ func TestCachingDB_CommandWALRangeSpanFiltersPublishedRoot(t *testing.T) {
 	}
 	defer func() { _ = backend.Close() }()
 	db, err := Open(t.TempDir(), backend, Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -307,9 +305,8 @@ func TestCachingDB_CommandWALRangeSpanPreservesPublishedRootMiss(t *testing.T) {
 	}
 
 	db, err := Open(t.TempDir(), backend, Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -384,9 +381,8 @@ func TestCachingDB_CommandWALRangeSpanIteratorPreservesPublishedRoot(t *testing.
 	}
 
 	db, err := Open(t.TempDir(), backend, Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -454,9 +450,8 @@ func TestCachingDB_CommandWALRangeSpanSurvivesDisjointOrdinaryDeleteRange(t *tes
 	backend := NewMockBackend()
 	backend.Set([]byte("b"), []byte("old"))
 	db, err := Open(t.TempDir(), backend, Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -491,9 +486,8 @@ func TestCachingDB_CommandWALRangeSpanSurvivesDisjointOrdinaryDeleteRange(t *tes
 
 func TestCachingDB_CommandWALRangeSpanBlocksLaterWriteSyncBypass(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -535,9 +529,8 @@ func TestCachingDB_CommandWALRangeSpanBlocksLaterWriteSyncBypass(t *testing.T) {
 
 func TestCachingBatch_CommandWALRangeOnlyUsesSpanLayer(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -616,11 +609,10 @@ func TestCachingDB_CommandWALRangeSpanFlushCollectionRespectsLaneBarriers(t *tes
 	newDB := func(t *testing.T) *DB {
 		t.Helper()
 		db, err := Open(t.TempDir(), NewMockBackend(), Options{
-			DisableWAL:     true,
-			AllowUnsafe:    true,
-			JournalLanes:   2,
-			MemtableShards: 2,
-			FlushThreshold: 1 << 20,
+			ExternalCommandWAL: true,
+			JournalLanes:       2,
+			MemtableShards:     2,
+			FlushThreshold:     1 << 20,
 		})
 		if err != nil {
 			t.Fatalf("Open: %v", err)
@@ -699,9 +691,8 @@ func TestCachingDB_CommandWALRangeSpanFlushCollectionRespectsLaneBarriers(t *tes
 
 func TestCachingDB_CommandWALRangeSpanCheckpointCombinesFlushUnits(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -744,9 +735,8 @@ func TestCachingDB_CommandWALRangeSpanCheckpointCombinesFlushUnits(t *testing.T)
 
 func TestCachingDB_CommandWALRangeSpanBounds(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -883,9 +873,8 @@ func TestCachingDB_DeleteRangeAfterCommandWALAppendFailureDoesNotMutate(t *testi
 	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -925,9 +914,8 @@ func TestCachingDB_DeleteRangeAfterCommandWALAppendNoopDoesNotAppend(t *testing.
 	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 20,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 20,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
