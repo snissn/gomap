@@ -427,6 +427,44 @@ func publicStatUint64(t *testing.T, db *DB, key string) uint64 {
 	return statMapUint64(t, db.Stats(), key)
 }
 
+func requirePublicStatDelta(t *testing.T, before, after map[string]string, key string, want uint64) {
+	t.Helper()
+	got := statMapUint64(t, after, key) - statMapUint64(t, before, key)
+	if got != want {
+		t.Fatalf("%s delta=%d, want %d (before=%#v after=%#v)", key, got, want, before, after)
+	}
+}
+
+func requirePublicCommandWALNoCheckpointSince(t *testing.T, db *DB, before map[string]string) {
+	t.Helper()
+	after := db.Stats()
+	for _, key := range []string{
+		"treedb.commit_seq",
+		"treedb.public.checkpoint.calls_total",
+		"treedb.cache.checkpoint.runs",
+	} {
+		if got, want := after[key], before[key]; got != want {
+			t.Fatalf("%s after public write=%q, want unchanged %q (before=%#v after=%#v)", key, got, want, before, after)
+		}
+	}
+}
+
+func commandWALDurabilityProofOptions(dir string) Options {
+	opts := OptionsFor(ProfileCommandWALDurable, dir)
+	opts.CommandWALStatsScan = true
+	opts.DisableSideStores = true
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.DisableBackgroundPrune = true
+	opts.FlushThreshold = 1 << 30
+	opts.MaxQueuedMemtables = -1
+	opts.WriterFlushMaxMemtables = 0
+	opts.WriterFlushMaxDuration = 0
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	return opts
+}
+
 func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),
@@ -495,6 +533,119 @@ func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
 	} {
 		_ = statMapUint64(t, stats, key)
 	}
+}
+
+func TestPublicCommandWALDurableSyncBoundaryMatrixDoesNotCheckpoint(t *testing.T) {
+	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open command WAL durable: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	for _, key := range []string{
+		"treedb.command_wal.append.count_total",
+		"treedb.command_wal.append.point.count_total",
+		"treedb.command_wal.append.payload.count_total",
+		"treedb.command_wal.append.entry_scan.count_total",
+		"treedb.command_wal.flush.count_total",
+		"treedb.command_wal.sync.count_total",
+		"treedb.public.batch.write.calls_total",
+		"treedb.public.batch.write_sync.calls_total",
+		"treedb.public.checkpoint.calls_total",
+	} {
+		if got := statMapUint64(t, before, key); got != 0 {
+			t.Fatalf("%s before writes=%d, want 0 (stats=%#v)", key, got, before)
+		}
+	}
+	if got := before["treedb.cache.redo_log.mode"]; got != "external_command_wal" {
+		t.Fatalf("redo_log.mode=%q, want external_command_wal", got)
+	}
+	if got := before["treedb.cache.redo_log.enabled"]; got != "false" {
+		t.Fatalf("redo_log.enabled=%q, want false", got)
+	}
+	if got := before["treedb.cache.command_wal.external_durability"]; got != "true" {
+		t.Fatalf("command_wal.external_durability=%q, want true", got)
+	}
+
+	if err := db.SetSync([]byte("point-sync"), []byte("v1")); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+	afterSetSync := db.Stats()
+	requirePublicStatDelta(t, before, afterSetSync, "treedb.command_wal.append.count_total", 1)
+	requirePublicStatDelta(t, before, afterSetSync, "treedb.command_wal.append.point.count_total", 1)
+	requirePublicStatDelta(t, before, afterSetSync, "treedb.command_wal.sync.count_total", 1)
+	requirePublicCommandWALNoCheckpointSince(t, db, before)
+
+	if err := db.DeleteSync([]byte("point-sync")); err != nil {
+		t.Fatalf("DeleteSync: %v", err)
+	}
+	afterDeleteSync := db.Stats()
+	requirePublicStatDelta(t, before, afterDeleteSync, "treedb.command_wal.append.count_total", 2)
+	requirePublicStatDelta(t, before, afterDeleteSync, "treedb.command_wal.append.point.count_total", 2)
+	requirePublicStatDelta(t, before, afterDeleteSync, "treedb.command_wal.sync.count_total", 2)
+	requirePublicCommandWALNoCheckpointSince(t, db, before)
+
+	writeBatch := db.NewBatch()
+	if err := writeBatch.Set([]byte("batch-write"), []byte("v2")); err != nil {
+		_ = writeBatch.Close()
+		t.Fatalf("batch Write Set: %v", err)
+	}
+	if err := writeBatch.Write(); err != nil {
+		_ = writeBatch.Close()
+		t.Fatalf("batch Write: %v", err)
+	}
+	if err := writeBatch.Close(); err != nil {
+		t.Fatalf("batch Write Close: %v", err)
+	}
+	afterBatchWrite := db.Stats()
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.count_total", 3)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.append.payload.count_total", 1)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.flush.count_total", 1)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.command_wal.sync.count_total", 2)
+	requirePublicStatDelta(t, before, afterBatchWrite, "treedb.public.batch.write.calls_total", 1)
+	requirePublicCommandWALNoCheckpointSince(t, db, before)
+
+	syncBatch := db.NewBatch()
+	if err := syncBatch.Set([]byte("batch-sync"), []byte("v3")); err != nil {
+		_ = syncBatch.Close()
+		t.Fatalf("batch WriteSync Set: %v", err)
+	}
+	if err := syncBatch.WriteSync(); err != nil {
+		_ = syncBatch.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := syncBatch.Close(); err != nil {
+		t.Fatalf("batch WriteSync Close: %v", err)
+	}
+	afterBatchWriteSync := db.Stats()
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.count_total", 4)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.append.payload.count_total", 2)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.flush.count_total", 1)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.command_wal.sync.count_total", 3)
+	requirePublicStatDelta(t, before, afterBatchWriteSync, "treedb.public.batch.write_sync.calls_total", 1)
+	requirePublicCommandWALNoCheckpointSince(t, db, before)
+
+	if err := db.DeleteRange([]byte("batch-"), []byte("batch-\xff")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+	afterRangeDelete := db.Stats()
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.count_total", 5)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.append.entry_scan.count_total", 1)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.flush.count_total", 2)
+	requirePublicStatDelta(t, before, afterRangeDelete, "treedb.command_wal.sync.count_total", 3)
+	requirePublicCommandWALNoCheckpointSince(t, db, before)
+
+	for _, key := range []string{"point-sync", "batch-write", "batch-sync"} {
+		has, err := db.Has([]byte(key))
+		if err != nil {
+			t.Fatalf("Has(%s): %v", key, err)
+		}
+		if has {
+			t.Fatalf("%s remains visible after delete/delete-range", key)
+		}
+	}
+	assertPublicCommandWALFrames(t, db, 5)
 }
 
 func TestPublicCommandWALBatchIngressStatsDistinguishViews(t *testing.T) {
