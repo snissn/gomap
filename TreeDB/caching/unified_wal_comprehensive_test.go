@@ -131,7 +131,7 @@ func TestUnifiedWAL_CrashRecoveryMissingPayloadSkipped(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	opened, err := db.Open(db.Options{Dir: dir})
+	opened, err := db.Open(db.Options{Dir: dir, AllowLegacyCachedRedoJournalReplay: true})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestUnifiedWAL_CrashRecoveryCompactZeroInlineBatch(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	opened, err := db.Open(db.Options{Dir: dir})
+	opened, err := db.Open(db.Options{Dir: dir, AllowLegacyCachedRedoJournalReplay: true})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestUnifiedWAL_CrashRecoveryPreservesEntryRevision(t *testing.T) {
 		t.Fatalf("deleted record op=%d seq=%d revision=%d, want delete seq %d revision 43", deletedRecord.Op, deletedRecord.Seq, deletedRecord.Revision, seqRecord.Seq)
 	}
 
-	opened, err := db.Open(db.Options{Dir: dir})
+	opened, err := db.Open(db.Options{Dir: dir, AllowLegacyCachedRedoJournalReplay: true})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}

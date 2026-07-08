@@ -26,6 +26,11 @@ var (
 	// ErrRecoveryRequired indicates the DB must be opened read-write for recovery
 	// before the requested read-only or offline-maintenance operation can run.
 	ErrRecoveryRequired = collectionwal.ErrCollectionWALRecoveryRequired
+	// ErrLegacyCachedRedoJournalReplayDisabled indicates that a directory still
+	// has legacy cached redo-journal segments. Current command-WAL opens do not
+	// replay those segments by default; forensic compatibility replay must be
+	// requested explicitly.
+	ErrLegacyCachedRedoJournalReplayDisabled = errors.New("treedb: legacy cached redo journal replay disabled")
 	// ErrUnsupportedRequiredFeature indicates format.json requires a storage
 	// feature this binary does not understand.
 	ErrUnsupportedRequiredFeature = errors.New("treedb: unsupported required storage feature")

@@ -193,32 +193,19 @@ func TestReadOnlyDoesNotReplayOrRemoveCommitLog(t *testing.T) {
 		t.Fatalf("expected commitlog segment to exist: %v", err)
 	}
 
-	ro, err := Open(Options{Dir: dir, ReadOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	val, err := ro.Get([]byte("k"))
-	if err != nil {
-		_ = ro.Close()
-		t.Fatalf("Get: %v", err)
-	}
-	if val != nil {
-		_ = ro.Close()
-		t.Fatalf("expected commitlog key to be absent in read-only view, got %q", val)
-	}
-	if err := ro.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
+	if _, err := Open(Options{Dir: dir, ReadOnly: true}); !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, ErrLegacyCachedRedoJournalReplayDisabled) {
+		t.Fatalf("Open read-only error=%v, want ErrRecoveryRequired and ErrLegacyCachedRedoJournalReplayDisabled", err)
 	}
 
 	if _, err := os.Stat(commitPath); err != nil {
 		t.Fatalf("read-only open should not remove commitlog segment: %v", err)
 	}
 
-	rw, err := Open(Options{Dir: dir})
+	rw, err := Open(Options{Dir: dir, AllowLegacyCachedRedoJournalReplay: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	val, err = rw.Get([]byte("k"))
+	val, err := rw.Get([]byte("k"))
 	if err != nil {
 		_ = rw.Close()
 		t.Fatalf("Get: %v", err)

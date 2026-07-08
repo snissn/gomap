@@ -904,6 +904,14 @@ type Options struct {
 	// legacy cached redo journal until cached writes are converted to typed
 	// command frames.
 	CommandWAL bool
+	// AllowLegacyCachedRedoJournalReplay permits explicit forensic recovery of
+	// pre-command-WAL cached redo-journal segments. Normal command-WAL and public
+	// profile opens should leave this false so dirty legacy journals fail closed
+	// instead of being silently replayed by the old compatibility path.
+	//
+	// Deprecated: this compatibility escape hatch exists only for pre-alpha
+	// legacy directories and focused recovery tests.
+	AllowLegacyCachedRedoJournalReplay bool
 	// CommandWALStatsScan enables expensive diagnostic Stats() counters that scan
 	// command-WAL segment files for frame counts and max LSN. Keep this disabled
 	// for normal telemetry; benchmark proof paths can opt in explicitly.
@@ -1929,8 +1937,17 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			_ = db.Close()
 			return nil, err
 		}
-		if opts.Durability != DurabilityWALOffRelaxed {
-			if err := replayWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
+		legacySegments, hasLegacyRedoJournal, err := legacyCachedRedoJournalReplaySegments(db, segments, opts.WALMaxSegmentBytes)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		if hasLegacyRedoJournal && !opts.AllowLegacyCachedRedoJournalReplay {
+			_ = db.Close()
+			return nil, legacyCachedRedoJournalReplayDisabledError(legacySegments, opts.WALMaxSegmentBytes)
+		}
+		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal {
+			if err := replayWALIntoBackend(db, legacySegments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
 				_ = db.Close()
 				return nil, err
 			}

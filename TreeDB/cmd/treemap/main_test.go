@@ -177,7 +177,7 @@ func TestCompactCommandsExposeFullStoragePath(t *testing.T) {
 	}
 }
 
-func TestCompactCommandReplaysCachedWALBeforeCompaction(t *testing.T) {
+func TestCompactCommandReplaysCommandWALBeforeCompaction(t *testing.T) {
 	dir := t.TempDir()
 	runCompactPendingWALWriter(t, dir)
 
@@ -226,7 +226,7 @@ func TestHelperTreemapCompactPendingWALWriter(t *testing.T) {
 		t.Fatalf("missing TREEMAP_COMPACT_WAL_DIR")
 	}
 
-	opts := treedb.OptionsFor(treedb.ProfileWALOnFast, dir)
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1

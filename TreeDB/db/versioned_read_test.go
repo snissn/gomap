@@ -152,7 +152,7 @@ func TestCommitLogRecoveryPreservesRecordEntryRevisions(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{Dir: dir, AllowLegacyCachedRedoJournalReplay: true})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
