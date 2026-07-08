@@ -51,16 +51,32 @@ Counter suffixes should follow these rules:
 | `_seconds` / `_ms` | gauge unless the key name also ends in `_total` |
 | `_active`, `_pending`, `_queued`, `_resident` | gauge |
 
-Compatibility exception: existing selected value-log raw I/O keys
-`treedb.cache.vlog_writev.bytes`, `treedb.cache.vlog_writev.syscalls`,
-`treedb.cache.vlog_writev.iovecs`, `treedb.cache.vlog_writev.flushes`,
-`treedb.cache.vlog_write.bytes`, `treedb.cache.vlog_write.syscalls`,
-`treedb.cache.vlog_write.calls`, `treedb.cache.vlog_io.bytes`, and
-`treedb.cache.vlog_io.syscalls` are monotonic counters even though they predate
-the `_total` naming convention. Ironbird must report them as load-window deltas
-until TreeDB exposes replacement `_bytes_total`, `_syscalls_total`,
-`_iovecs_total`, `_flushes_total`, or `_calls_total` aliases. New selected
-counters should use the `_total` suffix instead of extending this exception.
+Compatibility exception: existing selected value-log raw I/O and codec accounting
+keys are monotonic counters even though they predate the `_total` naming
+convention. This exception covers `treedb.cache.vlog_writev.bytes`,
+`treedb.cache.vlog_writev.syscalls`, `treedb.cache.vlog_writev.iovecs`,
+`treedb.cache.vlog_writev.flushes`, `treedb.cache.vlog_write.bytes`,
+`treedb.cache.vlog_write.syscalls`, `treedb.cache.vlog_write.calls`,
+`treedb.cache.vlog_io.bytes`, `treedb.cache.vlog_io.syscalls`,
+`treedb.cache.vlog_write_mode.raw_bytes.*`,
+`treedb.cache.vlog_write_mode.stored_bytes.*`,
+`treedb.cache.vlog_write_mode.frames.*`,
+`treedb.cache.vlog_write_mode.bucket.raw_bytes.*`,
+`treedb.cache.vlog_write_mode.bucket.stored_bytes.*`,
+`treedb.cache.vlog_write_mode.bucket.frames.*`,
+`treedb.cache.vlog_payload_kind.raw_bytes.*`,
+`treedb.cache.vlog_payload_kind.stored_bytes.*`,
+`treedb.cache.vlog_payload_kind.frames.*`,
+`treedb.cache.vlog_auto.bytes.*`, `treedb.cache.vlog_auto.frames.*`,
+`treedb.cache.vlog_auto.probe_attempts`,
+`treedb.cache.vlog_auto.probe_successes`,
+`treedb.cache.vlog_auto.hold_enters`, `treedb.cache.vlog_auto.hold_exits`,
+`treedb.cache.vlog_auto.bypass_bytes`, and
+`treedb.cache.vlog_auto.switches.*`. Ironbird must report these keys as
+load-window deltas until TreeDB exposes replacement `_total` aliases. Derived
+ratio, fraction, bytes-per, and per-byte timing fields remain gauges. New
+selected counters should use the `_total` suffix instead of extending this
+exception.
 
 String-valued policy or reason keys are allowed only when they are bounded
 tokens. Free-form diagnostic text must not be selected into benchmark result
