@@ -80,6 +80,11 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
     typed frames were accepted and covered. Use
     `-treedb-command-wal-stats-scan` only when segment inventory counters such
     as `treedb.command_wal.typed_segments` are required.
+  - Downstream adapter evidence should record the resolved TreeDB profile and
+    include command-WAL counters plus checkpoint counters. In particular,
+    distinguish `*Sync` command-WAL sync cost from explicit
+    `Checkpoint()`/`Close()` publication cost; see
+    `docs/TREEDB_DOWNSTREAM_VALIDATION.md`.
 - `-test` (`all` or CSV): see list above
 - `-keys` number of keys (default 100000)
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
