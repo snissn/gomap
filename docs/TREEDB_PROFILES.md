@@ -11,7 +11,8 @@ different trade-offs:
 
 Most callers, however, want a small number of *intention-level* configurations.
 TreeDB profiles provide those as a convenience API. For cached-mode write-path
-semantics (WAL on/off), see `docs/TREEDB_WRITE_PATHS.md`.
+semantics, including command-WAL, checkpoint-only benchmark, and legacy cached
+redo-journal compatibility terminology, see `docs/TREEDB_WRITE_PATHS.md`.
 
 The intended public profile surface is:
 
@@ -174,7 +175,7 @@ advertised as normal collection or Mongo gateway choices.
 
 ### `ProfileLegacyWALDurable`
 
-String name: `legacy_wal_durable`
+Compatibility string name: `legacy_wal_durable`
 
 Compatibility alias: `ProfileDurable` / `durable`
 
@@ -194,7 +195,7 @@ command-WAL transition.
 
 ### `ProfileNoWALFast`
 
-String name: `no_wal_fast`
+Compatibility string name: `no_wal_fast`
 
 Compatibility alias: `ProfileFast` / `fast`
 
@@ -202,8 +203,9 @@ Goal: maximize throughput by relaxing safety knobs.
 
 Behavior:
 
-- Disables or relaxes safety knobs:
-  - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync)
+- Disables or relaxes legacy compatibility safety knobs:
+  - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync,
+    compatibility-only)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses normal page reuse (`PreferAppendAlloc=false` by default)
 - Enables leaf pages in the value log (`IndexOuterLeavesInValueLog = true`)
@@ -222,8 +224,8 @@ Behavior:
 
 Notes:
 
-- Profiles do not change the write path beyond WAL on/off; the value log remains
-  enabled in cached mode.
+- Compatibility profiles do not change value-log persistence; the value log
+  remains enabled in cached mode even when the legacy redo journal is disabled.
 
 Use only when you want:
 
@@ -233,7 +235,7 @@ Use only when you want:
 
 ### `ProfileLegacyWALRelaxedFast`
 
-String name: `legacy_wal_relaxed_fast`
+Compatibility string name: `legacy_wal_relaxed_fast`
 
 Compatibility alias: `ProfileWALOnFast` / `wal_on_fast`
 
@@ -241,8 +243,8 @@ Goal: maximize write throughput while keeping WAL on.
 
 Behavior:
 
-- Keeps WAL on while relaxing durability checks:
-  - `Durability = DurabilityWALOnRelaxed`
+- Keeps legacy/raw WAL on while relaxing durability checks:
+  - `Durability = DurabilityWALOnRelaxed` (legacy compatibility)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses normal page reuse (`PreferAppendAlloc=false` by default)
 - Enables the same index optimization bundle as `ProfileNoWALFast`.

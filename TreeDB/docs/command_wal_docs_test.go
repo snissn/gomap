@@ -91,6 +91,142 @@ func TestCommandWALLegacyRawEncodingTestsHaveTypedFrameEquivalents(t *testing.T)
 	}
 }
 
+func TestCommandWALLegacySurfaceInventoryCoversRemovalStack(t *testing.T) {
+	treeRoot, _ := repoRoots(t)
+	path := filepath.Join(treeRoot, "docs", "spec", "command-wal-legacy-surface-inventory.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read legacy surface inventory: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"https://github.com/snissn/gomap/issues/3612",
+		"https://github.com/snissn/gomap/issues/3613",
+		"`DisableWAL` / `disableJournal`",
+		"`DurabilityWALOffRelaxed`",
+		"legacy cached redo journal",
+		"checkpoint-only benchmark",
+		"Public command-WAL opens enter cached mode as `DisableWAL=true`",
+		"`WriteAfterCommandWALAppend`",
+		"`writeRangeBatch(sync)`",
+		"`replayWALIntoBackend`",
+		"#3614",
+		"#3615",
+		"#3616",
+		"#3617",
+		"#3618",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("%s missing inventory/ownership wording %q", path, want)
+		}
+	}
+}
+
+func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
+	treeRoot, repoRoot := repoRoots(t)
+	paths := []string{
+		filepath.Join(treeRoot, "README.md"),
+		filepath.Join(treeRoot, "docs", "spec", "README.md"),
+		filepath.Join(treeRoot, "docs", "spec", "command-wal-legacy-surface-inventory.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_CONCEPTS.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_PROFILES.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_RECOVERY.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_TUNING.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_VALUELOG_AUTOTUNE.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_WRITE_PATHS.md"),
+		filepath.Join(repoRoot, "cmd", "unified_bench", "README.md"),
+	}
+	for _, p := range paths {
+		content, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("read %s: %v", p, err)
+		}
+		lines := strings.Split(string(content), "\n")
+		for i, line := range lines {
+			if !mentionsLegacyWALTerm(line) {
+				continue
+			}
+			context := strings.ToLower(line)
+			if i > 0 {
+				context = strings.ToLower(lines[i-1]) + " " + context
+			}
+			if i+1 < len(lines) {
+				context += " " + strings.ToLower(lines[i+1])
+			}
+			if hasLegacyWALContext(context) {
+				continue
+			}
+			t.Fatalf("%s:%d mentions legacy WAL terminology without legacy/compatibility/benchmark context: %s", p, i+1, line)
+		}
+	}
+}
+
+func mentionsLegacyWALTerm(line string) bool {
+	lower := strings.ToLower(line)
+	for _, term := range []string{
+		"legacy_wal",
+		"wal_on_fast",
+		"no_wal_fast",
+		"disablewal",
+		"disable wal",
+		"wal-on",
+		"wal on/off",
+		"wal-off",
+		"wal off",
+	} {
+		if strings.Contains(lower, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLegacyWALContext(context string) bool {
+	for _, term := range []string{
+		"legacy",
+		"compatib",
+		"historical",
+		"deprecated",
+		"unsafe",
+		"benchmark",
+		"internal",
+		"forensic",
+		"reject",
+		"not a treedb server profile",
+		"not public",
+		"not the current",
+		"not normal",
+		"should not present",
+		"must be removed",
+		"quarantin",
+		"archive",
+		"cross-db",
+		"old",
+		"low-level",
+		"process-crash",
+		"power-loss",
+		"fsync",
+		"checkpoint",
+		"recoverable",
+		"recoverability",
+		"recovery",
+		"durable-at-ack",
+		"performance",
+		"throughput",
+		"backend-only",
+		"commit sequence",
+		"mutation sequence",
+		"mutation revision",
+		"writesync",
+		"sync boundaries",
+	} {
+		if strings.Contains(context, term) {
+			return true
+		}
+	}
+	return false
+}
+
 func migrationInventoryRows(text string) map[string]string {
 	rows := make(map[string]string)
 	for _, line := range strings.Split(text, "\n") {

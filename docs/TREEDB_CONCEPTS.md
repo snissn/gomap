@@ -3,10 +3,16 @@
 TreeDB is a persistent ordered key/value store built around a B+Tree. The public API is
 `github.com/snissn/gomap/TreeDB` (package `treedb`).
 
-TreeDB has one engine with WAL on/off semantics:
+TreeDB has one engine with command-WAL-first public durability semantics:
 
-- **WAL on (default)**: write-back layer (`memtable + journal + value log + background flush`).
-- **WAL off**: journal disabled (unsafe), value log still enabled.
+- **Command-WAL durable/relaxed**: current public write handles append typed
+  command frames before visibility, then publish roots at checkpoint/flush/close
+  boundaries.
+- **Checkpoint-only benchmark mode**: unsafe benchmark ceiling with no
+  per-write command log. Use only when measuring storage/index overhead.
+- **Legacy cached redo journal**: old internal/compatibility terminology for
+  the cached-layer redo log; current public guidance should not present generic
+  WAL on/off as normal TreeDB profile choices.
 
 This doc is intentionally high-level. For canonical TreeDB behavior and format specs, see `TreeDB/docs/spec/README.md`.
 

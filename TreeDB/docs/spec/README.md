@@ -111,6 +111,10 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/user-command-wal-test-migration.md`
   - PR1 test migration inventory mapping legacy raw WAL invariants to typed
     command-frame coverage.
+- `TreeDB/docs/spec/command-wal-legacy-surface-inventory.md`
+  - issue #3613 M0 inventory and guardrail contract for removing or
+    quarantining legacy cached WAL / redo-journal public surfaces while
+    retaining command-WAL as the current durable write log.
 - `TreeDB/docs/spec/value-log-lifecycle.md`
   - retention, GC, rewrite, and operational lifecycle of value-log segments.
 - `TreeDB/docs/spec/backup-restore.md`

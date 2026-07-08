@@ -86,7 +86,9 @@ Compression is kept only when it improves predicted wall time with a safety marg
 Value log compression autotune is designed for:
 
 - **Cached mode** (TreeDB caching layer enabled via `treedb.Open`).
-- **WAL on/off** both supported; WAL off is selected via `Options.Durability = DurabilityWALOffRelaxed`.
+- **Command-WAL durable/relaxed** public profiles are the current recommended
+  surface. Legacy WAL-off / `DurabilityWALOffRelaxed` use is compatibility or
+  checkpoint-only benchmark territory, not normal production guidance.
 
 ### Configuration prerequisites
 

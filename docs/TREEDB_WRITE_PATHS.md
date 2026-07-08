@@ -1,4 +1,4 @@
-# TreeDB Write Paths (WAL on/off)
+# TreeDB Write Paths (Command-WAL and Legacy Compatibility)
 
 This is a supporting write-path explainer.
 
@@ -9,8 +9,10 @@ For the canonical TreeDB spec, see:
 ## Terminology (canonical)
 
 - **Value log (vlog)**: append-only log for large values used by cached mode.
-- **Journal / WAL**: redo/commit log for cached mode (metadata durability). We
-  use *WAL* as a shorthand for the journal in public docs.
+- **Command WAL**: current durable write log for public TreeDB write handles.
+- **Legacy cached redo journal**: old cached-mode redo/commit log terminology.
+  Current public docs should avoid generic WAL on/off guidance except when
+  explicitly discussing legacy compatibility or benchmark-only unsafe modes.
 
 ## Write-path modes (cached mode)
 
@@ -29,14 +31,15 @@ Use profiles rather than raw flags when possible:
 ```go
 opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./db") // command WAL + durable sync
 opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, "./db") // command WAL + relaxed sync
-opts := treedb.OptionsFor(treedb.ProfileBench, "./db") // no WAL; benchmark-only ceiling
+opts := treedb.OptionsFor(treedb.ProfileBench, "./db") // no WAL; benchmark-only unsafe ceiling
 ```
 
 Equivalent option-level knobs:
 
 - **Command WAL + durable sync**: `CommandWAL = true`, `Durability = DurabilityDurable`.
 - **Command WAL + relaxed sync**: `CommandWAL = true`, `Durability = DurabilityWALOnRelaxed`.
-- **No WAL benchmark ceiling**: `Durability = DurabilityWALOffRelaxed`.
+- **No WAL benchmark ceiling**: `Durability = DurabilityWALOffRelaxed`
+  (benchmark-only unsafe compatibility path).
 
 Legacy/raw WAL option bundles are still present for compatibility and low-level
 tests during the command-WAL transition, but current server, collection,
@@ -50,16 +53,18 @@ public operations that cannot be replayed as typed commands yet fail closed
 under command WAL; today that includes callback-based `Update`, `UpdateSync`,
 and range `DeleteRange`.
 
-## Migration (old → new)
+## Legacy Compatibility Migration (old -> new)
 
 TreeDB’s public `Options` API was simplified to make “intent” explicit:
 durability/integrity are selected via `Options.Durability` and
 `Options.ValueLog.*` rather than a loose set of booleans.
 
-Common mappings:
+Common legacy compatibility mappings:
 
-- `Options.DisableWAL=true` → `Options.Durability = DurabilityWALOffRelaxed`
-- `Options.RelaxedSync=true` (with WAL on) → `Options.Durability = DurabilityWALOnRelaxed`
+- `Options.DisableWAL=true` -> `Options.Durability = DurabilityWALOffRelaxed`
+  (legacy compatibility / benchmark-only unsafe)
+- `Options.RelaxedSync=true` (with legacy WAL on) ->
+  `Options.Durability = DurabilityWALOnRelaxed` (legacy compatibility)
 - `Options.DisableReadChecksum=true` → `Options.ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - `Options.AllowUnsafe=true` → removed from public API (unsafe modes are now explicit via the fields above)
 
