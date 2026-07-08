@@ -28,7 +28,7 @@ eventually flushes to the backend.
 Crash recovery:
 - On open, any journal segments in `Dir/maindb/wal/` are replayed into the backend with synced commits, then removed.
 
-### WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
+### Legacy compatibility WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
 
 WAL stays enabled, but `*Sync` operations do not `fsync`. This is
 crash-consistent (process crash) but not guaranteed durable on power loss.
@@ -36,7 +36,7 @@ crash-consistent (process crash) but not guaranteed durable on power loss.
 - `Set` / `Batch.Write`: not guaranteed durable on power loss.
 - `SetSync` / `Batch.WriteSync`: crash-consistent only (no `fsync`).
 
-### WAL off (`Durability = DurabilityWALOffRelaxed`)
+### Legacy compatibility WAL off (`Durability = DurabilityWALOffRelaxed`)
 
 WAL-off disables the journal/redo log while keeping the value log enabled. This
 improves write throughput but sacrifices durability for the most recent writes

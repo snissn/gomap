@@ -131,7 +131,7 @@ Behavior:
 - Enables command WAL:
   - `CommandWAL = true`
 - Keeps command frames recoverable from the local command-WAL path while relaxing
-  sync/checksum policy:
+  sync/checksum policy through a low-level compatibility enum:
   - `Durability = DurabilityWALOnRelaxed`
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses the same production-fast collection/index layout and compression defaults
@@ -173,7 +173,7 @@ for compatibility, low-level tests, and historical benchmark reproduction. They
 are not part of the intended public server/profile surface and should not be
 advertised as normal collection or Mongo gateway choices.
 
-### `ProfileLegacyWALDurable`
+### Legacy compatibility: `ProfileLegacyWALDurable`
 
 Compatibility string name: `legacy_wal_durable`
 
@@ -193,7 +193,7 @@ Behavior:
 Use only when you intentionally need the legacy/raw durable WAL path during the
 command-WAL transition.
 
-### `ProfileNoWALFast`
+### Legacy compatibility: `ProfileNoWALFast`
 
 Compatibility string name: `no_wal_fast`
 
@@ -233,7 +233,7 @@ Use only when you want:
 - you have an external durability boundary (e.g., higher-layer snapshots), or
   you are willing to trade durability/integrity for throughput
 
-### `ProfileLegacyWALRelaxedFast`
+### Legacy compatibility: `ProfileLegacyWALRelaxedFast`
 
 Compatibility string name: `legacy_wal_relaxed_fast`
 
@@ -247,9 +247,9 @@ Behavior:
   - `Durability = DurabilityWALOnRelaxed` (legacy compatibility)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses normal page reuse (`PreferAppendAlloc=false` by default)
-- Enables the same index optimization bundle as `ProfileNoWALFast`.
+- Enables the same index optimization bundle as legacy compatibility `ProfileNoWALFast`.
 - Enables the same Celestia-style value-log compression defaults as
-  `ProfileNoWALFast`.
+  legacy compatibility `ProfileNoWALFast`.
 
 Use only when you want:
 
