@@ -29,7 +29,27 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.command_wal."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.command_wal."):
+		return true
+	case isSelectedWriteKey(key):
+		return true
+	case isSelectedAutoCheckpointKey(key):
+		return true
+	case key == "treedb.cache.backpressure_mode":
+		return true
+	case key == "treedb.cache.queue_laneid_misses":
+		return true
+	case strings.HasPrefix(key, "treedb.cache.stats."):
+		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
+		return true
+	case isSelectedTotalKey(key, "treedb.cache.vlog_read."):
+		return true
+	case isSelectedTotalKey(key, "treedb.cache.vlog_template."):
+		return true
+	case isSelectedValueLogTemplateDefCacheKey(key, "treedb.cache.vlog_template_def_cache."):
+		return true
+	case isSelectedCachedValueLogWriteIOKey(key):
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_decode_buffer_grow."):
 		return true
@@ -56,6 +76,10 @@ func isSelectedKey(key string) bool {
 	case strings.HasPrefix(key, "treedb.cache.vlog_leaf_scan."):
 		return true
 	case strings.HasPrefix(key, "treedb.vlog.mmap"):
+		return true
+	case isSelectedTotalKey(key, "treedb.vlog.read."):
+		return true
+	case isSelectedValueLogTemplateDefCacheKey(key, "treedb.vlog.template_def_cache."):
 		return true
 	case strings.HasPrefix(key, "treedb.vlog.decode_buffer_grow."):
 		return true
@@ -120,6 +144,60 @@ func isSelectedKey(key string) bool {
 	case strings.HasPrefix(key, "treedb.collections.write_domain."):
 		return true
 	case strings.HasPrefix(key, "treedb.publish.watermark."):
+		return true
+	default:
+		return false
+	}
+}
+
+func isSelectedAutoCheckpointKey(key string) bool {
+	switch key {
+	case "treedb.cache.auto_checkpoint.count",
+		"treedb.cache.auto_checkpoint.last_reason":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSelectedWriteKey(key string) bool {
+	switch key {
+	case "treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait_for_checkpoint.count_total":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSelectedTotalKey(key, prefix string) bool {
+	return strings.HasPrefix(key, prefix) && strings.HasSuffix(key, "_total")
+}
+
+func isSelectedValueLogTemplateDefCacheKey(key, prefix string) bool {
+	suffix, ok := strings.CutPrefix(key, prefix)
+	if !ok {
+		return false
+	}
+	switch suffix {
+	case "hits", "misses":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSelectedCachedValueLogWriteIOKey(key string) bool {
+	switch key {
+	case "treedb.cache.vlog_writev.bytes",
+		"treedb.cache.vlog_writev.syscalls",
+		"treedb.cache.vlog_writev.iovecs",
+		"treedb.cache.vlog_writev.flushes",
+		"treedb.cache.vlog_write.bytes",
+		"treedb.cache.vlog_write.syscalls",
+		"treedb.cache.vlog_write.calls",
+		"treedb.cache.vlog_io.bytes",
+		"treedb.cache.vlog_io.syscalls":
 		return true
 	default:
 		return false

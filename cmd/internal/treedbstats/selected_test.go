@@ -4,10 +4,26 @@ import "testing"
 
 func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 	stats := map[string]string{
-		"treedb.commit_seq":          "7",
-		"treedb.applied_command_lsn": "9",
-		"treedb.command_wal.enabled": "true",
-		"treedb.command_wal.frames":  "3",
+		"treedb.commit_seq":                                                                             "7",
+		"treedb.applied_command_lsn":                                                                    "9",
+		"treedb.command_wal.enabled":                                                                    "true",
+		"treedb.command_wal.frames":                                                                     "3",
+		"treedb.cache.command_wal.external_durability":                                                  "true",
+		"treedb.cache.command_wal.checkpoint_publish.piggybacked":                                       "2",
+		"treedb.cache.command_wal.checkpoint_publish.separate":                                          "1",
+		"treedb.cache.write.wait_for_checkpoint.ns_total":                                               "101",
+		"treedb.cache.write.wait_for_checkpoint.count_total":                                            "3",
+		"treedb.cache.write.wait_for_checkpoint.ns_max":                                                 "77",
+		"treedb.cache.write.wait_for_checkpoint.ns_last":                                                "55",
+		"treedb.cache.auto_checkpoint.count":                                                            "4",
+		"treedb.cache.auto_checkpoint.last_reason":                                                      "size",
+		"treedb.cache.auto_checkpoint.last_unix_nano":                                                   "1770000000000000000",
+		"treedb.cache.auto_checkpoint.last_duration_ms":                                                 "3.250",
+		"treedb.cache.materialization.lag_age_ms":                                                       "12.500",
+		"treedb.cache.backpressure_mode":                                                                "adaptive",
+		"treedb.cache.flush_bps_ewma":                                                                   "8192",
+		"treedb.cache.queue_laneid_misses":                                                              "0",
+		"treedb.cache.stats.backend_write_batches_total":                                                "7",
 		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total":                           "5",
 		"treedb.process.read_path.outer_leaf.cache.hits":                                                "11",
 		"treedb.vlog.mmap_read.fallback_readat":                                                         "13",
@@ -17,10 +33,25 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.vlog.writer_append_buf.pool.retained_bytes":                                             "4194304",
 		"treedb.vlog.grouped_frame_cache.retained_bytes":                                                "67108864",
 		"treedb.vlog.grouped_frame_cache.allocated_slots":                                               "512",
+		"treedb.vlog.read.crc32_checks_total":                                                           "31",
+		"treedb.vlog.template_def_cache.hits":                                                           "13",
+		"treedb.vlog.template_def_cache.misses":                                                         "2",
+		"treedb.vlog.template_def_cache.hit_ratio":                                                      "0.866667",
 		"treedb.cache.vlog_grouped_frame_cache.retained_bytes":                                          "33554432",
 		"treedb.cache.vlog_grouped_frame_cache.allocated_slots":                                         "256",
 		"treedb.process.memory.rss_bytes":                                                               "123456789",
 		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments":                                        "512",
+		"treedb.cache.vlog_writev.syscalls":                                                             "6",
+		"treedb.cache.vlog_writev.bytes":                                                                "24576",
+		"treedb.cache.vlog_writev.iovecs":                                                               "48",
+		"treedb.cache.vlog_writev.flushes":                                                              "3",
+		"treedb.cache.vlog_writev.bytes_per_syscall":                                                    "4096.0",
+		"treedb.cache.vlog_write.syscalls":                                                              "9",
+		"treedb.cache.vlog_write.bytes":                                                                 "8192",
+		"treedb.cache.vlog_write.calls":                                                                 "7",
+		"treedb.cache.vlog_write.bytes_per_call":                                                        "1170.3",
+		"treedb.cache.vlog_io.bytes":                                                                    "32768",
+		"treedb.cache.vlog_io.syscalls":                                                                 "15",
 		"treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.calls_total":                  "17",
 		"treedb.cache.vlog_decode_scratch.small_pool.retained_bytes":                                    "65536",
 		"treedb.cache.vlog_writer_append_buf.pool.retained_bytes":                                       "8388608",
@@ -32,6 +63,11 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.cache.vlog_outer_leaf_codec.frames.lz4":                                                 "43",
 		"treedb.cache.vlog_block.k.bucket.lz4.le_1":                                                     "43",
 		"treedb.cache.vlog_dict.frames_kept":                                                            "2",
+		"treedb.cache.vlog_read.crc32_checks_total":                                                     "23",
+		"treedb.cache.vlog_template.reject.reason.ineligible_total":                                     "3",
+		"treedb.cache.vlog_template_def_cache.hits":                                                     "5",
+		"treedb.cache.vlog_template_def_cache.misses":                                                   "1",
+		"treedb.cache.vlog_template_def_cache.hit_ratio":                                                "0.833333",
 		"treedb.cache.vlog_autotune.observed_ratio":                                                     "0.410000",
 		"treedb.cache.vlog_leaf_scan.write_mode.frames.block":                                           "5",
 		"treedb.cache.memtable_residency.queue.append_only.entry_backing_bytes":                         "7340032",
@@ -95,6 +131,16 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.applied_command_lsn",
 		"treedb.command_wal.enabled",
 		"treedb.command_wal.frames",
+		"treedb.cache.command_wal.external_durability",
+		"treedb.cache.command_wal.checkpoint_publish.piggybacked",
+		"treedb.cache.command_wal.checkpoint_publish.separate",
+		"treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait_for_checkpoint.count_total",
+		"treedb.cache.auto_checkpoint.count",
+		"treedb.cache.auto_checkpoint.last_reason",
+		"treedb.cache.backpressure_mode",
+		"treedb.cache.queue_laneid_misses",
+		"treedb.cache.stats.backend_write_batches_total",
 		"treedb.process.read_path.backend_tree.get_append_pointer_hits_total",
 		"treedb.process.read_path.outer_leaf.cache.hits",
 		"treedb.vlog.mmap_read.fallback_readat",
@@ -104,10 +150,22 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.vlog.writer_append_buf.pool.retained_bytes",
 		"treedb.vlog.grouped_frame_cache.retained_bytes",
 		"treedb.vlog.grouped_frame_cache.allocated_slots",
+		"treedb.vlog.read.crc32_checks_total",
+		"treedb.vlog.template_def_cache.hits",
+		"treedb.vlog.template_def_cache.misses",
 		"treedb.cache.vlog_grouped_frame_cache.retained_bytes",
 		"treedb.cache.vlog_grouped_frame_cache.allocated_slots",
 		"treedb.process.memory.rss_bytes",
 		"treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments",
+		"treedb.cache.vlog_writev.syscalls",
+		"treedb.cache.vlog_writev.bytes",
+		"treedb.cache.vlog_writev.iovecs",
+		"treedb.cache.vlog_writev.flushes",
+		"treedb.cache.vlog_write.syscalls",
+		"treedb.cache.vlog_write.bytes",
+		"treedb.cache.vlog_write.calls",
+		"treedb.cache.vlog_io.bytes",
+		"treedb.cache.vlog_io.syscalls",
 		"treedb.cache.vlog_decode_buffer_grow.read_append_decoded_payload.calls_total",
 		"treedb.cache.vlog_decode_scratch.small_pool.retained_bytes",
 		"treedb.cache.vlog_writer_append_buf.pool.retained_bytes",
@@ -119,6 +177,9 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.cache.vlog_outer_leaf_codec.frames.lz4",
 		"treedb.cache.vlog_block.k.bucket.lz4.le_1",
 		"treedb.cache.vlog_dict.frames_kept",
+		"treedb.cache.vlog_read.crc32_checks_total",
+		"treedb.cache.vlog_template.reject.reason.ineligible_total",
+		"treedb.cache.vlog_template_def_cache.hits",
 		"treedb.cache.vlog_autotune.observed_ratio",
 		"treedb.cache.vlog_leaf_scan.write_mode.frames.block",
 		"treedb.cache.memtable_residency.queue.append_only.entry_backing_bytes",
@@ -179,8 +240,22 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 			t.Fatalf("Selected missing %s from %#v", key, got)
 		}
 	}
-	if _, ok := got["treedb.unrelated_stat_that_should_not_leave_the_helper"]; ok {
-		t.Fatalf("Selected kept unrelated stat: %#v", got)
+	for _, key := range []string{
+		"treedb.cache.auto_checkpoint.last_unix_nano",
+		"treedb.cache.auto_checkpoint.last_duration_ms",
+		"treedb.cache.write.wait_for_checkpoint.ns_max",
+		"treedb.cache.write.wait_for_checkpoint.ns_last",
+		"treedb.cache.materialization.lag_age_ms",
+		"treedb.cache.flush_bps_ewma",
+		"treedb.vlog.template_def_cache.hit_ratio",
+		"treedb.cache.vlog_writev.bytes_per_syscall",
+		"treedb.cache.vlog_write.bytes_per_call",
+		"treedb.cache.vlog_template_def_cache.hit_ratio",
+		"treedb.unrelated_stat_that_should_not_leave_the_helper",
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("Selected kept %s in %#v", key, got)
+		}
 	}
 }
 
@@ -222,5 +297,37 @@ func TestSelectedDropsOrderedRootFreeFormTriageFields(t *testing.T) {
 		if got[key] == "" {
 			t.Fatalf("Selected dropped token-safe triage field %s from %#v", key, got)
 		}
+	}
+}
+
+var selectedBenchSink map[string]string
+
+func BenchmarkSelectedLifecycleAttributionKeys(b *testing.B) {
+	stats := map[string]string{
+		"treedb.commit_seq":                                              "7",
+		"treedb.command_wal.sync.ns_total":                               "12345",
+		"treedb.cache.command_wal.checkpoint_publish.piggybacked":        "2",
+		"treedb.cache.write.wait_for_checkpoint.count_total":             "3",
+		"treedb.cache.auto_checkpoint.count":                             "4",
+		"treedb.cache.backpressure_mode":                                 "adaptive",
+		"treedb.cache.queue_laneid_misses":                               "0",
+		"treedb.cache.queue_len":                                         "3",
+		"treedb.cache.queue_backlog_bytes":                               "4096",
+		"treedb.cache.vlog_generation.rewrite.reclaimed_bytes":           "123",
+		"treedb.cache.vlog_writev.bytes":                                 "4096",
+		"treedb.cache.vlog_read.crc32_checks_total":                      "23",
+		"treedb.vlog.read.crc32_checks_total":                            "31",
+		"treedb.cache.vlog_template_def_cache.hits":                      "5",
+		"treedb.vlog.template_def_cache.hits":                            "13",
+		"treedb.process.memory.rss_bytes":                                "123456789",
+		"treedb.cache.checkpoint.stage.command_wal_publish.total_ns":     "101",
+		"treedb.cache.flush_apply.vlog_sync_ns_total":                    "202",
+		"treedb.publish.watermark.lag_drift_bytes_per_sec":               "0.000",
+		"treedb.unrelated_stat_that_should_not_leave_the_helper":         "17",
+		"treedb.another_unrelated_stat_that_should_not_leave_the_helper": "19",
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		selectedBenchSink = Selected(stats)
 	}
 }

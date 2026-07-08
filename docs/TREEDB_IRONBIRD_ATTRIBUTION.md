@@ -108,6 +108,48 @@ when the repo can expose them safely with negligible overhead. If a family is
 not available, the implementation must document the missing signal and the
 lowest-risk follow-up.
 
+## Current Selected TreeDB Names
+
+The current TreeDB stats surface already emits the following low-overhead
+families that Ironbird should preserve when present:
+
+- command-WAL append, flush, sync, live coverage, and cleanup:
+  `treedb.command_wal.*`;
+- cached command-WAL durability mode and checkpoint publication split:
+  `treedb.cache.command_wal.*`;
+- foreground write wait-for-checkpoint totals:
+  `treedb.cache.write.wait_for_checkpoint.ns_total`,
+  `treedb.cache.write.wait_for_checkpoint.count_total`;
+- checkpoint/frontier stages, debt, shared drain, and wait telemetry:
+  `treedb.cache.checkpoint.*`;
+- flush apply, span-run, and backlog coalescing work:
+  `treedb.cache.flush_apply.*`, `treedb.flush_apply.*`,
+  `treedb.cache.flush_span_run.*`, `treedb.cache.flush_backlog_coalescing.*`;
+- auto-checkpoint and queue pressure selected for delta-style artifacts:
+  `treedb.cache.auto_checkpoint.count`,
+  `treedb.cache.auto_checkpoint.last_reason`, `treedb.cache.queue_len`,
+  `treedb.cache.queue_backlog_bytes`, `treedb.cache.backpressure_mode`,
+  `treedb.cache.queue_laneid_misses`;
+- value-log generation, GC, rewrite, mmap, read, template, buffer, and cache
+  telemetry: `treedb.cache.vlog_generation.*`, `treedb.cache.vlog_mmap.*`,
+  selected `treedb.cache.vlog_read.*_total`,
+  selected `treedb.cache.vlog_template.*_total`,
+  selected `treedb.cache.vlog_template_def_cache.{hits,misses}`,
+  legacy monotonic write I/O keys such as `treedb.cache.vlog_writev.bytes`,
+  other selected `treedb.cache.vlog_*` families, and selected backend
+  `treedb.vlog.read.*_total` and
+  `treedb.vlog.template_def_cache.{hits,misses}` families;
+- process memory, memtable residency, append-only residency, and publish
+  watermark telemetry: `treedb.process.memory.*`,
+  `treedb.cache.memtable_residency.*`,
+  `treedb.process.memtable_residency.*`, `treedb.cache.append_only.*`,
+  `treedb.process.append_only.*`, `treedb.publish.watermark.*`.
+
+Numeric gauges such as materialization lag, EWMA rates, template-cache ratios,
+and last-event timestamps remain useful raw snapshot signals for Ironbird, but
+they are intentionally not selected by `cmd/internal/treedbstats` when that
+helper feeds delta-only benchmark artifacts.
+
 ## Ironbird Timeline Fields
 
 Ironbird rows should emit timestamped phase spans so the final report can
