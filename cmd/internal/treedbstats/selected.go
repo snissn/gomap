@@ -29,7 +29,29 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.command_wal."):
 		return true
+	case strings.HasPrefix(key, "treedb.cache.command_wal."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.write."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.auto_checkpoint."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.materialization."):
+		return true
+	case key == "treedb.cache.backpressure_mode":
+		return true
+	case key == "treedb.cache.flush_bps_ewma":
+		return true
+	case key == "treedb.cache.queue_laneid_misses":
+		return true
+	case strings.HasPrefix(key, "treedb.cache.stats."):
+		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_read."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_template."):
+		return true
+	case strings.HasPrefix(key, "treedb.cache.vlog_template_def_cache."):
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_decode_buffer_grow."):
 		return true

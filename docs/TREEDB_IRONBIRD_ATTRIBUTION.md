@@ -77,6 +77,39 @@ when the repo can expose them safely with negligible overhead. If a family is
 not available, the implementation must document the missing signal and the
 lowest-risk follow-up.
 
+## Current Selected TreeDB Names
+
+The current TreeDB stats surface already emits the following low-overhead
+families that Ironbird should preserve when present:
+
+- command-WAL append, flush, sync, live coverage, and cleanup:
+  `treedb.command_wal.*`;
+- cached command-WAL durability mode and checkpoint publication split:
+  `treedb.cache.command_wal.*`;
+- foreground writes waiting on checkpoint barriers:
+  `treedb.cache.write.wait_for_checkpoint.*`;
+- checkpoint/frontier stages, debt, shared drain, and wait telemetry:
+  `treedb.cache.checkpoint.*`;
+- flush apply, span-run, and backlog coalescing work:
+  `treedb.cache.flush_apply.*`, `treedb.flush_apply.*`,
+  `treedb.cache.flush_span_run.*`, `treedb.cache.flush_backlog_coalescing.*`;
+- auto-checkpoint and queue/materialization pressure:
+  `treedb.cache.auto_checkpoint.*`, `treedb.cache.queue_len`,
+  `treedb.cache.queue_backlog_bytes`, `treedb.cache.materialization.*`,
+  `treedb.cache.backpressure_mode`, `treedb.cache.flush_bps_ewma`,
+  `treedb.cache.queue_laneid_misses`;
+- value-log generation, GC, rewrite, mmap, read, template, buffer, and cache
+  telemetry: `treedb.cache.vlog_generation.*`, `treedb.cache.vlog_mmap.*`,
+  `treedb.cache.vlog_read.*`, `treedb.cache.vlog_template.*`,
+  `treedb.cache.vlog_template_def_cache.*`, other selected `treedb.cache.vlog_*`
+  families,
+  and selected backend `treedb.vlog.*` families;
+- process memory, memtable residency, append-only residency, and publish
+  watermark telemetry: `treedb.process.memory.*`,
+  `treedb.cache.memtable_residency.*`,
+  `treedb.process.memtable_residency.*`, `treedb.cache.append_only.*`,
+  `treedb.process.append_only.*`, `treedb.publish.watermark.*`.
+
 ## Ironbird Timeline Fields
 
 Ironbird rows should emit timestamped phase spans so the final report can
