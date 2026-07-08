@@ -12,15 +12,15 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 - Sync operations (`SetSync`, `WriteSync`, `DeleteSync`) use fsync durability boundaries.
 - Non-sync operations may be lost on power loss.
 
-### 1.2 `DurabilityWALOnRelaxed`
+### 1.2 Legacy compatibility `DurabilityWALOnRelaxed`
 
-- Commit log enabled.
+- Legacy compatibility commit log enabled.
 - Sync operations are relaxed (no fsync boundary).
 - Crash-consistent for process failure patterns, but not guaranteed durable across power loss.
 
-### 1.3 `DurabilityWALOffRelaxed`
+### 1.3 Legacy compatibility `DurabilityWALOffRelaxed`
 
-- Commit log disabled.
+- Legacy compatibility commit log disabled.
 - Value log remains enabled.
 - Sync operations are relaxed.
 - Durable boundary for recent writes is checkpoint/flush based, not per-write journal replay.
@@ -131,7 +131,7 @@ replay for old raw record batches after `command_wal_v1` activation. Complete
 command frames whose dependencies or external refs are missing fail recovery
 closed unless the command kind defines a formal idempotent skip rule.
 
-WAL-on collection writes add a stronger visibility boundary for command kinds
+Command-WAL collection writes add a stronger visibility boundary for command kinds
 that are `WAL-supported`: no collection read, scan, uniqueness check,
 update/delete planner, or pending-state merge may observe a mutation before its
 command WAL frame is committed/recoverable. Unsupported mutation kinds must be

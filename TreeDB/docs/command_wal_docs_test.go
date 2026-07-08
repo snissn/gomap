@@ -127,7 +127,14 @@ func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
 	paths := []string{
 		filepath.Join(treeRoot, "README.md"),
 		filepath.Join(treeRoot, "docs", "spec", "README.md"),
+		filepath.Join(treeRoot, "docs", "spec", "storage-format.md"),
+		filepath.Join(treeRoot, "docs", "spec", "write-path-and-durability.md"),
+		filepath.Join(treeRoot, "docs", "spec", "recovery.md"),
+		filepath.Join(treeRoot, "docs", "spec", "value-log-lifecycle.md"),
+		filepath.Join(treeRoot, "docs", "spec", "contracts.md"),
+		filepath.Join(treeRoot, "docs", "spec", "verification.md"),
 		filepath.Join(treeRoot, "docs", "spec", "command-wal-legacy-surface-inventory.md"),
+		filepath.Join(repoRoot, "docs", "README.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_CONCEPTS.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_PROFILES.md"),
 		filepath.Join(repoRoot, "docs", "contracts", "DURABILITY.md"),
@@ -227,6 +234,7 @@ func hasLegacyWALContext(context string) bool {
 		"mutation revision",
 		"writesync",
 		"sync boundaries",
+		"command-wal",
 	} {
 		if strings.Contains(context, term) {
 			return true

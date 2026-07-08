@@ -44,7 +44,7 @@ truncating, rewriting, or moving value-log bytes. The first implementation must
 skip value-log records protected only by command WAL rather than patching WAL
 records in place.
 
-WAL-only protection may be released only after the command frame is covered by a
+Command-WAL-only protection may be released only after the command frame is covered by a
 durable `AppliedLSN`, the root descriptors containing the refs are durable, and
 the value-log reachability tracker has incorporated those published roots or a
 full reachability scan has completed.
@@ -61,8 +61,8 @@ those commands fail before ack.
 
 Collection read views are also retention roots. If a live `CollectionReadView`
 can reach a pending mutable, queued, or publishing unit that references a
-value-log record, GC and rewrite must retain that record even if the command
-WAL frame has already been applied and WAL-only protection is otherwise
+value-log record, GC and rewrite must retain that record even if the command-WAL
+frame has already been applied and command-WAL-only protection is otherwise
 eligible for release.
 
 ### 3.1 Command WAL Maintenance Barrier
@@ -78,7 +78,7 @@ The barrier must:
    abort/classify;
 2. rebuild or refresh the protected external-ref index if recovery has not already
    done so;
-3. return an immutable protection snapshot containing WAL-only refs, read-view
+3. return an immutable protection snapshot containing command-WAL-only refs, read-view
    refs, pending publish refs, unclassified prepare groups, and active backup
    manifest refs;
 4. hold a retention token until the operation has finished all destructive
