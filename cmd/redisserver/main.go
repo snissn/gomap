@@ -10,39 +10,14 @@ import (
 	"strings"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/internal/redisserver"
 )
 
 func main() {
 	var cfg redisserver.Config
 
-	flag.StringVar(&cfg.Addr, "addr", ":6380", "listen address")
-	flag.StringVar(&cfg.Dir, "dir", "", "database directory (required)")
-	flag.StringVar(&cfg.Engine, "engine", "hashdb", "engine: hashdb|treedb")
-	flag.StringVar(&cfg.Auth, "auth", "", "require AUTH with the provided password")
-
-	cfg.BatchFlushOnNonset = true
-	flag.BoolVar(&cfg.BatchSets, "batch-sets", false, "enable per-connection SET batching")
-	flag.IntVar(&cfg.BatchSize, "batch-size", 16, "batch size for batched SETs")
-	flag.Var(&boolFlag{v: &cfg.BatchFlushOnNonset, set: &cfg.BatchFlushOnNonsetSet}, "batch-flush-on-nonset", "flush pending SETs before any non-SET command")
-
-	flag.IntVar(&cfg.HashDBShards, "hashdb-shards", 0, "HashDB shard count (0=default)")
-	flag.BoolVar(&cfg.HashDBCompression, "hashdb-compression", false, "HashDB value compression")
-
-	flag.Int64Var(&cfg.TreeDBFlushThreshold, "treedb-flush-threshold", 64*1024*1024, "TreeDB flush threshold in bytes")
-	flag.IntVar(&cfg.TreeDBValueLogThreshold, "treedb-value-log-threshold", 0, "TreeDB value-log pointer threshold")
-	flag.BoolVar(&cfg.TreeDBDisableWAL, "treedb-disable-wal", false, "TreeDB: disable WAL")
-	flag.BoolVar(&cfg.TreeDBRelaxedSync, "treedb-relaxed-sync", false, "TreeDB: relaxed sync")
-	flag.IntVar(&cfg.TreeDBJournalLanes, "treedb-journal-lanes", 0, "TreeDB: journal/value-log lanes (0=default)")
-	flag.IntVar(&cfg.TreeDBMemtableShards, "treedb-memtable-shards", 0, "TreeDB: memtable shard count (0=default)")
-
-	flag.Float64Var(&cfg.CompactDeadRatio, "compact-dead-ratio", 0.50, "compaction dead ratio threshold")
-	flag.Uint64Var(&cfg.CompactMinBytes, "compact-min-bytes", 1*1024*1024, "compaction minimum slab bytes")
-	flag.IntVar(&cfg.CompactMaxSlabs, "compact-max-slabs", 1, "compaction max slabs per run")
-	flag.IntVar(&cfg.CompactMicroBatch, "compact-microbatch", 256, "compaction micro-batch size")
-	flag.BoolVar(&cfg.CompactRotateBeforeWrite, "compact-rotate-before-write", false, "compaction rotate before copy")
-	flag.Int64Var(&cfg.CompactCopyBytesPerSec, "compact-copy-bps", 0, "compaction copy rate limit (bytes/sec)")
-	flag.Int64Var(&cfg.CompactCopyBurstBytes, "compact-copy-burst", 0, "compaction copy burst (bytes)")
+	registerConfigFlags(flag.CommandLine, &cfg)
 
 	idleClose := flag.Duration("idle-close", 0, "close idle connections after this duration")
 	cpuprofile := flag.String("cpuprofile", "", "write CPU profile to file (optional)")
@@ -108,6 +83,39 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+func registerConfigFlags(fs *flag.FlagSet, cfg *redisserver.Config) {
+	if fs == nil || cfg == nil {
+		return
+	}
+
+	fs.StringVar(&cfg.Addr, "addr", ":6380", "listen address")
+	fs.StringVar(&cfg.Dir, "dir", "", "database directory (required)")
+	fs.StringVar(&cfg.Engine, "engine", "hashdb", "engine: hashdb|treedb")
+	fs.StringVar(&cfg.Auth, "auth", "", "require AUTH with the provided password")
+
+	cfg.BatchFlushOnNonset = true
+	fs.BoolVar(&cfg.BatchSets, "batch-sets", false, "enable per-connection SET batching")
+	fs.IntVar(&cfg.BatchSize, "batch-size", 16, "batch size for batched SETs")
+	fs.Var(&boolFlag{v: &cfg.BatchFlushOnNonset, set: &cfg.BatchFlushOnNonsetSet}, "batch-flush-on-nonset", "flush pending SETs before any non-SET command")
+
+	fs.IntVar(&cfg.HashDBShards, "hashdb-shards", 0, "HashDB shard count (0=default)")
+	fs.BoolVar(&cfg.HashDBCompression, "hashdb-compression", false, "HashDB value compression")
+
+	fs.StringVar(&cfg.TreeDBProfile, "treedb-profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp)
+	fs.Int64Var(&cfg.TreeDBFlushThreshold, "treedb-flush-threshold", 64*1024*1024, "TreeDB flush threshold in bytes")
+	fs.IntVar(&cfg.TreeDBValueLogThreshold, "treedb-value-log-threshold", 0, "TreeDB value-log pointer threshold")
+	fs.IntVar(&cfg.TreeDBWriteLanes, "treedb-write-lanes", 0, "TreeDB: command/value log write lanes (0=default)")
+	fs.IntVar(&cfg.TreeDBMemtableShards, "treedb-memtable-shards", 0, "TreeDB: memtable shard count (0=default)")
+
+	fs.Float64Var(&cfg.CompactDeadRatio, "compact-dead-ratio", 0.50, "compaction dead ratio threshold")
+	fs.Uint64Var(&cfg.CompactMinBytes, "compact-min-bytes", 1*1024*1024, "compaction minimum slab bytes")
+	fs.IntVar(&cfg.CompactMaxSlabs, "compact-max-slabs", 1, "compaction max slabs per run")
+	fs.IntVar(&cfg.CompactMicroBatch, "compact-microbatch", 256, "compaction micro-batch size")
+	fs.BoolVar(&cfg.CompactRotateBeforeWrite, "compact-rotate-before-write", false, "compaction rotate before copy")
+	fs.Int64Var(&cfg.CompactCopyBytesPerSec, "compact-copy-bps", 0, "compaction copy rate limit (bytes/sec)")
+	fs.Int64Var(&cfg.CompactCopyBurstBytes, "compact-copy-burst", 0, "compaction copy burst (bytes)")
 }
 
 type boolFlag struct {

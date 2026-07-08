@@ -46,24 +46,15 @@ func openTreeDB(cfg Config) (kvstore.DB, error) {
 	if cfg.Dir == "" {
 		return nil, errors.New("db dir required")
 	}
-	opts := treedb.Options{
-		Dir:            cfg.Dir,
-		FlushThreshold: cfg.TreeDBFlushThreshold,
-		Durability: func() treedb.DurabilityMode {
-			if cfg.TreeDBDisableWAL {
-				return treedb.DurabilityWALOffRelaxed
-			}
-			if cfg.TreeDBRelaxedSync {
-				return treedb.DurabilityWALOnRelaxed
-			}
-			return treedb.DurabilityDurable
-		}(),
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold: cfg.TreeDBValueLogThreshold,
-		},
-		JournalLanes:   cfg.TreeDBJournalLanes,
-		MemtableShards: cfg.TreeDBMemtableShards,
+	profile, ok := treedb.ParsePublicProfile(cfg.TreeDBProfile, treedb.ProfileCommandWALDurable)
+	if !ok {
+		return nil, fmt.Errorf("unsupported TreeDB profile %q; allowed: %s", cfg.TreeDBProfile, treedb.ProfileFlagHelp)
 	}
+	opts := treedb.OptionsFor(profile, cfg.Dir)
+	opts.FlushThreshold = cfg.TreeDBFlushThreshold
+	opts.ValueLog.PointerThreshold = cfg.TreeDBValueLogThreshold
+	opts.JournalLanes = cfg.TreeDBWriteLanes
+	opts.MemtableShards = cfg.TreeDBMemtableShards
 	db, err := treedb.Open(opts)
 	if err != nil {
 		return nil, err

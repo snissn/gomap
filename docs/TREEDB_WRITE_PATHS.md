@@ -41,10 +41,10 @@ Equivalent option-level knobs:
 - **No WAL benchmark ceiling**: `Durability = DurabilityWALOffRelaxed`
   (benchmark-only unsafe compatibility path).
 
-Legacy/raw WAL option bundles are still present for compatibility and low-level
-tests during the command-WAL transition, but current server, collection,
-Mongo gateway, and YCSB guidance should use `command_wal_durable`,
-`command_wal_relaxed`, or benchmark-only `bench`.
+Deprecated raw cached-journal option bundles still exist for compatibility and
+low-level tests, but current server, collection, Mongo gateway, and YCSB
+guidance should use `command_wal_durable`, `command_wal_relaxed`, or
+benchmark-only `bench`.
 
 Raw TreeDB command-WAL support currently covers point and batch key/value
 writes: `Set`, `SetSync`, `Delete`, `DeleteSync`, `Batch.Write`, and
@@ -59,7 +59,7 @@ TreeDB’s public `Options` API was simplified to make “intent” explicit:
 durability/integrity are selected via `Options.Durability` and
 `Options.ValueLog.*` rather than a loose set of booleans.
 
-Common legacy compatibility mappings:
+Old compatibility mappings:
 
 - `Options.DisableWAL=true` -> `Options.Durability = DurabilityWALOffRelaxed`
   (legacy compatibility / benchmark-only unsafe)
