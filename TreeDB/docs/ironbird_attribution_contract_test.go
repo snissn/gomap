@@ -37,6 +37,8 @@ func TestIronbirdAttributionContractDocumentsRequiredSignals(t *testing.T) {
 		"`treedb.cache.vlog_io.bytes`",
 		"`treedb.cache.vlog_write_mode.raw_bytes.*`",
 		"`treedb.cache.vlog_payload_kind.raw_bytes.*`",
+		"`treedb.cache.vlog_payload_split.raw_bytes.*`",
+		"`treedb.cache.vlog_outer_leaf_codec.raw_bytes.*`",
 		"`treedb.cache.vlog_auto.bytes.*`",
 		"ratio, fraction, bytes-per, and per-byte timing fields remain gauges.",
 		"are monotonic counters even though they predate",
