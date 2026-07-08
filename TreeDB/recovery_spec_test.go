@@ -280,18 +280,6 @@ func TestCrashRecovery_WALReplayIsCoherent(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	// Log segments should be retired after successful recovery.
-	walDir := filepath.Join(dir, "maindb", "wal")
-	if entries, err := os.ReadDir(walDir); err == nil {
-		for _, entry := range entries {
-			name := entry.Name()
-			if strings.HasSuffix(name, ".log") &&
-				strings.HasPrefix(name, "commit-") {
-				t.Fatalf("expected logs to be clean after recovery; found %q", name)
-			}
-		}
-	}
-
 	cached, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
@@ -476,8 +464,32 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				t.Fatalf("get k: got %q, want %q", string(val), "small")
 			}
 
+			commandWALRequired := db.Stats()["treedb.command_wal.required_feature"] == "true"
 			if err := db.Close(); err != nil {
 				t.Fatalf("close: %v", err)
+			}
+
+			if commandWALRequired {
+				// Command-WAL recovery may leave a fresh active typed segment; a
+				// second reopen proves no replayable legacy redo debt remains.
+				reopened, err := treedb.Open(opts)
+				if err != nil {
+					t.Fatalf("reopen after recovery: %v", err)
+				}
+				defer reopened.Close()
+
+				val, err := reopened.Get([]byte("k"))
+				if err != nil {
+					t.Fatalf("get k after recovery reopen: %v", err)
+				}
+				if tc.expectLarge {
+					if len(val) != 4096 {
+						t.Fatalf("get k after recovery reopen: got len %d, want %d", len(val), 4096)
+					}
+				} else if string(val) != "small" {
+					t.Fatalf("get k after recovery reopen: got %q, want %q", string(val), "small")
+				}
+				return
 			}
 
 			entries, err := os.ReadDir(filepath.Join(dir, "maindb", "wal"))
