@@ -178,6 +178,7 @@ func mentionsLegacyWALTerm(line string) bool {
 		"profilefast",
 		"profilewalonfast",
 		"profilelegacy",
+		"profiledurable",
 		"profilenowalfast",
 		"durabilitywaloffrelaxed",
 		"durabilitywalonrelaxed",
