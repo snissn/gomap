@@ -151,7 +151,7 @@ Goal: no-WAL benchmark-friendly determinism.
 Behavior:
 
 - Uses the fast collection/index layout bundle.
-- Disables WAL through the no-WAL cached path.
+- Disables WAL through the benchmark-only no-WAL cached compatibility path.
 - Disables background workers that can inject large work mid-run:
   - cached-mode auto-checkpoint triggers disabled
     (`BackgroundCheckpointInterval < 0`, `BackgroundCheckpointIdleDuration < 0`,

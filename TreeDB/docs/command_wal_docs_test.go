@@ -192,6 +192,8 @@ func mentionsLegacyWALTerm(line string) bool {
 		"disablejournal",
 		"disablewal",
 		"disable wal",
+		"no-wal",
+		"no wal",
 	} {
 		if strings.Contains(lower, term) {
 			return true
@@ -218,6 +220,8 @@ func TestCommandWALLegacyTermMatcherCatchesDelimitedProfileAliases(t *testing.T)
 		"TREEDB_OPEN_PROFILE=fast",
 		"TREEDB_PROFILE=wal_on_fast",
 		"profile=durable",
+		"no-WAL benchmark ceiling",
+		"no WAL benchmark ceiling",
 	} {
 		if !mentionsLegacyWALTerm(line) {
 			t.Fatalf("mentionsLegacyWALTerm(%q) = false, want true", line)
