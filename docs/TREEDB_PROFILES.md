@@ -131,8 +131,8 @@ Behavior:
 - Enables command WAL:
   - `CommandWAL = true`
 - Keeps command frames recoverable from the local command-WAL path while relaxing
-  sync/checksum policy through a low-level compatibility enum:
-  - `Durability = DurabilityWALOnRelaxed`
+  sync/checksum policy through `DurabilityWALOnRelaxed`:
+  - `Durability = DurabilityWALOnRelaxed` (current command-WAL relaxed durability mode)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Uses the same production-fast collection/index layout and compression defaults
   as `ProfileCommandWALDurable`.
