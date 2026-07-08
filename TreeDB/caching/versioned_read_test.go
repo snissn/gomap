@@ -130,11 +130,10 @@ func TestGetVersionedAssignsMutableMemtableRevision(t *testing.T) {
 
 func TestCommandWALPointCallbacksReceiveVisibleRevision(t *testing.T) {
 	db, err := Open(t.TempDir(), NewMockBackend(), Options{
-		DisableWAL:     true,
-		AllowUnsafe:    true,
-		FlushThreshold: 1 << 30,
-		MemtableMode:   "skiplist",
-		MemtableShards: 1,
+		ExternalCommandWAL: true,
+		FlushThreshold:     1 << 30,
+		MemtableMode:       "skiplist",
+		MemtableShards:     1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

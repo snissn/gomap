@@ -754,7 +754,7 @@ func Open(opts Options) (*DB, error) {
 		opts.MemtableMode = "adaptive"
 	}
 
-	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed || opts.CommandWAL
+	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed
 	relaxedSync := opts.Durability != db.DurabilityDurable
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
@@ -800,6 +800,7 @@ func Open(opts Options) (*DB, error) {
 		FlushBacklogCoalescingMaxOpsPerSpan:        opts.FlushBacklogCoalescingMaxOpsPerSpan,
 		FlushBacklogCoalescingMinOldLeafBytesPerOp: opts.FlushBacklogCoalescingMinOldLeafBytesPerOp,
 		DisableWAL:                                 disableWAL,
+		ExternalCommandWAL:                         opts.CommandWAL,
 		JournalLanes:                               opts.JournalLanes,
 		WALMaxSegmentBytes:                         opts.WALMaxSegmentBytes,
 		JournalCompression:                         opts.JournalCompression,
