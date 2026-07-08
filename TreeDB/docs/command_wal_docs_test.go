@@ -135,6 +135,7 @@ func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
 		filepath.Join(treeRoot, "docs", "spec", "verification.md"),
 		filepath.Join(treeRoot, "docs", "spec", "command-wal-legacy-surface-inventory.md"),
 		filepath.Join(repoRoot, "docs", "README.md"),
+		filepath.Join(repoRoot, "docs", "TREEDB_CACHED_VS_BACKEND.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_CONCEPTS.md"),
 		filepath.Join(repoRoot, "docs", "TREEDB_PROFILES.md"),
 		filepath.Join(repoRoot, "docs", "contracts", "DURABILITY.md"),
