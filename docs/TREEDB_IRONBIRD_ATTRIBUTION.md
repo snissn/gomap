@@ -109,4 +109,3 @@ The final Ironbird report should include these tables for every accepted row:
 The report may conclude that a row remains under-instrumented, but it must name
 the missing signal and link the follow-up issue before using the row as
 optimization evidence.
-

@@ -44,4 +44,3 @@ func TestIronbirdAttributionContractDocumentsRequiredSignals(t *testing.T) {
 		}
 	}
 }
-
