@@ -17,8 +17,9 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 - **[Storage Format](TREEDB_STORAGE_FORMAT.md)**: On-disk layout, `ValuePtr`, and value-log lifecycle (GC/rewrite).
 - **[Write Paths](TREEDB_WRITE_PATHS.md)**: command-WAL write semantics and legacy compatibility notes.
 - **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: Legacy note (backend-only removed).
-- **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency and journal replay details.
-- **[Profiles](TREEDB_PROFILES.md)**: High-level command-WAL, legacy-WAL, no-WAL, and benchmark option presets.
+- **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency, command-WAL replay, and legacy compatibility boundaries.
+- **[Profiles](TREEDB_PROFILES.md)**: Public command-WAL profiles plus the explicit benchmark-only ceiling.
+- **[Downstream Validation](TREEDB_DOWNSTREAM_VALIDATION.md)**: Adapter benchmark checklist for command-WAL counters, checkpoint separation, and load-window evidence.
 - **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.
 - **[Typed-Storage Guides](../TreeDB/docs/guides/README.md)**: Collection layout quickstarts, typed-storage benchmark/profile guide, and vector typed-column guidance.
 - **[Document Service API](TREEDB_DOCUMENT_SERVICE_API.md)**: Pre-alpha Haystack-style HTTP/JSON contract for documents, metadata filters, and exact dense-vector search.

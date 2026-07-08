@@ -46,12 +46,12 @@ low-level tests, but current server, collection, Mongo gateway, and YCSB
 guidance should use `command_wal_durable`, `command_wal_relaxed`, or
 benchmark-only `bench`.
 
-Raw TreeDB command-WAL support currently covers point and batch key/value
-writes: `Set`, `SetSync`, `Delete`, `DeleteSync`, `Batch.Write`, and
-`Batch.WriteSync` are represented as typed `RawKVBatch` command frames. Raw
-public operations that cannot be replayed as typed commands yet fail closed
-under command WAL; today that includes callback-based `Update`, `UpdateSync`,
-and range `DeleteRange`.
+Raw TreeDB command-WAL support currently covers point, batch, and range
+key/value writes: `Set`, `SetSync`, `Delete`, `DeleteSync`, `DeleteRange`,
+`Batch.Write`, and `Batch.WriteSync` are represented as typed `RawKVBatch`
+command frames. Raw public operations that cannot be replayed as typed commands
+yet fail closed under command WAL; today that includes callback-based `Update`
+and `UpdateSync`.
 
 ## Legacy Compatibility Migration (old -> new)
 
@@ -85,7 +85,9 @@ TreeDB `Options.Dir` is a *root* directory. `treedb.Open` manages:
 
 - `Dir/maindb/`: main DB (index + journal + value log)
   - `Dir/maindb/index.db`: B+Tree pages + metadata.
-  - `Dir/maindb/wal/`: commit journal segments and future collection WAL segments.
+  - `Dir/maindb/wal/`: current command-WAL segments; legacy cached redo-journal
+    segments may exist only in compatibility/recovery fixtures and fail closed
+    by default unless explicitly opted in.
   - `Dir/maindb/value_vlog/`: value-log segments for large values.
   - `Dir/maindb/leaf_vlog/`: optional split leaf-log segments.
   - `Dir/maindb/LOCK`: cross-process exclusive-open lock.
@@ -108,6 +110,7 @@ TREEDB_WRITE_PATH_LOG=1
 ## Related docs
 
 - `docs/TREEDB_PROFILES.md`
+- `docs/TREEDB_DOWNSTREAM_VALIDATION.md`
 - `docs/TREEDB_VALUELOG_AUTOTUNE.md`
 - `docs/TREEDB_RECOVERY.md`
 - `docs/contracts/DURABILITY.md`

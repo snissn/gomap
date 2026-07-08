@@ -122,6 +122,63 @@ func TestCommandWALLegacySurfaceInventoryCoversRemovalStack(t *testing.T) {
 	}
 }
 
+func TestCommandWALCurrentDocsStateDurabilityContract(t *testing.T) {
+	_, repoRoot := repoRoots(t)
+	for _, tc := range []struct {
+		rel   string
+		wants []string
+	}{
+		{
+			rel: filepath.Join("docs", "contracts", "DURABILITY.md"),
+			wants: []string{
+				"TreeDB provides explicit durability calls (`SetSync`, `DeleteSync`,",
+				"`*Sync` means command-WAL/value-log sync",
+				"it does not require a full backend `Checkpoint()` per write",
+				"`Checkpoint()` and `Close()` are backend publication/drain boundaries",
+				"Current command-WAL directories fail closed on replayable legacy redo",
+			},
+		},
+		{
+			rel: filepath.Join("docs", "TREEDB_RECOVERY.md"),
+			wants: []string{
+				"Public command-WAL profiles persist command frames",
+				"Legacy cached redo-journal replay is a compatibility path",
+				"`AllowLegacyCachedRedoJournalReplay`",
+				"`DeleteRange`, `Batch.Write`, and `Batch.WriteSync`",
+				"Read-only opens do not perform mutating recovery",
+			},
+		},
+		{
+			rel: filepath.Join("docs", "TREEDB_WRITE_PATHS.md"),
+			wants: []string{
+				"`SetSync`, `Delete`, `DeleteSync`, `DeleteRange`",
+				"today that includes callback-based `Update`",
+				"legacy cached redo-journal",
+			},
+		},
+		{
+			rel: filepath.Join("docs", "TREEDB_DOWNSTREAM_VALIDATION.md"),
+			wants: []string{
+				"Pin the gomap commit or tag",
+				"`treedb.cache.redo_log.mode=external_command_wal`",
+				"Treat `WriteSync` / `Batch.WriteSync` as command-WAL sync boundaries",
+				"`DeleteRange`, `Batch.Write`, and `Batch.WriteSync` are",
+				"benchmark scripts fail if the accepted load window is too short to interpret",
+			},
+		},
+	} {
+		text, err := os.ReadFile(filepath.Join(repoRoot, tc.rel))
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.rel, err)
+		}
+		for _, want := range tc.wants {
+			if !strings.Contains(string(text), want) {
+				t.Fatalf("%s missing current command-WAL contract wording %q", tc.rel, want)
+			}
+		}
+	}
+}
+
 func TestCommandWALLegacyTermsInCurrentDocsNeedContext(t *testing.T) {
 	treeRoot, repoRoot := repoRoots(t)
 	paths := []string{

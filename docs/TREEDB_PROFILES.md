@@ -199,6 +199,15 @@ pack/GC, index vacuum, and zero-byte value-log cleanup. Do not manually chain
 `vlog-gc`, `vlog-rewrite`, `leafgen-pack`, `leafgen-gc`, and index vacuum unless
 you are debugging TreeDB internals.
 
+## Downstream Validation
+
+Downstream adapters should not claim TreeDB-vs-LevelDB evidence from a partial
+profile switch alone. Before publishing adapter benchmark evidence, follow the
+checklist in `docs/TREEDB_DOWNSTREAM_VALIDATION.md`: pin the gomap commit/tag,
+state the selected public profile, preserve command-WAL and checkpoint counters,
+and include enough load-window rows to separate command-WAL sync cost from
+checkpoint/close cost.
+
 ## Important Notes
 
 ### Profiles do not prevent overrides

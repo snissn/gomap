@@ -90,6 +90,11 @@ splits, and per-workload counters) into a "Collection Workload Metadata" table.
   `treedb.cache.vlog_outer_leaf_codec.*`, and `treedb.cache.vlog_block.*`
   counters so actual auto codec selection, outer-leaf codec distribution, and
   frame-K distribution remain available in benchprof output.
+- For command-WAL adapter evidence, keep `treedb.command_wal.*`,
+  `treedb.applied_command_lsn`, and `treedb.cache.checkpoint.*` counters
+  together. The first group proves accepted/covered command frames; the
+  checkpoint group measures explicit backend publication work and should not be
+  conflated with `WriteSync`/`Batch.WriteSync` command-WAL sync cost.
 - `benchprof_results.json` also preserves collection-storage suite metadata
   under `runs[].collection_workloads` when `unified-bench -suite
   collection_storage` is used. `benchprof` keeps those stable mode/workload names

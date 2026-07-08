@@ -2,7 +2,12 @@
 
 ## TL;DR
 
-- TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) for current command-WAL profiles and legacy compatibility WAL-on/off modes.
+- TreeDB provides explicit durability calls (`SetSync`, `DeleteSync`,
+  `Batch.WriteSync`) for current command-WAL profiles.
+- In the durable command-WAL profile, `*Sync` means command-WAL/value-log sync;
+  it does not require a full backend `Checkpoint()` per write.
+- `Checkpoint()` and `Close()` are backend publication/drain boundaries, not the
+  normal per-transaction durability barrier for command-WAL writes.
 - HashDB provides explicit durability calls (`PutSync`, `DeleteSync`) backed by the slab value log and crash recovery; non-sync writes may be lost on power loss.
 
 ## Who Is This For?
@@ -13,38 +18,55 @@
 ## TreeDB
 
 TreeDB exposes a single cached-mode engine with selectable durability semantics
-via `Options.Durability`.
+via public profiles and `Options.Durability`. Public server and adapter code
+should use `command_wal_durable` or `command_wal_relaxed`; `bench` is an
+explicit no-WAL benchmark ceiling.
 
-### Durable (default) (`Durability = DurabilityDurable`)
+### Command-WAL durable (`ProfileCommandWALDurable`, `Durability = DurabilityDurable`)
 
-Cached mode writes to the journal (and the value log for large values), then
-eventually flushes to the backend.
+Cached mode writes command frames to the command WAL and writes large values to
+the persistent value log, then eventually flushes to the backend.
 
-- `Set`: appends to the journal (and value log if needed) but does not `fsync`; not guaranteed durable on power loss.
-- `Batch.Write`: appends to the journal (and value log if needed) but does not `fsync`; not guaranteed durable on power loss.
-- `SetSync`: appends to the journal and `fsync`s it; durable.
-- `Batch.WriteSync`: appends the entire batch to the journal as a single checksummed segment and `fsync`s it; **atomic and durable**. On recovery, either the entire batch is applied or none of it is.
+- `Set`, `Delete`, `DeleteRange`, `Batch.Write`: append recoverable
+  command-WAL input, but do not establish a power-loss fsync boundary.
+- `SetSync`, `DeleteSync`: append the point command-WAL frame and sync the
+  command-WAL/value-log boundary; durable.
+- `Batch.WriteSync`: appends the entire batch as a typed `RawKVBatch` command
+  frame and syncs the command-WAL/value-log boundary; **atomic and durable**.
+  On recovery, either the entire batch is applied or none of it is.
+- None of these `*Sync` calls need a backend `Checkpoint()` or `treedb.commit_seq`
+  advance per write. The backend root is published later by flush/checkpoint.
 
 Crash recovery:
-- On open, any journal segments in `Dir/maindb/wal/` are replayed into the backend with synced commits, then removed.
+- On open, command-WAL segments in `Dir/maindb/wal/` are replayed through the
+  normal command executor, covered by the backend/applied-LSN state, then
+  cleaned only after coverage is proven.
 
-### Legacy compatibility WAL on, relaxed (`Durability = DurabilityWALOnRelaxed`)
+### Command-WAL relaxed (`ProfileCommandWALRelaxed`, `Durability = DurabilityWALOnRelaxed`)
 
-WAL stays enabled, but `*Sync` operations do not `fsync`. This is
-crash-consistent (process crash) but not guaranteed durable on power loss.
+Command-WAL frames remain the local recovery source, but `*Sync` operations do
+not `fsync`. This is crash-consistent for process-failure style recovery, but
+not guaranteed durable on power loss.
 
 - `Set` / `Batch.Write`: not guaranteed durable on power loss.
 - `SetSync` / `Batch.WriteSync`: crash-consistent only (no `fsync`).
 
-### Legacy compatibility WAL off (`Durability = DurabilityWALOffRelaxed`)
+### Benchmark-only no WAL (`ProfileBench`, `Durability = DurabilityWALOffRelaxed`)
 
-Benchmark/compatibility WAL-off mode disables the journal/redo log while keeping
-the value log enabled. This improves write throughput but sacrifices durability
-for the most recent writes since the last checkpoint.
+Benchmark-only no-WAL mode disables command-WAL/redo recovery while keeping the
+persistent value log enabled. This improves write throughput but sacrifices
+durability for the most recent writes since the last checkpoint/close boundary.
 
 - `Set` / `Batch.Write`: not guaranteed durable (no redo log).
 - `SetSync` / `Batch.WriteSync`: crash-consistent only (no redo log + no `fsync`).
 - Use `Checkpoint()` to establish a durable boundary.
+
+### Legacy compatibility replay
+
+Old cached redo-journal segments are not the current public durability path.
+Current command-WAL directories fail closed on replayable legacy redo by
+default. Compatibility tests or forensic recovery flows must opt in explicitly
+with `AllowLegacyCachedRedoJournalReplay`.
 
 ### Operational notes
 

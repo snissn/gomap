@@ -319,35 +319,41 @@ Additional criteria:
 - Error injection tests validate error propagation and no silent stalls.
 
 ## Open Questions
-- Should stress tests run against both WAL on/off variants (`DurabilityDurable` vs `DurabilityWALOffRelaxed`)?
+- Should stress tests run against both command-WAL public profiles
+  (`command_wal_durable` vs `command_wal_relaxed`) plus a smaller
+  benchmark-only no-WAL ceiling subset?
 - Should we gate "heavy" tests on an env var or a build tag?
-- Which WAL modes must be covered in each stress test?
+- Which command-WAL profiles must be covered in each stress test?
 
 ## Appendix: Config Matrix (Recommended)
 For each stress suite, consider these variants:
-- WAL: on vs off (`Options.Durability`).
+- Public command-WAL profile: durable vs relaxed.
+- Benchmark-only no-WAL ceiling: opt-in unsafe subset only.
 - Background tasks: enabled vs disabled (`TREEDB_BENCH_DISABLE_BG=1` parity).
 
 Example matrix for `TestConcurrentMixedOpsProgress`:
-- WAL on + BG on
-- WAL on + BG off
-- WAL off + BG off (unsafe mode)
+- command-WAL durable + BG on
+- command-WAL durable + BG off
+- command-WAL relaxed + BG off
+- benchmark-only no-WAL + BG off (unsafe ceiling)
 
 Tier selection rule (recommended):
 - `pr`: minimal critical path
-  - WAL on + BG on
-  - cached + journal + value log + BG off
+  - command-WAL durable + BG on
+  - command-WAL durable + value log + BG off
 - `daily`: expanded coverage
-  - cached + journal + value log + BG on
-  - cached + journal + value log + BG off
-  - cached + no journal + no vlog + BG off
-  - backend + journal off (backend mode)
+  - command-WAL durable + value log + BG on
+  - command-WAL durable + value log + BG off
+  - command-WAL relaxed + value log + BG off
+  - benchmark-only no-WAL + value log + BG off
 - `nightly`: full matrix
-  - cached/backend × journal on/off × value log on/off × BG on/off
-  - Skip invalid combos (value log on with journal off).
+  - command-WAL durable/relaxed plus benchmark-only no-WAL ceiling × value log
+    pointer policy × BG on/off
+  - Skip invalid legacy compatibility combinations unless a test explicitly opts
+    into forensic legacy replay.
 
 Implementation sketch:
-- Define `type testVariant struct { mode, wal, vlog, bg string }`.
+- Define `type testVariant struct { profile, valueLogPolicy, bg string }`.
 - Build `variants := variantsForTier(os.Getenv("TREEDB_TEST_TIER"))`.
 - Each stress test loops over `variants`, runs subtests, and applies per-tier timeouts.
 
