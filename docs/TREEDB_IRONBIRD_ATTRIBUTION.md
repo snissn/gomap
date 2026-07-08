@@ -117,8 +117,9 @@ families that Ironbird should preserve when present:
   `treedb.command_wal.*`;
 - cached command-WAL durability mode and checkpoint publication split:
   `treedb.cache.command_wal.*`;
-- foreground writes waiting on checkpoint barriers:
-  `treedb.cache.write.wait_for_checkpoint.*`;
+- foreground write wait-for-checkpoint totals:
+  `treedb.cache.write.wait_for_checkpoint.ns_total`,
+  `treedb.cache.write.wait_for_checkpoint.count_total`;
 - checkpoint/frontier stages, debt, shared drain, and wait telemetry:
   `treedb.cache.checkpoint.*`;
 - flush apply, span-run, and backlog coalescing work:

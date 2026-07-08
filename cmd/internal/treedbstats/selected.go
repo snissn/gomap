@@ -31,7 +31,7 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.cache.command_wal."):
 		return true
-	case strings.HasPrefix(key, "treedb.cache.write."):
+	case isSelectedWriteKey(key):
 		return true
 	case isSelectedAutoCheckpointKey(key):
 		return true
@@ -154,6 +154,16 @@ func isSelectedAutoCheckpointKey(key string) bool {
 	switch key {
 	case "treedb.cache.auto_checkpoint.count",
 		"treedb.cache.auto_checkpoint.last_reason":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSelectedWriteKey(key string) bool {
+	switch key {
+	case "treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait_for_checkpoint.count_total":
 		return true
 	default:
 		return false

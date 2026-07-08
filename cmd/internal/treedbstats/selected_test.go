@@ -13,6 +13,8 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 		"treedb.cache.command_wal.checkpoint_publish.separate":                                          "1",
 		"treedb.cache.write.wait_for_checkpoint.ns_total":                                               "101",
 		"treedb.cache.write.wait_for_checkpoint.count_total":                                            "3",
+		"treedb.cache.write.wait_for_checkpoint.ns_max":                                                 "77",
+		"treedb.cache.write.wait_for_checkpoint.ns_last":                                                "55",
 		"treedb.cache.auto_checkpoint.count":                                                            "4",
 		"treedb.cache.auto_checkpoint.last_reason":                                                      "size",
 		"treedb.cache.auto_checkpoint.last_unix_nano":                                                   "1770000000000000000",
@@ -241,6 +243,8 @@ func TestSelectedKeepsSharedTreeDBStats(t *testing.T) {
 	for _, key := range []string{
 		"treedb.cache.auto_checkpoint.last_unix_nano",
 		"treedb.cache.auto_checkpoint.last_duration_ms",
+		"treedb.cache.write.wait_for_checkpoint.ns_max",
+		"treedb.cache.write.wait_for_checkpoint.ns_last",
 		"treedb.cache.materialization.lag_age_ms",
 		"treedb.cache.flush_bps_ewma",
 		"treedb.vlog.template_def_cache.hit_ratio",
