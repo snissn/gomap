@@ -194,7 +194,106 @@ func mentionsLegacyWALTerm(line string) bool {
 			return true
 		}
 	}
+	return mentionsLegacyProfileAlias(lower)
+}
+
+func TestCommandWALLegacyTermMatcherCatchesDelimitedProfileAliases(t *testing.T) {
+	for _, line := range []string{
+		"`durable`",
+		"`fast`",
+		"`walonfast`",
+		"`wal_on_fast`",
+		"-profile durable",
+		"--profile fast",
+		"-treedb-profile walonfast",
+		"TREEDB_OPEN_PROFILE=fast",
+		"TREEDB_PROFILE=wal_on_fast",
+		"profile=durable",
+	} {
+		if !mentionsLegacyWALTerm(line) {
+			t.Fatalf("mentionsLegacyWALTerm(%q) = false, want true", line)
+		}
+	}
+	for _, line := range []string{
+		"the fast path remains current",
+		"durable command-WAL writes",
+		"fast checkpoint cleanup",
+	} {
+		if mentionsLegacyWALTerm(line) {
+			t.Fatalf("mentionsLegacyWALTerm(%q) = true, want false", line)
+		}
+	}
+}
+
+func mentionsLegacyProfileAlias(lower string) bool {
+	for _, alias := range []string{
+		"legacy_wal_relaxed_fast",
+		"legacy_wal_durable",
+		"no_wal_fast",
+		"wal_on_fast",
+		"walonfast",
+		"durable",
+		"fast",
+	} {
+		if containsDelimitedLegacyProfileAlias(lower, alias) {
+			return true
+		}
+	}
 	return false
+}
+
+func containsDelimitedLegacyProfileAlias(lower, alias string) bool {
+	for _, quoted := range []string{
+		"`" + alias + "`",
+		`"` + alias + `"`,
+		"'" + alias + "'",
+	} {
+		if strings.Contains(lower, quoted) {
+			return true
+		}
+	}
+	for _, prefix := range []string{
+		"-profile ",
+		"--profile ",
+		"-treedb-profile ",
+		"--treedb-profile ",
+		"profile=",
+		"profile: ",
+		"treedb_open_profile=",
+		"treedb_profile=",
+		"treedb_profile: ",
+	} {
+		if containsLegacyProfileValue(lower, prefix, alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsLegacyProfileValue(lower, prefix, alias string) bool {
+	for {
+		idx := strings.Index(lower, prefix)
+		if idx < 0 {
+			return false
+		}
+		value := strings.TrimLeft(lower[idx+len(prefix):], " \t`\"'")
+		if strings.HasPrefix(value, alias) && isLegacyProfileAliasBoundary(value, len(alias)) {
+			return true
+		}
+		lower = lower[idx+len(prefix):]
+	}
+}
+
+func isLegacyProfileAliasBoundary(value string, aliasLen int) bool {
+	if len(value) == aliasLen {
+		return true
+	}
+	switch value[aliasLen] {
+	case ' ', '\t', '`', '"', '\'', ',', '.', ';', ':', ')', ']', '}':
+		return true
+	default:
+		return false
+	}
 }
 
 func hasLegacyWALContext(context string) bool {

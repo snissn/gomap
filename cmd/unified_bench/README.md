@@ -298,11 +298,12 @@ clear semantic error.
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_collection_storage_profiles_XXXXXX)
+BENCH_PROFILE=durable # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
   -suite collection_storage \
   -dbs treedb \
-  -profile durable \
+  -profile "$BENCH_PROFILE" \
   -keys 10000 \
   -batchsize 1000 \
   -collection-storage-modes all \
@@ -349,8 +350,9 @@ point. It measures the production column-enabled collection manifest/control
 path, durable command-WAL publication, isolated physical column assets, planner
 diagnostics, parity, byte accounting, and executable row-store / B-tree /
 physical-column labels with a deterministic JSONBench-shaped fixture.
-`-profile balanced` is accepted as a `durable` alias for the column store suite
-so the unified-bench default still exercises the durable gate. The runnable
+`-profile balanced` is accepted as a durable-profile compatibility alias for
+the column store benchmark suite so the unified-bench default still exercises
+the durable gate. The runnable
 execution labels are `row_store_baseline`, `b_tree_index_baseline`,
 `serial_column_scan`, `aggregate_metadata`, and `parallel_column_scan`.
 The `aggregate_metadata` path uses typed aggregate metadata for q1, q4b, and
@@ -361,11 +363,12 @@ planner explicitly maintains a matching generated expression or aggregate.
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_column_store_profiles_XXXXXX)
+BENCH_PROFILE=durable # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
   -suite column_store \
   -dbs treedb \
-  -profile durable \
+  -profile "$BENCH_PROFILE" \
   -keys 100000 \
   -batchsize 1000 \
   -profile-dir "$OUT" \
@@ -471,7 +474,9 @@ Recommended:
 Mixed (reads under flush debt; intentionally stressful):
 
 ```bash
-go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -batchsize 1000 \\
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
+
+go run ./cmd/unified_bench -dbs treedb -profile "$BENCH_PROFILE" -keys 900000 -valsize 128 -batchsize 1000 \\
   -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_delete,batch_small_seq,random_delete,random_read \\
   -treedb-cache-stats-before-reads -progress=false
 ```
@@ -479,7 +484,9 @@ go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -
 Settled (reads after a durability boundary):
 
 ```bash
-go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -batchsize 1000 \\
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
+
+go run ./cmd/unified_bench -dbs treedb -profile "$BENCH_PROFILE" -keys 900000 -valsize 128 -batchsize 1000 \\
   -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_delete,batch_small_seq,random_delete,random_read \\
   -checkpoint-between-tests -progress=false
 ```
@@ -489,7 +496,9 @@ go run ./cmd/unified_bench -dbs treedb -profile fast -keys 900000 -valsize 128 -
 Run TreeDB twice (dict on/off) and LevelDB twice (block compression on/off) in one invocation:
 
 ```bash
-./bin/unified-bench -test batch_write,random_write,batch_delete -dbs treedb,leveldb -profile fast -keys 4000000 -format markdown \\
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
+
+./bin/unified-bench -test batch_write,random_write,batch_delete -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 4000000 -format markdown \\
   -treedb-force-value-pointers \\
   -treedb-vlog-dict both \\
   -leveldb-block-compression both
@@ -498,7 +507,9 @@ Run TreeDB twice (dict on/off) and LevelDB twice (block compression on/off) in o
 To sweep dict-frame encoder knobs (zstd level × entropy coding), use:
 
 ```bash
-./bin/unified-bench -test batch_write -dbs treedb -profile fast -keys 1000000 -format markdown \\
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
+
+./bin/unified-bench -test batch_write -dbs treedb -profile "$BENCH_PROFILE" -keys 1000000 -format markdown \\
   -treedb-force-value-pointers \\
   -treedb-vlog-dict on \\
   -treedb-vlog-dict-frame-encode-level all \\
@@ -510,14 +521,18 @@ To sweep dict-frame encoder knobs (zstd level × entropy coding), use:
 Run `random_read_parallel` with separate worker counts:
 
 ```bash
-./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 1 -progress=false
-./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 2 -progress=false
-./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 4 -progress=false
-./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 8 -progress=false
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
+
+./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test random_read_parallel -read-workers 1 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test random_read_parallel -read-workers 2 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test random_read_parallel -read-workers 4 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test random_read_parallel -read-workers 8 -progress=false
 ```
 
 `-test all` now includes `random_read_parallel` and `random_read_parallel_acquire_snapshot` in the output table:
 
 ```bash
-./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test all -read-workers 4 -format markdown -progress=false
+BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
+
+./bin/unified-bench -dbs treedb,leveldb -profile "$BENCH_PROFILE" -keys 500000 -test all -read-workers 4 -format markdown -progress=false
 ```
