@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-- TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) and coherent crash recovery with WAL on/off semantics.
+- TreeDB provides explicit durability calls (`SetSync`, `Batch.WriteSync`) for current command-WAL profiles and legacy compatibility WAL-on/off modes.
 - HashDB provides explicit durability calls (`PutSync`, `DeleteSync`) backed by the slab value log and crash recovery; non-sync writes may be lost on power loss.
 
 ## Who Is This For?

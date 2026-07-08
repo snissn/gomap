@@ -224,7 +224,6 @@ func hasLegacyWALContext(context string) bool {
 		"checkpoint",
 		"recoverable",
 		"recoverability",
-		"recovery",
 		"durable-at-ack",
 		"performance",
 		"throughput",
