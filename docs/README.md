@@ -20,6 +20,7 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 - **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency, command-WAL replay, and legacy compatibility boundaries.
 - **[Profiles](TREEDB_PROFILES.md)**: Public command-WAL profiles plus the explicit benchmark-only ceiling.
 - **[Downstream Validation](TREEDB_DOWNSTREAM_VALIDATION.md)**: Adapter benchmark checklist for command-WAL counters, checkpoint separation, and load-window evidence.
+- **[Ironbird Attribution](TREEDB_IRONBIRD_ATTRIBUTION.md)**: TreeDB lifecycle counters, Ironbird phase boundaries, and non-ABCI accounting contract for low-fanout benchmark rows.
 - **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.
 - **[Typed-Storage Guides](../TreeDB/docs/guides/README.md)**: Collection layout quickstarts, typed-storage benchmark/profile guide, and vector typed-column guidance.
 - **[Document Service API](TREEDB_DOCUMENT_SERVICE_API.md)**: Pre-alpha Haystack-style HTTP/JSON contract for documents, metadata filters, and exact dense-vector search.
