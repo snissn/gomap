@@ -43,9 +43,9 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.cache.vlog_mmap."):
 		return true
-	case isSelectedValueLogReadKey(key, "treedb.cache.vlog_read."):
+	case isSelectedTotalKey(key, "treedb.cache.vlog_read."):
 		return true
-	case isSelectedValueLogTemplateKey(key, "treedb.cache.vlog_template."):
+	case isSelectedTotalKey(key, "treedb.cache.vlog_template."):
 		return true
 	case isSelectedValueLogTemplateDefCacheKey(key, "treedb.cache.vlog_template_def_cache."):
 		return true
@@ -77,7 +77,7 @@ func isSelectedKey(key string) bool {
 		return true
 	case strings.HasPrefix(key, "treedb.vlog.mmap"):
 		return true
-	case isSelectedValueLogReadKey(key, "treedb.vlog.read."):
+	case isSelectedTotalKey(key, "treedb.vlog.read."):
 		return true
 	case isSelectedValueLogTemplateDefCacheKey(key, "treedb.vlog.template_def_cache."):
 		return true
@@ -160,11 +160,7 @@ func isSelectedAutoCheckpointKey(key string) bool {
 	}
 }
 
-func isSelectedValueLogReadKey(key, prefix string) bool {
-	return strings.HasPrefix(key, prefix) && strings.HasSuffix(key, "_total")
-}
-
-func isSelectedValueLogTemplateKey(key, prefix string) bool {
+func isSelectedTotalKey(key, prefix string) bool {
 	return strings.HasPrefix(key, prefix) && strings.HasSuffix(key, "_total")
 }
 
