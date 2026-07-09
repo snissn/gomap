@@ -216,6 +216,10 @@ func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, li
 	var stats LeafGenerationGCStats
 
 	db.writeMu.Lock()
+	if db.closing.Load() {
+		db.writeMu.Unlock()
+		return stats, nil
+	}
 	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
 	if !ok {
 		db.writeMu.Unlock()
@@ -238,6 +242,9 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if db.closing.Load() {
+		return stats, nil
+	}
 
 	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
 	if !ok {
