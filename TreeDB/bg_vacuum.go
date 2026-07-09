@@ -6,15 +6,73 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-const defaultBackgroundIndexVacuumSpanRatioPPM uint32 = 1_200_000
+const (
+	defaultBackgroundIndexVacuumSpanRatioPPM                uint32 = 1_200_000
+	defaultBackgroundIndexVacuumMaxBacklogSkips             uint32 = 3
+	defaultBackgroundIndexVacuumFreelistReclaimableRatioPPM uint32 = 250_000
+	defaultBackgroundIndexVacuumFreelistReclaimablePages    uint64 = 64
+	defaultBackgroundIndexVacuumCollectionRootSpanRatioPPM  uint32 = 1_200_000
+	defaultBackgroundIndexVacuumCollectionRootPages         uint64 = 16
+	backgroundIndexVacuumDebtReasonNone                            = "none"
+	backgroundIndexVacuumDebtReasonUser                            = "user"
+	backgroundIndexVacuumDebtReasonFreelist                        = "freelist"
+	backgroundIndexVacuumDebtReasonCollectionRoots                 = "collection_roots"
+)
+
+type bgIndexVacuumConfig struct {
+	Interval time.Duration
+
+	SpanRatioPPM uint32
+
+	MaxBacklogSkips uint32
+
+	FreelistReclaimableRatioPPM uint32
+	FreelistReclaimablePages    uint64
+
+	CollectionRootSpanRatioPPM uint32
+	CollectionRootPages        uint64
+}
+
+func normalizeBGIndexVacuumConfig(cfg bgIndexVacuumConfig) bgIndexVacuumConfig {
+	if cfg.SpanRatioPPM == 0 {
+		cfg.SpanRatioPPM = defaultBackgroundIndexVacuumSpanRatioPPM
+	}
+	if cfg.MaxBacklogSkips == 0 {
+		cfg.MaxBacklogSkips = defaultBackgroundIndexVacuumMaxBacklogSkips
+	}
+	if cfg.FreelistReclaimableRatioPPM == 0 {
+		cfg.FreelistReclaimableRatioPPM = defaultBackgroundIndexVacuumFreelistReclaimableRatioPPM
+	}
+	if cfg.FreelistReclaimablePages == 0 {
+		cfg.FreelistReclaimablePages = defaultBackgroundIndexVacuumFreelistReclaimablePages
+	}
+	if cfg.CollectionRootSpanRatioPPM == 0 {
+		cfg.CollectionRootSpanRatioPPM = defaultBackgroundIndexVacuumCollectionRootSpanRatioPPM
+	}
+	if cfg.CollectionRootPages == 0 {
+		cfg.CollectionRootPages = defaultBackgroundIndexVacuumCollectionRootPages
+	}
+	return cfg
+}
 
 type bgIndexVacuumWorker struct {
 	enabled atomic.Bool
 
-	interval     time.Duration
+	interval time.Duration
+
 	spanRatioPPM uint32
+
+	maxBacklogSkips uint32
+
+	freelistReclaimableRatioPPM uint32
+	freelistReclaimablePages    uint64
+
+	collectionRootSpanRatioPPM uint32
+	collectionRootPages        uint64
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -23,6 +81,7 @@ type bgIndexVacuumWorker struct {
 
 	runMu          sync.Mutex
 	runs           atomic.Uint64
+	probes         atomic.Uint64
 	vacuums        atomic.Uint64
 	lastRunUnix    atomic.Int64
 	lastVacuumUnix atomic.Int64
@@ -30,33 +89,78 @@ type bgIndexVacuumWorker struct {
 	lastPages      atomic.Uint64
 	lastErr        atomic.Value // string
 
+	backlogConsecutiveSkips atomic.Uint64
+	backlogSkips            atomic.Uint64
+	backlogForcedRuns       atomic.Uint64
+	lastBacklogBytes        atomic.Int64
+
+	lastFreelistReclaimablePages atomic.Uint64
+	lastFreelistReclaimableRatio atomic.Uint64
+	lastCollectionRootPages      atomic.Uint64
+	lastCollectionRootSpanRatio  atomic.Uint64
+	lastDebtReason               atomic.Value // string
+
 	lastProbeCommitSeq uint64
 	lastProbeValid     bool
 	retryProbe         bool
 }
 
+var bgIndexVacuumBacklogBytesHook struct {
+	mu sync.RWMutex
+	fn func(*DB) int64
+}
+
+func setBackgroundIndexVacuumBacklogBytesHookForTest(fn func(*DB) int64) func() {
+	bgIndexVacuumBacklogBytesHook.mu.Lock()
+	prev := bgIndexVacuumBacklogBytesHook.fn
+	bgIndexVacuumBacklogBytesHook.fn = fn
+	bgIndexVacuumBacklogBytesHook.mu.Unlock()
+	return func() {
+		bgIndexVacuumBacklogBytesHook.mu.Lock()
+		bgIndexVacuumBacklogBytesHook.fn = prev
+		bgIndexVacuumBacklogBytesHook.mu.Unlock()
+	}
+}
+
+func backgroundIndexVacuumBacklogBytes(db *DB) int64 {
+	bgIndexVacuumBacklogBytesHook.mu.RLock()
+	hook := bgIndexVacuumBacklogBytesHook.fn
+	bgIndexVacuumBacklogBytesHook.mu.RUnlock()
+	if hook != nil {
+		return hook(db)
+	}
+	if db == nil || db.cached == nil {
+		return 0
+	}
+	return db.cached.QueueBacklogBytes()
+}
+
 // Start launches the background index vacuum loop with the provided interval.
-func (w *bgIndexVacuumWorker) Start(db *DB, interval time.Duration, spanRatioPPM uint32) {
-	if interval <= 0 || db == nil {
+func (w *bgIndexVacuumWorker) Start(db *DB, cfg bgIndexVacuumConfig) {
+	cfg = normalizeBGIndexVacuumConfig(cfg)
+	if cfg.Interval <= 0 || db == nil {
 		w.enabled.Store(false)
 		return
 	}
-	if spanRatioPPM == 0 {
-		spanRatioPPM = defaultBackgroundIndexVacuumSpanRatioPPM
-	}
 
 	w.enabled.Store(true)
-	w.interval = interval
-	w.spanRatioPPM = spanRatioPPM
+	w.interval = cfg.Interval
+	w.spanRatioPPM = cfg.SpanRatioPPM
+	w.maxBacklogSkips = cfg.MaxBacklogSkips
+	w.freelistReclaimableRatioPPM = cfg.FreelistReclaimableRatioPPM
+	w.freelistReclaimablePages = cfg.FreelistReclaimablePages
+	w.collectionRootSpanRatioPPM = cfg.CollectionRootSpanRatioPPM
+	w.collectionRootPages = cfg.CollectionRootPages
 	w.stopCh = make(chan struct{})
 	w.doneCh = make(chan struct{})
 	w.kickCh = make(chan struct{}, 1)
 	w.lastErr.Store("")
+	w.lastDebtReason.Store(backgroundIndexVacuumDebtReasonNone)
 
 	go func() {
 		defer close(w.doneCh)
 
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(cfg.Interval)
 		defer ticker.Stop()
 
 		for {
@@ -114,104 +218,252 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		return
 	}
 
-	if w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq {
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store("")
+	forcedAfterBacklog := false
+	backlogBytes := backgroundIndexVacuumBacklogBytes(db)
+	w.lastBacklogBytes.Store(backlogBytes)
+	if backlogBytes > 0 {
+		consecutive := w.backlogConsecutiveSkips.Load()
+		if consecutive < uint64(w.maxBacklogSkipThreshold()) {
+			consecutive++
+			w.backlogConsecutiveSkips.Store(consecutive)
+			w.backlogSkips.Add(1)
+			w.finishRun(now, "")
+			return
+		}
+		forcedAfterBacklog = true
+		w.backlogForcedRuns.Add(1)
+		w.backlogConsecutiveSkips.Store(0)
+	} else {
+		w.backlogConsecutiveSkips.Store(0)
+	}
+
+	if !forcedAfterBacklog && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq {
+		w.finishRun(now, "")
 		return
 	}
 
-	// Avoid competing with the flush path. If there's any queued backlog, let the
-	// caching layer catch up first. This is not a completed trigger probe, so keep
-	// lastProbeCommitSeq unchanged.
-	if db.cached != nil {
-		if db.cached.QueueBacklogBytes() > 0 {
-			w.runs.Add(1)
-			w.lastRunUnix.Store(now.Unix())
-			w.lastErr.Store("")
-			return
-		}
-	}
-
 	rep, err := db.backend.IndexVacuumTriggerReport()
+	w.probes.Add(1)
 	if err != nil {
 		w.retryProbe = true
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store(err.Error())
+		w.finishRun(now, err.Error())
 		db.reportError(err)
 		return
 	}
 
 	w.lastProbeCommitSeq = rep.CommitSeq
 	w.lastProbeValid = true
-	w.lastPages.Store(rep.UserPages)
-	if rep.UserPages == 0 {
-		w.retryProbe = false
-		w.lastSpanRatio.Store(0)
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store("")
-		return
-	}
+	w.recordLastTriggerReport(rep)
 
-	spanRatio := rep.UserSpanRatioPPM
-	w.lastSpanRatio.Store(spanRatio)
-
-	if spanRatio < uint64(w.spanRatioPPM) {
+	reason := w.triggerReason(rep)
+	w.lastDebtReason.Store(reason)
+	if reason == backgroundIndexVacuumDebtReasonNone {
 		w.retryProbe = false
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store("")
+		w.finishRun(now, "")
 		return
 	}
 
 	if err := db.VacuumIndexOnline(context.Background()); err != nil {
 		w.retryProbe = true
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store(err.Error())
+		w.finishRun(now, err.Error())
 		db.reportError(err)
 		return
 	}
 
 	w.retryProbe = false
 	w.vacuums.Add(1)
+	w.finishRun(now, "")
+	w.lastVacuumUnix.Store(now.Unix())
+}
+
+func (w *bgIndexVacuumWorker) finishRun(now time.Time, err string) {
 	w.runs.Add(1)
 	w.lastRunUnix.Store(now.Unix())
-	w.lastVacuumUnix.Store(now.Unix())
-	w.lastErr.Store("")
+	w.lastErr.Store(err)
+}
+
+func (w *bgIndexVacuumWorker) recordLastTriggerReport(rep backenddb.IndexVacuumTriggerReport) {
+	w.lastPages.Store(rep.UserPages)
+	if rep.UserPages > 0 {
+		w.lastSpanRatio.Store(rep.UserSpanRatioPPM)
+	} else {
+		w.lastSpanRatio.Store(0)
+	}
+	w.lastFreelistReclaimablePages.Store(rep.FreelistReclaimablePages)
+	if rep.FreelistReclaimableValid {
+		w.lastFreelistReclaimableRatio.Store(rep.FreelistReclaimableRatioPPM)
+	} else {
+		w.lastFreelistReclaimableRatio.Store(0)
+	}
+	w.lastCollectionRootPages.Store(rep.CollectionRootPages)
+	if rep.CollectionRootSpanRatioValid {
+		w.lastCollectionRootSpanRatio.Store(rep.CollectionRootSpanRatioPPM)
+	} else {
+		w.lastCollectionRootSpanRatio.Store(0)
+	}
+}
+
+func (w *bgIndexVacuumWorker) triggerReason(rep backenddb.IndexVacuumTriggerReport) string {
+	if rep.UserPages > 0 && rep.UserSpanRatioPPM >= uint64(w.userSpanRatioThreshold()) {
+		return backgroundIndexVacuumDebtReasonUser
+	}
+	if rep.FreelistReclaimableValid &&
+		rep.FreelistReclaimablePages >= w.freelistReclaimablePagesThreshold() &&
+		rep.FreelistReclaimableRatioPPM >= uint64(w.freelistReclaimableRatioThreshold()) {
+		return backgroundIndexVacuumDebtReasonFreelist
+	}
+	if rep.CollectionRootSpanRatioValid &&
+		rep.CollectionRootPages >= w.collectionRootPagesThreshold() &&
+		rep.CollectionRootSpanRatioPPM >= uint64(w.collectionRootSpanRatioThreshold()) {
+		return backgroundIndexVacuumDebtReasonCollectionRoots
+	}
+	return backgroundIndexVacuumDebtReasonNone
+}
+
+func (w *bgIndexVacuumWorker) userSpanRatioThreshold() uint32 {
+	if w.spanRatioPPM == 0 {
+		return defaultBackgroundIndexVacuumSpanRatioPPM
+	}
+	return w.spanRatioPPM
+}
+
+func (w *bgIndexVacuumWorker) maxBacklogSkipThreshold() uint32 {
+	if w.maxBacklogSkips == 0 {
+		return defaultBackgroundIndexVacuumMaxBacklogSkips
+	}
+	return w.maxBacklogSkips
+}
+
+func (w *bgIndexVacuumWorker) freelistReclaimableRatioThreshold() uint32 {
+	if w.freelistReclaimableRatioPPM == 0 {
+		return defaultBackgroundIndexVacuumFreelistReclaimableRatioPPM
+	}
+	return w.freelistReclaimableRatioPPM
+}
+
+func (w *bgIndexVacuumWorker) freelistReclaimablePagesThreshold() uint64 {
+	if w.freelistReclaimablePages == 0 {
+		return defaultBackgroundIndexVacuumFreelistReclaimablePages
+	}
+	return w.freelistReclaimablePages
+}
+
+func (w *bgIndexVacuumWorker) collectionRootSpanRatioThreshold() uint32 {
+	if w.collectionRootSpanRatioPPM == 0 {
+		return defaultBackgroundIndexVacuumCollectionRootSpanRatioPPM
+	}
+	return w.collectionRootSpanRatioPPM
+}
+
+func (w *bgIndexVacuumWorker) collectionRootPagesThreshold() uint64 {
+	if w.collectionRootPages == 0 {
+		return defaultBackgroundIndexVacuumCollectionRootPages
+	}
+	return w.collectionRootPages
+}
+
+type bgIndexVacuumStats struct {
+	Enabled  bool
+	Interval time.Duration
+
+	SpanRatioPPM uint32
+
+	MaxBacklogSkips uint32
+
+	FreelistReclaimableRatioPPM uint32
+	FreelistReclaimablePages    uint64
+
+	CollectionRootSpanRatioPPM uint32
+	CollectionRootPages        uint64
+
+	Runs    uint64
+	Probes  uint64
+	Vacuums uint64
+
+	BacklogConsecutiveSkips uint64
+	BacklogSkips            uint64
+	BacklogForcedRuns       uint64
+	LastBacklogBytes        int64
+
+	LastRunUnix    int64
+	LastVacuumUnix int64
+	LastSpanRatio  uint64
+	LastPages      uint64
+	LastErr        string
+
+	LastFreelistReclaimablePages uint64
+	LastFreelistReclaimableRatio uint64
+	LastCollectionRootPages      uint64
+	LastCollectionRootSpanRatio  uint64
+	LastDebtReason               string
 }
 
 // Stats returns a snapshot of background index vacuum state and recent run info.
-func (w *bgIndexVacuumWorker) Stats() (enabled bool, interval time.Duration, spanRatioPPM uint32, runs uint64, vacuums uint64, lastRunUnix int64, lastVacuumUnix int64, lastSpanRatio uint64, lastPages uint64, lastErr string) {
-	enabled = w.Enabled()
-	interval = w.interval
-	spanRatioPPM = w.spanRatioPPM
-	runs = w.runs.Load()
-	vacuums = w.vacuums.Load()
-	lastRunUnix = w.lastRunUnix.Load()
-	lastVacuumUnix = w.lastVacuumUnix.Load()
-	lastSpanRatio = w.lastSpanRatio.Load()
-	lastPages = w.lastPages.Load()
-	if v := w.lastErr.Load(); v != nil {
-		lastErr, _ = v.(string)
+func (w *bgIndexVacuumWorker) Stats() bgIndexVacuumStats {
+	out := bgIndexVacuumStats{
+		Enabled:                      w.Enabled(),
+		Interval:                     w.interval,
+		SpanRatioPPM:                 w.userSpanRatioThreshold(),
+		MaxBacklogSkips:              w.maxBacklogSkipThreshold(),
+		FreelistReclaimableRatioPPM:  w.freelistReclaimableRatioThreshold(),
+		FreelistReclaimablePages:     w.freelistReclaimablePagesThreshold(),
+		CollectionRootSpanRatioPPM:   w.collectionRootSpanRatioThreshold(),
+		CollectionRootPages:          w.collectionRootPagesThreshold(),
+		Runs:                         w.runs.Load(),
+		Probes:                       w.probes.Load(),
+		Vacuums:                      w.vacuums.Load(),
+		BacklogConsecutiveSkips:      w.backlogConsecutiveSkips.Load(),
+		BacklogSkips:                 w.backlogSkips.Load(),
+		BacklogForcedRuns:            w.backlogForcedRuns.Load(),
+		LastBacklogBytes:             w.lastBacklogBytes.Load(),
+		LastRunUnix:                  w.lastRunUnix.Load(),
+		LastVacuumUnix:               w.lastVacuumUnix.Load(),
+		LastSpanRatio:                w.lastSpanRatio.Load(),
+		LastPages:                    w.lastPages.Load(),
+		LastFreelistReclaimablePages: w.lastFreelistReclaimablePages.Load(),
+		LastFreelistReclaimableRatio: w.lastFreelistReclaimableRatio.Load(),
+		LastCollectionRootPages:      w.lastCollectionRootPages.Load(),
+		LastCollectionRootSpanRatio:  w.lastCollectionRootSpanRatio.Load(),
 	}
-	return
+	if v := w.lastErr.Load(); v != nil {
+		out.LastErr, _ = v.(string)
+	}
+	if v := w.lastDebtReason.Load(); v != nil {
+		out.LastDebtReason, _ = v.(string)
+	}
+	if out.LastDebtReason == "" {
+		out.LastDebtReason = backgroundIndexVacuumDebtReasonNone
+	}
+	return out
 }
 
 func bgIndexVacuumStatsInto(out map[string]string, w *bgIndexVacuumWorker) {
-	enabled, interval, spanRatioPPM, runs, vacuums, lastRunUnix, lastVacuumUnix, lastSpanRatio, lastPages, lastErr := w.Stats()
-	out["treedb.bg_vacuum.enabled"] = fmt.Sprintf("%t", enabled)
-	out["treedb.bg_vacuum.interval_ms"] = fmt.Sprintf("%d", interval.Milliseconds())
-	out["treedb.bg_vacuum.span_ratio_ppm_threshold"] = fmt.Sprintf("%d", spanRatioPPM)
-	out["treedb.bg_vacuum.runs"] = fmt.Sprintf("%d", runs)
-	out["treedb.bg_vacuum.vacuums"] = fmt.Sprintf("%d", vacuums)
-	out["treedb.bg_vacuum.last_run_unix"] = fmt.Sprintf("%d", lastRunUnix)
-	out["treedb.bg_vacuum.last_vacuum_unix"] = fmt.Sprintf("%d", lastVacuumUnix)
-	out["treedb.bg_vacuum.last_span_ratio_ppm"] = fmt.Sprintf("%d", lastSpanRatio)
-	out["treedb.bg_vacuum.last_pages"] = fmt.Sprintf("%d", lastPages)
-	if lastErr != "" {
-		out["treedb.bg_vacuum.last_err"] = lastErr
+	stats := w.Stats()
+	out["treedb.bg_vacuum.enabled"] = fmt.Sprintf("%t", stats.Enabled)
+	out["treedb.bg_vacuum.interval_ms"] = fmt.Sprintf("%d", stats.Interval.Milliseconds())
+	out["treedb.bg_vacuum.span_ratio_ppm_threshold"] = fmt.Sprintf("%d", stats.SpanRatioPPM)
+	out["treedb.bg_vacuum.freelist_reclaimable_ratio_ppm_threshold"] = fmt.Sprintf("%d", stats.FreelistReclaimableRatioPPM)
+	out["treedb.bg_vacuum.freelist_reclaimable_pages_threshold"] = fmt.Sprintf("%d", stats.FreelistReclaimablePages)
+	out["treedb.bg_vacuum.collection_roots_span_ratio_ppm_threshold"] = fmt.Sprintf("%d", stats.CollectionRootSpanRatioPPM)
+	out["treedb.bg_vacuum.collection_roots_pages_threshold"] = fmt.Sprintf("%d", stats.CollectionRootPages)
+	out["treedb.bg_vacuum.max_backlog_skips"] = fmt.Sprintf("%d", stats.MaxBacklogSkips)
+	out["treedb.bg_vacuum.runs"] = fmt.Sprintf("%d", stats.Runs)
+	out["treedb.bg_vacuum.trigger_probes"] = fmt.Sprintf("%d", stats.Probes)
+	out["treedb.bg_vacuum.vacuums"] = fmt.Sprintf("%d", stats.Vacuums)
+	out["treedb.bg_vacuum.backlog_skips_consecutive"] = fmt.Sprintf("%d", stats.BacklogConsecutiveSkips)
+	out["treedb.bg_vacuum.backlog_skips_total"] = fmt.Sprintf("%d", stats.BacklogSkips)
+	out["treedb.bg_vacuum.backlog_forced_runs"] = fmt.Sprintf("%d", stats.BacklogForcedRuns)
+	out["treedb.bg_vacuum.last_backlog_bytes"] = fmt.Sprintf("%d", stats.LastBacklogBytes)
+	out["treedb.bg_vacuum.last_run_unix"] = fmt.Sprintf("%d", stats.LastRunUnix)
+	out["treedb.bg_vacuum.last_vacuum_unix"] = fmt.Sprintf("%d", stats.LastVacuumUnix)
+	out["treedb.bg_vacuum.last_span_ratio_ppm"] = fmt.Sprintf("%d", stats.LastSpanRatio)
+	out["treedb.bg_vacuum.last_pages"] = fmt.Sprintf("%d", stats.LastPages)
+	out["treedb.bg_vacuum.last_freelist_reclaimable_pages"] = fmt.Sprintf("%d", stats.LastFreelistReclaimablePages)
+	out["treedb.bg_vacuum.last_freelist_reclaimable_ratio_ppm"] = fmt.Sprintf("%d", stats.LastFreelistReclaimableRatio)
+	out["treedb.bg_vacuum.last_collection_roots_pages"] = fmt.Sprintf("%d", stats.LastCollectionRootPages)
+	out["treedb.bg_vacuum.last_collection_roots_span_ratio_ppm"] = fmt.Sprintf("%d", stats.LastCollectionRootSpanRatio)
+	out["treedb.bg_vacuum.last_debt_reason"] = stats.LastDebtReason
+	if stats.LastErr != "" {
+		out["treedb.bg_vacuum.last_err"] = stats.LastErr
 	}
 }

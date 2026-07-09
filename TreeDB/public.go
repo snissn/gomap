@@ -911,11 +911,15 @@ func Open(opts Options) (*DB, error) {
 		vacuumInterval = 0
 	}
 	if vacuumInterval > 0 {
-		spanRatioPPM := opts.BackgroundIndexVacuumSpanRatioPPM
-		if spanRatioPPM == 0 {
-			spanRatioPPM = defaultBackgroundIndexVacuumSpanRatioPPM
-		}
-		out.bgVac.Start(out, vacuumInterval, spanRatioPPM)
+		out.bgVac.Start(out, bgIndexVacuumConfig{
+			Interval:                    vacuumInterval,
+			SpanRatioPPM:                opts.BackgroundIndexVacuumSpanRatioPPM,
+			MaxBacklogSkips:             opts.BackgroundIndexVacuumMaxBacklogSkips,
+			FreelistReclaimableRatioPPM: opts.BackgroundIndexVacuumFreelistReclaimableRatioPPM,
+			FreelistReclaimablePages:    opts.BackgroundIndexVacuumFreelistReclaimablePages,
+			CollectionRootSpanRatioPPM:  opts.BackgroundIndexVacuumCollectionRootSpanRatioPPM,
+			CollectionRootPages:         opts.BackgroundIndexVacuumCollectionRootPages,
+		})
 	}
 	cached.SetStatsHook(out.publicCachedExpvarStatsInto)
 
