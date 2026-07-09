@@ -85,6 +85,23 @@ func (a *Allocator) SetHead(h uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.head = h
+	a.stats.Pages = 0
+	a.stats.FreeIDs = 0
+}
+
+// RefreshStats seeds the cheap freelist counters from the on-disk freelist
+// chain. Callers use this after opening an existing DB so Counters can report
+// current reclaimable debt without walking the chain on every maintenance tick.
+func (a *Allocator) RefreshStats(pageLimit uint64) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out, err := readStatsLocked(a.pager, a.head, pageLimit)
+	if err != nil {
+		return err
+	}
+	a.stats.Pages = out.Pages
+	a.stats.FreeIDs = out.FreeIDs
+	return nil
 }
 
 func (a *Allocator) SetPreferAppend(prefer bool) {
@@ -169,6 +186,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			a.lastAlloc = recycled
 			a.stats.AllocPages++
 			a.stats.ReuseAllocPages++
+			if a.stats.Pages > 0 {
+				a.stats.Pages--
+			}
 			ids = append(ids, recycled)
 			continue
 		}
@@ -181,6 +201,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			a.lastAlloc = id
 			a.stats.AllocPages++
 			a.stats.ReuseAllocPages++
+			if a.stats.FreeIDs > 0 {
+				a.stats.FreeIDs--
+			}
 			ids = append(ids, id)
 			countFree--
 		}
@@ -264,6 +287,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 				a.lastAlloc = id
 				a.stats.AllocPages++
 				a.stats.ReuseAllocPages++
+				if a.stats.FreeIDs > 0 {
+					a.stats.FreeIDs--
+				}
 				return id, nil
 			}
 		}
@@ -277,6 +303,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		a.lastAlloc = id
 		a.stats.AllocPages++
 		a.stats.ReuseAllocPages++
+		if a.stats.FreeIDs > 0 {
+			a.stats.FreeIDs--
+		}
 		return id, nil
 	}
 
@@ -289,6 +318,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 	a.lastAlloc = recycled
 	a.stats.AllocPages++
 	a.stats.ReuseAllocPages++
+	if a.stats.Pages > 0 {
+		a.stats.Pages--
+	}
 	return recycled, nil
 }
 
@@ -317,6 +349,7 @@ func (a *Allocator) Free(id uint64) error {
 			return err
 		}
 		a.stats.FreePages++
+		a.stats.Pages++
 		return nil
 	}
 
@@ -344,6 +377,7 @@ func (a *Allocator) Free(id uint64) error {
 		}
 		n.UpdateChecksum()
 		a.stats.FreePages++
+		a.stats.FreeIDs++
 		return nil
 	}
 
@@ -353,6 +387,7 @@ func (a *Allocator) Free(id uint64) error {
 		return err
 	}
 	a.stats.FreePages++
+	a.stats.Pages++
 	return nil
 }
 
@@ -385,6 +420,10 @@ func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out, err := readStatsLocked(a.pager, a.head, pageLimit)
+	if err == nil {
+		a.stats.Pages = out.Pages
+		a.stats.FreeIDs = out.FreeIDs
+	}
 	out.AllocPages = a.stats.AllocPages
 	out.AppendAllocPages = a.stats.AppendAllocPages
 	out.ReuseAllocPages = a.stats.ReuseAllocPages
@@ -399,6 +438,8 @@ func (a *Allocator) Counters() Stats {
 	defer a.mu.Unlock()
 	return Stats{
 		Head:             a.head,
+		Pages:            a.stats.Pages,
+		FreeIDs:          a.stats.FreeIDs,
 		AllocPages:       a.stats.AllocPages,
 		AppendAllocPages: a.stats.AppendAllocPages,
 		ReuseAllocPages:  a.stats.ReuseAllocPages,
