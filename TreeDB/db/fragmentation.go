@@ -70,6 +70,16 @@ func emitFragmentationProbeEvent(event FragmentationProbeEvent) {
 //   - CollectionRoot* fields are computed by walking collection root descriptors
 //     and their pager-backed roots. Span-ratio fields are valid only when a
 //     pager-backed collection root exists.
+type IndexVacuumFreelistDebtSnapshot struct {
+	TotalPages               uint64
+	FreelistHead             uint64
+	FreelistPages            uint64
+	FreelistFreeIDs          uint64
+	FreelistReclaimable      uint64
+	FreelistReclaimablePPM   uint64
+	FreelistReclaimableValid bool
+}
+
 type IndexVacuumTriggerReport struct {
 	CommitSeq uint64
 
@@ -103,6 +113,36 @@ type IndexVacuumTriggerReport struct {
 	CollectionRootDuplicatePageRefs uint64
 	CollectionRootLeafPages         uint64
 	CollectionRootInternalPages     uint64
+}
+
+// IndexVacuumFreelistDebtSnapshot returns the cheap freelist-debt fields used
+// to invalidate unchanged-CommitSeq background-vacuum trigger caches. It does
+// not walk the user tree, collection roots, or freelist chain.
+func (db *DB) IndexVacuumFreelistDebtSnapshot() (IndexVacuumFreelistDebtSnapshot, bool) {
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.idx.allocator == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return IndexVacuumFreelistDebtSnapshot{}, false
+	}
+	defer func() { _ = snap.Close() }()
+
+	out := IndexVacuumFreelistDebtSnapshot{}
+	if snap.idx.pager != nil {
+		out.TotalPages = snap.idx.pager.PageCount()
+	}
+	emitFragmentationProbeEvent(FragmentationProbeEventTriggerFreelistCounters)
+	fs := snap.idx.allocator.Counters()
+	out.FreelistHead = fs.Head
+	out.FreelistPages = fs.Pages
+	out.FreelistFreeIDs = fs.FreeIDs
+	out.FreelistReclaimable = fs.ReclaimablePages()
+	if fs.Head != 0 && out.TotalPages > 0 {
+		out.FreelistReclaimablePPM = (out.FreelistReclaimable * 1_000_000) / out.TotalPages
+		out.FreelistReclaimableValid = true
+	}
+	return out, true
 }
 
 // IndexVacuumTriggerReport returns the trigger report for automatic index

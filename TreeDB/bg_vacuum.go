@@ -100,14 +100,22 @@ type bgIndexVacuumWorker struct {
 	lastCollectionRootSpanRatio  atomic.Uint64
 	lastDebtReason               atomic.Value // string
 
-	lastProbeCommitSeq uint64
-	lastProbeValid     bool
-	retryProbe         bool
+	lastProbeCommitSeq              uint64
+	lastProbeFreelistReclaimable    uint64
+	lastProbeFreelistReclaimablePPM uint64
+	lastProbeFreelistValid          bool
+	lastProbeValid                  bool
+	retryProbe                      bool
 }
 
 var bgIndexVacuumBacklogBytesHook struct {
 	mu sync.RWMutex
 	fn func(*DB) int64
+}
+
+var bgIndexVacuumFreelistDebtSnapshotHook struct {
+	mu sync.RWMutex
+	fn func(*DB) (backenddb.IndexVacuumFreelistDebtSnapshot, bool)
 }
 
 func setBackgroundIndexVacuumBacklogBytesHookForTest(fn func(*DB) int64) func() {
@@ -122,6 +130,18 @@ func setBackgroundIndexVacuumBacklogBytesHookForTest(fn func(*DB) int64) func() 
 	}
 }
 
+func setBackgroundIndexVacuumFreelistDebtSnapshotHookForTest(fn func(*DB) (backenddb.IndexVacuumFreelistDebtSnapshot, bool)) func() {
+	bgIndexVacuumFreelistDebtSnapshotHook.mu.Lock()
+	prev := bgIndexVacuumFreelistDebtSnapshotHook.fn
+	bgIndexVacuumFreelistDebtSnapshotHook.fn = fn
+	bgIndexVacuumFreelistDebtSnapshotHook.mu.Unlock()
+	return func() {
+		bgIndexVacuumFreelistDebtSnapshotHook.mu.Lock()
+		bgIndexVacuumFreelistDebtSnapshotHook.fn = prev
+		bgIndexVacuumFreelistDebtSnapshotHook.mu.Unlock()
+	}
+}
+
 func backgroundIndexVacuumBacklogBytes(db *DB) int64 {
 	bgIndexVacuumBacklogBytesHook.mu.RLock()
 	hook := bgIndexVacuumBacklogBytesHook.fn
@@ -133,6 +153,19 @@ func backgroundIndexVacuumBacklogBytes(db *DB) int64 {
 		return 0
 	}
 	return db.cached.QueueBacklogBytes()
+}
+
+func backgroundIndexVacuumFreelistDebtSnapshot(db *DB) (backenddb.IndexVacuumFreelistDebtSnapshot, bool) {
+	bgIndexVacuumFreelistDebtSnapshotHook.mu.RLock()
+	hook := bgIndexVacuumFreelistDebtSnapshotHook.fn
+	bgIndexVacuumFreelistDebtSnapshotHook.mu.RUnlock()
+	if hook != nil {
+		return hook(db)
+	}
+	if db == nil || db.backend == nil {
+		return backenddb.IndexVacuumFreelistDebtSnapshot{}, false
+	}
+	return db.backend.IndexVacuumFreelistDebtSnapshot()
 }
 
 // Start launches the background index vacuum loop with the provided interval.
@@ -237,7 +270,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		w.backlogConsecutiveSkips.Store(0)
 	}
 
-	if !forcedAfterBacklog && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq {
+	if !forcedAfterBacklog && w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq && !w.freelistDebtChangedSinceLastProbe(db) {
 		w.finishRun(now, "")
 		return
 	}
@@ -252,6 +285,9 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	}
 
 	w.lastProbeCommitSeq = rep.CommitSeq
+	w.lastProbeFreelistReclaimable = rep.FreelistReclaimablePages
+	w.lastProbeFreelistReclaimablePPM = rep.FreelistReclaimableRatioPPM
+	w.lastProbeFreelistValid = rep.FreelistReclaimableValid
 	w.lastProbeValid = true
 	w.recordLastTriggerReport(rep)
 
@@ -274,6 +310,19 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	w.vacuums.Add(1)
 	w.finishRun(now, "")
 	w.lastVacuumUnix.Store(now.Unix())
+}
+
+func (w *bgIndexVacuumWorker) freelistDebtChangedSinceLastProbe(db *DB) bool {
+	if w.freelistReclaimablePages == 0 && w.freelistReclaimableRatioPPM == 0 {
+		return false
+	}
+	snap, ok := backgroundIndexVacuumFreelistDebtSnapshot(db)
+	if !ok {
+		return true
+	}
+	return snap.FreelistReclaimableValid != w.lastProbeFreelistValid ||
+		snap.FreelistReclaimable != w.lastProbeFreelistReclaimable ||
+		snap.FreelistReclaimablePPM != w.lastProbeFreelistReclaimablePPM
 }
 
 func (w *bgIndexVacuumWorker) finishRun(now time.Time, err string) {

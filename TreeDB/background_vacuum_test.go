@@ -217,6 +217,41 @@ func TestBackgroundIndexVacuumBacklogClearsResetsSkipCounter(t *testing.T) {
 	}
 }
 
+func TestBackgroundIndexVacuumFreelistDebtInvalidatesUnchangedCommitSkip(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 32)
+
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	d.bgVac.freelistReclaimablePages = 1
+	d.bgVac.freelistReclaimableRatioPPM = 1
+	d.bgVac.collectionRootPages = ^uint64(0)
+	d.bgVac.collectionRootSpanRatioPPM = ^uint32(0)
+	counts, restoreCounts := installBackgroundVacuumProbeCounter()
+	defer restoreCounts()
+
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
+		t.Fatalf("initial trigger probes=%d want 1", got)
+	}
+	changed := backenddb.IndexVacuumFreelistDebtSnapshot{
+		TotalPages:               128,
+		FreelistHead:             1,
+		FreelistReclaimable:      d.bgVac.lastProbeFreelistReclaimable + 1,
+		FreelistReclaimablePPM:   d.bgVac.lastProbeFreelistReclaimablePPM + 1,
+		FreelistReclaimableValid: true,
+	}
+	restoreDebt := setBackgroundIndexVacuumFreelistDebtSnapshotHookForTest(func(*DB) (backenddb.IndexVacuumFreelistDebtSnapshot, bool) {
+		return changed, true
+	})
+	defer restoreDebt()
+
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 2 {
+		t.Fatalf("trigger probes after freelist debt change=%d want 2", got)
+	}
+	assertNoBackgroundVacuumFullFragmentationWalks(t, counts)
+}
+
 func TestBackgroundIndexVacuumTriggerPredicatesIndependentDebt(t *testing.T) {
 	w := bgIndexVacuumWorker{
 		spanRatioPPM:                2_000_000,
