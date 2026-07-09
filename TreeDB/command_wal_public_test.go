@@ -1029,6 +1029,30 @@ func TestPublicCommandWALDurableBatchWriteSyncDoesNotCheckpoint(t *testing.T) {
 	requireRawKVValue(t, reopen, key, want)
 }
 
+func TestPublicCommandWALDurableEmptyBatchWriteSyncOnlySyncsCommandWAL(t *testing.T) {
+	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open command WAL durable: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	b := db.NewBatchWithSize(1)
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("empty batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("empty batch Close: %v", err)
+	}
+
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.sync.count_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.append.count_total", 0)
+	requirePublicCommandWALNoCheckpointSince(t, db, before)
+}
+
 func TestPublicCommandWALBatchCloseDiscardsDirtyPayload(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                 t.TempDir(),

@@ -273,6 +273,16 @@ func publicCommandWALPublishSync(durabilityMode string, sync bool) bool {
 	return sync && strings.HasPrefix(durabilityMode, "wal_on_sync")
 }
 
+func (tdb *DB) syncPublicCommandWAL() error {
+	if tdb == nil || !tdb.commandWALCached {
+		return nil
+	}
+	if tdb.backend == nil {
+		return ErrClosed
+	}
+	return tdb.backend.FlushCommandWALBarrier(publicCommandWALPublishSync(tdb.durabilityMode, true))
+}
+
 type commandWALPublicBatch struct {
 	db                       *DB
 	inner                    Batch
@@ -839,7 +849,7 @@ func (b *commandWALPublicBatch) write(sync bool) (err error) {
 		return nil
 	}
 	if sync {
-		if err := b.inner.WriteSync(); err != nil {
+		if err := b.db.syncPublicCommandWAL(); err != nil {
 			return err
 		}
 	} else {

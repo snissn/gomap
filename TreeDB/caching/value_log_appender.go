@@ -85,10 +85,7 @@ func (a *cachingValueLogAppender) FlushValueLogExternalRefs(fileIDs []uint32, sy
 		return errWALUnavailable
 	}
 	if len(fileIDs) == 0 {
-		if sync {
-			return a.Sync()
-		}
-		return a.Flush()
+		return a.db.flushPendingValueLogLanes(sync)
 	}
 	seenLanes := make(map[*lane]struct{}, len(fileIDs))
 	activeFileIDs := make(map[uint32]struct{}, len(fileIDs))

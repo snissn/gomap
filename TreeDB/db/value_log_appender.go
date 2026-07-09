@@ -25,7 +25,8 @@ type ValueLogAppender interface {
 }
 
 // ValueLogExternalRefFlusher is an optional extension for appenders that can
-// flush the value-log lanes containing specific file IDs. When sync is true,
+// flush the value-log lanes containing specific file IDs. An empty file-ID
+// slice requests a barrier for all pending appender writes. When sync is true,
 // the implementation owns durability for the referenced file IDs: active
 // segments should follow the appender's sync policy, and older referenced
 // segments should be synced directly if needed. Command-WAL SetRID logging uses

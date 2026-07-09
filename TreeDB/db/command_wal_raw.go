@@ -179,6 +179,32 @@ func (db *DB) FlushCommandWAL(sync bool) error {
 	return db.flushCommandWAL(sync, true)
 }
 
+// FlushCommandWALBarrier makes value-log bytes referenced by earlier command
+// frames durable before flushing the command WAL itself. It serializes with
+// command-WAL publishers so the two durability boundaries cannot be reordered.
+func (db *DB) FlushCommandWALBarrier(sync bool) error {
+	unlock, err := db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if appender := db.currentValueLogAppender(); appender != nil {
+		if flusher, ok := appender.(ValueLogExternalRefFlusher); ok {
+			if err := flusher.FlushValueLogExternalRefs(nil, sync); err != nil {
+				return err
+			}
+		} else if sync {
+			if err := appender.Sync(); err != nil {
+				return err
+			}
+		} else if err := appender.Flush(); err != nil {
+			return err
+		}
+	}
+	return db.FlushCommandWAL(sync)
+}
+
 func (db *DB) flushCommandWAL(sync bool, observe bool) error {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return nil

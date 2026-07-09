@@ -15,6 +15,7 @@ import (
 type vlogDirtyOrderWriter struct {
 	size    int64
 	flushes atomic.Int64
+	syncs   atomic.Int64
 }
 
 var _ valueWriter = (*vlogDirtyOrderWriter)(nil)
@@ -65,7 +66,10 @@ func (w *vlogDirtyOrderWriter) Flush() error {
 	w.flushes.Add(1)
 	return nil
 }
-func (w *vlogDirtyOrderWriter) Sync() error  { return nil }
+func (w *vlogDirtyOrderWriter) Sync() error {
+	w.syncs.Add(1)
+	return nil
+}
 func (w *vlogDirtyOrderWriter) Close() error { return nil }
 
 func waitErr(t *testing.T, ch <-chan error, label string) error {
