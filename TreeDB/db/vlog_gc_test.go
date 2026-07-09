@@ -35,7 +35,7 @@ func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
 func TestValueLogGC_PostRefreshNilSetReturnsEmptyStats(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
