@@ -112,8 +112,15 @@ func compareTriggerToFullFragmentationReport(t *testing.T, d *DB, label string) 
 			counters.Head, counters.Pages, counters.FreeIDs, counters.AllocPages, counters.AppendAllocPages, counters.ReuseAllocPages, counters.FreePages)
 	}
 	if trigger.FreelistReclaimableValid {
-		assertTriggerFieldMatchesFullReport(t, label, "treedb.freelist.reclaimable_pages", trigger.FreelistReclaimablePages, full)
-		assertTriggerFieldMatchesFullReport(t, label, "treedb.freelist.reclaimable_ratio_ppm", trigger.FreelistReclaimableRatioPPM, full)
+		if got, want := trigger.FreelistReclaimablePages, counters.ReclaimablePages(); got != want {
+			t.Fatalf("%s trigger freelist reclaimable pages=%d want allocator counters %d", label, got, want)
+		}
+		if trigger.TotalPages > 0 {
+			wantRatio := (trigger.FreelistReclaimablePages * 1_000_000) / trigger.TotalPages
+			if got := trigger.FreelistReclaimableRatioPPM; got != wantRatio {
+				t.Fatalf("%s trigger freelist reclaimable ratio=%d want %d", label, got, wantRatio)
+			}
+		}
 	}
 	if trigger.CollectionRootSpanRatioValid {
 		assertTriggerFieldMatchesFullReport(t, label, "treedb.collection_roots.pages", trigger.CollectionRootPages, full)
