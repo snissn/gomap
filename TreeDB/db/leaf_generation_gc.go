@@ -112,11 +112,14 @@ type leafGenerationGCDecision struct {
 
 func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
 	db.writeMu.RLock()
+	db.mu.RLock()
 	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
+		db.mu.RUnlock()
 		db.writeMu.RUnlock()
 		return false, nil
 	}
 	valueLogManager := db.valueLogManager
+	db.mu.RUnlock()
 	db.writeMu.RUnlock()
 
 	if err := valueLogManager.Refresh(); err != nil {
@@ -146,13 +149,15 @@ func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGC
 	}
 
 	db.writeMu.RLock()
-	defer db.writeMu.RUnlock()
+	db.mu.RLock()
+	current := db.state.Load()
+	manifest := db.leafGenerationManifest.clone()
+	db.mu.RUnlock()
+	db.writeMu.RUnlock()
 
-	current := db.State()
 	if current == nil || current.CommitSeq != snap.state.CommitSeq || current.LeafGenerationStateVersion != snap.state.LeafGenerationStateVersion {
 		return basis, false
 	}
-	manifest := db.leafGenerationManifest.clone()
 	if manifest == nil {
 		return basis, false
 	}
@@ -162,30 +167,40 @@ func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGC
 	return basis, true
 }
 
-func (db *DB) leafGenerationGCScanBasisStillCurrent(basis leafGenerationGCScanBasis) bool {
-	current := db.State()
+func (db *DB) leafGenerationGCValidatedManifestClone(basis leafGenerationGCScanBasis) (*leafGenerationManifest, bool) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	current := db.state.Load()
 	if current == nil || current.CommitSeq != basis.commitSeq || current.LeafGenerationStateVersion != basis.leafGenerationStateVersion {
-		return false
+		return nil, false
 	}
-	return leafGenerationManifestsEqualForGC(basis.manifest, db.leafGenerationManifest)
+	if !leafGenerationManifestsEqualForGC(basis.manifest, db.leafGenerationManifest) {
+		return nil, false
+	}
+	manifest := db.leafGenerationManifest.clone()
+	if manifest == nil {
+		return nil, false
+	}
+	return manifest, true
 }
 
 func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, error) {
 	var stats LeafGenerationGCStats
 
-	db.writeMu.RLock()
-	if !db.leafGenerationGCScanBasisStillCurrent(basis) {
-		db.writeMu.RUnlock()
+	db.writeMu.Lock()
+	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
+	if !ok {
+		db.writeMu.Unlock()
 		return stats, nil
 	}
-	manifest := db.leafGenerationManifest.clone()
 	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
 	if err != nil {
-		db.writeMu.RUnlock()
+		db.writeMu.Unlock()
 		return stats, err
 	}
 	filePaths := db.leafGenerationFilePaths(manifest)
-	db.writeMu.RUnlock()
+	db.writeMu.Unlock()
 
 	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, basis.commitSeq, true)
 	return decision.stats, nil
@@ -197,11 +212,8 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
-	if !db.leafGenerationGCScanBasisStillCurrent(basis) {
-		return stats, nil
-	}
-	manifest := db.leafGenerationManifest.clone()
-	if manifest == nil {
+	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
+	if !ok {
 		return stats, nil
 	}
 	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
