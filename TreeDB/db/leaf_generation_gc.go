@@ -123,6 +123,10 @@ type leafGenerationGCDecision struct {
 
 func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
 	db.writeMu.RLock()
+	if db.closing.Load() {
+		db.writeMu.RUnlock()
+		return false, nil
+	}
 	db.mu.RLock()
 	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
 		db.mu.RUnlock()
@@ -131,16 +135,20 @@ func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
 	}
 	valueLogManager := db.valueLogManager
 	db.mu.RUnlock()
-	db.writeMu.RUnlock()
 
+	// Refresh may touch value-log manager state/files. Keep the shared writer
+	// gate while it runs so Close cannot clear/close the manager underneath it;
+	// ordinary shared-lock foreground publishes can still proceed.
 	if err := valueLogManager.Refresh(); err != nil {
+		db.writeMu.RUnlock()
 		return false, err
 	}
+	db.writeMu.RUnlock()
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
-	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
+	if db.closing.Load() || db.leafGenerationManifest == nil || db.valueLogManager == nil {
 		return false, nil
 	}
 	commitSeq := uint64(1)
@@ -159,15 +167,18 @@ func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGC
 		return basis, false
 	}
 
-	db.writeMu.RLock()
-	// Optimistic publishers can also hold writeMu.RLock while swapping the
-	// manifest under db.mu, so capture the state/manifest basis under db.mu as a
-	// coherent pair.
+	// The caller holds writeMu.RLock for the scan window. Optimistic publishers can
+	// share that lock while swapping the manifest under db.mu, so capture the
+	// state/manifest basis under db.mu as a coherent pair. Do not reacquire
+	// writeMu here: Go's RWMutex blocks recursive read locks when an exclusive
+	// waiter is pending.
 	db.mu.RLock()
 	current := db.state.Load()
-	manifest := db.leafGenerationManifest.clone()
+	var manifest *leafGenerationManifest
+	if db.leafGenerationManifest != nil {
+		manifest = db.leafGenerationManifest.clone()
+	}
 	db.mu.RUnlock()
-	db.writeMu.RUnlock()
 
 	if current == nil || current.CommitSeq != snap.state.CommitSeq || current.LeafGenerationStateVersion != snap.state.LeafGenerationStateVersion {
 		return basis, false
