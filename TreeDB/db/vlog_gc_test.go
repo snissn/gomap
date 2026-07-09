@@ -681,12 +681,50 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
+	seedValueLogRefIncrementalParityFixture(t, db, dir, false)
+
+	seq := db.currentCommitSeq()
+	incRefs, ok := db.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatalf("expected incremental ref set for seq=%d", seq)
+	}
+
+	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(incRefs, fullRefs) {
+		t.Fatalf("incremental/full-scan mismatch: incremental=%d full=%d", len(incRefs), len(fullRefs))
+	}
+}
+
+type valueLogRefIncrementalParityFixture struct {
+	SegmentAFileID     uint32
+	SegmentBFileID     uint32
+	UnreferencedFileID uint32
+}
+
+func seedValueLogRefIncrementalParityFixture(t *testing.T, db *DB, dir string, includeUnreferenced bool) valueLogRefIncrementalParityFixture {
+	t.Helper()
+
 	key := func(i int) []byte { return []byte(fmt.Sprintf("k%06d", i)) }
 	valueA := func(i int) []byte { return bytes.Repeat([]byte{byte(i % 251)}, 256) }
 	valueB := func(i int) []byte { return bytes.Repeat([]byte{byte((i + 17) % 251)}, 512) }
 
 	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 10_000, 320, valueA)
 	ptrsB := appendPointersInNewSegment(t, dir, 0, 2, 20_000, 120, valueB)
+	var unreferencedFileID uint32
+	if includeUnreferenced {
+		unreferenced := appendPointersInNewSegment(t, dir, 0, 3, 30_000, 1, func(int) []byte {
+			return bytes.Repeat([]byte("unreferenced|"), 32)
+		})
+		unreferencedFileID = unreferenced[0].FileID
+	}
 
 	b := db.NewBatch().(*Batch)
 	for i := 0; i < 320; i++ {
@@ -715,23 +753,10 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	}
 	_ = b.Close()
 
-	seq := db.currentCommitSeq()
-	incRefs, ok := db.valueLogRefTracker.referencedSet(seq)
-	if !ok {
-		t.Fatalf("expected incremental ref set for seq=%d", seq)
-	}
-
-	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
-	if err != nil {
-		t.Fatalf("scanValueLogRefCounts: %v", err)
-	}
-	if fullSeq != seq {
-		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
-	}
-
-	fullRefs := valueLogRefSetFromCounts(fullCounts)
-	if !reflect.DeepEqual(incRefs, fullRefs) {
-		t.Fatalf("incremental/full-scan mismatch: incremental=%d full=%d", len(incRefs), len(fullRefs))
+	return valueLogRefIncrementalParityFixture{
+		SegmentAFileID:     ptrsA[0].FileID,
+		SegmentBFileID:     ptrsB[0].FileID,
+		UnreferencedFileID: unreferencedFileID,
 	}
 }
 

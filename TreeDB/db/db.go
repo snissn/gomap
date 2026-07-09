@@ -90,6 +90,9 @@ type DB struct {
 	// Test hook used to release synthetic snapshot pins at exact compaction
 	// phase boundaries.
 	compactStorageAfterPhase func(string)
+	// Test hook used to observe whether fenced value-log reclaim resolved
+	// referenced segments through the tracker or the full-scan fallback.
+	compactStorageFencedValueLogRefHook func(compactStorageFencedValueLogRefEvent)
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]

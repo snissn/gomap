@@ -300,6 +300,11 @@ type CompactStorageStats struct {
 	ByteMinimized        bool `json:"byte_minimized"`
 }
 
+type compactStorageFencedValueLogRefEvent struct {
+	Source             valueLogRefResolutionSource
+	ReferencedSegments int
+}
+
 // CompactStoragePlan reports full storage compaction debt without mutating the
 // database. It is safe for read-only opens.
 func (db *DB) CompactStoragePlan(ctx context.Context, opts CompactStorageOptions) (CompactStorageStats, error) {
@@ -710,8 +715,9 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 		if len(fencedIDs) > 0 {
 			phaseName := fmt.Sprintf("settle-fenced-value-log-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
-				// Fenced IDs are independently proven unreachable by a fresh
-				// root scan below. Cached callers rotate and block writers
+				// Fenced IDs are independently proven unreachable by the
+				// tracker-aware referenced set (strict commit-sequence match) or
+				// its full-scan fallback. Cached callers rotate and block writers
 				// before enabling this path, so ReclaimActive can collect the
 				// formerly-active files that would otherwise reappear as debt
 				// after close/reopen.
@@ -1080,7 +1086,7 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 	if db == nil || !opts.UnsafeValueLogReclaimFencedUnreferenced || db.valueLogManager == nil {
 		return nil, 0, nil
 	}
-	referenced, err := db.compactStorageScannedValueLogRefs(ctx)
+	referenced, err := db.compactStorageReferencedValueLogRefs(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1134,23 +1140,16 @@ func (db *DB) compactStorageFencedUnreferencedValueLogIDs(ctx context.Context, o
 	return ids, bytes, nil
 }
 
-func (db *DB) compactStorageScannedValueLogRefs(ctx context.Context) (map[uint32]struct{}, error) {
-	counts, _, err := db.scanValueLogRefCounts(ctx)
-	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
-		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
-			return nil, refreshErr
-		}
-		counts, _, err = db.scanValueLogRefCounts(ctx)
-	}
+func (db *DB) compactStorageReferencedValueLogRefs(ctx context.Context) (map[uint32]struct{}, error) {
+	refs, source, err := db.referencedValueLogSegmentsWithSource(ctx)
 	if err != nil {
 		return nil, err
 	}
-	refs := make(map[uint32]struct{}, len(counts))
-	for fileID, n := range counts {
-		if n == 0 {
-			continue
-		}
-		refs[fileID] = struct{}{}
+	if db != nil && db.compactStorageFencedValueLogRefHook != nil {
+		db.compactStorageFencedValueLogRefHook(compactStorageFencedValueLogRefEvent{
+			Source:             source,
+			ReferencedSegments: len(refs),
+		})
 	}
 	return refs, nil
 }
