@@ -64,8 +64,14 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		return stats, err
 	}
 
+	// Hold a shared writer gate only for the unlocked scan window. Ordinary
+	// foreground commits can still proceed through their shared-lock publish path,
+	// but Close and other exclusive teardown/cutover paths cannot close the pager
+	// or value-log manager while the pinned snapshot is being walked.
+	db.writeMu.RLock()
 	snap := db.AcquireSnapshot()
 	if snap == nil {
+		db.writeMu.RUnlock()
 		return stats, ErrClosed
 	}
 	if len(snap.leafGenerationIDs) > 0 {
@@ -73,23 +79,28 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 	}
 	if snap.state == nil || snap.state.LeafGenerations == nil {
 		_ = snap.Close()
+		db.writeMu.RUnlock()
 		return stats, nil
 	}
 
 	basis, ok := db.captureLeafGenerationGCScanBasis(snap)
 	if !ok {
 		_ = snap.Close()
+		db.writeMu.RUnlock()
 		return stats, nil
 	}
 
 	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
 	if err != nil {
 		_ = snap.Close()
+		db.writeMu.RUnlock()
 		return stats, err
 	}
 	if err := snap.Close(); err != nil {
+		db.writeMu.RUnlock()
 		return stats, err
 	}
+	db.writeMu.RUnlock()
 	snap = nil
 
 	if opts.DryRun {
@@ -149,6 +160,9 @@ func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGC
 	}
 
 	db.writeMu.RLock()
+	// Optimistic publishers can also hold writeMu.RLock while swapping the
+	// manifest under db.mu, so capture the state/manifest basis under db.mu as a
+	// coherent pair.
 	db.mu.RLock()
 	current := db.state.Load()
 	manifest := db.leafGenerationManifest.clone()
@@ -168,6 +182,8 @@ func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGC
 }
 
 func (db *DB) leafGenerationGCValidatedManifestClone(basis leafGenerationGCScanBasis) (*leafGenerationManifest, bool) {
+	// See captureLeafGenerationGCScanBasis: db.mu serializes manifest swaps from
+	// optimistic publishers that share writeMu.RLock with this maintenance path.
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
