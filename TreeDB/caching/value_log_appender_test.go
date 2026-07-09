@@ -41,3 +41,27 @@ func TestCachingValueLogExternalRefFlusherSyncsRotatedSegments(t *testing.T) {
 		t.Fatalf("FlushValueLogExternalRefs rotated segment: %v", err)
 	}
 }
+
+func TestCachingValueLogExternalRefFlusherEmptyIDsSyncsAllPendingLanes(t *testing.T) {
+	db := &DB{lanes: make([]lane, 2)}
+	writers := make([]*vlogDirtyOrderWriter, len(db.lanes))
+	for i := range db.lanes {
+		writers[i] = &vlogDirtyOrderWriter{}
+		db.lanes[i].id = i
+		db.lanes[i].vlog = writers[i]
+		db.lanes[i].vlogSyncPending.Store(true)
+	}
+	appender := &cachingValueLogAppender{db: db, lane: &db.lanes[0]}
+
+	if err := appender.FlushValueLogExternalRefs(nil, true); err != nil {
+		t.Fatalf("FlushValueLogExternalRefs all pending: %v", err)
+	}
+	for i := range db.lanes {
+		if got := writers[i].syncs.Load(); got != 1 {
+			t.Fatalf("lane %d syncs=%d, want 1", i, got)
+		}
+		if db.lanes[i].vlogSyncPending.Load() {
+			t.Fatalf("lane %d still has a pending sync", i)
+		}
+	}
+}

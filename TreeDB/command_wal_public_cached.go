@@ -280,7 +280,7 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	if tdb.backend == nil {
 		return ErrClosed
 	}
-	return tdb.backend.FlushCommandWAL(publicCommandWALPublishSync(tdb.durabilityMode, true))
+	return tdb.backend.FlushCommandWALBarrier(publicCommandWALPublishSync(tdb.durabilityMode, true))
 }
 
 type commandWALPublicBatch struct {

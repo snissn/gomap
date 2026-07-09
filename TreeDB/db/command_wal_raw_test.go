@@ -18,6 +18,31 @@ type commandWALCountingValueLogAppender struct {
 	syncs   int
 }
 
+type commandWALBarrierTestAppender struct {
+	externalFlushes int
+	externalSync    bool
+	externalFileIDs []uint32
+	externalErr     error
+}
+
+func (a *commandWALBarrierTestAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	return nil, errors.New("unexpected AppendValues")
+}
+
+func (a *commandWALBarrierTestAppender) Flush() error { return nil }
+func (a *commandWALBarrierTestAppender) Sync() error  { return nil }
+
+func (a *commandWALBarrierTestAppender) CurrentValueLogSegment() (string, uint32, bool) {
+	return "", 0, false
+}
+
+func (a *commandWALBarrierTestAppender) FlushValueLogExternalRefs(fileIDs []uint32, sync bool) error {
+	a.externalFlushes++
+	a.externalSync = sync
+	a.externalFileIDs = append(a.externalFileIDs[:0], fileIDs...)
+	return a.externalErr
+}
+
 func (a *commandWALCountingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
 	return a.inner.AppendValues(values)
 }
@@ -34,6 +59,41 @@ func (a *commandWALCountingValueLogAppender) Sync() error {
 
 func (a *commandWALCountingValueLogAppender) CurrentValueLogSegment() (string, uint32, bool) {
 	return a.inner.CurrentValueLogSegment()
+}
+
+func TestFlushCommandWALBarrierOrdersExternalRefsBeforeCommandWAL(t *testing.T) {
+	d, err := Open(Options{
+		Dir:                    t.TempDir(),
+		CommandWAL:             true,
+		CommandWALStatsScan:    true,
+		DisableBackgroundPrune: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	externalErr := errors.New("external value-log sync failed")
+	appender := &commandWALBarrierTestAppender{externalErr: externalErr}
+	d.SetValueLogAppender(appender)
+	before := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total")
+	if err := d.FlushCommandWALBarrier(true); !errors.Is(err, externalErr) {
+		t.Fatalf("FlushCommandWALBarrier error=%v, want %v", err, externalErr)
+	}
+	if appender.externalFlushes != 1 || !appender.externalSync || len(appender.externalFileIDs) != 0 {
+		t.Fatalf("external barrier calls=%d sync=%t fileIDs=%v, want one all-ref sync", appender.externalFlushes, appender.externalSync, appender.externalFileIDs)
+	}
+	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before {
+		t.Fatalf("command WAL sync count=%d, want %d when external barrier fails", got, before)
+	}
+
+	appender.externalErr = nil
+	if err := d.FlushCommandWALBarrier(true); err != nil {
+		t.Fatalf("FlushCommandWALBarrier retry: %v", err)
+	}
+	if got := commandWALTestStatUint64(t, d.Stats(), "treedb.command_wal.sync.count_total"); got != before+1 {
+		t.Fatalf("command WAL sync count=%d, want %d", got, before+1)
+	}
 }
 
 func TestCommandWALIntentZeroValueLSNSentinelsM10C(t *testing.T) {
