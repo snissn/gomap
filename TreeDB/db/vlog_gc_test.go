@@ -32,6 +32,43 @@ func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_PostRefreshNilSetReturnsEmptyStats(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	origPostRefreshCurrentSet := valueLogGCPostRefreshCurrentSetNoRefresh
+	calls := 0
+	valueLogGCPostRefreshCurrentSetNoRefresh = func(vm *valuelog.Manager) *valuelog.Set {
+		calls++
+		return nil
+	}
+	defer func() { valueLogGCPostRefreshCurrentSetNoRefresh = origPostRefreshCurrentSet }()
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats != (ValueLogGCStats{}) {
+		t.Fatalf("expected zero stats for nil post-refresh value-log set, got %+v", stats)
+	}
+	if calls != 1 {
+		t.Fatalf("post-refresh current-set hook calls=%d want 1", calls)
+	}
+
+	segments, err := filepath.Glob(filepath.Join(ValueLogDirPath(dir), "*.log"))
+	if err != nil {
+		t.Fatalf("glob value-log segments: %v", err)
+	}
+	if len(segments) != 0 {
+		t.Fatalf("nil-set GC path created or retained unexpected value-log segments: %v", segments)
+	}
+}
+
 func TestValueLogRefTracker_DisabledForOuterLeavesSkipsStaleMetadata(t *testing.T) {
 	dir := t.TempDir()
 	stale := []byte("stale ref-count metadata from an older build")

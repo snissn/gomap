@@ -15,6 +15,12 @@ import (
 // deleting freshly rotated segments that may still back in-memory pointers.
 const valueLogKeepRecentSegmentsPerLane = 2
 
+// valueLogGCPostRefreshCurrentSetNoRefresh is a narrow test seam for the
+// second no-refresh read after the fallback Refresh call.
+var valueLogGCPostRefreshCurrentSetNoRefresh = func(vm *valuelog.Manager) *valuelog.Set {
+	return vm.CurrentSetNoRefresh()
+}
+
 // ValueLogGCOptions controls value-log garbage collection.
 type ValueLogGCOptions struct {
 	DryRun bool
@@ -155,7 +161,16 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		if err := vm.Refresh(); err != nil {
 			return stats, err
 		}
-		set = vm.CurrentSetNoRefresh()
+		set = valueLogGCPostRefreshCurrentSetNoRefresh(vm)
+	}
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = vm.Release(set)
+		}
+		if !opts.DryRun && !db.readOnly {
+			db.persistValueLogRefTrackerBestEffort()
+		}
+		return stats, nil
 	}
 	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
