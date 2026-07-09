@@ -1,13 +1,16 @@
 package treedb
 
 import (
+	"encoding/binary"
 	"fmt"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestBackgroundIndexVacuumIdleUnchangedCommitSkipsStructuralWalks(t *testing.T) {
@@ -123,6 +126,9 @@ func TestBackgroundIndexVacuumChangedCommitUsesCheapTrigger(t *testing.T) {
 	if got := counts[backenddb.FragmentationProbeEventTriggerFreelistCounters]; got != 1 {
 		t.Fatalf("trigger freelist counter reads=%d want 1", got)
 	}
+	if got := counts[backenddb.FragmentationProbeEventTriggerCollectionRootWalk]; got != 1 {
+		t.Fatalf("trigger collection-root walks=%d want 1", got)
+	}
 	if got := d.bgVac.lastPages.Load(); got != expected.UserPages {
 		t.Fatalf("lastPages=%d want %d", got, expected.UserPages)
 	}
@@ -136,6 +142,246 @@ func TestBackgroundIndexVacuumChangedCommitUsesCheapTrigger(t *testing.T) {
 		t.Fatalf("retryProbe left set after successful changed-state trigger")
 	}
 	assertNoBackgroundVacuumFullFragmentationWalks(t, counts)
+}
+
+func TestBackgroundIndexVacuumSustainedBacklogForcesTriggerProbe(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 64)
+
+	d.bgVac.maxBacklogSkips = 2
+	d.bgVac.spanRatioPPM = ^uint32(0)
+
+	restoreBacklog := setBackgroundIndexVacuumBacklogBytesHookForTest(func(*DB) int64 { return 4096 })
+	defer restoreBacklog()
+	counts, restoreCounts := installBackgroundVacuumProbeCounter()
+	defer restoreCounts()
+
+	d.bgVac.runOnce(d)
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 0 {
+		t.Fatalf("trigger probes before skip cap=%d want 0", got)
+	}
+	if got := d.bgVac.backlogConsecutiveSkips.Load(); got != 2 {
+		t.Fatalf("consecutive backlog skips=%d want 2", got)
+	}
+	if got := d.bgVac.backlogSkips.Load(); got != 2 {
+		t.Fatalf("total backlog skips=%d want 2", got)
+	}
+
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
+		t.Fatalf("forced trigger probes=%d want 1", got)
+	}
+	if got := d.bgVac.backlogForcedRuns.Load(); got != 1 {
+		t.Fatalf("forced-after-backlog runs=%d want 1", got)
+	}
+	if got := d.bgVac.backlogConsecutiveSkips.Load(); got != 0 {
+		t.Fatalf("consecutive backlog skips after forced probe=%d want 0", got)
+	}
+	if got := d.bgVac.lastBacklogBytes.Load(); got != 4096 {
+		t.Fatalf("last backlog bytes=%d want 4096", got)
+	}
+}
+
+func TestBackgroundIndexVacuumBacklogClearsResetsSkipCounter(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 32)
+
+	d.bgVac.maxBacklogSkips = 3
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	var backlog atomic.Int64
+	backlog.Store(2048)
+	restoreBacklog := setBackgroundIndexVacuumBacklogBytesHookForTest(func(*DB) int64 { return backlog.Load() })
+	defer restoreBacklog()
+	counts, restoreCounts := installBackgroundVacuumProbeCounter()
+	defer restoreCounts()
+
+	d.bgVac.runOnce(d)
+	if got := d.bgVac.backlogConsecutiveSkips.Load(); got != 1 {
+		t.Fatalf("consecutive backlog skips=%d want 1", got)
+	}
+
+	backlog.Store(0)
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
+		t.Fatalf("trigger probes after backlog cleared=%d want 1", got)
+	}
+	if got := d.bgVac.backlogConsecutiveSkips.Load(); got != 0 {
+		t.Fatalf("consecutive backlog skips after clear=%d want 0", got)
+	}
+	if got := d.bgVac.backlogForcedRuns.Load(); got != 0 {
+		t.Fatalf("forced-after-backlog runs=%d want 0", got)
+	}
+	if got := d.bgVac.lastBacklogBytes.Load(); got != 0 {
+		t.Fatalf("last backlog bytes=%d want 0", got)
+	}
+}
+
+func TestBackgroundIndexVacuumFreelistDebtInvalidatesUnchangedCommitSkip(t *testing.T) {
+	d := openBackgroundVacuumTestDB(t, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(t, d, 32)
+
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	d.bgVac.freelistReclaimablePages = 1
+	d.bgVac.freelistReclaimableRatioPPM = 1
+	d.bgVac.collectionRootPages = ^uint64(0)
+	d.bgVac.collectionRootSpanRatioPPM = ^uint32(0)
+	counts, restoreCounts := installBackgroundVacuumProbeCounter()
+	defer restoreCounts()
+
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 1 {
+		t.Fatalf("initial trigger probes=%d want 1", got)
+	}
+	changed := backenddb.IndexVacuumFreelistDebtSnapshot{
+		TotalPages:               128,
+		FreelistHead:             1,
+		FreelistReclaimable:      d.bgVac.lastProbeFreelistReclaimable + 1,
+		FreelistReclaimablePPM:   d.bgVac.lastProbeFreelistReclaimablePPM + 1,
+		FreelistReclaimableValid: true,
+	}
+	restoreDebt := setBackgroundIndexVacuumFreelistDebtSnapshotHookForTest(func(*DB) (backenddb.IndexVacuumFreelistDebtSnapshot, bool) {
+		return changed, true
+	})
+	defer restoreDebt()
+
+	d.bgVac.runOnce(d)
+	if got := counts[backenddb.FragmentationProbeEventTriggerReport]; got != 2 {
+		t.Fatalf("trigger probes after freelist debt change=%d want 2", got)
+	}
+	assertNoBackgroundVacuumFullFragmentationWalks(t, counts)
+}
+
+func TestBackgroundIndexVacuumTriggerPredicatesIndependentDebt(t *testing.T) {
+	w := bgIndexVacuumWorker{
+		spanRatioPPM:                2_000_000,
+		freelistReclaimableRatioPPM: 1_000_000,
+		freelistReclaimablePages:    10,
+		collectionRootSpanRatioPPM:  2_000_000,
+		collectionRootPages:         10,
+	}
+
+	tests := []struct {
+		name string
+		rep  backenddb.IndexVacuumTriggerReport
+		want string
+	}{
+		{
+			name: "absent optional debt is none",
+			rep: backenddb.IndexVacuumTriggerReport{
+				UserPages:                    4,
+				UserSpanRatioPPM:             1_000_000,
+				FreelistReclaimablePages:     100,
+				FreelistReclaimableRatioPPM:  4_000_000,
+				CollectionRootPages:          100,
+				CollectionRootSpanRatioPPM:   4_000_000,
+				CollectionRootSpanRatioValid: false,
+				FreelistReclaimableValid:     false,
+			},
+			want: backgroundIndexVacuumDebtReasonNone,
+		},
+		{
+			name: "user tree debt",
+			rep:  backenddb.IndexVacuumTriggerReport{UserPages: 4, UserSpanRatioPPM: 2_000_000},
+			want: backgroundIndexVacuumDebtReasonUser,
+		},
+		{
+			name: "freelist debt",
+			rep: backenddb.IndexVacuumTriggerReport{
+				UserPages:                   4,
+				UserSpanRatioPPM:            1_000_000,
+				FreelistReclaimableValid:    true,
+				FreelistReclaimablePages:    10,
+				FreelistReclaimableRatioPPM: 1_000_000,
+			},
+			want: backgroundIndexVacuumDebtReasonFreelist,
+		},
+		{
+			name: "collection root debt",
+			rep: backenddb.IndexVacuumTriggerReport{
+				UserPages:                    4,
+				UserSpanRatioPPM:             1_000_000,
+				CollectionRootSpanRatioValid: true,
+				CollectionRootPages:          10,
+				CollectionRootSpanRatioPPM:   2_000_000,
+			},
+			want: backgroundIndexVacuumDebtReasonCollectionRoots,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := w.triggerReason(tc.rep); got != tc.want {
+				t.Fatalf("triggerReason=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBackgroundIndexVacuumFreelistDebtTriggersVacuum(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{
+		KeepRecent:                    1,
+		PreferAppendAlloc:             true,
+		BackgroundIndexVacuumInterval: -1,
+	})
+	seedBackgroundVacuumFreelistDebt(t, d)
+
+	rep, err := d.backend.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("trigger report: %v", err)
+	}
+	if !rep.FreelistReclaimableValid || rep.FreelistReclaimablePages == 0 || rep.FreelistReclaimableRatioPPM == 0 {
+		t.Fatalf("freelist debt not present in trigger report: %+v", rep)
+	}
+
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	d.bgVac.freelistReclaimablePages = 1
+	d.bgVac.freelistReclaimableRatioPPM = 1
+	d.bgVac.collectionRootPages = ^uint64(0)
+	d.bgVac.collectionRootSpanRatioPPM = ^uint32(0)
+	d.bgVac.runOnce(d)
+
+	if got := d.bgVac.vacuums.Load(); got != 1 {
+		t.Fatalf("vacuums=%d want 1", got)
+	}
+	if got := lastBackgroundVacuumDebtReason(t, &d.bgVac); got != backgroundIndexVacuumDebtReasonFreelist {
+		t.Fatalf("last debt reason=%q want freelist", got)
+	}
+}
+
+func TestBackgroundIndexVacuumCollectionRootDebtTriggersVacuum(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d := openBackgroundVacuumTestDB(t, Options{
+		KeepRecent:                    1,
+		BackgroundIndexVacuumInterval: -1,
+	})
+	seedBackgroundVacuumCollectionRootDebt(t, d)
+
+	rep, err := d.backend.IndexVacuumTriggerReport()
+	if err != nil {
+		t.Fatalf("trigger report: %v", err)
+	}
+	if !rep.CollectionRootSpanRatioValid || rep.CollectionRootPages == 0 || rep.CollectionRootSpanRatioPPM == 0 {
+		t.Fatalf("collection root debt not present in trigger report: %+v", rep)
+	}
+
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	d.bgVac.freelistReclaimablePages = ^uint64(0)
+	d.bgVac.freelistReclaimableRatioPPM = ^uint32(0)
+	d.bgVac.collectionRootPages = 1
+	d.bgVac.collectionRootSpanRatioPPM = 1
+	d.bgVac.runOnce(d)
+
+	if got := d.bgVac.vacuums.Load(); got != 1 {
+		t.Fatalf("vacuums=%d want 1", got)
+	}
+	if got := lastBackgroundVacuumDebtReason(t, &d.bgVac); got != backgroundIndexVacuumDebtReasonCollectionRoots {
+		t.Fatalf("last debt reason=%q want collection_roots", got)
+	}
 }
 
 func installBackgroundVacuumProbeCounter() (map[backenddb.FragmentationProbeEvent]int, func()) {
@@ -156,6 +402,9 @@ func assertNoBackgroundVacuumStructuralWalks(t *testing.T, counts map[backenddb.
 	}
 	if got := counts[backenddb.FragmentationProbeEventTriggerFreelistCounters]; got != 0 {
 		t.Fatalf("cheap trigger freelist counter reads=%d want 0", got)
+	}
+	if got := counts[backenddb.FragmentationProbeEventTriggerCollectionRootWalk]; got != 0 {
+		t.Fatalf("cheap trigger collection-root walks=%d want 0", got)
 	}
 	assertNoBackgroundVacuumFullFragmentationWalks(t, counts)
 }
@@ -220,4 +469,126 @@ func TestBackgroundIndexVacuumRunsAndStops(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+}
+
+func BenchmarkBackgroundIndexVacuumBacklog(b *testing.B) {
+	d := openBackgroundVacuumTestDB(b, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(b, d, 128)
+	d.bgVac.maxBacklogSkips = ^uint32(0)
+	restoreBacklog := setBackgroundIndexVacuumBacklogBytesHookForTest(func(*DB) int64 { return 1024 })
+	defer restoreBacklog()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		d.bgVac.runOnce(d)
+	}
+}
+
+func BenchmarkBackgroundIndexVacuumTrigger(b *testing.B) {
+	d := openBackgroundVacuumTestDB(b, Options{BackgroundIndexVacuumInterval: -1})
+	seedBackgroundVacuumUserPages(b, d, 2048)
+	d.bgVac.spanRatioPPM = ^uint32(0)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		d.bgVac.lastProbeValid = false
+		d.bgVac.runOnce(d)
+	}
+}
+
+func openBackgroundVacuumTestDB(tb testing.TB, opts Options) *DB {
+	tb.Helper()
+	if opts.Dir == "" {
+		opts.Dir = tb.TempDir()
+	}
+	if opts.BackgroundIndexVacuumInterval == 0 {
+		opts.BackgroundIndexVacuumInterval = -1
+	}
+	d, err := Open(opts)
+	if err != nil {
+		tb.Fatalf("open: %v", err)
+	}
+	tb.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+func seedBackgroundVacuumUserPages(tb testing.TB, d *DB, n int) {
+	tb.Helper()
+	for i := 0; i < n; i++ {
+		key := []byte(fmt.Sprintf("bg-seed-%04d", i))
+		if err := d.Set(key, []byte("value")); err != nil {
+			tb.Fatalf("set seed: %v", err)
+		}
+	}
+	if err := d.Checkpoint(); err != nil {
+		tb.Fatalf("checkpoint seed: %v", err)
+	}
+}
+
+func seedBackgroundVacuumFreelistDebt(tb testing.TB, d *DB) {
+	tb.Helper()
+	for i := 0; i < 512; i++ {
+		key := []byte(fmt.Sprintf("free-debt-%04d", i))
+		if err := d.backend.Set(key, []byte("value")); err != nil {
+			tb.Fatalf("backend set freelist fixture: %v", err)
+		}
+	}
+	for i := 0; i < 512; i++ {
+		key := []byte(fmt.Sprintf("free-debt-%04d", i))
+		if err := d.backend.Delete(key); err != nil {
+			tb.Fatalf("backend delete freelist fixture: %v", err)
+		}
+	}
+}
+
+func seedBackgroundVacuumCollectionRootDebt(tb testing.TB, d *DB) {
+	tb.Helper()
+	kvs := make([]string, 0, 4096)
+	for i := 0; i < 2048; i++ {
+		kvs = append(kvs, fmt.Sprintf("doc/%04d", i), fmt.Sprintf("value-%04d", i))
+	}
+	rootID, err := d.backend.PublishOrderedRootIterator(0, mustBackgroundVacuumStringMemtable(tb, kvs...).NewIterator(nil, nil))
+	if err != nil {
+		tb.Fatalf("publish collection root fixture: %v", err)
+	}
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], rootID)
+	_, err = d.backend.PublishSystemRootIterator(mustBackgroundVacuumBytesMemtable(tb, "collections/root/bg/primary", encoded[:]).NewIterator(nil, nil))
+	if err != nil {
+		tb.Fatalf("publish collection descriptor fixture: %v", err)
+	}
+}
+
+func mustBackgroundVacuumStringMemtable(tb testing.TB, kvs ...string) memtable.Table {
+	tb.Helper()
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		tb.Fatalf("new memtable: %v", err)
+	}
+	for i := 0; i+1 < len(kvs); i += 2 {
+		mt.Set([]byte(kvs[i]), []byte(kvs[i+1]))
+	}
+	mt.Freeze()
+	return mt
+}
+
+func mustBackgroundVacuumBytesMemtable(tb testing.TB, key string, value []byte) memtable.Table {
+	tb.Helper()
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		tb.Fatalf("new memtable: %v", err)
+	}
+	mt.Set([]byte(key), value)
+	mt.Freeze()
+	return mt
+}
+
+func lastBackgroundVacuumDebtReason(t *testing.T, w *bgIndexVacuumWorker) string {
+	t.Helper()
+	v := w.lastDebtReason.Load()
+	if v == nil {
+		return ""
+	}
+	reason, _ := v.(string)
+	return reason
 }

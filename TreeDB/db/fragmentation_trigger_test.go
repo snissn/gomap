@@ -61,6 +61,9 @@ func compareTriggerToFullFragmentationReport(t *testing.T, d *DB, label string) 
 	if got := counts[FragmentationProbeEventTriggerFreelistCounters]; got != 1 {
 		t.Fatalf("%s trigger freelist counter reads=%d want 1", label, got)
 	}
+	if got := counts[FragmentationProbeEventTriggerCollectionRootWalk]; got != 1 {
+		t.Fatalf("%s trigger collection-root walks=%d want 1", label, got)
+	}
 	if got := counts[FragmentationProbeEventFullReport]; got != 0 {
 		t.Fatalf("%s full fragmentation reports during trigger=%d want 0", label, got)
 	}
@@ -82,6 +85,7 @@ func compareTriggerToFullFragmentationReport(t *testing.T, d *DB, label string) 
 		t.Fatalf("%s CommitSeq=%d want %d", label, trigger.CommitSeq, state.CommitSeq)
 	}
 
+	assertTriggerFieldMatchesFullReport(t, label, "treedb.pages.total", trigger.TotalPages, full)
 	assertTriggerFieldMatchesFullReport(t, label, "treedb.user.pages", trigger.UserPages, full)
 	if trigger.UserPages > 0 {
 		assertTriggerFieldMatchesFullReport(t, label, "treedb.user.pages.min", trigger.UserMinPageID, full)
@@ -96,14 +100,32 @@ func compareTriggerToFullFragmentationReport(t *testing.T, d *DB, label string) 
 	}
 	counters := idx.allocator.Counters()
 	if trigger.FreelistHead != counters.Head ||
+		trigger.FreelistPages != counters.Pages ||
+		trigger.FreelistFreeIDs != counters.FreeIDs ||
 		trigger.FreelistAllocPagesTotal != counters.AllocPages ||
 		trigger.FreelistAppendAllocPagesTotal != counters.AppendAllocPages ||
 		trigger.FreelistReuseAllocPagesTotal != counters.ReuseAllocPages ||
 		trigger.FreelistFreePagesTotal != counters.FreePages {
-		t.Fatalf("%s freelist counters mismatch: trigger={head:%d alloc:%d append:%d reuse:%d free:%d} counters={head:%d alloc:%d append:%d reuse:%d free:%d}",
+		t.Fatalf("%s freelist counters mismatch: trigger={head:%d pages:%d free_ids:%d alloc:%d append:%d reuse:%d free:%d} counters={head:%d pages:%d free_ids:%d alloc:%d append:%d reuse:%d free:%d}",
 			label,
-			trigger.FreelistHead, trigger.FreelistAllocPagesTotal, trigger.FreelistAppendAllocPagesTotal, trigger.FreelistReuseAllocPagesTotal, trigger.FreelistFreePagesTotal,
-			counters.Head, counters.AllocPages, counters.AppendAllocPages, counters.ReuseAllocPages, counters.FreePages)
+			trigger.FreelistHead, trigger.FreelistPages, trigger.FreelistFreeIDs, trigger.FreelistAllocPagesTotal, trigger.FreelistAppendAllocPagesTotal, trigger.FreelistReuseAllocPagesTotal, trigger.FreelistFreePagesTotal,
+			counters.Head, counters.Pages, counters.FreeIDs, counters.AllocPages, counters.AppendAllocPages, counters.ReuseAllocPages, counters.FreePages)
+	}
+	if trigger.FreelistReclaimableValid {
+		if got, want := trigger.FreelistReclaimablePages, counters.ReclaimablePages(); got != want {
+			t.Fatalf("%s trigger freelist reclaimable pages=%d want allocator counters %d", label, got, want)
+		}
+		if trigger.TotalPages > 0 {
+			wantRatio := (trigger.FreelistReclaimablePages * 1_000_000) / trigger.TotalPages
+			if got := trigger.FreelistReclaimableRatioPPM; got != wantRatio {
+				t.Fatalf("%s trigger freelist reclaimable ratio=%d want %d", label, got, wantRatio)
+			}
+		}
+	}
+	if trigger.CollectionRootSpanRatioValid {
+		assertTriggerFieldMatchesFullReport(t, label, "treedb.collection_roots.pages", trigger.CollectionRootPages, full)
+		assertTriggerFieldMatchesFullReport(t, label, "treedb.collection_roots.pages.span", trigger.CollectionRootSpan, full)
+		assertTriggerFieldMatchesFullReport(t, label, "treedb.collection_roots.pages.span_ratio_ppm", trigger.CollectionRootSpanRatioPPM, full)
 	}
 }
 
