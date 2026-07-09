@@ -2,9 +2,7 @@ package treedb
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,6 +29,10 @@ type bgIndexVacuumWorker struct {
 	lastSpanRatio  atomic.Uint64
 	lastPages      atomic.Uint64
 	lastErr        atomic.Value // string
+
+	lastProbeCommitSeq uint64
+	lastProbeValid     bool
+	retryProbe         bool
 }
 
 // Start launches the background index vacuum loop with the provided interval.
@@ -107,9 +109,21 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	defer w.runMu.Unlock()
 
 	now := time.Now()
+	state := db.backend.State()
+	if state == nil || db.backend.IsClosing() {
+		return
+	}
+
+	if w.lastProbeValid && !w.retryProbe && state.CommitSeq == w.lastProbeCommitSeq {
+		w.runs.Add(1)
+		w.lastRunUnix.Store(now.Unix())
+		w.lastErr.Store("")
+		return
+	}
 
 	// Avoid competing with the flush path. If there's any queued backlog, let the
-	// caching layer catch up first.
+	// caching layer catch up first. This is not a completed trigger probe, so keep
+	// lastProbeCommitSeq unchanged.
 	if db.cached != nil {
 		if db.cached.QueueBacklogBytes() > 0 {
 			w.runs.Add(1)
@@ -119,8 +133,9 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		}
 	}
 
-	rep, err := db.backend.FragmentationReport()
+	rep, err := db.backend.IndexVacuumTriggerReport()
 	if err != nil {
+		w.retryProbe = true
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store(err.Error())
@@ -128,25 +143,11 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		return
 	}
 
-	pagesStr := rep["treedb.user.pages"]
-	if pagesStr == "" {
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		msg := "fragmentation report missing treedb.user.pages"
-		w.lastErr.Store(msg)
-		db.reportError(errors.New(msg))
-		return
-	}
-	pages, err := strconv.ParseUint(pagesStr, 10, 64)
-	if err != nil {
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store(fmt.Sprintf("parse treedb.user.pages: %v", err))
-		db.reportError(fmt.Errorf("parse treedb.user.pages: %w", err))
-		return
-	}
-	w.lastPages.Store(pages)
-	if pages == 0 {
+	w.lastProbeCommitSeq = rep.CommitSeq
+	w.lastProbeValid = true
+	w.lastPages.Store(rep.UserPages)
+	if rep.UserPages == 0 {
+		w.retryProbe = false
 		w.lastSpanRatio.Store(0)
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
@@ -154,26 +155,11 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		return
 	}
 
-	spanStr := rep["treedb.user.pages.span_ratio_ppm"]
-	if spanStr == "" {
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		msg := "fragmentation report missing treedb.user.pages.span_ratio_ppm"
-		w.lastErr.Store(msg)
-		db.reportError(errors.New(msg))
-		return
-	}
-	spanRatio, err := strconv.ParseUint(spanStr, 10, 64)
-	if err != nil {
-		w.runs.Add(1)
-		w.lastRunUnix.Store(now.Unix())
-		w.lastErr.Store(fmt.Sprintf("parse treedb.user.pages.span_ratio_ppm: %v", err))
-		db.reportError(fmt.Errorf("parse treedb.user.pages.span_ratio_ppm: %w", err))
-		return
-	}
+	spanRatio := rep.UserSpanRatioPPM
 	w.lastSpanRatio.Store(spanRatio)
 
 	if spanRatio < uint64(w.spanRatioPPM) {
+		w.retryProbe = false
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store("")
@@ -181,6 +167,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	}
 
 	if err := db.VacuumIndexOnline(context.Background()); err != nil {
+		w.retryProbe = true
 		w.runs.Add(1)
 		w.lastRunUnix.Store(now.Unix())
 		w.lastErr.Store(err.Error())
@@ -188,6 +175,7 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 		return
 	}
 
+	w.retryProbe = false
 	w.vacuums.Add(1)
 	w.runs.Add(1)
 	w.lastRunUnix.Store(now.Unix())
