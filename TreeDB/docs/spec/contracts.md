@@ -24,6 +24,37 @@ Status:
 - The tree is ordered and range-addressable.
 - Collection/document APIs may keep separate non-empty logical ID contracts.
 
+### 1.1 Target external-timestamp MVCC key contract
+
+The opt-in codec in `TreeDB/internal/mvcckey` establishes the physical ordering
+contract for the external-version MVCC work tracked by
+https://github.com/snissn/gomap/issues/3668. It is not a read/write MVCC engine
+and does not change current raw KV behavior.
+
+- Caller-assigned versions are nonzero `uint64` timestamps. Timestamp zero is
+  rejected rather than remapped.
+- Logical keys are arbitrary bytes, including empty and embedded zero bytes.
+- Encoded order is logical key ascending and timestamp descending. Equal-key
+  scans therefore encounter the newest version first.
+- `EntryRevision` remains TreeDB's native current-entry validation token. It is
+  not an external timestamp, historical version, or MVCC visibility boundary.
+- Namespace, logical-prefix, and exact-logical-key/all-version bounds are
+  half-open byte ranges suitable for TreeDB iterators. Bound construction is
+  available in append-to-caller-buffer form.
+- Exact-key bounds reject logical keys whose eventual timestamp-bearing key
+  cannot fit the codec envelope. Logical-prefix bounds are prefix-sized and may
+  therefore be valid even when a same-sized exact key is not encodable.
+- The version-1 namespace is owned only by an MVCC layer that explicitly opts
+  in. Existing raw APIs neither encode keys nor reject that range; a mixed-use
+  owner must keep unrelated raw physical writes out of the reserved range.
+- The codec format and internal Go API are pre-alpha. A format change may
+  require rebuilding experimental DB directories rather than migration.
+
+Atomic `CommitAt`, snapshot reads such as `GetAt`, retained-version iteration,
+discard floors, Dgraph metadata, TTL, subscriptions, and conditional
+transactions are separate contracts owned by descendant issues. None are
+implied by the codec package.
+
 ## 2. Read Contracts
 
 ### 2.1 `Get`
