@@ -28,8 +28,6 @@ type Allocator struct {
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
 	preferAppend bool
-
-	testPageEvent func(allocatorPageEvent, uint64)
 }
 
 type allocatorPageEvent uint8
@@ -40,23 +38,25 @@ const (
 	allocatorPageUpdateChecksum
 )
 
+var testAllocatorPageEvent func(allocatorPageEvent, uint64)
+
 func (a *Allocator) getPageForWrite(pageID uint64) ([]byte, error) {
-	if a.testPageEvent != nil {
-		a.testPageEvent(allocatorPageGetForWrite, pageID)
+	if testAllocatorPageEvent != nil {
+		testAllocatorPageEvent(allocatorPageGetForWrite, pageID)
 	}
 	return a.pager.GetForWrite(pageID)
 }
 
 func (a *Allocator) verifyChecksum(pageID uint64, n *node.Node) bool {
-	if a.testPageEvent != nil {
-		a.testPageEvent(allocatorPageVerifyChecksum, pageID)
+	if testAllocatorPageEvent != nil {
+		testAllocatorPageEvent(allocatorPageVerifyChecksum, pageID)
 	}
 	return n.VerifyChecksum()
 }
 
 func (a *Allocator) updateChecksum(pageID uint64, n *node.Node) {
-	if a.testPageEvent != nil {
-		a.testPageEvent(allocatorPageUpdateChecksum, pageID)
+	if testAllocatorPageEvent != nil {
+		testAllocatorPageEvent(allocatorPageUpdateChecksum, pageID)
 	}
 	n.UpdateChecksum()
 }

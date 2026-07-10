@@ -78,8 +78,8 @@ func TestAllocator_FreeMany_FillsHeadAndChains(t *testing.T) {
 	TestHookFreeManyBeforeChecksum = func() { checksumUpdates++ }
 	t.Cleanup(func() { TestHookFreeManyBeforeChecksum = nil })
 	events := allocatorPageEvents{}
-	a.testPageEvent = events.observe
-	t.Cleanup(func() { a.testPageEvent = nil })
+	testAllocatorPageEvent = events.observe
+	t.Cleanup(func() { testAllocatorPageEvent = nil })
 	if err := a.FreeMany(ids); err != nil {
 		t.Fatalf("FreeMany: %v", err)
 	}
@@ -335,9 +335,9 @@ func TestAllocator_RegionBiasedAllocMany_DrainsAndRecyclesHeadWithOneVerificatio
 	}
 
 	events := allocatorPageEvents{}
-	a.testPageEvent = events.observe
+	testAllocatorPageEvent = events.observe
 	got, err := a.AllocMany(3, freed[len(freed)-1])
-	a.testPageEvent = nil
+	testAllocatorPageEvent = nil
 	if err != nil {
 		t.Fatalf("AllocMany: %v", err)
 	}

@@ -70,9 +70,9 @@ func benchmarkAllocatorFree(b *testing.B, many bool) {
 	if many {
 		a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
 		metrics = newAllocatorBenchmarkPageMetrics()
-		a.testPageEvent = metrics.observe
+		testAllocatorPageEvent = metrics.observe
 		freeAllocatorBenchmarkIDs(b, a, ids, true)
-		a.testPageEvent = nil
+		testAllocatorPageEvent = nil
 		closeAllocatorBenchmarkFixture(b, p, path)
 	}
 	benchmarkAllocatorMetrics(b, allocatorBenchmarkIDs, metrics)
@@ -127,9 +127,9 @@ func benchmarkAllocatorRegion(b *testing.B, count int, many bool) {
 		populateAllocatorBenchmarkFreelist(b, a, ids)
 		a.SetFreelistRegion(allocatorBenchmarkRegion, 1)
 		metrics = newAllocatorBenchmarkPageMetrics()
-		a.testPageEvent = metrics.observe
+		testAllocatorPageEvent = metrics.observe
 		allocAllocatorBenchmarkIDs(b, a, count, true)
-		a.testPageEvent = nil
+		testAllocatorPageEvent = nil
 		closeAllocatorBenchmarkFixture(b, p, path)
 	}
 	benchmarkAllocatorMetrics(b, count, metrics)
