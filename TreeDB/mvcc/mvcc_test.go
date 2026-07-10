@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -125,6 +127,38 @@ func TestCommitAtValidationPrecedesStorageWrite(t *testing.T) {
 	if got := spy.created.Load(); got != 0 {
 		t.Fatalf("batches created after validation failures = %d, want 0", got)
 	}
+}
+
+func TestCommitAtOversizedKeyRejectsBeforeDuplicateIdentityAllocation(t *testing.T) {
+	spy := &validationSpyDB{}
+	store := newStore(spy)
+	oversized := make([]byte, 16<<20)
+	mutations := []Mutation{
+		{Key: []byte("valid-before-oversized"), Value: []byte("must-not-publish")},
+		{Key: oversized, Value: []byte("invalid")},
+		{Key: []byte("valid-after-oversized"), Value: []byte("must-not-publish")},
+	}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	err := store.CommitAt(1, mutations, CommitRelaxed)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrInvalidKey) || !strings.Contains(err.Error(), "key index 1") {
+		t.Fatalf("oversized multi-mutation error = %v, want ErrInvalidKey at index 1", err)
+	}
+	if got := spy.created.Load(); got != 0 {
+		t.Fatalf("batches created after oversized-key rejection = %d, want 0", got)
+	}
+	// The 16 MiB caller-owned key is intentionally much larger than the codec
+	// envelope. Rejecting it must not copy it into duplicate-detection state.
+	// TotalAlloc remains useful after the temporary state is freed; a retained
+	// []byte-to-string conversion before validation would add at least 16 MiB.
+	allocated := after.TotalAlloc - before.TotalAlloc
+	if allocated > 2<<20 {
+		t.Fatalf("oversized-key validation allocated %d bytes, want <= %d", allocated, 2<<20)
+	}
+	t.Logf("oversized-key validation allocated %d bytes without creating a batch", allocated)
 }
 
 func TestCommitAtInjectedFailureIsAllOrNone(t *testing.T) {
@@ -429,6 +463,23 @@ type batchSpyDB struct {
 	created atomic.Int64
 }
 
+type validationSpyDB struct {
+	created atomic.Int64
+}
+
+func (*validationSpyDB) Iterator(_, _ []byte) (treedb.Iterator, error) {
+	panic("Iterator must not be called during CommitAt validation")
+}
+
+func (db *validationSpyDB) NewBatchWithSize(_ int) treedb.Batch {
+	db.created.Add(1)
+	panic("NewBatchWithSize must not be called during CommitAt validation")
+}
+
+func (*validationSpyDB) DurabilityMode() string {
+	return string(treedb.DurabilityWALOffRelaxed)
+}
+
 func (db *batchSpyDB) NewBatchWithSize(size int) treedb.Batch {
 	db.created.Add(1)
 	return db.DB.NewBatchWithSize(size)
@@ -505,3 +556,4 @@ func (b *stageFailureBatch) Set(key, value []byte) error {
 // contract instead of testing a narrower fake API.
 var _ treedb.Batch = (*writeFailureBatch)(nil)
 var _ treedb.Batch = (*stageFailureBatch)(nil)
+var _ treeDB = (*validationSpyDB)(nil)

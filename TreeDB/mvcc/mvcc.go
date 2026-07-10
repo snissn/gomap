@@ -131,7 +131,14 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 	}
 	for i := range mutations {
 		mutation := &mutations[i]
+		physical, err := mvcckey.Encode(mutation.Key, timestamp)
+		if err != nil {
+			return fmt.Errorf("%w at key index %d: %w", ErrInvalidKey, i, err)
+		}
 		if seen != nil {
+			// Encode validates the bounded codec envelope before the caller key is
+			// copied into duplicate-detection state. Reuse physical below so this
+			// validation does not introduce a second encoding pass.
 			identity := string(mutation.Key)
 			if _, exists := seen[identity]; exists {
 				return fmt.Errorf("%w: key index %d", ErrDuplicateKey, i)
@@ -139,10 +146,6 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 			seen[identity] = struct{}{}
 		}
 
-		physical, err := mvcckey.Encode(mutation.Key, timestamp)
-		if err != nil {
-			return fmt.Errorf("%w at key index %d: %w", ErrInvalidKey, i, err)
-		}
 		staged[i].physical = physical
 		if mutation.Delete {
 			staged[i].record = []byte{recordTombstoneV1}
