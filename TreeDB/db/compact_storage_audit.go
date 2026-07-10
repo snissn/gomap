@@ -440,6 +440,33 @@ func compactStorageAuditKeyMissReason(previous, current compactStorageAuditKey) 
 }
 
 func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAuditInput) (compactStorageAuditRaw, error) {
+	if in == nil {
+		return compactStorageAuditRaw{}, fmt.Errorf("compact storage audit: missing input")
+	}
+	result, err := db.maintenanceReachabilityScan(ctx, in.snap, maintenanceReachabilityScanOptions{
+		Collectors: maintenanceReachabilityValueLogRefCounts |
+			maintenanceReachabilityValueLogLiveBytes |
+			maintenanceReachabilityLeafGenerationTotals,
+		ProtectedRootIDs:        in.protectedRootIDs,
+		ProtectedSystemRootIDs:  in.protectedSystemRootIDs,
+		DisableLeafSubtreeCache: true,
+	})
+	raw := compactStorageAuditRaw{
+		valueLogRefCounts:          result.valueLogRefCounts,
+		valueLogReferencedSegments: result.valueLogReferencedSegments,
+		valueLogLiveBytesBySegment: result.valueLogLiveBytesBySegment,
+		leafGenerationLive:         result.leafGenerationLive,
+		counters:                   result.counters,
+	}
+	if err == nil {
+		runCompactStorageSharedAuditScanHook(raw.counters)
+	}
+	return raw, err
+}
+
+// scanCompactStorageAuditLegacy remains during staged consumer migration so
+// equivalence tests can compare the extracted scanner with the PL-03 walk.
+func (db *DB) scanCompactStorageAuditLegacy(ctx context.Context, in *compactStorageAuditInput) (compactStorageAuditRaw, error) {
 	raw := compactStorageAuditRaw{
 		valueLogRefCounts:          make(map[uint32]uint64),
 		valueLogReferencedSegments: make(map[uint32]struct{}),
