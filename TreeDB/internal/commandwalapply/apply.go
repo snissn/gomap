@@ -392,7 +392,7 @@ func checkContiguousAppendReady(db *backenddb.DB, applied uint64) error {
 }
 
 func appliedCommandLSN(db *backenddb.DB) uint64 {
-	if state := db.State(); state != nil {
+	if state, ok := db.StateToken(); ok {
 		return state.AppliedCommandLSN
 	}
 	return 0

@@ -37,6 +37,32 @@ func TestRunCloseHooksAllowsNestedRunCloseHooks(t *testing.T) {
 	}
 }
 
+func TestCloseHookMayCallClose(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	var calls atomic.Int32
+	d.RegisterCloseHook(func() error {
+		calls.Add(1)
+		return d.Close()
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close hook calling Close deadlocked")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("close hook calls=%d, want 1", got)
+	}
+}
+
 func TestCloseHookMayRunOnlineVacuum(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")

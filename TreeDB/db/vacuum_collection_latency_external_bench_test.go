@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,28 +24,35 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			database := openPL06PublicChurnBenchmarkDB(b, tc.valueSize)
 			defer func() { _ = database.Close() }()
 
-			var recording atomic.Bool
-			stop := make(chan struct{})
-			warmed := make(chan struct{})
-			writerDone := make(chan pl06PublicChurnResult, 1)
-			go runPL06PublicChurnWriter(database, &recording, stop, warmed, writerDone)
-			<-warmed
-
 			b.ReportAllocs()
 			b.ResetTimer()
-			recording.Store(true)
-			var vacuumErrors uint64
+			foreground := pl06PublicChurnResult{latencies: make([]time.Duration, 0, b.N*pl06PublicChurnOperationsPerVacuum)}
+			var vacuumErrors, exposureMisses uint64
 			for i := 0; i < b.N; i++ {
-				if err := database.VacuumIndexOnline(context.Background()); err != nil {
+				round, vacuumErr, exposureMiss := runPL06PublicFixedChurnRound(database, i)
+				foreground.latencies = append(foreground.latencies, round.latencies...)
+				foreground.points += round.points
+				foreground.ranges += round.ranges
+				if round.err != nil && foreground.err == nil {
+					foreground.err = round.err
+				}
+				if vacuumErr != nil {
 					vacuumErrors++
 				}
+				if exposureMiss {
+					exposureMisses++
+				}
 			}
-			recording.Store(false)
-			close(stop)
-			foreground := <-writerDone
 			b.StopTimer()
 			if foreground.err != nil {
 				b.Fatalf("foreground churn: %v", foreground.err)
+			}
+			if exposureMisses != 0 {
+				b.Fatalf("foreground exposure misses=%d want 0", exposureMisses)
+			}
+			wantSamples := b.N * pl06PublicChurnOperationsPerVacuum
+			if len(foreground.latencies) != wantSamples || foreground.points != uint64(wantSamples/2) || foreground.ranges != uint64(wantSamples/2) {
+				b.Fatalf("foreground fixed work samples=%d points=%d ranges=%d want %d/%d/%d", len(foreground.latencies), foreground.points, foreground.ranges, wantSamples, wantSamples/2, wantSamples/2)
 			}
 
 			b.ReportMetric(float64(pl06PublicChurnPercentile(foreground.latencies, 95).Nanoseconds()), "foreground-p95-ns")
@@ -55,6 +60,7 @@ func BenchmarkPL06ExternalVacuumCollectionForegroundChurn(b *testing.B) {
 			b.ReportMetric(float64(len(foreground.latencies))/float64(b.N), "foreground-samples/op")
 			b.ReportMetric(float64(foreground.points)/float64(b.N), "foreground-points/op")
 			b.ReportMetric(float64(foreground.ranges)/float64(b.N), "foreground-ranges/op")
+			b.ReportMetric(float64(exposureMisses)/float64(b.N), "foreground-exposure-misses/op")
 			b.ReportMetric(float64(vacuumErrors)/float64(b.N), "vacuum-errors/op")
 		})
 	}
@@ -108,32 +114,75 @@ type pl06PublicChurnResult struct {
 	err       error
 }
 
-func runPL06PublicChurnWriter(database *dbpkg.DB, recording *atomic.Bool, stop <-chan struct{}, warmed chan<- struct{}, done chan<- pl06PublicChurnResult) {
-	const warmOperations = 256
-	result := pl06PublicChurnResult{latencies: make([]time.Duration, 0, warmOperations*4)}
-	var warmOnce sync.Once
-	defer func() {
-		warmOnce.Do(func() { close(warmed) })
-		done <- result
+const (
+	pl06PublicChurnWorkers             = 4
+	pl06PublicChurnOperationsPerWorker = 8
+	pl06PublicChurnOperationsPerVacuum = pl06PublicChurnWorkers * pl06PublicChurnOperationsPerWorker
+	pl06PublicChurnVacuumLead          = time.Millisecond
+)
+
+type pl06PublicChurnWorkerResult struct {
+	latencies [pl06PublicChurnOperationsPerWorker]time.Duration
+	points    uint64
+	ranges    uint64
+	err       error
+}
+
+func runPL06PublicFixedChurnRound(database *dbpkg.DB, round int) (pl06PublicChurnResult, error, bool) {
+	vacuumDone := make(chan error, 1)
+	go func() {
+		vacuumDone <- database.VacuumIndexOnline(context.Background())
 	}()
-	for operation := 0; ; operation++ {
-		select {
-		case <-stop:
-			return
-		default:
+
+	timer := time.NewTimer(pl06PublicChurnVacuumLead)
+	exposureMiss := false
+	var vacuumErr error
+	select {
+	case vacuumErr = <-vacuumDone:
+		exposureMiss = true
+		if !timer.Stop() {
+			<-timer.C
 		}
-		recordBefore := recording.Load()
+	case <-timer.C:
+	}
+
+	start := make(chan struct{})
+	workerDone := make(chan pl06PublicChurnWorkerResult, pl06PublicChurnWorkers)
+	for worker := 0; worker < pl06PublicChurnWorkers; worker++ {
+		go runPL06PublicFixedChurnWorker(database, round, worker, start, workerDone)
+	}
+	close(start)
+
+	result := pl06PublicChurnResult{latencies: make([]time.Duration, 0, pl06PublicChurnOperationsPerVacuum)}
+	for worker := 0; worker < pl06PublicChurnWorkers; worker++ {
+		current := <-workerDone
+		result.latencies = append(result.latencies, current.latencies[:]...)
+		result.points += current.points
+		result.ranges += current.ranges
+		if current.err != nil && result.err == nil {
+			result.err = current.err
+		}
+	}
+	if !exposureMiss {
+		vacuumErr = <-vacuumDone
+	}
+	return result, vacuumErr, exposureMiss
+}
+
+func runPL06PublicFixedChurnWorker(database *dbpkg.DB, round, worker int, start <-chan struct{}, done chan<- pl06PublicChurnWorkerResult) {
+	<-start
+	var result pl06PublicChurnWorkerResult
+	for operation := 0; operation < pl06PublicChurnOperationsPerWorker; operation++ {
+		sequence := round*pl06PublicChurnOperationsPerVacuum + worker*pl06PublicChurnOperationsPerWorker + operation
 		started := time.Now()
-		if operation%2 == 0 {
-			key := []byte(fmt.Sprintf("foreground/point/%06d", operation%256))
-			value := []byte(fmt.Sprintf("value/%06d", operation))
+		if (worker+operation)%2 == 0 {
+			key := []byte(fmt.Sprintf("foreground/point/%06d", sequence%256))
+			value := []byte(fmt.Sprintf("value/%06d", sequence))
 			result.err = database.Set(key, value)
-			if recordBefore || recording.Load() {
-				result.points++
-			}
+			result.points++
 		} else {
 			batch := database.NewBatch()
-			rangeID := operation % 64
+			rangeID := sequence % 64
 			startKey := []byte(fmt.Sprintf("foreground/range/%03d/a", rangeID))
 			endKey := []byte(fmt.Sprintf("foreground/range/%03d/z", rangeID))
 			result.err = batch.DeleteRange(startKey, endKey)
@@ -143,20 +192,14 @@ func runPL06PublicChurnWriter(database *dbpkg.DB, recording *atomic.Bool, stop <
 			if closeErr := batch.Close(); result.err == nil {
 				result.err = closeErr
 			}
-			if recordBefore || recording.Load() {
-				result.ranges++
-			}
+			result.ranges++
 		}
-		if recordBefore || recording.Load() {
-			result.latencies = append(result.latencies, time.Since(started))
-		}
-		if operation+1 >= warmOperations {
-			warmOnce.Do(func() { close(warmed) })
-		}
+		result.latencies[operation] = time.Since(started)
 		if result.err != nil {
-			return
+			break
 		}
 	}
+	done <- result
 }
 
 func pl06PublicChurnPercentile(latencies []time.Duration, percentile int) time.Duration {

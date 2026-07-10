@@ -83,8 +83,8 @@ func (db *DB) PublishCommandWALAppliedLSN(appliedLSN uint64, covered []CommandWA
 	}
 	unlockCommandWALPublish := db.lockCommandWALRawPublish()
 	defer unlockCommandWALPublish()
-	state := db.State()
-	if state == nil {
+	state, ok := db.StateToken()
+	if !ok {
 		return ErrClosed
 	}
 	return db.publishCommandWALRoots(state.RootPageID, state.SystemRootPageID, appliedLSN, covered, sync)

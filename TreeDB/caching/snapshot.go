@@ -195,7 +195,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 	if backendSnap := db.AcquireBackendSnapshotFastPath(); backendSnap != nil {
 		var backendRootID uint64
-		if state := backendSnap.State(); state != nil {
+		if state, ok := backendSnap.StateToken(); ok {
 			backendRootID = state.RootPageID
 		}
 		snap := getSnapshot()
@@ -287,7 +287,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 
 	var backendRootID uint64
-	if state := backendSnap.State(); state != nil {
+	if state, ok := backendSnap.StateToken(); ok {
 		backendRootID = state.RootPageID
 	}
 	snap := getSnapshot()
@@ -319,6 +319,13 @@ func (s *Snapshot) State() *backenddb.DBState {
 		return nil
 	}
 	return s.backend.State()
+}
+
+func (s *Snapshot) StateToken() (backenddb.StateToken, bool) {
+	if s == nil || s.backend == nil {
+		return backenddb.StateToken{}, false
+	}
+	return s.backend.StateToken()
 }
 
 func (s *Snapshot) Close() error {

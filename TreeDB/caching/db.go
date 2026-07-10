@@ -7947,9 +7947,18 @@ type backendStateReader interface {
 	State() *backenddb.DBState
 }
 
+type backendStateTokenReader interface {
+	StateToken() (backenddb.StateToken, bool)
+}
+
 func backendMaxEntryRevision(backend BackendDB) page.EntryRevision {
 	if backend == nil {
 		return page.LegacyEntryRevision
+	}
+	if reader, ok := backend.(backendStateTokenReader); ok {
+		if state, available := reader.StateToken(); available {
+			return state.MaxEntryRevision
+		}
 	}
 	if reader, ok := backend.(backendStateReader); ok {
 		if state := reader.State(); state != nil {

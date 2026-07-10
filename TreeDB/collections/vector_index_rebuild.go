@@ -79,8 +79,8 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntent(name string, replay 
 		return VectorIndexStatus{}, fmt.Errorf("collections: column_graph rebuild for %q requires JSON documents, got %q", name, baseMeta.Options.DocumentFormat)
 	}
 
-	state := snap.State()
-	if state == nil {
+	state, ok := snap.StateToken()
+	if !ok {
 		_ = snap.Close()
 		return VectorIndexStatus{}, backenddb.ErrClosed
 	}

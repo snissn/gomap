@@ -60,6 +60,17 @@ type DBState struct {
 	LeafGenerationStateVersion uint64
 }
 
+// StateToken is an allocation-free, immutable scalar view of one coherently
+// published DB state. It intentionally excludes pointer-bearing state.
+type StateToken struct {
+	CommitSeq                  uint64
+	RootPageID                 uint64
+	SystemRootPageID           uint64
+	AppliedCommandLSN          uint64
+	MaxEntryRevision           page.EntryRevision
+	LeafGenerationStateVersion uint64
+}
+
 // snapshotView is the coherent publication unit for snapshot acquisition.
 // AcquireSnapshot reads this single pointer so index, state, value-log manager,
 // and publication epoch always come from the same publish event.
@@ -197,7 +208,10 @@ type DB struct {
 	// while writes are still available, so registrations after that point would
 	// otherwise be silently lost.
 	closeHooksClosed bool
-	closeHooksWG     sync.WaitGroup
+	// closeHooksRunning is protected by closeHooksMu. A reentrant Close from a
+	// user callback is folded into the active outer close operation.
+	closeHooksRunning bool
+	closeHooksWG      sync.WaitGroup
 
 	internalTeardownHooksMu     sync.Mutex
 	internalTeardownHooks       []func() error
@@ -1343,6 +1357,14 @@ func (s *Snapshot) State() *DBState {
 	return cloneDBState(s.state)
 }
 
+// StateToken returns the immutable scalar state pinned by the snapshot.
+func (s *Snapshot) StateToken() (StateToken, bool) {
+	if s == nil {
+		return StateToken{}, false
+	}
+	return stateTokenFromState(s.state)
+}
+
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
 	if db.closing.Load() {
@@ -2175,9 +2197,15 @@ func (db *DB) runCloseHooks() (retErr error) {
 	hooks := append([]func() error(nil), db.closeHooks...)
 	clear(db.closeHooks)
 	db.closeHooks = nil
+	db.closeHooksRunning = true
 	db.closeHooksWG.Add(1)
 	db.closeHooksMu.Unlock()
-	defer db.closeHooksWG.Done()
+	defer func() {
+		db.closeHooksMu.Lock()
+		db.closeHooksRunning = false
+		db.closeHooksMu.Unlock()
+		db.closeHooksWG.Done()
+	}()
 
 	var errs []error
 	for _, hook := range hooksBefore {
@@ -2250,6 +2278,18 @@ func (db *DB) runInternalTeardownHooksMaintenanceLocked() error {
 }
 
 func (db *DB) Close() error {
+	if db == nil {
+		return nil
+	}
+	db.closeHooksMu.Lock()
+	closeHooksRunning := db.closeHooksRunning
+	db.closeHooksMu.Unlock()
+	if closeHooksRunning {
+		// A user hook cannot synchronously wait for the hook drain that is
+		// invoking it. The active outer Close remains responsible for teardown.
+		return nil
+	}
+
 	var errs []error
 	if err := db.RunCloseHooks(); err != nil {
 		errs = append(errs, err)
@@ -3229,6 +3269,32 @@ func (db *DB) State() *DBState {
 		return nil
 	}
 	return cloneDBState(db.state.Load())
+}
+
+// StateToken returns an immutable scalar state from one coherent publication.
+func (db *DB) StateToken() (StateToken, bool) {
+	if db == nil {
+		return StateToken{}, false
+	}
+	view := db.snapshotViewRO.Load()
+	if view == nil {
+		return StateToken{}, false
+	}
+	return stateTokenFromState(view.state)
+}
+
+func stateTokenFromState(state *DBState) (StateToken, bool) {
+	if state == nil {
+		return StateToken{}, false
+	}
+	return StateToken{
+		CommitSeq:                  state.CommitSeq,
+		RootPageID:                 state.RootPageID,
+		SystemRootPageID:           state.SystemRootPageID,
+		AppliedCommandLSN:          state.AppliedCommandLSN,
+		MaxEntryRevision:           state.MaxEntryRevision,
+		LeafGenerationStateVersion: state.LeafGenerationStateVersion,
+	}, true
 }
 
 func cloneDBState(state *DBState) *DBState {

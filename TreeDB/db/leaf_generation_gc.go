@@ -179,7 +179,7 @@ func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
 		return false, nil
 	}
 	commitSeq := uint64(1)
-	if state := db.State(); state != nil && state.CommitSeq != 0 {
+	if state, ok := db.StateToken(); ok && state.CommitSeq != 0 {
 		commitSeq = state.CommitSeq
 	}
 	if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {

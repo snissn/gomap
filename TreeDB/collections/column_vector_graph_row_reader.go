@@ -441,8 +441,8 @@ func (c *Collection) columnVectorGraphPhysicalRowReaderSnapshotViewAtSnapshot(na
 	graphCfg.ActiveManifest = cfg.ActiveManifest
 	graphCfg.RecoveryAuthoritativeManifest = cfg.RecoveryAuthoritativeManifest
 	graphCfg.RecoveryAuthoritativeAppliedCommandLSN = cfg.RecoveryAuthoritativeAppliedCommandLSN
-	state := snap.State()
-	if state == nil {
+	state, ok := snap.StateToken()
+	if !ok {
 		return VectorIndexDefinition{}, columnVectorGraphManifestSnapshot{}, columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
 	assetRefs := make([]columnManifestAssetRefForScan, 0, 1)

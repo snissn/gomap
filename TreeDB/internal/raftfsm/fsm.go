@@ -501,7 +501,11 @@ func localAppliedCommandLSN(db *backenddb.DB) (uint64, error) {
 	if db == nil {
 		return 0, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "nil FSM DB")
 	}
-	return db.State().AppliedCommandLSN, nil
+	state, ok := db.StateToken()
+	if !ok {
+		return 0, codedError(raftentry.ErrorUnsafeDurabilityModeV1, "FSM DB state unavailable")
+	}
+	return state.AppliedCommandLSN, nil
 }
 
 func validateApplyProgressCoverage(db *backenddb.DB, record raftapply.ApplyProgressRecordV1) error {

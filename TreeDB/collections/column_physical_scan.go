@@ -428,8 +428,8 @@ func (c *Collection) prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars
 	if rootID == 0 {
 		return columnPhysicalScanSnapshotView{}, fmt.Errorf("collections: physical column scan missing manifest root %q", rootName)
 	}
-	snapshotState := snap.State()
-	if snapshotState == nil {
+	snapshotState, ok := snap.StateToken()
+	if !ok {
 		return columnPhysicalScanSnapshotView{}, backenddb.ErrClosed
 	}
 

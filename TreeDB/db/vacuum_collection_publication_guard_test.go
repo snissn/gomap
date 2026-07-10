@@ -282,6 +282,25 @@ func TestPublicationSourceGuardAllowsCopiedStateMutation(t *testing.T) {
 	}
 }
 
+func TestPublicationSourceGuardAllowsScalarStateToken(t *testing.T) {
+	source := loadPublicationGuardFixture(t, `type StateToken struct {
+	RootPageID uint64
+	SystemRootPageID uint64
+}
+func (db *DB) StateToken() (StateToken, bool) {
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.state == nil {
+		return StateToken{}, false
+	}
+	state := view.state
+	return StateToken{RootPageID: state.RootPageID, SystemRootPageID: state.SystemRootPageID}, true
+}`)
+	analysis := analyzePublicationGuard(t, source)
+	if len(analysis.stateWrites) != 0 || len(analysis.mutations) != 0 || len(analysis.escapes) != 0 {
+		t.Fatalf("typed guard rejected scalar state token: writes=%+v mutations=%+v escapes=%+v", analysis.stateWrites, analysis.mutations, analysis.escapes)
+	}
+}
+
 func TestPublicationSourceGuardRejectsTypedBypassFixtures(t *testing.T) {
 	fixtures := map[string]struct {
 		body      string
