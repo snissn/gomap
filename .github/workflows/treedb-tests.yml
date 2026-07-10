@@ -5,8 +5,103 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  mvcc-raw-path-gate:
+    name: mvcc raw-path gate (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Resolve open PR and relevant paths
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPOSITORY}/commits/${HEAD_SHA}/pulls" > "$RUNNER_TEMP/pulls.json"
+          pr_row=$(jq -r --arg head "$HEAD_SHA" \
+            '.[] | select(.state == "open" and .head.sha == $head) | [.number, .base.sha, .head.sha] | @tsv' \
+            "$RUNNER_TEMP/pulls.json" | head -1)
+          if [[ -z "$pr_row" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No open PR has exact head ${HEAD_SHA}; skipping MVCC raw-path gate."
+            exit 0
+          fi
+          IFS=$'\t' read -r pr_number base_sha head_sha <<< "$pr_row"
+          gh api --paginate \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
+            --jq '.[].filename' > "$RUNNER_TEMP/pr-files.txt"
+          cat "$RUNNER_TEMP/pr-files.txt"
+          if grep -Eq '^((TreeDB/(mvcc|internal/mvcckey|db)/)|scripts/mvcc_raw_path_gate\.sh$|\.github/scripts/check_mvcc_raw_path_gate\.py$|\.github/workflows/treedb-tests\.yml$)' \
+            "$RUNNER_TEMP/pr-files.txt"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No MVCC/raw-gate relevant path changed; skipping."
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact PR head
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.scope.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Gate self-checks
+        if: steps.scope.outputs.run == 'true'
+        run: |
+          bash -n scripts/mvcc_raw_path_gate.sh
+          python3 .github/scripts/check_mvcc_raw_path_gate.py --self-test
+
+      - name: Compare exact base and head
+        if: steps.scope.outputs.run == 'true'
+        env:
+          BASELINE_HASH: ${{ steps.scope.outputs.base_sha }}
+          CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
+          RUNS: "7"
+          BENCHTIME: 2s
+          CPUSET: "0"
+          MAX_REGRESSION_PERCENT: "5"
+          MAX_BYTES_REGRESSION_PERCENT: "1"
+          MAX_BYTES_REGRESSION_ABSOLUTE: "64"
+          SCRIPT_GOWORK: "off"
+          OUT_DIR: ${{ runner.temp }}/mvcc-raw-path-gate
+        run: ./scripts/mvcc_raw_path_gate.sh
+
+      - name: Add benchmark summary
+        if: always() && steps.scope.outputs.run == 'true'
+        run: |
+          if [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" ]]; then
+            cat "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "MVCC raw-path gate did not produce a summary." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark evidence
+        if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mvcc-raw-path-gate-${{ steps.scope.outputs.head_sha }}
+          path: ${{ runner.temp }}/mvcc-raw-path-gate
+          if-no-files-found: error
+
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}

@@ -169,7 +169,23 @@ If command LSN `N` is ready but a lower LSN is neither already applied nor part
 of the same publish boundary, recovery must stop or fail closed rather than
 publishing `N` out of order.
 
-### 4.4 Cleanup
+### 4.4 External-version MVCC batches
+
+`TreeDB/mvcc.CommitAt` uses the existing raw batch recovery path; it does not
+add an independent timestamp log or recovery sidecar. Every physical key in a
+logical commit carries the same caller timestamp, and every physical value
+carries either a present-value or tombstone envelope. Recovery therefore
+replays or skips the underlying raw batch as one unit under the same command-WAL
+frame or legacy batch fence rules described above.
+
+A durable-mode successful `CommitDurable` is process-crash recoverable without
+`Close` or `Checkpoint`. A relaxed commit has no such per-call promise; a later
+successful `Checkpoint`/safe `Close` establishes the mode's documented reopen
+boundary. Truncated WAL tails may discard an incomplete final batch but must not
+publish a prefix. Malformed MVCC key/value records are not guessed or repaired:
+`GetAt` reports them explicitly if they occupy the requested visible position.
+
+### 4.5 Cleanup
 
 After successful replay:
 

@@ -197,7 +197,30 @@ must remain outside that final serialized boundary.
 
 - `SetSync`, `DeleteSync`, `Batch.WriteSync`: in durable mode, fsync durability boundary; in relaxed modes, relaxed boundary only.
 
-### 5.3 Collection API Durability
+### 5.3 External-version MVCC commits
+
+The opt-in `TreeDB/mvcc.Store.CommitAt` stages every encoded put/tombstone for a
+caller timestamp into one raw TreeDB batch. Validation and duplicate detection
+finish before batch creation. A staging error closes the unwritten batch; a
+commit error may be ambiguous as to whether the whole batch published, but
+partial visibility is forbidden by the underlying batch boundary.
+
+- `CommitRelaxed` calls `Batch.Write`. It is an atomic visibility boundary, not
+  an fsync promise. Survival follows the configured relaxed mode and later
+  checkpoint/close boundaries.
+- `CommitDurable` fails with `ErrDurabilityUnavailable` unless the handle's
+  effective mode is `DurabilityDurable`, then calls `Batch.WriteSync`. A nil
+  return covers the configured WAL/value payload fsync recovery boundary; it
+  does not force an immediate backend-root checkpoint.
+- After timestamp/mode and non-nil Store validation, empty mutation lists are
+  no-ops: they do not access storage, probe the handle's open/durability state,
+  or manufacture a sync boundary.
+
+External timestamps are key bytes in the reserved MVCC subspace. They neither
+select TreeDB's internal commit sequence nor invoke conditional transactions;
+the caller owns conflict detection and timestamp assignment.
+
+### 5.4 Collection API Durability
 
 Collection mutators do not have separate `*Sync` Go methods. Their baseline
 acknowledgement is mode-dependent. Current shipped collection write-domain

@@ -50,10 +50,37 @@ and does not change current raw KV behavior.
 - The codec format and internal Go API are pre-alpha. A format change may
   require rebuilding experimental DB directories rather than migration.
 
-Atomic `CommitAt`, snapshot reads such as `GetAt`, retained-version iteration,
-discard floors, Dgraph metadata, TTL, subscriptions, and conditional
-transactions are separate contracts owned by descendant issues. None are
-implied by the codec package.
+The opt-in `TreeDB/mvcc` package owns the first read/write use of this codec:
+
+- `CommitAt(timestamp, mutations, mode)` rejects timestamp zero, invalid commit
+  modes, oversized logical keys, and duplicate logical keys before creating a
+  TreeDB batch. Nil and empty logical keys have the same duplicate identity.
+- After timestamp/mode and non-nil Store validation, an empty mutation list is a
+  no-op that does not access TreeDB or probe its durability/open state.
+- Duplicate logical keys within one batch are rejected; they are not resolved
+  by order-dependent last-write-wins behavior. Separate successful commits to
+  the same logical key and timestamp address one physical version, so the later
+  commit replaces the earlier version.
+- All puts and tombstones in one call are stored through one TreeDB atomic
+  batch. A storage error may be commit-ambiguous, but the batch is wholly
+  visible or wholly absent, never partially visible.
+- `CommitRelaxed` uses `Batch.Write` and promises atomic visibility without an
+  fsync boundary. `CommitDurable` is accepted only when TreeDB is configured in
+  `DurabilityDurable` mode and uses `Batch.WriteSync`.
+- `GetAt(key, readTimestamp)` creates a physical lower bound at
+  `(key, readTimestamp)` and seeks directly into the exact-key range. It returns
+  the newest retained version whose timestamp is at most the read timestamp;
+  it does not materialize the key's history.
+- Read results distinguish absent, present, and tombstoned states. Malformed
+  physical keys/value envelopes and underlying iterator/storage errors are
+  returned explicitly. Storage failures wrap `ErrStorage` while retaining the
+  underlying error for `errors.Is`/`errors.As`. Present values are caller-owned
+  copies.
+
+Retained-version iteration, discard floors, Dgraph metadata, TTL,
+subscriptions, and conditional transactions remain separate contracts owned by
+descendant issues. `TreeDB/mvcc` does not reinterpret `EntryRevision` and does
+not perform conflict detection.
 
 ## 2. Read Contracts
 

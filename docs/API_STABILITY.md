@@ -33,6 +33,9 @@ changes until the project reaches a stable post-pre-alpha phase.
 
 - Anything in an `internal/` directory (Go’s internal visibility rules apply).
 - Most packages under `TreeDB/*` and `HashDB/*` other than the root package are implementation details.
+- `TreeDB/mvcc` is an explicitly opt-in, pre-alpha downstream integration
+  surface. It is importable for pinned experiments, but its Go API and reserved
+  physical-key/value format are not yet stable compatibility promises.
 
 ### Tooling / Benchmarks (not stable)
 
