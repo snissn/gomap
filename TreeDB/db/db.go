@@ -2220,6 +2220,21 @@ func (db *DB) RunCloseHooks() error {
 	}
 	hookErr := db.runCloseHooks()
 	db.closeHooksMu.Lock()
+	closeHooksRunning := db.closeHooksRunning
+	closeHooksOwner := db.closeHooksOwner
+	closeHooksWaitHook := db.closeHooksWaitHook
+	db.closeHooksMu.Unlock()
+	if closeHooksRunning {
+		if caller := currentGoroutineID(); caller != 0 && caller == closeHooksOwner {
+			return hookErr
+		}
+		if closeHooksWaitHook != nil {
+			closeHooksWaitHook()
+		}
+		db.closeHooksWG.Wait()
+	}
+
+	db.closeHooksMu.Lock()
 	closeRequested := db.closeHooksCloseRequested
 	db.closeHooksCloseRequested = false
 	db.closeHooksMu.Unlock()

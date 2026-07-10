@@ -113,6 +113,71 @@ func TestStandaloneRunCloseHooksCompletesReentrantClose(t *testing.T) {
 	}
 }
 
+func TestConcurrentRunCloseHooksWaitsForPendingCloseDrain(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	closeRequested := make(chan struct{})
+	releaseHook := make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			close(releaseHook)
+			released = true
+		}
+	}
+	defer release()
+	d.RegisterCloseHook(func() error {
+		if err := d.Close(); err != nil {
+			return err
+		}
+		close(closeRequested)
+		<-releaseHook
+		return nil
+	})
+	d.RegisterCloseHook(func() error {
+		return d.Set([]byte("later-hook"), []byte("still-open"))
+	})
+
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- d.RunCloseHooks() }()
+	<-closeRequested
+
+	waiting := make(chan struct{})
+	d.closeHooksMu.Lock()
+	d.closeHooksWaitHook = func() { close(waiting) }
+	d.closeHooksMu.Unlock()
+	otherDone := make(chan error, 1)
+	go func() { otherDone <- d.RunCloseHooks() }()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent RunCloseHooks did not wait for the active drain")
+	}
+	if d.IsClosing() {
+		t.Fatal("concurrent RunCloseHooks began teardown before callbacks completed")
+	}
+	select {
+	case err := <-otherDone:
+		t.Fatalf("concurrent RunCloseHooks returned before callbacks completed: %v", err)
+	default:
+	}
+
+	release()
+	if err := <-ownerDone; err != nil {
+		t.Fatalf("owner RunCloseHooks: %v", err)
+	}
+	if err := <-otherDone; err != nil {
+		t.Fatalf("concurrent RunCloseHooks: %v", err)
+	}
+	if !d.IsClosing() {
+		t.Fatal("pending Close was not completed after callbacks returned")
+	}
+}
+
 // Recursive calls cannot be inlined, keeping the regression independent of
 // ordinary helper inlining decisions.
 func closeThroughHelpers(d *DB, depth int) error {
