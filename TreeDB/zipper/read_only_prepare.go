@@ -15,6 +15,11 @@ import (
 
 // ApplyOptions configures a root apply attempt.
 type ApplyOptions struct {
+	// CollectOldPointerRefs asks the apply engine to count pointer entries removed
+	// by overwrites, point deletes, and range deletes while it already owns the old
+	// leaf entry. Counts are attempt-local and returned only for successful apply.
+	CollectOldPointerRefs bool
+
 	// PrepareReadOnly asks ApplyWithOptions to run the read-only preparation
 	// pass before applying the delta. This is opt-in because it traverses the
 	// captured root in addition to the apply pass. It does not publish roots,
@@ -75,6 +80,10 @@ type ApplyResult struct {
 	RootID              uint64
 	PendingRetiredPages []uint64
 	Metrics             adaptive.Metrics
+	OldPointerRefs      PointerRefCounts
+	// OldPointerRefsCollected distinguishes a successful empty count from a path
+	// that did not collect apply-fed reference evidence.
+	OldPointerRefsCollected bool
 
 	// ReadOnlyPrepare is populated only when ApplyOptions.PrepareReadOnly is
 	// true or opt-in parallel apply needs the M1 span plan for gating. It is
@@ -937,6 +946,10 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	}
 
 	applyCfg := applyRunConfig{}
+	var oldPointerRefs PointerRefCounts
+	if opts.CollectOldPointerRefs {
+		applyCfg.oldPointerRefs = &oldPointerRefs
+	}
 	if opts.ParallelApplyConcurrency > 1 && prepared.DeleteRanges == 0 {
 		workers := resolveParallelApplyWorkers(opts, prepared.LeafSpanSummary())
 		if workers > 1 {
@@ -950,6 +963,10 @@ func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptio
 	result.RootID = newRoot
 	result.PendingRetiredPages = retired
 	result.Metrics = metrics
+	if err == nil && opts.CollectOldPointerRefs {
+		result.OldPointerRefs = oldPointerRefs
+		result.OldPointerRefsCollected = true
+	}
 	result.ReadOnlyPrepare = prepared
 	result.ReadOnlyPrepareNs = preparedNs
 	if result.ReadOnlyPrepareWorkerSummary.TargetWorkers == 0 && prepareRequested {

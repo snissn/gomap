@@ -343,6 +343,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
 	applyOpts := b.flushApplyOptions()
+	applyOpts.CollectOldPointerRefs = b.db.shouldCollectValueLogRefDelta(baseSeq)
 	prepareBuf := b.db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
@@ -385,7 +386,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		hook()
 	}
 	entries, ranges := b.batch.ApplyPlan()
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldPointerRefsCollected)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
@@ -568,6 +569,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 	}
 
 	applyOpts := b.flushApplyOptions()
+	applyOpts.CollectOldPointerRefs = b.db.shouldCollectValueLogRefDelta(baseSeq)
 	prepareBuf := b.db.acquireFlushApplyReadOnlyPrepareBuffer(applyOpts)
 	if prepareBuf != nil {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
@@ -602,7 +604,7 @@ func (b *Batch) writeSerialized(sync bool, intent *commandWALBatchIntent, maxEnt
 		return err
 	}
 	entries, ranges := b.batch.ApplyPlan()
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges)
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries, ranges, &applyResult.OldPointerRefs, applyResult.OldPointerRefsCollected)
 	if err != nil {
 		b.db.releasePendingValueLogAppendFileIDsFromBatch(b.batch)
 		b.db.observeRawBatchSpanNativePublishFallback(rawSpanPlan, spanNativePublishSnapshot, FlushSpanRunFallbackOutputOwnershipFailure)
