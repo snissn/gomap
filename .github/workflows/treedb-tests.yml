@@ -559,12 +559,13 @@ jobs:
             echo "runner_image=${ImageOS:-unknown}-${ImageVersion:-unknown}"
             echo "cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)"
             echo "go=$(go version)"
+            echo "gomaxprocs=1"
             echo "kernel=$(uname -a)"
           } | tee artifacts/snapshot_iterator_perf/environment.txt
 
       - name: Run same-binary snapshot iterator benchmark
         run: |
-          go test ./TreeDB -run '^$' \
+          GOMAXPROCS=1 go test ./TreeDB -run '^$' \
             -bench '^BenchmarkSnapshotIteratorSeekNext/keys=(1024|16384)/(snapshot_(seek|next)|public_(seek|next)_baseline)$' \
             -benchmem -benchtime=500ms -count=7 \
             | tee artifacts/snapshot_iterator_perf/raw.txt
