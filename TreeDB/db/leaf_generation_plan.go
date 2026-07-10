@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -88,6 +89,9 @@ type LeafGenerationPlan struct {
 	ExpectedReclaimRatioPPM         int
 	ExpectedReclaimPerByteCopiedPPM int
 	Admission                       string
+
+	stateKey  treeReachabilityCacheKey
+	liveStats leafGenerationLiveScanStats
 }
 
 type leafGenerationLiveScanStats struct {
@@ -250,8 +254,35 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	if err != nil {
 		return plan, err
 	}
+	plan = db.leafGenerationPlanFromLiveStats(opts, snap.state, manifest, liveScan)
+	if key, ok := leafGenerationPlanStateKey(snap.state, opts); ok {
+		plan.stateKey = key
+	}
+	plan.liveStats = cloneLeafGenerationLiveScanStats(liveScan)
+	return plan, nil
+}
 
-	set := snap.state.ValueLogSet
+func leafGenerationPlanStateKey(state *DBState, opts LeafGenerationPlanOptions) (treeReachabilityCacheKey, bool) {
+	key, ok := leafGenerationLiveStatsKeyForState(state)
+	if !ok {
+		return treeReachabilityCacheKey{}, false
+	}
+	if len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0 {
+		key.protectedRoots = leafGenerationProtectedRootsHash(opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
+	}
+	return key, true
+}
+
+func (db *DB) leafGenerationPlanFromLiveStats(opts LeafGenerationPlanOptions, state *DBState, manifest *leafGenerationManifest, liveScan leafGenerationLiveScanStats) LeafGenerationPlan {
+	var plan LeafGenerationPlan
+	if state == nil || manifest == nil {
+		plan.Admission = leafGenerationPlanAdmissionNoCandidates
+		return plan
+	}
+	plan.CurrentCommitSeq = state.CommitSeq
+	plan.CurrentGenerationID = manifest.CurrentGenerationID
+
+	set := state.ValueLogSet
 	plan.Generations = make([]LeafGenerationPlanGeneration, 0, len(manifest.Generations))
 	plan.Candidates = make([]LeafGenerationPlanGeneration, 0, len(manifest.Generations))
 	for _, gen := range manifest.Generations {
@@ -304,7 +335,7 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 	plan.ExpectedReclaimRatioPPM = ratioPPM(plan.CandidateBytesDead, plan.CandidateBytesTotal)
 	plan.ExpectedReclaimPerByteCopiedPPM = ratioPPM(plan.CandidateBytesDead, plan.CandidateBytesToCopy)
 	plan.Admission = leafGenerationPlanAdmission(opts, plan)
-	return plan, nil
+	return plan
 }
 
 func leafGenerationPlanAdmission(opts LeafGenerationPlanOptions, plan LeafGenerationPlan) string {
@@ -605,7 +636,99 @@ func (db *DB) leafGenerationLiveStatsForSnapshotWithProtectedRoots(ctx context.C
 	if len(protectedRootIDs) == 0 && len(protectedSystemRootIDs) == 0 {
 		return db.leafGenerationLiveStatsForSnapshot(ctx, snap)
 	}
-	return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, protectedRootIDs, protectedSystemRootIDs)
+	if snap == nil || snap.state == nil {
+		return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, protectedRootIDs, protectedSystemRootIDs)
+	}
+	cacheKey, cacheable := leafGenerationLiveStatsKeyForState(snap.state)
+	if cacheable {
+		cacheKey.protectedRoots = leafGenerationProtectedRootsHash(protectedRootIDs, protectedSystemRootIDs)
+		if stats, ok := db.loadCachedLeafGenerationLiveStats(cacheKey); ok {
+			return stats, nil
+		}
+	}
+	runLeafGenerationLiveScanHook()
+	stats, err := db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{
+		DisableCache:           true,
+		ProtectedRootIDs:       protectedRootIDs,
+		ProtectedSystemRootIDs: protectedSystemRootIDs,
+	})
+	if err != nil {
+		return leafGenerationLiveScanStats{}, err
+	}
+	if cacheable {
+		db.storeCachedLeafGenerationLiveStats(cacheKey, stats)
+	}
+	return stats, nil
+}
+
+// leafGenerationProtectedRootsHash makes cache identity independent of caller
+// ordering and duplicates while retaining the user/system root distinction.
+func leafGenerationProtectedRootsHash(rootIDs, systemRootIDs []uint64) [32]byte {
+	canonicalize := func(ids []uint64) []uint64 {
+		if len(ids) == 0 {
+			return nil
+		}
+		seen := make(map[uint64]struct{}, len(ids))
+		out := make([]uint64, 0, len(ids))
+		for _, id := range ids {
+			if id == 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		return out
+	}
+	h := sha256.New()
+	var buf [8]byte
+	for _, roots := range [][]uint64{canonicalize(rootIDs), canonicalize(systemRootIDs)} {
+		binary.LittleEndian.PutUint64(buf[:], uint64(len(roots)))
+		_, _ = h.Write(buf[:])
+		for _, rootID := range roots {
+			binary.LittleEndian.PutUint64(buf[:], rootID)
+			_, _ = h.Write(buf[:])
+		}
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func leafGenerationProtectedRootsOverlapMaintenance(ctx context.Context, snap *Snapshot, rootIDs, systemRootIDs []uint64) (bool, error) {
+	maintenanceRoots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
+	if err != nil {
+		return false, err
+	}
+	maintenanceRootIDs := make(map[uint64]struct{}, len(maintenanceRoots))
+	for _, root := range maintenanceRoots {
+		if root.rootID != 0 {
+			maintenanceRootIDs[root.rootID] = struct{}{}
+		}
+	}
+	for _, rootID := range rootIDs {
+		if _, ok := maintenanceRootIDs[rootID]; ok && rootID != 0 {
+			return true, nil
+		}
+	}
+	for _, systemRootID := range systemRootIDs {
+		if systemRootID == 0 {
+			continue
+		}
+		protectedRoots, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, systemRootID)
+		if err != nil {
+			return false, err
+		}
+		for _, root := range protectedRoots {
+			if _, ok := maintenanceRootIDs[root.rootID]; ok && root.rootID != 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (db *DB) leafGenerationLiveStatsForSnapshotUncached(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {

@@ -517,6 +517,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}
 
 	compactLeafPackCreatedFileIDs := make(map[uint32]struct{})
+	var compactLeafPackPlanState compactStorageLeafPackPlanState
 	if opts.Mode == CompactStorageExhaustive {
 		sealedCurrent := false
 		if err := db.runCompactStoragePhase(&stats, "seal-current-leaf-generation", func() error {
@@ -540,7 +541,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		if err := db.runCompactStoragePhase(&stats, phaseName, func() error {
 			var err error
 			protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-			pack, err = db.compactStorageLeafGenerationPackRunOnce(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), !maintenanceLocked, compactLeafPackCreatedFileIDs)
+			pack, err = db.compactStorageLeafGenerationPackRunOnce(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), !maintenanceLocked, compactLeafPackCreatedFileIDs, &compactLeafPackPlanState)
 			return err
 		}); err != nil {
 			return stats, err
@@ -575,6 +576,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	}); err != nil {
 		return stats, err
 	}
+	compactLeafPackPlanState.invalidate()
 	if err := db.runCompactStoragePhase(&stats, "checkpoint-after-leaf-generation-gc", func() error {
 		return db.Checkpoint()
 	}); err != nil {
@@ -609,7 +611,8 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 	}
 
-	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, leafPackPassesRemaining, auditSession); err != nil {
+	compactLeafPackPlanState.invalidate()
+	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, leafPackPassesRemaining, auditSession, &compactLeafPackPlanState); err != nil {
 		return stats, err
 	}
 	// If index vacuum was unsupported, keep leaf-generation pins through final
@@ -727,7 +730,7 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 	return true, nil
 }
 
-func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining int, auditSession *compactStorageAuditSession) error {
+func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining int, auditSession *compactStorageAuditSession, leafPackPlanState *compactStorageLeafPackPlanState) error {
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
@@ -789,7 +792,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				var err error
 				protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-				pack, err = db.compactStorageLeafGenerationPackRunOnce(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), lockMaintenance, ignoredLeafPackRawFileIDs)
+				pack, err = db.compactStorageLeafGenerationPackRunOnce(ctx, compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs), lockMaintenance, ignoredLeafPackRawFileIDs, leafPackPlanState)
 				return err
 			}); err != nil {
 				return err
@@ -813,6 +816,7 @@ func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOpt
 			}
 		}
 		if debt.LeafGCGenerations > 0 {
+			leafPackPlanState.invalidate()
 			phaseName := fmt.Sprintf("settle-leaf-generation-gc-%d", pass+1)
 			if err := db.runCompactStoragePhase(stats, phaseName, func() error {
 				protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
@@ -990,9 +994,113 @@ func compactStorageLeafPackSelectionErrorMeansNoDebt(err error) bool {
 
 const compactStorageLeafPackSkipRunCreated = "compact_storage_run_created"
 
-func (db *DB) compactStorageLeafGenerationPackRunOnce(ctx context.Context, opts LeafGenerationPackFromPlanOptions, lockMaintenance bool, ignoredRawFileIDs map[uint32]struct{}) (LeafGenerationPackRunOnceStats, error) {
+type compactStorageLeafPackPlanState struct {
+	key   treeReachabilityCacheKey
+	live  leafGenerationLiveScanStats
+	valid bool
+}
+
+func (state *compactStorageLeafPackPlanState) invalidate() {
+	if state == nil {
+		return
+	}
+	*state = compactStorageLeafPackPlanState{}
+}
+
+func (state *compactStorageLeafPackPlanState) resetFromPlan(plan LeafGenerationPlan) {
+	if state == nil || plan.liveStats.Generations == nil {
+		return
+	}
+	state.key = plan.stateKey
+	state.live = cloneLeafGenerationLiveScanStats(plan.liveStats)
+	state.valid = true
+}
+
+func (db *DB) compactStorageLeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOptions, carry *compactStorageLeafPackPlanState) (LeafGenerationPlan, error) {
+	if carry != nil && carry.valid {
+		published := db.state.Load()
+		key, ok := leafGenerationPlanStateKey(published, opts)
+		if ok && key == carry.key && published.LeafGenerations != nil && published.LeafGenerations.sourceManifest != nil {
+			plan := db.leafGenerationPlanFromLiveStats(opts, published, published.LeafGenerations.sourceManifest, carry.live)
+			plan.stateKey = key
+			plan.liveStats = cloneLeafGenerationLiveScanStats(carry.live)
+			return plan, nil
+		}
+		carry.invalidate()
+	}
+	plan, err := db.LeafGenerationPlan(ctx, opts)
+	if err != nil {
+		return plan, err
+	}
+	carry.resetFromPlan(plan)
+	return plan, nil
+}
+
+func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGenerationPackStats, result leafGenerationPackCarryResult) {
+	if state == nil || !state.valid || db == nil || pack.CopyAborts != 0 || result.publishedState == nil || result.protectedRootsOverlapSourceMaintenance {
+		state.invalidate()
+		return
+	}
+	sourceKey := result.sourceStateKey
+	sourceKey.protectedRoots = state.key.protectedRoots
+	if sourceKey != state.key || result.publishedState.LeafGenerations == nil {
+		state.invalidate()
+		return
+	}
+
+	live := cloneLeafGenerationLiveScanStats(state.live)
+	if result.trackSourceLiveMoved {
+		for generationID, moved := range result.sourceLiveMovedByGeneration {
+			remaining := live.Generations[generationID]
+			remaining.LivePages -= moved.LivePages
+			remaining.LiveBytes -= moved.LiveBytes
+			if remaining.LivePages < 0 {
+				remaining.LivePages = 0
+			}
+			if remaining.LiveBytes < 0 {
+				remaining.LiveBytes = 0
+			}
+			live.Generations[generationID] = remaining
+		}
+	} else {
+		for _, generationID := range pack.SourceGenerationIDs {
+			live.Generations[generationID] = leafGenerationLiveTotals{}
+		}
+	}
+
+	createdGenerations := make(map[uint64]struct{})
+	view := result.publishedState.LeafGenerations
+	for _, rawFileID := range pack.CreatedFileIDs {
+		if generationID := view.FileToGeneration[rawFileID]; generationID != 0 {
+			createdGenerations[generationID] = struct{}{}
+		}
+	}
+	for generationID := range createdGenerations {
+		generation := view.Generations[generationID]
+		var bytesTotal int64
+		for _, rawFileID := range generation.FileIDs {
+			bytesTotal += leafGenerationRawFilePhysicalSize(db.dir, result.publishedState.ValueLogSet, rawFileID)
+		}
+		live.Generations[generationID] = leafGenerationLiveTotals{
+			LivePages: max(1, len(generation.FileIDs)),
+			LiveBytes: bytesTotal,
+		}
+	}
+
+	key, ok := leafGenerationLiveStatsKeyForState(result.publishedState)
+	if !ok {
+		state.invalidate()
+		return
+	}
+	key.protectedRoots = state.key.protectedRoots
+	state.key = key
+	state.live = live
+	state.valid = true
+}
+
+func (db *DB) compactStorageLeafGenerationPackRunOnce(ctx context.Context, opts LeafGenerationPackFromPlanOptions, lockMaintenance bool, ignoredRawFileIDs map[uint32]struct{}, carry *compactStorageLeafPackPlanState) (LeafGenerationPackRunOnceStats, error) {
 	var stats LeafGenerationPackRunOnceStats
-	plan, err := db.LeafGenerationPlan(ctx, leafGenerationPackFromPlanPlanOptions(opts))
+	plan, err := db.compactStorageLeafGenerationPlan(ctx, leafGenerationPackFromPlanPlanOptions(opts), carry)
 	if err != nil {
 		return stats, err
 	}
@@ -1008,12 +1116,15 @@ func (db *DB) compactStorageLeafGenerationPackRunOnce(ctx context.Context, opts 
 		return stats, nil
 	}
 	stats.Selection = selection
-	packStats, err := db.leafGenerationPackSelected(ctx, leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs), selectedLeafGenerationPackPlan(selection), lockMaintenance)
+	var carryResult leafGenerationPackCarryResult
+	packStats, err := db.leafGenerationPackSelectedWithCarry(ctx, leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs), selectedLeafGenerationPackPlan(selection), lockMaintenance, &carryResult)
 	if err != nil {
+		carry.invalidate()
 		return stats, err
 	}
 	stats.Pack = packStats
 	stats.Ran = true
+	carry.advance(db, packStats, carryResult)
 	return stats, nil
 }
 

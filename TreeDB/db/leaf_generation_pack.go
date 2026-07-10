@@ -94,6 +94,14 @@ type LeafGenerationPackStats struct {
 	WallTimeNanos                   int64
 }
 
+type leafGenerationPackCarryResult struct {
+	sourceStateKey                         treeReachabilityCacheKey
+	publishedState                         *DBState
+	trackSourceLiveMoved                   bool
+	protectedRootsOverlapSourceMaintenance bool
+	sourceLiveMovedByGeneration            map[uint64]leafGenerationLiveTotals
+}
+
 // LeafGenerationPack rewrites live leaf-log pages from sealed source generations
 // into a fresh leaf-log output so the old generations can later be reclaimed by
 // ordinary generation GC.
@@ -137,10 +145,14 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	if err != nil {
 		return stats, err
 	}
-	return db.leafGenerationPackLocked(ctx, opts, selectedPlan, stats)
+	return db.leafGenerationPackLocked(ctx, opts, selectedPlan, stats, nil)
 }
 
 func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, lockMaintenance bool) (stats LeafGenerationPackStats, err error) {
+	return db.leafGenerationPackSelectedWithCarry(ctx, opts, selectedPlan, lockMaintenance, nil)
+}
+
+func (db *DB) leafGenerationPackSelectedWithCarry(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, lockMaintenance bool, carry *leafGenerationPackCarryResult) (stats LeafGenerationPackStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -178,10 +190,10 @@ func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGeneratio
 	stats.ExpectedReclaimBytes = selectedPlan.ExpectedReclaimBytes
 	stats.ExpectedReclaimRatioPPM = selectedPlan.ExpectedReclaimRatioPPM
 	stats.ExpectedReclaimPerByteCopiedPPM = selectedPlan.ExpectedReclaimPerByteCopiedPPM
-	return db.leafGenerationPackLocked(ctx, opts, selectedPlan, stats)
+	return db.leafGenerationPackLocked(ctx, opts, selectedPlan, stats, carry)
 }
 
-func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, stats LeafGenerationPackStats) (LeafGenerationPackStats, error) {
+func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationPackOptions, selectedPlan LeafGenerationPlan, stats LeafGenerationPackStats, carry *leafGenerationPackCarryResult) (LeafGenerationPackStats, error) {
 	rawSourceIDs, matchedGenerations, err := db.resolveLeafGenerationPackSourceFileIDs(opts.GenerationIDs)
 	if err != nil {
 		return stats, err
@@ -263,7 +275,12 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
 
-		var rewriteStats leafRefRewriteRunStats
+		rewriteStats := leafRefRewriteRunStats{
+			trackCarry:             carry != nil,
+			trackSourceLiveMoved:   carry != nil && (len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0),
+			protectedRootIDs:       opts.ProtectedRootIDs,
+			protectedSystemRootIDs: opts.ProtectedSystemRootIDs,
+		}
 		copied, copiedBytes, rewriteErr := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), attempt, &rewriteStats)
 		closeErr := writer.Close()
 		removeErr := removeLeafGenerationPackStagingDirFn(stagingDir)
@@ -271,6 +288,13 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		stats.PublishWaitNanos += rewriteStats.PublishWaitNanos
 		stats.PublishHoldNanos += rewriteStats.PublishHoldNanos
 		stats.PrivatePagesAllocated += rewriteStats.PrivatePages
+		if carry != nil {
+			carry.sourceStateKey = rewriteStats.sourceStateKey
+			carry.publishedState = rewriteStats.publishedState
+			carry.trackSourceLiveMoved = rewriteStats.trackSourceLiveMoved
+			carry.protectedRootsOverlapSourceMaintenance = rewriteStats.protectedRootsOverlapSourceMaintenance
+			carry.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(rewriteStats.sourceLiveMovedByGeneration)
+		}
 		if errors.Is(rewriteErr, errLeafGenerationPackPublishConflict) {
 			stats.CopyAborts++
 			stats.RetryCopyTimeNanos += rewriteStats.CopyTimeNanos

@@ -169,6 +169,10 @@ type leafRefRewriteCtx struct {
 	leafFrames      int
 	maxLeafFrameK   int
 
+	sourceScan                  *leafGenerationScanContext
+	sourceGenerationByFile      map[uint32]uint64
+	sourceLiveMovedByGeneration map[uint64]leafGenerationLiveTotals
+
 	readRefreshRetried bool
 }
 
@@ -184,15 +188,23 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 }
 
 type leafRefRewriteRunStats struct {
-	InternalPagesVisited int
-	SubtreesPruned       int
-	LeafFramesWritten    int
-	MaxLeafFrameK        int
-	CopyTimeNanos        int64
-	PublishWaitNanos     int64
-	PublishHoldNanos     int64
-	PrivatePages         int
-	PublishConflict      bool
+	InternalPagesVisited                   int
+	SubtreesPruned                         int
+	LeafFramesWritten                      int
+	MaxLeafFrameK                          int
+	CopyTimeNanos                          int64
+	PublishWaitNanos                       int64
+	PublishHoldNanos                       int64
+	PrivatePages                           int
+	PublishConflict                        bool
+	trackCarry                             bool
+	trackSourceLiveMoved                   bool
+	protectedRootIDs                       []uint64
+	protectedSystemRootIDs                 []uint64
+	sourceStateKey                         treeReachabilityCacheKey
+	publishedState                         *DBState
+	protectedRootsOverlapSourceMaintenance bool
+	sourceLiveMovedByGeneration            map[uint64]leafGenerationLiveTotals
 }
 
 type leafGenerationPackCopyPhase uint8
@@ -611,6 +623,9 @@ func (c *leafRefRewriteCtx) rewriteLeafRef(ptr page.LeafLogPtr) (page.ChildRef, 
 	if err != nil {
 		return page.ChildRef{}, false, err
 	}
+	if err := c.noteSourceLeafMoved(ptr); err != nil {
+		return page.ChildRef{}, false, err
+	}
 	next := page.LeafLogChildRef(leafLogPtr)
 	c.storeLeafPtrRemap(ptr, next)
 	return next, true, nil
@@ -648,12 +663,56 @@ func (c *leafRefRewriteCtx) rewriteLeafRefBatch(ptrs []page.LeafLogPtr) ([]page.
 		for i, newPtr := range newPtrs {
 			ref := page.LeafLogChildRef(newPtr)
 			oldPtr := ptrs[start+i]
+			if err := c.noteSourceLeafMoved(oldPtr); err != nil {
+				return nil, err
+			}
 			c.storeLeafPtrRemap(oldPtr, ref)
 			out[start+i] = ref
 		}
 		start = end
 	}
 	return out, nil
+}
+
+func (c *leafRefRewriteCtx) noteSourceLeafMoved(ptr page.LeafLogPtr) error {
+	if c == nil || c.db == nil || c.sourceScan == nil || c.sourceScan.snap == nil || c.sourceScan.snap.state == nil {
+		return nil
+	}
+	generationID := c.sourceGenerationByFile[ptr.FileID]
+	if generationID == 0 {
+		return nil
+	}
+	recordLen := ptr.RecordLength()
+	if recordLen == 0 {
+		var err error
+		recordLen, err = c.db.valueLogRecordLengthForRewriteInSet(ptr.ValuePtr(), c.sourceScan.snap.state.ValueLogSet)
+		if err != nil {
+			return err
+		}
+	}
+	liveBytes := recordLen
+	if liveBytes <= ^uint32(0)-4 {
+		liveBytes += 4
+	}
+	if ptr.IsGrouped() {
+		info, grouped, err := c.db.leafGenerationGroupedFrameInfo(c.sourceScan, ptr, recordLen)
+		if err != nil {
+			return err
+		}
+		if grouped {
+			if contribution, ok := info.liveByteContribution(ptr.SubIndex); ok {
+				liveBytes = contribution
+			}
+		}
+	}
+	if c.sourceLiveMovedByGeneration == nil {
+		c.sourceLiveMovedByGeneration = make(map[uint64]leafGenerationLiveTotals)
+	}
+	totals := c.sourceLiveMovedByGeneration[generationID]
+	totals.LivePages++
+	totals.LiveBytes += int64(liveBytes)
+	c.sourceLiveMovedByGeneration[generationID] = totals
+	return nil
 }
 
 func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
@@ -1138,6 +1197,20 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	rootID := snap.state.RootPageID
 	sysRoot := snap.state.SystemRootPageID
 	basis := captureLeafGenerationPackCopyBasis(snap, sourceIDs, singleSourceID, hasSingleSourceID)
+	if runStats != nil && runStats.trackCarry {
+		runStats.sourceStateKey, _ = leafGenerationLiveStatsKeyForState(snap.state)
+		if runStats.trackSourceLiveMoved {
+			runStats.protectedRootsOverlapSourceMaintenance, err = leafGenerationProtectedRootsOverlapMaintenance(
+				ctx,
+				snap,
+				runStats.protectedRootIDs,
+				runStats.protectedSystemRootIDs,
+			)
+			if err != nil {
+				return 0, 0, fmt.Errorf("leaf generation pack: compare protected roots with source maintenance roots: %w", err)
+			}
+		}
+	}
 
 	stagingPager, err := pager.NewOverlay(db.chunkSize, leafGenerationPackPrivatePageIDBase, idx.pager)
 	if err != nil {
@@ -1188,6 +1261,15 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		useSubtreeStatsPrune: len(sourceGenerationIDs) > 0,
 		maxCopiedBytes:       maxCopiedBytes,
 		leafFrameK:           leafFrameK,
+	}
+	if runStats != nil && runStats.trackSourceLiveMoved {
+		leafCtx.sourceScan = &leafGenerationScanContext{
+			snap:          snap,
+			groupedFrames: newLeafGenerationGroupedFrameScanCache(leafGenerationGroupedFrameScanCacheEntries),
+		}
+		if snap.state.LeafGenerations != nil {
+			leafCtx.sourceGenerationByFile = snap.state.LeafGenerations.FileToGeneration
+		}
 	}
 	privateLeafReader, err := valuelog.NewManager(writer.leafDir)
 	if err != nil {
@@ -1558,6 +1640,12 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
 	}
 	db.invalidateLeafGenerationSubtreeStats(publishAlloc.Pages())
+	if runStats != nil && runStats.trackCarry {
+		runStats.publishedState = db.state.Load()
+		if runStats.trackSourceLiveMoved {
+			runStats.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(leafCtx.sourceLiveMovedByGeneration)
+		}
+	}
 	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s dir_wait=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, dirWaitDuration, registerDuration, finalizeDuration, time.Since(publishStarted))
 	unlockPublish()
 	db.finalizeCommitPostWork(post)
