@@ -27,6 +27,41 @@ func newAllocatorForFreeManyTest(t *testing.T, pages int) (*Allocator, *pager.Pa
 	return New(p, 0), p
 }
 
+type allocatorPageEventCounts struct {
+	gets     int
+	verifies int
+	updates  int
+}
+
+type allocatorPageEvents map[uint64]*allocatorPageEventCounts
+
+func (events allocatorPageEvents) observe(event allocatorPageEvent, pageID uint64) {
+	counts := events[pageID]
+	if counts == nil {
+		counts = &allocatorPageEventCounts{}
+		events[pageID] = counts
+	}
+	switch event {
+	case allocatorPageGetForWrite:
+		counts.gets++
+	case allocatorPageVerifyChecksum:
+		counts.verifies++
+	case allocatorPageUpdateChecksum:
+		counts.updates++
+	}
+}
+
+func assertAllocatorPageEvents(t *testing.T, events allocatorPageEvents, pageID uint64, want allocatorPageEventCounts) {
+	t.Helper()
+	got := events[pageID]
+	if got == nil {
+		got = &allocatorPageEventCounts{}
+	}
+	if *got != want {
+		t.Fatalf("page %d events = %+v, want %+v", pageID, *got, want)
+	}
+}
+
 func TestAllocator_FreeMany_FillsHeadAndChains(t *testing.T) {
 	a, p := newAllocatorForFreeManyTest(t, page.MaxFreeIDs+8)
 
@@ -42,6 +77,9 @@ func TestAllocator_FreeMany_FillsHeadAndChains(t *testing.T) {
 	checksumUpdates := 0
 	TestHookFreeManyBeforeChecksum = func() { checksumUpdates++ }
 	t.Cleanup(func() { TestHookFreeManyBeforeChecksum = nil })
+	events := allocatorPageEvents{}
+	a.testPageEvent = events.observe
+	t.Cleanup(func() { a.testPageEvent = nil })
 	if err := a.FreeMany(ids); err != nil {
 		t.Fatalf("FreeMany: %v", err)
 	}
@@ -79,6 +117,8 @@ func TestAllocator_FreeMany_FillsHeadAndChains(t *testing.T) {
 	if !oldNode.VerifyChecksum() {
 		t.Fatal("filled head checksum is invalid")
 	}
+	assertAllocatorPageEvents(t, events, seed[0], allocatorPageEventCounts{gets: 1, verifies: 1, updates: 1})
+	assertAllocatorPageEvents(t, events, ids[2], allocatorPageEventCounts{gets: 1, updates: 1})
 }
 
 func TestAllocator_FreeMany_RejectsPageZeroBeforeMutation(t *testing.T) {
@@ -274,6 +314,38 @@ func TestAllocator_RegionBiasedAllocMany_RecycledHeadDoesNotConsumeFreeIDStat(t 
 	if after.AllocPages != before.AllocPages+2 || after.ReuseAllocPages != before.ReuseAllocPages+2 {
 		t.Fatalf("allocation counters after recycling empty head: before=%+v after=%+v", before, after)
 	}
+}
+
+func TestAllocator_RegionBiasedAllocMany_DrainsAndRecyclesHeadWithOneVerification(t *testing.T) {
+	freed := make([]uint64, page.MaxFreeIDs+3)
+	for i := range freed {
+		freed[i] = uint64(i + 1)
+	}
+	a, p := newAllocatorForFreeManyTest(t, len(freed)+1)
+	a.SetFreelistRegion(10, 1)
+	if err := a.FreeMany(freed); err != nil {
+		t.Fatalf("FreeMany: %v", err)
+	}
+
+	newestHead := a.Head()
+	newestData := mustAllocatorPage(t, p, newestHead)
+	olderHead := freelistNextPageID(newestData)
+	if got := node.NewNode(newestData).Count(); got != 1 {
+		t.Fatalf("newest freelist head count = %d, want 1", got)
+	}
+
+	events := allocatorPageEvents{}
+	a.testPageEvent = events.observe
+	got, err := a.AllocMany(3, freed[len(freed)-1])
+	a.testPageEvent = nil
+	if err != nil {
+		t.Fatalf("AllocMany: %v", err)
+	}
+	if len(got) != 3 || got[1] != newestHead {
+		t.Fatalf("AllocMany = %v, want body ID, recycled head %d, then older body ID", got, newestHead)
+	}
+	assertAllocatorPageEvents(t, events, newestHead, allocatorPageEventCounts{gets: 1, verifies: 1, updates: 1})
+	assertAllocatorPageEvents(t, events, olderHead, allocatorPageEventCounts{gets: 1, verifies: 1, updates: 1})
 }
 
 func TestAllocator_RegionBiasedAllocMany_MatchesRepeatedAllocWithMovingHint(t *testing.T) {

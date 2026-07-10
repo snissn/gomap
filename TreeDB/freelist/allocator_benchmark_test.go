@@ -6,11 +6,41 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
-const allocatorBenchmarkIDs = 10_000
+const (
+	allocatorBenchmarkIDs        = 10_000
+	allocatorBenchmarkRegion     = 8192
+	allocatorBenchmarkRegionHint = 4 * allocatorBenchmarkRegion
+)
+
+type allocatorBenchmarkPageMetrics struct {
+	gets          int
+	verifications int
+	updates       int
+	pagesTouched  int
+	seen          []bool
+}
+
+func newAllocatorBenchmarkPageMetrics() *allocatorBenchmarkPageMetrics {
+	return &allocatorBenchmarkPageMetrics{seen: make([]bool, allocatorBenchmarkIDs+1)}
+}
+
+func (metrics *allocatorBenchmarkPageMetrics) observe(event allocatorPageEvent, pageID uint64) {
+	if pageID < uint64(len(metrics.seen)) && !metrics.seen[pageID] {
+		metrics.seen[pageID] = true
+		metrics.pagesTouched++
+	}
+	switch event {
+	case allocatorPageGetForWrite:
+		metrics.gets++
+	case allocatorPageVerifyChecksum:
+		metrics.verifications++
+	case allocatorPageUpdateChecksum:
+		metrics.updates++
+	}
+}
 
 func BenchmarkAllocator_FreeMany(b *testing.B) {
 	benchmarkAllocatorFree(b, true)
@@ -23,71 +53,110 @@ func BenchmarkAllocator_Free(b *testing.B) {
 func benchmarkAllocatorFree(b *testing.B, many bool) {
 	b.Helper()
 	ids := allocatorBenchmarkIDsSlice()
-	pagesTouched := (allocatorBenchmarkIDs + page.MaxFreeIDs) / (page.MaxFreeIDs + 1)
-	checksumUpdates := pagesTouched
-	if !many {
-		pagesTouched = allocatorBenchmarkIDs
-		checksumUpdates = allocatorBenchmarkIDs
-	}
-
 	root := b.TempDir()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		a, p, path := newAllocatorBenchmarkFixture(b, root, i)
 		b.StartTimer()
-		if many {
-			if err := a.FreeMany(ids); err != nil {
-				b.Fatalf("FreeMany: %v", err)
-			}
-		} else {
-			for _, id := range ids {
-				if err := a.Free(id); err != nil {
-					b.Fatalf("Free(%d): %v", id, err)
-				}
-			}
-		}
+		freeAllocatorBenchmarkIDs(b, a, ids, many)
 		b.StopTimer()
-		if err := p.Close(); err != nil {
-			b.Fatalf("Close: %v", err)
+		closeAllocatorBenchmarkFixture(b, p, path)
+	}
+
+	a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
+	metrics := newAllocatorBenchmarkPageMetrics()
+	a.testPageEvent = metrics.observe
+	freeAllocatorBenchmarkIDs(b, a, ids, many)
+	a.testPageEvent = nil
+	closeAllocatorBenchmarkFixture(b, p, path)
+	benchmarkAllocatorMetrics(b, allocatorBenchmarkIDs, metrics)
+}
+
+func freeAllocatorBenchmarkIDs(b *testing.B, a *Allocator, ids []uint64, many bool) {
+	b.Helper()
+	if many {
+		if err := a.FreeMany(ids); err != nil {
+			b.Fatalf("FreeMany: %v", err)
 		}
-		if err := os.Remove(path); err != nil {
-			b.Fatalf("Remove fixture: %v", err)
+		return
+	}
+	for _, id := range ids {
+		if err := a.Free(id); err != nil {
+			b.Fatalf("Free(%d): %v", id, err)
 		}
 	}
-	benchmarkAllocatorMetrics(b, allocatorBenchmarkIDs, pagesTouched, checksumUpdates)
 }
 
 func BenchmarkAllocator_AllocMany(b *testing.B) {
+	benchmarkAllocatorRegion(b, allocatorBenchmarkIDs, true)
+}
+
+func BenchmarkAllocator_AllocMany2(b *testing.B) {
+	benchmarkAllocatorRegion(b, 2, true)
+}
+
+func BenchmarkAllocator_AllocRepeated2(b *testing.B) {
+	benchmarkAllocatorRegion(b, 2, false)
+}
+
+func benchmarkAllocatorRegion(b *testing.B, count int, many bool) {
+	b.Helper()
 	ids := allocatorBenchmarkIDsSlice()
-	pagesTouched := (allocatorBenchmarkIDs + page.MaxFreeIDs) / (page.MaxFreeIDs + 1)
 	root := b.TempDir()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		a, p, path := newAllocatorBenchmarkFixture(b, root, i)
-		if err := a.FreeMany(ids); err != nil {
-			b.Fatalf("FreeMany setup: %v", err)
-		}
-		a.SetFreelistRegion(1024, 1)
-		a.lastAlloc = 4 * 1024
+		populateAllocatorBenchmarkFreelist(b, a, ids)
+		a.SetFreelistRegion(allocatorBenchmarkRegion, 1)
 		b.StartTimer()
-		out, err := a.AllocMany(allocatorBenchmarkIDs, 0)
+		allocAllocatorBenchmarkIDs(b, a, count, many)
+		b.StopTimer()
+		closeAllocatorBenchmarkFixture(b, p, path)
+	}
+
+	a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
+	populateAllocatorBenchmarkFreelist(b, a, ids)
+	a.SetFreelistRegion(allocatorBenchmarkRegion, 1)
+	metrics := newAllocatorBenchmarkPageMetrics()
+	a.testPageEvent = metrics.observe
+	allocAllocatorBenchmarkIDs(b, a, count, many)
+	a.testPageEvent = nil
+	closeAllocatorBenchmarkFixture(b, p, path)
+	benchmarkAllocatorMetrics(b, count, metrics)
+}
+
+func populateAllocatorBenchmarkFreelist(b *testing.B, a *Allocator, ids []uint64) {
+	b.Helper()
+	for _, id := range ids {
+		if err := a.Free(id); err != nil {
+			b.Fatalf("Free(%d) setup: %v", id, err)
+		}
+	}
+}
+
+func allocAllocatorBenchmarkIDs(b *testing.B, a *Allocator, count int, many bool) {
+	b.Helper()
+	if many {
+		out, err := a.AllocMany(count, allocatorBenchmarkRegionHint)
 		if err != nil {
 			b.Fatalf("AllocMany: %v", err)
 		}
-		if len(out) != allocatorBenchmarkIDs {
-			b.Fatalf("AllocMany returned %d IDs, want %d", len(out), allocatorBenchmarkIDs)
+		if len(out) != count {
+			b.Fatalf("AllocMany returned %d IDs, want %d", len(out), count)
 		}
-		b.StopTimer()
-		if err := p.Close(); err != nil {
-			b.Fatalf("Close: %v", err)
-		}
-		if err := os.Remove(path); err != nil {
-			b.Fatalf("Remove fixture: %v", err)
-		}
+		return
 	}
-	benchmarkAllocatorMetrics(b, allocatorBenchmarkIDs, pagesTouched, pagesTouched)
+
+	hint := uint64(allocatorBenchmarkRegionHint)
+	for i := 0; i < count; i++ {
+		id, err := a.Alloc(hint)
+		if err != nil {
+			b.Fatalf("Alloc(%d): %v", hint, err)
+		}
+		hint = id
+	}
 }
 
 func allocatorBenchmarkIDsSlice() []uint64 {
@@ -112,8 +181,20 @@ func newAllocatorBenchmarkFixture(b *testing.B, root string, iteration int) (*Al
 	return New(p, 0), p, path
 }
 
-func benchmarkAllocatorMetrics(b *testing.B, ids, pagesTouched, checksumUpdates int) {
+func closeAllocatorBenchmarkFixture(b *testing.B, p *pager.Pager, path string) {
+	b.Helper()
+	if err := p.Close(); err != nil {
+		b.Fatalf("Close: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		b.Fatalf("Remove fixture: %v", err)
+	}
+}
+
+func benchmarkAllocatorMetrics(b *testing.B, ids int, metrics *allocatorBenchmarkPageMetrics) {
 	b.ReportMetric(float64(ids*b.N)/b.Elapsed().Seconds(), "ids/sec")
-	b.ReportMetric(float64(pagesTouched), "pages_touched/op")
-	b.ReportMetric(float64(checksumUpdates), "checksum_updates/op")
+	b.ReportMetric(float64(metrics.pagesTouched), "pages_touched/op")
+	b.ReportMetric(float64(metrics.gets), "get_for_write/op")
+	b.ReportMetric(float64(metrics.verifications), "checksum_verifications/op")
+	b.ReportMetric(float64(metrics.updates), "checksum_updates/op")
 }
