@@ -120,3 +120,55 @@ func TestSnapshotIteratorCreationRejectsStaleGeneration(t *testing.T) {
 		t.Fatal("stale generation accessed snapshot fields")
 	}
 }
+
+func TestBackendSnapshotIteratorEmptyDomainSeekRemainsEmpty(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, key := range []string{"a", "m", "z"} {
+		if err := d.SetSync([]byte(key), []byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	defer snap.Close()
+
+	for _, bounds := range []struct {
+		name       string
+		start, end []byte
+	}{
+		{name: "equal", start: []byte("m"), end: []byte("m")},
+		{name: "inverted", start: []byte("z"), end: []byte("a")},
+	} {
+		for _, reverse := range []bool{false, true} {
+			name := bounds.name + map[bool]string{false: "/forward", true: "/reverse"}[reverse]
+			t.Run(name, func(t *testing.T) {
+				var it iterator.UnsafeIterator
+				var err error
+				if reverse {
+					it, err = snap.ReverseIteratorWithOptions(bounds.start, bounds.end, IteratorOptions{})
+				} else {
+					it, err = snap.IteratorWithOptions(bounds.start, bounds.end, IteratorOptions{})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer it.Close()
+				for _, target := range [][]byte{nil, []byte("a"), []byte("m"), []byte("z"), {0xff}} {
+					it.Seek(target)
+					if it.Valid() {
+						t.Fatalf("Seek(%x) exposed key %x from empty domain", target, it.UnsafeKey())
+					}
+					if err := it.Error(); err != nil {
+						t.Fatalf("Seek(%x) error=%v", target, err)
+					}
+				}
+			})
+		}
+	}
+}

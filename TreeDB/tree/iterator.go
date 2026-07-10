@@ -383,6 +383,7 @@ type Iterator struct {
 	mode              IteratorMode
 	includeTombstones bool
 	reverse           bool
+	emptyDomain       bool
 	verifyAlways      bool
 }
 
@@ -477,6 +478,7 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, includeTomb
 		mode:              mode,
 		includeTombstones: includeTombstones,
 		reverse:           reverse,
+		emptyDomain:       start != nil && end != nil && compareTreeKey(start, end) >= 0,
 		verifyAlways:      t.pager != nil && t.pager.VerifyOnRead(),
 		slabAppender:      t.slabAppender,
 		slabBatcher:       t.slabBatcher,
@@ -493,7 +495,7 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, includeTomb
 func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, false) // Invalid immediately
+		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
 	it.Seek(start)
@@ -512,7 +514,7 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, true)
+		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
 	it.Seek(nil)
@@ -1037,6 +1039,9 @@ func (it *Iterator) Close() error {
 }
 
 func (it *Iterator) Seek(key []byte) {
+	if it.emptyDomain {
+		return
+	}
 	if it.reverse {
 		it.seekReverse(key)
 		return
