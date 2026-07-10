@@ -1007,17 +1007,6 @@ func (state *compactStorageLeafPackPlanState) invalidate() {
 	*state = compactStorageLeafPackPlanState{}
 }
 
-func leafGenerationPlanStateKey(state *DBState, opts LeafGenerationPlanOptions) (treeReachabilityCacheKey, bool) {
-	key, ok := leafGenerationLiveStatsKeyForState(state)
-	if !ok {
-		return treeReachabilityCacheKey{}, false
-	}
-	if len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0 {
-		key.protectedRoots = leafGenerationProtectedRootsHash(opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
-	}
-	return key, true
-}
-
 func (state *compactStorageLeafPackPlanState) resetFromPlan(plan LeafGenerationPlan) {
 	if state == nil || plan.liveStats.Generations == nil {
 		return

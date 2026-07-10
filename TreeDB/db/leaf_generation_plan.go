@@ -255,14 +255,22 @@ func (db *DB) LeafGenerationPlan(ctx context.Context, opts LeafGenerationPlanOpt
 		return plan, err
 	}
 	plan = db.leafGenerationPlanFromLiveStats(opts, snap.state, manifest, liveScan)
-	if key, ok := leafGenerationLiveStatsKeyForState(snap.state); ok {
-		if len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0 {
-			key.protectedRoots = leafGenerationProtectedRootsHash(opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
-		}
+	if key, ok := leafGenerationPlanStateKey(snap.state, opts); ok {
 		plan.stateKey = key
 	}
 	plan.liveStats = cloneLeafGenerationLiveScanStats(liveScan)
 	return plan, nil
+}
+
+func leafGenerationPlanStateKey(state *DBState, opts LeafGenerationPlanOptions) (treeReachabilityCacheKey, bool) {
+	key, ok := leafGenerationLiveStatsKeyForState(state)
+	if !ok {
+		return treeReachabilityCacheKey{}, false
+	}
+	if len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0 {
+		key.protectedRoots = leafGenerationProtectedRootsHash(opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
+	}
+	return key, true
 }
 
 func (db *DB) leafGenerationPlanFromLiveStats(opts LeafGenerationPlanOptions, state *DBState, manifest *leafGenerationManifest, liveScan leafGenerationLiveScanStats) LeafGenerationPlan {
