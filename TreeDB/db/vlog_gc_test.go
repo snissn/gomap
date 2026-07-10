@@ -559,16 +559,41 @@ func setValueLogPointer(t *testing.T, db *DB, key []byte, ptr page.ValuePtr) {
 	}
 }
 
-func TestValueLogRefTracker_StaleReplaceDoesNotRegressCommitSeq(t *testing.T) {
+func TestValueLogRefTracker_GCReplaceDoesNotRegressConcurrentAdvance(t *testing.T) {
 	tracker := newValueLogRefTracker()
-	tracker.replace(map[uint32]uint64{11: 1}, 7, true)
 	tracker.replace(map[uint32]uint64{12: 1}, 6, true)
+	observedRevision := tracker.revisionSnapshot()
+	advanced := make(chan struct{})
+	go func() {
+		tracker.replace(map[uint32]uint64{11: 1}, 7, true)
+		close(advanced)
+	}()
+	<-advanced
+	if tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, true, observedRevision) {
+		t.Fatal("GC fallback replaced tracker after concurrent sequence advance")
+	}
 	refs, ok := tracker.referencedSet(7)
 	if !ok {
-		t.Fatal("stale replace regressed tracker commit sequence")
+		t.Fatal("GC fallback regressed tracker commit sequence")
 	}
 	if _, ok := refs[11]; !ok {
-		t.Fatalf("newer tracker counts were replaced by stale scan: %v", refs)
+		t.Fatalf("concurrently advanced counts were replaced by stale scan: %v", refs)
+	}
+}
+
+func TestValueLogRefTracker_GCReplaceRepairsUnchangedStaleAheadState(t *testing.T) {
+	tracker := newValueLogRefTracker()
+	tracker.replace(map[uint32]uint64{11: 1}, 7, true)
+	observedRevision := tracker.revisionSnapshot()
+	if !tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, true, observedRevision) {
+		t.Fatal("unchanged stale-ahead tracker was not repaired")
+	}
+	refs, ok := tracker.referencedSet(6)
+	if !ok {
+		t.Fatal("repaired tracker does not match scanned sequence")
+	}
+	if _, ok := refs[12]; !ok {
+		t.Fatalf("repaired tracker counts = %v, want file 12", refs)
 	}
 }
 

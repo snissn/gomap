@@ -171,7 +171,7 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		const maxStaleScanRetries = 1
 		for attempt := 0; ; attempt++ {
 			var err error
-			referenced, _, scannedSeq, err = db.referencedValueLogSegmentsWithSourceAtSeq(ctx)
+			referenced, _, scannedSeq, err = db.referencedValueLogSegmentsForGCAtSeq(ctx)
 			if err != nil {
 				return stats, err
 			}
