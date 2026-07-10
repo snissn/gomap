@@ -45,6 +45,26 @@ type vacuumRecorder struct {
 	ranges []batch.DeleteRange
 }
 
+type vacuumRetiredPageFreer interface {
+	FreeMany([]uint64) error
+	Free(uint64) error
+}
+
+func freeVacuumRetired(freer vacuumRetiredPageFreer, retired []uint64) {
+	err := freer.FreeMany(retired)
+	if err == nil {
+		return
+	}
+	processed := 0
+	var batchErr *freelist.FreeManyError
+	if errors.As(err, &batchErr) && batchErr.Processed >= 0 && batchErr.Processed <= len(retired) {
+		processed = batchErr.Processed
+	}
+	for _, id := range retired[processed:] {
+		_ = freer.Free(id)
+	}
+}
+
 func (r *vacuumRecorder) Active() bool {
 	return r.active.Load()
 }
@@ -336,7 +356,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 	}
 
 	freeRetired := func(retired []uint64) {
-		_ = newAlloc.FreeMany(retired)
+		freeVacuumRetired(newAlloc, retired)
 	}
 
 	// Online catch-up: replay recorded keys in bounded passes.

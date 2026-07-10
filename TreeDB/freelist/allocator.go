@@ -6,61 +6,38 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"sync"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
-type Allocator struct {
-	pager *pager.Pager
-	head  uint64
-	mu    sync.Mutex
+type allocatorPageOperation uint8
 
-	lastAlloc    uint64
-	regionPages  uint64
-	regionRadius int
-
-	stats Stats
-
-	// preferAppend makes Alloc ignore the freelist and allocate new pages by
-	// extending the file. This improves locality at the cost of reclaiming space
-	// later via vacuum.
-	preferAppend bool
-}
-
-type allocatorPageOperations struct {
-	getForWriteFunc    func(*pager.Pager, uint64) ([]byte, error)
-	verifyChecksumFunc func(uint64, []byte) bool
-	updateChecksumFunc func(uint64, []byte)
-}
-
-func (ops *allocatorPageOperations) getForWrite(p *pager.Pager, pageID uint64) ([]byte, error) {
-	if ops == nil {
-		return p.GetForWrite(pageID)
-	}
-	return ops.getForWriteFunc(p, pageID)
-}
-
-func (ops *allocatorPageOperations) verifyChecksum(pageID uint64, data []byte) bool {
-	if ops == nil {
-		return node.NewNode(data).VerifyChecksum()
-	}
-	return ops.verifyChecksumFunc(pageID, data)
-}
-
-func (ops *allocatorPageOperations) updateChecksum(pageID uint64, data []byte) {
-	if ops == nil {
-		node.NewNode(data).UpdateChecksum()
-		return
-	}
-	ops.updateChecksumFunc(pageID, data)
-}
-
-var testAllocatorPageOperations *allocatorPageOperations
+const (
+	allocatorPageGetForWrite allocatorPageOperation = iota
+	allocatorPageVerifyChecksum
+	allocatorPageUpdateChecksum
+)
 
 var errCannotFreePageZero = errors.New("cannot free page 0")
+
+// FreeManyError reports an error after FreeMany committed a prefix of its
+// input. Processed is the number of leading IDs that were added to the
+// freelist; callers may retry ids[Processed:] without double-freeing the
+// committed prefix.
+type FreeManyError struct {
+	Processed int
+	Err       error
+}
+
+func (e *FreeManyError) Error() string {
+	return fmt.Sprintf("free many after %d IDs: %v", e.Processed, e.Err)
+}
+
+func (e *FreeManyError) Unwrap() error {
+	return e.Err
+}
 
 func freelistNextPageID(data []byte) uint64 {
 	return binary.LittleEndian.Uint64(data[page.PageHeaderSize : page.PageHeaderSize+8])
@@ -280,10 +257,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	pageOps := testAllocatorPageOperations
 
 	if a.regionPages > 0 && a.regionRadius > 0 {
-		return a.allocManyRegionLocked(count, hint, pageOps)
+		return a.allocManyRegionLocked(count, hint)
 	}
 
 	ids := make([]uint64, 0, count)
@@ -304,12 +280,25 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 		}
 
 		headID := a.head
-		data, err := pageOps.getForWrite(a.pager, headID)
+		if allocatorInstrumentationEnabled {
+			if err := a.injectedGetForWriteError(headID); err != nil {
+				a.observePageOperation(allocatorPageGetForWrite, headID)
+				return ids, err
+			}
+		}
+		data, err := a.pager.GetForWrite(headID)
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageGetForWrite, headID)
+		}
 		if err != nil {
 			return ids, err
 		}
 		n := node.NewNode(data)
-		if !pageOps.verifyChecksum(headID, data) {
+		checksumOK := n.VerifyChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageVerifyChecksum, headID)
+		}
+		if !checksumOK {
 			return ids, errors.New("freelist head corrupted (AllocMany)")
 		}
 		if n.Type() != page.PageTypeFreelist {
@@ -319,7 +308,10 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 		countFree := int(n.Count())
 		if countFree == 0 {
 			next := freelistNextPageID(data)
-			pageOps.updateChecksum(headID, data)
+			n.UpdateChecksum()
+			if allocatorInstrumentationEnabled {
+				a.observePageOperation(allocatorPageUpdateChecksum, headID)
+			}
 
 			recycled := a.head
 			a.head = next
@@ -350,7 +342,10 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 		}
 
 		n.SetCount(uint16(countFree))
-		pageOps.updateChecksum(headID, data)
+		n.UpdateChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageUpdateChecksum, headID)
+		}
 	}
 	return ids, nil
 }
@@ -376,17 +371,17 @@ func findRegionSlot(data []byte, count int, target, regionPages uint64, radius i
 // semantics while verifying and checksumming each mutated head once. Small
 // selections scan directly; larger selections reuse one transient range-max
 // index across head pages.
-func (a *Allocator) allocManyRegionLocked(count int, hint uint64, pageOps *allocatorPageOperations) ([]uint64, error) {
+func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, error) {
 	if count == 2 {
-		return a.allocTwoRegionLocked(hint, pageOps)
+		return a.allocTwoRegionLocked(hint)
 	}
 	if count < regionIndexMinSelections {
-		return a.allocManyRegionScanLocked(count, hint, pageOps)
+		return a.allocManyRegionScanLocked(count, hint)
 	}
-	return a.allocManyRegionIndexedLocked(count, hint, pageOps)
+	return a.allocManyRegionIndexedLocked(count, hint)
 }
 
-func (a *Allocator) allocTwoRegionLocked(hint uint64, pageOps *allocatorPageOperations) ([]uint64, error) {
+func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, 2)
 	if a.preferAppend || a.head == 0 {
 		id, err := a.pager.Alloc(2)
@@ -401,12 +396,25 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64, pageOps *allocatorPageOper
 	}
 
 	headID := a.head
-	data, err := pageOps.getForWrite(a.pager, headID)
+	if allocatorInstrumentationEnabled {
+		if err := a.injectedGetForWriteError(headID); err != nil {
+			a.observePageOperation(allocatorPageGetForWrite, headID)
+			return ids, err
+		}
+	}
+	data, err := a.pager.GetForWrite(headID)
+	if allocatorInstrumentationEnabled {
+		a.observePageOperation(allocatorPageGetForWrite, headID)
+	}
 	if err != nil {
 		return ids, err
 	}
 	n := node.NewNode(data)
-	if !pageOps.verifyChecksum(headID, data) {
+	checksumOK := n.VerifyChecksum()
+	if allocatorInstrumentationEnabled {
+		a.observePageOperation(allocatorPageVerifyChecksum, headID)
+	}
+	if !checksumOK {
 		return ids, errors.New("freelist head corrupted (AllocMany)")
 	}
 	if n.Type() != page.PageTypeFreelist {
@@ -416,7 +424,10 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64, pageOps *allocatorPageOper
 	countFree := int(n.Count())
 	if countFree == 0 {
 		next := freelistNextPageID(data)
-		pageOps.updateChecksum(headID, data)
+		n.UpdateChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageUpdateChecksum, headID)
+		}
 		a.head = next
 		a.pager.MarkUnverified(headID)
 		a.lastAlloc = headID
@@ -426,7 +437,7 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64, pageOps *allocatorPageOper
 			a.stats.Pages--
 		}
 		ids = append(ids, headID)
-		tail, tailErr := a.allocManyRegionScanLocked(1, headID, pageOps)
+		tail, tailErr := a.allocManyRegionScanLocked(1, headID)
 		ids = append(ids, tail...)
 		return ids, tailErr
 	}
@@ -461,7 +472,10 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64, pageOps *allocatorPageOper
 	}
 
 	n.SetCount(uint16(countFree))
-	pageOps.updateChecksum(headID, data)
+	n.UpdateChecksum()
+	if allocatorInstrumentationEnabled {
+		a.observePageOperation(allocatorPageUpdateChecksum, headID)
+	}
 	if countFree == 0 && len(ids) < 2 {
 		next := freelistNextPageID(data)
 		a.head = next
@@ -477,7 +491,7 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64, pageOps *allocatorPageOper
 	return ids, nil
 }
 
-func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64, pageOps *allocatorPageOperations) ([]uint64, error) {
+func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, count)
 	target := hint
 	for len(ids) < count {
@@ -497,12 +511,25 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64, pageOps *a
 		}
 
 		headID := a.head
-		data, err := pageOps.getForWrite(a.pager, headID)
+		if allocatorInstrumentationEnabled {
+			if err := a.injectedGetForWriteError(headID); err != nil {
+				a.observePageOperation(allocatorPageGetForWrite, headID)
+				return ids, err
+			}
+		}
+		data, err := a.pager.GetForWrite(headID)
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageGetForWrite, headID)
+		}
 		if err != nil {
 			return ids, err
 		}
 		n := node.NewNode(data)
-		if !pageOps.verifyChecksum(headID, data) {
+		checksumOK := n.VerifyChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageVerifyChecksum, headID)
+		}
+		if !checksumOK {
 			return ids, errors.New("freelist head corrupted (AllocMany)")
 		}
 		if n.Type() != page.PageTypeFreelist {
@@ -512,7 +539,10 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64, pageOps *a
 		countFree := int(n.Count())
 		if countFree == 0 {
 			next := freelistNextPageID(data)
-			pageOps.updateChecksum(headID, data)
+			n.UpdateChecksum()
+			if allocatorInstrumentationEnabled {
+				a.observePageOperation(allocatorPageUpdateChecksum, headID)
+			}
 			a.head = next
 			a.pager.MarkUnverified(headID)
 			a.lastAlloc = headID
@@ -549,7 +579,10 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64, pageOps *a
 		}
 
 		n.SetCount(uint16(countFree))
-		pageOps.updateChecksum(headID, data)
+		n.UpdateChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageUpdateChecksum, headID)
+		}
 		for _, id := range ids[start:] {
 			a.recordReuseAllocation(id)
 		}
@@ -570,12 +603,12 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64, pageOps *a
 	return ids, nil
 }
 
-func (a *Allocator) allocManyRegionIndexedLocked(count int, hint uint64, pageOps *allocatorPageOperations) ([]uint64, error) {
+func (a *Allocator) allocManyRegionIndexedLocked(count int, hint uint64) ([]uint64, error) {
 	var regionSlots regionSlotIndex
-	return a.allocManyRegionWithIndexLocked(count, hint, &regionSlots, pageOps)
+	return a.allocManyRegionWithIndexLocked(count, hint, &regionSlots)
 }
 
-func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regionSlots *regionSlotIndex, pageOps *allocatorPageOperations) ([]uint64, error) {
+func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regionSlots *regionSlotIndex) ([]uint64, error) {
 	ids := make([]uint64, 0, count)
 	target := hint
 	for len(ids) < count {
@@ -595,12 +628,25 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 		}
 
 		headID := a.head
-		data, err := pageOps.getForWrite(a.pager, headID)
+		if allocatorInstrumentationEnabled {
+			if err := a.injectedGetForWriteError(headID); err != nil {
+				a.observePageOperation(allocatorPageGetForWrite, headID)
+				return ids, err
+			}
+		}
+		data, err := a.pager.GetForWrite(headID)
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageGetForWrite, headID)
+		}
 		if err != nil {
 			return ids, err
 		}
 		n := node.NewNode(data)
-		if !pageOps.verifyChecksum(headID, data) {
+		checksumOK := n.VerifyChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageVerifyChecksum, headID)
+		}
+		if !checksumOK {
 			return ids, errors.New("freelist head corrupted (AllocMany)")
 		}
 		if n.Type() != page.PageTypeFreelist {
@@ -610,7 +656,10 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 		countFree := int(n.Count())
 		if countFree == 0 {
 			next := freelistNextPageID(data)
-			pageOps.updateChecksum(headID, data)
+			n.UpdateChecksum()
+			if allocatorInstrumentationEnabled {
+				a.observePageOperation(allocatorPageUpdateChecksum, headID)
+			}
 			recycled := headID
 			a.head = next
 			a.pager.MarkUnverified(recycled)
@@ -662,7 +711,10 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 		}
 
 		n.SetCount(uint16(countFree))
-		pageOps.updateChecksum(headID, data)
+		n.UpdateChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageUpdateChecksum, headID)
+		}
 		for _, id := range ids[start:] {
 			a.recordReuseAllocation(id)
 		}
@@ -875,9 +927,8 @@ func (a *Allocator) Free(id uint64) error {
 // intentionally accepted and recorded exactly as repeated calls to Free would
 // record them; production callers remain responsible for avoiding double free.
 //
-// An I/O error after a valid prefix may leave that prefix freed, matching the
-// per-ID Free loop semantics. Callers that need prefix accounting continue to
-// use Free one ID at a time.
+// Errors after locking are returned as *FreeManyError so callers can identify
+// the committed prefix and retry only the unprocessed suffix.
 func (a *Allocator) FreeMany(ids []uint64) error {
 	for _, id := range ids {
 		if id == 0 {
@@ -890,20 +941,33 @@ func (a *Allocator) FreeMany(ids []uint64) error {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	pageOps := testAllocatorPageOperations
+	processed := 0
 
 	if a.head != 0 {
 		headID := a.head
-		data, err := pageOps.getForWrite(a.pager, headID)
+		if allocatorInstrumentationEnabled {
+			if err := a.injectedGetForWriteError(headID); err != nil {
+				a.observePageOperation(allocatorPageGetForWrite, headID)
+				return &FreeManyError{Processed: processed, Err: err}
+			}
+		}
+		data, err := a.pager.GetForWrite(headID)
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageGetForWrite, headID)
+		}
 		if err != nil {
-			return err
+			return &FreeManyError{Processed: processed, Err: err}
 		}
 		n := node.NewNode(data)
-		if !pageOps.verifyChecksum(headID, data) {
-			return errors.New("freelist head corrupted (FreeMany)")
+		checksumOK := n.VerifyChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageVerifyChecksum, headID)
+		}
+		if !checksumOK {
+			return &FreeManyError{Processed: processed, Err: errors.New("freelist head corrupted (FreeMany)")}
 		}
 		if n.Type() != page.PageTypeFreelist {
-			return errors.New("invalid freelist page type")
+			return &FreeManyError{Processed: processed, Err: errors.New("invalid freelist page type")}
 		}
 
 		count := int(n.Count())
@@ -924,25 +988,30 @@ func (a *Allocator) FreeMany(ids []uint64) error {
 		if TestHookFreeManyBeforeChecksum != nil {
 			TestHookFreeManyBeforeChecksum()
 		}
-		pageOps.updateChecksum(headID, data)
+		n.UpdateChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageUpdateChecksum, headID)
+		}
 		if take > 0 {
 			a.recordFreedPages(take, false)
+			processed += take
 			ids = ids[take:]
 		}
 	}
 
 	for len(ids) > 0 {
-		consumed, err := a.initHeadWithFreeIDs(ids[0], a.head, ids[1:], pageOps, true)
+		consumed, err := a.initHeadWithFreeIDs(ids[0], a.head, ids[1:], true)
 		if err != nil {
-			return err
+			return &FreeManyError{Processed: processed, Err: err}
 		}
 		a.recordFreedPages(consumed, true)
+		processed += consumed
 		ids = ids[consumed:]
 	}
 	return nil
 }
 
-func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, pageOps *allocatorPageOperations, batch bool) (int, error) {
+func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, batch bool) (int, error) {
 	take := len(ids)
 	if take > page.MaxFreeIDs {
 		take = page.MaxFreeIDs
@@ -952,7 +1021,16 @@ func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, pageOps *
 		err  error
 	)
 	if batch {
-		data, err = pageOps.getForWrite(a.pager, id)
+		if allocatorInstrumentationEnabled {
+			if injectedErr := a.injectedGetForWriteError(id); injectedErr != nil {
+				a.observePageOperation(allocatorPageGetForWrite, id)
+				return 0, injectedErr
+			}
+		}
+		data, err = a.pager.GetForWrite(id)
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageGetForWrite, id)
+		}
 	} else {
 		data, err = a.pager.GetForWrite(id)
 	}
@@ -976,7 +1054,10 @@ func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, pageOps *
 		TestHookFreeManyBeforeChecksum()
 	}
 	if batch {
-		pageOps.updateChecksum(id, data)
+		n.UpdateChecksum()
+		if allocatorInstrumentationEnabled {
+			a.observePageOperation(allocatorPageUpdateChecksum, id)
+		}
 	} else {
 		n.UpdateChecksum()
 	}
@@ -994,7 +1075,7 @@ func (a *Allocator) recordFreedPages(count int, newHead bool) {
 }
 
 func (a *Allocator) initHead(id, next uint64) error {
-	_, err := a.initHeadWithFreeIDs(id, next, nil, nil, false)
+	_, err := a.initHeadWithFreeIDs(id, next, nil, false)
 	return err
 }
 

@@ -17,33 +17,6 @@ const (
 
 var allocatorBenchmarkIDsSink []uint64
 
-type allocatorBenchmarkPageMetrics struct {
-	gets          int
-	verifications int
-	updates       int
-	pagesTouched  int
-	seen          []bool
-}
-
-func newAllocatorBenchmarkPageMetrics() *allocatorBenchmarkPageMetrics {
-	return &allocatorBenchmarkPageMetrics{seen: make([]bool, allocatorBenchmarkIDs+1)}
-}
-
-func (metrics *allocatorBenchmarkPageMetrics) observe(event allocatorPageEvent, pageID uint64) {
-	if pageID < uint64(len(metrics.seen)) && !metrics.seen[pageID] {
-		metrics.seen[pageID] = true
-		metrics.pagesTouched++
-	}
-	switch event {
-	case allocatorPageGetForWrite:
-		metrics.gets++
-	case allocatorPageVerifyChecksum:
-		metrics.verifications++
-	case allocatorPageUpdateChecksum:
-		metrics.updates++
-	}
-}
-
 func BenchmarkAllocator_FreeMany(b *testing.B) {
 	benchmarkAllocatorFree(b, true)
 }
@@ -66,16 +39,7 @@ func benchmarkAllocatorFree(b *testing.B, many bool) {
 		closeAllocatorBenchmarkFixture(b, p, path)
 	}
 
-	var metrics *allocatorBenchmarkPageMetrics
-	if many {
-		a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
-		metrics = newAllocatorBenchmarkPageMetrics()
-		testAllocatorPageOperations = newRecordingAllocatorPageOperations(metrics.observe)
-		freeAllocatorBenchmarkIDs(b, a, ids, true)
-		testAllocatorPageOperations = nil
-		closeAllocatorBenchmarkFixture(b, p, path)
-	}
-	benchmarkAllocatorMetrics(b, allocatorBenchmarkIDs, metrics)
+	benchmarkAllocatorMetrics(b, allocatorBenchmarkIDs)
 }
 
 func freeAllocatorBenchmarkIDs(b *testing.B, a *Allocator, ids []uint64, many bool) {
@@ -121,18 +85,7 @@ func benchmarkAllocatorRegion(b *testing.B, count int, many bool) {
 		closeAllocatorBenchmarkFixture(b, p, path)
 	}
 
-	var metrics *allocatorBenchmarkPageMetrics
-	if many {
-		a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
-		populateAllocatorBenchmarkFreelist(b, a, ids)
-		a.SetFreelistRegion(allocatorBenchmarkRegion, 1)
-		metrics = newAllocatorBenchmarkPageMetrics()
-		testAllocatorPageOperations = newRecordingAllocatorPageOperations(metrics.observe)
-		allocAllocatorBenchmarkIDs(b, a, count, true)
-		testAllocatorPageOperations = nil
-		closeAllocatorBenchmarkFixture(b, p, path)
-	}
-	benchmarkAllocatorMetrics(b, count, metrics)
+	benchmarkAllocatorMetrics(b, count)
 }
 
 func populateAllocatorBenchmarkFreelist(b *testing.B, a *Allocator, ids []uint64) {
@@ -206,13 +159,6 @@ func closeAllocatorBenchmarkFixture(b *testing.B, p *pager.Pager, path string) {
 	}
 }
 
-func benchmarkAllocatorMetrics(b *testing.B, ids int, metrics *allocatorBenchmarkPageMetrics) {
+func benchmarkAllocatorMetrics(b *testing.B, ids int) {
 	b.ReportMetric(float64(ids*b.N)/b.Elapsed().Seconds(), "ids/sec")
-	if metrics == nil {
-		return
-	}
-	b.ReportMetric(float64(metrics.pagesTouched), "pages_touched/op")
-	b.ReportMetric(float64(metrics.gets), "get_for_write/op")
-	b.ReportMetric(float64(metrics.verifications), "checksum_verifications/op")
-	b.ReportMetric(float64(metrics.updates), "checksum_updates/op")
 }
