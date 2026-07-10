@@ -1,0 +1,59 @@
+File: db.test
+Build ID: d1bd244f2d1965f3b33a8f8e6fd1840c2a8a05a3
+Type: cpu
+Time: 2026-07-09 16:09:18 HST
+Duration: 3.85s, Total samples = 4s (103.95%)
+Showing nodes accounting for 3.33s, 83.25% of 4s total
+Dropped 104 nodes (cum <= 0.02s)
+Showing top 50 nodes out of 227
+      flat  flat%   sum%        cum   cum%
+     0.27s  6.75%  6.75%      0.27s  6.75%  internal/runtime/syscall/linux.Syscall6
+     0.24s  6.00% 12.75%      0.24s  6.00%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.19s  4.75% 17.50%      2.76s 69.00%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func1
+     0.17s  4.25% 21.75%      0.17s  4.25%  runtime.memhash64
+     0.14s  3.50% 25.25%      0.65s 16.25%  internal/runtime/maps.(*table).uncheckedPutSlot
+     0.13s  3.25% 28.50%      1.45s 36.25%  runtime.mapassign_fast64
+     0.12s  3.00% 31.50%      0.25s  6.25%  internal/runtime/maps.typedmemmove
+     0.12s  3.00% 34.50%      0.47s 11.75%  runtime.mapaccess2_fast64
+     0.11s  2.75% 37.25%      0.86s 21.50%  internal/runtime/maps.(*table).split
+     0.10s  2.50% 39.75%      0.13s  3.25%  runtime.typedmemmove
+     0.09s  2.25% 42.00%      0.09s  2.25%  internal/runtime/maps.ctrlGroup.matchEmptyOrDeleted (inline)
+     0.09s  2.25% 44.25%      0.09s  2.25%  runtime.futex
+     0.09s  2.25% 46.50%      0.12s  3.00%  runtime.mapaccess1_fast32
+     0.09s  2.25% 48.75%      0.09s  2.25%  runtime.memclrNoHeapPointers
+     0.08s  2.00% 50.75%      0.25s  6.25%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafValueViewColumnarPrefixV2
+     0.08s  2.00% 52.75%      0.08s  2.00%  internal/runtime/maps.(*groupReference).elem (inline)
+     0.07s  1.75% 54.50%      0.14s  3.50%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2ValueMetaAt
+     0.07s  1.75% 56.25%      0.07s  1.75%  internal/runtime/maps.(*ctrlGroup).get (inline)
+     0.06s  1.50% 57.75%      0.06s  1.50%  internal/runtime/maps.(*groupReference).key (inline)
+     0.06s  1.50% 59.25%      0.06s  1.50%  internal/runtime/maps.(*groupsReference).group (inline)
+     0.06s  1.50% 60.75%      0.14s  3.50%  runtime.mapassign_fast32
+     0.05s  1.25% 62.00%      0.05s  1.25%  runtime.memmove
+     0.05s  1.25% 63.25%      0.06s  1.50%  runtime.unlock2
+     0.04s  1.00% 64.25%      0.34s  8.50%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafValueView
+     0.04s  1.00% 65.25%      0.04s  1.00%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2EnsureMeta
+     0.04s  1.00% 66.25%      0.04s  1.00%  internal/runtime/maps.(*Map).directoryIndex (inline)
+     0.04s  1.00% 67.25%      0.05s  1.25%  internal/runtime/maps.(*Map).putSlotSmallFast32
+     0.04s  1.00% 68.25%      0.05s  1.25%  runtime.tryDeferToSpanScan
+     0.03s  0.75% 69.00%      0.03s  0.75%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     0.03s  0.75% 69.75%      0.04s  1.00%  github.com/snissn/gomap/TreeDB/db.(*DB).valueLogRecordLengthForRewriteInSet
+     0.03s  0.75% 70.50%      0.03s  0.75%  github.com/snissn/gomap/TreeDB/node.(*Node).Count (inline)
+     0.03s  0.75% 71.25%      0.03s  0.75%  github.com/snissn/gomap/TreeDB/node.(*Node).leafPrefixCompressed (inline)
+     0.03s  0.75% 72.00%      0.03s  0.75%  internal/filepathlite.(*lazybuf).append
+     0.03s  0.75% 72.75%      0.03s  0.75%  internal/runtime/maps.(*Map).directoryAt (inline)
+     0.03s  0.75% 73.50%      0.03s  0.75%  internal/runtime/maps.ctrlGroup.matchFull (inline)
+     0.03s  0.75% 74.25%      0.03s  0.75%  internal/runtime/maps.h1 (inline)
+     0.03s  0.75% 75.00%      0.03s  0.75%  internal/runtime/maps.h2 (inline)
+     0.03s  0.75% 75.75%      0.03s  0.75%  internal/runtime/maps.makeProbeSeq (inline)
+     0.03s  0.75% 76.50%      0.03s  0.75%  runtime.(*spanSet).push
+     0.03s  0.75% 77.25%      0.03s  0.75%  runtime.findObject
+     0.03s  0.75% 78.00%      0.03s  0.75%  runtime.memhash32
+     0.03s  0.75% 78.75%      0.08s  2.00%  runtime.newobject
+     0.03s  0.75% 79.50%      0.08s  2.00%  runtime.readmemstats_m
+     0.03s  0.75% 80.25%      0.04s  1.00%  runtime.typePointers.next
+     0.02s   0.5% 80.75%      0.02s   0.5%  encoding/binary.littleEndian.Uint32 (inline)
+     0.02s   0.5% 81.25%      0.02s   0.5%  hash/crc32.ieeeCLMUL
+     0.02s   0.5% 81.75%      0.02s   0.5%  internal/runtime/maps.probeSeq.next (inline)
+     0.02s   0.5% 82.25%      0.12s  3.00%  os.(*File).readdir
+     0.02s   0.5% 82.75%      0.04s  1.00%  runtime.(*unwinder).resolveInternal
+     0.02s   0.5% 83.25%      0.02s   0.5%  runtime.nextFreeFast (inline)

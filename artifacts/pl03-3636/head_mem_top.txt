@@ -1,0 +1,53 @@
+File: db.test
+Build ID: d1bd244f2d1965f3b33a8f8e6fd1840c2a8a05a3
+Type: alloc_space
+Time: 2026-07-09 16:09:22 HST
+Showing nodes accounting for 2324.40MB, 97.17% of 2392.21MB total
+Dropped 174 nodes (cum <= 11.96MB)
+      flat  flat%   sum%        cum   cum%
+ 2080.15MB 86.96% 86.96%  2080.15MB 86.96%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func1
+   59.53MB  2.49% 89.44%    59.53MB  2.49%  github.com/snissn/gomap/TreeDB/db.(*leafGenerationGroupedFrameScanCache).store
+   57.17MB  2.39% 91.83%  2231.89MB 93.30%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit
+   30.50MB  1.28% 93.11%    30.50MB  1.28%  internal/bytealg.MakeNoZero
+      23MB  0.96% 94.07%       23MB  0.96%  syscall.ByteSliceFromString
+   20.03MB  0.84% 94.91%    21.03MB  0.88%  github.com/snissn/gomap/TreeDB/db.(*DB).newCompactStorageLeafScanContext
+   18.50MB  0.77% 95.68%    28.50MB  1.19%  os.lstatNolog
+      17MB  0.71% 96.39%       27MB  1.13%  os.statNolog
+    4.50MB  0.19% 96.58%    14.03MB  0.59%  os.(*File).readdir
+       4MB  0.17% 96.75%    63.53MB  2.66%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGroupedFrameInfo
+       3MB  0.13% 96.87%    13.50MB  0.56%  github.com/snissn/gomap/TreeDB/db.(*DB).valueOnlyValueLogFiles
+       3MB  0.13% 97.00%    16.50MB  0.69%  os.(*unixDirent).Info
+       2MB 0.084% 97.08%    65.53MB  2.74%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationPtrTotals
+    1.50MB 0.063% 97.14%    77.54MB  3.24%  github.com/snissn/gomap/TreeDB/db.compactStorageUsage
+    0.50MB 0.021% 97.17%    19.50MB  0.82%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireCompactStorageAuditInput
+         0     0% 97.17%  2361.93MB 98.73%  github.com/snissn/gomap/TreeDB/db.(*DB).CompactStoragePlan (inline)
+         0     0% 97.17%  2361.93MB 98.73%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorage
+         0     0% 97.17%  2251.89MB 94.13%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorageSharedAudit
+         0     0% 97.17%  2323.42MB 97.12%  github.com/snissn/gomap/TreeDB/db.(*DB).populateCompactStorageAudit
+         0     0% 97.17%       18MB  0.75%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareCompactStorageAuditTopology
+         0     0% 97.17%  2080.15MB 86.96%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func2
+         0     0% 97.17%  2145.67MB 89.69%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3
+         0     0% 97.17%  2145.67MB 89.69%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3.1
+         0     0% 97.17%  2383.98MB 99.66%  github.com/snissn/gomap/TreeDB/db.BenchmarkCompactStorageSharedAudit
+         0     0% 97.17%    70.04MB  2.93%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage
+         0     0% 97.17%    16.50MB  0.69%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage.func1
+         0     0% 97.17%    22.05MB  0.92%  github.com/snissn/gomap/TreeDB/db.openCompactStorageAuditBenchmarkFixture
+         0     0% 97.17%       17MB  0.71%  github.com/snissn/gomap/TreeDB/db.resolveStorageLayout
+         0     0% 97.17%  2145.67MB 89.69%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
+         0     0% 97.17%    14.03MB  0.59%  os.(*File).ReadDir
+         0     0% 97.17%    28.50MB  1.19%  os.Lstat
+         0     0% 97.17%    22.03MB  0.92%  os.ReadDir
+         0     0% 97.17%       27MB  1.13%  os.Stat
+         0     0% 97.17%       23MB  0.96%  os.ignoringEINTR (inline)
+         0     0% 97.17%    27.50MB  1.15%  path/filepath.Join (inline)
+         0     0% 97.17%    55.54MB  2.32%  path/filepath.WalkDir
+         0     0% 97.17%    27.50MB  1.15%  path/filepath.join
+         0     0% 97.17%    39.53MB  1.65%  path/filepath.walkDir
+         0     0% 97.17%    27.50MB  1.15%  strings.(*Builder).Grow
+         0     0% 97.17%    27.50MB  1.15%  strings.(*Builder).grow
+         0     0% 97.17%    27.50MB  1.15%  strings.Join
+         0     0% 97.17%       23MB  0.96%  syscall.BytePtrFromString (inline)
+         0     0% 97.17%       20MB  0.84%  syscall.fstatat
+         0     0% 97.17%  2372.37MB 99.17%  testing.(*B).launch
+         0     0% 97.17%    12.11MB  0.51%  testing.(*B).run1.func1
+         0     0% 97.17%  2384.48MB 99.68%  testing.(*B).runN

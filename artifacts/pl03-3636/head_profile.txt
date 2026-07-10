@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCompactStorageSharedAudit-12    	    7454	    463532 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  336286 B/op	     314 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	3.856s

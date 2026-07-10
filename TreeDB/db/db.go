@@ -93,6 +93,9 @@ type DB struct {
 	// Test hook used to observe whether fenced value-log reclaim resolved
 	// referenced segments through the tracker or the full-scan fallback.
 	compactStorageFencedValueLogRefHook func(compactStorageFencedValueLogRefEvent)
+	// Test hook used to invalidate a shared CompactStorage audit immediately
+	// before its exact publication-basis revalidation.
+	compactStorageAuditBeforeRevalidate func(attempt int)
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]

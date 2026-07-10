@@ -1,0 +1,58 @@
+File: db.test
+Build ID: 9a3ae3b3fac909c9d782b2e64029bd6be6128fc5
+Type: alloc_space
+Time: 2026-07-09 16:15:50 HST
+Showing nodes accounting for 1719.28MB, 96.97% of 1772.95MB total
+Dropped 138 nodes (cum <= 8.86MB)
+Showing top 50 nodes out of 63
+      flat  flat%   sum%        cum   cum%
+ 1531.55MB 86.38% 86.38%  1539.55MB 86.84%  github.com/snissn/gomap/TreeDB/db.(*DB).collectValueLogLiveBytes
+   75.68MB  4.27% 90.65%    75.68MB  4.27%  github.com/snissn/gomap/TreeDB/db.(*leafGenerationGroupedFrameScanCache).store
+   21.04MB  1.19% 91.84%   108.72MB  6.13%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationLiveStatsWithOptions
+   15.50MB  0.87% 92.71%    15.50MB  0.87%  github.com/snissn/gomap/TreeDB/node.(*Node).ensureKeyScratch (inline)
+      15MB  0.85% 93.56%       15MB  0.85%  internal/bytealg.MakeNoZero
+   13.50MB  0.76% 94.32%    13.50MB  0.76%  syscall.ByteSliceFromString
+      11MB  0.62% 94.94%    13.50MB  0.76%  os.lstatNolog
+      10MB  0.56% 95.51%       10MB  0.56%  github.com/snissn/gomap/TreeDB/tree.New
+    8.50MB  0.48% 95.99%    16.50MB  0.93%  os.statNolog
+       3MB  0.17% 96.15%    44.01MB  2.48%  github.com/snissn/gomap/TreeDB/db.compactStorageUsage
+    2.50MB  0.14% 96.30%    10.50MB  0.59%  os.(*unixDirent).Info
+       2MB  0.11% 96.41%    77.68MB  4.38%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGroupedFrameInfo
+    1.50MB 0.085% 96.49%    79.18MB  4.47%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationPtrTotals
+    1.50MB 0.085% 96.58%        9MB  0.51%  github.com/snissn/gomap/TreeDB/db.(*DB).valueOnlyValueLogFiles
+    1.50MB 0.085% 96.66%    59.37MB  3.35%  github.com/snissn/gomap/TreeDB/db.collectLiveLeafGenerationIDs
+    1.50MB 0.085% 96.75%       14MB  0.79%  github.com/snissn/gomap/TreeDB/db.(*DB).referencedValueLogSegmentsWithSource
+       1MB 0.056% 96.80%    55.34MB  3.12%  github.com/snissn/gomap/TreeDB/db.(*DB).LeafGenerationPlan
+       1MB 0.056% 96.86%    80.18MB  4.52%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationSubtreeStatsDepth
+    0.50MB 0.028% 96.89%    13.50MB  0.76%  github.com/snissn/gomap/TreeDB/db.collectMaintenanceRootsWithContext
+    0.50MB 0.028% 96.92%  1548.05MB 87.32%  github.com/snissn/gomap/TreeDB/db.(*DB).estimateValueLogLiveBytesBySegment.func1
+    0.50MB 0.028% 96.94%    12.50MB  0.71%  github.com/snissn/gomap/TreeDB/db.(*DB).scanValueLogRefCounts
+    0.50MB 0.028% 96.97%       13MB  0.73%  github.com/snissn/gomap/TreeDB/db.openCompactStorageAuditBenchmarkFixture
+         0     0% 96.97%  1750.30MB 98.72%  github.com/snissn/gomap/TreeDB/db.(*DB).CompactStoragePlan (inline)
+         0     0% 96.97%  1555.55MB 87.74%  github.com/snissn/gomap/TreeDB/db.(*DB).ValueLogRewritePlan
+         0     0% 96.97%  1750.30MB 98.72%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorage
+         0     0% 96.97%  1548.05MB 87.32%  github.com/snissn/gomap/TreeDB/db.(*DB).estimateValueLogLiveBytesBySegment
+         0     0% 96.97%    73.89MB  4.17%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGC
+         0     0% 96.97%    50.84MB  2.87%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationLiveStatsForSnapshot
+         0     0% 96.97%    57.87MB  3.26%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots
+         0     0% 96.97%    50.84MB  2.87%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationLiveStatsForSnapshotWithProtectedRoots
+         0     0% 96.97%  1728.30MB 97.48%  github.com/snissn/gomap/TreeDB/db.(*DB).populateCompactStorageAudit
+         0     0% 96.97%       14MB  0.79%  github.com/snissn/gomap/TreeDB/db.(*DB).referencedValueLogSegments (inline)
+         0     0% 96.97%    50.84MB  2.87%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationLiveStats (inline)
+         0     0% 96.97%    80.18MB  4.52%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationSubtreeStats (inline)
+         0     0% 96.97%    79.18MB  4.47%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationSubtreeStatsDepth.func1
+         0     0% 96.97%    21.50MB  1.21%  github.com/snissn/gomap/TreeDB/db.(*DB).valueLogGC
+         0     0% 96.97%  1763.30MB 99.46%  github.com/snissn/gomap/TreeDB/db.BenchmarkCompactStorageSharedAudit
+         0     0% 96.97%    39.01MB  2.20%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage
+         0     0% 96.97%    10.50MB  0.59%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage.func1
+         0     0% 96.97%    13.50MB  0.76%  github.com/snissn/gomap/TreeDB/db.maintenanceRootsForSnapshotWithContext
+         0     0% 96.97%       10MB  0.56%  github.com/snissn/gomap/TreeDB/db.resolveStorageLayout
+         0     0% 96.97%    15.50MB  0.87%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafKeyFlagsView
+         0     0% 96.97%    79.18MB  4.47%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
+         0     0% 96.97%    15.50MB  0.87%  github.com/snissn/gomap/TreeDB/node.(*Node).getLeafKeyFlagsViewColumnarPrefixV2 (inline)
+         0     0% 96.97%    15.50MB  0.87%  github.com/snissn/gomap/TreeDB/node.(*Node).leafColumnarPrefixV2FullKeyFlagsAt
+         0     0% 96.97%    15.50MB  0.87%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).Next
+         0     0% 96.97%    15.50MB  0.87%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).getLeafKeyFlags
+         0     0% 96.97%    15.50MB  0.87%  github.com/snissn/gomap/TreeDB/tree.(*Iterator).loadCurrent
+         0     0% 96.97%    13.50MB  0.76%  os.Lstat
+         0     0% 96.97%    16.02MB   0.9%  os.ReadDir

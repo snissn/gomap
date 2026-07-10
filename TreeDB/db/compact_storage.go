@@ -67,6 +67,10 @@ var ErrCompactStorageLeafPageLogOwnerUnsupported = errors.New("treedb: compact s
 // temporary compact writer.
 var ErrCompactStorageLeafPageLogHandoffCleanup = errors.New("treedb: compact storage leaf page log handoff cleanup failed")
 
+// ErrCompactStorageAuditStale is a retryable error reporting that both attempts
+// to build a coherent CompactStorage audit were invalidated before publication.
+var ErrCompactStorageAuditStale = errors.New("treedb: compact storage audit snapshot became stale")
+
 // LeafPageLogCompactStorageHandoff is implemented by internally owned
 // leaf-page-log writers that can be safely restored after CompactStorage
 // temporarily replaces them with its compact writer.
@@ -283,6 +287,22 @@ type CompactStoragePhaseStats struct {
 	WallTimeNanos int64  `json:"wall_time_nanos"`
 }
 
+// CompactStorageAuditStats records shared reachability work and structural
+// reuse decisions made while producing a CompactStorage report.
+type CompactStorageAuditStats struct {
+	SharedScans                   uint64 `json:"shared_scans"`
+	StructuralReuseHits           uint64 `json:"structural_reuse_hits"`
+	StructuralReuseMisses         uint64 `json:"structural_reuse_misses"`
+	RevalidationRetries           uint64 `json:"revalidation_retries"`
+	RootSets                      uint64 `json:"root_sets"`
+	PagesVisited                  uint64 `json:"pages_visited"`
+	MemoHits                      uint64 `json:"memo_hits"`
+	PointerProjections            uint64 `json:"pointer_projections"`
+	GroupedRecordDedupeHits       uint64 `json:"grouped_record_dedupe_hits"`
+	PhysicalBytesRead             uint64 `json:"physical_bytes_read"`
+	LastStructuralReuseMissReason string `json:"last_structural_reuse_miss_reason,omitempty"`
+}
+
 // CompactStorageStats is the single high-level report for TreeDB storage
 // compaction and planning.
 type CompactStorageStats struct {
@@ -293,6 +313,7 @@ type CompactStorageStats struct {
 	After  []CompactStorageUsage `json:"after"`
 
 	Phases []CompactStoragePhaseStats `json:"phases,omitempty"`
+	Audit  CompactStorageAuditStats   `json:"audit"`
 
 	ValueLogRewritePlan ValueLogRewritePlan              `json:"value_log_rewrite_plan"`
 	ValueLogRewrite     ValueLogRewriteStats             `json:"value_log_rewrite,omitempty"`
@@ -347,6 +368,8 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	opts = normalizeCompactStorageOptions(opts)
 	stats.Mode = opts.Mode
 	stats.DryRun = opts.DryRun
+	auditSession := &compactStorageAuditSession{}
+	defer auditSession.close()
 	if db.readOnly && !opts.DryRun {
 		return stats, ErrReadOnly
 	}
@@ -380,7 +403,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 	}
 
-	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked, nil, nil)
+	initialDebt, err := db.populateCompactStorageAudit(ctx, opts, &stats, !maintenanceLocked, nil, nil, auditSession)
 	if err != nil {
 		return stats, err
 	}
@@ -586,7 +609,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 	}
 
-	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, leafPackPassesRemaining); err != nil {
+	if err := db.settleCompactStorageGC(ctx, opts, &stats, !maintenanceLocked, compactLeafLog, compactLeafPackCreatedFileIDs, leafPackPassesRemaining, auditSession); err != nil {
 		return stats, err
 	}
 	// If index vacuum was unsupported, keep leaf-generation pins through final
@@ -621,12 +644,13 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	stats.After = after
 
 	var finalAudit CompactStorageStats
-	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked, nil, compactLeafPackCreatedFileIDs)
+	finalDebt, err := db.populateCompactStorageAudit(ctx, opts, &finalAudit, !maintenanceLocked, nil, compactLeafPackCreatedFileIDs, auditSession)
 	if err != nil {
 		return stats, err
 	}
 	stats.ValueLogRewritePlan = finalAudit.ValueLogRewritePlan
 	stats.LeafGenerationPlan = finalAudit.LeafGenerationPlan
+	addCompactStorageAuditStats(&stats.Audit, finalAudit.Audit)
 	stats.RemainingDebt = finalDebt
 	if leafLogHandoff != nil {
 		if err := leafLogHandoff.cleanup(); err != nil {
@@ -703,15 +727,16 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 	return true, nil
 }
 
-func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining int) error {
+func (db *DB) settleCompactStorageGC(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, compactLeafLog *rewriteWriter, ignoredLeafPackRawFileIDs map[uint32]struct{}, leafPackPassesRemaining int, auditSession *compactStorageAuditSession) error {
 	const maxSettlePasses = 4
 	for pass := 0; pass < maxSettlePasses; pass++ {
 		var audit CompactStorageStats
 		var fencedIDs []uint32
-		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit, lockMaintenance, &fencedIDs, ignoredLeafPackRawFileIDs)
+		debt, err := db.populateCompactStorageAudit(ctx, opts, &audit, lockMaintenance, &fencedIDs, ignoredLeafPackRawFileIDs, auditSession)
 		if err != nil {
 			return err
 		}
+		addCompactStorageAuditStats(&stats.Audit, audit.Audit)
 		leafPackDebtActionable := debt.LeafPackGenerations > 0 && leafPackPassesRemaining > 0
 		if debt.ValueLogGCSegments == 0 && !leafPackDebtActionable && debt.LeafGCGenerations == 0 && len(fencedIDs) == 0 {
 			return nil
@@ -1056,13 +1081,22 @@ func compactStorageRememberLeafPackCreatedFileIDs(ignoredRawFileIDs map[uint32]s
 	}
 }
 
-func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, fencedIDsOut *[]uint32, ignoredLeafPackRawFileIDs map[uint32]struct{}) (CompactStorageDebt, error) {
+func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, fencedIDsOut *[]uint32, ignoredLeafPackRawFileIDs map[uint32]struct{}, session *compactStorageAuditSession) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
-	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
-	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(opts, protectedPaths))
+	_ = lockMaintenance
+	in, raw, auditStats, err := db.compactStorageSharedAudit(ctx, opts, session)
 	if err != nil {
 		return debt, err
 	}
+	defer in.close()
+	stats.Audit = auditStats
+	protectedPaths := in.protectedPaths
+	set := in.snap.state.ValueLogSet
+	rewritePlan := db.compactStorageRewritePlanFromAudit(
+		compactStorageRewritePlanOptions(opts, protectedPaths),
+		set,
+		raw.valueLogLiveBytesBySegment,
+	)
 	stats.ValueLogRewritePlan = rewritePlan
 	debt.ValueLogRewriteSegments = rewritePlan.SegmentsSelected
 	debt.ValueLogRewriteBytes = rewritePlan.SelectedBytesStale
@@ -1070,29 +1104,23 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 		debt.ValueLogRewriteBytes = rewritePlan.SelectedBytesTotal
 	}
 
-	valueGC, err := db.valueLogGC(ctx, ValueLogGCOptions{DryRun: true, ProtectedPaths: protectedPaths}, lockMaintenance)
+	valueGC, err := db.compactStorageValueLogGCFromAudit(ctx, set, raw.valueLogReferencedSegments, protectedPaths)
 	if err != nil {
 		return debt, err
 	}
 	stats.ValueLogGC = valueGC
 	debt.ValueLogGCSegments = valueGC.SegmentsEligible
 	debt.ValueLogGCBytes = valueGC.BytesEligible
-	fencedValueLogIDs, fencedValueLogBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(ctx, opts)
-	if err != nil {
-		return debt, err
-	}
+	fencedValueLogIDs, fencedValueLogBytes := db.compactStorageFencedUnreferencedFromAudit(opts, set, raw.valueLogReferencedSegments, protectedPaths)
 	if fencedIDsOut != nil {
 		*fencedIDsOut = append((*fencedIDsOut)[:0], fencedValueLogIDs...)
 	}
 	debt.ValueLogGCSegments += len(fencedValueLogIDs)
 	debt.ValueLogGCBytes += fencedValueLogBytes
 
-	protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
+	protectedRootIDs, protectedSystemRootIDs := in.protectedRootIDs, in.protectedSystemRootIDs
 	leafPackOpts := compactStorageLeafPackFromPlanOptions(opts, protectedRootIDs, protectedSystemRootIDs)
-	leafPlan, err := db.LeafGenerationPlan(ctx, leafGenerationPackFromPlanPlanOptions(leafPackOpts))
-	if err != nil {
-		return debt, err
-	}
+	leafPlan := db.compactStorageLeafGenerationPlanFromAudit(leafGenerationPackFromPlanPlanOptions(leafPackOpts), in, raw.leafGenerationLive)
 	leafPlan = compactStorageFilterIgnoredLeafPackPlan(leafPlan, leafPackOpts, ignoredLeafPackRawFileIDs)
 	stats.LeafGenerationPlan = leafPlan
 	leafPackGenerations, leafPackBytes, err := compactStorageLeafPackDebtFromPlan(leafPlan, leafPackOpts)
@@ -1102,12 +1130,7 @@ func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStora
 	debt.LeafPackGenerations = leafPackGenerations
 	debt.LeafPackBytes = leafPackBytes
 
-	protectedRootIDs, protectedSystemRootIDs = db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-	leafGC, err := db.leafGenerationGC(ctx, LeafGenerationGCOptions{
-		DryRun:                 true,
-		ProtectedRootIDs:       protectedRootIDs,
-		ProtectedSystemRootIDs: protectedSystemRootIDs,
-	}, lockMaintenance)
+	leafGC, err := db.compactStorageLeafGenerationGCFromAudit(ctx, in, raw.leafGenerationLive)
 	if err != nil {
 		return debt, err
 	}
