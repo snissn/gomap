@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -221,6 +222,11 @@ type ValueLogRewriteOnlineOptions struct {
 	// MinSegmentStaleBytes requires estimated stale bytes to be at least this
 	// threshold when sparse segment selection is used.
 	MinSegmentStaleBytes int64
+	// MinSegmentStaleBytesCapRatio caps MinSegmentStaleBytes to this fraction of
+	// each candidate segment's size. It lets callers retain an absolute floor
+	// for large segments without permanently excluding a small segment that
+	// already meets its stale-ratio policy. <=0 disables the cap.
+	MinSegmentStaleBytesCapRatio float64
 	// MinSegmentAge excludes very recent source segments from sparse selection.
 	// This is useful for cached maintenance so freshly-written segments are not
 	// immediately churned by rewrite during sustained ingest.
@@ -1366,6 +1372,7 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 
 	minStaleRatio := normalizeStaleRatio(opts.MinSegmentStaleRatio)
 	minStaleBytes := opts.MinSegmentStaleBytes
+	minStaleBytesCapRatio := normalizeStaleRatio(opts.MinSegmentStaleBytesCapRatio)
 	maxSourceSegments := opts.MaxSourceSegments
 	maxSourceBytes := opts.MaxSourceBytes
 	minSegmentAge := opts.MinSegmentAge
@@ -1497,7 +1504,17 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 		if minStaleRatio > 0 && staleRatio < minStaleRatio {
 			continue
 		}
-		if minStaleBytes > 0 && staleBytes < minStaleBytes {
+		effectiveMinStaleBytes := minStaleBytes
+		if minStaleBytesCapRatio > 0 {
+			capBytes := int64(math.Ceil(float64(size) * minStaleBytesCapRatio))
+			if capBytes < 1 {
+				capBytes = 1
+			}
+			if effectiveMinStaleBytes > capBytes {
+				effectiveMinStaleBytes = capBytes
+			}
+		}
+		if effectiveMinStaleBytes > 0 && staleBytes < effectiveMinStaleBytes {
 			continue
 		}
 		candidates = append(candidates, rewriteSourceSegment{
