@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
@@ -19,6 +20,32 @@ const valueLogKeepRecentSegmentsPerLane = 2
 // second no-refresh read after the fallback Refresh call.
 var valueLogGCPostRefreshCurrentSetNoRefresh = func(vm *valuelog.Manager) *valuelog.Set {
 	return vm.CurrentSetNoRefresh()
+}
+
+var valueLogGCPostScanHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func registerValueLogGCPostScanHook(hook func()) func() {
+	valueLogGCPostScanHook.mu.Lock()
+	prev := valueLogGCPostScanHook.fn
+	valueLogGCPostScanHook.fn = hook
+	valueLogGCPostScanHook.mu.Unlock()
+	return func() {
+		valueLogGCPostScanHook.mu.Lock()
+		valueLogGCPostScanHook.fn = prev
+		valueLogGCPostScanHook.mu.Unlock()
+	}
+}
+
+func runValueLogGCPostScanHook() {
+	valueLogGCPostScanHook.mu.Lock()
+	hook := valueLogGCPostScanHook.fn
+	valueLogGCPostScanHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 // ValueLogGCOptions controls value-log garbage collection.
@@ -131,25 +158,47 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	if vm == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
-	if !opts.DryRun {
-		// Publish preparation can flush value-log segments before the root that
-		// references them is installed. Serialize the reachability scan and delete
-		// phase with that prepared-publish window so GC cannot classify those
-		// segments against the previous root and remove them prematurely.
+	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
+	var referenced map[uint32]struct{}
+	var scannedSeq uint64
+	if !observedOnly {
+		// A full scan is O(N), so it must never run while publishPrepareMu is
+		// exclusively held. Safety invariant: GC never zombifies a segment from a
+		// referenced set older than the root visible while the exclusive lock is
+		// held. A post-scan root can first-reference an old segment, so a changed
+		// commit sequence is retried outside the lock once and then conservatively
+		// aborts this GC pass.
+		const maxStaleScanRetries = 1
+		for attempt := 0; ; attempt++ {
+			var err error
+			referenced, _, scannedSeq, err = db.referencedValueLogSegmentsForGCAtSeq(ctx)
+			if err != nil {
+				return stats, err
+			}
+			runValueLogGCPostScanHook()
+			if opts.DryRun {
+				break
+			}
+
+			db.publishPrepareMu.Lock()
+			if db.currentCommitSeq() == scannedSeq {
+				break
+			}
+			db.publishPrepareMu.Unlock()
+			if attempt == maxStaleScanRetries {
+				return stats, nil
+			}
+		}
+	} else if !opts.DryRun {
 		db.publishPrepareMu.Lock()
+	}
+	if !opts.DryRun {
 		defer db.publishPrepareMu.Unlock()
 	}
 
-	observedOnly := len(opts.ObservedSourceFileIDs) > 0 && opts.ObservedSourceAssumeUnreferenced
-	var referenced map[uint32]struct{}
-	if !observedOnly {
-		var err error
-		referenced, err = db.referencedValueLogSegments(ctx)
-		if err != nil {
-			return stats, err
-		}
-	}
-
+	// Commit-sequence equality fences published roots, not prepared output. The
+	// current/recent and pending-append keep sets below are therefore computed
+	// from the value-log topology while publish preparation remains excluded.
 	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
 	// path. Fall back to a refresh if the manager has not yet discovered any
 	// segments (or if another process created segments on disk).

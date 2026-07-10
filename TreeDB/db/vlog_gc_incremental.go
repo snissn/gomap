@@ -237,6 +237,7 @@ func (d *valueLogRefDelta) forEachChange(fn func(fileID uint32, change int64) er
 
 type valueLogRefTracker struct {
 	mu        sync.RWMutex
+	revision  uint64
 	commitSeq uint64
 	counts    map[uint32]uint64
 	valid     bool
@@ -286,7 +287,47 @@ func (t *valueLogRefTracker) replace(counts map[uint32]uint64, commitSeq uint64,
 	t.commitSeq = commitSeq
 	t.valid = true
 	t.dirty = dirty
+	t.revision++
 	t.mu.Unlock()
+}
+
+func (t *valueLogRefTracker) revisionSnapshot() uint64 {
+	if t == nil {
+		return 0
+	}
+	t.mu.RLock()
+	revision := t.revision
+	t.mu.RUnlock()
+	return revision
+}
+
+func (t *valueLogRefTracker) replaceUnlessAdvanced(counts map[uint32]uint64, commitSeq uint64, dirty bool, observedRevision uint64) bool {
+	if t == nil {
+		return false
+	}
+	next := make(map[uint32]uint64, len(counts))
+	for fileID, n := range counts {
+		if n == 0 {
+			continue
+		}
+		next[fileID] = n
+	}
+	t.mu.Lock()
+	// A GC fallback scan may finish after a concurrent commit advanced exact
+	// counts. Preserve that advancement, but still allow ordinary stale-ahead
+	// tracker corruption to be repaired when the tracker did not change during
+	// the scan.
+	if t.revision != observedRevision && t.commitSeq > commitSeq {
+		t.mu.Unlock()
+		return false
+	}
+	t.counts = next
+	t.commitSeq = commitSeq
+	t.valid = true
+	t.dirty = dirty
+	t.revision++
+	t.mu.Unlock()
+	return true
 }
 
 func (t *valueLogRefTracker) invalidate() {
@@ -295,6 +336,7 @@ func (t *valueLogRefTracker) invalidate() {
 	}
 	t.mu.Lock()
 	t.valid = false
+	t.revision++
 	t.mu.Unlock()
 }
 
@@ -340,6 +382,7 @@ func (t *valueLogRefTracker) applyDelta(nextCommitSeq uint64, delta *valueLogRef
 
 	t.commitSeq = nextCommitSeq
 	t.dirty = true
+	t.revision++
 	return nil
 }
 
@@ -387,7 +430,10 @@ func (t *valueLogRefTracker) markClean(commitSeq uint64) {
 	}
 	t.mu.Lock()
 	if t.valid && t.commitSeq == commitSeq {
-		t.dirty = false
+		if t.dirty {
+			t.dirty = false
+			t.revision++
+		}
 	}
 	t.mu.Unlock()
 }
@@ -493,27 +539,46 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 }
 
 func (db *DB) referencedValueLogSegmentsWithSource(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, error) {
+	refs, source, _, err := db.referencedValueLogSegmentsWithSourceAtSeq(ctx)
+	return refs, source, err
+}
+
+func (db *DB) referencedValueLogSegmentsWithSourceAtSeq(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
+	return db.referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx, false)
+}
+
+func (db *DB) referencedValueLogSegmentsForGCAtSeq(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
+	return db.referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx, true)
+}
+
+func (db *DB) referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx context.Context, guardConcurrentAdvance bool) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	seq := db.currentCommitSeq()
+	var trackerRevisionBeforeScan uint64
 	if db.valueLogRefTracker != nil {
+		trackerRevisionBeforeScan = db.valueLogRefTracker.revisionSnapshot()
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
-			return refs, valueLogRefResolutionSourceTracker, nil
+			return refs, valueLogRefResolutionSourceTracker, seq, nil
 		}
 	}
 	counts, scannedSeq, err := db.scanValueLogRefCounts(ctx)
 	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
 		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
-			return nil, valueLogRefResolutionSourceFallbackScan, refreshErr
+			return nil, valueLogRefResolutionSourceFallbackScan, 0, refreshErr
 		}
 		counts, scannedSeq, err = db.scanValueLogRefCounts(ctx)
 	}
 	if err != nil {
-		return nil, valueLogRefResolutionSourceFallbackScan, err
+		return nil, valueLogRefResolutionSourceFallbackScan, 0, err
 	}
 	if db.valueLogRefTracker != nil {
-		db.valueLogRefTracker.replace(counts, scannedSeq, true)
+		if guardConcurrentAdvance {
+			db.valueLogRefTracker.replaceUnlessAdvanced(counts, scannedSeq, true, trackerRevisionBeforeScan)
+		} else {
+			db.valueLogRefTracker.replace(counts, scannedSeq, true)
+		}
 	}
 	refs := make(map[uint32]struct{}, len(counts))
 	for fileID, n := range counts {
@@ -522,7 +587,7 @@ func (db *DB) referencedValueLogSegmentsWithSource(ctx context.Context) (map[uin
 		}
 		refs[fileID] = struct{}{}
 	}
-	return refs, valueLogRefResolutionSourceFallbackScan, nil
+	return refs, valueLogRefResolutionSourceFallbackScan, scannedSeq, nil
 }
 
 func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uint64, error) {

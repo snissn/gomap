@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -350,6 +352,248 @@ func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
 	pendingPath := filepath.Join(dir, "value_vlog", "value-l0-000002.log")
 	if _, err := os.Stat(pendingPath); err != nil {
 		t.Fatalf("pending segment missing after GC: %v", err)
+	}
+}
+
+func TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, db.dir, 0, 1, 1_000, 1, func(int) []byte { return []byte("old") })
+	appendPointersInNewSegment(t, db.dir, 0, 2, 2_000, 1, func(int) []byte { return []byte("active") })
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value-log set: %v", err)
+	}
+	db.valueLogRefTracker.invalidate()
+
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseScan) }) }
+	defer release()
+	var once sync.Once
+	restore := registerScanValueLogRefCountsHook(func() {
+		once.Do(func() {
+			close(scanStarted)
+			<-releaseScan
+		})
+	})
+	defer restore()
+
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcDone <- err
+	}()
+	<-scanStarted
+
+	publishDone := make(chan error, 1)
+	go func() { publishDone <- db.Set([]byte("publish-during-gc-scan"), []byte("ok")) }()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish during scan: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publish blocked while value-log GC full scan was paused")
+	}
+	release()
+	if err := <-gcDone; err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+}
+
+func TestValueLogGC_PostScanFirstReferenceToOldSegmentIsSafe(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldPtr := appendPointersInNewSegment(t, db.dir, 0, 1, 3_000, 1, func(int) []byte { return []byte("old") })[0]
+	appendPointersInNewSegment(t, db.dir, 0, 2, 4_000, 1, func(int) []byte { return []byte("active") })
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value-log set: %v", err)
+	}
+	db.valueLogRefTracker.invalidate() // Exercise the full-scan fallback split.
+	oldPath := filepath.Join(ValueLogDirPath(db.dir), "value-l0-000001.log")
+
+	postScan := make(chan struct{})
+	releaseGC := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseGC) }) }
+	defer release()
+	var once sync.Once
+	restore := registerValueLogGCPostScanHook(func() {
+		once.Do(func() {
+			close(postScan)
+			<-releaseGC
+		})
+	})
+	defer restore()
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcDone <- err
+	}()
+	<-postScan
+	setValueLogPointer(t, db, []byte("old-first-reference"), oldPtr)
+	release()
+	if err := <-gcDone; err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("old segment first referenced after scan was removed: %v", err)
+	}
+}
+
+func TestValueLogGC_PostScanNewSegmentIsSafe(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, db.dir, 0, 1, 5_000, 1, func(int) []byte { return []byte("old") })
+	appendPointersInNewSegment(t, db.dir, 0, 2, 6_000, 1, func(int) []byte { return []byte("active") })
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value-log set: %v", err)
+	}
+	db.valueLogRefTracker.invalidate() // Exercise the full-scan fallback split.
+
+	postScan := make(chan struct{})
+	releaseGC := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseGC) }) }
+	defer release()
+	var hookOnce sync.Once
+	restore := registerValueLogGCPostScanHook(func() {
+		hookOnce.Do(func() {
+			close(postScan)
+			<-releaseGC
+		})
+	})
+	defer restore()
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcDone <- err
+	}()
+	<-postScan
+
+	newPtr := appendPointersInNewSegment(t, db.dir, 0, 3, 7_000, 1, func(int) []byte { return []byte("new") })[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh post-scan value-log set: %v", err)
+	}
+	key := []byte("post-scan-new-segment")
+	setValueLogPointer(t, db, key, newPtr)
+	release()
+	if err := <-gcDone; err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	newPath := filepath.Join(ValueLogDirPath(db.dir), "value-l0-000003.log")
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("segment created and referenced after scan was removed: %v", err)
+	}
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("get post-scan pointer: %v", err)
+	}
+	if string(got) != "new" {
+		t.Fatalf("get post-scan pointer = %q, want %q", got, "new")
+	}
+}
+
+func TestValueLogGC_RepeatedPostScanPublicationAbortsWithoutDelete(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, db.dir, 0, 1, 8_000, 1, func(int) []byte { return []byte("old") })
+	appendPointersInNewSegment(t, db.dir, 0, 2, 9_000, 1, func(int) []byte { return []byte("active") })
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value-log set: %v", err)
+	}
+	db.valueLogRefTracker.invalidate()
+	oldPath := filepath.Join(ValueLogDirPath(db.dir), "value-l0-000001.log")
+
+	var attempts int
+	var publishErr error
+	restore := registerValueLogGCPostScanHook(func() {
+		attempts++
+		publishErr = db.Set([]byte(fmt.Sprintf("publish-after-scan-%d", attempts)), []byte("ok"))
+	})
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	restore()
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if publishErr != nil {
+		t.Fatalf("publish after scan: %v", publishErr)
+	}
+	if attempts != 2 {
+		t.Fatalf("scan attempts = %d, want bounded initial attempt plus one retry", attempts)
+	}
+	if stats.SegmentsDeleted != 0 || stats.BytesDeleted != 0 {
+		t.Fatalf("stale retry deleted segments: %+v", stats)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("bounded stale retry removed an unvalidated segment: %v", err)
+	}
+}
+
+func setValueLogPointer(t *testing.T, db *DB, key []byte, ptr page.ValuePtr) {
+	t.Helper()
+	b := db.NewBatch().(*Batch)
+	defer b.Close()
+	if err := b.SetPointer(key, ptr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write pointer: %v", err)
+	}
+}
+
+func TestValueLogRefTracker_GCReplaceDoesNotRegressConcurrentAdvance(t *testing.T) {
+	tracker := newValueLogRefTracker()
+	tracker.replace(map[uint32]uint64{12: 1}, 6, true)
+	observedRevision := tracker.revisionSnapshot()
+	advanced := make(chan struct{})
+	go func() {
+		tracker.replace(map[uint32]uint64{11: 1}, 7, true)
+		close(advanced)
+	}()
+	<-advanced
+	if tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, true, observedRevision) {
+		t.Fatal("GC fallback replaced tracker after concurrent sequence advance")
+	}
+	refs, ok := tracker.referencedSet(7)
+	if !ok {
+		t.Fatal("GC fallback regressed tracker commit sequence")
+	}
+	if _, ok := refs[11]; !ok {
+		t.Fatalf("concurrently advanced counts were replaced by stale scan: %v", refs)
+	}
+}
+
+func TestValueLogRefTracker_GCReplaceRepairsUnchangedStaleAheadState(t *testing.T) {
+	tracker := newValueLogRefTracker()
+	tracker.replace(map[uint32]uint64{11: 1}, 7, true)
+	observedRevision := tracker.revisionSnapshot()
+	if !tracker.replaceUnlessAdvanced(map[uint32]uint64{12: 1}, 6, true, observedRevision) {
+		t.Fatal("unchanged stale-ahead tracker was not repaired")
+	}
+	refs, ok := tracker.referencedSet(6)
+	if !ok {
+		t.Fatal("repaired tracker does not match scanned sequence")
+	}
+	if _, ok := refs[12]; !ok {
+		t.Fatalf("repaired tracker counts = %v, want file 12", refs)
 	}
 }
 
