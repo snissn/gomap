@@ -61,6 +61,8 @@ def evaluate(
     baseline: dict[str, list[Sample]],
     candidate: dict[str, list[Sample]],
     max_regression_percent: float,
+    max_bytes_regression_percent: float,
+    max_bytes_regression_absolute: float,
 ) -> tuple[bool, list[dict[str, object]]]:
     passed = True
     results: list[dict[str, object]] = []
@@ -69,7 +71,12 @@ def evaluate(
         head = median_sample(candidate[name])
         ns_delta_percent = ((head.ns_per_op / base.ns_per_op) - 1.0) * 100.0
         timing_pass = ns_delta_percent <= max_regression_percent
-        bytes_pass = head.bytes_per_op <= base.bytes_per_op
+        bytes_delta = head.bytes_per_op - base.bytes_per_op
+        bytes_tolerance = min(
+            base.bytes_per_op * max_bytes_regression_percent / 100.0,
+            max_bytes_regression_absolute,
+        )
+        bytes_pass = bytes_delta <= bytes_tolerance
         allocs_pass = head.allocs_per_op <= base.allocs_per_op
         row_pass = timing_pass and bytes_pass and allocs_pass
         passed = passed and row_pass
@@ -87,6 +94,8 @@ def evaluate(
                     "allocs_per_op": head.allocs_per_op,
                 },
                 "ns_delta_percent": ns_delta_percent,
+                "bytes_delta": bytes_delta,
+                "bytes_tolerance": bytes_tolerance,
                 "timing_pass": timing_pass,
                 "bytes_pass": bytes_pass,
                 "allocs_pass": allocs_pass,
@@ -101,6 +110,8 @@ def render_markdown(
     candidate_sha: str,
     expected_samples: int,
     max_regression_percent: float,
+    max_bytes_regression_percent: float,
+    max_bytes_regression_absolute: float,
     passed: bool,
     results: list[dict[str, object]],
 ) -> str:
@@ -112,10 +123,13 @@ def render_markdown(
         f"- candidate: `{candidate_sha}`",
         f"- samples: {expected_samples} per revision, alternating sequential order",
         f"- timing threshold: candidate median <= baseline median + {max_regression_percent:g}%",
-        "- allocation threshold: candidate median B/op and allocs/op must not increase",
+        "- allocs/op threshold: candidate median must not increase",
+        "- B/op jitter threshold: candidate median may increase by at most the smaller of "
+        f"{max_bytes_regression_percent:g}% or {max_bytes_regression_absolute:g} B; "
+        "zero-B baselines remain strict",
         "",
-        "| Benchmark | Base ns/op | Head ns/op | Delta | Base B/op | Head B/op | Base allocs/op | Head allocs/op | Result |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Benchmark | Base ns/op | Head ns/op | Delta | Base B/op | Head B/op | B tolerance | Base allocs/op | Head allocs/op | Result |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in results:
         base = row["baseline"]
@@ -124,7 +138,7 @@ def render_markdown(
         assert isinstance(head, dict)
         lines.append(
             "| {benchmark} | {base_ns:.3f} | {head_ns:.3f} | {delta:+.2f}% | "
-            "{base_bytes:.3f} | {head_bytes:.3f} | {base_allocs:.3f} | "
+            "{base_bytes:.3f} | {head_bytes:.3f} | {bytes_tolerance:.3f} | {base_allocs:.3f} | "
             "{head_allocs:.3f} | {status} |".format(
                 benchmark=row["benchmark"],
                 base_ns=base["ns_per_op"],
@@ -132,6 +146,7 @@ def render_markdown(
                 delta=row["ns_delta_percent"],
                 base_bytes=base["bytes_per_op"],
                 head_bytes=head["bytes_per_op"],
+                bytes_tolerance=row["bytes_tolerance"],
                 base_allocs=base["allocs_per_op"],
                 head_allocs=head["allocs_per_op"],
                 status="PASS" if row["pass"] else "FAIL",
@@ -143,6 +158,7 @@ def render_markdown(
 
 def synthetic_log(
     ns_scale: float = 1.0,
+    bytes_base: float = 128.0,
     bytes_delta: float = 0.0,
     alloc_delta: float = 0.0,
 ) -> str:
@@ -150,7 +166,7 @@ def synthetic_log(
     for index in range(7):
         for bench_index, name in enumerate(BENCHMARKS):
             ns_per_op = (1000.0 + bench_index * 9000.0 + index) * ns_scale
-            bytes_per_op = 128.0 + bench_index * 128.0 + bytes_delta
+            bytes_per_op = bytes_base + bench_index * bytes_base + bytes_delta
             allocs_per_op = 2.0 + bench_index + alloc_delta
             lines.append(
                 f"{name}-1 1000 {ns_per_op:.3f} ns/op "
@@ -168,27 +184,57 @@ def self_test() -> None:
         candidate_path.write_text(synthetic_log(ns_scale=1.04), encoding="utf-8")
         baseline = parse_benchmarks(baseline_path, 7)
         candidate = parse_benchmarks(candidate_path, 7)
-        passed, _ = evaluate(baseline, candidate, 5.0)
+        passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if not passed:
             raise AssertionError("4% timing change should pass")
 
         candidate_path.write_text(synthetic_log(ns_scale=1.06), encoding="utf-8")
         candidate = parse_benchmarks(candidate_path, 7)
-        passed, _ = evaluate(baseline, candidate, 5.0)
+        passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
             raise AssertionError("6% timing regression should fail")
 
         candidate_path.write_text(synthetic_log(alloc_delta=1.0), encoding="utf-8")
         candidate = parse_benchmarks(candidate_path, 7)
-        passed, _ = evaluate(baseline, candidate, 5.0)
+        passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
             raise AssertionError("allocation regression should fail")
 
-        candidate_path.write_text(synthetic_log(bytes_delta=1.0), encoding="utf-8")
+        baseline_path.write_text(synthetic_log(bytes_base=100.0), encoding="utf-8")
+        candidate_path.write_text(
+            synthetic_log(bytes_base=100.0, bytes_delta=1.0), encoding="utf-8"
+        )
+        baseline = parse_benchmarks(baseline_path, 7)
         candidate = parse_benchmarks(candidate_path, 7)
-        passed, _ = evaluate(baseline, candidate, 5.0)
+        passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+        if not passed:
+            raise AssertionError("B/op increase at the 1% boundary should pass")
+
+        candidate_path.write_text(
+            synthetic_log(bytes_base=100.0, bytes_delta=1.001), encoding="utf-8"
+        )
+        candidate = parse_benchmarks(candidate_path, 7)
+        passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
         if passed:
-            raise AssertionError("byte allocation regression should fail")
+            raise AssertionError("B/op increase above the 1% boundary should fail")
+
+        baseline_path.write_text(synthetic_log(bytes_base=10000.0), encoding="utf-8")
+        candidate_path.write_text(
+            synthetic_log(bytes_base=10000.0, bytes_delta=64.0), encoding="utf-8"
+        )
+        baseline = parse_benchmarks(baseline_path, 7)
+        candidate = parse_benchmarks(candidate_path, 7)
+        passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+        if not passed:
+            raise AssertionError("B/op increase at the 64 B boundary should pass")
+
+        candidate_path.write_text(
+            synthetic_log(bytes_base=10000.0, bytes_delta=64.001), encoding="utf-8"
+        )
+        candidate = parse_benchmarks(candidate_path, 7)
+        passed, _ = evaluate(baseline, candidate, 5.0, 1.0, 64.0)
+        if passed:
+            raise AssertionError("B/op increase above the 64 B boundary should fail")
 
         candidate_path.write_text("", encoding="utf-8")
         try:
@@ -208,6 +254,8 @@ def main() -> int:
     parser.add_argument("--candidate-sha")
     parser.add_argument("--expected-samples", type=int, default=7)
     parser.add_argument("--max-regression-percent", type=float, default=5.0)
+    parser.add_argument("--max-bytes-regression-percent", type=float, default=1.0)
+    parser.add_argument("--max-bytes-regression-absolute", type=float, default=64.0)
     parser.add_argument("--json-output")
     parser.add_argument("--markdown-output")
     parser.add_argument("--self-test", action="store_true")
@@ -216,6 +264,14 @@ def main() -> int:
     if args.self_test:
         self_test()
         return 0
+
+    for name in (
+        "max_regression_percent",
+        "max_bytes_regression_percent",
+        "max_bytes_regression_absolute",
+    ):
+        if getattr(args, name) < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative")
 
     required = (
         "baseline",
@@ -232,7 +288,11 @@ def main() -> int:
     baseline = parse_benchmarks(Path(args.baseline), args.expected_samples)
     candidate = parse_benchmarks(Path(args.candidate), args.expected_samples)
     passed, results = evaluate(
-        baseline, candidate, args.max_regression_percent
+        baseline,
+        candidate,
+        args.max_regression_percent,
+        args.max_bytes_regression_percent,
+        args.max_bytes_regression_absolute,
     )
     payload = {
         "pass": passed,
@@ -240,6 +300,8 @@ def main() -> int:
         "candidate_sha": args.candidate_sha,
         "expected_samples": args.expected_samples,
         "max_regression_percent": args.max_regression_percent,
+        "max_bytes_regression_percent": args.max_bytes_regression_percent,
+        "max_bytes_regression_absolute": args.max_bytes_regression_absolute,
         "results": results,
     }
     Path(args.json_output).write_text(
@@ -250,6 +312,8 @@ def main() -> int:
         args.candidate_sha,
         args.expected_samples,
         args.max_regression_percent,
+        args.max_bytes_regression_percent,
+        args.max_bytes_regression_absolute,
         passed,
         results,
     )

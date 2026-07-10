@@ -79,6 +79,8 @@ jobs:
           BENCHTIME: 2s
           CPUSET: "0"
           MAX_REGRESSION_PERCENT: "5"
+          MAX_BYTES_REGRESSION_PERCENT: "1"
+          MAX_BYTES_REGRESSION_ABSOLUTE: "64"
           SCRIPT_GOWORK: "off"
           OUT_DIR: ${{ runner.temp }}/mvcc-raw-path-gate
         run: ./scripts/mvcc_raw_path_gate.sh

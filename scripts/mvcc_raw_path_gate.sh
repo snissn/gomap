@@ -10,6 +10,8 @@ RUNS="${RUNS:-7}"
 BENCHTIME="${BENCHTIME:-2s}"
 CPUSET="${CPUSET:-0}"
 MAX_REGRESSION_PERCENT="${MAX_REGRESSION_PERCENT:-5}"
+MAX_BYTES_REGRESSION_PERCENT="${MAX_BYTES_REGRESSION_PERCENT:-1}"
+MAX_BYTES_REGRESSION_ABSOLUTE="${MAX_BYTES_REGRESSION_ABSOLUTE:-64}"
 SCRIPT_GOWORK="${SCRIPT_GOWORK:-off}"
 OUT_DIR="${OUT_DIR:-$ROOT/artifacts/mvcc_raw_path_gate}"
 BENCH_REGEX='^(BenchmarkGetVersioned|BenchmarkConditionalTxnBaselineBatchWrite)$'
@@ -78,6 +80,8 @@ CANDIDATE_BIN="$TMP_ROOT/candidate.test"
   echo "cpuset=$CPUSET"
   echo "gomaxprocs=1"
   echo "max_regression_percent=$MAX_REGRESSION_PERCENT"
+  echo "max_bytes_regression_percent=$MAX_BYTES_REGRESSION_PERCENT"
+  echo "max_bytes_regression_absolute=$MAX_BYTES_REGRESSION_ABSOLUTE"
   echo "github_runner_image=${ImageOS:-unknown} ${ImageVersion:-unknown}"
   echo "runner_arch=${RUNNER_ARCH:-unknown}"
   echo "runner_os=${RUNNER_OS:-unknown}"
@@ -134,6 +138,8 @@ python3 .github/scripts/check_mvcc_raw_path_gate.py \
   --candidate-sha "$CANDIDATE_SHA" \
   --expected-samples "$RUNS" \
   --max-regression-percent "$MAX_REGRESSION_PERCENT" \
+  --max-bytes-regression-percent "$MAX_BYTES_REGRESSION_PERCENT" \
+  --max-bytes-regression-absolute "$MAX_BYTES_REGRESSION_ABSOLUTE" \
   --json-output "$SUMMARY_JSON" \
   --markdown-output "$SUMMARY_MD"
 
