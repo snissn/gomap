@@ -163,9 +163,11 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 	var scannedSeq uint64
 	if !observedOnly {
 		// A full scan is O(N), so it must never run while publishPrepareMu is
-		// exclusively held. A root published after this scan can first-reference
-		// an old segment, therefore a changed commit sequence is retried outside
-		// the lock once and then conservatively aborts this GC pass.
+		// exclusively held. Safety invariant: GC never zombifies a segment from a
+		// referenced set older than the root visible while the exclusive lock is
+		// held. A post-scan root can first-reference an old segment, so a changed
+		// commit sequence is retried outside the lock once and then conservatively
+		// aborts this GC pass.
 		const maxStaleScanRetries = 1
 		for attempt := 0; ; attempt++ {
 			var err error
@@ -194,6 +196,9 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		defer db.publishPrepareMu.Unlock()
 	}
 
+	// Commit-sequence equality fences published roots, not prepared output. The
+	// current/recent and pending-append keep sets below are therefore computed
+	// from the value-log topology while publish preparation remains excluded.
 	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
 	// path. Fall back to a refresh if the manager has not yet discovered any
 	// segments (or if another process created segments on disk).
