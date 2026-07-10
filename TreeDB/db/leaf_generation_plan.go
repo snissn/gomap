@@ -132,6 +132,11 @@ var leafGenerationLiveScanHook struct {
 	fn func()
 }
 
+var leafGenerationGCExclusivePhaseHook struct {
+	mu sync.Mutex
+	fn func(bool)
+}
+
 var leafGenerationPlanCallHook struct {
 	mu sync.Mutex
 	fn func()
@@ -181,6 +186,27 @@ func runLeafGenerationLiveScanHook() {
 	leafGenerationLiveScanHook.mu.Unlock()
 	if hook != nil {
 		hook()
+	}
+}
+
+func registerLeafGenerationGCExclusivePhaseHook(hook func(bool)) func() {
+	leafGenerationGCExclusivePhaseHook.mu.Lock()
+	prev := leafGenerationGCExclusivePhaseHook.fn
+	leafGenerationGCExclusivePhaseHook.fn = hook
+	leafGenerationGCExclusivePhaseHook.mu.Unlock()
+	return func() {
+		leafGenerationGCExclusivePhaseHook.mu.Lock()
+		leafGenerationGCExclusivePhaseHook.fn = prev
+		leafGenerationGCExclusivePhaseHook.mu.Unlock()
+	}
+}
+
+func runLeafGenerationGCExclusivePhaseHook(entering bool) {
+	leafGenerationGCExclusivePhaseHook.mu.Lock()
+	hook := leafGenerationGCExclusivePhaseHook.fn
+	leafGenerationGCExclusivePhaseHook.mu.Unlock()
+	if hook != nil {
+		hook(entering)
 	}
 }
 
