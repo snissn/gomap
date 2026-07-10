@@ -226,10 +226,13 @@ type DB struct {
 	closeHooksRunning bool
 	// closeHooksOwner identifies the goroutine executing user callbacks. It is
 	// non-zero only while closeHooksRunning is true.
-	closeHooksOwner uint64
+	closeHooksOwner          uint64
+	closeHooksCloseRequested bool
 	// closeHooksWaitHook is a deterministic test seam for the concurrent waiter.
 	closeHooksWaitHook func()
 	closeHooksWG       sync.WaitGroup
+	closeTeardownOnce  sync.Once
+	closeTeardownErr   error
 
 	internalTeardownHooksMu     sync.Mutex
 	internalTeardownHooks       []func() error
@@ -2215,7 +2218,15 @@ func (db *DB) RunCloseHooks() error {
 	if db == nil {
 		return nil
 	}
-	return db.runCloseHooks()
+	hookErr := db.runCloseHooks()
+	db.closeHooksMu.Lock()
+	closeRequested := db.closeHooksCloseRequested
+	db.closeHooksCloseRequested = false
+	db.closeHooksMu.Unlock()
+	if closeRequested {
+		return errors.Join(hookErr, db.closeAfterHooksOnce())
+	}
+	return hookErr
 }
 
 func (db *DB) runCloseHooks() (retErr error) {
@@ -2325,7 +2336,11 @@ func (db *DB) Close() error {
 	if closeHooksRunning {
 		if caller := currentGoroutineID(); caller != 0 && caller == closeHooksOwner {
 			// A user hook cannot synchronously wait for the hook drain that is
-			// invoking it. The active outer Close remains responsible for teardown.
+			// invoking it. Record teardown for the active outer Close or standalone
+			// RunCloseHooks owner to complete after callbacks return.
+			db.closeHooksMu.Lock()
+			db.closeHooksCloseRequested = true
+			db.closeHooksMu.Unlock()
 			return nil
 		}
 		if closeHooksWaitHook != nil {
@@ -2335,12 +2350,27 @@ func (db *DB) Close() error {
 	}
 
 	var errs []error
-	if err := db.RunCloseHooks(); err != nil {
+	if err := db.runCloseHooks(); err != nil {
 		errs = append(errs, err)
 	}
 	// Another caller may have started the once-only hook drain. Do not begin
 	// production teardown until those callbacks have returned.
 	db.closeHooksWG.Wait()
+	if err := db.closeAfterHooksOnce(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (db *DB) closeAfterHooksOnce() error {
+	db.closeTeardownOnce.Do(func() {
+		db.closeTeardownErr = db.closeAfterHooks()
+	})
+	return db.closeTeardownErr
+}
+
+func (db *DB) closeAfterHooks() error {
+	var errs []error
 
 	// Lock order after user callbacks is maintenanceMu, internal teardown hooks,
 	// writeMu, teardownMu, then mu. Internal registration never waits on

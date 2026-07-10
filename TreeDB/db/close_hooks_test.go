@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -81,6 +82,34 @@ func TestCloseHookMayCallCloseThroughDeepHelpers(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("close hook calling Close through deep helpers deadlocked")
+	}
+}
+
+func TestStandaloneRunCloseHooksCompletesReentrantClose(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	d.RegisterCloseHook(func() error {
+		return d.Close()
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.RunCloseHooks() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunCloseHooks: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("standalone close-hook drain deadlocked")
+	}
+	if !d.IsClosing() {
+		t.Fatal("reentrant Close returned without completing DB teardown")
+	}
+	if err := d.Set([]byte("after-close"), []byte("value")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Set after reentrant Close error=%v, want %v", err, ErrClosed)
 	}
 }
 

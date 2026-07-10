@@ -143,19 +143,26 @@ type vacuumRetiredPageFreer interface {
 	Free(uint64) error
 }
 
-func freeVacuumRetired(freer vacuumRetiredPageFreer, retired []uint64) {
+func freeVacuumRetired(freer vacuumRetiredPageFreer, retired []uint64) error {
 	err := freer.FreeMany(retired)
 	if err == nil {
-		return
+		return nil
 	}
 	processed := 0
 	var batchErr *freelist.FreeManyError
 	if errors.As(err, &batchErr) && batchErr.Processed >= 0 && batchErr.Processed <= len(retired) {
 		processed = batchErr.Processed
 	}
-	for _, id := range retired[processed:] {
-		_ = freer.Free(id)
+	if processed == len(retired) {
+		return fmt.Errorf("vacuum: free retired pages: %w", err)
 	}
+	var firstErr error
+	for _, id := range retired[processed:] {
+		if err := freer.Free(id); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("vacuum: free retired page %d: %w", id, err)
+		}
+	}
+	return firstErr
 }
 
 func (r *vacuumRecorder) Active() bool {
@@ -523,10 +530,6 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		return err
 	}
 
-	freeRetired := func(retired []uint64) {
-		freeVacuumRetired(newAlloc, retired)
-	}
-
 	// Online catch-up: replay recorded keys in bounded passes.
 	for pass := 0; pass < vacuumCatchupPassesMax; pass++ {
 		if err := ctx.Err(); err != nil {
@@ -543,7 +546,10 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			cleanupNewPager()
 			return err
 		}
-		freeRetired(retired)
+		if err := freeVacuumRetired(newAlloc, retired); err != nil {
+			cleanupNewPager()
+			return err
+		}
 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 			if err := db.leafPageLog.Flush(); err != nil {
 				cleanupNewPager()
@@ -569,7 +575,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		if err != nil {
 			return err
 		}
-		freeRetired(retired)
+		if err := freeVacuumRetired(newAlloc, retired); err != nil {
+			return err
+		}
 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 			if err := db.leafPageLog.Flush(); err != nil {
 				return err
@@ -820,6 +828,15 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			cleanupNewPager()
 			return finalSyncErr
 		}
+		// A fallback directory scan can fail. Complete it before renaming index.db
+		// so an error cannot leave the live generation backed by an unlinked file.
+		if !leafPageLogSegmentsRegistered {
+			if err := db.valueLogManager.Refresh(); err != nil {
+				unlockCutover(false)
+				cleanupNewPager()
+				return err
+			}
+		}
 
 		swapPublishStarted := time.Now()
 		if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
@@ -874,19 +891,6 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.meta = nextMeta
 		db.metaPageID = MetaPage0ID
 		valueLogSet := db.valueLogManager.CurrentSetNoRefresh()
-		if !leafPageLogSegmentsRegistered {
-			if valueLogSet != nil {
-				_ = db.valueLogManager.Release(valueLogSet)
-				valueLogSet = nil
-			}
-			if err := db.valueLogManager.Refresh(); err != nil {
-				db.mu.Unlock()
-				unlockCutover(false)
-				cleanupNewPager()
-				return err
-			}
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
-		}
 		leafGenerationView := oldState.LeafGenerations
 		if leafGenerationChanged {
 			leafGenerationView = stagedLeafGenerationView
