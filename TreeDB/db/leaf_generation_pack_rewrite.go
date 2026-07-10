@@ -1277,7 +1277,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if db.indexOuterLeavesInValueLog {
 		leafCtx.zipper.SetLeafPageLog(&leafRefRewritePageAppender{ctx: leafCtx})
 	}
-	if runStats != nil && runStats.trackSourceLiveMoved {
+	if runStats != nil {
 		defer func() {
 			runStats.InternalPagesVisited = leafCtx.internalVisited
 			runStats.SubtreesPruned = leafCtx.subtreesPruned

@@ -2655,6 +2655,48 @@ func TestCompactStorageLeafPackCarryMatchesFreshPlanWithProtectedResidual(t *tes
 	assertCompactStorageLeafPackCarryMatchesFreshPlan(t, d, []uint64{detachedRoot}, nil)
 }
 
+func TestCompactStorageLeafPackCarryRescansWhenProtectedRootsChange(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "main", 512, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "main", 0, 256, 'b')
+	d.SetLeafPageLog(nil)
+
+	published := d.State()
+	if published == nil || published.RootPageID == 0 {
+		t.Fatal("expected published root")
+	}
+	opts := leafGenerationPackFromPlanPlanOptions(compactStorageLeafPackFromPlanOptions(
+		normalizeCompactStorageOptions(CompactStorageOptions{
+			LeafPackMaxGenerationsPerPass: 1,
+			LeafPackMinReclaimPerCopyPPM:  1,
+		}),
+		nil,
+		nil,
+	))
+
+	scans := withLeafGenerationLiveScanCounter(t)
+	var carry compactStorageLeafPackPlanState
+	if _, err := d.compactStorageLeafGenerationPlan(context.Background(), opts, &carry); err != nil {
+		t.Fatalf("initial carried plan: %v", err)
+	}
+	initialScans := scans.Load()
+	if initialScans == 0 {
+		t.Fatal("initial plan did not perform a live scan")
+	}
+
+	opts.ProtectedRootIDs = []uint64{published.RootPageID}
+	if _, err := d.compactStorageLeafGenerationPlan(context.Background(), opts, &carry); err != nil {
+		t.Fatalf("changed protected-root plan: %v", err)
+	}
+	if got, want := scans.Load(), initialScans+1; got != want {
+		t.Fatalf("changed protected roots live scans=%d want %d", got, want)
+	}
+}
+
 func assertCompactStorageLeafPackCarryMatchesFreshPlan(t *testing.T, d *DB, protectedRootIDs, protectedSystemRootIDs []uint64) {
 	t.Helper()
 	opts := compactStorageLeafPackFromPlanOptions(normalizeCompactStorageOptions(CompactStorageOptions{
