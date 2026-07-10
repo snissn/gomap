@@ -169,7 +169,11 @@ func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
 	db.writeMu.RUnlock()
 
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	runLeafGenerationGCExclusivePhaseHook(true)
+	defer func() {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+	}()
 
 	if db.closing.Load() || db.leafGenerationManifest == nil || db.valueLogManager == nil {
 		return false, nil
@@ -239,21 +243,26 @@ func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, li
 	var stats LeafGenerationGCStats
 
 	db.writeMu.Lock()
+	runLeafGenerationGCExclusivePhaseHook(true)
 	if db.closing.Load() {
+		runLeafGenerationGCExclusivePhaseHook(false)
 		db.writeMu.Unlock()
 		return stats, false, nil
 	}
 	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
 	if !ok {
+		runLeafGenerationGCExclusivePhaseHook(false)
 		db.writeMu.Unlock()
 		return stats, true, nil
 	}
 	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
 	if err != nil {
+		runLeafGenerationGCExclusivePhaseHook(false)
 		db.writeMu.Unlock()
 		return stats, false, err
 	}
 	filePaths := db.leafGenerationFilePaths(manifest)
+	runLeafGenerationGCExclusivePhaseHook(false)
 	db.writeMu.Unlock()
 
 	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, basis.commitSeq, true)
@@ -264,7 +273,11 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	var stats LeafGenerationGCStats
 
 	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	runLeafGenerationGCExclusivePhaseHook(true)
+	defer func() {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+	}()
 	if db.closing.Load() {
 		return stats, nil
 	}
