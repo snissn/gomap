@@ -28,6 +28,8 @@ type Allocator struct {
 	preferAppend bool
 }
 
+var errCannotFreePageZero = errors.New("cannot free page 0")
+
 func freelistNextPageID(data []byte) uint64 {
 	return binary.LittleEndian.Uint64(data[page.PageHeaderSize : page.PageHeaderSize+8])
 }
@@ -51,6 +53,11 @@ func clearFreelistIDAt(data []byte, idx int) {
 // entry is written but before the page checksum is updated. It should remain
 // nil in production.
 var TestHookFreeBeforeChecksum func()
+
+// TestHookFreeManyBeforeChecksum is a test-only hook that fires once for each
+// freelist page FreeMany updates, immediately before its checksum is written.
+// It should remain nil in production.
+var TestHookFreeManyBeforeChecksum func()
 
 // Stats reports freelist metadata under the allocator lock.
 type Stats struct {
@@ -133,18 +140,7 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 	defer a.mu.Unlock()
 
 	if a.regionPages > 0 && a.regionRadius > 0 {
-		ids := make([]uint64, 0, count)
-		var err error
-		for len(ids) < count {
-			id, allocErr := a.allocLocked(hint)
-			if allocErr != nil {
-				err = allocErr
-				break
-			}
-			ids = append(ids, id)
-			hint = id
-		}
-		return ids, err
+		return a.allocManyRegionLocked(count, hint)
 	}
 
 	ids := make([]uint64, 0, count)
@@ -212,6 +208,129 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 		n.UpdateChecksum()
 	}
 	return ids, nil
+}
+
+// allocManyRegionLocked consumes all region-preferred entries from a verified
+// head page before falling back to LIFO entries from that same page. Region
+// preference is evaluated from the incoming hint (or last allocation); each
+// returned ID still advances lastAlloc for the next head-page selection.
+func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, error) {
+	ids := make([]uint64, 0, count)
+	target := hint
+	for len(ids) < count {
+		if a.preferAppend || a.head == 0 {
+			allocCount := count - len(ids)
+			id, err := a.pager.Alloc(allocCount)
+			if err != nil {
+				return ids, err
+			}
+			a.stats.AllocPages += uint64(allocCount)
+			a.stats.AppendAllocPages += uint64(allocCount)
+			for i := 0; i < allocCount; i++ {
+				ids = append(ids, id+uint64(i))
+			}
+			a.lastAlloc = ids[len(ids)-1]
+			return ids, nil
+		}
+
+		data, err := a.pager.GetForWrite(a.head)
+		if err != nil {
+			return ids, err
+		}
+		n := node.NewNode(data)
+		if !n.VerifyChecksum() {
+			return ids, errors.New("freelist head corrupted (AllocMany)")
+		}
+		if n.Type() != page.PageTypeFreelist {
+			return ids, errors.New("invalid freelist page type")
+		}
+
+		countFree := int(n.Count())
+		if countFree == 0 {
+			next := freelistNextPageID(data)
+			recycled := a.head
+			a.head = next
+			a.recordReuseAllocation(recycled)
+			if a.stats.Pages > 0 {
+				a.stats.Pages--
+			}
+			ids = append(ids, recycled)
+			target = recycled
+			continue
+		}
+
+		start := len(ids)
+		need := count - start
+		selected := 0
+		if target == 0 {
+			target = a.lastAlloc
+		}
+		selectionTarget := target
+		var selectedSlots [page.MaxFreeIDs]bool
+		if selectionTarget != 0 {
+			for i := countFree - 1; i >= 0 && selected < need; i-- {
+				candidate := freelistIDAt(data, i)
+				if a.inRegion(candidate, selectionTarget/a.regionPages) {
+					ids = append(ids, candidate)
+					selectedSlots[i] = true
+					selected++
+					selectionTarget = candidate
+				}
+			}
+		}
+
+		if selected > 0 {
+			// Compact selected entries without re-verifying the page or updating
+			// its checksum for every ID.
+			write := 0
+			for i := 0; i < countFree; i++ {
+				if selectedSlots[i] {
+					continue
+				}
+				setFreelistIDAt(data, write, freelistIDAt(data, i))
+				write++
+			}
+			for i := write; i < countFree; i++ {
+				clearFreelistIDAt(data, i)
+			}
+			countFree = write
+		}
+
+		for countFree > 0 && len(ids) < count {
+			idx := countFree - 1
+			ids = append(ids, freelistIDAt(data, idx))
+			clearFreelistIDAt(data, idx)
+			countFree--
+		}
+
+		n.SetCount(uint16(countFree))
+		n.UpdateChecksum()
+		for _, id := range ids[start:] {
+			a.recordReuseAllocation(id)
+		}
+		if len(ids) > 0 {
+			target = ids[len(ids)-1]
+		}
+	}
+	return ids, nil
+}
+
+func (a *Allocator) inRegion(id, targetRegion uint64) bool {
+	region := id / a.regionPages
+	if region >= targetRegion {
+		return region-targetRegion <= uint64(a.regionRadius)
+	}
+	return targetRegion-region <= uint64(a.regionRadius)
+}
+
+func (a *Allocator) recordReuseAllocation(id uint64) {
+	a.pager.MarkUnverified(id)
+	a.lastAlloc = id
+	a.stats.AllocPages++
+	a.stats.ReuseAllocPages++
+	if a.stats.FreeIDs > 0 {
+		a.stats.FreeIDs--
+	}
 }
 
 func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
@@ -340,7 +459,7 @@ func (a *Allocator) Free(id uint64) error {
 	defer a.mu.Unlock()
 
 	if id == 0 {
-		return errors.New("cannot free page 0")
+		return errCannotFreePageZero
 	}
 
 	if a.head == 0 {
@@ -391,27 +510,124 @@ func (a *Allocator) Free(id uint64) error {
 	return nil
 }
 
-func (a *Allocator) initHead(id, next uint64) error {
-	data, err := a.pager.GetForWrite(id)
-	if err != nil {
-		return err
+// FreeMany adds multiple pages to the freelist while holding the allocator
+// lock once. It validates page zero before mutating state. Duplicate IDs are
+// intentionally accepted and recorded exactly as repeated calls to Free would
+// record them; production callers remain responsible for avoiding double free.
+//
+// An I/O error after a valid prefix may leave that prefix freed, matching the
+// per-ID Free loop semantics. Callers that need prefix accounting continue to
+// use Free one ID at a time.
+func (a *Allocator) FreeMany(ids []uint64) error {
+	for _, id := range ids {
+		if id == 0 {
+			return errCannotFreePageZero
+		}
+	}
+	if len(ids) == 0 {
+		return nil
 	}
 
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for len(ids) > 0 {
+		if a.head == 0 {
+			consumed, err := a.initHeadWithFreeIDs(ids[0], 0, ids[1:], true)
+			if err != nil {
+				return err
+			}
+			a.recordFreedPages(consumed, true)
+			ids = ids[consumed:]
+			continue
+		}
+
+		data, err := a.pager.GetForWrite(a.head)
+		if err != nil {
+			return err
+		}
+		n := node.NewNode(data)
+		if !n.VerifyChecksum() {
+			return errors.New("freelist head corrupted (FreeMany)")
+		}
+		if n.Type() != page.PageTypeFreelist {
+			return errors.New("invalid freelist page type")
+		}
+
+		count := int(n.Count())
+		if count >= page.MaxFreeIDs {
+			consumed, err := a.initHeadWithFreeIDs(ids[0], a.head, ids[1:], true)
+			if err != nil {
+				return err
+			}
+			a.recordFreedPages(consumed, true)
+			ids = ids[consumed:]
+			continue
+		}
+
+		take := page.MaxFreeIDs - count
+		if take > len(ids) {
+			take = len(ids)
+		}
+		for i := 0; i < take; i++ {
+			setFreelistIDAt(data, count+i, ids[i])
+			n.SetCount(uint16(count + i + 1))
+			if TestHookFreeBeforeChecksum != nil {
+				TestHookFreeBeforeChecksum()
+			}
+		}
+		if TestHookFreeManyBeforeChecksum != nil {
+			TestHookFreeManyBeforeChecksum()
+		}
+		n.UpdateChecksum()
+		a.recordFreedPages(take, false)
+		ids = ids[take:]
+	}
+	return nil
+}
+
+func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, batchHook bool) (int, error) {
+	take := len(ids)
+	if take > page.MaxFreeIDs {
+		take = page.MaxFreeIDs
+	}
+	data, err := a.pager.GetForWrite(id)
+	if err != nil {
+		return 0, err
+	}
 	n := node.NewNode(data)
 	n.SetPageID(id)
 	n.SetType(page.PageTypeFreelist)
 	n.SetCount(0)
-
-	body := page.FreelistPageBody{
-		NextPageID: next,
-		FreeIDs:    nil,
-	}
+	body := page.FreelistPageBody{NextPageID: next}
 	body.Encode(data[page.PageHeaderSize:])
-
+	for i := 0; i < take; i++ {
+		setFreelistIDAt(data, i, ids[i])
+		n.SetCount(uint16(i + 1))
+		if TestHookFreeBeforeChecksum != nil {
+			TestHookFreeBeforeChecksum()
+		}
+	}
+	if batchHook && TestHookFreeManyBeforeChecksum != nil {
+		TestHookFreeManyBeforeChecksum()
+	}
 	n.UpdateChecksum()
-
 	a.head = id
-	return nil
+	return take + 1, nil
+}
+
+func (a *Allocator) recordFreedPages(count int, newHead bool) {
+	a.stats.FreePages += uint64(count)
+	if newHead {
+		a.stats.Pages++
+		count--
+	}
+	a.stats.FreeIDs += uint64(count)
+}
+
+func (a *Allocator) initHead(id, next uint64) error {
+	_, err := a.initHeadWithFreeIDs(id, next, nil, false)
+	return err
 }
 
 // Stats returns freelist page counts while holding the allocator lock to avoid

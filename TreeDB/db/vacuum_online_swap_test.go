@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -192,8 +193,14 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	var freeManyChecksumUpdates atomic.Int64
+	freelist.TestHookFreeManyBeforeChecksum = func() { freeManyChecksumUpdates.Add(1) }
+	defer func() { freelist.TestHookFreeManyBeforeChecksum = nil }()
 	if err := d.VacuumIndexOnline(ctx); err != nil {
 		t.Fatalf("vacuum: %v", err)
+	}
+	if got := freeManyChecksumUpdates.Load(); got == 0 {
+		t.Fatal("online vacuum did not batch retired pages through FreeMany")
 	}
 
 	afterInfo, err := os.Stat(indexPath)

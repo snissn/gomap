@@ -329,9 +329,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 	}
 
 	freeRetired := func(retired []uint64) {
-		for _, id := range retired {
-			_ = newAlloc.Free(id)
-		}
+		_ = newAlloc.FreeMany(retired)
 	}
 
 	// Online catch-up: replay recorded keys in bounded passes.
