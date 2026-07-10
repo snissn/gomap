@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func leafGenerationPackPublicationTestOptions(dir string) Options {
@@ -173,6 +174,47 @@ func TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources(t *testin
 				t.Fatalf("SetSync after pre-meta failure: %v", err)
 			}
 		})
+	}
+}
+
+func TestLeafGenerationPack_ClosesStagingReaderBeforePromotion(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+
+	originalClose := closeLeafGenerationPackStagingReaderFn
+	defer func() { closeLeafGenerationPackStagingReaderFn = originalClose }()
+	var readerClosed atomic.Bool
+	closeLeafGenerationPackStagingReaderFn = func(reader *valuelog.Manager) error {
+		err := originalClose(reader)
+		if err == nil {
+			readerClosed.Store(true)
+		}
+		return err
+	}
+
+	var promotionObserved atomic.Bool
+	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase != leafGenerationPackBeforePromotion {
+			return nil
+		}
+		promotionObserved.Store(true)
+		if !readerClosed.Load() {
+			return errors.New("staging reader remained open at promotion")
+		}
+		return nil
+	})
+	defer unregister()
+
+	if _, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID},
+		Force:         true,
+	}); err != nil {
+		t.Fatalf("LeafGenerationPack: %v", err)
+	}
+	if !promotionObserved.Load() {
+		t.Fatal("promotion hook was not observed")
 	}
 }
 

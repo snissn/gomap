@@ -251,6 +251,10 @@ var leafGenerationPackPublishHook struct {
 	fn func(leafGenerationPackPublishEvent) error
 }
 
+var closeLeafGenerationPackStagingReaderFn = func(reader *valuelog.Manager) error {
+	return reader.Close()
+}
+
 func registerLeafGenerationPackPublishHook(hook func(leafGenerationPackPublishEvent) error) func() {
 	leafGenerationPackPublishHook.mu.Lock()
 	previous := leafGenerationPackPublishHook.fn
@@ -1189,7 +1193,10 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	privateLeafReader.SetDictLookup(db.valueLogDictLookup)
 	leafCtx.privateLeafReader = privateLeafReader
 	defer func() {
-		if closeErr := privateLeafReader.Close(); closeErr != nil {
+		if privateLeafReader == nil {
+			return
+		}
+		if closeErr := closeLeafGenerationPackStagingReaderFn(privateLeafReader); closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 	}()
@@ -1297,6 +1304,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: snapshot created leaf ref segments: %w", err)
 	}
+	// The staging manager may mmap copied segments while applying collection
+	// deltas. Windows forbids renaming those files while the mappings are open,
+	// so release every staging read handle before entering publish.
+	if err := closeLeafGenerationPackStagingReaderFn(privateLeafReader); err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: close copied leaf ref reader: %w", err)
+	}
+	privateLeafReader = nil
+	leafCtx.privateLeafReader = nil
 	if err := writer.Close(); err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: close copied leaf refs: %w", err)
 	}

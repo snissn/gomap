@@ -236,6 +236,10 @@ the highest valid durable meta state. Startup removes orphan
 `.leaf-pack-copy-*` directories only after acquiring the database lock, so it
 cannot delete an active attempt.
 
+Before promotion, leaf pack closes both staging append writers and the private
+staging value-log manager. This releases mapped read handles as well as ordinary
+file handles, which is required for rename-based promotion on Windows.
+
 `maintenanceMu`, the snapshot generation pins, and `teardownMu` remain held
 across copy and publish. Therefore leaf-generation GC cannot reclaim a source
 before the replacement root and generation state are durable, and `Close`

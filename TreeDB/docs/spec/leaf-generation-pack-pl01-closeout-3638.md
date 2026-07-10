@@ -12,8 +12,10 @@ not change pack admission, byte budgets, leaf/value-log formats, or GC policy.
    pages use an in-memory pager with disjoint high logical IDs and fallback reads
    through the pinned source pager. Neither staging representation changes live
    `PageCount`, the allocator, or the freelist.
-3. Staged records are flushed, fsynced, and closed without `writeMu`. Pack
-   publication is durable even when the legacy pre-alpha `Sync` option is false.
+3. Staged records are flushed and fsynced without `writeMu`. The append writers
+   and private staging reader, including its mapped segments, are closed before
+   promotion so Windows rename semantics are satisfied. Pack publication is
+   durable even when the legacy pre-alpha `Sync` option is false.
 4. Under `writeMu`, `publishPrepareMu`, and the value-log publication gate, the
    implementation revalidates index generation, `CommitSeq`, both roots,
    `LeafGenerationStateVersion`, and exact source-generation state/file lists.
