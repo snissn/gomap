@@ -220,6 +220,26 @@ func TestWriteWaitForCheckpointStatsIncrement(t *testing.T) {
 	}
 }
 
+func TestObserveWriteWaitForCheckpointPreservesZeroDurationSample(t *testing.T) {
+	db := &DB{}
+	db.observeWriteWaitForCheckpoint(0)
+
+	stats := map[string]string{}
+	db.appendWriteWaitForCheckpointStats(stats)
+	if got := requireStatUint64(t, stats, "treedb.cache.write.wait_for_checkpoint.count_total"); got != 1 {
+		t.Fatalf("wait_for_checkpoint.count_total=%d, want 1 (stats=%#v)", got, stats)
+	}
+	for _, key := range []string{
+		"treedb.cache.write.wait_for_checkpoint.ns_total",
+		"treedb.cache.write.wait_for_checkpoint.ns_max",
+		"treedb.cache.write.wait_for_checkpoint.ns_last",
+	} {
+		if got := requireStatUint64(t, stats, key); got != 1 {
+			t.Fatalf("%s=%d, want 1 (stats=%#v)", key, got, stats)
+		}
+	}
+}
+
 func TestBeginDirectWriteRecordsCheckpointWait(t *testing.T) {
 	db := &DB{}
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
