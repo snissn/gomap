@@ -222,12 +222,14 @@ func (db *DB) prepareCompactStorageAuditTopology() error {
 	if db == nil || db.valueLogManager == nil {
 		return nil
 	}
+	refreshed := false
 	if db.indexOuterLeavesInValueLog {
 		db.writeMu.Lock()
 		if err := db.valueLogManager.Refresh(); err != nil {
 			db.writeMu.Unlock()
 			return err
 		}
+		refreshed = true
 		commitSeq := uint64(1)
 		if state := db.state.Load(); state != nil && state.CommitSeq != 0 {
 			commitSeq = state.CommitSeq
@@ -242,17 +244,90 @@ func (db *DB) prepareCompactStorageAuditTopology() error {
 	if managerSet == nil {
 		return nil
 	}
+	if len(managerSet.Files) == 0 && !refreshed {
+		_ = db.valueLogManager.Release(managerSet)
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return err
+		}
+		managerSet = db.valueLogManager.CurrentSetNoRefresh()
+		if managerSet == nil {
+			return nil
+		}
+	}
 	state := db.state.Load()
 	currentSet := (*valuelog.Set)(nil)
 	if state != nil {
 		currentSet = state.ValueLogSet
 	}
 	same := compactStorageValueLogSetsMatch(currentSet, managerSet)
-	_ = db.valueLogManager.Release(managerSet)
 	if same {
+		return db.valueLogManager.Release(managerSet)
+	}
+	if compactStorageValueLogSetAddsOnlyZeroByteFiles(currentSet, managerSet) {
+		return db.valueLogManager.Release(managerSet)
+	}
+	return db.publishCompactStorageValueLogSet(managerSet)
+}
+
+func compactStorageValueLogSetAddsOnlyZeroByteFiles(current, candidate *valuelog.Set) bool {
+	if candidate == nil {
+		return false
+	}
+	if current != nil {
+		for id, file := range current.Files {
+			if candidate.Files[id] != file {
+				return false
+			}
+		}
+	}
+	added := false
+	for id, file := range candidate.Files {
+		if current != nil && current.Files[id] == file {
+			continue
+		}
+		if file == nil || file.File == nil {
+			return false
+		}
+		info, err := file.File.Stat()
+		if err != nil || info.Size() != 0 {
+			return false
+		}
+		added = true
+	}
+	return added
+}
+
+// publishCompactStorageValueLogSet consumes a retained manager set and
+// publishes that exact topology. In particular, an empty set that has already
+// been refreshed must not enter publishValueLogSetNoRefresh's discovery
+// fallback and resurrect topology that the manager has retired.
+func (db *DB) publishCompactStorageValueLogSet(valueLogSet *valuelog.Set) error {
+	if db == nil || db.valueLogManager == nil || valueLogSet == nil {
 		return nil
 	}
-	return db.publishValueLogSetNoRefresh()
+	db.mu.Lock()
+	oldState := db.state.Load()
+	if oldState == nil || compactStorageValueLogSetsMatch(oldState.ValueLogSet, valueLogSet) {
+		db.mu.Unlock()
+		return db.valueLogManager.Release(valueLogSet)
+	}
+	newState := &DBState{
+		CommitSeq:                  oldState.CommitSeq,
+		RootPageID:                 oldState.RootPageID,
+		SystemRootPageID:           oldState.SystemRootPageID,
+		AppliedCommandLSN:          oldState.AppliedCommandLSN,
+		MaxEntryRevision:           oldState.MaxEntryRevision,
+		ValueLogSet:                valueLogSet,
+		LeafGenerations:            oldState.LeafGenerations,
+		LeafGenerationStateVersion: oldState.LeafGenerationStateVersion,
+	}
+	db.state.Store(newState)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
+	db.mu.Unlock()
+	if oldState.ValueLogSet != nil {
+		return db.valueLogManager.Release(oldState.ValueLogSet)
+	}
+	return nil
 }
 
 func compactStorageValueLogSetsMatch(a, b *valuelog.Set) bool {

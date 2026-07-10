@@ -60,6 +60,86 @@ func TestCompactStorageAudit_DryRunUsesOneSharedWalkAndNoLegacyScanners(t *testi
 	}
 }
 
+func TestCompactStorageAudit_EmptyRegisteredTopologyRefreshesOutOfProcessSegment(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	path := filepath.Join(ValueLogDirPath(dir), "value-l0-000001.log")
+	if err := os.WriteFile(path, make([]byte, 4<<10), 0o644); err != nil {
+		t.Fatalf("write out-of-process value-log segment: %v", err)
+	}
+	refreshBefore := db.valueLogManager.RefreshScanCount()
+
+	stats, err := db.CompactStoragePlan(context.Background(), CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got, want := db.valueLogManager.RefreshScanCount(), refreshBefore+1; got != want {
+		t.Fatalf("refresh scans=%d want %d", got, want)
+	}
+	var diskBytes int64
+	for _, usage := range stats.Before {
+		if usage.Name == "value_vlog" {
+			diskBytes = usage.Bytes
+			break
+		}
+	}
+	if diskBytes != 4<<10 {
+		t.Fatalf("value_vlog disk bytes=%d want %d", diskBytes, 4<<10)
+	}
+	if stats.ValueLogRewritePlan.SegmentsTotal != 1 || stats.ValueLogGC.SegmentsTotal != 1 {
+		t.Fatalf("out-of-process segment missing from plans: rewrite=%+v gc=%+v", stats.ValueLogRewritePlan, stats.ValueLogGC)
+	}
+}
+
+func TestCompactStorageAudit_PublishesLegitimatelyEmptyRefreshedTopology(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(ValueLogDirPath(dir), "value-l0-000001.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir value-log dir: %v", err)
+	}
+	if err := os.WriteFile(path, make([]byte, 4<<10), 0o644); err != nil {
+		t.Fatalf("write value-log segment: %v", err)
+	}
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	fileID, ok := compactStorageValueLogFileID(filepath.Base(path))
+	if !ok {
+		t.Fatalf("parse file ID from %s", path)
+	}
+	if state := db.State(); state == nil || state.ValueLogSet == nil || len(state.ValueLogSet.Files) != 1 {
+		t.Fatalf("initial published topology=%+v want one segment", state)
+	}
+	if err := db.valueLogManager.MarkZombie(fileID); err != nil {
+		t.Fatalf("MarkZombie: %v", err)
+	}
+	refreshBefore := db.valueLogManager.RefreshScanCount()
+
+	if err := db.prepareCompactStorageAuditTopology(); err != nil {
+		t.Fatalf("prepareCompactStorageAuditTopology: %v", err)
+	}
+	if got, want := db.valueLogManager.RefreshScanCount(), refreshBefore+1; got != want {
+		t.Fatalf("refresh scans=%d want exactly one empty-topology refresh (%d)", got, want)
+	}
+	state := db.State()
+	if state == nil || state.ValueLogSet == nil || len(state.ValueLogSet.Files) != 0 {
+		t.Fatalf("published topology=%+v want legitimate empty set", state)
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	defer func() { _ = db.valueLogManager.Release(set) }()
+	if set == nil || len(set.Files) != 0 {
+		t.Fatalf("manager topology=%+v want empty set", set)
+	}
+}
+
 func TestCompactStorageAuditKey_ExactInvalidation(t *testing.T) {
 	setA := &valuelog.Set{}
 	setB := &valuelog.Set{}
