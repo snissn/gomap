@@ -244,6 +244,42 @@ Required performance evidence:
   them with non-skipped benchmarks and allocation evidence before closing the
   feature stack.
 
+## 10.2 External-Version MVCC Key Codec
+
+Invariant:
+
+- The opt-in external-version codec round-trips arbitrary logical bytes and
+  orders physical keys by logical key ascending, timestamp descending.
+- Timestamp zero, wrong namespace versions, malformed escapes,
+  missing/truncated/extra suffixes, and encoded keys above the uint16 envelope
+  fail explicitly before the caller can persist an ambiguous key.
+- Namespace, logical-prefix, and exact-key/all-version half-open bounds contain
+  exactly their intended version-1 physical keys.
+- The codec remains separate from raw TreeDB operations and from
+  `EntryRevision`; adding it does not alter existing raw key encoding or the
+  on-page entry-revision domain.
+
+Coverage:
+
+- `TreeDB/internal/mvcckey/codec_test.go`:
+  - arbitrary-byte and timestamp-extreme round trips;
+  - randomized order equivalence against the `(key asc, timestamp desc)`
+    oracle;
+  - namespace, logical-prefix, and all-version bound membership;
+  - malformed/truncated/wrong-version rejection;
+  - exact maximum-size acceptance and one-byte-over rejection.
+- `TreeDB/internal/mvcckey/codec_fuzz_test.go`:
+  - `FuzzRoundTrip`;
+  - `FuzzDecodeNeverPanics`.
+- `TreeDB/internal/mvcckey/codec_bench_test.go`:
+  - `BenchmarkEncode` and `BenchmarkDecode` for allocating and reusable-buffer
+    paths;
+  - `BenchmarkLogicalPrefixBounds`.
+
+The codec is a new opt-in path, so its performance gate is absolute cost and
+allocation behavior rather than a before/after raw-TreeDB result. Existing raw
+benchmarks must remain unchanged because no current raw API calls this package.
+
 ## 11. Collections Native Fast Path
 
 Invariant:

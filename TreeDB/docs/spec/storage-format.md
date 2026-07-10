@@ -54,6 +54,54 @@ value storage managed by reachability-based GC and rewrite/compaction. The
 single-group provider/storage boundary is defined in
 `TreeDB/docs/spec/raftcluster.md`.
 
+## 1.1 Opt-in external-version MVCC key subspace
+
+Issue [#3670](https://github.com/snissn/gomap/issues/3670) defines a pre-alpha,
+opt-in physical-key codec for a later caller-assigned MVCC layer. The codec is
+implemented in `TreeDB/internal/mvcckey`; existing raw TreeDB reads, writes,
+`EntryRevision`, page formats, and command-WAL frames do not invoke it.
+
+Version 1 physical keys use this byte layout:
+
+```text
+00 54 44 42 4d 56 43 43 01  escaped-logical-key  00 00  u64be(^timestamp)
+|--------- "TDBMVCC" v1 ---------|                       |----- 8 bytes -----|
+```
+
+Encoding rules:
+
+- logical keys are arbitrary byte strings, including the empty key;
+- each logical `00` byte is escaped as `00 ff`; every other byte is copied;
+- `00 00` terminates the escaped logical key;
+- the caller-assigned timestamp is a nonzero `uint64`; zero is reserved and
+  rejected;
+- the timestamp suffix is the big-endian bitwise complement of the timestamp;
+- malformed escapes, missing/truncated/extra suffix bytes, timestamp zero, and
+  keys outside the exact versioned marker fail explicitly;
+- the format envelope is at most `65535` encoded bytes and is checked before
+  allocation. TreeDB's 4096-byte pages and the selected leaf/value shape may
+  impose a smaller usable physical-key limit.
+
+The escape is order-preserving. If one logical key is a prefix of another, its
+`00 00` terminator sorts before either a copied nonzero extension byte or the
+`00 ff` encoding of a zero extension byte. For equal logical keys,
+`u64be(^timestamp)` sorts larger timestamps first. Physical byte order is
+therefore `(logical key ascending, timestamp descending)`.
+
+The marker reserves the half-open physical range
+`[00 54 44 42 4d 56 43 43 01, 00 54 44 42 4d 56 43 43 02)` when the opt-in
+layer owns a TreeDB keyspace. Logical-prefix bounds use the marker plus an
+escaped, unterminated logical prefix. All-version bounds for one logical key use
+the marker plus the escaped key and `00 00` terminator. The exclusive upper
+bound is the lexicographic successor of that physical prefix. Exact-key bounds
+enforce the same full-key size envelope as `Encode`; logical-prefix bounds are
+limited only by their own encoded bound size.
+
+This namespace does not make raw TreeDB keys non-empty or silently reserve a
+prefix in existing raw APIs. A later MVCC owner must prevent unrelated raw
+writes from entering its reserved physical range. The namespace marker makes
+MVCC physical keys non-empty even when the logical key is empty.
+
 ## 2. Index Page Basics
 
 ### 2.1 Fixed page size
