@@ -3,9 +3,11 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,6 +245,115 @@ func loadLeafGenerationManifestOrFatal(t *testing.T, dir string) *leafGeneration
 	return manifest
 }
 
+type leafGenerationGCTestResult struct {
+	stats LeafGenerationGCStats
+	err   error
+}
+
+func startLeafGenerationGCPausedAtLiveScan(t *testing.T, db *DB, opts LeafGenerationGCOptions) (func(), <-chan leafGenerationGCTestResult) {
+	t.Helper()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var enterOnce sync.Once
+	var releaseOnce sync.Once
+	unregister := registerLeafGenerationLiveScanHook(func() {
+		enterOnce.Do(func() { close(entered) })
+		<-release
+	})
+	done := make(chan leafGenerationGCTestResult, 1)
+	go func() {
+		stats, err := db.LeafGenerationGC(context.Background(), opts)
+		done <- leafGenerationGCTestResult{stats: stats, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		unregister()
+		t.Fatal("LeafGenerationGC did not enter live scan")
+	}
+	releaseScan := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	t.Cleanup(func() {
+		releaseScan()
+		unregister()
+	})
+	return releaseScan, done
+}
+
+func requireLeafGenerationForegroundSetCompletes(t *testing.T, db *DB, key string) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		done <- db.SetSync([]byte(key), []byte("ok"))
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SetSync while leaf-generation GC scan paused: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetSync blocked while leaf-generation GC scan was paused")
+	}
+}
+
+func queueLeafGenerationCheckpointBehindReadLock(t *testing.T, db *DB) (func(), <-chan error) {
+	t.Helper()
+	db.writeMu.RLock()
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(db.writeMu.RUnlock)
+	}
+	t.Cleanup(release)
+
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		done <- db.Checkpoint()
+	}()
+	<-started
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if !db.writeMu.TryRLock() {
+			break
+		}
+		db.writeMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("Checkpoint did not queue for writeMu")
+		}
+		time.Sleep(100 * time.Microsecond)
+	}
+	return release, done
+}
+
+func requireLeafGenerationOperationCompletes(t *testing.T, name string, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s did not complete", name)
+	}
+}
+
+func requireLeafGenerationGCResult(t *testing.T, done <-chan leafGenerationGCTestResult) LeafGenerationGCStats {
+	t.Helper()
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatalf("LeafGenerationGC: %v", result.err)
+		}
+		return result.stats
+	case <-time.After(5 * time.Second):
+		t.Fatal("LeafGenerationGC did not finish after releasing live scan")
+	}
+	return LeafGenerationGCStats{}
+}
+
 func TestLeafGenerationView_SkipsRetiringAndDeletedGenerations(t *testing.T) {
 	manifest := &leafGenerationManifest{
 		Version:             leafGenerationManifestVersion,
@@ -276,6 +387,304 @@ func TestLeafGenerationView_SkipsRetiringAndDeletedGenerations(t *testing.T) {
 	}
 	if got, want := view.FileToGeneration[303], uint64(3); got != want {
 		t.Fatalf("FileToGeneration[303]=%d, want %d", got, want)
+	}
+}
+
+func TestLeafGenerationGC_LiveScanDoesNotBlockForegroundWrite(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "scan-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "scan-new", 64, 'b')
+
+	releaseScan, done := startLeafGenerationGCPausedAtLiveScan(t, db, LeafGenerationGCOptions{})
+	requireLeafGenerationForegroundSetCompletes(t, db, "scan-concurrent")
+	releaseScan()
+	_ = requireLeafGenerationGCResult(t, done)
+
+	got, err := db.Get([]byte("scan-concurrent"))
+	if err != nil {
+		t.Fatalf("Get concurrent write: %v", err)
+	}
+	if !bytes.Equal(got, []byte("ok")) {
+		t.Fatalf("concurrent write value=%q want ok", got)
+	}
+}
+
+func TestLeafGenerationGC_QueuedCheckpointDoesNotGateLaterWrite(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "checkpoint-scan-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "checkpoint-scan-new", 64, 'b')
+
+	releaseScan, gcDone := startLeafGenerationGCPausedAtLiveScan(t, db, LeafGenerationGCOptions{})
+	releaseCheckpointBlocker, checkpointDone := queueLeafGenerationCheckpointBehindReadLock(t, db)
+
+	setStarted := make(chan struct{})
+	setDone := make(chan error, 1)
+	go func() {
+		close(setStarted)
+		setDone <- db.SetSync([]byte("checkpoint-scan-concurrent"), []byte("ok"))
+	}()
+	<-setStarted
+	releaseCheckpointBlocker()
+
+	requireLeafGenerationOperationCompletes(t, "Checkpoint while live scan paused", checkpointDone)
+	requireLeafGenerationOperationCompletes(t, "SetSync queued after Checkpoint", setDone)
+	releaseScan()
+	_ = requireLeafGenerationGCResult(t, gcDone)
+
+	got, err := db.Get([]byte("checkpoint-scan-concurrent"))
+	if err != nil {
+		t.Fatalf("Get concurrent write: %v", err)
+	}
+	if !bytes.Equal(got, []byte("ok")) {
+		t.Fatalf("concurrent write value=%q want ok", got)
+	}
+}
+
+func TestLeafGenerationGC_LifetimeGateLockOrderStress(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "lifetime-stress-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "lifetime-stress-new", 64, 'b')
+
+	for round := 0; round < 24; round++ {
+		start := make(chan struct{})
+		errs := make(chan error, 3)
+		go func() {
+			<-start
+			_, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+			if errors.Is(err, ErrLeafGenerationGCStaleScan) {
+				err = nil
+			}
+			errs <- err
+		}()
+		go func() {
+			<-start
+			errs <- db.Checkpoint()
+		}()
+		go func(round int) {
+			<-start
+			key := []byte(fmt.Sprintf("lifetime-stress-write-%02d", round))
+			errs <- db.SetSync(key, []byte("ok"))
+		}(round)
+		close(start)
+
+		for operation := 0; operation < 3; operation++ {
+			select {
+			case err := <-errs:
+				if err != nil {
+					t.Fatalf("round %d operation %d: %v", round, operation, err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatalf("round %d operation %d timed out", round, operation)
+			}
+		}
+	}
+}
+
+func TestLeafGenerationGC_RevalidationFailureSkipsStalePublish(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "revalidate", 64, 'a')
+	path1, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
+	rawFileID1 := page.ValueLogSegmentID(fileID1)
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "revalidate", 64, 'b')
+	before := db.State()
+
+	releaseScan, done := startLeafGenerationGCPausedAtLiveScan(t, db, LeafGenerationGCOptions{})
+	requireLeafGenerationForegroundSetCompletes(t, db, "revalidate-concurrent")
+	afterWrite := db.State()
+	if before == nil || afterWrite == nil || afterWrite.CommitSeq == before.CommitSeq {
+		t.Fatalf("concurrent write did not advance CommitSeq: before=%+v after=%+v", before, afterWrite)
+	}
+	releaseScan()
+	stats := requireLeafGenerationGCResult(t, done)
+	if stats.GenerationsDeleted != 0 || stats.FilesDeleted != 0 {
+		t.Fatalf("stale scan applied deletion: stats=%+v", stats)
+	}
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("stale scan removed candidate leaf segment: %v", err)
+	}
+	manifestAfter := loadLeafGenerationManifestOrFatal(t, db.dir)
+	gen1 := findLeafGenerationByFileID(t, manifestAfter, rawFileID1)
+	if gen1.State == leafGenerationStateDeleted {
+		t.Fatalf("stale scan marked generation deleted: %+v", gen1)
+	}
+}
+
+func TestLeafGenerationGC_DryRunLiveScanDoesNotBlockForegroundWrite(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "dry-scan-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "dry-scan-new", 64, 'b')
+
+	releaseScan, done := startLeafGenerationGCPausedAtLiveScan(t, db, LeafGenerationGCOptions{DryRun: true})
+	requireLeafGenerationForegroundSetCompletes(t, db, "dry-scan-concurrent")
+	releaseScan()
+	_ = requireLeafGenerationGCResult(t, done)
+
+	got, err := db.Get([]byte("dry-scan-concurrent"))
+	if err != nil {
+		t.Fatalf("Get concurrent dry-run write: %v", err)
+	}
+	if !bytes.Equal(got, []byte("ok")) {
+		t.Fatalf("concurrent dry-run write value=%q want ok", got)
+	}
+}
+
+func TestLeafGenerationGC_DryRunRetriesInvalidatedScan(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "dry-retry-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "dry-retry-new", 64, 'b')
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	scans := 0
+	unregister := registerLeafGenerationLiveScanHook(func() {
+		mu.Lock()
+		scans++
+		scan := scans
+		mu.Unlock()
+		if scan == 1 {
+			close(entered)
+			<-release
+		}
+	})
+	t.Cleanup(unregister)
+
+	done := make(chan leafGenerationGCTestResult, 1)
+	go func() {
+		stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+		done <- leafGenerationGCTestResult{stats: stats, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dry-run GC did not enter first live scan")
+	}
+	if err := db.SetSync([]byte("dry-retry-concurrent"), []byte("ok")); err != nil {
+		t.Fatalf("SetSync invalidating first dry-run scan: %v", err)
+	}
+	close(release)
+
+	stats := requireLeafGenerationGCResult(t, done)
+	mu.Lock()
+	gotScans := scans
+	mu.Unlock()
+	if gotScans != 2 {
+		t.Fatalf("live scans=%d, want 2 after one invalidation", gotScans)
+	}
+	if stats.GenerationsEligible == 0 || stats.BytesEligible == 0 {
+		t.Fatalf("retried dry-run reported zero actionable debt: %+v", stats)
+	}
+}
+
+func TestLeafGenerationGC_DryRunRetryExhaustionReturnsStale(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "dry-stale-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "dry-stale-new", 64, 'b')
+
+	entered := make(chan int, 2)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	scans := 0
+	unregister := registerLeafGenerationLiveScanHook(func() {
+		mu.Lock()
+		scans++
+		scan := scans
+		mu.Unlock()
+		entered <- scan
+		<-release
+	})
+	t.Cleanup(unregister)
+
+	done := make(chan leafGenerationGCTestResult, 1)
+	go func() {
+		stats, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
+		done <- leafGenerationGCTestResult{stats: stats, err: err}
+	}()
+	for attempt := 1; attempt <= 2; attempt++ {
+		select {
+		case scan := <-entered:
+			if scan != attempt {
+				t.Fatalf("live scan=%d, want attempt %d", scan, attempt)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("dry-run GC did not enter live scan attempt %d", attempt)
+		}
+		key := fmt.Sprintf("dry-stale-concurrent-%d", attempt)
+		if err := db.SetSync([]byte(key), []byte("ok")); err != nil {
+			t.Fatalf("SetSync invalidating dry-run attempt %d: %v", attempt, err)
+		}
+		release <- struct{}{}
+	}
+	select {
+	case result := <-done:
+		if !errors.Is(result.err, ErrLeafGenerationGCStaleScan) {
+			t.Fatalf("LeafGenerationGC error=%v, want ErrLeafGenerationGCStaleScan", result.err)
+		}
+		if result.stats != (LeafGenerationGCStats{}) {
+			t.Fatalf("stale dry-run stats=%+v, want zero with explicit error", result.stats)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("dry-run GC did not return after bounded stale retries")
+	}
+}
+
+func TestLeafGenerationGC_CloseWaitsForUnlockedScan(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	writeLeafGenerationKeys(t, db, "close-scan-old", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "close-scan-new", 64, 'b')
+
+	releaseScan, gcDone := startLeafGenerationGCPausedAtLiveScan(t, db, LeafGenerationGCOptions{})
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- db.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before live scan released: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseScan()
+	_ = requireLeafGenerationGCResult(t, gcDone)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close after live scan: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not finish after live scan released")
 	}
 }
 

@@ -144,6 +144,7 @@ type DB struct {
 
 	mu                              sync.RWMutex
 	writeMu                         sync.RWMutex
+	teardownMu                      sync.RWMutex // Pins Close-sensitive resources outside writeMu.
 	commitMu                        sync.Mutex
 	publishPrepareMu                sync.RWMutex
 	pendingValueLogAppendMu         sync.Mutex
@@ -2222,6 +2223,10 @@ func (db *DB) Close() error {
 	}
 	db.clearFlushApplyReadOnlyPrepareBuffers()
 	db.writeMu.Unlock()
+	// Operations using teardownMu may briefly take writeMu while preparing or
+	// revalidating work. Never wait for them while holding writeMu.
+	db.teardownMu.Lock()
+	defer db.teardownMu.Unlock()
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.valueLogRefTracker != nil {

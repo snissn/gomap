@@ -58,58 +58,279 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
 
-	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
-		return stats, nil
+	attempts := 1
+	if opts.DryRun {
+		attempts++
 	}
-	if err := db.valueLogManager.Refresh(); err != nil {
-		return stats, err
+	for attempt := 0; attempt < attempts; attempt++ {
+		stats, stale, err := db.leafGenerationGCAttempt(ctx, opts)
+		if err != nil {
+			return stats, err
+		}
+		if !stale {
+			return stats, nil
+		}
+		if err := ctx.Err(); err != nil {
+			return LeafGenerationGCStats{}, err
+		}
 	}
-	commitSeq := uint64(1)
-	if state := db.State(); state != nil && state.CommitSeq != 0 {
-		commitSeq = state.CommitSeq
+	return LeafGenerationGCStats{}, ErrLeafGenerationGCStaleScan
+}
+
+func (db *DB) leafGenerationGCAttempt(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, bool, error) {
+	var stats LeafGenerationGCStats
+
+	// Refresh, snapshot acquisition, and the live scan intentionally run outside
+	// writeMu. Pin their backing resources against Close without joining the lock
+	// used by checkpoints and foreground publishes.
+	db.teardownMu.RLock()
+	teardownHeld := true
+	releaseTeardown := func() {
+		if teardownHeld {
+			db.teardownMu.RUnlock()
+			teardownHeld = false
+		}
 	}
-	if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
-		return stats, err
+	defer releaseTeardown()
+	if db.closing.Load() {
+		return stats, false, nil
 	}
 
-	manifest := db.leafGenerationManifest.clone()
-	if manifest == nil {
-		return stats, nil
-	}
-	filePaths := db.leafGenerationFilePaths(manifest)
-	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
-	if err != nil {
-		return stats, err
+	prepared, err := db.prepareLeafGenerationGCScan()
+	if err != nil || !prepared {
+		return stats, false, err
 	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
-		return stats, ErrClosed
+		return stats, false, ErrClosed
 	}
 	if len(snap.leafGenerationIDs) > 0 {
 		snap.releaseLeafGenerationPins()
 	}
 	if snap.state == nil || snap.state.LeafGenerations == nil {
 		_ = snap.Close()
-		return stats, nil
+		return stats, false, nil
+	}
+
+	basis, ok := db.captureLeafGenerationGCScanBasis(snap)
+	if !ok {
+		_ = snap.Close()
+		return stats, opts.DryRun, nil
 	}
 
 	liveGenerations, err := collectLiveLeafGenerationIDs(ctx, snap, opts.ProtectedRootIDs, opts.ProtectedSystemRootIDs)
 	if err != nil {
 		_ = snap.Close()
-		return stats, err
+		return stats, false, err
 	}
-
-	currentCommitSeq := snap.state.CommitSeq
 	if err := snap.Close(); err != nil {
-		return stats, err
+		return stats, false, err
 	}
 	snap = nil
-	intermediateChanged := false
-	zombieFileIDs := make(map[uint32]struct{})
+	releaseTeardown()
+
+	if opts.DryRun {
+		return db.leafGenerationGCDryRunFromScan(basis, liveGenerations)
+	}
+	stats, err = db.leafGenerationGCApplyScan(basis, liveGenerations)
+	return stats, false, err
+}
+
+type leafGenerationGCScanBasis struct {
+	commitSeq                  uint64
+	leafGenerationStateVersion uint64
+	manifest                   *leafGenerationManifest
+}
+
+type leafGenerationGCDecision struct {
+	stats               LeafGenerationGCStats
+	intermediateChanged bool
+	zombieFileIDs       map[uint32]struct{}
+}
+
+func (db *DB) prepareLeafGenerationGCScan() (bool, error) {
+	if db.closing.Load() {
+		return false, nil
+	}
+	db.mu.RLock()
+	if db.leafGenerationManifest == nil || db.valueLogManager == nil {
+		db.mu.RUnlock()
+		return false, nil
+	}
+	valueLogManager := db.valueLogManager
+	db.mu.RUnlock()
+
+	// The caller's teardown read lock keeps Close from clearing or closing this
+	// manager. Manager synchronization handles concurrent normal DB activity.
+	if err := valueLogManager.Refresh(); err != nil {
+		return false, err
+	}
+
+	db.writeMu.Lock()
+	runLeafGenerationGCExclusivePhaseHook(true)
+	defer func() {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+	}()
+
+	if db.closing.Load() || db.leafGenerationManifest == nil || db.valueLogManager == nil {
+		return false, nil
+	}
+	commitSeq := uint64(1)
+	if state := db.State(); state != nil && state.CommitSeq != 0 {
+		commitSeq = state.CommitSeq
+	}
+	if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (db *DB) captureLeafGenerationGCScanBasis(snap *Snapshot) (leafGenerationGCScanBasis, bool) {
+	var basis leafGenerationGCScanBasis
+	if snap == nil || snap.state == nil || snap.state.LeafGenerations == nil {
+		return basis, false
+	}
+
+	// Optimistic publishers swap the state and manifest under db.mu, so capture
+	// the pair under that lock. The teardown read lock protects backing resources
+	// from Close; snapshot references handle normal index-generation cutovers.
+	db.mu.RLock()
+	current := db.state.Load()
+	var manifest *leafGenerationManifest
+	if db.leafGenerationManifest != nil {
+		manifest = db.leafGenerationManifest.clone()
+	}
+	db.mu.RUnlock()
+
+	if current == nil || current.CommitSeq != snap.state.CommitSeq || current.LeafGenerationStateVersion != snap.state.LeafGenerationStateVersion {
+		return basis, false
+	}
+	if manifest == nil {
+		return basis, false
+	}
+	basis.commitSeq = snap.state.CommitSeq
+	basis.leafGenerationStateVersion = snap.state.LeafGenerationStateVersion
+	basis.manifest = manifest
+	return basis, true
+}
+
+func (db *DB) leafGenerationGCValidatedManifestClone(basis leafGenerationGCScanBasis) (*leafGenerationManifest, bool) {
+	// See captureLeafGenerationGCScanBasis: db.mu serializes manifest swaps from
+	// optimistic publishers that share writeMu.RLock with this maintenance path.
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	current := db.state.Load()
+	if current == nil || current.CommitSeq != basis.commitSeq || current.LeafGenerationStateVersion != basis.leafGenerationStateVersion {
+		return nil, false
+	}
+	if !leafGenerationManifestsEqualForGC(basis.manifest, db.leafGenerationManifest) {
+		return nil, false
+	}
+	manifest := db.leafGenerationManifest.clone()
+	if manifest == nil {
+		return nil, false
+	}
+	return manifest, true
+}
+
+func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, bool, error) {
+	var stats LeafGenerationGCStats
+
+	db.writeMu.Lock()
+	runLeafGenerationGCExclusivePhaseHook(true)
+	if db.closing.Load() {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+		return stats, false, nil
+	}
+	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
+	if !ok {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+		return stats, true, nil
+	}
+	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
+	if err != nil {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+		return stats, false, err
+	}
+	filePaths := db.leafGenerationFilePaths(manifest)
+	runLeafGenerationGCExclusivePhaseHook(false)
+	db.writeMu.Unlock()
+
+	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, basis.commitSeq, true)
+	return decision.stats, false, nil
+}
+
+func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGenerations map[uint64]struct{}) (LeafGenerationGCStats, error) {
+	var stats LeafGenerationGCStats
+
+	db.writeMu.Lock()
+	runLeafGenerationGCExclusivePhaseHook(true)
+	defer func() {
+		runLeafGenerationGCExclusivePhaseHook(false)
+		db.writeMu.Unlock()
+	}()
+	if db.closing.Load() {
+		return stats, nil
+	}
+
+	manifest, ok := db.leafGenerationGCValidatedManifestClone(basis)
+	if !ok {
+		return stats, nil
+	}
+	currentLeafLogRawFileIDs, err := db.currentLeafPageLogRawFileIDSet()
+	if err != nil {
+		return stats, err
+	}
+	filePaths := db.leafGenerationFilePaths(manifest)
+	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, basis.commitSeq, false)
+	stats = decision.stats
+
+	if len(decision.zombieFileIDs) > 0 {
+		for fileID := range decision.zombieFileIDs {
+			if err := db.valueLogManager.MarkZombie(fileID); err != nil && !errors.Is(err, valuelog.ErrFileNotFound) {
+				return stats, err
+			}
+		}
+	}
+
+	if decision.intermediateChanged {
+		if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+			return stats, err
+		}
+		db.leafGenerationManifest = manifest
+	}
+	if decision.intermediateChanged || len(decision.zombieFileIDs) > 0 {
+		if err := db.publishLeafGenerationState(len(decision.zombieFileIDs) > 0); err != nil {
+			return stats, err
+		}
+	}
+
+	prePrune := manifest.clone()
+	manifest, pruned, filesDeleted, err := db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
+	if err != nil {
+		return stats, fmt.Errorf("leaf generation gc: prune deleted generation records: %w", err)
+	}
+	if !pruned {
+		return stats, nil
+	}
+	stats.GenerationsDeleted = countPrunedLeafGenerations(prePrune, manifest)
+	stats.FilesDeleted = filesDeleted
+	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
+		return stats, err
+	}
+	db.leafGenerationManifest = manifest
+	return stats, nil
+}
+
+func (db *DB) buildLeafGenerationGCDecision(manifest *leafGenerationManifest, filePaths map[uint32]string, currentLeafLogRawFileIDs map[uint32]struct{}, liveGenerations map[uint64]struct{}, currentCommitSeq uint64, dryRun bool) leafGenerationGCDecision {
+	decision := leafGenerationGCDecision{zombieFileIDs: make(map[uint32]struct{})}
 	activeFileRefs := leafGenerationActiveFileRefCounts(manifest)
 	for i := range manifest.Generations {
 		gen := &manifest.Generations[i]
@@ -122,7 +343,7 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			}
 			return genBytes
 		}
-		stats.GenerationsTotal++
+		decision.stats.GenerationsTotal++
 		if gen.State == leafGenerationStateDeleted {
 			// Zombie state is in-memory only. After a reopen, deleted manifest records
 			// whose files are still present must be marked zombie again so deletion is
@@ -142,12 +363,12 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 				if _, current := currentLeafLogRawFileIDs[fileID]; current {
 					continue
 				}
-				zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
+				decision.zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
 			}
 			continue
 		}
 		if gen.State == leafGenerationStateWritable {
-			stats.GenerationsWritable++
+			decision.stats.GenerationsWritable++
 			continue
 		}
 		// Multiple physical leaf-log append writers can be current at once while
@@ -156,37 +377,37 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		// because the current root no longer references its older pages; future
 		// appends may still land in that file until the lane rotates or closes.
 		if leafGenerationRecordIntersectsFileIDSet(*gen, currentLeafLogRawFileIDs) {
-			stats.GenerationsLive++
+			decision.stats.GenerationsLive++
 			if gen.State != leafGenerationStateSealed {
 				gen.State = leafGenerationStateSealed
-				intermediateChanged = true
+				decision.intermediateChanged = true
 			}
 			continue
 		}
 		if _, ok := liveGenerations[gen.GenerationID]; ok {
-			stats.GenerationsLive++
+			decision.stats.GenerationsLive++
 			if gen.State != leafGenerationStateSealed {
 				gen.State = leafGenerationStateSealed
-				intermediateChanged = true
+				decision.intermediateChanged = true
 			}
 			continue
 		}
 		if db.leafGenerationPins.count(gen.GenerationID) > 0 {
-			stats.GenerationsRetiring++
+			decision.stats.GenerationsRetiring++
 			if gen.State != leafGenerationStateRetiring {
 				gen.State = leafGenerationStateRetiring
 				if currentCommitSeq > gen.RetiredCommitSeq {
 					gen.RetiredCommitSeq = currentCommitSeq
 				}
-				intermediateChanged = true
+				decision.intermediateChanged = true
 			}
 			continue
 		}
-		stats.GenerationsEligible++
+		decision.stats.GenerationsEligible++
 		if bytes := loadGenBytes(); bytes > 0 {
-			stats.BytesEligible += bytes
+			decision.stats.BytesEligible += bytes
 		}
-		if opts.DryRun {
+		if dryRun {
 			continue
 		}
 		if gen.State != leafGenerationStateDeleted {
@@ -195,7 +416,7 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 				gen.DeletedCommitSeq = currentCommitSeq
 			}
 			if bytes := loadGenBytes(); bytes > 0 {
-				stats.BytesDeleted += bytes
+				decision.stats.BytesDeleted += bytes
 			}
 			seenFiles := make(map[uint32]struct{}, len(gen.FileIDs))
 			for _, fileID := range gen.FileIDs {
@@ -217,51 +438,43 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 				if activeFileRefs[fileID] > 0 {
 					continue
 				}
-				zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
+				decision.zombieFileIDs[page.ValueLogFileID(fileID)] = struct{}{}
 			}
-			intermediateChanged = true
+			decision.intermediateChanged = true
 		}
 	}
+	return decision
+}
 
-	if opts.DryRun {
-		return stats, nil
+func leafGenerationManifestsEqualForGC(a, b *leafGenerationManifest) bool {
+	if a == nil || b == nil {
+		return a == b
 	}
-
-	if len(zombieFileIDs) > 0 {
-		for fileID := range zombieFileIDs {
-			if err := db.valueLogManager.MarkZombie(fileID); err != nil && !errors.Is(err, valuelog.ErrFileNotFound) {
-				return stats, err
-			}
+	if a.Version != b.Version || a.CurrentGenerationID != b.CurrentGenerationID || a.NextGenerationID != b.NextGenerationID || len(a.Generations) != len(b.Generations) {
+		return false
+	}
+	for i := range a.Generations {
+		ag, bg := a.Generations[i], b.Generations[i]
+		if ag.GenerationID != bg.GenerationID || ag.State != bg.State || ag.CreatedCommitSeq != bg.CreatedCommitSeq || ag.SealedCommitSeq != bg.SealedCommitSeq || ag.RetiredCommitSeq != bg.RetiredCommitSeq || ag.DeletedCommitSeq != bg.DeletedCommitSeq || ag.PublishedCommitSeq != bg.PublishedCommitSeq {
+			return false
+		}
+		if !leafGenerationFileIDsEqualForGC(ag.FileIDs, bg.FileIDs) {
+			return false
 		}
 	}
+	return true
+}
 
-	if intermediateChanged {
-		if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
-			return stats, err
-		}
-		db.leafGenerationManifest = manifest
+func leafGenerationFileIDsEqualForGC(a, b []uint32) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	if intermediateChanged || len(zombieFileIDs) > 0 {
-		if err := db.publishLeafGenerationState(len(zombieFileIDs) > 0); err != nil {
-			return stats, err
+	for i := range a {
+		if a[i] != b[i] {
+			return false
 		}
 	}
-
-	prePrune := manifest.clone()
-	manifest, pruned, filesDeleted, err := db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
-	if err != nil {
-		return stats, fmt.Errorf("leaf generation gc: prune deleted generation records: %w", err)
-	}
-	if !pruned {
-		return stats, nil
-	}
-	stats.GenerationsDeleted = countPrunedLeafGenerations(prePrune, manifest)
-	stats.FilesDeleted = filesDeleted
-	if err := saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest); err != nil {
-		return stats, err
-	}
-	db.leafGenerationManifest = manifest
-	return stats, nil
+	return true
 }
 
 func (db *DB) currentLeafPageLogRawFileIDSet() (map[uint32]struct{}, error) {
