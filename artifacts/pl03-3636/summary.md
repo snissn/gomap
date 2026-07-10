@@ -3,7 +3,9 @@
 Issue: `snissn/gomap#3636`
 
 - Base: `7d210c971ed3df543d9fe00fd5016b5d82cc7c0d`
-- Head source: branch `codex/pl03-compact-shared-audit`
+- Head source: `1db5ff2ecaf9aa5abedaa39befb43e517b8a6565` (branch
+  `codex/pl03-compact-shared-audit`, including `origin/main` at
+  `9bb109dd0ed643448c065951eb72cdab99c47ac6`)
 - Host: Linux 6.8.0-124-generic, Intel Core i5-11400F, Go 1.26.0
 - Workspace mode: `GOWORK=off`
 
@@ -28,9 +30,9 @@ GOWORK=off go test ./TreeDB/db -run '^$' \
 
 | Metric (median, count=5) | Base | Head | Change |
 | --- | ---: | ---: | ---: |
-| Audit time | 897.9 us/op | 451.3 us/op | -49.74% |
-| Allocated bytes | 427.0 KiB/op | 328.4 KiB/op | -23.09% |
-| Allocations | 422 allocs/op | 314 allocs/op | -25.59% |
+| Audit time | 897.9 us/op | 597.9 us/op | -33.41% |
+| Allocated bytes | 427.0 KiB/op | 461.6 KiB/op | +8.11% |
+| Allocations | 422 allocs/op | 335 allocs/op | -20.62% |
 | Legacy reference scans | 1/op | 0/op | -100% |
 | Legacy live-byte scans | 1/op | 0/op | -100% |
 | Legacy leaf scans | 2/op | 0/op | -100% |
@@ -49,8 +51,9 @@ GOWORK=off go test ./TreeDB/db -run '^$' \
 ```
 
 The base CPU profile is dominated by repeated iterator/live-byte collection.
-The head profile contains one direct recursive audit walk; remaining hot work is
-the exact grouped-record set and leaf value projection accounting.
+The head profile contains one physical recursive audit walk plus memoized
+maintenance-root projection replay. Remaining hot work is the exact per-page
+pointer aggregate maps and grouped-record live-byte accounting.
 
 Artifacts:
 

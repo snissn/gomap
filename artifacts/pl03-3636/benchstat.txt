@@ -4,7 +4,7 @@ pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
                              │ artifacts/pl03-3636/base.txt │    artifacts/pl03-3636/head.txt     │
                              │            sec/op            │    sec/op     vs base               │
-CompactStorageSharedAudit-12                   897.9µ ± ∞ ¹   451.3µ ± ∞ ¹  -49.74% (p=0.008 n=5)
+CompactStorageSharedAudit-12                   897.9µ ± ∞ ¹   597.9µ ± ∞ ¹  -33.41% (p=0.008 n=5)
 ¹ need >= 6 samples for confidence interval at level 0.95
 
                              │ artifacts/pl03-3636/base.txt │         artifacts/pl03-3636/head.txt         │
@@ -22,12 +22,12 @@ CompactStorageSharedAudit-12                    1.000 ± ∞ ¹            0.000
 CompactStorageSharedAudit-12                    1.000 ± ∞ ¹           0.000 ± ∞ ¹  -100.00% (p=0.008 n=5)
 ¹ need >= 6 samples for confidence interval at level 0.95
 
-                             │ artifacts/pl03-3636/base.txt │     artifacts/pl03-3636/head.txt     │
-                             │             B/op             │     B/op       vs base               │
-CompactStorageSharedAudit-12                  427.0Ki ± ∞ ¹   328.4Ki ± ∞ ¹  -23.09% (p=0.008 n=5)
+                             │ artifacts/pl03-3636/base.txt │    artifacts/pl03-3636/head.txt     │
+                             │             B/op             │     B/op       vs base              │
+CompactStorageSharedAudit-12                  427.0Ki ± ∞ ¹   461.6Ki ± ∞ ¹  +8.11% (p=0.008 n=5)
 ¹ need >= 6 samples for confidence interval at level 0.95
 
                              │ artifacts/pl03-3636/base.txt │    artifacts/pl03-3636/head.txt    │
                              │          allocs/op           │  allocs/op   vs base               │
-CompactStorageSharedAudit-12                    422.0 ± ∞ ¹   314.0 ± ∞ ¹  -25.59% (p=0.008 n=5)
+CompactStorageSharedAudit-12                    422.0 ± ∞ ¹   335.0 ± ∞ ¹  -20.62% (p=0.008 n=5)
 ¹ need >= 6 samples for confidence interval at level 0.95

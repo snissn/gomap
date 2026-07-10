@@ -2,10 +2,10 @@ goos: linux
 goarch: amd64
 pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
-BenchmarkCompactStorageSharedAudit-12    	    2565	    458111 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  336325 B/op	     314 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    2509	    446047 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  336117 B/op	     314 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    2648	    451253 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  336248 B/op	     314 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    2631	    442190 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  336368 B/op	     314 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    2643	    453019 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  336250 B/op	     314 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1935	    600930 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  472797 B/op	     335 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1790	    631285 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  472656 B/op	     335 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1983	    597900 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  472665 B/op	     335 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    2017	    593887 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  472568 B/op	     335 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1998	    592451 ns/op	         0 legacy_leaf_scans/op	         0 legacy_live_scans/op	         0 legacy_ref_scans/op	  472603 B/op	     335 allocs/op
 PASS
-ok  	github.com/snissn/gomap/TreeDB/db	7.144s
+ok  	github.com/snissn/gomap/TreeDB/db	7.336s
