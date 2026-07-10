@@ -58,6 +58,11 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
+	if !opts.DryRun {
+		if err := db.CheckStorageMaintenanceReady(); err != nil {
+			return stats, err
+		}
+	}
 
 	attempts := 1
 	if opts.DryRun {

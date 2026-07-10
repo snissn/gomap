@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -192,8 +193,49 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := d.VacuumIndexOnline(ctx); err != nil {
+	var freeManyChecksumUpdates atomic.Int64
+	freelist.TestHookFreeManyBeforeChecksum = func() { freeManyChecksumUpdates.Add(1) }
+	defer func() { freelist.TestHookFreeManyBeforeChecksum = nil }()
+	snapshotReady := make(chan struct{})
+	continueVacuum := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(continueVacuum)
+		}
+	}()
+	testHookVacuumAfterBaseSnapshot = func() {
+		close(snapshotReady)
+		<-continueVacuum
+	}
+	defer func() { testHookVacuumAfterBaseSnapshot = nil }()
+	vacuumDone := make(chan error, 1)
+	go func() { vacuumDone <- d.VacuumIndexOnline(ctx) }()
+	select {
+	case <-snapshotReady:
+	case err := <-vacuumDone:
+		t.Fatalf("vacuum finished before base snapshot hook: %v", err)
+	case <-ctx.Done():
+		t.Fatalf("waiting for vacuum base snapshot: %v", ctx.Err())
+	}
+
+	deltaValue := bytes.Repeat([]byte("w"), 200)
+	delta := d.NewBatch()
+	if err := delta.Set([]byte("k000010"), deltaValue); err != nil {
+		t.Fatalf("delta set: %v", err)
+	}
+	deltaErr := delta.Write()
+	_ = delta.Close()
+	close(continueVacuum)
+	released = true
+	if deltaErr != nil {
+		t.Fatalf("delta write: %v", deltaErr)
+	}
+	if err := <-vacuumDone; err != nil {
 		t.Fatalf("vacuum: %v", err)
+	}
+	if got := freeManyChecksumUpdates.Load(); got == 0 {
+		t.Fatal("online vacuum did not batch retired pages through FreeMany")
 	}
 
 	afterInfo, err := os.Stat(indexPath)
@@ -208,7 +250,7 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if !bytes.Equal(got, value) {
+	if !bytes.Equal(got, deltaValue) {
 		t.Fatalf("value mismatch")
 	}
 }

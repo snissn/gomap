@@ -1,6 +1,7 @@
 package pager
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -169,6 +170,65 @@ func TestFlushDirtyChunksFromRetainsLowerChunksForFinalSync(t *testing.T) {
 	p.mu.RUnlock()
 	if dirtyCount != 0 {
 		t.Fatalf("dirty chunks after final sync=%d want 0", dirtyCount)
+	}
+}
+
+func TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index_sync_pages.db")
+	chunkSize := int64(page.PageSize * 4)
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		chunkSize = ((chunkSize + gran - 1) / gran) * gran
+	}
+	pagesPerChunk := int(chunkSize / int64(page.PageSize))
+	pageCount := pagesPerChunk + 1
+
+	p, err := Open(path, chunkSize)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := p.Alloc(pageCount); err != nil {
+		t.Fatalf("Alloc: %v", err)
+	}
+	for _, pageID := range []uint64{0, 1, 2, uint64(pagesPerChunk)} {
+		buf := make([]byte, page.PageSize)
+		buf[0] = byte(pageID + 1)
+		if err := p.Write(pageID, buf); err != nil {
+			t.Fatalf("Write(%d): %v", pageID, err)
+		}
+	}
+	dirtyBefore := len(p.dirtyChunks)
+	if dirtyBefore < 2 {
+		t.Fatalf("dirty chunks=%d want at least 2", dirtyBefore)
+	}
+
+	if err := p.SyncPages([]uint64{uint64(pagesPerChunk), 2, 1, 1, 0}); err != nil {
+		t.Fatalf("SyncPages: %v", err)
+	}
+	if got := len(p.dirtyChunks); got != dirtyBefore {
+		t.Fatalf("dirty chunks=%d want unchanged %d", got, dirtyBefore)
+	}
+	if err := p.SyncPages([]uint64{uint64(pageCount)}); !errors.Is(err, ErrPageOutOfBounds) {
+		t.Fatalf("SyncPages out of bounds error=%v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(path, chunkSize)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	reopened.SetPageCount(uint64(pageCount))
+	for _, pageID := range []uint64{0, 1, 2, uint64(pagesPerChunk)} {
+		buf, err := reopened.Get(pageID)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", pageID, err)
+		}
+		if got, want := buf[0], byte(pageID+1); got != want {
+			t.Fatalf("Get(%d)[0]=%d want %d", pageID, got, want)
+		}
 	}
 }
 

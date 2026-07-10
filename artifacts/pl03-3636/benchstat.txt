@@ -1,0 +1,86 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+                             │ artifacts/pl03-3636/base.txt │    artifacts/pl03-3636/head.txt     │
+                             │            sec/op            │    sec/op     vs base               │
+CompactStorageSharedAudit-12                   868.1µ ± ∞ ¹   593.2µ ± ∞ ¹  -31.66% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │         artifacts/pl03-3636/head.txt         │
+                             │     audit_unavailable/op     │ audit_unavailable/op  vs base                │
+CompactStorageSharedAudit-12                    1.000 ± ∞ ¹            0.000 ± ∞ ¹  -100.00% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │       artifacts/pl03-3636/head.txt        │
+                             │    grouped_dedupe_hits/op    │ grouped_dedupe_hits/op  vs base           │
+CompactStorageSharedAudit-12                    0.000 ± ∞ ¹              0.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                             │ artifacts/pl03-3636/base.txt │         artifacts/pl03-3636/head.txt         │
+                             │     legacy_leaf_scans/op     │ legacy_leaf_scans/op  vs base                │
+CompactStorageSharedAudit-12                    2.000 ± ∞ ¹            0.000 ± ∞ ¹  -100.00% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │         artifacts/pl03-3636/head.txt         │
+                             │     legacy_live_scans/op     │ legacy_live_scans/op  vs base                │
+CompactStorageSharedAudit-12                    1.000 ± ∞ ¹            0.000 ± ∞ ¹  -100.00% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │        artifacts/pl03-3636/head.txt         │
+                             │     legacy_ref_scans/op      │ legacy_ref_scans/op  vs base                │
+CompactStorageSharedAudit-12                    1.000 ± ∞ ¹           0.000 ± ∞ ¹  -100.00% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │   artifacts/pl03-3636/head.txt    │
+                             │       pages_visited/op       │ pages_visited/op  vs base         │
+CompactStorageSharedAudit-12                    0.000 ± ∞ ¹        2.000 ± ∞ ¹  ? (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │      artifacts/pl03-3636/head.txt       │
+                             │    physical_bytes_read/op    │ physical_bytes_read/op  vs base         │
+CompactStorageSharedAudit-12                     0.0k ± ∞ ¹             131.1k ± ∞ ¹  ? (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │      artifacts/pl03-3636/head.txt       │
+                             │    pointer_projections/op    │ pointer_projections/op  vs base         │
+CompactStorageSharedAudit-12                   0.000k ± ∞ ¹             4.096k ± ∞ ¹  ? (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │   artifacts/pl03-3636/head.txt   │
+                             │        reuse_hits/op         │ reuse_hits/op  vs base           │
+CompactStorageSharedAudit-12                    0.000 ± ∞ ¹     0.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                             │ artifacts/pl03-3636/base.txt │   artifacts/pl03-3636/head.txt   │
+                             │       reuse_misses/op        │ reuse_misses/op  vs base         │
+CompactStorageSharedAudit-12                    0.000 ± ∞ ¹       1.000 ± ∞ ¹  ? (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │        artifacts/pl03-3636/head.txt        │
+                             │   revalidation_retries/op    │ revalidation_retries/op  vs base           │
+CompactStorageSharedAudit-12                    0.000 ± ∞ ¹               0.000 ± ∞ ¹  ~ (p=1.000 n=5) ²
+¹ need >= 6 samples for confidence interval at level 0.95
+² all samples are equal
+
+                             │ artifacts/pl03-3636/base.txt │   artifacts/pl03-3636/head.txt   │
+                             │       shared_scans/op        │ shared_scans/op  vs base         │
+CompactStorageSharedAudit-12                    0.000 ± ∞ ¹       1.000 ± ∞ ¹  ? (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │    artifacts/pl03-3636/head.txt     │
+                             │             B/op             │     B/op       vs base              │
+CompactStorageSharedAudit-12                  427.2Ki ± ∞ ¹   461.7Ki ± ∞ ¹  +8.08% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/base.txt │    artifacts/pl03-3636/head.txt    │
+                             │          allocs/op           │  allocs/op   vs base               │
+CompactStorageSharedAudit-12                    426.0 ± ∞ ¹   339.0 ± ∞ ¹  -20.42% (p=0.008 n=5)
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                             │ artifacts/pl03-3636/head.txt │
+                             │  reuse_miss_reason_cold/op   │
+CompactStorageSharedAudit-12                    1.000 ± ∞ ¹
+¹ need >= 6 samples for confidence interval at level 0.95

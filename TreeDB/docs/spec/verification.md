@@ -139,6 +139,9 @@ Coverage:
 - `TreeDB/db/vacuum_online_swap_test.go`
 - `TreeDB/db/compact_storage_test.go`
   - `TestCompactStorageHoldsMaintenanceLockAcrossPhases`
+- `TreeDB/db/compact_storage_audit_test.go`
+  - shared-walk call counts, snapshot-basis revalidation, structural reuse,
+    grouped pointer accounting, and legacy planner parity
 - `TreeDB/compact_storage_test.go`
   - `TestCompactStorageFullPacksLeafGenerationDebtOffline`
   - `TestCompactStorageCachedDeletesZeroByteValueLogFiles`

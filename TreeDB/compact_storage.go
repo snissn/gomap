@@ -48,6 +48,8 @@ var ErrCompactStorageLeafPageLogOwnerUnsupported = treedbdb.ErrCompactStorageLea
 
 var ErrCompactStorageLeafPageLogHandoffCleanup = treedbdb.ErrCompactStorageLeafPageLogHandoffCleanup
 
+var ErrCompactStorageAuditStale = treedbdb.ErrCompactStorageAuditStale
+
 type CompactStorageLeafPageLogOwnerClassification = treedbdb.CompactStorageLeafPageLogOwnerClassification
 
 type CompactStorageLeafPageLogOwnerError = treedbdb.CompactStorageLeafPageLogOwnerError
@@ -67,6 +69,9 @@ type CompactStorageDebt = treedbdb.CompactStorageDebt
 
 // CompactStoragePhaseStats records one phase in a full compaction run.
 type CompactStoragePhaseStats = treedbdb.CompactStoragePhaseStats
+
+// CompactStorageAuditStats records shared reachability work and reuse decisions.
+type CompactStorageAuditStats = treedbdb.CompactStorageAuditStats
 
 // CompactStorageStats is the single high-level report for TreeDB storage
 // compaction and planning.

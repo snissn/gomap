@@ -190,6 +190,13 @@ func (g *cachingLeafPageLogGroup) ProtectedLeafGenerationRootIDPair() ([]uint64,
 	return g.db.publishedLeafGenerationProtectionIDs()
 }
 
+func (g *cachingLeafPageLogGroup) ProtectedLeafGenerationRootIDPairSnapshot() ([]uint64, []uint64, uint64) {
+	if g == nil || g.db == nil {
+		return nil, nil, 0
+	}
+	return g.db.publishedLeafGenerationProtectionSnapshot()
+}
+
 func (g *cachingLeafPageLogGroup) MarkLeafPageLogSegmentsRegistered(segments []backenddb.LeafPageLogSegment) {
 	if g == nil || g.db == nil || len(segments) == 0 || !g.db.indexOuterLeavesInValueLog {
 		return

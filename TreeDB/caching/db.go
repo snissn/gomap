@@ -5637,13 +5637,19 @@ func (db *DB) ProtectedLeafGenerationRootIDPair() ([]uint64, []uint64) {
 }
 
 func (db *DB) publishedLeafGenerationProtectionIDs() ([]uint64, []uint64) {
+	rootIDs, systemRootIDs, _ := db.publishedLeafGenerationProtectionSnapshot()
+	return rootIDs, systemRootIDs
+}
+
+func (db *DB) publishedLeafGenerationProtectionSnapshot() ([]uint64, []uint64, uint64) {
 	if db == nil {
-		return nil, nil
+		return nil, nil, 0
 	}
 	db.mu.RLock()
 	published := clonePublishedRootSet(db.rootPublishedSet)
+	version := db.rootDomainVersion.Load()
 	db.mu.RUnlock()
-	return publishedRootSetRootIDs(published), publishedRootSetSystemRootIDs(published)
+	return publishedRootSetRootIDs(published), publishedRootSetSystemRootIDs(published), version
 }
 
 func publishedRootSetRootIDs(set *publishedRootSet) []uint64 {
