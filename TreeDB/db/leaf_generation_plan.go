@@ -690,6 +690,39 @@ func leafGenerationProtectedRootsHash(rootIDs, systemRootIDs []uint64) [32]byte 
 	return out
 }
 
+func leafGenerationProtectedRootsOverlapMaintenance(ctx context.Context, snap *Snapshot, rootIDs, systemRootIDs []uint64) (bool, error) {
+	maintenanceRoots, err := maintenanceRootsForSnapshotWithContext(ctx, snap)
+	if err != nil {
+		return false, err
+	}
+	maintenanceRootIDs := make(map[uint64]struct{}, len(maintenanceRoots))
+	for _, root := range maintenanceRoots {
+		if root.rootID != 0 {
+			maintenanceRootIDs[root.rootID] = struct{}{}
+		}
+	}
+	for _, rootID := range rootIDs {
+		if _, ok := maintenanceRootIDs[rootID]; ok && rootID != 0 {
+			return true, nil
+		}
+	}
+	for _, systemRootID := range systemRootIDs {
+		if systemRootID == 0 {
+			continue
+		}
+		protectedRoots, err := collectMaintenanceRootsForSystemRootWithContext(ctx, snap.idx.pager, &snap.reader, systemRootID)
+		if err != nil {
+			return false, err
+		}
+		for _, root := range protectedRoots {
+			if _, ok := maintenanceRootIDs[root.rootID]; ok && root.rootID != 0 {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func (db *DB) leafGenerationLiveStatsForSnapshotUncached(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
 	return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, nil, nil)
 }

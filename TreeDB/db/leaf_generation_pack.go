@@ -95,10 +95,11 @@ type LeafGenerationPackStats struct {
 }
 
 type leafGenerationPackCarryResult struct {
-	sourceStateKey              treeReachabilityCacheKey
-	publishedState              *DBState
-	trackSourceLiveMoved        bool
-	sourceLiveMovedByGeneration map[uint64]leafGenerationLiveTotals
+	sourceStateKey                         treeReachabilityCacheKey
+	publishedState                         *DBState
+	trackSourceLiveMoved                   bool
+	protectedRootsOverlapSourceMaintenance bool
+	sourceLiveMovedByGeneration            map[uint64]leafGenerationLiveTotals
 }
 
 // LeafGenerationPack rewrites live leaf-log pages from sealed source generations
@@ -275,8 +276,10 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		}
 
 		rewriteStats := leafRefRewriteRunStats{
-			trackCarry:           carry != nil,
-			trackSourceLiveMoved: carry != nil && (len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0),
+			trackCarry:             carry != nil,
+			trackSourceLiveMoved:   carry != nil && (len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0),
+			protectedRootIDs:       opts.ProtectedRootIDs,
+			protectedSystemRootIDs: opts.ProtectedSystemRootIDs,
 		}
 		copied, copiedBytes, rewriteErr := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), attempt, &rewriteStats)
 		closeErr := writer.Close()
@@ -289,6 +292,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			carry.sourceStateKey = rewriteStats.sourceStateKey
 			carry.publishedState = rewriteStats.publishedState
 			carry.trackSourceLiveMoved = rewriteStats.trackSourceLiveMoved
+			carry.protectedRootsOverlapSourceMaintenance = rewriteStats.protectedRootsOverlapSourceMaintenance
 			carry.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(rewriteStats.sourceLiveMovedByGeneration)
 		}
 		if errors.Is(rewriteErr, errLeafGenerationPackPublishConflict) {

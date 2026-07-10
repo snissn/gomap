@@ -188,20 +188,23 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 }
 
 type leafRefRewriteRunStats struct {
-	InternalPagesVisited        int
-	SubtreesPruned              int
-	LeafFramesWritten           int
-	MaxLeafFrameK               int
-	CopyTimeNanos               int64
-	PublishWaitNanos            int64
-	PublishHoldNanos            int64
-	PrivatePages                int
-	PublishConflict             bool
-	trackCarry                  bool
-	trackSourceLiveMoved        bool
-	sourceStateKey              treeReachabilityCacheKey
-	publishedState              *DBState
-	sourceLiveMovedByGeneration map[uint64]leafGenerationLiveTotals
+	InternalPagesVisited                   int
+	SubtreesPruned                         int
+	LeafFramesWritten                      int
+	MaxLeafFrameK                          int
+	CopyTimeNanos                          int64
+	PublishWaitNanos                       int64
+	PublishHoldNanos                       int64
+	PrivatePages                           int
+	PublishConflict                        bool
+	trackCarry                             bool
+	trackSourceLiveMoved                   bool
+	protectedRootIDs                       []uint64
+	protectedSystemRootIDs                 []uint64
+	sourceStateKey                         treeReachabilityCacheKey
+	publishedState                         *DBState
+	protectedRootsOverlapSourceMaintenance bool
+	sourceLiveMovedByGeneration            map[uint64]leafGenerationLiveTotals
 }
 
 type leafGenerationPackCopyPhase uint8
@@ -1196,6 +1199,17 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	basis := captureLeafGenerationPackCopyBasis(snap, sourceIDs, singleSourceID, hasSingleSourceID)
 	if runStats != nil && runStats.trackCarry {
 		runStats.sourceStateKey, _ = leafGenerationLiveStatsKeyForState(snap.state)
+		if runStats.trackSourceLiveMoved {
+			runStats.protectedRootsOverlapSourceMaintenance, err = leafGenerationProtectedRootsOverlapMaintenance(
+				ctx,
+				snap,
+				runStats.protectedRootIDs,
+				runStats.protectedSystemRootIDs,
+			)
+			if err != nil {
+				return 0, 0, fmt.Errorf("leaf generation pack: compare protected roots with source maintenance roots: %w", err)
+			}
+		}
 	}
 
 	stagingPager, err := pager.NewOverlay(db.chunkSize, leafGenerationPackPrivatePageIDBase, idx.pager)

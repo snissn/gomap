@@ -1048,7 +1048,7 @@ func (db *DB) compactStorageLeafGenerationPlan(ctx context.Context, opts LeafGen
 }
 
 func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGenerationPackStats, result leafGenerationPackCarryResult) {
-	if state == nil || !state.valid || db == nil || pack.CopyAborts != 0 || result.publishedState == nil {
+	if state == nil || !state.valid || db == nil || pack.CopyAborts != 0 || result.publishedState == nil || result.protectedRootsOverlapSourceMaintenance {
 		state.invalidate()
 		return
 	}

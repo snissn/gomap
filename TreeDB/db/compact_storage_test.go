@@ -2655,6 +2655,59 @@ func TestCompactStorageLeafPackCarryMatchesFreshPlanWithProtectedResidual(t *tes
 	assertCompactStorageLeafPackCarryMatchesFreshPlan(t, d, []uint64{detachedRoot}, nil)
 }
 
+func TestCompactStorageLeafPackCarryRescansWhenProtectedRootIsRewritten(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+
+	writeLeafGenerationKeys(t, d, "main", 2048, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, d, "main", 0, 1024, 'b')
+	writeLeafGenerationKeys(t, d, "current", 16, 'c')
+	d.SetLeafPageLog(nil)
+
+	published := d.State()
+	if published == nil || published.RootPageID == 0 {
+		t.Fatal("expected published root")
+	}
+	opts := compactStorageLeafPackFromPlanOptions(normalizeCompactStorageOptions(CompactStorageOptions{
+		LeafPackMaxPasses:             2,
+		LeafPackMaxGenerationsPerPass: 1,
+		LeafPackMinReclaimPerCopyPPM:  1,
+	}), []uint64{published.RootPageID}, nil)
+	ignored := make(map[uint32]struct{})
+	var carry compactStorageLeafPackPlanState
+	scans := withLeafGenerationLiveScanCounter(t)
+
+	first, err := d.compactStorageLeafGenerationPackRunOnce(context.Background(), opts, true, ignored, &carry)
+	if err != nil {
+		t.Fatalf("first leaf pack: %v", err)
+	}
+	if !first.Ran {
+		t.Fatalf("first leaf pack skipped: %+v", first)
+	}
+	compactStorageRememberLeafPackCreatedFileIDs(ignored, first)
+	scansAfterPack := scans.Load()
+
+	planOpts := leafGenerationPackFromPlanPlanOptions(opts)
+	carried, err := d.compactStorageLeafGenerationPlan(context.Background(), planOpts, &carry)
+	if err != nil {
+		t.Fatalf("post-pack plan: %v", err)
+	}
+	if got, want := scans.Load(), scansAfterPack+1; got != want {
+		t.Fatalf("post-pack live scans=%d want %d", got, want)
+	}
+	fresh, err := d.LeafGenerationPlan(context.Background(), planOpts)
+	if err != nil {
+		t.Fatalf("fresh plan: %v", err)
+	}
+	carried = compactStorageFilterIgnoredLeafPackPlan(carried, opts, ignored)
+	fresh = compactStorageFilterIgnoredLeafPackPlan(fresh, opts, ignored)
+	if !reflect.DeepEqual(compactStorageAuditPublicLeafPlan(carried), compactStorageAuditPublicLeafPlan(fresh)) {
+		t.Fatalf("post-pack plan differs from fresh scan:\ncarried=%+v\nfresh=%+v", carried, fresh)
+	}
+}
+
 func TestCompactStorageLeafPackCarryRescansWhenProtectedRootsChange(t *testing.T) {
 	d, leafLog, _ := openLeafGenerationPackTestDB(t)
 
