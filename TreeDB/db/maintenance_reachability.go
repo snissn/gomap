@@ -386,7 +386,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 			return nil, fmt.Errorf("maintenance reachability: invalid page type %d on page %d", n.Type(), pageID)
 		}
 		memo[pageID] = entry
-		if collectLeaf && !verifyAlways {
+		if collectLeaf && !opts.DisableLeafSubtreeCache && !verifyAlways {
 			db.storeLeafGenerationSubtreeStats(pageID, entry.leafTotals)
 		}
 		return entry.leafTotals, nil
