@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -26,8 +27,8 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 	fset := token.NewFileSet()
 	calls := make(map[string]map[string]struct{})
 	var publicationMethods []string
-	snapshotStores := make(map[string]struct{})
-	epochAdds := make(map[string]struct{})
+	atomicMutations := make(map[string]map[string]struct{})
+	publishSnapshotViewCallers := make(map[string]struct{})
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -54,18 +55,22 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 				if !ok {
 					return true
 				}
+				if mutation, ok := sourceGuardAtomicMutation(call); ok {
+					if atomicMutations[mutation] == nil {
+						atomicMutations[mutation] = make(map[string]struct{})
+					}
+					atomicMutations[mutation][fnName] = struct{}{}
+				}
 				switch target := call.Fun.(type) {
 				case *ast.Ident:
 					calls[fnName][target.Name] = struct{}{}
+					if target.Name == "publishSnapshotView" {
+						publishSnapshotViewCallers[fnName] = struct{}{}
+					}
 				case *ast.SelectorExpr:
 					calls[fnName][target.Sel.Name] = struct{}{}
-					if base, ok := target.X.(*ast.SelectorExpr); ok {
-						if root, ok := base.X.(*ast.Ident); ok && root.Name == "db" && base.Sel.Name == "snapshotViewRO" && target.Sel.Name == "Store" {
-							snapshotStores[fnName] = struct{}{}
-						}
-						if root, ok := base.X.(*ast.Ident); ok && root.Name == "db" && base.Sel.Name == "systemRootPublishEpoch" && target.Sel.Name == "Add" {
-							epochAdds[fnName] = struct{}{}
-						}
+					if target.Sel.Name == "publishSnapshotView" {
+						publishSnapshotViewCallers[fnName] = struct{}{}
 					}
 				}
 				return true
@@ -82,14 +87,91 @@ func TestCollectionPublicationPathsConvergeOnCoherentSnapshotPublication(t *test
 			t.Errorf("production publication method %s does not converge on publishSnapshotView", method)
 		}
 	}
-	storeCallers := sortedSourceGuardKeys(snapshotStores)
-	if got, want := strings.Join(storeCallers, ","), "clearSnapshotView,publishSnapshotView"; got != want {
-		t.Fatalf("snapshotViewRO.Store callers=%s want %s", got, want)
+
+	wantAtomicCallers := map[string]string{
+		"idx.Store":                  "closeAllIndexes,openReadOnly,openReadOnlyNoLock,openWithLock,vacuumIndexOnline",
+		"snapshotViewRO.Store":       "clearSnapshotView,publishSnapshotView",
+		"state.Store":                "RefreshValueLogSet,finalizeCommitLockedWithOptions,openReadOnly,openReadOnlyNoLock,publishLeafGenerationState,publishValueLogSetNoRefresh,vacuumIndexOnline",
+		"state.Swap":                 "openWithLock",
+		"systemRootPublishEpoch.Add": "publishSnapshotView",
 	}
-	epochCallers := sortedSourceGuardKeys(epochAdds)
-	if got, want := strings.Join(epochCallers, ","), "publishSnapshotView"; got != want {
-		t.Fatalf("systemRootPublishEpoch.Add callers=%s want %s", got, want)
+	for mutation := range atomicMutations {
+		if _, ok := wantAtomicCallers[mutation]; !ok {
+			t.Errorf("unexpected direct coherent-state mutation %s by %s", mutation, strings.Join(sortedSourceGuardKeys(atomicMutations[mutation]), ","))
+		}
 	}
+	for mutation, want := range wantAtomicCallers {
+		got := strings.Join(sortedSourceGuardKeys(atomicMutations[mutation]), ",")
+		if got != want {
+			t.Errorf("%s callers=%s want %s", mutation, got, want)
+		}
+	}
+	for _, mutation := range []string{"idx.Store", "idx.Swap", "state.Store", "state.Swap"} {
+		for caller := range atomicMutations[mutation] {
+			if caller == "closeAllIndexes" {
+				continue
+			}
+			if !sourceCallGraphReaches(calls, caller, "publishSnapshotView", make(map[string]bool)) {
+				t.Errorf("direct %s caller %s does not converge on publishSnapshotView", mutation, caller)
+			}
+		}
+	}
+	if got, want := strings.Join(sortedSourceGuardKeys(publishSnapshotViewCallers), ","), "RefreshValueLogSet,ensureCommandWALRecoverySnapshotView,finalizeCommitLockedWithOptions,openReadOnly,openReadOnlyNoLock,openWithLock,publishLeafGenerationState,publishValueLogSetNoRefresh,vacuumIndexOnline"; got != want {
+		t.Errorf("publishSnapshotView callers=%s want %s", got, want)
+	}
+}
+
+func TestPublicationSourceGuardFindsRenamedReceiverBypasses(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", `package db
+func (renamed *DB) bypass(gen *indexGen, state *DBState) {
+	renamed.idx.Store(gen)
+	renamed.state.Swap(state)
+}`, 0)
+	if err != nil {
+		t.Fatalf("parse fixture: %v", err)
+	}
+	got := make(map[string]struct{})
+	ast.Inspect(file, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if mutation, ok := sourceGuardAtomicMutation(call); ok {
+			got[mutation] = struct{}{}
+		}
+		return true
+	})
+	if want := map[string]struct{}{"idx.Store": {}, "state.Swap": {}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("mutations=%v want %v", got, want)
+	}
+}
+
+func sourceGuardAtomicMutation(call *ast.CallExpr) (string, bool) {
+	if call == nil {
+		return "", false
+	}
+	target, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	base, ok := target.X.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	switch base.Sel.Name {
+	case "idx", "state", "snapshotViewRO":
+		if target.Sel.Name != "Store" && target.Sel.Name != "Swap" {
+			return "", false
+		}
+	case "systemRootPublishEpoch":
+		if target.Sel.Name != "Add" {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	return base.Sel.Name + "." + target.Sel.Name, true
 }
 
 func sortedSourceGuardKeys(values map[string]struct{}) []string {

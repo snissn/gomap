@@ -203,6 +203,111 @@ func TestReconcileCollectionBasisEntriesCleansPartialCloneOnFailure(t *testing.T
 	}
 }
 
+type vacuumReservedAllocatorTestBase struct {
+	next  uint64
+	freed []uint64
+}
+
+func (a *vacuumReservedAllocatorTestBase) Alloc(uint64) (uint64, error) {
+	id := a.next
+	a.next++
+	return id, nil
+}
+
+func (a *vacuumReservedAllocatorTestBase) Free(id uint64) error {
+	a.freed = append(a.freed, id)
+	return nil
+}
+
+func TestVacuumReservedAllocatorUsesAndReclaimsReservedPages(t *testing.T) {
+	base := &vacuumReservedAllocatorTestBase{next: 100}
+	alloc := newVacuumReservedAllocator(base, 10, 3)
+
+	for i, want := range []uint64{10, 11, 12, 100} {
+		got, err := alloc.Alloc(0)
+		if err != nil {
+			t.Fatalf("alloc %d: %v", i, err)
+		}
+		if got != want {
+			t.Fatalf("alloc %d=%d want %d", i, got, want)
+		}
+	}
+	if err := alloc.ReleaseUnused(); err != nil {
+		t.Fatalf("release exhausted reservation: %v", err)
+	}
+	if len(base.freed) != 0 {
+		t.Fatalf("freed exhausted reservation=%v want none", base.freed)
+	}
+
+	base = &vacuumReservedAllocatorTestBase{next: 200}
+	alloc = newVacuumReservedAllocator(base, 20, 4)
+	if got, err := alloc.Alloc(0); err != nil || got != 20 {
+		t.Fatalf("reserved alloc=%d err=%v want 20", got, err)
+	}
+	if err := alloc.ReleaseUnused(); err != nil {
+		t.Fatalf("release unused reservation: %v", err)
+	}
+	if !reflect.DeepEqual(base.freed, []uint64{21, 22, 23}) {
+		t.Fatalf("freed=%v want [21 22 23]", base.freed)
+	}
+}
+
+func TestVacuumIndexOnlinePrecutoverSyncRunsOutsideWriteMu(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	db, err := Open(vacuumSnapshotTestOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := publishVacuumSnapshotCollectionVersion(db, 0, 0, 2048); err != nil {
+		t.Fatalf("publish collection: %v", err)
+	}
+
+	var preflushCalls, finalCalls int
+	var hookErr error
+	db.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
+		writeMuAvailable := db.writeMu.TryRLock()
+		if writeMuAvailable {
+			db.writeMu.RUnlock()
+		}
+		switch phase {
+		case vacuumPagerSyncPrecutover:
+			preflushCalls++
+			if !writeMuAvailable && hookErr == nil {
+				hookErr = errors.New("precutover pager sync ran under writeMu")
+			}
+		case vacuumPagerSyncFinal:
+			finalCalls++
+			if writeMuAvailable && hookErr == nil {
+				hookErr = errors.New("final pager sync ran outside writeMu")
+			}
+		default:
+			if hookErr == nil {
+				hookErr = fmt.Errorf("unexpected pager sync phase %d", phase)
+			}
+		}
+	}
+
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if preflushCalls == 0 || finalCalls != 1 {
+		t.Fatalf("pager sync calls preflush=%d final=%d want preflush>0 final=1", preflushCalls, finalCalls)
+	}
+	stats := db.vacuumOnlineStatsSnapshot()
+	if stats.PrecloneTraversalPages <= 1 {
+		t.Fatalf("preclone traversal pages=%d want multi-page clone", stats.PrecloneTraversalPages)
+	}
+	if stats.CutoverCloneTraversalPages != 0 {
+		t.Fatalf("cutover clone traversal pages=%d want 0", stats.CutoverCloneTraversalPages)
+	}
+}
+
 func TestVacuumIndexOnlineCollectionPrecloneAllowsMutationAndReopens(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
@@ -382,6 +487,86 @@ func TestVacuumIndexOnlineDefersRangeOnlyTailOverLimit(t *testing.T) {
 	}
 	if stats.UserTailMutations != vacuumCutoverMaxKeys+1 {
 		t.Fatalf("tail mutations=%d want %d", stats.UserTailMutations, vacuumCutoverMaxKeys+1)
+	}
+}
+
+func TestVacuumIndexOnlineReplaysProductionRangeMutation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	opts := Options{Dir: dir, DisableBackgroundPrune: true}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	seed := db.NewBatch()
+	for i := 0; i < 32; i++ {
+		key := []byte(fmt.Sprintf("range/%03d", i))
+		if err := seed.Set(key, append([]byte("value/"), key...)); err != nil {
+			t.Fatalf("seed set %d: %v", i, err)
+		}
+	}
+	if err := seed.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = seed.Close()
+
+	var once sync.Once
+	var rangeErr error
+	db.vacuumBeforeCutoverHook = func(_ int) {
+		once.Do(func() {
+			mutation := db.NewBatch()
+			defer func() { _ = mutation.Close() }()
+			if err := mutation.DeleteRange([]byte("range/008"), []byte("range/024")); err != nil {
+				rangeErr = err
+				return
+			}
+			rangeErr = mutation.Write()
+		})
+	}
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+	if rangeErr != nil {
+		t.Fatalf("range mutation: %v", rangeErr)
+	}
+	if got := db.vacuumOnlineStatsSnapshot().UserTailMutations; got != 1 {
+		t.Fatalf("tail mutations=%d want 1 production range", got)
+	}
+	assertVacuumProductionRangeState(t, db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	assertVacuumProductionRangeState(t, reopened)
+}
+
+func assertVacuumProductionRangeState(t *testing.T, db *DB) {
+	t.Helper()
+	for i := 0; i < 32; i++ {
+		key := []byte(fmt.Sprintf("range/%03d", i))
+		if i >= 8 && i < 24 {
+			has, err := db.Has(key)
+			if err != nil {
+				t.Fatalf("has deleted key %q: %v", key, err)
+			}
+			if has {
+				t.Fatalf("deleted key %q remains", key)
+			}
+			continue
+		}
+		value, err := db.Get(key)
+		want := append([]byte("value/"), key...)
+		if err != nil || !bytes.Equal(value, want) {
+			t.Fatalf("key %q=(%q,%v) want %q", key, value, err, want)
+		}
 	}
 }
 

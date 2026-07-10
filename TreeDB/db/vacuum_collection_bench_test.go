@@ -3,9 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -23,26 +21,6 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 			db := openVacuumCollectionBenchmarkDB(b, tc.valueSize)
 			defer func() { _ = db.Close() }()
 			var total VacuumOnlineStats
-
-			var maxObservedPause atomic.Int64
-			stopObserver := make(chan struct{})
-			observerDone := make(chan struct{})
-			go func() {
-				defer close(observerDone)
-				for {
-					select {
-					case <-stopObserver:
-						return
-					default:
-					}
-					start := time.Now()
-					db.writeMu.RLock()
-					wait := time.Since(start).Nanoseconds()
-					db.writeMu.RUnlock()
-					for current := maxObservedPause.Load(); wait > current && !maxObservedPause.CompareAndSwap(current, wait); current = maxObservedPause.Load() {
-					}
-				}
-			}()
 
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -66,8 +44,6 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 				total.ConcurrentMutationAborts += stats.ConcurrentMutationAborts
 			}
 			b.StopTimer()
-			close(stopObserver)
-			<-observerDone
 
 			b.ReportMetric(float64(total.TotalDuration.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")
 			b.ReportMetric(float64(total.CutoverDuration.Nanoseconds())/float64(b.N), "cutover-ns/op")
@@ -80,7 +56,6 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 			b.ReportMetric(float64(total.UserTailMutations)/float64(b.N), "tail-mutations/op")
 			b.ReportMetric(float64(total.DeferredCutovers)/float64(b.N), "deferred-cutovers/op")
 			b.ReportMetric(float64(total.ConcurrentMutationAborts)/float64(b.N), "concurrent-aborts/op")
-			b.ReportMetric(float64(maxObservedPause.Load()), "observed-writer-pause-ns")
 		})
 	}
 }

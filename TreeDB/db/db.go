@@ -162,6 +162,7 @@ type DB struct {
 	// Package-private deterministic hooks for online-vacuum concurrency tests.
 	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
 	vacuumBeforeCutoverHook       func(int)
+	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
 	meta                          page.MetaPageBody
 	metaPageID                    uint64
 	entryRevisionFloor            atomic.Uint64
