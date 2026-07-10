@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 
@@ -132,6 +133,7 @@ func TestAllocator_FreeMany_HookRunsBeforeChecksum(t *testing.T) {
 	if err := a.Free(2); err != nil {
 		t.Fatalf("Free(2): %v", err)
 	}
+	head := a.Head()
 
 	var once sync.Once
 	reached := make(chan struct{}, 1)
@@ -147,7 +149,7 @@ func TestAllocator_FreeMany_HookRunsBeforeChecksum(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- a.FreeMany([]uint64{1, 3}) }()
 	<-reached
-	if data := mustAllocatorPage(t, p, a.Head()); page.VerifyChecksumNonMutating(data) {
+	if data := mustAllocatorPage(t, p, head); page.VerifyChecksumNonMutating(data) {
 		t.Fatal("checksum was updated before the free hook released")
 	} else if got := node.NewNode(data).Count(); got != 1 {
 		t.Fatalf("count while free hook is paused = %d, want written prefix count 1", got)
@@ -156,7 +158,7 @@ func TestAllocator_FreeMany_HookRunsBeforeChecksum(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("FreeMany: %v", err)
 	}
-	if data := mustAllocatorPage(t, p, a.Head()); !page.VerifyChecksumNonMutating(data) {
+	if data := mustAllocatorPage(t, p, head); !page.VerifyChecksumNonMutating(data) {
 		t.Fatal("checksum was not updated after FreeMany completed")
 	}
 }
@@ -216,6 +218,94 @@ func TestAllocator_RegionBiasedAllocMany_BatchesNearbyUnverified(t *testing.T) {
 	after := a.Counters()
 	if after.AllocPages != before.AllocPages+2 || after.ReuseAllocPages != before.ReuseAllocPages+2 || after.FreeIDs != before.FreeIDs-2 {
 		t.Fatalf("unexpected counters after region AllocMany: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestAllocator_RegionBiasedAllocMany_RecycledHeadDoesNotConsumeFreeIDStat(t *testing.T) {
+	freed := make([]uint64, page.MaxFreeIDs+3)
+	for i := range freed {
+		freed[i] = uint64(i + 1)
+	}
+	a, p := newAllocatorForFreeManyTest(t, len(freed)+1)
+	a.SetFreelistRegion(4, 1)
+	if err := a.FreeMany(freed); err != nil {
+		t.Fatalf("FreeMany: %v", err)
+	}
+
+	emptyHead := a.Head()
+	headData := mustAllocatorPage(t, p, emptyHead)
+	if got := node.NewNode(headData).Count(); got != 1 {
+		t.Fatalf("newest freelist head count = %d, want 1 before drain", got)
+	}
+	if got := freelistNextPageID(headData); got == 0 {
+		t.Fatal("expected an older freelist head after newest head")
+	}
+
+	drained, err := a.AllocMany(1, freed[len(freed)-1])
+	if err != nil {
+		t.Fatalf("drain AllocMany: %v", err)
+	}
+	if len(drained) != 1 || drained[0] != freed[len(freed)-1] {
+		t.Fatalf("drain AllocMany = %v, want [%d]", drained, freed[len(freed)-1])
+	}
+	if got := node.NewNode(mustAllocatorPage(t, p, emptyHead)).Count(); got != 0 {
+		t.Fatalf("newest freelist head count after drain = %d, want 0", got)
+	}
+
+	before := a.Counters()
+	if before.Pages != 2 || before.FreeIDs != page.MaxFreeIDs {
+		t.Fatalf("counters before recycling empty head = %+v, want 2 heads and %d body IDs", before, page.MaxFreeIDs)
+	}
+	got, err := a.AllocMany(2, emptyHead)
+	if err != nil {
+		t.Fatalf("recycle AllocMany: %v", err)
+	}
+	if len(got) != 2 || got[0] != emptyHead {
+		t.Fatalf("recycle AllocMany = %v, want empty head %d followed by one body ID", got, emptyHead)
+	}
+
+	after := a.Counters()
+	if after.Pages != before.Pages-1 {
+		t.Fatalf("freelist pages after recycling empty head = %d, want %d", after.Pages, before.Pages-1)
+	}
+	if after.FreeIDs != before.FreeIDs-1 {
+		t.Fatalf("free body IDs after recycling head and allocating one body ID = %d, want %d", after.FreeIDs, before.FreeIDs-1)
+	}
+	if after.AllocPages != before.AllocPages+2 || after.ReuseAllocPages != before.ReuseAllocPages+2 {
+		t.Fatalf("allocation counters after recycling empty head: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestAllocator_RegionBiasedAllocMany_MatchesRepeatedAllocWithMovingHint(t *testing.T) {
+	newFixture := func(t *testing.T) *Allocator {
+		t.Helper()
+		a, _ := newAllocatorForFreeManyTest(t, 130)
+		a.SetFreelistRegion(10, 1)
+		if err := a.FreeMany([]uint64{1, 90, 95, 38, 115, 105}); err != nil {
+			t.Fatalf("FreeMany: %v", err)
+		}
+		return a
+	}
+
+	batched := newFixture(t)
+	got, err := batched.AllocMany(5, 129)
+	if err != nil {
+		t.Fatalf("AllocMany: %v", err)
+	}
+
+	repeated := newFixture(t)
+	want := make([]uint64, 0, len(got))
+	hint := uint64(129)
+	for range got {
+		id, err := repeated.Alloc(hint)
+		if err != nil {
+			t.Fatalf("Alloc(%d): %v", hint, err)
+		}
+		want = append(want, id)
+		hint = id
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("AllocMany order = %v, repeated Alloc order = %v", got, want)
 	}
 }
 

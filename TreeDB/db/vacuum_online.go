@@ -24,6 +24,10 @@ import (
 var ErrVacuumInProgress = errors.New("online vacuum already in progress")
 var ErrVacuumUnsupported = errors.New("online vacuum unsupported on this platform")
 
+// testHookVacuumAfterBaseSnapshot coordinates writes that must be replayed by
+// online vacuum tests. It remains nil in production.
+var testHookVacuumAfterBaseSnapshot func()
+
 const (
 	vacuumDeltaBatchSize     = 4096
 	vacuumCatchupPassesMax   = 3
@@ -269,6 +273,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
+	if testHookVacuumAfterBaseSnapshot != nil {
+		testHookVacuumAfterBaseSnapshot()
+	}
 	var newRoot uint64
 	if db.indexOuterLeavesInValueLog {
 		if db.leafPageLog == nil {

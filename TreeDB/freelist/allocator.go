@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -47,6 +48,182 @@ func setFreelistIDAt(data []byte, idx int, id uint64) {
 func clearFreelistIDAt(data []byte, idx int) {
 	off := page.PageHeaderSize + 8 + idx*8
 	clear(data[off : off+8])
+}
+
+type regionSlotHeap []int
+
+func (h *regionSlotHeap) init() {
+	for parent := len(*h)/2 - 1; parent >= 0; parent-- {
+		h.down(parent)
+	}
+}
+
+func (h *regionSlotHeap) push(slot int) {
+	*h = append(*h, slot)
+	child := len(*h) - 1
+	for child > 0 {
+		parent := (child - 1) / 2
+		if (*h)[parent] >= (*h)[child] {
+			break
+		}
+		(*h)[parent], (*h)[child] = (*h)[child], (*h)[parent]
+		child = parent
+	}
+}
+
+func (h *regionSlotHeap) pop() int {
+	last := len(*h) - 1
+	maximum := (*h)[0]
+	(*h)[0] = (*h)[last]
+	*h = (*h)[:last]
+	if len(*h) > 0 {
+		h.down(0)
+	}
+	return maximum
+}
+
+func (h *regionSlotHeap) down(parent int) {
+	for {
+		left := parent*2 + 1
+		if left >= len(*h) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(*h) && (*h)[right] > (*h)[left] {
+			child = right
+		}
+		if (*h)[parent] >= (*h)[child] {
+			return
+		}
+		(*h)[parent], (*h)[child] = (*h)[child], (*h)[parent]
+		parent = child
+	}
+}
+
+// regionSlotIndex finds the highest current freelist slot in a region range.
+// Per-region heaps use lazy deletion while the segment tree indexes their
+// current maxima.
+type regionSlotIndex struct {
+	regions     []uint64
+	buckets     []regionSlotHeap
+	slotBuckets []int
+	tree        []int
+	treeBase    int
+}
+
+func newRegionSlotIndex(data []byte, count int, regionPages uint64) *regionSlotIndex {
+	slotRegions := make([]uint64, count)
+	regions := make([]uint64, count)
+	for slot := 0; slot < count; slot++ {
+		region := freelistIDAt(data, slot) / regionPages
+		slotRegions[slot] = region
+		regions[slot] = region
+	}
+	sort.Slice(regions, func(i, j int) bool { return regions[i] < regions[j] })
+	unique := regions[:0]
+	for _, region := range regions {
+		if len(unique) == 0 || unique[len(unique)-1] != region {
+			unique = append(unique, region)
+		}
+	}
+	regions = unique
+
+	bucketByRegion := make(map[uint64]int, len(regions))
+	for bucket, region := range regions {
+		bucketByRegion[region] = bucket
+	}
+	idx := &regionSlotIndex{
+		regions:     regions,
+		buckets:     make([]regionSlotHeap, len(regions)),
+		slotBuckets: make([]int, count),
+		treeBase:    1,
+	}
+	for idx.treeBase < len(regions) {
+		idx.treeBase *= 2
+	}
+	idx.tree = make([]int, idx.treeBase*2)
+	for i := range idx.tree {
+		idx.tree[i] = -1
+	}
+	for slot, region := range slotRegions {
+		bucket := bucketByRegion[region]
+		idx.slotBuckets[slot] = bucket
+		idx.buckets[bucket] = append(idx.buckets[bucket], slot)
+	}
+	for bucket := range idx.buckets {
+		idx.buckets[bucket].init()
+		idx.tree[idx.treeBase+bucket] = idx.buckets[bucket][0]
+	}
+	for treeIdx := idx.treeBase - 1; treeIdx > 0; treeIdx-- {
+		idx.tree[treeIdx] = max(idx.tree[treeIdx*2], idx.tree[treeIdx*2+1])
+	}
+	return idx
+}
+
+func (idx *regionSlotIndex) highestInRange(targetRegion uint64, radius int) int {
+	distance := uint64(radius)
+	low := uint64(0)
+	if targetRegion > distance {
+		low = targetRegion - distance
+	}
+	high := targetRegion + distance
+	if high < targetRegion {
+		high = ^uint64(0)
+	}
+	left := sort.Search(len(idx.regions), func(i int) bool { return idx.regions[i] >= low })
+	right := sort.Search(len(idx.regions), func(i int) bool { return idx.regions[i] > high })
+	if left == right {
+		return -1
+	}
+	return idx.rangeMax(left, right)
+}
+
+func (idx *regionSlotIndex) rangeMax(left, right int) int {
+	best := -1
+	for left, right = left+idx.treeBase, right+idx.treeBase; left < right; left, right = left/2, right/2 {
+		if left%2 == 1 {
+			best = max(best, idx.tree[left])
+			left++
+		}
+		if right%2 == 1 {
+			right--
+			best = max(best, idx.tree[right])
+		}
+	}
+	return best
+}
+
+func (idx *regionSlotIndex) remove(slot, lastSlot int) {
+	removedBucket := idx.slotBuckets[slot]
+	lastBucket := idx.slotBuckets[lastSlot]
+	idx.slotBuckets[lastSlot] = -1
+	if slot != lastSlot {
+		idx.slotBuckets[slot] = lastBucket
+		if lastBucket != removedBucket {
+			idx.buckets[lastBucket].push(slot)
+		}
+	}
+	idx.refreshBucket(removedBucket)
+	if lastBucket != removedBucket {
+		idx.refreshBucket(lastBucket)
+	}
+}
+
+func (idx *regionSlotIndex) refreshBucket(bucket int) {
+	h := &idx.buckets[bucket]
+	for len(*h) > 0 && idx.slotBuckets[(*h)[0]] != bucket {
+		h.pop()
+	}
+	maximum := -1
+	if len(*h) > 0 {
+		maximum = (*h)[0]
+	}
+	treeIdx := idx.treeBase + bucket
+	idx.tree[treeIdx] = maximum
+	for treeIdx /= 2; treeIdx > 0; treeIdx /= 2 {
+		idx.tree[treeIdx] = max(idx.tree[treeIdx*2], idx.tree[treeIdx*2+1])
+	}
 }
 
 // TestHookFreeBeforeChecksum is a test-only hook that fires after a freelist
@@ -250,7 +427,10 @@ func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, err
 			next := freelistNextPageID(data)
 			recycled := a.head
 			a.head = next
-			a.recordReuseAllocation(recycled)
+			a.pager.MarkUnverified(recycled)
+			a.lastAlloc = recycled
+			a.stats.AllocPages++
+			a.stats.ReuseAllocPages++
 			if a.stats.Pages > 0 {
 				a.stats.Pages--
 			}
@@ -260,47 +440,28 @@ func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, err
 		}
 
 		start := len(ids)
-		need := count - start
-		selected := 0
 		if target == 0 {
 			target = a.lastAlloc
 		}
-		selectionTarget := target
-		var selectedSlots [page.MaxFreeIDs]bool
-		if selectionTarget != 0 {
-			for i := countFree - 1; i >= 0 && selected < need; i-- {
-				candidate := freelistIDAt(data, i)
-				if a.inRegion(candidate, selectionTarget/a.regionPages) {
-					ids = append(ids, candidate)
-					selectedSlots[i] = true
-					selected++
-					selectionTarget = candidate
-				}
-			}
-		}
-
-		if selected > 0 {
-			// Compact selected entries without re-verifying the page or updating
-			// its checksum for every ID.
-			write := 0
-			for i := 0; i < countFree; i++ {
-				if selectedSlots[i] {
-					continue
-				}
-				setFreelistIDAt(data, write, freelistIDAt(data, i))
-				write++
-			}
-			for i := write; i < countFree; i++ {
-				clearFreelistIDAt(data, i)
-			}
-			countFree = write
-		}
-
+		regionSlots := newRegionSlotIndex(data, countFree, a.regionPages)
 		for countFree > 0 && len(ids) < count {
-			idx := countFree - 1
-			ids = append(ids, freelistIDAt(data, idx))
-			clearFreelistIDAt(data, idx)
+			slot := -1
+			if target != 0 {
+				slot = regionSlots.highestInRange(target/a.regionPages, a.regionRadius)
+			}
+			lastSlot := countFree - 1
+			if slot < 0 {
+				slot = lastSlot
+			}
+			id := freelistIDAt(data, slot)
+			if slot != lastSlot {
+				setFreelistIDAt(data, slot, freelistIDAt(data, lastSlot))
+			}
+			clearFreelistIDAt(data, lastSlot)
+			regionSlots.remove(slot, lastSlot)
+			ids = append(ids, id)
 			countFree--
+			target = id
 		}
 
 		n.SetCount(uint16(countFree))
@@ -308,19 +469,8 @@ func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, err
 		for _, id := range ids[start:] {
 			a.recordReuseAllocation(id)
 		}
-		if len(ids) > 0 {
-			target = ids[len(ids)-1]
-		}
 	}
 	return ids, nil
-}
-
-func (a *Allocator) inRegion(id, targetRegion uint64) bool {
-	region := id / a.regionPages
-	if region >= targetRegion {
-		return region-targetRegion <= uint64(a.regionRadius)
-	}
-	return targetRegion-region <= uint64(a.regionRadius)
 }
 
 func (a *Allocator) recordReuseAllocation(id uint64) {
