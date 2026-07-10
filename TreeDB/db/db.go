@@ -90,6 +90,9 @@ type DB struct {
 	// Test hook used to release synthetic snapshot pins at exact compaction
 	// phase boundaries.
 	compactStorageAfterPhase func(string)
+	// Test hook used to observe whether fenced value-log reclaim resolved
+	// referenced segments through the tracker or the full-scan fallback.
+	compactStorageFencedValueLogRefHook func(compactStorageFencedValueLogRefEvent)
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -1243,9 +1246,22 @@ type Options struct {
 	// BackgroundIndexVacuumInterval enables periodic online index vacuum passes.
 	// `0` uses a default; `<0` disables.
 	BackgroundIndexVacuumInterval time.Duration
-	// BackgroundIndexVacuumSpanRatioPPM sets the span ratio threshold that
-	// triggers a vacuum pass (0 uses a default).
+	// BackgroundIndexVacuumSpanRatioPPM sets the user-tree span ratio threshold
+	// that triggers a vacuum pass (0 uses a default).
 	BackgroundIndexVacuumSpanRatioPPM uint32
+	// BackgroundIndexVacuumMaxBacklogSkips bounds consecutive cached-backlog skips
+	// before a trigger probe is forced (0 uses a conservative default).
+	BackgroundIndexVacuumMaxBacklogSkips uint32
+	// BackgroundIndexVacuumFreelistReclaimableRatioPPM and
+	// BackgroundIndexVacuumFreelistReclaimablePages trigger vacuum when both
+	// freelist reclaimable debt thresholds are met (0 uses conservative defaults).
+	BackgroundIndexVacuumFreelistReclaimableRatioPPM uint32
+	BackgroundIndexVacuumFreelistReclaimablePages    uint64
+	// BackgroundIndexVacuumCollectionRootSpanRatioPPM and
+	// BackgroundIndexVacuumCollectionRootPages trigger vacuum when both
+	// collection-root span debt thresholds are met (0 uses conservative defaults).
+	BackgroundIndexVacuumCollectionRootSpanRatioPPM uint32
+	BackgroundIndexVacuumCollectionRootPages        uint64
 	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
 	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
 	// size trigger). This is an operational safety cap; it does not make each
@@ -2385,8 +2401,12 @@ func (db *DB) recover() error {
 		p.SetPageCount(chosen.meta.TotalPages)
 	}
 
-	// Update Allocator Head
+	// Update Allocator Head and best-effort seed cheap freelist debt counters used
+	// by background vacuum trigger reports. Keep open behavior tolerant: if the
+	// optional seed walk fails, the trigger treats absent reclaimable counts as
+	// no debt and FragmentationReport can still surface the detailed error.
 	idx.allocator.SetHead(chosen.meta.FreelistHeadID)
+	_ = idx.allocator.RefreshStats(chosen.meta.TotalPages)
 
 	return nil
 }

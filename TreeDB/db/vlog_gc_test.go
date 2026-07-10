@@ -32,6 +32,43 @@ func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_PostRefreshNilSetReturnsEmptyStats(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	origPostRefreshCurrentSet := valueLogGCPostRefreshCurrentSetNoRefresh
+	calls := 0
+	valueLogGCPostRefreshCurrentSetNoRefresh = func(vm *valuelog.Manager) *valuelog.Set {
+		calls++
+		return nil
+	}
+	defer func() { valueLogGCPostRefreshCurrentSetNoRefresh = origPostRefreshCurrentSet }()
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats != (ValueLogGCStats{}) {
+		t.Fatalf("expected zero stats for nil post-refresh value-log set, got %+v", stats)
+	}
+	if calls != 1 {
+		t.Fatalf("post-refresh current-set hook calls=%d want 1", calls)
+	}
+
+	segments, err := filepath.Glob(filepath.Join(ValueLogDirPath(dir), "*.log"))
+	if err != nil {
+		t.Fatalf("glob value-log segments: %v", err)
+	}
+	if len(segments) != 0 {
+		t.Fatalf("nil-set GC path created or retained unexpected value-log segments: %v", segments)
+	}
+}
+
 func TestValueLogRefTracker_DisabledForOuterLeavesSkipsStaleMetadata(t *testing.T) {
 	dir := t.TempDir()
 	stale := []byte("stale ref-count metadata from an older build")
@@ -681,12 +718,50 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
+	seedValueLogRefIncrementalParityFixture(t, db, dir, false)
+
+	seq := db.currentCommitSeq()
+	incRefs, ok := db.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatalf("expected incremental ref set for seq=%d", seq)
+	}
+
+	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(incRefs, fullRefs) {
+		t.Fatalf("incremental/full-scan mismatch: incremental=%d full=%d", len(incRefs), len(fullRefs))
+	}
+}
+
+type valueLogRefIncrementalParityFixture struct {
+	SegmentAFileID     uint32
+	SegmentBFileID     uint32
+	UnreferencedFileID uint32
+}
+
+func seedValueLogRefIncrementalParityFixture(t *testing.T, db *DB, dir string, includeUnreferenced bool) valueLogRefIncrementalParityFixture {
+	t.Helper()
+
 	key := func(i int) []byte { return []byte(fmt.Sprintf("k%06d", i)) }
 	valueA := func(i int) []byte { return bytes.Repeat([]byte{byte(i % 251)}, 256) }
 	valueB := func(i int) []byte { return bytes.Repeat([]byte{byte((i + 17) % 251)}, 512) }
 
 	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 10_000, 320, valueA)
 	ptrsB := appendPointersInNewSegment(t, dir, 0, 2, 20_000, 120, valueB)
+	var unreferencedFileID uint32
+	if includeUnreferenced {
+		unreferenced := appendPointersInNewSegment(t, dir, 0, 3, 30_000, 1, func(int) []byte {
+			return bytes.Repeat([]byte("unreferenced|"), 32)
+		})
+		unreferencedFileID = unreferenced[0].FileID
+	}
 
 	b := db.NewBatch().(*Batch)
 	for i := 0; i < 320; i++ {
@@ -715,23 +790,10 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	}
 	_ = b.Close()
 
-	seq := db.currentCommitSeq()
-	incRefs, ok := db.valueLogRefTracker.referencedSet(seq)
-	if !ok {
-		t.Fatalf("expected incremental ref set for seq=%d", seq)
-	}
-
-	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
-	if err != nil {
-		t.Fatalf("scanValueLogRefCounts: %v", err)
-	}
-	if fullSeq != seq {
-		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
-	}
-
-	fullRefs := valueLogRefSetFromCounts(fullCounts)
-	if !reflect.DeepEqual(incRefs, fullRefs) {
-		t.Fatalf("incremental/full-scan mismatch: incremental=%d full=%d", len(incRefs), len(fullRefs))
+	return valueLogRefIncrementalParityFixture{
+		SegmentAFileID:     ptrsA[0].FileID,
+		SegmentBFileID:     ptrsB[0].FileID,
+		UnreferencedFileID: unreferencedFileID,
 	}
 }
 

@@ -39,6 +39,40 @@ var (
 	errValueLogRefCorrupt  = errors.New("treedb: corrupt value-log ref counters metadata")
 )
 
+type valueLogRefResolutionSource string
+
+const (
+	valueLogRefResolutionSourceTracker        valueLogRefResolutionSource = "tracker"
+	valueLogRefResolutionSourceFallbackScan   valueLogRefResolutionSource = "fallback_scan"
+	valueLogRefResolutionSourceValidationScan valueLogRefResolutionSource = "validation_scan"
+)
+
+var scanValueLogRefCountsHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
+func registerScanValueLogRefCountsHook(hook func()) func() {
+	scanValueLogRefCountsHook.mu.Lock()
+	prev := scanValueLogRefCountsHook.fn
+	scanValueLogRefCountsHook.fn = hook
+	scanValueLogRefCountsHook.mu.Unlock()
+	return func() {
+		scanValueLogRefCountsHook.mu.Lock()
+		scanValueLogRefCountsHook.fn = prev
+		scanValueLogRefCountsHook.mu.Unlock()
+	}
+}
+
+func runScanValueLogRefCountsHook() {
+	scanValueLogRefCountsHook.mu.Lock()
+	hook := scanValueLogRefCountsHook.fn
+	scanValueLogRefCountsHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
 type valueLogRefDelta struct {
 	inline    [16]valueLogRefDeltaEntry
 	inlineN   int
@@ -454,24 +488,29 @@ func (db *DB) persistValueLogRefTrackerBestEffort() {
 }
 
 func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error) {
+	refs, _, err := db.referencedValueLogSegmentsWithSource(ctx)
+	return refs, err
+}
+
+func (db *DB) referencedValueLogSegmentsWithSource(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	seq := db.currentCommitSeq()
 	if db.valueLogRefTracker != nil {
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
-			return refs, nil
+			return refs, valueLogRefResolutionSourceTracker, nil
 		}
 	}
 	counts, scannedSeq, err := db.scanValueLogRefCounts(ctx)
 	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
 		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
-			return nil, refreshErr
+			return nil, valueLogRefResolutionSourceFallbackScan, refreshErr
 		}
 		counts, scannedSeq, err = db.scanValueLogRefCounts(ctx)
 	}
 	if err != nil {
-		return nil, err
+		return nil, valueLogRefResolutionSourceFallbackScan, err
 	}
 	if db.valueLogRefTracker != nil {
 		db.valueLogRefTracker.replace(counts, scannedSeq, true)
@@ -483,13 +522,14 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 		}
 		refs[fileID] = struct{}{}
 	}
-	return refs, nil
+	return refs, valueLogRefResolutionSourceFallbackScan, nil
 }
 
 func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uint64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	runScanValueLogRefCountsHook()
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
 		if snap != nil {

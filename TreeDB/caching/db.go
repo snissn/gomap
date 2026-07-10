@@ -2548,22 +2548,20 @@ func (db *DB) markLaneValueLogBoundary(l *lane, totalBytes int64, flushedBoundar
 	l.vlogSyncPending.Store(true)
 }
 
-func (db *DB) checkpointFlushValueLogLanes() error {
+func (db *DB) flushPendingValueLogLanes(sync bool) error {
 	if db == nil || !db.splitValueLogEnabled() {
 		return nil
 	}
-	// Checkpoint is a durability boundary for cached mode. Ensure any buffered
-	// value-log bytes are visible before publishing pointers durably to the backend.
-	flushOnly := db.relaxedSync
+	actualSync := sync && !db.relaxedSync
 	for i := range db.lanes {
 		l := &db.lanes[i]
-		if !l.vlogDirty.Load() && !l.vlogSyncPending.Load() {
+		if !l.vlogDirty.Load() && !(actualSync && l.vlogSyncPending.Load()) {
 			continue
 		}
 		l.vlogMu.Lock()
 		w := l.vlog
 		var err error
-		syncBoundary := l.vlogSyncPending.Load() && !flushOnly
+		syncBoundary := actualSync && l.vlogSyncPending.Load()
 		if w != nil {
 			if syncBoundary {
 				err = w.Sync()
@@ -2573,7 +2571,7 @@ func (db *DB) checkpointFlushValueLogLanes() error {
 		}
 		if err == nil {
 			l.vlogDirty.Store(false)
-			if syncBoundary || flushOnly {
+			if syncBoundary || db.relaxedSync {
 				l.vlogSyncPending.Store(false)
 			}
 			l.backendReadFlushedSeq.Store(l.backendReadDirtySeq.Load())
@@ -2584,6 +2582,12 @@ func (db *DB) checkpointFlushValueLogLanes() error {
 		}
 	}
 	return nil
+}
+
+func (db *DB) checkpointFlushValueLogLanes() error {
+	// Checkpoint is a durability boundary for cached mode. Ensure any buffered
+	// value-log bytes are visible before publishing pointers durably to the backend.
+	return db.flushPendingValueLogLanes(true)
 }
 
 func (db *DB) syncDirBestEffort(dir string) {

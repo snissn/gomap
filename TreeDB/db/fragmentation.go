@@ -3,15 +3,235 @@ package db
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// FragmentationProbeEvent identifies structural maintenance probe phases for
+// deterministic tests. These events are intentionally coarse: the index vacuum
+// trigger walks only the structures included in IndexVacuumTriggerReport, not
+// the fill-percentile/full-report path used by FragmentationReport.
+type FragmentationProbeEvent string
+
+const (
+	FragmentationProbeEventFullReport                FragmentationProbeEvent = "full_report"
+	FragmentationProbeEventFullUserTreeWalk          FragmentationProbeEvent = "full_user_tree_walk"
+	FragmentationProbeEventFullFreelistChainWalk     FragmentationProbeEvent = "full_freelist_chain_walk"
+	FragmentationProbeEventFullCollectionRootWalk    FragmentationProbeEvent = "full_collection_root_walk"
+	FragmentationProbeEventTriggerReport             FragmentationProbeEvent = "index_vacuum_trigger_report"
+	FragmentationProbeEventTriggerUserTreeWalk       FragmentationProbeEvent = "index_vacuum_trigger_user_tree_walk"
+	FragmentationProbeEventTriggerFreelistCounters   FragmentationProbeEvent = "index_vacuum_trigger_freelist_counters"
+	FragmentationProbeEventTriggerCollectionRootWalk FragmentationProbeEvent = "index_vacuum_trigger_collection_root_walk"
+)
+
+var fragmentationProbeHook struct {
+	mu sync.RWMutex
+	fn func(FragmentationProbeEvent)
+}
+
+// SetFragmentationProbeHookForTest installs a process-wide fragmentation probe
+// hook and returns a restore function. It is intended for deterministic tests;
+// callers must serialize installation and should not use it in production code.
+func SetFragmentationProbeHookForTest(fn func(FragmentationProbeEvent)) func() {
+	fragmentationProbeHook.mu.Lock()
+	prev := fragmentationProbeHook.fn
+	fragmentationProbeHook.fn = fn
+	fragmentationProbeHook.mu.Unlock()
+	return func() {
+		fragmentationProbeHook.mu.Lock()
+		fragmentationProbeHook.fn = prev
+		fragmentationProbeHook.mu.Unlock()
+	}
+}
+
+func emitFragmentationProbeEvent(event FragmentationProbeEvent) {
+	fragmentationProbeHook.mu.RLock()
+	fn := fragmentationProbeHook.fn
+	fragmentationProbeHook.mu.RUnlock()
+	if fn != nil {
+		fn(event)
+	}
+}
+
+// IndexVacuumTriggerReport is the cheap subset of FragmentationReport used by
+// automatic index-vacuum trigger decisions.
+//
+// Contract for background maintenance callers:
+//   - CommitSeq is the snapshot state used for this report.
+//   - User* fields are computed by one user-index page walk and preserve the
+//     treedb.user.pages.span_ratio_ppm semantics from FragmentationReport.
+//   - Freelist* fields come from allocator.Counters(); Pages/FreeIDs are seeded
+//     at open and maintained incrementally so the trigger avoids per-probe
+//     freelist-chain walks. Freelist reclaimable fields are valid only when the
+//     allocator reports a non-empty freelist and total pages are known.
+//   - CollectionRoot* fields are computed by walking collection root descriptors
+//     and their pager-backed roots. Span-ratio fields are valid only when a
+//     pager-backed collection root exists.
+type IndexVacuumFreelistDebtSnapshot struct {
+	TotalPages               uint64
+	FreelistHead             uint64
+	FreelistPages            uint64
+	FreelistFreeIDs          uint64
+	FreelistReclaimable      uint64
+	FreelistReclaimablePPM   uint64
+	FreelistReclaimableValid bool
+}
+
+type IndexVacuumTriggerReport struct {
+	CommitSeq uint64
+
+	UserPages        uint64
+	UserMinPageID    uint64
+	UserMaxPageID    uint64
+	UserSpan         uint64
+	UserSpanRatioPPM uint64
+
+	TotalPages uint64
+
+	FreelistHead                  uint64
+	FreelistPages                 uint64
+	FreelistFreeIDs               uint64
+	FreelistReclaimablePages      uint64
+	FreelistReclaimableRatioPPM   uint64
+	FreelistReclaimableValid      bool
+	FreelistAllocPagesTotal       uint64
+	FreelistAppendAllocPagesTotal uint64
+	FreelistReuseAllocPagesTotal  uint64
+	FreelistFreePagesTotal        uint64
+
+	CollectionRootCount             uint64
+	CollectionRootPagerRoots        uint64
+	CollectionRootPages             uint64
+	CollectionRootMinPageID         uint64
+	CollectionRootMaxPageID         uint64
+	CollectionRootSpan              uint64
+	CollectionRootSpanRatioPPM      uint64
+	CollectionRootSpanRatioValid    bool
+	CollectionRootDuplicatePageRefs uint64
+	CollectionRootLeafPages         uint64
+	CollectionRootInternalPages     uint64
+}
+
+// IndexVacuumFreelistDebtSnapshot returns the cheap freelist-debt fields used
+// to invalidate unchanged-CommitSeq background-vacuum trigger caches. It does
+// not walk the user tree, collection roots, or freelist chain.
+func (db *DB) IndexVacuumFreelistDebtSnapshot() (IndexVacuumFreelistDebtSnapshot, bool) {
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.idx.allocator == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return IndexVacuumFreelistDebtSnapshot{}, false
+	}
+	defer func() { _ = snap.Close() }()
+
+	out := IndexVacuumFreelistDebtSnapshot{}
+	if snap.idx.pager != nil {
+		out.TotalPages = snap.idx.pager.PageCount()
+	}
+	emitFragmentationProbeEvent(FragmentationProbeEventTriggerFreelistCounters)
+	fs := snap.idx.allocator.Counters()
+	out.FreelistHead = fs.Head
+	out.FreelistPages = fs.Pages
+	out.FreelistFreeIDs = fs.FreeIDs
+	out.FreelistReclaimable = fs.ReclaimablePages()
+	if fs.Head != 0 && out.TotalPages > 0 {
+		out.FreelistReclaimablePPM = (out.FreelistReclaimable * 1_000_000) / out.TotalPages
+		out.FreelistReclaimableValid = true
+	}
+	return out, true
+}
+
+// IndexVacuumTriggerReport returns the trigger report for automatic index
+// vacuum. Unlike FragmentationReport, it avoids fill-percentile allocation and
+// full-report map parsing; freelist reclaimable debt uses seeded incremental
+// counters rather than walking the on-disk freelist chain.
+func (db *DB) IndexVacuumTriggerReport() (IndexVacuumTriggerReport, error) {
+	emitFragmentationProbeEvent(FragmentationProbeEventTriggerReport)
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return IndexVacuumTriggerReport{}, fmt.Errorf("missing index")
+	}
+	defer func() { _ = snap.Close() }()
+
+	out := IndexVacuumTriggerReport{CommitSeq: snap.state.CommitSeq}
+	if snap.idx.pager != nil {
+		out.TotalPages = snap.idx.pager.PageCount()
+	}
+
+	emitFragmentationProbeEvent(FragmentationProbeEventTriggerUserTreeWalk)
+	err := snap.tree.WalkPages(func(pageID uint64, _ node.Node) error {
+		if out.UserPages == 0 {
+			out.UserMinPageID = pageID
+			out.UserMaxPageID = pageID
+		} else {
+			if pageID < out.UserMinPageID {
+				out.UserMinPageID = pageID
+			}
+			if pageID > out.UserMaxPageID {
+				out.UserMaxPageID = pageID
+			}
+		}
+		out.UserPages++
+		return nil
+	})
+	if err != nil {
+		return out, err
+	}
+	if out.UserPages > 0 {
+		out.UserSpan = (out.UserMaxPageID - out.UserMinPageID) + 1
+		out.UserSpanRatioPPM = (out.UserSpan * 1_000_000) / out.UserPages
+	}
+
+	if snap.idx.allocator != nil {
+		emitFragmentationProbeEvent(FragmentationProbeEventTriggerFreelistCounters)
+		fs := snap.idx.allocator.Counters()
+		out.FreelistHead = fs.Head
+		out.FreelistPages = fs.Pages
+		out.FreelistFreeIDs = fs.FreeIDs
+		out.FreelistReclaimablePages = fs.ReclaimablePages()
+		if fs.Head != 0 && out.TotalPages > 0 {
+			out.FreelistReclaimableRatioPPM = (out.FreelistReclaimablePages * 1_000_000) / out.TotalPages
+			out.FreelistReclaimableValid = true
+		}
+		out.FreelistAllocPagesTotal = fs.AllocPages
+		out.FreelistAppendAllocPagesTotal = fs.AppendAllocPages
+		out.FreelistReuseAllocPagesTotal = fs.ReuseAllocPages
+		out.FreelistFreePagesTotal = fs.FreePages
+	}
+
+	emitFragmentationProbeEvent(FragmentationProbeEventTriggerCollectionRootWalk)
+	if collection, err := collectionRootFragmentationStats(snap.idx, snap.state); err == nil {
+		out.CollectionRootCount = collection.roots
+		out.CollectionRootPagerRoots = collection.pagerRoots
+		out.CollectionRootPages = collection.pages
+		out.CollectionRootDuplicatePageRefs = collection.duplicatePages
+		out.CollectionRootLeafPages = collection.leafPages
+		out.CollectionRootInternalPages = collection.internalPages
+		if collection.hasPagerBackedID {
+			out.CollectionRootMinPageID = collection.minPageID
+			out.CollectionRootMaxPageID = collection.maxPageID
+			out.CollectionRootSpan = (collection.maxPageID - collection.minPageID) + 1
+			if collection.pages > 0 {
+				out.CollectionRootSpanRatioPPM = (out.CollectionRootSpan * 1_000_000) / collection.pages
+				out.CollectionRootSpanRatioValid = true
+			}
+		}
+	}
+	return out, nil
+}
+
 // FragmentationReport returns best-effort structural stats about the user index
 // that help diagnose scan regressions after churn.
 func (db *DB) FragmentationReport() (map[string]string, error) {
+	emitFragmentationProbeEvent(FragmentationProbeEventFullReport)
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
 		if snap != nil {
@@ -37,6 +257,7 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	var leafFillPPM []uint32
 	var internalFillPPM []uint32
 
+	emitFragmentationProbeEvent(FragmentationProbeEventFullUserTreeWalk)
 	err := tr.WalkPages(func(pageID uint64, n node.Node) error {
 		if pages == 0 {
 			minID = pageID
@@ -105,6 +326,7 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 		out["treedb.user.internal_fill_ppm_max"] = fmt.Sprintf("%d", p.max)
 	}
 
+	emitFragmentationProbeEvent(FragmentationProbeEventFullFreelistChainWalk)
 	fs, err := idx.allocator.Stats(totalPages)
 	out["treedb.freelist.head"] = fmt.Sprintf("%d", fs.Head)
 	out["treedb.freelist.alloc_pages_total"] = fmt.Sprintf("%d", fs.AllocPages)
@@ -128,6 +350,7 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	out["treedb.graveyard.min_seq"] = fmt.Sprintf("%d", graveyard.MinSeq)
 	out["treedb.graveyard.max_seq"] = fmt.Sprintf("%d", graveyard.MaxSeq)
 
+	emitFragmentationProbeEvent(FragmentationProbeEventFullCollectionRootWalk)
 	if collection, err := collectionRootFragmentationStats(idx, snap.state); err != nil {
 		out["treedb.collection_roots.error"] = err.Error()
 	} else {

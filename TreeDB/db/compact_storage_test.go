@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -579,6 +580,205 @@ func TestCompactStorageFencedReclaimProtectsByFileID(t *testing.T) {
 	if len(ids) != 0 {
 		t.Fatalf("fenced reclaim IDs=%v want none", ids)
 	}
+}
+
+type compactStorageFencedValueLogRefCounters struct {
+	tracker        atomic.Uint64
+	fallbackScan   atomic.Uint64
+	validationScan atomic.Uint64
+	other          atomic.Uint64
+}
+
+func withCompactStorageFencedValueLogRefCounters(t *testing.T, db *DB) *compactStorageFencedValueLogRefCounters {
+	t.Helper()
+	counters := &compactStorageFencedValueLogRefCounters{}
+	prev := db.compactStorageFencedValueLogRefHook
+	db.compactStorageFencedValueLogRefHook = func(event compactStorageFencedValueLogRefEvent) {
+		switch event.Source {
+		case valueLogRefResolutionSourceTracker:
+			counters.tracker.Add(1)
+		case valueLogRefResolutionSourceFallbackScan:
+			counters.fallbackScan.Add(1)
+		case valueLogRefResolutionSourceValidationScan:
+			counters.validationScan.Add(1)
+		default:
+			counters.other.Add(1)
+		}
+		if prev != nil {
+			prev(event)
+		}
+	}
+	t.Cleanup(func() {
+		db.compactStorageFencedValueLogRefHook = prev
+	})
+	return counters
+}
+
+func withValueLogRefFullScanCounter(t *testing.T) *atomic.Uint64 {
+	t.Helper()
+	var counter atomic.Uint64
+	unregister := registerScanValueLogRefCountsHook(func() {
+		counter.Add(1)
+	})
+	t.Cleanup(func() {
+		unregister()
+	})
+	return &counter
+}
+
+func TestCompactStoragePlanFencedReclaimUsesTrackerRefsWhenValid(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	fixture := seedValueLogRefIncrementalParityFixture(t, db, dir, true)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	if _, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq()); !ok {
+		t.Fatalf("expected valid value-log ref tracker")
+	}
+
+	counters := withCompactStorageFencedValueLogRefCounters(t, db)
+	fullScans := withValueLogRefFullScanCounter(t)
+	stats, err := db.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		UnsafeValueLogReclaimFencedUnreferenced: true,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if counters.tracker.Load() != 1 || counters.fallbackScan.Load() != 0 || counters.validationScan.Load() != 0 || counters.other.Load() != 0 {
+		t.Fatalf("fenced refs counters tracker=%d fallback=%d validation=%d other=%d; want tracker=1 only",
+			counters.tracker.Load(), counters.fallbackScan.Load(), counters.validationScan.Load(), counters.other.Load())
+	}
+	if got := fullScans.Load(); got != 0 {
+		t.Fatalf("scanValueLogRefCounts calls during tracker-valid CompactStoragePlan=%d want 0", got)
+	}
+	if stats.RemainingDebt.ValueLogGCSegments == 0 {
+		// RemainingDebt carries both ordinary GC and fenced debt; the hook and scan
+		// counter assertions above prove the fenced audit used the tracker path.
+		t.Fatalf("expected value-log debt including unreferenced file %d, stats=%+v", fixture.UnreferencedFileID, stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageFencedReclaimFallsBackWhenTrackerStale(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	fixture := seedValueLogRefIncrementalParityFixture(t, db, dir, true)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	opts := CompactStorageOptions{UnsafeValueLogReclaimFencedUnreferenced: true}
+	wantIDs, wantBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("compactStorageFencedUnreferencedValueLogIDs tracker path: %v", err)
+	}
+	if !compactStorageIDListContains(wantIDs, fixture.UnreferencedFileID) {
+		t.Fatalf("tracker path fenced IDs=%v want unreferenced file %d", wantIDs, fixture.UnreferencedFileID)
+	}
+
+	seq := db.currentCommitSeq()
+	db.valueLogRefTracker.mu.Lock()
+	db.valueLogRefTracker.commitSeq = seq + 1
+	db.valueLogRefTracker.valid = true
+	db.valueLogRefTracker.mu.Unlock()
+	if _, ok := db.valueLogRefTracker.referencedSet(seq); ok {
+		t.Fatalf("expected stale tracker to be rejected for seq=%d", seq)
+	}
+
+	counters := withCompactStorageFencedValueLogRefCounters(t, db)
+	fullScans := withValueLogRefFullScanCounter(t)
+	gotIDs, gotBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("compactStorageFencedUnreferencedValueLogIDs fallback path: %v", err)
+	}
+	if !reflect.DeepEqual(gotIDs, wantIDs) || gotBytes != wantBytes {
+		t.Fatalf("fallback fenced IDs/bytes=(%v,%d) want (%v,%d)", gotIDs, gotBytes, wantIDs, wantBytes)
+	}
+	if counters.tracker.Load() != 0 || counters.fallbackScan.Load() != 1 || counters.validationScan.Load() != 0 || counters.other.Load() != 0 {
+		t.Fatalf("fenced refs counters tracker=%d fallback=%d validation=%d other=%d; want fallback=1 only",
+			counters.tracker.Load(), counters.fallbackScan.Load(), counters.validationScan.Load(), counters.other.Load())
+	}
+	if got := fullScans.Load(); got != 1 {
+		t.Fatalf("scanValueLogRefCounts calls for stale tracker fallback=%d want 1", got)
+	}
+	if _, ok := db.valueLogRefTracker.referencedSet(seq); !ok {
+		t.Fatalf("expected fallback scan to refresh tracker for seq=%d", seq)
+	}
+}
+
+func TestCompactStorageFencedReclaimTrackerFullScanParityBeforeDeletion(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	fixture := seedValueLogRefIncrementalParityFixture(t, db, dir, true)
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	seq := db.currentCommitSeq()
+	trackerRefs, ok := db.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatalf("expected tracker refs for seq=%d", seq)
+	}
+	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(trackerRefs, fullRefs) {
+		t.Fatalf("tracker/full-scan refs differ: tracker=%v full=%v", trackerRefs, fullRefs)
+	}
+
+	opts := CompactStorageOptions{UnsafeValueLogReclaimFencedUnreferenced: true}
+	trackerIDs, trackerBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("tracker fenced IDs: %v", err)
+	}
+	db.valueLogRefTracker.invalidate()
+	scanIDs, scanBytes, err := db.compactStorageFencedUnreferencedValueLogIDs(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("scan fenced IDs: %v", err)
+	}
+	if !reflect.DeepEqual(scanIDs, trackerIDs) || scanBytes != trackerBytes {
+		t.Fatalf("tracker/scan fenced IDs differ: tracker=(%v,%d) scan=(%v,%d)", trackerIDs, trackerBytes, scanIDs, scanBytes)
+	}
+	fenced := compactStorageIDListSet(scanIDs)
+	for ref := range fullRefs {
+		if _, ok := fenced[ref]; ok {
+			t.Fatalf("referenced file %d appeared in fenced IDs %v", ref, scanIDs)
+		}
+	}
+	if _, ok := fenced[fixture.UnreferencedFileID]; !ok {
+		t.Fatalf("unreferenced file %d missing from fenced IDs %v", fixture.UnreferencedFileID, scanIDs)
+	}
+}
+
+func compactStorageIDListContains(ids []uint32, id uint32) bool {
+	_, ok := compactStorageIDListSet(ids)[id]
+	return ok
+}
+
+func compactStorageIDListSet(ids []uint32) map[uint32]struct{} {
+	out := make(map[uint32]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
+	}
+	return out
 }
 
 func TestZeroByteValueLogCleanupProtectsByFileID(t *testing.T) {
