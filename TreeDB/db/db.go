@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -224,6 +224,9 @@ type DB struct {
 	// closeHooksRunning is protected by closeHooksMu. A reentrant Close from a
 	// user callback is folded into the active outer close operation.
 	closeHooksRunning bool
+	// closeHooksOwner identifies the goroutine executing user callbacks. It is
+	// non-zero only while closeHooksRunning is true.
+	closeHooksOwner uint64
 	// closeHooksWaitHook is a deterministic test seam for the concurrent waiter.
 	closeHooksWaitHook func()
 	closeHooksWG       sync.WaitGroup
@@ -2229,10 +2232,12 @@ func (db *DB) runCloseHooks() (retErr error) {
 	clear(db.closeHooks)
 	db.closeHooks = nil
 	db.closeHooksRunning = true
+	db.closeHooksOwner = currentGoroutineID()
 	db.closeHooksWG.Add(1)
 	db.closeHooksMu.Unlock()
 	defer func() {
 		db.closeHooksMu.Lock()
+		db.closeHooksOwner = 0
 		db.closeHooksRunning = false
 		db.closeHooksMu.Unlock()
 		db.closeHooksWG.Done()
@@ -2314,10 +2319,11 @@ func (db *DB) Close() error {
 	}
 	db.closeHooksMu.Lock()
 	closeHooksRunning := db.closeHooksRunning
+	closeHooksOwner := db.closeHooksOwner
 	closeHooksWaitHook := db.closeHooksWaitHook
 	db.closeHooksMu.Unlock()
 	if closeHooksRunning {
-		if closeCalledFromUserCloseHook() {
+		if caller := currentGoroutineID(); caller != 0 && caller == closeHooksOwner {
 			// A user hook cannot synchronously wait for the hook drain that is
 			// invoking it. The active outer Close remains responsible for teardown.
 			return nil
@@ -2419,22 +2425,28 @@ func (db *DB) Close() error {
 	return errors.Join(errs...)
 }
 
-func closeCalledFromUserCloseHook() bool {
-	// Hooks run synchronously, so runCloseHooks remains on the stack only for
-	// the true reentrant callback path. Unrelated Close callers must wait for
-	// the active drain and continue teardown.
-	var pcs [16]uintptr
-	n := runtime.Callers(2, pcs[:])
-	frames := runtime.CallersFrames(pcs[:n])
-	for {
-		frame, more := frames.Next()
-		if strings.HasSuffix(frame.Function, "/TreeDB/db.(*DB).runCloseHooks") {
-			return true
-		}
-		if !more {
-			return false
-		}
+func currentGoroutineID() uint64 {
+	// The runtime stack header begins with "goroutine <id> ". Recording that ID
+	// once around callback execution gives Close an explicit, depth-independent
+	// reentrancy marker without treating unrelated concurrent callers as hooks.
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	const prefix = "goroutine "
+	if n <= len(prefix) || string(buf[:len(prefix)]) != prefix {
+		return 0
 	}
+	end := len(prefix)
+	for end < n && buf[end] >= '0' && buf[end] <= '9' {
+		end++
+	}
+	if end == len(prefix) {
+		return 0
+	}
+	id, err := strconv.ParseUint(string(buf[len(prefix):end]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (db *DB) reportError(err error) {

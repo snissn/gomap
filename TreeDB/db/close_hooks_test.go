@@ -63,6 +63,36 @@ func TestCloseHookMayCallClose(t *testing.T) {
 	}
 }
 
+func TestCloseHookMayCallCloseThroughDeepHelpers(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	d.RegisterCloseHook(func() error {
+		return closeThroughHelpers(d, 64)
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close hook calling Close through deep helpers deadlocked")
+	}
+}
+
+// Recursive calls cannot be inlined, keeping the regression independent of
+// ordinary helper inlining decisions.
+func closeThroughHelpers(d *DB, depth int) error {
+	if depth == 0 {
+		return d.Close()
+	}
+	return closeThroughHelpers(d, depth-1)
+}
+
 func TestCloseWaitsForStandaloneCloseHookDrain(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
