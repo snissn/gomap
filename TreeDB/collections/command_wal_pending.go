@@ -491,8 +491,8 @@ func (domain *collectionWriteDomain) recordPendingCommandWALLSNLocked(db *backen
 		if db == nil {
 			return backenddb.ErrClosed
 		}
-		state := db.State()
-		if state == nil {
+		state, ok := db.StateToken()
+		if !ok {
 			return backenddb.ErrClosed
 		}
 		if lsn < state.AppliedCommandLSN {
@@ -525,8 +525,8 @@ func (domain *collectionWriteDomain) pendingCommandWALCoverageIntentLocked(db *b
 	if first == 0 || last == 0 {
 		return nil, 0, nil
 	}
-	state := db.State()
-	if state == nil {
+	state, ok := db.StateToken()
+	if !ok {
 		return nil, 0, backenddb.ErrClosed
 	}
 	current := state.AppliedCommandLSN

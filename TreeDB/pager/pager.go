@@ -742,8 +742,22 @@ func (p *Pager) Write(pageID uint64, data []byte) error {
 	return nil
 }
 
-// Sync msyncs the memory maps to disk.
+// FlushDirtyChunksFrom synchronously writes dirty memory-map chunks at or
+// above firstChunk to the backing file without issuing a file sync. Lower
+// chunks remain dirty for a later Sync at the durability boundary.
+func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
+	if firstChunk < 0 {
+		firstChunk = 0
+	}
+	return p.syncDirtyChunks(false, firstChunk)
+}
+
+// Sync msyncs the memory maps and syncs the backing file to disk.
 func (p *Pager) Sync() error {
+	return p.syncDirtyChunks(true, 0)
+}
+
+func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -751,13 +765,16 @@ func (p *Pager) Sync() error {
 		return nil
 	}
 	p.mu.Lock()
-	// Copy dirty list and clear
+	// Move the selected dirty chunks into this sync attempt. Lower chunks can be
+	// intentionally retained for a later durability-boundary Sync.
 	toSync := make([]int, 0, len(p.dirtyChunks))
 	for idx := range p.dirtyChunks {
+		if idx < firstChunk {
+			continue
+		}
 		toSync = append(toSync, idx)
+		delete(p.dirtyChunks, idx)
 	}
-	// We clear the map now. If Msync fails, we must restore these.
-	p.dirtyChunks = make(map[int]struct{})
 	p.mu.Unlock()
 
 	// Perform msync under read lock
@@ -813,7 +830,7 @@ func (p *Pager) Sync() error {
 		}
 	}
 
-	if syncErr == nil {
+	if syncErr == nil && syncFile {
 		if err := p.file.Sync(); err != nil {
 			syncErr = err
 		}

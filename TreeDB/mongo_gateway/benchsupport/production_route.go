@@ -484,8 +484,8 @@ func (p *productionRouteProofCatalogVersion) Refresh() uint64 {
 		p.known.Store(false)
 		return 0
 	}
-	state := p.db.State()
-	if state == nil {
+	state, ok := p.db.StateToken()
+	if !ok {
 		p.value.Store(0)
 		p.known.Store(false)
 		return 0

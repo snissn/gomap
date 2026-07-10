@@ -672,7 +672,10 @@ func (c *Collection) buildColumnManifestPublishSystemDeltaIterator(input ColumnM
 		return nil, backenddb.ErrClosed
 	}
 	defer func() { _ = current.Close() }()
-	state := current.State()
+	state, ok := current.StateToken()
+	if !ok {
+		return nil, backenddb.ErrClosed
+	}
 	if state.CommitSeq != input.BaseCommitSeq || state.SystemRootPageID != input.BaseSystemRoot {
 		return nil, fmt.Errorf("collections: concurrent schema modification detected for %q", input.BaseMeta.Name)
 	}

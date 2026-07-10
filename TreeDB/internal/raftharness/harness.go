@@ -430,7 +430,8 @@ func rejectNonEmptySnapshotInstallTarget(node *Node) error {
 	if _, ok := node.LastApplied(); ok {
 		return fmt.Errorf("%w: node %s already has local applied progress", ErrCommittedLogConflict, node.id)
 	}
-	if lsn := node.db.State().AppliedCommandLSN; lsn != 0 {
+	if state, ok := node.db.StateToken(); ok && state.AppliedCommandLSN != 0 {
+		lsn := state.AppliedCommandLSN
 		return fmt.Errorf("%w: node %s has local AppliedCommandLSN coverage %d without apply progress", ErrCommittedLogConflict, node.id, lsn)
 	}
 	return nil

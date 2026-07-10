@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -38,6 +39,36 @@ type vacuumCollectionRootReplacement struct {
 	value []byte
 }
 
+type collectionToken struct {
+	indexGenerationID uint64
+	systemRootPageID  uint64
+	commitSeq         uint64
+	publishEpoch      uint64
+}
+
+type collectionEntry struct {
+	key           []byte
+	sourceRootIDs []uint64
+	clonedRootIDs []uint64
+}
+
+type collectionBasis struct {
+	snapshot     *Snapshot
+	token        collectionToken
+	entries      []collectionEntry
+	byKey        map[string]int
+	destRefCount map[uint64]int
+
+	// sourceToDest deduplicates aliases within one accepted basis. destPages
+	// owns every destination page allocated for a cloned root so dropped clones
+	// can be returned to the destination allocator during adjacent reconciliation.
+	sourceToDest map[uint64]uint64
+	destPages    map[uint64][]uint64
+}
+
+type collectionRootCloneFunc func(sourceRootID uint64) (destRootID uint64, allocatedPages []uint64, err error)
+type collectionRootReclaimFunc func(destRootID uint64, allocatedPages []uint64) error
+
 type vacuumCollectionRootRewriteFunc func(vacuumCollectionRootDescriptor) (uint64, error)
 
 type collectionRootDescriptorShapeError struct {
@@ -63,6 +94,34 @@ func isCollectionRootDescriptorShapeError(err error) bool {
 
 type vacuumAllocator interface {
 	Alloc(hint uint64) (uint64, error)
+}
+
+type vacuumCollectionAllocator interface {
+	vacuumAllocator
+	Free(id uint64) error
+}
+
+type vacuumRecordingAllocator struct {
+	base        vacuumAllocator
+	pages       []uint64
+	inlinePages [16]uint64
+}
+
+func newVacuumRecordingAllocator(base vacuumAllocator) *vacuumRecordingAllocator {
+	a := &vacuumRecordingAllocator{base: base}
+	a.pages = a.inlinePages[:0]
+	return a
+}
+
+func (a *vacuumRecordingAllocator) Alloc(hint uint64) (uint64, error) {
+	if a == nil || a.base == nil {
+		return 0, errors.New("vacuum: missing recording allocator")
+	}
+	id, err := a.base.Alloc(hint)
+	if err == nil {
+		a.pages = append(a.pages, id)
+	}
+	return id, err
 }
 
 type vacuumUnsafeToReader interface {
@@ -97,6 +156,32 @@ func vacuumCollectCollectionRootDescriptors(p *pager.Pager, reader tree.SlabRead
 }
 
 func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]vacuumCollectionRootDescriptor, error) {
+	entries, err := vacuumCollectCollectionEntriesFromRoot(ctx, p, reader, systemRootID)
+	if err != nil {
+		return nil, err
+	}
+	var out []vacuumCollectionRootDescriptor
+	for _, entry := range entries {
+		for i, rootID := range entry.sourceRootIDs {
+			out = append(out, vacuumCollectionRootDescriptor{
+				key:       append([]byte(nil), entry.key...),
+				rootID:    rootID,
+				rootIDs:   append([]uint64(nil), entry.sourceRootIDs...),
+				rootIndex: i,
+			})
+		}
+	}
+	return out, nil
+}
+
+func vacuumCollectCollectionEntries(ctx context.Context, snap *Snapshot) ([]collectionEntry, error) {
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		return nil, errors.New("vacuum: missing collection snapshot")
+	}
+	return vacuumCollectCollectionEntriesFromRoot(ctx, snap.idx.pager, &snap.reader, snap.state.SystemRootPageID)
+}
+
+func vacuumCollectCollectionEntriesFromRoot(ctx context.Context, p *pager.Pager, reader tree.SlabReader, systemRootID uint64) ([]collectionEntry, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -110,15 +195,15 @@ func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *p
 		return nil, err
 	}
 
-	var out []vacuumCollectionRootDescriptor
+	var out []collectionEntry
 	var pointerScratch []byte
 	descriptorPrefixes := []struct {
 		prefix    []byte
 		end       []byte
 		allowList bool
 	}{
-		{prefix: vacuumCollectionRootDescriptorPrefixBytes, end: vacuumCollectionRootDescriptorPrefixEnd()},
 		{prefix: vacuumCollectionRootOverlayDescriptorPrefixBytes, end: vacuumCollectionRootOverlayDescriptorPrefixEnd(), allowList: true},
+		{prefix: vacuumCollectionRootDescriptorPrefixBytes, end: vacuumCollectionRootDescriptorPrefixEnd()},
 	}
 	for _, descriptorPrefix := range descriptorPrefixes {
 		it := tree.New(p, reader, systemRootID).IteratorWithOptions(descriptorPrefix.prefix, descriptorPrefix.end, tree.IteratorOptions{
@@ -145,15 +230,10 @@ func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *p
 				_ = it.Close()
 				return nil, err
 			}
-			keyCopy := append([]byte(nil), key...)
-			for i, rootID := range rootIDs {
-				out = append(out, vacuumCollectionRootDescriptor{
-					key:       keyCopy,
-					rootID:    rootID,
-					rootIDs:   append([]uint64(nil), rootIDs...),
-					rootIndex: i,
-				})
-			}
+			out = append(out, collectionEntry{
+				key:           append([]byte(nil), key...),
+				sourceRootIDs: append([]uint64(nil), rootIDs...),
+			})
 			it.Next()
 		}
 		if err := it.Error(); err != nil {
@@ -165,6 +245,260 @@ func vacuumCollectCollectionRootDescriptorsWithContext(ctx context.Context, p *p
 		}
 	}
 	return out, nil
+}
+
+func reconcileCollectionBasisEntries(old *collectionBasis, successorEntries []collectionEntry, token collectionToken, clone collectionRootCloneFunc, reclaim collectionRootReclaimFunc) (*collectionBasis, int, error) {
+	// The caller transfers ownership of the collected catalog. Keep the exact
+	// key and root-vector buffers pinned in the basis instead of copying the
+	// complete catalog a second time.
+	entries := successorEntries
+	if !collectionEntriesSorted(entries) {
+		sort.Slice(entries, func(i, j int) bool {
+			return bytes.Compare(entries[i].key, entries[j].key) < 0
+		})
+	}
+	next := &collectionBasis{
+		token:        token,
+		entries:      entries,
+		byKey:        make(map[string]int, len(entries)),
+		destRefCount: make(map[uint64]int, len(entries)),
+		sourceToDest: make(map[uint64]uint64, len(entries)),
+		destPages:    make(map[uint64][]uint64, len(entries)),
+	}
+	for i := range next.entries {
+		key := collectionEntryKeyString(next.entries[i].key)
+		if _, exists := next.byKey[key]; exists {
+			return nil, 0, fmt.Errorf("vacuum: duplicate collection descriptor %q", key)
+		}
+		next.byKey[key] = i
+	}
+
+	dirty := collectionBasisDirtyDescriptorCount(old, next)
+	unchanged := make([]bool, len(next.entries))
+	clonedRootCount := 0
+	for i := range next.entries {
+		clonedRootCount += len(next.entries[i].sourceRootIDs)
+	}
+	clonedRoots := make([]uint64, clonedRootCount)
+	clonedRootOffset := 0
+	for i := range next.entries {
+		count := len(next.entries[i].sourceRootIDs)
+		if count > 0 {
+			next.entries[i].clonedRootIDs = clonedRoots[clonedRootOffset : clonedRootOffset+count]
+			clonedRootOffset += count
+		}
+	}
+	sameSourceGeneration := old != nil && old.token.indexGenerationID == next.token.indexGenerationID
+	if old != nil {
+		for i := range next.entries {
+			oldIndex, ok := old.byKey[collectionEntryKeyString(next.entries[i].key)]
+			if !ok || oldIndex < 0 || oldIndex >= len(old.entries) {
+				continue
+			}
+			oldEntry := old.entries[oldIndex]
+			if !equalRootIDVectors(oldEntry.sourceRootIDs, next.entries[i].sourceRootIDs) {
+				continue
+			}
+			if !sameSourceGeneration && len(next.entries[i].sourceRootIDs) > 0 {
+				continue
+			}
+			if len(oldEntry.clonedRootIDs) != len(oldEntry.sourceRootIDs) {
+				return nil, 0, fmt.Errorf("vacuum: descriptor %q has mismatched source/clone vectors", next.entries[i].key)
+			}
+			unchanged[i] = true
+			copy(next.entries[i].clonedRootIDs, oldEntry.clonedRootIDs)
+			for rootIndex, sourceRootID := range oldEntry.sourceRootIDs {
+				destRootID := oldEntry.clonedRootIDs[rootIndex]
+				if sourceRootID == 0 || destRootID == 0 {
+					continue
+				}
+				if existing, ok := next.sourceToDest[sourceRootID]; ok && existing != destRootID {
+					return nil, 0, fmt.Errorf("vacuum: aliased source root %d maps to destinations %d and %d", sourceRootID, existing, destRootID)
+				}
+				next.sourceToDest[sourceRootID] = destRootID
+				next.destRefCount[destRootID]++
+				if pages, ok := old.destPages[destRootID]; ok {
+					next.destPages[destRootID] = pages
+				}
+			}
+		}
+	}
+
+	newDestinations := make(map[uint64]struct{})
+	cleanupNewDestinations := func() error {
+		if reclaim == nil || len(newDestinations) == 0 {
+			return nil
+		}
+		ids := make([]uint64, 0, len(newDestinations))
+		for id := range newDestinations {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		var errs []error
+		for _, id := range ids {
+			if err := reclaim(id, next.destPages[id]); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	for i := range next.entries {
+		if unchanged[i] {
+			continue
+		}
+		entry := &next.entries[i]
+		for rootIndex, sourceRootID := range entry.sourceRootIDs {
+			if sourceRootID == 0 {
+				continue
+			}
+			destRootID, ok := next.sourceToDest[sourceRootID]
+			if !ok {
+				if clone == nil {
+					return nil, 0, errors.Join(errors.New("vacuum: missing collection root cloner"), cleanupNewDestinations())
+				}
+				var pages []uint64
+				var err error
+				destRootID, pages, err = clone(sourceRootID)
+				if err != nil {
+					return nil, 0, errors.Join(err, cleanupNewDestinations())
+				}
+				if destRootID == 0 {
+					return nil, 0, errors.Join(fmt.Errorf("vacuum: clone of collection root %d returned zero", sourceRootID), cleanupNewDestinations())
+				}
+				next.sourceToDest[sourceRootID] = destRootID
+				// clone transfers ownership of its page list to this basis.
+				next.destPages[destRootID] = pages
+				newDestinations[destRootID] = struct{}{}
+			}
+			entry.clonedRootIDs[rootIndex] = destRootID
+			next.destRefCount[destRootID]++
+		}
+	}
+
+	if old != nil && reclaim != nil {
+		unused := make([]uint64, 0, len(old.destRefCount))
+		for destRootID, refs := range old.destRefCount {
+			if refs > 0 && next.destRefCount[destRootID] == 0 {
+				unused = append(unused, destRootID)
+			}
+		}
+		sort.Slice(unused, func(i, j int) bool { return unused[i] < unused[j] })
+		for _, destRootID := range unused {
+			if err := reclaim(destRootID, old.destPages[destRootID]); err != nil {
+				return nil, 0, err
+			}
+		}
+	}
+	return next, dirty, nil
+}
+
+// collectionEntryKeyString is safe because a basis owns and pins its immutable
+// key buffers for at least as long as byKey can reference them.
+func collectionEntryKeyString(key []byte) string {
+	return unsafe.String(unsafe.SliceData(key), len(key))
+}
+
+func collectionEntriesSorted(entries []collectionEntry) bool {
+	for i := 1; i < len(entries); i++ {
+		if bytes.Compare(entries[i-1].key, entries[i].key) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func collectionBasisDirtyDescriptorCount(old, next *collectionBasis) int {
+	if old == nil {
+		return len(next.entries)
+	}
+	sameSourceGeneration := old.token.indexGenerationID == next.token.indexGenerationID
+	dirty := 0
+	for i := range next.entries {
+		oldIndex, ok := old.byKey[collectionEntryKeyString(next.entries[i].key)]
+		if !ok || oldIndex < 0 || oldIndex >= len(old.entries) || !equalRootIDVectors(old.entries[oldIndex].sourceRootIDs, next.entries[i].sourceRootIDs) || (!sameSourceGeneration && len(next.entries[i].sourceRootIDs) > 0) {
+			dirty++
+		}
+	}
+	for i := range old.entries {
+		if _, ok := next.byKey[collectionEntryKeyString(old.entries[i].key)]; !ok {
+			dirty++
+		}
+	}
+	return dirty
+}
+
+func equalRootIDVectors(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (basis *collectionBasis) replacements() ([]vacuumCollectionRootReplacement, error) {
+	if basis == nil {
+		return nil, errors.New("vacuum: missing collection basis")
+	}
+	replacements := make([]vacuumCollectionRootReplacement, 0, len(basis.entries))
+	for _, entry := range basis.entries {
+		if len(entry.sourceRootIDs) != len(entry.clonedRootIDs) {
+			return nil, fmt.Errorf("vacuum: descriptor %q has mismatched source/clone vectors", entry.key)
+		}
+		if equalRootIDVectors(entry.sourceRootIDs, entry.clonedRootIDs) {
+			continue
+		}
+		replacements = append(replacements, vacuumCollectionRootReplacement{
+			key:   append([]byte(nil), entry.key...),
+			value: encodeCollectionRootDescriptorRootIDs(entry.clonedRootIDs),
+		})
+	}
+	return replacements, nil
+}
+
+func vacuumBuildCollectionBasis(ctx context.Context, old *collectionBasis, snap *Snapshot, token collectionToken, alloc vacuumCollectionAllocator, newPager *pager.Pager, visitSourcePage func(uint64)) (*collectionBasis, int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if snap == nil || alloc == nil || newPager == nil {
+		return nil, 0, errors.New("vacuum: missing collection basis input")
+	}
+	entries, err := vacuumCollectCollectionEntries(ctx, snap)
+	if err != nil {
+		return nil, 0, err
+	}
+	reclaim := func(_ uint64, pages []uint64) error {
+		var errs []error
+		for _, pageID := range pages {
+			if pageID == 0 {
+				continue
+			}
+			if err := alloc.Free(pageID); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	clone := func(sourceRootID uint64) (uint64, []uint64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
+		}
+		recordingAlloc := newVacuumRecordingAllocator(alloc)
+		destRootID, err := vacuumCopyCollectionRootWithObserver(snap.idx.pager, sourceRootID, recordingAlloc, newPager, visitSourcePage)
+		if err != nil {
+			return 0, nil, errors.Join(err, reclaim(0, recordingAlloc.pages))
+		}
+		return destRootID, recordingAlloc.pages, nil
+	}
+	next, dirty, err := reconcileCollectionBasisEntries(old, entries, token, clone, reclaim)
+	if err != nil {
+		return nil, 0, err
+	}
+	next.snapshot = snap
+	return next, dirty, nil
 }
 
 func decodeCollectionRootDescriptorRootIDs(key, val []byte, allowList bool) ([]uint64, error) {
@@ -313,6 +647,10 @@ func encodeCollectionRootDescriptorRootIDs(rootIDs []uint64) []byte {
 }
 
 func vacuumCopyCollectionRoot(oldPager *pager.Pager, rootID uint64, alloc vacuumAllocator, newPager *pager.Pager) (uint64, error) {
+	return vacuumCopyCollectionRootWithObserver(oldPager, rootID, alloc, newPager, nil)
+}
+
+func vacuumCopyCollectionRootWithObserver(oldPager *pager.Pager, rootID uint64, alloc vacuumAllocator, newPager *pager.Pager, visitSourcePage func(uint64)) (uint64, error) {
 	if rootID == 0 {
 		return 0, nil
 	}
@@ -320,14 +658,14 @@ func vacuumCopyCollectionRoot(oldPager *pager.Pager, rootID uint64, alloc vacuum
 		return 0, errors.New("vacuum: missing pager/allocator")
 	}
 
-	allLeafRefs, err := vacuumTreeAllLeafRefsIfComplete(oldPager, rootID)
+	allLeafRefs, err := vacuumTreeAllLeafRefsIfCompleteWithObserver(oldPager, rootID, visitSourcePage)
 	if err != nil {
 		return 0, err
 	}
 	if allLeafRefs {
-		return vacuumBuildInternalTreeFromLeafRefs(oldPager, rootID, newPager, alloc, false)
+		return vacuumBuildInternalTreeFromLeafRefsWithObserver(oldPager, rootID, newPager, alloc, false, visitSourcePage)
 	}
-	return vacuumClonePagerTreeWithLeafRefs(oldPager, rootID, alloc, newPager, false)
+	return vacuumClonePagerTreeWithLeafRefsWithObserver(oldPager, rootID, alloc, newPager, false, visitSourcePage)
 }
 
 func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]vacuumLeafChild, bool, error) {

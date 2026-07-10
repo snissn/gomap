@@ -246,8 +246,8 @@ func (w *bgIndexVacuumWorker) runOnce(db *DB) {
 	defer w.runMu.Unlock()
 
 	now := time.Now()
-	state := db.backend.State()
-	if state == nil || db.backend.IsClosing() {
+	state, ok := db.backend.StateToken()
+	if !ok || db.backend.IsClosing() {
 		return
 	}
 

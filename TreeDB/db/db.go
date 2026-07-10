@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,13 +62,25 @@ type DBState struct {
 	LeafGenerationStateVersion uint64
 }
 
+// StateToken is an allocation-free, immutable scalar view of one coherently
+// published DB state. It intentionally excludes pointer-bearing state.
+type StateToken struct {
+	CommitSeq                  uint64
+	RootPageID                 uint64
+	SystemRootPageID           uint64
+	AppliedCommandLSN          uint64
+	MaxEntryRevision           page.EntryRevision
+	LeafGenerationStateVersion uint64
+}
+
 // snapshotView is the coherent publication unit for snapshot acquisition.
-// AcquireSnapshot reads this single pointer so idx/state/vlog manager always
-// come from the same publish event.
+// AcquireSnapshot reads this single pointer so index, state, value-log manager,
+// and publication epoch always come from the same publish event.
 type snapshotView struct {
-	idx         *indexGen
-	state       *DBState
-	vlogManager *valuelog.Manager
+	idx                    *indexGen
+	state                  *DBState
+	vlogManager            *valuelog.Manager
+	systemRootPublishEpoch uint64
 }
 
 type DB struct {
@@ -168,12 +182,19 @@ type DB struct {
 	combineDoneCh                   chan struct{}
 	vacuumInProgress                atomic.Bool
 	vacuum                          vacuumRecorder
-	meta                            page.MetaPageBody
-	metaPageID                      uint64
-	entryRevisionFloor              atomic.Uint64
-	commandJournal                  *commitlog.CommandJournal
-	conditionalActiveTxnCount       atomic.Int64
-	conditionalOracle               conditionalConflictOracle
+	systemRootPublishEpoch          atomic.Uint64
+	vacuumOnlineLast                atomic.Pointer[VacuumOnlineStats]
+	// Package-private deterministic hooks for online-vacuum concurrency tests.
+	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
+	vacuumBeforeCutoverHook       func(int)
+	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
+	vacuumPreflushHook            func() error
+	meta                          page.MetaPageBody
+	metaPageID                    uint64
+	entryRevisionFloor            atomic.Uint64
+	commandJournal                *commitlog.CommandJournal
+	conditionalActiveTxnCount     atomic.Int64
+	conditionalOracle             conditionalConflictOracle
 
 	state atomic.Pointer[DBState]
 
@@ -200,6 +221,22 @@ type DB struct {
 	// while writes are still available, so registrations after that point would
 	// otherwise be silently lost.
 	closeHooksClosed bool
+	// closeHooksRunning is protected by closeHooksMu. A reentrant Close from a
+	// user callback is folded into the active outer close operation.
+	closeHooksRunning bool
+	// closeHooksOwner identifies the goroutine executing user callbacks. It is
+	// non-zero only while closeHooksRunning is true.
+	closeHooksOwner          uint64
+	closeHooksCloseRequested bool
+	// closeHooksWaitHook is a deterministic test seam for the concurrent waiter.
+	closeHooksWaitHook func()
+	closeHooksWG       sync.WaitGroup
+	closeTeardownOnce  sync.Once
+	closeTeardownErr   error
+
+	internalTeardownHooksMu     sync.Mutex
+	internalTeardownHooks       []func() error
+	internalTeardownHooksClosed bool
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
@@ -1290,12 +1327,13 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db                *DB
-	idx               *indexGen
-	state             *DBState
-	vlogManager       *valuelog.Manager
-	vlogPinned        bool
-	leafGenerationIDs []uint64
+	db                     *DB
+	idx                    *indexGen
+	state                  *DBState
+	vlogManager            *valuelog.Manager
+	vlogPinned             bool
+	systemRootPublishEpoch uint64
+	leafGenerationIDs      []uint64
 	// leafGenerationPinnedIDs mirrors the generation IDs retained by this
 	// snapshot for stats/debugging. Release follows leafGenerationPinSet or
 	// leafGenerationRefs when those optimized paths are present.
@@ -1345,7 +1383,15 @@ func (s *Snapshot) State() *DBState {
 	if s == nil {
 		return nil
 	}
-	return s.state
+	return cloneDBState(s.state)
+}
+
+// StateToken returns the immutable scalar state pinned by the snapshot.
+func (s *Snapshot) StateToken() (StateToken, bool) {
+	if s == nil {
+		return StateToken{}, false
+	}
+	return stateTokenFromState(s.state)
 }
 
 // AcquireSnapshot returns a new snapshot.
@@ -1436,6 +1482,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
+	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
 	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
 	for i := range snap.rootTrees {
 		snap.rootTrees[i].root = 0
@@ -2164,13 +2211,40 @@ func (db *DB) RegisterCloseHookIfOpenAfter(setup func() bool, hook func() error)
 	}, true
 }
 
-// RunCloseHooks runs and clears registered close hooks. Wrappers that own a
-// backend DB should call this before they start closing resources required by
-// backend publish APIs.
+// RunCloseHooks runs and clears registered user close hooks. Callbacks run
+// outside DB maintenance and before Close marks the DB as closing, so they may
+// call normal DB APIs, including RunCloseHooks and maintenance operations.
 func (db *DB) RunCloseHooks() error {
 	if db == nil {
 		return nil
 	}
+	hookErr := db.runCloseHooks()
+	db.closeHooksMu.Lock()
+	closeHooksRunning := db.closeHooksRunning
+	closeHooksOwner := db.closeHooksOwner
+	closeHooksWaitHook := db.closeHooksWaitHook
+	db.closeHooksMu.Unlock()
+	if closeHooksRunning {
+		if caller := currentGoroutineID(); caller != 0 && caller == closeHooksOwner {
+			return hookErr
+		}
+		if closeHooksWaitHook != nil {
+			closeHooksWaitHook()
+		}
+		db.closeHooksWG.Wait()
+	}
+
+	db.closeHooksMu.Lock()
+	closeRequested := db.closeHooksCloseRequested
+	db.closeHooksCloseRequested = false
+	db.closeHooksMu.Unlock()
+	if closeRequested {
+		return errors.Join(hookErr, db.closeAfterHooksOnce())
+	}
+	return hookErr
+}
+
+func (db *DB) runCloseHooks() (retErr error) {
 	db.closeHooksMu.Lock()
 	if db.closeHooksClosed {
 		db.closeHooksMu.Unlock()
@@ -2183,7 +2257,17 @@ func (db *DB) RunCloseHooks() error {
 	hooks := append([]func() error(nil), db.closeHooks...)
 	clear(db.closeHooks)
 	db.closeHooks = nil
+	db.closeHooksRunning = true
+	db.closeHooksOwner = currentGoroutineID()
+	db.closeHooksWG.Add(1)
 	db.closeHooksMu.Unlock()
+	defer func() {
+		db.closeHooksMu.Lock()
+		db.closeHooksOwner = 0
+		db.closeHooksRunning = false
+		db.closeHooksMu.Unlock()
+		db.closeHooksWG.Done()
+	}()
 
 	var errs []error
 	for _, hook := range hooksBefore {
@@ -2205,12 +2289,113 @@ func (db *DB) RunCloseHooks() error {
 	return errors.Join(errs...)
 }
 
-func (db *DB) Close() error {
+func (db *DB) registerInternalTeardownHook(hook func() error) func() {
+	if db == nil || hook == nil {
+		return func() {}
+	}
+	db.internalTeardownHooksMu.Lock()
+	defer db.internalTeardownHooksMu.Unlock()
+	if db.internalTeardownHooksClosed || db.closing.Load() {
+		return func() {}
+	}
+	idx := len(db.internalTeardownHooks)
+	db.internalTeardownHooks = append(db.internalTeardownHooks, hook)
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.internalTeardownHooksMu.Lock()
+			if idx >= 0 && idx < len(db.internalTeardownHooks) && db.internalTeardownHooks[idx] != nil {
+				db.internalTeardownHooks[idx] = nil
+			}
+			db.internalTeardownHooksMu.Unlock()
+		})
+	}
+}
+
+// runInternalTeardownHooksMaintenanceLocked runs DB-owned resource teardown
+// only after active maintenance has drained and closing rejects new work.
+func (db *DB) runInternalTeardownHooksMaintenanceLocked() error {
+	db.internalTeardownHooksMu.Lock()
+	if db.internalTeardownHooksClosed {
+		db.internalTeardownHooksMu.Unlock()
+		return nil
+	}
+	db.internalTeardownHooksClosed = true
+	hooks := append([]func() error(nil), db.internalTeardownHooks...)
+	clear(db.internalTeardownHooks)
+	db.internalTeardownHooks = nil
+	db.internalTeardownHooksMu.Unlock()
+
 	var errs []error
-	if err := db.RunCloseHooks(); err != nil {
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (db *DB) Close() error {
+	if db == nil {
+		return nil
+	}
+	db.closeHooksMu.Lock()
+	closeHooksRunning := db.closeHooksRunning
+	closeHooksOwner := db.closeHooksOwner
+	closeHooksWaitHook := db.closeHooksWaitHook
+	db.closeHooksMu.Unlock()
+	if closeHooksRunning {
+		if caller := currentGoroutineID(); caller != 0 && caller == closeHooksOwner {
+			// A user hook cannot synchronously wait for the hook drain that is
+			// invoking it. Record teardown for the active outer Close or standalone
+			// RunCloseHooks owner to complete after callbacks return.
+			db.closeHooksMu.Lock()
+			db.closeHooksCloseRequested = true
+			db.closeHooksMu.Unlock()
+			return nil
+		}
+		if closeHooksWaitHook != nil {
+			closeHooksWaitHook()
+		}
+		db.closeHooksWG.Wait()
+	}
+
+	var errs []error
+	if err := db.runCloseHooks(); err != nil {
 		errs = append(errs, err)
 	}
+	// Another caller may have started the once-only hook drain. Do not begin
+	// production teardown until those callbacks have returned.
+	db.closeHooksWG.Wait()
+	if err := db.closeAfterHooksOnce(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (db *DB) closeAfterHooksOnce() error {
+	db.closeTeardownOnce.Do(func() {
+		db.closeTeardownErr = db.closeAfterHooks()
+	})
+	return db.closeTeardownErr
+}
+
+func (db *DB) closeAfterHooks() error {
+	var errs []error
+
+	// Lock order after user callbacks is maintenanceMu, internal teardown hooks,
+	// writeMu, teardownMu, then mu. Internal registration never waits on
+	// maintenanceMu, and callbacks run before this chain with no DB lock held.
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
 	db.closing.Store(true)
+	if err := db.runInternalTeardownHooksMaintenanceLocked(); err != nil {
+		errs = append(errs, err)
+	}
 	// Wait for active apply attempts before closing the reusable flush/apply
 	// worker pool and tearing down index resources.
 	db.writeMu.Lock()
@@ -2283,6 +2468,30 @@ func (db *DB) Close() error {
 		errs = append(errs, bgErr)
 	}
 	return errors.Join(errs...)
+}
+
+func currentGoroutineID() uint64 {
+	// The runtime stack header begins with "goroutine <id> ". Recording that ID
+	// once around callback execution gives Close an explicit, depth-independent
+	// reentrancy marker without treating unrelated concurrent callers as hooks.
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	const prefix = "goroutine "
+	if n <= len(prefix) || string(buf[:len(prefix)]) != prefix {
+		return 0
+	}
+	end := len(prefix)
+	for end < n && buf[end] >= '0' && buf[end] <= '9' {
+		end++
+	}
+	if end == len(prefix) {
+		return 0
+	}
+	id, err := strconv.ParseUint(string(buf[len(prefix):end]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return id
 }
 
 func (db *DB) reportError(err error) {
@@ -3186,7 +3395,44 @@ func (db *DB) InlineThresholdForKey(key []byte) int {
 }
 
 func (db *DB) State() *DBState {
-	return db.state.Load()
+	if db == nil {
+		return nil
+	}
+	return cloneDBState(db.state.Load())
+}
+
+// StateToken returns an immutable scalar state from one coherent publication.
+func (db *DB) StateToken() (StateToken, bool) {
+	if db == nil {
+		return StateToken{}, false
+	}
+	view := db.snapshotViewRO.Load()
+	if view == nil {
+		return StateToken{}, false
+	}
+	return stateTokenFromState(view.state)
+}
+
+func stateTokenFromState(state *DBState) (StateToken, bool) {
+	if state == nil {
+		return StateToken{}, false
+	}
+	return StateToken{
+		CommitSeq:                  state.CommitSeq,
+		RootPageID:                 state.RootPageID,
+		SystemRootPageID:           state.SystemRootPageID,
+		AppliedCommandLSN:          state.AppliedCommandLSN,
+		MaxEntryRevision:           state.MaxEntryRevision,
+		LeafGenerationStateVersion: state.LeafGenerationStateVersion,
+	}, true
+}
+
+func cloneDBState(state *DBState) *DBState {
+	if state == nil {
+		return nil
+	}
+	copyState := *state
+	return &copyState
 }
 
 // IsClosing reports whether the database is closing. It returns true if db is nil.
@@ -3203,13 +3449,19 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		return
 	}
 	old := db.snapshotViewRO.Load()
+	coherentRootChanged := old == nil || old.idx == nil || old.state == nil || old.idx.id != idx.id || old.state.SystemRootPageID != state.SystemRootPageID
+	publishEpoch := db.systemRootPublishEpoch.Load()
+	if coherentRootChanged {
+		publishEpoch = db.systemRootPublishEpoch.Add(1)
+	}
 	if old != nil && old.state != nil && old.state.LeafGenerations != nil && old.state.LeafGenerations != state.LeafGenerations {
 		db.markLeafGenerationPinSetStale(old.state.LeafGenerations.PinSet)
 	}
 	db.snapshotViewRO.Store(&snapshotView{
-		idx:         idx,
-		state:       state,
-		vlogManager: vm,
+		idx:                    idx,
+		state:                  state,
+		vlogManager:            vm,
+		systemRootPublishEpoch: publishEpoch,
 	})
 	if state.LeafGenerations != nil && db.snapshotAcquireInFlight() == 0 {
 		db.leafGenerationPins.pruneInactiveGenerationIDs(state.LeafGenerations.GenerationOrder)

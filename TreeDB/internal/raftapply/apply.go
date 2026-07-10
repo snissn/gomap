@@ -497,7 +497,11 @@ func (h *Harness) appliedCommandLSN() uint64 {
 	if h == nil || h.db == nil {
 		return 0
 	}
-	return h.db.State().AppliedCommandLSN
+	state, ok := h.db.StateToken()
+	if !ok {
+		return 0
+	}
+	return state.AppliedCommandLSN
 }
 
 func (h *Harness) logicalDigestForProgressV1(meta ApplyMetadataV1) (LogicalDigestV1, error) {
@@ -512,8 +516,11 @@ func (h *Harness) requireApplyRecordCoverage(appliedLSN uint64) error {
 	if appliedLSN == 0 {
 		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: apply metadata has no local AppliedCommandLSN coverage")
 	}
-	if h != nil && h.db != nil && h.db.State().AppliedCommandLSN < appliedLSN {
-		return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: apply metadata AppliedCommandLSN %d outruns local coverage %d", appliedLSN, h.db.State().AppliedCommandLSN)
+	if h != nil && h.db != nil {
+		state, ok := h.db.StateToken()
+		if !ok || state.AppliedCommandLSN < appliedLSN {
+			return codedError(raftentry.ErrorUnsafeDurabilityModeV1, "raftapply: apply metadata AppliedCommandLSN %d outruns local coverage %d", appliedLSN, state.AppliedCommandLSN)
+		}
 	}
 	return nil
 }

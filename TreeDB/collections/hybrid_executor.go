@@ -36,6 +36,27 @@ type hybridSearchExecutionPlan struct {
 	scalarLookupLimit             int
 }
 
+type hybridSearchStateToken struct {
+	state     backenddb.StateToken
+	available bool
+}
+
+func hybridSearchDBStateToken(db *backenddb.DB) hybridSearchStateToken {
+	if db == nil {
+		return hybridSearchStateToken{}
+	}
+	state, ok := db.StateToken()
+	return hybridSearchStateToken{state: state, available: ok}
+}
+
+func hybridSearchSnapshotStateToken(snapshot *backenddb.Snapshot) hybridSearchStateToken {
+	if snapshot == nil {
+		return hybridSearchStateToken{}
+	}
+	state, ok := snapshot.StateToken()
+	return hybridSearchStateToken{state: state, available: ok}
+}
+
 func (c *Collection) searchHybrid(opts HybridSearchOptions) (HybridSearchResponse, error) {
 	return c.searchHybridWithCandidateBudgetPolicy(opts, hybridCandidateBudgetPolicyDefault)
 }
@@ -50,9 +71,9 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	if err := c.flushBufferedWrites(); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search cannot flush current snapshot: %w", ErrHybridSearchIndexUnavailable, err))
 	}
-	baseState := c.db.State()
+	baseState := hybridSearchDBStateToken(c.db)
 	response.Snapshot = hybridSearchSnapshotFromState(baseState)
-	if baseState == nil {
+	if !baseState.available {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, fmt.Errorf("%w: hybrid search current snapshot unavailable", ErrHybridSearchIndexUnavailable))
 	}
 
@@ -61,7 +82,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	if err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonScalarFilterUnbounded, err)
 	}
-	if err := hybridSearchCheckCurrentSnapshot(c.db.State(), baseState); err != nil {
+	if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
@@ -74,7 +95,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	if err != nil {
 		return hybridSearchFailClosed(response, hybridStatsFailClosedReason(candidateStats, hybridCandidateErrorFailClosedReason(err)), err)
 	}
-	if err := hybridSearchCheckCurrentSnapshot(c.db.State(), baseState); err != nil {
+	if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 
@@ -102,7 +123,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	}
 	response.Results = results
 
-	if err := hybridSearchCheckCurrentSnapshot(c.db.State(), baseState); err != nil {
+	if err := hybridSearchCheckCurrentSnapshot(hybridSearchDBStateToken(c.db), baseState); err != nil {
 		return hybridSearchFailClosed(response, HybridFailClosedReasonSnapshotMismatch, err)
 	}
 	if plan.resultMode == HybridResultModeFull {
@@ -515,7 +536,7 @@ func hybridFilterResultsByScalarAllowSet(results []HybridSearchResult, allowSet 
 	return out
 }
 
-func (c *Collection) hybridFetchResultDocuments(response *HybridSearchResponse, opts DocumentFetchOptions, baseState *backenddb.DBState) error {
+func (c *Collection) hybridFetchResultDocuments(response *HybridSearchResponse, opts DocumentFetchOptions, baseState hybridSearchStateToken) error {
 	if response == nil || len(response.Results) == 0 {
 		return nil
 	}
@@ -528,7 +549,7 @@ func (c *Collection) hybridFetchResultDocuments(response *HybridSearchResponse, 
 		return fmt.Errorf("%w: hybrid final document read view unavailable: %w", ErrHybridSearchIndexUnavailable, err)
 	}
 	defer func() { _ = view.Close() }()
-	if err := hybridSearchCheckCurrentSnapshot(view.snapshot.State(), baseState); err != nil {
+	if err := hybridSearchCheckCurrentSnapshot(hybridSearchSnapshotStateToken(view.snapshot), baseState); err != nil {
 		return err
 	}
 	fetch, err := view.FetchDocumentsByID(ids, opts)
@@ -549,23 +570,26 @@ func (c *Collection) hybridFetchResultDocuments(response *HybridSearchResponse, 
 	return nil
 }
 
-func hybridSearchSnapshotFromState(state *backenddb.DBState) HybridSearchSnapshot {
+func hybridSearchSnapshotFromState(token hybridSearchStateToken) HybridSearchSnapshot {
 	snapshot := HybridSearchSnapshot{Consistency: HybridConsistencyCurrentSnapshot}
-	if state == nil {
+	if !token.available {
 		return snapshot
 	}
+	state := token.state
 	snapshot.CommitSeq = state.CommitSeq
 	snapshot.SystemRootPageID = state.SystemRootPageID
 	snapshot.CollectionGeneration = state.CommitSeq
 	return snapshot
 }
 
-func hybridSearchCheckCurrentSnapshot(current, base *backenddb.DBState) error {
-	if current == nil || base == nil {
+func hybridSearchCheckCurrentSnapshot(current, base hybridSearchStateToken) error {
+	if !current.available || !base.available {
 		return fmt.Errorf("%w: hybrid search current snapshot disappeared", ErrHybridSearchStaleIndex)
 	}
-	if current.CommitSeq != base.CommitSeq || current.SystemRootPageID != base.SystemRootPageID || current.RootPageID != base.RootPageID {
-		return fmt.Errorf("%w: hybrid search snapshot changed from commit=%d system_root=%d root=%d to commit=%d system_root=%d root=%d", ErrHybridSearchStaleIndex, base.CommitSeq, base.SystemRootPageID, base.RootPageID, current.CommitSeq, current.SystemRootPageID, current.RootPageID)
+	currentState := current.state
+	baseState := base.state
+	if currentState.CommitSeq != baseState.CommitSeq || currentState.SystemRootPageID != baseState.SystemRootPageID || currentState.RootPageID != baseState.RootPageID {
+		return fmt.Errorf("%w: hybrid search snapshot changed from commit=%d system_root=%d root=%d to commit=%d system_root=%d root=%d", ErrHybridSearchStaleIndex, baseState.CommitSeq, baseState.SystemRootPageID, baseState.RootPageID, currentState.CommitSeq, currentState.SystemRootPageID, currentState.RootPageID)
 	}
 	return nil
 }

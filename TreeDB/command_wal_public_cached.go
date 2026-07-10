@@ -181,8 +181,8 @@ func (tdb *DB) clearPublishedPublicCommandWALPending() {
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil {
 		return
 	}
-	state := tdb.backend.State()
-	if state == nil {
+	state, ok := tdb.backend.StateToken()
+	if !ok {
 		return
 	}
 	tdb.clearPublicCommandWALPendingThrough(state.AppliedCommandLSN)
@@ -233,8 +233,8 @@ func (tdb *DB) preparePublicCommandWALPendingPublish(sync bool) (uint64, []db.Co
 	if last > cutoverLast {
 		last = cutoverLast
 	}
-	state := tdb.backend.State()
-	if state == nil {
+	state, ok := tdb.backend.StateToken()
+	if !ok {
 		return 0, nil, ErrClosed
 	}
 	current := state.AppliedCommandLSN

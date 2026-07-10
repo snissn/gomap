@@ -339,7 +339,11 @@ func (db *DB) buildRootPublishGroupLocked(set *publishedRootSet) *rootPublishGro
 	if set != nil {
 		group.generation = set.generation
 	}
-	if stateDB, ok := db.backend.(backendStateProvider); ok && stateDB != nil {
+	if stateDB, ok := db.backend.(backendStateTokenReader); ok && stateDB != nil {
+		if state, available := stateDB.StateToken(); available {
+			group.systemRootPageID = state.SystemRootPageID
+		}
+	} else if stateDB, ok := db.backend.(backendStateProvider); ok && stateDB != nil {
 		if state := stateDB.State(); state != nil {
 			group.systemRootPageID = state.SystemRootPageID
 		}
@@ -941,7 +945,7 @@ func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot 
 	}
 	if s.backend != nil {
 		rootID := snap.publishedRootID
-		if state := s.backend.State(); state != nil && rootID == 0 {
+		if state, ok := s.backend.StateToken(); ok && rootID == 0 {
 			rootID = state.SystemRootPageID
 			snap.publishedRootID = rootID
 		}
@@ -959,7 +963,7 @@ func rootDomainSnapshotBackendRootID(s *Snapshot, fallback uint64) uint64 {
 	if s == nil || s.backend == nil {
 		return 0
 	}
-	if state := s.backend.State(); state != nil {
+	if state, ok := s.backend.StateToken(); ok {
 		return state.RootPageID
 	}
 	return 0

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
@@ -23,6 +24,7 @@ import (
 
 var ErrVacuumInProgress = errors.New("online vacuum already in progress")
 var ErrVacuumUnsupported = errors.New("online vacuum unsupported on this platform")
+var ErrVacuumConcurrentMutation = errors.New("online vacuum aborted after concurrent mutations")
 
 // testHookVacuumAfterBaseSnapshot coordinates writes that must be replayed by
 // online vacuum tests. It remains nil in production.
@@ -38,6 +40,97 @@ const (
 	vacuumMaxGrowthFactor    = 8
 )
 
+type vacuumCollectionClonePhase uint8
+
+const (
+	vacuumCollectionClonePreclone vacuumCollectionClonePhase = iota + 1
+	vacuumCollectionCloneReclone
+)
+
+type vacuumPagerSyncPhase uint8
+
+const (
+	vacuumPagerSyncPrecutover vacuumPagerSyncPhase = iota + 1
+	vacuumPagerSyncFinal
+)
+
+type VacuumOnlineStats struct {
+	TotalDuration              time.Duration
+	UserTreeDuration           time.Duration
+	SystemReserveDuration      time.Duration
+	CollectionBasisDuration    time.Duration
+	PreflushDuration           time.Duration
+	CutoverDuration            time.Duration
+	SystemTreeDuration         time.Duration
+	FinalPagerSyncDuration     time.Duration
+	SwapPublishDuration        time.Duration
+	MaxWriterPause             time.Duration
+	PrecloneTraversalPages     uint64
+	RecloneTraversalPages      uint64
+	CutoverCloneTraversalPages uint64
+	DirtyDescriptors           uint64
+	UserTailMutations          uint64
+	UserTailPointMutations     uint64
+	UserTailRangeMutations     uint64
+	DeferredCutovers           uint64
+	ConcurrentMutationAborts   uint64
+}
+
+// vacuumReservedAllocator keeps the final system-tree writes in pages reserved
+// before the larger user and collection trees are built. That lets the
+// pre-cutover sync flush those larger trees without the final system rebuild
+// dirtying their tail chunks again.
+type vacuumReservedAllocator struct {
+	base vacuumCollectionAllocator
+	next uint64
+	end  uint64
+}
+
+func newVacuumReservedAllocator(base vacuumCollectionAllocator, start, count uint64) *vacuumReservedAllocator {
+	return &vacuumReservedAllocator{
+		base: base,
+		next: start,
+		end:  start + count,
+	}
+}
+
+func (a *vacuumReservedAllocator) Alloc(hint uint64) (uint64, error) {
+	if a == nil || a.base == nil {
+		return 0, errors.New("vacuum: missing reserved allocator")
+	}
+	if a.next < a.end {
+		id := a.next
+		a.next++
+		return id, nil
+	}
+	return a.base.Alloc(hint)
+}
+
+func (a *vacuumReservedAllocator) ReleaseUnused() error {
+	if a == nil || a.base == nil {
+		return errors.New("vacuum: missing reserved allocator")
+	}
+	for a.next < a.end {
+		id := a.next
+		a.next++
+		if err := a.base.Free(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (db *DB) vacuumOnlineStatsSnapshot() VacuumOnlineStats {
+	if db == nil {
+		return VacuumOnlineStats{}
+	}
+	stats := db.vacuumOnlineLast.Load()
+	if stats == nil {
+		return VacuumOnlineStats{}
+	}
+	return *stats
+}
+
 type vacuumRecorder struct {
 	active atomic.Bool
 	mu     sync.Mutex
@@ -50,19 +143,26 @@ type vacuumRetiredPageFreer interface {
 	Free(uint64) error
 }
 
-func freeVacuumRetired(freer vacuumRetiredPageFreer, retired []uint64) {
+func freeVacuumRetired(freer vacuumRetiredPageFreer, retired []uint64) error {
 	err := freer.FreeMany(retired)
 	if err == nil {
-		return
+		return nil
 	}
 	processed := 0
 	var batchErr *freelist.FreeManyError
 	if errors.As(err, &batchErr) && batchErr.Processed >= 0 && batchErr.Processed <= len(retired) {
 		processed = batchErr.Processed
 	}
-	for _, id := range retired[processed:] {
-		_ = freer.Free(id)
+	if processed == len(retired) {
+		return fmt.Errorf("vacuum: free retired pages: %w", err)
 	}
+	var firstErr error
+	for _, id := range retired[processed:] {
+		if err := freer.Free(id); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("vacuum: free retired page %d: %w", id, err)
+		}
+	}
+	return firstErr
 }
 
 func (r *vacuumRecorder) Active() bool {
@@ -199,10 +299,20 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	return db.vacuumIndexOnline(ctx, true)
 }
 
-func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error {
+func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if db == nil {
+		return ErrClosed
+	}
+	runStarted := time.Now()
+	runStats := &VacuumOnlineStats{}
+	defer func() {
+		runStats.TotalDuration = time.Since(runStarted)
+		published := *runStats
+		db.vacuumOnlineLast.Store(&published)
+	}()
 	if db.readOnly {
 		return ErrReadOnly
 	}
@@ -212,6 +322,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 	if lockMaintenance {
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
+	}
+	if db.closing.Load() {
+		return ErrClosed
 	}
 
 	if !db.vacuumInProgress.CompareAndSwap(false, true) {
@@ -293,27 +406,60 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
+	if baseSnap == nil {
+		cleanupNewPager()
+		if db.closing.Load() {
+			return ErrClosed
+		}
+		return errors.New("vacuum: missing base snapshot")
+	}
 	if testHookVacuumAfterBaseSnapshot != nil {
 		testHookVacuumAfterBaseSnapshot()
 	}
+	basis := &collectionBasis{snapshot: baseSnap}
+	defer func() {
+		if basis != nil && basis.snapshot != nil {
+			_ = basis.snapshot.Close()
+			basis.snapshot = nil
+		}
+	}()
+	baseState := baseSnap.state
+	basePager := baseSnap.Pager()
+	if baseState == nil || basePager == nil {
+		cleanupNewPager()
+		return errors.New("vacuum: missing base snapshot state")
+	}
+	reserveStarted := time.Now()
+	systemTreePages, err := vacuumCountPagerTreePages(basePager, baseState.SystemRootPageID)
+	if err != nil {
+		cleanupNewPager()
+		return err
+	}
+	maxInt := int(^uint(0) >> 1)
+	if systemTreePages > uint64(maxInt) {
+		cleanupNewPager()
+		return fmt.Errorf("vacuum: system tree page count %d exceeds allocation limit", systemTreePages)
+	}
+	systemReserveStart, err := newPager.Alloc(int(systemTreePages))
+	if err != nil {
+		cleanupNewPager()
+		return err
+	}
+	systemAlloc := newVacuumReservedAllocator(newAlloc, systemReserveStart, systemTreePages)
+	reservedBytes := systemAlloc.end * uint64(page.PageSize)
+	firstPreflushChunk := int((reservedBytes + uint64(db.chunkSize) - 1) / uint64(db.chunkSize))
+	runStats.SystemReserveDuration += time.Since(reserveStarted)
+
+	userTreeStarted := time.Now()
 	var newRoot uint64
 	if db.indexOuterLeavesInValueLog {
 		if db.leafPageLog == nil {
-			_ = baseSnap.Close()
 			cleanupNewPager()
 			return fmt.Errorf("vacuum: leaf page log not configured")
 		}
 
-		baseState := baseSnap.State()
-		basePager := baseSnap.Pager()
-		if baseState == nil || basePager == nil {
-			_ = baseSnap.Close()
-			cleanupNewPager()
-			return errors.New("vacuum: missing base snapshot state")
-		}
 		rootData, err := basePager.Get(baseState.RootPageID)
 		if err != nil {
-			_ = baseSnap.Close()
 			cleanupNewPager()
 			return err
 		}
@@ -322,14 +468,12 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		if rootNode.Type() == page.PageTypeLeaf {
 			newRoot, err = vacuumClonePagerTreeWithLeafRefs(basePager, baseState.RootPageID, newAlloc, newPager, effectiveInternalBaseDelta)
 			if err != nil {
-				_ = baseSnap.Close()
 				cleanupNewPager()
 				return err
 			}
 		} else {
 			newRoot, err = vacuumBuildInternalTreeFromLeafRefs(basePager, baseState.RootPageID, newPager, newAlloc, effectiveInternalBaseDelta)
 			if err != nil {
-				_ = baseSnap.Close()
 				cleanupNewPager()
 				return err
 			}
@@ -345,18 +489,45 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
 		_ = baseIter.Close()
 	}
-	_ = baseSnap.Close()
 	if err != nil {
 		cleanupNewPager()
 		return err
 	}
-	if err := checkGrowth(); err != nil {
+	runStats.UserTreeDuration += time.Since(userTreeStarted)
+
+	cutoverLocked := false
+	collectionVisit := func(phase vacuumCollectionClonePhase) func(uint64) {
+		return func(sourcePageID uint64) {
+			switch phase {
+			case vacuumCollectionClonePreclone:
+				runStats.PrecloneTraversalPages++
+			case vacuumCollectionCloneReclone:
+				runStats.RecloneTraversalPages++
+			}
+			if cutoverLocked {
+				runStats.CutoverCloneTraversalPages++
+			}
+			if hook := db.vacuumCollectionClonePageHook; hook != nil {
+				hook(phase, sourcePageID)
+			}
+		}
+	}
+	basisStarted := time.Now()
+	baseToken, err := db.collectionTokenForSnapshot(baseSnap)
+	if err != nil {
 		cleanupNewPager()
 		return err
 	}
-
-	freeRetired := func(retired []uint64) {
-		freeVacuumRetired(newAlloc, retired)
+	builtBasis, _, err := vacuumBuildCollectionBasis(ctx, nil, baseSnap, baseToken, newAlloc, newPager, collectionVisit(vacuumCollectionClonePreclone))
+	if err != nil {
+		cleanupNewPager()
+		return err
+	}
+	basis = builtBasis
+	runStats.CollectionBasisDuration += time.Since(basisStarted)
+	if err := checkGrowth(); err != nil {
+		cleanupNewPager()
+		return err
 	}
 
 	// Online catch-up: replay recorded keys in bounded passes.
@@ -375,7 +546,10 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			cleanupNewPager()
 			return err
 		}
-		freeRetired(retired)
+		if err := freeVacuumRetired(newAlloc, retired); err != nil {
+			cleanupNewPager()
+			return err
+		}
 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 			if err := db.leafPageLog.Flush(); err != nil {
 				cleanupNewPager()
@@ -386,40 +560,147 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			cleanupNewPager()
 			return err
 		}
-		if len(opsMap) <= vacuumCatchupKeyTarget {
+		if len(opsMap)+len(ranges) <= vacuumCatchupKeyTarget {
 			break
 		}
 	}
 
-	// Final cutover: stop recording, apply the tail, rebuild the System tree in
-	// the new file, then swap index.db on disk and publish a new index generation.
+	applyTail := func(ops map[string]batch.Entry, ranges []batch.DeleteRange) error {
+		if len(ops) == 0 && len(ranges) == 0 {
+			return nil
+		}
+		var retired []uint64
+		var err error
+		newRoot, retired, err = db.applyVacuumDelta(newRoot, ops, ranges, newZ, nil)
+		if err != nil {
+			return err
+		}
+		if err := freeVacuumRetired(newAlloc, retired); err != nil {
+			return err
+		}
+		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+			if err := db.leafPageLog.Flush(); err != nil {
+				return err
+			}
+		}
+		return checkGrowth()
+	}
+
+	// Final cutover: stop recording, validate the pinned collection basis, apply
+	// only a bounded user tail, rebuild the system tree, then perform the existing
+	// durability/swap/publication sequence.
 	defers := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			cleanupNewPager()
 			return err
 		}
-
-		db.writeMu.Lock()
-		db.vacuum.Stop()
-		finalOps, finalRanges := db.vacuum.DrainApplyPlan()
-		if len(finalOps) > vacuumCutoverMaxKeys && len(finalRanges) == 0 && defers < vacuumCutoverMaxDefers {
-			db.vacuum.Start()
-			db.writeMu.Unlock()
-			defers++
-
-			var retired []uint64
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, finalRanges, newZ, nil)
-			if err != nil {
+		// Flush preclone, catch-up, and reclone overflow chunks while writers can
+		// continue. Reserved low chunks stay dirty for the final durability sync,
+		// which remains in the established crash sequence.
+		if hook := db.vacuumPagerSyncHook; hook != nil {
+			hook(vacuumPagerSyncPrecutover)
+		}
+		preflushStarted := time.Now()
+		preflushErr := newPager.FlushDirtyChunksFrom(firstPreflushChunk)
+		runStats.PreflushDuration += time.Since(preflushStarted)
+		if preflushErr != nil {
+			cleanupNewPager()
+			return preflushErr
+		}
+		if hook := db.vacuumPreflushHook; hook != nil {
+			if err := hook(); err != nil {
 				cleanupNewPager()
 				return err
 			}
-			freeRetired(retired)
-			if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
-				if err := db.leafPageLog.Flush(); err != nil {
-					cleanupNewPager()
-					return err
+		}
+		if hook := db.vacuumBeforeCutoverHook; hook != nil {
+			hook(defers)
+		}
+
+		db.writeMu.Lock()
+		cutoverLocked = true
+		holdStarted := time.Now()
+		unlockCutover := func(completed bool) {
+			hold := time.Since(holdStarted)
+			if hold > runStats.MaxWriterPause {
+				runStats.MaxWriterPause = hold
+			}
+			if completed {
+				runStats.CutoverDuration = hold
+			}
+			cutoverLocked = false
+			db.writeMu.Unlock()
+		}
+
+		db.vacuum.Stop()
+		finalOps, finalRanges := db.vacuum.DrainApplyPlan()
+		tailMutations := len(finalOps) + len(finalRanges)
+		runStats.UserTailMutations += uint64(tailMutations)
+		runStats.UserTailPointMutations += uint64(len(finalOps))
+		runStats.UserTailRangeMutations += uint64(len(finalRanges))
+		if db.closing.Load() {
+			unlockCutover(false)
+			cleanupNewPager()
+			return ErrClosed
+		}
+		currentToken, err := db.currentCollectionTokenLocked()
+		if err != nil {
+			unlockCutover(false)
+			cleanupNewPager()
+			return err
+		}
+		coherentDirty := currentToken.indexGenerationID != basis.token.indexGenerationID || currentToken.systemRootPageID != basis.token.systemRootPageID
+		epochDirty := currentToken.publishEpoch != basis.token.publishEpoch
+		needsDeferredCutover := coherentDirty || epochDirty || tailMutations > vacuumCutoverMaxKeys
+		if needsDeferredCutover {
+			if defers >= vacuumCutoverMaxDefers {
+				runStats.ConcurrentMutationAborts++
+				unlockCutover(false)
+				cleanupNewPager()
+				return ErrVacuumConcurrentMutation
+			}
+			successor := db.AcquireSnapshot()
+			if successor == nil {
+				unlockCutover(false)
+				cleanupNewPager()
+				if db.closing.Load() {
+					return ErrClosed
 				}
+				return errors.New("vacuum: missing successor snapshot")
+			}
+			successorToken, tokenErr := db.collectionTokenForSnapshot(successor)
+			if tokenErr != nil {
+				_ = successor.Close()
+				unlockCutover(false)
+				cleanupNewPager()
+				return tokenErr
+			}
+			db.vacuum.Start()
+			unlockCutover(false)
+			defers++
+			runStats.DeferredCutovers++
+
+			if err := applyTail(finalOps, finalRanges); err != nil {
+				_ = successor.Close()
+				cleanupNewPager()
+				return err
+			}
+			recloneStarted := time.Now()
+			nextBasis, dirtyDescriptors, err := vacuumBuildCollectionBasis(ctx, basis, successor, successorToken, newAlloc, newPager, collectionVisit(vacuumCollectionCloneReclone))
+			if err != nil {
+				_ = successor.Close()
+				cleanupNewPager()
+				return err
+			}
+			runStats.CollectionBasisDuration += time.Since(recloneStarted)
+			runStats.DirtyDescriptors += uint64(dirtyDescriptors)
+			oldSnapshot := basis.snapshot
+			basis.snapshot = nil
+			basis = nextBasis
+			if err := oldSnapshot.Close(); err != nil {
+				cleanupNewPager()
+				return err
 			}
 			if err := checkGrowth(); err != nil {
 				cleanupNewPager()
@@ -428,60 +709,38 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			continue
 		}
 
-		if len(finalOps) > 0 || len(finalRanges) > 0 {
-			var retired []uint64
-			newRoot, retired, err = db.applyVacuumDelta(newRoot, finalOps, finalRanges, newZ, nil)
-			if err != nil {
-				db.writeMu.Unlock()
-				cleanupNewPager()
-				return err
-			}
-			freeRetired(retired)
-			if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
-				if err := db.leafPageLog.Flush(); err != nil {
-					db.writeMu.Unlock()
-					cleanupNewPager()
-					return err
-				}
-			}
-			if err := checkGrowth(); err != nil {
-				db.writeMu.Unlock()
-				cleanupNewPager()
-				return err
-			}
-		}
-
-		// Snapshot current roots/meta while writers are paused.
-		db.mu.RLock()
-		oldGen := db.idx.Load()
-		state := db.state.Load()
-		baseMeta := db.meta
-		db.mu.RUnlock()
-		if oldGen == nil || state == nil {
-			db.writeMu.Unlock()
-			cleanupNewPager()
-			return errors.New("vacuum: missing db state")
-		}
-
-		reader := newValueReader(state.ValueLogSet)
-		collectionRootReplacements, err := vacuumRewriteCollectionRoots(oldGen.pager, reader, state.SystemRootPageID, newAlloc, newPager)
-		if err != nil {
-			db.writeMu.Unlock()
+		if err := applyTail(finalOps, finalRanges); err != nil {
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
-		if err := checkGrowth(); err != nil {
-			db.writeMu.Unlock()
+
+		// The coherent token is clean, so the pinned basis is the exact system
+		// catalog accepted for cutover. No collection-root clone occurs below.
+		oldGen := db.idx.Load()
+		state := db.state.Load()
+		if oldGen == nil || state == nil || oldGen != basis.snapshot.idx {
+			unlockCutover(false)
+			cleanupNewPager()
+			return errors.New("vacuum: collection basis generation changed")
+		}
+		db.mu.RLock()
+		baseMeta := db.meta
+		db.mu.RUnlock()
+		collectionRootReplacements, err := basis.replacements()
+		if err != nil {
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
 
 		var newSysRoot uint64
 		effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
+		systemTreeStarted := time.Now()
 		if db.indexOuterLeavesInValueLog && len(collectionRootReplacements) == 0 {
-			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(oldGen.pager, state.SystemRootPageID, newAlloc, newPager, effectiveInternalBaseDelta)
+			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(basis.snapshot.idx.pager, basis.token.systemRootPageID, systemAlloc, newPager, effectiveInternalBaseDelta)
 		} else {
-			newSysRoot, err = vacuumBuildSystemRoot(oldGen.pager, reader, state.SystemRootPageID, newAlloc, newPager, bulk.BuildOptions{
+			newSysRoot, err = vacuumBuildSystemRoot(basis.snapshot.idx.pager, &basis.snapshot.reader, basis.token.systemRootPageID, systemAlloc, newPager, bulk.BuildOptions{
 				LeafPrefixCompression: db.leafPrefixCompression,
 				LeafColumnar:          db.indexColumnarLeaves,
 				PackedValuePtr:        db.indexPackedValuePtr,
@@ -489,12 +748,18 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			}, collectionRootReplacements)
 		}
 		if err != nil {
-			db.writeMu.Unlock()
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
+		if err := systemAlloc.ReleaseUnused(); err != nil {
+			unlockCutover(false)
+			cleanupNewPager()
+			return err
+		}
+		runStats.SystemTreeDuration += time.Since(systemTreeStarted)
 		if err := checkGrowth(); err != nil {
-			db.writeMu.Unlock()
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
@@ -509,7 +774,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 
 		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
 			if err := db.leafPageLog.Sync(); err != nil {
-				db.writeMu.Unlock()
+				unlockCutover(false)
 				cleanupNewPager()
 				return err
 			}
@@ -519,7 +784,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			var err error
 			leafPageLogSegmentsRegistered, err = db.registerLeafPageLogSegmentsForPublish()
 			if err != nil {
-				db.writeMu.Unlock()
+				unlockCutover(false)
 				cleanupNewPager()
 				return err
 			}
@@ -531,7 +796,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			stagedLeafManifest, changed, err := db.stagedLeafGenerationManifestWithPending(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 			db.mu.RUnlock()
 			if err != nil {
-				db.writeMu.Unlock()
+				unlockCutover(false)
 				cleanupNewPager()
 				return err
 			}
@@ -543,23 +808,39 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 
 		// Write redundant Meta pages (0/1) to the new file and sync it.
 		if err := writeMetaToPager(newPager, MetaPage0ID, nextMeta); err != nil {
-			db.writeMu.Unlock()
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
 		if err := writeMetaToPager(newPager, MetaPage1ID, nextMeta); err != nil {
-			db.writeMu.Unlock()
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
-		if err := newPager.Sync(); err != nil {
-			db.writeMu.Unlock()
+		if hook := db.vacuumPagerSyncHook; hook != nil {
+			hook(vacuumPagerSyncFinal)
+		}
+		finalSyncStarted := time.Now()
+		finalSyncErr := newPager.Sync()
+		runStats.FinalPagerSyncDuration += time.Since(finalSyncStarted)
+		if finalSyncErr != nil {
+			unlockCutover(false)
 			cleanupNewPager()
-			return err
+			return finalSyncErr
+		}
+		// A fallback directory scan can fail. Complete it before renaming index.db
+		// so an error cannot leave the live generation backed by an unlinked file.
+		if !leafPageLogSegmentsRegistered {
+			if err := db.valueLogManager.Refresh(); err != nil {
+				unlockCutover(false)
+				cleanupNewPager()
+				return err
+			}
 		}
 
+		swapPublishStarted := time.Now()
 		if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
-			db.writeMu.Unlock()
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
@@ -573,13 +854,13 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		// Swap index.db -> index.db.bak, index.db.new -> index.db.
 		_ = os.Remove(bakPath)
 		if err := os.Rename(indexPath, bakPath); err != nil {
-			db.writeMu.Unlock()
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
 		if err := os.Rename(newPath, indexPath); err != nil {
 			_ = os.Rename(bakPath, indexPath)
-			db.writeMu.Unlock()
+			unlockCutover(false)
 			cleanupNewPager()
 			return err
 		}
@@ -610,19 +891,6 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		db.meta = nextMeta
 		db.metaPageID = MetaPage0ID
 		valueLogSet := db.valueLogManager.CurrentSetNoRefresh()
-		if !leafPageLogSegmentsRegistered {
-			if valueLogSet != nil {
-				_ = db.valueLogManager.Release(valueLogSet)
-				valueLogSet = nil
-			}
-			if err := db.valueLogManager.Refresh(); err != nil {
-				db.mu.Unlock()
-				db.writeMu.Unlock()
-				cleanupNewPager()
-				return err
-			}
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
-		}
 		leafGenerationView := oldState.LeafGenerations
 		if leafGenerationChanged {
 			leafGenerationView = stagedLeafGenerationView
@@ -646,7 +914,8 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 		db.mu.Unlock()
 		db.clearLeafGenerationReachabilityCaches()
 
-		db.writeMu.Unlock()
+		unlockCutover(true)
+		runStats.SwapPublishDuration += time.Since(swapPublishStarted)
 
 		if oldState != nil {
 			_ = db.valueLogManager.Release(oldState.ValueLogSet)
@@ -661,12 +930,48 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 			}
 		}
 
-		// Drop the DB-held reference to the previous generation outside the
-		// writer pause; closing the old mmap can be expensive.
+		// Drop the basis pin and DB-held reference to the previous generation
+		// outside the writer pause; closing the old mmap can be expensive.
+		if basis.snapshot != nil {
+			if err := basis.snapshot.Close(); err != nil {
+				db.reportError(err)
+			}
+			basis.snapshot = nil
+		}
 		db.releaseIndex(oldGen)
 
 		return nil
 	}
+}
+
+func (db *DB) collectionTokenForSnapshot(snap *Snapshot) (collectionToken, error) {
+	if db == nil || snap == nil || snap.idx == nil || snap.state == nil {
+		return collectionToken{}, errors.New("vacuum: missing coherent collection snapshot")
+	}
+	return collectionToken{
+		indexGenerationID: snap.idx.id,
+		systemRootPageID:  snap.state.SystemRootPageID,
+		commitSeq:         snap.state.CommitSeq,
+		publishEpoch:      snap.systemRootPublishEpoch,
+	}, nil
+}
+
+// currentCollectionTokenLocked must be called while writeMu is held. All root
+// publication paths take writeMu, so idx/state form one coherent token here.
+func (db *DB) currentCollectionTokenLocked() (collectionToken, error) {
+	if db == nil {
+		return collectionToken{}, ErrClosed
+	}
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.idx == nil || view.state == nil {
+		return collectionToken{}, errors.New("vacuum: missing current coherent collection state")
+	}
+	return collectionToken{
+		indexGenerationID: view.idx.id,
+		systemRootPageID:  view.state.SystemRootPageID,
+		commitSeq:         view.state.CommitSeq,
+		publishEpoch:      view.systemRootPublishEpoch,
+	}, nil
 }
 
 type vacuumRangeDeltaApplier func(root uint64, b *batch.Batch) (newRoot uint64, retired []uint64, err error)
@@ -774,10 +1079,61 @@ type vacuumCloneCtx struct {
 	oldPager          *pager.Pager
 	newPager          *pager.Pager
 	internalBaseDelta bool
+	visitSourcePage   func(uint64)
 	alloc             interface {
 		Alloc(hint uint64) (uint64, error)
 	}
 	remap map[uint64]uint64
+}
+
+func vacuumCountPagerTreePages(p *pager.Pager, rootID uint64) (uint64, error) {
+	if p == nil {
+		return 0, errors.New("vacuum: missing pager")
+	}
+	if rootID == 0 {
+		return 0, errors.New("vacuum: missing root id")
+	}
+	seen := make(map[uint64]struct{})
+	var walk func(uint64) error
+	walk = func(id uint64) error {
+		if _, ok := seen[id]; ok {
+			return nil
+		}
+		seen[id] = struct{}{}
+		data, err := p.Get(id)
+		if err != nil {
+			return err
+		}
+		n := node.NewNode(data)
+		switch n.Type() {
+		case page.PageTypeLeaf:
+			return nil
+		case page.PageTypeInternal:
+			for i := uint16(0); i < n.Count(); i++ {
+				_, childRef, err := n.GetInternalEntryRefView(i)
+				if err != nil {
+					return err
+				}
+				switch childRef.Kind {
+				case page.ChildRefPage:
+					if err := walk(childRef.Page); err != nil {
+						return err
+					}
+				case page.ChildRefLeafLog:
+					// The leaf page is persistent value-log data, not a pager page.
+				default:
+					return fmt.Errorf("vacuum: unexpected child ref kind %d at page %d", childRef.Kind, id)
+				}
+			}
+			return nil
+		default:
+			return fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), id)
+		}
+	}
+	if err := walk(rootID); err != nil {
+		return 0, err
+	}
+	return uint64(len(seen)), nil
 }
 
 type vacuumLeafChild struct {
@@ -964,6 +1320,12 @@ func (b *vacuumInternalTreeBuilder) finish() (uint64, error) {
 func vacuumBuildInternalTreeFromLeafRefs(src *pager.Pager, rootID uint64, dst *pager.Pager, alloc interface {
 	Alloc(hint uint64) (uint64, error)
 }, internalBaseDelta bool) (uint64, error) {
+	return vacuumBuildInternalTreeFromLeafRefsWithObserver(src, rootID, dst, alloc, internalBaseDelta, nil)
+}
+
+func vacuumBuildInternalTreeFromLeafRefsWithObserver(src *pager.Pager, rootID uint64, dst *pager.Pager, alloc interface {
+	Alloc(hint uint64) (uint64, error)
+}, internalBaseDelta bool, visitSourcePage func(uint64)) (uint64, error) {
 	if src == nil {
 		return 0, errors.New("vacuum: missing pager")
 	}
@@ -976,6 +1338,9 @@ func vacuumBuildInternalTreeFromLeafRefs(src *pager.Pager, rootID uint64, dst *p
 	}
 	var walk func(uint64) error
 	walk = func(id uint64) error {
+		if visitSourcePage != nil {
+			visitSourcePage(id)
+		}
 		data, err := src.Get(id)
 		if err != nil {
 			return err
@@ -1016,6 +1381,10 @@ func vacuumBuildInternalTreeFromLeafRefs(src *pager.Pager, rootID uint64, dst *p
 }
 
 func vacuumTreeAllLeafRefsIfComplete(p *pager.Pager, rootID uint64) (bool, error) {
+	return vacuumTreeAllLeafRefsIfCompleteWithObserver(p, rootID, nil)
+}
+
+func vacuumTreeAllLeafRefsIfCompleteWithObserver(p *pager.Pager, rootID uint64, visitSourcePage func(uint64)) (bool, error) {
 	if p == nil {
 		return false, errors.New("vacuum: missing pager")
 	}
@@ -1026,6 +1395,9 @@ func vacuumTreeAllLeafRefsIfComplete(p *pager.Pager, rootID uint64) (bool, error
 	leafRefs := 0
 	var walk func(uint64) (bool, error)
 	walk = func(id uint64) (bool, error) {
+		if visitSourcePage != nil {
+			visitSourcePage(id)
+		}
 		data, err := p.Get(id)
 		if err != nil {
 			return false, err
@@ -1068,6 +1440,12 @@ func vacuumTreeAllLeafRefsIfComplete(p *pager.Pager, rootID uint64) (bool, error
 func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, alloc interface {
 	Alloc(hint uint64) (uint64, error)
 }, newPager *pager.Pager, internalBaseDelta bool) (uint64, error) {
+	return vacuumClonePagerTreeWithLeafRefsWithObserver(oldPager, rootID, alloc, newPager, internalBaseDelta, nil)
+}
+
+func vacuumClonePagerTreeWithLeafRefsWithObserver(oldPager *pager.Pager, rootID uint64, alloc interface {
+	Alloc(hint uint64) (uint64, error)
+}, newPager *pager.Pager, internalBaseDelta bool, visitSourcePage func(uint64)) (uint64, error) {
 	if oldPager == nil {
 		return 0, errors.New("vacuum: missing source pager")
 	}
@@ -1078,6 +1456,7 @@ func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, allo
 		oldPager:          oldPager,
 		newPager:          newPager,
 		internalBaseDelta: internalBaseDelta,
+		visitSourcePage:   visitSourcePage,
 		alloc:             alloc,
 		remap:             make(map[uint64]uint64, 1024),
 	}
@@ -1092,6 +1471,9 @@ func (c *vacuumCloneCtx) cloneNode(oldID uint64) (uint64, error) {
 		return 0, errors.New("vacuum: clone missing pager/allocator")
 	}
 
+	if c.visitSourcePage != nil {
+		c.visitSourcePage(oldID)
+	}
 	data, err := c.oldPager.Get(oldID)
 	if err != nil {
 		return 0, err

@@ -943,8 +943,8 @@ func initialCatalogVersion(db *backenddb.DB) uint64 {
 	if db == nil {
 		return 0
 	}
-	state := db.State()
-	if state == nil {
+	state, ok := db.StateToken()
+	if !ok {
 		return 0
 	}
 	return state.CommitSeq

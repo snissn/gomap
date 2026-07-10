@@ -3,12 +3,14 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -18,6 +20,117 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
+
+func TestVacuumIndexOnlineRefreshFailureLeavesOldIndexAuthoritative(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                        dir,
+		KeepRecent:                 1,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+	}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := &unregisteredLeafPageLog{dir: dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		_ = d.Close()
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	d.SetLeafPageLog(leafLog)
+
+	b := d.NewBatch()
+	for i := 0; i < 256; i++ {
+		if err := b.Set([]byte(fmt.Sprintf("refresh-failure/%06d", i)), bytes.Repeat([]byte{byte(i)}, 64)); err != nil {
+			_ = b.Close()
+			_ = d.Close()
+			t.Fatalf("batch set %d: %v", i, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		_ = d.Close()
+		t.Fatalf("seed WriteSync: %v", err)
+	}
+	_ = b.Close()
+
+	indexPath := filepath.Join(dir, indexFileName)
+	beforeInfo, err := os.Stat(indexPath)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("stat index before vacuum: %v", err)
+	}
+	vlogDir := ValueLogDirPath(dir)
+	parkedVlogDir := vlogDir + ".parked"
+	if err := os.Rename(vlogDir, parkedVlogDir); err != nil {
+		_ = d.Close()
+		t.Fatalf("park value-log directory: %v", err)
+	}
+	if err := os.WriteFile(vlogDir, []byte("force refresh scan failure\n"), 0o644); err != nil {
+		_ = os.Rename(parkedVlogDir, vlogDir)
+		_ = d.Close()
+		t.Fatalf("install refresh failure fixture: %v", err)
+	}
+
+	vacuumErr := d.VacuumIndexOnline(context.Background())
+	removeErr := os.Remove(vlogDir)
+	restoreErr := os.Rename(parkedVlogDir, vlogDir)
+	if removeErr != nil || restoreErr != nil {
+		_ = d.Close()
+		t.Fatalf("restore value-log directory: remove=%v rename=%v", removeErr, restoreErr)
+	}
+	if vacuumErr == nil {
+		_ = d.Close()
+		t.Fatal("vacuum succeeded despite forced value-log refresh failure")
+	}
+	if !errors.Is(vacuumErr, syscall.ENOTDIR) {
+		t.Logf("vacuum returned platform refresh error: %v", vacuumErr)
+	}
+	afterInfo, err := os.Stat(indexPath)
+	if err != nil {
+		_ = d.Close()
+		t.Fatalf("stat index after vacuum: %v", err)
+	}
+	if !os.SameFile(beforeInfo, afterInfo) {
+		_ = d.Close()
+		t.Fatal("value-log refresh failure replaced the authoritative index")
+	}
+	for _, name := range []string{indexNewFileName, indexReadyFileName, indexBakFileName} {
+		if _, statErr := os.Stat(filepath.Join(dir, name)); !errors.Is(statErr, os.ErrNotExist) {
+			_ = d.Close()
+			t.Fatalf("artifact %s remains after refresh failure: %v", name, statErr)
+		}
+	}
+	if err := d.Set([]byte("after-refresh-failure"), []byte("still-open")); err != nil {
+		_ = d.Close()
+		t.Fatalf("write after failed vacuum: %v", err)
+	}
+	if got, err := d.Get([]byte("refresh-failure/000042")); err != nil || len(got) != 64 || got[0] != 42 {
+		_ = d.Close()
+		t.Fatalf("read after failed vacuum len=%d err=%v", len(got), err)
+	}
+
+	d.SetLeafPageLog(nil)
+	if err := leafLog.Close(); err != nil {
+		_ = d.Close()
+		t.Fatalf("close leaf log: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if got, err := reopened.Get([]byte("after-refresh-failure")); err != nil || string(got) != "still-open" {
+		t.Fatalf("reopen Get=%q err=%v", got, err)
+	}
+}
 
 func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[page.LeafLogPtr]struct{} {
 	t.Helper()

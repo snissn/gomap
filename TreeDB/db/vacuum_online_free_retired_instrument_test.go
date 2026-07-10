@@ -32,7 +32,9 @@ func TestVacuumFreeRetired_GetForWriteFailurePreservesSuffix(t *testing.T) {
 	injectedErr := errors.New("injected second get-for-write failure")
 	a.TestInjectGetForWriteFailureAfter(1, injectedErr)
 
-	freeVacuumRetired(a, retired)
+	if err := freeVacuumRetired(a, retired); err != nil {
+		t.Fatalf("freeVacuumRetired: %v", err)
+	}
 
 	if got := a.TestInjectedGetForWriteFailures(); got != 1 {
 		t.Fatalf("injected GetForWrite failures = %d, want 1", got)

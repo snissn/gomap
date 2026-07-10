@@ -1,6 +1,262 @@
 package db
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"runtime"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestRunCloseHooksAllowsNestedRunCloseHooks(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	var calls atomic.Int32
+	d.RegisterCloseHook(func() error {
+		calls.Add(1)
+		return d.RunCloseHooks()
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.RunCloseHooks() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunCloseHooks: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("nested RunCloseHooks deadlocked")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("close hook calls=%d, want 1", got)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestCloseHookMayCallClose(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	var calls atomic.Int32
+	d.RegisterCloseHook(func() error {
+		calls.Add(1)
+		return d.Close()
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close hook calling Close deadlocked")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("close hook calls=%d, want 1", got)
+	}
+}
+
+func TestCloseHookMayCallCloseThroughDeepHelpers(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	d.RegisterCloseHook(func() error {
+		return closeThroughHelpers(d, 64)
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("close hook calling Close through deep helpers deadlocked")
+	}
+}
+
+func TestStandaloneRunCloseHooksCompletesReentrantClose(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	d.RegisterCloseHook(func() error {
+		return d.Close()
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.RunCloseHooks() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunCloseHooks: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("standalone close-hook drain deadlocked")
+	}
+	if !d.IsClosing() {
+		t.Fatal("reentrant Close returned without completing DB teardown")
+	}
+	if err := d.Set([]byte("after-close"), []byte("value")); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Set after reentrant Close error=%v, want %v", err, ErrClosed)
+	}
+}
+
+func TestConcurrentRunCloseHooksWaitsForPendingCloseDrain(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	closeRequested := make(chan struct{})
+	releaseHook := make(chan struct{})
+	released := false
+	release := func() {
+		if !released {
+			close(releaseHook)
+			released = true
+		}
+	}
+	defer release()
+	d.RegisterCloseHook(func() error {
+		if err := d.Close(); err != nil {
+			return err
+		}
+		close(closeRequested)
+		<-releaseHook
+		return nil
+	})
+	d.RegisterCloseHook(func() error {
+		return d.Set([]byte("later-hook"), []byte("still-open"))
+	})
+
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- d.RunCloseHooks() }()
+	<-closeRequested
+
+	waiting := make(chan struct{})
+	d.closeHooksMu.Lock()
+	d.closeHooksWaitHook = func() { close(waiting) }
+	d.closeHooksMu.Unlock()
+	otherDone := make(chan error, 1)
+	go func() { otherDone <- d.RunCloseHooks() }()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("concurrent RunCloseHooks did not wait for the active drain")
+	}
+	if d.IsClosing() {
+		t.Fatal("concurrent RunCloseHooks began teardown before callbacks completed")
+	}
+	select {
+	case err := <-otherDone:
+		t.Fatalf("concurrent RunCloseHooks returned before callbacks completed: %v", err)
+	default:
+	}
+
+	release()
+	if err := <-ownerDone; err != nil {
+		t.Fatalf("owner RunCloseHooks: %v", err)
+	}
+	if err := <-otherDone; err != nil {
+		t.Fatalf("concurrent RunCloseHooks: %v", err)
+	}
+	if !d.IsClosing() {
+		t.Fatal("pending Close was not completed after callbacks returned")
+	}
+}
+
+// Recursive calls cannot be inlined, keeping the regression independent of
+// ordinary helper inlining decisions.
+func closeThroughHelpers(d *DB, depth int) error {
+	if depth == 0 {
+		return d.Close()
+	}
+	return closeThroughHelpers(d, depth-1)
+}
+
+func TestCloseWaitsForStandaloneCloseHookDrain(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	hookStarted := make(chan struct{})
+	releaseHook := make(chan struct{})
+	d.RegisterCloseHook(func() error {
+		close(hookStarted)
+		<-releaseHook
+		return nil
+	})
+
+	hookDone := make(chan error, 1)
+	go func() { hookDone <- d.RunCloseHooks() }()
+	<-hookStarted
+
+	closeWaiting := make(chan struct{})
+	d.closeHooksMu.Lock()
+	d.closeHooksWaitHook = func() { close(closeWaiting) }
+	d.closeHooksMu.Unlock()
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- d.Close() }()
+	<-closeWaiting
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before standalone hook drain completed: %v", err)
+	default:
+	}
+
+	close(releaseHook)
+	if err := <-hookDone; err != nil {
+		t.Fatalf("RunCloseHooks: %v", err)
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if !d.IsClosing() {
+		t.Fatal("Close returned without marking the DB closing")
+	}
+}
+
+func TestCloseHookMayRunOnlineVacuum(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := d.Set([]byte("hook/key"), []byte("value")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	d.RegisterCloseHook(func() error {
+		return d.VacuumIndexOnline(context.Background())
+	})
+	done := make(chan error, 1)
+	go func() { done <- d.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("close hook maintenance call deadlocked")
+	}
+}
 
 func TestRegisterCloseHookAfterRunCloseHooksIsIgnored(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})

@@ -12,6 +12,116 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
+func TestDBAndSnapshotStateReturnCopies(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	published := db.state.Load()
+	if published == nil {
+		t.Fatal("published state is nil")
+	}
+	originalSystemRoot := published.SystemRootPageID
+	dbState := db.State()
+	if dbState == nil {
+		t.Fatal("DB.State returned nil")
+	}
+	dbState.SystemRootPageID = originalSystemRoot + 100
+	gotSystemRoot := db.state.Load().SystemRootPageID
+	// Restore the old implementation's shared pointer before cleanup.
+	dbState.SystemRootPageID = originalSystemRoot
+	if gotSystemRoot != originalSystemRoot {
+		t.Errorf("DB.State exposed published SystemRootPageID: got %d want %d", gotSystemRoot, originalSystemRoot)
+	}
+	if again := db.State(); again == dbState {
+		t.Error("DB.State returned the same mutable pointer twice")
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	originalRoot := published.RootPageID
+	snapshotState := snap.State()
+	if snapshotState == nil {
+		t.Fatal("Snapshot.State returned nil")
+	}
+	snapshotState.RootPageID = originalRoot + 100
+	gotRoot := db.state.Load().RootPageID
+	// Restore the old implementation's shared pointer before cleanup.
+	snapshotState.RootPageID = originalRoot
+	if gotRoot != originalRoot {
+		t.Errorf("Snapshot.State exposed published RootPageID: got %d want %d", gotRoot, originalRoot)
+	}
+	if again := snap.State(); again == snapshotState {
+		t.Error("Snapshot.State returned the same mutable pointer twice")
+	}
+}
+
+func TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree(t *testing.T) {
+	db := &DB{snapPool: NewSnapshotPool()}
+	state := &DBState{CommitSeq: 17, RootPageID: 23, SystemRootPageID: 29}
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.refs.Store(1)
+	db.idx.Store(idx)
+	db.state.Store(state)
+	db.publishSnapshotView(idx, state, nil)
+
+	token, ok := db.StateToken()
+	if !ok {
+		t.Fatal("DB.StateToken returned unavailable")
+	}
+	if token.CommitSeq != state.CommitSeq || token.RootPageID != state.RootPageID || token.SystemRootPageID != state.SystemRootPageID {
+		t.Fatalf("DB.StateToken=%+v want commit=%d root=%d system_root=%d", token, state.CommitSeq, state.RootPageID, state.SystemRootPageID)
+	}
+	token.SystemRootPageID++
+	again, ok := db.StateToken()
+	if !ok || again.SystemRootPageID != state.SystemRootPageID {
+		t.Fatalf("caller mutation changed published token: got=%+v ok=%v", again, ok)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	snapshotToken, ok := snap.StateToken()
+	if !ok || snapshotToken != again {
+		t.Fatalf("Snapshot.StateToken=%+v ok=%v want %+v", snapshotToken, ok, again)
+	}
+	snapshotToken.RootPageID++
+	snapshotAgain, ok := snap.StateToken()
+	if !ok || snapshotAgain.RootPageID != state.RootPageID {
+		t.Fatalf("caller mutation changed snapshot token: got=%+v ok=%v", snapshotAgain, ok)
+	}
+
+	var sink uint64
+	if allocs := testing.AllocsPerRun(1000, func() {
+		current, available := db.StateToken()
+		if !available {
+			panic("DB.StateToken became unavailable")
+		}
+		sink += current.CommitSeq + current.RootPageID + current.SystemRootPageID
+	}); allocs != 0 {
+		t.Fatalf("DB.StateToken allocs/run=%v want 0", allocs)
+	}
+	if allocs := testing.AllocsPerRun(1000, func() {
+		current, available := snap.StateToken()
+		if !available {
+			panic("Snapshot.StateToken became unavailable")
+		}
+		sink += current.CommitSeq + current.RootPageID + current.SystemRootPageID
+	}); allocs != 0 {
+		t.Fatalf("Snapshot.StateToken allocs/run=%v want 0", allocs)
+	}
+	if sink == 0 {
+		t.Fatal("state token allocation checks did not consume values")
+	}
+}
+
 func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 	idx1 := &indexGen{registry: lifecycle.NewReaderRegistry()}
 	idx1.refs.Store(1)

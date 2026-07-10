@@ -3443,8 +3443,8 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	if m == nil || m.isClosing() {
 		return nil, false
 	}
-	state := m.db.State()
-	if state == nil || state.SystemRootPageID == 0 {
+	state, ok := m.db.StateToken()
+	if !ok || state.SystemRootPageID == 0 {
 		return nil, false
 	}
 	domain := m.existingWriteDomainForCollection(name)
@@ -3455,8 +3455,8 @@ func (m *CollectionManager) openCollectionFromWriteDomainCache(name string) (*Co
 	if catalog == nil {
 		return nil, false
 	}
-	currentState := m.db.State()
-	if currentState == nil ||
+	currentState, ok := m.db.StateToken()
+	if !ok ||
 		currentState.SystemRootPageID != state.SystemRootPageID ||
 		currentState.CommitSeq != state.CommitSeq {
 		return nil, false
@@ -3486,11 +3486,12 @@ func (m *CollectionManager) ListCollections() ([]CollectionMeta, error) {
 		return nil, backenddb.ErrClosed
 	}
 	defer func() { _ = snap.Close() }()
-	if snap.State() == nil || snap.State().SystemRootPageID == 0 {
+	state, ok := snap.StateToken()
+	if !ok || state.SystemRootPageID == 0 {
 		return nil, nil
 	}
 	prefix := []byte(systemCollectionMetaPrefix)
-	it, err := snap.IteratorAtRoot(snap.State().SystemRootPageID, prefix, prefixEnd(prefix))
+	it, err := snap.IteratorAtRoot(state.SystemRootPageID, prefix, prefixEnd(prefix))
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, nil
 	}
@@ -18464,7 +18465,7 @@ func snapshotSystemRoot(snap *backenddb.Snapshot) uint64 {
 	if snap == nil {
 		return 0
 	}
-	if state := snap.State(); state != nil {
+	if state, ok := snap.StateToken(); ok {
 		return state.SystemRootPageID
 	}
 	return 0
@@ -18474,7 +18475,7 @@ func snapshotUserRoot(snap *backenddb.Snapshot) uint64 {
 	if snap == nil {
 		return 0
 	}
-	if state := snap.State(); state != nil {
+	if state, ok := snap.StateToken(); ok {
 		return state.RootPageID
 	}
 	return 0
@@ -18484,7 +18485,7 @@ func snapshotCommitSeq(snap *backenddb.Snapshot) uint64 {
 	if snap == nil {
 		return 0
 	}
-	if state := snap.State(); state != nil {
+	if state, ok := snap.StateToken(); ok {
 		return state.CommitSeq
 	}
 	return 0
@@ -18494,7 +18495,7 @@ func dbCommitSeqAndSystemRoot(db *backenddb.DB) (uint64, uint64) {
 	if db == nil {
 		return 0, 0
 	}
-	if state := db.State(); state != nil {
+	if state, ok := db.StateToken(); ok {
 		return state.CommitSeq, state.SystemRootPageID
 	}
 	return 0, 0
@@ -19320,7 +19321,7 @@ func (c *Collection) validateRootOverlayDescriptorSnapshotForMeta(snap *backendd
 	if snap == nil {
 		return backenddb.ErrClosed
 	}
-	if snap.State() == nil {
+	if _, ok := snap.StateToken(); !ok {
 		return backenddb.ErrClosed
 	}
 	// A raw TreeDB user-root commit does not change collection descriptors, and
@@ -19369,8 +19370,8 @@ func (c *Collection) validateMutationRootDescriptors(expectedUserRoot, expectedS
 	if c == nil || c.db == nil {
 		return backenddb.ErrClosed
 	}
-	state := c.db.State()
-	if state == nil {
+	state, ok := c.db.StateToken()
+	if !ok {
 		return backenddb.ErrClosed
 	}
 	if state.CommitSeq == expectedCommitSeq {
@@ -21035,11 +21036,15 @@ func loadCollectionCatalog(snap *backenddb.Snapshot, name string) (*collectionCa
 }
 
 func loadCollectionCatalogRootOverlays(snap *backenddb.Snapshot, rootNames []string) (map[string][]uint64, error) {
-	if snap == nil || snap.State() == nil || snap.State().SystemRootPageID == 0 || len(rootNames) == 0 {
+	if snap == nil || len(rootNames) == 0 {
+		return nil, nil
+	}
+	state, ok := snap.StateToken()
+	if !ok || state.SystemRootPageID == 0 {
 		return nil, nil
 	}
 	prefix := []byte(systemCollectionRootOverlayPrefix)
-	it, err := snap.IteratorAtRoot(snap.State().SystemRootPageID, prefix, prefixEnd(prefix))
+	it, err := snap.IteratorAtRoot(state.SystemRootPageID, prefix, prefixEnd(prefix))
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, nil
 	}
@@ -21430,10 +21435,14 @@ func (c *collectionCatalog) copy() *collectionCatalog {
 }
 
 func getSystemValue(snap *backenddb.Snapshot, key string) ([]byte, bool, error) {
-	if snap == nil || snap.State() == nil || snap.State().SystemRootPageID == 0 {
+	if snap == nil {
 		return nil, false, nil
 	}
-	entry, err := snap.GetEntryAtRoot(snap.State().SystemRootPageID, []byte(key))
+	state, ok := snap.StateToken()
+	if !ok || state.SystemRootPageID == 0 {
+		return nil, false, nil
+	}
+	entry, err := snap.GetEntryAtRoot(state.SystemRootPageID, []byte(key))
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, false, nil
 	}
@@ -21570,8 +21579,9 @@ func buildSystemTargetIterator(snap *backenddb.Snapshot, updates map[string][]by
 
 	entries := make([]systemTargetEntry, 0, len(updateEntries))
 	updateIdx := 0
-	if snap != nil && snap.State() != nil && snap.State().SystemRootPageID != 0 {
-		it, err := snap.IteratorAtRoot(snap.State().SystemRootPageID, nil, nil)
+	state, stateOK := snap.StateToken()
+	if snap != nil && stateOK && state.SystemRootPageID != 0 {
+		it, err := snap.IteratorAtRoot(state.SystemRootPageID, nil, nil)
 		if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
 			return nil, err
 		}

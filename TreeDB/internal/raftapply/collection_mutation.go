@@ -177,7 +177,8 @@ func (h *Harness) commandWALHandleCovered(handle commandwalapply.Handle) bool {
 	if h == nil || h.db == nil || handle.LSN() == 0 {
 		return false
 	}
-	return h.db.State().AppliedCommandLSN >= handle.LSN()
+	state, ok := h.db.StateToken()
+	return ok && state.AppliedCommandLSN >= handle.LSN()
 }
 
 func lowerCollectionMutationV1(entry raftentry.CommandEntryV1, limits nativewire.Limits) (collectionMutationV1, error) {

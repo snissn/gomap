@@ -395,7 +395,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 
 	if !opts.DryRun && db.indexOuterLeavesInValueLog {
 		commitSeq := uint64(1)
-		if state := db.State(); state != nil && state.CommitSeq != 0 {
+		if state, ok := db.StateToken(); ok && state.CommitSeq != 0 {
 			commitSeq = state.CommitSeq
 		}
 		if _, err := db.reconcileLeafGenerationManifestWithDirInPlace(commitSeq); err != nil {
@@ -674,7 +674,7 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 		return false, nil
 	}
 	commitSeq := uint64(1)
-	if state := db.State(); state != nil && state.CommitSeq != 0 {
+	if state, ok := db.StateToken(); ok && state.CommitSeq != 0 {
 		commitSeq = state.CommitSeq
 	}
 	db.mu.Lock()

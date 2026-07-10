@@ -131,6 +131,48 @@ func TestPagerLifecycle(t *testing.T) {
 	p2.Close()
 }
 
+func TestFlushDirtyChunksFromRetainsLowerChunksForFinalSync(t *testing.T) {
+	chunkSize := mmapOffsetGranularity()
+	if chunkSize < int64(page.PageSize) {
+		chunkSize = int64(page.PageSize)
+	}
+	pagesPerChunk := int(chunkSize / int64(page.PageSize))
+	p, err := Open(filepath.Join(t.TempDir(), "selective-sync.db"), chunkSize)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+	if _, err := p.Alloc(pagesPerChunk + 1); err != nil {
+		t.Fatalf("alloc: %v", err)
+	}
+	data := make([]byte, page.PageSize)
+	if err := p.Write(0, data); err != nil {
+		t.Fatalf("write chunk 0: %v", err)
+	}
+	if err := p.Write(uint64(pagesPerChunk), data); err != nil {
+		t.Fatalf("write chunk 1: %v", err)
+	}
+	if err := p.FlushDirtyChunksFrom(1); err != nil {
+		t.Fatalf("selective flush: %v", err)
+	}
+	p.mu.RLock()
+	_, lowerDirty := p.dirtyChunks[0]
+	_, upperDirty := p.dirtyChunks[1]
+	p.mu.RUnlock()
+	if !lowerDirty || upperDirty {
+		t.Fatalf("dirty chunks after selective flush: lower=%t upper=%t", lowerDirty, upperDirty)
+	}
+	if err := p.Sync(); err != nil {
+		t.Fatalf("final sync: %v", err)
+	}
+	p.mu.RLock()
+	dirtyCount := len(p.dirtyChunks)
+	p.mu.RUnlock()
+	if dirtyCount != 0 {
+		t.Fatalf("dirty chunks after final sync=%d want 0", dirtyCount)
+	}
+}
+
 func TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index_sync_pages.db")
