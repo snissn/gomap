@@ -69,6 +69,53 @@ type valueErrorUnsafeReverseIter struct {
 	valueCopied bool
 }
 
+type seekErrorUnsafeReverseIter struct {
+	*mockUnsafeReverseIter
+	err    error
+	seeked bool
+}
+
+type seekAdvanceErrorUnsafeReverseIter struct {
+	*mockUnsafeReverseIter
+	err    error
+	armed  bool
+	failed bool
+}
+
+func (m *seekAdvanceErrorUnsafeReverseIter) Seek(key []byte) {
+	m.mockUnsafeReverseIter.Seek(key)
+	m.armed = true
+	m.failed = false
+}
+
+func (m *seekAdvanceErrorUnsafeReverseIter) Next() {
+	m.mockUnsafeReverseIter.Next()
+	if m.armed {
+		m.failed = true
+		m.idx = -1
+	}
+}
+
+func (m *seekAdvanceErrorUnsafeReverseIter) Error() error {
+	if m.failed {
+		return m.err
+	}
+	return nil
+}
+
+func (m *seekErrorUnsafeReverseIter) Seek(key []byte) {
+	m.seeked = true
+	m.mockUnsafeReverseIter.Seek(key)
+	m.idx = -1
+}
+
+func (m *seekErrorUnsafeReverseIter) Error() error {
+	if m.seeked {
+		return m.err
+	}
+	return nil
+}
+
 func (m *valueErrorUnsafeReverseIter) UnsafeValue() []byte {
 	m.valueLoaded = true
 	return nil
@@ -190,6 +237,99 @@ func TestReverseTwoWayMergerSurfacesCurrentValueError(t *testing.T) {
 		t.Fatalf("first key = %q, want Z", merged.Key())
 	}
 	_ = merged.Value()
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestReverseTwoWayMergerSeekFailsClosedOnNonCurrentSourceError(t *testing.T) {
+	want := errors.New("reverse two-way seek failed")
+	broken := &seekErrorUnsafeReverseIter{
+		mockUnsafeReverseIter: &mockUnsafeReverseIter{
+			data: []entry{{k: "Z", v: "bad"}},
+			idx:  0,
+		},
+		err: want,
+	}
+	healthy := &mockUnsafeReverseIter{data: []entry{{k: "B", v: "ok"}}, idx: 0}
+	merged := NewReverseTwoWayMerger(broken, healthy, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("Z"))
+	if merged.Valid() {
+		t.Fatal("reverse merged iterator exposed a partial result after source seek error")
+	}
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestReverseHeapMergingIteratorSeekReportsEverySourceError(t *testing.T) {
+	wantFirst := errors.New("first reverse heap seek failed")
+	wantSecond := errors.New("second reverse heap seek failed")
+	first := &seekErrorUnsafeReverseIter{
+		mockUnsafeReverseIter: &mockUnsafeReverseIter{data: []entry{{k: "Z", v: "bad"}}, idx: 0},
+		err:                   wantFirst,
+	}
+	second := &seekErrorUnsafeReverseIter{
+		mockUnsafeReverseIter: &mockUnsafeReverseIter{data: []entry{{k: "Y", v: "bad"}}, idx: 0},
+		err:                   wantSecond,
+	}
+	healthy := &mockUnsafeReverseIter{data: []entry{{k: "X", v: "ok"}}, idx: 0}
+	merged := NewReverseMergingIterator([]IteratorSource{
+		{Iter: first, Priority: 0},
+		{Iter: second, Priority: 1},
+		{Iter: healthy, Priority: 2},
+	}, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("Z"))
+	if merged.Valid() {
+		t.Fatal("reverse heap iterator exposed a partial result after source seek errors")
+	}
+	if got := merged.Error(); !errors.Is(got, wantFirst) || !errors.Is(got, wantSecond) {
+		t.Fatalf("Error() = %v, want both %v and %v", got, wantFirst, wantSecond)
+	}
+}
+
+func TestReverseTwoWayMergerSeekReportsErrorFromTombstoneAdvance(t *testing.T) {
+	want := errors.New("reverse two-way tombstone advance failed")
+	broken := &seekAdvanceErrorUnsafeReverseIter{
+		mockUnsafeReverseIter: &mockUnsafeReverseIter{data: []entry{{k: "Z", del: true}}, idx: 0},
+		err:                   want,
+	}
+	healthy := &mockUnsafeReverseIter{data: []entry{{k: "Y", v: "partial"}}, idx: 0}
+	merged := NewReverseTwoWayMerger(broken, healthy, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("Z"))
+	if merged.Valid() {
+		t.Fatal("reverse two-way iterator exposed a partial result after tombstone advance error")
+	}
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestReverseHeapMergingIteratorSeekReportsErrorFromTombstoneAdvance(t *testing.T) {
+	want := errors.New("reverse heap tombstone advance failed")
+	broken := &seekAdvanceErrorUnsafeReverseIter{
+		mockUnsafeReverseIter: &mockUnsafeReverseIter{data: []entry{{k: "Z", del: true}}, idx: 0},
+		err:                   want,
+	}
+	middle := &mockUnsafeReverseIter{data: []entry{{k: "Y", v: "partial"}}, idx: 0}
+	oldest := &mockUnsafeReverseIter{data: []entry{{k: "X", v: "partial"}}, idx: 0}
+	merged := NewReverseMergingIterator([]IteratorSource{
+		{Iter: broken, Priority: 0},
+		{Iter: middle, Priority: 1},
+		{Iter: oldest, Priority: 2},
+	}, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("Z"))
+	if merged.Valid() {
+		t.Fatal("reverse heap iterator exposed a partial result after tombstone advance error")
+	}
 	if !errors.Is(merged.Error(), want) {
 		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
 	}

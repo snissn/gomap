@@ -2,6 +2,7 @@ package merging
 
 import (
 	"bytes"
+	"errors"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -26,6 +27,37 @@ type Iterator interface {
 type IteratorSource struct {
 	Iter     iterator.UnsafeIterator
 	Priority int
+}
+
+func joinIteratorError(current, next error) error {
+	if next == nil {
+		return current
+	}
+	if current == nil {
+		return next
+	}
+	return errors.Join(current, next)
+}
+
+func twoIteratorErrors(first, second iterator.UnsafeIterator) error {
+	var err error
+	if first != nil {
+		err = joinIteratorError(err, first.Error())
+	}
+	if second != nil {
+		err = joinIteratorError(err, second.Error())
+	}
+	return err
+}
+
+func sourceIteratorErrors(sources []IteratorSource) error {
+	var err error
+	for _, src := range sources {
+		if src.Iter != nil {
+			err = joinIteratorError(err, src.Iter.Error())
+		}
+	}
+	return err
 }
 
 // heapItem is an internal wrapper for the min-heap.
@@ -164,6 +196,11 @@ func (mi *MergingIterator) Seek(key []byte) {
 	for _, src := range mi.sources {
 		src.Iter.Seek(key)
 	}
+	mi.err = sourceIteratorErrors(mi.sources)
+	if mi.err != nil {
+		mi.h = mi.h[:0]
+		return
+	}
 	mi.rebuildHeap()
 	mi.advance()
 }
@@ -179,6 +216,9 @@ func (mi *MergingIterator) Next() {
 
 	if mi.hasCur {
 		mi.cur.iter.Next()
+		if mi.captureIteratorError(mi.cur.iter) {
+			return
+		}
 		if mi.cur.iter.Valid() {
 			mi.cur.key = mi.cur.iter.UnsafeKey()
 			mi.h.push(mi.cur)
@@ -209,6 +249,9 @@ func (mi *MergingIterator) advance() {
 			if next != nil && bytes.Equal(next.key, currentKey) {
 				shadowed := mi.h.pop()
 				shadowed.iter.Next()
+				if mi.captureIteratorError(shadowed.iter) {
+					return
+				}
 				if shadowed.iter.Valid() {
 					shadowed.key = shadowed.iter.UnsafeKey()
 					mi.h.push(shadowed)
@@ -221,6 +264,9 @@ func (mi *MergingIterator) advance() {
 		// If tombstone, advance winner and continue.
 		if top.iter.IsDeleted() {
 			top.iter.Next()
+			if mi.captureIteratorError(top.iter) {
+				return
+			}
 			if top.iter.Valid() {
 				top.key = top.iter.UnsafeKey()
 				mi.h.push(top)
@@ -234,6 +280,21 @@ func (mi *MergingIterator) advance() {
 		mi.valid = true
 		return
 	}
+}
+
+func (mi *MergingIterator) captureIteratorError(iter iterator.UnsafeIterator) bool {
+	if iter == nil {
+		return false
+	}
+	err := iter.Error()
+	if err == nil {
+		return false
+	}
+	mi.err = joinIteratorError(mi.err, err)
+	mi.cur = heapItem{}
+	mi.hasCur = false
+	mi.valid = false
+	return true
 }
 
 func (mi *MergingIterator) Valid() bool {

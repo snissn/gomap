@@ -63,6 +63,53 @@ type valueErrorUnsafeIter struct {
 	valueCopied bool
 }
 
+type seekErrorUnsafeIter struct {
+	*mockUnsafeIter
+	err    error
+	seeked bool
+}
+
+type seekAdvanceErrorUnsafeIter struct {
+	*mockUnsafeIter
+	err    error
+	armed  bool
+	failed bool
+}
+
+func (m *seekAdvanceErrorUnsafeIter) Seek(key []byte) {
+	m.mockUnsafeIter.Seek(key)
+	m.armed = true
+	m.failed = false
+}
+
+func (m *seekAdvanceErrorUnsafeIter) Next() {
+	m.mockUnsafeIter.Next()
+	if m.armed {
+		m.failed = true
+		m.idx = len(m.data)
+	}
+}
+
+func (m *seekAdvanceErrorUnsafeIter) Error() error {
+	if m.failed {
+		return m.err
+	}
+	return nil
+}
+
+func (m *seekErrorUnsafeIter) Seek(key []byte) {
+	m.seeked = true
+	m.mockUnsafeIter.Seek(key)
+	m.idx = len(m.data)
+}
+
+func (m *seekErrorUnsafeIter) Error() error {
+	if m.seeked {
+		return m.err
+	}
+	return nil
+}
+
 func (m *valueErrorUnsafeIter) UnsafeValue() []byte {
 	m.valueLoaded = true
 	return nil
@@ -223,6 +270,96 @@ func TestTwoWayMergerSurfacesCurrentValueError(t *testing.T) {
 		t.Fatalf("first key = %q, want A", merged.Key())
 	}
 	_ = merged.Value()
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestTwoWayMergerSeekFailsClosedOnNonCurrentSourceError(t *testing.T) {
+	want := errors.New("two-way seek failed")
+	broken := &seekErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", v: "bad"}}},
+		err:            want,
+	}
+	healthy := &mockUnsafeIter{data: []entry{{k: "B", v: "ok"}}}
+	merged := NewTwoWayMerger(broken, healthy, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("B"))
+	if merged.Valid() {
+		t.Fatal("merged iterator exposed a partial result after source seek error")
+	}
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestHeapMergingIteratorSeekReportsEverySourceError(t *testing.T) {
+	wantFirst := errors.New("first heap seek failed")
+	wantSecond := errors.New("second heap seek failed")
+	first := &seekErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", v: "bad"}}},
+		err:            wantFirst,
+	}
+	second := &seekErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "B", v: "bad"}}},
+		err:            wantSecond,
+	}
+	healthy := &mockUnsafeIter{data: []entry{{k: "C", v: "ok"}}}
+	merged := NewMergingIterator([]IteratorSource{
+		{Iter: first, Priority: 0},
+		{Iter: second, Priority: 1},
+		{Iter: healthy, Priority: 2},
+	}, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("A"))
+	if merged.Valid() {
+		t.Fatal("heap iterator exposed a partial result after source seek errors")
+	}
+	if got := merged.Error(); !errors.Is(got, wantFirst) || !errors.Is(got, wantSecond) {
+		t.Fatalf("Error() = %v, want both %v and %v", got, wantFirst, wantSecond)
+	}
+}
+
+func TestTwoWayMergerSeekReportsErrorFromTombstoneAdvance(t *testing.T) {
+	want := errors.New("two-way tombstone advance failed")
+	broken := &seekAdvanceErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", del: true}}},
+		err:            want,
+	}
+	healthy := &mockUnsafeIter{data: []entry{{k: "B", v: "partial"}}}
+	merged := NewTwoWayMerger(broken, healthy, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("A"))
+	if merged.Valid() {
+		t.Fatal("two-way iterator exposed a partial result after tombstone advance error")
+	}
+	if !errors.Is(merged.Error(), want) {
+		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
+	}
+}
+
+func TestHeapMergingIteratorSeekReportsErrorFromTombstoneAdvance(t *testing.T) {
+	want := errors.New("heap tombstone advance failed")
+	broken := &seekAdvanceErrorUnsafeIter{
+		mockUnsafeIter: &mockUnsafeIter{data: []entry{{k: "A", del: true}}},
+		err:            want,
+	}
+	middle := &mockUnsafeIter{data: []entry{{k: "B", v: "partial"}}}
+	oldest := &mockUnsafeIter{data: []entry{{k: "C", v: "partial"}}}
+	merged := NewMergingIterator([]IteratorSource{
+		{Iter: broken, Priority: 0},
+		{Iter: middle, Priority: 1},
+		{Iter: oldest, Priority: 2},
+	}, nil, nil)
+	defer merged.Close()
+
+	merged.Seek([]byte("A"))
+	if merged.Valid() {
+		t.Fatal("heap iterator exposed a partial result after tombstone advance error")
+	}
 	if !errors.Is(merged.Error(), want) {
 		t.Fatalf("Error() = %v, want %v", merged.Error(), want)
 	}

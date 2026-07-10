@@ -137,6 +137,11 @@ func (mi *ReverseMergingIterator) Seek(key []byte) {
 	for _, src := range mi.sources {
 		src.Iter.Seek(key)
 	}
+	mi.err = sourceIteratorErrors(mi.sources)
+	if mi.err != nil {
+		mi.h = mi.h[:0]
+		return
+	}
 	mi.rebuildHeap()
 	mi.advance()
 }
@@ -152,6 +157,9 @@ func (mi *ReverseMergingIterator) Next() {
 
 	if mi.hasCur {
 		mi.cur.iter.Next()
+		if mi.captureIteratorError(mi.cur.iter) {
+			return
+		}
 		if mi.cur.iter.Valid() {
 			mi.cur.key = mi.cur.iter.UnsafeKey()
 			mi.h.push(mi.cur)
@@ -179,6 +187,9 @@ func (mi *ReverseMergingIterator) advance() {
 		// Upper bound is exclusive; if a source yields >= end, advance it and continue.
 		if mi.end != nil && bytes.Compare(currentKey, mi.end) >= 0 {
 			top.iter.Next()
+			if mi.captureIteratorError(top.iter) {
+				return
+			}
 			if top.iter.Valid() {
 				top.key = top.iter.UnsafeKey()
 				mi.h.push(top)
@@ -192,6 +203,9 @@ func (mi *ReverseMergingIterator) advance() {
 			if next != nil && bytes.Equal(next.key, currentKey) {
 				shadowed := mi.h.pop()
 				shadowed.iter.Next()
+				if mi.captureIteratorError(shadowed.iter) {
+					return
+				}
 				if shadowed.iter.Valid() {
 					shadowed.key = shadowed.iter.UnsafeKey()
 					mi.h.push(shadowed)
@@ -204,6 +218,9 @@ func (mi *ReverseMergingIterator) advance() {
 		// If tombstone, advance winner and continue.
 		if top.iter.IsDeleted() {
 			top.iter.Next()
+			if mi.captureIteratorError(top.iter) {
+				return
+			}
 			if top.iter.Valid() {
 				top.key = top.iter.UnsafeKey()
 				mi.h.push(top)
@@ -216,6 +233,21 @@ func (mi *ReverseMergingIterator) advance() {
 		mi.valid = true
 		return
 	}
+}
+
+func (mi *ReverseMergingIterator) captureIteratorError(iter iterator.UnsafeIterator) bool {
+	if iter == nil {
+		return false
+	}
+	err := iter.Error()
+	if err == nil {
+		return false
+	}
+	mi.err = joinIteratorError(mi.err, err)
+	mi.cur = reverseHeapItem{}
+	mi.hasCur = false
+	mi.valid = false
+	return true
 }
 
 func (mi *ReverseMergingIterator) Valid() bool { return mi.valid }
@@ -313,6 +345,9 @@ func (m *ReverseTwoWayMerger) Next() {
 	}
 	if m.cur != nil {
 		m.cur.Next()
+		if m.captureIteratorError(m.cur) {
+			return
+		}
 	}
 	m.advance()
 }
@@ -329,6 +364,10 @@ func (m *ReverseTwoWayMerger) Seek(key []byte) {
 	}
 	m.src1.Seek(key)
 	m.src2.Seek(key)
+	m.err = twoIteratorErrors(m.src1, m.src2)
+	if m.err != nil {
+		return
+	}
 	m.advance()
 }
 
@@ -350,6 +389,9 @@ func (m *ReverseTwoWayMerger) advance() {
 				// Keys equal: src1 wins, src2 is shadowed.
 				winner = m.src1
 				m.src2.Next()
+				if m.captureIteratorError(m.src2) {
+					return
+				}
 			}
 		case m.src1.Valid():
 			winner = m.src1
@@ -362,6 +404,9 @@ func (m *ReverseTwoWayMerger) advance() {
 		// Exclusive end (upper bound): skip keys >= end.
 		if m.end != nil && bytes.Compare(k, m.end) >= 0 {
 			winner.Next()
+			if m.captureIteratorError(winner) {
+				return
+			}
 			continue
 		}
 
@@ -372,6 +417,9 @@ func (m *ReverseTwoWayMerger) advance() {
 
 		if winner.IsDeleted() {
 			winner.Next()
+			if m.captureIteratorError(winner) {
+				return
+			}
 			continue
 		}
 
@@ -379,6 +427,20 @@ func (m *ReverseTwoWayMerger) advance() {
 		m.valid = true
 		return
 	}
+}
+
+func (m *ReverseTwoWayMerger) captureIteratorError(iter iterator.UnsafeIterator) bool {
+	if iter == nil {
+		return false
+	}
+	err := iter.Error()
+	if err == nil {
+		return false
+	}
+	m.err = joinIteratorError(m.err, err)
+	m.valid = false
+	m.cur = nil
+	return true
 }
 
 func (m *ReverseTwoWayMerger) Valid() bool { return m.valid }

@@ -69,10 +69,6 @@ func (it *snapshotBoundIterator) begin() bool {
 	return it != nil && !it.closed.Load() && it.inner != nil
 }
 
-func (it *snapshotBoundIterator) closeInner() {
-	it.closeOnce.Do(func() { it.closeErr = it.inner.Close() })
-}
-
 func (it *snapshotBoundIterator) Valid() bool {
 	if !it.begin() {
 		return false
@@ -169,17 +165,22 @@ func (it *snapshotBoundIterator) Close() error {
 		return nil
 	}
 	it.closed.Store(true)
-	it.closeInner()
-	if it.owner != nil {
-		owner := it.owner
-		owner.iteratorMu.Lock()
-		delete(owner.iterators, it)
-		shouldFinalize := owner.closed.Load() && len(owner.iterators) == 0
-		owner.iteratorMu.Unlock()
-		if shouldFinalize {
-			it.closeErr = errors.Join(it.closeErr, owner.finalizeCloseIfUnreferenced())
+	it.closeOnce.Do(func() {
+		if it.inner != nil {
+			it.closeErr = it.inner.Close()
 		}
-	}
+		owner := it.owner
+		it.owner = nil
+		if owner != nil {
+			owner.iteratorMu.Lock()
+			delete(owner.iterators, it)
+			shouldFinalize := owner.closed.Load() && len(owner.iterators) == 0
+			owner.iteratorMu.Unlock()
+			if shouldFinalize {
+				it.closeErr = errors.Join(it.closeErr, owner.finalizeCloseIfUnreferenced())
+			}
+		}
+	})
 	return it.closeErr
 }
 

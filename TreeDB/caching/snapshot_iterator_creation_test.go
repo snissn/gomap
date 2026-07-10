@@ -124,3 +124,42 @@ func TestCachedSnapshotIteratorCreationRejectsStaleGeneration(t *testing.T) {
 		t.Fatal("stale generation accessed cached snapshot fields")
 	}
 }
+
+func TestCachedSnapshotIteratorDoubleCloseDetachesPooledOwner(t *testing.T) {
+	cached, backend := newCachedSnapshotPoolTestDB(t)
+	defer func() {
+		_ = cached.Close()
+		_ = backend.Close()
+	}()
+
+	snap := cached.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	it, err := snap.bindNewIterator(func() (merging.Iterator, error) {
+		return snap.buildIteratorLocked(nil, nil, false)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := it.(*snapshotBoundIterator)
+	if err := snap.Close(); err != nil {
+		t.Fatalf("Snapshot.Close: %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Iterator.Close: %v", err)
+	}
+	if bound.owner != nil {
+		t.Fatal("closed iterator retained pooled cached snapshot owner")
+	}
+
+	reused := getSnapshot()
+	generation := snap.generation.Load()
+	if err := it.Close(); err != nil {
+		t.Fatalf("second Iterator.Close: %v", err)
+	}
+	if snap.generation.Load() != generation || snap.finalized.Load() {
+		t.Fatal("double iterator close mutated a pooled cached snapshot generation")
+	}
+	putSnapshot(reused)
+}
