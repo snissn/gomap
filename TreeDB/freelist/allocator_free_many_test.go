@@ -381,6 +381,40 @@ func TestAllocator_RegionBiasedAllocMany_MatchesRepeatedAllocWithMovingHint(t *t
 	}
 }
 
+func TestAllocator_RegionBiasedAllocMany_IndexedPathMatchesRepeatedAlloc(t *testing.T) {
+	freed := []uint64{1, 90, 95, 38, 115, 105, 12, 29, 81, 99, 130, 111, 72}
+	newFixture := func(t *testing.T) *Allocator {
+		t.Helper()
+		a, _ := newAllocatorForFreeManyTest(t, 140)
+		a.SetFreelistRegion(10, 1)
+		if err := a.FreeMany(freed); err != nil {
+			t.Fatalf("FreeMany: %v", err)
+		}
+		return a
+	}
+
+	batched := newFixture(t)
+	got, err := batched.AllocMany(10, 129)
+	if err != nil {
+		t.Fatalf("AllocMany: %v", err)
+	}
+
+	repeated := newFixture(t)
+	want := make([]uint64, 0, len(got))
+	hint := uint64(129)
+	for range got {
+		id, err := repeated.Alloc(hint)
+		if err != nil {
+			t.Fatalf("Alloc(%d): %v", hint, err)
+		}
+		want = append(want, id)
+		hint = id
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("indexed AllocMany order = %v, repeated Alloc order = %v", got, want)
+	}
+}
+
 func mustAllocatorPage(t *testing.T, p *pager.Pager, id uint64) []byte {
 	t.Helper()
 	data, err := p.Get(id)

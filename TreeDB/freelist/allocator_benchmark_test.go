@@ -15,6 +15,8 @@ const (
 	allocatorBenchmarkRegionHint = 4 * allocatorBenchmarkRegion
 )
 
+var allocatorBenchmarkIDsSink []uint64
+
 type allocatorBenchmarkPageMetrics struct {
 	gets          int
 	verifications int
@@ -146,17 +148,24 @@ func allocAllocatorBenchmarkIDs(b *testing.B, a *Allocator, count int, many bool
 		if len(out) != count {
 			b.Fatalf("AllocMany returned %d IDs, want %d", len(out), count)
 		}
+		allocatorBenchmarkIDsSink = out
 		return
 	}
 
 	hint := uint64(allocatorBenchmarkRegionHint)
+	out := make([]uint64, 0, count)
 	for i := 0; i < count; i++ {
 		id, err := a.Alloc(hint)
 		if err != nil {
 			b.Fatalf("Alloc(%d): %v", hint, err)
 		}
+		out = append(out, id)
 		hint = id
 	}
+	if len(out) != count {
+		b.Fatalf("repeated Alloc returned %d IDs, want %d", len(out), count)
+	}
+	allocatorBenchmarkIDsSink = out
 }
 
 func allocatorBenchmarkIDsSlice() []uint64 {

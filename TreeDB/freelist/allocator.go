@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 
@@ -88,47 +89,37 @@ type regionSlotEntry struct {
 	slot   int
 }
 
-type regionSlotEntries []regionSlotEntry
-
-func (entries regionSlotEntries) Len() int      { return len(entries) }
-func (entries regionSlotEntries) Swap(i, j int) { entries[i], entries[j] = entries[j], entries[i] }
-func (entries regionSlotEntries) Less(i, j int) bool {
-	if entries[i].region != entries[j].region {
-		return entries[i].region < entries[j].region
-	}
-	return entries[i].slot < entries[j].slot
-}
-
 // regionSlotIndex finds the highest current freelist slot in a region range.
 // Entries remain ordered by candidate region while the segment tree tracks the
 // slot each candidate currently occupies after swap-with-last removals.
 type regionSlotIndex struct {
-	entries     []regionSlotEntry
-	slotEntries []int
-	tree        []int
+	entries     [page.MaxFreeIDs]regionSlotEntry
+	slotEntries [page.MaxFreeIDs]int
+	tree        [page.MaxFreeIDs * 4]int
+	count       int
 	treeBase    int
 }
 
 func (idx *regionSlotIndex) reset(data []byte, count int, regionPages uint64) {
-	if cap(idx.entries) < count {
-		idx.entries = make([]regionSlotEntry, count)
-	} else {
-		idx.entries = idx.entries[:count]
-	}
+	idx.count = count
+	entries := idx.entries[:count]
 	for slot := 0; slot < count; slot++ {
-		idx.entries[slot] = regionSlotEntry{
+		entries[slot] = regionSlotEntry{
 			region: freelistIDAt(data, slot) / regionPages,
 			slot:   slot,
 		}
 	}
-	sort.Sort(regionSlotEntries(idx.entries))
+	slices.SortFunc(entries, func(a, b regionSlotEntry) int {
+		if a.region < b.region {
+			return -1
+		}
+		if a.region > b.region {
+			return 1
+		}
+		return a.slot - b.slot
+	})
 
-	if cap(idx.slotEntries) < count {
-		idx.slotEntries = make([]int, count)
-	} else {
-		idx.slotEntries = idx.slotEntries[:count]
-	}
-	for entry, candidate := range idx.entries {
+	for entry, candidate := range entries {
 		idx.slotEntries[candidate.slot] = entry
 	}
 
@@ -137,15 +128,10 @@ func (idx *regionSlotIndex) reset(data []byte, count int, regionPages uint64) {
 		idx.treeBase *= 2
 	}
 	treeLen := idx.treeBase * 2
-	if cap(idx.tree) < treeLen {
-		idx.tree = make([]int, treeLen)
-	} else {
-		idx.tree = idx.tree[:treeLen]
-	}
-	for i := range idx.tree {
+	for i := range idx.tree[:treeLen] {
 		idx.tree[i] = -1
 	}
-	for entry, candidate := range idx.entries {
+	for entry, candidate := range entries {
 		idx.tree[idx.treeBase+entry] = candidate.slot
 	}
 	for treeIdx := idx.treeBase - 1; treeIdx > 0; treeIdx-- {
@@ -163,8 +149,9 @@ func (idx *regionSlotIndex) highestInRange(targetRegion uint64, radius int) int 
 	if high < targetRegion {
 		high = ^uint64(0)
 	}
-	left := sort.Search(len(idx.entries), func(i int) bool { return idx.entries[i].region >= low })
-	right := sort.Search(len(idx.entries), func(i int) bool { return idx.entries[i].region > high })
+	entries := idx.entries[:idx.count]
+	left := sort.Search(len(entries), func(i int) bool { return entries[i].region >= low })
+	right := sort.Search(len(entries), func(i int) bool { return entries[i].region > high })
 	if left == right {
 		return -1
 	}
@@ -388,9 +375,201 @@ func findRegionSlot(data []byte, count int, target, regionPages uint64, radius i
 // selections scan directly; larger selections reuse one transient range-max
 // index across head pages.
 func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, error) {
+	if count == 2 {
+		return a.allocTwoRegionLocked(hint)
+	}
+	if count < regionIndexMinSelections {
+		return a.allocManyRegionScanLocked(count, hint)
+	}
+	return a.allocManyRegionIndexedLocked(count, hint)
+}
+
+func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
+	ids := make([]uint64, 0, 2)
+	if a.preferAppend || a.head == 0 {
+		id, err := a.pager.Alloc(2)
+		if err != nil {
+			return ids, err
+		}
+		ids = append(ids, id, id+1)
+		a.stats.AllocPages += 2
+		a.stats.AppendAllocPages += 2
+		a.lastAlloc = id + 1
+		return ids, nil
+	}
+
+	headID := a.head
+	data, err := a.getPageForWrite(headID)
+	if err != nil {
+		return ids, err
+	}
+	n := node.NewNode(data)
+	if !a.verifyChecksum(headID, n) {
+		return ids, errors.New("freelist head corrupted (AllocMany)")
+	}
+	if n.Type() != page.PageTypeFreelist {
+		return ids, errors.New("invalid freelist page type")
+	}
+
+	countFree := int(n.Count())
+	if countFree == 0 {
+		next := freelistNextPageID(data)
+		a.head = next
+		a.pager.MarkUnverified(headID)
+		a.lastAlloc = headID
+		a.stats.AllocPages++
+		a.stats.ReuseAllocPages++
+		if a.stats.Pages > 0 {
+			a.stats.Pages--
+		}
+		ids = append(ids, headID)
+		tail, tailErr := a.allocManyRegionScanLocked(1, headID)
+		ids = append(ids, tail...)
+		return ids, tailErr
+	}
+
+	target := hint
+	if target == 0 {
+		target = a.lastAlloc
+	}
+	for countFree > 0 && len(ids) < 2 {
+		slot := countFree - 1
+		if target != 0 {
+			if regionSlot := findRegionSlot(data, countFree, target, a.regionPages, a.regionRadius); regionSlot >= 0 {
+				slot = regionSlot
+			}
+		}
+		lastSlot := countFree - 1
+		id := freelistIDAt(data, slot)
+		if slot != lastSlot {
+			setFreelistIDAt(data, slot, freelistIDAt(data, lastSlot))
+		}
+		clearFreelistIDAt(data, lastSlot)
+		ids = append(ids, id)
+		countFree--
+		target = id
+	}
+
+	n.SetCount(uint16(countFree))
+	a.updateChecksum(headID, n)
+	for _, id := range ids {
+		a.recordReuseAllocation(id)
+	}
+	if countFree == 0 && len(ids) < 2 {
+		next := freelistNextPageID(data)
+		a.head = next
+		a.pager.MarkUnverified(headID)
+		a.lastAlloc = headID
+		a.stats.AllocPages++
+		a.stats.ReuseAllocPages++
+		if a.stats.Pages > 0 {
+			a.stats.Pages--
+		}
+		ids = append(ids, headID)
+	}
+	return ids, nil
+}
+
+func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, count)
 	target := hint
+	for len(ids) < count {
+		if a.preferAppend || a.head == 0 {
+			allocCount := count - len(ids)
+			id, err := a.pager.Alloc(allocCount)
+			if err != nil {
+				return ids, err
+			}
+			a.stats.AllocPages += uint64(allocCount)
+			a.stats.AppendAllocPages += uint64(allocCount)
+			for i := 0; i < allocCount; i++ {
+				ids = append(ids, id+uint64(i))
+			}
+			a.lastAlloc = ids[len(ids)-1]
+			return ids, nil
+		}
+
+		headID := a.head
+		data, err := a.getPageForWrite(headID)
+		if err != nil {
+			return ids, err
+		}
+		n := node.NewNode(data)
+		if !a.verifyChecksum(headID, n) {
+			return ids, errors.New("freelist head corrupted (AllocMany)")
+		}
+		if n.Type() != page.PageTypeFreelist {
+			return ids, errors.New("invalid freelist page type")
+		}
+
+		countFree := int(n.Count())
+		if countFree == 0 {
+			next := freelistNextPageID(data)
+			a.head = next
+			a.pager.MarkUnverified(headID)
+			a.lastAlloc = headID
+			a.stats.AllocPages++
+			a.stats.ReuseAllocPages++
+			if a.stats.Pages > 0 {
+				a.stats.Pages--
+			}
+			ids = append(ids, headID)
+			target = headID
+			continue
+		}
+
+		start := len(ids)
+		if target == 0 {
+			target = a.lastAlloc
+		}
+		for countFree > 0 && len(ids) < count {
+			slot := countFree - 1
+			if target != 0 {
+				if regionSlot := findRegionSlot(data, countFree, target, a.regionPages, a.regionRadius); regionSlot >= 0 {
+					slot = regionSlot
+				}
+			}
+			lastSlot := countFree - 1
+			id := freelistIDAt(data, slot)
+			if slot != lastSlot {
+				setFreelistIDAt(data, slot, freelistIDAt(data, lastSlot))
+			}
+			clearFreelistIDAt(data, lastSlot)
+			ids = append(ids, id)
+			countFree--
+			target = id
+		}
+
+		n.SetCount(uint16(countFree))
+		a.updateChecksum(headID, n)
+		for _, id := range ids[start:] {
+			a.recordReuseAllocation(id)
+		}
+		if countFree == 0 && len(ids) < count {
+			next := freelistNextPageID(data)
+			a.head = next
+			a.pager.MarkUnverified(headID)
+			a.lastAlloc = headID
+			a.stats.AllocPages++
+			a.stats.ReuseAllocPages++
+			if a.stats.Pages > 0 {
+				a.stats.Pages--
+			}
+			ids = append(ids, headID)
+			target = headID
+		}
+	}
+	return ids, nil
+}
+
+func (a *Allocator) allocManyRegionIndexedLocked(count int, hint uint64) ([]uint64, error) {
 	var regionSlots regionSlotIndex
+	return a.allocManyRegionWithIndexLocked(count, hint, &regionSlots)
+}
+
+func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regionSlots *regionSlotIndex) ([]uint64, error) {
+	ids := make([]uint64, 0, count)
+	target := hint
 	for len(ids) < count {
 		if a.preferAppend || a.head == 0 {
 			allocCount := count - len(ids)
@@ -446,7 +625,7 @@ func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, err
 			slot := -1
 			if target != 0 {
 				selections := min(countFree, count-len(ids))
-				if !indexed && selections >= regionIndexMinSelections {
+				if !indexed && regionSlots != nil && selections >= regionIndexMinSelections {
 					regionSlots.reset(data, countFree, a.regionPages)
 					indexed = true
 				}
