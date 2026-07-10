@@ -40,16 +40,13 @@ const (
 
 var testAllocatorPageEvent func(allocatorPageEvent, uint64)
 
-func observeAllocatorPage(pageID uint64, verified, updated bool) {
-	if testAllocatorPageEvent == nil {
-		return
-	}
-	testAllocatorPageEvent(allocatorPageGetForWrite, pageID)
+func observeAllocatorPage(hook func(allocatorPageEvent, uint64), pageID uint64, verified, updated bool) {
+	hook(allocatorPageGetForWrite, pageID)
 	if verified {
-		testAllocatorPageEvent(allocatorPageVerifyChecksum, pageID)
+		hook(allocatorPageVerifyChecksum, pageID)
 	}
 	if updated {
-		testAllocatorPageEvent(allocatorPageUpdateChecksum, pageID)
+		hook(allocatorPageUpdateChecksum, pageID)
 	}
 }
 
@@ -322,7 +319,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 				a.stats.Pages--
 			}
 			ids = append(ids, recycled)
-			observeAllocatorPage(headID, true, false)
+			if hook := testAllocatorPageEvent; hook != nil {
+				observeAllocatorPage(hook, headID, true, false)
+			}
 			continue
 		}
 
@@ -343,7 +342,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 		n.SetCount(uint16(countFree))
 		n.UpdateChecksum()
-		observeAllocatorPage(headID, true, true)
+		if hook := testAllocatorPageEvent; hook != nil {
+			observeAllocatorPage(hook, headID, true, true)
+		}
 	}
 	return ids, nil
 }
@@ -418,7 +419,9 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 			a.stats.Pages--
 		}
 		ids = append(ids, headID)
-		observeAllocatorPage(headID, true, false)
+		if hook := testAllocatorPageEvent; hook != nil {
+			observeAllocatorPage(hook, headID, true, false)
+		}
 		tail, tailErr := a.allocManyRegionScanLocked(1, headID)
 		ids = append(ids, tail...)
 		return ids, tailErr
@@ -442,15 +445,21 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 		}
 		clearFreelistIDAt(data, lastSlot)
 		ids = append(ids, id)
+		a.pager.MarkUnverified(id)
+		a.lastAlloc = id
+		a.stats.AllocPages++
+		a.stats.ReuseAllocPages++
+		if a.stats.FreeIDs > 0 {
+			a.stats.FreeIDs--
+		}
 		countFree--
 		target = id
 	}
 
 	n.SetCount(uint16(countFree))
 	n.UpdateChecksum()
-	observeAllocatorPage(headID, true, true)
-	for _, id := range ids {
-		a.recordReuseAllocation(id)
+	if hook := testAllocatorPageEvent; hook != nil {
+		observeAllocatorPage(hook, headID, true, true)
 	}
 	if countFree == 0 && len(ids) < 2 {
 		next := freelistNextPageID(data)
@@ -512,7 +521,9 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 			}
 			ids = append(ids, headID)
 			target = headID
-			observeAllocatorPage(headID, true, false)
+			if hook := testAllocatorPageEvent; hook != nil {
+				observeAllocatorPage(hook, headID, true, false)
+			}
 			continue
 		}
 
@@ -540,7 +551,9 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 
 		n.SetCount(uint16(countFree))
 		n.UpdateChecksum()
-		observeAllocatorPage(headID, true, true)
+		if hook := testAllocatorPageEvent; hook != nil {
+			observeAllocatorPage(hook, headID, true, true)
+		}
 		for _, id := range ids[start:] {
 			a.recordReuseAllocation(id)
 		}
@@ -612,7 +625,9 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 			}
 			ids = append(ids, recycled)
 			target = recycled
-			observeAllocatorPage(headID, true, false)
+			if hook := testAllocatorPageEvent; hook != nil {
+				observeAllocatorPage(hook, headID, true, false)
+			}
 			continue
 		}
 
@@ -654,7 +669,9 @@ func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regio
 
 		n.SetCount(uint16(countFree))
 		n.UpdateChecksum()
-		observeAllocatorPage(headID, true, true)
+		if hook := testAllocatorPageEvent; hook != nil {
+			observeAllocatorPage(hook, headID, true, true)
+		}
 		for _, id := range ids[start:] {
 			a.recordReuseAllocation(id)
 		}
@@ -919,7 +936,9 @@ func (a *Allocator) FreeMany(ids []uint64) error {
 			a.recordFreedPages(take, false)
 			ids = ids[take:]
 		}
-		observeAllocatorPage(headID, true, updated)
+		if hook := testAllocatorPageEvent; hook != nil {
+			observeAllocatorPage(hook, headID, true, updated)
+		}
 	}
 
 	for len(ids) > 0 {
@@ -966,7 +985,9 @@ func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, batchHook
 	}
 	if batchHook {
 		n.UpdateChecksum()
-		observeAllocatorPage(id, false, true)
+		if hook := testAllocatorPageEvent; hook != nil {
+			observeAllocatorPage(hook, id, false, true)
+		}
 	} else {
 		n.UpdateChecksum()
 	}
