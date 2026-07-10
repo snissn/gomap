@@ -61,12 +61,13 @@ type DBState struct {
 }
 
 // snapshotView is the coherent publication unit for snapshot acquisition.
-// AcquireSnapshot reads this single pointer so idx/state/vlog manager always
-// come from the same publish event.
+// AcquireSnapshot reads this single pointer so index, state, value-log manager,
+// and publication epoch always come from the same publish event.
 type snapshotView struct {
-	idx         *indexGen
-	state       *DBState
-	vlogManager *valuelog.Manager
+	idx                    *indexGen
+	state                  *DBState
+	vlogManager            *valuelog.Manager
+	systemRootPublishEpoch uint64
 }
 
 type DB struct {
@@ -156,12 +157,17 @@ type DB struct {
 	combineDoneCh                   chan struct{}
 	vacuumInProgress                atomic.Bool
 	vacuum                          vacuumRecorder
-	meta                            page.MetaPageBody
-	metaPageID                      uint64
-	entryRevisionFloor              atomic.Uint64
-	commandJournal                  *commitlog.CommandJournal
-	conditionalActiveTxnCount       atomic.Int64
-	conditionalOracle               conditionalConflictOracle
+	systemRootPublishEpoch          atomic.Uint64
+	vacuumOnlineLast                atomic.Pointer[VacuumOnlineStats]
+	// Package-private deterministic hooks for online-vacuum concurrency tests.
+	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
+	vacuumBeforeCutoverHook       func(int)
+	meta                          page.MetaPageBody
+	metaPageID                    uint64
+	entryRevisionFloor            atomic.Uint64
+	commandJournal                *commitlog.CommandJournal
+	conditionalActiveTxnCount     atomic.Int64
+	conditionalOracle             conditionalConflictOracle
 
 	state atomic.Pointer[DBState]
 
@@ -1270,12 +1276,13 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db                *DB
-	idx               *indexGen
-	state             *DBState
-	vlogManager       *valuelog.Manager
-	vlogPinned        bool
-	leafGenerationIDs []uint64
+	db                     *DB
+	idx                    *indexGen
+	state                  *DBState
+	vlogManager            *valuelog.Manager
+	vlogPinned             bool
+	systemRootPublishEpoch uint64
+	leafGenerationIDs      []uint64
 	// leafGenerationPinnedIDs mirrors the generation IDs retained by this
 	// snapshot for stats/debugging. Release follows leafGenerationPinSet or
 	// leafGenerationRefs when those optimized paths are present.
@@ -1411,6 +1418,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
+	snap.systemRootPublishEpoch = view.systemRootPublishEpoch
 	snap.reader.reconfigure(vlogSet, db.leafPageReadCache)
 	for i := range snap.rootTrees {
 		snap.rootTrees[i].root = 0
@@ -2182,6 +2190,8 @@ func (db *DB) Close() error {
 	if err := db.RunCloseHooks(); err != nil {
 		errs = append(errs, err)
 	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
 	db.closing.Store(true)
 	// Wait for active apply attempts before closing the reusable flush/apply
 	// worker pool and tearing down index resources.
@@ -3154,13 +3164,19 @@ func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Ma
 		return
 	}
 	old := db.snapshotViewRO.Load()
+	coherentRootChanged := old == nil || old.idx == nil || old.state == nil || old.idx.id != idx.id || old.state.SystemRootPageID != state.SystemRootPageID
+	publishEpoch := db.systemRootPublishEpoch.Load()
+	if coherentRootChanged {
+		publishEpoch = db.systemRootPublishEpoch.Add(1)
+	}
 	if old != nil && old.state != nil && old.state.LeafGenerations != nil && old.state.LeafGenerations != state.LeafGenerations {
 		db.markLeafGenerationPinSetStale(old.state.LeafGenerations.PinSet)
 	}
 	db.snapshotViewRO.Store(&snapshotView{
-		idx:         idx,
-		state:       state,
-		vlogManager: vm,
+		idx:                    idx,
+		state:                  state,
+		vlogManager:            vm,
+		systemRootPublishEpoch: publishEpoch,
 	})
 	if state.LeafGenerations != nil && db.snapshotAcquireInFlight() == 0 {
 		db.leafGenerationPins.pruneInactiveGenerationIDs(state.LeafGenerations.GenerationOrder)
