@@ -168,7 +168,19 @@ type CompactStorageOptions struct {
 	// Value-log rewrite knobs.
 	ValueLogRewriteBatchSize       int
 	ValueLogRewriteMaxSegmentBytes int64
-	ValueLogProtectedPaths         []string
+	// ValueLogRewriteMinSegmentStaleRatio and
+	// ValueLogRewriteMinSegmentStaleBytes control non-exhaustive sparse
+	// value-log rewrite admission. Both thresholds are conjunctive when set:
+	// full/quick mode selects a segment only when stale ratio and stale bytes
+	// both meet the mode policy. The default byte floor is capped at the
+	// configured stale ratio for small segments, so a small segment that is
+	// sufficiently stale is not permanently exempt; an explicit byte override
+	// remains an exact conjunctive floor. Zero uses mode defaults. Exhaustive
+	// mode ignores these knobs and rewrites any partially-live segment with
+	// stale bytes so it remains the byte-minimizing mode.
+	ValueLogRewriteMinSegmentStaleRatio float64
+	ValueLogRewriteMinSegmentStaleBytes int64
+	ValueLogProtectedPaths              []string
 	// ValueLogProtectedPathsFunc refreshes online protected paths before each
 	// value-log rewrite/GC audit or applied phase. Live cached-mode callers use
 	// this so foreground writer rotations that happen during a multi-phase
@@ -293,8 +305,12 @@ type CompactStorageStats struct {
 
 	RemainingDebt CompactStorageDebt `json:"remaining_debt"`
 
-	// FullyCompacted is the legacy policy-oriented compacted flag. For
-	// exhaustive mode, ByteMinimized reports the stricter benchmark contract.
+	// FullyCompacted is the legacy policy-oriented compacted flag and matches
+	// PolicyFullyCompacted. Non-exhaustive modes compute value-log rewrite debt
+	// against their stale-ratio/stale-byte policy, so they can be policy compacted
+	// while ByteMinimized remains false. Exhaustive mode keeps the stricter
+	// byte-minimizing rewrite policy and is the only mode that asserts
+	// ByteMinimized.
 	FullyCompacted       bool `json:"fully_compacted"`
 	PolicyFullyCompacted bool `json:"policy_fully_compacted"`
 	ByteMinimized        bool `json:"byte_minimized"`
@@ -371,9 +387,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	stats.RemainingDebt = initialDebt
 	if opts.DryRun {
 		stats.After = before
-		stats.FullyCompacted = initialDebt.Empty()
-		stats.PolicyFullyCompacted = stats.FullyCompacted
-		stats.ByteMinimized = false
+		stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, initialDebt)
 		return stats, nil
 	}
 
@@ -446,7 +460,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 	if err := db.runCompactStoragePhase(&stats, "value-log-rewrite", func() error {
 		protectedPaths := compactStorageOnlineRewriteProtectedPaths(opts)
 		protectedRootIDs, protectedSystemRootIDs := db.compactStorageLeafGenerationProtectedRootIDPair(opts)
-		rewriteOpts := compactStorageRewritePlanOptions(protectedPaths)
+		rewriteOpts := compactStorageRewritePlanOptions(opts, protectedPaths)
 		rewriteOpts.LeafGenerationProtectedRootIDs = protectedRootIDs
 		rewriteOpts.LeafGenerationProtectedSystemRootIDs = protectedSystemRootIDs
 		rewriteOpts.BatchSize = opts.ValueLogRewriteBatchSize
@@ -620,10 +634,15 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 		}
 	}
 	cleanupLeafLogDone = true
-	stats.FullyCompacted = finalDebt.Empty()
-	stats.PolicyFullyCompacted = stats.FullyCompacted
-	stats.ByteMinimized = opts.Mode == CompactStorageExhaustive && finalDebt.Empty()
+	stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized = compactStorageCompactionFlags(opts, finalDebt)
 	return stats, nil
+}
+
+func compactStorageCompactionFlags(opts CompactStorageOptions, debt CompactStorageDebt) (fullyCompacted bool, policyFullyCompacted bool, byteMinimized bool) {
+	policyFullyCompacted = debt.Empty()
+	fullyCompacted = policyFullyCompacted
+	byteMinimized = opts.Mode == CompactStorageExhaustive && debt.Empty()
+	return fullyCompacted, policyFullyCompacted, byteMinimized
 }
 
 func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWriter) (bool, error) {
@@ -823,6 +842,12 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 	if opts.ValueLogRewriteBatchSize < 0 {
 		opts.ValueLogRewriteBatchSize = 0
 	}
+	if opts.ValueLogRewriteMinSegmentStaleRatio < 0 {
+		opts.ValueLogRewriteMinSegmentStaleRatio = 0
+	}
+	if opts.ValueLogRewriteMinSegmentStaleBytes < 0 {
+		opts.ValueLogRewriteMinSegmentStaleBytes = 0
+	}
 	if opts.Mode == CompactStorageExhaustive {
 		opts.LeafPackForce = true
 	}
@@ -869,10 +894,34 @@ func normalizeCompactStorageOptions(opts CompactStorageOptions) CompactStorageOp
 	return opts
 }
 
-func compactStorageRewritePlanOptions(protectedPaths []string) ValueLogRewriteOnlineOptions {
+const (
+	compactStoragePolicyValueLogRewriteMinStaleRatio = 0.30
+	compactStoragePolicyValueLogRewriteMinStaleBytes = 8 << 20
+)
+
+func compactStorageRewritePlanOptions(opts CompactStorageOptions, protectedPaths []string) ValueLogRewriteOnlineOptions {
+	ratio := float64(0)
+	staleBytes := int64(1)
+	staleBytesCapRatio := float64(0)
+	if opts.Mode != CompactStorageExhaustive {
+		ratio = compactStoragePolicyValueLogRewriteMinStaleRatio
+		staleBytes = compactStoragePolicyValueLogRewriteMinStaleBytes
+		if opts.ValueLogRewriteMinSegmentStaleRatio > 0 {
+			ratio = opts.ValueLogRewriteMinSegmentStaleRatio
+		}
+		if opts.ValueLogRewriteMinSegmentStaleBytes > 0 {
+			staleBytes = opts.ValueLogRewriteMinSegmentStaleBytes
+		} else {
+			// Keep the 8 MiB default meaningful for normal segments without
+			// permanently excluding a small segment that meets the ratio policy.
+			staleBytesCapRatio = ratio
+		}
+	}
 	return ValueLogRewriteOnlineOptions{
-		MinSegmentStaleBytes: 1,
-		ProtectedPaths:       protectedPaths,
+		MinSegmentStaleRatio:         ratio,
+		MinSegmentStaleBytes:         staleBytes,
+		MinSegmentStaleBytesCapRatio: staleBytesCapRatio,
+		ProtectedPaths:               protectedPaths,
 	}
 }
 
@@ -1010,7 +1059,7 @@ func compactStorageRememberLeafPackCreatedFileIDs(ignoredRawFileIDs map[uint32]s
 func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, fencedIDsOut *[]uint32, ignoredLeafPackRawFileIDs map[uint32]struct{}) (CompactStorageDebt, error) {
 	var debt CompactStorageDebt
 	protectedPaths := compactStorageFencedValueLogProtectedPaths(opts)
-	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(protectedPaths))
+	rewritePlan, err := db.ValueLogRewritePlan(ctx, compactStorageRewritePlanOptions(opts, protectedPaths))
 	if err != nil {
 		return debt, err
 	}

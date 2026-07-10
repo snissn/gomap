@@ -367,6 +367,419 @@ func TestCompactStoragePlanMatchesAppliedRewriteScopeForLiveOnlySegments(t *test
 	}
 }
 
+func TestCompactStorageFullRewriteSkipsMostlyLiveValueLogSegment(t *testing.T) {
+	db := openCompactStorageRewritePolicyFixture(t, 9, 1, 1024)
+	defer func() { _ = db.Close() }()
+
+	opts := CompactStorageOptions{
+		Mode:                                CompactStorageFull,
+		ValueLogRewriteMinSegmentStaleRatio: 0.30,
+		ValueLogRewriteMinSegmentStaleBytes: 1,
+		DisableZeroByteValueLogCleanup:      true,
+	}
+	plan, err := db.CompactStoragePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if plan.ValueLogRewritePlan.BytesStale <= 0 {
+		t.Fatalf("expected byte-minimization stale bytes in mostly-live fixture, plan=%+v", plan.ValueLogRewritePlan)
+	}
+	if got := plan.ValueLogRewritePlan.SegmentsSelected; got != 0 {
+		t.Fatalf("full policy selected mostly-live segment=%d want 0, plan=%+v", got, plan.ValueLogRewritePlan)
+	}
+	if got := plan.RemainingDebt.ValueLogRewriteSegments; got != 0 {
+		t.Fatalf("policy rewrite debt=%d want 0, debt=%+v plan=%+v", got, plan.RemainingDebt, plan.ValueLogRewritePlan)
+	}
+	if !plan.FullyCompacted || !plan.PolicyFullyCompacted || plan.ByteMinimized {
+		t.Fatalf("plan flags fully=%t policy=%t byte=%t debt=%+v plan=%+v", plan.FullyCompacted, plan.PolicyFullyCompacted, plan.ByteMinimized, plan.RemainingDebt, plan.ValueLogRewritePlan)
+	}
+
+	stats, err := db.CompactStorage(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := stats.ValueLogRewrite.SourceSegmentsRequested; got != 0 {
+		t.Fatalf("applied rewrite source segments=%d want 0, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if got := stats.ValueLogRewrite.ValueBytesCopied; got != 0 {
+		t.Fatalf("applied rewrite copied bytes=%d want 0, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("stats flags fully=%t policy=%t byte=%t debt=%+v plan=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt, stats.ValueLogRewritePlan)
+	}
+}
+
+func TestCompactStorageQuickAndDefaultRewriteSkipMostlyLiveValueLogSegment(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		opts     CompactStorageOptions
+		wantMode CompactStorageMode
+	}{
+		{name: "quick", opts: CompactStorageOptions{Mode: CompactStorageQuick}, wantMode: CompactStorageQuick},
+		{name: "zero_value_default", opts: CompactStorageOptions{}, wantMode: CompactStorageFull},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openCompactStorageRewritePolicyFixture(t, 9, 1, 1024)
+			defer func() { _ = db.Close() }()
+
+			plan, err := db.CompactStoragePlan(context.Background(), tt.opts)
+			if err != nil {
+				t.Fatalf("CompactStoragePlan: %v", err)
+			}
+			if plan.Mode != tt.wantMode {
+				t.Fatalf("plan mode=%q want %q", plan.Mode, tt.wantMode)
+			}
+			if plan.ValueLogRewritePlan.BytesStale <= 0 {
+				t.Fatalf("expected physical stale bytes in mostly-live fixture, plan=%+v", plan.ValueLogRewritePlan)
+			}
+			if plan.ValueLogRewritePlan.SegmentsSelected != 0 || plan.RemainingDebt.ValueLogRewriteSegments != 0 || plan.RemainingDebt.ValueLogRewriteBytes != 0 {
+				t.Fatalf("plan reported rewrite work for policy-skipped segment: plan=%+v debt=%+v", plan.ValueLogRewritePlan, plan.RemainingDebt)
+			}
+			if !plan.FullyCompacted || !plan.PolicyFullyCompacted || plan.ByteMinimized {
+				t.Fatalf("plan flags fully=%t policy=%t byte=%t debt=%+v", plan.FullyCompacted, plan.PolicyFullyCompacted, plan.ByteMinimized, plan.RemainingDebt)
+			}
+
+			stats, err := db.CompactStorage(context.Background(), tt.opts)
+			if err != nil {
+				t.Fatalf("CompactStorage: %v", err)
+			}
+			if stats.Mode != tt.wantMode {
+				t.Fatalf("stats mode=%q want %q", stats.Mode, tt.wantMode)
+			}
+			if stats.ValueLogRewrite.SourceSegmentsRequested != 0 || stats.ValueLogRewrite.ValueRecordsCopied != 0 || stats.ValueLogRewrite.ValueBytesCopied != 0 {
+				t.Fatalf("applied rewrite copied policy-skipped segment: stats=%+v", stats.ValueLogRewrite)
+			}
+			if stats.RemainingDebt.ValueLogRewriteSegments != 0 || stats.RemainingDebt.ValueLogRewriteBytes != 0 {
+				t.Fatalf("remaining policy rewrite debt=%+v want none", stats.RemainingDebt)
+			}
+			if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
+				t.Fatalf("stats flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+			}
+		})
+	}
+}
+
+func TestCompactStorageFullRewritePolicyRequiresStaleRatioAndBytes(t *testing.T) {
+	cases := []struct {
+		name         string
+		opts         CompactStorageOptions
+		wantSelected int
+	}{
+		{
+			name: "below_ratio",
+			opts: CompactStorageOptions{
+				Mode:                                CompactStorageFull,
+				ValueLogRewriteMinSegmentStaleRatio: 0.30,
+				ValueLogRewriteMinSegmentStaleBytes: 1,
+			},
+			wantSelected: 0,
+		},
+		{
+			name: "below_bytes",
+			opts: CompactStorageOptions{
+				Mode:                                CompactStorageFull,
+				ValueLogRewriteMinSegmentStaleRatio: 0.01,
+				ValueLogRewriteMinSegmentStaleBytes: 1 << 20,
+			},
+			wantSelected: 0,
+		},
+		{
+			name: "clears_both",
+			opts: CompactStorageOptions{
+				Mode:                                CompactStorageFull,
+				ValueLogRewriteMinSegmentStaleRatio: 0.01,
+				ValueLogRewriteMinSegmentStaleBytes: 1,
+			},
+			wantSelected: 1,
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openCompactStorageRewritePolicyFixture(t, 9, 1, 1024)
+			defer func() { _ = db.Close() }()
+			plan, err := db.CompactStoragePlan(context.Background(), tt.opts)
+			if err != nil {
+				t.Fatalf("CompactStoragePlan: %v", err)
+			}
+			if got := plan.ValueLogRewritePlan.SegmentsSelected; got != tt.wantSelected {
+				t.Fatalf("segments selected=%d want %d, rewrite plan=%+v debt=%+v", got, tt.wantSelected, plan.ValueLogRewritePlan, plan.RemainingDebt)
+			}
+			if got := plan.RemainingDebt.ValueLogRewriteSegments; got != tt.wantSelected {
+				t.Fatalf("rewrite debt segments=%d want %d, rewrite plan=%+v debt=%+v", got, tt.wantSelected, plan.ValueLogRewritePlan, plan.RemainingDebt)
+			}
+		})
+	}
+}
+
+func TestCompactStorageFullRewriteRewritesHighStaleValueLogSegment(t *testing.T) {
+	db := openCompactStorageRewritePolicyFixture(t, 2, 8, 1024)
+	defer func() { _ = db.Close() }()
+
+	opts := CompactStorageOptions{
+		Mode:                                CompactStorageFull,
+		ValueLogRewriteMinSegmentStaleRatio: 0.30,
+		ValueLogRewriteMinSegmentStaleBytes: 1,
+	}
+	plan, err := db.CompactStoragePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.ValueLogRewritePlan.SegmentsSelected; got != 1 {
+		t.Fatalf("full policy selected segments=%d want 1, plan=%+v debt=%+v", got, plan.ValueLogRewritePlan, plan.RemainingDebt)
+	}
+	if got := plan.RemainingDebt.ValueLogRewriteSegments; got != 1 {
+		t.Fatalf("policy rewrite debt=%d want 1, debt=%+v plan=%+v", got, plan.RemainingDebt, plan.ValueLogRewritePlan)
+	}
+	if plan.FullyCompacted || plan.PolicyFullyCompacted || plan.ByteMinimized {
+		t.Fatalf("plan flags fully=%t policy=%t byte=%t want all false before rewrite", plan.FullyCompacted, plan.PolicyFullyCompacted, plan.ByteMinimized)
+	}
+
+	stats, err := db.CompactStorage(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := stats.ValueLogRewrite.SourceSegmentsRequested; got != 1 {
+		t.Fatalf("applied rewrite source segments=%d want 1, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if got := stats.ValueLogRewrite.ValueRecordsCopied; got != 2 {
+		t.Fatalf("applied rewrite copied records=%d want 2, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if got := stats.ValueLogRewrite.ValueBytesCopied; got <= 0 {
+		t.Fatalf("applied rewrite copied bytes=%d want >0, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if stats.RemainingDebt.ValueLogRewriteSegments != 0 || stats.RemainingDebt.ValueLogRewriteBytes != 0 {
+		t.Fatalf("remaining policy rewrite debt=%+v want none", stats.RemainingDebt)
+	}
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("stats flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageFullRewriteDoesNotExemptSmallHighStaleValueLogSegment(t *testing.T) {
+	db := openCompactStorageRewritePolicyFixture(t, 2, 8, 128)
+	defer func() { _ = db.Close() }()
+
+	// The source segment is far below the default 8 MiB absolute floor, but it
+	// is 80% stale. Full mode caps that floor at its 30% ratio threshold so this
+	// high-stale small segment remains actionable.
+	opts := CompactStorageOptions{Mode: CompactStorageFull}
+	plan, err := db.CompactStoragePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStoragePlan: %v", err)
+	}
+	if got := plan.ValueLogRewritePlan.SegmentsSelected; got != 1 {
+		t.Fatalf("full policy selected segments=%d want 1, plan=%+v debt=%+v", got, plan.ValueLogRewritePlan, plan.RemainingDebt)
+	}
+	if got := plan.RemainingDebt.ValueLogRewriteSegments; got != 1 {
+		t.Fatalf("policy rewrite debt=%d want 1, debt=%+v plan=%+v", got, plan.RemainingDebt, plan.ValueLogRewritePlan)
+	}
+
+	stats, err := db.CompactStorage(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("CompactStorage: %v", err)
+	}
+	if got := stats.ValueLogRewrite.SourceSegmentsRequested; got != 1 {
+		t.Fatalf("applied rewrite source segments=%d want 1, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if got := stats.ValueLogRewrite.ValueBytesCopied; got <= 0 {
+		t.Fatalf("applied rewrite copied bytes=%d want >0, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || stats.ByteMinimized {
+		t.Fatalf("stats flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageExhaustiveRewriteSelectsAnyStaleValueLogSegment(t *testing.T) {
+	db := openCompactStorageRewritePolicyFixture(t, 9, 1, 128)
+	defer func() { _ = db.Close() }()
+
+	fullPlan, err := db.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		Mode:                                CompactStorageFull,
+		ValueLogRewriteMinSegmentStaleRatio: 0.30,
+		ValueLogRewriteMinSegmentStaleBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan full: %v", err)
+	}
+	if got := fullPlan.ValueLogRewritePlan.SegmentsSelected; got != 0 {
+		t.Fatalf("full policy selected mostly-live segment=%d want 0, plan=%+v", got, fullPlan.ValueLogRewritePlan)
+	}
+
+	exhaustivePlan, err := db.CompactStoragePlan(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan exhaustive: %v", err)
+	}
+	if got := exhaustivePlan.ValueLogRewritePlan.SegmentsSelected; got != 1 {
+		t.Fatalf("exhaustive selected segments=%d want 1 for stale bytes, plan=%+v debt=%+v", got, exhaustivePlan.ValueLogRewritePlan, exhaustivePlan.RemainingDebt)
+	}
+	if exhaustivePlan.FullyCompacted || exhaustivePlan.PolicyFullyCompacted || exhaustivePlan.ByteMinimized {
+		t.Fatalf("exhaustive plan flags fully=%t policy=%t byte=%t want all false before rewrite", exhaustivePlan.FullyCompacted, exhaustivePlan.PolicyFullyCompacted, exhaustivePlan.ByteMinimized)
+	}
+
+	stats, err := db.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive})
+	if err != nil {
+		t.Fatalf("CompactStorage exhaustive: %v", err)
+	}
+	if got := stats.ValueLogRewrite.SourceSegmentsRequested; got != 1 {
+		t.Fatalf("exhaustive rewrite source segments=%d want 1, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if got := stats.ValueLogRewrite.ValueRecordsCopied; got != 9 {
+		t.Fatalf("exhaustive rewrite copied records=%d want 9, stats=%+v", got, stats.ValueLogRewrite)
+	}
+	if !stats.FullyCompacted || !stats.PolicyFullyCompacted || !stats.ByteMinimized {
+		t.Fatalf("exhaustive stats flags fully=%t policy=%t byte=%t debt=%+v", stats.FullyCompacted, stats.PolicyFullyCompacted, stats.ByteMinimized, stats.RemainingDebt)
+	}
+}
+
+func TestCompactStorageCompactedFlagsTruthTable(t *testing.T) {
+	debt := CompactStorageDebt{ValueLogRewriteSegments: 1, ValueLogRewriteBytes: 1}
+	for _, tt := range []struct {
+		name       string
+		opts       CompactStorageOptions
+		debt       CompactStorageDebt
+		wantFully  bool
+		wantPolicy bool
+		wantByte   bool
+	}{
+		{name: "full_empty_policy_only", opts: CompactStorageOptions{Mode: CompactStorageFull}, wantFully: true, wantPolicy: true, wantByte: false},
+		{name: "full_policy_debt", opts: CompactStorageOptions{Mode: CompactStorageFull}, debt: debt, wantFully: false, wantPolicy: false, wantByte: false},
+		{name: "quick_empty_policy_only", opts: CompactStorageOptions{Mode: CompactStorageQuick}, wantFully: true, wantPolicy: true, wantByte: false},
+		{name: "exhaustive_empty_byte_minimized", opts: CompactStorageOptions{Mode: CompactStorageExhaustive}, wantFully: true, wantPolicy: true, wantByte: true},
+		{name: "exhaustive_byte_debt", opts: CompactStorageOptions{Mode: CompactStorageExhaustive}, debt: debt, wantFully: false, wantPolicy: false, wantByte: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fully, policy, byteMinimized := compactStorageCompactionFlags(tt.opts, tt.debt)
+			if fully != tt.wantFully || policy != tt.wantPolicy || byteMinimized != tt.wantByte {
+				t.Fatalf("flags fully=%t policy=%t byte=%t want fully=%t policy=%t byte=%t", fully, policy, byteMinimized, tt.wantFully, tt.wantPolicy, tt.wantByte)
+			}
+		})
+	}
+}
+
+func TestCompactStorageRewritePolicyDefaultsAndOverrides(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		opts      CompactStorageOptions
+		wantRatio float64
+		wantBytes int64
+		wantCap   float64
+	}{
+		{name: "default_is_full_policy", opts: normalizeCompactStorageOptions(CompactStorageOptions{}), wantRatio: compactStoragePolicyValueLogRewriteMinStaleRatio, wantBytes: compactStoragePolicyValueLogRewriteMinStaleBytes, wantCap: compactStoragePolicyValueLogRewriteMinStaleRatio},
+		{name: "quick_uses_policy", opts: normalizeCompactStorageOptions(CompactStorageOptions{Mode: CompactStorageQuick}), wantRatio: compactStoragePolicyValueLogRewriteMinStaleRatio, wantBytes: compactStoragePolicyValueLogRewriteMinStaleBytes, wantCap: compactStoragePolicyValueLogRewriteMinStaleRatio},
+		{name: "full_override", opts: normalizeCompactStorageOptions(CompactStorageOptions{Mode: CompactStorageFull, ValueLogRewriteMinSegmentStaleRatio: 0.42, ValueLogRewriteMinSegmentStaleBytes: 4096}), wantRatio: 0.42, wantBytes: 4096, wantCap: 0},
+		{name: "exhaustive_byte_minimizing", opts: normalizeCompactStorageOptions(CompactStorageOptions{Mode: CompactStorageExhaustive, ValueLogRewriteMinSegmentStaleRatio: 0.99, ValueLogRewriteMinSegmentStaleBytes: 1 << 30}), wantRatio: 0, wantBytes: 1, wantCap: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rewriteOpts := compactStorageRewritePlanOptions(tt.opts, nil)
+			if rewriteOpts.MinSegmentStaleRatio != tt.wantRatio || rewriteOpts.MinSegmentStaleBytes != tt.wantBytes || rewriteOpts.MinSegmentStaleBytesCapRatio != tt.wantCap {
+				t.Fatalf("rewrite policy ratio=%v bytes=%d cap=%v want ratio=%v bytes=%d cap=%v", rewriteOpts.MinSegmentStaleRatio, rewriteOpts.MinSegmentStaleBytes, rewriteOpts.MinSegmentStaleBytesCapRatio, tt.wantRatio, tt.wantBytes, tt.wantCap)
+			}
+		})
+	}
+}
+
+func TestCompactStorageRewritePolicyRatioOnlyOverrideCapsDefaultByteFloor(t *testing.T) {
+	opts := normalizeCompactStorageOptions(CompactStorageOptions{
+		Mode:                                CompactStorageFull,
+		ValueLogRewriteMinSegmentStaleRatio: 0.10,
+	})
+	rewriteOpts := compactStorageRewritePlanOptions(opts, nil)
+	if rewriteOpts.MinSegmentStaleRatio != 0.10 || rewriteOpts.MinSegmentStaleBytes != compactStoragePolicyValueLogRewriteMinStaleBytes || rewriteOpts.MinSegmentStaleBytesCapRatio != 0.10 {
+		t.Fatalf("ratio-only rewrite policy=%+v", rewriteOpts)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: rewriteSelectorTestFile(t, "ratio-equal.log", 100),
+		2: rewriteSelectorTestFile(t, "ratio-below.log", 100),
+	}
+	selected := selectRewriteSourceSegments(rewriteOpts, files, map[uint32]struct{}{}, map[uint32]int64{
+		1: 90, // 10 stale bytes: ratio and capped byte-floor equality.
+		2: 91, // 9 stale bytes: below both effective thresholds.
+	})
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("ratio-only override did not select equality candidate: selected=%v", selected)
+	}
+	if _, ok := selected[2]; ok {
+		t.Fatalf("ratio-only override selected below-threshold candidate: selected=%v", selected)
+	}
+}
+
+func TestCompactStorageRewritePolicyBytesOnlyOverrideKeepsExactFloor(t *testing.T) {
+	const customStaleBytes = int64(40)
+	opts := normalizeCompactStorageOptions(CompactStorageOptions{
+		Mode:                                CompactStorageFull,
+		ValueLogRewriteMinSegmentStaleBytes: customStaleBytes,
+	})
+	rewriteOpts := compactStorageRewritePlanOptions(opts, nil)
+	if rewriteOpts.MinSegmentStaleRatio != compactStoragePolicyValueLogRewriteMinStaleRatio || rewriteOpts.MinSegmentStaleBytes != customStaleBytes || rewriteOpts.MinSegmentStaleBytesCapRatio != 0 {
+		t.Fatalf("bytes-only rewrite policy=%+v", rewriteOpts)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: rewriteSelectorTestFile(t, "bytes-below.log", 100),
+		2: rewriteSelectorTestFile(t, "bytes-equal.log", 100),
+	}
+	selected := selectRewriteSourceSegments(rewriteOpts, files, map[uint32]struct{}{}, map[uint32]int64{
+		1: 61, // 39% stale clears the default ratio but misses the exact byte floor.
+		2: 60, // 40% stale clears both thresholds at byte-floor equality.
+	})
+	if _, ok := selected[1]; ok {
+		t.Fatalf("bytes-only override selected below exact byte floor: selected=%v", selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("bytes-only override did not select equality candidate: selected=%v", selected)
+	}
+}
+
+func openCompactStorageRewritePolicyFixture(t *testing.T, liveRecords, staleRecords, valueSize int) *DB {
+	t.Helper()
+	if liveRecords <= 0 || staleRecords <= 0 {
+		t.Fatalf("liveRecords and staleRecords must be positive: live=%d stale=%d", liveRecords, staleRecords)
+	}
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	total := liveRecords + staleRecords
+	ptrs := appendPointersInNewSegment(t, db.dir, 0, 1, 360_000, total, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i%23)}, valueSize)
+	})
+	activePtrs := appendPointersInNewSegment(t, db.dir, 0, 2, 460_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("z"), valueSize)
+	})
+	b, ok := db.NewBatch().(*Batch)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("NewBatch type assertion failed")
+	}
+	for i := 0; i < liveRecords; i++ {
+		if err := b.SetPointer([]byte(fmt.Sprintf("source-live-%06d", i)), ptrs[i]); err != nil {
+			_ = b.Close()
+			_ = db.Close()
+			t.Fatalf("SetPointer source %d: %v", i, err)
+		}
+	}
+	if err := b.SetPointer([]byte("active-live"), activePtrs[0]); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("SetPointer active: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		_ = db.Close()
+		t.Fatalf("batch close: %v", err)
+	}
+	if err := db.RefreshValueLogSet(); err != nil {
+		_ = db.Close()
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	return db
+}
+
 func TestCompactStorageReportsAppliedValueLogGCStats(t *testing.T) {
 	dir := t.TempDir()
 
