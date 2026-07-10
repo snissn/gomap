@@ -187,6 +187,8 @@ type DB struct {
 	rawSpanNativePublicUpdateSyncReject  atomic.Uint64
 	publicBatchWrite                     publicOperationStats
 	publicBatchWriteSync                 publicOperationStats
+	publicBatchWriteSyncPhaseEnabled     bool
+	publicBatchWriteSyncPhase            publicBatchWriteSyncPhaseStats
 	publicCheckpoint                     publicOperationStats
 	bgVac                                bgIndexVacuumWorker
 	notifyError                          func(error)
@@ -204,6 +206,39 @@ type publicOperationStats struct {
 	nsTotal atomic.Uint64
 	lastNs  atomic.Int64
 	maxNs   atomic.Int64
+}
+
+type publicBatchWriteSyncPhaseSample struct {
+	checkpointGate           time.Duration
+	preflightMaterialization time.Duration
+	commandCallback          time.Duration
+	commandAppend            time.Duration
+	commandAppendObserved    bool
+	commandFlush             time.Duration
+	commandFlushObserved     bool
+	commandSync              time.Duration
+	commandSyncObserved      bool
+	memtablePublicationReset time.Duration
+}
+
+type publicBatchWriteSyncPhaseStats struct {
+	calls                      atomic.Uint64
+	errors                     atomic.Uint64
+	wallNs                     atomic.Uint64
+	checkpointGateNs           atomic.Uint64
+	preflightMaterializationNs atomic.Uint64
+	commandCallbackNs          atomic.Uint64
+	commandAppendCalls         atomic.Uint64
+	commandAppendNs            atomic.Uint64
+	commandFlushCalls          atomic.Uint64
+	commandFlushNs             atomic.Uint64
+	commandSyncCalls           atomic.Uint64
+	commandSyncNs              atomic.Uint64
+	commandOtherNs             atomic.Uint64
+	memtablePublicationResetNs atomic.Uint64
+	residualNs                 atomic.Uint64
+	topLevelPartitionOverruns  atomic.Uint64
+	commandPartitionOverruns   atomic.Uint64
 }
 
 var (
@@ -313,6 +348,94 @@ func publicOperationStatsInto(stats map[string]string, prefix string, s *publicO
 	stats[prefix+".ns_total"] = fmt.Sprintf("%d", s.nsTotal.Load())
 	stats[prefix+".last_ns"] = fmt.Sprintf("%d", s.lastNs.Load())
 	stats[prefix+".max_ns"] = fmt.Sprintf("%d", s.maxNs.Load())
+}
+
+func nonNegativeDurationNs(value time.Duration) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	return uint64(value.Nanoseconds())
+}
+
+func (s *publicBatchWriteSyncPhaseStats) observe(start time.Time, err error, sample publicBatchWriteSyncPhaseSample) {
+	if s == nil {
+		return
+	}
+	wallNs := nonNegativeDurationNs(time.Since(start))
+	checkpointGateNs := nonNegativeDurationNs(sample.checkpointGate)
+	preflightMaterializationNs := nonNegativeDurationNs(sample.preflightMaterialization)
+	commandCallbackNs := nonNegativeDurationNs(sample.commandCallback)
+	commandAppendNs := nonNegativeDurationNs(sample.commandAppend)
+	commandFlushNs := nonNegativeDurationNs(sample.commandFlush)
+	commandSyncNs := nonNegativeDurationNs(sample.commandSync)
+	memtablePublicationResetNs := nonNegativeDurationNs(sample.memtablePublicationReset)
+
+	topLevelKnownNs := checkpointGateNs + preflightMaterializationNs + commandCallbackNs + memtablePublicationResetNs
+	residualNs := uint64(0)
+	if topLevelKnownNs <= wallNs {
+		residualNs = wallNs - topLevelKnownNs
+	} else {
+		s.topLevelPartitionOverruns.Add(1)
+	}
+	commandKnownNs := commandAppendNs + commandFlushNs + commandSyncNs
+	commandOtherNs := uint64(0)
+	if commandKnownNs <= commandCallbackNs {
+		commandOtherNs = commandCallbackNs - commandKnownNs
+	} else {
+		s.commandPartitionOverruns.Add(1)
+	}
+
+	s.calls.Add(1)
+	if err != nil {
+		s.errors.Add(1)
+	}
+	s.wallNs.Add(wallNs)
+	s.checkpointGateNs.Add(checkpointGateNs)
+	s.preflightMaterializationNs.Add(preflightMaterializationNs)
+	s.commandCallbackNs.Add(commandCallbackNs)
+	if sample.commandAppendObserved {
+		s.commandAppendCalls.Add(1)
+	}
+	s.commandAppendNs.Add(commandAppendNs)
+	if sample.commandFlushObserved {
+		s.commandFlushCalls.Add(1)
+	}
+	s.commandFlushNs.Add(commandFlushNs)
+	if sample.commandSyncObserved {
+		s.commandSyncCalls.Add(1)
+	}
+	s.commandSyncNs.Add(commandSyncNs)
+	s.commandOtherNs.Add(commandOtherNs)
+	s.memtablePublicationResetNs.Add(memtablePublicationResetNs)
+	s.residualNs.Add(residualNs)
+}
+
+func publicBatchWriteSyncPhaseStatsInto(stats map[string]string, enabled bool, s *publicBatchWriteSyncPhaseStats) {
+	if stats == nil || s == nil {
+		return
+	}
+	prefix := "treedb.public.batch.write_sync.phase."
+	stats[prefix+"enabled"] = strconv.FormatBool(enabled)
+	stats[prefix+"scope"] = "command_wal_public_batch_write_sync"
+	stats[prefix+"top_level_partition"] = "checkpoint_gate+preflight_materialization+command_callback+memtable_publication_reset+residual"
+	stats[prefix+"command_callback_partition"] = "command_append+(command_flush|command_sync)+command_other"
+	stats[prefix+"calls_total"] = fmt.Sprintf("%d", s.calls.Load())
+	stats[prefix+"errors_total"] = fmt.Sprintf("%d", s.errors.Load())
+	stats[prefix+"wall.ns_total"] = fmt.Sprintf("%d", s.wallNs.Load())
+	stats[prefix+"checkpoint_gate.ns_total"] = fmt.Sprintf("%d", s.checkpointGateNs.Load())
+	stats[prefix+"preflight_materialization.ns_total"] = fmt.Sprintf("%d", s.preflightMaterializationNs.Load())
+	stats[prefix+"command_callback.ns_total"] = fmt.Sprintf("%d", s.commandCallbackNs.Load())
+	stats[prefix+"command_append.calls_total"] = fmt.Sprintf("%d", s.commandAppendCalls.Load())
+	stats[prefix+"command_append.ns_total"] = fmt.Sprintf("%d", s.commandAppendNs.Load())
+	stats[prefix+"command_flush.calls_total"] = fmt.Sprintf("%d", s.commandFlushCalls.Load())
+	stats[prefix+"command_flush.ns_total"] = fmt.Sprintf("%d", s.commandFlushNs.Load())
+	stats[prefix+"command_sync.calls_total"] = fmt.Sprintf("%d", s.commandSyncCalls.Load())
+	stats[prefix+"command_sync.ns_total"] = fmt.Sprintf("%d", s.commandSyncNs.Load())
+	stats[prefix+"command_other.ns_total"] = fmt.Sprintf("%d", s.commandOtherNs.Load())
+	stats[prefix+"memtable_publication_reset.ns_total"] = fmt.Sprintf("%d", s.memtablePublicationResetNs.Load())
+	stats[prefix+"residual.ns_total"] = fmt.Sprintf("%d", s.residualNs.Load())
+	stats[prefix+"top_level_partition_overruns_total"] = fmt.Sprintf("%d", s.topLevelPartitionOverruns.Load())
+	stats[prefix+"command_partition_overruns_total"] = fmt.Sprintf("%d", s.commandPartitionOverruns.Load())
 }
 
 func writePathFromOptions(opts Options) writePathInfo {
@@ -865,7 +988,7 @@ func Open(opts Options) (*DB, error) {
 
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
-	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	out := &DB{cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
 	if out.commandWALCached {
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
@@ -937,9 +1060,10 @@ func (db *DB) publicCachedExpvarStatsInto(stats map[string]string) {
 }
 
 const (
-	envDisableBackgroundPrune       = "TREEDB_DISABLE_BACKGROUND_PRUNE"
-	envDisableBackgroundIndexVacuum = "TREEDB_DISABLE_BACKGROUND_INDEX_VACUUM"
-	envDisableVlogGeneration        = "TREEDB_DISABLE_VLOG_GENERATION"
+	envDisableBackgroundPrune         = "TREEDB_DISABLE_BACKGROUND_PRUNE"
+	envDisableBackgroundIndexVacuum   = "TREEDB_DISABLE_BACKGROUND_INDEX_VACUUM"
+	envDisableVlogGeneration          = "TREEDB_DISABLE_VLOG_GENERATION"
+	envPublicBatchWriteSyncPhaseStats = "TREEDB_PUBLIC_BATCH_WRITE_SYNC_PHASE_STATS"
 
 	// Value-log compression knobs (cached mode).
 	//
@@ -1008,6 +1132,9 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	}
 	if envBool(envDisableVlogGeneration) {
 		opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	}
+	if enabled, ok := envBoolSet(envPublicBatchWriteSyncPhaseStats); ok {
+		opts.PublicBatchWriteSyncPhaseStats = enabled
 	}
 
 	if val, ok := envString(envVlogCompression); ok {
@@ -2070,6 +2197,7 @@ func (db *DB) publicOperationStatsInto(stats map[string]string) {
 	}
 	publicOperationStatsInto(stats, "treedb.public.batch.write", &db.publicBatchWrite)
 	publicOperationStatsInto(stats, "treedb.public.batch.write_sync", &db.publicBatchWriteSync)
+	publicBatchWriteSyncPhaseStatsInto(stats, db.publicBatchWriteSyncPhaseEnabled, &db.publicBatchWriteSyncPhase)
 	publicOperationStatsInto(stats, "treedb.public.checkpoint", &db.publicCheckpoint)
 }
 

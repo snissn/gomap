@@ -34787,6 +34787,16 @@ func (b *Batch) WriteSync() error {
 	return b.write(true)
 }
 
+// CommandWALBatchWriteTiming is a request-scoped partition of the cached work
+// around a command-WAL public batch callback. The callback itself is reported
+// separately so its command-journal subphases can be partitioned by the caller.
+type CommandWALBatchWriteTiming struct {
+	CheckpointGate           time.Duration
+	PreflightMaterialization time.Duration
+	CommandCallback          time.Duration
+	MemtablePublicationReset time.Duration
+}
+
 // WriteAfterCommandWALAppend writes a cached batch by running appendCommand
 // after cached write preflight succeeds and before the mutation becomes
 // visible in the mutable table. This is intentionally limited to command-WAL
@@ -34818,6 +34828,62 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 		return b.writeRangeBatch(sync)
 	}
 	return b.writeRegular(sync)
+}
+
+// WriteAfterCommandWALAppendMeasured is the opt-in diagnostic counterpart to
+// WriteAfterCommandWALAppend. It preserves the same write ordering while
+// measuring non-overlapping request phases. Normal writes use the unmeasured
+// method above and do not pay these clock reads.
+func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func() error) (timing CommandWALBatchWriteTiming, err error) {
+	if b == nil || b.db == nil {
+		return timing, backenddb.ErrClosed
+	}
+	if b.closed {
+		return timing, ErrBatchClosed
+	}
+	if appendCommand == nil {
+		return timing, fmt.Errorf("cachingdb: missing command wal append callback")
+	}
+	if !b.db.externalCommandWAL {
+		return timing, fmt.Errorf("cachingdb: command wal batch writes require external command wal cached mode")
+	}
+
+	checkpointStart := time.Now()
+	b.db.waitForCheckpointForWrite()
+	phaseStart := time.Now()
+	timing.CheckpointGate = phaseStart.Sub(checkpointStart)
+	if b.backend != nil {
+		return timing, fmt.Errorf("cachingdb: command wal batch writes require cached memtable path")
+	}
+
+	callbackInvoked := false
+	postCallbackStart := time.Time{}
+	measuredAppend := func() error {
+		callbackStart := time.Now()
+		timing.PreflightMaterialization = callbackStart.Sub(phaseStart)
+		callbackInvoked = true
+		appendErr := appendCommand()
+		postCallbackStart = time.Now()
+		timing.CommandCallback = postCallbackStart.Sub(callbackStart)
+		return appendErr
+	}
+	prevAppend := b.commandWALAppend
+	b.commandWALAppend = measuredAppend
+	defer func() {
+		b.commandWALAppend = prevAppend
+	}()
+	if b.hasDeleteRanges {
+		err = b.writeRangeBatch(sync)
+	} else {
+		err = b.writeRegular(sync)
+	}
+	writeEnd := time.Now()
+	if callbackInvoked {
+		timing.MemtablePublicationReset = writeEnd.Sub(postCallbackStart)
+	} else {
+		timing.PreflightMaterialization = writeEnd.Sub(phaseStart)
+	}
+	return timing, err
 }
 
 func (b *Batch) write(sync bool) error {

@@ -436,6 +436,34 @@ func requirePublicStatDelta(t *testing.T, before, after map[string]string, key s
 	}
 }
 
+func requirePublicBatchWriteSyncPhasePartitions(t *testing.T, stats map[string]string) {
+	t.Helper()
+	prefix := "treedb.public.batch.write_sync.phase."
+	wall := statMapUint64(t, stats, prefix+"wall.ns_total")
+	topLevel := statMapUint64(t, stats, prefix+"checkpoint_gate.ns_total") +
+		statMapUint64(t, stats, prefix+"preflight_materialization.ns_total") +
+		statMapUint64(t, stats, prefix+"command_callback.ns_total") +
+		statMapUint64(t, stats, prefix+"memtable_publication_reset.ns_total") +
+		statMapUint64(t, stats, prefix+"residual.ns_total")
+	if topLevel != wall {
+		t.Fatalf("request phase sum=%d, want wall=%d (stats=%#v)", topLevel, wall, stats)
+	}
+	commandCallback := statMapUint64(t, stats, prefix+"command_callback.ns_total")
+	commandPartition := statMapUint64(t, stats, prefix+"command_append.ns_total") +
+		statMapUint64(t, stats, prefix+"command_flush.ns_total") +
+		statMapUint64(t, stats, prefix+"command_sync.ns_total") +
+		statMapUint64(t, stats, prefix+"command_other.ns_total")
+	if commandPartition != commandCallback {
+		t.Fatalf("command phase sum=%d, want callback=%d (stats=%#v)", commandPartition, commandCallback, stats)
+	}
+	if got := statMapUint64(t, stats, prefix+"top_level_partition_overruns_total"); got != 0 {
+		t.Fatalf("top-level partition overruns=%d, want 0 (stats=%#v)", got, stats)
+	}
+	if got := statMapUint64(t, stats, prefix+"command_partition_overruns_total"); got != 0 {
+		t.Fatalf("command partition overruns=%d, want 0 (stats=%#v)", got, stats)
+	}
+}
+
 func requirePublicCommandWALNoCheckpointSince(t *testing.T, db *DB, before map[string]string) {
 	t.Helper()
 	after := db.Stats()
@@ -535,6 +563,191 @@ func TestPublicCommandWALRuntimeStatsExposeAppendAndSyncCounters(t *testing.T) {
 	} {
 		_ = statMapUint64(t, stats, key)
 	}
+}
+
+func TestPublicCommandWALBatchWriteSyncPhaseStatsDisabledByDefault(t *testing.T) {
+	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	before := db.Stats()
+	prefix := "treedb.public.batch.write_sync.phase."
+	if got := before[prefix+"enabled"]; got != "false" {
+		t.Fatalf("phase enabled=%q, want false", got)
+	}
+	b := db.NewBatch()
+	if err := b.Set([]byte("disabled"), []byte("value")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 1)
+	if got := statMapUint64(t, after, prefix+"calls_total"); got != 0 {
+		t.Fatalf("disabled phase calls=%d, want 0 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"wall.ns_total"); got != 0 {
+		t.Fatalf("disabled phase wall=%d, want 0 (stats=%#v)", got, after)
+	}
+}
+
+func TestPublicCommandWALBatchWriteSyncPhaseStatsAreRequestScopedAndAdditive(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	opts.PublicBatchWriteSyncPhaseStats = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	prefix := "treedb.public.batch.write_sync.phase."
+	before := db.Stats()
+	if got := before[prefix+"enabled"]; got != "true" {
+		t.Fatalf("phase enabled=%q, want true", got)
+	}
+	if got := before[prefix+"top_level_partition"]; got != "checkpoint_gate+preflight_materialization+command_callback+memtable_publication_reset+residual" {
+		t.Fatalf("top-level partition=%q", got)
+	}
+	if got := before[prefix+"command_callback_partition"]; got != "command_append+(command_flush|command_sync)+command_other" {
+		t.Fatalf("command partition=%q", got)
+	}
+
+	// A non-sync public batch and an explicit checkpoint both touch global
+	// command-WAL counters, but must not enter this request-scoped WriteSync lane.
+	writeBatch := db.NewBatch()
+	if err := writeBatch.Set([]byte("write-noise"), []byte("value")); err != nil {
+		_ = writeBatch.Close()
+		t.Fatalf("noise batch Set: %v", err)
+	}
+	if err := writeBatch.Write(); err != nil {
+		_ = writeBatch.Close()
+		t.Fatalf("noise batch Write: %v", err)
+	}
+	if err := writeBatch.Close(); err != nil {
+		t.Fatalf("noise batch Close: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got := statMapUint64(t, db.Stats(), prefix+"calls_total"); got != 0 {
+		t.Fatalf("phase calls after non-WriteSync traffic=%d, want 0", got)
+	}
+
+	payloadBatch := db.NewBatch()
+	if err := payloadBatch.Set([]byte("payload"), []byte("one")); err != nil {
+		_ = payloadBatch.Close()
+		t.Fatalf("payload batch Set: %v", err)
+	}
+	if err := payloadBatch.WriteSync(); err != nil {
+		_ = payloadBatch.Close()
+		t.Fatalf("payload batch WriteSync: %v", err)
+	}
+	if err := payloadBatch.Close(); err != nil {
+		t.Fatalf("payload batch Close: %v", err)
+	}
+
+	entryScanBatch, ok := db.NewBatch().(*commandWALPublicBatch)
+	if !ok {
+		t.Fatalf("NewBatch type=%T, want *commandWALPublicBatch", db.NewBatch())
+	}
+	if err := entryScanBatch.SetView([]byte("entry-scan"), []byte("two")); err != nil {
+		_ = entryScanBatch.Close()
+		t.Fatalf("entry-scan batch SetView: %v", err)
+	}
+	if err := entryScanBatch.WriteSync(); err != nil {
+		_ = entryScanBatch.Close()
+		t.Fatalf("entry-scan batch WriteSync: %v", err)
+	}
+	if err := entryScanBatch.Close(); err != nil {
+		t.Fatalf("entry-scan batch Close: %v", err)
+	}
+
+	// Empty WriteSync still has a request-scoped command barrier. Its unsplit
+	// barrier time is conservatively retained in command_other.
+	emptyBatch := db.NewBatch()
+	if err := emptyBatch.WriteSync(); err != nil {
+		_ = emptyBatch.Close()
+		t.Fatalf("empty batch WriteSync: %v", err)
+	}
+	if err := emptyBatch.Close(); err != nil {
+		t.Fatalf("empty batch Close: %v", err)
+	}
+
+	after := db.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.public.batch.write_sync.calls_total", 3)
+	if got := statMapUint64(t, after, prefix+"calls_total"); got != 3 {
+		t.Fatalf("phase calls=%d, want 3 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"errors_total"); got != 0 {
+		t.Fatalf("phase errors=%d, want 0 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_append.calls_total"); got != 2 {
+		t.Fatalf("phase command append calls=%d, want 2 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_sync.calls_total"); got != 2 {
+		t.Fatalf("phase command sync calls=%d, want 2 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, prefix+"command_flush.calls_total"); got != 0 {
+		t.Fatalf("phase command flush calls=%d, want 0 (stats=%#v)", got, after)
+	}
+	if got := statMapUint64(t, after, "treedb.command_wal.append.count_total"); got <= 2 {
+		t.Fatalf("global command append count=%d, want > request-scoped 2 after noise (stats=%#v)", got, after)
+	}
+	requirePublicBatchWriteSyncPhasePartitions(t, after)
+}
+
+func TestPublicCommandWALBatchWriteSyncPhaseStatsEnvironmentOverride(t *testing.T) {
+	t.Setenv(envPublicBatchWriteSyncPhaseStats, "true")
+	db, err := Open(commandWALDurabilityProofOptions(t.TempDir()))
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if got := db.Stats()["treedb.public.batch.write_sync.phase.enabled"]; got != "true" {
+		t.Fatalf("phase enabled=%q, want true from %s", got, envPublicBatchWriteSyncPhaseStats)
+	}
+}
+
+func TestPublicCommandWALBatchWriteSyncPhaseStatsLabelRelaxedFlush(t *testing.T) {
+	opts := commandWALDurabilityProofOptions(t.TempDir())
+	opts.Durability = DurabilityWALOnRelaxed
+	opts.PublicBatchWriteSyncPhaseStats = true
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open command WAL: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("relaxed"), []byte("value")); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch Close: %v", err)
+	}
+
+	stats := db.Stats()
+	prefix := "treedb.public.batch.write_sync.phase."
+	if got := statMapUint64(t, stats, prefix+"command_flush.calls_total"); got != 1 {
+		t.Fatalf("phase command flush calls=%d, want 1 (stats=%#v)", got, stats)
+	}
+	if got := statMapUint64(t, stats, prefix+"command_sync.calls_total"); got != 0 {
+		t.Fatalf("phase command sync calls=%d, want 0 (stats=%#v)", got, stats)
+	}
+	requirePublicBatchWriteSyncPhasePartitions(t, stats)
 }
 
 func TestPublicCommandWALDurableSyncBoundaryMatrixDoesNotCheckpoint(t *testing.T) {
@@ -3029,6 +3242,60 @@ func BenchmarkPublicCommandWALDurableTinyBatchWriteSync(b *testing.B) {
 			b.ReportMetric(float64(totalBatchBytes)/float64(b.N), "bytes/batch")
 			reportWriteSyncLatencyDistribution(b, latencies)
 			reportCommandWALBenchmarkDeltas(b, before, after, uint64(b.N))
+		})
+	}
+}
+
+func BenchmarkPublicCommandWALTinyBatchWriteSyncPhaseStatsOverhead(b *testing.B) {
+	for _, durability := range []struct {
+		name string
+		mode DurabilityMode
+	}{
+		{name: "durable", mode: DurabilityDurable},
+		{name: "relaxed", mode: DurabilityWALOnRelaxed},
+	} {
+		b.Run("durability="+durability.name, func(b *testing.B) {
+			for _, enabled := range []bool{false, true} {
+				b.Run(fmt.Sprintf("enabled=%t", enabled), func(b *testing.B) {
+					opts := commandWALDurabilityProofOptions(b.TempDir())
+					opts.Durability = durability.mode
+					opts.PublicBatchWriteSyncPhaseStats = enabled
+					db, err := Open(opts)
+					if err != nil {
+						b.Fatalf("Open: %v", err)
+					}
+					defer func() { _ = db.Close() }()
+
+					value := []byte("public-command-wal-value")
+					before := db.Stats()
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						batch := db.NewBatchWithSize(1)
+						var keyBuf [32]byte
+						key := strconv.AppendInt(keyBuf[:0], int64(i), 10)
+						if err := batch.Set(key, value); err != nil {
+							_ = batch.Close()
+							b.Fatalf("batch Set: %v", err)
+						}
+						if err := batch.WriteSync(); err != nil {
+							_ = batch.Close()
+							b.Fatalf("batch WriteSync: %v", err)
+						}
+						if err := batch.Close(); err != nil {
+							b.Fatalf("batch Close: %v", err)
+						}
+					}
+					b.StopTimer()
+
+					after := db.Stats()
+					wantPhaseCalls := uint64(0)
+					if enabled {
+						wantPhaseCalls = uint64(b.N)
+					}
+					requireBenchmarkStatDelta(b, before, after, "treedb.public.batch.write_sync.phase.calls_total", wantPhaseCalls)
+				})
+			}
 		})
 	}
 }
