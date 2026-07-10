@@ -280,6 +280,44 @@ The codec is a new opt-in path, so its performance gate is absolute cost and
 allocation behavior rather than a before/after raw-TreeDB result. Existing raw
 benchmarks must remain unchanged because no current raw API calls this package.
 
+## 10.3 External-Version MVCC Commit and Point Read
+
+Invariants:
+
+- one `CommitAt` call is one atomic TreeDB batch at one nonzero caller
+  timestamp, with deterministic pre-write duplicate rejection;
+- puts, empty values, and historical tombstones remain distinguishable;
+- `GetAt` returns the newest retained version at or below the read timestamp by
+  a direct bounded seek, without collecting version history;
+- durable commits require durable TreeDB mode and survive a process crash;
+  relaxed commits require a later checkpoint/close boundary for reopen proof;
+- storage failures may leave the whole batch present or absent but never leave
+  a visible prefix; malformed records and storage errors fail explicitly;
+- raw TreeDB and `EntryRevision` paths do not invoke this opt-in layer.
+
+Coverage:
+
+- `TreeDB/mvcc/mvcc_test.go`:
+  - golden overwrite/tombstone/read-before/exact/between/max histories and
+    repeated commits at one physical timestamp;
+  - multi-key atomicity, duplicate/nil-empty-key rejection, and validation
+    before storage write;
+  - injected pre-commit, post-commit, and staging failures proving all-or-none
+    visibility;
+  - malformed envelope and underlying closed-storage errors;
+  - durable/relaxed mode gates, checkpoint plus close/reopen, and durable child
+    process crash recovery without `Close`;
+  - deterministic randomized comparison with an in-memory MVCC oracle;
+  - concurrent readers under the race detector.
+- `TreeDB/mvcc/mvcc_bench_test.go`:
+  - single and 32-key `CommitAt` versus an equivalent direct TreeDB batch;
+  - `GetAt` versus an equivalent direct bounded seek at version depths 1, 8,
+    and 64, including allocation counts.
+
+The raw regression gate uses unchanged existing point/batch benchmarks from the
+same base and head. Because `TreeDB/mvcc` is opt-in and not called by raw APIs,
+any repeatable raw-path regression or allocation increase blocks closeout.
+
 ## 11. Collections Native Fast Path
 
 Invariant:

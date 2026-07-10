@@ -97,10 +97,24 @@ bound is the lexicographic successor of that physical prefix. Exact-key bounds
 enforce the same full-key size envelope as `Encode`; logical-prefix bounds are
 limited only by their own encoded bound size.
 
+The `TreeDB/mvcc` owner stores a one-byte record-kind envelope as the physical
+value:
+
+```text
+01 <logical value bytes>   // present value; the payload may be empty
+02                         // tombstone; trailing bytes are malformed
+```
+
+An empty physical value or unknown record-kind byte is malformed. Logical
+tombstones are values in this reserved subspace rather than raw TreeDB delete
+operations so historical deletion markers remain seekable. This record format,
+like the key codec, is pre-alpha and may require rebuilding experimental DB
+directories after a format change.
+
 This namespace does not make raw TreeDB keys non-empty or silently reserve a
-prefix in existing raw APIs. A later MVCC owner must prevent unrelated raw
-writes from entering its reserved physical range. The namespace marker makes
-MVCC physical keys non-empty even when the logical key is empty.
+prefix in existing raw APIs. The MVCC owner must prevent unrelated raw writes
+from entering its reserved physical range. The namespace marker makes MVCC
+physical keys non-empty even when the logical key is empty.
 
 ## 2. Index Page Basics
 
