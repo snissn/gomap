@@ -1347,6 +1347,7 @@ type Snapshot struct {
 	rootTreesMu             sync.Mutex
 	rootTrees               []snapshotRootTree
 	closed                  atomic.Bool
+	generation              atomic.Uint64
 	finalized               atomic.Bool
 	iteratorMu              sync.Mutex
 	iterators               map[*snapshotBoundIterator]struct{}
@@ -1513,7 +1514,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			snap.treeRoot = 0
 		}
 	}
+	snap.iteratorMu.Lock()
 	snap.closed.Store(false)
+	snap.iteratorMu.Unlock()
 	return snap
 }
 
@@ -1543,10 +1546,13 @@ func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.iteratorMu.Lock()
 	if !s.closed.CompareAndSwap(false, true) {
+		s.iteratorMu.Unlock()
 		return nil
 	}
-	s.invalidateBoundIterators()
+	s.invalidateBoundIteratorsLocked()
+	s.iteratorMu.Unlock()
 	return s.finalizeCloseIfUnreferenced()
 }
 

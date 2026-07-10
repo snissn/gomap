@@ -700,10 +700,9 @@ func (s *Snapshot) Iterator(start, end []byte) (publiciterator.Iterator, error) 
 // IteratorWithOptions returns an iterator bound to an existing snapshot with
 // explicit value materialization controls.
 func (s *Snapshot) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
-	if s == nil || s.closed.Load() {
-		return nil, ErrClosed
-	}
-	return s.bindIterator(s.tree.IteratorWithOptions(start, end, opts))
+	return s.bindNewIterator(func() iterator.UnsafeIterator {
+		return s.buildIteratorLocked(start, end, opts, false)
+	})
 }
 
 // Iterate calls fn for each visible key/value pair in [start, end) using this
@@ -737,10 +736,18 @@ func (s *Snapshot) ReverseIterator(start, end []byte) (publiciterator.Iterator, 
 // ReverseIteratorWithOptions returns a reverse iterator bound to an existing
 // snapshot with explicit value materialization controls.
 func (s *Snapshot) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
-	if s == nil || s.closed.Load() {
-		return nil, ErrClosed
+	return s.bindNewIterator(func() iterator.UnsafeIterator {
+		return s.buildIteratorLocked(start, end, opts, true)
+	})
+}
+
+// buildIteratorLocked reads the snapshot's pinned tree and must run while
+// iteratorMu is held by bindNewIterator.
+func (s *Snapshot) buildIteratorLocked(start, end []byte, opts IteratorOptions, reverse bool) iterator.UnsafeIterator {
+	if reverse {
+		return s.tree.ReverseIteratorWithOptions(start, end, opts)
 	}
-	return s.bindIterator(s.tree.ReverseIteratorWithOptions(start, end, opts))
+	return s.tree.IteratorWithOptions(start, end, opts)
 }
 
 // ReverseIterate calls fn for each visible key/value pair in [start, end) in

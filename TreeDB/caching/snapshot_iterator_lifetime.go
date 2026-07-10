@@ -20,32 +20,48 @@ type snapshotBoundIterator struct {
 	end       []byte
 }
 
-func (s *Snapshot) bindIterator(inner merging.Iterator) (merging.Iterator, error) {
+func (s *Snapshot) bindNewIterator(create func() (merging.Iterator, error)) (merging.Iterator, error) {
+	if s == nil || create == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return s.bindNewIteratorAtGeneration(s.generation.Load(), create)
+}
+
+func (s *Snapshot) bindNewIteratorAtGeneration(generation uint64, create func() (merging.Iterator, error)) (merging.Iterator, error) {
+	if s == nil || create == nil {
+		return nil, backenddb.ErrClosed
+	}
+	s.iteratorMu.Lock()
+	defer s.iteratorMu.Unlock()
+	if s.closed.Load() || generation != s.generation.Load() {
+		return nil, backenddb.ErrClosed
+	}
+	inner, err := create()
+	if err != nil {
+		return nil, err
+	}
+	return s.bindIteratorLocked(inner)
+}
+
+// bindIteratorLocked registers inner while s.iteratorMu is held. Callers hold
+// that lock across the closed check and all snapshot-backed source creation.
+func (s *Snapshot) bindIteratorLocked(inner merging.Iterator) (merging.Iterator, error) {
 	if inner == nil {
 		return nil, backenddb.ErrClosed
 	}
 	start, end := inner.Domain()
 	it := &snapshotBoundIterator{owner: s, inner: inner, start: start, end: end}
-	s.iteratorMu.Lock()
-	if s.closed.Load() {
-		s.iteratorMu.Unlock()
-		_ = inner.Close()
-		return nil, backenddb.ErrClosed
-	}
 	if s.iterators == nil {
 		s.iterators = make(map[*snapshotBoundIterator]struct{})
 	}
 	s.iterators[it] = struct{}{}
-	s.iteratorMu.Unlock()
 	return it, nil
 }
 
-func (s *Snapshot) invalidateBoundIterators() {
-	s.iteratorMu.Lock()
+func (s *Snapshot) invalidateBoundIteratorsLocked() {
 	for it := range s.iterators {
 		it.closed.Store(true)
 	}
-	s.iteratorMu.Unlock()
 }
 
 func (it *snapshotBoundIterator) begin() bool {

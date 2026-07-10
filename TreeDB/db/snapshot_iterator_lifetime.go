@@ -24,32 +24,45 @@ type snapshotBoundIterator struct {
 	end       []byte
 }
 
-func (s *Snapshot) bindIterator(inner iterator.UnsafeIterator) (iterator.UnsafeIterator, error) {
+func (s *Snapshot) bindNewIterator(create func() iterator.UnsafeIterator) (iterator.UnsafeIterator, error) {
+	if s == nil || create == nil {
+		return nil, ErrClosed
+	}
+	return s.bindNewIteratorAtGeneration(s.generation.Load(), create)
+}
+
+func (s *Snapshot) bindNewIteratorAtGeneration(generation uint64, create func() iterator.UnsafeIterator) (iterator.UnsafeIterator, error) {
+	if s == nil || create == nil {
+		return nil, ErrClosed
+	}
+	s.iteratorMu.Lock()
+	defer s.iteratorMu.Unlock()
+	if s.closed.Load() || generation != s.generation.Load() {
+		return nil, ErrClosed
+	}
+	return s.bindIteratorLocked(create())
+}
+
+// bindIteratorLocked registers inner while s.iteratorMu is held. Iterator
+// creation holds that lock from the closed check through construction and this
+// registration, so Snapshot.Close cannot recycle s between those steps.
+func (s *Snapshot) bindIteratorLocked(inner iterator.UnsafeIterator) (iterator.UnsafeIterator, error) {
 	if inner == nil {
 		return nil, ErrClosed
 	}
 	start, end := inner.Domain()
 	it := &snapshotBoundIterator{owner: s, inner: inner, start: start, end: end}
-	s.iteratorMu.Lock()
-	if s.closed.Load() {
-		s.iteratorMu.Unlock()
-		_ = inner.Close()
-		return nil, ErrClosed
-	}
 	if s.iterators == nil {
 		s.iterators = make(map[*snapshotBoundIterator]struct{})
 	}
 	s.iterators[it] = struct{}{}
-	s.iteratorMu.Unlock()
 	return it, nil
 }
 
-func (s *Snapshot) invalidateBoundIterators() {
-	s.iteratorMu.Lock()
+func (s *Snapshot) invalidateBoundIteratorsLocked() {
 	for it := range s.iterators {
 		it.closed.Store(true)
 	}
-	s.iteratorMu.Unlock()
 }
 
 func (it *snapshotBoundIterator) begin() bool {

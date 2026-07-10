@@ -36,7 +36,12 @@ func NewSnapshotPool() *SnapshotPool {
 }
 
 func (p *SnapshotPool) Get() *Snapshot {
-	return p.pool.Get().(*Snapshot)
+	s := p.pool.Get().(*Snapshot)
+	s.iteratorMu.Lock()
+	s.generation.Add(1)
+	s.closed.Store(true)
+	s.iteratorMu.Unlock()
+	return s
 }
 
 func (p *SnapshotPool) Put(s *Snapshot) {
@@ -59,9 +64,9 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.registryID = 0
 	s.iteratorMu.Lock()
 	clear(s.iterators)
-	s.iteratorMu.Unlock()
-	s.closed.Store(false)
+	s.closed.Store(true)
 	s.finalized.Store(false)
+	s.iteratorMu.Unlock()
 	// treePager/treeRoot are intentionally preserved as a pooled cache key for
 	// the next AcquireSnapshot() on this same object. registryShardHint is also
 	// preserved so the same pooled Snapshot keeps a stable fast registry shard.

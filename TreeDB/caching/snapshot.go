@@ -44,6 +44,7 @@ type Snapshot struct {
 	publishedRoots  *publishedRootSet
 
 	closed     atomic.Bool
+	generation atomic.Uint64
 	finalized  atomic.Bool
 	iteratorMu sync.Mutex
 	iterators  map[*snapshotBoundIterator]struct{}
@@ -71,7 +72,20 @@ func getSnapshot() *Snapshot {
 	if snap == nil {
 		snap = &Snapshot{}
 	}
+	snap.iteratorMu.Lock()
+	snap.generation.Add(1)
+	snap.closed.Store(true)
+	snap.iteratorMu.Unlock()
+	return snap
+}
+
+func activateSnapshot(snap *Snapshot) *Snapshot {
+	if snap == nil {
+		return nil
+	}
+	snap.iteratorMu.Lock()
 	snap.closed.Store(false)
+	snap.iteratorMu.Unlock()
 	return snap
 }
 
@@ -91,9 +105,9 @@ func putSnapshot(snap *Snapshot) {
 	snap.publishedRoots = nil
 	snap.iteratorMu.Lock()
 	clear(snap.iterators)
-	snap.iteratorMu.Unlock()
 	snap.closed.Store(true)
 	snap.finalized.Store(false)
+	snap.iteratorMu.Unlock()
 	snapshotPool.Put(snap)
 }
 
@@ -211,7 +225,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		snap.backend = backendSnap
 		snap.backendRootID = backendRootID
 		snap.backendFallback = backendSnapshotLookup{db: db, snapshot: backendSnap, rootID: backendRootID}
-		return snap
+		return activateSnapshot(snap)
 	}
 
 	view := db.retainMemtableView()
@@ -312,7 +326,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if snap.publishedRoots == nil {
 		db.rootPublishStats.backendFallbacks.Add(1)
 	}
-	return snap
+	return activateSnapshot(snap)
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -340,10 +354,13 @@ func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
+	s.iteratorMu.Lock()
 	if !s.closed.CompareAndSwap(false, true) {
+		s.iteratorMu.Unlock()
 		return nil
 	}
-	s.invalidateBoundIterators()
+	s.invalidateBoundIteratorsLocked()
+	s.iteratorMu.Unlock()
 	return s.finalizeCloseIfUnreferenced()
 }
 
@@ -647,17 +664,9 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 // Iterator returns a stable iterator over the snapshot's queued memtables plus
 // its backend snapshot.
 func (s *Snapshot) Iterator(start, end []byte) (publiciterator.Iterator, error) {
-	sources, err := s.iteratorSources(start, end, false)
-	if err != nil {
-		return nil, err
-	}
-	if len(sources) == 0 {
-		return s.bindIterator(&emptyIterator{start: start, end: end})
-	}
-	if len(sources) == 1 {
-		return s.bindIterator(newSingleSourceIterator(sources[0].Iter, start, end, false))
-	}
-	return s.bindIterator(merging.NewMergingIterator(sources, start, end))
+	return s.bindNewIterator(func() (merging.Iterator, error) {
+		return s.buildIteratorLocked(start, end, false)
+	})
 }
 
 // Iterate calls fn for each visible key/value pair in [start, end) using this
@@ -671,17 +680,28 @@ func (s *Snapshot) Iterate(start, end []byte, fn func(key, value []byte) error) 
 // ReverseIterator returns a stable reverse iterator over the snapshot's queued
 // memtables plus its backend snapshot.
 func (s *Snapshot) ReverseIterator(start, end []byte) (publiciterator.Iterator, error) {
-	sources, err := s.iteratorSources(start, end, true)
+	return s.bindNewIterator(func() (merging.Iterator, error) {
+		return s.buildIteratorLocked(start, end, true)
+	})
+}
+
+// buildIteratorLocked accesses the snapshot's pinned view and backend and must
+// run while iteratorMu is held by bindNewIterator.
+func (s *Snapshot) buildIteratorLocked(start, end []byte, reverse bool) (merging.Iterator, error) {
+	sources, err := s.iteratorSources(start, end, reverse)
 	if err != nil {
 		return nil, err
 	}
 	if len(sources) == 0 {
-		return s.bindIterator(&emptyIterator{start: start, end: end})
+		return &emptyIterator{start: start, end: end}, nil
 	}
 	if len(sources) == 1 {
-		return s.bindIterator(newSingleSourceIterator(sources[0].Iter, start, end, true))
+		return newSingleSourceIterator(sources[0].Iter, start, end, reverse), nil
 	}
-	return s.bindIterator(merging.NewReverseMergingIterator(sources, start, end))
+	if reverse {
+		return merging.NewReverseMergingIterator(sources, start, end), nil
+	}
+	return merging.NewMergingIterator(sources, start, end), nil
 }
 
 // ReverseIterate calls fn for each visible key/value pair in [start, end) in
