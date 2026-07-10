@@ -148,11 +148,15 @@ type DB struct {
 	maintenanceOpsPerCoalesce      int
 	zipperParallelMergeSource      zipper.ParallelMergePressureSource
 
-	mu                              sync.RWMutex
-	writeMu                         sync.RWMutex
-	teardownMu                      sync.RWMutex // Pins Close-sensitive resources outside writeMu.
-	commitMu                        sync.Mutex
-	publishPrepareMu                sync.RWMutex
+	mu               sync.RWMutex
+	writeMu          sync.RWMutex
+	teardownMu       sync.RWMutex // Pins Close-sensitive resources outside writeMu.
+	commitMu         sync.Mutex
+	publishPrepareMu sync.RWMutex
+	// valueLogPublicationMu prevents snapshots and RefreshValueLogSet from
+	// observing segments while maintenance is promoting/registering them before
+	// the root/meta publication that makes them authoritative.
+	valueLogPublicationMu           sync.RWMutex
 	pendingValueLogAppendMu         sync.Mutex
 	pendingValueLogAppendFileIDRefs map[uint32]int
 	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
@@ -448,19 +452,26 @@ type DB struct {
 	testSystemRootWarmMaxDeltaOps int
 	// testFailWriteMeta forces writeMeta to fail before mutating the target meta
 	// page so tests can exercise pre-publish cleanup paths.
-	testFailWriteMeta                     atomic.Bool
-	testFailCommandWALFlush               atomic.Bool
-	testAfterOptimisticApplyHook          func()
-	testAfterOptimisticPublishPrepareHook func()
-	testCommandWALRecoveryFailAfterLSN    atomic.Uint64
-	commandWALReplayLSN                   atomic.Uint64
-	commandWALReplayToken                 atomic.Uint64
-	commandWALReplayTokenSeq              atomic.Uint64
+	testFailWriteMeta atomic.Bool
+	// testFailSyncMeta fails after the alternate meta page has been written but
+	// before its durability outcome is known.
+	testFailSyncMeta                       atomic.Bool
+	testFailCommandWALFlush                atomic.Bool
+	testAfterOptimisticApplyHook           func()
+	testAfterOptimisticPublishPrepareHook  func()
+	testCheckpointAfterPoisonPreflightHook func()
+	testCommandWALRecoveryFailAfterLSN     atomic.Uint64
+	commandWALReplayLSN                    atomic.Uint64
+	commandWALReplayToken                  atomic.Uint64
+	commandWALReplayTokenSeq               atomic.Uint64
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
 	// unrecoverable LSN gap.
-	commandWALFlushPoisoned          atomic.Bool
+	commandWALFlushPoisoned atomic.Bool
+	// publicationPoisoned is set after an outcome-ambiguous root/meta publish.
+	// It is intentionally cleared only by close/reopen.
+	publicationPoisoned              atomic.Bool
 	commandWALStatsMu                sync.Mutex
 	commandWALRequiredFeature        bool
 	commandWALRequiredErr            string
@@ -551,6 +562,7 @@ const snapshotShardHintUnset = -1
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 var errTestCommandWALFlushFailpoint = errors.New("treedb: command wal flush failpoint")
 var errTestWriteMetaFailpoint = errors.New("treedb: write meta failpoint")
+var errTestSyncMetaFailpoint = errors.New("treedb: sync meta failpoint")
 
 const (
 	commandWALWriterBufferSize              = 16 << 20
@@ -1338,7 +1350,12 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
-	if db.closing.Load() {
+	if db == nil {
+		return nil
+	}
+	db.valueLogPublicationMu.RLock()
+	defer db.valueLogPublicationMu.RUnlock()
+	if db.closing.Load() || db.publicationPoisoned.Load() {
 		return nil
 	}
 	snap := db.snapPool.Get()
@@ -1744,6 +1761,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
 	}
 	if err := recoverIndexSwap(opts.Dir); err != nil {
+		return nil, err
+	}
+	if err := cleanupLeafGenerationPackStagingDirs(resolveStorageLayout(opts.Dir).leafVLogDir); err != nil {
 		return nil, err
 	}
 
@@ -2668,7 +2688,15 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// 4. Sync Meta - No DB Lock
 	if sync {
 		t1 := time.Now()
-		if err := idx.pager.Sync(); err != nil {
+		var err error
+		if db.testFailSyncMeta.Load() {
+			err = errTestSyncMetaFailpoint
+		} else if opts.syncMetaPageOnly {
+			err = idx.pager.SyncPages([]uint64{targetPageID})
+		} else {
+			err = idx.pager.Sync()
+		}
+		if err != nil {
 			return post, err
 		}
 		if debugTiming {
@@ -2939,9 +2967,18 @@ func (db *DB) Checkpoint() error {
 	if db.readOnly {
 		return ErrReadOnly
 	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if db.testCheckpointAfterPoisonPreflightHook != nil {
+		db.testCheckpointAfterPoisonPreflightHook()
+	}
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
 
 	idx := db.idx.Load()
 	if idx == nil || idx.pager == nil {
@@ -3189,6 +3226,14 @@ func (db *DB) clearSnapshotView() {
 // RefreshValueLogSet publishes a new DBState with the current value-log set
 // (excluding zombies) without creating a new commit.
 func (db *DB) RefreshValueLogSet() error {
+	if db == nil {
+		return ErrClosed
+	}
+	db.valueLogPublicationMu.RLock()
+	defer db.valueLogPublicationMu.RUnlock()
+	if err := db.publicationPoisonedError(); err != nil {
+		return err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

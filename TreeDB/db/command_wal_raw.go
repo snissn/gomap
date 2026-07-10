@@ -255,7 +255,17 @@ func (db *DB) finishCommandWALAppendFlush(path commandWALAppendStatsPath, actual
 	return nil
 }
 
+func (db *DB) publicationPoisonedError() error {
+	if db != nil && db.publicationPoisoned.Load() {
+		return fmt.Errorf("%w: root publication outcome is ambiguous; reopen required", ErrRecoveryRequired)
+	}
+	return nil
+}
+
 func (db *DB) commandWALPoisonedError() error {
+	if err := db.publicationPoisonedError(); err != nil {
+		return err
+	}
 	if db != nil && db.commandWAL && db.commandWALFlushPoisoned.Load() {
 		return fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}

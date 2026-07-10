@@ -24,6 +24,10 @@ import (
 var ErrVacuumInProgress = errors.New("online vacuum already in progress")
 var ErrVacuumUnsupported = errors.New("online vacuum unsupported on this platform")
 
+// testHookVacuumAfterBaseSnapshot coordinates writes that must be replayed by
+// online vacuum tests. It remains nil in production.
+var testHookVacuumAfterBaseSnapshot func()
+
 const (
 	vacuumDeltaBatchSize     = 4096
 	vacuumCatchupPassesMax   = 3
@@ -39,6 +43,26 @@ type vacuumRecorder struct {
 	mu     sync.Mutex
 	ops    map[string]batch.Entry
 	ranges []batch.DeleteRange
+}
+
+type vacuumRetiredPageFreer interface {
+	FreeMany([]uint64) error
+	Free(uint64) error
+}
+
+func freeVacuumRetired(freer vacuumRetiredPageFreer, retired []uint64) {
+	err := freer.FreeMany(retired)
+	if err == nil {
+		return
+	}
+	processed := 0
+	var batchErr *freelist.FreeManyError
+	if errors.As(err, &batchErr) && batchErr.Processed >= 0 && batchErr.Processed <= len(retired) {
+		processed = batchErr.Processed
+	}
+	for _, id := range retired[processed:] {
+		_ = freer.Free(id)
+	}
 }
 
 func (r *vacuumRecorder) Active() bool {
@@ -269,6 +293,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
+	if testHookVacuumAfterBaseSnapshot != nil {
+		testHookVacuumAfterBaseSnapshot()
+	}
 	var newRoot uint64
 	if db.indexOuterLeavesInValueLog {
 		if db.leafPageLog == nil {
@@ -329,9 +356,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) error
 	}
 
 	freeRetired := func(retired []uint64) {
-		for _, id := range retired {
-			_ = newAlloc.Free(id)
-		}
+		freeVacuumRetired(newAlloc, retired)
 	}
 
 	// Online catch-up: replay recorded keys in bounded passes.

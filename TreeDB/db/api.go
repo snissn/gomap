@@ -87,6 +87,12 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 // --- Public API ---
 
 func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
+	if db == nil {
+		return nil, ErrClosed
+	}
+	if err := db.publicationPoisonedError(); err != nil {
+		return nil, err
+	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
