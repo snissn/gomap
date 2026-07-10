@@ -12,6 +12,55 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
+func TestDBAndSnapshotStateReturnCopies(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	published := db.state.Load()
+	if published == nil {
+		t.Fatal("published state is nil")
+	}
+	originalSystemRoot := published.SystemRootPageID
+	dbState := db.State()
+	if dbState == nil {
+		t.Fatal("DB.State returned nil")
+	}
+	dbState.SystemRootPageID = originalSystemRoot + 100
+	gotSystemRoot := db.state.Load().SystemRootPageID
+	// Restore the old implementation's shared pointer before cleanup.
+	dbState.SystemRootPageID = originalSystemRoot
+	if gotSystemRoot != originalSystemRoot {
+		t.Errorf("DB.State exposed published SystemRootPageID: got %d want %d", gotSystemRoot, originalSystemRoot)
+	}
+	if again := db.State(); again == dbState {
+		t.Error("DB.State returned the same mutable pointer twice")
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	originalRoot := published.RootPageID
+	snapshotState := snap.State()
+	if snapshotState == nil {
+		t.Fatal("Snapshot.State returned nil")
+	}
+	snapshotState.RootPageID = originalRoot + 100
+	gotRoot := db.state.Load().RootPageID
+	// Restore the old implementation's shared pointer before cleanup.
+	snapshotState.RootPageID = originalRoot
+	if gotRoot != originalRoot {
+		t.Errorf("Snapshot.State exposed published RootPageID: got %d want %d", gotRoot, originalRoot)
+	}
+	if again := snap.State(); again == snapshotState {
+		t.Error("Snapshot.State returned the same mutable pointer twice")
+	}
+}
+
 func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 	idx1 := &indexGen{registry: lifecycle.NewReaderRegistry()}
 	idx1.refs.Store(1)

@@ -308,6 +308,55 @@ func TestVacuumIndexOnlinePrecutoverSyncRunsOutsideWriteMu(t *testing.T) {
 	}
 }
 
+func TestVacuumIndexOnlinePreflushFailureLeavesOldIndexAuthoritative(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum unsupported on windows")
+	}
+	dir := t.TempDir()
+	opts := vacuumSnapshotTestOptions(dir)
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	rootID, err := publishVacuumSnapshotCollectionVersion(db, 0, 0, 2048)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("publish collection: %v", err)
+	}
+
+	preflushErr := errors.New("injected preflush failure")
+	var calls atomic.Int32
+	db.vacuumPreflushHook = func() error {
+		calls.Add(1)
+		return preflushErr
+	}
+	if err := db.VacuumIndexOnline(context.Background()); !errors.Is(err, preflushErr) {
+		_ = db.Close()
+		t.Fatalf("vacuum error=%v, want %v", err, preflushErr)
+	}
+	if got := calls.Load(); got != 1 {
+		_ = db.Close()
+		t.Fatalf("preflush failpoint calls=%d, want 1", got)
+	}
+	for _, name := range []string{indexNewFileName, indexReadyFileName} {
+		if _, statErr := os.Stat(filepath.Join(dir, name)); !errors.Is(statErr, os.ErrNotExist) {
+			_ = db.Close()
+			t.Fatalf("artifact %s remains after preflush failure: %v", name, statErr)
+		}
+	}
+	verifyVacuumSnapshotCollectionRootUnchanged(t, db, rootID)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+	verifyVacuumSnapshotCollectionRootUnchanged(t, reopened, rootID)
+}
+
 func TestVacuumIndexOnlineCollectionPrecloneAllowsMutationAndReopens(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
@@ -755,12 +804,8 @@ func TestVacuumIndexOnlineSerializesCloseThroughMaintenance(t *testing.T) {
 	}()
 	waitVacuumTestSignal(t, closeStarted, "Close start")
 
+	waitVacuumTestSignal(t, closeHookRan, "user close hook outside maintenance")
 	select {
-	case <-closeHookRan:
-		close(release)
-		<-vacuumErr
-		<-closeErr
-		t.Fatal("Close drained production teardown hooks while vacuum held maintenanceMu")
 	case err := <-closeErr:
 		close(release)
 		<-vacuumErr
@@ -790,7 +835,6 @@ func TestVacuumIndexOnlineSerializesCloseThroughMaintenance(t *testing.T) {
 	if err := <-closeErr; err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	waitVacuumTestSignal(t, closeHookRan, "close hook after vacuum")
 	appender.mu.Lock()
 	writerOpen = appender.writer != nil
 	appender.mu.Unlock()
@@ -1003,6 +1047,27 @@ func verifyVacuumSnapshotCollectionVersion(t *testing.T, db *DB, expectedRoot ui
 	empty, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(vacuumSnapshotEmptyKey))
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty overlay=%x err=%v", empty, err)
+	}
+}
+
+func verifyVacuumSnapshotCollectionRootUnchanged(t *testing.T, db *DB, expectedRoot uint64) {
+	t.Helper()
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer func() { _ = snap.Close() }()
+	encoded, err := snap.GetAtRoot(snap.state.SystemRootPageID, []byte(vacuumSnapshotPrimaryKey))
+	if err != nil {
+		t.Fatalf("read primary descriptor: %v", err)
+	}
+	rootIDs, err := decodeCollectionRootDescriptorRootIDs([]byte(vacuumSnapshotPrimaryKey), encoded, false)
+	if err != nil || len(rootIDs) != 1 || rootIDs[0] != expectedRoot {
+		t.Fatalf("primary descriptor roots=%v err=%v, want [%d]", rootIDs, err, expectedRoot)
+	}
+	entry, err := snap.GetEntryAtRoot(expectedRoot, []byte("doc/000000"))
+	if err != nil || len(entry.Value) == 0 {
+		t.Fatalf("original collection entry len=%d err=%v", len(entry.Value), err)
 	}
 }
 

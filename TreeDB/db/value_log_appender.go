@@ -418,7 +418,7 @@ func (db *DB) installCommandWALValueLogAppender() error {
 	}
 	db.SetValueLogAppender(appender)
 	db.SetLeafPageLog(replayInlineLeafPageLog{appender: appender})
-	db.RegisterCloseHook(func() error {
+	db.registerInternalTeardownHook(func() error {
 		db.SetLeafPageLog(nil)
 		db.SetValueLogAppender(nil)
 		return appender.close()

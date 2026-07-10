@@ -164,6 +164,7 @@ type DB struct {
 	vacuumCollectionClonePageHook func(vacuumCollectionClonePhase, uint64)
 	vacuumBeforeCutoverHook       func(int)
 	vacuumPagerSyncHook           func(vacuumPagerSyncPhase)
+	vacuumPreflushHook            func() error
 	meta                          page.MetaPageBody
 	metaPageID                    uint64
 	entryRevisionFloor            atomic.Uint64
@@ -196,6 +197,11 @@ type DB struct {
 	// while writes are still available, so registrations after that point would
 	// otherwise be silently lost.
 	closeHooksClosed bool
+	closeHooksWG     sync.WaitGroup
+
+	internalTeardownHooksMu     sync.Mutex
+	internalTeardownHooks       []func() error
+	internalTeardownHooksClosed bool
 
 	leafGenerationLiveStatsMu        sync.RWMutex
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
@@ -1334,7 +1340,7 @@ func (s *Snapshot) State() *DBState {
 	if s == nil {
 		return nil
 	}
-	return s.state
+	return cloneDBState(s.state)
 }
 
 // AcquireSnapshot returns a new snapshot.
@@ -2146,24 +2152,17 @@ func (db *DB) RegisterCloseHookIfOpenAfter(setup func() bool, hook func() error)
 	}, true
 }
 
-// RunCloseHooks runs and clears registered close hooks. Wrappers that own a
-// backend DB should call this before they start closing resources required by
-// backend publish APIs. Hook teardown is serialized with maintenance so it
-// cannot invalidate resources still in use by an active maintenance operation.
+// RunCloseHooks runs and clears registered user close hooks. Callbacks run
+// outside DB maintenance and before Close marks the DB as closing, so they may
+// call normal DB APIs, including RunCloseHooks and maintenance operations.
 func (db *DB) RunCloseHooks() error {
 	if db == nil {
 		return nil
 	}
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
-	return db.runCloseHooksMaintenanceLocked()
+	return db.runCloseHooks()
 }
 
-// runCloseHooksMaintenanceLocked drains hooks with maintenanceMu held. The
-// global close/maintenance order is maintenanceMu -> closeHooksMu -> writeMu ->
-// mu. closeHooksMu is released before invoking callbacks; callbacks may publish
-// through writeMu but must not recursively enter maintenance.
-func (db *DB) runCloseHooksMaintenanceLocked() error {
+func (db *DB) runCloseHooks() (retErr error) {
 	db.closeHooksMu.Lock()
 	if db.closeHooksClosed {
 		db.closeHooksMu.Unlock()
@@ -2176,7 +2175,9 @@ func (db *DB) runCloseHooksMaintenanceLocked() error {
 	hooks := append([]func() error(nil), db.closeHooks...)
 	clear(db.closeHooks)
 	db.closeHooks = nil
+	db.closeHooksWG.Add(1)
 	db.closeHooksMu.Unlock()
+	defer db.closeHooksWG.Done()
 
 	var errs []error
 	for _, hook := range hooksBefore {
@@ -2198,21 +2199,74 @@ func (db *DB) runCloseHooksMaintenanceLocked() error {
 	return errors.Join(errs...)
 }
 
-func (db *DB) closeHooksHaveRunMaintenanceLocked() bool {
-	db.closeHooksMu.Lock()
-	closed := db.closeHooksClosed
-	db.closeHooksMu.Unlock()
-	return closed
+func (db *DB) registerInternalTeardownHook(hook func() error) func() {
+	if db == nil || hook == nil {
+		return func() {}
+	}
+	db.internalTeardownHooksMu.Lock()
+	defer db.internalTeardownHooksMu.Unlock()
+	if db.internalTeardownHooksClosed || db.closing.Load() {
+		return func() {}
+	}
+	idx := len(db.internalTeardownHooks)
+	db.internalTeardownHooks = append(db.internalTeardownHooks, hook)
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			db.internalTeardownHooksMu.Lock()
+			if idx >= 0 && idx < len(db.internalTeardownHooks) && db.internalTeardownHooks[idx] != nil {
+				db.internalTeardownHooks[idx] = nil
+			}
+			db.internalTeardownHooksMu.Unlock()
+		})
+	}
+}
+
+// runInternalTeardownHooksMaintenanceLocked runs DB-owned resource teardown
+// only after active maintenance has drained and closing rejects new work.
+func (db *DB) runInternalTeardownHooksMaintenanceLocked() error {
+	db.internalTeardownHooksMu.Lock()
+	if db.internalTeardownHooksClosed {
+		db.internalTeardownHooksMu.Unlock()
+		return nil
+	}
+	db.internalTeardownHooksClosed = true
+	hooks := append([]func() error(nil), db.internalTeardownHooks...)
+	clear(db.internalTeardownHooks)
+	db.internalTeardownHooks = nil
+	db.internalTeardownHooksMu.Unlock()
+
+	var errs []error
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (db *DB) Close() error {
-	db.maintenanceMu.Lock()
-	defer db.maintenanceMu.Unlock()
 	var errs []error
-	if err := db.runCloseHooksMaintenanceLocked(); err != nil {
+	if err := db.RunCloseHooks(); err != nil {
 		errs = append(errs, err)
 	}
+	// Another caller may have started the once-only hook drain. Do not begin
+	// production teardown until those callbacks have returned.
+	db.closeHooksWG.Wait()
+
+	// Lock order after user callbacks is maintenanceMu, internal teardown hooks,
+	// writeMu, teardownMu, then mu. Internal registration never waits on
+	// maintenanceMu, and callbacks run before this chain with no DB lock held.
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
 	db.closing.Store(true)
+	if err := db.runInternalTeardownHooksMaintenanceLocked(); err != nil {
+		errs = append(errs, err)
+	}
 	// Wait for active apply attempts before closing the reusable flush/apply
 	// worker pool and tearing down index resources.
 	db.writeMu.Lock()
@@ -3171,7 +3225,18 @@ func (db *DB) InlineThresholdForKey(key []byte) int {
 }
 
 func (db *DB) State() *DBState {
-	return db.state.Load()
+	if db == nil {
+		return nil
+	}
+	return cloneDBState(db.state.Load())
+}
+
+func cloneDBState(state *DBState) *DBState {
+	if state == nil {
+		return nil
+	}
+	copyState := *state
+	return &copyState
 }
 
 // IsClosing reports whether the database is closing. It returns true if db is nil.

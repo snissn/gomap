@@ -292,11 +292,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
-	// A wrapper may drain backend close hooks before it calls DB.Close. Once
-	// those hooks have run, maintenance resources such as the production leaf
-	// appender are no longer valid even though normal publish APIs remain open
-	// long enough for the wrapper's final flush.
-	if db.closing.Load() || db.closeHooksHaveRunMaintenanceLocked() {
+	if db.closing.Load() {
 		return ErrClosed
 	}
 
@@ -393,7 +389,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			basis.snapshot = nil
 		}
 	}()
-	baseState := baseSnap.State()
+	baseState := baseSnap.state
 	basePager := baseSnap.Pager()
 	if baseState == nil || basePager == nil {
 		cleanupNewPager()
@@ -578,6 +574,12 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		if preflushErr != nil {
 			cleanupNewPager()
 			return preflushErr
+		}
+		if hook := db.vacuumPreflushHook; hook != nil {
+			if err := hook(); err != nil {
+				cleanupNewPager()
+				return err
+			}
 		}
 		if hook := db.vacuumBeforeCutoverHook; hook != nil {
 			hook(defers)
