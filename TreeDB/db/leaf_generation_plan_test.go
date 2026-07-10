@@ -834,6 +834,48 @@ func TestLeafGenerationPlan_CachesLiveStatsPerPublishedState(t *testing.T) {
 	}
 }
 
+func TestLeafGenerationPlan_CachesProtectedRootsCanonically(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+	writeLeafGenerationKeys(t, db, "k", 64, 'a')
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeyRange(t, db, "k", 0, 16, 'b')
+	state := db.State()
+	if state == nil {
+		t.Fatal("expected published state")
+	}
+
+	counter := withLeafGenerationLiveScanCounter(t)
+	first := LeafGenerationPlanOptions{
+		ProtectedRootIDs:       []uint64{state.RootPageID, state.RootPageID},
+		ProtectedSystemRootIDs: []uint64{state.SystemRootPageID, state.SystemRootPageID},
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), first); err != nil {
+		t.Fatalf("LeafGenerationPlan first: %v", err)
+	}
+	if got, want := counter.Load(), uint64(1); got != want {
+		t.Fatalf("scan count after first protected plan=%d, want %d", got, want)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		ProtectedRootIDs:       []uint64{state.RootPageID},
+		ProtectedSystemRootIDs: []uint64{state.SystemRootPageID},
+	}); err != nil {
+		t.Fatalf("LeafGenerationPlan reordered roots: %v", err)
+	}
+	if got, want := counter.Load(), uint64(1); got != want {
+		t.Fatalf("scan count after reordered protected plan=%d, want %d", got, want)
+	}
+	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{
+		ProtectedRootIDs: []uint64{state.RootPageID},
+	}); err != nil {
+		t.Fatalf("LeafGenerationPlan changed roots: %v", err)
+	}
+	if got, want := counter.Load(), uint64(2); got != want {
+		t.Fatalf("scan count after changed protected plan=%d, want %d", got, want)
+	}
+}
+
 func TestLeafGenerationPlan_ReusesCachedSubtreesAcrossRootChanges(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 	counter := withLeafGenerationSubtreeCacheMissCounter(t)

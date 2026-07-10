@@ -581,6 +581,7 @@ type treeReachabilityCacheKey struct {
 	rootID              uint64
 	systemRoot          uint64
 	leafGenerationStamp uint64
+	protectedRoots      [32]byte
 }
 
 type leafGenerationLiveStatsCache struct {

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -605,7 +606,66 @@ func (db *DB) leafGenerationLiveStatsForSnapshotWithProtectedRoots(ctx context.C
 	if len(protectedRootIDs) == 0 && len(protectedSystemRootIDs) == 0 {
 		return db.leafGenerationLiveStatsForSnapshot(ctx, snap)
 	}
-	return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, protectedRootIDs, protectedSystemRootIDs)
+	if snap == nil || snap.state == nil {
+		return db.leafGenerationLiveStatsForSnapshotUncachedWithProtectedRoots(ctx, snap, protectedRootIDs, protectedSystemRootIDs)
+	}
+	cacheKey, cacheable := leafGenerationLiveStatsKeyForState(snap.state)
+	if cacheable {
+		cacheKey.protectedRoots = leafGenerationProtectedRootsHash(protectedRootIDs, protectedSystemRootIDs)
+		if stats, ok := db.loadCachedLeafGenerationLiveStats(cacheKey); ok {
+			return stats, nil
+		}
+	}
+	runLeafGenerationLiveScanHook()
+	stats, err := db.scanLeafGenerationLiveStatsWithOptions(ctx, snap, leafGenerationLiveStatsScanOptions{
+		DisableCache:           true,
+		ProtectedRootIDs:       protectedRootIDs,
+		ProtectedSystemRootIDs: protectedSystemRootIDs,
+	})
+	if err != nil {
+		return leafGenerationLiveScanStats{}, err
+	}
+	if cacheable {
+		db.storeCachedLeafGenerationLiveStats(cacheKey, stats)
+	}
+	return stats, nil
+}
+
+// leafGenerationProtectedRootsHash makes cache identity independent of caller
+// ordering and duplicates while retaining the user/system root distinction.
+func leafGenerationProtectedRootsHash(rootIDs, systemRootIDs []uint64) [32]byte {
+	canonicalize := func(ids []uint64) []uint64 {
+		if len(ids) == 0 {
+			return nil
+		}
+		seen := make(map[uint64]struct{}, len(ids))
+		out := make([]uint64, 0, len(ids))
+		for _, id := range ids {
+			if id == 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+		return out
+	}
+	h := sha256.New()
+	var buf [8]byte
+	for _, roots := range [][]uint64{canonicalize(rootIDs), canonicalize(systemRootIDs)} {
+		binary.LittleEndian.PutUint64(buf[:], uint64(len(roots)))
+		_, _ = h.Write(buf[:])
+		for _, rootID := range roots {
+			binary.LittleEndian.PutUint64(buf[:], rootID)
+			_, _ = h.Write(buf[:])
+		}
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
 }
 
 func (db *DB) leafGenerationLiveStatsForSnapshotUncached(ctx context.Context, snap *Snapshot) (leafGenerationLiveScanStats, error) {
