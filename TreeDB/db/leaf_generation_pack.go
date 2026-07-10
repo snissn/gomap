@@ -97,6 +97,7 @@ type LeafGenerationPackStats struct {
 type leafGenerationPackCarryResult struct {
 	sourceStateKey              treeReachabilityCacheKey
 	publishedState              *DBState
+	trackSourceLiveMoved        bool
 	sourceLiveMovedByGeneration map[uint64]leafGenerationLiveTotals
 }
 
@@ -273,7 +274,10 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			writer.SetLeafDictMode(leafDictID, leafDictBytes, leafDictUseRawPages)
 		}
 
-		rewriteStats := leafRefRewriteRunStats{trackSourceLiveMoved: carry != nil}
+		rewriteStats := leafRefRewriteRunStats{
+			trackCarry:           carry != nil,
+			trackSourceLiveMoved: carry != nil && (len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0),
+		}
 		copied, copiedBytes, rewriteErr := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), attempt, &rewriteStats)
 		closeErr := writer.Close()
 		removeErr := removeLeafGenerationPackStagingDirFn(stagingDir)
@@ -284,6 +288,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		if carry != nil {
 			carry.sourceStateKey = rewriteStats.sourceStateKey
 			carry.publishedState = rewriteStats.publishedState
+			carry.trackSourceLiveMoved = rewriteStats.trackSourceLiveMoved
 			carry.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(rewriteStats.sourceLiveMovedByGeneration)
 		}
 		if errors.Is(rewriteErr, errLeafGenerationPackPublishConflict) {

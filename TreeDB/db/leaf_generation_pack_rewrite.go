@@ -197,6 +197,7 @@ type leafRefRewriteRunStats struct {
 	PublishHoldNanos            int64
 	PrivatePages                int
 	PublishConflict             bool
+	trackCarry                  bool
 	trackSourceLiveMoved        bool
 	sourceStateKey              treeReachabilityCacheKey
 	publishedState              *DBState
@@ -1193,7 +1194,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	rootID := snap.state.RootPageID
 	sysRoot := snap.state.SystemRootPageID
 	basis := captureLeafGenerationPackCopyBasis(snap, sourceIDs, singleSourceID, hasSingleSourceID)
-	if runStats != nil && runStats.trackSourceLiveMoved {
+	if runStats != nil && runStats.trackCarry {
 		runStats.sourceStateKey, _ = leafGenerationLiveStatsKeyForState(snap.state)
 	}
 
@@ -1625,9 +1626,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
 	}
 	db.invalidateLeafGenerationSubtreeStats(publishAlloc.Pages())
-	if runStats != nil {
+	if runStats != nil && runStats.trackCarry {
 		runStats.publishedState = db.state.Load()
-		runStats.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(leafCtx.sourceLiveMovedByGeneration)
+		if runStats.trackSourceLiveMoved {
+			runStats.sourceLiveMovedByGeneration = cloneLeafGenerationLiveTotalsMap(leafCtx.sourceLiveMovedByGeneration)
+		}
 	}
 	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s dir_wait=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, dirWaitDuration, registerDuration, finalizeDuration, time.Since(publishStarted))
 	unlockPublish()

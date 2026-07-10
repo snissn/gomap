@@ -1060,17 +1060,23 @@ func (state *compactStorageLeafPackPlanState) advance(db *DB, pack LeafGeneratio
 	}
 
 	live := cloneLeafGenerationLiveScanStats(state.live)
-	for generationID, moved := range result.sourceLiveMovedByGeneration {
-		remaining := live.Generations[generationID]
-		remaining.LivePages -= moved.LivePages
-		remaining.LiveBytes -= moved.LiveBytes
-		if remaining.LivePages < 0 {
-			remaining.LivePages = 0
+	if result.trackSourceLiveMoved {
+		for generationID, moved := range result.sourceLiveMovedByGeneration {
+			remaining := live.Generations[generationID]
+			remaining.LivePages -= moved.LivePages
+			remaining.LiveBytes -= moved.LiveBytes
+			if remaining.LivePages < 0 {
+				remaining.LivePages = 0
+			}
+			if remaining.LiveBytes < 0 {
+				remaining.LiveBytes = 0
+			}
+			live.Generations[generationID] = remaining
 		}
-		if remaining.LiveBytes < 0 {
-			remaining.LiveBytes = 0
+	} else {
+		for _, generationID := range pack.SourceGenerationIDs {
+			live.Generations[generationID] = leafGenerationLiveTotals{}
 		}
-		live.Generations[generationID] = remaining
 	}
 
 	createdGenerations := make(map[uint64]struct{})

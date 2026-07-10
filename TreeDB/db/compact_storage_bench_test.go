@@ -10,6 +10,8 @@ import (
 
 func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 	var liveScans, packPasses atomic.Uint64
+	var packPhaseNanos, packApplyNanos, packCopyNanos int64
+	var packPublishWaitNanos, packPublishHoldNanos int64
 	unregister := registerLeafGenerationLiveScanHook(func() { liveScans.Add(1) })
 	defer unregister()
 
@@ -44,6 +46,17 @@ func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 			_ = db.Close()
 			b.Fatalf("ran leaf-pack passes=%d want at least 3", ranPacks)
 		}
+		for _, phase := range stats.Phases {
+			if len(phase.Name) >= len("leaf-generation-pack-") && phase.Name[:len("leaf-generation-pack-")] == "leaf-generation-pack-" {
+				packPhaseNanos += phase.WallTimeNanos
+			}
+		}
+		for _, pack := range stats.LeafGenerationPacks {
+			packApplyNanos += pack.Pack.WallTimeNanos
+			packCopyNanos += pack.Pack.CopyTimeNanos
+			packPublishWaitNanos += pack.Pack.PublishWaitNanos
+			packPublishHoldNanos += pack.Pack.PublishHoldNanos
+		}
 		db.compactStorageAfterPhase = nil
 		if err := db.Close(); err != nil {
 			b.Fatalf("close: %v", err)
@@ -53,6 +66,11 @@ func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
 	if b.N > 0 {
 		b.ReportMetric(float64(liveScans.Load())/float64(b.N), "live_scans/op")
 		b.ReportMetric(float64(packPasses.Load())/float64(b.N), "pack_passes/op")
+		b.ReportMetric(float64(packPhaseNanos)/float64(b.N), "pack_phase_ns/op")
+		b.ReportMetric(float64(packApplyNanos)/float64(b.N), "pack_apply_ns/op")
+		b.ReportMetric(float64(packCopyNanos)/float64(b.N), "pack_copy_ns/op")
+		b.ReportMetric(float64(packPublishWaitNanos)/float64(b.N), "pack_publish_wait_ns/op")
+		b.ReportMetric(float64(packPublishHoldNanos)/float64(b.N), "pack_publish_hold_ns/op")
 	}
 }
 
