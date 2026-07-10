@@ -532,8 +532,9 @@ func TestVacuumIndexOnlineReplaysProductionRangeMutation(t *testing.T) {
 	if rangeErr != nil {
 		t.Fatalf("range mutation: %v", rangeErr)
 	}
-	if got := db.vacuumOnlineStatsSnapshot().UserTailMutations; got != 1 {
-		t.Fatalf("tail mutations=%d want 1 production range", got)
+	stats := db.vacuumOnlineStatsSnapshot()
+	if stats.UserTailMutations != 1 || stats.UserTailPointMutations != 0 || stats.UserTailRangeMutations != 1 {
+		t.Fatalf("tail mutations=%d points=%d ranges=%d want 1/0/1 production range", stats.UserTailMutations, stats.UserTailPointMutations, stats.UserTailRangeMutations)
 	}
 	assertVacuumProductionRangeState(t, db)
 	if err := db.Close(); err != nil {
@@ -708,19 +709,29 @@ func TestVacuumIndexOnlineSerializesCloseThroughMaintenance(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum unsupported on windows")
 	}
-	db, err := Open(vacuumSnapshotTestOptions(t.TempDir()))
+	opts := vacuumSnapshotTestOptions(t.TempDir())
+	opts.CommandWAL = true
+	opts.IndexOuterLeavesInValueLog = true
+	opts.ValueLog = ValueLogOptions{}
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	if _, err := publishVacuumSnapshotCollectionVersion(db, 0, 0, 256); err != nil {
-		t.Fatalf("publish initial collection: %v", err)
+	appender, ok := db.currentValueLogAppender().(*replayInlineAppender)
+	if !ok || appender == nil {
+		t.Fatalf("production value-log appender=%T, want *replayInlineAppender", db.currentValueLogAppender())
+	}
+	for i := 0; i < 256; i++ {
+		if err := db.Set([]byte(fmt.Sprintf("close/%06d", i)), bytes.Repeat([]byte{byte(i), byte(i >> 8)}, 8)); err != nil {
+			t.Fatalf("seed key %d: %v", i, err)
+		}
 	}
 
 	reached := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	db.vacuumCollectionClonePageHook = func(phase vacuumCollectionClonePhase, _ uint64) {
-		if phase == vacuumCollectionClonePreclone {
+	db.vacuumPagerSyncHook = func(phase vacuumPagerSyncPhase) {
+		if phase == vacuumPagerSyncPrecutover {
 			once.Do(func() {
 				close(reached)
 				<-release
@@ -729,25 +740,62 @@ func TestVacuumIndexOnlineSerializesCloseThroughMaintenance(t *testing.T) {
 	}
 	vacuumErr := make(chan error, 1)
 	go func() { vacuumErr <- db.VacuumIndexOnline(context.Background()) }()
-	waitVacuumTestSignal(t, reached, "collection preclone")
+	waitVacuumTestSignal(t, reached, "vacuum precutover sync")
 
 	closeHookRan := make(chan struct{})
 	db.RegisterCloseHook(func() error {
 		close(closeHookRan)
 		return nil
 	})
+	closeStarted := make(chan struct{})
 	closeErr := make(chan error, 1)
-	go func() { closeErr <- db.Close() }()
-	waitVacuumTestSignal(t, closeHookRan, "close hook")
-	if db.closing.Load() {
-		t.Fatal("Close marked DB closing before acquiring maintenanceMu")
+	go func() {
+		close(closeStarted)
+		closeErr <- db.Close()
+	}()
+	waitVacuumTestSignal(t, closeStarted, "Close start")
+
+	select {
+	case <-closeHookRan:
+		close(release)
+		<-vacuumErr
+		<-closeErr
+		t.Fatal("Close drained production teardown hooks while vacuum held maintenanceMu")
+	case err := <-closeErr:
+		close(release)
+		<-vacuumErr
+		t.Fatalf("Close returned while vacuum held maintenanceMu: %v", err)
+	case <-time.After(250 * time.Millisecond):
 	}
+	if got := db.currentValueLogAppender(); got != appender {
+		close(release)
+		<-vacuumErr
+		<-closeErr
+		t.Fatalf("production value-log appender changed during maintenance: got %T (%p), want %p", got, got, appender)
+	}
+	appender.mu.Lock()
+	writerOpen := appender.writer != nil
+	appender.mu.Unlock()
+	if !writerOpen || db.leafPageLog == nil {
+		close(release)
+		<-vacuumErr
+		<-closeErr
+		t.Fatalf("production outer-leaf appender torn down during maintenance: writerOpen=%t leafPageLog=%T", writerOpen, db.leafPageLog)
+	}
+
 	close(release)
 	if err := <-vacuumErr; err != nil {
 		t.Fatalf("vacuum: %v", err)
 	}
 	if err := <-closeErr; err != nil {
 		t.Fatalf("close: %v", err)
+	}
+	waitVacuumTestSignal(t, closeHookRan, "close hook after vacuum")
+	appender.mu.Lock()
+	writerOpen = appender.writer != nil
+	appender.mu.Unlock()
+	if writerOpen || db.currentValueLogAppender() != nil {
+		t.Fatalf("production value-log appender remained open after Close: writerOpen=%t appender=%T", writerOpen, db.currentValueLogAppender())
 	}
 }
 

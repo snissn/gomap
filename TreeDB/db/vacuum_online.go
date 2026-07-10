@@ -60,6 +60,8 @@ type VacuumOnlineStats struct {
 	CutoverCloneTraversalPages uint64
 	DirtyDescriptors           uint64
 	UserTailMutations          uint64
+	UserTailPointMutations     uint64
+	UserTailRangeMutations     uint64
 	DeferredCutovers           uint64
 	ConcurrentMutationAborts   uint64
 }
@@ -284,7 +286,11 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
 	}
-	if db.closing.Load() {
+	// A wrapper may drain backend close hooks before it calls DB.Close. Once
+	// those hooks have run, maintenance resources such as the production leaf
+	// appender are no longer valid even though normal publish APIs remain open
+	// long enough for the wrapper's final flush.
+	if db.closing.Load() || db.closeHooksHaveRunMaintenanceLocked() {
 		return ErrClosed
 	}
 
@@ -581,6 +587,8 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		finalOps, finalRanges := db.vacuum.DrainApplyPlan()
 		tailMutations := len(finalOps) + len(finalRanges)
 		runStats.UserTailMutations += uint64(tailMutations)
+		runStats.UserTailPointMutations += uint64(len(finalOps))
+		runStats.UserTailRangeMutations += uint64(len(finalRanges))
 		if db.closing.Load() {
 			unlockCutover(false)
 			cleanupNewPager()

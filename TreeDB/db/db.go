@@ -2147,11 +2147,22 @@ func (db *DB) RegisterCloseHookIfOpenAfter(setup func() bool, hook func() error)
 
 // RunCloseHooks runs and clears registered close hooks. Wrappers that own a
 // backend DB should call this before they start closing resources required by
-// backend publish APIs.
+// backend publish APIs. Hook teardown is serialized with maintenance so it
+// cannot invalidate resources still in use by an active maintenance operation.
 func (db *DB) RunCloseHooks() error {
 	if db == nil {
 		return nil
 	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
+	return db.runCloseHooksMaintenanceLocked()
+}
+
+// runCloseHooksMaintenanceLocked drains hooks with maintenanceMu held. The
+// global close/maintenance order is maintenanceMu -> closeHooksMu -> writeMu ->
+// mu. closeHooksMu is released before invoking callbacks; callbacks may publish
+// through writeMu but must not recursively enter maintenance.
+func (db *DB) runCloseHooksMaintenanceLocked() error {
 	db.closeHooksMu.Lock()
 	if db.closeHooksClosed {
 		db.closeHooksMu.Unlock()
@@ -2186,13 +2197,20 @@ func (db *DB) RunCloseHooks() error {
 	return errors.Join(errs...)
 }
 
+func (db *DB) closeHooksHaveRunMaintenanceLocked() bool {
+	db.closeHooksMu.Lock()
+	closed := db.closeHooksClosed
+	db.closeHooksMu.Unlock()
+	return closed
+}
+
 func (db *DB) Close() error {
-	var errs []error
-	if err := db.RunCloseHooks(); err != nil {
-		errs = append(errs, err)
-	}
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
+	var errs []error
+	if err := db.runCloseHooksMaintenanceLocked(); err != nil {
+		errs = append(errs, err)
+	}
 	db.closing.Store(true)
 	// Wait for active apply attempts before closing the reusable flush/apply
 	// worker pool and tearing down index resources.
