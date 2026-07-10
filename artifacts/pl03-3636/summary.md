@@ -2,10 +2,9 @@
 
 Issue: `snissn/gomap#3636`
 
-- Base: `7d210c971ed3df543d9fe00fd5016b5d82cc7c0d`
-- Head source: `1db5ff2ecaf9aa5abedaa39befb43e517b8a6565` (branch
-  `codex/pl03-compact-shared-audit`, including `origin/main` at
-  `9bb109dd0ed643448c065951eb72cdab99c47ac6`)
+- Base: `9bb109dd0ed643448c065951eb72cdab99c47ac6`
+- Head source: `a663709e6fa252bddd154e8a9f0fbf3c3cf3e924` (branch
+  `codex/pl03-compact-shared-audit`)
 - Host: Linux 6.8.0-124-generic, Intel Core i5-11400F, Go 1.26.0
 - Workspace mode: `GOWORK=off`
 
@@ -17,7 +16,8 @@ leaves are enabled and written through a leaf-page log, so each audit must walk
 the index, decode outer-leaf pages, count logical value pointers, account leaf
 generations, and recompute filesystem debt. Planner caches are cleared outside
 the timed region before each operation. The same benchmark source was copied
-unchanged into a detached worktree at the pinned base.
+unchanged into a detached worktree at the pinned base. Both copies had SHA-256
+`e5af992431cb6f1f401099759d74c9f529bc44ac850a98a0ae90ea08d010cdab`.
 
 Both base and head were measured serially with:
 
@@ -30,9 +30,9 @@ GOWORK=off go test ./TreeDB/db -run '^$' \
 
 | Metric (median, count=5) | Base | Head | Change |
 | --- | ---: | ---: | ---: |
-| Audit time | 897.9 us/op | 597.9 us/op | -33.41% |
-| Allocated bytes | 427.0 KiB/op | 461.6 KiB/op | +8.11% |
-| Allocations | 422 allocs/op | 335 allocs/op | -20.62% |
+| Audit time | 936.6 us/op | 594.6 us/op | -36.52% |
+| Allocated bytes | 427.2 KiB/op | 461.9 KiB/op | +8.12% |
+| Allocations | 426 allocs/op | 339 allocs/op | -20.42% |
 | Legacy reference scans | 1/op | 0/op | -100% |
 | Legacy live-byte scans | 1/op | 0/op | -100% |
 | Legacy leaf scans | 2/op | 0/op | -100% |
@@ -52,7 +52,7 @@ GOWORK=off go test ./TreeDB/db -run '^$' \
 
 The base CPU profile is dominated by repeated iterator/live-byte collection.
 The head profile contains one physical recursive audit walk plus memoized
-maintenance-root projection replay. Remaining hot work is the exact per-page
+maintenance-root projection replay. Remaining hot work is the per-page
 pointer aggregate maps and grouped-record live-byte accounting.
 
 Artifacts:

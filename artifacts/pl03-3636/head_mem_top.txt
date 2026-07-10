@@ -1,48 +1,49 @@
 File: db.test
-Build ID: 3cca45fef240ac479367692b4b3db63c003fdf24
+Build ID: 03df0a3b527c6f80d0e29eff7677c7e00c27793c
 Type: alloc_space
-Time: 2026-07-09 18:26:38 HST
-Showing nodes accounting for 2679.54MB, 98.07% of 2732.23MB total
-Dropped 152 nodes (cum <= 13.66MB)
+Time: 2026-07-09 19:21:50 HST
+Showing nodes accounting for 2638.83MB, 97.73% of 2700.09MB total
+Dropped 138 nodes (cum <= 13.50MB)
       flat  flat%   sum%        cum   cum%
- 2450.56MB 89.69% 89.69%  2450.56MB 89.69%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func1
-   83.04MB  3.04% 92.73%  2601.54MB 95.22%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit
-   45.40MB  1.66% 94.39%    45.40MB  1.66%  github.com/snissn/gomap/TreeDB/db.(*leafGenerationGroupedFrameScanCache).store
-      28MB  1.02% 95.42%       28MB  1.02%  internal/bytealg.MakeNoZero
-   20.50MB  0.75% 96.17%    20.50MB  0.75%  syscall.ByteSliceFromString
-   15.50MB  0.57% 96.73%       20MB  0.73%  os.statNolog
-   15.03MB  0.55% 97.28%    15.03MB  0.55%  github.com/snissn/gomap/TreeDB/db.(*DB).newCompactStorageLeafScanContext
-   12.50MB  0.46% 97.74%    21.50MB  0.79%  os.lstatNolog
-       4MB  0.15% 97.89%    15.50MB  0.57%  os.(*unixDirent).Info
-    2.50MB 0.092% 97.98%    58.52MB  2.14%  github.com/snissn/gomap/TreeDB/db.compactStorageUsage
-       2MB 0.073% 98.05%    23.50MB  0.86%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireCompactStorageAuditInput
-    0.50MB 0.018% 98.07%    45.90MB  1.68%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationPtrTotals
-         0     0% 98.07%  2709.57MB 99.17%  github.com/snissn/gomap/TreeDB/db.(*DB).CompactStoragePlan (inline)
-         0     0% 98.07%  2709.57MB 99.17%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorage
-         0     0% 98.07%  2626.05MB 96.11%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorageSharedAudit
-         0     0% 98.07%    45.40MB  1.66%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGroupedFrameInfo
-         0     0% 98.07%  2679.06MB 98.05%  github.com/snissn/gomap/TreeDB/db.(*DB).populateCompactStorageAudit
-         0     0% 98.07%    19.50MB  0.71%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareCompactStorageAuditTopology
-         0     0% 98.07%  2450.56MB 89.69%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func2
-         0     0% 98.07%  2496.46MB 91.37%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3
-         0     0% 98.07%  2496.46MB 91.37%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3.1
-         0     0% 98.07%  2723.62MB 99.68%  github.com/snissn/gomap/TreeDB/db.BenchmarkCompactStorageSharedAudit
-         0     0% 98.07%    52.02MB  1.90%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage
-         0     0% 98.07%    15.50MB  0.57%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage.func1
-         0     0% 98.07%    14.05MB  0.51%  github.com/snissn/gomap/TreeDB/db.openCompactStorageAuditBenchmarkFixture
-         0     0% 98.07%    17.50MB  0.64%  github.com/snissn/gomap/TreeDB/db.resolveStorageLayout
-         0     0% 98.07%  2496.46MB 91.37%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
-         0     0% 98.07%    21.50MB  0.79%  os.Lstat
-         0     0% 98.07%    19.51MB  0.71%  os.ReadDir
-         0     0% 98.07%       20MB  0.73%  os.Stat
-         0     0% 98.07%    20.50MB  0.75%  os.ignoringEINTR (inline)
-         0     0% 98.07%       24MB  0.88%  path/filepath.Join (inline)
-         0     0% 98.07%    40.52MB  1.48%  path/filepath.WalkDir
-         0     0% 98.07%       24MB  0.88%  path/filepath.join
-         0     0% 98.07%    30.51MB  1.12%  path/filepath.walkDir
-         0     0% 98.07%       24MB  0.88%  strings.(*Builder).Grow
-         0     0% 98.07%       24MB  0.88%  strings.(*Builder).grow
-         0     0% 98.07%       24MB  0.88%  strings.Join
-         0     0% 98.07%    20.50MB  0.75%  syscall.BytePtrFromString (inline)
-         0     0% 98.07%  2715.01MB 99.37%  testing.(*B).launch
-         0     0% 98.07%  2723.62MB 99.68%  testing.(*B).runN
+ 2392.21MB 88.60% 88.60%  2392.21MB 88.60%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func1
+   79.06MB  2.93% 91.53%  2556.83MB 94.69%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit
+   59.02MB  2.19% 93.71%    59.02MB  2.19%  github.com/snissn/gomap/TreeDB/db.(*leafGenerationGroupedFrameScanCache).store
+      29MB  1.07% 94.79%       29MB  1.07%  internal/bytealg.MakeNoZero
+   18.50MB  0.69% 95.47%       25MB  0.93%  os.statNolog
+      17MB  0.63% 96.10%       17MB  0.63%  syscall.ByteSliceFromString
+   16.03MB  0.59% 96.69%    16.03MB  0.59%  github.com/snissn/gomap/TreeDB/db.(*DB).newCompactStorageLeafScanContext
+      14MB  0.52% 97.21%    21.50MB   0.8%  os.lstatNolog
+    5.50MB   0.2% 97.42%    66.53MB  2.46%  github.com/snissn/gomap/TreeDB/db.compactStorageUsage
+       3MB  0.11% 97.53%    18.50MB  0.69%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireCompactStorageAuditInputAttempt
+    2.50MB 0.093% 97.62%       15MB  0.56%  github.com/snissn/gomap/TreeDB/db.(*DB).valueOnlyValueLogFiles
+       2MB 0.074% 97.69%    61.02MB  2.26%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationGroupedFrameInfo
+       1MB 0.037% 97.73%    62.02MB  2.30%  github.com/snissn/gomap/TreeDB/db.(*DB).scanLeafGenerationPtrTotals
+         0     0% 97.73%  2675.37MB 99.08%  github.com/snissn/gomap/TreeDB/db.(*DB).CompactStoragePlan (inline)
+         0     0% 97.73%  2675.37MB 99.08%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorage
+         0     0% 97.73%  2575.33MB 95.38%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorageSharedAudit
+         0     0% 97.73%    13.50MB   0.5%  github.com/snissn/gomap/TreeDB/db.(*DB).compactStorageValueLogGCFromAudit
+         0     0% 97.73%  2643.36MB 97.90%  github.com/snissn/gomap/TreeDB/db.(*DB).populateCompactStorageAudit
+         0     0% 97.73%    13.50MB   0.5%  github.com/snissn/gomap/TreeDB/db.(*DB).prepareCompactStorageAuditTopology
+         0     0% 97.73%  2392.21MB 88.60%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func2
+         0     0% 97.73%  2454.23MB 90.89%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3
+         0     0% 97.73%  2454.23MB 90.89%  github.com/snissn/gomap/TreeDB/db.(*DB).scanCompactStorageAudit.func3.1
+         0     0% 97.73%  2692.91MB 99.73%  github.com/snissn/gomap/TreeDB/db.BenchmarkCompactStorageSharedAudit
+         0     0% 97.73%    53.53MB  1.98%  github.com/snissn/gomap/TreeDB/db.compactStoragePathUsage
+         0     0% 97.73%    17.54MB  0.65%  github.com/snissn/gomap/TreeDB/db.openCompactStorageAuditBenchmarkFixture
+         0     0% 97.73%       20MB  0.74%  github.com/snissn/gomap/TreeDB/db.resolveStorageLayout
+         0     0% 97.73%  2454.23MB 90.89%  github.com/snissn/gomap/TreeDB/node.(*Node).WalkInternalChildren
+         0     0% 97.73%    21.50MB   0.8%  os.Lstat
+         0     0% 97.73%    18.02MB  0.67%  os.ReadDir
+         0     0% 97.73%       25MB  0.93%  os.Stat
+         0     0% 97.73%       17MB  0.63%  os.ignoringEINTR (inline)
+         0     0% 97.73%    24.50MB  0.91%  path/filepath.Join (inline)
+         0     0% 97.73%    39.53MB  1.46%  path/filepath.WalkDir
+         0     0% 97.73%    24.50MB  0.91%  path/filepath.join
+         0     0% 97.73%    27.52MB  1.02%  path/filepath.walkDir
+         0     0% 97.73%    24.50MB  0.91%  strings.(*Builder).Grow
+         0     0% 97.73%    24.50MB  0.91%  strings.(*Builder).grow
+         0     0% 97.73%    24.50MB  0.91%  strings.Join
+         0     0% 97.73%       17MB  0.63%  syscall.BytePtrFromString (inline)
+         0     0% 97.73%       14MB  0.52%  syscall.fstatat
+         0     0% 97.73%  2684.63MB 99.43%  testing.(*B).launch
+         0     0% 97.73%  2692.91MB 99.73%  testing.(*B).runN

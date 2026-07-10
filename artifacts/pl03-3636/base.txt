@@ -2,10 +2,10 @@ goos: linux
 goarch: amd64
 pkg: github.com/snissn/gomap/TreeDB/db
 cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
-BenchmarkCompactStorageSharedAudit-12    	    1320	    897217 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437382 B/op	     422 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    1328	    897876 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437185 B/op	     422 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    1314	    895372 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437190 B/op	     422 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    1276	    909269 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437203 B/op	     422 allocs/op
-BenchmarkCompactStorageSharedAudit-12    	    1329	    903847 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437211 B/op	     422 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1282	    956053 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437480 B/op	     426 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1232	    935759 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437396 B/op	     426 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1276	    936559 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437422 B/op	     426 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1089	   1005834 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437459 B/op	     426 allocs/op
+BenchmarkCompactStorageSharedAudit-12    	    1105	    921019 ns/op	         2.000 legacy_leaf_scans/op	         1.000 legacy_live_scans/op	         1.000 legacy_ref_scans/op	  437408 B/op	     426 allocs/op
 PASS
-ok  	github.com/snissn/gomap/TreeDB/db	7.273s
+ok  	github.com/snissn/gomap/TreeDB/db	8.511s
