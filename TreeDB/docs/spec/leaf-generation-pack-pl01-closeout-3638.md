@@ -67,33 +67,33 @@ Five alternating runs per revision produced these medians:
 
 | Metric | Exact base | Head | Gate/result |
 | --- | ---: | ---: | --- |
-| idle foreground p95 | 1.275 ms | 1.242 ms | reference |
-| pack foreground p95 | 1.256 ms | 1.228 ms | 0.99x head idle, pass |
-| idle foreground p99 | 2.173 ms | 1.403 ms | reference |
-| pack foreground p99 | 267.941 ms | 2.298 ms | 1.64x head idle, pass |
-| idle foreground writes/s | 7.222k | 7.321k | reference |
-| pack foreground writes/s | 1.499k | 7.121k | 97.3% of head idle |
-| pack idle wall | 571.9 ms | 588.9 ms | +2.97%, below 5% gate |
-| pack idle throughput | 506.6 MB/s | 492.0 MB/s | -2.9%, statistically neutral |
-| pack idle B/op | 311.7 MiB | 314.8 MiB | +1.01% |
+| idle foreground p95 | 1.232 ms | 1.219 ms | reference |
+| pack foreground p95 | 1.254 ms | 1.234 ms | 1.01x head idle, pass |
+| idle foreground p99 | 2.293 ms | 2.314 ms | reference |
+| pack foreground p99 | 303.335 ms | 2.288 ms | 0.99x head idle, pass |
+| idle foreground writes/s | 7.259k | 7.142k | reference |
+| pack foreground writes/s | 1.357k | 7.546k | 105.7% of head idle |
+| pack idle wall | 663.4 ms | 607.7 ms | -8.39%, below 5% regression gate |
+| pack idle throughput | 436.8 MB/s | 476.7 MB/s | +9.15% |
+| pack idle B/op | 311.7 MiB | 314.8 MiB | +1.00% |
 | pack idle allocs/op | 195.5k | 195.7k | +0.09% |
-| pack publish hold | unavailable | 18.74 ms | 739 metadata pages |
-| contended pack wall | 481.6 ms | 698.5 ms | head includes full retry |
-| contended retry copy | unavailable | 316.6 ms | one stale attempt discarded |
+| pack publish hold | unavailable | 24.41 ms | 739 metadata pages |
+| contended pack wall | 515.3 ms | 722.0 ms | head includes full retry |
+| contended retry copy | unavailable | 320.2 ms | one stale attempt discarded |
 | contended B/op | 313.0 MiB | 630.3 MiB | two complete copies |
-| contended allocs/op | 204.1k | 308.0k | two complete copies |
+| contended allocs/op | 204.0k | 308.0k | two complete copies |
 
 The contended head result deliberately forces a foreground commit between copy
 and publish, so wall time and allocations include two complete attempts. It is
 retry-cost evidence, not the no-conflict wall-time gate. The mutex profiles are
 also dominated by fixture leaf-lane construction; after removing that common
-setup signal, the sampled base profile attributes 281 ms of mutex delay to the
-whole-copy `rewriteLeafRefsOnline` unlock, while the corresponding head profile
-contains no leaf-pack `writeMu` contention stack. The explicit head publish-hold
-counter is the bounded critical-section measurement.
+setup signal. Across the five combined profiles, base attributes 1,578.86 ms of
+mutex delay to the whole-copy `rewriteLeafRefsOnline` unlock; head attributes
+9.92 ms to `rewriteLeafRefsOnline`. The explicit head publish-hold counter, not
+that sampled delay, is the bounded critical-section measurement.
 
 Raw local artifacts are in
-`artifacts/pl01-3638-20260710T070752Z/`: `base.txt`, `head.txt`, `benchstat.txt`,
+`artifacts/pl01-3638-20260710T080225Z/`: `base.txt`, `head.txt`, `benchstat.txt`,
 five mutex profiles per revision, and rendered mutex tops. The overlaid harness
 SHA-256 is
 `50a71982c36240dec603a88999c4c8957e8e134fb9b097eb48615535fdc29dd3`.
