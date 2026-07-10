@@ -19,6 +19,7 @@ const leafGenerationPackDefaultMinReclaimPerByteCopiedPPM = 10000
 const leafGenerationPackDefaultLeafFrameK = 16
 
 var leafGenerationPackRIDStartScanner = nextRewriteRIDStartFromSet
+var removeLeafGenerationPackStagingDirFn = os.RemoveAll
 
 func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
 	entries, err := os.ReadDir(leafDir)
@@ -265,7 +266,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		var rewriteStats leafRefRewriteRunStats
 		copied, copiedBytes, rewriteErr := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceValueIDs, nil, 0, 0, false, 0, opts.Sync, normalizeLeafGenerationPackLeafFrameK(opts.LeafFrameK), attempt, &rewriteStats)
 		closeErr := writer.Close()
-		removeErr := os.RemoveAll(stagingDir)
+		removeErr := removeLeafGenerationPackStagingDirFn(stagingDir)
 		stats.CopyTimeNanos += rewriteStats.CopyTimeNanos
 		stats.PublishWaitNanos += rewriteStats.PublishWaitNanos
 		stats.PublishHoldNanos += rewriteStats.PublishHoldNanos
@@ -282,8 +283,11 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 			}
 			continue
 		}
-		if rewriteErr != nil || closeErr != nil || removeErr != nil {
+		if rewriteErr != nil {
 			return stats, fmt.Errorf("leaf generation pack: rewrite leaf refs: %w", errors.Join(rewriteErr, closeErr, removeErr))
+		}
+		if cleanupErr := errors.Join(closeErr, removeErr); cleanupErr != nil && db.notifyError != nil {
+			db.notifyError(fmt.Errorf("leaf generation pack: post-publication cleanup: %w", cleanupErr))
 		}
 
 		stats.LeafPagesCopied = copied

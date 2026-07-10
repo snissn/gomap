@@ -21,9 +21,10 @@ const (
 	leafGenerationPackBenchmarkWritesPerWriter = 64
 )
 
-// Run with -benchtime=1x -count=5 -benchmem. This file is intentionally
-// self-contained and uses reflection only for PL-01 stats so the exact committed
-// harness can be overlaid on the pinned pre-PL-01 base.
+// Run five externally alternating base/head invocations with
+// -benchtime=1x -count=1 -benchmem. This file is intentionally self-contained
+// and uses reflection only for PL-01 stats so the exact committed harness can
+// be overlaid on the pinned pre-PL-01 base.
 func BenchmarkLeafGenerationPackCopyPublish(b *testing.B) {
 	for _, mode := range []string{"foreground_idle", "pack_idle", "pack_contended"} {
 		b.Run(mode, func(b *testing.B) {

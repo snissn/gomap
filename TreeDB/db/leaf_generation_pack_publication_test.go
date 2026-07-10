@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func leafGenerationPackPublicationTestOptions(dir string) Options {
@@ -215,6 +217,92 @@ func TestLeafGenerationPack_ClosesStagingReaderBeforePromotion(t *testing.T) {
 	}
 	if !promotionObserved.Load() {
 		t.Fatal("promotion hook was not observed")
+	}
+}
+
+func TestLeafGenerationPackStagingAllocatorRejectsCommittedNamespace(t *testing.T) {
+	base, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatalf("open base pager: %v", err)
+	}
+	defer func() { _ = base.Close() }()
+	overlay, err := pager.NewOverlay(64*1024, 1, base)
+	if err != nil {
+		t.Fatalf("new overlay: %v", err)
+	}
+	defer func() { _ = overlay.Close() }()
+
+	alloc := &leafGenerationPackStagingAllocator{pager: overlay}
+	if _, err := alloc.Alloc(0); err == nil || !strings.Contains(err.Error(), "committed-namespace") {
+		t.Fatalf("Alloc error=%v, want committed-namespace rejection", err)
+	}
+	if len(alloc.pages) != 0 {
+		t.Fatalf("staging allocator retained invalid pages: %v", alloc.pages)
+	}
+}
+
+func TestCheckpointRechecksPublicationPoisonAfterPreflight(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	preflightDone := make(chan struct{})
+	release := make(chan struct{})
+	db.testCheckpointAfterPoisonPreflightHook = func() {
+		close(preflightDone)
+		<-release
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- db.Checkpoint() }()
+	<-preflightDone
+	db.publicationPoisoned.Store(true)
+	close(release)
+
+	if err := <-done; !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("Checkpoint error=%v, want ErrRecoveryRequired", err)
+	}
+}
+
+func TestLeafGenerationPack_PostPublicationCleanupFailureIsReportedOutOfBand(t *testing.T) {
+	dir := t.TempDir()
+	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
+	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
+	candidate := prepareLeafGenerationPackTestCandidate(t, db, leafLog, 512)
+
+	testErr := errors.New("staging cleanup failpoint")
+	originalRemove := removeLeafGenerationPackStagingDirFn
+	defer func() { removeLeafGenerationPackStagingDirFn = originalRemove }()
+	removeLeafGenerationPackStagingDirFn = func(path string) error {
+		if strings.HasPrefix(filepath.Base(path), ".leaf-pack-copy-") {
+			return testErr
+		}
+		return originalRemove(path)
+	}
+	notified := make(chan error, 1)
+	originalNotify := db.notifyError
+	defer func() { db.notifyError = originalNotify }()
+	db.notifyError = func(err error) { notified <- err }
+
+	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{candidate.generation.GenerationID},
+		Force:         true,
+	})
+	if err != nil {
+		t.Fatalf("LeafGenerationPack reported committed publication as failure: %v", err)
+	}
+	if stats.LeafPagesCopied == 0 {
+		t.Fatal("LeafGenerationPack did not publish copied pages")
+	}
+	select {
+	case err := <-notified:
+		if !errors.Is(err, testErr) {
+			t.Fatalf("NotifyError=%v, want cleanup failpoint", err)
+		}
+	default:
+		t.Fatal("post-publication cleanup failure was not reported")
 	}
 }
 

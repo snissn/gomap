@@ -448,14 +448,15 @@ type DB struct {
 	testFailWriteMeta atomic.Bool
 	// testFailSyncMeta fails after the alternate meta page has been written but
 	// before its durability outcome is known.
-	testFailSyncMeta                      atomic.Bool
-	testFailCommandWALFlush               atomic.Bool
-	testAfterOptimisticApplyHook          func()
-	testAfterOptimisticPublishPrepareHook func()
-	testCommandWALRecoveryFailAfterLSN    atomic.Uint64
-	commandWALReplayLSN                   atomic.Uint64
-	commandWALReplayToken                 atomic.Uint64
-	commandWALReplayTokenSeq              atomic.Uint64
+	testFailSyncMeta                       atomic.Bool
+	testFailCommandWALFlush                atomic.Bool
+	testAfterOptimisticApplyHook           func()
+	testAfterOptimisticPublishPrepareHook  func()
+	testCheckpointAfterPoisonPreflightHook func()
+	testCommandWALRecoveryFailAfterLSN     atomic.Uint64
+	commandWALReplayLSN                    atomic.Uint64
+	commandWALReplayToken                  atomic.Uint64
+	commandWALReplayTokenSeq               atomic.Uint64
 	// commandWALFlushPoisoned is intentionally cleared only by closing and
 	// reopening the DB. After an append reached the journal but flush/sync or
 	// root publication failed, continuing on the same handle could create an
@@ -2962,9 +2963,15 @@ func (db *DB) Checkpoint() error {
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
 	}
+	if db.testCheckpointAfterPoisonPreflightHook != nil {
+		db.testCheckpointAfterPoisonPreflightHook()
+	}
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
 
 	idx := db.idx.Load()
 	if idx == nil || idx.pager == nil {

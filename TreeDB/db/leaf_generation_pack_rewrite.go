@@ -41,6 +41,9 @@ func (a *leafGenerationPackStagingAllocator) Alloc(uint64) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if id < leafGenerationPackPrivatePageIDBase {
+		return 0, errors.New("leaf generation pack: staging allocator returned committed-namespace id")
+	}
 	a.pages = append(a.pages, id)
 	return id, nil
 }

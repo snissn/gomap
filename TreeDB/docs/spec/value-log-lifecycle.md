@@ -248,9 +248,10 @@ value-log pointers embedded in copied leaf pages remain persistent references;
 leaf packing does not alter their reachability or lifetime.
 
 `BenchmarkLeafGenerationPackCopyPublish` provides the pinned before/after
-performance fixture. Run it with `-benchtime=1x -count=5 -benchmem`; it reports
-copy bytes/second, frames, wall time, foreground write p95/p99 and completed
-writes, exclusive publish hold time, copy attempts, `B/op`, and `allocs/op`.
+performance fixture. Run five externally alternating base/head invocations with
+`-benchtime=1x -count=1 -benchmem`; it reports copy bytes/second, frames, wall
+time, foreground write p95/p99 and completed writes, exclusive publish hold
+time, copy attempts, `B/op`, and `allocs/op`.
 
 ### 6.3 Offline rewrite (`ValueLogRewriteOffline`)
 
