@@ -66,12 +66,15 @@ func benchmarkAllocatorFree(b *testing.B, many bool) {
 		closeAllocatorBenchmarkFixture(b, p, path)
 	}
 
-	a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
-	metrics := newAllocatorBenchmarkPageMetrics()
-	a.testPageEvent = metrics.observe
-	freeAllocatorBenchmarkIDs(b, a, ids, many)
-	a.testPageEvent = nil
-	closeAllocatorBenchmarkFixture(b, p, path)
+	var metrics *allocatorBenchmarkPageMetrics
+	if many {
+		a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
+		metrics = newAllocatorBenchmarkPageMetrics()
+		a.testPageEvent = metrics.observe
+		freeAllocatorBenchmarkIDs(b, a, ids, true)
+		a.testPageEvent = nil
+		closeAllocatorBenchmarkFixture(b, p, path)
+	}
 	benchmarkAllocatorMetrics(b, allocatorBenchmarkIDs, metrics)
 }
 
@@ -118,14 +121,17 @@ func benchmarkAllocatorRegion(b *testing.B, count int, many bool) {
 		closeAllocatorBenchmarkFixture(b, p, path)
 	}
 
-	a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
-	populateAllocatorBenchmarkFreelist(b, a, ids)
-	a.SetFreelistRegion(allocatorBenchmarkRegion, 1)
-	metrics := newAllocatorBenchmarkPageMetrics()
-	a.testPageEvent = metrics.observe
-	allocAllocatorBenchmarkIDs(b, a, count, many)
-	a.testPageEvent = nil
-	closeAllocatorBenchmarkFixture(b, p, path)
+	var metrics *allocatorBenchmarkPageMetrics
+	if many {
+		a, p, path := newAllocatorBenchmarkFixture(b, root, b.N)
+		populateAllocatorBenchmarkFreelist(b, a, ids)
+		a.SetFreelistRegion(allocatorBenchmarkRegion, 1)
+		metrics = newAllocatorBenchmarkPageMetrics()
+		a.testPageEvent = metrics.observe
+		allocAllocatorBenchmarkIDs(b, a, count, true)
+		a.testPageEvent = nil
+		closeAllocatorBenchmarkFixture(b, p, path)
+	}
 	benchmarkAllocatorMetrics(b, count, metrics)
 }
 
@@ -202,6 +208,9 @@ func closeAllocatorBenchmarkFixture(b *testing.B, p *pager.Pager, path string) {
 
 func benchmarkAllocatorMetrics(b *testing.B, ids int, metrics *allocatorBenchmarkPageMetrics) {
 	b.ReportMetric(float64(ids*b.N)/b.Elapsed().Seconds(), "ids/sec")
+	if metrics == nil {
+		return
+	}
 	b.ReportMetric(float64(metrics.pagesTouched), "pages_touched/op")
 	b.ReportMetric(float64(metrics.gets), "get_for_write/op")
 	b.ReportMetric(float64(metrics.verifications), "checksum_verifications/op")

@@ -705,12 +705,12 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		return id, err
 	}
 
-	data, err := a.getPageForWrite(a.head)
+	data, err := a.pager.GetForWrite(a.head)
 	if err != nil {
 		return 0, err
 	}
 	n := node.NewNode(data)
-	if !a.verifyChecksum(a.head, n) {
+	if !n.VerifyChecksum() {
 		return 0, errors.New("freelist head corrupted (Alloc)")
 	}
 	if n.Type() != page.PageTypeFreelist {
@@ -751,7 +751,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 				}
 				clearFreelistIDAt(data, lastIdx)
 				n.SetCount(uint16(lastIdx))
-				a.updateChecksum(a.head, n)
+				n.UpdateChecksum()
 
 				a.pager.MarkUnverified(id)
 				a.lastAlloc = id
@@ -767,7 +767,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		lastIdx := count - 1
 		clearFreelistIDAt(data, lastIdx)
 		n.SetCount(uint16(lastIdx))
-		a.updateChecksum(a.head, n)
+		n.UpdateChecksum()
 
 		a.pager.MarkUnverified(id)
 		a.lastAlloc = id
@@ -824,12 +824,12 @@ func (a *Allocator) Free(id uint64) error {
 	}
 
 	// Load Head
-	data, err := a.getPageForWrite(a.head)
+	data, err := a.pager.GetForWrite(a.head)
 	if err != nil {
 		return err
 	}
 	n := node.NewNode(data)
-	if !a.verifyChecksum(a.head, n) {
+	if !n.VerifyChecksum() {
 		return errors.New("freelist head corrupted (Free)")
 	}
 	if n.Type() != page.PageTypeFreelist {
@@ -845,7 +845,7 @@ func (a *Allocator) Free(id uint64) error {
 		if TestHookFreeBeforeChecksum != nil {
 			TestHookFreeBeforeChecksum()
 		}
-		a.updateChecksum(a.head, n)
+		n.UpdateChecksum()
 		a.stats.FreePages++
 		a.stats.FreeIDs++
 		return nil
@@ -934,7 +934,13 @@ func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, batchHook
 	if take > page.MaxFreeIDs {
 		take = page.MaxFreeIDs
 	}
-	data, err := a.getPageForWrite(id)
+	var data []byte
+	var err error
+	if batchHook {
+		data, err = a.getPageForWrite(id)
+	} else {
+		data, err = a.pager.GetForWrite(id)
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -954,7 +960,11 @@ func (a *Allocator) initHeadWithFreeIDs(id, next uint64, ids []uint64, batchHook
 	if batchHook && TestHookFreeManyBeforeChecksum != nil {
 		TestHookFreeManyBeforeChecksum()
 	}
-	a.updateChecksum(id, n)
+	if batchHook {
+		a.updateChecksum(id, n)
+	} else {
+		n.UpdateChecksum()
+	}
 	a.head = id
 	return take + 1, nil
 }
