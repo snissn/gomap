@@ -54,7 +54,7 @@ func benchmarkPL11CompareRegion(b *testing.B, count int, many bool) {
 	initialHead := a.head
 	initialLastAlloc := a.lastAlloc
 	initialStats := a.stats
-	snapshots := snapshotPL11CompareHeads(b, p, initialHead, count > 2)
+	snapshots := snapshotPL11CompareHeads(b, p, initialHead, true)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
