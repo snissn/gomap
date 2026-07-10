@@ -234,6 +234,15 @@ func TestNilStoreReturnsStorageErrors(t *testing.T) {
 	if _, err := store.GetAt([]byte("k"), 1); !errors.Is(err, ErrStorage) || !errors.Is(err, treedb.ErrClosed) {
 		t.Fatalf("GetAt nil store error=%v", err)
 	}
+
+	db := openTestDB(t, t.TempDir(), treedb.DurabilityDurable)
+	store = New(db)
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := store.CommitAt(1, nil, CommitDurable); err != nil {
+		t.Fatalf("empty CommitAt on closed non-nil store must not access storage: %v", err)
+	}
 }
 
 func TestCommitAtDurabilityModesAndReopen(t *testing.T) {
@@ -256,6 +265,9 @@ func TestCommitAtDurabilityModesAndReopen(t *testing.T) {
 			dir := t.TempDir()
 			db := openTestDB(t, dir, durability)
 			store := New(db)
+			if err := store.CommitAt(22, nil, CommitDurable); err != nil {
+				t.Fatalf("empty durable CommitAt must be a no-op: %v", err)
+			}
 			if err := store.CommitAt(22, []Mutation{{Key: []byte("k"), Value: []byte("relaxed")}}, CommitDurable); !errors.Is(err, ErrDurabilityUnavailable) {
 				t.Fatalf("durable request error=%v want ErrDurabilityUnavailable", err)
 			}

@@ -99,6 +99,8 @@ func newStore(db treeDB) *Store {
 // Duplicate logical keys, including nil and empty keys (which are the same
 // logical key), are rejected before a TreeDB batch is created. This deliberately
 // avoids an order-dependent last-write-wins policy. Empty batches are no-ops.
+// After timestamp, mode, and non-nil Store validation, an empty batch returns
+// without accessing TreeDB or checking its configured durability/open state.
 // A returned storage error can be commit-ambiguous, but visibility is always
 // whole-batch: readers may see all mutations or none, never a prefix.
 func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode) error {
@@ -111,11 +113,11 @@ func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode
 	if s == nil || s.db == nil {
 		return storageError("create batch", treedb.ErrClosed)
 	}
-	if mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
-		return fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
-	}
 	if len(mutations) == 0 {
 		return nil
+	}
+	if mode == CommitDurable && !durableTreeDBMode(s.db.DurabilityMode()) {
+		return fmt.Errorf("%w: configured mode %q", ErrDurabilityUnavailable, s.db.DurabilityMode())
 	}
 
 	type stagedMutation struct {

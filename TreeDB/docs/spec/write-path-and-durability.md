@@ -212,7 +212,9 @@ partial visibility is forbidden by the underlying batch boundary.
   effective mode is `DurabilityDurable`, then calls `Batch.WriteSync`. A nil
   return covers the configured WAL/value payload fsync recovery boundary; it
   does not force an immediate backend-root checkpoint.
-- Empty mutation lists are no-ops and do not manufacture a sync boundary.
+- After timestamp/mode and non-nil Store validation, empty mutation lists are
+  no-ops: they do not access storage, probe the handle's open/durability state,
+  or manufacture a sync boundary.
 
 External timestamps are key bytes in the reserved MVCC subspace. They neither
 select TreeDB's internal commit sequence nor invoke conditional transactions;

@@ -55,6 +55,8 @@ The opt-in `TreeDB/mvcc` package owns the first read/write use of this codec:
 - `CommitAt(timestamp, mutations, mode)` rejects timestamp zero, invalid commit
   modes, oversized logical keys, and duplicate logical keys before creating a
   TreeDB batch. Nil and empty logical keys have the same duplicate identity.
+- After timestamp/mode and non-nil Store validation, an empty mutation list is a
+  no-op that does not access TreeDB or probe its durability/open state.
 - Duplicate logical keys within one batch are rejected; they are not resolved
   by order-dependent last-write-wins behavior. Separate successful commits to
   the same logical key and timestamp address one physical version, so the later
