@@ -117,6 +117,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
     retaining command-WAL as the current durable write log.
 - `TreeDB/docs/spec/value-log-lifecycle.md`
   - retention, GC, rewrite, and operational lifecycle of value-log segments.
+- `TreeDB/docs/spec/leaf-generation-pack-pl01-closeout-3638.md`
+  - issue #3638 two-phase publication state machine, portable page-durability
+    contract, deterministic failure boundary, and count=5 performance closeout.
 - `TreeDB/docs/spec/backup-restore.md`
   - restorable file set, live backup barrier, restore validation, and
     quarantine/purge requirements for command-WAL external refs.

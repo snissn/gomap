@@ -1265,8 +1265,15 @@ func (z *Zipper) releaseApplyScratch(s *mergeScratch) {
 // CloneWithAllocator returns a zipper that shares config/pager with z but uses
 // the provided allocator.
 func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
+	return z.CloneWithPagerAllocator(z.pager, a)
+}
+
+// CloneWithPagerAllocator returns a zipper that shares z's configuration while
+// using a different pager and allocator. Private COW maintenance uses this to
+// build an overlay tree without allocating in the live index pager.
+func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zipper {
 	return &Zipper{
-		pager:                     z.pager,
+		pager:                     p,
 		allocator:                 a,
 		outerLeavesInValueLog:     z.outerLeavesInValueLog,
 		leafPageLog:               z.leafPageLog,

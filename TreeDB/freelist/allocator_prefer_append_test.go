@@ -76,38 +76,3 @@ func TestAllocator_PreferAppendAlloc_CanToggleBack(t *testing.T) {
 		t.Fatalf("expected freelist reuse page 1, got %d", got)
 	}
 }
-
-func TestAllocator_AllocAppendOnlyDoesNotConsumeFreelist(t *testing.T) {
-	dir := t.TempDir()
-	p, err := pager.Open(filepath.Join(dir, "index.db"), 64*1024)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer p.Close()
-
-	if _, err := p.Alloc(4); err != nil {
-		t.Fatalf("Alloc: %v", err)
-	}
-	a := New(p, 0)
-	if err := a.Free(3); err != nil {
-		t.Fatalf("Free(3): %v", err)
-	}
-	if err := a.Free(2); err != nil {
-		t.Fatalf("Free(2): %v", err)
-	}
-
-	privateID, err := a.AllocAppendOnly()
-	if err != nil {
-		t.Fatalf("AllocAppendOnly: %v", err)
-	}
-	if privateID != 4 {
-		t.Fatalf("private page=%d want appended page 4", privateID)
-	}
-	ordinaryID, err := a.Alloc(0)
-	if err != nil {
-		t.Fatalf("Alloc: %v", err)
-	}
-	if ordinaryID != 2 {
-		t.Fatalf("ordinary page=%d want untouched freelist page 2", ordinaryID)
-	}
-}

@@ -131,7 +131,7 @@ func TestPagerLifecycle(t *testing.T) {
 	p2.Close()
 }
 
-func TestPagerSyncPagesPersistsExactRangesWithoutClearingDirtyChunks(t *testing.T) {
+func TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "index_sync_pages.db")
 	chunkSize := int64(page.PageSize * 4)

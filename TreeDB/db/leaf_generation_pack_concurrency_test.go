@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 type leafGenerationPackTestCandidate struct {
@@ -217,12 +217,13 @@ func TestLeafGenerationPack_PrivatePagesRaceWithForegroundWriters(t *testing.T) 
 	if idx == nil {
 		t.Fatal("missing index")
 	}
-	tracker := newPrivateAppendAllocTracker(idx.allocator)
-	defer func() {
-		if err := tracker.FreeAll(); err != nil {
-			t.Fatalf("FreeAll: %v", err)
-		}
-	}()
+	mainPagesBefore := idx.pager.PageCount()
+	staging, err := pager.NewOverlay(db.chunkSize, leafGenerationPackPrivatePageIDBase, idx.pager)
+	if err != nil {
+		t.Fatalf("NewOverlay: %v", err)
+	}
+	defer func() { _ = staging.Close() }()
+	tracker := &leafGenerationPackStagingAllocator{pager: staging}
 
 	const iterations = 256
 	var wg sync.WaitGroup
@@ -236,16 +237,18 @@ func TestLeafGenerationPack_PrivatePagesRaceWithForegroundWriters(t *testing.T) 
 				errCh <- err
 				return
 			}
-			buf, err := idx.pager.GetForWrite(id)
+			if id < leafGenerationPackPrivatePageIDBase {
+				errCh <- fmt.Errorf("private id %d overlaps committed namespace", id)
+				return
+			}
+			buf, err := staging.GetForWrite(id)
 			if err != nil {
 				errCh <- err
 				return
 			}
-			builder := node.NewBuilder(buf, page.PageTypeInternal)
-			builder.SetPageID(id)
-			builder.FinishNoNode()
+			clear(buf)
 		}
-		if err := idx.pager.SyncPages(tracker.Pages()); err != nil {
+		if err := staging.Sync(); err != nil {
 			errCh <- err
 		}
 	}()
@@ -263,6 +266,9 @@ func TestLeafGenerationPack_PrivatePagesRaceWithForegroundWriters(t *testing.T) 
 	close(errCh)
 	for err := range errCh {
 		t.Fatalf("concurrent private-page stress: %v", err)
+	}
+	if got := idx.pager.PageCount(); got < mainPagesBefore || got != db.meta.TotalPages {
+		t.Fatalf("main pager pages=%d before=%d durable meta=%d", got, mainPagesBefore, db.meta.TotalPages)
 	}
 	for i := 0; i < iterations; i++ {
 		key := []byte(fmt.Sprintf("private-race-%04d", i))

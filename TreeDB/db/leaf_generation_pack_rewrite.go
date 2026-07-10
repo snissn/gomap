@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,6 +23,82 @@ import (
 const leafRefRewriteMapInitCap = 128    // initial map capacity for small leaf-ref rewrite batches
 const leafRefRewriteInlineChildCap = 64 // stack-backed child-id scratch for common small internal nodes
 const leafRefRewriteInlineRemapCap = 8  // inline remap cache before promoting to map
+
+// Private leaf-pack index pages live in a separate pager and use a namespace
+// that can never alias an ordinary committed page ID.
+const leafGenerationPackPrivatePageIDBase = uint64(1) << 63
+
+type leafGenerationPackStagingAllocator struct {
+	pager *pager.Pager
+	pages []uint64
+}
+
+func (a *leafGenerationPackStagingAllocator) Alloc(uint64) (uint64, error) {
+	if a == nil || a.pager == nil {
+		return 0, errors.New("leaf generation pack: missing staging pager")
+	}
+	id, err := a.pager.Alloc(1)
+	if err != nil {
+		return 0, err
+	}
+	a.pages = append(a.pages, id)
+	return id, nil
+}
+
+func (a *leafGenerationPackStagingAllocator) Pages() []uint64 {
+	if a == nil {
+		return nil
+	}
+	return append([]uint64(nil), a.pages...)
+}
+
+// leafGenerationPackPublishAllocator appends pages only after exact
+// revalidation while writeMu is held. Rollback restores the logical count; the
+// physical file may remain larger, but recovery and later allocation use the
+// committed logical TotalPages boundary.
+type leafGenerationPackPublishAllocator struct {
+	pager *pager.Pager
+	start uint64
+	pages []uint64
+}
+
+func newLeafGenerationPackPublishAllocator(p *pager.Pager) *leafGenerationPackPublishAllocator {
+	start := uint64(0)
+	if p != nil {
+		start = p.PageCount()
+	}
+	return &leafGenerationPackPublishAllocator{pager: p, start: start}
+}
+
+func (a *leafGenerationPackPublishAllocator) Alloc(uint64) (uint64, error) {
+	if a == nil || a.pager == nil {
+		return 0, errors.New("leaf generation pack: missing publish pager")
+	}
+	id, err := a.pager.Alloc(1)
+	if err != nil {
+		return 0, err
+	}
+	if id >= leafGenerationPackPrivatePageIDBase {
+		return 0, errors.New("leaf generation pack: committed page id namespace exhausted")
+	}
+	a.pages = append(a.pages, id)
+	return id, nil
+}
+
+func (a *leafGenerationPackPublishAllocator) Pages() []uint64 {
+	if a == nil {
+		return nil
+	}
+	return append([]uint64(nil), a.pages...)
+}
+
+func (a *leafGenerationPackPublishAllocator) Rollback() {
+	if a == nil || a.pager == nil {
+		return
+	}
+	a.pager.SetPageCount(a.start)
+	a.pages = nil
+}
 
 func (db *DB) cleanupRewriteCreatedSegments(createdSegments []rewriteCreatedSegment) error {
 	if len(createdSegments) == 0 {
@@ -150,6 +227,50 @@ func runLeafGenerationPackCopyHook(event leafGenerationPackCopyEvent) {
 	if hook != nil {
 		hook(event)
 	}
+}
+
+type leafGenerationPackPublishPhase uint8
+
+const (
+	leafGenerationPackBeforePromotion leafGenerationPackPublishPhase = iota + 1
+	leafGenerationPackAfterPromotion
+	leafGenerationPackAfterDirectorySync
+	leafGenerationPackBeforeRegistration
+	leafGenerationPackAfterRegistration
+	leafGenerationPackBeforeMetaWrite
+)
+
+type leafGenerationPackPublishEvent struct {
+	Phase   leafGenerationPackPublishPhase
+	Attempt int
+	FileIDs []uint32
+}
+
+var leafGenerationPackPublishHook struct {
+	mu sync.Mutex
+	fn func(leafGenerationPackPublishEvent) error
+}
+
+func registerLeafGenerationPackPublishHook(hook func(leafGenerationPackPublishEvent) error) func() {
+	leafGenerationPackPublishHook.mu.Lock()
+	previous := leafGenerationPackPublishHook.fn
+	leafGenerationPackPublishHook.fn = hook
+	leafGenerationPackPublishHook.mu.Unlock()
+	return func() {
+		leafGenerationPackPublishHook.mu.Lock()
+		leafGenerationPackPublishHook.fn = previous
+		leafGenerationPackPublishHook.mu.Unlock()
+	}
+}
+
+func runLeafGenerationPackPublishHook(event leafGenerationPackPublishEvent) error {
+	leafGenerationPackPublishHook.mu.Lock()
+	hook := leafGenerationPackPublishHook.fn
+	leafGenerationPackPublishHook.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(event)
 }
 
 var errLeafGenerationPackPublishConflict = errors.New("leaf generation pack: copy basis changed before publish")
@@ -679,9 +800,9 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		b := node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{
-			InternalBaseDelta: n.InternalBaseDeltaEnabled(),
-		})
+		// Staging mixes virtual private IDs and ordinary source IDs. Full-width
+		// child refs avoid the uint32 span limit of base-delta encoding.
+		b := node.NewBuilder(buf, page.PageTypeInternal)
 		b.SetPageID(newID)
 		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 			return id, false, err
@@ -852,6 +973,99 @@ func (db *DB) leafGenerationPackCopyBasisMatches(basis leafGenerationPackCopyBas
 	return true
 }
 
+func cloneLeafGenerationPackStagedNode(staged *pager.Pager, id uint64, alloc *leafGenerationPackPublishAllocator, remap map[uint64]uint64) (uint64, error) {
+	if id == 0 || id < leafGenerationPackPrivatePageIDBase {
+		return id, nil
+	}
+	if mapped, ok := remap[id]; ok {
+		return mapped, nil
+	}
+	if staged == nil || alloc == nil {
+		return 0, errors.New("leaf generation pack: missing staged publish state")
+	}
+	data, err := staged.Get(id)
+	if err != nil {
+		return 0, err
+	}
+	n := node.NewNodeView(data)
+	if !n.VerifyChecksum() {
+		return 0, fmt.Errorf("leaf generation pack: staged page %d checksum mismatch", id)
+	}
+	if n.Type() != page.PageTypeInternal {
+		return 0, fmt.Errorf("leaf generation pack: staged page %d has unexpected type %d", id, n.Type())
+	}
+	newID, err := alloc.Alloc(id)
+	if err != nil {
+		return 0, err
+	}
+	remap[id] = newID
+	buf, err := alloc.pager.GetForWrite(newID)
+	if err != nil {
+		return 0, err
+	}
+	// Virtual and source IDs may differ by more than uint32, so staged nodes use
+	// full-width refs. Publish keeps that representation for the rewritten path.
+	b := node.NewBuilder(buf, page.PageTypeInternal)
+	b.SetPageID(newID)
+	if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+		return 0, err
+	} else if ok {
+		b.SetInternalFenceBounds(low, high)
+	}
+	for i := uint16(0); i < n.Count(); i++ {
+		key, ref, err := n.GetInternalEntryRefView(i)
+		if err != nil {
+			return 0, err
+		}
+		if ref.Kind == page.ChildRefPage {
+			ref.Page, err = cloneLeafGenerationPackStagedNode(staged, ref.Page, alloc, remap)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if err := b.AddInternalChildRef(key, ref); err != nil {
+			return 0, err
+		}
+	}
+	b.FinishNoNode()
+	return newID, nil
+}
+
+func rebaseLeafGenerationPackCollectionReplacements(staged *pager.Pager, replacements []vacuumCollectionRootReplacement, alloc *leafGenerationPackPublishAllocator, remap map[uint64]uint64) ([]vacuumCollectionRootReplacement, error) {
+	if len(replacements) == 0 {
+		return nil, nil
+	}
+	out := make([]vacuumCollectionRootReplacement, 0, len(replacements))
+	for _, replacement := range replacements {
+		allowList := bytes.HasPrefix(replacement.key, vacuumCollectionRootOverlayDescriptorPrefixBytes)
+		rootIDs, err := decodeCollectionRootDescriptorRootIDs(replacement.key, replacement.value, allowList)
+		if err != nil {
+			return nil, err
+		}
+		for i, rootID := range rootIDs {
+			rootIDs[i], err = cloneLeafGenerationPackStagedNode(staged, rootID, alloc, remap)
+			if err != nil {
+				return nil, fmt.Errorf("leaf generation pack: publish collection root %d: %w", rootID, err)
+			}
+		}
+		out = append(out, vacuumCollectionRootReplacement{
+			key:   append([]byte(nil), replacement.key...),
+			value: encodeCollectionRootDescriptorRootIDs(rootIDs),
+		})
+	}
+	return out, nil
+}
+
+func leafGenerationPackCommittedRetired(ids []uint64) []uint64 {
+	out := make([]uint64, 0, len(ids))
+	for _, id := range ids {
+		if id != 0 && id < leafGenerationPackPrivatePageIDBase {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func promoteLeafGenerationPackSegments(created []rewriteCreatedSegment, leafDir string) ([]rewriteCreatedSegment, error) {
 	promoted := append([]rewriteCreatedSegment(nil), created...)
 	for i := range promoted {
@@ -872,7 +1086,7 @@ func promoteLeafGenerationPackSegments(created []rewriteCreatedSegment, leafDir 
 	return promoted, nil
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, syncPublish bool, leafFrameK int, attempt int, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sourceChunks map[valueLogChunkKey]ValueLogRewritePlanChunk, sourceChunkBytes int64, singleSourceID uint32, hasSingleSourceID bool, maxCopiedBytes int64, _ bool, leafFrameK int, attempt int, runStats *leafRefRewriteRunStats) (copied int, copiedBytes int64, err error) {
 	if db == nil {
 		return 0, 0, fmt.Errorf("missing db")
 	}
@@ -918,21 +1132,16 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	sysRoot := snap.state.SystemRootPageID
 	basis := captureLeafGenerationPackCopyBasis(snap, sourceIDs, singleSourceID, hasSingleSourceID)
 
-	tracker := newPrivateAppendAllocTracker(idx.allocator)
+	stagingPager, err := pager.NewOverlay(db.chunkSize, leafGenerationPackPrivatePageIDBase, idx.pager)
+	if err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: create private index staging pager: %w", err)
+	}
 	defer func() {
-		if tracker == nil {
-			return
+		if closeErr := stagingPager.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
 		}
-		freeErr := tracker.FreeAll()
-		if freeErr == nil {
-			return
-		}
-		if err != nil {
-			err = errors.Join(err, freeErr)
-			return
-		}
-		err = freeErr
 	}()
+	tracker := &leafGenerationPackStagingAllocator{pager: stagingPager}
 
 	var sourceGenerationIDs map[uint64]struct{}
 	if snap.state.LeafGenerations != nil && sourceChunks == nil {
@@ -958,7 +1167,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	leafCtx := &leafRefRewriteCtx{
 		ctx:                  ctx,
 		db:                   db,
-		pager:                idx.pager,
+		pager:                stagingPager,
 		leafReader:           &snap.reader,
 		alloc:                tracker,
 		writer:               writer,
@@ -984,7 +1193,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			err = errors.Join(err, closeErr)
 		}
 	}()
-	leafCtx.zipper = idx.zipper.CloneWithAllocator(tracker)
+	leafCtx.zipper = idx.zipper.CloneWithPagerAllocator(stagingPager, tracker)
 	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 	leafCtx.zipper.SetLeafPageReader(leafCtx)
 	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
@@ -1027,6 +1236,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system leaf root: %w", err)
 	}
+	preCollectionSysRoot := newSysRoot
 	if len(collectionRootReplacements) > 0 {
 		if sysChanged {
 			if err := writer.Flush(); err != nil {
@@ -1036,10 +1246,15 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 				return 0, 0, fmt.Errorf("vlog-rewrite: refresh private leaf reader: %w", err)
 			}
 		}
+		retiredBeforeCollectionDelta := len(leafCtx.retired)
 		replacedSysRoot, replacementChanged, err := leafCtx.applySystemRootCollectionRootReplacements(newSysRoot, collectionRootReplacements)
 		if err != nil {
 			return 0, 0, fmt.Errorf("vlog-rewrite: rewrite system collection descriptors: %w", err)
 		}
+		// The staged descriptor delta proves and accounts for the copy-time work,
+		// but its virtual root IDs must be rebased during publish. Its retired list
+		// therefore has no ownership in the committed pager.
+		leafCtx.retired = leafCtx.retired[:retiredBeforeCollectionDelta]
 		newSysRoot = replacedSysRoot
 		sysChanged = sysChanged || replacementChanged
 	}
@@ -1069,20 +1284,15 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		PrivatePageIDs: append([]uint64(nil), privatePages...),
 	})
 
-	// Persist only private copy output here. The meta-page install remains in
-	// the short publish phase after exact basis validation.
-	if syncPublish {
-		if err := writer.Sync(); err != nil {
-			return 0, 0, fmt.Errorf("vlog-rewrite: sync rewritten leaf refs: %w", err)
-		}
-		if err := idx.pager.SyncPages(privatePages); err != nil {
-			return 0, 0, fmt.Errorf("vlog-rewrite: sync private index pages: %w", err)
-		}
-	} else {
-		if err := writer.Flush(); err != nil {
-			return 0, 0, fmt.Errorf("vlog-rewrite: flush rewritten leaf refs: %w", err)
-		}
+	// Pack publication is always durable. Copy fsync remains outside writeMu;
+	// Sync=false is retained only for source compatibility with the pre-alpha
+	// API and no longer weakens the root/segment publication contract.
+	if err := writer.Sync(); err != nil {
+		return 0, 0, fmt.Errorf("vlog-rewrite: sync rewritten leaf refs: %w", err)
 	}
+	// The private index pages live only in memory and are never a publication
+	// candidate. Their reconstructed live-pager pages are synchronized before the
+	// alternate meta page.
 	createdSegments, err := writer.createdSegmentsSnapshot()
 	if err != nil {
 		return 0, 0, fmt.Errorf("vlog-rewrite: snapshot created leaf ref segments: %w", err)
@@ -1119,24 +1329,92 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		return 0, 0, errLeafGenerationPackPublishConflict
 	}
 
+	visibilityLocked := false
+	publishPrepareLocked := false
+	db.publishPrepareMu.RLock()
+	publishPrepareLocked = true
+	db.valueLogPublicationMu.Lock()
+	visibilityLocked = true
+	previousUnlockPublish := unlockPublish
+	unlockPublish = func() {
+		if visibilityLocked {
+			db.valueLogPublicationMu.Unlock()
+			visibilityLocked = false
+		}
+		if publishPrepareLocked {
+			db.publishPrepareMu.RUnlock()
+			publishPrepareLocked = false
+		}
+		previousUnlockPublish()
+	}
+	// Refresh can publish a new state without writeMu. Revalidate once more after
+	// taking the visibility gate so every basis field is stable through publish.
+	if !db.leafGenerationPackCopyBasisMatches(basis) {
+		if runStats != nil {
+			runStats.PublishConflict = true
+		}
+		unlockPublish()
+		return 0, 0, errLeafGenerationPackPublishConflict
+	}
+	publishEvent := leafGenerationPackPublishEvent{
+		Attempt: attempt,
+		FileIDs: append([]uint32(nil), createdIDs...),
+	}
+	publishEvent.Phase = leafGenerationPackBeforePromotion
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		unlockPublish()
+		return 0, 0, fmt.Errorf("vlog-rewrite: promotion failpoint: %w", err)
+	}
+
 	promotedSegments, promoteErr := promoteLeafGenerationPackSegments(createdSegments, resolveStorageLayout(db.dir).leafVLogDir)
 	createdSegments = promotedSegments
+	var (
+		publishAlloc *leafGenerationPackPublishAllocator
+		dirSyncCh    chan error
+	)
+	waitDirectorySync := func() error {
+		if dirSyncCh == nil {
+			return nil
+		}
+		err := <-dirSyncCh
+		dirSyncCh = nil
+		return err
+	}
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
+		if syncErr := waitDirectorySync(); syncErr != nil {
+			baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", syncErr))
+		}
+		if publishAlloc != nil {
+			publishAlloc.Rollback()
+		}
 		cleanupErr := db.cleanupRewriteCreatedSegments(createdSegments)
 		if cleanupErr != nil {
 			baseErr = errors.Join(baseErr, cleanupErr)
 		}
+		if len(createdSegments) > 0 {
+			leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
+			if syncErr := syncDirFn(leafVLogDir); syncErr != nil {
+				baseErr = errors.Join(baseErr, fmt.Errorf("vlog-rewrite: sync cleaned leaf directory: %w", syncErr))
+			}
+		}
 		return 0, 0, baseErr
 	}
-	if promoteErr != nil {
+	cleanupAndUnlock := func(baseErr error) (int, int64, error) {
+		copied, copiedBytes, cleanupErr := cleanupCreatedSegments(baseErr)
 		unlockPublish()
-		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr))
+		return copied, copiedBytes, cleanupErr
 	}
-	if syncPublish && len(createdSegments) > 0 {
-		if err := syncDirFn(resolveStorageLayout(db.dir).leafVLogDir); err != nil {
-			unlockPublish()
-			return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", err))
-		}
+	if promoteErr != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: promote copied leaf refs: %w", promoteErr))
+	}
+	publishEvent.Phase = leafGenerationPackAfterPromotion
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: promoted leaf directory failpoint: %w", err))
+	}
+	if len(createdSegments) > 0 {
+		dirSyncCh = make(chan error, 1)
+		leafVLogDir := resolveStorageLayout(db.dir).leafVLogDir
+		go func() { dirSyncCh <- syncDirFn(leafVLogDir) }()
 	}
 
 	var leafManifest *leafGenerationManifest
@@ -1145,8 +1423,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		stagedManifest := db.leafGenerationManifest.clone()
 		rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(stagedManifest, snap.state.CommitSeq+1, createdIDs)
 		if err != nil {
-			unlockPublish()
-			return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", err))
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", err))
 		}
 		if changed {
 			leafManifest = stagedManifest
@@ -1154,37 +1431,116 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}
 
-	db.publishPrepareMu.RLock()
+	// Allocate committed IDs only after exact revalidation. No foreground writer
+	// can observe or account for this append range because writeMu is held from
+	// allocation through meta publication.
+	relocateStarted := time.Now()
+	publishAlloc = newLeafGenerationPackPublishAllocator(idx.pager)
+	remap := make(map[uint64]uint64, len(privatePages))
+	publishCollectionReplacements, err := rebaseLeafGenerationPackCollectionReplacements(stagingPager, collectionRootReplacements, publishAlloc, remap)
+	if err != nil {
+		return cleanupAndUnlock(err)
+	}
+	publishedRoot, err := cloneLeafGenerationPackStagedNode(stagingPager, newRoot, publishAlloc, remap)
+	if err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish user root: %w", err))
+	}
+	publishedSysRoot, err := cloneLeafGenerationPackStagedNode(stagingPager, preCollectionSysRoot, publishAlloc, remap)
+	if err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish system root: %w", err))
+	}
+	relocateDuration := time.Since(relocateStarted)
+	publishRetired := leafGenerationPackCommittedRetired(leafCtx.retired)
+	// The target-directory and index-page durability fences are independent and
+	// can run concurrently. Both complete before registration or meta write.
+	pageSyncStarted := time.Now()
+	if err := idx.pager.SyncPages(publishAlloc.Pages()); err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published index pages: %w", err))
+	}
+	pageSyncDuration := time.Since(pageSyncStarted)
+	dirWaitStarted := time.Now()
+	if err := waitDirectorySync(); err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync promoted leaf directory: %w", err))
+	}
+	dirWaitDuration := time.Since(dirWaitStarted)
+	publishEvent.Phase = leafGenerationPackAfterDirectorySync
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: directory sync failpoint: %w", err))
+	}
+
+	publishEvent.Phase = leafGenerationPackBeforeRegistration
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: registration failpoint: %w", err))
+	}
+	registerStarted := time.Now()
 	if len(createdSegments) > 0 {
 		// Registration belongs to publish: staged files are invisible to Refresh
 		// until exact revalidation has succeeded under writeMu.
 		for _, seg := range createdSegments {
 			if err := db.valueLogManager.RegisterSegment(seg.path, seg.fileID); err != nil {
-				db.publishPrepareMu.RUnlock()
-				unlockPublish()
-				return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: register rewritten leaf segment %d: %w", seg.fileID, err))
+				return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: register rewritten leaf segment %d: %w", seg.fileID, err))
 			}
 		}
 	}
+	publishEvent.Phase = leafGenerationPackAfterRegistration
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: post-registration failpoint: %w", err))
+	}
 
-	post, finalizeErr := db.finalizeCommitLockedWithOptions(newRoot, newSysRoot, leafCtx.retired, syncPublish, adaptive.Metrics{}, createdIDs, false, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
+	if len(publishCollectionReplacements) > 0 {
+		if db.leafPageLog == nil {
+			return cleanupAndUnlock(errors.New("vlog-rewrite: collection root publication requires leaf page log"))
+		}
+		publishCtx := &leafRefRewriteCtx{
+			ctx:        ctx,
+			db:         db,
+			pager:      idx.pager,
+			leafReader: db.valueLogManager,
+			alloc:      publishAlloc,
+		}
+		publishCtx.zipper = idx.zipper.CloneWithPagerAllocator(idx.pager, publishAlloc)
+		publishCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
+		publishCtx.zipper.SetLeafPageReader(db.valueLogManager)
+		publishCtx.zipper.SetLeafPageLog(db.leafPageLog)
+		publishedSysRoot, _, err = publishCtx.applySystemRootCollectionRootReplacements(publishedSysRoot, publishCollectionReplacements)
+		if err != nil {
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish collection descriptors: %w", err))
+		}
+		publishRetired = append(publishRetired, publishCtx.retired...)
+		if err := db.leafPageLog.Sync(); err != nil {
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published collection descriptors: %w", err))
+		}
+		if err := idx.pager.SyncPages(publishAlloc.Pages()); err != nil {
+			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: sync published collection index pages: %w", err))
+		}
+	}
+	publishEvent.Phase = leafGenerationPackBeforeMetaWrite
+	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: meta write failpoint: %w", err))
+	}
+
+	registerDuration := time.Since(registerStarted)
+	finalizeStarted := time.Now()
+	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
 		skipPrePublishFlush: true,
 		syncMetaPageOnly:    true,
 	})
-	db.publishPrepareMu.RUnlock()
+	finalizeDuration := time.Since(finalizeStarted)
 	if finalizeErr != nil {
 		if !finalizeCommitErrorAllowsCreatedSegmentCleanup(finalizeErr) {
-			// Meta persistence may have happened. Keep both pages and segments so a
-			// reopen can safely follow either durable meta-page outcome.
-			tracker = nil
+			// The alternate meta page was written and its durability outcome is
+			// ambiguous. Retain every candidate resource and fail closed until reopen.
+			db.publicationPoisoned.Store(true)
 			unlockPublish()
-			return 0, 0, fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr)
+			return 0, 0, errors.Join(
+				fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr),
+				db.commandWALPoisonedError(),
+			)
 		}
-		unlockPublish()
-		return cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
+		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr))
 	}
-	db.invalidateLeafGenerationSubtreeStats(privatePages)
-	tracker = nil
+	db.invalidateLeafGenerationSubtreeStats(publishAlloc.Pages())
+	commitTimingPrintf("treedb: leaf_pack_publish relocate=%s page_sync=%s dir_wait=%s register=%s finalize=%s total=%s\n", relocateDuration, pageSyncDuration, dirWaitDuration, registerDuration, finalizeDuration, time.Since(publishStarted))
 	unlockPublish()
 	db.finalizeCommitPostWork(post)
 	return leafCtx.copied, leafCtx.copiedBytes, nil

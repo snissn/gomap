@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/compression"
@@ -19,8 +20,36 @@ const leafGenerationPackDefaultLeafFrameK = 16
 
 var leafGenerationPackRIDStartScanner = nextRewriteRIDStartFromSet
 
+func cleanupLeafGenerationPackStagingDirs(leafDir string) error {
+	entries, err := os.ReadDir(leafDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	removed := false
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), ".leaf-pack-copy-") {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(leafDir, entry.Name())); err != nil {
+			return fmt.Errorf("leaf generation pack: remove orphan staging directory %q: %w", entry.Name(), err)
+		}
+		removed = true
+	}
+	if removed {
+		return syncDirFn(leafDir)
+	}
+	return nil
+}
+
 type LeafGenerationPackOptions struct {
-	GenerationIDs              []uint64
+	GenerationIDs []uint64
+	// Sync is retained for API compatibility. Leaf-generation pack publication
+	// is always durable: copied records/pages, the promoted-directory entry, and
+	// the alternate meta page are synchronized before source generations can
+	// become reclaimable. Setting Sync to false does not weaken that contract.
 	Sync                       bool
 	MinPublishedAgeCommits     uint64
 	MinExpectedReclaimBytes    int64
@@ -55,6 +84,7 @@ type LeafGenerationPackStats struct {
 	CreatedFileIDs                  []uint32
 	CopyAttempts                    int
 	CopyAborts                      int
+	RetryCopyTimeNanos              int64
 	CopyTimeNanos                   int64
 	PublishWaitNanos                int64
 	PublishHoldNanos                int64
@@ -73,6 +103,9 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	if db.readOnly {
 		return stats, ErrReadOnly
 	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return stats, err
+	}
 	if !db.indexOuterLeavesInValueLog {
 		return stats, nil
 	}
@@ -88,6 +121,9 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return stats, err
+	}
 	selectedPlan, err := db.validateLeafGenerationPackSelection(ctx, opts)
 	stats.SourceGenerationIDs = append(stats.SourceGenerationIDs, selectedPlan.CandidateGenerationIDs...)
 	stats.SourceBytesTotal = selectedPlan.CandidateBytesTotal
@@ -110,6 +146,9 @@ func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGeneratio
 	if db.readOnly {
 		return stats, ErrReadOnly
 	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return stats, err
+	}
 	if !db.indexOuterLeavesInValueLog {
 		return stats, nil
 	}
@@ -126,6 +165,9 @@ func (db *DB) leafGenerationPackSelected(ctx context.Context, opts LeafGeneratio
 	if lockMaintenance {
 		db.maintenanceMu.Lock()
 		defer db.maintenanceMu.Unlock()
+	}
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return stats, err
 	}
 	stats.SourceGenerationIDs = append(stats.SourceGenerationIDs, selectedPlan.CandidateGenerationIDs...)
 	stats.SourceBytesTotal = selectedPlan.CandidateBytesTotal
@@ -230,6 +272,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		stats.PrivatePagesAllocated += rewriteStats.PrivatePages
 		if errors.Is(rewriteErr, errLeafGenerationPackPublishConflict) {
 			stats.CopyAborts++
+			stats.RetryCopyTimeNanos += rewriteStats.CopyTimeNanos
 			stats.PrivatePagesDiscarded += rewriteStats.PrivatePages
 			if closeErr != nil || removeErr != nil {
 				return stats, errors.Join(rewriteErr, closeErr, removeErr)
