@@ -123,14 +123,12 @@ func TestSnapshotIteratorCreationRejectsStaleGeneration(t *testing.T) {
 	}
 }
 
-func TestSnapshotIteratorDoubleCloseDetachesPooledOwner(t *testing.T) {
+func TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	// Isolate this test's pool so the returned object is the next object reused.
-	d.snapPool = NewSnapshotPool()
 
 	snap := d.AcquireSnapshot()
 	if snap == nil {
@@ -141,6 +139,11 @@ func TestSnapshotIteratorDoubleCloseDetachesPooledOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	bound := it.(*snapshotBoundIterator)
+	keeper, err := snap.IteratorWithOptions(nil, nil, IteratorOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keeper.Close()
 	if err := snap.Close(); err != nil {
 		t.Fatalf("Snapshot.Close: %v", err)
 	}
@@ -148,21 +151,22 @@ func TestSnapshotIteratorDoubleCloseDetachesPooledOwner(t *testing.T) {
 		t.Fatalf("Iterator.Close: %v", err)
 	}
 	if bound.owner != nil {
-		t.Fatal("closed iterator retained pooled snapshot owner")
+		t.Fatal("closed iterator retained snapshot owner")
 	}
 
-	reused := d.snapPool.Get()
-	if reused != snap {
-		t.Fatal("snapshot pool did not reuse the just-returned snapshot")
+	generation := snap.generation.Load()
+	if snap.finalized.Load() {
+		t.Fatal("keeper did not pin closed snapshot owner")
 	}
-	generation := reused.generation.Load()
 	if err := it.Close(); err != nil {
 		t.Fatalf("second Iterator.Close: %v", err)
 	}
-	if reused.generation.Load() != generation || reused.finalized.Load() {
-		t.Fatal("double iterator close mutated a reused snapshot generation")
+	if snap.generation.Load() != generation || snap.finalized.Load() {
+		t.Fatal("double iterator close mutated detached snapshot owner")
 	}
-	d.snapPool.Put(reused)
+	if err := keeper.Close(); err != nil {
+		t.Fatalf("keeper Iterator.Close: %v", err)
+	}
 }
 
 func TestBackendSnapshotIteratorEmptyDomainSeekRemainsEmpty(t *testing.T) {
