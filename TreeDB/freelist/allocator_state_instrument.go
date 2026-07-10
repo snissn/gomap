@@ -5,10 +5,17 @@ package freelist
 import (
 	"sync"
 
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
-const allocatorInstrumentationEnabled = true
+type allocatorPageOperation uint8
+
+const (
+	allocatorPageGetForWrite allocatorPageOperation = iota
+	allocatorPageVerifyChecksum
+	allocatorPageUpdateChecksum
+)
 
 type allocatorPageOperationCounts struct {
 	gets     int
@@ -59,6 +66,27 @@ func (a *Allocator) observePageOperation(operation allocatorPageOperation, pageI
 		counts.updates++
 	}
 	a.instrumentation.operations[pageID] = counts
+}
+
+func (a *Allocator) batchGetForWrite(pageID uint64) ([]byte, error) {
+	if err := a.injectedGetForWriteError(pageID); err != nil {
+		a.observePageOperation(allocatorPageGetForWrite, pageID)
+		return nil, err
+	}
+	data, err := a.pager.GetForWrite(pageID)
+	a.observePageOperation(allocatorPageGetForWrite, pageID)
+	return data, err
+}
+
+func (a *Allocator) batchVerifyChecksum(pageID uint64, n *node.Node) bool {
+	checksumOK := n.VerifyChecksum()
+	a.observePageOperation(allocatorPageVerifyChecksum, pageID)
+	return checksumOK
+}
+
+func (a *Allocator) batchUpdateChecksum(pageID uint64, n *node.Node) {
+	n.UpdateChecksum()
+	a.observePageOperation(allocatorPageUpdateChecksum, pageID)
 }
 
 func (a *Allocator) injectedGetForWriteError(_ uint64) error {

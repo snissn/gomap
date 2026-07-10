@@ -28,19 +28,15 @@ func assertAllocatorPageOperationCounts(t *testing.T, a *Allocator, pageID uint6
 
 func performObservedPageCycle(t *testing.T, a *Allocator, pageID uint64) {
 	t.Helper()
-	data, err := a.pager.GetForWrite(pageID)
-	a.observePageOperation(allocatorPageGetForWrite, pageID)
+	data, err := a.batchGetForWrite(pageID)
 	if err != nil {
 		t.Fatalf("GetForWrite(%d): %v", pageID, err)
 	}
 	n := node.NewNode(data)
-	checksumOK := n.VerifyChecksum()
-	a.observePageOperation(allocatorPageVerifyChecksum, pageID)
-	if !checksumOK {
+	if !a.batchVerifyChecksum(pageID, n) {
 		t.Fatalf("VerifyChecksum(%d) = false", pageID)
 	}
-	n.UpdateChecksum()
-	a.observePageOperation(allocatorPageUpdateChecksum, pageID)
+	a.batchUpdateChecksum(pageID, n)
 }
 
 func TestAllocator_PageOperationGateDetectsActualDuplicateCalls(t *testing.T) {
