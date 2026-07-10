@@ -60,18 +60,11 @@ var ownedReadScratchPool = sync.Pool{
 	},
 }
 
-// snapshotPool keeps the cached Snapshot wrapper off the heap-heavy per-key
-// read path. Snapshot.Close returns objects here after releasing backend and
-// memtable-view references; callers must not use a Snapshot after Close.
-var snapshotPool = sync.Pool{
-	New: func() any { return &Snapshot{} },
-}
-
 func getSnapshot() *Snapshot {
-	snap, _ := snapshotPool.Get().(*Snapshot)
-	if snap == nil {
-		snap = &Snapshot{}
-	}
+	// Exported Snapshot handles must have unique identities. Reusing an address
+	// would let a stale pointer retained after Close operate on the new snapshot;
+	// no generation stored in the reused object can distinguish those aliases.
+	snap := &Snapshot{}
 	snap.iteratorMu.Lock()
 	snap.generation.Add(1)
 	snap.closed.Store(true)
@@ -108,7 +101,7 @@ func putSnapshot(snap *Snapshot) {
 	snap.closed.Store(true)
 	snap.finalized.Store(false)
 	snap.iteratorMu.Unlock()
-	snapshotPool.Put(snap)
+	// Do not make the exported handle reusable. A stale alias must remain closed.
 }
 
 func getOwnedReadScratch() *ownedReadScratch {

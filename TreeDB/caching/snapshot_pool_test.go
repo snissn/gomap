@@ -25,7 +25,7 @@ func newCachedSnapshotPoolTestDB(t *testing.T) (*DB, *backenddb.DB) {
 	return cached, backend
 }
 
-func TestAcquireSnapshot_CachedPathAllocsAfterWarm(t *testing.T) {
+func TestAcquireSnapshot_CachedPathAllocsAreBounded(t *testing.T) {
 	cached, backend := newCachedSnapshotPoolTestDB(t)
 	defer func() {
 		_ = cached.Close()
@@ -59,8 +59,11 @@ func TestAcquireSnapshot_CachedPathAllocsAfterWarm(t *testing.T) {
 			panic(err)
 		}
 	})
-	if allocs > 0.1 {
-		t.Fatalf("cached AcquireSnapshot allocs/run=%f want <= 0.1", allocs)
+	// Each acquisition deliberately allocates distinct exported cached and
+	// backend handles. Reusing either address would allow a stale pointer to
+	// operate on a later snapshot; keep the safety cost bounded to those handles.
+	if allocs > 2.1 {
+		t.Fatalf("cached AcquireSnapshot allocs/run=%f want <= 2.1", allocs)
 	}
 }
 

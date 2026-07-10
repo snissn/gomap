@@ -1327,6 +1327,11 @@ type Options struct {
 	MaxWALBytes int64
 }
 
+// Snapshot is a consistent point-in-time database view.
+//
+// Snapshot pointers are single-use: after Close returns, callers must discard
+// the pointer and any later method call remains invalid even after subsequent
+// snapshots are acquired.
 type Snapshot struct {
 	db                     *DB
 	idx                    *indexGen

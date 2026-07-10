@@ -321,8 +321,11 @@ func TestAcquireSnapshot_AllocsBoundedAfterWarmPath(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	})
-	if allocs > 1.1 {
-		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 1.1 after warm path", allocs)
+	// Distinct exported cached and backend handles are the two intentional
+	// allocations. Their addresses cannot be reused safely while callers may
+	// retain a closed pointer.
+	if allocs > 2.1 {
+		t.Fatalf("AcquireSnapshot allocs/run=%f, want <= 2.1 after warm path", allocs)
 	}
 }
 

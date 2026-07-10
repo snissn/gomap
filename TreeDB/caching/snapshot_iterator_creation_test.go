@@ -7,9 +7,10 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 )
 
-func TestCachedSnapshotIteratorCreationSerializesCloseAndPoolReuse(t *testing.T) {
+func TestCachedSnapshotIteratorCreationSerializesCloseAndRelease(t *testing.T) {
 	cached, backend := newCachedSnapshotPoolTestDB(t)
 	defer func() {
 		_ = cached.Close()
@@ -62,7 +63,7 @@ func TestCachedSnapshotIteratorCreationSerializesCloseAndPoolReuse(t *testing.T)
 				t.Fatal("second AcquireSnapshot=nil")
 			}
 			if other == snap {
-				t.Fatal("cached snapshot was returned to pool before iterator registration completed")
+				t.Fatal("AcquireSnapshot reused a cached snapshot handle during iterator registration")
 			}
 			if err := other.Close(); err != nil {
 				t.Fatalf("second Snapshot.Close: %v", err)
@@ -122,6 +123,49 @@ func TestCachedSnapshotIteratorCreationRejectsStaleGeneration(t *testing.T) {
 	}
 	if createCalled {
 		t.Fatal("stale generation accessed cached snapshot fields")
+	}
+}
+
+func TestCachedSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition(t *testing.T) {
+	cached, backend := newCachedSnapshotPoolTestDB(t)
+	defer func() {
+		_ = cached.Close()
+		_ = backend.Close()
+	}()
+	if err := cached.Set([]byte("old"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := cached.AcquireSnapshot()
+	if stale == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatalf("stale Snapshot.Close: %v", err)
+	}
+	fresh := cached.AcquireSnapshot()
+	if fresh == nil {
+		t.Fatal("fresh AcquireSnapshot=nil")
+	}
+	defer fresh.Close()
+	if fresh == stale {
+		t.Fatal("AcquireSnapshot reused an exported cached snapshot handle")
+	}
+
+	for _, reverse := range []bool{false, true} {
+		var it publiciterator.Iterator
+		var err error
+		if reverse {
+			it, err = stale.ReverseIterator(nil, nil)
+		} else {
+			it, err = stale.Iterator(nil, nil)
+		}
+		if !errors.Is(err, backenddb.ErrClosed) {
+			t.Fatalf("reverse=%v stale iterator error=%v want ErrClosed", reverse, err)
+		}
+		if it != nil {
+			t.Fatalf("reverse=%v stale handle returned an iterator", reverse)
+		}
 	}
 }
 

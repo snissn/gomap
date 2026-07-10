@@ -9,8 +9,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// snapshotBoundIterator prevents a pooled Snapshot from being returned and
-// reused until every iterator invalidated by Snapshot.Close is itself closed.
+// snapshotBoundIterator prevents a Snapshot from releasing its pinned state
+// until every iterator invalidated by Snapshot.Close is itself closed.
 // Registration and closure use a mutex; the steady-state path uses one atomic
 // closed check and does not allocate.
 type snapshotBoundIterator struct {

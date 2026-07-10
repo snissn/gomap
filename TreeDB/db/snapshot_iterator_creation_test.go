@@ -10,7 +10,7 @@ import (
 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 )
 
-func TestSnapshotIteratorCreationSerializesCloseAndPoolReuse(t *testing.T) {
+func TestSnapshotIteratorCreationSerializesCloseAndRelease(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +63,7 @@ func TestSnapshotIteratorCreationSerializesCloseAndPoolReuse(t *testing.T) {
 				t.Fatal("second AcquireSnapshot=nil")
 			}
 			if other == snap {
-				t.Fatal("snapshot was returned to pool before iterator registration completed")
+				t.Fatal("AcquireSnapshot reused a snapshot handle during iterator registration")
 			}
 			if err := other.Close(); err != nil {
 				t.Fatalf("second Snapshot.Close: %v", err)
@@ -120,6 +120,45 @@ func TestSnapshotIteratorCreationRejectsStaleGeneration(t *testing.T) {
 	}
 	if createCalled {
 		t.Fatal("stale generation accessed snapshot fields")
+	}
+}
+
+func TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	stale := d.AcquireSnapshot()
+	if stale == nil {
+		t.Fatal("AcquireSnapshot=nil")
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatalf("stale Snapshot.Close: %v", err)
+	}
+	fresh := d.AcquireSnapshot()
+	if fresh == nil {
+		t.Fatal("fresh AcquireSnapshot=nil")
+	}
+	defer fresh.Close()
+	if fresh == stale {
+		t.Fatal("AcquireSnapshot reused an exported snapshot handle")
+	}
+
+	for _, reverse := range []bool{false, true} {
+		var it iterator.UnsafeIterator
+		if reverse {
+			it, err = stale.ReverseIteratorWithOptions(nil, nil, IteratorOptions{})
+		} else {
+			it, err = stale.IteratorWithOptions(nil, nil, IteratorOptions{})
+		}
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("reverse=%v stale iterator error=%v want ErrClosed", reverse, err)
+		}
+		if it != nil {
+			t.Fatalf("reverse=%v stale handle returned an iterator", reverse)
+		}
 	}
 }
 

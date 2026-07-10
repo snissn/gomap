@@ -20,23 +20,20 @@ type Iterator interface {
 	Reset(start, end []byte)
 }
 
-// SnapshotPool manages a pool of Snapshot objects to reduce allocation overhead.
-type SnapshotPool struct {
-	pool sync.Pool
-}
+// SnapshotPool centralizes Snapshot allocation and cleanup.
+//
+// Exported Snapshot handles are deliberately not reused. A caller can retain a
+// pointer after Close, and reactivating that same address would let the stale
+// alias operate on an unrelated snapshot. No generation stored in the reused
+// object can distinguish those aliases.
+type SnapshotPool struct{}
 
 func NewSnapshotPool() *SnapshotPool {
-	return &SnapshotPool{
-		pool: sync.Pool{
-			New: func() interface{} {
-				return &Snapshot{registryShardHint: snapshotShardHintUnset}
-			},
-		},
-	}
+	return &SnapshotPool{}
 }
 
 func (p *SnapshotPool) Get() *Snapshot {
-	s := p.pool.Get().(*Snapshot)
+	s := &Snapshot{registryShardHint: snapshotShardHintUnset}
 	s.iteratorMu.Lock()
 	s.generation.Add(1)
 	s.closed.Store(true)
@@ -67,12 +64,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.closed.Store(true)
 	s.finalized.Store(false)
 	s.iteratorMu.Unlock()
-	// treePager/treeRoot are intentionally preserved as a pooled cache key for
-	// the next AcquireSnapshot() on this same object. registryShardHint is also
-	// preserved so the same pooled Snapshot keeps a stable fast registry shard.
-	// The reader backing address is stable per pooled Snapshot object, so Reset
-	// can be skipped safely when pager+root are unchanged.
-	p.pool.Put(s)
+	// Do not make the exported handle reusable. See SnapshotPool's contract.
 }
 
 type ghostIndex struct {
