@@ -282,6 +282,12 @@ func (t *valueLogRefTracker) replace(counts map[uint32]uint64, commitSeq uint64,
 		next[fileID] = n
 	}
 	t.mu.Lock()
+	// A fallback scan may finish after a concurrent commit advanced the tracker.
+	// Do not replace newer exact counts with an older snapshot.
+	if t.commitSeq > commitSeq {
+		t.mu.Unlock()
+		return
+	}
 	t.counts = next
 	t.commitSeq = commitSeq
 	t.valid = true
@@ -493,24 +499,29 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 }
 
 func (db *DB) referencedValueLogSegmentsWithSource(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, error) {
+	refs, source, _, err := db.referencedValueLogSegmentsWithSourceAtSeq(ctx)
+	return refs, source, err
+}
+
+func (db *DB) referencedValueLogSegmentsWithSourceAtSeq(ctx context.Context) (map[uint32]struct{}, valueLogRefResolutionSource, uint64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	seq := db.currentCommitSeq()
 	if db.valueLogRefTracker != nil {
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
-			return refs, valueLogRefResolutionSourceTracker, nil
+			return refs, valueLogRefResolutionSourceTracker, seq, nil
 		}
 	}
 	counts, scannedSeq, err := db.scanValueLogRefCounts(ctx)
 	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
 		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
-			return nil, valueLogRefResolutionSourceFallbackScan, refreshErr
+			return nil, valueLogRefResolutionSourceFallbackScan, 0, refreshErr
 		}
 		counts, scannedSeq, err = db.scanValueLogRefCounts(ctx)
 	}
 	if err != nil {
-		return nil, valueLogRefResolutionSourceFallbackScan, err
+		return nil, valueLogRefResolutionSourceFallbackScan, 0, err
 	}
 	if db.valueLogRefTracker != nil {
 		db.valueLogRefTracker.replace(counts, scannedSeq, true)
@@ -522,7 +533,7 @@ func (db *DB) referencedValueLogSegmentsWithSource(ctx context.Context) (map[uin
 		}
 		refs[fileID] = struct{}{}
 	}
-	return refs, valueLogRefResolutionSourceFallbackScan, nil
+	return refs, valueLogRefResolutionSourceFallbackScan, scannedSeq, nil
 }
 
 func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uint64, error) {

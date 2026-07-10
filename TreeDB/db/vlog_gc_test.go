@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -350,6 +352,120 @@ func TestValueLogGC_KeepsPendingValueLogAppenderSegments(t *testing.T) {
 	pendingPath := filepath.Join(dir, "value_vlog", "value-l0-000002.log")
 	if _, err := os.Stat(pendingPath); err != nil {
 		t.Fatalf("pending segment missing after GC: %v", err)
+	}
+}
+
+func TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, db.dir, 0, 1, 1_000, 1, func(int) []byte { return []byte("old") })
+	appendPointersInNewSegment(t, db.dir, 0, 2, 2_000, 1, func(int) []byte { return []byte("active") })
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value-log set: %v", err)
+	}
+	db.valueLogRefTracker.invalidate()
+
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	var once sync.Once
+	restore := registerScanValueLogRefCountsHook(func() {
+		once.Do(func() {
+			close(scanStarted)
+			<-releaseScan
+		})
+	})
+	defer restore()
+
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcDone <- err
+	}()
+	<-scanStarted
+
+	publishDone := make(chan error, 1)
+	go func() { publishDone <- db.Set([]byte("publish-during-gc-scan"), []byte("ok")) }()
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatalf("publish during scan: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publish blocked while value-log GC full scan was paused")
+	}
+	close(releaseScan)
+	if err := <-gcDone; err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+}
+
+func TestValueLogGC_PostScanFirstReferenceToOldSegmentIsSafe(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldPtr := appendPointersInNewSegment(t, db.dir, 0, 1, 3_000, 1, func(int) []byte { return []byte("old") })[0]
+	appendPointersInNewSegment(t, db.dir, 0, 2, 4_000, 1, func(int) []byte { return []byte("active") })
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("refresh value-log set: %v", err)
+	}
+	db.valueLogRefTracker.invalidate() // Exercise the full-scan fallback split.
+	oldPath := filepath.Join(ValueLogDirPath(db.dir), "value-l0-000001.log")
+
+	postScan := make(chan struct{})
+	releaseGC := make(chan struct{})
+	var once sync.Once
+	restore := registerValueLogGCPostScanHook(func() {
+		once.Do(func() {
+			close(postScan)
+			<-releaseGC
+		})
+	})
+	defer restore()
+	gcDone := make(chan error, 1)
+	go func() {
+		_, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+		gcDone <- err
+	}()
+	<-postScan
+	setValueLogPointer(t, db, []byte("old-first-reference"), oldPtr)
+	close(releaseGC)
+	if err := <-gcDone; err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("old segment first referenced after scan was removed: %v", err)
+	}
+}
+
+func setValueLogPointer(t *testing.T, db *DB, key []byte, ptr page.ValuePtr) {
+	t.Helper()
+	b := db.NewBatch().(*Batch)
+	defer b.Close()
+	if err := b.SetPointer(key, ptr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write pointer: %v", err)
+	}
+}
+
+func TestValueLogRefTracker_StaleReplaceDoesNotRegressCommitSeq(t *testing.T) {
+	tracker := newValueLogRefTracker()
+	tracker.replace(map[uint32]uint64{11: 1}, 7, true)
+	tracker.replace(map[uint32]uint64{12: 1}, 6, true)
+	refs, ok := tracker.referencedSet(7)
+	if !ok {
+		t.Fatal("stale replace regressed tracker commit sequence")
+	}
+	if _, ok := refs[11]; !ok {
+		t.Fatalf("newer tracker counts were replaced by stale scan: %v", refs)
 	}
 }
 
