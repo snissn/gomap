@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -13,6 +14,17 @@ const leafGenerationGCContentionFixtureKeys = 16 * 1024
 const leafGenerationGCContentionScanWindow = 50 * time.Millisecond
 
 type leafGenerationGCBenchmarkWriteResult struct {
+	duration time.Duration
+	err      error
+}
+
+type leafGenerationGCBenchmarkWrite struct {
+	start   chan struct{}
+	started chan struct{}
+	done    chan leafGenerationGCBenchmarkWriteResult
+}
+
+type leafGenerationGCBenchmarkGCResult struct {
 	duration time.Duration
 	err      error
 }
@@ -41,33 +53,84 @@ func leafGenerationGCBenchmarkPercentile(samples []time.Duration, percentile int
 	return sorted[index-1]
 }
 
+func launchLeafGenerationGCBenchmarkWrite(db *DB, key []byte) leafGenerationGCBenchmarkWrite {
+	write := leafGenerationGCBenchmarkWrite{
+		start:   make(chan struct{}),
+		started: make(chan struct{}),
+		done:    make(chan leafGenerationGCBenchmarkWriteResult, 1),
+	}
+	go func() {
+		<-write.start
+		start := time.Now()
+		close(write.started)
+		err := db.Set(key, []byte("value"))
+		write.done <- leafGenerationGCBenchmarkWriteResult{duration: time.Since(start), err: err}
+	}()
+	return write
+}
+
+func (write leafGenerationGCBenchmarkWrite) begin() {
+	close(write.start)
+	<-write.started
+}
+
+func TestLeafGenerationGCBenchmarkPercentile(t *testing.T) {
+	samples := make([]time.Duration, 100)
+	for i := range samples {
+		samples[i] = time.Duration(i+1) * time.Millisecond
+	}
+	if got, want := leafGenerationGCBenchmarkPercentile(samples, 95), 95*time.Millisecond; got != want {
+		t.Fatalf("p95=%s, want %s", got, want)
+	}
+	if got, want := leafGenerationGCBenchmarkPercentile(samples, 99), 99*time.Millisecond; got != want {
+		t.Fatalf("p99=%s, want %s", got, want)
+	}
+	if got := leafGenerationGCBenchmarkPercentile(nil, 99); got != 0 {
+		t.Fatalf("empty p99=%s, want 0", got)
+	}
+}
+
 func BenchmarkLeafGenerationGCWriterContention(b *testing.B) {
 	db, _ := openLeafGenerationGCContentionBenchDB(b)
 	idleWrites := make([]time.Duration, 0, b.N)
 	gcWrites := make([]time.Duration, 0, b.N)
+	gcDurations := make([]time.Duration, 0, b.N)
+	var scannedPages atomic.Uint64
+	unregisterPageCounter := registerLeafGenerationSubtreeCacheMissHook(func(uint64) {
+		scannedPages.Add(1)
+	})
+	b.Cleanup(unregisterPageCounter)
+	var totalScans uint64
+	var totalScannedPages uint64
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		idleStart := time.Now()
-		if err := db.Set([]byte(fmt.Sprintf("leaf-gc-idle-%08d", i)), []byte("value")); err != nil {
-			b.Fatalf("idle Set: %v", err)
+		idleWrite := launchLeafGenerationGCBenchmarkWrite(db, []byte(fmt.Sprintf("leaf-gc-write-i-%08d", i)))
+		idleWrite.begin()
+		idleResult := <-idleWrite.done
+		if idleResult.err != nil {
+			b.Fatalf("idle Set: %v", idleResult.err)
 		}
-		idleWrites = append(idleWrites, time.Since(idleStart))
+		idleWrites = append(idleWrites, idleResult.duration)
 
 		enteredScan := make(chan struct{})
 		releaseScan := make(chan struct{})
 		var scanOnce sync.Once
+		var scanCount atomic.Uint64
 		unregister := registerLeafGenerationLiveScanHook(func() {
+			scanCount.Add(1)
 			scanOnce.Do(func() {
 				close(enteredScan)
 				<-releaseScan
 			})
 		})
-		gcDone := make(chan error, 1)
+		pagesBefore := scannedPages.Load()
+		gcDone := make(chan leafGenerationGCBenchmarkGCResult, 1)
 		go func() {
+			start := time.Now()
 			_, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true})
-			gcDone <- err
+			gcDone <- leafGenerationGCBenchmarkGCResult{duration: time.Since(start), err: err}
 		}()
 		select {
 		case <-enteredScan:
@@ -76,27 +139,24 @@ func BenchmarkLeafGenerationGCWriterContention(b *testing.B) {
 			b.Fatal("LeafGenerationGC did not enter live scan")
 		}
 
-		writeStarted := make(chan struct{})
-		writeDone := make(chan leafGenerationGCBenchmarkWriteResult, 1)
-		writeStart := time.Now()
-		go func() {
-			close(writeStarted)
-			err := db.Set([]byte(fmt.Sprintf("leaf-gc-during-%08d", i)), []byte("value"))
-			writeDone <- leafGenerationGCBenchmarkWriteResult{duration: time.Since(writeStart), err: err}
-		}()
-		<-writeStarted
+		gcWrite := launchLeafGenerationGCBenchmarkWrite(db, []byte(fmt.Sprintf("leaf-gc-write-g-%08d", i)))
+		gcWrite.begin()
 		time.Sleep(leafGenerationGCContentionScanWindow)
 		close(releaseScan)
-		writeResult := <-writeDone
+		writeResult := <-gcWrite.done
 		if writeResult.err != nil {
 			unregister()
 			b.Fatalf("Set during leaf GC: %v", writeResult.err)
 		}
 		gcWrites = append(gcWrites, writeResult.duration)
-		if err := <-gcDone; err != nil {
+		gcResult := <-gcDone
+		if gcResult.err != nil {
 			unregister()
-			b.Fatalf("LeafGenerationGC dry run: %v", err)
+			b.Fatalf("LeafGenerationGC dry run: %v", gcResult.err)
 		}
+		gcDurations = append(gcDurations, gcResult.duration)
+		totalScans += scanCount.Load()
+		totalScannedPages += scannedPages.Load() - pagesBefore
 		unregister()
 	}
 	b.StopTimer()
@@ -109,19 +169,21 @@ func BenchmarkLeafGenerationGCWriterContention(b *testing.B) {
 	b.ReportMetric(float64(idleP99.Nanoseconds()), "idle-write-p99-ns")
 	b.ReportMetric(float64(gcP95.Nanoseconds()), "gc-write-p95-ns")
 	b.ReportMetric(float64(gcP99.Nanoseconds()), "gc-write-p99-ns")
-	if gcP95 > idleP95 {
-		b.ReportMetric(float64((gcP95 - idleP95).Nanoseconds()), "scan-block-p95-ns")
-	} else {
-		b.ReportMetric(0, "scan-block-p95-ns")
-	}
-	if gcP99 > idleP99 {
-		b.ReportMetric(float64((gcP99 - idleP99).Nanoseconds()), "scan-block-p99-ns")
-	} else {
-		b.ReportMetric(0, "scan-block-p99-ns")
-	}
 	b.ReportMetric(float64(leafGenerationGCContentionScanWindow.Nanoseconds()), "scan-window-ns")
+	if idleP95 > 0 {
+		b.ReportMetric(float64(gcP95)/float64(idleP95), "gc/idle-p95")
+	}
 	if idleP99 > 0 {
 		b.ReportMetric(float64(gcP99)/float64(idleP99), "gc/idle-p99")
+	}
+	b.ReportMetric(float64(leafGenerationGCBenchmarkPercentile(gcDurations, 95).Nanoseconds()), "gc-wall-p95-ns")
+	b.ReportMetric(float64(leafGenerationGCBenchmarkPercentile(gcDurations, 99).Nanoseconds()), "gc-wall-p99-ns")
+	if b.N > 0 {
+		b.ReportMetric(float64(totalScans)/float64(b.N), "live-scans/op")
+		b.ReportMetric(float64(totalScannedPages)/float64(b.N), "live-scan-pages/op")
+	}
+	if totalScans > 0 {
+		b.ReportMetric(float64(totalScannedPages)/float64(totalScans), "live-scan-pages/scan")
 	}
 	if elapsed := b.Elapsed(); elapsed > 0 {
 		b.ReportMetric(float64(b.N)/elapsed.Seconds(), "ops/s")
