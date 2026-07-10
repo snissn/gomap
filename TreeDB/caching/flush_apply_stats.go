@@ -291,6 +291,7 @@ func (db *DB) appendWriteWaitForCheckpointStats(stats map[string]string) {
 	stats["treedb.cache.write.wait_for_checkpoint.ns_max"] = fmt.Sprintf("%d", db.writeWaitForCheckpointMaxNs.Load())
 	stats["treedb.cache.write.wait_for_checkpoint.ns_last"] = fmt.Sprintf("%d", db.writeWaitForCheckpointLastNs.Load())
 	stats["treedb.cache.write.wait_for_checkpoint.count_total"] = fmt.Sprintf("%d", db.writeWaitForCheckpointSamples.Load())
+	stats["treedb.cache.write.wait_for_checkpoint.active"] = fmt.Sprintf("%d", db.writeWaitForCheckpointActive.Load())
 }
 
 const flushCoordinatorProgressWait = 10 * time.Millisecond

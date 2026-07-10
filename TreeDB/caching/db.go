@@ -8430,6 +8430,8 @@ type deferredRetiredMemtablesHold struct {
 }
 
 type DB struct {
+	writeWaitForCheckpointActive atomic.Int64
+
 	mu          sync.RWMutex
 	flushMu     sync.Mutex
 	writeMu     sync.RWMutex
@@ -22755,6 +22757,8 @@ func (db *DB) waitForCheckpointForWriteSince(start time.Time) {
 	if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
 		return
 	}
+	db.writeWaitForCheckpointActive.Add(1)
+	defer addAtomicInt64FloorZero(&db.writeWaitForCheckpointActive, -1)
 	db.waitForCheckpoint()
 	db.observeWriteWaitForCheckpoint(time.Since(start))
 }

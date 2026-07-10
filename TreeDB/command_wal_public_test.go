@@ -3147,11 +3147,9 @@ func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
 		}
 		overlapBatches[i] = batch
 	}
-	writeEntered := make(chan struct{}, len(overlapBatches))
 	writeResults := make(chan writeResult, 16)
 	for i, batch := range overlapBatches {
 		go func(index int, batch Batch) {
-			writeEntered <- struct{}{}
 			var writeErr error
 			if index%2 == 0 {
 				writeErr = batch.Write()
@@ -3164,7 +3162,7 @@ func TestPublicCommandWALAutoCheckpointOverlapDrainsFrontier(t *testing.T) {
 			writeResults <- writeResult{index: index, err: writeErr}
 		}(i, batch)
 	}
-	if err := waitForPublicCommandWALWriteEntries(writeEntered, len(overlapBatches)); err != nil {
+	if err := waitForPublicCommandWALActiveCheckpointWriters(db, len(overlapBatches)); err != nil {
 		t.Fatal(err)
 	}
 	releaseCheckpointPublishOnce.Do(func() { close(releaseCheckpointPublish) })
@@ -3232,17 +3230,29 @@ func waitForPublicCommandWALCheckpointPhase(ch <-chan struct{}, phase string) er
 	}
 }
 
-func waitForPublicCommandWALWriteEntries(ch <-chan struct{}, count int) error {
+func waitForPublicCommandWALActiveCheckpointWriters(db *DB, want int) error {
 	timer := time.NewTimer(publicCommandWALCheckpointTestTimeout)
 	defer timer.Stop()
-	for i := 0; i < count; i++ {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		stats := db.cached.Stats()
+		got, err := strconv.Atoi(stats["treedb.cache.write.wait_for_checkpoint.active"])
+		if err != nil {
+			return fmt.Errorf("parse active checkpoint writers %q: %w", stats["treedb.cache.write.wait_for_checkpoint.active"], err)
+		}
+		if got == want {
+			return nil
+		}
+		if got > want {
+			return fmt.Errorf("active checkpoint writers=%d, want %d", got, want)
+		}
 		select {
-		case <-ch:
+		case <-ticker.C:
 		case <-timer.C:
-			return fmt.Errorf("timed out waiting for overlap writes to enter (%d/%d)", i, count)
+			return fmt.Errorf("timed out waiting for active checkpoint writers=%d (last=%d)", want, got)
 		}
 	}
-	return nil
 }
 
 func waitForPublicCommandWALAutoCheckpointCount(db *DB, want uint64) error {
