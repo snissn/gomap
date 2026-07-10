@@ -35,8 +35,14 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 				}
 				stats := db.vacuumOnlineStatsSnapshot()
 				total.TotalDuration += stats.TotalDuration
+				total.UserTreeDuration += stats.UserTreeDuration
+				total.SystemReserveDuration += stats.SystemReserveDuration
+				total.CollectionBasisDuration += stats.CollectionBasisDuration
+				total.PreflushDuration += stats.PreflushDuration
 				total.CutoverDuration += stats.CutoverDuration
 				total.SystemTreeDuration += stats.SystemTreeDuration
+				total.FinalPagerSyncDuration += stats.FinalPagerSyncDuration
+				total.SwapPublishDuration += stats.SwapPublishDuration
 				if stats.MaxWriterPause > total.MaxWriterPause {
 					total.MaxWriterPause = stats.MaxWriterPause
 				}
@@ -53,8 +59,14 @@ func BenchmarkVacuumIndexOnlineCollection(b *testing.B) {
 			b.StopTimer()
 
 			b.ReportMetric(float64(total.TotalDuration.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")
+			b.ReportMetric(float64(total.UserTreeDuration.Nanoseconds())/float64(b.N), "user-tree-ns/op")
+			b.ReportMetric(float64(total.SystemReserveDuration.Nanoseconds())/float64(b.N), "system-reserve-ns/op")
+			b.ReportMetric(float64(total.CollectionBasisDuration.Nanoseconds())/float64(b.N), "collection-basis-ns/op")
+			b.ReportMetric(float64(total.PreflushDuration.Nanoseconds())/float64(b.N), "preflush-ns/op")
 			b.ReportMetric(float64(total.CutoverDuration.Nanoseconds())/float64(b.N), "cutover-ns/op")
 			b.ReportMetric(float64(total.SystemTreeDuration.Nanoseconds())/float64(b.N), "system-tree-ns/op")
+			b.ReportMetric(float64(total.FinalPagerSyncDuration.Nanoseconds())/float64(b.N), "final-pager-sync-ns/op")
+			b.ReportMetric(float64(total.SwapPublishDuration.Nanoseconds())/float64(b.N), "swap-publish-ns/op")
 			b.ReportMetric(float64(total.MaxWriterPause.Nanoseconds()), "max-writer-pause-ns")
 			b.ReportMetric(float64(total.PrecloneTraversalPages)/float64(b.N), "preclone-pages/op")
 			b.ReportMetric(float64(total.RecloneTraversalPages)/float64(b.N), "reclone-pages/op")
@@ -130,8 +142,14 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 
 				stats := db.vacuumOnlineStatsSnapshot()
 				total.TotalDuration += stats.TotalDuration
+				total.UserTreeDuration += stats.UserTreeDuration
+				total.SystemReserveDuration += stats.SystemReserveDuration
+				total.CollectionBasisDuration += stats.CollectionBasisDuration
+				total.PreflushDuration += stats.PreflushDuration
 				total.CutoverDuration += stats.CutoverDuration
 				total.SystemTreeDuration += stats.SystemTreeDuration
+				total.FinalPagerSyncDuration += stats.FinalPagerSyncDuration
+				total.SwapPublishDuration += stats.SwapPublishDuration
 				if stats.MaxWriterPause > total.MaxWriterPause {
 					total.MaxWriterPause = stats.MaxWriterPause
 				}
@@ -148,8 +166,14 @@ func BenchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B) {
 			b.StopTimer()
 
 			b.ReportMetric(float64(total.TotalDuration.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")
+			b.ReportMetric(float64(total.UserTreeDuration.Nanoseconds())/float64(b.N), "user-tree-ns/op")
+			b.ReportMetric(float64(total.SystemReserveDuration.Nanoseconds())/float64(b.N), "system-reserve-ns/op")
+			b.ReportMetric(float64(total.CollectionBasisDuration.Nanoseconds())/float64(b.N), "collection-basis-ns/op")
+			b.ReportMetric(float64(total.PreflushDuration.Nanoseconds())/float64(b.N), "preflush-ns/op")
 			b.ReportMetric(float64(total.CutoverDuration.Nanoseconds())/float64(b.N), "cutover-ns/op")
 			b.ReportMetric(float64(total.SystemTreeDuration.Nanoseconds())/float64(b.N), "system-tree-ns/op")
+			b.ReportMetric(float64(total.FinalPagerSyncDuration.Nanoseconds())/float64(b.N), "final-pager-sync-ns/op")
+			b.ReportMetric(float64(total.SwapPublishDuration.Nanoseconds())/float64(b.N), "swap-publish-ns/op")
 			b.ReportMetric(float64(total.MaxWriterPause.Nanoseconds()), "max-writer-pause-ns")
 			b.ReportMetric(float64(vacuumCollectionLatencyPercentile(foregroundLatencies, 95).Nanoseconds()), "foreground-p95-ns/op")
 			b.ReportMetric(float64(vacuumCollectionLatencyPercentile(foregroundLatencies, 99).Nanoseconds()), "foreground-p99-ns/op")

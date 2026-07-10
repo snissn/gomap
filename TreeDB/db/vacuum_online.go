@@ -52,8 +52,14 @@ const (
 
 type VacuumOnlineStats struct {
 	TotalDuration              time.Duration
+	UserTreeDuration           time.Duration
+	SystemReserveDuration      time.Duration
+	CollectionBasisDuration    time.Duration
+	PreflushDuration           time.Duration
 	CutoverDuration            time.Duration
 	SystemTreeDuration         time.Duration
+	FinalPagerSyncDuration     time.Duration
+	SwapPublishDuration        time.Duration
 	MaxWriterPause             time.Duration
 	PrecloneTraversalPages     uint64
 	RecloneTraversalPages      uint64
@@ -393,6 +399,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		cleanupNewPager()
 		return errors.New("vacuum: missing base snapshot state")
 	}
+	reserveStarted := time.Now()
 	systemTreePages, err := vacuumCountPagerTreePages(basePager, baseState.SystemRootPageID)
 	if err != nil {
 		cleanupNewPager()
@@ -411,7 +418,9 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 	systemAlloc := newVacuumReservedAllocator(newAlloc, systemReserveStart, systemTreePages)
 	reservedBytes := systemAlloc.end * uint64(page.PageSize)
 	firstPreflushChunk := int((reservedBytes + uint64(db.chunkSize) - 1) / uint64(db.chunkSize))
+	runStats.SystemReserveDuration += time.Since(reserveStarted)
 
+	userTreeStarted := time.Now()
 	var newRoot uint64
 	if db.indexOuterLeavesInValueLog {
 		if db.leafPageLog == nil {
@@ -454,6 +463,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		cleanupNewPager()
 		return err
 	}
+	runStats.UserTreeDuration += time.Since(userTreeStarted)
 
 	cutoverLocked := false
 	collectionVisit := func(phase vacuumCollectionClonePhase) func(uint64) {
@@ -472,6 +482,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 			}
 		}
 	}
+	basisStarted := time.Now()
 	baseToken, err := db.collectionTokenForSnapshot(baseSnap)
 	if err != nil {
 		cleanupNewPager()
@@ -483,6 +494,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		return err
 	}
 	basis = builtBasis
+	runStats.CollectionBasisDuration += time.Since(basisStarted)
 	if err := checkGrowth(); err != nil {
 		cleanupNewPager()
 		return err
@@ -560,9 +572,12 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncPrecutover)
 		}
-		if err := newPager.FlushDirtyChunksFrom(firstPreflushChunk); err != nil {
+		preflushStarted := time.Now()
+		preflushErr := newPager.FlushDirtyChunksFrom(firstPreflushChunk)
+		runStats.PreflushDuration += time.Since(preflushStarted)
+		if preflushErr != nil {
 			cleanupNewPager()
-			return err
+			return preflushErr
 		}
 		if hook := db.vacuumBeforeCutoverHook; hook != nil {
 			hook(defers)
@@ -636,12 +651,14 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 				cleanupNewPager()
 				return err
 			}
+			recloneStarted := time.Now()
 			nextBasis, dirtyDescriptors, err := vacuumBuildCollectionBasis(ctx, basis, successor, successorToken, newAlloc, newPager, collectionVisit(vacuumCollectionCloneReclone))
 			if err != nil {
 				_ = successor.Close()
 				cleanupNewPager()
 				return err
 			}
+			runStats.CollectionBasisDuration += time.Since(recloneStarted)
 			runStats.DirtyDescriptors += uint64(dirtyDescriptors)
 			oldSnapshot := basis.snapshot
 			basis.snapshot = nil
@@ -768,12 +785,16 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
 		}
-		if err := newPager.Sync(); err != nil {
+		finalSyncStarted := time.Now()
+		finalSyncErr := newPager.Sync()
+		runStats.FinalPagerSyncDuration += time.Since(finalSyncStarted)
+		if finalSyncErr != nil {
 			unlockCutover(false)
 			cleanupNewPager()
-			return err
+			return finalSyncErr
 		}
 
+		swapPublishStarted := time.Now()
 		if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
 			unlockCutover(false)
 			cleanupNewPager()
@@ -863,6 +884,7 @@ func (db *DB) vacuumIndexOnline(ctx context.Context, lockMaintenance bool) (retE
 		db.clearLeafGenerationReachabilityCaches()
 
 		unlockCutover(true)
+		runStats.SwapPublishDuration += time.Since(swapPublishStarted)
 
 		if oldState != nil {
 			_ = db.valueLogManager.Release(oldState.ValueLogSet)

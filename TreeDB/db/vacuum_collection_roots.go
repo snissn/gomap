@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -101,8 +102,15 @@ type vacuumCollectionAllocator interface {
 }
 
 type vacuumRecordingAllocator struct {
-	base  vacuumAllocator
-	pages []uint64
+	base        vacuumAllocator
+	pages       []uint64
+	inlinePages [16]uint64
+}
+
+func newVacuumRecordingAllocator(base vacuumAllocator) *vacuumRecordingAllocator {
+	a := &vacuumRecordingAllocator{base: base}
+	a.pages = a.inlinePages[:0]
+	return a
 }
 
 func (a *vacuumRecordingAllocator) Alloc(hint uint64) (uint64, error) {
@@ -194,8 +202,8 @@ func vacuumCollectCollectionEntriesFromRoot(ctx context.Context, p *pager.Pager,
 		end       []byte
 		allowList bool
 	}{
-		{prefix: vacuumCollectionRootDescriptorPrefixBytes, end: vacuumCollectionRootDescriptorPrefixEnd()},
 		{prefix: vacuumCollectionRootOverlayDescriptorPrefixBytes, end: vacuumCollectionRootOverlayDescriptorPrefixEnd(), allowList: true},
+		{prefix: vacuumCollectionRootDescriptorPrefixBytes, end: vacuumCollectionRootDescriptorPrefixEnd()},
 	}
 	for _, descriptorPrefix := range descriptorPrefixes {
 		it := tree.New(p, reader, systemRootID).IteratorWithOptions(descriptorPrefix.prefix, descriptorPrefix.end, tree.IteratorOptions{
@@ -236,33 +244,29 @@ func vacuumCollectCollectionEntriesFromRoot(ctx context.Context, p *pager.Pager,
 			return nil, err
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return bytes.Compare(out[i].key, out[j].key) < 0
-	})
 	return out, nil
 }
 
 func reconcileCollectionBasisEntries(old *collectionBasis, successorEntries []collectionEntry, token collectionToken, clone collectionRootCloneFunc, reclaim collectionRootReclaimFunc) (*collectionBasis, int, error) {
-	entries := make([]collectionEntry, len(successorEntries))
-	for i := range successorEntries {
-		entries[i] = collectionEntry{
-			key:           append([]byte(nil), successorEntries[i].key...),
-			sourceRootIDs: append([]uint64(nil), successorEntries[i].sourceRootIDs...),
-		}
+	// The caller transfers ownership of the collected catalog. Keep the exact
+	// key and root-vector buffers pinned in the basis instead of copying the
+	// complete catalog a second time.
+	entries := successorEntries
+	if !collectionEntriesSorted(entries) {
+		sort.Slice(entries, func(i, j int) bool {
+			return bytes.Compare(entries[i].key, entries[j].key) < 0
+		})
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return bytes.Compare(entries[i].key, entries[j].key) < 0
-	})
 	next := &collectionBasis{
 		token:        token,
 		entries:      entries,
 		byKey:        make(map[string]int, len(entries)),
-		destRefCount: make(map[uint64]int),
-		sourceToDest: make(map[uint64]uint64),
-		destPages:    make(map[uint64][]uint64),
+		destRefCount: make(map[uint64]int, len(entries)),
+		sourceToDest: make(map[uint64]uint64, len(entries)),
+		destPages:    make(map[uint64][]uint64, len(entries)),
 	}
 	for i := range next.entries {
-		key := string(next.entries[i].key)
+		key := collectionEntryKeyString(next.entries[i].key)
 		if _, exists := next.byKey[key]; exists {
 			return nil, 0, fmt.Errorf("vacuum: duplicate collection descriptor %q", key)
 		}
@@ -271,10 +275,23 @@ func reconcileCollectionBasisEntries(old *collectionBasis, successorEntries []co
 
 	dirty := collectionBasisDirtyDescriptorCount(old, next)
 	unchanged := make([]bool, len(next.entries))
+	clonedRootCount := 0
+	for i := range next.entries {
+		clonedRootCount += len(next.entries[i].sourceRootIDs)
+	}
+	clonedRoots := make([]uint64, clonedRootCount)
+	clonedRootOffset := 0
+	for i := range next.entries {
+		count := len(next.entries[i].sourceRootIDs)
+		if count > 0 {
+			next.entries[i].clonedRootIDs = clonedRoots[clonedRootOffset : clonedRootOffset+count]
+			clonedRootOffset += count
+		}
+	}
 	sameSourceGeneration := old != nil && old.token.indexGenerationID == next.token.indexGenerationID
 	if old != nil {
 		for i := range next.entries {
-			oldIndex, ok := old.byKey[string(next.entries[i].key)]
+			oldIndex, ok := old.byKey[collectionEntryKeyString(next.entries[i].key)]
 			if !ok || oldIndex < 0 || oldIndex >= len(old.entries) {
 				continue
 			}
@@ -289,7 +306,7 @@ func reconcileCollectionBasisEntries(old *collectionBasis, successorEntries []co
 				return nil, 0, fmt.Errorf("vacuum: descriptor %q has mismatched source/clone vectors", next.entries[i].key)
 			}
 			unchanged[i] = true
-			next.entries[i].clonedRootIDs = append([]uint64(nil), oldEntry.clonedRootIDs...)
+			copy(next.entries[i].clonedRootIDs, oldEntry.clonedRootIDs)
 			for rootIndex, sourceRootID := range oldEntry.sourceRootIDs {
 				destRootID := oldEntry.clonedRootIDs[rootIndex]
 				if sourceRootID == 0 || destRootID == 0 {
@@ -330,7 +347,6 @@ func reconcileCollectionBasisEntries(old *collectionBasis, successorEntries []co
 			continue
 		}
 		entry := &next.entries[i]
-		entry.clonedRootIDs = make([]uint64, len(entry.sourceRootIDs))
 		for rootIndex, sourceRootID := range entry.sourceRootIDs {
 			if sourceRootID == 0 {
 				continue
@@ -350,7 +366,8 @@ func reconcileCollectionBasisEntries(old *collectionBasis, successorEntries []co
 					return nil, 0, errors.Join(fmt.Errorf("vacuum: clone of collection root %d returned zero", sourceRootID), cleanupNewDestinations())
 				}
 				next.sourceToDest[sourceRootID] = destRootID
-				next.destPages[destRootID] = append([]uint64(nil), pages...)
+				// clone transfers ownership of its page list to this basis.
+				next.destPages[destRootID] = pages
 				newDestinations[destRootID] = struct{}{}
 			}
 			entry.clonedRootIDs[rootIndex] = destRootID
@@ -375,6 +392,21 @@ func reconcileCollectionBasisEntries(old *collectionBasis, successorEntries []co
 	return next, dirty, nil
 }
 
+// collectionEntryKeyString is safe because a basis owns and pins its immutable
+// key buffers for at least as long as byKey can reference them.
+func collectionEntryKeyString(key []byte) string {
+	return unsafe.String(unsafe.SliceData(key), len(key))
+}
+
+func collectionEntriesSorted(entries []collectionEntry) bool {
+	for i := 1; i < len(entries); i++ {
+		if bytes.Compare(entries[i-1].key, entries[i].key) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func collectionBasisDirtyDescriptorCount(old, next *collectionBasis) int {
 	if old == nil {
 		return len(next.entries)
@@ -382,13 +414,13 @@ func collectionBasisDirtyDescriptorCount(old, next *collectionBasis) int {
 	sameSourceGeneration := old.token.indexGenerationID == next.token.indexGenerationID
 	dirty := 0
 	for i := range next.entries {
-		oldIndex, ok := old.byKey[string(next.entries[i].key)]
+		oldIndex, ok := old.byKey[collectionEntryKeyString(next.entries[i].key)]
 		if !ok || oldIndex < 0 || oldIndex >= len(old.entries) || !equalRootIDVectors(old.entries[oldIndex].sourceRootIDs, next.entries[i].sourceRootIDs) || (!sameSourceGeneration && len(next.entries[i].sourceRootIDs) > 0) {
 			dirty++
 		}
 	}
 	for i := range old.entries {
-		if _, ok := next.byKey[string(old.entries[i].key)]; !ok {
+		if _, ok := next.byKey[collectionEntryKeyString(old.entries[i].key)]; !ok {
 			dirty++
 		}
 	}
@@ -454,7 +486,7 @@ func vacuumBuildCollectionBasis(ctx context.Context, old *collectionBasis, snap 
 		if err := ctx.Err(); err != nil {
 			return 0, nil, err
 		}
-		recordingAlloc := &vacuumRecordingAllocator{base: alloc}
+		recordingAlloc := newVacuumRecordingAllocator(alloc)
 		destRootID, err := vacuumCopyCollectionRootWithObserver(snap.idx.pager, sourceRootID, recordingAlloc, newPager, visitSourcePage)
 		if err != nil {
 			return 0, nil, errors.Join(err, reclaim(0, recordingAlloc.pages))
