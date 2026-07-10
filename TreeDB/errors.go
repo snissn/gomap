@@ -38,6 +38,9 @@ var (
 	// ErrConcurrentModification indicates a conditional publish observed a read
 	// precondition that changed after the transaction opened.
 	ErrConcurrentModification = db.ErrConcurrentModification
+	// ErrLeafGenerationGCStaleScan indicates both bounded dry-run attempts were
+	// invalidated by concurrent publication and the caller should retry.
+	ErrLeafGenerationGCStaleScan = db.ErrLeafGenerationGCStaleScan
 	// ErrConditionalTxnUnsupported indicates the selected TreeDB mode cannot
 	// provide native conditional transaction semantics.
 	ErrConditionalTxnUnsupported = db.ErrConditionalTxnUnsupported
