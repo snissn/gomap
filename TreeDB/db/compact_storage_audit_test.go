@@ -11,7 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -158,6 +160,371 @@ func TestCompactStorageAudit_ValueLogCollectorsMatchLegacyGroupedAliases(t *test
 	}
 }
 
+func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T) {
+	db, leafLog := openLeafGenerationGCTestDB(t)
+
+	grouped := appendPointersInNewSegment(t, db.dir, 0, 1, 270_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("grouped-maintenance|"), 32)
+	})[0]
+	active := appendPointersInNewSegment(t, db.dir, 0, 2, 280_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("active-maintenance|"), 32)
+	})[0]
+	protectedOrdinary := appendPointersInNewSegment(t, db.dir, 0, 3, 290_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("protected-ordinary|"), 32)
+	})[0]
+	protectedSystem := appendPointersInNewSegment(t, db.dir, 0, 4, 300_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte(fmt.Sprintf("protected-system-%d|", i)), 32)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	writeLeafGenerationKeys(t, db, "base", 2048, 'a')
+	b := db.NewBatch().(*Batch)
+	recordLen := page.ValuePtrRecordLength(grouped)
+	for i := 0; i < 3; i++ {
+		ptr := grouped
+		ptr.Length = page.ValuePtrMarkGrouped(recordLen, uint8(i))
+		if err := b.SetPointer([]byte(fmt.Sprintf("grouped/%d", i)), ptr); err != nil {
+			t.Fatalf("SetPointer grouped %d: %v", i, err)
+		}
+	}
+	if err := b.SetPointer([]byte("maintenance/active"), active); err != nil {
+		t.Fatalf("SetPointer active: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync maintenance pointers: %v", err)
+	}
+	closeNoErr(t, b)
+
+	maintenanceRoot := db.State().RootPageID
+	ordinaryRoot, err := db.PublishOrderedRootIterator(
+		maintenanceRoot,
+		mustFrozenSystemPointerMemtable(t, "protected/ordinary", protectedOrdinary).NewIterator(nil, nil),
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator ordinary: %v", err)
+	}
+	collectionRoot, err := db.PublishOrderedRootIterator(
+		maintenanceRoot,
+		mustFrozenSystemPointerMemtable(t, "protected/collection", protectedSystem[0]).NewIterator(nil, nil),
+	)
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator collection: %v", err)
+	}
+	protectedSystemRoot, err := db.PublishOrderedRootIterator(0, compactStorageAuditMixedTable(
+		t,
+		map[string][]byte{maintenanceTestCollectionRootKey: encodeMaintenanceRootID(collectionRoot)},
+		map[string]page.ValuePtr{"protected/system": protectedSystem[1]},
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator system: %v", err)
+	}
+	if state := db.State(); state.RootPageID == ordinaryRoot || state.SystemRootPageID == protectedSystemRoot {
+		t.Fatalf("protected roots must be detached: state=%+v ordinary=%d system=%d", state, ordinaryRoot, protectedSystemRoot)
+	}
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotateLeaf: %v", err)
+	}
+	writeLeafGenerationKeys(t, db, "current", 1, 'z')
+
+	wantRefs, _, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("legacy refs: %v", err)
+	}
+	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
+	if err != nil {
+		t.Fatalf("legacy live bytes: %v", err)
+	}
+	opts := normalizeCompactStorageOptions(CompactStorageOptions{
+		LeafGenerationProtectedRootIDs:       []uint64{ordinaryRoot},
+		LeafGenerationProtectedSystemRootIDs: []uint64{protectedSystemRoot},
+	})
+	input, err := db.acquireCompactStorageAuditInput(opts)
+	if err != nil {
+		t.Fatalf("acquire protected audit input: %v", err)
+	}
+	defer input.close()
+	got, err := db.scanCompactStorageAudit(context.Background(), input)
+	if err != nil {
+		t.Fatalf("shared protected audit: %v", err)
+	}
+
+	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
+		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
+	}
+	if !reflect.DeepEqual(got.valueLogReferencedSegments, valueLogRefSetFromCounts(wantRefs)) {
+		t.Fatalf("referenced segments mismatch: shared=%v legacy=%v", got.valueLogReferencedSegments, valueLogRefSetFromCounts(wantRefs))
+	}
+	if !reflect.DeepEqual(got.valueLogLiveBytesBySegment, wantLive) {
+		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got.valueLogLiveBytesBySegment, wantLive)
+	}
+	if got.valueLogRefCounts[grouped.FileID] != 3 {
+		t.Fatalf("grouped alias refs=%d want 3", got.valueLogRefCounts[grouped.FileID])
+	}
+	if got.valueLogLiveBytesBySegment[grouped.FileID] != int64(recordLen) {
+		t.Fatalf("grouped live bytes=%d want one record=%d", got.valueLogLiveBytesBySegment[grouped.FileID], recordLen)
+	}
+	if _, ok := got.valueLogRefCounts[protectedOrdinary.FileID]; ok {
+		t.Fatalf("protected ordinary segment %d entered maintenance projection: %v", protectedOrdinary.FileID, got.valueLogRefCounts)
+	}
+	if _, ok := got.valueLogRefCounts[protectedSystem[0].FileID]; ok {
+		t.Fatalf("protected system segment %d entered maintenance projection: %v", protectedSystem[0].FileID, got.valueLogRefCounts)
+	}
+	leafOpts := leafGenerationPackFromPlanPlanOptions(compactStorageLeafPackFromPlanOptions(
+		opts,
+		input.protectedRootIDs,
+		input.protectedSystemRootIDs,
+	))
+	wantLeaf, err := db.LeafGenerationPlan(context.Background(), leafOpts)
+	if err != nil {
+		t.Fatalf("legacy leaf plan: %v", err)
+	}
+	gotLeaf := db.compactStorageLeafGenerationPlanFromAudit(leafOpts, input, got.leafGenerationLive)
+	if !reflect.DeepEqual(gotLeaf, wantLeaf) {
+		t.Fatalf("leaf plan mismatch:\nshared=%+v\nlegacy=%+v", gotLeaf, wantLeaf)
+	}
+
+	unprotectedInput, err := db.acquireCompactStorageAuditInput(CompactStorageOptions{})
+	if err != nil {
+		t.Fatalf("acquire unprotected audit input: %v", err)
+	}
+	defer unprotectedInput.close()
+	unprotected, err := db.scanCompactStorageAudit(context.Background(), unprotectedInput)
+	if err != nil {
+		t.Fatalf("shared unprotected audit: %v", err)
+	}
+	unprotectedPages := compactStorageAuditLeafLivePages(unprotected.leafGenerationLive)
+	if compactStorageAuditLeafLivePages(got.leafGenerationLive) <= unprotectedPages {
+		t.Fatalf("protected roots did not extend leaf projection: protected=%v unprotected=%v", got.leafGenerationLive, unprotected.leafGenerationLive)
+	}
+	for _, projection := range []struct {
+		name string
+		opts CompactStorageOptions
+	}{
+		{name: "ordinary", opts: CompactStorageOptions{LeafGenerationProtectedRootIDs: []uint64{ordinaryRoot}}},
+		{name: "system", opts: CompactStorageOptions{LeafGenerationProtectedSystemRootIDs: []uint64{protectedSystemRoot}}},
+	} {
+		protectedInput, err := db.acquireCompactStorageAuditInput(projection.opts)
+		if err != nil {
+			t.Fatalf("acquire %s-only audit input: %v", projection.name, err)
+		}
+		protectedOnly, scanErr := db.scanCompactStorageAudit(context.Background(), protectedInput)
+		protectedInput.close()
+		if scanErr != nil {
+			t.Fatalf("shared %s-only audit: %v", projection.name, scanErr)
+		}
+		if pages := compactStorageAuditLeafLivePages(protectedOnly.leafGenerationLive); pages <= unprotectedPages {
+			t.Fatalf("%s protected root did not extend leaf projection: protected=%v unprotected=%v", projection.name, protectedOnly.leafGenerationLive, unprotected.leafGenerationLive)
+		}
+	}
+}
+
+func TestCompactStorageAudit_ProtectedPagerRootsMatchLegacyWithMemoReuse(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	grouped := appendPointersInNewSegment(t, dir, 0, 1, 320_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("memo-grouped|"), 32)
+	})[0]
+	protected := appendPointersInNewSegment(t, dir, 0, 2, 330_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte(fmt.Sprintf("memo-protected-%d|", i)), 32)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	recordLen := page.ValuePtrRecordLength(grouped)
+	for i := 0; i < 512; i++ {
+		if err := b.Set(
+			[]byte(fmt.Sprintf("maintenance/%04d", i)),
+			bytes.Repeat([]byte{byte('a' + i%23)}, 96),
+		); err != nil {
+			t.Fatalf("Set maintenance %d: %v", i, err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		ptr := grouped
+		ptr.Length = page.ValuePtrMarkGrouped(recordLen, uint8(i))
+		if err := b.SetPointer([]byte(fmt.Sprintf("grouped/%d", i)), ptr); err != nil {
+			t.Fatalf("SetPointer grouped %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write grouped maintenance pointers: %v", err)
+	}
+	closeNoErr(t, b)
+
+	state := db.State()
+	pageIDs := collectRootPageIDs(t, db, state.RootPageID)
+	systemDescriptors := make(map[string][]byte, len(pageIDs))
+	for i, pageID := range pageIDs {
+		if pageID == state.RootPageID {
+			continue
+		}
+		systemDescriptors[fmt.Sprintf("%smemo-%04d", collectionRootDescriptorPrefix, i)] = encodeMaintenanceRootID(pageID)
+	}
+	if len(systemDescriptors) == 0 {
+		t.Fatalf("maintenance root %d has no shared child subtrees: pages=%v", state.RootPageID, pageIDs)
+	}
+	if _, err := db.PublishSystemRootIterator(compactStorageAuditMixedTable(t, systemDescriptors, nil).NewIterator(nil, nil)); err != nil {
+		t.Fatalf("PublishSystemRootIterator descriptors: %v", err)
+	}
+	ordinaryRoot, err := db.PublishOrderedRootIterator(0, compactStorageAuditMixedTable(
+		t,
+		nil,
+		map[string]page.ValuePtr{"detached/pointer": protected[0]},
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator ordinary: %v", err)
+	}
+	protectedSystemRoot, err := db.PublishOrderedRootIterator(0, compactStorageAuditMixedTable(
+		t,
+		map[string][]byte{maintenanceTestCollectionRootKey: encodeMaintenanceRootID(ordinaryRoot)},
+		map[string]page.ValuePtr{"detached/system": protected[1]},
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator system: %v", err)
+	}
+
+	wantRefs, _, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("legacy refs: %v", err)
+	}
+	wantLive, err := db.estimateValueLogLiveBytesBySegment(context.Background())
+	if err != nil {
+		t.Fatalf("legacy live bytes: %v", err)
+	}
+	opts := normalizeCompactStorageOptions(CompactStorageOptions{
+		LeafGenerationProtectedRootIDs:       []uint64{ordinaryRoot},
+		LeafGenerationProtectedSystemRootIDs: []uint64{protectedSystemRoot},
+	})
+	input, err := db.acquireCompactStorageAuditInput(opts)
+	if err != nil {
+		t.Fatalf("acquire audit input: %v", err)
+	}
+	defer input.close()
+	got, err := db.scanCompactStorageAudit(context.Background(), input)
+	if err != nil {
+		t.Fatalf("shared audit: %v", err)
+	}
+	if !reflect.DeepEqual(got.valueLogRefCounts, wantRefs) {
+		t.Fatalf("ref counts mismatch: shared=%v legacy=%v", got.valueLogRefCounts, wantRefs)
+	}
+	if !reflect.DeepEqual(got.valueLogLiveBytesBySegment, wantLive) {
+		t.Fatalf("live bytes mismatch: shared=%v legacy=%v", got.valueLogLiveBytesBySegment, wantLive)
+	}
+	if wantRefs[grouped.FileID] <= 3 {
+		t.Fatalf("fixture did not create repeated maintenance projections: refs=%d", wantRefs[grouped.FileID])
+	}
+	if got.valueLogRefCounts[grouped.FileID] != wantRefs[grouped.FileID] || got.valueLogLiveBytesBySegment[grouped.FileID] != int64(recordLen) {
+		t.Fatalf("grouped projection mismatch: refs=%d want=%d live=%d record=%d", got.valueLogRefCounts[grouped.FileID], wantRefs[grouped.FileID], got.valueLogLiveBytesBySegment[grouped.FileID], recordLen)
+	}
+	if _, ok := got.valueLogRefCounts[protected[0].FileID]; ok {
+		t.Fatalf("protected-only segment %d entered value-log projection: %v", protected[0].FileID, got.valueLogRefCounts)
+	}
+	if got.counters.MemoHits == 0 {
+		t.Fatalf("expected current collection roots to reuse user-root subtree memo: %+v", got.counters)
+	}
+	leafOpts := leafGenerationPackFromPlanPlanOptions(compactStorageLeafPackFromPlanOptions(
+		opts,
+		input.protectedRootIDs,
+		input.protectedSystemRootIDs,
+	))
+	wantLeaf, err := db.LeafGenerationPlan(context.Background(), leafOpts)
+	if err != nil {
+		t.Fatalf("legacy leaf plan: %v", err)
+	}
+	gotLeaf := db.compactStorageLeafGenerationPlanFromAudit(leafOpts, input, got.leafGenerationLive)
+	if !reflect.DeepEqual(gotLeaf, wantLeaf) {
+		t.Fatalf("leaf plan mismatch:\nshared=%+v\nlegacy=%+v", gotLeaf, wantLeaf)
+	}
+}
+
+func TestCompactStorageAudit_ProtectedRootsDoNotPoisonTrackerOrSubsequentGC(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	protected := appendPointersInNewSegment(t, dir, 0, 1, 300_000, 3, func(i int) []byte {
+		return bytes.Repeat([]byte(fmt.Sprintf("detached-%d|", i)), 32)
+	})
+	maintenance := appendPointersInNewSegment(t, dir, 0, 2, 310_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("maintenance|"), 32)
+	})[0]
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("maintenance"), maintenance); err != nil {
+		t.Fatalf("SetPointer maintenance: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write maintenance: %v", err)
+	}
+	closeNoErr(t, b)
+
+	ordinaryRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "detached/ordinary", protected[0]).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator ordinary: %v", err)
+	}
+	collectionRoot, err := db.PublishOrderedRootIterator(0, mustFrozenSystemPointerMemtable(t, "detached/collection", protected[1]).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator collection: %v", err)
+	}
+	protectedSystemRoot, err := db.PublishOrderedRootIterator(0, compactStorageAuditMixedTable(
+		t,
+		map[string][]byte{maintenanceTestCollectionRootKey: encodeMaintenanceRootID(collectionRoot)},
+		map[string]page.ValuePtr{"detached/system": protected[2]},
+	).NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("PublishOrderedRootIterator system: %v", err)
+	}
+
+	_, err = db.CompactStoragePlan(context.Background(), CompactStorageOptions{
+		LeafGenerationProtectedRootIDs:       []uint64{ordinaryRoot},
+		LeafGenerationProtectedSystemRootIDs: []uint64{protectedSystemRoot},
+	})
+	if err != nil {
+		t.Fatalf("CompactStoragePlan protected: %v", err)
+	}
+	trackerRefs, ok := db.valueLogRefTracker.referencedSet(db.currentCommitSeq())
+	if !ok {
+		t.Fatal("protected audit did not publish a current tracker")
+	}
+	if _, ok := trackerRefs[protected[0].FileID]; ok {
+		t.Fatalf("protected-only segment %d entered tracker: %v", protected[0].FileID, trackerRefs)
+	}
+	if _, ok := trackerRefs[maintenance.FileID]; !ok {
+		t.Fatalf("maintenance segment %d missing from tracker: %v", maintenance.FileID, trackerRefs)
+	}
+
+	var scans atomic.Uint64
+	unregister := registerScanValueLogRefCountsHook(func() { scans.Add(1) })
+	t.Cleanup(unregister)
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC after removing protection: %v", err)
+	}
+	if got := scans.Load(); got != 0 {
+		t.Fatalf("ValueLogGC legacy ref scans=%d want tracker-only resolution", got)
+	}
+	if stats.SegmentsDeleted != 1 {
+		t.Fatalf("SegmentsDeleted=%d want 1: %+v", stats.SegmentsDeleted, stats)
+	}
+	protectedPath := filepath.Join(ValueLogDirPath(dir), "value-l0-000001.log")
+	if _, err := os.Stat(protectedPath); !os.IsNotExist(err) {
+		t.Fatalf("protected-only segment retained after protection removal: %v", err)
+	}
+}
+
 func TestCompactStorageAudit_CountsValuePointersInsideOuterLeafPages(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 	const records = 512
@@ -267,6 +634,144 @@ func TestCompactStorageAudit_ReusesStructureButRefreshesZeroByteDebt(t *testing.
 	}
 }
 
+func TestCompactStorageAudit_ScanCountInvalidationTable(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	type scanCounts struct {
+		shared uint64
+		refs   uint64
+		live   uint64
+		leaf   uint64
+	}
+	var counts struct {
+		shared atomic.Uint64
+		refs   atomic.Uint64
+		live   atomic.Uint64
+		leaf   atomic.Uint64
+	}
+	unregisterShared := registerCompactStorageSharedAuditScanHook(func(compactStorageAuditCounters) { counts.shared.Add(1) })
+	unregisterRefs := registerScanValueLogRefCountsHook(func() { counts.refs.Add(1) })
+	unregisterLive := registerRewritePlanLiveEstimateHook(func() { counts.live.Add(1) })
+	unregisterLeaf := registerLeafGenerationLiveScanHook(func() { counts.leaf.Add(1) })
+	t.Cleanup(func() {
+		unregisterLeaf()
+		unregisterLive()
+		unregisterRefs()
+		unregisterShared()
+	})
+	load := func() scanCounts {
+		return scanCounts{
+			shared: counts.shared.Load(),
+			refs:   counts.refs.Load(),
+			live:   counts.live.Load(),
+			leaf:   counts.leaf.Load(),
+		}
+	}
+	delta := func(after, before scanCounts) scanCounts {
+		return scanCounts{
+			shared: after.shared - before.shared,
+			refs:   after.refs - before.refs,
+			live:   after.live - before.live,
+			leaf:   after.leaf - before.leaf,
+		}
+	}
+
+	session := &compactStorageAuditSession{}
+	defer session.close()
+	protectedRoot := db.State().RootPageID
+	protectedPath := filepath.Join(ValueLogDirPath(db.dir), "protected.log")
+	tests := []struct {
+		name       string
+		session    *compactStorageAuditSession
+		opts       CompactStorageOptions
+		before     func()
+		want       scanCounts
+		missReason string
+	}{
+		{name: "cold", session: session, want: scanCounts{shared: 1}, missReason: "cold"},
+		{name: "exact reuse", session: session, want: scanCounts{}},
+		{
+			name:       "protected-root invalidation",
+			session:    session,
+			opts:       CompactStorageOptions{LeafGenerationProtectedRootIDs: []uint64{protectedRoot}},
+			want:       scanCounts{shared: 1},
+			missReason: "protected_root_set",
+		},
+		{
+			name:    "protected-path invalidation",
+			session: session,
+			opts: CompactStorageOptions{
+				LeafGenerationProtectedRootIDs: []uint64{protectedRoot},
+				ValueLogProtectedPaths:         []string{protectedPath},
+			},
+			want:       scanCounts{shared: 1},
+			missReason: "protected_path_set",
+		},
+		{
+			name:    "commit invalidation",
+			session: session,
+			opts: CompactStorageOptions{
+				LeafGenerationProtectedRootIDs: []uint64{protectedRoot},
+				ValueLogProtectedPaths:         []string{protectedPath},
+			},
+			before:     func() { writeCompactStorageAuditInvalidation(t, db, "table-commit") },
+			want:       scanCounts{shared: 1},
+			missReason: "commit_seq",
+		},
+		{
+			name:    "cold retry",
+			session: &compactStorageAuditSession{},
+			opts: CompactStorageOptions{
+				LeafGenerationProtectedRootIDs: []uint64{protectedRoot},
+				ValueLogProtectedPaths:         []string{protectedPath},
+			},
+			before: func() {
+				db.compactStorageAuditBeforeRevalidate = func(attempt int) {
+					if attempt == 0 {
+						writeCompactStorageAuditInvalidation(t, db, "table-retry")
+					}
+				}
+			},
+			want:       scanCounts{shared: 2},
+			missReason: "cold",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db.compactStorageAuditBeforeRevalidate = nil
+			if tt.before != nil {
+				tt.before()
+			}
+			before := load()
+			var stats CompactStorageStats
+			_, err := db.populateCompactStorageAudit(
+				context.Background(),
+				normalizeCompactStorageOptions(tt.opts),
+				&stats,
+				true,
+				nil,
+				nil,
+				tt.session,
+			)
+			db.compactStorageAuditBeforeRevalidate = nil
+			if err != nil {
+				t.Fatalf("populateCompactStorageAudit: %v", err)
+			}
+			if got := delta(load(), before); got != tt.want {
+				t.Fatalf("scan counts=%+v want %+v", got, tt.want)
+			}
+			if tt.missReason != "" && stats.Audit.LastStructuralReuseMissReason != tt.missReason {
+				t.Fatalf("miss reason=%q want %q: %+v", stats.Audit.LastStructuralReuseMissReason, tt.missReason, stats.Audit)
+			}
+		})
+	}
+	t.Cleanup(func() { db.compactStorageAuditBeforeRevalidate = nil })
+}
+
 func TestCompactStorageAudit_StaleRevalidationRetriesOnce(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -355,4 +860,28 @@ func writeCompactStorageAuditInvalidation(t *testing.T, db *DB, key string) {
 		t.Fatalf("Write invalidation: %v", err)
 	}
 	closeNoErr(t, b)
+}
+
+func compactStorageAuditMixedTable(t *testing.T, inline map[string][]byte, pointers map[string]page.ValuePtr) memtable.Table {
+	t.Helper()
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	for key, value := range inline {
+		mt.Set([]byte(key), value)
+	}
+	for key, ptr := range pointers {
+		mt.SetEntry([]byte(key), nil, ptr, node.FlagPointer)
+	}
+	mt.Freeze()
+	return mt
+}
+
+func compactStorageAuditLeafLivePages(stats leafGenerationLiveScanStats) int {
+	total := 0
+	for _, generation := range stats.Generations {
+		total += generation.LivePages
+	}
+	return total
 }

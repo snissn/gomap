@@ -46,6 +46,11 @@ type compactStorageAuditInput struct {
 	key                    compactStorageAuditKey
 }
 
+type compactStorageAuditRoot struct {
+	maintenanceRoot
+	valueLogProjection bool
+}
+
 func (in *compactStorageAuditInput) close() {
 	if in == nil || in.snap == nil {
 		return
@@ -297,17 +302,35 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		return raw, err
 	}
 	raw.counters.RootSets = uint64(len(roots))
+	valueLogRootCount := 0
+	for _, root := range roots {
+		if root.valueLogProjection {
+			valueLogRootCount++
+		}
+	}
+	directValueLogProjection := valueLogRootCount == 1
 	type valueLogSegmentTally struct {
 		references uint64
 		liveBytes  int64
 	}
+	type auditMemoEntry struct {
+		leafTotals       leafGenerationSubtreeStats
+		children         []uint64
+		valueLogTallies  map[uint32]valueLogSegmentTally
+		groupedRecords   map[uint32][]uint64
+		valueLogComplete bool
+	}
 	segmentTallies := make(map[uint32]valueLogSegmentTally)
-	seenGroupedRecordStarts := make(map[uint32]map[uint64]struct{})
+	directGroupedRecordStarts := make(map[uint32]map[uint64]struct{})
+	var groupedRecordLengths map[uint32]map[uint64]int64
+	if !directValueLogProjection {
+		groupedRecordLengths = make(map[uint32]map[uint64]int64)
+	}
 	verifyAlways := in.snap.idx.pager.VerifyOnRead()
-	memo := make(map[uint64]leafGenerationSubtreeStats, 64)
+	memo := make(map[uint64]auditMemoEntry, 64)
 	childStacks := make([][]uint64, 0, 8)
 	leafScratch := make([]byte, 0, page.PageSize)
-	scanLeafValues := func(n node.Node) error {
+	scanLeafValues := func(n node.Node, entry *auditMemoEntry) error {
 		for i := uint16(0); i < n.Count(); i++ {
 			_, ptr, flags, err := n.GetLeafValueView(i)
 			if err != nil {
@@ -316,25 +339,75 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 			if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(ptr.FileID) {
 				continue
 			}
-			raw.counters.PointerProjections++
-			tally := segmentTallies[ptr.FileID]
+			if directValueLogProjection {
+				raw.counters.PointerProjections++
+				tally := segmentTallies[ptr.FileID]
+				tally.references++
+				if page.ValuePtrIsGrouped(ptr) {
+					if ptr.Offset < 4 {
+						return fmt.Errorf("compact storage audit: invalid grouped pointer offset %d", ptr.Offset)
+					}
+					starts := directGroupedRecordStarts[ptr.FileID]
+					if starts == nil {
+						starts = make(map[uint64]struct{})
+						directGroupedRecordStarts[ptr.FileID] = starts
+					}
+					start := ptr.Offset - 4
+					if _, ok := starts[start]; ok {
+						raw.counters.GroupedRecordDedupeHits++
+						segmentTallies[ptr.FileID] = tally
+						continue
+					}
+					starts[start] = struct{}{}
+				}
+				hint := page.ValuePtrRecordLength(ptr)
+				recordLen, err := db.valueLogRecordLengthForRewriteInSet(ptr, in.snap.state.ValueLogSet)
+				if err != nil {
+					return err
+				}
+				if hint == 0 {
+					raw.counters.PhysicalBytesRead += valuelog.HeaderSize
+				}
+				tally.liveBytes += int64(recordLen)
+				segmentTallies[ptr.FileID] = tally
+				continue
+			}
+			if entry.valueLogTallies == nil {
+				entry.valueLogTallies = make(map[uint32]valueLogSegmentTally)
+			}
+			tally := entry.valueLogTallies[ptr.FileID]
 			tally.references++
 			if page.ValuePtrIsGrouped(ptr) {
 				if ptr.Offset < 4 {
 					return fmt.Errorf("compact storage audit: invalid grouped pointer offset %d", ptr.Offset)
 				}
-				starts := seenGroupedRecordStarts[ptr.FileID]
-				if starts == nil {
-					starts = make(map[uint64]struct{})
-					seenGroupedRecordStarts[ptr.FileID] = starts
+				lengths := groupedRecordLengths[ptr.FileID]
+				if lengths == nil {
+					lengths = make(map[uint64]int64)
+					groupedRecordLengths[ptr.FileID] = lengths
 				}
 				start := ptr.Offset - 4
-				if _, ok := starts[start]; ok {
-					raw.counters.GroupedRecordDedupeHits++
-					segmentTallies[ptr.FileID] = tally
-					continue
+				recordLen, ok := lengths[start]
+				if !ok {
+					hint := page.ValuePtrRecordLength(ptr)
+					length, err := db.valueLogRecordLengthForRewriteInSet(ptr, in.snap.state.ValueLogSet)
+					if err != nil {
+						return err
+					}
+					if hint == 0 {
+						raw.counters.PhysicalBytesRead += valuelog.HeaderSize
+					}
+					recordLen = int64(length)
+					lengths[start] = recordLen
+				} else if recordLen < 0 {
+					recordLen = -recordLen
 				}
-				starts[start] = struct{}{}
+				if entry.groupedRecords == nil {
+					entry.groupedRecords = make(map[uint32][]uint64)
+				}
+				entry.groupedRecords[ptr.FileID] = append(entry.groupedRecords[ptr.FileID], start)
+				entry.valueLogTallies[ptr.FileID] = tally
+				continue
 			}
 			hint := page.ValuePtrRecordLength(ptr)
 			recordLen, err := db.valueLogRecordLengthForRewriteInSet(ptr, in.snap.state.ValueLogSet)
@@ -345,11 +418,11 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 				raw.counters.PhysicalBytesRead += valuelog.HeaderSize
 			}
 			tally.liveBytes += int64(recordLen)
-			segmentTallies[ptr.FileID] = tally
+			entry.valueLogTallies[ptr.FileID] = tally
 		}
 		return nil
 	}
-	scanOuterLeaf := func(ptr page.LeafLogPtr) error {
+	scanOuterLeaf := func(ptr page.LeafLogPtr, entry *auditMemoEntry) error {
 		data, usedDst, state, err := in.snap.reader.ReadLeafLogPageUnsafeToWithState(ptr, leafScratch[:0])
 		if err != nil {
 			return err
@@ -370,7 +443,7 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		if n.Type() != page.PageTypeLeaf {
 			return fmt.Errorf("compact storage audit: invalid outer leaf page type %d for file=%d offset=%d", n.Type(), ptr.FileID, ptr.Offset)
 		}
-		if err := scanLeafValues(n); err != nil {
+		if err := scanLeafValues(n, entry); err != nil {
 			return err
 		}
 		if usedDst {
@@ -381,11 +454,14 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 		return nil
 	}
 
-	var walk func(uint64, int) (leafGenerationSubtreeStats, error)
-	walk = func(pageID uint64, depth int) (leafGenerationSubtreeStats, error) {
-		if stats, ok := memo[pageID]; ok {
+	var walk func(uint64, int, bool) (leafGenerationSubtreeStats, error)
+	walk = func(pageID uint64, depth int, valueLogProjection bool) (leafGenerationSubtreeStats, error) {
+		if entry, ok := memo[pageID]; ok {
+			if valueLogProjection && !entry.valueLogComplete {
+				return nil, fmt.Errorf("compact storage audit: maintenance projection reached protected-only memo page %d", pageID)
+			}
 			raw.counters.MemoHits++
-			return stats, nil
+			return entry.leafTotals, nil
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -406,11 +482,13 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 			}
 		}
 
-		var leafTotals leafGenerationSubtreeStats
+		entry := auditMemoEntry{valueLogComplete: valueLogProjection}
 		switch n.Type() {
 		case page.PageTypeLeaf:
-			if err := scanLeafValues(n); err != nil {
-				return nil, err
+			if valueLogProjection {
+				if err := scanLeafValues(n, &entry); err != nil {
+					return nil, err
+				}
 			}
 		case page.PageTypeInternal:
 			for len(childStacks) <= depth {
@@ -420,40 +498,86 @@ func (db *DB) scanCompactStorageAudit(ctx context.Context, in *compactStorageAud
 			err := n.WalkInternalChildren(&children, func(ptr page.LeafLogPtr) error {
 				if leafScan != nil {
 					var visitErr error
-					leafTotals, visitErr = db.scanLeafGenerationPtrTotals(leafScan, leafTotals, ptr)
+					entry.leafTotals, visitErr = db.scanLeafGenerationPtrTotals(leafScan, entry.leafTotals, ptr)
 					if visitErr != nil {
 						return visitErr
 					}
 				}
-				return scanOuterLeaf(ptr)
+				if valueLogProjection {
+					return scanOuterLeaf(ptr, &entry)
+				}
+				return nil
 			})
 			if err != nil {
 				return nil, err
 			}
+			entry.children = append(entry.children, children...)
 			childStacks[depth] = children[:0]
 			for _, childID := range children {
-				childTotals, err := walk(childID, depth+1)
+				childTotals, err := walk(childID, depth+1, valueLogProjection)
 				if err != nil {
 					return nil, err
 				}
-				leafTotals = mergeLeafGenerationTotals(leafTotals, childTotals)
+				entry.leafTotals = mergeLeafGenerationTotals(entry.leafTotals, childTotals)
 			}
 		default:
 			return nil, fmt.Errorf("compact storage audit: invalid page type %d on page %d", n.Type(), pageID)
 		}
-		memo[pageID] = leafTotals
+		memo[pageID] = entry
 		if !verifyAlways {
-			db.storeLeafGenerationSubtreeStats(pageID, leafTotals)
+			db.storeLeafGenerationSubtreeStats(pageID, entry.leafTotals)
 		}
-		return leafTotals, nil
+		return entry.leafTotals, nil
+	}
+	var projectValueLog func(uint64) error
+	projectValueLog = func(pageID uint64) error {
+		entry, ok := memo[pageID]
+		if !ok || !entry.valueLogComplete {
+			return fmt.Errorf("compact storage audit: missing value-log projection for page %d", pageID)
+		}
+		for fileID, local := range entry.valueLogTallies {
+			tally := segmentTallies[fileID]
+			tally.references += local.references
+			tally.liveBytes += local.liveBytes
+			segmentTallies[fileID] = tally
+			raw.counters.PointerProjections += local.references
+		}
+		for fileID, starts := range entry.groupedRecords {
+			lengths := groupedRecordLengths[fileID]
+			for _, start := range starts {
+				recordLen, ok := lengths[start]
+				if !ok || recordLen == 0 {
+					return fmt.Errorf("compact storage audit: missing grouped record length for file=%d start=%d", fileID, start)
+				}
+				if recordLen < 0 {
+					raw.counters.GroupedRecordDedupeHits++
+					continue
+				}
+				lengths[start] = -recordLen
+				tally := segmentTallies[fileID]
+				tally.liveBytes += recordLen
+				segmentTallies[fileID] = tally
+			}
+		}
+		for _, childID := range entry.children {
+			if err := projectValueLog(childID); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	for _, root := range roots {
-		stats, err := walk(root.rootID, 0)
+		stats, err := walk(root.rootID, 0, root.valueLogProjection)
 		if err != nil {
 			return raw, err
 		}
 		raw.leafGenerationLive.Generations = mergeLeafGenerationTotals(raw.leafGenerationLive.Generations, stats)
+		if root.valueLogProjection && !directValueLogProjection {
+			if err := projectValueLog(root.rootID); err != nil {
+				return raw, err
+			}
+		}
 	}
 	for fileID, tally := range segmentTallies {
 		raw.valueLogRefCounts[fileID] = tally.references
@@ -501,12 +625,21 @@ func (db *DB) newCompactStorageLeafScanContext(snap *Snapshot) (*leafGenerationS
 	}, nil
 }
 
-func compactStorageAuditRoots(ctx context.Context, in *compactStorageAuditInput) ([]maintenanceRoot, error) {
-	roots, err := maintenanceRootsForSnapshotWithContext(ctx, in.snap)
+func compactStorageAuditRoots(ctx context.Context, in *compactStorageAuditInput) ([]compactStorageAuditRoot, error) {
+	maintenanceRoots, err := maintenanceRootsForSnapshotWithContext(ctx, in.snap)
 	if err != nil {
 		return nil, err
 	}
-	roots = dedupeMaintenanceRootsByRootID(roots)
+	maintenanceRoots = dedupeMaintenanceRootsByRootID(maintenanceRoots)
+	roots := make([]compactStorageAuditRoot, 0, len(maintenanceRoots)+len(in.protectedRootIDs)+len(in.protectedSystemRootIDs))
+	// Maintenance roots stay first so every memo entry they can project contains
+	// value-log aggregates; later protected-only roots reuse only leaf totals.
+	for _, root := range maintenanceRoots {
+		roots = append(roots, compactStorageAuditRoot{
+			maintenanceRoot:    root,
+			valueLogProjection: true,
+		})
+	}
 	seen := make(map[uint64]struct{}, len(roots)+len(in.protectedRootIDs)+len(in.protectedSystemRootIDs))
 	for _, root := range roots {
 		seen[root.rootID] = struct{}{}
@@ -519,7 +652,7 @@ func compactStorageAuditRoots(ctx context.Context, in *compactStorageAuditInput)
 			return
 		}
 		seen[root.rootID] = struct{}{}
-		roots = append(roots, root)
+		roots = append(roots, compactStorageAuditRoot{maintenanceRoot: root})
 	}
 	for _, rootID := range in.protectedRootIDs {
 		add(maintenanceRoot{kind: maintenanceRootUser, rootID: rootID})
