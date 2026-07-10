@@ -4,8 +4,95 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 )
+
+func BenchmarkCompactStorageLeafPackMultiPass(b *testing.B) {
+	var liveScans, packPasses atomic.Uint64
+	unregister := registerLeafGenerationLiveScanHook(func() { liveScans.Add(1) })
+	defer unregister()
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		db := openCompactStorageLeafPackBenchmarkFixture(b)
+		db.compactStorageAfterPhase = func(name string) {
+			if len(name) >= len("leaf-generation-pack-") && name[:len("leaf-generation-pack-")] == "leaf-generation-pack-" {
+				packPasses.Add(1)
+			}
+		}
+		b.StartTimer()
+
+		stats, err := db.CompactStorage(context.Background(), CompactStorageOptions{
+			LeafPackMaxPasses:             4,
+			LeafPackMaxGenerationsPerPass: 1,
+			LeafPackMinReclaimPerCopyPPM:  1,
+		})
+		b.StopTimer()
+		if err != nil {
+			_ = db.Close()
+			b.Fatalf("CompactStorage: %v", err)
+		}
+		ranPacks := 0
+		for _, pack := range stats.LeafGenerationPacks {
+			if pack.Ran {
+				ranPacks++
+			}
+		}
+		if ranPacks < 3 {
+			_ = db.Close()
+			b.Fatalf("ran leaf-pack passes=%d want at least 3", ranPacks)
+		}
+		db.compactStorageAfterPhase = nil
+		if err := db.Close(); err != nil {
+			b.Fatalf("close: %v", err)
+		}
+		b.StartTimer()
+	}
+	if b.N > 0 {
+		b.ReportMetric(float64(liveScans.Load())/float64(b.N), "live_scans/op")
+		b.ReportMetric(float64(packPasses.Load())/float64(b.N), "pack_passes/op")
+	}
+}
+
+func openCompactStorageLeafPackBenchmarkFixture(b *testing.B) *DB {
+	b.Helper()
+	dir := b.TempDir()
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		b.Fatalf("Open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	db.SetLeafPageLog(leafLog)
+
+	for generation := 0; generation < 4; generation++ {
+		writeLeafGenerationBenchKeyRange(b, db, "shared", 0, 4096, byte('a'+generation))
+		writeLeafGenerationBenchKeyRange(b, db, fmt.Sprintf("keep-%d", generation), 0, 64, byte('k'+generation))
+		if generation < 3 {
+			if err := leafLog.rotateLeaf(); err != nil {
+				_ = leafLog.Close()
+				_ = db.Close()
+				b.Fatalf("rotateLeaf generation %d: %v", generation, err)
+			}
+		}
+	}
+	db.SetLeafPageLog(nil)
+	if err := leafLog.Close(); err != nil {
+		_ = db.Close()
+		b.Fatalf("close leaf log: %v", err)
+	}
+	return db
+}
 
 func BenchmarkCompactStorageRewritePolicyMostlyLivePlan(b *testing.B) {
 	db := openCompactStorageRewritePolicyBenchmarkFixture(b, 2047, 1, 1024)
