@@ -110,6 +110,21 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 	}
 
 	targetCapacity = ((targetCapacity + p.chunkSize - 1) / p.chunkSize) * p.chunkSize
+	if p.memoryOnly {
+		chunksNeeded := (targetCapacity - currentCapacity) / p.chunkSize
+		newChunks := make([][]byte, chunksNeeded)
+		for i := range newChunks {
+			newChunks[i] = make([]byte, p.chunkSize)
+		}
+		p.mu.Lock()
+		p.chunks = append(p.chunks, newChunks...)
+		updated := make([][]byte, len(p.chunks))
+		copy(updated, p.chunks)
+		p.atomicChunks.Store(&chunkList{data: updated})
+		p.ensurePrefetchCapacityLocked(len(p.chunks))
+		p.mu.Unlock()
+		return nil
+	}
 
 	// Best-effort preallocation to fail fast on ENOSPC and reduce SIGBUS risk
 	// on mmap writes (platform/filesystem dependent).

@@ -29,6 +29,7 @@ type finalizeCommitOptions struct {
 	appliedCommandLSN           uint64
 	appliedRanges               []CommandWALLSNRange
 	skipPrePublishFlush         bool
+	syncMetaPageOnly            bool
 	skipConditionalRootConflict bool
 	maxEntryRevision            page.EntryRevision
 }

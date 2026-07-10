@@ -186,7 +186,74 @@ and updates keys in bounded commit batches. Cached-mode callers must checkpoint
 first, protect cached value-log paths, and allocate rewrite RIDs from the shared
 cached allocator.
 
-### 6.2 Offline rewrite (`ValueLogRewriteOffline`)
+### 6.2 Online split leaf-generation pack (`DB.LeafGenerationPack`)
+
+Leaf-generation pack uses a two-phase copy/publish state machine:
+
+1. **Copy, without `writeMu`:** acquire a coherent snapshot and its leaf-generation
+   pins; discover source refs from that snapshot; read source leaf/value-log
+   records; write recompressed frames below a hidden, non-scanned staging
+   directory; allocate and write private COW index pages; and apply collection-root
+   zipper deltas. Private pages use a disjoint logical ID namespace in a staging
+   pager that reads unchanged children through the pinned source pager. They do
+   not enlarge the live pager, enter committed `PageCount`, consume the foreground
+   freelist, or require crash recovery accounting.
+2. **Copy durability, without `writeMu`:** flush and fsync the staging leaf-log
+   frames. The private index pages are in-memory relocation input and are never
+   an authoritative publication candidate; the final live-pager pages are
+   synchronized before meta publication.
+   `LeafGenerationPackOptions.Sync` is retained for API compatibility but no
+   longer weakens this durability contract. The copied records, in-memory
+   staging pages,
+   and copy-time retired-page list remain unreachable.
+3. **Publish, under `writeMu`:** revalidate the snapshot's `CommitSeq`,
+   `RootPageID`, `SystemRootPageID`, `LeafGenerationStateVersion`, index
+   generation, and exact source-generation state/file lists. Any mismatch
+   discards the whole attempt and performs one full retry; no copied root,
+   retired-page list, or private allocation is reused.
+4. **Install:** while holding `writeMu` and the value-log visibility gate, rename
+   staged files into `leaf_vlog`, fsync that directory, and call `RegisterSegment`.
+   Registration is tentative and publish-owned: existing snapshots retain their
+   immutable old set, while `AcquireSnapshot` and `RefreshValueLogSet` cannot
+   construct a set containing candidates before root publication. Rebase private
+   page IDs by appending final COW pages to the live pager, synchronize those
+   pages, publish the new roots and generation manifest through the alternate
+   meta page, and only then make committed retired pages reclaimable. On
+   platforms that require
+   an explicit mapped-view flush, its address and length are aligned to the
+   platform mapping granularity. Linux relies on `fsync`; every platform ends
+   with the file-wide `os.File.Sync` durability fence. `SyncPages` therefore
+   promises durability of the requested pages, not that only those bytes reach
+   stable storage.
+
+If exact revalidation fails, the in-memory staging pager and staged records are
+discarded and a full copy retries once; no private page or retired-page list is reused. A failure
+before writing the alternate meta page rolls the live append cursor back and
+removes candidates while visibility remains exclusive. A sync failure after the
+alternate meta write is outcome-ambiguous: all candidate pages and segments are
+retained, the handle fails closed with `ErrRecoveryRequired`, and reopen selects
+the highest valid durable meta state. Startup removes orphan
+`.leaf-pack-copy-*` directories only after acquiring the database lock, so it
+cannot delete an active attempt.
+
+Before promotion, leaf pack closes both staging append writers and the private
+staging value-log manager. This releases mapped read handles as well as ordinary
+file handles, which is required for rename-based promotion on Windows.
+
+`maintenanceMu`, the snapshot generation pins, and `teardownMu` remain held
+across copy and publish. Therefore leaf-generation GC cannot reclaim a source
+before the replacement root and generation state are durable, and `Close`
+cannot tear down the snapshot, pager, or private reader during copy. Ordinary
+value-log pointers embedded in copied leaf pages remain persistent references;
+leaf packing does not alter their reachability or lifetime.
+
+`BenchmarkLeafGenerationPackCopyPublish` provides the pinned before/after
+performance fixture. Run five externally alternating base/head invocations with
+`-benchtime=1x -count=1 -benchmem`; it reports copy bytes/second, frames, wall
+time, foreground write p95/p99 and completed writes, exclusive publish hold
+time, copy attempts, `B/op`, and `allocs/op`.
+
+### 6.3 Offline rewrite (`ValueLogRewriteOffline`)
 
 Offline rewrite rewrites live pointer records into fresh segments and swaps index.
 
@@ -212,7 +279,7 @@ Offline rewrite rewrites live pointer records into fresh segments and swaps inde
 - Pointer map deduplicates source record copies when needed.
 - Old segments are removed only after index swap succeeds.
 
-### 6.3 Full storage compaction (`DB.CompactStorage`)
+### 6.4 Full storage compaction (`DB.CompactStorage`)
 
 `DB.CompactStorage` is the preferred online operator path for reclaiming TreeDB
 storage. It composes:
