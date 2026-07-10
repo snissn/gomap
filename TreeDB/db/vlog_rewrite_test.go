@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -5794,6 +5795,91 @@ func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T)
 	if _, ok := selected[2]; !ok {
 		t.Fatalf("expected segment 2 selected by stale priority, got=%v", selected)
 	}
+}
+
+func TestSelectRewriteSourceSegments_StaleBytesFloorRemainsUncappedForLargeSegment(t *testing.T) {
+	const (
+		segmentSize = int64(32 << 20)
+		staleBytes  = int64(6 << 20)
+	)
+	file := rewriteSelectorTestFile(t, "large.log", segmentSize)
+	files := map[uint32]*valuelog.File{1: file}
+	liveByID := map[uint32]int64{1: segmentSize - staleBytes}
+	if capBytes := int64(math.Ceil(float64(segmentSize) * 0.30)); capBytes <= 8<<20 {
+		t.Fatalf("fixture cap=%d want > 8 MiB", capBytes)
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MinSegmentStaleRatio:         0.10,
+		MinSegmentStaleBytes:         8 << 20,
+		MinSegmentStaleBytesCapRatio: 0.30,
+	}, files, map[uint32]struct{}{}, liveByID)
+
+	if got := float64(staleBytes) / float64(segmentSize); got < 0.10 {
+		t.Fatalf("fixture stale ratio=%v want >= 0.10", got)
+	}
+	if _, ok := selected[1]; ok {
+		t.Fatalf("large segment selected below uncapped 8 MiB floor: selected=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_StaleBytesCapCrossoverAndEquality(t *testing.T) {
+	const (
+		staleFloor = int64(8 << 20)
+		capRatio   = 0.30
+	)
+	// This is the largest integer segment size whose rounded-up cap is exactly
+	// the absolute floor. One byte larger crosses to the uncapped side.
+	equalitySize := staleFloor * 10 / 3
+	if got := int64(math.Ceil(float64(equalitySize) * capRatio)); got != staleFloor {
+		t.Fatalf("equality cap=%d want %d for segment size %d", got, staleFloor, equalitySize)
+	}
+	if got := int64(math.Ceil(float64(equalitySize+1) * capRatio)); got <= staleFloor {
+		t.Fatalf("post-crossover cap=%d want > %d", got, staleFloor)
+	}
+	belowSize := (staleFloor - 1) * 10 / 3
+	belowCap := int64(math.Ceil(float64(belowSize) * capRatio))
+	if belowCap >= staleFloor {
+		t.Fatalf("pre-crossover cap=%d want < %d", belowCap, staleFloor)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: rewriteSelectorTestFile(t, "below.log", belowSize),
+		2: rewriteSelectorTestFile(t, "equal.log", equalitySize),
+		3: rewriteSelectorTestFile(t, "above-below-floor.log", equalitySize+1),
+		4: rewriteSelectorTestFile(t, "above-at-floor.log", equalitySize+1),
+	}
+	liveByID := map[uint32]int64{
+		1: belowSize - belowCap,
+		2: equalitySize - staleFloor,
+		3: equalitySize + 1 - (staleFloor - 1),
+		4: equalitySize + 1 - staleFloor,
+	}
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MinSegmentStaleBytes:         staleFloor,
+		MinSegmentStaleBytesCapRatio: capRatio,
+	}, files, map[uint32]struct{}{}, liveByID)
+
+	for _, id := range []uint32{1, 2, 4} {
+		if _, ok := selected[id]; !ok {
+			t.Fatalf("segment %d not selected at effective floor equality: selected=%v", id, selected)
+		}
+	}
+	if _, ok := selected[3]; ok {
+		t.Fatalf("post-crossover segment selected below uncapped floor: selected=%v", selected)
+	}
+}
+
+func rewriteSelectorTestFile(t *testing.T, name string, size int64) *valuelog.File {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("create selector fixture %s: %v", path, err)
+	}
+	if err := os.Truncate(path, size); err != nil {
+		t.Fatalf("truncate selector fixture %s to %d: %v", path, size, err)
+	}
+	return &valuelog.File{Path: path}
 }
 
 func TestGroupedRecordKeyForPtr_UsesFullOffsetWidth(t *testing.T) {
