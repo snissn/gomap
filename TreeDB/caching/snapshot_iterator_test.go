@@ -1,12 +1,74 @@
 package caching
 
 import (
+	"bytes"
 	"reflect"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
 )
+
+func TestSingleSourceIteratorForwardSeekClampsToStart(t *testing.T) {
+	newIterator := func(t *testing.T, keys ...string) merging.Iterator {
+		t.Helper()
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeSkiplist)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		for _, key := range keys {
+			mt.Set([]byte(key), []byte("value/"+key))
+		}
+		mt.Freeze()
+		start := []byte("m")
+		return newSingleSourceIterator(mt.NewIterator(start, nil), start, nil, false)
+	}
+
+	t.Run("mixed domain", func(t *testing.T) {
+		it := newIterator(t, "a", "c", "m", "z")
+		defer it.Close()
+		for _, test := range []struct {
+			name   string
+			target []byte
+			want   []byte
+		}{
+			{name: "nil", target: nil, want: []byte("m")},
+			{name: "below", target: []byte("a"), want: []byte("m")},
+			{name: "start", target: []byte("m"), want: []byte("m")},
+			{name: "inside", target: []byte("n"), want: []byte("z")},
+			{name: "above", target: []byte{0xff}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				it.Seek(test.target)
+				if test.want == nil {
+					if it.Valid() {
+						t.Fatalf("Seek(%x) key=%q want invalid", test.target, it.Key())
+					}
+				} else if !it.Valid() || !bytes.Equal(it.Key(), test.want) {
+					t.Fatalf("Seek(%x) valid=%v key=%q want %q", test.target, it.Valid(), it.Key(), test.want)
+				}
+				if err := it.Error(); err != nil {
+					t.Fatalf("Seek(%x) error=%v", test.target, err)
+				}
+			})
+		}
+	})
+
+	t.Run("all data below start", func(t *testing.T) {
+		it := newIterator(t, "a", "c")
+		defer it.Close()
+		for _, target := range [][]byte{nil, []byte("a"), []byte("m"), {0xff}} {
+			it.Seek(target)
+			if it.Valid() {
+				t.Fatalf("Seek(%x) key=%q want invalid", target, it.Key())
+			}
+			if err := it.Error(); err != nil {
+				t.Fatalf("Seek(%x) error=%v", target, err)
+			}
+		}
+	})
+}
 
 func TestSnapshotIterator_QueueValueOverridesPublishedAndTombstoneHidesPublished(t *testing.T) {
 	dir := t.TempDir()

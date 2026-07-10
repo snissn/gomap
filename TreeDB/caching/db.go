@@ -36669,6 +36669,9 @@ func (it *singleSourceIterator) Seek(key []byte) {
 	if it.reverse && key != nil && it.start != nil && bytes.Compare(key, it.start) < 0 {
 		return
 	}
+	if !it.reverse && it.start != nil && (key == nil || bytes.Compare(key, it.start) < 0) {
+		key = it.start
+	}
 	it.iter.Seek(key)
 	it.advance()
 }
