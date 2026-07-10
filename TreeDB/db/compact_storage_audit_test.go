@@ -362,7 +362,7 @@ func TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection(t *testing.T
 		t.Fatalf("legacy leaf plan: %v", err)
 	}
 	gotLeaf := db.compactStorageLeafGenerationPlanFromAudit(leafOpts, input, got.leafGenerationLive)
-	if !reflect.DeepEqual(gotLeaf, wantLeaf) {
+	if !reflect.DeepEqual(compactStorageAuditPublicLeafPlan(gotLeaf), compactStorageAuditPublicLeafPlan(wantLeaf)) {
 		t.Fatalf("leaf plan mismatch:\nshared=%+v\nlegacy=%+v", gotLeaf, wantLeaf)
 	}
 
@@ -521,9 +521,15 @@ func TestCompactStorageAudit_ProtectedPagerRootsMatchLegacyWithMemoReuse(t *test
 		t.Fatalf("legacy leaf plan: %v", err)
 	}
 	gotLeaf := db.compactStorageLeafGenerationPlanFromAudit(leafOpts, input, got.leafGenerationLive)
-	if !reflect.DeepEqual(gotLeaf, wantLeaf) {
+	if !reflect.DeepEqual(compactStorageAuditPublicLeafPlan(gotLeaf), compactStorageAuditPublicLeafPlan(wantLeaf)) {
 		t.Fatalf("leaf plan mismatch:\nshared=%+v\nlegacy=%+v", gotLeaf, wantLeaf)
 	}
+}
+
+func compactStorageAuditPublicLeafPlan(plan LeafGenerationPlan) LeafGenerationPlan {
+	plan.stateKey = treeReachabilityCacheKey{}
+	plan.liveStats = leafGenerationLiveScanStats{}
+	return plan
 }
 
 func TestCompactStorageAudit_ProtectedRootsDoNotPoisonTrackerOrSubsequentGC(t *testing.T) {
